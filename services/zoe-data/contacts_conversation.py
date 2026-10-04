@@ -215,6 +215,41 @@ def classify_contacts_query(query: str) -> tuple[str, str]:
     return "name", phrase
 
 
+def query_core_phrase(query: str) -> str:
+    """The user's OWN words once the scaffolding is stripped ("who is my mum" ->
+    "mum"), so a reply can echo what was said instead of the canonical word."""
+    q = _BOOK_RE.sub("contacts", _QUERY_PUNCT_RE.sub("", (query or "").strip()))
+    words = q.split()
+    lead = 0
+    while lead < len(words) and words[lead].lower() in _SCAFFOLD:
+        lead += 1
+    end = len(words)
+    while end > lead and words[end - 1].lower() in _SCAFFOLD:
+        end -= 1
+    return " ".join(words[lead:end]).lower()
+
+
+def relation_aliases(canon: str) -> list[str]:
+    """Every stored spelling that means `canon` ('mother' -> mother, mum, mom,
+    mummy, mommy), lower-case, for a WHOLE-VALUE match on people.relationship.
+    'grandmother' / 'sister-in-law' are different relations and never included."""
+    c = canon_relation(canon)
+    mod = in_law = ""
+    base = c
+    m = re.match(r"^(step|half|ex|late)\s+(.+)$", base)
+    if m:
+        mod, base = m.group(1), m.group(2)
+    if base.endswith("-in-law"):
+        in_law, base = "-in-law", base[: -len("-in-law")]
+    spellings = {base, *(k for k, v in _REL_CANON.items() if v == base)}
+    out: set[str] = set()
+    for s in spellings:
+        for pre in ([""] if not mod else [f"{mod} ", f"{mod}-", mod]):
+            for suf in ([""] if not in_law else ["-in-law", " in law", " in-law"]):
+                out.add(f"{pre}{s}{suf}")
+    return sorted(out)
+
+
 # ── Duplicate detection (class 4b) ───────────────────────────────────────────
 
 
@@ -254,39 +289,63 @@ def duplicate_kind(a_name: str, a_rel: Optional[str],
     return None
 
 
-def collapse_duplicates(rows: Iterable[dict]) -> list[dict]:
-    """One row per person: a first-name-only row folds into the fuller record
-    with the same first name and a compatible relation (blank contact fields on
-    the kept row are filled from the folded one). Order is preserved."""
-    rows = [dict(r) for r in rows]
-    drop: set[int] = set()
+def _stub_pairs(rows: list[dict]) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    """(same_pairs, stub_pairs) as index pairs (keep, fold) over `rows`.
+
+    'same'   - identical name + compatible relation: the later row folds into the earlier.
+    'stub'   - a first-name-only row folds into the fuller row ONLY when exactly one
+               fuller same-first-name row is compatible with it. With two or more
+               (a Dan Smith and a Dan Jones) the stub could be either, so it is left
+               alone - never guessed, never order-dependent.
+    """
+    same: list[tuple[int, int]] = []
+    stubs: list[tuple[int, int]] = []
     for i, a in enumerate(rows):
-        for j, b in enumerate(rows):
-            if i == j or j in drop or i in drop:
-                continue
-            kind = duplicate_kind(a.get("name", ""), a.get("relationship"),
-                                  b.get("name", ""), b.get("relationship"))
-            if kind == "a_stub" or (kind == "same" and j < i):
-                keep, gone = b, a
-                drop.add(i)
-            elif kind == "b_stub":
-                keep, gone = a, b
-                drop.add(j)
-            else:
-                continue
-            for k in ("relationship", "birthday", "phone", "email", "notes"):
-                if not keep.get(k) and gone.get(k):
-                    keep[k] = gone[k]
-            # Remember which ids folded in, so facts linked to the stub still show.
-            keep.setdefault("_merged_ids", []).extend(
-                [gone.get("id"), *gone.get("_merged_ids", [])])
+        ta = _tokens(a.get("name", ""))
+        for j in range(i + 1, len(rows)):
+            if duplicate_kind(a.get("name", ""), a.get("relationship"),
+                              rows[j].get("name", ""), rows[j].get("relationship")) == "same":
+                same.append((i, j))
+        if len(ta) != 1:
+            continue
+        fuller = [j for j, b in enumerate(rows)
+                  if j != i and duplicate_kind(a.get("name", ""), a.get("relationship"),
+                                               b.get("name", ""), b.get("relationship")) == "a_stub"]
+        if len(fuller) == 1:
+            stubs.append((fuller[0], i))
+    return same, stubs
+
+
+def collapse_duplicates(rows: Iterable[dict]) -> list[dict]:
+    """One row per person: exact duplicates and an unambiguous first-name-only row
+    fold into the fuller record (blank contact fields on the kept row are filled
+    from the folded one). Order is preserved."""
+    rows = [dict(r) for r in rows]
+    same, stubs = _stub_pairs(rows)
+    drop: set[int] = set()
+    for keep_i, gone_i in [*same, *stubs]:
+        if gone_i in drop or keep_i in drop or keep_i == gone_i:
+            continue
+        keep, gone = rows[keep_i], rows[gone_i]
+        drop.add(gone_i)
+        for k in ("relationship", "birthday", "phone", "email", "notes"):
+            if not keep.get(k) and gone.get(k):
+                keep[k] = gone[k]
+        # Remember which ids folded in, so facts linked to the stub still show.
+        keep.setdefault("_merged_ids", []).extend(
+            [gone.get("id"), *gone.get("_merged_ids", [])])
     return [r for n, r in enumerate(rows) if n not in drop]
 
 
 def find_duplicate_groups(rows: Iterable[dict]) -> list[list[dict]]:
-    """Groups of >=2 likely-duplicate records (by user), for the dry-run report.
-    Never decides anything: a person reads the report."""
+    """Groups of >=2 likely-duplicate records (per user), for the dry-run report:
+    exact duplicates and a stub with exactly ONE fuller candidate. A stub with
+    several (Dan next to Dan Smith and Dan Jones) is never grouped, so two
+    different people are not bridged through it. Never decides anything."""
     rows = [dict(r) for r in rows]
+    by_user: dict[object, list[int]] = {}
+    for i, r in enumerate(rows):
+        by_user.setdefault(r.get("user_id"), []).append(i)
     parent = list(range(len(rows)))
 
     def find(x: int) -> int:
@@ -295,18 +354,17 @@ def find_duplicate_groups(rows: Iterable[dict]) -> list[list[dict]]:
             x = parent[x]
         return x
 
-    for i, a in enumerate(rows):
-        for j in range(i + 1, len(rows)):
-            b = rows[j]
-            if a.get("user_id") != b.get("user_id"):
-                continue
-            if duplicate_kind(a.get("name", ""), a.get("relationship"),
-                              b.get("name", ""), b.get("relationship")):
-                parent[find(i)] = find(j)
+    for idxs in by_user.values():
+        sub = [rows[i] for i in idxs]
+        same, stubs = _stub_pairs(sub)
+        for a, b in [*same, *stubs]:
+            parent[find(idxs[a])] = find(idxs[b])
     groups: dict[int, list[dict]] = {}
     for i, r in enumerate(rows):
         groups.setdefault(find(i), []).append(r)
     return [g for g in groups.values() if len(g) > 1]
+
+
 
 
 # ── Reply wording (flag: ZOE_CONTACTS_CONVERSATIONAL) ────────────────────────
@@ -383,11 +441,25 @@ def fact_clause(text: str, name: str, pattern_type: str = "") -> str:
     return t
 
 
+def format_count(n: int, capped: bool = False) -> str:
+    """The short answer to 'how many contacts do I have'."""
+    if n <= 0:
+        return "You don't have any contacts saved yet."
+    if capped:
+        return f"You have over {n} contacts."
+    return f"You have {n} contact{'' if n == 1 else 's'}."
+
+
 def format_lookup(people: list[dict], query: str,
-                  facts: Optional[dict[str, list[str]]] = None) -> str:
-    """Sentence-shaped answer for a name lookup (rows already de-duplicated)."""
+                  facts: Optional[dict[str, list[str]]] = None,
+                  relation_word: str = "") -> str:
+    """Sentence-shaped answer for a name lookup (rows already de-duplicated).
+    `relation_word` is the user's OWN word for a relation query ("mum"), echoed
+    back instead of the canonical one."""
     facts = facts or {}
     if not people:
+        if relation_word:
+            return f"I don't have your {relation_word} saved in your contacts."
         q = (query or "").strip()
         return f'I don\'t have anyone called "{q}" in your contacts.' if q else \
             "You don't have any contacts saved yet."
@@ -449,7 +521,7 @@ _ONLY_WORDS = frozenset({"just", "only"})
 _SINGULAR_PRONOUNS = frozenset({"her", "him", "it"})
 BATCH_FIRST_EXTRA = frozenset({"all", "everyone", "everybody", "both", "just", "only"})
 BATCH_FILLER_EXTRA = _ALL_WORDS | _ONLY_WORDS | frozenset({
-    "his", "their", "hers", "them", "those", "these", "of", "and",
+    "his", "their", "hers", "them", "those", "these", "of", "and", "but",
 })
 
 
@@ -490,7 +562,13 @@ def batch_reply_scope(tokens: list[str], offers: list[dict],
     if first not in (affirm_first | BATCH_FIRST_EXTRA):
         return None
     if any(t in ("dont", "don't", "not", "no") for t in rest):
-        return ("dismiss", list(offers), [])
+        if not matched:
+            return ("dismiss", list(offers), [])
+        # "yes, not Jessika" / "ok don't add Jessika": the yes answers the question,
+        # the named person is the exception - accept the rest, drop the named one.
+        named = [o for i, o in enumerate(offers) if i in matched]
+        kept = [o for i, o in enumerate(offers) if i not in matched]
+        return ("accept", kept, named) if kept else ("dismiss", named, [])
     if len(offers) > 1 and not matched and any(t in _SINGULAR_PRONOUNS for t in rest) \
             and not any(t in _ALL_WORDS for t in rest):
         return None  # "yes add her" with several offers: legacy oldest-first binding
@@ -502,3 +580,217 @@ def batch_reply_scope(tokens: list[str], offers: list[dict],
             any(t in _ONLY_WORDS for t in rest) else []
         return ("accept", chosen, rejected)
     return ("accept", list(offers), [])
+
+
+# ── The ASKED set (ZOE_CONTACT_OFFER_BATCH) ──────────────────────────────────
+#
+# "Surfaced" only means an offer was injected into a prompt; the model may omit
+# the question, ask it before another question, or ask something else last. A
+# yes/no binds to an offer set ONLY when (1) the enumerated question was built
+# for exactly that set and (2) the user's PREVIOUS assistant message actually
+# ends with that question. The set is recorded when the question is built
+# (in-process: zoe-data is one worker, like pending_suggestions._SHOWN_SINCE_TICK;
+# after a restart nothing binds and the brain handles the reply - fail closed).
+
+_ASKED: dict[str, dict] = {}
+_ASKED_TTL_S = 3600.0
+
+
+def record_asked(user_id: str, question: str, offers: list[dict], now: Optional[float] = None) -> None:
+    import time as _t
+
+    ids = [str(o.get("id")) for o in offers[:OFFER_BATCH_MAX] if o.get("id")]
+    if user_id and question and ids:
+        _ASKED[user_id] = {"question": question, "ids": ids, "ts": _t.time() if now is None else now}
+
+
+def get_asked(user_id: str, now: Optional[float] = None) -> Optional[dict]:
+    import time as _t
+
+    a = _ASKED.get(user_id)
+    if a and (_t.time() if now is None else now) - a["ts"] <= _ASKED_TTL_S:
+        return a
+    _ASKED.pop(user_id, None)
+    return None
+
+
+def clear_asked(user_id: str) -> None:
+    _ASKED.pop(user_id, None)
+
+
+def _norm_text(s: str) -> str:
+    return re.sub(r"[^a-z0-9?']+", " ", (s or "").lower()).strip()
+
+
+def asked_in_message(previous: Optional[str], question: str) -> bool:
+    """True when `previous` (the last assistant message) carries `question` AND it
+    is the LAST question in the message - a yes after "milk on the list? ... add
+    A, B and C?" answers the last one; a question asked AFTER ours is what a
+    yes answers instead, so it must not bind."""
+    p, q = _norm_text(previous or ""), _norm_text(question)
+    if not p or not q:
+        return False
+    at = p.rfind(q)
+    if at < 0:
+        return False
+    return "?" not in p[at + len(q):]
+
+
+# ── Same person? (stub upgrade is a guess unless nothing can be lost) ────────
+
+STUB_DATA_FIELDS = ("phone", "email", "notes", "birthday", "how_we_met")
+
+
+def _is_blank(v) -> bool:
+    return v is None or (isinstance(v, str) and not v.strip())
+
+
+def stub_is_safe_to_upgrade(stub: dict, new_relationship: Optional[str], linked: bool) -> bool:
+    """A first-name-only record may be renamed silently ONLY when nothing can be
+    lost or mis-attributed: it carries a SPECIFIC relationship equal to the new
+    one (a NULL / 'friend' stub matches any same-first-name person), holds no
+    contact data, and has no linked memories. Anything else is asked about."""
+    srel, nrel = _rel_norm(stub.get("relationship")), _rel_norm(new_relationship)
+    if not srel or srel in _GENERIC_RELS or srel != nrel:
+        return False
+    if linked or not all(_is_blank(stub.get(k)) for k in STUB_DATA_FIELDS):
+        return False
+    return True
+
+
+def decide_same_person(name: str, relationship: Optional[str], rows: list[dict],
+                       linked_ids: frozenset = frozenset()) -> tuple[str, list[dict]]:
+    """What to do with a save of `name` given the existing same-first-name rows.
+
+      ("new", [])                 a genuinely new person: insert
+      ("existing_fuller", [row])  the new name is the shorter form of ONE fuller contact: write nothing
+      ("ambiguous", [rows])       the shorter form of SEVERAL fuller contacts: ask which
+      ("upgrade", [stub])         an unambiguous, empty, specific-relation stub: rename it in place
+      ("ask", [stub])             a stub that may be a different person: ask "same person?"
+    """
+    nt = _tokens(name)
+    fuller_match: list[dict] = []
+    stub_match: list[dict] = []
+    for r in rows:
+        k = duplicate_kind(name, relationship, r.get("name", ""), r.get("relationship"))
+        if k == "a_stub":
+            fuller_match.append(r)
+        elif k == "b_stub":
+            stub_match.append(r)
+    if fuller_match:
+        return ("existing_fuller" if len(fuller_match) == 1 else "ambiguous"), fuller_match
+    if stub_match:
+        other_fuller = [r for r in rows if len(_tokens(r.get("name", ""))) >= 2
+                        and _tokens(r.get("name", "")) != nt]
+        if other_fuller or len(stub_match) > 1:
+            return "new", []  # the stub could be anyone: do not guess
+        stub = stub_match[0]
+        if stub_is_safe_to_upgrade(stub, relationship, str(stub.get("id")) in linked_ids):
+            return "upgrade", [stub]
+        return "ask", [stub]
+    return "new", []
+
+
+def same_person_question(stub_name: str, name: str) -> str:
+    return f"I already have a {stub_name} saved. Is {name} the same person?"
+
+
+_SAME_PENDING: dict[str, list[dict]] = {}
+_SAME_TTL_S = 900.0
+
+
+def remember_same_person(user_id: str, item: dict, now: Optional[float] = None) -> None:
+    import time as _t
+
+    item = {**item, "ts": _t.time() if now is None else now}
+    q = [i for i in _SAME_PENDING.get(user_id, []) if i.get("stub_id") != item.get("stub_id")]
+    q.append(item)
+    _SAME_PENDING[user_id] = q
+
+
+def peek_same_person(user_id: str, now: Optional[float] = None) -> Optional[dict]:
+    import time as _t
+
+    t = _t.time() if now is None else now
+    q = [i for i in _SAME_PENDING.get(user_id, []) if t - i["ts"] <= _SAME_TTL_S]
+    _SAME_PENDING[user_id] = q
+    return q[-1] if q else None  # the LAST question asked is the one a yes/no answers
+
+
+def pop_same_person(user_id: str) -> Optional[dict]:
+    q = _SAME_PENDING.get(user_id) or []
+    return q.pop() if q else None
+
+
+_SAME_YES = frozenset({"yes", "yeah", "yep", "yup", "sure", "same", "correct", "right", "ok", "okay"})
+_SAME_NO = frozenset({"no", "nope", "nah", "different", "separate", "another", "new"})
+_SAME_FILL = frozenset({
+    "person", "the", "one", "it's", "its", "is", "they", "are", "they're", "theyre",
+    "he", "she", "that", "same", "a", "please", "thanks", "add", "them", "as", "an",
+    "other", "guy", "girl", "not",
+})
+
+
+def same_person_reply_kind(tokens: list[str]) -> Optional[str]:
+    """'yes' / 'no' / None for a short reply to the same-person question."""
+    if not tokens or len(tokens) > 6:
+        return None
+    first = tokens[0]
+    kind = "yes" if first in _SAME_YES else "no" if first in _SAME_NO else None
+    if kind is None:
+        return None
+    for t in tokens[1:]:
+        if t in _SAME_NO and kind == "yes":
+            return None  # "yes no"
+        if t not in _SAME_FILL and t not in _SAME_YES and t not in _SAME_NO:
+            return None
+    if kind == "yes" and any(t in ("not", "no", "different", "separate") for t in tokens[1:]):
+        return "no"
+    return kind
+
+
+_MIRROR_RE = re.compile(r"^\s*person in contacts\b", re.IGNORECASE)
+
+
+async def linked_memory_ids(user_id: str, person_ids: list[str], timeout: float = 1.5) -> set[str]:
+    """Which of `person_ids` have memory rows (other than the contact-card
+    mirror) linked to them. Conservative: ANY failure answers 'all of them',
+    which turns a silent stub upgrade into a question."""
+    import asyncio
+
+    ids = [str(i) for i in person_ids if i]
+    if not ids:
+        return set()
+    try:
+        from memory_service import get_memory_service
+
+        refs = await asyncio.wait_for(get_memory_service().list_by_entity(user_id, ids), timeout)
+        return {str((r.metadata or {}).get("entity_id")) for r in refs
+                if not _MIRROR_RE.match(str(getattr(r, "text", "") or ""))}
+    except Exception:  # noqa: BLE001
+        return set(ids)
+
+
+async def refresh_person_mirror(user_id: str, person_id: str, name: str,
+                                relationship: Optional[str]) -> None:
+    """After a rename: archive the stale 'Person in contacts: <old name>' mirror
+    rows and write the new one. Best-effort - the contact row is already correct."""
+    try:
+        from memory_service import get_memory_service
+
+        svc = get_memory_service()
+        for r in await svc.list_by_entity(user_id, [str(person_id)]):
+            if _MIRROR_RE.match(str(getattr(r, "text", "") or "")):
+                await svc.review(r.id, decision="archive", actor=user_id, note="contact renamed")
+        from routers.people import _store_person_memory  # type: ignore
+
+        await _store_person_memory(
+            None, user_id,
+            {"id": person_id, "name": name, "relationship": relationship, "notes": None},
+            "updated")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")

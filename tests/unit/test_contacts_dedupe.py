@@ -49,6 +49,19 @@ def test_reports_the_stub_pair_and_nothing_else(tmp_path, capsys):
     assert "b1" not in out and "b2" not in out and "c1" not in out   # negative controls
 
 
+def test_a_stub_next_to_two_fuller_people_is_not_reported_as_a_duplicate(tmp_path, capsys):
+    """Per its own docstring: Dan + Dan Smith + Dan Jones must not group Smith with Jones."""
+    rows = [
+        {"id": "d0", "user_id": "demo_u1", "name": "Dan", "relationship": "friend"},
+        {"id": "d1", "user_id": "demo_u1", "name": "Dan Smith", "relationship": "friend"},
+        {"id": "d2", "user_id": "demo_u1", "name": "Dan Jones", "relationship": "friend"},
+    ]
+    f = tmp_path / "rows.json"
+    f.write_text(json.dumps(rows))
+    assert cd.main(["--dry-run", "--json-file", str(f)]) == 0
+    assert "No likely-duplicate contacts found." in capsys.readouterr().out
+
+
 def test_clean_data_reports_none(tmp_path, capsys):
     f = tmp_path / "rows.json"
     f.write_text(json.dumps(ROWS[2:]))

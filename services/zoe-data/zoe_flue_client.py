@@ -710,6 +710,7 @@ async def _pending_offer_block(user_id: str) -> str:
         q = _cc.offer_question(offers, _safe)
         if not q:
             return ""
+        _cc.record_asked(user_id, q, offers)  # the set a following yes/no may bind to
         return (f"{_OFFER_BLOCK_OPEN}\n"
                 f'- After answering, ask the user exactly: "{q}"\n{_OFFER_BLOCK_CLOSE}')
     lines = []

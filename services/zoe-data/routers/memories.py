@@ -651,6 +651,7 @@ async def _fold_pending_contact_offers(packet: dict[str, Any], user_id: str) -> 
         q = _cc.offer_question(pend, _safe_prompt_inline)
         if not q:
             return packet
+        _cc.record_asked(user_id, q, pend)  # the set a following yes/no may bind to
         section = (
             "## People mentioned recently (not contacts yet)\n"
             "IMPORTANT: In this reply, after answering the user, ask the question "

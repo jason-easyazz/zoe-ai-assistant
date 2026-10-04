@@ -55,11 +55,31 @@ except for the bug fixes in the table above. Enable `ZOE_CONTACTS_CONVERSATIONAL
 no new state), then `ZOE_CONTACT_OFFER_BATCH`. Samantha bar S13 and S14 pass with the flags off; S15 needs
 `ZOE_CONTACTS_CONVERSATIONAL`; S16 SKIPs until the offer flags are on (see [samantha-bar.md](samantha-bar.md)).
 
+## Safety rules added after review (PR #1854)
+
+* **Relation lookups** ("who is my son") match `people.relationship` only, whole value, any spelling of
+  the relation (mother = mum = mom). Never the name field, never a substring (grandson, sister-in-law).
+  The reply echoes the user's own word.
+* **A yes/no binds an offer set only when that set was ASKED.** "Surfaced" only means injected into a prompt.
+  The prompt builders record the question and the offer ids (`contacts_conversation.record_asked`,
+  in-process); the matcher requires the user's previous assistant message to END with that question
+  (`asked_in_message`; a question asked after ours means the yes was for that one). Nothing recorded, nothing
+  in history, or a restart: no match, the brain gets the reply. The accepted set is always a subset of the asked set.
+* "yes, not X" accepts the rest and drops X; "no X" is left to the brain.
+* **A first-name-only contact is renamed in place only when nothing can be lost**: specific equal relationship
+  (NULL and the brain's default `friend` match any same-first-name person), no phone/email/notes/birthday,
+  no linked memories. Otherwise Zoe asks "I already have a Dan saved. Is Dan Murphy the same person?"
+  and acts on a yes/no only if that question ends her previous message (`people_same_person_reply`).
+  A rename clears `is_partial` and refreshes the memory mirror. The offer-accept path (`execute_suggestion`,
+  including batch) uses the same decision (`decide_same_person`).
+* A stub next to two or more fuller people is never folded into one of them (lookup, save, dedupe report).
+* "how many contacts do I have" answers with the count; a missing relationship is never printed as `(None)`.
+
 ## Known limits
 
 * Offers are individual rows: "Rodrigo, Jessika and the three kids" enumerates the kids by name if each has
   a row; there is no household-group offer.
-* "no, not Jessika" and "yes except X" are left to the brain (a named refusal is not guessed).
+* "no, not Jessika" (a named refusal after a no) is left to the brain, not guessed.
 * Facts on the lookup come from entity-linked memory rows; a fact stored unlinked (`person_pending`) is
   not shown until the idle link resolver (`ZOE_MEMORY_LINK_RESOLVER_ENABLED`) relinks it.
 * The person relationship graph (`person_relationships`) is not read for the sentence yet.
