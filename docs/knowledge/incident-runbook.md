@@ -4,6 +4,10 @@ title: Production Incident Runbook
 description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, MemoryMax-without-MemorySwapMax being no cap at all, and a VAD model swap that loads cleanly but detects no speech, and the B0.8 client pins deployed ahead of the memory store (deploy gate accepted replay evidence bound to another commit), a stale profile cookie short-circuiting the YouTube Music QR sign-in, and the Skybridge fast path answering a statement as a contacts query over the router's chat verdict, and the panel barge-in monitor cutting off Zoe's own replies (pre-playback speech and her own onset), a landing script edited while running that left Kokoro stopped, auto-merge firing before a voice PR's head-bound probe, the overnight landing-chain hazards (no deploy run created, the replay-artifact slot overwritten, reset --hard in a shared worktree, deploy-run lag), a Samantha compare taken while the box was mid-deploy/restart, a stacked PR conflicting after its parent squash-merged, the panel device-token rotation runbook, the morning check-in failing on a datetime in its context (latent until open loops existed), parallel PRs clashing on append-only docs and Alembic numbers, a voice probe hung in getaddrinfo on an mDNS name, detaching agent-launched harnesses, and reading the panel Pi's voice logs (journal flood, outage recovery, thermal, USB). Diagnose-fast patterns plus the prevention rules.
 tags: [incident, runbook, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap, vad, voice, chromadb, b0.8, voice-gate, ytmusic, sign-in, skybridge, router, barge-in, panel, kokoro, auto-merge, landing, samantha-bar, stacked-pr, device-token, proactive, json, mdns, zoe-base-url, alembic, harness, zoe-pi, thermal, journald]
 timestamp: 2026-10-04T22:00:00+08:00
+
+description: Verified failure signatures on the live box and their fixes — the zoe-data accept-queue hang (health 000 while systemd says active), root-owned lab-container files silently blocking every deploy at the git pull step, the memory-reconcile fail-open duplicate factory, the voice stack swapped out, the brain's CUDA-OOM crash-loop under unified-memory pressure, MemoryMax-without-MemorySwapMax being no cap at all, and a VAD model swap that loads cleanly but detects no speech, and the B0.8 client pins deployed ahead of the memory store (deploy gate accepted replay evidence bound to another commit), a stale profile cookie short-circuiting the YouTube Music QR sign-in, and the Skybridge fast path answering a statement as a contacts query over the router's chat verdict, and the panel barge-in monitor cutting off Zoe's own replies (pre-playback speech and her own onset), a landing script edited while running that left Kokoro stopped, auto-merge firing before a voice PR's head-bound probe, the overnight landing-chain hazards (no deploy run created, the replay-artifact slot overwritten, reset --hard in a shared worktree, deploy-run lag), a Samantha compare taken while the box was mid-deploy/restart, a stacked PR conflicting after its parent squash-merged, the panel device-token rotation runbook, the morning check-in failing on a datetime in its context (latent until open loops existed), parallel PRs clashing on append-only docs and Alembic numbers, a voice probe hung in getaddrinfo on an mDNS name, detaching agent-launched harnesses, and installed units drifting from their merged templates (unit_drift_check.py) with the 2026-10-04 evening log-review operator steps. Diagnose-fast patterns plus the prevention rules.
+tags: [incident, runbook, unit-drift, log-review, deploy, zoe-data, systemd, docker, permissions, memory, cuda, swap, vad, voice, chromadb, b0.8, voice-gate, ytmusic, sign-in, skybridge, router, barge-in, panel, kokoro, auto-merge, landing, samantha-bar, stacked-pr, device-token, proactive, json, mdns, zoe-base-url, alembic, harness]
+timestamp: 2026-09-30T11:00:00+08:00
 ---
 
 # Production Incident Runbook
@@ -815,3 +819,94 @@ the daemon.
 **Inert settings.** `Nice=-5` in `zoe-voice.service` has no effect (`ps -o ni` shows 0; the user
 manager's `RLIMIT_NICE` is 0). The daemon has no CPU priority edge on the Pi; keep other load
 off the box instead.
+
+## 24. Installed unit drifted from its merged template — and the operator steps from the 2026-10-04 evening log review
+
+**Signature.** A unit-template fix is merged, every test is green, and the symptom it
+was written to prevent is still live. The 2026-10-04 review found it three ways at once
+(full inventory: [log-review-units-2026-10-04.md](log-review-units-2026-10-04.md)):
+
+* `functiongemma-router` runs WITHOUT `--mlock`, `LimitMEMLOCK=infinity` and
+  `MemoryMax=1280M` (live `VmLck: 0 kB`) although the template carries them;
+* `kokoro-tts` runs `TimeoutStartSec=120` vs the template's 300 — drift with **no runtime
+  effect** (`Type=simple`, no `ExecStartPre/Post`: the timeout never runs during its brain wait);
+* every Flue/Node stop or restart logs `status=143` + `Failed with result 'exit-code'`.
+
+**Diagnose in one command (read-only — parses unit files, never calls systemctl):**
+
+```bash
+python3 scripts/maintenance/unit_drift_check.py            # exit 1 = drift, 2 = unreadable unit; values print as sha256 prefixes
+python3 scripts/maintenance/unit_drift_check.py --show-values  # readable (trusted terminal only)
+python3 scripts/maintenance/unit_drift_check.py --units functiongemma-router --json
+python3 scripts/maintenance/unit_drift_check.py --strict   # also fail on untracked host edits
+```
+
+`MISSING`/`DIFFERS` = merged template not applied (act). `LIVE_ONLY` = an untracked host edit
+(track it as a drop-in or leave it). Run it after every merge touching `scripts/setup/systemd/`.
+Known harmless residue: kokoro `PYTHONPATH`/`ZOE_KOKORO_BACKEND`, serena `MemorySwapMax=0`
+(stricter than the template); **to confirm**: live zoe-data omits the repo-root `.env` its
+template lists first.
+
+### Operator steps (applying is NOT done by the PR)
+
+**(a) Router — apply the merged template (adds `--mlock`, `LimitMEMLOCK`, `MemoryMax=1280M`).**
+Only those three lines differ from the live unit (verified by the tool), so a template copy
+is safe here. The router is CPU-only (~650 MB), so no Kokoro pause is needed, but restart
+OUTSIDE a landing probe (a restart mid-probe records a spurious `fail`, section 15(d)) and
+note that for the ~5 s of the restart the stage-2 call times out and the turn keeps the
+similarity route.
+
+```bash
+cp ~/.config/systemd/user/functiongemma-router.service /tmp/functiongemma-router.service.bak
+cp scripts/setup/systemd/functiongemma-router.service ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user restart functiongemma-router
+curl -s localhost:11436/health && curl -s localhost:11436/props | grep -c r2     # healthy AND the r2 GGUF
+P=$(systemctl --user show -p MainPID --value functiongemma-router)
+grep -E 'VmLck|VmSwap|VmRSS' /proc/$P/status      # VmLck ~280 MB (the GGUF), VmSwap 0
+python3 scripts/maintenance/unit_drift_check.py --units functiongemma-router   # no drift
+# rollback: cp /tmp/functiongemma-router.service.bak ~/.config/systemd/user/ ; daemon-reload ; restart
+```
+
+If `VmLck` stays 0: `mlock` failing on `RLIMIT_MEMLOCK` is only a WARNING in llama.cpp —
+check `journalctl --user -u functiongemma-router | grep -i mlock` and
+`systemctl --user show functiongemma-router -p LimitMEMLOCK`.
+
+**(b) Kokoro — optional, template consistency only** (no runtime effect; drop-in, next start):
+
+```bash
+mkdir -p ~/.config/systemd/user/kokoro-tts.service.d
+cp scripts/setup/systemd/kokoro-tts.service.d/70-start-timeout.conf ~/.config/systemd/user/kokoro-tts.service.d/
+systemctl --user daemon-reload      # NO restart — do not bounce TTS for this
+systemctl --user show kokoro-tts -p TimeoutStartUSec    # 5min
+```
+
+**(c) Flue/Node units — stop reporting a clean SIGTERM as a failure** (drop-ins, no restart):
+
+```bash
+for u in flue-zoe-brain-2x flue-zoe-telegram; do
+  mkdir -p ~/.config/systemd/user/$u.service.d
+  cp scripts/setup/systemd/$u.service.d/50-exit-143.conf ~/.config/systemd/user/$u.service.d/
+done
+systemctl --user daemon-reload
+systemctl --user show flue-zoe-brain-2x flue-zoe-telegram -p SuccessExitStatus     # 143
+```
+
+**(d) Landing helpers (`~/.zoe/agent-tools/`, not in the repo — for the tool owner).**
+Edit them while NO landing is running (section 13: editing a running script left Kokoro
+down for 5 minutes):
+
+1. `land_voice_pr.sh` stops Kokoro, THEN calls `wait_deploy` (up to 22 min). Tonight one
+   landing kept TTS down 303 s (21:34:46 stop -> 21:39:49 ready) while only waiting for another PR's
+   deploy. Move `systemctl --user stop kokoro-tts.service` (and its headroom loop) to just
+   AFTER `wait_deploy` + the post-wait restart re-check, immediately before the probe. The
+   `trap ... start kokoro-tts` on EXIT already restores it.
+2. Every `gh` call needs a repo (`cd /home/zoe/assistant` first, done in `land_queue.sh`
+   during the review, or `-R <owner>/<repo>`); `docs_merge_chain.sh` still prints
+   `failed to run git: fatal: not a git repository` and a blank `queue #N -> ` state.
+3. 10 probes for 4 merges: a merge during a ~5-10 min probe makes every other queued PR
+   BEHIND and sig #36 (never move the head after its probe) forces a repeat. Land fewer
+   voice-path PRs concurrently; do not relax sig #36.
+
+Noise classes to NOT chase (router `W restored context checkpoint` = a cache hit; the
+two large probe re-prefills; red-then-green `replay-evidence`; probe EMPTY flapping 0-2) are
+listed in [log-review-units-2026-10-04.md](log-review-units-2026-10-04.md) sections 2 and 3.
