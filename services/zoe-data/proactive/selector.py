@@ -34,7 +34,7 @@ from datetime import datetime, timedelta, timezone
 
 # Shared with the day brief: naive DB timestamps are UTC; stored text is flattened,
 # bracket-free (cannot forge a delimiter) and capped.
-from brief_first_turn import _as_utc, _clean
+from brief_first_turn import _as_utc, _clean, trigger_key
 
 logger = logging.getLogger(__name__)
 
@@ -292,6 +292,7 @@ class Raise:
     hint: str
     token: str
     lifecycle: bool = False  # ZOE_LOOP_LIFECYCLE at prepare: the question phrasing
+    trigger: str = ""        # ``trigger_key`` of the utterance this raise rode in on
 
     @property
     def body(self) -> str:
@@ -453,7 +454,7 @@ async def _prepare(message: str, uid: str, sid: str, brief_active: bool) -> Rais
 
             return Raise(uid, sid, str(r[0]), str(r[1]), shape, _clean(r[2]),
                          _clean(r[3]) or _ASK.get(str(r[1]), _ASK["open_loop"]), token,
-                         lifecycle_enabled())
+                         lifecycle_enabled(), trigger_key(message))
     return None
 
 
@@ -475,7 +476,8 @@ async def settle(raised: Raise | None, *, produced: bool) -> bool:
     """Mark the candidate surfaced once the turn EMITTED reply text (cooldown,
     count, this session). Called from each lane's stream ``finally`` — the
     brief_first_turn.settle pattern: shielded, so a barge-in still records a raise
-    that was heard; ``produced=False`` records nothing. NEVER raises."""
+    that was heard; ``produced=False`` records nothing. Under ``ZOE_PROACTIVE_LEDGER`` the
+    delivery is also entered in the ledger (``proactive/ledger.py``). NEVER raises."""
     if raised is None:
         return False
     task = asyncio.ensure_future(_settle(raised, produced))
@@ -500,6 +502,12 @@ async def _settle(raised: Raise, produced: bool) -> bool:
                     "cooldown_until = ?, last_surfaced_session = ?, last_surfaced_at = ? WHERE id = ?",
                     (_iso(now + COOLDOWN), raised.session_id, _iso(now), raised.candidate_id),
                 )
+                from proactive import ledger  # flag-dark delivery ledger (no I/O when off)
+
+                await ledger.record_for_candidate(
+                    db, candidate_id=raised.candidate_id, user_id=raised.user_id,
+                    session_id=raised.session_id, shape=raised.shape, now=now,
+                    trigger=raised.trigger)
             settled = True
     except Exception as exc:  # noqa: BLE001
         logger.warning("proactive-selector: settle failed user=%s: %r", raised.user_id, exc)
@@ -512,18 +520,20 @@ async def _settle(raised: Raise, produced: bool) -> bool:
 
 
 async def mark_brief_surfaced(user_id: str, session_id: str,
-                              items: list[tuple[str, str, str]]) -> int:
+                              items: list[tuple[str, str, str]], *, trigger: str = "") -> int:
     """The ``[Today]`` brief mentioned these ``(kind, source_ref, text)`` items: record
     them as surfaced exactly as a raise would (count, cooldown, this session, ONE shared
     stamp), so the next conversation does not raise the loop the brief just voiced.
     An item the nightly pass never selected gets an already-expired row that carries
     the cooldown, so a later night cannot select it fresh. Called from
-    ``brief_first_turn`` settle (``ZOE_LOOP_LIFECYCLE``). Never raises."""
+    ``brief_first_turn`` settle (``ZOE_LOOP_LIFECYCLE``). Under ``ZOE_PROACTIVE_LEDGER`` each
+    item also lands in the delivery ledger. Never raises."""
     if not items or not user_id or not session_id or not selector_enabled():
         return 0
     try:
         from db_compat import get_compat_db
         from open_loop_quality import loop_anchors
+        from proactive import ledger
 
         now = _now()
         stamp, cool = _iso(now), _iso(now + COOLDOWN)
@@ -544,6 +554,12 @@ async def mark_brief_surfaced(user_id: str, session_id: str,
                      " ".join(sorted(loop_anchors(text))), stamp, cool, session_id, stamp,
                      stamp, stamp),
                 )
+                if ledger.ledger_enabled():
+                    await ledger.record(
+                        db, user_id=user_id, candidate_id=None, kind=kind, source_ref=ref,
+                        shape="brief", delivered_by="brief", session_id=session_id,
+                        cue_words=" ".join(sorted(loop_anchors(text))), now=now,
+                        trigger=trigger)
     except Exception as exc:  # noqa: BLE001
         logger.warning("proactive-selector: brief mark failed user=%s: %r", user_id, exc)
         return 0

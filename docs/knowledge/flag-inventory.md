@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Auto-generated inventory of every ZOE_* environment flag read in the codebase — defaults, readers, typed_env adoption, and .env.example coverage.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-10-04T00:00:00Z
+timestamp: 2026-10-05T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-10-04T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-10-04. The table body is deterministic (sorted, no
+Last generated: 2026-10-05. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Default `dynamic` = not statically extractable; `(required)` = bare
@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-512 flags; 510 not documented in `.env.example`.
+513 flags; 511 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -362,6 +362,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_PRESENCE_WINDOW_S` | `''` | no | NO | `services/zoe-data/proactive/presence.py` |
 | `ZOE_PROACTIVE_ARRIVAL_RESPONSE_S` | `''` | no | NO | `services/zoe-data/proactive/arrival.py` |
 | `ZOE_PROACTIVE_BRIEF_ON_ARRIVAL` | `''` | no | NO | `services/zoe-data/proactive/arrival.py` |
+| `ZOE_PROACTIVE_LEDGER` | `''` | no | NO | `services/zoe-data/proactive/ledger.py` |
 | `ZOE_PROACTIVE_RAISE_GAP_S` | `7200` | yes | NO | `services/zoe-data/proactive/selector.py` |
 | `ZOE_PROACTIVE_RAISE_PER_DAY` | `2` | yes | NO | `services/zoe-data/proactive/selector.py` |
 | `ZOE_PROACTIVE_SELECTOR` | `''` | no | NO | `services/zoe-data/proactive/selector.py` |

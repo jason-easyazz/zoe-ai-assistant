@@ -3521,6 +3521,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_PROACTIVE_LEDGER": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/proactive/ledger.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_PROACTIVE_RAISE_GAP_S": {
         "defaults": [
           "7200"
