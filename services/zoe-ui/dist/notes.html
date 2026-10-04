@@ -463,14 +463,6 @@
                     <div class="more-item-icon">📝</div>
                     <div class="more-item-label">Notes</div>
                 </div>
-                <div class="more-item" onclick="navigateToPage('cooking.html')">
-                    <div class="more-item-icon">🍳</div>
-                    <div class="more-item-label">Cooking</div>
-                </div>
-                <div class="more-item" onclick="navigateToPage('smart-home.html')">
-                    <div class="more-item-icon">🏠</div>
-                    <div class="more-item-label">Smart Home</div>
-                </div>
                 <div class="more-item" onclick="navigateToPage('updates.html')">
                     <div class="more-item-icon">⬇️</div>
                     <div class="more-item-label">Updates</div>
@@ -500,8 +492,6 @@
             <a href="calendar.html" class="mobile-nav-item">📅 Calendar</a>
             <a href="journal.html" class="mobile-nav-item">📔 Journal</a>
             <a href="notes.html" class="mobile-nav-item active">📝 Notes</a>
-            <a href="cooking.html" class="mobile-nav-item">🍳 Cooking</a>
-            <a href="smart-home.html" class="mobile-nav-item">🏠 Smart Home</a>
             <a href="updates.html" class="mobile-nav-item">⬇️ Updates</a>
             <a href="settings.html" class="mobile-nav-item">⚙️ Settings</a>
         </div>
@@ -667,7 +657,7 @@
 
         async function loadNotes() {
             try {
-                const r = await fetch('/api/notes');
+                const r = await fetch('/api/notes/');
                 if (!r.ok) throw new Error();
                 const data = await r.json();
                 notes = Array.isArray(data) ? data : (data.notes || []);
@@ -840,7 +830,7 @@
                         method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
                     });
                 } else {
-                    r = await fetch('/api/notes', {
+                    r = await fetch('/api/notes/', {
                         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
                     });
                 }

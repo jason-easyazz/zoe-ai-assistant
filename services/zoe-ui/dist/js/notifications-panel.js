@@ -5,6 +5,8 @@
  */
 (function() {
     'use strict';
+    // A desktop page must never route into /touch/* (standing rule, 2026-07-20).
+    const IS_TOUCH_SURFACE = (function () { try { return location.pathname.startsWith('/touch/'); } catch (_) { return false; } })();
 
     let notificationsOpen = false;
     let notificationsData = [];
@@ -342,7 +344,9 @@
                     const openHandler = function(e) {
                         e.stopPropagation();
                         close();
-                        location.href = '/touch/updates.html?highlight=openclaw';
+                        // Desktop is desktop, touch is touch: only a touch surface deep-links into
+                        // the panel's updates page; on desktop the panel itself is the updates view.
+                        if (IS_TOUCH_SURFACE) location.href = '/touch/updates.html?highlight=openclaw';
                     };
                     openBtn.addEventListener('click', openHandler);
                     openBtn.addEventListener('touchend', function(e) { e.preventDefault(); openHandler(e); });
@@ -355,7 +359,7 @@
                     const openZoeHandler = function(e) {
                         e.stopPropagation();
                         close();
-                        location.href = '/touch/updates.html';
+                        if (IS_TOUCH_SURFACE) location.href = '/touch/updates.html';
                     };
                     openZoeBtn.addEventListener('click', openZoeHandler);
                     openZoeBtn.addEventListener('touchend', function(e) { e.preventDefault(); openZoeHandler(e); });

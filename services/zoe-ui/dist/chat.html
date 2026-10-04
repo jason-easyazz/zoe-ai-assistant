@@ -2465,14 +2465,6 @@
                     <div class="more-item-icon">📝</div>
                     <div class="more-item-label">Notes</div>
                 </div>
-                <div class="more-item" onclick="navigateToPage('cooking.html')">
-                    <div class="more-item-icon">🍳</div>
-                    <div class="more-item-label">Cooking</div>
-                </div>
-                <div class="more-item" onclick="navigateToPage('smart-home.html')">
-                    <div class="more-item-icon">🏠</div>
-                    <div class="more-item-label">Smart Home</div>
-                </div>
                 <div class="more-item" onclick="navigateToPage('updates.html')">
                     <div class="more-item-icon">⬇️</div>
                     <div class="more-item-label">Updates</div>
@@ -2505,9 +2497,7 @@
             <a href="memories.html" class="mobile-nav-item">🧠 Memories</a>
             <a href="notes.html" class="mobile-nav-item">📝 Notes</a>
 
-            <a href="cooking.html" class="mobile-nav-item">🍳 Cooking</a>
 
-            <a href="smart-home.html" class="mobile-nav-item">🏠 Smart Home</a>
 
             <a href="updates.html" class="mobile-nav-item">⬇️ Updates</a>
 
@@ -4892,7 +4882,7 @@
                 [...new FormData(form).entries()].filter(([,v]) => v.trim())
             );
             try {
-                await apiRequest('/api/notes', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+                await apiRequest('/api/notes/', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
                 wrap.innerHTML = `<div class="cef-wrap"><div class="cef-success">
                     <div class="cef-success-icon" style="background:linear-gradient(135deg,#3b82f6,#60a5fa)">✓</div>
                     <div class="cef-success-body">
@@ -5232,7 +5222,7 @@
                 [...new FormData(form).entries()].filter(([,v]) => v.trim())
             );
             try {
-                await apiRequest('/api/reminders', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+                await apiRequest('/api/reminders/', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
                 const dateStr = payload.due_date
                     ? new Date(payload.due_date+'T00:00').toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'})
                     : '';
