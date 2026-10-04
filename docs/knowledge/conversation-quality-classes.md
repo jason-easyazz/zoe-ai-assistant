@@ -21,8 +21,11 @@ The S1 floor (`ZOE_ROUTER_HEAD_MIN_CONF`) only helps when the head is *unsure*; 
 *confident* misroute, which no threshold catches (see `two-stage-router-rollout.md`).
 
 **Rule** (`memory_gate.own_fact_question_kind`): a possessive / first-person anchor AND a fact
-noun (birthday, address, age, phone, email, name…) or a first-person stored-fact verb ("where do
-I live", "when was I born"), plus "who am I". "what time is it", "when is Easter", "what's my
+noun (birthday, address, age, phone number, email, name…) that ENDS the question, or a first-person
+stored-fact verb ("where do I live", "when was I born"), plus a bare "who am I" (anchored to the whole
+utterance: "who am I meeting tomorrow" is a calendar question). Only my/our and the user's own relations
+("mum's") count as possessives: "Obama's age", "what's my phone bill", "what's my job today" are not
+own-fact. "what time is it", "when is Easter", "what's my
 schedule", "how old is the universe", "when is my birthday party" never match.
 
 **Live path** (one rule on every head surface, like the evidence and event-time rules):
@@ -81,6 +84,11 @@ sure". The Flue brain has a `web_search` tool but a 4B model rarely elects to ch
    `browser_broker.search_web`;
 4. results → a `[MEMORY CONTEXT — live web check …]` block appended after the user's words telling
    the brain to say whether it was right, give the corrected fact and name the source domain;
+   untrusted web text is framed as quoted DATA (instruction-shaped sentences are dropped, each snippet
+   truncated, brackets/quotes neutralised); household questions (named people, family words, home/here,
+   any capitalised word outside a small public-entity allowlist) are never "world trivia", so no household
+   name is ever sent to a search provider; a spoken (`voice_mode`) challenge gets a 3 s wall instead of 8 s
+   because no filler plays during the lookup;
    timeout / no results / blocked / error → the seam answers itself with an honest "I can't check that
    right now, so please treat my last answer as unconfirmed rather than certain." (no brain call;
    outcome label `seam_reply`, never `ok`).
@@ -116,7 +124,7 @@ announces the `recall_memory` call in text before making it; both reach the user
   The follow-up there is one line in `PERSONAL_RECALL_DOCTRINE`: "call the tool silently; never announce it".
 - **Post-filter** (`narration_filter`, wrapping the stream in `run_flue_brain_streaming`): drop up to
   two LEADING lookup-announcing sentences ("I'll check…", "Let me look…", "Checking…", "One moment while
-  I look that up", "Okay, I'll see what I remember…") when a real answer follows. Kept: a sentence
+  I look that up", "Okay, I'll see what I remember…") when a real answer follows. When the answer is in the SAME sentence ("Let me look: you have 3 events today." — colon, dash, or a comma before an answer word) only the announcement clause goes. The sentence splitter respects abbreviations (Dr., Mr., St., e.g., i.e., "No. 5"), initials and decimals. Kept: a sentence
   carrying a promise ("…and get back to you", "let you know", "tomorrow", "with you"), an announcement with
   nothing after it, and anything not at the very start. Tool/thinking sentinels pass straight through.
 - "who am I" / "tell me about myself" / "what do you remember about me" are `own_fact` shapes (kind

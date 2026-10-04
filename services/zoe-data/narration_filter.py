@@ -76,15 +76,48 @@ _DEFERRAL_RE = re.compile(
 _SENT_END_RE = re.compile(r"[.!?…]+[\"')\]]*(?=\s)|\n")
 
 
+# Where the announcement CLAUSE ends inside one sentence and the answer begins:
+# "Let me look: you have 3 events." / "Checking — you have 3 events." / "Let me
+# check, you have 3 events." (a comma counts only before an answer-shaped word, so
+# "Let me check my notes, then tell you." stays one announcement). A colon inside a
+# clock time ("3:30") is not a boundary.
+_BOUNDARY_RE = re.compile(
+    r"\s*(?::(?!\d)|[—–]|\s-\s|,(?=\s+(?:you|your|you['’]re|you['’]ve|i|i['’]ve|it|it['’]s|"
+    r"there|here|that|no|yes|nothing|nobody|none)\b))\s*"
+)
+
+
+def split_narration(sentence: str) -> Optional[str]:
+    """Split ONE sentence into announcement + answer.
+
+    * ``None``  — not a lookup announcement (or it carries a promise): leave it.
+    * ``""``    — the whole sentence is the announcement ("I'll check what I've got
+      on file about you."): drop it, if an answer follows.
+    * non-empty — the announcement clause plus an answer in the SAME sentence
+      ("Let me look: you have 3 events today."): drop only the clause, keep this
+      (first letter capitalised).
+    The promise test looks at the announcement clause only, so an answer that
+    mentions "tomorrow" does not protect the announcement in front of it. Pure."""
+    s = (sentence or "").strip()
+    if not s:
+        return None
+    m = _NARRATION_RE.match(s)
+    if not m:
+        return None
+    b = _BOUNDARY_RE.search(s, m.end())
+    head = s[: b.start()] if b else s
+    rest = s[b.end():].strip() if b else ""
+    if len(head) > _MAX_SENTENCE_CHARS or _DEFERRAL_RE.search(head):
+        return None
+    if not rest:
+        return ""
+    return rest[0].upper() + rest[1:]
+
+
 def is_narration(sentence: str) -> bool:
     """True for ONE sentence that only announces a lookup ("I'll check what I've
-    got on file about you.") and carries no promise. Pure."""
-    s = (sentence or "").strip()
-    if not s or len(s) > _MAX_SENTENCE_CHARS:
-        return False
-    if _DEFERRAL_RE.search(s):
-        return False
-    return bool(_NARRATION_RE.match(s))
+    got on file about you.") and carries no promise and no inline answer. Pure."""
+    return split_narration(sentence) == ""
 
 
 _FILLER_ONLY_RE = re.compile(
@@ -93,20 +126,52 @@ _FILLER_ONLY_RE = re.compile(
 )
 
 
+# A "." after one of these is not a sentence end ("Dr. Patel's number", "e.g. the
+# dentist"). "no" counts only before a digit ("No. 5") — "No. You have nothing." is
+# a sentence. A single capital letter ("J. Smith") is an initial.
+_ABBREVIATIONS = frozenset({
+    "dr", "mr", "mrs", "ms", "mx", "st", "prof", "sr", "jr", "vs", "etc", "approx", "mt", "ave",
+    "rd", "blvd", "dept", "est", "inc", "ltd", "co", "fig", "gen", "col", "capt", "sgt", "rev", "hon",
+    "e.g", "i.e", "a.m", "p.m", "u.s", "u.k",
+})
+_WORD_BEFORE_RE = re.compile(r"([A-Za-z]+(?:\.[A-Za-z]+)*)$")
+
+
+def _is_abbreviation_dot(text: str, m: "re.Match[str]") -> bool:
+    if m.group(0) != ".":
+        return False
+    wm = _WORD_BEFORE_RE.search(text[: m.start()])
+    if not wm:
+        return False
+    word = wm.group(1)
+    low = word.lower()
+    if low in _ABBREVIATIONS or (len(word) == 1 and word.isupper()):
+        return True
+    return low == "no" and bool(re.match(r"\s*\d", text[m.end():]))
+
+
+def _next_end(text: str, start: int = 0) -> int:
+    """Index just past the first real sentence end at or after ``start``, or -1."""
+    for m in _SENT_END_RE.finditer(text, start):
+        if not _is_abbreviation_dot(text, m):
+            return m.end()
+    return -1
+
+
 def _first_sentence_end(buf: str) -> int:
     """Index just past the first sentence of ``buf`` (terminator followed by
-    whitespace, or a newline), or -1 when the sentence is not complete yet. A
-    bare interjection sentence ("Sure!", "Okay.") is joined to the sentence
-    after it, so "Sure! Let me check." is judged as one announcement."""
-    m = _SENT_END_RE.search(buf)
-    if not m:
+    whitespace, or a newline; abbreviations and initials do not end one), or -1
+    when the sentence is not complete yet. A bare interjection sentence ("Sure!",
+    "Okay.") is joined to the sentence after it, so "Sure! Let me check." is
+    judged as one announcement."""
+    end = _next_end(buf)
+    if end < 0:
         return -1
-    end = m.end()
     if _FILLER_ONLY_RE.match(buf[:end]):
         rest = buf[end:]
         lead = len(rest) - len(rest.lstrip())
-        m2 = _SENT_END_RE.search(rest[lead:])
-        return end + lead + m2.end() if m2 else -1
+        e2 = _next_end(rest[lead:])
+        return end + lead + e2 if e2 >= 0 else -1
     return end
 
 
@@ -120,9 +185,18 @@ def strip_leading_narration(text: str) -> str:
         stripped = rest.lstrip()
         end = _first_sentence_end(stripped)
         if end < 0:
-            break
+            if not stripped:
+                break
+            end = len(stripped)  # the reply's last (unterminated) sentence
         sentence, after = stripped[:end], stripped[end:]
-        if not is_narration(sentence) or not after.strip():
+        remainder = split_narration(sentence)
+        if remainder is None:
+            break
+        if remainder:  # the answer is in the same sentence: drop the clause only
+            rest = remainder + after
+            dropped += 1
+            break
+        if not after.strip():
             break
         rest = after.lstrip()
         dropped += 1
@@ -149,13 +223,21 @@ class NarrationStripper:
         while not self._passing:
             stripped = self._buf.lstrip()
             end = _first_sentence_end(stripped)
+            if end < 0 and final and stripped:
+                end = len(stripped)  # the reply's last (unterminated) sentence
             if end < 0:
                 if final or len(stripped) > _PROBE_LIMIT:
                     out += "".join(self._held) + self._buf
                     self._held, self._buf, self._passing = [], "", True
                 break
             sentence, after = stripped[:end], stripped[end:]
-            if self._dropped + len(self._held) < _MAX_DROPPED and is_narration(sentence):
+            remainder = (split_narration(sentence)
+                         if self._dropped + len(self._held) < _MAX_DROPPED else None)
+            if remainder:  # announcement clause + answer in one sentence: keep the answer
+                out += remainder + after
+                self._held, self._buf, self._passing = [], "", True
+                break
+            if remainder == "":
                 if after.strip():
                     self._dropped += 1
                     self._held = []  # an answer follows: the announcements go
@@ -165,6 +247,9 @@ class NarrationStripper:
                 # when the answer arrives)
                 self._held.append(self._buf)
                 self._buf = ""
+                if final:  # the stream ended on the announcement: it IS the reply
+                    out += "".join(self._held)
+                    self._held, self._passing = [], True
                 break
             out += "".join(self._held) + self._buf
             self._held, self._buf, self._passing = [], "", True

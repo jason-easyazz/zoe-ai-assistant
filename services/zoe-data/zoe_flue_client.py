@@ -688,13 +688,13 @@ def _recall_block_open() -> str:
 
 
 # ── Challenge verification + trivia hedge (both default OFF) ─────────────────
-async def _verify_plan(message: str, uid: str, session_id: str):
+async def _verify_plan(message: str, uid: str, session_id: str, voice: bool = False):
     """``verify_on_challenge.prepare`` or None — import-guarded and never
     raises. Flag off: ``prepare`` returns None before any read."""
     try:
         import verify_on_challenge
 
-        return await verify_on_challenge.prepare(message, uid, session_id)
+        return await verify_on_challenge.prepare(message, uid, session_id, voice=voice)
     except Exception as exc:  # noqa: BLE001 - the check must never break a turn
         logger.warning("seam verify_on_challenge failed (non-fatal): %s", type(exc).__name__)
         return None
@@ -1582,7 +1582,7 @@ async def _run_flue_brain_streaming_turn(
     # a world-fact answer runs ONE bounded web search. A hit rides as a block
     # AFTER the user's words; a miss answers honestly right here — the brain is
     # never asked to re-assert an unchecked claim.
-    verify_plan = await _verify_plan(message, uid, session_id)
+    verify_plan = await _verify_plan(message, uid, session_id, bool(kwargs.get("voice_mode")))
     if verify_plan is not None and verify_plan.reply:
         _record_outcome(outcome_sink, FLUE_OUTCOME_SEAM_REPLY, f"verify_on_challenge:{verify_plan.status}")
         yield verify_plan.reply

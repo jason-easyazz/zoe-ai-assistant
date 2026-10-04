@@ -332,26 +332,31 @@ def is_event_time_question(message: str) -> bool:
 _OF_NOUN = (
     r"(?:birthday|b-?day|birth\s*date|date\s+of\s+birth|dob|anniversary|age|"
     r"(?:home\s+|street\s+|postal\s+|email\s+|mailing\s+|work\s+)?address|post\s*code|"
-    r"zip\s*code|(?:phone|mobile|cell)(?:\s+number)?|(?:phone|mobile|cell)\s+no\.?|"
+    r"zip\s*code|(?:phone|mobile|cell)\s+(?:number|no\.?)|"
     r"e-?mail(?:\s+address)?|(?:sur|last|middle|full|first|nick|maiden)\s*name|name|"
     r"star\s+sign|zodiac(?:\s+sign)?|blood\s+type|(?:licen[cs]e|number)\s+plate|rego|"
     r"hometown|birthplace|place\s+of\s+birth|occupation|job(?:\s+title)?|"
     r"favou?rite\s+(?:[\w'’-]+)|shoe\s+size|height|weight)"
 )
+# First-person possessives (my / our / mine) and the user's own relations
+# ("mum's"). A generic third-party possessive ("Obama's age") is deliberately NOT
+# here: it is a world question, and claiming it as own-fact would re-point it to
+# memory and switch the challenge verification off.
 _OF_POSS = (
     r"(?:my|our|(?:mum|mom|mother|dad|father|nan|nana|gran|grandma|grandpa|sister|"
     r"brother|wife|husband|partner|son|daughter|boyfriend|girlfriend|"
-    r"fianc[eé]e?|niece|nephew|cousin|aunt|auntie|uncle|friend|boss)['’]s|"
-    r"[\w-]+['’]s)"
+    r"fianc[eé]e?|niece|nephew|cousin|aunt|auntie|uncle)['’]s)"
 )
+# The fact noun must END the question (filler words allowed): "what's my job today",
+# "when is my rego due", "what's my phone bill" are not requests for a stored fact.
+_OF_END = r"(?:\s+(?:again|please|then|now|exactly|anyway|zoe))*\W*$"
 OWN_FACT_QUESTION_PATTERNS: tuple[tuple[str, re.Pattern], ...] = tuple(
     (kind, re.compile(rx, re.IGNORECASE))
     for kind, rx in (
         # "when is my birthday", "what's my address", "when's mum's birthday",
         # "what is our wifi..." is NOT here (no fact noun) — the noun is the guard.
         ("fact_noun", r"\b(?:when|what|which|whats)(?:['’]s|\s+(?:is|are|was|were))?\s+"
-                      r"" + _OF_POSS + r"\s+(?:[\w'’-]+\s+)?" + _OF_NOUN + r"\b"
-                      r"(?!\s+(?:party|dinner|lunch|drinks|celebration|cake|present|gift)\b)"),
+                      r"" + _OF_POSS + r"\s+(?:[\w'’-]+\s+)?" + _OF_NOUN + _OF_END),
         ("how_old", r"\bhow\s+old\s+(?:am\s+i|are\s+we|is\s+(?:my|our)\s+[\w'’-]+|"
                     r"is\s+(?:he|she)\b|is\s+(?:mum|mom|dad|nan|nana|gran)\b)"),
         ("born", r"\b(?:when|what\s+(?:year|day|date))\s+(?:was|were)\s+(?:i|we)\s+born\b"),
@@ -365,8 +370,10 @@ OWN_FACT_QUESTION_PATTERNS: tuple[tuple[str, re.Pattern], ...] = tuple(
         ("have", r"\bwhat\s+do\s+i\s+do\s+for\s+(?:work|a\s+living)\b"),
         # "Who am I?" (live 2026-10-04: answered after a narrated lookup), "tell me
         # about myself", "what do you remember about me" — the whole stored profile.
-        ("self", r"\bwho\s+am\s+i\b(?!\s+(?:to|supposed|kidding|fooling)\b)"),
-        ("self", r"\btell\s+me\s+(?:about\s+myself|who\s+i\s+am|what\s+you\s+know\s+about\s+me)\b"),
+        # Anchored to the whole utterance: "who am I meeting tomorrow" is a calendar question.
+        ("self", r"^\W*(?:(?:so|and|hey|ok|okay|um|uh|zoe)[\s,]+)*who\s+am\s+i\W*$"),
+        ("self", r"^\W*(?:(?:so|and|hey|ok|okay|um|uh|zoe)[\s,]+)*tell\s+me\s+(?:about\s+myself|who\s+i\s+am|"
+                 r"what\s+you\s+know\s+about\s+me)\W*$"),
         ("self", r"\bwhat\s+(?:do\s+you|can\s+you)\s+(?:know|remember|tell\s+me)\s+(?:about|of)\s+me\b"),
     )
 )

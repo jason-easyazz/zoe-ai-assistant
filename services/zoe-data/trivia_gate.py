@@ -69,14 +69,71 @@ _COMMAND_RE = re.compile(
 )
 
 
+# Household shapes with NO personal pronoun: "how old is Sarah", "when was Anna born",
+# "when did Tom move out", "how many kids does Sarah have", "how far is it from home".
+# These must never read as world trivia — the question (with the names in it) would be
+# sent to a search provider and the answer hedged as if it were public knowledge.
+_HOUSEHOLD_RE = re.compile(
+    r"\b(?:home|here|house|our|ours|family|household|neighbou?rs?|kids?|children|mum|mom|dad|"
+    r"wife|husband|partner|sister|brother|nan|nana|gran|grandma|grandpa|boyfriend|girlfriend|"
+    r"boss|colleagues?|flatmates?|roommates?)\b"
+    r"|\bhow\s+old\s+(?:is|was)\s+(?!the\b|this\b|that\b|it\b|earth\b|universe\b|moon\b|sun\b|"
+    r"everest\b|mount\b|mt\b)\w+\s*\W*$"
+    r"|\bwhen\s+(?:was|were)\s+(?!the\b)\w+(?:\s+\w+)?\s+born\b"
+    r"|\bwhen\s+did\s+(?!the\b)\w+\s+(?:move|retire|marry|get\s+(?:married|home|back)|"
+    r"come\s+(?:home|back)|leave\s+home)\b"
+    r"|\bhow\s+many\s+(?:kids|children|siblings|brothers|sisters|pets|cars|dogs|cats)\s+"
+    r"(?:does|do|did|has)\s+\w+\s+(?:have|got)\b",
+    re.IGNORECASE,
+)
+# A capitalised word that is not a public entity is treated as a PERSON/PLACE OF THE
+# HOUSEHOLD (fail closed: a missed hedge/verify costs little; a leaked name costs more).
+# The allowlist is deliberately small and public: countries, continents, big cities,
+# and the words real trivia questions capitalise ("Grand Final", "World Cup").
+_PUBLIC_WORDS = frozenset("""
+australia australian canada canadian america american usa us uk england english britain british
+scotland wales ireland france french germany german italy italian spain spanish portugal japan
+japanese china chinese india indian russia brazil mexico argentina egypt greece turkey europe asia
+africa antarctica oceania pacific atlantic indian arctic earth moon mars sun jupiter venus saturn
+berlin paris london rome madrid tokyo beijing moscow sydney melbourne perth adelaide brisbane
+canberra hobart darwin auckland wellington washington york new zealand
+mount mt everest eiffel tower wall great barrier reef sahara amazon nile river lake ocean sea
+grand final finals world cup olympics olympic games series league premier premiership super bowl
+open championship championships tournament grand prix formula one afl nrl nfl nba mlb nhl fifa uefa
+nobel prize oscar oscars academy awards emmy grammy bible titanic war century
+january february march april may june july august september october november december
+monday tuesday wednesday thursday friday saturday sunday
+""".split())
+_CAP_WORD_RE = re.compile(r"\b[A-Z][a-z]+(?:['’][a-z]+)?\b")
+
+
+def _has_private_proper_name(msg: str) -> bool:
+    """True when ``msg`` holds a capitalised word (other than the opener and "I")
+    that is not in the small public-entity allowlist."""
+    words = list(_CAP_WORD_RE.finditer(msg))
+    for m in words:
+        w = m.group(0).lower().replace("\u2019", "'")
+        if m.start() == len(msg) - len(msg.lstrip()):
+            continue  # sentence-initial capital ("Who", "How")
+        if w.endswith("'s"):
+            w = w[:-2]
+        if w not in _PUBLIC_WORDS:
+            return True
+    return False
+
+
 def is_world_trivia(message: str) -> bool:
-    """True for a world-knowledge question with a date / number / winner shape,
-    not about the user, not live data, not a command. Pure."""
+    """True for a world-knowledge question with a date / number / winner shape and
+    no personal signal: not about the user (pronoun anchor), not about the
+    household (named people, family words, home/here), not live data, not a
+    command. Pure."""
     msg = (message or "").strip()
     if not msg or len(msg) > 240:
         return False
     if _COMMAND_RE.match(msg) or _LIVE_RE.search(msg):
         return False
     if _PERSONAL_RE.search(_REQUEST_ME_RE.sub(" ", msg)):
+        return False
+    if _HOUSEHOLD_RE.search(msg) or _has_private_proper_name(msg):
         return False
     return any(rx.search(msg) for rx in _TRIVIA_PATTERNS)

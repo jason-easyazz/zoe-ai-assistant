@@ -37,7 +37,12 @@ NEG = ["What time is it?", "what's the time", "When is Easter?", "what's my sche
        "how old is the universe", "what's the weather", "what's on my calendar",
        "what time is my dentist appointment", "when's my flight", "when is my birthday party",
        "what's my timer at", "what's the capital of France", "when is the game on",
-       "what is my next meeting", "what's the project's name"]
+       "what is my next meeting", "what's the project's name",
+       # finding 1: "who am I <verb>ing" is a calendar question, not "who am I"
+       "who am I meeting tomorrow", "who am I seeing on Friday", "who am I having lunch with",
+       # finding 4: bare nouns and third-party possessives are not own-fact
+       "what's my phone bill", "what's my job today", "when is my rego due", "what's Obama's age",
+       "what's Sarah's phone number", "when is Nick's birthday"]
 
 
 @pytest.mark.parametrize("text", POS)
@@ -222,3 +227,24 @@ def test_corpus_rows_label_first_person_facts_as_memory_recall():
     for r in own1:
         if r["label"] == "memory":
             assert memory_gate.is_own_fact_question(r["text"]), r["text"]
+
+
+# ── review findings 1 and 4 ──────────────────────────────────────────────────
+
+@pytest.mark.parametrize("text", ["who am I meeting tomorrow", "who am I seeing on Friday"])
+def test_who_am_i_verb_phrase_still_routes_to_calendar(head, text):
+    head("calendar", 0.99, "call:show_calendar{}")
+    assert semantic_router.route(text)["routed"] == "calendar"
+    assert fast_tiers.intent_gate("calendar_show", text, lane="voice") is True
+
+
+@pytest.mark.parametrize("text", ["Who am I", "who am I?", "so, who am I", "Hey Zoe, who am I."])
+def test_who_am_i_alone_is_own_fact(text):
+    assert memory_gate.own_fact_question_kind(text) == "self"
+
+
+@pytest.mark.parametrize("text", ["what's my phone bill", "what's my job today", "when is my rego due",
+                                  "what's Obama's age"])
+def test_bare_nouns_and_third_party_possessives_keep_their_tool(head, text):
+    head("time", 0.99, TIME_CALL)
+    assert semantic_router.route(text)["routed"] == "time"  # NOT re-pointed to memory

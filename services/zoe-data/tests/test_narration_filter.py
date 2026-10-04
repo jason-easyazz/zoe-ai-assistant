@@ -94,6 +94,10 @@ def test_flag_default_off():
     "I'll check what I've got on file about you.",
     "I'll check the weather and get back to you. It's sunny.",
     f"I'll check. Let me look at it. Hmm, let me search. {ANSWER}",
+    "Let me look: you have 3 events today. Anything else?",
+    "Checking \u2014 you have 3 events today. Anything else?",
+    "Dr. Patel's number. It is 123. Anything else?",
+    "Let me look up Dr. Patel's number. It is 123.",
     ANSWER,
 ])
 @pytest.mark.parametrize("size", [1, 2, 5, 11, 400])
@@ -232,3 +236,60 @@ def test_self_questions_are_own_fact(text):
 @pytest.mark.parametrize("text", ["who am I to argue", "who is she", "who are you"])
 def test_self_negative(text):
     assert memory_gate.own_fact_question_kind(text) != "self"
+
+
+# ── review findings 2 and 5 ──────────────────────────────────────────────────
+
+@pytest.mark.parametrize("text,want", [
+    # announcement + answer in ONE sentence: only the clause goes
+    ("Let me look: you have 3 events today. Anything else?", "You have 3 events today. Anything else?"),
+    ("Let me check, you have 3 events today.", "You have 3 events today."),
+    ("Checking \u2014 you have 3 events today.", "You have 3 events today."),
+    ("I'll check what I've got on file: you swim every morning.", "You swim every morning."),
+    # the answer part mentioning "tomorrow" must not protect the announcement in front of it
+    ("Let me look: you have a meeting tomorrow.", "You have a meeting tomorrow."),
+    # a clock time's colon is not a boundary
+    ("Let me check the 3:30 slot. It is free.", "It is free."),
+    # a pure announcement sentence followed by the answer
+    ("Let me look that up. You have 3 events today.", "You have 3 events today."),
+])
+def test_only_the_announcement_clause_is_stripped(text, want):
+    assert nf.strip_leading_narration(text) == want
+
+
+@pytest.mark.parametrize("text", [
+    "Let me look: you have 3 events today. Anything else?",
+    "Checking \u2014 you have 3 events today.",
+    "Let me check, you have 3 events today. Anything else?",
+])
+@pytest.mark.parametrize("size", [1, 3, 8, 500])
+def test_clause_strip_stream_equals_pure(text, size):
+    st = nf.NarrationStripper()
+    out = "".join(st.feed(text[i:i + size]) for i in range(0, len(text), size)) + st.finish()
+    assert out == nf.strip_leading_narration(text)
+
+
+def test_promise_in_the_announcement_clause_is_still_kept():
+    text = "Let me check the weather and get back to you: it looks fine."
+    assert nf.strip_leading_narration(text) == text
+
+
+@pytest.mark.parametrize("text,want", [
+    ("Dr. Patel's number. It is 123.", "Dr. Patel's number. It is 123."),  # not an announcement: untouched
+    ("Let me look up Dr. Patel's number. It is 123.", "It is 123."),  # one sentence, not cut at "Dr."
+    ("I'll check e.g. the dentist. It is 123.", "It is 123."),
+    ("Let me check with Mr. Jones and Mrs. Lee. It is 123.", "It is 123."),
+    ("Let me look at No. 5 on the list. It is free.", "It is free."),
+    ("Let me look at J. Smith's file. It is empty.", "It is empty."),
+])
+def test_abbreviations_do_not_end_a_sentence(text, want):
+    assert nf.strip_leading_narration(text) == want
+
+
+def test_no_before_a_word_still_ends_a_sentence():
+    # "No." followed by a word is a sentence ("No. You have nothing."), not an abbreviation
+    assert nf._first_sentence_end("No. You have nothing.") == 3
+
+
+def test_decimals_are_not_sentence_ends():
+    assert nf.strip_leading_narration("Let me check the 3.5 litre tank. It is full.") == "It is full."
