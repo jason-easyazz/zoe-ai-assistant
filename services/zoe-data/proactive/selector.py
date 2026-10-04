@@ -50,6 +50,10 @@ _PREPARE_TIMEOUT_S = 2.0
 _TRUTHY = {"1", "true", "yes", "on"}
 
 RAISE_OPEN = "[RAISE — once, naturally, only if it fits; otherwise ignore]"
+# A greeting raise is the one thing chosen for this conversation's first open turn: the
+# header must not hand the brain an "ignore" exit (the sidecar strips by the "[RAISE"
+# prefix, context-blocks.ts, so the header text after it is free).
+RAISE_OPEN_GREETING = "[RAISE — once, naturally, after answering them]"
 RAISE_CLOSE = "[END RAISE]"
 _ASK = {
     "open_loop": "briefly and warmly ask how that is going",
@@ -293,28 +297,40 @@ class Raise:
     def body(self) -> str:
         lead = _LEAD.get(self.kind, "Earlier they told you")
         if self.kind != "event" and self.lifecycle:
-            return f"{lead}: {self.text}. {ask_phrasing(self.hint)}"
+            return f"{lead}: {self.text}. {ask_phrasing(self.hint, shape=self.shape)}"
         return (f"{lead}: {self.text}. If it fits, {self.hint} — once, in your own words, "
                 "never quoting them and never as a list or a reminder.")
 
     @property
     def block(self) -> str:
         """The Flue seam's block, appended after the user's words."""
-        return f"{RAISE_OPEN}\n{self.body}\n{RAISE_CLOSE}"
+        head = RAISE_OPEN_GREETING if (self.shape == "greeting" and self.lifecycle) else RAISE_OPEN
+        return f"{head}\n{self.body}\n{RAISE_CLOSE}"
 
 
-def ask_phrasing(hint: str) -> str:
+def ask_phrasing(hint: str, *, shape: str = "cue") -> str:
     """How a loop or moment is raised (``ZOE_LOOP_LIFECYCLE``). The block rides in the
     USER message, so a bare hint ("How did the dentist go?") read as the user asking
     and drew "I don't have any information about how your dentist appointment went"
-    (day sim, 2026-10-03). Say who asks, and forbid the disclaimer."""
+    (day sim, 2026-10-03). Say who asks, and forbid the disclaimer.
+
+    ``shape``: a **greeting** raise is the one thing the selector chose for the first open
+    turn of a conversation — the brain should bring it up (the day sim's confirmation run
+    on 2026-10-04 injected + settled the dentist and the reply never voiced it under the
+    "if it fits … leave it out" wording). A **cue** raise rides a turn about something
+    else, so "if it fits" stays its escape hatch."""
     hint = (hint or "").replace('"', "").strip()
     example = f' — for example: "{hint}"' if hint.endswith("?") else (f" ({hint})" if hint else "")
-    return ("If it fits this conversation, ask them about it with ONE short, gentle question "
-            f"in your own words{example}. You are asking THEM how it is for them; you do not "
-            "need to know the answer, so never say you have no information about it. One "
-            "sentence, never quoting them, never as a list or a reminder. If it does not fit, "
-            "leave it out.")
+    tail = ("You are asking THEM how it is for them; you do not need to know the answer, "
+            "so never say you have no information about it. One sentence, never quoting "
+            "them, never as a list or a reminder.")
+    if shape == "greeting":
+        return ("Bring this up: after answering what they said, ask them about it with ONE "
+                f"short, gentle question in your own words{example}. {tail} This is the one "
+                "thing to raise this conversation, so do raise it unless they have just "
+                "brought up something heavier themselves.")
+    return (f"If it fits this conversation, ask them about it with ONE short, gentle question "
+            f"in your own words{example}. {tail} If it does not fit, leave it out.")
 
 
 def _now() -> datetime:
