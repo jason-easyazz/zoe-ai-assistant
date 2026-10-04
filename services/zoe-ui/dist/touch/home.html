@@ -94,10 +94,10 @@
   .lcol .lrow.done .bx{background:var(--cat-personal);border-color:var(--cat-personal)}
   .lcol .lrow.done .tx2{color:var(--ink-faint);text-decoration:line-through}
   .lcol .ladd{display:flex;gap:8px;margin-top:12px}
-  .lcol .ladd input{flex:1;min-width:0;height:44px;border-radius:12px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:var(--ink);font:inherit;font-size:17px;padding:0 12px;outline:none}
-  .lcol .ladd button{width:44px;height:44px;border-radius:12px;border:0;background:var(--accent);color:#fff;font-size:20px;cursor:pointer}
+  .lcol .ladd input{flex:1;min-width:0;height:48px;border-radius:12px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:var(--ink);font:inherit;font-size:17px;padding:0 12px;outline:none}
+  .lcol .ladd button{width:48px;height:48px;border-radius:12px;border:0;background:var(--accent);color:#fff;font-size:20px;cursor:pointer}
   .lcol.newl{background:transparent;border-style:dashed}
-  .lcol.newl select{width:100%;height:44px;margin-top:8px;border-radius:12px;background:rgba(255,255,255,.06);color:var(--ink);border:1px solid rgba(255,255,255,.14);font:inherit;padding:0 8px}
+  .lcol.newl select{width:100%;height:48px;margin-top:8px;border-radius:12px;background:rgba(255,255,255,.06);color:var(--ink);border:1px solid rgba(255,255,255,.14);font:inherit;padding:0 8px}
   /* Day — full-screen: timeline + reminders (+ comms when a source exists) */
   .dayf{position:absolute;inset:0;padding:106px 70px 150px;display:flex;gap:48px}
   .dayf .dc1{flex:1.35;min-width:0}
@@ -118,10 +118,12 @@
   .dayf .drem .rtx{flex:1;min-width:0}
   .dayf .dev .lact,.dayf .drem .lact{align-self:center}
   .dayf .drem .lact button,.dayf .dev .lact button{width:34px;height:34px}
+  /* drawn 34 px in the dense day view; the FINGER target stays 48 px via the ::before extension */
+  .dayf .drem .lact button::before,.dayf .dev .lact button::before{content:'';position:absolute;inset:-7px}
   /* Lists v2 — tab selector + selected list in flowing columns */
   .lstf2{position:absolute;inset:0;padding:100px 64px 150px;display:flex;flex-direction:column}
   .ltabs{display:flex;gap:10px;flex-wrap:wrap}
-  .ltab{font-size:19px;font-weight:500;color:var(--ink-soft);padding:9px 18px;border-radius:999px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);cursor:pointer;white-space:nowrap}
+  .ltab{font-size:19px;font-weight:500;color:var(--ink-soft);padding:9px 18px;min-height:48px;display:inline-flex;align-items:center;border-radius:999px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);cursor:pointer;white-space:nowrap}
   .ltab.on{background:rgba(123,150,255,.22);border-color:rgba(123,150,255,.55);color:var(--ink);font-weight:600}
   /* List selector pills live in the chrome header row, pushed to the RIGHT next
      to the settings cog (count sits on the left where the title used to be). */
@@ -166,7 +168,7 @@
   .calhead{position:absolute;top:38px;left:110px;right:110px;height:48px;display:flex;align-items:center;gap:16px}
   .calhead h1{font-size:28px;font-weight:600;flex:1;letter-spacing:-.01em}
   .calviews{display:flex;gap:6px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:5px}
-  .calviews button{font:inherit;font-size:16px;color:var(--ink-soft);background:transparent;border:0;border-radius:999px;padding:8px 18px;cursor:pointer}
+  .calviews button{font:inherit;font-size:16px;color:var(--ink-soft);background:transparent;border:0;border-radius:999px;padding:13px 20px;min-height:48px;cursor:pointer}   /* min-height, not padding arithmetic: line-height:normal varies by font */
   .calviews button.on{background:#fff;color:#0a0d14;font-weight:600}
   .calbody{flex:1;min-height:0;overflow-y:auto}
   /* Week and month are TODAY-ANCHORED and scroll; the calendar no longer spends
@@ -223,22 +225,26 @@
   .remrow{display:flex;gap:16px;align-items:baseline;padding:12px 4px;border-bottom:1px solid rgba(255,255,255,.08)}
   .remrow .rw{font-size:18px;color:var(--ink-faint);min-width:130px;flex:none;font-variant-numeric:tabular-nums}
   .remrow .rt2{font-size:21px;font-weight:500;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
-  .setf{position:absolute;inset:0;padding:100px 200px 150px;display:flex;flex-direction:column;overflow-y:auto}
+  .setf{position:absolute;inset:0;padding:100px 200px 150px;display:flex;flex-direction:column;overflow-y:auto;scrollbar-width:none}
+  .setf::-webkit-scrollbar{width:0}
   .setsec{background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.09);border-radius:20px;margin-bottom:14px;overflow:hidden}
   .setsec .sh{display:flex;align-items:center;gap:14px;padding:20px 24px;cursor:pointer;font-size:22px;font-weight:500}
-  .srow2 .sw{width:58px;height:34px;border-radius:999px;background:rgba(255,255,255,.16);position:relative;transition:.25s;flex:none;cursor:pointer}
-  .srow2 .sw::after{content:'';position:absolute;top:4px;left:4px;width:26px;height:26px;border-radius:50%;background:#fff;transition:.25s}
+  .srow2 .sw{width:64px;height:40px;border-radius:999px;background:rgba(255,255,255,.16);position:relative;transition:.25s;flex:none;cursor:pointer}
+  /* The pill is drawn 64×40 but the FINGER target is 72×48: the ::before pseudo-element
+     extends the switch's own hit box (clicks on it fire the span's handler). */
+  .srow2 .sw::before{content:'';position:absolute;inset:-4px;border-radius:999px}
+  .srow2 .sw::after{content:'';position:absolute;top:4px;left:4px;width:32px;height:32px;border-radius:50%;background:#fff;transition:.25s}
   .srow2 .sw.on{background:var(--accent)}
   .srow2 .sw.on::after{left:28px}
-  .srow2 input[type=range]{flex:1;max-width:280px;accent-color:var(--accent);height:34px}
+  .srow2 input[type=range]{flex:1;max-width:280px;accent-color:var(--accent);height:48px}
   /* color-scheme:dark is load-bearing, not cosmetic: the OPEN dropdown is a NATIVE
      popup the browser paints on a light background by default, while `color` above
      is near-white (--ink) — so the option text rendered white-on-white and was
      unreadable. It tells the browser to paint its own UI dark; the explicit option
      rule below is the fallback for engines that don't honour color-scheme there. */
-  .srow2 .sset{margin-left:auto;background:rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.14);color:var(--ink);border-radius:12px;padding:10px 14px;font-size:19px;min-height:44px;cursor:pointer;color-scheme:dark}
+  .srow2 .sset{margin-left:auto;background:rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.14);color:var(--ink);border-radius:12px;padding:10px 14px;font-size:19px;min-height:48px;cursor:pointer;color-scheme:dark}
   .srow2 .sset option{background:#131a2b;color:var(--ink)}
-  .srow2 .sbtn{margin-left:auto;background:rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.14);color:var(--ink);border-radius:12px;padding:10px 18px;font:inherit;font-size:18px;min-height:44px;cursor:pointer}
+  .srow2 .sbtn{margin-left:auto;background:rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.14);color:var(--ink);border-radius:12px;padding:10px 18px;font:inherit;font-size:18px;min-height:48px;cursor:pointer}
   .srow2 .sbtn:disabled{opacity:.5}
   .srow2 .sv{min-width:56px;text-align:right;color:var(--ink-soft);font-variant-numeric:tabular-nums}
   .srow2 .stat{width:12px;height:12px;border-radius:50%;flex:none}
@@ -256,7 +262,7 @@
   .lrow2{position:relative}
   /* Always visible — this is a touch panel, there is no hover to reveal on. */
   .lact{margin-left:auto;display:flex;gap:6px}
-  .lact button{width:34px;height:34px;border-radius:9px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:var(--ink-soft);font-size:15px;cursor:pointer}
+  .lact button{position:relative;width:48px;height:48px;border-radius:12px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:var(--ink-soft);font-size:18px;cursor:pointer}
   .lact button.del{color:#ff9db0}
   .lrow2 input.edit{flex:1;height:36px;border-radius:9px;border:1px solid rgba(123,150,255,.5);background:rgba(255,255,255,.08);color:var(--ink);font:inherit;font-size:19px;padding:0 10px;outline:none}
   .estmodal{position:absolute;inset:0;z-index:70;display:none;align-items:center;justify-content:center;background:rgba(7,10,22,.62);backdrop-filter:blur(14px)}
@@ -305,7 +311,7 @@
   /* touch date+time stepper (replaces native <input type=date> on the kiosk) */
   .estmc .dtp{display:flex;gap:12px;align-items:flex-start;margin-top:4px;flex-wrap:wrap}
   .estmc .dtg{display:flex;flex-direction:column;align-items:center;gap:6px}
-  .estmc .dtg button{width:60px;height:40px;border-radius:11px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.08);color:#fff;font-size:15px;cursor:pointer;padding:0}
+  .estmc .dtg button{width:60px;height:48px;border-radius:11px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.08);color:#fff;font-size:15px;cursor:pointer;padding:0}
   .estmc .dtg .dtv{font-size:24px;font-weight:600;font-variant-numeric:tabular-nums;min-width:60px;text-align:center;line-height:1}
   .estmc .dtg .dtl{font-size:12px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.1em}
   .estmc .dtsep{width:1px;align-self:stretch;background:rgba(255,255,255,.14);margin:2px 4px}
@@ -343,7 +349,7 @@
   .tmr{display:flex;align-items:center;gap:14px;background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.1);border-radius:16px;padding:12px 18px;font-size:20px}
   .tmr b{font-variant-numeric:tabular-nums;font-size:24px}
   .tmr .tx3{color:var(--ink-soft)}
-  .tmr button{width:38px;height:38px;border-radius:50%;border:0;background:var(--cat-health);color:#2a0910;font-size:16px;cursor:pointer}
+  .tmr button{width:48px;height:48px;border-radius:50%;border:0;background:var(--cat-health);color:#2a0910;font-size:18px;cursor:pointer}
   /* People */
   .pgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:18px;max-height:380px;overflow-y:auto}
   .pcard{display:flex;align-items:center;gap:14px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);border-radius:16px;padding:12px 16px}
@@ -482,6 +488,7 @@
   .mfull .cfc .cfx{position:absolute;top:6px;z-index:3;width:34px;height:34px;border:0;border-radius:50%;
      background:rgba(6,9,20,.7);backdrop-filter:blur(8px);color:#fff;font-size:16px;line-height:1;
      display:none;place-items:center;cursor:pointer;right:8px}
+  .mfull .cfc .cfx::before{content:'';position:absolute;inset:-7px}   /* 48 px finger target on a 34 px glyph */
   .mfull .cfc.right .cfx{right:auto;left:8px}
   .mfull .cfc.on .cfx{display:grid}
   /* The meta/scrub/transport stack sits BELOW the flow, so its top edge is what
@@ -564,7 +571,7 @@
   .srcrow .srcnm{font-size:19px;font-weight:600}
   .srcrow .srcsub{font-size:13.5px;color:var(--ink-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .srcrow.warn .srcsub{color:#f5c877}
-  .srcbtn{flex:none;height:44px;padding:0 20px;border-radius:12px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.08);color:#fff;font:inherit;font-size:16px;font-weight:600;cursor:pointer}
+  .srcbtn{flex:none;height:48px;padding:0 20px;border-radius:12px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.08);color:#fff;font:inherit;font-size:16px;font-weight:600;cursor:pointer}
   .srcbtn.warn{background:var(--accent);border-color:transparent}
   .srcok{flex:none;font-size:14px;color:#66d6a3;font-weight:600}
   .srcnote{color:var(--ink-faint);padding:12px 4px;font-size:16px;display:flex;flex-direction:column;gap:12px;align-items:flex-start}
@@ -581,8 +588,8 @@
   .rtile .rti{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center}
   .rtile .rti .qn{font-size:18px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .rtile .rti .ra{font-size:14px;color:var(--ink-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px}
-  .rtile .qadd,.rtile .qnext{flex:none;width:38px;height:38px;border-radius:50%;border:0;background:rgba(255,255,255,.08);color:var(--accent);font-size:18px;cursor:pointer;display:grid;place-items:center}
-  .rtile .qnext svg{width:19px;height:19px}
+  .rtile .qadd,.rtile .qnext{flex:none;width:48px;height:48px;border-radius:50%;border:0;background:rgba(255,255,255,.08);color:var(--accent);font-size:18px;cursor:pointer;display:grid;place-items:center}
+  .rtile .qnext svg{width:22px;height:22px}
   /* ---- Playlists tab: compact album-art grid (smaller tiles, more per row) ---- */
   .mqlist.grid{display:grid;grid-template-columns:repeat(5,1fr);gap:16px 14px;align-content:start;padding-top:2px}
   .mqlist.grid .qi.pl{display:flex;flex-direction:column;align-items:stretch;gap:0;padding:0;background:none;cursor:pointer;font-size:15px}
@@ -691,7 +698,7 @@
 
   /* ROOMS — a control panel for everything in a room */
   .rm .rchips{position:absolute;top:46px;right:122px;display:flex;gap:8px}
-  .rm .rchip{font-size:22px;font-weight:500;color:rgba(255,255,255,.5);padding:10px 20px;border-radius:999px}
+  .rm .rchip{font-size:22px;font-weight:500;color:rgba(255,255,255,.5);padding:10px 20px;min-height:48px;display:inline-flex;align-items:center;border-radius:999px}
   .rm .rchip.on{background:rgba(255,255,255,.12);color:#fff;font-weight:600}
   .rm .rhero{position:absolute;left:60px;top:150px;width:560px;bottom:150px;border-radius:28px;overflow:hidden;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);padding:38px;display:flex;flex-direction:column;justify-content:center}
   .rm .rhero .cover{position:absolute;inset:0;background:linear-gradient(150deg,rgba(106,166,255,.3),rgba(155,140,255,.12) 55%,transparent 78%);pointer-events:none}
@@ -706,7 +713,7 @@
   .rm .rtp button svg{width:26px;height:26px}
   .rm .rtp .pp svg{width:30px;height:30px;color:#0a0d18}
   .rm .rvol{position:relative;display:flex;align-items:center;justify-content:center;gap:14px;margin-top:18px;color:rgba(255,255,255,.6);font-size:16px}
-  .rm .rvol input[type=range]{flex:1;max-width:300px;accent-color:#fff;height:40px}
+  .rm .rvol input[type=range]{flex:1;max-width:300px;accent-color:#fff;height:48px}
   .rm .rvol .vv{min-width:44px;text-align:left;font-variant-numeric:tabular-nums}
   .rm .rtp button{width:58px;height:58px;border-radius:50%;border:0;background:rgba(255,255,255,.14);color:#fff;font-size:20px;cursor:pointer}
   .rm .rtp .pp{width:66px;height:66px;background:#fff;color:#10131c;font-size:23px}
@@ -820,7 +827,7 @@
   .mfull .mvolt.multi .vpop .vzones{display:flex;flex-direction:column;gap:16px;width:100%}
   .mfull .vzrow{display:flex;align-items:center;gap:12px;width:100%}
   .mfull .vzrow .vzn{flex:none;width:104px;font-size:14px;font-weight:500;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .mfull .vzrow input[type=range]{flex:1;height:28px;accent-color:#fff;background:transparent;cursor:pointer;touch-action:none;min-width:0}
+  .mfull .vzrow input[type=range]{flex:1;height:48px;accent-color:#fff;background:transparent;cursor:pointer;touch-action:none;min-width:0}
   .mfull .vzrow .vzv{flex:none;width:44px;text-align:right;font-size:14px;color:rgba(255,255,255,.85);font-variant-numeric:tabular-nums}
   .spk{display:flex;align-items:center;gap:11px;padding:13px 20px;border-radius:999px;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.22);color:#fff;font:inherit;font-size:19px;font-weight:500;cursor:pointer;max-width:340px}
   .spk .spkname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -982,6 +989,10 @@
   .wkdot.prog{background:#7b96ff}.wkdot.review{background:#ffbf5e}
   .wkdot.block{background:#ff7a90}.wkdot.done{background:#66d6a3}
   .wkempty{color:rgba(255,255,255,.5);font-size:16px;padding:20px 4px}
+  /* Motion is purposeful and cheap — and off for anyone who asked (design system §7). */
+  @media (prefers-reduced-motion: reduce){
+    *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}
+  }
 </style>
 </head>
 <body>
@@ -1121,13 +1132,16 @@
     confirm:{heard:'“Add olive oil to the shopping list”', wash:'var(--accent)', html:'<div class="card confirm"><div class="wash"></div><div class="kick">Confirm</div><div class="q">Add to your Shopping list?</div><div class="rows"><div class="r"><span class="l">Item</span><span>Olive oil</span></div><div class="r"><span class="l">List</span><span>Shopping · 6 items</span></div></div><div class="acts"><button class="no">Not now</button><button class="yes">Add it</button></div></div>'},
   };
 
+  // prefers-reduced-motion for the JS-driven motion the CSS block cannot reach
+  // (the weather-star canvas twinkle and the Cover Flow spring). Live-tracked.
+  var RM=false;try{var _rmq=window.matchMedia('(prefers-reduced-motion: reduce)');RM=!!_rmq.matches;if(_rmq.addEventListener)_rmq.addEventListener('change',function(e){RM=!!e.matches;});}catch(e){}
   var cv=document.getElementById('cv'),ctx=cv.getContext('2d'),W=1280,H=720;cv.width=W;cv.height=H;
   var stars=[],drops=[],wxOn=false,wxGlow=true; // wxGlow: warm dusk glow, off for clear night
   (function seed(){for(var i=0;i<26;i++)stars.push({x:Math.random()*W,y:Math.random()*H*.6,r:Math.random()*1.6+.3,tw:Math.random()*6.28});})();
   function frame(t){ if(wxOn){ctx.clearRect(0,0,W,H);
       if(wxGlow){var s2=ctx.createRadialGradient(220,560,10,220,560,280);s2.addColorStop(0,'rgba(255,210,150,.6)');s2.addColorStop(1,'rgba(255,210,150,0)');ctx.fillStyle=s2;ctx.beginPath();ctx.arc(220,560,280,0,6.29);ctx.fill();}
-      ctx.fillStyle='#fff';stars.forEach(function(st){ctx.globalAlpha=(.5+.5*Math.sin(t/700+st.tw))*.9;ctx.beginPath();ctx.arc(st.x,st.y,st.r,0,6.29);ctx.fill();});ctx.globalAlpha=1;
-    } requestAnimationFrame(frame); }
+      ctx.fillStyle='#fff';stars.forEach(function(st){ctx.globalAlpha=RM?.72:(.5+.5*Math.sin(t/700+st.tw))*.9;ctx.beginPath();ctx.arc(st.x,st.y,st.r,0,6.29);ctx.fill();});ctx.globalAlpha=1;
+    } if(RM){setTimeout(function(){requestAnimationFrame(frame);},1000);}else{requestAnimationFrame(frame);} }   // reduced motion: a still sky, repainted once a second
   requestAnimationFrame(frame);
 
   var full=document.getElementById('full'),cardwrap=document.getElementById('cardwrap'),host=document.getElementById('host'),dock=document.getElementById('dock'),dbody=document.getElementById('dbody'),home=document.getElementById('home'),glow=document.getElementById('glow'),pick=document.getElementById('pick');
@@ -1452,7 +1466,13 @@
     'mdi:door':'<path d="M3.5 21h17"/><path d="M6 21V4.2a1.2 1.2 0 0 1 1.4-1.2l9 1.3a1.2 1.2 0 0 1 1.1 1.2V21"/><circle cx="14.8" cy="12.4" r="1"/>',
     '_':'<circle cx="12" cy="12" r="8.6"/><path d="M12 8.4v4.2"/><path d="M12 15.8h.01"/>'
   };
-  function mdi(name){return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'+(MDI[name]||MDI['_'])+'</svg>';}
+  // HA supplies ANY mdi:* name (mdi:lamp, mdi:floor-lamp, mdi:power-socket-au, …) and the
+  // server surfaces it raw (routers/panel_config.py), so an icon outside the local glyph
+  // set resolves to its FAMILY — a lamp is still a light, a socket is still a switch —
+  // never to the question mark, which is reserved for "no icon at all".
+  var MDI_FAMILY=[[/light|lamp|bulb|lantern|sconce|chandelier|led/,'mdi:lightbulb-outline'],[/fan/,'mdi:fan'],[/television|^mdi:tv|monitor|speaker|cast|projector|media|remote/,'mdi:television'],[/thermo|temperature|heat|radiator|snowflake|air-condition|hvac/,'mdi:thermostat'],[/door|gate|garage/,'mdi:door'],[/palette|scene|movie|party|weather-night|sleep/,'mdi:palette-outline']];
+  function mdiResolve(name){if(!name)return '_';if(MDI[name])return name;var n=String(name).toLowerCase();for(var i=0;i<MDI_FAMILY.length;i++){if(MDI_FAMILY[i][0].test(n))return MDI_FAMILY[i][1];}return 'mdi:toggle-switch-outline';}
+  function mdi(name){return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'+MDI[mdiResolve(name)]+'</svg>';}
 
   // Operator-chosen dock pins. null until the first load succeeds; the dock
   // falls back to its old "first few lights HA returned" behaviour whenever
@@ -1809,7 +1829,7 @@
     apiGet('/api/calendar/events?start_date='+ds+'&end_date='+ds).then(function(data){
       if(_cur!=='home')return;
       var evs=((data&&data.events)||[]).filter(function(e){return !e.deleted;}).sort(function(a,b){return (a.start_time||'').localeCompare(b.start_time||'');});
-      if(!evs.length){host.innerHTML='<div class="tr" style="opacity:.55"><span class="dot" style="--c:var(--accent)"></span><span class="tt"></span><span class="tn">Nothing scheduled today</span></div>';return;}
+      if(!evs.length){host.innerHTML='<div class="tr" style="opacity:.55;grid-template-columns:1fr"><span class="tn">Nothing scheduled today</span></div>';return;}
       host.innerHTML=evs.slice(0,4).map(function(e){var cat=CAT[(e.category||'').toLowerCase()]||'var(--accent)';var when=e.all_day?'All day':fmt12(e.start_time);return '<div class="tr"><span class="dot" style="--c:'+cat+'"></span><span class="tt">'+esc(when)+'</span><span class="tn">'+esc(e.title||'Event')+'</span></div>';}).join('');
     }).catch(function(){host.innerHTML='<div class="tr" style="opacity:.55"><span class="dot" style="--c:var(--cat-health)"></span><span class="tt"></span><span class="tn">Couldn’t load your day</span></div>';});}
   function initHome(){tickClock();_homeTick=setInterval(tickClock,15000);loadWeather();loadToday();
@@ -2498,7 +2518,8 @@
     // A long jump isn't a gesture continuation — the 8s drift home from deep in
     // a 200-track queue would otherwise fly through 100 covers and have to
     // render every one. Land it, exactly as it always has.
-    if(Math.abs(target-_cf.focus)>CF_WIN_DRAG){
+    // Reduced motion: no spring — land on the target exactly as a long jump does.
+    if(RM||Math.abs(target-_cf.focus)>CF_WIN_DRAG){
       cfStopAnim();_cf.vel=0;cfAnim(false);_cf.focus=target;cfRender();return;
     }
     _cf.target=target;if(v0!=null)_cf.vel=v0;
@@ -2965,7 +2986,10 @@
       var host=document.getElementById('rmLights'),sc=document.getElementById('rmScenes');
       if(!host)return;
       var toggles=_ha.lights.slice(0,6);
-      host.innerHTML=toggles.map(function(e){return '<div class="rlt'+(isOn(e)?' on':'')+'" data-eid="'+esc(e.entity_id)+'"><div class="ri">'+BULB+'</div><div><div class="rn">'+esc(friendly(e))+'</div><div class="rs">'+(isOn(e)?'On':'Off')+'</div></div></div>';}).join('')
+      // HA's own icon (attributes.icon: mdi:fan, mdi:television, …) — the same source
+      // the server resolves for pinned tiles. A bulb for every toggle drew a bulb on
+      // the fan and the TV.
+      host.innerHTML=toggles.map(function(e){return '<div class="rlt'+(isOn(e)?' on':'')+'" data-eid="'+esc(e.entity_id)+'"><div class="ri">'+mdi((e.attributes&&e.attributes.icon)||'mdi:lightbulb-outline')+'</div><div><div class="rn">'+esc(friendly(e))+'</div><div class="rs">'+(isOn(e)?'On':'Off')+'</div></div></div>';}).join('')
         ||('<div style="color:var(--ink-faint);font-size:20px;padding:20px">'+(_ha.ok?'No devices yet':'Couldn’t reach Home Assistant')+'</div>');
       host.querySelectorAll('.rlt[data-eid]').forEach(function(el){el.onclick=function(){
         var on=el.classList.toggle('on');var rs=el.querySelector('.rs');if(rs)rs.textContent=on?'On':'Off';
