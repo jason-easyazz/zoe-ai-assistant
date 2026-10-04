@@ -39,7 +39,7 @@ import struct
 import threading
 import time
 import wave
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 
 # Must be set before torch import to bypass Jetson NVML assertion.
@@ -484,6 +484,78 @@ def _wait_for_brain_ready() -> None:
     )
 
 
+# ─── Hugging Face hub: explicit repo + optional offline load ──────────────────
+#
+# Found by the 2026-10-04 evening log review (docs/knowledge/log-review-units-
+# 2026-10-04.md): every Kokoro start (12 that evening — each voice probe pauses
+# the sidecar) printed `WARNING: Defaulting repo_id to hexgrad/Kokoro-82M` and
+# made four HEAD requests to huggingface.co (config, weights, voice) even though
+# the whole snapshot is already in the local cache. Passing the repo id removes
+# the warning with zero behaviour change. The HEADs are an availability
+# dependency on the public internet at start time (a blackholed network turns
+# each into a ~10 s timeout before the cache fallback), so an opt-in
+# ZOE_KOKORO_HF_OFFLINE=1 serves the load from the cache — scoped to the load
+# only: later voice switches (the panel's "Zoe's voice") may need a voice file
+# that is NOT cached yet and must still be able to download it.
+
+_KOKORO_REPO_ID = "hexgrad/Kokoro-82M"  # the repo KPipeline defaults to
+_HF_OFFLINE_ON_LOAD = _env_flag("ZOE_KOKORO_HF_OFFLINE", False)
+
+
+def _hf_hub_cache_dir() -> Path:
+    explicit = os.environ.get("HF_HUB_CACHE")
+    if explicit:
+        return Path(explicit)
+    home = os.environ.get("HF_HOME")
+    return (Path(home) if home else Path.home() / ".cache" / "huggingface") / "hub"
+
+
+def _kokoro_snapshot_cached(voice: str, cache_dir: Path | None = None) -> bool:
+    """True only when a complete local snapshot exists: config + weights + the voice."""
+    root = (cache_dir or _hf_hub_cache_dir()) / ("models--" + _KOKORO_REPO_ID.replace("/", "--")) / "snapshots"
+    try:
+        snapshots = [d for d in root.iterdir() if d.is_dir()]
+    except OSError:
+        return False
+    return any(
+        (d / "config.json").exists()
+        and (d / "kokoro-v1_0.pth").exists()
+        and (d / "voices" / f"{voice}.pt").exists()
+        for d in snapshots
+    )
+
+
+@contextmanager
+def _hf_offline_for_load(enabled: bool, voice: str):
+    """Make huggingface_hub resolve from the local cache for the duration of the block.
+
+    No-op unless ``enabled`` AND a complete snapshot is cached (an incomplete cache
+    must fall through to the normal online path rather than fail the load). Both the
+    env var (read when huggingface_hub is first imported) and, if it is already
+    imported, its module constant (read at call time) are toggled and restored.
+    """
+    if not (enabled and _kokoro_snapshot_cached(voice)):
+        yield False
+        return
+    import sys
+
+    prev_env = os.environ.get("HF_HUB_OFFLINE")
+    consts = getattr(sys.modules.get("huggingface_hub"), "constants", None)
+    prev_const = getattr(consts, "HF_HUB_OFFLINE", None)
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    if consts is not None and prev_const is not None:
+        consts.HF_HUB_OFFLINE = True
+    try:
+        yield True
+    finally:
+        if prev_env is None:
+            os.environ.pop("HF_HUB_OFFLINE", None)
+        else:
+            os.environ["HF_HUB_OFFLINE"] = prev_env
+        if consts is not None and prev_const is not None:
+            consts.HF_HUB_OFFLINE = prev_const
+
+
 def _load_pipeline():
     """Load and return the Kokoro pipeline (blocking; run once in thread pool)."""
     global _device
@@ -513,7 +585,10 @@ def _load_pipeline():
     if device == "cuda":
         for attempt in range(1, _CUDA_LOAD_ATTEMPTS + 1):
             try:
-                pipeline = KPipeline(lang_code="a", device="cuda")
+                with _hf_offline_for_load(_HF_OFFLINE_ON_LOAD, _VOICE) as offline:
+                    pipeline = KPipeline(lang_code="a", repo_id=_KOKORO_REPO_ID, device="cuda")
+                if offline:
+                    logger.info("Kokoro weights resolved from the local HF cache (ZOE_KOKORO_HF_OFFLINE=1).")
                 _device = "cuda"
                 _degraded_reason = None
                 logger.info("Kokoro pipeline ready on cuda.")
@@ -534,7 +609,8 @@ def _load_pipeline():
         "restart kokoro-tts.service. (/health reports degraded=true.)",
         _CUDA_LOAD_ATTEMPTS, _degraded_reason,
     )
-    pipeline = KPipeline(lang_code="a", device="cpu")
+    with _hf_offline_for_load(_HF_OFFLINE_ON_LOAD, _VOICE):
+        pipeline = KPipeline(lang_code="a", repo_id=_KOKORO_REPO_ID, device="cpu")
     _device = "cpu"
     return pipeline
 

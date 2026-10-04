@@ -43,6 +43,16 @@ WorkingDirectory=%h/assistant/labs/flue-executor
 ExecStart=%h/.nvm/current/bin/node --experimental-strip-types src/live-runner.ts
 Restart=always
 RestartSec=5
+# A Flue/Node sidecar handles SIGTERM itself and exits with code 143 (128+15). systemd
+# only treats 0 (and death-by-SIGTERM) as a clean stop, so WITHOUT this line every
+# `systemctl --user stop|restart` logs "Main process exited, code=exited,
+# status=143/n/a" + "Failed with result 'exit-code'" and flips the unit into the
+# failed state for an instant. Measured: at least 29 such false failures across
+# flue-zoe-brain-2x / flue-zoe-telegram between 2026-09-27 and 2026-10-04 (every
+# deploy restart), which buries a REAL crash (a non-143 exit) in `--failed` noise.
+# Restart=always is unaffected: a genuine crash still restarts and still counts.
+# docs/knowledge/log-review-units-2026-10-04.md
+SuccessExitStatus=143
 # ZOE_EXECUTOR_MODE=live is REQUIRED (the runner refuses to start otherwise).
 # ZOE_EXECUTOR_DISPATCH (dry|full), MULTICA_DATABASE_URL/POSTGRES_URL, and any
 # Omnigent overrides live in the lab-local .env — copy .env.example and fill it

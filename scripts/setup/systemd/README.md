@@ -55,6 +55,15 @@ copy (installed units carry host edits and their own untracked drop-ins). The
 | `zoe-data.service.d/30-nofile.conf` | zoe-data's open-files limit: soft `1024` (user-manager default) → `LimitNOFILE=65536` (A10, infra audit 2026-10-03). Removes EMFILE-on-accept as a path to the accept-queue hang. Same value is in the template; `tests/unit/test_zoe_data_unit_limits.py` keeps them equal. | `docs/knowledge/incident-runbook.md` §1; install/verify/rollback in the file header |
 | `kokoro-tts.service.d/40-memory-tuning.conf` | Kokoro's glibc allocator: `MALLOC_ARENA_MAX=2` + `MALLOC_TRIM_THRESHOLD_=131072` (B6.6). Allocator only — no numeric change. | `docs/knowledge/voice-pipeline.md` (Kokoro memory) |
 | `kokoro-tts.service.d/60-kokoro-venv.conf` | Kokoro's interpreter: `/usr/bin/python3` → `~/.zoe/venvs/kokoro-py310/bin/python` (B5.7) — the same 3.10 + site-packages (`--system-site-packages`) with scikit-learn/pandas/pyarrow blocked. Build the venv FIRST (`scripts/setup/build_kokoro_venv.sh`); restart only under the brain-window lock. | `docs/knowledge/voice-pipeline.md` (Kokoro dedicated venv) |
+| `kokoro-tts.service.d/70-start-timeout.conf` | `TimeoutStartSec=300` (installed unit had 120 s, below the sidecar's own 180 s wait for the brain). Takes effect on the next start — `daemon-reload` only. | `docs/knowledge/incident-runbook.md` §24(b) |
+| `flue-zoe-brain-2x.service.d/50-exit-143.conf`, `flue-zoe-telegram.service.d/50-exit-143.conf` | `SuccessExitStatus=143`: the Node sidecar's SIGTERM exit is a clean stop, not `Failed with result 'exit-code'`. `Restart=always` unchanged. `daemon-reload` only. | `docs/knowledge/incident-runbook.md` §24(c) |
+
+**Did the installed unit ever get the template change?** Nothing applies a merged template
+for you. `python3 scripts/maintenance/unit_drift_check.py` compares each installed unit
+(plus its drop-ins, `%h` expanded, sizes normalised) with these templates, read-only, and
+prints what the box is missing (`--strict` also fails on untracked host edits). Run it after
+any merge that touches this directory; first run (2026-10-04) found the router running
+without `--mlock`.
 
 ```bash
 mkdir -p ~/.config/systemd/user/zoe-data.service.d
