@@ -24,6 +24,13 @@ from log_throttle import log_upstream_failure
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ha", tags=["ha-control"])
 
+
+
+def _ent(value: object) -> str:
+    """Bounded, single-line rendering of a caller-supplied id for a log line."""
+    return str(value).replace("\n", " ")[:120]
+
+
 _HA_BRIDGE = os.environ.get("ZOE_HA_BRIDGE_URL", "http://127.0.0.1:8007")
 _TIMEOUT = 10.0
 
@@ -92,10 +99,10 @@ async def get_entity_state(entity_id: str, caller: dict = Depends(_require_calle
     except httpx.ConnectError:
         raise HTTPException(status_code=503, detail="HA bridge offline")
     except httpx.HTTPStatusError as exc:
-        log_upstream_failure(logger, "ha/state bridge status error", exc, key="ha/state bridge status error")
+        log_upstream_failure(logger, f"ha/state bridge status error entity={_ent(entity_id)}", exc)
         raise HTTPException(status_code=exc.response.status_code, detail="HA bridge request failed")
     except Exception as exc:
-        log_upstream_failure(logger, "ha/state error", exc)
+        log_upstream_failure(logger, f"ha/state error entity={_ent(entity_id)}", exc)
         raise HTTPException(status_code=502, detail="HA bridge request failed")
 
 
@@ -137,8 +144,8 @@ async def ha_control(payload: HAControlPayload, caller: dict = Depends(_require_
     except httpx.ConnectError:
         raise HTTPException(status_code=503, detail="HA bridge offline")
     except httpx.HTTPStatusError as exc:
-        log_upstream_failure(logger, "ha/control bridge status error", exc)
+        log_upstream_failure(logger, f"ha/control bridge status error entity={_ent(entity_id)} service={_ent(service)}", exc)
         raise HTTPException(status_code=exc.response.status_code, detail="HA bridge request failed")
     except Exception as exc:
-        log_upstream_failure(logger, "ha/control error", exc)
+        log_upstream_failure(logger, f"ha/control error entity={_ent(entity_id)} service={_ent(service)}", exc)
         raise HTTPException(status_code=502, detail="HA bridge request failed")

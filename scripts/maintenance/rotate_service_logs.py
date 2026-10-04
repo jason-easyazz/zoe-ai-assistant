@@ -4,20 +4,27 @@
 WHY THIS EXISTS
     systemd's ``append:`` target never rotates. ``zoe-data.service`` (via the
     host drop-in ``20-capture-output.conf``) appends the service's stdout and
-    stderr to ``~/.zoe-logs/zoe-data.{stdout,stderr}.log`` and nothing ever
-    trims them: 2026-10-04 they stood at 86 MB and 119 MB, a day after the last
-    manual gzip, and the 2026-09-25 review had already found a 445 MB stdout
-    log. The in-process app log is rotated by ``logging_setup.py``; these two
-    streams are written by uvicorn/systemd and cannot be. logrotate is not
-    installed on this host and the user manager cannot run a system timer, so
-    this stdlib script runs from a user timer (``zoe-log-rotate.timer``).
+    stderr to ``~/.zoe-logs/zoe-data.{stdout,stderr}.log``. The only thing that
+    trimmed them was a host-local, UNTRACKED pair (``~/bin/zoe-logs-rotate.sh`` +
+    ``zoe-logs-rotate.{service,timer}``, daily 02:50) that acts only above 150 MB,
+    rewrites the file with ``tail -c 50MB`` (cutting mid-line, non-atomically),
+    keeps 3 stdout archives and never prunes the stderr ones. With stderr growing
+    ~70 MB/day it ran about every other day and the files sat at 86 MB / 119 MB
+    in between (2026-10-04); the 2026-09-25 review had found a 445 MB stdout.
+    This script is the tracked replacement: 50 MB threshold, whole-file gzip
+    segments, verified before anything is replaced, hourly. logrotate is not
+    installed on this host and a user manager cannot run a system timer, hence a
+    stdlib script on a user timer (``zoe-log-rotate.timer``). INSTALL STEP:
+    retire the old pair first (docs/knowledge/incident-runbook.md section 23).
 
 HOW IT ROTATES (copytruncate, loss-minimal)
     systemd opens the file ``O_APPEND`` and keeps the descriptor for the life of
     the unit, so renaming the file would leave the service writing into the
-    renamed inode. Instead: stream-gzip the first ``size`` bytes to
-    ``<name>.1.gz`` (older segments shift to ``.2.gz`` ... and fall off after
-    ``--keep``), then truncate the live file in place. Bytes appended while the
+    renamed inode. Instead: stream-gzip the first ``size`` bytes to a temp file,
+    verify it by reading it back, and only THEN publish it as
+    ``<stem>.1<ext>.gz`` (``zoe-data.stderr.1.log.gz``; older segments shift to
+    ``.2`` ... and fall off after ``--keep``) and truncate the live file in
+    place. A failure before the publish (ENOSPC, SIGTERM, OOM) changes nothing. Bytes appended while the
     copy ran are re-appended after the truncate, so the window in which a line
     can be lost is the gap between reading that tail and the ``truncate`` call —
     microseconds, not the seconds the gzip takes. Because the writer is
@@ -61,7 +68,11 @@ _NEVER = {"zoe-data.app.log"}
 
 
 def _segment(path: Path, n: int) -> Path:
-    return path.with_name(f"{path.name}.{n}.gz")
+    # ``zoe-data.stdout.log`` -> ``zoe-data.stdout.1.log.gz``. Deliberately NOT
+    # ``zoe-data.stdout.log.1.gz``: the host's older ~/bin/zoe-logs-rotate.sh
+    # prunes ``zoe-data.stdout.log.*.gz`` down to 3 files, which would silently eat
+    # these segments if both rotators ever ran.
+    return path.with_name(f"{path.stem}.{n}{path.suffix}.gz")
 
 
 def rotate_file(path: Path, *, max_bytes: int, keep: int, dry_run: bool = False) -> str:
@@ -83,7 +94,40 @@ def rotate_file(path: Path, *, max_bytes: int, keep: int, dry_run: bool = False)
 
     size0 = st.st_size
 
-    # 1. shift older segments up; the oldest falls off the end.
+    # 1. Build the new segment FIRST, in a temp file, and verify it. Nothing
+    #    that already exists is touched until a complete, readable archive is
+    #    on disk: a gzip failure (ENOSPC, SIGTERM, OOM) must leave the archive
+    #    and the live file exactly as they were, not erode one segment per tick.
+    target = _segment(path, 1)
+    tmp = target.with_name(target.name + ".tmp")
+    written = 0
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
+    try:
+        with os.fdopen(fd, "wb") as raw, gzip.GzipFile(
+            filename=path.name, mode="wb", fileobj=raw, compresslevel=6
+        ) as gz, open(path, "rb") as src_f:
+            while written < size0:
+                chunk = src_f.read(min(_CHUNK, size0 - written))
+                if not chunk:
+                    break
+                gz.write(chunk)
+                written += len(chunk)
+        if written != size0:
+            raise OSError(f"{path.name} shrank during rotation ({written} of {size0} bytes read)")
+        verified = 0
+        with gzip.open(tmp, "rb") as check:
+            while True:
+                chunk = check.read(_CHUNK)
+                if not chunk:
+                    break
+                verified += len(chunk)
+        if verified != size0:
+            raise OSError(f"verification of {tmp.name} failed ({verified} of {size0} bytes)")
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+    # 2. Only now make room: drop the oldest, shift the rest up, publish.
     oldest = _segment(path, keep)
     if oldest.exists():
         oldest.unlink()
@@ -91,25 +135,6 @@ def rotate_file(path: Path, *, max_bytes: int, keep: int, dry_run: bool = False)
         src = _segment(path, n)
         if src.exists():
             os.replace(src, _segment(path, n + 1))
-
-    # 2. stream-gzip exactly the first size0 bytes into a temp file, then publish.
-    target = _segment(path, 1)
-    tmp = target.with_name(target.name + ".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
-    try:
-        with os.fdopen(fd, "wb") as raw, gzip.GzipFile(
-            filename=path.name, mode="wb", fileobj=raw, compresslevel=6
-        ) as gz, open(path, "rb") as src_f:
-            remaining = size0
-            while remaining > 0:
-                chunk = src_f.read(min(_CHUNK, remaining))
-                if not chunk:
-                    break
-                gz.write(chunk)
-                remaining -= len(chunk)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
     os.replace(tmp, target)
 
     # 3. truncate in place, carrying over whatever was appended during the copy.

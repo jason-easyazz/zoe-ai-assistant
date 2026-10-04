@@ -2,12 +2,17 @@
 # capture, the crash-loop watcher, the memory export, the voice regression).
 #
 # WHY: `StandardOutput=append:` never rotates, logrotate is not installed on the
-# host, and a user manager cannot run a system logrotate timer. On 2026-10-04
-# zoe-data.stderr.log was 119 MB and zoe-data.stdout.log 86 MB, unrotated.
+# host, and a user manager cannot run a system logrotate timer. The host's older
+# untracked ~/bin/zoe-logs-rotate.sh (daily 02:50) only acts above 150 MB and
+# keeps a 50 MB tail via a non-atomic rewrite, so on 2026-10-04 zoe-data.stderr.log
+# stood at 119 MB and zoe-data.stdout.log at 86 MB.
 # Full rationale + the copytruncate semantics: scripts/maintenance/rotate_service_logs.py
 # and docs/knowledge/log-review-2026-10-04.md.
 #
-# OPERATOR STEP (a user unit; nothing here is installed by a deploy):
+# OPERATOR STEP (a user unit; nothing here is installed by a deploy).
+# RETIRE THE OLD PAIR FIRST so two rotators never share the files
+# (incident-runbook.md section 23, step 1):
+#   systemctl --user disable --now zoe-logs-rotate.timer
 #   cp scripts/setup/systemd/zoe-log-rotate.{service,timer} ~/.config/systemd/user/
 #   systemctl --user daemon-reload
 #   systemctl --user enable --now zoe-log-rotate.timer

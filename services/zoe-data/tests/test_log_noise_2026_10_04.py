@@ -85,6 +85,8 @@ def _isolate_logging(monkeypatch):
 )
 def test_healthy_poll_is_quiet(path):
     assert mw.is_quiet_poll(path, 200, 12) is True
+    assert mw.is_quiet_poll(path, 200, 12, "GET") is True
+    assert mw.is_quiet_poll(path, 200, 12, "HEAD") is True
 
 
 def test_trouble_on_a_poll_path_is_never_quiet():
@@ -367,3 +369,167 @@ def test_ws_origin_rejection_goes_through_the_throttle():
     attr_calls = [c.func.attr for c in ast.walk(fn) if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)]
     assert "log_throttled" in calls
     assert "warning" not in attr_calls  # a bare logger.warning here would reopen the flood
+
+
+# ── review round 1 (PR #1849) ────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("verb", ["PUT", "POST", "PATCH", "DELETE"])
+@pytest.mark.parametrize(
+    "path", ["/api/system/display/preferences", "/api/panels/zoe-touch-pi/config", "/api/ha/entities"]
+)
+def test_writes_on_a_polled_path_are_never_quiet(path, verb):
+    """A successful PUT of display preferences / panel config is a CHANGE, not a
+    poll: it must stay at INFO and survive the uvicorn access filter."""
+    assert mw.is_quiet_poll(path, 200, 5, verb) is False
+    flt = mw.QuietPollAccessFilter()
+    rec = logging.LogRecord(
+        "uvicorn.access", logging.INFO, __file__, 0, '%s - "%s %s HTTP/%s" %d',
+        ("172.18.0.3:1", verb, path, "1.1", 200), None,
+    )
+    assert flt.filter(rec) is True
+
+
+def test_only_the_state_sync_heartbeat_post_is_quiet():
+    assert mw.is_quiet_poll("/api/ui/state/sync", 200, 5, "POST") is True
+    assert mw.is_quiet_poll("/api/ui/state/sync", 200, 5, "PUT") is False
+    assert mw.is_quiet_poll("/api/ui/actions/pending", 200, 5, "POST") is False
+    flt = mw.QuietPollAccessFilter()
+    rec = logging.LogRecord(
+        "uvicorn.access", logging.INFO, __file__, 0, '%s - "%s %s HTTP/%s" %d',
+        ("172.18.0.3:1", "POST", "/api/ui/state/sync", "1.1", 200), None,
+    )
+    assert flt.filter(rec) is False
+
+
+def test_middleware_keeps_a_put_on_a_polled_path_at_info(caplog):
+    from starlette.requests import Request
+    from starlette.responses import PlainTextResponse
+
+    async def call_next(_request):
+        return PlainTextResponse("x", status_code=200)
+
+    middleware = mw.StructuredLoggingMiddleware(app=lambda *a, **k: None)
+    with caplog.at_level(logging.DEBUG, logger="middleware.logging"):
+        for verb in ("GET", "PUT"):
+            request = Request({"type": "http", "method": verb,
+                               "path": "/api/system/display/preferences", "headers": []})
+            asyncio.run(middleware.dispatch(request, call_next))
+    levels = [(r.method, r.levelno) for r in caplog.records if r.getMessage() == "Request completed"]
+    assert levels == [("GET", logging.DEBUG), ("PUT", logging.INFO)]
+
+
+def test_ha_state_failures_keep_the_entity_and_throttle_per_entity(monkeypatch, caplog):
+    from fastapi import HTTPException
+
+    from routers import ha_control
+
+    async def _boom(path):
+        raise httpx.ReadTimeout("")
+
+    monkeypatch.setattr(ha_control, "_bridge_get", _boom)
+    with caplog.at_level(logging.WARNING, logger="routers.ha_control"):
+        for entity in ("light.a", "light.b", "light.a", "light.b"):
+            with pytest.raises(HTTPException):
+                asyncio.run(ha_control.get_entity_state(entity, caller={"user_id": "u"}))
+    msgs = [r.getMessage() for r in caplog.records]
+    assert len(msgs) == 2  # one per entity, not one lumped line
+    assert any("entity=light.a" in m for m in msgs) and any("entity=light.b" in m for m in msgs)
+
+
+def test_ha_control_failures_are_not_lumped_across_entities(monkeypatch, caplog):
+    from fastapi import HTTPException
+
+    from routers import ha_control
+
+    async def _boom(path, body):
+        raise httpx.ReadTimeout("")
+
+    monkeypatch.setattr(ha_control, "_bridge_post", _boom)
+    with caplog.at_level(logging.WARNING, logger="routers.ha_control"):
+        for entity in ("light.a", "light.b"):
+            with pytest.raises(HTTPException):
+                asyncio.run(ha_control.ha_control(
+                    ha_control.HAControlPayload(entity_id=entity, action="toggle"),
+                    caller={"user_id": "u"},
+                ))
+    msgs = [r.getMessage() for r in caplog.records]
+    assert len(msgs) == 2, msgs  # two different user commands failed: both are visible
+    assert "entity=light.a" in msgs[0] and "entity=light.b" in msgs[1]
+    assert all("service=toggle" in m for m in msgs)
+
+
+def test_logout_never_logs_the_session_id(monkeypatch, caplog):
+    import auth
+    from routers import auth as auth_router
+
+    token = "LOGOUTTOKEN-0123456789-abcdefghij-xyz"
+
+    class _Resp:
+        status_code = 500
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, *a, **k):
+            return _Resp()
+
+    monkeypatch.setattr(auth_router.httpx, "AsyncClient", _Client)
+    monkeypatch.setitem(auth._session_cache, token, ({"user_id": "u"}, 0))
+
+    class _Req:
+        headers = {"X-Session-ID": token}
+
+    with caplog.at_level(logging.DEBUG, logger="routers.auth"):
+        asyncio.run(auth_router.logout(_Req(), current_user={"user_id": "u"}))
+    text = " ".join(r.getMessage() for r in caplog.records)
+    assert "upstream returned 500" in text and "evicted session" in text  # both paths exercised
+    assert token[:6] not in text
+    assert auth._session_digest(token) in text
+
+
+def test_no_logger_call_in_the_service_slices_a_credential():
+    """The CLASS behind two leaks (auth.get_current_user, routers/auth.logout):
+    `session_id[:20]` inside a log call. Any logging call whose arguments slice a
+    session / token / cookie / secret / key variable fails here -- use
+    auth._session_digest. (Server-generated ids such as a LiveKit participant sid
+    are not credentials and are not matched.)"""
+    import ast
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    cred = re.compile(r"token|cookie|secret|api_key|password|bearer", re.I)
+    # `session_id[:N]` is only a redaction attempt (a leaked credential prefix) when N is
+    # a short prefix; `[:64]` on a CHAT session id (brain_dispatch) is a length cap on a
+    # correlation id, not an auth session.
+    sess = re.compile(r"session", re.I)
+    log_methods = {"debug", "info", "warning", "error", "exception", "critical", "log"}
+    offenders = []
+    for path in root.rglob("*.py"):
+        if "tests" in path.relative_to(root).parts or "node_modules" in path.parts:
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:
+            continue
+        for call in ast.walk(tree):
+            if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                    and call.func.attr in log_methods):
+                continue
+            for arg in list(call.args) + [k.value for k in call.keywords]:
+                for sub in ast.walk(arg):
+                    if isinstance(sub, ast.Subscript) and isinstance(sub.slice, ast.Slice):
+                        base = ast.unparse(sub.value)
+                        upper = sub.slice.upper
+                        short = isinstance(upper, ast.Constant) and isinstance(upper.value, int) and upper.value <= 32
+                        if cred.search(base) or (sess.search(base) and short):
+                            offenders.append(f"{path.relative_to(root)}:{call.lineno} {base}[...]")
+    assert not offenders, offenders

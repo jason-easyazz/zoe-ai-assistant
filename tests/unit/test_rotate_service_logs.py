@@ -45,7 +45,7 @@ def test_rotates_a_big_file_and_keeps_the_content(tmp_path):
     assert mod.rotate_file(log, max_bytes=2 * MB, keep=3) == "rotated"
 
     assert log.stat().st_size == 0  # truncated in place, same inode
-    seg = tmp_path / "zoe-data.stderr.log.1.gz"
+    seg = tmp_path / "zoe-data.stderr.1.log.gz"
     assert gzip.decompress(seg.read_bytes()) == original
     assert stat.S_IMODE(seg.stat().st_mode) == 0o640  # logs hold household conversation
 
@@ -64,10 +64,10 @@ def test_segments_shift_and_the_oldest_falls_off(tmp_path):
     for gen in (b"gen1\n", b"gen2\n", b"gen3\n", b"gen4\n"):
         _fill(log, 2 * MB, gen)
         assert mod.rotate_file(log, max_bytes=MB, keep=3) == "rotated"
-    names = sorted(p.name for p in tmp_path.glob("x.log.*.gz"))
-    assert names == ["x.log.1.gz", "x.log.2.gz", "x.log.3.gz"]  # bounded: keep=3
-    assert gzip.decompress((tmp_path / "x.log.1.gz").read_bytes())[:5] == b"gen4\n"
-    assert gzip.decompress((tmp_path / "x.log.3.gz").read_bytes())[:5] == b"gen2\n"  # gen1 fell off
+    names = sorted(p.name for p in tmp_path.glob("x.*.log.gz"))
+    assert names == ["x.1.log.gz", "x.2.log.gz", "x.3.log.gz"]  # bounded: keep=3
+    assert gzip.decompress((tmp_path / "x.1.log.gz").read_bytes())[:5] == b"gen4\n"
+    assert gzip.decompress((tmp_path / "x.3.log.gz").read_bytes())[:5] == b"gen2\n"  # gen1 fell off
 
 
 def test_a_writer_holding_an_append_descriptor_keeps_working_and_file_is_not_sparse(tmp_path):
@@ -92,14 +92,14 @@ def test_bytes_appended_during_the_copy_are_carried_over(tmp_path, monkeypatch):
 
     def replace_then_append(src, dst):
         real_replace(src, dst)
-        if str(dst).endswith(".1.gz"):  # the copy is published; the writer sneaks one in
+        if str(dst).endswith(".1.log.gz"):  # the copy is published; the writer sneaks one in
             with open(log, "ab") as f:
                 f.write(b"late-line\n")
 
     monkeypatch.setattr(mod.os, "replace", replace_then_append)
     assert mod.rotate_file(log, max_bytes=MB, keep=2) == "rotated"
     assert log.read_bytes() == b"late-line\n"
-    assert b"late-line" not in gzip.decompress((tmp_path / "svc.log.1.gz").read_bytes())
+    assert b"late-line" not in gzip.decompress((tmp_path / "svc.1.log.gz").read_bytes())
 
 
 def test_symlinks_and_the_self_rotating_app_log_are_never_touched(tmp_path):
@@ -148,3 +148,64 @@ def test_timer_and_service_templates_exist_and_point_at_the_script():
     assert "scripts/maintenance/rotate_service_logs.py" in svc
     assert "Type=oneshot" in svc
     assert "OnUnitActiveSec=" in tmr and "WantedBy=timers.target" in tmr
+
+
+def test_segment_names_cannot_match_the_old_host_rotators_prune_glob(tmp_path):
+    """~/bin/zoe-logs-rotate.sh runs `ls -1t zoe-data.stdout.log.*.gz | tail -n +4 | xargs rm`.
+    Our segments must be invisible to that glob or the two rotators would eat each other."""
+    import fnmatch
+
+    log = tmp_path / "zoe-data.stdout.log"
+    for gen in (b"a\n", b"b\n", b"c\n", b"d\n", b"e\n"):
+        _fill(log, 2 * MB, gen)
+        mod.rotate_file(log, max_bytes=MB, keep=4)
+    segs = sorted(p.name for p in tmp_path.glob("*.gz"))
+    assert segs == [f"zoe-data.stdout.{n}.log.gz" for n in (1, 2, 3, 4)]
+    assert not [n for n in segs if fnmatch.fnmatch(n, "zoe-data.stdout.log.*.gz")]
+
+
+def _patch_gzip_enospc(monkeypatch):
+    import errno
+
+    real = mod.gzip.GzipFile.write
+    state = {"n": 0}
+
+    def flaky(self, data):
+        state["n"] += 1
+        if state["n"] >= 2:  # let the first chunk through: a MID-copy failure
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return real(self, data)
+
+    monkeypatch.setattr(mod.gzip.GzipFile, "write", flaky)
+
+
+def test_failed_gzip_leaves_archive_and_live_file_untouched(tmp_path, monkeypatch):
+    """The archive must not erode one segment per failed tick, and the live file
+    must not be truncated when no verified archive exists (P1, PR #1849 review)."""
+    log = tmp_path / "svc.log"
+    for gen in (b"gen1\n", b"gen2\n", b"gen3\n"):
+        _fill(log, 2 * MB, gen)
+        assert mod.rotate_file(log, max_bytes=MB, keep=3) == "rotated"
+    before = {p.name: p.read_bytes() for p in tmp_path.glob("svc.*.log.gz")}
+    assert len(before) == 3
+    _fill(log, 3 * MB, b"live\n")
+    live = log.read_bytes()
+
+    _patch_gzip_enospc(monkeypatch)
+    for _ in range(4):  # four failed ticks, as in the reproduction
+        with pytest.raises(OSError):
+            mod.rotate_file(log, max_bytes=MB, keep=3)
+
+    assert {p.name: p.read_bytes() for p in tmp_path.glob("svc.*.log.gz")} == before
+    assert log.read_bytes() == live
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_main_reports_a_failed_rotation_and_exits_nonzero(tmp_path, monkeypatch, capsys):
+    log = tmp_path / "zoe-data.stderr.log"
+    _fill(log, 3 * MB)
+    _patch_gzip_enospc(monkeypatch)
+    rc = mod.main(["--dir", str(tmp_path), "--max-mb", "1", "--file", "zoe-data.stderr.log"])
+    assert rc == 1
+    assert "FAILED" in capsys.readouterr().err
+    assert log.stat().st_size == 3 * MB

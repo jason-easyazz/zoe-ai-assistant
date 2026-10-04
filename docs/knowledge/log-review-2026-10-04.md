@@ -1,7 +1,7 @@
 ---
 type: review-record
 title: zoe-data log review — 2026-10-04 evening
-description: Inventory of every WARNING/ERROR/Traceback class and the noise classes in the zoe-data logs for 17:00–21:46 AWST on 2026-10-04 (seven restarts), why the unrotated stderr/stdout logs grow, what was fixed in code, and what remains for the operator. No household data.
+description: Inventory of every WARNING/ERROR/Traceback class and the noise classes in the zoe-data logs for 17:00–21:46 AWST on 2026-10-04 (seven restarts), why the under-rotated stderr/stdout logs grow, what was fixed in code, and what remains for the operator. No household data.
 tags: [logging, zoe-data, stderr, rotation, noise, review, incident]
 timestamp: 2026-10-04T22:00:00+08:00
 ---
@@ -70,12 +70,18 @@ nothing listens there now. Safe to delete (runbook §23 step 3).
 | `Multica sync_evolution_proposal failed: 400` | WARNING | 3 | 02:00–07:13 | Multica rejects the issue payload — not investigated |
 | `music discovery batch rc=2:` (empty stderr) | ERROR | 1 | 11:00:00 | not investigated |
 
-## 2. Why the unrotated logs grow
+## 2. Why the under-rotated logs grow
 
 `zoe-data.service` is started with the host drop-in `20-capture-output.conf`
 (`StandardOutput=append:…/zoe-data.stdout.log`, `StandardError=append:…/zoe-data.stderr.log`; it
 was untracked, now mirrored in `scripts/setup/systemd/zoe-data.service.d/`). systemd `append:`
-**never rotates**; the host has no logrotate; journald is volatile. Three writers:
+**never rotates**; the host has no logrotate; journald is volatile. The one rotator is a
+host-local, untracked pair (`~/bin/zoe-logs-rotate.sh` + `zoe-logs-rotate.{service,timer}`, daily
+02:50) that only acts above 150 MB, keeps a 50 MB tail via a non-atomic `tail -c … | cat >` rewrite
+and prunes only the stdout archives (to 3) — so the files oscillate between ~50 MB and 150 MB
+instead of staying small. The new tracked rotator replaces it (runbook §23 step 1 retires the
+old pair first; the new segment names, `zoe-data.stderr.1.log.gz`, cannot match the old script's
+`zoe-data.stdout.log.*.gz` prune). Three writers:
 
 1. **stderr = the JSON root-logger stream.** `main.py` calls `middleware.logging.setup_json_logging()`
    at import, which attaches an INFO `StreamHandler` (stderr) to the root logger. Every
@@ -102,7 +108,7 @@ The seven polls (≈ one per 2–5 s per open kiosk tab) are `GET /api/ui/action
 | Healthy polls flood stderr + app log | `middleware/logging.py`: `is_quiet_poll()` — fast `<400` polls log at DEBUG; `>=400` or `>=1 s` stays INFO. Escape: `ZOE_LOG_QUIET_POLL_PATHS=off` | `test_log_noise_2026_10_04.py::test_middleware_logs_healthy_poll_at_debug_and_trouble_at_info`, `…healthy_poll_is_quiet`, `…trouble_on_a_poll_path_is_never_quiet`, `…non_poll_paths_are_never_quiet` |
 | Same polls flood stdout (uvicorn access) | `QuietPollAccessFilter` on `uvicorn.access`, installed by `configure_logging()` (fails open) | `…access_filter_drops_healthy_polls_only`, `…configure_logging_quiets_chatty_libraries_and_is_idempotent` |
 | httpx / apscheduler-executor per-call INFO (and full URLs incl. household coordinates) | `logging_setup.quiet_chatty_loggers()` caps `httpx`, `httpcore`, `apscheduler.executors.default` at WARNING. Escape: `ZOE_LOG_CHATTY_LIBS_LEVEL=INFO` | `…configure_logging_quiets_chatty_libraries_and_is_idempotent`, `…chatty_level_env_restores_the_lines` |
-| Unrotated systemd `append:` logs | `scripts/maintenance/rotate_service_logs.py` (stdlib copytruncate, ≥ 50 MB, keep 4 `.gz`, flock, never touches the app log) + `zoe-log-rotate.{service,timer}` templates (operator install) + tracked `20-capture-output.conf` | `tests/unit/test_rotate_service_logs.py` (10 tests: content-preserving, shift/keep bound, O_APPEND writer survives and file not sparse, late-appended bytes carried over, symlink/app-log skipped, dry-run inert, templates exist) |
+| Poorly-rotated systemd `append:` logs (150 MB threshold, lossy tail rewrite) | `scripts/maintenance/rotate_service_logs.py` (stdlib copytruncate, ≥ 50 MB, keep 4 segments, archive built + verified before anything is replaced, flock, never touches the app log) + `zoe-log-rotate.{service,timer}` templates (operator install) + tracked `20-capture-output.conf` | `tests/unit/test_rotate_service_logs.py` (content-preserving, shift/keep bound, failed gzip leaves archive + live file untouched, O_APPEND writer survives and file not sparse, late-appended bytes carried over, symlink/app-log skipped, dry-run inert, templates exist) |
 | Expected upstream outage logged as a ~5 KB traceback per poll (121 + 20 in one outage) | `log_throttle.log_upstream_failure()` — transport/status errors: ONE throttled line, no traceback; genuine bugs keep ERROR + traceback and are never throttled. Applied in `routers/panel_config.py` and `routers/ha_control.py` | `…upstream_timeout_logs_one_line_without_traceback`, `…genuine_bug_keeps_its_traceback…`, `…ha_entities_timeout_is_502…`, `…panel_config_ha_outage_returns_none…` |
 | Reconnect-looping client floods the WARNING stream | `_enforce_ws_origin` logs through `log_throttled` (per origin+path, 60 s, carries "+N similar suppressed"); the 403 itself is unchanged | `…log_throttled_first_emits_repeats_fold_into_a_count`, `…ws_origin_rejection_goes_through_the_throttle`, key-space bound test |
 | Routine success trace at WARNING that printed reply text | `expert_dispatch.py`: `EXPERT_ACTIVE`/`EXPERT_SHADOW` → INFO; `reply=<80 chars>` → `reply_chars=<n>` | `…expert_active_trace_is_info_and_carries_no_reply_text` |
@@ -123,7 +129,7 @@ ships ON with an `off` escape hatch instead of default-dark; four new knobs are 
 
 ## 4. What remains
 
-**Operator (exact commands in `incident-runbook.md` §23):** install + start `zoe-log-rotate.timer`
+**Operator (exact commands in `incident-runbook.md` §23):** retire the old `zoe-logs-rotate` pair, then install + start `zoe-log-rotate.timer`
 and run it once (rotates the 119 MB / 86 MB files without a restart); restart zoe-data once so the
 volume fixes load; delete the two stale `zoe-data-801{1,2}.log`; `chmod 640` the existing app-log
 segments.

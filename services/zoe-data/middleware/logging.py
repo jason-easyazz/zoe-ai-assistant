@@ -152,12 +152,28 @@ def _quiet_poll_slow_ms() -> int:
         return DEFAULT_QUIET_POLL_SLOW_MS
 
 
-def is_quiet_poll(path: str, status_code: int, duration_ms: Optional[float] = None) -> bool:
+#: The one non-GET that is a poll: the panel's periodic UI-state heartbeat.
+#: Every other write (PUT/POST/PATCH/DELETE) is a *change* someone made and must
+#: always leave a trace, even on a path that is otherwise a polled read.
+HEARTBEAT_POST_PATHS: tuple[str, ...] = ("/api/ui/state/sync",)
+
+
+def is_quiet_poll(
+    path: str,
+    status_code: int,
+    duration_ms: Optional[float] = None,
+    method: str = "GET",
+) -> bool:
     """True when a finished request is a healthy poll that should log at DEBUG.
 
     ``duration_ms=None`` (uvicorn's access record carries none) means "judge on
-    status alone".
+    status alone". Only reads are quiet (GET/HEAD), plus the heartbeat POST in
+    :data:`HEARTBEAT_POST_PATHS`: a successful ``PUT /api/panels/<id>/config`` or
+    ``PUT /api/system/display/preferences`` is a configuration change, not a poll.
     """
+    verb = (method or "GET").upper()
+    if verb not in ("GET", "HEAD") and not (verb == "POST" and path in HEARTBEAT_POST_PATHS):
+        return False
     if status_code >= 400:
         return False
     if duration_ms is not None and duration_ms >= _quiet_poll_slow_ms():
@@ -177,11 +193,12 @@ class QuietPollAccessFilter(logging.Filter):
         if not isinstance(args, tuple) or len(args) < 5:
             return True
         try:
+            method = str(args[1])
             path = str(args[2]).split("?", 1)[0]
             status = int(args[4])
         except (TypeError, ValueError):
             return True
-        return not is_quiet_poll(path, status, None)
+        return not is_quiet_poll(path, status, None, method)
 
 
 class StructuredLoggingMiddleware(BaseHTTPMiddleware):
@@ -228,7 +245,7 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
             logger = logging.getLogger(__name__)
             level = (
                 logging.DEBUG
-                if is_quiet_poll(metadata["path"], response.status_code, elapsed_ms)
+                if is_quiet_poll(metadata["path"], response.status_code, elapsed_ms, request.method)
                 else logging.INFO
             )
             logger.log(

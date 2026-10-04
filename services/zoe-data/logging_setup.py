@@ -31,9 +31,9 @@ module writes to its own :class:`~logging.handlers.RotatingFileHandler` with a
 hard ceiling of ``maxBytes * (backupCount + 1)``.
 
 That ceiling covers the *app* log only. The two systemd-captured streams
-(``zoe-data.stderr.log`` / ``zoe-data.stdout.log``) are still unrotated by the
-unit; ``scripts/maintenance/rotate_service_logs.py`` + the ``zoe-log-rotate``
-timer bound them (operator install — docs/knowledge/log-review-2026-10-04.md).
+(``zoe-data.stderr.log`` / ``zoe-data.stdout.log``) are not rotated by the unit;
+``scripts/maintenance/rotate_service_logs.py`` + the ``zoe-log-rotate`` timer
+bound them (operator install — docs/knowledge/log-review-2026-10-04.md).
 
 Deliberately dependency-free (stdlib only, no ``typed_env``) so it can be
 called as the very first statement in ``main.py`` with no import-order risk.
