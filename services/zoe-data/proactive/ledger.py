@@ -51,6 +51,7 @@ _TRUTHY = {"1", "true", "yes", "on"}
 RESPONSE_WINDOW_S = 600       # record §3.5: the person's next turn "within … the next 10 min"
 JUDGE_BY = timedelta(hours=24)  # a row the sweep could not judge by then closes ``unknown``
 _REPLY_SLACK = timedelta(seconds=10)  # settle runs in the stream's finally; the reply row follows
+_REPLY_WITHIN = timedelta(minutes=5)  # ...and is persisted soon after; a later reply is another turn's
 _SWEEP_BATCH = 200
 _TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -141,17 +142,20 @@ async def record_for_candidate(db, *, candidate_id: str, user_id: str, session_i
 
 
 # ── sweep: what chat persisted ────────────────────────────────────────────────
-async def _reply_after(db, session_id: str, since: str) -> tuple[str, datetime] | None:
-    """The first assistant row of ``session_id`` at/after ``since``: the reply this delivery
-    rode in on (the text the person heard) and when it was persisted. Postgres SQL."""
+async def _reply_after(db, session_id: str, since: str,
+                       until: str) -> tuple[str, datetime] | None:
+    """The first assistant row of ``session_id`` in ``[since, until]``: the reply this
+    delivery rode in on (the text the person heard) and when it was persisted. The upper
+    bound keeps a lost save from borrowing a LATER turn's reply. Postgres SQL."""
     async with db.execute(
-        """SELECT cm.content, cm.created_at::timestamptz AS at
+        """SELECT cm.content, cm.created_at::timestamptz AS reply_at
            FROM chat_messages cm
            WHERE cm.session_id = ? AND cm.role = 'assistant'
              AND cm.created_at::timestamptz >= ?::timestamptz
+             AND cm.created_at::timestamptz <= ?::timestamptz
            ORDER BY cm.created_at::timestamptz ASC
            LIMIT 1""",
-        (session_id, since),
+        (session_id, since, until),
     ) as cur:
         row = await cur.fetchone()
     if not row:
@@ -211,7 +215,8 @@ async def _decide(db, row: tuple, now: datetime) -> tuple[str | None, int | None
     surfaced = _parse(surfaced_at)
     if surfaced is None:
         return "unknown", None
-    found = await _reply_after(db, sid, _iso(surfaced - _REPLY_SLACK))
+    found = await _reply_after(db, sid, _iso(surfaced - _REPLY_SLACK),
+                               _iso(surfaced + _REPLY_WITHIN))
     if found is None:
         return None, None  # not persisted yet (or never was): wait, expiry closes it
     reply, reply_at = found

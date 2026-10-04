@@ -15,6 +15,7 @@ Negative controls (each was run red before commit):
   * start the next-turn window BEFORE the reply                  -> trigger-turn test red;
   * drop ``outcome IS NULL`` from the sweep's SELECT and UPDATE  -> double-sweep test red;
   * drop the ``judge_by`` fallback                               -> expiry test red;
+  * drop the reply search's upper bound (``_REPLY_WITHIN``)      -> borrowed-reply test red;
   * ignore the response window                                   -> window test red.
 """
 from __future__ import annotations
@@ -115,10 +116,10 @@ def env(monkeypatch, tmp_path):
     state = {"now": NOW, "db": db, "turns": {}, "replies": {}}
     monkeypatch.setattr(sel, "_now", lambda: state["now"])
 
-    async def fake_reply_after(_db, session_id, since):
-        # the first assistant row of the session at/after ``since`` (chat_messages)
+    async def fake_reply_after(_db, session_id, since, until):
+        # the first assistant row of the session in [since, until] (chat_messages)
         due = [(text, at) for text, at in state["replies"].get(session_id, [])
-               if ledger._iso(at) >= since]
+               if since <= ledger._iso(at) <= until]
         return min(due, key=lambda r: r[1]) if due else None
 
     async def fake_turns(_db, user_id, start, end, limit=1):
@@ -271,6 +272,16 @@ async def test_a_reply_persisted_before_the_settle_is_not_this_deliverys(env):
     await _raise_and_settle(env)
     _persist_reply(env, "Good, thanks! How are you?", after_s=-60)
     assert await _sweep_at(env, 30) == 0
+
+
+async def test_a_later_turns_reply_is_not_borrowed_when_this_one_was_never_saved(env):
+    """The save was lost; a reply persisted 20 minutes later belongs to another turn and
+    must not make this delivery `undelivered`. It waits, and expiry closes it `unknown`."""
+    await _raise_and_settle(env)
+    _persist_reply(env, "Good, thanks! How are you?", after_s=20 * 60)
+    assert await _sweep_at(env, 30) == 0
+    assert await ledger.sweep(now=NOW + ledger.JUDGE_BY + timedelta(minutes=1)) == 1
+    assert _ledger(env)[0][4:] == (None, "unknown")
 
 
 async def test_unanchored_item_is_unknown_never_undelivered(env):
