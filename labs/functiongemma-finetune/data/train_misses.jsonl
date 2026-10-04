@@ -1,3 +1,21 @@
 {"text": "Who is flying in on Thursday, and where from?", "tool": "recall_memory", "args": {"query": "who is flying in on thursday and where from"}, "source": "samantha_bar_miss_2026-09-28"}
 {"text": "Who is flying in on Thursday, and which city do I live in?", "tool": "recall_memory", "args": {"query": "who is flying in on thursday and which city I live in"}, "source": "samantha_bar_miss_2026-09-28"}
 {"text": "Remind me, who did I say is flying in on Thursday?", "tool": "recall_memory", "args": {"query": "who is flying in on thursday"}, "source": "samantha_bar_miss_2026-09-28"}
+{"text": "when is my birthday", "tool": "recall_memory", "args": {"query": "when is my birthday"}, "source": "own_fact_miss_2026-10-04"}
+{"text": "when's my birthday again", "tool": "recall_memory", "args": {"query": "my birthday"}, "source": "own_fact_miss_2026-10-04"}
+{"text": "what's my address", "tool": "recall_memory", "args": {"query": "my address"}, "source": "own_fact_miss_2026-10-04"}
+{"text": "what is my home address", "tool": "recall_memory", "args": {"query": "my home address"}, "source": "own_fact_miss_2026-10-04"}
+{"text": "how old am I", "tool": "recall_memory", "args": {"query": "how old I am"}, "source": "own_fact_miss_2026-10-04"}
+{"text": "when was I born", "tool": "recall_memory", "args": {"query": "when I was born"}, "source": "own_fact_miss_2026-10-04"}
+{"text": "where do I live", "tool": "recall_memory", "args": {"query": "where I live"}, "source": "own_fact_miss_2026-10-04"}
+{"text": "which suburb do I live in", "tool": "recall_memory", "args": {"query": "which suburb I live in"}, "source": "own_fact_miss_2026-10-04"}
+{"text": "where am I from", "tool": "recall_memory", "args": {"query": "where I am from"}, "source": "own_fact_miss_2026-10-04"}
+{"text": "what's my phone number", "tool": "recall_memory", "args": {"query": "my phone number"}, "source": "own_fact_miss_2026-10-04"}
+{"text": "what's my email address", "tool": "recall_memory", "args": {"query": "my email address"}, "source": "own_fact_miss_2026-10-04"}
+{"text": "what's my middle name", "tool": "recall_memory", "args": {"query": "my middle name"}, "source": "own_fact_miss_2026-10-04"}
+{"text": "what's my star sign", "tool": "recall_memory", "args": {"query": "my star sign"}, "source": "own_fact_miss_2026-10-04"}
+{"text": "what's my postcode", "tool": "recall_memory", "args": {"query": "my postcode"}, "source": "own_fact_miss_2026-10-04"}
+{"text": "what car do I drive", "tool": "recall_memory", "args": {"query": "what car I drive"}, "source": "own_fact_miss_2026-10-04"}
+{"text": "when is our anniversary", "tool": "recall_memory", "args": {"query": "our anniversary"}, "source": "own_fact_miss_2026-10-04"}
+{"text": "what's my date of birth", "tool": "recall_memory", "args": {"query": "my date of birth"}, "source": "own_fact_miss_2026-10-04"}
+{"text": "what do I do for work", "tool": "recall_memory", "args": {"query": "what I do for work"}, "source": "own_fact_miss_2026-10-04"}

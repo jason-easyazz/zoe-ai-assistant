@@ -191,6 +191,10 @@ _FALLBACK_TEXT = "Sorry, I had trouble reaching my brain just now. Could you try
 FLUE_OUTCOME_OK = "ok"              # the sidecar answered, terminated cleanly
 FLUE_OUTCOME_FALLBACK = "fallback"  # _FALLBACK_TEXT served; the brain did not answer
 FLUE_OUTCOME_ERROR = "error"        # real text served, but the turn failed/truncated
+# The SEAM answered without the sidecar (verify_on_challenge's honest "can't
+# check right now"): a label only — not an ok, so it never reads as proof the
+# sidecar is healthy.
+FLUE_OUTCOME_SEAM_REPLY = "seam_reply"
 
 
 def _record_outcome(
@@ -590,6 +594,15 @@ def _present_state_shapes_enabled() -> bool:
     }
 
 
+def _own_fact_shapes_enabled() -> bool:
+    """ZOE_OWN_FACT_PRECEDENCE — default OFF; the same flag that re-points the
+    router (semantic_router.own_fact_precedence_enabled), so the recall floor
+    and the router can never disagree about an own-fact question. Per-call."""
+    return (os.environ.get("ZOE_OWN_FACT_PRECEDENCE") or "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
 def _recall_question_shape(message: str) -> str:
     """Which recall-floor shape this message is: "personal" (a my/I question),
     "event" (an event-shaped question about the user's people/plans —
@@ -601,7 +614,9 @@ def _recall_question_shape(message: str) -> str:
     2026-09-30), or — with ZOE_RECALL_PRESENT_STATE_SHAPES on — "present"
     (``memory_gate.present_state_question_kind``: "do I still get migraines?")
     / "event_time" (``memory_gate.is_event_time_question``: "what time is my
-    dentist appointment?"). Pure but for that flag. Ownership against continuity is decided by
+    dentist appointment?"), or — with ZOE_OWN_FACT_PRECEDENCE on — "own_fact"
+    (``memory_gate.is_own_fact_question``: "when is mum's birthday?"). Pure but
+    for those flags. Ownership against continuity is decided by
     ``_recall_floor_shape`` — the ONE predicate the floor, the continuity
     exclusivity check and the offer ager share."""
     msg = message or ""
@@ -621,7 +636,17 @@ def _recall_question_shape(message: str) -> str:
             return "event_time"
     if is_event_question(msg):
         return "event"
-    return "evidence" if is_evidence_question(msg) else ""
+    if is_evidence_question(msg):
+        return "evidence"
+    if _own_fact_shapes_enabled():
+        # "How old is my mum?", "When is mum's birthday?", "Where do I live?"
+        # (live 2026-10-04): a stored fact of the user's own life, with no
+        # my/I-question shape the personal regex above would claim.
+        from memory_gate import is_own_fact_question  # stdlib-only
+
+        if is_own_fact_question(msg):
+            return "own_fact"
+    return ""
 
 
 def _recall_floor_shape(message: str) -> str:
@@ -655,6 +680,66 @@ _RECALL_BLOCK_OPEN = (
     "use them to answer; do not mention this block]"
 )
 _RECALL_BLOCK_CLOSE = "[END MEMORY CONTEXT]"
+# ZOE_STRIP_NARRATION (default OFF): the same block with the "never narrate the
+# lookup" rule at the source — live 2026-10-04 "Who am I" opened with "I'll check
+# what I've got on file about you." The post-filter (narration_filter) is the
+# backstop; this asks the model not to say it in the first place.
+_RECALL_BLOCK_OPEN_DIRECT = (
+    "[MEMORY CONTEXT — Zoe's stored notes about this user; use them to answer "
+    "directly, never say you are checking or looking anything up; "
+    "do not mention this block]"
+)
+
+
+def _strip_narration_enabled() -> bool:
+    import narration_filter
+
+    return narration_filter.enabled()
+
+
+def _recall_block_open() -> str:
+    return _RECALL_BLOCK_OPEN_DIRECT if _strip_narration_enabled() else _RECALL_BLOCK_OPEN
+
+
+# ── Challenge verification + trivia hedge (both default OFF) ─────────────────
+async def _verify_plan(message: str, uid: str, session_id: str, voice: bool = False):
+    """``verify_on_challenge.prepare`` or None — import-guarded and never
+    raises. Flag off: ``prepare`` returns None before any read."""
+    try:
+        import verify_on_challenge
+
+        return await verify_on_challenge.prepare(message, uid, session_id, voice=voice)
+    except Exception as exc:  # noqa: BLE001 - the check must never break a turn
+        logger.warning("seam verify_on_challenge failed (non-fatal): %s", type(exc).__name__)
+        return None
+
+
+# ZOE_TRIVIA_HEDGE (read per call in _trivia_hedge_block). Registered [MEMORY CONTEXT pair -> elided from every message but the newest.
+_TRIVIA_HEDGE_BLOCK = (
+    "[MEMORY CONTEXT — accuracy note; do not mention this block]\n"
+    "This is a world-facts question with a date, number or winner. If you answer from "
+    "memory rather than a tool, say it as what you recall (\"I think…\", \"if I remember "
+    "right…\"), never as certain, and offer to check it online.\n"
+    "[END MEMORY CONTEXT]"
+)
+
+
+def _trivia_hedge_block(message: str, memory_block_present: bool) -> str:
+    """The one-line hedge instruction for a world-trivia turn, or '' (flag off,
+    a memory block already rides this turn, or not trivia). Never raises."""
+    try:
+        if memory_block_present:
+            return ""
+        if (os.environ.get("ZOE_TRIVIA_HEDGE") or "").strip().lower() not in {"1", "true", "yes", "on"}:
+            return ""
+        from trivia_gate import is_world_trivia
+        from verify_on_challenge import _strip_intent_hint
+
+        return _TRIVIA_HEDGE_BLOCK if is_world_trivia(_strip_intent_hint((message or "").strip())) else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 _OFFER_BLOCK_OPEN = "[PENDING CONTACT OFFER — do not mention this block]"
 _OFFER_BLOCK_CLOSE = "[END PENDING CONTACT OFFER]"
 # Every block this seam folds into the user message, as (open-line prefix, close
@@ -816,7 +901,7 @@ async def _recall_context_block(message: str, user_id: str) -> str:
                 user_id, shape, bullets, len(packet))
     if not packet:
         return ""
-    return f"{_RECALL_BLOCK_OPEN}\n{packet}\n{_RECALL_BLOCK_CLOSE}"
+    return f"{_recall_block_open()}\n{packet}\n{_RECALL_BLOCK_CLOSE}"
 
 
 # ── Continuity injection (ZOE_SEAM_CONTINUITY_INJECT, default ON) ───────────
@@ -1431,6 +1516,13 @@ async def run_flue_brain_streaming(
         message, session_id, user_id, day_brief_block=brief.block if brief else "",
         raise_block=raised.block if raised else "", **kwargs,
     )
+    if _strip_narration_enabled():
+        # ZOE_STRIP_NARRATION (default OFF): drop a leading "I'll check what I've
+        # got on file…" sentence when the real answer follows. Sentinels pass
+        # straight through; closing this wrapper closes the inner turn.
+        import narration_filter
+
+        turn = narration_filter.filter_stream(turn)
     debug = await _continuity_debug_uid((user_id or "").strip())
     reply: list[str] = []
     emitted = False  # real reply text went out (never a sentinel or the fallback)
@@ -1511,12 +1603,23 @@ async def _run_flue_brain_streaming_turn(
     from recall_evidence import note_turn
 
     note_turn(uid, message)
+    # Back a claim up when challenged (ZOE_VERIFY_ON_CHALLENGE, default OFF; no
+    # DB read, no search, no change to the bytes when off): "are you sure" after
+    # a world-fact answer runs ONE bounded web search. A hit rides as a block
+    # AFTER the user's words; a miss answers honestly right here — the brain is
+    # never asked to re-assert an unchecked claim.
+    verify_plan = await _verify_plan(message, uid, session_id, bool(kwargs.get("voice_mode")))
+    if verify_plan is not None and verify_plan.reply:
+        _record_outcome(outcome_sink, FLUE_OUTCOME_SEAM_REPLY, f"verify_on_challenge:{verify_plan.status}")
+        yield verify_plan.reply
+        return
+    verify_block = verify_plan.block if verify_plan is not None else ""
     # Deterministic recall floor (default OFF): on a personal-, event- or evidence-shaped
     # question turn, prepend the for-prompt packet so recall no longer depends on the model
     # electing to call its recall_memory tool. Placed BEFORE the identity wrap
     # so the block rides AFTER the identity line on the wire (the sidecar's
     # single-line strip regex is anchored at message start).
-    recall_block = await _recall_context_block(message, uid)
+    recall_block = "" if verify_block else await _recall_context_block(message, uid)
     # Continuity (default ON): a first-person mood/state STATEMENT gets the
     # recent-first packet so yesterday's worry reaches today's reply. Never on
     # the same turn as a recall block — the recall floor owns question turns.
@@ -1525,7 +1628,7 @@ async def _run_flue_brain_streaming_turn(
     # and the #1725 prompt cache are untouched.
     continuity_block = ""
     continuity_turn = False
-    if not recall_block:
+    if not recall_block and not verify_block:
         continuity_block = await _continuity_context_block(message, uid)
         continuity_turn = is_continuity_turn(message, uid)
     # Offer nudge on ANY turn — skipped when the recall packet already carries
@@ -1546,7 +1649,7 @@ async def _run_flue_brain_streaming_turn(
     elif raise_block:  # one ask per turn, same evidence as continuity (S4 round 3)
         if _offer_inject_enabled():
             logger.info("SEAM_OFFER user=%s deferred=1 reason=raise", uid)
-    elif "[pending-contact]" not in recall_block:
+    elif "[pending-contact]" not in recall_block and not verify_block:
         offer_block = await _pending_offer_block(uid)
     _blocks = "\n".join(b for b in (recall_block, offer_block) if b)
     # Sanitise BEFORE assembling: a user-typed " zoe-replay:" line must never reach
@@ -1570,6 +1673,15 @@ async def _run_flue_brain_streaming_turn(
     date_hint = _day_first_hint(message)
     if date_hint:
         brain_message = f"{brain_message}\n{date_hint}"
+    if verify_block:  # the live check rides last: closest to the reply
+        brain_message = f"{brain_message}\n{verify_block}"
+    else:
+        # ZOE_TRIVIA_HEDGE (default OFF): a world-fact question with a date /
+        # number / winner gets one line telling the brain to hedge an unchecked
+        # answer and offer to look it up. Never beside a memory block.
+        hedge_block = _trivia_hedge_block(message, bool(recall_block or continuity_block))
+        if hedge_block:
+            brain_message = f"{brain_message}\n{hedge_block}"
     outbound_message = _wrap_message_with_identity(brain_message, uid)
     # Replay isolation rides OUTSIDE the identity wrap so its line is first on the
     # wire. Only the replay harness ever passes this; absent → unchanged bytes.
