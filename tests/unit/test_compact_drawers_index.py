@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import importlib.util
-import math
 from pathlib import Path
 
 import pytest
@@ -23,7 +22,8 @@ def test_ratio_and_advice_match_the_measured_palace():
     assert m.tombstone_ratio(1591, 258) == pytest.approx(6.17, abs=0.01)   # the 2026-10-04 drawers index
     assert m.compaction_advised(1591, 258)
     assert not m.compaction_advised(300, 258)                              # a fresh-ish index
-    assert m.tombstone_ratio(0, 0) == 0.0 and math.isinf(m.tombstone_ratio(5, 0))
+    # live == 0 has no ratio: None, never inf/nan (Starlette's JSONResponse rejects non-finite floats)
+    assert m.tombstone_ratio(0, 0) is None and m.tombstone_ratio(5, 0) is None
     assert not m.compaction_advised(5, 0)                                  # nothing live: nothing to compact
 
 
