@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-497 flags; 495 not documented in `.env.example`.
+498 flags; 496 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -347,6 +347,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_PRESENCE_WINDOW_S` | `''` | no | NO | `services/zoe-data/proactive/presence.py` |
 | `ZOE_PROACTIVE_ARRIVAL_RESPONSE_S` | `''` | no | NO | `services/zoe-data/proactive/arrival.py` |
 | `ZOE_PROACTIVE_BRIEF_ON_ARRIVAL` | `''` | no | NO | `services/zoe-data/proactive/arrival.py` |
+| `ZOE_PROACTIVE_LEDGER` | `''` | no | NO | `services/zoe-data/proactive/ledger.py` |
 | `ZOE_PROACTIVE_RAISE_GAP_S` | `7200` | yes | NO | `services/zoe-data/proactive/selector.py` |
 | `ZOE_PROACTIVE_RAISE_PER_DAY` | `2` | yes | NO | `services/zoe-data/proactive/selector.py` |
 | `ZOE_PROACTIVE_SELECTOR` | `''` | no | NO | `services/zoe-data/proactive/selector.py` |

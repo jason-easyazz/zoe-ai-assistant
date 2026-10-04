@@ -471,20 +471,21 @@ async def prepare(message: str, user_id: str, session_id: str, *,
         return None
 
 
-async def settle(raised: Raise | None, *, produced: bool) -> bool:
+async def settle(raised: Raise | None, *, produced: bool, reply: str | None = None) -> bool:
     """Mark the candidate surfaced once the turn EMITTED reply text (cooldown,
     count, this session). Called from each lane's stream ``finally`` — the
     brief_first_turn.settle pattern: shielded, so a barge-in still records a raise
-    that was heard; ``produced=False`` records nothing. NEVER raises."""
+    that was heard; ``produced=False`` records nothing. ``reply`` (the lane passes it only
+    under ``ZOE_PROACTIVE_LEDGER``) feeds the delivery ledger's voiced check. NEVER raises."""
     if raised is None:
         return False
-    task = asyncio.ensure_future(_settle(raised, produced))
+    task = asyncio.ensure_future(_settle(raised, produced, reply))
     _settling.add(task)
     task.add_done_callback(_settling.discard)
     return await asyncio.shield(task)
 
 
-async def _settle(raised: Raise, produced: bool) -> bool:
+async def _settle(raised: Raise, produced: bool, reply: str | None = None) -> bool:
     settled = False
     try:
         if produced:
@@ -500,6 +501,11 @@ async def _settle(raised: Raise, produced: bool) -> bool:
                     "cooldown_until = ?, last_surfaced_session = ?, last_surfaced_at = ? WHERE id = ?",
                     (_iso(now + COOLDOWN), raised.session_id, _iso(now), raised.candidate_id),
                 )
+                from proactive import ledger  # flag-dark delivery ledger (no I/O when off)
+
+                await ledger.record_for_candidate(
+                    db, candidate_id=raised.candidate_id, user_id=raised.user_id,
+                    session_id=raised.session_id, shape=raised.shape, now=now, reply=reply)
             settled = True
     except Exception as exc:  # noqa: BLE001
         logger.warning("proactive-selector: settle failed user=%s: %r", raised.user_id, exc)
@@ -512,18 +518,22 @@ async def _settle(raised: Raise, produced: bool) -> bool:
 
 
 async def mark_brief_surfaced(user_id: str, session_id: str,
-                              items: list[tuple[str, str, str]]) -> int:
+                              items: list[tuple[str, str, str]], *,
+                              reply: str | None = None) -> int:
     """The ``[Today]`` brief mentioned these ``(kind, source_ref, text)`` items: record
     them as surfaced exactly as a raise would (count, cooldown, this session, ONE shared
     stamp), so the next conversation does not raise the loop the brief just voiced.
     An item the nightly pass never selected gets an already-expired row that carries
     the cooldown, so a later night cannot select it fresh. Called from
-    ``brief_first_turn`` settle (``ZOE_LOOP_LIFECYCLE``). Never raises."""
+    ``brief_first_turn`` settle (``ZOE_LOOP_LIFECYCLE``). Under ``ZOE_PROACTIVE_LEDGER`` each
+    item also lands in the delivery ledger (``reply`` = the lane's reply text, for its
+    voiced check). Never raises."""
     if not items or not user_id or not session_id or not selector_enabled():
         return 0
     try:
         from db_compat import get_compat_db
         from open_loop_quality import loop_anchors
+        from proactive import ledger
 
         now = _now()
         stamp, cool = _iso(now), _iso(now + COOLDOWN)
@@ -544,6 +554,11 @@ async def mark_brief_surfaced(user_id: str, session_id: str,
                      " ".join(sorted(loop_anchors(text))), stamp, cool, session_id, stamp,
                      stamp, stamp),
                 )
+                if ledger.ledger_enabled():
+                    await ledger.record(
+                        db, user_id=user_id, candidate_id=None, kind=kind, source_ref=ref,
+                        shape="brief", delivered_by="brief", session_id=session_id,
+                        cue_words=" ".join(sorted(loop_anchors(text))), now=now, reply=reply)
     except Exception as exc:  # noqa: BLE001
         logger.warning("proactive-selector: brief mark failed user=%s: %r", user_id, exc)
         return 0
