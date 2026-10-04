@@ -391,6 +391,39 @@ def test_routes_need_the_internal_token(monkeypatch):
     assert c.post("/api/memories/maintenance/compact-index", headers=h).json() == {"ok": True}
 
 
+def _sqlite_palace(tmp_path, live=258, added=1591):
+    import pickle
+    import sqlite3
+
+    p = tmp_path / "palace"
+    p.mkdir()
+    con = sqlite3.connect(p / "chroma.sqlite3")
+    con.executescript("CREATE TABLE collections (id TEXT, name TEXT); CREATE TABLE segments (id TEXT, scope TEXT, collection TEXT);"
+                      "CREATE TABLE embeddings (id INTEGER, segment_id TEXT);")
+    con.execute("INSERT INTO collections VALUES ('c1', 'mempalace_drawers')")
+    con.execute("INSERT INTO segments VALUES ('m1', 'METADATA', 'c1')")
+    con.execute("INSERT INTO segments VALUES ('v1', 'VECTOR', 'c1')")
+    con.executemany("INSERT INTO embeddings VALUES (?, 'm1')", [(i,) for i in range(live)])
+    con.commit(); con.close()
+    (p / "v1").mkdir()
+    (p / "v1" / "index_metadata.pickle").write_bytes(pickle.dumps({"total_elements_added": added}))
+    return p
+
+
+def test_health_route_answers_while_the_gate_is_closed(monkeypatch, tmp_path):
+    """Codex P2: the health read is what an operator calls DURING a compaction to watch it.
+    The real ``MemoryService.index_health`` must not take the collection lease — a leased
+    call would block on the closed gate (here: fail fast at 50 ms → 503)."""
+    svc = memory_service.MemoryService(data_dir=str(_sqlite_palace(tmp_path)))
+    monkeypatch.setattr(memory_service, "_MAINTENANCE_WAIT_S", 0.05)
+    c = _client(monkeypatch, svc)
+    memory_service._MAINTENANCE_OPEN.clear()
+    r = c.get("/api/memories/maintenance/index-health", headers={"X-Internal-Token": "tok"})
+    assert r.status_code == 200, r.text
+    assert r.json()["tombstone_ratio"] == 6.17 and r.json()["compaction_advised"] is True
+    assert memory_service._ACTIVE_OPS == 0
+
+
 def test_compact_route_is_dark_without_the_flag(monkeypatch):
     monkeypatch.delenv("ZOE_MEMORY_INDEX_COMPACT", raising=False)
     svc = _Svc({"ok": True})

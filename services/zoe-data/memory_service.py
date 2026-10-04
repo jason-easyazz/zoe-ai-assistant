@@ -1625,10 +1625,14 @@ class MemoryService:
             return {}
 
     async def index_health(self) -> dict[str, Any]:
-        """Tombstone health of the drawers index (read-only SQLite + pickle, no chroma call)."""
+        """Tombstone health of the drawers index (read-only SQLite + pickle, no chroma call).
+        Deliberately NOT via ``_run_sync``: that path takes the collection lease, and this
+        read is exactly what an operator calls DURING a compaction (gate closed) to watch
+        it — it must answer, never wait on the gate."""
         from memory_index_health import index_health
 
-        return await self._run_sync(index_health, self._data_dir)
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, index_health, self._data_dir)
 
     async def compact_index(self) -> dict[str, Any]:
         """In-process drawers index compaction (see ``compact_drawers_index_sync``).
