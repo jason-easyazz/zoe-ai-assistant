@@ -137,6 +137,15 @@ let n = 0; const ok = (m) => { n++; console.log('  ok  ' + m); };
       assert(mdiFn('mdi:fan-speed-3').includes(mdiMap['mdi:fan']) && mdiFn('mdi:tv').includes(mdiMap['mdi:television']), 'fan/tv families resolve');
       assert(mdiFn('').includes(q) && mdiFn(undefined).includes(q), 'only NO icon draws the question mark');
       ok('polish: calendar pills are ≥48 px by min-height; unknown HA icons resolve to a family glyph');
+      // Polish (#1862, Codex round 3): the remaining live controls meet 48 px, and the JS-driven
+      // motion (star canvas, Cover Flow spring) honours prefers-reduced-motion too.
+      for (const [re, what] of [[/\.estmc \.dtg button\{width:60px;height:48px/, 'date/time steppers 48 px'], [/\.srcbtn\{flex:none;height:48px/, 'source Connect/Reconnect 48 px'], [/\.srow2 \.sset\{[^}]*min-height:48px/, 'settings select 48 px'], [/\.srow2 \.sbtn\{[^}]*min-height:48px/, 'settings button 48 px'], [/\.lcol \.ladd button\{width:48px;height:48px/, 'list add button 48 px'], [/\.dayf \.drem \.lact button::before,\.dayf \.dev \.lact button::before\{content:'';position:absolute;inset:-7px\}/, 'day-view edit/delete hit box extended to 48'], [/\.mfull \.cfc \.cfx::before\{content:'';position:absolute;inset:-7px\}/, 'queue remove hit box extended to 48']]) assert(re.test(homeSrc), what);
+      assert(/\.ltab\{[^}]*min-height:48px/.test(homeSrc) && /\.rm \.rchip\{[^}]*min-height:48px/.test(homeSrc), 'list tabs + scene chips 48 px (found by scripts/maintenance/estate_touch_targets.py)');
+      assert(!/\.srow2 input\[type=range\]\{[^}]*height:34px/.test(homeSrc) && !/\.rm \.rvol input\[type=range\]\{[^}]*height:40px/.test(homeSrc), 'range inputs are 48 px tall');
+      assert(/var RM=false;try\{var _rmq=window\.matchMedia\('\(prefers-reduced-motion: reduce\)'\)/.test(homeSrc), 'RM flag reads the media query');
+      assert(/ctx\.globalAlpha=RM\?\.72:/.test(homeSrc) && /if\(RM\)\{setTimeout\(function\(\)\{requestAnimationFrame\(frame\);\},1000\);\}/.test(homeSrc), 'star canvas is still under reduced motion');
+      assert(/if\(RM\|\|Math\.abs\(target-_cf\.focus\)>CF_WIN_DRAG\)\{/.test(homeSrc), 'Cover Flow spring lands directly under reduced motion');
+      ok('polish: steppers/sources/settings/list/day-view/queue controls ≥48 px; JS motion honours reduced motion');
     }
     console.log('estate resilience: ' + n + ' checks passed');
   })().catch((e) => { console.error(e); process.exit(1); });
