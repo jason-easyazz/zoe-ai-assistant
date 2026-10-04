@@ -2342,6 +2342,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_LOG_REPEAT_WINDOW_S": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/log_throttle.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_LOOP_LIFECYCLE": {
         "defaults": [
           "False"

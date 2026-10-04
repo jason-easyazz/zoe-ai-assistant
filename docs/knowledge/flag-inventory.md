@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-502 flags; 500 not documented in `.env.example`.
+503 flags; 501 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -246,6 +246,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_LOG_MAX_BYTES` | `dynamic` | no | NO | `services/zoe-data/logging_setup.py` |
 | `ZOE_LOG_QUIET_POLL_PATHS` | `-` | no | NO | `services/zoe-data/middleware/logging.py` |
 | `ZOE_LOG_QUIET_POLL_SLOW_MS` | `dynamic` | no | NO | `services/zoe-data/middleware/logging.py` |
+| `ZOE_LOG_REPEAT_WINDOW_S` | `-` | no | NO | `services/zoe-data/log_throttle.py` |
 | `ZOE_LOOP_LIFECYCLE` | `False` | yes | NO | `services/zoe-data/open_loop_lifecycle.py` |
 | `ZOE_MAX_BROWSER_TABS` | `5` | yes | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_MCP_ACTOR_ROLE` | `-` | no | NO | `services/zoe-data/mcp_server.py` |
