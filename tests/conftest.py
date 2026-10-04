@@ -12,9 +12,20 @@ import os
 
 # Add active source paths. services/zoe-core (the dormant Pi brain lane) is
 # TypeScript and is not on the Python path; docs/archive no longer exists.
+#
+# zoe-data ONLY. services/zoe-auth used to be inserted here too (4b8a944b, for
+# "auth contract tests" that live under services/zoe-auth/tests and never load
+# this conftest), and because it was inserted LAST it sat at sys.path[0]: its
+# `models/` package and `main.py` shadowed zoe-data's `models.py` and `main.py`
+# for every test under tests/. Alone, tests/unit still passed because nothing
+# there imports `models` by that name; any run that collects tests/unit together
+# with a services/zoe-data test whose router does `from models import ...`
+# (one pytest invocation, as a developer does) failed those tests with
+# `ImportError: cannot import name 'PersonCreate' from 'models'` (2026-10-04,
+# PR #1827). The zoe-auth lane sets its own PYTHONPATH (validate.yml) and does
+# not need this file. Pinned by tests/unit/test_conftest_path_isolation.py.
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, 'services/zoe-data'))
-sys.path.insert(0, os.path.join(PROJECT_ROOT, 'services/zoe-auth'))
 
 
 @pytest.fixture(scope="session")
