@@ -844,6 +844,23 @@
     </div>
 
     <script>
+        // Where a successful login lands. js/auth.js stores the page the visitor
+        // was sent away from in sessionStorage (desktop pages redirect here
+        // synchronously when there is no member session); only a same-origin
+        // path is honoured, never a touch page (desktop is desktop).
+        function zoePostLoginDestination() {
+            try {
+                const stored = sessionStorage.getItem('zoe_redirect_after_login') || '';
+                sessionStorage.removeItem('zoe_redirect_after_login');
+                if (stored.startsWith('/') && !stored.startsWith('//') && !/[\\]/.test(stored)
+                    && !stored.startsWith('/touch/') && stored !== '/index.html' && stored !== '/') {
+                    return stored;
+                }
+            } catch (_) {}
+            return '/dashboard.html';
+        }
+    </script>
+    <script>
         let currentPin = '';
         let selectedUser = null;
 
@@ -1150,7 +1167,7 @@
                 if (oidcStateId) {
                     window.location.href = '/application/o/authorize/complete?oidc_state_id=' + encodeURIComponent(oidcStateId);
                 } else {
-                    window.location.href = '/dashboard.html';
+                    window.location.href = zoePostLoginDestination();
                 }
             }, 1000);
         }
@@ -1204,7 +1221,7 @@
                         if (now < expiresAt) {
                             // Valid session, redirect
                             // Always use standard dashboard; touch panels reach /touch directly
-                            window.location.href = '/dashboard.html';
+                            window.location.href = zoePostLoginDestination();
                             return;
                         } else {
                             // Session expired
