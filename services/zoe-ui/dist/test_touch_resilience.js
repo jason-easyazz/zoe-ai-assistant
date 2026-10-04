@@ -107,6 +107,11 @@ let n = 0; const ok = (m) => { n++; console.log('  ok  ' + m); };
       const sl = /function setLocalPanelId\((\w+)\)\s*\{([\s\S]{0,700})/.exec(settingsSrc); assert(sl, 'missing setLocalPanelId');
       assert(/localStorage\.getItem\('zoe_touch_panel_alias_generated'\) === String\(\w+ \|\| ''\)\.trim\(\)\) localStorage\.removeItem\('zoe_touch_panel_alias_generated'\)/.test(sl[2]), 'setLocalPanelId must clear the alias marker when that id becomes registered');
       ok('viewer: registering the generated alias clears the alias marker (touch/settings.html setLocalPanelId)');
+      // Codex (#1861, round 6): a NEW registration must reload so the executor re-classifies
+      // this browser as a panel and starts bind/sync/poll/push (it was booted as a viewer).
+      const sp = /async function savePanelIdentity\(\)[\s\S]{0,4000}?catch \(e\)/.exec(settingsSrc); assert(sp, 'savePanelIdentity');
+      assert(/registeredNow = true;/.test(sp[0]) && /if \(registeredNow\) \{[\s\S]{0,300}window\.location\.reload\(\)/.test(sp[0]), 'a new registration must reload the page');
+      ok('viewer: a new registration from Touch Settings reloads so the panel services start');
     }
     console.log('estate resilience: ' + n + ' checks passed');
   })().catch((e) => { console.error(e); process.exit(1); });
