@@ -63,6 +63,65 @@ let n = 0; const ok = (m) => { n++; console.log('  ok  ' + m); };
     assert(/_dockMusicT=setTimeout\(paintDockMusic,5000\);\n    \}\);/.test(html), 'dock music chain must re-arm inside its catch'); ok('dock: a failed now-playing poll re-arms the 5 s chain');
     assert(/var unavailable=!!d&&d\.available===false/.test(html) && /Music isn’t available right now/.test(html)); ok('music: MA available:false is "Music isn’t available", not "Nothing playing"');
     assert(/if\(e&&e\.message==='auth'\)\{\s*host\.innerHTML='<div class="srcnote">Sign in to manage music services\./.test(html) && /Couldn’t load music services/.test(html)); ok('sources: auth refusal and failed load are told apart');
+    // viewer mode (touch-ui-executor.js): a non-kiosk, unregistered browser is not a panel
+    {
+      const execSrc = fs.readFileSync(path.join(__dirname, 'js/touch-ui-executor.js'), 'utf8');
+      const m = /function isViewerContext\(/.exec(execSrc); assert(m, 'missing isViewerContext');
+      let i = execSrc.indexOf('{', m.index), d = 0; for (; i < execSrc.length; i++) { if (execSrc[i] === '{') d++; else if (execSrc[i] === '}') { d--; if (!d) break; } }
+      const { isViewerContext } = vm.runInNewContext(execSrc.slice(m.index, i + 1) + '; ({ isViewerContext })', { URLSearchParams });
+      const ls = (o) => ({ getItem: (k) => (k in o ? o[k] : null) });
+      assert.strictEqual(isViewerContext('', ls({})), true);
+      assert.strictEqual(isViewerContext('', ls({ zoe_touch_panel_id: 'panel_abc12345' })), true);
+      assert.strictEqual(isViewerContext('?kiosk=1', ls({})), false);
+      assert.strictEqual(isViewerContext('', ls({ zoe_kiosk: '1' })), false);
+      assert.strictEqual(isViewerContext('?panel_id=zoe-touch-pi', ls({})), false);
+      assert.strictEqual(isViewerContext('', ls({ zoe_panel_id: 'zoe-touch-pi' })), false);
+      // Codex (#1861): the session-scoped kiosk flag (auth.js on legacy touch pages) is a panel signal…
+      assert.strictEqual(isViewerContext('', ls({}), ls({ zoe_kiosk: '1' })), false);
+      // …and a locally generated alias is never a registered id, whether forced in the URL or stored.
+      // …and THIS browser's generated alias (the persisted marker) is never a registered id, whether forced or stored —
+      // while a registered id that merely LOOKS like one (no marker) is a panel (test_touch_panel_id_precedence.js).
+      assert.strictEqual(isViewerContext('?panel_id=panel_abc12345', ls({ zoe_touch_panel_alias_generated: 'panel_abc12345' })), true);
+      assert.strictEqual(isViewerContext('', ls({ zoe_panel_id: 'panel_abc12345', zoe_touch_panel_alias_generated: 'panel_abc12345' })), true);
+      assert.strictEqual(isViewerContext('?panel_id=weird-alias', ls({ zoe_touch_panel_alias_generated: 'weird-alias' })), true);
+      assert.strictEqual(isViewerContext('?panel_id=panel_abcd1234', ls({})), false);
+      ok('viewer: a laptop on /touch/home.html is a viewer; kiosk flag (URL, local or session) or a registered panel id makes a panel (a generated alias never does)');
+      assert(/if \(state\.viewer\) \{[\s\S]{0,1500}\} else \{[\s\S]{0,300}bindPanel\(\)/.test(execSrc), 'init must gate bind/sync/push/poll on state.viewer');
+      assert(/if \(state\.viewer\) \{[\s\S]{0,900}stopServiceWorkerPanelPoll\(\);/.test(execSrc), 'a viewer must STOP a leftover SW panel poll');
+      assert(/function stopServiceWorkerPanelPoll\(\)[\s\S]{0,600}STOP_PANEL_POLL/.test(execSrc));
+      ok('viewer: init skips panel bind, state sync, action poll, push socket and SW poll — and stops a leftover SW panel poll');
+      // Codex (#1861, round 2): js/auth.js on the legacy touch pages must carry the
+      // localStorage kiosk flag into sessionStorage BEFORE clearing it, or a kiosk
+      // navigating with a bare URL loses every signal before isViewerContext runs.
+      const authSrc = fs.readFileSync(path.join(__dirname, 'js/auth.js'), 'utf8');
+      const blk = /if \(currentPath\.startsWith\('\/touch\/'\)\) \{([\s\S]{0,400})\} else \{([\s\S]{0,120})\}/.exec(authSrc); assert(blk, 'auth.js kiosk-flag block');
+      assert(/sessionStorage\.setItem\('zoe_kiosk', '1'\)/.test(blk[1]) && /localStorage\.setItem\('zoe_kiosk', '1'\)/.test(blk[1]) && !/removeItem\('zoe_kiosk'\)/.test(blk[1]), 'on touch pages auth.js mirrors the kiosk flag and never deletes the estate\'s localStorage copy');
+      assert(/localStorage\.removeItem\('zoe_kiosk'\)/.test(blk[2]), 'off touch the stale key is cleared');
+      const homeSrc = fs.readFileSync(path.join(__dirname, 'touch/home.html'), 'utf8');
+      assert(/sessionStorage\.getItem\('zoe_kiosk'\)==='1'/.test(homeSrc.slice(0, 6000)), 'the estate bootstrap must honour the session-scoped kiosk flag');
+      ok('viewer: the kiosk flag survives bare navigations in both directions (auth.js mirrors, never deletes on touch; the estate bootstrap reads the session copy)');
+      // Codex (#1861, round 4): registering the generated alias (touch/settings.html
+      // setLocalPanelId after /panels/register) must drop the alias marker, or the
+      // now-registered panel reads as a viewer after reload.
+      const settingsSrc = fs.readFileSync(path.join(__dirname, 'touch/settings.html'), 'utf8');
+      const sl = /function setLocalPanelId\((\w+)\)\s*\{([\s\S]{0,700})/.exec(settingsSrc); assert(sl, 'missing setLocalPanelId');
+      assert(/localStorage\.getItem\('zoe_touch_panel_alias_generated'\) === String\(\w+ \|\| ''\)\.trim\(\)\) localStorage\.removeItem\('zoe_touch_panel_alias_generated'\)/.test(sl[2]), 'setLocalPanelId must clear the alias marker when that id becomes registered');
+      ok('viewer: registering the generated alias clears the alias marker (touch/settings.html setLocalPanelId)');
+      // Codex (#1861, rounds 6+7): a NEW registration must reload so the executor re-classifies
+      // this browser as a panel — and it must reload even when the bindings step AFTER the
+      // register fails (the id is already persisted), so the reload sits after the catch.
+      const sp = /async function savePanelIdentity\(\)[\s\S]*?\n        \}\n/.exec(settingsSrc); assert(sp, 'savePanelIdentity');
+      assert(/registeredNow = true;/.test(sp[0]), 'register branch marks registeredNow');
+      assert(/catch \(e\) \{[\s\S]*?\n            \}\n[\s\S]{0,900}if \(registeredNow\) \{[\s\S]{0,400}window\.location\.reload\(\)/.test(sp[0]), 'reload must be scheduled AFTER the catch (bindings failure still reloads)');
+      assert(!/try \{[\s\S]*?if \(registeredNow\) \{[\s\S]*?\} catch \(e\)/.test(sp[0]), 'reload must not live inside the try');
+      ok('viewer: a new registration from Touch Settings reloads so the panel services start (even if bindings fail)');
+      // Codex (#1861, round 7): the estate boot mirrors the kiosk flag into sessionStorage too —
+      // js/auth.js on a desktop tab removes the shared localStorage copy, and the tab-scoped
+      // copy is what keeps the kiosk a kiosk across a bare /touch/*.html navigation.
+      assert(/if\(p\.get\('kiosk'\)==='1'\)\{localStorage\.setItem\('zoe_kiosk','1'\);sessionStorage\.setItem\('zoe_kiosk','1'\);\}/.test(homeSrc), 'early inline ?kiosk=1 mirrors to sessionStorage');
+      assert(/if\(kiosk\)\{try\{localStorage\.setItem\('zoe_kiosk','1'\);sessionStorage\.setItem\('zoe_kiosk','1'\);\}catch\(e\)\{\}\}/.test(homeSrc), 'boot kiosk=true mirrors to sessionStorage');
+      ok('viewer: the estate boot persists the kiosk flag to BOTH storages (another tab cannot declassify the kiosk)');
+    }
     console.log('estate resilience: ' + n + ' checks passed');
   })().catch((e) => { console.error(e); process.exit(1); });
 }
