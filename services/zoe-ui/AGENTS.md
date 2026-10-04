@@ -11,8 +11,8 @@ The Zoe web frontend. `dist/` is the nginx docroot (hand-maintained HTML/CSS/JS,
 - `dist/sw.js` — service worker with Workbox precache.
 - `dist/lib/**` — pinned third-party vendor source, served straight to the browser and **tracked in git**. Nothing fetches or builds these: if it is not committed, a fresh clone serves a 404. `.gitignore` ignores the rest of `dist/lib/livekit/` (source maps etc.), so add a negation when vendoring a new file there. Currently vendored:
   - `gridstack/`; `livekit/livekit-client.umd.min.js` — livekit-client 2.5.0, Apache-2.0
-  - `marked/marked.min.js` 15.0.12 · `dompurify/purify.min.js` 3.4.12 · `qrcode/qrcode.min.js` 1.4.4 · `chartjs/chart.umd.js` 4.4.4 · `browser-image-compression/browser-image-compression.js` 2.0.2
-  - `prism/` 1.29.0 — `prism.js`, `prism-autoloader.min.js`, `prism-tomorrow.min.css`, `components/prism-<lang>.min.js`
+  - `marked/marked.umd.js` 18.0.14 (npm ships no minified build; only `marked.parse()` is used — the options removed in v8 were never set) · `dompurify/purify.min.js` 3.4.16 · `qrcode/qrcode.min.js` 1.4.4 (node-qrcode ≥1.5 ships no browser bundle in its tarball, so it stays) · `chartjs/chart.umd.js` 4.5.1. `browser-image-compression` was removed 2026-10-04: zero call sites.
+  - `prism/` 1.30.0 (CVE-2024-53382 DOM clobbering fixed) — `prism.js`, `prism-autoloader.min.js`, `prism-tomorrow.min.css`, `components/prism-<lang>.min.js`
   - `leaflet/` 1.9.4 — `leaflet.js`, `leaflet.css` **and `images/`** (the CSS references `images/layers.png`, `images/marker-icon.png`, … *relatively*; skipping them yields a working map with invisible markers)
   - `filepond/` 4.32.12 + `filepond/plugins/` — image-preview 4.6.12, image-resize 2.0.10, image-transform 3.8.8, file-validate-size 2.2.8, file-validate-type 1.2.9
 - `dist/workbox/` — VENDORED Workbox 7.0.0 runtime (`workbox-sw.js` + the `.prod.js` modules the SW uses). Third-party code: refresh it, don't hand-edit it.
