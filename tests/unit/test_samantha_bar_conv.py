@@ -1,4 +1,4 @@
-"""Pin the conversation-quality bar pack (scripts/perf/samantha_bar_conv.py, S13-S15).
+"""Pin the conversation-quality bar pack (scripts/perf/samantha_bar_conv.py, S17-S19).
 
 Pure logic only: no live API, brain or network. Each scorer has a positive, the
 exact failure it was written for (the negative control) and a boundary."""
@@ -31,12 +31,12 @@ def test_the_pack_is_not_wired_into_the_live_plan():
     bar = importlib.util.module_from_spec(spec)
     sys.modules["samantha_bar"] = bar
     spec.loader.exec_module(bar)
-    assert not {"S13", "S14", "S15"} & set(bar.SCENARIO_IDS)
+    assert not {"S17", "S18", "S19"} & set(bar.SCENARIO_IDS)
 
 
 def test_every_ask_names_its_flag():
     assert {k: v["flag"] for k, v in sc.ASKS.items()} == {
-        "S13": "ZOE_OWN_FACT_PRECEDENCE", "S14": "ZOE_VERIFY_ON_CHALLENGE", "S15": "ZOE_STRIP_NARRATION"}
+        "S17": "ZOE_OWN_FACT_PRECEDENCE", "S18": "ZOE_VERIFY_ON_CHALLENGE", "S19": "ZOE_STRIP_NARRATION"}
 
 
 @pytest.mark.parametrize("reply,want", [
@@ -47,8 +47,8 @@ def test_every_ask_names_its_flag():
     ("It's 7:50 AM right now. Your birthday is the 12th of March.", "PASS"),
     ("I don't have your birthday saved yet.", "FAIL"),
 ])
-def test_s13(reply, want):
-    assert sc.score_s13(reply)[0] == want
+def test_s17(reply, want):
+    assert sc.score_s17(reply)[0] == want
 
 
 @pytest.mark.parametrize("reply,want", [
@@ -58,8 +58,8 @@ def test_s13(reply, want):
     ("I can't check that right now, so treat my last answer as unconfirmed.", "PASS"),
     ("Hmm, maybe.", "FAIL"),
 ])
-def test_s14(reply, want):
-    assert sc.score_s14(reply)[0] == want
+def test_s18(reply, want):
+    assert sc.score_s18(reply)[0] == want
 
 
 @pytest.mark.parametrize("reply,want", [
@@ -69,5 +69,5 @@ def test_s14(reply, want):
     ("You're someone I don't know much about yet.", "FAIL"),
     ("I'll check the weather and get back to you. You swim every morning.", "PASS"),  # a promise is not narration
 ])
-def test_s15(reply, want):
-    assert sc.score_s15(reply)[0] == want
+def test_s19(reply, want):
+    assert sc.score_s19(reply)[0] == want

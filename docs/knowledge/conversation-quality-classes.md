@@ -135,8 +135,8 @@ not part of the reply, and are untouched. Tests: `test_narration_filter.py`.
 
 ## Bar fixtures
 
-`scripts/perf/samantha_bar_conv.py` holds S13 (own-fact vs clock), S14 (challenge → source or honest
-can't-check, never "pretty sure") and S15 (answered, not narrated) as synthetic asks + pure scorers,
+`scripts/perf/samantha_bar_conv.py` holds S17 (own-fact vs clock), S18 (challenge → source or honest
+can't-check, never "pretty sure") and S19 (answered, not narrated) as synthetic asks + pure scorers,
 pinned by `tests/unit/test_samantha_bar_conv.py`. They are **not** in `samantha_bar.SCENARIO_IDS`:
 wiring them changes the plan and the baseline contract, and each needs its flag on in the live service
 first. To wire: add the ids to `SCENARIO_IDS` / `SCENARIOS` with `expected: "FAIL"` (targets), add a

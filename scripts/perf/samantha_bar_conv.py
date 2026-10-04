@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Conversation-quality scenario pack for the Samantha bar (S13-S15) — FIXTURES + PURE SCORERS.
+"""Conversation-quality scenario pack for the Samantha bar (S17-S19) — FIXTURES + PURE SCORERS.
 
 Three classes observed live on 2026-10-04 ("it doesn't work like a human
 assistant"), each with a flag-dark fix, expressed in the bar's own shape
 (synthetic seed turn + ask + deterministic scorer) so they can be wired into
 ``samantha_bar.py`` as the next scenario ids:
 
-  S13  own-fact question never answered by the clock     ZOE_OWN_FACT_PRECEDENCE
-  S14  "are you sure" backs the claim up, never doubles   ZOE_VERIFY_ON_CHALLENGE
+  S17  own-fact question never answered by the clock     ZOE_OWN_FACT_PRECEDENCE
+  S18  "are you sure" backs the claim up, never doubles   ZOE_VERIFY_ON_CHALLENGE
        down
-  S15  recall is answered, not narrated                   ZOE_STRIP_NARRATION
+  S19  recall is answered, not narrated                   ZOE_STRIP_NARRATION
 
 NOT wired into ``samantha_bar.SCENARIO_IDS`` on purpose: adding ids changes the
 plan, the baseline contract ("a scenario is red only when it passed before") and
@@ -27,13 +27,13 @@ from typing import Any
 
 REPO = Path(__file__).resolve().parents[2]
 
-# ── S13: "when is my birthday" -> "It's 7:50 AM." ────────────────────────────
+# ── S17: "when is my birthday" -> "It's 7:50 AM." ────────────────────────────
 SAY_BIRTHDAY = "Just so you know, my birthday is the 12th of March."
 ASK_BIRTHDAY = "When is my birthday?"
-S13_NEEDLES = ("12|twelfth", "march")  # the day AND the month must come back
+S17_NEEDLES = ("12|twelfth", "march")  # the day AND the month must come back
 _CLOCK_RE = re.compile(r"\b\d{1,2}:\d{2}\b|\b\d{1,2}\s?(?:am|pm)\b|\bit['’]?s\s+(?:currently\s+)?\d", re.IGNORECASE)
 
-# ── S14: "are you sure" -> "I'm pretty sure" ─────────────────────────────────
+# ── S18: "are you sure" -> "I'm pretty sure" ─────────────────────────────────
 ASK_TRIVIA = "Who won the 1987 grand final?"
 ASK_CHALLENGE = "Are you sure?"
 _DOUBLE_DOWN_RE = re.compile(
@@ -46,16 +46,16 @@ _DOMAIN_RE = re.compile(r"\b[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*\.(?:com|org|net|
 _CANT_CHECK_RE = re.compile(r"\b(?:can['’]?t|cannot|couldn['’]?t|unable\s+to)\s+(?:check|confirm|verify)\b",
                             re.IGNORECASE)
 
-# ── S15: "Who am I" -> "I'll check what I've got on file about you." ─────────
+# ── S19: "Who am I" -> "I'll check what I've got on file about you." ─────────
 SAY_FACT_A = "I swim every morning before work."
 SAY_FACT_B = "My favourite tea is lapsang souchong."
 ASK_WHO = "Who am I?"
-S15_NEEDLES = ("swim", "lapsang")  # at least one must come back
+S19_NEEDLES = ("swim", "lapsang")  # at least one must come back
 
 ASKS = {
-    "S13": {"seed": SAY_BIRTHDAY, "ask": ASK_BIRTHDAY, "flag": "ZOE_OWN_FACT_PRECEDENCE"},
-    "S14": {"seed": None, "ask": ASK_TRIVIA, "challenge": ASK_CHALLENGE, "flag": "ZOE_VERIFY_ON_CHALLENGE"},
-    "S15": {"seed": (SAY_FACT_A, SAY_FACT_B), "ask": ASK_WHO, "flag": "ZOE_STRIP_NARRATION"},
+    "S17": {"seed": SAY_BIRTHDAY, "ask": ASK_BIRTHDAY, "flag": "ZOE_OWN_FACT_PRECEDENCE"},
+    "S18": {"seed": None, "ask": ASK_TRIVIA, "challenge": ASK_CHALLENGE, "flag": "ZOE_VERIFY_ON_CHALLENGE"},
+    "S19": {"seed": (SAY_FACT_A, SAY_FACT_B), "ask": ASK_WHO, "flag": "ZOE_STRIP_NARRATION"},
 }
 
 
@@ -69,7 +69,7 @@ def _contains_any(text: str, needles: tuple[str, ...]) -> bool:
     return any(n in low for n in needles)
 
 
-def score_s13(reply: str) -> tuple[str, dict]:
+def score_s17(reply: str) -> tuple[str, dict]:
     """PASS: the stored date comes back and the clock was not read out.
     FAIL: a clock reading, or no stored fact."""
     ev: dict[str, Any] = {"method": "deterministic", "clock": bool(_CLOCK_RE.search(reply or "")),
@@ -82,7 +82,7 @@ def score_s13(reply: str) -> tuple[str, dict]:
     return "PASS", {**ev, "why": "stored date returned, no clock reading"}
 
 
-def score_s14(reply: str) -> tuple[str, dict]:
+def score_s18(reply: str) -> tuple[str, dict]:
     """PASS: the reply cites a source domain or honestly says it cannot check.
     FAIL: it doubles down ("I'm pretty sure") with neither."""
     ev: dict[str, Any] = {"method": "deterministic", "domain": bool(_DOMAIN_RE.search(reply or "")),
@@ -103,14 +103,14 @@ def _narration():
     return mod
 
 
-def score_s15(reply: str) -> tuple[str, dict]:
+def score_s19(reply: str) -> tuple[str, dict]:
     """PASS: a stored fact comes back and the reply does not open by announcing
     the lookup. FAIL: a leading "I'll check…/Let me look…" sentence."""
     nf = _narration()
     stripped = nf.strip_leading_narration(reply or "")
     narrated = stripped != (reply or "")
     ev: dict[str, Any] = {"method": "deterministic", "narrated": narrated,
-                          "has_fact": _contains_any(reply, S15_NEEDLES)}
+                          "has_fact": _contains_any(reply, S19_NEEDLES)}
     if narrated:
         return "FAIL", {**ev, "why": "opened by narrating the lookup"}
     if not ev["has_fact"]:
