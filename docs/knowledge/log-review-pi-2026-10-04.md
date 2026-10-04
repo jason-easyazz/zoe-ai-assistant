@@ -111,7 +111,7 @@ read against the 09-28/29 baseline (§6 lists the lines to expect).
    second red.
 2. **No recovery line after announce-poll outages — `zoe_voice_announce.py` `AnnouncePoller`.**
    Only the first failure of a streak is logged, so the log counted 50 outages on 2026-10-04 but
-   never showed one end. Now one `INFO announce poll recovered after N failed polls (~Ts)` closes each
+   never showed one end. Now one `INFO announce poll recovered after N failed polls; poll blind ~Ts (…)` (first failure to first good poll, backoff included — an upper bound on the outage, not its length) closes each
    streak. While fixing it, a latent coupling: a *busy* cycle (live turn) returns `["busy"]` without
    fetching, yet it reset the failure counter — so a turn in the middle of an outage snapped the
    backoff from up to 60 s back to 5 s and would have logged a "recovery" for a server nobody had

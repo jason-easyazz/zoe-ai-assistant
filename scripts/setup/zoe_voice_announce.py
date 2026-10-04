@@ -204,8 +204,13 @@ class AnnouncePoller:
             started = self._outage_started
             self._outage_started = None
             took = max(0.0, self._monotonic() - started) if started is not None else 0.0
-            self._info("announce poll recovered after %d failed poll%s (~%.0fs)",
-                       failures, "" if failures == 1 else "s", took)
+            # NOT the outage length: it runs from the first failed poll to the
+            # first good one, so the 10/20/40/60 s backoff is inside it and the
+            # server itself was back up to one backoff step (<= 60 s) earlier.
+            self._info("announce poll recovered after %d failed poll%s; poll blind ~%.0fs "
+                       "(first failure to first good poll, backoff included - the server "
+                       "returned up to %.0fs earlier)",
+                       failures, "" if failures == 1 else "s", took, self.backoff_max_s)
 
     # ── the loop ────────────────────────────────────────────────────────────
     def run(self, shutdown_wait: Callable[[float], bool]) -> None:

@@ -291,11 +291,13 @@ class _Recorder:
         self.lines.append(("warning", msg % a))
 
 
-def _run_cycles(p, clock, cycles, step=5.0):
+def _run_cycles(p, clock, cycles):
+    """Run `cycles` waits, advancing the fake clock by the timeout the poller
+    ASKS for - so the real 5/10/20/40/60 s backoff schedule is exercised."""
     n = {"i": 0}
 
     def shutdown_wait(timeout):
-        clock.advance(step)
+        clock.advance(timeout)
         n["i"] += 1
         return n["i"] > cycles
 
@@ -314,13 +316,16 @@ def test_recovery_is_logged_once_with_the_failed_count_and_outage_length():
 
     rec = _Recorder()
     p, _ = _poller(clock, fetch=flaky_fetch, logger=rec)
-    _run_cycles(p, clock, 6)
+    _run_cycles(p, clock, 5)
     warns = [m for lvl, m in rec.lines if lvl == "warning"]
     recovered = [m for lvl, m in rec.lines if lvl == "info" and "recovered" in m]
     assert len(warns) == 1, "still one WARNING per streak"
     assert len(recovered) == 1
     assert "3 failed polls" in recovered[0]
-    assert "~15s" in recovered[0]  # first failure -> first good poll, three 5 s cycles later
+    # waits 5 (poll 1 fails at t=5), 10 (t=15 fails), 20 (t=35 fails), 40 (t=75 ok):
+    # blind 70 s, not the 15 s a fixed-step clock would show - the backoff is in it.
+    assert "poll blind ~70s" in recovered[0]
+    assert "backoff included" in recovered[0]
 
 
 def test_a_healthy_run_never_logs_a_recovery():
@@ -357,6 +362,6 @@ def test_a_busy_cycle_is_not_evidence_the_server_is_back():
 
     p.run(shutdown_wait)
     recovered = [m for _, m in rec.lines if "recovered" in m]
-    assert len(recovered) == 1 and "1 failed poll (" in recovered[0]
+    assert len(recovered) == 1 and "1 failed poll;" in recovered[0]
     # the busy cycle kept the backoff (10 s), it did not snap back to 5 s
     assert waits[2] == 10.0

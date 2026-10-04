@@ -794,7 +794,10 @@ Jetson cert — every turn would fail with an SSL error.
 **`announce poll failed … 502` bursts are the Jetson restarting, not the Pi.** Line up the
 timestamp with `systemctl --user show zoe-data -p ActiveEnterTimestamp` (or a `zoe-ui` restart for
 `Connection refused`). The daemon backs off to 60 s and keeps running. Since the fix, the end of
-each outage is logged as `announce poll recovered after N failed polls (~Ts)`; no such line after a
+each outage is logged as `announce poll recovered after N failed polls; poll blind ~Ts (…)`. The `~Ts`
+is first failed poll to first good poll — the 10/20/40/60 s backoff is inside it, so it overstates
+the outage and the server was back up to 60 s before the line (a 4 s restart logs ~10 s): compare
+the *failed* line's timestamp with `ActiveEnterTimestamp`, not the recovered line's. No such line after a
 `failed` line means the server is still down.
 
 **Thermal.** `vcgencmd get_throttled`: `0xe0000` = capped/throttled/soft-limit *have occurred*
