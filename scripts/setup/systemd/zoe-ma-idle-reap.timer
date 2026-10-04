@@ -1,0 +1,18 @@
+# Every 10 minutes: run the Music Assistant idle check (see the .service).
+# Persistent=false — a missed tick while the box was down is not worth
+# replaying; the next tick re-reads live state. OnBootSec=15min gives MA its
+# own boot (and any early-morning music) before the first check.
+#
+# Enable:
+#   systemctl --user enable --now zoe-ma-idle-reap.timer
+
+[Unit]
+Description=Periodic Music Assistant idle reap
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=10min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
