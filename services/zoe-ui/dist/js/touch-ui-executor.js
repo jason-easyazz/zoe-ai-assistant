@@ -156,16 +156,24 @@
     // panel, poll the action queue, sync panel state or open the panel push
     // socket (every one of those is refused with 403 for a non-panel and it
     // used to retry forever). Pure, pinned by dist/test_touch_resilience.js.
-    function isViewerContext(search, ls) {
+    function isViewerContext(search, ls, ss) {
         let params;
         try { params = new URLSearchParams(search || ''); } catch (_) { params = new URLSearchParams(); }
-        const get = (k) => { try { return ls ? ls.getItem(k) : null; } catch (_) { return null; } };
-        const kiosk = params.get('kiosk') === '1' || get('zoe_kiosk') === '1';
+        const get = (store, k) => { try { return store ? store.getItem(k) : null; } catch (_) { return null; } };
+        // The kiosk flag lives in THREE places: the URL, localStorage (the estate
+        // persists it at boot) and sessionStorage (js/auth.js on the legacy touch
+        // pages moves it there and clears the localStorage copy).
+        const kiosk = params.get('kiosk') === '1' || get(ls, 'zoe_kiosk') === '1' || get(ss, 'zoe_kiosk') === '1';
         if (kiosk) return false;
+        // A registered id is one the server knows. The locally generated alias
+        // (panel_xxxxxxxx, see generatePanelAlias) is fallback-only — carried in
+        // a URL through login or auto-home it must not turn a laptop into a panel.
+        const generated = (get(ls, 'zoe_touch_panel_alias_generated') || '').trim();
+        const isAlias = (id) => /^panel_[a-z0-9]{8}$/i.test(id) || (generated && id === generated);
         const forced = (params.get('panel_id') || '').trim();
-        if (forced) return false;
-        const registered = (get('zoe_panel_id') || '').trim();
-        return !registered;
+        if (forced && !isAlias(forced)) return false;
+        const registered = (get(ls, 'zoe_panel_id') || '').trim();
+        return !(registered && !isAlias(registered));
     }
 
     function getPanelId() {
@@ -2239,7 +2247,7 @@ body.light-mode .zaf-btn-cancel { background: rgba(0,0,0,0.07); color: rgba(26,2
                 // Auth bootstrap is best-effort; continue so the panel can retry.
             }
         }
-        state.viewer = isViewerContext(window.location.search, window.localStorage);
+        state.viewer = isViewerContext(window.location.search, window.localStorage, window.sessionStorage);
         state.panelId = getPanelId();
         const session = getSession();
         state.sessionId = session && session.session_id ? session.session_id : null;

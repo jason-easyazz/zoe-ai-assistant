@@ -76,7 +76,13 @@ let n = 0; const ok = (m) => { n++; console.log('  ok  ' + m); };
       assert.strictEqual(isViewerContext('', ls({ zoe_kiosk: '1' })), false);
       assert.strictEqual(isViewerContext('?panel_id=zoe-touch-pi', ls({})), false);
       assert.strictEqual(isViewerContext('', ls({ zoe_panel_id: 'zoe-touch-pi' })), false);
-      ok('viewer: a laptop on /touch/home.html is a viewer; kiosk flag or a registered panel id makes a panel (a generated alias does not)');
+      // Codex (#1861): the session-scoped kiosk flag (auth.js on legacy touch pages) is a panel signal…
+      assert.strictEqual(isViewerContext('', ls({}), ls({ zoe_kiosk: '1' })), false);
+      // …and a locally generated alias is never a registered id, whether forced in the URL or stored.
+      assert.strictEqual(isViewerContext('?panel_id=panel_abc12345', ls({})), true);
+      assert.strictEqual(isViewerContext('', ls({ zoe_panel_id: 'panel_abc12345' })), true);
+      assert.strictEqual(isViewerContext('?panel_id=weird-alias', ls({ zoe_touch_panel_alias_generated: 'weird-alias' })), true);
+      ok('viewer: a laptop on /touch/home.html is a viewer; kiosk flag (URL, local or session) or a registered panel id makes a panel (a generated alias never does)');
       assert(/if \(state\.viewer\) \{[\s\S]{0,400}\} else \{[\s\S]{0,200}bindPanel\(\)/.test(execSrc), 'init must gate bind/sync/push/poll on state.viewer');
       ok('viewer: init skips panel bind, state sync, action poll, push socket and SW poll');
     }
