@@ -191,20 +191,32 @@ machinery it feeds (emotional gate + pin, morning brief, emotional follow-up tri
 built and waiting. Add a small speech-emotion-recognition (SER) model scoring
 valence/arousal per utterance. Additive, flag-gated, rocks untouched.
 
-- **Model shortlist (researched — §8.4; pick by measured RAM/latency on the Orin, in this order):**
+- **Model shortlist (researched — §8.4; pick by measured RAM/latency on the Orin, in this order;
+  CORRECTED 2026-10-04 by the Q18 licence/scope record,
+  [arousal-detection-licence-scope-2026-10-04.md](../research/arousal-detection-licence-scope-2026-10-04.md),
+  which holds the go/no-go — read it before touching W4.1):**
   1. **Wav2Small** — distilled to 72K params (teacher-distilled from a wav2vec2 dimensional
      teacher; MobileNetV4-S variant 3.12M params, valence CCC 0.42 ≈ an 87.9M wav2vec2)
-     ([paper](https://arxiv.org/pdf/2408.13920)) — the RAM-frugal default.
-  2. **emotion2vec** (~19M params, MIT-licensed) — better quality, still edge-viable;
-     ONNX export is community-driven (FunASR runtime), verify at bake-off.
+     ([paper](https://arxiv.org/pdf/2408.13920)) — the RAM-frugal default **as a shape only:
+     no student weights are published anywhere** (the HF repo is a README that averages the
+     MIT Odyssey-2024 WavLM baseline with audEERING's CC-BY-NC-SA "research only" model; that
+     teacher is half non-commercial). A student has to be re-distilled from permissive
+     teachers; the record names the pair.
+  2. **emotion2vec+** (~93M params in the community ONNX, 373 MB fp32 — **not** 19M, and the
+     weights are under the **FunASR Model License** (commercial use permitted with attribution),
+     **not MIT**; only the repo code is MIT) — categorical (9 classes), no arousal; usable as an
+     embedding + in-house head, and only under the 300 MB line as int8.
   3. **SenseVoiceSmall** (FunAudioLLM) — categorical emotion (not valence/arousal) fused
      with ASR; proven embedded deployment path via **sherpa-onnx** (runs on Raspberry
      Pi-class hardware). Only if 1–2 fail: it duplicates STT work Moonshine already does.
   4. **audeering wav2vec2 dimensional (MSP-Podcast)** — the quality ceiling / labelling
      reference ([w2v2-how-to](https://github.com/audeering/w2v2-how-to)); too heavy
      resident, use as the lab judge for calibrating 1–3.
-  License + provenance check is part of the bake-off gate (emotion2vec MIT confirmed;
-  verify the others' model-weight licenses before any prod enable).
+  License + provenance check is part of the bake-off gate. **Licence rule (proposed by the Q18
+  record, awaiting the owner's yes): no non-commercial or research-only weights on the live path;
+  they may be lab judges.** Status 2026-10-04: every downloadable dimensional model is either
+  non-commercial (audeering, Vox-Profile) or permissive but 0.66–1.27 GB (Odyssey MIT, LAION
+  CC-BY) — judges/teachers only; the resident model must be made.
 - **Steps (flag `ZOE_PROSODY_EMOTION`, default OFF):**
   1. RAM/latency bake-off of shortlist models as ONNX on the box (lab, isolated venv) —
      kill criterion: >300 MB resident or >150 ms per utterance.
@@ -438,7 +450,10 @@ regression, ever (replay harness is the enforcement).
 - [x] **W3.4** zram rebalance (measure-first) — **DONE via B0.1** (2026-09-27, operator: 8 × 978 MB → 8 × 244 MiB, `/ 8 /` in `nvzramconfig.sh`; measured 2026-10-03: zram costs 503 MiB of RAM vs ≈3.9 GB on 07-06, ≈3.4 GB returned). Only lever left: zram off (~0.5 GB, operator/root) — see [the 2026-10-03 profile](../knowledge/memory-pressure-profile-2026-10-03.md)
 - [ ] **W3.5** harness fence-out (with tech-debt Wave 4) — NOT STARTED
 - [ ] **W3 DoD profile** — MEASURED 2026-10-03, **NOT MET in substance**: swap 2.1–2.7 GB (< 6 GB ✅) but MemAvailable 0.42–0.56 GB (07-06: 2.1 GB). Ranked reclaim list + the operator decisions (gate metric, brain `--cache-ram`, MA reap, HA reap = won't-do, zram off, Kokoro ONNX) in [`memory-pressure-profile-2026-10-03.md`](../knowledge/memory-pressure-profile-2026-10-03.md). W4.1 stays blocked.
-- [ ] **W4.1** SER bake-off (Wav2Small / emotion2vec) — NOT STARTED
+- [ ] **W4.1** SER bake-off (Wav2Small / emotion2vec) — NOT STARTED; **Q18 licence + scope
+  research DONE 2026-10-04** ([record](../research/arousal-detection-licence-scope-2026-10-04.md):
+  Wav2Small = recipe only, no published weights; emotion2vec = FunASR Model License, not MIT;
+  no permissive dimensional model under 300 MB exists; go/no-go + four owner decisions there)
 - [ ] **W4.2–4** scoring hook + fusion + lab-proof — NOT STARTED (gated on W3)
 - [~] **W5** speaker-ID enrollment + shadow mode + enable — **SCAFFOLDING MERGED, DARK**
   (consent-gated speaker profiles, migration `0023_speaker_consent`; face identity phase 2
@@ -635,10 +650,14 @@ actually consulted.
 ### 8.4 W4 — speech emotion recognition on-device
 - **Wav2Small** ([arXiv 2408.13920](https://arxiv.org/pdf/2408.13920)): distillation of a
   wav2vec2 valence/arousal/dominance teacher to 72K params; MobileNetV4-S student
-  (3.12M params) reaches valence CCC 0.42 ≈ an 87.9M-param wav2vec2. The RAM-frugal default.
-- **emotion2vec** ([repo](https://github.com/ddlBoJack/emotion2vec)): ~19M params,
-  MIT-licensed (commercial OK); ONNX export community-driven via FunASR
-  ([issue #55](https://github.com/ddlBoJack/emotion2vec/issues/55)) — verify at bake-off.
+  (3.12M params) reaches valence CCC 0.42 ≈ an 87.9M-param wav2vec2. The RAM-frugal default
+  **in shape only — no student weights are published** (verified 2026-10-04: the HF repo
+  `dkounadis/wav2small` holds a README defining the *teacher*, an average of the MIT Odyssey
+  WavLM baseline and audEERING's CC-BY-NC-SA model; see the
+  [Q18 record §1](../research/arousal-detection-licence-scope-2026-10-04.md)).
+- **emotion2vec+** ([repo](https://github.com/ddlBoJack/emotion2vec)): ~93M params (community
+  ONNX 373 MB fp32); weights under the **FunASR Model License** (commercial OK with
+  attribution) — the repo *code* is MIT, the weights are not; categorical only.
 - **SenseVoiceSmall** ([FunAudioLLM](https://github.com/FunAudioLLM/SenseVoice),
   [HF](https://huggingface.co/FunAudioLLM/SenseVoiceSmall)): ASR + categorical SER + audio
   events, non-autoregressive, with a proven embedded path via sherpa-onnx (Raspberry
