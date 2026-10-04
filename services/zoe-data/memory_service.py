@@ -215,6 +215,13 @@ _MAINTENANCE_OPEN = threading.Event()
 _MAINTENANCE_OPEN.set()
 _MAINTENANCE_WAIT_S = 60.0          # a caller blocks at most this long before raising
 _MAINTENANCE_DRAIN_S = 30.0         # the compaction waits at most this long for in-flight ops
+_MAINTENANCE_POLL_S = 0.5           # waiters re-check the blocked marker this often
+# Fail-closed state: set (never cleared by the compaction) when a rebuild failed AND the
+# restore from the export could not be verified. The gate then STAYS cleared — reopening
+# would let the opener's fallback create an empty cosine collection over a partial store —
+# every opener/lease call fails fast with the reason, ``index-health`` reports it, and the
+# operator restores the tar with zoe-data stopped (runbook §22). A restart clears it.
+_MAINTENANCE_BLOCKED: dict[str, Any] | None = None
 _OPS_COND = threading.Condition()   # guards _ACTIVE_OPS; notified when a lease is released
 _ACTIVE_OPS = 0
 _OP_THREAD = threading.local()      # .depth: this thread's lease nesting (re-entrant)
@@ -224,13 +231,67 @@ _COMPACT_PROBE = "When did I tell you about the dentist?"   # the measured faili
 _COMPACT_BACKUPS_DIR = os.path.expanduser("~/.zoe/palace-backups")
 
 
+def maintenance_state() -> dict[str, Any]:
+    """The gate as seen by operators: ``maintenance_open`` (normal = True),
+    ``maintenance_blocked`` + ``maintenance_reason`` (+ the backup paths) when fail-closed."""
+    blocked = _MAINTENANCE_BLOCKED
+    out: dict[str, Any] = {
+        "maintenance_open": _MAINTENANCE_OPEN.is_set(),
+        "maintenance_blocked": blocked is not None,
+        "maintenance_reason": (blocked or {}).get("reason"),
+    }
+    if blocked:
+        out.update({k: blocked.get(k) for k in ("backup_tar", "export", "since")})
+    return out
+
+
+def _block_maintenance(reason: str, report: dict[str, Any]) -> None:
+    """Fail closed: record why the gate must stay shut. The gate is NOT reopened."""
+    global _MAINTENANCE_BLOCKED
+    _MAINTENANCE_BLOCKED = {
+        "reason": reason, "backup_tar": report.get("backup_tar"), "export": report.get("export"),
+        "since": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
+    _MAINTENANCE_OPEN.clear()
+    logger.critical(
+        "MEMORY_INDEX_COMPACT GATE CLOSED — drawers collection is absent or partial and the restore "
+        "could not be verified; memory reads/writes fail fast until an operator restores the backup "
+        "(runbook §22) and restarts zoe-data. reason=%s backup_tar=%s export=%s",
+        reason, report.get("backup_tar"), report.get("export"))
+
+
+def clear_maintenance_block() -> None:
+    """Operator/test escape hatch after a verified manual restore (a restart does the same)."""
+    global _MAINTENANCE_BLOCKED
+    _MAINTENANCE_BLOCKED = None
+    _MAINTENANCE_OPEN.set()
+
+
+def _gate_error(wait: float) -> MemoryServiceError:
+    blocked = _MAINTENANCE_BLOCKED
+    if blocked is not None:
+        return MemoryServiceError(
+            "memory index maintenance FAILED CLOSED: the drawers collection is unavailable until an "
+            f"operator restores the backup and restarts zoe-data — {blocked.get('reason')}"
+            f" (backup_tar={blocked.get('backup_tar')})")
+    return MemoryServiceError(
+        f"memory index maintenance in progress: the drawers collection did not reopen within {wait:g}s")
+
+
 def _wait_for_maintenance_gate(timeout: float | None = None) -> None:
+    """Block (bounded) while the gate is cleared; fail FAST, without waiting, once the gate is
+    blocked — a waiter that entered before the block sees it within ``_MAINTENANCE_POLL_S``."""
     wait = _MAINTENANCE_WAIT_S if timeout is None else timeout
-    if _MAINTENANCE_OPEN.is_set() or _MAINTENANCE_OPEN.wait(wait):
+    if _MAINTENANCE_OPEN.is_set():
         return
-    raise MemoryServiceError(
-        f"memory index maintenance in progress: the drawers collection did not reopen within {wait:g}s"
-    )
+    deadline = time.monotonic() + wait
+    while _MAINTENANCE_BLOCKED is None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        if _MAINTENANCE_OPEN.wait(min(remaining, _MAINTENANCE_POLL_S)):
+            return
+    raise _gate_error(wait)
 
 
 @contextlib.contextmanager
@@ -251,10 +312,7 @@ def collection_op(timeout: float | None = None):
     wait = _MAINTENANCE_WAIT_S if timeout is None else timeout
     deadline = time.monotonic() + wait
     while True:
-        if not _MAINTENANCE_OPEN.wait(max(deadline - time.monotonic(), 0.0)):
-            raise MemoryServiceError(
-                f"memory index maintenance in progress: the drawers collection did not reopen within {wait:g}s"
-            )
+        _wait_for_maintenance_gate(max(deadline - time.monotonic(), 0.0))   # raises: timeout / blocked
         with _OPS_COND:
             if _MAINTENANCE_OPEN.is_set():
                 _ACTIVE_OPS += 1
@@ -263,7 +321,7 @@ def collection_op(timeout: float | None = None):
     try:
         yield
     finally:
-        _OP_THREAD.depth = 0
+        _OP_THREAD.depth -= 1
         with _OPS_COND:
             _ACTIVE_OPS -= 1
             _OPS_COND.notify_all()
@@ -272,6 +330,41 @@ def collection_op(timeout: float | None = None):
 def _leased_call(fn, *args):
     with collection_op():
         return fn(*args)
+
+
+class _LeasedDrawers:
+    """The drawers collection for code that is NOT inside ``_run_sync``: every method call
+    takes the lease, opens a FRESH handle and releases the lease when the call returns.
+
+    Needed by the async digest passes, which run their chroma calls on the event-loop thread
+    and ``await`` between them: a handle cached in a local across an ``await`` is exactly
+    the op the compaction's drain cannot see (``_ACTIVE_OPS`` stays 0, the delete races
+    the read or upsert). Per-call leasing means a compaction may land BETWEEN two calls —
+    which is fine: the next call opens the rebuilt collection (same ids, same rows), and a
+    write before the drain is in the export, one after the reopen lands on the new index.
+    Never hold a lease across an ``await``."""
+
+    __slots__ = ("_svc",)
+
+    def __init__(self, svc: Any):
+        self._svc = svc
+
+    def __getattr__(self, name: str):
+        if name.startswith("_"):
+            raise AttributeError(name)
+
+        def call(*args, **kwargs):
+            with collection_op():
+                return getattr(self._svc._collection(), name)(*args, **kwargs)
+
+        call.__name__ = name
+        return call
+
+
+def leased_drawers(svc: Any) -> _LeasedDrawers:
+    """``col = leased_drawers(svc)`` then ``col.get(...)`` / ``col.upsert(...)`` as before —
+    the leased accessor for any direct collection user outside ``_run_sync``."""
+    return _LeasedDrawers(svc)
 
 
 def _drain_collection_ops(timeout: float) -> bool:
@@ -310,6 +403,34 @@ def _collection_space(col: Any) -> str:
     except Exception:  # noqa: BLE001 — fall through to the metadata key
         pass
     return str((getattr(col, "metadata", None) or {}).get("hnsw:space") or "l2")
+
+
+def _restore_drawers(client: Any, ef: Any, space: str, rows: dict[str, list], report: dict[str, Any]) -> bool:
+    """After anything in the destructive region raised: put the exported rows back.
+
+    The collection may be ABSENT (delete completed, rebuild failed), PARTIAL (chroma's
+    SegmentAPI removes the segments before the sysdb row, so a delete that raised mid-way can
+    leave the name listed over no data) or a BROKEN rebuild — all three are handled the same
+    way: delete-if-listed, then create + re-add from the export. ``True`` only when the
+    restored count equals the exported count; the caller keeps the gate CLOSED otherwise."""
+    n = len(rows["ids"])
+    report["restored"] = False
+    try:
+        names = {getattr(c, "name", c) for c in client.list_collections()}
+        if _DRAWERS_COLLECTION in names:
+            client.delete_collection(_DRAWERS_COLLECTION)
+        restored = _rebuild_drawers(client, ef, space, rows)
+        count = int(restored.count())
+        report["restored_count"] = count
+        report["restored"] = count == n
+        if not report["restored"]:
+            report["restore_error"] = f"restored count {count} != exported {n}"
+    except Exception as rexc:  # noqa: BLE001 — the report carries it; the gate stays shut
+        report["restore_error"] = f"{type(rexc).__name__}: {rexc}"
+    if not report["restored"]:
+        logger.error("MEMORY_INDEX_COMPACT restore FAILED — restore the tar backup %s: %s",
+                     report.get("backup_tar"), report.get("restore_error"))
+    return bool(report["restored"])
 
 
 def _rebuild_drawers(client: Any, ef: Any, space: str, rows: dict[str, list]) -> Any:
@@ -364,9 +485,15 @@ def compact_drawers_index_sync(
     Runs in ONE executor thread with the maintenance gate cleared. Order: export (count +
     dims verified) → JSON export + tar backup of the palace under ``backups_dir`` → delete →
     create in the SAME space → re-add in batches → verify → reopen the gate. Any failure
-    BEFORE the delete aborts with no change; any failure AFTER it restores from the export
-    (create + re-add) and raises :class:`IndexCompactionError` whose ``report`` says
-    ``restored``. Nothing is re-embedded. Logs ``MEMORY_INDEX_COMPACT``.
+    BEFORE the delete aborts with no change; the delete itself is inside the guarded region
+    (``changed`` is marked before it is attempted — chroma removes the segments before the
+    sysdb row, so a delete that raises may already have destroyed data): any failure from
+    there on restores from the export (delete-if-listed + create + re-add) and raises
+    :class:`IndexCompactionError` whose ``report`` says ``restored``. The gate reopens ONLY
+    after a verified restore (count == exported); otherwise it stays closed
+    (``maintenance_state()``, ``status="blocked"``) for operator recovery. Every failure is
+    structured: ``report["status"]`` is ``busy`` (lock / drain), ``aborted`` (no change),
+    ``restored`` or ``blocked``. Nothing is re-embedded. Logs ``MEMORY_INDEX_COMPACT``.
     """
     import tarfile
 
@@ -375,11 +502,16 @@ def compact_drawers_index_sync(
     if getattr(_OP_THREAD, "depth", 0):
         raise IndexCompactionError(
             "compaction must not run under a collection lease (it would wait for itself) — "
-            "schedule it outside _run_sync", {"changed": False})
+            "schedule it outside _run_sync", {"changed": False, "status": "aborted"})
+    if _MAINTENANCE_BLOCKED is not None:
+        raise IndexCompactionError(
+            f"maintenance gate is closed after a failed restore — {_MAINTENANCE_BLOCKED.get('reason')}",
+            {"changed": False, "status": "blocked", **maintenance_state()})
     if not _COMPACT_LOCK.acquire(blocking=False):
-        raise IndexCompactionError("a compaction is already running", {"changed": False})
+        raise IndexCompactionError("a compaction is already running", {"changed": False, "status": "busy"})
     t0 = time.monotonic()
-    report: dict[str, Any] = {"changed": False, "restored": False, "space": None}
+    report: dict[str, Any] = {"changed": False, "restored": False, "space": None, "status": "aborted"}
+    reopen = True
     try:
         try:
             before = index_health(data_dir)
@@ -394,6 +526,7 @@ def compact_drawers_index_sync(
             drain = _MAINTENANCE_DRAIN_S if drain_s is None else drain_s
             t_drain = time.monotonic()
             if not _drain_collection_ops(drain):
+                report["status"] = "busy"
                 raise IndexCompactionError(
                     f"could not drain {_ACTIVE_OPS} in-flight collection operation(s) within {drain:g}s"
                     " — aborted before any change", report)
@@ -426,33 +559,36 @@ def compact_drawers_index_sync(
                 tf.add(palace_dir, arcname=os.path.basename(os.path.normpath(palace_dir)))
             report.update(export=str(export), backup_tar=str(tar_path))
 
-            client.delete_collection(_DRAWERS_COLLECTION)
-            report["changed"] = True
+            # ── destructive region: from here on the store may have changed ──────────────
+            report["changed"] = True   # BEFORE the delete: it can raise with the segments already gone
             try:
+                client.delete_collection(_DRAWERS_COLLECTION)
                 new = _rebuild_drawers(client, ef, space, rows)
                 verify = _verify_rebuilt_drawers(new, rows, probe)
                 report["verify"] = verify
                 if not verify["ok"]:
                     raise MemoryServiceError(f"verification failed: {verify}")
-            except Exception as exc:  # noqa: BLE001 — after the delete: put the rows back
-                try:
-                    try:
-                        client.delete_collection(_DRAWERS_COLLECTION)
-                    except Exception:  # noqa: BLE001 — may not exist yet
-                        pass
-                    restored = _rebuild_drawers(client, ef, space, rows)
-                    report["restored"] = int(restored.count()) == n
-                    report["restored_count"] = int(restored.count())
-                except Exception as rexc:  # noqa: BLE001
-                    report["restore_error"] = f"{type(rexc).__name__}: {rexc}"
-                    logger.error("MEMORY_INDEX_COMPACT restore FAILED — restore the tar backup %s: %s",
-                                 report.get("backup_tar"), rexc)
+            except Exception as exc:  # noqa: BLE001 — delete/rebuild/verify: put the rows back
+                if _restore_drawers(client, ef, space, rows, report):
+                    report["status"] = "restored"
+                else:
+                    report["status"] = "blocked"
+                    reopen = False
+                    _block_maintenance(
+                        f"{type(exc).__name__}: {exc}; restore failed: {report.get('restore_error')}", report)
+                report.update(maintenance_state())
                 raise IndexCompactionError(
                     f"{type(exc).__name__}: {exc} (after delete; restored={report['restored']})", report
                 ) from exc
+        except IndexCompactionError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — outside the destructive region: structured
+            tail = "unexpected error after the delete" if report["changed"] else "aborted before any change"
+            raise IndexCompactionError(f"{type(exc).__name__}: {exc} — {tail}", report) from exc
         finally:
-            _MAINTENANCE_OPEN.set()
-        report.update(ok=True, elements_added=n, seconds=round(time.monotonic() - t0, 2))
+            if reopen:
+                _MAINTENANCE_OPEN.set()
+        report.update(ok=True, status="ok", elements_added=n, seconds=round(time.monotonic() - t0, 2))
         logger.warning(
             "MEMORY_INDEX_COMPACT before=%s after=%s elements_added=%s seconds=%s space=%s backup=%s",
             (report.get("before") or {}).get("elements_added"), n, n, report["seconds"], space, tar_path,
@@ -460,8 +596,8 @@ def compact_drawers_index_sync(
         return report
     except IndexCompactionError as exc:
         exc.report["seconds"] = round(time.monotonic() - t0, 2)
-        logger.error("MEMORY_INDEX_COMPACT failed changed=%s restored=%s error=%s",
-                     exc.report.get("changed"), exc.report.get("restored"), exc)
+        logger.error("MEMORY_INDEX_COMPACT failed status=%s changed=%s restored=%s error=%s",
+                     exc.report.get("status"), exc.report.get("changed"), exc.report.get("restored"), exc)
         raise
     finally:
         _COMPACT_LOCK.release()
@@ -1632,7 +1768,9 @@ class MemoryService:
         from memory_index_health import index_health
 
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, index_health, self._data_dir)
+        row = await loop.run_in_executor(None, index_health, self._data_dir)
+        row.update(maintenance_state())   # fail-closed gate → maintenance_blocked + reason
+        return row
 
     async def compact_index(self) -> dict[str, Any]:
         """In-process drawers index compaction (see ``compact_drawers_index_sync``).

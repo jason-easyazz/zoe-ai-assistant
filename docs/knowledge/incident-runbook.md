@@ -742,9 +742,22 @@ nothing is re-embedded. Two ways:
   collection in the same space behind a maintenance gate (readers block ≤ 60 s) and
   verifies; the body carries `before`/`verify`/`seconds`, the log line is
   `MEMORY_INDEX_COMPACT`. Health first: `GET …/maintenance/index-health` (same token) gives
-  the ratio; `fresh=True` means "just rebuilt, nothing persisted yet", not unknown. A 500
-  with `restored=true` means the rows were put back from the export; `restored=false` names
-  the tar to restore (zoe-data stopped).
+  the ratio — counted from the persisted index metadata PLUS the write-ahead log tail, so
+  `fresh=True` (just rebuilt, nothing persisted yet) is still a real count, and
+  `ratio_known=false` means neither source could tell (the weekly trigger then compacts
+  once per period rather than skipping). The POST answers 409 (`status="busy"`) when
+  in-flight memory work did not drain within 30 s — retry later, nothing changed. A 500
+  with `status="restored"` means the rows were put back from the export and verified.
+  **`status="blocked"` = the gate is CLOSED**: the rebuild failed AND the restore could not
+  be verified, so the service keeps the drawers collection unavailable (every memory
+  read/write fails fast with "maintenance FAILED CLOSED", `index-health` shows
+  `maintenance_blocked=true` + `maintenance_reason` + `backup_tar`, the zoe-data log has
+  `MEMORY_INDEX_COMPACT GATE CLOSED`) instead of reopening onto an absent/partial store
+  that the opener would silently recreate as an EMPTY cosine collection. Recovery: stop
+  zoe-data, restore `backup_tar` over the palace (`tar -xf … -C ~/`, the archive holds the
+  palace directory), or re-add from the JSON `export` with the manual script, verify with
+  `scripts/maintenance/compact_drawers_index.py` (live rows == exported), then restart —
+  the block is in-process state and a restart clears it.
 - **Automated weekly** (once the flag is armed): `zoe-nightly-dreaming.py` (the 02:30
   `zoe-dreaming.timer`) checks the health on `ZOE_MEMORY_INDEX_COMPACT_DAY` (default Sunday,
   Zoe-local) and POSTs the compaction only when `compaction_advised` is true. Its verdict is

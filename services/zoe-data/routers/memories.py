@@ -986,9 +986,11 @@ async def memory_index_health_endpoint(_: None = Depends(require_internal_token)
     """Tombstone health of the drawers HNSW index — read-only, safe while serving.
 
     Internal/service endpoint (loopback or `X-Internal-Token`). Reads the palace SQLite
-    (`mode=ro`) + the segment's `index_metadata.pickle` — no chroma call, so it never
-    waits on the maintenance gate. `compaction_advised` (ratio ≥ 3) is what the weekly
-    dreaming trigger acts on; a just-rebuilt index reports `fresh=True`, ratio 1.0.
+    (`mode=ro`) + the segment's `index_metadata.pickle` + the write-ahead log tail — no
+    chroma call, so it never waits on the maintenance gate. `compaction_advised` (ratio ≥ 3)
+    is what the weekly dreaming trigger acts on; it is `None` when the ratio is unknown
+    (`ratio_known=False`), never guessed. `maintenance_blocked` + `maintenance_reason`
+    report a gate that failed closed after an unverified restore (runbook §22).
     """
     try:
         return await _svc().index_health()
@@ -1002,15 +1004,18 @@ async def memory_compact_index_endpoint(_: None = Depends(require_internal_token
 
     Internal/service endpoint (loopback or `X-Internal-Token`), flag-gated behind
     `ZOE_MEMORY_INDEX_COMPACT` (default OFF → 404, so the route is dark until an operator
-    flips it). Serialised: a second call while one runs is 409. On a failure after the
-    delete the rows are restored from the export and the report says so (500).
+    flips it). Serialised: a second call while one runs — or in-flight collection work
+    that does not drain within the budget — is 409 (`status="busy"`). Every other failure
+    is a structured 500 whose body is the report: `status="aborted"` (nothing changed),
+    `"restored"` (rows put back from the export, verified) or `"blocked"` (restore not
+    verified: the gate stays closed, `maintenance_blocked=true`, operator recovery).
     """
     if not index_compaction_enabled():
         raise HTTPException(status_code=404, detail="memory index compaction is disabled (ZOE_MEMORY_INDEX_COMPACT)")
     try:
         return await _svc().compact_index()
     except IndexCompactionError as exc:
-        status = 409 if "already running" in str(exc) else 500
+        status = 409 if exc.report.get("status") == "busy" else 500
         return JSONResponse(status_code=status, content=exc.report)
 
 

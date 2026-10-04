@@ -95,12 +95,20 @@ def index_compaction_decision(now_local: datetime.datetime, health: dict | None,
         return False, f"not compaction day (today={now_local.strftime('%a')}, day={day})"
     if not isinstance(health, dict):
         return False, "index health unavailable"
-    if health.get("fresh"):
-        return False, "fresh index (not persisted yet, ratio 1.0)"
+    if health.get("maintenance_blocked") is True:
+        return False, f"maintenance gate CLOSED — operator recovery needed: {health.get('maintenance_reason')}"
     ratio = health.get("tombstone_ratio")
-    if health.get("compaction_advised") is True:
+    advised = health.get("compaction_advised")
+    if advised is True:
         return True, f"advised: ratio={ratio} >= {health.get('threshold')}"
-    return False, f"not advised: ratio={ratio}"
+    if advised is False:
+        return False, f"not advised: ratio={ratio}"
+    # Unknown ratio (no persisted index metadata AND no write-ahead log to count from, or an
+    # unreadable pickle): never skip indefinitely — compact at most once per period (this
+    # runs once on the compaction day), but only when there is something to rebuild.
+    if int(health.get("live_rows") or 0) > 0:
+        return True, f"ratio unknown ({health.get('note') or 'no index metadata'}) — compacting once this period"
+    return False, "ratio unknown and no live rows — nothing to compact"
 
 
 def _api(method: str, path: str, timeout: float) -> tuple[int, dict]:
@@ -140,11 +148,13 @@ def weekly_index_compaction(now_local: datetime.datetime | None = None) -> int:
         print(f"index health unavailable: HTTP {status} {health.get('detail', '')}", file=sys.stderr)
         return 0
     print(json.dumps({k: health.get(k) for k in ("live_rows", "elements_added", "tombstone_ratio",
-                                                   "compaction_advised", "fresh", "note")}))
+                                                   "ratio_known", "compaction_advised", "fresh", "note",
+                                                   "maintenance_blocked", "maintenance_reason")}))
     run, reason = index_compaction_decision(now_local, health, day=day)
-    print(reason)
+    blocked = health.get("maintenance_blocked") is True
+    print(reason, file=(sys.stderr if blocked else sys.stdout))
     if not run:
-        return 0
+        return 1 if blocked else 0
     try:
         status, result = _api("POST", "/api/memories/maintenance/compact-index", timeout=900)
     except (urllib.error.URLError, OSError, ValueError) as exc:
@@ -155,6 +165,13 @@ def weekly_index_compaction(now_local: datetime.datetime | None = None) -> int:
               "scripts/maintenance/compact_drawers_index.py --compact")
         return 0
     print(json.dumps(result, indent=2, default=str))
+    if status == 409:
+        print("compaction busy (in-flight memory work did not drain, or one is already running) — "
+              "skipped this period, not a failure")
+        return 0
+    if result.get("status") == "blocked" or result.get("maintenance_blocked") is True:
+        print("compaction FAILED CLOSED — the drawers collection is unavailable until an operator restores "
+              f"the backup (runbook §22): backup_tar={result.get('backup_tar')}", file=sys.stderr)
     return 0 if status == 200 and result.get("ok") else 1
 
 
