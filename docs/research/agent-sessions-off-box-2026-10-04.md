@@ -166,8 +166,10 @@ The session that took this measurement is **not a terminal on the Jetson**. It i
 *remote* session: `~/.claude/remote/srv --serve` runs on the box and the UI is on Jason's
 desktop app, with `ccd-cli` spawned by that bridge (not by a shell) [live]. Two `sshd` sessions
 from the LAN were also present. So the *interface* is already off-box; only the *compute* is
-on it. That matters for option A: a lease in a shell wrapper would never see these sessions —
-it has to live in the Claude Code hook chain (§3.1).
+on it. That matters for option A: a lease in a shell wrapper would never see these sessions,
+and a Claude Code hook cannot take it for them either — by the time any hook runs, the bridge
+has already spawned `ccd-cli` outside any slice (§3.1). The enforcement point has to be the
+thing that *launches* the CLI.
 
 No Tailscale is installed [live]; the LAN, SSH and the Cloudflare tunnel container
 (`zoe-cloudflared`, used for Omnigent behind Access) are the paths in. The panel is reached from
@@ -204,34 +206,46 @@ to be on the box.
 **What it is.** Sessions keep running on the box, but the box refuses a second one and bounds
 the first.
 
-- **The lease.** A non-blocking `flock` on `/run/user/1000/zoe-agent-session.lock` (the pattern
-  the voice harness, the deploy step and `cross_review.sh` already use [src]). It must be taken
-  from Claude Code's **`SessionStart` hook** (`.claude/settings.json`, which does not exist in
-  this tree yet [live]), because the remote-bridge sessions are not launched through a shell
-  (§1.5); Codex sessions take it from a wrapper. Honest limit: a hook can print "box busy — a
-  session already holds the lease" and exit non-zero, but whether a `SessionStart` failure
-  *blocks* the session or only surfaces an error is **[unverified]** for the remote bridge; the
-  hard enforcement is the slice below, the lease is the polite one.
+- **The lease — taken by the launcher, not by a hook.** A non-blocking `flock` on
+  `/run/user/1000/zoe-agent-session.lock` (the pattern the voice harness, the deploy step and
+  `cross_review.sh` already use [src]), held for the session's lifetime by whatever process
+  **exec's the CLI**: a `zoe-agent` launcher script (`flock -n … systemd-run --user
+  --slice=zoe-agents.slice --scope -- claude|codex …`) for shell-launched sessions, and a
+  managed **user unit for the remote bridge** (`Slice=zoe-agents.slice`, `ExecStart=flock -n
+  <lock> … srv --serve …`) so every `ccd-cli` it spawns inherits the slice and the held lock.
+  Why not a Claude Code hook: per the hook reference, `SessionStart` is context-only — it can
+  add context and warn but has no blocking decision — and by the time it runs the bridge has
+  already spawned `ccd-cli` outside any slice; a `systemd-run` from the hook would only place a
+  *new child* in the slice, not the session [doc, inf]. What a `SessionStart` hook **can** still
+  do, and should: print an advisory ("another session holds the lease since 19:40") and tag
+  the sampler (§5) so unlaunchered sessions are counted. A bridge launched by hand around the
+  unit remains possible; it is the thing the sampler's "`ccd-cli` outside the slice" column
+  exists to catch, and the slice's cap does not cover it.
 - **The slice.** A `zoe-agents.slice` (user) with `MemoryHigh=MemoryMax` (the A6 lesson:
   a throttle band under a cap is permanent refault, `scripts/AGENTS.md:45`) and
-  **`MemorySwapMax=0`** — "two out of three is not a cap" (`incident-runbook.md §6`). The
-  session's processes go in via `systemd-run --user --slice=zoe-agents.slice --scope` for
-  shell-launched sessions, and via a `Slice=` on a user unit for the remote bridge if it is ever
-  made a unit (today it is a plain process under the login scope [live]). The shared Serena
-  stays in its own unit (already capped); the codebase-memory scopes are moved under the slice
-  by the capping wrapper. Values: `MemoryMax=2G` fits one working session with a leaked Serena
-  (§1.3); `3G` if two must briefly overlap for a hand-over.
+  **`MemorySwapMax=0`** — "two out of three is not a cap" (`incident-runbook.md §6`). Processes
+  enter it only at launch (the launcher's `--scope`, the bridge unit's `Slice=`); today the
+  bridge is a plain process under the login scope [live], which is exactly why it needs the
+  unit. The shared Serena stays in its own unit (already capped); the codebase-memory scopes are
+  moved under the slice by the capping wrapper. Values: `MemoryMax=2G` fits one working session
+  with a leaked Serena (§1.3); `3G` if two must briefly overlap for a hand-over.
 - **The trap the memory notes name.** cgroup guards cover CPU pages only; a session that runs a
-  GPU-loading harness (a `measure_voice.py --stt inprocess`, a second Kokoro) is the 07-19 crash
-  — the lease must *also* be the brain-window lock, i.e. the builder/session lease and
-  `/tmp/zoe-voice-harness.lock` are taken together, non-blocking, and a session that cannot get
-  the harness lock does not run model-loading work.
+  GPU-loading harness (a `measure_voice.py --stt inprocess`, a second Kokoro) is the 07-19 crash.
+  The answer is **not** to tie the session lease to the brain-window lock
+  (`/tmp/zoe-voice-harness.lock`): an idle open session would then block the nightly replay
+  gate and every voice-PR landing for as long as it stays open, turning RAM skips into lock
+  skips. The two locks stay separate: the session lease counts sessions; the harness lock is
+  taken **only around model-loading commands** (the probe, `measure_voice.py`, a Kokoro load —
+  which already run under `flock /tmp/zoe-voice-harness.lock` by rule) and around the builder's
+  whole run (§3.4). A session that cannot get the harness lock for such a command waits or
+  skips that command, not the session.
 - **RAM freed on the Jetson:** 0 at steady state while a session is on; it converts "N sessions"
   into "1 capped session" — the fleet failure class goes away, the per-session cost does not.
 - **Self-evolution:** preserved; the builder lane is one more lease holder.
-- **Effort / cost / risk:** one small PR (slice template, hook, wrapper, sampler); $0; risks:
-  the lease is advisory for the remote bridge until verified, a `MemoryMax` that OOM-kills a
-  session mid-PR, and Jason waits when the builder holds the lease (or vice versa).
+- **Effort / cost / risk:** one small PR (slice template, launcher, bridge unit, advisory hook,
+  sampler); $0; risks: a bridge or CLI started by hand outside the launcher is uncounted and
+  uncapped (the sampler flags it, nothing refuses it), a `MemoryMax` that OOM-kills a session
+  mid-PR, and Jason waits when the builder holds the lease (or vice versa).
 
 ### 3.2 B — engineer from another machine; the Jetson is the deploy target
 
@@ -347,14 +361,21 @@ used mini-PC, or the "DGX Spark" direction the self-building record notes), not 
 - **Wakes only for a ticket:** a `zoe-builder.timer` every 10 min runs the single-lane runner
   once; it exits 0 immediately when the queue is empty (the existing dry/full dispatch and
   SINGLE LANE guards in `flue-executor.service` / `multica_board_runner.py`).
-- **`ExecCondition`** (the unit does not start unless all hold): the agent lease is free; the
-  brain-window lock `/tmp/zoe-voice-harness.lock` is free (`flock -n`); `MemAvailable ≥ 1.5 GB`
-  (read from `/proc/meminfo`, the deploy gate's method); not inside the nightly replay window
-  (`zoe-serena-pregate-restart` at 04:15 → the probe). A builder that cannot start logs
-  `BUILDER_SKIP reason=` and the timer tries again — the zero-effect blind spot
+- **Locks in `ExecStart`, checks in `ExecCondition`.** The two locks are acquired by wrapping
+  the runner itself — `ExecStart=flock -n /run/user/1000/zoe-agent-session.lock flock -n
+  /tmp/zoe-voice-harness.lock <runner> --once` — so the lock file descriptors belong to the
+  builder process and live exactly as long as it does. They cannot be taken in `ExecCondition`:
+  that command exits before `ExecStart` runs and its `flock` descriptors close with it, so the
+  builder would start with nothing held. `ExecCondition` keeps the **point-in-time** checks
+  only: `MemAvailable ≥ 1.5 GB` (read from `/proc/meminfo`, the deploy gate's method) and not
+  inside the nightly replay window (`zoe-serena-pregate-restart` at 04:15 → the probe). A
+  builder that fails a condition or a non-blocking lock exits at once and logs
+  `BUILDER_SKIP reason=`; the timer tries again — the zero-effect blind spot
   (`incident-runbook.md §7`) is covered by the sampler in §5 counting skips.
-- **Never coexists with a brain window:** it holds the harness lock for its whole run, so a
-  hand-run probe, a landing script's probe step and the nightly gate exclude it, and it them.
+- **Never coexists with a brain window:** because the harness lock is held by the runner for
+  its whole run, a hand-run probe, a landing script's probe step and the nightly gate exclude
+  it, and it them — and because it holds the harness lock only while a ticket actually runs,
+  an idle builder never blocks the probe.
 - **The Omnigent container gets the same three-part cap** via compose (`mem_limit` +
   `memswap_limit` equal to `mem_limit`, which is Docker's "no swap"), ~1.5 GB, so a leaked
   runner is OOM-killed in the container rather than paging the box (the 08-04 class).
@@ -377,7 +398,7 @@ when the box can afford it.
 | Option | RAM freed on the Jetson | Self-evolution preserved? | Operator effort | Monthly cost | Risk |
 |---|---|---|---|---|---|
 | **Keep as is** | 0 | yes | none | $0 | the §1.4 ledger repeats; nothing refuses a second session; the W3 gate stays hostage to habit |
-| **A. One at a time (lease + slice)** | 0 while a session is on; caps the worst case at one session (~1–2 GB) instead of a fleet | yes (builder = lease holder) | low: 1 PR (slice, hook, wrapper, sampler) + `systemctl --user` install | $0 | lease advisory for the remote bridge until verified; OOM-kill mid-PR at the cap; serial waits |
+| **A. One at a time (lease + slice)** | 0 while a session is on; caps the worst case at one session (~1–2 GB) instead of a fleet | yes (builder = lease holder) | low: 1 PR (slice, launcher, bridge unit, advisory hook, sampler) + `systemctl --user` install | $0 | a CLI or bridge started by hand bypasses the launcher (counted, not refused); OOM-kill mid-PR at the cap; serial waits |
 | **B. Laptop / desktop + cloud sessions, Jetson = deploy target** | **~0.65–2 GB per avoided session** (+0.26 GB Serena, +0.77 GB swap) — i.e. the box runs at its no-session floor whenever nobody is editing | yes (builder stays capped on the box, moves later) | medium-low: laptop runbook, `ssh zoe` wrapper for the landing scripts, optional Tailscale, worktree sweep | $0 marginal (cloud sessions are in the existing Max / ChatGPT plans [doc]) | habit regression; voice PRs still need a box-run probe (deploy gate enforces); off-LAN access is an operator step |
 | **C. The Pi 5** | same as B | technically | high: second device with credentials, no RAM discipline there, SD-card and thermal unknowns | $0 | the voice/kiosk/AirPlay latency surface takes the bursts; a second device to protect |
 | **B + A (recommended)** | B's gain **and** a hard bound on whatever still runs on the box | yes, by design (§3.4) | A's PR + B's runbook | $0 | the union, each mitigated by the other |
@@ -403,9 +424,10 @@ all operator-installed, none auto-enabled, the `scripts/setup/systemd/README.md`
 | Piece | Kind | Does |
 |---|---|---|
 | `scripts/setup/systemd/zoe-agents.slice` | new user slice | `MemoryHigh=MemoryMax=2G`, `MemorySwapMax=0` — the fleet-wide bound for everything engineering-shaped on the box |
-| `scripts/maintenance/agent_session_lease.sh` | script | `flock -n` on `/run/user/1000/zoe-agent-session.lock` + `/tmp/zoe-voice-harness.lock`; prints the holder; used by the hook, the Codex wrapper and the builder's `ExecCondition` |
-| `.claude/settings.json` `SessionStart` hook (+ a `codex` wrapper) | config | takes the lease, moves the session into the slice (`systemd-run --scope` where launched from a shell), refuses with a message otherwise |
-| `scripts/setup/systemd/zoe-builder.service` + `.timer` | new user unit (inert) | §3.4: single-lane ticket runner, `Slice=zoe-agents.slice`, 1.5 GB cap, `ExecCondition` lease + brain-window + `MemAvailable ≥ 1.5 GB` |
+| `scripts/maintenance/zoe-agent` launcher | script | `flock -n /run/user/1000/zoe-agent-session.lock` then `systemd-run --user --slice=zoe-agents.slice --scope -- claude\|codex …` — the lock fd is held by the launcher for the session's lifetime; a second launch is refused with the holder's name. The session lease only; it never takes the harness lock |
+| `scripts/setup/systemd/zoe-claude-bridge.service` | new user unit (inert) | the remote-control bridge (`srv --serve`) as a managed unit: `Slice=zoe-agents.slice`, `ExecStart=flock -n <session lock> … srv --serve`, so every `ccd-cli` it spawns inherits the slice and the held lease |
+| `.claude/settings.json` `SessionStart` hook | config | **advisory only** (the hook has no blocking decision): prints who holds the lease, tags the session in the sampler's log; cannot refuse or move a session |
+| `scripts/setup/systemd/zoe-builder.service` + `.timer` | new user unit (inert) | §3.4: single-lane ticket runner, `Slice=zoe-agents.slice`, 1.5 GB cap; **`ExecStart` wraps the runner in both `flock -n`s** (session lease + `/tmp/zoe-voice-harness.lock`, held for the run); `ExecCondition` only for the point-in-time checks (`MemAvailable ≥ 1.5 GB`, replay-window schedule) |
 | `modules/omnigent/docker-compose.module.yml` `mem_limit` / `memswap_limit` | compose | the container's three-part cap (~1.5 GB, no swap) |
 | `scripts/setup/systemd/zoe-agent-mem.timer` + `.service` | sampler | every 5 min append to `~/.zoe-logs/agent-mem.tsv`: `MemAvailable`, swap used, `zoe-agents.slice` `memory.current`/`swap.current`, count of `session-*.scope`s, `ccd-cli` / `codex` / `serena` / `codebase-memory-mcp` process counts, lease holder, `BUILDER_SKIP` count since last sample, deploy-gate waits (from the runner log) |
 | `docs/knowledge/engineering-off-box.md` | runbook | laptop setup, `ssh zoe` recipes (probe, palace read, panel tunnel), the landing-script wrapper, cloud-session do/don't list, the worktree sweep |
@@ -419,14 +441,22 @@ rule: break the fix and the test must go red):
 2. **Guard week (A installed, sessions still on the box):** same sampler. Pass = the slice's
    `memory.current` never exceeds its cap, zero `memory.events oom` outside the slice, no
    deploy-gate "waiting for headroom" loops attributable to a session.
-   - *Negative control 1:* open a second session while one holds the lease → it must be refused
-     (or, if the remote bridge cannot be refused, it must land inside the slice and the sampler
-     must show two `ccd-cli` under one cap).
+   - *Negative control 1:* launch a second session through `zoe-agent` while one holds the lease
+     → it must be refused with the holder's name; start the bridge unit while a launcher
+     session holds the lease → the unit must fail to start (`flock -n` exit 1), and a `ccd-cli`
+     started by hand outside both must appear in the sampler's "outside the slice" column.
+   - *Negative control 1b:* leave a launcher session open and idle, then run the nightly probe
+     by hand under `flock /tmp/zoe-voice-harness.lock` → it must run (the session lease and the
+     harness lock are separate); a model-loading command *from* that session must wait on the
+     harness lock, not the session.
    - *Negative control 2:* inside the slice, allocate 2.5 GB in a throwaway `python3 -c` →
      the OOM kill must land on *that* process (`memory.events` of the slice increments), the
      brain's `MemoryCurrent` unchanged, `/health` green across the event.
    - *Negative control 3:* take `/tmp/zoe-voice-harness.lock` by hand and fire the builder timer
-     → `BUILDER_SKIP reason=brain_window` must be logged and nothing dispatched.
+     → `BUILDER_SKIP reason=brain_window` must be logged and nothing dispatched; then, with a
+     builder run in flight, `flock -n /tmp/zoe-voice-harness.lock true` must fail for the whole
+     run and succeed the moment the runner exits (proves the lock lives in `ExecStart`, not in
+     an `ExecCondition` that already returned).
 3. **Off-box week (B in use, A still installed):** Jason's sessions from the laptop. Pass =
    MemAvailable p50 during waking hours ≥ 2 GB **with the voice stack resident**, the nightly
    replay gate stops skipping on the 700 MB floor, `ccd-cli` count on the box is 0 for ≥ 80 % of
@@ -445,7 +475,7 @@ rule: break the fix and the test must go red):
   where the executor's bursts would land inside zoe-data's swap-denied cgroup.
 - **Voice first on the panel; the panel stays a panel:** the Pi is explicitly kept out of it.
 - **Nothing ships dark here because nothing ships:** this record builds nothing; the pieces in
-  §5 are inert templates and a hook, each a reviewed PR.
+  §5 are inert templates, a launcher and an advisory hook, each a reviewed PR.
 
 **Go**, on the B + A shape, pending the four decisions below.
 
@@ -457,8 +487,9 @@ rule: break the fix and the test must go red):
 2. **The Pi stays a panel — closed as "no"?** The reasons are latency, a second device holding
    your credentials, and its storage; the RAM gain is the same as the laptop's.
 3. **Hard cap or polite refusal for whatever still runs on the box?** A `MemoryMax=2G` slice
-   can kill a session mid-work when it leaks; a lease only refuses at start. The recommendation
-   is both (cap at 2 GB, lease in front), accepting the rare mid-work kill over the box paging.
+   can kill a session mid-work when it leaks; a launcher lease only refuses at start, and only
+   for sessions started through the launcher or the bridge unit. The recommendation is both
+   (cap at 2 GB, lease in front), accepting the rare mid-work kill over the box paging.
 4. **Builder lane: capped on the Jetson for the first proof skill, then to the laptop (or a
    cheap dedicated box) after two skills?** This follows the self-building record's own order;
    say if you would rather the builder never run on the Jetson at all, which means it waits for
@@ -466,13 +497,15 @@ rule: break the fix and the test must go red):
 
 ## 8. Next steps if GO
 
-1. **PR 1 — the guard + the sampler** (templates only, inert): `zoe-agents.slice`,
-   `agent_session_lease.sh`, the `SessionStart` hook + `codex` wrapper, `zoe-agent-mem.timer`,
-   a `ci_safe` test that the slice carries all three memory keys and the builder unit's
-   `ExecCondition` lines exist. Operator installs the sampler first (baseline week), the slice
-   and hook a week later.
-2. **PR 2 — the builder lane's shape**: `zoe-builder.service/.timer` with the `ExecCondition`
-   set and `BUILDER_SKIP` logging, plus the Omnigent compose `mem_limit`/`memswap_limit`.
+1. **PR 1 — the guard + the sampler** (templates only, inert): `zoe-agents.slice`, the
+   `zoe-agent` launcher, `zoe-claude-bridge.service`, the advisory `SessionStart` hook,
+   `zoe-agent-mem.timer`, a `ci_safe` test that the slice carries all three memory keys, that
+   the launcher and bridge unit take the session lease in the exec path, and that the builder
+   unit's `ExecStart` (not `ExecCondition`) wraps the runner in both `flock`s. Operator installs
+   the sampler first (baseline week), the slice, launcher and bridge unit a week later.
+2. **PR 2 — the builder lane's shape**: `zoe-builder.service/.timer` with the locks in
+   `ExecStart`, the point-in-time `ExecCondition`s and `BUILDER_SKIP` logging, plus the
+   Omnigent compose `mem_limit`/`memswap_limit`.
    Inert until the self-building record's PR 6 wires tickets to it.
 3. **PR 3 — the runbook**: `docs/knowledge/engineering-off-box.md` + a `ZOE_HOST`-aware
    `land_voice_pr.sh` (probe over `ssh zoe`, the rest local), and the sweep of the 102
@@ -482,9 +515,9 @@ rule: break the fix and the test must go red):
    or Access-SSH if off-LAN sessions are wanted; run the three negative controls; after the
    off-box week, re-run the profile with no session as the W3 DoD record.
 5. **Later**: move the Omnigent container to the laptop/VM after two skills have landed
-   (self-building record §8 step 9); decide `--cache-ram` on the 24 h occupancy read; revisit
-   whether the remote bridge can be a user unit with `Slice=` so even emergency sessions land in
-   the slice without a shell.
+   (self-building record §8 step 9); decide `--cache-ram` on the 24 h occupancy read; if the
+   sampler keeps showing `ccd-cli` outside the slice, decide whether a hand-started bridge is
+   tolerated or the bridge binary is only ever reachable through the unit.
 
 ## 9. Sources
 
@@ -512,6 +545,8 @@ Live (read-only, 2026-10-04 20:05–20:11 AWST): `ps -eo pid,rss,etimes,comm,arg
 Upstream [doc]: Claude Code cloud sessions —
 [Get started with Claude Code in the cloud](https://code.claude.com/docs/en/web-quickstart),
 [Choose a sandbox environment](https://code.claude.com/docs/en/sandbox-environments),
-[Claude Code on the web (announcement)](https://anthropic.com/news/claude-code-on-the-web);
+[Claude Code on the web (announcement)](https://anthropic.com/news/claude-code-on-the-web),
+[Claude Code hooks reference](https://code.claude.com/docs/en/hooks) (`SessionStart` carries no
+blocking decision — context and warnings only);
 Codex cloud — [Using Codex with your ChatGPT plan](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan),
 [Codex cloud environments](https://developers.openai.com/codex/cloud/environments).
