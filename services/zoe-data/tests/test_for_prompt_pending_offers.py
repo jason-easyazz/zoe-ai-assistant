@@ -78,3 +78,26 @@ async def test_on_but_empty_is_noop(monkeypatch):
     before = _base()
     after = await mem._fold_pending_contact_offers(dict(before), "u1")
     assert after["packet"] == before["packet"]
+
+
+@pytest.mark.asyncio
+async def test_batch_flag_folds_one_enumerated_question(monkeypatch):
+    """ZOE_CONTACT_OFFER_BATCH: the fold asks ONE question for the whole set (a
+    single yes then accepts all of it); flag OFF keeps a question per offer."""
+    monkeypatch.setenv("ZOE_PERSON_SUGGEST_ENABLED", "1")
+
+    async def fake_surface(user_id, *, limit=3):
+        return [{"name": n, "relationship": r} for n, r in
+                (("Rodrigo", "brother"), ("Jessika", ""), ("Wren", "niece"), ("Pell", ""))][:limit]
+    monkeypatch.setattr(pending_suggestions, "surface_pending_contacts_for_prompt", fake_surface)
+
+    monkeypatch.delenv("ZOE_CONTACT_OFFER_BATCH", raising=False)
+    legacy = (await mem._fold_pending_contact_offers(_base(), "u1"))["packet"]
+    assert legacy.count("[pending-contact]") == 3 and "Pell" not in legacy  # per-offer, capped at 3
+
+    monkeypatch.setenv("ZOE_CONTACT_OFFER_BATCH", "1")
+    pkt = (await mem._fold_pending_contact_offers(_base(), "u1"))["packet"]
+    assert pkt.count("[pending-contact]") == 1
+    assert ('"Would you like me to add Rodrigo (your brother), Jessika, Wren (your niece) '
+            'and Pell to your contacts?"') in pkt
+    assert "## What I know about you" in pkt
