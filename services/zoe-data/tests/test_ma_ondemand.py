@@ -88,6 +88,36 @@ async def test_fresh_seen_up_skips_the_probe(reap):
     assert reap["docker"] == []
 
 
+class _JustBooted:
+    """`time` stand-in for ma_ondemand: monotonic reads 5 s after host boot
+    (below the 30 s cache TTL), the wall clock stays real."""
+    import time as _real
+    monotonic = staticmethod(lambda: 5.0)
+    time = staticmethod(_real.time)
+
+
+async def test_empty_cache_within_30s_of_boot_still_probes_and_starts(monkeypatch, reap):
+    """Codex P2: `_last_seen_up` starts at the 0.0 sentinel and monotonic counts
+    from boot, so within 30 s of boot `monotonic() - 0.0 < TTL` read an EMPTY
+    cache as a fresh answer; with no `stopped` stamp (MA stopped outside the
+    reaper) the first music request skipped the probe AND the start and failed.
+    An empty cache must never be "recent"; a real stamp at the same clock still is."""
+    monkeypatch.setattr(ma_ondemand, "time", _JustBooted)
+    assert ma_ondemand._last_seen_up == 0.0 and not list(reap["docker"])
+    assert ma_ondemand._recently_up() is False
+    assert await ma_ondemand.ensure_running(timeout_s=2.0) is True
+    assert ("start", "zoe-music-assistant") in reap["docker"], "boot-time wake must start MA"
+    # Positive control at the same clock: a REAL cached answer (5.0, 0 s old) is honoured.
+    reap["docker"].clear()
+    ma_ondemand.note_seen_up()
+    assert ma_ondemand._last_seen_up == 5.0 and ma_ondemand._recently_up() is True
+    assert await ma_ondemand.ensure_running(timeout_s=0.2) is True
+    assert reap["docker"] == []
+    # ...and note_seen_down empties it again, so the next wake probes.
+    ma_ondemand.note_seen_down()
+    assert ma_ondemand._recently_up() is False
+
+
 async def test_reaper_stop_stamp_overrides_a_fresh_seen_up(reap, tmp_path):
     """Codex P2: a 'seen up' from the panel's 5 s poll can describe the container
     the reaper stopped a moment later — the reaper's `stopped` stamp (newer than

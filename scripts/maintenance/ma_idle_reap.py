@@ -23,7 +23,11 @@ function; each guard has its own negative control in
 
 Dry-run by default (prints the decision). ``--execute`` performs the stop,
 under the same ``flock`` ``ensure_running`` holds while starting, so the two can
-never interleave. Stdlib only — runs on ``/usr/bin/python3`` from a user timer.
+never interleave. ``observe()`` — snapshot (docker, MA, stamps, clock) →
+``decide()`` — is the ONE path to a decision and runs TWICE: once to report, and
+again under the lock right before ``docker stop``, because a play started
+natively in Music Assistant (phone app, Sonos, AirPlay) leaves no Zoe stamp and
+is only visible by re-fetching. Stdlib only — runs on ``/usr/bin/python3`` from a user timer.
 Secrets: ``MUSIC_ASSISTANT_TOKEN`` is read from the environment and never printed.
 """
 from __future__ import annotations
@@ -151,6 +155,31 @@ def _mtime(path: Path) -> float:
         return 0.0
 
 
+def observe(*, container: str, state_dir: Path, flag_on: bool,
+            idle_min: float, inflight_grace_s: float) -> tuple[str, str]:
+    """Snapshot the world (docker state, MA players/queues, stamps, clock) and
+    ``decide()``. The ONE path to a stop decision: ``main()`` calls it before the
+    stop lock (to report / dry-run) and AGAIN under the lock, so anything that
+    changed in between is seen — a wake (``inflight`` stamp), a stop by someone
+    else, or a play started natively in MA, which stamps NOTHING on this box and
+    can only be caught by re-reading ``players/all``."""
+    rc, out = _docker("inspect", "-f", "{{.State.Running}}", container, timeout=10)
+    running = rc == 0 and out.strip() == "true"
+    players = queues = None
+    if flag_on and running:
+        players, queues = _ma_cmd("players/all"), _ma_cmd("player_queues/all")
+    return decide(
+        flag_on=flag_on, running=running,
+        ma_readable=players is not None and queues is not None,
+        players=players or [], queues=queues or [],
+        now=time.time(), activity_epoch=_mtime(state_dir / "activity"),
+        inflight_epoch=_mtime(state_dir / "inflight"),
+        idle_min=idle_min, inflight_grace_s=inflight_grace_s,
+        quiet_window=parse_quiet_hours(os.environ.get("ZOE_MA_REAP_QUIET_HOURS")),
+        local_hour=time.localtime().tm_hour,
+    )
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("--execute", action="store_true", help="actually docker stop (default: dry-run)")
@@ -164,23 +193,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     state_dir = Path(os.environ.get("ZOE_MA_REAP_STATE_DIR", "~/.cache/zoe/ma-reap")).expanduser()
     flag_on = os.environ.get("ZOE_MA_IDLE_REAP", "0").strip().lower() in TRUTHY
     stamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+    world = dict(container=container, state_dir=state_dir, flag_on=flag_on,
+                 idle_min=args.idle_min, inflight_grace_s=args.inflight_grace_s)
 
-    rc, out = _docker("inspect", "-f", "{{.State.Running}}", container, timeout=10)
-    running = rc == 0 and out.strip() == "true"
-    players = queues = None
-    if flag_on and running:
-        players, queues = _ma_cmd("players/all"), _ma_cmd("player_queues/all")
-
-    action, reason = decide(
-        flag_on=flag_on, running=running,
-        ma_readable=players is not None and queues is not None,
-        players=players or [], queues=queues or [],
-        now=time.time(), activity_epoch=_mtime(state_dir / "activity"),
-        inflight_epoch=_mtime(state_dir / "inflight"),
-        idle_min=args.idle_min, inflight_grace_s=args.inflight_grace_s,
-        quiet_window=parse_quiet_hours(os.environ.get("ZOE_MA_REAP_QUIET_HOURS")),
-        local_hour=time.localtime().tm_hour,
-    )
+    action, reason = observe(**world)
     if action != "stop":
         print(f"{stamp} MA_REAP keep {reason}")
         return 0
@@ -194,9 +210,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         except OSError:
             print(f"{stamp} MA_REAP keep a start is in progress (lock held)")
             return 0
-        # Re-check the one thing that can change while we waited: a wake stamp.
-        if time.time() - _mtime(state_dir / "inflight") < args.inflight_grace_s:
-            print(f"{stamp} MA_REAP keep music request in flight (re-check)")
+        # Re-run the WHOLE decision under the lock, not just the inflight stamp:
+        # between the first snapshot and here someone may have pressed play in
+        # the MA app / on the Sonos — no Zoe stamp changes for that, only MA's
+        # own player state does, so it has to be re-fetched (Codex P2).
+        action, reason = observe(**world)
+        if action != "stop":
+            print(f"{stamp} MA_REAP keep {reason} (re-check under lock)")
             return 0
         # Stamp BEFORE the stop: zoe-data's ensure_running distrusts any cached
         # "MA answered" older than this file, so a wake right after the stop probes

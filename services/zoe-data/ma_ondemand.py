@@ -46,8 +46,11 @@ _TRUTHY = ("1", "true", "on", "yes")
 # newer than that answer: the panel's 5 s poll can leave a "seen up" that
 # describes the container the reaper stopped a moment later.
 _RECENT_UP_S = 30.0
-_last_seen_up: float = 0.0        # monotonic, for the TTL
-_last_seen_up_wall: float = 0.0   # wall clock, compared against the stamp mtime
+# 0.0 (or None) = NO cached answer. Never compare the sentinel against the clock:
+# time.monotonic() counts from boot, so within the first 30 s of uptime
+# `monotonic() - 0.0 < _RECENT_UP_S` reads an EMPTY cache as "answered just now".
+_last_seen_up: Optional[float] = 0.0        # monotonic, for the TTL
+_last_seen_up_wall: Optional[float] = 0.0   # wall clock, compared against the stamp mtime
 _lock: Optional[asyncio.Lock] = None
 
 
@@ -106,6 +109,13 @@ def note_seen_down() -> None:
 
 
 def _recently_up() -> bool:
+    """A cached "MA answered" that is < 30 s old and not contradicted by the
+    reaper's `stopped` stamp. An EMPTY cache (0.0/None, the boot value and what
+    note_seen_down leaves) is never "recent" — the TTL only applies to a real
+    stamp, or the first wake within 30 s of host boot would skip the probe AND
+    the `docker start` and fail (Codex P2)."""
+    if not _last_seen_up or not _last_seen_up_wall:
+        return False
     if time.monotonic() - _last_seen_up >= _RECENT_UP_S:
         return False
     try:  # the reaper touches `stopped` as it stops MA; newer than our answer = stale

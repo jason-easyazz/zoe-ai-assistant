@@ -286,9 +286,14 @@ no review in flight** — it kills live dispatches. Prefer
   (`HH-HH`, wraps midnight, unset = none). Queue timestamps, not player ones: a
   Sonos/Cast player refreshes its own stamp on local (non-MA) playback and would
   pin MA alive forever. The stop runs under the shared `flock` `ensure_running`
-  holds while starting, with the inflight stamp re-checked inside the lock. Pinned
+  holds while starting, and `observe()` — the ONE snapshot (docker, MA
+  players/queues, stamps, clock) → `decide()` path — runs AGAIN inside the lock:
+  a play started natively in MA (phone app, Sonos, AirPlay) stamps nothing, so
+  only a re-fetch can see it; an inflight-only re-check cut a live stream. Pinned
   by `tests/unit/test_ma_idle_reap.py` (`ci_safe`): every guard has a negative
-  control and `test_all_guards_pass_requires_a_stop` requires the reap to PROCEED.
+  control, `test_all_guards_pass_requires_a_stop` requires the reap to PROCEED,
+  and `test_execute_re_observes_under_the_lock_and_sees_a_native_play` makes the
+  second `players/all` answer `playing` and requires a keep.
   Record + apply/rollback: `docs/knowledge/music-assistant-idle-reap.md`.
 
 Verification: `bash -n`, `pytest tests/unit/test_cross_review_poll.py

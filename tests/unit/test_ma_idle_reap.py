@@ -131,3 +131,38 @@ def test_cli_dry_run_never_stops(monkeypatch, tmp_path, capsys):
     assert "MA_REAP stop idle_min=" in capsys.readouterr().out
     # The stamp ensure_running reads to distrust a pre-stop "seen up" (Codex P2).
     assert (tmp_path / "stopped").exists()
+
+
+def test_execute_re_observes_under_the_lock_and_sees_a_native_play(monkeypatch, tmp_path, capsys):
+    """Codex P2: a play started natively in MA (phone app, Sonos, AirPlay) between
+    the snapshot and the stop critical section leaves NO Zoe stamp, so an
+    inflight-only re-check passes and `docker stop` cuts a live stream. The whole
+    snapshot -> decide() must run again under the lock: the second players/all
+    answers 'playing' -> keep, no stop, no `stopped` stamp."""
+    monkeypatch.setenv("ZOE_MA_IDLE_REAP", "1")
+    monkeypatch.setenv("ZOE_MA_REAP_STATE_DIR", str(tmp_path))
+    monkeypatch.delenv("ZOE_MA_REAP_QUIET_HOURS", raising=False)
+    calls = []
+
+    def _docker(*args, timeout=30):
+        calls.append(args)
+        return 0, "true" if args[0] == "inspect" else ""
+    monkeypatch.setattr(reap, "_docker", _docker)
+    import time as _t
+    queues = _queues(newest=_t.time() - 3 * HOUR)
+    fetches = []
+
+    def _ma_cmd(c):
+        if c != "players/all":
+            return queues
+        fetches.append(c)
+        # 1st fetch (before the lock): idle. 2nd (under the lock): someone pressed play.
+        return _players() if len(fetches) == 1 else _players(sonos="playing")
+    monkeypatch.setattr(reap, "_ma_cmd", _ma_cmd)
+
+    assert reap.main(["--execute"]) == 0
+    out = capsys.readouterr().out
+    assert len(fetches) == 2, "player state must be re-fetched under the lock"
+    assert "keep Living Room is playing (re-check under lock)" in out
+    assert all(a[0] != "stop" for a in calls), "a play seen under the lock must veto the stop"
+    assert not (tmp_path / "stopped").exists(), "no stop -> no `stopped` stamp"

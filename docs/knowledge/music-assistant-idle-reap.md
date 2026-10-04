@@ -44,8 +44,11 @@ provider setup/reconfigure/save. Every mutating service entry point
 favourite add/remove, don't-stop, `resolve_music` for every action but `status`,
 and `_ma_api_for_write()` — the credential-write funnel) calls `ensure_running()`
 first. The wake: touch `activity` + `inflight` → under the shared `flock` (the one
-the reaper holds across stamp+stop): honour a cached "MA answered" only if it is
-newer than the reaper's `stopped` stamp and < 30 s old → else `GET /info` → else
+the reaper holds across stamp+stop): honour a cached "MA answered" only if one EXISTS
+(the empty `0.0` cache is never "recent": `monotonic()` counts from boot, so within
+30 s of boot the bare TTL compare read an empty cache as fresh and the first wake
+skipped the start), is newer than the reaper's `stopped` stamp and < 30 s old →
+else `GET /info` → else
 `docker start` (via `async_subprocess.run_to_completion`, never a loop-thread
 fork) + poll `/info` → log `MA_REAP start latency_ms=…`. Failure returns False and the existing "music
 isn't available" degrade path applies — never a broken turn.
@@ -56,8 +59,10 @@ running, MA API readable, no `inflight` stamp younger than
 `ZOE_MA_INFLIGHT_GRACE_S` (120 s), no player `playing`, no `paused` player with a
 queue, newest of (`activity` stamp, MA per-queue `elapsed_time_last_updated`)
 older than `ZOE_MA_IDLE_MIN` (45), local hour outside `ZOE_MA_REAP_QUIET_HOURS`
-(`HH-HH`, optional). Then `docker stop` under the same lock, re-checking the
-inflight stamp inside it. Log line: `MA_REAP stop idle_min=…`. Dry run against
+(`HH-HH`, optional). Then, under the same lock, the WHOLE snapshot → `decide()`
+(`observe()`) runs again before `docker stop` — a play started natively in MA
+between the two stamps nothing on this box, so only a re-fetch of `players/all`
+can veto the stop (`keep … (re-check under lock)`). Log line: `MA_REAP stop idle_min=…`. Dry run against
 the live box (2026-10-04, no `--execute`): `would-stop idle_min=5394`.
 
 **Cold-start cost after a reap:** one music request pays ~4 s (start + HTTP)
