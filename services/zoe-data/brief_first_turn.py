@@ -254,6 +254,14 @@ def render_body(shape: str, lines: list[str], local_date: str) -> str:
     return head + "\n" + "\n".join(f"- {line}" for line in lines)
 
 
+def trigger_key(message: str | None) -> str:
+    """A short digest of the turn's normalised words: lets the delivery ledger tell a later
+    copy of the triggering utterance from the member's real next turn (no text is kept)."""
+    import hashlib
+
+    return hashlib.sha1(_normalize(message).encode("utf-8")).hexdigest()[:16]
+
+
 @dataclass
 class DayBrief:
     user_id: str
@@ -265,6 +273,7 @@ class DayBrief:
     token: str = ""  # this turn's hold on a queued 07:30 brief (``_briefing``)
     session_id: str = ""
     surfaced: tuple = ()  # ``mentioned`` items, marked at settle (ZOE_LOOP_LIFECYCLE)
+    trigger: str = ""  # ``trigger_key`` of the utterance this brief rode in on
 
     @property
     def block(self) -> str:
@@ -370,7 +379,7 @@ async def _prepare(message: str, uid: str, now: datetime, sid: str = "") -> DayB
     token = uuid.uuid4().hex
     _briefing.setdefault(uid, {})[token] = time.monotonic()
     return DayBrief(uid, shape, len(items), render_body(shape, lines, local_date), now,
-                    local_date, token, sid, surfaced)
+                    local_date, token, sid, surfaced, trigger_key(message))
 
 
 async def prepare(message: str, user_id: str, session_id: str = "") -> DayBrief | None:
@@ -430,7 +439,8 @@ async def _settle(brief: DayBrief, produced: bool) -> bool:
         # The loops it voiced are surfaced: the next conversation must not raise them.
         from proactive.selector import mark_brief_surfaced
 
-        await mark_brief_surfaced(brief.user_id, brief.session_id, list(brief.surfaced))
+        await mark_brief_surfaced(brief.user_id, brief.session_id, list(brief.surfaced),
+                                  **({"trigger": brief.trigger} if brief.trigger else {}))
     _log(brief.user_id, brief.items, brief.shape, injected=True, claimed=claimed)
     return claimed
 

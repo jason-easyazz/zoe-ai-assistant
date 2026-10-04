@@ -232,6 +232,68 @@ enables both halves (default off, read per call; off = no I/O). Code: `proactive
 - **Junk never surfaces:** loops and moments must pass `open_loop_quality.loop_is_concrete`
   (the open-loop calibration, #1790); their anchor words are the candidate's `cue_words`.
 
+## Delivery ledger (flag-dark)
+
+Pull-not-push inbox, **PR 1 of 6** ([record](../research/pull-not-push-inbox-2026-10-04.md)
+§3.1 / §3.5 / §5). `ZOE_PROACTIVE_LEDGER=1` (default off, read per call; off = byte-identical,
+no DB access). Code: `proactive/ledger.py`; migration `0036`
+(`proactive_deliveries`). It records evidence only: it changes no reply, no block, no spacing
+rule, no candidate row, and never speaks (`ZOE_PROACTIVE_SPOKEN` stays 0).
+
+Why: `proactive_candidates` says a block went out with a reply, not whether the reply voiced it
+(PR #1821 found the brain voicing a greeting raise 0/5 times, indistinguishable from success
+in production) and not what the person did next. Nothing live wrote an accepted / ignored label
+for the lane that is actually used (record §2.5).
+
+- **Writer.** One OPEN row per item a conversation carried: `selector._settle` (a raise that
+  settled with reply text) and `selector.mark_brief_surfaced` (a `[Today]` brief line; needs
+  `ZOE_PROACTIVE_SELECTOR` + `ZOE_LOOP_LIFECYCLE` like the brief mark itself). Idempotent on
+  `idem_key = user|session|kind|source_ref|delivered_by|local date` (UNIQUE, `ON CONFLICT DO
+  NOTHING`): a retried settle inserts nothing, but a later delivery of the same item (a permanent
+  Telegram session, a raise again after the 3-day cooldown) is a new row.
+- **The brain lanes are untouched, on purpose.** `zoe_core_client.py` / `zoe_flue_client.py` /
+  `routers/voice_tts.py` are `VOICE_PATH_PATTERNS`: an edit there needs a Jetson replay-gate run
+  bound to the PR head (serial, one shared artifact slot). The record (§3.5) sketched the
+  voiced check in the settle path; this PR does it in the sweep from what chat already
+  persisted: both lanes save the reply the person HEARD to `chat_messages` (the streaming
+  voice lane saves what was spoken), the user's turn before the stream (chat, streaming voice)
+  or together with the reply after it (non-streaming voice, which also saves a SECOND copy of
+  the triggering utterance milliseconds before the reply). So the delivery's REPLY is the first
+  assistant row of its session STRICTLY AFTER the settle (never before it: that is the previous
+  turn's; assistant rows within 5 s behind it count as part of it), and the person's "next
+  turn" is their first user row strictly after that reply at MICROSECOND precision, skipping
+  any copy of the triggering utterance (`trigger_key`, a digest, no text), whichever
+  order it was saved in. `tests/test_proactive_ledger.py` pins that no voice-path file mentions
+  the ledger. Reply text is checked and discarded, never stored.
+- **State machine.** `outcome` NULL = surfaced, awaiting the sweep. Closed outcomes:
+  `undelivered` (the reply carried none of the item's anchor words, the #1821 failure),
+  `accepted`, `ignored`, `unknown`. `voiced` (1 / 0 / NULL; anchors and reply are both stemmed, so plural/singular and
+  possessives never decide it) is written when the row closes;
+  NULL (no anchors, or no reply was ever found) is **unknown, never undelivered**, because
+  nothing proves it was not voiced. `expires_at` = surfaced + 24 h: a row the sweep could not
+  judge by then closes `unknown`, so nothing strands.
+- **Sweep** (`ledger.sweep`, engine slow loop step 4, 300 s, paused in quiet hours). No
+  persisted reply yet: the row waits. A reply without an anchor: `undelivered` at once. An
+  `event` (Notify, no answer expected) voiced: `accepted`. Anything else (a Question) waits
+  `RESPONSE_WINDOW_S` = 600 s after the reply, then the member's FIRST next turn decides: a
+  deterministic intent, or a turn with no anchor word, is `ignored`; a turn sharing an anchor
+  is `accepted`; no turn is `ignored`; an unverified item that was not taken up is `unknown`.
+  A chat read or intent-router error leaves the row open for the next tick. The chat reads are
+  Postgres-only SQL (`arrival._first_user_turn` shape; the next turn is member-wide, the reply
+  session-bound), so unit tests fake `ledger._reply_after` / `ledger._user_turns`. Re-running
+  is a no-op.
+- **Logs** (counts and kinds only, never item or reply text): `PROACTIVE_LEDGER user= kind=
+  shape= by=` (written), `PROACTIVE_LEDGER_OUTCOME user= kind= outcome= voiced=` (closed).
+- **Not in this PR** (record §5 order): classes (Notify / Question / Review), the inbox read
+  and `GET`/`POST` endpoints, the orb `has` state and `inbox_pending` sync field, the "what's
+  up?" pull and `[INBOX]` block, the back-off, `delivery.py` consolidation, the P10 head. The
+  ledger's `delivered_by` ('turn' | 'brief') leaves room for `pull`. The brief's `[Today]`
+  calendar events are not marked surfaced today, so they get no ledger row.
+- **Measure it.** After enabling: `SELECT outcome, count(*) FROM proactive_deliveries GROUP BY
+  1` — the `undelivered` share is the live voiced-rate the day-sim could only sample, and the
+  first two weeks are the W16 baseline. The head (P10) needs >=200 labelled rows with >=40
+  positives (record §3.5). Pinned by `tests/test_proactive_ledger.py`.
+
 ## Open-loop lifecycle (flag-dark)
 
 `ZOE_LOOP_LIFECYCLE=1` (default off, read per call; off = byte-identical) closes four gaps the

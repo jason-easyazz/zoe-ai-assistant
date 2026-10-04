@@ -2282,6 +2282,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_LOG_CHATTY_LIBS_LEVEL": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/logging_setup.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_LOG_DIR": {
         "defaults": [
           "-"
@@ -2309,6 +2319,36 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/logging_setup.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LOG_QUIET_POLL_PATHS": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/middleware/logging.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LOG_QUIET_POLL_SLOW_MS": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/middleware/logging.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LOG_REPEAT_WINDOW_S": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/log_throttle.py"
         ],
         "typed_env": false
       },
@@ -3119,6 +3159,26 @@
         ],
         "typed_env": false
       },
+      "ZOE_PERSONA_DRIFT": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/persona_drift.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_PERSONA_LAYER": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/persona_layer.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_PERSON_BIRTHDAY_CAPTURE_ENABLED": {
         "defaults": [
           "''"
@@ -3469,6 +3529,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/proactive/arrival.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PROACTIVE_LEDGER": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/proactive/ledger.py"
         ],
         "typed_env": false
       },

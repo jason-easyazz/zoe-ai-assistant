@@ -294,61 +294,17 @@ function hideOrbTyping() {
 function initIntelligenceWS() {
     const orb = document.getElementById('zoeOrb');
     if (!orb) return;
-    
-    // Try WebSocket first, fall back to SSE on failure
-    if (wsRetries >= MAX_WS_RETRIES) {
-        console.log('WebSocket failed after retries, switching to SSE');
-        initIntelligenceSSE();
+    // The page's ONE push socket (js/auth.js zoePush) — this file used to open
+    // a second one with no session_id, which the server refuses with 403.
+    if (window.zoePush && typeof window.zoePush.subscribe === 'function') {
+        window.zoePush.subscribe(handleIntelligenceEvent);
+        orb.classList.remove('error', 'connecting');
+        orb.classList.add('connected');
+        orb.title = 'Connected';
         return;
     }
-    
-    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${location.host}/ws/push?channel=all`;
-    
-    try {
-        intelligenceWS = new WebSocket(wsUrl);
-        
-        intelligenceWS.onopen = () => {
-            wsRetries = 0;
-            orb.classList.remove('error', 'connecting');
-            orb.classList.add('connected');
-            orb.title = 'Connected';
-            console.log('✅ Intelligence WebSocket connected');
-        };
-        
-        intelligenceWS.onmessage = (evt) => {
-            try { 
-                const msg = JSON.parse(evt.data); 
-                handleIntelligenceEvent(msg); 
-            } catch(e) {
-                console.warn('Failed to parse WebSocket message:', e);
-            }
-        };
-        
-        intelligenceWS.onerror = (error) => {
-            console.warn('WebSocket error:', error);
-            wsRetries++;
-            orb.classList.remove('connected', 'connecting');
-            orb.classList.add('error');
-            orb.title = 'Connection error';
-        };
-        
-        intelligenceWS.onclose = () => {
-            orb.classList.remove('connected', 'error');
-            orb.classList.add('connecting');
-            orb.title = 'Reconnecting...';
-            
-            // Retry with exponential backoff
-            const delay = Math.min(1000 * Math.pow(2, wsRetries), 10000);
-            setTimeout(() => initIntelligenceWS(), delay);
-        };
-    } catch (e) {
-        console.error('Failed to create WebSocket:', e);
-        wsRetries++;
-        orb.classList.add('error');
-        orb.title = 'WS init failed';
-        setTimeout(() => initIntelligenceWS(), 2500);
-    }
+    // No hub on this page: poll instead (never a raw socket).
+    initIntelligenceSSE();
 }
 
 /**
@@ -415,18 +371,11 @@ function handleIntelligenceEvent(event) {
     }
     if (event.type === 'proactive_suggestion' || event.type === 'ambient_notification') {
         orb.classList.add('badge', 'proactive');
-        const n = event.data;
+        const n = event.data || {};
         window.__lastSuggestion = n;
-        const html = `
-          <div style="font-weight:600; margin-bottom:6px;">${n.title ? n.title : 'Suggestion'}</div>
-          <div style="margin-bottom:10px; color:#374151;">${n.message}</div>
-          <div style="display:flex; gap:8px; flex-wrap:wrap;">
-            <button class="btn" style="padding:6px 10px; border-radius:8px; border:1px solid #e5e7eb; background:#10b981; color:white;" onclick="suggestionAction(${JSON.stringify(n.id)}, 'accept')">Yes</button>
-            <button class="btn" style="padding:6px 10px; border-radius:8px; border:1px solid #e5e7eb; background:white;" onclick="suggestionAction(${JSON.stringify(n.id)}, 'dismiss')">Not now</button>
-            <button class="btn" style="padding:6px 10px; border-radius:8px; border:1px solid #e5e7eb; background:white;" onclick="suggestionAction(${JSON.stringify(n.id)}, 'never')">Don't show again</button>
-            <button class="btn" style="padding:6px 10px; border-radius:8px; border:1px solid #e5e7eb; background:#7B61FF; color:white;" onclick="handleSuggestionWithChat(window.__lastSuggestion)">💬 Discuss</button>
-          </div>`;
-        showOrbToast(html, true, true); // Persistent until dismissed
+        // n.title / n.message are USER-AUTHORED (a reminder title reaches here via
+        // /api/notifications/pending) — build DOM, never an HTML string.
+        showOrbToast(buildSuggestionToast(n), true, true); // Persistent until dismissed
         
         // Also refresh panel list if available
         if (typeof loadNotificationsFromCore === 'function') {
@@ -436,16 +385,51 @@ function handleIntelligenceEvent(event) {
 }
 
 /**
- * Show Orb Toast Notification
+ * Build the proactive-suggestion toast as DOM. Every piece of notification text
+ * goes through textContent; the buttons carry the id in a closure, never in an
+ * on* attribute. Pinned by dist/test_desktop_wave3.js against a DOM shim.
+ */
+function buildSuggestionToast(n, doc) {
+    const d = doc || document;
+    const wrap = d.createElement('div');
+    const title = d.createElement('div');
+    title.style.cssText = 'font-weight:600; margin-bottom:6px;';
+    title.textContent = n && n.title ? String(n.title) : 'Suggestion';
+    const body = d.createElement('div');
+    body.style.cssText = 'margin-bottom:10px; color:#374151;';
+    body.textContent = n && n.message != null ? String(n.message) : '';
+    const row = d.createElement('div');
+    row.style.cssText = 'display:flex; gap:8px; flex-wrap:wrap;';
+    const mk = (label, style, onClick) => {
+        const b = d.createElement('button');
+        b.className = 'btn';
+        b.style.cssText = 'padding:6px 10px; border-radius:8px; border:1px solid #e5e7eb; ' + style;
+        b.textContent = label;
+        b.addEventListener('click', onClick);
+        return b;
+    };
+    const id = n ? n.id : undefined;
+    row.appendChild(mk('Yes', 'background:#10b981; color:white;', () => suggestionAction(id, 'accept')));
+    row.appendChild(mk('Not now', 'background:white;', () => suggestionAction(id, 'dismiss')));
+    row.appendChild(mk("Don't show again", 'background:white;', () => suggestionAction(id, 'never')));
+    row.appendChild(mk('\u{1F4AC} Discuss', 'background:#7B61FF; color:white;', () => handleSuggestionWithChat(window.__lastSuggestion)));
+    wrap.appendChild(title); wrap.appendChild(body); wrap.appendChild(row);
+    return wrap;
+}
+
+/**
+ * Show Orb Toast Notification. `text` is a string (rendered as text) or a DOM
+ * node (appended). HTML strings are no longer accepted — build DOM instead.
  */
 function showOrbToast(text, isHtml = false, persistent = false) {
     const el = document.getElementById('orbToast');
     if (!el) return;
     
-    if (isHtml) { 
-        el.innerHTML = text; 
-    } else { 
-        el.textContent = text; 
+    if (text && typeof text === 'object' && typeof text.nodeType === 'number') {
+        el.textContent = '';
+        el.appendChild(text);
+    } else {
+        el.textContent = String(text == null ? '' : text);
     }
     el.style.display = 'block';
     clearTimeout(window.__orbToastTimer);
@@ -473,12 +457,14 @@ function handleSuggestionWithChat(suggestion) {
     if (messages) {
         const suggestionDiv = document.createElement('div');
         suggestionDiv.className = 'orb-chat-message assistant';
-        suggestionDiv.innerHTML = `
-            <strong>💡 Suggestion:</strong><br/>
-            ${suggestion.title}<br/><br/>
-            ${suggestion.message}<br/><br/>
-            <em>Would you like to discuss this further?</em>
-        `;
+        const strong = document.createElement('strong'); strong.textContent = '\u{1F4A1} Suggestion:';
+        suggestionDiv.appendChild(strong); suggestionDiv.appendChild(document.createElement('br'));
+        suggestionDiv.appendChild(document.createTextNode(String((suggestion && suggestion.title) || '')));
+        suggestionDiv.appendChild(document.createElement('br')); suggestionDiv.appendChild(document.createElement('br'));
+        suggestionDiv.appendChild(document.createTextNode(String((suggestion && suggestion.message) || '')));
+        suggestionDiv.appendChild(document.createElement('br')); suggestionDiv.appendChild(document.createElement('br'));
+        const em = document.createElement('em'); em.textContent = 'Would you like to discuss this further?';
+        suggestionDiv.appendChild(em);
         messages.appendChild(suggestionDiv);
         messages.scrollTop = messages.scrollHeight;
     }

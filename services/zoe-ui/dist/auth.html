@@ -602,6 +602,23 @@
         // no session is ever created on the client.
         const AUTH_UNAVAILABLE_MESSAGE = "Zoe's sign-in service is unavailable — try again in a moment";
 
+        // ?redirect= is attacker-controlled (a link anyone can send). Only a
+        // same-origin http(s) path survives: `javascript:alert(1)//.html`,
+        // `/\\evil.com` (browsers normalise the backslash), `//evil.com` and
+        // absolute URLs all fall back to the dashboard. Pure so
+        // dist/test_desktop_wave3.js can pin it.
+        function safeRedirectTarget(raw, origin) {
+            const fallback = '/dashboard.html';
+            const target = String(raw == null ? '' : raw).trim();
+            if (!target || /[\\]/.test(target) || /[\u0000-\u001f]/.test(target)) return fallback;
+            let u;
+            try { u = new URL(target, origin); } catch (_) { return fallback; }
+            if (u.origin !== origin) return fallback;
+            if (u.protocol !== 'http:' && u.protocol !== 'https:') return fallback;
+            if (!u.pathname.startsWith('/') || u.pathname.startsWith('//')) return fallback;
+            return u.pathname + u.search + u.hash;
+        }
+
         class ZoeAuth {
             constructor() {
                 // Use empty base - endpoints already include /api/auth prefix
@@ -1157,14 +1174,7 @@
 
             redirectToApp() {
                 const urlParams = new URLSearchParams(window.location.search);
-                const redirect = urlParams.get('redirect') || 'dashboard.html';
-                let target = redirect.trim();
-                if (/^https?:\/\//i.test(target) || target.startsWith('//')) {
-                    target = 'dashboard.html';
-                } else if (!target.startsWith('/') && !target.endsWith('.html')) {
-                    target = 'dashboard.html';
-                }
-                window.location.href = target;
+                window.location.href = safeRedirectTarget(urlParams.get('redirect'), window.location.origin);
             }
 
             getLocation() {

@@ -38,6 +38,7 @@ HEALTH_URL = "http://localhost:8000/health"
 # 13s per cycle observed in the incident, so 5 restarts ~= a minute of looping.
 # Deliberately above normal: a single restart (deploy, manual) must never alert.
 DEFAULT_THRESHOLD = 5
+HEARTBEAT_S = 3600  # steady-state "healthy" line at most hourly (see check())
 DEFAULT_COOLDOWN_S = 1800  # don't re-alert more than twice an hour
 
 
@@ -173,10 +174,23 @@ def check(threshold: int, cooldown: int, dry_run: bool) -> int:
                 state.pop("last_alert_ts", None)
     else:
         status = "healthy" if healthy else f"unhealthy (active={active})"
-        print(f"crash-watch: {status}, restarts={restarts} (+{delta} since last check)")
+        # A steady "healthy, +0" line every 2 minutes was 41,700 undated lines
+        # (2.3 MB) in ~/.zoe-logs/crash-loop-watch.log (2026-10-04 log review).
+        # Say something only when the picture CHANGES (status flip, restarts
+        # moved) or as an hourly heartbeat proving the watcher is alive; every
+        # line now carries a timestamp so the log can be read after the fact.
+        steady = (healthy and delta == 0 and not dry_run
+                  and state.get("last_status") == "healthy"
+                  and now - state.get("last_log_ts", 0) < HEARTBEAT_S)
+        if not steady:
+            stamp = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(now))
+            print(f"{stamp} crash-watch: {status}, restarts={restarts} (+{delta} since last check)")
+            if not dry_run:
+                state["last_log_ts"] = now
 
     if not dry_run:
         state["restarts"] = restarts
+        state["last_status"] = "healthy" if healthy else "unhealthy"
         state["checked_at"] = now
         _save_state(state)
     return 2 if looping else 0

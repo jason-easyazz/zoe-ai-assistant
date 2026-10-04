@@ -4,8 +4,7 @@
   "description": "Zoe AI Assistant file manifest - defines approved files and patterns",
   "critical_files": {
     "css": [
-      "services/zoe-ui/dist/css/glass.css",
-      "services/zoe-ui/dist/css/memories-enhanced.css"
+      "services/zoe-ui/dist/css/glass.css"
     ],
     "core_js": [
       "services/zoe-ui/dist/js/auth.js",
