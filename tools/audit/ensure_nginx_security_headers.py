@@ -30,7 +30,8 @@ SECURITY_HEADERS: tuple[tuple[str, str], ...] = (
         # endpoints whose hostnames/ports are not stable enough to enumerate here.
         "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
         "style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; "
-        "font-src 'self'; connect-src 'self' ws: wss:; frame-ancestors 'self';",
+        "font-src 'self'; connect-src 'self' ws: wss: http://localhost:7777 http://127.0.0.1:8765; "
+        "frame-ancestors 'self';",
     ),
     ("X-Frame-Options", "SAMEORIGIN"),
     ("X-Content-Type-Options", "nosniff"),

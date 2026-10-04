@@ -686,9 +686,9 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             document.dispatchEvent(new CustomEvent('zoe:voice:thinking'));
         }
 
-        function onResponding(text) {
+        function onResponding(text, data) {
             const E = _estate();
-            if (E) { E.responding(text); document.dispatchEvent(new CustomEvent('zoe:voice:responding', { detail: { text } })); return; }
+            if (E) { E.responding(text, data || null); document.dispatchEvent(new CustomEvent('zoe:voice:responding', { detail: { text } })); return; }
             _setStatus('Responding…', 'responding');
             removeThinkingDots();
             if (text) {
@@ -733,7 +733,8 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
         },
         showCard: function (text, _actions) {
             if (!text) return;
-            VoiceOverlay.onResponding(text);
+            // A card's text REPLACES the running answer rather than appending to it.
+            VoiceOverlay.onResponding(text, { card: true });
             VoiceOverlay.onDone();
         },
         showBar: function (_text) { /* no-op */ },
@@ -752,53 +753,6 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
         if (navDot) {
             navDot.classList.remove('orb-listening', 'orb-thinking', 'orb-responding');
             if (mode !== 'ambient') navDot.classList.add('orb-' + mode);
-        }
-    }
-
-    // Navigation fallback: parse voice:responding text for navigation intent
-    // (until the backend sends proper panel_navigate ui_action events).
-    // Path-aware: use /touch/* when the current page is in the touch tree,
-    // otherwise use the root desktop paths. This prevents desktop users
-    // from being bounced to the touch UI via voice commands.
-    function _isTouchContext() {
-        try {
-            return (window.location.pathname || '').startsWith('/touch/');
-        } catch (_) { return false; }
-    }
-    function _page(name) {
-        return (_isTouchContext() ? '/touch/' : '/') + name;
-    }
-    function _buildPageMap() {
-        return {
-            'calendar':   _page('calendar.html'),
-            'chat':       _page('chat.html'),
-            'lists':      _page('lists.html'),
-            'notes':      _page('notes.html'),
-            'journal':    _page('journal.html'),
-            'weather':    _page('weather.html'),
-            'music':      _page('music.html'),
-            'settings':   _page('settings.html'),
-            'smart home': _page('smart-home.html'),
-            'smarthome':  _page('smart-home.html'),
-            'home':       _page('home.html'),
-            'dashboard':  _page('dashboard.html'),
-            'people':     _page('people.html'),
-            'memories':   _page('memories.html'),
-            'cooking':    _page('cooking.html'),
-        };
-    }
-
-    function _attemptVoiceNavigation(text) {
-        if (!text) return;
-        const lower = text.toLowerCase();
-        // Only navigate if the response sounds like a navigation confirmation
-        if (!/navigat|going to|opening|taking you|here.{0,10}(the|your)\s/i.test(lower)) return;
-        const map = _buildPageMap();
-        for (const [keyword, url] of Object.entries(map)) {
-            if (lower.includes(keyword)) {
-                setTimeout(() => { window.location.assign(url); }, 1800);
-                return;
-            }
         }
     }
 
@@ -880,6 +834,11 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                         // on every kiosk). Require a present id that matches an alias.
                         if (d.panel_id && panelMatchesAuthTarget(d.panel_id)) {
                             hidePinPad();
+                            // The estate's own card (see redirectToTouchLogin) must drop too
+                            // once the challenge is settled, or an answered PIN leaves it up.
+                            if (d.status === 'approved' && typeof window.__hideAuthCard === 'function') {
+                                try { window.__hideAuthCard(); } catch (_) { /* non-fatal */ }
+                            }
                             showToast(d.status === 'approved' ? 'Authorised' : 'Not authorised');
                         }
                     }
@@ -918,11 +877,10 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                             if (msg.type === 'voice:responding') {
                                 setOrbMode('responding');
                                 const text = (msg.data && msg.data.text) ? msg.data.text : '';
-                                VoiceOverlay.onResponding(text);
+                                VoiceOverlay.onResponding(text, msg.data || null);
                                 if (text && typeof showAmbientStatus === 'function') {
                                     showAmbientStatus(text);
                                 }
-                                _attemptVoiceNavigation(text);
                             }
                             if (msg.type === 'voice:done') {
                                 setOrbMode('ambient');
