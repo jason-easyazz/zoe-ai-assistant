@@ -318,6 +318,47 @@ async def _tier0(text: str, user_id: str, defer_intents: frozenset[str] = frozen
         return None
 
 
+async def _conversation_quality_tier(text: str, user_id: str, session_id: str):
+    """Two flag-dark deterministic tiers that run BEFORE everything else (a correction or
+    a pasted roster must never be answered by a generic apology / a guessed role):
+
+    * ``ZOE_CORRECTION_APPLY`` — "you've got the date wrong" / "Biscuit is their dog" reach the
+      STORED record and the reply says what changed (``correction_apply``).
+    * ``ZOE_ROSTER_NEUTRAL_ASK`` — a pasted `Name - detail` list whose roles are not stated is
+      restated neutrally with ONE question, never assigned wife/girls from first names
+      (``people_roles.roster_reply``).
+
+    Each acts only on evidence (a stored row to fix / an unlabelled list) and returns None
+    otherwise, so the brain answers every other turn exactly as before."""
+    try:
+        import correction_apply as _ca
+
+        if _ca.enabled():
+            res = await _ca.maybe_apply(text, user_id, session_id)
+            if res is not None:
+                import expert_dispatch as _xd
+
+                return _xd.DispatchResult(
+                    domain="memory", reply=res.reply, intent=f"correction_{res.kind}",
+                    tier="correction",
+                )
+        from typed_env import env_bool
+
+        if env_bool("ZOE_ROSTER_NEUTRAL_ASK", False) and user_id not in ("guest", ""):
+            import people_roles as _pr
+
+            if _pr.is_unlabelled_roster(text):
+                import expert_dispatch as _xd
+
+                return _xd.DispatchResult(
+                    domain="people", reply=_pr.roster_reply(text), intent="roster_neutral_ask",
+                    tier="roster",
+                )
+    except Exception as exc:  # never let the tier break a turn
+        logger.warning("fast_tiers conversation-quality tier failed (non-fatal): %s", exc)
+    return None
+
+
 async def resolve(
     text: str,
     user_id: str,
@@ -351,6 +392,10 @@ async def resolve(
 
         if not _xd.is_enabled():
             return None
+
+        cq = await _conversation_quality_tier(text, user_id, session_id)
+        if cq is not None:
+            return cq
 
         # Tier-0 — deterministic regex read shortcut (opt-in per channel).
         # `tier0_defer_intents` (from the channel profile) names read intents this

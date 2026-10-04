@@ -444,3 +444,23 @@ def test_snippets_are_truncated_and_quote_safe():
 def test_negative_control_clean_snippet_passes_through():
     block = voc.build_block(TRIVIA_Q, TRIVIA_A, GOOD_ROWS)
     assert "The 1987 grand final was won by the Hawks." in block
+
+
+# ── merge with #1860's ZOE_DATE_HINT: both survive, order is deterministic ───
+
+def test_date_hint_then_hedge_block_order_is_fixed(seam, monkeypatch):
+    q = "Who won the grand final on 7/8/1991?"
+    _, plain = _run(seam(q))
+    assert plain.startswith(f" zoe-uid:jason\n{q}\n") and "accuracy note" not in plain  # hint only, flag off
+    hint = plain.split("\n", 2)[2]
+    monkeypatch.setenv("ZOE_TRIVIA_HEDGE", "1")
+    _, both = _run(seam(q))
+    assert both == f" zoe-uid:jason\n{q}\n{hint}\n{zc._TRIVIA_HEDGE_BLOCK}"  # date hint first, hedge last
+
+
+def test_date_hint_kill_switch_leaves_hedge_alone(seam, monkeypatch):
+    q = "Who won the grand final on 7/8/1991?"
+    monkeypatch.setenv("ZOE_DATE_HINT", "0")
+    monkeypatch.setenv("ZOE_TRIVIA_HEDGE", "1")
+    _, sent = _run(seam(q))
+    assert sent == f" zoe-uid:jason\n{q}\n{zc._TRIVIA_HEDGE_BLOCK}"

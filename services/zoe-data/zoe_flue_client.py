@@ -419,6 +419,20 @@ def _schedule_flue_abort(
 _IDENTITY_ENVELOPE_PREFIX = " zoe-uid:"
 
 
+def _day_first_hint(message: str) -> str:
+    """``date_locale.day_first_hint`` that can never fail the turn."""
+    try:
+        from typed_env import env_bool
+
+        if not env_bool("ZOE_DATE_HINT", True):  # kill switch; default ON (additive, numeric-date turns only)
+            return ""
+        from date_locale import day_first_hint
+
+        return day_first_hint(message)
+    except Exception:  # noqa: BLE001 — a hint is optional; the turn is not
+        return ""
+
+
 def _wrap_message_with_identity(message: str, user_id: str) -> str:
     """Prefix ``message`` with the acting-identity envelope, or return it unchanged.
 
@@ -1653,6 +1667,12 @@ async def _run_flue_brain_streaming_turn(
         brain_message = f"{brain_message}\n{day_block}"
     if raise_block:  # proactive.selector: never on the same turn as the day brief
         brain_message = f"{brain_message}\n{raise_block}"
+    # A numeric date in the user's words ("his birthday is 7/8/1991") is DAY first in this
+    # household; the 4B model reads it month-first and answers "July 8th". One line, only on
+    # a turn that carries such a date, after the user's words (date_locale.py).
+    date_hint = _day_first_hint(message)
+    if date_hint:
+        brain_message = f"{brain_message}\n{date_hint}"
     if verify_block:  # the live check rides last: closest to the reply
         brain_message = f"{brain_message}\n{verify_block}"
     else:
