@@ -745,6 +745,11 @@ nothing is re-embedded. Two ways:
   the ratio; `fresh=True` means "just rebuilt, nothing persisted yet", not unknown. A 500
   with `restored=true` means the rows were put back from the export; `restored=false` names
   the tar to restore (zoe-data stopped).
+- **Automated weekly** (once the flag is armed): `zoe-nightly-dreaming.py` (the 02:30
+  `zoe-dreaming.timer`) checks the health on `ZOE_MEMORY_INDEX_COMPACT_DAY` (default Sunday,
+  Zoe-local) and POSTs the compaction only when `compaction_advised` is true. Its verdict is
+  in `~/training/logs/dreaming-systemd.log` under `=== Weekly drawers index compaction ===`;
+  while the flag is dark it prints the manual fallback and moves on.
 - **Manual fallback** (zoe-data stopped): `scripts/maintenance/compact_drawers_index.py
   --compact --i-stopped-zoe-data` — the recipe is in the script's docstring; it backs up the
   palace and verifies before returning 0.
