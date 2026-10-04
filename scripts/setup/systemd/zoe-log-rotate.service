@@ -11,7 +11,7 @@
 #
 # OPERATOR STEP (a user unit; nothing here is installed by a deploy).
 # RETIRE THE OLD PAIR FIRST so two rotators never share the files
-# (incident-runbook.md section 23, step 1):
+# (incident-runbook.md section 26, step 1):
 #   systemctl --user disable --now zoe-logs-rotate.timer
 #   cp scripts/setup/systemd/zoe-log-rotate.{service,timer} ~/.config/systemd/user/
 #   systemctl --user daemon-reload

@@ -15,7 +15,7 @@ WHY THIS EXISTS
     segments, verified before anything is replaced, hourly. logrotate is not
     installed on this host and a user manager cannot run a system timer, hence a
     stdlib script on a user timer (``zoe-log-rotate.timer``). INSTALL STEP:
-    retire the old pair first (docs/knowledge/incident-runbook.md section 23).
+    retire the old pair first (docs/knowledge/incident-runbook.md section 26).
 
 HOW IT ROTATES (copytruncate, loss-minimal)
     systemd opens the file ``O_APPEND`` and keeps the descriptor for the life of

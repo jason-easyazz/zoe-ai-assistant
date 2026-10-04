@@ -54,7 +54,7 @@ log — only that nothing failed). `zoe-stop.log` has no entry since 2026-06-19.
 **`zoe-data-8012.log` / `zoe-data-8011.log`.** Last written **2026-06-18 22:01** — not tonight.
 A hand-launched pair of `uvicorn` processes on :8011/:8012 (python3.10 user-site, started 21:47,
 stopped ~22:01) from an ad-hoc experiment. No unit, script or doc in the repo starts them and
-nothing listens there now. Safe to delete (runbook §23 step 3).
+nothing listens there now. Safe to delete (runbook §26 step 3).
 
 ### 1b. Same files, earlier today (outside the window, same classes would recur)
 
@@ -79,7 +79,7 @@ was untracked, now mirrored in `scripts/setup/systemd/zoe-data.service.d/`). sys
 host-local, untracked pair (`~/bin/zoe-logs-rotate.sh` + `zoe-logs-rotate.{service,timer}`, daily
 02:50) that only acts above 150 MB, keeps a 50 MB tail via a non-atomic `tail -c … | cat >` rewrite
 and prunes only the stdout archives (to 3) — so the files oscillate between ~50 MB and 150 MB
-instead of staying small. The new tracked rotator replaces it (runbook §23 step 1 retires the
+instead of staying small. The new tracked rotator replaces it (runbook §26 step 1 retires the
 old pair first; the new segment names, `zoe-data.stderr.1.log.gz`, cannot match the old script's
 `zoe-data.stdout.log.*.gz` prune). Three writers:
 
@@ -129,7 +129,7 @@ ships ON with an `off` escape hatch instead of default-dark; four new knobs are 
 
 ## 4. What remains
 
-**Operator (exact commands in `incident-runbook.md` §23):** retire the old `zoe-logs-rotate` pair, then install + start `zoe-log-rotate.timer`
+**Operator (exact commands in `incident-runbook.md` §26):** retire the old `zoe-logs-rotate` pair, then install + start `zoe-log-rotate.timer`
 and run it once (rotates the 119 MB / 86 MB files without a restart); restart zoe-data once so the
 volume fixes load; delete the two stale `zoe-data-801{1,2}.log`; `chmod 640` the existing app-log
 segments.
