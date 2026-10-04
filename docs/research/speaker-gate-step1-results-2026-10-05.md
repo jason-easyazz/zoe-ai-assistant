@@ -16,19 +16,26 @@ only** — the speaker embeddings are biometrics and stayed on the Pi.
 
 ## 0. TL;DR
 
-| Q15 target | CAM++ (candidate) | resemblyzer (incumbent, same clips) | Verdict |
+Each model's accuracy row is scored on **its own** pseudo-labels (a 2-means cut of the corpus made in
+that model's embedding space, §2), so the two columns are **not comparable with each other** and are
+not evidence of a difference in accuracy (§6).
+
+| Q15 target | CAM++ (candidate) | resemblyzer (incumbent) | Verdict |
 |---|---|---|---|
-| Separation ≥ 0.20 (owner median − runner-up median) | **0.500** (strict, vs pool p95: 0.342) | 0.106 (strict 0.057) | passes on pseudo-labels only |
-| False rejects < 10 % at the FAR = 1 % threshold | **8.3 %** (threshold 0.607; pool FAR 0.88 %) | 61.6 % (threshold 0.816) | passes on pseudo-labels only |
-| False accepts < 1 % at the FRR = 10 % threshold | **0.66 %** of the pool (threshold 0.631) | 7.3 % (threshold 0.728) | passes on pseudo-labels only |
-| Zero accepts of the TV clips | **FAIL — 2 of 5 accepted** at both points; enforcing zero needs threshold 0.867 = **56 % FRR** | FAIL — 1–2 of 5 | fails on the only labelled impostors |
+| Separation ≥ 0.20 (owner median − runner-up median) | **0.500 — pseudo-labels only.** Against the labelled TV clips alone: owner median − TV max = **−0.011** (one TV clip scores above the owner median); strict, vs pool p95: 0.342 | 0.106 (strict 0.057; owner median − TV max −0.079), own pseudo-labels | the headline is the owner median minus the median of five TV scores (two of which are owner-like); on the labelled impostors it fails |
+| False rejects < 10 % at the FAR = 1 % threshold | **8.3 % — pseudo-labels only** (threshold 0.607; pool FAR 0.88 %); **bootstrap 95 % interval 6.4–37.2 %** | 61.6 % (threshold 0.816; interval 28.8–95.9 %), own pseudo-labels | passes on pseudo-labels only, and the interval reaches 37 % |
+| False accepts < 1 % at the FRR = 10 % threshold | **0.66 % of the pool — pseudo-labels only** (threshold 0.631) | 7.3 % (threshold 0.728), own pseudo-labels | passes on pseudo-labels only |
+| Zero accepts of the TV clips | **FAIL — 2 of 5 accepted** at both points; enforcing zero needs threshold 0.867 = **56 % FRR** | FAIL — 1–2 of 5 | fails on the only independently labelled impostors |
 | < 200 ms per turn on the Pi | **p50 148 ms**, p95 376 ms, max 574 ms; 74 % of clips under 200 ms | p50 172 ms, p95 522 ms | p50 passes, p95 does not |
 
 The honest reading: **the targets are not met, they are unproven.** Everything marked "pseudo-labels"
 rests on a 2-means cut of the corpus, and that cut does not replicate in a second, independent
-embedder (§4). The only independently labelled impostors (five TV clips) fail the zero-accept bar, and
-near-silence is accepted as the owner by 34 of 50 non-speech clips (§5). CAM++ is nonetheless
-decisively better than the incumbent on every yardstick we have (§6), and it fits the Pi.
+embedder (§4). The only independently labelled impostors (five TV clips) fail the zero-accept bar —
+CAM++ and the incumbent are indistinguishable on them — and CAM++ accepts near-silence as the owner
+(34 of 50 non-speech clips, against 3 of 48 for the incumbent, §5). **This run does not show that
+CAM++ is more accurate than the incumbent.** What it does support is narrower: CAM++ is somewhat
+faster (p50 −14 %, p95 −28 %) and ≈ 3× lighter (250 vs 732 MB peak RSS), it fits the Pi, and the
+measurement instrument is ready for the labelled shadow week (§6, §8).
 
 **Go / no-go (§8): GO for the shadow week as a measurement instrument — flag-dark, Pi-only — with four
 changes to the design; NO-GO for graduating the gate or writing any threshold into a live `.env`.**
@@ -136,17 +143,20 @@ ground truth.
 
 ## 5. What the labelled evidence says
 
-### 5.1 The five TV clips: two of them look like the owner, in both models
+### 5.1 The five TV clips: some of them look like the owner, in both models
 
-CAM++ scores of the five TV clips against the owner centroid (sorted): −0.002, 0.277, 0.356, **0.819,
-0.867** — against an owner median of 0.857. The top two sit at the 37th and 56th percentile of the
-owner's own scores. The accepted two are **loud (mean −26.3 dBFS — the same as the median near-field
-owner clip) and long (4.6 s)**; the three rejected are quiet (−42.1 dBFS, 2.4 s). Resemblyzer shows the
-same shape (loud, long clips accepted; the quiet ones rejected; at least one clip is owner-like in both
-spaces — `tv_accepted` overlap 1). The best match of each TV clip to any single owner clip has median
-cosine 0.92 (CAM++). Two unrelated embedders agreeing that loud, long, close-mic "TV" clips are
-owner-like points to **the clips, not the model**: either the quarantine holds the owner's own voice
-(a real utterance that false-woke, or someone near the panel), or it is a very similar voice at the
+CAM++ scores of the five TV clips against the owner centroid (quantiles, n = 5; the tool emits no
+per-clip rows and no statistic over fewer than 5 clips): p5 0.05, p25 0.28, **p50 0.36**, p75 0.82,
+p95 0.86, max 0.867 — against an owner median of 0.857 and an owner p25 of 0.754. So two TV clips
+(p75 and above) sit inside the owner's own score range and one of them exceeds the owner median. The
+best match of each TV clip to any single owner clip has a median cosine of 0.92 (p95 0.97). The
+incumbent also accepts at least one of the same clips (`tv_accepted` overlap between the two spaces:
+1). Across all five clips the TV score correlates only weakly with clip level (Pearson r = 0.40) and
+length (r = 0.37); with n = 5 that is not evidence of anything, and **the earlier reading that the
+owner-like clips are "loud, long, close-mic" is withdrawn** — it came from means over a 2-clip and a
+3-clip subgroup, which the tool no longer emits. Two unrelated embedders both scoring some "TV" clips
+as owner-like points to **the clips, not the model**: either the quarantine holds the owner's own
+voice (a real utterance that false-woke, or someone near the panel) or a very similar voice at the
 mic. I cannot tell which from aggregates and did not listen to or transcribe anything.
 Consequence: the zero-TV-accept target as written is **unmeetable** at any usable FRR (threshold 0.867
 rejects 56 % of the owner) until those clips are re-judged by ear.
@@ -172,22 +182,41 @@ requirement before any embedder score may be used — it was an option in the re
 Below 2 s the gate is a coin flip (Omi's bench said the same: 17 % EER at 2 s). Abstain below 2 s;
 the sweet spot is 2–5 s of speech.
 
-## 6. The incumbent on the same clips
+## 6. The incumbent on the same clips — what can and cannot be said
 
-On the same pseudo-labels, resemblyzer fails every target but latency: separation 0.106, FRR 61.6 % at
-the 1 %-FAR threshold, FAR 7.3 % at the 10 %-FRR threshold (EER 8.0 %, noise-floor control 9.8 %). At
-the thresholds in use today:
+**What this run does NOT show: that CAM++ is more accurate than resemblyzer.** Each model is scored on
+the A/B cut of its *own* embedding space, and the two cuts are at chance against each other (§4:
+cross-label EER 45–49 %). A model that clusters more strongly will "win" separation, FRR and FAR on its
+own labels by construction — CAM++'s k=2 silhouette is 0.42, the incumbent's 0.28 — so the 0.500 vs
+0.106 separation and the 8.3 % vs 61.6 % FRR are properties of the two clusterings as much as of the
+two models. The earlier draft of this section said CAM++ was "decisively better on every yardstick";
+that is withdrawn.
+
+The independent evidence — labels that did not come from either embedding — does not separate them,
+and on one axis points the other way:
+
+| Independent check | CAM++ | resemblyzer |
+|---|---|---|
+| Labelled TV clips accepted (target: 0 of 5) | 2 of 5 | 1–2 of 5 — indistinguishable |
+| Non-speech quarantine accepted at the operating threshold | **34 of 50** | **3 of 48** at 0.70 (6 clips cannot be embedded at all) — the incumbent is better here |
+
+The supported comparative claims are therefore only these:
+
+- **Latency**: p50 148 vs 172 ms and p95 376 vs 522 ms standalone on the Pi (≈ 14 % and 28 % faster).
+  In-daemon latency for either model is unmeasured (§9); the 540 ms live figure includes contention.
+- **Memory**: 250 vs 732 MB peak process RSS standalone; CAM++ needs no torch.
+- **Coverage**: CAM++ embeds all 1,367 clips; the incumbent cannot embed 6 (they trim to nothing).
+- **Instrument readiness**: the same harness, controls and reports ran for both; nothing else about
+  accuracy is established until labelled shadow-week rows exist.
+
+For reference, the incumbent at the cosine lines in use today, **on its own pseudo-labels** (so read as
+shape, not as live rates; the live profile is a 12-clip centroid, not this leave-sessions-out one):
 
 | resemblyzer cosine | owner rejected | cluster-B accepted | TV accepted | non-speech accepted |
 |---|---|---|---|---|
 | 0.70 (server `.env`) | 4.5 % | **10.3 %** | 2 / 5 | 3 / 48 |
 | 0.75 (Pi `.env.voice`) | 15.5 % | 4.3 % | 2 / 5 | 1 / 48 |
 | 0.82 (code default) | 65.5 % | 0 % | 1 / 5 | 0 / 48 |
-
-(The live profile is a 12-clip centroid, not this leave-sessions-out one, so read these as the shape,
-not the exact live rates.) On every axis we can measure CAM++ is at least as good, on RAM it is 3×
-lighter, and the ≈ 0.50 vs 0.11 separation gap is not subtle — even allowing for the label problem
-the direction is not in doubt; the magnitude is.
 
 CAM++ at fixed cosine lines on its own pseudo-labels (FRR / cluster-B FAR / TV / non-speech accepted):
 0.50 → 6.1 % / 5.5 % / 2 / 34; 0.60 → 8.0 % / 1.1 % / 2 / 34; 0.65 → 11.5 % / 0 % / 2 / 34;
@@ -234,7 +263,7 @@ design in the record, from this run:
 2. **Log the raw cosine, no accept line**, for both embedders on the same turns (the existing
    `(boot, seq)` rows), and have the operator fill `truth` on a sample that deliberately includes TV
    and a second speaker.
-3. **Re-judge the five TV clips** (or at least the two loud ones) by ear before they are used as
+3. **Re-judge the five TV clips** (at least the two that score inside the owner's range) by ear before they are used as
    "impostors" again; if they hold the owner's voice, relabel them and the zero-TV-accept target
    becomes meaningful on the remaining three — and needs fresh TV recordings (§7.3).
 4. **Measure in the daemon**: process RSS delta (budget ≤ 150 MB) and the `Recorded → Speaker ID` gap
@@ -268,8 +297,14 @@ the only labels that are independent, and the p95 latency is 1.9× the bar.
   reports, the two model files with their licence/hash sidecars. **Nothing was copied off the Pi or
   committed.** Per the retention policy, delete the corpus copy and embeddings when the shadow week
   closes (or sooner on request): `rm -rf ~/.zoe-voice/speaker-shadow/{corpus,baseline-resemblyzer,embeddings.npz,manifest.json}`.
-- Reproduce on the Pi, from `~/.zoe-voice/speaker-shadow/code/`: `speaker_shadow_embed.py` (CAM++),
-  `speaker_shadow_embed.py --model resemblyzer_baseline --out-dir ../baseline-resemblyzer`, then
+- Reproduce on the Pi, from `~/.zoe-voice/speaker-shadow/code/` (the tools refuse to run without
+  `--i-am-on-the-pi`, refuse an output dir inside any git checkout, never chmod a pre-existing directory,
+  write via tmp + `os.replace`, and refuse to overwrite a complete run without `--force`):
+  `speaker_shadow_embed.py --i-am-on-the-pi` (CAM++),
+  `speaker_shadow_embed.py --i-am-on-the-pi --model resemblyzer_baseline --out-dir ../baseline-resemblyzer`, then
   `speaker_shadow_eval.py --compare-with ../baseline-resemblyzer [--fixed-thresholds 0.60,0.70]` and
   `speaker_shadow_eval.py --shadow-dir ../baseline-resemblyzer`. Env knobs (`SPEAKER_SHADOW_*`) are
-  script-only; no live flag reads them.
+  script-only; no live flag reads them. The eval refuses a manifest with `complete != true` (a `--limit`
+  smoke run, an abort or a deadline) unless `--allow-incomplete`. The copies of the scripts in the Pi's
+  `code/` dir are the pre-review version that produced these numbers; re-copy before the next run. A
+  re-run of the review-hardened eval (`--dry-run`, read-only) reproduced every number above.

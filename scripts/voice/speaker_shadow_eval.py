@@ -54,6 +54,7 @@ TARGETS = {
     "tv_accepts": 0,           # zero accepts of the TV clips
     "latency_p50_ms": 200.0,   # per turn, on the Pi
 }
+MIN_CELL = 5  # no statistic is emitted from fewer clips than this (a 1-4 clip "mean" is a per-clip row)
 BUCKETS: List[Tuple[str, float, float]] = [("<2s", 0.0, 2.0), ("2-5s", 2.0, 5.0), (">5s", 5.0, 1e9)]
 
 
@@ -338,25 +339,27 @@ def evaluate(
         s_tv = impostor_scores(emb[tv_idx], emb_a, fold, folds)
         s_b = impostor_scores(emb[b_idx], emb_a, fold, folds)
         s_pool = np.concatenate([s_tv, s_b])
+        tv_ok = s_tv.size >= MIN_CELL  # TV-only statistics need a cell of >= MIN_CELL clips
+        ev["tv_cell_suppressed"] = bool(0 < s_tv.size < MIN_CELL)
         ev["n"] = {"owner": int(s_own.size), "tv": int(s_tv.size), "B": int(s_b.size), "pool": int(s_pool.size)}
-        ev["score_quantiles"] = {"owner": quantiles(s_own), "tv": quantiles(s_tv), "B": quantiles(s_b)}
-        ev["score_max"] = {"tv": round(float(s_tv.max()), 4) if s_tv.size else None,
+        ev["score_quantiles"] = {"owner": quantiles(s_own), "tv": quantiles(s_tv) if tv_ok else None, "B": quantiles(s_b)}
+        ev["score_max"] = {"tv": round(float(s_tv.max()), 4) if tv_ok else None,
                            "B": round(float(s_b.max()), 4) if s_b.size else None}
         med_o = float(np.median(s_own))
-        runner = max([float(np.median(v)) for v in (s_tv, s_b) if v.size] or [float("nan")])
+        runner = max([float(np.median(v)) for v in ((s_tv if tv_ok else np.zeros(0)), s_b) if v.size] or [float("nan")])
         ev["separation"] = {
             "owner_median": round(med_o, 4),
             "runner_up_median": round(runner, 4),
             "owner_median_minus_runner_up_median": round(med_o - runner, 4),
             "owner_median_minus_pool_p95": round(med_o - float(np.percentile(s_pool, 95)), 4) if s_pool.size else None,
-            "owner_median_minus_tv_max": round(med_o - float(s_tv.max()), 4) if s_tv.size else None,
+            "owner_median_minus_tv_max": round(med_o - float(s_tv.max()), 4) if tv_ok else None,
         }
         e_pool, t_eer = eer(s_own, s_pool)
         ev["eer_pool"] = round(e_pool, 4)
         ev["eer_pool_ci95"] = bootstrap_ci(lambda a, b: eer(a, b)[0], s_own, s_pool, boot, rng)
         ev["eer_threshold"] = round(t_eer, 4)
         e_tv, _ = eer(s_own, s_tv)
-        ev["eer_tv_only"] = round(e_tv, 4)
+        ev["eer_tv_only"] = round(e_tv, 4) if tv_ok else None
         # operating points
         t_far1 = threshold_for_far(s_own, s_pool, 0.01)
         far1, frr1 = far_frr(s_own, s_pool, t_far1)
@@ -367,29 +370,34 @@ def evaluate(
         t_frr10 = threshold_for_frr(s_own, 0.10)
         far10, frr10 = far_frr(s_own, s_pool, t_frr10)
         ev["at_frr10pct"] = {"threshold": round(t_frr10, 4), "frr": round(frr10, 4), "far_pool": round(far10, 4),
-                             "far_tv": round(float(np.mean(s_tv >= t_frr10)), 4) if s_tv.size else None,
+                             "far_tv": round(float(np.mean(s_tv >= t_frr10)), 4) if tv_ok else None,
                              "tv_accepted": int(np.sum(s_tv >= t_frr10)), "tv_total": int(s_tv.size),
                              "B_accepted": int(np.sum(s_b >= t_frr10)), "B_total": int(s_b.size)}
         # Operating point for the secondary analyses = the pool-FAR<=1 % threshold. The zero-TV-accept
         # point is reported beside it: when the two differ a lot, the labelled TV clips are not
         # separable from the owner at a usable FRR (the gate cannot meet its zero-TV bar by cosine alone).
         t_op = t_far1
-        t_zero_tv = (float(s_tv.max()) + 1e-6) if s_tv.size else t_far1
+        t_zero_tv = (float(s_tv.max()) + 1e-6) if tv_ok else t_far1
         far_z, frr_z = far_frr(s_own, s_pool, t_zero_tv)
-        ev["zero_tv_accept_point"] = {"threshold": round(t_zero_tv, 4), "frr": round(frr_z, 4), "far_pool": round(far_z, 4)}
+        ev["zero_tv_accept_point"] = {"threshold": round(t_zero_tv, 4), "frr": round(frr_z, 4), "far_pool": round(far_z, 4),
+                                      "tv_enforced": bool(tv_ok)}
         ev["operating_threshold"] = round(t_op, 4)
-        if s_tv.size:
+        if tv_ok:
             acc = s_tv >= t_op
             tvi = tv_idx
+            iu = np.triu_indices(s_tv.size, 1)
+
+            def _pearson(x, y):
+                return round(float(np.corrcoef(x, y)[0, 1]), 3) if np.std(x) > 0 and np.std(y) > 0 else None
+
+            # Only statistics over ALL the TV clips (n >= MIN_CELL): no per-clip list, no sub-group mean.
             ev["tv_diagnostics"] = {
-                "scores_sorted": [round(float(v), 4) for v in np.sort(s_tv)],
-                "percentile_within_owner_scores": [round(float(np.mean(s_own < v)), 4) for v in np.sort(s_tv)],
+                "n": int(s_tv.size),
                 "accepted_at_operating_threshold": int(acc.sum()),
-                "mean_pairwise_cosine_among_tv": round(float((emb[tvi] @ emb[tvi].T)[np.triu_indices(s_tv.size, 1)].mean()), 4) if s_tv.size > 1 else None,
-                "duration_s_mean": {"accepted": round(float(dur[tvi][acc].mean()), 2) if acc.any() else None,
-                                    "rejected": round(float(dur[tvi][~acc].mean()), 2) if (~acc).any() else None},
-                "rms_dbfs_mean": {"accepted": round(float(rms[tvi][acc].mean()), 2) if acc.any() else None,
-                                  "rejected": round(float(rms[tvi][~acc].mean()), 2) if (~acc).any() else None},
+                "n_scoring_above_owner_median": int(np.sum(s_tv > med_o)),
+                "mean_pairwise_cosine_among_tv": round(float((emb[tvi] @ emb[tvi].T)[iu].mean()), 4),
+                "pearson_score_vs_rms_dbfs": _pearson(s_tv, rms[tvi]),
+                "pearson_score_vs_duration": _pearson(s_tv, dur[tvi]),
                 "max_cosine_to_any_owner_clip": quantiles((emb[tvi] @ emb[a_idx].T).max(axis=1), (50, 95)),
             }
         # length buckets (clip duration; net-speech length is not in the manifest)
@@ -400,7 +408,7 @@ def evaluate(
             o, p = s_own[own_b == name], s_pool[pool_all_b == name]
             e, _ = eer(o, p) if (o.size >= 10 and p.size >= 5) else (float("nan"), 0)
             bk[name] = {"owner_n": int(o.size), "pool_n": int(p.size), "eer": None if np.isnan(e) else round(e, 4),
-                        "frr_at_op": round(float(np.mean(o < t_op)), 4) if o.size else None}
+                        "frr_at_op": round(float(np.mean(o < t_op)), 4) if o.size >= MIN_CELL else None}
         ev["by_duration"] = bk
         # controls
         # Controls. (1) label shuffle: permute owner/impostor labels over the pooled scores -> ~50 %.
@@ -523,7 +531,7 @@ def _eval_labelled(emb, own_idx, imp_idx, tv_idx, mtimes, folds: int, gap_s: flo
         "far_pool_at_frr10": round(float(far_frr(own, pool, t_frr10)[0]), 4),
         "tv_accepted_at_far1": int(np.sum(s_tv >= t_far1)),
         "tv_accepted_at_frr10": int(np.sum(s_tv >= t_frr10)),
-        "tv_percentile_within_owner": [round(float(np.mean(own < v)), 4) for v in np.sort(s_tv)],
+        "tv_n_above_owner_median": int(np.sum(s_tv > np.median(own))) if s_tv.size >= MIN_CELL else None,
         "tv_accepted_mask": (s_tv >= t_far1),
     }
 
@@ -645,15 +653,45 @@ def latency_summary(clips: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
 
 # --------------------------------------------------------------------------- leak guard + output
 
-def assert_aggregate_only(report: Dict[str, Any], manifest: Dict[str, Any]) -> None:
-    """Refuse a report that carries any clip id, clip-array or per-clip table."""
-    blob = json.dumps(report)
-    for c in manifest.get("clips", []):
-        if c["id"] in blob:
-            raise AssertionError("report contains a clip id; refusing to write")
-    for k in ("clips", "emb", "embeddings"):
-        if k in report:
-            raise AssertionError(f"report has a {k!r} key; refusing to write")
+_LIST_OK_KEYS = {"fold_sizes"}          # per-fold clip COUNTS, not per-clip values
+_BAD_KEYS = {"clips", "emb", "embeddings", "ids", "id", "emb_row_of_clip", "scores", "scores_sorted"}
+_N_KEYS = ("n", "n_owner", "n_impostor", "owner_n", "pool_n")
+
+
+def assert_aggregate_only(report: Any, manifest: Dict[str, Any]) -> None:
+    """Refuse a report that carries a clip id, a per-clip table or list, or a statistic over < MIN_CELL clips.
+
+    Recursive over the whole structure. Numeric lists are allowed only as 2-element ``*ci95`` intervals
+    and the per-fold count list; any other numeric list (e.g. sorted per-clip scores) is refused. A dict
+    that states its own sample size n with 0 < n < MIN_CELL may not carry any other number.
+    """
+    ids = {c["id"] for c in manifest.get("clips", [])}
+
+    def walk(node: Any, key: str, path: str) -> None:
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if str(k) in _BAD_KEYS:
+                    raise AssertionError(f"report has a {k!r} key at {path or '/'}; refusing to write")
+                if str(k) in ids:
+                    raise AssertionError("report contains a clip id; refusing to write")
+                walk(v, str(k), f"{path}/{k}")
+            for nk in _N_KEYS:
+                n = node.get(nk)
+                if isinstance(n, int) and not isinstance(n, bool) and 0 < n < MIN_CELL:
+                    others = [v for k, v in node.items() if k not in _N_KEYS and isinstance(v, (int, float)) and not isinstance(v, bool)]
+                    if others:
+                        raise AssertionError(f"cell with n={n} < {MIN_CELL} carries statistics at {path or '/'}; refusing to write")
+        elif isinstance(node, (list, tuple)):
+            nums = [v for v in node if isinstance(v, (int, float)) and not isinstance(v, bool)]
+            if nums and not (key in _LIST_OK_KEYS or (key.endswith("ci95") and len(node) == 2)):
+                raise AssertionError(f"report has a numeric list at {path or '/'}; refusing to write (per-clip values)")
+            for i, v in enumerate(node):
+                walk(v, key, f"{path}[{i}]")
+        elif isinstance(node, str):
+            if any(i in node for i in ids):
+                raise AssertionError("report contains a clip id; refusing to write")
+
+    walk(report, "", "")
 
 
 def render_markdown(rep: Dict[str, Any], run: Dict[str, Any]) -> str:
@@ -673,8 +711,16 @@ def render_markdown(rep: Dict[str, Any], run: Dict[str, Any]) -> str:
     return "\n".join(L)
 
 
-def load_inputs(shadow: Path):
+class IncompleteRun(RuntimeError):
+    """The embedding run is not a complete pass over its corpus (smoke run, abort, deadline)."""
+
+
+def load_inputs(shadow: Path, allow_incomplete: bool = False):
     manifest = json.loads((shadow / "manifest.json").read_text())
+    if manifest.get("complete") is not True and not allow_incomplete:
+        raise IncompleteRun(
+            f"manifest says complete={manifest.get('complete')!r} (limited_to={manifest.get('limited_to')}, "
+            f"abort_reason={manifest.get('abort_reason')!r}); refusing to score a partial corpus")
     emb_all = np.load(shadow / "embeddings.npz")["emb"]
     rows = manifest["clips"]
     row_of = manifest["emb_row_of_clip"]
@@ -688,12 +734,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--shadow-dir", default=os.environ.get("SPEAKER_SHADOW_DIR", str(Path.home() / ".zoe-voice" / "speaker-shadow")))
     ap.add_argument("--out-prefix", default="report", help="writes <prefix>.json and <prefix>.md into the shadow dir")
+    ap.add_argument("--allow-incomplete", action="store_true",
+                    help="score a partial run anyway (recorded in the report as run.complete=false)")
+    ap.add_argument("--dry-run", action="store_true", help="print the report JSON to stdout; write no files")
     ap.add_argument("--fixed-thresholds", default="", help="comma list, e.g. 0.70,0.75: report FRR/FAR at these")
     ap.add_argument("--compare-with", default=None, metavar="DIR",
                     help="another embed output dir (same corpus, different model): also write compare.json")
     args = ap.parse_args(list(argv) if argv is not None else None)
     shadow = Path(args.shadow_dir).expanduser()
-    manifest, kept, emb = load_inputs(shadow)
+    try:
+        manifest, kept, emb = load_inputs(shadow, args.allow_incomplete)
+    except IncompleteRun as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 2
     rep = evaluate(
         emb,
         [c["group"] for c in kept], [c["duration_s"] for c in kept], [c["mtime"] for c in kept], [c["rms_dbfs"] for c in kept],
@@ -708,14 +761,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                                         "daemon_restarts_seen", "complete", "abort_reason", "onnxruntime")}
     rep["run"] = run
     assert_aggregate_only(rep, manifest)
-    old = os.umask(0o077)
-    try:
-        (shadow / f"{args.out_prefix}.json").write_text(json.dumps(rep, indent=1) + "\n")
-        (shadow / f"{args.out_prefix}.md").write_text(render_markdown(rep, run))
-    finally:
-        os.umask(old)
+    if args.dry_run:
+        print(json.dumps(rep, indent=1))
+    else:
+        old = os.umask(0o077)
+        try:
+            (shadow / f"{args.out_prefix}.json").write_text(json.dumps(rep, indent=1) + "\n")
+            (shadow / f"{args.out_prefix}.md").write_text(render_markdown(rep, run))
+        finally:
+            os.umask(old)
     if args.compare_with:
-        other_man, other_kept, other_emb = load_inputs(Path(args.compare_with).expanduser())
+        other_man, other_kept, other_emb = load_inputs(Path(args.compare_with).expanduser(), args.allow_incomplete)
         mine = {c["id"]: i for i, c in enumerate(kept)}
         pairs = [(mine[c["id"]], j) for j, c in enumerate(other_kept) if c["id"] in mine]
         pairs.sort()
@@ -730,11 +786,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                              "space2": other_man.get("model", {}).get("model_key"),
                              "clips_in_both": len(pairs)}
         assert_aggregate_only(cmp_rep, manifest)
-        old = os.umask(0o077)
-        try:
-            (shadow / "compare.json").write_text(json.dumps(cmp_rep, indent=1) + "\n")
-        finally:
-            os.umask(old)
+        if not args.dry_run:
+            old = os.umask(0o077)
+            try:
+                (shadow / "compare.json").write_text(json.dumps(cmp_rep, indent=1) + "\n")
+            finally:
+                os.umask(old)
         print(json.dumps(cmp_rep, indent=1))
     print(json.dumps({"targets": rep["targets_result"], "control_ok": rep["eval"].get("control_ok")}, indent=1))
     return 0

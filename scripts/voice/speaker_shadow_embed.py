@@ -42,7 +42,13 @@ Environment (scripts only — no live flag reads any of these)
   SPEAKER_SHADOW_HEALTH_URL     daemon health URL (default http://127.0.0.1:7777/health)
   SPEAKER_SHADOW_HEALTH_EVERY_S health poll period (default 60; 0 disables)
 
-Exit codes: 0 ok, 2 bad usage/model refusal, 3 daemon-health abort, 4 deadline reached.
+Safety rails: refuses to run without ``--i-am-on-the-pi``; refuses an output dir inside any
+repository checkout (or the repo this script lives in); never chmods a directory it did not create (an existing
+dir must already deny group/other); writes ``embeddings.npz``/``manifest.json`` via tmp + ``os.replace``;
+refuses to overwrite a COMPLETE run without ``--force`` (a ``--limit`` smoke run, an abort or a
+deadline reports ``complete: false`` against the whole-corpus count and cannot replace one).
+
+Exit codes: 0 ok, 2 bad usage/model/output-dir refusal, 3 daemon-health abort, 4 deadline reached.
 """
 from __future__ import annotations
 
@@ -137,9 +143,46 @@ def _chmod_private(path: Path, is_dir: bool) -> None:
     os.chmod(path, 0o700 if is_dir else 0o600)
 
 
+class UnsafeOutputDir(RuntimeError):
+    """The biometric output directory is somewhere it must never be."""
+
+
+def _git_root_of(path: Path) -> Optional[Path]:
+    """Nearest ancestor (or self) holding a ``.git`` entry, else None."""
+    p = path.resolve()
+    for cand in (p, *p.parents):
+        if (cand / ".git").exists():
+            return cand
+    return None
+
+
+def assert_safe_out_dir(path: Path) -> Path:
+    """Refuse any directory inside a git checkout (biometrics must never be committable) or
+    inside the checkout this script itself lives in. Returns the resolved path."""
+    p = path.expanduser().resolve()
+    if _git_root_of(p) is not None:
+        raise UnsafeOutputDir("output dir is inside a git working tree; refusing (biometrics stay on the Pi, outside any repo)")
+    here = _git_root_of(Path(__file__).resolve().parent)
+    if here is not None and (p == here or here in p.parents):
+        raise UnsafeOutputDir("output dir is inside the repository this script runs from; refusing")
+    return p
+
+
 def ensure_private_dir(path: Path) -> Path:
+    """Create *path* mode 700 if it does not exist. A pre-existing directory is NEVER chmod-ed
+    (it may be the cwd or a shared dir): it must already deny group/other, else it is refused."""
+    path = assert_safe_out_dir(path)
+    if path.exists():
+        if not path.is_dir():
+            raise UnsafeOutputDir(f"{path.name} exists and is not a directory")
+        if os.stat(path).st_mode & 0o077:
+            raise UnsafeOutputDir("existing output dir is accessible to group/other; chmod 700 it yourself or pick another")
+        return path
+    missing = [path, *[q for q in path.parents if not q.exists()]]
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
-    _chmod_private(path, True)
+    for q in missing:  # only directories this call created
+        if q.exists():
+            _chmod_private(q, True)
     return path
 
 
@@ -497,6 +540,23 @@ def _deadline_epoch(stop_at: Optional[str], now: Optional[float] = None) -> Opti
     return target.timestamp()
 
 
+class OutputExists(RuntimeError):
+    """A complete run already lives in the output dir and --force was not given."""
+
+
+def refuse_overwrite_of_complete_run(out_dir: Path, force: bool) -> None:
+    """A smoke run, a re-run or an aborted run must not destroy a complete corpus embedding."""
+    man = out_dir / "manifest.json"
+    if force or not man.exists():
+        return
+    try:
+        complete = bool(json.loads(man.read_text()).get("complete"))
+    except (OSError, ValueError):
+        complete = True  # unreadable existing manifest: assume it matters
+    if complete:
+        raise OutputExists("a complete run already exists in the output dir; use --out-dir elsewhere or --force")
+
+
 def run_embed(
     corpus: Path,
     out_dir: Path,
@@ -509,6 +569,7 @@ def run_embed(
     guard: Optional[DaemonGuard] = None,
     deadline: Optional[float] = None,
     limit: Optional[int] = None,
+    force: bool = False,
     now: Callable[[], float] = time.time,
 ) -> Tuple[int, Dict[str, Any]]:
     """Embed the corpus; write embeddings.npz + manifest.json. Returns (exit_code, manifest).
@@ -517,12 +578,13 @@ def run_embed(
     ``.metadata``/``.ort_version`` (the latter two optional). Tests pass a fake.
     """
     rate = int(embedder.spec["rate"])
-    ensure_private_dir(out_dir)
+    out_dir = ensure_private_dir(out_dir)
+    refuse_overwrite_of_complete_run(out_dir, force)
     old_umask = os.umask(0o077)
     try:
-        files = list_corpus(corpus)
-        if limit:
-            files = files[:limit]
+        all_files = list_corpus(corpus)
+        n_total = len(all_files)
+        files = all_files[:limit] if limit else all_files
         t_wall0 = time.perf_counter()
         rows: List[Dict[str, Any]] = []
         vecs: List[np.ndarray] = []
@@ -585,10 +647,13 @@ def run_embed(
             "min_s": min_s,
             "max_s": max_s,
             "warmup": warmup,
+            "n_files_total": n_total,
+            "limited_to": limit or None,
             "n_files_seen": len(files),
             "n_listed": len(rows),
             "counts": counts,
-            "complete": exit_code == 0 and len(rows) == len(files),
+            # complete = the WHOLE corpus, not the --limit slice
+            "complete": exit_code == 0 and len(rows) == n_total and not limit,
             "abort_reason": abort_reason,
             "wall_s": round(wall_s, 2),
             "peak_rss_mb": round(peak_rss_mb, 1),
@@ -597,10 +662,16 @@ def run_embed(
             "clips": rows,
             "emb_row_of_clip": {rows[j]["id"]: k for k, j in enumerate(kept_rows)},
         }
-        np.savez(out_dir / "embeddings.npz", emb=emb)
-        (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=1) + "\n")
-        for name in ("embeddings.npz", "manifest.json"):
-            _chmod_private(out_dir / name, False)
+        # tmp + os.replace for both files: an aborted/interrupted write can never leave a torn or
+        # truncated pair where a complete run used to be (manifest replaced last).
+        tmp_npz, tmp_man = out_dir / ".embeddings.npz.tmp", out_dir / ".manifest.json.tmp"
+        with open(tmp_npz, "wb") as fh:
+            np.savez(fh, emb=emb)
+        tmp_man.write_text(json.dumps(manifest, indent=1) + "\n")
+        for tmp in (tmp_npz, tmp_man):
+            _chmod_private(tmp, False)
+        os.replace(tmp_npz, out_dir / "embeddings.npz")
+        os.replace(tmp_man, out_dir / "manifest.json")
         return exit_code, manifest
     finally:
         os.umask(old_umask)
@@ -618,9 +689,19 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     ap.add_argument("--limit", type=int, default=None, help="embed only the first N clips (smoke test)")
     ap.add_argument("--stop-at", default=None, metavar="HH:MM", help="end gracefully at this local wall-clock time")
     ap.add_argument("--out-dir", default=None, help="where embeddings.npz/manifest.json go (default: shadow dir)")
+    ap.add_argument("--force", action="store_true", help="overwrite a complete run in the output dir")
+    ap.add_argument("--i-am-on-the-pi", action="store_true",
+                    help="required: this tool downloads a model and writes voiceprints; it runs on the Pi only")
     args = ap.parse_args(list(argv) if argv is not None else None)
+    if not args.i_am_on_the_pi:
+        print("refusing: pass --i-am-on-the-pi (this tool writes voiceprints; Pi only, never the Jetson or a dev box)", file=sys.stderr)
+        return 2
 
-    shadow = ensure_private_dir(Path(args.shadow_dir).expanduser())
+    try:
+        shadow = ensure_private_dir(Path(args.shadow_dir).expanduser())
+    except UnsafeOutputDir as exc:
+        print(f"unsafe shadow dir: {exc}", file=sys.stderr)
+        return 2
     corpus = Path(args.corpus).expanduser() if args.corpus else shadow / "corpus"
     try:
         model_path, sidecar = resolve_model(
@@ -637,6 +718,12 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         print("corpus dir missing", file=sys.stderr)
         return 2
     spec = MODELS[args.model]
+    out_dir = Path(args.out_dir).expanduser() if args.out_dir else shadow
+    try:  # fail BEFORE the model load / health poll if a complete run would be clobbered
+        refuse_overwrite_of_complete_run(assert_safe_out_dir(out_dir), args.force)
+    except (UnsafeOutputDir, OutputExists) as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 2
     embedder = make_embedder(model_path, spec, _threads())
     guard = DaemonGuard(
         os.environ.get("SPEAKER_SHADOW_HEALTH_URL", "http://127.0.0.1:7777/health"),
@@ -646,18 +733,23 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     if first:
         print(f"refusing to start: {first}", file=sys.stderr)
         return 3
-    code, man = run_embed(
-        corpus,
-        Path(args.out_dir).expanduser() if args.out_dir else shadow,
-        embedder,
-        sidecar=sidecar,
-        min_s=float(os.environ.get("SPEAKER_SHADOW_MIN_S", "0.5")),
-        max_s=float(os.environ.get("SPEAKER_SHADOW_MAX_S", "30")),
-        warmup=int(os.environ.get("SPEAKER_SHADOW_WARMUP", "3")),
-        guard=guard,
-        deadline=_deadline_epoch(args.stop_at),
-        limit=args.limit,
-    )
+    try:
+        code, man = run_embed(
+            corpus,
+            out_dir,
+            embedder,
+            sidecar=sidecar,
+            min_s=float(os.environ.get("SPEAKER_SHADOW_MIN_S", "0.5")),
+            max_s=float(os.environ.get("SPEAKER_SHADOW_MAX_S", "30")),
+            warmup=int(os.environ.get("SPEAKER_SHADOW_WARMUP", "3")),
+            guard=guard,
+            deadline=_deadline_epoch(args.stop_at),
+            limit=args.limit,
+            force=args.force,
+        )
+    except (UnsafeOutputDir, OutputExists) as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 2
     print(json.dumps({k: man[k] for k in ("counts", "complete", "abort_reason", "wall_s", "peak_rss_mb",
                                            "threads", "daemon_health_checks", "daemon_restarts_seen")}))
     return code

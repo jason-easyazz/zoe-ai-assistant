@@ -510,3 +510,198 @@ def test_nonspeech_attractor_and_fixed_thresholds_are_reported():
     assert set(fx) == {"0.50", "0.90"} and fx["0.50"]["frr"] <= fx["0.90"]["frr"]
     assert fx["0.50"]["nonspeech_accepted"] >= fx["0.90"]["nonspeech_accepted"]
     assert rep["eval"]["tv_diagnostics"]["accepted_at_operating_threshold"] == 0
+
+
+# ====================================================== review round 1 (Opus substitute review)
+
+
+def _golden_signal():
+    n = np.arange(1600)
+    return (0.3 * np.sin(2 * np.pi * 440 * n / 16000)
+            + 0.1 * np.sin(2 * np.pi * 1230 * n / 16000 + 0.5)
+            + 0.05 * (((n * 7919) % 1000) / 1000.0 - 0.5)).astype(np.float32)
+
+
+# Reference numbers computed ONCE with torchaudio.compliance.kaldi.fbank (dither 0, 80 mels) on the
+# signal above, on the Pi, then committed as plain numbers - not audio, not our own code's output.
+_GOLDEN_BINS = [0, 10, 20, 40, 60, 79]
+_GOLDEN_RAW = {0: [-12.5552, -5.5773, -8.3627, -8.022, -1.3732, -0.6913],
+               4: [-12.6075, -5.6201, -8.1087, -8.1526, -1.3719, -0.6915],
+               7: [-11.6415, -5.5305, -8.0589, -5.8442, -1.5663, -0.6604]}
+_GOLDEN_CMN_FRAME3 = [0.5876, 0.0402, 0.1876, 1.184, -0.0994, 0.016]
+
+
+def test_fbank_front_end_matches_the_torchaudio_golden_vector():
+    f = emb_mod.kaldi_fbank(_golden_signal(), cmn=False)
+    assert f.shape == (8, 80)
+    for fr, want in _GOLDEN_RAW.items():
+        assert f[fr, _GOLDEN_BINS] == pytest.approx(want, abs=3e-3), f"frame {fr}"
+    c = emb_mod.kaldi_fbank(_golden_signal(), cmn=True)
+    assert c[3, _GOLDEN_BINS] == pytest.approx(_GOLDEN_CMN_FRAME3, abs=3e-3)
+    assert float(f.mean()) == pytest.approx(-4.7628, abs=3e-3)
+
+
+def test_fbank_golden_goes_red_when_the_front_end_drifts(monkeypatch):
+    """Instrument check: a wrong pre-emphasis coefficient must break the golden comparison."""
+    src = Path(emb_mod.__file__).read_text().replace("fr - 0.97 * prev", "fr - 0.95 * prev")
+    assert src != Path(emb_mod.__file__).read_text()
+    ns = {"__name__": "mutant", "__file__": emb_mod.__file__}
+    exec(compile(src, "mutant", "exec"), ns)
+    f = ns["kaldi_fbank"](_golden_signal(), cmn=False)
+    assert not np.allclose(f[0, _GOLDEN_BINS], _GOLDEN_RAW[0], atol=3e-3)
+
+
+def test_resample_24k_to_16k_keeps_the_tone_and_removes_the_out_of_band_one():
+    pytest.importorskip("scipy")
+    n = np.arange(12000)
+    in_band = (0.5 * np.sin(2 * np.pi * 1000 * n / 24000)).astype(np.float32)
+    y = emb_mod.resample(in_band, 24000, 16000)
+    assert abs(y.size - 8000) <= 1 and y.dtype == np.float32
+    spec = np.abs(np.fft.rfft(y[:8000] * np.hanning(8000)))
+    assert abs(np.argmax(spec) * 16000 / 8000 - 1000) <= 4  # still 1 kHz at the new rate
+    assert np.max(np.abs(y[200:-200])) == pytest.approx(0.5, rel=0.03)  # gain preserved
+    out_band = (0.5 * np.sin(2 * np.pi * 10000 * n / 24000)).astype(np.float32)  # above the 8 kHz Nyquist
+    z = emb_mod.resample(out_band, 24000, 16000)
+    assert np.max(np.abs(z[200:-200])) < 0.01  # >34 dB down: no aliasing into the speech band
+
+
+def test_run_embed_hands_the_embedder_16k_audio_for_a_24k_clip(tmp_path):
+    pytest.importorskip("scipy")
+    corpus = tmp_path / "corpus"
+    _write_wav(corpus / "a.wav", 1.5, rate=24000)
+    seen = []
+
+    class Rec(FakeEmbedder):
+        def embed(self, wave16):
+            seen.append(wave16.size)
+            return super().embed(wave16)
+
+    code, man = emb_mod.run_embed(corpus, tmp_path / "o", Rec(), sidecar=_sidecar())
+    assert code == 0 and abs(seen[0] - 24000) <= 1  # 1.5 s at 16 kHz, not 36000
+    assert man["clips"][0]["sr_in"] == 24000
+
+
+def test_limit_run_is_not_complete_and_cannot_clobber_a_complete_run(tmp_path):
+    corpus, out = tmp_path / "corpus", tmp_path / "shadow"
+    _corpus(corpus)
+    code, full = emb_mod.run_embed(corpus, out, FakeEmbedder(fail_over_s=3.0), sidecar=_sidecar())
+    assert full["complete"] is True and full["n_files_total"] == 6 and full["limited_to"] is None
+    before = (out / "embeddings.npz").read_bytes(), (out / "manifest.json").read_bytes()
+    # a smoke run into the same dir is refused up front ...
+    with pytest.raises(emb_mod.OutputExists):
+        emb_mod.run_embed(corpus, out, FakeEmbedder(), sidecar=_sidecar(), limit=2)
+    assert before == ((out / "embeddings.npz").read_bytes(), (out / "manifest.json").read_bytes())
+    # ... and elsewhere it reports complete=false against the PRE-limit corpus size
+    code, part = emb_mod.run_embed(corpus, tmp_path / "smoke", FakeEmbedder(), sidecar=_sidecar(), limit=2)
+    assert part["complete"] is False and part["n_files_seen"] == 2 and part["n_files_total"] == 6
+    # --force is the explicit overwrite, and leaves no temp files behind
+    emb_mod.run_embed(corpus, out, FakeEmbedder(), sidecar=_sidecar(), limit=2, force=True)
+    assert json.loads((out / "manifest.json").read_text())["complete"] is False
+    assert sorted(p.name for p in out.iterdir()) == ["embeddings.npz", "manifest.json"]
+
+
+def test_an_aborted_rerun_keeps_the_complete_run_and_an_incomplete_one_may_be_replaced(tmp_path):
+    corpus, out = tmp_path / "corpus", tmp_path / "shadow"
+    _corpus(corpus)
+    emb_mod.run_embed(corpus, out, FakeEmbedder(fail_over_s=3.0), sidecar=_sidecar())
+    snapshot = (out / "manifest.json").read_bytes()
+    with pytest.raises(emb_mod.OutputExists):
+        emb_mod.run_embed(corpus, out, FakeEmbedder(), sidecar=_sidecar(), deadline=1.0, now=lambda: 2.0)
+    assert (out / "manifest.json").read_bytes() == snapshot
+    code, part = emb_mod.run_embed(corpus, tmp_path / "o2", FakeEmbedder(), sidecar=_sidecar(), deadline=1.0, now=lambda: 2.0)
+    assert code == 4 and part["complete"] is False
+    code, again = emb_mod.run_embed(corpus, tmp_path / "o2", FakeEmbedder(), sidecar=_sidecar())  # incomplete -> replaceable
+    assert code == 0 and again["complete"] is True
+
+
+def test_eval_refuses_an_incomplete_manifest_unless_told_otherwise(tmp_path):
+    corpus, shadow = tmp_path / "corpus", tmp_path / "shadow"
+    _corpus(corpus)
+    emb_mod.run_embed(corpus, shadow, FakeEmbedder(fail_over_s=3.0), sidecar=_sidecar(), limit=2)
+    with pytest.raises(ev_mod.IncompleteRun, match="partial"):
+        ev_mod.load_inputs(shadow)
+    assert ev_mod.main(["--shadow-dir", str(shadow)]) == 2
+    man, kept, e = ev_mod.load_inputs(shadow, allow_incomplete=True)
+    assert man["complete"] is False and len(kept) == e.shape[0] == 2
+
+
+# ---- biometric output-dir safety ---------------------------------------------------------
+
+
+def test_out_dir_inside_a_git_checkout_is_refused(tmp_path):
+    repo = tmp_path / "checkout"
+    (repo / ".git").mkdir(parents=True)
+    with pytest.raises(emb_mod.UnsafeOutputDir, match="git"):
+        emb_mod.ensure_private_dir(repo / "speaker-shadow")
+    with pytest.raises(emb_mod.UnsafeOutputDir):
+        emb_mod.ensure_private_dir(repo)
+    assert not (repo / "speaker-shadow").exists()
+    # the checkout this script itself lives in is off limits too
+    with pytest.raises(emb_mod.UnsafeOutputDir):
+        emb_mod.ensure_private_dir(REPO / "scripts" / "voice" / "out")
+
+
+def test_existing_dirs_are_never_chmod_ed_and_loose_ones_are_refused(tmp_path):
+    loose = tmp_path / "loose"
+    loose.mkdir()
+    loose.chmod(0o755)
+    with pytest.raises(emb_mod.UnsafeOutputDir, match="group/other"):
+        emb_mod.ensure_private_dir(loose)
+    assert _mode(loose) == 0o755  # we did not "fix" a directory we did not create
+    tight = tmp_path / "tight"
+    tight.mkdir()
+    tight.chmod(0o700)
+    assert emb_mod.ensure_private_dir(tight) == tight.resolve() and _mode(tight) == 0o700
+    fresh = emb_mod.ensure_private_dir(tmp_path / "a" / "b")
+    assert _mode(fresh) == 0o700 and _mode(fresh.parent) == 0o700  # dirs WE created are private
+
+
+def test_cli_requires_the_pi_acknowledgement_and_a_safe_dir(tmp_path, capsys):
+    assert emb_mod.main(["--shadow-dir", str(tmp_path / "s")]) == 2
+    assert "--i-am-on-the-pi" in capsys.readouterr().err
+    assert not (tmp_path / "s").exists()  # nothing was created before the refusal
+    repo = tmp_path / "checkout"
+    (repo / ".git").mkdir(parents=True)
+    assert emb_mod.main(["--i-am-on-the-pi", "--shadow-dir", str(repo / "s")]) == 2
+    assert "unsafe shadow dir" in capsys.readouterr().err and not (repo / "s").exists()
+
+
+# ---- aggregates-only guard: recursive, minimum cell size ----------------------------------
+
+
+def test_guard_refuses_per_clip_lists_small_cells_and_nested_ids():
+    manifest = {"clips": [{"id": "0123456789abcdef"}]}
+    ok = {"eval": {"fold_sizes": [10, 11, 9, 12, 10], "eer_pool_ci95": [0.04, 0.07], "n": {"owner": 100}}}
+    ev_mod.assert_aggregate_only(ok, manifest)
+    for bad in (
+        {"eval": {"tv_diagnostics": {"scores_sorted": [0.1, 0.2, 0.3]}}},                 # per-clip scores
+        {"eval": {"x": {"percentile_within_owner_scores": [0.1, 0.2, 0.3, 0.4, 0.5]}}},   # 5 floats, any key
+        {"eval": {"pair": [0.1, 0.2]}},                                                   # n=2 list not a ci95
+        {"a": {"b": [{"note": "0123456789abcdef"}]}},                                     # id nested in a list
+        {"a": {"0123456789abcdef": 1}},                                                   # id as a key
+        {"a": {"clips": 3}},
+        {"a": {"duration_s_mean": {"n": 2, "mean": 4.6}}},                                # n=2 "mean"
+    ):
+        with pytest.raises(AssertionError):
+            ev_mod.assert_aggregate_only(bad, manifest)
+    ev_mod.assert_aggregate_only({"a": {"n": 2, "note": None}}, manifest)  # a 2-clip cell with no statistic is fine
+
+
+def test_real_report_has_no_per_clip_lists_and_small_tv_cells_are_suppressed():
+    rng = np.random.default_rng(51)
+    emb, groups, dur, mt, rms = _planted(rng, n_tv=5)
+    rep = ev_mod.evaluate(emb, groups, dur, mt, rms, _latency(), boot=0)
+    ev_mod.assert_aggregate_only(rep, {"clips": []})
+    td = rep["eval"]["tv_diagnostics"]
+    assert td["n"] == 5 and "scores_sorted" not in td and "duration_s_mean" not in td
+    assert -1.0 <= td["pearson_score_vs_rms_dbfs"] <= 1.0
+    # three TV clips: every TV-only statistic is withheld, and the guard still passes
+    emb3, groups3, dur3, mt3, rms3 = _planted(np.random.default_rng(52), n_tv=3)
+    rep3 = ev_mod.evaluate(emb3, groups3, dur3, mt3, rms3, _latency(), boot=0)
+    ev3 = rep3["eval"]
+    assert ev3["tv_cell_suppressed"] is True and "tv_diagnostics" not in ev3
+    assert ev3["score_quantiles"]["tv"] is None and ev3["score_max"]["tv"] is None and ev3["eer_tv_only"] is None
+    assert ev3["separation"]["owner_median_minus_tv_max"] is None and ev3["zero_tv_accept_point"]["tv_enforced"] is False
+    ev_mod.assert_aggregate_only(rep3, {"clips": []})
+    cmp_rep = ev_mod.compare_spaces(emb, _unit(emb @ np.linalg.qr(rng.standard_normal((DIM, DIM)))[0]), groups, mt)
+    ev_mod.assert_aggregate_only(cmp_rep, {"clips": []})
