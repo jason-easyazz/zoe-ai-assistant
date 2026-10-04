@@ -139,13 +139,18 @@ def _raise(kind="open_loop", hint="How did the dentist appointment go?", lifecyc
 
 def test_raise_block_asks_one_gentle_question_from_the_hint():
     block = _raise().block
-    assert block.startswith(sel.RAISE_OPEN + "\n") and block.endswith("\n" + sel.RAISE_CLOSE)
+    r = _raise()
+    head = sel.RAISE_OPEN_GREETING if r.shape == "greeting" else sel.RAISE_OPEN
+    assert block.startswith(head + "\n") and block.endswith("\n" + sel.RAISE_CLOSE)
     assert f"Earlier they told you: {DENTIST}." in block
     assert 'for example: "How did the dentist appointment go?"' in block
     for must in ("ONE short, gentle question", "You are asking THEM",
-                 "never say you have no information about it", "One sentence",
-                 "If it does not fit, leave it out."):
+                 "never say you have no information about it", "One sentence"):
         assert must in block
+    # the escape hatch belongs to CUE raises only (2026-10-04: a greeting raise was
+    # injected + settled and never voiced under "if it fits … leave it out")
+    expect = "do raise it" if r.shape == "greeting" else "If it does not fit, leave it out."
+    assert expect in block
 
 
 def test_raise_block_hint_shapes():
@@ -512,3 +517,24 @@ async def test_extractor_prompt_and_resolved_recently_dedupe(monkeypatch, on):
     assert (memory_digest._OPEN_LOOPS_HORIZON in prompt) is on
     assert ("1 for a worry, a health concern" in prompt) is on
     assert (result["skipped_dup"], len(inserts)) == ((1, 0) if on else (0, 1))
+
+
+def test_greeting_raise_is_brought_up_and_cue_raise_keeps_its_escape_hatch():
+    # Confirmation day-sim 2026-10-04: a greeting raise was injected and settled but the
+    # reply never voiced it under the cue wording. Greeting = do raise it; cue = if it fits.
+    g = sel.ask_phrasing("How did the dentist go?", shape="greeting")
+    c = sel.ask_phrasing("How did the dentist go?", shape="cue")
+    assert g.startswith("Bring this up") and "do raise it" in g and "leave it out" not in g
+    assert c.startswith("If it fits") and "leave it out" in c
+    for text in (g, c):
+        assert "never say you have no information" in text and "ONE short, gentle question" in text
+    assert sel.ask_phrasing("How did the dentist go?") == c  # default shape is cue
+
+
+def test_raise_body_passes_its_shape_to_the_phrasing():
+    r = sel.Raise(user_id="u", session_id="s", candidate_id="c", kind="open_loop", shape="greeting",
+                  text="the dentist on Friday", hint="How did the dentist go?", token="t", lifecycle=True)
+    assert "Bring this up" in r.body and r.block.startswith(sel.RAISE_OPEN_GREETING)
+    r2 = sel.Raise(user_id="u", session_id="s", candidate_id="c", kind="open_loop", shape="cue",
+                   text="the dentist on Friday", hint="How did the dentist go?", token="t", lifecycle=True)
+    assert "If it fits" in r2.body and r2.block.startswith(sel.RAISE_OPEN + "\n")
