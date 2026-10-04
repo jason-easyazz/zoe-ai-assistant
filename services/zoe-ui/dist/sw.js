@@ -27,7 +27,7 @@ importScripts('/workbox/workbox-sw.js');
 //  same-origin, so the generic script/style routes below already cache them on
 //  first use, and precaching ~2 MB of libraries would re-download the lot on
 //  every future SW_VERSION bump.)
-const SW_VERSION = '4.82.0'; // chat.html (precached): retired OpenClaw credential UIs removed — the ChatGPT device-code card and the Telegram bot-token wizard (auth audit 2026-09-27)
+const SW_VERSION = '4.83.0'; // index.html + chat.html + js/push-notifications.js (precached): desktop auth gate, one push socket, push subscribe repaired, guest chat pool no longer listed (UI deep review wave 3, 2026-10-04)
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded

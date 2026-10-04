@@ -507,35 +507,16 @@
     window.openNotifications = open;
     window.closeNotifications = close;
 
-    // ── Real-time push via /ws/push ─────────────────────────────────────
-    let _ws = null;
-    let _wsRetryMs = 2000;
+    // ── Real-time push via the page's ONE /ws/push socket (js/auth.js zoePush) ──
+    // This file used to open its own socket with no session_id, which the server
+    // refuses (403) — reconnecting every few seconds on every desktop page.
     function connectPush() {
-        try {
-            const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const url = `${proto}//${location.host}/ws/push?channel=all`;
-            _ws = new WebSocket(url);
-            _ws.addEventListener('open', function() {
-                _wsRetryMs = 2000;
-            });
-            _ws.addEventListener('message', function(ev) {
-                if (!ev || !ev.data) return;
-                let msg;
-                try { msg = JSON.parse(ev.data); } catch (_) { return; }
-                if (!msg || !msg.type) return;
-                if (msg.type === 'notification_created' || msg.type === 'notifications_changed') {
-                    loadNotifications();
-                }
-            });
-            _ws.addEventListener('close', function() {
-                _ws = null;
-                setTimeout(connectPush, _wsRetryMs);
-                _wsRetryMs = Math.min(_wsRetryMs * 2, 30000);
-            });
-            _ws.addEventListener('error', function() { try { _ws && _ws.close(); } catch (_) {} });
-        } catch (e) {
-            setTimeout(connectPush, _wsRetryMs);
-        }
+        if (!window.zoePush || typeof window.zoePush.subscribe !== 'function') return;
+        window.zoePush.subscribe(function (msg) {
+            if (msg.type === 'notification_created' || msg.type === 'notifications_changed') {
+                loadNotifications();
+            }
+        });
     }
 
     document.addEventListener('DOMContentLoaded', function() {
