@@ -236,3 +236,45 @@ export async function askZoeAs(text: string, sessionId: string, userId: string):
   const data = (await res.json()) as { response?: string; error?: string };
   return data.response ?? data.error ?? "Sorry, I didn't get a reply.";
 }
+
+// ─── Voice notes (flag-dark; zoe-data `telegram_media` router, ZOE_TELEGRAM_MEDIA) ──
+// Two more internal contracts, same trust path as the four above. Neither is
+// /api/voice/* — those broadcast to every panel and capture into the panel
+// corpus; these do neither (see services/zoe-data/routers/telegram_media.py).
+
+/**
+ * OGG/Opus bytes → transcript via zoe-data's Moonshine (decode happens there).
+ * '' = no speech. Throws on transport / structured errors so the caller can
+ * answer generically; the error text never carries audio or a URL.
+ */
+export async function transcribeTelegramAudio(audio: Uint8Array): Promise<string> {
+  const headers = internalHeaders();
+  headers['Content-Type'] = 'audio/ogg';
+  const res = await fetch(`${DATA_URL}/api/system/telegram/transcribe`, {
+    method: 'POST',
+    headers,
+    body: audio,
+  });
+  const data = (await res.json().catch(() => ({}))) as { ok?: boolean; text?: string; error?: string };
+  if (!res.ok || !data.ok) throw new Error(`telegram transcribe ${res.status} ${data.error ?? ''}`.trim());
+  return data.text ?? '';
+}
+
+/**
+ * Reply text → OGG/Opus voice-note bytes via zoe-data's Kokoro + libopus.
+ * null when voice is unavailable (Kokoro down, ffmpeg missing, router off) —
+ * the caller falls back to text, so a voice outage never silences Zoe.
+ */
+export async function synthesizeTelegramVoice(text: string): Promise<Uint8Array | null> {
+  const res = await fetch(`${DATA_URL}/api/system/telegram/synthesize`, {
+    method: 'POST',
+    headers: internalHeaders(),
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) {
+    console.warn(`telegram synthesize ${res.status} — replying in text instead`);
+    return null;
+  }
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  return bytes.byteLength > 0 ? bytes : null;
+}

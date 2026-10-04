@@ -283,11 +283,25 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   `git log --all -- labs/flue-zoe-telegram` if ever needed.
   Since the cutover the AUTO-DEPLOYED pathspec is `labs/flue-zoe-telegram-2x/` —
   breaking work on the LIVE bot needs its own sibling (the same rule that
-  protected the beta). Regression net: `npm test` (40 tests, fully offline — a mock Telegram Bot
+  protected the beta). Regression net: `npm test` (70 tests, fully offline — a mock Telegram Bot
   API and a mock zoe-data on loopback, so no bot token, no real sends, and no
   metered model call) plus `npm run typecheck`, `npm run build`, and
   `./smoke-built.sh` (the only check that exercises the built artifact, because
   `start()` bypasses the `'use agent'` build scan the suite relies on).
+  **Voice notes in and out (flag-dark, 2026-10-04, owner decision Q17 "reply in
+  kind"):** `src/voice.ts` + a `message:voice`/`message:audio` handler registered
+  ONLY under `ZOE_TELEGRAM_VOICE_NOTES=1` (unset = received and ignored, as
+  before). Same linked-member identity gate as text; forwarded media refused
+  before `getFile` unless `ZOE_TELEGRAM_ALLOW_FORWARDED`; duration/size capped
+  before download; the token-bearing download URL is never logged. Audio goes
+  to zoe-data's **new internal `routers/telegram_media.py`** (`ZOE_TELEGRAM_MEDIA`)
+  for ffmpeg decode → Moonshine (capture OFF, NO panel broadcast) and Kokoro →
+  libopus OGG back — never `/api/voice/*`, which broadcasts to every panel. The
+  brain turn is the SAME `/api/chat` call as text. `/talk` (when `ZOE_BASE_URL`
+  is set) is a URL button to the existing `voice.html` push-to-talk page. **The
+  "voice path untouched" contract holds:** nothing under `VOICE_PATH_PATTERNS`
+  changes and the panel/Pi voice path is not involved; the flag-off control is
+  `test/voice_note_off.test.ts`. Record: `docs/knowledge/telegram-voice-notes.md`.
   README is a record, not a contract.
 - `functiongemma-finetune/` — fine-tune FunctionGemma-270M as the complete-call
   fast-tier router (follow-up to the feasibility spike, PR #1283): committed

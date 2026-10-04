@@ -32,7 +32,7 @@
  * PRODUCTION since the 2026-08-09 cutover: flue-zoe-telegram.service runs this
  * build on :3582 and deploy.yml auto-deploys diffs here. Voice path untouched.
  */
-import { GrammyError } from 'grammy';
+import { GrammyError, InlineKeyboard, InputFile } from 'grammy';
 import { Hono } from 'hono';
 import { createAgentRouter } from '@flue/runtime/routing';
 import { ZoeTelegram } from './agents/zoe.ts';
@@ -43,9 +43,19 @@ import {
   registerBotUsername,
   resolveTelegramUser,
   sessionFor,
+  synthesizeTelegramVoice,
+  transcribeTelegramAudio,
 } from './brain.ts';
 import { handleIncoming, handleNew, handleStart } from './handler.ts';
-import { bot } from './telegram.ts';
+import { bot, downloadTelegramFile } from './telegram.ts';
+import {
+  MAX_NOTE_BYTES,
+  handleTalk,
+  handleVoiceNote,
+  optionsFromEnv,
+  talkPageUrl,
+  voiceNotesEnabled,
+} from './voice.ts';
 
 /**
  * Poll health. If deleteWebhook()/bot.start() never succeeds (or later dies),
@@ -91,6 +101,24 @@ export function registerTelegramHandlers(): void {
     });
   });
 
+  // --- /talk: hand the phone the existing push-to-talk page ------------------
+  // Registered only when ZOE_BASE_URL names the public base URL; otherwise
+  // `/talk` keeps falling through to the brain as text (today's behaviour).
+  // BEFORE `message:text` like every command, or the text handler eats it.
+  const talkUrl = talkPageUrl();
+  if (talkUrl) {
+    bot.command('talk', async (ctx) => {
+      const telegramId = ctx.from?.id;
+      if (telegramId === undefined) return;
+      await handleTalk(telegramId, talkUrl, {
+        resolve: resolveTelegramUser,
+        reply: (text) => ctx.reply(text),
+        replyWithLink: (text, label, url) =>
+          ctx.reply(text, { reply_markup: new InlineKeyboard().url(label, url) }),
+      });
+    });
+  }
+
   // --- Telegram long-poll ingress -------------------------------------------
   // Identity IS the gate (no static allow-list): handleIncoming resolves the
   // sender → their Zoe user and runs the brain AS them; an unlinked sender is
@@ -111,6 +139,47 @@ export function registerTelegramHandlers(): void {
       console.error('Zoe brain/reply error:', err);
     }
   });
+
+  // --- Voice notes in and out (flag-dark) ------------------------------------
+  // ZOE_TELEGRAM_VOICE_NOTES unset → NO handler: a voice note is received by
+  // the poll loop and ignored, exactly as today. On → the same identity gate
+  // and the same /api/chat turn as text, replying in kind (src/voice.ts).
+  if (voiceNotesEnabled()) {
+    const opts = optionsFromEnv();
+    bot.on(['message:voice', 'message:audio'], async (ctx) => {
+      const telegramId = ctx.from?.id;
+      if (telegramId === undefined) return;
+      const media = ctx.message.voice ?? ctx.message.audio;
+      if (!media) return;
+      try {
+        await handleVoiceNote(
+          telegramId,
+          ctx.chat.id,
+          {
+            kind: ctx.message.voice ? 'voice' : 'audio',
+            fileId: media.file_id,
+            fileUniqueId: media.file_unique_id,
+            duration: media.duration,
+            fileSize: media.file_size,
+            forwarded: ctx.message.forward_origin !== undefined,
+          },
+          {
+            resolve: resolveTelegramUser,
+            session: sessionFor,
+            ask: askZoeAs,
+            download: (fileId) => downloadTelegramFile(fileId, MAX_NOTE_BYTES),
+            transcribe: transcribeTelegramAudio,
+            synthesize: synthesizeTelegramVoice,
+            reply: (text) => ctx.reply(text),
+            replyVoice: (ogg) => ctx.replyWithVoice(new InputFile(ogg, 'zoe.ogg')),
+          },
+          opts,
+        );
+      } catch (err) {
+        console.error('Zoe voice-note error:', err);
+      }
+    });
+  }
 }
 
 /**

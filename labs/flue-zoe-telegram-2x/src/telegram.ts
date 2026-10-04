@@ -46,6 +46,38 @@ export const bot = new Bot(requiredEnv('TELEGRAM_BOT_TOKEN'), {
   client: { apiRoot: TELEGRAM_API_ROOT },
 });
 
+/**
+ * Download one Telegram file (a voice note) by `file_id`, bounded by `maxBytes`.
+ *
+ * `getFile` → `<api root>/file/bot<token>/<file_path>`. THE URL EMBEDS THE BOT
+ * TOKEN: it is never logged, never put in an error, never stored — errors name
+ * sizes and statuses only. Rides the same `fetch` as every other Bot API call,
+ * so it inherits the unit's Happy-Eyeballs NODE_OPTIONS fix (a separate HTTP
+ * client would not). Resolves to the bytes in memory: the caller has already
+ * checked Telegram's declared duration/size, and `maxBytes` bounds the Buffer
+ * well under the unit's MemoryMax.
+ */
+export async function downloadTelegramFile(fileId: string, maxBytes: number): Promise<Uint8Array> {
+  const file = await bot.api.getFile(fileId);
+  if (!file.file_path) throw new Error('getFile returned no file_path');
+  if (file.file_size !== undefined && file.file_size > maxBytes) {
+    throw new Error(`file too large (${file.file_size} > ${maxBytes} bytes)`);
+  }
+  let res: Response;
+  try {
+    res = await fetch(`${TELEGRAM_API_ROOT}/file/bot${bot.token}/${file.file_path}`);
+  } catch (err) {
+    // A transport error's message may quote the URL (and so the token): rethrow by name only.
+    throw new Error(`file download failed: ${(err as Error)?.name ?? 'error'}`);
+  }
+  if (!res.ok) throw new Error(`file download HTTP ${res.status}`);
+  const declared = Number(res.headers.get('content-length') ?? '0');
+  if (declared > maxBytes) throw new Error(`file too large (${declared} > ${maxBytes} bytes)`);
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  if (bytes.byteLength > maxBytes) throw new Error(`file too large (${bytes.byteLength} > ${maxBytes} bytes)`);
+  return bytes;
+}
+
 // No static allow-list: identity is the gate. A sender only reaches Zoe's brain
 // if their telegram_id resolves to a linked Zoe user (see src/handler.ts), and
 // linking requires a signed token minted in an authenticated Zoe session. An
