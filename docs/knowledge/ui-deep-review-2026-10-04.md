@@ -184,9 +184,11 @@ Notes: `immutable` on `/lib/**` is only safe once the directory name carries the
 5. Lighthouse + axe **on the Pi**, weekly, results into `docs/knowledge/ui-audits/`; no browser lane on the Jetson (it OOM-cascades headless Chromium).
 6. A CDP-driven estate sweep (the script used here) as the local gate after any estate-facing PR: reload, walk every tile, assert 0 console errors and no `#authov.on`, write PNGs. It sees the real CSP, which the fetch-stubbing harnesses do not.
 
-## 8. Sequenced fix plan (proposal — not started)
+## 8. Sequenced fix plan
 
-1. **Panel unblockers (one PR, estate + nginx):** F1 (card exit + guest re-provision + expiry-aware `sid()`), F2 (CSP allow for the daemon or server-side activate), F9 (fake pair code), F13 (sleep wake), F12 (delete `_attemptVoiceNavigation`), F11 (accumulate sentences). Replay-gate not required unless `voice_tts.py` is touched; verify on the live panel over CDP.
+**Status:** wave 1 built and verified 2026-10-04 (same branch as this record). F1 card lifecycle + 401/403 policy + expiry-aware session, F2 CSP allowance for the daemon (+ kiosk toast instead of the keyboard bar), F9 fake pair card removed, F11 sentence accumulation (harness case A6, mutation-tested), F12 `_attemptVoiceNavigation` deleted, F13 night-clock wake, plus a tap-to-sign-in slice of F10 on Contacts. Gate: `scripts/maintenance/estate_browser_verify.py` (16 checks against the live backend, real CSP). Waves 2–6 not started.
+
+1. **Panel unblockers (one PR, estate + nginx) — DONE 2026-10-04:** F1 (card exit + guest re-provision + expiry-aware `sid()`), F2 (CSP allow for the daemon or server-side activate), F9 (fake pair code), F13 (sleep wake), F12 (delete `_attemptVoiceNavigation`), F11 (accumulate sentences). Replay-gate not required unless `voice_tts.py` is touched; verify on the live panel over CDP.
 2. **Delivery layer (one nginx PR + deploy.yml):** F4 gzip, F5 caching policy, F6 retired proxies + port 18790, F15 `^~`, F16 `=404`, F17 reload-on-change, F18 shared include, F19 CSP trim. Update `test_nginx_security_headers_helper.py` and `ensure_nginx_security_headers.py` in the same PR.
 3. **Desktop security + auth gating (one PR, single-finding commits):** F21/F22/F23 XSS + open redirect with harnesses; F7 shared `enforceAuth` redirect; F24 one push-socket opener; F25 push subscribe; F8 (no guest session listing; honest logged-out copy).
 4. **Packages:** Prism 1.30.0, dompurify/marked/chart.js/qrcode bumps, drop browser-image-compression; livekit-client + pinned server in its own replay-gated PR.
