@@ -129,6 +129,7 @@ class AnnouncePoller:
         self._monotonic = monotonic
         self._log = logger
         self._consecutive_failures = 0
+        self._outage_started: Optional[float] = None
 
     # ── logging (optional) ──────────────────────────────────────────────────
     def _info(self, msg: str, *args) -> None:
@@ -190,6 +191,22 @@ class AnnouncePoller:
             self.poll_interval_s * (2 ** min(self._consecutive_failures, 10)),
         )
 
+    def _note_recovered(self) -> None:
+        """A poll reached the server: end any outage and say how long it was.
+
+        The first failure is logged at WARNING and the rest are quiet, so
+        without this line the log never says when the server came back - the
+        2026-10-04 review could count 50 outages in a day but not measure one.
+        """
+        failures = self._consecutive_failures
+        self._consecutive_failures = 0
+        if failures > 0:
+            started = self._outage_started
+            self._outage_started = None
+            took = max(0.0, self._monotonic() - started) if started is not None else 0.0
+            self._info("announce poll recovered after %d failed poll%s (~%.0fs)",
+                       failures, "" if failures == 1 else "s", took)
+
     # ── the loop ────────────────────────────────────────────────────────────
     def run(self, shutdown_wait: Callable[[float], bool]) -> None:
         """Poll forever; `shutdown_wait(timeout)` is threading.Event.wait —
@@ -202,7 +219,11 @@ class AnnouncePoller:
         while not shutdown_wait(self.next_wait_s()):
             try:
                 outcomes = self.poll_once()
-                self._consecutive_failures = 0
+                if outcomes != ["busy"]:
+                    # Only a cycle that actually reached the server is evidence
+                    # it is back. A busy skip (live turn) never fetches, so it
+                    # must neither reset the backoff nor claim a recovery.
+                    self._note_recovered()
                 spoken = [o for o in outcomes if o != "busy"]
                 if spoken:
                     self._info("announce poll: %s", ",".join(spoken))
@@ -211,6 +232,7 @@ class AnnouncePoller:
                 # First failure at WARNING, the rest quietly (a multi-minute
                 # server restart shouldn't flood the daemon log).
                 if self._consecutive_failures == 1:
+                    self._outage_started = self._monotonic()
                     self._warning(
                         "announce poll failed (%s) — backing off up to %.0fs until the server returns",
                         exc, self.backoff_max_s,

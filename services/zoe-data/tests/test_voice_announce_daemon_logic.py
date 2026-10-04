@@ -273,3 +273,90 @@ def test_run_stops_on_shutdown_immediately():
     p, _ = _poller(clock, fetch=fetch)
     p.run(lambda timeout: True)  # already shutting down
     assert calls["n"] == 0
+
+
+# ── run(): outage observability (2026-10-04 log review) ─────────────────────
+# The first failure of a streak is the only WARNING, so the daemon log counted
+# 50 outages in one day but never said when the server came back or how long
+# the poll was blind. One INFO line closes each streak - only on a REAL fetch.
+
+class _Recorder:
+    def __init__(self):
+        self.lines = []
+
+    def info(self, msg, *a):
+        self.lines.append(("info", msg % a))
+
+    def warning(self, msg, *a):
+        self.lines.append(("warning", msg % a))
+
+
+def _run_cycles(p, clock, cycles, step=5.0):
+    n = {"i": 0}
+
+    def shutdown_wait(timeout):
+        clock.advance(step)
+        n["i"] += 1
+        return n["i"] > cycles
+
+    p.run(shutdown_wait)
+
+
+def test_recovery_is_logged_once_with_the_failed_count_and_outage_length():
+    clock = FakeClock()
+    calls = {"n": 0}
+
+    def flaky_fetch():
+        calls["n"] += 1
+        if calls["n"] <= 3:
+            raise ConnectionError("502")
+        return []
+
+    rec = _Recorder()
+    p, _ = _poller(clock, fetch=flaky_fetch, logger=rec)
+    _run_cycles(p, clock, 6)
+    warns = [m for lvl, m in rec.lines if lvl == "warning"]
+    recovered = [m for lvl, m in rec.lines if lvl == "info" and "recovered" in m]
+    assert len(warns) == 1, "still one WARNING per streak"
+    assert len(recovered) == 1
+    assert "3 failed polls" in recovered[0]
+    assert "~15s" in recovered[0]  # first failure -> first good poll, three 5 s cycles later
+
+
+def test_a_healthy_run_never_logs_a_recovery():
+    clock = FakeClock()
+    rec = _Recorder()
+    p, _ = _poller(clock, logger=rec)
+    _run_cycles(p, clock, 4)
+    assert not [m for _, m in rec.lines if "recovered" in m]
+
+
+def test_a_busy_cycle_is_not_evidence_the_server_is_back():
+    """A live turn skips the fetch entirely. It must neither reset the backoff
+    nor log a recovery for a server nobody has talked to."""
+    clock = FakeClock()
+    calls = {"n": 0}
+
+    def down_then_up():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ConnectionError("502")
+        return []
+
+    rec = _Recorder()
+    # cycle 1: idle -> fetch fails; cycle 2: busy (no fetch); cycle 3: idle -> ok
+    p, _ = _poller(clock, fetch=down_then_up, busy_seq=[False, True, False], logger=rec)
+    waits = []
+    n = {"i": 0}
+
+    def shutdown_wait(timeout):
+        waits.append(timeout)
+        clock.advance(timeout)
+        n["i"] += 1
+        return n["i"] > 3
+
+    p.run(shutdown_wait)
+    recovered = [m for _, m in rec.lines if "recovered" in m]
+    assert len(recovered) == 1 and "1 failed poll (" in recovered[0]
+    # the busy cycle kept the backoff (10 s), it did not snap back to 5 s
+    assert waits[2] == 10.0
