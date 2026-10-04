@@ -120,7 +120,7 @@ webrtcvad-wheels==2.0.14
 torch @ https://download.pytorch.org/whl/cpu/torch-2.14.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl
 # librosa 1.0.0 (>=3.12 only, API removals) is what an uncapped resolve picks on
 # this interpreter; Resemblyzer was written against 0.x, so it is held.
-librosa==0.11.0
+librosa==1.0.0
 scipy==1.17.1
 
 # ── WebRTC / LiveKit ──────────────────────────────────────────────────────
