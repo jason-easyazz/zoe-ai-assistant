@@ -15,7 +15,12 @@
     // Persist the panel_id from the kiosk URL so command context (skybridge/resolve)
     // has it on a fresh profile — otherwise typed commands go out with an empty panel id.
     var pid=p.get('panel_id');if(pid)localStorage.setItem('zoe_panel_id',pid);}catch(e){}})();
-  (function(){var ok=false,kiosk=false;try{var s=JSON.parse(localStorage.getItem('zoe_session')||'null');ok=!!(s&&s.session_id);}catch(e){ok=false;}
+  (function(){var ok=false,kiosk=false;try{var s=JSON.parse(localStorage.getItem('zoe_session')||'null');ok=!!(s&&s.session_id);
+    // A GUEST session carries expires_at (30 min) while the kiosk runs for days.
+    // An expired one must count as ABSENT here, or the first-paint fetches go
+    // out with a dead id, 401, and the who+PIN card is raised at boot instead
+    // of the ambient home. (Member sessions carry no expires_at.)
+    if(ok&&s.expires_at&&Date.parse(s.expires_at)<Date.now()){ok=false;try{localStorage.removeItem('zoe_session');}catch(e2){}}}catch(e){ok=false;}
     try{kiosk=(new URLSearchParams(location.search)).get('kiosk')==='1'||localStorage.getItem('zoe_kiosk')==='1';}catch(e){}
     window.__kiosk=kiosk;
     // Kiosk boots as GUEST into the ambient home (like skybridge did); the
@@ -351,6 +356,8 @@
   .acard .colR{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding-left:44px;border-left:1px solid rgba(255,255,255,.08)}
   .acard h2{font-size:25px;font-weight:600;margin-bottom:5px}
   .acard .sub{font-size:15px;color:var(--ink-faint);margin-bottom:22px}
+  .aback{display:none;margin-top:18px;height:48px;padding:0 22px;border-radius:14px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:var(--ink-soft);font:inherit;font-size:16px;align-items:center}
+  #authov.dismissable .aback{display:inline-flex}
   .au{display:flex;align-items:center;gap:16px;cursor:pointer;padding:9px 12px;border-radius:18px;border:1px solid transparent}
   .au .av{width:56px;height:56px;border-radius:50%;display:grid;place-items:center;font-size:23px;font-weight:600;color:#0a0d14;flex:none}
   .au .nm2{font-size:22px;font-weight:500;color:var(--ink-soft)}
@@ -980,7 +987,7 @@
   <div id="full"></div>
   <div id="cardwrap"><div id="host"></div></div>
   <div class="launch" id="launch"><div class="lgrid" id="lgrid"></div></div>
-  <div id="authov"><div class="acard"><div class="colL"><h2>Who’s here?</h2><div class="sub">Tap your name to sign in</div><div id="auList"></div></div><div class="colR"><div class="alead" id="auLead">Pick your name</div><div class="apin" id="auPin"><div class="adots" id="auDots"><span class="adot"></span><span class="adot"></span><span class="adot"></span><span class="adot"></span></div><div class="apad" id="auPad"></div></div></div></div></div>
+  <div id="authov"><div class="acard"><div class="colL"><h2>Who’s here?</h2><div class="sub">Tap your name to sign in</div><div id="auList"></div><button class="aback" id="auBack" type="button">Not now</button></div><div class="colR"><div class="alead" id="auLead">Pick your name</div><div class="apin" id="auPin"><div class="adots" id="auDots"><span class="adot"></span><span class="adot"></span><span class="adot"></span><span class="adot"></span></div><div class="apad" id="auPad"></div></div></div></div></div>
   <div id="cmdbar"><input id="cmdin" type="text" placeholder="Ask Zoe…" autocomplete="off"><button id="cmdgo" title="Send" aria-label="Send">➤</button></div>
   <div id="saytoast"></div>
   <div class="estmodal" id="estModal"></div>
@@ -1105,7 +1112,6 @@
   // card answers
   var CARD={
     confirm:{heard:'“Add olive oil to the shopping list”', wash:'var(--accent)', html:'<div class="card confirm"><div class="wash"></div><div class="kick">Confirm</div><div class="q">Add to your Shopping list?</div><div class="rows"><div class="r"><span class="l">Item</span><span>Olive oil</span></div><div class="r"><span class="l">List</span><span>Shopping · 6 items</span></div></div><div class="acts"><button class="no">Not now</button><button class="yes">Add it</button></div></div>'},
-    pair:{heard:'', wash:'var(--accent)', html:'<div class="card pair"><div class="wash"></div><div class="kick">Link a device</div><div class="digits"><div class="d">4</div><div class="d">8</div><div class="d">2</div><div class="d">1</div></div><div class="note2">Enter this code in the Zoe app on your phone to connect it to this home.</div></div>'}
   };
 
   var cv=document.getElementById('cv'),ctx=cv.getContext('2d'),W=1280,H=720;cv.width=W;cv.height=H;
@@ -1724,14 +1730,34 @@
   function two(n){return (n<10?'0':'')+n;}
   function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
   function fmt12(hhmm){var m=/^(\d{1,2}):(\d{2})/.exec(hhmm||'');if(!m)return esc(hhmm||'');var h=+m[1],ap=h<12?'am':'pm',hr=h%12;if(hr===0)hr=12;return hr+':'+m[2]+' '+ap;}
-  function sid(){try{return (JSON.parse(localStorage.getItem('zoe_session')||'{}').session_id)||'';}catch(_){return '';}}
+  function sid(){try{var s=JSON.parse(localStorage.getItem('zoe_session')||'{}');if(s.expires_at&&Date.parse(s.expires_at)<Date.now())return '';return s.session_id||'';}catch(_){return '';}}
   var _authBounced=false;
+  // Kiosk policy for a 401/403 from a data call. The who+PIN card is NOT the
+  // answer to every refusal: a guest kiosk is REFUSED routinely (contacts,
+  // ticking a list item, music sources), and raising the card on each one
+  // covered the ambient home behind "Who's here?" until somebody with a PIN
+  // walked past (2026-10-04: five days, after one 403 from /api/people/).
+  //   401 = the session itself is dead (expired/invalid) → drop it and mint a
+  //         fresh GUEST, silently; the surface keeps whatever it showed.
+  //   403 = the guest lacks permission → keep the session; the surface shows
+  //         its own "Sign in to …" copy with a tap-to-sign-in.
+  // The card is raised from here ONLY while a VOICE identity challenge is
+  // pending (the executor stashes it before calling __showAuthCard), and
+  // otherwise only when the person asks for it (Settings › Switch user).
+  var _guestRefillT=0;
+  function kioskAuthFail(status){
+    if(!window.__guestBootSettled)return;
+    var pend=null;try{pend=sessionStorage.getItem('zoe_panel_auth_challenge');}catch(e){}
+    if(pend){if(window.__showAuthCard)window.__showAuthCard();return;}
+    if(status===401){try{localStorage.removeItem('zoe_session');}catch(e){}
+      var now=Date.now();if(now-_guestRefillT>30000){_guestRefillT=now;convEnsureSession();}}
+  }
   function apiGet(url){return fetch(url,{headers:{'X-Session-ID':sid()},credentials:'include'}).then(function(r){
     // Server is authoritative on session validity: an expired/invalid session
     // 401/403s here — clear it and return to login (the presence guard alone
     // can't detect server-side expiry).
     if(r.status===401||r.status===403){
-      if(window.__kiosk){if(window.__guestBootSettled){try{localStorage.removeItem('zoe_session');}catch(e){}if(window.__showAuthCard)window.__showAuthCard();}}
+      if(window.__kiosk){kioskAuthFail(r.status);}
       else if(!_authBounced&&!window.__needAuth){_authBounced=true;try{localStorage.removeItem('zoe_session');}catch(e){}location.replace('/touch/index.html'+location.search);}
       throw new Error('auth');}
     if(!r.ok)throw new Error('http '+r.status);return r.json();});}
@@ -3091,7 +3117,7 @@
     document.querySelector('#estModal').querySelector('[data-x="yes"]').onclick=function(){estClose();onYes();};}
   function apiJson(method,url,body){return fetch(url,{method:method,headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:body?JSON.stringify(body):undefined}).then(function(r){
     if(r.status===401||r.status===403){
-      if(window.__kiosk){if(window.__guestBootSettled){try{localStorage.removeItem('zoe_session');}catch(e){}if(window.__showAuthCard)window.__showAuthCard();}}
+      if(window.__kiosk){kioskAuthFail(r.status);}
       else if(!_authBounced&&!window.__needAuth){_authBounced=true;try{localStorage.removeItem('zoe_session');}catch(e){}location.replace('/touch/index.html'+location.search);}
       throw new Error('auth');}
     if(!r.ok)throw new Error('http '+r.status);return r.json();});}
@@ -3195,8 +3221,8 @@
       if(srch)srch.onclick=function(){
         // Hand the mic to Zoe — she asks who to look for. Same daemon endpoint
         // the panel's orb uses; falls back to the typed command bar off-panel.
-        fetch('http://localhost:7777/activate',{method:'POST',signal:AbortSignal.timeout(800)})
-          .catch(function(){var cb=document.getElementById('cmdbar');if(cb){cb.classList.add('on');var ci=document.getElementById('cmdin');if(ci){ci.placeholder='Who are you looking for?';setTimeout(function(){ci.focus();},60);}}});
+        fetch('http://localhost:7777/activate',{method:'POST',mode:'no-cors',signal:AbortSignal.timeout(800)})
+          .catch(function(){if(window.__kiosk){toast('Voice isn’t available right now');return;}var cb=document.getElementById('cmdbar');if(cb){cb.classList.add('on');var ci=document.getElementById('cmdin');if(ci){ci.placeholder='Who are you looking for?';setTimeout(function(){ci.focus();},60);}}});
       };
       // Detail card is a function so relationship chips can hop between people.
       function openContact(pn,idx){
@@ -3261,7 +3287,12 @@
               .catch(function(){toast('Couldn’t link');});};
         }).catch(function(){toast('Couldn’t load relationship types');});
       }
-    }).catch(function(){if(grid)grid.innerHTML='<div style="color:var(--ink-faint);font-size:20px">Sign in to see your contacts.</div>';});
+    }).catch(function(e){if(!grid)return;
+      // 'auth' = the guest is not allowed (a 403); anything else is a FAILED
+      // load and must not read as "sign in" (AGENTS.md: empty ≠ failed ≠ unknown).
+      if(e&&e.message==='auth'){grid.innerHTML='<div class="ctsign" style="color:var(--ink-faint);font-size:20px;padding:12px 0;cursor:pointer">Sign in to see your contacts. <span style="color:var(--accent);text-decoration:underline">Tap to sign in</span></div>';
+        var sg=grid.querySelector('.ctsign');if(sg)sg.onclick=function(){if(window.__showAuthCard)window.__showAuthCard();};}
+      else grid.innerHTML='<div style="color:var(--ink-faint);font-size:20px;padding:12px 0">Couldn’t load your contacts.</div>';});
   }
 
   // ---- Settings: full-screen expanding sections ----
@@ -3675,7 +3706,7 @@
       {t:'Display',b:'<div id="setDisp"><div class="srow2"><span style="color:var(--ink-faint)">Loading…</span></div></div>'},
       {t:'Voice',b:'<div id="setVoice"><div class="srow2"><span style="color:var(--ink-faint)">Loading…</span></div></div>'},
       {t:'System',b:'<div id="setSys"><div class="srow2"><span style="color:var(--ink-faint)">Checking…</span></div></div>'},
-      {t:'Household',b:'<div class="srow2" data-act="contacts"><span>Contacts</span><span class="chev2">›</span></div><div class="srow2" data-act="rooms"><span>Rooms & devices</span><span class="chev2">›</span></div><div class="srow2" data-act="pair"><span>Link a device</span><span class="chev2">›</span></div>'}
+      {t:'Household',b:'<div class="srow2" data-act="contacts"><span>Contacts</span><span class="chev2">›</span></div><div class="srow2" data-act="rooms"><span>Rooms & devices</span><span class="chev2">›</span></div>'}
     ].map(function(sec,i){return '<div class="setsec"><div class="sh">'+esc(sec.t)+'<span class="caret">›</span></div><div class="sbody"><div class="inner">'+sec.b+'</div></div></div>';}).join('');
 
     wirePanelSettings();
@@ -3773,7 +3804,7 @@
       var row=e.target.closest('.srow2[data-go]');
       if(row){location.href=row.getAttribute('data-go');return;}
       var act=e.target.closest('.srow2[data-act]');
-      if(act){var a=act.getAttribute('data-act');if(a==='pair')show('pair');if(a==='contacts')show('person');if(a==='rooms')show('rooms');if(a==='switch'&&window.__showAuthCard)window.__showAuthCard();return;}
+      if(act){var a=act.getAttribute('data-act');if(a==='contacts')show('person');if(a==='rooms')show('rooms');if(a==='switch'&&window.__showAuthCard)window.__showAuthCard();return;}
       if(e.target.closest('#setOut')){var out=e.target.closest('#setOut');out.disabled=true;
         function clearLocal(){try{localStorage.removeItem('zoe_session');localStorage.removeItem('zoe_guest_mode');}catch(e2){}try{sessionStorage.removeItem('zoe_gb');}catch(e2){}}
         fetch('/api/auth/logout',{method:'POST',headers:{'X-Session-ID':sid()},credentials:'include'})
@@ -3999,7 +4030,7 @@
     // Messages/email section stays hidden until a comms backend exists (no fake data).
   }
 
-  var ORDER=[['home','Home'],['rooms','Rooms'],['sleep','Sleep'],['ask','Ask Zoe'],['weather','Weather'],['music','Music'],['timer','Timer'],['SEP'],['day','Day'],['list','List'],['reminder','Reminder'],['person','Person'],['confirm','Confirm'],['settings','Settings'],['pair','Pair']];
+  var ORDER=[['home','Home'],['rooms','Rooms'],['sleep','Sleep'],['ask','Ask Zoe'],['weather','Weather'],['music','Music'],['timer','Timer'],['SEP'],['day','Day'],['list','List'],['reminder','Reminder'],['person','Person'],['confirm','Confirm'],['settings','Settings']];
   ORDER.forEach(function(o){ if(o[0]==='SEP'){var s=document.createElement('div');s.className='sep';pick.appendChild(s);return;} var b=document.createElement('button');b.dataset.id=o[0];b.textContent=o[1];b.onclick=function(){show(o[0]);};pick.appendChild(b);});
   home.onclick=function(){lclose();show('home');};
   setInterval(refreshHA,30000);   // keep dock HA state fresh + recover from a failed load
@@ -4068,6 +4099,7 @@
   }
   var _heardT=null,_sending=false;
   function dockSaid(heard,say){
+    if(_cur==='sleep')show('home');   // voice is activity — the dock is hidden on the night clock and would never be restored
     dock.classList.remove('hide');
     if(_heardT)clearTimeout(_heardT);
     function restore(){_heardT=setTimeout(function(){if(dbody.querySelector('.dheard')&&_cur!=='sleep')renderDock();},5200);}
@@ -4076,7 +4108,7 @@
       else restore();
     } else if(say){dbody.innerHTML='<div class="dheard">'+esc(say)+'</div>';restore();}
   }
-  function dockHeard(q){dock.classList.remove('hide');dbody.innerHTML='<div class="dheard">Heard: <b>'+esc(q)+'</b></div>';
+  function dockHeard(q){if(_cur==='sleep')show('home');dock.classList.remove('hide');dbody.innerHTML='<div class="dheard">Heard: <b>'+esc(q)+'</b></div>';
     // heard is transient — bring the pinned controls back after a few seconds
     if(_heardT)clearTimeout(_heardT);
     _heardT=setTimeout(function(){if(dbody.querySelector('.dheard')&&_cur!=='sleep')renderDock();},8000);}
@@ -4336,13 +4368,13 @@
   // Live voice state → estate surfaces. touch-ui-executor.js checks for this
   // object and routes its voice events here INSTEAD of building the legacy
   // skybridge overlay box (which never auto-dismissed on the estate).
-  var _lisT=null,_askFallT=null;
+  var _lisT=null,_askFallT=null,_turnTxt='';
   window.ZoeEstateVoice={
     // Listening is shown on the ORB (fast breathe + bright glow), not by
     // taking over the dock — the dock keeps its pinned controls until a
     // transcript arrives. Safety timeout clears the state if no further
     // voice event lands (e.g. wake false-trigger).
-    listening:function(){orb.classList.add('listening');
+    listening:function(){orb.classList.add('listening');_turnTxt='';
       window.__voiceArrivedAt=0;   // a NEW turn started — the last arrival no longer owns responding events
       _userTookOver=false;         // a new turn hands the screen back to Zoe
       voiceConvTouch();
@@ -4351,17 +4383,24 @@
       // here is what left the last answer on screen forever.
       armAutoHome(VOICE_HOLD_MS);
       if(_lisT)clearTimeout(_lisT);_lisT=setTimeout(function(){orb.classList.remove('listening');},20000);},
-    transcript:function(t){orb.classList.remove('listening');if(_lisT)clearTimeout(_lisT);
+    transcript:function(t){orb.classList.remove('listening');if(_lisT)clearTimeout(_lisT);_turnTxt='';
       window.__voiceArrivedAt=0;   // new turn — see listening()
       _userTookOver=false;
       voiceConvTouch();
       cancelAutoHome();
       if(t){window.__lastHeard=t;dockHeard(t);}},
-    thinking:function(){orb.classList.remove('listening');orb.classList.add('busy');voiceConvTouch();cancelAutoHome();
+    thinking:function(){orb.classList.remove('listening');orb.classList.add('busy');_turnTxt='';voiceConvTouch();cancelAutoHome();
       var o=document.getElementById('askOut');if(o&&_cur==='ask')o.textContent='…';},
-    responding:function(t){orb.classList.remove('listening');orb.classList.add('busy');
+    responding:function(t,d){orb.classList.remove('listening');orb.classList.add('busy');
       voiceConvTouch();
       if(!t)return;
+      // The server emits one voice:responding per SENTENCE (so TTS can start
+      // on the first) plus a spoken filler flagged processing_ack. What is on
+      // screen is the whole answer so far — not the last sentence, and never
+      // the filler (it is spoken, not part of what Zoe answered).
+      if(d&&d.processing_ack)return;
+      if(d&&d.card)_turnTxt='';   // a card's text replaces, it does not append
+      _turnTxt=_turnTxt?(_turnTxt+' '+t):t;t=_turnTxt;
       if(_cur==='ask'){askShowAnswer(window.__lastHeard||'',t);return;}
       // Domain commands navigate the panel (?heard&say&domain) — a page that
       // JUST voice-arrived shows the summary in the dock. A responding event
@@ -4408,10 +4447,20 @@
     cmdbar.classList.remove('on');
     orbListening(true);
     toast(promptMsg||'Listening — ask Zoe anything');
-    fetch('http://localhost:7777/activate',{method:'POST',signal:AbortSignal.timeout(800)})
-      .then(function(r){if(!r||!r.ok)throw new Error('activate '+(r&&r.status));})
+    // Cross-origin to the panel's own daemon, which sends no CORS headers: a
+    // plain fetch is DELIVERED but its response is unreadable, so the promise
+    // rejects and the fallback fires after the mic has already opened. no-cors
+    // makes the opaque response RESOLVE (status 0); a refused connection still
+    // rejects, which is the only failure the fallback is for.
+    fetch('http://localhost:7777/activate',{method:'POST',mode:'no-cors',signal:AbortSignal.timeout(800)})
+      .then(function(r){if(!r||(r.type!=='opaque'&&!r.ok))throw new Error('activate '+(r&&r.status));})
       .catch(function(){
         orbListening(false);toastHide();
+        // Off-panel (a desktop browser, dev) the typed bar is the fallback. ON
+        // the kiosk there is no keyboard, so a keyboard is never the answer —
+        // say what happened. (Until 2026-10-04 the nginx CSP refused this very
+        // fetch, so every orb tap on the real panel landed here.)
+        if(window.__kiosk){toast('Voice isn’t available right now');return;}
         cmdbar.classList.add('on');
         setTimeout(function(){cmdin.focus();},50);
       })
@@ -4424,12 +4473,34 @@
   document.getElementById('cmdgo').addEventListener('click',function(){sendCmd(cmdin.value);});
 
   // ---- estate-native who + PIN unlock (replaces the old login page) ----
+  // The card can be shown and HIDDEN many times per page life. It used to be
+  // one-way — the only exit was a correct PIN → reload — so a stale voice
+  // challenge (dead server-side after 120 s) or one routine guest 403 left it
+  // covering the home screen for days. Listeners are wired ONCE; the
+  // selection state lives in _au and is reset on every show.
+  var AUTH_CARD_TTL_MS=120000;   // = the server's challenge TTL (panel_auth.py)
+  var _au={sel:null,code:'',wired:false,ttlT:null};
   window.__showAuthCard=function(){var ov=document.getElementById("authov");if(ov&&!ov.classList.contains("on"))initAuthCard();};
-  function initAuthCard(){(function(){
-    var ov=document.getElementById('authov'),list=document.getElementById('auList'),lead=document.getElementById('auLead'),pin=document.getElementById('auPin'),dots=document.getElementById('auDots').children,pad=document.getElementById('auPad');
+  window.__hideAuthCard=function(){var ov=document.getElementById('authov');if(!ov||!ov.classList.contains('on'))return;
+    ov.classList.remove('on');var pin=document.getElementById('auPin');if(pin)pin.classList.remove('on','err');
+    _au.sel=null;_au.code='';if(_au.ttlT){clearTimeout(_au.ttlT);_au.ttlT=null;}
+    try{sessionStorage.removeItem('zoe_panel_auth_challenge');}catch(e){}
+    // Back to the ambient home as a GUEST — mint a session if the refusal
+    // that raised the card had dropped it.
+    if(window.__kiosk&&!sid())convEnsureSession();};
+  function initAuthCard(){
+    var ov=document.getElementById('authov'),list=document.getElementById('auList'),lead=document.getElementById('auLead'),pin=document.getElementById('auPin'),dots=document.getElementById('auDots').children,pad=document.getElementById('auPad'),back=document.getElementById('auBack');
     var AVC=['#7b96ff','#66d6a3','#f5b13c','#ff7a90','#9aa6bd','#5ec8f0'];
-    var sel=null,code='';ov.classList.add('on');
-    function rdots(){for(var i=0;i<4;i++)dots[i].classList.toggle('f',i<code.length);}
+    _au.sel=null;_au.code='';ov.classList.add('on');pin.classList.remove('on','err');lead.textContent='Pick your name';
+    function rdots(){for(var i=0;i<4;i++)dots[i].classList.toggle('f',i<_au.code.length);}
+    rdots();
+    // A kiosk is a shared glance surface and the card must never be the only
+    // thing on it: dismissable by "Not now", by a tap outside, and on its own
+    // after the challenge TTL (an unanswered voice challenge is already dead
+    // server-side by then). Off-kiosk the card IS the login page — no dismiss.
+    ov.classList.toggle('dismissable',!!window.__kiosk);
+    if(_au.ttlT)clearTimeout(_au.ttlT);
+    _au.ttlT=window.__kiosk?setTimeout(function(){window.__hideAuthCard();},AUTH_CARD_TTL_MS):null;
     // A voice turn parked for identity waits on a panel auth challenge that the
     // executor stashes here before opening this card. The PIN typed above is the
     // answer to it, so post it to the panel endpoint (NOT the session login) to
@@ -4468,17 +4539,20 @@
     pad.innerHTML=['1','2','3','4','5','6','7','8','9','','0','⌫'].map(function(k){return k===''?'<button class="akey ghost"></button>':'<button class="akey" data-k="'+k+'">'+k+'</button>';}).join('');
     fetch('/api/auth/profiles').then(function(r){return r.json();}).then(function(ps){
       list.innerHTML=(ps||[]).slice(0,6).map(function(p,i){return '<div class="au" data-u="'+esc(p.user_id)+'" data-n="'+esc(p.username)+'"><div class="av" style="background:'+AVC[i%AVC.length]+'">'+esc((p.avatar||p.username||'?').charAt(0).toUpperCase())+'</div><div class="nm2">'+esc(p.username)+'</div></div>';}).join('');
-      list.addEventListener('click',function(e){var u=e.target.closest('.au');if(!u)return;
-        [].forEach.call(list.children,function(x){x.classList.toggle('sel',x===u);});
-        sel={user_id:u.getAttribute('data-u'),username:u.getAttribute('data-n')};
-        lead.innerHTML='Hi <span class="n">'+esc(sel.username)+'</span>';code='';rdots();pin.classList.add('on');});
     }).catch(function(){lead.textContent='Sign-in unavailable';});
-    pad.addEventListener('click',function(e){var b=e.target.closest('.akey');if(!b||!sel||b.classList.contains('ghost'))return;
+    if(_au.wired)return;_au.wired=true;
+    if(back)back.addEventListener('click',function(e){e.stopPropagation();window.__hideAuthCard();});
+    ov.addEventListener('click',function(e){if(e.target===ov&&window.__kiosk)window.__hideAuthCard();});
+    list.addEventListener('click',function(e){var u=e.target.closest('.au');if(!u)return;
+      [].forEach.call(list.children,function(x){x.classList.toggle('sel',x===u);});
+      _au.sel={user_id:u.getAttribute('data-u'),username:u.getAttribute('data-n')};
+      lead.innerHTML='Hi <span class="n">'+esc(_au.sel.username)+'</span>';_au.code='';rdots();pin.classList.add('on');});
+    pad.addEventListener('click',function(e){var b=e.target.closest('.akey');if(!b||!_au.sel||b.classList.contains('ghost'))return;
       var k=b.getAttribute('data-k');
-      if(k==='⌫'){code=code.slice(0,-1);rdots();return;}
-      if(code.length>=4)return;
-      code+=k;rdots();
-      if(code.length===4){var pc=code;
+      if(k==='⌫'){_au.code=_au.code.slice(0,-1);rdots();return;}
+      if(_au.code.length>=4)return;
+      _au.code+=k;rdots();
+      if(_au.code.length===4){var pc=_au.code,sel=_au.sel;
         fetch('/api/auth/login/passcode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:sel.username,user_id:sel.user_id,passcode:pc})})
           .then(function(r){return r.json().catch(function(){return {};}).then(function(d){return {ok:r.ok,d:d};});})
           .then(function(x){
@@ -4490,11 +4564,15 @@
               // reload either way so a stale challenge can't block the login.
               resolvePanelChallenge(pc,x.d.session_id).then(function(){location.reload();});return;
             }
-            pin.classList.add('err');setTimeout(function(){pin.classList.remove('err');code='';rdots();},450);
-          }).catch(function(){pin.classList.add('err');setTimeout(function(){pin.classList.remove('err');code='';rdots();},450);});
+            pin.classList.add('err');setTimeout(function(){pin.classList.remove('err');_au.code='';rdots();},450);
+          }).catch(function(){pin.classList.add('err');setTimeout(function(){pin.classList.remove('err');_au.code='';rdots();},450);});
       }});
-  })();}
+  }
   if(window.__needAuth)initAuthCard();
+  // The guest session outlives nothing: 30 min TTL on a kiosk that runs for
+  // days. Keep one alive so personal-but-guest-OK calls (voice token, panel
+  // sync) never go out dead; never while the card is up (someone is signing in).
+  if(window.__kiosk)setInterval(function(){if(!sid()&&!document.querySelector('#authov.on'))convEnsureSession();},60000);
 
   // ?conv=1 — arrive straight into conversation mode. Captured BEFORE the
   // arrival block below, which rewrites the URL down to panel_id/kiosk.
@@ -4545,6 +4623,6 @@
     }).catch(function(){});}catch(e){}
 })();
 </script>
-<script src="/js/touch-ui-executor.js?v=estate-4"></script>
+<script src="/js/touch-ui-executor.js?v=estate-5"></script>
 </body>
 </html>

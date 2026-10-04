@@ -227,6 +227,34 @@ const CONV_HOLD = 30000;
     assert(!e.onAsk(), 'a wake with nothing said leaves the home face alone');
   }
 
+  // A6. The server emits voice:responding once per SENTENCE (plus a spoken
+  // filler flagged processing_ack). The Ask surface must show the WHOLE answer
+  // so far — not just the last sentence, and never the filler (2026-10-04).
+  {
+    const e = bootEstate();
+    e.V.listening();
+    e.V.transcript('tell me about quokkas');
+    e.V.thinking();
+    e.V.responding('One sec.', { processing_ack: true });     // spoken filler
+    e.V.responding('A quokka is a small wallaby.');
+    e.V.responding('It lives on Rottnest Island.');
+    e.V.done(null);
+    e.clock.advance(1300);
+    assert(e.onAsk(), 'the chat answer is shown on the Ask surface');
+    assert.strictEqual(e.answer(), 'A quokka is a small wallaby. It lives on Rottnest Island.',
+      'every sentence of the turn is on screen, in order, without the filler');
+    // A card's text (show_card) REPLACES the running answer.
+    e.V.responding('Rottnest: 21°, sunny', { card: true });
+    assert.strictEqual(e.answer(), 'Rottnest: 21°, sunny', 'a card replaces the accumulated text');
+    // The next turn starts clean.
+    e.V.transcript('and the weather');
+    e.V.thinking();
+    e.V.responding('Sunny.');
+    e.V.done(null);
+    e.clock.advance(1300);
+    assert.strictEqual(e.answer(), 'Sunny.', 'a new turn does not inherit the previous answer');
+  }
+
   // ── Part B: the executor's push socket (js/touch-ui-executor.js) ──────────
   function extract(name) {
     const start = execSrc.indexOf('function ' + name + '(');
