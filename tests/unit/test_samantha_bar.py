@@ -199,6 +199,59 @@ def test_s12_raise_spacing(rows, verdict):
     assert sb.score_s12(rows, "o1", "o2")[0] == verdict
 
 
+# ── S13–S16 (2026-10-04): the contacts conversation classes ────────────────
+
+@pytest.mark.parametrize("reply, verdict", [
+    ("You have 2 contacts. Friend: Ottoline Fenwick. Brother: Percival.", "PASS"),
+    ('No contacts found for "in my contacts".', "FAIL"),                  # the live bug
+    ("You have 1 contact. Friend: Ottoline Fenwick.", "FAIL"),            # a person missing
+])
+def test_s13_list_all(reply, verdict):
+    assert sb.score_s13(reply)[0] == verdict
+
+
+@pytest.mark.parametrize("reply, verdict", [
+    ("Percival is your brother.", "PASS"),
+    ("Found:\n  - My Brother Percival (friend)", "FAIL"),                 # the live bug
+    ("Percival is your friend.", "FAIL"),
+    ("Percival is in your contacts.", "FAIL"),                            # no relation said
+])
+def test_s14_relation_phrase(reply, verdict):
+    assert sb.score_s14(reply)[0] == verdict
+
+
+@pytest.mark.parametrize("reply, verdict", [
+    ("Ottoline Fenwick is your friend.", "PASS"),
+    ("Found:\n  - Ottoline (friend)\n  - Ottoline Fenwick (friend)", "FAIL"),   # the live bug
+    ("Ottoline is your friend.", "FAIL"),                                  # the fuller record is lost
+])
+def test_s15_one_record(reply, verdict):
+    assert sb.score_s15(reply)[0] == verdict
+
+
+@pytest.mark.parametrize("offer, yes, verdict", [
+    ("Would you like me to add Ignatius, Philippa and Barnaby to your contacts?",
+     "Done — I've added Ignatius, Philippa and Barnaby to your contacts.", "PASS"),
+    ("Would you like me to add Ignatius? Would you like me to add Philippa?",
+     "Done — I've added Ignatius to your contacts.", "FAIL"),             # two questions
+    ("Would you like me to add Ignatius, Philippa and Barnaby to your contacts?",
+     "Done — I've added Ignatius to your contacts.", "FAIL"),             # a yes that adds one
+    ("Glad to help!", "ok", "SKIP"),                                      # flags dark: never a pass
+])
+def test_s16_one_question_one_yes(offer, yes, verdict):
+    assert sb.score_s16(offer, yes)[0] == verdict
+
+
+def test_contacts_scenarios_are_declared_and_demo_only():
+    assert {"S13", "S14", "S15", "S16"} <= set(sb.SCENARIO_IDS)
+    assert "S13" not in sb.EXPECTED and "S16" not in sb.EXPECTED  # a verdict, not a target
+    for sid in ("S13", "S14", "S15", "S16"):
+        assert any(s["id"] == sid for s in sb.SCENARIOS)
+    # synthetic people only: none of the fixtures can be a real household member
+    for text in (sb.SAY_CONTACT_FULL, sb.SAY_CONTACT_REL, sb.SAY_FAMILY):
+        assert any(n in text.lower() for n in ("ottoline", "percival", "ignatius"))
+
+
 def test_s10_s11_s12_in_the_run(monkeypatch):
     rows = [{"kind": "open_loop", "carries": True, "surfaced": 1, "session": "s5-open-1"},
             {"kind": "open_loop", "carries": False, "surfaced": 1, "session": "s5-open-2"}]
@@ -875,6 +928,9 @@ class _ScriptedLive(sb.Live):
                  "b-ask": "I have no idea who is visiting.",
                  "long-ask-sister": "Marisol.", "long-ask-dad": "He kept a lighthouse.",
                  "s5-open-1": "Good! How did the aquarium interview go?",
+                 "c-ask-list": "You have 2 contacts. Friend: Ottoline Fenwick. Brother: Percival.",
+                 "c-ask-rel": "Percival is your brother.",
+                 "c-ask-dup": "Ottoline Fenwick is your friend.",
                  "s20-ask": "Priya Nair's birthday is on 7 August 1991.",
                  "s21-fix": "Fixed: Biscuit Whitfield is a pet dog, not one of the children.",
                  "s21-ask": "Dana Whitfield has one child, Mika.",
@@ -946,6 +1002,16 @@ def test_healthy_run_has_every_scenario_and_no_setup_errors(monkeypatch):
     assert not [r for r in res.values() if "setup_problems" in r["evidence"]]
     assert res["S2"]["verdict"] == "PASS" and res["S7"]["verdict"] == "PASS"
     assert res["S8"]["verdict"] == "PASS"
+    # contacts: S13-S15 scored on the scripted replies; S16 SKIPs (no offer surfaced: flags dark)
+    assert [res[s]["verdict"] for s in ("S13", "S14", "S15", "S16")] == ["PASS", "PASS", "PASS", "SKIP"]
+
+
+def test_failed_contact_seed_errors_the_contacts_scenarios(monkeypatch):
+    live, res = _drive(monkeypatch, seed_errors=["c-rel"])
+    for sid in ("S13", "S14"):
+        assert res[sid]["verdict"] == "ERROR" and "seed turn c-rel failed" in res[sid]["evidence"]["why"]
+    assert "c-ask-list" not in live.chats and "c-ask-rel" not in live.chats  # never asked unexercised
+    assert res["S15"]["verdict"] == "PASS"
 
 
 @pytest.mark.parametrize("seed, sid, ask_tag", [

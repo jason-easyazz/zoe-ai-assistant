@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from fastapi import HTTPException
 
+import contacts_conversation as _cc
 from time_utils import today_for_zoe_tz
 from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS
 
@@ -636,6 +637,17 @@ _WHO_IS_TRAILING_PUNCT_RE = re.compile(r"[\s?.!,\u2026]+$")
 _WHO_IS_RAW_RE = re.compile(r"\bwho\s+is\s+(.+)$", re.IGNORECASE)
 
 
+_CONTACTS_BOOK = r"(?:contacts?(?: list)?|address ?book|phone ?book)"
+_CONTACTS_COUNT_RE = re.compile(r"^how\s+many\b")
+_CONTACTS_LIST_ALL_RES = tuple(re.compile(p) for p in (
+    rf"^(?:who|what)(?:'s|s|\s+is|\s+are)\s+(?:all\s+)?(?:in|on)\s+(?:my|the)\s+{_CONTACTS_BOOK}$",
+    rf"^who\s+(?:do\s+i|have\s+i)\s+(?:have|got)(?:\s+got)?\s+(?:saved|stored|in\s+my\s+{_CONTACTS_BOOK})$",
+    rf"^(?:list|read(?:\s+out)?|tell\s+me|give\s+me|show(?:\s+me)?)\s+(?:all\s+)?(?:of\s+)?(?:my|the)\s+(?:saved\s+)?{_CONTACTS_BOOK}$",
+    r"^(?:list|show(?:\s+me)?|tell\s+me)\s+(?:everyone|everybody|all\s+(?:the\s+)?people)\s+(?:i\s+have\s+)?(?:saved|in\s+my\s+contacts)$",
+    r"^how\s+many\s+(?:contacts|people)\s+do\s+i\s+have(?:\s+saved)?(?:\s+in\s+my\s+contacts)?$",
+))
+
+
 def _who_is_obj_words(obj: str) -> list[str]:
     return _WHO_IS_TRAILING_PUNCT_RE.sub("", obj.strip()).split()
 
@@ -797,6 +809,15 @@ def detect_intent(
     ):
         return Intent("people_search", {"query": ""})
 
+    # "who is in/on my contacts", "list my contacts", "who do I have saved" are
+    # LIST-ALL requests, never a name lookup (live 2026-10-04: `No contacts found
+    # for "in my contacts"`). Same empty-query people_search the "show my
+    # contacts" navigation phrase uses, so voice and chat share one handler.
+    if any(rx.match(t) for rx in _CONTACTS_LIST_ALL_RES):
+        if _CONTACTS_COUNT_RE.match(t):  # a count question gets the count, not the dump
+            return Intent("people_search", {"query": "", "mode": "count"})
+        return Intent("people_search", {"query": ""})
+
     if re.match(r"^remember that\b.+", t, re.IGNORECASE):
         return Intent("memory_remember", {"raw": text})
 
@@ -922,8 +943,17 @@ def detect_intent(
             r",|\s+(?:she\'?s?|he\'?s?|they\'?re?|who\s+is|as\s+(?:a|my)?)\b",
             raw, maxsplit=1, flags=re.I
         )[0].strip()
-        # Capitalise each word (input text is normalised to lower)
-        name = " ".join(w.capitalize() for w in name_part.split()) if name_part else raw
+        # "my brother kyle" is a RELATION + a name, not a name: strip the relation
+        # phrase and carry it to the relationship field ("kyle as my brother" /
+        # "kyle, he's my brother" resolve from the tail of the raw clause).
+        clean_name, phrase_rel = _cc.split_relation_from_name(name_part)
+        if not phrase_rel:
+            phrase_rel = _cc.relation_from_tail(raw)
+        if phrase_rel and clean_name:
+            name = clean_name
+        else:
+            # Capitalise each word (input text is normalised to lower)
+            name = " ".join(w.capitalize() for w in name_part.split()) if name_part else raw
 
         rel = "friend"
         context = "personal"
@@ -965,6 +995,12 @@ def detect_intent(
             if tag in tl:
                 circle = "inner"
                 break
+
+        # The relation spoken as "my <relation>" is the most specific signal.
+        if phrase_rel:
+            rel = phrase_rel
+            if phrase_rel in _cc.WORK_RELATIONS:
+                context = "work"
 
         return Intent("people_create", {"name": name, "relationship": rel, "context": context, "circle": circle})
 
@@ -1864,6 +1900,41 @@ def _offer_reply_kind(text: str, offer_name: str) -> Optional[str]:
     return kind
 
 
+async def _match_same_person_reply(text: str, user_id: str) -> Optional["Intent"]:
+    """A short yes/no to a queued 'is <new name> the same person as <stub>?'
+    question - bound only when the previous assistant message ENDS with it."""
+    item = _cc.peek_same_person(user_id)
+    if item is None:
+        return None
+    kind = _cc.same_person_reply_kind(_offer_reply_tokens(text))
+    if kind is None or not _cc.asked_in_message(
+            await _previous_assistant_message(user_id), item["question"]):
+        return None
+    return Intent("people_same_person_reply", {**{k: v for k, v in item.items() if k != "ts"},
+                                               "confirm": kind == "yes"})
+
+
+async def _previous_assistant_message(user_id: str) -> Optional[str]:
+    """The user's most recent assistant message (any session), or None. Used to
+    check that a short yes/no really answers a question Zoe just asked. Fail
+    closed: any error means 'unknown', which never binds a reply."""
+    try:
+        from database import get_db_ctx
+
+        async with get_db_ctx() as db:
+            cur = await db.execute(
+                "SELECT m.content FROM chat_messages m JOIN chat_sessions s ON s.id = m.session_id"
+                " WHERE s.user_id = ? AND m.role = 'assistant'"
+                " ORDER BY m.created_at DESC LIMIT 1",
+                (user_id,),
+            )
+            row = await cur.fetchone()
+        return str(row["content"] if row is not None else "") or None
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("_previous_assistant_message: lookup failed: %s", type(exc).__name__)
+        return None
+
+
 async def _match_pending_offer_reply(text: str, user_id: str) -> Optional["Intent"]:
     """Map a short yes/no turn onto the SURFACED contact offer it answers.
 
@@ -1875,7 +1946,11 @@ async def _match_pending_offer_reply(text: str, user_id: str) -> Optional["Inten
     """
     # Cheap shape pre-check (opener word only) before any flag/DB work.
     tokens = _offer_reply_tokens(text)
-    if not tokens or tokens[0] not in (_OFFER_AFFIRM_FIRST | _OFFER_DECLINE_FIRST):
+    batch = _cc.offer_batch_enabled()  # ZOE_CONTACT_OFFER_BATCH (default OFF)
+    first_ok = _OFFER_AFFIRM_FIRST | _OFFER_DECLINE_FIRST
+    if batch:
+        first_ok = first_ok | _cc.BATCH_FIRST_EXTRA
+    if not tokens or tokens[0] not in first_ok:
         return None
     try:
         from pending_suggestions import (
@@ -1891,6 +1966,39 @@ async def _match_pending_offer_reply(text: str, user_id: str) -> Optional["Inten
     offers = [o for o in offers if o.get("id")]
     if not offers:
         return None
+    if batch:
+        # The brain asked ONE enumerated question for the whole ASKED set, so a
+        # plain yes / "all of them" / "add his whole family" answers all of it,
+        # "just X" answers one, and a no drops the set. "Surfaced" only means an
+        # offer was injected into a prompt, so a reply binds ONLY when (1) the
+        # question was recorded for this set and (2) the previous assistant
+        # message really ends with it; otherwise the yes/no was for something
+        # else and normal routing (the brain) gets it.
+        asked = _cc.get_asked(user_id)
+        if not asked:
+            return None
+        offers = [o for o in offers if str(o.get("id")) in asked["ids"]]
+        if not offers or not _cc.asked_in_message(
+                await _previous_assistant_message(user_id), asked["question"]):
+            return None
+        scoped = _cc.batch_reply_scope(
+            tokens, offers, _OFFER_AFFIRM_FIRST, _OFFER_DECLINE_FIRST, _OFFER_REPLY_FILLER)
+        if scoped is not None:
+            _cc.clear_asked(user_id)  # the question is answered; never bind it twice
+            kind, acted, dropped = scoped
+            return Intent(
+                "pending_offer_accept" if kind == "accept" else "pending_offer_dismiss",
+                {
+                    "suggestion_id": acted[0]["id"],
+                    "name": acted[0].get("name") or "",
+                    "relationship": acted[0].get("relationship") or "",
+                    "suggestion_ids": [o["id"] for o in acted],
+                    "names": [o.get("name") or "" for o in acted],
+                    "dismiss_ids": [o["id"] for o in dropped],
+                    "dismiss_names": [o.get("name") or "" for o in dropped],
+                },
+            )
+        return None  # batch on: a reply the enumerated question does not cleanly answer goes to the brain
     # A reply that carries a name token binds to that offer, if unambiguous.
     token_set = set(tokens[1:])
     named = [
@@ -2016,6 +2124,12 @@ async def detect_and_extract_intent(
     # would otherwise be swallowed by the acknowledgement/greeting intents below.
     # Triple-guarded (flag + shape + a surfaced offer existing); returns None for
     # everything else so normal routing is untouched.
+    try:
+        _same = await _match_same_person_reply(text, user_id)
+        if _same is not None:
+            return _same
+    except Exception as _same_exc:  # never let the same-person path break routing
+        logger.debug("detect_and_extract_intent: same-person match failed: %s", _same_exc)
     try:
         _offer_reply = await _match_pending_offer_reply(text, user_id)
     except Exception as _offer_exc:  # never let the offer path break routing
@@ -2169,12 +2283,25 @@ _EXPLICIT_LIST_TARGET_RE = re.compile(
 )
 
 
+# "add his whole family" / "add everyone" / "add them all" / "add the kids" name
+# PEOPLE (live 2026-10-04: it landed on the shopping list). They are never a
+# shopping item, so the implicit list_add matcher defers them (to the pending
+# contact-offer reply matcher or the brain).
+_PEOPLE_REF_ADD_RE = re.compile(
+    r"^(?:(?:can|could) you |please )?add\s+(?:"
+    r"(?:his|her|their)\s+(?:whole\s+|entire\s+)?(?:family|kids|children)"
+    r"|(?:the\s+)?(?:whole\s+|entire\s+)family"
+    r"|everyone|everybody|them\s+all|all\s+of\s+them|(?:the\s+)?(?:kids|children))$",
+    re.IGNORECASE,
+)
+
+
 def _has_competing_list_cue(text: str) -> bool:
     """True when `text` names a non-list capability and lacks an explicit list
     target, so the implicit list_add matcher should defer to the brain."""
     if _EXPLICIT_LIST_TARGET_RE.search(text):
         return False
-    return bool(_COMPETING_LIST_CUE_RE.search(text))
+    return bool(_COMPETING_LIST_CUE_RE.search(text) or _PEOPLE_REF_ADD_RE.match(text))
 
 
 def _sanitize_list_item(raw: str) -> str:
@@ -2740,6 +2867,18 @@ async def _execute_people_create_direct(intent: Intent, user_id: str) -> Optiona
     if not name:
         return None
     relationship = slots.get("relationship") or None
+    # A name that is only a relation ("my boss") is not a name: ask, don't save a
+    # contact called "My Boss". A relation phrase wrapped around a real name
+    # ("my brother Kyle", from the regex lane OR the brain's people tool, which
+    # defaults the relationship to 'friend') becomes name + relationship.
+    _bare_rel = _cc.bare_relation_phrase(name)
+    if _bare_rel:
+        return f"What's your {_bare_rel}'s name?"
+    _clean_name, _phrase_rel = _cc.split_relation_from_name(name)
+    if _phrase_rel and _clean_name:
+        name = _clean_name
+        relationship = _cc.merge_relationship(relationship, _phrase_rel)
+    conversational = _cc.conversational_enabled()
     # 'circle' = valid middle tier (inner|circle|public); people.circle is NOT
     # NULL so it needs a value (a NULL default made this direct INSERT fail →
     # silent mcporter fallback that persists nothing).
@@ -2777,6 +2916,12 @@ async def _execute_people_create_direct(intent: Intent, user_id: str) -> Optiona
             if await dup_cursor.fetchone():
                 rel_phrase = f" as your {relationship}" if relationship else ""
                 return f"You already have {name}{rel_phrase} in your contacts."
+            if conversational and not slots.get("force_new"):
+                # A first-name-only contact and a fuller record of the same
+                # first name + relation are one person: never mint a second row.
+                merged = await _merge_into_same_person(db, user_id, name, relationship)
+                if merged:
+                    return merged
             await db.execute(
                 "INSERT INTO people (id, user_id, name, relationship, birthday, phone, email,"
                 " notes, visibility, circle, context) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -2798,11 +2943,186 @@ async def _execute_people_create_direct(intent: Intent, user_id: str) -> Optiona
             "all", "people:created",
             {"id": person_id, "name": name, "relationship": relationship},
         )
+        if conversational:
+            return _cc.format_created(name, relationship)
         rel_phrase = f" as your {relationship}" if relationship else ""
         return f"Added {name}{rel_phrase} to your contacts."
     except Exception as exc:
         logger.warning("people_create direct execution unavailable; falling back to mcporter: %s", exc)
         return None
+
+
+def _and_list(items: list[str]) -> str:
+    return _cc.join_and([i for i in items if i])
+
+
+async def _execute_pending_offer_batch(intent: Intent, user_id: str) -> str:
+    """ZOE_CONTACT_OFFER_BATCH: act on the WHOLE surfaced offer set from one
+    reply. Each offer still goes through the sanctioned per-row path
+    (execute_suggestion / mark_resolved); only the fan-out and the wording are
+    new. Failures are named, never reported as saved."""
+    from pending_suggestions import execute_suggestion, mark_resolved
+
+    slots = intent.slots or {}
+    ids = [i for i in (slots.get("suggestion_ids") or []) if i]
+    names = list(slots.get("names") or [])
+    names += [""] * (len(ids) - len(names))
+    drop_ids = [i for i in (slots.get("dismiss_ids") or []) if i]
+    drop_names = list(slots.get("dismiss_names") or [])
+    drop_names += [""] * (len(drop_ids) - len(drop_names))
+    if intent.name == "pending_offer_dismiss":
+        done = [n or "them" for i, n in zip(ids, names) if await mark_resolved(i, user_id)]
+        if not done:
+            return ("I tried to drop those offers but couldn't update them just now — "
+                    "if I ask again, another no will clear them.")
+        return f"No problem — I won't save {_and_list(done)} as contacts."
+    saved: list[str] = []
+    failed: list[str] = []
+    notes: list[str] = []  # already-have / updated / same-person question: not "added"
+    for sid, nm in zip(ids, names):
+        res = await execute_suggestion(sid, user_id)
+        if not res.get("ok"):
+            failed.append(nm or "them")
+            logger.info("pending_offer_accept(batch) failed user=%s err=%s", user_id, res.get("error"))
+            continue
+        note = _accept_note(res.get("result") or {}, user_id)
+        (notes if note else saved).append(note or nm or "them")
+    dropped = [n for i, n in zip(drop_ids, drop_names) if await mark_resolved(i, user_id)]
+    if saved:
+        out = f"Done — I've added {_and_list(saved)} to your contacts."
+    elif notes:
+        out = ""
+    else:
+        out = "I couldn't save them as contacts just now — you can add them from the People panel."
+    if notes:
+        out = f"{out} {' '.join(notes)}".strip()
+    if saved and failed:
+        out += f" I couldn't save {_and_list(failed)} just now — you can add them from the People panel."
+    if dropped:
+        out += f" I've left {_and_list(dropped)} out."
+    return out
+
+
+def _accept_note(result: dict, user_id: str) -> Optional[str]:
+    """The honest line for an accepted offer that did NOT create a new row
+    (execute_suggestion under ZOE_CONTACTS_CONVERSATIONAL), or None when it did
+    (or the legacy path ran). A same-person question is queued for the reply."""
+    name, rel = str(result.get("name") or ""), result.get("relationship")
+    if result.get("existing_name"):
+        return same_person_reply_text("existing_fuller", [{"name": result["existing_name"]}], name, rel)
+    if result.get("ambiguous"):
+        return same_person_reply_text("ambiguous", [{"name": n} for n in result["ambiguous"]], name, rel)
+    if result.get("upgraded_from"):
+        return same_person_reply_text("upgrade", [{"name": result["upgraded_from"]}], name, rel)
+    if result.get("ask_same_person"):
+        stub = result["ask_same_person"]
+        return _remember_same_person_question(user_id, stub, name, rel)
+    return None
+
+
+def _rel_suffix(rel: Optional[str]) -> str:
+    rel = (rel or "").strip()
+    return f", your {rel}" if rel else ""
+
+
+def same_person_reply_text(verdict: str, hits: list[dict], name: str,
+                           relationship: Optional[str]) -> Optional[str]:
+    """The user-facing line for a non-'new' decide_same_person verdict whose
+    side effects (if any) have already happened; None for 'new'."""
+    if verdict == "existing_fuller":
+        h = hits[0]
+        return f"You already have {h['name']} in your contacts{_rel_suffix(h.get('relationship') or relationship)}."
+    if verdict == "ambiguous":
+        return (f"You already have {_and_list([h['name'] for h in hits])} in your contacts. "
+                "Which one do you mean?")
+    if verdict == "upgrade":
+        return (f"I already had a {hits[0]['name']} saved, so I've updated that contact to "
+                f"{name}{_rel_suffix(relationship)} rather than adding a second one.")
+    if verdict == "ask":
+        return _cc.same_person_question(hits[0]["name"], name)
+    return None
+
+
+def _remember_same_person_question(user_id: str, stub: dict, name: str,
+                                   relationship: Optional[str]) -> str:
+    """Queue the 'is X the same person?' question so a following yes/no is bound
+    to it (and only if the previous assistant message really ended with it)."""
+    q = _cc.same_person_question(stub["name"], name)
+    _cc.remember_same_person(user_id, {
+        "stub_id": str(stub["id"]), "stub_name": stub["name"], "name": name,
+        "relationship": relationship, "question": q,
+    })
+    return q
+
+
+async def _merge_into_same_person(db, user_id: str, name: str,
+                                  relationship: Optional[str]) -> Optional[str]:
+    """Flag ZOE_CONTACTS_CONVERSATIONAL: the reply for a save that matches an
+    existing contact of the same first name + compatible relation, or None when
+    it is a genuinely new person (see contacts_conversation.decide_same_person).
+
+      * the new name is the shorter form of ONE fuller contact -> say so, write nothing;
+      * of SEVERAL fuller contacts (Caitlin Farrell / Caitlin Hale) -> ask which;
+      * an existing first-name-only stub is renamed in place ONLY when nothing can
+        be lost (specific equal relationship, no phone/email/notes, no linked
+        memories); a NULL/'friend' stub or one with data may be a different
+        person, so it is ASKED about ("is Dan Murphy the same person?") and
+        renamed only on a yes (people_same_person_reply).
+    """
+    first = (name.split() or [""])[0]
+    cur = await db.execute(
+        "SELECT id, name, relationship, phone, email, notes, birthday, how_we_met FROM people"
+        " WHERE user_id = ? AND lower(name) LIKE lower(?) ESCAPE '\\'"
+        " AND (deleted = 0 OR deleted IS NULL) LIMIT 20",
+        (user_id, f"{_escape_like_pattern(first)}%"),
+    )
+    rows = [dict(row) for row in await cur.fetchall()]
+    stub_ids = [r["id"] for r in rows if len(str(r.get("name", "")).split()) == 1]
+    linked = await _cc.linked_memory_ids(user_id, stub_ids) if stub_ids else set()
+    verdict, hits = _cc.decide_same_person(name, relationship, rows, frozenset(linked))
+    if verdict == "upgrade":
+        await _rename_person_row(db, user_id, hits[0]["id"], name, relationship)
+    elif verdict == "ask":
+        _remember_same_person_question(user_id, hits[0], name, relationship)
+    return same_person_reply_text(verdict, hits, name, relationship)
+
+
+async def _rename_person_row(db, user_id: str, person_id: str, name: str,
+                             relationship: Optional[str]) -> None:
+    """Rename a contact in place: name, relationship (kept when none given),
+    is_partial cleared (it is a full contact now), memory mirror refreshed."""
+    from datetime import datetime, timezone
+
+    await db.execute(
+        "UPDATE people SET name = ?, relationship = COALESCE(?, relationship), is_partial = 0,"
+        " updated_at = ? WHERE id = ? AND user_id = ?",
+        (name, relationship or None, datetime.now(timezone.utc).isoformat(), person_id, user_id),
+    )
+    await _notify_ui_channel(
+        "all", "people:updated", {"id": person_id, "name": name, "relationship": relationship or None})
+    await _cc.refresh_person_mirror(user_id, person_id, name, relationship)
+
+
+async def _execute_same_person_reply(intent: Intent, user_id: str) -> str:
+    """The user answered 'is <new name> the same person as <stub>?'."""
+    slots = intent.slots or {}
+    _cc.pop_same_person(user_id)
+    name, rel = str(slots.get("name") or ""), slots.get("relationship") or None
+    stub_name = str(slots.get("stub_name") or "")
+    if slots.get("confirm"):
+        from database import get_db_ctx
+
+        async with get_db_ctx() as db:
+            await _rename_person_row(db, user_id, str(slots.get("stub_id")), name, rel)
+        out = f"Done — I've updated {stub_name} to {name}{_rel_suffix(rel)}."
+    else:
+        out = await _execute_people_create_direct(
+            Intent("people_create", {"name": name, "relationship": rel, "force_new": True}), user_id) \
+            or f"I couldn't add {name} just now."
+    nxt = _cc.peek_same_person(user_id)
+    return f"{out} {nxt['question']}" if nxt else out
+
+
 
 
 async def _execute_note_search_direct(intent: Intent, user_id: str) -> Optional[str]:
@@ -2843,19 +3163,42 @@ async def _execute_people_search_direct(intent: Intent, user_id: str) -> Optiona
     Same root cause as note_search: the mcporter command omitted user_id, so the
     lookup ran as family-admin and never found an authed user's contacts. Binds
     the acting user_id in trusted code, mirroring the people_create direct
-    executor. Returns the formatted response, or None to fall back to mcporter."""
+    executor. Returns the formatted response, or None to fall back to mcporter.
+
+    The query is classified before it is searched (contacts_conversation):
+    "in my contacts" / "on my contacts" is a LIST-ALL request and a clause
+    ("flying in on thursday") is not a name at all - neither is ever run as a
+    name search (live 2026-10-04: `No contacts found for "in my contacts"`).
+    """
     slots = intent.slots or {}
-    query = str(slots.get("query") or "").strip()
+    raw_query = str(slots.get("query") or "").strip()
+    kind, query = _cc.classify_contacts_query(raw_query) if raw_query else ("list", "")
+    if kind == "none":
+        return "I'm not sure who you mean. What name should I look up?"
+    conversational = _cc.conversational_enabled()
+    cols = "id, name, relationship, birthday, phone, email" + (", notes" if conversational else "")
     try:
         from database import get_db_ctx
 
         async with get_db_ctx() as db:
-            if query:
+            if kind == "name":
                 like = f"%{_escape_like_pattern(query)}%"
                 cursor = await db.execute(
-                    "SELECT id, name, relationship, birthday, phone, email FROM people"
+                    f"SELECT {cols} FROM people"
                     " WHERE name ILIKE ? ESCAPE '\\' AND user_id = ? AND deleted = 0 LIMIT 10",
                     (like, user_id),
+                )
+            elif kind == "rel":
+                # "who is my son": match the RELATIONSHIP field only, whole value,
+                # any spelling of the relation (mum/mom/mother). Never the name
+                # (Jason, Mason) and never a substring (grandson, grandmother).
+                aliases = _cc.relation_aliases(query)
+                marks = ",".join("?" * len(aliases))
+                cursor = await db.execute(
+                    f"SELECT {cols} FROM people"
+                    f" WHERE lower(trim(relationship)) IN ({marks})"
+                    " AND user_id = ? AND deleted = 0 ORDER BY name LIMIT 10",
+                    (*aliases, user_id),
                 )
             else:
                 # Empty query = "show my contacts" / "open contacts page"
@@ -2864,15 +3207,69 @@ async def _execute_people_search_direct(intent: Intent, user_id: str) -> Optiona
                 # mcporter command (which omits user_id and would surface
                 # family-admin's contacts to any authed user).
                 cursor = await db.execute(
-                    "SELECT id, name, relationship, birthday, phone, email FROM people"
-                    " WHERE user_id = ? AND deleted = 0 ORDER BY name LIMIT 20",
+                    f"SELECT {cols} FROM people"
+                    " WHERE user_id = ? AND deleted = 0 ORDER BY name LIMIT "
+                    + ("200" if conversational or slots.get("mode") == "count" else "20"),
                     (user_id,),
                 )
             rows = [dict(r) for r in await cursor.fetchall()]
-        return _format_response(intent, json.dumps({"people": rows}, default=str))
+        if slots.get("mode") == "count":
+            # "how many contacts do I have": the number, short (TTS reads this out).
+            n = len(_cc.collapse_duplicates(rows)) if conversational else len(rows)
+            return _cc.format_count(n, capped=len(rows) >= 200)
+        # The user's own word for a relation ("mum"), echoed in the reply.
+        word = _cc.query_core_phrase(raw_query) if kind == "rel" else ""
+        if conversational:
+            if kind == "list":
+                return _cc.format_contact_list(rows)
+            people = _cc.collapse_duplicates(rows)
+            facts: dict[str, list[str]] = {}
+            if len(people) == 1:
+                facts[str(people[0].get("id"))] = await _contact_facts(user_id, people[0])
+            return _cc.format_lookup(people, f"my {word}" if word else query, facts, relation_word=word)
+        return _format_response(
+            Intent("people_search", {"query": word or query}), json.dumps({"people": rows}, default=str))
     except Exception as exc:
         logger.warning("people_search direct execution unavailable; falling back to mcporter: %s", exc)
         return None
+
+
+async def _contact_facts(user_id: str, person: dict, limit: int = 2) -> list[str]:
+    """Top stored facts about one contact, for a sentence-shaped lookup: memory
+    rows linked to the person (entity_id = people.id, including any first-name
+    stub folded into this record), then the contact's own notes / birthday.
+    Best-effort and time-boxed - a slow or failed memory read just means a
+    shorter answer, never a failed lookup."""
+    name = str(person.get("name") or "")
+    ids = [str(person.get("id") or "")] + [str(i) for i in person.get("_merged_ids", [])]
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _add(clause: str) -> None:
+        key = re.sub(r"\W+", " ", clause).strip().lower()
+        if clause and key and key not in seen and len(out) < limit:
+            seen.add(key)
+            out.append(clause)
+
+    try:
+        from memory_service import get_memory_service
+
+        refs = await asyncio.wait_for(
+            get_memory_service().list_by_entity(user_id, [i for i in ids if i]), timeout=2.0)
+        refs = sorted(refs, key=lambda r: str((r.metadata or {}).get("added_at") or ""), reverse=True)
+        for r in refs:
+            text = str(getattr(r, "text", "") or "")
+            if not text or re.match(r"^\s*person in contacts\b", text, re.IGNORECASE):
+                continue  # the contact-card mirror, not a fact about them
+            _add(_cc.fact_clause(text, name, str((r.metadata or {}).get("pattern_type") or "")))
+    except Exception as exc:  # noqa: BLE001 - facts are an embellishment
+        logger.debug("contact facts: memory read skipped: %s", type(exc).__name__)
+    notes = re.sub(r"\s+", " ", str(person.get("notes") or "")).strip()
+    if notes:
+        _add(notes.split(". ")[0][:120].rstrip("."))
+    if person.get("birthday"):
+        _add(f"{(name.split() or ['They'])[0]}'s birthday is {person['birthday']}")
+    return out
 
 
 # Personal-data intents an anonymous (guest) session may not touch via CHAT.
@@ -2996,13 +3393,21 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
     # offer answered off-panel with a plain yes/no. Accept goes through the
     # sanctioned pending_suggestions.execute_suggestion path (same as the panel
     # card's accept route); refusal dismisses so the offer stops re-surfacing.
+    if intent.name == "people_same_person_reply":
+        return await _execute_same_person_reply(intent, user_id)
+
+    if intent.name in ("pending_offer_accept", "pending_offer_dismiss") and \
+            len(intent.slots.get("suggestion_ids") or []) + len(intent.slots.get("dismiss_ids") or []) > 1:
+        return await _execute_pending_offer_batch(intent, user_id)
+
     if intent.name == "pending_offer_accept":
         from pending_suggestions import execute_suggestion
         _name = intent.slots.get("name") or "them"
         res = await execute_suggestion(intent.slots.get("suggestion_id", ""), user_id)
         if res.get("ok"):
             logger.info("pending_offer_accept: contact saved user=%s", user_id)
-            return f"Done — I've added {_name} to your contacts."
+            note = _accept_note(res.get("result") or {}, user_id)
+            return note or f"Done — I've added {_name} to your contacts."
         logger.info("pending_offer_accept failed user=%s err=%s", user_id, res.get("error"))
         return (
             f"I couldn't save {_name} as a contact just now — "
@@ -4825,10 +5230,13 @@ def _format_response(intent: Intent, raw_output: str) -> str:
     if intent.name == "people_search":
         people = data.get("people", [])
         if not people:
+            if not str(s.get("query") or "").strip():
+                return "You don't have any contacts saved yet."
             return f"No contacts found for \"{s.get('query', '')}\"."
         lines = ["Found:"]
         for p in people:
-            lines.append(f"  - {p.get('name', '?')} ({p.get('relationship', '?')})")
+            rel = str(p.get("relationship") or "").strip()
+            lines.append(f"  - {p.get('name', '?')}" + (f" ({rel})" if rel else ""))
         return "\n".join(lines)
 
     if intent.name == "note_create":

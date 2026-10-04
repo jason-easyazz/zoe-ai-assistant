@@ -777,6 +777,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_CONTACTS_CONVERSATIONAL": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/contacts_conversation.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_CONTACT_BACKFILL_ENABLED": {
         "defaults": [
           "''"
@@ -784,6 +794,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/contact_backfill.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CONTACT_OFFER_BATCH": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/contacts_conversation.py"
         ],
         "typed_env": false
       },

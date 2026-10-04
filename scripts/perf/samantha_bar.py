@@ -17,6 +17,9 @@ Scenarios (docs/knowledge/samantha-bar.md has what each one proves):
   S10 one-word change ("gave up the cello") — expected FAIL today: a TARGET, not a regression
   S11 ask-to-remember — expected SKIP: the behaviour is not built
   S12 raise spacing — two open conversations minutes apart must not both open with a raise
+  S13-S16 contacts conversation (2026-10-04): list-all, "my brother X" -> relationship, one
+          record per person, one enumerated offer question + one yes (S15/S16 need the
+          ZOE_CONTACTS_CONVERSATIONAL / ZOE_CONTACT_OFFER_BATCH flags; dark = FAIL / SKIP)
   S20 day-first dates — "7/8/1991" is 7 August (Australian household), in the store AND the reply
   S21 a correction reaches the record — "X is their dog" -> X is no longer one of the children;
       expected FAIL until ZOE_CORRECTION_APPLY is on (a TARGET, not a regression)
@@ -126,6 +129,7 @@ AUTH_OWNED_TABLES = frozenset({
     "sessions", "oidc_clients", "oidc_signing_keys",
 })
 SCENARIO_IDS = ("S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S10", "S11", "S12",
+                "S13", "S14", "S15", "S16",
                 "S20", "S21", "S22")
 VERDICTS = ("PASS", "FAIL", "SKIP", "ERROR")
 
@@ -168,6 +172,21 @@ S10_STOP_CUES = ("gave up", "given up", "stopped", "quit", "no longer", "not any
 S11_WHY = ("not built: zoe-data has no ask-to-remember behaviour (nothing asks the user for a "
            "reusable preference when a task would benefit); reserved so the gap stays visible")
 
+# S13-S16 (2026-10-04): the contacts conversation classes. Synthetic people only.
+# The regex lane, the Flue people tool and the voice handler all end in the same
+# intent_router handlers, so these are scored on the reply text, not the lane.
+SAY_CONTACT_FULL = "Add a contact named Ottoline Fenwick, she's my friend."
+SAY_CONTACT_REL = "Save a contact for my brother Percival."
+SAY_CONTACT_STUB = "Add a contact named Ottoline."
+ASK_CONTACTS_LIST = "Who is in my contacts?"
+ASK_WHO_REL = "Who is Percival?"
+ASK_WHO_DUP = "Who is Ottoline?"
+SAY_FAMILY = "My cousin Ignatius is visiting with his wife Philippa and their son Barnaby."
+SAY_FAMILY_NUDGE = "Thanks Zoe, that's all for now."
+SAY_FAMILY_YES = "Yes please."
+FAMILY_NAMES = ("ignatius", "philippa", "barnaby")
+S16_WHY = ("no enumerated contact offer surfaced - ZOE_PERSON_SUGGEST_ENABLED, ZOE_SEAM_OFFER_INJECT and "
+           "ZOE_CONTACT_OFFER_BATCH must all be on for the one-question offer, so SKIP is the dark default")
 # S20: a numeric date in the user's words. The house is in Australia, so 7/8/1991 is 7 August.
 SAY_DOB = "My friend Priya Nair's birthday is 7/8/1991."
 ASK_DOB = "When is Priya Nair's birthday?"
@@ -266,6 +285,24 @@ SCENARIOS: tuple[dict[str, Any], ...] = (
      "proves": "of S5's two open turns minutes apart, the second carries no raise of ANY candidate "
                "(the regression check for #1801's per-member raise gap, ZOE_PROACTIVE_RAISE_GAP_S)",
      "turns": [], "asks": []},
+    {"id": "S13", "title": "contacts: list all, not a name search", "judged": False,
+     "proves": "'Who is in my contacts?' lists the saved people instead of answering "
+               "`No contacts found for \"in my contacts\"`",
+     "turns": [("A", "c-full", SAY_CONTACT_FULL), ("A", "c-rel", SAY_CONTACT_REL)],
+     "asks": [("A", ASK_CONTACTS_LIST)]},
+    {"id": "S14", "title": "contacts: 'my brother Percival' is a brother", "judged": False,
+     "proves": "'Save a contact for my brother Percival' stores Percival with relationship brother "
+               "(not a contact called 'My Brother Percival' with relationship friend)",
+     "turns": [], "asks": [("A", ASK_WHO_REL)]},
+    {"id": "S15", "title": "contacts: one person, one record", "judged": False,
+     "proves": "a first-name-only save next to the full-name contact does not become a second "
+               "'Ottoline' in the lookup (ZOE_CONTACTS_CONVERSATIONAL; FAIL while that flag is dark)",
+     "turns": [("A", "c-stub", SAY_CONTACT_STUB)], "asks": [("A", ASK_WHO_DUP)]},
+    {"id": "S16", "title": "contacts: one offer question, one yes", "judged": False,
+     "proves": "after a family is described Zoe asks ONE question naming the people and a plain yes "
+               "adds them all (ZOE_CONTACT_OFFER_BATCH); SKIP while the offer flags are dark",
+     "turns": [("A", "c-family", SAY_FAMILY)],
+     "asks": [("A", SAY_FAMILY_NUDGE), ("A", SAY_FAMILY_YES)]},
     {"id": "S20", "title": "day-first dates", "judged": False,
      "proves": "'her birthday is 7/8/1991' is stored and answered as 7 August 1991 (DD/MM in an "
                "Australian household), never 'July 8' (date_locale.py)",
@@ -281,7 +318,7 @@ SCENARIOS: tuple[dict[str, Any], ...] = (
                "until ZOE_ROSTER_NEUTRAL_ASK is on (people_roles.py)",
      "turns": [("A", "s22-roster", SAY_ROSTER)], "asks": [("A", ASK_ROSTER)]},
 )
-EXPECTED = {s["id"]: s["expected"] for s in SCENARIOS if s.get("expected")}
+EXPECTED ={s["id"]: s["expected"] for s in SCENARIOS if s.get("expected")}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -605,6 +642,49 @@ def score_s12(rows: list[dict], s1: str, s2: str) -> tuple[str, dict]:
     return "PASS", ev
 
 
+def score_s13(reply: str) -> tuple[str, dict]:
+    """List-all: both seeded people named, and not the name-search miss."""
+    r = normalize(reply)
+    miss = "no contacts found" in r or "couldn't find anyone" in r
+    found = found_needles(reply, ("ottoline", "percival"))
+    ev = {"method": "deterministic", "found": found, "name_search_miss": miss}
+    return ("PASS" if not miss and len(found) == 2 else "FAIL"), ev
+
+
+def score_s14(reply: str) -> tuple[str, dict]:
+    """The relation lives in the relationship field: 'brother' is said, the
+    phrase is not the name, and the old default 'friend' is not."""
+    r = normalize(reply)
+    ev = {"method": "deterministic", "brother": "brother" in r,
+          "relation_in_name": "my brother percival" in r, "friend": "friend" in r}
+    ok = "percival" in r and ev["brother"] and not ev["relation_in_name"] and not ev["friend"]
+    return ("PASS" if ok else "FAIL"), ev
+
+
+def score_s15(reply: str) -> tuple[str, dict]:
+    """One Ottoline: the fuller record is named and no bare first-name entry
+    sits next to it (the old `Found: - Ottoline (friend) - Ottoline Fenwick (friend)`)."""
+    r = normalize(reply)
+    bare = re.search(r"\bottoline\b(?!\s+fenwick)", r) is not None
+    ev = {"method": "deterministic", "fuller_named": "fenwick" in r, "bare_duplicate": bare}
+    return ("PASS" if ev["fuller_named"] and not bare else "FAIL"), ev
+
+
+def score_s16(offer_reply: str, yes_reply: str) -> tuple[str, dict]:
+    """ONE question naming >= 2 of the family, then a yes that adds them all.
+    No enumerated offer at all = SKIP (the dark default), never a pass."""
+    named = found_needles(offer_reply, FAMILY_NAMES)
+    ev = {"method": "deterministic", "offer_names": named, "offer_questions": offer_reply.count("?")}
+    if len(named) < 2:
+        return "SKIP", {**ev, "why": S16_WHY}
+    if offer_reply.count("?") != 1:
+        return "FAIL", {**ev, "why": "the offer was not ONE question"}
+    added = found_needles(yes_reply, named)
+    ev["added_names"] = added
+    ok = len(added) == len(named) and re.search(r"\badded\b", normalize(yes_reply)) is not None
+    return ("PASS" if ok else "FAIL"), ev
+
+
 def score_s20(reply: str, packet: str | None) -> tuple[str, dict]:
     """Store AND reply: the recall packet must carry 7 August (and no month-first reading or
     raw digits), and the reply must say August without saying July."""
@@ -883,8 +963,7 @@ def plan_text(samples: int) -> str:
              f"  judged scenarios ask {samples}x, majority vote; judge rubric sha {JUDGE_PROMPT_SHA256[:12]}",
              "  order: day 1 (S1 seed+ask, S2/S4/S7 seeds) -> backdate day-1 sessions 26h ->",
              "         day 2 (S2 move+ask, S7 short dup+ask, S10 'gave up'+ask, S4 ask, S3 ask) -> S5 selector"
-         " hook + 2 open turns (S12 scores their spacing) -> S20/S21/S22 (dates, corrections, roles)"
-         " -> S6 -> S8; S11 is a reserved SKIP"]
+         " hook + 2 open turns (S12 scores their spacing) -> S20/S21/S22 (dates, corrections, roles) -> S6 -> S8 -> contacts S13-S16; S11 is a reserved SKIP"]
     for s in SCENARIOS:
         tag = "judged" if s["judged"] else "deterministic"
         exp = f", expected {s['expected']}" if s.get("expected") else ""
@@ -1594,6 +1673,48 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
             v, ev = score_s8(t1["reply"], t2["reply"], errors)
             put("S8", v, filler_turns=len(FILLER),
                 asks=[live.evidence(t1), live.evidence(t2)], **ev)
+
+    # S13-S16: the contacts conversation classes. Same-day, no backdate: contact
+    # writes are synchronous (nothing to wait for in the memory pipeline).
+    log("S13-S16: contacts list-all, relation phrase, duplicate, enumerated offer")
+    say(a, "c-full", SAY_CONTACT_FULL)
+    say(a, "c-rel", SAY_CONTACT_REL)
+    if setup_ok("S13", ("c-full", "c-rel")):
+        t = live.chat(a, "c-ask-list", ASK_CONTACTS_LIST)
+        if t["error"]:
+            put("S13", "ERROR", ask=live.evidence(t))
+        else:
+            v, ev = score_s13(t["reply"])
+            put("S13", v, ask={**live.evidence(t), **ev})
+    if setup_ok("S14", ("c-rel",)):
+        t = live.chat(a, "c-ask-rel", ASK_WHO_REL)
+        if t["error"]:
+            put("S14", "ERROR", ask=live.evidence(t))
+        else:
+            v, ev = score_s14(t["reply"])
+            put("S14", v, ask={**live.evidence(t), **ev})
+    say(a, "c-stub", SAY_CONTACT_STUB)
+    if setup_ok("S15", ("c-full", "c-stub")):
+        t = live.chat(a, "c-ask-dup", ASK_WHO_DUP)
+        if t["error"]:
+            put("S15", "ERROR", ask=live.evidence(t))
+        else:
+            v, ev = score_s15(t["reply"])
+            put("S15", v, ask={**live.evidence(t), **ev})
+    say(a, "c-family", SAY_FAMILY)
+    if setup_ok("S16", ("c-family",)):
+        t1 = live.chat(a, "c-family", SAY_FAMILY_NUDGE)
+        if t1["error"]:
+            put("S16", "ERROR", ask=live.evidence(t1))
+        elif len(found_needles(t1["reply"], FAMILY_NAMES)) < 2:
+            put("S16", "SKIP", asks=[live.evidence(t1)], why=S16_WHY)  # no yes turn to send
+        else:
+            t2 = live.chat(a, "c-family", SAY_FAMILY_YES)
+            if t2["error"]:
+                put("S16", "ERROR", asks=[live.evidence(t1), live.evidence(t2)])
+            else:
+                v, ev = score_s16(t1["reply"], t2["reply"])
+                put("S16", v, asks=[live.evidence(t1), live.evidence(t2)], **ev)
     return [res[k] for k in SCENARIO_IDS if k in res]
 
 
