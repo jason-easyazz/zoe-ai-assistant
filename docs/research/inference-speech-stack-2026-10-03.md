@@ -204,7 +204,7 @@ forward passes. `--checkpoint-min-step` cannot remove the last-user and last-4 b
 (13 checkpoints, brain-flags-tuning §1) to ≈ 81 MiB (2,788 × (21.3 + 8.5) KiB). The earlier
 "swa-full = 30 → 1,536 MiB" figure in [brain-speed-tuning.md](../architecture/brain-speed-tuning.md)
 §2 was measured on E2B at a much larger context; at ctx 8192 + q8_0 on E4B the number is an order of
-magnitude smaller **[computed, not yet measured]**. `--swa-full` also re-enables `--cache-reuse`
+magnitude smaller **[computed; applied and probe-measured 2026-10-04 23:43-23:51: 18/18 OK, no latency regression, brain 1586 ms / e2e 1775 ms; then `--cache-ram 1024` on top: 1491 / 1813 ms, MemAvailable ~2.0 -> 4.4 GB]**. `--swa-full` also re-enables `--cache-reuse`
 (the iSWA `get_can_shift()` size check passes), which stays optional. Two load-bearing places still
 carry the E2B-era figure as the reason the flag is off: the comment block in
 `scripts/setup/systemd/llama-server.service` ("~50x SWA cache growth … unaffordable") and the
