@@ -206,9 +206,13 @@ copy of this doc doesn't redo it.
 **Goal:** pick the W4 model with measured numbers. Isolated venv `~/.spikes/ser-bakeoff`
 (`--system-site-packages`, same pattern as the Pipecat spike). **STOP before installing**
 if `free -m` shows < 1.5 GB available.
-1. Candidates (find current HF ids; do not guess): Wav2Small (arXiv 2408.13920 — check
-   the paper/HF for released weights), emotion2vec (+ its FunASR ONNX runtime),
-   `audeering` wav2vec2 MSP-Podcast dimensional (judge only). Record each model's
+1. Candidates (find current HF ids; do not guess). **Checked 2026-10-04**
+   ([Q18 record](../research/arousal-detection-licence-scope-2026-10-04.md)): Wav2Small has
+   **no released weights** (the HF repo is a teacher recipe, half non-commercial) — a student
+   must be re-distilled from permissive teachers (Odyssey-2024 WavLM, MIT; LAION
+   Empathic-Insight-Voice heads, CC-BY-4.0); emotion2vec+ weights are **FunASR Model License**
+   (not MIT), 373 MB fp32 ONNX → int8 needed; `audeering` wav2vec2 MSP-Podcast dimensional
+   (CC-BY-NC-SA, "research only") is judge-only at most. Record each model's
    **weight license** — a non-commercial license is a kill criterion for prod (judge-use ok).
 2. For each: run over the 25 WAVs in `~/.zoe-voice-samples` (read-only), record
    per-utterance latency (p50/p95), steady RSS of the scoring process, and
