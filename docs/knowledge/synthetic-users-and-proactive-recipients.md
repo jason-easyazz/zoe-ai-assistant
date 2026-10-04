@@ -248,22 +248,27 @@ for the lane that is actually used (record §2.5).
 - **Writer.** One OPEN row per item a conversation carried: `selector._settle` (a raise that
   settled with reply text) and `selector.mark_brief_surfaced` (a `[Today]` brief line; needs
   `ZOE_PROACTIVE_SELECTOR` + `ZOE_LOOP_LIFECYCLE` like the brief mark itself). Idempotent on
-  `idem_key = user|session|kind|source_ref|delivered_by` (UNIQUE, `ON CONFLICT DO NOTHING`): a
-  retried settle inserts nothing.
+  `idem_key = user|session|kind|source_ref|delivered_by|local date` (UNIQUE, `ON CONFLICT DO
+  NOTHING`): a retried settle inserts nothing, but a later delivery of the same item (a permanent
+  Telegram session, a raise again after the 3-day cooldown) is a new row.
 - **The brain lanes are untouched, on purpose.** `zoe_core_client.py` / `zoe_flue_client.py` /
   `routers/voice_tts.py` are `VOICE_PATH_PATTERNS`: an edit there needs a Jetson replay-gate run
   bound to the PR head (serial, one shared artifact slot). The record (§3.5) sketched the
   voiced check in the settle path; this PR does it in the sweep from what chat already
   persisted: both lanes save the reply the person HEARD to `chat_messages` (the streaming
   voice lane saves what was spoken), the user's turn before the stream (chat, streaming voice)
-  or together with the reply after it (non-streaming voice). So the delivery's REPLY is the
-  first assistant row of its session at/after the settle (10 s slack), and the person's "next
-  turn" is their first user row after that reply, which excludes the triggering turn whichever
+  or together with the reply after it (non-streaming voice, which also saves a SECOND copy of
+  the triggering utterance milliseconds before the reply). So the delivery's REPLY is the first
+  assistant row of its session STRICTLY AFTER the settle (never before it: that is the previous
+  turn's; assistant rows within 5 s behind it count as part of it), and the person's "next
+  turn" is their first user row strictly after that reply at MICROSECOND precision, skipping
+  any copy of the triggering utterance (`trigger_key`, a digest, no text), whichever
   order it was saved in. `tests/test_proactive_ledger.py` pins that no voice-path file mentions
   the ledger. Reply text is checked and discarded, never stored.
 - **State machine.** `outcome` NULL = surfaced, awaiting the sweep. Closed outcomes:
   `undelivered` (the reply carried none of the item's anchor words, the #1821 failure),
-  `accepted`, `ignored`, `unknown`. `voiced` (1 / 0 / NULL) is written when the row closes;
+  `accepted`, `ignored`, `unknown`. `voiced` (1 / 0 / NULL; anchors and reply are both stemmed, so plural/singular and
+  possessives never decide it) is written when the row closes;
   NULL (no anchors, or no reply was ever found) is **unknown, never undelivered**, because
   nothing proves it was not voiced. `expires_at` = surfaced + 24 h: a row the sweep could not
   judge by then closes `unknown`, so nothing strands.

@@ -8,8 +8,12 @@ docs/research/pull-not-push-inbox-2026-10-04.md §3.1 / §3.5 / §5 (PR 1).
 ``proactive_candidates`` says a block went out with a reply, not whether the reply voiced
 it, and not what the person did next (record §2.5). This table is that evidence:
 
-  * ``idem_key`` UNIQUE — (member, session, kind, source_ref, delivered_by). A retried or
-    double settle of the same delivery inserts nothing; one item, one row.
+  * ``idem_key`` UNIQUE — (member, session, kind, source_ref, delivered_by, local date). A
+    retried or double settle of the same delivery inserts nothing; a LATER delivery of the
+    same item (a permanent Telegram session, a raise again after the 3-day cooldown) is a
+    new row.
+  * ``trigger_key`` — a digest of the utterance the delivery rode in on (no text), so the
+    sweep never mistakes a later copy of it for the member's "next turn".
   * ``voiced`` — set when the sweep closes the row, from the reply chat persisted for that
     delivery: 1 the reply carried one of the item's anchor words, 0 it did not (the
     injected-but-dropped case, outcome ``undelivered``), NULL unverifiable (no anchors, or
@@ -49,6 +53,7 @@ def upgrade() -> None:
                delivered_by TEXT NOT NULL DEFAULT 'turn',
                session_id TEXT NOT NULL,
                cue_words TEXT NOT NULL DEFAULT '',
+               trigger_key TEXT NOT NULL DEFAULT '',
                voiced INTEGER,
                surfaced_at TEXT NOT NULL,
                expires_at TEXT NOT NULL,

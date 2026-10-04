@@ -3,7 +3,7 @@
 Fixtures only — no household text, no real ids. The DB edge is a real SQLite file built by
 migrations 0033 + 0036 behind db_pool's own cursor types, so the idempotent INSERT, the
 outcome UPDATE and the selector's own SQL run for real; the two Postgres-only chat reads
-(``ledger._reply_after`` / ``ledger._user_turns``) are replaced by time-honouring fakes, like
+(``ledger._replies_after`` / ``ledger._user_turns``) are replaced by time-honouring fakes, like
 every other ``ci_safe`` test of a Postgres edge.
 
 Negative controls (each was run red before commit):
@@ -16,7 +16,12 @@ Negative controls (each was run red before commit):
   * drop ``outcome IS NULL`` from the sweep's SELECT and UPDATE  -> double-sweep test red;
   * drop the ``judge_by`` fallback                               -> expiry test red;
   * drop the reply search's upper bound (``_REPLY_WITHIN``)      -> borrowed-reply test red;
-  * ignore the response window                                   -> window test red.
+  * ignore the response window                                   -> window test red;
+  * truncate the chat bounds to whole seconds                    -> sub-second trigger-copy test red;
+  * drop the trigger-copy filter                                 -> equal-timestamp copy test red;
+  * drop the date from ``idem_key``                              -> two-days test red;
+  * stem only one side in ``voiced_in``                          -> plural tests red;
+  * look back before the settle for the reply                    -> quick-exchange test red.
 """
 from __future__ import annotations
 
@@ -116,19 +121,19 @@ def env(monkeypatch, tmp_path):
     state = {"now": NOW, "db": db, "turns": {}, "replies": {}}
     monkeypatch.setattr(sel, "_now", lambda: state["now"])
 
-    async def fake_reply_after(_db, session_id, since, until):
-        # the first assistant row of the session in [since, until] (chat_messages)
-        due = [(text, at) for text, at in state["replies"].get(session_id, [])
-               if since <= ledger._iso(at) <= until]
-        return min(due, key=lambda r: r[1]) if due else None
+    async def fake_replies_after(_db, session_id, since, until):
+        # the session's assistant rows in (since, until], oldest first (chat_messages),
+        # compared as instants (microseconds kept) exactly like the SQL's timestamptz
+        return sorted(((text, at) for text, at in state["replies"].get(session_id, [])
+                       if ledger._parse(since) < at <= ledger._parse(until)), key=lambda r: r[1])[:5]
 
-    async def fake_turns(_db, user_id, start, end, limit=1):
+    async def fake_turns(_db, user_id, start, end, limit=4):
         # the member's user rows in (start, end], oldest first
         rows = sorted((at, text) for text, at in state["turns"].get(user_id, [])
-                      if start < ledger._iso(at) <= end)
+                      if ledger._parse(start) < at <= ledger._parse(end))
         return [text for _at, text in rows][:limit]
 
-    monkeypatch.setattr(ledger, "_reply_after", fake_reply_after)
+    monkeypatch.setattr(ledger, "_replies_after", fake_replies_after)
     monkeypatch.setattr(ledger, "_user_turns", fake_turns)
     yield state
     sel._reset_state()
@@ -151,7 +156,7 @@ async def _raise_and_settle(env, *, sid="s1"):
     return raised
 
 
-def _persist_reply(env, text="How did the interview go?", *, sid="s1", after_s=2):
+def _persist_reply(env, text="How did the interview go?", *, sid="s1", after_s=2.0):
     """Chat persisted the reply the person heard, ``after_s`` after the settle."""
     env["replies"].setdefault(sid, []).append((text, NOW + timedelta(seconds=after_s)))
 
@@ -186,7 +191,7 @@ def test_migration_0036_is_idempotent_and_chained():
         cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(proactive_deliveries)")}
         idx = {r[1] for r in conn.exec_driver_sql("PRAGMA index_list(proactive_deliveries)")}
     assert cols == {"id", "idem_key", "user_id", "candidate_id", "kind", "source_ref", "shape",
-                    "delivered_by", "session_id", "cue_words", "voiced", "surfaced_at",
+                    "delivered_by", "session_id", "cue_words", "trigger_key", "voiced", "surfaced_at",
                     "expires_at", "outcome", "outcome_at", "created_at"}
     assert {"idx_proactive_deliveries_open", "idx_proactive_deliveries_user"} <= idx
     _migrate(engine, "0036_proactive_deliveries.py", "downgrade")
@@ -223,6 +228,17 @@ async def test_duplicate_idempotency_key_is_one_row(env):
     assert other_session is True and len(_ledger(env)) == 2  # another conversation = another delivery
 
 
+async def test_the_same_item_on_two_days_is_two_rows_in_a_permanent_session(env):
+    """Telegram keeps ONE session id forever: the Monday brief line and Tuesday's are two
+    deliveries, and a raise repeated after the cooldown is another."""
+    kw = dict(user_id=MEMBER, candidate_id=None, kind="open_loop", source_ref="open_loops:3",
+              shape="brief", delivered_by="brief", session_id="telegram-42", cue_words="interview")
+    assert await ledger.record(env["db"], now=NOW, **kw) is True
+    assert await ledger.record(env["db"], now=NOW + timedelta(hours=1), **kw) is False  # same day: a retry
+    assert await ledger.record(env["db"], now=NOW + timedelta(days=1), **kw) is True
+    assert len(_ledger(env)) == 2
+
+
 async def test_a_settle_without_text_writes_nothing(env):
     _seed(env)
     await sel.select_for_user(MEMBER, now=NOW)
@@ -237,6 +253,19 @@ async def test_brief_items_are_recorded_with_shape_brief_and_are_idempotent(env)
     assert await sel.mark_brief_surfaced(MEMBER, "s9", items)
     (row,) = _ledger(env)
     assert row == ("open_loop", "brief", "brief", "s9", None, None)
+
+
+@pytest.mark.parametrize("reply, cues, want", [
+    ("how did the dentist appointment go?", "appointments", 1),     # plural anchor, singular reply
+    ("how did the appointments go?", "appointment", 1),             # singular anchor, plural reply
+    ("how did the surgery go?", "surgeries", 1),                    # -ies / -y
+    ("how did the surgeries go?", "surgery", 1),
+    ("did the dentist's visit go well?", "dentist", 1),             # possessive
+    ("what about the boxes?", "box", 1),
+    ("Good, thanks! How are you?", "appointments", 0),              # a real miss stays a miss
+])
+def test_voiced_in_normalises_both_sides(reply, cues, want):
+    assert ledger.voiced_in(reply, cues) == want
 
 
 def test_voiced_in():
@@ -321,6 +350,70 @@ async def test_the_turn_that_triggered_the_delivery_is_never_its_answer(env):
     _says(env, "I had a long day at work today", after_s=90)
     await _sweep_at(env, 11)
     assert _ledger(env)[0][5] == "ignored"        # judged on the 90 s turn, not the trigger
+
+
+async def test_a_duplicate_copy_of_the_trigger_milliseconds_before_the_reply_is_not_next(env):
+    """The voice lane saves a SECOND copy of the triggering turn a few ms before the reply
+    row, inside the same second. Whole-second bounds let it through as 'next'; the real next
+    turn is the one 90 s later."""
+    await _raise_and_settle(env)
+    _says(env, GREET, after_s=3.100)            # duplicate copy of the trigger, 5 ms before
+    _persist_reply(env, after_s=3.105)
+    _says(env, "I had a long day at work today", after_s=90)
+    await _sweep_at(env, 11)
+    assert _ledger(env)[0][4:] == (1, "ignored")     # judged on the 90 s turn
+    # ...and if the member really did answer, that is what is seen
+    env["turns"][MEMBER].clear()
+    env["db"].conn.execute("UPDATE proactive_deliveries SET outcome = NULL, outcome_at = NULL")
+    _says(env, GREET, after_s=3.100)
+    _says(env, "The interview went well", after_s=90)
+    await _sweep_at(env, 11)
+    assert _ledger(env)[0][5] == "accepted"
+
+
+async def test_sub_second_bounds_alone_exclude_the_copy_when_no_trigger_is_known(env):
+    """No ``trigger_key`` to filter by (an older row): only the microsecond lower bound keeps
+    a copy saved 5 ms before the reply from being read as the member's 'next turn'."""
+    await ledger.record(env["db"], user_id=MEMBER, candidate_id=None, kind="open_loop",
+                        source_ref="open_loops:5", shape="greeting", delivered_by="turn",
+                        session_id="s1", cue_words="interview", now=NOW)
+    _says(env, "I had a long day at work today", after_s=3.100)   # a copy: different text on purpose
+    _persist_reply(env, after_s=3.105)
+    _says(env, "The interview went well", after_s=90)
+    await _sweep_at(env, 11)
+    assert _ledger(env)[0][5] == "accepted"       # judged on the 90 s turn, not the 3.1 s copy
+
+
+async def test_a_trigger_copy_with_the_same_timestamp_is_still_skipped_by_text(env):
+    await _raise_and_settle(env)
+    _persist_reply(env, after_s=3.105)
+    _says(env, GREET, after_s=3.105001)         # clock tie / reordered save: after the reply by 1 us
+    _says(env, "The interview went well", after_s=90)
+    await _sweep_at(env, 11)
+    assert _ledger(env)[0][5] == "accepted"
+
+
+async def test_quick_exchange_never_borrows_the_previous_turns_reply(env):
+    """Two voice turns 4 s apart: the PREVIOUS turn's reply was saved 1 s before this settle.
+    It is not this delivery's reply; this turn's own reply (after the settle) is."""
+    await _raise_and_settle(env)
+    _persist_reply(env, "Good, thanks! How are you?", after_s=-1)       # previous turn's reply
+    assert await _sweep_at(env, 1) == 0                                 # only that one: wait, never undelivered
+    _persist_reply(env, "How did the interview go?", after_s=2.5)       # this turn's reply
+    assert await _sweep_at(env, 1) == 0                                 # window open; but voiced was read
+    _says(env, "The interview went well", after_s=30)
+    await _sweep_at(env, 11)
+    assert _ledger(env)[0][4:] == (1, "accepted")
+
+
+async def test_an_auxiliary_row_right_behind_the_reply_counts_as_part_of_it(env):
+    await _raise_and_settle(env)
+    _persist_reply(env, "Good, thanks! How are you?", after_s=2.0)
+    _persist_reply(env, "Reminder: the interview is Friday", after_s=3.0)   # card / follow-up text
+    _persist_reply(env, "Unrelated much later reply", after_s=120)
+    assert await _sweep_at(env, 1) == 0
+    await _sweep_at(env, 11)
+    assert _ledger(env)[0][4] == 1
 
 
 async def test_a_turn_after_the_window_does_not_count(env):
