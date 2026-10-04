@@ -320,6 +320,76 @@ def is_event_time_question(message: str) -> bool:
     return bool(event_time_question_kind(message))
 
 
+# ── Own-fact recall questions (live 2026-10-04, ZOE_OWN_FACT_PRECEDENCE) ─────
+# "When is my birthday?" was claimed by the head as time (the word "when") and
+# answered "It's 7:50 AM." The same family — "what's my address", "how old am
+# I", "where do I live", "when is mum's birthday" — asks for a FACT the user
+# told Zoe, so no clock, calendar, weather or list tool can answer it. Each
+# row pins a possessive / first-person anchor AND a fact noun (or a
+# first-person verb for a stored fact), so "what time is it", "when is Easter",
+# "what's my schedule" and "how old is the universe" never match. First match
+# wins. Pure str -> kind.
+_OF_NOUN = (
+    r"(?:birthday|b-?day|birth\s*date|date\s+of\s+birth|dob|anniversary|age|"
+    r"(?:home\s+|street\s+|postal\s+|email\s+|mailing\s+|work\s+)?address|post\s*code|"
+    r"zip\s*code|(?:phone|mobile|cell)\s+(?:number|no\.?)|"
+    r"e-?mail(?:\s+address)?|(?:sur|last|middle|full|first|nick|maiden)\s*name|name|"
+    r"star\s+sign|zodiac(?:\s+sign)?|blood\s+type|(?:licen[cs]e|number)\s+plate|rego|"
+    r"hometown|birthplace|place\s+of\s+birth|occupation|job(?:\s+title)?|"
+    r"favou?rite\s+(?:[\w'’-]+)|shoe\s+size|height|weight)"
+)
+# First-person possessives (my / our / mine) and the user's own relations
+# ("mum's"). A generic third-party possessive ("Obama's age") is deliberately NOT
+# here: it is a world question, and claiming it as own-fact would re-point it to
+# memory and switch the challenge verification off.
+_OF_POSS = (
+    r"(?:my|our|(?:mum|mom|mother|dad|father|nan|nana|gran|grandma|grandpa|sister|"
+    r"brother|wife|husband|partner|son|daughter|boyfriend|girlfriend|"
+    r"fianc[eé]e?|niece|nephew|cousin|aunt|auntie|uncle)['’]s)"
+)
+# The fact noun must END the question (filler words allowed): "what's my job today",
+# "when is my rego due", "what's my phone bill" are not requests for a stored fact.
+_OF_END = r"(?:\s+(?:again|please|then|now|exactly|anyway|zoe))*\W*$"
+OWN_FACT_QUESTION_PATTERNS: tuple[tuple[str, re.Pattern], ...] = tuple(
+    (kind, re.compile(rx, re.IGNORECASE))
+    for kind, rx in (
+        # "when is my birthday", "what's my address", "when's mum's birthday",
+        # "what is our wifi..." is NOT here (no fact noun) — the noun is the guard.
+        ("fact_noun", r"\b(?:when|what|which|whats)(?:['’]s|\s+(?:is|are|was|were))?\s+"
+                      r"" + _OF_POSS + r"\s+(?:[\w'’-]+\s+)?" + _OF_NOUN + _OF_END),
+        ("how_old", r"\bhow\s+old\s+(?:am\s+i|are\s+we|is\s+(?:my|our)\s+[\w'’-]+|"
+                    r"is\s+(?:he|she)\b|is\s+(?:mum|mom|dad|nan|nana|gran)\b)"),
+        ("born", r"\b(?:when|what\s+(?:year|day|date))\s+(?:was|were)\s+(?:i|we)\s+born\b"),
+        ("born", r"\bwhere\s+(?:was|were)\s+(?:i|we)\s+born\b"),
+        ("live", r"\bwhere\s+(?:do|did)\s+(?:i|we)\s+(?:live|work|study|grow\s+up|go\s+to\s+school)\b"),
+        ("live", r"\bwhere\s+(?:am|are)\s+(?:i|we)\s+from\b"),
+        ("live", r"\b(?:which|what)\s+(?:city|town|suburb|street|state|country|area)\s+"
+                 r"(?:do|did)\s+(?:i|we)\s+(?:live|work|grow\s+up)\b"),
+        ("have", r"\bwhat\s+(?:kind\s+of\s+|type\s+of\s+)?(?:car|dog|cat|pet|phone|job|team|"
+                 r"school|uni|university)\s+do\s+(?:i|we)\s+(?:drive|have|own|support|go\s+to)\b"),
+        ("have", r"\bwhat\s+do\s+i\s+do\s+for\s+(?:work|a\s+living)\b"),
+        # "Who am I?" (live 2026-10-04: answered after a narrated lookup), "tell me
+        # about myself", "what do you remember about me" — the whole stored profile.
+        # Anchored to the whole utterance: "who am I meeting tomorrow" is a calendar question.
+        ("self", r"^\W*(?:(?:so|and|hey|ok|okay|um|uh|zoe)[\s,]+)*who\s+am\s+i\W*$"),
+        ("self", r"^\W*(?:(?:so|and|hey|ok|okay|um|uh|zoe)[\s,]+)*tell\s+me\s+(?:about\s+myself|who\s+i\s+am|"
+                 r"what\s+you\s+know\s+about\s+me)\W*$"),
+        ("self", r"\bwhat\s+(?:do\s+you|can\s+you)\s+(?:know|remember|tell\s+me)\s+(?:about|of)\s+me\b"),
+    )
+)
+
+
+def own_fact_question_kind(message: str) -> str:
+    """Kind ("fact_noun" / "how_old" / "born" / "live" / "have") for a question
+    about a stored fact of the user's own life (birthday, address, age…), else
+    "". Pure."""
+    return _first_match(OWN_FACT_QUESTION_PATTERNS, message)
+
+
+def is_own_fact_question(message: str) -> bool:
+    return bool(own_fact_question_kind(message))
+
+
 def message_needs_memory(message: str) -> bool:
     """True when the message likely benefits from MemPalace semantic search.
 

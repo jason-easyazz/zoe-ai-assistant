@@ -359,6 +359,15 @@ def _interrupted_reason(default: str) -> str:
     return default
 
 
+def _sidecar_answered(sink: dict[str, str]) -> bool:
+    """False when the turn was answered by the SEAM without reaching the sidecar
+    (``zoe_flue_client.FLUE_OUTCOME_SEAM_REPLY``: verify_on_challenge's honest
+    "can't check right now"). Such a turn is no evidence the sidecar is healthy,
+    so it must never close the breaker. A sink with no verdict (a test double,
+    an older client) keeps today's behaviour."""
+    return (sink or {}).get("outcome") != "seam_reply"
+
+
 def _fallback_lane() -> str:
     """The configured lane BELOW flue — the one a failover retries on."""
     return "core" if use_core_brain() else "legacy"
@@ -567,6 +576,8 @@ async def _flue_streaming_with_failover(
     # lane-attribution instrument the #1613 runbook has; a turn that leaves no
     # trace is an outage you cannot reconstruct.
     record = _LaneRecord(session_id)
+    # Bound before the observe so cleanup can read it whatever raised first.
+    outcome_sink: dict[str, str] = {}
     # ``served_any`` is set ONLY inside the flue loop below. Keep it that way:
     # it is not "this turn produced output", it is the EVIDENCE that flue itself
     # answered, and the cleanup block reads it as exactly that when deciding
@@ -625,7 +636,8 @@ async def _flue_streaming_with_failover(
                 yield delta
             return
 
-        _close_circuit(generation)
+        if _sidecar_answered(outcome_sink):
+            _close_circuit(generation)
         record.emit(
             attempted="flue", served="flue", **_flue_outcome(outcome_sink, served_any=served_any)
         )
@@ -647,7 +659,8 @@ async def _flue_streaming_with_failover(
                 # delta says nothing about flue), so the claim stays armed there.
                 # A fallback-lane turn cannot reach this: it emitted its record
                 # before dispatching, and it never sets `served_any`.
-                _close_circuit(generation)
+                if _sidecar_answered(outcome_sink):
+                    _close_circuit(generation)
             record.emit(
                 attempted="flue",
                 served="flue" if served_any else "-",
@@ -705,7 +718,8 @@ async def _flue_oneshot_with_failover(
             )
             return await _fallback_oneshot(message, session_id, user_id, **kwargs)
 
-        _close_circuit(generation)
+        if _sidecar_answered(outcome_sink):
+            _close_circuit(generation)
         record.emit(
             attempted="flue",
             served="flue",

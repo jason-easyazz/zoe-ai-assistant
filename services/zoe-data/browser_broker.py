@@ -968,6 +968,101 @@ def build_cloak_executor() -> BrowserExecutor | None:
     return _execute
 
 
+# --- bounded web search -----------------------------------------------------
+#
+# The broker's page-read surfaces (CloakBrowser) are heavy: launching Chromium
+# for one lookup on this RAM-starved box is the wrong cost for an "are you sure?"
+# check. The search TIER the repo already runs for chat and for the brain's
+# web_search tool is `research_evidence.fetch_web_fallback` (Tavily when keyed,
+# else DuckDuckGo HTML, with an honest status). This is the broker's single
+# entry point onto it: ONE query, a hard wall-clock bound, never raises, and the
+# same {ok, status, ...} envelope as `fetch_page_text` so a caller degrades
+# instead of exploding. The query text is never logged (it can carry personal
+# data) — only its length.
+
+
+def _result_domain(url: str) -> str:
+    """The bare host of an http(s) url ("www." dropped), or "" for anything else."""
+    from urllib.parse import urlparse
+
+    try:
+        parsed = urlparse((url or "").strip())
+    except ValueError:
+        return ""
+    if parsed.scheme.lower() not in ("http", "https"):
+        return ""
+    host = (parsed.hostname or "").lower()
+    return host[4:] if host.startswith("www.") else host
+
+
+async def search_web(
+    query: str,
+    *,
+    max_results: int = 5,
+    timeout_s: float = 8.0,
+) -> dict[str, Any]:
+    """ONE bounded web search -> ``{"ok", "status", "results", "domains", "elapsed_s"}``.
+
+    ``status`` is ``results`` / ``no_results`` / ``timeout`` / ``error`` /
+    ``blocked`` / ``off`` (the lookup's own honest label, plus ``timeout`` for
+    this wall-clock bound). ``results`` rows are ``{title, url, snippet,
+    domain}``; non-http(s) targets never appear. ``ok`` is True only for
+    ``results``. Never raises.
+    """
+    import asyncio
+    import logging
+
+    q = (query or "").strip()
+    started = time.monotonic()
+    log = logging.getLogger(__name__)
+    if not q:
+        return {"ok": False, "status": "no_results", "results": [], "domains": [], "elapsed_s": 0.0}
+    bound = max(0.5, float(timeout_s))
+
+    def _run() -> Any:
+        import research_evidence
+
+        return research_evidence.fetch_web_fallback(
+            q, max_results=max(1, int(max_results)), timeout_s=bound,
+            enrich_prices=False, deadline_s=bound,
+        )
+
+    try:
+        loop = asyncio.get_running_loop()
+        # +0.5 s: the lookup honours `bound` itself; this is the hard wall for a
+        # provider that does not (the worker thread then finishes on its own).
+        outcome = await asyncio.wait_for(loop.run_in_executor(None, _run), timeout=bound + 0.5)
+    except asyncio.TimeoutError:
+        log.info("search_web: timeout after %.1fs query_len=%d", bound, len(q))
+        return {"ok": False, "status": "timeout", "results": [], "domains": [],
+                "elapsed_s": round(time.monotonic() - started, 3)}
+    except Exception as exc:  # noqa: BLE001 - a search must never break a turn
+        log.info("search_web: failed (%s) query_len=%d", type(exc).__name__, len(q))
+        return {"ok": False, "status": "error", "results": [], "domains": [],
+                "elapsed_s": round(time.monotonic() - started, 3)}
+
+    rows: list[dict[str, str]] = []
+    for r in list(getattr(outcome, "results", None) or []):
+        if not isinstance(r, dict):
+            continue
+        url = str(r.get("url") or r.get("href") or "").strip()
+        domain = _result_domain(url)
+        if not domain:
+            continue
+        rows.append({
+            "title": str(r.get("title") or "").strip()[:160],
+            "url": url,
+            "snippet": str(r.get("snippet") or r.get("body") or "").strip()[:280],
+            "domain": domain,
+        })
+    status = str(getattr(outcome, "status", "") or "error")
+    if status == "results" and not rows:
+        status = "no_results"
+    domains = list(dict.fromkeys(r["domain"] for r in rows))
+    return {"ok": status == "results", "status": status, "results": rows, "domains": domains,
+            "elapsed_s": round(time.monotonic() - started, 3)}
+
+
 def create_default_browser_broker(openclaw_gateway_url: str | None = None) -> BrowserBroker:
     """Zoe's browser broker: a single Zoe-native CloakBrowser surface.
 

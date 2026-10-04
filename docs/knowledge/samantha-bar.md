@@ -112,6 +112,18 @@ synchronous, so there is no capture wait or backdate), and are not `EXPECTED` ta
 before them lists them under `new` until the next `--record-baseline`. The teardown sweep already removes
 their `people` and `pending_suggestions` rows (every table with a `user_id` column). Not yet run.
 
+**Reserved S17–S19 (2026-10-05, [conversation-quality-classes.md](conversation-quality-classes.md)) — NOT in
+`SCENARIO_IDS`.** Synthetic asks plus pure scorers live in `scripts/perf/samantha_bar_conv.py` (pinned by
+`tests/unit/test_samantha_bar_conv.py`, which also asserts they stay unwired). Each needs its flag on in the
+live service before wiring; the id block is shared across PRs (S13–S16 contacts, S17–S19 here, S20–S22 reserved
+elsewhere).
+
+| id | proves | scoring |
+|---|---|---|
+| S17 | "When is my birthday?" returns the stored date, never a clock reading (`ZOE_OWN_FACT_PRECEDENCE`). | deterministic: day + month present; a time of day without them FAIL. |
+| S18 | "Are you sure?" after a world-fact answer cites a source domain or says it cannot check, never "I'm pretty sure" (`ZOE_VERIFY_ON_CHALLENGE`). | deterministic: domain or can't-check = PASS; double-down = FAIL. |
+| S19 | "Who am I?" is answered, not narrated (`ZOE_STRIP_NARRATION`). | deterministic: a stored fact returns and the reply does not open with an "I'll check…/Let me look…" sentence. |
+
 `EXPECTED` marks S10 (FAIL), S11 (SKIP), S21 (FAIL) and S22 (FAIL) as targets: the result line and the artifact carry
 `expected`, and `--compare-baseline` is unchanged (only a previous PASS can regress), so a
 target turning PASS is an improvement to lock in by re-recording. A baseline recorded before
