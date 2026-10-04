@@ -11,6 +11,9 @@
     "@earendil-works/pi-coding-agent": "0.87.1",
     "@sinclair/typebox": "^0.34.0"
   },
+  "overrides": {
+    "brace-expansion@^5": "^5.0.12"
+  },
   "pi": {
     "extensions": [
       "./extensions/provider-local-gemma.ts",
