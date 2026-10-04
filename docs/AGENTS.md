@@ -6,7 +6,7 @@ All project documentation, organized by category. The root of the repository hol
 
 ## Ownership
 
-- `governance/` — `ZOE_DESIGN_PRINCIPLES.md` (the design charter — NORMATIVE for large design changes), cleanup safety, critical-files list, manifest system.
+- `governance/` — `ZOE_DESIGN_PRINCIPLES.md` (the design charter — NORMATIVE for large design changes), `emotional-safety-note.md` (NORMATIVE for anything that shapes, reads or keeps how a person feels: persona boundaries, kids, guests, affective retention, crisis language, persona drift), cleanup safety, critical-files list, manifest system.
 - `architecture/`, `api/`, `guides/`, `developer/`, `deployment/`, `adr/` — technical reference by audience.
 - `strategy/`, `research/`, `reviews/`, `post-mortems/`, `implementation/`, `performance/` — working documents.
 
