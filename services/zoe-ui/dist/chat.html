@@ -3488,25 +3488,15 @@
         // ── End Push Setup ────────────────────────────────────────────────────
 
         function initChatBackgroundPush() {
+            // The page's ONE push socket (js/auth.js zoePush): it already re-dispatches
+            // every message as a `zoe:push_event` window event for agent-activity.js.
             try {
-                let sessionId = '';
-                try {
-                    const raw = localStorage.getItem('zoe_session');
-                    if (raw) sessionId = JSON.parse(raw).session_id || '';
-                } catch (_) {}
-                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                const q = sessionId ? ('&session_id=' + encodeURIComponent(sessionId)) : '';
-                const ws = new WebSocket(protocol + '//' + window.location.host + '/ws/push?channel=all' + q);
-                ws.onmessage = (evt) => {
-                    try {
-                        const msg = JSON.parse(evt.data);
-                        // Broadcast to agent-activity so sidebar refreshes instantly
-                        window.dispatchEvent(new CustomEvent('zoe:push_event', { detail: msg }));
-                        if (msg.type === 'background_task_done' || msg.type === 'background_task_error') {
-                            checkPendingTasks();
-                        }
-                    } catch (_) {}
-                };
+                if (!window.zoePush) return;
+                window.zoePush.subscribe((msg) => {
+                    if (msg.type === 'background_task_done' || msg.type === 'background_task_error') {
+                        checkPendingTasks();
+                    }
+                });
             } catch (_) {}
         }
 
@@ -3553,7 +3543,20 @@
                 console.log('📋 Loading sessions for user:', userId);
                 console.log('📋 Session object:', session);
                 
-                const response = await apiRequest(`/api/chat/sessions/?user_id=${userId}`);
+                // The server resolves identity from the session header; a GUEST
+                // identity is the SHARED anonymous pool (thousands of probe rows),
+                // which must never be listed as "your chats".
+                const sessionsListEl = document.getElementById('sessionsList');
+                if (!window.zoeAuth || !window.zoeAuth.isAuthenticatedNonGuestSession || !window.zoeAuth.isAuthenticatedNonGuestSession()) {
+                    if (sessionsListEl) {
+                        sessionsListEl.innerHTML = `
+                        <div style="padding: 20px; text-align: center; color: #94a3b8;">
+                            <p style="margin-bottom: 10px;">Sign in to see your chats</p>
+                        </div>`;
+                    }
+                    return;
+                }
+                const response = await apiRequest('/api/chat/sessions/');
                 const sessions = response.sessions || [];
                 
                 console.log('📋 Loaded sessions:', sessions.length, sessions);
@@ -3692,7 +3695,7 @@
                 const session = window.zoeAuth?.getCurrentSession();
                 const userId = session?.user_info?.user_id || session?.user_id;
                 
-                const response = await apiRequest(`/api/chat/sessions/${sessionId}/messages/?user_id=${userId}`);
+                const response = await apiRequest(`/api/chat/sessions/${sessionId}/messages/`);
                 const messages = response.messages || [];
                 
                 const container = document.getElementById('messagesContainer');

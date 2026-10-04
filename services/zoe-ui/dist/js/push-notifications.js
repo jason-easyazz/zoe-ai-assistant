@@ -67,14 +67,20 @@
             return vapidPublicKey;
         }
         
+        // A guest / logged-out visitor gets 403 here; its JSON body carries no key,
+        // and the old code handed `undefined` to urlBase64ToUint8Array (TypeError
+        // on every page load). Resolve null instead and let the caller bail.
         try {
             const response = await fetch(`${API_BASE}/vapid-public-key`);
+            if (!response.ok) return null;
             const data = await response.json();
-            vapidPublicKey = data.public_key || data.publicKey;
+            const key = data && (data.public_key || data.publicKey);
+            if (typeof key !== 'string' || !key) return null;
+            vapidPublicKey = key;
             return vapidPublicKey;
         } catch (error) {
-            console.error('❌ Failed to get VAPID public key:', error);
-            throw error;
+            console.warn('⚠️ VAPID public key unavailable:', error && error.message);
+            return null;
         }
     }
     
@@ -126,10 +132,12 @@
             
             // Get VAPID public key
             const publicKey = await getVapidPublicKey();
+            if (!publicKey) throw new Error('VAPID public key unavailable (not signed in?)');
             const applicationServerKey = urlBase64ToUint8Array(publicKey);
             
-            // Subscribe to push service
-            subscription = await registration.pushManager.subscribe({
+            // Subscribe to push service. (`subscription` was undeclared under
+            // 'use strict' — a ReferenceError that killed every subscribe.)
+            const subscription = await registration.pushManager.subscribe({
                 userVisibleOnly: true, // Must be true for Chrome
                 applicationServerKey: applicationServerKey
             });
@@ -168,16 +176,12 @@
             device_type: deviceType
         };
         
-        // Pass session token so the subscription is saved against the correct user.
-        const sessionToken = document.cookie.match(/access_token=([^;]+)/)?.[1]
-                          || localStorage.getItem('access_token') || '';
+        // Identity rides on X-Session-ID, which js/auth.js's fetch interceptor
+        // attaches; there is no Bearer access_token in this auth model.
         try {
             const response = await fetch(`${API_BASE}/subscribe`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    ...(sessionToken ? { 'Authorization': 'Bearer ' + sessionToken } : {}),
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
             
@@ -188,8 +192,10 @@
             const data = await response.json();
             console.log('✅ Subscription saved to backend:', data);
             
-            // Store subscription ID
-            localStorage.setItem('zoe_push_subscription_id', data.subscription_id);
+            // Store subscription ID (never the string "undefined")
+            if (data && data.subscription_id != null) {
+                localStorage.setItem('zoe_push_subscription_id', String(data.subscription_id));
+            }
             
             return data;
             
@@ -218,14 +224,9 @@
             
             // Remove from backend (DELETE /api/push/subscribe with endpoint in body)
             const subscriptionJson = subscription.toJSON();
-            const sessionToken = document.cookie.match(/access_token=([^;]+)/)?.[1]
-                              || localStorage.getItem('access_token') || '';
             await fetch(`${API_BASE}/subscribe`, {
                 method: 'DELETE',
-                headers: {
-                    'Content-Type': 'application/json',
-                    ...(sessionToken ? { 'Authorization': 'Bearer ' + sessionToken } : {}),
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     endpoint: subscriptionJson.endpoint
                 })
@@ -281,13 +282,20 @@
     /**
      * Auto-subscribe on page load — prompts if permission not yet decided.
      */
+    // Only a signed-in MEMBER can subscribe (the VAPID key is 403 otherwise), and
+    // only a signed-in member should ever see the permission prompt.
+    function shouldAutoSubscribe(auth, notification) {
+        if (!auth || typeof auth.isAuthenticatedNonGuestSession !== 'function') return false;
+        if (!auth.isAuthenticatedNonGuestSession()) return false;
+        if (notification && notification.permission === 'denied') return false;
+        return true;
+    }
+
     async function autoSubscribe() {
         if (!isPushSupported()) {
             return;
         }
-
-        // Denied = nothing we can do.
-        if (Notification.permission === 'denied') {
+        if (!shouldAutoSubscribe(window.zoeAuth, window.Notification)) {
             return;
         }
 
