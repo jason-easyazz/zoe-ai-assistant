@@ -57,9 +57,6 @@ COMPOSE_FILES = (
 LAN_LEDGER: dict[tuple[str, str, str], str] = {
     ("docker-compose.yml", "zoe-ui", "80"): "front door: browsers + Pi kiosk (nginx)",
     ("docker-compose.yml", "zoe-ui", "443"): "front door: browsers + Pi kiosk (nginx, TLS)",
-    ("docker-compose.yml", "zoe-ui", "18790"): (
-        "OpenClaw Control UI TLS port (nginx) — not reviewed; OpenClaw is being retired"
-    ),
     ("docker-compose.yml", "zoe-auth", "8002"): (
         "OIDC issuer at zoe.local:8002 (Omnigent/browser OIDC path) — not reviewed; "
         "nginx also proxies it internally via zoe-auth:8002"
