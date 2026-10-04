@@ -34,6 +34,13 @@ couplings that fail at RUNTIME, not startup:
   and with one slot every chat turn then re-prefills its whole prompt (+4.1 s
   TTFT measured); ``-1`` is "no limit" on 15.6G unified memory.
 
+2026-10-04 (replay-gated, docs/knowledge/brain-kv-cache-tuning.md) adds a coupling
+between two flags: ``--swa-full`` is ON (no SWA prompt checkpoints -> no split prefill;
+the old "unaffordable" figure was an E2B number) and, because it halves every cached
+prompt entry, ``--cache-ram`` dropped 2048 -> 1024 with the same coverage. They move
+together: ``--swa-full`` back OFF means entries double again, so ``--cache-ram 1024``
+would halve coverage (and the cap should be re-decided, not silently kept).
+
 The FunctionGemma router sidecar (``functiongemma-router.service``, same llama.cpp
 server, CPU-only) carries couplings of its own: its ``--cache-ram`` must be a
 positive cap that fits under the unit's ``MemoryMax`` (left at the 8192 MiB default
@@ -152,6 +159,28 @@ def test_host_prompt_cache_is_a_positive_cap():
         f"--cache-ram {cram}: 0 disables the host prompt cache (one slot -> full re-prefill on "
         "every chat turn, +4.1 s TTFT measured) and -1 is unbounded on unified memory"
     )
+
+
+def test_swa_full_is_on():
+    # 2026-10-04: --swa-full turns off the SWA prompt checkpoints (the split-prefill
+    # forward passes) for ~ +150 MiB at ctx 8192 + q8_0 on E4B. Replay probe 18/18 OK.
+    # The earlier "unaffordable" reason was an E2B figure at a larger context.
+    assert re.search(r"(?:^|\s)--swa-full(?:\s|$)", _exec_start()), (
+        "--swa-full dropped from the brain unit: checkpoints (and ~55-60 ms split-prefill "
+        "passes) come back and each cache-ram entry doubles — re-decide --cache-ram too"
+    )
+
+
+def test_cache_ram_is_1024_and_coupled_to_swa_full():
+    cmd = _exec_start()
+    swa_full = re.search(r"(?:^|\s)--swa-full(?:\s|$)", cmd) is not None
+    cram = int(_flag(cmd, "--cache-ram") or 0)
+    # With --swa-full each cached entry is ~81 MiB (was ~172), so 1024 MiB keeps the
+    # coverage 2048 gave before it. Without --swa-full, 1024 would halve that coverage.
+    if swa_full:
+        assert cram == 1024, f"--cache-ram {cram}: 1024 is the replay-gated size with --swa-full"
+    else:
+        assert cram >= 2048, f"--cache-ram {cram} without --swa-full halves prompt-cache coverage"
 
 
 CORE_PROVIDER = ROOT / "services" / "zoe-core" / "extensions" / "provider-local-gemma.ts"
