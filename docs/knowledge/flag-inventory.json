@@ -2282,6 +2282,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_LOG_CHATTY_LIBS_LEVEL": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/logging_setup.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_LOG_DIR": {
         "defaults": [
           "-"
@@ -2309,6 +2319,26 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/logging_setup.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LOG_QUIET_POLL_PATHS": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/middleware/logging.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LOG_QUIET_POLL_SLOW_MS": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/middleware/logging.py"
         ],
         "typed_env": false
       },

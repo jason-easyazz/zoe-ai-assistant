@@ -185,7 +185,7 @@ async def dispatch(domain: str, text: str, ctx: dict[str, Any], *, write_ok: boo
     if kind in ("write", "expert"):
         can_act = can_act and _allow_writes()
     if not can_act:
-        logger.warning("EXPERT_SHADOW domain=%s score=%.2f would=%s (%s) %.0fms → brain",
+        logger.info("EXPERT_SHADOW domain=%s score=%.2f would=%s (%s) %.0fms → brain",
                        domain, score, intent_name, kind, (time.monotonic() - t0) * 1000.0)
         return None
 
@@ -220,8 +220,12 @@ async def dispatch(domain: str, text: str, ctx: dict[str, Any], *, write_ok: boo
     if not reply:
         logger.info("EXPERT_EMPTY domain=%s intent=%s → brain", domain, intent_name)
         return None
-    logger.warning("EXPERT_ACTIVE domain=%s score=%.2f intent=%s %.0fms reply=%r",
-                   domain, score, intent_name, (time.monotonic() - t0) * 1000.0, reply[:80])
+    # INFO, not WARNING: this is the routine success trace, promoted to WARNING
+    # in the era when the root logger had no handler and only WARNING+ survived
+    # (logging_setup.py). It also used to print the first 80 chars of the reply —
+    # household conversation — into the logs; the length is all a trace needs.
+    logger.info("EXPERT_ACTIVE domain=%s score=%.2f intent=%s %.0fms reply_chars=%d",
+                domain, score, intent_name, (time.monotonic() - t0) * 1000.0, len(reply))
     return DispatchResult(domain=domain, reply=reply, intent=intent_name, ui=_ui_for(domain))
 
 

@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from auth import get_current_user
+from log_throttle import log_upstream_failure
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ha", tags=["ha-control"])
@@ -78,8 +79,8 @@ async def list_entities(
         return {"entities": entities, "count": len(entities)}
     except httpx.ConnectError:
         raise HTTPException(status_code=503, detail="HA bridge offline")
-    except Exception:
-        logger.exception("ha/entities error")
+    except Exception as exc:
+        log_upstream_failure(logger, "ha/entities error", exc)
         raise HTTPException(status_code=502, detail="HA bridge request failed")
 
 
@@ -91,10 +92,10 @@ async def get_entity_state(entity_id: str, caller: dict = Depends(_require_calle
     except httpx.ConnectError:
         raise HTTPException(status_code=503, detail="HA bridge offline")
     except httpx.HTTPStatusError as exc:
-        logger.exception("ha/state bridge status error entity=%s", entity_id)
+        log_upstream_failure(logger, "ha/state bridge status error", exc, key="ha/state bridge status error")
         raise HTTPException(status_code=exc.response.status_code, detail="HA bridge request failed")
-    except Exception:
-        logger.exception("ha/state error entity=%s", entity_id)
+    except Exception as exc:
+        log_upstream_failure(logger, "ha/state error", exc)
         raise HTTPException(status_code=502, detail="HA bridge request failed")
 
 
@@ -136,8 +137,8 @@ async def ha_control(payload: HAControlPayload, caller: dict = Depends(_require_
     except httpx.ConnectError:
         raise HTTPException(status_code=503, detail="HA bridge offline")
     except httpx.HTTPStatusError as exc:
-        logger.exception("ha/control bridge status error")
+        log_upstream_failure(logger, "ha/control bridge status error", exc)
         raise HTTPException(status_code=exc.response.status_code, detail="HA bridge request failed")
-    except Exception:
-        logger.exception("ha/control error")
+    except Exception as exc:
+        log_upstream_failure(logger, "ha/control error", exc)
         raise HTTPException(status_code=502, detail="HA bridge request failed")

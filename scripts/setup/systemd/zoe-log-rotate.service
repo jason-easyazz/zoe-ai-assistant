@@ -1,0 +1,29 @@
+# Size-based rotation for the logs systemd appends to (zoe-data's stdout/stderr
+# capture, the crash-loop watcher, the memory export, the voice regression).
+#
+# WHY: `StandardOutput=append:` never rotates, logrotate is not installed on the
+# host, and a user manager cannot run a system logrotate timer. On 2026-10-04
+# zoe-data.stderr.log was 119 MB and zoe-data.stdout.log 86 MB, unrotated.
+# Full rationale + the copytruncate semantics: scripts/maintenance/rotate_service_logs.py
+# and docs/knowledge/log-review-2026-10-04.md.
+#
+# OPERATOR STEP (a user unit; nothing here is installed by a deploy):
+#   cp scripts/setup/systemd/zoe-log-rotate.{service,timer} ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now zoe-log-rotate.timer
+#   systemctl --user start zoe-log-rotate.service   # one rotation now (>= 50 MB files)
+# Dry run first (changes nothing):
+#   python3 scripts/maintenance/rotate_service_logs.py --dry-run
+
+[Unit]
+Description=Rotate size-bloated zoe log files in ~/.zoe-logs
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/assistant/scripts/maintenance/rotate_service_logs.py
+Nice=10
+IOSchedulingClass=idle
+# Its own output is a line per rotation; journald is volatile on this host, so
+# keep it with the rest instead of losing it.
+StandardOutput=append:%h/.zoe-logs/log-rotate.log
+StandardError=append:%h/.zoe-logs/log-rotate.log

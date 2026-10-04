@@ -57,6 +57,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from auth import get_current_user
 from database import get_db
+from log_throttle import log_upstream_failure
 
 logger = logging.getLogger(__name__)
 
@@ -480,8 +481,8 @@ async def _entity_index() -> dict[str, dict] | None:
             response = await client.get(f"{_HA_BRIDGE}/entities")
             response.raise_for_status()
             data = response.json()
-    except Exception:
-        logger.warning("panel config: HA bridge unreachable; pins unresolved", exc_info=True)
+    except Exception as exc:
+        log_upstream_failure(logger, "panel config: HA bridge unreachable; pins unresolved", exc)
         return None
     entities = data if isinstance(data, list) else data.get("entities", [])
     return {
