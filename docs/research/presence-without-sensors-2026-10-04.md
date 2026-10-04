@@ -455,11 +455,21 @@ is a second room.
 **The Pi 5 radio.** Bluetooth 5 / BLE onboard ([Raspberry Pi docs](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html));
 HA's integration lists the Pi 3B+/4B's CYW43455 as supported but *"connected via the UART bus
 which may limit their performance"* ([HA bluetooth](https://www.home-assistant.io/integrations/bluetooth/));
-BlueZ passive scanning needs ≥ 5.63 with experimental features ([same page](https://www.home-assistant.io/integrations/bluetooth/),
+BlueZ passive scanning needs ≥ 5.63 with experimental features per HA, and bleak's passive mode
+needs BlueZ ≥ 5.55 with `--experimental` plus the `AdvertisementMonitor1` API (BlueZ ≥ 5.56,
+kernel ≥ 5.10) ([same page](https://www.home-assistant.io/integrations/bluetooth/),
 [bleak #1612](https://github.com/hbldh/bleak/discussions/1612)). Indoor range is "same room,
-maybe the next" — a few metres through drywall [unverified; measure]. The Pi already runs BlueZ
-for the Omi lab (`labs/omi-receiver/README.md:71-77`, `bleak 0.22.3`), so the stack is proven on
-this panel.
+maybe the next" — a few metres through drywall [unverified; measure]. **What the panel actually
+has is not established** [unverified on the Pi 5]: this record queried no live service, and the
+only Bluetooth work near the panel is the Omi receiver *lab* (`labs/omi-receiver/README.md:71-77`
+gives a manual `apt install bluez` protocol for a laptop or the Pi; Omi is B9 in the program
+tracker, not a live service), so nothing proves which BlueZ the panel runs, whether
+`bluetooth.service` carries `--experimental`, or whether the UART-attached radio accepts
+passive scanning. That check is **E4 step 0** and part of phase 0: `bluetoothd -v`,
+`bluetoothctl show` (adapter present, `Powered: yes`), `systemctl cat bluetooth` for
+`--experimental`, and a 10-second `BleakScanner(scanning_mode="passive")` smoke test. If passive
+scanning is unsupported, the fallback is bleak's default **active** scan (more radio time on the
+shared Wi-Fi/BT antenna) — acceptable for the measurement week, to be re-checked before PR 3.
 
 ### 2.3 Wi-Fi / DHCP device trackers
 
@@ -515,7 +525,14 @@ same entity reaches the fusion as a p≈0.95 input.
   disk, ever; the tick emits numbers only** (`motion_score`, `face_count`, `person_count`,
   `best_face_px`) — never an embedding, never an identity (identity stays on the wake-word
   path the person chose to trigger); **a visible "eye" dot on the panel whenever the camera stream
-  is open**, and a one-tap "camera off" that is honoured in the daemon, not the UI; **BLE stores
+  is open — as a dedicated always-visible element, not a state of the orb** (`home.html`'s
+  `show()` adds `.hide` to `#orb` on the sleep surface, `:1284`, so an orb-borne dot would vanish
+  after three minutes of ordinary inactivity while capture continued; the dot gets its own
+  `#camdot` outside every surface and is never given `.hide`), under the invariant
+  **no indicator → no capture**: the daemon keeps the stream open only while a kiosk has read
+  its `/health` within the last 10 s, so a crashed, closed or navigated-away kiosk closes the
+  camera by itself (§3.5); and a one-tap "camera off" that is honoured in the daemon, not the
+  UI; **BLE stores
   one key/MAC in the Pi's env**, never in Postgres, never in a log line; the Jetson keeps **last
   state only** (no event table — 0028 stays dropped); the Pi keeps a 7-day rotating JSONL of
   scores for the measurement, then deletes it.
@@ -546,7 +563,7 @@ the direction the sleep gate fails. Bermuda / ESPHome proxies only if a second r
 | `PRESENCE_CAMERA_QUIET_AFTER_TTS_S` / `PRESENCE_CAMERA_MIN_REOPEN_S` | Pi daemon | 5 / 30 — the hysteresis from §2.1 |
 | `PRESENCE_BLE_ENABLED`, `PRESENCE_BLE_IRK` **or** `PRESENCE_BT_CLASSIC_MAC` | Pi env only | the scanner; with an IRK it resolves every resolvable private address in software (`bluetooth-data-tools`, §2.2) and keeps RSSI for matches only; with a classic MAC it pages every 6 s; neither identifier is ever logged |
 | `ZOE_PRESENCE_SOURCES` | zoe-data | comma list of producers the fusion may read: `session,touch,voice,music,room,camera,ble,ha` (the identity plan's name, `:113`); empty = today's behaviour |
-| `ZOE_SLEEP_GATE_PRESENCE` | zoe-data | the third vote in `resolve_sleep_gate` from `anyone_here` (and from a `binary_sensor` occupancy entity if one ever exists) |
+| `ZOE_SLEEP_GATE_PRESENCE` | zoe-data | the third vote in `/sleep-gate`: an in-memory `anyone_here` read taken **before** the HA lookup (§3.5), plus a `binary_sensor` occupancy branch in `resolve_sleep_gate` if such an entity ever exists; missing/stale/erroring score ⇒ no vote ⇒ today's behaviour |
 | `ZOE_PRESENCE_ORB_GATE` | zoe-data | the P1 orb "has something" state requires `owner_near ≥ 0.7` |
 
 ### 3.2 Signals
@@ -593,7 +610,9 @@ present, `0.3–0.7` unsure, `< 0.3` absent — the same three-band shape the pl
 Concretely: `_maybe_speak_notification` keeps reading `panel_presence_tier` (identity-confirmed)
 and `anyone_here` can only *demote* (two faces ⇒ guest-safe), never promote; the camera tick's
 detector runs on motion or every 10 s — `anyone_here` never shortens that; the sleep gate's third
-vote is `anyone_here ≥ 0.7` **and** the score is fresher than 60 s, else the vote is "no".
+vote is `anyone_here ≥ 0.7` **and** the score is fresher than 60 s, read before the HA lookup,
+else the vote is "no" (§3.5). A fourth invariant sits with capture: **no indicator → no capture**
+— the camera stream exists only while a kiosk is demonstrably showing the privacy dot (§2.5, §3.5).
 
 ### 3.5 Where it lives
 
@@ -604,12 +623,49 @@ vote is `anyone_here ≥ 0.7` **and** the score is fresher than 60 s, else the v
   to every resolvable private address and a resolved-address cache so the phone keeps matching
   across its ~15-minute rotations — §2.2; or a `hcitool`-style page by the classic MAC every 6 s),
   both as daemon threads behind their flags, both writing the JSONL and the `/health` fields.
+- **The indicator transport (Pi → kiosk), stated explicitly.** The kiosk page is served from the
+  Jetson's nginx origin and the daemon listens on `localhost:7777`; wave 1 added
+  `http://localhost:7777 http://127.0.0.1:8765` to `connect-src` so the orb's `POST /activate`
+  stops being refused by the CSP (`services/zoe-ui/nginx.conf:18`,
+  [ui-deep-review F2](../knowledge/ui-deep-review-2026-10-04.md)), but that call is `mode:
+  'no-cors'` (#1829) because `_HealthHandler` sends **no CORS headers** — a `no-cors` fetch yields
+  an opaque response, so today the page could not read `camera_open` from `/health` at all. The
+  chosen path: the daemon adds `Access-Control-Allow-Origin: <origin of ZOE_URL>` (the one origin
+  it already trusts for its own API calls, read from its env — never `*`), `Vary: Origin`, no
+  credentials, **GET `/health` only**; the kiosk polls it every 2 s with a normal CORS fetch and
+  paints `#camdot` from `camera_open`; the `/activate` POST stays `no-cors`. Security note:
+  `/health` already binds `0.0.0.0` (`zoe_voice_daemon.py:3262`) and is unauthenticated, so the
+  header changes nothing for a non-browser LAN client; it only lets *that one page origin* read
+  three booleans (`camera_open`, `camera_off_latched`, `ble_scanning`) and a float — no frame,
+  no identity, no key. The same 2 s poll is what the daemon counts as "a kiosk is showing the
+  indicator" for the no-indicator-no-capture rule (10 s without a poll ⇒ close the stream).
+  Rejected: a zoe-data/nginx same-origin proxy to the Pi (adds a Jetson hop and a second
+  trust path for one boolean) and riding the 5 s `state/sync` (that goes kiosk → Jetson, the
+  wrong direction). Test ideas: a daemon unit test with a mocked capture — stop polling
+  `/health`, assert the stream closes within 10 s; the Playwright estate gate asserts `#camdot`
+  is visible on the **sleep** surface while `/health` reports `camera_open`, and that a wrong
+  `Origin` gets no `Access-Control-Allow-Origin`.
 - Jetson: `services/zoe-data/presence_fusion.py` — **pure functions** (signals in, two scores
   out, injectable clock; table-driven `ci_safe` tests: each signal alone, decay, the two fail-safe
   rows, a stale score, HA unreachable) — plus a last-state dict keyed by `panel_id` behind
   `POST /api/panels/{id}/presence` (device-token, scores only, 413 anything with an image field)
   and a read used by `resolve_sleep_gate`, the P1 orb and `arrival`'s gate
   (`tier == owner` **and** `anyone_here` not contradicting it with two faces).
+- **The sleep-gate read, bounded and first.** `GET /api/panels/{id}/sleep-gate` today spends up
+  to `_HA_BRIDGE_TIMEOUT = 5.0` s in `_entity_index` (`panel_config.py:466-479`) while the
+  browser takes its decision at **4 s** (`home.html:1248`), so a vote that only exists inside
+  `resolve_sleep_gate` *after* the HA pull can arrive after the panel has already slept (a
+  mismatch that predates this record and is worth its own one-line fix). The presence vote is
+  therefore read **before** the HA lookup, inside the same route, from the in-memory last-state
+  dict — a lookup, no I/O, well inside a 500 ms budget — and if `anyone_here ≥ 0.7` with a score
+  fresher than 60 s the route returns `{"block": true, "reason": "presence", "entities": []}`
+  at once, never touching HA; otherwise it falls through to today's room-toggle path unchanged.
+  Fail-safe is explicit and in the existing direction: no score, a stale score, a daemon that
+  stopped POSTing, or any exception in the read ⇒ **no vote** ⇒ the route behaves exactly as
+  today ⇒ sleep. **No new endpoint and no third browser request**: the kiosk's two-vote race is
+  untouched; the server's answer simply gets faster when someone is there. Lock-in rows for
+  `test_panel_sleep_gate.py`: fresh score blocks without an HA call (assert the bridge mock is
+  never hit); stale score falls through; read exception falls through.
 
 ### 3.6 The one policy sentence to add
 
@@ -650,7 +706,7 @@ must go red).
 | **E1 — power** (first, alone; **never a brown-out on the live panel**) | Step 0: read the supply — `vcgencmd get_config usb_max_current_enable`, the first-boot "restricted to 600 mA" warning in `journalctl`, the PSU label. **If it is 3 A, stop: E1 is "buy the 5 A PD supply or a powered hub" and nothing else runs.** Step 1 (only with a verified 5 V/5 A PD supply negotiated, or the camera/speaker on a powered hub): with the stream open, 50 TTS replies + 20 announcements over two days. `usb_max_current_enable=1` is set only *after* the 5 A supply is in place and only if the firmware did not already raise the limit — never on a 3 A supply (the docs' own crash warning, §2.1) | `dmesg` USB disconnect count; `vcgencmd pmic_read_adc` rails and `vcgencmd get_throttled` undervoltage bits [unverified on this image]; daemon camera-open failures | **0 disconnects, 0 undervoltage flags in 48 h** | The "it reproduces" control is **not** run on the live panel. It comes from the 2026-07-19 `dmesg`/journal history already on the Pi (read-only), or from a bench Pi 5 with a 3 A supply if one is available. If neither shows a disconnect, the trap is not what we think and the premise is cheaper than feared — recorded, not assumed |
 | **E2 — the tick as a presence instrument** | one week shadow: `motion_score`, `face_count` at 1 fps | lead time: how many seconds before each touch/voice event the score was already ≥ 0.7; false-present minutes while the phone geofence says away and no touch/voice for ≥ 30 min | lead ≥ 20 s on ≥ 80 % of touches; false-present < 2 % of away minutes | lens covered for one day ⇒ motion and faces must read 0 (a stale frame buffer would not) |
 | **E3 — faces vs persons** | for every motion event, did a face appear within 10 s? | share of "someone there" episodes with no face | if > 30 % lack a face, add the person detector in phase 2 | — |
-| **E4 — BLE / paging** | RSSI every 6 s; iPhone idle vs screen-on vs settings page open | detection rate while the owner is at the panel (touch as ground truth); RSSI at 1 m / 3 m / next room | present ≥ 90 % of panel-touch minutes; next-room RSSI distinguishable by ≥ 10 dB | phone BT off for an hour ⇒ absent within one half-life; a second household phone must **not** match (IRK) |
+| **E4 — BLE / paging** | Step 0 (prerequisite, read-only on the panel): `bluetoothd -v`, `bluetoothctl show`, `systemctl cat bluetooth` for `--experimental`, a 10 s `BleakScanner(scanning_mode="passive")` smoke test — record the BlueZ version and whether passive scanning / `AdvertisementMonitor1` work; **if not, the week runs on active scanning and says so**. Then: RSSI every 6 s; iPhone idle vs screen-on vs settings page open | detection rate while the owner is at the panel (touch as ground truth); RSSI at 1 m / 3 m / next room | present ≥ 90 % of panel-touch minutes; next-room RSSI distinguishable by ≥ 10 dB | phone BT off for an hour ⇒ absent within one half-life; a second household phone must **not** match (IRK) |
 | **E5 — sleep card** | shadow the third vote for a week: minutes the card *would* have been blocked by `anyone_here` while the room was dark and silent | the owner's complaint ("the sleep card keeps coming up") measured, not felt | ≥ 1 avoided false-sleep per day, 0 latch-awake incidents | force the Pi POST to fail for a day ⇒ the gate must fall back to today's two votes |
 | **E6 — Wi-Fi/companion** | HA `device_tracker` state vs phone-at-panel truth | lag of home→away and away→home; false-away minutes while touching the panel | false-away < 5 % | airplane mode ⇒ away within `consider_home` |
 
@@ -662,17 +718,24 @@ drop-ins untouched.
 
 0. **Prerequisite (operator, no code):** E1 step 0 — read the supply rating. If it is 3 A, the
    5 A PD supply (~A$20) or a powered hub is the cheapest "sensor" in this record and is bought
-   *before* anything else in E1 runs; `usb_max_current_enable` is not a substitute (§2.1). Decide
-   the phone question (Decision 2). Write the privacy note (§2.5) and the policy paragraph (§3.6).
+   *before* anything else in E1 runs; `usb_max_current_enable` is not a substitute (§2.1). E4
+   step 0 — record the panel's BlueZ version and passive-scan support (§2.2; today
+   [unverified on the Pi 5]). Decide the phone question (Decision 2). Write the privacy note
+   (§2.5) and the policy paragraph (§3.6).
 1. **PR 1 — shadow tick + fusion math.** `presence_tick.py` (motion diff, YuNet-or-SCRFD on
-   motion, JSONL, `/health` fields, the hysteresis), `presence_fusion.py` pure + tests, the
-   eye-dot CSS state on the orb (hidden until the daemon reports `camera_open`), a `camera off`
-   control honoured by the daemon. Flags: `PRESENCE_TICK_ENABLED`. Nothing POSTs. Runs E2/E3.
+   motion, JSONL, `/health` fields incl. `camera_open`, the hysteresis, the
+   no-indicator-no-capture liveness rule), CORS on `GET /health` for the `ZOE_URL` origin only
+   (§3.5), `presence_fusion.py` pure + tests, the dedicated `#camdot` privacy indicator outside
+   every surface (visible on the sleep clock too, painted from a 2 s `/health` poll), a `camera
+   off` control honoured by the daemon. Flags: `PRESENCE_TICK_ENABLED`. Nothing POSTs. Tests:
+   daemon stream closes within 10 s of the last `/health` read; estate gate sees `#camdot` on the
+   sleep surface. Runs E2/E3.
 2. **PR 2 — the third vote.** `POST /api/panels/{id}/presence` (scores only), last-state dict,
-   `resolve_sleep_gate` reads `anyone_here` behind `ZOE_SLEEP_GATE_PRESENCE`, with the
-   `binary_sensor` occupancy device-class branch written at the same time (so a bought sensor is
-   a config change, not a PR). `test_panel_sleep_gate.py` gains the stale-score and
-   POST-failure rows; the browser gate gains the third request in the race. Runs E5.
+   the bounded in-memory read at the **top** of `/sleep-gate` before `_entity_index` (§3.5)
+   behind `ZOE_SLEEP_GATE_PRESENCE`, with the `binary_sensor` occupancy device-class branch in
+   `resolve_sleep_gate` written at the same time (so a bought sensor is a config change, not a
+   PR). `test_panel_sleep_gate.py` gains the fresh-score-skips-HA, stale-score and
+   read-exception rows; the kiosk's two-request race is **unchanged**. Runs E5.
 3. **PR 3 — owner near.** `presence_ble.py` (one identifier in Pi env), `owner_near`, the P1 orb
    gate (`ZOE_PRESENCE_ORB_GATE`), `arrival`'s two-faces demotion. Runs E4.
 4. **PR 4 — owner home.** `ha` in `ZOE_PRESENCE_SOURCES`: a 30 s-TTL reader of
@@ -757,7 +820,9 @@ or MAC anywhere but the Pi env; Bermuda before a second room; ultrasound.
 `docs/architecture/samantha-evolution-plan.md`, `docs/architecture/omi-integration-plan.md`,
 `docs/knowledge/feature-audit-2026-09-25.md`, `docs/knowledge/biometric-retention-policy.md`,
 `docs/knowledge/synthetic-users-and-proactive-recipients.md`,
-`docs/knowledge/memory-pressure-profile-2026-10-03.md`, `docs/research/pull-not-push-inbox-2026-10-04.md`,
+`docs/knowledge/memory-pressure-profile-2026-10-03.md`, `docs/knowledge/ui-deep-review-2026-10-04.md`
+(F2: CSP `connect-src` for the daemon, wave 1), `services/zoe-ui/nginx.conf`,
+`docs/research/pull-not-push-inbox-2026-10-04.md`,
 `docs/research/speaker-gate-rebuild-2026-10-04.md`, `docs/research/companion-field-vs-samantha-2026-10-03.md`,
 `docs/IDEAS.md`.
 
