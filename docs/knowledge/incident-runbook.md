@@ -816,7 +816,7 @@ the daemon.
 manager's `RLIMIT_NICE` is 0). The daemon has no CPU priority edge on the Pi; keep other load
 off the box instead.
 
-## 24. Pi deploy broke the unit — `zoe-voice` dead with `status=203/EXEC` (2026-10-04)
+## 27. Pi deploy broke the unit — `zoe-voice` dead with `status=203/EXEC` (2026-10-04)
 
 **Signature.** Right after `scripts/setup/deploy-pi-voice.sh`, the panel has no voice:
 `systemctl --user status zoe-voice` (as `pi` on `zoe-pi`) shows `status=203/EXEC` (or a
