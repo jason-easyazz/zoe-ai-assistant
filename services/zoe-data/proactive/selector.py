@@ -330,7 +330,7 @@ def ask_phrasing(hint: str, *, shape: str = "cue") -> str:
         # placed before the user's words 0/5, the cue wording 0/5; "Your reply MUST open
         # with one short, warm question …" voiced 5/5. A 4B model follows a required
         # opening, not an invitation.
-        return ("Your reply MUST open with ONE short, warm question asking them about it, in "
+        return ("Your reply MUST open with ONE short, gentle question asking them about it, in "
                 f"your own words{example}, then answer their greeting. {tail} The only "
                 "exception: they have just brought up something heavier themselves.")
     return (f"If it fits this conversation, ask them about it with ONE short, gentle question "

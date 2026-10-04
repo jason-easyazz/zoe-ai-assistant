@@ -524,7 +524,7 @@ def test_greeting_raise_is_brought_up_and_cue_raise_keeps_its_escape_hatch():
     # reply never voiced it under the cue wording. Greeting = do raise it; cue = if it fits.
     g = sel.ask_phrasing("How did the dentist go?", shape="greeting")
     c = sel.ask_phrasing("How did the dentist go?", shape="cue")
-    assert g.startswith("Your reply MUST open with ONE short, warm question") and "leave it out" not in g
+    assert g.startswith("Your reply MUST open with ONE short, gentle question") and "leave it out" not in g
     assert c.startswith("If it fits") and "leave it out" in c
     for text in (g, c):
         assert "never say you have no information" in text and "ONE short, gentle question" in text
