@@ -1,0 +1,50 @@
+# Claude Code remote-control bridge as a MANAGED user unit — INERT TEMPLATE (no [Install]).
+#
+# Why (docs/research/agent-sessions-off-box-2026-10-04.md section 1.5 + 3.1): the remote
+# bridge (`…/srv/<sha>/server --serve`) is today a plain process under the login scope
+# (session-NN.scope), and it spawns every `ccd-cli` session. A shell wrapper never sees those
+# sessions and a SessionStart hook runs after they are already outside any slice. The only
+# place to enforce "one engineering session, inside the slice" is the thing that launches the
+# bridge. As a unit it gets:
+#   * Slice=zoe-agents.slice  - every ccd-cli it spawns inherits the aggregate cap, and
+#   * the session lease       - ExecStart wraps the bridge in the SAME flock the `zoe-agent`
+#                               launcher takes ($XDG_RUNTIME_DIR/zoe-agent-session.lock), held
+#                               for the bridge's lifetime and inherited by its children.
+# If a launcher session holds the lease, this unit FAILS TO START with exit 75 (and is not
+# restarted: RestartPreventExitStatus=75). That is the point; it is not a fault.
+# It never takes /tmp/zoe-voice-harness.lock (the brain-window lock) — see zoe-agent.
+#
+# [unverified]
+#   * The desktop app starts its own `srv --serve` (run dir <hash>/, daemon.lock/daemon.token).
+#     Whether it ATTACHES to a server it did not start was not tested. Do not enable or rely on
+#     this unit until the stage-gate in docs/knowledge/engineering-off-box.md passes; until
+#     then the sampler's "ccd-cli outside the slice" column is the control.
+#   * Stopping this unit ends every session its bridge spawned (KillMode=control-group).
+#
+# Install (operator, stage-gated — zoe-agents.slice FIRST):
+#   cp scripts/setup/systemd/zoe-claude-bridge.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload      # do NOT enable; `start` only for the stage-gate
+# Rollback: systemctl --user stop zoe-claude-bridge; rm the unit; daemon-reload.
+
+[Unit]
+Description=Claude Code remote bridge (managed: session lease + zoe-agents.slice)
+Documentation=file://%h/assistant/docs/knowledge/engineering-off-box.md
+After=default.target
+
+[Service]
+Type=simple
+Slice=zoe-agents.slice
+# -n: never wait; -E 75: contention exits 75, distinguishable from the bridge's own failures.
+# %t = the user runtime dir ($XDG_RUNTIME_DIR), the same directory the launcher locks in.
+# Resolves the newest ~/.claude/remote/srv/<sha>/server and exec's `server --serve …` under it.
+ExecStart=/usr/bin/flock -n -E 75 %t/zoe-agent-session.lock %h/assistant/scripts/agents/zoe-claude-bridge-exec
+Restart=on-failure
+RestartSec=30
+RestartPreventExitStatus=75 127
+KillMode=control-group
+# Dev tooling must lose every memory fight against the live voice stack.
+Nice=10
+OOMScoreAdjust=500
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=zoe-claude-bridge

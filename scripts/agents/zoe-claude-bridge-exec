@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# Exec target of zoe-claude-bridge.service — runs INSIDE the unit's `flock -n -E 75 <lease>`.
+#
+# The Claude Code remote-control bridge is not a stable path: on this box it is
+# ~/.claude/remote/srv/<sha1>/server (one directory per app release, e.g. 89cb6289…/server),
+# NOT a file called `srv`. A unit cannot pin the hash, so this resolves the release at start
+# (running --serve's exe, else newest `server` file mtime; see below). Because the flock in the unit's ExecStart wraps THIS script, the lease
+# is held for as long as the bridge runs, and every ccd-cli the bridge spawns inherits both the
+# lease fd and the unit's Slice=.
+#
+# [unverified] The flags below are copied from the live process observed 2026-10-04
+# (`server --serve --socket <run>/rpc.sock --token-file <run>/token.<id>`); how the desktop app
+# discovers a server it did not start (run dir <hash>/daemon.lock + daemon.token) was NOT
+# tested. The unit therefore ships without [Install] and is stage-gated in the runbook.
+#
+# Overrides (no ZOE_* flags — this is operator tooling): AGENT_BRIDGE_SRV_ROOT,
+# AGENT_BRIDGE_RUN_DIR, AGENT_BRIDGE_PROC_ROOT (tests).
+set -euo pipefail
+
+RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+HOLDER="$RUNTIME_DIR/zoe-agent-session.holder"
+SRV_ROOT="${AGENT_BRIDGE_SRV_ROOT:-$HOME/.claude/remote/srv}"
+RUN_DIR="${AGENT_BRIDGE_RUN_DIR:-$HOME/.claude/remote/run/zoe-managed}"
+
+PROC_ROOT="${AGENT_BRIDGE_PROC_ROOT:-/proc}"
+
+# Which release? Directory mtime is NOT evidence (it moves only when an entry is created or
+# removed, so it goes stale the moment a release is rewritten in place or the app rolls back to
+# an older hash still on disk - on this box srv/89cb6289…/ has dir mtime 09-30 but its `server`
+# was rewritten 10-04). In order of authority:
+#   1. the release whose `server` a live `--serve` process of ours is executing (the app's own
+#      choice, i.e. the version it will talk to);
+#   2. else the `server` FILE with the newest mtime.
+# The choice and its reason go to stderr (journald).
+bin="" why=""
+for pd in "$PROC_ROOT"/[0-9]*/; do
+    exe="$(readlink "${pd}exe" 2>/dev/null || true)"
+    case "$exe" in "$SRV_ROOT"/*/server) ;; *) continue ;; esac
+    [ -x "$exe" ] || continue
+    if tr '\0' ' ' < "${pd}cmdline" 2>/dev/null | grep -q -- '--serve'; then
+        bin="$exe" why="running --serve process $(basename "$pd")"
+        break
+    fi
+done
+if [ -z "$bin" ]; then
+    for f in "$SRV_ROOT"/*/server; do
+        [ -x "$f" ] || continue
+        if [ -z "$bin" ] || [ "$f" -nt "$bin" ]; then bin="$f"; fi
+    done
+    why="newest server file mtime"
+fi
+if [ -z "$bin" ]; then
+    echo "zoe-claude-bridge-exec: no executable <release>/server under $SRV_ROOT" >&2
+    exit 127
+fi
+echo "zoe-claude-bridge-exec: release $(basename "$(dirname "$bin")") chosen by $why" >&2
+
+mkdir -p "$RUN_DIR"
+chmod 700 "$RUN_DIR"
+token="$RUN_DIR/token"
+if [ ! -s "$token" ]; then
+    (umask 077; head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$token")
+fi
+
+printf 'pid=%s\nsince=%s\ncli=%s\n' "$$" "$(date +%s)" "claude-bridge" > "$HOLDER"
+exec "$bin" --serve --socket "$RUN_DIR/rpc.sock" --token-file "$token"
