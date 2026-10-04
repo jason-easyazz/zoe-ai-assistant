@@ -57,7 +57,7 @@ server {
     assert updated.count("add_header Content-Security-Policy") == 3
     assert updated.count("add_header X-Frame-Options") == 3
     assert updated.count("add_header Strict-Transport-Security") == 1
-    assert updated.count("connect-src 'self' ws: wss:") == 3
+    assert updated.count("connect-src 'self' ws: wss: http://localhost:7777 http://127.0.0.1:8765") == 3
     assert helper.missing_headers(updated) == []
 
 
@@ -326,7 +326,7 @@ def test_ensure_headers_is_idempotent_and_replaces_managed_blocks():
     assert once == twice
     assert '"DENY"' not in once
     assert '"SAMEORIGIN"' in once
-    assert "connect-src 'self' ws: wss:" in once
+    assert "connect-src 'self' ws: wss: http://localhost:7777 http://127.0.0.1:8765" in once
     assert once.count(helper.BEGIN_MARKER) == 1
     assert "Strict-Transport-Security" not in once
     assert helper.missing_headers(once) == []
@@ -353,7 +353,7 @@ def test_ensure_headers_replaces_managed_csp_missing_websocket_sources():
 
     updated = helper.ensure_headers(config)
 
-    assert "connect-src 'self' ws: wss:" in updated
+    assert "connect-src 'self' ws: wss: http://localhost:7777 http://127.0.0.1:8765" in updated
     assert "connect-src 'self';" not in updated
     assert helper.missing_headers(updated) == []
 

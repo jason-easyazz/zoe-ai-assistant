@@ -1,0 +1,202 @@
+---
+type: Reference
+title: UI deep review (2026-10-04) — live panel, desktop pages, delivery layer
+description: Evidence-based review of Zoe's two UI surfaces as they actually run — the kiosk estate driven and screenshotted over the Pi's Chrome DevTools port, every desktop page smoked headless (on the Pi, not the RAM-tight Jetson), plus three read-only code reviews (estate, desktop, platform/packages). Ranked findings with file:line evidence and minimal remedies, the instrument recipe, and a sequenced fix plan. Headline — the panel's PIN card had covered the home screen since 28 Sep, the orb cannot reach the voice daemon under the nginx CSP, nginx ships no gzip and no Cache-Control for HTML.
+tags: [ui, touch, estate, desktop, nginx, service-worker, csp, review, evidence]
+timestamp: 2026-10-04T10:30:00+08:00
+---
+
+# UI deep review — 2026-10-04
+
+**What this is.** Jason asked for a full deep review of Zoe's UI before any fixing. This record is what was *observed* (live, with instruments) and what was *verified in code* (three parallel read-only reviews, every claim re-checked against a file:line). Nothing was edited. The one live state change: the kiosk page was reloaded over CDP to clear a stuck PIN card (see F1); it was left on the ambient home screen.
+
+**How to see the UI remotely** (the instrument, reusable):
+- The kiosk Chromium exposes CDP on `127.0.0.1:9222` on the Pi. Tunnel with `setsid ssh -N -L 127.0.0.1:9222:127.0.0.1:9222 -L 127.0.0.1:9223:127.0.0.1:9223 pi@192.168.1.61 </dev/null & disown` (use `127.0.0.1`, not `localhost`, which resolves to `::1`). Then Playwright `connect_over_cdp("http://127.0.0.1:9222")` and take the page whose url contains `touch/home.html`. Navigate with `#apps` → `.ltile[data-id=…]`, `#home`, and `#slClock` to leave sleep. `page.reload()` re-runs the kiosk bootstrap (fresh guest session).
+- Desktop smokes run in a **headless Chromium on the Pi** (`systemd-run --user … chromium --headless --remote-debugging-port=9223 …`), tunnelled to `9223`. The Jetson had ~420 MB available; the Pi had ~6.6 GB. Fresh context per page, or guest sessions leak between pages and fake a login. Those requests appear in nginx logs as 192.168.1.61 with UA `HeadlessChrome` — filter before reading panel stats.
+- Screenshots of all 12 estate surfaces were taken; the as-found state and a contact sheet were delivered in the session.
+
+---
+
+## 1. What the panel was actually doing (live evidence)
+
+| Observation | Evidence |
+|---|---|
+| **Panel showed "Who's here?" (who+PIN card) — since 28 Sep.** | `#authov.on` with no `zoe_session` in localStorage and `sessionStorage.zoe_redirect_after_login` set (the executor's `redirectToTouchLogin` path). `panel_auth_challenges` newest row: `2026-09-28 23:30:32 UTC`, `status=pending`, kind `voice_turn`, expired 2 min later. Voice daemon log at 07:30:38 local: transcript "Give me my morning grace" (the morning brief, needs identity). No 401/403 from the panel in the whole nginx log — it was the challenge path, not a session expiry. |
+| **The card is re-raised instantly by any 401/403 in guest mode.** | Reproduced: after a clean reload, tapping Contacts → `GET /api/people/` 403 → `apiGet` deletes `zoe_session` and shows the card (`touch/home.html:1733-1736`). Nothing dismisses it; the only exit is a correct PIN or a reboot. |
+| **The orb's call to the voice daemon is blocked by CSP.** | On the live page: `fetch('http://localhost:7777/')` → console `Refused to connect … violates "connect-src 'self' ws: wss:"`. Same for `127.0.0.1:8765`. `panelVoice()` (`home.html:4411-4417`) then falls into `.catch` → shows `#cmdbar` and focuses the text input — the keyboard behaviour #1536 was meant to remove. The orb harness stubs fetch and never sees the CSP. |
+| Kiosk is fresh after deploys. | Cached `touch/home.html` ETag `6aba879e-5573d` = server; SW active at 4.82.0 (`skipWaiting` + `clientsClaim`), an empty `zoe-precache-v2-4.80.0` cache lingers (cosmetic). |
+| 755 × 502/504 to the panel in 6 h. | All `connect() refused` to upstream :8000 during four zoe-data restarts 09:20–09:55 local (deploys). The estate recovers; every poll catches. Not a UI bug, but see F10 (empty-vs-failed). |
+| All 12 surfaces render; 0 console errors during the sweep. | Only warning: non-standard `appearance: slider-vertical` (volume slider). |
+| Visual nits from the screenshots | Lists shows two tabs both named **Shopping** (Jason's family list + an empty guest-owned list from 2026-07-05); Rooms draws a lightbulb on **Ceiling Fan** and **TV**; Settings shows a desktop scrollbar on a touch panel (`.setf` has `overflow-y:auto`, no `::-webkit-scrollbar{width:0}` like the calendar); Home's "Nothing scheduled today" has a stray accent dot far left of the text (`home.html:1750`). |
+| **`p0test`** (test admin flagged for removal in the 25 Sep review) is on the panel sign-in list. | `GET /api/auth/profiles` returns it; it renders as the 4th tile. |
+
+## 2. What the desktop pages do logged out (live evidence)
+
+Fresh-context, headless, `https://192.168.1.218`:
+- `index.html` / `auth.html` / `settings.html` behave (settings redirects to `/`).
+- **Every data page half-renders behind a "Session Expired" modal** (dashboard, chat, calendar, lists, notes, people, memories, journal, music, updates) and error-storms: 401/403 on every data call, `❌ Failed to subscribe to push: TypeError: Cannot read properties of undefined (reading 'length')` at `js/push-notifications.js:85` (vapid key 403 → undefined), and `wss://…/ws/push?channel=all` handshake 403 **4–5 attempts per 6 s** per page.
+- `chat.html` logged out lists **the shared guest pool of chat sessions** (50 shown; 3,979 `user_id='guest'` rows in `chat_sessions`, mostly `s1probe-*`, `corrpr*`, `bench-*`, `web_*` probes) behind the modal. Any LAN visitor sees them.
+- `dashboard.html` / `lists.html`: `Cannot initialize dashboard: WidgetManager not loaded or widgets not registered`.
+- Also seen: `memories.html` → `/api/reminders/notifications/pending` 401 (route exists; headerless guest case); one `/api/journeys` 404 on `journal.html` (no caller found in the tree — source not located); `smart-home.html` (meta-refresh to `touch/smart-home.html`) → `/api/ha/states` 404; `cooking.html`, `smart-home.html`, `touch/voice.html` → `127.0.0.1:8765/wake` CSP-refused (from `touch/js/touch-menu.js`).
+
+(Logged-in behaviour not exercised: no test credential was available; see §6.)
+
+---
+
+## 3. Ranked findings
+
+P1 = user-visible breakage / security / data exposure · P2 = degraded · P3 = hygiene. Each has evidence; remedies were code-verified, not guessed.
+
+### P1
+
+**F1 — The who+PIN card has no exit and five non-voice paths raise it on a guest kiosk.** `#authov` is shown by `ov.classList.add('on')` (`touch/home.html:4431`) and removed by nothing: no close button (`:983`), no tap-outside, no timer; the only way out is a correct passcode → `location.reload()` (`:4485-4491`). The server drops the parked turn after 120 s (`voice_tts.py:1828`, `panel_auth.py:38`) and broadcasts nothing on expiry. Raise paths: voice identity challenge (`touch-ui-executor.js:1178-1196` → `redirectToTouchLogin` → `__showAuthCard`); **any 401/403 in `apiGet`/`apiJson`** while `__kiosk && __guestBootSettled` (`home.html:1733-1736`, `3093-3096`) — routine for a guest: Contacts (`guest_policy.py:181`), ticking a list item (`:170`), Sources → Connect (`handoff.py:44`), voice/idle-logout settings writes; Settings "Switch user" (`:3776`); Sources "Sign in" (`:2130`); `authCard` fallbacks (`:2170/2172`); and a **stale guest session** — guest TTL is 30 min (`zoe-auth/core/sessions.py:78`) but the boot guard only checks `session_id` presence (`:18`) and `sid()` never checks `expires_at` (`:1727`), so a reboot >30 min after provisioning fires first-paint fetches with a dead session → 401 → card at boot. Guest is re-provisioned only at boot (`:26-32`) or by the Talk button (`:4232-4240`); after the 401 branch deletes `zoe_session` the kiosk runs sessionless until reload. What a member sees after an unanswered challenge: a blurred card (z80) covering orb (z50), dock (z46) and the night clock — no touch way to reach Zoe until someone with a PIN signs in or the Pi reboots.
+*Remedy (minimal):* (1) `initAuthCard`: add "Not now" + tap-outside + a 120 s auto-hide; `hide()` removes `.on`, clears `zoe_panel_auth_challenge`, and mints one guest session if none. (2) `apiGet`/`apiJson` kiosk branch: raise the card only when a panel challenge is pending; otherwise re-provision guest once and toast ("Sign in to see contacts"). (3) Treat `expires_at` as authoritative in `sid()`/boot. (4) Executor: on `panel_pin_result` call `window.__hideAuthCard` if defined.
+*Verify:* CDP `window.__showAuthCard()` → card drops after 120 s and `zoe_session` is repopulated; negative control: remove the timer → stays up. Tap Contacts as guest → toast, no card.
+
+**F2 — The orb tap (and Contacts voice search) can never reach the panel daemon; every tap opens the typed keyboard bar.** `home.html:4411` and `:3198` `fetch('http://localhost:7777/activate')` from a page at `https://192.168.1.218`; nginx sends `connect-src 'self' ws: wss:` (`nginx.conf:304,316`); kiosk flags relax nothing (`start-kiosk.sh`). Chromium refuses before any network → `.catch` → `#cmdbar` + text focus (`:4413-4417`). `test_touch_orb_and_dock.js:78-80` fulfils the route with Playwright and is blind to this class. Same block hits `127.0.0.1:8765/wake` from `touch-menu.js`.
+*Remedy:* either add `http://localhost:7777 http://127.0.0.1:8765` to `connect-src` (one line, every page) or route it server-side (`POST /api/panels/{device_id}/activate` proxying to the Pi via the existing allowed-panel-host guard in `system.py:2535-2548`), and keep the typed bar for `!window.__kiosk` only. `test_nginx_security_headers_helper.py` pins the CSP string ×3 — update in the same PR.
+*Verify:* on the live panel, CDP `fetch('http://localhost:7777/health')` no longer logs a CSP refusal; tap the orb → beep + listening, no cmdbar.
+
+**F3 — `p0test` is a live admin on the panel sign-in card.** Flagged in `state-of-zoe-review-2026-09-25.md:704` for revoke/disable; still returned by `/api/auth/profiles`. Operator step (zoe-auth admin), not a UI change.
+
+**F4 — No gzip; 350 KB pages ship uncompressed.** `nginx -T | grep gzip` → nothing; `touch/home.html` 350,013 B (gzip → 103 KB), `chat.html` 346,775 B (→ 65 KB), `livekit-client.umd.min.js` 352 KB (→ 90 KB). With `no-cache` on js/css every ETag miss re-sends in full. *Remedy:* `gzip on; gzip_types …; gzip_min_length 1024; gzip_vary on;` in each server block (or a shared include). Brotli is not in nginx:alpine.
+
+**F5 — No `Cache-Control` on HTML, manifest, fonts, icons; the SW does not protect the kiosk from heuristic caching.** Only `.js/.css` get `no-cache` (`nginx.conf:27-38`, `:314-326`). RFC 7234 heuristics today: `touch/home.html` ~14 h, `chat.html` ~17 h, `manifest.json` ~7.6 d, fonts ~10 d, icons ~19 d. `sw.js:144-147` routes `/touch/home.html` NetworkOnly and other documents NetworkFirst, but Workbox calls bare `fetch(request)` so the browser HTTP cache still answers a soft navigation; only precached entries carry `__WB_REVISION__`. A kiosk that soft-navigates (`panel_navigate`, `location.href=`) within ~14 h of a deploy is not guaranteed a fresh `home.html`; a non-SW browser has the same exposure. *Remedy:* explicit policy in §5.
+
+**F6 — Retired-service proxies still live, including a whole listening port.** `/hermes/` (`nginx.conf:155-167`), `/proxy/hermes/`, `/proxy/openclaw/` (`:252-264`, dup `:441-453`, `:534-546`) and the `listen 18790 ssl` OpenClaw server (`:570-603`; `docker-compose.yml:20` publishes it) all 502. Nothing listens on 8642/18789. *Remedy:* delete (retire by removing).
+
+**F7 — Logged-out desktop: half-render + request storm instead of a redirect.** Root cause 5 of the overhaul plan is still open: pages fire data calls before auth resolves; `/ws/push?channel=all` is opened without a session and reconnects ~1/s; `push-notifications.js:85` throws on a 403 vapid key. (Per-page detail and the one shared fix: §4, desktop review.)
+
+**F8 — Anonymous visitors see the shared guest chat pool.** `GET /api/chat/sessions/` with no session resolves to `user_id='guest'` (`auth.py:199-212`) and lists the pool (`chat.py:3059-3067`); 3,979 guest sessions exist, dominated by test probes (`s1probe-`, `corrpr`, `bench-`, `web_`). Behind Cloudflare Access remotely, but open on the LAN. *Remedy:* chat page must not list sessions for a guest identity (and should not show "Session Expired" to someone who never had one); separately, the probe-session purge is not keeping up — 30+ `corrpr*`, 26 `bench-*` rows.
+
+**F9 — Settings › Household › "Link a device" shows a hardcoded fake pairing code.** `CARD.pair` (`home.html:1108`) renders static digits 4-8-2-1 with "Enter this code in the Zoe app on your phone". Real pairing exists (`panel_provision.py:175`). `CARD.confirm` ("Add olive oil", `:1107`) is fake too but only reachable via the hidden `#pick`. *Remedy:* remove the row or call the provisioning API.
+
+### P2
+
+**F10 — Empty vs failed conflated (AGENTS.md rule).** Lists: per-type `.catch(()=>[])` (`home.html:3102`) turns a deploy 502 into blank tabs (the catch at `:3109` is unreachable). Contacts: any failure reads "Sign in to see your contacts" (`:3264`). Sources: any failure reads "Sign in to manage music services" (`:4128`) although the catalogue is `get_current_user`, not signed-in-only (`music_setup.py:54-55`). Music: `!d.available` renders "Nothing playing" when MA is down (`:1813`). *Remedy:* branch on `e.message==='auth'` vs http and keep prior state.
+
+**F11 — Multi-sentence voice answers overwrite each other on Ask.** Server emits `voice:responding` per sentence (`voice_tts.py:4349-4365`, called 4472/4502/4506/4510) plus a `processing_ack` filler; `askShowAnswer` does `textContent=a` (`home.html:4329`), and the 1200 ms defer keeps only the last sentence (`:4372-4375`); `dockSaid` overwrites the same way. *Remedy:* accumulate per turn (reset on `transcript`/`thinking`, append, skip `processing_ack`). *Verify:* extend `test_touch_voice_text_lifecycle.js` with two `responding` events (currently fails).
+
+**F12 — Executor still navigates the estate to RETIRED pages from spoken text.** `_attemptVoiceNavigation` (`touch-ui-executor.js:791-803`, called `:925`) regex-matches "here's the weather…" and `location.assign('/touch/weather.html')` 1.8 s later; `voice_tts.py:842` calls those pages retired. The backend already sends `panel_navigate`. *Remedy:* delete the function.
+
+**F13 — Voice text wakes the dock on the sleep screen and never clears.** `dockHeard`/`dockSaid` `dock.classList.remove('hide')` (`home.html:4071,4079`); restore timers skip `renderDock` on sleep; `done()` never arms drift on sleep (`:4381`). *Remedy:* if `_cur==='sleep'` call `show('home')` first.
+
+**F14 — A signed-in member not bound to the panel silently loses the durable action queue.** `_authorize_panel` 403s a non-guest with no `panel_user_bindings` row (`ui_actions.py:118-130`); executor then clears `pollTimer` forever (`touch-ui-executor.js:1385-1394`). *Remedy:* fall back to guest polling on 401/403, or bind on passcode login.
+
+**F15 — `~* \.(js|css)$` regex location 404s proxied assets.** Music Assistant's own `assets/index-*.js` under `/modules/music-assistant/` → 404 (verified); same for `/api/*.js`, `/multica/*.js`. The `/_next/` block already documents the trap and uses `^~`. *Remedy:* `^~` on every proxy prefix, or scope the regex to docroot dirs.
+
+**F16 — SPA fallback serves `index.html` with 200 for any typo URL** (`try_files … /index.html`, `nginx.conf:40-42`, `:328-330`); the site is multi-page. Workbox NetworkFirst then caches `index.html` under the wrong URL for 7 days. *Remedy:* `=404` + `error_page 404`.
+
+**F17 — nginx.conf changes are never applied by deploy.** `deploy.yml` never touches `zoe-ui`/nginx; conf is a read-only bind mount, so the file updates but the master never reloads. In sync today by luck (container 2026-09-26, conf 2026-07-22). *Remedy:* `nginx -t && nginx -s reload` on conf change in deploy; `nginx -t` in a throwaway `nginx:alpine` in `validate`.
+
+**F18 — Port-80 and 443 blocks are hand-duplicated and drifted** (`/ha/` sends `X-Forwarded-Proto http` on :80 `:211` vs `$scheme` on :443 `:493`). Port 80 serves the full app in plaintext. *Remedy:* shared `include` or redirect :80 → :443.
+
+**F19 — CSP carries `'unsafe-eval'`, `https://www.youtube.com`, `img-src https:` that code does not justify.** Zero `eval(`/`new Function(` in first-party, lib or workbox; youtube only in prose. `img-src https:` is needed only for the three Google art hosts. (Keep `'unsafe-inline'`: every page is inline-script heavy.)
+
+**F20 — Prism 1.29.0 has a published DOM-clobbering fix (CVE-2024-53382) in 1.30.0;** chat renders untrusted markdown. Drop-in upgrade. **livekit-client 2.5.0** is 17 minors behind 2.22.3 while the server runs `livekit/livekit-server:latest` (1.9.3, unpinned, `docker-compose.yml:176`) — pin the server, bump the client, **replay-gate** (voice path).
+
+### P3
+
+- **Duplicate polling on the estate:** Rooms/Sleep run their own 30 s `loadHA` beside the global one (`home.html:2920,2997,4005`); `/api/skybridge/timers` is hit by three loops; SW `_panelPoll` 5 s (`sw.js:697`) duplicates the executor's 2 s pending poll. `paintDockMusic` reschedules inside `.then` with an empty `.catch` (`:1345,1372`) — a 502 kills the 5 s chain until `refreshHA` repaints.
+- **Design-system conformance (`skybridge-design-system.md`) is near zero on the estate:** no `--sky-*` tokens, no `skybridge-ds.css`, 936 lines of inline CSS with magic numbers; no `prefers-reduced-motion` anywhere; no `data-theme`/sun-driven light set (only `wxlight` for clear-day weather); all icons are 1.7–1.8 px stroke **line** icons (the doc's "single biggest tell"); colour-emoji glyphs in chrome (🎵 ⏱ ✎ ✕ ＋ ⏭ ➤ ⚠, executor 💡⚫⏮⏯⏭📅🛒✏️); hit targets <48 px: `.lact button` 34 (every list/reminder edit+delete), `.cfx` 34, `.tmr button` 38, `.rtile .qadd/.qnext` 38, `.srow2 .sw` 58×34, `.calviews button` ~35; **Inter is never used by `home.html`** (only `touch/index.html` loads `skybridge-type.css`; the estate uses `-apple-system … system-ui`).
+- **Text inputs on the panel beyond PIN + short search** (contract `services/zoe-ui/AGENTS.md:35`): cmdbar, reminder title, event title/location, contact name/relationship/phone/email, room name, location label, pin label, playlist name, link-person name, executor action-form fields.
+- **Dead files in `dist/touch/` loaded by nothing:** `css/ambient.css`, `css/gestures.css`, `css/touch-base.css`, `js/ambient-widgets.js`, `js/photo-slideshow.js`, `js/presence-detection.js`, `js/touch-common.js`, `js/voice-touch.js`, `js/touch-nav.js`, `js/touch-widgets.js`, `css/cards/*.css`, `skybridge.html`, `developer/index.html`. Legacy pages reachable only via other legacy pages or F12: `cooking/music/settings/updates/timers/weather.html`. Live referrers confirmed for `index.html`, `voice.html`, `pair.html`, `games.html` (stub), `js/timers-global.js`, `js/zoe-compose.js`, `skybridge-ds/type.css` + `skybridge-theme.js`.
+- **Vendored dead weight:** `browser-image-compression` (57 KB) has 0 call sites. `gridstack` is **10.1.2** (undocumented in AGENTS.md; latest 14). `?v=` stamps are incoherent (`auth.js` under three different stamps; `touch-ui-executor.js` two) and fragment the SW `zoe-js` cache. SW cruft: three "one-shot" purges re-run on every activate (`sw.js:733-786`), `/` and `/index.html` precached twice, header says `Version: 1.0.0`, `sw-registration.js` shows an "update available" banner that `skipWaiting` makes moot. SW_VERSION discipline itself is good (0 no-bump commits since 2026-08-01).
+- **PWA:** manifest valid, all icons 200; the four `shortcut-*.png` are byte-identical to `icon-96.png`; `<link rel=manifest>` absent on music/settings/voice/jukebox/setup-*; `clear-session.html` has no `lang`/viewport; duplicate `theme-color` metas on several pages.
+- **Accessibility:** `prefers-reduced-motion` 0 everywhere (Cover Flow, drift, aurora); `:focus-visible` only on chat.html; no `aria-live` on the voice transcript/answer region; `dist/js/widgets/README.md` sits in the docroot (denied by nginx, but should not be there).
+- **Estate P2-6 (latent, not live):** the kiosk push socket depends on `panels.allow_guest && is_active` (`main.py:2406-2491`); live row is `1|1` and the socket upgrades (28 × 101 in 6 h). Flipping that flag would make the kiosk deaf to all `voice:*` text with a reconnect every 30 s.
+
+**What is actually solid (estate):** every `/api/*` and `/ws/*` path the estate calls resolves to a live route with the matching method and shape (no MISSING/MOVED); WS keepalive + capped backoff + superseded-socket guard; conversation flags travel end-to-end and the lifecycle harness proves the dwell rules; pin-config caching with honest null/empty/failed states and the `.pc.temp.open` repaint guard; idle-sleep decision races a 4 s timer with two votes; drag guards on seek/volume; bounded single-retry token fetch; LiveKit loaded only on Talk and torn down on every exit. CI-wired node harnesses (`test_touch_conversation_mode.js`, `test_touch_voice_text_lifecycle.js`) pass; `tests/unit/test_sw_workbox_local.py` (6) and `test_ui_no_external_assets_scan.py` (109) pass.
+
+---
+
+## 4. Desktop pages — code review against the overhaul plan
+
+Three stored-XSS / open-redirect sinks in LIVE code paths were found and re-verified by line (the plan's Wave 1 fixed the chat/notes/memories/journal/calendar sinks; these three files were not touched):
+
+**F21 (P1) — Stored XSS in the floating orb's proactive toast.** `js/zoe-orb.js:419-423` interpolates `${n.title}` / `${n.message}` into HTML → `el.innerHTML = text` (`:446`); again at `:476-480`. `n` is a pending notification whose `message` is the **user-authored reminder title** (`reminders.py:74`); polled on every orb page (dashboard, lists, people via `orb-loader.js:15-16`). *Remedy:* build with `createElement`/`textContent`, buttons via `addEventListener` (the `onclick="suggestionAction(${JSON.stringify(n.id)}…)"` attributes are attribute-context interpolation too). *Verify:* DOM-shim harness in the `test_chat_xss_and_sw_origin.js` pattern.
+
+**F22 (P1) — Stored XSS in `people.html` search sidebar.** `people.html:1464-1482` (`searchPeople`, wired via `oninput`) renders `${p.name}` / `${p.category}` unescaped with `onclick="selectPerson('${p.id}')"`; the card renderer at `:1326-1333` is the correct model. #1463 revived the page; `test_people_page_boots.js` checks execution, not escaping.
+
+**F23 (P1) — `?redirect=` open redirect in `auth.html`.** `redirectToApp()` (`auth.html:1158-1167`) rejects only `^https?://` and `//`; `javascript:alert(1)//.html` passes `endsWith('.html')`, `/\evil.com` passes `startsWith('/')`. Runs for any visitor holding a stored session (`:1134-1148`). CSP does not block `javascript:` navigation. *Remedy:* `new URL(target, location.origin)` and require same origin + protocol, no backslashes; else `dashboard.html`.
+
+**F7 detail (P1) — no desktop page gates on auth; a guest session counts as signed in.** `window.zoeAuthReady` (`auth.js:570`) has zero desktop consumers. `enforceAuth()` on a desktop path with no session paints the "Session Expired" overlay (`auth.js:338-386`) instead of redirecting, after every page's init already fired its fetches. `isAuthenticated()` (`:131-138`) accepts a guest session while `getSession()` returns `''` for guests (`:69-79`), so requests go headerless → 401/403 storms and `apiRequest` toasts per failure (`common.js:408-410`). Only `settings.html:2277-2290` gates. *One shared fix:* in `enforceAuth()`, for non-`/touch/` protected paths with no non-guest session, store `zoe_redirect_after_login` (already written at `:362`, consumed by nothing on desktop) and `location.replace('/index.html')` before `zoeAuthReady` resolves; make `index.html` consume the redirect key. *Verify:* logged-out smoke → exactly one navigation to `/index.html`, zero `/api/*` requests.
+
+**F24 (P1) — `/ws/push?channel=all` is opened without `session_id` and 403s for everyone, always.** `notifications-panel.js:513-536` (10 desktop pages) and `zoe-orb.js:306` open it with no session; the server requires `session_id` for non-panel sockets (`main.py:2593-2596`, guests refused at `:2612`) → `close(1008)` → 403, reconnect 2 s → 30 s cap. The bell's instant path is dead for signed-in users too (only the 60 s poll works); `websocket-sync.js:initPush` (`:301-315`) does it right and no page calls it. *One shared fix:* a single `window.zoeOpenPush(onMessage)` that no-ops without a non-guest session, appends `session_id`, owns the backoff; subscribe `notifications-panel.js`, `zoe-orb.js`, `chat.html:3499` through it.
+
+**F25 (P1) — Web-push subscribe can never succeed, and runs on every page.** `push-notifications.js:132` `subscription = await …` is undeclared under `'use strict'` → `ReferenceError` for signed-in users (triage item 20, still open); logged out, the 403 body parses to `publicKey=undefined` → `urlBase64ToUint8Array` throws (`:85`). `autoSubscribe()` runs on load via `sw-registration.js:380-385` and calls `Notification.requestPermission()` regardless of login; `:172-173` sends a `Bearer access_token` that does not exist in this auth model. `dashboard.html:2262-2300` has a correct second copy — consolidate.
+
+**P2:** desktop → `/touch/*` links still live (standing rule): `cooking.html:5` / `smart-home.html:5` meta-refresh, linked from 10 pages each; `notifications-panel.js:345/:358` deep-link to `/touch/updates.html` ungated; `developer/` linked from 10 pages and still served. `widgetsRegistered:false` is a benign `pageshow` race (`dashboard.js:576-584`, `lists-dashboard.js:792-799`) — real init runs on `widgets-registered`; act only on `event.persisted`. Orb state survives logout: `orb-loader.js:60` listens on `window`, `auth.js:281` dispatches on `document`; `zoeAuth.getUserId` is never exported so every user shares `orbChatMessages_guest`. Root causes 2/3/4 open: ~40 `?user_id=` sites (journal-api.js, widgets/core, chat.html), `stubs.py:16-46` still fakes collections/projects/layout while `memories.html` drives the canvas (POST `/api/collections` → 405), `models.py` has no `extra=`. Dead controls in kept pages: `settings.html:2230` `/api/tools/call`; `music.html:1327` `/api/ha/service` + `:1064` `current_item` off the player; `widgets/core/system.js` `Math.random()` stats; `week-planner.js:291` `/api/calendar/week`; `project.js` seven `/api/projects/*`; `widgets/music/*` five missing music routes; `offline.html:231` `/api/health`.
+
+**P3:** trailing-slash 307s at 10 sites (`chat.html:4892/5232/6589`, `notes.html:670/843`, `people.html:920`, `music.html:1365`, …); loaded-but-unused `chat-sessions.js`, `ai-processor.js`, `mcp-client.js`; `/api/chat/warm/{id}` POSTed by `zoe-orb.js:94` on every orb page (no route); `chat.html:5898` preview iframe keeps `allow-same-origin` while nginx 404s `/_preview/`.
+
+**Endpoint truth (463 server routes parsed):** MISSING — PUT `/api/user/profile` (`people.html:1633`), PUT/DELETE `/api/tiles/{id}`, POST `/api/media/upload` (journal), `/api/ha/service`, `/api/tools/call`, `/api/chat/warm/{id}`, `/api/mcp`, `/api/calendar/week`, 7× `/api/projects/*`, `/api/music/queue` (bare), `/similar|/radio|/discover|/playlist`, `/api/homeassistant/*`, HEAD `/api/health`. WRONG METHOD — POST `/api/collections`, POST `…/tiles`, POST `/api/music/queue/next`, DELETE `/api/notes/`, DELETE `/api/music/queue/{x}`. Everything the estate calls resolves (§3).
+
+**Plan reconciliation (24-item register + root causes):** FIXED — RC1 lists items (#1462), realtime gap (#1472/#1474), touch-ui-executor off desktop (#1470), lists swallowed script (#1470), people canvas (#1463), calendar metadata + escaping (#1488), journal prefix/Edit/Journeys (#1467), chat action_menu/add_to_list/push-tap/agent-activity (#1464), SW CDN kill (#1486), manifests (#1477), `?setup=` XSS + demo bypass (#1487), chat/notes/memories/journal sinks (#1486/#1489/#1483), "Welcome, undefined". OPEN — RC2 `?user_id=`, RC3 stubs, RC4 Pydantic `extra`, RC5 auth gating, one auth client, trailing-slash 307s, `/ws/push` collapse, notifications-panel panel deletion, honesty-by-removal set, Wave 0 smoke harness, orb logout listener, music transport, preview iframe, compose-card light theme (no `data-theme`), push ReferenceError, settings `/api/tools/call`, dead-tier retirement + touch links. NOT RE-VERIFIED — dark-mode white-on-white (`dark-mode-shared.css` unchanged).
+
+**Dead tier, referrer-checked:** loaded by nothing — `js/navigation.js`, `js/lib/{module-widget-loader,widget-registry}.js`, `js/voice/*`, `js/widget-settings-sheet.js`, `components/zoe-orb.html`, `css/{glass,memories-enhanced,widgets-enhanced}.css`, `week_planner_widget.html`, `games.html`, `clear-cache*.html`, `clear-session.html`, `_preview/*`, desktop `voice.html`. Still loaded (retire needs edits): `mini-player.js` (7 pages), `chat-sessions.js`, `ai-processor.js`, `mcp-client.js`, `websocket-sync.js` (now the live poller), `dashboard-protection.js`, `widgets/music/{player,library}.js`. Both critical-file manifests still pin `glass.css`, `memories-enhanced.css`, `ai-processor.js`, `components/zoe-orb.html`, `widget-system.js`, `widget-base.js`, 8 `widgets/core/*.js` — remove in the same PR as any deletion.
+
+**Harness health:** all 15 no-browser desktop harnesses pass (run 2026-10-04); all CI-wired except `test_chat_component_render.js`. No harness covers `zoe-orb.js`, `people.html` escaping, `push-notifications.js`, or the `?redirect=` guard.
+
+---
+
+## 5. Coherent caching policy (no build step, hand-maintained `dist/`)
+
+Principle: HTML is the only thing that must be fresh on every navigation; everything else is addressed by ETag revalidation or a version in the URL.
+
+```nginx
+# documents, SW, manifest: always revalidate (ETag -> 304 is cheap)
+location ~* \.(html|json|webmanifest)$ { add_header Cache-Control "no-cache" always; try_files $uri =404; }
+location = /sw.js                      { add_header Cache-Control "no-cache" always; }
+# first-party js/css: revalidate (today's behaviour; drop the ?v= stamps)
+location ~* ^/(js|css|touch|components)/.*\.(js|css)$ { add_header Cache-Control "no-cache" always; try_files $uri =404; }
+# vendored libs + workbox: versioned by DIRECTORY (lib/<pkg>-<ver>/), so long-lived
+location ~* ^/(lib|workbox)/ { add_header Cache-Control "public, max-age=31536000, immutable" always; try_files $uri =404; }
+# fonts, icons, images
+location ~* \.(woff2?|png|ico|svg|jpe?g|webp)$ { add_header Cache-Control "public, max-age=604800, stale-while-revalidate=86400" always; try_files $uri =404; }
+location / { try_files $uri $uri/ =404; }
+error_page 404 /offline.html;
+```
+Notes: `immutable` on `/lib/**` is only safe once the directory name carries the version (today `lib/marked/marked.min.js` is overwritten in place). `add_header` inside a `location` drops the server-level security headers — that is why the CSP block is repeated in the js/css location; a shared `include` (F18) fixes it once. Cloudflare edge caching behind Access is unverified; explicit headers remove the ambiguity. Proxy prefixes get `^~` (F15).
+
+## 6. Vendored packages
+
+| Package | Vendored | Latest | Used by | Note |
+|---|---|---|---|---|
+| prismjs | 1.29.0 | 1.30.0 | chat.html, touch/chat.html | **CVE-2024-53382** fixed in 1.30.0; drop-in |
+| marked | 15.0.12 | 18.0.14 | chat pages (`marked.parse` only) | removed options all went in v8, none used; low risk |
+| dompurify | 3.4.12 | 3.4.16 | chat pages | patch bumps; low |
+| chart.js | 4.4.4 | 4.5.1 | chat pages | low |
+| leaflet | 1.9.4 | 1.9.4 | chat pages | current |
+| livekit-client | 2.5.0 | 2.22.3 | voice.html, touch/voice.html, touch/home.html | server `:latest` 1.9.3 unpinned; **replay-gate** |
+| gridstack | 10.1.2 | 14.0.0 | touch/dashboard, touch/lists, desktop dashboard/lists | 3 majors; deliberate upgrade with a visual check |
+| filepond (+5 plugins) | 4.32.12 | 4.32.12 | journal pages | current |
+| qrcode | 1.4.4 | 1.5.4 | chat, touch/home | low |
+| browser-image-compression | 2.0.2 | 2.0.2 | journal.html | **0 call sites** — remove |
+| workbox | 7.0.0 | 7.4.1 | sw.js | refresh via `workbox-cli copyLibraries` |
+
+## 7. Tooling proposal (smallest set that fits)
+
+1. `nginx -t` in CI against the real conf in a throwaway `nginx:alpine` (catches F15/F17's class). Free, deterministic.
+2. ESLint with only `no-undef` + `no-unused-vars` over `dist/js/**`, `dist/touch/js/**`, `sw.js` and inline scripts (`eslint-plugin-html`), globals declared per vendored lib. ~20 s on ubuntu-latest. Would have caught the `journal-api.js` ReferenceError class.
+3. `html-validate` over `dist/**/*.html`, lenient preset (dup ids, lang/viewport, nameless buttons, duplicate metas). ~15 s.
+4. A ten-line curl smoke post-deploy on the Jetson: Cache-Control on `/touch/home.html`, gzip on `/chat.html`, 404 for `/nonexistent.html`, 200 for an MA asset, 404 for `/AGENTS.md`.
+5. Lighthouse + axe **on the Pi**, weekly, results into `docs/knowledge/ui-audits/`; no browser lane on the Jetson (it OOM-cascades headless Chromium).
+6. A CDP-driven estate sweep (the script used here) as the local gate after any estate-facing PR: reload, walk every tile, assert 0 console errors and no `#authov.on`, write PNGs. It sees the real CSP, which the fetch-stubbing harnesses do not.
+
+## 8. Sequenced fix plan
+
+**Status:** wave 1 built and verified 2026-10-04 (same branch as this record). F1 card lifecycle + 401/403 policy + expiry-aware session, F2 CSP allowance for the daemon (+ kiosk toast instead of the keyboard bar), F9 fake pair card removed, F11 sentence accumulation (harness case A6, mutation-tested), F12 `_attemptVoiceNavigation` deleted, F13 night-clock wake, plus a tap-to-sign-in slice of F10 on Contacts. Gate: `scripts/maintenance/estate_browser_verify.py` (19 checks against the live backend, real CSP, a REAL cross-origin probe of the daemon). Landed as #1822 + #1829 and proven on the real panel 2026-10-04 14:06 local: orb tap → `listening`, no keyboard bar, no toast; the Pi daemon logged "Orb-tap activation received". Waves 2–6 not started.
+
+Two things the landing taught, both now load-bearing:
+- **Behind the CSP wall was a CORS wall.** The daemon sends no `Access-Control-Allow-Origin`, so a plain cross-origin `fetch` is *delivered* (the mic opens) while its promise rejects — the orb then dropped `listening` and toasted "Voice isn't available" on a live turn. The daemon fetches are `mode:'no-cors'` and treat an opaque response as delivered (#1829). A Playwright-fulfilled route can see neither CSP nor CORS; the gate now serves the real CSP header AND makes a real no-cors `GET /` to the daemon on its host (only `/activate` is fulfilled, because it beeps the real mic). Mutation-checked against a closed port.
+- **`nginx.conf` is a single-file bind mount pinned to an inode.** The deploy's `git` sync replaced the file, so the container kept serving the OLD config (md5 differed in and out of the container) and `nginx -s reload` would have re-read the old inode. The F17 remedy is `docker restart zoe-ui` (about 4 s of UI downtime, the estate's polls recover), not a reload, whenever the conf changes.
+
+1. **Panel unblockers (one PR, estate + nginx) — DONE 2026-10-04:** F1 (card exit + guest re-provision + expiry-aware `sid()`), F2 (CSP allow for the daemon or server-side activate), F9 (fake pair code), F13 (sleep wake), F12 (delete `_attemptVoiceNavigation`), F11 (accumulate sentences). Replay-gate not required unless `voice_tts.py` is touched; verify on the live panel over CDP.
+2. **Delivery layer (one nginx PR + deploy.yml):** F4 gzip, F5 caching policy, F6 retired proxies + port 18790, F15 `^~`, F16 `=404`, F17 reload-on-change, F18 shared include, F19 CSP trim. Update `test_nginx_security_headers_helper.py` and `ensure_nginx_security_headers.py` in the same PR.
+3. **Desktop security + auth gating (one PR, single-finding commits):** F21/F22/F23 XSS + open redirect with harnesses; F7 shared `enforceAuth` redirect; F24 one push-socket opener; F25 push subscribe; F8 (no guest session listing; honest logged-out copy).
+4. **Packages:** Prism 1.30.0, dompurify/marked/chart.js/qrcode bumps, drop browser-image-compression; livekit-client + pinned server in its own replay-gated PR.
+5. **Operator steps:** disable `p0test`; purge the guest probe-session pool; delete the empty guest "Shopping" list; decide the fate of the dead `dist/touch/` files (retire by removing).
+6. **Later / design:** estate onto the design-system tokens, filled glyphs, 48 px targets, reduced-motion; desktop Wave 4b/5/6 per the overhaul plan.
+
+Related: [desktop-ui-overhaul-plan](../architecture/desktop-ui-overhaul-plan.md) · [skybridge-design-system](../architecture/skybridge-design-system.md) · [runtime-topology](runtime-topology.md) · [feature-audit-2026-09-25](feature-audit-2026-09-25.md)
