@@ -576,6 +576,7 @@ rule: break the fix and the test must go red):
    the exec path and name the slice; the Serena drop-in and the wrapper both name
    `zoe-agents.slice` (extend `tests/unit/test_agent_mcp_memory_bounds.py`, which already pins
    the wrapper). Operator installs the sampler first (baseline week), the rest a week later.
+   **Built:** install, negative controls and rollback in [`docs/knowledge/engineering-off-box.md`](../knowledge/engineering-off-box.md) (sampler = `zoe-agents-sampler.*`, launcher = `scripts/agents/zoe-agent`).
 2. **PR 2 — the builder lane's shape**: `zoe-builder.service/.timer` with the `-E 75`/`-E 76`
    locks in `ExecStart`, the `ExecStopPost` reason translator, the point-in-time
    `ExecCondition` scripts, plus the Omnigent compose `mem_limit`/`memswap_limit`. **Its
@@ -583,7 +584,7 @@ rule: break the fix and the test must go red):
    runner in both `flock`s with distinct `-E` codes, `SuccessExitStatus` lists them, the
    translator maps every code to a reason string, and the compose file sets `memswap_limit`
    equal to `mem_limit`. Inert until the self-building record's PR 6 wires tickets to it.
-3. **PR 3 — the runbook**: `docs/knowledge/engineering-off-box.md` + a `ZOE_HOST`-aware
+3. **PR 3 — the runbook**: extend `docs/knowledge/engineering-off-box.md` (PR 1 created it with the install recipe) + a `ZOE_HOST`-aware
    `land_voice_pr.sh` (probe over `ssh zoe`, the rest local), and the sweep of the 102
    worktrees (list, prune the merged ones, re-check every surviving `.mcp.json` for a stdio
    Serena).
