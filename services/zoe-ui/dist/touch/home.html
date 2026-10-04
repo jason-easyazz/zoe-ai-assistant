@@ -3221,7 +3221,7 @@
       if(srch)srch.onclick=function(){
         // Hand the mic to Zoe — she asks who to look for. Same daemon endpoint
         // the panel's orb uses; falls back to the typed command bar off-panel.
-        fetch('http://localhost:7777/activate',{method:'POST',signal:AbortSignal.timeout(800)})
+        fetch('http://localhost:7777/activate',{method:'POST',mode:'no-cors',signal:AbortSignal.timeout(800)})
           .catch(function(){if(window.__kiosk){toast('Voice isn’t available right now');return;}var cb=document.getElementById('cmdbar');if(cb){cb.classList.add('on');var ci=document.getElementById('cmdin');if(ci){ci.placeholder='Who are you looking for?';setTimeout(function(){ci.focus();},60);}}});
       };
       // Detail card is a function so relationship chips can hop between people.
@@ -4447,8 +4447,13 @@
     cmdbar.classList.remove('on');
     orbListening(true);
     toast(promptMsg||'Listening — ask Zoe anything');
-    fetch('http://localhost:7777/activate',{method:'POST',signal:AbortSignal.timeout(800)})
-      .then(function(r){if(!r||!r.ok)throw new Error('activate '+(r&&r.status));})
+    // Cross-origin to the panel's own daemon, which sends no CORS headers: a
+    // plain fetch is DELIVERED but its response is unreadable, so the promise
+    // rejects and the fallback fires after the mic has already opened. no-cors
+    // makes the opaque response RESOLVE (status 0); a refused connection still
+    // rejects, which is the only failure the fallback is for.
+    fetch('http://localhost:7777/activate',{method:'POST',mode:'no-cors',signal:AbortSignal.timeout(800)})
+      .then(function(r){if(!r||(r.type!=='opaque'&&!r.ok))throw new Error('activate '+(r&&r.status));})
       .catch(function(){
         orbListening(false);toastHide();
         // Off-panel (a desktop browser, dev) the typed bar is the fallback. ON

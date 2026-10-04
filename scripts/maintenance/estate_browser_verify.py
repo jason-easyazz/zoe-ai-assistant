@@ -57,6 +57,9 @@ with sync_playwright() as p:
     csp_err=[l for l in logs if "Content Security Policy" in l[1]]
     check(len(activates)==1 and not csp_err, f"orb tap POSTed /activate without a CSP refusal (activates={len(activates)}, csp_errors={len(csp_err)})")
     check(st["listening"] and not st["cmdbar"], f"orb shows listening, no keyboard bar: {st}")
+    print("--- 1b. CORS: a REAL cross-origin request to the daemon on this host resolves (opaque), it does not reject")
+    probe = pg.evaluate("""async () => { try { const r = await fetch('http://localhost:7777/', {mode:'no-cors', signal: AbortSignal.timeout(2000)}); return 'resolved type='+r.type+' status='+r.status; } catch (e) { return 'REJECTED '+e.message; } }""")
+    check(probe.startswith("resolved type=opaque"), f"no-cors GET / to the real daemon resolves opaque (this is what the orb's POST relies on): {probe}")
     print("--- 2. a guest 403 (Contacts) must NOT raise the PIN card")
     pg.click("#apps"); pg.clock.run_for(600); time.sleep(0.4); pg.click('.ltile[data-id="person"]'); pg.clock.run_for(1500); time.sleep(2.5)
     st=pg.evaluate("()=>({authOn:!!document.querySelector('#authov.on'), sess:!!localStorage.getItem('zoe_session'), copy:(document.querySelector('.ctsign')||{}).textContent||''})")
