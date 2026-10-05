@@ -433,11 +433,11 @@ def reply_for(kind: str, ident: Identity) -> Optional[str]:
     then falls through to the brain exactly as before). It never DENIES a fact the
     account merely lacks: a first-name-only account does not say "I have no surname" —
     the brain/recall may know one — it just does not answer the surname question."""
-    parts = ident.name.split()
+    parts = ident.account_name.split()  # the account's own name; the preferred name is a nickname
     if kind == "name":
         return f"Your name is {ident.name}."
     if kind == "fullname":
-        return f"Your full name is {ident.name}." if len(parts) >= 2 else None
+        return f"Your full name is {ident.account_name}." if len(parts) >= 2 else None
     if kind == "surname":
         return f"Your surname is {parts[-1]}." if len(parts) >= 2 else None
     if kind == "call":
@@ -625,8 +625,8 @@ def classify_name_assertion(asserted: str, ident: Identity, meta: Optional[dict]
     """``"match"`` | ``"needs_review"`` | ``"conflict"`` for a name a memory row claims is
     the user's own.
 
-    * match: the account name or the preferred name appears as a token (a longer form of
-      the real name — "Jason Smith" for "Jason" — is a match);
+    * match: the asserted name is the account name or the preferred name, or a shorter /
+      longer form of it ("Jason" / "Jason Smith") - compared as COMPLETE names;
     * needs_review: no shared token but it LOOKS like a nickname of one (a 3+ letter
       prefix either way: "Zeddy"/"Zed") or the row came from an explicit user teach
       (``EXPLICIT_SOURCES``) — never auto-purged, never logged as pollution;
@@ -635,12 +635,17 @@ def classify_name_assertion(asserted: str, ident: Identity, meta: Optional[dict]
     toks = _norm_tokens(asserted)
     if not toks:
         return "match"
-    mine = set(_norm_tokens(ident.account_name)) | set(_norm_tokens(ident.name))
-    if set(toks) & mine:
+    tset = set(toks)
+    names = [set(_norm_tokens(ident.account_name)), set(_norm_tokens(ident.name))]
+    # COMPLETE names, not one shared token: "Michael Smith" does not agree with the
+    # account "Jason Smith" just because the surname is shared. A shorter or longer form of
+    # the SAME name ("Jason" / "Jason Smith" either way round) is a match.
+    if any(n and (tset <= n or n <= tset) for n in names):
         return "match"
+    mine = set().union(*names)
     for t in toks:
         for m in mine:
-            if min(len(t), len(m)) >= 3 and (t.startswith(m) or m.startswith(t)):
+            if t != m and min(len(t), len(m)) >= 3 and (t.startswith(m) or m.startswith(t)):
                 return "needs_review"
     if (meta or {}).get("source") in EXPLICIT_SOURCES:
         return "needs_review"

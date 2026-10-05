@@ -665,3 +665,19 @@ def test_expired_entry_is_the_fallback_when_the_refresh_fails():
             raise RuntimeError("db down")
 
     assert asyncio.run(idf.resolve_identity(UID, db=Boom())) is stale
+
+
+def test_names_are_compared_whole_not_by_one_shared_token():
+    jason = idf.build_identity(UID, username="x", settings={"display_name": "Jason Smith"}, sysloc=SYSLOC)
+    for asserted, verdict in [("Jason Smith", "match"), ("Jason", "match"), ("Jason Q Smith", "match"),
+                              ("Michael Smith", "conflict"), ("Smith", "match"), ("Michael", "conflict")]:
+        assert idf.classify_name_assertion(asserted, jason, {"source": "digest"}) == verdict, asserted
+
+
+def test_full_name_and_surname_come_from_the_account_name_not_a_nickname():
+    i = idf.build_identity(UID, username="x", settings={"display_name": "Sam Rivers"},
+                           prefs={"preferred_name": "Sammy"}, sysloc=SYSLOC)
+    assert i.name == "Sammy"
+    assert idf.reply_for("fullname", i) == "Your full name is Sam Rivers."
+    assert idf.reply_for("surname", i) == "Your surname is Rivers."
+    assert idf.reply_for("name", i) == "Your name is Sammy."
