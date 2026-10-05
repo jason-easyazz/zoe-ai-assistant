@@ -112,11 +112,8 @@ Three layers prove it (all in `services/zoe-data/tests/test_zmb_lab.py`):
 | (g) emotional | G3: an emotional record is kept for every household member incl. children with no stored consent row (owner decision 2026-10-05, default `ZOE_AFFECT_CONSENT_GATE=household`) and never for a guest; five identities, the real `_affect_allowed` gate | feelings are never recorded for a guest or an unrecognised voice (the household members are sanity cells that pin the owner's decision: a policy change must flip them deliberately) | `affect` (the guest sentinels are the controlled cells) | none |
 | (c) temporal, (d) recall, (i) poisoning | not built yet (later PRs) | | | |
 
-The four known failures are **measured, not assumed**, and each is a real gap in `main` today:
-`B9` (the regex stage cannot read a list of new names; the model stage that should is the brain tier),
-`E1b` (the `remember ...` template stores `User asked me to remember: who my dentist is` and the quality gate accepts it
-because only a trailing `?` or an interrogative opener marks a question - a voice transcript never has a `?`),
-`F3` (audit F10: the tombstone is an in-process dict, 300 s), `H5` (`identity_facts.asserted_user_name` has no `goes by`,
+The known failure is **measured, not assumed**, and is a real gap in `main` today:
+`F3` (audit F10: the tombstone is an in-process dict, 300 s). B9, E1b and H5 were targets until #1882 fixed them (2026-10-06): the speaker's own name list is kept, an unpunctuated recall question is never stored, and every self-name template is walled. `H5` was (`identity_facts.asserted_user_name` had no `goes by`,
 yet the extractor's own template emits `User goes by {0}`). They are in the public table on purpose: a table without them
 reads as cherry-picked. When one is fixed its `expected` flips to `PASS`, it gets a control, and `test_z0_measures_as_documented`
 tells you it is time.

@@ -22,10 +22,10 @@
     },
     {
       "id": "E1b.spoken_recall_question_is_not_a_fact",
-      "title": "TARGET: a recall question as the speech-to-text delivers it (no question mark: 'do you remember who my dentist is') stores nothing",
+      "title": "a recall question as the speech-to-text delivers it (no question mark: 'do you remember who my dentist is') stores nothing",
       "tier": "store",
       "kind": "script",
-      "expected": "FAIL",
+      "expected": "PASS", "controls": ["extractor", "gate"],
       "lme_map": "abstention",
       "note": "measured, not assumed: the regex 'remember ...' template stores 'User asked me to remember: who my dentist is' and the write-quality gate accepts it because only a trailing '?' or an interrogative OPENER marks a question - 'do you remember' is neither once the '?' is gone, and a voice transcript never has one",
       "events": [
