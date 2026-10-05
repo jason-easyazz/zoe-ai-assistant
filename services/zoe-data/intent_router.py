@@ -3570,6 +3570,16 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         preview = (ref.text or "").strip()
         if len(preview) > 80:
             preview = preview[:77] + "…"
+        # "forget that" is a forget like any other: the rejected row still holds the text. Erase it for real
+        # (see memory_forget_entity below); the reject already hid it, so a failed erase changes nothing visible.
+        if hasattr(svc, "erase_rows"):
+            try:
+                from memory_service import physical_erase_enabled
+                if physical_erase_enabled():
+                    await svc.erase_rows(user_id, [ref.id], actor=user_id, reason="forgotten by request (last)")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("memory_forget_last: physical erase failed (%s) - row stays rejected",
+                               type(exc).__name__)
         return f"Done — I forgot: \"{preview}\"."
 
     if intent.name == "memory_forget_entity" and intent.slots.get("undo"):
@@ -3664,18 +3674,68 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
                 continue
             if name_re.search(getattr(r, "text", "") or ""):
                 matches.append(r)
+        # "Forgotten means forever" (owner, 2026-10-06): an archived row still holds the text and the name
+        # (the document, ``review_note`` = "forget_entity:<name>", the audit trail's before/after). Erase
+        # those rows for real - drawers, audit trail, and the bytes Chroma leaves in SQLite free pages, the
+        # FTS5 index, the write-ahead log and orphan HNSW dirs - once the archive has succeeded (the archive
+        # is the fail-safe: a failed erase leaves a hidden row, never a recalled one). ZOE_MEMORY_PHYSICAL_ERASE=0
+        # restores archive-only. Counts only are logged; never the name.
+        async def _erase_named(archived_ids: list[str]) -> None:
+            if not hasattr(svc, "erase_rows"):
+                return
+            try:
+                from memory_service import physical_erase_enabled
+                if not physical_erase_enabled():
+                    return
+                # ... plus the rows the approved sweep can never reach: a pending / disputed / superseded /
+                # archived / rejected row naming the entity holds the same text (an edited fact's old version,
+                # a model's candidate). They carry no recall to hide, so they go straight to erase.
+                erase_ids = list(archived_ids)
+                seen_ids.update(archived_ids)
+                for st in ("pending", "disputed", "superseded", "archived", "rejected"):
+                    off = 0
+                    while True:
+                        page = await svc.list_by_status(user_id=user_id, status=st, limit=1000, offset=off)
+                        if not page:
+                            break
+                        for r in page:
+                            _md = getattr(r, "metadata", {}) or {}
+                            if (getattr(r, "id", "") and r.id not in seen_ids
+                                    and (_md.get("user_id") == user_id or _md.get("wing") == user_id)
+                                    and name_re.search(getattr(r, "text", "") or "")):
+                                erase_ids.append(r.id)
+                                seen_ids.add(r.id)
+                        if len(page) < 1000:
+                            break
+                        off += len(page)
+                if not erase_ids:
+                    return
+                erased = await svc.erase_rows(user_id, erase_ids, actor=user_id,
+                                              reason="forgotten by request (entity)")
+                logger.info("memory_forget_entity: erased=%s ok=%s", erased.get("rows_removed"),
+                            (erased.get("physical") or {}).get("ok"))
+            except Exception as exc:  # noqa: BLE001 - the rows are archived either way
+                logger.warning("memory_forget_entity: physical erase failed (%s) - rows stay archived",
+                               type(exc).__name__)
+
         if not matches:
-            # nothing in the palace, but a contact / summary line / open loop may still name them
+            # nothing approved, but older versions / candidates may still hold the text; and a contact / summary
+            # line / open loop may still name them
+            await _erase_named([])
             return f"I don't have anything saved about {name}." + await _forget_cascade_note(user_id, name)
         forgotten = 0
+        archived_ids: list[str] = []
         for r in matches:
             try:
-                await svc.review(r.id, decision="archive", actor=user_id,
-                                 note=f"forget_entity:{name}")
+                ref = await svc.review(r.id, decision="archive", actor=user_id,
+                                       note=f"forget_entity:{name}")
                 forgotten += 1
+                if ref is not None:      # None = the archive was refused / did nothing: never erase on top of that
+                    archived_ids.append(r.id)
             except Exception as exc:
                 logger.warning("memory_forget_entity: archive failed id=%s: %s",
                                r.id, exc)
+        await _erase_named(archived_ids)
         if forgotten == 0:
             return (f"I found {len(matches)} memories about {name} but couldn't "
                     "archive them just now -- nothing was changed.")

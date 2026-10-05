@@ -21,6 +21,7 @@ from __future__ import annotations
 import atexit
 import contextlib
 import importlib
+import itertools
 import math
 import os
 import re
@@ -44,7 +45,10 @@ CONTROLS = {
     "extractor": "a lazy extractor that flips day/month, guesses roles, mines questions and assistant text",
     "gate": "the write-quality gate removed - questions, meta-rambling and transcript echoes are stored",
     "reader": "a reader that always answers from the nearest row instead of declining",
+    "physical_erase": "ZOE_MEMORY_PHYSICAL_ERASE=0 - a hard delete / forget removes the row through the API and leaves the text on disk",
 }
+
+_DISK_SEQ = itertools.count(1)
 
 _PIN_ENV = {
     "MEMPALACE_DATA_DIR": "mempalace",
@@ -205,6 +209,66 @@ class LabCollection:
         return {"ids": out_ids, "documents": out_docs, "metadatas": out_metas, "distances": out_dist}
 
 
+# ── a REAL Chroma collection (the disk cells) ────────────────────────────────
+
+def _hash_vec(text: str) -> list[float]:
+    """A deterministic 384-d stand-in embedding (the disk cells measure what is left ON DISK, not retrieval)."""
+    import hashlib
+    h = hashlib.sha256((text or "").encode("utf-8")).digest()
+    return [((h[i % 32] + i) % 97) / 97.0 + 0.01 for i in range(384)]
+
+
+def chroma_available() -> bool:
+    import importlib.util
+    return importlib.util.find_spec("chromadb") is not None
+
+
+class DiskCollection:
+    """The service's drawers collection over REAL Chroma in a throwaway directory, same call surface as
+    ``LabCollection`` (``rows`` included). Embeddings are hash vectors: retrieval QUALITY is not measured here,
+    the bytes Chroma leaves behind are."""
+
+    def __init__(self, raw: Any) -> None:
+        self._raw = raw
+
+    @property
+    def rows(self) -> "dict[str, tuple[str, dict]]":
+        got = self._raw.get(include=["documents", "metadatas"])
+        return {i: (d or "", dict(m or {})) for i, d, m in zip(got["ids"], got["documents"], got["metadatas"])}
+
+    def _embed(self, kw: dict) -> dict:
+        docs = kw.get("documents")
+        if kw.get("embeddings") is None and docs is not None:
+            kw = dict(kw, embeddings=[_hash_vec(d) for d in docs])
+        return kw
+
+    def upsert(self, **kw):
+        return self._raw.upsert(**self._embed(kw))
+
+    def add(self, **kw):
+        return self._raw.add(**self._embed(kw))
+
+    def update(self, **kw):
+        return self._raw.update(**self._embed(kw))
+
+    def delete(self, **kw):
+        return self._raw.delete(**kw)
+
+    def get(self, **kw):
+        kw.setdefault("include", ["documents", "metadatas"])
+        return self._raw.get(**kw)
+
+    def count(self) -> int:
+        return int(self._raw.count())
+
+    def query(self, **kw):
+        texts = kw.pop("query_texts", None)
+        if texts is not None:
+            kw["query_embeddings"] = [_hash_vec(t) for t in texts]
+        kw.setdefault("include", ["documents", "metadatas", "distances"])
+        return self._raw.query(**kw)
+
+
 # ── the lazy extractor (the negative control for extraction / abstention) ────
 
 _FEMALE_NAMES = frozenset({"dana", "tove", "priya", "marisol", "anika", "odile", "ines", "saoirse",
@@ -301,6 +365,8 @@ def controls_off(features: "frozenset[str] | set[str]", svc: types.SimpleNamespa
                     return None  # "archived" without archiving: the handler still says it forgot
                 return await real_review(self, mem_id, decision=decision, actor=actor, **kw)
             patch(svc.memory_service.MemoryService, "review", review_no_forget_archive)
+        if "physical_erase" in features:
+            setenv("ZOE_MEMORY_PHYSICAL_ERASE", "0")
         if "extractor" in features:
             patch(svc.memory_extractor, "extract_candidates", lazy_extract_candidates)
         if "gate" in features:
@@ -322,13 +388,22 @@ class LabService:
     module patches the in-process forget handler needs. ``close()`` restores every patched attribute
     (the lab leaves nothing global behind, so it is safe inside a pytest session or a long process)."""
 
-    def __init__(self, svc: types.SimpleNamespace, tag: str = "bench"):
+    def __init__(self, svc: types.SimpleNamespace, tag: str = "bench", disk: bool = False):
         self.svc = svc
         self._undo: list[Any] = []
-        data_dir = os.path.join(scratch_root(), f"palace-{tag}-{os.getpid()}")
+        self._disk = disk
+        data_dir = os.path.join(scratch_root(), f"palace-{tag}-{os.getpid()}"
+                                + (f"-disk{next(_DISK_SEQ)}" if disk else ""))   # a fresh path per disk lab: chroma caches clients by path
         if svc.live_store_guard.is_live_palace(data_dir):  # cannot happen; refuse rather than assume
             raise LabRefusal(f"lab data dir {data_dir} resolves to the live palace")
-        self.col = LabCollection()
+        self.data_dir = data_dir
+        if disk:
+            shutil.rmtree(data_dir, ignore_errors=True)
+            os.makedirs(data_dir)
+            client = svc.memory_service._palace_client(data_dir)   # the service's own cached client: one SQLite
+            self.col = DiskCollection(client.get_or_create_collection("mempalace_drawers"))
+        else:
+            self.col = LabCollection()
         self.service = svc.memory_service.MemoryService(data_dir=data_dir)
         col = self.col
         self.service._collection = lambda: col
@@ -347,6 +422,10 @@ class LabService:
         self.service.tick_access = no_tick
         self.service.tick_consolidation = no_tick
         self._patch(svc.memory_service, "_user_opted_out", not_opted_out)
+        if not disk:
+            # the in-memory lab has no files to erase: F1-F4 keep measuring the archive step the handler takes
+            # first; the disk cells (F5 / F6) run the erase over REAL Chroma
+            self._patch(svc.memory_service, "physical_erase_enabled", lambda: False)
         # the forget intent handler looks the service up through the module singleton at call time
         self._patch(svc.memory_service, "get_memory_service", lambda: self.service)
 
@@ -358,3 +437,14 @@ class LabService:
     def close(self) -> None:
         while self._undo:
             self._undo.pop()()
+        if self._disk:   # a real palace is a directory on disk: forget the cached client and delete the files
+            key = os.path.realpath(self.data_dir)
+            try:
+                self.svc.memory_service._AUDIT_CLIENTS.pop(key, None)
+                try:
+                    from chromadb.api.shared_system_client import SharedSystemClient
+                    SharedSystemClient.clear_system_cache()
+                except Exception:  # noqa: BLE001 - older chroma: the per-path cache is harmless once the path is unique
+                    pass
+            finally:
+                shutil.rmtree(self.data_dir, ignore_errors=True)

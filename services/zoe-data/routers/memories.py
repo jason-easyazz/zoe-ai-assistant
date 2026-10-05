@@ -1059,6 +1059,39 @@ async def memory_compact_index_endpoint(_: None = Depends(require_internal_token
         return JSONResponse(status_code=status, content=exc.report)
 
 
+def _physical_note() -> dict:
+    """The last hard delete's physical-erase verdict (counts only), additive to the forget responses."""
+    rep = getattr(_svc(), "last_erase_report", None)
+    if not rep:
+        return {}
+    return {"physical_erase": {k: rep.get(k) for k in ("enabled", "ok", "heap_scrub_active", "seconds") if k in rep}}
+
+
+@router.post("/maintenance/scrub-residue")
+async def memory_scrub_residue_endpoint(
+    tokens: Optional[list[str]] = Query(
+        None, description="optional strings to verify gone afterwards (counts only are returned; at most 24 are used)"),
+    _: None = Depends(require_internal_token),
+):
+    """Physically scrub forgotten text from the palace's SQLite file and drop orphan HNSW directories.
+
+    Internal/service endpoint (loopback or `X-Internal-Token`). This is the ONE-TIME step for a store that
+    was written before hard deletes erased physically (`ZOE_MEMORY_PHYSICAL_ERASE`, default on): it blanks
+    the write-ahead log's copies of deleted rows, rebuilds the FTS5 index, runs `VACUUM` and removes HNSW
+    directories no collection owns, all under the maintenance gate (collection ops drain first; measured
+    ~1 s on the 63 MB live store). Idempotent and safe to repeat. 404 when the flag is off; 503 when the
+    gate could not be taken (nothing changed). Response: counts and timings only - never text.
+    """
+    from memory_service import physical_erase_enabled
+
+    if not physical_erase_enabled():
+        raise HTTPException(status_code=404, detail="physical erase is disabled (ZOE_MEMORY_PHYSICAL_ERASE=0)")
+    report = await _svc().scrub_residue(tokens=(tokens or [])[:24])
+    if report.get("error") or (report.get("scrub") or {}).get("error"):
+        return JSONResponse(status_code=503, content=report)
+    return report
+
+
 @router.get("/people")
 async def people_with_memories(
     limit: int = Query(100, ge=1, le=500),
@@ -1147,7 +1180,7 @@ async def forget_user(
         removed = await _svc().delete_user(target_user, actor=admin["user_id"])
     except MemoryServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return {"user_id": target_user, "removed": removed}
+    return {"user_id": target_user, "removed": removed, **_physical_note()}
 
 
 async def _registered_account(user_id: str) -> bool:
@@ -1254,7 +1287,7 @@ async def forget_synthetic_user(target_user: str, request: Request):
                      "error=%s", target_user, exc)
         raise HTTPException(status_code=400, detail=str(exc))
     logger.warning("MEMORY_FORGET_SYNTHETIC user=%s removed=%d outcome=ok", target_user, removed)
-    return {"user_id": target_user, "removed": removed, "mode": "synthetic"}
+    return {"user_id": target_user, "removed": removed, "mode": "synthetic", **_physical_note()}
 
 
 @router.post("/link-preview")

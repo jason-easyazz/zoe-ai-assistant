@@ -25,6 +25,7 @@ import asyncio
 import contextlib
 import hashlib
 import importlib
+import importlib.util
 import re
 import sys
 import types
@@ -81,6 +82,10 @@ IDENTITIES = {
 class Z0Arm(Arm):
     name = "Z0"
     capabilities = frozenset({"clock", "controls", "reader", "identities", "idle_pass"})
+    #: ``disk`` = the arm can run a cell over REAL Chroma and byte-scan what is left on disk. Needs chromadb
+    #: (not installed in the slim CI lane: the disk cells SKIP there with the reason, never pass).
+    if importlib.util.find_spec("chromadb") is not None:
+        capabilities = capabilities | {"disk"}
 
     def __init__(self, off: "frozenset[str] | set[str]" = frozenset(), name: str | None = None):
         from .. import lab_driver
@@ -98,14 +103,21 @@ class Z0Arm(Arm):
         self._clock = 0.0
         self._prev_user = ""
         self._refused = 0
+        self._heap_scrub_ours = False
 
     # ── lifecycle ─────────────────────────────────────────────────────────
-    def reset(self, user_id: str) -> None:
+    def reset(self, user_id: str, *, disk: bool = False) -> None:
         if not DEMO_USER_RE.match(user_id or ""):
             raise ValueError(f"refusing non-demo identity {user_id!r} (must match {DEMO_USER_RE.pattern})")
         if self._lab_service is not None:
             self._lab_service.close()
-        self._lab_service = self._lab.LabService(self.svc, tag=self.name)
+        self._lab_service = self._lab.LabService(self.svc, tag=self.name, disk=disk)
+        if disk and not self._heap_scrub_ours:
+            # The disk cells measure the RECOMMENDED deployment: host heap scrubbing on (HNSW heap residue is a
+            # separate class with its own fix; unscrubbed, chromadb 0.6.3 left a name in length.bin in 5 of 60
+            # runs - docs/knowledge/forgotten-text-physical-erase.md section 4). Restored on close().
+            import memory_residue
+            self._heap_scrub_ours = (not memory_residue.heap_scrub_on()) and memory_residue.enable_heap_scrub()
         self._user = user_id
         self._clock = 0.0
         self._prev_user = ""
@@ -116,6 +128,10 @@ class Z0Arm(Arm):
         if self._lab_service is not None:
             self._lab_service.close()
             self._lab_service = None
+        if self._heap_scrub_ours:
+            import memory_residue
+            memory_residue.disable_heap_scrub()
+            self._heap_scrub_ours = False
         if not self._loop.is_closed():
             self._loop.close()
 
@@ -354,6 +370,19 @@ class Z0Arm(Arm):
             reply = self._run(ir.execute_intent(ir.Intent("memory_forget_entity", {"name": entity}),
                                                 self._user))
         return reply or ""
+
+    # ── the disk cells (capability ``disk``) ────────────────────────────────
+    def hard_delete(self) -> int:
+        """The audited hard delete (``MemoryService.delete_user``) of this cell's user, with the controls
+        applied. Returns the rows removed."""
+        with self._ctl():
+            return int(self._run(self.service.delete_user(self._user, actor="admin", reason="rtbf")) or 0)
+
+    def disk_residue(self, tokens: "list[str]") -> "dict[str, Any]":
+        """Byte-scan a COPY of this arm's real palace for each token: ``{"tokens": {token: {"total", "files",
+        "sqlite_pages"}}}`` (counts only). The palace is a throwaway directory under the lab's scratch root."""
+        import memory_residue  # service module (stdlib only); on the path once the lab is loaded
+        return memory_residue.scan_palace(self._lab_service.data_dir, list(tokens), scratch=self._lab.scratch_root())
 
     def as_of(self, query: str, ts: str) -> "list[dict[str, Any]]":
         raise NotImplementedError("MemoryService has no as-of read (rows keep added_at = now in a "

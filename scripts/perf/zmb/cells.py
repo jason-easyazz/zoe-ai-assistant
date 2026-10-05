@@ -11,12 +11,15 @@ Event forms (a dict in ``cell.events``):
     {"do": "advance_clock", "seconds": 360}                    lab clock (capability ``clock``)
     {"do": "ingest_as", "identity": "guest", "turns": [...]}   turns as another household identity
     {"do": "idle_pass", "transcript": "...", "proposes": [..]} the arm's own nightly pass (``idle_pass``)
+    {"do": "hard_delete"}                                      the audited hard delete of the user (capability ``disk``)
 
 Probe forms (a dict in ``cell.probes``; every probe must pass):
 
     {"kind": "store",   "assertions": [...], "as": identity?}  scorers.score_store over the row export
     {"kind": "facts",   "gold": [[..]], "anti": [[..]]}        fact recall + anti-fact precision over stored rows
     {"kind": "entities","gold": [..]}                          entity precision / recall over stored rows
+    {"kind": "disk",    "tokens": ["..."]}                     capability ``disk``: no byte of the arm's REAL on-disk
+                                                               palace (SQLite pages, FTS5, write-ahead log, HNSW files) holds a token
     {"kind": "recall",  "query": "...", "k": 5, "needles": [], "anti_needles": [], "canaries": []}
     {"kind": "answer",  "query": "...", "needles": [], "canaries": []}   the scripted reader (capability ``reader``)
 
@@ -40,8 +43,8 @@ RETAINED = ("approved", "pending", "disputed")
 
 _TURN_KEYS = {"text", "speaker", "day_offset", "writer", "proposes", "op", "attr", "assistant_text",
               "memory_type"}
-_CAPS = {"advance_clock": "clock", "ingest_as": "identities", "idle_pass": "idle_pass"}
-_PROBE_KINDS = ("store", "facts", "entities", "recall", "answer")
+_CAPS = {"advance_clock": "clock", "ingest_as": "identities", "idle_pass": "idle_pass", "hard_delete": "disk"}
+_PROBE_KINDS = ("store", "facts", "entities", "recall", "answer", "disk")
 
 
 @dataclass
@@ -76,6 +79,8 @@ def required_capabilities(cell: Cell) -> "set[str]":
     for p in cell.probes:
         if p.get("kind") == "answer":
             need.add("reader")
+        if p.get("kind") == "disk":
+            need.add("disk")
         if p.get("as"):
             need.add("identities")
     return need
@@ -100,6 +105,8 @@ def _play(cell: Cell, arm: Arm) -> "list[dict[str, Any]]":
             arm.ingest_as(ev["identity"], [make_turn(t) for t in ev["turns"]])
         elif do == "idle_pass":
             passes.append(arm.run_idle_pass(ev["transcript"], list(ev.get("proposes") or ())))
+        elif do == "hard_delete":
+            arm.hard_delete()
         else:
             raise ValueError(f"unknown event action {do!r}")
     return passes
@@ -121,6 +128,8 @@ def _probe(p: "dict[str, Any]", arm: Arm) -> scorers.Score:
                                       min_precision=float(p.get("min_precision", 1.0)),
                                       min_recall=float(p.get("min_recall", 0.75)),
                                       ignore=p.get("ignore") or ())
+    if kind == "disk":   # capability ``disk``: the bytes Chroma leaves behind (counts only, never text)
+        return scorers.score_disk(arm.disk_residue(list(p["tokens"])))
     if kind == "recall":
         rows = arm.recall(p["query"], int(p.get("k", 5)))
         text = "\n".join(r.get("text", "") for r in rows)
@@ -147,7 +156,8 @@ def run_cell(cell: Cell, world: World, arm: Arm) -> Outcome:
     if not cell.probes:
         return done(Outcome("ERROR", reason="a store-tier cell with no probes proves nothing"))
     try:
-        arm.reset(demo_user(world, cell))
+        needs_disk = "disk" in required_capabilities(cell)
+        arm.reset(demo_user(world, cell), **({"disk": True} if needs_disk else {}))
         passes = _play(cell, arm)
         for rep in passes:
             if rep.get("skipped_reason") or rep.get("error"):

@@ -76,7 +76,8 @@ def test_every_controlled_cell_goes_red_with_its_features_off(full_control_pass)
     assert cp["ok"] and cp["green"] == [] and cp["not_run"] == []
     assert cp["checked"] == cp["red"] > 90
     assert {r["id"] for r in cp["rows"]} == {c.id for c in CELLS
-                                             if c.controls and c.expected == "PASS" and c.tier == "store"}
+                                             if c.controls and c.expected == "PASS" and c.tier == "store"
+                                             and cellmod.required_capabilities(c) <= set(Z0Arm.capabilities)}
     assert all(r["verdict"] == "FAIL" and r["stage"] in ("write", "read", "answer") for r in cp["rows"])
 
 
@@ -216,6 +217,9 @@ def test_z0_measures_as_documented(full_measure):
         r = by[c.id]
         if c.tier == "full":
             assert r["verdict"] == "SKIP" and r["reason"] and r["brain_turns"] == 0
+        elif cellmod.required_capabilities(c) - set(Z0Arm.capabilities):
+            # a disk cell where chromadb is not installed (the slim CI lane): a declared SKIP, never a PASS
+            assert r["verdict"] == "SKIP" and "lacks capability" in r["reason"], (c.id, r)
         elif c.is_target:
             # a KNOWN failure. If this starts passing you fixed the thing: flip `expected` to PASS in the
             # spec, give the cell a control, and re-record the baseline.
