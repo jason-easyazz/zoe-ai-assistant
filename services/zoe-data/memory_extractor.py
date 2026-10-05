@@ -945,6 +945,7 @@ async def extract_and_ingest(
                     actor=source,
                     note="conversational correction supersede (QA F2)",
                     source_excerpt=turn_excerpt,
+                    session_id=session_id,
                 )
                 if new_ref is not None:
                     saved += 1

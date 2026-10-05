@@ -439,8 +439,16 @@ async def test_edit_preserves_shared_scope_and_extras(svc):
     )
     assert edited.metadata["visibility"] == "family", "edit must not downgrade visibility"
     assert edited.metadata["scope"] == "shared"
-    assert edited.metadata.get("source_excerpt") == "said during dinner"
     assert edited.metadata.get("candidate_custom_note") == "from kitchen assistant"
+    # memory_authority: the excerpt is EVIDENCE for the row's text. A reviewer's rewrite is
+    # not what was "said during dinner", so the new row does not inherit the old excerpt
+    # (inheriting it is how a digest rewrite used to pass as a user write). The superseded
+    # row keeps it as history.
+    assert edited.metadata.get("source_excerpt") is None
+    old_doc, old_meta = svc._col.rows[ref.id] if hasattr(svc, "_col") else (None, None)
+    if old_meta is not None:
+        assert old_meta.get("status") == "superseded"
+        assert old_meta.get("source_excerpt") == "said during dinner"
 
 
 # ── FIX 9: source_excerpt is scrubbed + capped where it is written ────────────

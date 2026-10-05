@@ -3397,6 +3397,11 @@ async def _speculative_side_effect_barrier(intent_name: str) -> None:
     await _vs.await_commit(f"intent:{intent_name}")
 
 
+_REMEMBER_IMPERATIVE_RE = re.compile(
+    r"^\s*(?:(?:please|hey|ok|okay|zoe|and|also)[,\s]+)*(?:remember|note|make a note|keep in mind|"
+    r"don['’]?t forget|do not forget|save|store)\b", re.IGNORECASE)
+
+
 async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str]:
     # ^ shared write funnel: fail-open to least-privilege guest, not admin, when a
     #   caller omits identity (#1021/#1032 posture). All live callers pass an explicit
@@ -3700,6 +3705,22 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             key_prefix = "emo-" if memory_type == "emotional_moment" else "fact-"
             user_turn_id = key_prefix + hashlib.sha1(f"{user_id}|{memory_type}|{norm}".encode()).hexdigest()[:16]
             svc = get_memory_service()
+            # The model's paraphrase is rank 1 on its own. The user's OWN latest turn is its
+            # anchor; and when that turn is an explicit "remember ..." / "note that ..." that
+            # supports the fact, the person is DICTATING it through the brain (memory
+            # authority: `explicit_teach`, a direct user statement) - so "remember that I live
+            # in Perth now" changes the stored home instead of being held back.
+            anchor, teach_origin = "", None
+            if memory_type == "fact":
+                try:
+                    from memory_authority import supports as _supports
+                    from memory_digest import latest_user_turn
+
+                    anchor = await latest_user_turn(user_id)
+                    if anchor and _REMEMBER_IMPERATIVE_RE.match(anchor) and _supports(text, anchor):
+                        teach_origin = "explicit_teach"
+                except Exception as exc:  # noqa: BLE001 - the anchor is an upgrade, never a gate
+                    logger.debug("memory_store anchor lookup failed: %s", type(exc).__name__)
             ref = await svc.ingest(
                 text,
                 user_id=user_id,
@@ -3709,6 +3730,8 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
                 confidence=confidence,
                 tags=tags,
                 metadata=(emo_metadata or None),
+                anchor_text=anchor or None,
+                origin=teach_origin,
             )
         except Exception as exc:
             logger.warning("memory_store ingest failed: %s", exc)
@@ -3717,6 +3740,18 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             # ingest silently drops on PII reject / dedup / opt-out. Don't claim
             # a durable write the store didn't actually make.
             return "I couldn't save that just now — it may already be stored or contain something I can't keep."
+        try:
+            from memory_authority import is_candidate
+
+            held_back = is_candidate(ref)
+        except Exception:
+            held_back = False
+        if held_back:
+            # The model's paraphrase disagrees with something the user told me directly:
+            # it is parked, not stored - and the reply must not claim otherwise.
+            return ("That doesn't match something you told me before, so I haven't changed it yet "
+                    "- I'll ask you which is right, and it is waiting in your Memories to confirm. "
+                    "Or just tell me plainly (for example \"remember that I live in Perth now\").")
         # An EXPLICIT teach beats a recent forget — but only clear the shadow
         # AFTER the store succeeded (its source is tombstone-exempt), or a
         # failed/rejected store would silently drop the protection (Greptile P1).
@@ -5429,11 +5464,15 @@ async def _execute_greeting(intent: Intent, user_id: str) -> str:
             tod = "evening"
         else:
             tod = "night"
-    # Try to personalise with the user's preferred name from portrait
+    # Personalise with the user's EXPLICIT preferred name — the one settings field
+    # ("call me Jay" writes it; identity answers and the brain-prompt line read it). This
+    # used to import ``user_portrait.load_portrait_field``, which no module defines, so
+    # the greeting was never personalised; an account that never chose a name is still
+    # greeted without one (the account name is not announced on every "hi").
     name_suffix = ""
     try:
-        from user_portrait import load_portrait_field  # type: ignore[import]
-        name = await load_portrait_field(user_id, "preferred_name")
+        from identity_facts import preferred_name  # type: ignore[import]
+        name = await preferred_name(user_id)
         if name:
             name_suffix = f", {name}"
     except Exception:

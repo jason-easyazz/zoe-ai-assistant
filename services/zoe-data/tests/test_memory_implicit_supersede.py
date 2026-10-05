@@ -85,6 +85,15 @@ def _svc(monkeypatch) -> tuple[MemoryService, _Col]:
     async def opted_in(_uid):
         return False
 
+    async def consenting(_uid, *_a, **_k):
+        # the affect gate defaults to opt-in: the seeded member has consented (a stored mode)
+        import persona_layer
+
+        return persona_layer.MemberMode(mode="companion", minor=False)
+
+    import persona_layer
+
+    monkeypatch.setattr(persona_layer, "load_member_mode", consenting)
     svc._append_audit = no_audit
     svc.search = no_hits  # reconcile_for_ingest → ADD, exactly as measured live
     monkeypatch.setattr(memory_service, "_user_opted_out", opted_in)

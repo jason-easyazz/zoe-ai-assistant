@@ -124,8 +124,16 @@ def _empty(value) -> bool:
     return value is None or (isinstance(value, str) and value.strip() == "")
 
 
-async def merge_person(db, user_id: str, source_id: str, target_id: str) -> dict:
+async def merge_person(db, user_id: str, source_id: str, target_id: str, *,
+                       actor: str = "") -> dict:
     """Fold ``source_id`` into ``target_id`` for ``user_id``; re-point all its data.
+
+    Memory authority (docs/knowledge/memory-authority.md): a merge closes / re-points people
+    rows and relationship edges whoever stated them, so it is a USER (or admin) action and is
+    enforced HERE, at the entry point: ``actor`` is the account asking (the REST endpoint
+    passes it); a named writer below the user classes (a model, a batch pass, an unknown
+    string) is refused with ``AUTHORITY_BLOCKED``. An empty ``actor`` is the legacy direct
+    call. Nothing automatic calls this.
 
     Steps (all owner-scoped):
       1. Validate both people exist for this user (not deleted) and are distinct.
@@ -149,6 +157,13 @@ async def merge_person(db, user_id: str, source_id: str, target_id: str) -> dict
     re-homing them is best-effort and intentionally NOT done here — merge must not block
     on the vector store. Returns a summary dict for the endpoint.
     """
+    if actor:
+        import memory_authority as _auth
+
+        if _auth.active() and _auth.writer_is_inferred(actor, user_id=user_id):
+            _auth.log_blocked(actor, "relationship", user_id=user_id, action="merge")
+            if _auth.enabled():
+                raise PersonMergeError("a merge is something a person asks for; it was not applied")
     if source_id == target_id:
         raise PersonMergeError("source and target are the same person")
 
