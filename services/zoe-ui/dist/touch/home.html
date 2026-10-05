@@ -1787,7 +1787,17 @@
   function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
   function fmt12(hhmm){var m=/^(\d{1,2}):(\d{2})/.exec(hhmm||'');if(!m)return esc(hhmm||'');var h=+m[1],ap=h<12?'am':'pm',hr=h%12;if(hr===0)hr=12;return hr+':'+m[2]+' '+ap;}
   function sid(){try{var s=JSON.parse(localStorage.getItem('zoe_session')||'{}');if(s.expires_at&&Date.parse(s.expires_at)<Date.now())return '';return s.session_id||'';}catch(_){return '';}}
+  // Off-kiosk (a member's laptop/phone on the estate) a 401 means the stored
+  // session is dead server-side: drop it and raise the estate's OWN who+PIN card
+  // in place — never navigate to the retired /touch/index.html (2026-10-05: a
+  // stale session bounced Jason onto "the old login screen"; with NO session the
+  // same browser gets the card at boot, so the two paths disagreed). A 403 keeps
+  // the session (a guest asking for something personal) and raises the card.
   var _authBounced=false;
+  function estateAuthFail(status){
+    if(status===401){if(!_authBounced){_authBounced=true;try{localStorage.removeItem('zoe_session');}catch(e){}}window.__needAuth=true;}
+    if(window.__showAuthCard)window.__showAuthCard();
+  }
   // Kiosk policy for a 401/403 from a data call. The who+PIN card is NOT the
   // answer to every refusal: a guest kiosk is REFUSED routinely (contacts,
   // ticking a list item, music sources), and raising the card on each one
@@ -1813,8 +1823,7 @@
     // 401/403s here — clear it and return to login (the presence guard alone
     // can't detect server-side expiry).
     if(r.status===401||r.status===403){
-      if(window.__kiosk){kioskAuthFail(r.status);}
-      else if(!_authBounced&&!window.__needAuth){_authBounced=true;try{localStorage.removeItem('zoe_session');}catch(e){}location.replace('/touch/index.html'+location.search);}
+      if(window.__kiosk){kioskAuthFail(r.status);}else{estateAuthFail(r.status);}
       throw new Error('auth');}
     if(!r.ok)throw new Error('http '+r.status);return r.json();});}
   function tickClock(){var c=document.getElementById('hClock');if(!c)return;var d=new Date(),h=d.getHours()%12;if(h===0)h=12;c.textContent=h+':'+two(d.getMinutes());var dt=document.getElementById('hDate');if(dt)dt.textContent=d.toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long'});}
@@ -3189,8 +3198,7 @@
     document.querySelector('#estModal').querySelector('[data-x="yes"]').onclick=function(){estClose();onYes();};}
   function apiJson(method,url,body){return fetch(url,{method:method,headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:body?JSON.stringify(body):undefined}).then(function(r){
     if(r.status===401||r.status===403){
-      if(window.__kiosk){kioskAuthFail(r.status);}
-      else if(!_authBounced&&!window.__needAuth){_authBounced=true;try{localStorage.removeItem('zoe_session');}catch(e){}location.replace('/touch/index.html'+location.search);}
+      if(window.__kiosk){kioskAuthFail(r.status);}else{estateAuthFail(r.status);}
       throw new Error('auth');}
     if(!r.ok)throw new Error('http '+r.status);return r.json();});}
   var _lst={lists:[],sel:null};

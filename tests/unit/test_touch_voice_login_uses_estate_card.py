@@ -9,9 +9,11 @@ from the initial commit. A voice turn therefore threw the user off the estate
 and onto the retired screen mid-conversation.
 
 `/touch/index.html` is NOT retired by this guard and must not be deleted: it is
-still the login destination for every non-estate touch page (`js/auth.js`) and
-for non-kiosk browsers (`home.html`'s 401 bounce). The contract asserted here is
-narrower — *when the host page offers the estate card, the voice path uses it*.
+still the login destination for every non-estate touch page (`js/auth.js`).
+The estate itself never navigates there any more: off-kiosk, a 401 in
+`home.html`'s `apiGet`/`apiJson` raises the card in place (`estateAuthFail`,
+2026-10-05). The contract asserted here is narrower — *when the host page
+offers the estate card, the voice path uses it*.
 
 Static guard, in the spirit of tests/unit/test_ui_auth_routes_exist.py: the
 relationship is a cross-file one (executor calls a hook home.html defines), so
