@@ -146,6 +146,13 @@ let n = 0; const ok = (m) => { n++; console.log('  ok  ' + m); };
       assert(/ctx\.globalAlpha=RM\?\.72:/.test(homeSrc) && /if\(RM\)\{setTimeout\(function\(\)\{requestAnimationFrame\(frame\);\},1000\);\}/.test(homeSrc), 'star canvas is still under reduced motion');
       assert(/if\(RM\|\|Math\.abs\(target-_cf\.focus\)>CF_WIN_DRAG\)\{/.test(homeSrc), 'Cover Flow spring lands directly under reduced motion');
       ok('polish: steppers/sources/settings/list/day-view/queue controls ≥48 px; JS motion honours reduced motion');
+      // 2026-10-05: a member's laptop with a STALE session was bounced to the retired
+      // /touch/index.html by the estate's own 401 path. Off-kiosk auth failures raise the
+      // estate card in place; the estate never navigates to the old login page.
+      assert(!/location\.replace\('\/touch\/index\.html'/.test(homeSrc) && !/location\.href=['"]\/touch\/index\.html/.test(homeSrc), 'home.html must not navigate to /touch/index.html');
+      assert(/function estateAuthFail\(status\)\{[\s\S]{0,400}if\(window\.__showAuthCard\)window\.__showAuthCard\(\);/.test(homeSrc), 'estateAuthFail raises the card');
+      assert((homeSrc.match(/if\(window\.__kiosk\)\{kioskAuthFail\(r\.status\);\}else\{estateAuthFail\(r\.status\);\}/g) || []).length === 2, 'both apiGet and apiJson route off-kiosk failures to estateAuthFail');
+      ok('estate: off-kiosk 401/403 raises the who+PIN card in place, never the old login page');
     }
     console.log('estate resilience: ' + n + ' checks passed');
   })().catch((e) => { console.error(e); process.exit(1); });
