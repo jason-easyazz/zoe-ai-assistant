@@ -1082,3 +1082,31 @@ exits 4 and prints the rollback if any fails. Rollback = restore the `.bak-<ts>`
 
 **Rule of thumb.** `scripts/setup/*.service` files are Jetson templates unless the name says
 otherwise; a deploy to another host must render, never copy, them.
+
+## 28. "Forgotten" text is still on disk — Chroma deletes rows, not bytes (2026-10-06)
+
+**Signature.** The owner's rule is "forgotten means forever", but `scripts/maintenance/memory_residue_check.py
+--token <text>` finds the text in a COPY of `~/.mempalace` after a hard delete / forget / compaction: in
+`chroma.sqlite3` (a SQLite free page, in-page slack, `embedding_fulltext_search_content`, the FTS5 index,
+`embeddings_queue`), in an orphan HNSW directory, or (rarely) in an HNSW file (`length.bin` /
+`data_level0.bin`). `GET /api/memories/maintenance/index-health` shows `orphan_segment_dirs > 0` and
+`heap_scrub_active=false`.
+
+**Cause.** A Chroma API delete removes the row and nothing else (measured on the live store 2026-10-06;
+`docs/knowledge/forgotten-text-physical-erase.md`). Before the fix the entity-forget also only ARCHIVED the rows.
+
+**Fix (landed).** `ZOE_MEMORY_PHYSICAL_ERASE` (default on): `delete_user`, `erase_rows` (the `memory_forget_entity` /
+`memory_forget_last` path) and the compaction run `memory_service.erase_residue_sync` under the maintenance gate — queue
+scrub, FTS5 rebuild, `VACUUM`, orphan HNSW dirs, then a verify of the live files (a rebuild if text is still in an
+index file and `ZOE_MEMORY_INDEX_COMPACT` is on). Logs `MEMORY_PHYSICAL_ERASE ok=...`; a WARNING `incomplete` means text
+may remain (counts only, never the text).
+
+**One-time scrub for an existing store (about 1 s, collection ops wait, idempotent):**
+`curl -s -X POST -H "X-Internal-Token: $ZOE_INTERNAL_TOKEN" http://127.0.0.1:8000/api/memories/maintenance/scrub-residue`
+(`?tokens=<canary>` verifies). Then `python3 scripts/maintenance/memory_residue_check.py --token <canary>
+--also-scan ~/.zoe/palace-backups`: the compaction backups (tar + JSON export) keep pre-forget bytes by design — an owner
+decision whether to rewrite or delete them.
+
+**Heap residue.** If a forgotten text is found in an HNSW file: `ZOE_MEMORY_HEAP_SCRUB=1` (or `MALLOC_PERTURB_=85` in the
+unit) and restart; costs ~2% on chroma work and is process-wide (the voice STT runs in this process — replay the voice
+gate first). Then run the scrub endpoint, compact (`/maintenance/compact-index`) and re-check.
