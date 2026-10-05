@@ -231,7 +231,7 @@ def test_z0_measures_as_documented(full_measure):
 def test_the_axis_table_for_z0_is_claimable_with_wilson_intervals(full_measure, full_control_pass):
     axes = artifact.axis_stats(full_measure, BY_ID, full_control_pass["ok"])
     a = axes["authority"]
-    assert a["n"] == a["pass"] == 66 and a["claimable"] and a["wilson95"][0] > 0.94 and a["hard_violations"] == []
+    assert a["n"] == a["pass"] == 72 and a["claimable"] and a["wilson95"][0] > 0.94 and a["hard_violations"] == []
     for name in ("identity", "forgetting", "abstention", "extraction", "emotional"):
         assert axes[name]["claimable"] and axes[name]["n"] > 0 and not axes[name]["hard_violations"], name
     for name in ("temporal", "recall", "poisoning"):

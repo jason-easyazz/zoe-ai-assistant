@@ -96,10 +96,10 @@ def test_a_clean_run_is_ok_and_the_artifact_has_the_contract_fields(bench):
         assert {"id", "axis", "verdict", "stage", "expected", "controls", "duration_s", "brain_turns",
                 "evidence"} <= set(c)
     auth = a["axes"]["authority"]
-    assert auth["pass"] == auth["n"] == 66 and auth["claimable"] and auth["wilson95"][0] > 0.9
+    assert auth["pass"] == auth["n"] == 72 and auth["claimable"] and auth["wilson95"][0] > 0.9
     assert set(a["axes"]) == set(spec.AXES.values())
     trend = [json.loads(x) for x in bench["paths"]["trend"].read_text().splitlines()]
-    assert trend[-1]["status"] == "ok" and trend[-1]["axes"]["authority"] == [66, 66]
+    assert trend[-1]["status"] == "ok" and trend[-1]["axes"]["authority"] == [72, 72]
 
 
 def test_the_artifact_never_carries_household_text(bench):

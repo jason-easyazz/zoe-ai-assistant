@@ -38,6 +38,7 @@ from memory_service import (
     memory_affect,
 )
 from models import MemoryProposalCreate, MemoryReviewBody
+import memory_authority
 import recall_evidence
 
 logger = logging.getLogger(__name__)
@@ -521,6 +522,9 @@ def _build_memory_prompt_packet(
         kept_ts.append(_added_at_ts(meta))
         cite = f"[mem:{str(ref.id)[:8]}]"
         prefix = "(uncertain) " if status == "disputed" else ""
+        if memory_authority.is_unverified(meta):
+            # a voice the speaker gate did not confirm: "someone at the panel said", never "you told me"
+            prefix = f"{memory_authority.UNVERIFIED_RECALL_LABEL} {prefix}"
         if str(meta.get("memory_type")) == "state_change":
             # memory_supersede's tombstone: a recorded CHANGE, not a current fact.
             prefix = f"(change) {prefix}"
