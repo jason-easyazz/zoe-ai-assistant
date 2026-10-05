@@ -87,9 +87,11 @@ def control_pass(cells: "list[Cell]", world, off: "frozenset[str]", log=_log) ->
     controlled cells that PASSED with their feature off (the instrument does not measure the feature);
     ``not_run`` = ones that errored or skipped (no proof either way)."""
     from .arms.z0 import Z0Arm
-    todo = [c for c in cells if c.controls and set(c.controls) <= off and c.expected == "PASS"
-            and c.tier == "store"]
     arm = Z0Arm(off=off)
+    # a cell the arm cannot run here (the disk cells need chromadb, absent from the slim CI lane) is a declared
+    # SKIP in the measurement, not "no proof either way" for the whole instrument
+    todo = [c for c in cells if c.controls and set(c.controls) <= off and c.expected == "PASS"
+            and c.tier == "store" and cellmod.required_capabilities(c) <= set(arm.capabilities)]
     try:
         rows = run_cells(todo, world, arm, log) if todo else []
     finally:

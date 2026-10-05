@@ -76,7 +76,8 @@ def test_every_controlled_cell_goes_red_with_its_features_off(full_control_pass)
     assert cp["ok"] and cp["green"] == [] and cp["not_run"] == []
     assert cp["checked"] == cp["red"] == 119       # 116 before the two timelines (C2 / C4 now controlled, + C2.history_is_labelled)
     assert {r["id"] for r in cp["rows"]} == {c.id for c in CELLS
-                                             if c.controls and c.expected == "PASS" and c.tier == "store"}
+                                             if c.controls and c.expected == "PASS" and c.tier == "store"
+                                             and cellmod.required_capabilities(c) <= set(Z0Arm.capabilities)}
     assert all(r["verdict"] == "FAIL" and r["stage"] in ("write", "read", "answer") for r in cp["rows"])
 
 
@@ -89,7 +90,11 @@ def test_each_control_is_named_by_a_cell_and_flips_the_cells_it_alone_guards(con
         assert control == "gate"
         return
     cp = runner.control_pass(CELLS, world.make_world(), frozenset({control}))
-    assert cp["ok"] and cp["checked"] == len(alone) and cp["red"] == len(alone)
+    if cp["checked"] == 0:
+        # every cell naming this control needs a capability this lane lacks (the ``disk`` cells need chromadb,
+        # absent from the slim CI lane): a declared skip, not a proof either way
+        pytest.skip(f"control {control!r}: its cells need a capability this lane lacks")
+    assert cp["ok"] and cp["checked"] <= len(alone) and cp["red"] == cp["checked"]
 
 
 def test_the_s1_signature_appears_when_the_authority_wall_is_off():
@@ -216,6 +221,9 @@ def test_z0_measures_as_documented(full_measure):
         r = by[c.id]
         if c.tier == "full":
             assert r["verdict"] == "SKIP" and r["reason"] and r["brain_turns"] == 0
+        elif cellmod.required_capabilities(c) - set(Z0Arm.capabilities):
+            # a disk cell where chromadb is not installed (the slim CI lane): a declared SKIP, never a PASS
+            assert r["verdict"] == "SKIP" and "lacks capability" in r["reason"], (c.id, r)
         elif c.is_target:
             # a KNOWN failure. If this starts passing you fixed the thing: flip `expected` to PASS in the
             # spec, give the cell a control, and re-record the baseline.
