@@ -210,7 +210,7 @@ async def list_review_queue(
         d = _ref_to_dict(r)
         d["dispute"] = True
         old = await svc.get(str(r.metadata.get("contradicts_id") or "")) if r.metadata.get("contradicts_id") else None
-        d["contradicts_text"] = old.text if old is not None else None
+        d["contradicts_text"] = old.text if old is not None else (r.metadata.get("edge_old_text") or None)
         items.append(d)
     return {"items": items, "count": len(items)}
 

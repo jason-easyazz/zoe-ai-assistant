@@ -82,6 +82,11 @@ except ImportError:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 
+#: the stored (``candidate_``-prefixed) spelling of the affect metadata keys
+#: ``contradicts_id`` prefix of a candidate that disputes a people-graph edge
+_EDGE_REF = "edge:"
+_AFFECT_CANDIDATE_KEYS = frozenset(f"candidate_{k}" for k in _auth.AFFECT_KEYS)
+
 _MEMPALACE_DATA = os.environ.get(
     "MEMPALACE_DATA_DIR", os.path.expanduser("~/.mempalace")
 )
@@ -1759,6 +1764,18 @@ class MemoryService:
                 and not await self._affect_allowed(user_id):
             self._bump("affect_drop", actor)
             return None
+        # ... and an edit may not attach a FEELING (``metadata={"affect": ...}``, the turn
+        # digest's update path) to an ordinary fact for a member who has not consented: the
+        # same strip ``ingest`` applies - the fact stays, the feeling does not. A feeling the
+        # superseded row already carried is not carried forward either.
+        strip_affect = False
+        if decision == "edit" and (
+            _auth.carries_affect(metadata) or _auth.carries_affect(current.metadata)
+        ) and not await self._affect_allowed(user_id):
+            strip_affect = True
+            metadata = {k: v for k, v in (metadata or {}).items()
+                        if k not in _auth.AFFECT_KEYS and k not in _AFFECT_CANDIDATE_KEYS}
+            logger.info("AFFECT_STRIPPED writer=%s", actor)
 
         # The authority wall (memory_authority): an inferred writer may not retire, rewrite
         # or contradict a row the USER said. ``edit`` text the user's own turn supports is
@@ -1796,6 +1813,20 @@ class MemoryService:
                         new_meta["authority_class"] = _auth.USER_CONFIRMED
                         new_meta["authority_basis"] = "user_approved"
                     disputed = str(current.metadata.get("contradicts_id") or "")
+                if disputed.startswith(_EDGE_REF):
+                    # The candidate disputes a people-graph EDGE, not a memory row: approving
+                    # it must change the structured relationship (person_extractor
+                    # .apply_edge_dispute), or the candidate becomes an approved memory that
+                    # contradicts the graph. If the edge cannot be changed the candidate stays
+                    # disputed - nothing is approved.
+                    new_edge = await self._apply_edge_dispute(user_id, current.metadata, disputed)
+                    if new_edge is None:
+                        self._bump("edge_dispute_unapplied", actor)
+                        logger.warning("EDGE_DISPUTE_NOT_APPLIED user=%s", user_id)
+                        return None
+                    new_meta["edge_applied_id"] = new_edge
+                    new_meta["supersedes_edge_id"] = disputed[len(_EDGE_REF):]
+                    disputed = ""
                 await self._run_sync(
                     self._write_row, mem_id, current.text, new_meta
                 )
@@ -1893,6 +1924,8 @@ class MemoryService:
             } | _auth.PROVENANCE_KEYS
             for key, value in current.metadata.items():
                 if key in _EDIT_CARRY_FORWARD_SKIP or key in new_meta:
+                    continue
+                if strip_affect and key in _AFFECT_CANDIDATE_KEYS:
                     continue
                 new_meta[key] = value
             new_meta.update(_auth.provenance(writer, edit_res, turn_ref=turn_ref))
@@ -2005,6 +2038,30 @@ class MemoryService:
         return True
 
     # ── authority (memory_authority.py) ───────────────────────────────────────
+
+    async def _apply_edge_dispute(self, user_id: str, meta: Mapping[str, Any], ref: str) -> Optional[str]:
+        """Apply an approved ``edge:<id>`` dispute candidate to ``person_relationships``: the
+        candidate's stored edge change (``edge_new_rel`` / person ids / group, written by
+        ``person_extractor._edge_may_change``) closes the current edge and opens the new one,
+        stamped ``user_confirmed``. Returns the new current edge id, or None (candidate lacks the
+        edge data, the pair is gone, or the write failed). Never raises."""
+        try:
+            new_rel = str(meta.get("edge_new_rel") or "")
+            if not new_rel:
+                return None
+            from db_pool import get_db_ctx
+            from person_extractor import apply_edge_dispute
+
+            async with get_db_ctx() as db:
+                return await apply_edge_dispute(
+                    db, user_id, ref[len(_EDGE_REF):], new_rel_type=new_rel,
+                    rel_group=str(meta.get("edge_rel_group") or "personal"),
+                    person_a_id=str(meta.get("edge_person_a_id") or ""),
+                    person_b_id=str(meta.get("edge_person_b_id") or ""),
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_service: edge dispute not applied (%s)", type(exc).__name__)
+            return None
 
     async def _affect_allowed(self, user_id: str) -> bool:
         """May an AFFECTIVE record (an ``emotional_moment`` row, a feeling in a row's metadata)
@@ -2199,6 +2256,7 @@ class MemoryService:
         basis: str = "authority_blocked",
         status: str = "disputed",
         cls: Optional[str] = None,
+        extra: Optional[Mapping[str, Any]] = None,
     ) -> Optional[str]:
         """Store ``text`` as a ``disputed`` (or, for a person to ask about, ``pending``)
         candidate - never approved, never recalled - linked to the row it disagrees with. Idempotent (deterministic id); a
@@ -2218,6 +2276,9 @@ class MemoryService:
             md.update(_auth.provenance(writer, _auth.Resolved(cand_cls, basis)))
             if contradicts:
                 md["contradicts_id"] = contradicts
+            for k, v in (extra or {}).items():  # scalar payload (e.g. the edge change of a dispute)
+                if isinstance(v, (str, int, float, bool)):
+                    md[str(k)] = v
             md["authority_blocked"] = True
             mem_id = _memory_id(user_id, scrubbed, md)
             existing = await self._run_sync(self._get_sync, mem_id)

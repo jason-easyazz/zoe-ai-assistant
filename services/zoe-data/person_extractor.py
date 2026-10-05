@@ -856,9 +856,16 @@ async def _stamp_edge(db, user_id: str, edge_id: str, authority: str, origin: st
 
 
 async def _edge_may_change(db, user_id: str, edge_id: str, authority: str, origin: str,
-                           name_a: str, name_b: str, rel_type: str) -> bool:
+                           name_a: str, name_b: str, rel_type: str, *,
+                           pid_a: str = "", pid_b: str = "", rel_group: str = "",
+                           old_rel_type: str = "") -> bool:
     """The people-graph half of the authority wall: may ``origin`` (writing with
-    ``authority``) close the current edge ``edge_id`` for a different relationship?"""
+    ``authority``) close the current edge ``edge_id`` for a different relationship?
+
+    A refusal leaves a disputed candidate (contradicts_id = "edge:<id>") that carries the
+    whole edge change (edge id, the two person ids, the old / new relationship and group):
+    approving it through ``MemoryService.review`` applies it to the graph
+    (``apply_edge_dispute``) - the candidate alone never changes the structured relationship."""
     import memory_authority as _auth
 
     if not _auth.active():
@@ -881,10 +888,105 @@ async def _edge_may_change(db, user_id: str, edge_id: str, authority: str, origi
             f"{name_a} is {name_b}'s {rel_type.replace('_', ' ')}.", user_id=user_id,
             writer=origin, contradicts=f"edge:{edge_id}", kind="relationship",
             memory_type="person",
+            extra={
+                "edge_id": edge_id, "edge_person_a_id": pid_a, "edge_person_b_id": pid_b,
+                "edge_old_rel": old_rel_type, "edge_new_rel": rel_type,
+                "edge_rel_group": rel_group,
+                "edge_old_text": (name_a + " is " + name_b + "'s " + old_rel_type.replace("_", " ") + "."
+                                  if old_rel_type else ""),
+            },
         )
     except Exception as exc:  # noqa: BLE001 - the candidate is a courtesy, the wall is the rule
         logger.debug("person_extractor: edge candidate not stored (%s)", type(exc).__name__)
     return False
+
+
+def _relationship_labels(rel_type: str) -> tuple[str, str]:
+    from routers.people import RELATIONSHIP_TYPES
+
+    for entries in RELATIONSHIP_TYPES.values():
+        for key, la, lb in entries:
+            if key == rel_type:
+                return la, lb
+    label = rel_type.replace("_", " ").title()
+    return label, label
+
+
+async def apply_edge_dispute(
+    db,
+    user_id: str,
+    edge_id: str,
+    *,
+    new_rel_type: str,
+    rel_group: str = "personal",
+    person_a_id: str = "",
+    person_b_id: str = "",
+    authority: str = "user_confirmed",
+    origin: str = "review_ui",
+) -> Optional[str]:
+    """Apply an APPROVED relationship dispute to the graph: close the pair's current edge and
+    open ``new_rel_type`` (history kept: ``valid_to`` / ``superseded_by``), stamped with the
+    approver's authority. The person has decided, so ``_edge_may_change`` is not consulted.
+
+    The pair comes from the stored ``edge_id`` (falling back to the candidate's person ids when
+    that edge is gone). Idempotent: when the pair's current edge already IS ``new_rel_type`` the
+    call is a no-op that returns it. Returns the new current edge's id, or ``None`` when the
+    change could not be applied (no such pair, or the insert failed - the old edge is re-opened
+    so the pair never loses its current edge)."""
+    from person_merge import _fetchone  # the people-graph writer's dual-driver SELECT
+
+    if not (user_id and new_rel_type):
+        return None
+    row = await _fetchone(
+        db,
+        "SELECT person_a_id, person_b_id FROM person_relationships WHERE id=$1 AND user_id=$2",
+        "SELECT person_a_id, person_b_id FROM person_relationships WHERE id=? AND user_id=?",
+        (edge_id, user_id),
+    ) if edge_id else None
+    pid_a, pid_b = (str(row[0]), str(row[1])) if row else (person_a_id, person_b_id)
+    if not (pid_a and pid_b) or pid_a == pid_b:
+        return None
+
+    current = await _current_edge_for_pair(db, user_id, pid_a, pid_b)
+    if current is not None and current[1] == new_rel_type:
+        return str(current[0])  # already applied
+    lbl_a, lbl_b = _relationship_labels(new_rel_type)
+    rel_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat() + "Z"
+    old_id = str(current[0]) if current is not None else None
+    if old_id is not None:
+        await _supersede_edge(db, user_id, old_id, rel_id, now)
+        await db.commit()
+    try:
+        try:
+            await db.execute(
+                "INSERT INTO person_relationships "
+                "(id, user_id, person_a_id, person_b_id, rel_type, rel_a_to_b, rel_b_to_a, rel_group, "
+                "valid_from, valid_to, superseded_by, created_at, updated_at) "
+                "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,NULL,$10,$11)",
+                rel_id, user_id, pid_a, pid_b, new_rel_type, lbl_a, lbl_b, rel_group, now, now, now,
+            )
+        except Exception:
+            await db.execute(
+                "INSERT INTO person_relationships "
+                "(id, user_id, person_a_id, person_b_id, rel_type, rel_a_to_b, rel_b_to_a, rel_group, "
+                "valid_from, valid_to, superseded_by, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,NULL,NULL,?,?)",
+                (rel_id, user_id, pid_a, pid_b, new_rel_type, lbl_a, lbl_b, rel_group, now, now, now),
+            )
+        await db.commit()
+    except Exception as exc:  # noqa: BLE001 - never leave the pair without a current edge
+        logger.warning("person_extractor: apply_edge_dispute insert failed for user=%s: %s", user_id, exc)
+        if old_id is not None:
+            try:
+                await _reopen_edge(db, user_id, old_id, now)
+                await db.commit()
+            except Exception as exc2:  # noqa: BLE001
+                logger.warning("person_extractor: apply_edge_dispute re-open failed: %s", exc2)
+        return None
+    await _stamp_edge(db, user_id, rel_id, authority, origin)
+    await db.commit()
+    return rel_id
 
 
 async def _write_relationship(
@@ -989,7 +1091,8 @@ async def _write_relationship(
                     # Unchanged relationship — nothing to supersede or insert.
                     return
                 if not await _edge_may_change(db, user_id, existing_id, authority, origin,
-                                              name_a, name_b, rel_type):
+                                              name_a, name_b, rel_type, pid_a=pid_a, pid_b=pid_b,
+                                              rel_group=rel_group, old_rel_type=existing_type):
                     return
                 # rel_type changed → close the old edge, then fall through to
                 # insert the new current edge.

@@ -123,16 +123,17 @@ AFFECT_KEYS = ("affect", "valence", "intensity")
 
 
 def affect_gate_mode() -> str:
-    """``members`` (default: guests and known minors never get an affective record) | ``optin``
-    (also requires the member to have opted in to the persona layer - a stored mode row) |
-    ``off``. Per-call env read. docs/governance/emotional-safety-note.md section 6."""
+    """``optin`` (DEFAULT: a stored persona-mode row - the member's consent - is required to keep an
+    affective record; guests and known minors never) | ``members`` (any non-minor member, no stored
+    consent needed) | ``off``. Per-call env read. docs/governance/emotional-safety-note.md section 6:
+    consent is explicit, so the default is fail-closed; ``members`` is the explicit loosening."""
     raw = os.environ.get("ZOE_AFFECT_CONSENT_GATE")
     if raw is None:
-        return "members"
+        return "optin"
     v = raw.strip().lower()
     if v in ("0", "false", "no", "off", ""):
         return "off"
-    return "optin" if v == "optin" else "members"
+    return "members" if v == "members" else "optin"
 
 
 def is_affective(memory_type: Optional[str], metadata: Optional[Mapping[str, Any]] = None) -> bool:

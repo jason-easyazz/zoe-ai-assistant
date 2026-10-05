@@ -155,13 +155,16 @@ consenting adult members only; children and guests never. Enforced at the same c
 (`MemoryService._affect_allowed`, in `ingest` and `review(edit)`): an `emotional_moment` row is not
 stored (`AFFECT_NOT_STORED`), and a feeling carried in an ordinary row's metadata (`affect` / `valence` /
 `intensity`) is stripped (`AFFECT_STRIPPED` - the fact stays, the feeling does not; the sentence itself may
-still name a feeling). Modes: `members` (**default**) refuses guest sentinels and any member flagged a minor
-in `member_modes` (a failed lookup fails open with a warning - the minor flag lives in Postgres);
-`optin` additionally requires the member's stored persona mode (the opt-in) and fails closed; `off`.
-**Decision for the owner:** the note wants an explicit per-member consent, and no consent flow exists yet
-(plan W5.3 - the enrolment interview). `optin` is therefore flag-dark: turning it on today would stop
-emotional memory for everyone, including the owner (Samantha bar S4). Until W5.3 ships the default is the
-part that is certain (guests and children: never).
+still name a feeling). The strip applies to `review(edit)` too: a feeling in the edit's `metadata`
+(the turn digest's update path) is dropped without consent, and a feeling the superseded row carried is
+not carried forward. Modes: `optin` (**default**, fail-closed) requires the member's stored persona mode
+(`member_modes` row = the consent record) and refuses guest sentinels and minors; `members` (the explicit
+loosening) refuses only guests and minors, needs no consent row, and a failed lookup fails open with a
+warning; `off`. **Default changed in the Codex round on #1868:** the note wants an explicit per-member
+consent, so the default is the consent-required one. **Consequence for the owner:** until a consent flow
+exists (plan W5.3 - the enrolment interview) a member with no `member_modes` row keeps no
+`emotional_moment` rows and no affect metadata (Samantha bar S4 reads affect the digest keeps) - the
+operator sets `ZOE_AFFECT_CONSENT_GATE=members` (one env line) or writes the owner's persona-mode row.
 
 ## `ZOE_MEMORY_AUTHORITY` - `enforce` (default) | `shadow` | `off`
 

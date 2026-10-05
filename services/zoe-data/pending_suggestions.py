@@ -403,13 +403,18 @@ def ui_components_for_suggestions(suggestions: list[dict]) -> list[dict]:
     """Build AG-UI confirm cards for active suggestions.
 
     `person_create` gets a contact-specific card ("Add {name}?" / "Add {name} as
-    your {relationship}?") with explicit Add + Dismiss actions (P4). Every other
-    action type keeps the generic single-action Save card.
+    your <relationship>?") with explicit Add + Dismiss actions (P4). `memory_dispute`
+    ("earlier you told me X, I've just heard Y - which is right?") gets a card with
+    BOTH answers (keep the old fact / use the new one). Every other action type keeps
+    the generic single-action Save card.
     """
     comps = []
     for s in suggestions:
         if s.get("action_type") == "person_create":
             comps.append(_person_create_card(s))
+            continue
+        if s.get("action_type") == "memory_dispute":
+            comps.append(_memory_dispute_card(s))
             continue
         comps.append({
             "type": "action_card",
@@ -421,6 +426,33 @@ def ui_components_for_suggestions(suggestions: list[dict]) -> list[dict]:
             }],
         })
     return comps
+
+
+_DISPUTE_TITLE_CAP = 320
+
+
+def _memory_dispute_card(s: dict) -> dict:
+    """Confirm card for a `memory_dispute` question: two explicit answers on the SAME
+    existing handlers (no new endpoint, same `action_card` shape as person_create).
+
+    * "Keep what I told you" -> `pending_suggestion_dismiss`: `mark_resolved` rejects the
+      held-back candidate (`memory_disputes.resolve(accept=False)`), the old fact stands.
+    * "Use the new one" -> `pending_suggestion_accept`: `_execute_action` approves the
+      candidate as the person's own (`resolve(accept=True)`), retiring the old fact.
+    """
+    title = _safe_card_inline(
+        s.get("offer_phrase") or s.get("description") or "", _DISPUTE_TITLE_CAP
+    ) or "Which one is right?"
+    return dict(
+        type="action_card",
+        title=title,
+        actions=[
+            dict(label="Keep what I told you", action="pending_suggestion_dismiss",
+                 suggestion_id=s["id"]),
+            dict(label="Use the new one", action="pending_suggestion_accept",
+                 suggestion_id=s["id"]),
+        ],
+    )
 
 
 def _person_create_card(s: dict) -> dict:

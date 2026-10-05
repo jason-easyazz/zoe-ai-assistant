@@ -10,8 +10,9 @@
   the same rule (``test_memory_authority_people.py`` pins the stamps).
 * Affect consent (docs/governance/emotional-safety-note.md section 6): a RECORD of how someone seems
   (an ``emotional_moment`` row, a feeling in a row's metadata) is kept for consenting adult members
-  only - guests and children never. ``ZOE_AFFECT_CONSENT_GATE=members`` (default) refuses guests and
-  members flagged as minors; ``optin`` also needs the member's stored persona mode; ``off`` allows.
+  only - guests and children never. ``ZOE_AFFECT_CONSENT_GATE=optin`` (DEFAULT) also needs the member's
+  stored persona mode (the consent record); ``members`` refuses only guests and members flagged as
+  minors; ``off`` allows.
 
 Synthetic data, fake Chroma, fake persona lookup (ci_safe).
 """
@@ -205,19 +206,60 @@ def test_an_edit_cannot_make_a_minor_row_affective(svc, monkeypatch):
                                   actor="review_ui")) is None
 
 
-def test_optin_mode_requires_the_stored_persona_mode_and_fails_closed(svc, monkeypatch):
-    monkeypatch.setenv("ZOE_AFFECT_CONSENT_GATE", "optin")
+def test_default_mode_requires_a_stored_consent_row_and_fails_closed(svc, monkeypatch):
+    assert ma.affect_gate_mode() == "optin"                   # unset env = opt-in
     _persona(monkeypatch, mode="unset")
-    assert emo(svc) is None                                   # no opt-in row
+    assert emo(svc) is None                                   # no consent row: not kept
     _persona(monkeypatch, mode="companion")
-    assert emo(svc) is not None
+    assert emo(svc) is not None                               # the stored mode is the consent
     _persona(monkeypatch, fail=True)
     assert emo(svc, user="member-c") is None                  # lookup failed: closed
 
 
-def test_default_mode_fails_open_on_a_lookup_error_but_off_allows_guests(svc, monkeypatch):
+def test_members_mode_is_the_explicit_loosening_and_fails_open(svc, monkeypatch):
+    monkeypatch.setenv("ZOE_AFFECT_CONSENT_GATE", "members")
+    _persona(monkeypatch, mode="unset")
+    assert emo(svc) is not None                               # no consent row needed
+    _persona(monkeypatch, mode="kid", minor=True)
+    assert emo(svc, user="member-b") is None                  # minors still never
     _persona(monkeypatch, fail=True)
-    assert emo(svc) is not None                               # members mode: a DB blip is not a ban
+    assert emo(svc, user="member-c") is not None              # a DB blip is not a ban here
     monkeypatch.setenv("ZOE_AFFECT_CONSENT_GATE", "off")      # the break-the-fix control
     _persona(monkeypatch)
     assert emo(svc, user="guest") is not None
+
+
+# ── review(edit) with a feeling in the metadata (Codex #1868 r4) ─────────────
+
+def _edit_with_affect(svc, row):
+    return asyncio.run(svc.review(row.id, decision="edit", edits="User has a dentist visit on Monday.",
+                                  actor="turn_digest", metadata={"affect": "anxious", "valence": "-0.4"}))
+
+
+@pytest.mark.parametrize("persona", [{"mode": "kid", "minor": True}, {"mode": "unset"}, {"fail": True}])
+def test_an_edit_cannot_attach_a_feeling_without_consent(svc, monkeypatch, persona):
+    """A minor, a member with no consent row (the default gate is opt-in), and a failed lookup
+    (closed): the fact is edited, the feeling is stripped - not persisted as candidate_affect."""
+    _persona(monkeypatch)
+    row = put(svc, "User has a dentist visit on Friday.", source="turn_digest")
+    _persona(monkeypatch, **persona)
+    new = _edit_with_affect(svc, row)
+    assert new is not None and new.text == "User has a dentist visit on Monday."
+    assert not any(k.endswith(("affect", "valence", "intensity")) for k in new.metadata), new.metadata
+
+
+def test_an_edit_does_not_carry_forward_a_feeling_the_member_no_longer_consents_to(svc, monkeypatch):
+    _persona(monkeypatch)
+    row = put(svc, "User has a dentist visit on Friday.", source="turn_digest", metadata={"affect": "anxious"})
+    assert row.metadata.get("candidate_affect") == "anxious"
+    _persona(monkeypatch, mode="unset")                        # consent withdrawn
+    new = asyncio.run(svc.review(row.id, decision="edit", edits="User has a dentist visit on Monday.",
+                                 actor="turn_digest"))
+    assert new is not None and "candidate_affect" not in new.metadata
+
+
+def test_a_consenting_member_keeps_the_feeling_on_an_edit(svc, monkeypatch):
+    _persona(monkeypatch)
+    row = put(svc, "User has a dentist visit on Friday.", source="turn_digest")
+    new = _edit_with_affect(svc, row)
+    assert new.metadata.get("candidate_affect") == "anxious"
