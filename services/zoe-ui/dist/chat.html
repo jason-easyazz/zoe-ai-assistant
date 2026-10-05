@@ -4051,6 +4051,9 @@
                 const session = window.zoeAuth?.getCurrentSession();
                 const userId = session?.user_info?.user_id || session?.user_id || 'default';
                 
+                // Create-then-persist the chat session BEFORE the first send (the creator
+                // already falls back to a persisted local id when /sessions/ fails).
+                if (!currentSessionId) await createOrGetCurrentSession();
                 streamAbortController = new AbortController();
                 const stopBtn = document.getElementById('stopStreamBtn');
                 if (stopBtn) {
@@ -4076,7 +4079,9 @@
                             source: window.location.pathname,
                             onboarding_mode: isOnboardingMode
                         },
-                        session_id: currentSessionId || `session_${Date.now()}`
+                        // Persisted, never a throwaway: a fresh id per message would make every
+                        // turn a one-message conversation (the server cannot attach a follow-up).
+                        session_id: currentSessionId || (currentSessionId = `session_${Date.now()}`)
                     })
                 });
 
