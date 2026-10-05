@@ -320,7 +320,7 @@ def test_a_landing_or_the_bar_running_waits(box):
     w = make_window(box, host, measure_fn=lambda win: {})
     assert w.run() == bakeoff.EXIT_OK and any("voice-PR landing" in l for l in w.logs) and sum(host.slept) >= 180
     patterns = [a[-1] for a, _m in host.cmds if a[0] == "pgrep"]
-    assert r"^bash .*/land_voice_pr\.sh" in patterns and r"^/bin/bash .*samantha_bar" in patterns       # the anchored patterns, as the land script
+    assert r"^bash .*/land_voice_pr\.sh" in patterns and r"samantha_bar\.py|samantha_day_sim\.py" in patterns       # the anchored patterns, as the land script
 
 
 def test_never_quiet_is_a_refusal_not_an_endless_wait(box):
