@@ -213,10 +213,15 @@ def test_the_users_correction_wins(svc):
     # the regex extractor's correction path is user_stated by construction
     again = edit(svc, new.id, "User lives in Broome.", "chat_regex", source_excerpt="actually I live in Broome")
     assert again is not None and recalled(svc) == ["User lives in Broome."]
-    # ...and so is a model-assisted writer whose turn carries the correction
+    # a MODEL's paraphrase of the user's turn (user_stated_derived) is not the user's own
+    # statement: it parks as a candidate until the person says yes - then it wins
     third = edit(svc, again.id, "User lives in Darwin.", "turn_digest",
                  source_excerpt="Big news - I've moved. I live in Darwin now.")
-    assert third is not None and recalled(svc) == ["User lives in Darwin."]
+    assert third is None and recalled(svc) == ["User lives in Broome."]
+    (cand,) = status_of(svc, "disputed")
+    assert cand.metadata["authority_class"] == ma.USER_STATED_DERIVED
+    asyncio.run(svc.review(cand.id, decision="approve", actor="review_ui"))
+    assert recalled(svc) == ["User lives in Darwin."]
 
 
 def test_inferred_edit_of_a_user_row_is_refused_and_leaves_a_candidate(svc, caplog):
@@ -285,8 +290,12 @@ def test_supersede_by_refuses_an_inferred_successor(svc, caplog):
     assert asyncio.run(svc.supersede_by(UID, old.id, inferred.id, actor="implicit_supersede")) is False
     assert meta(svc, old.id)["status"] == "approved"
     assert "AUTHORITY_BLOCKED writer=digest kind=home action=supersede" in caplog.text
-    stated = put(svc, "User lives in Perth.", "turn_digest", source_excerpt="I live in Perth now",
-                 user_turn_id="t-2")
+    # a model's paraphrase of the user's turn (user_stated_derived) is still not a direct statement
+    derived = put(svc, "User lives in Perth.", "turn_digest", source_excerpt="I live in Perth now",
+                  user_turn_id="t-2", status="pending")
+    assert meta(svc, derived.id)["authority_class"] == ma.USER_STATED_DERIVED
+    assert asyncio.run(svc.supersede_by(UID, old.id, derived.id, actor="implicit_supersede")) is False
+    stated = put(svc, "User lives in Perth now.", "chat_regex", user_turn_id="t-3")
     assert asyncio.run(svc.supersede_by(UID, old.id, stated.id, actor="implicit_supersede")) is True
     assert meta(svc, old.id)["status"] == "superseded"
 
@@ -313,19 +322,34 @@ def test_a_rejected_candidate_stays_rejected_and_the_user_row_stays_approved(svc
 
 def test_negation_is_user_stated_and_supersedes_history_kept(svc, monkeypatch):
     """"I don't play tennis any more": the user's own words retire the row - and the old
-    row is KEPT (superseded + invalid_at), never deleted."""
+    row is KEPT (superseded + invalid_at), never deleted. (Written by a direct user writer;
+    a model's paraphrase of it waits for the person's yes - next test.)"""
     monkeypatch.setenv("ZOE_MEMORY_IMPLICIT_SUPERSEDE", "1")
     import memory_supersede
 
     old = put(svc, "User plays tennis on Saturdays.", "voice_fact")
-    new = put(svc, "User no longer plays tennis.", "turn_digest", memory_type="state_change",
-              tags=["state_change"], source_excerpt="I don't play tennis on Saturdays any more")
+    new = put(svc, "User no longer plays tennis.", "voice_fact", memory_type="state_change",
+              tags=["state_change"])
     assert meta(svc, new.id)["authority"] == ma.USER_STATED
     out = asyncio.run(memory_supersede.supersede_for_turn(svc, UID, "no longer", [new]))
     assert out["superseded"] == 1
     om = meta(svc, old.id)
     assert om["status"] == "superseded" and om["superseded_by_id"] == new.id and om["invalid_at"]
     assert asyncio.run(svc.get(old.id)).text == "User plays tennis on Saturdays."
+
+
+def test_a_model_paraphrased_negation_waits_for_the_persons_yes(svc, monkeypatch):
+    monkeypatch.setenv("ZOE_MEMORY_IMPLICIT_SUPERSEDE", "1")
+    import memory_supersede
+
+    old = put(svc, "User plays tennis on Saturdays.", "voice_fact")
+    new = put(svc, "User no longer plays tennis.", "turn_digest", memory_type="state_change",
+              tags=["state_change"], source_excerpt="I don't play tennis on Saturdays any more")
+    assert new.metadata["authority_class"] == ma.USER_STATED_DERIVED and new.metadata["status"] == "disputed"
+    out = asyncio.run(memory_supersede.supersede_for_turn(svc, UID, "no longer", [new]))
+    assert out["superseded"] == 0 and meta(svc, old.id)["status"] == "approved"
+    asyncio.run(svc.review(new.id, decision="approve", actor="review_ui"))
+    assert meta(svc, old.id)["status"] == "superseded" and meta(svc, new.id)["authority_class"] == ma.USER_CONFIRMED
 
 
 def test_an_unanchored_model_negation_cannot_retire_a_user_row(svc, monkeypatch, caplog):
@@ -349,8 +373,8 @@ def test_i_used_to_keeps_history(svc, monkeypatch):
     import memory_supersede
 
     old = put(svc, "User lives in Perth.", "voice_fact")
-    new = put(svc, "User used to live in Perth.", "turn_digest", memory_type="state_change",
-              tags=["state_change"], source_excerpt="I used to live in Perth")
+    new = put(svc, "User used to live in Perth.", "voice_fact", memory_type="state_change",
+              tags=["state_change"])
     assert meta(svc, new.id)["authority"] == ma.USER_STATED
     asyncio.run(memory_supersede.supersede_for_turn(svc, UID, "used to", [new]))
     om = meta(svc, old.id)
@@ -475,16 +499,27 @@ def test_third_person_move_is_not_a_user_attribute(svc, monkeypatch):
     assert [r.text for r in status_of(svc, "disputed")] == ["User lives in Hobart."]
 
 
-def test_digest_that_reads_the_users_own_words_may_supersede(svc, monkeypatch):
-    """The anchor is what separates a correction from an inference: the same digest, but the
-    user DID say it in a first-person sentence of the transcript."""
+def test_digest_that_reads_the_users_own_words_is_derived_and_cannot_overwrite_a_direct_row(
+        svc, monkeypatch):
+    """The anchor makes the digest's fact `user_stated_derived`: it beats model classes and
+    other derived rows, but NEVER a direct statement - a paraphrase of an older sentence in a
+    day's transcript must not overwrite what the person said directly (both would be
+    'user_stated' and the newer would win). It waits for the person's yes."""
     seed = put(svc, "User lives in Geraldton.", "voice_fact")
     out = _digest(svc, monkeypatch, transcript="okay " * 5 + "Big news, I moved to Hobart last week " + "so on " * 8,
                   facts=[{"fact": "User lives in Hobart.", "type": "profile"}], seed_id=seed.id)
-    assert out["superseded"] == 1 and meta(svc, seed.id)["status"] == "superseded"
-    new = meta(svc, meta(svc, seed.id)["superseded_by_id"])
-    assert new["authority"] == ma.USER_STATED and new["authority_basis"] == "anchored_user_turn"
-    assert new["origin"] == "digest" and new["model"]  # still honest about WHO wrote it
+    assert out["superseded"] == 0 and meta(svc, seed.id)["status"] == "approved"
+    (cand,) = status_of(svc, "disputed")
+    assert (cand.metadata["authority_class"], cand.metadata["authority_basis"]) == (
+        ma.USER_STATED_DERIVED, "anchored_user_turn")
+    assert cand.metadata["origin"] == "digest" and cand.metadata["model"]  # honest about WHO wrote it
+    # ...and over another DERIVED row (or any model row) the same digest does win
+    derived_seed = put(svc, "User lives in Alice Springs.", "turn_digest", user_turn_id="d1",
+                       source_excerpt="I live in Alice Springs")
+    assert derived_seed.metadata["authority_class"] == ma.USER_STATED_DERIVED
+    new = edit(svc, derived_seed.id, "User lives in Hobart.", "digest",
+               anchor_text="Big news, I moved to Hobart last week")
+    assert new is not None and meta(svc, derived_seed.id)["status"] == "superseded"
 
 
 def test_the_digest_transcript_is_user_turns_only():
@@ -614,15 +649,16 @@ def test_bar_scenario_store_level(svc, scn):
 
 # ── 8. more break-the-fix controls ────────────────────────────────────────────
 
-def test_control_the_anchor_is_what_separates_a_correction_from_a_guess(svc, monkeypatch):
-    put(svc, "User lives in Geraldton.", "voice_fact")
+def test_control_the_anchor_is_what_separates_a_derived_fact_from_a_guess(svc, monkeypatch):
+    put(svc, "User lives in Geraldton.", "turn_digest", source_excerpt="I live in Geraldton")  # derived
     guess = put(svc, "User lives in Hobart.", "turn_digest",
                 source_excerpt="Casey moved to Hobart last month")
     assert guess.metadata["status"] == "disputed" and guess.metadata["authority"] == ma.INFERRED
     monkeypatch.setattr(ma, "supports", lambda *a, **k: True)       # break the anchor
     broken = put(svc, "User lives in Darwin.", "turn_digest",
                  source_excerpt="Casey moved to Darwin last month")
-    assert broken.metadata["status"] == "approved" and broken.metadata["authority"] == ma.USER_STATED
+    assert broken.metadata["status"] == "approved"
+    assert broken.metadata["authority_class"] == ma.USER_STATED_DERIVED
 
 
 def test_control_archive_and_supersede_walls_are_the_authority_rule(svc, monkeypatch):
@@ -647,3 +683,55 @@ def test_the_edit_carries_no_user_turn_id_forward(svc):
     assert meta(svc, old.id)["user_turn_id"] == "turn-old"
     new = edit(svc, old.id, "User's dog is named Teddy Bear.", "review_ui")
     assert "user_turn_id" not in meta(svc, new.id)
+
+
+# ── 9. review round 1 (Codex on #1868) ────────────────────────────────────────
+
+def test_default_manual_proposals_are_the_users_own_statements(svc):
+    """POST /api/memories/proposals defaults source_type to "manual": the class must come from
+    the route (origin="proposal"), never from a client-chosen label."""
+    import inspect
+
+    from routers import memories
+
+    assert 'origin="proposal"' in inspect.getsource(memories)
+    assert ma.writer_class("manual") == ma.USER_STATED
+    ref = put(svc, "User prefers tea.", "manual", origin="proposal")
+    assert ref.metadata["authority_class"] == ma.USER_STATED
+    # a client-chosen label that is NOT on the allow-list cannot downgrade the route
+    odd = put(svc, "User prefers oat milk.", "web-form-7", origin="proposal")
+    assert odd.metadata["authority_class"] == ma.USER_STATED
+
+
+@pytest.mark.parametrize("new,old", [
+    ("User prefers coffee.", "User prefers tea."),
+    ("User drives a Honda.", "User drives a Toyota."),
+    ("User is vegan.", "User is vegetarian."),
+    ("User is married.", "User is single."),
+    ("User studies law.", "User studies nursing."),
+])
+def test_ordinary_distilled_shapes_contradict(svc, new, old):
+    assert ma.conflict_kind(new, old)
+    put(svc, old, "voice_fact")
+    ref = put(svc, new, "digest")
+    assert ref.metadata["status"] == "disputed"
+
+
+@pytest.mark.parametrize("new,old", [
+    ("User likes coffee.", "User likes tea."),
+    ("User prefers green tea.", "User prefers tea."),     # a richer statement of the same thing
+    ("User prefers tea.", "User prefers tea."),
+    ("User drives a Honda.", "Casey drives a Toyota."),  # someone else
+])
+def test_ordinary_shapes_that_do_not_contradict(new, old):
+    assert ma.conflict_kind(new, old) is None
+
+
+def test_a_quote_stitched_across_two_user_turns_is_no_anchor():
+    import memory_digest
+
+    turns = "My dog is Teddy.\nRex is coming over."
+    stitched = {"fact": "User's dog is named Rex.", "quote": "My dog is Teddy. Rex is coming over."}
+    assert memory_digest.fact_anchor(stitched, turns) is None
+    one = {"fact": "User's dog is named Teddy.", "quote": "my dog is teddy."}
+    assert memory_digest.fact_anchor(one, turns) == "my dog is teddy."

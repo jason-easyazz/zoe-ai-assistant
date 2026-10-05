@@ -56,7 +56,7 @@ class FakeSvc:
         return rows[offset:offset + limit]
 
     async def review(self, mem_id, *, decision, actor, edits=None, note=None, metadata=None,
-                     source_excerpt=None):
+                     source_excerpt=None, **_kw):
         assert decision == "edit"
         old = self.rows[mem_id]
         old.metadata["status"] = "superseded"

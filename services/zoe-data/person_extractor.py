@@ -808,6 +808,17 @@ async def _reopen_edge(db, user_id: str, edge_id: str, now: str) -> None:
         )
 
 
+def _edge_authority_for(source: str, text: str) -> str:
+    """The authority label an edge written from ``text`` by ``source`` deserves: the person's
+    own words by a user-class lane (``conversation`` / ``voice`` regex over the user turn) are
+    ``user_stated``; any other source (a digest, a batch pass, an unknown lane) is ``inferred``
+    and cannot close an edge the user stated."""
+    import memory_authority as _auth
+
+    res = _auth.resolve_write(source, text, anchor_text=text)
+    return _auth.authority_of(res.cls) if res.rank >= _auth.USER_RANK else _auth.INFERRED
+
+
 async def _edge_authority(db, user_id: str, edge_id: str) -> str:
     """The stamped ``authority`` of a person_relationships edge ("" = unstamped legacy row,
     or a database without the column - migration 0037). Read-only; never raises."""
@@ -848,11 +859,19 @@ async def _edge_may_change(db, user_id: str, edge_id: str, authority: str, origi
     ``authority``) close the current edge ``edge_id`` for a different relationship?"""
     import memory_authority as _auth
 
-    if not _auth.enabled() or authority in _auth.PROTECTED:
+    if not _auth.active():
         return True
-    if (await _edge_authority(db, user_id, edge_id)) == _auth.INFERRED:
-        return True  # inference may correct its own edge
+    by_label = {_auth.USER_STATED: _auth.USER_STATED, _auth.USER_CONFIRMED: _auth.USER_CONFIRMED,
+                _auth.INFERRED: _auth.MODEL_FROM_TRANSCRIPT}
+    power = _auth.RANK[by_label.get(authority, _auth.MODEL_FROM_TRANSCRIPT)]
+    # An UNSTAMPED edge (written before migration 0037, or on a database that has not run it)
+    # is the user's until shown otherwise - the same rule memory rows follow.
+    edge_cls = by_label.get(await _edge_authority(db, user_id, edge_id), _auth.USER_STATED)
+    if _auth.may_override(power, edge_cls):
+        return True
     _auth.log_blocked(origin, "relationship", user_id=user_id, action="edge")
+    if not _auth.enabled():
+        return True  # shadow: said what it WOULD have refused
     try:
         from memory_service import get_memory_service
 
@@ -1260,7 +1279,7 @@ async def process_text(
                 rel_type, rel_group = rel_info
                 try:
                     await _write_relationship(user_id, name_a, name_b, rel_type, rel_group, _db,
-                                              authority="user_stated", origin=source)
+                                              authority=_edge_authority_for(source, text), origin=source)
                     written += 1
                 except Exception as exc:
                     logger.debug("person_extractor: relationship write failed: %s", exc)

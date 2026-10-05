@@ -14,17 +14,18 @@ The rule (enforced at ONE choke point, ``MemoryService``: ``ingest`` / ``review`
 
 * Every row carries a PROVENANCE CLASS (``authority_class``) from an ALLOW-LIST, ranked:
 
-      operator 5 > user_confirmed 4 > user_stated 3 > user_unverified 2
-              > model_from_turn 1 > model_from_transcript 0
+      operator 6 > user_confirmed 5 > user_stated 4 > user_stated_derived 3
+              > user_unverified 2 > model_from_turn 1 > model_from_transcript 0
 
   plus ``authority`` (the owner's three-way view: user_stated | user_confirmed | inferred),
   ``authority_basis``, ``origin`` (the writer), ``turn_ref`` and ``model`` (LLM writers).
   An UNKNOWN writer is rank 0 (fail-closed). Rows written before this existed derive a class
   on read (``legacy_class``); ``scripts/maintenance/memory_authority_backfill.py`` reports
   and, on request, stamps the same answer.
-* A write may supersede / archive / contradict an existing row only if its class is a USER
-  class (rank >= 3: typed or spoken by the person, a later statement of theirs always wins) or
-  its rank is >= the row's. Anything else is DEMOTED to a ``disputed`` CANDIDATE row linked by
+* A write may supersede / archive / contradict an existing row only if its class is a DIRECT
+  user class (rank >= 4: typed or spoken by the person, a later statement of theirs always wins;
+  a model's paraphrase of them, ``user_stated_derived``, never overrides a direct statement) or
+  its power is >= the row's rank. Anything else is DEMOTED to a ``disputed`` CANDIDATE row linked by
   ``contradicts_id`` (never recalled, askable later) and logs
   ``AUTHORITY_BLOCKED writer=<name> kind=<attr>`` (labels only — never text).
 * A supersede records the NEW writer's provenance. It never inherits the old row's
@@ -61,16 +62,22 @@ ENV = "ZOE_MEMORY_AUTHORITY"
 # ── provenance classes (rank = power over existing rows) ─────────────────────
 OPERATOR = "operator"
 USER_CONFIRMED = "user_confirmed"
-USER_STATED = "user_stated"
+USER_STATED = "user_stated"            # the person's own words, or a deterministic extractor over them
+USER_STATED_DERIVED = "user_stated_derived"  # a MODEL's paraphrase that the user's own turn supports
 USER_UNVERIFIED = "user_unverified"   # voice turn attributed only by panel binding (P1.3, follow-up)
 MODEL_FROM_TURN = "model_from_turn"
 MODEL_FROM_TRANSCRIPT = "model_from_transcript"
 RANK = {
-    OPERATOR: 5, USER_CONFIRMED: 4, USER_STATED: 3, USER_UNVERIFIED: 2,
+    OPERATOR: 6, USER_CONFIRMED: 5, USER_STATED: 4, USER_STATED_DERIVED: 3, USER_UNVERIFIED: 2,
     MODEL_FROM_TURN: 1, MODEL_FROM_TRANSCRIPT: 0,
 }
 CLASSES = tuple(RANK)
-USER_RANK = RANK[USER_STATED]   # a class at or above this is the PERSON speaking
+#: a class at or above this is the PERSON speaking DIRECTLY: only these always override. A
+#: model's paraphrase of the user (rank 3) beats model classes but never a direct statement -
+#: both would otherwise be "user_stated" and the NEWER one would win, so a mis-paraphrase of an
+#: older sentence in a day transcript could overwrite what the person said later.
+USER_RANK = RANK[USER_STATED]
+DERIVED_RANK = RANK[USER_STATED_DERIVED]
 
 # The owner's three-way view, derived from the class.
 INFERRED = "inferred"
@@ -81,7 +88,7 @@ PROTECTED = frozenset({USER_STATED, USER_CONFIRMED})
 def authority_of(cls: str) -> str:
     if cls in (OPERATOR, USER_CONFIRMED):
         return USER_CONFIRMED
-    if cls == USER_STATED:
+    if cls in (USER_STATED, USER_STATED_DERIVED):
         return USER_STATED
     return INFERRED
 
@@ -111,6 +118,35 @@ def enabled() -> bool:
     return mode() == "enforce"
 
 
+AFFECT_ENV = "ZOE_AFFECT_CONSENT_GATE"
+AFFECT_KEYS = ("affect", "valence", "intensity")
+
+
+def affect_gate_mode() -> str:
+    """``members`` (default: guests and known minors never get an affective record) | ``optin``
+    (also requires the member to have opted in to the persona layer - a stored mode row) |
+    ``off``. Per-call env read. docs/governance/emotional-safety-note.md section 6."""
+    raw = os.environ.get("ZOE_AFFECT_CONSENT_GATE")
+    if raw is None:
+        return "members"
+    v = raw.strip().lower()
+    if v in ("0", "false", "no", "off", ""):
+        return "off"
+    return "optin" if v == "optin" else "members"
+
+
+def is_affective(memory_type: Optional[str], metadata: Optional[Mapping[str, Any]] = None) -> bool:
+    """An ``emotional_moment`` row: a RECORD of how someone seems (governance note section 6)."""
+    return (memory_type or "") == "emotional_moment"
+
+
+def carries_affect(metadata: Optional[Mapping[str, Any]]) -> bool:
+    """An ordinary fact carrying a feeling in its metadata (``affect`` / ``valence`` /
+    ``intensity``, stored ``candidate_``-prefixed)."""
+    md = metadata or {}
+    return any(md.get(k) or md.get(f"candidate_{k}") for k in AFFECT_KEYS)
+
+
 def active() -> bool:
     """Is the wall at least watching (``shadow`` or ``enforce``)?"""
     return mode() != "off"
@@ -136,7 +172,7 @@ USER_CONFIRMED_WRITERS = frozenset({"review_ui", "user_confirmed"})
 #: The person's own words, typed or dictated, or a deterministic extractor over their turn
 #: (assistant text is never mined — tests/test_memory_extractor_purity.py).
 USER_STATED_WRITERS = frozenset({
-    "voice_fact", "proposal", "conversation_correction", "chat", "chat_regex",
+    "voice_fact", "proposal", "manual", "explicit_teach", "conversation_correction", "chat", "chat_regex",
     "chat_regex_fallback", "voice_regex", "conversation", "voice", "skybridge_action",
 })
 DETERMINISTIC_USER_WRITERS = frozenset({"chat_regex", "chat_regex_fallback", "voice_regex", "conversation", "voice"})
@@ -144,6 +180,8 @@ USER_STATED_PREFIXES = ("note_", "journal_")   # note_<action>, journal_<action>
 #: the people-UI mirror rows ("person_created" / "person_updated"): exact names, NOT a prefix -
 #: "person_extractor_llm" is a model.
 USER_STATED_WRITERS_EXTRA = frozenset({"person_created", "person_updated", "person_deleted"})
+#: Writers fed by the panel / voice lane: their turns can be mis-attributed to the bound member.
+VOICE_LANE_WRITERS = frozenset({"voice_fact", "voice_regex", "voice", "voice_turn_digest"})
 #: Model writers that READ one user turn: user_stated only when that turn supports the fact.
 MODEL_FROM_TURN_WRITERS = frozenset({
     "turn_digest", "voice_turn_digest", "person_extractor_llm", "brain_tool", "mcp",
@@ -151,6 +189,11 @@ MODEL_FROM_TURN_WRITERS = frozenset({
 })
 #: Model writers that read a whole day's transcript: same, against the user turns of it.
 TRANSCRIPT_WRITERS = frozenset({"digest", "idle_consolidation"})
+#: Automatic writers that never read a user turn (beyond the two sets above).
+INFERRED_ONLY_AUTOMATIC = frozenset({
+    "consolidation", "synthesis", "music_digest", "ambient", "implicit_supersede",
+    "profile-analysis", "hindsight_retain_candidate", "decay_sweep", "mcp",
+})
 #: Writers that never have user text behind them (and every UNKNOWN writer): rank 0.
 LLM_WRITERS = frozenset({
     "turn_digest", "voice_turn_digest", "digest", "idle_consolidation", "consolidation",
@@ -205,11 +248,20 @@ class Resolved:
 
     @property
     def rank(self) -> int:
+        """STANDING: how well the row it becomes is protected from later writes."""
+        return RANK[self.cls]
+
+    @property
+    def power(self) -> int:
+        """POWER over existing rows (= ``rank``: a model's paraphrase of the user never
+        overrides a direct statement, however fresh the turn it paraphrases)."""
         return RANK[self.cls]
 
 
 def resolve_write(writer: str, text: str, *, anchor_text: Optional[str] = None,
-                  claimed: Optional[str] = None, user_id: str = "") -> Resolved:
+                  claimed: Optional[str] = None, user_id: str = "",
+                  prompt_text: Optional[str] = None,
+                  speaker_verified: Optional[bool] = None) -> Resolved:
     """The class a NEW row gets, from who is writing it and what the user's own turn says.
     ``claimed`` can only DOWNGRADE (``inferred``), or confirm (``user_confirmed``) for a
     user-class writer — a model writer cannot claim authority; only the anchor gives it."""
@@ -218,23 +270,40 @@ def resolve_write(writer: str, text: str, *, anchor_text: Optional[str] = None,
     if claimed == INFERRED:
         return Resolved(MODEL_FROM_TRANSCRIPT, "claimed_inferred")
     if RANK[base] >= USER_RANK:
+        # P1.3 hook: a VOICE-lane self-fact whose speaker the speaker-id did not confirm is
+        # `user_unverified` (a guest, or another member, may be talking to a panel bound to
+        # the owner). ``None`` = the lane does not report a verdict yet (today: the voice
+        # daemon does not) -> unchanged. Only a self-fact; only the voice-lane writers.
+        if (speaker_verified is False and w in VOICE_LANE_WRITERS
+                and _USER_SUBJECT_RE.match(text or "")):
+            return Resolved(USER_UNVERIFIED, "speaker_not_verified")
         if claimed == USER_CONFIRMED and base == USER_STATED:
             return Resolved(USER_CONFIRMED, "user_confirmed")
         return Resolved(base, "deterministic_user_turn" if w in DETERMINISTIC_USER_WRITERS
                         else "explicit_source")
     if w in MODEL_FROM_TURN_WRITERS or w in TRANSCRIPT_WRITERS:
-        if anchor_text and supports(text, anchor_text):
-            return Resolved(USER_STATED, "anchored_user_turn")
+        if (anchor_text or prompt_text) and supports(text, anchor_text or "", prompt_text):
+            if speaker_verified is False and w in VOICE_LANE_WRITERS:
+                return Resolved(USER_UNVERIFIED, "speaker_not_verified")
+            return Resolved(USER_STATED_DERIVED, "anchored_user_turn")
         return Resolved(base, "unanchored" if anchor_text else "no_user_evidence")
     return Resolved(MODEL_FROM_TRANSCRIPT, "automatic_writer")
 
 
-def may_override(writer_cls: str, target_cls: str) -> bool:
-    """May a write of ``writer_cls`` supersede / archive / contradict a row of
-    ``target_cls``? A user class always may (a later statement of the person's wins);
-    below that, rank >= rank."""
-    wr = RANK.get(writer_cls, 0)
-    return wr >= USER_RANK or wr >= RANK.get(target_cls, 0)
+def row_power(meta: Mapping[str, Any], text: str = "") -> int:
+    """Power over existing rows of the write that produced this row (= its rank)."""
+    return RANK[row_class(meta, text)]
+
+
+def may_override(power: int, target_cls: str) -> bool:
+    """May a write of this POWER supersede / archive / contradict a row of ``target_cls``?
+    A direct user class always may (a later statement of the person's wins); below that,
+    power >= the row's rank."""
+    if target_cls == OPERATOR:
+        # an operator's deliberate cleanup is not undone by a spoken sentence a panel may have
+        # mis-attributed (P1.3): it takes a confirming action (the review UI) or an operator
+        return power >= RANK[USER_CONFIRMED]
+    return power >= USER_RANK or power >= RANK.get(target_cls, 0)
 
 
 def provenance(writer: str, res: Resolved, *, turn_ref: Optional[str] = None,
@@ -292,8 +361,9 @@ def legacy_class_basis(meta: Mapping[str, Any], text: str = "") -> tuple[str, st
     """
     reviewed_by = str(meta.get("reviewed_by") or "").strip()
     source = str(meta.get("source") or meta.get("added_by") or "").strip()
-    src_cls = writer_class(source)
-    if reviewed_by and RANK[writer_class(reviewed_by)] < USER_RANK:
+    uid = str(meta.get("user_id") or meta.get("wing") or "")
+    src_cls = writer_class(source, user_id=uid)
+    if reviewed_by and _is_model_actor(reviewed_by) and reviewed_by != uid:
         return (MODEL_FROM_TURN if reviewed_by in MODEL_FROM_TURN_WRITERS
                 else MODEL_FROM_TRANSCRIPT), "legacy_reviewed_by_model"
     if RANK[src_cls] >= USER_RANK:
@@ -301,13 +371,22 @@ def legacy_class_basis(meta: Mapping[str, Any], text: str = "") -> tuple[str, st
     if source in MODEL_FROM_TURN_WRITERS or source in TRANSCRIPT_WRITERS:
         excerpt = str(meta.get("source_excerpt") or meta.get("candidate_source_excerpt") or "")
         if excerpt and text and supports(text, excerpt):
-            return USER_STATED, "legacy_anchored_excerpt"
+            return USER_STATED_DERIVED, "legacy_anchored_excerpt"
         if reviewed_by:
             return USER_CONFIRMED, "legacy_reviewed_by_person"
         return src_cls, "legacy_unanchored"
     if reviewed_by:
         return USER_CONFIRMED, "legacy_reviewed_by_person"
     return MODEL_FROM_TRANSCRIPT, "legacy_automatic_source"
+
+
+def _is_model_actor(name: str) -> bool:
+    """A reviewer that is a MODEL / batch pass, as opposed to a person. Only for reading
+    LEGACY ``reviewed_by`` values: an account id or any other label that names no known
+    automatic writer is a person (a live WRITE from an unknown label is still rank 0)."""
+    n = (name or "").strip()
+    return (n in MODEL_FROM_TURN_WRITERS or n in TRANSCRIPT_WRITERS or n in LLM_WRITERS
+            or n in INFERRED_ONLY_AUTOMATIC or n in _automatic_sources())
 
 
 def legacy_class(meta: Mapping[str, Any], text: str = "") -> str:
@@ -347,7 +426,7 @@ _CUE_WORDS = {
     "home": "live lives lived living move moved moving reside resides resided based settle "
             "settled home house from stay stays relocate relocated",
     "work": "work works worked working job jobs employ employed employer career occupation "
-            "profession company business hired",
+            "profession company business hired start started join joined",
     "age": "old age aged turn turned",
     "birth": "birthday born bday birth dob",
     "like": "like likes liked love loves loved enjoy enjoys prefer prefers preferred favourite "
@@ -379,6 +458,24 @@ def _stem(tok: str) -> str:
 
 
 _CUE_OF: dict[str, str] = {_stem(w): cls for cls, words in _CUE_WORDS.items() for w in words.split()}
+
+
+# First-person present / change-of-state shapes that name the attribute without its noun:
+# "I'm 41 now" (age), "I'm in Perth now" (home), "I'm at Acme now" (work), "I'm Alex" (name).
+_SHAPE_CUES = (
+    ("age", re.compile(r"\bI(?:['’]m| am)\s+\d{1,3}\b|\bturn(?:ed|ing|s)?\s+\d{1,3}\b", re.IGNORECASE)),
+    ("home", re.compile(r"\bI(?:['’]m| am)\s+(?:now\s+)?in\s+\w+(?:\s+\w+){0,3}?\s+now\b"
+                        r"|\bI(?:['’]m| am)\s+now\s+in\s+\w+", re.IGNORECASE)),
+    ("work", re.compile(r"\bI(?:['’]m| am)\s+(?:now\s+)?at\s+\w+(?:\s+\w+){0,3}?\s+now\b"
+                        r"|\bI(?:['’]m| am)\s+now\s+at\s+\w+", re.IGNORECASE)),
+    ("name", re.compile(r"\b(?:I(?:['’]m| am)|this is|it(?:['’]s| is))\s+[A-Z][a-z]+")),
+)
+
+
+def _window_cues(win: str, stems: set[str]) -> set[str]:
+    out = {_CUE_OF[s] for s in stems if s in _CUE_OF}
+    out |= {cls for cls, rx in _SHAPE_CUES if rx.search(win)}
+    return out
 
 
 def _fold(text: str) -> str:
@@ -432,7 +529,53 @@ def _fact_parts(fact: str) -> tuple[bool, set[str], set[str], set[str]]:
     return about_user, value, cues, other
 
 
-def supports(fact: str, user_text: str) -> bool:
+_RELATION = (r"(?:wife|husband|partner|girlfriend|boyfriend|fianc\w*|spouse|son|daughter|kids?|child|"
+             r"children|brother|sister|mum|mom|mother|dad|father|grandma|grandmother|grandpa|"
+             r"grandfather|aunt|uncle|cousin|niece|nephew|friend|mate|boss|colleague|coworker|"
+             r"neighbou?r|parents?|sibling|in-laws?|family|baby|girls|boys|ex)")
+#: "my sister", "my wife's", "our best friend": a possessive of ANOTHER PERSON
+_MY_RELATION_RE = re.compile(rf"\b(?:my|our)\s+(?:[a-z]+\s+){{0,2}}?({_RELATION})s?(?:['’]s)?\b", re.IGNORECASE)
+_NEG_RE = re.compile(r"\b(?:not|never|no|none|nobody|nothing|neither|nor)\b|n['’]t\b|\bany ?more\b",
+                     re.IGNORECASE)
+_HYPOTHETICAL_RE = re.compile(
+    r"\b(?:wish|if|maybe|perhaps|might|hope|hoping|someday|supposedly|apparently|imagine|pretend|"
+    r"would|could)\b", re.IGNORECASE)
+_QUESTION_START_RE = re.compile(r"^\s*(?:do|does|did|am|are|is|can|could|will|would|should)\s+"
+                                r"(?:i|we|you|my)\b", re.IGNORECASE)
+
+
+_LEAD_INTERJECTION_RE = re.compile(r"^\s*(?:(?:no|nope|nah|yes|yeah|yep|actually|well|oh|sorry|um|uh|hi|hey)[,.!\s]+)+",
+                                   re.IGNORECASE)
+
+
+def _window_is_a_statement_about_the_user(win: str, fact: str) -> bool:
+    """The user's OWN, affirmative, first-person statement - not a question, a wish, a
+    negation the fact does not share, or a sentence about someone else's relative.
+    (Review of #1868: "my sister lives in Perth" must not support "User lives in Perth".)"""
+    win = _LEAD_INTERJECTION_RE.sub("", win)
+    if "?" in win or _QUESTION_START_RE.match(win):
+        return False
+    if bool(_NEG_RE.search(win)) != bool(_NEG_RE.search(fact or "")):
+        return False
+    if _HYPOTHETICAL_RE.search(win):
+        return False
+    if re.search(r"\bused to\b", win, re.IGNORECASE) and not re.search(r"\bused to\b", fact or "", re.IGNORECASE):
+        return False
+    fact_l = (fact or "").lower()
+    for m in _MY_RELATION_RE.finditer(win):
+        rel = m.group(1).lower()
+        try:
+            from memory_quality import _role_variants
+
+            names = {v.lower() for v in _role_variants(rel)} | {rel}
+        except Exception:  # noqa: BLE001
+            names = {rel}
+        if not any(re.search(rf"\b{re.escape(n)}s?\b", fact_l) for n in names):
+            return False  # the sentence is about the user's relative; the fact does not say so
+    return True
+
+
+def supports(fact: str, user_text: str, prompt_text: Optional[str] = None) -> bool:
     """Does the user's OWN turn text support ``fact``?
 
     ``user_text`` is user turns only (the caller must never pass assistant text). True when
@@ -442,6 +585,11 @@ def supports(fact: str, user_text: str) -> bool:
     for a fact about the user — the user speaking in the first person. A third person's
     name merely appearing in a transcript supports nothing: "uh Casey is coming over, I
     think" does not support "User's name is Casey" (no name cue).
+
+    ``prompt_text`` is the ASSISTANT question the user is answering ("Where do you live
+    now?"). It is never evidence by itself - it only lets a SHORT elliptical answer ("no,
+    Perth now", "it's Alex") be read in context: the answer must carry every value token of
+    the fact, and the question must name the same attribute the fact does.
     """
     if not fact or not user_text:
         return False
@@ -460,13 +608,36 @@ def supports(fact: str, user_text: str) -> bool:
         stems = {_stem(w) for w in ws}
         if value and not value <= stems:
             continue
-        if cues and not cues <= {_CUE_OF[s] for s in stems if s in _CUE_OF}:
+        if cues and not cues <= _window_cues(win, stems):
             continue
         if other and len(other & stems) / len(other) < 0.6:
             continue
         if about_user and not any(w.lower() in _FIRST_PERSON for w in ws):
             continue
+        if not _window_is_a_statement_about_the_user(win, fact):
+            continue
         return True
+    return _answers_a_question(fact, value, cues, user_text, prompt_text)
+
+
+def _answers_a_question(fact: str, value: set[str], cues: set[str], user_text: str,
+                        prompt_text: Optional[str]) -> bool:
+    """A short elliptical user answer to an assistant question about the fact's attribute."""
+    if not prompt_text or "?" not in prompt_text or not value:
+        return False
+    p_stems = {_stem(w) for w in _words(prompt_text)}
+    p_cues = {_CUE_OF[s] for s in p_stems if s in _CUE_OF}
+    p_cues |= {"name"} if re.search(r"\bname\b", prompt_text, re.IGNORECASE) else set()
+    if not cues or not cues <= p_cues:
+        return False
+    for line in _normalise_dates(user_text).split("\n"):
+        ans = _LEAD_INTERJECTION_RE.sub("", line).strip()
+        if not ans or "?" in ans or len(ans.split()) > 8 or _HYPOTHETICAL_RE.search(ans):
+            continue
+        if bool(_NEG_RE.search(ans)) != bool(_NEG_RE.search(fact or "")):
+            continue
+        if value <= {_stem(w) for w in _words(ans)}:
+            return True
     return False
 
 
@@ -503,6 +674,28 @@ def kind_of(text: str) -> str:
     return "other"
 
 
+# Distilled third-person shapes ("User prefers tea."): a verb that takes ONE object at a time.
+# Likes / loves / enjoys / takes / owns are deliberately absent - a person has several.
+_EXCL_VERB_RE = re.compile(
+    r"^\s*(?:the\s+)?user\s+(?P<verb>prefers|drives|studies|attends|supports)\s+(?P<obj>.+?)\s*[.!?]*\s*$",
+    re.IGNORECASE)
+#: values that exclude each other ("vegetarian" / "vegan"; "single" / "married")
+_EXCL_GROUPS = (
+    frozenset({"vegetarian", "vegan", "pescatarian", "pescetarian", "omnivore", "carnivore"}),
+    frozenset({"single", "married", "divorced", "widowed", "engaged", "separated"}),
+)
+_OBJ_STOP = frozenset({"a", "an", "the", "to", "of", "my", "their", "his", "her"})
+
+
+def _obj_tokens(obj: str) -> frozenset[str]:
+    return frozenset(t for t in re.findall(r"[a-z0-9]+", (obj or "").lower()) if t not in _OBJ_STOP)
+
+
+def _verb_object(text: str) -> tuple[str, frozenset[str]]:
+    m = _EXCL_VERB_RE.match(text or "")
+    return (m.group("verb").lower(), _obj_tokens(m.group("obj"))) if m else ("", frozenset())
+
+
 def _slot_value(rx: re.Pattern[str], text: str) -> str:
     m = rx.search(text or "")
     if not m:
@@ -535,22 +728,32 @@ def conflict_kind(new_text: str, old_text: str) -> Optional[str]:
             return kind_of(old_text)
     if is_tombstone(new_text) and same_topic(new_text, old_text):
         return kind_of(old_text)
+    # "User prefers tea." vs "User prefers coffee." - same verb, a different single object
+    (vn, on), (vo, oo) = _verb_object(new_text), _verb_object(old_text)
+    if vn and vn == vo and on and oo and not (on <= oo or oo <= on):
+        return kind_of(old_text)
+    # mutually exclusive states ("User is vegetarian." / "User is vegan.")
+    wn, wo = set(re.findall(r"[a-z]+", new_text.lower())), set(re.findall(r"[a-z]+", old_text.lower()))
+    for group in _EXCL_GROUPS:
+        gn, go = wn & group, wo & group
+        if gn and go and gn != go:
+            return kind_of(old_text)
     return None
 
 
-def find_conflict(new_text: str, rows: list[Any], writer_rank: int, *,
+def find_conflict(new_text: str, rows: list[Any], writer_power: int, *,
                   exclude_id: str = "") -> Optional[tuple[Any, str]]:
     """The first APPROVED row in ``rows`` that ``new_text`` contradicts and that OUTRANKS a
-    writer of ``writer_rank`` (a user class never needs this: it may override), with the
-    attribute kind, else None. ``rows`` are MemoryRef-likes (``id``, ``text``, ``metadata``)."""
-    if writer_rank >= USER_RANK:
+    writer of ``writer_power`` (a direct user class never needs this: it may override), with
+    the attribute kind, else None. ``rows`` are MemoryRef-likes (``id``, ``text``, ``metadata``)."""
+    if writer_power >= RANK[OPERATOR]:
         return None
-    for r in rows:
+    for r in rows[:2000]:  # newest first (list_by_status): bounded, this runs on the event loop
         meta = getattr(r, "metadata", None) or {}
         if getattr(r, "id", "") == exclude_id or str(meta.get("status") or "") != "approved":
             continue
         text = getattr(r, "text", "") or ""
-        if row_rank(meta, text) <= writer_rank:
+        if may_override(writer_power, row_class(meta, text)):
             continue
         kind = conflict_kind(new_text, text)
         if kind:

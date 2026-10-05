@@ -458,6 +458,59 @@ def _implicit_change_cue(user_message: str) -> str | None:
         return None
 
 
+_ATTRIBUTE_QUESTION_RE = re.compile(
+    r"\b(?:where|live|living|work|job|employ|name|called|old|age|born|birthday|moved|stay)\w*\b", re.IGNORECASE)
+
+
+async def prev_assistant_question(user_id: str, session_id: str | None, user_message: str,
+                                  db=None) -> str:
+    """The assistant message that immediately preceded ``user_message`` in its session, when it
+    is a QUESTION about a personal attribute ("Where do you live now?") - the context a short
+    elliptical answer ("no, Perth now", "it's Alex") needs. Context only: assistant text is
+    never evidence for a fact about the user (memory_authority.supports). "" when there is
+    none / on any failure."""
+    if not session_id or not user_message:
+        return ""
+    sql = """
+        SELECT a.content FROM chat_messages a
+        WHERE a.session_id = ? AND a.role = 'assistant'
+          AND a.created_at::timestamptz < (
+                SELECT max(u.created_at::timestamptz) FROM chat_messages u
+                WHERE u.session_id = ? AND u.role = 'user' AND u.content = ?)
+        ORDER BY a.created_at::timestamptz DESC LIMIT 1
+    """
+    try:
+        from db_pool import get_db_ctx  # type: ignore[import]
+
+        async with get_db_ctx() as _db:
+            row = await (await _db.execute(sql, (session_id, session_id, user_message))).fetchone()
+        q = str(row[0] or "").strip() if row else ""
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("prev_assistant_question failed: %s", type(exc).__name__)
+        return ""
+    return q[-300:] if q.endswith("?") and _ATTRIBUTE_QUESTION_RE.search(q) else ""
+
+
+async def latest_user_turn(user_id: str, *, within_minutes: int = 10, db=None) -> str:
+    """The member's most recent user turn (any session) within ``within_minutes`` - the turn an
+    explicit "remember ..." tool call belongs to. "" on none / failure."""
+    sql = """
+        SELECT cm.content FROM chat_messages cm JOIN chat_sessions cs ON cm.session_id = cs.id
+        WHERE """ + _message_owner_expr() + """ = ? AND cm.role = 'user'
+          AND cm.created_at::timestamptz >= (now()::timestamptz - make_interval(mins => ?::int))
+        ORDER BY cm.created_at::timestamptz DESC LIMIT 1
+    """
+    try:
+        from db_pool import get_db_ctx  # type: ignore[import]
+
+        async with get_db_ctx() as _db:
+            row = await (await _db.execute(sql, (user_id, within_minutes))).fetchone()
+        return str(row[0] or "").strip() if row else ""
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("latest_user_turn failed: %s", type(exc).__name__)
+        return ""
+
+
 async def run_turn_digest(
     user_id: str,
     user_message: str,
@@ -465,6 +518,7 @@ async def run_turn_digest(
     *,
     session_id: str | None = None,
     source: str = "turn_digest",
+    speaker_verified: bool | None = None,
 ) -> dict:
     """LLM fact extraction on a single conversation exchange.
 
@@ -475,7 +529,14 @@ async def run_turn_digest(
     """
     result: dict = {"user_id": user_id, "new": 0, "skipped_duplicates": 0, "skipped_low_quality": 0}
 
-    if not user_message or len(user_message.split()) < 4:
+    prompt_text = ""
+    if user_message and len(user_message.split()) < 4:
+        # A SHORT answer to a personal-attribute question ("no, Perth now", "it's Alex") is a
+        # fact only in the context of that question: read it with the question (context, never
+        # evidence - memory_authority.supports needs the user's own words to carry the value).
+        if memory_authority.enabled():
+            prompt_text = await prev_assistant_question(user_id, session_id, user_message)
+    if not user_message or (len(user_message.split()) < 4 and not prompt_text):
         return result
     # Skip purely procedural messages that can't contain personal facts.
     _skip_starts = ("what is", "what are", "how do", "explain", "tell me about",
@@ -505,7 +566,8 @@ async def run_turn_digest(
         # evidence excerpt below stays the user's verbatim words.
         from date_locale import normalize_numeric_dates
         prompt = _TURN_EXTRACTION_PROMPT.format(
-            user_message=normalize_numeric_dates(user_message)[:600])
+            user_message=(f"(replying to Zoe's question: \"{prompt_text}\") " if prompt_text else "")
+            + normalize_numeric_dates(user_message)[:600])
         payload = {
             "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
             "messages": [
@@ -564,6 +626,7 @@ async def run_turn_digest(
         # unless the flag is on AND the user's own words carry a change-of-state cue.
         change_cue = _implicit_change_cue(user_message)
         changed_refs: list = []
+        fresh_candidates: list = []
         existing_rows = None  # approved rows, read once, only for a cue turn
 
         for idx, item in enumerate(facts):
@@ -663,6 +726,8 @@ async def run_turn_digest(
                         anchor_text=user_message,
                         session_id=session_id,
                         turn_ref=f"{base_turn_id}-td{idx}",
+                        prompt_text=prompt_text or None,
+                        speaker_verified=speaker_verified,
                     )
                     if new_ref is not None:
                         result["new"] += 1
@@ -687,10 +752,13 @@ async def run_turn_digest(
                     metadata={"affect": fact_affect} if fact_affect else None,
                     source_excerpt=turn_excerpt,
                     anchor_text=user_message,
+                    prompt_text=prompt_text or None,
+                    speaker_verified=speaker_verified,
                 )
                 if ref is not None and memory_authority.is_candidate(ref):
-                    # held back as a pending candidate (it disputes something the user said)
+                    # held back (it disputes something the user said): ask ONE question
                     result["skipped_low_quality"] += 1
+                    fresh_candidates.append(ref)
                 elif ref is not None:
                     result["new"] += 1
                     logger.info("turn_digest: stored for %s: %s", user_id, fact[:80])
@@ -698,6 +766,14 @@ async def run_turn_digest(
                         changed_refs.append(ref)
             except MemoryServiceError as exc:
                 logger.debug("turn_digest: ingest failed for %s: %s", user_id, exc)
+
+        if memory_authority.enabled() and session_id:
+            import memory_disputes
+
+            # a held-back write, or a topic the user just touched that has an open dispute,
+            # becomes ONE question through the offer mechanism (never a lost row)
+            result["dispute_questions"] = await memory_disputes.queue_questions(
+                svc, user_id, session_id, user_message, fresh=fresh_candidates)
 
         if changed_refs:
             from memory_supersede import supersede_for_turn
@@ -1035,7 +1111,11 @@ def fact_anchor(item: dict, user_text: str) -> str | None:
         return user_text
     squash = lambda t: re.sub(r"\s+", " ", str(t or "")).strip().lower()  # noqa: E731
     quote = squash(item.get("quote"))
-    return str(item.get("quote")).strip() if quote and quote in squash(user_text) else None
+    # ONE message at a time: the transcript joins user turns with newlines, and a quote stitched
+    # across two turns ("My dog is Teddy. Rex is coming over.") is not something the user said.
+    if quote and any(quote in squash(line) for line in str(user_text or "").split("\n")):
+        return str(item.get("quote")).strip()
+    return None
 
 
 class ExtractorError(RuntimeError):
@@ -1311,6 +1391,12 @@ async def run_weekly_consolidation(user_id: str) -> dict:
         summary["resolved_contradictions"] = await _resolve_contradictions(svc, user_id)
     except Exception as exc:
         logger.warning("consolidation: contradiction pass failed user=%s: %s", user_id, exc)
+    try:
+        import memory_disputes
+
+        summary["stale_disputes"] = await memory_disputes.expire_stale(svc, user_id)
+    except Exception as exc:
+        logger.warning("consolidation: dispute expiry failed user=%s: %s", user_id, exc)
     try:
         archived_ids = await svc.sweep_soft_archive(user_id=user_id, actor="decay_sweep")
         summary["archived"] = len(archived_ids)

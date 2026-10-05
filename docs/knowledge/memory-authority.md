@@ -26,24 +26,32 @@ looked like a regex write from a real conversation. No path checked who wrote th
 
 | Rank | Class | Which writers (allow-list; anything not listed is rank 0) |
 |---|---|---|
-| 5 | `operator` | `operator`, `operator-cleanup`, `identity_audit`, `admin`, `system`, `samantha_live_cleanup` |
-| 4 | `user_confirmed` | the review UI (`review_ui`), the account acting on its own rows (`actor == user_id`: REST edits, intent handlers, MCP), the user approving a candidate |
-| 3 | `user_stated` | the person's words typed or dictated (`voice_fact`, `proposal`, `conversation_correction`, `chat`, `skybridge_action`, `note_*`, `journal_*`, `person_created/updated`), deterministic extractors over the user's turn (`chat_regex`, `chat_regex_fallback`, `voice_regex`, `conversation`, `voice`), and a model writer whose fact the user's OWN turn supports (below) |
-| 2 | `user_unverified` | reserved for voice turns attributed only by panel binding - nothing writes it yet (P1.3) |
-| 1 | `model_from_turn` | `turn_digest`, `voice_turn_digest`, `person_extractor_llm`, `brain_tool`, `mcp`, `zoe_agent`, `decay_sweep` - when the turn does not support the fact |
+| 6 | `operator` | `operator`, `operator-cleanup`, `identity_audit`, `admin`, `system`, `samantha_live_cleanup` |
+| 5 | `user_confirmed` | the review UI (`review_ui`), the account acting on its own rows (`actor == user_id`: REST edits, intent handlers, MCP), the user approving a candidate |
+| 4 | `user_stated` | the person's words typed or dictated (`voice_fact`, `proposal`/`manual` - the proposals route passes `origin="proposal"` whatever label the client sent, `conversation_correction`, `chat`, `skybridge_action`, `note_*`, `journal_*`, `person_created/updated`) and deterministic extractors over the user's turn (`chat_regex`, `chat_regex_fallback`, `voice_regex`, `conversation`, `voice`) - a DIRECT statement |
+| 3 | `user_stated_derived` | a MODEL writer's fact that the user's OWN turn supports (below) - the person's words, paraphrased by a model |
+| 2 | `user_unverified` | a voice-lane SELF-fact whose speaker the speaker-id did not confirm: the hook exists (`speaker_verified=False` on `ingest` / `review` / `run_turn_digest`) but the voice daemon does not report a verdict yet, so **today every panel write is a direct user class** - a guest, or another member, speaking to a panel bound to the owner can overwrite the owner's rows (not operator rows). Wiring the verdict is P1.3 (voice-path, replay-gated) |
+| 1 | `model_from_turn` | `turn_digest`, `voice_turn_digest`, `person_extractor_llm`, `brain_tool`, `mcp` (every MCP review / forget call passes `origin="mcp"`; the account is only the acting member), `zoe_agent`, `decay_sweep` - when the turn does not support the fact |
 | 0 | `model_from_transcript` | `digest`, `idle_consolidation` (unsupported), `consolidation`, `synthesis`, `music_digest`, the emotional pass, `profile-analysis`, `hindsight_retain_candidate`, **any unknown writer** |
 
 Each row also gets `authority` (the owner's three-way view: `user_stated` | `user_confirmed` |
-`inferred`), `authority_class`, `authority_basis` (why), `origin` (the real writer - finer than the lane
+`inferred`; a derived row shows as `user_stated`), `authority_class`, `authority_basis` (why), `origin` (the real writer - finer than the lane
 `source`; `person_extractor_llm` writes under `source="conversation"`), `turn_ref`, and `model` for LLM
 writers. Stamped in **every** mode.
 
 ## The rule - one choke point (`MemoryService`)
 
-* **May a write override a row?** Yes if its class is a **user class (rank >= 3)** - a later statement of
-  the person's always wins, even over a row they once approved (this is the one place the rule departs from
-  the audit's literal `rank(writer) >= rank(target)`, so a typed correction can replace a `user_confirmed`
-  row) - or if `rank(writer) >= rank(row)`. Below that it is held back.
+* **May a write override a row?** Yes if its class is a **DIRECT user class (rank >= 4)** - a later
+  statement of the person's always wins, even over a row they once approved (the one place the rule departs
+  from the audit's literal `rank(writer) >= rank(target)`, so a typed correction can replace a
+  `user_confirmed` row) - or if `rank(writer) >= rank(row)` (same class = newer wins; a higher class always).
+  A **model's paraphrase of the user (`user_stated_derived`, rank 3) never overrides a direct statement**:
+  both would otherwise read "user_stated", the newer would win, and a mis-paraphrase of an older sentence
+  in a day's transcript could overwrite what the person said later. It does beat model classes and other
+  derived rows. Cost, stated plainly: a change the person made that ONLY the turn digest captured (no
+  regex/typed write) parks as a candidate instead of superseding at once - and is then ASKED about (next
+  section) - so re-run the bar's S2 (Dunedin -> Hobart) / S10 before relying on it. A spoken sentence
+  never undoes an OPERATOR row (it takes the review UI or an operator). Below that it is held back.
 * **Held back = a `disputed` candidate.** `ingest` stores the fact with `status=disputed`,
   `contradicts_id=<row>`, `authority_blocked=true`; `review(edit)` leaves the same candidate and returns
   `None` (every caller already treats `None` as "supersede refused"). `disputed` is a blocked-read status,
@@ -67,7 +75,27 @@ writers. Stamped in **every** mode.
   `user_confirmed` and **retires the row it disputed**; rejecting it keeps the row and the candidate is
   not resurrected by the next extraction.
 
-## How a model writer earns `user_stated` (`supports`)
+## A held-back write is asked about, not lost (`memory_disputes.py`)
+
+* `GET /api/memories/review` lists `disputed` candidates (`dispute: true`) beside the text they dispute
+  (`contradicts_text`). A held-back `review` answers 409, not a crash (same for MCP).
+* `run_turn_digest` turns the candidate it just produced - and, on later turns, the one whose topic the
+  message touches - into ONE offer through `pending_suggestions` (`action_type=memory_dispute`):
+  "Earlier you told me X and I've just heard Y - which is right?". **Yes** (`execute_suggestion`)
+  approves the candidate (-> `user_confirmed`, retires the row it disputed); a dismissal rejects it.
+* `expire_stale` (weekly pass) resolves an unanswered dispute after **30 days** to a logged
+  `STALE_DISPUTE` (`status=rejected` + review note); the disputed row keeps standing; nothing is deleted.
+* Short elliptical answers ("no, Perth now", "it's Alex") are read with the assistant question they answer
+  (`prompt_text` - context only, never evidence; `memory_digest.prev_assistant_question`, personal-attribute
+  questions only). First-person present / change shapes ("I'm 41 now", "I started at Acme", "I'm in Perth
+  now") name their attribute without its noun and are recognised.
+* The brain's `remember_fact` (`brain_tool`) carries the user's latest turn as `anchor_text`
+  (`memory_digest.latest_user_turn`); when that turn is an explicit "remember / note that ..." that
+  supports the fact the person is dictating through the brain (`origin=explicit_teach`, a direct
+  statement), so "remember that I live in Perth now" changes the home; otherwise the paraphrase stays
+  rank 1 and the reply says it is waiting to be confirmed.
+
+## How a model writer earns `user_stated_derived` (`supports`)
 
 The caller passes the user's OWN turn text as `anchor_text` (user turns only - never assistant text;
 defaults to `source_excerpt`). The fact is supported when ONE user sentence (or two adjacent ones of the
@@ -76,7 +104,10 @@ names (name / where they live / work / age / birthday / a liking / an allergy, w
 other words, and - for a fact about the user - the user speaking in the first person. So `uh Casey is
 coming over, I think` does not support `User's name is Casey` (no name cue), `Casey moved to Perth` does
 not support `User lives in Perth` (no first person), and `my dog is Teddy` / `uh Rex is coming` on two
-turns does not support `User's dog is Rex`. Dates are normalised day-first before matching.
+turns does not support `User's dog is Rex`. Dates are normalised day-first before matching. The window must also be the user's own AFFIRMATIVE
+statement: a question, a wish / hypothetical, a negation the fact does not share, `used to` the fact does not
+share, and a possessive of ANOTHER PERSON ("my sister lives in Perth", "my wife's birthday") are all
+rejected unless the fact itself names that relation.
 
 P1.2 (digest): `_EXTRACTION_PROMPT` now asks for `{"fact","type","quote"}` - the user's own words, verbatim.
 `memory_digest.fact_anchor` uses the quote only if it is a verbatim span of the user turns (a hallucinated
@@ -107,15 +138,30 @@ user's text becomes a **pending PERSON candidate** ("<X> was mentioned in conver
 | W12 nightly implicit-conflict pass | yes | same |
 | W16 decay archive | yes | `decay_sweep` = rank 1 |
 | W20 voice teach | yes (user class) | `voice_fact` |
-| W22 MCP `memory_review` as the user | **no - follow-up** | the agent edits under the owner's id (`actor == user_id` => `user_confirmed`), indistinguishable from the owner by construction |
+| W22 MCP `memory_review` / `memory_forget` as the user | yes | `mcp_server` passes `origin="mcp"` (rank 1) on every review and forget call; the account stays `actor` (audit). An MCP edit, archive, reject or candidate-approval cannot touch a row the person said; the tool answers "held back" instead of crashing |
+| `person_merge.merge_person` (closes / re-points people rows + edges) | yes | a USER/admin action enforced at the entry point: a named writer below the user classes is refused (`AUTHORITY_BLOCKED ... action=merge`); the REST endpoint passes `actor=<account>`; nothing automatic calls it |
 
-Not in this PR (follow-ups): **dispute -> question** (the proactive selector / `pending_suggestions` asking
-"earlier you told me X; I heard Y - which is right?"; candidates already carry `contradicts_id`, and
-`review(approve)` resolves them, so the asker is the only missing piece); **P1.3 speaker gate**
-(`user_unverified` for panel-bound turns); the `used to love <city>` cue false positive (P2.1); durable
-forgetting; REM/deep-sleep raw upserts; `brain_tool` / `mcp` carrying the user's turn as `anchor_text`
-(today a conflicting `remember_fact` is held back and the brain is told to say so - the reply no longer
-claims "Got it" over a held-back write).
+Not in this PR (follow-ups): **P1.3 speaker gate** (the voice daemon reporting the speaker-id verdict -
+the hook is in); the `used to love <city>` cue false positive (P2.1); durable forgetting; REM/deep-sleep raw
+upserts; a UI card for the dispute offer (it reaches the brain as an offer line like every other offer).
+`_write_relationship` has one production caller (`process_text`, regex over the user's turn); it now passes
+the caller's real class (`_edge_authority_for(source, text)`), so a model-sourced call cannot close a
+user-stated edge.
+
+## Affective records need consent (`ZOE_AFFECT_CONSENT_GATE`)
+
+`docs/governance/emotional-safety-note.md` section 6: a RECORD of how someone seems is kept for
+consenting adult members only; children and guests never. Enforced at the same choke point
+(`MemoryService._affect_allowed`, in `ingest` and `review(edit)`): an `emotional_moment` row is not
+stored (`AFFECT_NOT_STORED`), and a feeling carried in an ordinary row's metadata (`affect` / `valence` /
+`intensity`) is stripped (`AFFECT_STRIPPED` - the fact stays, the feeling does not; the sentence itself may
+still name a feeling). Modes: `members` (**default**) refuses guest sentinels and any member flagged a minor
+in `member_modes` (a failed lookup fails open with a warning - the minor flag lives in Postgres);
+`optin` additionally requires the member's stored persona mode (the opt-in) and fails closed; `off`.
+**Decision for the owner:** the note wants an explicit per-member consent, and no consent flow exists yet
+(plan W5.3 - the enrolment interview). `optin` is therefore flag-dark: turning it on today would stop
+emotional memory for everyone, including the owner (Samantha bar S4). Until W5.3 ships the default is the
+part that is certain (guests and children: never).
 
 ## `ZOE_MEMORY_AUTHORITY` - `enforce` (default) | `shadow` | `off`
 
@@ -125,7 +171,10 @@ and the wall depends on them). **Default `enforce`, argued:** the only thing the
 MODEL's overwrite of something the user said as a `disputed` candidate - lossless (the text is kept),
 reversible (approving it applies it) and invisible to recall - while a writer that has the user's turn earns
 `user_stated` through `supports`, so what the user said is never refused. `shadow` default would leave the
-incident class open for a week on a box whose only user is the owner. **Not measured:** the bar and the
+incident class open for a week on a box whose only user is the owner. **Shipped `enforce` because** the findings that made it unsafe are fixed with tests: the anchor cannot be
+satisfied by a relative's / negated / questioned sentence, the owner's reviewed rows are protected, the
+idle-consolidation supersede is one operation, held-back writes are visible, asked about and expire logged,
+and an explicit "remember ..." carries its turn. **Not measured:** the bar and the
 replay gate were not run (the box is RAM-starved); the operator should run the Samantha bar (S2, S10,
 S20-S22) and watch `AUTHORITY_BLOCKED` / `AUTHORITY_WOULD_BLOCK` for a night before relying on it, and flips
 to `shadow` with one env line if a legitimate update is being parked. Voice-gate: none of the changed files
@@ -154,6 +203,10 @@ rank 0. **Not run against the live palace.**
   `ZOE_MEMORY_AUTHORITY=off` as the negative control on every cell (the S1 signature), shadow mode, the
   quote anchor, idle consolidation sending user turns only, the weekly merge.
 * `test_memory_authority_people.py` - migration 0037, edge stamps, the edge wall + control.
+* `test_memory_authority_review.py` - one group per finding of the #1868 review (anchor negatives table, owner-reviewed legacy rows, idle consolidation one-operation supersede, review-queue/offer/TTL for disputes, brain_tool explicit remember, user_unverified hook + exposure, admin approve, the P2 notes).
+* `test_memory_authority_gates.py` - MCP cannot overwrite a user_stated row (with the old call shape as the
+  control), person merge entry-point enforcement, the edge writer asks the rule, and the affect consent gate
+  (guests, minors, opt-in mode, fail-open/closed, off = control).
 * `test_memory_authority_backfill.py` - the dry-run report (read-only, no text) and the apply.
 * `test_identity_facts.py` - the digest-replay control now removes BOTH walls; removing only #1866's
   leaves the genuine row standing (defence in depth).

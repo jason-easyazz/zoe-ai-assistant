@@ -37,8 +37,8 @@
     },
     {
       "id": "A3",
-      "title": "saying I stopped is mine to say",
-      "proves": "'I don't play tennis any more' is the user's own word: the model-assisted writer that read it stores it as user_stated, so the retirement of the old fact is allowed",
+      "title": "a model's reading of 'I stopped' waits for my yes",
+      "proves": "'I don't play tennis any more' read by the turn digest is user_stated_derived: it beats model classes but never a direct statement, so it parks as a candidate the person approves (a direct writer would have retired the old fact at once)",
       "turns": [
         ["A", "d1-tennis", "I play tennis on Saturdays."],
         ["A", "d2-tennis", "I don't play tennis any more."]
@@ -47,15 +47,15 @@
       "store": {
         "seed": [["User plays tennis on Saturdays.", "voice_fact"]],
         "proposals": [{"writer": "turn_digest", "fact": "User no longer plays tennis."}],
-        "expect_approved": ["User plays tennis on Saturdays.", "User no longer plays tennis."],
-        "expect_pending": [],
+        "expect_approved": ["User plays tennis on Saturdays."],
+        "expect_pending": ["User no longer plays tennis."],
         "expect_authority": {"User no longer plays tennis.": "user_stated"}
       }
     },
     {
       "id": "A4",
-      "title": "my correction wins, a guess does not",
-      "proves": "after 'I live in Hobart now' the stated move is user_stated; a consolidation pass proposing another city is held as a candidate",
+      "title": "a model-read move and a guess both wait; neither overwrites",
+      "proves": "after 'I live in Hobart now' the turn digest's reading is user_stated_derived and a consolidation guess is inferred: both are held as candidates against the direct 'I live in Dunedin' row",
       "turns": [
         ["A", "d1-home", "I live in Dunedin, by the way."],
         ["A", "d2-home", "Big news - I've moved. I live in Hobart now."]
@@ -67,8 +67,8 @@
           {"writer": "turn_digest", "fact": "User lives in Hobart."},
           {"writer": "consolidation", "fact": "User lives in Perth."}
         ],
-        "expect_approved": ["User lives in Dunedin.", "User lives in Hobart."],
-        "expect_pending": ["User lives in Perth."],
+        "expect_approved": ["User lives in Dunedin."],
+        "expect_pending": ["User lives in Hobart.", "User lives in Perth."],
         "expect_authority": {"User lives in Hobart.": "user_stated", "User lives in Perth.": "inferred"}
       }
     }

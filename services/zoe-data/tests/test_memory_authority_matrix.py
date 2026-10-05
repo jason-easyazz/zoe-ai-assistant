@@ -74,24 +74,55 @@ def status(svc, mem_id):
     return svc._col.rows[mem_id][1]["status"]
 
 
-def allowed(writer_rank, target_cls):
-    return writer_rank >= ma.USER_RANK or writer_rank >= ma.RANK[target_cls]
+# HAND-WRITTEN policy (review of #1868: a table derived from ma.RANK passes whatever the code
+# says). Writer class -> the target classes it may supersede / archive / contradict.
+_ALL = {"operator", "user_confirmed", "user_stated", "user_stated_derived", "user_unverified",
+        "model_from_turn", "model_from_transcript"}
+OVERRIDES = {
+    "operator": _ALL,
+    "user_confirmed": _ALL,                                   # the review UI / the account
+    "user_stated": _ALL - {"operator"},                       # a spoken sentence never undoes an operator's cleanup
+    "user_stated_derived": {"user_stated_derived", "user_unverified", "model_from_turn", "model_from_transcript"},
+    "user_unverified": {"user_unverified", "model_from_turn", "model_from_transcript"},
+    "model_from_turn": {"model_from_turn", "model_from_transcript"},
+    "model_from_transcript": {"model_from_transcript"},
+}
+
+
+def allowed(writer_cls, target_cls):
+    return target_cls in OVERRIDES[writer_cls]
+
+
+def test_the_numeric_order_and_policy_are_pinned_literally():
+    assert ma.RANK == {"operator": 6, "user_confirmed": 5, "user_stated": 4, "user_stated_derived": 3,
+                       "user_unverified": 2, "model_from_turn": 1, "model_from_transcript": 0}
+    assert ma.USER_RANK == 4 and ma.DERIVED_RANK == 3
+    assert ma.CLASSES == ("operator", "user_confirmed", "user_stated", "user_stated_derived",
+                          "user_unverified", "model_from_turn", "model_from_transcript")
+    for w in _ALL:                                            # the code agrees with the table, cell by cell
+        for t in _ALL:
+            assert ma.may_override(ma.RANK[w], t) is allowed(w, t), (w, t)
+    # the headline cells, spelled out
+    assert not allowed("user_stated", "operator") and not allowed("model_from_turn", "user_confirmed")
+    assert not allowed("model_from_transcript", "user_stated") and not allowed("user_stated_derived", "user_stated")
+    assert not allowed("user_unverified", "user_stated_derived") and allowed("user_stated_derived", "model_from_turn")
 
 
 # (label, path, actor, extra kwargs, resulting writer class)
 EDIT_PATHS = [
     ("W1 regex extractor", "chat_regex", {"source_excerpt": SAID}, ma.USER_STATED),
-    ("W2 turn digest, user's words support it", "turn_digest", {"source_excerpt": SAID}, ma.USER_STATED),
+    ("W2 turn digest, user's words support it", "turn_digest", {"source_excerpt": SAID}, ma.USER_STATED_DERIVED),
     ("W2 turn digest, nothing supports it", "turn_digest", {}, ma.MODEL_FROM_TURN),
     ("W4 LLM person extractor (own origin), supported", "conversation",
-     {"origin": "person_extractor_llm", "source_excerpt": SAID}, ma.USER_STATED),
+     {"origin": "person_extractor_llm", "source_excerpt": SAID}, ma.USER_STATED_DERIVED),
     ("W4 LLM person extractor (own origin), unsupported", "conversation",
      {"origin": "person_extractor_llm"}, ma.MODEL_FROM_TURN),
-    ("W6a/b nightly digest, verbatim user quote", "digest", {"anchor_text": SAID}, ma.USER_STATED),
+    ("W6a/b nightly digest, verbatim user quote", "digest", {"anchor_text": SAID}, ma.USER_STATED_DERIVED),
     ("W6a/b nightly digest, no user evidence", "digest", {}, ma.MODEL_FROM_TRANSCRIPT),
     ("W8 idle consolidation, no user evidence", "idle_consolidation", {}, ma.MODEL_FROM_TRANSCRIPT),
     ("W10 weekly contradiction judge", "consolidation", {}, ma.MODEL_FROM_TRANSCRIPT),
     ("W20 voice teach", "voice_fact", {"source_excerpt": SAID}, ma.USER_STATED),
+    ("W22 MCP edit (acting for the account)", UID, {"origin": "mcp"}, ma.MODEL_FROM_TURN),
     ("W24 the account editing its own row", UID, {}, ma.USER_CONFIRMED),
     ("operator tool", "identity_audit", {}, ma.OPERATOR),
     ("unknown writer (fail-closed)", "some_new_writer", {}, ma.MODEL_FROM_TRANSCRIPT),
@@ -103,7 +134,7 @@ EDIT_PATHS = [
 def test_edit_matrix(svc, label, actor, kw, wcls, target):
     old = seed(svc, target)
     got = asyncio.run(svc.review(old, decision="edit", edits=NEW, actor=actor, **kw))
-    if allowed(ma.RANK[wcls], target):
+    if allowed(wcls, target):
         assert got is not None and status(svc, old) == "superseded", (label, target)
         nm = got.metadata
         assert nm["origin"] == (kw.get("origin") or actor) and nm["authority_class"] == wcls
@@ -112,7 +143,7 @@ def test_edit_matrix(svc, label, actor, kw, wcls, target):
         assert got is None and status(svc, old) == "approved", (label, target)
         cands = asyncio.run(svc.list_by_status(user_id=UID, status="disputed"))
         assert [c.text for c in cands] == [NEW] and cands[0].metadata["contradicts_id"] == old
-        assert cands[0].metadata["authority"] == ma.INFERRED
+        assert cands[0].metadata["authority_class"] == wcls
 
 
 @pytest.mark.parametrize("target", CLASSES)
@@ -143,7 +174,7 @@ def test_ingest_matrix(svc, monkeypatch, actor, wcls, target):
     old = seed(svc, target)
     ref = asyncio.run(svc.ingest(NEW, user_id=UID, source=actor, status="approved"))
     assert ref.metadata["authority_class"] == wcls
-    want_ok = allowed(ma.RANK[wcls], target)
+    want_ok = allowed(wcls, target)
     assert (ref.metadata["status"] == "approved") == want_ok, (actor, target)
     assert status(svc, old) == "approved"                        # ingest never retires anything
     if not want_ok:
@@ -162,7 +193,7 @@ def test_supersede_by_matrix(svc, monkeypatch, new_cls, target):
     old = seed(svc, target, tag="old")
     new = seed(svc, new_cls, text="User's dog is named Rex.", tag="new")
     done = asyncio.run(svc.supersede_by(UID, old, new, actor="implicit_supersede"))
-    assert done is allowed(ma.RANK[new_cls], target), (new_cls, target)
+    assert done is allowed(new_cls, target), (new_cls, target)
     assert status(svc, old) == ("superseded" if done else "approved")
     # negative control
     monkeypatch.setenv("ZOE_MEMORY_AUTHORITY", "off")
@@ -177,8 +208,7 @@ def test_archive_matrix_decay_and_batch_passes(svc, monkeypatch, actor, target):
     rows of their own rank or lower (a never-recalled row the user said is never decayed)."""
     old = seed(svc, target)
     got = asyncio.run(svc.review(old, decision="archive", actor=actor))
-    wrank = ma.RANK[ma.writer_class(actor)]
-    assert (got is not None) is allowed(wrank, target), (actor, target)
+    assert (got is not None) is allowed(ma.writer_class(actor), target), (actor, target)
     assert status(svc, old) == ("archived" if got is not None else "approved")
     monkeypatch.setenv("ZOE_MEMORY_AUTHORITY", "off")
     again = seed(svc, target, tag="b")
@@ -259,13 +289,14 @@ def test_fact_anchor(item, want):
 def test_a_hallucinated_quote_leaves_the_fact_inferred_but_a_verbatim_one_earns_user_stated(svc):
     seed(svc, ma.USER_STATED, text="User lives in Geraldton.", tag="h")
     bad = {"fact": "User lives in Hobart.", "quote": "I live in Hobart"}      # model made it up
-    good = {"fact": "User lives in Hobart.", "quote": "I moved to Hobart last week"}
+    good = {"fact": "User lives in Hobart now.", "quote": "I moved to Hobart last week"}
     r1 = asyncio.run(svc.ingest(bad["fact"], user_id=UID, source="digest", status="approved",
                                 anchor_text=memory_digest.fact_anchor(bad, USER_TURNS) or ""))
     assert r1.metadata["status"] == "disputed"
     r2 = asyncio.run(svc.ingest(good["fact"], user_id=UID, source="digest", status="approved",
                                 user_turn_id="x", anchor_text=memory_digest.fact_anchor(good, USER_TURNS) or ""))
-    assert r2.metadata["status"] == "approved" and r2.metadata["authority_class"] == ma.USER_STATED
+    # a verbatim quote earns the DERIVED class: it still cannot overwrite the direct row
+    assert r2.metadata["authority_class"] == ma.USER_STATED_DERIVED and r2.metadata["status"] == "disputed"
 
 
 def test_the_extraction_prompt_asks_for_the_users_own_words():

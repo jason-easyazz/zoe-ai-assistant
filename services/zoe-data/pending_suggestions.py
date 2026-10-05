@@ -463,10 +463,22 @@ async def mark_resolved(suggestion_id: str, user_id: str) -> bool:
         async with get_db_ctx() as db:
             rows = await db.fetch(
                 "UPDATE pending_suggestions SET resolved = 1"
-                " WHERE id = $1 AND user_id = $2 AND resolved = 0 RETURNING id",
+                " WHERE id = $1 AND user_id = $2 AND resolved = 0"
+                " RETURNING id, action_type, pre_filled_slots",
                 suggestion_id,
                 user_id,
             )
+        for r in rows:
+            if r["action_type"] == "memory_dispute":
+                # a dismissal answers "which is right?" with "the old one": reject the candidate
+                import memory_disputes
+
+                try:
+                    cid = json.loads(r["pre_filled_slots"] or "{}").get("candidate_id") or ""
+                except json.JSONDecodeError:
+                    cid = ""
+                if cid:
+                    await memory_disputes.resolve(user_id, cid, accept=False)
         return bool(rows)
     except Exception as exc:
         logger.debug("pending_suggestions.mark_resolved failed: %s", exc)
@@ -690,6 +702,16 @@ async def _execute_action(conn, action: str, slots: dict, user_id: str) -> dict:
             visibility,
         )
         return {"person_id": pid, "name": name, "relationship": relationship, "created": True}
+
+    if action == "memory_dispute":
+        # The person said YES to "earlier you told me X, I've just heard Y - which is right?":
+        # approving the held-back candidate is the correction (memory_disputes.resolve).
+        import memory_disputes
+
+        ok = await memory_disputes.resolve(user_id, str(slots.get("candidate_id") or ""), accept=True)
+        if not ok:
+            raise ValueError("dispute_not_applied")
+        return {"candidate_id": slots.get("candidate_id"), "applied": True}
 
     raise ValueError(f"unsupported_action:{action}")
 

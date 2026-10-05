@@ -9,7 +9,7 @@ user said. Rows written before that have no stamp; the live code DERIVES one for
 SAME rule in bulk so the operator can see the counts first and, if wanted, persist the stamps.
 
 The backfill rule (one function, ``memory_authority.legacy_class_basis``; classes are ranked
-operator 5 > user_confirmed 4 > user_stated 3 > user_unverified 2 > model_from_turn 1 >
+operator 6 > user_confirmed 5 > user_stated 4 > user_stated_derived 3 > user_unverified 2 > model_from_turn 1 >
 model_from_transcript 0, and an UNKNOWN source is rank 0):
 
   reviewed_by a MODEL (digest / consolidation / turn_digest / ...)  -> model_* (the text is
@@ -17,8 +17,8 @@ model_from_transcript 0, and an UNKNOWN source is rank 0):
   source on the user allow-list (voice_fact, chat_regex, notes, ...)-> user_stated
   source review_ui / an operator tool                               -> user_confirmed / operator
   source a model writer that read the user's turn (turn_digest,
-        digest, idle_consolidation, ...)                            -> user_stated only if the
-        stored ``source_excerpt`` supports the text, else model_from_turn / model_from_transcript
+        digest, idle_consolidation, ...)                            -> user_stated_derived only if
+        the stored ``source_excerpt`` supports the text, else model_from_turn / model_from_transcript
   reviewed_by a person (approved a model row)                       -> user_confirmed
   any other source                                                  -> model_from_transcript
 
@@ -56,7 +56,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "services" / "zoe-d
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 import memory_authority as ma  # noqa: E402
 
-DEFAULT_PALACE = "~/.mempalace"
+import os  # noqa: E402
+
+DEFAULT_PALACE = os.environ.get("MEMPALACE_DATA_DIR") or "~/.mempalace"  # the service honours it too
 DRAWERS = "mempalace_drawers"
 
 
