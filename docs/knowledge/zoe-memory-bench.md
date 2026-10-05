@@ -9,7 +9,7 @@ timestamp: 2026-10-05T18:00:00Z
 # Zoe Memory Bench (ZMB) - foundation
 
 Code: `scripts/perf/zmb/` (package), `scripts/perf/zoe_memory_bench.py` (entry point).
-Tests: `tests/unit/test_zmb_scorers.py`, `tests/unit/test_zmb_runner.py`, `services/zoe-data/tests/test_zmb_lab.py` (all `ci_safe`).
+Tests: `tests/unit/test_zmb_scorers.py`, `tests/unit/test_zmb_runner.py`, `services/zoe-data/tests/test_zmb_lab.py`, and for the bake-off `tests/unit/test_zmb_bakeoff.py`, `test_zmb_hindsight_arm.py`, `test_zmb_embed_shim.py` (all `ci_safe`).
 Design record: `/home/zoe/.zoe/agent-tools/research-drop/zoe-memory-bench-design-2026-10-05.md`; the bake-off it serves:
 `/home/zoe/.zoe/agent-tools/research-drop/memory-system-decision-2026-10-05.md` section 6. This is build-plan "PR 3" (the
 foundation); the live driver (synthetic store routes, the chat tier, Telegram, the timer) is not in it.
@@ -224,12 +224,12 @@ read the store through this export, never a vector index.
 |---|---|---|
 | `Z0` | **implemented** | the current `MemoryService` + extractors + forget handler + nightly digest, in-process over the lab store |
 | `Z0-off` | **implemented** | Z0 with every control off: the negative control (the S1 signature must appear). `--arm Z0-off` = `--control off` |
-| `H0` / `H1` / `H2` | **stub** | Hindsight 0.10.2: no Zoe layer / verbatim, observations off, Zoe gate + forget ledger / concise + observations, fenced consolidation. Every call raises `NotImplementedError` with the install hint (py3.12 venv under `/home/zoe/.zoe/bakeoff-2026-10/`, `hindsight-api-slim==0.10.2`, scratch Postgres `pgvector/pgvector:pg17` on :55432 and the clone brain on :11500, in an operator-approved brain-stop window) |
+| `H0` / `H1` / `H2` | **implemented over Hindsight's HTTP API** (`arms/hindsight.py`; never run against the real server yet) | Hindsight 0.10.2: no Zoe layer / verbatim, observations off, Zoe gate + forget ledger / concise + observations, fenced consolidation (consolidate per authority tag scope). One bank per synthetic user, tags carry the provenance class. The Zoe layer reuses the service's own modules (`memory_authority`, `identity_facts`, `memory_forgotten`, `MemoryService._affect_allowed`, `memory_quality`, `memory_extractor`), each protection with a named switch for a negative control; it is counted by `zoe_layer_lines()` for G3. With no reachable server every cell SKIPs with the reason (never a pass). `as_of` raises `NotImplementedError`: 0.10.2 has no belief-time read. Proven red-before-green against `arms/fake_hindsight.py`, a test double of the documented API shapes, in `tests/unit/test_zmb_hindsight_arm.py`. The real server runs only inside the owner's window: `docs/knowledge/bakeoff-howto.md` |
 | `G` | **stub** | Graphiti as a library with no Graphiti LLM: Zoe's extractors build `EntityNode` / `EntityEdge`, `add_triplet`, the authority wrapper around `resolve_edge_contradictions`. `NotImplementedError` with the install hint |
 | `MV` | **implemented** (needs the bake-off venv) | MemPalace 3.10.0 as a LIBRARY (`get_collection` + `upsert/query/get/delete`): the VERBATIM tier alone. Real store = scratch palace + scrubbed HOME; without the library every call raises `NotImplementedError` with the install hint (SKIP). `InMemoryVerbatimStore` is a TEST DOUBLE for the CI lane |
-| `HM` | **glue implemented, Hindsight tier STUB** | Hindsight (distilled) + MemPalace (verbatim) composed: one write gate in front of both tiers, one forget ledger, authority order at recall, evidence frame, voice-lane cache, per-tier failure isolation. `--arm HM` on the generic spec SKIPs with the Hindsight install hint; its OWN cells are `hm_cells.py` (below) |
+| `HM` | **glue implemented; its Hindsight tier (`HindsightDistilledTier`) is still a stub, only the standalone H arms exist** | Hindsight (distilled) + MemPalace (verbatim) composed: one write gate in front of both tiers, one forget ledger, authority order at recall, evidence frame, voice-lane cache, per-tier failure isolation. `--arm HM` on the generic spec SKIPs with the Hindsight install hint; its OWN cells are `hm_cells.py` (below) |
 
-A stub arm run is `status=skip` (every cell SKIP with the install hint), never a pass. The bake-off runner fills an arm in
+A stub arm run, or an H arm with no server, is `status=skip` (every cell SKIP with the reason), never a pass. The bake-off runner fills an arm in
 without touching a scorer: implement the five calls against the system, report rows in the export shape, run the same specs.
 The instrument (controls, scorers, cells) is Z0's lab and does not change per arm.
 
@@ -344,10 +344,20 @@ palace, not sit beside it (two stores for one job is net negative). **H1 is the 
 beyond the Wilson interval on at least one of {exact-quote hit@5 at 100 filler, tier-down answered, recall of a fact said in the last turn}
 and passes every HM cell at 0 violations.
 
+## The bake-off runner (added 2026-10-06)
+
+`scripts/perf/zmb/bakeoff_window.sh` is the owner's one command (`docs/knowledge/bakeoff-howto.md`): preflight (lock, quiet panel, memory), scratch Postgres,
+the loopback embeddings shim (`embed_shim.py`: OpenAI-compatible `/v1/embeddings` over the router's bge-small ONNX, 127.0.0.1:11501, no downloads, <= 150 MB),
+the Gemma clone generated from the live unit, `hindsight-api` with the loopback env, then Z0 / Z0-off / H1 / H2 / H0 over three seeds with the G0-G3 inputs
+recorded per arm, and an always-run restore of the live brain. `bakeoff_gates.py` is the decision rule as pure functions (thresholds pinned by a test;
+`NA` is never a pass; the verdict is capped at `ADOPT_CANDIDATE` because A3, A8, poisoning, C and D are not built). Tests: `tests/unit/test_zmb_bakeoff.py`
+(every service command shimmed: lock held refuses, panel not quiet waits, low memory aborts and restores, any failure restores),
+`tests/unit/test_zmb_hindsight_arm.py`, `tests/unit/test_zmb_embed_shim.py`.
+
 ## Not in this PR (the build plan continues)
 
 Synthetic store routes in zoe-data (`synthetic-ingest`, `synthetic-digest`, `capture-synthetic`) and the live driver that uses
 them; the chat tier and the local judge with its calibration set; temporal, recall (hit@k at 30/100/300 filler) and poisoning
 axes; provenance (A3) and graph-edge (A8) cells; the Telegram one-liner, the 05:15 timer and `non_pass_streak`; the
-LongMemEval_S retrieval-only anchor; the `--claim-report` renderer; the Hindsight and Graphiti arms themselves. Everything here
+LongMemEval_S retrieval-only anchor; the `--claim-report` renderer; the Graphiti arm; Hindsight's own HM distilled tier. Everything here
 is lab-only: the live service was not touched.

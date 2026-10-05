@@ -158,6 +158,7 @@ aider_env/
 !scripts/setup/lib/*.sh
 !scripts/setup/jetson/*.sh
 !scripts/train/*.sh
+!scripts/perf/zmb/*.sh
 !labs/needle-benchmark/setup.sh
 !RESTART_SERVICES.sh
 !start-zoe.sh

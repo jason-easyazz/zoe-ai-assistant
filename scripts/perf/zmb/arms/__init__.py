@@ -7,9 +7,9 @@ from .base import Arm, IngestReport, Turn
 ARMS = {
     "Z0": "the current MemoryService, in-process over the lab store (implemented)",
     "Z0-off": "Z0 with every control switched off: the negative control (implemented)",
-    "H0": "Hindsight concise + observations, no Zoe layer (STUB)",
-    "H1": "Hindsight verbatim, observations off, Zoe layer on (STUB)",
-    "H2": "Hindsight concise + observations, fenced consolidation, Zoe layer on (STUB)",
+    "H0": "Hindsight concise + observations, no Zoe layer (implemented over its HTTP API; needs the bake-off server, else every cell SKIPs)",
+    "H1": "Hindsight verbatim, observations off, Zoe layer on (implemented; needs the bake-off server)",
+    "H2": "Hindsight concise + observations, fenced consolidation, Zoe layer on (implemented; needs the bake-off server)",
     "G": "Graphiti add_triplet only + authority wrapper (STUB)",
     "MV": "MemPalace 3.10.0 as a library: the VERBATIM tier alone (needs the bake-off venv; else every cell SKIPs)",
     "HM": "Hindsight (distilled tier: STUB) + MemPalace (verbatim tier) combined; its own cells: zmb/hm_cells.py",
