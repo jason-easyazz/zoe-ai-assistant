@@ -108,7 +108,24 @@ jobs:
           )" || exit 1
           echo "::add-mask::${AUTH_HEADER}"
           # Record the currently-deployed SHA so later steps can detect what changed.
-          echo "OLD_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          # The SHA must come from the SAME checkout the later diffs run in (the live
+          # checkout), or a later `git diff $OLD_SHA HEAD` fails with "bad object" (sig #43).
+          echo "OLD_SHA=$(git -C "${ZOE_CHECKOUT:-/home/zoe/assistant}" rev-parse HEAD)" >> "$GITHUB_ENV"
+          # DEPLOY_BASE_SHA = what the last SUCCESSFUL deploy shipped, read from a durable
+          # marker that the final step of that deploy wrote (sig #43 follow-up, 2026-10-05).
+          # It is the baseline for the docs-only restart skip. The marker (not the live
+          # HEAD) is the authority: a deploy that failed after the reset leaves the tree
+          # ahead of what actually restarted, and diffing from the marker still sees that
+          # change. One-time BOOTSTRAP: no marker yet -> the live HEAD before this fetch.
+          DEPLOY_STATE_DIR="${ZOE_DEPLOY_STATE_DIR:-$HOME/.zoe/deploy}"
+          if [ -s "${DEPLOY_STATE_DIR}/last-deployed-sha" ]; then
+            DEPLOY_BASE_SHA="$(head -n1 "${DEPLOY_STATE_DIR}/last-deployed-sha" | tr -d '[:space:]')"
+            echo "DEPLOY_BASE_SHA=${DEPLOY_BASE_SHA} (from ${DEPLOY_STATE_DIR}/last-deployed-sha)"
+          else
+            DEPLOY_BASE_SHA="$(git rev-parse HEAD)" || DEPLOY_BASE_SHA=""
+            echo "no last-deployed-sha marker yet — bootstrapping DEPLOY_BASE_SHA=${DEPLOY_BASE_SHA} from the live HEAD"
+          fi
+          echo "DEPLOY_BASE_SHA=${DEPLOY_BASE_SHA}" >> "$GITHUB_ENV"
           # Retry the fetch: this checkout's .git is shared with other tooling, so a
           # concurrent `git fetch` can lose the ref-lock race on refs/remotes/origin/main
           # ("cannot lock ref ... is at X but expected Y") and fail the whole deploy.
@@ -192,6 +209,9 @@ jobs:
           # concurrent fetch on this shared .git could have advanced to a commit
           # pushed after the gate ran (a silent bypass of the gate above).
           git reset --hard "$target"
+          # What this run is deploying; the last step stamps it into the marker once the
+          # health check has passed.
+          echo "DEPLOY_TARGET_SHA=${target}" >> "$GITHUB_ENV"
 
       # THIS LIST — not services/zoe-data/requirements.txt — is what a deploy
       # actually installs on the box. Nothing in this workflow reads that file
@@ -375,6 +395,12 @@ jobs:
       # XDG_RUNTIME_DIR is required so systemctl --user can reach the user session bus.
       - name: Restart zoe-data (user service)
         run: |
+          # Every other step cd's into the live checkout; this one did not, so its git
+          # commands ran in the runner's WORKSPACE clone (a stale second repo under
+          # _work/) where DEPLOY_BASE_SHA is "not an object" - the skip could never trigger and
+          # a docs merge fell to a restart (or, pre-#1878, to a bogus "docs-only" on
+          # the empty output of a failed diff). Pin the live checkout explicitly.
+          cd "${ZOE_CHECKOUT:-/home/zoe/assistant}"
           export XDG_RUNTIME_DIR="/run/user/$(id -u)"
           # Docs-only merges do not restart the service. Every merge to main used to
           # cold-restart zoe-data (router heads, embedder, chroma caches), which
@@ -382,12 +408,24 @@ jobs:
           # 2026-10-04: a research-record merge mid-probe failed a landing). A merge
           # whose only changes are under docs/ or are Markdown files anywhere has
           # nothing the service loads; everything else keeps the unconditional restart.
-          if [ -n "${OLD_SHA:-}" ] && [ "${OLD_SHA}" != "$(git rev-parse HEAD)" ]; then
-            NON_DOC="$(git diff --name-only "${OLD_SHA}" HEAD | grep -vE '^docs/|\.md$' || true)"
-            if [ -z "${NON_DOC}" ]; then
-              echo "docs-only merge since ${OLD_SHA} — zoe-data not restarted."
-              exit 0
+          # FAIL CLOSED (sig #43, 2026-10-05): the skip applies only when DEPLOY_BASE_SHA (the
+          # last successfully deployed SHA, from the durable marker) is a real
+          # object in the live checkout AND the diff itself succeeds AND it lists nothing outside docs/*.md.
+          # A bad DEPLOY_BASE_SHA or a failed diff used to print nothing, which read as "docs-only"
+          # and left a code merge running on the old process.
+          if [ -n "${DEPLOY_BASE_SHA:-}" ] && [ "${DEPLOY_BASE_SHA}" != "$(git rev-parse HEAD)" ] \
+             && git cat-file -e "${DEPLOY_BASE_SHA}^{commit}" 2>/dev/null; then
+            if CHANGED="$(git diff --name-only "${DEPLOY_BASE_SHA}" HEAD)"; then
+              NON_DOC="$(printf '%s\n' "${CHANGED}" | grep -vE '^docs/|\.md$' || true)"
+              if [ -n "${CHANGED}" ] && [ -z "${NON_DOC}" ]; then
+                echo "docs-only merge since ${DEPLOY_BASE_SHA} — zoe-data not restarted."
+                exit 0
+              fi
+            else
+              echo "diff ${DEPLOY_BASE_SHA}..HEAD failed — restarting zoe-data (fail closed)."
             fi
+          else
+            echo "DEPLOY_BASE_SHA unknown or not an object in this checkout — restarting zoe-data (fail closed)."
           fi
           systemctl --user restart zoe-data.service
           # Record which interpreter actually came up (B0.7: venv 3.12 vs system
@@ -552,3 +590,17 @@ jobs:
           done
           echo "zoe-data failed health check after warmup window (~120s)"
           exit 1
+
+      # Durable "what the last successful deploy shipped" marker - read by the NEXT run's
+      # Pull step as DEPLOY_BASE_SHA (the docs-only restart-skip baseline). Written LAST,
+      # only after the health check passed (the default `if: success()`), atomically, so
+      # a failed or partial deploy never advances it: the next run then diffs from the
+      # last SHA that really came up healthy and cannot skip a restart a code change needs.
+      - name: Record deployed SHA
+        run: |
+          [ -n "${DEPLOY_TARGET_SHA:-}" ] || { echo "no DEPLOY_TARGET_SHA - marker not updated"; exit 0; }
+          DEPLOY_STATE_DIR="${ZOE_DEPLOY_STATE_DIR:-$HOME/.zoe/deploy}"
+          mkdir -p "${DEPLOY_STATE_DIR}"
+          printf '%s\n' "${DEPLOY_TARGET_SHA}" > "${DEPLOY_STATE_DIR}/last-deployed-sha.tmp"
+          mv -f "${DEPLOY_STATE_DIR}/last-deployed-sha.tmp" "${DEPLOY_STATE_DIR}/last-deployed-sha"
+          echo "last-deployed-sha = ${DEPLOY_TARGET_SHA}"

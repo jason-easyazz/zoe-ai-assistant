@@ -1,0 +1,110 @@
+{
+  "spec_version": 1,
+  "axis": "forgetting",
+  "cells": [
+    {
+      "id": "F1.sweep_keeps_the_rest",
+      "title": "'forget everything about X' leaves no approved row naming X and keeps every other person's rows",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["sweep"],
+      "lme_map": "",
+      "note": "drives the REAL memory_forget_entity intent handler (tombstone, search + approved sweep, whole-word match, review(archive)); the household's only way to ask for deletion",
+      "events": [
+        {"text": "User's friend {friend} lives in {home}.", "speaker": "owner_taught"},
+        {"text": "User met {friend} at the harbour last spring.", "speaker": "owner_taught"},
+        {"text": "{friend}'s birthday is {dob_text}.", "speaker": "owner_taught"},
+        {"text": "User's sister {sibling} works at {job}.", "speaker": "owner_taught"},
+        {"text": "User's sister {sibling} likes quiet mornings.", "speaker": "owner_taught"},
+        {"do": "forget", "entity": "{friend}"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "absent", "contains": ["{friend}"], "statuses": ["approved", "pending", "disputed"]},
+          {"op": "count_at_least", "contains": ["{sibling}"], "statuses": ["approved"], "n": 2}
+        ]},
+        {"kind": "recall", "query": "tell me about {friend}", "k": 10, "anti_needles": ["{friend}"]}
+      ]
+    },
+    {
+      "id": "F2.late_writer.<writer>",
+      "title": "a late <writer> pass over a transcript that still names X cannot resurrect X right after the forget",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["tombstone"],
+      "lme_map": "",
+      "note": "chat rows are not erased, so the day's transcript still contains the forgotten name; the in-flight extractor / digest passes run seconds behind the conversation (the 2026-07-13 straggler). The tombstone is the only thing between them and the store",
+      "matrix": {"writer": ["turn_digest", "digest", "idle_consolidation"]},
+      "events": [
+        {"text": "User's friend {friend} lives in {home}.", "speaker": "owner_taught"},
+        {"text": "{friend}'s birthday is {dob_text}.", "speaker": "owner_taught"},
+        {"do": "forget", "entity": "{friend}"},
+        {"text": "okay so that was the plan and then {friend} rang about the weekend and we will see about the shopping later on tonight", "speaker": "system_writer", "writer": "<writer>", "proposes": ["User's friend {friend} is visiting at the weekend.", "{friend}: {dob_text}"], "op": "say"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "absent", "contains": ["{friend}"], "statuses": ["approved", "pending", "disputed"]}
+        ]}
+      ]
+    },
+    {
+      "id": "F3.after_tombstone_ttl",
+      "title": "TARGET: six minutes after the forget (the 300 s tombstone has expired) a digest over the same transcript does not resurrect X",
+      "tier": "store",
+      "kind": "script",
+      "expected": "FAIL",
+      "lme_map": "",
+      "note": "audit F10: the tombstone is an in-process dict with a 300 s TTL and the nightly digest runs hours later, so a forgotten name returns the next night. Measured on a fake clock stepped 360 s. Becomes a hard invariant when a durable forget ledger lands",
+      "events": [
+        {"text": "User's friend {friend} lives in {home}.", "speaker": "owner_taught"},
+        {"do": "forget", "entity": "{friend}"},
+        {"do": "advance_clock", "seconds": 360},
+        {"text": "okay so that was the plan and then {friend} rang about the weekend and we will see about the shopping later on tonight", "speaker": "system_writer", "writer": "digest", "proposes": ["User's friend {friend} is visiting at the weekend."], "op": "say"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "absent", "contains": ["{friend}"], "statuses": ["approved", "pending", "disputed"]}
+        ]}
+      ]
+    },
+    {
+      "id": "F4.reteach_allowed",
+      "title": "sanity: after a forget, the owner explicitly teaching the name again is stored (the user changing their mind beats the guard)",
+      "tier": "store",
+      "kind": "script",
+      "sanity": true,
+      "controls": [],
+      "events": [
+        {"text": "User's friend {friend} lives in {home}.", "speaker": "owner_taught"},
+        {"do": "forget", "entity": "{friend}"},
+        {"text": "User's friend {friend} lives in {lima}.", "speaker": "owner_taught"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "present", "contains": ["{friend}", "{lima}"], "statuses": ["approved"]}
+        ]}
+      ]
+    },
+    {
+      "id": "F.cascade",
+      "title": "forgetting cascades: the portrait, user-model card, open loops, proactive candidates and the people row hold no X",
+      "tier": "full",
+      "skip_reason": "the derived stores live in Postgres (user_portraits, user_model_card, open_loops, proactive_candidates, people): the live driver reads them through the API",
+      "controls": []
+    },
+    {
+      "id": "F.restart_durability",
+      "title": "a forget survives a service restart",
+      "tier": "full",
+      "skip_reason": "a live restart is operator work, not bench work (the tombstone is in-process by design: F3 measures what that costs)",
+      "controls": []
+    },
+    {
+      "id": "F.reply_declines",
+      "title": "asked about X after the forget, the reply declines",
+      "tier": "full",
+      "skip_reason": "needs the brain's reply (chat tier)",
+      "controls": []
+    }
+  ]
+}
