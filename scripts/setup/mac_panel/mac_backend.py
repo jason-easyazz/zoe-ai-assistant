@@ -42,6 +42,48 @@ import wave
 import numpy as np
 
 
+def ensure_tflite_runtime() -> "str | None":
+    """Make ``import tflite_runtime.interpreter`` work on macOS; return who provides it.
+
+    openWakeWord's ONNX backend scores ~0 on macOS ARM64 (openWakeWord issue #336: the
+    ONNX mel-spectrogram model's output distribution differs from the TFLite one the
+    classifiers were trained on; TFLite scores the same audio ~0.998), so the Mac must
+    run the TFLite backend. PyPI's openwakeword 0.6.0 imports ``tflite_runtime`` (Linux
+    wheels only); a newer tree imports ``ai_edge_litert``. Whichever drop-in interpreter
+    is installed (``ai_edge_litert``, else TensorFlow's ``tf.lite``), register it under
+    the ``tflite_runtime`` name - the workaround the issue itself describes. Returns
+    "tflite_runtime" | "ai_edge_litert" | "tensorflow" | None (nothing usable)."""
+    import importlib
+    import sys
+    import types
+    try:
+        importlib.import_module("tflite_runtime.interpreter")
+        return "tflite_runtime"
+    except Exception:
+        pass
+    interpreter = load_delegate = provider = None
+    try:
+        mod = importlib.import_module("ai_edge_litert.interpreter")
+        interpreter, load_delegate, provider = mod.Interpreter, getattr(mod, "load_delegate", None), "ai_edge_litert"
+    except Exception:
+        try:
+            tf = importlib.import_module("tensorflow")
+            interpreter = tf.lite.Interpreter
+            load_delegate = getattr(getattr(tf.lite, "experimental", None), "load_delegate", None)
+            provider = "tensorflow"
+        except Exception:
+            return None
+    pkg = types.ModuleType("tflite_runtime")
+    sub = types.ModuleType("tflite_runtime.interpreter")
+    sub.Interpreter = interpreter
+    if load_delegate is not None:
+        sub.load_delegate = load_delegate
+    pkg.interpreter = sub
+    sys.modules["tflite_runtime"] = pkg
+    sys.modules["tflite_runtime.interpreter"] = sub
+    return provider
+
+
 def db_to_gain(db: float) -> float:
     """Decibels (negative = quieter) -> linear amplitude factor."""
     return 10.0 ** (float(db) / 20.0)
@@ -102,6 +144,12 @@ class MacPlayer:
         self._target = 1.0
         self._step = 0.0
         self._out_rate = self._rate
+        # Open the device HERE, in the caller's thread: a device that cannot be opened
+        # raises OSError out of the constructor, exactly like Popen(["aplay"]) raising
+        # when aplay cannot start. The turn loop already treats that as "nothing played"
+        # (it falls back to the blocking turn and logs) instead of counting the reply as
+        # heard - which is what a worker-side open would have made it do.
+        self._stream = self._open_stream()
         self._thread = threading.Thread(target=self._run, daemon=True, name="mac-player")
         self._thread.start()
 
@@ -248,10 +296,9 @@ class MacPlayer:
         return a.astype(np.int16).tobytes()
 
     def _run(self) -> None:
-        stream = None
+        stream = self._stream
         code = 0
         try:
-            stream = self._open_stream()
             while True:
                 raw = self._next_block()
                 if raw is None:
@@ -264,11 +311,10 @@ class MacPlayer:
             self._backend.note(f"playback failed: {exc}")
             code = 1
         finally:
-            if stream is not None:
-                try:
-                    stream.close()  # PortAudio discards pending buffers on an aborted close
-                except Exception:
-                    pass
+            try:
+                stream.close()  # PortAudio discards pending buffers on an aborted close
+            except Exception:
+                pass
             with self._cond:
                 if self.returncode is None:
                     self.returncode = code
@@ -348,6 +394,28 @@ class MacBackend:
         self._open_lock = threading.Lock()
         self._out_index_resolved = False
         self._out_index: int | None = None
+
+    def wakeword_framework(self) -> str:
+        """openWakeWord inference backend for this platform: "tflite" when a TFLite
+        interpreter can be provided (see ensure_tflite_runtime), else "onnx" - loudly,
+        because ONNX scores ~0 on macOS ARM64 and the wake word will then never fire
+        (use push-to-talk: `mac_virtual_panel.sh ptt`). WAKEWORD_FRAMEWORK=onnx|tflite
+        overrides, for the day upstream fixes the ONNX path."""
+        import os
+        forced = os.environ.get("WAKEWORD_FRAMEWORK", "").strip().lower()
+        if forced in ("onnx", "tflite"):
+            if forced == "tflite":
+                ensure_tflite_runtime()
+            return forced
+        provider = ensure_tflite_runtime()
+        if provider:
+            if self._log is not None:
+                self._log.info("mac backend: wake word on the TFLite backend (provided by %s)", provider)
+            return "tflite"
+        self.note("no TFLite runtime importable (pip install ai-edge-litert==1.4.0): falling back to the ONNX "
+                  "wake-word backend, which scores ~0 on macOS ARM64 (openWakeWord #336) - the wake word "
+                  "will probably never fire. Use push-to-talk: mac_virtual_panel.sh ptt")
+        return "onnx"
 
     # ── PortAudio plumbing ──────────────────────────────────────────────────
     def note(self, msg: str) -> None:

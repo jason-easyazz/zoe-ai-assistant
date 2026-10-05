@@ -259,14 +259,21 @@ def test_a_device_that_refuses_the_rate_is_reopened_at_its_own_rate_and_resample
     assert any("resampling to 48000" in w for w in log.warnings)
 
 
-def test_an_unopenable_device_ends_the_player_with_an_error_not_an_exception():
-    class _Dead(_PA):
+def test_a_write_failure_mid_playback_ends_the_player_with_an_error_not_an_exception():
+    class _Dying(_Stream):
+        def write(self, data):
+            raise OSError(-9988, "Stream closed")
+
+    class _DyingPA(_PA):
         def open(self, **kw):
-            raise OSError(-9996, "Invalid output device")
+            s = _Dying(kw)
+            self.streams.append(s)
+            return s
 
     log = _Log()
-    be, _ = _backend(_Dead(), log=log)
+    be, _ = _backend(_DyingPA(), log=log)
     p = be.start_pcm_stream(24000, 1, 2)
+    p.stdin.write(_pcm(1, 2400))
     assert p.wait(3) == 1
     assert any("playback failed" in w for w in log.warnings)
 
@@ -315,7 +322,7 @@ def test_blocking_play_on_a_dead_output_device_raises_so_preflight_fails(tmp_pat
     with wave.open(str(f), "wb") as wf:
         wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(16000); wf.writeframes(_pcm(1, 640))
     be, _ = _backend(_Dead(), log=_Log())
-    with pytest.raises(OSError, match="audio output failed"):
+    with pytest.raises(OSError):
         be.play_file_blocking(str(f), timeout=3)
 
 
@@ -608,3 +615,140 @@ def test_script_has_no_pi_paths_and_the_deploy_ship_set_is_unchanged():
     deploy = (_SETUP / "deploy-pi-voice.sh").read_text()
     assert "SHIPPED_FILES=(zoe_voice_daemon.py zoe_voice_announce.py pi-requirements.txt)" in deploy
     assert "mac_backend" not in deploy and "mac_panel" not in deploy  # the Pi ships nothing new
+
+
+# ── review round 3: player open failure, wake-word backend ───────────────────
+
+def test_a_device_that_cannot_open_raises_from_the_constructor_not_later():
+    """Codex finding: the stream was opened in the worker, so the constructor returned a
+    live-looking player for a dead device and the turn loop counted the reply as played.
+    Now start_pcm_stream raises, like Popen(["aplay"]) does when aplay cannot start."""
+    class _Dead(_PA):
+        def open(self, **kw):
+            raise OSError(-9996, "Invalid output device")
+
+    be, _ = _backend(_Dead(), log=_Log())
+    with pytest.raises(OSError, match="Invalid output device"):
+        be.start_pcm_stream(24000, 1, 2)
+    # control: a healthy device returns a player whose stream is already open
+    be2, pa2 = _backend()
+    p = be2.start_pcm_stream(24000, 1, 2)
+    assert len(pa2.streams) == 1
+    p.kill()
+
+
+def test_wakeword_framework_prefers_tflite_and_shims_the_runtime(monkeypatch):
+    for k in [k for k in sys.modules if k.startswith(("tflite_runtime", "ai_edge_litert"))]:
+        monkeypatch.delitem(sys.modules, k)
+    litert = types.ModuleType("ai_edge_litert")
+    interp = types.ModuleType("ai_edge_litert.interpreter")
+
+    class Interpreter:  # stands in for the real drop-in
+        pass
+
+    interp.Interpreter = Interpreter
+    interp.load_delegate = lambda *a: None
+    litert.interpreter = interp
+    monkeypatch.setitem(sys.modules, "ai_edge_litert", litert)
+    monkeypatch.setitem(sys.modules, "ai_edge_litert.interpreter", interp)
+    monkeypatch.delenv("WAKEWORD_FRAMEWORK", raising=False)
+    be, _ = _backend()
+    assert be.wakeword_framework() == "tflite"
+    import tflite_runtime.interpreter as shim  # what openWakeWord 0.6.0 imports
+    assert shim.Interpreter is Interpreter
+    monkeypatch.delitem(sys.modules, "tflite_runtime")
+    monkeypatch.delitem(sys.modules, "tflite_runtime.interpreter")
+
+
+def test_wakeword_framework_without_any_tflite_falls_back_loudly(monkeypatch):
+    import builtins
+    real_import = builtins.__import__
+
+    def _block(name, *a, **k):
+        if name.split(".")[0] in ("tflite_runtime", "ai_edge_litert", "tensorflow"):
+            raise ImportError(name)
+        return real_import(name, *a, **k)
+
+    for k in [k for k in sys.modules if k.startswith(("tflite_runtime", "ai_edge_litert", "tensorflow"))]:
+        monkeypatch.delitem(sys.modules, k)
+    monkeypatch.setattr(builtins, "__import__", _block)
+    monkeypatch.delenv("WAKEWORD_FRAMEWORK", raising=False)
+    log = _Log()
+    be, _ = _backend(log=log)
+    assert be.wakeword_framework() == "onnx"
+    assert any("openWakeWord #336" in w and "push-to-talk" in w for w in log.warnings)
+    monkeypatch.setenv("WAKEWORD_FRAMEWORK", "onnx")
+    assert _backend()[0].wakeword_framework() == "onnx"
+
+
+@pytest.mark.parametrize("top,ok,needle", [(0.998, True, "scoring OK"), (0.2, True, "WEAK"),
+                                           (0.00001, False, "#336"), (0.0, False, "DEAD")])
+def test_classify_wake_score(top, ok, needle):
+    got_ok, why = pre.classify_wake_score(top, "onnx")
+    assert got_ok is ok and needle in why
+
+
+def _clip(path, rate=16000, n=16000):
+    import wave
+    with wave.open(str(path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(rate)
+        wf.writeframes(_pcm(500, n))
+
+
+class _ScoringModel:
+    """Stands in for openwakeword.model.Model: records the framework, scores by it."""
+    seen: list = []
+
+    def __init__(self, wakeword_models, inference_framework):
+        type(self).seen.append((tuple(wakeword_models), inference_framework))
+        self.fw = inference_framework
+
+    def predict(self, chunk):
+        assert len(chunk) == 1280
+        return {"hey_mycroft_v0.1": 0.99 if self.fw == "tflite" else 1e-5}
+
+
+class _FwBackend:
+    def __init__(self, fw):
+        self.fw = fw
+
+    def wakeword_framework(self):
+        return self.fw
+
+
+def test_wake_preflight_passes_on_tflite_and_fails_loudly_on_dead_onnx(tmp_path):
+    clip = tmp_path / "c.wav"
+    _clip(clip)
+    env = {"WAKEWORD_TEST_CLIP": str(clip)}
+    ok, why = pre.check_wakeword(env, backend=_FwBackend("tflite"), model_cls=_ScoringModel)
+    assert ok and "0.99" in why and _ScoringModel.seen[-1] == (("hey_mycroft",), "tflite")
+    ok, why = pre.check_wakeword(env, backend=_FwBackend("onnx"), model_cls=_ScoringModel)
+    assert not ok and "DEAD" in why and "push-to-talk" in why
+    assert pre.check_wakeword({}, backend=_FwBackend("tflite"), model_cls=_ScoringModel)[0] is False
+    bad = tmp_path / "bad.wav"
+    _clip(bad, rate=44100)
+    ok, why = pre.check_wakeword({"WAKEWORD_TEST_CLIP": str(bad)}, backend=_FwBackend("tflite"),
+                                 model_cls=_ScoringModel)
+    assert not ok and "16 kHz" in why
+
+
+def test_wakeword_requirements_pin_a_macos_arm64_wheel_and_are_installed_separately():
+    text = (_SETUP / "mac-requirements-wakeword.txt").read_text()
+    assert re.search(r"^ai-edge-litert==1\.4\.0$", text, flags=re.M)
+    sh = _SCRIPT.read_text()
+    assert "mac-requirements-wakeword.txt" in sh and "hey_mycroft_test.wav" in sh and '"hey_mycroft"' in sh
+
+
+def test_ptt_posts_activate_once_per_enter(tmp_path):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    log = tmp_path / "curl.log"
+    fake = bindir / "curl"
+    fake.write_text(f'#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "{log}"\n')
+    fake.chmod(0o755)
+    r = _sh("ptt", home=tmp_path, stdin="\n\n",
+            env_extra={"PATH": f"{bindir}:{os.environ['PATH']}", "HEALTH_PORT": "7788"})
+    assert r.returncode == 0
+    assert log.read_text().splitlines() == ["-fsS -X POST http://127.0.0.1:7788/activate"] * 2

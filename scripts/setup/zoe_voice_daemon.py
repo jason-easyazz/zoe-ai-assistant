@@ -429,6 +429,9 @@ class _PiBackend:
     def local_tts_cmd(self, text: str) -> list:
         return ["espeak-ng", "-s", "140", "-p", "44", text]
 
+    def wakeword_framework(self) -> str:
+        return "onnx"
+
     def make_ducker(self, proc):
         return _SinkInputDucker(proc.pid)
 
@@ -2515,11 +2518,10 @@ def _feed_pcm_chunk(aplay, wav_bytes: bytes):
         return aplay
     pcm = _trim_chunk_silence(pcm, rate, ch, width)
     if aplay is None:
-        try:
-            aplay = _PLATFORM.start_pcm_stream(rate, ch, width)
-        except NotImplementedError as exc:  # a Mac player that cannot take this PCM format
-            log.warning("TTS chunk not playable on this platform: %s", exc)
-            return None
+        # A player that cannot start raises (Popen: FileNotFoundError; Mac: OSError /
+        # NotImplementedError). _do_single_turn_stream treats that as "nothing played"
+        # and falls back to the blocking turn, instead of counting the reply as heard.
+        aplay = _PLATFORM.start_pcm_stream(rate, ch, width)
         _register_tts_process(aplay)
         if BARGE_DUCK_ENABLED:
             _PLAYOUT.reset()
@@ -3475,10 +3477,14 @@ def main():
         sys.exit(1)
 
     log.info("Loading wake word model...")
-    custom_model = os.path.join(os.path.dirname(__file__), "hey_zoe.onnx")
+    oww_framework = _PLATFORM.wakeword_framework()  # "onnx" on the Pi, always
+    # The custom model is a framework-specific file: hey_zoe.onnx for ONNX (the Pi),
+    # hey_zoe.tflite when the Mac runs the TFLite backend.
+    custom_name = "hey_zoe.onnx" if oww_framework == "onnx" else "hey_zoe." + oww_framework
+    custom_model = os.path.join(os.path.dirname(__file__), custom_name)
     wake_phrase = "Hey Zoe"
     # Optional Speex NS support: only enable if dependency is available.
-    oww_kwargs = {"inference_framework": "onnx"}
+    oww_kwargs = {"inference_framework": oww_framework}
     try:
         import speexdsp_ns  # type: ignore  # noqa: F401
         oww_kwargs["enable_speex_noise_suppression"] = True
@@ -3498,9 +3504,9 @@ def main():
         )
         wake_phrase = "Hey Jarvis"
         log.warning(
-            "Custom hey_zoe.onnx not found — using bundled 'hey_jarvis'. "
-            "Say clearly: **Hey Jarvis** (not Hey Zoe). Place hey_zoe.onnx in %s to change.",
-            os.path.dirname(__file__),
+            "Custom %s not found — using bundled 'hey_jarvis'. "
+            "Say clearly: **Hey Jarvis** (not Hey Zoe). Place %s in %s to change.",
+            custom_name, custom_name, os.path.dirname(__file__),
         )
     os.environ["_ZOE_WAKE_PHRASE_LOG"] = wake_phrase
 

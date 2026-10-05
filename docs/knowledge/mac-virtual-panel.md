@@ -21,7 +21,7 @@ proven only against fakes (§9).
 
 | Tests | Does NOT test |
 |---|---|
-| openWakeWord ONNX wake word (`hey_jarvis`, or `hey_zoe` if you supply the model) | the real duck: `pactl set-sink-input-volume` on a PulseAudio sink-input (the Mac ducks an in-process gain instead, §6) |
+| openWakeWord wake word (`hey_jarvis`, or `hey_zoe` if you supply a `.tflite` build) - on the TFLite backend, see "The wake word on Apple silicon" | the real duck: `pactl set-sink-input-volume` on a PulseAudio sink-input (the Mac ducks an in-process gain instead, §6) |
 | mic capture, Silero endpointing, WAV upload to `/api/voice/*` (STT) | face ID (`zoe_face_id.py` is a separate Pi service; nothing here runs it) |
 | the reply stream, sentence-gapless TTS playback, follow-up listening, conversation mode | AirPlay-2 "Zoe Panel" output (shairport-sync + nqptp are Pi services) |
 | the announce poller (`/api/voice/announcements`, played-ACK) | the Jabra/PanaCast USB-power trap (a Mac has none of that topology) |
@@ -59,6 +59,29 @@ checked against the pre-change file (7 call sites x {`default`, `hw:2,0`}: ident
 the golden values. The Mac module is loaded by path only when asked for, so `deploy-pi-voice.sh` ships nothing
 new (`SHIPPED_FILES` unchanged).
 
+### The wake word on Apple silicon (known limitation, mitigated)
+
+openWakeWord's **ONNX** backend - the one the Pi uses and the daemon hard-codes there - scores ~1e-5 on macOS ARM64 for audio its
+**TFLite** backend scores ~0.998 (openWakeWord issue #336, fetched 2026-10-05: the ONNX mel-spectrogram model's output distribution differs
+from the one the classifiers were trained on). The daemon runs, the mic is fine, and the wake word silently never fires. So on `mac`:
+
+* The daemon picks the **TFLite** backend (`_PLATFORM.wakeword_framework()`; the Pi's is always `onnx`, byte-identical). PyPI's `openwakeword`
+  0.6.0 pulls `tflite-runtime` on Linux only, so `mac_backend.ensure_tflite_runtime()` registers whichever drop-in interpreter is installed
+  (`ai_edge_litert`, else TensorFlow's `tf.lite`) under the `tflite_runtime` name - the workaround the issue itself describes.
+  `scripts/setup/mac-requirements-wakeword.txt` pins `ai-edge-litert==1.4.0` (per PyPI the newest release with `macosx_12_0_arm64` wheels,
+  cp310-cp312; 2.x had none) and is installed **separately**, so a missing wheel is a loud warning, not a failed install. `WAKEWORD_FRAMEWORK=onnx|tflite`
+  overrides. openWakeWord falls back to ONNX with only a log warning when it finds no TFLite runtime, which is why the next point exists.
+* **`preflight` scores a real clip and FAILS if the wake word is dead**: it feeds openWakeWord's own `hey_mycroft` test clip (downloaded by `install` to
+  `~/.zoe-virtual-panel/wakeword_test/`) through the exact backend the daemon will use; top score >= 0.5 passes, 0.05-0.5 warns (weak), < 0.05 fails with the
+  #336 diagnosis. `run` runs it and stops on FAIL.
+* **Push-to-talk fallback**: `bash scripts/setup/mac_virtual_panel.sh run --skip-preflight`, then in a second terminal `... ptt` and press Enter to start a
+  turn (it POSTs `http://127.0.0.1:7777/activate`, the same trigger the touch page's orb-tap uses; with no `Origin` header the Mac guard lets it through).
+  Equivalent by hand: `curl -X POST http://127.0.0.1:7777/activate`.
+* **Custom "Hey Zoe"**: the Pi's `hey_zoe.onnx` is an ONNX file and cannot be used on the TFLite backend. The Mac daemon looks for `scripts/setup/hey_zoe.tflite`
+  (`HEY_ZOE_TFLITE=... install` copies it) and otherwise uses bundled `hey_jarvis`. Whether a `.tflite` build of `hey_zoe` exists is not known to this repo.
+* **[unverified]**: that `ai-edge-litert==1.4.0` installs and satisfies openWakeWord 0.6.0 through the shim on this Mac; that the Silero/openWakeWord feature
+  models behave identically under it; that the test clip is 16 kHz mono (the scorer errors out clearly if not).
+
 ## 3. Install and run - the eight steps
 
 Prerequisites: Apple-silicon Mac, [Homebrew](https://brew.sh), a checkout of the Zoe repo, and from the
@@ -71,7 +94,7 @@ operator (§5): the `DEVICE_TOKEN` for `mac-dev` and the Cloudflare Access servi
    `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` (nothing in shell history; file mode 600).
 3. `bash scripts/setup/mac_virtual_panel.sh devices`, then edit `AUDIO_DEVICE` / `AUDIO_OUTPUT_DEVICE` in
    `~/.zoe-virtual-panel/.env.voice` if the macOS defaults are not what you want (index or name substring).
-4. `bash scripts/setup/mac_virtual_panel.sh preflight` - macOS asks to let your terminal use the microphone:
+4. `bash scripts/setup/mac_virtual_panel.sh preflight` - first scores the wake-word test clip (above; FAIL = the wake word is dead), then macOS asks to let your terminal use the microphone:
    allow it (System Settings > Privacy & Security > Microphone [doc: Apple Support]; a denied permission reads as
    digital silence and preflight says so). It then plays a tone, and does one authenticated `/api/voice/speak`
    round trip and plays Zoe's reply. Every failure prints which layer (Access, token, origin) said no.
@@ -80,13 +103,12 @@ operator (§5): the `DEVICE_TOKEN` for `mac-dev` and the Cloudflare Access servi
 6. `bash scripts/setup/mac_virtual_panel.sh ui` - opens `https://zoe.the411.life/touch/home.html?panel_id=mac-dev&kiosk=1`
    (the estate UI, same URL shape as the Pi kiosk [src: `scripts/setup/touchscreen/start-kiosk.sh`]). Sign in through Access
    as yourself; the page boots as the kiosk guest and shows the who+PIN card as on the Pi.
-7. Say the wake word (default model: **"Hey Jarvis"**; for "Hey Zoe" copy the Pi's model next to the daemon:
-   `HEY_ZOE_ONNX=/path/hey_zoe.onnx bash scripts/setup/mac_virtual_panel.sh install` - the daemon loads
-   `scripts/setup/hey_zoe.onnx` if present; the file is untracked).
+7. Say the wake word (default model: **"Hey Jarvis"**; "Hey Zoe" needs a `.tflite` build: `HEY_ZOE_TFLITE=/path/hey_zoe.tflite bash scripts/setup/mac_virtual_panel.sh install`
+   - the Mac daemon loads `scripts/setup/hey_zoe.tflite` if present; the file is untracked). If the wake word is dead, use `... ptt` (see above).
 8. Rollback: `bash scripts/setup/mac_virtual_panel.sh uninstall --yes` deletes `~/.zoe-virtual-panel/` (venv, Silero
    cache via `TORCH_HOME`, `.env.voice`, log) - and only a directory carrying the `.zoe-virtual-panel-marker` file that `install`/`env` write; it refuses any other directory, and `install` refuses to adopt a non-empty directory without the marker, so a mis-set `ZOE_MAC_PANEL_HOME` can never become a delete target. Homebrew packages stay (`brew uninstall portaudio` if you want).
 
-Commands: `install | configure | devices | preflight | run [--skip-preflight] | ui | lab-summary | uninstall --yes | env-template`.
+Commands: `install | configure | devices | preflight | run [--skip-preflight] | ptt | ui | lab-summary | uninstall --yes | env-template`.
 
 ## 4. Reaching zoe-data through the tunnel
 
@@ -207,7 +229,7 @@ them); it is not evidence about playback. The Pi-default byte-identity tests are
 Everything in `mac_virtual_panel.sh`, `preflight.py` and `mac_backend.py` has been run only against fakes and on Linux (`bash -n`, shellcheck, unit tests).
 Not exercised on macOS: the brew formulae and the `CFLAGS`/`LDFLAGS` PyAudio build (PyAudio's install page says `brew install portaudio` then
 `pip install pyaudio`, building from source [doc]); `openwakeword` on macOS (its setup lists `speexdsp-ns` for Linux only [doc: openWakeWord setup.py]; if pip
-complains, `pip install --no-deps openwakeword` plus its listed deps is the fallback); `torch` arm64 wheel; Silero via `torch.hub` (hubconf needs only `torch`
+complains, `pip install --no-deps openwakeword` plus its listed deps is the fallback); the TFLite wake-word path end to end (`ai-edge-litert==1.4.0` wheel, the `tflite_runtime` shim, the scoring clip); `torch` arm64 wheel; Silero via `torch.hub` (hubconf needs only `torch`
 [doc]); CoreAudio accepting 16 kHz/24 kHz mono input/output through PortAudio (the player falls back to the device rate with linear resampling and logs it);
 the microphone permission prompt being attributed to your terminal app; the actual gain-change latency; `caffeinate`/`open`; whether `hey_zoe.onnx` lives at
 `/home/pi/.zoe-voice/hey_zoe.onnx` on the Pi (the deploy script's default daemon dir - confirm before copying); the Access overlapping-app cookie behaviour (§4 A);
@@ -220,6 +242,6 @@ NDJSON passing through Cloudflare unbuffered (§4).
 * Microphone permission: https://support.apple.com/guide/mac-help/control-access-to-your-microphone-on-mac-mchla1b1e1fe/mac.
 * Access service tokens: https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/ - `CF-Access-Client-Id`/`CF-Access-Client-Secret`, Service Auth action, token expiry.
 * Access application paths and precedence: https://developers.cloudflare.com/cloudflare-one/access-controls/policies/app-paths/.
-* openWakeWord: https://github.com/dscripka/openWakeWord (`setup.py` markers, `utils.download_models`). Silero VAD hub: https://github.com/snakers4/silero-vad (`hubconf.py`).
+* openWakeWord: https://github.com/dscripka/openWakeWord (`setup.py` markers, `utils.download_models`); macOS ARM64 ONNX scoring bug: https://github.com/dscripka/openWakeWord/issues/336; `ai-edge-litert` wheels: https://pypi.org/project/ai-edge-litert/. Silero VAD hub: https://github.com/snakers4/silero-vad (`hubconf.py`).
 * In this repo: `scripts/setup/zoe_voice_daemon.py`, `scripts/setup/mac_panel/`, `services/zoe-data/routers/panel_auth.py`, `routers/voice_tts.py`, `services/zoe-ui/nginx.d/locations.inc`,
   `config/cloudflared-config.yml`, `skills/touch-panel/SKILL.md`, `docs/research/barge-in-duck-decide-resume-2026-10-04.md`, `docs/knowledge/voice-pipeline.md`.

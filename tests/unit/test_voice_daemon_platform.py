@@ -22,6 +22,7 @@ from __future__ import annotations
 import base64
 import importlib.util
 import io
+import json
 import logging
 import subprocess
 import sys
@@ -372,10 +373,75 @@ def test_mac_streams_reply_chunks_through_the_in_process_player(mac):
     assert mac._fake_pa.streams[0].stopped and mac._fake_pa.streams[0].closed
 
 
-def test_a_pcm_format_the_mac_player_cannot_take_is_skipped_not_fatal(mac, caplog):
-    caplog.set_level(logging.WARNING)
-    assert mac._feed_pcm_chunk(None, _wav(width=3)) is None
-    assert any("not playable" in r.getMessage() for r in caplog.records)
+def test_a_pcm_format_the_mac_player_cannot_take_raises_like_a_player_that_cannot_start(mac):
+    with pytest.raises(NotImplementedError):
+        mac._feed_pcm_chunk(None, _wav(width=3))
+
+
+def _stream_lines(daemon):
+    return [
+        json.dumps({"transcript": "what time is it"}).encode(),
+        json.dumps({"chunk": 0, "text": "Noon."}).encode(),
+        base64.b64encode(_wav(rate=24000, ch=1, n=2400)),
+        json.dumps({"done": True, "reply": "Noon."}).encode(),
+    ]
+
+
+class _Resp:
+    def __init__(self, lines):
+        self._lines = lines
+
+    def raise_for_status(self):
+        pass
+
+    def iter_lines(self, decode_unicode=False):  # noqa: ARG002
+        return iter(self._lines)
+
+    def close(self):
+        pass
+
+
+def _turn_rig(d, monkeypatch):
+    fallback = []
+    monkeypatch.setattr(d.requests, "post", lambda *a, **k: _Resp(_stream_lines(d)), raising=False)
+    monkeypatch.setattr(d, "_speaker_claim_for_turn", lambda _w: None)
+    monkeypatch.setattr(d, "_is_junk_transcript", lambda _t: False)
+    monkeypatch.setattr(d, "_tts_process", None)
+    monkeypatch.setattr(d, "_tts_started_at", None)
+    monkeypatch.setattr(d, "_do_single_turn", lambda *a, **k: fallback.append(1) or True)
+    return fallback
+
+
+def test_a_mac_output_device_that_cannot_open_is_no_playback_not_a_played_reply(mac, monkeypatch, caplog):
+    """Codex finding: a dead device must not be counted as 'reply played'. The player
+    raises at construction, so the turn loop's own handler runs - the same one a Pi whose
+    aplay cannot start reaches: the reply is NOT reported as played (returns False, no
+    TTFA line) and, because the server already processed the transcript, the turn is not
+    re-POSTed (no duplicate write). The failure is logged."""
+    caplog.set_level(logging.INFO)
+
+    def _dead(**kw):
+        raise OSError(-9996, "Invalid output device")
+
+    monkeypatch.setattr(mac._fake_pa, "open", _dead)
+    fallback = _turn_rig(mac, monkeypatch)
+    ok = mac._do_single_turn_stream(MagicMock(), b"RIFFwav", prompt_on_empty=False)
+    assert ok is False and fallback == []
+    assert mac._active_playback() is None
+    text = " ".join(r.getMessage() for r in caplog.records)
+    assert "Invalid output device" in text and "TTFA" not in text
+
+
+def test_a_working_mac_output_device_plays_the_stream_and_does_not_fall_back(mac, monkeypatch):
+    fallback = _turn_rig(mac, monkeypatch)
+    ok = mac._do_single_turn_stream(MagicMock(), b"RIFFwav", prompt_on_empty=False)
+    assert ok is True and fallback == []
+    assert mac._fake_pa.streams and mac._fake_pa.streams[0].closed
+
+
+def test_pi_wakeword_framework_is_onnx_and_the_mac_one_is_not_forced_to_it(pi, mac):
+    assert pi._PLATFORM.wakeword_framework() == "onnx"
+    assert mac._PLATFORM.wakeword_framework() in ("tflite", "onnx")  # tflite iff a runtime is importable here
 
 
 def test_play_audio_b64_on_the_mac_plays_wav_and_stops_on_barge(mac):

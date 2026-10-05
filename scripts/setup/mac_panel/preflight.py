@@ -93,6 +93,70 @@ def classify_probe(status: int, location: str = "", content_type: str = "", body
     return False, f"unexpected HTTP {status}"
 
 
+# ── wake-word scoring (openWakeWord issue #336) ───────────────────────────────
+# On macOS ARM64 the ONNX backend gives ~1e-5 for audio the TFLite backend scores
+# ~0.998, silently: the daemon runs, the mic is fine, the wake word never fires.
+# So prove it: score openWakeWord's own `hey_mycroft` test clip with the backend the
+# daemon will use and FAIL loudly when the top score is ~0.
+WAKE_TEST_MODEL = "hey_mycroft"
+WAKE_PASS = 0.5
+WAKE_DEAD = 0.05
+
+
+def classify_wake_score(top: float, framework: str) -> tuple:
+    """(ok, diagnosis) for the top score the wake-word test clip reached."""
+    if top >= WAKE_PASS:
+        return True, f"wake word scoring OK: the {WAKE_TEST_MODEL} test clip reached {top:.2f} on the {framework} backend"
+    if top >= WAKE_DEAD:
+        return True, (f"wake word scoring is WEAK: the {WAKE_TEST_MODEL} test clip only reached {top:.2f} on the "
+                      f"{framework} backend (expected > {WAKE_PASS}); expect missed wakes - lower WAKEWORD_THRESHOLD or use push-to-talk")
+    return False, (f"wake word is DEAD: the {WAKE_TEST_MODEL} test clip scored {top:.5f} on the {framework} backend. "
+                   "This is the macOS ARM64 ONNX trap (openWakeWord #336): the wake word will never fire. "
+                   "Install a TFLite runtime (pip install ai-edge-litert==1.4.0; the install step does) or use "
+                   "push-to-talk: `mac_virtual_panel.sh run --skip-preflight` then `mac_virtual_panel.sh ptt` in another terminal")
+
+
+def score_wake_clip(model_cls, wav_path: str, framework: str, model_name: str = WAKE_TEST_MODEL) -> float:
+    """Top score over a 16 kHz mono 16-bit clip, fed in 80 ms chunks like the daemon,
+    with silence either side so the model's context flushes."""
+    import wave
+
+    import numpy as np
+    with wave.open(wav_path, "rb") as wf:
+        if (wf.getframerate(), wf.getnchannels(), wf.getsampwidth()) != (16000, 1, 2):
+            raise ValueError(f"{wav_path}: need 16 kHz mono 16-bit, got {wf.getframerate()} Hz / "
+                             f"{wf.getnchannels()} ch / {wf.getsampwidth() * 8}-bit")
+        pcm = np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16)
+    audio = np.concatenate([np.zeros(8000, dtype=np.int16), pcm, np.zeros(24000, dtype=np.int16)])
+    model = model_cls(wakeword_models=[model_name], inference_framework=framework)
+    top = 0.0
+    for i in range(0, len(audio) - 1279, 1280):
+        scores = model.predict(audio[i:i + 1280])
+        if scores:
+            top = max(top, max(float(v) for v in scores.values()))
+    return top
+
+
+def check_wakeword(env, backend=None, model_cls=None) -> tuple:
+    """(ok, diagnosis): score the test clip with the daemon's wake-word backend."""
+    clip = env.get("WAKEWORD_TEST_CLIP", "")
+    if not clip or not os.path.isfile(clip):
+        return False, (f"wake-word test clip missing ({clip or 'WAKEWORD_TEST_CLIP unset'}); "
+                       "run `mac_virtual_panel.sh install` to download it")
+    try:
+        if backend is None:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            from mac_backend import MacBackend
+            backend = MacBackend(pyaudio_module=None)
+        framework = backend.wakeword_framework()
+        if model_cls is None:
+            from openwakeword.model import Model as model_cls
+        top = score_wake_clip(model_cls, clip, framework)
+    except Exception as exc:
+        return False, f"wake-word scoring test could not run: {type(exc).__name__}: {exc}"
+    return classify_wake_score(top, framework)
+
+
 def level_report(peak: int, rms: float, seconds: float) -> tuple:
     """(ok, diagnosis) for a short mic capture of 16-bit samples."""
     if peak == 0:
@@ -210,10 +274,16 @@ def main(argv=None) -> int:
     ap.add_argument("command", choices=("devices", "check"))
     ap.add_argument("--no-audio", action="store_true", help="skip the mic level + speaker tone")
     ap.add_argument("--no-server", action="store_true", help="skip the zoe-data round trip")
+    ap.add_argument("--no-wakeword", action="store_true", help="skip the wake-word scoring test")
     args = ap.parse_args(argv)
     env = os.environ
     failures = 0
     backend = None
+
+    if args.command == "check" and not args.no_wakeword:
+        ok, why = check_wakeword(env)
+        print(("[ ok ] " if ok else "[FAIL] ") + why)
+        failures += 0 if ok else 1
 
     if args.command == "devices" or not args.no_audio:
         import pyaudio

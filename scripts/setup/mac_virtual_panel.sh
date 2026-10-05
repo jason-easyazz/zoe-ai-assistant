@@ -5,8 +5,9 @@
 #   bash scripts/setup/mac_virtual_panel.sh install       idempotent: brew deps, venv, pip, models, .env.voice template
 #   bash scripts/setup/mac_virtual_panel.sh configure     prompt (silently) for DEVICE_TOKEN + the Cloudflare Access pair
 #   bash scripts/setup/mac_virtual_panel.sh devices       list audio devices (pick AUDIO_DEVICE / AUDIO_OUTPUT_DEVICE)
-#   bash scripts/setup/mac_virtual_panel.sh preflight     mic level + speaker tone + one authenticated round trip
+#   bash scripts/setup/mac_virtual_panel.sh preflight     wake-word scoring test + mic level + speaker tone + one authenticated round trip
 #   bash scripts/setup/mac_virtual_panel.sh run           preflight (server only) then the daemon, foreground
+#   bash scripts/setup/mac_virtual_panel.sh ptt           push-to-talk: press Enter to start a turn (POST /activate) - the wake-word fallback
 #   bash scripts/setup/mac_virtual_panel.sh ui            print/open the touch-UI URL for this panel id
 #   bash scripts/setup/mac_virtual_panel.sh lab-summary   aggregate BARGE_DECIDE lines from the daemon log
 #   bash scripts/setup/mac_virtual_panel.sh uninstall --yes   delete $ZOE_MAC_PANEL_HOME (the whole rollback)
@@ -16,7 +17,7 @@
 # the venv, the torch-hub Silero cache (TORCH_HOME), the .env.voice, the daemon log.
 # Rollback = delete that directory. It never writes outside it, except Homebrew
 # packages (portaudio, python@3.12 - `brew uninstall` them if you want them gone)
-# and, only if you ask with HEY_ZOE_ONNX, one untracked hey_zoe.onnx next to the daemon.
+# and, only if you ask with HEY_ZOE_ONNX / HEY_ZOE_TFLITE, one untracked hey_zoe.* next to the daemon.
 #
 # bash 3.2 compatible (macOS /bin/bash). Design + verification status:
 # docs/knowledge/mac-virtual-panel.md.
@@ -32,6 +33,9 @@ LOG_FILE="${PANEL_HOME}/voice.log"
 MARKER="${PANEL_HOME}/.zoe-virtual-panel-marker"
 TORCH_HOME_DIR="${PANEL_HOME}/torch"
 REQ_FILE="${HERE}/mac-requirements.txt"
+REQ_WAKE_FILE="${HERE}/mac-requirements-wakeword.txt"
+WAKE_CLIP="${PANEL_HOME}/wakeword_test/hey_mycroft_test.wav"
+WAKE_CLIP_URL="https://raw.githubusercontent.com/dscripka/openWakeWord/main/tests/data/hey_mycroft_test.wav"
 REQ_STAMP="${PANEL_HOME}/.requirements.sha256"
 PY_FORMULA="${MAC_PANEL_PY_FORMULA:-python@3.12}"
 DEFAULT_ZOE_URL="${MAC_PANEL_DEFAULT_ZOE_URL:-https://zoe.the411.life}"
@@ -160,6 +164,7 @@ load_env() {
   set +a
   export PANEL_PLATFORM="${PANEL_PLATFORM:-mac}"
   export TORCH_HOME="${TORCH_HOME_DIR}"
+  export WAKEWORD_TEST_CLIP="${WAKEWORD_TEST_CLIP:-${WAKE_CLIP}}"
   export PYTHONUNBUFFERED=1
 }
 
@@ -192,7 +197,7 @@ cmd_install() {
   fi
 
   local want have
-  want="$(sha256_of "${REQ_FILE}")"
+  want="$(sha256_of "${REQ_FILE}")$(sha256_of "${REQ_WAKE_FILE}")"
   have="$(cat "${REQ_STAMP}" 2>/dev/null || true)"
   if [ "${want}" = "${have}" ]; then
     say "== pip: requirements unchanged since the last install - skipping"
@@ -203,6 +208,12 @@ cmd_install() {
     # PyAudio builds from source; on Apple silicon Homebrew is not on the compiler's default search path.
     CFLAGS="-I${bp}/include" LDFLAGS="-L${bp}/lib" "${VENV}/bin/python" -m pip install --upgrade pip
     CFLAGS="-I${bp}/include" LDFLAGS="-L${bp}/lib" "${VENV}/bin/python" -m pip install -r "${REQ_FILE}"
+    # Separate, so a missing wheel cannot fail the whole install - but never silently:
+    # without a TFLite runtime the wake word is dead on Apple silicon (openWakeWord #336).
+    if ! "${VENV}/bin/python" -m pip install -r "${REQ_WAKE_FILE}"; then
+      say "WARNING: no TFLite runtime wheel for this Mac (${REQ_WAKE_FILE})."
+      say "         The wake word will not fire; use push-to-talk (\`$0 ptt\`). preflight will say FAIL."
+    fi
     printf '%s' "${want}" > "${REQ_STAMP}"
   fi
 
@@ -210,19 +221,30 @@ cmd_install() {
   TORCH_HOME="${TORCH_HOME_DIR}" "${VENV}/bin/python" - <<'PY'
 import openwakeword
 from openwakeword.utils import download_models
-download_models(["hey_jarvis"])
+download_models(["hey_jarvis", "hey_mycroft"])  # hey_mycroft: the preflight scoring test
 import torch
 torch.hub.load(repo_or_dir="snakers4/silero-vad", model="silero_vad", force_reload=False, trust_repo=True)
 print("models ready")
 PY
 
+  mkdir -p "$(dirname "${WAKE_CLIP}")"
+  if [ ! -s "${WAKE_CLIP}" ]; then
+    curl -fsSL -o "${WAKE_CLIP}" "${WAKE_CLIP_URL}" \
+      || say "WARNING: could not download the wake-word test clip; preflight will FAIL its scoring test until you re-run install"
+  fi
+
+  if [ -n "${HEY_ZOE_TFLITE:-}" ]; then
+    [ -f "${HEY_ZOE_TFLITE}" ] || die 5 "HEY_ZOE_TFLITE=${HEY_ZOE_TFLITE} is not a file"
+    cp "${HEY_ZOE_TFLITE}" "${HERE}/hey_zoe.tflite"
+    say "== custom wake word: copied to ${HERE}/hey_zoe.tflite (untracked; the Mac's TFLite backend loads it by that name)"
+  fi
   if [ -n "${HEY_ZOE_ONNX:-}" ]; then
     [ -f "${HEY_ZOE_ONNX}" ] || die 5 "HEY_ZOE_ONNX=${HEY_ZOE_ONNX} is not a file"
     cp "${HEY_ZOE_ONNX}" "${HERE}/hey_zoe.onnx"
     say "== custom wake word: copied to ${HERE}/hey_zoe.onnx (untracked; the daemon loads it by that name)"
   elif [ ! -f "${HERE}/hey_zoe.onnx" ]; then
     say "== wake word: no hey_zoe.onnx beside the daemon -> it will answer to 'Hey Jarvis'."
-    say "   To test 'Hey Zoe': HEY_ZOE_ONNX=/path/to/hey_zoe.onnx bash $0 install"
+    say "   To test 'Hey Zoe' on the Mac you need the TFLite build: HEY_ZOE_TFLITE=/path/to/hey_zoe.tflite bash $0 install"
   fi
 
   write_env_if_absent
@@ -261,7 +283,7 @@ cmd_run() {
   load_env
   [ -n "${DEVICE_TOKEN:-}" ] || die 3 "DEVICE_TOKEN is empty in ${ENV_FILE}; run: bash $0 configure"
   if [ "$skip" != 1 ]; then
-    "${py}" "${HERE}/mac_panel/preflight.py" check --no-audio || die 4 "preflight failed; fix it or pass --skip-preflight"
+    "${py}" "${HERE}/mac_panel/preflight.py" check --no-audio || die 4 "preflight failed; fix it, or pass --skip-preflight and talk with push-to-talk (bash $0 ptt) if only the wake word is dead"
   fi
   cd "${HERE}"
   say "starting the virtual panel '${PANEL_ID}' -> ${ZOE_URL} (Ctrl-C to stop; log: ${ZOE_VOICE_LOG:-stderr})"
@@ -270,6 +292,19 @@ cmd_run() {
     exec caffeinate -i "${py}" "${HERE}/zoe_voice_daemon.py"
   fi
   exec "${py}" "${HERE}/zoe_voice_daemon.py"
+}
+
+# Push-to-talk: the wake-word fallback. POST /activate is the same trigger the touch UI's
+# orb-tap uses (it starts a recording as if the wake word had fired). No Origin header, so
+# the Mac daemon's origin guard lets it through; the daemon must already be running.
+cmd_ptt() {
+  [ -f "${ENV_FILE}" ] && load_env
+  local url="http://${HEALTH_BIND:-127.0.0.1}:${HEALTH_PORT:-7777}/activate"
+  say "Push-to-talk: press Enter to start a turn, Ctrl-D or Ctrl-C to quit. (daemon: ${url})"
+  while printf '> ' && read -r _; do
+    curl -fsS -X POST "${url}" >/dev/null || say "  could not reach the daemon at ${url} - is \`run\` going?"
+  done
+  printf '\n'
 }
 
 cmd_ui() {
@@ -296,7 +331,7 @@ cmd_uninstall() {
   say "removed ${PANEL_HOME}. (Homebrew portaudio/${PY_FORMULA} left in place; hey_zoe.onnx, if you copied one, is at ${HERE}/hey_zoe.onnx.)"
 }
 
-usage() { sed -n '2,19p' "${BASH_SOURCE[0]}"; }
+usage() { sed -n '2,15p' "${BASH_SOURCE[0]}"; }
 
 main() {
   local cmd="${1:-help}"
@@ -307,6 +342,7 @@ main() {
     devices) cmd_devices "$@" ;;
     preflight) cmd_preflight "$@" ;;
     run) cmd_run "$@" ;;
+    ptt) cmd_ptt "$@" ;;
     ui) cmd_ui "$@" ;;
     lab-summary) cmd_lab_summary "$@" ;;
     uninstall) cmd_uninstall "$@" ;;

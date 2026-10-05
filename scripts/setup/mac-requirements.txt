@@ -5,8 +5,8 @@
 # KEPT from pi-requirements.txt (the daemon imports them at start-up):
 pyaudio>=0.2.14                  # needs `brew install portaudio` first (PyAudio's macOS install note)
 numpy>=1.26.0
-openwakeword>=0.6.0              # ONNX backend; its Linux-only deps (speexdsp-ns) are markers, skipped on macOS
-onnxruntime>=1.18.0
+openwakeword>=0.6.0              # Linux-only deps (speexdsp-ns, tflite-runtime) are markers; the Mac TFLite runtime is in mac-requirements-wakeword.txt
+onnxruntime>=1.18.0              # openWakeWord feature models; NOT the wake-word backend on a Mac (ONNX scores ~0 there; see mac-requirements-wakeword.txt)
 requests>=2.32.0
 #
 # CHANGED:
