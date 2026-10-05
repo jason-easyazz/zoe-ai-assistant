@@ -143,7 +143,7 @@ class FakeSvc:
         return rows[offset:offset + limit]
 
     async def review(self, mem_id, *, decision, actor, edits=None, note=None, metadata=None,
-                     source_excerpt=None):
+                     source_excerpt=None, **kw):
         old = self.rows[mem_id]
         old.metadata["status"] = "superseded"
         return self._add(edits, supersedes=mem_id, user_id=old.metadata["user_id"])
