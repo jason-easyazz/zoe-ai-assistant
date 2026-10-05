@@ -407,6 +407,22 @@ def _same_kind_row(meta: dict, row_text: str, person_name: str, pattern_type: st
     return month is not None or day is not None
 
 
+async def _authority_refused_edit(
+    svc, mem_id: str, text: str, source: str,
+    source_excerpt: Optional[str], origin: Optional[str],
+) -> bool:
+    """Did ``svc.review(mem_id, decision="edit")`` return None because the memory-authority
+    wall refused it? (Best-effort: a service without the predicate, or an error, is "no".)"""
+    ask = getattr(svc, "edit_outranked", None)
+    if ask is None:
+        return False
+    try:
+        return bool(await ask(mem_id, actor=source, edits=text, origin=origin,
+                              anchor_text=source_excerpt))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 async def _reconcile_same_kind_entity_row(
     svc,
     text: str,
@@ -455,6 +471,13 @@ async def _reconcile_same_kind_entity_row(
         origin=origin,
     )
     if new_ref is None:
+        # A REFUSAL by the authority wall (the row is the user's own words and this writer is
+        # inferred) is final: falling through to the text reconcile + plain ingest would retry
+        # it through a less specific matcher and then write the structured people tables
+        # anyway (Codex P1 on #1868). A plain failure still falls through.
+        if await _authority_refused_edit(svc, target.id, text, source, source_excerpt, origin):
+            logger.info("person_extractor: entity supersede of %s refused by authority", target.id)
+            return AUTHORITY_BLOCKED
         return None  # supersede failed — fall through to the normal path
     logger.info(
         "person_extractor: entity-superseded %s (kind=%s) with %s",
@@ -599,6 +622,9 @@ async def _ingest_to_mempalace(
                     except Exception as exc:
                         logger.debug("person_extractor: relink after supersede failed: %s", exc)
                     return new_ref.id
+                if await _authority_refused_edit(svc, target_id, text, source, source_excerpt, origin):
+                    logger.info("person_extractor: supersede of %s refused by authority", target_id)
+                    return AUTHORITY_BLOCKED
             except Exception as exc:
                 logger.warning("person_extractor: supersede failed (%s) — plain ingest", exc)
         ref = await svc.ingest(
@@ -1442,6 +1468,8 @@ async def process_text(
                 pattern_type=pattern_type,
                 source_excerpt=excerpt,
             )
+            if mem_id == AUTHORITY_BLOCKED:
+                continue  # held back as a candidate: nothing to apply to the structured tables
 
             # PostgreSQL write (only when we have a DB UUID)
             if person_uuid:

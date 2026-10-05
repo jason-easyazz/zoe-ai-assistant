@@ -2109,10 +2109,47 @@ class MemoryService:
                 rows = await self._run_sync(self._operator_rows_sync, user_id)
             else:
                 rows = await self._run_sync(self._list_by_status_sync, user_id, "approved")
-            return _auth.find_conflict(text, rows, writer_rank)
+            # every approved row is compared (no recency prefix), off the event loop
+            return await self._run_sync(_auth.find_conflict, text, rows, writer_rank)
         except Exception as exc:  # noqa: BLE001 - the guard must never break ingestion
             logger.debug("memory_service: authority conflict scan skipped (%s)", type(exc).__name__)
             return None
+
+    async def edit_outranked(
+        self,
+        mem_id: str,
+        *,
+        actor: str,
+        edits: str,
+        origin: Optional[str] = None,
+        anchor_text: Optional[str] = None,
+        authority: Optional[str] = None,
+        prompt_text: Optional[str] = None,
+        speaker_verified: Optional[bool] = None,
+    ) -> bool:
+        """Would ``review(mem_id, decision="edit", edits=...)`` be REFUSED by the authority wall
+        (the row outranks this writer)? Pure: no log, no candidate, no write. ``review`` returns
+        None for a refusal and for ordinary failures alike; a caller that must not retry a refusal
+        through another route (``person_extractor``: ordinary ``ingest`` -> structured tables)
+        asks this after the None. False in ``shadow`` mode, on any read error, and for a row that
+        is not approved."""
+        if not (_auth.active() and _auth.enabled()):
+            return False
+        try:
+            current = await self.get(mem_id)
+            if current is None:
+                return False
+            meta = current.metadata or {}
+            if str(meta.get("status") or "") != "approved":
+                return False
+            user_id = str(meta.get("user_id") or meta.get("wing") or "")
+            res = _auth.resolve_write(
+                origin or actor, (edits or current.text).strip(),
+                anchor_text=anchor_text, claimed=authority, user_id=user_id,
+                prompt_text=prompt_text, speaker_verified=speaker_verified)
+            return not _auth.may_override(res.power, _auth.row_class(meta, current.text))
+        except Exception:  # noqa: BLE001 - a read error is not a refusal
+            return False
 
     async def _authority_refuses(
         self,

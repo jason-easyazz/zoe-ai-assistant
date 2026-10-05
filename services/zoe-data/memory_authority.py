@@ -629,6 +629,50 @@ def supports(fact: str, user_text: str, prompt_text: Optional[str] = None) -> bo
     return _answers_a_question(fact, value, cues, user_text, prompt_text)
 
 
+#: a fact about one of the user's RELATIVES: "User's sister lives in Perth." / "My son is 12."
+_FACT_RELATION_RE = re.compile(
+    rf"^\s*(?:the\s+)?(?:user['’]s|my)\s+(?:[a-z]+\s+){{0,2}}?(?P<rel>{_RELATION})\b", re.IGNORECASE)
+#: a relation (or any third-party possessive) in a QUESTION: "your sister", "Alice's brother"
+_PROMPT_THIRD_PARTY_RE = re.compile(
+    rf"\b(?:my|your|our|his|her|their|[a-z]+['’]s)\s+(?:[a-z]+\s+){{0,2}}?{_RELATION}s?\b", re.IGNORECASE)
+_YOU_RE = re.compile(r"\byou(?:r|rs|rself)?\b|\byou['’](?:re|ve|d|ll)\b", re.IGNORECASE)
+_NOT_A_NAME = frozenset({"user", "users", "the", "my", "i", "we", "our", "his", "her", "their", "a", "an"})
+
+
+def _prompt_is_self_directed(prompt_text: str) -> bool:
+    """The question is put to the user about THEMSELF: it says you / your / yourself and names
+    no third party's possessive ("your sister", "Alice's brother")."""
+    return bool(_YOU_RE.search(prompt_text)) and not _PROMPT_THIRD_PARTY_RE.search(prompt_text)
+
+
+def _prompt_subject_matches(fact: str, prompt_text: str) -> bool:
+    """Is the SUBJECT of the question the SUBJECT of the fact? (Review of #1868, Codex P1:
+    "Where does your sister live?" -> "Perth" must not make "User lives in Perth." the user's.)
+
+      * a fact about the user (or their pet / name / age): the question must be self-directed;
+      * a fact about the user's relative ("User's sister ..."): the question must name that
+        relation (or a synonym) - and so is not self-directed;
+      * a fact about a named third person ("Alice works at Acme."): the question must name them;
+      * anything else: no match (fail closed - the fact is then NOT user_stated_derived).
+    """
+    m = _FACT_RELATION_RE.match(fact or "")
+    if m:
+        rel = m.group("rel").lower()
+        try:
+            from memory_quality import _role_variants
+
+            names = {v.lower() for v in _role_variants(rel)} | {rel}
+        except Exception:  # noqa: BLE001
+            names = {rel}
+        return any(re.search(rf"\b{re.escape(n)}s?\b", prompt_text, re.IGNORECASE) for n in names)
+    if _USER_SUBJECT_RE.match(fact or ""):
+        return _prompt_is_self_directed(prompt_text)
+    m = re.match(r"\s*([A-Z][\w'’\-]*)", _fold(fact or ""))
+    if m and m.group(1).lower() not in _NOT_A_NAME:
+        return re.search(rf"\b{re.escape(m.group(1))}(?:['’]s)?\b", _fold(prompt_text), re.IGNORECASE) is not None
+    return False
+
+
 def _answers_a_question(fact: str, value: set[str], cues: set[str], user_text: str,
                         prompt_text: Optional[str]) -> bool:
     """A short elliptical user answer to an assistant question about the fact's attribute."""
@@ -638,6 +682,8 @@ def _answers_a_question(fact: str, value: set[str], cues: set[str], user_text: s
     p_cues = {_CUE_OF[s] for s in p_stems if s in _CUE_OF}
     p_cues |= {"name"} if re.search(r"\bname\b", prompt_text, re.IGNORECASE) else set()
     if not cues or not cues <= p_cues:
+        return False
+    if not _prompt_subject_matches(fact, prompt_text):
         return False
     for line in _normalise_dates(user_text).split("\n"):
         ans = _LEAD_INTERJECTION_RE.sub("", line).strip()
@@ -713,6 +759,47 @@ def _slot_value(rx: re.Pattern[str], text: str) -> str:
     return re.sub(r"\s+", " ", v).strip().lower()
 
 
+# The people-graph writers store a person's date as a COMPACT row, "Alice: 15 March" (no verb, no
+# attribute noun - ``memory_quality._attribute_key`` cannot read it). Two compact rows for the SAME
+# name whose values are bare dates and name different days contradict each other.
+_COMPACT_RE = re.compile(r"^\s*(?P<name>[A-Z][\w'’\-]*(?:\s+[A-Z][\w'’\-]*){0,2})\s*:\s*(?P<value>[^:\n]{1,40}?)\s*[.!?]*\s*$")
+_MONTHS = {m: i + 1 for i, m in enumerate(
+    "january february march april may june july august september october november december".split())}
+_DATE_FILLER = frozenset({"of", "th", "st", "nd", "rd", "the", "on", "in", "around", "about"})
+
+
+def _bare_date(value: str) -> Optional[tuple[int, int]]:
+    """``(month, day)`` when ``value`` is ONLY a calendar date ("March 15", "15th of March 1990",
+    "15/03"), else None - a compact row that says anything else is not a date row."""
+    v = _normalise_dates(value or "")
+    month = day = None
+    for tok in re.findall(r"[A-Za-z]+|\d+", _fold(v)):
+        low = tok.lower()
+        if tok.isdigit():
+            if len(tok) <= 2 and day is None and 1 <= int(tok) <= 31:
+                day = int(tok)
+            elif len(tok) == 4:
+                continue  # a year: the day is what identifies the date
+            else:
+                return None
+        elif low in _DATE_FILLER:
+            continue
+        else:
+            hit = next((n for m, n in _MONTHS.items() if low == m or (len(low) == 3 and m.startswith(low))), None)
+            if hit is None or month is not None:
+                return None
+            month = hit
+    return (month, day) if month and day else None
+
+
+def _compact_dates_differ(new_text: str, old_text: str) -> bool:
+    a, b = _COMPACT_RE.match(new_text or ""), _COMPACT_RE.match(old_text or "")
+    if not (a and b) or _fold(a.group("name")).lower() != _fold(b.group("name")).lower():
+        return False
+    da, db = _bare_date(a.group("value")), _bare_date(b.group("value"))
+    return bool(da and db and da != db)
+
+
 def conflict_kind(new_text: str, old_text: str) -> Optional[str]:
     """If ``new_text`` contradicts ``old_text`` (same subject, same attribute, a DIFFERENT
     value — or a stated END of it), the closed-vocabulary kind of the attribute, else None.
@@ -726,6 +813,8 @@ def conflict_kind(new_text: str, old_text: str) -> Optional[str]:
         return None
     if not new_text or not old_text or subject_key(new_text) != subject_key(old_text):
         return None
+    if _compact_dates_differ(new_text, old_text):
+        return "birthday"
     if exclusive_conflict(new_text, old_text):
         return "home"
     ka, kb = _attribute_key(new_text), _attribute_key(old_text)
@@ -757,7 +846,11 @@ def find_conflict(new_text: str, rows: list[Any], writer_power: int, *,
     the attribute kind, else None. ``rows`` are MemoryRef-likes (``id``, ``text``, ``metadata``)."""
     if writer_power >= RANK[OPERATOR]:
         return None
-    for r in rows[:2000]:  # newest first (list_by_status): bounded, this runs on the event loop
+    # EVERY row is examined - never a recency prefix (Codex P2 on #1868: with >2,000 approved
+    # memories an older user-stated fact fell outside the newest-first slice and became
+    # invisible to the wall). The scan is cheap per row (status / class gates, then the
+    # subject comparison) and the service runs it on the executor, not the event loop.
+    for r in rows:
         meta = getattr(r, "metadata", None) or {}
         if getattr(r, "id", "") == exclude_id or str(meta.get("status") or "") != "approved":
             continue
