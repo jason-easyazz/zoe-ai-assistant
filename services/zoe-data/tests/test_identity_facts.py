@@ -723,3 +723,104 @@ def test_the_owner_reviewing_their_own_memory_is_a_direct_edit(svc):
     assert ok is not None
     assert asyncio.run(svc.review(ok.id, decision="edit", actor="some_extractor",
                                   edits=f"User's name is {WRONG}.")) is None
+
+
+# ── every self-name template is walled, not only "name is" (ZMB H5) ───────────
+#
+# The regex extractor's own "call me X" template emits "User goes by X" (zoe_agent's fallback:
+# "User goes by: X") and the model writers paraphrase ("prefers to be called", "is known as",
+# "nickname is", "name's"). The wall only knew "User's name is X" / "User is called X", so those
+# rows were stored and a name nobody in the account goes by could stand beside the real one.
+
+SELF_NAME_TEMPLATES = [
+    "User goes by Mika Vale.",
+    "User goes by: Mika Vale",                    # zoe_agent's regex fallback
+    "User goes by the name Mika Vale.",
+    "The user also goes by Mika Vale.",
+    "User prefers to be called Mika Vale.",
+    "User likes to be called Mika.",
+    "User would like to be addressed as Mika.",
+    "User prefers being called Mika.",
+    "User wants to be known as Mika.",
+    "User asked me to call them Mika.",
+    "User is called Mika Vale.",
+    "User is also known as Mika Vale.",
+    "User is named Mika Vale.",
+    "User's name's Mika Vale.",
+    "User's nickname is Mika.",
+    "The user's preferred name is Mika.",
+    "User's first name is Mika.",
+    "User's alias: Mika",
+    "User introduced themselves as Mika.",
+    "User calls themselves Mika.",
+    "User says their name is Mika.",
+    "The owner goes by Mika.",
+    "Account holder goes by Mika.",
+    "user goes by mika",                          # a lower-case transcript is still a name claim
+]
+
+
+@pytest.mark.parametrize("text", SELF_NAME_TEMPLATES)
+def test_every_self_name_template_is_a_name_assertion(text):
+    assert idf.is_user_name_assertion(text), text
+    assert idf.asserted_user_name(text).lower().startswith("mika")
+
+
+@pytest.mark.parametrize("text", SELF_NAME_TEMPLATES)
+@pytest.mark.parametrize("source", ["digest", "chat_regex", "consolidation"])
+def test_an_automatic_writer_cannot_store_any_self_name_template(svc, text, source):
+    assert _ingest(svc, text, source) is None
+    assert not svc._col.rows
+
+
+@pytest.mark.parametrize("text", ["User goes by Mika Vale.", "User prefers to be called Mika.",
+                                  "User is also known as Mika Vale.", "User's nickname is Mika."])
+def test_the_automatic_edit_path_is_walled_for_every_template_too(svc, text):
+    seed = _ingest(svc, f"User's name is {REAL}.", "voice_fact")
+    assert asyncio.run(svc.review(seed.id, decision="edit", actor="digest", edits=text)) is None
+
+
+@pytest.mark.parametrize("text", ["User goes by Jay.", "User prefers to be called Jay.",
+                                  "User is also known as Jay.", "User's nickname is Jay."])
+@pytest.mark.parametrize("source", ["voice_fact", "brain_tool", "review_ui", "proposal"])
+def test_control_the_users_own_explicit_teach_still_stores(svc, text, source):
+    assert _ingest(svc, text, source) is not None
+
+
+@pytest.mark.parametrize("text", [
+    "User goes by bus.", "User goes by train to work.", "User goes by the book.", "User goes by car.",
+    "User is called a nerd by friends.", "User goes by foot.",
+    "Marisol goes by Mika.", "User's dog is called Biscuit.", "User's friend Dana goes by Dee.",
+    "User's sister is known as Bea.", "User asked me to remember: call me Mika",
+])
+def test_control_not_a_self_name_claim_is_untouched(svc, text):
+    assert not idf.is_user_name_assertion(text)
+    assert _ingest(svc, text, "digest") is not None
+
+
+def test_control_the_users_own_rename_still_works_and_the_wall_still_holds(live_account, svc):
+    """"call me Jay" from the user's turn renames the ACCOUNT (a settings write, not a memory row);
+    the extractors' copies of the same words are refused, in every template."""
+    assert asyncio.run(idf.maybe_answer("call me Jay", UID))[0] == "rename"
+    assert live_account.writes == [(UID, "preferred_name", "Jay")]
+    for text in ("User goes by Jay.", "User goes by: Jay", "User prefers to be called Jay.",
+                 "User is also known as Jay.", "User's nickname is Jay."):
+        assert _ingest(svc, text, "chat_regex") is None
+    assert asyncio.run(idf.maybe_answer("whats my name", UID))[1] == "Your name is Jay."
+
+
+def test_the_regex_extractors_own_template_is_walled_end_to_end(svc):
+    """The text memory_extractor itself emits for "call me X" is what the wall must know."""
+    import memory_extractor
+
+    cands = [c.text for c in memory_extractor.extract_candidates("you can call me Mika", "")]
+    assert "User goes by Mika" in cands
+    assert all(_ingest(svc, t, "chat_regex") is None for t in cands)
+    assert not svc._col.rows
+
+
+def test_break_the_fix_control_the_new_templates_are_what_block_them(svc, monkeypatch):
+    """With the vocabulary gap re-opened (only the original two templates) the goes-by row is stored."""
+    monkeypatch.setattr(idf, "_NAME_ASSERT_RES", idf._NAME_ASSERT_RES[:2])
+    monkeypatch.setattr(idf, "_EXPLICIT_ATTR_TEMPLATES", (0,))
+    assert _ingest(svc, "User goes by Mika Vale.", "digest") is not None

@@ -78,10 +78,10 @@
     },
     {
       "id": "H5.goes_by_not_walled",
-      "title": "TARGET: 'User goes by X' from an automatic writer is not recognised as a name assertion",
+      "title": "'User goes by X' from an automatic writer is not recognised as a name assertion",
       "tier": "store",
       "kind": "script",
-      "expected": "FAIL",
+      "expected": "PASS", "controls": ["identity"],
       "note": "measured, not assumed: identity_facts.asserted_user_name does not match 'goes by', yet the regex extractor's own template emits 'User goes by {0}'. The wall has a vocabulary gap",
       "events": [
         {"text": "okay so that was the plan for tomorrow and then uh {intruder} is coming over I think and we will see what happens with the weather and the shopping later on tonight", "speaker": "system_writer", "writer": "digest", "proposes": ["User goes by {intruder}."], "op": "say"}
