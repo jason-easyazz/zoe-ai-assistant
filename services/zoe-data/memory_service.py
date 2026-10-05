@@ -46,6 +46,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Optional
 
+from live_store_guard import (
+    LiveStoreViolation,
+    assert_palace_open_allowed,
+    assert_write_allowed,
+    guard_collection,
+)
 from memory_importance import score_importance
 
 try:
@@ -92,6 +98,9 @@ _DRAWERS_EF_LOCK = threading.Lock()
 def _palace_client(data_dir: str) -> Any:
     """The cached PersistentClient for ``data_dir`` (resolved, so every spelling shares it)."""
     key = os.path.realpath(os.path.abspath(os.path.expanduser(data_dir)))
+    # Hard guard (live_store_guard): a pytest session may never open the household palace —
+    # checked on EVERY call, not only the first, so a cached client cannot launder it.
+    assert_palace_open_allowed(key)
     client = _AUDIT_CLIENTS.get(key)
     if client is None:
         with _AUDIT_CLIENTS_LOCK:
@@ -181,14 +190,18 @@ def get_drawers_collection(data_dir: str) -> Any:
     client = _palace_client(data_dir)
     ef = _drawers_embedding_function()
     try:
-        return client.get_collection(_DRAWERS_COLLECTION, embedding_function=ef)
+        col = client.get_collection(_DRAWERS_COLLECTION, embedding_function=ef)
     except Exception:
         names = {getattr(c, "name", c) for c in client.list_collections()}
         if _DRAWERS_COLLECTION in names:
             raise  # it exists: this is a real error, never paper over it with a create
-        return client.create_collection(
+        col = client.create_collection(
             _DRAWERS_COLLECTION, metadata={"hnsw:space": "cosine"}, embedding_function=ef
         )
+    # The one wrapped accessor: every direct drawer writer (digest passes, tick_access, supersede,
+    # zoe_agent) gets its handle here. The service gets the raw collection; a non-service process on
+    # the live palace gets a write-checking proxy (live_store_guard.GuardedCollection).
+    return guard_collection(col, data_dir)
 
 
 # ── Maintenance gate + in-process index compaction (ZOE_MEMORY_INDEX_COMPACT) ──────────
@@ -924,6 +937,22 @@ def _scope_visibility(scope: Any | None) -> str:
     return _MEMORY_SCOPE_TO_VISIBILITY[scope_value]
 
 
+_TOMBSTONE_MAX_HASHES = 200   # keeps the JSON inside the audit row's 4,000-char cap
+
+
+def _delete_tombstone_id(user_id: str, ids: list[str]) -> str:
+    """Stable, content-free id for a ``delete_user`` audit row."""
+    basis = f"{user_id}|{len(ids)}|{time.time_ns()}".encode()
+    return f"delete_user:{hashlib.sha256(basis).hexdigest()[:16]}"
+
+
+def _delete_tombstone_body(ids: list[str]) -> dict[str, Any]:
+    """What a hard delete records about the rows it targets: a count and short hashes of the
+    row ids (themselves text-derived hashes). Never the text, never the metadata."""
+    hashes = [hashlib.sha256(i.encode()).hexdigest()[:8] for i in ids[:_TOMBSTONE_MAX_HASHES]]
+    return {"rows_targeted": len(ids), "id_hashes": hashes, "truncated": len(ids) > len(hashes)}
+
+
 def _memory_id(user_id: str, text: str, metadata: Mapping[str, Any]) -> str:
     """Stable row id; include durable identity so same text can exist in distinct lanes."""
 
@@ -1149,6 +1178,7 @@ class MemoryService:
         authoritative memory scope and is validated before any durable write.
         """
         self._require(user_id, "user_id is required")
+        assert_write_allowed(getattr(self, "_data_dir", _MEMPALACE_DATA), user_id, "ingest")
         if not text or not text.strip():
             raise MemoryServiceError("empty text")
 
@@ -1252,6 +1282,8 @@ class MemoryService:
                 await self._run_sync(
                     self._write_row, mem_id, scrubbed, metadata
                 )
+            except LiveStoreViolation:
+                raise
             except Exception as exc:
                 self._bump("error", source)
                 logger.warning("memory_service: write failed user=%s source=%s: %s",
@@ -1362,15 +1394,38 @@ class MemoryService:
             )
         return rows
 
-    async def delete_user(self, user_id: str, *, actor: str) -> int:
-        """Right-to-be-forgotten. Returns number of rows removed."""
+    async def delete_user(self, user_id: str, *, actor: str, reason: str = "") -> int:
+        """Right-to-be-forgotten. Returns number of rows removed.
+
+        A hard delete is the one removal that bypasses the ``status`` lifecycle, so it must not be
+        silent. When rows match, a content-free ``delete_user`` INTENT row is written BEFORE anything
+        is deleted (actor, reason, ``rows_targeted``, short id hashes — never text) and a
+        ``delete_user_done`` row (same tombstone id, ``rows_removed``) AFTER ``_delete_ids`` succeeds,
+        so "attempted" and "done" are distinguishable and a failed delete never leaves a false
+        "removed" record. If the intent cannot be written nothing is deleted (fail closed). Both rows
+        survive the purge of the user's own per-row trail (that trail carries text and is removed). A
+        sweep that matches no rows writes nothing — it removes nothing. Documented in
+        docs/knowledge/memory-loss-audit-2026-10-05.md."""
         self._require(user_id, "user_id is required")
+        assert_write_allowed(getattr(self, "_data_dir", _MEMPALACE_DATA), user_id, "delete_user")
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())
         async with lock:
             try:
                 ids = await self._run_sync(self._list_ids_for_user, user_id)
                 if ids:
+                    tomb_id = _delete_tombstone_id(user_id, ids)
+                    await self._run_sync(
+                        self._append_audit_sync,
+                        tomb_id, user_id, actor, "delete_user",
+                        _delete_tombstone_body(ids), None,
+                        reason or "hard delete (right-to-be-forgotten / synthetic sweep)",
+                    )
                     await self._run_sync(self._delete_ids, ids)
+                    await self._run_sync(
+                        self._append_audit_sync,
+                        tomb_id, user_id, actor, "delete_user_done",
+                        {"rows_removed": len(ids)}, None, "",
+                    )
                 await self._run_sync(self._delete_audit_for_user_sync, user_id)
             except Exception as exc:
                 raise MemoryServiceError(f"delete_user failed: {exc}") from exc
@@ -1933,9 +1988,20 @@ class MemoryService:
         if not keys:
             self._seen_keys_by_user.pop(user_id, None)
 
+    # Statuses that mean "a candidate reached ingest and was NOT written": counted in the
+    # durable reject ledger (memory_reject_ledger) so the nightly summary can say why an
+    # ingest left no row. ``error`` is separate (a failed write is loud, never a reject).
+    _REFUSED_STATUSES = frozenset({"opt_out", "pii_reject", "tombstone_drop", "dedup"})
+
     def _bump(self, status: str, source: str) -> None:
         if _METRICS_OK:
             memory_write_count.labels(source=source, status=status).inc()
+        if status in self._REFUSED_STATUSES:
+            try:
+                from memory_reject_ledger import record_reject
+                record_reject(source, status, gate=False)
+            except Exception:  # noqa: BLE001
+                pass
 
     async def _graph_depth_by_pid(self, query: str, user_id: str) -> dict[str, int]:
         """Best-effort relationship-graph neighbourhood for the query's person.
@@ -2033,6 +2099,8 @@ class MemoryService:
         return _palace_client(self._data_dir).get_or_create_collection(_AUDIT_COLLECTION)
 
     def _write_row(self, mem_id: str, text: str, metadata: dict[str, Any]) -> None:
+        assert_write_allowed(
+            getattr(self, "_data_dir", _MEMPALACE_DATA), str(metadata.get("user_id") or metadata.get("wing") or ""), "row write")
         col = self._collection()
         col.upsert(ids=[mem_id], documents=[text], metadatas=[metadata])
 
@@ -2319,7 +2387,9 @@ class MemoryService:
 
     def _delete_audit_for_user_sync(self, user_id: str) -> int:
         col = self._audit_collection()
-        result = col.get(where={"user_id": user_id})
+        # The ``delete_user`` / ``delete_user_done`` rows are the record OF the removal — they outlive it.
+        result = col.get(where={"$and": [{"user_id": user_id},
+                                         {"action": {"$nin": ["delete_user", "delete_user_done"]}}]})
         ids = list(result.get("ids") or [])
         if ids:
             col.delete(ids=ids)
@@ -2552,6 +2622,8 @@ class MemoryService:
                 self._append_audit_sync,
                 mem_id, user_id, actor, action, before, after, reason,
             )
+        except LiveStoreViolation:
+            raise  # a guard trip is a configuration bug, never a "best-effort" miss
         except Exception as exc:
             logger.warning("memory_service: audit append failed: %s", exc)
 
@@ -2566,6 +2638,7 @@ class MemoryService:
         reason: str,
     ) -> None:
         import json as _json
+        assert_write_allowed(getattr(self, "_data_dir", _MEMPALACE_DATA), user_id, "audit append")
         col = self._audit_collection()
         audit_id = str(uuid.uuid4())
         summary = f"{action} {mem_id} by {actor} for {user_id}"
