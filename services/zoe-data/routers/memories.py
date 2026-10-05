@@ -228,6 +228,9 @@ async def review_memory(
             actor=user["user_id"],
             edits=body.content,
             note=body.note,
+            # an admin reviewing ANOTHER user's row acts as an operator, not as the account
+            # (memory_authority: only the account itself is user_confirmed on its own rows)
+            origin="admin" if (is_admin and owner and owner != user["user_id"]) else None,
         )
     except MemoryServiceError as exc:
         # ValueErrors from bad input become 400, missing-row becomes 404.

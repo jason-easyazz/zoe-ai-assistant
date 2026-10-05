@@ -3717,6 +3717,18 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             # ingest silently drops on PII reject / dedup / opt-out. Don't claim
             # a durable write the store didn't actually make.
             return "I couldn't save that just now — it may already be stored or contain something I can't keep."
+        try:
+            from memory_authority import is_candidate
+
+            held_back = is_candidate(ref)
+        except Exception:
+            held_back = False
+        if held_back:
+            # The model's paraphrase disagrees with something the user told me directly:
+            # it is parked, not stored - and the reply must not claim otherwise.
+            return ("That doesn't match something you told me before, so I haven't changed it. "
+                    "If it has changed, tell me plainly (for example \"I live in Perth now\") "
+                    "and I'll update it.")
         # An EXPLICIT teach beats a recent forget — but only clear the shadow
         # AFTER the store succeeded (its source is tombstone-exempt), or a
         # failed/rejected store would silently drop the protection (Greptile P1).

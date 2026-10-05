@@ -33,6 +33,12 @@ logger = logging.getLogger(__name__)
 _TEMPORAL_TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 
+#: ``_ingest_to_mempalace`` result: the fact contradicted something the user said and was
+#: stored as a pending CANDIDATE (memory_authority) - the structured people-graph rows
+#: (dates, activities, gifts...) must not be written from it either.
+AUTHORITY_BLOCKED = "authority_blocked"
+
+
 def temporal_relationships_enabled() -> bool:
     """Cheap per-call read of the temporal-relationships flag (default OFF)."""
     return (
@@ -410,6 +416,8 @@ async def _reconcile_same_kind_entity_row(
     pattern_type: str,
     source: str,
     source_excerpt: Optional[str] = None,
+    session_id: Optional[str] = None,
+    origin: Optional[str] = None,
 ) -> Optional[str]:
     """Supersede/skip against an existing row of the SAME person + SAME kind.
 
@@ -443,6 +451,8 @@ async def _reconcile_same_kind_entity_row(
         actor=source,
         note=f"person {pattern_type} supersede (entity-keyed, QA 2026-07-13)",
         source_excerpt=source_excerpt,
+        session_id=session_id,
+        origin=origin,
     )
     if new_ref is None:
         return None  # supersede failed — fall through to the normal path
@@ -476,8 +486,12 @@ async def _ingest_to_mempalace(
     session_id: Optional[str] = None,
     pattern_type: Optional[str] = None,
     source_excerpt: Optional[str] = None,
+    origin: Optional[str] = None,
 ) -> Optional[str]:
     """Write one fact to MemPalace and return the mem_id.
+
+    ``origin`` names the real writer when it is finer than the lane ``source`` (the LLM half
+    of the person extractor shares ``source="conversation"`` with the regex half).
 
     ``source_excerpt`` is the text the fact was mined from (the user's utterance on
     the chat/voice lanes) — the evidence ``recall_evidence`` quotes. MemoryService
@@ -510,7 +524,7 @@ async def _ingest_to_mempalace(
             try:
                 handled = await _reconcile_same_kind_entity_row(
                     svc, text, user_id, person_name, entity_id, pattern_type, source,
-                    source_excerpt,
+                    source_excerpt, session_id, origin,
                 )
             except Exception as exc:
                 logger.debug(
@@ -564,6 +578,8 @@ async def _ingest_to_mempalace(
                     actor=source,
                     note="person fact supersede (QA F9)",
                     source_excerpt=source_excerpt,
+                    session_id=session_id,
+                    origin=origin,
                 )
                 if new_ref is not None:
                     logger.info("person_extractor: superseded %s with %r", target_id, text[:60])
@@ -595,7 +611,10 @@ async def _ingest_to_mempalace(
             entity_type="person" if entity_id and not entity_id.startswith("slug:") else "person_pending",
             entity_id=entity_id or f"slug:{person_name.lower().replace(' ', '_')}",
             source_excerpt=source_excerpt,
+            origin=origin,
         )
+        if ref is not None and (getattr(ref, "metadata", None) or {}).get("authority_blocked"):
+            return AUTHORITY_BLOCKED
         return ref.id if ref else None
     except Exception as exc:
         logger.debug("person_extractor: mempalace ingest failed: %s", exc)
@@ -789,6 +808,64 @@ async def _reopen_edge(db, user_id: str, edge_id: str, now: str) -> None:
         )
 
 
+async def _edge_authority(db, user_id: str, edge_id: str) -> str:
+    """The stamped ``authority`` of a person_relationships edge ("" = unstamped legacy row,
+    or a database without the column - migration 0037). Read-only; never raises."""
+    for sql, args in (
+        ("SELECT authority FROM person_relationships WHERE id=$1 AND user_id=$2", (edge_id, user_id)),
+        ("SELECT authority FROM person_relationships WHERE id=? AND user_id=?", (edge_id, user_id)),
+    ):
+        try:
+            cur = await db.execute(sql, *args) if "$1" in sql else await db.execute(sql, args)
+            row = await cur.fetchone()
+            return str(row[0] or "") if row else ""
+        except Exception:  # noqa: BLE001 - wrong param style / no such column
+            continue
+    return ""
+
+
+async def _stamp_edge(db, user_id: str, edge_id: str, authority: str, origin: str) -> None:
+    """Best-effort provenance on a freshly inserted edge (a no-op before migration 0037)."""
+    for sql, args in (
+        ("UPDATE person_relationships SET authority=$1, origin=$2 WHERE id=$3 AND user_id=$4",
+         (authority, origin, edge_id, user_id)),
+        ("UPDATE person_relationships SET authority=?, origin=? WHERE id=? AND user_id=?",
+         (authority, origin, edge_id, user_id)),
+    ):
+        try:
+            if "$1" in sql:
+                await db.execute(sql, *args)
+            else:
+                await db.execute(sql, args)
+            return
+        except Exception:  # noqa: BLE001
+            continue
+
+
+async def _edge_may_change(db, user_id: str, edge_id: str, authority: str, origin: str,
+                           name_a: str, name_b: str, rel_type: str) -> bool:
+    """The people-graph half of the authority wall: may ``origin`` (writing with
+    ``authority``) close the current edge ``edge_id`` for a different relationship?"""
+    import memory_authority as _auth
+
+    if not _auth.enabled() or authority in _auth.PROTECTED:
+        return True
+    if (await _edge_authority(db, user_id, edge_id)) == _auth.INFERRED:
+        return True  # inference may correct its own edge
+    _auth.log_blocked(origin, "relationship", user_id=user_id, action="edge")
+    try:
+        from memory_service import get_memory_service
+
+        await get_memory_service().record_candidate(
+            f"{name_a} is {name_b}'s {rel_type.replace('_', ' ')}.", user_id=user_id,
+            writer=origin, contradicts=f"edge:{edge_id}", kind="relationship",
+            memory_type="person",
+        )
+    except Exception as exc:  # noqa: BLE001 - the candidate is a courtesy, the wall is the rule
+        logger.debug("person_extractor: edge candidate not stored (%s)", type(exc).__name__)
+    return False
+
+
 async def _write_relationship(
     user_id: str,
     name_a: str,
@@ -796,8 +873,17 @@ async def _write_relationship(
     rel_type: str,
     rel_group: str,
     db,
+    *,
+    authority: str = "user_stated",
+    origin: str = "person_extractor",
 ) -> None:
-    """Upsert a relationship edge, creating partial stubs for unknown people."""
+    """Upsert a relationship edge, creating partial stubs for unknown people.
+
+    ``authority`` / ``origin`` (memory_authority): ``process_text`` reads the user's own
+    turn, so its edges are ``user_stated`` (the default). The edge is stamped with its
+    writer, and an ``inferred`` writer can never CLOSE an edge the user stated (or one
+    that is unstamped - a legacy edge is the user's until shown otherwise): it leaves a
+    pending candidate instead and logs ``AUTHORITY_BLOCKED``."""
     from routers.people import RELATIONSHIP_TYPES, _WORK_GROUPS
 
     # Resolve labels
@@ -881,6 +967,9 @@ async def _write_relationship(
                 if existing_type == rel_type:
                     # Unchanged relationship — nothing to supersede or insert.
                     return
+                if not await _edge_may_change(db, user_id, existing_id, authority, origin,
+                                              name_a, name_b, rel_type):
+                    return
                 # rel_type changed → close the old edge, then fall through to
                 # insert the new current edge.
                 await _supersede_edge(db, user_id, existing_id, rel_id, now)
@@ -932,6 +1021,7 @@ async def _write_relationship(
                         user_id, name_a, rel_type, name_b, exc2)
                 return
         await db.commit()
+        await _stamp_edge(db, user_id, rel_id, authority, origin)
         # Update context for both people
         for pid in (pid_a, pid_b):
             try:
@@ -1003,8 +1093,10 @@ async def apply_person_fact(
     session_id: str | None = None,
     db=None,
     source_excerpt: str | None = None,
+    origin: str | None = None,
 ) -> bool:
     """Apply one structured person fact (regex or LLM). Returns True if written.
+    ``origin``: the real writer when finer than ``source`` (``person_extractor_llm``).
     ``source_excerpt``: the text it was mined from (see ``_ingest_to_mempalace``)."""
     name = (name or "").strip()
     value = (value or "").strip()
@@ -1039,7 +1131,14 @@ async def apply_person_fact(
             session_id=session_id,
             pattern_type=pattern_type,
             source_excerpt=source_excerpt,
+            origin=origin,
         )
+
+        if mem_id == AUTHORITY_BLOCKED:
+            # The memory write was refused as an overwrite of the user's own words and left
+            # a pending candidate: the dates / activities / gifts tables are not the place
+            # to apply it (the user confirms the candidate, then it applies).
+            return False
 
         if not person_uuid:
             return bool(mem_id)
@@ -1160,7 +1259,8 @@ async def process_text(
             if rel_info and _looks_like_person_name(name_a) and _looks_like_person_name(name_b):
                 rel_type, rel_group = rel_info
                 try:
-                    await _write_relationship(user_id, name_a, name_b, rel_type, rel_group, _db)
+                    await _write_relationship(user_id, name_a, name_b, rel_type, rel_group, _db,
+                                              authority="user_stated", origin=source)
                     written += 1
                 except Exception as exc:
                     logger.debug("person_extractor: relationship write failed: %s", exc)

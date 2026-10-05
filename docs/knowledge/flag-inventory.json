@@ -2579,6 +2579,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_MEMORY_AUTHORITY": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_authority.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_MEMORY_COMPOSE_ENABLED": {
         "defaults": [
           "''"

@@ -20,6 +20,7 @@ import re
 import uuid
 
 import httpx
+import memory_authority
 from routers.journal import CREATED_AT_VALID_TIMESTAMP_SQL
 from user_filters import GUEST_USERS, drop_synthetic_users, message_owner_expr
 
@@ -281,6 +282,7 @@ You are extracting personal facts from a chat transcript. Only extract facts the
 Return ONLY a JSON array (no preamble, no explanation). Each item has:
   "type": one of "profile" | "preference" | "habit" | "event" | "relationship" | "health"
   "fact": a single concise sentence (max 150 chars) in third-person (e.g. "User is 44 years old")
+  "quote": the user's OWN words that state it, copied EXACTLY from ONE chat message below (a fact about the user needs words where the user speaks about themself: "I", "my", "me"). A name that merely appears in a message is not a fact about the user.
 
 If nothing personal was stated, return: []
 
@@ -656,6 +658,11 @@ async def run_turn_digest(
                         # value the edit would otherwise carry forward).
                         metadata={"affect": fact_affect},
                         source_excerpt=turn_excerpt,
+                        # authority: the user's OWN turn is the anchor; the new row is THIS
+                        # writer's (session/turn), never the superseded row's
+                        anchor_text=user_message,
+                        session_id=session_id,
+                        turn_ref=f"{base_turn_id}-td{idx}",
                     )
                     if new_ref is not None:
                         result["new"] += 1
@@ -679,8 +686,12 @@ async def run_turn_digest(
                     tags=fact_tags,
                     metadata={"affect": fact_affect} if fact_affect else None,
                     source_excerpt=turn_excerpt,
+                    anchor_text=user_message,
                 )
-                if ref is not None:
+                if ref is not None and memory_authority.is_candidate(ref):
+                    # held back as a pending candidate (it disputes something the user said)
+                    result["skipped_low_quality"] += 1
+                elif ref is not None:
                     result["new"] += 1
                     logger.info("turn_digest: stored for %s: %s", user_id, fact[:80])
                     if fact_changes:
@@ -808,6 +819,10 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                         edits=fact,
                         actor="digest",
                         note="digest contradiction: superseded by newer turn",
+                        # the day's USER turns (never assistant text): a verbatim user quote
+                        # supports the fact, or the digest is an inference and cannot
+                        # overrule what the user said
+                        anchor_text=fact_anchor(item, chat_text) or "",
                     )
                 except MemoryServiceError as exc:
                     logger.warning(
@@ -851,6 +866,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                         edits=fact,
                         actor="digest",
                         note="nightly digest supersede (QA F9)",
+                        anchor_text=fact_anchor(item, chat_text) or "",
                     )
                     if new_ref is not None:
                         result["superseded"] += 1
@@ -867,11 +883,14 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                     confidence=0.8,
                     status="approved",
                     tags=tags,
+                    anchor_text=fact_anchor(item, chat_text) or "",
                 )
             except MemoryServiceError as exc:
                 logger.warning("memory_digest: ingest failed for %s: %s", user_id, exc)
                 continue
-            if ref is not None:
+            if ref is not None and memory_authority.is_candidate(ref):
+                result["candidates"] = result.get("candidates", 0) + 1
+            elif ref is not None:
                 result["new"] += 1
                 logger.info("memory_digest: stored for %s: %s", user_id, fact[:80])
 
@@ -1004,6 +1023,19 @@ async def _load_todays_messages(user_id: str, db=None) -> str:
     except Exception as exc:
         logger.warning("memory_digest: could not load messages for %s: %s", user_id, exc)
         return ""
+
+
+def fact_anchor(item: dict, user_text: str) -> str | None:
+    """The user's OWN words that anchor one extracted fact (memory_authority): the model's
+    ``quote`` when it is a verbatim span of the user turns, ``None`` when it gave a quote that
+    is NOT (a hallucinated span is no evidence), and the whole user transcript when the model
+    gave no ``quote`` field at all (an older reply shape; ``supports`` still demands the
+    subject, value, attribute and first person in ONE user sentence)."""
+    if not isinstance(item, dict) or "quote" not in item:
+        return user_text
+    squash = lambda t: re.sub(r"\s+", " ", str(t or "")).strip().lower()  # noqa: E731
+    quote = squash(item.get("quote"))
+    return str(item.get("quote")).strip() if quote and quote in squash(user_text) else None
 
 
 class ExtractorError(RuntimeError):
@@ -1150,9 +1182,11 @@ async def _merge_near_duplicates(svc, user_id: str) -> int:
     )
     if len(approved) < 2:
         return 0
-    # Pin the freshest/highest-confidence row of each cluster as the keeper.
+    # Pin the strongest row of each cluster as the keeper: authority class first (a row the
+    # user said outranks a model's), then confidence, then age.
     approved.sort(
         key=lambda r: (
+            -memory_authority.row_rank(r.metadata, r.text),
             -float(r.metadata.get("confidence", 0.7) or 0.7),
             r.metadata.get("added_at", ""),
         ),
@@ -1167,17 +1201,15 @@ async def _merge_near_duplicates(svc, user_id: str) -> int:
         matched = False
         for keeper in keepers:
             if _text_overlap(text, keeper.text) >= 0.85:
-                # Supersede the weaker row with the keeper's existing id.
+                # An IDENTICAL duplicate is archived (nothing is lost, nothing is rewritten:
+                # the old merge edited the weaker row into the keeper's text - 6,585 of 6,605
+                # audit edits were such no-op rewrites stamped reviewed_by=consolidation). A
+                # near-duplicate whose text DIFFERS is a different statement and is left alone.
                 try:
-                    # review() returns None when the edit was refused (the
-                    # memory opt-out wall) — count only edits that happened.
-                    if await svc.review(
-                        ref.id,
-                        decision="edit",
-                        edits=keeper.text,
-                        actor="consolidation",
-                        note="weekly: merged near-duplicate",
-                    ) is not None:
+                    if await svc.archive_duplicate(
+                        ref.id, keeper.id, actor="consolidation",
+                        note="weekly: identical duplicate of " + keeper.id,
+                    ):
                         merged += 1
                 except Exception as exc:
                     logger.debug(
@@ -1280,7 +1312,7 @@ async def run_weekly_consolidation(user_id: str) -> dict:
     except Exception as exc:
         logger.warning("consolidation: contradiction pass failed user=%s: %s", user_id, exc)
     try:
-        archived_ids = await svc.sweep_soft_archive(user_id=user_id, actor="consolidation")
+        archived_ids = await svc.sweep_soft_archive(user_id=user_id, actor="decay_sweep")
         summary["archived"] = len(archived_ids)
     except Exception as exc:
         logger.warning("consolidation: sweep failed user=%s: %s", user_id, exc)

@@ -310,11 +310,16 @@ async def consolidate_session(session_id: str, user_id: str,
         return 0
     user_id = owner
 
-    transcript = "\n".join(f"{r['role']}: {r['content']}" for r in rows if r["content"])
+    # USER turns only, to the extractor AND as the anchor: the extraction prompt says "user
+    # turns only", and the old "role: content" transcript fed it the assistant's lines too, so
+    # a fact the assistant SAID became a fact about the user (memory fidelity audit V5).
+    user_turns = "\n".join(str(r["content"]) for r in rows
+                           if r["content"] and str(r["role"]) == "user")
+    transcript = user_turns
 
     # ── Step 2: NO pooled connection held across Gemma extraction + ingest ─────
     try:
-        from memory_digest import _extract_facts_with_gemma
+        from memory_digest import _extract_facts_with_gemma, fact_anchor
         facts = await _extract_facts_with_gemma(transcript)
     except Exception as exc:
         # Honour the "never raises out" contract: a Gemma failure (OOM/timeout/
@@ -352,6 +357,7 @@ async def consolidate_session(session_id: str, user_id: str,
                 svc, text, user_id=user_id, source="idle_consolidation",
                 session_id=session_id, user_turn_id=turn_id,
                 memory_type="fact", confidence=0.8, tags=["idle", "self"],
+                anchor_text=fact_anchor(item, user_turns) or "",
             )
             stored += 1
         except Exception as exc:

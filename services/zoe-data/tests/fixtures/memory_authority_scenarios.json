@@ -1,0 +1,76 @@
+{
+  "synthetic": true,
+  "note": "Samantha-bar-shaped scenarios for the memory-authority class (turns = (user, session label, text) exactly as scripts/perf/samantha_bar.py SCENARIOS; asks = (user, question)). They are NOT wired into the live bar (that is a baseline decision: new scenario ids need a --record-baseline run on a healthy box) - tests/test_memory_authority.py replays each one at the STORE level: seed rows, then the model-proposed facts are ingested with the day's user turns as the anchor. Synthetic people/places only.",
+  "scenarios": [
+    {
+      "id": "A1",
+      "title": "an inference cannot overwrite what I said",
+      "proves": "a day transcript with a half-heard sentence about someone else does not turn the stated dog name into the heard one; the heard one waits as a candidate",
+      "turns": [
+        ["A", "d1-dog", "My dog is called Teddy."],
+        ["A", "d1-stt", "uh Rex is coming over I think, we will see about the shopping"]
+      ],
+      "asks": [["A", "What is my dog called?"]],
+      "store": {
+        "seed": [["User's dog is named Teddy.", "voice_fact"]],
+        "proposals": [{"writer": "digest", "fact": "User's dog is named Rex."}],
+        "expect_approved": ["User's dog is named Teddy."],
+        "expect_pending": ["User's dog is named Rex."],
+        "expect_authority": {"User's dog is named Teddy.": "user_stated", "User's dog is named Rex.": "inferred"}
+      }
+    },
+    {
+      "id": "A2",
+      "title": "a name I only overheard is a person, not me",
+      "proves": "a speech-to-text fragment naming a third person never becomes the owner's name; the name is raised as a person to ask about",
+      "turns": [
+        ["A", "d1-chat", "Okay, that is the plan for tomorrow and the shopping."],
+        ["A", "d1-stt", "uh Mika Vale is coming over I think, and so on"]
+      ],
+      "asks": [["A", "What is my name?"]],
+      "store": {
+        "seed": [],
+        "proposals": [{"writer": "digest", "fact": "User's name is Mika Vale."}],
+        "expect_approved": [],
+        "expect_pending": ["Mika Vale was mentioned in conversation (who they are is not known)."]
+      }
+    },
+    {
+      "id": "A3",
+      "title": "saying I stopped is mine to say",
+      "proves": "'I don't play tennis any more' is the user's own word: the model-assisted writer that read it stores it as user_stated, so the retirement of the old fact is allowed",
+      "turns": [
+        ["A", "d1-tennis", "I play tennis on Saturdays."],
+        ["A", "d2-tennis", "I don't play tennis any more."]
+      ],
+      "asks": [["A", "Do I still play tennis?"]],
+      "store": {
+        "seed": [["User plays tennis on Saturdays.", "voice_fact"]],
+        "proposals": [{"writer": "turn_digest", "fact": "User no longer plays tennis."}],
+        "expect_approved": ["User plays tennis on Saturdays.", "User no longer plays tennis."],
+        "expect_pending": [],
+        "expect_authority": {"User no longer plays tennis.": "user_stated"}
+      }
+    },
+    {
+      "id": "A4",
+      "title": "my correction wins, a guess does not",
+      "proves": "after 'I live in Hobart now' the stated move is user_stated; a consolidation pass proposing another city is held as a candidate",
+      "turns": [
+        ["A", "d1-home", "I live in Dunedin, by the way."],
+        ["A", "d2-home", "Big news - I've moved. I live in Hobart now."]
+      ],
+      "asks": [["A", "Which city do I live in these days?"]],
+      "store": {
+        "seed": [["User lives in Dunedin.", "voice_fact"]],
+        "proposals": [
+          {"writer": "turn_digest", "fact": "User lives in Hobart."},
+          {"writer": "consolidation", "fact": "User lives in Perth."}
+        ],
+        "expect_approved": ["User lives in Dunedin.", "User lives in Hobart."],
+        "expect_pending": ["User lives in Perth."],
+        "expect_authority": {"User lives in Hobart.": "user_stated", "User lives in Perth.": "inferred"}
+      }
+    }
+  ]
+}

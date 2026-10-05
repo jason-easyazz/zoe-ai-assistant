@@ -391,8 +391,12 @@ def _record_quality_reject(source: str, reason: str, text: str) -> None:
 async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
                                session_id: Optional[str], user_turn_id: Optional[str],
                                memory_type: str, confidence: float,
-                               tags: list[str]) -> str:
+                               tags: list[str], anchor_text: Optional[str] = None) -> str:
     """Ingest a conversational fact, merging it with an equivalent existing row.
+
+    ``anchor_text`` is the user's OWN turn text the fact was mined from (user turns only):
+    a model-assisted source (idle consolidation) earns ``user_stated`` authority only when
+    it supports the fact (memory_authority); without it the fact is ``inferred``.
 
     Returns an outcome string so callers can be HONEST about what happened
     (QA review F13 — teach replies must not claim success over a silent drop):
@@ -446,7 +450,7 @@ async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
         text, user_id=user_id, source=source,
         session_id=session_id, user_turn_id=user_turn_id,
         memory_type=memory_type, confidence=confidence, status="approved",
-        tags=tags, metadata=metadata,
+        tags=tags, metadata=metadata, anchor_text=anchor_text,
     )
     new_id = getattr(ref, "id", None)
     if ref is None:

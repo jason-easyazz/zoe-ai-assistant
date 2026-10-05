@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-527 flags; 525 not documented in `.env.example`.
+528 flags; 526 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -269,6 +269,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_MCP_USER_ID` | `-` | no | NO | `services/zoe-data/mcp_server.py` |
 | `ZOE_MCP_USER_ROLE` | `-` | no | NO | `services/zoe-data/mcp_server.py` |
 | `ZOE_MEMORY_AUDIT_COLLECTION` | `'mempalace_audit'` | no | NO | `services/zoe-data/memory_service.py` |
+| `ZOE_MEMORY_AUTHORITY` | `-` | no | NO | `services/zoe-data/memory_authority.py` |
 | `ZOE_MEMORY_COMPOSE_ENABLED` | `''` | no | NO | `services/zoe-data/zoe_memory_compose.py` |
 | `ZOE_MEMORY_DIGEST_LOOKBACK_HOURS` | `-` | no | NO | `services/zoe-data/memory_digest.py` |
 | `ZOE_MEMORY_IMPLICIT_SUPERSEDE` | `False` | yes | NO | `services/zoe-data/memory_supersede.py` |

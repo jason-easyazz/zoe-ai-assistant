@@ -24,6 +24,18 @@ Safety rails enforced here, not in callers:
   * PII scrubber               -> Luhn CC, SSN-shape, 2FA, password-adjacent.
   * immutable audit log        -> every mutation appends to `mempalace_audit`.
   * metrics                    -> every path instruments `zoe_memory_*` counters.
+  * AUTHORITY (memory_authority.py) -> every row carries a provenance CLASS from an
+    allow-list (operator 5 > user_confirmed 4 > user_stated 3 > user_unverified 2 >
+    model_from_turn 1 > model_from_transcript 0; unknown writers rank 0) plus `authority`
+    (user_stated | user_confirmed | inferred), `origin`, `turn_ref`, `model`, derived at
+    write time from the real writer. ingest(), review(edit|archive|reject|approve),
+    supersede_by() and archive_duplicate() are the ONE choke point: a write below the user
+    classes can never supersede, archive or contradict a row that outranks it about the
+    same subject + attribute - it leaves a `disputed` candidate linked via `contradicts_id`
+    and logs `AUTHORITY_BLOCKED writer=<name> kind=<attr>`. A supersede records the NEW
+    writer's provenance (never the old row's source / session / excerpt). The identity wall
+    (identity_facts) is the special case "the user's own name is never writable by an
+    automatic writer at all". ZOE_MEMORY_AUTHORITY=enforce|shadow|off.
 """
 
 from __future__ import annotations
@@ -46,6 +58,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Optional
 
+import memory_authority as _auth
 from memory_importance import score_importance
 
 try:
@@ -1158,11 +1171,25 @@ class MemoryService:
         scope: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
         opt_out: bool = False,
+        authority: Optional[str] = None,
+        anchor_text: Optional[str] = None,
+        turn_ref: Optional[str] = None,
+        origin: Optional[str] = None,
     ) -> Optional[MemoryRef]:
         """Store a fact. Returns None when silently dropped.
 
         When ``scope`` is None, ``metadata["scope"]`` is treated as the
         authoritative memory scope and is validated before any durable write.
+
+        Provenance (``memory_authority``): the row's class is derived from ``source`` and,
+        for a model-assisted writer, from ``anchor_text`` - the user's OWN turn text(s) the
+        fact was mined from (user turns only; defaults to ``source_excerpt``).
+        ``authority`` may only DOWNGRADE (``"inferred"``) or confirm (``"user_confirmed"``,
+        user-class sources). ``origin`` names the WRITER when it is finer than the lane
+        label ``source`` (``person_extractor_llm`` writes under ``source="conversation"``).
+        A fact from a writer below the user classes that contradicts an approved row
+        outranking it is stored as a ``disputed`` candidate (``contradicts_id``) instead -
+        the returned ref says so.
         """
         self._require(user_id, "user_id is required")
         if not text or not text.strip():
@@ -1182,6 +1209,11 @@ class MemoryService:
         # person became the owner's name). identity_facts answers from the account.
         if _identity_assertion_blocked(text, user_id=user_id, source=source):
             self._bump("identity_drop", source)
+            await self._third_person_candidate(
+                text, user_id=user_id, source=source,
+                anchor_text=anchor_text if anchor_text is not None else source_excerpt,
+                session_id=session_id,
+            )
             return None
 
         scrubbed, reject = scrub_pii(text)
@@ -1232,6 +1264,29 @@ class MemoryService:
                 self._bump("dedup", source)
                 return None
 
+            # Authority: who really wrote this, decided HERE from the writer + the user's
+            # own turn text. An inferred fact that contradicts a protected row becomes a
+            # pending candidate (the user's words stay approved; nothing is lost).
+            writer = origin or source
+            resolved = _auth.resolve_write(
+                writer, scrubbed,
+                anchor_text=anchor_text if anchor_text is not None else source_excerpt,
+                claimed=authority, user_id=user_id,
+            )
+            clash = None
+            if resolved.rank < _auth.USER_RANK and status == "approved" and _auth.active():
+                clash = await self._protected_conflict(user_id, scrubbed, resolved.rank)
+            if clash is not None:
+                self._bump("authority_demote", source)
+                _auth.log_blocked(writer, clash[1], user_id=user_id, action="ingest")
+                if not _auth.enabled():
+                    clash = None  # shadow: logged what WOULD have been held back
+            if clash is not None:
+                dup = await self._existing_candidate(user_id, scrubbed, clash[0].id)
+                if dup is not None:
+                    self._remember_seen_key(user_id, idem_key)
+                    return dup
+
             metadata = self._build_metadata(
                 user_id=user_id,
                 source=source,
@@ -1239,7 +1294,7 @@ class MemoryService:
                 user_turn_id=user_turn_id,
                 memory_type=memory_type,
                 confidence=confidence,
-                status=status,
+                status="disputed" if clash is not None else status,
                 tags=tags or [],
                 entity_type=entity_type,
                 entity_id=entity_id,
@@ -1250,6 +1305,10 @@ class MemoryService:
                 idem_key=idem_key,
                 text=scrubbed,
             )
+            metadata.update(_auth.provenance(writer, resolved, turn_ref=turn_ref or user_turn_id))
+            if clash is not None:
+                metadata["contradicts_id"] = clash[0].id
+                metadata["authority_blocked"] = True
 
             mem_id = _memory_id(user_id, scrubbed, metadata)
 
@@ -1265,7 +1324,7 @@ class MemoryService:
                 existing_status = str(
                     existing.metadata.get("status", "") or ""
                 ).strip().lower()
-                if existing_status not in {"", "pending"}:
+                if existing_status not in {"", "pending", "disputed"}:
                     self._bump("dedup", source)
                     if _METRICS_OK:
                         memory_dedup_skip_count.inc()
@@ -1506,13 +1565,13 @@ class MemoryService:
         archived: list[str] = []
         for mid in to_archive:
             try:
-                await self.review(
+                if await self.review(
                     mid,
                     decision="archive",
                     actor=actor,
                     note=f"soft-archive: score<{score_threshold}, age>={min_age_days}d",
-                )
-                archived.append(mid)
+                ) is not None:       # None = refused (the authority wall: a row the user said)
+                    archived.append(mid)
             except Exception as exc:
                 logger.warning(
                     "memory_service: soft-archive failed id=%s: %s", mid, exc
@@ -1543,8 +1602,26 @@ class MemoryService:
         note: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
         source_excerpt: Optional[str] = None,
+        session_id: Optional[str] = None,
+        anchor_text: Optional[str] = None,
+        turn_ref: Optional[str] = None,
+        authority: Optional[str] = None,
+        origin: Optional[str] = None,
     ) -> Optional[MemoryRef]:
         """Approve / reject / edit a pending memory.
+
+        Authority (``memory_authority``): an ``edit`` writes a NEW row stamped with the
+        NEW writer's provenance - ``source`` / ``origin`` = this ``actor``, ``session_id`` =
+        the ``session_id`` passed here (or none), ``turn_ref``, ``model`` - and never
+        inherits the old row's source, session, turn or (for an inferred writer) excerpt.
+        ``anchor_text`` is the user's own turn text the new fact was mined from (defaults
+        to ``source_excerpt``). An automatic / model actor whose new text the user's turn
+        does not support CANNOT edit, archive or reject an approved row that outranks it,
+        nor approve a candidate raised against one: it gets ``None`` (callers already treat
+        that as "supersede refused") and, for a contradicting edit, a ``disputed``
+        candidate linked by ``contradicts_id`` is left behind. A person approving a
+        candidate makes it ``user_confirmed`` and retires the row it disputed. ``actor ==``
+        the row's owner (the account acting on its own rows) is ``user_confirmed``.
 
         ``source_excerpt`` (``edit`` only) is the evidence for the NEW text — a
         correcting utterance replaces the edited row's excerpt; omitted, the old
@@ -1586,6 +1663,22 @@ class MemoryService:
             edits or "", user_id=user_id, source=actor
         ):
             self._bump("identity_drop", actor)
+            await self._third_person_candidate(
+                edits or "", user_id=user_id, source=actor,
+                anchor_text=anchor_text if anchor_text is not None else source_excerpt,
+                session_id=session_id,
+            )
+            return None
+
+        # The authority wall (memory_authority): an inferred writer may not retire, rewrite
+        # or contradict a row the USER said. ``edit`` text the user's own turn supports is
+        # itself user_stated (resolved below) and passes.
+        if await self._authority_refuses(
+            current, decision=decision, actor=origin or actor, user_id=user_id, edits=edits,
+            anchor_text=anchor_text if anchor_text is not None else source_excerpt,
+            authority=authority, session_id=session_id,
+        ):
+            self._bump("authority_block", actor)
             return None
 
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())
@@ -1602,6 +1695,15 @@ class MemoryService:
                 new_meta["reviewed_at"] = datetime.datetime.utcnow().isoformat() + "Z"
                 if note:
                     new_meta["review_note"] = note[:1024]
+                disputed = ""
+                if decision == "approve" and not _auth.writer_is_inferred(actor, user_id=user_id):
+                    # A person approving a row IS the user stating it: from here it is
+                    # user_confirmed, and the row it was raised against is retired below.
+                    if _auth.row_rank(current.metadata, current.text) < _auth.USER_RANK:
+                        new_meta["authority"] = _auth.USER_CONFIRMED
+                        new_meta["authority_class"] = _auth.USER_CONFIRMED
+                        new_meta["authority_basis"] = "user_approved"
+                    disputed = str(current.metadata.get("contradicts_id") or "")
                 await self._run_sync(
                     self._write_row, mem_id, current.text, new_meta
                 )
@@ -1614,6 +1716,16 @@ class MemoryService:
                     after={"status": new_status, "text": current.text},
                     reason=note or "",
                 )
+                if disputed and await self._run_sync(
+                    self._supersede_by_sync, user_id, disputed, mem_id
+                ):
+                    await self._append_audit(
+                        mem_id=disputed, user_id=user_id, actor=actor, action="supersede",
+                        before={"status": "approved"},
+                        after={"status": "superseded", "superseded_by_id": mem_id},
+                        reason="user approved the candidate that disputed it",
+                    )
+                    _invalidate_agent_user_facts_cache(user_id)
                 return MemoryRef(id=mem_id, text=current.text, metadata=new_meta)
 
             # decision == "edit"
@@ -1624,11 +1736,25 @@ class MemoryService:
             if reject:
                 raise MemoryServiceError(f"edit rejected by PII scrubber: {reject}")
             current_scope = current.metadata.get("scope")
+            # The NEW row is the NEW writer's: its source / session / turn / excerpt are
+            # this edit's, never the superseded row's (the carried-forward label made a
+            # digest rewrite look like a regex write - see memory_authority).
+            writer = origin or actor
+            edit_res = _auth.resolve_write(
+                writer, scrubbed,
+                anchor_text=anchor_text if anchor_text is not None else source_excerpt,
+                claimed=authority, user_id=user_id,
+            )
+            edit_source = writer if _auth.is_known_writer(writer) else "review_ui"
+            carried_excerpt = (
+                None if edit_res.rank < _auth.USER_RANK
+                else current.metadata.get("source_excerpt")
+            )
             new_meta = self._build_metadata(
                 user_id=user_id,
-                source=current.metadata.get("source", "review_ui"),
-                session_id=current.metadata.get("session_id"),
-                user_turn_id=current.metadata.get("user_turn_id"),
+                source=edit_source,
+                session_id=session_id,
+                user_turn_id=None,
                 memory_type=current.metadata.get("memory_type", "fact"),
                 confidence=float(current.metadata.get("confidence", 0.7)),
                 status="approved",
@@ -1636,8 +1762,7 @@ class MemoryService:
                 entity_type=current.metadata.get("entity_type"),
                 entity_id=current.metadata.get("entity_id"),
                 expires_at=current.metadata.get("expires_at"),
-                source_excerpt=(source_excerpt if source_excerpt
-                                else current.metadata.get("source_excerpt")),
+                source_excerpt=(source_excerpt if source_excerpt else carried_excerpt),
                 scope=current_scope,
                 extra_metadata=metadata,
                 idem_key=self._idempotency_key(
@@ -1672,11 +1797,12 @@ class MemoryService:
                 # edit from a high-stakes fact to ordinary text would keep a stale
                 # 0.9 boost.
                 "importance",
-            }
+            } | _auth.PROVENANCE_KEYS
             for key, value in current.metadata.items():
                 if key in _EDIT_CARRY_FORWARD_SKIP or key in new_meta:
                     continue
                 new_meta[key] = value
+            new_meta.update(_auth.provenance(writer, edit_res, turn_ref=turn_ref))
             new_id = _memory_id(user_id, scrubbed, new_meta)
             new_meta["supersedes_id"] = mem_id
             new_meta["reviewed_by"] = actor
@@ -1755,8 +1881,10 @@ class MemoryService:
 
     def _supersede_by_sync(self, user_id: str, old_id: str, new_id: str) -> bool:
         col = self._collection()
-        got = col.get(ids=[old_id, new_id], include=["metadatas"])
-        metas = {i: dict(m or {}) for i, m in zip(got.get("ids") or [], got.get("metadatas") or [])}
+        got = col.get(ids=[old_id, new_id], include=["metadatas", "documents"])
+        ids_ = got.get("ids") or []
+        metas = {i: dict(m or {}) for i, m in zip(ids_, got.get("metadatas") or [])}
+        docs = {i: d or "" for i, d in zip(ids_, got.get("documents") or [])}
         old_m, new_m = metas.get(old_id), metas.get(new_id)
         if old_m is None or new_m is None:
             return False
@@ -1764,6 +1892,18 @@ class MemoryService:
             return False
         if str(old_m.get("status") or "") != "approved":
             return False
+        # Authority: an INFERRED successor can never retire a row the user said. (The
+        # implicit-supersede passes pick pairs by topic; they have no user turn in hand
+        # when they run nightly, so the rows' own authority decides.)
+        if _auth.active():
+            new_rank = _auth.row_rank(new_m, docs.get(new_id, ""))
+            if (new_rank < _auth.USER_RANK
+                    and _auth.row_rank(old_m, docs.get(old_id, "")) > new_rank):
+                _auth.log_blocked(str(new_m.get("origin") or new_m.get("source") or ""),
+                                  _auth.kind_of(docs.get(old_id, "")), user_id=user_id,
+                                  action="supersede")
+                if _auth.enabled():
+                    return False
         now = datetime.datetime.now(datetime.timezone.utc).timestamp()
         old_m.update(status="superseded", superseded_by_id=new_id, invalid_at=now)
         new_m.setdefault("valid_from", new_m.get("added_ts") or now)
@@ -1771,6 +1911,239 @@ class MemoryService:
             new_m["supersedes_id"] = old_id
         col.update(ids=[old_id, new_id], metadatas=[old_m, new_m])
         return True
+
+    # ── authority (memory_authority.py) ───────────────────────────────────────
+
+    async def _protected_conflict(
+        self, user_id: str, text: str, writer_rank: int
+    ) -> Optional[tuple[Any, str]]:
+        """``(row, kind)`` of the approved row that OUTRANKS ``writer_rank`` and that ``text``
+        contradicts, else None. Fail-open (a read error never blocks a write)."""
+        if not _auth.active():
+            return None
+        try:
+            rows = await self._run_sync(self._list_by_status_sync, user_id, "approved")
+            return _auth.find_conflict(text, rows, writer_rank)
+        except Exception as exc:  # noqa: BLE001 - the guard must never break ingestion
+            logger.debug("memory_service: authority conflict scan skipped (%s)", type(exc).__name__)
+            return None
+
+    async def _authority_refuses(
+        self,
+        current: MemoryRef,
+        *,
+        decision: str,
+        actor: str,
+        user_id: str,
+        edits: Optional[str],
+        anchor_text: Optional[str],
+        authority: Optional[str],
+        session_id: Optional[str],
+    ) -> bool:
+        """True when ``actor`` (a writer below the user classes) may not apply ``decision`` to
+        ``current`` because ``current`` outranks it. Logs ``AUTHORITY_BLOCKED`` (labels
+        only) and, for a contradicting edit, leaves a disputed candidate behind. In
+        ``shadow`` mode it only logs ``AUTHORITY_WOULD_BLOCK`` and returns False."""
+        if not _auth.active():
+            return False
+        meta = current.metadata or {}
+        status = str(meta.get("status") or "")
+        kind, action, candidate = "", decision, False
+        if decision == "approve":
+            # a candidate raised AGAINST a row is that row's owner's to approve
+            if not (status in ("pending", "disputed") and meta.get("contradicts_id")
+                    and _auth.writer_is_inferred(actor, user_id=user_id)):
+                return False
+            kind = _auth.kind_of(current.text)
+        else:
+            if status != "approved":
+                return False
+            if decision == "edit":
+                res = _auth.resolve_write(
+                    actor, (edits or current.text).strip(), anchor_text=anchor_text,
+                    claimed=authority, user_id=user_id)
+            else:  # archive / reject: the actor's own standing, no text to anchor
+                res = _auth.Resolved(_auth.writer_class(actor, user_id=user_id), "action")
+            if _auth.may_override(res.cls, _auth.row_class(meta, current.text)):
+                return False
+            if decision == "edit":
+                new_text = (edits or current.text).strip()
+                kind = _auth.conflict_kind(new_text, current.text) or ""
+                candidate = bool(kind)
+                action = "edit" if kind else "rewrite"
+            kind = kind or _auth.kind_of(current.text)
+        _auth.log_blocked(actor, kind, user_id=user_id, action=action)
+        if not _auth.enabled():
+            return False
+        if candidate:
+            await self._write_candidate(
+                (edits or current.text).strip(), user_id=user_id, writer=actor,
+                contradicts=current.id, kind=kind, session_id=session_id,
+                memory_type=str(meta.get("memory_type") or "fact"),
+                entity_type=meta.get("entity_type"), entity_id=meta.get("entity_id"),
+            )
+        return True
+
+    async def archive_duplicate(self, mem_id: str, keeper_id: str, *, actor: str,
+                                note: str = "identical duplicate") -> bool:
+        """Archive ``mem_id`` because ``keeper_id`` says EXACTLY the same thing (normalised
+        text) and is approved, the same user's, and of at least the same class: nothing is
+        lost, so no authority is needed beyond that (the weekly merge used to REWRITE the
+        weaker row - 6,585 no-op edits). Never raises; returns whether it archived."""
+        try:
+            cur, keep = await self.get(mem_id), await self.get(keeper_id)
+            if cur is None or keep is None or mem_id == keeper_id:
+                return False
+            uid = cur.metadata.get("user_id") or cur.metadata.get("wing")
+            if (not uid or uid != (keep.metadata.get("user_id") or keep.metadata.get("wing"))
+                    or str(cur.metadata.get("status")) != "approved"
+                    or str(keep.metadata.get("status")) != "approved"):
+                return False
+            norm = lambda t: re.sub(r"\s+", " ", (t or "").strip().lower()).strip(" .!?")  # noqa: E731
+            if norm(cur.text) != norm(keep.text) or (
+                    _auth.row_rank(keep.metadata, keep.text) < _auth.row_rank(cur.metadata, cur.text)):
+                return False
+            lock = self._user_locks.setdefault(uid, asyncio.Lock())
+            async with lock:
+                md = dict(cur.metadata)
+                md.update(status="archived", reviewed_by=actor,
+                          reviewed_at=datetime.datetime.utcnow().isoformat() + "Z",
+                          review_note=note[:1024], duplicate_of=keeper_id)
+                await self._run_sync(self._write_row, mem_id, cur.text, md)
+                await self._append_audit(
+                    mem_id=mem_id, user_id=uid, actor=actor, action="archive_duplicate",
+                    before={"status": "approved"}, after={"status": "archived", "duplicate_of": keeper_id},
+                    reason=note)
+            _invalidate_agent_user_facts_cache(uid)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_service: archive_duplicate failed (%s)", type(exc).__name__)
+            return False
+
+    async def _existing_candidate(
+        self, user_id: str, text: str, contradicts: str
+    ) -> Optional[MemoryRef]:
+        """The still-PENDING candidate that already says ``text`` against ``conflicts_with``
+        (the digest's review path and its plain-ingest fallback both raise one for the same
+        fact; one question is enough). Fail-open."""
+        try:
+            for status in ("disputed", "pending"):
+                for r in await self._run_sync(self._list_by_status_sync, user_id, status):
+                    if r.text == text and str(r.metadata.get("contradicts_id") or "") == contradicts:
+                        return r
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+
+    async def record_candidate(
+        self,
+        text: str,
+        *,
+        user_id: str,
+        writer: str,
+        contradicts: str = "",
+        kind: str = "other",
+        **kw: Any,
+    ) -> Optional[str]:
+        """Public form of the candidate write for the people-graph writers: a PENDING,
+        inferred row that disagrees with something the user said (``conflicts_with`` may be
+        a graph edge id, written as ``edge:<id>``)."""
+        return await self._write_candidate(
+            text, user_id=user_id, writer=writer, contradicts=contradicts, kind=kind, **kw)
+
+    async def _write_candidate(
+        self,
+        text: str,
+        *,
+        user_id: str,
+        writer: str,
+        contradicts: str,
+        kind: str,
+        session_id: Optional[str] = None,
+        memory_type: str = "fact",
+        entity_type: Optional[str] = None,
+        entity_id: Optional[str] = None,
+        basis: str = "authority_blocked",
+        status: str = "disputed",
+    ) -> Optional[str]:
+        """Store ``text`` as a ``disputed`` (or, for a person to ask about, ``pending``)
+        candidate - never approved, never recalled - linked to the row it disagrees with. Idempotent (deterministic id); a
+        candidate the user already reviewed is not resurrected. Never raises."""
+        try:
+            scrubbed, reject = scrub_pii(text)
+            if reject or not scrubbed.strip():
+                return None
+            md = self._build_metadata(
+                user_id=user_id, source=writer, session_id=session_id, user_turn_id=None,
+                memory_type=memory_type, confidence=0.5, status=status,
+                tags=["authority_candidate"], entity_type=entity_type, entity_id=entity_id,
+                expires_at=None, text=scrubbed,
+            )
+            cand_cls = (_auth.MODEL_FROM_TURN if _auth.writer_class(writer) == _auth.MODEL_FROM_TURN
+                        else _auth.MODEL_FROM_TRANSCRIPT)
+            md.update(_auth.provenance(writer, _auth.Resolved(cand_cls, basis)))
+            if contradicts:
+                md["contradicts_id"] = contradicts
+            md["authority_blocked"] = True
+            mem_id = _memory_id(user_id, scrubbed, md)
+            existing = await self._run_sync(self._get_sync, mem_id)
+            if existing is not None and str(
+                existing.metadata.get("status") or ""
+            ).strip().lower() not in {"", "pending", "disputed"}:
+                return None
+            dup = await self._existing_candidate(user_id, scrubbed, contradicts)
+            if dup is not None:
+                return dup.id
+            await self._run_sync(self._write_row, mem_id, scrubbed, md)
+            await self._append_audit(
+                mem_id=mem_id, user_id=user_id, actor=writer, action="authority_candidate",
+                before=None, after={"contradicts_id": contradicts, "kind": kind,
+                                    "authority": _auth.INFERRED},
+                reason=basis,
+            )
+            self._bump("authority_candidate", writer)
+            return mem_id
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_service: authority candidate not stored (%s)", type(exc).__name__)
+            return None
+
+    async def _third_person_candidate(
+        self,
+        text: str,
+        *,
+        user_id: str,
+        source: str,
+        anchor_text: Optional[str],
+        session_id: Optional[str],
+    ) -> None:
+        """The identity wall dropped ``User's name is <X>`` from a model writer. When the
+        user's own turn text merely MENTIONS ``<X>`` (a speech-to-text fragment, a third
+        person) without claiming it as their name, ``<X>`` is a PERSON to ask about - a
+        pending person candidate - never a user attribute. Silent when the user did say it."""
+        if not _auth.enabled() or not anchor_text:
+            return
+        try:
+            from identity_facts import asserted_user_name
+
+            name = asserted_user_name(text)
+            if not name:
+                return
+            if _auth.resolve_write(source, text, anchor_text=anchor_text).rank >= _auth.USER_RANK:
+                return
+            words = {w.lower() for w in re.findall(r"[A-Za-z][A-Za-z'\-]*", name)}
+            heard = {w.lower() for w in re.findall(r"[A-Za-z][A-Za-z'\-]*", anchor_text)}
+            if not words or not words <= heard:
+                return
+            slug = "_".join(sorted(words))[:60]
+            await self._write_candidate(
+                f"{name.strip()} was mentioned in conversation (who they are is not known).",
+                user_id=user_id, writer=source, contradicts="", kind="person",
+                session_id=session_id, memory_type="person", entity_type="person_pending",
+                entity_id=f"slug:{slug}", basis="third_person_in_user_turn", status="pending",
+            )
+            logger.info("PERSON_CANDIDATE writer=%s kind=name", source)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("memory_service: person candidate skipped (%s)", type(exc).__name__)
 
     async def export_user(self, user_id: str) -> dict[str, Any]:
         """Full JSON dump for GDPR-style export."""

@@ -443,8 +443,14 @@ def test_digest_replay_of_the_live_incident_leaves_the_genuine_row(svc, monkeypa
     assert rows[seed.id][1]["status"] == "approved"
     assert not any(WRONG in doc for doc, _ in rows.values())
 
-    # break-the-fix control: with the wall removed the SAME replay reproduces the incident
+    # defence in depth: the identity wall is the SPECIAL CASE of the authority rule
+    # (memory_authority), so removing it alone still leaves the genuine row standing
     monkeypatch.setattr(idf, "AUTOMATIC_SOURCES", frozenset())
+    asyncio.run(memory_digest.run_memory_digest(UID))
+    assert rows[seed.id][1]["status"] == "approved"
+
+    # break-the-fix control: with BOTH walls removed the SAME replay reproduces the incident
+    monkeypatch.setenv("ZOE_MEMORY_AUTHORITY", "0")
     asyncio.run(memory_digest.run_memory_digest(UID))
     assert rows[seed.id][1]["status"] == "superseded"
     assert any(WRONG in doc for doc, _ in rows.values())
