@@ -570,6 +570,10 @@ async def run_turn_digest(
     if re.match(r"^(?:and\s+|oh[,\s]+|btw[,\s]+)?(?:she|he|they|her|his|their)\b", msg_lower):
         result["skipped_reason"] = "pronoun_subject_no_context"
         return result
+    # A turn naming an entity the user asked Zoe to forget is not mined (and saves the model call).
+    if not await _skip_forgotten_turns(user_id, [user_message], "turn_digest"):
+        result["skipped_reason"] = "forgotten_entity"
+        return result
 
     try:
         from memory_service import get_memory_service, MemoryServiceError  # type: ignore[import]
@@ -870,6 +874,11 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
             fact = (item.get("fact") or "").strip()
             if not fact or len(fact) < 10:
                 continue
+            # A fact about an entity the user asked Zoe to forget is dropped HERE, before the
+            # contradiction pass below: that branch WRITES via review(edit), not ingest (ZMB F3).
+            if not await _skip_forgotten_turns(user_id, [fact], "digest_fact"):
+                _count_drop("digest", "forgotten_entity", gate=False)
+                continue
             # Token-level, per stored fact (memory_overlap): never skips a fact that holds a new
             # name / number / date; one that extends a stored fact supersedes it at reconcile below.
             verdict, _stored = dedup_verdict(fact, existing_text)
@@ -1120,10 +1129,29 @@ async def _load_todays_messages(user_id: str, db=None) -> str:
         if not rows:
             return ""
         lines = [row[0] for row in rows if row[0]]
+        lines = await _skip_forgotten_turns(user_id, lines, "digest")
         return "\n".join(lines)
     except Exception as exc:
         logger.warning("memory_digest: could not load messages for %s: %s", user_id, exc)
         return ""
+
+
+async def _skip_forgotten_turns(user_id: str, turns: list, reader: str) -> list:
+    """``turns`` without the ones that name an entity the user asked Zoe to forget (the durable
+    ``memory_forgotten`` ledger). The chat rows are not erased, so without this every transcript reader
+    (nightly digest, idle consolidation, open loops) re-mines the forgotten turns once the 300 s tombstone
+    has expired and the name comes back (ZMB F3). Skipped, not re-mined; logs a COUNT only. Fail-open: a
+    ledger failure keeps the turns (the ingest chokepoint is the second wall)."""
+    try:
+        import memory_forgotten
+        kept, dropped = await memory_forgotten.keep_unforgotten(user_id, turns)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("memory_digest: forgotten-turn filter unavailable (%s)", type(exc).__name__)
+        return turns
+    if dropped:
+        logger.info("memory_digest: %s skipped %d turn(s) naming a forgotten entity user=%s",
+                    reader, dropped, user_id)
+    return kept
 
 
 def fact_anchor(item: dict, user_text: str) -> str | None:
@@ -2108,6 +2136,17 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
         logger.warning("open_loops: message load failed user=%s: %s", user_id, exc)
         return _done("load_error")
 
+    # A turn naming a forgotten entity is skipped, not re-mined (memory_forgotten; ZMB F3).
+    try:
+        import memory_forgotten
+        rows, _dropped_forgotten = await memory_forgotten.keep_unforgotten(
+            user_id, rows, text_of=lambda r: str(r[0] or ""))
+        if _dropped_forgotten:
+            logger.info("open_loops: skipped %d turn(s) naming a forgotten entity user=%s",
+                        _dropped_forgotten, user_id)
+    except Exception as exc:  # noqa: BLE001 - fail-open; the loop text is scrubbed again below
+        logger.debug("open_loops: forgotten-turn filter unavailable (%s)", type(exc).__name__)
+
     # Newest turns win the budget; the prompt reads oldest first.
     lines: list[str] = []
     budget = _OPEN_LOOPS_TRANSCRIPT_CHARS
@@ -2162,6 +2201,8 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
         if not loop_is_concrete(text):
             result["discarded_meta"] += 1
             continue
+        if not await _skip_forgotten_turns(user_id, [f"{text} {hint}"], "open_loops"):
+            continue  # a loop about a forgotten entity is not stored
         candidates.append((
             text,
             "" if hint_reject else hint,
