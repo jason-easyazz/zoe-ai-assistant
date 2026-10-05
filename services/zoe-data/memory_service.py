@@ -1206,8 +1206,14 @@ class MemoryService:
         origin: Optional[str] = None,
         prompt_text: Optional[str] = None,
         speaker_verified: Optional[bool] = None,
+        captured_at: Optional[str] = None,
     ) -> Optional[MemoryRef]:
         """Store a fact. Returns None when silently dropped.
+
+        ``captured_at`` (ISO-8601, optional) is for RESTORES only: the instant the fact was
+        originally captured. It replaces "now" for ``added_at`` / ``added_ts`` / ``last_accessed``
+        (and ``valid_from`` when the validity flag is on), so a restored July memory still answers
+        "when did I tell you" with July. Unparseable → ignored (stored as captured now).
 
         When ``scope`` is None, ``metadata["scope"]`` is treated as the
         authoritative memory scope and is validated before any durable write.
@@ -1351,6 +1357,7 @@ class MemoryService:
                 extra_metadata=metadata,
                 idem_key=idem_key,
                 text=scrubbed,
+                captured_at=captured_at,
             )
             metadata.update(_auth.provenance(writer, resolved, turn_ref=turn_ref or user_turn_id))
             if clash is not None:
@@ -2372,6 +2379,7 @@ class MemoryService:
         extra_metadata: Optional[dict[str, Any]] = None,
         idem_key: str = "",
         text: str = "",
+        captured_at: Optional[str] = None,
     ) -> dict[str, Any]:
         """Build durable metadata for a memory row.
 
@@ -2379,6 +2387,13 @@ class MemoryService:
         first-class Zoe memory scope and drives legacy visibility mapping.
         """
         _now_dt = datetime.datetime.utcnow()
+        if captured_at:   # restore path: keep the original capture instant (see ingest)
+            try:
+                _c = datetime.datetime.fromisoformat(str(captured_at).strip().replace("Z", "+00:00"))
+                _now_dt = (_c.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+                           if _c.tzinfo else _c)
+            except ValueError:
+                pass
         now = _now_dt.isoformat() + "Z"
         extra = dict(extra_metadata or {})
         event_scope = scope if scope is not None else extra.get("scope")
