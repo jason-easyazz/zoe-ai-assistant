@@ -2659,6 +2659,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_MEMORY_HEAP_SCRUB": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_service.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_MEMORY_IMPLICIT_SUPERSEDE": {
         "defaults": [
           "False"
@@ -2746,6 +2756,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/memory_metrics.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MEMORY_PHYSICAL_ERASE": {
+        "defaults": [
+          "'1'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_service.py"
         ],
         "typed_env": false
       },
