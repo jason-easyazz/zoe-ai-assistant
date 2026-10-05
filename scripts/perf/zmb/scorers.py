@@ -43,6 +43,18 @@ def merge(*scores: Score) -> Score:
     return Score(ok=bad is None, stage=bad.stage if bad else "", evidence=ev)
 
 
+def score_disk(report: "dict[str, Any]", *, stage: str = "write") -> Score:
+    """The forgotten text is PHYSICALLY gone: ``report`` is ``memory_residue.scan_palace``'s output (counts per
+    token / file / SQLite page owner - never text). Any byte-hit anywhere fails the cell at the write stage."""
+    toks = report.get("tokens") or {}
+    total = sum(int(t.get("total", 0)) for t in toks.values())
+    where = sorted({f for t in toks.values() for f in (t.get("files") or {})})
+    owners = sorted({o for t in toks.values() for o in (t.get("sqlite_pages") or {})})
+    ev = {"tokens": len(toks), "byte_hits": total, "files": where[:8], "sqlite_page_owners": owners[:8]}
+    ok = bool(toks) and total == 0
+    return Score(ok=ok, stage="" if ok else stage, evidence=ev)
+
+
 # ── text normalisation ───────────────────────────────────────────────────────
 
 def normalize(text: str) -> str:

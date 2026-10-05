@@ -126,6 +126,11 @@ def _palace_client(data_dir: str) -> Any:
         with _AUDIT_CLIENTS_LOCK:
             client = _AUDIT_CLIENTS.get(key)
             if client is None:
+                if os.environ.get("ZOE_MEMORY_HEAP_SCRUB", "").strip().lower() in ("1", "true", "yes", "on"):
+                    # opt-in (default OFF: the allocator is process-wide, the voice path shares this process):
+                    # keep hnswlib's index-file writes free of the remains of freed text. See memory_residue.
+                    import memory_residue
+                    memory_residue.enable_heap_scrub()
                 import chromadb
                 _check_palace_format(key, getattr(chromadb, "__version__", "0"))
                 client = chromadb.PersistentClient(path=key)
@@ -613,6 +618,9 @@ def compact_drawers_index_sync(
                 raise IndexCompactionError(
                     f"{type(exc).__name__}: {exc} (after delete; restored={report['restored']})", report
                 ) from exc
+            # Verified rebuild: the old collection's pages are on the SQLite freelist (every drawer's text, readable)
+            # and its HNSW directory is still on disk (chroma never removes it). Erase both while the gate is shut.
+            report["residue"] = _scrub_residue_in_window(data_dir)
         except IndexCompactionError:
             raise
         except Exception as exc:  # noqa: BLE001 — outside the destructive region: structured
@@ -634,6 +642,148 @@ def compact_drawers_index_sync(
         raise
     finally:
         _COMPACT_LOCK.release()
+
+# ── Physical erasure: forgotten text must not survive on disk (ZOE_MEMORY_PHYSICAL_ERASE) ──────────
+# A chroma ``delete`` removes the row and nothing else: the text stays in SQLite free pages and in-page
+# slack, in the FTS5 trigram index, in the ``embeddings_queue`` write-ahead log and (heap residue) in HNSW
+# files (see ``memory_residue``). The erase below is the part Chroma does not do. It runs INSIDE the
+# maintenance gate (collection ops drained, new openers blocked) because ``VACUUM`` needs the file to itself.
+_ERASE_MAX_NEEDLES = 24          # verification scans every file once per needle: bound the cost
+_ERASE_NEEDLE_BYTES = 40         # a head window of each forgotten text; >= 12 bytes or it is noise
+
+
+def physical_erase_enabled() -> bool:
+    """Flag ``ZOE_MEMORY_PHYSICAL_ERASE`` (default ON; per-call read). OFF restores the old behaviour:
+    the API delete only, text left on disk."""
+    return os.environ.get("ZOE_MEMORY_PHYSICAL_ERASE", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def heap_scrub_active() -> bool:
+    """True when THIS process scrubs its heap (``ZOE_MEMORY_HEAP_SCRUB=1`` ran ``mallopt(M_PERTURB)`` when the
+    palace opened, or ``MALLOC_PERTURB_`` is set): what keeps the host's own HNSW writes free of the remains of
+    freed text (see ``memory_residue``)."""
+    import memory_residue
+    return memory_residue.heap_scrub_on()
+
+
+@contextlib.contextmanager
+def _maintenance_window(drain_s: float | None = None, lock_wait_s: float = 60.0):
+    """Exclusive access to the palace for a file-level operation: wait for any running compaction, close the
+    gate, drain in-flight collection ops, yield, reopen. Raises :class:`MemoryServiceError` (nothing changed)
+    when the gate is blocked, a compaction does not finish, or the ops do not drain."""
+    if getattr(_OP_THREAD, "depth", 0):
+        raise MemoryServiceError("a maintenance window must not be opened under a collection lease")
+    if _MAINTENANCE_BLOCKED is not None:
+        raise MemoryServiceError(f"maintenance gate is closed — {_MAINTENANCE_BLOCKED.get('reason')}")
+    if not _COMPACT_LOCK.acquire(timeout=lock_wait_s):
+        raise MemoryServiceError("a compaction is already running")
+    try:
+        _MAINTENANCE_OPEN.clear()
+        try:
+            drain = _MAINTENANCE_DRAIN_S if drain_s is None else drain_s
+            if not _drain_collection_ops(drain):
+                raise MemoryServiceError(
+                    f"could not drain {_ACTIVE_OPS} in-flight collection operation(s) within {drain:g}s")
+            yield
+        finally:
+            if _MAINTENANCE_BLOCKED is None:
+                _MAINTENANCE_OPEN.set()
+    finally:
+        _COMPACT_LOCK.release()
+
+
+def _scrub_residue_in_window(data_dir: str, *, vacuum: bool = True) -> dict[str, Any]:
+    """The file-level erase, for a caller that ALREADY holds the gate: SQLite scrub (queue blank + purge, FTS5
+    rebuild, VACUUM) + orphan HNSW segment directories. Never raises: the report carries ``error``."""
+    import memory_residue
+
+    out: dict[str, Any] = {"enabled": physical_erase_enabled()}
+    if not out["enabled"]:
+        return out
+    palace = os.path.expanduser(data_dir)
+    try:
+        out["sqlite"] = memory_residue.scrub_sqlite(palace, vacuum=vacuum)
+        out["orphans_removed"] = len(memory_residue.remove_orphan_segments(palace))
+    except Exception as exc:  # noqa: BLE001 - a scrub failure must never fail the delete / compaction
+        out["error"] = f"{type(exc).__name__}: {exc}"
+        logger.warning("MEMORY_PHYSICAL_ERASE scrub failed (%s) — forgotten text may remain on disk",
+                       type(exc).__name__)
+    return out
+
+
+def _needles_for_texts(texts: Iterable[str]) -> list[str]:
+    seen: dict[str, None] = {}
+    for t in texts:
+        head = (t or "").strip()[:_ERASE_NEEDLE_BYTES]
+        if len(head.encode("utf-8")) >= 12:
+            seen.setdefault(head, None)
+    return list(seen)[:_ERASE_MAX_NEEDLES]
+
+
+def _verify_residue(data_dir: str, needles: list[str]) -> dict[str, Any]:
+    """Count (never print) how many of the forgotten text heads are still in the palace's files, in place."""
+    import memory_residue
+
+    if not needles:
+        return {"checked": False, "reason": "no needles"}
+    rep = memory_residue.scan_palace(os.path.expanduser(data_dir), needles, copy=False)
+    sqlite_hits = index_hits = 0
+    for r in rep["tokens"].values():
+        for f, n in r["files"].items():
+            if f.startswith("chroma.sqlite3"):
+                sqlite_hits += n
+            else:
+                index_hits += n
+    return {"checked": True, "needles": len(needles), "sqlite_hits": sqlite_hits, "index_hits": index_hits,
+            "clean": sqlite_hits == 0 and index_hits == 0, "seconds": rep["seconds"]}
+
+
+def erase_residue_sync(data_dir: str = _MEMPALACE_DATA, *, needles: Iterable[str] = (), rebuild: bool = True,
+                       drain_s: float | None = None) -> dict[str, Any]:
+    """Physically erase forgotten text, then PROVE it. One call for every hard-delete / forget path.
+
+    1. gate shut -> :func:`_scrub_residue_in_window` (queue blank + purge, FTS5 rebuild, ``VACUUM``, orphan
+       HNSW dirs) -> verify the live files for ``needles`` (head windows of the forgotten texts, in memory only);
+    2. text still found in an HNSW file and ``rebuild`` and ``ZOE_MEMORY_INDEX_COMPACT`` is on: rebuild the
+       drawers index (``compact_drawers_index_sync``, which scrubs again) and verify once more.
+
+    Never raises; ``report["ok"]`` is False (and a WARNING is logged, counts only) when text is still found.
+    ``heap_scrub_active`` says whether the host's allocator keeps its own future index writes clean."""
+    t0 = time.monotonic()
+    nd = list(needles)
+    report: dict[str, Any] = {"enabled": physical_erase_enabled(), "heap_scrub_active": heap_scrub_active()}
+    if not report["enabled"]:
+        report["ok"] = None
+        return report
+    try:
+        with _maintenance_window(drain_s):
+            report["scrub"] = _scrub_residue_in_window(data_dir)
+            report["verify"] = _verify_residue(data_dir, nd)
+        verify = report["verify"]
+        if verify.get("checked") and verify.get("index_hits") and rebuild and index_compaction_enabled():
+            try:
+                comp = compact_drawers_index_sync(data_dir, drain_s=drain_s)
+                report["rebuild"] = {k: v for k, v in comp.items() if k in ("status", "rows", "seconds")}
+            except IndexCompactionError as exc:
+                report["rebuild"] = {"status": exc.report.get("status"), "error": str(exc)[:200]}
+            report["verify_after_rebuild"] = _verify_residue(data_dir, nd)
+            verify = report["verify_after_rebuild"]
+        if "error" in report["scrub"]:
+            report["ok"] = False
+        else:
+            report["ok"] = bool(verify["clean"]) if verify.get("checked") else None
+    except Exception as exc:  # noqa: BLE001
+        report["error"] = f"{type(exc).__name__}: {exc}"
+        report["ok"] = False
+    report["seconds"] = round(time.monotonic() - t0, 3)
+    if report.get("ok") is False:
+        logger.warning("MEMORY_PHYSICAL_ERASE incomplete: %s (counts only; text may remain on disk)",
+                       {k: report.get(k) for k in ("error", "verify", "verify_after_rebuild")})
+    else:
+        logger.info("MEMORY_PHYSICAL_ERASE ok=%s seconds=%s heap_scrub_active=%s", report.get("ok"),
+                    report["seconds"], report["heap_scrub_active"])
+    return report
+
 
 _MEMORY_SCOPE_TO_VISIBILITY = {
     "personal": "personal",
@@ -1188,6 +1338,8 @@ class MemoryService:
         # here as it ages out, so total size is hard-capped at _SEEN_KEYS_MAX.
         self._seen_keys_by_user: dict[str, set[str]] = {}
         self._background_tasks: set[asyncio.Task[Any]] = set()
+        # the last physical-erase report (counts only) of a hard delete / forget, for the operator endpoints
+        self.last_erase_report: dict[str, Any] | None = None
 
     async def ingest(
         self,
@@ -1552,8 +1704,12 @@ class MemoryService:
         assert_write_allowed(getattr(self, "_data_dir", _MEMPALACE_DATA), user_id, "delete_user")
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())
         async with lock:
+            needles: list[str] = []
             try:
                 ids = await self._run_sync(self._list_ids_for_user, user_id)
+                if ids and physical_erase_enabled():
+                    # heads of the texts about to be erased, held in memory only, to PROVE them gone afterwards
+                    needles = _needles_for_texts(await self._run_sync(self._texts_for_ids_sync, ids))
                 if ids:
                     tomb_id = _delete_tombstone_id(user_id, ids)
                     await self._run_sync(
@@ -1568,9 +1724,13 @@ class MemoryService:
                         tomb_id, user_id, actor, "delete_user_done",
                         {"rows_removed": len(ids)}, None, "",
                     )
-                await self._run_sync(self._delete_audit_for_user_sync, user_id)
+                audit_removed = await self._run_sync(self._delete_audit_for_user_sync, user_id)
             except Exception as exc:
                 raise MemoryServiceError(f"delete_user failed: {exc}") from exc
+            # The API delete left the text on disk (free pages, FTS5 index, write-ahead log, orphan HNSW
+            # dirs): erase it physically and verify. Best-effort — the rows ARE gone either way.
+            if ids or audit_removed:
+                self.last_erase_report = await self._physical_erase(needles)
             # Purge this user's idempotency-cache entries so re-teaching a
             # previously known fact after a forget isn't dropped as a
             # duplicate for the rest of the process lifetime.
@@ -2462,6 +2622,15 @@ class MemoryService:
         loop = asyncio.get_event_loop()
         row = await loop.run_in_executor(None, index_health, self._data_dir)
         row.update(maintenance_state())   # fail-closed gate → maintenance_blocked + reason
+        # physical-erase posture (docs/knowledge/forgotten-text-physical-erase.md): is the host allocator
+        # scrubbing, and how many HNSW dirs does no collection own (pre-rebuild index files left on disk)
+        try:
+            import memory_residue
+            row["orphan_segment_dirs"] = len(memory_residue.orphan_segment_dirs(self._data_dir))
+        except Exception:  # noqa: BLE001 - informational
+            row["orphan_segment_dirs"] = None
+        row["heap_scrub_active"] = heap_scrub_active()
+        row["physical_erase_enabled"] = physical_erase_enabled()
         return row
 
     async def compact_index(self) -> dict[str, Any]:
@@ -2471,6 +2640,98 @@ class MemoryService:
         the leases — it would wait for itself."""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, compact_drawers_index_sync, self._data_dir)
+
+    async def _physical_erase(self, needles: list[str]) -> dict[str, Any]:
+        """:func:`erase_residue_sync` off the event loop. Deliberately NOT via ``_run_sync``: that takes a
+        collection lease and the erase drains the leases. Never raises."""
+        if not physical_erase_enabled():
+            return {"enabled": False}
+        loop = asyncio.get_event_loop()
+        try:
+            return await loop.run_in_executor(
+                None, lambda: erase_residue_sync(self._data_dir, needles=needles))
+        except Exception as exc:  # noqa: BLE001 - the rows are already gone; the report says the erase failed
+            logger.warning("MEMORY_PHYSICAL_ERASE failed (%s)", type(exc).__name__)
+            return {"enabled": True, "ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    async def scrub_residue(self, *, tokens: Iterable[str] = ()) -> dict[str, Any]:
+        """The one-time / on-demand scrub of the WHOLE palace's SQLite file (queue blank + purge, FTS5
+        rebuild, ``VACUUM``) and its orphan HNSW dirs, under the maintenance gate. ``tokens`` are optional
+        strings to verify gone afterwards (counts only are returned). Serving never stops: the gate holds
+        collection ops for the duration (measured ~1 s on the 63 MB live store)."""
+        return await self._physical_erase(list(tokens))
+
+    def _texts_for_ids_sync(self, ids: list[str]) -> list[str]:
+        col = self._collection()
+        out: list[str] = []
+        for i in range(0, len(ids), 100):
+            got = col.get(ids=ids[i:i + 100], include=["documents"])
+            out.extend(str(d) for d in (got.get("documents") or []) if d)
+        return out
+
+    def _owned_rows_sync(self, user_id: str, ids: list[str]) -> tuple[list[str], list[str]]:
+        """``(ids, texts)`` of the rows among ``ids`` that ``user_id`` owns - a forget only ever erases the
+        caller's own rows (a family-visible row of another member is never theirs to erase)."""
+        col = self._collection()
+        owned: list[str] = []
+        texts: list[str] = []
+        for i in range(0, len(ids), 100):
+            got = col.get(ids=ids[i:i + 100], include=["documents", "metadatas"])
+            for rid, doc, meta in zip(got.get("ids") or [], got.get("documents") or [], got.get("metadatas") or []):
+                meta = meta or {}
+                if meta.get("user_id") == user_id or meta.get("wing") == user_id:
+                    owned.append(rid)
+                    texts.append(str(doc or ""))
+        return owned, texts
+
+    def _delete_audit_for_rows_sync(self, row_ids: list[str]) -> int:
+        """Delete the per-row audit trail (it carries the row's text in ``before`` / ``after`` and the
+        forget note in ``reason``) of rows being erased. Tombstones are never matched: they name no row."""
+        col = self._audit_collection()
+        n = 0
+        for i in range(0, len(row_ids), 100):
+            got = col.get(where={"mempalace_id": {"$in": row_ids[i:i + 100]}})
+            ids = list(got.get("ids") or [])
+            if ids:
+                col.delete(ids=ids)
+                n += len(ids)
+        return n
+
+    async def erase_rows(self, user_id: str, ids: Iterable[str], *, actor: str,
+                         reason: str = "forgotten by request") -> dict[str, Any]:
+        """HARD-erase specific rows of ONE user, the part of "forgotten means forever" that is the drawers:
+        a content-free ``forget_erase`` intent row (counts and short id hashes, never text or name), the
+        rows themselves, their per-row audit trail, a ``forget_erase_done`` row, then the physical erase
+        (:func:`erase_residue_sync`: free pages, FTS5, write-ahead log, orphan HNSW dirs, verified). Only
+        rows ``user_id`` owns are touched. ``reason`` must never carry the forgotten name. Fail-closed: if the
+        intent row cannot be written nothing is deleted. Returns counts only."""
+        self._require(user_id, "user_id is required")
+        assert_write_allowed(getattr(self, "_data_dir", _MEMPALACE_DATA), user_id, "erase_rows")
+        want = [i for i in dict.fromkeys(str(x) for x in ids) if i]
+        if not want:
+            return {"rows_removed": 0}
+        lock = self._user_locks.setdefault(user_id, asyncio.Lock())
+        async with lock:
+            try:
+                owned, texts = await self._run_sync(self._owned_rows_sync, user_id, want)
+                if not owned:
+                    return {"rows_removed": 0}
+                needles = _needles_for_texts(texts) if physical_erase_enabled() else []
+                tomb_id = _delete_tombstone_id(user_id, owned)
+                await self._run_sync(
+                    self._append_audit_sync, tomb_id, user_id, actor, "forget_erase",
+                    _delete_tombstone_body(owned), None, reason)
+                await self._run_sync(self._delete_ids, owned)
+                audit_removed = await self._run_sync(self._delete_audit_for_rows_sync, owned)
+                await self._run_sync(
+                    self._append_audit_sync, tomb_id, user_id, actor, "forget_erase_done",
+                    {"rows_removed": len(owned)}, None, "")
+            except Exception as exc:
+                raise MemoryServiceError(f"erase_rows failed: {exc}") from exc
+            report = await self._physical_erase(needles)
+            self.last_erase_report = report
+            _invalidate_agent_user_facts_cache(user_id)
+            return {"rows_removed": len(owned), "audit_removed": audit_removed, "physical": report}
 
     def _collection_sizes_sync(self) -> dict[str, int]:
         from collections import Counter as _Counter
@@ -3037,9 +3298,9 @@ class MemoryService:
 
     def _delete_audit_for_user_sync(self, user_id: str) -> int:
         col = self._audit_collection()
-        # The ``delete_user`` / ``delete_user_done`` rows are the record OF the removal — they outlive it.
+        # The ``delete_user`` / ``forget_erase`` (+ ``_done``) rows are the record OF the removal — they outlive it.
         result = col.get(where={"$and": [{"user_id": user_id},
-                                         {"action": {"$nin": ["delete_user", "delete_user_done"]}}]})
+                                         {"action": {"$nin": ["delete_user", "delete_user_done", "forget_erase", "forget_erase_done"]}}]})
         ids = list(result.get("ids") or [])
         if ids:
             col.delete(ids=ids)

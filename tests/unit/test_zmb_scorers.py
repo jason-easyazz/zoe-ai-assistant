@@ -534,8 +534,7 @@ def test_arm_registry_lists_every_arm_of_the_bakeoff():
         make_arm("mem0")
 
 
-@pytest.mark.parametrize("name,hint", [("H0", "Hindsight"), ("H1", "hindsight-api-slim"), ("H2", "Hindsight"),
-                                       ("G", "graphiti-core")])
+@pytest.mark.parametrize("name,hint", [("G", "graphiti-core")])         # the Hindsight arms are implemented now (tests/unit/test_zmb_hindsight_arm.py)
 def test_stub_arms_raise_not_implemented_with_the_install_hint_on_every_call(name, hint):
     arm = make_arm(name)
     assert arm.name == name and arm.capabilities == frozenset()
@@ -552,9 +551,8 @@ def test_stub_arms_raise_not_implemented_with_the_install_hint_on_every_call(nam
 def test_a_stub_arm_never_imports_or_opens_anything():
     import ast
     import zmb.arms.graphiti as g
-    import zmb.arms.hindsight as h
     allowed = {"__future__", "typing", "base"}          # the stubs import nothing but the interface
-    for mod in (g, h):
+    for mod in (g,):
         tree = ast.parse(Path(mod.__file__).read_text())
         mods = set()
         for node in ast.walk(tree):

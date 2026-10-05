@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-534 flags; 532 not documented in `.env.example`.
+536 flags; 534 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -277,6 +277,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_MEMORY_AUTHORITY` | `-` | no | NO | `services/zoe-data/memory_authority.py` |
 | `ZOE_MEMORY_COMPOSE_ENABLED` | `''` | no | NO | `services/zoe-data/zoe_memory_compose.py` |
 | `ZOE_MEMORY_DIGEST_LOOKBACK_HOURS` | `-` | no | NO | `services/zoe-data/memory_digest.py` |
+| `ZOE_MEMORY_HEAP_SCRUB` | `''` | no | NO | `services/zoe-data/memory_service.py` |
 | `ZOE_MEMORY_IMPLICIT_SUPERSEDE` | `False` | yes | NO | `services/zoe-data/memory_supersede.py` |
 | `ZOE_MEMORY_INDEX_COMPACT` | `''` | no | NO | `services/zoe-data/memory_service.py` |
 | `ZOE_MEMORY_INDEX_COMPACT_DAY` | `-` | no | NO | `scripts/maintenance/zoe-nightly-dreaming.py` |
@@ -286,6 +287,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_MEMORY_LINT_STALE_DAYS` | `'365'` | no | NO | `services/zoe-data/memory_lint.py` |
 | `ZOE_MEMORY_LOOP_LOG_PATH` | `'~/.zoe/zoe-data-memory-loops.log'` | no | NO | `services/zoe-data/routers/system.py` |
 | `ZOE_MEMORY_LOOP_ZERO_EFFECT_RUNS` | `-` | no | NO | `services/zoe-data/memory_metrics.py` |
+| `ZOE_MEMORY_PHYSICAL_ERASE` | `'1'` | no | NO | `services/zoe-data/memory_service.py` |
 | `ZOE_MEMORY_REJECT_LEDGER` | `-` | no | NO | `services/zoe-data/memory_reject_ledger.py` |
 | `ZOE_MEMORY_STARTUP_STRICT` | `'false'` | no | NO | `services/zoe-data/main.py` |
 | `ZOE_MERGE_QUEUE_ENABLED` | `''` | no | NO | `services/zoe-data/greploop_guard.py` |
