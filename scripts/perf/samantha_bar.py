@@ -196,6 +196,10 @@ S20_WRONG = ("july 8", "8 july", "8th july", "8th of july", "july 8th", "7 8 199
 SAY_KIDS = "My friend Dana Whitfield has two kids, Mika and Biscuit."
 SAY_PET = "Biscuit is their dog"
 ASK_KIDS = "How many children does Dana Whitfield have?"
+# What S21's setup must see in the recall packet before the correction is sent: the kids FACT.
+# Not the names — the live store keeps "Dana Whitfield has two kids" and drops "Mika and Biscuit",
+# so waiting for "biscuit" could never succeed and made S21 an ERROR instead of a verdict.
+S21_LANDED = ("kids",)
 # S22: a pasted list, no roles stated. Nothing says who the wife or the girls are.
 SAY_ROSTER = ("Here are my friend's family details, along with a partner and two children.\n\n"
               "Callum Reyes - 14/03/1980\nAnika Reyes - 02/11/1985\n"
@@ -1625,7 +1629,7 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
             put("S20", v, landed=land["S20"], ask={**live.evidence(t), **ev})
 
     say(a, "s21-kids", SAY_KIDS)
-    land["S21"] = live.wait_landed(a, ASK_KIDS, ("biscuit",))
+    land["S21"] = live.wait_landed(a, ASK_KIDS, S21_LANDED)
     if setup_ok("S21", ("s21-kids",), ("S21",)):
         ack = live.chat(a, "s21-fix", SAY_PET)
         t = live.chat(a, "s21-ask", ASK_KIDS)
