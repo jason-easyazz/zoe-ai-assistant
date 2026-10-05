@@ -1,0 +1,10 @@
+# The macOS wake-word backend. openWakeWord's ONNX backend scores ~0 on macOS ARM64
+# (https://github.com/dscripka/openWakeWord/issues/336: ONNX ~1e-5 vs TFLite ~0.998 on the
+# same audio), so the Mac must run the TFLite backend. PyPI's openwakeword 0.6.0 only
+# pulls `tflite-runtime` on Linux; `ai-edge-litert` (Google's successor, same
+# Interpreter API) is the macOS option, and mac_panel/mac_backend.py registers it under
+# the `tflite_runtime` name. Pinned to 1.4.0: per PyPI it is the newest release that
+# ships macosx_12_0_arm64 wheels (cp310-cp312); 2.x was source-only/manylinux when this
+# was written [unverified on a Mac - the install script installs this file separately and
+# says loudly if it fails, and `preflight` then FAILS the wake-word scoring test].
+ai-edge-litert==1.4.0
