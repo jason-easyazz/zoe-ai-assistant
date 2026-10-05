@@ -1421,6 +1421,13 @@ async def process_text(
                     "person_extractor: skipped non-name relationship %r/%r", name_a, name_b
                 )
 
+        # Names listed after a relationship noun ("has two kids, Mika and Biscuit"): kept as
+        # people rows linked to the owner + a fact that carries the names (named_relations.py).
+        from named_relations import apply_named_relations
+
+        written += await apply_named_relations(
+            text, user_id=user_id, source=source, session_id=session_id, db=_db)
+
         if not tasks:
             return written
 

@@ -65,6 +65,7 @@ from live_store_guard import (
     assert_write_allowed,
     guard_collection,
 )
+from memory_captured_at import parse_captured_at, value_shape
 from memory_importance import score_importance
 
 try:
@@ -1219,7 +1220,8 @@ class MemoryService:
         ``captured_at`` (ISO-8601, optional) is for RESTORES only: the instant the fact was
         originally captured. It replaces "now" for ``added_at`` / ``added_ts`` / ``last_accessed``
         (and ``valid_from`` when the validity flag is on), so a restored July memory still answers
-        "when did I tell you" with July. Unparseable → ignored (stored as captured now).
+        "when did I tell you" with July. Unparseable, or more than 5 minutes in the future → ignored with a
+        WARNING naming the value's shape (never the value); the row is then stored as captured now.
 
         When ``scope`` is None, ``metadata["scope"]`` is treated as the
         authoritative memory scope and is validated before any durable write.
@@ -2496,12 +2498,16 @@ class MemoryService:
         """
         _now_dt = datetime.datetime.utcnow()
         if captured_at:   # restore path: keep the original capture instant (see ingest)
-            try:
-                _c = datetime.datetime.fromisoformat(str(captured_at).strip().replace("Z", "+00:00"))
-                _now_dt = (_c.astimezone(datetime.timezone.utc).replace(tzinfo=None)
-                           if _c.tzinfo else _c)
-            except ValueError:
-                pass
+            _c, _why = parse_captured_at(captured_at)
+            if _c is not None:
+                _now_dt = _c
+            else:
+                # Never silent: a restore that quietly dates a row "now" loses the one thing captured_at is for.
+                # Log the SHAPE of the value, never the value (it travels beside the row's text in the caller).
+                logger.warning(
+                    "memory_service: captured_at ignored (%s), stored as captured now: %s",
+                    _why, value_shape(captured_at),
+                )
         now = _now_dt.isoformat() + "Z"
         extra = dict(extra_metadata or {})
         event_scope = scope if scope is not None else extra.get("scope")

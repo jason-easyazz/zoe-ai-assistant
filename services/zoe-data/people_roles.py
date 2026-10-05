@@ -147,6 +147,15 @@ def role_assignment_supported(name: str, role: str, source_text: str) -> bool:
         if re.search(rf"\b(?:{role_alt})s?\b[^.!?\n]*?\b(?:name|called|named)\s+(?:is\s+)?{first}\b",
                      sent, re.IGNORECASE):
             return True
+        # The role noun followed, in this ONE sentence, by a list that includes the name:
+        # "Dana has two kids, Mika and Biscuit" / "Dana's kids are Mika and Biscuit" / "my two
+        # sisters, Ana and Bea". The user stated the role for every listed name; a name followed
+        # by its own verb ("my friend, Casey is the wife") is a new clause, not a list member.
+        listed = (rf"\b(?:{role_alt})s?\b\s*(?:[:,]|\b(?:are|is|named|called)\b)\s*(?:named\s+|called\s+)?"
+                  rf"(?-i:(?:[A-Z][\w'\u2019-]*(?:\s[A-Z][\w'\u2019-]*)?\s*(?:,\s*(?:and\s+)?|\s+and\s+|&\s*))*)"
+                  rf"{first}\b(?!\s+(?:is|was|are|were|has|have|had)\b)")
+        if re.search(listed, sent, re.IGNORECASE):
+            return True
     return False
 
 
