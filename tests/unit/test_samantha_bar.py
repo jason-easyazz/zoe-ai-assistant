@@ -979,11 +979,12 @@ class _ScriptedLive(sb.Live):
         return {}
 
 
-def _drive(monkeypatch, backdate=True, **live_kw):
+def _drive(monkeypatch, backdate=True, selected=None, **live_kw):
     monkeypatch.setattr(sb, "_ask_judged", lambda live, u, tag, q, n, scorer, sid: ("PASS", {}))
     monkeypatch.setattr(sb.time, "sleep", lambda s: None)
     live = _ScriptedLive(**live_kw)
-    res = {r["id"]: r for r in sb.run_scenarios(live, A, B, 1, backdate, lambda m: None)}
+    res = {r["id"]: r for r in sb.run_scenarios(live, A, B, 1, backdate, lambda m: None,
+                                                selected=selected)}
     return live, res
 
 
@@ -1108,8 +1109,8 @@ def test_failed_filler_turns_error_s8_in_the_run(monkeypatch):
 def _capture_samples(monkeypatch):
     seen = {}
 
-    def run(live, a, b, samples, backdate, log):
-        seen["samples"], seen["backdate"] = samples, backdate
+    def run(live, a, b, samples, backdate, log, selected=None):
+        seen["samples"], seen["backdate"], seen["selected"] = samples, backdate, selected
         return [{"id": s, "verdict": "PASS", "evidence": {}} for s in sb.SCENARIO_IDS]
     monkeypatch.setattr(sb, "run_scenarios", run)
     monkeypatch.setattr(sb, "teardown", lambda *a: {"proven": True, "problems": []})
@@ -1303,3 +1304,168 @@ def test_s21_setup_probe_does_not_need_the_store_to_keep_the_kids_names(monkeypa
     # a store with no kids fact at all is still a setup failure, never a verdict
     live, res = _drive(monkeypatch, store="- User's friend is named Dana Whitfield")
     assert res["S21"]["verdict"] == "ERROR" and "s21-fix" not in live.chats
+
+
+# ── --only / --axis: a PARTIAL run (never an error, never a baseline) ─────────
+
+def test_parse_selection_full_run_is_none_and_filters_are_validated():
+    assert sb.parse_selection(None, None) is None
+    assert sb.parse_selection("s21, S22", None) == frozenset({"S21", "S22"})   # case / spaces
+    assert sb.parse_selection(None, "b") == frozenset(
+        {"S13", "S14", "S15", "S16", "S20", "S21", "S22"})                      # letter shorthand
+    assert sb.parse_selection(None, "temporal,e") == frozenset({"S2", "S10", "S3"})
+    assert sb.parse_selection("S21,S1", "b") == frozenset({"S21"})              # intersection
+    for only, axis in (("S99", None), ("S1,SX", None), ("", None), (None, "zz"), (None, ""),
+                       (None, "f"), (None, "h"),                # axes with no bar scenario
+                       ("S1", "b")):                            # empty intersection
+        with pytest.raises(ValueError):
+            sb.parse_selection(only, axis)
+
+
+def test_every_scenario_axis_is_a_known_axis_and_deps_are_scenarios():
+    assert set(sb.AXIS_OF.values()) <= set(sb.AXES.values())
+    assert set(sb.AXIS_OF) <= set(sb.SCENARIO_IDS)
+    assert {d for ds in sb.SEED_DEPS.values() for d in ds} <= set(sb.SCENARIO_IDS)
+    assert sb.seed_closure({"S12"}) == frozenset({"S12", "S5", "S4"})           # transitive
+    assert sb.seed_closure({"S8"}) == frozenset({"S8", "S1", "S7"})
+
+
+def test_unknown_only_id_or_axis_exits_2_before_anything_runs(monkeypatch, tmp_path, capsys):
+    args = _gates_open(monkeypatch, tmp_path)
+    calls = _must_not_run(monkeypatch)
+    for bad in (["--only", "S99"], ["--axis", "nope"], ["--only", "S21", "--axis", "e"]):
+        with pytest.raises(SystemExit) as ei:
+            sb.main(args + bad)
+        assert ei.value.code == 2
+    assert calls == [] and not (tmp_path / "r.json").exists()
+    assert "unknown scenario id" in capsys.readouterr().err
+
+
+def test_only_runs_the_selection_and_reports_partial_not_error(monkeypatch, tmp_path):
+    args = _gates_open(monkeypatch, tmp_path)
+    seen = {}
+
+    def run(live, a, b, samples, backdate, log, selected=None):
+        seen["selected"] = selected
+        return [{"id": s, "verdict": "PASS", "evidence": {}} for s in sb.SCENARIO_IDS if s in selected]
+    monkeypatch.setattr(sb, "run_scenarios", run)
+    monkeypatch.setattr(sb, "teardown", lambda *a: {"proven": True, "problems": []})
+    assert sb.main(args + ["--only", "S1,S3"]) == 0
+    res = json.loads((tmp_path / "r.json").read_text())
+    # the control: with the partial branch removed this is `error` (len(results) != len(SCENARIO_IDS))
+    assert res["status"] == "partial" and res["partial"] is True and res["selected"] == ["S1", "S3"]
+    assert [r["id"] for r in res["scenarios"]] == ["S1", "S3"] and seen["selected"] == {"S1", "S3"}
+    assert not (tmp_path / "b.json").exists()
+    trend = [json.loads(x) for x in (tmp_path / "t.jsonl").read_text().splitlines()]
+    assert trend[-1]["status"] == "partial"
+
+
+def test_a_selection_that_returns_the_wrong_scenarios_is_still_an_error(monkeypatch, tmp_path):
+    args = _gates_open(monkeypatch, tmp_path)
+    monkeypatch.setattr(sb, "run_scenarios", lambda *a, **k: [
+        {"id": "S1", "verdict": "PASS", "evidence": {}}])          # asked for S1+S3, S3 went missing
+    monkeypatch.setattr(sb, "teardown", lambda *a: {"proven": True, "problems": []})
+    assert sb.main(args + ["--only", "S1,S3"]) == 2
+    assert json.loads((tmp_path / "r.json").read_text())["status"] == "error"
+
+
+def test_record_baseline_is_refused_with_only_or_axis(monkeypatch, tmp_path):
+    args = _gates_open(monkeypatch, tmp_path)
+    calls = _must_not_run(monkeypatch)
+    for sel in (["--only", "S21"], ["--axis", "b"]):
+        with pytest.raises(SystemExit) as ei:
+            sb.main(args + ["--record-baseline"] + sel)
+        assert ei.value.code == 2
+    assert calls == [] and not (tmp_path / "b.json").exists()
+    # selecting EVERY scenario is the full run: recording stays legal
+    _all_pass(monkeypatch)
+    assert sb.main(args + ["--record-baseline", "--only", ",".join(sb.SCENARIO_IDS)]) == 0
+    assert (tmp_path / "b.json").exists()
+
+
+def test_partial_run_never_records_even_if_the_cli_gate_were_bypassed(monkeypatch, tmp_path):
+    """Defence in depth: the baseline write itself checks `partial`, not just the CLI gate."""
+    args = _gates_open(monkeypatch, tmp_path)
+    monkeypatch.setattr(sb, "run_scenarios", lambda *a, **k: [{"id": "S1", "verdict": "PASS", "evidence": {}}])
+    monkeypatch.setattr(sb, "teardown", lambda *a: {"proven": True, "problems": []})
+    errs = []
+    # the CLI gate's ap.error is neutralised: main carries on into the run with --record-baseline set
+    monkeypatch.setattr(sb.argparse.ArgumentParser, "error", lambda self, msg: errs.append(msg))
+    sb.main(args + ["--record-baseline", "--only", "S1"])
+    assert errs and "--record-baseline is refused" in errs[0]
+    assert not (tmp_path / "b.json").exists()
+
+
+def test_compare_baseline_with_only_compares_only_the_selected(monkeypatch, tmp_path):
+    args = _gates_open(monkeypatch, tmp_path)
+    (tmp_path / "b.json").write_text(json.dumps(_base(S1="PASS", S2="PASS", S3="PASS")))
+    before = (tmp_path / "b.json").read_text()
+    monkeypatch.setattr(sb, "teardown", lambda *a: {"proven": True, "problems": []})
+    # S2 and S3 are unselected: they are not in this run, so they cannot be red
+    monkeypatch.setattr(sb, "run_scenarios", lambda *a, **k: [{"id": "S1", "verdict": "PASS", "evidence": {}}])
+    assert sb.main(args + ["--compare-baseline", "--only", "S1"]) == 0
+    res = json.loads((tmp_path / "r.json").read_text())
+    assert res["status"] == "partial" and res["compare"]["regressions"] == [] and not res["compare"]["red"]
+    assert any("partial run: compared only 1 of" in n for n in res["compare"]["notes"])
+    # a SELECTED scenario that regressed is red: exit 1, status regression
+    monkeypatch.setattr(sb, "run_scenarios", lambda *a, **k: [{"id": "S1", "verdict": "FAIL", "evidence": {}}])
+    assert sb.main(args + ["--compare-baseline", "--only", "S1"]) == 1
+    res = json.loads((tmp_path / "r.json").read_text())
+    assert res["status"] == "regression" and res["compare"]["regressions"] == ["S1"]
+    assert (tmp_path / "b.json").read_text() == before            # a compare never rewrites the bar
+
+
+def test_restrict_baseline_drops_unselected_and_keeps_the_rest():
+    base = _base(S1="PASS", S2="FAIL")
+    got = sb.restrict_baseline(base, frozenset({"S1"}))
+    assert got["scenarios"] == {"S1": "PASS"} and got["judge_prompt_sha256"] == base["judge_prompt_sha256"]
+    assert sb.restrict_baseline(base, None) is base and sb.restrict_baseline(None, frozenset({"S1"})) is None
+
+
+def test_dry_run_with_only_prints_the_partial_plan(no_network, capsys):
+    assert sb.main(["--dry-run", "--only", "S21,S8"]) == 0
+    out = capsys.readouterr().out
+    assert "PARTIAL RUN" in out and "S8, S21" in out
+    assert "  S21 " in out and "  S2 " not in out and "  S13 " not in out
+    # S8 reads S1's and S7's seeds: they are listed, and marked seed-only
+    assert "  S1 same-day" in out and "seed turns only" in out
+    assert "PARTIAL RUN" not in sb.plan_text(1)
+
+
+def test_run_scenarios_only_s21_sends_only_s21_turns(monkeypatch):
+    live, res = _drive(monkeypatch, selected={"S21"})
+    assert set(res) == {"S21"} and res["S21"]["verdict"] == "PASS"
+    assert live.chats == ["s21-kids", "s21-fix", "s21-ask"]      # no filler, no contacts, no day-1 seeds
+    assert live.backdated == []                                   # no multi-day scenario in play
+
+
+def test_run_scenarios_only_s8_runs_the_seeds_it_reads_but_asks_nothing_else(monkeypatch):
+    live, res = _drive(monkeypatch, selected={"S8"})
+    assert set(res) == {"S8"} and res["S8"]["verdict"] == "PASS"
+    assert "d1-sister" in live.chats and "d1-dad" in live.chats           # S8's facts are seeded
+    assert "d1-ask-sister" not in live.chats and "d2-ask-dad" not in live.chats  # S1 / S7 not asked
+    assert "long-ask-sister" in live.chats and sum(t.startswith("filler-") for t in live.chats) == len(sb.FILLER)
+    assert not any(t in live.chats for t in ("d1-home", "d1-worry", "d1-cello", "s21-kids", "c-full"))
+
+
+def test_run_scenarios_only_s2_backdates_and_asks_only_s2(monkeypatch):
+    live, res = _drive(monkeypatch, selected={"S2"})
+    assert set(res) == {"S2"} and res["S2"]["verdict"] == "PASS"
+    assert live.backdated
+    assert "d1-sister" not in live.chats and "d1-dad" not in live.chats
+    live, res = _drive(monkeypatch, selected={"S2"}, backdate_incomplete=True)
+    assert res["S2"]["verdict"] == "ERROR"                        # the gate still protects a partial run
+
+
+def test_run_scenarios_only_s12_runs_s5_s4_seed_and_open_turns_but_reports_s12_only(monkeypatch):
+    live, res = _drive(monkeypatch, selected={"S12"}, selector_hook={"enabled": True})
+    assert set(res) == {"S12"}
+    assert "d1-worry" in live.chats and "s5-open-1" in live.chats and "s5-open-2" in live.chats
+    assert "d2-edge" not in live.chats and "d2-dentist" not in live.chats
+
+
+def test_selected_none_is_the_full_bar_unchanged(monkeypatch):
+    live, res = _drive(monkeypatch, selected=None)
+    assert set(res) == set(sb.SCENARIO_IDS)
+    live2, res2 = _drive(monkeypatch, selected=frozenset(sb.SCENARIO_IDS))
+    assert live.chats == live2.chats and set(res2) == set(res)

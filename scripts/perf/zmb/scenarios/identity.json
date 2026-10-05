@@ -1,0 +1,103 @@
+{
+  "spec_version": 1,
+  "axis": "identity",
+  "cells": [
+    {
+      "id": "H1.<writer>",
+      "title": "<writer> cannot store a name as the owner's own (the account is the authority, not a recalled row)",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["identity"],
+      "lme_map": "",
+      "note": "the 2026-10-05 incident: a speech-to-text fragment naming a third person became 'User's name is <X>'. Three phrasings the wall recognises; every automatic writer label is walled, including one nobody has heard of",
+      "matrix": {
+        "writer": ["digest", "turn_digest", "voice_turn_digest", "idle_consolidation", "consolidation", "chat_regex_fallback", "brand_new_lane"]
+      },
+      "events": [
+        {"text": "okay so that was the plan for tomorrow and then uh {intruder} is coming over I think and we will see what happens with the weather and the shopping later on tonight", "speaker": "system_writer", "writer": "<writer>", "proposes": ["User's name is {intruder}.", "The user's name is {intruder}.", "User is called {intruder}."], "op": "say"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "absent", "contains": ["{intruder}"], "statuses": ["approved"]}
+        ]}
+      ]
+    },
+    {
+      "id": "H2.edit.<writer>",
+      "title": "<writer> cannot edit an ordinary row into 'the user's name is X' (the review(edit) door)",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["identity"],
+      "lme_map": "",
+      "note": "the nightly digest's contradiction pass superseded via review(edit), which carried the old row's source forward: the same wall must stand on the edit door. The seed row is the writer's own inference (rank 0) so ONLY the identity wall, not the authority wall, is what stops the edit",
+      "matrix": {"writer": ["digest", "idle_consolidation", "consolidation", "brand_new_lane"]},
+      "events": [
+        {"text": "okay so uh we were talking about tea earlier I think and the shopping later on tonight", "speaker": "system_writer", "writer": "digest", "proposes": ["User likes tea."], "op": "say"},
+        {"text": "okay so that was the plan and then uh {intruder} is coming over I think and we will see what happens", "speaker": "system_writer", "writer": "<writer>", "proposes": ["User's name is {intruder}."], "op": "edit", "attr": "preference"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "absent", "contains": ["{intruder}"], "statuses": ["approved"]},
+          {"op": "present", "contains": ["tea"], "statuses": ["approved"]}
+        ]}
+      ]
+    },
+    {
+      "id": "H3.third_person_candidate",
+      "title": "a fragment naming a third person becomes a person candidate to ask about, never the owner's name",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["identity"],
+      "lme_map": "",
+      "events": [
+        {"text": "okay so that was the plan for tomorrow and then uh {intruder} is coming over I think and we will see what happens with the weather and the shopping later on tonight", "speaker": "system_writer", "writer": "digest", "proposes": ["User's name is {intruder}."], "op": "say"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "absent", "contains": ["{intruder}"], "statuses": ["approved"]},
+          {"op": "present", "contains": ["{intruder}"], "statuses": ["pending"]},
+          {"op": "absent", "contains": ["{intruder}", "name is"], "statuses": ["approved", "pending", "disputed"]}
+        ]}
+      ]
+    },
+    {
+      "id": "H4.owner_teach_allowed",
+      "title": "sanity: the owner's own explicit teach of their name is stored (the wall is an allow-list of who may say it, not a ban)",
+      "tier": "store",
+      "kind": "script",
+      "sanity": true,
+      "controls": [],
+      "events": [
+        {"text": "User's name is {owner}.", "speaker": "owner_taught"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "present", "contains": ["{owner}"], "statuses": ["approved"]}
+        ]}
+      ]
+    },
+    {
+      "id": "H5.goes_by_not_walled",
+      "title": "TARGET: 'User goes by X' from an automatic writer is not recognised as a name assertion",
+      "tier": "store",
+      "kind": "script",
+      "expected": "FAIL",
+      "note": "measured, not assumed: identity_facts.asserted_user_name does not match 'goes by', yet the regex extractor's own template emits 'User goes by {0}'. The wall has a vocabulary gap",
+      "events": [
+        {"text": "okay so that was the plan for tomorrow and then uh {intruder} is coming over I think and we will see what happens with the weather and the shopping later on tonight", "speaker": "system_writer", "writer": "digest", "proposes": ["User goes by {intruder}."], "op": "say"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "absent", "contains": ["{intruder}"], "statuses": ["approved"]}
+        ]}
+      ]
+    },
+    {
+      "id": "H.reply_polluted_row",
+      "title": "asked 'what's my name' with a polluted name row in the store, the reply is the account's name (the brain's reply)",
+      "tier": "full",
+      "skip_reason": "needs the brain's reply and the account tables (Postgres): the live driver asks it; the store-tier cells above prove the polluted row is never written",
+      "controls": []
+    }
+  ]
+}

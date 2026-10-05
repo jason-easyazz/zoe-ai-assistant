@@ -1,0 +1,122 @@
+{
+  "spec_version": 1,
+  "axis": "abstention",
+  "cells": [
+    {
+      "id": "E1.question_is_not_a_fact",
+      "title": "asking about something never said stores nothing (a question is not a memory, so a later ask has nothing to 'remember')",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["extractor", "gate"],
+      "lme_map": "abstention (the false-premise / never-said family)",
+      "note": "the store-tier half of abstention: the denial loop of 2026-07-07 started when asks and the assistant's own refusals were mined back into facts. The reply half (declining, no canary) is the brain tier",
+      "events": [
+        {"text": "what is my dentist called", "speaker": "owner_typed"},
+        {"text": "when is my dentist appointment?", "speaker": "owner_typed"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "count_eq", "contains": [], "statuses": ["approved", "pending", "disputed"], "n": 0}
+        ]}
+      ]
+    },
+    {
+      "id": "E1b.spoken_recall_question_is_not_a_fact",
+      "title": "TARGET: a recall question as the speech-to-text delivers it (no question mark: 'do you remember who my dentist is') stores nothing",
+      "tier": "store",
+      "kind": "script",
+      "expected": "FAIL",
+      "lme_map": "abstention",
+      "note": "measured, not assumed: the regex 'remember ...' template stores 'User asked me to remember: who my dentist is' and the write-quality gate accepts it because only a trailing '?' or an interrogative OPENER marks a question - 'do you remember' is neither once the '?' is gone, and a voice transcript never has one",
+      "events": [
+        {"text": "do you remember who my dentist is", "speaker": "owner_typed"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "count_eq", "contains": [], "statuses": ["approved", "pending", "disputed"], "n": 0}
+        ]}
+      ]
+    },
+    {
+      "id": "E2.denial_is_not_stored",
+      "title": "the assistant's own 'I don't have anything about your dentist' is never mined into a fact",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["extractor", "gate"],
+      "lme_map": "",
+      "events": [
+        {"text": "thanks", "speaker": "owner_typed", "assistant_text": "I don't have any notes about your dentist, sorry."},
+        {"text": "ok cool", "speaker": "owner_typed", "assistant_text": "Your dentist is not something you have told me about yet."}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "absent", "contains": ["dentist"], "statuses": ["approved", "pending", "disputed"]}
+        ]}
+      ]
+    },
+    {
+      "id": "E3.false_premise_not_stored",
+      "title": "a question with a false premise ('lands from Lima' when the store says another city) does not write the premise",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["extractor", "gate"],
+      "lme_map": "abstention (LongMemEval _abs: the false-premise rewrite)",
+      "events": [
+        {"text": "User's sister {sibling} is flying in from {home}.", "speaker": "owner_taught"},
+        {"text": "when does my sister {sibling} land from {lima}?", "speaker": "owner_typed"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "absent", "contains": ["{lima}"], "statuses": ["approved", "pending", "disputed"]},
+          {"op": "present", "contains": ["{sibling}", "{home}"], "statuses": ["approved"]}
+        ]}
+      ]
+    },
+    {
+      "id": "E4.near_miss_canary",
+      "title": "sanity (instrument check): a near-miss row (an optometrist) is never offered as the answer to a question about a dentist",
+      "tier": "store",
+      "kind": "script",
+      "sanity": true,
+      "controls": ["reader"],
+      "lme_map": "abstention",
+      "note": "scripted reader, NOT the brain: it declines unless one row carries every content word of the question. The canary token exists nowhere else in the world; the control reader answers from the nearest row and must leak it. This proves the canary scorer and its control work, nothing about Zoe's real reply (that is the brain tier: S3)",
+      "events": [
+        {"text": "User's {clinic} is {clinic_name} ({canary}).", "speaker": "owner_taught"}
+      ],
+      "probes": [
+        {"kind": "answer", "query": "when is my dentist appointment", "needles": ["don't have"], "canaries": ["{canary}"]}
+      ]
+    },
+    {
+      "id": "E5.known_attribute_answered",
+      "title": "sanity: the same scripted reader DOES answer a question the store can answer (it is not an always-decline stub)",
+      "tier": "store",
+      "kind": "script",
+      "sanity": true,
+      "controls": [],
+      "events": [
+        {"text": "User's {clinic} is {clinic_name} ({canary}).", "speaker": "owner_taught"}
+      ],
+      "probes": [
+        {"kind": "answer", "query": "who is my {clinic}", "needles": ["{canary}"]}
+      ]
+    },
+    {
+      "id": "E.never_said_reply",
+      "title": "asked about the dentist (never said), the reply declines and names no specific",
+      "tier": "full",
+      "skip_reason": "needs the brain's reply (chat tier); this is samantha_bar S3, which the ZMB report joins per axis",
+      "controls": [],
+      "lme_map": "abstention"
+    },
+    {
+      "id": "E.false_premise_reply",
+      "title": "asked when X lands from Lima (the store says elsewhere), the reply corrects the premise",
+      "tier": "full",
+      "skip_reason": "needs the brain's reply (chat tier)",
+      "controls": [],
+      "lme_map": "abstention (LongMemEval _abs)"
+    }
+  ]
+}

@@ -58,6 +58,9 @@ Usage:
         nice -n 5 python3 scripts/perf/samantha_bar.py --compare-baseline
     ... --record-baseline        # this run becomes the bar
     ... --samples 3              # judged scenarios: 3 asks, majority vote
+    ... --only S21,S22           # a PARTIAL run (also --axis b): status=partial, exit 2 on an
+                                 # unknown id, NEVER records a baseline (--record-baseline is
+                                 # refused); --compare-baseline compares only the selected ones
     ... --teardown-only          # clean up a previous killed run
 
 Artifacts (~/.cache/zoe/): samantha_bar_last.json (full evidence),
@@ -323,6 +326,74 @@ SCENARIOS: tuple[dict[str, Any], ...] = (
      "turns": [("A", "s22-roster", SAY_ROSTER)], "asks": [("A", ASK_ROSTER)]},
 )
 EXPECTED ={s["id"]: s["expected"] for s in SCENARIOS if s.get("expected")}
+
+# Axes (the Zoe Memory Bench's nine, docs/knowledge/zoe-memory-bench.md): the letter is the
+# `--axis` shorthand. Only the axes that have a bar scenario can be selected here; forgetting,
+# identity and poisoning cells live in the ZMB (scripts/perf/zmb/), not in this harness.
+AXES = {"a": "authority", "b": "extraction", "c": "temporal", "d": "recall", "e": "abstention",
+        "f": "forgetting", "g": "emotional", "h": "identity", "i": "poisoning"}
+AXIS_OF = {"S1": "recall", "S7": "recall", "S8": "recall",
+           "S2": "temporal", "S10": "temporal",
+           "S3": "abstention",
+           "S4": "emotional", "S5": "emotional", "S12": "emotional",
+           "S6": "authority",
+           "S13": "extraction", "S14": "extraction", "S15": "extraction", "S16": "extraction",
+           "S20": "extraction", "S21": "extraction", "S22": "extraction"}
+# A scenario that only ASKS about facts another scenario SEEDS: selecting it still runs those
+# seed turns (the asks and verdicts of the unselected scenario are NOT run or reported).
+SEED_DEPS = {"S5": ("S4",), "S12": ("S5",), "S6": ("S1", "S7"), "S8": ("S1", "S7")}
+# Scenarios whose setup needs the day-1 -> day-2 backdate.
+MULTI_DAY = frozenset({"S2", "S4", "S5", "S7", "S10", "S12"})
+
+
+def parse_selection(only: str | None, axis: str | None) -> frozenset[str] | None:
+    """The scenario ids a run is restricted to, or None for the full bar.
+
+    ``only`` = comma-separated scenario ids; ``axis`` = comma-separated axis letters or names.
+    Both given = the intersection (they are filters). An unknown id / axis, an axis with no bar
+    scenario, or an empty result raises ValueError (the CLI turns it into exit 2) - a typo must
+    never silently run nothing, or everything."""
+    if only is None and axis is None:
+        return None
+    chosen = set(SCENARIO_IDS)
+    if only is not None:
+        ids = [t.strip().upper() for t in only.split(",") if t.strip()]
+        if not ids:
+            raise ValueError("--only needs at least one scenario id")
+        unknown = [t for t in ids if t not in SCENARIO_IDS]
+        if unknown:
+            raise ValueError(f"unknown scenario id(s) {', '.join(unknown)} "
+                             f"(known: {', '.join(SCENARIO_IDS)})")
+        chosen &= set(ids)
+    if axis is not None:
+        names = []
+        for t in (x.strip().lower() for x in axis.split(",") if x.strip()):
+            name = AXES.get(t, t)
+            if name not in AXES.values():
+                raise ValueError(f"unknown axis {t!r} (known: "
+                                 f"{', '.join(f'{k}={v}' for k, v in AXES.items())})")
+            names.append(name)
+        if not names:
+            raise ValueError("--axis needs at least one axis")
+        have = {sid for sid in SCENARIO_IDS if AXIS_OF.get(sid) in names}
+        if not have:
+            raise ValueError(f"no bar scenario on axis {', '.join(names)} "
+                             "(those cells live in the Zoe Memory Bench)")
+        chosen &= have
+    if not chosen:
+        raise ValueError("--only and --axis select no scenario in common")
+    return frozenset(chosen)
+
+
+def seed_closure(selected: "frozenset[str] | set[str]") -> frozenset[str]:
+    """``selected`` plus every scenario whose SEED turns they depend on (transitively)."""
+    out, todo = set(selected), list(selected)
+    while todo:
+        for dep in SEED_DEPS.get(todo.pop(), ()):
+            if dep not in out:
+                out.add(dep)
+                todo.append(dep)
+    return frozenset(out)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -859,6 +930,15 @@ def compare_baseline(current: dict[str, str], baseline: dict[str, Any] | None) -
             "improvements": improvements, "new": new, "red": bool(regressions), "notes": notes}
 
 
+def restrict_baseline(baseline: dict[str, Any] | None, selected: "frozenset[str] | None") -> dict[str, Any] | None:
+    """The baseline narrowed to the scenarios a partial run executed (the rest cannot regress
+    in a run that never ran them)."""
+    if baseline is None or selected is None:
+        return baseline
+    return {**baseline, "scenarios": {k: v for k, v in (baseline.get("scenarios") or {}).items()
+                                      if k in selected}}
+
+
 def make_baseline(results: list[dict], revision: dict | None, samples: int) -> dict[str, Any]:
     return {"harness_version": HARNESS_VERSION,
             "created_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
@@ -961,18 +1041,26 @@ def env_file_value(service_dir: Path, key: str) -> str:
 # Plan (dry-run)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def plan_text(samples: int) -> str:
+def plan_text(samples: int, selected: "frozenset[str] | None" = None) -> str:
     lines = [f"samantha_bar v{HARNESS_VERSION} — plan (no network)",
              f"  identities: demo A + demo B, each ^demo_bar_[0-9a-f]{{8}}$ (fresh per run)",
              f"  judged scenarios ask {samples}x, majority vote; judge rubric sha {JUDGE_PROMPT_SHA256[:12]}",
              "  order: day 1 (S1 seed+ask, S2/S4/S7 seeds) -> backdate day-1 sessions 26h ->",
              "         day 2 (S2 move+ask, S7 short dup+ask, S10 'gave up'+ask, S4 ask, S3 ask) -> S5 selector"
          " hook + 2 open turns (S12 scores their spacing) -> S20/S21/S22 (dates, corrections, roles) -> S6 -> S8 -> contacts S13-S16; S11 is a reserved SKIP"]
+    need = seed_closure(selected) if selected is not None else None
+    if selected is not None and selected != frozenset(SCENARIO_IDS):
+        lines.append(f"  PARTIAL RUN (--only/--axis): {', '.join(s for s in SCENARIO_IDS if s in selected)}"
+                     " — status=partial, never records a baseline; --compare-baseline compares only these")
     for s in SCENARIOS:
+        if selected is not None and s["id"] not in need:
+            continue
         tag = "judged" if s["judged"] else "deterministic"
         exp = f", expected {s['expected']}" if s.get("expected") else ""
+        seed_only = " (seed turns only: a selected scenario reads them)" \
+            if selected is not None and s["id"] not in selected else ""
         lines.append(f"  {s['id']} {s['title']} [{tag}{exp}]: {len(s['turns'])} seed turn(s), "
-                     f"{len(s['asks'])} question(s) — {s['proves']}")
+                     f"{len(s['asks'])} question(s) — {s['proves']}{seed_only}")
     lines += ["  teardown: forget-synthetic (or admin forget) + residual == 0 + /for-prompt == 0, Postgres rows by",
               "            exact demo id / session id == 0 — runs in finally, asserted, exit 2 if unproven",
               f"  gates: ZOE_PERF=1, {LOCK}, not {NIGHTLY_WINDOW[0][0]:02d}:{NIGHTLY_WINDOW[0][1]:02d}-"
@@ -1479,10 +1567,23 @@ def _ask_judged(live: Live, user: str, sid_tag: str, question: str, samples: int
 
 
 def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
-                  log: Callable[[str], None]) -> list[dict]:
+                  log: Callable[[str], None],
+                  selected: "frozenset[str] | set[str] | None" = None) -> list[dict]:
+    """Run the bar. ``selected`` (None = all) restricts it to those scenario ids: only their asks
+    are sent and only their verdicts are returned, but the SEED turns of any scenario they depend
+    on (``SEED_DEPS``) still run, and the day-1 backdate runs only when a multi-day scenario is in
+    play. The flow, the order and every scorer are otherwise identical to the full run."""
     res: dict[str, dict] = {}
     land: dict[str, dict] = {}
     seeds: dict[str, dict] = {}
+    sel = frozenset(SCENARIO_IDS) if selected is None else frozenset(selected)
+    need = seed_closure(sel)
+
+    def ask(sid):   # send this scenario's asks and report its verdict
+        return sid in sel
+
+    def seed(sid):  # run this scenario's seed turns (it, or a scenario that reads them, is selected)
+        return sid in need
 
     def say(user, tag, text):
         t = live.chat(user, tag, text)
@@ -1492,6 +1593,8 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
         return t
 
     def put(sid, verdict, **ev):
+        if sid not in sel:  # an unselected scenario is never reported
+            return
         res[sid] = {"id": sid, "verdict": verdict, "evidence": ev}
         if sid in EXPECTED:  # a target: its verdict is tracked, it is not a regression
             res[sid]["expected"] = EXPECTED[sid]
@@ -1508,26 +1611,38 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
             return False
         return True
 
+    if selected is not None:
+        log(f"partial run: {', '.join(s for s in SCENARIO_IDS if s in sel)}"
+            + (f" (+ seed turns for {', '.join(s for s in SCENARIO_IDS if s in need - sel)})"
+               if need - sel else ""))
+
     # Day 1 ------------------------------------------------------------------
     log("day 1: S1 seed + same-day ask; S2/S4/S7 seeds")
-    say(a, "d1-sister", SAY_SISTER)
-    land["S1"] = live.wait_landed(a, ASK_SISTER, ("marisol",))
-    if setup_ok("S1", ("d1-sister",), ("S1",)):
+    if seed("S1"):
+        say(a, "d1-sister", SAY_SISTER)
+        land["S1"] = live.wait_landed(a, ASK_SISTER, ("marisol",))
+    if ask("S1") and setup_ok("S1", ("d1-sister",), ("S1",)):
         t = live.chat(a, "d1-ask-sister", ASK_SISTER)
         if t["error"]:
             put("S1", "ERROR", landed=land["S1"], ask=live.evidence(t))
         else:
             v, ev = score_s1(t["reply"])
             put("S1", v, landed=land["S1"], ask={**live.evidence(t), **ev})
-    say(a, "d1-home", SAY_OLD_HOME)
-    land["S2_old"] = live.wait_landed(a, ASK_HOME, ("dunedin",))
-    say(a, "d1-worry", SAY_WORRY)
-    land["S4"] = live.wait_landed(a, "feeling anxious interview", ("interview",))
-    say(a, "d1-dad", SAY_DAD_RICH)
-    land["S7_rich"] = live.wait_landed(a, ASK_DAD, ("lighthouse",))
-    say(a, "d1-cello", SAY_CELLO)
-    land["S10_old"] = live.wait_landed(a, ASK_CELLO, ("orchestra",))
-    if backdate:
+    if seed("S2"):
+        say(a, "d1-home", SAY_OLD_HOME)
+        land["S2_old"] = live.wait_landed(a, ASK_HOME, ("dunedin",))
+    if seed("S4"):
+        say(a, "d1-worry", SAY_WORRY)
+        land["S4"] = live.wait_landed(a, "feeling anxious interview", ("interview",))
+    if seed("S7"):
+        say(a, "d1-dad", SAY_DAD_RICH)
+        land["S7_rich"] = live.wait_landed(a, ASK_DAD, ("lighthouse",))
+    if seed("S10"):
+        say(a, "d1-cello", SAY_CELLO)
+        land["S10_old"] = live.wait_landed(a, ASK_CELLO, ("orchestra",))
+    if not (need & MULTI_DAY):
+        land["backdate"] = {"landed": True, "kind": "backdate", "skipped": True}  # nothing multi-day
+    elif backdate:
         day1 = [s for s in live.sessions.get(a, []) if s.startswith("bar-d1-")]
         bd = live.backdate(day1, 26 * 3600) if day1 else {"ok": False, "sessions": 0,
                                                             "verified_sessions": 0, "turns": 0,
@@ -1542,21 +1657,23 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
 
     # Day 2 ------------------------------------------------------------------
     log("day 2: S2 move + ask; S7 short dup + ask; S4; S3")
-    say(a, "d2-home", SAY_NEW_HOME)
-    land["S2_new"] = live.wait_landed(a, ASK_HOME, ("hobart",))
+    if seed("S2"):
+        say(a, "d2-home", SAY_NEW_HOME)
+        land["S2_new"] = live.wait_landed(a, ASK_HOME, ("hobart",))
     # Supersession needs BOTH facts present: without Dunedin landed, a Hobart-only
     # reply proves nothing.
-    if setup_ok("S2", ("d1-home", "d2-home"), ("S2_old", "S2_new", "backdate")):
+    if ask("S2") and setup_ok("S2", ("d1-home", "d2-home"), ("S2_old", "S2_new", "backdate")):
         v, ev = _ask_judged(live, a, "d2-ask-home", ASK_HOME, samples, score_s2, "S2")
         put("S2", v, landed={"old": land["S2_old"], "new": land["S2_new"]}, **ev)
 
     # The short duplicate is captured in the background (ensure_future) and, being
     # a duplicate, never becomes a visible row: wait for the capture COUNTER to
     # advance, not for time to pass. Not observed → S7 ERROR, never PASS.
-    cap_before = live.capture_status(a)
-    say(a, "d2-dad", SAY_DAD_SHORT)
-    land["S7_dup"] = live.wait_captured(a, cap_before)
-    if setup_ok("S7", ("d1-dad", "d2-dad"), ("S7_rich", "S7_dup", "backdate")):
+    if seed("S7"):
+        cap_before = live.capture_status(a)
+        say(a, "d2-dad", SAY_DAD_SHORT)
+        land["S7_dup"] = live.wait_captured(a, cap_before)
+    if ask("S7") and setup_ok("S7", ("d1-dad", "d2-dad"), ("S7_rich", "S7_dup", "backdate")):
         t = live.chat(a, "d2-ask-dad", ASK_DAD)
         pkt = live.packet(a, ASK_DAD)
         if t["error"]:
@@ -1566,10 +1683,11 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
             put("S7", v, landed=land["S7_rich"], ask={**live.evidence(t), **ev})
 
     # S10: the one-word change. Its capture is background too: wait on the counter.
-    cap_before = live.capture_status(a)
-    say(a, "d2-cello", SAY_CELLO_STOP)
-    land["S10_stop"] = live.wait_captured(a, cap_before)
-    if setup_ok("S10", ("d1-cello", "d2-cello"), ("S10_old", "S10_stop", "backdate")):
+    if seed("S10"):
+        cap_before = live.capture_status(a)
+        say(a, "d2-cello", SAY_CELLO_STOP)
+        land["S10_stop"] = live.wait_captured(a, cap_before)
+    if ask("S10") and setup_ok("S10", ("d1-cello", "d2-cello"), ("S10_old", "S10_stop", "backdate")):
         t = live.chat(a, "d2-ask-cello", ASK_CELLO)
         pkt = live.packet(a, ASK_CELLO)
         if t["error"]:
@@ -1579,47 +1697,50 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
             put("S10", v, ask={**live.evidence(t), **ev})
     put("S11", "SKIP", why=S11_WHY)
 
-    if setup_ok("S4", ("d1-worry",), ("S4", "backdate")):
+    if ask("S4") and setup_ok("S4", ("d1-worry",), ("S4", "backdate")):
         v, ev = _ask_judged(live, a, "d2-edge", ASK_WORRY, samples, score_s4, "S4")
         put("S4", v, landed=land["S4"], **ev)
 
-    v, ev = _ask_judged(live, a, "d2-dentist", ASK_UNSAID, samples, score_s3, "S3")
-    put("S3", v, **ev)
+    if ask("S3"):
+        v, ev = _ask_judged(live, a, "d2-dentist", ASK_UNSAID, samples, score_s3, "S3")
+        put("S3", v, **ev)
 
     # S5: the selector hook, then two open turns (flag off / no route: the
     # legacy proactive_pending read, SKIP when no hook fired) --------------------
     # S12 rides on S5's two open turns: no extra brain turn.
-    if setup_ok("S5", ("d1-worry",), ("S4", "backdate")):  # no open loop seeded = nothing to carry
-        v12, ev12 = "SKIP", {"why": "ZOE_PROACTIVE_SELECTOR off or the hook unavailable"}
-        try:
-            hook = live.run_selector(a)
-            if not (hook or {}).get("enabled"):
-                v, ev = score_s5(live.proactive_hooks(a))
-                ev["selector"] = "off" if hook else "unavailable"
-            else:
-                t1 = live.chat(a, "s5-open-1", ASK_OPEN_1)
-                t2 = live.chat(a, "s5-open-2", ASK_OPEN_2)
-                asks = [live.evidence(t1), live.evidence(t2)]
-                if t1["error"] or t2["error"]:
-                    v, ev = "ERROR", {"why": "an open turn failed", "asks": asks}
-                    v12, ev12 = "ERROR", {"why": "an S5 open turn failed"}
+    if seed("S5"):
+        if setup_ok("S5", ("d1-worry",), ("S4", "backdate")):  # no open loop seeded = nothing to carry
+            v12, ev12 = "SKIP", {"why": "ZOE_PROACTIVE_SELECTOR off or the hook unavailable"}
+            try:
+                hook = live.run_selector(a)
+                if not (hook or {}).get("enabled"):
+                    v, ev = score_s5(live.proactive_hooks(a))
+                    ev["selector"] = "off" if hook else "unavailable"
                 else:
-                    rows = live.raise_state(a)
-                    v, ev = score_s5_raise(hook, t1["reply"], t2["reply"], rows)
-                    ev["asks"] = asks
-                    v12, ev12 = score_s12(rows, t1["session"], t2["session"])
-        except Exception as exc:  # noqa: BLE001
-            v, ev = "ERROR", {"why": f"hook/read failed: {type(exc).__name__}"}
-            v12, ev12 = "ERROR", {"why": f"hook/read failed: {type(exc).__name__}"}
-        put("S5", v, **ev)
-        put("S12", v12, **ev12)
-    else:
-        put("S12", "ERROR", why="S5's setup was not exercised, so its open turns never ran")
+                    t1 = live.chat(a, "s5-open-1", ASK_OPEN_1)
+                    t2 = live.chat(a, "s5-open-2", ASK_OPEN_2)
+                    asks = [live.evidence(t1), live.evidence(t2)]
+                    if t1["error"] or t2["error"]:
+                        v, ev = "ERROR", {"why": "an open turn failed", "asks": asks}
+                        v12, ev12 = "ERROR", {"why": "an S5 open turn failed"}
+                    else:
+                        rows = live.raise_state(a)
+                        v, ev = score_s5_raise(hook, t1["reply"], t2["reply"], rows)
+                        ev["asks"] = asks
+                        v12, ev12 = score_s12(rows, t1["session"], t2["session"])
+            except Exception as exc:  # noqa: BLE001
+                v, ev = "ERROR", {"why": f"hook/read failed: {type(exc).__name__}"}
+                v12, ev12 = "ERROR", {"why": f"hook/read failed: {type(exc).__name__}"}
+            put("S5", v, **ev)
+            put("S12", v12, **ev12)
+        else:
+            put("S12", "ERROR", why="S5's setup was not exercised, so its open turns never ran")
 
     # S20/S21/S22: the three conversation-quality classes (2026-10-04) ------------
-    say(a, "d1-dob", SAY_DOB)
-    land["S20"] = live.wait_landed(a, ASK_DOB, ("1991",))
-    if setup_ok("S20", ("d1-dob",), ("S20",)):
+    if seed("S20"):
+        say(a, "d1-dob", SAY_DOB)
+        land["S20"] = live.wait_landed(a, ASK_DOB, ("1991",))
+    if ask("S20") and setup_ok("S20", ("d1-dob",), ("S20",)):
         t = live.chat(a, "s20-ask", ASK_DOB)
         pkt = live.packet(a, ASK_DOB)
         if t["error"]:
@@ -1628,9 +1749,10 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
             v, ev = score_s20(t["reply"], pkt)
             put("S20", v, landed=land["S20"], ask={**live.evidence(t), **ev})
 
-    say(a, "s21-kids", SAY_KIDS)
-    land["S21"] = live.wait_landed(a, ASK_KIDS, S21_LANDED)
-    if setup_ok("S21", ("s21-kids",), ("S21",)):
+    if seed("S21"):
+        say(a, "s21-kids", SAY_KIDS)
+        land["S21"] = live.wait_landed(a, ASK_KIDS, S21_LANDED)
+    if ask("S21") and setup_ok("S21", ("s21-kids",), ("S21",)):
         ack = live.chat(a, "s21-fix", SAY_PET)
         t = live.chat(a, "s21-ask", ASK_KIDS)
         pkt = live.packet(a, ASK_KIDS + " Biscuit")
@@ -1640,9 +1762,10 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
             v, ev = score_s21(ack["reply"], t["reply"], pkt)
             put("S21", v, landed=land["S21"], ask={**live.evidence(t), **ev})
 
-    t1 = say(a, "s22-roster", SAY_ROSTER)
-    land["S22"] = live.wait_landed(a, ASK_ROSTER, ("anika",))
-    if setup_ok("S22", ("s22-roster",), ("S22",)):
+    if seed("S22"):
+        t1 = say(a, "s22-roster", SAY_ROSTER)
+        land["S22"] = live.wait_landed(a, ASK_ROSTER, ("anika",))
+    if ask("S22") and setup_ok("S22", ("s22-roster",), ("S22",)):
         t2 = live.chat(a, "s22-ask", ASK_ROSTER)
         pkt = live.packet(a, ASK_ROSTER)
         if t2["error"]:
@@ -1652,61 +1775,67 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
             put("S22", v, landed=land["S22"], ask={**live.evidence(t2), **ev})
 
     # S6: isolation ----------------------------------------------------------
-    t = live.chat(b, "b-ask", ASK_B)
-    pkt_b = live.packet(b, ASK_B + " Marisol Lisbon Hobart Teodor lighthouse")
-    pkt_a = live.packet(a, ASK_B + " dad Teodor lighthouse")
-    if t["error"]:
-        put("S6", "ERROR", ask=live.evidence(t))
-    else:
-        v, ev = score_s6(t["reply"], pkt_b, pkt_a)
-        put("S6", v, ask={**live.evidence(t), **ev})
+    if ask("S6"):
+        t = live.chat(b, "b-ask", ASK_B)
+        pkt_b = live.packet(b, ASK_B + " Marisol Lisbon Hobart Teodor lighthouse")
+        pkt_a = live.packet(a, ASK_B + " dad Teodor lighthouse")
+        if t["error"]:
+            put("S6", "ERROR", ask=live.evidence(t))
+        else:
+            v, ev = score_s6(t["reply"], pkt_b, pkt_a)
+            put("S6", v, ask={**live.evidence(t), **ev})
 
     # S8: long history -------------------------------------------------------
-    log(f"S8: {len(FILLER)} filler turns across {FILLER_SESSIONS} sessions")
-    errors = 0
-    for i, text in enumerate(FILLER):
-        errors += bool(say(a, f"filler-{i % FILLER_SESSIONS}", text)["error"])
-    # The facts S8 must recall are S1's and S7's seeds; without them landed there
-    # is nothing to survive the history (and any failed filler turn is ERROR in score_s8).
-    if setup_ok("S8", ("d1-sister", "d1-dad"), ("S1", "S7_rich")):
-        t1 = live.chat(a, "long-ask-sister", ASK_LONG_SISTER)
-        t2 = live.chat(a, "long-ask-dad", ASK_LONG_DAD)
-        if t1["error"] or t2["error"]:
-            put("S8", "ERROR", filler_errors=errors, asks=[live.evidence(t1), live.evidence(t2)])
-        else:
-            v, ev = score_s8(t1["reply"], t2["reply"], errors)
-            put("S8", v, filler_turns=len(FILLER),
-                asks=[live.evidence(t1), live.evidence(t2)], **ev)
+    if ask("S8"):
+        log(f"S8: {len(FILLER)} filler turns across {FILLER_SESSIONS} sessions")
+        errors = 0
+        for i, text in enumerate(FILLER):
+            errors += bool(say(a, f"filler-{i % FILLER_SESSIONS}", text)["error"])
+        # The facts S8 must recall are S1's and S7's seeds; without them landed there
+        # is nothing to survive the history (and any failed filler turn is ERROR in score_s8).
+        if setup_ok("S8", ("d1-sister", "d1-dad"), ("S1", "S7_rich")):
+            t1 = live.chat(a, "long-ask-sister", ASK_LONG_SISTER)
+            t2 = live.chat(a, "long-ask-dad", ASK_LONG_DAD)
+            if t1["error"] or t2["error"]:
+                put("S8", "ERROR", filler_errors=errors, asks=[live.evidence(t1), live.evidence(t2)])
+            else:
+                v, ev = score_s8(t1["reply"], t2["reply"], errors)
+                put("S8", v, filler_turns=len(FILLER),
+                    asks=[live.evidence(t1), live.evidence(t2)], **ev)
 
     # S13-S16: the contacts conversation classes. Same-day, no backdate: contact
     # writes are synchronous (nothing to wait for in the memory pipeline).
     log("S13-S16: contacts list-all, relation phrase, duplicate, enumerated offer")
-    say(a, "c-full", SAY_CONTACT_FULL)
-    say(a, "c-rel", SAY_CONTACT_REL)
-    if setup_ok("S13", ("c-full", "c-rel")):
+    if ask("S13") or ask("S14") or ask("S15"):
+        say(a, "c-full", SAY_CONTACT_FULL)
+    if ask("S13") or ask("S14"):
+        say(a, "c-rel", SAY_CONTACT_REL)
+    if ask("S13") and setup_ok("S13", ("c-full", "c-rel")):
         t = live.chat(a, "c-ask-list", ASK_CONTACTS_LIST)
         if t["error"]:
             put("S13", "ERROR", ask=live.evidence(t))
         else:
             v, ev = score_s13(t["reply"])
             put("S13", v, ask={**live.evidence(t), **ev})
-    if setup_ok("S14", ("c-rel",)):
+    if ask("S14") and setup_ok("S14", ("c-rel",)):
         t = live.chat(a, "c-ask-rel", ASK_WHO_REL)
         if t["error"]:
             put("S14", "ERROR", ask=live.evidence(t))
         else:
             v, ev = score_s14(t["reply"])
             put("S14", v, ask={**live.evidence(t), **ev})
-    say(a, "c-stub", SAY_CONTACT_STUB)
-    if setup_ok("S15", ("c-full", "c-stub")):
+    if ask("S15"):
+        say(a, "c-stub", SAY_CONTACT_STUB)
+    if ask("S15") and setup_ok("S15", ("c-full", "c-stub")):
         t = live.chat(a, "c-ask-dup", ASK_WHO_DUP)
         if t["error"]:
             put("S15", "ERROR", ask=live.evidence(t))
         else:
             v, ev = score_s15(t["reply"])
             put("S15", v, ask={**live.evidence(t), **ev})
-    say(a, "c-family", SAY_FAMILY)
-    if setup_ok("S16", ("c-family",)):
+    if ask("S16"):
+        say(a, "c-family", SAY_FAMILY)
+    if ask("S16") and setup_ok("S16", ("c-family",)):
         t1 = live.chat(a, "c-family", SAY_FAMILY_NUDGE)
         if t1["error"]:
             put("S16", "ERROR", ask=live.evidence(t1))
@@ -1835,6 +1964,14 @@ def main(argv: list[str] | None = None) -> int:
                          "--record-baseline / --compare-baseline, whose scenarios are multi-day)")
     ap.add_argument("--keep-replies", action="store_true",
                     help="store 240-char reply excerpts in the local results file (debug)")
+    ap.add_argument("--only", default=None, metavar="S21[,S22]",
+                    help="run only these scenario ids (a PARTIAL run: status=partial, exit 2 on an "
+                         "unknown id, NEVER records a baseline; --compare-baseline compares only "
+                         "the selected scenarios)")
+    ap.add_argument("--axis", default=None, metavar="b[,c]",
+                    help="run only the scenarios on these ZMB axes (letter or name: a authority, "
+                         "b extraction, c temporal, d recall, e abstention, g emotional); "
+                         "intersected with --only; a PARTIAL run like --only")
     ap.add_argument("--teardown-only", action="store_true",
                     help="only clean up a previous run's pending teardown")
     ap.add_argument("--service-dir", default=None)
@@ -1853,9 +1990,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.compare_baseline and args.record_baseline:
         ap.error("--compare-baseline and --record-baseline are mutually exclusive: a regressed "
                  "compare run must never overwrite the bar (record alone, deliberately)")
+    try:
+        selected = parse_selection(args.only, args.axis)
+    except ValueError as exc:
+        ap.error(str(exc))
+    partial = selected is not None and selected != frozenset(SCENARIO_IDS)
+    if partial and args.record_baseline:
+        ap.error("--record-baseline is refused with --only/--axis: a partial run would turn every "
+                 "unselected scenario into 'new' — record the baseline from a full run")
 
     if args.dry_run:
-        print(plan_text(args.samples or 1))
+        print(plan_text(args.samples or 1, selected))
         return 0
     if os.environ.get("ZOE_PERF") != "1":
         print("samantha_bar: skipped — live runs require ZOE_PERF=1 (see --dry-run)")
@@ -1943,7 +2088,8 @@ def main(argv: list[str] | None = None) -> int:
     td: dict[str, Any] = {"proven": False, "problems": ["not run"]}
     try:
         write_json(args.pending, {"users": [a, b], "sessions": [], "started_at": started.isoformat()})
-        results = run_scenarios(live, a, b, args.samples, not args.no_backdate, log)
+        results = run_scenarios(live, a, b, args.samples, not args.no_backdate, log,
+                                selected=selected)
     except BaseException as exc:  # noqa: BLE001 — teardown must still run
         run_error = f"{type(exc).__name__}: {str(exc)[:200]}"
         log(f"run aborted: {run_error}")
@@ -1957,14 +2103,24 @@ def main(argv: list[str] | None = None) -> int:
             args.pending.unlink(missing_ok=True)
         log(f"teardown proven={td['proven']} {'' if td['proven'] else td['problems']}")
 
-    cmp = compare_baseline(verdict_map(results), baseline)
-    status = "error" if (run_error or not td["proven"] or len(results) != len(SCENARIO_IDS)) \
-        else ("regression" if (args.compare_baseline and cmp["red"]) else "ok")
+    expected_ids = selected if selected is not None else frozenset(SCENARIO_IDS)
+    cmp = compare_baseline(verdict_map(results),
+                           restrict_baseline(baseline, selected) if partial else baseline)
+    if partial:
+        cmp["notes"].append(f"partial run: compared only {len(expected_ids)} of "
+                            f"{len(SCENARIO_IDS)} scenarios")
+    # A short run is `partial` (never `error`) ONLY when it was asked to be short: results must be
+    # exactly the selected ids. Anything else short of the selection is still an error.
+    status = "error" if (run_error or not td["proven"]
+                         or {r["id"] for r in results} != set(expected_ids)) \
+        else ("regression" if (args.compare_baseline and cmp["red"])
+              else ("partial" if partial else "ok"))
     payload = {"harness_version": HARNESS_VERSION, "status": status, "run_error": run_error,
                "started_at": started.isoformat(timespec="seconds"),
                "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
                "duration_s": round(time.monotonic() - t0, 1), "samples": args.samples,
-               "backdate": not args.no_backdate,
+               "backdate": not args.no_backdate, "partial": partial,
+               "selected": sorted(expected_ids) if partial else None,
                "revision": revision, "judge_prompt_sha256": JUDGE_PROMPT_SHA256,
                "scenarios": results, "compare": cmp, "teardown": td,
                "baseline_ref": {"path": str(args.baseline),
@@ -1972,7 +2128,7 @@ def main(argv: list[str] | None = None) -> int:
                                 "commit": ((baseline or {}).get("revision") or {}).get("commit")}}
     write_json(args.results, payload)
     append_trend(args.trend, payload)
-    if args.record_baseline and status != "error":
+    if args.record_baseline and status == "ok" and not partial:  # a partial run NEVER records
         write_json(args.baseline, make_baseline(results, revision, args.samples))
         log(f"baseline recorded: {args.baseline}")
     elif args.record_baseline:
