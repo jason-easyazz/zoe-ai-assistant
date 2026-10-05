@@ -1094,14 +1094,15 @@ async def _user_opted_out(user_id: str) -> bool:
 
 
 def _identity_assertion_blocked(text: str, *, user_id: str, source: str) -> bool:
-    """True when an AUTOMATIC writer (``identity_facts.AUTOMATIC_SOURCES``) is asserting
-    the user's own name. Explicit teach paths (``voice_fact``, ``brain_tool``,
-    ``review_ui``) and operator tools are never blocked. Logs a label only (never the
+    """True when an AUTOMATIC writer is asserting the user's own name. "Automatic" is
+    everything that is not an allow-listed direct source (``identity_facts.DIRECT_USER_SOURCES``:
+    ``voice_fact``, ``brain_tool``, ``review_ui``, ``proposal``, the audit tool) - so a label
+    nobody anticipated (``chat_regex_fallback``) is walled by default. Logs a label only (never the
     text). Never raises."""
     try:
-        from identity_facts import AUTOMATIC_SOURCES, is_user_name_assertion
+        from identity_facts import is_automatic_source, is_user_name_assertion
 
-        if source not in AUTOMATIC_SOURCES or not is_user_name_assertion(text):
+        if not is_automatic_source(source, owner=user_id) or not is_user_name_assertion(text):
             return False
     except Exception:  # noqa: BLE001 — the guard must never break ingestion
         return False

@@ -130,6 +130,29 @@ def test_dry_run_is_read_only_and_redaction_hides_names(palace, accounts_file, c
     assert hashlib.sha256((palace / "chroma.sqlite3").read_bytes()).hexdigest() == before
 
 
+def test_redacted_json_contains_none_of_the_identity_values(palace, accounts_file, capsys):
+    """--json --redact used to mask only text/account_name; asserted + account_home leaked."""
+    audit.main(["--dry-run", "--json", "--redact", "--palace", str(palace), "--accounts-file", accounts_file])
+    out = capsys.readouterr().out
+    rows = json.loads(out)
+    assert rows and {r["id"] for r in rows} >= {"m1", "m6", "m9"}
+    for value in (WRONG, "Mika", "Vale", "Zed", "Zeddy", "Ola", "Hobart", "Tasmania", "Perth"):
+        assert value not in out, value
+    for r in rows:
+        assert all(r[k] == "<redacted>" for k in audit.IDENTITY_FIELDS if r[k])
+    # control: unredacted output does carry them (the assertion above is measuring something)
+    audit.main(["--dry-run", "--json", "--palace", str(palace), "--accounts-file", accounts_file])
+    plain = capsys.readouterr().out
+    assert WRONG in plain and "Perth" in plain and "Hobart" in plain
+
+
+def test_redacted_text_report_hides_names_and_places_too(palace, accounts_file, capsys):
+    audit.main(["--dry-run", "--redact", "--palace", str(palace), "--accounts-file", accounts_file])
+    out = capsys.readouterr().out
+    for value in (WRONG, "Zed", "Zeddy", "Perth", "Hobart"):
+        assert value not in out, value
+
+
 def test_user_filter(palace, accounts_file, capsys):
     audit.main(["--dry-run", "--json", "--user", "member-b", "--palace", str(palace), "--accounts-file", accounts_file])
     assert [c["id"] for c in json.loads(capsys.readouterr().out)] == ["m9"]
@@ -262,5 +285,5 @@ def test_the_purged_edit_passes_the_writer_wall(palace, accounts_file):
     """The audit's own replacement row must not be eaten by the guard it ships with."""
     import identity_facts as idf
 
-    assert "identity_audit" not in idf.AUTOMATIC_SOURCES
+    assert "identity_audit" in idf.DIRECT_USER_SOURCES and idf.is_automatic_source("digest")
     assert idf.is_user_name_assertion("User's name is Zed.")  # it IS an assertion: only the actor lets it through

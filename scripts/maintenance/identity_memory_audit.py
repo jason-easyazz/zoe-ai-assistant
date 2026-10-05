@@ -8,7 +8,7 @@ day transcript holding a speech-to-text fragment that named a third person, asse
 as the user's name, and its contradiction pass superseded the genuine name fact with it
 (``MemoryService.review(edit)`` carries the old row's source/session forward, so it looked
 like a regex/Telegram write). The writers are now walled off
-(``identity_facts.AUTOMATIC_SOURCES``) and own-identity questions are answered from the
+(``identity_facts.DIRECT_USER_SOURCES`` allow-list) and own-identity questions are answered from the
 account (``identity_facts``); this tool finds the rows that were already stored.
 
 Account side (never memory): ``auth_users`` / ``users`` / ``user_preferences`` /
@@ -169,6 +169,16 @@ def find_conflicts(identities: dict[str, idf.Identity], rows: list[dict[str, Any
     return sorted(found, key=lambda c: (c["user_id"], c["kind"], c["id"]))
 
 
+# EVERY field that carries a name or a place. A redacted report must contain none of them,
+# so adding a field to find_conflicts() that holds either means adding it here (and the test
+# asserts no synthetic value survives).
+IDENTITY_FIELDS = ("text", "asserted", "account_name", "account_home")
+
+
+def redacted(c: dict[str, Any]) -> dict[str, Any]:
+    return {k: ("<redacted>" if k in IDENTITY_FIELDS and v else v) for k, v in c.items()}
+
+
 def render(conflicts: list[dict[str, Any]], redact: bool) -> str:
     if not conflicts:
         return "No memory row asserts an identity that conflicts with the account."
@@ -291,7 +301,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.user:
         conflicts = [c for c in conflicts if c["user_id"] == args.user]
     if args.json:
-        shown = [{**c, "text": "<redacted>", "account_name": "<redacted>"} if args.redact else c for c in conflicts]
+        shown = [redacted(c) if args.redact else c for c in conflicts]
         print(json.dumps(shown, indent=2))
     else:
         print(render(conflicts, args.redact))

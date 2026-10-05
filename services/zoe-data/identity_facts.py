@@ -52,14 +52,23 @@ logger = logging.getLogger(__name__)
 KEY_PREFERRED_NAME = "preferred_name"
 KEY_HOME_ADDRESS = "home_address"
 
-# Writers that MINE facts from what was said (as opposed to the user dictating one, or an
-# operator tool): ``user_prefs.MEMORY_OPT_OUT_SOURCES`` plus the voice-lane and idle-
-# consolidation labels, which that opt-out list omits. None of them may assert the
-# user's own name — that is an account fact.
-AUTOMATIC_SOURCES = frozenset({
-    "chat_regex", "turn_digest", "conversation", "ambient", "digest", "consolidation",
-    "synthesis", "music_digest", "voice_regex", "voice_turn_digest", "idle_consolidation",
-})
+# THE WALL IS AN ALLOW-LIST. Only a source that is the user DICTATING a fact (or an
+# operator tool) may assert the user's own name; EVERY other source label is automatic and
+# walled - including ones nobody has thought of yet. A deny-list of automatic names cannot
+# hold: ``zoe_agent._background_memory_save`` falls back to ``chat_regex_fallback`` when
+# ``memory_extractor`` cannot be imported, and ``user_prefs.MEMORY_OPT_OUT_SOURCES`` omits
+# the voice-lane / idle-consolidation labels - each was a hole the moment it was missed.
+EXPLICIT_SOURCES = frozenset({"brain_tool", "voice_fact", "review_ui", "proposal"})
+DIRECT_USER_SOURCES = EXPLICIT_SOURCES | {"identity_audit"}
+
+
+def is_automatic_source(source: Optional[str], owner: Optional[str] = None) -> bool:
+    """True for every writer that is not a direct user/operator source. ``owner`` (the row's
+    user_id) lets ``review(edit)`` treat the owner reviewing their OWN memory (the review
+    UI passes the user id as the actor) as direct."""
+    src = (source or "").strip()
+    return not (src in DIRECT_USER_SOURCES or (owner and src == owner))
+
 
 _NON_ACCOUNT_IDS = frozenset({"", "guest", "voice-guest", "default", "anonymous", "system"})
 
@@ -613,12 +622,6 @@ def is_user_name_assertion(text: str) -> bool:
 
 def _norm_tokens(value: str) -> list[str]:
     return [t for t in re.split(r"[^a-z0-9]+", (value or "").lower()) if t]
-
-
-# Sources that are the user DICTATING a fact (memory_tombstones.EXPLICIT_TEACH_SOURCES).
-# A name row from one of them that disagrees with the account may be a nickname or a
-# deliberate choice — a person decides; it is never auto-purgeable.
-EXPLICIT_SOURCES = frozenset({"brain_tool", "voice_fact", "review_ui"})
 
 
 def classify_name_assertion(asserted: str, ident: Identity, meta: Optional[dict] = None) -> str:

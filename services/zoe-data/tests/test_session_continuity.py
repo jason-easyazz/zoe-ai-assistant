@@ -219,3 +219,103 @@ def test_desktop_chat_page_persists_the_session_it_sends():
     assert "session_id: currentSessionId || (currentSessionId = `session_${Date.now()}`)" in html
     assert "if (!currentSessionId) await createOrGetCurrentSession();" in html
     assert "session_id: currentSessionId || `session_${Date.now()}`" not in html  # the throwaway form
+
+
+# ── the NON-streaming path takes the per-session lock too ─────────────────────
+
+class _Stop(Exception):
+    """Raised by the fake first write so chat() unwinds right after the lock section starts."""
+
+
+class _Req:
+    def __init__(self, body):
+        self._body, self.headers = body, {}
+
+    async def json(self):
+        return self._body
+
+
+def _chat_mod():
+    return pytest.importorskip("routers.chat")
+
+
+def _run_overlapping(monkeypatch, bodies):
+    """Start len(bodies) non-stream chat() calls that each block inside their first write,
+    holding the session lock. Returns (session ids seen at the write, results)."""
+    chat_mod = _chat_mod()
+    seen: list[str] = []
+
+    async def go():
+        release = asyncio.Event()
+
+        async def fake_recent(user_id, **kw):
+            # The resolver's busy probe RACES the other request's acquire: both pick the same row.
+            return "ask_shared00"
+
+        async def fake_ensure(sid, uid):
+            return None
+
+        async def fake_save(sid, role, content, user_id=None, **kw):
+            seen.append(sid)
+            await release.wait()
+            raise _Stop()
+
+        monkeypatch.setattr(sc, "recent_session_id", fake_recent)
+        monkeypatch.setattr(chat_mod, "_ensure_user_and_chat_session", fake_ensure)
+        monkeypatch.setattr(chat_mod, "_save_chat_message", fake_save)
+        chat_mod._SESSION_LOCKS.clear()
+        tasks = []
+        for b in bodies:
+            tasks.append(asyncio.ensure_future(chat_mod.chat(_Req(b), {"user_id": "member-a"}, stream=False)))
+            for _ in range(5):  # let it resolve, take the lock and block in the write
+                await asyncio.sleep(0)
+        await asyncio.sleep(0.05)
+        release.set()
+        return await asyncio.gather(*tasks, return_exceptions=True)
+
+    return seen, asyncio.run(go())
+
+
+def test_two_overlapping_nonstream_idless_calls_never_share_a_session(monkeypatch):
+    seen, results = _run_overlapping(monkeypatch, [{"message": "one"}, {"message": "two"}])
+    assert len(seen) == 2 and seen[0] == "ask_shared00"
+    assert seen[1] != seen[0] and re.fullmatch(r"ask_[0-9a-f]{8}", seen[1])  # fresh ask_, no race
+    assert all(isinstance(r, _Stop) for r in results)
+
+
+def test_break_the_fix_control_without_the_lock_both_attach_to_one_session(monkeypatch):
+    """Same overlap with the lock section neutralised: both end up in ask_shared00. This is
+    the bug the lock fixes, so the test above is measuring the lock."""
+    chat_mod = _chat_mod()
+
+    class NoLock:
+        def locked(self):
+            return False
+
+        async def acquire(self):
+            return True
+
+        def release(self):
+            return None
+
+    monkeypatch.setattr(chat_mod, "_get_session_lock", lambda sid: NoLock())
+    seen, _ = _run_overlapping(monkeypatch, [{"message": "one"}, {"message": "two"}])
+    assert seen == ["ask_shared00", "ask_shared00"]
+
+
+def test_overlapping_nonstream_calls_on_an_explicit_id_serialise_then_answer_busy(monkeypatch):
+    chat_mod = _chat_mod()
+    monkeypatch.setattr(chat_mod, "_SESSION_LOCK_TIMEOUT_S", 0.05)
+    seen, results = _run_overlapping(monkeypatch, [{"message": "one", "session_id": "bar-s1"},
+                                                   {"message": "two", "session_id": "bar-s1"}])
+    assert seen == ["bar-s1"]  # the 2nd never reached its write
+    assert isinstance(results[0], _Stop)
+    assert results[1]["code"] == "session_busy" and results[1]["session_id"] == "bar-s1"
+
+
+def test_the_lock_is_released_so_sequential_idless_calls_keep_the_same_session(monkeypatch):
+    chat_mod = _chat_mod()
+    seen, results = _run_overlapping(monkeypatch, [{"message": "one"}])
+    assert isinstance(results[0], _Stop) and not chat_mod._get_session_lock("ask_shared00").locked()
+    seen2, _ = _run_overlapping(monkeypatch, [{"message": "two"}])
+    assert seen2 == ["ask_shared00"]  # nothing in flight: continuity unchanged

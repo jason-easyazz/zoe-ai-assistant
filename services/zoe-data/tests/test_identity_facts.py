@@ -411,7 +411,22 @@ def _ingest(svc, text, source):
     return asyncio.run(svc.ingest(text, user_id=UID, source=source, status="approved", confidence=0.9))
 
 
-@pytest.mark.parametrize("source", sorted(idf.AUTOMATIC_SOURCES))
+# The wall is an ALLOW-list of direct sources, so every other label - the known mining
+# lanes, the zoe_agent regex FALLBACK (used when memory_extractor cannot be imported), the
+# agent tools, and a label nobody has invented yet - is walled.
+AUTOMATIC = ["chat_regex", "chat_regex_fallback", "turn_digest", "conversation", "ambient", "digest",
+             "consolidation", "synthesis", "music_digest", "voice_regex", "voice_turn_digest",
+             "idle_consolidation", "mcp", "zoe_agent", "profile-analysis", "some_future_extractor", ""]
+
+
+class _Everything:
+    """A DIRECT_USER_SOURCES stand-in that allows every label (= the wall removed)."""
+
+    def __contains__(self, _):
+        return True
+
+
+@pytest.mark.parametrize("source", AUTOMATIC)
 def test_automatic_writers_cannot_store_the_users_name(svc, source, caplog):
     caplog.set_level(logging.INFO, logger=memory_service.logger.name)
     assert _ingest(svc, f"User's name is {WRONG}.", source) is None
@@ -426,7 +441,7 @@ def test_phrasing_variants_are_walled_too(svc, text):
     assert _ingest(svc, text, "digest") is None
 
 
-@pytest.mark.parametrize("source", ["voice_fact", "brain_tool", "review_ui", "identity_audit"])
+@pytest.mark.parametrize("source", ["voice_fact", "brain_tool", "review_ui", "proposal", "identity_audit"])
 def test_explicit_teach_and_operator_sources_still_store(svc, source):
     assert _ingest(svc, f"User's name is {REAL}.", source) is not None
 
@@ -438,10 +453,11 @@ def test_other_facts_from_automatic_writers_are_untouched(svc, text):
 
 
 def test_break_the_fix_control_the_wall_is_what_blocks(svc, monkeypatch):
-    """If AUTOMATIC_SOURCES stops covering the writer the row is stored: the tests above
+    """With the wall removed the row is stored - for the fallback label too: the tests above
     are measuring the wall, not an accident of the fake."""
-    monkeypatch.setattr(idf, "AUTOMATIC_SOURCES", frozenset())
+    monkeypatch.setattr(idf, "DIRECT_USER_SOURCES", _Everything())
     assert _ingest(svc, f"User's name is {WRONG}.", "chat_regex") is not None
+    assert _ingest(svc, f"User's name is {WRONG} Jr.", "chat_regex_fallback") is not None
 
 
 def test_automatic_edit_cannot_supersede_into_a_name_assertion(svc):
@@ -495,7 +511,7 @@ def test_digest_replay_of_the_live_incident_leaves_the_genuine_row(svc, monkeypa
     assert not any(WRONG in doc for doc, _ in rows.values())
 
     # break-the-fix control: with the wall removed the SAME replay reproduces the incident
-    monkeypatch.setattr(idf, "AUTOMATIC_SOURCES", frozenset())
+    monkeypatch.setattr(idf, "DIRECT_USER_SOURCES", _Everything())
     asyncio.run(memory_digest.run_memory_digest(UID))
     assert rows[seed.id][1]["status"] == "superseded"
     assert any(WRONG in doc for doc, _ in rows.values())
@@ -681,3 +697,23 @@ def test_full_name_and_surname_come_from_the_account_name_not_a_nickname():
     assert idf.reply_for("fullname", i) == "Your full name is Sam Rivers."
     assert idf.reply_for("surname", i) == "Your surname is Rivers."
     assert idf.reply_for("name", i) == "Your name is Sammy."
+
+
+def test_the_zoe_agent_regex_fallback_cannot_store_the_name_end_to_end(svc, monkeypatch):
+    """zoe_agent._background_memory_save falls back to its own patterns when memory_extractor
+    cannot be imported; they emit "User's name is ..." with source=chat_regex_fallback."""
+    import zoe_agent
+
+    src = open(zoe_agent.__file__).read()
+    assert 'source="chat_regex_fallback"' in src  # the label this test stands for is really in use
+    assert _ingest(svc, f"User's name is {WRONG}", "chat_regex_fallback") is None
+    assert not svc._col.rows
+
+
+def test_the_owner_reviewing_their_own_memory_is_a_direct_edit(svc):
+    """The review UI passes the user id as the actor; that is the user, not an extractor."""
+    seed = _ingest(svc, f"User's name is {REAL}.", "voice_fact")
+    ok = asyncio.run(svc.review(seed.id, decision="edit", actor=UID, edits=f"User's name is {REAL} Quill."))
+    assert ok is not None
+    assert asyncio.run(svc.review(ok.id, decision="edit", actor="some_extractor",
+                                  edits=f"User's name is {WRONG}.")) is None
