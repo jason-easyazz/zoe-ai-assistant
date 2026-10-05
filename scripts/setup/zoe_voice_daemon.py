@@ -22,6 +22,7 @@ import json
 import logging
 import math
 import os
+import platform
 import re
 import signal
 import socketserver
@@ -353,6 +354,111 @@ WAKE_BEEP_DURATION_MS = int(os.environ.get("WAKE_BEEP_DURATION_MS", "120"))
 WAKE_BEEP_VOLUME = float(os.environ.get("WAKE_BEEP_VOLUME", "0.22"))  # 0..1
 # Route playback explicitly (default to same ALSA device family as mic).
 AUDIO_OUTPUT_DEVICE = os.environ.get("AUDIO_OUTPUT_DEVICE", AUDIO_DEVICE).strip() or "default"
+
+
+# ── Platform backend: PANEL_PLATFORM=pi|mac|auto (default pi) ────────────────
+# Everything the daemon asks of the OS - the player process, the duck, the local
+# TTS fallback, the on-box panel agent - goes through ONE object so the same
+# daemon can run as a "virtual panel" on a Mac (docs/knowledge/mac-virtual-panel.md).
+# `pi` is the live panel's behaviour, command for command: _PiBackend builds the
+# exact aplay / mpg123 / pactl / espeak-ng argv the call sites used to inline
+# (pinned byte for byte by tests/unit/test_voice_daemon_platform.py). `mac` loads
+# scripts/setup/mac_panel/mac_backend.py BY PATH, only when asked for - the Pi
+# never imports it, so deploy-pi-voice.sh ships nothing new.
+def _resolve_panel_platform(raw: "str | None", system: str) -> str:
+    """PANEL_PLATFORM -> "pi" | "mac". Unset/empty/unknown is "pi" (an unknown
+    value is logged, never guessed); "auto" follows platform.system()."""
+    value = (raw or "").strip().lower()
+    if value == "mac":
+        return "mac"
+    if value == "auto":
+        return "mac" if system == "Darwin" else "pi"
+    if value not in ("", "pi"):
+        log.warning("Env PANEL_PLATFORM=%r is not pi|mac|auto; using pi", raw)
+    elif value == "" and system == "Darwin":
+        log.warning("Running on macOS with PANEL_PLATFORM unset: the Pi backend needs "
+                    "aplay/pactl and will not play anything. Set PANEL_PLATFORM=mac.")
+    return "pi"
+
+
+class _PiBackend:
+    """The live panel: ALSA aplay/mpg123, PulseAudio sink-input duck, espeak-ng."""
+
+    name = "pi"
+    has_panel_agent = True      # the on-box agent on 127.0.0.1:8765 (screen wake)
+    default_health_bind = ""    # every interface, as the Pi has always done
+
+    @staticmethod
+    def _aplay_cmd(fpath: str) -> list:
+        cmd = ["aplay", "-q"]
+        if AUDIO_OUTPUT_DEVICE != "default":
+            cmd += ["-D", AUDIO_OUTPUT_DEVICE]
+        cmd.append(fpath)
+        return cmd
+
+    def start_file_player(self, fpath: str, ext: str):
+        """Start playing a file without blocking: (Popen-like, player name)."""
+        if ext == "mp3":
+            if AUDIO_OUTPUT_DEVICE != "default":
+                cmd = ["mpg123", "-q", "-a", AUDIO_OUTPUT_DEVICE, fpath]
+            else:
+                cmd = ["mpg123", "-q", fpath]
+        else:
+            cmd = self._aplay_cmd(fpath)
+        return subprocess.Popen(cmd), cmd[0]
+
+    def play_file_blocking(self, fpath: str, timeout: "float | None" = None) -> None:
+        """Play a short WAV (the chimes) and wait for it."""
+        cmd = self._aplay_cmd(fpath)
+        if timeout is None:
+            subprocess.run(cmd, check=False)
+        else:
+            subprocess.run(cmd, check=False, timeout=timeout)
+
+    def start_buffer_player(self, fpath: str):
+        return subprocess.Popen(self._aplay_cmd(fpath), stderr=subprocess.DEVNULL)
+
+    def start_pcm_stream(self, rate: int, ch: int, width: int):
+        """One persistent player fed raw PCM on stdin (gapless sentence chunks)."""
+        fmt = {1: "U8", 2: "S16_LE", 3: "S24_3LE", 4: "S32_LE"}.get(width, "S16_LE")
+        cmd = ["aplay", "-q", "-t", "raw", "-f", fmt, "-c", str(ch), "-r", str(rate)]
+        if AUDIO_OUTPUT_DEVICE != "default":
+            cmd += ["-D", AUDIO_OUTPUT_DEVICE]
+        return subprocess.Popen(cmd, stdin=subprocess.PIPE)
+
+    def local_tts_cmd(self, text: str) -> list:
+        return ["espeak-ng", "-s", "140", "-p", "44", text]
+
+    def make_ducker(self, proc):
+        return _SinkInputDucker(proc.pid)
+
+
+def _make_platform_backend(name: str):
+    if name != "mac":
+        return _PiBackend()
+    import importlib.util
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mac_panel", "mac_backend.py")
+    if not os.path.isfile(path):
+        raise RuntimeError(f"PANEL_PLATFORM=mac needs {path} (run from a full repo checkout)")
+    spec = importlib.util.spec_from_file_location("zoe_mac_panel_backend", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.MacBackend(
+        pyaudio_module=pyaudio,
+        output_device=AUDIO_OUTPUT_DEVICE,
+        duck_params=lambda: (BARGE_DUCK_DB, BARGE_DUCK_RAMP_MS),
+        log=log,
+    )
+
+
+PANEL_PLATFORM = _resolve_panel_platform(os.environ.get("PANEL_PLATFORM"), platform.system())
+_PLATFORM = _make_platform_backend(PANEL_PLATFORM)
+# The health server also serves an unauthenticated POST /activate (it starts a
+# recording). Bound to every interface on the Pi's home LAN it is accepted; the
+# Mac backend defaults to loopback, because a laptop leaves the house.
+HEALTH_BIND = os.environ.get("HEALTH_BIND", _PLATFORM.default_health_bind)
+if PANEL_PLATFORM != "pi":
+    log.info("Platform backend: %s", PANEL_PLATFORM)
 # After a voice cycle or an announcement, ignore wake scores for this long.
 # It guards the WAKE detector (not barge-in): the speakerphone hears Zoe's own
 # TTS, and the 1.5s it used to be dates from the Whisper era, when echo of a
@@ -398,6 +504,18 @@ _junk_raw = os.environ.get(
 VOICE_IGNORE_TRANSCRIPTS = frozenset(x.strip().lower() for x in _junk_raw.split(",") if x.strip())
 
 _headers = {"X-Device-Token": DEVICE_TOKEN, "Content-Type": "application/json"}
+# Cloudflare Access service token (flag-dark). Only the virtual panel reaching zoe-data
+# through the tunnel sets these (docs/knowledge/mac-virtual-panel.md): Access answers a
+# credential-less API call with a 302 to its login page. Unset (the Pi, on the LAN) the
+# dict above is untouched. Both halves or neither - a lone half is logged and ignored.
+CF_ACCESS_CLIENT_ID = os.environ.get("CF_ACCESS_CLIENT_ID", "").strip()
+CF_ACCESS_CLIENT_SECRET = os.environ.get("CF_ACCESS_CLIENT_SECRET", "").strip()
+if CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET:
+    _headers["CF-Access-Client-Id"] = CF_ACCESS_CLIENT_ID
+    _headers["CF-Access-Client-Secret"] = CF_ACCESS_CLIENT_SECRET
+elif CF_ACCESS_CLIENT_ID or CF_ACCESS_CLIENT_SECRET:
+    log.warning("CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET must both be set; "
+                "sending no Cloudflare Access headers")
 _shutdown = threading.Event()
 # Retry transient backend errors so voice turns are less flaky on brief network
 # hiccups without masking persistent auth/configuration problems.
@@ -796,7 +914,7 @@ def _bridge_post(path: str, data: dict, timeout: int = 60) -> dict:
 
 
 def play_audio_b64(audio_b64: str, content_type: str = "audio/wav") -> bool:
-    """Decode and play base64 audio via aplay/mpg123.
+    """Decode and play base64 audio via the platform player (aplay/mpg123 on the Pi).
 
     Registers the subprocess in _tts_process so the barge-in thread can kill it.
     Checks _barge_in_requested before and during playback.
@@ -818,17 +936,7 @@ def play_audio_b64(audio_b64: str, content_type: str = "audio/wav") -> bool:
         with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as f:
             f.write(raw)
             fpath = f.name
-        if ext == "mp3":
-            if AUDIO_OUTPUT_DEVICE != "default":
-                cmd = ["mpg123", "-q", "-a", AUDIO_OUTPUT_DEVICE, fpath]
-            else:
-                cmd = ["mpg123", "-q", fpath]
-        else:
-            cmd = ["aplay", "-q"]
-            if AUDIO_OUTPUT_DEVICE != "default":
-                cmd += ["-D", AUDIO_OUTPUT_DEVICE]
-            cmd.append(fpath)
-        proc = subprocess.Popen(cmd)
+        proc, player_name = _PLATFORM.start_file_player(fpath, ext)
         _register_tts_process(proc)
         # Poll for barge-in while playback runs.
         barged = False
@@ -845,7 +953,7 @@ def play_audio_b64(audio_b64: str, content_type: str = "audio/wav") -> bool:
             time.sleep(0.05)
         played = barged or proc.returncode == 0
         if not played:
-            log.warning("Audio playback failed: %s exited %s", cmd[0], proc.returncode)
+            log.warning("Audio playback failed: %s exited %s", player_name, proc.returncode)
         with _tts_process_lock:
             _tts_process = None
         try:
@@ -1154,7 +1262,7 @@ class _BargeEpisode:
     def __init__(self, source: str, proc: "subprocess.Popen", det: _BargeDetector,
                  captured_at: float):
         self.source, self.proc = source, proc
-        self.ducker = _SinkInputDucker(proc.pid)
+        self.ducker = _PLATFORM.make_ducker(proc)
         self.decider = _BargeDecider()
         self.decider.start(captured_at - det.onset_offset_chunks() * _CHUNK_S,
                            speech_ms=det.hits() * _CHUNK_S * 1000.0)
@@ -1565,11 +1673,7 @@ def play_wake_beep() -> None:
             wf.setsampwidth(2)
             wf.setframerate(SAMPLE_RATE)
             wf.writeframes(bytes(frames))
-        cmd = ["aplay", "-q"]
-        if AUDIO_OUTPUT_DEVICE != "default":
-            cmd += ["-D", AUDIO_OUTPUT_DEVICE]
-        cmd.append(fpath)
-        subprocess.run(cmd, check=False)
+        _PLATFORM.play_file_blocking(fpath)
         os.unlink(fpath)
     except Exception as exc:
         log.warning("Wake beep failed: %s", exc)
@@ -1588,6 +1692,8 @@ def _notify_wake_background():
 
 def _wake_panel_agent() -> None:
     """Fire-and-forget POST to the local panel agent so the screen wakes up."""
+    if not _PLATFORM.has_panel_agent:
+        return  # a virtual panel has no on-box agent; its screen is a browser tab
     try:
         requests.post(
             "http://127.0.0.1:8765/wake",
@@ -1635,11 +1741,7 @@ def play_follow_up_beep() -> None:
             wf.setsampwidth(2)
             wf.setframerate(SAMPLE_RATE)
             wf.writeframes(bytes(frames))
-        cmd = ["aplay", "-q"]
-        if AUDIO_OUTPUT_DEVICE != "default":
-            cmd += ["-D", AUDIO_OUTPUT_DEVICE]
-        cmd.append(fpath)
-        subprocess.run(cmd, check=False, timeout=3)
+        _PLATFORM.play_file_blocking(fpath, timeout=3)
         os.unlink(fpath)
     except Exception as exc:
         log.debug("Follow-up beep failed: %s", exc)
@@ -1752,15 +1854,12 @@ def _is_junk_transcript(text: str) -> bool:
 
 
 def _espeak_local(text: str) -> None:
-    """Speak a short phrase locally using espeak-ng as an emergency fallback."""
+    """Speak a short phrase locally (espeak-ng on the Pi, say on a Mac) as an emergency fallback."""
     try:
-        subprocess.run(
-            ["espeak-ng", "-s", "140", "-p", "44", text],
-            check=False,
-            timeout=10,
-        )
+        cmd = _PLATFORM.local_tts_cmd(text)
+        subprocess.run(cmd, check=False, timeout=10)
     except FileNotFoundError:
-        log.debug("espeak-ng not installed; local TTS fallback unavailable")
+        log.debug("%s not installed; local TTS fallback unavailable", _PLATFORM.local_tts_cmd("")[0])
     except Exception as exc:
         log.debug("espeak-ng fallback failed: %s", exc)
 
@@ -2308,12 +2407,8 @@ def _play_buffer_phrase():
         if not files:
             return None
         chosen = random.choice(files)
-        cmd = ["aplay", "-q"]
-        if AUDIO_OUTPUT_DEVICE != "default":
-            cmd += ["-D", AUDIO_OUTPUT_DEVICE]
-        cmd.append(chosen)
         log.info("Buffer phrase playing: %s", os.path.basename(chosen))
-        return subprocess.Popen(cmd, stderr=subprocess.DEVNULL)
+        return _PLATFORM.start_buffer_player(chosen)
     except Exception as exc:
         log.debug("buffer phrase skipped: %s", exc)
         return None
@@ -2385,11 +2480,11 @@ def _feed_pcm_chunk(aplay, wav_bytes: bytes):
         return aplay
     pcm = _trim_chunk_silence(pcm, rate, ch, width)
     if aplay is None:
-        fmt = {1: "U8", 2: "S16_LE", 3: "S24_3LE", 4: "S32_LE"}.get(width, "S16_LE")
-        cmd = ["aplay", "-q", "-t", "raw", "-f", fmt, "-c", str(ch), "-r", str(rate)]
-        if AUDIO_OUTPUT_DEVICE != "default":
-            cmd += ["-D", AUDIO_OUTPUT_DEVICE]
-        aplay = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+        try:
+            aplay = _PLATFORM.start_pcm_stream(rate, ch, width)
+        except NotImplementedError as exc:  # a Mac player that cannot take this PCM format
+            log.warning("TTS chunk not playable on this platform: %s", exc)
+            return None
         _register_tts_process(aplay)
         if BARGE_DUCK_ENABLED:
             _PLAYOUT.reset()
@@ -3286,10 +3381,10 @@ def _start_health_server():
         class _ReuseAddrTcp(socketserver.TCPServer):
             allow_reuse_address = True
 
-        srv = _ReuseAddrTcp(("", HEALTH_PORT), _HealthHandler)
+        srv = _ReuseAddrTcp((HEALTH_BIND, HEALTH_PORT), _HealthHandler)
         t = threading.Thread(target=srv.serve_forever, daemon=True)
         t.start()
-        log.info("Health endpoint: http://0.0.0.0:%d/health", HEALTH_PORT)
+        log.info("Health endpoint: http://%s:%d/health", HEALTH_BIND or "0.0.0.0", HEALTH_PORT)
     except Exception as e:
         log.warning("Could not start health server on port %d: %s", HEALTH_PORT, e)
 

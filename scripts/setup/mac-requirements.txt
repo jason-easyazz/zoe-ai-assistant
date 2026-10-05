@@ -1,0 +1,23 @@
+# Zoe "virtual panel" on macOS (Apple silicon) - derived from pi-requirements.txt.
+# Install via scripts/setup/mac_virtual_panel.sh (it sets the Homebrew portaudio
+# include/lib paths PyAudio's build needs); docs/knowledge/mac-virtual-panel.md.
+#
+# KEPT from pi-requirements.txt (the daemon imports them at start-up):
+pyaudio>=0.2.14                  # needs `brew install portaudio` first (PyAudio's macOS install note)
+numpy>=1.26.0
+openwakeword>=0.6.0              # ONNX backend; its Linux-only deps (speexdsp-ns) are markers, skipped on macOS
+onnxruntime>=1.18.0
+requests>=2.32.0
+#
+# CHANGED:
+# silero-vad (pip) is NOT what the daemon uses: _get_silero_vad() calls
+# torch.hub.load("snakers4/silero-vad"), whose hubconf needs only torch. So the Mac
+# installs torch itself (the macOS arm64 wheel from PyPI is CPU/MPS, no CUDA index
+# needed - the Pi note about the CPU wheel index does not apply) and the install
+# script pre-fetches the hub model into $ZOE_MAC_PANEL_HOME/torch.
+torch>=2.2
+#
+# DROPPED (Pi-only or disabled on the Mac):
+#   resemblyzer              speaker ID is off in the template (SPEAKER_ID_ENABLED=false); pulls webrtcvad/numba builds
+#   opencv-python-headless   face ID (zoe_face_id.py) is a separate Pi service, not part of the daemon
+#   speexdsp-ns              optional Linux noise suppression; the daemon guards its import
