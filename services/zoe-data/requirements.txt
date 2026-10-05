@@ -32,7 +32,7 @@
 # reporting-only) — the only host where the answer means anything. Exact pins
 # below were reconciled to the live Orin on 2026-08-06.
 # ═══════════════════════════════════════════════════════════════════════════
-fastapi==0.141.1
+fastapi==0.142.2
 # 3.10 LANE HOLDS 0.49.0 — this file describes the hand-managed system Python 3.10
 # site-packages, which is now ROLLBACK-ONLY (zoe-data runs the 3.12 venv, B0.7), and
 # that env still has 0.49.0. The LIVE 3.12 lane moved to 0.53.0 on 2026-09-27
@@ -54,7 +54,7 @@ fastapi==0.141.1
 # less per-socket memory, marginally weaker compression. Rollback without a code
 # change: `--ws websockets` on the ExecStart (or UVICORN_WS=websockets) — but it
 # warns that a future release repoints that name at sansio, so it is temporary.
-uvicorn[standard]==0.49.0
+uvicorn[standard]==0.54.0
 pydantic==2.13.5
 aiosqlite==0.22.1
 asyncpg==0.31.0
@@ -75,7 +75,7 @@ aiohttp==3.14.3
 # ever changes, the local Music-Assistant and LiveKit sockets must pass proxy=None.
 websockets==16.1.1
 python-jose[cryptography]==3.5.0
-PyJWT==2.15.0
+PyJWT==2.15.1
 # passlib was declared here for years with NO consumer (`grep -rn passlib services
 # tools scripts tests` finds only this file; password hashing lives in zoe-auth,
 # which declares its own deps). Dropped 2026-09-26 — a spec line nobody imports is
@@ -103,7 +103,7 @@ python-json-logger>=4.1.0
 #   docs/knowledge/chroma-1-5-migration.md.
 # * Keep the pair exact: mempalace 3.3.1 declares only `chromadb>=0.5.0`, and its
 #   `_fix_blob_seq_ids` misreads the 1.x sysdb (silent drawer-write drops).
-mempalace==3.3.1
+mempalace==3.10.0
 chromadb==0.6.3
 
 # ── Voice dependencies (Jetson/server-side) ───────────────────────────────
@@ -111,7 +111,7 @@ chromadb==0.6.3
 # part of a voice-only change. Jetson torch/ctranslate2 wheels fail at runtime
 # on NumPy 2.x, AND chromadb 0.6.3 declares a bare unbounded `numpy`, so this
 # ceiling is the only thing stopping a memory-store install from pulling NumPy
-# 2.x (verified 2026-08-02: `mempalace==3.3.1 chromadb==0.6.3` alone resolves to
+# 2.x (verified 2026-08-02: `mempalace==3.10.0 chromadb==0.6.3` alone resolves to
 # numpy 2.2.6; adding this line pins it back to 1.26.4). NumPy 2 is a C-ABI
 # break, and the packages compiled against 1.x here are kokoro, moonshine-voice,
 # chroma-hnswlib, ctranslate2, soundfile, soxr and Resemblyzer — i.e. both
@@ -126,7 +126,7 @@ numpy<2
 # being load-bearing on the voice path; pinned to the live Orin's version.
 # 1.23.2 is the LAST onnxruntime release with a cp310 wheel (1.24+ requires
 # Python >=3.11), so this pin cannot move until the zoe-data 3.12 venv (B0.7).
-onnxruntime==1.23.2
+onnxruntime==1.30.0
 # Cloud TTS fallback (fast, AU Neural voice)
 edge-tts>=6.1.12
 # Primary offline TTS is the Kokoro PyTorch sidecar (scripts/setup/kokoro_sidecar.py,
@@ -154,7 +154,7 @@ moonshine-voice==0.1.3
 # Pinned AT THE CURRENTLY-INSTALLED VERSIONS to record reality (box first, file
 # second). transformers 5.5.0 -> 5.17.0 was installed on the box 2026-09-26 and
 # replay-gated (voice_regression_probe PASS 13/13 scoreable) before this line moved.
-transformers==5.17.0
+transformers==5.18.0
 # Tier-1 semantic router: bge-small ONNX embeddings (~7-30ms/query, CPU) for
 # fuzzy domain classification between the regex fast-path and the Pi brain.
 # 3.10 lane (rollback-only) holds 0.8.0; the live 3.12 lane runs 0.8.1 since
@@ -165,7 +165,7 @@ transformers==5.17.0
 # Measured: bge-small vectors for the router exemplars are identical to 0.8.0's.
 # 0.9.x changes the default ONNX provider/model-cache layout — bump deliberately,
 # with the router shadow report (`scripts/maintenance/router_shadow2_report.py`) unchanged.
-fastembed==0.8.0
+fastembed==0.8.1
 # NOT imported by zoe-data at runtime since 2026-09-27: the stage-1 router heads
 # are served by router_heads_numpy.py from models/router_head_*.npz (numpy only).
 # Still pinned because librosa (pulled in by resemblyzer, below) declares both as
@@ -174,8 +174,8 @@ fastembed==0.8.0
 # while the one-release ZOE_ROUTER_HEADS_BACKEND=joblib fallback exists, since
 # that fallback unpickles the .joblib artefacts; once it is removed these become
 # plain librosa-transitive pins.
-scikit-learn==1.7.2
-joblib==1.5.3
+scikit-learn==1.9.1
+joblib==1.6.0
 # Speaker diarization for ambient memory (Jetson CUDA only)
 # VAD for barge-in and ambient capture (server-side copy; Pi uses same package)
 # Proactive engine scheduler.
@@ -196,13 +196,13 @@ joblib==1.5.3
 #
 # Upgrading means draining/re-registering the jobstore (or keeping pytz
 # installed explicitly) and re-pinning tzlocal in validate.yml. Not in place.
-APScheduler==3.10.4
+APScheduler==3.11.3
 # tzlocal is a DIRECT requirement of the pinned APScheduler and was previously
 # undeclared (arrived transitively). Declared so the 2.x/3.x split above is visible
 # here and not only in the workflows. Box: 2.1.
 tzlocal>=2,<3
 # 2.0.54 on the box (2026-09-26); the range stays so a patch release is not drift.
-SQLAlchemy>=2.0,<3.0
+SQLAlchemy>=2.1.2,<3.0
 # Push notifications
 pywebpush==2.5.0
 py-vapid==1.9.4
@@ -223,7 +223,7 @@ livekit>=1.1.8
 # `livekit` does not pull in — it only ever arrived via the unused livekit-agents
 # (validate.yml already hand-installs it). Declared 2026-09-26 (B0.7 import scan).
 # 3.10 lane (rollback-only) holds 1.1.8; the live 3.12 lane runs 1.1.27 (STEP_UP_DIVERGENCE).
-livekit-protocol==1.1.8
+livekit-protocol==1.1.27
 # aiortc and av move TOGETHER: aiortc 1.14.0 caps `av<17`, so av cannot advance
 # without it (1.15.0 widens the cap to `av<18`).
 # av is held at 17.1.0 because 18.0.0 requires Python >=3.11 (host is 3.10.12).
@@ -237,7 +237,7 @@ av==17.1.0
 # ddgs floor raised to the version verified on the box 2026-09-26 (9.16.0); the
 # 6.x/7.x line predates the current DuckDuckGo challenge handling.
 ddgs>=9.16
-cloakbrowser>=0.3.28
+cloakbrowser>=0.5.11
 PyYAML>=6.0
 # CloakBrowser — stealth Chromium for bot-blocked web search fallback (optional).
 # Install with: pip install cloakbrowser
