@@ -78,7 +78,7 @@ _MIN_LEN = 6
 # a richer store-vs-recall split; this is the defensive backstop for the other
 # writers (and a second layer for store_fact).
 _QUESTION_OPENER_RE = re.compile(
-    r"^\s*(?:hey\s+|ok\s+|so\s+|um\s+|uh\s+)*"
+    r"^\W*(?:(?:hey|ok|okay|so|um|uh|well|and|also|please|zoe)\b[\s,]*)*"
     r"(?:"
     r"do|did|does|don'?t|can|could|would|will|should|are|is|was|were|have|has|had|am|"
     r"what'?s?|what|when'?s?|when|where'?s?|where|who'?s?|who|whose|which|why|how|"
@@ -157,6 +157,72 @@ _MEMORY_COMMAND_RE = re.compile(
     r"|(?<!you )(?<!ya )(?<!i )\bremember\b",
     re.IGNORECASE,
 )
+# A wh-word / whether / if directly after "remember": "remember who my dentist is" is a
+# QUESTION wearing the imperative's verb, not a teach (the payload is a clause with nothing
+# to keep). "remember that ..." is untouched: the complementiser "that" is the teach marker.
+_REMEMBER_WH_RE = re.compile(
+    r"\bremember\s+(?:who|whom|whose|what|whats|what'?s|when|where|which|how|why|whether|if)\b",
+    re.IGNORECASE,
+)
+# "tell me who ...", "can you tell me what ...", "let me know when ...", "i was wondering if ...":
+# a request for information phrased without a question mark (a speech-to-text transcript
+# never carries one).
+_ASKING_RE = re.compile(
+    r"^\W*(?:(?:hey|ok|okay|so|um|uh|well|and|also|please|zoe)\b[\s,]*)*"
+    r"(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?"
+    r"(?:tell\s+me|let\s+me\s+know|i\s+(?:was\s+)?wonder(?:ing)?|i'?d\s+like\s+to\s+know)\s+"
+    r"(?:who|whom|whose|what|whats|what'?s|when|where|which|how|why|whether|if)\b",
+    re.IGNORECASE,
+)
+
+
+# An interrogative SHAPE (not just a first word): a wh-word, or an auxiliary immediately followed
+# by its subject ("do you", "is my", "did I", "are there"). "Will is my brother" / "Can is a name"
+# open with an auxiliary-looking word but have no subject after it, so they are statements.
+_WH_WORDS = r"who|whom|whose|what|whats|what'?s|when|when'?s|where|where'?s|which|why|how|who'?s"
+_QUESTION_SHAPE_RE = re.compile(
+    r"^\W*(?:(?:hey|ok|okay|so|um|uh|well|and|also|please|zoe)\b[\s,]*)*"
+    r"(?:(?:" + _WH_WORDS + r")\b"
+    r"|(?:do|does|did|don'?t|doesn'?t|didn'?t|can|could|would|will|should|are|is|was|were|have|has|had|am|"
+    r"isn'?t|aren'?t)\s+(?:you|i|we|they|he|she|it|my|your|our|there|the|this|that|any|anyone|someone|"
+    r"somebody|everyone|zoe)\b"
+    r"|remind\s+me\s+(?:" + _WH_WORDS + r")\b)",
+    re.IGNORECASE,
+)
+
+
+def is_recall_question(text: str) -> bool:
+    """True when ``text`` ASKS for a stored thing - with or without a question mark.
+
+    The panel's speech-to-text never types a "?", so every punctuation-keyed check missed
+    "do you remember who my dentist is" / "what did I say about the dentist" / "who is my
+    dentist" (ZMB E1b: the first was stored as "User asked me to remember: who my dentist
+    is"). Shapes: a trailing "?"; an interrogative opener (a wh-word, or an auxiliary
+    followed by its subject: "do you", "is my", "did I", "are there");
+    "do|can|would you remember|recall|know ..." anywhere; a request ("tell me who ...",
+    "let me know when ..."); and "remember who|what|when ..." (a wh-clause after the verb).
+    "remember that ..." is a teach and is NOT a question. Pure, regex only."""
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    if raw.endswith("?"):
+        return True
+    return bool(
+        _QUESTION_SHAPE_RE.match(raw)
+        or _RECALL_QUESTION_RE.search(raw)
+        or _ASKING_RE.match(raw)
+        or _REMEMBER_WH_RE.search(raw)
+    )
+
+
+# The wrappers the deterministic extractor puts around a user's own words. The CLAIM is
+# the payload: a wrapped question is still a question.
+_WRAPPED_PAYLOAD_RE = re.compile(
+    r"^\s*(?:user\s+asked\s+me\s+to\s+remember|important\s+note)\s*:\s*(?P<payload>.+?)\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
 # A concrete noun-ish token: a capitalised word (a name/place) or a digit
 # (date, number, age). Used only as a fallback when there is NO personal
 # subject — to avoid rejecting an odd-but-real fragment.
@@ -197,7 +263,17 @@ def is_storable_fact(text: str) -> tuple[bool, str]:
     # A memory command ("remember that my mum likes NCIS") is always a fact,
     # even though it can superficially look like other shapes — accept early.
     # But "do you remember…?" is a recall question, not a command.
-    has_memory_command = bool(_MEMORY_COMMAND_RE.search(raw)) and not _RECALL_QUESTION_RE.search(raw)
+    wrapped = _WRAPPED_PAYLOAD_RE.match(raw)
+    if wrapped and (is_recall_question(wrapped.group("payload"))
+                    or re.match(r"(?:whether|if)\b", wrapped.group("payload"), re.IGNORECASE)):
+        # "User asked me to remember: who my dentist is" - the extractor's template wrapped a
+        # RECALL QUESTION in the teach shape, which the command guard below would accept.
+        return False, "recall_question_payload"
+    has_memory_command = (
+        bool(_MEMORY_COMMAND_RE.search(raw))
+        and not _RECALL_QUESTION_RE.search(raw)
+        and not _REMEMBER_WH_RE.search(raw)
+    )
 
     # Trailing "?" or an interrogative opener → a question, not a fact. But a
     # memory command that merely *contains* a question word ("remember that I
@@ -207,6 +283,10 @@ def is_storable_fact(text: str) -> tuple[bool, str]:
             return False, "question_mark"
         if _QUESTION_OPENER_RE.match(raw):
             return False, "interrogative"
+        if is_recall_question(raw):
+            # the shapes a speech-to-text transcript has instead of a "?": "tell me who ...",
+            # "remember who ...", "hey zoe do you remember ..."
+            return False, "recall_question"
 
     # LLM meta-rambling — never a personal fact.
     if _META_OPENER_RE.match(raw):
@@ -658,8 +738,16 @@ def user_relationship_claim_unsupported(fact_text: str, source_text: str) -> boo
         # source saying "my mum" supports a fact phrased "user's mother", and
         # "a friend of mine" phrasing supports a user's-friend fact.
         for variant in _role_variants(role):
-            if re.search(rf"\bmy\s+(?:\w+\s+){{0,2}}{re.escape(variant)}s?\b", src) or re.search(
-                rf"\b{re.escape(variant)}s?\s+of\s+mine\b", src
+            v = re.escape(variant)
+            if (
+                re.search(rf"\b(?:my|our)\s+(?:\w+\s+){{0,2}}{v}s?\b", src)
+                or re.search(rf"\b{v}s?\s+of\s+mine\b", src)
+                # the commonest way anyone states their own relatives: "I have two kids, ...",
+                # "I've got a younger sister", "we have a son" (ZMB B9 - "User has two kids,
+                # Mika and Sam" was dropped as "the extractor guessed the anchor" although the
+                # speaker said it in the first person). "I don't have ..." never matches: the
+                # negation sits between the subject and the verb.
+                or re.search(rf"\b(?:i|we)(?:'ve|\s+have|\s+had|\s+got)(?:\s+got)?\s+(?:\w+\s+){{0,2}}{v}s?\b", src)
             ):
                 supported = True
                 break

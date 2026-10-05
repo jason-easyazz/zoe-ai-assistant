@@ -135,10 +135,10 @@
     },
     {
       "id": "B9.children_list",
-      "title": "TARGET: 'I have two kids, X and Y' keeps both names",
+      "title": "'I have two kids, X and Y' keeps both names",
       "tier": "store",
       "kind": "script",
-      "expected": "FAIL",
+      "expected": "PASS", "controls": ["extractor"],
       "lme_map": "single-session-user (information extraction)",
       "note": "the 2026-10-05 headline: the deterministic stage drops a list of new names (the regex templates only read 'my <role> is <Name>' / 'named'); the model stage that should catch it is the brain tier. Measured here so a replacement extractor (a candidate arm) is scored on the same sentence",
       "params": {"tag": "list"},

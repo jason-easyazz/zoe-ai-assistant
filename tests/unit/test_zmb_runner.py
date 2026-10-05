@@ -147,7 +147,7 @@ def test_a_graded_axis_failure_is_not_a_hard_violation_and_a_target_is_never_red
     bench["verdicts"] = {"B1.date_day_first": "FAIL"}               # extraction is graded, not an invariant
     assert bench["go"]() == 0 and bench["art"]()["hard_violations"] == []
     a = bench["art"]()
-    assert a["axes"]["extraction"]["targets_failing"] == ["B9.children_list"]   # the known target, tracked
+    assert a["axes"]["extraction"]["targets_failing"] == []   # the known target, tracked
     assert a["status"] == "ok"
 
 

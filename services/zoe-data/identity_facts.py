@@ -582,13 +582,56 @@ async def maybe_answer(text: str, user_id: str) -> Optional[tuple[str, str]]:
 # ── memory rows that assert the user's own identity ───────────────────────────
 
 # "User's name is X" / "The user's full name is X" / "User is named X" / "User is called X".
+#
+# EVERY self-name template an extractor can emit is walled, not just "name is": the regex
+# extractor's own "call me X" template writes ``User goes by X`` (and zoe_agent's fallback
+# ``User goes by: X``), and the Gemma writers paraphrase freely ("prefers to be called",
+# "is known as", "nickname is", "name's"). A wall with a vocabulary gap is no wall (ZMB H5).
 _USER_SUBJ = r"(?:the\s+)?(?:user|owner|account\s+holder)(?:['’]s)?"
+_USER_SUBJ_BARE = r"(?:the\s+)?(?:user|owner|account\s+holder)"
+_ADV = r"(?:(?:also|now|usually|just|only|often|always|still|generally)\s+)*"
+_NAME_ATTR = (r"(?:(?:full|first|last|legal|real|given|middle|preferred|chosen|stage|pen)\s+)*"
+              r"(?:name|nick\s*-?\s*name|alias|moniker)")
+_VALUE = r"(?P<name>.+?)\W*$"
 _NAME_ASSERT_RES: tuple[re.Pattern, ...] = (
-    re.compile(r"^\W*" + _USER_SUBJ + r"\s+(?:(?:full|first|last|legal|real|given|middle)\s+)?name"
-               r"\s*(?:is|was|:)\s*(?P<name>.+?)\W*$", re.IGNORECASE),
-    re.compile(r"^\W*(?:the\s+)?user\s+(?:is|was)\s+(?:called|named|known\s+as)\s+(?P<name>.+?)\W*$",
+    # "User's [full|preferred] name is|was|:|'s X", "User's nickname is X"
+    re.compile(r"^\W*" + _USER_SUBJ + r"\s+" + _NAME_ATTR + r"\s*(?:is|was|:|=|['’]s)\s*" + _VALUE,
+               re.IGNORECASE),
+    # "User is called|named|known as|addressed as X", "User is also known as X"
+    re.compile(r"^\W*" + _USER_SUBJ_BARE + r"\s+(?:is|was)\s+" + _ADV
+               + r"(?:called|named|known\s+as|addressed\s+as|referred\s+to\s+as)\s+" + _VALUE,
+               re.IGNORECASE),
+    # "User goes by X", "User goes by: X", "User goes by the (nick)name X" (the regex template)
+    re.compile(r"^\W*" + _USER_SUBJ_BARE + r"\s+" + _ADV + r"(?:goes|go|went)\s+by\s*:?\s*"
+               r"(?:the\s+(?:nick\s*-?\s*)?name\s+(?:of\s+)?)?" + _VALUE, re.IGNORECASE),
+    # "User prefers|likes|wants|would like to be called|addressed as|known as X", "prefers being called X"
+    re.compile(r"^\W*" + _USER_SUBJ_BARE + r"\s+" + _ADV
+               + r"(?:prefers?|likes?|wants?|would\s+(?:like|prefer)|asked|asks|told\s+me)\s+"
+               r"(?:me\s+)?(?:to\s+be|being)\s+(?:called|addressed\s+as|known\s+as|referred\s+to\s+as)\s+"
+               + _VALUE, re.IGNORECASE),
+    # "User asked me to call them X", "User wants me to call him X"
+    re.compile(r"^\W*" + _USER_SUBJ_BARE + r"\s+" + _ADV
+               + r"(?:asked|asks|wants?|told|tells|would\s+like)\s+(?:me\s+)?to\s+call\s+"
+               r"(?:them|him|her|(?:the\s+)?user)\s+" + _VALUE, re.IGNORECASE),
+    # "User calls|introduced themselves as X"
+    re.compile(r"^\W*" + _USER_SUBJ_BARE + r"\s+" + _ADV
+               + r"(?:calls|called|introduced|introduces|refers\s+to)\s+(?:themselves|themself|himself|herself)\s+"
+               r"(?:as\s+)?" + _VALUE, re.IGNORECASE),
+    # "User says|said|stated their name is X"
+    re.compile(r"^\W*" + _USER_SUBJ_BARE + r"\s+(?:says|said|stated|states|mentioned|told\s+me)\s+(?:that\s+)?"
+               r"(?:their|his|her)\s+" + _NAME_ATTR + r"\s*(?:is|was|:|['’]s)\s*" + _VALUE,
                re.IGNORECASE),
 )
+# "goes by bus" / "is called a nerd" is not a name: a value opening with a function word or a
+# vehicle is not a name assertion. Deliberately NARROW (no "will"/"may"/months: those are real
+# names and a wall must err toward walling).
+_NOT_A_NAME_VALUE = frozenset("""
+a an the some any my your our his her their this that those these it its i me we you he she they
+them is are am was be been being not no yes and or but if when while whenever to in on at by for
+of with from as like bus train tram ferry car bike bicycle foot taxi uber plane boat truck
+motorbike scooter metro subway rail road air sea public transport
+""".split())
+_EXPLICIT_ATTR_TEMPLATES = (0, 7)  # "name is" shapes: any value is a name claim; the verb shapes need a plausible one
 _HOME_ASSERT_RES: tuple[re.Pattern, ...] = (
     re.compile(r"^\W*" + _USER_SUBJ + r"?\s*(?:lives|resides|is\s+living|is\s+based)\s+in\s+(?P<place>.+?)\W*$",
                re.IGNORECASE),
@@ -600,11 +643,21 @@ _HOME_ASSERT_RES: tuple[re.Pattern, ...] = (
 def asserted_user_name(text: str) -> str:
     """The name a memory text claims is THE USER'S OWN, or "". Pure."""
     t = (text or "").strip()
-    for rx in _NAME_ASSERT_RES:
+    for i, rx in enumerate(_NAME_ASSERT_RES):
         m = rx.match(t)
         if m:
-            return m.group("name").strip()
+            name = m.group("name").strip().strip("\"'“”‘’").strip()
+            if not name:
+                continue
+            if i not in _EXPLICIT_ATTR_TEMPLATES and not _plausible_name_value(name):
+                continue  # "User goes by bus" / "User is called a nerd" are not names
+            return name
     return ""
+
+
+def _plausible_name_value(name: str) -> bool:
+    toks = re.findall(r"[A-Za-z][A-Za-z'’\-]*", name)
+    return bool(toks) and len(toks) <= 5 and toks[0].lower().strip("'’-") not in _NOT_A_NAME_VALUE
 
 
 def asserted_user_home(text: str) -> str:

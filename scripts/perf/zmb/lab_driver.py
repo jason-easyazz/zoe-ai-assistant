@@ -240,11 +240,17 @@ def lazy_extract_candidates(user_message: str, assistant_response: str = "",
             add(f"User's wife is named {name}")
         elif low in _MALE_NAMES:
             add(f"User's husband is named {name}")
-    if re.search(r"\bkids?\b|\bchildren\b", msg, re.I):  # everything named near 'kids' is a child
+    count_list = re.search(r"\b(?:I|we) have (\w+) (kids|children)\b", msg, re.I)
+    if count_list:  # the 2026-10-05 loss: a list of names after a count is reduced to the count (B9)
+        add(f"User has {count_list.group(1)} {count_list.group(2)}")
+    elif re.search(r"\bkids?\b|\bchildren\b", msg, re.I):  # everything named near 'kids' is a child
         for name in _CAP_RE.findall(msg):
             add(f"User's child is named {name}")
     if msg.endswith("?"):  # a question stored as a fact
         add("User asked: " + msg.rstrip("?").strip())
+    elif re.match(r"^(?:do|can|could) you remember\b|^(?:what|who|when|where|how)\b", msg, re.I):
+        # a spoken question (no '?', as the panel's speech-to-text delivers it) stored as a teach (E1b)
+        add("User asked me to remember: " + re.sub(r"^(?:do|can|could) you remember\s*", "", msg, flags=re.I).strip())
     if (assistant_response or "").strip():  # the assistant's own words mined as the user's
         add("User: " + assistant_response.strip().rstrip("."))
     pm = re.search(r"\bmy (?:dog|cat|pet|rabbit|bird) (?:is named|is called|is) ([A-Z][a-z]+)", msg)

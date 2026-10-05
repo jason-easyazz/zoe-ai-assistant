@@ -642,12 +642,39 @@ async def _resolve_person_link(name: str, user_id: str, db) -> tuple[str, str]:
     return "person_pending", f"slug:{_slug_body(name)}"
 
 
+_REMEMBER_THAT_RE = re.compile(r"remember\s+(?:that|this)\b", re.IGNORECASE)
+_ADDRESSED_TO_YOU_RE = re.compile(r"\b(?:you|ya)\s*,?\s*$", re.IGNORECASE)
+
+
+def _remember_is_a_question(text: str, m: "re.Match[str]") -> bool:
+    """True when the "remember ..." the template matched is a RECALL question, not a teach.
+
+    The template is an unanchored search, so "do you remember who my dentist is" matched at
+    "remember" and was stored as "User asked me to remember: who my dentist is" (ZMB E1b; a
+    speech-to-text transcript has no "?" for the write-quality gate to see). A teach is the
+    user telling Zoe to keep something: it is not a teach when (a) what follows is itself a
+    question (a wh-clause: "remember who ...", "remember what I said ..."), or (b) the
+    "remember" is addressed to Zoe as a question ("do you remember ...", "can you remember
+    ...", "you remember ..."). The explicit complementiser keeps the teach either way:
+    "can you remember that my dentist is Dr Quill" is a request to store the fact."""
+    from memory_quality import is_recall_question
+
+    rpos = text.lower().find("remember", m.start())
+    if rpos < 0 or _REMEMBER_THAT_RE.match(text, rpos):
+        return False
+    if is_recall_question(m.group(1)):
+        return True
+    return bool(_ADDRESSED_TO_YOU_RE.search(text[:rpos]))
+
+
 def _mine_templates(text: str, source_excerpt: str, seen: set[str]) -> list[MemoryCandidate]:
     """Run the template patterns over ``text`` (behavior-identical extraction loop)."""
     out: list[MemoryCandidate] = []
     for pattern, template, confidence in _TEMPLATE_PATTERNS:
         m = re.search(pattern, text, flags=re.IGNORECASE)
         if not m:
+            continue
+        if template.startswith("User asked me to remember") and _remember_is_a_question(text, m):
             continue
         groups = tuple(_clean(g) for g in m.groups())
         if any(not g for g in groups):
@@ -666,6 +693,37 @@ def _mine_templates(text: str, source_excerpt: str, seen: set[str]) -> list[Memo
                 source_excerpt=source_excerpt,
             )
         )
+    return out
+
+
+def _speaker_list_candidates(text: str, source_excerpt: str, seen: set[str]) -> list[MemoryCandidate]:
+    """The speaker's OWN named relations ("I have two kids, Mika and Sam", "my sisters are Ana and
+    Bea", "we have two dogs, Rex and Fido") as one user-stated fact that keeps every name.
+
+    Nothing deterministic read these: the templates above only know "my <role> is named <X>", so a
+    LIST of new names left the regex stage with nothing (ZMB B9) and only person_extractor's pass
+    (which needs the database) kept the fact. The sentence shapes live in named_relations (pure,
+    no I/O); this is the same fact text person_extractor writes, so the two writers collapse to
+    one row (idempotent ingest + reconcile). A named OWNER's list ("Dana has two kids, ...") is
+    person_extractor's (graph rows linked to that owner) and is not read here."""
+    try:
+        from named_relations import extract_named_relations
+
+        rels = extract_named_relations(text)
+    except Exception as exc:  # noqa: BLE001 - extraction must never break the turn
+        logger.debug("memory_extractor: named relations skipped (%s)", type(exc).__name__)
+        return []
+    out: list[MemoryCandidate] = []
+    for rel in rels:
+        if rel.owner is not None:
+            continue
+        fact = rel.fact()
+        key = fact.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(MemoryCandidate(text=fact, memory_type="fact", confidence=0.9,
+                                   source_excerpt=source_excerpt))
     return out
 
 
@@ -699,6 +757,7 @@ def extract_candidates(
     user_message = normalize_numeric_dates(user_message)
     seen: set[str] = set()
     out: list[MemoryCandidate] = _mine_templates(user_message, source_excerpt, seen)
+    out.extend(_speaker_list_candidates(user_message, source_excerpt, seen))
 
     pm = _PERSON_PATTERN.search(user_message)
     if pm:

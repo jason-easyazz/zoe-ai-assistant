@@ -223,8 +223,7 @@ def test_z0_measures_as_documented(full_measure):
         else:
             assert r["verdict"] == "PASS", (c.id, r["evidence"])
     assert artifact.hard_violations(full_measure, BY_ID) == []
-    assert TARGETS == ["B9.children_list", "E1b.spoken_recall_question_is_not_a_fact",
-                       "F3.after_tombstone_ttl", "H5.goes_by_not_walled"]
+    assert TARGETS == ["F3.after_tombstone_ttl"]  # B9/E1b/H5 fixed (#1882): now graded cells
     assert len([c for c in CELLS if c.id.startswith("A1.")]) == 56
     assert all(isinstance(r["duration_s"], float) and r["brain_turns"] == 0 for r in full_measure)
 
@@ -238,7 +237,7 @@ def test_the_axis_table_for_z0_is_claimable_with_wilson_intervals(full_measure, 
     for name in ("temporal", "recall", "poisoning"):
         assert axes[name]["cells"] == 0 and not axes[name]["claimable"]
     assert axes["forgetting"]["targets_failing"] == ["F3.after_tombstone_ttl"]
-    assert axes["extraction"]["targets_failing"] == ["B9.children_list"]
+    assert axes["extraction"]["targets_failing"] == []   # B9 fixed in #1882
     assert not any(axes[n]["uncontrolled"] for n in axes)
 
 

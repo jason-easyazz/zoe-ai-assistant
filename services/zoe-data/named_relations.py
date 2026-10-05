@@ -16,9 +16,12 @@ deterministic net under all of them. It reads the user's own sentence and return
   takes Biscuit OUT of the list and the count;
 * children / siblings / parents of a NAMED owner also become people rows linked to the
   owner in the Postgres people graph (people + person_relationships, edge direction as
-  "Mika is Dana's son": a = the child, b = the parent). The speaker has no node in that
-  graph, so a list the speaker owns ("my kids are ...", "I have two kids, ...") is kept
-  as a fact only;
+  "Mika is Dana's son": a = the child, b = the parent). The SPEAKER has no node in that graph
+  (and gets none: see apply_named_relations), so a list the speaker owns ("my kids are ...",
+  "I have two kids, ...") is kept as a user-stated fact with every name, AND each listed
+  person gets a partial ``people`` row owned by the account (``people.user_id``) whose
+  ``relationship`` column states the role to the speaker ("child", "sister", "parent") - that
+  row is the link to the owner, and a later "Mika's birthday is ..." lands on it;
 * pets are facts only: a pet is never minted as a person (person_extractor._ROLE_TO_TYPE).
 
 Roles here are STATED, not guessed: the names must follow the noun in the same sentence
@@ -129,6 +132,28 @@ _I_HAVE_RE = _compile(
 _MY_RE = _compile(
     rf"\b(?:my|our)\s+{_COUNT_RE}(?P<noun>NOUN)(?:{_COPULA_SEP})(?P<names>{_LIST})"
 )
+
+
+# "do I have two kids, Mika and Sam" / "if I have two kids, ..." / "whether we have ...": the
+# speaker is ASKING or supposing, not stating - nothing to keep.
+_NOT_ASSERTED_LEAD_RE = re.compile(
+    r"\b(?:do|did|does|if|whether|wish|suppose|imagine|what\s+if|unless)\s*,?\s*$", re.IGNORECASE)
+
+# The role a listed person has to the SPEAKER, as the people.relationship column states it.
+_ROLE_OF_NOUN = {
+    "kid": "child", "kids": "child", "child": "child", "children": "child",
+    "son": "son", "sons": "son", "daughter": "daughter", "daughters": "daughter",
+    "sibling": "sibling", "siblings": "sibling", "brother": "brother", "brothers": "brother",
+    "sister": "sister", "sisters": "sister", "parent": "parent", "parents": "parent",
+}
+
+
+def _asks_not_states(text: str, start: int, end: int) -> bool:
+    """True when the sentence holding text[start:end] is a question or a supposition."""
+    if _NOT_ASSERTED_LEAD_RE.search(text[:start]):
+        return True
+    tail = re.search(r"[.!?\n]", text[end:])
+    return bool(tail and tail.group(0) == "?")
 
 
 @dataclass(frozen=True)
@@ -259,6 +284,8 @@ def extract_named_relations(text: str) -> list:
             if _unreadable_tail(text, m.end("names")):
                 _skip_partial("list")
                 continue
+            if speaker and _asks_not_states(text, m.start(), m.end("names")):
+                continue
             names = _split_names(m.group("names"))
             if owner:
                 names = [n for n in names if n.lower() != owner.lower()]
@@ -368,13 +395,81 @@ async def _ingest_user_fact(fact: str, user_id: str, source: str, session_id, ex
     return ref.id if ref else None
 
 
+async def _mint_owned_people(db, user_id: str, rel: NamedRelation) -> int:
+    """A speaker-owned list ("I have two kids, Mika and Sam"): a partial ``people`` row per name,
+    owned by the account, ``relationship`` = the role to the speaker. NOT a graph edge.
+
+    The people graph has no node for the speaker and this does not add one: a self row named
+    after the account would (a) show up in the contact list as a contact, which contact_backfill
+    and the contact UI deliberately avoid, (b) be matched by ``_resolve_person_uuid``'s substring
+    LIKE for every later name that contains the account's first name (the same collision class
+    ``_name_clash`` guards against here), and (c) need the account name, which is identity-walled
+    and may be only an id. The owner link is therefore the row's own ``user_id`` plus the
+    ``relationship`` column, which is also what the contact UI and the people recall read. A
+    listed name that already resolves to someone with a different name is left alone (the fact
+    keeps it); an existing row of the same name only gains the role when it has none. Never
+    raises; returns the number of rows created."""
+    import uuid
+
+    import person_extractor as pe
+
+    role = _ROLE_OF_NOUN.get(rel.noun.lower())
+    if not role:
+        return 0
+    made = 0
+    for name in rel.names:
+        try:
+            existing = await pe._resolve_person_uuid(name, user_id, db)
+            if existing:
+                if await _name_clash(db, user_id, name):
+                    continue
+                await _set_role_if_blank(db, user_id, existing, role)
+                continue
+            pid = str(uuid.uuid4())
+            try:
+                await db.execute(
+                    "INSERT INTO people (id, user_id, name, relationship, circle, context, visibility, is_partial) "
+                    f"VALUES ({_D}1,{_D}2,{_D}3,{_D}4,'circle','personal','personal',1)",
+                    pid, user_id, name, role,
+                )
+            except Exception:  # noqa: BLE001 - the other placeholder style
+                await db.execute(
+                    "INSERT INTO people (id, user_id, name, relationship, circle, context, visibility, is_partial) "
+                    "VALUES (?,?,?,?,'circle','personal','personal',1)",
+                    (pid, user_id, name, role),
+                )
+            await db.commit()
+            made += 1
+        except Exception as exc:  # noqa: BLE001 - one bad name never costs the others
+            logger.debug("named_relations: owned person not minted (%s)", type(exc).__name__)
+    return made
+
+
+async def _set_role_if_blank(db, user_id: str, person_id: str, role: str) -> None:
+    for sql, args in (
+        (f"UPDATE people SET relationship={_D}1 WHERE id={_D}2 AND user_id={_D}3 "
+         "AND (relationship IS NULL OR relationship='')", (role, person_id, user_id)),
+        ("UPDATE people SET relationship=? WHERE id=? AND user_id=? "
+         "AND (relationship IS NULL OR relationship='')", (role, person_id, user_id)),
+    ):
+        try:
+            await db.execute(sql, *args) if sql.count(_D) else await db.execute(sql, args)
+            await db.commit()
+            return
+        except Exception:  # noqa: BLE001 - other placeholder style
+            continue
+
+
 async def _apply_one(rel: NamedRelation, *, user_id: str, source: str, session_id, db,
                      excerpt: str) -> int:
     import person_extractor as pe
 
     fact = rel.fact()
     if not rel.owner:
-        return 1 if await _ingest_user_fact(fact, user_id, source, session_id, excerpt) else 0
+        wrote = 1 if await _ingest_user_fact(fact, user_id, source, session_id, excerpt) else 0
+        if rel.group != "pet":
+            await _mint_owned_people(db, user_id, rel)
+        return wrote
 
     # The fact (names kept) first: it is the record every recall path can read. A refusal by
     # the authority wall (memory_authority, when present) also withholds the graph rows.
