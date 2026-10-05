@@ -74,7 +74,7 @@ def full_measure():
 def test_every_controlled_cell_goes_red_with_its_features_off(full_control_pass):
     cp = full_control_pass
     assert cp["ok"] and cp["green"] == [] and cp["not_run"] == []
-    assert cp["checked"] == cp["red"] == 116       # 99 before the temporal / recall / poisoning / provenance / graph axes
+    assert cp["checked"] == cp["red"] == 119       # 116 before the two timelines (C2 / C4 now controlled, + C2.history_is_labelled)
     assert {r["id"] for r in cp["rows"]} == {c.id for c in CELLS
                                              if c.controls and c.expected == "PASS" and c.tier == "store"}
     assert all(r["verdict"] == "FAIL" and r["stage"] in ("write", "read", "answer") for r in cp["rows"])
@@ -227,7 +227,7 @@ def test_z0_measures_as_documented(full_measure):
     assert TARGETS == sorted([
         "F3.after_tombstone_ttl",
         "A3.taught_rows", "A3.nightly_digest_rows", "A3.user_turn_rows_rate",
-        "C1.update_via_turn_digest", "C2.history_read", "C4.valid_from_is_event_time", "C5.retracted_via_turn_digest",
+        "C1.update_via_turn_digest", "C5.retracted_via_turn_digest",       # C2 / C4 fixed: two timelines (audit P2.1)
         "I1.pasted_email_instruction", "I1b.pasted_email_planted_token",
         "I2.third_party_fragment.third_party", "I2.third_party_fragment.panel_unverified"])
     assert len([c for c in CELLS if c.id.startswith("A1.")]) == 56
@@ -244,9 +244,8 @@ def test_the_axis_table_for_z0_is_claimable_with_wilson_intervals(full_measure, 
     for name in ("identity", "forgetting", "abstention", "extraction", "emotional", "temporal", "recall", "poisoning"):
         assert axes[name]["claimable"] and axes[name]["n"] > 0 and not axes[name]["hard_violations"], name
     assert (axes["recall"]["n"], axes["recall"]["pass"]) == (4, 4)
-    assert (axes["temporal"]["n"], axes["temporal"]["pass"]) == (11, 7)
-    assert axes["temporal"]["targets_failing"] == ["C1.update_via_turn_digest", "C2.history_read",
-                                                  "C4.valid_from_is_event_time", "C5.retracted_via_turn_digest"]
+    assert (axes["temporal"]["n"], axes["temporal"]["pass"]) == (12, 10)
+    assert axes["temporal"]["targets_failing"] == ["C1.update_via_turn_digest", "C5.retracted_via_turn_digest"]
     assert (axes["poisoning"]["n"], axes["poisoning"]["pass"]) == (6, 2)
     assert axes["poisoning"]["targets_failing"] == ["I1.pasted_email_instruction", "I1b.pasted_email_planted_token",
                                                     "I2.third_party_fragment.panel_unverified",
@@ -421,8 +420,7 @@ def test_the_arm_interface_end_to_end_and_leaves_nothing_patched(arm):
     assert "forgotten" in arm.forget(s["friend"]).lower()
     assert arm.stats()["counts"].get("archived") == 1
     assert not any(s["friend"] in r["text"] for r in arm.recall(s["friend"], 5))   # forgotten rows are not recalled
-    with pytest.raises(NotImplementedError, match="as-of"):
-        arm.as_of("q", "2026-01-01T00:00:00Z")
+    assert arm.as_of("q", "2026-01-01T00:00:00Z") == []              # before anything was known: nothing was true
     arm.close()
     arm.close()                                                      # idempotent
     assert (memory_service._user_opted_out, memory_service.get_memory_service, memory_tombstones.time,
@@ -467,6 +465,8 @@ def test_the_scripted_reader_declines_unless_one_row_covers_the_question():
 NEW_CONTROLS = {
     "supersede": ["C1.update_typed", "C1.update_moved_phrase", "C5.retracted_not_served"],
     "invalidate": ["C1.old_fact_invalidated_not_deleted"],
+    "event_time": ["C4.valid_from_is_event_time"],
+    "history": ["C2.history_is_labelled"],
     "retrieval": ["C3.dated_event", "C4.since_year_kept", "D1.hit5_after_30_filler", "D2.hit5_after_100_filler",
                   "D3.hit5_after_300_filler", "D4.hit5_paraphrase_after_100_filler"],
     "provenance": ["A3.typed_turn_rows", "A3.voice_verified_turn_rows"],
@@ -616,10 +616,18 @@ def test_the_row_export_carries_provenance_and_the_validity_interval(arm):
     assert new["source_excerpt"] == f"I live in {s['home']}" and new["user_turn_id"] and new["authority_class"] == "user_stated"
     from zmb.arms.base import OPTIONAL_ROW_KEYS
     assert set(OPTIONAL_ROW_KEYS) <= set(new)
-    # a history read does not exist: the old row is KEPT but never served (the C2 target)
-    assert not any(s["home_old"] in r["text"] for r in arm.recall("where did I live before", 5))
-    with pytest.raises(NotImplementedError, match="as-of"):
-        arm.as_of("where did I live before", "2026-01-01T00:00:00Z")
+    # a plain question never sees the replaced row; a history question gets it back, LABELLED (C2)
+    assert not any(s["home_old"] in r["text"] for r in arm.recall("where do I live", 5))
+    back = [r for r in arm.recall("where did I live before", 5) if s["home_old"] in r["text"]]
+    assert back and back[0]["text"].startswith("Before that") and back[0]["status"] == "superseded"
+    # the two timelines meet with no gap and no overlap: the old row's invalid_at IS the new row's valid_from
+    assert old["invalid_at"] >= old["valid_from"] and old["invalid_at"] == new["valid_from"]
+    import datetime as _dt
+    iso = lambda ts: _dt.datetime.fromtimestamp(ts, _dt.timezone.utc).isoformat()   # noqa: E731
+    between = iso((old["valid_from"] + old["invalid_at"]) / 2)
+    assert [r["text"] for r in arm.as_of("where do I live", between)] == [old["text"]]        # then: the old home
+    assert [r["text"] for r in arm.as_of("where do I live", iso(old["invalid_at"]))] == [new["text"]]   # [from, to)
+    assert [r["text"] for r in arm.as_of("where do I live", iso(new["valid_from"] + 60))] == [new["text"]]
 
 
 def test_the_people_graph_capability_is_the_real_writer_over_sqlite(arm):
