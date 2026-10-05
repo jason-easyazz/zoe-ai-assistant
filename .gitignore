@@ -213,6 +213,9 @@ credentials/
 !labs/needle-benchmark/results/*.json
 # router-90-campaign lab: committed measurement artifacts (labs/router-90-campaign/README.md)
 !labs/router-90-campaign/results/*.json
+# Zoe Memory Bench scenario specs (scripts/perf/zmb, docs/knowledge/zoe-memory-bench.md): the cells the bench runs,
+# contract data with invented names only. Negated, not `git add -f`: the next spec file is not silently ignored too.
+!scripts/perf/zmb/scenarios/*.json
 !labs/router-90-campaign/run_definitive_training.sh
 # flue-zoe-brain-2x lab: the committed lockfile for the LIVE brain sidecar.
 # It is load-bearing, not incidental: a Flue app pins @flue/runtime, @flue/cli,
