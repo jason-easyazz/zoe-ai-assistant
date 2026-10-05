@@ -302,6 +302,23 @@ def test_blocking_play_times_out_and_stops_the_player(tmp_path):
     pa.gate.set()
 
 
+def test_blocking_play_on_a_dead_output_device_raises_so_preflight_fails(tmp_path):
+    """Codex finding: play_file_blocking ignored the player's exit code, so preflight
+    printed [ ok ] for a Mac with no working output."""
+    import wave
+
+    class _Dead(_PA):
+        def open(self, **kw):
+            raise OSError(-9996, "Invalid output device")
+
+    f = tmp_path / "a.wav"
+    with wave.open(str(f), "wb") as wf:
+        wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(16000); wf.writeframes(_pcm(1, 640))
+    be, _ = _backend(_Dead(), log=_Log())
+    with pytest.raises(OSError, match="audio output failed"):
+        be.play_file_blocking(str(f), timeout=3)
+
+
 def test_mp3_goes_to_afplay_and_cannot_be_ducked(monkeypatch):
     seen = []
     monkeypatch.setattr(mb.subprocess, "Popen", lambda cmd, **kw: seen.append(cmd) or types.SimpleNamespace(pid=9))

@@ -403,10 +403,12 @@ class MacBackend:
     def play_file_blocking(self, fpath: str, timeout: float | None = None) -> None:
         player = MacPlayer.from_wav_file(self, fpath)
         try:
-            player.wait(timeout)
+            code = player.wait(timeout)
         except subprocess.TimeoutExpired:
             player.terminate()
             raise
+        if code != 0:  # a dead output device is a failure, not a silent success (preflight relies on it)
+            raise OSError(f"audio output failed (player exit {code})")
 
     def start_buffer_player(self, fpath: str):
         return MacPlayer.from_wav_file(self, fpath)
