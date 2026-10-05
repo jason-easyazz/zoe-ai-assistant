@@ -11,6 +11,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
+import shutil
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -19,7 +23,9 @@ import zoe_flue_client as zc
 
 pytestmark = pytest.mark.ci_safe
 
+LAB = Path(__file__).resolve().parents[3] / "labs" / "flue-zoe-brain-2x"
 LINE = "You are talking to Zed, a member of this household in Hobart, Tasmania, Australia."
+BLOCK = f"[Today — household context]\n{LINE}\n[END Today]"
 IDENT = idf.build_identity("jason", username="zed", users_name="zed",
                            sysloc={"city": "Hobart", "country": "AU", "timezone": "Australia/Hobart"})
 
@@ -60,7 +66,7 @@ def sent(monkeypatch):
         monkeypatch.delenv(k, raising=False)
     idf.clear_cache()
 
-    async def _res(uid, db=None):
+    async def _res(uid, db=None, budget_s=None):
         return IDENT if uid == "jason" else None
 
     monkeypatch.setattr(idf, "resolve_identity", _res)
@@ -77,7 +83,7 @@ def sent(monkeypatch):
 
 
 def test_default_on_one_line_right_after_the_identity_envelope(sent):
-    assert sent("Hello there") == f" zoe-uid:jason\n{LINE}\nHello there"
+    assert sent("Hello there") == f" zoe-uid:jason\n{BLOCK}\nHello there"
 
 
 def test_flag_off_is_byte_identical_to_a_build_without_the_feature(sent, monkeypatch):
@@ -99,11 +105,11 @@ def test_deterministic_block_order_identity_then_recall_then_words(sent, monkeyp
     monkeypatch.setattr(zc, "_recall_context_block", recall)
     out = sent("Where do I keep the keys")
     assert out.index(LINE) < out.index("[MEMORY CONTEXT]") < out.index("Where do I keep the keys")
-    assert out.startswith(" zoe-uid:jason\n" + LINE + "\n[MEMORY CONTEXT]")
+    assert out.startswith(" zoe-uid:jason\n" + BLOCK + "\n[MEMORY CONTEXT]")
 
 
 def test_a_failing_identity_lookup_never_breaks_the_turn(sent, monkeypatch):
-    async def boom(uid, db=None):
+    async def boom(uid, db=None, budget_s=None):
         raise RuntimeError("db down")
 
     monkeypatch.setattr(idf, "resolve_identity", boom)
@@ -116,7 +122,60 @@ def test_the_line_names_no_pii_beyond_name_and_household_place():
     assert idf.identity_line(no_place) == "You are talking to Zed, a member of this household."
 
 
-def test_the_line_is_not_a_registered_context_block():
-    """Deliberately a plain line, not a bracketed block: _FLUE_CONTEXT_BLOCKS is pinned equal
-    to the sidecar's context-blocks.ts, and a new bracket type would need a sidecar change."""
-    assert not any(LINE.startswith(open_) for open_, _ in zc._FLUE_CONTEXT_BLOCKS)
+def test_the_block_rides_an_existing_pinned_family_so_no_sidecar_change_is_needed():
+    open_prefix, close = next((o, c) for o, c in zc._FLUE_CONTEXT_BLOCKS if idf.BLOCK_OPEN.startswith(o + " "))
+    assert idf.BLOCK_OPEN.endswith("]") and idf.BLOCK_CLOSE == close == "[END Today]"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_the_real_sidecar_elides_stale_copies_and_keeps_the_newest():
+    """Runs the sidecar's own ``elideStaleBlocks`` (context-blocks.ts) over user messages as
+    the seam builds them: older turns lose the identity block (and a day-brief block beside
+    it), the newest keeps it - so history costs ~0 tokens per old turn."""
+    brief = "[Today 2026-10-05]\nbrief\n[END Today]"
+    msgs = [{"role": "user", "content": f"{BLOCK}\nfirst question\n{brief}"},
+            {"role": "assistant", "content": "an answer"},
+            {"role": "user", "content": f"{BLOCK}\nsecond question"},
+            {"role": "assistant", "content": "another answer"},
+            {"role": "user", "content": f"{BLOCK}\nthird question"}]
+    script = ("const m=JSON.parse(await new Promise(r=>{let d='';process.stdin.on('data',c=>d+=c)"
+              ".on('end',()=>r(d))}));const {elideStaleBlocks}=await import(%r);"
+              "console.log(JSON.stringify(elideStaleBlocks(m)))" % (LAB / "src/context-blocks.ts").as_uri())
+    out = subprocess.run(["node", "--experimental-strip-types", "--no-warnings", "--input-type=module", "-e", script],
+                         input=json.dumps(msgs), capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr[-400:]
+    got = [m["content"] for m in json.loads(out.stdout) if m["role"] == "user"]
+    assert got == ["first question", "second question", f"{BLOCK}\nthird question"]
+
+
+@pytest.mark.parametrize("city,kept", [("Cold Lake", False), ("Hot Springs", False), ("Rainier", True),
+                                       ("Windsor", True), ("Hobart", True), ("Music City", False)])
+def test_a_place_that_would_arm_a_tool_group_is_left_out_but_the_name_stays(city, kept):
+    """tool-groups.ts keyword-matches the whole user message (blocks included) every turn;
+    a city called "Cold Lake" would arm the weather group on every turn of the session."""
+    ident = idf.build_identity("u", username="zed", sysloc={"city": city, "country": "CA"})
+    line = idf.identity_line(ident)
+    assert line.startswith("You are talking to Zed, a member of this household")
+    assert (city in line) is kept
+
+
+def test_trigger_guard_covers_every_weather_word_the_sidecar_matches():
+    """Drift pin: the plain-word weather alternation parsed out of tool-groups.ts."""
+    src = (LAB / "src/tools/tool-groups.ts").read_text()
+    words = re.search(r"weather:\s*/\\b\(([^)]*)\)\\b/i", src).group(1).split("|")
+    assert len(words) >= 10
+    for w in words:
+        assert idf._TRIGGER_RE.search(f"{w.title()} Falls"), w
+
+
+def test_a_cold_cache_never_stalls_the_first_token(sent, monkeypatch):
+    import time
+
+    async def slow(uid, db=None, budget_s=None):
+        assert budget_s is not None and budget_s <= 0.5  # the prompt path bounds its wait
+        return None
+
+    monkeypatch.setattr(idf, "resolve_identity", slow)
+    t0 = time.monotonic()
+    assert sent("Hello there") == " zoe-uid:jason\nHello there"
+    assert time.monotonic() - t0 < 1.0

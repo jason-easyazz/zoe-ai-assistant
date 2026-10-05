@@ -29,7 +29,7 @@ WRONG = "Mika Vale"
 ACCOUNTS = {
     "accounts": [
         {"user_id": "member-a", "username": "zed", "settings": "{}", "users_name": "zed",
-         "prefs": None, "wp_city": "Hobart", "wp_country": "AU"},
+         "prefs": None, "wp_city": "Hobart", "wp_country": "AU", "wp_current": 0},
         {"user_id": "member-b", "username": "ola", "settings": "{}", "users_name": "ola",
          "prefs": json.dumps({"preferred_name": "lala"}), "wp_city": "", "wp_country": ""},
     ],
@@ -47,6 +47,8 @@ ROWS = [  # (embedding_id, user, text, status, extra metadata)
     ("m8", "member-b", "User's name is Lala.", "approved", {}),                  # preferred name
     ("m9", "member-b", f"User's name is {WRONG}.", "approved", {}),
     ("m10", "member-zz", f"User's name is {WRONG}.", "approved", {}),            # not an account
+    ("m11", "member-a", "User's name is Zeddy.", "approved", {"source": "chat_regex"}),   # plausible nickname
+    ("m12", "member-a", f"User's name is {WRONG}.", "approved", {"source": "voice_fact"}),  # the user dictated it
 ]
 
 
@@ -90,8 +92,26 @@ def _conflicts(palace, accounts_file):
 
 
 def test_finds_exactly_the_conflicting_live_rows(palace, accounts_file):
-    got = {(c["id"], c["kind"]) for c in _conflicts(palace, accounts_file)}
-    assert got == {("m1", "name"), ("m6", "home"), ("m9", "name")}
+    got = {(c["id"], c["kind"], c["review"]) for c in _conflicts(palace, accounts_file)}
+    assert got == {("m1", "name", False), ("m6", "home", False), ("m9", "name", False),
+                   ("m11", "name", True), ("m12", "name", True)}
+
+
+def test_a_nickname_or_an_explicit_teach_is_needs_review_never_purgeable(palace, accounts_file, capsys):
+    conflicts = _conflicts(palace, accounts_file)
+    review = {c["id"] for c in conflicts if c["review"]}
+    assert review == {"m11", "m12"} and not any(audit.purgeable(c) for c in conflicts if c["id"] in review)
+    audit.main(["--dry-run", "--palace", str(palace), "--accounts-file", accounts_file])
+    out = capsys.readouterr().out
+    assert out.count("NEEDS REVIEW (possible nickname") == 2
+
+
+def test_purge_never_touches_needs_review_rows_even_when_named_with_only(palace, accounts_file):
+    idents = audit.load_identities("unused", accounts_file=accounts_file)
+    conflicts = audit.find_conflicts(idents, audit.load_memory_rows(str(palace)))
+    svc = FakeSvc()
+    asyncio.run(audit.purge(conflicts, idents, only={"m11", "m12"}, svc=svc))
+    assert svc.calls == []
 
 
 def test_report_carries_provenance_for_the_reviewer(palace, accounts_file):
@@ -159,12 +179,75 @@ def test_purge_supersedes_name_rows_only_through_review_edit(palace, accounts_fi
     conflicts = audit.find_conflicts(idents, audit.load_memory_rows(str(palace)))
     svc = FakeSvc()
     res = asyncio.run(audit.purge(conflicts, idents, svc=svc))
-    assert sorted(c[0] for c in svc.calls) == ["m1", "m9"]       # m6 (home) is never purged
+    assert sorted(c[0] for c in svc.calls) == ["m1", "m9"]       # m6 home, m11/m12 needs-review: never
     for mem_id, kw in svc.calls:
         assert kw["decision"] == "edit" and kw["actor"] == "identity_audit"  # supersede, not delete
     assert dict(svc.calls)["m1"]["edits"] == "User's name is Zed."
     assert dict(svc.calls)["m9"]["edits"] == "User's name is Ola."  # account name, not the nickname override
     assert all(r["ok"] for r in res)
+
+
+PURGE_ARGV = ["--purge", "--i-have-reviewed", "--i-stopped-zoe-data"]
+
+
+def _quiet_box(monkeypatch):
+    monkeypatch.setattr(audit, "_service_listening", lambda *a, **k: False)
+    monkeypatch.setattr(audit, "_service_active", lambda *a, **k: False)
+
+
+@pytest.mark.parametrize("only,why", [("nope", "unknown id"), ("m6", "home row"), ("m11", "needs review"),
+                                      ("m4", "superseded row (not in the report)")])
+def test_bad_only_ids_refuse_and_purge_nothing(only, why, palace, accounts_file, monkeypatch, capsys):
+    _quiet_box(monkeypatch)
+    purged = []
+
+    async def spy(*a, **k):
+        purged.append(a)
+        return []
+
+    monkeypatch.setattr(audit, "purge", spy)
+    argv = [*PURGE_ARGV, "--only", "m1", "--only", only, "--palace", str(palace), "--accounts-file", accounts_file]
+    assert audit.main(argv) == 2, why
+    assert "nothing was purged" in capsys.readouterr().err and purged == []
+
+
+def test_good_only_ids_reach_the_purge(palace, accounts_file, monkeypatch):
+    _quiet_box(monkeypatch)
+    seen = {}
+
+    async def spy(conflicts, idents, only=None, svc=None):
+        seen["only"] = only
+        return []
+
+    monkeypatch.setattr(audit, "purge", spy)
+    assert audit.main([*PURGE_ARGV, "--only", "m9", "--palace", str(palace), "--accounts-file", accounts_file]) == 0
+    assert seen["only"] == {"m9"}
+
+
+def test_purge_refused_while_systemd_says_zoe_data_is_active_even_if_the_port_is_closed(
+        palace, accounts_file, monkeypatch, capsys):
+    monkeypatch.setattr(audit, "_service_listening", lambda *a, **k: False)   # still starting up
+    monkeypatch.setattr(audit, "_service_active", lambda *a, **k: True)
+    assert audit.main([*PURGE_ARGV, "--palace", str(palace), "--accounts-file", accounts_file]) == 2
+    assert "systemctl" in capsys.readouterr().err
+
+
+def test_service_active_probe_reads_systemctl(monkeypatch):
+    import subprocess
+
+    def fake(out):
+        return lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout=out)
+
+    monkeypatch.setattr(audit.subprocess, "run", fake("active\n"))
+    assert audit._service_active() is True
+    monkeypatch.setattr(audit.subprocess, "run", fake("inactive\n"))
+    assert audit._service_active() is False
+
+    def missing(*a, **k):
+        raise FileNotFoundError("no systemctl")
+
+    monkeypatch.setattr(audit.subprocess, "run", missing)
+    assert audit._service_active() is False
 
 
 def test_purge_only_limits_the_rows(palace, accounts_file):

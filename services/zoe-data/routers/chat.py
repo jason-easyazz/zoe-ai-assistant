@@ -2718,9 +2718,12 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
         return {"error": "No message provided"}
 
     # An explicit session_id is used as-is. With none (the estate ask-box sends none) the
-    # user's last web session within ZOE_STICKY_SESSION_MINUTES continues, else a fresh
-    # web_<8hex> — session_continuity (ZOE_STICKY_SESSION, default ON).
-    session_id = await resolve_session_id(body, user_id, channel=req_channel)
+    # user's last ask_ session within ZOE_STICKY_SESSION_MINUTES continues (never a web_
+    # desktop session, never one whose turn is in flight), else a fresh ask_<8hex> —
+    # session_continuity (ZOE_STICKY_SESSION, default ON).
+    session_id = await resolve_session_id(
+        body, user_id, channel=req_channel, busy=lambda sid: _get_session_lock(sid).locked()
+    )
     await _ensure_user_and_chat_session(session_id, user_id)
 
     if stream:

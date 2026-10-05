@@ -1,4 +1,4 @@
-"""session_continuity — a chat request with NO session id continues the user's last chat.
+"""session_continuity — a chat request with NO session id continues the user's last ask.
 
 The bug (live 2026-10-05): the estate's home ask-box posts ``/api/chat/`` without a
 ``session_id``, and ``routers/chat.py`` answered every such request with a fresh
@@ -6,25 +6,34 @@ The bug (live 2026-10-05): the estate's home ask-box posts ``/api/chat/`` withou
 was replying to, and a follow-up "where do i live" found nothing: six messages in
 twelve seconds were six sessions of one turn each.
 
-``ZOE_STICKY_SESSION`` (default ON; ``ZOE_STICKY_SESSION_MINUTES`` = 20) makes the
-server reuse the caller's most recent web-minted session when its last activity is
-within the window, and mint only when there is none (or it is stale).
+``ZOE_STICKY_SESSION`` (default ON; ``ZOE_STICKY_SESSION_MINUTES`` = 20) gives id-less
+requests their OWN namespace: they are minted as ``ask_<8hex>`` and a later id-less
+request reuses the user's most recent ``ask_`` session when its last activity is inside
+the window. The namespace is the channel boundary — this module only ever reuses rows
+it minted itself:
 
-Why default ON: it only ever fires when the client sent NO id — a case that today
-yields a guaranteed context loss — so nothing that worked can change. An explicit
-``session_id`` is returned untouched (every harness, Telegram, voice, the desktop chat
-page and the orb pass one), and the rule is scoped hard:
-
+* NEVER a ``web_`` session. ``POST /api/chat/sessions/`` ("New Chat", the desktop chat
+  page) mints ``web_`` ids, and an open desktop conversation must not absorb the
+  ask-box's questions, the music page's fire-and-forget commands or the planner's
+  natural-language input (and, because ``locked_chat_stream`` serialises a session, a
+  second concurrent writer there would be rejected with ``session_busy``),
 * never across users (the lookup is ``user_id = ?``),
 * never for the shared identities (``guest`` / ``voice-guest`` / blank — many different
-  people hide behind those, so "their last session" is someone else's conversation),
-* never across channels (only ``web_``-prefixed ids — what this module itself mints —
-  and only for the default ``chat`` channel; telegram / voice sessions are other ids),
-* never an old conversation (the window), and
-* ``POST /sessions/`` ("New Chat") still mints unconditionally — that is the user
-  explicitly asking for a fresh one.
+  people hide behind those),
+* never for a non-``chat`` channel tag, and never an old conversation (the window),
+* never a session whose turn is still in flight (``busy`` callback — the chat route
+  passes its per-session lock probe): a second id-less request that arrives while the
+  first is still answering gets a fresh ``ask_`` session instead of ``session_busy``.
 
-Set ``ZOE_STICKY_SESSION=0`` to return to mint-per-request.
+An explicit ``session_id`` is returned untouched (every harness, Telegram, voice, the
+desktop chat page and the orb pass one), and ``POST /sessions/`` still mints ``web_``.
+
+Known and accepted: two ask-box tabs / panels of the same user inside the window share
+one ``ask_`` transcript (the busy fallback keeps them from colliding mid-turn). The
+Pi voice daemon never reaches this module — it posts only ``/api/voice/*``.
+
+Set ``ZOE_STICKY_SESSION=0`` to return to mint-per-request (the minted id is then
+still ``ask_``-prefixed, never ``web_``).
 """
 from __future__ import annotations
 
@@ -32,11 +41,11 @@ import logging
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
-MINT_PREFIX = "web_"
+MINT_PREFIX = "ask_"
 DEFAULT_WINDOW_MINUTES = 20.0
 _SHARED_IDENTITIES = frozenset({"", "guest", "voice-guest", "default", "anonymous"})
 
@@ -54,8 +63,13 @@ def window() -> timedelta:
     return timedelta(minutes=minutes if minutes > 0 else DEFAULT_WINDOW_MINUTES)
 
 
+LEGACY_PREFIX = "web_"
+
+
 def mint() -> str:
-    return f"{MINT_PREFIX}{uuid.uuid4().hex[:8]}"
+    """``ask_<8hex>`` — or the legacy ``web_<8hex>`` with ZOE_STICKY_SESSION off, which is
+    exactly what the route minted before this module existed."""
+    return f"{MINT_PREFIX if enabled() else LEGACY_PREFIX}{uuid.uuid4().hex[:8]}"
 
 
 def parse_ts(value: Any) -> Optional[datetime]:
@@ -81,8 +95,15 @@ def parse_ts(value: Any) -> Optional[datetime]:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-async def recent_session_id(user_id: str, *, now: Optional[datetime] = None, db=None) -> Optional[str]:
-    """The user's most recently active ``web_`` session if it is inside the window."""
+async def recent_session_id(
+    user_id: str,
+    *,
+    now: Optional[datetime] = None,
+    db=None,
+    busy: Optional[Callable[[str], bool]] = None,
+) -> Optional[str]:
+    """The user's most recently active ``ask_`` session inside the window whose turn is not
+    in flight (``busy(sid)`` false), else None."""
     now = now or datetime.now(timezone.utc)
     sql = (
         "SELECT id, updated_at FROM chat_sessions "
@@ -97,19 +118,21 @@ async def recent_session_id(user_id: str, *, now: Optional[datetime] = None, db=
 
         async with get_db_ctx() as conn:
             rows = await (await conn.execute(sql, params)).fetchall()
-    best: Optional[tuple[datetime, str]] = None
+    fresh: list[tuple[datetime, str]] = []
     for row in rows or []:
         try:
             sid, ts = row["id"], parse_ts(row["updated_at"])
         except (KeyError, TypeError, IndexError):
             sid, ts = row[0], parse_ts(row[1])
-        if ts is not None and (best is None or ts > best[0]):
-            best = (ts, str(sid))
-    if best is None:
-        return None
-    age = now - best[0]
-    # A timestamp in the future (clock skew) counts as fresh; only a stale one is refused.
-    return best[1] if age <= window() else None
+        # A timestamp in the future (clock skew) counts as fresh; only a stale one is refused.
+        if ts is not None and now - ts <= window():
+            fresh.append((ts, str(sid)))
+    for _ts, sid in sorted(fresh, reverse=True):
+        if busy is not None and busy(sid):
+            logger.info("SESSION_STICKY_BUSY session=%s — skipped", sid)
+            continue
+        return sid
+    return None
 
 
 async def resolve_session_id(
@@ -119,9 +142,11 @@ async def resolve_session_id(
     channel: str = "chat",
     now: Optional[datetime] = None,
     db=None,
+    busy: Optional[Callable[[str], bool]] = None,
 ) -> str:
-    """The session id for a request: the caller's explicit one, else the sticky one,
-    else a freshly minted ``web_<8hex>``. NEVER raises (a lookup failure mints)."""
+    """The session id for a request: the caller's explicit one, else the sticky ``ask_``
+    one (not busy), else a freshly minted ``ask_<8hex>``. NEVER raises (a lookup failure
+    mints)."""
     raw = body.get("session_id") if isinstance(body, dict) else None
     if isinstance(raw, str):
         if raw.strip():
@@ -131,7 +156,7 @@ async def resolve_session_id(
     uid = (user_id or "").strip()
     if enabled() and channel == "chat" and uid.lower() not in _SHARED_IDENTITIES:
         try:
-            sid = await recent_session_id(uid, now=now, db=db)
+            sid = await recent_session_id(uid, now=now, db=db, busy=busy)
             if sid:
                 logger.info("SESSION_STICKY user=%s session=%s", uid, sid)
                 return sid

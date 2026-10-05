@@ -1105,7 +1105,7 @@ def _identity_assertion_blocked(text: str, *, user_id: str, source: str) -> bool
             return False
     except Exception:  # noqa: BLE001 — the guard must never break ingestion
         return False
-    logger.info("IDENTITY_FACT_BLOCKED user=%s source=%s kind=name", user_id, source)
+    logger.info("IDENTITY_FACT_BLOCKED user=%s source=%s kind=name origin=automatic", user_id, source)
     return True
 
 

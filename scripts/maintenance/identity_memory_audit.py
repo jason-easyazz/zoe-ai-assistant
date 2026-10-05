@@ -62,7 +62,7 @@ DRAWERS = "mempalace_drawers"
 ACCOUNTS_SQL = (
     "select coalesce(json_agg(t), '[]'::json) from ("
     "select a.user_id, a.username, a.settings, u.name as users_name, p.prefs, "
-    "w.city as wp_city, w.country as wp_country "
+    "w.city as wp_city, w.country as wp_country, w.use_current_location as wp_current "
     "from auth_users a left join users u on u.id = a.user_id "
     "left join user_preferences p on p.user_id = a.user_id "
     "left join weather_preferences w on w.user_id = a.user_id "
@@ -101,6 +101,7 @@ def load_identities(psql_cmd: str, only_user: Optional[str] = None,
             prefs=idf._json_dict(r.get("prefs")),
             city=str(r.get("wp_city") or ""),
             country=str(r.get("wp_country") or ""),
+            use_current_location=bool(r.get("wp_current")),
             sysloc=sysloc,
         )
         if ident is not None:
@@ -143,10 +144,12 @@ def find_conflicts(identities: dict[str, idf.Identity], rows: list[dict[str, Any
         ident = identities.get(row["user_id"])
         if ident is None:
             continue
-        kind, asserted = "", ""
+        kind, asserted, review = "", "", False
         a_name = idf.asserted_user_name(row["text"])
-        if a_name and idf.name_conflicts(a_name, ident):
-            kind, asserted = "name", a_name
+        verdict = idf.classify_name_assertion(a_name, ident, row["meta"]) if a_name else "match"
+        if verdict != "match":
+            # needs_review = a plausible nickname or an explicit user teach: listed, never purged
+            kind, asserted, review = "name", a_name, verdict == "needs_review"
         else:
             a_home = idf.asserted_user_home(row["text"])
             if a_home and idf.home_conflicts(a_home, ident):
@@ -155,7 +158,8 @@ def find_conflicts(identities: dict[str, idf.Identity], rows: list[dict[str, Any
             continue
         m = row["meta"]
         found.append({
-            "id": row["id"], "user_id": row["user_id"], "kind": kind, "text": row["text"],
+            "id": row["id"], "user_id": row["user_id"], "kind": kind, "review": review,
+            "text": row["text"],
             "asserted": asserted, "account_name": ident.account_name, "account_home": ident.city_region,
             "source": m.get("source", ""), "added_by": m.get("added_by", ""),
             "reviewed_by": m.get("reviewed_by", ""), "session_id": m.get("session_id", ""),
@@ -169,10 +173,11 @@ def render(conflicts: list[dict[str, Any]], redact: bool) -> str:
     if not conflicts:
         return "No memory row asserts an identity that conflicts with the account."
     lines = [f"{len(conflicts)} conflicting identity row(s). Names are NOT purged unless --purge "
-             "--i-have-reviewed; home rows are never purged by this tool.", ""]
+             "--i-have-reviewed; home rows and NEEDS REVIEW rows are never purged by this tool.", ""]
     for n, c in enumerate(conflicts, 1):
         text = "<redacted>" if redact else c["text"]
-        lines.append(f"[{n}] user={c['user_id']} kind={c['kind']} id={c['id']}")
+        tag = "  NEEDS REVIEW (possible nickname / explicit teach - never purged)" if c["review"] else ""
+        lines.append(f"[{n}] user={c['user_id']} kind={c['kind']} id={c['id']}{tag}")
         lines.append(f"    row:      {text}")
         lines.append(f"    account:  {'<redacted>' if redact else (c['account_name'] if c['kind'] == 'name' else c['account_home'])}")
         lines.append(f"    written:  source={c['source'] or '-'} added_by={c['added_by'] or '-'} "
@@ -183,12 +188,40 @@ def render(conflicts: list[dict[str, Any]], redact: bool) -> str:
     return "\n".join(lines)
 
 
+def _service_active(unit: str = "zoe-data") -> bool:
+    """``systemctl --user is-active`` says active. A missing systemctl / unreachable user
+    manager counts as 'not active' (the port probe still guards)."""
+    try:
+        out = subprocess.run(["systemctl", "--user", "is-active", unit], capture_output=True,
+                             text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return out in ("active", "activating", "reloading")
+
+
 def _service_listening(host: str = "127.0.0.1", port: int = 8000) -> bool:
     try:
         with socket.create_connection((host, port), timeout=1.0):
             return True
     except OSError:
         return False
+
+
+def purgeable(c: dict[str, Any]) -> bool:
+    return c["kind"] == "name" and not c["review"]
+
+
+def validate_only(conflicts: list[dict[str, Any]], only: set[str]) -> Optional[str]:
+    """An error message when any ``--only`` id is not a purgeable row of THIS report (a typo
+    must not silently purge nothing - or the wrong thing), else None."""
+    by_id = {c["id"]: c for c in conflicts}
+    for mid in sorted(only):
+        c = by_id.get(mid)
+        if c is None:
+            return f"--only {mid}: not a conflicting identity row in this report"
+        if not purgeable(c):
+            return f"--only {mid}: kind={c['kind']}{' (needs review)' if c['review'] else ''} is never purged by this tool"
+    return None
 
 
 async def purge(conflicts: list[dict[str, Any]], identities: dict[str, idf.Identity], *,
@@ -200,7 +233,7 @@ async def purge(conflicts: list[dict[str, Any]], identities: dict[str, idf.Ident
         svc = get_memory_service()
     results = []
     for c in conflicts:
-        if c["kind"] != "name" or (only and c["id"] not in only):
+        if not purgeable(c) or (only and c["id"] not in only):
             continue
         ident = identities[c["user_id"]]
         try:
@@ -245,6 +278,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         if _service_listening():
             print("refused: something is still listening on 127.0.0.1:8000 (zoe-data running?)", file=sys.stderr)
             return 2
+        if _service_active():
+            print("refused: systemctl --user says zoe-data is active (it can be up while :8000 is not "
+                  "yet listening)", file=sys.stderr)
+            return 2
     try:
         identities = load_identities(args.psql_cmd, args.user, args.accounts_file)
         conflicts = find_conflicts(identities, load_memory_rows(args.palace))
@@ -260,6 +297,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(render(conflicts, args.redact))
     if args.purge:
         import asyncio
+
+        bad = validate_only(conflicts, set(args.only)) if args.only else None
+        if bad:
+            print(f"refused: {bad}; nothing was purged", file=sys.stderr)
+            return 2
 
         done = asyncio.run(purge(conflicts, identities, only=set(args.only) or None))
         print(json.dumps({"purged": done}, indent=2))

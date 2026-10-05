@@ -5429,11 +5429,15 @@ async def _execute_greeting(intent: Intent, user_id: str) -> str:
             tod = "evening"
         else:
             tod = "night"
-    # Try to personalise with the user's preferred name from portrait
+    # Personalise with the user's EXPLICIT preferred name — the one settings field
+    # ("call me Jay" writes it; identity answers and the brain-prompt line read it). This
+    # used to import ``user_portrait.load_portrait_field``, which no module defines, so
+    # the greeting was never personalised; an account that never chose a name is still
+    # greeted without one (the account name is not announced on every "hi").
     name_suffix = ""
     try:
-        from user_portrait import load_portrait_field  # type: ignore[import]
-        name = await load_portrait_field(user_id, "preferred_name")
+        from identity_facts import preferred_name  # type: ignore[import]
+        name = await preferred_name(user_id)
         if name:
             name_suffix = f", {name}"
     except Exception:

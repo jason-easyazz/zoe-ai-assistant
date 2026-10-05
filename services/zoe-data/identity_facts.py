@@ -162,10 +162,15 @@ def build_identity(
     city: str = "",
     country: str = "",
     sysloc: Optional[dict] = None,
+    use_current_location: bool = False,
 ) -> Optional[Identity]:
     """Pure: the Identity the account rows imply (no I/O, no memory). ``None`` when the
     account has no name at all. ``city``/``country`` are the user's own weather prefs;
-    ``sysloc`` is the household default (``system_preferences.weather_default_location``)."""
+    ``sysloc`` is the household default (``system_preferences.weather_default_location``).
+
+    ``weather_preferences.city`` is a WEATHER location. With ``use_current_location`` set
+    it follows the device (a travel city is not home), so it is ignored and the household
+    default stands in."""
     uid = (user_id or "").strip()
     settings, prefs, sysloc = settings or {}, prefs or {}, sysloc or {}
     account_name = _display(
@@ -179,6 +184,8 @@ def build_identity(
         return None
 
     city, country, region = (city or "").strip(), (country or "").strip(), ""
+    if use_current_location:
+        city, country = "", ""
     sys_city = str(sysloc.get("city") or "").strip()
     if not city:
         city, country = sys_city, country or str(sysloc.get("country") or "").strip()
@@ -205,28 +212,43 @@ def build_identity(
     )
 
 
+# ONE round trip (a cold lookup used to be five sequential queries — on the voice path
+# that is latency spent before the brain is even called).
+_IDENTITY_SQL = (
+    "SELECT a.username AS username, a.settings AS settings, u.name AS users_name, "
+    "p.prefs AS prefs, w.city AS wp_city, w.country AS wp_country, "
+    "w.use_current_location AS wp_current, "
+    "(SELECT value FROM system_preferences WHERE key = 'weather_default_location') AS sysloc "
+    "FROM auth_users a "
+    "LEFT JOIN users u ON u.id = a.user_id "
+    "LEFT JOIN user_preferences p ON p.user_id = a.user_id "
+    "LEFT JOIN weather_preferences w ON w.user_id = a.user_id "
+    "WHERE a.user_id = ?"
+)
+
+
+def identity_from_row(uid: str, row: Any) -> Optional[Identity]:
+    """Pure: ``_IDENTITY_SQL``'s row -> Identity (``None`` for no row = not an account)."""
+    if row is None:
+        return None
+    return build_identity(
+        uid,
+        username=str(_col(row, "username", 0) or ""),
+        settings=_json_dict(_col(row, "settings", 1)),
+        users_name=str(_col(row, "users_name", 2) or ""),
+        prefs=_json_dict(_col(row, "prefs", 3)),
+        city=str(_col(row, "wp_city", 4) or ""),
+        country=str(_col(row, "wp_country", 5) or ""),
+        use_current_location=bool(_col(row, "wp_current", 6)),
+        sysloc=_json_dict(_col(row, "sysloc", 7)),
+    )
+
+
 async def _load_identity(db, user_id: str) -> Optional[Identity]:
     uid = (user_id or "").strip()
     if not _is_account_id(uid):
         return None
-    auth = await _one(db, "SELECT username, settings FROM auth_users WHERE user_id = ?", (uid,))
-    if auth is None:  # not a registered account (harness / demo / stale id)
-        return None
-    users_row = await _one(db, "SELECT name FROM users WHERE id = ?", (uid,))
-    prefs_row = await _one(db, "SELECT prefs FROM user_preferences WHERE user_id = ?", (uid,))
-    wp = await _one(db, "SELECT city, country FROM weather_preferences WHERE user_id = ?", (uid,))
-    sysrow = await _one(db, "SELECT value FROM system_preferences WHERE key = ?",
-                        ("weather_default_location",))
-    return build_identity(
-        uid,
-        username=str(_col(auth, "username", 0) or ""),
-        settings=_json_dict(_col(auth, "settings", 1)),
-        users_name=str(_col(users_row, "name", 0) or ""),
-        prefs=_json_dict(_col(prefs_row, "prefs", 0)),
-        city=str(_col(wp, "city", 0) or ""),
-        country=str(_col(wp, "country", 1) or ""),
-        sysloc=_json_dict(_col(sysrow, "value", 0)),
-    )
+    return identity_from_row(uid, await _one(db, _IDENTITY_SQL, (uid,)))
 
 
 _CACHE_TTL_S = 120.0
@@ -242,9 +264,27 @@ def clear_cache(user_id: Optional[str] = None) -> None:
         _cache.pop(user_id, None)
 
 
-async def resolve_identity(user_id: str, db=None) -> Optional[Identity]:
+_loads: dict[str, "asyncio.Future"] = {}
+
+
+async def _fetch(uid: str, db) -> Optional[Identity]:
+    if db is not None:
+        return await _load_identity(db, uid)
+    from db_pool import get_db_ctx  # type: ignore[import]
+
+    async with get_db_ctx() as conn:
+        return await _load_identity(conn, uid)
+
+
+async def resolve_identity(user_id: str, db=None, *, budget_s: Optional[float] = None) -> Optional[Identity]:
     """The account's identity, or ``None`` (guest / unregistered / DB trouble).
-    Cached per user for ``_CACHE_TTL_S``; failures are never cached. NEVER raises."""
+
+    Cached per user for ``_CACHE_TTL_S``. ``budget_s`` bounds how long THIS caller waits
+    (default ``_LOAD_TIMEOUT_S``); a load that outlives the budget keeps running in the
+    background and fills the cache for the next turn, and the caller gets the last known
+    identity (even an expired one) or ``None``. A failure is remembered for
+    ``_FAIL_TTL_S`` so a hung DB costs one wait per window, not one per turn.
+    NEVER raises."""
     uid = (user_id or "").strip()
     if not _is_account_id(uid):
         return None
@@ -252,25 +292,26 @@ async def resolve_identity(user_id: str, db=None) -> Optional[Identity]:
     now = time.monotonic()
     if hit is not None and now - hit[0] < _CACHE_TTL_S:
         return hit[1]
+    wait = _LOAD_TIMEOUT_S if budget_s is None else budget_s
     try:
-        if db is not None:
-            ident = await asyncio.wait_for(_load_identity(db, uid), _LOAD_TIMEOUT_S)
-        else:
-            from db_pool import get_db_ctx  # type: ignore[import]
+        task = _loads.get(uid)
+        if task is None or task.done() or task.get_loop() is not asyncio.get_running_loop():
+            task = asyncio.ensure_future(_fetch(uid, db))
+            _loads[uid] = task
 
-            async def _go() -> Optional[Identity]:
-                async with get_db_ctx() as conn:
-                    return await _load_identity(conn, uid)
-
-            ident = await asyncio.wait_for(_go(), _LOAD_TIMEOUT_S)
+            def _done(t, uid=uid):
+                _loads.pop(uid, None)
+                try:
+                    _cache[uid] = (time.monotonic(), t.result())
+                except BaseException:  # noqa: BLE001 — failure/cancel: keep the stale entry
+                    old = _cache.get(uid)
+                    _cache[uid] = (time.monotonic() - _CACHE_TTL_S + _FAIL_TTL_S,
+                                   old[1] if old else None)
+            task.add_done_callback(_done)
+        return await asyncio.wait_for(asyncio.shield(task), wait)
     except Exception as exc:  # noqa: BLE001 — identity must never break a turn
-        logger.debug("identity_facts: resolve failed for %s: %r", uid, exc)
-        # Remember the failure briefly so a hung DB costs ONE timeout per window, not one
-        # per turn (the entry expires _FAIL_TTL_S after now).
-        _cache[uid] = (now - _CACHE_TTL_S + _FAIL_TTL_S, None)
-        return None
-    _cache[uid] = (now, ident)
-    return ident
+        logger.debug("identity_facts: resolve failed/over budget for %s: %r", uid, type(exc).__name__)
+        return hit[1] if hit is not None else None
 
 
 # ── the brain-prompt line (ZOE_IDENTITY_BLOCK) ────────────────────────────────
@@ -288,18 +329,53 @@ def identity_block_enabled() -> bool:
     return env_bool("ZOE_IDENTITY_BLOCK", True)
 
 
+# The sidecar discloses tool groups by keyword-matching the WHOLE user message, injected
+# blocks included (tool-groups.ts GROUP_TRIGGERS, read on the unelided history). A city
+# called "Cold Lake" or "Hot Springs" would arm the weather group on every turn, so a
+# place that contains one of those words is left out of the line (the name still goes).
+# Mirror of the plain-word triggers; pinned against the TS source by a test.
+_GROUP_TRIGGER_WORDS = (
+    r"weather|temperature|forecast|rain|raining|rainy|snow|sunny|wind|windy|umbrella|jacket|degrees|"
+    r"hot|cold|washing|laundry|outside|lists?|shopping|grocer(?:y|ies)|to-?dos?|tasks?|timers?|"
+    r"countdown|remind(?:er|ers)?|calendar|schedule|appointments?|meetings?|events?|agenda|notes?|"
+    r"jot|journal(?:ing)?|diary|contacts?|play|pause|resume|unpause|stop|skip|next|previous|"
+    r"shuffle|mute|unmute|volume|louder|quieter|spotify|music|lights?|dim|brighten"
+)
+_TRIGGER_RE = re.compile(r"\b(?:" + _GROUP_TRIGGER_WORDS + r")\b", re.IGNORECASE)
+
+# An EXISTING pinned block family ("[Today" in zoe_flue_client._FLUE_CONTEXT_BLOCKS /
+# the sidecar's context-blocks.ts), so older copies are elided from history without a
+# sidecar change. The label is free text after "[Today ".
+BLOCK_OPEN = "[Today — household context]"
+BLOCK_CLOSE = "[END Today]"
+
+
+def _prompt_place(ident: Identity) -> str:
+    place = ident.place if ident.city else ""
+    return "" if place and _TRIGGER_RE.search(place) else place
+
+
 def identity_line(ident: Identity) -> str:
-    where = f" in {ident.place}" if ident.city else ""
+    place = _prompt_place(ident)
+    where = f" in {place}" if place else ""
     return f"You are talking to {ident.name}, a member of this household{where}."
 
 
+# A cold lookup must not stall the first token: bounded wait, the load finishes in the
+# background and the next turn is warm.
+_BLOCK_BUDGET_S = 0.3
+
+
 async def identity_block(user_id: str) -> str:
-    """The prompt line for ``user_id`` or ``""`` (flag off / not an account). NEVER raises."""
+    """The prompt block for ``user_id`` or ``""`` (flag off / not an account / lookup over
+    budget with nothing cached). NEVER raises."""
     try:
         if not identity_block_enabled():
             return ""
-        ident = await resolve_identity(user_id)
-        return identity_line(ident) if ident is not None else ""
+        ident = await resolve_identity(user_id, budget_s=_BLOCK_BUDGET_S)
+        if ident is None:
+            return ""
+        return f"{BLOCK_OPEN}\n{identity_line(ident)}\n{BLOCK_CLOSE}"
     except Exception as exc:  # noqa: BLE001
         logger.debug("identity_facts: block skipped: %r", exc)
         return ""
@@ -316,7 +392,8 @@ def _rx(body: str) -> re.Pattern:
 
 
 _IDENTITY_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
-    ("fullname", _rx(r"(?:what(?:['’]s|\s+is|\s+are)?|whats)\s+my\s+(?:full|last|sur|middle)\s*name")),
+    ("fullname", _rx(r"(?:what(?:['’]s|\s+is|\s+are)?|whats)\s+my\s+full\s*name")),
+    ("surname", _rx(r"(?:what(?:['’]s|\s+is|\s+are)?|whats)\s+my\s+(?:last|sur)\s*name")),
     ("name", _rx(r"(?:what(?:['’]s|\s+is|\s+are)?|whats)\s+my\s+(?:first\s+|real\s+)?name")),
     ("name", _rx(r"do\s+you\s+(?:know|remember)\s+my\s+name")),
     ("name", _rx(r"(?:can\s+you\s+|could\s+you\s+)?(?:tell|remind)\s+me\s+(?:what\s+)?my\s+(?:first\s+)?name(?:\s+is)?")),
@@ -324,20 +401,23 @@ _IDENTITY_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
     ("call", _rx(r"what\s+am\s+i\s+called")),
     ("call", _rx(r"what\s+(?:name\s+)?(?:do|did)\s+you\s+have\s+(?:for|down\s+for)\s+me")),
     ("self", _rx(r"who\s+am\s+i")),
-    ("home", _rx(r"where\s+(?:do|did)\s+(?:i|we)\s+live")),
+    # HOME, present tense only. "where did I live" is the past, "what city am I in" is the
+    # present LOCATION (a trip is not home), "which suburb/area" is finer than the account
+    # knows — all of those fall through to the brain.
+    ("home", _rx(r"where\s+do\s+(?:i|we)\s+live")),
     ("home", _rx(r"where(?:['’]s|\s+is)\s+(?:my|our)\s+(?:home|house|place)")),
-    ("home", _rx(r"(?:which|what)\s+(?:city|town|suburb|state|country|area|region)\s+"
-                 r"(?:am\s+i|are\s+we)\s+in")),
-    ("home", _rx(r"(?:which|what)\s+(?:city|town|suburb|state|country|area|region)\s+"
-                 r"(?:do|did)\s+(?:i|we)\s+live\s+in")),
+    ("home_city", _rx(r"(?:which|what)\s+(?:city|town)\s+do\s+(?:i|we)\s+live\s+in")),
+    ("home_region", _rx(r"(?:which|what)\s+(?:state|region)\s+do\s+(?:i|we)\s+live\s+in")),
+    ("home_country", _rx(r"(?:which|what)\s+country\s+do\s+(?:i|we)\s+live\s+in")),
     ("address", _rx(r"(?:what(?:['’]s|\s+is)|whats)\s+(?:my|our)\s+(?:home\s+|street\s+|house\s+)?address")),
     ("address", _rx(r"(?:what|which)\s+address\s+do\s+you\s+have\s+for\s+me")),
 )
 
 
 def identity_question_kind(message: str) -> str:
-    """"name" / "fullname" / "call" / "self" / "home" / "address" for a question that
-    asks WHO the user is or WHERE they live, else "". Whole-utterance anchored, so
+    """"name" / "fullname" / "surname" / "call" / "self" / "home" / "home_city" /
+    "home_region" / "home_country" / "address" for a question that asks WHO the user is
+    or WHERE they live, else "". Whole-utterance anchored, so
     "who am I meeting tomorrow" and "what's my name for the booking" never match. Pure."""
     text = (message or "").strip()
     if not text or len(text) > 120:
@@ -350,11 +430,16 @@ def identity_question_kind(message: str) -> str:
 
 def reply_for(kind: str, ident: Identity) -> Optional[str]:
     """The one-sentence answer, or ``None`` when the account lacks the fact (the turn
-    then falls through to the brain exactly as before)."""
-    if kind in ("name",):
+    then falls through to the brain exactly as before). It never DENIES a fact the
+    account merely lacks: a first-name-only account does not say "I have no surname" —
+    the brain/recall may know one — it just does not answer the surname question."""
+    parts = ident.name.split()
+    if kind == "name":
         return f"Your name is {ident.name}."
     if kind == "fullname":
-        return f"The name I have for you is {ident.name}. I don't have a surname on your account."
+        return f"Your full name is {ident.name}." if len(parts) >= 2 else None
+    if kind == "surname":
+        return f"Your surname is {parts[-1]}." if len(parts) >= 2 else None
     if kind == "call":
         return f"I call you {ident.name}."
     if kind == "self":
@@ -362,6 +447,12 @@ def reply_for(kind: str, ident: Identity) -> Optional[str]:
         return f"You're {ident.name}, a member of this household{where}."
     if kind == "home":
         return f"You live in {ident.city_region}." if ident.city else None
+    if kind == "home_city":
+        return f"You live in {ident.city}." if ident.city else None
+    if kind == "home_region":
+        return f"You live in {ident.region}." if ident.region else None
+    if kind == "home_country":
+        return f"You live in {ident.country}." if ident.country else None
     if kind == "address":
         if ident.street_address:
             return f"Your address is {ident.street_address}."
@@ -372,13 +463,99 @@ def reply_for(kind: str, ident: Identity) -> Optional[str]:
     return None
 
 
+# ── an explicit rename: "call me Jay" / "my name is Jay" ──────────────────────
+# The user's OWN first-person rename is the one legitimate way a name changes. It is
+# written to ``user_preferences.prefs["preferred_name"]`` — the SAME field the identity
+# answers, the brain-prompt line and the greeting all read (the old greeting read a
+# portrait field that no code ever defined) — and acknowledged. It is a settings write
+# by the account holder, NOT a memory write, so it is unaffected by the writer wall
+# below, which stays closed to automatic writers (digest / regex / LLM extractors).
+_RENAME_STOP = frozenset("""
+a an the some any my your our his her their this that those these it its i me we you he she
+they them is are am was be been being not no yes and or but if when while whenever later back
+soon now then today tonight tomorrow morning evening afternoon night again please maybe
+sometime anytime anything something nothing everyone someone anyone one first last next time
+sir madam mate boss dude crazy stupid idiot silly what who how why where which up down out
+over off on in at to for of with from by about as like ever never always just only also too
+very really actually basically honestly sorry thanks thank ok okay hello hi hey yeah yep nope
+can could would should will shall may might must do does did
+""".split())
+_NAME_TOKEN = r"[A-Za-z][A-Za-z'’\-]{0,24}"
+_NAME_CAP = r"(?P<name>" + _NAME_TOKEN + r"(?:\s+" + _NAME_TOKEN + r"){0,2})"
+_RENAME_LEAD = r"^\W*(?:(?:so|and|hey|ok|okay|um|uh|zoe|please|actually|no|yes|well|just)[\s,]+)*"
+
+
+def _rn(body: str) -> re.Pattern:
+    return re.compile(_RENAME_LEAD + body + _TAIL, re.IGNORECASE)
+
+
+_RENAME_PATTERNS: tuple[re.Pattern, ...] = (
+    _rn(r"(?:(?:you\s+can|can\s+you|could\s+you|would\s+you)\s+)?(?:just\s+)?call\s+me\s+" + _NAME_CAP),
+    _rn(r"my\s+name(?:['’]s|\s+is)\s+(?:actually\s+)?" + _NAME_CAP),
+    _rn(r"(?:i\s+go\s+by|i\s+prefer\s+to\s+be\s+called|i\s+like\s+to\s+be\s+called|"
+        r"i(?:['’]m|\s+am)\s+called|people\s+call\s+me|everyone\s+calls\s+me|friends\s+call\s+me)\s+"
+        + _NAME_CAP),
+)
+
+
+def rename_request(message: str) -> str:
+    """The name from an explicit first-person rename ("call me Jay", "my name is Jay",
+    "I go by Jay"), else "". Whole-utterance anchored; a question never renames; a name
+    made of stop-words ("call me later", "call me a taxi") is rejected. A bare "actually
+    it's Jay" is deliberately NOT a rename (too ambiguous) — it falls to the brain. Pure."""
+    text = (message or "").strip()
+    if not text or len(text) > 100 or "?" in text:
+        return ""
+    for rx in _RENAME_PATTERNS:
+        m = rx.match(text)
+        if not m:
+            continue
+        toks = m.group("name").split()
+        while len(toks) > 1 and toks[-1].lower() in ("please", "then", "now", "again", "mate", "zoe", "thanks"):
+            toks.pop()  # the greedy name swallowed the polite tail
+        if any(t.lower().strip("'’-") in _RENAME_STOP for t in toks):
+            return ""
+        return _display(" ".join(toks))
+    return ""
+
+
+async def apply_rename(user_id: str, name: str) -> bool:
+    """Write the preferred name to the account settings (one atomic ``jsonb ||``). NEVER raises."""
+    try:
+        from user_prefs import set_pref  # type: ignore[import]
+
+        await set_pref(user_id, KEY_PREFERRED_NAME, name)
+        clear_cache(user_id)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("identity_facts: rename write failed (non-fatal): %r", type(exc).__name__)
+        return False
+
+
+async def preferred_name(user_id: str) -> str:
+    """The explicit preferred name ("" when none is set) — what the greeting personalises with."""
+    ident = await resolve_identity(user_id)
+    return ident.name if ident is not None and ident.has_preferred_name else ""
+
+
 async def maybe_answer(text: str, user_id: str) -> Optional[tuple[str, str]]:
     """``(kind, reply)`` for an own-identity question from a registered account, else
-    ``None``. Memory is never consulted for the ANSWER; it is only checked afterwards,
+    ``None`` (a rename returns ``("rename", "I'll call you X.")`` after writing the
+    settings field). Memory is never consulted for the ANSWER; it is only checked afterwards,
     in the background, to log a conflicting row (``IDENTITY_CONFLICT``). NEVER raises."""
     try:
+        if not _is_account_id(user_id):
+            return None
+        new_name = rename_request(text)
+        if new_name:
+            if await resolve_identity(user_id) is None:  # registered accounts only
+                return None
+            if not await apply_rename(user_id, new_name):
+                return None
+            logger.info("IDENTITY_RENAME user=%s origin=explicit", user_id)
+            return "rename", f"I'll call you {new_name}."
         kind = identity_question_kind(text)
-        if not kind or not _is_account_id(user_id):
+        if not kind:
             return None
         ident = await resolve_identity(user_id)
         if ident is None:
@@ -438,15 +615,41 @@ def _norm_tokens(value: str) -> list[str]:
     return [t for t in re.split(r"[^a-z0-9]+", (value or "").lower()) if t]
 
 
-def name_conflicts(asserted: str, ident: Identity) -> bool:
-    """True when ``asserted`` is not this account's name: neither the account name nor
-    the preferred name appears as a token in it (a longer form of the real name —
-    "Jason Smith" for "Jason" — is NOT a conflict)."""
-    toks = set(_norm_tokens(asserted))
+# Sources that are the user DICTATING a fact (memory_tombstones.EXPLICIT_TEACH_SOURCES).
+# A name row from one of them that disagrees with the account may be a nickname or a
+# deliberate choice — a person decides; it is never auto-purgeable.
+EXPLICIT_SOURCES = frozenset({"brain_tool", "voice_fact", "review_ui"})
+
+
+def classify_name_assertion(asserted: str, ident: Identity, meta: Optional[dict] = None) -> str:
+    """``"match"`` | ``"needs_review"`` | ``"conflict"`` for a name a memory row claims is
+    the user's own.
+
+    * match: the account name or the preferred name appears as a token (a longer form of
+      the real name — "Jason Smith" for "Jason" — is a match);
+    * needs_review: no shared token but it LOOKS like a nickname of one (a 3+ letter
+      prefix either way: "Zeddy"/"Zed") or the row came from an explicit user teach
+      (``EXPLICIT_SOURCES``) — never auto-purged, never logged as pollution;
+    * conflict: anything else, i.e. a name nobody in the account goes by that an
+      automatic writer put there."""
+    toks = _norm_tokens(asserted)
     if not toks:
-        return False
+        return "match"
     mine = set(_norm_tokens(ident.account_name)) | set(_norm_tokens(ident.name))
-    return not (toks & mine)
+    if set(toks) & mine:
+        return "match"
+    for t in toks:
+        for m in mine:
+            if min(len(t), len(m)) >= 3 and (t.startswith(m) or m.startswith(t)):
+                return "needs_review"
+    if (meta or {}).get("source") in EXPLICIT_SOURCES:
+        return "needs_review"
+    return "conflict"
+
+
+def name_conflicts(asserted: str, ident: Identity, meta: Optional[dict] = None) -> bool:
+    """True only for a real ``conflict`` (see ``classify_name_assertion``)."""
+    return classify_name_assertion(asserted, ident, meta) == "conflict"
 
 
 def home_conflicts(asserted: str, ident: Identity) -> bool:
@@ -470,17 +673,18 @@ async def conflicting_memory_rows(user_id: str, ident: Identity, *, svc=None,
         for ref in rows or []:
             text = getattr(ref, "text", "") or ""
             md = getattr(ref, "metadata", {}) or {}
-            kind = ""
+            kind, review = "", False
             a_name = asserted_user_name(text)
-            if a_name and name_conflicts(a_name, ident):
-                kind = "name"
+            verdict = classify_name_assertion(a_name, ident, md) if a_name else "match"
+            if verdict != "match":
+                kind, review = "name", verdict == "needs_review"
             else:
                 a_home = asserted_user_home(text)
                 if a_home and home_conflicts(a_home, ident):
                     kind = "home"
             if kind:
                 out.append({
-                    "id": getattr(ref, "id", ""), "kind": kind, "text": text,
+                    "id": getattr(ref, "id", ""), "kind": kind, "review": review, "text": text,
                     "source": md.get("source", ""), "added_by": md.get("added_by", ""),
                     "reviewed_by": md.get("reviewed_by", ""), "session_id": md.get("session_id", ""),
                 })
@@ -505,14 +709,14 @@ async def _log_conflicts(user_id: str, kind: str, ident: Identity, *, svc=None) 
     """Log ``IDENTITY_CONFLICT user=<id> kind=<name|home>`` once per conflicting memory
     row. The answer was already given from the account; this only makes the pollution
     visible. Ids and labels only — never the row's text."""
-    want = "home" if kind in ("home", "address") else "name"
+    want = "home" if kind.startswith("home") or kind == "address" else "name"
     try:
         rows = await asyncio.wait_for(conflicting_memory_rows(user_id, ident, svc=svc), 3.0)
     except Exception:  # noqa: BLE001
         return 0
     n = 0
     for row in rows:
-        if row["kind"] == want:
+        if row["kind"] == want and not row.get("review"):
             logger.warning("IDENTITY_CONFLICT user=%s kind=%s", user_id, want)
             n += 1
     return n
