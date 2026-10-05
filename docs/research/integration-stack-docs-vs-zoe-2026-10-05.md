@@ -142,7 +142,7 @@ Live: `zoe-cloudflared` (cloudflared **2026.9.3**, protocol `quic`, `--no-autoup
 |---|---|---|
 | `zoe.the411.life` | `http://zoe-ui:80` | `302` to `the411.cloudflareaccess.com` (Access login), including `/health` |
 | `buildzoe.the411.life` | `http://zoe-omnigent:6767` ("NO auth of its own, so the Access policy is the only gate", config comment) | `302` to Access login |
-| `ssh.the411.life` | `ssh://localhost:22` | **`530`, not `302`** |
+| the SSH tunnel hostname | `ssh://localhost:22` | **`530`, not `302`** |
 
 ### Settings against the documentation
 
@@ -163,8 +163,8 @@ The doc's design (path-scoped Access app + **Service Auth** policy + `CF-Access-
 
 ### Highest-value fix: Cloudflare
 
-**Close or gate `ssh.the411.life`.** A `530` instead of the `302` the other two hostnames return indicates there is no Access application in front of it **[unverified]** (I cannot read the Zero Trust dashboard; `sshd_config` sets only `KbdInteractiveAuthentication no`, so `PasswordAuthentication` falls to the OpenSSH default; `sshd -T` needs root **[unverified]**). Cloudflare's SSH guide pairs the tunnel with Access ("SSH with Access for Infrastructure ... SSH certificates with Access policies and command logging") **[doc]**. Either delete the `ssh://` ingress rule (the home VPN path in the Mac-panel doc already exists) or put an Access app with an email-allow policy in front.
-Verify: `curl -I https://ssh.the411.life` returns `302` to `*.cloudflareaccess.com` (or the hostname no longer resolves); `cloudflared access ssh --hostname ssh.the411.life` prompts for Access login. Rollback: re-add the ingress line.
+**Close or gate the SSH tunnel hostname.** A `530` instead of the `302` the other two hostnames return indicates there is no Access application in front of it **[unverified]** (I cannot read the Zero Trust dashboard; `sshd_config` sets only `KbdInteractiveAuthentication no`, so `PasswordAuthentication` falls to the OpenSSH default; `sshd -T` needs root **[unverified]**). Cloudflare's SSH guide pairs the tunnel with Access ("SSH with Access for Infrastructure ... SSH certificates with Access policies and command logging") **[doc]**. Either delete the `ssh://` ingress rule (the home VPN path in the Mac-panel doc already exists) or put an Access app with an email-allow policy in front.
+Verify: `curl -I https://the SSH tunnel hostname` returns `302` to `*.cloudflareaccess.com` (or the hostname no longer resolves); `cloudflared access ssh --hostname the SSH tunnel hostname` prompts for Access login. Rollback: re-add the ingress line.
 Next two, same file set: drop the `cert.pem` mount (verify the tunnel re-registers; rollback = re-add the line) and add `originRequest.access` for `buildzoe` once the app's AUD tag is copied from the dashboard (verify: a request with a forged `Cf-Access-Jwt-Assertion` is rejected at cloudflared, a real browser session still loads).
 
 ---
@@ -301,7 +301,7 @@ Impact x effort, with the proof that would close each. G-numbers are referenced 
 
 | Rank | Gap | Impact | Effort | Proof it is closed |
 |---|---|---|---|---|
-| G1 | `ssh.the411.life` appears to have no Access app (530 vs 302) | High if password auth is on | S (dashboard) | `curl -I` returns 302 to Access or the ingress is gone; `cloudflared access ssh` prompts |
+| G1 | the SSH tunnel hostname returns 530 where the others return the Access 302 — verify its Access policy in the dashboard (unverified from outside) | High if password auth is on | S (dashboard) | `curl -I` returns 302 to Access or the ingress is gone; `cloudflared access ssh` prompts |
 | G2 | HA bridge env contains 3 LLM API keys + LiveKit secret (`env_file: .env`), root, LAN-exposed until #1727 | High | S (batch with A3) | `docker exec ... env` shows only `HA_*`/`ZOE_HA_VOICE_*`; compose-lint test |
 | G3 | Telegram token in journal on errors; boot DNS race leaves Telegram down 2+ min | High (credential) + Med (availability) | S | redaction unit test with negative control; `grep -c` = 0 after rotation; start-retry test |
 | G4 | Tunnel container holds `cert.pem`; creds `644`; no `originRequest.access` on the no-auth Omnigent origin | Med | S | tunnel re-registers without the mount; forged JWT rejected at cloudflared |
