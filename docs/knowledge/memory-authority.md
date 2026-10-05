@@ -29,8 +29,8 @@ looked like a regex write from a real conversation. No path checked who wrote th
 | 6 | `operator` | `operator`, `operator-cleanup`, `identity_audit`, `admin`, `system`, `samantha_live_cleanup` |
 | 5 | `user_confirmed` | the review UI (`review_ui`), the account acting on its own rows (`actor == user_id`: REST edits, intent handlers, MCP), the user approving a candidate |
 | 4 | `user_stated` | the person's words typed or dictated (`voice_fact`, `proposal`/`manual` - the proposals route passes `origin="proposal"` whatever label the client sent, `conversation_correction`, `chat`, `skybridge_action`, `note_*`, `journal_*`, `person_created/updated`) and deterministic extractors over the user's turn (`chat_regex`, `chat_regex_fallback`, `voice_regex`, `conversation`, `voice`) - a DIRECT statement |
-| 3 | `user_stated_derived` | a MODEL writer's fact that the user's OWN turn supports (below) - the person's words, paraphrased by a model |
-| 2 | `user_unverified` | a voice-lane SELF-fact whose speaker the speaker-id did not confirm: the hook exists (`speaker_verified=False` on `ingest` / `review` / `run_turn_digest`) but the voice daemon does not report a verdict yet, so **today every panel write is a direct user class** - a guest, or another member, speaking to a panel bound to the owner can overwrite the owner's rows (not operator rows). Wiring the verdict is P1.3 (voice-path, replay-gated) |
+| 3 | `user_stated_derived` | a MODEL writer's fact that the user's OWN turn supports (below) - the person's words, paraphrased by a model; when a per-turn writer's turn PLAINLY entails it, basis `verbatim_user_span`, with `user_stated` power |
+| 2 | `user_unverified` | a voice-lane SELF-fact whose speaker the speaker-id did not confirm: stored `pending`, never approved (ZMB I2); the hook exists (`speaker_verified=False` on `ingest` / `review` / `run_turn_digest`) but the voice daemon does not report a verdict yet, so **today every panel write is a direct user class** - a guest, or another member, speaking to a panel bound to the owner can overwrite the owner's rows (not operator rows). Wiring the verdict is P1.3 (voice-path, replay-gated) |
 | 1 | `model_from_turn` | `turn_digest`, `voice_turn_digest`, `person_extractor_llm`, `brain_tool`, `mcp` (every MCP review / forget call passes `origin="mcp"`; the account is only the acting member), `zoe_agent`, `decay_sweep` - when the turn does not support the fact |
 | 0 | `model_from_transcript` | `digest`, `idle_consolidation` (unsupported), `consolidation`, `synthesis`, `music_digest`, the emotional pass, `profile-analysis`, `hindsight_retain_candidate`, **any unknown writer** |
 
@@ -49,7 +49,8 @@ writers. Stamped in **every** mode.
   both would otherwise read "user_stated", the newer would win, and a mis-paraphrase of an older sentence
   in a day's transcript could overwrite what the person said later. It does beat model classes and other
   derived rows. Cost, stated plainly: a change the person made that ONLY the turn digest captured (no
-  regex/typed write) parks as a candidate instead of superseding at once - and is then ASKED about (next
+  regex/typed write) parks as a candidate instead of superseding at once - UNLESS their own turn plainly
+  entails it (next-but-one section: it then updates at once) - and is then ASKED about (next
   section) - so re-run the bar's S2 (Dunedin -> Hobart) / S10 before relying on it. A spoken sentence
   never undoes an OPERATOR row (it takes the review UI or an operator). Below that it is held back.
 * **Held back = a `disputed` candidate.** `ingest` stores the fact with `status=disputed`,
@@ -74,6 +75,49 @@ writers. Stamped in **every** mode.
 * **The user resolves it.** A person approving a candidate (`review(approve)` by a user class) makes it
   `user_confirmed` and **retires the row it disputed**; rejecting it keeps the row and the candidate is
   not resurrected by the next extraction.
+
+## Your own change of mind updates the record (ZMB C1 / C5)
+
+A per-turn model writer (`turn_digest`, `voice_turn_digest`) reads ONE user turn. When that turn **plainly
+entails** the fact it proposes - `memory_authority.entailing_span`: one verbatim sentence of the turn that
+`supports()` accepts, with the speaker first (the first-person word comes before the claim: "I moved to
+Hobart", "I no longer see Dana", "my dentist is Priya now"), no hedge or report in it ("I think", "probably",
+"came up", "Dana said"), about the speaker, from a speaker the lane did not reject (`speaker_verified` is not
+`False`) - the write is stamped `authority_class=user_stated_derived` with `authority_basis=verbatim_user_span`
+(the honest provenance: a model wrote it) and carries **`user_stated` power and standing** (`Resolved.promoted`;
+`row_class` reads it back as `user_stated`). So it lands approved, the nightly conflict pass retires the older
+row (history kept, `invalid_at`), and recall serves the new fact: the owner changing their mind needs no
+confirmation.
+
+The paraphrase-drift concern ("a model's paraphrase can drift from what was said") is answered by the
+entailment test, not by rank. A paraphrase the turn does not plainly entail - a different value, a
+hypothetical, a hedge, a relative's move, a report, the opposite polarity or tense, or a claim that leads
+while the speaker trails ("Hobart is where I live now") - stays `user_stated_derived` rank 3 / `model_from_turn`
+and parks as a `disputed` candidate exactly as before. The whole-day writers (`digest`, `idle_consolidation`)
+are **not** promoted: a transcript has no single turn to quote, and the 2026-10-05 incident class stays walled.
+The identity wall and the third-person rules are untouched (a name is still the account's; a fact about
+someone else is never given the owner's power).
+
+## An unverified speaker's self-fact is a candidate (ZMB I2)
+
+When the voice lane reports `speaker_verified=False`, a self-fact (`User lives in ...`) is class
+`user_unverified`. `MemoryService.ingest` now stores it **`pending`** (a candidate the owner confirms in the
+review queue; approving it makes it `user_confirmed`), not `approved`, so it is never recalled and never
+served as "you told me" (the prompt packet drops `pending`). A dispute keeps its stronger `disputed` status;
+a fact about someone else is unchanged; `shadow` mode only logs `UNVERIFIED_SELF_FACT_PENDING`. The verdict
+itself is still not sent by the voice daemon (P1.3, voice-path), so this is dormant in production until it is.
+
+## Every row written from a user turn carries its evidence (ZMB A3)
+
+`MemoryService` stamps `source_excerpt`, `user_turn_id` and the authority class at the write boundary
+(`memory_authority.turn_evidence`). The caller's value always wins; the gaps are filled only from evidence that
+is the user's by construction: the teach lane (`voice_fact`, `review_ui`, `explicit_teach`) takes the user's
+turn (`anchor_text`) or the taught text; a model writer whose anchor the user's turn supports takes the
+verbatim supporting sentence (`supporting_span`); the id is a stable content id of that evidence (`fact-...`
+for the teach lane, `ut-...` otherwise). The teach path (`expert_dispatch.store_fact`) now passes the spoken
+words, the nightly digest passes the verbatim sentence and the `chat_messages` id of the turn it read
+(`memory_digest.Transcript.turns`, `locate_turn`), and `review(edit)` by a model reading a user turn keeps the
+turn reference as `user_turn_id`. A row no user sentence supports gets no invented evidence.
 
 ## A held-back write is asked about, not lost (`memory_disputes.py`)
 
@@ -221,6 +265,7 @@ rank 0. **Not run against the live palace.**
 * `test_memory_authority_gates.py` - MCP cannot overwrite a user_stated row (with the old call shape as the
   control), person merge entry-point enforcement, the edge writer asks the rule, and the affect consent gate
   (guests, the household default incl. minors, `members` / `optin` as explicit options, fail-open/closed, off = control).
+* `test_memory_own_change_of_mind.py` - the ZMB cells C1 / C5 (via the turn digest), I2 (panel_unverified) and A3 (teach lane, nightly digest, rate) with their inputs copied from the bench, each with a break-the-fix control and the over-reach controls (hedge, relative, report, rejected speaker, whole-day writers, shadow mode).
 * `test_memory_authority_backfill.py` - the dry-run report (read-only, no text) and the apply.
 * `test_identity_facts.py` - the digest-replay control now removes BOTH walls; removing only #1866's
   leaves the genuine row standing (defence in depth).

@@ -37,25 +37,25 @@
     },
     {
       "id": "A3",
-      "title": "a model's reading of 'I stopped' waits for my yes",
-      "proves": "'I don't play tennis any more' read by the turn digest is user_stated_derived: it beats model classes but never a direct statement, so it parks as a candidate the person approves (a direct writer would have retired the old fact at once)",
+      "title": "my own plain sentence read by the turn digest updates the record",
+      "proves": "'I do not play tennis any more', read by the per-turn digest, is the owner changing their own mind (ZMB C5): the turn entails it, so the fact is user_stated_derived with user_stated POWER and lands approved; only a paraphrase the turn does not entail parks as a candidate (A5)",
       "turns": [
         ["A", "d1-tennis", "I play tennis on Saturdays."],
-        ["A", "d2-tennis", "I don't play tennis any more."]
+        ["A", "d2-tennis", "I do not play tennis any more."]
       ],
       "asks": [["A", "Do I still play tennis?"]],
       "store": {
         "seed": [["User plays tennis on Saturdays.", "voice_fact"]],
         "proposals": [{"writer": "turn_digest", "fact": "User no longer plays tennis."}],
-        "expect_approved": ["User plays tennis on Saturdays."],
-        "expect_pending": ["User no longer plays tennis."],
+        "expect_approved": ["User plays tennis on Saturdays.", "User no longer plays tennis."],
+        "expect_pending": [],
         "expect_authority": {"User no longer plays tennis.": "user_stated"}
       }
     },
     {
       "id": "A4",
-      "title": "a model-read move and a guess both wait; neither overwrites",
-      "proves": "after 'I live in Hobart now' the turn digest's reading is user_stated_derived and a consolidation guess is inferred: both are held as candidates against the direct 'I live in Dunedin' row",
+      "title": "my own move lands; a guess waits",
+      "proves": "after 'I live in Hobart now' the per-turn digest's reading is the owner speaking (ZMB C1) and lands approved; a consolidation guess is inferred and is held as a candidate against the direct 'I live in Dunedin' row",
       "turns": [
         ["A", "d1-home", "I live in Dunedin, by the way."],
         ["A", "d2-home", "Big news - I've moved. I live in Hobart now."]
@@ -67,9 +67,55 @@
           {"writer": "turn_digest", "fact": "User lives in Hobart."},
           {"writer": "consolidation", "fact": "User lives in Perth."}
         ],
-        "expect_approved": ["User lives in Dunedin."],
-        "expect_pending": ["User lives in Hobart.", "User lives in Perth."],
+        "expect_approved": ["User lives in Dunedin.", "User lives in Hobart."],
+        "expect_pending": ["User lives in Perth."],
         "expect_authority": {"User lives in Hobart.": "user_stated", "User lives in Perth.": "inferred"}
+      }
+    },
+    {
+      "id": "A5",
+      "title": "a reading my turn does not entail waits for my yes",
+      "proves": "a relative move or a hedged remark is only a model reading of my turn: it parks as a candidate beside the direct row (the paraphrase-drift control for A3 and A4)",
+      "turns": [
+        [
+          "A",
+          "d1-home",
+          "I live in Dunedin, by the way."
+        ],
+        [
+          "A",
+          "d2-home",
+          "My sister moved to Hobart last week."
+        ]
+      ],
+      "asks": [
+        [
+          "A",
+          "Which city do I live in these days?"
+        ]
+      ],
+      "store": {
+        "seed": [
+          [
+            "User lives in Dunedin.",
+            "voice_fact"
+          ]
+        ],
+        "proposals": [
+          {
+            "writer": "turn_digest",
+            "fact": "User lives in Hobart."
+          }
+        ],
+        "expect_approved": [
+          "User lives in Dunedin."
+        ],
+        "expect_pending": [
+          "User lives in Hobart."
+        ],
+        "expect_authority": {
+          "User lives in Hobart.": "inferred"
+        }
       }
     }
   ]
