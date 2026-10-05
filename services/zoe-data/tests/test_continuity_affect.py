@@ -266,13 +266,14 @@ async def test_real_review_edit_stores_affect_and_continuity_focuses_it(monkeypa
 
     svc._append_audit = no_audit
 
-    # the affect gate defaults to opt-in: this member has consented (a stored persona mode)
+    # pinned to the explicit `optin` mode (not the household default): this member has consented
     import persona_layer
 
     async def consenting(_uid, db=None):
         return persona_layer.MemberMode(mode="companion", minor=False)
 
     monkeypatch.setattr(persona_layer, "load_member_mode", consenting)
+    monkeypatch.setenv("ZOE_AFFECT_CONSENT_GATE", "optin")
     old_meta = {"user_id": "demo-a", "wing": "demo-a", "status": "approved", "memory_type": "event",
                 "source": "turn_digest", "confidence": 0.82,
                 "added_at": (NOW - datetime.timedelta(hours=30)).isoformat()}

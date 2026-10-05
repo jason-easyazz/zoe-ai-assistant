@@ -148,23 +148,34 @@ upserts; a UI card for the dispute offer (it reaches the brain as an offer line 
 the caller's real class (`_edge_authority_for(source, text)`), so a model-sourced call cannot close a
 user-stated edge.
 
-## Affective records need consent (`ZOE_AFFECT_CONSENT_GATE`)
+## Affective records: the whole household, never guests (`ZOE_AFFECT_CONSENT_GATE`)
 
-`docs/governance/emotional-safety-note.md` section 6: a RECORD of how someone seems is kept for
-consenting adult members only; children and guests never. Enforced at the same choke point
+**Owner product decision, 2026-10-05:** Zoe keeps emotional context (`emotional_moment` rows and affect
+metadata on facts) for EVERY household member INCLUDING children, and NEVER for guests; no stored consent
+row is required. This overrides the "children never" rule in `docs/governance/emotional-safety-note.md`
+(section 6 holds the decision) and the opt-in default PR #1868 introduced. Enforced at the same choke point
 (`MemoryService._affect_allowed`, in `ingest` and `review(edit)`): an `emotional_moment` row is not
 stored (`AFFECT_NOT_STORED`), and a feeling carried in an ordinary row's metadata (`affect` / `valence` /
 `intensity`) is stripped (`AFFECT_STRIPPED` - the fact stays, the feeling does not; the sentence itself may
 still name a feeling). The strip applies to `review(edit)` too: a feeling in the edit's `metadata`
-(the turn digest's update path) is dropped without consent, and a feeling the superseded row carried is
-not carried forward. Modes: `optin` (**default**, fail-closed) requires the member's stored persona mode
-(`member_modes` row = the consent record) and refuses guest sentinels and minors; `members` (the explicit
-loosening) refuses only guests and minors, needs no consent row, and a failed lookup fails open with a
-warning; `off`. **Default changed in the Codex round on #1868:** the note wants an explicit per-member
-consent, so the default is the consent-required one. **Consequence for the owner:** until a consent flow
-exists (plan W5.3 - the enrolment interview) a member with no `member_modes` row keeps no
-`emotional_moment` rows and no affect metadata (Samantha bar S4 reads affect the digest keeps) - the
-operator sets `ZOE_AFFECT_CONSENT_GATE=members` (one env line) or writes the owner's persona-mode row.
+(the turn digest's update path) is dropped when the gate refuses, and a feeling the superseded row carried
+is not carried forward.
+
+Modes (`memory_authority.affect_gate_mode`, per-call env read):
+
+* `household` (**DEFAULT**, env unset): every member including minors; guests refused; an unknown or failed
+  `member_modes` lookup refuses (closed). A person with no `member_modes` row is a member if they are a real
+  account, i.e. not a guest sentinel (`user_filters.GUEST_USERS`: `guest`, `anonymous`, `voice-guest`,
+  `voice-daemon`, empty - the kiosk guest resolves to user id `guest` / role `guest` in `auth.py` and
+  `routers/panel_auth.py`).
+* `members`: adult members only (a member flagged minor is refused), no stored consent, a failed lookup
+  fails open with a warning. Explicit stricter option.
+* `optin`: adult members with a stored persona mode (`member_modes` row = the consent record); fails
+  closed. Explicit stricter option; an unrecognised value (a typo) also lands here, never on the default.
+* `off` (`0` / `false` / `no` / `off`): no gate.
+
+**Operator step after the household-default PR merges:** the live env pin `ZOE_AFFECT_CONSENT_GATE=members`
+is removed so the default (`household`) applies and children's emotional context is kept.
 
 ## `ZOE_MEMORY_AUTHORITY` - `enforce` (default) | `shadow` | `off`
 
@@ -209,7 +220,7 @@ rank 0. **Not run against the live palace.**
 * `test_memory_authority_review.py` - one group per finding of the #1868 review (anchor negatives table, owner-reviewed legacy rows, idle consolidation one-operation supersede, review-queue/offer/TTL for disputes, brain_tool explicit remember, user_unverified hook + exposure, admin approve, the P2 notes).
 * `test_memory_authority_gates.py` - MCP cannot overwrite a user_stated row (with the old call shape as the
   control), person merge entry-point enforcement, the edge writer asks the rule, and the affect consent gate
-  (guests, minors, opt-in mode, fail-open/closed, off = control).
+  (guests, the household default incl. minors, `members` / `optin` as explicit options, fail-open/closed, off = control).
 * `test_memory_authority_backfill.py` - the dry-run report (read-only, no text) and the apply.
 * `test_identity_facts.py` - the digest-replay control now removes BOTH walls; removing only #1866's
   leaves the genuine row standing (defence in depth).
