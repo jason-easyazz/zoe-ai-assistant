@@ -158,6 +158,14 @@ def record_reject(source: str, reason: str, *, gate: bool = True) -> None:
         pass
 
 
+def record_guard_drop(source: str, guard: str, *, gate: bool = True) -> None:
+    """Count one fact an extractor GUARD threw away (unanchored role, unstated role, unsupported
+    user anchor, low confidence, dedup overlap ...). Reason code = ``guard_<guard>``, so the nightly
+    summary reads "guard_value_role_unsupported:2". Until now these drops were INFO log lines only:
+    nothing counted them, so a guard that started eating real facts was invisible. Never raises."""
+    record_reject(source, "guard_" + _clean(guard), gate=gate)
+
+
 def summary(hours: int = 24) -> dict:
     """Totals over the last ``hours`` hours ending now (file + the unflushed in-memory delta):
     ``{"rejected", "reasons", "sources", "persist_failed"}``. Counts only."""
