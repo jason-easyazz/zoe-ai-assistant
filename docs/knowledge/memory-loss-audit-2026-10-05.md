@@ -189,6 +189,36 @@ Larger unrecorded removals exist but touched **only** fixture ids: the 2026-08-1
 2026-09-29 purge (482 → 257: `u1` 135, `existing` 45, `newbie` 45; 0 owner rows). Both were raw operator deletes with
 no audit row — the same unrecorded-removal shape, which is why §6 closes that door.
 
+### Restore (owner-approved 2026-10-05: "yes restore the July memories")
+
+`scripts/maintenance/restore_memories_from_export.py` replays the 20 rows of §5 from
+`~/.zoe-backups/jason-mem-20260705-184122.json` (read-only) **through `MemoryService.ingest`** — never a raw
+collection write — as `source=operator_restore`, `status=approved`, original type / confidence / session /
+user-turn / entity, `captured_at` = the original capture instant (new optional `ingest(captured_at=...)`, so
+"when did I tell you" still says July), and provenance as `candidate_origin=july_export_restore`,
+`candidate_authority_class=user_stated`, `candidate_restored_from_{export,id,source,added_at,session_id,user_turn_id}`.
+Each restore also writes a `restore` audit row (actor `operator_restore`, reason names the export file; no text).
+It refuses a row that already exists by original id **or** by exact text for the owner in any status (a superseded or
+archived copy is a deliberate replacement), which also makes a second apply restore 0. The dry run
+(default) prints id suffix, date, length, sha10, the current write-quality-gate verdict and the duplicate check —
+no text. `--apply` needs `--i-have-reviewed --i-stopped-zoe-data` and refuses while the zoe-data unit is active or
+127.0.0.1:8000 accepts connections. `--skip-gate-rejects` leaves out rows the *current* gate would reject
+(by default all 20 eligible rows are restored, as approved).
+
+```bash
+python3 scripts/maintenance/restore_memories_from_export.py            # dry run: shapes only, writes nothing
+systemctl --user stop zoe-data
+~/.zoe/venvs/zoe-data-py312/bin/python scripts/maintenance/restore_memories_from_export.py \
+    --apply --i-have-reviewed --i-stopped-zoe-data
+systemctl --user start zoe-data && until curl -sf http://127.0.0.1:8000/readyz; do sleep 5; done
+python3 scripts/maintenance/restore_memories_from_export.py            # verify: "would restore: 0"
+```
+
+Dry run against the live palace on 2026-10-05: 20 selected, **18 restorable, 2 refused** (both have exactly the
+text of a live *superseded* owner row — `8264bfbd`, `cd6d6da9`, sha10 `914d8baec5`); 2 of the 18 (`b2a4e799`,
+`d7d51beb`) would be rejected by today's gate as `weather_report` — the pre-#1042 junk. They restore unless
+`--skip-gate-rejects` is given.
+
 ## 6. What this PR changes
 
 | Class | Fix | Where |
