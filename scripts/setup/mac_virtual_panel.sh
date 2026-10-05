@@ -29,6 +29,7 @@ PANEL_HOME="${ZOE_MAC_PANEL_HOME:-$HOME/.zoe-virtual-panel}"
 VENV="${PANEL_HOME}/venv"
 ENV_FILE="${PANEL_HOME}/.env.voice"
 LOG_FILE="${PANEL_HOME}/voice.log"
+MARKER="${PANEL_HOME}/.zoe-virtual-panel-marker"
 TORCH_HOME_DIR="${PANEL_HOME}/torch"
 REQ_FILE="${HERE}/mac-requirements.txt"
 REQ_STAMP="${PANEL_HOME}/.requirements.sha256"
@@ -97,10 +98,22 @@ ZOE_VOICE_STREAM="1"
 EOF
 }
 
-# ── env file helpers ──────────────────────────────────────────────────────────
-write_env_if_absent() {
+# ── the panel home and its marker ─────────────────────────────────────────────
+# The marker proves a directory is OURS. `uninstall` deletes only a directory that
+# carries it, and install refuses to adopt an existing non-empty directory that does
+# not (ZOE_MAC_PANEL_HOME=$HOME/Documents must never become an rm -rf target).
+ensure_panel_home() {
+  if [ -d "${PANEL_HOME}" ] && [ ! -f "${MARKER}" ] && [ -n "$(ls -A "${PANEL_HOME}" 2>/dev/null)" ]; then
+    die 5 "${PANEL_HOME} exists, is not empty and is not a virtual-panel directory (no .zoe-virtual-panel-marker); choose another ZOE_MAC_PANEL_HOME"
+  fi
   mkdir -p "${PANEL_HOME}"
   chmod 700 "${PANEL_HOME}" 2>/dev/null || true
+  [ -f "${MARKER}" ] || printf 'created by mac_virtual_panel.sh; uninstall deletes only a directory with this file\n' > "${MARKER}"
+}
+
+# ── env file helpers ──────────────────────────────────────────────────────────
+write_env_if_absent() {
+  ensure_panel_home
   if [ -f "${ENV_FILE}" ]; then
     say "kept existing ${ENV_FILE} (not overwritten; \`env-template\` shows the current template)"
     return 0
@@ -170,8 +183,7 @@ cmd_install() {
   brew_py="${MAC_PANEL_PYTHON:-$(brew --prefix "${PY_FORMULA}")/bin/python3.12}"
   [ -x "${brew_py}" ] || die 3 "no interpreter at ${brew_py} (set MAC_PANEL_PYTHON to a python3.10-3.12)"
 
-  mkdir -p "${PANEL_HOME}"
-  chmod 700 "${PANEL_HOME}" 2>/dev/null || true
+  ensure_panel_home
   if [ ! -x "${VENV}/bin/python" ]; then
     say "== venv: ${VENV}"
     "${brew_py}" -m venv "${VENV}"
@@ -278,6 +290,8 @@ cmd_uninstall() {
   case "${PANEL_HOME}" in
     ""|"/"|"$HOME"|"$HOME/") die 2 "refusing to delete '${PANEL_HOME}'" ;;
   esac
+  [ -d "${PANEL_HOME}" ] || die 2 "${PANEL_HOME} does not exist; nothing to remove"
+  [ -f "${MARKER}" ] || die 2 "refusing to delete ${PANEL_HOME}: it has no .zoe-virtual-panel-marker, so this script did not create it"
   rm -rf "${PANEL_HOME}"
   say "removed ${PANEL_HOME}. (Homebrew portaudio/${PY_FORMULA} left in place; hey_zoe.onnx, if you copied one, is at ${HERE}/hey_zoe.onnx.)"
 }

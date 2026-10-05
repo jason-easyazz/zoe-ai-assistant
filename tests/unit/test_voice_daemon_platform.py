@@ -303,9 +303,11 @@ def test_pi_barge_episode_still_uses_the_pactl_sink_input_ducker(pi):
 
 def test_access_headers_only_when_both_halves_are_set(clean_env):
     clean_env.setenv("DEVICE_TOKEN", "tok")
+    clean_env.setenv("ZOE_URL", "https://zoe.example.com")
     clean_env.setenv("CF_ACCESS_CLIENT_ID", "id.access")
     clean_env.setenv("CF_ACCESS_CLIENT_SECRET", "s3cret")
     d = _load_daemon("zoe_voice_daemon_cf_both_under_test")
+    assert d._CF_ACCESS_REFUSED is False
     assert d._headers == {"X-Device-Token": "tok", "Content-Type": "application/json",
                           "CF-Access-Client-Id": "id.access", "CF-Access-Client-Secret": "s3cret"}
 
@@ -314,6 +316,7 @@ def test_access_headers_only_when_both_halves_are_set(clean_env):
 def test_a_lone_access_half_is_ignored_and_logged(clean_env, caplog, env):
     caplog.set_level(logging.WARNING)
     clean_env.setenv("DEVICE_TOKEN", "tok")
+    clean_env.setenv("ZOE_URL", "https://zoe.example.com")
     for k, v in env.items():
         clean_env.setenv(k, v)
     d = _load_daemon("zoe_voice_daemon_cf_half_under_test")
@@ -505,3 +508,107 @@ def test_decide_log_format_is_what_the_lab_summary_parses(mac_duck, caplog):
     _drive(d, ep, [0.99] * 16)
     s = lab.summarise([r.getMessage() for r in caplog.records])
     assert s["decisions"] == 1 and s["detected"] == 1 and s["outcomes"]["commit"]["n"] == 1
+
+
+# ── review fixes: the Access secret only goes to a public https host ─────────
+
+_PUBLIC = ["https://zoe.the411.life", "https://zoe.example.com:8443/x", "https://8.8.8.8",
+           "https://[2606:4700::1111]"]
+_PRIVATE = ["http://zoe.the411.life", "https://zoe.local", "https://192.168.1.218", "https://10.0.0.5",
+            "https://172.16.3.4", "https://127.0.0.1", "https://localhost", "https://[::1]",
+            "https://169.254.1.1", "https://zoe", "https://nas.lan", "https://x.internal",
+            "http://192.168.1.218", "ftp://zoe.example.com", "zoe.example.com", ""]
+
+
+@pytest.mark.parametrize("url", _PUBLIC)
+def test_access_secret_may_go_to_a_public_https_host(pi, url):
+    assert pi._zoe_url_may_carry_access_secret(url) is True
+
+
+@pytest.mark.parametrize("url", _PRIVATE)
+def test_access_secret_never_goes_to_lan_loopback_or_plain_http(pi, url):
+    assert pi._zoe_url_may_carry_access_secret(url) is False
+
+
+@pytest.mark.parametrize("url", _PUBLIC + _PRIVATE)
+def test_preflight_applies_the_same_rule_as_the_daemon(pi, url):
+    spec = importlib.util.spec_from_file_location("pre_parity", _REPO / "scripts/setup/mac_panel/preflight.py")
+    pre = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pre)
+    assert pre.url_may_carry_access_secret(url) == pi._zoe_url_may_carry_access_secret(url)
+
+
+@pytest.mark.parametrize("url", ["http://192.168.1.218", "https://zoe.local"])
+def test_lan_zoe_url_with_the_secret_sends_no_headers_logs_and_refuses_to_start(clean_env, caplog, url):
+    caplog.set_level(logging.ERROR)
+    clean_env.setenv("DEVICE_TOKEN", "tok")
+    clean_env.setenv("ZOE_URL", url)
+    clean_env.setenv("CF_ACCESS_CLIENT_ID", "id.access")
+    clean_env.setenv("CF_ACCESS_CLIENT_SECRET", "s3cret")
+    d = _load_daemon("zoe_voice_daemon_cf_lan_under_test")
+    assert set(d._headers) == {"X-Device-Token", "Content-Type"} and d._CF_ACCESS_REFUSED is True
+    assert any("not a public https URL" in r.getMessage() for r in caplog.records)
+    assert "s3cret" not in caplog.text
+    started = []
+    d._start_health_server = lambda: started.append(1)
+    with pytest.raises(SystemExit) as exc:
+        d.main()
+    assert exc.value.code == 1 and started == []  # refused before anything started
+
+
+def test_pi_without_the_secret_starts_as_before(pi):
+    assert pi._CF_ACCESS_REFUSED is False  # ZOE_URL's Pi default (https://zoe.local) is irrelevant with no secret
+
+
+# ── review fixes: POST /activate on the Mac ──────────────────────────────────
+
+@pytest.mark.parametrize("host,origin,want", [
+    ("127.0.0.1:7777", None, True),                                   # curl / shell
+    ("localhost:7777", "https://zoe.the411.life", True),             # the touch page, configured origin
+    ("[::1]:7777", "https://zoe.the411.life", True),
+    ("127.0.0.1:7777", "https://evil.example", False),               # hostile page, no-cors POST
+    ("127.0.0.1:7777", "null", False),                                # sandboxed iframe / file://
+    ("127.0.0.1:7777", "http://zoe.the411.life", False),             # wrong scheme
+    ("evil.example:7777", None, False),                               # DNS rebinding: its own Host
+    ("evil.example", "https://zoe.the411.life", False),
+    ("127.0.0.1.evil.example:7777", None, False),
+    (None, None, False),
+])
+def test_mac_activate_needs_a_loopback_host_and_the_zoe_origin(mac, monkeypatch, host, origin, want):
+    monkeypatch.setattr(mac, "ZOE_URL", "https://zoe.the411.life")
+    assert mac._activate_request_allowed(host, origin) is want
+
+
+@pytest.mark.parametrize("host,origin", [("evil.example", "https://evil.example"), (None, "null"), ("x", None)])
+def test_pi_activate_is_unchecked_exactly_as_before(pi, host, origin):
+    assert pi._activate_request_allowed(host, origin) is True
+
+
+def _post_activate(d, headers):
+    import http.client
+    import socketserver
+    srv = socketserver.TCPServer(("127.0.0.1", 0), d._HealthHandler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        d._orb_activate_event.clear()
+        conn = http.client.HTTPConnection("127.0.0.1", srv.server_address[1], timeout=5)
+        conn.request("POST", "/activate", headers=headers)
+        resp = conn.getresponse()
+        resp.read()
+        return resp.status, d._orb_activate_event.is_set()
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_activate_over_real_http_mac_blocks_a_hostile_page(mac, monkeypatch):
+    monkeypatch.setattr(mac, "ZOE_URL", "https://zoe.the411.life")
+    assert _post_activate(mac, {"Origin": "https://evil.example"}) == (403, False)
+    assert _post_activate(mac, {"Origin": "https://zoe.the411.life"}) == (200, True)
+    assert _post_activate(mac, {}) == (200, True)  # no Origin: not a browser cross-origin POST
+
+
+def test_activate_over_real_http_on_the_pi_accepts_any_origin_as_before(pi):
+    """Control: the identical hostile request on the Pi backend is accepted."""
+    assert pi.PANEL_PLATFORM == "pi"
+    assert _post_activate(pi, {"Origin": "https://evil.example"}) == (200, True)

@@ -26,13 +26,34 @@ import wave
 # ── pure logic ────────────────────────────────────────────────────────────────
 
 
+def url_may_carry_access_secret(url: str) -> bool:
+    """Mirror of zoe_voice_daemon._zoe_url_may_carry_access_secret (a parity test pins
+    them together): https and a public host, never a LAN/loopback/.local address."""
+    import ipaddress
+    from urllib.parse import urlsplit
+    try:
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower().rstrip(".")
+    except ValueError:
+        return False
+    if parts.scheme != "https" or not host:
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return "." in host and not host.endswith((".local", ".localhost", ".lan", ".internal", ".home.arpa"))
+    return not (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_unspecified
+                or ip.is_multicast or ip.is_reserved)
+
+
 def build_headers(env) -> dict:
     """The request headers the daemon builds: device token, plus the Cloudflare Access
-    service-token pair when BOTH halves are set (mirrors zoe_voice_daemon._headers)."""
+    service-token pair when BOTH halves are set AND ZOE_URL may carry it (mirrors
+    zoe_voice_daemon._headers)."""
     headers = {"X-Device-Token": env.get("DEVICE_TOKEN", ""), "Content-Type": "application/json"}
     cid = (env.get("CF_ACCESS_CLIENT_ID") or "").strip()
     secret = (env.get("CF_ACCESS_CLIENT_SECRET") or "").strip()
-    if cid and secret:
+    if cid and secret and url_may_carry_access_secret(env.get("ZOE_URL", "")):
         headers["CF-Access-Client-Id"] = cid
         headers["CF-Access-Client-Secret"] = secret
     return headers
@@ -108,6 +129,10 @@ def probe_server(env, post, *, text: str = "Virtual panel check.") -> tuple:
         return False, "ZOE_URL is not set to an http(s) URL", None
     if not env.get("DEVICE_TOKEN"):
         return False, "DEVICE_TOKEN is empty (provision mac-dev first; see docs/knowledge/mac-virtual-panel.md)", None
+    if ((env.get("CF_ACCESS_CLIENT_ID") or "").strip() and (env.get("CF_ACCESS_CLIENT_SECRET") or "").strip()
+            and not url_may_carry_access_secret(base)):
+        return False, ("CF_ACCESS_CLIENT_ID/SECRET are set but ZOE_URL is not a public https URL: the daemon "
+                       "refuses to send the Access secret there (it would reach a LAN host, in the clear for http)"), None
     headers = build_headers(env)
     verify = (env.get("VERIFY_SSL", "true").lower() not in ("false", "0", "no"))
     try:

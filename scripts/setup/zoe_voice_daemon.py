@@ -510,9 +510,44 @@ _headers = {"X-Device-Token": DEVICE_TOKEN, "Content-Type": "application/json"}
 # dict above is untouched. Both halves or neither - a lone half is logged and ignored.
 CF_ACCESS_CLIENT_ID = os.environ.get("CF_ACCESS_CLIENT_ID", "").strip()
 CF_ACCESS_CLIENT_SECRET = os.environ.get("CF_ACCESS_CLIENT_SECRET", "").strip()
+
+
+def _zoe_url_may_carry_access_secret(url: str) -> bool:
+    """True only for an https URL whose host is a public name or address.
+
+    The Access secret is a bearer credential for the tunnel. Copying the Pi's LAN
+    ZOE_URL (http://192.168.x.x, https://zoe.local) into the env that holds it would
+    send the secret to a LAN host - in the clear for http - so anything private,
+    loopback, link-local, ``.local``/``.lan``/``.internal`` or a bare single-label
+    name is refused. (A public name that resolves privately via split DNS cannot be
+    seen from here.)"""
+    import ipaddress
+    from urllib.parse import urlsplit
+    try:
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower().rstrip(".")
+    except ValueError:
+        return False
+    if parts.scheme != "https" or not host:
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return "." in host and not host.endswith((".local", ".localhost", ".lan", ".internal", ".home.arpa"))
+    return not (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_unspecified
+                or ip.is_multicast or ip.is_reserved)
+
+
+_CF_ACCESS_REFUSED = False
 if CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET:
-    _headers["CF-Access-Client-Id"] = CF_ACCESS_CLIENT_ID
-    _headers["CF-Access-Client-Secret"] = CF_ACCESS_CLIENT_SECRET
+    if _zoe_url_may_carry_access_secret(ZOE_URL):
+        _headers["CF-Access-Client-Id"] = CF_ACCESS_CLIENT_ID
+        _headers["CF-Access-Client-Secret"] = CF_ACCESS_CLIENT_SECRET
+    else:
+        _CF_ACCESS_REFUSED = True
+        log.error("CF_ACCESS_CLIENT_ID/SECRET are set but ZOE_URL=%s is not a public https URL; "
+                  "the Access secret would be sent to a LAN host (in the clear for http). "
+                  "No Access headers are attached and main() will refuse to start.", ZOE_URL)
 elif CF_ACCESS_CLIENT_ID or CF_ACCESS_CLIENT_SECRET:
     log.warning("CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET must both be set; "
                 "sending no Cloudflare Access headers")
@@ -3337,6 +3372,34 @@ _daemon_started_at = time.time()
 _orb_activate_event = threading.Event()
 
 
+def _activate_request_allowed(host_header: "str | None", origin_header: "str | None") -> bool:
+    """May this request start a recording via POST /activate?
+
+    Pi: always (byte-identical to before; the panel's LAN is trusted). Mac: the
+    daemon listens on loopback, but ANY web page can POST there (the touch page does
+    exactly that, mode:no-cors), and a rebinding page can reach it under its own
+    name. So require a loopback Host, and, when the browser sent an Origin, the
+    configured ZOE_URL origin. No Origin (curl, the shell) is allowed: a page cannot
+    omit it on a cross-origin POST."""
+    if PANEL_PLATFORM != "mac":
+        return True
+    from urllib.parse import urlsplit
+    host = (host_header or "").strip().lower()
+    if host.startswith("["):
+        hostname = host[1:].split("]")[0]
+    elif host.count(":") == 1:
+        hostname = host.split(":")[0]
+    else:
+        hostname = host
+    if hostname not in ("127.0.0.1", "localhost", "::1"):
+        return False
+    if origin_header is None:
+        return True
+    want = urlsplit(ZOE_URL)
+    got = urlsplit(origin_header.strip())
+    return bool(want.scheme and want.netloc and (got.scheme, got.netloc.lower()) == (want.scheme, want.netloc.lower()))
+
+
 class _HealthHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
@@ -3361,6 +3424,11 @@ class _HealthHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         """Handle orb-tap activation from the touch UI (POST /activate)."""
         if self.path == "/activate":
+            if not _activate_request_allowed(self.headers.get("Host"), self.headers.get("Origin")):
+                self.send_response(403)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             _orb_activate_event.set()
             body = json.dumps({"ok": True, "triggered": "wake"}).encode()
             self.send_response(200)
@@ -3392,6 +3460,9 @@ def _start_health_server():
 def main():
     global _INPUT_DEVICE_INDEX, _last_wake_at
 
+    if _CF_ACCESS_REFUSED:
+        log.error("Refusing to start: fix ZOE_URL (public https tunnel host) or unset CF_ACCESS_CLIENT_ID/SECRET.")
+        sys.exit(1)
     _start_health_server()
     try:
         from openwakeword.model import Model as OWWModel

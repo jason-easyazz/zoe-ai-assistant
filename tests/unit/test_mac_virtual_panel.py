@@ -173,6 +173,45 @@ def test_terminate_stops_at_once_and_breaks_the_pipe():
     assert p2.poll() == -9
 
 
+def test_a_writer_blocked_on_a_full_buffer_is_released_when_the_device_dies():
+    """Review finding: the writer waited on `not aborted` only, so a device that died
+    (returncode set by the player thread, no abort) left it spinning forever and the
+    turn thread hung in _feed_pcm_chunk. It must now see the failure and raise."""
+    class _DyingStream(_Stream):
+        def write(self, data):
+            self.gate.wait(10)
+            raise OSError(-9988, "Stream closed")
+
+    class _DyingPA(_PA):
+        def open(self, **kw):
+            s = _DyingStream(kw)
+            s.gate = self.gate
+            self.streams.append(s)
+            return s
+
+    pa = _DyingPA()
+    pa.gate = threading.Event()
+    be, _ = _backend(pa, log=_Log())
+    p = be.start_pcm_stream(16000, 1, 2)
+    outcome = []
+
+    def writer():
+        try:
+            p.stdin.write(b"\x01\x00" * 150000)  # far beyond the 64 kB buffer: it must block
+            outcome.append("returned")
+        except BrokenPipeError:
+            outcome.append("broken-pipe")
+
+    t = threading.Thread(target=writer, daemon=True)
+    t.start()
+    t.join(0.3)
+    assert t.is_alive()          # genuinely blocked on the full buffer
+    pa.gate.set()                # the device now fails on its first write
+    t.join(3)
+    assert not t.is_alive(), "writer still blocked after the player died"
+    assert outcome == ["broken-pipe"] and p.poll() == 1
+
+
 def test_a_finished_player_keeps_its_exit_code_when_terminated_late():
     be, _ = _backend()
     p = be.start_pcm_stream(16000, 1, 2)
@@ -310,9 +349,14 @@ def test_output_device_resolution():
 
 def test_headers_match_what_the_daemon_builds():
     assert pre.build_headers({"DEVICE_TOKEN": "t"}) == {"X-Device-Token": "t", "Content-Type": "application/json"}
-    both = {"DEVICE_TOKEN": "t", "CF_ACCESS_CLIENT_ID": "i", "CF_ACCESS_CLIENT_SECRET": "s"}
+    both = {"DEVICE_TOKEN": "t", "CF_ACCESS_CLIENT_ID": "i", "CF_ACCESS_CLIENT_SECRET": "s",
+            "ZOE_URL": "https://zoe.example.com"}
     assert pre.build_headers(both) == {"X-Device-Token": "t", "Content-Type": "application/json",
                                        "CF-Access-Client-Id": "i", "CF-Access-Client-Secret": "s"}
+    lan = dict(both, ZOE_URL="http://192.168.1.218")
+    assert set(pre.build_headers(lan)) == {"X-Device-Token", "Content-Type"}  # never to a LAN/plain-http host
+    ok, why, _ = pre.probe_server(lan, lambda *a, **k: pytest.fail("must not send anything"))
+    assert not ok and "not a public https URL" in why
     assert "CF-Access-Client-Id" not in pre.build_headers({"DEVICE_TOKEN": "t", "CF_ACCESS_CLIENT_ID": "i"})
 
 
@@ -349,11 +393,11 @@ def test_probe_server_round_trip_and_never_follows_redirects():
         seen.update(url=url, **kw)
         return _Resp(200, {"Content-Type": "application/json"}, payload={"audio_base64": base64.b64encode(b"RIFFx").decode()})
 
-    env = {"ZOE_URL": "https://zoe.example/", "DEVICE_TOKEN": "t", "CF_ACCESS_CLIENT_ID": "i",
+    env = {"ZOE_URL": "https://zoe.example.com/", "DEVICE_TOKEN": "t", "CF_ACCESS_CLIENT_ID": "i",
            "CF_ACCESS_CLIENT_SECRET": "s", "VERIFY_SSL": "true"}
     ok, why, audio = pre.probe_server(env, post)
     assert ok and audio == b"RIFFx" and "5 bytes" in why
-    assert seen["url"] == "https://zoe.example/api/voice/speak" and seen["allow_redirects"] is False
+    assert seen["url"] == "https://zoe.example.com/api/voice/speak" and seen["allow_redirects"] is False
     assert seen["verify"] is True and seen["headers"]["CF-Access-Client-Id"] == "i"
     env["VERIFY_SSL"] = "false"
     pre.probe_server(env, post)
@@ -361,11 +405,11 @@ def test_probe_server_round_trip_and_never_follows_redirects():
 
 
 def test_probe_server_diagnoses_without_a_traceback():
-    base = {"ZOE_URL": "https://zoe.example", "DEVICE_TOKEN": "t"}
+    base = {"ZOE_URL": "https://zoe.example.com", "DEVICE_TOKEN": "t"}
     ok, why, _ = pre.probe_server(base, lambda *a, **k: _Resp(302, {"Location": "https://t.cloudflareaccess.com/x"}))
     assert not ok and "CF_ACCESS_CLIENT_ID" in why
     ok, why, _ = pre.probe_server(base, lambda *a, **k: (_ for _ in ()).throw(ConnectionError("boom")))
-    assert not ok and "ConnectionError" in why and "zoe.example" in why
+    assert not ok and "ConnectionError" in why and "zoe.example.com" in why
     assert pre.probe_server({"ZOE_URL": "zoe.example", "DEVICE_TOKEN": "t"}, None)[0] is False
     ok, why, _ = pre.probe_server({"ZOE_URL": "https://z"}, None)
     assert not ok and "DEVICE_TOKEN is empty" in why
@@ -508,16 +552,37 @@ def test_macos_only_commands_refuse_on_other_systems(tmp_path):
         assert r.returncode == 2 and "macOS only" in r.stderr, cmd
 
 
-def test_uninstall_needs_yes_and_only_deletes_the_panel_home(tmp_path):
-    (tmp_path / "panel").mkdir()
-    (tmp_path / "panel" / "marker").write_text("x")
+def test_uninstall_needs_yes_and_only_deletes_a_marked_panel_home(tmp_path):
+    assert _sh("env", home=tmp_path).returncode == 0  # creates panel/ with the marker
+    assert (tmp_path / "panel" / ".zoe-virtual-panel-marker").is_file()
     (tmp_path / "keep").write_text("y")
     assert _sh("uninstall", home=tmp_path).returncode == 2
-    assert (tmp_path / "panel" / "marker").exists()
+    assert (tmp_path / "panel" / ".env.voice").exists()
     assert _sh("uninstall", "--yes", home=tmp_path).returncode == 0
     assert not (tmp_path / "panel").exists() and (tmp_path / "keep").exists()
-    refused = _sh("uninstall", "--yes", home=tmp_path, env_extra={"ZOE_MAC_PANEL_HOME": str(tmp_path)})
-    assert refused.returncode == 2 and tmp_path.exists()
+
+
+def test_uninstall_refuses_a_directory_this_script_did_not_create(tmp_path):
+    """Review finding: ZOE_MAC_PANEL_HOME=$HOME/Documents was deletable. Now only a
+    directory carrying the marker is, and install will not adopt a foreign one."""
+    docs = tmp_path / "Documents"
+    docs.mkdir()
+    (docs / "thesis.docx").write_text("precious")
+    env = {"ZOE_MAC_PANEL_HOME": str(docs)}
+    r = _sh("uninstall", "--yes", home=tmp_path, env_extra=env)
+    assert r.returncode == 2 and "marker" in r.stderr and (docs / "thesis.docx").exists()
+    adopt = _sh("env", home=tmp_path, env_extra=env)       # the installer's first write
+    assert adopt.returncode == 5 and "not a virtual-panel directory" in adopt.stderr
+    assert not (docs / ".zoe-virtual-panel-marker").exists() and (docs / "thesis.docx").exists()
+    assert _sh("uninstall", "--yes", home=tmp_path, env_extra={"ZOE_MAC_PANEL_HOME": str(tmp_path)}).returncode == 2
+    assert _sh("uninstall", "--yes", home=tmp_path, env_extra={"ZOE_MAC_PANEL_HOME": str(tmp_path / "nope")}).returncode == 2
+
+
+def test_an_empty_or_marked_directory_is_adoptable_and_reinstall_is_idempotent(tmp_path):
+    (tmp_path / "panel").mkdir()  # empty: fine
+    assert _sh("env", home=tmp_path).returncode == 0
+    assert _sh("env", home=tmp_path).returncode == 0  # marked: fine again
+    assert _sh("configure", home=tmp_path, stdin="a\n\n\n").returncode == 0
 
 
 def test_script_has_no_pi_paths_and_the_deploy_ship_set_is_unchanged():

@@ -26,8 +26,8 @@ proven only against fakes (§9).
 | the reply stream, sentence-gapless TTS playback, follow-up listening, conversation mode | AirPlay-2 "Zoe Panel" output (shairport-sync + nqptp are Pi services) |
 | the announce poller (`/api/voice/announcements`, played-ACK) | the Jabra/PanaCast USB-power trap (a Mac has none of that topology) |
 | the barge-in **decide** logic: detector, grace, `_BargeDecider`, ledger, seed capture (§7) | Pi thermals, Pi CPU/RAM contention, ALSA/Pulse latency (aplay adds ~70-90 ms before first sound [src: `zoe_voice_daemon.py` barge comment]) |
-| the kiosk **UI** in a browser tab through the tunnel (`/touch/home.html?panel_id=mac-dev&kiosk=1`) | the orb-tap-to-daemon path: the Pi's on-box agent POSTs `127.0.0.1:7777/activate`; a browser tab cannot, so on the Mac use the wake word |
-| the Access + device-token plumbing a remote panel needs | the screen-wake agent (`127.0.0.1:8765`, skipped on the Mac) |
+| the kiosk **UI** in a browser tab through the tunnel (`/touch/home.html?panel_id=mac-dev&kiosk=1`), including orb-tap: the touch page itself `fetch`es `POST http://localhost:7777/activate` with `mode:'no-cors'` [src: `touch/home.html`, `touch/js/touch-menu.js`], which on a Mac reaches the local daemon (guarded, §2; [unverified] end to end) | the Pi's on-box screen-wake agent: it listens on `127.0.0.1:8765` and only wakes the screen (`/wake`); it never starts a recording, and the Mac has none |
+| the Access + device-token plumbing a remote panel needs | the Pi's `/wake` call to that agent (skipped on the Mac) |
 
 ## 2. How the code is arranged
 
@@ -41,7 +41,7 @@ value is logged and means pi). The daemon routes every OS-level thing through on
 | the duck (phase 1) | `_SinkInputDucker`: `pactl` on the player's sink-input, found by pid | `GainDucker`: a gain on the player's own stream (`BARGE_DUCK_DB`, optional ramp) |
 | local TTS fallback | `espeak-ng` | `say` |
 | screen-wake agent | POST `127.0.0.1:8765/wake` | none |
-| `/health` + `/activate` bind | every interface | `127.0.0.1` (`HEALTH_BIND` overrides) - `/activate` is unauthenticated and starts a recording, fine on a home LAN, not on a laptop at a cafe |
+| `/health` + `/activate` | every interface, no checks (as always) | bound to `127.0.0.1` (`HEALTH_BIND` overrides) **and** `POST /activate` answers 403 unless the `Host` is `127.0.0.1`/`localhost` and any `Origin` is the `ZOE_URL` origin. Loopback alone is not enough: any web page can POST to it (the touch page does, no-cors), and a DNS-rebinding page arrives under its own host name. A page cannot omit `Origin` on a cross-origin POST, so curl/shell calls (no `Origin`) still work |
 | face ID, `vcgencmd`, `/proc`/`/sys` probes | not in the daemon at all [src: grep] | not applicable |
 
 **Why a gain and not `osascript` or `afplay -v`** (the two obvious macOS options):
@@ -84,7 +84,7 @@ operator (§5): the `DEVICE_TOKEN` for `mac-dev` and the Cloudflare Access servi
    `HEY_ZOE_ONNX=/path/hey_zoe.onnx bash scripts/setup/mac_virtual_panel.sh install` - the daemon loads
    `scripts/setup/hey_zoe.onnx` if present; the file is untracked).
 8. Rollback: `bash scripts/setup/mac_virtual_panel.sh uninstall --yes` deletes `~/.zoe-virtual-panel/` (venv, Silero
-   cache via `TORCH_HOME`, `.env.voice`, log). Homebrew packages stay (`brew uninstall portaudio` if you want).
+   cache via `TORCH_HOME`, `.env.voice`, log) - and only a directory carrying the `.zoe-virtual-panel-marker` file that `install`/`env` write; it refuses any other directory, and `install` refuses to adopt a non-empty directory without the marker, so a mis-set `ZOE_MAC_PANEL_HOME` can never become a delete target. Homebrew packages stay (`brew uninstall portaudio` if you want).
 
 Commands: `install | configure | devices | preflight | run [--skip-preflight] | ui | lab-summary | uninstall --yes | env-template`.
 
@@ -128,8 +128,7 @@ reachable-or-not by tunnel: the HA bridge (`HA_BRIDGE_URL`, unused here) and the
 Env keys (daemon): `ZOE_URL=https://zoe.the411.life`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` (both or neither - a lone half
 is ignored with a WARNING; unset, the Pi's headers are untouched), `DEVICE_TOKEN`, `PANEL_ID=mac-dev`, `VERIFY_SSL=true`.
 **VERIFY_SSL:** the Pi sets it false for the Jetson's self-signed LAN cert; the tunnel host serves a public-CA certificate through
-Cloudflare, so keep `true` here. **Do not** put the Access pair in an `.env.voice` whose `ZOE_URL` is a LAN address - the headers would be
-sent to that host.
+Cloudflare, so keep `true` here. The daemon attaches the Access pair **only when `ZOE_URL` is https with a public host** (not RFC1918/loopback/link-local, not `.local`/`.lan`/`.internal`, not a bare name). If the pair is set and `ZOE_URL` fails that test (e.g. the Pi's LAN URL pasted in) it attaches nothing, logs an ERROR and `main()` exits 1 - the secret never goes to a LAN host or over plain http. `preflight` applies the same rule.
 
 **Announce poller.** Unchanged code; it polls `GET /api/voice/announcements` with the same headers. The template sets
 `ZOE_ANNOUNCE_POLL_S=15` (the Pi uses 5 s on the LAN). Announcements are claimed per panel id, so `mac-dev` only receives ones

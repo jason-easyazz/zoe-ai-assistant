@@ -175,7 +175,8 @@ class MacPlayer:
         pos = 0
         while pos < len(view):
             with self._cond:
-                while not self._aborted and len(self._buf) >= self._max:
+                while (self.returncode is None and not self._aborted
+                       and len(self._buf) >= self._max):
                     self._cond.wait(0.05)
                 if self._aborted or self.returncode is not None:
                     raise BrokenPipeError("player stopped")
