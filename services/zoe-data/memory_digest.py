@@ -21,6 +21,7 @@ import uuid
 
 import httpx
 import memory_authority
+from memory_overlap import dedup_verdict, richness
 from routers.journal import CREATED_AT_VALID_TIMESTAMP_SQL
 from user_filters import GUEST_USERS, drop_synthetic_users, message_owner_expr
 
@@ -183,6 +184,15 @@ async def _resolve_pending_person_links(user_id: str, db=None) -> dict:
             except Exception:
                 pass
     return result
+
+
+def _count_drop(source: str, guard: str, *, gate: bool = True) -> None:
+    """Put one guard / dedup drop in the reject ledger (reason ``guard_<guard>``). Never raises."""
+    try:
+        from memory_reject_ledger import record_guard_drop
+        record_guard_drop(source, guard, gate=gate)
+    except Exception:  # noqa: BLE001 - bookkeeping must never block a write path
+        pass
 
 
 def _passes_quality_gate(text: str) -> bool:
@@ -611,9 +621,8 @@ async def run_turn_digest(
         try:
             from zoe_agent import _mempalace_load_user_facts  # type: ignore[import]
             existing_text = await _mempalace_load_user_facts(user_id, limit=50)
-            existing_lower = existing_text.lower()
         except Exception:
-            existing_lower = ""
+            existing_text = ""
 
         import hashlib as _hashlib
         base_turn_id = _hashlib.sha1(user_message.encode("utf-8", "ignore")).hexdigest()[:16]
@@ -666,10 +675,12 @@ async def run_turn_digest(
             # words are the OLD fact's plus "no longer", so it always "overlaps"
             # ("User no longer lives in Dunedin." scores 0.83 against "User lives in
             # Dunedin." and was dropped as a duplicate of the fact it retires).
-            fact_words = set(fact.lower().split())
-            overlap = sum(1 for w in fact_words if w in existing_lower) / max(len(fact_words), 1)
-            if overlap > 0.7 and not fact_changes:
+            # Token-level, per stored fact (memory_overlap): a fact holding a NEW name / number /
+            # date is never a duplicate, and one that extends a stored fact supersedes it below.
+            verdict, _stored = dedup_verdict(fact, existing_text)
+            if verdict == "duplicate" and not fact_changes:
                 result["skipped_duplicates"] += 1
+                _count_drop("turn_digest", "dedup_overlap", gate=False)
                 continue
             if not _passes_quality_gate(fact):
                 result["skipped_low_quality"] += 1
@@ -683,6 +694,7 @@ async def run_turn_digest(
                 from memory_quality import user_relationship_claim_unsupported
                 if user_relationship_claim_unsupported(fact, user_message):
                     result["skipped_low_quality"] += 1
+                    _count_drop("turn_digest", "user_anchor_unsupported")
                     logger.info("run_turn_digest: dropped unsupported user-anchored relationship: %r", fact[:70])
                     continue
             except Exception:
@@ -693,6 +705,7 @@ async def run_turn_digest(
                 from people_roles import named_role_claim_unsupported
                 if named_role_claim_unsupported(fact, user_message):
                     result["skipped_low_quality"] += 1
+                    _count_drop("turn_digest", "role_claim_unsupported")
                     logger.info("run_turn_digest: dropped unstated role claim: %r", fact[:70])
                     continue
             except Exception:
@@ -703,11 +716,13 @@ async def run_turn_digest(
             # decision (entity-guarded); never raises — errors → ADD.
             try:
                 from memory_quality import reconcile_for_ingest
-                op, target_id = await reconcile_for_ingest(svc, fact, user_id)
+                op, target_id = await reconcile_for_ingest(
+                    svc, fact, user_id, extend_supersedes=True)
             except Exception:
                 op, target_id = "add", None
             if op == "skip":
                 result["skipped_duplicates"] += 1
+                _count_drop("turn_digest", "dedup_reconcile", gate=False)
                 logger.info("turn_digest: dedup-skip kept=%s cand=%r", target_id, fact[:60])
                 continue
             if op == "update" and target_id:
@@ -848,17 +863,20 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
 
         if facts:
             existing_text = await _mempalace_load_user_facts(user_id, limit=100)
-            existing_lower = existing_text.lower()
+        else:
+            existing_text = ""
 
         for item in facts:
             fact = (item.get("fact") or "").strip()
             if not fact or len(fact) < 10:
                 continue
-            fact_words = set(fact.lower().split())
-            overlap_score = sum(1 for w in fact_words if w in existing_lower) / max(len(fact_words), 1)
-            if overlap_score > 0.7:
-                logger.debug("memory_digest: dedup skip (%.0f%% overlap): %s", overlap_score * 100, fact[:60])
+            # Token-level, per stored fact (memory_overlap): never skips a fact that holds a new
+            # name / number / date; one that extends a stored fact supersedes it at reconcile below.
+            verdict, _stored = dedup_verdict(fact, existing_text)
+            if verdict == "duplicate":
+                logger.debug("memory_digest: dedup skip (duplicate of a stored fact): %s", fact[:60])
                 result["skipped_duplicates"] += 1
+                _count_drop("digest", "dedup_overlap", gate=False)
                 continue
 
             # Anchor validation BEFORE the contradiction check: that branch can
@@ -869,6 +887,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
             try:
                 from memory_quality import user_relationship_claim_unsupported
                 if user_relationship_claim_unsupported(fact, ""):
+                    _count_drop("digest", "user_anchor_no_provenance")
                     logger.info("memory_digest: dropped user-anchored relationship (no turn provenance in nightly batch): %r", fact[:70])
                     continue
             except Exception:
@@ -932,10 +951,12 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
             # (entity-guarded); never raises — errors → ADD.
             try:
                 from memory_quality import reconcile_for_ingest
-                op, target_id = await reconcile_for_ingest(svc, fact, user_id)
+                op, target_id = await reconcile_for_ingest(
+                    svc, fact, user_id, extend_supersedes=True)
             except Exception:
                 op, target_id = "add", None
             if op == "skip":
+                _count_drop("digest", "dedup_reconcile", gate=False)
                 logger.info("memory_digest: dedup-skip kept=%s cand=%r", target_id, fact[:60])
                 continue
             if op == "update" and target_id:
@@ -1226,10 +1247,11 @@ async def _is_contradiction(new_fact: str, existing_fact: str) -> bool:
 #
 # Runs once per week (default: Sunday 04:00). Goals:
 #   1. **Merge near-duplicates**: memories whose text overlap ≥ 0.85
-#      collapse into one — keep the highest-confidence row, mark the rest
-#      as `superseded_by_id=keeper`. No LLM call needed for this step;
-#      pure word-overlap is cheap and safe because anything this close
-#      already lost information at capture time.
+#      are clustered; the survivor is the RICHEST row (most distinct
+#      entity / number / date tokens), then the higher authority class,
+#      then the newest. Only an IDENTICAL duplicate is archived
+#      (`archive_duplicate`); a near-duplicate with different text is left
+#      alone. No LLM call needed for this step.
 #   2. **Resolve contradictions**: for each pair in the top-K most similar
 #      approved rows, ask the LLM if they contradict; if yes, keep the
 #      newest and supersede the other.
@@ -1239,6 +1261,9 @@ async def _is_contradiction(new_fact: str, existing_fact: str) -> bool:
 # The pass is idempotent: running it twice in a row is a no-op because
 # merged / superseded rows already have ``status != 'approved'`` and are
 # excluded from subsequent scans.
+
+
+from memory_overlap import tokens as _overlap_tokens  # noqa: E402
 
 
 def _text_overlap(a: str, b: str) -> float:
@@ -1251,8 +1276,9 @@ def _text_overlap(a: str, b: str) -> float:
     other" signal, so we divide by min(|A|,|B|). Filler words (len ≤ 2)
     are ignored to keep stopwords from inflating similarity.
     """
-    wa = {w for w in a.lower().split() if len(w) > 2}
-    wb = {w for w in b.lower().split() if len(w) > 2}
+    # word-boundary tokens: "kids." and "kids" are the same word (punctuation used to split them)
+    wa = {w for w in _overlap_tokens(a) if len(w) > 2}
+    wb = {w for w in _overlap_tokens(b) if len(w) > 2}
     if not wa or not wb:
         return 0.0
     inter = wa & wb
@@ -1266,16 +1292,13 @@ async def _merge_near_duplicates(svc, user_id: str) -> int:
     )
     if len(approved) < 2:
         return 0
-    # Pin the strongest row of each cluster as the keeper: authority class first (a row the
-    # user said outranks a model's), then confidence, then age.
-    approved.sort(
-        key=lambda r: (
-            -memory_authority.row_rank(r.metadata, r.text),
-            -float(r.metadata.get("confidence", 0.7) or 0.7),
-            r.metadata.get("added_at", ""),
-        ),
-        reverse=False,
-    )
+    # Pin the survivor of each cluster as the keeper. RICHNESS first: the row with more distinct
+    # entity / number / date tokens ("... two kids Mika and Biscuit" beats "... two kids") must
+    # never be the one retired in favour of a sparser echo. Ties: the row with the higher authority
+    # class (a row the user said outranks a model's), then the newest.
+    approved.sort(key=lambda r: str(r.metadata.get("added_at", "") or ""), reverse=True)  # newest first
+    approved.sort(  # stable: keeps the newest-first order inside equal (richness, rank)
+        key=lambda r: (-richness(r.text or ""), -memory_authority.row_rank(r.metadata, r.text)))
     keepers: list = []
     merged = 0
     for ref in approved:

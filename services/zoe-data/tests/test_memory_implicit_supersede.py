@@ -86,7 +86,7 @@ def _svc(monkeypatch) -> tuple[MemoryService, _Col]:
         return False
 
     async def consenting(_uid, *_a, **_k):
-        # the affect gate defaults to opt-in: the seeded member has consented (a stored mode)
+        # pinned to the explicit `optin` mode below: the seeded member has consented (a stored mode)
         import persona_layer
 
         return persona_layer.MemberMode(mode="companion", minor=False)
@@ -94,6 +94,7 @@ def _svc(monkeypatch) -> tuple[MemoryService, _Col]:
     import persona_layer
 
     monkeypatch.setattr(persona_layer, "load_member_mode", consenting)
+    monkeypatch.setenv("ZOE_AFFECT_CONSENT_GATE", "optin")  # explicit mode, not the (household) default
     svc._append_audit = no_audit
     svc.search = no_hits  # reconcile_for_ingest → ADD, exactly as measured live
     monkeypatch.setattr(memory_service, "_user_opted_out", opted_in)
@@ -388,14 +389,18 @@ def test_dropped_my_keys_supersedes_nothing(monkeypatch):
 
 
 def test_change_fact_skips_the_word_overlap_dedup_only_under_flag(monkeypatch):
-    """"User no longer lives in Dunedin." scores 0.83 on the legacy word-overlap dedup
-    against the fact it retires, so it was dropped as a duplicate (control: flag off)."""
+    """"User no longer lives in Dunedin." scored 0.83 on the legacy SUBSTRING word-overlap dedup
+    against the fact it retires, so it was dropped as a duplicate. The dedup is now token-level
+    (memory_overlap): the change fact is no longer lost with the flag off either - it is stored
+    beside the old row - and only the flag retires the old row."""
     blob = "## What I know about you:\n- User lives in Dunedin.\n- User plays the cello."
     say = "I no longer live in Dunedin."
     facts = [{"type": "profile", "fact": "User no longer lives in Dunedin."}]
     col, (home,), res = _turn(monkeypatch, say, facts, [("User lives in Dunedin.", "profile")],
                               on=False, blob=blob.lower())
-    assert res["skipped_duplicates"] == 1 and col.rows[home][1]["status"] == "approved"
+    assert res["skipped_duplicates"] == 0 and res["new"] == 1       # kept, not dropped as a duplicate
+    assert col.rows[home][1]["status"] == "approved"                # ... but flag off retires nothing
+    assert _by_text(col, "User no longer lives in Dunedin.")[1]["status"] == "approved"
     col, (home,), res = _turn(monkeypatch, say, facts, [("User lives in Dunedin.", "profile")],
                               on=True, blob=blob.lower())
     assert res["superseded"] == 1 and col.rows[home][1]["status"] == "superseded"
@@ -607,13 +612,16 @@ def test_changes_existing_matches_the_home_slot_and_same_topic_only():
 
 def test_correction_retires_the_old_home_row_only_under_flag(monkeypatch):
     """Measured 2026-10-04 (day-sim ask 3, both runs): the corrected fact scores 0.83
-    on the word-overlap dedup against the row it replaces and was dropped — the
-    reply then asserted Ballarat. Control: flag off keeps the measured failure."""
+    on the (substring) word-overlap dedup against the row it replaces and was dropped — the
+    reply then asserted Ballarat. The dedup is now token-level: the corrected fact is kept even
+    with the flag off (beside the old row); only the flag retires the old row."""
     blob = f"## What I know about you:\n- {MUM_OLD}\n- User plays the cello."
     facts = [{"type": "relationship", "fact": MUM_NEW}]
     seeds = [(MUM_OLD, "relationship"), ("User plays the cello.", "habit")]
     col, (old, cello), res = _turn(monkeypatch, MUM_FIX, facts, seeds, on=False, blob=blob.lower())
-    assert res["skipped_duplicates"] == 1 and col.rows[old][1]["status"] == "approved"
+    assert res["skipped_duplicates"] == 0 and res["new"] == 1       # kept, not dropped as a duplicate
+    assert col.rows[old][1]["status"] == "approved"                 # ... but flag off retires nothing
+    assert _by_text(col, MUM_NEW)[1]["status"] == "approved"
     col, (old, cello), res = _turn(monkeypatch, MUM_FIX, facts, seeds, on=True, blob=blob.lower())
     assert res["superseded"] == 1
     assert col.rows[old][1]["status"] == "superseded"

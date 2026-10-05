@@ -553,6 +553,16 @@ def _merge_decision(
     """
     if _information(candidate) > _information(existing_text) + _RICHNESS_MARGIN:
         return "update", existing_id
+    # A candidate that names something the stored row does not (a new name, number or date) is NEVER a
+    # restatement, however few characters it adds ("... kids" -> "... kids Mika"): skipping it
+    # dropped exactly the new names (brain-extraction research L3). When it also holds every word of
+    # the stored row it strictly extends it -> supersede (history kept); otherwise it is a different
+    # statement -> keep both.
+    from memory_overlap import novel_markers, strictly_extends
+    if novel_markers(candidate, existing_text):
+        if strictly_extends(candidate, existing_text):
+            return "update", existing_id
+        return "add", None
     return "skip", existing_id
 
 
@@ -780,8 +790,13 @@ async def reconcile_for_ingest(
     *,
     title: Optional[str] = None,
     limit: int = 3,
+    extend_supersedes: bool = False,
 ) -> tuple[str, Optional[str]]:
     """Shared ADD/UPDATE/SKIP decision for ALL conversational memory writers.
+
+    ``extend_supersedes`` (the digests pass True): a candidate that STRICTLY EXTENDS a stored row
+    (holds every word of it plus a new name / number / date) is an UPDATE of that row (review(edit),
+    history kept) rather than an ADD that leaves the sparser row beside the richer one.
 
     QA review F9: each writer (memory_extractor, person_extractor,
     memory_digest, expert_dispatch) used to blind-ADD near-duplicate or
@@ -836,7 +851,13 @@ async def reconcile_for_ingest(
             if getattr(h, "text", None)
         ]
         existing = guard_existing_by_entity(text, existing, title)
-        return classify_against_existing(text, existing)
+        decision = classify_against_existing(text, existing)
+        if decision[0] == "add" and extend_supersedes:
+            from memory_overlap import strictly_extends
+            for mem_id, mem_text in existing:
+                if mem_id and strictly_extends(text, mem_text):
+                    return "update", mem_id
+        return decision
     except Exception as exc:
         # Exception type only — backend errors can embed the query (which is
         # the raw candidate memory text) in the exception message.

@@ -39,6 +39,16 @@ _TEMPORAL_TRUTHY = frozenset({"1", "true", "yes", "on"})
 AUTHORITY_BLOCKED = "authority_blocked"
 
 
+def _count_guard_drop(guard: str) -> None:
+    """One extractor guard drop (or authority hold-back) -> the durable reject ledger, reason
+    ``guard_<guard>``; these were INFO / DEBUG log lines only. Never raises."""
+    try:
+        from memory_reject_ledger import record_guard_drop
+        record_guard_drop("person_extractor", guard)
+    except Exception:  # noqa: BLE001 - bookkeeping must never block extraction
+        pass
+
+
 def temporal_relationships_enabled() -> bool:
     """Cheap per-call read of the temporal-relationships flag (default OFF)."""
     return (
@@ -477,6 +487,7 @@ async def _reconcile_same_kind_entity_row(
         # anyway (Codex P1 on #1868). A plain failure still falls through.
         if await _authority_refused_edit(svc, target.id, text, source, source_excerpt, origin):
             logger.info("person_extractor: entity supersede of %s refused by authority", target.id)
+            _count_guard_drop("authority_held")
             return AUTHORITY_BLOCKED
         return None  # supersede failed — fall through to the normal path
     logger.info(
@@ -624,6 +635,7 @@ async def _ingest_to_mempalace(
                     return new_ref.id
                 if await _authority_refused_edit(svc, target_id, text, source, source_excerpt, origin):
                     logger.info("person_extractor: supersede of %s refused by authority", target_id)
+                    _count_guard_drop("authority_held")
                     return AUTHORITY_BLOCKED
             except Exception as exc:
                 logger.warning("person_extractor: supersede failed (%s) — plain ingest", exc)
@@ -1421,6 +1433,13 @@ async def process_text(
                     "person_extractor: skipped non-name relationship %r/%r", name_a, name_b
                 )
 
+        # Names listed after a relationship noun ("has two kids, Mika and Biscuit"): kept as
+        # people rows linked to the owner + a fact that carries the names (named_relations.py).
+        from named_relations import apply_named_relations
+
+        written += await apply_named_relations(
+            text, user_id=user_id, source=source, session_id=session_id, db=_db)
+
         if not tasks:
             return written
 
@@ -1440,6 +1459,7 @@ async def process_text(
             # shapes are handled by memory_extractor's coreference path instead.
             if not _looks_like_person_name(name):
                 logger.debug("person_extractor: skipping non-name %r (%s)", name, pattern_type)
+                _count_guard_drop("non_name")
                 continue
             person_uuid = uuid_cache.get(name)
 

@@ -899,8 +899,9 @@ class _ScriptedLive(sb.Live):
     the scenario wants, so the ONLY way a scenario errors is a setup problem."""
 
     def __init__(self, seed_errors=(), unlanded=(), filler_errors=0, capture_stalls=False,
-                 backdate_incomplete=False, selector_hook=None):
+                 backdate_incomplete=False, selector_hook=None, store=None):
         super().__init__("tok", "", "postgresql://x", False)
+        self.store = store  # when set, a fact "lands" only if every needle is in this text
         self.selector_hook = selector_hook
         self.seed_errors, self.unlanded = set(seed_errors), set(unlanded)
         self.filler_errors, self.chats = filler_errors, []
@@ -940,6 +941,9 @@ class _ScriptedLive(sb.Live):
         return {"reply": reply, "error": None, "ms": 1, "session": tag}
 
     def wait_landed(self, user, message, needles, timeout_s=90):
+        if self.store is not None:
+            landed = all(n.lower() in self.store.lower() for n in needles)
+            return {"landed": landed, "waited_s": 0}
         landed = not (set(needles) & self.unlanded)
         return {"landed": landed, "waited_s": 0}
 
@@ -1282,5 +1286,20 @@ def test_new_scenarios_run_in_the_harness(monkeypatch):
     assert {"s21-fix", "s21-ask", "s22-ask", "s20-ask"} <= set(live.chats)
     live, res = _drive(monkeypatch, seed_errors=["d1-dob"])
     assert res["S20"]["verdict"] == "ERROR" and "s20-ask" not in live.chats
-    live, res = _drive(monkeypatch, unlanded=["biscuit"])
+    live, res = _drive(monkeypatch, unlanded=["kids"])
+    assert res["S21"]["verdict"] == "ERROR" and "s21-fix" not in live.chats
+
+
+def test_s21_setup_probe_does_not_need_the_store_to_keep_the_kids_names(monkeypatch):
+    """The live store keeps 'Dana Whitfield has two kids' and drops 'Mika and Biscuit'. S21's
+    landing probe waited for the name Biscuit, which can never appear, so the scenario was
+    ERROR (a setup failure that hid the verdict) instead of a clean FAIL/PASS. The probe must
+    wait for the kids fact itself; the scorer then judges the (missing) pet in the store."""
+    live, res = _drive(monkeypatch, store="- User's friend is named Dana Whitfield\n"
+                                          "- Dana Whitfield has two kids")
+    assert res["S21"]["verdict"] in ("PASS", "FAIL"), res["S21"]
+    assert "setup_problems" not in res["S21"]["evidence"]
+    assert "s21-fix" in live.chats and "s21-ask" in live.chats
+    # a store with no kids fact at all is still a setup failure, never a verdict
+    live, res = _drive(monkeypatch, store="- User's friend is named Dana Whitfield")
     assert res["S21"]["verdict"] == "ERROR" and "s21-fix" not in live.chats
