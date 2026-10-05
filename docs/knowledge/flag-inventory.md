@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-529 flags; 527 not documented in `.env.example`.
+532 flags; 530 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -163,6 +163,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_GITHUB_REPO` | `'jason-easyazz/zoe-ai-assistant'` | no | NO | `services/zoe-data/greploop_guard.py`<br>`services/zoe-data/greptile_client.py` |
 | `ZOE_GRAPH_RECALL_BOOST` | `''` | no | NO | `services/zoe-data/memory_service.py` |
 | `ZOE_GRAPH_RECALL_WEIGHT` | `dynamic` | no | NO | `services/zoe-data/memory_service.py` |
+| `ZOE_HARNESS` | `-` | no | NO | `services/zoe-data/live_store_guard.py` |
 | `ZOE_HA_BRIDGE_URL` | `''`, `'http://127.0.0.1:8007'` | no | NO | `services/zoe-data/intent_router.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/ha_control.py`<br>`services/zoe-data/routers/stubs.py`<br>`services/zoe-data/routers/system.py`<br>`services/zoe-data/smart_home_service.py`<br>`services/zoe-data/zoe_agent.py` |
 | `ZOE_HA_URL` | `dynamic` | no | NO | `services/zoe-data/routers/stubs.py` |
 | `ZOE_HA_VOICE_INGRESS_URL` | `'http://host.docker.internal:8000'` | no | NO | `services/homeassistant-mcp-bridge/main.py` |
@@ -231,6 +232,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_LIVEKIT_IDLE_TIMEOUT_S` | `'300'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_LIVEKIT_ONDEMAND` | `'true'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_LIVEKIT_STREAM_TTS` | `'0'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
+| `ZOE_LIVE_PALACE_DIR` | `''` | no | NO | `services/zoe-data/live_store_guard.py` |
 | `ZOE_LIVE_REPO_ROOT` | `'/home/zoe/assistant'` | no | NO | `scripts/maintenance/zoe_apply_intent_gap_contract.py` |
 | `ZOE_LIVE_SERVICE_DIR` | `'/home/zoe/assistant/services/zoe-data'` | no | NO | `scripts/maintenance/router_selftrain.py` |
 | `ZOE_LK_COOLDOWN_TIMEOUT_S` | `'4.0'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
@@ -282,6 +284,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_MEMORY_LINT_STALE_DAYS` | `'365'` | no | NO | `services/zoe-data/memory_lint.py` |
 | `ZOE_MEMORY_LOOP_LOG_PATH` | `'~/.zoe/zoe-data-memory-loops.log'` | no | NO | `services/zoe-data/routers/system.py` |
 | `ZOE_MEMORY_LOOP_ZERO_EFFECT_RUNS` | `-` | no | NO | `services/zoe-data/memory_metrics.py` |
+| `ZOE_MEMORY_REJECT_LEDGER` | `-` | no | NO | `services/zoe-data/memory_reject_ledger.py` |
 | `ZOE_MEMORY_STARTUP_STRICT` | `'false'` | no | NO | `services/zoe-data/main.py` |
 | `ZOE_MERGE_QUEUE_ENABLED` | `''` | no | NO | `services/zoe-data/greploop_guard.py` |
 | `ZOE_MERGE_QUEUE_LABEL` | `'auto-merge'` | no | NO | `services/zoe-data/greploop_guard.py` |

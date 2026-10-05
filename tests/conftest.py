@@ -27,6 +27,23 @@ import os
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, 'services/zoe-data'))
 
+# Pin the household palace off the live directory for every test under tests/ too (the
+# zoe-data suite has its own pin in services/zoe-data/tests/conftest.py). Without it a tests/
+# module that imports memory_service opens ~/.mempalace; live_store_guard now refuses that
+# from a pytest session, and the pin is what makes the integration lane run against a scratch
+# store instead. Reuse the zoe-data pin's directory when both conftests load in one session.
+import atexit
+import shutil
+import tempfile
+
+if "memory_service" not in sys.modules:
+    _stores = os.environ.get("ZOE_TEST_STORES_DIR") or tempfile.mkdtemp(prefix="zoe-test-stores-")
+    if "ZOE_TEST_STORES_DIR" not in os.environ:
+        os.environ["ZOE_TEST_STORES_DIR"] = _stores
+        atexit.register(shutil.rmtree, _stores, ignore_errors=True)
+    os.environ["MEMPALACE_DATA_DIR"] = os.path.join(_stores, "mempalace")
+    os.environ["ZOE_MEMORY_REJECT_LEDGER"] = os.path.join(_stores, "memory-reject-ledger.json")
+
 
 @pytest.fixture(scope="session")
 def event_loop():

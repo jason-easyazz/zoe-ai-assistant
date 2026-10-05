@@ -1486,6 +1486,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_HARNESS": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/live_store_guard.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_HA_BRIDGE_URL": {
         "defaults": [
           "''",
@@ -2185,6 +2195,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_LIVE_PALACE_DIR": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/live_store_guard.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_LIVE_REPO_ROOT": {
         "defaults": [
           "'/home/zoe/assistant'"
@@ -2706,6 +2726,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/memory_metrics.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MEMORY_REJECT_LEDGER": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_reject_ledger.py"
         ],
         "typed_env": false
       },

@@ -339,6 +339,7 @@ async def consolidate_session(session_id: str, user_id: str,
         logger.warning("idle consolidation: deps unavailable: %s", exc)
         return 0
 
+    rejected = skipped = dropped = failed = 0
     for item in facts or []:
         text = _fact_text(item)
         if not text:
@@ -346,29 +347,45 @@ async def consolidate_session(session_id: str, user_id: str,
         try:
             ok, _reason = is_storable_fact(text)
         except Exception:
-            ok = True
+            ok, _reason = True, ""
         if not ok:
+            rejected += 1
+            try:
+                from memory_reject_ledger import record_reject
+                record_reject("idle_consolidation", _reason)
+            except Exception:
+                pass
             continue
         # Stable dedup id so a re-run of the same session before the watermark
         # advances collapses to one row (mirrors the voice path's hash behaviour).
         turn_id = "idle:" + hashlib.sha1(f"{session_id}:{text}".encode("utf-8")).hexdigest()[:16]
         try:
-            await _ingest_or_supersede(
+            outcome = await _ingest_or_supersede(
                 svc, text, user_id=user_id, source="idle_consolidation",
                 session_id=session_id, user_turn_id=turn_id,
                 memory_type="fact", confidence=0.8, tags=["idle", "self"],
                 anchor_text=fact_anchor(item, user_turns) or "",
             )
-            stored += 1
+            # ``stored`` used to count every call that did not raise — including an
+            # equivalent-fact "skip" and a PII/opt-out "dropped" — so the line overstated what
+            # reached the palace (log 09-28: stored=4, audit: 3 ingests). Count only writes.
+            if outcome == "skip":
+                skipped += 1
+            elif outcome == "dropped":
+                dropped += 1
+            else:  # "stored" (or a legacy None from an older stub)
+                stored += 1
         except Exception as exc:
-            logger.debug("idle consolidation ingest failed: %s", exc)
+            failed += 1
+            logger.warning("idle consolidation ingest failed: %s", exc)
 
     # ── Step 3: fresh short-lived conn — advance the watermark, then release ───
     last_at = rows[-1]["at"]
     async with get_ctx() as conn:
         await _write_watermark(conn, session_id, user_id, last_at, len(rows))
-    logger.info("MEMORY_IDLE_CONSOLIDATE session=%s user=%s turns=%d stored=%d",
-                session_id, user_id, len(rows), stored)
+    logger.info("MEMORY_IDLE_CONSOLIDATE session=%s user=%s turns=%d stored=%d "
+                "rejected=%d skipped=%d dropped=%d failed=%d",
+                session_id, user_id, len(rows), stored, rejected, skipped, dropped, failed)
     return stored
 
 

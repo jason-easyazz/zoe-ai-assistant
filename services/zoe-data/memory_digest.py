@@ -193,7 +193,11 @@ def _passes_quality_gate(text: str) -> bool:
     real fact."""
     try:
         from memory_quality import is_storable_fact
-        ok, _reason = is_storable_fact(text)
+        ok, reason = is_storable_fact(text)
+        if not ok:
+            # This gate used to drop silently (reason discarded, no log, no counter).
+            from memory_reject_ledger import record_reject
+            record_reject("digest", reason)
         return ok
     except Exception:
         return True
@@ -1551,6 +1555,11 @@ async def run_nightly_digest_pass(db=None) -> dict:
     cutoff = _utcnow()
     results = await run_digest_for_all_active_users(db=db, cutoff=cutoff)
     age_h = await newest_owned_user_turn_age_hours(db=db, cutoff=cutoff)
+    try:  # "N candidates rejected: reasons" — counts only, zero is logged too
+        from memory_reject_ledger import log_nightly_summary
+        log_nightly_summary(hours=24)
+    except Exception:
+        pass
     return {
         "results": results,
         "cutoff": cutoff,

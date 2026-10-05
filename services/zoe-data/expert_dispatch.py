@@ -379,13 +379,14 @@ def _echo_fact(text: str) -> str:
 
 def _record_quality_reject(source: str, reason: str, text: str) -> None:
     """Log + count a write-quality reject so we can audit what's being dropped."""
-    logger.info("MEMORY_QUALITY_REJECT source=%s reason=%s text=%r",
-                source, reason, (text or "")[:120])
     try:
-        from memory_metrics import memory_quality_reject_count
-        memory_quality_reject_count.labels(source=source, reason=reason).inc()
+        from memory_reject_ledger import record_reject
+        record_reject(source, reason)   # the ONE place that counts it: durable hourly COUNT (no text)
+        # + zoe_memory_quality_reject_count (do not .inc() it again here)
     except Exception:
         pass
+    logger.info("MEMORY_QUALITY_REJECT source=%s reason=%s text=%r",
+                source, reason, (text or "")[:120])
 
 
 async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
