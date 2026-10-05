@@ -16,6 +16,8 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Optional
 
+import own_words as _own_words
+
 logger = logging.getLogger(__name__)
 
 
@@ -677,6 +679,12 @@ def _mine_templates(text: str, source_excerpt: str, seen: set[str]) -> list[Memo
         if template.startswith("User asked me to remember") and _remember_is_a_question(text, m):
             continue
         groups = tuple(_clean(g) for g in m.groups())
+        if text.startswith(_own_words.MASK, m.end()) and groups:
+            # the capture ends at a region own_words removed (someone else's speech, a pasted block):
+            # "I live in Hobart and <Dana's words>" keeps "Hobart"; "remember that my mum said <her words>" keeps nothing
+            if _own_words.ends_with_speech_verb(groups[-1]):
+                continue
+            groups = groups[:-1] + (_clean(_own_words.trim_stub(groups[-1])),)
         if any(not g for g in groups):
             continue
         cand_text = _clean(template.format(*groups))
@@ -727,10 +735,68 @@ def _speaker_list_candidates(text: str, source_excerpt: str, seen: set[str]) -> 
     return out
 
 
+def _extract_with_drops(
+    user_message: str,
+    assistant_response: str = "",
+    prev_user_message: Optional[str] = None,
+) -> "tuple[list[MemoryCandidate], list[str]]":
+    """``(candidates, drops)``: the candidates mined from the OWNER's own words of the turn, and the guard
+    reason (``pasted_content`` / ``third_person_speech``) of every candidate the unguarded miner would have
+    produced that own_words threw away (one entry per lost candidate; the caller records them in the reject
+    ledger under its own writer label).
+
+    A pasted email, a ``system:`` line or another person's quoted speech is not the owner talking
+    (own_words); an ordinary turn takes the unchanged path, byte for byte."""
+    own = _own_words.analyze(user_message)
+    if not own.changed:
+        return _extract_plain(user_message, assistant_response, prev_user_message), []
+    kept = _extract_plain(own.masked, assistant_response, prev_user_message, excerpt_text=own.text)
+    drops: list[str] = []
+    try:
+        # Which guard threw a fact away? The unguarded miner is run for the counter only (cheap: regexes).
+        full = _extract_plain(user_message, assistant_response, prev_user_message)
+        past_paste = _extract_plain(own.paste_only, assistant_response, prev_user_message,
+                                    excerpt_text=own.text)
+        kept_t = set(c.text for c in kept)
+        paste_t = set(c.text for c in past_paste)
+        for c in full:
+            if c.text in kept_t:
+                continue
+            drops.append(_own_words.THIRD_PERSON_SPEECH if c.text in paste_t else _own_words.PASTED_CONTENT)
+    except Exception as exc:  # noqa: BLE001 - bookkeeping must never cost a turn its facts
+        logger.debug("memory_extractor: drop accounting skipped (%s)", type(exc).__name__)
+    return kept, drops
+
+
 def extract_candidates(
     user_message: str,
     assistant_response: str = "",
     prev_user_message: Optional[str] = None,
+) -> list[MemoryCandidate]:
+    """Extract memory candidates from the OWNER's own words of a user turn (see ``_extract_plain`` for the
+    contract and ``own_words`` for what is not the owner's voice). A fact thrown away because it came from
+    pasted content or another person's speech is counted in the reject ledger (``guard_pasted_content`` /
+    ``guard_third_person_speech``, writer ``memory_extractor``)."""
+    out, drops = _extract_with_drops(user_message, assistant_response, prev_user_message)
+    for reason in drops:
+        _count_guard_drop("memory_extractor", reason)
+    return out
+
+
+def _count_guard_drop(source: str, guard: str) -> None:
+    try:
+        from memory_reject_ledger import record_guard_drop
+        record_guard_drop(source, guard)
+    except Exception:  # noqa: BLE001 - bookkeeping must never block a write path
+        pass
+
+
+def _extract_plain(
+    user_message: str,
+    assistant_response: str = "",
+    prev_user_message: Optional[str] = None,
+    *,
+    excerpt_text: Optional[str] = None,
 ) -> list[MemoryCandidate]:
     """Extract memory candidates from a user turn.
 
@@ -750,7 +816,7 @@ def extract_candidates(
     if _should_skip(user_message):
         return []
 
-    source_excerpt = _clean(user_message)[:220]
+    source_excerpt = _clean(excerpt_text if excerpt_text is not None else user_message)[:220]
     # "my birthday is 7/8/1991" is mined as "7 August 1991" (household day-first order,
     # date_locale.py) — the verbatim excerpt above keeps the user's own digits.
     from date_locale import normalize_numeric_dates
@@ -913,15 +979,21 @@ async def extract_and_ingest(
                         break
             except Exception as exc:
                 logger.debug("pronoun chain-anchor lookback failed: %s", exc)
+    own = _own_words.analyze(user_message)
     try:
-        candidates = extract_candidates(
+        candidates, guard_drops = _extract_with_drops(
             user_message, assistant_response, prev_user_message=prev_user_message
         )
     finally:
         # Record the current USER turn even when nothing extracts — the next
         # turn's correction/pronoun may anchor to it.
         note_user_turn(user_id, session_id, user_message)
-    if not candidates:
+    # Pasted content / another person's speech never reached a template (own_words); the facts it WOULD have
+    # produced are counted here under this lane's writer label (reject ledger, ``guard_<reason>``).
+    for reason in guard_drops:
+        _count_guard_drop(source, reason)
+    paste_note = _own_words.pasted_note(own)
+    if not candidates and not paste_note:
         return 0
     if await _memory_opted_out(user_id):
         logger.info("memory_extractor: user=%s opted out — dropping %d candidate(s)", user_id, len(candidates))
@@ -965,7 +1037,7 @@ async def extract_and_ingest(
     # goes to the store, which scrubs before it cuts; the candidates' own
     # ``source_excerpt`` is pre-cut, which could slice a card number below the
     # scrubber's Luhn check.
-    turn_excerpt = " ".join((user_message or "").split())
+    turn_excerpt = " ".join((own.text if own.changed else (user_message or "")).split())
 
     for idx, c in enumerate(candidates):
         # Write-quality gate (mem0-style): drop candidates that aren't shaped
@@ -1031,7 +1103,29 @@ async def extract_and_ingest(
         )
         if ref is not None:
             saved += 1
-    if saved > 0:
+    note_saved = False
+    if paste_note:
+        # The ONE row a pasted turn may leave behind: "User pasted an email [about <clean subject>]". Writer
+        # ``pasted_content`` is a model_from_turn writer and is given NO anchor, so it can never be user_stated;
+        # nothing of the pasted body is copied (no excerpt - chat_messages already holds the raw turn). The
+        # recall packet labels it "something you pasted".
+        try:
+            note_ref = await svc.ingest(
+                paste_note,
+                user_id=user_id,
+                source=_own_words.PASTE_NOTE_SOURCE,
+                session_id=session_id,
+                user_turn_id=f"{base_turn_id}-pasted",
+                memory_type="fact",
+                confidence=0.5,
+                status=status,
+                tags=["conversation", "pasted"],
+                metadata=dict(provenance="pasted", pasted_kind=own.kind),
+            )
+            note_saved = note_ref is not None
+        except Exception as exc:  # noqa: BLE001 - the note is a courtesy; it must never cost the turn
+            logger.debug("memory_extractor: paste note skipped (%s)", type(exc).__name__)
+    if saved > 0 or note_saved:
         try:
             from zoe_agent import _invalidate_user_facts_cache
             _invalidate_user_facts_cache(user_id)

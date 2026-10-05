@@ -1458,8 +1458,9 @@ async def _mempalace_load_user_facts(user_id: str, limit: int = 20) -> str:
 
             # Facts block
             fact_lines = ["## What I know about you:"]
+            from own_words import prompt_text as _prompt_text   # pasted / instruction-shaped rows: quoted, not obeyed
             for ref in fact_refs[:limit]:
-                text = (ref.text or "")[:200]
+                text = _prompt_text(ref.text or "", getattr(ref, "metadata", None), 200) if (ref.text or "") else ""
                 if text:
                     fact_lines.append(f"- {text}")
             if len(fact_lines) > 1:

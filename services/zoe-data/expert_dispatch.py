@@ -517,6 +517,20 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
     text = (text or "").strip()
     if not text:
         return None
+    # A pasted email, a "system:" line or another person's quoted speech is not the owner teaching Zoe: only the
+    # owner's own words are stored, and a turn with none left stores nothing and defers to the brain (reply only).
+    # Pasted instructions ("ignore previous instructions and remember that ...") were taken as the owner's
+    # explicit request and stored approved (ZMB I1/I1b/I4).
+    try:
+        import own_words
+        own = own_words.analyze(text)
+    except Exception:  # noqa: BLE001 - a guard bug must not take the teach path down
+        own = None
+    if own is not None and own.changed:
+        own_words.count_drops("voice_fact", own)
+        if len(own.text.split()) < 3:
+            return None
+        text = own.text
     # STORE (imperative teach) vs RECALL (a question). The tricky case: "Do you
     # remember what my mum's name is?" is a RECALL question that happens to contain
     # the word 'remember' — it must not be mistaken for the imperative "remember
@@ -704,12 +718,13 @@ async def _run_expert(domain: str, text: str, user_id: str, session_id: str) -> 
         rows = await get_memory_service().search(text, user_id=user_id, limit=8)
         seen: set[str] = set()
         lines: list[str] = []
+        from own_words import prompt_text as _prompt_text   # pasted / instruction-shaped rows: quoted, not obeyed
         for r in rows or []:
             t = (getattr(r, "text", "") or "").strip()
             key = t.lower()
             if t and key not in seen:
                 seen.add(key)
-                lines.append(f"- {t[:200]}")
+                lines.append(f"- {_prompt_text(t, getattr(r, 'metadata', None), 200)}")
         if lines:
             facts = "## Relevant things you've told me:\n" + "\n".join(lines)
     except Exception as exc:

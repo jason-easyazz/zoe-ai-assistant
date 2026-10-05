@@ -21,6 +21,7 @@ import uuid
 
 import httpx
 import memory_authority
+import own_words
 from memory_overlap import dedup_verdict, richness
 from routers.journal import CREATED_AT_VALID_TIMESTAMP_SQL
 from user_filters import GUEST_USERS, drop_synthetic_users, message_owner_expr
@@ -542,6 +543,14 @@ async def run_turn_digest(
     Returns a summary dict: {"new": N, "skipped_duplicates": N, "error": ...}
     """
     result: dict = {"user_id": user_id, "new": 0, "skipped_duplicates": 0, "skipped_low_quality": 0}
+
+    # A pasted email / a system: line / another person's quoted speech is not the owner talking: the model reads
+    # (and the facts are anchored to) the owner's own words only (own_words; ZMB I1/I2/I4).
+    own = own_words.analyze(user_message)
+    if own.changed:
+        own_words.count_drops(source, own)
+        user_message = own.text
+        result["guard"] = list(own.reasons)
 
     prompt_text = ""
     if user_message and len(user_message.split()) < 4:
@@ -1129,6 +1138,7 @@ async def _load_todays_messages(user_id: str, db=None) -> str:
         if not rows:
             return ""
         lines = [row[0] for row in rows if row[0]]
+        lines = own_words.filter_turns(lines, "digest")   # pasted / third-person text is not the owner's (ZMB I1/I2)
         lines = await _skip_forgotten_turns(user_id, lines, "digest")
         return "\n".join(lines)
     except Exception as exc:

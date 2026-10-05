@@ -38,6 +38,7 @@ KEY_MEMORY_OPT_OUT = "memory_opt_out"
 # explicit "remember this"). These honour KEY_MEMORY_OPT_OUT at ingest.
 MEMORY_OPT_OUT_SOURCES = frozenset({
     "chat_regex",       # memory_extractor.extract_and_ingest (chat + voice + zoe_agent)
+    "pasted_content",   # the one "User pasted an email" note a pasted turn leaves (own_words)
     "turn_digest",      # memory_digest.run_turn_digest (same turn)
     "conversation",     # person_extractor / person_extractor_llm (same turn)
     "ambient",          # ambient audio capture
