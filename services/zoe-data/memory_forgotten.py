@@ -48,7 +48,10 @@ logger = logging.getLogger(__name__)
 
 SALT_ENV = "ZOE_FORGET_LEDGER_SALT"
 SHIELD_DAYS_ENV = "ZOE_FORGOTTEN_SHIELD_DAYS"
-DEFAULT_SHIELD_DAYS = 365
+#: Owner decision 2026-10-06 ("forgotten means forever"): a forget never expires. The env var
+#: is the explicit loosening for a household that wants a bounded shield (days > 0).
+DEFAULT_SHIELD_DAYS = 0          # 0 = permanent
+PERMANENT_UNTIL = "9999-12-31T23:59:59Z"   # sorts after every real timestamp in the ledger
 MIN_SALT_CHARS = 16
 #: Longest entity (in words) the ledger can hold and match. Names are 1-4 words; 6 leaves room.
 MAX_KEY_TOKENS = 6
@@ -80,6 +83,8 @@ def _iso(dt: datetime) -> str:
 
 
 def shield_days() -> int:
+    """Days a forget shields for; ``0`` means forever (the default). ``ZOE_FORGOTTEN_SHIELD_DAYS``
+    with a positive integer bounds it; anything else keeps the permanent default."""
     raw = (os.environ.get("ZOE_FORGOTTEN_SHIELD_DAYS") or "").strip()
     try:
         days = int(raw)
@@ -88,6 +93,13 @@ def shield_days() -> int:
     except ValueError:
         pass
     return DEFAULT_SHIELD_DAYS
+
+
+def shield_until_for(start: datetime, days: Optional[int]) -> str:
+    """The ledger's ``shield_until``: a real instant for a bounded shield, the far-future
+    sentinel for a permanent one (so ``shield_until > now`` stays the single lookup rule)."""
+    d = days if days else shield_days()
+    return PERMANENT_UNTIL if d <= 0 else _iso(start + timedelta(days=d))
 
 
 # ── the secret and the hash ──────────────────────────────────────────────────
@@ -327,7 +339,7 @@ async def add(user_id: str, name: str, *, actor: str = "", scope: str = SCOPE_EN
         return False
     digest = _Hasher(user_id).hash(key)
     start = _now()
-    until = _iso(start + timedelta(days=shield_for_days or shield_days()))
+    until = shield_until_for(start, shield_for_days)
     _overlay.setdefault(user_id, {})[digest] = until
     _invalidate(user_id)
     try:

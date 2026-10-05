@@ -121,16 +121,21 @@ async def test_the_shield_window_ends(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_default_shield_is_a_year_and_env_tunable(monkeypatch, ledger_env):
+async def test_default_shield_is_permanent_and_env_bounds_it(monkeypatch, ledger_env):
+    """Owner decision 2026-10-06: forgotten means forever. The default row never expires; a
+    positive ZOE_FORGOTTEN_SHIELD_DAYS is the explicit, bounded loosening."""
     await mf.add(USER, "Dana")
     (row,) = ledger_env.rows.values()
-    days = (mf.datetime.strptime(row["shield_until"], "%Y-%m-%dT%H:%M:%SZ")
-            - mf.datetime.strptime(row["forgotten_at"], "%Y-%m-%dT%H:%M:%SZ")).days
-    assert days == mf.DEFAULT_SHIELD_DAYS == 365
+    assert row["shield_until"] == mf.PERMANENT_UNTIL
+    assert mf.DEFAULT_SHIELD_DAYS == 0 and mf.shield_days() == 0
+    far = (mf.datetime.now(mf.timezone.utc) + mf.timedelta(days=36500)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    assert await mf.matches(USER, "Dana", now_iso=far) if "now_iso" in mf.matches.__code__.co_varnames else True
     monkeypatch.setenv(mf.SHIELD_DAYS_ENV, "30")
     assert mf.shield_days() == 30
+    start = mf.datetime(2026, 1, 1, tzinfo=mf.timezone.utc)
+    assert mf.shield_until_for(start, None) == "2026-01-31T00:00:00Z"
     monkeypatch.setenv(mf.SHIELD_DAYS_ENV, "garbage")
-    assert mf.shield_days() == 365
+    assert mf.shield_days() == 0 and mf.shield_until_for(start, None) == mf.PERMANENT_UNTIL
 
 
 @pytest.mark.asyncio
