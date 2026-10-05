@@ -2,7 +2,7 @@
 type: research
 title: Memory fidelity audit — "Samantha doesn't have dementia, neither can Zoe" (2026-10-05)
 date: 2026-10-05
-status: research-only; nothing built. Read-only audit of the write paths, the authority model, the read paths and the live palace, a field comparison, and a ranked plan to make an inferred write unable to overrule a user-stated fact.
+status: audit complete; P1.1/P1.2 built in PR #1868 (feat/memory-authority); P1.3-P1.5, P2, P3 not started. Read-only audit of the write paths, the authority model, the read paths and the live palace, a field comparison, and a ranked plan to make an inferred write unable to overrule a user-stated fact.
 description: Deep audit of Zoe's memory against the owner's 2026-10-05 directive. Every code path that creates, supersedes, archives, merges or rewrites a memory or person/relationship row (file:line, inputs, what it may overwrite, provenance, user-told, history, tests); the authority matrix (14 retire-capable paths, 0 check provenance, 8 act on model-written or model-judged text); read-path risks (HNSW, filtered search, sticky sessions, the live recall flag, isolation, temporal validity, forgetting); read-only live-palace numbers (shapes only); the field (mem0, Letta/MemGPT, Zep/Graphiti, ChatGPT, Anthropic, Nomi, LoCoMo/LongMemEval) with sources; and a ranked P1-P3 plan with a test and a negative control for every item.
 ---
 
@@ -71,7 +71,7 @@ counts only. `[unverified]` marks anything not read at source.
    not touched.
 7. **Plan:** P1 = one authority choke point in `MemoryService` (allow-list of provenance classes,
    fail-closed, shadow-then-enforce), digest facts anchored to a verbatim user span, unverified-speaker
-   self-facts become candidates, and a fidelity regression pack with negative controls. P2 = temporal
+   self-facts become candidates, a consent gate on emotional retention, and a fidelity regression pack with negative controls. P2 = temporal
    validity always on, durable forgetting with cascade, a nightly fidelity report. P3 = the churn / decay /
    stale-upsert / guest-bucket fixes. §6.
 
@@ -124,7 +124,7 @@ it is applied to contacts but to no memory row.
 | # | Writer | Trigger (live?) | Inputs | May overwrite | Provenance | Told | Hist | Tests |
 |---|---|---|---|---|---|---|---|---|
 | W6 | **Nightly digest, facts** `run_memory_digest` (`memory_digest.py:717`), `source=digest` | 03:00 nightly (`scripts/maintenance/daily_consolidation.py`, `routers/system.py:834`) | **all `role='user'` chat turns of the last window joined by newline, `LIMIT 200` (`:986`), then the FIRST 3,000 characters (`:1037`)**; per-turn speaker, time and session are discarded (`_load_todays_messages` `:969`) | **yes** — (a) contradiction pass: top-3 semantic neighbours, Gemma judge, `review(edit, actor="digest")` (`:794-826`) — the incident path; (b) reconcile UPDATE (`:840-860`) | `source=digest`; **no excerpt, session or turn id on a fresh row; on an edit the old row's source/excerpt ride along** | no | yes | `test_memory_digest_*` (SQL / window / verdict only; no authority test) |
-| W7 | **Emotional pass** `_emotional_memory_pass` (`:894`), `source=digest`, `emotional_moment` @0.9 | after W6, same transcript | same day transcript | add-only (approved) | source only | no | n/a | `test_memory_emotional_recall.py` |
+| W7 | **Emotional pass** `_emotional_memory_pass` (`:894`), `source=digest`, `emotional_moment` @0.9 | after W6, same transcript | same day transcript | add-only (approved) — **but it is a retained record of how a person felt, written with no consent check**: `_emotional_memory_pass` and the turn digest's `affect` metadata (`run_turn_digest`, `candidate_affect`) run for every user id the digest selects, with no member-mode / opt-in / minor / guest test; `docs/governance/emotional-safety-note.md` §4-§5 and §10 say a record of feeling is for consenting adult members only, never for children or guests (V17) | source only | no | n/a | `test_memory_emotional_recall.py` (pins recall, not consent) |
 | W8 | **Idle consolidation** `memory_idle_consolidation.consolidate_session` (`:281`), `source=idle_consolidation`, **`ZOE_IDLE_CONSOLIDATION_ENABLED=1`** | ~3 min idle-session sweep | **`"{role}: {content}"` for every row — assistant turns included** (`:313`) fed to the extractor whose prompt says "user turns only" (`memory_digest.py:278-290`) | **yes** — `expert_dispatch._ingest_or_supersede` (`:391`) → reconcile UPDATE → ingest the new row then **archive** the old (`:474`) | source, session_id, stable turn id; no excerpt; **no anchor validator** (W6 has the relationship anchor, W8 has none) | no | archived (not `superseded`, no `superseded_by_id`) | `test_memory_idle_consolidation.py` (pins that the extractor sees the whole conversation) |
 | W9 | **Weekly consolidation, merge** `_merge_near_duplicates` (`:1146`), `actor=consolidation` | weekly (Sunday) | approved rows only; keeper = highest `confidence` (`:1154-1159`); lexical containment ≥ 0.85 (`:1169`) | **yes** — `review(edit, edits=keeper.text)` on the weaker row (`:1174`): the weaker row's text is replaced by the keeper's, whoever wrote it; counts `merged += 1` even when the edit hashed to the same id (no-op) | `reviewed_by=consolidation` stamped regardless | no | **a no-op rewrite in 6,585 of 6,605 audit edits** | none pins it (only `test_memory_digest_idle_verdict.py` reads its summary) |
 | W10 | **Weekly consolidation, contradictions** `_resolve_contradictions` (`:1193`) | weekly | newest 200 approved rows; pairs with lexical overlap ≥ 0.25; Gemma judge (`:1222`) | **yes** — the *older* row is replaced by the newer's text (`:1225-1232`); "newer" is `added_at`, not authority | `reviewed_by=consolidation` | no | yes | `test_memory_opt_out_endpoints.py` (opt-out only) |
@@ -204,7 +204,8 @@ below the answer is **no** — `classify_against_existing` receives `(id, text)`
 | W3 regex person extractor — graph edges | relationship type between two people | **YES (unverified speaker; no edge provenance)** | `person_extractor.py:792-955` | code; schema |
 | W16 decay archive | any unrecalled row | **YES (not inference — time)** | `memory_service.py:1438-1500` | code; arithmetic in §1.2 |
 | W11 write-time implicit supersede | topic-matched older rows | **YES (needs a user cue; the topic match is on the model's text)** | `memory_supersede.py:254-306` | code |
-| W22 MCP `memory_review` | any | **YES (an agent acts as the user; the audit cannot tell)** | `mcp_server.py:3202` | code |
+| W22 MCP `memory_review` | any | **YES (an agent acts as the user; the audit cannot tell)** — `review(..., actor=user_id)`, so an authority check sees the *account*, not `mcp` (V13); the fix must pass `origin="mcp"` (rank 1) and keep the user id only as the acting member | `mcp_server.py:3202`, `:3230` | code |
+| W7 + W2 `affect`: emotional retention | `emotional_moment` rows; `candidate_affect` | **not an override — a consent violation**: retains how someone felt for guests, minors and members who never opted in | `memory_digest.py:894-968`, `:495-505` (`extract_affect`); `docs/governance/emotional-safety-note.md` §4, §5, §10 | code + governance note |
 | W1 regex extractor | attribute-shaped | no — same authority (newer user words win); **wrong-row risk** at similarity ≥ 0.45 | `memory_extractor.py:931-949` | code |
 | W20 voice teach | attribute-shaped | no — user-authored; same wrong-row risk | `expert_dispatch.py:638` | code |
 | W14 deep sleep | pending → approved | **escalates inferred to approved on popularity** (does not override) | `memory_digest.py:1663` | code |
@@ -260,6 +261,7 @@ real `MemoryService`, `memory_quality` and `memory_supersede`; no live data touc
 | V13 | MCP edit / forget run as the user id; an agent edit is indistinguishable from the owner's | `mcp_server.py:3202`, `:3230` |
 | V14 | REM / deep-sleep / synthesis raw upserts write stale metadata outside the per-user lock | `memory_digest.py:1569-1573`, `:1668-1673`, `:1799` |
 | V15 | Ranking uses the writer-reported `confidence` and access popularity, not authority: a 0.85 model row outranks a 0.72 regex row of the same fact, and each recall bumps `access_count`, so wrong-but-retrieved rows get hotter | `memory_service.py:2267-2268` |
+| V17 | **No consent gate on emotional retention.** The nightly emotional pass stores approved `emotional_moment` rows (and the turn digest stores `candidate_affect`) with no check of member mode, opt-in, minor flag or guest status; the governance note requires the writer to check consent before retaining affect and forbids it outright for children and guests. The only wall is `MEMORY_OPT_OUT_SOURCES` (a general opt-out, which also misses `voice_turn_digest` and `idle_consolidation`, V16). The owner's palace holds 8 such rows; whether the owner has a member-mode opt-in row was not checked | `memory_digest.py:894-968`, `:495-505`; `docs/governance/emotional-safety-note.md` |
 | V16 | The opt-out wall omits `voice_regex`, `voice_turn_digest`, `voice`, `idle_consolidation` | `user_prefs.py:39-48` |
 
 ## 3. Read-path risks
@@ -499,17 +501,21 @@ on the replay-gate list and merge serially; the bar runs only outside the 01:45-
 
 | Rank | Class | Which writers (today's `source` / actor) | Needs |
 |---|---|---|---|
-| 5 | `operator` | `operator-cleanup`, `identity_audit`, admin tools | named actor; every use audited |
-| 4 | `user_confirmed` | review-UI approve/edit, "yes" to an offer, an answer to a clarifying question | actor is the account |
-| 3 | `user_stated` | `voice_fact`, `review_ui`, `proposal`, `person_created/updated`, `note_*`, `journal_*`, `skybridge_action`, `conversation_correction`, and the deterministic extractors `chat_regex` / `voice_regex` **when the speaker is authenticated** (typed session, Telegram, or a speaker-ID score ≥ threshold) | verbatim span in the user's turn |
+| 6 | `operator` | `operator-cleanup`, `identity_audit`, admin tools | named actor; every use audited |
+| 5 | `user_confirmed` | review-UI approve/edit, "yes" to an offer, an answer to a clarifying question | actor is the account |
+| 4 | `user_stated` | `voice_fact`, `review_ui`, `proposal`, `person_created/updated`, `note_*`, `journal_*`, `skybridge_action`, `conversation_correction`, and the deterministic extractors `chat_regex` / `voice_regex` **when the speaker is authenticated** (typed session, Telegram, or a speaker-ID score ≥ threshold) | the row's text is the user's own words: a verbatim span of the user's turn, or a deterministic extraction of one |
+| 3 | `user_stated_derived` | a **model paraphrase anchored to a user turn**: `turn_digest`, `voice_turn_digest`, the LLM person extractor, nightly digest facts that pass the P1.2 anchor — with an authenticated speaker | a `quote` that is a normalised substring of one user turn and entails the fact. **Never equal to `user_stated`**: a paraphrase can drift from what was said |
 | 2 | `user_unverified` | the same voice writers when the turn was attributed only by panel binding | — never supersedes; self-assertions are `pending` |
-| 1 | `model_from_turn` | `turn_digest`, `voice_turn_digest`, the LLM person extractor, `brain_tool`, `mcp`, `zoe_agent` | a `quote` that is a substring of one user turn and entails the fact; with an authenticated speaker this is promoted to `user_stated` (the user said it) |
+| 1 | `model_from_turn` | the same model writers when the quote fails or the speaker is not authenticated; and always `brain_tool`, `mcp`, `zoe_agent` (their text is the model's, not a span of the turn) | a `quote` is optional; add-only unless it later passes the anchor |
 | 0 | `model_from_transcript` | `digest`, `idle_consolidation`, `synthesis`, emotional pass, `music_digest`, anything unknown | none — **add-only** |
 
-Rule: a write may supersede / archive / merge into a target only if `rank(writer) ≥ rank(target)`;
-otherwise it is **demoted to a candidate** (`status=disputed`, `contradicts_id=<target>`; `disputed` is
+Rule: a write may supersede / archive / merge into a target only if `rank(writer) > rank(target)`, or the two
+are the **same class** and the writer is newer (a person changing their mind, or a model refreshing its own
+derived fact). **Equal-rank recency never applies across classes: a model-derived fact can never supersede a
+direct user statement, however recent**, while a direct statement may replace a derived one. Otherwise the
+write is **demoted to a candidate** (`status=disputed`, `contradicts_id=<target>`; `disputed` is
 already a blocked-read status, `memory_service.py:829`) and the contradiction is surfaced as a question
-(§6 P1.1c). Recency breaks ties only inside a rank. `confidence` stops being a ranking input across ranks.
+(§6 P1.1c). Recency breaks ties only inside one class. `confidence` stops being a ranking input across ranks.
 
 ### P1 — before any other memory work
 
@@ -519,7 +525,20 @@ already a blocked-read status, `memory_service.py:829`) and the contradiction is
   ALLOW | DEMOTE | DENY`, pure, no I/O); `memory_service.py` — `ingest` stamps `authority`,
   `asserted_by` (`user|assistant|third_party|system`), `speaker` (`authenticated|score:<x>|panel_bound`);
   `review(edit/archive)`, `supersede_by`, `sweep_soft_archive`, `archive_by_entity` and the `relink` call
-  `check()` and obey it. Stop the carry-forward at `memory_service.py:1596-1599`: the edited row gets the
+  `check()` and obey it. **A `MemoryService`-only check cannot cover the people graph:**
+  `person_extractor._write_relationship` closes `person_relationships` edges with direct SQL (`_supersede_edge`,
+  `person_extractor.py:747`) and never calls `MemoryService`, so the edge writer (and `person_merge`, which moves
+  edges) must call the **same pure `memory_authority.check()`** and read the edge's stamped class. Verified in PR
+  #1868 (`feat/memory-authority`): migration `0037` adds `authority` / `origin` to `person_relationships`;
+  `_write_relationship` stamps new edges (`_stamp_edge`) and gates the close through `_edge_may_change`
+  (`person_extractor.py:845-873`), which records a `contradicts=edge:<id>` candidate instead of closing a
+  protected edge, treats unstamped legacy edges as the user's, and is a no-op while the authority flag is off — so
+  **the extractor's edge writer is gated in #1868**; `person_merge.py` has no authority reference in that branch
+  (a gap to close, or to document as user-only). **The MCP review path must pass its origin:** `mcp_server.py:3202`
+  and `:3230` call `svc.review(..., actor=user_id)`, so a check keyed on the actor sees the *account* (in #1868
+  `writer_class` maps `actor == user_id` to `user_confirmed`, and `mcp_server.py` is not in that PR): an agent edit
+  is classed as the owner's. Require `origin="mcp"` (rank 1) on every MCP `memory_review` / `memory_forget`
+  call, keep the user id only as the acting member, and put the MCP review/forget paths in the F9 matrix. Stop the carry-forward at `memory_service.py:1596-1599`: the edited row gets the
   **editor's** `source`, and `origin_id` / `origin_source` keep lineage. Move #1866's identity guard
   inside the same function (the account-name fact is `user_confirmed` by construction), replacing its
   deny-list of 11 strings. Add `authority` to the per-writer call sites only where they know better
@@ -542,8 +561,14 @@ already a blocked-read status, `memory_service.py:829`) and the contradiction is
 * **Expected effect.** The §2.2 matrix goes from 12 "YES" rows to 0; V1/V2/V3/V6/V8/V9/V11/V13 closed by one
   change. **Measured by** the shadow counter (expect > 0 on day one — the nightly passes will show what
   they would have done), the fidelity report (§P2.3) and the pack (P1.4).
-* **Risk.** Over-blocking a legitimate correction: the user's own turn arrives as `user_stated`/`model_from_turn`
-  with an authenticated speaker, so "I've moved to <city>" still supersedes — that path must be in the pack.
+* **Risk.** Over-blocking a legitimate correction: the user's own turn ("I've moved to <city>") is deterministic
+  or dictated, so it arrives as `user_stated` and supersedes a derived row; if only the model's paraphrase of that
+  turn is available (`user_stated_derived`) it cannot silently replace a *direct* row and becomes a `disputed`
+  candidate — the cost is one question, which the correction tier (`correction_apply`, W26) or the review UI
+  resolves. That path must be in the pack. **Status in #1868 as built:** `memory_authority.py` treats model writers
+  that read one turn as `user_stated` "only when that turn supports the fact" — direct and derived share one
+  class, so equal-rank recency can still let a paraphrase replace a direct row. Splitting `user_stated_derived`
+  (between `user_stated` and `model_from_turn`) is a follow-up on #1868, listed on the plan board.
 
 **P1.2 The digest anchored to the user's own words — for every fact.**
 
@@ -588,6 +613,24 @@ already a blocked-read status, `memory_service.py:829`) and the contradiction is
 * **Expected effect.** Closes V4/V10 at the source; measured by the count of approved self-facts
   with `speaker=panel_bound` (target 0) and `fidelity.unverified_self_fact_total`.
 
+**P1.5 A consent gate on emotional retention (V17).**
+
+* **Files.** `memory_digest.py`: `_emotional_memory_pass` (`:894`) and the `affect` capture in `run_turn_digest`
+  (`:495-505`) call one member-mode read (`consent_to_retain_affect(user_id) -> bool`) before they keep anything:
+  **guests, synthetic ids, minors and members with no opt-in row never retain**; a consenting adult member does,
+  once identity is enforceable (the governance note's own condition). In-turn acts (a gentler reply) are
+  unaffected. Add `voice_turn_digest` and `idle_consolidation` to the same wall (V16). On revocation a nightly step
+  archives the member's `emotional_moment` rows and strips `candidate_affect`.
+* **Flag.** Pure fix for guests and minors (policy already says never); `ZOE_EMOTION_RETENTION_GATE=shadow|enforce`
+  for the adult opt-in leg.
+* **Test idea.** `tests/test_memory_emotion_consent.py` (`ci_safe`): run the nightly pass and the turn digest with a
+  stubbed extractor that always returns an emotional moment, for six identities — owner with opt-in, owner with no
+  mode row, a member flagged minor, a `kid`-mode member, `guest`, a `demo_` id: only the first writes a row; the
+  others write **zero** `emotional_moment` rows and zero `candidate_affect`. **Negative control:** remove the gate
+  and five of six write (today's behaviour). Add a revocation case.
+* **Measured by** the fidelity report (§P2.3): `emotional_moment` / `candidate_affect` rows grouped by member mode
+  (target 0 for guest / minor / no-opt-in).
+
 **P1.4 The memory-fidelity regression pack.** Static half in `services/zoe-data/tests/` (joins CI by the
 co-located `ci_safe` marker, per the marker-based CI rule), live half as new bar scenarios in
 `scripts/perf/samantha_bar.py` (S23+, same demo-users-only guardrails, `backdate` already supported at
@@ -612,6 +655,7 @@ scorer where possible and a negative control that must turn it red.
 | F14 | **No churn**: weekly merge on identical texts performs 0 edits; audit edit count == real changes | S3 as a test | — | restore the merge → 138 self-edits |
 | F15 | **Restart durability**: tombstones / ledger survive a process restart | persist + reload | — | in-process dict → lost |
 | F16 | **Only the user promotes**: no `pending → approved` without a user actor | deep-sleep pass on a pending fixture | — | restore popularity promotion → red |
+| F18 | **Emotional-retention consent**: guest / minor / no-opt-in members retain no `emotional_moment` or `candidate_affect` | stubbed extractor × six identities (P1.5) | — | remove the consent gate |
 | F17 | **Opt-out parity** across chat, voice and idle lanes | iterate every source in the authority table | — | drop `voice_regex` from the list → red |
 
 Benchmarks: F2 / F4 / F6 / F1 are the LongMemEval shapes (knowledge-update, temporal, abstention,
@@ -683,7 +727,7 @@ negative control: seed an authority violation → the report flags it.
 
 PR A (additive, safe): class table + stamps + shadow `check()` + the merge no-op fix + the pack skeleton
 (F9, F14, F6) + `memory_fidelity_report.py`. PR B: enforce flip + digest anchor + user-only idle transcript
-+ the `used to` fix. PR C (voice-path, serial, replay-gated): speaker verdict + gate. PR D: forgetting
++ the `used to` fix + the `user_stated_derived` class split + MCP `origin="mcp"` + the P1.5 consent gate. PR C (voice-path, serial, replay-gated): speaker verdict + gate. PR D: forgetting
 ledger + cascade + temporal reads. Each ≤ 30 files; the bar baseline is re-recorded after B.
 
 ## 7. Decisions for Jason
