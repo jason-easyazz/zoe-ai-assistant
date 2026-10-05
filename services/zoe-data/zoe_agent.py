@@ -1381,6 +1381,11 @@ async def _mempalace_add(
             logger.info("MEMORY_QUALITY_REJECT source=%s reason=%s text=%r",
                         added_by or "zoe_agent", reason, summary[:120])
             try:
+                from memory_reject_ledger import record_reject
+                record_reject(added_by or "zoe_agent", reason)
+            except Exception:
+                pass
+            try:
                 from memory_metrics import memory_quality_reject_count
                 memory_quality_reject_count.labels(
                     source=added_by or "zoe_agent", reason=reason).inc()

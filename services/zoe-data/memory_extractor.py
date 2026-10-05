@@ -21,6 +21,11 @@ logger = logging.getLogger(__name__)
 
 def _record_quality_reject(source: str, reason: str, text: str) -> None:
     """Log + count a write-quality reject so dropped candidates are auditable."""
+    try:
+        from memory_reject_ledger import record_reject
+        record_reject(source, reason)   # durable per-day COUNT (no text) for the nightly summary
+    except Exception:
+        pass
     logger.info("MEMORY_QUALITY_REJECT source=%s reason=%s text=%r",
                 source, reason, (text or "")[:120])
     try:

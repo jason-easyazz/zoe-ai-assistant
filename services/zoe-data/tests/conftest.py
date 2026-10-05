@@ -42,3 +42,5 @@ ZOE_TEST_STORE_DIR = tempfile.mkdtemp(prefix="zoe-test-stores-")
 atexit.register(shutil.rmtree, ZOE_TEST_STORE_DIR, ignore_errors=True)  # no /tmp litter per session
 os.environ["MEMPALACE_DATA_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "mempalace")
 os.environ["ZOE_VOICE_STT_LOG"] = os.path.join(ZOE_TEST_STORE_DIR, "voice_stt.jsonl")
+# The write-time reject ledger (memory_reject_ledger) persists day counters under ~/.zoe by default.
+os.environ["ZOE_MEMORY_REJECT_LEDGER"] = os.path.join(ZOE_TEST_STORE_DIR, "memory-reject-ledger.json")

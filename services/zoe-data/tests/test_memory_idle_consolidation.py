@@ -358,3 +358,48 @@ def test_sweep_threads_since_from_find_idle_sessions(monkeypatch):
     # `since` was threaded from find_idle_sessions, NOT re-fetched per session.
     assert seen["args"] == ("sess-1", "jason", sentinel_since)
     assert not listing_conn.executed, "sweep must not issue a per-session fetchval/execute"
+
+
+def test_consolidation_counts_refusals_and_stores_only_real_writes(monkeypatch, caplog, tmp_path):
+    """``stored=`` used to count every ingest call that did not raise (a dedup "skip" and a
+    PII/opt-out "dropped" included) and gate rejects were invisible. Class: bucket b of
+    docs/knowledge/memory-loss-audit-2026-10-05.md."""
+    import logging
+
+    import expert_dispatch
+    import memory_digest
+    import memory_quality
+    import memory_reject_ledger
+    import memory_service
+
+    monkeypatch.setenv("ZOE_MEMORY_REJECT_LEDGER", str(tmp_path / "ledger.json"))
+    memory_reject_ledger.reset_for_tests()
+    turns = [_Row(role="user", content="x", at="2026-06-23T09:00:00+00:00"),
+             _Row(role="assistant", content="y", at="2026-06-23T09:00:05+00:00"),
+             _Row(role="user", content="z", at="2026-06-23T09:00:09+00:00")]
+    conn = _FakeConn(turns)
+
+    async def _fake_extract(text):
+        return [{"fact": "Do you remember my mum's name?"}, {"fact": "My dad's name is Neil"},
+                {"fact": "Rex is the dog"}, {"fact": "My card is on file"}, {"fact": "Nan lives in Perth"}]
+
+    outcomes = iter(["stored", "skip", "dropped", None])      # None = a legacy stub result
+
+    async def _fake_ingest(svc, text, **kw):
+        return next(outcomes)
+
+    monkeypatch.setattr(memory_digest, "_extract_facts_with_gemma", _fake_extract)
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: object())
+    monkeypatch.setattr(expert_dispatch, "_ingest_or_supersede", _fake_ingest)
+    monkeypatch.setattr(memory_quality, "is_storable_fact",
+                        lambda t: (False, "question_mark") if t.endswith("?") else (True, ""))
+
+    with caplog.at_level(logging.INFO, logger="memory_idle_consolidation"):
+        stored = _run(mic.consolidate_session("sess-1", "jason", get_ctx=_ctx_factory(conn)))
+
+    assert stored == 2, "one real write + one legacy None; the skip and the drop are not stored"
+    line = next(r.getMessage() for r in caplog.records if "MEMORY_IDLE_CONSOLIDATE" in r.getMessage())
+    assert "stored=2 rejected=1 skipped=1 dropped=1 failed=0" in line, line
+    summary = memory_reject_ledger.summary(1)
+    assert summary["reasons"] == {"question_mark": 1} and summary["sources"] == {"idle_consolidation": 1}
+    memory_reject_ledger.reset_for_tests()

@@ -192,7 +192,11 @@ def _passes_quality_gate(text: str) -> bool:
     real fact."""
     try:
         from memory_quality import is_storable_fact
-        ok, _reason = is_storable_fact(text)
+        ok, reason = is_storable_fact(text)
+        if not ok:
+            # This gate used to drop silently (reason discarded, no log, no counter).
+            from memory_reject_ledger import record_reject
+            record_reject("digest", reason)
         return ok
     except Exception:
         return True
@@ -1143,6 +1147,23 @@ def _text_overlap(a: str, b: str) -> float:
     return len(inter) / max(min(len(wa), len(wb)), 1)
 
 
+def _identical_text(a: str, b: str) -> bool:
+    """Same words ignoring case, spacing and trailing punctuation."""
+    def norm(t: str) -> str:
+        return re.sub(r"\s+", " ", (t or "").strip().lower()).rstrip(" .!?")
+    return norm(a) == norm(b)
+
+
+def _same_subject(a, b) -> bool:
+    """Two rows describe the same thing: same memory type and the same linked entity (both
+    unlinked counts as the same)."""
+    ma, mb = a.metadata or {}, b.metadata or {}
+    if (ma.get("memory_type") or "") != (mb.get("memory_type") or ""):
+        return False
+    return ((ma.get("entity_type") or ""), (ma.get("entity_id") or "")) == \
+        ((mb.get("entity_type") or ""), (mb.get("entity_id") or ""))
+
+
 async def _merge_near_duplicates(svc, user_id: str) -> int:
     """Collapse near-duplicate approved rows. Returns merge count."""
     approved = await svc.list_by_status(
@@ -1166,6 +1187,32 @@ async def _merge_near_duplicates(svc, user_id: str) -> int:
             continue
         matched = False
         for keeper in keepers:
+            if _identical_text(text, keeper.text):
+                # An EXACT duplicate. The old path called ``review(edit, edits=keeper.text)``,
+                # which for identical text re-derives the row's own id: an in-place rewrite
+                # that stamped ``reviewed_by=consolidation`` / ``supersedes_id=<self>`` on a
+                # row nobody reviewed, wrote an ``edit`` audit row and churned the HNSW index
+                # every week (6,585 of 6,605 audit edits, 2026-07..10). Retire the duplicate
+                # through the normal archive path instead (audit row, row kept), but only
+                # when the two rows are the SAME subject — identical text on different
+                # entities (two notes with one title, two people named alike) is not a
+                # duplicate and is left completely alone.
+                if _same_subject(ref, keeper):
+                    try:
+                        if await svc.review(
+                            ref.id,
+                            decision="archive",
+                            actor="consolidation",
+                            note=f"weekly: exact duplicate of {keeper.id}",
+                        ) is not None:
+                            merged += 1
+                    except Exception as exc:
+                        logger.debug(
+                            "consolidation: duplicate archive skipped id=%s: %s", ref.id, exc
+                        )
+                    matched = True
+                    break
+                continue  # same words, different subject → keep both, rewrite nothing
             if _text_overlap(text, keeper.text) >= 0.85:
                 # Supersede the weaker row with the keeper's existing id.
                 try:
@@ -1433,6 +1480,11 @@ async def run_nightly_digest_pass(db=None) -> dict:
     cutoff = _utcnow()
     results = await run_digest_for_all_active_users(db=db, cutoff=cutoff)
     age_h = await newest_owned_user_turn_age_hours(db=db, cutoff=cutoff)
+    try:  # "N candidates rejected: reasons" — counts only, zero is logged too
+        from memory_reject_ledger import log_nightly_summary
+        log_nightly_summary(days=1)
+    except Exception:
+        pass
     return {
         "results": results,
         "cutoff": cutoff,
