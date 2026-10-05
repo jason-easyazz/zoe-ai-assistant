@@ -20,7 +20,15 @@ import expert_dispatch
 import fast_tiers
 from intent_router import detect_and_extract_intent, detect_intent, execute_intent
 
-from tests.test_contacts_conversation import _PeopleDB, _install  # the same tiny people-table fake
+# The same tiny people-table fake, loaded by path: ``from tests.test_contacts_conversation``
+# resolves to the repo-root ``tests`` package when pytest runs from the checkout root (local
+# red, CI green - CI's cwd is services/zoe-data), so the sibling file is imported explicitly.
+import importlib.util as _ilu
+import pathlib as _pl
+_spec = _ilu.spec_from_file_location(
+    "_contacts_conversation_fakes", _pl.Path(__file__).with_name("test_contacts_conversation.py"))
+_fakes = _ilu.module_from_spec(_spec); _spec.loader.exec_module(_fakes)
+_PeopleDB, _install = _fakes._PeopleDB, _fakes._install
 
 USER = "demo_contact_create_user"  # a DEMO user, never a real person
 
