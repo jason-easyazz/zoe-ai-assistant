@@ -90,7 +90,11 @@ def test_each_control_is_named_by_a_cell_and_flips_the_cells_it_alone_guards(con
         assert control == "gate"
         return
     cp = runner.control_pass(CELLS, world.make_world(), frozenset({control}))
-    assert cp["ok"] and cp["checked"] == len(alone) and cp["red"] == len(alone)
+    if cp["checked"] == 0:
+        # every cell naming this control needs a capability this lane lacks (the ``disk`` cells need chromadb,
+        # absent from the slim CI lane): a declared skip, not a proof either way
+        pytest.skip(f"control {control!r}: its cells need a capability this lane lacks")
+    assert cp["ok"] and cp["checked"] <= len(alone) and cp["red"] == cp["checked"]
 
 
 def test_the_s1_signature_appears_when_the_authority_wall_is_off():
