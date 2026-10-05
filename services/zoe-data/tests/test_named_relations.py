@@ -379,9 +379,12 @@ async def test_pets_are_facts_only_never_minted_as_people(svc):
 
 
 async def test_the_speakers_own_list_is_a_fact_not_a_graph_node(svc):
+    """The speaker has no node, so no EDGE; but every listed person is a row owned by the account
+    whose ``relationship`` states the role to the speaker (the link to the owner)."""
     db = await _open_db()
     await pe.process_text("I have two kids, Mika and Biscuit.", user_id=USER, db=db)
-    assert await _names(db) == []
+    assert await _names(db) == ["Biscuit", "Mika"]
+    assert await _edges(db) == []
     assert "User has two kids, Mika and Biscuit." in svc.approved()
 
 
