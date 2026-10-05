@@ -496,6 +496,8 @@ async def _ingest_to_mempalace(
         storable, reason = is_storable_fact(text)
         if not storable:
             logger.debug("person_extractor: dropped non-fact (%s): %r", reason, text[:60])
+            from memory_reject_ledger import record_reject
+            record_reject("person_extractor", reason)
             return None
         from memory_service import get_memory_service
         svc = get_memory_service()
