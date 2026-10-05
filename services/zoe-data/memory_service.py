@@ -1122,6 +1122,23 @@ async def _user_opted_out(user_id: str) -> bool:
         return False
 
 
+def _identity_assertion_blocked(text: str, *, user_id: str, source: str) -> bool:
+    """True when an AUTOMATIC writer is asserting the user's own name. "Automatic" is
+    everything that is not an allow-listed direct source (``identity_facts.DIRECT_USER_SOURCES``:
+    ``voice_fact``, ``brain_tool``, ``review_ui``, ``proposal``, the audit tool) - so a label
+    nobody anticipated (``chat_regex_fallback``) is walled by default. Logs a label only (never the
+    text). Never raises."""
+    try:
+        from identity_facts import is_automatic_source, is_user_name_assertion
+
+        if not is_automatic_source(source, owner=user_id) or not is_user_name_assertion(text):
+            return False
+    except Exception:  # noqa: BLE001 — the guard must never break ingestion
+        return False
+    logger.info("IDENTITY_FACT_BLOCKED user=%s source=%s kind=name origin=automatic", user_id, source)
+    return True
+
+
 class MemoryServiceError(Exception):
     """Raised for operational failures."""
 
@@ -1194,6 +1211,14 @@ class MemoryService:
         # caller remembering to. Explicit teach sources are never dropped.
         if source in MEMORY_OPT_OUT_SOURCES and (opt_out or await _user_opted_out(user_id)):
             self._bump("opt_out", source)
+            return None
+
+        # Identity is an ACCOUNT fact, never a recalled one: an automatic writer (regex,
+        # digest, consolidation, person extractor…) must not store "the user's name is X"
+        # — it mishears and mis-attributes (a speech-to-text fragment naming a third
+        # person became the owner's name). identity_facts answers from the account.
+        if _identity_assertion_blocked(text, user_id=user_id, source=source):
+            self._bump("identity_drop", source)
             return None
 
         scrubbed, reject = scrub_pii(text)
@@ -1617,6 +1642,15 @@ class MemoryService:
             self._bump("opt_out", actor)
             return None
 
+        # The nightly digest's contradiction pass SUPERSEDES via review(edit): the edited
+        # row's source/session_id carry forward, so a polluted name written here looked
+        # like a regex/Telegram row. Same identity wall as ingest().
+        if decision == "edit" and _identity_assertion_blocked(
+            edits or "", user_id=user_id, source=actor
+        ):
+            self._bump("identity_drop", actor)
+            return None
+
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())
         async with lock:
             if decision in {"approve", "reject", "archive"}:
@@ -2006,7 +2040,7 @@ class MemoryService:
     # Statuses that mean "a candidate reached ingest and was NOT written": counted in the
     # durable reject ledger (memory_reject_ledger) so the nightly summary can say why an
     # ingest left no row. ``error`` is separate (a failed write is loud, never a reject).
-    _REFUSED_STATUSES = frozenset({"opt_out", "pii_reject", "tombstone_drop", "dedup"})
+    _REFUSED_STATUSES = frozenset({"opt_out", "pii_reject", "tombstone_drop", "dedup", "identity_drop"})
 
     def _bump(self, status: str, source: str) -> None:
         if _METRICS_OK:

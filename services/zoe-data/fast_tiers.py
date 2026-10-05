@@ -58,7 +58,11 @@ _VOICE_TIER0_DEFER_INTENTS = frozenset({"reminder_list", "timer_status"})
 # slow (2-4s recall/store) and wrong (it mis-stored recall *questions* as facts),
 # so the brain — now given the user's facts + portrait — owns recall and chat.
 CHANNEL_PROFILES: dict[str, dict[str, Any]] = {
-    "chat":     {"run_tier0": True,  "allow_writes": False},
+    # identity_tier: own-identity questions ("what's my name", "where do I live") are
+    # answered from the ACCOUNT (identity_facts), never recalled from memory. Voice/
+    # livekit are deliberately NOT listed: their scope gate runs after resolve() and
+    # personal facts must not bypass it (same reason as _VOICE_TIER0_DEFER_INTENTS).
+    "chat":     {"run_tier0": True,  "allow_writes": False, "identity_tier": True},
     "voice":    {"run_tier0": True,  "allow_writes": True,
                  "defer_domains": frozenset({"people", "memory"}),
                  "tier0_defer_intents": _VOICE_TIER0_DEFER_INTENTS},
@@ -67,7 +71,7 @@ CHANNEL_PROFILES: dict[str, dict[str, Any]] = {
     # could never be answered: binds_followups=False tells a `direct` write to
     # state the outcome instead of asking.
     "livekit":  {"run_tier0": True,  "allow_writes": True, "binds_followups": False},
-    "telegram": {"run_tier0": True,  "allow_writes": True},
+    "telegram": {"run_tier0": True,  "allow_writes": True, "identity_tier": True},
 }
 
 
@@ -363,6 +367,29 @@ async def _conversation_quality_tier(text: str, user_id: str, session_id: str):
     return None
 
 
+async def _identity_tier(text: str, user_id: str):
+    """Own-identity question → one sentence built from the ACCOUNT, before recall.
+
+    Unflagged (a correctness fix): it acts only on a narrow whole-utterance question
+    shape from a REGISTERED account whose account actually holds the fact, and returns
+    None otherwise — so the brain answers every other turn exactly as before."""
+    try:
+        import identity_facts as _idf
+
+        hit = await _idf.maybe_answer(text, user_id)
+        if hit is None:
+            return None
+        kind, reply = hit
+        import expert_dispatch as _xd
+
+        return _xd.DispatchResult(
+            domain="identity", reply=reply, intent=f"identity_{kind}", tier="identity",
+        )
+    except Exception as exc:  # never let the tier break a turn
+        logger.warning("fast_tiers identity tier failed (non-fatal): %s", exc)
+        return None
+
+
 async def resolve(
     text: str,
     user_id: str,
@@ -400,6 +427,12 @@ async def resolve(
         cq = await _conversation_quality_tier(text, user_id, session_id)
         if cq is not None:
             return cq
+
+        # Identity facts come from the account, never from memory.
+        if prof.get("identity_tier"):
+            idt = await _identity_tier(text, user_id)
+            if idt is not None:
+                return idt
 
         # Tier-0 — deterministic regex read shortcut (opt-in per channel).
         # `tier0_defer_intents` (from the channel profile) names read intents this

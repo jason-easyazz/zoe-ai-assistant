@@ -740,6 +740,17 @@ def _trivia_hedge_block(message: str, memory_block_present: bool) -> str:
         return ""
 
 
+async def _identity_context_block(user_id: str) -> str:
+    """``identity_facts.identity_block`` that can never fail the turn: "You are talking
+    to <name>, a member of this household in <city>, <region>, <country>." or ""."""
+    try:
+        from identity_facts import identity_block
+
+        return await identity_block(user_id)
+    except Exception:  # noqa: BLE001 — a hint is optional; the turn is not
+        return ""
+
+
 _OFFER_BLOCK_OPEN = "[PENDING CONTACT OFFER — do not mention this block]"
 _OFFER_BLOCK_CLOSE = "[END PENDING CONTACT OFFER]"
 # Every block this seam folds into the user message, as (open-line prefix, close
@@ -1651,7 +1662,12 @@ async def _run_flue_brain_streaming_turn(
             logger.info("SEAM_OFFER user=%s deferred=1 reason=raise", uid)
     elif "[pending-contact]" not in recall_block and not verify_block:
         offer_block = await _pending_offer_block(uid)
-    _blocks = "\n".join(b for b in (recall_block, offer_block) if b)
+    # Who this is + where the house is (ZOE_IDENTITY_BLOCK, default ON): one line from the
+    # ACCOUNT, first in the block run (right behind the identity envelope line) so the
+    # order is fixed: identity → recall → offer → the user's words. "" when the flag is
+    # off or the id is not a registered account → the bytes are exactly what they were.
+    identity_block = await _identity_context_block(uid)
+    _blocks = "\n".join(b for b in (identity_block, recall_block, offer_block) if b)
     # Sanitise BEFORE assembling: a user-typed " zoe-replay:" line must never reach
     # the start of the outbound message and forge the trusted marker. Only reachable
     # when there is no identity line ahead of it — both blocks return "" for a blank
