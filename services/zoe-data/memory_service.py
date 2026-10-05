@@ -2067,12 +2067,18 @@ class MemoryService:
 
     async def _affect_allowed(self, user_id: str) -> bool:
         """May an AFFECTIVE record (an ``emotional_moment`` row, a feeling in a row's metadata)
-        be kept for this member? docs/governance/emotional-safety-note.md section 6: consenting
-        adult members only; guests and children never. Default mode ``members``: guest sentinels
-        and a member flagged a minor are refused (a failed lookup fails OPEN there with a warning
-        - the minor flag lives in Postgres, and refusing all feelings on a DB blip would silence
-        the feature). ``optin`` additionally needs a stored persona mode (the opt-in) and fails
-        CLOSED. ``off`` allows all."""
+        be kept for this person? Owner product decision 2026-10-05
+        (docs/governance/emotional-safety-note.md section 6). Modes (``memory_authority.affect_gate_mode``):
+
+        * ``household`` (DEFAULT): every household member incl. children, no stored consent row.
+          Guests are refused - a guest is the sentinel principal in ``user_filters.GUEST_USERS``
+          (``guest`` / ``anonymous`` / ``voice-guest`` / ``voice-daemon`` / empty), the same set
+          the batch memory passes and ``auth`` use. A person with no ``member_modes`` row is a
+          member. A failed member lookup refuses (closed).
+        * ``members``: as above but a member flagged a minor is refused; a failed lookup fails
+          OPEN with a warning (the minor flag lives in Postgres; a DB blip must not silence it).
+        * ``optin``: adult members with a stored persona mode; fails CLOSED.
+        * ``off``: allows all."""
         mode = _auth.affect_gate_mode()
         if mode == "off":
             return True
@@ -2090,9 +2096,12 @@ class MemoryService:
 
             member = await asyncio.wait_for(load_member_mode(uid), timeout=2.0)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("memory_service: affect consent lookup failed (%s) - %s",
-                           type(exc).__name__, "closed" if mode == "optin" else "open")
-            return mode != "optin"
+            closed = mode in ("household", "optin")
+            logger.warning("memory_service: affect gate lookup failed (%s) - %s",
+                           type(exc).__name__, "closed" if closed else "open")
+            return not closed
+        if mode == "household":
+            return True
         if member.minor:
             return False
         return not (mode == "optin" and member.mode == UNSET_MODE)

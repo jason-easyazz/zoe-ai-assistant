@@ -8,11 +8,12 @@
   a user (or admin) action, enforced at the entry point.
 * Edges: ``person_extractor._write_relationship`` -> ``_edge_may_change`` is the people-graph half of
   the same rule (``test_memory_authority_people.py`` pins the stamps).
-* Affect consent (docs/governance/emotional-safety-note.md section 6): a RECORD of how someone seems
-  (an ``emotional_moment`` row, a feeling in a row's metadata) is kept for consenting adult members
-  only - guests and children never. ``ZOE_AFFECT_CONSENT_GATE=optin`` (DEFAULT) also needs the member's
-  stored persona mode (the consent record); ``members`` refuses only guests and members flagged as
-  minors; ``off`` allows.
+* Affect gate (docs/governance/emotional-safety-note.md section 6; owner product decision 2026-10-05):
+  a RECORD of how someone seems (an ``emotional_moment`` row, a feeling in a row's metadata) is kept
+  for every household member INCLUDING children, never for guests, no stored consent row.
+  ``ZOE_AFFECT_CONSENT_GATE=household`` (DEFAULT); ``members`` = adults only; ``optin`` = a stored
+  persona mode (the consent record) is required; ``off`` allows. The tests below name the mode they
+  exercise; only the ``test_the_default_*`` ones rely on the env being unset.
 
 Synthetic data, fake Chroma, fake persona lookup (ci_safe).
 """
@@ -151,7 +152,7 @@ def test_the_edge_writer_calls_the_authority_rule():
     assert "may_override(" in inspect.getsource(person_extractor._edge_may_change)
 
 
-# ── affect consent ───────────────────────────────────────────────────────────
+# ── affect gate ──────────────────────────────────────────────────────────────
 
 def _persona(monkeypatch, *, mode="companion", minor=False, fail=False):
     import persona_layer
@@ -164,69 +165,136 @@ def _persona(monkeypatch, *, mode="companion", minor=False, fail=False):
     monkeypatch.setattr(persona_layer, "load_member_mode", load)
 
 
+def _gate(monkeypatch, mode):
+    monkeypatch.setenv("ZOE_AFFECT_CONSENT_GATE", mode)
+
+
 def emo(svc, user=UID, **kw):
     return asyncio.run(svc.ingest("User was proud of the 5k finish.", user_id=user, source="digest",
                                   memory_type="emotional_moment", status="approved", **kw))
 
 
-@pytest.mark.parametrize("guest", ["guest", "voice-guest", "anonymous", "voice-daemon"])
-def test_guests_never_get_an_affective_record(svc, monkeypatch, guest, caplog):
+GUESTS = ["guest", "voice-guest", "anonymous", "voice-daemon"]
+
+
+def test_the_default_is_household_and_keeps_a_minors_emotional_moment(svc, monkeypatch):
+    """Owner decision 2026-10-05: env unset = household. A child's emotional moment is kept."""
+    assert ma.affect_gate_mode() == "household"
+    _persona(monkeypatch, mode="kid", minor=True)
+    ref = emo(svc)
+    assert ref is not None and ref.metadata["memory_type"] == "emotional_moment"
+
+
+def test_the_default_needs_no_consent_row(svc, monkeypatch):
+    """No member_modes row (UNSET) is still a member under the default - no stored consent needed."""
+    assert ma.affect_gate_mode() == "household"
+    _persona(monkeypatch, mode="unset")
+    assert emo(svc) is not None
+
+
+@pytest.mark.parametrize("guest", GUESTS)
+@pytest.mark.parametrize("mode", [None, "household", "members", "optin"])
+def test_guests_never_get_an_affective_record_in_any_mode(svc, monkeypatch, guest, mode, caplog):
+    """The default (None = env unset) and every explicit mode: a guest sentinel is refused."""
     caplog.set_level(logging.INFO, logger=memory_service.logger.name)
+    if mode:
+        _gate(monkeypatch, mode)
     _persona(monkeypatch)
     assert emo(svc, user=guest) is None and not svc._col.rows
     assert "AFFECT_NOT_STORED" in caplog.text
 
 
-def test_a_minor_never_gets_an_affective_record(svc, monkeypatch):
+def test_household_refuses_when_the_member_lookup_fails(svc, monkeypatch):
+    """Unknown / failed lookup is closed under the default (and explicit household)."""
+    _persona(monkeypatch, fail=True)
+    assert emo(svc, user="member-c") is None and not svc._col.rows
+    _gate(monkeypatch, "household")
+    assert emo(svc, user="member-c") is None
+
+
+def test_household_keeps_adults_and_children_alike(svc, monkeypatch):
+    _gate(monkeypatch, "household")
+    for persona in ({"mode": "companion"}, {"mode": "unset"}, {"mode": "kid", "minor": True},
+                    {"mode": "helper", "minor": True}):
+        _persona(monkeypatch, **persona)
+        assert emo(svc, user=f"member-{persona['mode']}") is not None, persona
+
+
+def test_members_mode_is_adults_only_without_a_consent_row_and_fails_open(svc, monkeypatch):
+    _gate(monkeypatch, "members")
+    _persona(monkeypatch, mode="unset")
+    assert emo(svc) is not None                               # no consent row needed
     _persona(monkeypatch, mode="kid", minor=True)
-    assert emo(svc) is None and not svc._col.rows
+    assert emo(svc, user="member-b") is None                  # minors refused in this stricter mode
+    _persona(monkeypatch, fail=True)
+    assert emo(svc, user="member-c") is not None              # a DB blip is not a ban here
 
 
-def test_a_consenting_adult_keeps_it(svc, monkeypatch):
+def test_optin_mode_requires_a_stored_consent_row_and_fails_closed(svc, monkeypatch):
+    _gate(monkeypatch, "optin")
+    _persona(monkeypatch, mode="unset")
+    assert emo(svc) is None                                   # no consent row: not kept
+    _persona(monkeypatch, mode="companion")
+    assert emo(svc) is not None                               # the stored mode is the consent
+    _persona(monkeypatch, mode="kid", minor=True)
+    assert emo(svc, user="member-b") is None                  # minors refused
+    _persona(monkeypatch, fail=True)
+    assert emo(svc, user="member-c") is None                  # lookup failed: closed
+
+
+def test_an_unrecognised_value_falls_to_the_strictest_gate_not_the_default(monkeypatch):
+    for typo in ("hosuehold", "adults", "strict", "1", "true"):
+        monkeypatch.setenv("ZOE_AFFECT_CONSENT_GATE", typo)
+        assert ma.affect_gate_mode() == "optin", typo
+    for raw, want in (("household", "household"), (" Members ", "members"), ("optin", "optin"),
+                      ("off", "off"), ("0", "off")):
+        monkeypatch.setenv("ZOE_AFFECT_CONSENT_GATE", raw)
+        assert ma.affect_gate_mode() == want, raw
+    monkeypatch.delenv("ZOE_AFFECT_CONSENT_GATE")
+    assert ma.affect_gate_mode() == "household"
+
+
+def test_off_is_the_break_the_fix_control(svc, monkeypatch):
+    _gate(monkeypatch, "off")
     _persona(monkeypatch)
-    ref = emo(svc)
-    assert ref is not None and ref.metadata["memory_type"] == "emotional_moment"
+    assert emo(svc, user="guest") is not None
 
 
-def test_a_fact_with_a_feeling_keeps_the_fact_not_the_feeling_for_a_minor(svc, monkeypatch):
+def test_a_fact_with_a_feeling_keeps_it_for_a_minor_by_default_and_strips_it_in_members(svc, monkeypatch):
     _persona(monkeypatch, mode="kid", minor=True)
-    ref = put(svc, "User has a swimming carnival on Friday.", source="turn_digest",
-              metadata={"affect": "anxious"})
-    assert ref is not None and not any(k.endswith("affect") for k in ref.metadata)
+    kept = put(svc, "User has a swimming carnival on Friday.", source="turn_digest",
+               metadata={"affect": "anxious"})
+    assert kept.metadata.get("candidate_affect") == "anxious"          # household default
+    _gate(monkeypatch, "members")
+    stripped = put(svc, "User has a spelling test on Monday.", source="turn_digest",
+                   metadata={"affect": "anxious"})
+    assert stripped is not None and not any(k.endswith("affect") for k in stripped.metadata)
     _persona(monkeypatch)
     ok = put(svc, "User has a maths test on Monday.", source="turn_digest", metadata={"affect": "anxious"})
     assert ok.metadata.get("candidate_affect") == "anxious"
 
 
-def test_an_edit_cannot_make_a_minor_row_affective(svc, monkeypatch):
+def test_a_guests_fact_never_carries_a_feeling_in_any_mode(svc, monkeypatch):
+    _persona(monkeypatch)
+    for mode in ("household", "members", "optin"):
+        _gate(monkeypatch, mode)
+        ref = put(svc, f"Visitor asked about parking ({mode}).", source="turn_digest", user="voice-guest",
+                  metadata={"affect": "anxious"})
+        assert ref is None or not any(k.endswith("affect") for k in ref.metadata), mode
+
+
+def test_an_edit_keeps_a_minors_affective_row_by_default_but_members_refuses(svc, monkeypatch):
     _persona(monkeypatch)
     row = emo(svc)
     _persona(monkeypatch, mode="kid", minor=True)
     assert asyncio.run(svc.review(row.id, decision="edit", edits="User was proud of the 10k finish.",
-                                  actor="review_ui")) is None
-
-
-def test_default_mode_requires_a_stored_consent_row_and_fails_closed(svc, monkeypatch):
-    assert ma.affect_gate_mode() == "optin"                   # unset env = opt-in
-    _persona(monkeypatch, mode="unset")
-    assert emo(svc) is None                                   # no consent row: not kept
-    _persona(monkeypatch, mode="companion")
-    assert emo(svc) is not None                               # the stored mode is the consent
-    _persona(monkeypatch, fail=True)
-    assert emo(svc, user="member-c") is None                  # lookup failed: closed
-
-
-def test_members_mode_is_the_explicit_loosening_and_fails_open(svc, monkeypatch):
-    monkeypatch.setenv("ZOE_AFFECT_CONSENT_GATE", "members")
-    _persona(monkeypatch, mode="unset")
-    assert emo(svc) is not None                               # no consent row needed
-    _persona(monkeypatch, mode="kid", minor=True)
-    assert emo(svc, user="member-b") is None                  # minors still never
-    _persona(monkeypatch, fail=True)
-    assert emo(svc, user="member-c") is not None              # a DB blip is not a ban here
-    monkeypatch.setenv("ZOE_AFFECT_CONSENT_GATE", "off")      # the break-the-fix control
+                                  actor="review_ui")) is not None   # household default keeps it
+    _gate(monkeypatch, "members")
     _persona(monkeypatch)
-    assert emo(svc, user="guest") is not None
+    row2 = emo(svc, user="member-d")
+    _persona(monkeypatch, mode="kid", minor=True)
+    assert asyncio.run(svc.review(row2.id, decision="edit", edits="User was proud of the 10k finish.",
+                                  actor="review_ui")) is None
 
 
 # ── review(edit) with a feeling in the metadata (Codex #1868 r4) ─────────────
@@ -236,10 +304,25 @@ def _edit_with_affect(svc, row):
                                   actor="turn_digest", metadata={"affect": "anxious", "valence": "-0.4"}))
 
 
-@pytest.mark.parametrize("persona", [{"mode": "kid", "minor": True}, {"mode": "unset"}, {"fail": True}])
-def test_an_edit_cannot_attach_a_feeling_without_consent(svc, monkeypatch, persona):
-    """A minor, a member with no consent row (the default gate is opt-in), and a failed lookup
-    (closed): the fact is edited, the feeling is stripped - not persisted as candidate_affect."""
+def test_an_edit_attaches_a_feeling_for_a_minor_and_an_unconsented_member_by_default(svc, monkeypatch):
+    for persona in ({"mode": "kid", "minor": True}, {"mode": "unset"}):
+        _persona(monkeypatch)
+        row = put(svc, f"User has a dentist visit on Friday ({persona['mode']}).", source="turn_digest")
+        _persona(monkeypatch, **persona)
+        new = _edit_with_affect(svc, row)
+        assert new is not None and new.metadata.get("candidate_affect") == "anxious", persona
+
+
+@pytest.mark.parametrize("gate,persona", [
+    ("members", {"mode": "kid", "minor": True}),
+    ("optin", {"mode": "kid", "minor": True}),
+    ("optin", {"mode": "unset"}),
+    ("optin", {"fail": True}),
+    ("household", {"fail": True}),
+])
+def test_an_edit_cannot_attach_a_feeling_where_the_gate_refuses(svc, monkeypatch, gate, persona):
+    """The fact is edited, the feeling is stripped - not persisted as candidate_affect."""
+    _gate(monkeypatch, gate)
     _persona(monkeypatch)
     row = put(svc, "User has a dentist visit on Friday.", source="turn_digest")
     _persona(monkeypatch, **persona)
@@ -248,17 +331,18 @@ def test_an_edit_cannot_attach_a_feeling_without_consent(svc, monkeypatch, perso
     assert not any(k.endswith(("affect", "valence", "intensity")) for k in new.metadata), new.metadata
 
 
-def test_an_edit_does_not_carry_forward_a_feeling_the_member_no_longer_consents_to(svc, monkeypatch):
+def test_an_edit_does_not_carry_forward_a_feeling_the_gate_no_longer_allows(svc, monkeypatch):
+    _gate(monkeypatch, "optin")
     _persona(monkeypatch)
     row = put(svc, "User has a dentist visit on Friday.", source="turn_digest", metadata={"affect": "anxious"})
     assert row.metadata.get("candidate_affect") == "anxious"
-    _persona(monkeypatch, mode="unset")                        # consent withdrawn
+    _persona(monkeypatch, mode="unset")                        # consent withdrawn (optin mode)
     new = asyncio.run(svc.review(row.id, decision="edit", edits="User has a dentist visit on Monday.",
                                  actor="turn_digest"))
     assert new is not None and "candidate_affect" not in new.metadata
 
 
-def test_a_consenting_member_keeps_the_feeling_on_an_edit(svc, monkeypatch):
+def test_a_member_keeps_the_feeling_on_an_edit(svc, monkeypatch):
     _persona(monkeypatch)
     row = put(svc, "User has a dentist visit on Friday.", source="turn_digest")
     new = _edit_with_affect(svc, row)
