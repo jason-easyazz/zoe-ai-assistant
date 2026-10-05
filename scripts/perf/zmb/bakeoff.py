@@ -373,7 +373,7 @@ class Window:
         return parse_panel_age(r.out, self.host.now()) if r.rc == 0 else None
 
     def landing_running(self) -> str:
-        for label, pat in (("a voice-PR landing", r"^bash .*/land_voice_pr\.sh"), ("the samantha bar", r"^/bin/bash .*samantha_bar")):
+        for label, pat in (("a voice-PR landing", r"^bash .*/land_voice_pr\.sh"), ("the samantha bar", r"samantha_bar\.py|samantha_day_sim\.py")):
             if self.host.run(["pgrep", "-f", pat], mutating=False).rc == 0:
                 return label
         return ""
