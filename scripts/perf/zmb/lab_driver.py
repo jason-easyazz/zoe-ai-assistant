@@ -44,6 +44,11 @@ CONTROLS = {
     "extractor": "a lazy extractor that flips day/month, guesses roles, mines questions and assistant text",
     "gate": "the write-quality gate removed - questions, meta-rambling and transcript echoes are stored",
     "reader": "a reader that always answers from the nearest row instead of declining",
+    "supersede": "ZOE_MEMORY_IMPLICIT_SUPERSEDE=off - the nightly implicit-conflict pass retires nothing (a changed fact never replaces the old one)",
+    "invalidate": "a superseded row is DELETED instead of invalidated (no history is kept)",
+    "retrieval": "search ignores the query and returns the newest rows (the ranking / owner filter is broken)",
+    "provenance": "the write boundary drops source_excerpt and user_turn_id (a row no longer says which turn it came from)",
+    "topic": "the same-topic guard removed: a change retires every older fact, about anyone",
 }
 
 _PIN_ENV = {
@@ -315,6 +320,50 @@ def controls_off(features: "frozenset[str] | set[str]", svc: types.SimpleNamespa
             old_mode = READER["sycophantic"]
             READER["sycophantic"] = True
             undo.append(lambda: READER.__setitem__("sycophantic", old_mode))
+        if "supersede" in features:
+            setenv("ZOE_MEMORY_IMPLICIT_SUPERSEDE", "off")
+        if "invalidate" in features:
+            ms = svc.memory_service.MemoryService
+            real_write_row, real_sup = ms._write_row, ms._supersede_by_sync
+
+            def write_row_no_history(self, mem_id, text, metadata):
+                if str((metadata or {}).get("status") or "") == "superseded":
+                    self._collection().delete(ids=[mem_id])      # "invalidated" by deleting the row
+                    return None
+                return real_write_row(self, mem_id, text, metadata)
+
+            def supersede_by_deleting(self, user_id, old_id, new_id):
+                done = real_sup(self, user_id, old_id, new_id)
+                if done:
+                    self._collection().delete(ids=[old_id])
+                return done
+            patch(ms, "_write_row", write_row_no_history)
+            patch(ms, "_supersede_by_sync", supersede_by_deleting)
+        if "retrieval" in features:
+            ms = svc.memory_service.MemoryService
+
+            def newest_first_search(self, query, user_id, limit, depth_by_pid=None):
+                import datetime as _dt
+                rows = self._visible_rows(user_id, _dt.datetime.now(_dt.timezone.utc))
+                rows.sort(key=lambda r: (float((r.metadata or {}).get("added_ts") or 0.0), r.id), reverse=True)
+                return rows[:limit]
+            patch(ms, "_semantic_search", newest_first_search)
+        if "provenance" in features:
+            ms = svc.memory_service.MemoryService
+            raw_build = ms.__dict__["_build_metadata"]        # a staticmethod: restore the descriptor itself
+            real_build = ms._build_metadata
+
+            def build_without_provenance(**k):
+                md = real_build(**k)
+                md.pop("source_excerpt", None)
+                md.pop("user_turn_id", None)
+                return md
+            ms._build_metadata = staticmethod(build_without_provenance)
+            undo.append(lambda: setattr(ms, "_build_metadata", raw_build))
+        if "topic" in features:
+            sup = importlib.import_module("memory_supersede")
+            patch(sup, "same_topic", lambda new, old: True)
+            patch(sup, "exclusive_conflict", lambda new, old: True)
         yield
     finally:
         for fn in reversed(undo):

@@ -1,0 +1,166 @@
+{
+  "spec_version": 1,
+  "axis": "authority",
+  "cells": [
+    {
+      "id": "A3.typed_turn_rows",
+      "title": "provenance: every row stored from a typed owner turn says which turn and which words it came from, and its authority class (>= 95%)",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["provenance"],
+      "lme_map": "(none)",
+      "note": "the rate over rows of this lane (the typed regex extractor, chat_regex): source_excerpt (the owner's own sentence), user_turn_id and authority_class all non-empty",
+      "events": [
+        {"text": "I live in {home}", "speaker": "owner_typed"},
+        {"text": "I work at {job}", "speaker": "owner_typed"},
+        {"text": "my dog is named {pet}", "speaker": "owner_typed"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "count_at_least", "contains": [], "statuses": ["approved"], "origins": ["chat_regex"], "n": 3},
+          {"op": "fraction_have", "contains": [], "statuses": ["approved"], "origins": ["chat_regex"],
+           "fields": ["source_excerpt", "user_turn_id", "authority_class"], "min": 0.95}
+        ]}
+      ]
+    },
+    {
+      "id": "A3.voice_verified_turn_rows",
+      "title": "provenance: every row stored from a speaker-verified voice turn carries its excerpt, its turn id and its authority class (>= 95%)",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["provenance"],
+      "lme_map": "(none)",
+      "events": [
+        {"text": "I live in {home}", "speaker": "owner_voice_verified"},
+        {"text": "I work at {job}", "speaker": "owner_voice_verified"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "count_at_least", "contains": [], "statuses": ["approved"], "origins": ["voice_regex"], "n": 2},
+          {"op": "fraction_have", "contains": [], "statuses": ["approved"], "origins": ["voice_regex"],
+           "fields": ["source_excerpt", "user_turn_id", "authority_class"], "min": 0.95}
+        ]}
+      ]
+    },
+    {
+      "id": "A3.taught_rows",
+      "title": "provenance: every row stored from an explicit 'remember that ...' teach carries the owner's excerpt, its turn id and its authority class (>= 95%)",
+      "tier": "store",
+      "kind": "script",
+      "expected": "FAIL",
+      "lme_map": "(none)",
+      "note": "measured: the teach lane (expert_dispatch store_fact, source voice_fact) stamps a stable user_turn_id and authority_class but passes NO source_excerpt, so none of its rows says which words it came from. The fix is one argument at that call site",
+      "events": [
+        {"text": "User lives in {home}.", "speaker": "owner_taught"},
+        {"text": "User works at {job}.", "speaker": "owner_taught"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "count_at_least", "contains": [], "statuses": ["approved"], "origins": ["voice_fact"], "n": 2},
+          {"op": "fraction_have", "contains": [], "statuses": ["approved"], "origins": ["voice_fact"],
+           "fields": ["source_excerpt", "user_turn_id", "authority_class"], "min": 0.95}
+        ]}
+      ]
+    },
+    {
+      "id": "A3.nightly_digest_rows",
+      "title": "provenance: a row the nightly digest mines from the owner's day carries an excerpt, a turn id and its authority class (>= 95%)",
+      "tier": "store",
+      "kind": "script",
+      "expected": "FAIL",
+      "lme_map": "(none)",
+      "note": "measured: the digest stamps authority_class (user_stated_derived when the day's words support the fact) but passes only anchor_text, which is not stored: no source_excerpt and no user_turn_id, so nothing says which turn the fact came from",
+      "events": [
+        {"do": "idle_pass", "transcript": "so today I went to the shop and the weather was fine and then I told everyone that I live in {home} and the kids were at school until late and we had dinner at home quietly and watched a film together", "proposes": ["User lives in {home}"]}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "count_at_least", "contains": ["{home}"], "statuses": ["approved"], "origins": ["digest"], "n": 1},
+          {"op": "fraction_have", "contains": ["{home}"], "statuses": ["approved"], "origins": ["digest"],
+           "fields": ["source_excerpt", "user_turn_id", "authority_class"], "min": 0.95}
+        ]}
+      ]
+    },
+    {
+      "id": "A3.user_turn_rows_rate",
+      "title": "provenance rate: of the rows stored from user turns across the typed, voice, teach and nightly-digest lanes (equal weight), >= 95% carry excerpt, turn id and authority class",
+      "tier": "store",
+      "kind": "script",
+      "expected": "FAIL",
+      "lme_map": "(none)",
+      "note": "the decision record's 'provenance >= 95% rows with an excerpt'. An equal-weight sample of the four lanes, NOT the live mix (the live palace holds 5 of 284 rows with an excerpt, measured 2026-10-05): the per-lane cells above say which lane is the gap",
+      "events": [
+        {"do": "idle_pass", "transcript": "so today I went to the shop and the weather was fine and then I told everyone that I work at {job} and the kids were at school until late and we had dinner at home quietly and watched a film together", "proposes": ["User works at {job}"]},
+        {"text": "I live in {home}", "speaker": "owner_typed"},
+        {"text": "my dog is named {pet}", "speaker": "owner_typed"},
+        {"text": "I live in {home_old}", "speaker": "owner_voice_verified"},
+        {"text": "User's friend {friend} lives in {lima}.", "speaker": "owner_taught"},
+        {"text": "User's friend {sibling} lives in {home_intruder}.", "speaker": "owner_taught"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "fraction_have", "contains": [], "statuses": ["approved"],
+           "fields": ["source_excerpt", "user_turn_id", "authority_class"], "min": 0.95}
+        ]}
+      ]
+    },
+    {
+      "id": "A8.inferred_cannot_close_user_edge",
+      "title": "graph edges: an inferred relationship ('spouse', written by the nightly digest) cannot close the user-stated 'friend' edge between the same two people",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["authority"],
+      "lme_map": "(none)",
+      "note": "the REAL person_extractor._write_relationship over an in-memory SQLite with the 0007 / 0015 (temporal edges) / 0037 (writer stamp) shapes, with the live flag ZOE_TEMPORAL_RELATIONSHIPS_ENABLED=1. Control: ZOE_MEMORY_AUTHORITY=off lets the same write close the edge",
+      "events": [
+        {"do": "edge", "a": "{friend}", "b": "{sibling}", "rel": "friend", "group": "personal", "authority": "user_stated", "origin": "conversation"},
+        {"do": "edge", "a": "{friend}", "b": "{sibling}", "rel": "spouse", "group": "family", "authority": "inferred", "origin": "digest"}
+      ],
+      "probes": [
+        {"kind": "edges", "assertions": [
+          {"op": "current_rel", "a": "{friend}", "b": "{sibling}", "equals": "friend"},
+          {"op": "no_current_rel", "a": "{friend}", "b": "{sibling}", "equals": "spouse"},
+          {"op": "history_len", "a": "{friend}", "b": "{sibling}", "n": 1}
+        ]}
+      ]
+    },
+    {
+      "id": "A8.refused_edge_is_held_not_lost",
+      "title": "graph edges: the refused inferred relationship is kept as a disputed candidate that points at the edge it would have closed",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["authority"],
+      "lme_map": "(none)",
+      "events": [
+        {"do": "edge", "a": "{friend}", "b": "{sibling}", "rel": "friend", "group": "personal", "authority": "user_stated", "origin": "conversation"},
+        {"do": "edge", "a": "{friend}", "b": "{sibling}", "rel": "spouse", "group": "family", "authority": "inferred", "origin": "digest"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "present", "contains": ["{friend}", "{sibling}"], "statuses": ["disputed"]},
+          {"op": "field_set", "contains": ["{friend}", "{sibling}"], "statuses": ["disputed"], "field": "contradicts_id"}
+        ]}
+      ]
+    },
+    {
+      "id": "A8.user_change_closes_edge_keeps_history",
+      "title": "sanity (instrument check): the owner's own later statement DOES change the relationship, and the closed edge is kept as history",
+      "tier": "store",
+      "kind": "script",
+      "sanity": true,
+      "lme_map": "",
+      "note": "the positive control for A8: a wall that blocks every change would pass the cells above",
+      "events": [
+        {"do": "edge", "a": "{friend}", "b": "{sibling}", "rel": "friend", "group": "personal", "authority": "user_stated", "origin": "conversation"},
+        {"do": "edge", "a": "{friend}", "b": "{sibling}", "rel": "spouse", "group": "family", "authority": "user_stated", "origin": "conversation"}
+      ],
+      "probes": [
+        {"kind": "edges", "assertions": [
+          {"op": "current_rel", "a": "{friend}", "b": "{sibling}", "equals": "spouse"},
+          {"op": "closed_rel", "a": "{friend}", "b": "{sibling}", "equals": "friend"},
+          {"op": "history_len", "a": "{friend}", "b": "{sibling}", "n": 2}
+        ]}
+      ]
+    }
+  ]
+}

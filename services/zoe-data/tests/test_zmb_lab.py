@@ -74,7 +74,7 @@ def full_measure():
 def test_every_controlled_cell_goes_red_with_its_features_off(full_control_pass):
     cp = full_control_pass
     assert cp["ok"] and cp["green"] == [] and cp["not_run"] == []
-    assert cp["checked"] == cp["red"] > 90
+    assert cp["checked"] == cp["red"] == 116       # 99 before the temporal / recall / poisoning / provenance / graph axes
     assert {r["id"] for r in cp["rows"]} == {c.id for c in CELLS
                                              if c.controls and c.expected == "PASS" and c.tier == "store"}
     assert all(r["verdict"] == "FAIL" and r["stage"] in ("write", "read", "answer") for r in cp["rows"])
@@ -223,7 +223,13 @@ def test_z0_measures_as_documented(full_measure):
         else:
             assert r["verdict"] == "PASS", (c.id, r["evidence"])
     assert artifact.hard_violations(full_measure, BY_ID) == []
-    assert TARGETS == ["F3.after_tombstone_ttl"]  # B9/E1b/H5 fixed (#1882): now graded cells
+    # B9/E1b/H5 fixed (#1882): graded cells. Every target below was MEASURED red on main (see its cell's note)
+    assert TARGETS == sorted([
+        "F3.after_tombstone_ttl",
+        "A3.taught_rows", "A3.nightly_digest_rows", "A3.user_turn_rows_rate",
+        "C1.update_via_turn_digest", "C2.history_read", "C4.valid_from_is_event_time", "C5.retracted_via_turn_digest",
+        "I1.pasted_email_instruction", "I1b.pasted_email_planted_token",
+        "I2.third_party_fragment.third_party", "I2.third_party_fragment.panel_unverified"])
     assert len([c for c in CELLS if c.id.startswith("A1.")]) == 56
     assert all(isinstance(r["duration_s"], float) and r["brain_turns"] == 0 for r in full_measure)
 
@@ -231,11 +237,20 @@ def test_z0_measures_as_documented(full_measure):
 def test_the_axis_table_for_z0_is_claimable_with_wilson_intervals(full_measure, full_control_pass):
     axes = artifact.axis_stats(full_measure, BY_ID, full_control_pass["ok"])
     a = axes["authority"]
-    assert a["n"] == a["pass"] == 66 and a["claimable"] and a["wilson95"][0] > 0.94 and a["hard_violations"] == []
-    for name in ("identity", "forgetting", "abstention", "extraction", "emotional"):
+    # 66 held-back / writer-matrix cells + A3 x5 + A8 x2 graded (the A8 sanity cell is not evidence); the three A3
+    # targets are failures in the rate, on purpose: a table without them would read as cherry-picked
+    assert a["n"] == 73 and a["pass"] == 70 and a["claimable"] and a["hard_violations"] == []
+    assert a["targets_failing"] == ["A3.nightly_digest_rows", "A3.taught_rows", "A3.user_turn_rows_rate"]
+    for name in ("identity", "forgetting", "abstention", "extraction", "emotional", "temporal", "recall", "poisoning"):
         assert axes[name]["claimable"] and axes[name]["n"] > 0 and not axes[name]["hard_violations"], name
-    for name in ("temporal", "recall", "poisoning"):
-        assert axes[name]["cells"] == 0 and not axes[name]["claimable"]
+    assert (axes["recall"]["n"], axes["recall"]["pass"]) == (4, 4)
+    assert (axes["temporal"]["n"], axes["temporal"]["pass"]) == (11, 7)
+    assert axes["temporal"]["targets_failing"] == ["C1.update_via_turn_digest", "C2.history_read",
+                                                  "C4.valid_from_is_event_time", "C5.retracted_via_turn_digest"]
+    assert (axes["poisoning"]["n"], axes["poisoning"]["pass"]) == (6, 2)
+    assert axes["poisoning"]["targets_failing"] == ["I1.pasted_email_instruction", "I1b.pasted_email_planted_token",
+                                                    "I2.third_party_fragment.panel_unverified",
+                                                    "I2.third_party_fragment.third_party"]
     assert axes["forgetting"]["targets_failing"] == ["F3.after_tombstone_ttl"]
     assert axes["extraction"]["targets_failing"] == []   # B9 fixed in #1882
     assert not any(axes[n]["uncontrolled"] for n in axes)
@@ -445,3 +460,252 @@ def test_the_scripted_reader_declines_unless_one_row_covers_the_question():
     assert "zorbl-17" in reader_answer(rows, "who is my optometrist")
     assert "zorbl-17" in reader_answer(rows, "when is my dentist appointment", sycophantic=True)
     assert reader_answer([], "anything", sycophantic=True) == "I don't have that saved."
+
+
+# ── the temporal / recall / poisoning / provenance / graph axes ──────────────
+
+NEW_CONTROLS = {
+    "supersede": ["C1.update_typed", "C1.update_moved_phrase", "C5.retracted_not_served"],
+    "invalidate": ["C1.old_fact_invalidated_not_deleted"],
+    "retrieval": ["C3.dated_event", "C4.since_year_kept", "D1.hit5_after_30_filler", "D2.hit5_after_100_filler",
+                  "D3.hit5_after_300_filler", "D4.hit5_paraphrase_after_100_filler"],
+    "provenance": ["A3.typed_turn_rows", "A3.voice_verified_turn_rows"],
+    "topic": ["C6.no_collateral_invalidation"],
+}
+
+
+@pytest.mark.parametrize("control", sorted(NEW_CONTROLS))
+def test_each_new_control_flips_exactly_the_cells_that_name_it(control):
+    """The five switches this axis set added: off ALONE, exactly the listed cells go red - and every other
+    controlled cell is not even run (a switch that turned an unrelated cell red would be a different switch)."""
+    cp = runner.control_pass(CELLS, world.make_world(), frozenset({control}))
+    assert cp["ok"] and sorted(r["id"] for r in cp["rows"]) == sorted(NEW_CONTROLS[control])
+    assert cp["red"] == len(NEW_CONTROLS[control]) and cp["green"] == [] and cp["not_run"] == []
+
+
+@pytest.mark.parametrize("control", sorted(NEW_CONTROLS))
+def test_an_uncontrolled_pass_is_refused_for_every_new_control(control, monkeypatch, tmp_path):
+    """RED-BEFORE-GREEN per switch: a cell that names the control but cannot go red with it off (it asserts the
+    absence of a string nothing writes) stays GREEN, so the run is REFUSED - the lab will not report a PASS no
+    control can turn red."""
+    vac = spec.Cell(id="X9.vacuous", axis="temporal", title="cannot fail", tier="store", kind="script",
+                    controls=(control,), events=({"text": "User lives in {home}.", "speaker": "owner_taught"},),
+                    probes=({"kind": "store", "assertions": [{"op": "absent", "contains": ["zzz-never-written"]}]},))
+    cp = runner.control_pass(CELLS + [vac], world.make_world(), frozenset({control}))
+    assert cp["green"] == ["X9.vacuous"] and not cp["ok"]
+    monkeypatch.setattr(runner, "load_cells", lambda: CELLS + [vac])
+    monkeypatch.setattr(runner, "revision", lambda: None)
+    argv = ["--only", "X9.vacuous", "--results", str(tmp_path / "r.json"), "--trend", str(tmp_path / "t.jsonl"),
+            "--baseline", str(tmp_path / "b.json")]
+    assert runner.main(argv) == 2
+    art = json.loads((tmp_path / "r.json").read_text())
+    assert art["status"] == "error" and "X9.vacuous" in art["refusal"] and art["cells"] == []
+
+
+def test_the_new_axes_refuse_when_a_control_switch_is_wired_to_nothing(monkeypatch, tmp_path):
+    """The whole new spec through the real runner: with a switch that disables nothing every temporal / recall /
+    provenance / graph control cell stays green and the run is refused, nothing measured."""
+    monkeypatch.setattr(lab_driver, "controls_off", _controls_do_nothing)
+    cp = runner.control_pass(CELLS, world.make_world(), ALL)
+    new_ids = {i for ids in NEW_CONTROLS.values() for i in ids} | {"A8.inferred_cannot_close_user_edge",
+                                                                    "A8.refused_edge_is_held_not_lost",
+                                                                    "I3.assistant_text_canary",
+                                                                    "I4.system_prefixed_user_line"}
+    assert new_ids <= set(cp["green"]) and not cp["ok"]
+    monkeypatch.setattr(runner, "revision", lambda: None)
+    argv = ["--axis", "temporal,recall,poisoning", "--results", str(tmp_path / "r.json"),
+            "--trend", str(tmp_path / "t.jsonl"), "--baseline", str(tmp_path / "b.json")]
+    assert runner.main(argv) == 2
+    art = json.loads((tmp_path / "r.json").read_text())
+    assert "instrument not instrumented" in art["refusal"] and art["cells"] == []
+
+
+async def _true():
+    return True
+
+
+def test_the_new_cells_measure_the_real_code_not_the_control_flag(monkeypatch, arm):
+    """Break the real function (no ZMB switch touched) and the cell that claims it goes red."""
+    import memory_supersede
+    import person_extractor
+    assert os.environ.get("ZOE_MEMORY_IMPLICIT_SUPERSEDE") in (None, "")       # the lab sets it per operation only
+    for cid in ("C1.update_typed", "C5.retracted_not_served", "C6.no_collateral_invalidation",
+                "C1.old_fact_invalidated_not_deleted", "D2.hit5_after_100_filler", "A3.typed_turn_rows",
+                "A8.inferred_cannot_close_user_edge", "I4.system_prefixed_user_line"):
+        assert _run(cid, arm).verdict == "PASS", cid
+    monkeypatch.setattr(memory_supersede, "conflict_pairs", lambda rows: [])           # the pass finds nothing
+    assert _run("C1.update_typed", arm).verdict == "FAIL" and _run("C5.retracted_not_served", arm).verdict == "FAIL"
+    monkeypatch.undo()
+    monkeypatch.setattr(memory_supersede, "same_topic", lambda a, b: True)
+    monkeypatch.setattr(memory_supersede, "exclusive_conflict", lambda a, b: True)    # a greedy matcher
+    assert _run("C6.no_collateral_invalidation", arm).verdict == "FAIL"
+    monkeypatch.undo()
+    real = memory_service.MemoryService._supersede_by_sync
+
+    def deleting(self, user_id, old_id, new_id):
+        done = real(self, user_id, old_id, new_id)
+        if done:
+            self._collection().delete(ids=[old_id])
+        return done
+    monkeypatch.setattr(memory_service.MemoryService, "_supersede_by_sync", deleting)  # history deleted
+    assert _run("C1.old_fact_invalidated_not_deleted", arm).verdict == "FAIL"
+    monkeypatch.undo()
+
+    def newest_first(self, query, user_id, limit, depth_by_pid=None):                  # a ranking that ignores the query
+        import datetime
+        rows = self._visible_rows(user_id, datetime.datetime.now(datetime.timezone.utc))
+        return sorted(rows, key=lambda r: (float(r.metadata.get("added_ts") or 0), r.id), reverse=True)[:limit]
+    monkeypatch.setattr(memory_service.MemoryService, "_semantic_search", newest_first)
+    out = _run("D2.hit5_after_100_filler", arm)
+    assert out.verdict == "FAIL" and out.evidence["probes"][0]["hit_at_k"]["hits"] == 0 and out.stage == "read"
+    monkeypatch.undo()
+    real_build = memory_service.MemoryService._build_metadata
+
+    def no_provenance(**k):
+        md = real_build(**k)
+        md.pop("source_excerpt", None)
+        md.pop("user_turn_id", None)
+        return md
+    monkeypatch.setattr(memory_service.MemoryService, "_build_metadata", staticmethod(no_provenance))
+    assert _run("A3.typed_turn_rows", arm).verdict == "FAIL"
+    monkeypatch.undo()
+    monkeypatch.setattr(person_extractor, "_edge_may_change", lambda *a, **k: _true())  # the edge wall lets everyone in
+    assert os.environ.get("ZOE_MEMORY_AUTHORITY") in (None, "")
+    assert _run("A8.inferred_cannot_close_user_edge", arm).verdict == "FAIL"
+    assert _run("A8.refused_edge_is_held_not_lost", arm).verdict == "FAIL"
+    monkeypatch.undo()
+    monkeypatch.setattr(memory_extractor, "extract_candidates", lab_driver.lazy_extract_candidates)
+    assert _run("I4.system_prefixed_user_line", arm).verdict == "FAIL"
+
+
+def test_the_live_flags_are_set_around_an_operation_and_restored(arm, monkeypatch):
+    """Z0 runs with the flags the live service runs with (OFF in the code, ON in .env) - per operation only."""
+    monkeypatch.delenv("ZOE_MEMORY_IMPLICIT_SUPERSEDE", raising=False)
+    monkeypatch.setenv("ZOE_TEMPORAL_RELATIONSHIPS_ENABLED", "0")
+    seen = {}
+    real = memory_service.MemoryService.ingest
+
+    async def spy(self, *a, **k):
+        seen["supersede"] = os.environ.get("ZOE_MEMORY_IMPLICIT_SUPERSEDE")
+        seen["edges"] = os.environ.get("ZOE_TEMPORAL_RELATIONSHIPS_ENABLED")
+        return await real(self, *a, **k)
+    monkeypatch.setattr(memory_service.MemoryService, "ingest", spy)
+    arm.reset(DEMO)
+    arm.ingest([Turn("User lives in Perth.", "owner_taught")])
+    assert seen == {"supersede": "1", "edges": "1"}
+    assert "ZOE_MEMORY_IMPLICIT_SUPERSEDE" not in os.environ and os.environ["ZOE_TEMPORAL_RELATIONSHIPS_ENABLED"] == "0"
+    off = Z0Arm(off=frozenset({"supersede"}))
+    try:
+        off.reset(DEMO)
+        off.ingest([Turn("User lives in Perth.", "owner_taught")])
+        assert seen["supersede"] == "off"                      # the control wins over the live flag
+    finally:
+        off.close()
+
+
+def test_the_row_export_carries_provenance_and_the_validity_interval(arm):
+    w = world.make_world()
+    s = w.slots
+    arm.reset(DEMO)
+    arm.ingest([Turn(f"I live in {s['home_old']}", "owner_typed"), Turn(f"I live in {s['home']}", "owner_typed")])
+    assert arm.run_conflict_pass()["superseded"] == 1
+    rows = {r["text"]: r for r in arm.stats()["rows"]}
+    old, new = rows[f"User lives in {s['home_old']}"], rows[f"User lives in {s['home']}"]
+    assert old["status"] == "superseded" and old["invalid_at"] and old["superseded_by_id"] == new["id"]
+    assert new["status"] == "approved" and new["valid_from"] and new["supersedes_id"] == old["id"]
+    assert new["source_excerpt"] == f"I live in {s['home']}" and new["user_turn_id"] and new["authority_class"] == "user_stated"
+    from zmb.arms.base import OPTIONAL_ROW_KEYS
+    assert set(OPTIONAL_ROW_KEYS) <= set(new)
+    # a history read does not exist: the old row is KEPT but never served (the C2 target)
+    assert not any(s["home_old"] in r["text"] for r in arm.recall("where did I live before", 5))
+    with pytest.raises(NotImplementedError, match="as-of"):
+        arm.as_of("where did I live before", "2026-01-01T00:00:00Z")
+
+
+def test_the_people_graph_capability_is_the_real_writer_over_sqlite(arm):
+    s = world.make_world().slots
+    arm.reset(DEMO)
+    a, b = s["friend"], s["sibling"]
+    arm.write_edge(a, b, "friend", "personal", "user_stated", "conversation")
+    arm.write_edge(a, b, "spouse", "family", "inferred", "digest")
+    (edge,) = arm.edges()
+    assert (edge["rel_type"], edge["current"], edge["authority"], edge["origin"]) == ("friend", True, "user_stated", "conversation")
+    held = [r for r in arm.stats()["rows"] if r["status"] == "disputed"]
+    assert len(held) == 1 and held[0]["contradicts_id"].startswith("edge:") and held[0]["authority_class"] != "user_stated"
+    arm.reset("demo_bar_0a1b2c3e")                          # reset opens a fresh graph: nothing leaks across cells
+    assert arm.edges() == []
+
+
+def test_a_cell_that_needs_a_capability_the_arm_lacks_skips_it_never_passes():
+    from zmb.arms.base import Arm
+
+    class NoGraph(Arm):
+        name = "no-graph"
+        capabilities = frozenset()
+
+        def reset(self, u): ...
+        def ingest(self, t): ...
+        def recall(self, q, k=10): ...
+        def forget(self, e): ...
+        def as_of(self, q, ts): ...
+        def stats(self): ...
+    w = world.make_world()
+    for cid, cap in (("A8.inferred_cannot_close_user_edge", "edges"), ("C1.update_typed", "conflict_pass")):
+        out = cellmod.run_cell(BY_ID[cid].rendered(w), w, NoGraph())
+        assert out.verdict == "SKIP" and cap in out.reason, cid
+
+
+def test_the_recall_corpus_is_deterministic_and_the_filler_is_what_it_says(arm):
+    from zmb import needles
+    a, b = needles.corpus("zmb-v1"), needles.corpus("zmb-v1")
+    assert a == b and len(a) == 20 and len({n.subject for n in a}) == 20 and len({n.answer for n in a}) == 20
+    assert needles.corpus("fresh-x") != a                                       # a held-out seed is a new corpus
+    f = needles.chatter("zmb-v1", 100)
+    assert f == needles.chatter("zmb-v1", 100) and len(f) == 100 and f != needles.chatter("zmb-v1", 100, salt="x")
+    kinds = {k: sum(1 for x in f if x["kind"] == k) for k in ("chatter", "preference", "near_miss")}
+    assert all(kinds.values()) and sum(kinds.values()) == 100
+    assert len({x["text"] for x in f}) == 100                                    # every turn distinct: no idempotency collapse
+    near = {x["text"] for x in f if x["kind"] == "near_miss"}
+    assert near and not any(n.subject in t or n.answer in t for n in a for t in near)   # a near-miss is about someone else
+    arm.reset(DEMO)
+    w = world.make_world()
+    cellmod._play(BY_ID["D2.hit5_after_100_filler"].rendered(w), arm, w)
+    rows = arm.stats()["rows"]
+    assert len(rows) > 50 and {n.fact for n in a} <= {r["text"] for r in rows}
+    assert not any(r["status"] != "approved" for r in rows)
+
+
+@pytest.mark.parametrize("cid", ["D1.hit5_after_30_filler", "D2.hit5_after_100_filler", "D3.hit5_after_300_filler",
+                                 "D4.hit5_paraphrase_after_100_filler"])
+def test_every_recall_cell_reports_its_hit_rate_with_a_wilson_interval(cid, arm):
+    out = _run(cid, arm)
+    h = out.evidence["probes"][0]["hit_at_k"]
+    assert out.verdict == "PASS" and (h["n"], h["k"]) == (20, 5) and h["hits"] == 20 and h["rate"] == 1.0
+    assert h["wilson95"][0] > 0.83 and h["min_rate"] in (0.85, 0.9, 0.95)
+
+
+def test_the_decision_rule_cells_exist_with_the_rule_s_thresholds():
+    """The cells the decision rule names (docs/research/memory-system-decision-2026-10-05.md section 6): D at 100
+    filler >= 90%, provenance >= 95%, C1 / C2 / C6, poisoning, A8 - each present, on the right axis."""
+    d2 = BY_ID["D2.hit5_after_100_filler"]
+    assert d2.axis == "recall" and d2.probes[0]["min_rate"] == 0.9 and d2.probes[0]["k"] == 5
+    assert d2.events[1]["turns"] == 100
+    rate = BY_ID["A3.user_turn_rows_rate"]
+    assert rate.axis == "authority" and rate.probes[0]["assertions"][0]["min"] == 0.95
+    assert rate.probes[0]["assertions"][0]["fields"] == ["source_excerpt", "user_turn_id", "authority_class"]
+    for cid in ("C1.update_typed", "C1.old_fact_invalidated_not_deleted", "C2.history_read",
+                "C6.no_collateral_invalidation"):
+        assert BY_ID[cid].axis == "temporal"
+    assert {c.id for c in CELLS if c.axis == "poisoning"} >= {"I1.pasted_email_instruction", "I3.assistant_text_canary",
+                                                              "I4.system_prefixed_user_line"}
+    assert {c.id for c in CELLS if c.id.startswith("A8.")} >= {"A8.inferred_cannot_close_user_edge"}
+    # every axis of the bench has cells now (the instrument can finally say ADOPTABLE or not on every named axis)
+    assert {c.axis for c in CELLS} == set(spec.AXES.values())
+
+
+def test_no_cell_id_or_title_names_a_household_string():
+    pool = world.pool_strings()
+    for c in CELLS:
+        for text in (c.id, c.title):
+            for name in pool:
+                assert name.lower() not in text.lower().replace(".", " ").replace("_", " ").split(), (c.id, name)

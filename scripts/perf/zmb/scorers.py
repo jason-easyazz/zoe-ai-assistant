@@ -140,7 +140,8 @@ def score_canaries(texts: Iterable[str], canaries: Sequence[str], *, stage: str 
 
 # ── store assertions over the arm's row export ───────────────────────────────
 
-ASSERT_OPS = ("present", "absent", "count_eq", "count_at_least", "all_have", "field_set")
+ASSERT_OPS = ("present", "absent", "count_eq", "count_at_least", "all_have", "field_set", "fraction_have",
+              "epoch_year")
 
 
 def _rows_matching(rows: Sequence[dict], contains: Sequence[str], statuses: "Sequence[str] | None") -> list[dict]:
@@ -163,28 +164,103 @@ def score_store(rows: Sequence[dict], assertions: Sequence[dict], *, stage: str 
     * ``count_at_least`` at least ``n`` such rows
     * ``all_have``       every such row has ``row[field] == equals`` (and there is at least one)
     * ``field_set``      every such row has a non-empty ``row[field]`` (and there is at least one)
+    * ``fraction_have``  at least ``min`` (0..1) of such rows have a non-empty value in EVERY one of ``fields`` (and
+                         there is at least one row): the provenance rate, e.g. >= 95% of user-turn rows carry an excerpt
+    * ``epoch_year``     every such row's ``row[field]`` is an epoch-seconds time whose UTC year is ``equals``
+                         (and there is at least one): "valid_from is the year the user said, not the capture year"
+    Any assertion may also carry ``origins`` (only rows whose ``origin`` is in the list count).
 
     Unknown ops raise: a typo in a spec must be a loud error, not a silent PASS. Evidence is which
     assertion INDEXES failed - never the text.
     """
     failed: list[int] = []
+    fractions: list[dict] = []
     for i, a in enumerate(assertions):
         op = a.get("op")
         if op not in ASSERT_OPS:
             raise ValueError(f"unknown store assertion op {op!r} (known: {', '.join(ASSERT_OPS)})")
         hit = _rows_matching(rows, a.get("contains") or [], a.get("statuses"))
+        if a.get("origins"):
+            hit = [r for r in hit if r.get("origin") in a["origins"]]
         n = int(a.get("n", 1))
+        frac = 0.0
+        if op == "fraction_have":
+            fields = a.get("fields") or [a.get("field", "")]
+            have = sum(1 for r in hit if all(r.get(f) for f in fields))
+            frac = (have / len(hit)) if hit else 0.0
+            fractions.append({"assertion": i, "rows": len(hit), "complete": have, "rate": round(frac, 4)})
         ok = {"present": len(hit) >= 1,
               "absent": len(hit) == 0,
               "count_eq": len(hit) == n,
               "count_at_least": len(hit) >= n,
               "all_have": bool(hit) and all(r.get(a.get("field", "")) == a.get("equals") for r in hit),
               "field_set": bool(hit) and all(r.get(a.get("field", "")) for r in hit),
+              "fraction_have": bool(hit) and frac >= float(a.get("min", 0.95)),
+              "epoch_year": bool(hit) and op == "epoch_year" and all(
+                  _epoch_year(r.get(a.get("field", ""))) == _as_int(a.get("equals")) for r in hit),
               }[op]
         if not ok:
             failed.append(i)
-    return Score(not failed, "" if not failed else stage,
-                 {"assertions": len(assertions), "failed": failed})
+    ev: dict[str, Any] = {"assertions": len(assertions), "failed": failed}
+    if fractions:
+        ev["fractions"] = fractions
+    return Score(not failed, "" if not failed else stage, ev)
+
+
+def _as_int(value: Any) -> "int | None":
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _epoch_year(value: Any) -> "int | None":
+    """The UTC year of an epoch-seconds value (the row export carries what the store holds), else None."""
+    import datetime as _dt
+    try:
+        return _dt.datetime.fromtimestamp(float(value), _dt.timezone.utc).year
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+# ── the people graph (axis a, A8) ────────────────────────────────────────────
+
+EDGE_OPS = ("current_rel", "no_current_rel", "history_len", "closed_rel")
+
+
+def score_edges(edges: Sequence[dict], assertions: Sequence[dict], *, stage: str = "write") -> Score:
+    """Assertions over the people graph export (``Arm.edges()``: one dict per relationship edge with ``a``, ``b``
+    (names), ``rel_type``, ``current`` and ``authority``). ``current_rel`` / ``no_current_rel``: the pair's open edge
+    is / is not ``equals``; ``history_len``: the pair has exactly ``n`` edges, open or closed (history is kept, never
+    deleted); ``closed_rel``: a closed edge of type ``equals`` exists. Unknown ops raise. Evidence: indexes only."""
+    failed: list[int] = []
+    for i, a in enumerate(assertions):
+        op = a.get("op")
+        if op not in EDGE_OPS:
+            raise ValueError(f"unknown edge assertion op {op!r} (known: {', '.join(EDGE_OPS)})")
+        pair = [e for e in edges if {e.get("a"), e.get("b")} == {a.get("a"), a.get("b")}]
+        open_ = [e for e in pair if e.get("current")]
+        ok = {"current_rel": len(open_) == 1 and open_[0].get("rel_type") == a.get("equals"),
+              "no_current_rel": all(e.get("rel_type") != a.get("equals") for e in open_),
+              "history_len": len(pair) == int(a.get("n", 1)),
+              "closed_rel": any((not e.get("current")) and e.get("rel_type") == a.get("equals") for e in pair),
+              }[op]
+        if not ok:
+            failed.append(i)
+    return Score(not failed, "" if not failed else stage, {"assertions": len(assertions), "failed": failed})
+
+
+# ── hit@k over a generated corpus (axis d) ───────────────────────────────────
+
+def score_hits(hits: int, n: int, *, k: int, min_rate: float, label: str = "") -> Score:
+    """Retrieval hit rate: ``hits`` of ``n`` needles were in the top ``k``. PASS iff hits / n >= ``min_rate`` (and n > 0).
+    Evidence is the count, the rate and the Wilson interval - never text."""
+    rate = (hits / n) if n else 0.0
+    lo, hi = wilson(hits, n)
+    ok = n > 0 and rate >= min_rate
+    return Score(ok, "" if ok else "read", {"hit_at_k": {"k": k, "n": n, "hits": hits, "rate": round(rate, 4),
+                                                         "wilson95": [round(lo, 4), round(hi, 4)],
+                                                         "min_rate": min_rate, **({"queries": label} if label else {})}})
 
 
 # ── entity precision / recall (extraction fidelity) ──────────────────────────

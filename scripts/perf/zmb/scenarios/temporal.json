@@ -1,0 +1,227 @@
+{
+  "spec_version": 1,
+  "axis": "temporal",
+  "cells": [
+    {
+      "id": "C1.update_typed",
+      "title": "knowledge update: the owner states a new home after an old one, the nightly conflict pass runs, and the current fact is what the store and the recall packet serve",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["supersede"],
+      "lme_map": "knowledge-update (LongMemEval); BEAM knowledge update",
+      "note": "measured on Z0 with the live flag ZOE_MEMORY_IMPLICIT_SUPERSEDE=1 (OFF in the code, ON in services/zoe-data/.env): two approved user-stated rows 'User lives in X' / 'User lives in Y' are paired by memory_supersede.conflict_pass (the exclusive home slot) and the older is retired. Without the pass both stay approved and recall serves both",
+      "events": [
+        {"text": "I live in {home_old}", "speaker": "owner_typed"},
+        {"text": "I live in {home}", "speaker": "owner_typed"},
+        {"do": "conflict_pass"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "present", "contains": ["{home}"], "statuses": ["approved"]},
+          {"op": "absent", "contains": ["{home_old}"], "statuses": ["approved", "pending", "disputed"]}
+        ]},
+        {"kind": "recall", "query": "where do I live", "k": 5, "needles": ["{home}"], "anti_needles": ["{home_old}"]}
+      ]
+    },
+    {
+      "id": "C1.update_moved_phrase",
+      "title": "knowledge update through a change verb ('moved to'): the new home replaces the old one in what is served",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["supersede"],
+      "lme_map": "knowledge-update",
+      "note": "the owner's explicit teach lane (voice_fact); 'moved to' is a change cue in memory_supersede.CUES",
+      "events": [
+        {"text": "User lives in {home_old}.", "speaker": "owner_taught"},
+        {"text": "User moved to {home}.", "speaker": "owner_taught"},
+        {"do": "conflict_pass"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "present", "contains": ["{home}"], "statuses": ["approved"]},
+          {"op": "absent", "contains": ["{home_old}"], "statuses": ["approved", "pending", "disputed"]}
+        ]},
+        {"kind": "recall", "query": "where do I live", "k": 5, "needles": ["{home}"], "anti_needles": ["{home_old}"]}
+      ]
+    },
+    {
+      "id": "C1.update_via_turn_digest",
+      "title": "knowledge update when the new fact is written by the per-turn digest (a model writer, anchored on the owner's own words): the current fact must win",
+      "tier": "store",
+      "kind": "script",
+      "expected": "FAIL",
+      "lme_map": "knowledge-update",
+      "note": "measured, not assumed: the digest's 'User lives in <new>' contradicts a user-stated row, so the authority wall (#1868) holds it back as a `disputed` candidate (user_stated_derived) and recall keeps serving the OLD home until the owner confirms. Safe against the 2026-10-05 incident, but the update does not land on its own: the decision rule's C1 >= 95% needs either the owner's confirmation in the loop (brain tier) or a rule that lets a verbatim user anchor retire the row. The scripted digest stands in for the model; the dispute question queue needs Postgres and is not run in the lab",
+      "events": [
+        {"text": "I live in {home_old}", "speaker": "owner_typed"},
+        {"text": "I moved to {home}", "speaker": "system_writer", "writer": "turn_digest", "proposes": ["User lives in {home}"]},
+        {"do": "conflict_pass"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "present", "contains": ["{home}"], "statuses": ["approved"]},
+          {"op": "absent", "contains": ["{home_old}"], "statuses": ["approved", "pending", "disputed"]}
+        ]},
+        {"kind": "recall", "query": "where do I live", "k": 5, "needles": ["{home}"], "anti_needles": ["{home_old}"]}
+      ]
+    },
+    {
+      "id": "C1.old_fact_invalidated_not_deleted",
+      "title": "after an update the old fact is invalidated, not deleted: the row is still in the store as superseded with its invalid_at, and the new row carries its valid_from",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["invalidate"],
+      "lme_map": "knowledge-update (Zep: invalidate, never delete)",
+      "events": [
+        {"text": "I live in {home_old}", "speaker": "owner_typed"},
+        {"text": "I live in {home}", "speaker": "owner_typed"},
+        {"do": "conflict_pass"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "present", "contains": ["{home_old}"], "statuses": ["superseded"]},
+          {"op": "field_set", "contains": ["{home_old}"], "statuses": ["superseded"], "field": "invalid_at"},
+          {"op": "field_set", "contains": ["{home}"], "statuses": ["approved"], "field": "valid_from"},
+          {"op": "field_set", "contains": ["{home}"], "statuses": ["approved"], "field": "supersedes_id"}
+        ]}
+      ]
+    },
+    {
+      "id": "C2.history_read",
+      "title": "history: asked where the owner lived before the move, the recall packet can answer with the old home",
+      "tier": "store",
+      "kind": "script",
+      "expected": "FAIL",
+      "lme_map": "temporal-reasoning; BEAM knowledge update (the old value)",
+      "note": "measured: the old row IS kept (C1.old_fact_invalidated_not_deleted passes) but every read hides `superseded` rows (memory_service._BLOCKED_READ_STATUSES) and MemoryService.search does not expose them, so there is no history / as-of read to add to the Z0 arm; Arm.as_of stays NotImplementedError. The target for a bi-temporal read (the Postgres columns the decision record plans, or an arm that has one)",
+      "events": [
+        {"text": "I live in {home_old}", "speaker": "owner_typed"},
+        {"text": "I live in {home}", "speaker": "owner_typed"},
+        {"do": "conflict_pass"}
+      ],
+      "probes": [
+        {"kind": "recall", "query": "where did I live before {home}", "k": 5, "needles": ["{home_old}"]}
+      ]
+    },
+    {
+      "id": "C3.dated_event",
+      "title": "a dated event: 'my dentist appointment is on <date>' is answered by its date when asked 'when is my dentist appointment', among other household rows",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["retrieval"],
+      "lme_map": "temporal-reasoning; BEAM event ordering",
+      "note": "the date is the one the owner stated (day first, a month name), kept in the row's text; 40 seeded household turns follow so the row must be FOUND, not just present. The structured event date (valid_from is the capture time) is C4.valid_from_is_event_time",
+      "events": [
+        {"text": "User's dentist appointment is on {appt_date}.", "speaker": "owner_taught"},
+        {"do": "filler", "turns": 40, "salt": "c3"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "present", "contains": ["dentist", "{appt_date}"], "statuses": ["approved"]}
+        ]},
+        {"kind": "recall", "query": "when is my dentist appointment", "k": 5, "needles": ["{appt_date}"]}
+      ]
+    },
+    {
+      "id": "C4.since_year_kept",
+      "title": "validity the owner states ('since <year>') survives into the row and is what answers 'since when have I lived there'",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["retrieval"],
+      "lme_map": "temporal-reasoning",
+      "events": [
+        {"text": "User has lived in {home} since {since_year}.", "speaker": "owner_taught"},
+        {"do": "filler", "turns": 40, "salt": "c4"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "present", "contains": ["{home}", "{since_year}"], "statuses": ["approved"]}
+        ]},
+        {"kind": "recall", "query": "since when have I lived in {home}", "k": 5, "needles": ["{since_year}"]}
+      ]
+    },
+    {
+      "id": "C4.valid_from_is_event_time",
+      "title": "the row's valid_from is the year the owner said ('since <year>'), not the year the sentence was captured",
+      "tier": "store",
+      "kind": "script",
+      "expected": "FAIL",
+      "lme_map": "temporal-reasoning (event time vs ingestion time)",
+      "note": "measured: valid_from is stamped with the capture time (memory_service._build_metadata); the owner's 'since <year>' lives only in the sentence. A bi-temporal store (valid time distinct from record time) is what the decision rule's temporal axis asks for",
+      "events": [
+        {"text": "I live in {home}, I have been here since {since_year}", "speaker": "owner_typed"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "present", "contains": ["{home}"], "statuses": ["approved"]},
+          {"op": "epoch_year", "contains": ["{home}"], "statuses": ["approved"], "field": "valid_from", "equals": "{since_year}"}
+        ]}
+      ]
+    },
+    {
+      "id": "C5.retracted_not_served",
+      "title": "stale-fact abstention: a fact the owner retracted ('no longer sees <clinic>') is not served as current when asked",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["supersede"],
+      "lme_map": "abstention (the stale fact); knowledge-update",
+      "note": "the explicit-teach lane: 'User no longer sees X' is an end-cue fact (memory_supersede.CUES), so the nightly pass retires 'User's dentist is X'; the retraction itself stays as the current statement",
+      "events": [
+        {"text": "User's dentist is {clinic_name}.", "speaker": "owner_taught"},
+        {"text": "User no longer sees {clinic_name}.", "speaker": "owner_taught"},
+        {"do": "conflict_pass"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "absent", "contains": ["dentist", "{clinic_name}"], "statuses": ["approved", "pending", "disputed"]},
+          {"op": "present", "contains": ["{clinic_name}"], "statuses": ["superseded"]}
+        ]},
+        {"kind": "recall", "query": "who is my dentist", "k": 5, "anti_needles": ["dentist is {clinic_name}"]}
+      ]
+    },
+    {
+      "id": "C5.retracted_via_turn_digest",
+      "title": "stale-fact abstention when the retraction is written by the per-turn digest: the retracted fact must not be served as current",
+      "tier": "store",
+      "kind": "script",
+      "expected": "FAIL",
+      "lme_map": "abstention (the stale fact)",
+      "note": "measured: the digest's 'User no longer sees X' contradicts a user-stated row, so the authority wall holds it back as a `disputed` candidate and recall keeps serving the retracted dentist until the owner confirms (same mechanism as C1.update_via_turn_digest)",
+      "events": [
+        {"text": "User's dentist is {clinic_name}.", "speaker": "owner_taught"},
+        {"text": "I no longer see {clinic_name}", "speaker": "system_writer", "writer": "turn_digest", "proposes": ["User no longer sees {clinic_name}."]},
+        {"do": "conflict_pass"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "absent", "contains": ["dentist", "{clinic_name}"], "statuses": ["approved", "pending", "disputed"]}
+        ]},
+        {"kind": "recall", "query": "who is my dentist", "k": 5, "anti_needles": ["dentist is {clinic_name}"]}
+      ]
+    },
+    {
+      "id": "C6.no_collateral_invalidation",
+      "title": "no collateral invalidation: a friend's move retires the friend's old home and nothing else (not the owner's home, not the friend's job)",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["topic"],
+      "lme_map": "(none: Zep's open bug class, graphiti #1728)",
+      "note": "the decision rule's 'C6 0 collateral'. The positive half (the friend's old home IS retired) keeps the cell from passing because the pass did nothing",
+      "events": [
+        {"text": "User lives in {home}.", "speaker": "owner_taught"},
+        {"text": "User's friend {friend} works at {job}.", "speaker": "owner_taught"},
+        {"text": "User's friend {friend} lives in {home_old}.", "speaker": "owner_taught"},
+        {"text": "User's friend {friend} moved to {lima}.", "speaker": "owner_taught"},
+        {"do": "conflict_pass"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "present", "contains": ["{friend}", "{home_old}"], "statuses": ["superseded"]},
+          {"op": "present", "contains": ["{home}"], "statuses": ["approved"]},
+          {"op": "present", "contains": ["{friend}", "{job}"], "statuses": ["approved"]},
+          {"op": "present", "contains": ["{friend}", "{lima}"], "statuses": ["approved"]}
+        ]}
+      ]
+    }
+  ]
+}

@@ -8,6 +8,7 @@ the feature under test and must turn the cell red. A run whose control stays gre
     world.py      the seeded synthetic household that generates every name, date and gold fact
     scorers.py    pure deterministic scorers + Wilson intervals
     cells.py      the arm-agnostic cell script (events in, probes out)
+    needles.py    the recall corpus: seeded needles, paraphrase queries and household filler (axis d)
     arms/         the adapter interface (base) + Z0 (implemented), Hindsight and Graphiti (stubs)
     lab_driver.py the in-process lab: the real MemoryService over an in-memory store, with the controls
     artifact.py   the results artifact, per-axis Wilson intervals, baseline compare

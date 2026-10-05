@@ -11,6 +11,11 @@ Event forms (a dict in ``cell.events``):
     {"do": "advance_clock", "seconds": 360}                    lab clock (capability ``clock``)
     {"do": "ingest_as", "identity": "guest", "turns": [...]}   turns as another household identity
     {"do": "idle_pass", "transcript": "...", "proposes": [..]} the arm's own nightly pass (``idle_pass``)
+    {"do": "conflict_pass"}                                    the arm's nightly implicit-conflict pass (``conflict_pass``)
+    {"do": "edge", "a": "..", "b": "..", "rel": "friend", "group": "personal",
+     "authority": "user_stated", "origin": "conversation"}     a people-graph write (``edges``)
+    {"do": "needles"}                                          teach the seeded recall corpus (``needles.corpus``)
+    {"do": "filler", "turns": 100}                             N seeded household-chatter turns (``needles.chatter``)
 
 Probe forms (a dict in ``cell.probes``; every probe must pass):
 
@@ -18,6 +23,8 @@ Probe forms (a dict in ``cell.probes``; every probe must pass):
     {"kind": "facts",   "gold": [[..]], "anti": [[..]]}        fact recall + anti-fact precision over stored rows
     {"kind": "entities","gold": [..]}                          entity precision / recall over stored rows
     {"kind": "recall",  "query": "...", "k": 5, "needles": [], "anti_needles": [], "canaries": []}
+    {"kind": "edges",   "assertions": [...]}                   the people graph (``scorers.score_edges``; ``edges``)
+    {"kind": "hit_at_k", "k": 5, "min_rate": 0.9, "queries": "direct"|"paraphrase"}   the corpus's needles retrieved
     {"kind": "answer",  "query": "...", "needles": [], "canaries": []}   the scripted reader (capability ``reader``)
 
 A probe or event the arm cannot do (a stub arm, a missing capability) makes the cell SKIP with the reason -
@@ -30,7 +37,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import scorers
+from . import needles as needlemod, scorers
 from .arms.base import Arm, Turn
 from .spec import Cell
 from .world import World
@@ -40,8 +47,9 @@ RETAINED = ("approved", "pending", "disputed")
 
 _TURN_KEYS = {"text", "speaker", "day_offset", "writer", "proposes", "op", "attr", "assistant_text",
               "memory_type"}
-_CAPS = {"advance_clock": "clock", "ingest_as": "identities", "idle_pass": "idle_pass"}
-_PROBE_KINDS = ("store", "facts", "entities", "recall", "answer")
+_CAPS = {"advance_clock": "clock", "ingest_as": "identities", "idle_pass": "idle_pass",
+         "conflict_pass": "conflict_pass", "edge": "edges"}
+_PROBE_KINDS = ("store", "facts", "entities", "recall", "answer", "edges", "hit_at_k")
 
 
 @dataclass
@@ -76,6 +84,8 @@ def required_capabilities(cell: Cell) -> "set[str]":
     for p in cell.probes:
         if p.get("kind") == "answer":
             need.add("reader")
+        if p.get("kind") == "edges":
+            need.add("edges")
         if p.get("as"):
             need.add("identities")
     return need
@@ -85,9 +95,11 @@ def _retained_texts(rows: "list[dict]") -> "list[str]":
     return [r.get("text", "") for r in rows if r.get("status") in RETAINED]
 
 
-def _play(cell: Cell, arm: Arm) -> "list[dict[str, Any]]":
-    """Play the events; returns the counters of every idle pass (a pass that did not RUN proves nothing)."""
+def _play(cell: Cell, arm: Arm, world: "World | None" = None) -> "list[dict[str, Any]]":
+    """Play the events; returns the counters of every idle pass (a pass that did not RUN proves nothing).
+    ``world`` supplies the seed of the generated events (``needles`` / ``filler``)."""
     passes: list[dict[str, Any]] = []
+    seed = (world.seed if world is not None else "zmb-v1")
     for ev in cell.events:
         do = ev.get("do")
         if do is None:
@@ -100,18 +112,49 @@ def _play(cell: Cell, arm: Arm) -> "list[dict[str, Any]]":
             arm.ingest_as(ev["identity"], [make_turn(t) for t in ev["turns"]])
         elif do == "idle_pass":
             passes.append(arm.run_idle_pass(ev["transcript"], list(ev.get("proposes") or ())))
+        elif do == "conflict_pass":
+            arm.run_conflict_pass()
+        elif do == "edge":
+            arm.write_edge(ev["a"], ev["b"], ev["rel"], ev.get("group", "personal"),
+                           ev.get("authority", "user_stated"), ev.get("origin", "conversation"))
+        elif do == "needles":
+            arm.ingest([Turn(n.fact, "owner_taught") for n in needlemod.corpus(seed)])
+        elif do == "filler":
+            arm.ingest([Turn(f["text"], f["speaker"]) for f in needlemod.chatter(seed, int(ev["turns"]),
+                                                                                   str(ev.get("salt", "")))])
         else:
             raise ValueError(f"unknown event action {do!r}")
     return passes
 
 
-def _probe(p: "dict[str, Any]", arm: Arm) -> scorers.Score:
+def _hit_at_k(p: "dict[str, Any]", arm: Arm, seed: str) -> scorers.Score:
+    """For every needle of the seeded corpus: ask it (``direct`` or ``paraphrase``) and look in the top-k rows for
+    ONE row that holds both the subject's name and the answer token. A pure string match, no judge."""
+    which = str(p.get("queries", "direct"))
+    if which not in ("direct", "paraphrase"):
+        raise ValueError(f"hit_at_k queries must be 'direct' or 'paraphrase', got {which!r}")
+    k = int(p.get("k", 5))
+    corpus = needlemod.corpus(seed)
+    hits = 0
+    for n in corpus:
+        rows = arm.recall(n.direct if which == "direct" else n.paraphrase, k)
+        if any(scorers.contains_phrase(r.get("text", ""), n.subject)
+               and scorers.contains_phrase(r.get("text", ""), n.answer) for r in rows):
+            hits += 1
+    return scorers.score_hits(hits, len(corpus), k=k, min_rate=float(p.get("min_rate", 0.9)), label=which)
+
+
+def _probe(p: "dict[str, Any]", arm: Arm, seed: str = "zmb-v1") -> scorers.Score:
     kind = p.get("kind")
     if kind not in _PROBE_KINDS:
         raise ValueError(f"unknown probe kind {kind!r} (known: {', '.join(_PROBE_KINDS)})")
     if kind == "store":
         rows = (arm.stats_as(p["as"]) if p.get("as") else arm.stats())["rows"]
         return scorers.score_store(rows, p["assertions"], stage=p.get("stage", "write"))
+    if kind == "edges":
+        return scorers.score_edges(arm.edges(), p["assertions"], stage=p.get("stage", "write"))
+    if kind == "hit_at_k":
+        return _hit_at_k(p, arm, seed)
     if kind in ("facts", "entities"):
         texts = _retained_texts(arm.stats()["rows"])
         if kind == "facts":
@@ -148,12 +191,12 @@ def run_cell(cell: Cell, world: World, arm: Arm) -> Outcome:
         return done(Outcome("ERROR", reason="a store-tier cell with no probes proves nothing"))
     try:
         arm.reset(demo_user(world, cell))
-        passes = _play(cell, arm)
+        passes = _play(cell, arm, world)
         for rep in passes:
             if rep.get("skipped_reason") or rep.get("error"):
                 raise RuntimeError("the idle pass did not run (" + str(rep.get("skipped_reason")
                                                                      or rep.get("error"))[:60] + ")")
-        scores = [_probe(p, arm) for p in cell.probes]
+        scores = [_probe(p, arm, world.seed) for p in cell.probes]
     except NotImplementedError as exc:  # a stub arm / a call the arm does not have: a SKIP, never a PASS
         return done(Outcome("SKIP", reason=str(exc)[:300]))
     except (ValueError, KeyError, TypeError, RuntimeError) as exc:  # a broken cell or arm: loud
