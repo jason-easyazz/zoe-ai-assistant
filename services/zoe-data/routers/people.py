@@ -594,7 +594,7 @@ async def merge_person_endpoint(
     await require_feature_access(db, user, feature="people", action="update")
     user_id = user["user_id"]
     try:
-        result = await merge_person(db, user_id, source_id, target_id)
+        result = await merge_person(db, user_id, source_id, target_id, actor=user_id)
     except PersonMergeError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 

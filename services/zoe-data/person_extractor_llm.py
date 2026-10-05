@@ -108,6 +108,8 @@ daughter, kids, girls, boys, friend, brother, sister, mum, dad, etc.) the value
 MUST say whose relative they are — e.g. "wife of Jordan Smith" or "user's
 friend" — NEVER a bare role like "wife" or "girl" (a bare role is ambiguous and
 will be discarded).
+NEVER drop names: when the text lists people after a relationship ("has two kids,
+Mika and Biscuit"), keep every listed name in the value - never reduce it to a count.
 {rules}
 
 Text:
@@ -127,6 +129,8 @@ daughter, kids, girls, boys, friend, brother, sister, mum, dad, etc.) the value
 MUST say whose relative they are — e.g. "wife of Jordan Smith" or "user's
 friend" — NEVER a bare role like "wife" or "girl" (a bare role is ambiguous and
 will be discarded).
+NEVER drop names: when the text lists people after a relationship ("has two kids,
+Mika and Biscuit"), keep every listed name in the value - never reduce it to a count.
 {rules}
 
 Text:
@@ -311,6 +315,7 @@ async def process_text_llm(
             # The utterance it was mined from: recall_evidence quotes it for the
             # chat/voice sources ("conversation"/"voice"); scrubbed at MemoryService.
             source_excerpt=" ".join(text.split()),
+            origin="person_extractor_llm",
         )
         if ok:
             written += 1

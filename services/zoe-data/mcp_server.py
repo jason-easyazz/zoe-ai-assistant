@@ -3205,9 +3205,17 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
                     actor=user_id,
                     edits=args.get("edits"),
                     note=args.get("note"),
+                    # An MCP agent acts FOR the member but is not the member: it is a model
+                    # writer (rank 1), so it cannot overwrite, archive or approve over a row
+                    # the person said (memory_authority). ``actor`` stays the account that
+                    # asked, for the audit trail.
+                    origin="mcp",
                 )
             except MemoryServiceError as exc:
                 return {"error": str(exc)}
+            if ref is None:
+                return {"error": "held back: that would overwrite something you told me directly; "
+                                 "say it yourself (or approve the pending candidate) to change it"}
             return {
                 "id": ref.id,
                 "status": (ref.metadata or {}).get("status"),
@@ -3227,14 +3235,18 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             if (existing.metadata or {}).get("user_id") != user_id:
                 return {"error": "forbidden: memory belongs to another user"}
             try:
-                await svc.review(
+                done = await svc.review(
                     mem_id,
                     decision="reject",
                     actor=user_id,
                     note=args.get("note") or "memory_forget",
+                    origin="mcp",  # a model writer acting for the member (memory_authority)
                 )
             except MemoryServiceError as exc:
                 return {"error": str(exc)}
+            if done is None:
+                return {"error": "held back: that is something you told me directly; ask me "
+                                 "to forget it yourself (\"forget that\") and I will"}
             return {"id": mem_id, "status": "rejected"}
 
     # === MULTICA BOARD TOOLS ============================================
