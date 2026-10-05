@@ -370,6 +370,7 @@ from research_evidence import (
 )
 from risk_policy import classify_request, is_whatsapp_connect_request
 from chat_session_title import derive_session_title, title_is_weak
+from session_continuity import resolve_session_id
 from ag_ui_stream import AgRunRecorder, iter_openclaw_text_chunks, iter_text_message_chunks, new_run_ids
 from ag_ui.core import (
     CustomEvent,
@@ -2703,7 +2704,6 @@ def _resolve_channel(body: dict) -> str:
 async def chat(request: Request, user: dict = Depends(resolve_acting_user), stream: bool = True):
     body = await request.json()
     message = body.get("message", "")
-    session_id = body.get("session_id", f"web_{uuid.uuid4().hex[:8]}")
     user_id = user["user_id"]
     force_agent: str = body.get("force_agent", "auto")  # 'auto' | 'hermes' | legacy 'openclaw'
     # OpenClaw remains available, but only for explicit manual requests.
@@ -2717,6 +2717,10 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
     if not message:
         return {"error": "No message provided"}
 
+    # An explicit session_id is used as-is. With none (the estate ask-box sends none) the
+    # user's last web session within ZOE_STICKY_SESSION_MINUTES continues, else a fresh
+    # web_<8hex> — session_continuity (ZOE_STICKY_SESSION, default ON).
+    session_id = await resolve_session_id(body, user_id, channel=req_channel)
     await _ensure_user_and_chat_session(session_id, user_id)
 
     if stream:
@@ -3170,7 +3174,7 @@ async def chat_capabilities(user: dict = Depends(get_current_user)):
 async def whatsapp_connect(request: Request, user: dict = Depends(get_current_user)):
     user_id = user["user_id"]
     body = await request.json()
-    session_id = body.get("session_id", f"web_{uuid.uuid4().hex[:8]}")
+    session_id = await resolve_session_id(body, user_id)
     approved = bool(body.get("approved", False))
     if not approved:
         approval_id = await _create_pending_approval(

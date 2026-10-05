@@ -27,7 +27,7 @@ importScripts('/workbox/workbox-sw.js');
 //  same-origin, so the generic script/style routes below already cache them on
 //  first use, and precaching ~2 MB of libraries would re-download the lot on
 //  every future SW_VERSION bump.)
-const SW_VERSION = '4.84.0'; // chat/dashboard/calendar/lists/offline (precached): desktop→touch links severed, dead tier removed, offline probes /health, trailing-slash 307s gone (UI deep review wave 5, 2026-10-04)
+const SW_VERSION = '4.84.1'; // 4.84.1: chat.html persists its chat session id before the first send (no throwaway id per message). 4.84.0: chat/dashboard/calendar/lists/offline (precached): desktop→touch links severed, dead tier removed, offline probes /health, trailing-slash 307s gone (UI deep review wave 5, 2026-10-04)
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded

@@ -1093,6 +1093,22 @@ async def _user_opted_out(user_id: str) -> bool:
         return False
 
 
+def _identity_assertion_blocked(text: str, *, user_id: str, source: str) -> bool:
+    """True when an AUTOMATIC writer (``identity_facts.AUTOMATIC_SOURCES``) is asserting
+    the user's own name. Explicit teach paths (``voice_fact``, ``brain_tool``,
+    ``review_ui``) and operator tools are never blocked. Logs a label only (never the
+    text). Never raises."""
+    try:
+        from identity_facts import AUTOMATIC_SOURCES, is_user_name_assertion
+
+        if source not in AUTOMATIC_SOURCES or not is_user_name_assertion(text):
+            return False
+    except Exception:  # noqa: BLE001 — the guard must never break ingestion
+        return False
+    logger.info("IDENTITY_FACT_BLOCKED user=%s source=%s kind=name", user_id, source)
+    return True
+
+
 class MemoryServiceError(Exception):
     """Raised for operational failures."""
 
@@ -1158,6 +1174,14 @@ class MemoryService:
         # caller remembering to. Explicit teach sources are never dropped.
         if source in MEMORY_OPT_OUT_SOURCES and (opt_out or await _user_opted_out(user_id)):
             self._bump("opt_out", source)
+            return None
+
+        # Identity is an ACCOUNT fact, never a recalled one: an automatic writer (regex,
+        # digest, consolidation, person extractor…) must not store "the user's name is X"
+        # — it mishears and mis-attributes (a speech-to-text fragment naming a third
+        # person became the owner's name). identity_facts answers from the account.
+        if _identity_assertion_blocked(text, user_id=user_id, source=source):
+            self._bump("identity_drop", source)
             return None
 
         scrubbed, reject = scrub_pii(text)
@@ -1553,6 +1577,15 @@ class MemoryService:
             and await _user_opted_out(user_id)
         ):
             self._bump("opt_out", actor)
+            return None
+
+        # The nightly digest's contradiction pass SUPERSEDES via review(edit): the edited
+        # row's source/session_id carry forward, so a polluted name written here looked
+        # like a regex/Telegram row. Same identity wall as ingest().
+        if decision == "edit" and _identity_assertion_blocked(
+            edits or "", user_id=user_id, source=actor
+        ):
+            self._bump("identity_drop", actor)
             return None
 
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())

@@ -1595,6 +1595,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_IDENTITY_BLOCK": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/identity_facts.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_IDLE_CONSOLIDATION_CHECK_S": {
         "defaults": [
           "60"
@@ -2277,11 +2287,13 @@
       },
       "ZOE_LOCATION_CITY": {
         "defaults": [
+          "''",
           "'Geraldton'",
           "dynamic"
         ],
         "in_env_example": false,
         "readers": [
+          "services/zoe-data/identity_facts.py",
           "services/zoe-data/mcp_server.py",
           "services/zoe-data/routers/weather.py",
           "services/zoe-data/voice_stitch.py"
@@ -2290,10 +2302,12 @@
       },
       "ZOE_LOCATION_COUNTRY": {
         "defaults": [
+          "''",
           "dynamic"
         ],
         "in_env_example": false,
         "readers": [
+          "services/zoe-data/identity_facts.py",
           "services/zoe-data/routers/weather.py"
         ],
         "typed_env": false
@@ -2319,6 +2333,16 @@
         "readers": [
           "services/zoe-data/mcp_server.py",
           "services/zoe-data/routers/weather.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_LOCATION_REGION": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/identity_facts.py"
         ],
         "typed_env": false
       },
@@ -4516,6 +4540,26 @@
         ],
         "typed_env": true
       },
+      "ZOE_STICKY_SESSION": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/session_continuity.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_STICKY_SESSION_MINUTES": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/session_continuity.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_STRIP_NARRATION": {
         "defaults": [
           "-"
@@ -4679,11 +4723,13 @@
       },
       "ZOE_TIMEZONE": {
         "defaults": [
+          "''",
           "'Australia/Perth'",
           "-"
         ],
         "in_env_example": false,
         "readers": [
+          "services/zoe-data/identity_facts.py",
           "services/zoe-data/mcp_server.py",
           "services/zoe-data/memory_digest.py",
           "services/zoe-data/multica_autopilot_sync.py",
