@@ -50,22 +50,24 @@ class _Cur:
 
 
 class FakeDB:
+    """Answers the ONE joined identity query (``_IDENTITY_SQL``) from plain fields."""
+
     def __init__(self, *, auth=True, users_name=REAL.lower(), prefs=None, wp=None, sysloc=SYSLOC):
-        self.tables = {
-            "auth_users": {"username": REAL.lower(), "settings": "{}"} if auth else None,
-            "users": {"name": users_name} if users_name is not None else None,
-            "user_preferences": {"prefs": json.dumps(prefs)} if prefs is not None else None,
-            "weather_preferences": wp,
-            "system_preferences": {"value": json.dumps(sysloc)} if sysloc is not None else None,
-        }
+        self.auth, self.users_name, self.prefs, self.wp, self.sysloc = auth, users_name, prefs, wp, sysloc
         self.queries: list[str] = []
 
     async def execute(self, sql, params=()):
         self.queries.append(sql)
-        for table, row in self.tables.items():
-            if f"FROM {table}" in sql:
-                return _Cur(row)
-        raise AssertionError(f"unexpected SQL {sql!r}")
+        assert "FROM auth_users" in sql, sql
+        if not self.auth:
+            return _Cur(None)
+        wp = self.wp or {}
+        return _Cur({
+            "username": REAL.lower(), "settings": "{}", "users_name": self.users_name,
+            "prefs": json.dumps(self.prefs) if self.prefs is not None else None,
+            "wp_city": wp.get("city"), "wp_country": wp.get("country"), "wp_current": wp.get("current"),
+            "sysloc": json.dumps(self.sysloc) if self.sysloc is not None else None,
+        })
 
 
 @pytest.fixture(autouse=True)
@@ -84,17 +86,23 @@ def _ident(**kw):
 POS = {
     "name": ["whats my name", "What's my name?", "what is my name", "do you know my name",
              "tell me my name", "zoe, what's my name again", "what is my first name"],
-    "fullname": ["what's my full name", "whats my last name", "what is my surname"],
+    "fullname": ["what's my full name", "what is my full name"],
+    "surname": ["whats my last name", "what is my surname"],
     "call": ["what do you call me", "what am I called", "who do you call me"],
     "self": ["who am I", "Who am I?", "hey zoe, who am i"],
-    "home": ["where do I live", "where do we live", "what city am I in", "which city do I live in",
-             "what suburb do we live in", "where's my home", "what country are we in"],
+    "home": ["where do I live", "where do we live", "where's my home"],
+    "home_city": ["which city do I live in", "what town do we live in"],
+    "home_region": ["what state do we live in", "which region do I live in"],
+    "home_country": ["which country do I live in", "what country do we live in"],
     "address": ["what's my address", "what is my home address", "whats our address"],
 }
 NEG = ["who am I meeting tomorrow", "who am I seeing on Friday", "what's my name for the booking",
        "my name", "what is my email address", "what's my work address", "where do I work",
        "where was I born", "what's the weather", "what's my schedule", "who are you",
        "what's the name of my dentist", "who is Marisol", "tell me about myself",
+       # past tense / present LOCATION / finer than the account knows: all fall to the brain
+       "where did I live", "where did we live", "what city am I in", "what country are we in",
+       "which suburb do I live in", "what area do we live in", "what's my middle name",
        "what do you know about me", "where am I from", "what's your name", "x" * 200]
 
 
@@ -145,6 +153,23 @@ def test_no_location_means_no_place_clause(monkeypatch):
     assert idf.reply_for("home", i) is None  # nothing to say -> falls through to the brain
 
 
+def test_current_location_users_city_is_not_home():
+    """weather_preferences.city is a WEATHER location; with use_current_location it follows the
+    device, so a travel city must not be reported as home - the household default stands in."""
+    trip = _ident(city="Dunedin", country="NZ", use_current_location=True)
+    assert (trip.city, trip.region, trip.country) == ("Hobart", "Tasmania", "Australia")
+    fixed = _ident(city="Dunedin", country="NZ", use_current_location=False)
+    assert fixed.city == "Dunedin"
+
+
+def test_current_location_with_no_household_default_means_no_home(monkeypatch):
+    for k in ("ZOE_LOCATION_CITY", "ZOE_LOCATION_REGION", "ZOE_LOCATION_COUNTRY", "ZOE_TIMEZONE"):
+        monkeypatch.delenv(k, raising=False)
+    i = idf.build_identity(UID, username="zed", city="Dunedin", country="NZ", sysloc={},
+                           use_current_location=True)
+    assert i.city == "" and idf.reply_for("home", i) is None
+
+
 def test_no_account_name_no_identity():
     assert idf.build_identity(UID, username="", users_name="", sysloc=SYSLOC) is None
 
@@ -159,9 +184,10 @@ def test_unregistered_id_has_none_even_with_a_users_row():
     assert asyncio.run(idf.resolve_identity("bar-s1", db=FakeDB(auth=False))) is None
 
 
-def test_resolve_reads_the_account_tables_and_caches():
+def test_resolve_reads_the_account_tables_in_ONE_query_and_caches():
     db = FakeDB(prefs={"preferred_name": "zeddy", "home_address": "1 Test Lane"})
     first = asyncio.run(idf.resolve_identity(UID, db=db))
+    assert len(db.queries) == 1
     n = len(db.queries)
     assert (first.name, first.street_address, first.city) == ("Zeddy", "1 Test Lane", "Hobart")
     assert asyncio.run(idf.resolve_identity(UID, db=db)) is first and len(db.queries) == n
@@ -196,7 +222,9 @@ def account(monkeypatch):
     ("what do you call me", "I call you Zed."),
     ("who am I", "You're Zed, a member of this household in Hobart, Tasmania."),
     ("where do i live", "You live in Hobart, Tasmania."),
-    ("what city am I in", "You live in Hobart, Tasmania."),
+    ("which city do I live in", "You live in Hobart."),
+    ("what state do we live in", "You live in Tasmania."),
+    ("which country do I live in", "You live in Australia."),
     ("what's my address",
      "I only have your location, Hobart, Tasmania, not a street address."),
 ])
@@ -262,6 +290,29 @@ def test_conflict_is_logged_without_text(caplog):
 ])
 def test_name_conflict_rule(asserted, conflict):
     assert idf.name_conflicts(asserted, _ident()) is conflict
+
+
+@pytest.mark.parametrize("asserted,meta,verdict", [
+    ("Zed Quill", {}, "match"),
+    ("Mika Vale", {"source": "chat_regex"}, "conflict"),
+    ("Mika Vale", {"source": "voice_fact"}, "needs_review"),   # the user dictated it
+    ("Zeddy", {"source": "chat_regex"}, "needs_review"),        # a plausible nickname of Zed
+    ("Zeddy", {}, "needs_review"),
+    ("Zedd Quill", {"source": "digest"}, "needs_review"),
+])
+def test_name_assertion_classes(asserted, meta, verdict):
+    assert idf.classify_name_assertion(asserted, _ident(), meta) == verdict
+    assert idf.name_conflicts(asserted, _ident(), meta) is (verdict == "conflict")
+
+
+def test_a_nickname_row_is_not_logged_as_pollution(caplog):
+    class Svc:
+        async def list_by_status(self, **kw):
+            return [MemoryRef(id="m", text="User's name is Zeddy.", metadata={"source": "chat_regex"})]
+
+    caplog.set_level(logging.INFO, logger=idf.logger.name)
+    assert asyncio.run(idf._log_conflicts(UID, "name", _ident(), svc=Svc())) == 0
+    assert "IDENTITY_CONFLICT" not in caplog.text
 
 
 def test_preferred_name_is_not_a_conflict():
@@ -360,7 +411,22 @@ def _ingest(svc, text, source):
     return asyncio.run(svc.ingest(text, user_id=UID, source=source, status="approved", confidence=0.9))
 
 
-@pytest.mark.parametrize("source", sorted(idf.AUTOMATIC_SOURCES))
+# The wall is an ALLOW-list of direct sources, so every other label - the known mining
+# lanes, the zoe_agent regex FALLBACK (used when memory_extractor cannot be imported), the
+# agent tools, and a label nobody has invented yet - is walled.
+AUTOMATIC = ["chat_regex", "chat_regex_fallback", "turn_digest", "conversation", "ambient", "digest",
+             "consolidation", "synthesis", "music_digest", "voice_regex", "voice_turn_digest",
+             "idle_consolidation", "mcp", "zoe_agent", "profile-analysis", "some_future_extractor", ""]
+
+
+class _Everything:
+    """A DIRECT_USER_SOURCES stand-in that allows every label (= the wall removed)."""
+
+    def __contains__(self, _):
+        return True
+
+
+@pytest.mark.parametrize("source", AUTOMATIC)
 def test_automatic_writers_cannot_store_the_users_name(svc, source, caplog):
     caplog.set_level(logging.INFO, logger=memory_service.logger.name)
     assert _ingest(svc, f"User's name is {WRONG}.", source) is None
@@ -375,7 +441,7 @@ def test_phrasing_variants_are_walled_too(svc, text):
     assert _ingest(svc, text, "digest") is None
 
 
-@pytest.mark.parametrize("source", ["voice_fact", "brain_tool", "review_ui", "identity_audit"])
+@pytest.mark.parametrize("source", ["voice_fact", "brain_tool", "review_ui", "proposal", "identity_audit"])
 def test_explicit_teach_and_operator_sources_still_store(svc, source):
     assert _ingest(svc, f"User's name is {REAL}.", source) is not None
 
@@ -387,10 +453,11 @@ def test_other_facts_from_automatic_writers_are_untouched(svc, text):
 
 
 def test_break_the_fix_control_the_wall_is_what_blocks(svc, monkeypatch):
-    """If AUTOMATIC_SOURCES stops covering the writer the row is stored: the tests above
+    """With the wall removed the row is stored - for the fallback label too: the tests above
     are measuring the wall, not an accident of the fake."""
-    monkeypatch.setattr(idf, "AUTOMATIC_SOURCES", frozenset())
+    monkeypatch.setattr(idf, "DIRECT_USER_SOURCES", _Everything())
     assert _ingest(svc, f"User's name is {WRONG}.", "chat_regex") is not None
+    assert _ingest(svc, f"User's name is {WRONG} Jr.", "chat_regex_fallback") is not None
 
 
 def test_automatic_edit_cannot_supersede_into_a_name_assertion(svc):
@@ -445,7 +512,7 @@ def test_digest_replay_of_the_live_incident_leaves_the_genuine_row(svc, monkeypa
 
     # defence in depth: the identity wall is the SPECIAL CASE of the authority rule
     # (memory_authority), so removing it alone still leaves the genuine row standing
-    monkeypatch.setattr(idf, "AUTOMATIC_SOURCES", frozenset())
+    monkeypatch.setattr(idf, "DIRECT_USER_SOURCES", _Everything())
     asyncio.run(memory_digest.run_memory_digest(UID))
     assert rows[seed.id][1]["status"] == "approved"
 
@@ -454,3 +521,205 @@ def test_digest_replay_of_the_live_incident_leaves_the_genuine_row(svc, monkeypa
     asyncio.run(memory_digest.run_memory_digest(UID))
     assert rows[seed.id][1]["status"] == "superseded"
     assert any(WRONG in doc for doc, _ in rows.values())
+
+
+# ── surname replies never deny what the account merely lacks ──────────────────
+
+def test_surname_questions_fall_through_for_a_first_name_only_account():
+    one = _ident()
+    assert idf.reply_for("fullname", one) is None and idf.reply_for("surname", one) is None
+
+
+def test_surname_and_full_name_answer_from_a_multi_token_name_without_negation():
+    two = idf.build_identity(UID, username="zed", settings={"display_name": "Sam Rivers"}, sysloc=SYSLOC)
+    assert idf.reply_for("fullname", two) == "Your full name is Sam Rivers."
+    assert idf.reply_for("surname", two) == "Your surname is Rivers."
+    for kind in ("fullname", "surname", "name", "call", "self", "home"):
+        reply = idf.reply_for(kind, two) or ""
+        assert "don't" not in reply and "no surname" not in reply and " not " not in f" {reply} "
+
+
+# ── home: present-tense home only, the right granularity ──────────────────────
+
+def test_home_questions_answer_at_the_granularity_asked():
+    i = _ident()
+    assert idf.reply_for("home_city", i) == "You live in Hobart."
+    assert idf.reply_for("home_region", i) == "You live in Tasmania."
+    assert idf.reply_for("home_country", i) == "You live in Australia."
+    nz = _ident(city="Dunedin", country="NZ")  # no region known for a user's own city
+    assert idf.reply_for("home_region", nz) is None and idf.reply_for("home_country", nz) == "You live in New Zealand."
+
+
+# ── an explicit rename (the one legitimate way a name changes) ────────────────
+
+RENAME_OK = [("call me Jay", "Jay"), ("Call me jay please", "Jay"), ("you can call me Jay", "Jay"),
+             ("my name is Jay", "Jay"), ("My name's Jay", "Jay"), ("actually my name is Mika Vale", "Mika Vale"),
+             ("I go by Jay", "Jay"), ("hey zoe, call me Jay", "Jay"), ("everyone calls me Jay", "Jay")]
+RENAME_NO = ["call me later", "can you call me a taxi", "call me when you are ready", "call me back",
+             "my name is Jay and I live here", "what is my name?", "my name is?", "actually it's Jay",
+             "call me", "call me please", "don't call me that", "call me tomorrow", "who calls me Jay"]
+
+
+@pytest.mark.parametrize("text,name", RENAME_OK)
+def test_rename_shapes(text, name):
+    assert idf.rename_request(text) == name
+
+
+@pytest.mark.parametrize("text", RENAME_NO)
+def test_non_renames(text):
+    assert idf.rename_request(text) == ""
+
+
+@pytest.fixture
+def live_account(monkeypatch):
+    """A registered account backed by FakeDB; ``user_prefs.set_pref`` writes into it."""
+    import user_prefs
+
+    db = FakeDB()
+    real = idf.resolve_identity
+    writes = []
+
+    async def bound(uid, db_=None, **kw):
+        return await real(uid, db=db, **kw) if uid == UID else None
+
+    async def set_pref(uid, key, value, *, db=None):
+        writes.append((uid, key, value))
+        fake.prefs = {**(fake.prefs or {}), key: value}
+
+    fake = db
+    monkeypatch.setattr(idf, "resolve_identity", bound)
+    monkeypatch.setattr(user_prefs, "set_pref", set_pref)
+    db.writes = writes
+    return db
+
+
+def test_rename_via_chat_updates_the_answer_the_line_and_the_greeting(live_account):
+    import fast_tiers
+
+    res = asyncio.run(fast_tiers.resolve("call me Jay", UID, "s1", channel="chat"))
+    assert res.reply == "I'll call you Jay." and res.intent == "identity_rename" and res.tier == "identity"
+    assert live_account.writes == [(UID, "preferred_name", "Jay")]
+    assert asyncio.run(fast_tiers.resolve("whats my name", UID, "s1", channel="chat")).reply == "Your name is Jay."
+    assert asyncio.run(fast_tiers.resolve("what do you call me", UID, "s1", channel="telegram")).reply == "I call you Jay."
+    ident = asyncio.run(idf.resolve_identity(UID))
+    assert idf.identity_line(ident).startswith("You are talking to Jay,")
+    assert asyncio.run(idf.preferred_name(UID)) == "Jay"  # what the greeting reads: ONE source
+
+
+def test_greeting_reads_the_same_field(live_account, monkeypatch):
+    import intent_router
+
+    class _Intent:
+        slots = {"time_of_day": "morning"}
+
+    assert asyncio.run(intent_router._execute_greeting(_Intent(), UID)).startswith("Good morning!")  # never chose a name
+    asyncio.run(idf.apply_rename(UID, "Jay"))
+    assert asyncio.run(intent_router._execute_greeting(_Intent(), UID)).startswith("Good morning, Jay!")
+
+
+def test_rename_is_for_registered_accounts_on_chat_and_telegram_only(live_account, monkeypatch):
+    import fast_tiers
+    import semantic_router
+
+    assert asyncio.run(idf.maybe_answer("call me Jay", "guest")) is None
+    assert asyncio.run(idf.maybe_answer("call me Jay", "someone-else")) is None
+    assert live_account.writes == []
+    monkeypatch.setattr(semantic_router, "is_enabled", lambda: False)
+    assert asyncio.run(fast_tiers.resolve("call me Jay", UID, "s1", channel="voice")) is None
+    assert live_account.writes == []
+
+
+def test_a_failed_rename_write_falls_through_instead_of_lying(live_account, monkeypatch):
+    import user_prefs
+
+    async def boom(*a, **k):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(user_prefs, "set_pref", boom)
+    assert asyncio.run(idf.maybe_answer("call me Jay", UID)) is None
+
+
+def test_rename_and_wall_are_logged_as_different_things(live_account, svc, caplog):
+    """The user's own rename is an accepted settings write; the same words from an
+    automatic writer are refused - and the two log lines say which is which."""
+    caplog.set_level(logging.INFO)
+    assert asyncio.run(idf.maybe_answer("my name is Jay", UID))[0] == "rename"
+    assert f"IDENTITY_RENAME user={UID} origin=explicit" in caplog.text
+    assert _ingest(svc, "User's name is Jay.", "chat_regex") is None  # the extractor's copy of it
+    assert f"IDENTITY_FACT_BLOCKED user={UID} source=chat_regex kind=name origin=automatic" in caplog.text
+
+
+def test_after_a_rename_a_digest_asserted_name_still_cannot_land(live_account, svc):
+    asyncio.run(idf.maybe_answer("call me Jay", UID))
+    assert _ingest(svc, f"User's name is {WRONG}.", "digest") is None
+    assert asyncio.run(idf.maybe_answer("whats my name", UID))[1] == "Your name is Jay."
+
+
+# ── cold lookup budget + stale fallback ───────────────────────────────────────
+
+def test_cold_lookup_over_budget_returns_none_then_warms_in_the_background():
+    class Slow(FakeDB):
+        async def execute(self, sql, params=()):
+            await asyncio.sleep(0.15)
+            return await super().execute(sql, params)
+
+    async def go():
+        db = Slow()
+        t0 = asyncio.get_running_loop().time()
+        first = await idf.resolve_identity(UID, db=db, budget_s=0.02)
+        waited = asyncio.get_running_loop().time() - t0
+        await asyncio.sleep(0.3)  # the load finishes on its own
+        return first, waited, await idf.resolve_identity(UID, db=db, budget_s=0.02), len(db.queries)
+
+    first, waited, second, queries = asyncio.run(go())
+    assert first is None and waited < 0.1
+    assert second is not None and second.name == "Zed" and queries == 1  # one load, not two
+
+
+def test_expired_entry_is_the_fallback_when_the_refresh_fails():
+    import time
+
+    stale = _ident()
+    idf._cache[UID] = (time.monotonic() - 10_000, stale)
+
+    class Boom:
+        async def execute(self, *a, **k):
+            raise RuntimeError("db down")
+
+    assert asyncio.run(idf.resolve_identity(UID, db=Boom())) is stale
+
+
+def test_names_are_compared_whole_not_by_one_shared_token():
+    jason = idf.build_identity(UID, username="x", settings={"display_name": "Jason Smith"}, sysloc=SYSLOC)
+    for asserted, verdict in [("Jason Smith", "match"), ("Jason", "match"), ("Jason Q Smith", "match"),
+                              ("Michael Smith", "conflict"), ("Smith", "match"), ("Michael", "conflict")]:
+        assert idf.classify_name_assertion(asserted, jason, {"source": "digest"}) == verdict, asserted
+
+
+def test_full_name_and_surname_come_from_the_account_name_not_a_nickname():
+    i = idf.build_identity(UID, username="x", settings={"display_name": "Sam Rivers"},
+                           prefs={"preferred_name": "Sammy"}, sysloc=SYSLOC)
+    assert i.name == "Sammy"
+    assert idf.reply_for("fullname", i) == "Your full name is Sam Rivers."
+    assert idf.reply_for("surname", i) == "Your surname is Rivers."
+    assert idf.reply_for("name", i) == "Your name is Sammy."
+
+
+def test_the_zoe_agent_regex_fallback_cannot_store_the_name_end_to_end(svc, monkeypatch):
+    """zoe_agent._background_memory_save falls back to its own patterns when memory_extractor
+    cannot be imported; they emit "User's name is ..." with source=chat_regex_fallback."""
+    import zoe_agent
+
+    src = open(zoe_agent.__file__).read()
+    assert 'source="chat_regex_fallback"' in src  # the label this test stands for is really in use
+    assert _ingest(svc, f"User's name is {WRONG}", "chat_regex_fallback") is None
+    assert not svc._col.rows
+
+
+def test_the_owner_reviewing_their_own_memory_is_a_direct_edit(svc):
+    """The review UI passes the user id as the actor; that is the user, not an extractor."""
+    seed = _ingest(svc, f"User's name is {REAL}.", "voice_fact")
+    ok = asyncio.run(svc.review(seed.id, decision="edit", actor=UID, edits=f"User's name is {REAL} Quill."))
+    assert ok is not None
+    assert asyncio.run(svc.review(ok.id, decision="edit", actor="some_extractor",
+                                  edits=f"User's name is {WRONG}.")) is None

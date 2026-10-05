@@ -370,7 +370,7 @@ from research_evidence import (
 )
 from risk_policy import classify_request, is_whatsapp_connect_request
 from chat_session_title import derive_session_title, title_is_weak
-from session_continuity import resolve_session_id
+from session_continuity import mint as mint_session_id, resolve_session_id
 from ag_ui_stream import AgRunRecorder, iter_openclaw_text_chunks, iter_text_message_chunks, new_run_ids
 from ag_ui.core import (
     CustomEvent,
@@ -2718,9 +2718,12 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
         return {"error": "No message provided"}
 
     # An explicit session_id is used as-is. With none (the estate ask-box sends none) the
-    # user's last web session within ZOE_STICKY_SESSION_MINUTES continues, else a fresh
-    # web_<8hex> — session_continuity (ZOE_STICKY_SESSION, default ON).
-    session_id = await resolve_session_id(body, user_id, channel=req_channel)
+    # user's last ask_ session within ZOE_STICKY_SESSION_MINUTES continues (never a web_
+    # desktop session, never one whose turn is in flight), else a fresh ask_<8hex> —
+    # session_continuity (ZOE_STICKY_SESSION, default ON).
+    session_id = await resolve_session_id(
+        body, user_id, channel=req_channel, busy=lambda sid: _get_session_lock(sid).locked()
+    )
     await _ensure_user_and_chat_session(session_id, user_id)
 
     if stream:
@@ -2745,318 +2748,341 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
             },
         )
     else:
-        approval_token, message_for_processing = _extract_approval_token(message)
-        # Persist the user turn on the non-stream path as well. The stream
-        # path does this inside chat_stream_generator; without this the
-        # nightly digest would see an empty chat_messages table for any
-        # voice / CLI clients that opt out of SSE.
-        if message:
-            await _save_chat_message(session_id, "user", message, user_id=user_id)
-        if approval_token:
-            approved = await _resolve_approval(user_id, approval_token)
-            if not approved:
-                return {"error": "Invalid approval token", "session_id": session_id}
-            message_for_processing = approved.get("request_text") or message_for_processing
+        # Serialise NON-streaming turns per session exactly as locked_chat_stream does for
+        # streams (persist-then-load invariant). An id-less request that the resolver pointed at
+        # a session whose turn is in flight (its busy probe raced the other request's acquire)
+        # takes a fresh ask_ session instead; check-then-acquire below has no await between, so
+        # it is atomic on the event loop. An explicit id waits like the stream path, then
+        # answers session_busy.
+        lock = _get_session_lock(session_id)
+        if lock.locked() and session_id != body.get("session_id"):
+            session_id = mint_session_id()
+            await _ensure_user_and_chat_session(session_id, user_id)
+            lock = _get_session_lock(session_id)
+        try:
+            await asyncio.wait_for(lock.acquire(), timeout=_SESSION_LOCK_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            logger.warning("session %s concurrency timeout - rejecting duplicate non-stream request", session_id)
+            return {
+                "error": "Another request is already in progress for this session. Please wait.",
+                "code": "session_busy",
+                "session_id": session_id,
+            }
+        try:
+            approval_token, message_for_processing = _extract_approval_token(message)
+            # Persist the user turn on the non-stream path as well. The stream
+            # path does this inside chat_stream_generator; without this the
+            # nightly digest would see an empty chat_messages table for any
+            # voice / CLI clients that opt out of SSE.
+            if message:
+                await _save_chat_message(session_id, "user", message, user_id=user_id)
+            if approval_token:
+                approved = await _resolve_approval(user_id, approval_token)
+                if not approved:
+                    return {"error": "Invalid approval token", "session_id": session_id}
+                message_for_processing = approved.get("request_text") or message_for_processing
 
-        if _GUARDED_AUTO and not approval_token:
-            risk = classify_request(message_for_processing)
-            if risk.requires_confirmation:
-                approval_id = await _create_pending_approval(
+            if _GUARDED_AUTO and not approval_token:
+                risk = classify_request(message_for_processing)
+                if risk.requires_confirmation:
+                    approval_id = await _create_pending_approval(
+                        user_id=user_id,
+                        session_id=session_id,
+                        message=message_for_processing,
+                        risk_level=risk.level,
+                        reason=risk.reason,
+                        normalized_action=risk.normalized_action,
+                    )
+                    return {
+                        "response": "Approval required before executing this action.",
+                        "session_id": session_id,
+                        "ui_components": [
+                            {
+                                "component": "confirmation",
+                                "props": {
+                                    "description": f"{risk.reason}. Approve to continue.",
+                                    "yes_text": "Approve",
+                                    "no_text": "Cancel",
+                                    "yes_action": f"/approve {approval_id}",
+                                },
+                            }
+                        ],
+                    }
+
+            lc = message_for_processing.lower().strip()
+            task_class = classify_query(message_for_processing)
+            if task_class == "research":
+                missing = missing_brief_fields(message_for_processing)
+                if missing:
+                    followup = _research_followup_prompt(missing)
+                    await _save_chat_message(session_id, "assistant", followup, user_id=user_id)
+                    return {
+                        "response": followup,
+                        "session_id": session_id,
+                        "ui_components": [
+                            {
+                                "component": "status",
+                                "props": {
+                                    "level": "info",
+                                    "message": "Research brief incomplete - waiting for constraints.",
+                                },
+                            }
+                        ],
+                    }
+            if "what can you do right now" in lc or lc in {"/capabilities", "capabilities", "tools"}:
+                try:
+                    caps_text = Path("/home/zoe/assistant/CAPABILITIES.md").read_text()[:12000]
+                except Exception:
+                    caps_text = "Hermes is the active escalation agent. Zoe tools include calendar, lists, reminders, memory, Graphify, Multica, and CloakBrowser."
+                capabilities_text = "Hermes/Zoe capabilities:\n\n" + caps_text
+                await _save_chat_message(session_id, "assistant", capabilities_text, user_id=user_id)
+                return {"response": capabilities_text, "session_id": session_id}
+
+            use_intent_fast_path = (not force_openclaw) and _ALL_TOOLS_ENABLED
+            if task_class == "research":
+                # Keep research prompts on the evidence-producing flow.
+                use_intent_fast_path = False
+            if message_for_processing.startswith("/openclaw "):
+                message_for_processing = message_for_processing[len("/openclaw ") :].strip()
+                force_openclaw = True
+                use_intent_fast_path = False
+
+            if use_intent_fast_path:
+                # Tier-1.5 channel-agnostic fast path (the SAME core voice uses): answer
+                # calendar / lists / weather / time / people / memory sub-second instead
+                # of paying ~5s for the Pi-hybrid/brain lane below. Threshold-gated inside
+                # expert_dispatch, so only confident matches short-circuit; everything else
+                # returns None and falls through to the hybrid lane unchanged. Non-fatal.
+                # Keep ONLY resolve() inside the try so a fast-path miss/error falls
+                # through to the hybrid lane. The success branch is OUTSIDE the try:
+                # if persistence raises it must NOT be swallowed (that would re-run the
+                # turn on the brain and return a different reply than we injected).
+                _fp_res = None
+                try:
+                    import fast_tiers as _fast_path
+                    _fp_res = await _fast_path.resolve(
+                        message_for_processing, user_id, session_id,
+                        channel=req_channel,
+                    )
+                except Exception as _fp_exc:  # never let the fast path break a turn
+                    logger.debug("chat fast_path resolve failed (non-fatal): %s", _fp_exc)
+                    _fp_res = None
+                if _fp_res is not None and getattr(_fp_res, "reply", ""):
+                    _fp_reply = _fp_res.reply
+                    asyncio.ensure_future(
+                        chat_inject_background(
+                            message_for_processing, _fp_reply,
+                            f"fast:{_fp_res.domain}", user_id, session_id,
+                        )
+                    )
+                    asyncio.ensure_future(
+                        _persist_memory_candidates(
+                            user_id, session_id, message_for_processing, _fp_reply
+                        )
+                    )
+                    await _save_chat_message(session_id, "assistant", _fp_reply, user_id=user_id)
+                    return {"response": _fp_reply, "session_id": session_id}
+                _pi_hybrid = await _run_chat_pi_hybrid_lane(
+                    message_for_processing,
                     user_id=user_id,
                     session_id=session_id,
-                    message=message_for_processing,
-                    risk_level=risk.level,
-                    reason=risk.reason,
-                    normalized_action=risk.normalized_action,
+                    context=_CHAT_CONTEXTS.get(session_id),
+                    request_text=message,
+                    record_run_state=True,
+                    panel_id=req_panel_id,
                 )
-                return {
-                    "response": "Approval required before executing this action.",
-                    "session_id": session_id,
-                    "ui_components": [
-                        {
-                            "component": "confirmation",
-                            "props": {
-                                "description": f"{risk.reason}. Approve to continue.",
-                                "yes_text": "Approve",
-                                "no_text": "Cancel",
-                                "yes_action": f"/approve {approval_id}",
-                            },
-                        }
-                    ],
-                }
+                if _pi_hybrid.get("accepted"):
+                    _pi_cue = _pi_hybrid.get("cue") or {}
+                    _pi_decision = _pi_hybrid.get("decision") or {}
+                    return {
+                        "response": _pi_hybrid.get("response_text") or "",
+                        "session_id": session_id,
+                        "processing_cue": {
+                            "available": bool(_pi_cue.get("available")),
+                            "text": _pi_cue.get("text") or "",
+                            "event": _pi_cue.get("event"),
+                        },
+                        "pi_hybrid": {
+                            "accepted": True,
+                            "reason": _pi_decision.get("reason"),
+                            "intent": _pi_decision.get("intent"),
+                            "intent_group": _pi_decision.get("intent_group"),
+                            "agreement_kind": _pi_decision.get("agreement_kind"),
+                            "execution_scope": _pi_decision.get("execution_scope"),
+                            "action_form": _pi_hybrid.get("action_form"),
+                        },
+                    }
 
-        lc = message_for_processing.lower().strip()
-        task_class = classify_query(message_for_processing)
-        if task_class == "research":
-            missing = missing_brief_fields(message_for_processing)
-            if missing:
-                followup = _research_followup_prompt(missing)
-                await _save_chat_message(session_id, "assistant", followup, user_id=user_id)
-                return {
-                    "response": followup,
-                    "session_id": session_id,
-                    "ui_components": [
-                        {
-                            "component": "status",
-                            "props": {
-                                "level": "info",
-                                "message": "Research brief incomplete - waiting for constraints.",
-                            },
-                        }
-                    ],
-                }
-        if "what can you do right now" in lc or lc in {"/capabilities", "capabilities", "tools"}:
-            try:
-                caps_text = Path("/home/zoe/assistant/CAPABILITIES.md").read_text()[:12000]
-            except Exception:
-                caps_text = "Hermes is the active escalation agent. Zoe tools include calendar, lists, reminders, memory, Graphify, Multica, and CloakBrowser."
-            capabilities_text = "Hermes/Zoe capabilities:\n\n" + caps_text
-            await _save_chat_message(session_id, "assistant", capabilities_text, user_id=user_id)
-            return {"response": capabilities_text, "session_id": session_id}
-
-        use_intent_fast_path = (not force_openclaw) and _ALL_TOOLS_ENABLED
-        if task_class == "research":
-            # Keep research prompts on the evidence-producing flow.
-            use_intent_fast_path = False
-        if message_for_processing.startswith("/openclaw "):
-            message_for_processing = message_for_processing[len("/openclaw ") :].strip()
-            force_openclaw = True
-            use_intent_fast_path = False
-
-        if use_intent_fast_path:
-            # Tier-1.5 channel-agnostic fast path (the SAME core voice uses): answer
-            # calendar / lists / weather / time / people / memory sub-second instead
-            # of paying ~5s for the Pi-hybrid/brain lane below. Threshold-gated inside
-            # expert_dispatch, so only confident matches short-circuit; everything else
-            # returns None and falls through to the hybrid lane unchanged. Non-fatal.
-            # Keep ONLY resolve() inside the try so a fast-path miss/error falls
-            # through to the hybrid lane. The success branch is OUTSIDE the try:
-            # if persistence raises it must NOT be swallowed (that would re-run the
-            # turn on the brain and return a different reply than we injected).
-            _fp_res = None
-            try:
-                import fast_tiers as _fast_path
-                _fp_res = await _fast_path.resolve(
-                    message_for_processing, user_id, session_id,
-                    channel=req_channel,
-                )
-            except Exception as _fp_exc:  # never let the fast path break a turn
-                logger.debug("chat fast_path resolve failed (non-fatal): %s", _fp_exc)
-                _fp_res = None
-            if _fp_res is not None and getattr(_fp_res, "reply", ""):
-                _fp_reply = _fp_res.reply
-                asyncio.ensure_future(
-                    chat_inject_background(
-                        message_for_processing, _fp_reply,
-                        f"fast:{_fp_res.domain}", user_id, session_id,
+            intent = await detect_and_extract_intent(message_for_processing, user_id) if use_intent_fast_path else None
+            # The router head is the authority over a keyword claim (INTENT_GATE) —
+            # Samantha bar S1 was answered here by the "who is <X>" contacts lookup.
+            if intent is not None:
+                import fast_tiers as _ft_gate
+                if not _ft_gate.keyword_intent_allowed(intent.name, message_for_processing, lane="chat"):
+                    intent = None
+            # Save original message before appending voice suffix; run_zoe_agent needs the
+            # clean text so _check_fast_response (greetings/acks) still matches correctly.
+            _original_message_for_agent = message_for_processing
+            # Apply voice mode suffix AFTER intent detection so regex anchors ($) still match.
+            if is_voice_mode and message_for_processing:
+                try:
+                    from routers.voice_tts import _VOICE_SYSTEM_PROMPT_SUFFIX  # type: ignore
+                    message_for_processing = message_for_processing + "\n" + _VOICE_SYSTEM_PROMPT_SUFFIX
+                except ImportError:
+                    pass
+            if intent:
+                # Fire intent navigation to the touch panel immediately (non-blocking).
+                # This is the fix for _broadcast_intent_nav being dead code — it is now called
+                # on every non-streaming request that has a panel_id (i.e. voice commands).
+                if req_panel_id and intent.name in _INTENT_PANEL_NAV:
+                    asyncio.ensure_future(_broadcast_intent_nav(intent, panel_id=req_panel_id))
+                result = await execute_intent(intent, user_id)
+                if result:
+                    asyncio.ensure_future(
+                        chat_inject_background(message_for_processing, result, intent.name, user_id, session_id)
                     )
+                    asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, result))
+                    await _save_chat_message(session_id, "assistant", result, user_id=user_id)
+                    return {"response": result, "session_id": session_id}
+            if _WHATSAPP_FLOW_ENABLED and is_whatsapp_connect_request(message_for_processing):
+                message_for_processing = (
+                    "Connect WhatsApp integration for user with full guided flow: preflight checks, "
+                    "credential/session validation, qr/session setup, webhook test, remediation."
                 )
-                asyncio.ensure_future(
-                    _persist_memory_candidates(
-                        user_id, session_id, message_for_processing, _fp_reply
-                    )
-                )
-                await _save_chat_message(session_id, "assistant", _fp_reply, user_id=user_id)
-                return {"response": _fp_reply, "session_id": session_id}
-            _pi_hybrid = await _run_chat_pi_hybrid_lane(
-                message_for_processing,
-                user_id=user_id,
-                session_id=session_id,
-                context=_CHAT_CONTEXTS.get(session_id),
-                request_text=message,
-                record_run_state=True,
-                panel_id=req_panel_id,
-            )
-            if _pi_hybrid.get("accepted"):
-                _pi_cue = _pi_hybrid.get("cue") or {}
-                _pi_decision = _pi_hybrid.get("decision") or {}
-                return {
-                    "response": _pi_hybrid.get("response_text") or "",
-                    "session_id": session_id,
-                    "processing_cue": {
-                        "available": bool(_pi_cue.get("available")),
-                        "text": _pi_cue.get("text") or "",
-                        "event": _pi_cue.get("event"),
-                    },
-                    "pi_hybrid": {
-                        "accepted": True,
-                        "reason": _pi_decision.get("reason"),
-                        "intent": _pi_decision.get("intent"),
-                        "intent_group": _pi_decision.get("intent_group"),
-                        "agreement_kind": _pi_decision.get("agreement_kind"),
-                        "execution_scope": _pi_decision.get("execution_scope"),
-                        "action_form": _pi_hybrid.get("action_form"),
-                    },
-                }
 
-        intent = await detect_and_extract_intent(message_for_processing, user_id) if use_intent_fast_path else None
-        # The router head is the authority over a keyword claim (INTENT_GATE) —
-        # Samantha bar S1 was answered here by the "who is <X>" contacts lookup.
-        if intent is not None:
-            import fast_tiers as _ft_gate
-            if not _ft_gate.keyword_intent_allowed(intent.name, message_for_processing, lane="chat"):
-                intent = None
-        # Save original message before appending voice suffix; run_zoe_agent needs the
-        # clean text so _check_fast_response (greetings/acks) still matches correctly.
-        _original_message_for_agent = message_for_processing
-        # Apply voice mode suffix AFTER intent detection so regex anchors ($) still match.
-        if is_voice_mode and message_for_processing:
+            response_text = ""
             try:
-                from routers.voice_tts import _VOICE_SYSTEM_PROMPT_SUFFIX  # type: ignore
-                message_for_processing = message_for_processing + "\n" + _VOICE_SYSTEM_PROMPT_SUFFIX
-            except ImportError:
-                pass
-        if intent:
-            # Fire intent navigation to the touch panel immediately (non-blocking).
-            # This is the fix for _broadcast_intent_nav being dead code — it is now called
-            # on every non-streaming request that has a panel_id (i.e. voice commands).
-            if req_panel_id and intent.name in _INTENT_PANEL_NAV:
-                asyncio.ensure_future(_broadcast_intent_nav(intent, panel_id=req_panel_id))
-            result = await execute_intent(intent, user_id)
-            if result:
-                asyncio.ensure_future(
-                    chat_inject_background(message_for_processing, result, intent.name, user_id, session_id)
-                )
-                asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, result))
-                await _save_chat_message(session_id, "assistant", result, user_id=user_id)
-                return {"response": result, "session_id": session_id}
-        if _WHATSAPP_FLOW_ENABLED and is_whatsapp_connect_request(message_for_processing):
-            message_for_processing = (
-                "Connect WhatsApp integration for user with full guided flow: preflight checks, "
-                "credential/session validation, qr/session setup, webhook test, remediation."
-            )
+                # Portrait is cheap and the local brain takes it directly, so load it
+                # eagerly. Facts + semantic recall (ns_full_mem) are ONLY consumed by the
+                # Hermes/OpenClaw escalation branches and the non-local-brain path — the
+                # local Pi brain gets its memory from the memory.ts extension's
+                # /api/memories/for-prompt packet (db_memory_context=None below). So
+                # compute them LAZILY to avoid a redundant facts-load + semantic search
+                # on every non-escalating turn (the recall double-load this PR removes).
+                ns_portrait = await _safe_load_portrait(user_id)
+                _ns_full_mem_cache: "str | None" = None
 
-        response_text = ""
-        try:
-            # Portrait is cheap and the local brain takes it directly, so load it
-            # eagerly. Facts + semantic recall (ns_full_mem) are ONLY consumed by the
-            # Hermes/OpenClaw escalation branches and the non-local-brain path — the
-            # local Pi brain gets its memory from the memory.ts extension's
-            # /api/memories/for-prompt packet (db_memory_context=None below). So
-            # compute them LAZILY to avoid a redundant facts-load + semantic search
-            # on every non-escalating turn (the recall double-load this PR removes).
-            ns_portrait = await _safe_load_portrait(user_id)
-            _ns_full_mem_cache: "str | None" = None
+                async def _ns_full_mem() -> str:
+                    nonlocal _ns_full_mem_cache
+                    if _ns_full_mem_cache is None:
+                        _dbm, _sem = await asyncio.gather(
+                            _mempalace_load_user_facts(user_id),
+                            _build_memory_context(message_for_processing, user_id=user_id),
+                        )
+                        _ns_full_mem_cache = "\n\n".join(filter(None, [ns_portrait, _dbm, _sem]))
+                    return _ns_full_mem_cache
 
-            async def _ns_full_mem() -> str:
-                nonlocal _ns_full_mem_cache
-                if _ns_full_mem_cache is None:
-                    _dbm, _sem = await asyncio.gather(
-                        _mempalace_load_user_facts(user_id),
-                        _build_memory_context(message_for_processing, user_id=user_id),
+                if _USE_LOCAL_BRAIN:
+                    # Use original (pre-suffix) message for agent so fast-path checks work
+                    _agent_msg = _original_message_for_agent if is_voice_mode else message_for_processing
+                    expanded_msg = openclaw_user_message(intent, _agent_msg) if intent else _agent_msg
+                    response_text = await _brain_oneshot(
+                        expanded_msg, session_id, user_id,
+                        portrait=ns_portrait,
+                        db_memory_context=None,
+                        max_tokens_override=voice_max_tokens,
+                        voice_mode=is_voice_mode,
                     )
-                    _ns_full_mem_cache = "\n\n".join(filter(None, [ns_portrait, _dbm, _sem]))
-                return _ns_full_mem_cache
-
-            if _USE_LOCAL_BRAIN:
-                # Use original (pre-suffix) message for agent so fast-path checks work
-                _agent_msg = _original_message_for_agent if is_voice_mode else message_for_processing
-                expanded_msg = openclaw_user_message(intent, _agent_msg) if intent else _agent_msg
-                response_text = await _brain_oneshot(
-                    expanded_msg, session_id, user_id,
-                    portrait=ns_portrait,
-                    db_memory_context=None,
-                    max_tokens_override=voice_max_tokens,
-                    voice_mode=is_voice_mode,
-                )
-                # If Zoe Agent signals escalation, route accordingly
-                if response_text.startswith("__ESCALATE_HERMES__:"):
-                    _, escalate_body = response_text.split(":", 1)
-                    _, _, hermes_task = escalate_body.partition("|")
-                    try:
+                    # If Zoe Agent signals escalation, route accordingly
+                    if response_text.startswith("__ESCALATE_HERMES__:"):
+                        _, escalate_body = response_text.split(":", 1)
+                        _, _, hermes_task = escalate_body.partition("|")
+                        try:
+                            response_text = await _hermes_completion(
+                                hermes_task or message_for_processing,
+                                session_id,
+                                user_id,
+                                username=user.get("username") or "",
+                                portrait=ns_portrait,
+                                facts=await _ns_full_mem() or "",
+                            )
+                        except Exception as _he:
+                            logger.warning("Hermes non-stream escalation failed: %s", _he)
+                            response_text = "I couldn't reach Hermes right now. Please try again."
+                    elif response_text.startswith("__ESCALATE__:"):
+                        _, escalate_body = response_text.split(":", 1)
+                        _, _, oc_task = escalate_body.partition("|")
                         response_text = await _hermes_completion(
-                            hermes_task or message_for_processing,
+                            oc_task or message_for_processing,
                             session_id,
                             user_id,
                             username=user.get("username") or "",
                             portrait=ns_portrait,
                             facts=await _ns_full_mem() or "",
                         )
-                    except Exception as _he:
-                        logger.warning("Hermes non-stream escalation failed: %s", _he)
-                        response_text = "I couldn't reach Hermes right now. Please try again."
-                elif response_text.startswith("__ESCALATE__:"):
-                    _, escalate_body = response_text.split(":", 1)
-                    _, _, oc_task = escalate_body.partition("|")
+                else:
+                    oc_message = openclaw_user_message(intent, message_for_processing)
                     response_text = await _hermes_completion(
-                        oc_task or message_for_processing,
+                        oc_message,
                         session_id,
                         user_id,
                         username=user.get("username") or "",
                         portrait=ns_portrait,
                         facts=await _ns_full_mem() or "",
                     )
-            else:
-                oc_message = openclaw_user_message(intent, message_for_processing)
-                response_text = await _hermes_completion(
-                    oc_message,
-                    session_id,
-                    user_id,
-                    username=user.get("username") or "",
-                    portrait=ns_portrait,
-                    facts=await _ns_full_mem() or "",
+            except Exception as exc:
+                if task_class != "research":
+                    raise
+                logger.exception("research execution failed; using deterministic fallback: %s", exc)
+                response_text = (
+                    "I could not complete live browsing just now, so I prepared a deterministic "
+                    "research brief with source links and evidence placeholders."
                 )
-        except Exception as exc:
-            if task_class != "research":
-                raise
-            logger.exception("research execution failed; using deterministic fallback: %s", exc)
-            response_text = (
-                "I could not complete live browsing just now, so I prepared a deterministic "
-                "research brief with source links and evidence placeholders."
-            )
-        # Never hand the user a blank turn. Under heavy concurrent load the local
-        # brain can occasionally return no text (Pi-RPC subprocess thrash); surface
-        # a graceful retry prompt instead of an empty response. Skip for research
-        # tasks — those have their own evidence-package flow below and must not feed
-        # a retry string into _build_research_package.
-        if task_class != "research" and not (response_text or "").strip():
-            logger.warning("chat non-stream: empty brain response, using fallback (session=%s)", session_id)
-            response_text = "Sorry, I didn't catch that — could you say it again?"
-        clean_text, actions = _extract_ui_actions(response_text)
-        resp = {"response": clean_text, "session_id": session_id}
-        ui_commands = [a for a in actions if "command" in a]
-        ui_components = [a for a in actions if "component" in a]
-        if ui_commands:
-            resp["ui_commands"] = ui_commands
-        if ui_components:
-            resp["ui_components"] = ui_components
-        if task_class == "research":
-            pkg = await _build_research_package(
-                query=message_for_processing,
-                response_text=response_text,
-                backend="openclawLocal" if force_openclaw or not _USE_ZOE_AGENT else "zoeAgent",
-                user_id=user_id,
-                session_id=session_id,
-            )
-            resp.setdefault("ui_components", [])
-            resp["ui_components"].append({"component": "research_evidence", "props": pkg})
-            if req_panel_id:
-                # Push a touch-optimized report card automatically for research tasks.
-                # get_db_ctx, not `async for db in get_db()`: exiting the generator
-                # early leaks the pooled connection (#953 / the 2026-07-03 pool drain).
-                async with get_db_ctx() as db:
-                    try:
-                        await enqueue_ui_action(
-                            db,
-                            user_id=user_id,
-                            action_type="panel_show_research_report",
-                            payload={"package": pkg, "panel_id": req_panel_id},
-                            requested_by="chat",
-                            panel_id=req_panel_id,
-                            chat_session_id=session_id,
-                            idempotency_key=f"{session_id}:research:{uuid.uuid4().hex[:8]}",
-                        )
-                        await db.commit()
-                    except Exception as exc:
-                        # Non-fatal: research response should still return in chat
-                        # even if panel action delivery fails.
-                        logger.warning("research panel push skipped: %s", exc)
-        if actions:
-            asyncio.ensure_future(_queue_ui_actions_background(actions, user_id, session_id))
-        asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
-        if response_text:
-            await _save_chat_message(session_id, "assistant", response_text, user_id=user_id)
-        return resp
+            # Never hand the user a blank turn. Under heavy concurrent load the local
+            # brain can occasionally return no text (Pi-RPC subprocess thrash); surface
+            # a graceful retry prompt instead of an empty response. Skip for research
+            # tasks — those have their own evidence-package flow below and must not feed
+            # a retry string into _build_research_package.
+            if task_class != "research" and not (response_text or "").strip():
+                logger.warning("chat non-stream: empty brain response, using fallback (session=%s)", session_id)
+                response_text = "Sorry, I didn't catch that — could you say it again?"
+            clean_text, actions = _extract_ui_actions(response_text)
+            resp = {"response": clean_text, "session_id": session_id}
+            ui_commands = [a for a in actions if "command" in a]
+            ui_components = [a for a in actions if "component" in a]
+            if ui_commands:
+                resp["ui_commands"] = ui_commands
+            if ui_components:
+                resp["ui_components"] = ui_components
+            if task_class == "research":
+                pkg = await _build_research_package(
+                    query=message_for_processing,
+                    response_text=response_text,
+                    backend="openclawLocal" if force_openclaw or not _USE_ZOE_AGENT else "zoeAgent",
+                    user_id=user_id,
+                    session_id=session_id,
+                )
+                resp.setdefault("ui_components", [])
+                resp["ui_components"].append({"component": "research_evidence", "props": pkg})
+                if req_panel_id:
+                    # Push a touch-optimized report card automatically for research tasks.
+                    # get_db_ctx, not `async for db in get_db()`: exiting the generator
+                    # early leaks the pooled connection (#953 / the 2026-07-03 pool drain).
+                    async with get_db_ctx() as db:
+                        try:
+                            await enqueue_ui_action(
+                                db,
+                                user_id=user_id,
+                                action_type="panel_show_research_report",
+                                payload={"package": pkg, "panel_id": req_panel_id},
+                                requested_by="chat",
+                                panel_id=req_panel_id,
+                                chat_session_id=session_id,
+                                idempotency_key=f"{session_id}:research:{uuid.uuid4().hex[:8]}",
+                            )
+                            await db.commit()
+                        except Exception as exc:
+                            # Non-fatal: research response should still return in chat
+                            # even if panel action delivery fails.
+                            logger.warning("research panel push skipped: %s", exc)
+            if actions:
+                asyncio.ensure_future(_queue_ui_actions_background(actions, user_id, session_id))
+            asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
+            if response_text:
+                await _save_chat_message(session_id, "assistant", response_text, user_id=user_id)
+            return resp
+        finally:
+            lock.release()
 
 
 @router.get("/sessions/")
