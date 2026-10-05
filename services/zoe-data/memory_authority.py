@@ -537,6 +537,9 @@ _RELATION = (r"(?:wife|husband|partner|girlfriend|boyfriend|fianc\w*|spouse|son|
 _MY_RELATION_RE = re.compile(rf"\b(?:my|our)\s+(?:[a-z]+\s+){{0,2}}?({_RELATION})s?(?:['’]s)?\b", re.IGNORECASE)
 _NEG_RE = re.compile(r"\b(?:not|never|no|none|nobody|nothing|neither|nor)\b|n['’]t\b|\bany ?more\b",
                      re.IGNORECASE)
+_USED_TO_RE = re.compile(r"\bused to\b|\bformerly\b|\bpreviously\b|\bwas living\b", re.IGNORECASE)
+#: a stated END of a state ("no longer" / "any more" are also negations above)
+_ENDED_RE = re.compile(r"\b(?:stopped|dropped|quit|gave up|given up|ended|left|no longer)\b|\bany ?more\b", re.IGNORECASE)
 _HYPOTHETICAL_RE = re.compile(
     r"\b(?:wish|if|maybe|perhaps|might|hope|hoping|someday|supposedly|apparently|imagine|pretend|"
     r"would|could)\b", re.IGNORECASE)
@@ -559,8 +562,13 @@ def _window_is_a_statement_about_the_user(win: str, fact: str) -> bool:
         return False
     if _HYPOTHETICAL_RE.search(win):
         return False
-    if re.search(r"\bused to\b", win, re.IGNORECASE) and not re.search(r"\bused to\b", fact or "", re.IGNORECASE):
-        return False
+    # POLARITY / TENSE / CHANGE-OF-STATE must AGREE between the user's words and the fact (no
+    # entailment across them): "I live in X" does not support "User no longer lives in X", and
+    # "I used to live in X" does not support "User lives in X" (nor the reverse). The cue words
+    # stay in _STOP for token coverage (paraphrase tolerance); this is where they are enforced.
+    for cue in (_USED_TO_RE, _ENDED_RE):
+        if bool(cue.search(win)) != bool(cue.search(fact or "")):
+            return False
     fact_l = (fact or "").lower()
     for m in _MY_RELATION_RE.finditer(win):
         rel = m.group(1).lower()

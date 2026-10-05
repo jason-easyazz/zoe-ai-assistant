@@ -83,6 +83,42 @@ NOT_THE_USERS_STATEMENT = [
 ]
 
 
+POLARITY_TENSE_NEGATIVES = [      # no entailment across polarity / tense / change-of-state
+    ("User no longer lives in Perth.", "I live in Perth"),
+    ("User lives in Perth.", "I used to live in Perth"),
+    ("User used to live in Perth.", "I live in Perth"),
+    ("User lives in Perth.", "I don't live in Perth"),
+    ("User stopped playing tennis.", "I play tennis"),
+    ("User plays tennis.", "I stopped playing tennis"),
+    ("User lives in Perth.", "I no longer live in Perth"),
+]
+POLARITY_TENSE_POSITIVES = [      # the cue is consistent on both sides
+    ("User lives in Perth.", "I moved to Perth"),
+    ("User no longer lives in Perth.", "I don't live in Perth any more"),
+    ("User used to live in Perth.", "I used to live in Perth"),
+    ("User stopped playing tennis.", "I stopped playing tennis"),
+    ("User no longer plays tennis.", "I don't play tennis any more"),
+]
+
+
+@pytest.mark.parametrize("fact,turn", POLARITY_TENSE_NEGATIVES)
+def test_polarity_and_tense_must_agree_between_the_quote_and_the_fact(fact, turn):
+    assert not ma.supports(fact, turn)
+
+
+@pytest.mark.parametrize("fact,turn", POLARITY_TENSE_POSITIVES)
+def test_a_consistent_change_cue_still_supports(fact, turn):
+    assert ma.supports(fact, turn)
+
+
+def test_a_polarity_mismatch_leaves_the_fact_at_model_from_turn():
+    r = ma.resolve_write("turn_digest", "User no longer lives in Perth.", anchor_text="I live in Perth")
+    assert (r.cls, r.basis) == (ma.MODEL_FROM_TURN, "unanchored")
+    ok = ma.resolve_write("turn_digest", "User no longer lives in Perth.",
+                          anchor_text="I don't live in Perth any more")
+    assert ok.cls == ma.USER_STATED_DERIVED
+
+
 @pytest.mark.parametrize("fact,turn", NOT_THE_USERS_STATEMENT)
 def test_supports_rejects_what_is_not_the_users_own_affirmative_statement(fact, turn):
     assert not ma.supports(fact, turn)
