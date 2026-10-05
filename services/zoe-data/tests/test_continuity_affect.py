@@ -201,7 +201,7 @@ def test_digest_update_path_carries_the_new_feeling(monkeypatch):
         reviewed.append((mem_id, kw))
         return MemoryRef(id="edited-1", text=kw["edits"])
 
-    async def reconcile(_svc, fact, user_id):
+    async def reconcile(_svc, fact, user_id, **_kw):
         return "update", "neutral-1"
 
     svc.review = review
@@ -226,7 +226,7 @@ def test_digest_neutral_update_clears_the_old_feeling(monkeypatch):
         reviewed.append((mem_id, kw))
         return MemoryRef(id="edited-1", text=kw["edits"])
 
-    async def reconcile(_svc, fact, user_id):
+    async def reconcile(_svc, fact, user_id, **_kw):
         return "update", "anxious-1"
 
     svc.review = review
