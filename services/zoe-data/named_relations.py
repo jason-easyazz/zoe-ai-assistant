@@ -74,11 +74,34 @@ _NOT_A_NAME = frozenset(
 
 # -- patterns -----------------------------------------------------------------
 
-_TOKEN = r"[A-Z][a-z]{1,30}(?:-[A-Z][a-z]{1,20})?"
-_MEMBER = rf"(?-i:{_TOKEN}(?:\s{_TOKEN})?)"
-_SEP = r"(?:\s*,\s*(?:and\s+|&\s*)?|\s+and\s+|\s*&\s*)"
+def _letter_class(pred) -> str:
+    """A regex class of the Latin / Greek / Cyrillic letters satisfying pred (str.isupper ...)."""
+    spans = [(0x41, 0x530), (0x1E00, 0x1F00)]
+    return "[" + "".join(chr(c) for lo, hi in spans for c in range(lo, hi) if pred(chr(c))) + "]"
+
+
+_UP = _letter_class(str.isupper)
+_LOW = _letter_class(str.islower)
+_LETTER = r"[^\W\d_]"
+
+# One WHOLE name token: an initial capital (O'Brien / D'Angelo allow a second after an
+# apostrophe), at least one lower-case letter (no SHOUTED words), any letters after that
+# (McDonald, Zoë), up to two hyphenated parts (Anne-Marie). The token is anchored at both
+# ends: it may not start inside a word / after an apostrophe or hyphen, and may not stop in the
+# middle of one - "McDonald" is read as McDonald, never as the suffix "Donald"; a token that
+# cannot be read whole (Ana2, Anne-marie) matches nothing, so no partial name is ever stored.
+# The only thing allowed to follow it directly is a possessive 's.
+_PART = rf"{_UP}(?=[^\W\d_]*{_LOW}){_LETTER}{{1,%d}}"
+_TOKEN = (
+    rf"(?<![\w'’-]){_UP}(?:['’]{_UP})?(?=[^\W\d_]*{_LOW}){_LETTER}{{1,30}}"
+    rf"(?:-{_PART % 20}){{0,2}}"
+    rf"(?!\w|-\w|['’](?!s(?!\w))\w)"
+)
+# the two-word shape joins on a SPACE only: a line break ends a name ("Mika\nBiscuit" = two kids)
+_MEMBER = rf"(?-i:{_TOKEN}(?: {_TOKEN})?)"
+_SEP = r"(?:\s*,\s*(?:and\s+|&\s*)?|\s+and\s+|\s*&\s*|\s*\n\s*)"
 _LIST = rf"{_MEMBER}(?:{_SEP}{_MEMBER})*"
-_OWNER = rf"(?-i:{_TOKEN}(?:\s{_TOKEN})?)"
+_OWNER = rf"(?-i:{_TOKEN}(?: {_TOKEN})?)"
 
 _PUNCT_SEP = r"(?:\s+(?:named|called)\s+|\s*[:,]\s*|\s+[-–—]\s+)"
 _COPULA_SEP = r"(?:\s*[:,]\s*|\s+(?:are|is)\s+(?:named\s+|called\s+)?|\s+(?:named|called)\s+)"
@@ -158,7 +181,7 @@ def _split_names(raw: str) -> list:
     from person_extractor import _NON_NAME_TOKENS, _looks_like_person_name
 
     out: list = []
-    for part in re.split(r"\s*,\s*(?:and\s+|&\s*)?|\s+and\s+|\s*&\s*", raw.strip()):
+    for part in re.split(r"\s*,\s*(?:and\s+|&\s*)?|\s+and\s+|\s*&\s*|\s*\n\s*", raw.strip()):
         tokens = part.split()
         # a trailing capitalised stop word ("Mika Friday") is not part of the name
         while len(tokens) > 1 and tokens[-1].lower() in _NON_NAME_TOKENS:
@@ -180,9 +203,42 @@ def _clean_owner(raw: str) -> Optional[str]:
     return " ".join(tokens) if tokens else None
 
 
+# a lower-case surname particle directly before an owner ("van der Berg", "de la Cruz"): the
+# owner token read here is only the tail of the name
+_PARTICLES = frozenset("van von de der den di da del della la le du dos das bin al el ten ter".split())
+_LIST_CONTINUES = re.compile(r"(?:\s*,\s*(?:and\s+|&\s*)?|\s+and\s+|\s*&\s*|\s*\n\s*)(\S+)", re.IGNORECASE)
+
+
+def _normalise(text: str) -> str:
+    """Collapse runs of spaces / tabs but KEEP line breaks: a roster written one name per line is
+    a list ("Mika\nBiscuit" = two children), never one name ("Mika Biscuit")."""
+    text = re.sub(r"\r\n?|[\x0b\x0c\x85\u2028\u2029]", "\n", text or "")
+    text = re.sub(r"[^\S\n]+", " ", text)
+    return re.sub(r" ?\n[\s]*", "\n", text).strip()
+
+
+def _unreadable_tail(text: str, end: int) -> bool:
+    """True when the list is followed by one more capitalised / numbered word that no name token
+    could take whole ("Mika and Ana2", "Mika, BISCUIT"): the list we read is a PARTIAL one."""
+    m = _LIST_CONTINUES.match(text, end)
+    if not m:
+        return False
+    word = m.group(1).rstrip(".,;:!?)\"'’")
+    if len(word) < 2 or not (word[0].isupper() or word[0].isdigit()):
+        return False
+    if re.fullmatch(r"I['’]\w+", word):
+        return False  # "..., I think" / "I'm"
+    return re.fullmatch(_TOKEN, word) is None
+
+
+def _skip_partial(why: str) -> None:
+    # no names in the log line: a half-read name is exactly what must not travel anywhere
+    logger.info("named_relations: relation skipped, a name could not be read whole (%s)", why)
+
+
 def extract_named_relations(text: str) -> list:
     """Every "<owner> <noun> <Names>" list the sentence states. Pure, no I/O."""
-    text = " ".join((text or "").split())
+    text = _normalise(text)
     if not text:
         return []
     out: list = []
@@ -196,6 +252,13 @@ def extract_named_relations(text: str) -> list:
                 owner = _clean_owner(m.group("owner"))
                 if not owner:
                     continue  # "Her kids are ..." - a pronoun owner needs an antecedent
+                before = text[:m.start("owner")].split()
+                if before and before[-1].lower() in _PARTICLES:
+                    _skip_partial("owner")
+                    continue
+            if _unreadable_tail(text, m.end("names")):
+                _skip_partial("list")
+                continue
             names = _split_names(m.group("names"))
             if owner:
                 names = [n for n in names if n.lower() != owner.lower()]

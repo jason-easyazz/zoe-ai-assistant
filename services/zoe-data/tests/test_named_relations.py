@@ -106,6 +106,73 @@ def test_a_trailing_stop_word_is_not_part_of_a_name():
     assert _one("Dana has two kids, Mika and Biscuit Friday.").names == ("Mika", "Biscuit")
 
 
+# -- whole-token names (Codex P2: a partial name is never stored) ---------------------------
+
+@pytest.mark.parametrize("owner", ["McDonald", "O'Brien", "O\u2019Brien", "Anne-Marie", "Zo\u00eb", "D'Angelo"])
+def test_an_owner_name_is_read_whole_never_as_a_suffix_or_prefix(owner):
+    rel = _one(f"{owner} has two kids, Ana and Bea")
+    assert rel.owner == owner
+    assert rel.names == ("Ana", "Bea")
+
+
+def test_a_possessive_owner_with_an_apostrophe_name_is_read_whole():
+    rel = _one("O'Brien's kids are Ana and Bea")
+    assert rel.owner == "O'Brien"
+
+
+@pytest.mark.parametrize("child", ["O'Brien", "Anne-Marie", "Zo\u00eb", "McDonald"])
+def test_a_listed_name_is_read_whole(child):
+    assert _one(f"Dana has two kids, {child} and Bea").names == (child, "Bea")
+
+
+@pytest.mark.parametrize("text", [
+    "Dana has two kids, Mika and Ana2",          # digit glued to a name
+    "Dana has two kids, Mika and BISCUIT",       # shouted - cannot be read as a name
+    "Dana has two kids, Mika and Anne-marie",    # half-capitalised hyphen part
+    "Ana2 has two kids, Mika and Bea",           # owner cannot be read whole
+    "van der Berg has two kids, Mika and Bea",   # owner is only the tail of a particle name
+])
+def test_a_name_that_cannot_be_read_whole_skips_the_relation(text):
+    assert nr.extract_named_relations(text) == []
+
+
+def test_a_skipped_relation_is_logged_without_the_name(caplog):
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="named_relations"):
+        assert nr.extract_named_relations("Dana has two kids, Mika and Ana2") == []
+    assert any("could not be read whole" in r.getMessage() for r in caplog.records)
+    assert not any("Ana2" in r.getMessage() or "Mika" in r.getMessage() for r in caplog.records)
+
+
+def test_a_trailing_first_person_clause_is_not_an_unreadable_name():
+    assert _one("Dana has two kids, Mika and Biscuit, I think.").names == ("Mika", "Biscuit")
+
+
+def test_plain_names_still_parse():
+    rel = _one("Dana has two kids, Mika and Biscuit")
+    assert (rel.owner, rel.names) == ("Dana", ("Mika", "Biscuit"))
+    assert _one("Dana's kids are Mika and Biscuit").owner == "Dana"
+
+
+# -- line breaks are list separators (Codex P2: never one name across a line) ---------------
+
+def test_a_roster_with_line_breaks_is_a_list_not_one_joined_name():
+    rel = _one("Dana has two kids:\nMika\nBiscuit")
+    assert rel.names == ("Mika", "Biscuit")
+    assert "Mika Biscuit" not in rel.fact()
+
+
+def test_line_breaks_of_every_kind_separate_names():
+    for br in ("\r\n", "\r", "\n\n", " \n ", "\u2028"):
+        assert _one(f"Dana has two kids:{br}Mika{br}Biscuit").names == ("Mika", "Biscuit"), repr(br)
+
+
+def test_a_single_line_list_and_a_two_word_name_are_unchanged():
+    assert _one("Dana has two kids: Mika, Biscuit").names == ("Mika", "Biscuit")
+    assert _one("Dana has two kids: Mika Jo and Biscuit").names == ("Mika Jo", "Biscuit")
+
+
 # -- the write path: people graph + stored fact ---------------------------------------------
 
 class FakeSvc:
