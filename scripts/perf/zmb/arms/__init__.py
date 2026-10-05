@@ -11,6 +11,8 @@ ARMS = {
     "H1": "Hindsight verbatim, observations off, Zoe layer on (STUB)",
     "H2": "Hindsight concise + observations, fenced consolidation, Zoe layer on (STUB)",
     "G": "Graphiti add_triplet only + authority wrapper (STUB)",
+    "MV": "MemPalace 3.10.0 as a library: the VERBATIM tier alone (needs the bake-off venv; else every cell SKIPs)",
+    "HM": "Hindsight (distilled tier: STUB) + MemPalace (verbatim tier) combined; its own cells: zmb/hm_cells.py",
 }
 
 
@@ -29,6 +31,12 @@ def make_arm(name: str) -> Arm:
     if name == "G":
         from .graphiti import GraphitiArm
         return GraphitiArm()
+    if name == "MV":
+        from .mempalace_verbatim import MemPalaceVerbatimArm
+        return MemPalaceVerbatimArm()
+    if name == "HM":
+        from .hm import HMArm
+        return HMArm()
     from .hindsight import HindsightArm
     return HindsightArm(name)
 
