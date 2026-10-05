@@ -71,6 +71,8 @@ PANEL_ID="mac-dev"
 DEVICE_TOKEN=""
 
 # --- reaching zoe-data through the Cloudflare tunnel (away from the LAN) ---
+# On the home VPN use the LAN address instead and no Access pair:
+#   MAC_PANEL_DEFAULT_ZOE_URL=https://192.168.1.218 ... install, then VERIFY_SSL="false" below.
 ZOE_URL="${DEFAULT_ZOE_URL}"
 # Public CA certificate on the tunnel host: keep verification ON. (The Pi sets false
 # only because it talks to the Jetson's self-signed LAN cert; set false here only if

@@ -110,6 +110,27 @@ operator (§5): the `DEVICE_TOKEN` for `mac-dev` and the Cloudflare Access servi
 
 Commands: `install | configure | devices | preflight | run [--skip-preflight] | ptt | ui | lab-summary | uninstall --yes | env-template`.
 
+## 3b. On the home VPN: skip Cloudflare Access entirely
+
+When the Mac is on a VPN into the home LAN it is in the same position as the Pi: it can reach the Jetson
+directly at `https://192.168.1.218` (self-signed certificate), so **no Access application, no service token
+and no tunnel hop** are needed. Only the panel registration and the device token (§5 steps 2–4) remain,
+and those three `curl` calls can be run against the LAN address from the Jetson or the Mac.
+
+Install with the LAN address as the default and verification off (the Pi's own settings):
+
+```
+MAC_PANEL_DEFAULT_ZOE_URL=https://192.168.1.218 bash scripts/setup/mac_virtual_panel.sh install
+bash scripts/setup/mac_virtual_panel.sh configure      # DEVICE_TOKEN only; press Enter at both CF_ACCESS prompts
+```
+
+Then in `~/.zoe-virtual-panel/.env.voice` set `VERIFY_SSL="false"` (the kit writes `true` for the public
+host). Leave `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` empty: the daemon refuses to send Access
+headers to a non-public URL anyway and logs an error if both are set with a LAN `ZOE_URL` [src: daemon
+`_CF_ACCESS_REFUSED`]. `ui` opens the LAN touch page (`https://192.168.1.218/touch/home.html?panel_id=mac-dev&kiosk=1`);
+accept the self-signed certificate in the browser once. Switching back to the tunnel later is the §3 path:
+set `ZOE_URL` to the public host, `VERIFY_SSL="true"`, and add the Access pair.
+
 ## 4. Reaching zoe-data through the tunnel
 
 **Where it lives [src].** `config/cloudflared-config.yml` (not git-tracked; read from the live checkout, hostnames only -
