@@ -856,10 +856,16 @@ async def extract_and_ingest(
     source: str = "chat_regex",
     auto_approve: bool = True,
     prev_user_message: Optional[str] = None,
+    speaker_verified: Optional[bool] = None,
 ) -> int:
     """Extract candidates and ingest them via MemoryService.
 
     Returns the number of successfully written/accepted candidates.
+
+    ``speaker_verified`` is the voice lane's speaker-gate verdict for the turn, passed to
+    every write it causes (``MemoryService.ingest`` / ``review``): ``False`` = the gate did
+    not confirm the speaker, so a self-fact becomes ``user_unverified``; ``None`` = the
+    lane reports no verdict (chat, or a panel with the gate off) = unchanged.
 
     ``prev_user_message`` overrides the anaphora anchor; when ``None`` (the
     per-turn call sites) the prior USER message is resolved from the in-process
@@ -966,6 +972,8 @@ async def extract_and_ingest(
     # ``source_excerpt`` is pre-cut, which could slice a card number below the
     # scrubber's Luhn check.
     turn_excerpt = " ".join((user_message or "").split())
+    # Only a verdict is passed on: no verdict = the exact write the lane always made.
+    _verdict_kw = {} if speaker_verified is None else {"speaker_verified": speaker_verified}
 
     for idx, c in enumerate(candidates):
         # Write-quality gate (mem0-style): drop candidates that aren't shaped
@@ -1005,6 +1013,7 @@ async def extract_and_ingest(
                     note="conversational correction supersede (QA F2)",
                     source_excerpt=turn_excerpt,
                     session_id=session_id,
+                    **_verdict_kw,
                 )
                 if new_ref is not None:
                     saved += 1
@@ -1028,6 +1037,7 @@ async def extract_and_ingest(
             entity_type=entity_type,
             entity_id=entity_id,
             source_excerpt=turn_excerpt,
+            **_verdict_kw,
         )
         if ref is not None:
             saved += 1

@@ -42,6 +42,7 @@ CONTROLS = {
     "tombstone": "the forget tombstone removed - a late extractor write may resurrect a forgotten name",
     "sweep": "the forget sweep archives nothing while still claiming it did",
     "affect": "ZOE_AFFECT_CONSENT_GATE=off - feelings are recorded for guests and children",
+    "speaker": "the speaker-gate verdict dropped on the voice lane - an unconfirmed panel voice's self-fact is written as the owner's own statement",
     "extractor": "a lazy extractor that flips day/month, guesses roles, mines questions and assistant text",
     "gate": "the write-quality gate removed - questions, meta-rambling and transcript echoes are stored",
     "reader": "a reader that always answers from the nearest row instead of declining",
@@ -360,6 +361,19 @@ def controls_off(features: "frozenset[str] | set[str]", svc: types.SimpleNamespa
             setenv("ZOE_AFFECT_CONSENT_GATE", "off")
         if "identity" in features:
             patch(svc.memory_service, "_identity_assertion_blocked", lambda *a, **k: False)
+        if "speaker" in features:
+            real_ingest = svc.memory_service.MemoryService.ingest
+            real_edit = svc.memory_service.MemoryService.review
+
+            async def ingest_no_verdict(self, *a, **kw):
+                kw.pop("speaker_verified", None)   # the voice lane reports nothing: today's behaviour
+                return await real_ingest(self, *a, **kw)
+
+            async def review_no_verdict(self, *a, **kw):
+                kw.pop("speaker_verified", None)
+                return await real_edit(self, *a, **kw)
+            patch(svc.memory_service.MemoryService, "ingest", ingest_no_verdict)
+            patch(svc.memory_service.MemoryService, "review", review_no_verdict)
         if "tombstone" in features:
             patch(svc.memory_tombstones, "matching_tombstone", lambda *a, **k: None)
             patch(svc.memory_tombstones, "add", lambda *a, **k: None)

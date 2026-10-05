@@ -30,7 +30,7 @@ looked like a regex write from a real conversation. No path checked who wrote th
 | 5 | `user_confirmed` | the review UI (`review_ui`), the account acting on its own rows (`actor == user_id`: REST edits, intent handlers, MCP), the user approving a candidate |
 | 4 | `user_stated` | the person's words typed or dictated (`voice_fact`, `proposal`/`manual` - the proposals route passes `origin="proposal"` whatever label the client sent, `conversation_correction`, `chat`, `skybridge_action`, `note_*`, `journal_*`, `person_created/updated`) and deterministic extractors over the user's turn (`chat_regex`, `chat_regex_fallback`, `voice_regex`, `conversation`, `voice`) - a DIRECT statement |
 | 3 | `user_stated_derived` | a MODEL writer's fact that the user's OWN turn supports (below) - the person's words, paraphrased by a model |
-| 2 | `user_unverified` | a voice-lane SELF-fact whose speaker the speaker-id did not confirm: the hook exists (`speaker_verified=False` on `ingest` / `review` / `run_turn_digest`) but the voice daemon does not report a verdict yet, so **today every panel write is a direct user class** - a guest, or another member, speaking to a panel bound to the owner can overwrite the owner's rows (not operator rows). Wiring the verdict is P1.3 (voice-path, replay-gated) |
+| 2 | `user_unverified` | a voice-lane SELF-fact whose speaker the speaker-id did not confirm (`speaker_verified=False`; the voice-lane writers `voice_fact`, `voice_regex`, `voice`, `voice_turn_digest` only). **Wired (P1.3, see "The speaker verdict" below)**: a panel with the speaker gate ON reports it per turn; a panel with the gate off or in W5 shadow mode reports nothing (`None`) and **every panel write there is still a direct user class** - a guest, or another member, speaking to a panel bound to the owner can overwrite the owner's rows (not operator rows) until the gate is switched on |
 | 1 | `model_from_turn` | `turn_digest`, `voice_turn_digest`, `person_extractor_llm`, `brain_tool`, `mcp` (every MCP review / forget call passes `origin="mcp"`; the account is only the acting member), `zoe_agent`, `decay_sweep` - when the turn does not support the fact |
 | 0 | `model_from_transcript` | `digest`, `idle_consolidation` (unsupported), `consolidation`, `synthesis`, `music_digest`, the emotional pass, `profile-analysis`, `hindsight_retain_candidate`, **any unknown writer** |
 
@@ -141,8 +141,34 @@ user's text becomes a **pending PERSON candidate** ("<X> was mentioned in conver
 | W22 MCP `memory_review` / `memory_forget` as the user | yes | `mcp_server` passes `origin="mcp"` (rank 1) on every review and forget call; the account stays `actor` (audit). An MCP edit, archive, reject or candidate-approval cannot touch a row the person said; the tool answers "held back" instead of crashing |
 | `person_merge.merge_person` (closes / re-points people rows + edges) | yes | a USER/admin action enforced at the entry point: a named writer below the user classes is refused (`AUTHORITY_BLOCKED ... action=merge`); the REST endpoint passes `actor=<account>`; nothing automatic calls it |
 
-Not in this PR (follow-ups): **P1.3 speaker gate** (the voice daemon reporting the speaker-id verdict -
-the hook is in); the `used to love <city>` cue false positive (P2.1); durable forgetting; REM/deep-sleep raw
+### The speaker verdict (P1.3): voice turn -> `speaker_verified` -> every write the turn causes
+
+The Pi daemon (`scripts/setup/zoe_voice_daemon.py`) adds ONE optional field to `/api/voice/turn` and
+`/api/voice/turn_stream`: `speaker: {"verified": null|false, "member": <id>|null, "score": <float>|null}`
+(beside the legacy flat `voice_user_id` / `voice_score`). zoe-data (`routers/voice_tts.py::_speaker_verdict`)
+turns it into `speaker_verified`, **decided by the server, never by the panel**: `True` only when the claim
+passes the server's own gate (`ZOE_SPEAKER_ID_THRESHOLD` + the member's current consent) - a `verified: true`
+on the wire is ignored; `False` when the gate ran and did not confirm (a scored claim the server refused, a
+revoked consent, or the daemon's `verified: false` = "scored, nobody matched"); `None` (today's behaviour,
+byte for byte) when there is no `speaker` block - the gate is off, in W5 shadow mode (the default: scored and
+logged, never attached), errored, or the caller is not a device token. The verdict rides `_run_voice_memory_passes`
+-> `extract_and_ingest` (`voice_regex`: ingest + the correction `review(edit)`) and `run_turn_digest`
+(`voice_turn_digest`), and `fast_tiers` -> `expert_dispatch.store_fact` (`voice_fact`); only a verdict is passed on
+(no verdict = the exact call the lane always made). Classes: verified -> `user_stated`; unverified self-fact ->
+`user_unverified` (rank 2: stored, never supersedes the owner, held back as a `disputed` candidate when it
+contradicts a row outranking it); a later verified statement supersedes it (rank 4 >= 2); no verdict -> unchanged.
+Third-person facts (the two person extractors) are not self-assertions and never change class. The recall packet
+labels an unverified row `(someone at the panel said this; speaker not confirmed)` and never quotes it as "you
+said". **Known residual**: the brain's `memory_store` tool (`brain_tool`, `origin="explicit_teach"` on a "remember
+that ..." turn) crosses the Flue sidecar process boundary and does not carry the verdict - an unconfirmed voice
+that says "remember that I live in X" is still a direct statement there. Pinned by
+`services/zoe-data/tests/test_voice_speaker_verdict.py`, `tests/unit/test_voice_daemon_speaker_verdict.py` and
+ZMB cells `A6.panel_unverified.*` / `A7.panel_unverified_kept.*` (control `speaker`). Enabling the gate
+(`SPEAKER_ID_ENABLED=true`, `SPEAKER_ID_SHADOW=false`) with nobody enrolled makes EVERY panel self-fact
+`user_unverified` - enrol first; the shadow-week numbers (docs/research/speaker-gate-step1-results-2026-10-05.md)
+say the gate is not yet fit to enforce.
+
+Not in this PR (follow-ups): ~~**P1.3 speaker gate**~~ (done - "The speaker verdict" below); the `used to love <city>` cue false positive (P2.1); durable forgetting; REM/deep-sleep raw
 upserts; a UI card for the dispute offer (it reaches the brain as an offer line like every other offer).
 `_write_relationship` has one production caller (`process_text`, regex over the user's turn); it now passes
 the caller's real class (`_edge_authority_for(source, text)`), so a model-sourced call cannot close a
