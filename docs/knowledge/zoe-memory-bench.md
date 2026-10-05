@@ -228,10 +228,52 @@ read the store through this export, never a vector index.
 | `Z0-off` | **implemented** | Z0 with every control off: the negative control (the S1 signature must appear). `--arm Z0-off` = `--control off` |
 | `H0` / `H1` / `H2` | **stub** | Hindsight 0.10.2: no Zoe layer / verbatim, observations off, Zoe gate + forget ledger / concise + observations, fenced consolidation. Every call raises `NotImplementedError` with the install hint (py3.12 venv under `/home/zoe/.zoe/bakeoff-2026-10/`, `hindsight-api-slim==0.10.2`, scratch Postgres `pgvector/pgvector:pg17` on :55432 and the clone brain on :11500, in an operator-approved brain-stop window) |
 | `G` | **stub** | Graphiti as a library with no Graphiti LLM: Zoe's extractors build `EntityNode` / `EntityEdge`, `add_triplet`, the authority wrapper around `resolve_edge_contradictions`. `NotImplementedError` with the install hint |
+| `MV` | **implemented** (needs the bake-off venv) | MemPalace 3.10.0 as a LIBRARY (`get_collection` + `upsert/query/get/delete`): the VERBATIM tier alone. Real store = scratch palace + scrubbed HOME; without the library every call raises `NotImplementedError` with the install hint (SKIP). `InMemoryVerbatimStore` is a TEST DOUBLE for the CI lane |
+| `HM` | **glue implemented, Hindsight tier STUB** | Hindsight (distilled) + MemPalace (verbatim) composed: one write gate in front of both tiers, one forget ledger, authority order at recall, evidence frame, voice-lane cache, per-tier failure isolation. `--arm HM` on the generic spec SKIPs with the Hindsight install hint; its OWN cells are `hm_cells.py` (below) |
 
 A stub arm run is `status=skip` (every cell SKIP with the install hint), never a pass. The bake-off runner fills an arm in
 without touching a scorer: implement the five calls against the system, report rows in the export shape, run the same specs.
 The instrument (controls, scorers, cells) is Z0's lab and does not change per arm.
+
+## HM cells (`scripts/perf/zmb/hm_cells.py`): the combined arm, Hindsight + MemPalace
+
+Why separate: the generic runner's control pass runs the lab arm (Z0) with `lab_driver.CONTROLS` switched off; the HM protections are
+`arms/hm_policy.Controls` (guest gate, speaker class, forget-verbatim, ledger write check, distiller skip, provenance cascade, requeue
+siblings, physical erase, evidence frame, authority, voice policy, parallel lookup, tier isolation, wing isolation, no-model-on-write).
+Same rule as everywhere: **each named switch is turned OFF, one at a time, and the cell must go red; only then is it measured with every
+protection on.** A cell that stays green with its control off REFUSES the run (exit 2).
+
+```bash
+python3 scripts/perf/zmb/hm_cells.py --list
+python3 scripts/perf/zmb/hm_cells.py                                   # double store (CI lane): controls first, then the measurement
+MALLOC_PERTURB_=85 PYTHONMALLOC=malloc bash /home/zoe/.zoe/bakeoff-2026-10/mp_run.sh scripts/perf/zmb/hm_cells.py --store library
+```
+
+The distilled tier in every cell is `FakeDistilledTier`, a TEST DOUBLE (the real `HindsightDistilledTier` is a stub). The cells prove the
+GLUE, never Hindsight's or MemPalace's retrieval quality. Result: 20 cells (17 graded, 2 sanity, 1 tracked target), 18 negative controls
+all red, 17/17 graded green on the real library with a scrubbed heap (16/16 on the double; HM-F6 needs a disk store).
+
+| Cell | Claim | Controls (each alone) |
+|---|---|---|
+| HM-F1 / F2 | forget clears BOTH tiers at t+0 and at t+6 min after a replay and a distiller re-proposal; the rest is kept | `forget_verbatim`; `ledger_write_check`, `distiller_skip` |
+| HM-F3 / F7 | derived facts that never name the entity go with their source chunk; the bundle's innocent chunks' facts are rebuilt | `cascade_provenance`; `requeue_siblings` |
+| HM-F6 | no file of the verbatim palace holds the name (needs the real store and a scrubbed heap) | `physical_erase` |
+| HM-F5 | TARGET (expected FAIL): an STT misspelling of the forgotten name survives | none (already red) |
+| HM-G1 | guest words reach neither tier; a child's emotional turn is kept | `guest_gate` |
+| HM-I1 / I2 | a pasted email's instruction is not in ordinary recall; an explicit quote is framed, instruction withheld | `speaker_class`; `frame` |
+| HM-H1 | a third person's "I'm Dev" never reaches the packet or the identity line | `speaker_class` |
+| HM-A1 / A2 | a verified verbatim statement outranks an older derived fact; a distiller proposal cannot supersede a user-stated one | `authority` |
+| HM-L1 / L2 | voice-lane p95 <= 600 ms (cache); the second lookup adds <= 25 ms p95 (modelled latencies in CI, measured on the real run) | `voice_policy`; `parallel_lookup` |
+| HM-T1 | one tier down degrades the packet and says so | `tier_isolation` |
+| HM-W1 | a verified turn is one chunk and zero model calls on the write path | `sync_distill` |
+| HM-V1 | another member's chunk is never in this member's packet | `isolate_wing` |
+| HM-R1 | the verbatim tier hosted in zoe-data fits the RAM gate (arithmetic over measured numbers) | the sidecar + second-session + batch-32 shape is red |
+| HM-S1, HM-F4 | sanity: the verified user's words are stored/recalled/distilled; a deliberate re-teach after a forget is stored | none (positive controls) |
+
+Pilot instruments (`scripts/perf/zmb/pilot/`, run with the bake-off venv): `household.py` (a deterministic 1,000-turn synthetic household +
+60 exact-reference queries), `verbatim_pilot.py` (MemPalace library vs plain Chroma: ingest, size, RSS, hit@k with Wilson intervals,
+latency, MemPalace's dedup in dry-run), `forget_probe.py` (what a delete leaves on disk), `two_store_ram_probe.py`, `batch_rss_probe.py`,
+`ef_probe.py`, `lock_probe.py`. Measurements and the design: `docs/research/memory-arm-hm-hindsight-mempalace-2026-10-06.md`.
 
 ## `samantha_bar.py --only` / `--axis`
 
@@ -290,6 +332,19 @@ itself and is the cell on which a candidate with a durable forget ledger should 
 
 Arm measurements the runner does not take (RAM / PSS sampling, recall p50/p95, brain-slot seconds, extraction JSON validity,
 install size, cold start, egress audit) belong to the bake-off runner around the arm, not to the scorers.
+
+### Added 2026-10-06 for the HM arm (Hindsight + MemPalace); G0-G3 above are unchanged
+
+HM is ADOPTABLE only if every G0-G3 item passes **and**: **HM-G0a** the whole stack adds <= 600 MB steady / <= 900 MB burst with the verbatim
+tier counted (in-process with the shared embedder <= 50 MB; flush and backfill batches <= 8); **HM-G1a** voice-lane recall p95 <= 600 ms served
+from the write-behind cache, chat-lane second lookup adds <= 25 ms p95, verbatim query p95 <= 100 ms warm; **HM-G1b** either tier down is a
+degraded packet, not a failed turn; **HM-G2a** 0 resurrections in either tier at t+0 and t+6 min after the arm's own replay, and 0 files of the
+verbatim palace match the ledger within 60 s of the forget; **HM-G2b** 0 guest chunks, 0 canaries in an ordinary packet, explicit-quote packets
+framed with the instruction withheld, 0 third-person names in the packet or identity line; **HM-G2c** a distiller proposal never supersedes a
+user-stated fact and a verified verbatim statement outranks an older derived fact; **HM-G3a** the verbatim tier must REPLACE zoe-data's own
+palace, not sit beside it (two stores for one job is net negative). **H1 is the default over HM**: HM is chosen only if it beats H1 and Z0
+beyond the Wilson interval on at least one of {exact-quote hit@5 at 100 filler, tier-down answered, recall of a fact said in the last turn}
+and passes every HM cell at 0 violations.
 
 ## Not in this PR (the build plan continues)
 
