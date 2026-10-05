@@ -186,6 +186,16 @@ def _is_unanchored_role(value: str) -> bool:
     return True
 
 
+def _count_drop(guard: str) -> None:
+    """One extractor guard drop -> the durable reject ledger (reason ``guard_<guard>``), so the
+    nightly MEMORY_REJECT_SUMMARY says how many facts each guard threw away. Never raises."""
+    try:
+        from memory_reject_ledger import record_guard_drop
+        record_guard_drop("person_extractor_llm", guard)
+    except Exception:  # noqa: BLE001 - bookkeeping must never block extraction
+        pass
+
+
 async def process_text_llm(
     text: str,
     *,
@@ -254,6 +264,7 @@ async def process_text_llm(
             continue
         if not _keep_item(item, gated=gated, min_conf=min_conf):
             logger.debug("person_extractor_llm: dropped low-confidence %r/%r", name, fact_type)
+            _count_drop("low_confidence")
             continue
         if _is_unanchored_role(value):
             # Rescue before dropping: if the TURN itself supports a user anchor
@@ -265,6 +276,7 @@ async def process_text_llm(
                 if not user_relationship_claim_unsupported(f"user's {value}", text):
                     value = f"user's {value}"
                 else:
+                    _count_drop("unanchored_role")
                     logger.info(
                         "person_extractor_llm: dropped unanchored relationship %r for %r — "
                         "value must say whose relative (e.g. \"wife of X\", \"user's friend\")",
@@ -272,6 +284,7 @@ async def process_text_llm(
                     )
                     continue
             except Exception:
+                _count_drop("unanchored_role")
                 logger.info(
                     "person_extractor_llm: dropped unanchored relationship %r for %r",
                     value, name,
@@ -283,6 +296,7 @@ async def process_text_llm(
         try:
             from people_roles import value_role_unsupported
             if value_role_unsupported(name, value, text):
+                _count_drop("value_role_unsupported")
                 logger.info(
                     "person_extractor_llm: dropped unstated role %r for %r (the text never "
                     "ties that role to this name)", value, name,
@@ -297,6 +311,7 @@ async def process_text_llm(
         try:
             from memory_quality import user_relationship_claim_unsupported
             if user_relationship_claim_unsupported(f"{name}: {value}", text):
+                _count_drop("user_anchor_unsupported")
                 logger.info(
                     "person_extractor_llm: dropped unsupported user-anchored "
                     "relationship %r for %r (source never says \"my …\")", value, name,
