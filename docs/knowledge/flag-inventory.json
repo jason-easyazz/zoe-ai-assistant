@@ -1435,6 +1435,26 @@
         ],
         "typed_env": false
       },
+      "ZOE_FORGET_LEDGER_SALT": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_forgotten.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_FORGOTTEN_SHIELD_DAYS": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_forgotten.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_FRUSTRATION_MAX_SESSIONS": {
         "defaults": [
           "'2000'"

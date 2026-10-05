@@ -426,6 +426,16 @@ _FORGET_ENTITY_RE = re.compile(
     re.IGNORECASE,
 )
 
+# The spoken UNDO of the forget cascade's contact removal ("I've also removed them from your
+# contacts ... say 'keep the contact' to undo"). Anchored to the whole utterance: it only ever
+# means that reply. Routed as ``memory_forget_entity`` with ``undo=True`` (the forget handler's
+# own undo), so it needs no new intent name.
+_KEEP_CONTACT_RE = re.compile(
+    r"^(?:please\s+)?(?:keep|restore|bring\s+back|put\s+back)\s+"
+    r"(?:the|that|their|his|her)\s+contact(?:\s+(?:please|after\s+all))?\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
 # ── Portrait intents ───────────────────────────────────────────────────────────
 # "how well do you know me" / "what do you understand about me" → reveal portrait
 _PORTRAIT_REVEAL_RE = re.compile(
@@ -794,6 +804,10 @@ def detect_intent(
     # Matched very early so it never collides with other verbs.
     if _FORGET_LAST_RE.match(t):
         return Intent("memory_forget_last", {})
+
+    # "keep the contact" -- undo the contact removal the last forget cascade announced.
+    if _KEEP_CONTACT_RE.match(t):
+        return Intent("memory_forget_entity", {"name": "", "undo": True})
 
     # "forget everything about X" -- entity-scoped forget (QA review F14).
     # Only fires when the captured entity is name-shaped: "forget about it",
@@ -3402,6 +3416,25 @@ _REMEMBER_IMPERATIVE_RE = re.compile(
     r"don['’]?t forget|do not forget|save|store)\b", re.IGNORECASE)
 
 
+async def _forget_cascade_note(user_id: str, name: str) -> str:
+    """Run the forget cascade (memory_forget_cascade) and return the sentence that says what it did,
+    or ''. The spoken part is honest: it names only what was actually removed. Never raises."""
+    try:
+        from memory_forget_cascade import cascade_forget
+        c = await cascade_forget(user_id, name)
+    except Exception as exc:
+        logger.warning("memory_forget_entity: cascade failed (%s)", type(exc).__name__)
+        return ""
+    if c.people and c.summary_cleared:
+        return (" I've also removed them from your contacts and your summary"
+                " — say 'keep the contact' to undo.")
+    if c.people:
+        return " I've also removed them from your contacts — say 'keep the contact' to undo."
+    if c.summary_cleared:
+        return " I've also cleared them from your summary."
+    return ""
+
+
 async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str]:
     # ^ shared write funnel: fail-open to least-privilege guest, not admin, when a
     #   caller omits identity (#1021/#1032 posture). All live callers pass an explicit
@@ -3539,6 +3572,25 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             preview = preview[:77] + "…"
         return f"Done — I forgot: \"{preview}\"."
 
+    if intent.name == "memory_forget_entity" and intent.slots.get("undo"):
+        # "keep the contact": put back the contact(s) + edges the last forget cascade removed.
+        try:
+            from memory_service import is_guest_memory_user
+            if is_guest_memory_user(user_id):
+                return "I don't keep memories in guest sessions, so there's nothing to undo."
+            from memory_forget_cascade import restore_contacts
+            restored = await restore_contacts(user_id)
+        except Exception as exc:
+            logger.info("memory_forget_entity undo: unavailable: %s", type(exc).__name__)
+            return "I couldn't reach your contacts just now, so nothing was changed."
+        if restored is None:
+            return "I couldn't reach your contacts just now, so nothing was changed."
+        if not restored:
+            return ("There's no contact I removed a moment ago that I can put back. "
+                    "You can add them again from the People panel.")
+        return ("Okay — I've kept the contact. What I forgot about them stays forgotten "
+                "unless you tell me again.")
+
     # "forget everything about X" -- archive (soft-delete, NEVER hard-delete)
     # every memory of the caller's that is name-anchored on X (QA review F14).
     # Deterministic: MemoryService search + list, then a strict whole-word
@@ -3565,6 +3617,14 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             _tombstone_add(user_id, name)
         except Exception as exc:
             logger.warning("memory_forget_entity: tombstone failed (%s)", type(exc).__name__)
+        # ... and the DURABLE half: the hashed ledger (memory_forgotten) that the nightly digest, the idle
+        # pass and every other writer honour after the tombstone's 300 s have gone (ZMB F3). Written for
+        # every exit path too; best-effort (the tombstone above still shields the in-flight race).
+        try:
+            import memory_forgotten
+            await memory_forgotten.add(user_id, name, actor=user_id)
+        except Exception as exc:
+            logger.warning("memory_forget_entity: forgotten ledger failed (%s)", type(exc).__name__)
         try:
             svc = get_memory_service()
             # Semantic search surfaces the ranked rows; the approved list makes
@@ -3605,7 +3665,8 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             if name_re.search(getattr(r, "text", "") or ""):
                 matches.append(r)
         if not matches:
-            return f"I don't have anything saved about {name}."
+            # nothing in the palace, but a contact / summary line / open loop may still name them
+            return f"I don't have anything saved about {name}." + await _forget_cascade_note(user_id, name)
         forgotten = 0
         for r in matches:
             try:
@@ -3637,7 +3698,8 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         things = "thing" if forgotten == 1 else "things"
         suffix = "" if forgotten == len(matches) else (
             f" ({len(matches) - forgotten} I couldn't reach just now.)")
-        return f"Okay — I've forgotten {forgotten} {things} about {name}.{suffix}"
+        return (f"Okay — I've forgotten {forgotten} {things} about {name}.{suffix}"
+                + await _forget_cascade_note(user_id, name))
 
     # "remember that <fact>" — an EXPLICIT, model-callable memory write. This is
     # the fulfillment for the Flue sidecar's remember_fact + remember_emotional_moment

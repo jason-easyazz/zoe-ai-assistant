@@ -313,14 +313,23 @@ async def consolidate_session(session_id: str, user_id: str,
     # USER turns only, to the extractor AND as the anchor: the extraction prompt says "user
     # turns only", and the old "role: content" transcript fed it the assistant's lines too, so
     # a fact the assistant SAID became a fact about the user (memory fidelity audit V5).
-    user_turns = "\n".join(str(r["content"]) for r in rows
-                           if r["content"] and str(r["role"]) == "user")
+    user_turn_list = [str(r["content"]) for r in rows
+                      if r["content"] and str(r["role"]) == "user"]
+    # A turn naming an entity the user asked Zoe to forget is skipped, not re-mined (memory_forgotten, ZMB F3):
+    # the chat rows are not erased, so without this the forgotten name returns at the next idle pass.
+    try:
+        from memory_digest import _skip_forgotten_turns
+        user_turn_list = await _skip_forgotten_turns(user_id, user_turn_list, "idle_consolidation")
+    except Exception as exc:  # noqa: BLE001 - fail-open; MemoryService.ingest is the second wall
+        logger.debug("idle consolidation: forgotten-turn filter unavailable: %s", type(exc).__name__)
+    user_turns = "\n".join(user_turn_list)
     transcript = user_turns
 
     # ── Step 2: NO pooled connection held across Gemma extraction + ingest ─────
     try:
         from memory_digest import _extract_facts_with_gemma, fact_anchor
-        facts = await _extract_facts_with_gemma(transcript)
+        # every turn skipped (all named a forgotten entity) = nothing to mine, watermark still advances
+        facts = await _extract_facts_with_gemma(transcript) if transcript.strip() else []
     except Exception as exc:
         # Honour the "never raises out" contract: a Gemma failure (OOM/timeout/
         # import) must not abort the whole sweep — leave the watermark un-advanced

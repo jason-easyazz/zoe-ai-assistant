@@ -12,6 +12,10 @@ lane funnels through — drops name-anchored candidates while the tombstone is
 live. An EXPLICIT re-teach ("remember that Delia …") clears the tombstone: the
 user changing their mind beats the guard.
 
+This is the FAST path only. The durable half is ``memory_forgotten`` (a hashed Postgres
+ledger that the nightly digest and every other writer also honour: the tombstone's 300 s
+expiry used to let the digest re-mine the forgotten turns the next night).
+
 In-process on purpose (not a DB table): zoe-data is a single uvicorn process
 and every extractor pass runs inside it, so the in-flight writes a tombstone
 must block die with the process on restart — nothing can straggle across a
@@ -37,7 +41,13 @@ DEFAULT_TTL_S = 300.0
 # store, and the teach handler then clears the tombstone AFTER the store
 # succeeds. Async/mined lanes (turn_digest, chat_regex, voice_regex,
 # conversation, idle_consolidation, …) are never listed here.
-EXPLICIT_TEACH_SOURCES = frozenset({"brain_tool", "voice_fact", "review_ui"})
+#
+# ``brain_tool`` is NOT listed (P2.2): it is the 4B brain's own paraphrase, and an
+# exemption let a model's retelling resurrect a forgotten name. When the person
+# really is dictating through the brain, ``intent_router`` labels the write
+# ``origin="explicit_teach"`` (their own "remember ..." turn supports the fact) and
+# ``MemoryService.ingest`` exempts it on that origin, not on the source.
+EXPLICIT_TEACH_SOURCES = frozenset({"voice_fact", "review_ui"})
 
 # {user_id: {name_norm: expires_at_monotonic}}
 _tombstones: dict[str, dict[str, float]] = {}

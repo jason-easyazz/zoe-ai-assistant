@@ -59,6 +59,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Optional
 
 import memory_authority as _auth
+import memory_forgotten as _forgotten
 from live_store_guard import (
     LiveStoreViolation,
     assert_palace_open_allowed,
@@ -1287,21 +1288,41 @@ class MemoryService:
             )
             return None
 
-        # Forget tombstones: "forget everything about X" shadows X for a few
-        # minutes so in-flight/late extractor passes can't resurrect the name
-        # (ingest is the one durable-write chokepoint every lane funnels
-        # through). Explicit re-teach paths clear the tombstone first.
-        try:
-            from memory_tombstones import EXPLICIT_TEACH_SOURCES, matching_tombstone
-            if source not in EXPLICIT_TEACH_SOURCES and matching_tombstone(user_id, scrubbed):
-                self._bump("tombstone_drop", source)
-                logger.info(
-                    "memory_service: ingest dropped — mentions a just-forgotten "
-                    "entity (user=%s source=%s)", user_id, source,
-                )
-                return None
-        except Exception:
-            pass  # the guard must never break ingestion
+        # Forgetting. "forget everything about X" shadows X so a late extractor pass cannot
+        # resurrect the name (ingest is the one durable-write chokepoint every lane funnels
+        # through): the 300 s in-process tombstone is the fast path for in-flight writers, the
+        # hashed ``memory_forgotten`` ledger is the durable one (the nightly digest re-reads the
+        # forgotten turns hours later). BOTH apply to EVERY source except the person's own
+        # explicit re-teach from a speaker the lane did not reject; ``brain_tool`` paraphrases
+        # are not exempt - the brain acting on an explicit "remember ..." turn is labelled
+        # ``origin="explicit_teach"`` by the caller. The evidence turn counts too: a fact mined
+        # from a turn that names a forgotten entity is a forgotten turn, re-mined.
+        reteach = _forgotten.is_explicit_reteach(
+            origin or source, user_id=user_id, speaker_verified=speaker_verified)
+        if not reteach:
+            try:
+                from memory_tombstones import matching_tombstone
+                if matching_tombstone(user_id, scrubbed):
+                    self._bump("tombstone_drop", source)
+                    logger.info(
+                        "memory_service: ingest dropped — mentions a just-forgotten "
+                        "entity (user=%s source=%s)", user_id, source,
+                    )
+                    return None
+            except Exception:
+                pass  # the guard must never break ingestion
+            try:
+                evidence = anchor_text if anchor_text is not None else source_excerpt
+                if await _forgotten.matches(user_id, scrubbed) or (
+                        evidence and await _forgotten.matches(user_id, evidence)):
+                    self._bump("forgotten_drop", source)
+                    logger.info(
+                        "memory_service: ingest dropped — names a forgotten entity (ledger) "
+                        "(user=%s source=%s)", user_id, source,
+                    )
+                    return None
+            except Exception:
+                pass  # fail-open: a ledger blip must never lose a fact
 
         idem_key = self._idempotency_key(
             user_id,
@@ -1415,6 +1436,12 @@ class MemoryService:
                 after={"text": scrubbed, **metadata},
             )
             self._bump("ok", source)
+            if reteach:
+                # the person taught it again, AFTER the store succeeded: lift the shield
+                try:
+                    await _forgotten.release(user_id, scrubbed)
+                except Exception:
+                    pass
             return MemoryRef(id=mem_id, text=scrubbed, metadata=metadata)
 
     async def load_for_prompt(
@@ -1758,6 +1785,22 @@ class MemoryService:
                 session_id=session_id,
             )
             return None
+
+        # Forgotten ledger (P2.2): an edit WRITES a new row, so it hits the same wall as ingest - new text
+        # naming an entity the user asked Zoe to forget is refused unless it is the person's own edit
+        # (their account acting in the review UI, or an explicit re-teach writer).
+        if decision == "edit" and edits and not (
+                (actor == user_id and not origin)
+                or _forgotten.is_explicit_reteach(origin or actor, user_id=user_id,
+                                                  speaker_verified=speaker_verified)):
+            try:
+                if await _forgotten.matches(user_id, edits):
+                    self._bump("forgotten_drop", actor)
+                    logger.info("memory_service: edit refused — names a forgotten entity (ledger) "
+                                "(user=%s actor=%s)", user_id, actor)
+                    return None
+            except Exception:
+                pass  # fail-open
 
         # Consent gate: an edit may not turn a row into an affective record for a member who
         # has not consented (the edited row carries its memory_type forward).
@@ -2597,7 +2640,8 @@ class MemoryService:
     # Statuses that mean "a candidate reached ingest and was NOT written": counted in the
     # durable reject ledger (memory_reject_ledger) so the nightly summary can say why an
     # ingest left no row. ``error`` is separate (a failed write is loud, never a reject).
-    _REFUSED_STATUSES = frozenset({"opt_out", "pii_reject", "tombstone_drop", "dedup", "identity_drop"})
+    _REFUSED_STATUSES = frozenset({"opt_out", "pii_reject", "tombstone_drop", "forgotten_drop", "dedup",
+                                 "identity_drop"})
 
     def _bump(self, status: str, source: str) -> None:
         if _METRICS_OK:
