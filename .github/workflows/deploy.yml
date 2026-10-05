@@ -108,7 +108,9 @@ jobs:
           )" || exit 1
           echo "::add-mask::${AUTH_HEADER}"
           # Record the currently-deployed SHA so later steps can detect what changed.
-          echo "OLD_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          # The SHA must come from the SAME checkout the later diffs run in (the live
+          # checkout), or a later `git diff $OLD_SHA HEAD` fails with "bad object" (sig #43).
+          echo "OLD_SHA=$(git -C "${ZOE_CHECKOUT:-/home/zoe/assistant}" rev-parse HEAD)" >> "$GITHUB_ENV"
           # Retry the fetch: this checkout's .git is shared with other tooling, so a
           # concurrent `git fetch` can lose the ref-lock race on refs/remotes/origin/main
           # ("cannot lock ref ... is at X but expected Y") and fail the whole deploy.
@@ -382,12 +384,23 @@ jobs:
           # 2026-10-04: a research-record merge mid-probe failed a landing). A merge
           # whose only changes are under docs/ or are Markdown files anywhere has
           # nothing the service loads; everything else keeps the unconditional restart.
-          if [ -n "${OLD_SHA:-}" ] && [ "${OLD_SHA}" != "$(git rev-parse HEAD)" ]; then
-            NON_DOC="$(git diff --name-only "${OLD_SHA}" HEAD | grep -vE '^docs/|\.md$' || true)"
-            if [ -z "${NON_DOC}" ]; then
-              echo "docs-only merge since ${OLD_SHA} — zoe-data not restarted."
-              exit 0
+          # FAIL CLOSED (sig #43, 2026-10-05): the skip applies only when OLD_SHA is a real
+          # object here AND the diff itself succeeds AND it lists nothing outside docs/*.md.
+          # A bad OLD_SHA or a failed diff used to print nothing, which read as "docs-only"
+          # and left a code merge running on the old process.
+          if [ -n "${OLD_SHA:-}" ] && [ "${OLD_SHA}" != "$(git rev-parse HEAD)" ] \
+             && git cat-file -e "${OLD_SHA}^{commit}" 2>/dev/null; then
+            if CHANGED="$(git diff --name-only "${OLD_SHA}" HEAD)"; then
+              NON_DOC="$(printf '%s\n' "${CHANGED}" | grep -vE '^docs/|\.md$' || true)"
+              if [ -n "${CHANGED}" ] && [ -z "${NON_DOC}" ]; then
+                echo "docs-only merge since ${OLD_SHA} — zoe-data not restarted."
+                exit 0
+              fi
+            else
+              echo "diff ${OLD_SHA}..HEAD failed — restarting zoe-data (fail closed)."
             fi
+          else
+            echo "OLD_SHA unknown or not an object in this checkout — restarting zoe-data (fail closed)."
           fi
           systemctl --user restart zoe-data.service
           # Record which interpreter actually came up (B0.7: venv 3.12 vs system
