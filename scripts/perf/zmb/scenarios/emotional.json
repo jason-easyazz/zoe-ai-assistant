@@ -1,0 +1,42 @@
+{
+  "spec_version": 1,
+  "axis": "emotional",
+  "cells": [
+    {
+      "id": "G3.consent.<who.name>",
+      "title": "an emotional record for <who.label> is <who.expect>",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["affect"],
+      "lme_map": "",
+      "note": "owner decision 2026-10-05 (docs/governance/emotional-safety-note.md section 6, ZOE_AFFECT_CONSENT_GATE default 'household'): a record of how someone seems is kept for every household member INCLUDING children, with no stored consent row, and NEVER for a guest. The real _affect_allowed gate runs; only the Postgres member-mode lookup behind it is scripted per identity. The household members are the positive cases (sanity: the gate is not 'drop everything'; they pin the owner's decision, so a policy change must flip them deliberately); the guest sentinels are the controlled cases - with the gate off they write",
+      "matrix": {
+        "who": [
+          {"name": "consenting_owner", "label": "a consenting adult member", "expect": "kept", "op": "present", "_sanity": true, "_controls": []},
+          {"name": "owner_no_mode", "label": "an adult member with no stored consent row", "expect": "kept (household default: no stored consent is required)", "op": "present", "_sanity": true, "_controls": []},
+          {"name": "minor", "label": "a child member", "expect": "kept (the whole household incl. children)", "op": "present", "_sanity": true, "_controls": []},
+          {"name": "guest", "label": "a guest", "expect": "never kept", "op": "absent"},
+          {"name": "voice_guest", "label": "an unrecognised voice guest", "expect": "never kept", "op": "absent"}
+        ]
+      },
+      "events": [
+        {"do": "ingest_as", "identity": "<who.name>", "turns": [
+          {"text": "okay so that was the plan and then they sounded a bit on edge about the interview tomorrow and we will see how it goes", "speaker": "system_writer", "writer": "turn_digest", "proposes": ["User seems anxious about the interview."], "op": "say", "memory_type": "emotional_moment"}
+        ]}
+      ],
+      "probes": [
+        {"kind": "store", "as": "<who.name>", "assertions": [
+          {"op": "<who.op>", "contains": ["interview"], "statuses": ["approved", "pending"]}
+        ]}
+      ]
+    },
+    {
+      "id": "G.thread_reply",
+      "title": "a worry on day 1 is acknowledged on day 2, warmly, not verbatim, with no clinical label",
+      "tier": "full",
+      "skip_reason": "needs the brain's reply and a judge for tone (chat tier): samantha_bar S4; the ZMB judge calibration is a later PR",
+      "controls": [],
+      "lme_map": "single-session-preference (personalised use)"
+    }
+  ]
+}

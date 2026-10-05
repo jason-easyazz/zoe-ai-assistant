@@ -1,0 +1,175 @@
+{
+  "spec_version": 1,
+  "axis": "extraction",
+  "cells": [
+    {
+      "id": "B1.date_day_first",
+      "title": "'my birthday is <d>/<m>/<y>' is stored day-first (7/8/1991 is 7 August), never read month-first",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["extractor"],
+      "lme_map": "single-session-user (information extraction)",
+      "note": "scores the DETERMINISTIC stage (memory_extractor + the write-quality gate + ingest); the model stages (turn digest, person extractor) need the brain and are the live tier. Anti-fact = the month-first reading",
+      "params": {"tag": "date"},
+      "events": [
+        {"text": "My birthday is {dob_numeric}.", "speaker": "owner_typed"}
+      ],
+      "probes": [
+        {"kind": "facts", "gold": [["{dob_text}"]], "anti": [["{dob_flip}"]]}
+      ]
+    },
+    {
+      "id": "B2.pet_not_child",
+      "title": "'my dog is named X' is stored as a pet, never as a child",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["extractor"],
+      "lme_map": "single-session-user",
+      "params": {"tag": "pet"},
+      "events": [
+        {"text": "my dog is named {pet}", "speaker": "owner_typed"}
+      ],
+      "probes": [
+        {"kind": "facts", "gold": [["{pet}", "dog"]],
+         "anti": [["{pet}", "child"], ["{pet}", "son"], ["{pet}", "daughter"], ["{pet}", "kid"]]}
+      ]
+    },
+    {
+      "id": "B3.role_stated",
+      "title": "a stated role is kept with the right name ('my wife's name is X', 'my son's name is Y') and no other role is attached",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["extractor"],
+      "lme_map": "single-session-user",
+      "params": {"tag": "role"},
+      "events": [
+        {"text": "my wife's name is {spouse}", "speaker": "owner_typed"},
+        {"text": "my son's name is {kid1}", "speaker": "owner_typed"}
+      ],
+      "probes": [
+        {"kind": "facts", "gold": [["{spouse}", "wife"], ["{kid1}", "son"]],
+         "anti": [["{spouse}", "husband"], ["{spouse}", "son"], ["{kid1}", "wife"], ["{kid1}", "daughter"], ["{kid1}", "husband"]]}
+      ]
+    },
+    {
+      "id": "B4.roles_never_guessed",
+      "title": "a list of names with no roles stored no role (no 'wife', 'husband', 'son' guessed from a first name)",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["extractor"],
+      "lme_map": "",
+      "note": "samantha_bar S22 at the store level. The names are drawn from disjoint gendered pools, so a first-name role guess is detectable",
+      "params": {"tag": "role"},
+      "events": [
+        {"text": "Here are the people in the house: {spouse}, {male} and {kid1}.", "speaker": "owner_typed"}
+      ],
+      "probes": [
+        {"kind": "facts", "gold": [],
+         "anti": [["{spouse}", "wife"], ["{male}", "husband"], ["{male}", "son"], ["{spouse}", "mother"], ["{kid1}", "son"], ["{kid1}", "daughter"]]}
+      ]
+    },
+    {
+      "id": "B5.negation_not_stored_positive",
+      "title": "'I don't live in <city> any more' never stores 'lives in <city>'",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["extractor"],
+      "lme_map": "",
+      "params": {"tag": "negation"},
+      "events": [
+        {"text": "I don't live in {home} any more", "speaker": "owner_typed"}
+      ],
+      "probes": [
+        {"kind": "facts", "gold": [], "anti": [["lives in", "{home}"], ["{home}"]]}
+      ]
+    },
+    {
+      "id": "B6.assistant_text_not_users",
+      "title": "an assistant sentence echoed back is never mined into the user's facts",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["extractor", "gate"],
+      "lme_map": "(opposite polarity to LongMemEval single-session-assistant)",
+      "note": "services/zoe-data/tests/test_memory_extractor_purity.py is the unit pin; this is the bench-level cell",
+      "params": {"tag": "assistant"},
+      "events": [
+        {"text": "thanks", "speaker": "owner_typed", "assistant_text": "Noted, your dog is called {pet_intruder}."}
+      ],
+      "probes": [
+        {"kind": "facts", "gold": [], "anti": [["{pet_intruder}"]]}
+      ]
+    },
+    {
+      "id": "B7.pronoun_to_the_person_not_the_user",
+      "title": "'she is a doctor' after 'my wife's name is X' is about X, not about the user",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["extractor"],
+      "lme_map": "",
+      "params": {"tag": "pronoun"},
+      "events": [
+        {"text": "my wife's name is {spouse}", "speaker": "owner_typed"},
+        {"text": "she is a doctor", "speaker": "owner_typed"}
+      ],
+      "probes": [
+        {"kind": "facts", "gold": [["{spouse}", "doctor"]], "anti": [["user is a doctor"]]}
+      ]
+    },
+    {
+      "id": "B8.entities",
+      "title": "entity precision / recall over four dictated names: every name kept, no name invented",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["extractor"],
+      "lme_map": "single-session-user (information extraction)",
+      "params": {"tag": "entities"},
+      "events": [
+        {"text": "my wife's name is {spouse}", "speaker": "owner_typed"},
+        {"text": "my son's name is {kid1}", "speaker": "owner_typed"},
+        {"text": "my dog is named {pet}", "speaker": "owner_typed"},
+        {"text": "my brother's name is {male}", "speaker": "owner_typed"}
+      ],
+      "probes": [
+        {"kind": "entities", "gold": ["{spouse}", "{kid1}", "{pet}", "{male}"], "min_precision": 1.0, "min_recall": 0.9}
+      ]
+    },
+    {
+      "id": "B9.children_list",
+      "title": "TARGET: 'I have two kids, X and Y' keeps both names",
+      "tier": "store",
+      "kind": "script",
+      "expected": "FAIL",
+      "lme_map": "single-session-user (information extraction)",
+      "note": "the 2026-10-05 headline: the deterministic stage drops a list of new names (the regex templates only read 'my <role> is <Name>' / 'named'); the model stage that should catch it is the brain tier. Measured here so a replacement extractor (a candidate arm) is scored on the same sentence",
+      "params": {"tag": "list"},
+      "events": [
+        {"text": "I have two kids, {kid1} and {kid2}.", "speaker": "owner_typed"}
+      ],
+      "probes": [
+        {"kind": "facts", "gold": [["{kid1}"], ["{kid2}"]]}
+      ]
+    },
+    {
+      "id": "B.third_party_date",
+      "title": "'my friend X's birthday is 7/8/1991' is stored day-first for X",
+      "tier": "full",
+      "skip_reason": "no deterministic template reads a third person's date; the turn-digest MODEL does (needs the brain): samantha_bar S20",
+      "controls": [],
+      "lme_map": "single-session-user"
+    },
+    {
+      "id": "B.pasted_roster",
+      "title": "a pasted list of names with no roles is answered with one question asking who is who",
+      "tier": "full",
+      "skip_reason": "needs the brain's reply (chat tier): samantha_bar S22; B4 scores the store half",
+      "controls": []
+    },
+    {
+      "id": "B.correction_reaches_record",
+      "title": "a pet named inside a list of children ('X is their dog') is moved from the children to the pets in the record",
+      "tier": "full",
+      "skip_reason": "needs the correction-apply pass and the brain's reply: samantha_bar S21",
+      "controls": []
+    }
+  ]
+}

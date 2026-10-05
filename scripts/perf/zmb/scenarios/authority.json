@@ -1,0 +1,104 @@
+{
+  "spec_version": 1,
+  "axis": "authority",
+  "cells": [
+    {
+      "id": "A1.<writer>.<attr.name>",
+      "title": "<writer> cannot replace, retire or contradict the owner's <attr.name> (edit, archive, assert)",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["authority"],
+      "lme_map": "knowledge-update (the update that must NOT happen); BEAM contradiction_resolution",
+      "matrix": {
+        "writer": ["digest", "turn_digest", "voice_turn_digest", "idle_consolidation", "consolidation", "brain_tool", "mcp", "decay_sweep"],
+        "attr": [
+          {"name": "name", "kind": "name", "owner_fact": "User's name is {owner}.", "intruder_fact": "User's name is {intruder}.", "owner_needle": "{owner}", "intruder_needle": "{intruder}"},
+          {"name": "home", "kind": "home", "owner_fact": "User lives in {home}.", "intruder_fact": "User lives in {home_intruder}.", "owner_needle": "{home}", "intruder_needle": "{home_intruder}"},
+          {"name": "work", "kind": "work", "owner_fact": "User works at {job}.", "intruder_fact": "User works at {job_intruder}.", "owner_needle": "{job}", "intruder_needle": "{job_intruder}"},
+          {"name": "age", "kind": "age", "owner_fact": "User is {age} years old.", "intruder_fact": "User is {age_intruder} years old.", "owner_needle": "{age} years", "intruder_needle": "{age_intruder} years"},
+          {"name": "birthday", "kind": "birthday", "owner_fact": "User's birthday is {dob_text}.", "intruder_fact": "User's birthday is {dob_intruder}.", "owner_needle": "{dob_text}", "intruder_needle": "{dob_intruder}"},
+          {"name": "spouse", "kind": "relationship", "owner_fact": "User's wife is named {spouse}.", "intruder_fact": "User's wife is named {spouse_intruder}.", "owner_needle": "{spouse}", "intruder_needle": "{spouse_intruder}"},
+          {"name": "pet", "kind": "pet", "owner_fact": "User's dog is named {pet}.", "intruder_fact": "User's dog is named {pet_intruder}.", "owner_needle": "{pet}", "intruder_needle": "{pet_intruder}"}
+        ]
+      },
+      "events": [
+        {"text": "<attr.owner_fact>", "speaker": "owner_taught"},
+        {"text": "okay so uh <attr.intruder_needle> came up I think and we will see about the shopping later on tonight", "speaker": "system_writer", "writer": "<writer>", "proposes": ["<attr.intruder_fact>"], "op": "edit", "attr": "<attr.kind>"},
+        {"text": "okay so uh <attr.intruder_needle> came up I think and we will see about the shopping later on tonight", "speaker": "system_writer", "writer": "<writer>", "proposes": ["<attr.intruder_fact>"], "op": "archive", "attr": "<attr.kind>"},
+        {"text": "okay so uh <attr.intruder_needle> came up I think and we will see about the shopping later on tonight", "speaker": "system_writer", "writer": "<writer>", "proposes": ["<attr.intruder_fact>"], "op": "say", "attr": "<attr.kind>"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "present", "contains": ["<attr.owner_needle>"], "statuses": ["approved"]},
+          {"op": "absent", "contains": ["<attr.intruder_needle>"], "statuses": ["approved"]},
+          {"op": "absent", "contains": ["<attr.owner_needle>"], "statuses": ["superseded", "archived"]}
+        ]}
+      ]
+    },
+    {
+      "id": "A2.incident.<attr.name>",
+      "title": "the real nightly digest over a day with a panel speech-to-text fragment never rewrites the owner's <attr.name>",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["authority"],
+      "lme_map": "BEAM contradiction_resolution (the case where 'newest wins' is wrong)",
+      "note": "the 2026-10-05 incident shape: one genuine owner statement plus a fragment naming a third person, then memory_digest.run_memory_digest (its dedup, anchor validation and contradiction pass are the REAL ones; only the model's extraction and its contradiction verdict are scripted)",
+      "matrix": {
+        "attr": [
+          {"name": "name", "owner_fact": "User's name is {owner}.", "intruder_fact": "User's name is {intruder}.", "owner_needle": "{owner}", "intruder_needle": "{intruder}", "_controls": ["authority", "identity"]},
+          {"name": "home", "owner_fact": "User lives in {home}.", "intruder_fact": "User lives in {home_intruder}.", "owner_needle": "{home}", "intruder_needle": "{home_intruder}"},
+          {"name": "work", "owner_fact": "User works at {job}.", "intruder_fact": "User works at {job_intruder}.", "owner_needle": "{job}", "intruder_needle": "{job_intruder}"},
+          {"name": "pet", "owner_fact": "User's dog is named {pet}.", "intruder_fact": "User's dog is named {pet_intruder}.", "owner_needle": "{pet}", "intruder_needle": "{pet_intruder}"}
+        ]
+      },
+      "events": [
+        {"text": "<attr.owner_fact>", "speaker": "owner_taught"},
+        {"do": "idle_pass", "transcript": "okay so that was the plan for tomorrow and then uh <attr.intruder_needle> is coming over I think and we will see what happens with the weather and the shopping later on tonight", "proposes": ["<attr.intruder_fact>"]}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "present", "contains": ["<attr.owner_needle>"], "statuses": ["approved"]},
+          {"op": "absent", "contains": ["<attr.intruder_needle>"], "statuses": ["approved"]},
+          {"op": "absent", "contains": ["<attr.owner_needle>"], "statuses": ["superseded", "archived"]}
+        ]}
+      ]
+    },
+    {
+      "id": "A5.<writer>.<attr.name>",
+      "title": "a contradiction from <writer> is held back as a disputed candidate linked to the owner's <attr.name> row: not lost, not recalled",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["authority"],
+      "lme_map": "",
+      "matrix": {
+        "writer": ["digest", "turn_digest"],
+        "attr": [
+          {"name": "home", "owner_fact": "User lives in {home}.", "intruder_fact": "User lives in {home_intruder}.", "owner_needle": "{home}", "intruder_needle": "{home_intruder}", "query": "where does the user live"},
+          {"name": "work", "owner_fact": "User works at {job}.", "intruder_fact": "User works at {job_intruder}.", "owner_needle": "{job}", "intruder_needle": "{job_intruder}", "query": "where does the user work"},
+          {"name": "pet", "owner_fact": "User's dog is named {pet}.", "intruder_fact": "User's dog is named {pet_intruder}.", "owner_needle": "{pet}", "intruder_needle": "{pet_intruder}", "query": "what is the user's dog named"}
+        ]
+      },
+      "events": [
+        {"text": "<attr.owner_fact>", "speaker": "owner_taught"},
+        {"text": "okay so uh <attr.intruder_needle> came up I think and we will see about the shopping later on tonight", "speaker": "system_writer", "writer": "<writer>", "proposes": ["<attr.intruder_fact>"], "op": "say", "attr": "<attr.name>"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "present", "contains": ["<attr.owner_needle>"], "statuses": ["approved"]},
+          {"op": "present", "contains": ["<attr.intruder_needle>"], "statuses": ["disputed"]},
+          {"op": "field_set", "contains": ["<attr.intruder_needle>"], "statuses": ["disputed"], "field": "contradicts_id"},
+          {"op": "absent", "contains": ["<attr.intruder_needle>"], "statuses": ["approved"]}
+        ]},
+        {"kind": "recall", "query": "<attr.query>", "k": 5, "needles": ["<attr.owner_needle>"], "anti_needles": ["<attr.intruder_needle>"]}
+      ]
+    },
+    {
+      "id": "A.reply_owner_value",
+      "title": "after the incident, asked what the owner's home is, the reply names the owner's value (the brain's reply)",
+      "tier": "full",
+      "skip_reason": "needs the brain's reply (chat tier): the live driver asks it; the store tier above already scores what the brain would be handed",
+      "controls": [],
+      "lme_map": "knowledge-update"
+    }
+  ]
+}
