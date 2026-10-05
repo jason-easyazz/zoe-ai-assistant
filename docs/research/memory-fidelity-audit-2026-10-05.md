@@ -209,7 +209,7 @@ below the answer is **no** — `classify_against_existing` receives `(id, text)`
 | W1 regex extractor | attribute-shaped | no — same authority (newer user words win); **wrong-row risk** at similarity ≥ 0.45 | `memory_extractor.py:931-949` | code |
 | W20 voice teach | attribute-shaped | no — user-authored; same wrong-row risk | `expert_dispatch.py:638` | code |
 | W14 deep sleep | pending → approved | **escalates inferred to approved on popularity** (does not override) | `memory_digest.py:1663` | code |
-| W21 brain tool | any | adds; **can add a contradicting row that outranks the user's** (0.85 vs 0.72) and is exempt from guards | `intent_router.py:3653`, `memory_tombstones.py:40` | code |
+| W21 brain tool | any | adds; **can add an approved row that contradicts the user's and outranks it** (0.85 vs 0.72 confidence) and is exempt from guards — check applied at *ingest*, not only on mutations (P1.1 "Add-only writers"); #1868 does this | `intent_router.py:3653`, `memory_tombstones.py:40` | code |
 | W13 REM | metadata | can **resurrect** a row superseded or forgotten mid-pass (stale upsert) | `memory_digest.py:1485-1575` | code |
 | W24, W25, W26, W27 | user commands | no (user authority) | — | — |
 | W5, W15, W18, W19, W23, W28-W30 | add-only or dark | no | — | — |
@@ -558,6 +558,21 @@ already a blocked-read status, `memory_service.py:829`) and the contradiction is
   `user_confirmed` target survives every automatic writer, an unknown source string is rank 0, an edit's
   `source` is the editor's. **Negative control:** `ZOE_MEMORY_AUTHORITY=off` makes the same test fail with the S1
   signature (old row superseded, new row `source=voice_fact`). Also replay S1-S4 as regression tests.
+* **Add-only writers are checked at ingest, not only on mutations.** `check()` guarding `review` / `supersede_by`
+  is not enough: `brain_tool` (W21), `mcp` `memory_add`, `zoe_agent`, the emotional pass and synthesis never edit —
+  they *insert* an `approved` row that contradicts a protected user statement, and because recall multiplies by the
+  writer's own `confidence` (`memory_service.py:2267`) it can be ranked first. Rule: **at `ingest`, a fact from a
+  model class (rank below the user classes) that contradicts a user-class row about the same subject + attribute
+  (a different value, or a stated end of it) is stored `status=disputed`, `contradicts_id=<row>`, never
+  `approved`** (`disputed` is a blocked-read status, `memory_service.py:829`, so it is never recalled and is askable
+  later). **PR #1868 now does this**: `docs/knowledge/memory-authority.md` "Held back = a `disputed` candidate" /
+  "Where: `ingest` (a contradicting fact)" and `MemoryService.ingest` storing `status="disputed" if clash is not
+  None` (`memory_service.py:1297` on `feat/memory-authority`, `conflict_kind` / `find_conflict` in
+  `memory_authority.py`); a pure restatement by a lower class is refused quietly. What the ingest check cannot see
+  is a model fact about an attribute the matcher does not model — those still ride in as `approved` and only the
+  ranking change below contains them. **Recall ranking must prefer user classes** (P2.4): authority rank first,
+  then relevance × recency, with writer `confidence` and access popularity removed as cross-class inputs (V15) —
+  until then a non-contradicting but conflicting-in-spirit model row can still outrank a user row.
 * **Expected effect.** The §2.2 matrix goes from 12 "YES" rows to 0; V1/V2/V3/V6/V8/V9/V11/V13 closed by one
   change. **Measured by** the shadow counter (expect > 0 on day one — the nightly passes will show what
   they would have done), the fidelity report (§P2.3) and the pack (P1.4).
@@ -578,7 +593,20 @@ already a blocked-read status, `memory_service.py:829`) and the contradiction is
   (`memory_digest.py:780`, which today *drops every relationship* rather than checking one): the quote must be
   a normalised substring of one user turn, share ≥ k content tokens with the fact, and self-attributes
   (name, age, birthday, home, job, spouse) additionally need a first-person marker in the quote
-  ("my", "I'm", "I live", "call me"). Facts that fail are dropped and counted. The stored row carries
+  ("my", "I'm", "I live", "call me"). **Substring + token overlap + a first-person marker is not entailment**:
+  the quote "I live in <city>" would anchor the fact "User no longer lives in <city>". (Checked in #1868's
+  `memory_authority.supports()` at `48700d2e`: `not never longer anymore used dropped stopped` are in its `_STOP` list, so
+  the negation and change words are *ignored* when matching — "no longer" cannot be told from nothing.) So the
+  anchor adds a **no-polarity-change rule**: the fact must be a normalised paraphrase of the quote — every
+  *negation* word (not, n't, never, no, none, neither, nor, without), every *change/ended* cue (no longer, used to,
+  any more, anymore, stopped, quit, gave up, dropped, left, moved from, ex-), every *tense* cue (was / were / did
+  vs is / am / do; "in 2019", "last year", "when I was") and every *quantifier shift* (always / never / sometimes)
+  present in **either** the fact or the quote must be present in **both** with the same value; otherwise the fact
+  is not anchored and stays `model_from_turn` (add-only, unable to supersede). A small closed rule set, testable
+  with a table of positive and negative pairs. #1868's `user_stated_derived` class (once split below `user_stated`;
+  not yet in that branch at `48700d2e`) caps the damage of a miss — a paraphrase can never replace a direct
+  statement — and an **LLM entailment judge is P2**, an extra check on facts that pass the rule set, never a
+  replacement for it. Facts that fail are dropped and counted. The stored row carries
   `source_excerpt=quote`, `user_turn_id`, `speaker`. The contradiction pass (`:794-826`) stops editing: a
   contradiction with a rank-≥-writer row is a `disputed` candidate. `memory_idle_consolidation.py:313`
   sends **user turns only** (the prompt already claims it) and runs the same anchor. Weekly merge
@@ -617,8 +645,18 @@ already a blocked-read status, `memory_service.py:829`) and the contradiction is
 
 * **Files.** `memory_digest.py`: `_emotional_memory_pass` (`:894`) and the `affect` capture in `run_turn_digest`
   (`:495-505`) call one member-mode read (`consent_to_retain_affect(user_id) -> bool`) before they keep anything:
-  **guests, synthetic ids, minors and members with no opt-in row never retain**; a consenting adult member does,
-  once identity is enforceable (the governance note's own condition). In-turn acts (a gentler reply) are
+  **guests, synthetic ids, minors and members with no opt-in row never retain**; a consenting adult member does
+  **only when the speaker is also verified**. The gate therefore takes `(user_id, speaker_verdict)`, not `user_id`
+  alone: an unverified panel turn bound to a consenting adult (`user_unverified`, `speaker=panel_bound`, §6.0) is
+  **never** retained as affect — that is the governance note's own condition ("only once identity is enforceable",
+  §10), and the consent row proves the *member* agreed, not that *this speaker* is that member. Typed / Telegram
+  sessions are authenticated and count as verified.
+  **Sequencing / interim exposure.** The speaker verdict is P1.3 (PR C) and lands after the consent gate (PR B).
+  So PR B ships the gate with a **hard interim rule: no voice-lane turn retains affect at all** (`voice_turn_digest`,
+  `voice_regex`, `voice` and the nightly pass over panel-sourced turns) until the verdict exists; typed and
+  Telegram turns of consenting adults retain. If that interim rule is not wanted, P1.5's adult leg moves into PR C
+  and PR B carries only the guest / minor / synthetic / no-mode leg. Stated explicitly: without one of these, an
+  unverified panel turn bound to a consenting adult would be retained as affect between B and C. In-turn acts (a gentler reply) are
   unaffected. Add `voice_turn_digest` and `idle_consolidation` to the same wall (V16). On revocation a nightly step
   archives the member's `emotional_moment` rows and strips `candidate_affect`.
 * **Flag.** Pure fix for guests and minors (policy already says never); `ZOE_EMOTION_RETENTION_GATE=shadow|enforce`
@@ -629,7 +667,8 @@ already a blocked-read status, `memory_service.py:829`) and the contradiction is
   others write **zero** `emotional_moment` rows and zero `candidate_affect`. **Negative control:** remove the gate
   and five of six write (today's behaviour). Add a revocation case.
 * **Measured by** the fidelity report (§P2.3): `emotional_moment` / `candidate_affect` rows grouped by member mode
-  (target 0 for guest / minor / no-opt-in).
+  (target 0 for guest / minor / no-opt-in / unverified-speaker). The test gains a seventh identity: a consenting
+  adult whose turn is `panel_bound` → zero rows (negative control: drop the speaker condition and it writes).
 
 **P1.4 The memory-fidelity regression pack.** Static half in `services/zoe-data/tests/` (joins CI by the
 co-located `ci_safe` marker, per the marker-based CI rule), live half as new bar scenarios in
@@ -655,6 +694,7 @@ scorer where possible and a negative control that must turn it red.
 | F14 | **No churn**: weekly merge on identical texts performs 0 edits; audit edit count == real changes | S3 as a test | — | restore the merge → 138 self-edits |
 | F15 | **Restart durability**: tombstones / ledger survive a process restart | persist + reload | — | in-process dict → lost |
 | F16 | **Only the user promotes**: no `pending → approved` without a user actor | deep-sleep pass on a pending fixture | — | restore popularity promotion → red |
+| F19 | **Ranking prefers user classes**: a higher-confidence, hotter model row never outranks the user's row on the same subject | blend over a two-row fixture | — | restore `confidence` × access ranking |
 | F18 | **Emotional-retention consent**: guest / minor / no-opt-in members retain no `emotional_moment` or `candidate_affect` | stubbed extractor × six identities (P1.5) | — | remove the consent gate |
 | F17 | **Opt-out parity** across chat, voice and idle lanes | iterate every source in the authority table | — | drop `voice_regex` from the list → red |
 
@@ -673,17 +713,31 @@ shows the false positive); give events an `expires_at` at write time. *Test:* F2
 `valid_from` 12/82 → 100%; the temporal bar category. *Flag:* the stamp is a pure addition; the `as_of` read
 is additive.
 
-**P2.2 Forgetting that stays forgotten.** A Postgres `memory_forgotten` ledger (user, entity key,
-`forgotten_at`, `scope`, actor) replacing the 300 s in-process tombstone (`memory_tombstones.py`):
-consulted by `ingest` for **every** source except an explicit re-teach by a verified speaker, and by the
+**P2.2 Forgetting that stays forgotten.** A Postgres `memory_forgotten` ledger replacing the 300 s in-process tombstone (`memory_tombstones.py`). **It
+must not retain what it was asked to forget**: it stores only `user_id`, a **salted hash of the normalised entity
+key** (`HMAC-SHA256(per-user secret salt, normalised name/topic)`, the salt held in the secrets store and rotated
+with the user's key, never in the table), `forgotten_at`, the shield-window end, `scope` and actor — **never the
+name or topic text**. The re-ingest / transcript check hashes each candidate entity the same way and compares
+hashes; a name that only appears inside a longer phrase is matched by hashing its extracted entity tokens, not by
+storing the phrase. Consequence to accept: the ledger can answer "is this forgotten?" but cannot list *what* was
+forgotten; the spoken confirmation ("I've forgotten N things") is the only place the name is echoed, and it is
+not persisted. The ledger is consulted by `ingest` for **every** source except an explicit re-teach by a verified speaker, and by the
 digest's transcript loader (`_load_todays_messages`) so turns containing a forgotten entity are skipped,
 not re-mined; a cascade that archives/regenerates the portrait, card, open loops, proactive candidates and
 soft-deletes the `people` row + edges (with a spoken "I've also removed them from your contacts and your
 summary — say 'keep the contact' to undo"); a **hard-delete path** for "forget it for good" that removes the
 Chroma row, the audit `before/after` text, and writes a text-free deletion record (`id`, class, time,
-actor) — closing the ledger gap (`_delete_ids` writes nothing today); `brain_tool` loses its tombstone
+actor — the hashed key only, never the entity) — closing the ledger gap (`_delete_ids` writes nothing today); `brain_tool` loses its tombstone
 exemption. *Tests:* F10, F11, F15. *Measure:* resurrection count (target 0), ledger-vs-palace
 reconciliation in the report.
+
+**P2.4 Recall ranking prefers user classes.** `_semantic_search._blend` and `_metadata_read` rank by writer
+`confidence` × decay + access popularity (`memory_service.py:2267-2268`); change to authority rank first (user
+classes above model classes), then relevance × recency, with `confidence` and `access_count` no longer crossing a
+class boundary (V15). Together with the ingest-time `disputed` rule (P1.1, in #1868) this is what stops an add-only
+model row from being served ahead of the user's own. *Test:* F19 — a user-class row and a higher-confidence
+model row about the same subject: the user row is first, with and without hot access counts; *negative control:*
+restore the old blend. *Measure:* the fraction of recall packets whose top bullet is a user-class row.
 
 **P2.3 A nightly fidelity report.** `scripts/maintenance/memory_fidelity_report.py` + `GET
 /api/memories/maintenance/fidelity` (beside `index-health`), run at the end of the dreaming cycle
@@ -709,8 +763,7 @@ negative control: seed an authority violation → the report flags it.
 4. **Opt-out list → allow-list**: derive it from the authority table so `voice_regex`,
    `voice_turn_digest`, `voice`, `idle_consolidation` are covered (V16).
 5. **Guest writes**: reject `is_guest_memory_user` ids at `ingest` (8 write-only rows today).
-6. **Ranking**: order by authority rank, then relevance × recency; drop writer `confidence` and access
-   popularity as cross-class ranking inputs (V15, `memory_service.py:2267-2268`).
+6. **Ranking** — moved up to P2.4 (V15, `memory_service.py:2267-2268`).
 7. **Recall packet provenance**: tag each bullet "you told me" / "I picked this up" so the brain can hedge
    (feeds S3 and F12); `recall_evidence.py` already computes the effective writer.
 8. **People-graph provenance**: `asserted_by`, `source_session`, `source_excerpt` on `people` and
@@ -726,7 +779,7 @@ negative control: seed an authority violation → the report flags it.
 ### Sequencing
 
 PR A (additive, safe): class table + stamps + shadow `check()` + the merge no-op fix + the pack skeleton
-(F9, F14, F6) + `memory_fidelity_report.py`. PR B: enforce flip + digest anchor + user-only idle transcript
+(F9, F14, F6) + `memory_fidelity_report.py`. PR B: enforce flip + digest anchor (with the no-polarity-change rule) + user-only idle transcript
 + the `used to` fix + the `user_stated_derived` class split + MCP `origin="mcp"` + the P1.5 consent gate. PR C (voice-path, serial, replay-gated): speaker verdict + gate. PR D: forgetting
 ledger + cascade + temporal reads. Each ≤ 30 files; the bar baseline is re-recorded after B.
 
