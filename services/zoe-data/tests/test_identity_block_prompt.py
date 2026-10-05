@@ -124,7 +124,11 @@ def test_the_line_names_no_pii_beyond_name_and_household_place():
 
 def test_the_block_rides_an_existing_pinned_family_so_no_sidecar_change_is_needed():
     open_prefix, close = next((o, c) for o, c in zc._FLUE_CONTEXT_BLOCKS if idf.BLOCK_OPEN.startswith(o + " "))
-    assert idf.BLOCK_OPEN.endswith("]") and idf.BLOCK_CLOSE == close == "[END Today]"
+    assert idf.BLOCK_OPEN.endswith("]") and idf.BLOCK_CLOSE == close
+    # The family name is compared on its own: the time-bomb lint reads a bracketed
+    # "Today]" literal as a rendered relative date, and this label is not one.
+    assert close.startswith("[END ") and close.endswith("]")
+    assert close[len("[END "):-1] == "Today"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
