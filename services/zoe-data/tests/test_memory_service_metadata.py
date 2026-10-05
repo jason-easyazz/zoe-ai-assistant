@@ -276,10 +276,10 @@ async def test_delete_user_purges_audit_payload_rows(monkeypatch):
     # tombstone is excluded from the purge and WRITTEN (one row, no text) — see
     # tests/test_memory_loss_class.py for the full contract.
     assert audit.seen_get_where == {
-        "$and": [{"user_id": "jason"}, {"action": {"$ne": "delete_user"}}]}
+        "$and": [{"user_id": "jason"}, {"action": {"$nin": ["delete_user", "delete_user_done"]}}]}
     assert "include" not in audit.seen_get_kwargs
     assert audit.deleted_ids == ["audit-1", "audit-2"]
-    assert len(audit.upserts) == 1
+    assert len(audit.upserts) == 2        # intent + completion, both content-free
     assert invalidated == ["jason"]
 
 

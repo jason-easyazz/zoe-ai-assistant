@@ -50,6 +50,7 @@ from live_store_guard import (
     LiveStoreViolation,
     assert_palace_open_allowed,
     assert_write_allowed,
+    guard_collection,
 )
 from memory_importance import score_importance
 
@@ -189,14 +190,18 @@ def get_drawers_collection(data_dir: str) -> Any:
     client = _palace_client(data_dir)
     ef = _drawers_embedding_function()
     try:
-        return client.get_collection(_DRAWERS_COLLECTION, embedding_function=ef)
+        col = client.get_collection(_DRAWERS_COLLECTION, embedding_function=ef)
     except Exception:
         names = {getattr(c, "name", c) for c in client.list_collections()}
         if _DRAWERS_COLLECTION in names:
             raise  # it exists: this is a real error, never paper over it with a create
-        return client.create_collection(
+        col = client.create_collection(
             _DRAWERS_COLLECTION, metadata={"hnsw:space": "cosine"}, embedding_function=ef
         )
+    # The one wrapped accessor: every direct drawer writer (digest passes, tick_access, supersede,
+    # zoe_agent) gets its handle here. The service gets the raw collection; a non-service process on
+    # the live palace gets a write-checking proxy (live_store_guard.GuardedCollection).
+    return guard_collection(col, data_dir)
 
 
 # ── Maintenance gate + in-process index compaction (ZOE_MEMORY_INDEX_COMPACT) ──────────
@@ -942,10 +947,10 @@ def _delete_tombstone_id(user_id: str, ids: list[str]) -> str:
 
 
 def _delete_tombstone_body(ids: list[str]) -> dict[str, Any]:
-    """What a hard delete records about the rows it removes: a count and short hashes of the
+    """What a hard delete records about the rows it targets: a count and short hashes of the
     row ids (themselves text-derived hashes). Never the text, never the metadata."""
     hashes = [hashlib.sha256(i.encode()).hexdigest()[:8] for i in ids[:_TOMBSTONE_MAX_HASHES]]
-    return {"rows_removed": len(ids), "id_hashes": hashes, "truncated": len(ids) > len(hashes)}
+    return {"rows_targeted": len(ids), "id_hashes": hashes, "truncated": len(ids) > len(hashes)}
 
 
 def _memory_id(user_id: str, text: str, metadata: Mapping[str, Any]) -> str:
@@ -1392,33 +1397,36 @@ class MemoryService:
     async def delete_user(self, user_id: str, *, actor: str, reason: str = "") -> int:
         """Right-to-be-forgotten. Returns number of rows removed.
 
-        A hard delete is the one removal that bypasses the ``status`` lifecycle, so it must
-        not be silent: BEFORE anything is deleted a content-free ``delete_user`` audit row is
-        written (actor, reason, row count, short id hashes — never text) and it SURVIVES the
-        purge of the user's own per-row audit trail (those rows carry text and are removed).
-        If the tombstone cannot be written nothing is deleted (fail closed): a removal with
-        no record is how 93 owner "ingests" became indistinguishable from loss
-        (docs/knowledge/memory-loss-audit-2026-10-05.md)."""
+        A hard delete is the one removal that bypasses the ``status`` lifecycle, so it must not be
+        silent. When rows match, a content-free ``delete_user`` INTENT row is written BEFORE anything
+        is deleted (actor, reason, ``rows_targeted``, short id hashes — never text) and a
+        ``delete_user_done`` row (same tombstone id, ``rows_removed``) AFTER ``_delete_ids`` succeeds,
+        so "attempted" and "done" are distinguishable and a failed delete never leaves a false
+        "removed" record. If the intent cannot be written nothing is deleted (fail closed). Both rows
+        survive the purge of the user's own per-row trail (that trail carries text and is removed). A
+        sweep that matches no rows writes nothing — it removes nothing. Documented in
+        docs/knowledge/memory-loss-audit-2026-10-05.md."""
         self._require(user_id, "user_id is required")
         assert_write_allowed(getattr(self, "_data_dir", _MEMPALACE_DATA), user_id, "delete_user")
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())
         async with lock:
             try:
                 ids = await self._run_sync(self._list_ids_for_user, user_id)
-                # An empty synthetic sweep removes nothing and is not worth a row; anything
-                # else (rows to remove, or a real user's trail) is recorded first.
-                from user_filters import is_synthetic_user
-                if ids or not is_synthetic_user(user_id):
+                if ids:
+                    tomb_id = _delete_tombstone_id(user_id, ids)
                     await self._run_sync(
                         self._append_audit_sync,
-                        _delete_tombstone_id(user_id, ids), user_id, actor, "delete_user",
-                        _delete_tombstone_body(ids), None, reason or "hard delete (right-to-be-forgotten / synthetic sweep)",
+                        tomb_id, user_id, actor, "delete_user",
+                        _delete_tombstone_body(ids), None,
+                        reason or "hard delete (right-to-be-forgotten / synthetic sweep)",
                     )
-                if ids:
                     await self._run_sync(self._delete_ids, ids)
+                    await self._run_sync(
+                        self._append_audit_sync,
+                        tomb_id, user_id, actor, "delete_user_done",
+                        {"rows_removed": len(ids)}, None, "",
+                    )
                 await self._run_sync(self._delete_audit_for_user_sync, user_id)
-            except LiveStoreViolation:
-                raise
             except Exception as exc:
                 raise MemoryServiceError(f"delete_user failed: {exc}") from exc
             # Purge this user's idempotency-cache entries so re-teaching a
@@ -1991,7 +1999,7 @@ class MemoryService:
         if status in self._REFUSED_STATUSES:
             try:
                 from memory_reject_ledger import record_reject
-                record_reject(source, status)
+                record_reject(source, status, gate=False)
             except Exception:  # noqa: BLE001
                 pass
 
@@ -2379,8 +2387,9 @@ class MemoryService:
 
     def _delete_audit_for_user_sync(self, user_id: str) -> int:
         col = self._audit_collection()
-        # The ``delete_user`` tombstones are the record OF the removal — they outlive it.
-        result = col.get(where={"$and": [{"user_id": user_id}, {"action": {"$ne": "delete_user"}}]})
+        # The ``delete_user`` / ``delete_user_done`` rows are the record OF the removal — they outlive it.
+        result = col.get(where={"$and": [{"user_id": user_id},
+                                         {"action": {"$nin": ["delete_user", "delete_user_done"]}}]})
         ids = list(result.get("ids") or [])
         if ids:
             col.delete(ids=ids)

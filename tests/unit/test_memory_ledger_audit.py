@@ -67,6 +67,19 @@ def world(tmp_path):
         _ing("zoe_once", "2026-09-01T00:00:04Z"),
         _ing("zoe_testsess", "2026-09-01T00:00:05Z", session="sess-hermes"),
         _ing("zoe_old", "2026-01-01T00:00:00Z"),                       # before --since: out of the ledger
+        _ing("zoe_hard", "2026-09-01T00:00:06Z"),                      # removed by a COMPLETED hard delete
+        _ing("zoe_attempt", "2026-09-01T00:00:07Z"),                   # a hard delete was started, never finished
+        _ing("zoe_dup", "2026-09-01T00:00:08Z"),                       # retired by #1868's archive_duplicate
+        ("a-dup", {"mempalace_id": "zoe_dup", "user_id": OWNER, "action": "archive_duplicate", "actor": "consolidation",
+                   "timestamp": "2026-09-02T00:00:00Z", "before": "{}", "after": "{}"}),
+        ("a-tomb1", {"mempalace_id": "delete_user:aaaa", "user_id": OWNER, "action": "delete_user", "actor": "admin",
+                     "timestamp": "2026-09-03T00:00:00Z", "after": "{}",
+                     "before": json.dumps({"rows_targeted": 1, "id_hashes": [mla.id_hash("zoe_hard")]})}),
+        ("a-tomb1d", {"mempalace_id": "delete_user:aaaa", "user_id": OWNER, "action": "delete_user_done", "actor": "admin",
+                      "timestamp": "2026-09-03T00:00:01Z", "after": "{}", "before": json.dumps({"rows_removed": 1})}),
+        ("a-tomb2", {"mempalace_id": "delete_user:bbbb", "user_id": OWNER, "action": "delete_user", "actor": "admin",
+                     "timestamp": "2026-09-03T00:01:00Z", "after": "{}",
+                     "before": json.dumps({"rows_targeted": 1, "id_hashes": [mla.id_hash("zoe_attempt")]})}),
     ]
     for i in range(6):                                                  # approved + re-ingested: impossible if it persisted
         audit.append(_ing("zoe_phantom", f"2026-09-0{i + 1}T10:00:00Z", text="the repo literal sentence appears here"))
@@ -78,7 +91,15 @@ def world(tmp_path):
         ("zoe_real_copy", {"user_id": OWNER, "status": "approved", "source": "conversation", "session_id": "telegram-1",
                            "chroma:document": "the repo literal sentence appears here"}),
         ("zoe_test_row", {"user_id": OWNER, "status": "approved", "source": "chat_regex",
+                          "chroma:document": "the repo literal sentence appears here"}),          # NO session: not evidence
+        ("zoe_zoe_session", {"user_id": OWNER, "status": "approved", "source": "conversation", "session_id": "zoe-abc123",
+                             "chroma:document": "the repo literal sentence appears here"}),        # a service-minted shape
+        ("zoe_delegate", {"user_id": OWNER, "status": "approved", "source": "conversation", "session_id": "delegate-9",
                           "chroma:document": "the repo literal sentence appears here"}),
+        ("zoe_sess_test", {"user_id": OWNER, "status": "approved", "source": "chat_regex", "session_id": "sess-hermes",
+                           "chroma:document": "the repo literal sentence appears here"}),          # positive evidence
+        ("zoe_fixture_user", {"user_id": "u1", "status": "approved", "source": "note_created",
+                              "chroma:document": "the repo literal sentence appears here"}),         # positive evidence
         ("zoe_demo", {"user_id": "demo_bar_ab0e0001", "status": "approved",
                       "chroma:document": "the repo literal sentence appears here"}),
         ("zoe_guest", {"user_id": "guest", "status": "approved", "chroma:document": SECRET}),
@@ -108,9 +129,12 @@ def test_every_ledger_row_lands_in_exactly_one_bucket(world):
         "zoe_once": "unexplained",                # gone, unrecorded, no copy, one event
         "zoe_testsess": "test_session_gone",
         "zoe_phantom": "phantom_audit_only",      # 6 approved ingests of one id cannot all be real
+        "zoe_hard": "recorded_removal",           # a completed delete_user tombstone lists its id hash
+        "zoe_attempt": "unexplained",             # an INTENT with no completion is an attempt, not a removal
+        "zoe_dup": "recorded_removal",            # #1868's archive_duplicate action
     }
     assert "zoe_old" not in by_id                 # outside --since
-    assert rep["ledger_ids"] == 6 and sum(v["ids"] for v in rep["buckets"].values()) == 6
+    assert rep["ledger_ids"] == 9 and sum(v["ids"] for v in rep["buckets"].values()) == 9
 
 
 def test_control_one_ingest_is_not_a_phantom(world):
@@ -120,7 +144,7 @@ def test_control_one_ingest_is_not_a_phantom(world):
 
 def test_counts_events_and_literal_matches(world):
     rep, *_ = _report(world)
-    assert rep["ledger_events"] == 11 and rep["buckets"]["phantom_audit_only"] == {"ids": 1, "events": 6}
+    assert rep["ledger_events"] == 14 and rep["buckets"]["phantom_audit_only"] == {"ids": 1, "events": 6}
     assert rep["missing_events_literal"] == 6      # the phantom's text equals a repo literal
 
 
@@ -139,12 +163,25 @@ def test_a_pending_batch_phantom_needs_the_suite_batch_evidence(world):
     assert by_id["zoe_slow"] == "unexplained"                    # control: same repeats, but not in a batch
 
 
-def test_literal_rows_under_real_ids_only(world):
-    _, drawers, _, lits = _report(world)
-    rows = {r["id"]: r for r in mla.literal_rows(drawers, lits)}
-    assert set(rows) == {"zoe_real_copy", "zoe_test_row"}          # demo_* and guest are not 'real ids'
-    assert rows["zoe_real_copy"]["verdict"] == "likely_real_utterance_copied_into_a_test"
-    assert rows["zoe_test_row"]["verdict"] == "likely_test_row"
+def test_literal_rows_need_positive_evidence_to_be_called_test_rows(world):
+    _, drawers, audit, lits = _report(world)
+    rows = {r["id"]: r["verdict"] for r in mla.literal_rows(drawers, lits, audit)}
+    assert set(rows) == {"zoe_real_copy", "zoe_test_row", "zoe_zoe_session", "zoe_delegate", "zoe_sess_test",
+                         "zoe_fixture_user"}                                   # demo_* and guest are not 'real ids'
+    assert rows["zoe_real_copy"] == "likely_real_utterance_copied_into_a_test"   # telegram-shaped session
+    assert rows["zoe_sess_test"] == "likely_test_row"                            # sess-... session id
+    assert rows["zoe_fixture_user"] == "likely_test_row"                         # fixture user id u1
+    # an empty session, a service-minted zoe-/delegate- session: NOT evidence of a test row
+    assert rows["zoe_test_row"] == rows["zoe_zoe_session"] == rows["zoe_delegate"] == "needs_review"
+
+
+def test_a_suite_batch_minute_is_positive_evidence(world):
+    """A drawer whose first ingest sits in a many-ids-at-once minute is a suite row even with no session."""
+    drawers = [{"eid": "zoe_b0", "user_id": OWNER, "status": "approved", "chroma:document": "the repo literal sentence appears here"}]
+    audit = [_ing(f"zoe_b{i}", "2026-09-05T10:00:00Z")[1] | {"mempalace_id": f"zoe_b{i}"} for i in range(9)]
+    lits = {"the repo literal sentence appears here": ["tests/x.py"]}
+    assert mla.literal_rows(drawers, lits, audit)[0]["verdict"] == "likely_test_row"
+    assert mla.literal_rows(drawers, lits, audit[:3])[0]["verdict"] == "needs_review"      # control: no batch
 
 
 def test_population_counts_guest_and_noop_rewrites(world):
@@ -180,12 +217,33 @@ def test_no_memory_text_is_ever_printed(world, capsys):
         assert SECRET not in blob and "the repo literal sentence appears here" not in blob
 
 
-def test_plan_archive_lists_only_test_shaped_rows_and_names_the_normal_path(world):
+def test_plan_archive_contains_only_positively_matched_rows(world):
     plan = world["tmp"] / "plan.json"
     mla.main(["--db", world["db"], "--repo", world["repo"], "--plan-archive", str(plan)])
     body = json.loads(plan.read_text())
-    assert [r["id"] for r in body["rows"]] == ["zoe_test_row"]     # the real-utterance copy is NOT planned
+    assert sorted(r["id"] for r in body["rows"]) == ["zoe_fixture_user", "zoe_sess_test"]
     assert body["rows"][0]["decision"] == "archive" and "never raw delete" in body["how_to_apply"]
+
+
+def test_plan_archive_defaults_to_nothing(world):
+    """Every literal row here is real-session or has no test evidence: the plan must be EMPTY."""
+    db = world["tmp"] / "only_ambiguous.sqlite3"
+    drawers = [("zoe_x", {"user_id": OWNER, "status": "approved", "source": "conversation", "session_id": "zoe-1",
+                          "chroma:document": "the repo literal sentence appears here"}),
+               ("zoe_y", {"user_id": OWNER, "status": "approved", "source": "conversation",
+                          "chroma:document": "the repo literal sentence appears here"})]
+    _make_db(str(db), drawers, [])
+    plan = world["tmp"] / "empty_plan.json"
+    mla.main(["--db", str(db), "--repo", world["repo"], "--plan-archive", str(plan)])
+    assert json.loads(plan.read_text())["rows"] == []
+
+
+def test_reference_gap_counts_completed_hard_deletes_and_duplicate_archives_as_recorded(world):
+    _, drawers, audit, _ = _report(world)
+    ref = world["tmp"] / "r2.json"
+    ref.write_text(json.dumps({"ids": ["zoe_hard", "zoe_attempt", "zoe_dup", "zoe_lost"]}))
+    gap = mla.reference_gaps(drawers, audit, {"r": mla.reference_ids(str(ref))})["r"]
+    assert gap["absent_now"] == 4 and gap["recorded_removal"] == 2 and gap["unrecorded"] == 2   # attempt + lost
 
 
 def test_the_script_has_no_write_or_delete_path():

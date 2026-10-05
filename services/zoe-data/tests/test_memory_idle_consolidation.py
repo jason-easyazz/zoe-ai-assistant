@@ -400,6 +400,6 @@ def test_consolidation_counts_refusals_and_stores_only_real_writes(monkeypatch, 
     assert stored == 2, "one real write + one legacy None; the skip and the drop are not stored"
     line = next(r.getMessage() for r in caplog.records if "MEMORY_IDLE_CONSOLIDATE" in r.getMessage())
     assert "stored=2 rejected=1 skipped=1 dropped=1 failed=0" in line, line
-    summary = memory_reject_ledger.summary(1)
+    summary = memory_reject_ledger.summary(24)
     assert summary["reasons"] == {"question_mark": 1} and summary["sources"] == {"idle_consolidation": 1}
     memory_reject_ledger.reset_for_tests()

@@ -18,7 +18,8 @@ Buckets (every ledger id lands in exactly one):
   present              the drawer exists (``present_status`` counted separately)
   test_session_gone    gone, a test-shaped session id (sess-/test-/probe-...), too few events to prove
                        it never persisted: a test row, presence unknown
-  recorded_removal     gone, but an archive/edit/delete_user audit row accounts for it
+  recorded_removal     gone, but an archive / archive_duplicate / id-changing edit row, or a COMPLETED
+                       delete_user tombstone (its id_hashes list sha256(id)[:8]), accounts for it
   phantom_audit_only   gone, and the same id was "ingested" again and again while approved — the
                        durable dedup (memory_service.ingest) makes that impossible for a row that
                        persisted, so the rows never reached THIS palace (a test wrote the audit
@@ -56,6 +57,8 @@ GUEST_IDS = ("guest", "anonymous", "voice-guest", "voice-daemon", "")
 # A real conversation leaves a channel-shaped session id; a unit test does not.
 REAL_SESSION_RE = re.compile(r"^(telegram|voice-panel|web|ask|livekit|panel)[-_]", re.IGNORECASE)
 TEST_SESSION_RE = re.compile(r"^(sess|test|probe|diag|demo)[-_]", re.IGNORECASE)
+# ids no real person has: fixtures the suites mint (user_filters would call them real — no separator)
+FIXTURE_USER_IDS = frozenset({"u", "u1", "u2", "newbie", "existing"})
 PHANTOM_MIN_EVENTS = 3          # an approved row cannot be re-ingested: 3+ events = never persisted
 BATCH_MIN_IDS = 8               # >= this many distinct ids ingested in ONE minute = a suite run
 BATCH_FRACTION = 0.8            # ...and this share of an id's events fall in such minutes
@@ -149,6 +152,32 @@ def _json(s: str | None) -> dict:
         return {}
 
 
+def suite_batch_minutes(audit: list[dict]) -> set[tuple[str, str]]:
+    """(user, minute) pairs in which >= BATCH_MIN_IDS distinct ids were "ingested" at once — a suite run."""
+    minute_ids: dict[tuple[str, str], set[str]] = collections.defaultdict(set)
+    for a in audit:
+        if a.get("action") == "ingest":
+            minute_ids[(str(a.get("user_id")), str(a.get("timestamp", ""))[:16])].add(a.get("mempalace_id", ""))
+    return {k for k, v in minute_ids.items() if len(v) >= BATCH_MIN_IDS}
+
+
+def id_hash(row_id: str) -> str:
+    """The short row-id hash ``MemoryService.delete_user`` records (sha256(id)[:8])."""
+    return hashlib.sha256(str(row_id).encode("utf-8")).hexdigest()[:8]
+
+
+def deleted_hashes(audit: list[dict]) -> set[str]:
+    """Row-id hashes covered by a COMPLETED hard delete: a ``delete_user`` intent row (its tombstone
+    id ``delete_user:<hash>`` lists ``id_hashes``) AND the ``delete_user_done`` row that shares that
+    id. An intent with no completion is an attempt, not a removal."""
+    done = {a.get("mempalace_id") for a in audit if a.get("action") == "delete_user_done"}
+    out: set[str] = set()
+    for a in audit:
+        if a.get("action") == "delete_user" and a.get("mempalace_id") in done:
+            out.update(str(h) for h in _json(a.get("before")).get("id_hashes", []))
+    return out
+
+
 def reconcile(drawers: list[dict], audit: list[dict], *, owner: str, since: str,
               references: dict[str, set[str]], literals: dict[str, list[str]]) -> dict:
     live = {r["eid"]: r for r in drawers}
@@ -156,17 +185,13 @@ def reconcile(drawers: list[dict], audit: list[dict], *, owner: str, since: str,
     for a in audit:
         by_id[a.get("mempalace_id", "")].append(a)
 
-    # Suite-run batches: minutes in which >= BATCH_MIN_IDS distinct owner ids were "ingested" at once.
-    minute_ids: dict[str, set[str]] = collections.defaultdict(set)
-    for a in audit:
-        if a.get("user_id") == owner and a.get("action") == "ingest":
-            minute_ids[str(a.get("timestamp", ""))[:16]].add(a.get("mempalace_id", ""))
-    batch_minutes = {m for m, v in minute_ids.items() if len(v) >= BATCH_MIN_IDS}
+    batch_minutes = {m for (u, m) in suite_batch_minutes(audit) if u == owner}
 
     def batch_share(mid: str) -> float:
         ev = [e for e in by_id[mid] if e.get("action") == "ingest"]
         return sum(1 for e in ev if str(e.get("timestamp", ""))[:16] in batch_minutes) / len(ev) if ev else 0.0
 
+    tomb_hashes = deleted_hashes(audit)
     ledger = [a for a in audit if a.get("user_id") == owner and a.get("action") == "ingest"
               and str(a.get("timestamp", "")) >= since]
     ids = sorted({a["mempalace_id"] for a in ledger})
@@ -180,8 +205,10 @@ def reconcile(drawers: list[dict], audit: list[dict], *, owner: str, since: str,
     for mid in ids:
         all_events = by_id[mid]
         total_ingests = sum(1 for e in all_events if e.get("action") == "ingest")
-        recorded = [e for e in all_events if e.get("action") in ("archive", "edit", "delete_user")
+        recorded = [e for e in all_events if e.get("action") in ("archive", "archive_duplicate", "edit")
                     and (e.get("action") != "edit" or _json(e.get("before")).get("id") != _json(e.get("after")).get("id"))]
+        if id_hash(mid) in tomb_hashes:     # a hard delete is filed under delete_user:<hash>, not under the row id
+            recorded.append({"action": "delete_user"})
         text = first_text.get(mid, "")
         if mid in live:
             bucket = "present"
@@ -226,24 +253,38 @@ def reference_gaps(drawers: list[dict], audit: list[dict], references: dict[str,
     removal: set[str] = set()
     for a in audit:
         act = a.get("action")
-        if act in ("archive", "delete_user"):
+        if act in ("archive", "archive_duplicate"):
             removal.add(a.get("mempalace_id", ""))
         elif act == "edit":
             before, after = _json(a.get("before")), _json(a.get("after"))
             if before.get("id") != after.get("id"):   # a no-op in-place rewrite retires nothing
                 removal.add(str(before.get("id", "")))
+    tomb = deleted_hashes(audit)
     out = {}
     for name, ids_ in references.items():
         gone = sorted(i for i in ids_ if i not in live)
-        recorded = [i for i in gone if i in removal]
+        is_recorded = lambda i: i in removal or id_hash(i) in tomb   # noqa: E731
+        recorded = [i for i in gone if is_recorded(i)]
         out[name] = {"rows": len(ids_), "absent_now": len(gone), "recorded_removal": len(recorded),
                      "unrecorded": len(gone) - len(recorded),
-                     "unrecorded_id_sha": sorted(h(i) for i in gone if i not in removal)[:50]}
+                     "unrecorded_id_sha": sorted(h(i) for i in gone if not is_recorded(i))[:50]}
     return out
 
 
-def literal_rows(drawers: list[dict], literals: dict[str, list[str]]) -> list[dict]:
-    """Drawers under a REAL user id whose text is a repo test/script literal."""
+def literal_rows(drawers: list[dict], literals: dict[str, list[str]], audit: list[dict] | None = None) -> list[dict]:
+    """Drawers under a REAL user id whose text is a repo test/script literal, each with a verdict that
+    needs POSITIVE evidence to say "test":
+
+    * ``likely_test_row`` — a test-shaped session id (sess-/test-/probe-/diag-/demo-), a fixture user id
+      (u, u1, newbie, existing), or the row's first ingest sits in a suite-run batch minute;
+    * ``likely_real_utterance_copied_into_a_test`` — a channel-shaped session id (a person said it);
+    * ``needs_review`` — anything else (an empty or unlisted session id is NOT evidence of a test: API/MCP
+      writes carry none and the service mints ``zoe-``/``delegate-`` shapes). Never planned."""
+    batches = suite_batch_minutes(audit or [])
+    first_ingest: dict[str, tuple[str, str]] = {}
+    for a in sorted(audit or [], key=lambda a: str(a.get("timestamp", ""))):
+        if a.get("action") == "ingest":
+            first_ingest.setdefault(a.get("mempalace_id", ""), (str(a.get("user_id")), str(a.get("timestamp", ""))[:16]))
     out = []
     for r in drawers:
         uid = str(r.get("user_id") or r.get("wing") or "")
@@ -251,13 +292,15 @@ def literal_rows(drawers: list[dict], literals: dict[str, list[str]]) -> list[di
         if uid in GUEST_IDS or SYNTHETIC_RE.match(uid) or text not in literals:
             continue
         sess = str(r.get("session_id") or "")
+        if REAL_SESSION_RE.match(sess):
+            verdict = "likely_real_utterance_copied_into_a_test"
+        elif TEST_SESSION_RE.match(sess) or uid in FIXTURE_USER_IDS or first_ingest.get(r["eid"]) in batches:
+            verdict = "likely_test_row"
+        else:
+            verdict = "needs_review"
         out.append({
             "id": r["eid"], "user_id": uid, "status": r.get("status"), "source": r.get("source"),
-            "text_sha": h(text), "files": literals[text][:3],
-            # a channel-shaped session id means a person said it: keep, a literal that merely
-            # copies a real utterance. No session / a bare one is test-shaped.
-            "verdict": "likely_real_utterance_copied_into_a_test" if REAL_SESSION_RE.match(sess)
-            else "likely_test_row",
+            "text_sha": h(text), "files": literals[text][:3], "verdict": verdict,
         })
     return out
 
@@ -309,7 +352,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--reference", action="append", default=[], help="backup/export to look for gone rows in")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--plan-archive", metavar="FILE",
-                    help="write the test-shaped literal rows as a JSON archive plan (no execution here)")
+                    help="write ONLY rows positively matched as test rows (test session id, fixture user id, suite-batch minute) as a JSON archive plan; empty when nothing matches (no execution here)")
     args = ap.parse_args(argv)
 
     conn = connect_ro(args.db)
@@ -321,7 +364,7 @@ def main(argv: list[str] | None = None) -> int:
     literals = repo_literals(args.repo)
     report = {
         "ledger": reconcile(drawers, audit, owner=args.owner, since=args.since, references=refs, literals=literals),
-        "literal_rows": literal_rows(drawers, literals),
+        "literal_rows": literal_rows(drawers, literals, audit),
         "reference_gaps": reference_gaps(drawers, audit, refs),
         "population": population(drawers, audit),
     }

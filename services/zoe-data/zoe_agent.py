@@ -1385,12 +1385,6 @@ async def _mempalace_add(
                 record_reject(added_by or "zoe_agent", reason)
             except Exception:
                 pass
-            try:
-                from memory_metrics import memory_quality_reject_count
-                memory_quality_reject_count.labels(
-                    source=added_by or "zoe_agent", reason=reason).inc()
-            except Exception:
-                pass
             return False
     except Exception:
         # If the gate itself errors, fall through and store — never lose a fact.
