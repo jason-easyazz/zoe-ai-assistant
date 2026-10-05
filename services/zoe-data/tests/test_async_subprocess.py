@@ -478,6 +478,21 @@ def test_permit_returns_even_after_the_callers_loop_closes(monkeypatch):
         raise AssertionError("permit stranded after the caller's loop closed")
 
 
+async def _deregistered(mod, popen, timeout: float = 2.0) -> bool:
+    """Poll (bounded) until ``popen`` has left ``mod._LIVE_CHILDREN``."""
+    import asyncio
+    import time as _t
+
+    deadline = _t.monotonic() + timeout
+    while True:
+        with mod._LIVE_CHILDREN_LOCK:
+            if popen not in mod._LIVE_CHILDREN:
+                return True
+        if _t.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(0.02)
+
+
 @pytest.mark.asyncio
 async def test_shutdown_terminates_registered_children():
     """A dying zoe-data must take its children with it.
@@ -505,8 +520,11 @@ async def test_shutdown_terminates_registered_children():
 
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
-        with mod._LIVE_CHILDREN_LOCK:
-            assert popen not in mod._LIVE_CHILDREN
+        # The deregistration happens in the SHIELDED worker thread's `finally`, after
+        # communicate() returns for the killed child - so it can land a moment after the
+        # cancelled awaiter returns (flaky on a loaded CI box). Poll, bounded; a registry that
+        # never deregisters still fails here after the deadline.
+        assert await _deregistered(mod, popen), "killed child still registered after 2s"
     finally:
         # In prod the process is dying; in a SUITE the flag would poison every
         # later run_to_completion with "refusing to spawn".

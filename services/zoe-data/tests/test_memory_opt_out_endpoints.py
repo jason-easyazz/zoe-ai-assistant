@@ -415,8 +415,11 @@ async def test_consolidation_does_not_count_edits_the_opt_out_wall_skipped(monke
     dupes = [_approved("a", "Jason loves Italian food a lot", "2026-09-01"),
              _approved("b", "Jason loves Italian food a lot really", "2026-09-02")]
     svc = _SkippingReviewSvc(dupes)
+    # The weekly merge no longer REWRITES a near-duplicate (memory-authority audit W9: 6,585 of
+    # 6,605 audit edits were no-op rewrites): a merely similar row is left alone, and only an
+    # identical one is archived (``archive_duplicate``) - so no review/edit is attempted at all.
     assert await memory_digest._merge_near_duplicates(svc, "u-optout") == 0
-    assert svc.review_calls == 1                      # the edit WAS attempted …
+    assert svc.review_calls == 0
 
     async def always_contradicts(a, b):
         return True
@@ -426,7 +429,7 @@ async def test_consolidation_does_not_count_edits_the_opt_out_wall_skipped(monke
             _approved("o", "Jason's dentist is on Friday", "2026-09-01")]
     svc = _SkippingReviewSvc(pair)
     assert await memory_digest._resolve_contradictions(svc, "u-optout") == 0
-    assert svc.review_calls == 1                      # … and skipped, not counted
+    assert svc.review_calls == 1                      # the edit WAS attempted and skipped, not counted
 
     # A real edit still counts.
     svc = _SkippingReviewSvc(pair, review_result=object())
