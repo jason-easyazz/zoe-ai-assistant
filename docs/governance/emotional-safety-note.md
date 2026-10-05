@@ -109,6 +109,9 @@ building the feature cannot erode them:
 - **Strictest retention.** If a future feature must keep anything about a child's feelings, it
   needs this note changed first and an explicit decision from the owner; the default is "keep
   nothing".
+  **Superseded in part, 2026-10-05:** the owner decided that emotional context in memory
+  (`emotional_moment` rows, affect metadata on facts) IS kept for children (§6). Every other
+  restriction above is unchanged, including no per-child scores, no drift rows and no arousal trace.
 
 ## 5. Guests
 
@@ -128,13 +131,32 @@ that is emotional rather than biometric:
 |---|---|
 | The persona record and member modes | Household configuration, not affect. Kept until reset or deleted; the owner can read it and reset it at any time (§9). Deleting a member deletes their mode row. |
 | An *act* on how someone seems (an apology, a gentler reply) | For **everyone**, in the turn only. Stores nothing. Needs no consent because it keeps nothing. |
-| A *record* of how someone seems (any score kept past the turn; any feed to memory, continuity, follow-up) | **Consenting adult members only**, opted in per member, revocable, and **only once identity is enforceable** (the speaker gate live and the enrolment-interview opt-in, plan W5.3). Until then: **no per-clip or per-turn affective value is kept for anyone**. The only thing the shadow phase may keep is identity-free aggregates updated in place (a histogram, counters) with no timestamp, no sequence number and no row per turn (arousal record §3.2). |
-| Children, guests | Never a record (§4, §5). |
+| A *record* of how someone seems, **in memory** (an `emotional_moment` row; a feeling in a fact's metadata - `affect` / `valence` / `intensity`) | **Every household member, children included; never a guest. No stored consent row is required.** **Owner product decision, 2026-10-05**, overriding the earlier "consenting adult members only, opted in" rule and §4's "children never" for these two memory forms (see the decision block below). |
+| Any OTHER record of how someone seems (a per-clip or per-turn score kept past the turn: arousal/prosody, text-affect scores, mood trajectories, persona-drift scores) | Unchanged: **consenting adult members only**, opted in per member, revocable, and **only once identity is enforceable** (the speaker gate live and the enrolment-interview opt-in, plan W5.3). Until then: **no per-clip or per-turn affective value is kept for anyone**. The only thing the shadow phase may keep is identity-free aggregates updated in place (a histogram, counters) with no timestamp, no sequence number and no row per turn (arousal record §3.2). |
+| Guests | Never a record of any kind (§5). |
 | Presence | The house has no presence sensors; presence is panel activity only. The presence design stores no frames, only a count or a boolean on-device, and no identity ([companion-field record P8](../research/companion-field-vs-samantha-2026-10-03.md), [panel-identity plan](../architecture/panel-identity-plan.md)). Presence may gate *whether Zoe speaks first*; it never feeds an affective record. |
 | Arousal / prosody | Activation, not emotion, not truth, not diagnosis; never a lie detector, never a crisis detector, never surveillance. It never triggers the crisis path (§7) on its own. Scoring runs only on turns addressed to Zoe (a wake-word turn), never ambient audio, until the WA Surveillance Devices Act question is answered by counsel. |
 | Consent | A stored timestamp, not an assumption; revocation stops the record and removes the member from any match pool. Absence of consent means "the act only". |
 | Transparency | A member can ask what Zoe has about them and see it. Nothing is inferred silently about a person who cannot see it. |
 | Licence | No non-commercial or research-only model weights on the live path; they may judge in the lab. |
+
+**Owner decision, 2026-10-05 - emotional context in memory for the whole household.** Zoe keeps emotional
+context (`emotional_moment` memory rows and affect metadata on facts) for EVERY household member
+including children, and NEVER for guests. No stored consent row is required. This is a product decision
+by the owner; it replaces the opt-in default PR #1868 introduced and §4's "children never" for these two
+memory forms only (everything else in §4 - no romantic/companion mode for a minor, no per-child
+scores/drift, the crisis path precondition in §7 - stands). It is enforced at the memory choke point by
+`ZOE_AFFECT_CONSENT_GATE` (`MemoryService._affect_allowed`), with three modes and an escape hatch:
+
+| Mode | Who keeps emotional context |
+|---|---|
+| `household` (**default**, env unset) | Every member incl. minors. Guests refused; an unknown or failed member lookup refuses (closed). A person with no `member_modes` row is a member if they are a real account (not a guest sentinel). |
+| `members` | Adult members only (a member flagged minor is refused); no stored consent needed; a failed lookup fails open. |
+| `optin` | Adult members with a stored persona-mode row (the consent record); fails closed. Also what an unrecognised value falls to. |
+| `off` (`0`/`false`/`no`/`off`) | No gate (lab control only). |
+
+A guest is the sentinel principal (`guest`, `anonymous`, `voice-guest`, `voice-daemon`, empty -
+`user_filters.GUEST_USERS`), the same identity the rest of the stack treats as "nobody identified".
 
 ## 7. Crisis language
 

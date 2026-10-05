@@ -65,6 +65,7 @@ from live_store_guard import (
     assert_write_allowed,
     guard_collection,
 )
+from memory_captured_at import parse_captured_at, value_shape
 from memory_importance import score_importance
 
 try:
@@ -1219,7 +1220,8 @@ class MemoryService:
         ``captured_at`` (ISO-8601, optional) is for RESTORES only: the instant the fact was
         originally captured. It replaces "now" for ``added_at`` / ``added_ts`` / ``last_accessed``
         (and ``valid_from`` when the validity flag is on), so a restored July memory still answers
-        "when did I tell you" with July. Unparseable → ignored (stored as captured now).
+        "when did I tell you" with July. Unparseable, or more than 5 minutes in the future → ignored with a
+        WARNING naming the value's shape (never the value); the row is then stored as captured now.
 
         When ``scope`` is None, ``metadata["scope"]`` is treated as the
         authoritative memory scope and is validated before any durable write.
@@ -2065,12 +2067,18 @@ class MemoryService:
 
     async def _affect_allowed(self, user_id: str) -> bool:
         """May an AFFECTIVE record (an ``emotional_moment`` row, a feeling in a row's metadata)
-        be kept for this member? docs/governance/emotional-safety-note.md section 6: consenting
-        adult members only; guests and children never. Default mode ``members``: guest sentinels
-        and a member flagged a minor are refused (a failed lookup fails OPEN there with a warning
-        - the minor flag lives in Postgres, and refusing all feelings on a DB blip would silence
-        the feature). ``optin`` additionally needs a stored persona mode (the opt-in) and fails
-        CLOSED. ``off`` allows all."""
+        be kept for this person? Owner product decision 2026-10-05
+        (docs/governance/emotional-safety-note.md section 6). Modes (``memory_authority.affect_gate_mode``):
+
+        * ``household`` (DEFAULT): every household member incl. children, no stored consent row.
+          Guests are refused - a guest is the sentinel principal in ``user_filters.GUEST_USERS``
+          (``guest`` / ``anonymous`` / ``voice-guest`` / ``voice-daemon`` / empty), the same set
+          the batch memory passes and ``auth`` use. A person with no ``member_modes`` row is a
+          member. A failed member lookup refuses (closed).
+        * ``members``: as above but a member flagged a minor is refused; a failed lookup fails
+          OPEN with a warning (the minor flag lives in Postgres; a DB blip must not silence it).
+        * ``optin``: adult members with a stored persona mode; fails CLOSED.
+        * ``off``: allows all."""
         mode = _auth.affect_gate_mode()
         if mode == "off":
             return True
@@ -2088,9 +2096,12 @@ class MemoryService:
 
             member = await asyncio.wait_for(load_member_mode(uid), timeout=2.0)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("memory_service: affect consent lookup failed (%s) - %s",
-                           type(exc).__name__, "closed" if mode == "optin" else "open")
-            return mode != "optin"
+            closed = mode in ("household", "optin")
+            logger.warning("memory_service: affect gate lookup failed (%s) - %s",
+                           type(exc).__name__, "closed" if closed else "open")
+            return not closed
+        if mode == "household":
+            return True
         if member.minor:
             return False
         return not (mode == "optin" and member.mode == UNSET_MODE)
@@ -2487,12 +2498,16 @@ class MemoryService:
         """
         _now_dt = datetime.datetime.utcnow()
         if captured_at:   # restore path: keep the original capture instant (see ingest)
-            try:
-                _c = datetime.datetime.fromisoformat(str(captured_at).strip().replace("Z", "+00:00"))
-                _now_dt = (_c.astimezone(datetime.timezone.utc).replace(tzinfo=None)
-                           if _c.tzinfo else _c)
-            except ValueError:
-                pass
+            _c, _why = parse_captured_at(captured_at)
+            if _c is not None:
+                _now_dt = _c
+            else:
+                # Never silent: a restore that quietly dates a row "now" loses the one thing captured_at is for.
+                # Log the SHAPE of the value, never the value (it travels beside the row's text in the caller).
+                logger.warning(
+                    "memory_service: captured_at ignored (%s), stored as captured now: %s",
+                    _why, value_shape(captured_at),
+                )
         now = _now_dt.isoformat() + "Z"
         extra = dict(extra_metadata or {})
         event_scope = scope if scope is not None else extra.get("scope")
