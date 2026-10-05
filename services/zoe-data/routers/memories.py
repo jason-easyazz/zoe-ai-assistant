@@ -96,6 +96,9 @@ def _ref_to_dict(ref: MemoryRef) -> dict[str, Any]:
         "updated_at": meta.get("reviewed_at") or meta.get("added_at"),
         "expires_at": meta.get("expires_at"),
         "supersedes_id": meta.get("supersedes_id"),
+        "contradicts_id": meta.get("contradicts_id"),
+        "authority_class": meta.get("authority_class"),
+        "origin": meta.get("origin"),
         "superseded_by_id": meta.get("superseded_by_id"),
         "access_count": int(meta.get("access_count", 0) or 0),
         "source": "mempalace",
@@ -166,6 +169,9 @@ async def create_memory_proposal(
             body.content,
             user_id=user["user_id"],
             source=body.source_type or "proposal",
+            # the proposals API is the person typing: its class must not depend on a
+            # client-chosen source label ("manual", "web", anything)
+            origin="proposal",
             memory_type=body.memory_type or "fact",
             confidence=float(body.confidence or 0.5),
             status=status,
@@ -198,6 +204,14 @@ async def list_review_queue(
         user_id=user["user_id"], status="pending", limit=limit
     )
     items = [_ref_to_dict(r) for r in rows]
+    # A write that disagreed with something the person said is parked as `disputed`
+    # (memory_authority): show it HERE, beside the row it disputes, so it can be answered.
+    for r in await svc.list_by_status(user_id=user["user_id"], status="disputed", limit=limit):
+        d = _ref_to_dict(r)
+        d["dispute"] = True
+        old = await svc.get(str(r.metadata.get("contradicts_id") or "")) if r.metadata.get("contradicts_id") else None
+        d["contradicts_text"] = old.text if old is not None else (r.metadata.get("edge_old_text") or None)
+        items.append(d)
     return {"items": items, "count": len(items)}
 
 
@@ -228,6 +242,9 @@ async def review_memory(
             actor=user["user_id"],
             edits=body.content,
             note=body.note,
+            # an admin reviewing ANOTHER user's row acts as an operator, not as the account
+            # (memory_authority: only the account itself is user_confirmed on its own rows)
+            origin="admin" if (is_admin and owner and owner != user["user_id"]) else None,
         )
     except MemoryServiceError as exc:
         # ValueErrors from bad input become 400, missing-row becomes 404.
@@ -235,6 +252,8 @@ async def review_memory(
         if "not found" in msg.lower():
             raise HTTPException(status_code=404, detail=msg)
         raise HTTPException(status_code=400, detail=msg)
+    if ref is None:  # the opt-out / identity / authority walls refuse with None
+        raise HTTPException(status_code=409, detail="That change was not applied (held back).")
     return _ref_to_dict(ref)
 
 

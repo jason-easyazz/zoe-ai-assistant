@@ -191,6 +191,7 @@ async def _fix_structured_date(db, user_id: str, old_mem_id: str, new_mem_id: st
 
 async def apply_date_correction(
     text: str, user_id: str, recent_messages: list[str], *, svc=None, db=None,
+    session_id: Optional[str] = None,
 ) -> Optional[CorrectionResult]:
     from date_locale import find_numeric_dates, misread_pattern, render_date
 
@@ -242,6 +243,7 @@ async def apply_date_correction(
                     row.id, decision="edit", edits=new, actor=SOURCE,
                     note=f"date correction ({order} order)",
                     source_excerpt=" ".join((text or "").split()),
+                    session_id=session_id,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("correction_apply: date edit failed (%s)", type(exc).__name__)
@@ -415,7 +417,7 @@ async def _make_pet(db, user_id: str, person_id: str, current_rel: str, kind: st
 
 
 async def apply_pet_correction(
-    text: str, user_id: str, *, svc=None, db=None,
+    text: str, user_id: str, *, svc=None, db=None, session_id: Optional[str] = None,
 ) -> Optional[CorrectionResult]:
     stmt = pet_statement(text)
     if not stmt:
@@ -453,7 +455,8 @@ async def apply_pet_correction(
             continue
         try:
             ref = await svc.review(r.id, decision="edit", edits=new, actor=SOURCE,
-                                   note="pet is not a child (correction)", source_excerpt=excerpt)
+                                   note="pet is not a child (correction)", source_excerpt=excerpt,
+                                   session_id=session_id)
         except Exception as exc:  # noqa: BLE001
             logger.warning("correction_apply: pet edit failed (%s)", type(exc).__name__)
             continue
@@ -514,10 +517,11 @@ async def maybe_apply(
         if is_date_correction(text):
             if recent_messages is None:
                 recent_messages = await _recent_user_messages(user_id, session_id, text)
-            res = await apply_date_correction(text, user_id, recent_messages, svc=svc, db=db)
+            res = await apply_date_correction(text, user_id, recent_messages, svc=svc, db=db,
+                                              session_id=session_id)
             if res:
                 return res
-        return await apply_pet_correction(text, user_id, svc=svc, db=db)
+        return await apply_pet_correction(text, user_id, svc=svc, db=db, session_id=session_id)
     except Exception as exc:  # noqa: BLE001 — a correction never breaks the turn
         logger.warning("correction_apply failed user=%s: %s", user_id, type(exc).__name__)
         return None

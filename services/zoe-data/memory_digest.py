@@ -20,6 +20,7 @@ import re
 import uuid
 
 import httpx
+import memory_authority
 from routers.journal import CREATED_AT_VALID_TIMESTAMP_SQL
 from user_filters import GUEST_USERS, drop_synthetic_users, message_owner_expr
 
@@ -285,6 +286,7 @@ You are extracting personal facts from a chat transcript. Only extract facts the
 Return ONLY a JSON array (no preamble, no explanation). Each item has:
   "type": one of "profile" | "preference" | "habit" | "event" | "relationship" | "health"
   "fact": a single concise sentence (max 150 chars) in third-person (e.g. "User is 44 years old")
+  "quote": the user's OWN words that state it, copied EXACTLY from ONE chat message below (a fact about the user needs words where the user speaks about themself: "I", "my", "me"). A name that merely appears in a message is not a fact about the user.
 
 If nothing personal was stated, return: []
 
@@ -460,6 +462,59 @@ def _implicit_change_cue(user_message: str) -> str | None:
         return None
 
 
+_ATTRIBUTE_QUESTION_RE = re.compile(
+    r"\b(?:where|live|living|work|job|employ|name|called|old|age|born|birthday|moved|stay)\w*\b", re.IGNORECASE)
+
+
+async def prev_assistant_question(user_id: str, session_id: str | None, user_message: str,
+                                  db=None) -> str:
+    """The assistant message that immediately preceded ``user_message`` in its session, when it
+    is a QUESTION about a personal attribute ("Where do you live now?") - the context a short
+    elliptical answer ("no, Perth now", "it's Alex") needs. Context only: assistant text is
+    never evidence for a fact about the user (memory_authority.supports). "" when there is
+    none / on any failure."""
+    if not session_id or not user_message:
+        return ""
+    sql = """
+        SELECT a.content FROM chat_messages a
+        WHERE a.session_id = ? AND a.role = 'assistant'
+          AND a.created_at::timestamptz < (
+                SELECT max(u.created_at::timestamptz) FROM chat_messages u
+                WHERE u.session_id = ? AND u.role = 'user' AND u.content = ?)
+        ORDER BY a.created_at::timestamptz DESC LIMIT 1
+    """
+    try:
+        from db_pool import get_db_ctx  # type: ignore[import]
+
+        async with get_db_ctx() as _db:
+            row = await (await _db.execute(sql, (session_id, session_id, user_message))).fetchone()
+        q = str(row[0] or "").strip() if row else ""
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("prev_assistant_question failed: %s", type(exc).__name__)
+        return ""
+    return q[-300:] if q.endswith("?") and _ATTRIBUTE_QUESTION_RE.search(q) else ""
+
+
+async def latest_user_turn(user_id: str, *, within_minutes: int = 10, db=None) -> str:
+    """The member's most recent user turn (any session) within ``within_minutes`` - the turn an
+    explicit "remember ..." tool call belongs to. "" on none / failure."""
+    sql = """
+        SELECT cm.content FROM chat_messages cm JOIN chat_sessions cs ON cm.session_id = cs.id
+        WHERE """ + _message_owner_expr() + """ = ? AND cm.role = 'user'
+          AND cm.created_at::timestamptz >= (now()::timestamptz - make_interval(mins => ?::int))
+        ORDER BY cm.created_at::timestamptz DESC LIMIT 1
+    """
+    try:
+        from db_pool import get_db_ctx  # type: ignore[import]
+
+        async with get_db_ctx() as _db:
+            row = await (await _db.execute(sql, (user_id, within_minutes))).fetchone()
+        return str(row[0] or "").strip() if row else ""
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("latest_user_turn failed: %s", type(exc).__name__)
+        return ""
+
+
 async def run_turn_digest(
     user_id: str,
     user_message: str,
@@ -467,6 +522,7 @@ async def run_turn_digest(
     *,
     session_id: str | None = None,
     source: str = "turn_digest",
+    speaker_verified: bool | None = None,
 ) -> dict:
     """LLM fact extraction on a single conversation exchange.
 
@@ -477,7 +533,14 @@ async def run_turn_digest(
     """
     result: dict = {"user_id": user_id, "new": 0, "skipped_duplicates": 0, "skipped_low_quality": 0}
 
-    if not user_message or len(user_message.split()) < 4:
+    prompt_text = ""
+    if user_message and len(user_message.split()) < 4:
+        # A SHORT answer to a personal-attribute question ("no, Perth now", "it's Alex") is a
+        # fact only in the context of that question: read it with the question (context, never
+        # evidence - memory_authority.supports needs the user's own words to carry the value).
+        if memory_authority.enabled():
+            prompt_text = await prev_assistant_question(user_id, session_id, user_message)
+    if not user_message or (len(user_message.split()) < 4 and not prompt_text):
         return result
     # Skip purely procedural messages that can't contain personal facts.
     _skip_starts = ("what is", "what are", "how do", "explain", "tell me about",
@@ -507,7 +570,8 @@ async def run_turn_digest(
         # evidence excerpt below stays the user's verbatim words.
         from date_locale import normalize_numeric_dates
         prompt = _TURN_EXTRACTION_PROMPT.format(
-            user_message=normalize_numeric_dates(user_message)[:600])
+            user_message=(f"(replying to Zoe's question: \"{prompt_text}\") " if prompt_text else "")
+            + normalize_numeric_dates(user_message)[:600])
         payload = {
             "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
             "messages": [
@@ -566,6 +630,7 @@ async def run_turn_digest(
         # unless the flag is on AND the user's own words carry a change-of-state cue.
         change_cue = _implicit_change_cue(user_message)
         changed_refs: list = []
+        fresh_candidates: list = []
         existing_rows = None  # approved rows, read once, only for a cue turn
 
         for idx, item in enumerate(facts):
@@ -660,6 +725,13 @@ async def run_turn_digest(
                         # value the edit would otherwise carry forward).
                         metadata={"affect": fact_affect},
                         source_excerpt=turn_excerpt,
+                        # authority: the user's OWN turn is the anchor; the new row is THIS
+                        # writer's (session/turn), never the superseded row's
+                        anchor_text=user_message,
+                        session_id=session_id,
+                        turn_ref=f"{base_turn_id}-td{idx}",
+                        prompt_text=prompt_text or None,
+                        speaker_verified=speaker_verified,
                     )
                     if new_ref is not None:
                         result["new"] += 1
@@ -683,14 +755,29 @@ async def run_turn_digest(
                     tags=fact_tags,
                     metadata={"affect": fact_affect} if fact_affect else None,
                     source_excerpt=turn_excerpt,
+                    anchor_text=user_message,
+                    prompt_text=prompt_text or None,
+                    speaker_verified=speaker_verified,
                 )
-                if ref is not None:
+                if ref is not None and memory_authority.is_candidate(ref):
+                    # held back (it disputes something the user said): ask ONE question
+                    result["skipped_low_quality"] += 1
+                    fresh_candidates.append(ref)
+                elif ref is not None:
                     result["new"] += 1
                     logger.info("turn_digest: stored for %s: %s", user_id, fact[:80])
                     if fact_changes:
                         changed_refs.append(ref)
             except MemoryServiceError as exc:
                 logger.debug("turn_digest: ingest failed for %s: %s", user_id, exc)
+
+        if memory_authority.enabled() and session_id:
+            import memory_disputes
+
+            # a held-back write, or a topic the user just touched that has an open dispute,
+            # becomes ONE question through the offer mechanism (never a lost row)
+            result["dispute_questions"] = await memory_disputes.queue_questions(
+                svc, user_id, session_id, user_message, fresh=fresh_candidates)
 
         if changed_refs:
             from memory_supersede import supersede_for_turn
@@ -812,6 +899,10 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                         edits=fact,
                         actor="digest",
                         note="digest contradiction: superseded by newer turn",
+                        # the day's USER turns (never assistant text): a verbatim user quote
+                        # supports the fact, or the digest is an inference and cannot
+                        # overrule what the user said
+                        anchor_text=fact_anchor(item, chat_text) or "",
                     )
                 except MemoryServiceError as exc:
                     logger.warning(
@@ -855,6 +946,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                         edits=fact,
                         actor="digest",
                         note="nightly digest supersede (QA F9)",
+                        anchor_text=fact_anchor(item, chat_text) or "",
                     )
                     if new_ref is not None:
                         result["superseded"] += 1
@@ -871,11 +963,14 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                     confidence=0.8,
                     status="approved",
                     tags=tags,
+                    anchor_text=fact_anchor(item, chat_text) or "",
                 )
             except MemoryServiceError as exc:
                 logger.warning("memory_digest: ingest failed for %s: %s", user_id, exc)
                 continue
-            if ref is not None:
+            if ref is not None and memory_authority.is_candidate(ref):
+                result["candidates"] = result.get("candidates", 0) + 1
+            elif ref is not None:
                 result["new"] += 1
                 logger.info("memory_digest: stored for %s: %s", user_id, fact[:80])
 
@@ -1008,6 +1103,23 @@ async def _load_todays_messages(user_id: str, db=None) -> str:
     except Exception as exc:
         logger.warning("memory_digest: could not load messages for %s: %s", user_id, exc)
         return ""
+
+
+def fact_anchor(item: dict, user_text: str) -> str | None:
+    """The user's OWN words that anchor one extracted fact (memory_authority): the model's
+    ``quote`` when it is a verbatim span of the user turns, ``None`` when it gave a quote that
+    is NOT (a hallucinated span is no evidence), and the whole user transcript when the model
+    gave no ``quote`` field at all (an older reply shape; ``supports`` still demands the
+    subject, value, attribute and first person in ONE user sentence)."""
+    if not isinstance(item, dict) or "quote" not in item:
+        return user_text
+    squash = lambda t: re.sub(r"\s+", " ", str(t or "")).strip().lower()  # noqa: E731
+    quote = squash(item.get("quote"))
+    # ONE message at a time: the transcript joins user turns with newlines, and a quote stitched
+    # across two turns ("My dog is Teddy. Rex is coming over.") is not something the user said.
+    if quote and any(quote in squash(line) for line in str(user_text or "").split("\n")):
+        return str(item.get("quote")).strip()
+    return None
 
 
 class ExtractorError(RuntimeError):
@@ -1154,9 +1266,11 @@ async def _merge_near_duplicates(svc, user_id: str) -> int:
     )
     if len(approved) < 2:
         return 0
-    # Pin the freshest/highest-confidence row of each cluster as the keeper.
+    # Pin the strongest row of each cluster as the keeper: authority class first (a row the
+    # user said outranks a model's), then confidence, then age.
     approved.sort(
         key=lambda r: (
+            -memory_authority.row_rank(r.metadata, r.text),
             -float(r.metadata.get("confidence", 0.7) or 0.7),
             r.metadata.get("added_at", ""),
         ),
@@ -1171,17 +1285,15 @@ async def _merge_near_duplicates(svc, user_id: str) -> int:
         matched = False
         for keeper in keepers:
             if _text_overlap(text, keeper.text) >= 0.85:
-                # Supersede the weaker row with the keeper's existing id.
+                # An IDENTICAL duplicate is archived (nothing is lost, nothing is rewritten:
+                # the old merge edited the weaker row into the keeper's text - 6,585 of 6,605
+                # audit edits were such no-op rewrites stamped reviewed_by=consolidation). A
+                # near-duplicate whose text DIFFERS is a different statement and is left alone.
                 try:
-                    # review() returns None when the edit was refused (the
-                    # memory opt-out wall) — count only edits that happened.
-                    if await svc.review(
-                        ref.id,
-                        decision="edit",
-                        edits=keeper.text,
-                        actor="consolidation",
-                        note="weekly: merged near-duplicate",
-                    ) is not None:
+                    if await svc.archive_duplicate(
+                        ref.id, keeper.id, actor="consolidation",
+                        note="weekly: identical duplicate of " + keeper.id,
+                    ):
                         merged += 1
                 except Exception as exc:
                     logger.debug(
@@ -1284,7 +1396,13 @@ async def run_weekly_consolidation(user_id: str) -> dict:
     except Exception as exc:
         logger.warning("consolidation: contradiction pass failed user=%s: %s", user_id, exc)
     try:
-        archived_ids = await svc.sweep_soft_archive(user_id=user_id, actor="consolidation")
+        import memory_disputes
+
+        summary["stale_disputes"] = await memory_disputes.expire_stale(svc, user_id)
+    except Exception as exc:
+        logger.warning("consolidation: dispute expiry failed user=%s: %s", user_id, exc)
+    try:
+        archived_ids = await svc.sweep_soft_archive(user_id=user_id, actor="decay_sweep")
         summary["archived"] = len(archived_ids)
     except Exception as exc:
         logger.warning("consolidation: sweep failed user=%s: %s", user_id, exc)

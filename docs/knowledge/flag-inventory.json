@@ -113,6 +113,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_AFFECT_CONSENT_GATE": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_authority.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_AGENT_LLM_TIMEOUT": {
         "defaults": [
           "'120.0'",
@@ -2596,6 +2606,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/memory_service.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_MEMORY_AUTHORITY": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_authority.py"
         ],
         "typed_env": false
       },

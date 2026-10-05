@@ -392,8 +392,12 @@ def _record_quality_reject(source: str, reason: str, text: str) -> None:
 async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
                                session_id: Optional[str], user_turn_id: Optional[str],
                                memory_type: str, confidence: float,
-                               tags: list[str]) -> str:
+                               tags: list[str], anchor_text: Optional[str] = None) -> str:
     """Ingest a conversational fact, merging it with an equivalent existing row.
+
+    ``anchor_text`` is the user's OWN turn text the fact was mined from (user turns only):
+    a model-assisted source (idle consolidation) earns ``user_stated`` authority only when
+    it supports the fact (memory_authority); without it the fact is ``inferred``.
 
     Returns an outcome string so callers can be HONEST about what happened
     (QA review F13 — teach replies must not claim success over a silent drop):
@@ -447,7 +451,7 @@ async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
         text, user_id=user_id, source=source,
         session_id=session_id, user_turn_id=user_turn_id,
         memory_type=memory_type, confidence=confidence, status="approved",
-        tags=tags, metadata=metadata,
+        tags=tags, metadata=metadata, anchor_text=anchor_text,
     )
     new_id = getattr(ref, "id", None)
     if ref is None:
@@ -470,10 +474,28 @@ async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
     # ingest dedups on a text-derived mem_id, so a near-identical value can map to
     # the same id as old_id (or be dropped, ref=None) — archiving then would delete
     # the only copy of the fact. Guard against that.
+    try:
+        from memory_authority import is_candidate
+
+        held_back = is_candidate(ref)
+    except Exception:  # noqa: BLE001
+        held_back = False
+    if held_back:
+        # The new fact disputes something the person said directly: it is parked as a
+        # candidate (and asked about), so the old row must NOT be retired here.
+        logger.info("MEMORY_STORE_HELD source=%s", source)
+        return "dropped"
     if old_id and new_id and new_id != old_id:
         try:
-            await svc.review(old_id, decision="archive", actor=source,
-                             note="superseded by newer conversational fact")
+            if hasattr(svc, "supersede_by"):
+                # ONE operation judged on the NEW row's own provenance (its class decides),
+                # not a separate archive attributed to a bare model label (which the wall
+                # refuses, leaving both rows approved).
+                await svc.supersede_by(user_id, old_id, new_id, actor=source,
+                                       note="superseded by newer conversational fact")
+            else:
+                await svc.review(old_id, decision="archive", actor=source,
+                                 note="superseded by newer conversational fact")
             from memory_metrics import memory_supersede_count
             memory_supersede_count.labels(source=source).inc()
             logger.info("MEMORY_SUPERSEDE source=%s old=%s new=%r",

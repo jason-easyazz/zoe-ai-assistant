@@ -22,13 +22,14 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-530 flags; 528 not documented in `.env.example`.
+532 flags; 530 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
 | `ZOE_A2A_CLIENT_TIMEOUT_S` | `'30'` | no | NO | `services/zoe-data/a2a_client.py` |
 | `ZOE_A2A_TOKEN` | `''` | no | NO | `services/zoe-data/auth.py` |
 | `ZOE_ACP_DELIVERY_MODE` | `'live'` | no | NO | `services/zoe-data/zoe_acp_client.py` |
+| `ZOE_AFFECT_CONSENT_GATE` | `-` | no | NO | `services/zoe-data/memory_authority.py` |
 | `ZOE_AGENT_LLM_TIMEOUT` | `'120.0'`, `dynamic` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_AGENT_MAX_TOOL_ITERS` | `5` | yes | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_AGENT_TOOL_TIMEOUT` | `'10.0'` | no | NO | `services/zoe-data/zoe_agent.py` |
@@ -271,6 +272,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_MCP_USER_ID` | `-` | no | NO | `services/zoe-data/mcp_server.py` |
 | `ZOE_MCP_USER_ROLE` | `-` | no | NO | `services/zoe-data/mcp_server.py` |
 | `ZOE_MEMORY_AUDIT_COLLECTION` | `'mempalace_audit'` | no | NO | `services/zoe-data/memory_service.py` |
+| `ZOE_MEMORY_AUTHORITY` | `-` | no | NO | `services/zoe-data/memory_authority.py` |
 | `ZOE_MEMORY_COMPOSE_ENABLED` | `''` | no | NO | `services/zoe-data/zoe_memory_compose.py` |
 | `ZOE_MEMORY_DIGEST_LOOKBACK_HOURS` | `-` | no | NO | `services/zoe-data/memory_digest.py` |
 | `ZOE_MEMORY_IMPLICIT_SUPERSEDE` | `False` | yes | NO | `services/zoe-data/memory_supersede.py` |
