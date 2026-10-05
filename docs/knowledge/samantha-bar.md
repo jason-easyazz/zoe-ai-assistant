@@ -29,6 +29,9 @@ ZOE_PERF=1 \
 ... --samples 3            # judged scenarios ask 3x in fresh sessions, majority vote (odd only)
 ...                        # --compare-baseline inherits the BASELINE's count; an explicit mismatch is refused
 ... --no-backdate          # DIAGNOSTIC only (same-day run): refused with --record/--compare-baseline
+... --only S21,S22         # PARTIAL run (also --axis b|extraction; both = intersection): status=partial, NEVER a baseline
+...                        # unknown id/axis = exit 2; --record-baseline is refused; --compare-baseline compares only the selected
+...                        # (a selected scenario that regressed is still status=regression, exit 1)
 ... --teardown-only        # clean up a run that was killed before its own teardown
 ```
 
