@@ -51,12 +51,30 @@ presents conflicting bullets newest-first; the Dunedin row is retired later by a
   anything, and a cue-less change acts as a swap in `supersede_for_turn`.
 - **Tombstone:** a fact with an END cue is stored `memory_type=state_change`, tag
   `state_change`. The card never lists it; the recall packet prefixes it `(change)`.
-- **Topic match** (`same_topic`): equal subject key (owner, relation words, possessive
-  names — "User's sister …" never matches "User …"), then content tokens minus the change
-  frame and frequency words, plural folded; shared tokens must be ≥ ½ of the smaller set
+- **Subject** (`same_subject`, 2026-10-06): equal owner and relation words AND compatible NAMED
+  people (`subject_names` / `names_compatible`): a leading name, a possessive ("Dana's job"),
+  the names after a relation noun ("User's friend Dana"). Names are read WHOLE with
+  `named_relations`' token reader (the recall floor's discipline), never as substrings:
+  "Ana" is not "Anabel"; "Dana" is "Dana Whitfield" but "Whitfield" is not. "User's friend
+  Dana" is not "User's friend Leo" is not "User" (bake-off X1: the old key carried only
+  "user" + "friend", so the nightly pass retired 5 of 20 friends' homes). One side naming
+  nobody still matches when every relation is one-per-person (mum, dad, wife, boss ...:
+  "User's mum lives in Bendigo" corrects "User's mum Ingrid lives in Ballarat"); for
+  friend / sister / kids the name is what tells people apart.
+- **Attribute** (`attributes_of` / `same_attribute`): a closed vocabulary (home, job,
+  birthday, age, pet, school, health, status). When BOTH facts state a classified attribute
+  and the sets are disjoint they are never the same topic: a move never retires a job
+  (bake-off X2: "friend moved to Perth" retired "friend works at a bookbinder" on the seeds
+  where the name + "friend" were enough overlap).
+- **Topic match** (`same_topic`): `same_subject` and `same_attribute`, then content tokens
+  MINUS the subject's own words (relation words, names) and the change frame and
+  frequency words, plural folded; shared tokens must be ≥ ½ of the smaller set
   AND ≥ ½ of the old fact's set. Known miss by design: "gave up the cello" does not retire
   "plays the cello in a community orchestra" (one word of four) — the LLM judges and the
-  newest-first packet remain the backstop.
+  newest-first packet remain the backstop. The same name guard sits in the per-turn
+  reconciler (`memory_quality.classify_against_existing`: "Leo's birthday is ..." never
+  UPDATEs "Dana's birthday is ...", the attribute key strips the subject) and in the weekly
+  LLM contradiction pass (two different named people's facts are never put to the judge).
 - **Exclusive slot:** home (`lives/based/settled in X`, `moved to X`); a different X
   supersedes.
 - **Targets:** approved person-fact types only (`user_model_card.ALLOWED_TYPES`); never

@@ -972,10 +972,10 @@ def conflict_kind(new_text: str, old_text: str) -> Optional[str]:
     'same attribute' means one thing across the store."""
     try:
         from memory_quality import _attribute_key, _attrs_match, _same_value
-        from memory_supersede import exclusive_conflict, is_tombstone, same_topic, subject_key
+        from memory_supersede import exclusive_conflict, is_tombstone, same_subject, same_topic
     except Exception:  # noqa: BLE001 — a matcher outage must not break a write
         return None
-    if not new_text or not old_text or subject_key(new_text) != subject_key(old_text):
+    if not new_text or not old_text or not same_subject(new_text, old_text):
         return None
     if _compact_dates_differ(new_text, old_text):
         return "birthday"

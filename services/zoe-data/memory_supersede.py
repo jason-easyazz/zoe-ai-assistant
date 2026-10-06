@@ -197,6 +197,14 @@ _FRAME_WORDS = frozenset({
 })
 
 
+def _fold_token(t: str) -> str:
+    """One topic token's canonical form: no possessive 's, plural 's' folded ("lives" = "live")."""
+    t = t.removesuffix("'s")
+    if len(t) > 4 and t.endswith("s") and not t.endswith("ss"):
+        t = t[:-1]
+    return t
+
+
 def topic_tokens(text: str) -> set[str]:
     """Content tokens minus memory_digest's stopwords (which include time words) and the
     change/verb frame, plural 's' folded ("lives" = "live"). A token with a digit counts
@@ -210,9 +218,7 @@ def topic_tokens(text: str) -> set[str]:
             continue
         if t in _AFFECT_STOPWORDS or t in _FRAME_WORDS:
             continue
-        if len(t) > 4 and t.endswith("s") and not t.endswith("ss"):
-            t = t[:-1]
-        out.add(t)
+        out.add(_fold_token(t))
     return out
 
 
@@ -223,23 +229,185 @@ def _relations(text: str) -> frozenset[str]:
                      for m in re.findall(rf"\b{_EVT_REL}\b", text or "", re.I))
 
 
+# ── Whose fact is it? (the named person) ─────────────────────────────────────────
+# The subject of a fact is the user, a relation of the user ("User's friend Dana"), or a
+# named person. "User's friend Dana lives in Hobart" and "User's friend Leo lives in Perth"
+# share the owner ("user") and the relation ("friend"): until 2026-10-06 that was the whole
+# key, so the nightly pass read them as ONE subject with two homes and retired the older
+# (bake-off verification X1: 5 of 20 friend facts retired on a real run). A name is read
+# WHOLE, never as a substring, with the token reader named_relations uses (the same
+# whole-name discipline as memory_gate.person_names_in_question, the recall floor's matcher).
+_NOT_A_PERSON = frozenset({"he", "her", "his", "him", "user", "users", "i", "my", "our"})
+
+
+# A group noun lists the subject's dependents ("Dana has two kids, Mika and Biscuit"): those names extend a fact,
+# they do not change whose fact it is.
+_GROUP_RELATIONS = frozenset({"kid", "kids", "child", "children", "sons", "daughters", "parent", "parents",
+                              "sibling", "siblings", "grandparents", "in-laws", "family"})
+
+
+def _name_pattern() -> str:
+    from named_relations import _TOKEN
+
+    return rf"{_TOKEN}(?: {_TOKEN})?"
+
+
+def _is_person_token(tok: str) -> bool:
+    from memory_gate import _EVT_REL, _NOT_A_NAME as function_words
+    from named_relations import _NOT_A_NAME as nationalities
+
+    low = tok.lower()
+    return not (low in _NOT_A_PERSON or low in function_words or low in nationalities
+                or re.fullmatch(_EVT_REL, low, re.I))
+
+
+def _clean_name(raw: str) -> str:
+    """A matched name as casefolded whole tokens, or "" when its first token is not a person's."""
+    toks = raw.split()
+    if not toks or not _is_person_token(toks[0]):
+        return ""
+    if len(toks) == 2 and not _is_person_token(toks[1]):
+        toks = toks[:1]
+    return " ".join(toks).casefold()
+
+
+def subject_names(text: str) -> frozenset[str]:
+    """The named people a fact is about, as casefolded WHOLE names: a leading name
+    ("Dana lives in Hobart", "Dana Whitfield's mum ..."), a possessive ("Dana's job"),
+    and the names that follow a relation noun ("User's friend Dana", "my sisters Ana and
+    Bea"). The user, pronouns, relation nouns and function words are never names."""
+    from memory_gate import _EVT_REL
+
+    t = (text or "").strip()
+    if not t:
+        return frozenset()
+    name = _name_pattern()
+    found: list[str] = []
+    m = re.match(rf"(?:the\s+)?(?P<n>{name})(?!\w)", t)
+    if m:
+        found.append(m.group("n"))
+    found += [m.group("n") for m in re.finditer(rf"(?P<n>{name})['’]s(?!\w)", t)]
+    for m in re.finditer(
+            rf"\b(?i:(?P<rel>{_EVT_REL})(?:\s+(?:named|called))?)\s+(?P<n>{name}"
+            rf"(?:(?:\s*,\s*(?:and\s+)?|\s+and\s+|\s*&\s*){name})*)", t):
+        if m.group("rel").lower() in _GROUP_RELATIONS:
+            continue                      # "Dana has two kids Mika": the kids are Dana's, not who the fact is about
+        found += re.findall(name, m.group("n"))
+    return frozenset(n for n in (_clean_name(x) for x in found) if n)
+
+
+def names_compatible(a: Iterable[str], b: Iterable[str]) -> bool:
+    """May two fact subjects be the SAME people? Both name nobody, or every name on each
+    side has a partner on the other that is the same name or extends it by whole tokens
+    ("Dana" ~ "Dana Whitfield"; "Dana" is not "Leo", "Whitfield" is not "Dana Whitfield").
+    One side naming someone the other does not is NOT the same subject: a retirement is
+    never a guess about who a fact is about."""
+    left, right = [tuple(x.split()) for x in a], [tuple(x.split()) for x in b]
+
+    def pair(x: tuple, y: tuple) -> bool:
+        n = min(len(x), len(y))
+        return x[:n] == y[:n]
+
+    return (all(any(pair(x, y) for y in right) for x in left)
+            and all(any(pair(x, y) for x in left) for y in right))
+
+
 def subject_key(text: str) -> tuple[str, frozenset[str], frozenset[str]]:
-    """(owner, relation words, possessive names). Two facts must share it: the user's
-    home is not their sister's, and "Tom quit" says nothing about the user."""
+    """(owner, relation words, named people). Two facts must share it (``same_subject``):
+    the user's home is not their sister's, "Tom quit" says nothing about the user, and
+    "User's friend Dana" is not "User's friend Leo"."""
     t = (text or "").strip()
     first = re.match(r"(?:the\s+)?([A-Za-z]+)", t, re.I)
     owner = first.group(1).lower() if first else ""
     owner = "user" if owner in {"user", "i", "my"} else owner
-    poss = frozenset(w.lower() for w in re.findall(r"\b([A-Z][a-z]+)['’]s\b", t)
-                     if w.lower() != "user")
-    return owner, _relations(t), poss
+    return owner, _relations(t), subject_names(t)
+
+
+# Relations a person has ONE of: "User's mum lives in Bendigo" corrects "User's mum Ingrid
+# lives in Ballarat" whether or not the correction repeats her name. For every other relation
+# ("friend", "sister", "kids"...) the name is what tells the people apart.
+_ONE_PER_PERSON = frozenset({
+    "mum", "mom", "mother", "dad", "father", "wife", "husband", "partner", "boyfriend",
+    "girlfriend", "fiancé", "fiancée", "fiance", "fiancee", "boss", "nan", "nana", "gran",
+    "grandma", "grandmother", "grandpa", "grandfather"})
+
+
+def facts_compatible(a: str, b: str) -> bool:
+    """Do two fact texts name compatible people (``names_compatible``)? A side that names
+    nobody still matches when every relation both facts carry is a one-per-person one."""
+    na, nb = subject_names(a), subject_names(b)
+    if names_compatible(na, nb):
+        return True
+    if bool(na) != bool(nb):          # one side names nobody
+        rels = _relations(a) | _relations(b)
+        return bool(rels) and rels <= _ONE_PER_PERSON
+    return False
+
+
+def same_subject(a: str, b: str) -> bool:
+    """Are two fact texts about the same subject? Owner and relations equal, the named
+    people compatible (``facts_compatible``)."""
+    ka, kb = subject_key(a), subject_key(b)
+    return ka[0] == kb[0] and ka[1] == kb[1] and facts_compatible(a, b)
+
+
+# ── What is it about? (the attribute) ────────────────────────────────────────────
+# A person has one home and one job; a move says nothing about the job. The closed
+# vocabulary below is the attributes the card and the authority wall already tell apart
+# (``memory_authority.kind_of``); a fact may carry several ("works at the dog groomer").
+_ATTRIBUTES: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
+    (name, re.compile(rx, re.I)) for name, rx in (
+        ("home", r"\b(?:lives?|living|based|settled|resides?)\s+(?:in|at|near|on)\b"
+                 r"|\bmoved\s+(?:away\s+)?from\b|\bhome\s*(?:town|address)?\b|\baddress\b"),
+        ("job", r"\bworks?\b|\bworked\b|\bworking\b|\bjob\b|\bemploy|\bcareer\b|\boccupation\b|"
+                r"\bprofession\b|\bretired\b|\bresigned\b|\bhired\b|\bpromoted\b"),
+        ("birthday", r"\bbirthday\b|\bborn\b|\bdob\b"),
+        ("age", r"\byears? old\b|\baged?\s+\d"),
+        ("pet", r"\b(?:dog|cat|puppy|kitten|pet|rabbit|bird|horse|fish)s?\b"),
+        ("school", r"\b(?:studies|studying|studied|attends?|attended|school|universit|college|degree)"),
+        ("health", r"\ballerg|\bintoleran|\bdiagnos|\bmedicat"),
+        ("status", r"\b(?:single|married|engaged|divorced|widowed|dating)\b"),
+    ))
+
+
+def attributes_of(text: str) -> frozenset[str]:
+    """The attributes a fact states, from the closed vocabulary above (empty = unclassified)."""
+    t = text or ""
+    out = {name for name, rx in _ATTRIBUTES if rx.search(t)}
+    if _HOME.search(t):
+        out.add("home")
+    return frozenset(out)
+
+
+def same_attribute(new: str, old: str) -> bool:
+    """False only when BOTH facts state a classified attribute and the two sets are
+    disjoint ("moved to Perth" [home] against "works at a bakery" [job])."""
+    a, b = attributes_of(new), attributes_of(old)
+    return not (a and b) or bool(a & b)
+
+
+def _subject_tokens(text: str) -> set[str]:
+    """The folded tokens of a fact's subject (relation words, names): the subject is
+    compared by ``same_subject``, so it must not also count as shared TOPIC."""
+    out: set[str] = set()
+    for rel in _relations(text):
+        out |= {_fold_token(rel), rel}
+    for name in subject_names(text):
+        for tok in name.split():
+            out |= {_fold_token(tok), tok}
+    return out
 
 
 def same_topic(new: str, old: str) -> bool:
-    """Deterministic same-topic test (thresholds above; no model)."""
-    if subject_key(new) != subject_key(old):
+    """Deterministic same-topic test (thresholds above; no model). The subject must match
+    (``same_subject``), the attribute must not differ (``same_attribute``), and the
+    SUBJECT's own words never count as shared topic: "User's friend Ines moved to Perth"
+    and "User's friend Ines works at a bookbinder" share a friend and a name, not a topic
+    (bake-off verification X2: a friend's move retired the friend's job on 2 of 3 seeds)."""
+    if not same_subject(new, old) or not same_attribute(new, old):
         return False
-    a, b = topic_tokens(new), topic_tokens(old)
+    a = topic_tokens(new) - _subject_tokens(new)
+    b = topic_tokens(old) - _subject_tokens(old)
     shared = a & b
     if not shared:
         return False
@@ -266,7 +434,7 @@ def home_value(text: str) -> Optional[str]:
 
 def exclusive_conflict(new: str, old: str) -> bool:
     nv, ov = home_value(new), home_value(old)
-    return bool(nv and ov and nv != ov and subject_key(new) == subject_key(old))
+    return bool(nv and ov and nv != ov and same_subject(new, old))
 
 
 def _is_target(meta: dict[str, Any]) -> bool:
