@@ -518,7 +518,7 @@ def plan_table(cfg: Any, seeds: tuple, budget: "Optional[Budget]" = None) -> "li
                      f"only if time remains; ~{PHASE_MIN['slot'][a]:g} min at run 1's rate, not budgeted" if opt else "idle retain of 10-turn chunks"))
         for k in range(2, b.seeds[a] + 1):
             rows.append((f"{a} seed {k} ({seeds[k - 1]}): store-tier cells", b.box_min[a], "ceiling, same box as seed 1"))
-    rows.append(("t+6 min forgetting verdicts, report", 1.0, "inside the tail kept before the restore reserve"))
+    rows.append(("t+6 min forgetting verdicts, report", 0.0, f"inside the {TAIL_MIN:g} min tail, not counted"))
     return rows
 
 
