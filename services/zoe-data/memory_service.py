@@ -2416,6 +2416,98 @@ class MemoryService:
         col.update(ids=[old_id, new_id], metadatas=[old_m, new_m])
         return True
 
+    async def restore_superseded(
+        self, user_id: str, mem_id: str, *, expected_successor_id: str, actor: str, note: str = "",
+    ) -> Optional[dict[str, Any]]:
+        """Take back a WRONG retirement: ``mem_id`` was superseded by a row about a different person or
+        attribute (bake-off X1 / X2), so it is true again. The operator's audited restore
+        (``scripts/maintenance/memory_supersede_collateral_audit.py --apply-restore``); there is no review decision
+        for it, and the authority wall does not apply (a person ran it, on rows a matcher bug retired).
+
+        Under the per-user lock it re-reads the row and acts only when it belongs to ``user_id``, is still
+        ``superseded`` and its ``superseded_by_id`` is ``expected_successor_id`` (so a plan made before a later
+        edit never overwrites it, and a second run restores nothing). The row goes back to ``approved`` with
+        ``invalid_at`` / ``expired_at`` / ``superseded_by_id`` cleared and its ORIGINAL ``valid_from`` kept
+        (``memory_temporal.restore_fields``: a new open-ended interval); its embedding is rebuilt when the index
+        lost it. The successor stays as it is (a true fact about someone else) except that a ``supersedes_id``
+        pointing back at this row is cleared and noted. Audit rows (no text): ``restore_collateral`` on the
+        restored row, ``restore_collateral_unlink`` on the successor. Returns ``{"reindexed", "unlinked"}`` or
+        None when nothing was restored. Raises ``LiveStoreViolation`` (never swallowed) against the live
+        palace from a non-service process."""
+        if not user_id or not mem_id or not expected_successor_id or mem_id == expected_successor_id:
+            return None
+        lock = self._user_locks.setdefault(user_id, asyncio.Lock())
+        async with lock:
+            done = await self._run_sync(self._restore_superseded_sync, user_id, mem_id, expected_successor_id)
+        if done is None:
+            return None
+        before, after, succ_before = done.pop("before"), done.pop("after"), done.pop("succ_before")
+        await self._append_audit(
+            mem_id=mem_id, user_id=user_id, actor=actor, action="restore_collateral",
+            before=before, after=after, reason=note,
+        )
+        if succ_before is not None:
+            await self._append_audit(
+                mem_id=expected_successor_id, user_id=user_id, actor=actor, action="restore_collateral_unlink",
+                before=succ_before, after={"supersedes_id": ""}, reason=note,
+            )
+        _invalidate_agent_user_facts_cache(user_id)
+        return done
+
+    def _restore_superseded_sync(
+        self, user_id: str, old_id: str, new_id: str,
+    ) -> Optional[dict[str, Any]]:
+        assert_write_allowed(getattr(self, "_data_dir", _MEMPALACE_DATA), user_id, "row restore")
+        col = self._collection()
+        got = col.get(ids=[old_id, new_id], include=["metadatas", "documents", "embeddings"])
+        ids_ = list(got.get("ids") or [])
+        metas = {i: dict(m or {}) for i, m in zip(ids_, got.get("metadatas") or [])}
+        docs = {i: d or "" for i, d in zip(ids_, got.get("documents") or [])}
+        embs = got.get("embeddings")
+        old_m, new_m = metas.get(old_id), metas.get(new_id)
+        if old_m is None or new_m is None:
+            return None
+        if any(str(m.get("user_id") or m.get("wing") or "") != user_id for m in (old_m, new_m)):
+            return None
+        if str(old_m.get("status") or "") != "superseded" or str(old_m.get("superseded_by_id") or "") != new_id:
+            return None
+        keys = ("status", "superseded_by_id", "invalid_at", "expired_at", "valid_from", "valid_until")
+        before = {k: old_m.get(k) for k in keys if old_m.get(k) is not None}
+        now = datetime.datetime.now(datetime.timezone.utc)
+        sets, drops = _temporal.restore_fields(old_m, now=now.timestamp())
+        for k in drops:
+            old_m.pop(k, None)
+        old_m.update(sets)
+        old_m.update(status="approved", reviewed_by="operator_restore",
+                     reviewed_at=now.replace(tzinfo=None).isoformat() + "Z",
+                     review_note=("restored: retired by a row about a different person or attribute "
+                                  f"(conflict-pass collateral); successor {new_id}")[:1024])
+        after = {k: old_m.get(k) for k in ("status", "valid_from", "valid_until", "restored_at")
+                 if old_m.get(k) is not None}
+        succ_before = None
+        if str(new_m.get("supersedes_id") or "") == old_id:
+            succ_before = {"supersedes_id": old_id}
+            new_m.pop("supersedes_id", None)
+            new_m["supersedes_cleared_id"] = old_id
+            new_m["supersedes_cleared_note"] = "restore_collateral: the older row was retired for a different fact"
+        # The row is still in the collection (a retirement keeps it), so a metadata-only update keeps its
+        # embedding. One the index lost (the collection reports an empty vector) is rebuilt from the text.
+        lost = False
+        if embs is not None:
+            vec = embs[ids_.index(old_id)] if len(embs) == len(ids_) else None
+            lost = vec is None or len(vec) == 0
+        reindexed = lost and bool(docs.get(old_id))
+        if reindexed:
+            col.upsert(ids=[old_id], documents=[docs[old_id]], metadatas=[old_m])
+            if succ_before is not None:
+                col.update(ids=[new_id], metadatas=[new_m])
+        elif succ_before is not None:
+            col.update(ids=[old_id, new_id], metadatas=[old_m, new_m])
+        else:
+            col.update(ids=[old_id], metadatas=[old_m])
+        return {"reindexed": reindexed, "unlinked": succ_before is not None,
+                "before": before, "after": after, "succ_before": succ_before}
+
     # ── authority (memory_authority.py) ───────────────────────────────────────
 
     async def _apply_edge_dispute(self, user_id: str, meta: Mapping[str, Any], ref: str) -> Optional[str]:
