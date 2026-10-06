@@ -217,7 +217,9 @@ def test_ab_scenario_flag_off_is_the_measured_failure(monkeypatch):
     old, res = asyncio.run(go())
     assert "superseded" not in res
     assert col.rows[old][1]["status"] == "approved"
-    assert all("valid_from" not in m and "invalid_at" not in m for _, m in col.rows.values())
+    # the supersede POLICY is off, so nothing was retired (no invalid_at); the validity stamp is not a policy
+    # switch: every row still carries valid_from (audit P2.1)
+    assert all("invalid_at" not in m and "valid_from" in m for _, m in col.rows.values())
     assert _by_text(col, TOMBSTONE)[1]["memory_type"] == "event"
     rows = asyncio.run(svc.list_by_status(user_id=UID, status="approved"))
     text = umc.render_card(umc.build_card("Ottilie", rows))
@@ -253,23 +255,20 @@ def test_flag_off_turn_digest_calls_are_byte_identical(monkeypatch):
     ]
 
 
-def test_build_metadata_writes_no_validity_keys_when_off(monkeypatch):
-    _flag(monkeypatch, False)
+@pytest.mark.parametrize("on", [True, False])
+def test_build_metadata_always_writes_the_capture_time_as_valid_from(monkeypatch, on):
+    """The stamp is a pure addition: the same with the supersede policy on or off."""
+    _flag(monkeypatch, on)
     md = MemoryService._build_metadata(
         user_id=UID, source="turn_digest", session_id=None, user_turn_id=None,
         memory_type="fact", confidence=0.8, status="approved", tags=[], entity_type=None,
         entity_id=None, expires_at=None)
-    assert "valid_from" not in md
-    _flag(monkeypatch, True)
-    md = MemoryService._build_metadata(
-        user_id=UID, source="turn_digest", session_id=None, user_turn_id=None,
-        memory_type="fact", confidence=0.8, status="approved", tags=[], entity_type=None,
-        entity_id=None, expires_at=None)
-    assert md["valid_from"] == md["added_ts"]
+    assert md["valid_from"] == md["added_ts"] and md["valid_from_basis"] == "captured"
+    assert "invalid_at" not in md
 
 
 @pytest.mark.parametrize("on", [True, False])
-def test_review_edit_marks_invalid_at_only_under_flag(monkeypatch, on):
+def test_review_edit_marks_invalid_at_with_the_policy_on_or_off(monkeypatch, on):
     _flag(monkeypatch, on)
     svc, col = _svc(monkeypatch)
 
@@ -281,8 +280,8 @@ def test_review_edit_marks_invalid_at_only_under_flag(monkeypatch, on):
 
     old, new = asyncio.run(go())
     assert col.rows[old][1]["status"] == "superseded"
-    assert ("invalid_at" in col.rows[old][1]) is on
-    assert ("valid_from" in new.metadata) is on
+    assert col.rows[old][1]["invalid_at"] == new.metadata["valid_from"]     # half-open: they meet
+    assert col.rows[old][1]["expired_at"] and "valid_from" in new.metadata
 
 
 # ── cue table ─────────────────────────────────────────────────────────────────
@@ -459,6 +458,36 @@ def test_conflict_pairs_newer_cue_or_home_only():
             _ref(6, "User used to play the piano.", 40), _ref(7, "User plays the piano.", 5)]
     got = {(n.id, o.id, why) for n, o, why in ms.conflict_pairs(rows)}
     assert got == {("r2", "r1", "dropped"), ("r4", "r3", "home")}
+
+
+@pytest.mark.parametrize("new,old,retires", [
+    # S4 (audit): a reminiscence is not a change of state
+    ("User used to love Dunedin.", "User lives in Dunedin.", False),
+    ("User used to like the city.", "User lives in the city.", False),
+    ("User used to live in Dunedin.", "User lives in Dunedin.", True),
+    ("User used to work at the bank.", "User works at the bank.", True),
+    ("User used to be a smoker.", "User is a smoker.", True),
+    ("User used to have a spaniel.", "User has a spaniel.", True),
+])
+def test_used_to_needs_a_state_change_reading(new, old, retires):
+    """"used to <verb>" retires only the row that verb is about; "used to love <city>" ends nothing about where the
+    person lives. Break the fix (cue_applies always True) and the reminiscence rows retire the current fact."""
+    rows = [_ref(1, old, 10), _ref(2, new, 1)]
+    got = [(n.id, o.id) for n, o, _why in ms.conflict_pairs(rows)]
+    assert got == ([("r2", "r1")] if retires else [])
+
+
+def test_a_reminiscence_does_not_retire_the_current_home_through_the_nightly_pass(monkeypatch):
+    _flag(monkeypatch, True)
+    svc, col = _svc(monkeypatch)
+
+    async def go():
+        home = await _seed(svc, col, "User lives in Dunedin.", days_ago=5, memory_type="profile")
+        await _seed(svc, col, "User used to love Dunedin.", days_ago=1, memory_type="profile")
+        return home, await memory_digest._implicit_conflict_pass(UID)
+
+    home, out = asyncio.run(go())
+    assert out == dict(pairs=0, superseded=0) and col.rows[home][1]["status"] == "approved"
 
 
 def test_nightly_pass_cap_and_idempotence(monkeypatch, caplog):

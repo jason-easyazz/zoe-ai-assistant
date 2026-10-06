@@ -52,6 +52,8 @@ CONTROLS = {
     "provenance": "the write boundary drops source_excerpt and user_turn_id (a row no longer says which turn it came from)",
     "entailment": "the verbatim-anchor rule removed (wall ON): a per-turn model reading of the owner's own change of mind cannot retire the owner's row, it waits as a disputed candidate",
     "topic": "the same-topic guard removed: a change retires every older fact, about anyone",
+    "event_time": "the stated-validity parser switched off: valid_from is always the capture time, never the date the person said",
+    "history": "the history read switched off: a replaced fact is kept but a question about how things used to be never sees it",
     "physical_erase": "ZOE_MEMORY_PHYSICAL_ERASE=0 - a hard delete / forget removes the row through the API and leaves the text on disk",
 }
 
@@ -106,7 +108,7 @@ def load_service() -> types.SimpleNamespace:
     _service_path()
     mods = {n: importlib.import_module(n) for n in (
         "memory_service", "memory_authority", "memory_tombstones", "memory_extractor",
-        "memory_quality", "identity_facts", "live_store_guard")}
+        "memory_quality", "identity_facts", "live_store_guard", "memory_temporal")}
     return types.SimpleNamespace(**mods)
 
 
@@ -420,6 +422,10 @@ def controls_off(features: "frozenset[str] | set[str]", svc: types.SimpleNamespa
                 return done
             patch(ms, "_write_row", write_row_no_history)
             patch(ms, "_supersede_by_sync", supersede_by_deleting)
+        if "event_time" in features:
+            patch(svc.memory_temporal, "parse_validity", lambda *a, **k: svc.memory_temporal.Validity())
+        if "history" in features:
+            patch(svc.memory_temporal, "is_history_question", lambda *_a, **_k: False)
         if "retrieval" in features:
             ms = svc.memory_service.MemoryService
 

@@ -3645,16 +3645,19 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             rows = list(await svc.search(name, user_id=user_id, limit=25))
             # Paginate the approved sweep: a single limit=1000 page would let a
             # privacy request silently miss rows for users with bigger stores.
-            offset = 0
-            while True:
-                page = await svc.list_by_status(
-                    user_id=user_id, status="approved", limit=1000, offset=offset)
-                if not page:
-                    break
-                rows.extend(page)
-                if len(page) < 1000:
-                    break
-                offset += len(page)
+            # ... and the facts that were REPLACED (superseded) too: they are kept as history ("where did I live
+            # before?"), so a forgotten name left in one would come back through that read.
+            for _status in ("approved", "superseded"):
+                offset = 0
+                while True:
+                    page = await svc.list_by_status(
+                        user_id=user_id, status=_status, limit=1000, offset=offset)
+                    if not page:
+                        break
+                    rows.extend(page)
+                    if len(page) < 1000:
+                        break
+                    offset += len(page)
         except Exception as exc:
             logger.info("memory_forget_entity: lookup failed: %s", exc)
             return "I couldn't reach the memory store right now, so nothing was changed."

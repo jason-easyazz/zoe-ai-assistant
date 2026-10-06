@@ -19,9 +19,11 @@ match, a subject guard and one exclusive slot (home). No model call.
   rule over stored pairs, plus a differing home-slot value, capped per user per run.
 
 The old row is never deleted: ``status=superseded``, ``superseded_by_id``, ``invalid_at``
-(epoch seconds); the successor gets ``supersedes_id`` and ``valid_from`` (= its
-``added_ts``) via ``MemoryService.supersede_by``. Reads already hide ``superseded``
-(``memory_service._BLOCKED_READ_STATUSES``).
+(epoch seconds: where the successor's ``valid_from`` begins) and ``expired_at``; the successor
+gets ``supersedes_id`` and ``valid_from`` (``memory_temporal``: the stated event time, else
+its ``added_ts``) via ``MemoryService.supersede_by``. Ordinary reads hide ``superseded``
+(``memory_service._BLOCKED_READ_STATUSES``); a history question ("where did I live before?")
+and ``search(as_of=...)`` read them.
 """
 from __future__ import annotations
 
@@ -134,6 +136,31 @@ def _utterance_swap(cue: Optional[str]) -> Optional[Cue]:
         if c.name == cue:
             return Cue(c.name, "swap", c.pattern, c.fact_level)
     return Cue(cue, "swap", re.compile(r"(?!x)x"), False)
+
+
+# "used to <verb>" is a change of STATE only for the row that verb is about: "used to live in Perth" ends "lives in
+# Perth"; "used to love Perth" is a reminiscence and ends nothing about where the person lives (the 2026-10-05
+# fidelity audit's S4: a newer "used to love <city>" retired the current "lives in <city>"). The verb after the
+# cue must be the old row's own (irregular verbs by their forms).
+_USED_TO_VERB = re.compile(r"\bused to\s+(?:not\s+)?([a-z]+)", re.I)
+_IRREGULAR_FORMS = dict(be=("is", "am", "are", "was", "were", "been"), have=("has", "have", "had"),
+                        do=("does", "did"), go=("goes", "went"))
+
+
+def cue_applies(cue_name: str, new: str, old: str) -> bool:
+    """May the cue ``cue_name`` in ``new`` retire ``old``? Only "used to" is conditional (see above); a fact whose
+    "used to" verb cannot be read keeps the cue's old behaviour."""
+    if cue_name != "used to":
+        return True
+    m = _USED_TO_VERB.search(new or "")
+    if not m:
+        return True
+    verb = m.group(1).lower()
+    words = re.findall(r"[a-z']+", (old or "").lower())
+    if verb in _IRREGULAR_FORMS:
+        return any(w in _IRREGULAR_FORMS[verb] for w in words)
+    stem = verb[:-1] if verb.endswith("e") else verb
+    return any(w.startswith(stem) for w in words)
 
 
 def changes_existing(fact: str, rows: Iterable[Any]) -> bool:
@@ -285,6 +312,8 @@ async def supersede_for_turn(svc, user_id: str, cue: str, written: Iterable[Any]
                     continue
                 if not (same_topic(ref.text, old.text) or exclusive_conflict(ref.text, old.text)):
                     continue
+                if not cue_applies(c.name, ref.text, old.text):
+                    continue
                 if await svc.supersede_by(user_id, old.id, by.id, actor=ACTOR,
                                           note=f"implicit change ({c.name})"):
                     taken.add(old.id)
@@ -323,7 +352,7 @@ def conflict_pairs(rows: list[Any]) -> list[tuple[Any, Any, str]]:
         for older in live[i + 1:]:
             if older.id in retired or not _is_target(older.metadata or {}):
                 continue
-            if cue is not None and same_topic(newer.text, older.text):
+            if cue is not None and same_topic(newer.text, older.text) and cue_applies(cue.name, newer.text, older.text):
                 reason = cue.name
             elif exclusive_conflict(newer.text, older.text):
                 reason = "home"
