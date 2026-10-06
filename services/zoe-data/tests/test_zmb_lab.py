@@ -80,7 +80,7 @@ def test_every_controlled_cell_goes_red_with_its_features_off(full_control_pass)
     # 136 with chromadb present (the two ``disk`` cells run), 134 in the slim CI lane where they are declared skips
     # (99 before the temporal / recall / poisoning / provenance / graph axes; +6 for the cells #1895 fixes; +3 for the two
     # timelines: C2.history_read and C4.valid_from_is_event_time leave the targets, + C2.history_is_labelled)
-    assert len(runnable) in (134, 136) and cp["checked"] == cp["red"] == len(runnable)
+    assert len(runnable) in (135, 137) and cp["checked"] == cp["red"] == len(runnable)
     assert {r["id"] for r in cp["rows"]} == runnable
     assert all(r["verdict"] == "FAIL" and r["stage"] in ("write", "read", "answer") for r in cp["rows"])
 
@@ -254,7 +254,7 @@ def test_the_axis_table_for_z0_is_claimable_with_wilson_intervals(full_measure, 
     for name in ("identity", "forgetting", "abstention", "extraction", "emotional", "temporal", "recall", "poisoning"):
         assert axes[name]["claimable"] and axes[name]["n"] > 0 and not axes[name]["hard_violations"], name
     assert (axes["recall"]["n"], axes["recall"]["pass"]) == (4, 4)
-    assert (axes["temporal"]["n"], axes["temporal"]["pass"]) == (12, 12)
+    assert (axes["temporal"]["n"], axes["temporal"]["pass"]) == (13, 13)
     assert axes["temporal"]["targets_failing"] == []     # C2 / C4 fixed: two timelines (audit P2.1)
     assert (axes["poisoning"]["n"], axes["poisoning"]["pass"]) == (7, 6)
     # only the bare third-party fragment is left: it needs a speaker verdict, not a text rule
@@ -481,7 +481,7 @@ NEW_CONTROLS = {
                   "D3.hit5_after_300_filler", "D4.hit5_paraphrase_after_100_filler"],
     "provenance": ["A3.typed_turn_rows", "A3.voice_verified_turn_rows", "A3.taught_rows", "A3.nightly_digest_rows",
                    "A3.user_turn_rows_rate"],
-    "topic": ["C6.no_collateral_invalidation"],
+    "topic": ["C6.no_collateral_invalidation", "C7.named_friends_keep_their_homes"],
 }
 
 
@@ -584,6 +584,34 @@ def test_the_new_cells_measure_the_real_code_not_the_control_flag(monkeypatch, a
     assert _run("A8.inferred_cannot_close_user_edge", arm).verdict == "FAIL"
     assert _run("A8.refused_edge_is_held_not_lost", arm).verdict == "FAIL"
     monkeypatch.undo()
+
+
+#: The baseline seed, the two held-out names the bake-off's window draws, and the two stability seeds whose friends
+#: (Ines, Tove) drew a job the pre-fix pass retired on a friend's move (bake-off verification X2: C6 was PASS on the
+#: baseline seed and FAIL on stab-14 / stab-1).
+COLLATERAL_SEEDS = ("zmb-v1", "zmb-heldout-a", "zmb-heldout-b", "stab-14", "stab-1")
+
+
+@pytest.mark.parametrize("seed", COLLATERAL_SEEDS)
+@pytest.mark.parametrize("cid", ["C6.no_collateral_invalidation", "C7.named_friends_keep_their_homes"])
+def test_no_collateral_invalidation_on_every_seed(cid, seed, arm):
+    """C6 (a friend's move retires nothing else) and C7 (two named friends keep their own homes) pass on every seed:
+    the pass keys on the named person and the attribute, whatever the world drew."""
+    assert _run(cid, arm, seed).verdict == "PASS"
+
+
+def test_c7_goes_red_when_the_named_person_is_ignored(monkeypatch, arm):
+    """Break the fix (no names in the subject: the pre-fix key) and C7 is red on every seed; C6 on the seeds where the
+    friend's job shares the friend's name and "friend" with the move."""
+    import memory_supersede
+
+    monkeypatch.setattr(memory_supersede, "subject_names", lambda text: frozenset())
+    for seed in COLLATERAL_SEEDS:
+        assert _run("C7.named_friends_keep_their_homes", arm, seed).verdict == "FAIL", seed
+    monkeypatch.undo()
+    monkeypatch.setattr(memory_supersede, "same_attribute", lambda a, b: True)
+    monkeypatch.setattr(memory_supersede, "_subject_tokens", lambda text: set())
+    assert [_run("C6.no_collateral_invalidation", arm, s).verdict for s in COLLATERAL_SEEDS].count("FAIL") >= 2
 
 
 def test_the_live_flags_are_set_around_an_operation_and_restored(arm, monkeypatch):
