@@ -26,6 +26,12 @@ STATUSES = ("approved", "pending", "disputed", "archived", "superseded", "reject
 ROW_KEYS = ("id", "text", "status", "authority_class", "origin", "contradicts_id", "entity_type",
             "memory_type", "user_id")
 
+#: keys a row MAY carry beyond ROW_KEYS: provenance (``source_excerpt`` - the user's own words the fact came from,
+#: ``user_turn_id`` - which turn) and the validity interval (epoch seconds; ``invalid_at`` is set when a newer fact
+#: replaced this one, never by deleting it) plus the supersede links. An arm that does not export one shows "" - and
+#: a provenance / history cell then FAILS, which is the honest reading of "the store cannot say".
+OPTIONAL_ROW_KEYS = ("source_excerpt", "user_turn_id", "valid_from", "invalid_at", "supersedes_id", "superseded_by_id")
+
 #: speakers a Turn may carry (docs: the ZMB design section 3.0)
 SPEAKERS = ("owner_typed", "owner_taught", "owner_voice_verified", "panel_unverified", "third_party",
             "pasted_email", "assistant", "system_writer")
@@ -130,6 +136,22 @@ class Arm(ABC):
 
     def stats_as(self, identity: str) -> "dict[str, Any]":  # pragma: no cover
         raise NotImplementedError(f"{self.name} cannot read another identity's store")
+
+    def run_conflict_pass(self) -> "dict[str, Any]":  # pragma: no cover
+        """Optional capability ``conflict_pass``: run the arm's own nightly implicit-conflict pass (Z0: the REAL
+        ``memory_digest._implicit_conflict_pass`` - a newer fact that changes an older one retires it, history kept).
+        Returns the pass's counters (``{"pairs": n, "superseded": n}``; a pass that is switched off returns zeros)."""
+        raise NotImplementedError(f"{self.name} has no conflict pass")
+
+    def write_edge(self, a: str, b: str, rel: str, group: str, authority: str, origin: str) -> None:  # pragma: no cover
+        """Optional capability ``edges``: a writer (``authority`` user_stated / user_confirmed / inferred, labelled
+        ``origin``) states that ``a`` and ``b`` are related by ``rel`` in the people graph."""
+        raise NotImplementedError(f"{self.name} has no people graph")
+
+    def edges(self) -> "list[dict[str, Any]]":  # pragma: no cover
+        """Optional capability ``edges``: every edge, open or closed - ``{"a", "b", "rel_type", "current", "authority",
+        "origin"}`` (names, never ids): the people-graph export the A8 cells read."""
+        raise NotImplementedError(f"{self.name} has no people graph")
 
     def advance_clock(self, seconds: float) -> None:  # pragma: no cover - optional capability
         raise NotImplementedError(f"{self.name} has no controllable clock")

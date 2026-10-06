@@ -1,0 +1,69 @@
+{
+  "spec_version": 1,
+  "axis": "recall",
+  "cells": [
+    {
+      "id": "D1.hit5_after_30_filler",
+      "title": "recall: 20 needles told first, 30 seeded household turns after - the top 5 rows for a direct question hold the needle (>= 95%)",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["retrieval"],
+      "lme_map": "multi-session; information extraction (LongMemEval Recall@k shape)",
+      "note": "retrieval-only hit@5 over the store's own search: a hit = ONE retrieved row holds the subject's name and the answer token (pure string match, no judge). The filler is mostly chatter that is never stored, some preferences, and near-miss facts of the same sentence shape about other people. In the lab the collection ranks by a deterministic bag-of-words distance (a stand-in for the embedder): this cell measures the store and its owner / status filters, NOT embedding quality - an arm with a real embedder runs the same cell for real. The decision rule's bar is D2; the design's floor at 30 is 95%",
+      "events": [
+        {"do": "needles"},
+        {"do": "filler", "turns": 30}
+      ],
+      "probes": [
+        {"kind": "hit_at_k", "k": 5, "min_rate": 0.95, "queries": "direct"}
+      ]
+    },
+    {
+      "id": "D2.hit5_after_100_filler",
+      "title": "recall: 20 needles told first, 100 seeded household turns after - the top 5 rows hold the needle (>= 90%, the decision-rule cell)",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["retrieval"],
+      "lme_map": "multi-session; BEAM multi-session reasoning",
+      "note": "the decision rule's 'D hit@5 at 100 filler >= 90%'; same corpus and scoring as D1 (see its note for what the lab does and does not measure)",
+      "events": [
+        {"do": "needles"},
+        {"do": "filler", "turns": 100}
+      ],
+      "probes": [
+        {"kind": "hit_at_k", "k": 5, "min_rate": 0.9, "queries": "direct"}
+      ]
+    },
+    {
+      "id": "D3.hit5_after_300_filler",
+      "title": "recall: 20 needles told first, 300 seeded household turns after - the top 5 rows hold the needle (>= 85%)",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["retrieval"],
+      "lme_map": "multi-session; BEAM multi-session reasoning at scale",
+      "events": [
+        {"do": "needles"},
+        {"do": "filler", "turns": 300}
+      ],
+      "probes": [
+        {"kind": "hit_at_k", "k": 5, "min_rate": 0.85, "queries": "direct"}
+      ]
+    },
+    {
+      "id": "D4.hit5_paraphrase_after_100_filler",
+      "title": "recall by paraphrase: the same 20 needles asked in other words (sharing only the subject's name) after 100 filler turns - the top 5 rows hold the needle (>= 90%)",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["retrieval"],
+      "lme_map": "multi-session; information extraction (paraphrased question)",
+      "note": "the paraphrase shares no word with the stored sentence but the subject's name. A bag-of-words lab can only find those by the name; a semantic arm is what this cell is for, and the gap between D2 and D4 on that arm is the measurement",
+      "events": [
+        {"do": "needles"},
+        {"do": "filler", "turns": 100}
+      ],
+      "probes": [
+        {"kind": "hit_at_k", "k": 5, "min_rate": 0.9, "queries": "paraphrase"}
+      ]
+    }
+  ]
+}
