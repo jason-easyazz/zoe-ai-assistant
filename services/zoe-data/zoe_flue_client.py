@@ -449,6 +449,72 @@ def _wrap_message_with_identity(message: str, user_id: str) -> str:
     return f"{_IDENTITY_ENVELOPE_PREFIX}{uid}\n{message}"
 
 
+# Machine-readable HOUSEHOLD-PERSONA envelope (ZOE_PERSONA_LAYER, persona_layer.py). MUST match
+# the sidecar parser (labs/flue-zoe-brain-2x src/persona.ts PERSONA_ENVELOPE_PREFIX / _RE).
+#
+# WHY: the fixed persona paragraphs live in the SIDECAR system prompt (src/soul.ts), so the
+# zoe-data-side swap in zoe_agent.py (legacy lane) never reached this lane: with the flag on,
+# the system prompt was byte-identical to flag off (2026-10-06 flag attribution, 2,384 tokens
+# both ways). zoe-data owns the persona DATA (household record + each member's mode), so it
+# renders the block here, per turn, and forwards it on one envelope line; the sidecar strips it
+# and swaps it for the fixed paragraphs in THAT turn's system prompt.
+#
+# WIRE ORDER: between the replay line and the identity line:
+#   " zoe-spec:<id>\n zoe-replay:1\n zoe-persona:<JSON string>\n zoe-uid:<id>\n<blocks>\n<message>"
+# Flag off, nothing loaded, a member held on the fixed persona (no opt-in row, a minor while
+# persona_layer.MINORS_GET_PERSONA is False, a failed lookup) or wire 1 = NO line = the bytes
+# are exactly what they were. The JSON string keeps the multi-line block on ONE line.
+_PERSONA_ENVELOPE_PREFIX = " zoe-persona:"
+_PERSONA_ENVELOPE_RE = re.compile(r"^ zoe-persona:[^\n]*\n")
+# The slot budget for the block, in tokens (persona_layer.estimate_tokens). The renderer itself
+# caps at 175; this is the wire-level ceiling the sidecar mirrors (PERSONA_MAX_TOKENS).
+_PERSONA_MAX_TOKENS = 400
+# A cold snapshot costs two small reads; the first token never waits longer than this for them.
+_PERSONA_REFRESH_BUDGET_S = 0.5
+
+
+async def _persona_context_block(user_id: str) -> str:
+    """The rendered household persona block for THIS member, or "" (= leave the fixed persona).
+
+    Never raises and never stalls the turn. The flag is read per call (``persona_layer.enabled``);
+    the member's mode comes from ``persona_layer.block_for(user_id)``, which already carries the
+    household policy: guests / synthetic ids get the household tone and no relationship mode, a
+    member with no stored mode (no opt-in) or whose lookup failed keeps the fixed persona, and a
+    minor keeps it while ``MINORS_GET_PERSONA`` is False. Keyed by the acting id only, so one
+    member's mode can never be rendered for another."""
+    try:
+        if _wire_version() < _WIRE_2:  # a 1.x sidecar does not parse the line: it would reach the model
+            return ""
+        import persona_layer
+
+        if not persona_layer.enabled():
+            return ""
+        uid = (user_id or "").strip()
+        try:
+            await asyncio.wait_for(persona_layer.refresh(uid), timeout=_PERSONA_REFRESH_BUDGET_S)
+        except asyncio.TimeoutError:
+            logger.warning("PERSONA_BLOCK refresh timed out; the fixed persona stands")
+            return ""
+        block = persona_layer.block_for(uid)
+        if not block:
+            return ""
+        if persona_layer.estimate_tokens(block) > _PERSONA_MAX_TOKENS:
+            logger.warning("PERSONA_BLOCK over the %d-token slot budget; the fixed persona stands", _PERSONA_MAX_TOKENS)
+            return ""
+        logger.info("PERSONA_BLOCK user=%s chars=%d", uid, len(block))
+        return block
+    except Exception:  # noqa: BLE001 - a persona is optional; the turn is not
+        logger.warning("PERSONA_BLOCK failed; the fixed persona stands", exc_info=True)
+        return ""
+
+
+def _wrap_message_with_persona(message: str, block: str) -> str:
+    """Prefix ``message`` with the persona envelope, or return it unchanged (no block)."""
+    if not block:
+        return message
+    return f"{_PERSONA_ENVELOPE_PREFIX}{json.dumps(block, ensure_ascii=True)}\n{message}"
+
+
 # Machine-readable REPLAY-ISOLATION envelope. MUST match the sidecar's parser
 # (labs/flue-zoe-brain-2x src/replay-mode.ts REPLAY_ENVELOPE_PREFIX / _RE).
 #
@@ -534,6 +600,8 @@ def _strip_replay_envelope(message: str) -> str:
         message = _REPLAY_ENVELOPE_RE.sub("", message)
         # The speculative-turn marker is trusted the same way: never user-forgeable.
         message = _SPECULATIVE_ENVELOPE_RE.sub("", message)
+        # ...and so is the persona block: only the seam may set it.
+        message = _PERSONA_ENVELOPE_RE.sub("", message)
     return message
 
 
@@ -1699,6 +1767,9 @@ async def _run_flue_brain_streaming_turn(
         if hedge_block:
             brain_message = f"{brain_message}\n{hedge_block}"
     outbound_message = _wrap_message_with_identity(brain_message, uid)
+    # Household persona + this member's mode (ZOE_PERSONA_LAYER, default OFF): rides between the
+    # replay line and the identity line. "" (the default) = unchanged bytes.
+    outbound_message = _wrap_message_with_persona(outbound_message, await _persona_context_block(uid))
     # Replay isolation rides OUTSIDE the identity wrap so its line is first on the
     # wire. Only the replay harness ever passes this; absent → unchanged bytes.
     outbound_message = _wrap_message_with_replay(

@@ -81,6 +81,11 @@ import {
   stripReplayEnvelope,
 } from '../replay-mode.ts';
 import {
+  forwardedPersonaFromMessages,
+  stripPersonaEnvelope,
+  withPersonaBlock,
+} from '../persona.ts';
+import {
   bindTurnSpeculativeId,
   forwardedSpeculativeTurnFromMessages,
   stripSpeculativeEnvelope,
@@ -217,7 +222,10 @@ export function applyPolicies(context: Context, userModelSuffix = ''): Context {
   // The B1.1 speculative-turn line rides OUTERMOST (ahead of replay), so it
   // comes off first. See src/speculative-turn.ts.
   const unwrapped = stripReplayEnvelope(stripSpeculativeEnvelope(context.messages));
-  const clean = { ...context, messages: stripIdentityEnvelope(unwrapped) };
+  // The household persona block (src/persona.ts) rides between the replay and identity lines;
+  // read it off the NEWEST user message, then strip it everywhere. Absent = today prompt.
+  const persona = forwardedPersonaFromMessages(unwrapped);
+  const clean = { ...context, messages: stripIdentityEnvelope(stripPersonaEnvelope(unwrapped)) };
   // ZOE_BRAIN_ELIDE_STALE_BLOCKS (src/context-blocks.ts): older user messages lose
   // their injected blocks before windowing. Disclosure below still reads `clean`,
   // so the session-sticky tool block never retracts when a block is elided.
@@ -225,7 +233,8 @@ export function applyPolicies(context: Context, userModelSuffix = ''): Context {
   const sent = elided === clean.messages ? clean : { ...clean, messages: elided };
   // The user-model block (src/user-model.ts) joins the system prompt BEFORE
   // windowing, so the history budget is charged for it. '' → unchanged.
-  const windowed = windowContextToBudget(withUserModelBlock(sent, userModelSuffix));
+  // The persona swap happens BEFORE windowing too, so the history budget is charged for it.
+  const windowed = windowContextToBudget(withUserModelBlock(withPersonaBlock(sent, persona), userModelSuffix));
   const safe = stripCodingBuiltins(windowed);
   const disclosed = progressiveToolsEnabled()
     ? discloseTools(safe, clean.messages)
@@ -253,12 +262,12 @@ export interface PromptSections {
  */
 export function promptSections(context: Context): PromptSections {
   const unwrapped = stripReplayEnvelope(stripSpeculativeEnvelope(context.messages));
-  const uid = forwardedIdentityFromMessages(unwrapped) || (process.env.ZOE_BRAIN_USER_ID ?? '');
+  const uid = forwardedIdentityFromMessages(stripPersonaEnvelope(unwrapped)) || (process.env.ZOE_BRAIN_USER_ID ?? '');
   const sent = applyPolicies(context, cachedUserModelSuffix(uid.trim()));
   const tokens = (ms: Message[]) => ms.reduce((n, m) => n + estimateMessageTokens(m), 0);
   let last = sent.messages.length;
   while (last > 0 && sent.messages[last - 1].role !== 'user') last -= 1;
-  const stored = stripIdentityEnvelope(unwrapped);
+  const stored = stripIdentityEnvelope(stripPersonaEnvelope(unwrapped));
   return {
     system: estimateTextTokens(sent.systemPrompt ?? ''),
     tools: estimateToolTokens(sent.tools),
@@ -297,7 +306,7 @@ export function bindIdentityForRound(context: Context, signal?: AbortSignal): vo
   bindTurnSpeculativeId(signal, forwardedSpeculativeTurnFromMessages(context.messages));
   const specStripped = stripSpeculativeEnvelope(context.messages);
   bindTurnReplayMode(signal, forwardedReplayFromMessages(specStripped));
-  bindTurnUserId(signal, forwardedIdentityFromMessages(stripReplayEnvelope(specStripped)));
+  bindTurnUserId(signal, forwardedIdentityFromMessages(stripPersonaEnvelope(stripReplayEnvelope(specStripped))));
 }
 
 const DEFAULT_TEMPERATURE = 0.5;

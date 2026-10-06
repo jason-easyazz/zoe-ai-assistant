@@ -1,10 +1,13 @@
 """Persona layer, phase 0 — household persona + per-member mode (flag-dark ``ZOE_PERSONA_LAYER``).
 
 Zoe's persona today is a fixed text block (the live copy is ``ZOE_SOUL`` in
-``labs/flue-zoe-brain-2x/src/agents/zoe.ts``; ``zoe_agent._ZOE_SOUL_BASE`` /
+``labs/flue-zoe-brain-2x/src/soul.ts``; ``zoe_agent._ZOE_SOUL_BASE`` /
 ``_ZOE_SOUL_VOICE`` are the dormant legacy lane's). This module expresses that persona as
 DATA the household can read and reset, renders it deterministically (no LLM), and — when
-``ZOE_PERSONA_LAYER`` is on — swaps the rendered block in for the fixed persona paragraphs.
+``ZOE_PERSONA_LAYER`` is on — swaps the rendered block in for the fixed persona paragraphs:
+on the legacy lane here (``apply_to_prompt``), on the LIVE Flue lane by forwarding ``block_for``
+on a ``zoe-persona`` envelope line (``zoe_flue_client._persona_context_block``) that the sidecar
+(``src/persona.ts``) swaps in.
 
 Normative rules live in ``docs/governance/emotional-safety-note.md``; design in
 ``docs/research/personality-identity-layer-2026-10-04.md``. The ones this file enforces:
