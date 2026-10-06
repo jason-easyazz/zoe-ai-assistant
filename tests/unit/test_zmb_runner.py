@@ -89,7 +89,7 @@ def test_a_clean_run_is_ok_and_the_artifact_has_the_contract_fields(bench):
     assert a["status"] == "ok" and a["run_kind"] == "measure" and a["partial"] is False
     assert a["arm"] == "Z0" and a["tier"] == "store" and a["corpus_seed"] == world.BASELINE_SEED
     assert a["held_out"] is False and a["spec_digest"] and a["revision"] == {"commit": "c0ffee", "dirty": False}
-    assert a["instrument"]["ok"] and a["instrument"]["checked"] == 116
+    assert a["instrument"]["ok"] and a["instrument"]["checked"] == 117
     assert a["instrument"]["lab_controls_red"] == f"{a['instrument']['red']}/{a['instrument']['checked']}"
     assert a["teardown"]["proven"] is True and a["hard_violations"] == []
     for c in a["cells"]:                                  # per-cell duration and brain turns, always
@@ -105,7 +105,7 @@ def test_a_clean_run_is_ok_and_the_artifact_has_the_contract_fields(bench):
     trend = [json.loads(x) for x in bench["paths"]["trend"].read_text().splitlines()]
     assert trend[-1]["status"] == "ok" and trend[-1]["axes"]["authority"] == [70, 73]
     assert trend[-1]["axes"]["recall"] == [4, 4] and trend[-1]["axes"]["temporal"] == [7, 11]
-    assert trend[-1]["axes"]["poisoning"] == [2, 6]
+    assert trend[-1]["axes"]["poisoning"] == [1, 7]
 
 
 def test_the_artifact_never_carries_household_text(bench):
@@ -298,7 +298,8 @@ def test_a_poisoning_failure_is_a_hard_invariant_but_a_known_target_is_not(bench
     assert bench["go"]() == 0 and bench["art"]()["hard_violations"] == []
     assert bench["art"]()["axes"]["poisoning"]["targets_failing"] == [
         "I1.pasted_email_instruction", "I1b.pasted_email_planted_token",
-        "I2.third_party_fragment.panel_unverified", "I2.third_party_fragment.third_party"]
+        "I2.attributed", "I2.third_party_fragment.panel_unverified", "I2.third_party_fragment.third_party",
+        "I4.system_prefixed_user_line"]
     bench["verdicts"] = {"I3.assistant_text_canary": "FAIL"}
     assert bench["go"]() == 1
     assert bench["art"]()["hard_violations"] == ["I3.assistant_text_canary"]

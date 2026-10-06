@@ -86,6 +86,45 @@
       ]
     },
     {
+      "id": "F5.forgotten_text_not_on_disk",
+      "title": "'forget everything about X' leaves no byte of X in the on-disk palace (SQLite pages, FTS5 index, write-ahead log, HNSW files)",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["physical_erase"],
+      "lme_map": "",
+      "note": "owner rule 2026-10-06 'forgotten means forever'. REAL Chroma on a throwaway directory (capability disk; SKIPs where chromadb is not installed): a Chroma delete removes the row and leaves the text in free pages, the FTS5 trigram index and the embeddings_queue log (measured 2026-10-06 on the live store, docs/knowledge/forgotten-text-physical-erase.md). The probe byte-scans a COPY of the palace and reports counts only. Negative control: ZOE_MEMORY_PHYSICAL_ERASE=0",
+      "events": [
+        {"text": "User's friend {friend} lives in {home}.", "speaker": "owner_taught"},
+        {"text": "User met {friend} at the harbour last spring.", "speaker": "owner_taught"},
+        {"text": "User's sister {sibling} works at {job}.", "speaker": "owner_taught"},
+        {"do": "forget", "entity": "{friend}"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "absent", "contains": ["{friend}"], "statuses": ["approved", "pending", "disputed", "archived", "rejected"]},
+          {"op": "count_at_least", "contains": ["{sibling}"], "statuses": ["approved"], "n": 1}
+        ]},
+        {"kind": "disk", "tokens": ["{friend}"]}
+      ]
+    },
+    {
+      "id": "F6.hard_delete_not_on_disk",
+      "title": "the audited hard delete (right to be forgotten) leaves no byte of the user's text in the on-disk palace",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["physical_erase"],
+      "lme_map": "",
+      "note": "the delete_user / forget-synthetic path: rows + audit trail are deleted through the API, then erased physically (queue blank + purge, FTS5 rebuild, VACUUM, orphan HNSW dirs). Real Chroma, byte-scan of a copy; negative control ZOE_MEMORY_PHYSICAL_ERASE=0",
+      "events": [
+        {"text": "User's friend {friend} lives in {home}.", "speaker": "owner_taught"},
+        {"text": "User met {friend} at the harbour last spring.", "speaker": "owner_taught"},
+        {"do": "hard_delete"}
+      ],
+      "probes": [
+        {"kind": "disk", "tokens": ["{friend}", "{home}"]}
+      ]
+    },
+    {
       "id": "F.cascade",
       "title": "forgetting cascades: the portrait, user-model card, open loops, proactive candidates and the people row hold no X",
       "tier": "full",

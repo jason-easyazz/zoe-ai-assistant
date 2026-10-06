@@ -16,12 +16,15 @@ Event forms (a dict in ``cell.events``):
      "authority": "user_stated", "origin": "conversation"}     a people-graph write (``edges``)
     {"do": "needles"}                                          teach the seeded recall corpus (``needles.corpus``)
     {"do": "filler", "turns": 100}                             N seeded household-chatter turns (``needles.chatter``)
+    {"do": "hard_delete"}                                      the audited hard delete of the user (capability ``disk``)
 
 Probe forms (a dict in ``cell.probes``; every probe must pass):
 
     {"kind": "store",   "assertions": [...], "as": identity?}  scorers.score_store over the row export
     {"kind": "facts",   "gold": [[..]], "anti": [[..]]}        fact recall + anti-fact precision over stored rows
     {"kind": "entities","gold": [..]}                          entity precision / recall over stored rows
+    {"kind": "disk",    "tokens": ["..."]}                     capability ``disk``: no byte of the arm's REAL on-disk
+                                                               palace (SQLite pages, FTS5, write-ahead log, HNSW files) holds a token
     {"kind": "recall",  "query": "...", "k": 5, "needles": [], "anti_needles": [], "canaries": []}
     {"kind": "edges",   "assertions": [...]}                   the people graph (``scorers.score_edges``; ``edges``)
     {"kind": "hit_at_k", "k": 5, "min_rate": 0.9, "queries": "direct"|"paraphrase"}   the corpus's needles retrieved
@@ -48,8 +51,8 @@ RETAINED = ("approved", "pending", "disputed")
 _TURN_KEYS = {"text", "speaker", "day_offset", "writer", "proposes", "op", "attr", "assistant_text",
               "memory_type"}
 _CAPS = {"advance_clock": "clock", "ingest_as": "identities", "idle_pass": "idle_pass",
-         "conflict_pass": "conflict_pass", "edge": "edges"}
-_PROBE_KINDS = ("store", "facts", "entities", "recall", "answer", "edges", "hit_at_k")
+         "conflict_pass": "conflict_pass", "edge": "edges", "hard_delete": "disk"}
+_PROBE_KINDS = ("store", "facts", "entities", "recall", "answer", "edges", "hit_at_k", "disk")
 
 
 @dataclass
@@ -86,6 +89,8 @@ def required_capabilities(cell: Cell) -> "set[str]":
             need.add("reader")
         if p.get("kind") == "edges":
             need.add("edges")
+        if p.get("kind") == "disk":
+            need.add("disk")
         if p.get("as"):
             need.add("identities")
     return need
@@ -122,6 +127,8 @@ def _play(cell: Cell, arm: Arm, world: "World | None" = None) -> "list[dict[str,
         elif do == "filler":
             arm.ingest([Turn(f["text"], f["speaker"]) for f in needlemod.chatter(seed, int(ev["turns"]),
                                                                                    str(ev.get("salt", "")))])
+        elif do == "hard_delete":
+            arm.hard_delete()
         else:
             raise ValueError(f"unknown event action {do!r}")
     return passes
@@ -164,6 +171,8 @@ def _probe(p: "dict[str, Any]", arm: Arm, seed: str = "zmb-v1") -> scorers.Score
                                       min_precision=float(p.get("min_precision", 1.0)),
                                       min_recall=float(p.get("min_recall", 0.75)),
                                       ignore=p.get("ignore") or ())
+    if kind == "disk":   # capability ``disk``: the bytes Chroma leaves behind (counts only, never text)
+        return scorers.score_disk(arm.disk_residue(list(p["tokens"])))
     if kind == "recall":
         rows = arm.recall(p["query"], int(p.get("k", 5)))
         text = "\n".join(r.get("text", "") for r in rows)
@@ -190,7 +199,8 @@ def run_cell(cell: Cell, world: World, arm: Arm) -> Outcome:
     if not cell.probes:
         return done(Outcome("ERROR", reason="a store-tier cell with no probes proves nothing"))
     try:
-        arm.reset(demo_user(world, cell))
+        needs_disk = "disk" in required_capabilities(cell)
+        arm.reset(demo_user(world, cell), **({"disk": True} if needs_disk else {}))
         passes = _play(cell, arm, world)
         for rep in passes:
             if rep.get("skipped_reason") or rep.get("error"):

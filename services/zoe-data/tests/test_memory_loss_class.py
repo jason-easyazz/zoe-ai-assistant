@@ -247,7 +247,8 @@ async def test_delete_user_records_intent_first_and_completion_after(tmp_path, m
     assert intent["mempalace_id"] == done["mempalace_id"] and intent["mempalace_id"].startswith("delete_user:")
     assert "zoe_jason_aa" not in json.dumps(audit.upserts), "ids are hashed; nothing text-like is recorded"
     # the purge of the user's own per-row trail must exclude both tombstone actions
-    assert audit.where == {"$and": [{"user_id": "jason"}, {"action": {"$nin": ["delete_user", "delete_user_done"]}}]}
+    assert audit.where == {"$and": [{"user_id": "jason"}, {"action": {"$nin": [
+        "delete_user", "delete_user_done", "forget_erase", "forget_erase_done"]}}]}
 
 
 @pytest.mark.asyncio
@@ -298,6 +299,12 @@ _CHROMA_RECEIVER_HINTS = ("client", "chroma", "palace", "system", "col")   # for
 _REMOVERS = {
     ("memory_service.py", "_delete_ids"), ("memory_service.py", "_delete_audit_for_user_sync"),
     ("memory_service.py", "compact_drawers_index_sync"), ("memory_service.py", "_restore_drawers"),
+    # forget path (erase_rows): the audited row erase - tombstone intent row first, rows, their per-row audit trail
+    ("memory_service.py", "_delete_audit_for_rows_sync"),
+    # the ZMB disk lab's collection wrapper: real Chroma, but ONLY over a throwaway directory under the lab's scratch root
+    ("scripts/perf/zmb/lab_driver.py", "delete"),
+    # the forgotten ledger's own row (a salted hash, never palace text): an explicit re-teach releases it (#1883)
+    ("memory_forgotten.py", "release"),
     ("scripts/maintenance/compact_drawers_index.py", "compact"),
     ("scripts/maintenance/check_memory_tombstones.py", "compact"),
     ("scripts/maintenance/remediate_ownerless_memories.py", "delete_rows"),
@@ -366,9 +373,10 @@ def test_no_module_removes_palace_rows_outside_the_audited_paths():
     assert not offenders, f"unaudited removal path(s) — route through MemoryService.delete_user: {offenders}"
 
 
-def test_delete_ids_has_exactly_one_caller_delete_user():
-    """``_delete_ids`` is the unaudited primitive; the tombstone lives in delete_user. A new caller (any
-    module, any alias) would skip it and pass the scanner above."""
+def test_delete_ids_has_exactly_the_two_audited_callers():
+    """``_delete_ids`` is the unaudited primitive; the tombstone lives in its callers: ``delete_user`` (the
+    hard delete) and ``erase_rows`` (the forget path: content-free ``forget_erase`` intent row first, ``_done``
+    after). A new caller (any module, any alias) would skip it and pass the scanner above."""
     refs = []
     for rel, text in _tracked_sources():
         tree = ast.parse(text)
@@ -376,7 +384,8 @@ def test_delete_ids_has_exactly_one_caller_delete_user():
             for n in ast.walk(fn_node):
                 if (isinstance(n, ast.Attribute) and n.attr == "_delete_ids") or (isinstance(n, ast.Name) and n.id == "_delete_ids"):
                     refs.append((rel, fn_node.name))
-    assert set(refs) - {("memory_service.py", "_delete_ids")} == {("memory_service.py", "delete_user")}, refs
+    assert set(refs) - {("memory_service.py", "_delete_ids")} == {
+        ("memory_service.py", "delete_user"), ("memory_service.py", "erase_rows")}, refs
 
 
 @pytest.mark.parametrize("source,expected", [
