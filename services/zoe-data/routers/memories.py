@@ -837,6 +837,17 @@ async def memory_for_prompt(
         description="'continuity' pins facts from the last few days ahead of "
         "relevance (the flue seam's mood-statement turns)",
     ),
+    focus_people: Optional[list[str]] = Query(
+        None,
+        description="people.id values the question NAMES (the seam's named-person "
+        "recall floor): forces the semantic search and the people-graph relational "
+        "block, with those people first. Scoped to user_id like every read here",
+    ),
+    force_recall: bool = Query(
+        False,
+        description="Run the semantic search whatever the message looks like (the "
+        "named-person floor, for a person with no contact row to focus)",
+    ),
     _: None = Depends(require_internal_token),
 ):
     """Compact, cited memory packet for injection into an agent's system prompt.
@@ -872,7 +883,13 @@ async def memory_for_prompt(
     all_rows = await svc.load_for_prompt(user_id, limit=scan)
     facts = all_rows[:limit]
     hits: list[MemoryRef] = []
-    needs_search = _message_needs_memory(message) or emo_turn or continuity
+    # Named-person floor (ZOE_PERSON_RECALL_FLOOR): a question that names a person the user
+    # knows forces the search, and leads the relational block with that person. In-process
+    # callers that omit these receive the Query() descriptors, which are neither a list
+    # nor True - so they stay on the unchanged path.
+    focus = [f for f in focus_people if isinstance(f, str) and f] if isinstance(focus_people, list) else []
+    forced = force_recall is True or bool(focus)
+    needs_search = _message_needs_memory(message) or emo_turn or continuity or forced
     if message.strip() and needs_search:
         try:
             hits = await svc.search(message, user_id=user_id, limit=6)
@@ -940,7 +957,8 @@ async def memory_for_prompt(
     # Best-effort — compose_packet never raises.
     from zoe_memory_compose import compose_packet
 
-    block = await compose_packet(user_id, message)
+    block = await (compose_packet(user_id, message, focus_ids=focus) if focus
+                   else compose_packet(user_id, message))
     if block:
         result = _fold_relational_block(result, block)
 

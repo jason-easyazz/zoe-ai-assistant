@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-537 flags; 535 not documented in `.env.example`.
+538 flags; 536 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -351,6 +351,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_PERSON_LLM_CONFIDENCE_MIN` | `'0.4'` | no | NO | `services/zoe-data/person_extractor_llm.py` |
 | `ZOE_PERSON_LLM_PREFILTER` | `''` | no | NO | `services/zoe-data/person_extractor_llm.py` |
 | `ZOE_PERSON_MERGE_ENABLED` | `''` | no | NO | `services/zoe-data/person_merge.py` |
+| `ZOE_PERSON_RECALL_FLOOR` | `-` | no | NO | `services/zoe-data/memory_gate.py` |
 | `ZOE_PERSON_SUGGEST_ENABLED` | `''` | no | NO | `services/zoe-data/pending_suggestions.py` |
 | `ZOE_PIN_CHALLENGE_TTL_S` | `'120'` | no | NO | `services/zoe-data/routers/panel_auth.py` |
 | `ZOE_PIN_LOCKOUT_S` | `'300'` | no | NO | `services/zoe-data/routers/panel_auth.py` |
