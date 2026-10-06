@@ -152,7 +152,13 @@ def test_anchored_model_fact_is_user_stated_only_when_the_users_turn_supports_it
     ok = put(svc, "User lives in Hobart.", "turn_digest", source_excerpt="I moved to Hobart in May")
     bad = put(svc, "User lives in Perth.", "turn_digest", source_excerpt="Casey moved to Perth in May")
     assert meta(svc, ok.id)["authority"] == ma.USER_STATED
-    assert meta(svc, ok.id)["authority_basis"] == "anchored_user_turn"
+    # a plain first-person sentence of the turn ENTAILS it: the owner speaking (ZMB C1), user_stated POWER
+    assert meta(svc, ok.id)["authority_class"] == ma.USER_STATED_DERIVED
+    assert meta(svc, ok.id)["authority_basis"] == ma.VERBATIM_BASIS
+    # supported but hedged: still the user's derived fact, no power over what they said before
+    hedged = put(svc, "User lives in Cairns.", "turn_digest", source_excerpt="I moved to Cairns in May I think",
+                 user_turn_id="h-1")
+    assert meta(svc, hedged.id)["authority_basis"] == "anchored_user_turn"
     assert meta(svc, bad.id)["authority"] == ma.INFERRED
     assert meta(svc, bad.id)["authority_basis"] == "unanchored"
 
@@ -213,15 +219,22 @@ def test_the_users_correction_wins(svc):
     # the regex extractor's correction path is user_stated by construction
     again = edit(svc, new.id, "User lives in Broome.", "chat_regex", source_excerpt="actually I live in Broome")
     assert again is not None and recalled(svc) == ["User lives in Broome."]
-    # a MODEL's paraphrase of the user's turn (user_stated_derived) is not the user's own
-    # statement: it parks as a candidate until the person says yes - then it wins
+    # the per-turn digest reading the owner's OWN plain sentence ("I live in Darwin now") is the owner changing
+    # their mind (ZMB C1): it updates, with the honest class `user_stated_derived` and the verbatim basis
     third = edit(svc, again.id, "User lives in Darwin.", "turn_digest",
-                 source_excerpt="Big news - I've moved. I live in Darwin now.")
-    assert third is None and recalled(svc) == ["User lives in Broome."]
+                 source_excerpt="Big news - I have moved. I live in Darwin now.")
+    assert third is not None and recalled(svc) == ["User lives in Darwin."]
+    assert (third.metadata["authority_class"], third.metadata["authority_basis"]) == (
+        ma.USER_STATED_DERIVED, ma.VERBATIM_BASIS)
+    # a paraphrase the turn does NOT plainly entail (hedged here) is only a MODEL's reading of it: it parks as a
+    # candidate until the person says yes - then it wins
+    fourth = edit(svc, third.id, "User lives in Cairns.", "turn_digest",
+                  source_excerpt="Cairns is where I live now I think")
+    assert fourth is None and recalled(svc) == ["User lives in Darwin."]
     (cand,) = status_of(svc, "disputed")
     assert cand.metadata["authority_class"] == ma.USER_STATED_DERIVED
     asyncio.run(svc.review(cand.id, decision="approve", actor="review_ui"))
-    assert recalled(svc) == ["User lives in Darwin."]
+    assert recalled(svc) == ["User lives in Cairns."]
 
 
 def test_inferred_edit_of_a_user_row_is_refused_and_leaves_a_candidate(svc, caplog):
@@ -290,11 +303,19 @@ def test_supersede_by_refuses_an_inferred_successor(svc, caplog):
     assert asyncio.run(svc.supersede_by(UID, old.id, inferred.id, actor="implicit_supersede")) is False
     assert meta(svc, old.id)["status"] == "approved"
     assert "AUTHORITY_BLOCKED writer=digest kind=home action=supersede" in caplog.text
-    # a model's paraphrase of the user's turn (user_stated_derived) is still not a direct statement
-    derived = put(svc, "User lives in Perth.", "turn_digest", source_excerpt="I live in Perth now",
+    # a model's paraphrase of the user's turn that the turn does not PLAINLY entail (user_stated_derived)
+    # is still not a direct statement
+    derived = put(svc, "User lives in Perth.", "turn_digest", source_excerpt="Perth is where I live now",
                   user_turn_id="t-2", status="pending")
     assert meta(svc, derived.id)["authority_class"] == ma.USER_STATED_DERIVED
+    assert meta(svc, derived.id)["authority_basis"] == "anchored_user_turn"
     assert asyncio.run(svc.supersede_by(UID, old.id, derived.id, actor="implicit_supersede")) is False
+    # ...but the owner's own plain sentence read by the per-turn digest has user_stated POWER (ZMB C1)
+    plain = put(svc, "User lives in Perth.", "turn_digest", source_excerpt="I live in Perth now",
+                user_turn_id="t-2b", status="pending")
+    assert (meta(svc, plain.id)["authority_class"], meta(svc, plain.id)["authority_basis"]) == (
+        ma.USER_STATED_DERIVED, ma.VERBATIM_BASIS)
+    assert ma.row_class(meta(svc, plain.id)) == ma.USER_STATED
     stated = put(svc, "User lives in Perth now.", "chat_regex", user_turn_id="t-3")
     assert asyncio.run(svc.supersede_by(UID, old.id, stated.id, actor="implicit_supersede")) is True
     assert meta(svc, old.id)["status"] == "superseded"
@@ -344,7 +365,7 @@ def test_a_model_paraphrased_negation_waits_for_the_persons_yes(svc, monkeypatch
 
     old = put(svc, "User plays tennis on Saturdays.", "voice_fact")
     new = put(svc, "User no longer plays tennis.", "turn_digest", memory_type="state_change",
-              tags=["state_change"], source_excerpt="I don't play tennis on Saturdays any more")
+              tags=["state_change"], source_excerpt="I do not play tennis on Saturdays any more I think")
     assert new.metadata["authority_class"] == ma.USER_STATED_DERIVED and new.metadata["status"] == "disputed"
     out = asyncio.run(memory_supersede.supersede_for_turn(svc, UID, "no longer", [new]))
     assert out["superseded"] == 0 and meta(svc, old.id)["status"] == "approved"
@@ -515,7 +536,7 @@ def test_digest_that_reads_the_users_own_words_is_derived_and_cannot_overwrite_a
     assert cand.metadata["origin"] == "digest" and cand.metadata["model"]  # honest about WHO wrote it
     # ...and over another DERIVED row (or any model row) the same digest does win
     derived_seed = put(svc, "User lives in Alice Springs.", "turn_digest", user_turn_id="d1",
-                       source_excerpt="I live in Alice Springs")
+                       source_excerpt="Alice Springs is where I live")
     assert derived_seed.metadata["authority_class"] == ma.USER_STATED_DERIVED
     new = edit(svc, derived_seed.id, "User lives in Hobart.", "digest",
                anchor_text="Big news, I moved to Hobart last week")
@@ -650,7 +671,7 @@ def test_bar_scenario_store_level(svc, scn):
 # ── 8. more break-the-fix controls ────────────────────────────────────────────
 
 def test_control_the_anchor_is_what_separates_a_derived_fact_from_a_guess(svc, monkeypatch):
-    put(svc, "User lives in Geraldton.", "turn_digest", source_excerpt="I live in Geraldton")  # derived
+    put(svc, "User lives in Geraldton.", "turn_digest", source_excerpt="Geraldton is where I live")  # derived
     guess = put(svc, "User lives in Hobart.", "turn_digest",
                 source_excerpt="Casey moved to Hobart last month")
     assert guess.metadata["status"] == "disputed" and guess.metadata["authority"] == ma.INFERRED
