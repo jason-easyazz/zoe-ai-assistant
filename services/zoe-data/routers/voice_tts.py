@@ -258,9 +258,22 @@ async def _voice_relational_lines(query: str, user_id: str) -> list[str]:
     this is ``[]`` (a true no-op). Best-effort: never raises.
     """
     try:
-        from zoe_memory_compose import compose_packet
+        from zoe_memory_compose import compose_enabled, compose_packet
 
-        block = await compose_packet(user_id, query)
+        # Named-person floor (ZOE_PERSON_RECALL_FLOOR, S21): a question that names a person this
+        # user knows gets the relational block whatever words it uses, led by that person.
+        # Only looked up when the composed block can be built at all (the flag is read first,
+        # so flag-off pays nothing). The vector half of this packet always searches already.
+        named: list = []
+        if compose_enabled():
+            import person_recall_floor
+
+            named = await person_recall_floor.resolve_named_people(query, user_id, lane="voice")
+        if named:
+            block = await compose_packet(
+                user_id, query, focus_ids=person_recall_floor.focus_ids(named) or None)
+        else:
+            block = await compose_packet(user_id, query)
     except Exception as exc:  # compose_packet already swallows; belt-and-braces
         logger.debug("voice relational compose failed (non-fatal): %s", exc)
         return []

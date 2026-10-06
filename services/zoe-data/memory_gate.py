@@ -10,6 +10,7 @@ Dependency-free on purpose (pure str → bool) so any module can import it cheap
 """
 from __future__ import annotations
 
+import os
 import re
 
 MEMORY_TRIGGER_WORDS = frozenset({
@@ -388,6 +389,159 @@ def own_fact_question_kind(message: str) -> str:
 
 def is_own_fact_question(message: str) -> bool:
     return bool(own_fact_question_kind(message))
+
+
+# ── Named-person questions (S21, ZOE_PERSON_RECALL_FLOOR) ────────────────────
+#
+# "How many children does Dana Whitfield have?" has no my/I, no event verb and no
+# own-fact noun, so no recall-floor shape claimed it and the brain answered "I don't
+# have any information about Dana Whitfield's children" with the corrected record in
+# the store (Samantha bar S21: recall_memory was called in 0 of 3 recorded runs). A
+# question that NAMES a person the user has told Zoe about is a question about the
+# stored record, whatever its grammar. This half is the PURE matching; resolving the
+# known names (a user's `people` rows, their person-fact entities) is
+# `person_recall_floor`, because it needs the database.
+#
+# The match is exact and whole-name, never a substring (the `LIKE %name%` resolver this
+# replaces would link "Sam" to "Samantha"):
+#   * a multi-word name matches as a contiguous, whole-word phrase, in any case;
+#   * a one-word reference (the first name of a multi-word contact, or a contact stored
+#     with one name) must be written capitalised ("Dana"), because a lower-case "dana"
+#     in typed text is as likely a word as a name; a message with NO capitals past its
+#     first letter (a speech-to-text transcript) is treated as caseless, so the voice
+#     lane's "how many kids does dana have" still reaches the store;
+#   * a first name that two contacts share, or that is an ordinary function word
+#     ("will", "may", "who"), names nobody.
+PERSON_FLOOR_ENV = "ZOE_PERSON_RECALL_FLOOR"
+# A question names at most this many people (bounds the focus read + the packet).
+PERSON_FLOOR_MAX_NAMED = 3
+
+_NAME_TOKEN_RE = re.compile(r"[^\W\d_]+(?:['’\-][^\W\d_]+)*")
+_POSSESSIVE_TAIL_RE = re.compile(r"['’]s$", re.IGNORECASE)
+_NOT_A_NAME = frozenset({
+    "a", "an", "and", "are", "am", "any", "as", "at", "be", "but", "by", "can", "could",
+    "did", "do", "does", "for", "from", "had", "has", "have", "hey", "how", "i", "if",
+    "in", "is", "it", "its", "may", "me", "my", "no", "not", "of", "ok", "okay", "on",
+    "or", "our", "please", "shall", "she", "should", "so", "the", "their", "them",
+    "then", "there", "they", "this", "that", "to", "us", "was", "we", "were", "what",
+    "whats", "when", "where", "which", "who", "whom", "whose", "why", "will", "with",
+    "would", "yes", "you", "your", "zoe",
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+})
+
+
+def person_floor_mode() -> str:
+    """ZOE_PERSON_RECALL_FLOOR: ``enforce`` (default: unset, ``1``, ``true``...) |
+    ``shadow`` (resolve and log ``RECALL_FLOOR ... mode=shadow``, force nothing) |
+    ``off`` (``0`` / ``false`` / ``no`` / ``off`` / empty: no lookup at all).
+    Per-call env read, the idiom of ``memory_authority.mode``."""
+    raw = os.environ.get("ZOE_PERSON_RECALL_FLOOR")
+    if raw is None:
+        return "enforce"
+    v = raw.strip().lower()
+    if v in ("0", "false", "no", "off", ""):
+        return "off"
+    if v == "shadow":
+        return "shadow"
+    return "enforce"
+
+
+def _name_tokens(text: str) -> list[tuple[str, bool]]:
+    """(casefolded token, written-capitalised) per word; a trailing 's is dropped."""
+    out: list[tuple[str, bool]] = []
+    for m in _NAME_TOKEN_RE.finditer(text or ""):
+        raw = m.group(0)
+        out.append((_POSSESSIVE_TAIL_RE.sub("", raw).casefold(), raw[:1].isupper()))
+    return out
+
+
+def _is_caseless(message: str) -> bool:
+    """No capital after the first letter: a transcript, or a lazily typed line."""
+    letters = [c for c in (message or "") if c.isalpha()]
+    return not any(c.isupper() for c in letters[1:])
+
+
+def is_person_question_sentence(sentence: str) -> bool:
+    """A question-shaped sentence that is not a how-to ("how do I add ...")."""
+    s = sentence or ""
+    if _PROCEDURAL_HOW_RE.match(s):
+        return False
+    return bool(_QUESTION_SHAPE_RE.match(s)) or s.rstrip().endswith("?")
+
+
+def person_question_sentences(message: str) -> list[str]:
+    """The question-shaped sentences of ``message`` (``event_sentences`` split)."""
+    return [s for s in event_sentences(message) if is_person_question_sentence(s)]
+
+
+def person_names_in_question(message: str, known_names) -> list[str]:
+    """The ``known_names`` (one user's own contact / person-entity names) that
+    ``message`` names, in order of first mention, at most ``PERSON_FLOOR_MAX_NAMED``.
+    Exact whole-name matching, see the block comment above. Pure; ``message`` is the
+    sentence (or message) to read; the caller decides which sentences are questions."""
+    msg_tokens = _name_tokens(message)
+    if not msg_tokens or not known_names:
+        return []
+    caseless = _is_caseless(message)
+    names = [n for n in dict.fromkeys(str(k).strip() for k in known_names) if n]
+    folded = {n: [t for t, _ in _name_tokens(n)] for n in names}
+    # first-name references: only where exactly one contact starts with that token
+    first_owner: dict[str, set[str]] = {}
+    for n, toks in folded.items():
+        if toks:
+            first_owner.setdefault(toks[0], set()).add(n)
+    hits: list[tuple[int, str]] = []
+    for n, toks in folded.items():
+        if not toks:
+            continue
+        pos = -1
+        if len(toks) >= 2:
+            for i in range(len(msg_tokens) - len(toks) + 1):
+                if [t for t, _ in msg_tokens[i:i + len(toks)]] == toks:
+                    pos = i
+                    break
+        if pos < 0:
+            # a one-word contact is that word; a multi-word contact answers to its
+            # first name when no other contact shares it
+            head = toks[0]
+            if (head in _NOT_A_NAME or len(head) < 2
+                    or (len(toks) >= 2 and len(first_owner.get(head, ())) != 1)):
+                continue
+            for i, (t, cap) in enumerate(msg_tokens):
+                if t == head and (cap or caseless):
+                    pos = i
+                    break
+        if pos >= 0:
+            hits.append((pos, n))
+    hits.sort()
+    return [n for _, n in hits][:PERSON_FLOOR_MAX_NAMED]
+
+
+def person_candidate_names(message: str) -> list[str]:
+    """Capitalised word runs (up to three words) that could be a person's name: the
+    lookup keys for person-fact entities (``slug:<name>``), which have no table to scan.
+    Function words and weekdays break a run; a possessive 's ends it. Pure."""
+    out: list[str] = []
+    run: list[str] = []
+
+    def _flush() -> None:
+        if run:
+            name = " ".join(run)
+            if name not in out:
+                out.append(name)
+        run.clear()
+
+    for m in _NAME_TOKEN_RE.finditer(message or ""):
+        raw = m.group(0)
+        word = _POSSESSIVE_TAIL_RE.sub("", raw)
+        if raw[:1].isupper() and word.casefold() not in _NOT_A_NAME and len(word) >= 2:
+            run.append(word)
+            if len(run) == 3 or _POSSESSIVE_TAIL_RE.search(raw):
+                _flush()
+        else:
+            _flush()
+    _flush()
+    return out[:PERSON_FLOOR_MAX_NAMED + 2]
 
 
 def message_needs_memory(message: str) -> bool:

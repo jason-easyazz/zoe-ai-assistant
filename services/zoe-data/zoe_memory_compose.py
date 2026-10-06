@@ -169,7 +169,7 @@ def _fmt_date(month: Optional[int], day: Optional[int], year: Optional[int]) -> 
     return label.strip()
 
 
-async def _fetch_relational(db, user_id: str) -> dict[str, list[dict[str, Any]]]:
+async def _fetch_relational(db, user_id: str, focus_ids=None) -> dict[str, list[dict[str, Any]]]:
     """Three bounded batch reads (people / relationships / dates). No N+1.
 
     Visibility mirrors the people router: a row is visible when it is
@@ -226,6 +226,13 @@ async def _fetch_relational(db, user_id: str) -> dict[str, list[dict[str, Any]]]
         rows = await cur.fetchall()
     out["dates"] = [dict(r) for r in rows]
 
+    # Named-person floor: the block is ABOUT the people the question names - their row, their
+    # edges, their dates - so it cannot be crowded out by the recency-ordered caps above.
+    # Skipped entirely (no read, same SQL, same output) when no one was named.
+    focus = [f for f in dict.fromkeys(str(x) for x in (focus_ids or ())) if f]
+    if focus:
+        await _lead_with_focus(db, user_id, focus, out, _extra)
+
     # Recent facts/likes per person — ONE bounded batch read (IN over the ≤8
     # people already fetched, no N+1), gated by the dossier flag so the default
     # path pays nothing. Grouped in Python; each person keeps its most-recent
@@ -254,6 +261,51 @@ async def _fetch_relational(db, user_id: str) -> dict[str, list[dict[str, Any]]]
         out["facts"] = facts
 
     return out
+
+
+async def _lead_with_focus(db, user_id: str, focus: list[str], out: dict, extra_cols: str) -> None:
+    """Make ``out`` ABOUT the named people: their rows, the edges that touch them (the other
+    end is named inside the edge line - "Mika's parent is Dana Whitfield") and their dates REPLACE
+    the recency-ordered household lists, which would otherwise fill the 8-row caps with whoever was
+    contacted last and push the answer out of the packet. Three bounded reads, every one scoped
+    ``user_id = ?`` - an id that is not this user's reads nothing (``out`` is then left empty)."""
+    marks = ",".join("?" for _ in focus)
+    async with db.execute(
+        f"""SELECT id, name, relationship, circle, context, notes{extra_cols}
+             FROM people
+            WHERE deleted = 0 AND user_id = ? AND id IN ({marks})
+            LIMIT ?""",
+        (user_id, *focus, _MAX_PEOPLE),
+    ) as cur:
+        led = [dict(r) for r in await cur.fetchall()]
+    out["people"] = led
+
+    async with db.execute(
+        f"""SELECT pr.rel_a_to_b AS label, pa.name AS name_a, pb.name AS name_b, pr.notes
+             FROM person_relationships pr
+             JOIN people pa ON pa.id = pr.person_a_id AND pa.deleted = 0
+             JOIN people pb ON pb.id = pr.person_b_id AND pb.deleted = 0
+            WHERE pr.user_id = ?
+              AND pr.valid_to IS NULL
+              AND (pr.person_a_id IN ({marks}) OR pr.person_b_id IN ({marks}))
+            ORDER BY pr.updated_at DESC
+            LIMIT ?""",
+        (user_id, *focus, *focus, _MAX_RELATIONSHIPS),
+    ) as cur:
+        led_rel = [dict(r) for r in await cur.fetchall()]
+    out["relationships"] = led_rel
+
+    async with db.execute(
+        f"""SELECT pid.label, pid.date_type, pid.month, pid.day, pid.year, p.name
+             FROM person_important_dates pid
+             JOIN people p ON p.id = pid.person_id AND p.deleted = 0
+            WHERE pid.user_id = ? AND pid.person_id IN ({marks})
+            ORDER BY pid.month, pid.day
+            LIMIT ?""",
+        (user_id, *focus, _MAX_DATES),
+    ) as cur:
+        led_dates = [dict(r) for r in await cur.fetchall()]
+    out["dates"] = led_dates
 
 
 async def _load_portrait(db, user_id: str) -> str:
@@ -439,7 +491,9 @@ def _build_lines(data: dict[str, list[dict[str, Any]]], portrait: str) -> tuple[
     return lines, refs
 
 
-async def compose_relational_block(user_id: str, message: str, db) -> Optional[dict[str, Any]]:
+async def compose_relational_block(
+    user_id: str, message: str, db, *, focus_ids=None
+) -> Optional[dict[str, Any]]:
     """Build the cited relational block, or None when it should be skipped.
 
     Returns None (a true no-op for the caller) when:
@@ -456,11 +510,15 @@ async def compose_relational_block(user_id: str, message: str, db) -> Optional[d
     """
     if not compose_enabled():
         return None
-    if not needs_relational(message):
+    # A question that names people the user knows (``focus_ids``, the named-person recall
+    # floor) is relational by definition, whatever words it uses.
+    if not focus_ids and not needs_relational(message):
         return None
     try:
-        data = await _fetch_relational(db, user_id)
-        portrait = await _load_portrait(db, user_id)
+        data = await _fetch_relational(db, user_id, focus_ids)
+        # A named-person block answers about those people; the household portrait is the
+        # packet's, not this turn's (and would only crowd the reserved slice).
+        portrait = "" if focus_ids else await _load_portrait(db, user_id)
     except Exception:
         logger.exception("memory compose: relational read failed (user=%s)", user_id)
         return None
@@ -471,7 +529,7 @@ async def compose_relational_block(user_id: str, message: str, db) -> Optional[d
     return {"lines": lines, "refs": refs}
 
 
-async def compose_packet(user_id: str, message: str) -> Optional[dict[str, Any]]:
+async def compose_packet(user_id: str, message: str, *, focus_ids=None) -> Optional[dict[str, Any]]:
     """Gate + open a DB context + build the cited relational block, or None.
 
     The single shared entry point for the composed relational half, called by
@@ -494,12 +552,14 @@ async def compose_packet(user_id: str, message: str) -> Optional[dict[str, Any]]
         return None
     if not (message and message.strip()):
         return None
-    if not needs_relational(message):
+    if not focus_ids and not needs_relational(message):
         return None
     try:
         from db_pool import get_db_ctx
 
         async with get_db_ctx() as db:
+            if focus_ids:
+                return await compose_relational_block(user_id, message, db, focus_ids=focus_ids)
             return await compose_relational_block(user_id, message, db)
     except Exception:
         logger.exception("memory compose: packet build failed (user=%s)", user_id)
