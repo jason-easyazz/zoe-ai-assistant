@@ -92,9 +92,9 @@
       "title": "history: asked where the owner lived before the move, the recall packet can answer with the old home",
       "tier": "store",
       "kind": "script",
-      "expected": "FAIL",
+      "controls": ["invalidate", "history"],
       "lme_map": "temporal-reasoning; BEAM knowledge update (the old value)",
-      "note": "measured: the old row IS kept (C1.old_fact_invalidated_not_deleted passes) but every read hides `superseded` rows (memory_service._BLOCKED_READ_STATUSES) and MemoryService.search does not expose them, so there is no history / as-of read to add to the Z0 arm; Arm.as_of stays NotImplementedError. The target for a bi-temporal read (the Postgres columns the decision record plans, or an arm that has one)",
+      "note": "fixed (audit P2.1): a question about how things used to be (memory_temporal.is_history_question) makes MemoryService.search add the facts that were replaced, each labelled 'Before that (...)' so it cannot be read as current; Z0.as_of is the real search(as_of=...). It was FAIL on main: the old row was kept but every read hid `superseded` rows. Controls: `invalidate` (the replaced row is deleted: there is no history to read) and `history` (the history read is off: the row is kept but never served). `supersede` is NOT a control here: with it off both homes stay approved and the old one is served as a CURRENT fact, which is C1's failure, not this cell's",
       "events": [
         {"text": "I live in {home_old}", "speaker": "owner_typed"},
         {"text": "I live in {home}", "speaker": "owner_typed"},
@@ -102,6 +102,23 @@
       ],
       "probes": [
         {"kind": "recall", "query": "where did I live before {home}", "k": 5, "needles": ["{home_old}"]}
+      ]
+    },
+    {
+      "id": "C2.history_is_labelled",
+      "title": "a replaced fact served for a history question is LABELLED as history ('Before that'), so it cannot be read as the current one; asked with 'used to'",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["history"],
+      "lme_map": "temporal-reasoning (knowledge update: the old value, marked)",
+      "note": "the same two-home update as C2.history_read, asked another way ('where did I used to live'): the old home must come back AND carry the 'Before that' label (memory_temporal.before_that), never as a bare 'User lives in <old home>' beside the current one. Control `history`: the history read off",
+      "events": [
+        {"text": "I live in {home_old}", "speaker": "owner_typed"},
+        {"text": "I live in {home}", "speaker": "owner_typed"},
+        {"do": "conflict_pass"}
+      ],
+      "probes": [
+        {"kind": "recall", "query": "where did I used to live", "k": 5, "needles": ["{home_old}", "Before that"]}
       ]
     },
     {
@@ -146,9 +163,9 @@
       "title": "the row's valid_from is the year the owner said ('since <year>'), not the year the sentence was captured",
       "tier": "store",
       "kind": "script",
-      "expected": "FAIL",
+      "controls": ["event_time"],
       "lme_map": "temporal-reasoning (event time vs ingestion time)",
-      "note": "measured: valid_from is stamped with the capture time (memory_service._build_metadata); the owner's 'since <year>' lives only in the sentence. A bi-temporal store (valid time distinct from record time) is what the decision rule's temporal axis asks for",
+      "note": "fixed (audit P2.1): valid_from is the event time stated in the owner's own words (memory_temporal.parse_validity: 'since 2015' -> 1 January 2015, precision year, basis `stated`); without a phrase it is the capture time, and a model writer never gets an event time. It was FAIL on main: valid_from was always the capture time. Control `event_time` (the parser off: valid_from falls back to the capture year)",
       "events": [
         {"text": "I live in {home}, I have been here since {since_year}", "speaker": "owner_typed"}
       ],

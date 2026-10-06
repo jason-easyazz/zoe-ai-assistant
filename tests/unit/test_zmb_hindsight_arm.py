@@ -399,10 +399,12 @@ def test_the_whole_store_tier_runs_clean_on_h1_and_h0_is_red_on_the_hard_axes():
     ran = [r for r in rows if r["verdict"] != "SKIP"]
     assert [r["id"] for r in ran if r["verdict"] == "ERROR"] == []
     unexpected = sorted(r["id"] for r in ran if r["expected"] == "PASS" and r["verdict"] != "PASS")    # a target H1 PASSES is the point (F3)
-    # KNOWN GAPS of the H arms' Zoe layer: none left. The five A3 provenance cells (the row export now carries source_excerpt /
-    # user_turn_id, stamped through Hindsight metadata) and the unverified-speaker hold (A7.panel_unverified_kept.*,
-    # I2.third_party_fragment.panel_unverified: a self-assertion from an unverified voice is a PENDING candidate, #1895) are ported. A gap that
-    # comes back must be listed HERE with its reason, never silently accepted: fix the adapter and shrink this list, never widen it.
+    # KNOWN GAPS of the H arms' Zoe layer: none left. The five A3 provenance cells (the row export carries source_excerpt / user_turn_id,
+    # stamped through Hindsight metadata), the unverified-speaker hold (A7.panel_unverified_kept.*, I2.third_party_fragment.panel_unverified:
+    # a self-assertion from an unverified voice is a PENDING candidate, #1895) and the two timelines (C4.valid_from_is_event_time: the layer
+    # stamps valid_from through the real memory_temporal.parse_validity / stamp; C2.history_read / history_is_labelled: a history question also
+    # gets the retired rows, labelled "Before that", #1896) are ported. A gap that comes back must be listed HERE with its reason, never
+    # silently accepted: fix the adapter and shrink this list, never widen it.
     known: "list[str]" = []
     assert unexpected == known, unexpected
     h0, _g = mk("H0")
@@ -605,16 +607,33 @@ def test_the_graph_is_per_cell_a_reset_starts_an_empty_one():
 CONFLICT_CELLS = sorted(c.id for c in CELLS.values() if c.tier == "store" and "conflict_pass" in cellmod.required_capabilities(c))
 
 
-def test_eight_cells_need_the_conflict_pass_and_each_controlled_one_goes_red_without_its_feature():
-    assert len(CONFLICT_CELLS) == 8
+def test_nine_cells_need_the_conflict_pass_and_each_controlled_one_goes_red_without_its_feature():
+    assert len(CONFLICT_CELLS) == 9
     controlled = [cid for cid in CONFLICT_CELLS if CELLS[cid].controls and CELLS[cid].expected == "PASS"]
-    assert len(controlled) == 7                                                     # C2.history_read is a known-failing target (Z0 too: no as-of read)
+    assert len(controlled) == 9 and {"C2.history_read", "C2.history_is_labelled"} <= set(controlled)      # the two timelines (#1896): C2 is a PASS cell now
     for variant in ("H1", "H2"):
         for cid in controlled:
             assert verdict(variant, cid) == "PASS", f"{variant} {cid}"
             for control in CELLS[cid].controls:
                 assert verdict(variant, cid, off=frozenset([control])) == "FAIL", f"switching {control} OFF must turn {cid} red on {variant}"
-    assert verdict("H1", "C2.history_read") == "FAIL" and verdict("H0", "C1.update_typed") == "SKIP"
+    assert verdict("H0", "C1.update_typed") == "SKIP"
+
+
+def test_the_stated_event_time_is_valid_from_and_its_control_turns_the_cell_red():
+    for variant in ("H1", "H2"):
+        assert verdict(variant, "C4.valid_from_is_event_time") == "PASS", variant
+        assert verdict(variant, "C4.valid_from_is_event_time", off=frozenset(["event_time"])) == "FAIL", variant
+
+
+def test_a_history_question_serves_the_retired_row_labelled_and_a_plain_one_does_not():
+    arm, _f = mk("H1")
+    arm.reset(USER)
+    arm.ingest([Turn("User lives in Perth.", "owner_taught"), Turn("User moved to Hobart.", "owner_taught")])
+    arm.run_conflict_pass()
+    old = [r["text"] for r in arm.recall("where did I live before Hobart", 5) if "Perth" in r["text"]]
+    assert old and all(t.startswith("Before that") for t in old)
+    assert all("Perth" not in r["text"] for r in arm.recall("where does the user live", 5))
+    arm.close()
 
 
 def test_the_conflict_pass_retires_by_deleting_the_document_and_keeps_the_row_as_history():

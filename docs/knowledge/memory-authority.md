@@ -264,6 +264,45 @@ S20-S22) and watch `AUTHORITY_BLOCKED` / `AUTHORITY_WOULD_BLOCK` for a night bef
 to `shadow` with one env line if a legitimate update is being parked. Voice-gate: none of the changed files
 is in `voice_gate_check.VOICE_PATH_PATTERNS`.
 
+## Two timelines on every row - temporal validity (`memory_temporal.py`, audit P2.1)
+
+Every row says WHEN IT WAS TRUE as well as WHEN ZOE LEARNED IT. No flag: the stamp is a pure addition;
+`ZOE_MEMORY_IMPLICIT_SUPERSEDE` stays what it was, the policy switch for whether a changed fact retires the old one.
+
+| key (epoch seconds, UTC) | meaning | written |
+|---|---|---|
+| `added_ts` (= `learned_at`) | when Zoe learned it; never rewritten | every ingest |
+| `valid_from` + `valid_from_basis` (`stated` / `captured`) + `valid_from_precision` (`year`/`month`/`day`, stated only) | when it became true: the event time the person SAID ("since 2018", "I moved last March", "for five years"), else the capture time | every ingest / edit |
+| `valid_until` (+ precision) | when the person says it stops ("until June"); exclusive | only if stated |
+| `invalid_at` (+ `invalid_at_precision`) | when it stopped being true: the successor's `valid_from` (never before the row began, never after its own `valid_until`); an archive stamps "now" | every supersede (`supersede_by`, `review(edit)`) and every archive; the row is KEPT |
+| `expired_at` | when Zoe stopped believing it (the transaction time of the retirement) | with `invalid_at` |
+
+* **Half-open**: a row is true on `[valid_from, min(invalid_at, valid_until))`. A successor's `valid_from` IS its predecessor's
+  `invalid_at`: no gap, no overlap. If the person states a start earlier than the old row began ("... since 2020", learned in 2026) the old
+  row's interval is empty, never inverted.
+* **An event time is only ever read from the person's own words.** `MemoryService._validity_span` hands the parser the source excerpt
+  (else the fact text) ONLY for a `user_stated` / `user_confirmed` write; a model writer (`turn_digest`, `digest`, `brain_tool`, ...)
+  and a `user_stated_derived` paraphrase get the capture time (basis `captured`). `parse_validity` is deterministic (stdlib +
+  `date_locale`, day-first numeric dates), ties a phrase to the right fact when one turn holds several, and ignores a start in the
+  future ("I'll move in March 2027" is an intention). "Until June" ends as June BEGINS; "through June" as it ends.
+* **History is a read, not a hole.** `MemoryService.history(query, user_id=, entity_id=, anchors=)` returns the `superseded` rows
+  (text untouched); `search(..., as_of=<epoch|ISO|datetime>)` returns the rows true at that instant, replaced ones included (a legacy
+  superseded row with no `invalid_at` is bounded by its successor, or not claimed at all; an unreadable `as_of` raises, it never
+  answers "now"). `search(..., history=None)` (default) adds the predecessors, each labelled "Before that (from 2018 until March 2024): ...",
+  ONLY when the question is a recall question with a history cue (`memory_temporal.is_history_question`: "where did I live
+  before?", "what did I used to...", "previously"); a plain question never sees one, a statement never triggers it, `history=False` is
+  the write path's opt-out, and a `limit` of 1 stays 1. Archived / rejected / pending / disputed rows are never history.
+* **Forgetting wins over history.** A superseded row that names something the person asked Zoe to forget is never returned (the hashed
+  ledger and the tombstone are checked; an error hides the row), and the forget sweep (`memory_forget_entity`) now archives
+  `superseded` rows too, so the name is gone from the history read as well as from the current one.
+* **The `used to` cue needs a state-change reading** (`memory_supersede.cue_applies`): "used to live in Perth" retires "lives in Perth",
+  "used to love Perth" retires nothing about where the person lives (audit S4).
+* **Existing rows**: nothing needs migrating (`memory_temporal.row_start` falls back to `added_ts`). `scripts/maintenance/memory_validity_backfill.py --dry-run`
+  prints the counts of what a backfill would stamp (counts only, no text, no `--apply`); the plan is
+  `memory_temporal.backfill_plan`. **Not run against the live palace.**
+* Proof: ZMB cells C2.history_read, C2.history_is_labelled, C4.valid_from_is_event_time (controls `invalidate`, `history`, `event_time`),
+  `test_memory_temporal.py`, `test_memory_implicit_supersede.py` (the `used to` table).
+
 ## Existing rows (backfill)
 
 The live code derives a class for unstamped rows (`legacy_class_basis`), so nothing needs migrating for
@@ -293,5 +332,8 @@ rank 0. **Not run against the live palace.**
   (guests, the household default incl. minors, `members` / `optin` as explicit options, fail-open/closed, off = control).
 * `test_memory_own_change_of_mind.py` - the ZMB cells C1 / C5 (via the turn digest), I2 (panel_unverified) and A3 (teach lane, nightly digest, rate) with their inputs copied from the bench, each with a break-the-fix control and the over-reach controls (hedge, relative, report, rejected speaker, whole-day writers, shadow mode).
 * `test_memory_authority_backfill.py` - the dry-run report (read-only, no text) and the apply.
+* `test_memory_temporal.py` - the two timelines: the stated-validity parser (positives, negatives, per-fact binding), the half-open
+  interval, invalidate-never-delete, a model writer never gets an event time, the labelled history read, `as_of`, forgotten names
+  never resurface, the validity backfill plan, and the ZMB controls (`event_time`, `history`, `invalidate`) turning their cells red.
 * `test_identity_facts.py` - the digest-replay control now removes BOTH walls; removing only #1866's
   leaves the genuine row standing (defence in depth).

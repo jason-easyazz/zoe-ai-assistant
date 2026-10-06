@@ -49,7 +49,7 @@ import types
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
@@ -86,7 +86,7 @@ BANK_CONFIG = {
 #: (``authority`` also guards the people graph's edges, ``supersede`` / ``topic`` / ``invalidate`` / ``entailment`` are the conflict pass's and the
 #: model-writer lane's controls, ``physical_erase`` is the Postgres scrub: the same names as ``lab_driver.CONTROLS``)
 LAYER_FEATURES = ("guest", "affect", "identity", "ledger", "authority", "gate", "scrub", "provenance", "speaker",
-                  "supersede", "topic", "invalidate", "entailment", "physical_erase")
+                  "supersede", "topic", "invalidate", "entailment", "physical_erase", "event_time", "history")
 
 
 class HindsightUnavailable(NotImplementedError):
@@ -273,6 +273,7 @@ class Known:
     invalid_at: Any = ""            # set when a newer fact replaced this one - the row stays (history), it is never deleted
     supersedes_id: str = ""
     superseded_by_id: str = ""
+    span: "dict[str, Any]" = field(default_factory=dict)     # the stamped event time (``memory_temporal.stamp``: valid_from + its basis / precision)
 
     def as_ref(self) -> Any:        # the MemoryRef shape ``find_conflict`` reads
         return types.SimpleNamespace(id=self.id, text=self.text,
@@ -548,6 +549,25 @@ class ZoeLayer:
         by_id = {k.id: k for k in self.known.get(user, [])}
         return len(pairs), [(by_id[n.id], by_id[o.id], why) for n, o, why in pairs[:ms.NIGHTLY_CAP]]
 
+    def stamp(self, plan: "Plan", at: datetime) -> "dict[str, Any]":
+        """The two timelines (ZMB C4): the REAL ``memory_temporal.stamp`` - ``valid_from`` is the event time the owner STATED ("since 2015") in their own
+        words (a user-class write only, never a model's paraphrase), else the capture time ``at``."""
+        mt = self.svc.memory_temporal
+        span = (plan.excerpt or plan.text) if plan.cls in (self.ma.USER_STATED, self.ma.USER_CONFIRMED) else ""
+        with self._lab_controls("event_time"):
+            return mt.stamp(mt.parse_validity(span, plan.text, now=at) if span else mt.Validity(), at.timestamp())
+
+    def history(self, user: str, query: str, limit: int) -> "list[tuple[Known, str]]":
+        """``[(retired row, its 'Before that (...)' text)]`` for a question about how things used to be: the REAL ``memory_temporal``
+        ``is_history_question`` / ``rank_history`` / ``before_that`` over this layer's retired rows (a forgotten name is never served)."""
+        mt = self.svc.memory_temporal
+        with self._lab_controls("history"):
+            if not mt.is_history_question(query):
+                return []
+        old = {k.id: k for k in self.known.get(user, []) if k.status == "superseded" and not self.ledger_blocks(user, k.text)}
+        ranked = mt.rank_history(query, [(k.id, k.text, {**k.span, "invalid_at": k.invalid_at}) for k in old.values()], limit=min(mt.HISTORY_MAX, limit))
+        return [(old[rid], mt.before_that(text, meta)) for rid, text, meta in ranked]
+
     def supersede(self, user: str, old: Known, new: "Optional[Known]", now: float) -> None:
         """Retire ``old`` as history: ``status=superseded``, ``invalid_at`` (and the links) - never deleted. With ``invalidate`` OFF the row is dropped."""
         old.status, old.in_hindsight, old.invalid_at = "superseded", False, now
@@ -727,8 +747,9 @@ class HindsightArm(Arm):
                 return
         doc = self._retain(uid, plan.text, self._tags(uid, plan, turn.speaker), plan.memory_type, turn.day_offset, plan.excerpt, plan.turn_id)
         at = self._now() - timedelta(days=turn.day_offset)
+        sp = L.stamp(plan, at)
         new = Known(doc, plan.text, plan.cls, "approved", plan.origin, plan.memory_type, excerpt=plan.excerpt, turn_id=plan.turn_id,
-                    added_at=at.isoformat(timespec="seconds"), valid_from=at.timestamp())
+                    added_at=at.isoformat(timespec="seconds"), valid_from=sp["valid_from"], span=sp)
         L.remember(uid, new)
         if t is not None and plan.status == "superseded":
             L.supersede(uid, t, new, t.invalid_at)
@@ -875,13 +896,16 @@ class HindsightArm(Arm):
         first_unit = {}                                  # a held row links to the row the owner can see (a unit id), not to the document id
         for u in units:
             first_unit.setdefault(str(u.get("document_id") or ""), str(u.get("id") or ""))
-        held = [{"id": k.id, "text": k.text, "status": k.status, "authority_class": k.cls, "origin": k.origin,
-                 "contradicts_id": first_unit.get(k.contradicts_id, k.contradicts_id), "entity_type": "", "memory_type": k.memory_type,
-                 "user_id": uid, "source_excerpt": k.excerpt, "user_turn_id": k.turn_id,
-                 "valid_from": k.valid_from, "invalid_at": k.invalid_at, "supersedes_id": k.supersedes_id,
-                 "superseded_by_id": first_unit.get(k.superseded_by_id, k.superseded_by_id)}
-                for k in (self.layer.known.get(uid, []) if self.layer else []) if not k.in_hindsight]
+        held = [self._held_row(k, uid, first_unit) for k in (self.layer.known.get(uid, []) if self.layer else []) if not k.in_hindsight]
         return rows + held
+
+    @staticmethod
+    def _held_row(k: Known, uid: str, first_unit: "dict[str, str]") -> "dict[str, Any]":
+        return {"id": k.id, "text": k.text, "status": k.status, "authority_class": k.cls, "origin": k.origin,
+                "contradicts_id": first_unit.get(k.contradicts_id, k.contradicts_id), "entity_type": "", "memory_type": k.memory_type,
+                "user_id": uid, "source_excerpt": k.excerpt, "user_turn_id": k.turn_id,
+                "valid_from": k.valid_from, "invalid_at": k.invalid_at, "supersedes_id": k.supersedes_id,
+                "superseded_by_id": first_unit.get(k.superseded_by_id, k.superseded_by_id)}
 
     def stats(self) -> "dict[str, Any]":
         rows = self._rows_for(self._user)
@@ -926,6 +950,8 @@ class HindsightArm(Arm):
             ma = self.layer.ma
             rows = [r for r in rows if r["authority_class"] not in ("user_unverified", "quoted_third_party")]
             rows.sort(key=lambda r: -ma.RANK.get(r["authority_class"], 0))     # stable: Hindsight's order within a class
+            old = self.layer.history(uid, query, max(0, k - 1))       # a history question also gets the replaced facts, labelled
+            rows = rows[:k - len(old)] + [{**self._held_row(o, uid, {}), "text": txt} for o, txt in old]
         return rows[:k]
 
     def answer(self, query: str, k: int = 5) -> str:

@@ -112,7 +112,7 @@ class Arm(ABC):
     @abstractmethod
     def as_of(self, query: str, ts: str) -> "list[dict[str, Any]]":
         """Rows as the store believed them at ISO timestamp ``ts``. ``NotImplementedError`` when the arm
-        has no as-of read (Z0 today: audit section 5.4)."""
+        has no as-of read (Z0 has one since the two timelines, audit P2.1: ``MemoryService.search(as_of=...)``)."""
 
     @abstractmethod
     def stats(self) -> "dict[str, Any]":
