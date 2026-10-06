@@ -74,7 +74,7 @@ def full_measure():
 def test_every_controlled_cell_goes_red_with_its_features_off(full_control_pass):
     cp = full_control_pass
     assert cp["ok"] and cp["green"] == [] and cp["not_run"] == []
-    assert cp["checked"] == cp["red"] == 117       # 99 before the temporal / recall / poisoning / provenance / graph axes
+    assert cp["checked"] == cp["red"] == 123       # 99 before the temporal / recall / poisoning / provenance / graph axes
     assert {r["id"] for r in cp["rows"]} == {c.id for c in CELLS
                                              if c.controls and c.expected == "PASS" and c.tier == "store"
                                              and cellmod.required_capabilities(c) <= set(Z0Arm.capabilities)}
@@ -246,9 +246,9 @@ def test_z0_measures_as_documented(full_measure):
 def test_the_axis_table_for_z0_is_claimable_with_wilson_intervals(full_measure, full_control_pass):
     axes = artifact.axis_stats(full_measure, BY_ID, full_control_pass["ok"])
     a = axes["authority"]
-    # 66 held-back / writer-matrix cells + A3 x5 + A8 x2 graded (the A8 sanity cell is not evidence); the three A3
+    # 72 held-back / writer-matrix / A6-A7 cells + A3 x5 + A8 x2 graded (the A8 sanity cell is not evidence); the three A3
     # targets are failures in the rate, on purpose: a table without them would read as cherry-picked
-    assert a["n"] == 73 and a["pass"] == 70 and a["claimable"] and a["hard_violations"] == []
+    assert a["n"] == 79 and a["pass"] == 76 and a["claimable"] and a["hard_violations"] == []
     assert a["targets_failing"] == ["A3.nightly_digest_rows", "A3.taught_rows", "A3.user_turn_rows_rate"]
     for name in ("identity", "forgetting", "abstention", "extraction", "emotional", "temporal", "recall", "poisoning"):
         assert axes[name]["claimable"] and axes[name]["n"] > 0 and not axes[name]["hard_violations"], name

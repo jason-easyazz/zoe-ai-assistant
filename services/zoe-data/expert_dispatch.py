@@ -200,8 +200,11 @@ async def dispatch(domain: str, text: str, ctx: dict[str, Any], *, write_ok: boo
     # 3) ACTIVE: fulfill via the existing path.
     try:
         if kind == "expert":
+            _verdict_kw = ({} if ctx.get("speaker_verified") is None
+                           else {"speaker_verified": ctx["speaker_verified"]})
             reply = await store_fact(domain, text, user_id, session_id,
-                                     user_turn_id=str(ctx.get("user_turn_id") or "") or None)
+                                     user_turn_id=str(ctx.get("user_turn_id") or "") or None,
+                                     **_verdict_kw)
         else:
             from intent_router import Intent, execute_intent
             slots = dict(regex_slots or {})
@@ -392,7 +395,8 @@ def _record_quality_reject(source: str, reason: str, text: str) -> None:
 async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
                                session_id: Optional[str], user_turn_id: Optional[str],
                                memory_type: str, confidence: float,
-                               tags: list[str], anchor_text: Optional[str] = None) -> str:
+                               tags: list[str], anchor_text: Optional[str] = None,
+                               speaker_verified: Optional[bool] = None) -> str:
     """Ingest a conversational fact, merging it with an equivalent existing row.
 
     ``anchor_text`` is the user's OWN turn text the fact was mined from (user turns only):
@@ -452,6 +456,7 @@ async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
         session_id=session_id, user_turn_id=user_turn_id,
         memory_type=memory_type, confidence=confidence, status="approved",
         tags=tags, metadata=metadata, anchor_text=anchor_text,
+        **({} if speaker_verified is None else {"speaker_verified": speaker_verified}),
     )
     new_id = getattr(ref, "id", None)
     if ref is None:
@@ -508,7 +513,8 @@ async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
 
 
 async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
-                     user_turn_id: Optional[str] = None) -> Optional[str]:
+                     user_turn_id: Optional[str] = None,
+                     speaker_verified: Optional[bool] = None) -> Optional[str]:
     """people/memory: STORE a taught fact (statement) or RECALL one (question).
 
     Statements are persisted to MemPalace via MemoryService.ingest (which has
@@ -597,6 +603,7 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
         linked = await _mx_extract(
             text, user_id=user_id, session_id=session_id or None,
             source="voice_fact", auto_approve=True,
+            **({} if speaker_verified is None else {"speaker_verified": speaker_verified}),
         )
     except Exception as exc:
         logger.debug("store_fact person-link path skipped (%s)", exc)
@@ -661,6 +668,7 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
             svc, text, user_id=user_id, source="voice_fact",
             session_id=session_id or None, user_turn_id=user_turn_id,
             memory_type="fact", confidence=0.85, tags=["voice", "self"],
+            **({} if speaker_verified is None else {"speaker_verified": speaker_verified}),
         )
     except Exception as exc:
         # QA review F13: this teach fast path replies INSTANTLY, so a failed

@@ -148,6 +148,13 @@ def quote_for(meta: dict[str, Any], fact: str) -> str:
     a word boundary. An excerpt that merely repeats the fact adds nothing."""
     if effective_writer(meta) not in QUOTABLE_WRITERS:
         return ""
+    try:
+        from memory_authority import is_unverified
+
+        if is_unverified(meta):
+            return ""   # the packet says "you said": never for a speaker the gate did not confirm
+    except Exception:  # noqa: BLE001
+        pass
     excerpt = _one_line(str((meta or {}).get("source_excerpt") or ""))
     if not excerpt:
         return ""

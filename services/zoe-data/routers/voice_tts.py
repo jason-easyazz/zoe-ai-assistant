@@ -2938,12 +2938,18 @@ async def _schedule_voice_chat_save(
 
 
 async def _run_voice_memory_passes(
-    user_text: str, reply: str, user_id: str, session_id: str
+    user_text: str, reply: str, user_id: str, session_id: str,
+    speaker_verified: Optional[bool] = None,
 ) -> None:
     """Run both memory extraction passes for a completed voice exchange.
 
     Standalone (non-nested) version so it can be called from any early-return
     path — not just the main LLM path at the bottom of voice_command.
+
+    ``speaker_verified`` is the speaker gate's verdict for the turn (``_speaker_verdict``):
+    ``False`` makes a self-fact the turn states ``user_unverified`` instead of the owner's
+    own statement (memory_authority); ``None`` = no verdict = unchanged. Third-person
+    person-facts (the two person extractors) are not self-assertions and are unaffected.
     """
     try:
         # Mirror of the chat-lane guard: an EXPLICIT "remember/note that …"
@@ -2960,11 +2966,13 @@ async def _run_voice_memory_passes(
         from person_extractor import process_text as _person_extract
         from person_extractor_llm import process_text_llm as _person_extract_llm
         from latent_intent_detector import detect_and_store as _detect_suggestions
+        # Only a verdict is passed on: no verdict = the exact call the lane always made.
+        _verdict_kw = {} if speaker_verified is None else {"speaker_verified": speaker_verified}
         _mx_results = await asyncio.gather(
             _mi(user_text, reply, user_id=user_id, session_id=session_id,
-                source="voice_regex", auto_approve=True),
+                source="voice_regex", auto_approve=True, **_verdict_kw),
             _td(user_id, user_text, reply, session_id=session_id,
-                source="voice_turn_digest"),
+                source="voice_turn_digest", **_verdict_kw),
             # USER TEXT ONLY — never mine the assistant reply for facts
             # (poisoned-store bug 2026-07-07: Zoe's own sentences were stored
             # as approved user memories; see the matching comment in
@@ -3030,6 +3038,9 @@ async def voice_command(
     text = str((payload or {}).get("text", "")).strip()
     panel_id = str((payload or {}).get("panel_id", caller.get("panel_id") or "unknown"))
     identified_user_id: Optional[str] = (payload or {}).get("identified_user_id") or None
+    # The speaker gate's verdict for THIS turn, carried to every memory write it causes
+    # (None = the lane reports no verdict = today's behaviour; see _speaker_verdict).
+    _speaker_verified: Optional[bool] = None
     if not identified_user_id:
         # Panels that match speaker profiles locally send a claim + score; the
         # threshold decision stays server-side so a panel can never lower it,
@@ -3037,8 +3048,14 @@ async def voice_command(
         # STILL hold consent in the DB — a panel whose profile cache predates a
         # revocation must not keep identifying that user (fail closed).
         _claimed = _accept_panel_voice_claim(payload, caller)
+        _by_claim = False
         if _claimed and await _voice_claim_consented(_claimed):
             identified_user_id = _claimed
+            _by_claim = True
+        _speaker_verified = _speaker_verdict(payload, caller, identified_by_claim=_by_claim)
+        if _speaker_verified is not None:
+            logger.info("voice speaker verdict panel=%s verified=%s",
+                        str((payload or {}).get("panel_id") or "")[:40], _speaker_verified)
     # Forwarded by /voice/turn so end-to-end total can be recorded from the
     # true start of the request (audio upload). Falls back to command start.
     _t_turn_start = (payload or {}).get("_t_turn_start")
@@ -3482,7 +3499,7 @@ async def voice_command(
                 except Exception:
                     pass
                 await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
-                _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+                _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id, speaker_verified=_speaker_verified))
                 return {"ok": True, "panel_id": panel_id, "reply": reply_text,
                         "audio_base64": audio_b64_conf, "content_type": ct_conf}
             elif _contains_decision_keyword(lc, _CANCEL_KEYWORDS):
@@ -3571,7 +3588,7 @@ async def voice_command(
                     except Exception:
                         pass
                     await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
-                    _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+                    _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id, speaker_verified=_speaker_verified))
                     return {
                         "ok": True,
                         "panel_id": panel_id,
@@ -3706,7 +3723,7 @@ async def voice_command(
             except Exception:
                 pass
             await _schedule_voice_chat_save(session_id, text, _skybridge_reply, _skybridge_user)
-            _spawn_bg(_run_voice_memory_passes(text, _skybridge_reply, _skybridge_user, session_id))
+            _spawn_bg(_run_voice_memory_passes(text, _skybridge_reply, _skybridge_user, session_id, speaker_verified=_speaker_verified))
             return {
                 "ok": True,
                 "panel_id": panel_id,
@@ -3791,7 +3808,7 @@ async def voice_command(
                     }
                     _intro_audio = await synthesize({"text": reply_text}, caller=caller)
                     await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
-                    _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+                    _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id, speaker_verified=_speaker_verified))
                     return {
                         "ok": True,
                         "panel_id": panel_id,
@@ -3880,7 +3897,7 @@ async def voice_command(
                     )
                     _list_audio = await synthesize({"text": reply_text}, caller=caller)
                     await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
-                    _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+                    _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id, speaker_verified=_speaker_verified))
                     return {
                         "ok": True,
                         "panel_id": panel_id,
@@ -3932,7 +3949,7 @@ async def voice_command(
                     )
                     _cal_audio = await synthesize({"text": reply_text}, caller=caller)
                     await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
-                    _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+                    _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id, speaker_verified=_speaker_verified))
                     return {
                         "ok": True,
                         "panel_id": panel_id,
@@ -3961,7 +3978,7 @@ async def voice_command(
                     await _broadcast_reminder_ui(panel_id=panel_id, summary=reply_text, turn_key=_turn_key)
                     _rem_audio = await synthesize({"text": reply_text}, caller=caller)
                     await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
-                    _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+                    _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id, speaker_verified=_speaker_verified))
                     return {
                         "ok": True,
                         "panel_id": panel_id,
@@ -4109,7 +4126,7 @@ async def voice_command(
                     action=_pub_intent.name,
                 )
                 await _schedule_voice_chat_save(session_id, text, _pub_reply, effective_user)
-                _spawn_bg(_run_voice_memory_passes(text, _pub_reply, effective_user, session_id))
+                _spawn_bg(_run_voice_memory_passes(text, _pub_reply, effective_user, session_id, speaker_verified=_speaker_verified))
                 return {
                     "ok": True, "panel_id": panel_id,
                     "reply": _pub_reply,
@@ -4134,7 +4151,7 @@ async def voice_command(
                 await _broadcast_weather_ui(panel_id, _weather_fb_reply, turn_key=_turn_key)
                 _weather_fb_audio = await synthesize({"text": _weather_fb_reply}, caller=caller)
                 await _schedule_voice_chat_save(session_id, text, _weather_fb_reply, effective_user)
-                _spawn_bg(_run_voice_memory_passes(text, _weather_fb_reply, effective_user, session_id))
+                _spawn_bg(_run_voice_memory_passes(text, _weather_fb_reply, effective_user, session_id, speaker_verified=_speaker_verified))
                 return {
                     "ok": True,
                     "panel_id": panel_id,
@@ -4168,7 +4185,7 @@ async def voice_command(
             text, effective_user, session_id,
             channel="voice",
             router_decision=_router_decision,
-            extra_ctx={"db": db, "panel_id": panel_id},
+            extra_ctx={"db": db, "panel_id": panel_id, "speaker_verified": _speaker_verified},
         )
         if _xresult is not None:
             reply_text = _xresult.reply
@@ -4195,7 +4212,7 @@ async def voice_command(
             except Exception:
                 pass
             await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
-            _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+            _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id, speaker_verified=_speaker_verified))
             return {
                 "ok": True, "panel_id": panel_id, "reply": reply_text,
                 "audio_base64": _xaudio_b64, "content_type": _xct,
@@ -4571,7 +4588,7 @@ async def voice_command(
                         # Safe during GeneratorExit unwind: neither call suspends
                         # (_schedule_voice_chat_save only spawns a bg task).
                         await _schedule_voice_chat_save(session_id, "", heard_reply, effective_user)
-                        _spawn_bg(_run_voice_memory_passes(text, heard_reply, effective_user, session_id))
+                        _spawn_bg(_run_voice_memory_passes(text, heard_reply, effective_user, session_id, speaker_verified=_speaker_verified))
 
             return StreamingResponse(
                 _generate_voice_stream(),
@@ -4835,7 +4852,7 @@ async def voice_command(
     # handles both regex and LLM extraction passes in the background.
     if reply_text and effective_user and effective_user not in ("guest", "voice-daemon"):
         await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
-        _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+        _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id, speaker_verified=_speaker_verified))
 
     return {
         "ok": True,
@@ -4957,6 +4974,9 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
     for _claim_key in ("voice_user_id", "voice_score"):
         if (payload or {}).get(_claim_key) is not None:
             command_payload[_claim_key] = payload[_claim_key]
+    # The daemon's per-turn speaker-gate block (memory provenance; see _speaker_verdict).
+    if isinstance((payload or {}).get("speaker"), dict):
+        command_payload["speaker"] = payload["speaker"]
 
     result = await voice_command(command_payload, caller=caller, stream=False, db=db)
     result["text"] = transcript
@@ -5179,6 +5199,9 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     for _claim_key in ("voice_user_id", "voice_score"):
         if (payload or {}).get(_claim_key) is not None:
             command_payload[_claim_key] = payload[_claim_key]
+    # The daemon's per-turn speaker-gate block (memory provenance; see _speaker_verdict).
+    if isinstance((payload or {}).get("speaker"), dict):
+        command_payload["speaker"] = payload["speaker"]
 
     # Delegate LLM + per-sentence TTS to the existing streaming pipeline.
     # (voice_command's stream generator records the downstream llm_first_token /
@@ -5723,6 +5746,51 @@ def _speaker_id_threshold() -> float:
         return 0.82
 
 
+def _claim_fields(payload: dict) -> tuple[str, Any]:
+    """``(member, score)`` of the panel's speaker claim: the legacy flat
+    ``voice_user_id`` / ``voice_score`` pair, else the ``speaker`` block's
+    ``member`` / ``score`` (a daemon that sends both sends the same values)."""
+    user = str((payload or {}).get("voice_user_id") or "").strip()
+    if user:
+        return user, (payload or {}).get("voice_score")
+    block = (payload or {}).get("speaker")
+    if isinstance(block, dict):
+        return str(block.get("member") or "").strip(), block.get("score")
+    return "", None
+
+
+def _speaker_verdict(payload: dict, caller: dict, *, identified_by_claim: bool) -> Optional[bool]:
+    """What the speaker gate said about this turn, as the memory layer needs it
+    (``MemoryService.ingest(speaker_verified=...)``; docs/knowledge/memory-authority.md).
+
+    * ``True``  - the panel's claim PASSED the server's own gate (threshold + the member's
+      consent): ``identified_by_claim``. The panel's word alone never produces this;
+      a ``speaker.verified: true`` on the wire is ignored.
+    * ``False`` - the gate ran and did not confirm a member: a scored claim the server
+      refused (below ``ZOE_SPEAKER_ID_THRESHOLD``, a revoked profile), or the daemon's
+      ``speaker.verified: false`` (it scored the turn and nobody matched).
+    * ``None``  - no verdict: not a device caller, no ``speaker`` block / claim at all (the
+      gate is off or in shadow mode), or the caller named the speaker itself
+      (``identified_user_id``, a legacy / HA path). Today's behaviour, exactly.
+    """
+    if (caller or {}).get("source") != "device":
+        return None
+    if identified_by_claim:
+        return True
+    payload = payload or {}
+    user, raw_score = _claim_fields(payload)
+    if user:
+        try:
+            float(raw_score)
+        except (TypeError, ValueError):
+            return None      # a malformed claim is no evidence either way
+        return False
+    block = payload.get("speaker")
+    if isinstance(block, dict) and block.get("verified") is False:
+        return False
+    return None
+
+
 def _accept_panel_voice_claim(payload: dict, caller: dict) -> Optional[str]:
     """Gate a panel-computed speaker-ID claim (voice_user_id + voice_score).
 
@@ -5737,11 +5805,11 @@ def _accept_panel_voice_claim(payload: dict, caller: dict) -> Optional[str]:
     if (caller or {}).get("source") != "device":
         return None
     payload = payload or {}
-    user = str(payload.get("voice_user_id") or "").strip()
+    user, raw_score = _claim_fields(payload)
     if not user:
         return None
     try:
-        score = float(payload.get("voice_score"))
+        score = float(raw_score)
     except (TypeError, ValueError):
         return None
     threshold = _speaker_id_threshold()
