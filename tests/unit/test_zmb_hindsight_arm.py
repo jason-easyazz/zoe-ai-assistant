@@ -607,10 +607,12 @@ def test_the_graph_is_per_cell_a_reset_starts_an_empty_one():
 CONFLICT_CELLS = sorted(c.id for c in CELLS.values() if c.tier == "store" and "conflict_pass" in cellmod.required_capabilities(c))
 
 
-def test_nine_cells_need_the_conflict_pass_and_each_controlled_one_goes_red_without_its_feature():
-    assert len(CONFLICT_CELLS) == 9
+def test_the_conflict_pass_cells_each_go_red_without_their_feature():
+    # the set grows with the temporal axis (9 after #1896, 10 with C7 from #1903): pin the shape, not a count
+    assert len(CONFLICT_CELLS) >= 9
     controlled = [cid for cid in CONFLICT_CELLS if CELLS[cid].controls and CELLS[cid].expected == "PASS"]
-    assert len(controlled) == 9 and {"C2.history_read", "C2.history_is_labelled"} <= set(controlled)      # the two timelines (#1896): C2 is a PASS cell now
+    assert len(controlled) == len(CONFLICT_CELLS), "every conflict-pass cell is graded and controlled"
+    assert {"C2.history_read", "C2.history_is_labelled"} <= set(controlled)      # the two timelines (#1896): C2 is a PASS cell now
     for variant in ("H1", "H2"):
         for cid in controlled:
             assert verdict(variant, cid) == "PASS", f"{variant} {cid}"
