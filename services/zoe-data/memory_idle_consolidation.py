@@ -315,6 +315,13 @@ async def consolidate_session(session_id: str, user_id: str,
     # a fact the assistant SAID became a fact about the user (memory fidelity audit V5).
     user_turn_list = [str(r["content"]) for r in rows
                       if r["content"] and str(r["role"]) == "user"]
+    # Pasted content / another person's quoted speech is not the owner's own voice: only the owner's part of each
+    # turn is mined (own_words; ZMB I1/I2/I4).
+    try:
+        import own_words
+        user_turn_list = own_words.filter_turns(user_turn_list, "idle_consolidation")
+    except Exception as exc:  # noqa: BLE001 - fail-open: ingest's anchored check is the second wall
+        logger.debug("idle consolidation: own-words filter unavailable: %s", type(exc).__name__)
     # A turn naming an entity the user asked Zoe to forget is skipped, not re-mined (memory_forgotten, ZMB F3):
     # the chat rows are not erased, so without this the forgotten name returns at the next idle pass.
     try:

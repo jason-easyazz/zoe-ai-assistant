@@ -212,6 +212,14 @@ async def process_text_llm(
     # them: the 4B model's default is month-first ("7/8/1991" -> "July 8").
     from date_locale import normalize_numeric_dates
     text = normalize_numeric_dates(text)
+    # Only the owner's own words reach the model (own_words; ZMB I1/I2): see person_extractor.process_text.
+    import own_words
+    own = own_words.analyze(text)
+    if own.changed:
+        own_words.count_drops("person_extractor_llm", own)
+        text = own.text
+        if len(text.split()) < 4:
+            return 0
     if prefilter_enabled() and not mentions_person(text):
         # No plausible person mention → skip the ~0.6–1.3 s Gemma call
         # entirely (flag-gated; see prefilter rationale above).

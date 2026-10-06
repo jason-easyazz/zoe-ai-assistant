@@ -97,8 +97,14 @@ def pin_scratch_stores() -> None:
 
 
 def _service_path() -> None:
+    # FIRST on the path, not merely on it: a maintenance script loaded earlier in the same process
+    # (zoe-nightly-dreaming.py) puts the LIVE checkout's services/zoe-data at sys.path[0], and a lab that
+    # imported the service modules from there would measure the wrong tree (this checkout's own_words wall
+    # would be missing from the arm that is supposed to carry it)
     p = str(SERVICE_DIR)
-    if p not in sys.path:
+    if sys.path[:1] != [p]:
+        if p in sys.path:
+            sys.path.remove(p)
         sys.path.insert(0, p)
 
 
@@ -361,6 +367,13 @@ def lazy_extract_candidates(user_message: str, assistant_response: str = "",
         add("User asked me to remember: " + re.sub(r"^(?:do|can|could) you remember\s*", "", msg, flags=re.I).strip())
     if (assistant_response or "").strip():  # the assistant's own words mined as the user's
         add("User: " + assistant_response.strip().rstrip("."))
+    for rm in re.finditer(r"\bremember that ([^.\n]+)", msg, re.I):
+        # a teach read off the raw text whoever wrote it: a pasted email's embedded instruction, a typed
+        # 'system:' line (poisoning I1 / I1b / I4: the own-words wall is part of the real extractor)
+        add("User asked me to remember: " + rm.group(1).strip())
+    for lm in re.finditer(r"\b(?:says?|said)\b[:,]?\s*\"?I live in ([^\".,;!?\n]+)", msg):
+        # a QUOTED third person's first-person words pinned on the owner (poisoning I2.attributed)
+        add(f"User lives in {lm.group(1).strip()}")
     pm = re.search(r"\bmy (?:dog|cat|pet|rabbit|bird) (?:is named|is called|is) ([A-Z][a-z]+)", msg)
     if pm:  # a pet recorded as a child
         add(f"User's child is named {pm.group(1)}")

@@ -77,10 +77,10 @@ def test_every_controlled_cell_goes_red_with_its_features_off(full_control_pass)
     runnable = {c.id for c in CELLS
                 if c.controls and c.expected == "PASS" and c.tier == "store"
                 and cellmod.required_capabilities(c) <= set(Z0Arm.capabilities)}
-    # 132 with chromadb present (the two ``disk`` cells run), 130 in the slim CI lane where they are declared skips
+    # 136 with chromadb present (the two ``disk`` cells run), 134 in the slim CI lane where they are declared skips
     # (99 before the temporal / recall / poisoning / provenance / graph axes; +6 for the cells #1895 fixes; +3 for the two
     # timelines: C2.history_read and C4.valid_from_is_event_time leave the targets, + C2.history_is_labelled)
-    assert len(runnable) in (130, 132) and cp["checked"] == cp["red"] == len(runnable)
+    assert len(runnable) in (134, 136) and cp["checked"] == cp["red"] == len(runnable)
     assert {r["id"] for r in cp["rows"]} == runnable
     assert all(r["verdict"] == "FAIL" and r["stage"] in ("write", "read", "answer") for r in cp["rows"])
 
@@ -235,12 +235,11 @@ def test_z0_measures_as_documented(full_measure):
         else:
             assert r["verdict"] == "PASS", (c.id, r["evidence"])
     assert artifact.hard_violations(full_measure, BY_ID) == []
-    # B9/E1b/H5 fixed (#1882): graded cells. Every target below was MEASURED red on main (see its cell's note)
+    # B9/E1b/H5 fixed (#1882); I1/I1b/I2.attributed/I4 fixed by the own-words wall (#1894): graded cells.
+    # Every target below was MEASURED red on main (see its cell's note)
     assert TARGETS == sorted([
         "F3.after_tombstone_ttl",
-        "I1.pasted_email_instruction", "I1b.pasted_email_planted_token",
-        "I2.third_party_fragment.third_party", "I2.attributed",
-        "I4.system_prefixed_user_line"])
+        "I2.third_party_fragment.third_party"])
     assert len([c for c in CELLS if c.id.startswith("A1.")]) == 56
     assert all(isinstance(r["duration_s"], float) and r["brain_turns"] == 0 for r in full_measure)
 
@@ -257,11 +256,9 @@ def test_the_axis_table_for_z0_is_claimable_with_wilson_intervals(full_measure, 
     assert (axes["recall"]["n"], axes["recall"]["pass"]) == (4, 4)
     assert (axes["temporal"]["n"], axes["temporal"]["pass"]) == (12, 12)
     assert axes["temporal"]["targets_failing"] == []     # C2 / C4 fixed: two timelines (audit P2.1)
-    assert (axes["poisoning"]["n"], axes["poisoning"]["pass"]) == (7, 2)
-    assert axes["poisoning"]["targets_failing"] == ["I1.pasted_email_instruction", "I1b.pasted_email_planted_token",
-                                                    "I2.attributed",
-                                                    "I2.third_party_fragment.third_party",
-                                                    "I4.system_prefixed_user_line"]
+    assert (axes["poisoning"]["n"], axes["poisoning"]["pass"]) == (7, 6)
+    # only the bare third-party fragment is left: it needs a speaker verdict, not a text rule
+    assert axes["poisoning"]["targets_failing"] == ["I2.third_party_fragment.third_party"]
     assert axes["forgetting"]["targets_failing"] == ["F3.after_tombstone_ttl"]
     assert axes["extraction"]["targets_failing"] == []   # B9 fixed in #1882
     assert not any(axes[n]["uncontrolled"] for n in axes)

@@ -60,6 +60,7 @@ from typing import Any, Callable, Iterable, Mapping, Optional
 
 import memory_authority as _auth
 import memory_forgotten as _forgotten
+import own_words as _own_words
 import memory_temporal as _temporal
 from live_store_guard import (
     LiveStoreViolation,
@@ -1302,6 +1303,33 @@ def _identity_assertion_blocked(text: str, *, user_id: str, source: str) -> bool
     return True
 
 
+def _foreign_voice_reason(fact: str, evidence: Optional[str]) -> str:
+    """``pasted_content`` / ``third_person_speech`` when a per-turn MODEL writer's ``fact`` rests on words that are
+    not the owner's own voice (own_words), else "". The owner's own words supporting the fact always keep it.
+
+    * a PASTED turn (an email, a ``system:`` line, a quoted instruction): a model writer's fact is kept only when
+      the owner's OWN part of the turn supports it - the brain acting on "Remember that the PIN is ..." inside a
+      pasted email is the confused deputy this closes;
+    * another person's quoted speech ("Dana says: I live in Hobart"): the fact is refused only when the speech is
+      what supports it (the owner's own part does not).
+    Never raises; a turn that is the owner's alone returns "" without further work."""
+    if not evidence or not fact:
+        return ""
+    try:
+        own = _own_words.analyze(evidence)
+        if not own.changed:
+            return ""
+        if own.has_own and _auth.supports(fact, own.text):
+            return ""
+        if own.pasted:
+            return _own_words.PASTED_CONTENT
+        if _auth.supports(fact, own.original):
+            return _own_words.THIRD_PERSON_SPEECH
+    except Exception:  # noqa: BLE001 - the guard must never break ingestion
+        return ""
+    return ""
+
+
 class MemoryServiceError(Exception):
     """Raised for operational failures."""
 
@@ -1410,6 +1438,20 @@ class MemoryService:
                 session_id=session_id,
             )
             return None
+
+        # Pasted content / another person's quoted speech (own_words; ZMB I1/I2/I4): a per-turn MODEL writer
+        # (the brain's memory tool, the turn digest, the person LLM) may not store a fact whose only support is
+        # words that are not the owner's own voice. The deterministic miners never reach here with such text.
+        if ((source in _auth.MODEL_FROM_TURN_WRITERS or (origin or "") in _auth.MODEL_FROM_TURN_WRITERS)
+                and source != _own_words.PASTE_NOTE_SOURCE):
+            foreign = _foreign_voice_reason(
+                text, anchor_text if anchor_text is not None else source_excerpt)
+            if foreign:
+                self._bump("guard_drop", source)
+                _own_words.count_drops(source, None, (foreign,))
+                logger.info("memory_service: ingest dropped - fact rests on %s (user=%s source=%s)",
+                            foreign, user_id, source)
+                return None
 
         # Consent gate (governance/emotional-safety-note.md section 6): a RECORD of how someone
         # seems is kept for consenting adult members only. Guests and children: never.

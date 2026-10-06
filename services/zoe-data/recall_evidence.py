@@ -158,6 +158,9 @@ def quote_for(meta: dict[str, Any], fact: str) -> str:
     excerpt = _one_line(str((meta or {}).get("source_excerpt") or ""))
     if not excerpt:
         return ""
+    from own_words import instruction_shaped, is_pasted_row
+    if is_pasted_row(meta) or instruction_shaped(excerpt):
+        return ""          # quoted, not obeyed: an instruction-shaped excerpt never reaches the brain prompt
     if len(excerpt) > EXCERPT_MAX_CHARS:
         fact_words = _content_words(fact)
         best, best_score = excerpt, -1
