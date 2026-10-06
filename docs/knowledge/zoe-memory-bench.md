@@ -316,15 +316,16 @@ MALLOC_PERTURB_=85 PYTHONMALLOC=malloc bash /home/zoe/.zoe/bakeoff-2026-10/mp_ru
 ```
 
 The distilled tier in every cell is `FakeDistilledTier`, a TEST DOUBLE (the real `HindsightDistilledTier` is a stub). The cells prove the
-GLUE, never Hindsight's or MemPalace's retrieval quality. Result: 20 cells (17 graded, 2 sanity, 1 tracked target), 18 negative controls
-all red, 17/17 graded green on the real library with a scrubbed heap (16/16 on the double; HM-F6 needs a disk store).
+GLUE, never Hindsight's or MemPalace's retrieval quality. Result (2026-10-07, after the forget-alias sweep closed HM-F5, the last tracked target): 21 cells (19 graded, 2 sanity, 0 targets). On the
+double 17/17 runnable graded cells are green with 18 negative controls all red (HM-F6 needs a disk store, HM-F8 the real Hindsight tier); the
+library run adds HM-F6 under a scrubbed heap.
 
 | Cell | Claim | Controls (each alone) |
 |---|---|---|
 | HM-F1 / F2 | forget clears BOTH tiers at t+0 and at t+6 min after a replay and a distiller re-proposal; the rest is kept | `forget_verbatim`; `ledger_write_check`, `distiller_skip` |
 | HM-F3 / F7 | derived facts that never name the entity go with their source chunk; the bundle's innocent chunks' facts are rebuilt | `cascade_provenance`; `requeue_siblings` |
 | HM-F6 | no file of the verbatim palace holds the name (needs the real store and a scrubbed heap) | `physical_erase` |
-| HM-F5 | TARGET (expected FAIL): an STT misspelling of the forgotten name survives | none (already red) |
+| HM-F5 | the forget-alias sweep: the STT misspellings of the forgotten name are PROPOSED (never erased unasked, a similar-but-different name stays), and a confirmed one goes through the same path and is refused on replay (was the tracked target; closed 2026-10-07, production side `services/zoe-data/memory_forget_alias.py`) | `alias_sweep` |
 | HM-G1 | guest words reach neither tier; a child's emotional turn is kept | `guest_gate` |
 | HM-I1 / I2 | a pasted email's instruction is not in ordinary recall; an explicit quote is framed, instruction withheld | `speaker_class`; `frame` |
 | HM-H1 | a third person's "I'm Dev" never reaches the packet or the identity line | `speaker_class` |

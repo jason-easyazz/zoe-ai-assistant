@@ -194,7 +194,8 @@ async def list_active(user_id: str, session_id: str) -> list[dict]:
             rows = await db.fetch(
                 """SELECT id, action_type, description, offer_phrase, pre_filled_slots
                    FROM pending_suggestions
-                   WHERE user_id = $1 AND session_id = $2 AND resolved = 0
+                   WHERE user_id = $1 AND (session_id = $2 OR action_type = 'forget_alias')
+                     AND resolved = 0
                    ORDER BY created_at ASC LIMIT 5""",
                 user_id,
                 session_id,
@@ -416,6 +417,9 @@ def ui_components_for_suggestions(suggestions: list[dict]) -> list[dict]:
         if s.get("action_type") == "memory_dispute":
             comps.append(_memory_dispute_card(s))
             continue
+        if s.get("action_type") == "forget_alias":
+            comps.append(_forget_alias_card(s))
+            continue
         comps.append({
             "type": "action_card",
             "title": s.get("offer_phrase") or "Save this?",
@@ -455,6 +459,21 @@ def _memory_dispute_card(s: dict) -> dict:
     )
 
 
+def _forget_alias_card(s: dict) -> dict:
+    """Confirm card for a `forget_alias` question: Yes = the SAME permanent forget on the spelling (accept), No = leave it (dismiss)."""
+    title = _safe_card_inline(
+        s.get("offer_phrase") or s.get("description") or "", _DISPUTE_TITLE_CAP
+    ) or "Did you also mean another spelling?"
+    return dict(
+        type="action_card",
+        title=title,
+        actions=[
+            dict(label="Yes, forget it too", action="pending_suggestion_accept", suggestion_id=s["id"]),
+            dict(label="No, leave it", action="pending_suggestion_dismiss", suggestion_id=s["id"]),
+        ],
+    )
+
+
 def _person_create_card(s: dict) -> dict:
     """Contact-specific confirm card for a `person_create` proposal."""
     raw_slots = s.get("pre_filled_slots") or {}
@@ -487,6 +506,20 @@ def _person_create_card(s: dict) -> dict:
     }
 
 
+async def _scrub_forget_alias(suggestion_id: str, conn=None) -> None:
+    """An answered `forget_alias` question must not keep the spelling it asked about: blank the text, keep the row."""
+    sql = ("UPDATE pending_suggestions SET description = '', offer_phrase = '', pre_filled_slots = '{}' "
+           "WHERE id = $1")
+    try:
+        if conn is not None:
+            await conn.execute(sql, suggestion_id)
+        else:
+            async with get_db_ctx() as db:
+                await db.execute(sql, suggestion_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("pending_suggestions: could not scrub an answered forget_alias question (%s)", type(exc).__name__)
+
+
 async def mark_resolved(suggestion_id: str, user_id: str) -> bool:
     """True only when a row was actually flipped — a missing/foreign suggestion
     or a DB failure returns False so callers don't report a dismissal that
@@ -501,6 +534,12 @@ async def mark_resolved(suggestion_id: str, user_id: str) -> bool:
                 user_id,
             )
         for r in rows:
+            if r["action_type"] == "forget_alias":
+                # "No, leave it": counted by reason only (never the spelling), and the question row is scrubbed
+                await _scrub_forget_alias(suggestion_id)
+                from memory_reject_ledger import record_reject
+
+                record_reject("forget_alias", "owner_declined", gate=False)
             if r["action_type"] == "memory_dispute":
                 # a dismissal answers "which is right?" with "the old one": reject the candidate
                 import memory_disputes
@@ -745,6 +784,15 @@ async def _execute_action(conn, action: str, slots: dict, user_id: str) -> dict:
             raise ValueError("dispute_not_applied")
         return {"candidate_id": slots.get("candidate_id"), "applied": True}
 
+    if action == "forget_alias":
+        # The person said YES to "Did you also mean <spelling>?": forget it through the same permanent path as the
+        # original forget (memory_forget_alias.forget_confirmed). A forget that did not land leaves the question open.
+        import memory_forget_alias
+
+        if not await memory_forget_alias.forget_confirmed(user_id, str(slots.get("alias") or "")):
+            raise ValueError("forget_alias_not_applied")
+        return {"forgotten": True}
+
     raise ValueError(f"unsupported_action:{action}")
 
 
@@ -769,6 +817,8 @@ async def execute_suggestion(suggestion_id: str, user_id: str) -> dict:
                     suggestion_id,
                     user_id,
                 )
+                if action == "forget_alias":
+                    await _scrub_forget_alias(suggestion_id, conn)
         return {"ok": True, "action": action, "result": result}
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}

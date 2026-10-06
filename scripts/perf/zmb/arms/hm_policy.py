@@ -62,6 +62,7 @@ class Controls:
     parallel_lookup: bool = True       # the chat lane consults both tiers concurrently (max, not sum)
     tier_isolation: bool = True        # one tier failing degrades the packet, it does not fail the turn
     isolate_wing: bool = True          # every verbatim read is scoped to the asking member's wing
+    alias_sweep: bool = True           # a forget also PROPOSES the name's STT misspellings / split spellings (the owner confirms)
     sync_distill: bool = False         # (inverted: ON = a model call on the write path) the owner's "no model call"
 
     @classmethod
@@ -192,6 +193,52 @@ class HashedLedger:
     def dump_bytes(self) -> bytes:
         """Everything the ledger holds, serialised (for the 'no plaintext' check)."""
         return repr(sorted((u, sorted(h)) for u, h in self._hashes.items())).encode()
+
+
+# ── the forget-alias sweep: contract of services/zoe-data/memory_forget_alias.py (reference implementation for the lab) ──
+
+def alias_max_edits(letters: int) -> int:
+    """7+ letters: 2 edits; 5-6: 1; 4 or fewer: none (measured on a 73,604-word dictionary: 0 false matches at these bounds)."""
+    return 2 if letters >= 7 else (1 if letters >= 5 else 0)
+
+
+def _lev(a: str, b: str) -> int:
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def alias_candidates(name: str, texts: "list[str]", max_run: int = 3) -> "list[str]":
+    """Spellings of ``name`` the owner should be ASKED about: whole tokens within ``alias_max_edits``, or a 2-3 token run whose join is one
+    edit LESS and starts with the same letter; never a substring, never a run holding the exact name. First-seen form, most common first."""
+    toks = [w.casefold() for w in _WORD.findall(unicodedata.normalize("NFKC", name or ""))][:MAX_KEY_TOKENS]
+    joined = "".join(toks)
+    k = alias_max_edits(len(joined))
+    if k == 0 or not toks or not joined.isalpha():
+        return []
+    found: "dict[str, list]" = {}
+    longest = min(max_run, max(len(toks) + 2, 2))
+    for text in texts:
+        words = _WORD.findall(unicodedata.normalize("NFKC", text or ""))
+        low = [w.casefold() for w in words]
+        for i in range(len(words)):
+            for n in range(1, longest + 1):
+                if i + n > len(words):
+                    break
+                run = low[i:i + n]
+                if not all(t.isalpha() for t in run) or any(run[j:j + len(toks)] == toks for j in range(len(run) - len(toks) + 1)):
+                    continue
+                j = "".join(run)
+                if n > 1 and (j[0] != joined[0] or any(len(t) < 2 for t in run)):
+                    continue
+                if _lev(j, joined) <= (k if n == 1 else max(k - 1, 0)):
+                    rec = found.setdefault(" ".join(run), [" ".join(words[i:i + n]), 0])
+                    rec[1] += 1
+    return [v[0] for _k, v in sorted(found.items(), key=lambda kv: (-kv[1][1], kv[0]))]
 
 
 # ── the recall sanitiser ─────────────────────────────────────────────────────
