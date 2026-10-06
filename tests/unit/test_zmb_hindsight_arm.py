@@ -397,19 +397,15 @@ def test_the_whole_store_tier_runs_clean_on_h1_and_h0_is_red_on_the_hard_axes():
     ran = [r for r in rows if r["verdict"] != "SKIP"]
     assert [r["id"] for r in ran if r["verdict"] == "ERROR"] == []
     unexpected = sorted(r["id"] for r in ran if r["expected"] == "PASS" and r["verdict"] != "PASS")    # a target H1 PASSES is the point (F3)
-    # KNOWN GAPS of the H arms' Zoe layer, each listed in the bake-off record. Fix the adapter and shrink this list, never widen it:
-    #  - the row export carries authority_class but no source_excerpt / user_turn_id, so the five A3 provenance cells Z0 passes
-    #    (typed / voice-verified / taught / nightly-digest / user-turn rate; #1895 stamps provenance on Z0) are red on H1
-    #    (A3 is part of the hard `authority` axis: a real run lists them as H1 hard violations until the adapter stamps provenance);
-    #  - #1895 holds an unverified self-fact as a PENDING candidate; the H layer has not ported that rule, so the A7 cells (home / work /
-    #    pet) and I2.third_party_fragment.panel_unverified (same hold, same rule) are red. Port the fix, then delete these entries.
-    #  - C4.valid_from_is_event_time (the two timelines, audit P2.1): the H layer files a row at its own capture time and has no
-    #    stated-event-time parser (memory_temporal.parse_validity), so valid_from is the filing year, not the year the owner said.
-    #    Port the parser, then delete this entry.
-    known = sorted(["A3.typed_turn_rows", "A3.voice_verified_turn_rows", "A3.taught_rows", "A3.nightly_digest_rows",
-                    "A3.user_turn_rows_rate", "C4.valid_from_is_event_time",
-                     "I2.third_party_fragment.panel_unverified"]
-                   + [c.id for c in store if c.id.startswith("A7.panel_unverified_kept")])
+    # KNOWN GAPS of the H arms' Zoe layer: one. The five A3 provenance cells (the row export carries source_excerpt / user_turn_id,
+    # stamped through Hindsight metadata) and the unverified-speaker hold (A7.panel_unverified_kept.*, I2.third_party_fragment.panel_unverified:
+    # a self-assertion from an unverified voice is a PENDING candidate, #1895) are ported. What stays red:
+    #  - C4.valid_from_is_event_time (the two timelines, audit P2.1, #1896): at this point of the stack the H arms' row export carries NO
+    #    validity interval at all (valid_from / invalid_at are stamped by the conflict pass and the side table, which the stacked PR #1901 adds), so
+    #    there is nothing to stamp the owner's stated event time ("since 2015") into. The port itself is small (the layer calls the REAL
+    #    memory_temporal.parse_validity / stamp, ~8 lines) and lands in #1901, which deletes this entry.
+    # A gap that comes back must be listed HERE with its reason, never silently accepted: fix the adapter and shrink this list, never widen it.
+    known: "list[str]" = ["C4.valid_from_is_event_time"]
     assert unexpected == known, unexpected
     h0, _g = mk("H0")
     rows0 = run_cells(store, WORLD, h0)
@@ -426,3 +422,83 @@ def test_the_artifact_of_an_h_arm_run_carries_no_household_text():
     arm.close()
     payload = {"cells": [{k: v for k, v in r.items() if k != "evidence"} for r in rows], "measure": arm.measure()}
     assert artifact.household_strings_in(payload, WORLD.all_strings()) == []
+
+
+# ── provenance (ZMB A3): the stamp rides through Hindsight and is read back ──────────────────────────────────────────
+
+A3_CELLS = ("A3.typed_turn_rows", "A3.voice_verified_turn_rows", "A3.taught_rows", "A3.nightly_digest_rows", "A3.user_turn_rows_rate")
+
+
+@pytest.mark.parametrize("variant", ["H1", "H2"])
+def test_the_provenance_cells_pass_with_the_stamp_and_go_red_without_it(variant):
+    for cid in A3_CELLS:
+        assert verdict(variant, cid) == "PASS", f"{variant} {cid}"
+        assert verdict(variant, cid, off=frozenset({"provenance"})) == "FAIL", f"switching provenance OFF must turn {cid} red on {variant}"
+
+
+def test_h0_has_no_zoe_layer_so_it_stamps_no_provenance_and_the_a3_cells_are_red():
+    for cid in A3_CELLS:
+        assert verdict("H0", cid) == "FAIL", cid
+
+
+def test_the_excerpt_and_the_turn_id_ride_as_item_metadata_and_a_turn_tag_and_come_back_in_the_export():
+    arm, fake = mk("H1")
+    arm.reset(USER)
+    arm.ingest([Turn("I live in Perth", "owner_typed")])
+    item = posts(fake, "/memories")[-1]["items"][0]
+    assert item["metadata"]["source_excerpt"] == "I live in Perth" and item["metadata"]["user_turn_id"]
+    assert f"turn:{item['metadata']['user_turn_id']}" in item["tags"]
+    row = next(r for r in arm.stats()["rows"] if r["status"] == "approved")
+    assert row["source_excerpt"] == "I live in Perth" and row["user_turn_id"] == item["metadata"]["user_turn_id"] and row["authority_class"]
+    # a server that dropped the metadata still says which turn through the tag, and says nothing about the words (never invents them)
+    fake.banks[arm.bank_for(USER)]["units"][0]["metadata"] = {}
+    row = next(r for r in arm.stats()["rows"] if r["status"] == "approved")
+    assert row["user_turn_id"] == item["metadata"]["user_turn_id"] and row["source_excerpt"] == ""
+
+
+def test_a_held_candidate_carries_its_provenance_in_the_export_too():
+    arm, _f = mk("H1")
+    arm.reset(USER)
+    arm.ingest([Turn("I live in Perth", "panel_unverified")])
+    held = [r for r in arm.stats()["rows"] if r["status"] == "pending"]
+    assert len(held) == 1 and held[0]["source_excerpt"] == "I live in Perth" and held[0]["user_turn_id"]
+
+
+def test_forgetting_a_name_leaves_no_excerpt_that_names_her():
+    arm, _f = mk("H1")
+    arm.reset(USER)
+    arm.ingest([Turn("I live in Perth and Marisol is my sister", "owner_typed")])
+    assert any("Marisol" in r["source_excerpt"] for r in arm.stats()["rows"])           # the excerpt is the owner's whole sentence
+    arm.forget("Marisol")
+    assert all("marisol" not in (r["source_excerpt"] + r["text"]).lower() for r in arm.stats()["rows"])
+
+
+def test_the_speaker_control_turns_the_unverified_hold_red():
+    for cid in ("A7.panel_unverified_kept.home", "I2.third_party_fragment.panel_unverified"):
+        assert verdict("H1", cid) == "PASS", cid
+        assert verdict("H1", cid, off=frozenset({"speaker"})) == "FAIL", cid
+
+
+# ── the capabilities an H arm declares it lacks: those cells SKIP with the reason, never ERROR, never pass ──────────
+
+def test_cells_needing_a_capability_hindsight_lacks_skip_with_the_reason():
+    store = [c for c in CELLS.values() if c.tier == "store"]
+    for variant in ("H0", "H1", "H2"):
+        arm, _f = mk(variant)
+        for cap in ("conflict_pass", "edges", "disk"):
+            assert cap not in arm.capabilities and cap in hs.HindsightArm.LACKS
+            need = [c for c in store if cap in cellmod.required_capabilities(c)]
+            assert need, f"no cell needs {cap}: the declaration would be vacuous"
+            for c in need:
+                o = run(arm, c.id)
+                assert o.verdict == "SKIP" and cap in o.reason, (variant, c.id, o)
+        arm.close()
+
+
+def test_called_directly_the_arm_says_why_it_cannot():
+    arm, _f = mk("H1")
+    for call in (arm.run_conflict_pass, arm.edges, lambda: arm.write_edge("a", "b", "friend", "personal", "user_stated", "conversation"),
+                 arm.hard_delete, lambda: arm.disk_residue(["x"])):
+        with pytest.raises(NotImplementedError):
+            call()
+    arm.close()

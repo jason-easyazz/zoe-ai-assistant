@@ -128,7 +128,8 @@ def test_the_hindsight_environment_is_loopback_only_and_has_the_run_overrides():
     kv = dict(l.split("=", 1) for l in env.splitlines() if "=" in l and not l.startswith("#"))
     assert kv["HINDSIGHT_API_LLM_TRACE_ENABLED"] == "true" and kv["HINDSIGHT_API_EMBEDDINGS_OPENAI_BATCH_SIZE"] == "8"
     assert kv["HINDSIGHT_API_LLM_BASE_URL"] == "http://127.0.0.1:11500/v1" and kv["HINDSIGHT_API_DATABASE_URL"].endswith("127.0.0.1:55432/hindsight")
-    assert kv["EGRESS_AUDIT_LOG"] == "/b/egress-r1.log" and kv["PYTHONPATH"] == "/b/egress_audit"
+    assert kv["EGRESS_AUDIT_LOG"] == "/b/egress-r1.log" and kv["PYTHONPATH"] == str(bakeoff.EGRESS_AUDIT_DIR)       # the hook ships in the repo
+    assert (bakeoff.EGRESS_AUDIT_DIR / "sitecustomize.py").is_file() and kv["PYTHONDONTWRITEBYTECODE"] == "1"
     with pytest.raises(bakeoff.Refused, match="non-loopback"):
         bakeoff.hindsight_env(ENV_EXAMPLE + "HINDSIGHT_API_WEBHOOK_URL=https://hooks.example.com/x\n", bakeoff.Cfg(bakeoff_dir=Path("/b")), "r1")
 
@@ -156,7 +157,7 @@ def test_small_parsers():
 # ── the host double: the same trick the deploy tests use ─────────────────────
 
 class FakeHost(bakeoff.Host):
-    def __init__(self, tmp: Path, *, panel_busy_for=0.0, landing_for=0.0, mem=None, live_ok=True, fail=()):
+    def __init__(self, tmp: Path, *, panel_busy_for=0.0, landing_for=0.0, mem=None, live_ok=True, fail=(), hook_live=True):
         self.t = 1_800_000_000.0
         self.t0 = self.t
         self.cmds: "list[tuple[list[str], bool]]" = []
@@ -165,6 +166,7 @@ class FakeHost(bakeoff.Host):
         self.landing_until = self.t + landing_for
         self.mem = mem or (lambda h: 3000.0)
         self.live_ok, self.fail = live_ok, set(fail)
+        self.hook_live = hook_live
         self.live_active = True
         self.tmp = tmp
         self.metrics_calls = 0
@@ -235,6 +237,8 @@ class FakeHost(bakeoff.Host):
             return "100\n"
         if path.endswith("smaps_rollup"):
             return "Rss: 1 kB\nPss: 204800 kB\n"
+        if "/egress-" in path and self.hook_live:           # the server's egress hook, as a healthy one writes it
+            return "12:00:00 pid=1 ok hook-loaded uvloop=blocked\n12:00:01 pid=1 ok connect ('127.0.0.1', 55432)\n"
         return ""
 
 
@@ -708,3 +712,196 @@ def test_dry_plan_prints_the_schedule(box):
     measure.dry_plan(w)
     out = "\n".join(w.logs)
     assert "PLAN" in out and "H1 seed 1" in out and "forgetting probes" in out and "hard cap 90" in out and "RESTORE (always" in out
+
+
+
+# ── egress: counted per window and per phase, "0 over N observed", and a missing log is never a zero ───────────────
+
+import datetime as _dt  # noqa: E402
+
+
+def _egress_lines(ref, spec):
+    """``spec`` = [(seconds from ref, 'ok' or 'VIOLATION', what)] -> hook-log text (time of day only, like the real hook)."""
+    out = ["{} pid=7 ok hook-loaded uvloop=blocked".format(_dt.datetime.fromtimestamp(ref - 8).strftime("%H:%M:%S"))]
+    for off, tag, what in spec:
+        out.append("{} pid=7 {} {}".format(_dt.datetime.fromtimestamp(ref + off).strftime("%H:%M:%S"), tag, what))
+    return "\n".join(out) + "\n"
+
+
+def _marks(ref):
+    return [(ref, "lab"), (ref + 60, "H1:zmb-v1"), (ref + 120, "H2:latency"), (ref + 180, "validity:concise")]
+
+
+GOOD = [(-5, "ok", "connect ('127.0.0.1', 55432)"), (10, "ok", "getaddrinfo localhost"), (70, "ok", "connect ('127.0.0.1', 11500)"),
+        (80, "ok", "connect ('127.0.0.1', 55432)"), (130, "ok", "connect ('::1', 11500, 0, 0)"), (200, "ok", "connect unix:/run/x.sock")]
+
+
+def test_a_clean_hook_log_says_zero_over_n_observed_and_splits_them_by_phase(tmp_path):
+    ref = 1_800_000_000.0
+    log = tmp_path / "egress-t1.log"
+    log.write_text(_egress_lines(ref, GOOD))
+    got = measure.egress_summary(log, _marks(ref), ref, 0)
+    assert got["connects"] == 0 and got["observed"] == 6
+    assert got["detail"].startswith("0 non-loopback connects over 6 observed (")
+    assert got["by_arm"] == {"setup": {"observed": 1, "violations": 0}, "shared": {"observed": 2, "violations": 0},
+                             "H1": {"observed": 2, "violations": 0}, "H2": {"observed": 1, "violations": 0}}
+    g0 = gates.gate_g0({"nonloopback_connects": got["connects"], "egress": got})["zero_nonloopback_connects"]
+    assert g0["state"] == gates.PASS and g0["measured"].startswith("0 non-loopback connects over 6 observed")
+
+
+def test_a_violation_is_counted_against_the_phase_that_made_it_and_the_gate_fails(tmp_path):
+    ref = 1_800_000_000.0
+    log = tmp_path / "egress-t1.log"
+    log.write_text(_egress_lines(ref, GOOD + [(135, "VIOLATION", "getaddrinfo control.example.invalid")]))
+    got = measure.egress_summary(log, _marks(ref), ref, 1)                 # +1: the ss sampler also saw one non-loopback peer
+    assert got["connects"] == 2 and got["by_arm"]["H2"] == {"observed": 2, "violations": 1}
+    assert "H2 2 (1 non-loopback)" in got["detail"] and "control.example.invalid" in got["detail"] and "ss sampler 1 peers" in got["detail"]
+    g0 = gates.gate_g0({"nonloopback_connects": got["connects"], "egress": got})["zero_nonloopback_connects"]
+    assert g0["state"] == gates.FAIL and g0["measured"].startswith("2 non-loopback connects over 7 observed")
+
+
+def test_a_missing_or_blind_hook_log_is_not_measured_never_a_zero(tmp_path):
+    ref = 1_800_000_000.0
+    missing = measure.egress_summary(tmp_path / "nope.log", [], ref, 0)
+    empty = tmp_path / "empty.log"
+    empty.write_text("")
+    loaded_only = tmp_path / "loaded.log"
+    loaded_only.write_text("12:00:00 pid=7 ok hook-loaded uvloop=blocked\n")
+    for got in (missing, measure.egress_summary(empty, [], ref, 0), measure.egress_summary(loaded_only, [], ref, 0)):
+        assert got["connects"] is None and got["detail"].startswith("not measured")
+        g0 = gates.gate_g0({"nonloopback_connects": got["connects"], "egress": got})["zero_nonloopback_connects"]
+        assert g0["state"] == gates.NA                                    # NA, and an arm with an NA item is INCOMPLETE, never a pass
+    assert measure.count_violations(tmp_path / "nope.log") is None and measure.count_violations(loaded_only) is None
+
+
+def test_phases_are_attributed_across_midnight(tmp_path):
+    ref = _dt.datetime(2026, 10, 6, 23, 59, 30).timestamp()
+    log = tmp_path / "egress-t1.log"
+    log.write_text(_egress_lines(ref, [(5, "ok", "connect ('127.0.0.1', 1)"), (50, "ok", "connect ('127.0.0.1', 2)"), (125, "ok", "connect ('127.0.0.1', 3)")]))
+    got = measure.egress_summary(log, [(ref, "lab"), (ref + 30, "H1:zmb-v1"), (ref + 100, "H0:latency")], ref, 0)
+    assert got["by_arm"] == {"shared": {"observed": 1, "violations": 0}, "H1": {"observed": 1, "violations": 0}, "H0": {"observed": 1, "violations": 0}}
+
+
+def test_the_hook_in_the_repo_logs_connects_and_blocks_uvloop(tmp_path):
+    """The hook is run for real in a subprocess: it must be live (hook-loaded), see a loopback connect and a non-loopback lookup, and make
+    ``import uvloop`` fail (run 1's hook was blind because uvloop connects in C, bypassing the socket audit event)."""
+    log = tmp_path / "hook.log"
+    code = (
+        "import socket, sys\n"
+        "try:\n    socket.create_connection(('127.0.0.1', 1), timeout=1)\nexcept OSError:\n    pass\n"
+        "try:\n    socket.getaddrinfo('control.example.invalid', 80)\nexcept OSError:\n    pass\n"
+        "print('uvloop-entry', sys.modules.get('uvloop', 'absent'))\n")
+    env = {"PATH": os.environ.get("PATH", ""), "EGRESS_AUDIT_LOG": str(log), "PYTHONPATH": str(bakeoff.EGRESS_AUDIT_DIR)}
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, timeout=60)
+    assert r.returncode == 0 and "uvloop-entry None" in r.stdout, r.stdout + r.stderr     # None in sys.modules: the import raises ImportError
+    parsed = measure.parse_egress(log.read_text())
+    assert parsed and parsed["hook_loaded"] and parsed["observed"] >= 2
+    assert [e["what"] for e in parsed["entries"] if e["violation"]] == ["control.example.invalid"]
+    assert any(e["kind"] == "connect" and not e["violation"] for e in parsed["entries"])
+
+
+def test_a_dead_egress_hook_aborts_early_and_puts_the_brain_back(box):
+    host = FakeHost(box, hook_live=False)
+    w = make_window(box, host, measure_fn=lambda win: {"ok": True})
+    assert w.run() == bakeoff.EXIT_ABORTED
+    assert any("egress hook is not live" in m for m in w.logs) and restored(host)
+
+
+def test_a_live_egress_hook_is_logged_and_the_window_goes_on(box):
+    host = FakeHost(box)
+    w = make_window(box, host, measure_fn=lambda win: {"ok": True})
+    assert w.run() == bakeoff.EXIT_OK and any("egress hook live" in m for m in w.logs)
+
+
+# ── the phase budget: three H1 seeds inside the cap, H2 and H0 one seed each ──────────────────────────────────────
+
+def test_the_budget_fits_three_h1_seeds_inside_the_hard_cap(box):
+    cfg = bakeoff.Cfg(bakeoff_dir=box)
+    b = measure.plan_budget(cfg)
+    assert b.seeds == {"H1": 3, "H2": 1, "H0": 1} and b.arms == ("H1", "H2", "H0")
+    assert b.total_min() <= b.avail_min <= cfg.cap_min - cfg.reserve_min - measure.TAIL_MIN              # the hard cap is kept, with the tail
+    assert b.cells_in_box("H1") >= b.runnable > 100                     # one H1 seed box holds every runnable store cell at run 1's rate
+    assert b.box_min["H2"] >= 2.0 and b.box_min["H0"] >= 1.0 and b.store_cells > b.runnable
+    assert 3 * b.box_min["H1"] > b.box_min["H2"] + b.box_min["H0"]      # H1 is the preferred arm: the biggest share of the time
+
+
+def test_a_lower_arm_only_gets_what_is_left_behind_the_work_queued_for_it(box):
+    b = measure.plan_budget(bakeoff.Cfg(bakeoff_dir=box))
+    assert b.seed_box_s("H1", 3600.0) == b.box_min["H1"] * 60.0 and b.seed_box_s("H1", 120.0) == 120.0     # H1: its ceiling, never over the time left
+    assert b.fixed_min("H0") == 0.0                     # H0's latency / slot are "only if time remains": its cells outrank its timings
+    queued_h2 = (b.fixed_min("H2") + measure.PHASE_MIN["validity"]["concise"] + 2.0) * 60.0       # its own phases + H0's 2 min seed box
+    assert b.seed_box_s("H2", queued_h2 - 1.0) == 0.0                                  # nothing left behind its own queue: no box, no starving H0
+    assert 0 < b.seed_box_s("H2", 3000.0) <= 2 * b.box_min["H2"] * 60.0
+    assert b.seed_box_s("H2", 6000.0) == 2 * b.box_min["H2"] * 60.0                    # an early H1 hands its slack on, up to twice the plan
+    assert b.seed_box_s("H0", 100.0 * 60) <= 2 * b.box_min["H0"] * 60.0
+
+
+def test_h1_runs_first_and_complete_then_h2_then_h0(box, tmp_path, monkeypatch):
+    w, _host = e2e_window(box, tmp_path, monkeypatch)
+    calls, real = [], measure.run_arm_seed
+    monkeypatch.setattr(measure, "run_arm_seed", lambda ctx, v, seed, *a, **k: (calls.append((v, seed)), real(ctx, v, seed, *a, **k))[1])
+    measure.measure(w)
+    assert [v for v, _s in calls] == ["H1", "H1", "H1", "H2", "H0"]
+    assert len({s for v, s in calls if v == "H1"}) == 3 and {s for v, s in calls if v != "H1"} == {calls[0][1]}
+
+
+def test_the_dry_plan_prints_the_per_arm_cell_budget_and_the_seed_counts(box):
+    host = FakeHost(box)
+    w = make_window(box, host, dry=True)
+    measure.dry_plan(w)
+    line = next(m for m in w.logs if m.startswith("per-arm cell budget"))
+    assert "H1 3 seeds x " in line and "H2 1 seed x " in line and "H0 1 seed x " in line and "all 3 seeds complete inside the cap" in line
+    assert "SKIP by capability" in line
+    out = "\n".join(w.logs)
+    assert out.index("H1 seed 1") < out.index("H1 seed 3") < out.index("H2 seed 1") < out.index("H0 seed 1")      # execution order: H1 first and complete
+    assert "H2 seed 2" not in out and "H0 seed 2" not in out and "slack +" in out
+
+
+# ── why hard cells did not run, the winner-clause axes, and the top of the record ──────────────────────────────────
+
+def test_skips_are_split_into_time_box_and_capability_and_the_gate_says_which():
+    rows = [{"verdict": "SKIP", "reason": "time box reached"}, {"verdict": "SKIP", "reason": "time box reached"},
+            {"verdict": "SKIP", "reason": "arm H1 lacks capability: disk"}, {"verdict": "SKIP", "reason": "arm H1 lacks capability: edges"},
+            {"verdict": "SKIP", "reason": "cannot reach Hindsight at x"}]
+    why = measure.skip_breakdown(rows)
+    assert why == {"time box": 2, "capability: disk": 1, "capability: edges": 1, "unreachable": 1}
+    g2 = gates.gate_g2({"zmb-v1": {"hard_skipped": 5, "hard_skipped_why": why, "hard_violations": []}}, {})["hard_cells_all_ran"]
+    assert g2["state"] == gates.FAIL and "5 skipped (2 time box, 1 capability: disk, 1 capability: edges, 1 unreachable)" in g2["measured"]
+    assert gates.gate_g2({"s": {"hard_skipped": 0, "hard_violations": []}}, {})["hard_cells_all_ran"]["state"] == gates.PASS
+
+
+def test_the_winner_clause_reads_the_temporal_and_recall_axes_the_axes_pr_built():
+    assert gates.WIN_AXES == {"B": "extraction", "C": "temporal", "D": "recall", "E": "abstention"}
+    def ax(p, n):
+        lo, hi = gates.wilson(p, n)
+        return {"pass": p, "n": n, "wilson95": [round(lo, 4), round(hi, 4)]}
+    z0 = {"extraction": ax(20, 20), "temporal": ax(10, 20), "recall": ax(4, 20), "abstention": ax(10, 10)}
+    arm = {"extraction": ax(20, 20), "temporal": ax(20, 20), "recall": ax(20, 20), "abstention": ax(10, 10)}
+    c = gates.compare_axes(arm, z0)
+    assert c["C"]["axis"] == "temporal" and c["C"]["beats"] and c["D"]["axis"] == "recall" and c["D"]["beats"]       # two beats: the rule's win
+    assert not c["B"]["beats"] and not c["E"]["beats"] and not any(v["worse"] for v in c.values())
+    assert gates.compare_axes({}, z0)["C"]["note"] == "no data"                                                       # an arm that ran none: no data, not a tie
+
+
+def test_the_run_record_opens_with_the_verdict_the_clause_per_axis_and_the_plain_answer(box, tmp_path, monkeypatch):
+    w, _host = e2e_window(box, tmp_path, monkeypatch)
+    measure.measure(w)
+    md = Path(json.loads((box / "run-t1.json").read_text())["docs_path"]).read_text()
+    head = md.split("## Run")[0]
+    assert "**Verdict by the pre-registered rule:" in head and "### Winner clause per axis" in head and "### Is it better than ours?" in head
+    assert "| B | extraction |" in head and "| C | temporal |" in head and "| D | recall |" in head and "| E | abstention |" in head
+    assert "A tie goes to Z0" in head and "Honest caveats:" in head
+    assert head.index("Verdict by") < head.index("Winner clause per axis") < head.index("Is it better than ours?")
+
+
+def test_the_plain_answer_says_yes_only_when_the_rule_says_so():
+    ax = {"extraction": {"pass": 18, "n": 18, "wilson95": [0.82, 1.0], "skipped": 0}}
+    arm = {"verdict": "PASSES_BUILT_GATES", "seeds_done": 3, "axes": ax, "gates": {"G0": {"x": {"state": gates.PASS}}}}
+    won = {"verdict": "ADOPT_CANDIDATE", "winner": "H1", "compare": {"H1": {"B": {"axis": "extraction", "built": True, "beats": True, "worse": False},
+                                                                        "D": {"axis": "recall", "built": True, "beats": True, "worse": False}}}}
+    assert gates._better_line({"H1": arm}, won).startswith("Yes, on what was measured: H1 passes every built gate")
+    tie = {"verdict": "KEEP_Z0", "compare": {"H1": {"B": {"axis": "extraction", "built": True, "beats": False, "worse": False, "arm": [18, 18, [0.82, 1.0]]},
+                                                  "C": {"axis": "temporal", "built": True, "beats": False, "worse": False, "note": "no data"}}}}
+    line = gates._better_line({"H1": {**arm, "verdict": "NOT_ADOPTABLE", "gates": {"G2": {"hard_cells_all_ran": {"state": gates.FAIL}}}}}, tie)
+    assert line.startswith("No evidence that H1 is better than Z0") and "ties Z0 on B extraction" in line and "no data for C temporal" in line
+    assert "A tie goes to Z0" in line and "G2 hard_cells_all_ran" in line
