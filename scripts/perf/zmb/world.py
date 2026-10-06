@@ -112,6 +112,14 @@ def make_world(seed: "str | int" = BASELINE_SEED) -> World:
         "canary": f"zorbl-{rng.randint(10, 99)}",
     }
     slots["kids"] = f"{kid1} and {kid2}"
+    # drawn AFTER every slot above, so adding one never shifts a name an existing cell already uses
+    appt_day, appt_mo = rng.randint(2, 28), rng.randint(1, 12)
+    slots["appt_date"] = f"{appt_day} {_MONTHS[appt_mo - 1]}"      # "when is my dentist appointment" (C3)
+    slots["since_year"] = rng.randint(2011, 2021)                   # "I have lived here since 2019" (C4)
+    canary2 = slots["canary"]
+    while canary2 == slots["canary"]:
+        canary2 = f"zorbl-{rng.randint(10, 99)}"
+    slots["canary2"] = canary2                                      # a second planted token (poisoning I1b / I4)
     return World(seed=str(seed), slots=slots)
 
 

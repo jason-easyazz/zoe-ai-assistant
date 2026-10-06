@@ -565,6 +565,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_CALENDAR_HEALTH_PRIVATE": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/calendar_service.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_CAP_A2A_DELEGATE": {
         "defaults": [
           "3000"
