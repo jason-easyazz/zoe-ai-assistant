@@ -39,6 +39,7 @@ from memory_service import (
 )
 from models import MemoryProposalCreate, MemoryReviewBody
 import own_words
+import memory_authority
 import recall_evidence
 
 logger = logging.getLogger(__name__)
@@ -529,6 +530,9 @@ def _build_memory_prompt_packet(
         instruction_row = own_words.instruction_shaped(text)
         if pasted_row or instruction_row:
             prefix = f"(something you pasted) {prefix}"
+        if memory_authority.is_unverified(meta):
+            # a voice the speaker gate did not confirm: "someone at the panel said", never "you told me"
+            prefix = f"{memory_authority.UNVERIFIED_RECALL_LABEL} {prefix}"
         if str(meta.get("memory_type")) == "state_change":
             # memory_supersede's tombstone: a recorded CHANGE, not a current fact.
             prefix = f"(change) {prefix}"

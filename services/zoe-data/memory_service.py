@@ -1563,26 +1563,42 @@ class MemoryService:
                     self._remember_seen_key(user_id, idem_key)
                     return dup
 
+            # A speaker the panel did not verify cannot state the OWNER's facts (audit section 6.0, ZMB I2):
+            # a self-assertion from `user_unverified` is a CANDIDATE the owner confirms (`pending`), never an
+            # approved row and never served as "you told me". A dispute (above) keeps its own, stronger status.
+            write_status = "disputed" if clash is not None else status
+            if (clash is None and status == "approved" and resolved.cls == _auth.USER_UNVERIFIED
+                    and _auth.is_self_assertion(scrubbed)):
+                self._bump("unverified_pending", source)
+                logger.info("UNVERIFIED_SELF_FACT_PENDING writer=%s", writer)
+                if _auth.enabled():
+                    write_status = "pending"
+
+            # Provenance (ZMB A3): a row written from a user turn says which words and which turn
+            ev_excerpt, ev_turn_id = _auth.turn_evidence(
+                writer, resolved, scrubbed, user_id=user_id,
+                anchor_text=anchor_text, source_excerpt=source_excerpt, user_turn_id=user_turn_id)
+
             metadata = self._build_metadata(
                 user_id=user_id,
                 source=source,
                 session_id=session_id,
-                user_turn_id=user_turn_id,
+                user_turn_id=ev_turn_id,
                 memory_type=memory_type,
                 confidence=confidence,
-                status="disputed" if clash is not None else status,
+                status=write_status,
                 tags=tags or [],
                 entity_type=entity_type,
                 entity_id=entity_id,
                 expires_at=expires_at,
-                source_excerpt=source_excerpt,
+                source_excerpt=ev_excerpt,
                 scope=scope,
                 extra_metadata=metadata,
                 idem_key=idem_key,
                 text=scrubbed,
                 captured_at=captured_at,
             )
-            metadata.update(_auth.provenance(writer, resolved, turn_ref=turn_ref or user_turn_id))
+            metadata.update(_auth.provenance(writer, resolved, turn_ref=turn_ref or ev_turn_id))
             if clash is not None:
                 metadata["contradicts_id"] = clash[0].id
                 metadata["authority_blocked"] = True
@@ -2121,11 +2137,19 @@ class MemoryService:
                 None if edit_res.rank < _auth.USER_RANK
                 else current.metadata.get("source_excerpt")
             )
+            # ZMB A3: the edited row is the NEW writer's, so it says which turn and which words it came from
+            edit_excerpt, edit_turn_id = _auth.turn_evidence(
+                writer, edit_res, scrubbed, user_id=user_id,
+                anchor_text=anchor_text if anchor_text is not None else source_excerpt,
+                source_excerpt=source_excerpt, teach=False,
+                # a turn reference names the turn of a model reading of a USER turn only; the person editing in the
+                # review UI is not a turn (and a stamped edit must not look like one)
+                user_turn_id=turn_ref if edit_res.cls in (_auth.USER_STATED_DERIVED, _auth.USER_UNVERIFIED) else None)
             new_meta = self._build_metadata(
                 user_id=user_id,
                 source=edit_source,
                 session_id=session_id,
-                user_turn_id=None,
+                user_turn_id=edit_turn_id,
                 memory_type=current.metadata.get("memory_type", "fact"),
                 confidence=float(current.metadata.get("confidence", 0.7)),
                 status="approved",
@@ -2133,7 +2157,7 @@ class MemoryService:
                 entity_type=current.metadata.get("entity_type"),
                 entity_id=current.metadata.get("entity_id"),
                 expires_at=current.metadata.get("expires_at"),
-                source_excerpt=(source_excerpt if source_excerpt else carried_excerpt),
+                source_excerpt=(edit_excerpt if edit_excerpt else carried_excerpt),
                 scope=current_scope,
                 extra_metadata=metadata,
                 idem_key=self._idempotency_key(

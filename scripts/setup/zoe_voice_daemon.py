@@ -2257,6 +2257,15 @@ def _record_speaker_shadow(claim: tuple[str, float] | None) -> bool:
         return False
 
 
+#: `_claim_ctx.source` values that mean the turn was actually SCORED against the
+#: household profiles (as opposed to "error" / "encoder_unavailable" / never attempted).
+_SCORED_SOURCES = frozenset({"local", "server"})
+#: What a non-shadow, scored, nobody-matched turn hands back instead of None. Falsy
+#: and empty, so a caller that only asks `if claim:` is unchanged; only
+#: `_speaker_field` tells it apart from "the gate did not run".
+SCORED_NO_MATCH: tuple = ()
+
+
 def _speaker_claim_for_turn(wav_bytes: bytes) -> tuple[str, float] | None:
     """Identify the speaker for one turn, honouring W5 shadow mode.
 
@@ -2305,6 +2314,11 @@ def _speaker_claim_for_turn(wav_bytes: bytes) -> tuple[str, float] | None:
         except Exception as exc:  # journal formatting must never cost a row
             log.debug("shadow journal line failed (row already written): %s", exc)
         return None
+    if claim is None and getattr(_claim_ctx, "source", None) in _SCORED_SOURCES:
+        # The gate RAN and nobody matched: a verdict ("not a household voice"), not
+        # the absence of one. Falsy, so every `if voice_claim:` still reads "no
+        # claim"; `_speaker_field` turns it into `verified: false`.
+        return SCORED_NO_MATCH
     return claim
 
 
@@ -2420,6 +2434,39 @@ def _speaker_claim_to_attach(wav_bytes: bytes) -> tuple[str, float] | None:
         _start_shadow_scoring(wav_bytes)
         return None
     return _speaker_claim_for_turn(wav_bytes)
+
+
+def _speaker_field(claim: object) -> dict | None:
+    """The turn payload's ``speaker`` block: what the speaker gate said about THIS turn,
+    for memory provenance on the server (memory_authority: a self-fact spoken by a voice
+    the gate did not confirm is `user_unverified`, never the owner's own statement).
+
+        {"verified": null,  "member": "<id>", "score": 0.8123}   a candidate; the SERVER
+                                                                 judges it (its own threshold
+                                                                 + the member's consent)
+        {"verified": false, "member": null,   "score": null}     the gate ran, nobody matched
+        (absent)                                                 the gate is off, in shadow
+                                                                 mode, errored, or was not run
+
+    The daemon never sends ``verified: true`` - acceptance is the server's call, so a panel
+    cannot make itself more trusted than the server allows. The legacy flat
+    ``voice_user_id`` / ``voice_score`` pair still rides beside it (older servers). Absent
+    = ``speaker_verified=None`` downstream = today's behaviour exactly.
+    """
+    if claim is _CLAIM_UNSET or claim is None or not isinstance(claim, tuple):
+        return None
+    if not claim:
+        return {"verified": False, "member": None, "score": None}
+    if len(claim) == 2:
+        member, score = claim
+        try:
+            score = float(score)
+        except (TypeError, ValueError):
+            return None
+        if not member or not math.isfinite(score):
+            return None
+        return {"verified": None, "member": str(member), "score": round(score, 4)}
+    return None
 
 
 _BUFFER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "buffers")
@@ -2671,6 +2718,9 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
     if _scored_claim:
         # A claim + raw score; the server applies its own threshold.
         payload["voice_user_id"], payload["voice_score"] = _scored_claim
+    _speaker = _speaker_field(_scored_claim)
+    if _speaker is not None:
+        payload["speaker"] = _speaker
 
     url = f"{ZOE_URL}/api/voice/turn_stream"
     _barge_in_requested.clear()
@@ -2903,6 +2953,9 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
     if voice_claim:
         # A claim + raw score; the server applies its own threshold.
         turn_payload["voice_user_id"], turn_payload["voice_score"] = voice_claim
+    _speaker = _speaker_field(voice_claim)
+    if _speaker is not None:
+        turn_payload["speaker"] = _speaker
 
     # Run the turn in a thread so we can play a buffer phrase ONLY when the
     # answer is actually slow. Fast/cached turns (~0.5s) return before the delay

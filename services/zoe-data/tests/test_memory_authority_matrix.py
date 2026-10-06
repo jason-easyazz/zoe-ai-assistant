@@ -129,12 +129,18 @@ EDIT_PATHS = [
 ]
 
 
+# A per-turn model writer whose anchor turn ENTAILS the fact (ZMB C1 / C5, the owner changing their own mind) is stamped with
+# the honest class `user_stated_derived` but carries `user_stated` POWER (basis `verbatim_user_span`): it overrides what a
+# direct statement may. Every other row of this table is judged by its stored class.
+POWER_CLS = {"W2 turn digest, user's words support it": ma.USER_STATED}
+
+
 @pytest.mark.parametrize("target", CLASSES)
 @pytest.mark.parametrize("label,actor,kw,wcls", EDIT_PATHS, ids=[p[0] for p in EDIT_PATHS])
 def test_edit_matrix(svc, label, actor, kw, wcls, target):
     old = seed(svc, target)
     got = asyncio.run(svc.review(old, decision="edit", edits=NEW, actor=actor, **kw))
-    if allowed(wcls, target):
+    if allowed(POWER_CLS.get(label, wcls), target):
         assert got is not None and status(svc, old) == "superseded", (label, target)
         nm = got.metadata
         assert nm["origin"] == (kw.get("origin") or actor) and nm["authority_class"] == wcls
