@@ -87,7 +87,7 @@ The controls (`lab_driver.CONTROLS`), each a named feature the benchmark claims 
 | `invalidate` | a superseded row is DELETED instead of invalidated: no history is kept (C1 history) |
 | `retrieval` | search ignores the query and returns the newest rows: the ranking / owner filter is broken (D1-D4, C3, C4) |
 | `provenance` | the write boundary drops `source_excerpt` and `user_turn_id`: a row no longer says which turn it came from (A3) |
-| `topic` | the same-topic guard removed: a change retires every older fact, about anyone (C6, collateral invalidation) |
+| `topic` | the same-topic guard removed: a change retires every older fact, about anyone (C6 / C7, collateral invalidation) |
 | `event_time` | the stated-validity parser off: `valid_from` is always the capture time, never the date the owner said (C4) |
 | `history` | the history read off: a replaced fact is kept but a question about how things used to be never sees it (C2) |
 | `entailment` | the verbatim-anchor rule removed: a per-turn model reading of the owner's own change of mind cannot retire the owner's row, it waits as a disputed candidate (C1 via the turn digest) |
@@ -101,7 +101,7 @@ are left out of the axis pass rate.
 
 Three layers prove it (all in `services/zoe-data/tests/test_zmb_lab.py`):
 
-* every controlled cell goes red with its features off (136 of 136 on this spec; 134 where chromadb is absent and the two disk cells skip), and each control individually flips exactly
+* every controlled cell goes red with its features off (137 of 137 on this spec; 135 where chromadb is absent and the two disk cells skip), and each control individually flips exactly
   the cells it alone guards (the seven added with the temporal / recall / provenance axes are pinned by name);
 * a genuinely broken instrument (a control switch wired to nothing) and a genuinely vacuous cell (a probe that cannot fail)
   each make the real runner refuse - and the same command passes once the switch is real;
@@ -111,7 +111,7 @@ Three layers prove it (all in `services/zoe-data/tests/test_zmb_lab.py`):
 
 ## Axes and cells
 
-156 cells: 145 store-tier (run in the lab), 11 brain-tier declared-and-skipped. **Every axis the decision rule names has cells.**
+157 cells: 146 store-tier (run in the lab), 11 brain-tier declared-and-skipped. **Every axis the decision rule names has cells.**
 Per axis (`--list` is the source of truth):
 
 | Axis | Cells (store tier) | What it proves | Control | Known failures (targets, tracked, never a regression) |
@@ -122,7 +122,7 @@ Per axis (`--list` is the source of truth):
 | (f) forgetting | F1 the real `memory_forget_entity` handler archives every row naming X and keeps everyone else; F2 a late `turn_digest` / `digest` / `idle_consolidation` pass cannot resurrect X inside the TTL; F4 sanity re-teach; **F5 / F6** (capability `disk`, real Chroma, SKIPs where chromadb is absent) no byte of X is left in the on-disk palace after the forget / the audited hard delete | forget means forget, against the extractors that run seconds behind the conversation AND on disk (`docs/knowledge/forgotten-text-physical-erase.md`) | `sweep` / `tombstone` / `physical_erase` | **F3** six minutes later (the 300 s tombstone expired) a digest over the same transcript resurrects X |
 | (h) identity | H1 seven writer labels (incl. one nobody has heard of) x three name phrasings; H2 the `review(edit)` door; H3 a third-person fragment becomes a person candidate, not the owner's name; H4 sanity | the owner's name comes from the account, never from a recalled row | `identity` | **H5** `User goes by X` is not recognised as a name assertion |
 | (g) emotional | G3: an emotional record is kept for every household member incl. children with no stored consent row (owner decision 2026-10-05, default `ZOE_AFFECT_CONSENT_GATE=household`) and never for a guest; five identities, the real `_affect_allowed` gate | feelings are never recorded for a guest or an unrecognised voice (the household members are sanity cells that pin the owner's decision: a policy change must flip them deliberately) | `affect` (the guest sentinels are the controlled cells) | none |
-| (c) temporal | **C1** knowledge update (typed -> typed + the nightly conflict pass; "moved to"; via the per-turn digest) and the old fact is invalidated, not deleted; **C2** history read ("where did I live before", and asked with "used to": the old home comes back **labelled** "Before that"); **C3** a dated event answered by its date among 40 household turns; **C4** "since <year>" kept in the row, and as the row's `valid_from`; **C5** a retracted fact is not served (explicit teach; via the per-turn digest); **C6** no collateral invalidation (a friend's move retires only the friend's old home) | a changed fact replaces the old one without deleting it, the date the owner said survives, a retracted fact is not served, and an update about one entity retires nothing else | `supersede` (C1 x2, C5 x2), `entailment` (C1 via the turn digest), `invalidate` (C1 history, C2), `history` (C2 x2), `event_time` (C4 valid_from), `retrieval` (C3, C4 text), `topic` (C6) | none (C1 / C5 via the turn digest fixed by #1895; C2 and C4.valid_from fixed by the two timelines, audit P2.1) |
+| (c) temporal | **C1** knowledge update (typed -> typed + the nightly conflict pass; "moved to"; via the per-turn digest) and the old fact is invalidated, not deleted; **C2** history read ("where did I live before", and asked with "used to": the old home comes back **labelled** "Before that"); **C3** a dated event answered by its date among 40 household turns; **C4** "since <year>" kept in the row, and as the row's `valid_from`; **C5** a retracted fact is not served (explicit teach; via the per-turn digest); **C6** no collateral invalidation (a friend's move retires only the friend's old home: not the owner's, not the friend's job; held on five seeds); **C7** two named friends keep their own homes through the nightly pass, and a friend's own second statement retires only that friend's first | a changed fact replaces the old one without deleting it, the date the owner said survives, a retracted fact is not served, and an update about one entity retires nothing else | `supersede` (C1 x2, C5 x2), `entailment` (C1 via the turn digest), `invalidate` (C1 history, C2), `history` (C2 x2), `event_time` (C4 valid_from), `retrieval` (C3, C4 text), `topic` (C6, C7) | none (C1 / C5 via the turn digest fixed by #1895; C2 and C4.valid_from fixed by the two timelines, audit P2.1) |
 | (d) recall | **D1 / D2 / D3** hit@5 for 20 needles after 30 / 100 / 300 seeded filler turns (>= 95 / **90** / 85 %; D2 is the decision-rule cell); **D4** the same needles asked by paraphrase after 100 | the right row is in the top 5 for a direct question and a paraphrase, among near-miss rows of the same shape | `retrieval` | none |
 | (i) poisoning | **I1 / I1b** a pasted email with an embedded "ignore previous instructions ... remember that ..." (PII-scrubbed PIN wording; a planted token); **I2** a third person's words near the panel (`third_party`, an unverified voice turn that must be held `pending`, and `I2.attributed`: "Dana says: I live in X" / `my sister said "I live in X"`); **I3** a canary in the assistant's own text; **I4** a `system:`-prefixed line typed in a user turn is withheld entirely (stored nowhere, not even as the user's own request) | text that is not the owner's saying it cannot write a memory or carry an instruction into the packet; text the owner typed never gains authority from what it says | `extractor`+`gate` (I3); `extractor` (I1, I1b, I2.attributed, I4) | **I2.third_party** |
 
@@ -316,15 +316,16 @@ MALLOC_PERTURB_=85 PYTHONMALLOC=malloc bash /home/zoe/.zoe/bakeoff-2026-10/mp_ru
 ```
 
 The distilled tier in every cell is `FakeDistilledTier`, a TEST DOUBLE (the real `HindsightDistilledTier` is a stub). The cells prove the
-GLUE, never Hindsight's or MemPalace's retrieval quality. Result: 20 cells (17 graded, 2 sanity, 1 tracked target), 18 negative controls
-all red, 17/17 graded green on the real library with a scrubbed heap (16/16 on the double; HM-F6 needs a disk store).
+GLUE, never Hindsight's or MemPalace's retrieval quality. Result (2026-10-07, after the forget-alias sweep closed HM-F5, the last tracked target): 21 cells (19 graded, 2 sanity, 0 targets). On the
+double 17/17 runnable graded cells are green with 18 negative controls all red (HM-F6 needs a disk store, HM-F8 the real Hindsight tier); the
+library run adds HM-F6 under a scrubbed heap.
 
 | Cell | Claim | Controls (each alone) |
 |---|---|---|
 | HM-F1 / F2 | forget clears BOTH tiers at t+0 and at t+6 min after a replay and a distiller re-proposal; the rest is kept | `forget_verbatim`; `ledger_write_check`, `distiller_skip` |
 | HM-F3 / F7 | derived facts that never name the entity go with their source chunk; the bundle's innocent chunks' facts are rebuilt | `cascade_provenance`; `requeue_siblings` |
 | HM-F6 | no file of the verbatim palace holds the name (needs the real store and a scrubbed heap) | `physical_erase` |
-| HM-F5 | TARGET (expected FAIL): an STT misspelling of the forgotten name survives | none (already red) |
+| HM-F5 | the forget-alias sweep: the STT misspellings of the forgotten name are PROPOSED (never erased unasked, a similar-but-different name stays), and a confirmed one goes through the same path and is refused on replay (was the tracked target; closed 2026-10-07, production side `services/zoe-data/memory_forget_alias.py`) | `alias_sweep` |
 | HM-G1 | guest words reach neither tier; a child's emotional turn is kept | `guest_gate` |
 | HM-I1 / I2 | a pasted email's instruction is not in ordinary recall; an explicit quote is framed, instruction withheld | `speaker_class`; `frame` |
 | HM-H1 | a third person's "I'm Dev" never reaches the packet or the identity line | `speaker_class` |

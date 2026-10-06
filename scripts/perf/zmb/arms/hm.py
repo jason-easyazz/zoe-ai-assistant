@@ -35,7 +35,7 @@ from concurrent.futures import ThreadPoolExecutor
 from .hindsight import INSTALL_HINT as HINDSIGHT_HINT
 from .hindsight import HindsightClient, HindsightError
 from .hm_policy import (DEFAULT_ROOMS, MODEL_FROM_TRANSCRIPT, RANK, SPEAKER_LABEL, USER_STATED, USER_STATED_DERIVED,
-                        Controls, HashedLedger, LatencyModel, frame, label_for, percentile)
+                        Controls, HashedLedger, LatencyModel, alias_candidates, frame, label_for, percentile)
 from .mempalace_verbatim import MemPalaceVerbatimArm, _name_pattern, _toks
 
 # ── attribute keys: how the lab decides two statements are about the same thing ───────────────────────────────
@@ -593,6 +593,16 @@ class HMArm(Arm):
         self._refresh_cache(user)
         return (f"forgotten: {n_v} verbatim chunk(s), {n_d + n_src} distilled fact(s), {n_q} queued; "
                 "the ledger holds only a hash")
+
+    def alias_candidates(self, entity: str) -> "list[str]":
+        """The forget-alias sweep: the misspellings / split spellings of ``entity`` the rows still hold. PROPOSALS only (see ``forget_alias``)."""
+        if not self.controls.alias_sweep:
+            return []
+        return alias_candidates(entity, [r.get("text", "") for r in self.stats()["rows"]])
+
+    def forget_alias(self, alias: str) -> str:
+        """The owner's YES to "did you also mean <alias>?": the SAME permanent path as the original forget."""
+        return self.forget(alias)
 
     # ── reads ─────────────────────────────────────────────────────────────
     def _lat(self, tier: str) -> float:

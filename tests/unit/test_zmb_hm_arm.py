@@ -297,14 +297,28 @@ def test_every_hm_cell_goes_red_with_each_named_protection_off_and_green_with_al
     s = res["summary"]
     assert s["not_instrumented"] == [], s["not_instrumented"]
     assert s["fail"] == [] and s["sanity_fail"] == [], s
-    assert s["targets_failing"] == ["HM-F5.forget.stt-misspelling"] and s["targets_now_passing"] == []
+    assert s["targets_failing"] == [] and s["targets_now_passing"] == []          # HM-F5 closed by the forget-alias sweep: graded, not a target
     assert s["skipped"] == ["HM-F6.forget.physical", "HM-F8.forget.physical-distilled"]      # F6 needs the library store, F8 the real Hindsight tier + its Postgres
-    assert s["pass"] == s["graded"] == 16
+    assert s["pass"] == s["graded"] == 17
     for row in res["cells"]:
         if row["verdict"] == "SKIP":
             continue
         assert set(row.get("controls_verdicts", {}).values()) <= {"FAIL"}, row["id"]
         assert len(row.get("controls_verdicts", {})) == len(row["controls"])
+
+
+def test_the_alias_sweep_rule_in_the_lab_port():
+    """The lab's port of the forget-alias rule (services/zoe-data/tests/test_forget_alias_sweep.py asserts it agrees with the service's)."""
+    from zmb.arms.hm_policy import alias_candidates
+    stt = ["Marisal", "Marysol", "Marizol", "Marisole", "Marissol", "Maricol", "Marisoul", "Marrisol"]
+    split = ["Mari sol", "Mari-sol", "Maris ol"]
+    for v in stt:
+        assert [c.lower() for c in alias_candidates("Marisol", [f"so {v} is bringing the cake"])] == [v.lower()]
+    for v in split:
+        assert any(c.lower().replace(" ", "") == v.lower().replace(" ", "").replace("-", "") for c in alias_candidates("Marisol", [f"so {v} rang"]))
+    assert alias_candidates("Dana", ["Dan Dayna Dane Dana W Dana-Whitfield Da na"]) == []                    # <= 4 letters: none
+    assert alias_candidates("Marisol", ["Marisol's sister, Marisol W and MARISOL"]) == []                    # the exact name is the exact forget's job
+    assert sorted(alias_candidates("Priya", ["Pria Pry Prya"])) == ["Pria", "Prya"]
 
 
 def test_cell_ids_are_unique_and_every_control_is_a_real_switch():

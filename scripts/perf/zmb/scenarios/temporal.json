@@ -240,6 +240,31 @@
           {"op": "present", "contains": ["{friend}", "{lima}"], "statuses": ["approved"]}
         ]}
       ]
+    },
+    {
+      "id": "C7.named_friends_keep_their_homes",
+      "title": "two named friends keep their own homes: the nightly pass never reads one friend's home as a second home of another, and a friend's own second statement retires only that friend's first",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["topic"],
+      "lme_map": "(none: the same bug class as C6, found on a real run: 5 of 20 friend facts retired by a different friend's home)",
+      "note": "bake-off verification X1: the subject key ignored a friend's NAME, so 'User's friend A lives in X' and 'User's friend B lives in Y' were one subject with two homes and the newer retired the older. The owner's own home is a third subject on the same relation-free key and must survive too. The positive half (the friend's OWN old home is retired, by that friend's own move) keeps the cell from passing because the pass did nothing",
+      "events": [
+        {"text": "User lives in {home}.", "speaker": "owner_taught"},
+        {"text": "User's friend {friend} lives in {home_old}.", "speaker": "owner_taught"},
+        {"text": "User's friend {male} lives in {lima}.", "speaker": "owner_taught"},
+        {"do": "conflict_pass"},
+        {"text": "User's friend {friend} moved to {home_intruder}.", "speaker": "owner_taught"},
+        {"do": "conflict_pass"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "present", "contains": ["{male}", "{lima}"], "statuses": ["approved"]},
+          {"op": "present", "contains": ["{friend}", "{home_old}"], "statuses": ["superseded"]},
+          {"op": "present", "contains": ["{friend}", "{home_intruder}"], "statuses": ["approved"]},
+          {"op": "present", "contains": ["User lives in {home}"], "statuses": ["approved"]}
+        ]}
+      ]
     }
   ]
 }

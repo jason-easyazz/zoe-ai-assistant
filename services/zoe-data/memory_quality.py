@@ -571,6 +571,16 @@ def _attrs_match(a: str, b: str) -> bool:
     return ta <= tb or tb <= ta
 
 
+def _facts_compatible(a: str, b: str) -> bool:
+    """Do two facts name compatible people (``memory_supersede.facts_compatible``)? True if the matcher is unavailable."""
+    try:
+        from memory_supersede import facts_compatible
+
+        return facts_compatible(a, b)
+    except Exception:  # noqa: BLE001 - a matcher outage must not break a write
+        return True
+
+
 def classify_against_existing(
     text: str,
     existing: list[tuple[str, str]],
@@ -606,6 +616,11 @@ def classify_against_existing(
 
     for mem_id, mem_text in existing:
         if not mem_text:
+            continue
+        # "Leo's birthday is June 9" never replaces "Dana's birthday is March 5": the attribute key
+        # strips the subject, so two people's same attribute read as one fact (the per-turn arm of the
+        # nightly-pass defect, bake-off verification X1). A different named subject is a different fact.
+        if not _facts_compatible(text, mem_text):
             continue
         sim = _similarity(text, mem_text)
         if sim > best_dup[0]:

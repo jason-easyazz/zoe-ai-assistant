@@ -2225,6 +2225,15 @@ async def detect_and_extract_intent(
     except Exception as _same_exc:  # never let the same-person path break routing
         logger.debug("detect_and_extract_intent: same-person match failed: %s", _same_exc)
     try:
+        # a bare yes / no to "Did you also mean <spelling>?" (forget-alias sweep): bound only to the question just asked aloud
+        import memory_forget_alias as _mfa
+        _alias_reply = await _mfa.match_reply(user_id, text, _previous_assistant_message)
+        if _alias_reply is not None:
+            return Intent("pending_offer_accept" if _alias_reply[1] else "pending_offer_dismiss",
+                          {"suggestion_id": _alias_reply[0], "forget_alias": True})
+    except Exception as _alias_exc:  # never let the alias path break routing
+        logger.debug("detect_and_extract_intent: forget-alias reply match failed: %s", _alias_exc)
+    try:
         _offer_reply = await _match_pending_offer_reply(text, user_id)
     except Exception as _offer_exc:  # never let the offer path break routing
         logger.debug("detect_and_extract_intent: offer-reply match failed: %s", _offer_exc)
@@ -3437,6 +3446,17 @@ async def _forget_cascade_note(user_id: str, name: str) -> str:
     return ""
 
 
+async def _forget_alias_note(user_id: str, name: str, svc: Any) -> str:
+    """The forget-alias sweep (memory_forget_alias): the sentence asking about the first misspelling of ``name`` ('' when none / off / shadow).
+    Never forgets anything on its own, never raises."""
+    try:
+        import memory_forget_alias
+        return await memory_forget_alias.offer(user_id, name, svc)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memory_forget_entity: alias sweep failed (%s)", type(exc).__name__)
+        return ""
+
+
 async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str]:
     # ^ shared write funnel: fail-open to least-privilege guest, not admin, when a
     #   caller omits identity (#1021/#1032 posture). All live callers pass an explicit
@@ -3523,6 +3543,11 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
     # card's accept route); refusal dismisses so the offer stops re-surfacing.
     if intent.name == "people_same_person_reply":
         return await _execute_same_person_reply(intent, user_id)
+
+    if intent.name in ("pending_offer_accept", "pending_offer_dismiss") and intent.slots.get("forget_alias"):
+        import memory_forget_alias
+        return await memory_forget_alias.answer(
+            user_id, str(intent.slots.get("suggestion_id") or ""), intent.name == "pending_offer_accept")
 
     if intent.name in ("pending_offer_accept", "pending_offer_dismiss") and \
             len(intent.slots.get("suggestion_ids") or []) + len(intent.slots.get("dismiss_ids") or []) > 1:
@@ -3611,6 +3636,8 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         name = str(intent.slots.get("name", "")).strip()
         if not name:
             return "Who should I forget about? Give me the name and I'll do it."
+        # an alias the owner CONFIRMED ("Did you also mean ...?" -> yes) takes this same path once; it never sweeps for aliases of an alias
+        alias_confirmed = bool(intent.slots.get("alias_confirmed"))
         try:
             from memory_service import get_memory_service, is_guest_memory_user
         except Exception as exc:
@@ -3634,7 +3661,9 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         # every exit path too; best-effort (the tombstone above still shields the in-flight race).
         try:
             import memory_forgotten
-            await memory_forgotten.add(user_id, name, actor=user_id)
+            await memory_forgotten.add(user_id, name, actor=user_id,
+                                       scope=memory_forgotten.SCOPE_ALIAS if alias_confirmed
+                                       else memory_forgotten.SCOPE_ENTITY)
         except Exception as exc:
             logger.warning("memory_forget_entity: forgotten ledger failed (%s)", type(exc).__name__)
         try:
@@ -3663,7 +3692,8 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             return "I couldn't reach the memory store right now, so nothing was changed."
         # Strict name anchoring: the row's text must contain the entity name as
         # a whole word/phrase (case-insensitive). No stemming, no similarity.
-        name_re = re.compile(r"\b" + re.escape(name) + r"\b", re.IGNORECASE)
+        from memory_forgotten import name_pattern as _forget_name_pattern
+        name_re = _forget_name_pattern(name)   # separator-blind between the words, like the ledger's tokens
         seen_ids: set[str] = set()
         matches = []
         for r in rows:
@@ -3727,7 +3757,9 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             # nothing approved, but older versions / candidates may still hold the text; and a contact / summary
             # line / open loop may still name them
             await _erase_named([])
-            return f"I don't have anything saved about {name}." + await _forget_cascade_note(user_id, name)
+            _cascade = await _forget_cascade_note(user_id, name)
+            return (f"I don't have anything saved about {name}." + _cascade
+                    + ("" if alias_confirmed else await _forget_alias_note(user_id, name, svc)))
         forgotten = 0
         archived_ids: list[str] = []
         for r in matches:
@@ -3763,8 +3795,9 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         things = "thing" if forgotten == 1 else "things"
         suffix = "" if forgotten == len(matches) else (
             f" ({len(matches) - forgotten} I couldn't reach just now.)")
-        return (f"Okay — I've forgotten {forgotten} {things} about {name}.{suffix}"
-                + await _forget_cascade_note(user_id, name))
+        _cascade = await _forget_cascade_note(user_id, name)
+        return (f"Okay — I've forgotten {forgotten} {things} about {name}.{suffix}" + _cascade
+                + ("" if alias_confirmed else await _forget_alias_note(user_id, name, svc)))
 
     # "remember that <fact>" — an EXPLICIT, model-callable memory write. This is
     # the fulfillment for the Flue sidecar's remember_fact + remember_emotional_moment

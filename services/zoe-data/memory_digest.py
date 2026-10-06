@@ -1453,6 +1453,11 @@ async def _resolve_contradictions(svc, user_id: str, max_pairs: int = 50) -> int
                 return resolved
             if _text_overlap(newer.text, older.text) < 0.25:
                 continue
+            # Two different named people's facts never contradict each other, whatever the judge says
+            # ("Dana lives in Hobart" does not retire "Leo lives in Perth"; bake-off verification X1).
+            from memory_supersede import facts_compatible
+            if not facts_compatible(newer.text, older.text):
+                continue
             older_current = await svc.get(older.id)
             if older_current is None or older_current.metadata.get("status") != "approved":
                 continue

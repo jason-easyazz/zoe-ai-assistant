@@ -56,6 +56,9 @@ MIN_SALT_CHARS = 16
 #: Longest entity (in words) the ledger can hold and match. Names are 1-4 words; 6 leaves room.
 MAX_KEY_TOKENS = 6
 SCOPE_ENTITY = "entity"
+#: A spelling the owner CONFIRMED is the same forgotten name (``memory_forget_alias``): forgotten through the same path,
+#: labelled so the audit can tell "I forgot Dana" from "I also meant Dayna".
+SCOPE_ALIAS = "alias"
 #: A cached "forgotten set" is trusted this long; any write through this module invalidates it.
 _CACHE_TTL_S = 30.0
 #: After a failed read, do not hammer the DB per ingest: reuse the last-known-good set this long.
@@ -132,6 +135,15 @@ def normalise_key(name: str) -> str:
     """The canonical entity key: NFKC, case-folded words joined by one space (at most ``MAX_KEY_TOKENS``)."""
     text = unicodedata.normalize("NFKC", str(name or "")).casefold()
     return " ".join(_WORD_RE.findall(text)[:MAX_KEY_TOKENS])
+
+
+def name_pattern(name: str) -> "re.Pattern[str]":
+    """The whole-word, case-blind regex for a forgotten name, agreeing with the ledger's tokens: the name's words are joined by ANY run of
+    non-word characters ("Mari sol" finds "Mari-sol", as the ledger already hashes them alike). No word characters: the literal."""
+    words = _WORD_RE.findall(unicodedata.normalize("NFKC", str(name or "")).strip())
+    if not words:
+        return re.compile(r"\b" + re.escape(str(name or "").strip()) + r"\b", re.IGNORECASE)
+    return re.compile(r"\b" + r"[\W_]+".join(re.escape(w) for w in words) + r"\b", re.IGNORECASE)
 
 
 class _Hasher:
