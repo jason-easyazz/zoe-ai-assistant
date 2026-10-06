@@ -475,6 +475,27 @@ def archive_fields(meta: Mapping[str, Any], *, now: float) -> dict[str, Any]:
     return out
 
 
+#: the keys a retirement writes on the retired row (``retire_fields`` + ``superseded_by_id``); an un-retire drops them
+RETIRE_KEYS = ("invalid_at", "invalid_at_precision", "expired_at", "superseded_by_id")
+
+
+def restore_fields(meta: Mapping[str, Any], *, now: float) -> tuple[dict[str, Any], tuple[str, ...]]:
+    """The two-timelines change for a row that was retired WRONGLY (an un-retire): ``(set, drop)``.
+
+    A row retired for a different person's or attribute's fact was never replaced, so it is true again from
+    where it began: a new validity interval OPEN-ENDED from the ORIGINAL ``valid_from`` (kept; ``added_ts`` /
+    ``added_at`` stand in, marked ``backfill``, for a row that predates the stamp). ``invalid_at`` /
+    ``expired_at`` / ``superseded_by_id`` are dropped. A ``valid_until`` the person stated themselves is theirs and
+    stays. ``restored_at`` (epoch) says when Zoe took the retirement back. The text and ``added_ts`` are never
+    touched: the row was learned when it was learned."""
+    out: dict[str, Any] = {"restored_at": now}
+    if num(meta.get("valid_from")) is None:
+        begin = row_start(meta)
+        if begin is not None:
+            out["valid_from"], out["valid_from_basis"] = begin, "backfill"
+    return out, RETIRE_KEYS
+
+
 def stamp(validity: Validity, captured: float) -> dict[str, Any]:
     """The keys a NEW row gets: ``valid_from`` (stated start, else ``captured``) and its basis, plus the stated
     end and the precision of each stated date."""
