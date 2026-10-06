@@ -3413,6 +3413,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_PERSON_RECALL_FLOOR": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_gate.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_PERSON_SUGGEST_ENABLED": {
         "defaults": [
           "''"
