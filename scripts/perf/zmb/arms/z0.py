@@ -29,6 +29,7 @@ import asyncio
 import contextlib
 import hashlib
 import importlib
+import os
 import importlib.util
 import os
 import re
@@ -490,5 +491,9 @@ class Z0Arm(Arm):
         return memory_residue.scan_palace(self._lab_service.data_dir, list(tokens), scratch=self._lab.scratch_root())
 
     def as_of(self, query: str, ts: str) -> "list[dict[str, Any]]":
-        raise NotImplementedError("MemoryService has no as-of read (rows keep added_at = now in a "
-                                  "backdated run; docs/research/memory-fidelity-audit-2026-10-05.md 5.4)")
+        """Rows as the store believed them at ``ts``: the REAL ``MemoryService.search(as_of=...)`` - the rows whose
+        half-open validity interval ``[valid_from, invalid_at)`` contains the instant, replaced (``superseded``) rows
+        included (audit P2.1; ``memory_temporal``)."""
+        with self._ctl():
+            refs = self._run(self.service.search(query, user_id=self._user, limit=10, as_of=ts))
+        return [self._row(r.id, r.text, r.metadata) for r in refs]
