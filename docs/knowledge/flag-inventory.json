@@ -1445,6 +1445,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_FORGET_ALIAS_SWEEP": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_forget_alias.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_FORGET_LEDGER_SALT": {
         "defaults": [
           "-"

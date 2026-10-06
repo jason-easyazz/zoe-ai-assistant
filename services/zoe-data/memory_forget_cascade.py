@@ -63,7 +63,10 @@ def _now_iso() -> str:
 
 
 def _name_re(name: str) -> "re.Pattern[str]":
-    return re.compile(r"\b" + re.escape(name.strip()) + r"\b", re.IGNORECASE)
+    # the same whole-word pattern the ledger's tokenisation implies (separator-blind between the words of a name),
+    # so a confirmed split alias ("Mari sol") clears "Mari-sol" in a contact or a summary too
+    from memory_forgotten import name_pattern
+    return name_pattern(name)
 
 
 def _names(rx: "re.Pattern[str]", *texts: Any) -> bool:

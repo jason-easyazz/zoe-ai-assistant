@@ -162,15 +162,25 @@ def cell_f4(arm: HMArm) -> scorers.Score:
 
 
 def cell_f5(arm: HMArm) -> scorers.Score:
-    """TARGET (expected FAIL, a documented hole): a speech-to-text MISSPELLING of the forgotten name ('Marisal') matches
-    neither the name pattern nor the hashed ledger, so that chunk survives. Measured on the real library
-    (forget_probe.py: p6 survived every lexical route). The fill is a similar-name check at forget time that ASKS
-    the person; it is not built, so this cell is red on purpose and tracked."""
+    """A speech-to-text MISSPELLING of the forgotten name ('Marisal', 'Marysol') matches neither the name pattern nor the hashed ledger, so its
+    chunks used to survive (forget_probe.py: p6). The fill is the forget-alias sweep: the arm PROPOSES spellings within the length-ruled edit
+    distance and the owner confirms. (1) proposed; (2) nothing erased before a confirmation ('Marisa', a different person two edits away,
+    stays too); (3) a confirmed alias goes through the same path (gone from both tiers, refused on a replay); (4) the innocent turns stay."""
     arm.reset(USER)
-    arm.ingest([T("Marisal is bringing the cake on Sunday"), T(_KEEP_TURNS[0])])
+    arm.ingest([T("Marisal is bringing the cake on Sunday"), T("Marysol rang about the lift on Friday"),
+                T("Marisa lives two doors down and waves every morning"), T(_KEEP_TURNS[0])])
     arm.forget(FORGOTTEN)
-    left = _mentions(arm.stats()["rows"], "Marisal")
-    return _score(not left, "write", survivors=len(left))
+    asked = arm.alias_candidates(FORGOTTEN)
+    proposed = {"Marisal", "Marysol"} <= set(asked)
+    word = lambda w: [r for r in arm.stats()["rows"] if re.search(rf"\b{w}\b", r.get("text", ""), re.IGNORECASE)]  # noqa: E731 - whole word: _mentions() is separator-blind, so "Marisa lives" would read as "Marisal"
+    silent = len(word("Marisal")) + len(word("Marysol"))
+    arm.forget_alias("Marisal")
+    arm.forget_alias("Marysol")
+    left = word("Marisal") + word("Marysol")
+    replay = arm.ingest([T("Marisal is bringing the cake on Sunday")]).written
+    kept = len(word("Marisa")) == 1 and len(word("Okonkwo")) == 1
+    return _score(proposed and silent == 2 and not left and replay == 0 and kept, "write", proposed=sorted(asked),
+                  unconfirmed_still_there=silent, survivors_after_confirm=len(left), replay_written=replay, innocent_kept=kept)
 
 
 def cell_f6(arm: HMArm) -> scorers.Score:
@@ -436,8 +446,8 @@ CELLS: "list[HMCell]" = [
            ("physical_erase",), cell_f6, needs_disk=True),
     HMCell("HM-F8.forget.physical-distilled", "after a forget the name is in no byte of Hindsight's Postgres (log tables, dead tuples, statistics, WAL)", "F",
            ("physical_erase",), cell_f8, needs_pg=True),
-    HMCell("HM-F5.forget.stt-misspelling", "TARGET: an STT misspelling of the forgotten name survives (no deterministic route)",
-           "F", (), cell_f5, expected="FAIL"),
+    HMCell("HM-F5.forget.stt-misspelling", "an STT misspelling of the forgotten name is proposed, never erased unasked, and goes when the owner confirms",
+           "F", ("alias_sweep",), cell_f5),
     HMCell("HM-G1.consent.side-door", "guest words reach neither tier; a child's emotional turn is kept like any member's",
            "G", ("guest_gate",), cell_g1),
     HMCell("HM-I1.poison.default-recall", "a pasted email's instruction line is not in ordinary recall or the distilled tier",
