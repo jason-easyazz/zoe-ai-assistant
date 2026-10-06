@@ -1130,6 +1130,26 @@ brain turns) and up to **1.12 s** on long clips, measured from the `Recorded …
   before the score completes, on both the stream and the blocking turn paths. Scoring
   synchronously again turns those tests red.
 
+### The `speaker` block — the gate's verdict reaches memory provenance (2026-10-06)
+
+With the gate ACTIVE (`SPEAKER_ID_ENABLED=true`, `SPEAKER_ID_SHADOW=false`) the daemon adds
+`speaker: {"verified": null|false, "member": <id>|null, "score": <float>|null}` to the turn payload of
+`/api/voice/turn` and `/api/voice/turn_stream`, beside the unchanged `voice_user_id` / `voice_score`:
+
+| gate said | `speaker` | server `speaker_verified` |
+|---|---|---|
+| scored a candidate (score = the raw cosine) | `{"verified": null, "member": "<id>", "score": 0.8123}` | `True` if score >= `ZOE_SPEAKER_ID_THRESHOLD` and the member's profile consent stands, else `False` |
+| scored, nobody matched (`SCORED_NO_MATCH`) | `{"verified": false, "member": null, "score": null}` | `False` |
+| gate off / W5 shadow / identify error / encoder missing | key absent | `None` (no verdict: today's behaviour) |
+
+The daemon never sends `verified: true` (the server decides; a `true` on the wire is ignored). `speaker_verified`
+then reaches every memory write the turn causes: `False` makes a self-fact `user_unverified`, never the owner's own
+statement ([memory-authority.md](memory-authority.md), "The speaker verdict"). Pinned by
+`tests/unit/test_voice_daemon_speaker_verdict.py` (the real request builders, the gate stubbed). **Deploy**: the
+daemon change is a replay-gated Pi step (`scripts/setup/zoe_voice_daemon.py`); an old daemon keeps working (no
+`speaker` key = no verdict) and an old server ignores the new key. The field is inert until the gate leaves
+shadow mode.
+
 ## Panel barge-in — anchored to playback start (2026-09-28)
 
 The Pi daemon's barge-in decides "the user is talking over Zoe, stop playback". Two

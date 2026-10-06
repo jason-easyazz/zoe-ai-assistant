@@ -857,7 +857,10 @@ def _answers_a_question(fact: str, value: set[str], cues: set[str], user_text: s
 
 # ── same subject + same attribute, different value ───────────────────────────
 
-_WORK_RE = re.compile(r"\bworks?\s+(?:at|for|as|in)\s+(?P<v>[\w'’\- ]{2,40}?)(?:[.,;!?]|$)", re.IGNORECASE)
+# `works at/for X` is the voice extractor's own template (memory_extractor): the slash must read as the
+# preposition, or an unconfirmed panel voice's "I work at Acme" sat beside the owner's job instead of
+# being held back as a candidate (found by ZMB cell A6.panel_unverified.work).
+_WORK_RE = re.compile(r"\bworks?\s+(?:at|for|as|in)(?:/(?:at|for))?:?\s+(?P<v>[\w'’\- ]{2,40}?)(?:[.,;!?]|$)", re.IGNORECASE)
 _AGE_RE = re.compile(r"\b(?P<v>\d{1,3})\s+years?\s+old\b|\baged?\s+(?P<w>\d{1,3})\b", re.IGNORECASE)
 
 
@@ -1020,6 +1023,17 @@ def find_conflict(new_text: str, rows: list[Any], writer_power: int, *,
         if kind:
             return r, kind
     return None
+
+
+#: How the recall packet labels a row a voice the speaker gate did NOT confirm said (it is
+#: stored, never the owner's own statement): the brain must not say "you told me".
+UNVERIFIED_RECALL_LABEL = "(someone at the panel said this; speaker not confirmed)"
+
+
+def is_unverified(meta: Optional[Mapping[str, Any]]) -> bool:
+    """Was this row stamped ``user_unverified`` at write time? Reads the STAMP only (a row written
+    before provenance existed derives a class on read and is never unverified)."""
+    return str((meta or {}).get("authority_class") or "") == USER_UNVERIFIED
 
 
 def is_candidate(ref: Any) -> bool:
