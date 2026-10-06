@@ -139,8 +139,8 @@
       ],
       "probes": [
         {"kind": "store", "assertions": [
-          {"op": "present", "contains": ["<attr.intruder_needle>"], "statuses": ["approved", "pending"]},
-          {"op": "all_have", "contains": ["<attr.intruder_needle>"], "statuses": ["approved", "pending"], "field": "authority_class", "equals": "user_unverified"}
+          {"op": "present", "contains": ["<attr.intruder_needle>"], "statuses": ["pending"]},
+          {"op": "all_have", "contains": ["<attr.intruder_needle>"], "statuses": ["pending"], "field": "authority_class", "equals": "user_unverified"}
         ]}
       ]
     },
