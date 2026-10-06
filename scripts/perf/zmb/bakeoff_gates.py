@@ -7,9 +7,9 @@ or reads the live system: ``bakeoff.py`` measures, this decides, so the verdict 
 Every gate item is one of ``PASS`` / ``FAIL`` / ``NA`` (not measured). ``NA`` is never a pass: a gate with an ``NA`` item and no
 ``FAIL`` is ``INCOMPLETE``, and an INCOMPLETE arm is not adoptable (the same "a skip is never a pass" rule as the artifact).
 
-The rule's own words are honoured, including what the foundation cannot do yet: G2 names A3, A8, poisoning (I1-I6), and the winner
-clause names temporal (C) and recall (D) axes - none built (docs/knowledge/zoe-memory-bench.md). A candidate can therefore reach
-``ADOPT_CANDIDATE`` at most; the report prints exactly which required cells do not exist so nobody reads it as final.
+Every axis the rule names exists in the spec: G2's hard cells include A3 / A8 (the ``authority`` axis) and poisoning (``poisoning``),
+and the winner clause's C and D are the ``temporal`` and ``recall`` axes. The verdict is still advisory (the owner decides), and the
+design's remaining unbuilt cells are listed in docs/knowledge/zoe-memory-bench.md.
 """
 from __future__ import annotations
 
@@ -27,15 +27,13 @@ RULE = {
     "layer_lines_max": 1000, "delete_lines_min": 5000, "memory_lines_total": 17923,
     "seeds_required": 3, "restore_forget_min": 6,
 }
-#: rule letter -> the ZMB axis that implements it today (None = not built)
-WIN_AXES = {"B": "extraction", "C": None, "D": None, "E": "abstention"}
-#: required by the rule's G2 / winner clause but absent from the foundation spec
-UNBUILT = ("A3 provenance honesty", "A8 graph edges", "poisoning I1-I6", "temporal C1-C7", "recall D (hit@k at 30/100/300 filler)")
+#: rule letter -> the ZMB axis that implements it (None = not built; every letter is built now)
+WIN_AXES = {"B": "extraction", "C": "temporal", "D": "recall", "E": "abstention"}
 #: the files the decision record (section 3.1) estimates are deletable under adoption, for the G3 line count (an ESTIMATE)
 DELETABLE_FILES = (
     "memory_digest.py", "memory_idle_consolidation.py", "memory_quality.py", "memory_lint.py", "memory_reject_ledger.py",
     "memory_index_health.py", "memory_recall_probe.py", "zoe_memory_layers.py", "zoe_memory_compose.py", "hindsight_memory.py")
-HARD_AXES = ("authority", "forgetting", "abstention", "emotional", "identity")
+HARD_AXES = ("authority", "forgetting", "abstention", "emotional", "identity", "poisoning")
 
 
 def item(state: str, threshold: str, measured: str) -> "dict[str, str]":
@@ -205,8 +203,8 @@ def decide(arms: "dict[str, dict]", z0_axes: dict) -> "dict[str, Any]":
     """The rule's verdict. ``arms`` = ``evaluate_arm`` results by name (H0, H1, H2)."""
     adoptable = [n for n in ("H1", "H2", "H0") if arms.get(n, {}).get("verdict") == "PASSES_BUILT_GATES"]
     cmp_by_arm = {n: compare_axes(a["axes"], z0_axes) for n, a in arms.items()}
-    caveat = ("NOT FINAL: the rule also requires " + ", ".join(UNBUILT) + " - none exist in the foundation spec yet, so no arm can be "
-              "declared ADOPTABLE; this is the verdict on every cell that exists.")
+    caveat = ("Advisory: this is the pre-registered rule applied to every cell in the spec (B/C/D/E, A3/A8 under authority, poisoning "
+              "as a hard axis); known-failing targets count as failures, a skipped cell is never a pass, and the owner decides.")
     if not adoptable:
         incomplete = [n for n, a in arms.items() if a["verdict"] == "INCOMPLETE"]
         text = ("KEEP_Z0: no arm passes every built gate" + (f" ({', '.join(incomplete)} incomplete: not a pass)" if incomplete else "")
@@ -222,10 +220,10 @@ def decide(arms: "dict[str, dict]", z0_axes: dict) -> "dict[str, Any]":
         if len(wins) >= 2 and not worse:
             return {"verdict": "ADOPT_CANDIDATE", "winner": n, "adoptable": adoptable, "compare": cmp_by_arm, "caveat": caveat,
                     "text": f"ADOPT_CANDIDATE {n}: passes every built gate and beats Z0 beyond the Wilson interval on {', '.join(wins)} "
-                            f"(rule needs 2 of B/C/D/E; C and D are not built). " + ("H1 chosen over H2 per the rule. " if len(order) == 2 else "")}
+                            f"(rule needs 2 of B/C/D/E). " + ("H1 chosen over H2 per the rule. " if len(order) == 2 else "")}
     return {"verdict": "KEEP_Z0", "winner": None, "adoptable": adoptable, "compare": cmp_by_arm, "caveat": caveat,
             "text": f"KEEP_Z0 (tie goes to Z0): {', '.join(adoptable)} pass every built gate but do not beat Z0 beyond the Wilson interval "
-                    f"on two of B/C/D/E (built: B, E) without being worse on the others."}
+                    f"on two of B/C/D/E (B extraction, C temporal, D recall, E abstention) without being worse on the others."}
 
 
 def median(xs: "list[float]") -> "Optional[float]":

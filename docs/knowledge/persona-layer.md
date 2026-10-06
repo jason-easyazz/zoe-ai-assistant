@@ -1,7 +1,7 @@
 ---
 type: Reference
 title: Persona layer — phase 0 (household persona + per-member mode, flag-dark)
-description: What landed for Zoe's personality layer in phase 0 — the persona record, where it lives, how it renders and is swapped into a prompt, which lane it reaches today (the dormant legacy lane, NOT the live Flue brain), the routes, the drift stub, and what remains.
+description: What landed for Zoe's personality layer in phase 0 — the persona record, where it lives, how it renders and is swapped into a prompt, which lanes it reaches (the dormant legacy lane and, via a per-turn envelope, the live Flue brain), the routes, the drift stub, and what remains.
 tags: [persona, personality, governance, flag-dark, W5.4, P5]
 timestamp: 2026-10-04T00:00:00Z
 ---
@@ -28,9 +28,41 @@ absent (404) and every prompt is byte-identical to today.
 | `_ZOE_SOUL_BASE` / `_ZOE_SOUL_VOICE` in `services/zoe-data/zoe_agent.py` | legacy lane | dormant (selected only when `ZOE_BRAIN_BACKEND` is not `flue` and `ZOE_USE_CORE_BRAIN` is off) |
 | `services/zoe-core/SOUL.md` | core (Pi agent) lane | dormant |
 
-**In phase 0 the persona layer reaches the dormant legacy lane only.** The live Flue prompt is
-untouched on purpose: `labs/flue-zoe-brain-2x/src/*` is voice path (replay-gated) and
-`deploy.yml` restarts the sidecar on any change there. The sidecar consumer is phase 1 (below).
+**Phase 0 reached the dormant legacy lane only; the live Flue lane is wired as of the sidecar
+consumer below.** The 2026-10-06 flag attribution measured the flag as INERT on the live brain
+(`system=2384` tokens on and off): the fixed persona lives in the sidecar prompt, not in zoe-data.
+It stayed unwired in phase 0 on purpose: `labs/flue-zoe-brain-2x/src/*` is voice path (replay-gated)
+and `deploy.yml` restarts the sidecar on any change there.
+
+### The live lane (sidecar consumer)
+
+- **Where the prompt is built.** `labs/flue-zoe-brain-2x/src/agents/zoe.ts` returns `ZOE_INSTRUCTIONS`
+  (soul + doctrines, 9,326 chars = 2,332 tokens). The soul now lives in `src/soul.ts` as named
+  paragraphs (joined bytes unchanged, sha256-pinned); `ZOE_PERSONA_FIXED` is its first five paragraphs.
+  The provider (`src/providers/capped-completions.ts` `applyPolicies`) is the only place that sees the
+  system prompt and the newest user message together.
+- **How the block gets there.** zoe-data owns the data, the flag and the member, so
+  `zoe_flue_client._persona_context_block(uid)` renders `persona_layer.block_for(uid)` per turn and forwards
+  it as ONE envelope line, `` zoe-persona:<JSON string>``, between the replay and identity lines (the
+  same trusted-envelope pattern as the identity, replay and speculative-turn lines). `src/persona.ts` parses
+  and validates it (string, at most 400 tokens, no control characters, opens with `You are Zoe`), strips it,
+  and swaps `ZOE_PERSONA_FIXED` for the block plus the two soul paragraphs the block does not carry
+  (how to use what is known about the person; what help is). It is read off the NEWEST user message on every
+  model round and nothing is cached or bound, so a member mode can never carry into another turn.
+- **Why an envelope and not the phase-1 fetch.** The cloned user-model fetch is background-only, so a
+  member first turn after any sidecar restart would run on the wrong persona, and it needs a second
+  authenticated endpoint. The turn already knows the member.
+- **Flag off / held = today bytes.** No line is sent when the flag is off, nothing is loaded, the member has
+  no `member_modes` row, the lookup failed or timed out (0.5 s budget), the member is a minor
+  (`MINORS_GET_PERSONA` is False until the crisis path ships), or the wire is 1. No line = `ZOE_INSTRUCTIONS`
+  byte-for-byte. Guests and synthetic ids get the household tone and no relationship mode.
+- **Cost.** The block is 101 (guest) to 134 (kid) tokens for the default persona, 175 at most; the net change
+  to the prompt is about minus 40 tokens for a default companion (the block replaces 255 tokens of fixed
+  persona and keeps 88). It changes the head of the system prompt, so a member switch re-prefills the
+  prompt once (the same cost class as the user-model suffix on a user switch, larger because the swap is at
+  the front); one member in a row is fully cached.
+- **Pinned by** `tests/test_persona_flue_lane.py` (wire bytes, the household policy, and the real sidecar
+  `applyPolicies` run through node) and the sidecar `test/persona_layer.test.ts`.
 
 ## What exists
 
@@ -79,16 +111,15 @@ untouched on purpose: `labs/flue-zoe-brain-2x/src/*` is voice path (replay-gated
 
 ## Not in this PR
 
-No voice, panel-chip or phone editor (the PUT is the only editor); no sidecar consumer
-(`src/persona.ts`) and so no effect on the live brain; no kid *assignment* (waits on W5 enrolment)
+No voice, panel-chip or phone editor (the PUT is the only editor); no kid *assignment* (waits on W5 enrolment)
 and no tool narrowing; no nickname/notes fields; no deterministic crisis path (the note requires
 it; it is not built); no P5 log line in the chat path; no S13 persona-adherence bar scenario.
 
 ## Phase 1 (next)
 
-1. Sidecar `src/persona.ts` cloned from `user-model.ts` (fetch `/api/persona/block`, per-user cache,
-   fail-open, appended after the user-model suffix), flag-gated, replay-gated; delivery proof like
-   the user-model A/B. Until then the flag changes nothing live.
+1. DONE (see the live-lane section above): the sidecar consumer, as a per-turn envelope rather than the
+   cloned fetch. Remaining: the replay gate landing, then the S4 / persona bar compare (below) before the
+   flag is flipped in the live env.
 2. Editing: voice `persona_adjust` intent with confirm, touch chips, phone QR for boundaries.
 3. The crisis path, before the persona layer is enabled for any minor (note §7).
 4. Baseline week → calibrate the drift bar → log-only drift line beside `FLUE_CONTEXT_BUDGET`.

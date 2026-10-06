@@ -58,8 +58,8 @@ Output: `~/.zoe/bakeoff-2026-10/run-<stamp>.log`, `run-<stamp>.json`, and a **dr
 The first lines of the markdown are the verdict by the pre-registered rule (`bakeoff_gates.py`; a test pins every threshold):
 
 * **`KEEP_Z0`** - no arm passes every built gate and beats Z0 beyond the Wilson interval on two of B/C/D/E (ties go to Z0). The rule says: keep Z0, finish audit P1-P3.
-* **`ADOPT_CANDIDATE <arm>`** - passes every built gate and beats Z0 on two axes. **Never final**: the rule also needs A3 provenance honesty, A8 graph edges, the
-  poisoning cells and the temporal (C) and recall (D) axes, none of which exist in the foundation spec yet. The report prints that caveat under the verdict.
+* **`ADOPT_CANDIDATE <arm>`** - passes every built gate and beats Z0 on two axes. Advisory: every axis the rule names now exists in the spec (C = `temporal`, D = `recall`, A3 / A8 under `authority`, `poisoning` a hard axis);
+  known-failing targets count against an arm and the owner decides. The report prints a one-line advisory note under the verdict.
 * Per arm: `NOT_ADOPTABLE` (a gate item failed), `INCOMPLETE` (something was not measured or fewer than three seeds ran; not a pass),
   `PASSES_BUILT_GATES`. If H1 and H2 both pass the rule chooses H1. H0 is the measurement of what Hindsight does with no Zoe layer; it cannot win.
 * Gate tables list each item as threshold / measured / `PASS | FAIL | NA`. The axes table shows pass / n with Wilson 95% for Z0, Z0-off, H0, H1, H2.
