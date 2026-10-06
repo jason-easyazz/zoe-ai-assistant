@@ -623,3 +623,17 @@ def test_no_cell_id_title_note_or_skip_reason_names_a_household_string():
         public = " ".join((c.id, c.title, c.note, c.skip_reason, c.lme_map))
         hits = scorers.found_needles(public, pool)
         assert not hits, (c.id, hits)
+
+
+def test_score_disk_names_the_postgres_relations_and_live_tables_but_never_text():
+    dirty = {"tokens": {"Marisol": {"total": 3, "files": {"pg_wal/0001": 1, "base/1/16": 2}, "pg_relations": {"audit_log": 2, "pg_wal": 1},
+                         "live_rows": {"llm_requests": 1, "audit_log": 0}}}}
+    s = scorers.score_disk(dirty)
+    assert not s.ok and s.stage == "write" and s.evidence["byte_hits"] == 3
+    assert s.evidence["pg_relations"] == ["audit_log", "pg_wal"] and s.evidence["live_row_tables"] == ["llm_requests"]      # a zero-count table is not residue
+    assert "Marisol" not in json.dumps(s.evidence)
+    clean = scorers.score_disk({"tokens": {"Marisol": {"total": 0, "files": {}, "pg_relations": {}, "live_rows": {}}}})
+    assert clean.ok and clean.evidence["pg_relations"] == [] and clean.evidence["live_row_tables"] == []
+    assert not scorers.score_disk({"tokens": {}}).ok                          # a scan of nothing proves nothing
+    chroma = scorers.score_disk({"tokens": {"x": {"total": 0, "files": {}, "sqlite_pages": {}}}})
+    assert chroma.ok and "pg_relations" not in chroma.evidence                    # the Chroma evidence keeps its shape

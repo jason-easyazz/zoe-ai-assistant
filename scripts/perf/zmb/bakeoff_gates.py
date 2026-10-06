@@ -296,8 +296,8 @@ def _caveats(arms: "dict[str, dict]", decision: dict, z0_axes: dict) -> "list[st
         skipped = {ax: s.get("skipped") for ax, s in a["axes"].items() if s.get("skipped")}
         if skipped:
             out.append("Cells the arm could not or did not run, per axis: " + ", ".join(f"{ax} {n}" for ax, n in sorted(skipped.items()))
-                       + ". Capability skips (conflict_pass, graph edges, on-disk residue) are structural: the H arms cannot answer those cells, "
-                       "so G2 `hard_cells_all_ran` stays red for them by the pre-registered rule (a skip is never a pass).")
+                       + ". A capability skip is structural (the arm lacks what the cell needs: H0 has no Zoe layer, so no people graph or nightly pass; any arm built "
+                       "without the scratch Postgres has no disk scan), so G2 `hard_cells_all_ran` stays red for it by the pre-registered rule (a skip is never a pass).")
     out.append("Extraction quality (B) is measured through Hindsight's real extraction with the Gemma E4B clone; one server, one scratch Postgres, "
                "synthetic households only. Net RSS is gross (the Chroma/ONNX that adoption frees is not subtracted).")
     return out

@@ -391,27 +391,29 @@ def test_the_whole_store_tier_runs_clean_on_h1_and_h0_is_red_on_the_hard_axes():
     arm, _f = mk("H1")
     rows = run_cells(store, WORLD, arm)
     arm.close()
-    # every cell that RAN either matches its declared expectation or is a known H1 adapter gap. SKIPs are declared capability gaps
-    # (the temporal / edge / disk cells need conflict_pass / edges / disk, which only Z0 has); the targets (expected FAIL) are red on
-    # H1 as on Z0 unless a fix lands (F3 is the one H1 passes: its forgotten ledger).
+    # every cell that RAN either matches its declared expectation or is a known H1 adapter gap. The only SKIPs left are the disk cells (F5 / F6):
+    # this arm was built without a scratch-Postgres handle (the next test gives it one); the targets (expected FAIL) are red on H1 as on Z0
+    # unless a fix lands (F3 is the one H1 passes: its forgotten ledger).
+    assert sorted(r["id"] for r in rows if r["verdict"] == "SKIP") == sorted(
+        c.id for c in store if "disk" in cellmod.required_capabilities(c))
     ran = [r for r in rows if r["verdict"] != "SKIP"]
     assert [r["id"] for r in ran if r["verdict"] == "ERROR"] == []
     unexpected = sorted(r["id"] for r in ran if r["expected"] == "PASS" and r["verdict"] != "PASS")    # a target H1 PASSES is the point (F3)
-    # KNOWN GAPS of the H arms' Zoe layer: one. The five A3 provenance cells (the row export carries source_excerpt / user_turn_id,
-    # stamped through Hindsight metadata) and the unverified-speaker hold (A7.panel_unverified_kept.*, I2.third_party_fragment.panel_unverified:
-    # a self-assertion from an unverified voice is a PENDING candidate, #1895) are ported. What stays red:
-    #  - C4.valid_from_is_event_time (the two timelines, audit P2.1, #1896): at this point of the stack the H arms' row export carries NO
-    #    validity interval at all (valid_from / invalid_at are stamped by the conflict pass and the side table, which the stacked PR #1901 adds), so
-    #    there is nothing to stamp the owner's stated event time ("since 2015") into. The port itself is small (the layer calls the REAL
-    #    memory_temporal.parse_validity / stamp, ~8 lines) and lands in #1901, which deletes this entry.
-    # A gap that comes back must be listed HERE with its reason, never silently accepted: fix the adapter and shrink this list, never widen it.
-    known: "list[str]" = ["C4.valid_from_is_event_time"]
+    # KNOWN GAPS of the H arms' Zoe layer: none left. The five A3 provenance cells (the row export carries source_excerpt / user_turn_id,
+    # stamped through Hindsight metadata), the unverified-speaker hold (A7.panel_unverified_kept.*, I2.third_party_fragment.panel_unverified:
+    # a self-assertion from an unverified voice is a PENDING candidate, #1895) and the two timelines (C4.valid_from_is_event_time: the layer
+    # stamps valid_from through the real memory_temporal.parse_validity / stamp; C2.history_read / history_is_labelled: a history question also
+    # gets the retired rows, labelled "Before that", #1896) are ported. A gap that comes back must be listed HERE with its reason, never
+    # silently accepted: fix the adapter and shrink this list, never widen it.
+    known: "list[str]" = []
     assert unexpected == known, unexpected
     h0, _g = mk("H0")
     rows0 = run_cells(store, WORLD, h0)
     h0.close()
     bad = artifact.hard_violations(rows0, CELLS)
     assert len(bad) >= 60 and any(b.startswith("A1.") for b in bad)                       # what Hindsight does natively, on the same spec
+    skipped0 = sorted(r["id"] for r in rows0 if r["verdict"] == "SKIP")                   # no Zoe layer: no people graph, no conflict pass (and no pg here)
+    assert skipped0 == sorted(c.id for c in store if cellmod.required_capabilities(c) & {"edges", "conflict_pass", "disk"})
 
 
 def test_the_artifact_of_an_h_arm_run_carries_no_household_text():
@@ -479,13 +481,36 @@ def test_the_speaker_control_turns_the_unverified_hold_red():
         assert verdict("H1", cid, off=frozenset({"speaker"})) == "FAIL", cid
 
 
-# ── the capabilities an H arm declares it lacks: those cells SKIP with the reason, never ERROR, never pass ──────────
+# ── the capabilities an arm declares it lacks: those cells SKIP with the reason, never ERROR, never pass ──────────
 
-def test_cells_needing_a_capability_hindsight_lacks_skip_with_the_reason():
-    store = [c for c in CELLS.values() if c.tier == "store"]
-    for variant in ("H0", "H1", "H2"):
+def pgmk(variant="H1", **kw):
+    """An arm over the fake Hindsight AND the fake scratch Postgres it writes to (what the bake-off window gives the real one)."""
+    from zmb.arms.fake_postgres import FakePostgres
+    pg = FakePostgres()
+    fake = FakeHindsight(pg=pg)
+    kw.setdefault("settle_poll_s", 0)
+    arm = hs.HindsightArm(variant, transport=fake, pg=pg, **kw)
+    return arm, fake, pg
+
+
+def test_the_capabilities_follow_the_layer_and_the_scratch_postgres_handle():
+    full = {"clock", "idle_pass", "identities", "reader", "controls", "conflict_pass", "edges", "disk"}
+    assert hs.HindsightArm.capabilities == full                                    # what a layered arm with a scratch Postgres can do (the plan counts this)
+    for variant, has_layer in (("H0", False), ("H1", True), ("H2", True)):
         arm, _f = mk(variant)
-        for cap in ("conflict_pass", "edges", "disk"):
+        assert ("conflict_pass" in arm.capabilities) is has_layer and ("edges" in arm.capabilities) is has_layer
+        assert "disk" not in arm.capabilities                                      # no pg= handle: no way to read the store's disk
+        arm2, _f2, _pg = pgmk(variant)
+        assert "disk" in arm2.capabilities and ("edges" in arm2.capabilities) is has_layer
+        arm.close()
+        arm2.close()
+
+
+def test_cells_needing_a_capability_the_arm_lacks_skip_with_the_reason():
+    store = [c for c in CELLS.values() if c.tier == "store"]
+    for variant, lacking in (("H0", ("conflict_pass", "edges", "disk")), ("H1", ("disk",)), ("H2", ("disk",))):
+        arm, _f = mk(variant)
+        for cap in lacking:
             assert cap not in arm.capabilities and cap in hs.HindsightArm.LACKS
             need = [c for c in store if cap in cellmod.required_capabilities(c)]
             assert need, f"no cell needs {cap}: the declaration would be vacuous"
@@ -493,12 +518,265 @@ def test_cells_needing_a_capability_hindsight_lacks_skip_with_the_reason():
                 o = run(arm, c.id)
                 assert o.verdict == "SKIP" and cap in o.reason, (variant, c.id, o)
         arm.close()
+    h0, _f, _pg = pgmk("H0")                                                      # H0 with a Postgres handle: the disk cells RUN (and are red, below)
+    assert all(run(h0, c.id).verdict != "SKIP" for c in store if "disk" in cellmod.required_capabilities(c))
+    h0.close()
 
 
 def test_called_directly_the_arm_says_why_it_cannot():
-    arm, _f = mk("H1")
-    for call in (arm.run_conflict_pass, arm.edges, lambda: arm.write_edge("a", "b", "friend", "personal", "user_stated", "conversation"),
-                 arm.hard_delete, lambda: arm.disk_residue(["x"])):
-        with pytest.raises(NotImplementedError):
+    arm, _f = mk("H1")                                                            # a layered arm without a Postgres handle
+    for call in (arm.hard_delete, lambda: arm.disk_residue(["x"])):
+        with pytest.raises(NotImplementedError, match="pg="):
             call()
+    with pytest.raises(hs.PgUnavailable):
+        arm.reset(USER, disk=True)
+    arm.close()
+    h0, _f2 = mk("H0")
+    for call in (h0.run_conflict_pass, h0.edges, lambda: h0.write_edge("a", "b", "friend", "personal", "user_stated", "conversation")):
+        with pytest.raises(NotImplementedError, match="no Zoe layer"):
+            call()
+    h0.close()
+
+
+# ── the people graph (A8, capability ``edges``): Zoe's own, reused as it is, behind the same authority wall ──────────
+
+A8_CELLS = ("A8.inferred_cannot_close_user_edge", "A8.refused_edge_is_held_not_lost", "A8.user_change_closes_edge_keeps_history")
+
+
+@pytest.mark.parametrize("variant", ["H1", "H2"])
+def test_the_a8_cells_pass_on_the_layered_arms_and_the_authority_control_turns_them_red(variant):
+    for cid in A8_CELLS:
+        assert verdict(variant, cid) == "PASS", f"{variant} {cid}"
+    for cid in A8_CELLS[:2]:                                                      # the two controlled hard cells
+        assert CELLS[cid].controls == ("authority",)
+        assert verdict(variant, cid, off=frozenset({"authority"})) == "FAIL", f"switching authority OFF must turn {cid} red on {variant}"
+    assert verdict(variant, A8_CELLS[2], off=frozenset({"authority"})) == "PASS"       # the sanity cell is unaffected: the owner's own change always closes the edge
+
+
+def test_h0_has_no_zoe_layer_so_the_a8_cells_skip_red_by_design():
+    for cid in A8_CELLS:
+        o = run(mk("H0")[0], cid)
+        assert o.verdict == "SKIP" and "edges" in o.reason
+
+
+def test_the_edge_machinery_is_z0s_own_not_a_copy():
+    from zmb.arms import people_graph, z0
+    assert hs.PeopleGraph is people_graph.PeopleGraph and z0.PeopleGraph is people_graph.PeopleGraph
+    writes = (("Marisol", "Ines", "friend", "personal", "user_stated", "conversation"), ("Marisol", "Ines", "spouse", "family", "inferred", "digest"),
+              ("Marisol", "Ines", "spouse", "family", "user_stated", "conversation"))
+    z0arm = z0.Z0Arm()
+    z0arm.reset(USER)
+    h1, _f = mk("H1")
+    h1.reset(USER)
+    try:
+        for w in writes:
+            z0arm.write_edge(*w)
+            h1.write_edge(*w)
+        assert h1.edges() == z0arm.edges() and len(h1.edges()) == 2 and [e["current"] for e in h1.edges()] == [False, True]
+    finally:
+        z0arm.close()
+        h1.close()
+
+
+def test_a_refused_relationship_is_a_held_candidate_in_the_export_that_points_at_the_edge_and_never_reaches_hindsight():
+    arm, fake = mk("H1")
+    arm.reset(USER)
+    arm.write_edge("Marisol", "Ines", "friend", "personal", "user_stated", "conversation")
+    arm.write_edge("Marisol", "Ines", "spouse", "family", "inferred", "digest")
+    held = [r for r in arm.stats()["rows"] if r["status"] == "disputed"]
+    assert len(held) == 1 and "Marisol" in held[0]["text"] and held[0]["contradicts_id"].startswith("edge:") and held[0]["origin"] == "digest"
+    assert held[0]["authority_class"] in ("model_from_transcript", "model_from_turn")
+    assert not posts(fake, "/memories")                                             # a graph edge is not a memory: nothing was retained
+    arm.write_edge("Marisol", "Ines", "spouse", "family", "inferred", "digest")      # idempotent: the same candidate is not written twice
+    assert len([r for r in arm.stats()["rows"] if r["status"] == "disputed"]) == 1
+    arm.close()
+
+
+def test_the_graph_is_per_cell_a_reset_starts_an_empty_one():
+    arm, _f = mk("H1")
+    arm.reset(USER)
+    arm.write_edge("Marisol", "Ines", "friend", "personal", "user_stated", "conversation")
+    assert len(arm.edges()) == 1
+    arm.reset("demo_bar_2b3c4d5e")
+    assert arm.edges() == []
+    arm.close()
+
+
+# ── the nightly conflict pass (temporal C cells, capability ``conflict_pass``): Zoe's own, over the arm's exported rows ──────────
+
+CONFLICT_CELLS = sorted(c.id for c in CELLS.values() if c.tier == "store" and "conflict_pass" in cellmod.required_capabilities(c))
+
+
+def test_nine_cells_need_the_conflict_pass_and_each_controlled_one_goes_red_without_its_feature():
+    assert len(CONFLICT_CELLS) == 9
+    controlled = [cid for cid in CONFLICT_CELLS if CELLS[cid].controls and CELLS[cid].expected == "PASS"]
+    assert len(controlled) == 9 and {"C2.history_read", "C2.history_is_labelled"} <= set(controlled)      # the two timelines (#1896): C2 is a PASS cell now
+    for variant in ("H1", "H2"):
+        for cid in controlled:
+            assert verdict(variant, cid) == "PASS", f"{variant} {cid}"
+            for control in CELLS[cid].controls:
+                assert verdict(variant, cid, off=frozenset([control])) == "FAIL", f"switching {control} OFF must turn {cid} red on {variant}"
+    assert verdict("H0", "C1.update_typed") == "SKIP"
+
+
+def test_the_stated_event_time_is_valid_from_and_its_control_turns_the_cell_red():
+    for variant in ("H1", "H2"):
+        assert verdict(variant, "C4.valid_from_is_event_time") == "PASS", variant
+        assert verdict(variant, "C4.valid_from_is_event_time", off=frozenset(["event_time"])) == "FAIL", variant
+
+
+def test_a_history_question_serves_the_retired_row_labelled_and_a_plain_one_does_not():
+    arm, _f = mk("H1")
+    arm.reset(USER)
+    arm.ingest([Turn("User lives in Perth.", "owner_taught"), Turn("User moved to Hobart.", "owner_taught")])
+    arm.run_conflict_pass()
+    old = [r["text"] for r in arm.recall("where did I live before Hobart", 5) if "Perth" in r["text"]]
+    assert old and all(t.startswith("Before that") for t in old)
+    assert all("Perth" not in r["text"] for r in arm.recall("where does the user live", 5))
+    arm.close()
+
+
+def test_the_conflict_pass_retires_by_deleting_the_document_and_keeps_the_row_as_history():
+    arm, fake = mk("H1")
+    arm.reset(USER)
+    arm.ingest([Turn("User lives in Perth.", "owner_taught"), Turn("User moved to Hobart.", "owner_taught")])
+    assert len(texts(arm, "approved")) == 2                                         # two approved homes until the nightly pass runs
+    out = arm.run_conflict_pass()
+    assert out == {"pairs": 1, "superseded": 1}
+    assert sum(1 for m, p in fake.calls if m == "DELETE" and "/documents/" in p) == 1
+    assert texts(arm, "approved") == ["User moved to Hobart."]
+    old = next(r for r in arm.stats()["rows"] if r["status"] == "superseded")
+    new = next(r for r in arm.stats()["rows"] if r["status"] == "approved")
+    assert "Perth" in old["text"] and old["invalid_at"] and old["valid_from"] and old["superseded_by_id"] == new["id"]
+    assert new["supersedes_id"] == old["id"] and new["valid_from"] and not new["invalid_at"]
+    assert arm.run_conflict_pass() == {"pairs": 0, "superseded": 0}                       # idempotent: a retired row is no longer approved
+    assert all("Perth" not in r["text"] for r in arm.recall("where does the user live", 5))
+    arm.close()
+
+
+def test_the_pass_never_touches_a_different_topic_or_another_persons_fact():
+    arm, _f = mk("H1")
+    arm.reset(USER)
+    arm.ingest([Turn("User lives in Perth.", "owner_taught"), Turn("User's friend Marisol works at the observatory.", "owner_taught"),
+                Turn("User's friend Marisol lives in Hobart.", "owner_taught"), Turn("User's friend Marisol moved to Lima.", "owner_taught")])
+    arm.run_conflict_pass()
+    kept = texts(arm, "approved")                      # the friend's change retires what Zoe's own topic rule says it replaces: never the OWNER's home
+    assert "User lives in Perth." in kept and "User's friend Marisol moved to Lima." in kept and "User's friend Marisol lives in Hobart." not in kept
+
+
+def test_the_conflict_pass_is_the_real_memory_supersede_not_a_copy():
+    import memory_supersede
+    arm, _f = mk("H1")
+    arm.reset(USER)
+    arm.ingest([Turn("User lives in Perth.", "owner_taught"), Turn("User moved to Hobart.", "owner_taught")])
+    seen = []
+    real = memory_supersede.conflict_pairs
+    memory_supersede.conflict_pairs = lambda rows: (seen.append([r.text for r in rows]), real(rows))[1]
+    try:
+        arm.run_conflict_pass()
+    finally:
+        memory_supersede.conflict_pairs = real
+    assert seen and sorted(seen[0]) == ["User lives in Perth.", "User moved to Hobart."]
+    arm.close()
+
+
+# ── physical erase (F5 / F6, capability ``disk``): Hindsight's delete, then the Postgres-level scrub it does not do ──────────
+
+DISK_CELLS = ("F5.forgotten_text_not_on_disk", "F6.hard_delete_not_on_disk")
+
+
+def disk_verdict(variant, cid, **kw):
+    arm, _f, _pg = pgmk(variant, **kw)
+    try:
+        return run(arm, cid).verdict
+    finally:
+        arm.close()
+
+
+@pytest.mark.parametrize("variant", ["H1", "H2"])
+def test_the_disk_cells_pass_with_the_scrub_and_go_red_without_it(variant):
+    for cid in DISK_CELLS:
+        assert CELLS[cid].controls == ("physical_erase",)
+        assert disk_verdict(variant, cid) == "PASS", f"{variant} {cid}"
+        assert disk_verdict(variant, cid, off=frozenset(["physical_erase"])) == "FAIL", f"switching physical_erase OFF must turn {cid} red on {variant}"
+
+
+def test_native_hindsight_leaves_the_text_on_disk_so_h0_is_red_on_both_disk_cells():
+    for cid in DISK_CELLS:
+        assert disk_verdict("H0", cid) == "FAIL", cid                                # no Zoe layer = no scrub: the engine's delete alone
+
+
+def test_the_residue_is_where_the_engine_leaves_it_and_the_scan_sees_it_before_the_delete_too():
+    """The instrument's positive control: a scan that never finds anything proves nothing. The text is found while it is there, and after an
+    UNSCRUBBED delete it is found in the places the engine never revisits (the log tables, the orphan entity, the dead heap rows, the WAL)."""
+    arm, _f, pg = pgmk("H1", off=frozenset(["physical_erase"]))
+    arm.reset(USER)
+    arm.ingest([Turn("User's friend Marisol lives in Hobart.", "owner_taught"), Turn("User's sister Ines works at a bakery.", "owner_taught")])
+    live = arm.disk_residue(["Marisol", "Ines"])["tokens"]
+    assert live["Marisol"]["total"] > 0 and live["Ines"]["total"] > 0
+    arm.forget("Marisol")
+    after = arm.disk_residue(["Marisol"])["tokens"]["Marisol"]
+    assert after["total"] > 0 and {"audit_log", "llm_requests", "entities"} <= set(after["live_rows"])          # live rows the engine never deletes
+    assert {"documents", "memory_units", "pg_wal"} <= set(after["pg_relations"])                                 # dead rows in the files, and the WAL
+    assert arm.disk_residue(["Ines"])["tokens"]["Ines"]["total"] > 0                  # everyone else's text is still there (the forget is not a wipe)
+    arm.close()
+
+
+def test_the_scrub_erases_the_log_rows_the_derived_rows_and_the_dead_tuples_but_not_other_peoples_text():
+    arm, _f, pg = pgmk("H1")
+    arm.reset(USER)
+    arm.ingest([Turn("User's friend Marisol lives in Hobart.", "owner_taught"), Turn("User's sister Ines works at a bakery.", "owner_taught")])
+    arm.forget("Marisol")
+    assert pg.calls[-2:] == ["erase_text", "compact"]                                 # after the API sweep, in that order
+    scan = arm.disk_residue(["Marisol", "Hobart", "Ines"])["tokens"]
+    assert scan["Marisol"]["total"] == 0 and scan["Hobart"]["total"] == 0
+    assert scan["Ines"]["total"] > 0 and any(r["bank"] == arm.bank_for(USER) for r in pg.rows["audit_log"])      # the sister's own log row stays
+    arm.close()
+
+
+def test_hard_delete_removes_the_bank_the_side_table_and_the_logs_and_returns_the_memories_removed():
+    arm, fake, pg = pgmk("H1")
+    arm.reset(USER)
+    arm.ingest([Turn("User lives in Perth.", "owner_taught"), Turn("User met Marisol at the harbour.", "owner_taught")])
+    arm.ingest([Turn("x", "system_writer", writer="digest", proposes=("User lives in Marisol.",))])        # held back (it contradicts the owner): a side-table row
+    assert [r["status"] for r in arm.stats()["rows"] if r["status"] == "disputed"] == ["disputed"]
+    bank = arm.bank_for(USER)
+    assert arm.hard_delete() == 2 and bank not in fake.banks
+    assert arm.stats()["rows"] == [] and arm.layer.known[USER] == []
+    assert not [r for t in ("audit_log", "llm_requests") for r in pg.rows.get(t, []) if r["bank"] == bank]
+    assert arm.disk_residue(["Marisol", "Perth"])["clean"]
+    arm.close()
+
+
+def test_a_disk_cell_starts_from_a_clean_cluster_so_it_measures_its_own_residue_not_an_earlier_cells():
+    arm, _f, pg = pgmk("H1", off=frozenset(["physical_erase"]))
+    arm.reset(USER)
+    arm.ingest([Turn("User's friend Marisol lives in Hobart.", "owner_taught")])
+    arm.reset("demo_bar_2b3c4d5e")                                                       # the next ordinary cell: the engine's bank delete leaves the log rows
+    assert not arm.disk_residue(["Marisol"])["clean"]
+    arm.reset("demo_bar_3c4d5e6f", disk=True)                                            # a disk cell: earlier leftovers are cleared first
+    assert arm.disk_residue(["Marisol"])["clean"]
+    assert pg.calls[-2:] == ["erase_orphans", "compact"]
+    arm.close()
+
+
+def test_the_whole_store_tier_runs_on_h1_with_a_scratch_postgres_and_nothing_skips():
+    from zmb.runner import run_cells
+    store = [c for c in CELLS.values() if c.tier == "store"]
+    arm, _f, _pg = pgmk("H1")
+    rows = run_cells(store, WORLD, arm)
+    arm.close()
+    assert [r["id"] for r in rows if r["verdict"] in ("SKIP", "ERROR")] == []
+    assert sorted(r["id"] for r in rows if r["expected"] == "PASS" and r["verdict"] != "PASS") == []
+
+
+def test_a_token_another_live_bank_holds_makes_the_cell_an_error_not_a_verdict():
+    """A byte scan cannot tell whose bytes they are. If another LIVE bank legitimately holds the scanned name the residue is unattributable: the
+    cell must ERROR loudly (never PASS, never a false FAIL)."""
+    arm, _f, _pg = pgmk("H1")
+    arm.reset(USER)
+    arm.ingest([Turn("User's friend Marisol lives in Hobart.", "owner_taught")])
+    arm.ingest_as("consenting_owner", [Turn("User's friend Marisol works at the observatory.", "owner_taught")])      # a second, live bank
+    with pytest.raises(RuntimeError, match="ANOTHER bank"):
+        arm.disk_residue(["Marisol"])
     arm.close()

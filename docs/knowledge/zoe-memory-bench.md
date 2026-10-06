@@ -3,7 +3,7 @@ type: Reference
 title: Zoe Memory Bench (ZMB) - foundation
 description: The benchmark that measures what no public memory benchmark does - authority (who may change what the user said), forgetting, identity, extraction fidelity, abstention, and now temporal updates, multi-session recall at 30/100/300 filler turns, poisoning, provenance and graph edges (every axis the decision rule names has cells) - with generated gold, deterministic scorers, a negative control on every claim, per-axis Wilson intervals, an in-process lab driver, an arm-adapter interface for the memory-system bake-off (Z0, Hindsight, Graphiti) and the pre-registered bake-off decision rule. What is built, how to run it, what each axis proves, the artifact format, and what is stubbed.
 tags: [memory, benchmark, zmb, authority, forgetting, negative-control, bake-off, eval, zoe-data]
-timestamp: 2026-10-06T09:00:00Z
+timestamp: 2026-10-06T14:30:00Z
 ---
 
 # Zoe Memory Bench (ZMB) - foundation
@@ -91,7 +91,7 @@ The controls (`lab_driver.CONTROLS`), each a named feature the benchmark claims 
 | `event_time` | the stated-validity parser off: `valid_from` is always the capture time, never the date the owner said (C4) |
 | `history` | the history read off: a replaced fact is kept but a question about how things used to be never sees it (C2) |
 | `entailment` | the verbatim-anchor rule removed: a per-turn model reading of the owner's own change of mind cannot retire the owner's row, it waits as a disputed candidate (C1 via the turn digest) |
-| `physical_erase` | `ZOE_MEMORY_PHYSICAL_ERASE=0`: a hard delete / forget removes the row through the API and leaves the text on disk (the F5 / F6 disk cells, REAL Chroma, byte-scan of a copy) |
+| `physical_erase` | `ZOE_MEMORY_PHYSICAL_ERASE=0`: a hard delete / forget removes the row through the API and leaves the text on disk (the F5 / F6 disk cells, byte-scan of a copy: REAL Chroma on Z0, the scratch Postgres on the H arms) |
 
 A cell lists every control that must be off together (`controls: ["extractor", "gate"]` = a two-layer defence: `--control
 off` switches both). **Sanity** cells (`sanity: true`) are positive controls - "the owner teaching their own name is
@@ -276,7 +276,8 @@ class Arm(ABC):
     forget(entity)            # "forget everything about X" -> the arm's own confirmation
     as_of(query, ts)          # rows true at ts, half-open [valid_from, invalid_at) (Z0: MemoryService.search(as_of=...))
     stats()                   # -> {"rows": [...], "counts": {status: n}, "writes_refused": n}  the store export
-    # optional capabilities: advance_clock, ingest_as/stats_as, run_idle_pass, run_conflict_pass, write_edge/edges, answer
+    # optional capabilities: advance_clock, ingest_as/stats_as, run_idle_pass, run_conflict_pass, write_edge/edges, answer,
+    #                        hard_delete/disk_residue (``disk``: the on-disk residue cells F5 / F6)
     #                        (a cell needing one an arm lacks SKIPs)
 ```
 
@@ -435,7 +436,55 @@ recorded per arm, and an always-run restore of the live brain. `bakeoff_gates.py
 (every service command shimmed: lock held refuses, panel not quiet waits, low memory aborts and restores, any failure restores),
 `tests/unit/test_zmb_hindsight_arm.py`, `tests/unit/test_zmb_embed_shim.py`.
 
-**Adapter gap closed (run-2 prep):** the H arms' row export used to carry `authority_class` but no `source_excerpt` / `user_turn_id`, so the five A3 cells were red on H1. The Zoe layer now stamps both through the REAL `memory_authority.turn_evidence` (the service's own write-boundary fill-in; excerpt scrubbed by `scrub_source_excerpt`), sends them as Hindsight item metadata (plus a `turn:` tag for the id), and reads them back in the export (an observation takes its source fact's). A named control `provenance` turns the A3 cells red; `speaker` turns the unverified-speaker hold red (the same pass ported #1895's hold-pending to the H layer, so the A7 / I2 pins are gone too). `test_zmb_hindsight_arm.py` lists ONE known gap after the two-timelines merge (#1896): `C4.valid_from_is_event_time` - at this point of the stack the H arms' row export carries no validity interval at all (`valid_from` / `invalid_at` arrive with the conflict pass in the stacked PR #1901), so `valid_from` is empty on H1 and the stated event time has nowhere to go. The port is ~8 lines (the layer calls the REAL `memory_temporal.parse_validity` / `stamp`, as it already calls the real `memory_authority` / `memory_supersede`) and lives in #1901, which deletes this entry. Until then it is a real H1 temporal gap. H0 has no layer and stays red on A3 by design. **Structural skips that remain** (declared in `HindsightArm.LACKS`): the cells needing `conflict_pass` (temporal, 8), `edges` (A8, 3) and `disk` (F5 / F6, 2) SKIP on every H arm with the reason; the hard ones (A8 x2, F5, F6) keep G2 `hard_cells_all_ran` red by the pre-registered rule.
+**Adapter gap closed (run-2 prep):** the H arms' row export used to carry `authority_class` but no `source_excerpt` / `user_turn_id`, so the five A3 cells were red on H1. The Zoe layer now stamps both through the REAL `memory_authority.turn_evidence` (the service's own write-boundary fill-in; excerpt scrubbed by `scrub_source_excerpt`), sends them as Hindsight item metadata (plus a `turn:` tag for the id), and reads them back in the export (an observation takes its source fact's). A named control `provenance` turns the A3 cells red; `speaker` turns the unverified-speaker hold red (the same pass ported #1895's hold-pending to the H layer, so the A7 / I2 pins are gone too). `test_zmb_hindsight_arm.py` lists no known gap (the C4 stated-event-time cell the two-timelines merge #1896 added was red here until the validity interval existed; it and the C2 history cells are ported below). H0 has no layer and stays red on A3 by design. **The structural skips are closed** (next section): the cells needing `conflict_pass` (temporal, 8), `edges` (A8, 3) and `disk` (F5 / F6, 2) now RUN on the layered H arms.
+
+### H arms run the graph-edge, conflict-pass and physical-erase cells (added 2026-10-06, stacked on the run-2 prep)
+
+Run 1 left four HARD cells no H arm could run (A8 x2, F5, F6), so `hard_cells_all_ran` stayed red by the pre-registered rule whatever else passed. Nothing about the rule changed;
+the arms now do the work. Consistent with the adoption design (Hindsight = derived memory rows; the people graph in Postgres stays Zoe's; Hindsight runs on Postgres + pgvector):
+
+* **`edges` = Zoe's own people graph** (`arms/people_graph.py`, extracted from Z0 and used by BOTH): the real `person_extractor._write_relationship` (temporal edges, the writer
+  stamp, `_edge_may_change` = the authority wall on edges) over an in-memory SQLite with the 0007 / 0015 / 0037 shapes. In the H layer the held-back relationship reaches the side
+  table as a `disputed` row pointing at `edge:<id>` through a `CandidateSink` standing in for `MemoryService.record_candidate`; nothing reaches Hindsight (a graph edge is not a
+  memory). The A8 cells pass on H1 / H2 and the `authority` control turns the two controlled ones red; **H0 (no layer) SKIPs them, so it stays red on the hard gate by design.**
+  A test pins that Z0 and H1 export identical edges for the same writes.
+* **`conflict_pass` = Zoe's nightly pass over the arm's exported rows**: the real `memory_supersede.conflict_pairs` (a newer change cue on the same topic, or a different home) over
+  the layer's approved rows; a retirement is a `DELETE document` on Hindsight and the row stays in the export as `superseded` with `invalid_at` and the supersede links (history
+  kept, never deleted). Observations Hindsight invalidated itself carry the time the arm first saw them so; an observation's validity interval is its source fact's. Controls: `supersede`,
+  `topic`, `invalidate`, `entailment` (the C1 model-writer cell) each turn their cell red on H1 and H2. H0 SKIPs (the pass is Zoe's, not Hindsight's).
+* **The two timelines (#1896) on the H arms**: the layer stamps `valid_from` through the REAL `memory_temporal.parse_validity` / `stamp` on the owner's own words (a user-class write only; a model's paraphrase never gets an event time), so `C4.valid_from_is_event_time` passes on H1 / H2 and the named control `event_time` turns it red. A history question ("where did I live before ...") also gets the arm's retired rows, labelled "Before that (...)" (the real `is_history_question` / `rank_history` / `before_that`, a forgotten name never served), so `C2.history_read` and `C2.history_is_labelled` run on the layered H arms and the controls `invalidate` (no history kept) and `history` (the read off) turn them red. The layer calls Zoe's real functions, as it already does for `memory_authority` and `memory_supersede`; `HindsightArm.as_of` (a belief-time filter) stays unanswerable on Hindsight 0.10.2. `0 known gaps` on H1 over the fake.
+* **`disk` = physical erase on Hindsight's Postgres** (`arms/pg_store.py`). `hard_delete()` = `DELETE bank` through the API, the Zoe side table, then the scrub below; `forget()` ends with the
+  same scrub scoped to the name; `disk_residue()` byte-scans a copy of the data directory. The scrub exists because the engine's own delete leaves text in six places (all MEASURED on
+  the scratch Postgres, `pilot/pg_erase_probe.py`; the tables are the migrated 0.10.2 schema):
+
+| residue the engine's delete leaves | where | what removes it |
+|---|---|---|
+| the whole retain request and every recall query | `audit_log.request` / `response` (no FK to the bank; `delete_bank` / `delete_document` never touch it) | `erase_text` / `erase_bank` |
+| the extraction prompt with the text in it | `llm_requests.input` / `output`, `async_operations.task_payload` | `erase_text` / `erase_bank` |
+| a person nobody mentions any more | `entities.canonical_name` (pruned lazily by a worker), `observation_history.content` | `erase_text` (orphan prune) |
+| the deleted rows' bytes | heap pages, TOAST, btree / GIN / trigram index entries of `documents`, `chunks`, `memory_units` (dead tuples) | `VACUUM FULL` of every text-bearing table |
+| planner statistics | `pg_statistic` most-common values / histograms (`ANALYZE` of an EMPTY table leaves the old ones) | delete the rows for the schema's relations, re-`ANALYZE`, `VACUUM FULL pg_statistic` |
+| every row ever inserted | `pg_wal` (a segment is recycled, not zeroed) | `wal_recycle = off`, `pg_switch_wal()` + `CHECKPOINT` twice |
+
+Ablation, one run, 3 documents (2 name her), the unique token counted in a COPY of the data directory (`docker cp`) plus the live-row query: **no scrub 42 hits in 10 relations; erase_text only 42;
+VACUUM FULL + WAL only 21 (the log rows, the entity, `pg_statistic`); everything but the WAL switch 28 (all in `pg_wal`); everything but `pg_statistic`, when autovacuum analysed while the rows
+lived, 6 to 8 across runs (`pg_statistic`); erase_text + WAL switch without VACUUM FULL 14 (dead tuples); the full scrub 0.** Every step removes bytes no other step removes. Through the real arm (`HindsightArm` ->
+`ScratchPostgres`, engine writes modelled in SQL) over real Postgres files: **H1 with the scrub F5 PASS / F6 PASS (0 hits); H1 with `physical_erase` OFF F5 41 / F6 66 hits FAIL; H0 37 / 60
+FAIL.** The instrument is itself measured: baseline clean (0), positive control sees the text before the delete, a scan of the files sees only what was checkpointed (so it checkpoints first),
+and a long compressible value is INVISIBLE to a byte scan with the default storage (0 of 40 rows) and visible with `STORAGE EXTERNAL` (all 40, in the table and the WAL), which `prepare()` sets on
+the text-bearing columns of the scratch server. A token another LIVE bank also holds makes a disk cell an ERROR (not a verdict): the window therefore sweeps stale `zmb-` banks first, and the
+forgetting probe's own names are outside every world pool.
+
+Where the data directory is: the compose already bind-mounts it (`/home/zoe/.zoe/bakeoff-2026-10/pgdata`) but the container's postgres user owns it, mode 0700, so the lab reads it with `docker cp` (a
+client-side extract: the copy is the caller's) instead of changing the container's user; the 256 MB cap is untouched.
+
+What is NOT proven: the real Hindsight server has still never written these rows. The probe models the engine's writes in SQL from the migrated schema and the engine source, so the first
+window's F5 / F6 are the first contact (the adapter control `physical_erase` OFF on the real stack must be red, and `arm_controls` now counts six claims). Hindsight's `audit_log` / `llm_requests` are
+OFF by default and the bake-off turns them ON to count extraction validity; under adoption they stay off and the scrub is belt and braces. The H arms' side table (held / retired rows) is in-process, not
+disk: under adoption it is Postgres rows and the same scrub would cover it.
+
+**Remaining `LACKS` after this change** (`HindsightArm.LACKS`, per instance): H0 has no `conflict_pass` and no `edges` (no Zoe layer: 3 A8 cells including the 2 hard ones, 8 temporal cells SKIP, so the hard gate
+stays red for H0 by design); an arm built without `pg=` has no `disk`. H1 / H2 in a window lack nothing (`0 of 144 store cells SKIP by capability`; H0: 11).
 
 ## Not built yet (the build plan continues)
 

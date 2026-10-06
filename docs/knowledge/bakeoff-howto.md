@@ -42,10 +42,14 @@ Guards: MemAvailable below 1.2 GB at any time aborts and restores; 90 minutes is
 
 ## What it measures, and how long (planned minutes; `--dry-run` prints the live numbers)
 
+0. Stale `zmb-` banks an earlier window left in the scratch store are deleted first (the disk cells scan the whole data directory: a live bank that holds a name they look for
+   makes their residue unmeasurable, and the cell would say so as an ERROR). Only this tool's own prefix is touched.
 1. Z0 and Z0-off in the lab on three seeds (1): the control and the negative control. Seeds: `zmb-v1` (baseline) plus two held-out.
 2. Forgetting probes start for each Hindsight arm (1): forget an invented friend, check at t+0. The **real t+6 min** check (wait, replay the transcript
    through the arm's own nightly pass and a late model writer, check again) runs later, between cells.
-3. Adapter negative controls on the real server (1): with a Zoe-layer protection OFF the cell that claims it must go red.
+3. Adapter negative controls on the real server (1): with a Zoe-layer protection OFF the cell that claims it must go red. Six claims: `authority` (A1), `identity`, `ledger`, and the three
+   that need what this change gave the arm: `authority` on the people graph (A8), `supersede` on the conflict pass (C1) and **`physical_erase` on F5** (the byte scan must find REAL Postgres
+   residue on the real stack when the scrub is off; if it does not, the scan is blind and the run says so).
 4. **H1 first and complete** (run 2 plan; `--dry-run` prints the minutes and the per-arm cell budget): seed 1 (ceiling ~10), recall latency n=50 (1), verbatim extraction JSON
    validity over >= 100 retain calls (6), brain-slot seconds per retained turn (3), then seeds 2 and 3 (ceiling ~10 each). The ceilings come from run 1's measured seconds per cell
    (H1 3.7, H2 12, H0 20) with headroom for the cells added since; a seed that finishes early hands its slack to the arms behind it. A cell the box did not reach is a SKIP, never a pass.
@@ -98,8 +102,13 @@ Exit codes: 0 done, 2 refused before anything was started, 3 aborted (restored),
 * Net RSS: the Chroma / ONNX that adoption frees inside `zoe-data` is not subtracted, so the figure is gross (conservative).
 * G3 "delete >= 5,000 of 17,923 lines" is an estimate from a file list, not a proof that those files are deletable.
 * The affect line of G2 predates the owner's 2026-10-05 policy (households incl. children recorded, guests never); the cells follow the policy.
-* A forgotten name can survive inside an INVALIDATED observation (Hindsight keeps invalidated rows); the cells count retained rows only
-  (approved / pending / disputed), and no cell checks physical erasure of Hindsight's own tables.
+* A forgotten name can survive inside an INVALIDATED observation (Hindsight keeps invalidated rows); the store cells count retained rows only
+  (approved / pending / disputed). Physical erasure of Hindsight's own tables IS checked now (F5 / F6, below), but only with the engine modelled: the SQL probe
+  (`pilot/pg_erase_probe.py`) writes what the 0.10.2 schema and engine source say it writes, so the first window is the first time the real server's rows are scanned.
+* **F5 / F6 on the H arms.** The scrub (`arms/pg_store.py`) deletes the engine's log rows, orphan entities and history rows for the bank / name, rewrites every text-bearing table (`VACUUM FULL`),
+  drops and recomputes planner statistics and switches the WAL away; the scan byte-scans a `docker cp` of the data directory (the bind mount is `/home/zoe/.zoe/bakeoff-2026-10/pgdata`, mode 0700 for the
+  container's user, so the lab cannot read it in place). `HINDSIGHT_API_AUDIT_LOG_ENABLED=true` and `LLM_TRACE_ENABLED=true` (needed for the validity count) put the whole text in two log tables; under
+  adoption keep both off. H0 (no Zoe layer, no scrub) is expected RED on F5 / F6, and SKIPs A8 and the nightly-pass cells (no layer, no people graph): the hard gate stays red for it by design.
 * The embedding model is whatever `embed_shim.py --find` found (bge-small from `/tmp/fastembed_cache`, which a reboot clears; the fallback is Chroma's
   MiniLM under `~/.cache/chroma`, a different model). The run record names it.
 
@@ -107,5 +116,6 @@ Exit codes: 0 done, 2 refused before anything was started, 3 aborted (restored),
 
 `scripts/perf/zmb/`: `bakeoff_window.sh` (the command), `bakeoff.py` (preflight, window, restore), `bakeoff_measure.py` (phases, sampler, report),
 `bakeoff_gates.py` (the rule), `embed_shim.py` (OpenAI-compatible `/v1/embeddings` on 127.0.0.1:11501, `--selftest`), `arms/hindsight.py` (H0/H1/H2 and the
-Zoe layer, `zoe_layer_lines()` for G3), `arms/fake_hindsight.py` (the test double). Tests: `tests/unit/test_zmb_bakeoff.py`, `test_zmb_hindsight_arm.py`,
-`test_zmb_embed_shim.py`. Runtime files: `/home/zoe/.zoe/bakeoff-2026-10/` (`hindsight.env.example`, `scratch-postgres.compose.yml`, the venv, the logs).
+Zoe layer, `zoe_layer_lines()` for G3), `arms/people_graph.py` (Zoe's people graph, shared with Z0), `arms/pg_store.py` (the scratch-Postgres erase and scan),
+`arms/fake_hindsight.py` + `arms/fake_postgres.py` (the test doubles), `pilot/pg_erase_probe.py` (the measured ablation: run it with the scratch container up; `--cells` runs F5 / F6 through the real arm).
+Tests: `tests/unit/test_zmb_bakeoff.py`, `test_zmb_hindsight_arm.py`, `test_zmb_pg_store.py` (`ZMB_PG_LIVE=1` adds the live checks), `test_zmb_embed_shim.py`. Runtime files: `/home/zoe/.zoe/bakeoff-2026-10/` (`hindsight.env.example`, `scratch-postgres.compose.yml`, the venv, the logs).

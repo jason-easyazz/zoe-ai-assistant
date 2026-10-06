@@ -146,3 +146,15 @@ copies, and `~/.zoe/palace-backups/mempalace-*-20261006-014900.*` (made by my co
 * The forget ledger stores only a salted hash and never the name; the `forget_erase` tombstones store counts and id hashes.
 * A name typed into a forget that is NOT whole-word in a row (a misspelling, a pronoun-only row) is still not matched
   (research hole 2c).
+
+## 8. The same question for Hindsight on Postgres (added 2026-10-06; bake-off H arms)
+
+Section 7's Postgres bullet was unmeasured; for the Hindsight arms it is now measured on the SCRATCH Postgres (`zoe-bakeoff-pg`, never the live database).
+The engine's `delete_document` / `delete_bank` cascade through documents, chunks, memory units, links and (for a bank) entities and observation history, and
+leave: the `audit_log` and `llm_requests` rows that hold the whole retain request / extraction prompt, the entity of a person no memory mentions, the deleted rows'
+bytes (dead tuples: heap, TOAST, index entries), the planner statistics, and the write-ahead log. `arms/pg_store.py` erases the first two by name / bank, rewrites
+the rest (`VACUUM FULL` of every text-bearing table, statistics deleted and re-analysed, `wal_recycle = off` + two `pg_switch_wal()` + checkpoints) and byte-scans a copy
+of the data directory (`docker cp`; the directory itself is mode 0700 for the container's user). Ablation, negative control and the instrument's own checks (a
+compressed TOAST value is invisible to a byte scan; a scan of files sees only what was checkpointed) are in `docs/knowledge/zoe-memory-bench.md` ("H arms run the graph-edge,
+conflict-pass and physical-erase cells"); re-run them with `python3 scripts/perf/zmb/pilot/pg_erase_probe.py` (and `--cells` for F5 / F6 through the real arm) while the scratch
+container is up. For the LIVE zoe-data Postgres (`chat_messages`, `user_portraits`, `people`) the same classes apply and remain unmeasured: that is a separate, operator-gated job.
