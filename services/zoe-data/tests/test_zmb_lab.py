@@ -74,7 +74,7 @@ def full_measure():
 def test_every_controlled_cell_goes_red_with_its_features_off(full_control_pass):
     cp = full_control_pass
     assert cp["ok"] and cp["green"] == [] and cp["not_run"] == []
-    assert cp["checked"] == cp["red"] == 119       # 116 before the two timelines (C2 / C4 now controlled, + C2.history_is_labelled)
+    assert cp["checked"] == cp["red"] == 121       # +3 for the two timelines (C2 / C4 now controlled, + C2.history_is_labelled)
     assert {r["id"] for r in cp["rows"]} == {c.id for c in CELLS
                                              if c.controls and c.expected == "PASS" and c.tier == "store"
                                              and cellmod.required_capabilities(c) <= set(Z0Arm.capabilities)}

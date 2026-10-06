@@ -311,6 +311,12 @@ _REMOVERS = {
     ("scripts/maintenance/remediate_ownerless_memories.py", "main"),    # ``args.delete`` — the argparse flag, not a call
     ("scripts/maintenance/chroma_migrate_rehearsal.py", "probe_roundtrip"),
     ("scripts/maintenance/chroma_migrate_rehearsal.py", "probe_recall"),
+    # the Zoe Memory Bench: arms and negative controls that work on a SCRATCH copy / an in-memory store, never the palace
+    # (the `invalidate` control deletes a replaced row on purpose, to prove the history cells go red without it)
+    ("scripts/perf/zmb/lab_driver.py", "write_row_no_history"), ("scripts/perf/zmb/lab_driver.py", "supersede_by_deleting"),
+    ("scripts/perf/zmb/arms/mempalace_verbatim.py", "delete"), ("scripts/perf/zmb/arms/mempalace_verbatim.py", "forget"),
+    ("scripts/perf/zmb/arms/mempalace_verbatim.py", "forget_ids"), ("scripts/perf/zmb/arms/mempalace_verbatim.py", "sweep_ledger"),
+    ("scripts/perf/zmb/pilot/forget_probe.py", "main"),
 }
 
 

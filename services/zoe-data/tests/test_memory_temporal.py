@@ -275,19 +275,24 @@ def test_as_of_reads_a_legacy_superseded_row_by_its_successor_and_refuses_an_unr
 def test_breaking_the_stamp_turns_the_cells_red():
     """The instrument check: parser off (``event_time``) -> C4 red; history read off -> C2's labelled cell red; the
     replaced row deleted instead of invalidated -> C2 red."""
-    from zmb import cells as cellmod, runner, spec
+    from zmb import runner, spec
     cells = spec.load_cells()
     for control, cid in (("event_time", "C4.valid_from_is_event_time"), ("history", "C2.history_is_labelled")):
         cp = runner.control_pass([c for c in cells if c.id == cid], world.make_world(), frozenset([control]))
         assert cp["ok"] and cp["red"] == 1 and cp["green"] == [], (control, cp)
+
+
+def test_deleting_the_replaced_row_instead_of_invalidating_it_turns_c2_red():
+    from zmb import cells as cellmod, spec
+    cells = spec.load_cells()
     # C2.history_read also names `invalidate` (with `history`): deleting the replaced row instead of invalidating it
     # leaves no history to read, and the cell is red with that switch alone
     w = world.make_world()
     c2 = next(c for c in cells if c.id == "C2.history_read").rendered(w)
-    ok, broken = Z0Arm(), Z0Arm(off=frozenset(["invalidate"]))
-    try:
-        assert cellmod.run_cell(c2, w, ok).verdict == "PASS"
-        assert cellmod.run_cell(c2, w, broken).verdict == "FAIL"
-    finally:
-        ok.close()
-        broken.close()
+    # one arm at a time: two live labs patch the same module globals and must be closed in LIFO order
+    for off, want in ((frozenset(), "PASS"), (frozenset(["invalidate"]), "FAIL")):
+        a = Z0Arm(off=off)
+        try:
+            assert cellmod.run_cell(c2, w, a).verdict == want
+        finally:
+            a.close()

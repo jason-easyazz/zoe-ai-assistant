@@ -391,7 +391,14 @@ def test_the_whole_store_tier_runs_clean_on_h1_and_h0_is_red_on_the_hard_axes():
     arm, _f = mk("H1")
     rows = run_cells(store, WORLD, arm)
     arm.close()
-    assert [r["id"] for r in rows if r["verdict"] in ("FAIL", "ERROR")] == []             # every cell incl. the former targets
+    # every cell incl. the former targets - except the cells of the temporal / poisoning / provenance axes (#1893), which
+    # the Hindsight arm was not built against: its pasted-email and third-party writes are not walled, its rows carry no
+    # source_excerpt / user_turn_id, and it has no stated-event-time parser (C4: valid_from is its filing time). A cell
+    # that starts passing here is an improvement to lock in: remove it from this list.
+    assert [r["id"] for r in rows if r["verdict"] in ("FAIL", "ERROR")] == [
+        "I1.pasted_email_instruction", "I1b.pasted_email_planted_token", "I2.third_party_fragment.third_party",
+        "I2.third_party_fragment.panel_unverified", "A3.typed_turn_rows", "A3.voice_verified_turn_rows",
+        "A3.taught_rows", "A3.nightly_digest_rows", "A3.user_turn_rows_rate", "C4.valid_from_is_event_time"]
     h0, _g = mk("H0")
     rows0 = run_cells(store, WORLD, h0)
     h0.close()

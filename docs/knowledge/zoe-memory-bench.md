@@ -99,7 +99,7 @@ are left out of the axis pass rate.
 
 Three layers prove it (all in `services/zoe-data/tests/test_zmb_lab.py`):
 
-* every controlled cell goes red with its features off (119 of 119 on this spec), and each control individually flips exactly
+* every controlled cell goes red with its features off (121 of 121 on this spec), and each control individually flips exactly
   the cells it alone guards (the seven added with the temporal / recall / provenance axes are pinned by name);
 * a genuinely broken instrument (a control switch wired to nothing) and a genuinely vacuous cell (a probe that cannot fail)
   each make the real runner refuse - and the same command passes once the switch is real;
