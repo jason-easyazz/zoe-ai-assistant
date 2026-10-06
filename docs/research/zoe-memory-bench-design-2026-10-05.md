@@ -520,6 +520,14 @@ the live box and run **outside** the nightly window under the harness lock. ZMB 
 | 9 | **Operations:** user timer 05:15 + service unit, Telegram one-liner on regression / error / streak, `non_pass_streak`, `docs/knowledge/zmb.md`, a `docs/CANONICAL.md` index line, a Child-DOX entry | `scripts/setup/systemd/zoe-zmb.{service,timer}`, `scripts/perf/zmb/notify.py` | notify: dry-run prints the exact line and sends nothing; a clean pass sends nothing; a delivery failure is recorded, not raised; the line contains no value text |
 | 10 | **Anchor + adapter (lab only, not in the bar):** LongMemEval_S retrieval-only Recall@k run on the box (one-off, hours; dataset download and licence **[unverified]**) and a thin adapter interface so the same specs can drive mem0-OSS / Graphiti | `scripts/perf/zmb/anchor_longmemeval.py`, `scripts/perf/zmb/adapters/` | adapter contract test against a fake memory system; anchor output schema |
 
+**Status 2026-10-06 (store tier, lab only).** The temporal (C), recall (D), poisoning (I), provenance (A3) and graph-edge (A8) cells of
+rows 5 and 7 now exist as store-tier cells in the lab (`scripts/perf/zmb/scenarios/{temporal,recall,poisoning,provenance_graph}.json`),
+each with a negative control or a measured `expected: FAIL`. They deviate from the sketch above in three ways, all recorded in
+`docs/knowledge/zoe-memory-bench.md`: C1-C5 follow the owner's brief (update, history, dated event, "since <year>", stale-fact
+abstention) with C6 = collateral invalidation kept because the decision rule names it; D runs retrieval-only hit@5 over a seeded corpus
+(the lab's bag-of-words ranking proves the store, not the embedder); and I2 / I3 / I4 / I1b are scored at the STORE (what is written and
+how the packet labels it), the reply half staying brain tier. No cell was run against the live service.
+
 What can be claimed after which PR: after 5, authority / identity / poisoning pass counts with controls (the part the
 owner's incident is about); after 7, the full per-axis table; after 10, one retrieval number comparable with the
 LongMemEval paper and the ability to run a competitor on the same specs. Not before.
