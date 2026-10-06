@@ -74,10 +74,12 @@ def full_measure():
 def test_every_controlled_cell_goes_red_with_its_features_off(full_control_pass):
     cp = full_control_pass
     assert cp["ok"] and cp["green"] == [] and cp["not_run"] == []
-    assert cp["checked"] == cp["red"] == 123       # 99 before the temporal / recall / poisoning / provenance / graph axes
-    assert {r["id"] for r in cp["rows"]} == {c.id for c in CELLS
-                                             if c.controls and c.expected == "PASS" and c.tier == "store"
-                                             and cellmod.required_capabilities(c) <= set(Z0Arm.capabilities)}
+    runnable = {c.id for c in CELLS
+                if c.controls and c.expected == "PASS" and c.tier == "store"
+                and cellmod.required_capabilities(c) <= set(Z0Arm.capabilities)}
+    # 123 with chromadb present (the two ``disk`` cells run), 121 in the slim CI lane where they are declared skips
+    assert len(runnable) in (121, 123) and cp["checked"] == cp["red"] == len(runnable)
+    assert {r["id"] for r in cp["rows"]} == runnable
     assert all(r["verdict"] == "FAIL" and r["stage"] in ("write", "read", "answer") for r in cp["rows"])
 
 
