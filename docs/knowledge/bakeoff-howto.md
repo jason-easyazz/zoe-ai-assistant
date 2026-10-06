@@ -46,16 +46,22 @@ Guards: MemAvailable below 1.2 GB at any time aborts and restores; 90 minutes is
 2. Forgetting probes start for each Hindsight arm (1): forget an invented friend, check at t+0. The **real t+6 min** check (wait, replay the transcript
    through the arm's own nightly pass and a late model writer, check again) runs later, between cells.
 3. Adapter negative controls on the real server (1): with a Zoe-layer protection OFF the cell that claims it must go red.
-4. Seed 1 of H1 (9), H2 (11), H0 (6): the store-tier cells, interleaved across axes, time-boxed. A cell the box did not reach is a SKIP, never a pass.
-5. Recall latency n=50 per arm (4.5), extraction JSON validity over >= 100 retain calls per mode (9), brain-slot seconds per retained turn (3).
-6. Seeds 2 and 3 of each arm in whatever time is left (up to 31). Fewer than three seeds makes an arm INCOMPLETE, which is not adoptable.
+4. **H1 first and complete** (run 2 plan; `--dry-run` prints the minutes and the per-arm cell budget): seed 1 (ceiling ~10), recall latency n=50 (1), verbatim extraction JSON
+   validity over >= 100 retain calls (6), brain-slot seconds per retained turn (3), then seeds 2 and 3 (ceiling ~10 each). The ceilings come from run 1's measured seconds per cell
+   (H1 3.7, H2 12, H0 20) with headroom for the cells added since; a seed that finishes early hands its slack to the arms behind it. A cell the box did not reach is a SKIP, never a pass.
+5. **H2 then H0, one seed each**, taking what H1 left: seed 1, then latency, concise extraction validity (shared, 10) and slot. H0's latency and slot are "only if time remains" (not
+   budgeted): H0 cannot win or complete, so its cells outrank its timings. The rule needs three seeds, so H2 and H0 are INCOMPLETE by design: measured for the comparison, never adopted.
+6. The t+6 min forgetting verdicts and the report (inside the 5 min tail). Fewer than three seeds makes an arm INCOMPLETE, which is not adoptable.
 7. Per arm: PSS of every candidate PID every 2 s (steady = median, burst = max, plus the scratch Postgres container), MemAvailable floor, and non-loopback
-   connects (the egress hook log plus `ss` polling). A hook that wrote nothing is "not measured", never "zero".
+   connects (the egress hook log plus `ss` polling). The hook is `scripts/perf/zmb/egress_audit/sitecustomize.py` (in the repo; it also makes `import uvloop` fail, because
+   run 1's hook was blind: `hindsight-api` runs on uvloop, whose C-level connects never raise the audit event). The window refuses to go on if the hook has not logged `hook-loaded` and a connect
+   once the server is healthy. The gate reads `0 non-loopback connects over N observed` with a split by phase (arm); a missing, empty or connect-less log is "not measured" (NA), never "zero".
 
 ## Reading the verdict
 
 Output: `~/.zoe/bakeoff-2026-10/run-<stamp>.log`, `run-<stamp>.json`, and a **draft** `docs/research/bakeoff-run-<stamp>.md`.
-The first lines of the markdown are the verdict by the pre-registered rule (`bakeoff_gates.py`; a test pins every threshold):
+The top of the markdown states plainly (1) the verdict by the pre-registered rule, (2) the winner clause per axis (B extraction, C temporal, D recall, E abstention: Z0 vs each arm, with the
+Wilson 95% interval and beats / tie / WORSE / no data), and (3) a one-line "is it better than ours?" with the honest caveats (a tie goes to Z0). The rule is `bakeoff_gates.py`; a test pins every threshold:
 
 * **`KEEP_Z0`** - no arm passes every built gate and beats Z0 beyond the Wilson interval on two of B/C/D/E (ties go to Z0). The rule says: keep Z0, finish audit P1-P3.
 * **`ADOPT_CANDIDATE <arm>`** - passes every built gate and beats Z0 on two axes. Advisory: every axis the rule names now exists in the spec (C = `temporal`, D = `recall`, A3 / A8 under `authority`, `poisoning` a hard axis);

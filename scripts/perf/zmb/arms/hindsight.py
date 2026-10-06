@@ -76,7 +76,7 @@ BANK_CONFIG = {
            "enable_reranking": False},
 }
 #: Zoe-layer protections that can be switched OFF one at a time (negative controls)
-LAYER_FEATURES = ("guest", "affect", "identity", "ledger", "authority", "gate", "scrub")
+LAYER_FEATURES = ("guest", "affect", "identity", "ledger", "authority", "gate", "scrub", "provenance", "speaker")
 
 
 class HindsightUnavailable(NotImplementedError):
@@ -244,6 +244,8 @@ class Known:
     memory_type: str = ""
     contradicts_id: str = ""
     in_hindsight: bool = True       # False = a side-table row (held back / pending / retired): Hindsight has no status for it
+    excerpt: str = ""               # provenance (ZMB A3): the owner's own words the row came from, and which turn
+    turn_id: str = ""
 
     def as_ref(self) -> Any:        # the MemoryRef shape ``find_conflict`` reads
         return types.SimpleNamespace(id=self.id, text=self.text,
@@ -263,6 +265,8 @@ class Plan:
     target: "Optional[Known]" = None
     status: str = ""
     release_text: str = ""          # an explicit re-teach: release the forget-ledger entries this text names
+    excerpt: str = ""               # provenance (ZMB A3), carried to Hindsight as item metadata + a turn tag
+    turn_id: str = ""
 
 
 class ZoeLayer:
@@ -375,8 +379,20 @@ class ZoeLayer:
                 return k
         return None
 
+    def evidence(self, writer: str, res: Any, text: str, user: str, anchor: str, excerpt: str = "", turn_id: str = "",
+                 teach: bool = True) -> "tuple[str, str]":
+        """``(source_excerpt, user_turn_id)`` a row written from a user turn carries (ZMB A3): the REAL ``memory_authority.turn_evidence``
+        (the fill-in the service's own write boundary applies: a teach is the owner's words, a model fact the sentence that supports it,
+        nothing when no user sentence does) with the excerpt PII-scrubbed and cut by the service's ``scrub_source_excerpt``."""
+        if "provenance" in self.off:
+            return "", ""
+        ex, tid = self.ma.turn_evidence(writer, res, text, user_id=user, anchor_text=anchor or None, source_excerpt=excerpt or None,
+                                        user_turn_id=turn_id or None, teach=teach)
+        return (self.svc.memory_service.scrub_source_excerpt(ex) or "" if ex else ""), tid or ""
+
     def plan_fact(self, user: str, writer: str, fact: str, *, anchor: str, op: str = "say", attr: str = "",
-                  memory_type: str = "", verified: "Optional[bool]" = None, affect_ok: bool = True) -> Plan:
+                  memory_type: str = "", verified: "Optional[bool]" = None, affect_ok: bool = True,
+                  excerpt: str = "", turn_id: str = "") -> Plan:
         """The decision for one proposed fact from ``writer`` (a lane label: ``voice_fact``, ``chat_regex``, a model writer ...)."""
         ma = self.ma
         if self.is_guest(user):
@@ -389,8 +405,10 @@ class ZoeLayer:
         reteach = self.mf.is_explicit_reteach(writer, user_id=user, speaker_verified=verified)
         if not reteach and self.ledger_blocks(user, fact, anchor):
             return Plan("refuse", fact, reason="forgotten (ledger)")
-        res = ma.resolve_write(writer, fact, anchor_text=anchor or None, user_id=user, speaker_verified=verified)
-        base = dict(cls=res.cls, origin=writer, memory_type=memory_type, release_text=fact if reteach else "")
+        res = ma.resolve_write(writer, fact, anchor_text=anchor or None, user_id=user,
+                               speaker_verified=None if "speaker" in self.off else verified)
+        ex, tid = self.evidence(writer, res, fact, user, anchor, excerpt, turn_id, teach=(op != "edit"))
+        base = dict(cls=res.cls, origin=writer, memory_type=memory_type, release_text=fact if reteach else "", excerpt=ex, turn_id=tid)
         guard = "authority" not in self.off and ma.enabled()
         if op in ("edit", "archive"):
             target = self._target_for(user, attr or ma.kind_of(fact))
@@ -400,6 +418,9 @@ class ZoeLayer:
                 return Plan("refuse", fact, reason=f"{op}: {res.cls} may not override {target.cls}", target=target, **base)
             return Plan("retire", fact if op == "edit" else "", target=target, status="superseded" if op == "edit" else "archived", **base)
         hit = ma.find_conflict(fact, self._known_refs(user), res.power) if guard else None
+        if not hit and guard and res.cls == ma.USER_UNVERIFIED and ma.is_self_assertion(fact):
+            # a speaker the panel did not verify cannot state the OWNER's facts: a candidate the owner confirms, never served (#1895, ZMB I2)
+            return Plan("pending", fact, reason="unverified speaker: a candidate", status="pending", **base)
         if hit:
             row, kind = hit
             return Plan("hold", fact, reason=f"contradicts a {kind} row", target=next(k for k in self.known[user] if k.id == row.id),
@@ -415,11 +436,12 @@ class ZoeLayer:
         cands = self.extractor.extract_candidates(turn.text, turn.assistant_text, prev_user_message=self.prev_user_text or None)
         self.prev_user_text = turn.text
         plans = []
-        for c in cands:
+        for n, c in enumerate(cands):
             if "gate" not in self.off and not self.quality.is_storable_fact(c.text)[0]:
                 plans.append(Plan("refuse", c.text, reason="write-quality gate"))
                 continue
-            plans.append(self.plan_fact(user, writer, c.text, anchor=turn.text, memory_type=c.memory_type, verified=verified))
+            plans.append(self.plan_fact(user, writer, c.text, anchor=turn.text, memory_type=c.memory_type, verified=verified,
+                                        excerpt=" ".join(turn.text.split()), turn_id=f"{_digest(turn.text)}-{n}"))
         return plans
 
     def plan_raw_turn(self, user: str, turn: Turn, *, verified: "Optional[bool]") -> "list[Plan]":
@@ -431,7 +453,8 @@ class ZoeLayer:
         if "gate" not in self.off and not self.quality.is_storable_fact(turn.text)[0]:
             return [Plan("refuse", turn.text, reason="write-quality gate")]
         writer = "chat_regex" if turn.speaker in ("owner_typed", "third_party", "pasted_email") else "voice_regex"
-        return [self.plan_fact(user, writer, turn.text, anchor=turn.text, memory_type=turn.memory_type, verified=verified)]
+        return [self.plan_fact(user, writer, turn.text, anchor=turn.text, memory_type=turn.memory_type, verified=verified,
+                               excerpt=" ".join(turn.text.split()), turn_id=f"{_digest(turn.text)}-0")]
 
     def remember(self, user: str, k: Known) -> None:
         self.known.setdefault(user, []).append(k)
@@ -441,7 +464,9 @@ class ZoeLayer:
         pat, n = name_pattern(name), 0
         for k in self.known.get(user, []):
             if k.status in ("approved", "pending", "disputed") and pat.search(k.text):
-                k.status, k.text, n = status, "[forgotten]", n + 1       # the side table must not keep what it was told to forget
+                k.status, k.text, k.excerpt, n = status, "[forgotten]", "", n + 1       # the side table must not keep what it was told to forget
+            elif k.excerpt and pat.search(k.excerpt):
+                k.excerpt = self.scrub(k.excerpt, name)
         return n
 
     def scrub(self, text: str, name: str) -> str:
@@ -466,6 +491,16 @@ def zoe_layer_lines(path: "Optional[str]" = None) -> int:
 
 class HindsightArm(Arm):
     capabilities = frozenset({"clock", "idle_pass", "identities", "reader", "controls"})
+    #: What this arm CANNOT do, and why. A cell that needs one of these SKIPs with the reason (``cells.run_cell`` compares the declared
+    #: capabilities), never ERRORs and never passes. Under the rule a skipped HARD cell keeps `hard_cells_all_ran` red: that is the honest
+    #: reading of "the engine cannot answer this", and the run record says how many such cells there are.
+    LACKS = {
+        "conflict_pass": "Hindsight has no nightly implicit-conflict pass: a newer fact does not retire an older one by cue (H2 consolidates "
+                         "observations, which is not a supersede with history)",
+        "edges": "the people graph (person_relationships) is Zoe's own Postgres graph, not part of the memory engine: Hindsight has no "
+                 "authority-labelled relationship edges to write or export",
+        "disk": "the store is a Postgres container whose data directory is not readable by the lab: no on-disk residue scan",
+    }
 
     def __init__(self, variant: str = "H1", *, base_url: "Optional[str]" = None,
                  transport: "Optional[Callable[..., tuple[int, bytes]]]" = None,
@@ -543,16 +578,20 @@ class HindsightArm(Arm):
     # ── writing ──
     def _tags(self, uid: str, plan: Plan, speaker: str) -> "list[str]":
         tags = [f"user:{uid}", f"class:{plan.cls}", f"origin:{plan.origin}"]
-        return tags + [f"lane:{speaker}"] if speaker else tags
+        tags += [f"lane:{speaker}"] if speaker else []
+        return tags + [f"turn:{plan.turn_id}"] if plan.turn_id else tags      # the turn id also rides as a tag: a metadata-less server still says which turn
 
-    def _retain(self, uid: str, text: str, tags: "list[str]", memory_type: str, day_offset: int = 0) -> str:
+    def _retain(self, uid: str, text: str, tags: "list[str]", memory_type: str, day_offset: int = 0, excerpt: str = "",
+                turn_id: str = "") -> str:
         self._seq += 1
         doc = f"d{self._seq:04d}-{_digest(uid, text)}"
         item: "dict[str, Any]" = {"content": text, "document_id": doc, "context": "the user is speaking"}
         if tags:
             item["tags"] = tags
-        if memory_type:
-            item["metadata"] = {"memory_type": memory_type}
+        meta = {"memory_type": memory_type, "source_excerpt": excerpt, "user_turn_id": turn_id}      # provenance rides as item metadata (ZMB A3)
+        meta = {k: v for k, v in meta.items() if v}
+        if meta:
+            item["metadata"] = meta
         if day_offset:
             item["timestamp"] = (self._now() - timedelta(days=day_offset)).isoformat(timespec="seconds")
         if self.cfg.get("enable_observations") and not self.cfg.get("enable_auto_consolidation") and tags:
@@ -577,7 +616,8 @@ class HindsightArm(Arm):
         if plan.kind in ("hold", "pending"):
             rep.refused += 1 if plan.kind == "hold" else 0
             L.remember(uid, Known(f"zoe-{plan.kind}-{_digest(uid, plan.text)}", plan.text, plan.cls, plan.status, plan.origin,
-                                  plan.memory_type, plan.target.id if plan.target else "", in_hindsight=False))
+                                  plan.memory_type, plan.target.id if plan.target else "", in_hindsight=False,
+                                  excerpt=plan.excerpt, turn_id=plan.turn_id))
             rep.notes.append(plan.reason)
             return
         if plan.kind == "retire":
@@ -587,8 +627,8 @@ class HindsightArm(Arm):
             rep.retired += 1
             if not plan.text:
                 return
-        doc = self._retain(uid, plan.text, self._tags(uid, plan, turn.speaker), plan.memory_type, turn.day_offset)
-        L.remember(uid, Known(doc, plan.text, plan.cls, "approved", plan.origin, plan.memory_type))
+        doc = self._retain(uid, plan.text, self._tags(uid, plan, turn.speaker), plan.memory_type, turn.day_offset, plan.excerpt, plan.turn_id)
+        L.remember(uid, Known(doc, plan.text, plan.cls, "approved", plan.origin, plan.memory_type, excerpt=plan.excerpt, turn_id=plan.turn_id))
         if plan.release_text:
             L.ledger_release(uid, plan.release_text)
         rep.written += 1
@@ -691,30 +731,38 @@ class HindsightArm(Arm):
         return rep
 
     # ── reading ──
-    def _unit_row(self, u: dict, side: "dict[str, Known]") -> "dict[str, Any]":
+    def _unit_row(self, u: dict, side: "dict[str, Known]", by_id: "Optional[dict[str, dict]]" = None) -> "dict[str, Any]":
         tags = [str(x) for x in (u.get("tags") or [])]
         tag = lambda p: next((x[len(p):] for x in tags if x.startswith(p)), "")  # noqa: E731
         k = side.get(str(u.get("document_id") or ""))
+        meta = dict(u.get("metadata") or {})
+        for src_id in (u.get("source_memory_ids") or []) if by_id else []:      # an observation is derived: its provenance is its source fact's
+            src = (by_id.get(str(src_id)) or {}).get("metadata") or {}
+            if src.get("source_excerpt") and not meta.get("source_excerpt"):
+                meta["source_excerpt"], meta["user_turn_id"] = src["source_excerpt"], src.get("user_turn_id", "")
         status = {"valid": "approved", "": "approved"}.get(str(u.get("state") or ""), "superseded")
         if k and k.status != "approved":
             status = k.status
         return {"id": str(u.get("id") or ""), "text": str(u.get("text") or ""), "status": status,
                 "authority_class": tag("class:"), "origin": tag("origin:"), "contradicts_id": "",
-                "entity_type": "", "memory_type": str((u.get("metadata") or {}).get("memory_type") or (k.memory_type if k else "")),
-                "user_id": tag("user:")}
+                "entity_type": "", "memory_type": str(meta.get("memory_type") or (k.memory_type if k else "")),
+                "user_id": tag("user:"),
+                # provenance (ZMB A3): what the store HOLDS (Hindsight's own metadata and tags), never what the side table remembers
+                "source_excerpt": str(meta.get("source_excerpt") or ""), "user_turn_id": str(meta.get("user_turn_id") or tag("turn:"))}
 
     def _rows_for(self, uid: str) -> "list[dict[str, Any]]":
         if self.layer and self.layer.is_guest(uid):
             return []
         side = {k.id: k for k in (self.layer.known.get(uid, []) if self.layer else [])}
         units = self.client.list_units(self.bank_for(uid)) if self.bank_for(uid) in self._banks else []
-        rows = [self._unit_row(u, side) for u in units]
+        by_id = {str(u.get("id")): u for u in units}
+        rows = [self._unit_row(u, side, by_id) for u in units]
         first_unit = {}                                  # a held row links to the row the owner can see (a unit id), not to the document id
         for u in units:
             first_unit.setdefault(str(u.get("document_id") or ""), str(u.get("id") or ""))
         held = [{"id": k.id, "text": k.text, "status": k.status, "authority_class": k.cls, "origin": k.origin,
                  "contradicts_id": first_unit.get(k.contradicts_id, k.contradicts_id), "entity_type": "", "memory_type": k.memory_type,
-                 "user_id": uid}
+                 "user_id": uid, "source_excerpt": k.excerpt, "user_turn_id": k.turn_id}
                 for k in (self.layer.known.get(uid, []) if self.layer else []) if not k.in_hindsight]
         return rows + held
 
@@ -776,7 +824,8 @@ class HindsightArm(Arm):
         hit: "list[tuple[str, str]]" = []
         for d in sorted(docs):
             text = str((self.client.get_document(bank, d) or {}).get("original_text") or "")
-            names = any(pat.search(f"{u.get('text') or ''} {u.get('entities') or ''}") for u in units if u.get("document_id") == d)
+            names = any(pat.search(f"{u.get('text') or ''} {u.get('entities') or ''} {(u.get('metadata') or {}).get('source_excerpt') or ''}")
+                        for u in units if u.get("document_id") == d)          # the stored excerpt is the owner's words: it can name her too
             if names or pat.search(text):
                 hit.append((d, text))
         for d, _t in hit:
@@ -794,10 +843,27 @@ class HindsightArm(Arm):
                 rest = self.layer.scrub(text, entity)
                 k = next((x for x in self.layer.known.get(uid, []) if x.id == d), None)
                 if rest and k is not None:
-                    doc = self._retain(uid, rest, [f"user:{uid}", f"class:{k.cls}", f"origin:{k.origin}"], k.memory_type)
-                    self.layer.remember(uid, Known(doc, rest, k.cls, "approved", k.origin, k.memory_type))
+                    ex = self.layer.scrub(k.excerpt, entity) if k.excerpt else ""      # the excerpt keeps only what does not name her
+                    tags = [f"user:{uid}", f"class:{k.cls}", f"origin:{k.origin}"] + ([f"turn:{k.turn_id}"] if k.turn_id else [])
+                    doc = self._retain(uid, rest, tags, k.memory_type, 0, ex, k.turn_id)
+                    self.layer.remember(uid, Known(doc, rest, k.cls, "approved", k.origin, k.memory_type, excerpt=ex, turn_id=k.turn_id))
         self._finish(uid)
         return f"Forgot everything about {entity}: {n} document(s) removed."
+
+    def run_conflict_pass(self) -> "dict[str, Any]":
+        raise NotImplementedError(self.LACKS["conflict_pass"])
+
+    def write_edge(self, a: str, b: str, rel: str, group: str, authority: str, origin: str) -> None:
+        raise NotImplementedError(self.LACKS["edges"])
+
+    def edges(self) -> "list[dict[str, Any]]":
+        raise NotImplementedError(self.LACKS["edges"])
+
+    def hard_delete(self) -> int:
+        raise NotImplementedError(self.LACKS["disk"])
+
+    def disk_residue(self, tokens: "list[str]") -> "dict[str, Any]":
+        raise NotImplementedError(self.LACKS["disk"])
 
     def as_of(self, query: str, ts: str) -> "list[dict[str, Any]]":
         raise NotImplementedError("Hindsight 0.10.2 has no belief-time read: recall's temporal_window only RANKS memories by their "

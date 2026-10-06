@@ -5,18 +5,22 @@ Order of work, by value, because 90 minutes cannot hold everything at full size 
     1  Z0 and Z0-off in the lab on every seed (no brain)                   the control, and the negative control
     2  forgetting probes START (t+0 check); the real t+6 min check is run later, between cells
     3  adapter negative controls on the real server (a bypassed gate must write the intruder row)
-    4  seed 1 of H1, H2, H0: the store-tier cells, time-boxed
-    5  recall latency (n=50), extraction JSON validity (>=100 calls, per mode), brain-slot seconds per retained turn
-    6  seeds 2 and 3 of each arm, in whatever time is left; then the t+6 min forgetting verdicts
+    4  H1, the preferred arm, FIRST and COMPLETE: seed 1, recall latency (n=50), verbatim extraction validity (>=100 calls), brain-slot
+       seconds per retained turn, then seeds 2 and 3 (each seed box is a ceiling sized from run 1's measured seconds per cell)
+    5  H2 (one seed, then its latency / concise validity / slot) and H0 (same) take what H1 left: they are INCOMPLETE by design
+       (the rule needs three seeds), so they are measured for the comparison, never for adoption
+    6  the t+6 min forgetting verdicts, the report
 
 A cell the time box did not reach is a SKIP with the reason, never a pass; an arm with fewer than three seeds is INCOMPLETE and cannot be
 adopted (bakeoff_gates). Counts and labels only go into the artifact: no household text.
 """
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import hashlib
 import json
+import math
 import re
 import threading
 from pathlib import Path
@@ -25,8 +29,19 @@ from typing import Any, Callable, Optional
 from . import bakeoff_gates as gates
 from .bakeoff import UNITS, Aborted
 
-#: per-(arm, seed) wall-clock boxes in minutes; later seeds get 60% of the first (the first seed is the baseline)
-BOX_MIN = {"H1": 9.0, "H2": 11.0, "H0": 6.0}
+#: What run 1 (20261006-0935, ``run-20261006-0935.log``) MEASURED; the planner budgets from these, not from hope.
+#: minutes per fixed phase (Z0 lab + forgetting start + adapter controls; per-arm latency / slot; per-mode extraction validity)
+PHASE_MIN = {"lab": 2.1, "latency": {"H1": 1.0, "H2": 2.5, "H0": 5.1}, "slot": {"H1": 3.1, "H2": 5.2, "H0": 5.2},
+             "validity": {"verbatim": 6.0, "concise": 10.0}}
+#: seconds per cell that RAN, seed 1: H1 112 cells in 414 s, H2 55 in 662 s, H0 18 in 362 s
+S_PER_CELL = {"H1": 3.7, "H2": 12.0, "H0": 20.0}
+#: seeds per arm. H1 is the preferred arm and needs all three (the rule); H2 and H0 get one each and are INCOMPLETE by design
+SEEDS_PER_ARM = {"H1": 3, "H2": 1, "H0": 1}
+ARM_ORDER = ("H1", "H2", "H0")                    # priority: an earlier arm is finished before a later one starts
+OPTIONAL_PHASES = ("H0",)                         # the arm's latency + slot run only if time remains, never budgeted: H0 cannot win or complete,
+                                                  # so its CELLS (the baseline of what Hindsight does natively) outrank its timings
+H1_BOX_MARGIN = 1.25                             # the new cells (D recall, A3, C temporal) are unmeasured on real Hindsight: headroom over run 1's rate
+OPEN_MIN, TAIL_MIN = 0.5, 5.0                    # steps 1-6 of the window; the t+6 min wait + report at the end
 LATENCY_FACTS, LATENCY_QUERIES = 16, 50
 VALIDITY_CALLS = 104
 SLOT_RETAINS, SLOT_TURNS_PER_CHUNK = 12, 10
@@ -213,6 +228,9 @@ class Ctx:
         self.forget: "dict[str, ForgetProbe]" = {}
         self.notes: "list[str]" = []
         self.aborted = ""
+        self.validity_done: "set[str]" = set()
+        self.marks: "list[tuple[float, str]]" = []      # (epoch, phase label): which phase an egress event fell in
+        self.ref_epoch = win.host.now()
 
     def new_arm(self, variant: str, **kw: Any) -> Any:
         return self.win.arm_factory(variant, **kw)
@@ -222,6 +240,7 @@ class Ctx:
         return parse_metrics_seconds(r.out) if r.rc == 0 else None
 
     def label(self, name: str) -> None:
+        self.marks.append((self.host.now(), name))
         if self.sampler:
             self.sampler.label = name
 
@@ -282,6 +301,19 @@ def phase_arm_controls(ctx: Ctx, store: list) -> None:
     ctx.arm_controls_ok = red == len(claims)
 
 
+def skip_breakdown(rows: "list[dict]") -> "dict[str, int]":
+    """Why cells were skipped, as counts: ``time box`` (the budget ran out), ``capability: x, y`` (the arm cannot do what the cell needs:
+    structural, no amount of time fixes it), ``unreachable``, ``other``."""
+    out: "dict[str, int]" = {}
+    for r in rows:
+        why = str(r.get("reason") or "")
+        m = re.search(r"lacks capability: (.+)", why)
+        key = ("time box" if "time box" in why else f"capability: {m.group(1).strip()}" if m else
+               "unreachable" if "reach Hindsight" in why else "other")
+        out[key] = out.get(key, 0) + 1
+    return out
+
+
 def run_arm_seed(ctx: Ctx, variant: str, seed: str, box_s: float, store: list, by_id: dict, instrument_of: "Callable[[str], dict]") -> None:
     from . import artifact, cells as cellmod, runner
     from .world import make_world
@@ -305,10 +337,11 @@ def run_arm_seed(ctx: Ctx, variant: str, seed: str, box_s: float, store: list, b
         raise Aborted(f"Hindsight unreachable during {variant}:{seed}")
     inst = instrument_of(seed)
     hard_skipped = sum(1 for r in rows if r["verdict"] == "SKIP" and artifact.is_hard(by_id[r["id"]]))
+    hard_skip_why = skip_breakdown([r for r in rows if r["verdict"] == "SKIP" and artifact.is_hard(by_id[r["id"]])])
     ran = sum(1 for r in rows if r["verdict"] != "SKIP")
     ctx.seed_runs.setdefault(variant, {})[seed] = {
         "axes": artifact.axis_stats(rows, by_id, inst["ok"]), "hard_violations": artifact.hard_violations(rows, by_id),
-        "hard_skipped": hard_skipped, "instrument": {"ok": inst["ok"] and getattr(ctx, "arm_controls_ok", False),
+        "hard_skipped": hard_skipped, "hard_skipped_why": hard_skip_why, "instrument": {"ok": inst["ok"] and getattr(ctx, "arm_controls_ok", False),
                                                       "lab_controls_red": inst["lab_controls_red"], "arm_controls": ctx.measure[variant].get("arm_controls")},
         "cells_ran": ran, "cells_selected": len(rows), "duration_s": round(ctx.host.mono() - t0, 1), "cells": _strip(rows),
         "retain": arm.measure()}
@@ -401,29 +434,109 @@ def phase_slot(ctx: Ctx, variant: str) -> None:
 
 # ── the schedule, the report ─────────────────────────────────────────────────
 
-def plan_table(cfg: Any, seeds: tuple) -> "list[tuple[str, float, str]]":
-    arms = list(cfg.arms)
-    rows = [("Z0 + Z0-off in the lab on 3 seeds (no brain)", 1.0, "control and negative control"),
-            ("forgetting probes start (t+0 check)", 1.0, "H arms; real t+6 min check runs later between cells"),
-            ("adapter negative controls on the real server", 1.0, "bypassed gate must write the intruder row")]
-    rows += [(f"{a} seed 1 ({seeds[0]}): store-tier cells", BOX_MIN[a], "time-boxed, interleaved across axes") for a in arms]
-    rows += [("recall latency n=50 per arm", 1.5 * len(arms), "p50/p95 through the shim and Postgres"),
-             ("extraction JSON validity, concise and verbatim", 9.0, f">= 100 retain calls per mode"),
-             ("brain-slot seconds per retained turn", 1.0 * len(arms), "idle retain of 10-turn chunks")]
-    rows += [(f"{a} seeds 2 and 3", 2 * BOX_MIN[a] * 0.6, "only if time remains; fewer seeds => INCOMPLETE") for a in arms]
-    rows += [("t+6 min forgetting verdicts, report", 1.0, "")]
+@dataclasses.dataclass
+class Budget:
+    """The phase budget of one window. ``avail_min`` = cap - the restore/report reserve - the tail - the window-open steps. Fixed phases are
+    run 1's measured minutes; a seed's box is a CEILING (an arm that finishes early hands its slack to the arms behind it)."""
+    avail_min: float
+    store_cells: int
+    runnable: int                                   # store-tier cells an H arm can run at all (the rest SKIP: missing capability)
+    arms: tuple
+    seeds: dict                                      # arm -> seeds planned
+    box_min: dict                                    # arm -> planned ceiling of ONE seed box, minutes
+
+    def fixed_min(self, arm: str) -> float:
+        """Budgeted latency + slot minutes for the arm (the extraction-validity phase is per MODE, see ``validity_min``). 0 for an optional arm."""
+        return 0.0 if arm in OPTIONAL_PHASES else PHASE_MIN["latency"][arm] + PHASE_MIN["slot"][arm]
+
+    def validity_min(self) -> float:
+        return ((PHASE_MIN["validity"]["verbatim"] if "H1" in self.arms else 0.0)
+                + (PHASE_MIN["validity"]["concise"] if any(a != "H1" for a in self.arms) else 0.0))
+
+    def cells_in_box(self, arm: str) -> int:
+        return int(self.box_min[arm] * 60.0 / S_PER_CELL[arm])
+
+    def total_min(self) -> float:
+        return PHASE_MIN["lab"] + self.validity_min() + sum(self.fixed_min(a) + self.seeds[a] * self.box_min[a] for a in self.arms)
+
+    def seed_box_s(self, arm: str, time_left_s: float) -> float:
+        """The ceiling for the next seed box of ``arm`` in seconds. H1: its planned ceiling. A lower arm: whatever is left behind the
+        work still queued for it and for the arms after it (a lower arm may use up to 2x its plan when H1 finished early, never more)."""
+        planned = self.box_min[arm] * 60.0
+        if arm == "H1" or arm not in ARM_ORDER:
+            return min(planned, time_left_s)
+        later = [a for a in ARM_ORDER[ARM_ORDER.index(arm) + 1:] if a in self.arms]
+        concise_here = arm == "H2" or (arm == "H0" and "H2" not in self.arms)
+        queued = (self.fixed_min(arm) + (PHASE_MIN["validity"]["concise"] if concise_here else 0.0)
+                  + sum(self.fixed_min(a) + 2.0 for a in later)) * 60.0
+        left = max(0.0, time_left_s - queued)
+        return min(2.0 * planned, left * (2.0 / 3.0 if later else 1.0))
+
+
+def plan_budget(cfg: Any, store: "Optional[list]" = None, runnable: "Optional[int]" = None) -> Budget:
+    """Three seeds of H1 inside the cap, one seed each for H2 and H0, the hard cap kept. ``store`` = the store-tier cells; the cells an H arm
+    can run are those whose required capabilities it declares (the rest SKIP with the reason and cost nothing)."""
+    arms = tuple(a for a in ARM_ORDER if a in cfg.arms)
+    if store is None:
+        from . import spec
+        store = [c for c in spec.load_cells() if c.tier == "store"]
+    if runnable is None:
+        from . import cells as cellmod
+        from .arms.hindsight import HindsightArm
+        runnable = sum(1 for c in store if cellmod.required_capabilities(c) <= set(HindsightArm.capabilities))
+    avail = cfg.cap_min - cfg.reserve_min - TAIL_MIN - OPEN_MIN
+    seeds = {a: SEEDS_PER_ARM[a] for a in arms}
+    h1 = round(max(5.0, runnable * S_PER_CELL["H1"] * H1_BOX_MARGIN / 60.0) * 2) / 2.0          # to the half minute
+    box = {"H1": h1} if "H1" in arms else {}
+    draft = Budget(avail, len(store), runnable, arms, seeds, {a: 0.0 for a in arms})
+    spare = avail - PHASE_MIN["lab"] - draft.validity_min() - sum(draft.fixed_min(a) for a in arms) - seeds.get("H1", 0) * box.get("H1", 0.0)
+    lower = [a for a in arms if a != "H1"]
+    for i, a in enumerate(lower):                                                        # H2 gets twice H0's share of what H1 leaves
+        share = (2.0 / 3.0 if i == 0 else 1.0 / 3.0) if len(lower) == 2 else 1.0
+        box[a] = math.floor(max(1.0, spare * share) * 2) / 2.0                 # rounded DOWN: the plan must fit the cap, not just touch it
+    return Budget(avail, len(store), runnable, arms, seeds, {a: box.get(a, 0.0) for a in arms})
+
+
+def plan_table(cfg: Any, seeds: tuple, budget: "Optional[Budget]" = None) -> "list[tuple[str, float, str]]":
+    """The schedule in EXECUTION order: ``(what, minutes, note)``."""
+    b = budget or plan_budget(cfg)
+    rows = [("Z0 + Z0-off in the lab on 3 seeds, forgetting probes start (t+0), adapter negative controls", PHASE_MIN["lab"],
+             "control, negative control; the real t+6 min check runs later between cells")]
+    concise_done = False
+    for a in b.arms:
+        rows.append((f"{a} seed 1 ({seeds[0]}): store-tier cells", b.box_min[a],
+                     f"ceiling; ~{b.cells_in_box(a)} of {b.runnable} runnable cells at {S_PER_CELL[a]:g} s/cell (run 1)"))
+        opt = a in OPTIONAL_PHASES
+        why = f"only if time remains; ~{PHASE_MIN['latency'][a]:g} min at run 1's rate, not budgeted" if opt else "p50/p95 through the shim and Postgres"
+        rows.append((f"{a} recall latency n=50", 0.0 if opt else PHASE_MIN["latency"][a], why))
+        mode = "verbatim" if a == "H1" else "concise"
+        if a == "H1" or not concise_done:
+            rows.append((f"extraction JSON validity, {mode} (>= 100 retain calls)", PHASE_MIN["validity"][mode],
+                         "shared by H0 and H2" if mode == "concise" else ""))
+            concise_done = concise_done or mode == "concise"
+        rows.append((f"{a} brain-slot seconds per retained turn", 0.0 if opt else PHASE_MIN["slot"][a],
+                     f"only if time remains; ~{PHASE_MIN['slot'][a]:g} min at run 1's rate, not budgeted" if opt else "idle retain of 10-turn chunks"))
+        for k in range(2, b.seeds[a] + 1):
+            rows.append((f"{a} seed {k} ({seeds[k - 1]}): store-tier cells", b.box_min[a], "ceiling, same box as seed 1"))
+    rows.append(("t+6 min forgetting verdicts, report", 0.0, f"inside the {TAIL_MIN:g} min tail, not counted"))
     return rows
 
 
 def dry_plan(win: Any) -> dict:
     cfg = win.cfg
     seeds = seeds_for(win.run_id)
-    win.log("PLAN (the measurement phases; est. minutes):")
+    b = plan_budget(cfg)
+    win.log("PLAN (the measurement phases, in execution order; est. minutes from run 1's measured rates; H1 first and complete):")
     total = 0.0
-    for name, mins, note in plan_table(cfg, seeds):
+    for name, mins, note in plan_table(cfg, seeds, b):
         total += mins
         win.log(f"  {mins:5.1f}  {name}" + (f"   [{note}]" if note else ""))
-    win.log(f"  {total:5.1f}  total planned work; hard cap {cfg.cap_min:.0f} min; {cfg.reserve_min:.0f} min always kept for restore + report")
+    win.log(f"  {total:5.1f}  total planned work; hard cap {cfg.cap_min:.0f} min; {cfg.reserve_min:.0f} min always kept for restore + report; "
+            f"{TAIL_MIN:.0f} min tail; {b.avail_min:.1f} min available for the phases above (slack {b.avail_min - b.total_min():+.1f})")
+    win.log("per-arm cell budget (cells per seed box at run 1's seconds per cell): " + "; ".join(
+        f"{a} {b.seeds[a]} seed{'s' if b.seeds[a] > 1 else ''} x {b.box_min[a]:g} min = ~{b.cells_in_box(a)}/{b.runnable} runnable cells each"
+        + (" (all 3 seeds complete inside the cap)" if a == "H1" and b.cells_in_box(a) >= b.runnable else "")
+        for a in b.arms) + f"; {b.store_cells - b.runnable} of {b.store_cells} store cells SKIP by capability (conflict_pass / edges / disk)")
     win.log("seeds: " + ", ".join(seeds))
     win.log(f"outputs: {cfg.bakeoff_dir}/run-{win.run_id}.log, run-{win.run_id}.json, <docs>/bakeoff-run-{win.run_id}.md")
     win.log("RESTORE (always, on every exit path): stop zoe-bakeoff-hindsight/-gemma/-embed, docker compose down, "
@@ -441,13 +554,89 @@ def make_factories(win: Any) -> None:
         win.client_factory = lambda: HindsightClient(base)
 
 
+EGRESS_RX = re.compile(r"^(\d\d):(\d\d):(\d\d) pid=(\d+) (ok|VIOLATION) (\S+)(?: (.*))?\Z")
+
+
+def parse_egress(text: str) -> "Optional[dict]":
+    """The hook log as counts, or None when it holds no usable line (a missing or empty log is NOT zero: it is not measured).
+    ``observed`` counts connect and DNS events only; the hook-loaded line is liveness. A log with that line but no event is
+    observed == 0 and callers read it as not measured too: the server always talks to Postgres, so an instrument that saw nothing was blind."""
+    entries, loaded = [], False
+    for ln in (text or "").splitlines():
+        m = EGRESS_RX.match(ln.strip())
+        if not m:
+            continue
+        tod = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3))
+        kind = m.group(6)
+        if kind == "hook-loaded":
+            loaded = True
+            continue
+        entries.append({"tod": tod, "violation": m.group(5) == "VIOLATION", "kind": kind, "what": (m.group(7) or "")[:120]})
+    if not entries and not loaded:
+        return None
+    return {"hook_loaded": loaded, "observed": len(entries), "entries": entries}
+
+
 def count_violations(path: Path) -> "Optional[int]":
-    """Non-loopback connects the in-process egress hook logged. None = the hook wrote nothing: that is NOT zero, it is not measured."""
+    """Non-loopback connects the in-process egress hook logged. None = nothing usable in the log: that is NOT zero, it is not measured."""
     try:
-        lines = [ln for ln in path.read_text(errors="ignore").splitlines() if ln.strip()]
+        parsed = parse_egress(path.read_text(errors="ignore"))
     except OSError:
         return None
-    return sum(1 for ln in lines if " VIOLATION " in ln) if lines else None
+    if parsed is None or not parsed["observed"]:
+        return None
+    return sum(1 for e in parsed["entries"] if e["violation"])
+
+
+def phase_arm(label: str) -> str:
+    """The arm a phase label belongs to (``H1:zmb-v1`` -> H1); a phase that serves every arm over the shared server is ``shared``."""
+    head = label.split(":", 1)[0]
+    return head if head in ("H0", "H1", "H2") else "shared"
+
+
+def attribute_egress(parsed: dict, marks: "list[tuple[float, str]]", ref_epoch: float) -> "dict[str, dict]":
+    """Per arm (``shared`` = lab and validity phases, ``setup`` = before the first phase) the observed events and violations, by the
+    WALL-CLOCK phase each event fell in (the hook stamps only the time of day; ``marks`` = (epoch, label) of each phase start). All arms
+    share one Hindsight process, so this says WHICH phase made a connection, never that another arm was clear of it."""
+    ref = dt.datetime.fromtimestamp(ref_epoch)
+    ref_s = ref.hour * 3600 + ref.minute * 60 + ref.second
+    out: "dict[str, dict]" = {}
+    ordered = sorted(marks)
+    for e in parsed["entries"]:
+        delta = ((e["tod"] - ref_s + 43200) % 86400) - 43200          # the signed distance to the measurement start, across midnight
+        t = ref_epoch + delta
+        label = "setup"
+        for when, name in ordered:
+            if when <= t:
+                label = name
+        arm = "setup" if label == "setup" else phase_arm(label)
+        d = out.setdefault(arm, {"observed": 0, "violations": 0})
+        d["observed"] += 1
+        d["violations"] += 1 if e["violation"] else 0
+    return out
+
+
+def egress_summary(path: Path, marks: "list[tuple[float, str]]", ref_epoch: float, ss_peers: int) -> "dict[str, Any]":
+    """What the egress gate reads: ``connects`` (None = not measured), the plain detail line, and the per-arm split."""
+    try:
+        text = path.read_text(errors="ignore")
+    except OSError:
+        text = ""
+    parsed = parse_egress(text)
+    if parsed is None:
+        return {"connects": None, "observed": 0, "by_arm": {},
+                "detail": f"not measured: no egress hook log at {path.name}: the hook never wrote (a hook that wrote nothing proves nothing)"}
+    if not parsed["observed"]:
+        return {"connects": None, "observed": 0, "by_arm": {},
+                "detail": f"not measured: {path.name} shows the hook loaded but no connect at all: the instrument was blind, so this is not a zero"}
+    by_arm = attribute_egress(parsed, marks, ref_epoch)
+    hook_v = sum(1 for e in parsed["entries"] if e["violation"])
+    total = hook_v + ss_peers
+    split = ", ".join(f"{a} {d['observed']}" + (f" ({d['violations']} non-loopback)" if d["violations"] else "") for a, d in sorted(by_arm.items()))
+    peers = sorted({e["what"] for e in parsed["entries"] if e["violation"]})[:3]
+    detail = (f"{total} non-loopback connects over {parsed['observed']} observed (hook {hook_v}; ss sampler {ss_peers} peers; by phase: {split})"
+              + (f"; first: {'; '.join(peers)}" if peers else ""))
+    return {"connects": total, "observed": parsed["observed"], "detail": detail, "by_arm": by_arm}
 
 
 def git_commit(win: Any) -> str:
@@ -461,14 +650,15 @@ def write_report(ctx: Ctx, win: Any, seeds: tuple, store: list, by_id: dict) -> 
     cfg, repo = win.cfg, Path(__file__).resolve().parents[3]
     z0_axes = gates.aggregate_axes(ctx.z0)
     z0_off_axes = gates.aggregate_axes(ctx.z0_off)
-    hook = count_violations(cfg.bakeoff_dir / f"egress-{win.run_id}.log")
-    viol = None if hook is None else hook + (len(ctx.sampler.nonloopback) if ctx.sampler else 0)
+    eg = egress_summary(cfg.bakeoff_dir / f"egress-{win.run_id}.log", ctx.marks, ctx.ref_epoch, len(ctx.sampler.nonloopback) if ctx.sampler else 0)
+    viol = eg["connects"]
     dl = sum(len((repo / "services/zoe-data" / f).read_text().splitlines()) for f in gates.DELETABLE_FILES if (repo / "services/zoe-data" / f).exists()) + 2500
     arms: "dict[str, dict]" = {}
     for v in cfg.arms:
         m = ctx.measure.setdefault(v, {})
         m["rss"] = ctx.sampler.summary(f"{v}:") if ctx.sampler else {}
         m["nonloopback_connects"] = viol
+        m["egress"] = {"observed": eg["observed"], "detail": eg["detail"], "by_arm": eg["by_arm"]}
         m["mem_available_floor_mb"] = None if win.mem_floor == float("inf") else round(win.mem_floor, 0)
         m["layer_lines"] = zoe_layer_lines() if v != "H0" else 0
         m["deletable_lines"], m["deletable_basis"] = dl, "wc -l of the 10 files in decision record 3.1 + its 2,500-line memory_service estimate"
@@ -486,8 +676,10 @@ def write_report(ctx: Ctx, win: Any, seeds: tuple, store: list, by_id: dict) -> 
         "the real Hindsight extraction quality on the B cells (the unit tests use a rule-based test double)",
         "net RSS (the Chroma/ONNX that adoption frees inside zoe-data was NOT subtracted: the figure is gross, so conservative)",
         "G3 deletable lines is an ESTIMATE of files judged deletable, never proven",
-        "A3 provenance honesty, A8 graph edges, poisoning I1-I6, temporal C and recall D cells do not exist yet",
-        "arms share one Hindsight server and one egress log: the non-loopback count is for the whole window, not per arm"]
+        "cells an H arm cannot run (temporal cells that need the nightly conflict pass, A8 graph edges, F5/F6 on-disk residue) are SKIPs with the "
+        "reason; hard ones keep `hard_cells_all_ran` red by the pre-registered rule: not a pass, and not an engine result either",
+        "H2 and H0 ran one seed each by design (H1 first, three seeds): the rule needs three, so they can only be INCOMPLETE",
+        "all arms share one Hindsight server and one egress log: the per-arm egress split is by wall-clock phase, the gate reads the whole window"]
     md = gates.render_markdown(meta, arms, decision, z0_axes, z0_off_axes, notes)
     docs = cfg.docs_dir or (repo / "docs" / "research")
     try:
@@ -531,7 +723,11 @@ def measure(win: Any) -> dict:
         ctx.embed_model = "unknown"
     def instrument_of(seed: str) -> dict:
         return (ctx.z0.get(seed) or {}).get("instrument") or {"ok": False, "lab_controls_red": "?"}
-    tail_s = 5 * 60.0
+    tail_s = TAIL_MIN * 60.0
+    budget = plan_budget(cfg, store)
+    log("budget: " + "; ".join(f"{a} {budget.seeds[a]} seed(s) x <= {budget.box_min[a]:g} min (~{budget.cells_in_box(a)}/{budget.runnable} cells)"
+                               for a in budget.arms) + f"; {budget.avail_min:.1f} min available, planned {budget.total_min():.1f}")
+    concise_arms = tuple(a for a in cfg.arms if a != "H1")
     try:
         ctx.label("lab")
         phase_z0(ctx, seeds, store, by_id)
@@ -541,26 +737,21 @@ def measure(win: Any) -> dict:
             ctx.forget[v].start()
             log(f"forgetting probe {v}: t+0 {ctx.forget[v].t0}")
         phase_arm_controls(ctx, store)
-        for v in cfg.arms:
-            box = min(BOX_MIN[v] * 60.0, win.time_left_s() - tail_s)
-            if box >= 60.0:
-                run_arm_seed(ctx, v, seeds[0], box, store, by_id, instrument_of)
-        for v in cfg.arms:
-            if win.time_left_s() > tail_s + 90:
-                phase_latency(ctx, v)
-        if win.time_left_s() > tail_s + 300:
-            modes = [("concise", tuple(a for a in cfg.arms if a != "H1")), ("verbatim", tuple(a for a in cfg.arms if a == "H1"))]
-            for mode, vs in modes:
-                if vs:
-                    phase_validity(ctx, mode, vs, min(600.0, win.time_left_s() - tail_s))
-        for v in cfg.arms:
-            if win.time_left_s() > tail_s + 90:
-                phase_slot(ctx, v)
-        for si in (1, 2):
-            for v in cfg.arms:
-                box = min(BOX_MIN[v] * 0.6 * 60.0, win.time_left_s() - tail_s)
-                if box >= 90.0:
-                    run_arm_seed(ctx, v, seeds[si], box, store, by_id, instrument_of)
+        for v in budget.arms:                 # H1 first and complete, then H2, then H0: a later arm only gets what the earlier one left
+            for k in range(budget.seeds[v]):
+                box = budget.seed_box_s(v, win.time_left_s() - tail_s)
+                if box >= 60.0:
+                    run_arm_seed(ctx, v, seeds[k], box, store, by_id, instrument_of)
+                if k == 0:
+                    if win.time_left_s() > tail_s + 90:
+                        phase_latency(ctx, v)
+                    mode_arms = ("H1",) if v == "H1" else (concise_arms if "concise" not in ctx.validity_done else ())
+                    if mode_arms and win.time_left_s() > tail_s + 300:
+                        mode = "verbatim" if v == "H1" else "concise"
+                        phase_validity(ctx, mode, mode_arms, min(600.0, win.time_left_s() - tail_s))
+                        ctx.validity_done.add(mode)
+                    if win.time_left_s() > tail_s + 90:
+                        phase_slot(ctx, v)
         for p in ctx.forget.values():            # a real t+6 min: wait out whatever is left, never skip it
             while p.t6 is None:
                 win.guard()
