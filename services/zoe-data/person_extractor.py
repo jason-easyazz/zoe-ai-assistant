@@ -1357,6 +1357,15 @@ async def process_text(
     # and a month-first model later rewrote it as July 8.
     from date_locale import normalize_numeric_dates
     text = normalize_numeric_dates(text)
+    # Only the owner's own words are mined: the people in a pasted email, or in another person's quoted speech,
+    # are not the owner's contacts or the owner's facts (own_words; ZMB I1/I2).
+    import own_words
+    own = own_words.analyze(text)
+    if own.changed:
+        own_words.count_drops("person_extractor", own)
+        text = own.text
+        if not text.strip():
+            return 0
 
     _db, _opened = await _ensure_db(db)
     if _db is None:

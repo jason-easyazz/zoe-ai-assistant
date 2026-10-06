@@ -33,6 +33,8 @@ import time
 from difflib import SequenceMatcher
 from typing import Optional
 
+import own_words as _own_words
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -238,6 +240,13 @@ _EXTRACTED_PREFIX_RE = re.compile(
 )
 
 
+def is_pasted_content(text: str) -> bool:
+    """Is this user turn (or part of it) pasted / quoted / someone else's speech rather than the owner's own
+    voice? Thin wrapper over ``own_words.analyze`` for callers that only need the verdict (ZMB I1/I2/I4)."""
+    own = _own_words.analyze(text)
+    return own.pasted or bool(own.speech)
+
+
 def is_storable_fact(text: str) -> tuple[bool, str]:
     """Return ``(storable, reason)`` for a conversational memory candidate.
 
@@ -259,6 +268,12 @@ def is_storable_fact(text: str) -> tuple[bool, str]:
         return False, "empty"
     if len(raw) < _MIN_LEN:
         return False, "too_short"
+
+    # An instruction addressed to the assistant ("ignore previous instructions ...") is never a fact about the
+    # person: a pasted email's line was stored as "User asked me to remember: ..." (ZMB I1/I1b). The turn-level
+    # guard is own_words; this is the write boundary's backstop for every writer that reaches the gate.
+    if _own_words.instruction_shaped(raw):
+        return False, "instruction_shaped"
 
     # A memory command ("remember that my mum likes NCIS") is always a fact,
     # even though it can superficially look like other shapes — accept early.

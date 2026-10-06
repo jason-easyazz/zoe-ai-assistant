@@ -210,6 +210,8 @@ VOICE_LANE_WRITERS = frozenset({"voice_fact", "voice_regex", "voice", "voice_tur
 MODEL_FROM_TURN_WRITERS = frozenset({
     "turn_digest", "voice_turn_digest", "person_extractor_llm", "brain_tool", "mcp",
     "zoe_agent", "decay_sweep",
+    # the one "User pasted an email" note a pasted turn leaves (own_words): never anchored, so never user_stated
+    "pasted_content",
 })
 #: Per-turn model writers whose anchor is ONE user turn: when that turn entails the fact (and the speaker is not
 #: rejected) the write carries ``user_stated`` power (``VERBATIM_BASIS``) - the owner's own change of mind, stated plainly.

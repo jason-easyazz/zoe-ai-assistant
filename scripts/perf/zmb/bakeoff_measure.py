@@ -339,6 +339,19 @@ def skip_breakdown(rows: "list[dict]") -> "dict[str, int]":
     return out
 
 
+def skip_breakdown(rows: "list[dict]") -> "dict[str, int]":
+    """Why cells were skipped, as counts: ``time box`` (the budget ran out), ``capability: x, y`` (the arm cannot do what the cell needs:
+    structural, no amount of time fixes it), ``unreachable``, ``other``."""
+    out: "dict[str, int]" = {}
+    for r in rows:
+        why = str(r.get("reason") or "")
+        m = re.search(r"lacks capability: (.+)", why)
+        key = ("time box" if "time box" in why else f"capability: {m.group(1).strip()}" if m else
+               "unreachable" if "reach Hindsight" in why else "other")
+        out[key] = out.get(key, 0) + 1
+    return out
+
+
 def run_arm_seed(ctx: Ctx, variant: str, seed: str, box_s: float, store: list, by_id: dict, instrument_of: "Callable[[str], dict]") -> None:
     from . import artifact, cells as cellmod, runner
     from .world import make_world

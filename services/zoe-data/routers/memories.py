@@ -38,6 +38,7 @@ from memory_service import (
     memory_affect,
 )
 from models import MemoryProposalCreate, MemoryReviewBody
+import own_words
 import memory_authority
 import recall_evidence
 
@@ -522,6 +523,13 @@ def _build_memory_prompt_packet(
         kept_ts.append(_added_at_ts(meta))
         cite = f"[mem:{str(ref.id)[:8]}]"
         prefix = "(uncertain) " if status == "disputed" else ""
+        # Quoted, not obeyed (ZMB I1/I4): a row a pasted turn left, or ANY row whose text is an instruction addressed
+        # to the assistant (an older build stored them as "User asked me to remember: ignore previous ..."), is
+        # labelled as something the user pasted and an instruction-shaped text is never rendered into the prompt.
+        pasted_row = own_words.is_pasted_row(meta)
+        instruction_row = own_words.instruction_shaped(text)
+        if pasted_row or instruction_row:
+            prefix = f"(something you pasted) {prefix}"
         if memory_authority.is_unverified(meta):
             # a voice the speaker gate did not confirm: "someone at the panel said", never "you told me"
             prefix = f"{memory_authority.UNVERIFIED_RECALL_LABEL} {prefix}"
@@ -533,9 +541,10 @@ def _build_memory_prompt_packet(
             prefix = f"(recent, felt {felt}) {prefix}" if felt else f"(recent) {prefix}"
         when = recall_evidence.date_suffix(meta, now=now) if evidence else ""
         dated += bool(when)
-        if quotes:
+        if quotes and not (pasted_row or instruction_row):
             quote_by_id[ref.id] = recall_evidence.quote_for(meta, text[:200])
-        lines.append(f"- {prefix}{text[:200]}{when} {cite}")
+        shown = "[instruction-shaped text withheld]" if instruction_row else text[:200]
+        lines.append(f"- {prefix}{shown}{when} {cite}")
         entry = {
             "id": ref.id,
             "memory_type": meta.get("memory_type", "fact"),
