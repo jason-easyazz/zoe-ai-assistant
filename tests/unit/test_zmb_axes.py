@@ -234,4 +234,4 @@ def test_arms_that_export_no_provenance_fail_the_provenance_cells_honestly():
     out = cellmod.run_cell(cells["A3.user_turn_rows_rate"].rendered(w), w, arm)
     assert out.verdict == "FAIL" and out.stage == "write"
     assert set(OPTIONAL_ROW_KEYS) == {"source_excerpt", "user_turn_id", "valid_from", "invalid_at", "supersedes_id",
-                                      "superseded_by_id"}
+                                      "superseded_by_id", "retire_quote", "retired_by", "quote_elsewhere"}

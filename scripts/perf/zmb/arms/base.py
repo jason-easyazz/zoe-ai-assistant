@@ -30,7 +30,8 @@ ROW_KEYS = ("id", "text", "status", "authority_class", "origin", "contradicts_id
 #: ``user_turn_id`` - which turn) and the validity interval (epoch seconds; ``invalid_at`` is set when a newer fact
 #: replaced this one, never by deleting it) plus the supersede links. An arm that does not export one shows "" - and
 #: a provenance / history cell then FAILS, which is the honest reading of "the store cannot say".
-OPTIONAL_ROW_KEYS = ("source_excerpt", "user_turn_id", "valid_from", "invalid_at", "supersedes_id", "superseded_by_id")
+OPTIONAL_ROW_KEYS = ("source_excerpt", "user_turn_id", "valid_from", "invalid_at", "supersedes_id", "superseded_by_id",
+                     "retire_quote", "retired_by", "quote_elsewhere")
 
 #: speakers a Turn may carry (docs: the ZMB design section 3.0)
 SPEAKERS = ("owner_typed", "owner_taught", "owner_voice_verified", "panel_unverified", "third_party",
@@ -152,6 +153,18 @@ class Arm(ABC):
         """Optional capability ``edges``: every edge, open or closed - ``{"a", "b", "rel_type", "current", "authority",
         "origin"}`` (names, never ids): the people-graph export the A8 cells read."""
         raise NotImplementedError(f"{self.name} has no people graph")
+
+    def quote_retire(self, text: str, *, lane: str = "chat", speaker_verified: "bool | None" = None,
+                     brain: "dict[str, Any] | None" = None, mode: str = "enforce") -> "dict[str, Any]":  # pragma: no cover
+        """Optional capability ``quote_retire``: one candidate state change through the arm's quote-backed retirement
+        (``services/zoe-data/memory_retire.py``): the deterministic half (prefilter, the owner's own words, candidates), the
+        SCRIPTED brain's choice (``brain``: ``{"pick_text": row text}`` / ``{"pick": n}`` / ``{"top1": true}`` /
+        ``{"row_containing": text}``), then the wall. Returns ``{"action", "reason", "offered": [ids], "chosen": id}``."""
+        raise NotImplementedError(f"{self.name} has no quote-backed retirement")
+
+    def cue_gate(self, text: str) -> bool:  # pragma: no cover
+        """Optional capability ``quote_retire``: does the arm's quote-retire prefilter open the door to the judge for this sentence?"""
+        raise NotImplementedError(f"{self.name} has no quote-backed retirement")
 
     def advance_clock(self, seconds: float) -> None:  # pragma: no cover - optional capability
         raise NotImplementedError(f"{self.name} has no controllable clock")

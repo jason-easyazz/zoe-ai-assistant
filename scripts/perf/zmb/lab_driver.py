@@ -55,6 +55,15 @@ CONTROLS = {
     "event_time": "the stated-validity parser switched off: valid_from is always the capture time, never the date the person said",
     "history": "the history read switched off: a replaced fact is kept but a question about how things used to be never sees it",
     "physical_erase": "ZOE_MEMORY_PHYSICAL_ERASE=0 - a hard delete / forget removes the row through the API and leaves the text on disk",
+    "retire_cue": "the quote-retire prefilter removed: any sentence opens the door to the judge, a mention, a question or a plan included (S10x)",
+    "retire_judge": "no judge: the retirement takes the retrieval's top-1 row whatever the sentence says (the naive rule; wrong on 34 of 40 non-changes)",
+    "retire_speaker": "the verified-owner check removed: a voice turn the speaker gate did not confirm may retire the owner's row",
+    "retire_ownwords": "the own-words wall removed from quote-retire: pasted text and a third person's quoted speech are read as the owner's sentence",
+    "retire_offered": "the offered-rows check removed: the judge may name ANY row, not one of the three it was shown",
+    "retire_owner_row": "the owner's-own-row check removed: another person's copy of a fact is offered and retired",
+    "retire_shadow": "ZOE_QUOTE_RETIRE=shadow applies the retirement: the decision is logged AND written",
+    "retire_quote": "the verbatim sentence is not kept with the retirement: a row is retired with no evidence of why",
+    "retire_forget": "the verbatim sentence is kept where the forget sweep never looks: a forgotten name stays in the cited quote",
 }
 
 _DISK_SEQ = itertools.count(1)
@@ -114,7 +123,7 @@ def load_service() -> types.SimpleNamespace:
     _service_path()
     mods = {n: importlib.import_module(n) for n in (
         "memory_service", "memory_authority", "memory_tombstones", "memory_extractor",
-        "memory_quality", "identity_facts", "live_store_guard", "memory_temporal")}
+        "memory_quality", "identity_facts", "live_store_guard", "memory_temporal", "memory_retire")}
     return types.SimpleNamespace(**mods)
 
 
@@ -389,6 +398,8 @@ def lazy_extract_candidates(user_message: str, assistant_response: str = "",
 
 #: the scripted reader's mode (``reader`` control): the arm reads it at call time, inside the control scope
 READER = {"sycophantic": False}
+#: the scripted brain's mode for quote-retire (``retire_judge`` control): ``naive`` = no judgement, take the retrieval's top-1
+RETIRE = {"naive": False}
 
 @contextlib.contextmanager
 def controls_off(features: "frozenset[str] | set[str]", svc: types.SimpleNamespace) -> Iterator[None]:
@@ -499,6 +510,48 @@ def controls_off(features: "frozenset[str] | set[str]", svc: types.SimpleNamespa
             # the verbatim-anchor rule removed: a per-turn model writer never carries user_stated power, so the owner's own change
             # of mind is held back as a disputed candidate (with the wall ON; with the wall OFF nothing is held back at all)
             patch(importlib.import_module("memory_authority"), "entailing_span", lambda fact, user_text: None)
+        if "retire_cue" in features:
+            mr = importlib.import_module("memory_retire")
+            patch(mr, "_is_change_sentence", lambda sentence: "any" if sentence.strip() else None)
+        if "retire_judge" in features:
+            old_naive = RETIRE["naive"]
+            RETIRE["naive"] = True
+            undo.append(lambda: RETIRE.__setitem__("naive", old_naive))
+        if "retire_speaker" in features:
+            patch(importlib.import_module("memory_retire"), "check_speaker", lambda lane, user_id, verified: "")
+        if "retire_ownwords" in features:
+            patch(importlib.import_module("memory_retire"), "own_part", lambda text: ((text or "").strip(), False))
+        if "retire_offered" in features:
+            patch(importlib.import_module("memory_retire"), "check_offered", lambda row_id, offered: bool(row_id))
+        if "retire_owner_row" in features:
+            patch(importlib.import_module("memory_retire"), "subject_ok", lambda quote, row_text: True)
+        if "retire_shadow" in features:
+            mr = importlib.import_module("memory_retire")
+            real_decide = mr.decide
+
+            async def decide_applying_in_shadow(svc, user_id, prep, **kw):
+                if kw.get("mode_override") == "shadow":
+                    kw["mode_override"] = "enforce"
+                return await real_decide(svc, user_id, prep, **kw)
+            patch(mr, "decide", decide_applying_in_shadow)
+        if "retire_quote" in features or "retire_forget" in features:
+            ms_cls = svc.memory_service.MemoryService
+            real_sync = ms_cls._retire_with_quote_sync
+            keep_quote = "retire_quote" not in features
+
+            def retire_without_quote(self, user_id, old_id, quote, turn_ref, lane, cue):
+                done = real_sync(self, user_id, old_id, quote, turn_ref, lane, cue)
+                if done:
+                    col = self._collection()
+                    got = col.get(ids=[old_id], include=["metadatas", "documents"])
+                    meta = dict((got.get("metadatas") or [{}])[0] or {})
+                    held = meta.get("retire_quote", "")
+                    meta["retire_quote"] = ""          # blanked, not popped: a real Chroma update MERGES metadata and would keep the key
+                    if keep_quote:
+                        meta["quote_elsewhere"] = held     # retire_forget: kept, but where the forget sweep never looks
+                    col.update(ids=[old_id], metadatas=[meta])
+                return done
+            patch(ms_cls, "_retire_with_quote_sync", retire_without_quote)
         if "topic" in features:
             sup = importlib.import_module("memory_supersede")
             patch(sup, "same_topic", lambda new, old: True)

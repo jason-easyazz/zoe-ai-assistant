@@ -4,7 +4,7 @@
  * Offline: an in-process fake zoe-data answers POST /api/system/web-search with
  * each B10.0 outcome shape in turn. Asserts, in both directions of the flag:
  *   - flag off (default): the tool is NOT registered (`optionalZoeTools()` is
- *     empty) and `zoeTools` is still the 21-tool set — the negative control;
+ *     empty) and `zoeTools` is still the 22-tool set — the negative control;
  *   - flag on: registered under the name `web_search`, calls the exact
  *     path/method/payload, formats `results`, and surfaces no_results / blocked /
  *     error / off HONESTLY (never as "nothing found" when the lookup was walled);
@@ -70,7 +70,7 @@ test('negative control — flag off: not registered, zoeTools untouched', () => 
   delete process.env.ZOE_WEB_SEARCH_TOOL;
   assert.equal(webSearchToolEnabled(), false);
   assert.deepEqual(optionalZoeTools(), []);
-  assert.equal(zoeTools.length, 21);
+  assert.equal(zoeTools.length, 22);
   assert.ok(!zoeTools.some((t) => t.name === 'web_search'));
   for (const off of ['0', '', 'false', 'no', 'off']) {
     process.env.ZOE_WEB_SEARCH_TOOL = off;
@@ -85,7 +85,7 @@ test('flag on: registered as web_search; truthy spellings accepted', () => {
   }
   assert.equal(theTool().name, 'web_search');
   // Still not in the always-registered set — the flag adds, never mutates.
-  assert.equal(zoeTools.length, 21);
+  assert.equal(zoeTools.length, 22);
 });
 
 test('results: exact wire call + formatted rows with the source cited', async () => {

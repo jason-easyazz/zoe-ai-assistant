@@ -2782,6 +2782,9 @@ _DISPATCHABLE_INTENTS = frozenset({
     # model-callable memory write behind the Flue sidecar's remember_fact tool.
     # Fulfillment is intent_router.execute_intent → MemoryService.ingest.
     "memory_store",
+    # Quote-backed retirement (memory_retire.py): the brain's `memory_retire` tool names one of the notes it was SHOWN;
+    # the sentence it is about is the turn zoe_flue_client noted, never an argument. Shadow by default.
+    "memory_retire",
 })
 
 

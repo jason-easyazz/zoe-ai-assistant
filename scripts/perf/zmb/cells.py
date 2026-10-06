@@ -17,6 +17,10 @@ Event forms (a dict in ``cell.events``):
     {"do": "needles"}                                          teach the seeded recall corpus (``needles.corpus``)
     {"do": "filler", "turns": 100}                             N seeded household-chatter turns (``needles.chatter``)
     {"do": "hard_delete"}                                      the audited hard delete of the user (capability ``disk``)
+    {"do": "retire", "text": "...", "speaker": "owner_typed",  one candidate state change through quote-backed retirement
+     "brain": {"pick_text": "..."}, "mode": "enforce"}          (capability ``quote_retire``; S10x): the REAL prefilter, candidates
+                                                               and wall, the brain's CHOICE scripted (``Arm.quote_retire``)
+    {"do": "seed_pool"}                                        the S10x pool: 30 old facts + 30 other-person copies + 40 generic rows
 
 Probe forms (a dict in ``cell.probes``; every probe must pass):
 
@@ -29,6 +33,12 @@ Probe forms (a dict in ``cell.probes``; every probe must pass):
     {"kind": "edges",   "assertions": [...]}                   the people graph (``scorers.score_edges``; ``edges``)
     {"kind": "hit_at_k", "k": 5, "min_rate": 0.9, "queries": "direct"|"paraphrase"}   the corpus's needles retrieved
     {"kind": "answer",  "query": "...", "needles": [], "canaries": []}   the scripted reader (capability ``reader``)
+    {"kind": "as_of",   "contains": [..]}                      the retired row is returned by ``as_of`` a moment BEFORE it was retired
+                                                               (the midpoint of its validity interval) and is not recalled now
+    {"kind": "prefilter", "min_changes": n, "min_held_out": n, "max_mentions": n}   the quote-retire cue gate over the S10x sentences
+                                                               (the arm's gate; no store read); a gate that fires on a mention is red
+    {"kind": "s10x", "check": "copies_not_offered"|"right_rows", ...}   the S10x pool run over the arm (capability ``quote_retire``;
+                                                               ``right_rows`` also needs ``embedder``: the retrieval is the live one)
 
 A probe or event the arm cannot do (a stub arm, a missing capability) makes the cell SKIP with the reason -
 never PASS. ``LiveStoreViolation`` (a ``BaseException``) is never caught: it aborts the run.
@@ -51,8 +61,8 @@ RETAINED = ("approved", "pending", "disputed")
 _TURN_KEYS = {"text", "speaker", "day_offset", "writer", "proposes", "op", "attr", "assistant_text",
               "memory_type"}
 _CAPS = {"advance_clock": "clock", "ingest_as": "identities", "idle_pass": "idle_pass",
-         "conflict_pass": "conflict_pass", "edge": "edges", "hard_delete": "disk"}
-_PROBE_KINDS = ("store", "facts", "entities", "recall", "answer", "edges", "hit_at_k", "disk")
+         "conflict_pass": "conflict_pass", "edge": "edges", "hard_delete": "disk", "retire": "quote_retire"}
+_PROBE_KINDS = ("store", "facts", "entities", "recall", "answer", "edges", "hit_at_k", "disk", "as_of", "prefilter", "s10x")
 
 
 @dataclass
@@ -91,9 +101,19 @@ def required_capabilities(cell: Cell) -> "set[str]":
             need.add("edges")
         if p.get("kind") == "disk":
             need.add("disk")
+        if p.get("kind") in ("s10x", "prefilter"):
+            need.add("quote_retire")
+            if p.get("check") == "right_rows":
+                need.add("embedder")
         if p.get("as"):
             need.add("identities")
     return need
+
+
+def z0_only(cell: Cell) -> bool:
+    """A cell that measures Zoe's OWN quote-backed retirement (``memory_retire`` over the store: capability ``quote_retire``): only the Z0 arms
+    can run it. The memory-engine bake-off's H arms never see it (their cell lists leave it out), so it cannot move an arm-vs-Z0 comparison."""
+    return "quote_retire" in required_capabilities(cell)
 
 
 def _retained_texts(rows: "list[dict]") -> "list[str]":
@@ -129,6 +149,16 @@ def _play(cell: Cell, arm: Arm, world: "World | None" = None) -> "list[dict[str,
                                                                                    str(ev.get("salt", "")))])
         elif do == "hard_delete":
             arm.hard_delete()
+        elif do == "retire":
+            speaker = str(ev.get("speaker", "owner_typed"))
+            if speaker not in arm.RETIRE_SPEAKERS:
+                raise ValueError(f"unknown retire speaker {speaker!r} (known: {', '.join(arm.RETIRE_SPEAKERS)})")
+            lane, verified = arm.RETIRE_SPEAKERS[speaker]
+            arm.quote_retire(ev["text"], lane=lane, speaker_verified=verified, brain=ev.get("brain"),
+                             mode=str(ev.get("mode", "enforce")))
+        elif do == "seed_pool":
+            from . import s10x_data
+            arm.ingest([Turn(t, "owner_taught") for t in s10x_data.pool()])
         else:
             raise ValueError(f"unknown event action {do!r}")
     return passes
@@ -151,6 +181,77 @@ def _hit_at_k(p: "dict[str, Any]", arm: Arm, seed: str) -> scorers.Score:
     return scorers.score_hits(hits, len(corpus), k=k, min_rate=float(p.get("min_rate", 0.9)), label=which)
 
 
+def _as_of_probe(p: "dict[str, Any]", arm: Arm) -> scorers.Score:
+    """The two timelines of a quote-backed retirement: the retired row was believed from ``valid_from`` to ``invalid_at``, so a read
+    AS OF the middle of that interval still returns it, and a read now does not."""
+    import datetime as dt
+    rows = [r for r in arm.stats()["rows"] if r.get("status") == "superseded"
+            and all(scorers.contains_phrase(r.get("text", ""), c) for c in p.get("contains") or [])]
+    if not rows:
+        return scorers.Score(False, "write", {"as_of": "no retired row"})
+    r = rows[0]
+    try:
+        start, end = float(r.get("valid_from")), float(r.get("invalid_at"))
+    except (TypeError, ValueError):
+        return scorers.Score(False, "write", {"as_of": "no validity interval"})
+    mid = dt.datetime.fromtimestamp((start + end) / 2, dt.timezone.utc).isoformat()
+    query = " ".join(p.get("contains") or ["x"])
+    then = [h["id"] for h in arm.as_of(query, mid)]
+    now = [h["id"] for h in arm.recall(query, 10)]
+    ok = r["id"] in then and r["id"] not in now
+    return scorers.Score(ok, "" if ok else "read", {"as_of": {"returned_then": r["id"] in then, "recalled_now": r["id"] in now}})
+
+
+def _prefilter_probe(p: "dict[str, Any]", arm: Arm) -> scorers.Score:
+    """The quote-retire cue gate over the S10x sentences (the arm's own gate: no store is read). ``min_changes`` of the 30 plain changes must open the
+    door; of the 15 held-out changes ``min_held_out``; and no more than ``max_mentions`` of the 10 held-out mentions (a gate that
+    opens for "I saw a cello today" is no gate). Evidence: counts only."""
+    from . import s10x_data
+    fires = arm.cue_gate
+    changes = sum(fires(say) for _old, say, _fact in s10x_data.PAIRS)
+    held = sum(fires(t) for t in s10x_data.HELD_OUT_CHANGES)
+    mentions = sum(fires(t) for t in s10x_data.HELD_OUT_MENTIONS)
+    ok = (changes >= int(p.get("min_changes", 28)) and held >= int(p.get("min_held_out", 12))
+          and mentions <= int(p.get("max_mentions", 0)))
+    return scorers.Score(ok, "" if ok else "read", {"prefilter": {
+        "changes": f"{changes}/{len(s10x_data.PAIRS)}", "held_out_changes": f"{held}/{len(s10x_data.HELD_OUT_CHANGES)}",
+        "held_out_mentions_fired": f"{mentions}/{len(s10x_data.HELD_OUT_MENTIONS)}"}})
+
+
+def _s10x_probe(p: "dict[str, Any]", arm: Arm) -> scorers.Score:
+    """The S10x pool (``seed_pool``) run over the arm, one change at a time. ``copies_not_offered``: with a HOSTILE judge (always the
+    first row offered) no other-person copy is ever offered or retired. ``right_rows``: an honest judge names the owner's old row
+    when it was offered; the rate of changes that retired exactly the right row, with the sentence attached, must reach ``min_rate``
+    (the record's bar: 24 of 30; the retrieval is the live one, so this runs on Z0e)."""
+    from . import s10x_data
+    check = p.get("check")
+    olds = [old for old, _say, _fact in s10x_data.PAIRS]
+    copies = set(s10x_data.other_person_copies())
+    by_text = {r["text"]: r for r in arm.stats()["rows"]}
+    copy_ids = {by_text[t]["id"] for t in copies if t in by_text}
+    if check == "copies_not_offered":
+        offered_copy = retired_copy = 0
+        for _old, say, _fact in s10x_data.PAIRS:
+            out = arm.quote_retire(say, brain={"top1": True})
+            offered_copy += bool(copy_ids & set(out["offered"]))
+            retired_copy += out["chosen"] in copy_ids and out["action"] == "retired"
+        ok = offered_copy == 0 and retired_copy == 0
+        return scorers.Score(ok, "" if ok else "write", {"s10x": {"copies_offered": f"{offered_copy}/{len(olds)}",
+                                                                   "copies_retired": f"{retired_copy}/{len(olds)}"}})
+    if check == "right_rows":
+        right = 0
+        for old, say, _fact in s10x_data.PAIRS:
+            arm.quote_retire(say, brain={"pick_text": old})
+        for old, say, _fact in s10x_data.PAIRS:
+            r = by_text.get(old)
+            now = next((x for x in arm.stats()["rows"] if r and x["id"] == r["id"]), None)
+            right += bool(now and now["status"] == "superseded" and now["retire_quote"] == say)
+        wrong = sum(1 for x in arm.stats()["rows"] if x["status"] == "superseded" and x["text"] not in set(olds))
+        return scorers.score_hits(right, len(olds), k=3, min_rate=float(p.get("min_rate", 0.8)), label="right_rows") \
+            if not wrong else scorers.Score(False, "write", {"s10x": {"right": right, "wrong_rows_retired": wrong}})
+    raise ValueError(f"unknown s10x check {check!r}")
+
+
 def _probe(p: "dict[str, Any]", arm: Arm, seed: str = "zmb-v1") -> scorers.Score:
     kind = p.get("kind")
     if kind not in _PROBE_KINDS:
@@ -171,6 +272,12 @@ def _probe(p: "dict[str, Any]", arm: Arm, seed: str = "zmb-v1") -> scorers.Score
                                       min_precision=float(p.get("min_precision", 1.0)),
                                       min_recall=float(p.get("min_recall", 0.75)),
                                       ignore=p.get("ignore") or ())
+    if kind == "as_of":
+        return _as_of_probe(p, arm)
+    if kind == "prefilter":
+        return _prefilter_probe(p, arm)
+    if kind == "s10x":
+        return _s10x_probe(p, arm)
     if kind == "disk":   # capability ``disk``: the bytes Chroma leaves behind (counts only, never text)
         return scorers.score_disk(arm.disk_residue(list(p["tokens"])))
     if kind == "recall":

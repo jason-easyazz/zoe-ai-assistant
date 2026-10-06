@@ -79,8 +79,10 @@ def test_every_controlled_cell_goes_red_with_its_features_off(full_control_pass)
                 and cellmod.required_capabilities(c) <= set(Z0Arm.capabilities)}
     # 136 with chromadb present (the two ``disk`` cells run), 134 in the slim CI lane where they are declared skips
     # (99 before the temporal / recall / poisoning / provenance / graph axes; +6 for the cells #1895 fixes; +3 for the two
-    # timelines: C2.history_read and C4.valid_from_is_event_time leave the targets, + C2.history_is_labelled)
-    assert len(runnable) in (135, 137) and cp["checked"] == cp["red"] == len(runnable)
+    # timelines: C2.history_read and C4.valid_from_is_event_time leave the targets, + C2.history_is_labelled; +13 for the S10x
+    # quote-backed retirement cells (12 without chromadb: S10x.forgotten_quote_not_on_disk is a ``disk`` cell; the 14th controlled
+    # one, S10x.pool_right_rows_retired, needs the embedder and runs on Z0e only)
+    assert len(runnable) in (147, 150) and cp["checked"] == cp["red"] == len(runnable)
     assert {r["id"] for r in cp["rows"]} == runnable
     assert all(r["verdict"] == "FAIL" and r["stage"] in ("write", "read", "answer") for r in cp["rows"])
 

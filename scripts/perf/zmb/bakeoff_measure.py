@@ -34,8 +34,9 @@ from .bakeoff import PG_CONTAINER, UNITS, Aborted
 #: minutes per fixed phase (Z0 lab + forgetting start + adapter controls; per-arm latency / slot; per-mode extraction validity)
 PHASE_MIN = {"lab": 2.1, "latency": {"H1": 1.0, "H2": 2.5, "H0": 5.1, "HM": 0.0}, "slot": {"H1": 3.1, "H2": 5.2, "H0": 5.2, "HM": 0.0},
              "validity": {"verbatim": 6.0, "concise": 10.0},
-             #: Z0e (real Chroma + MiniLM) on the D cells x 3 seeds, measured 2026-10-06 first contact: 4 cells x ~6.5 s x 3 seeds = 1.3 min
-             "z0e": 1.4,
+             #: Z0e (real Chroma + MiniLM) on the D cells x 3 seeds, measured 2026-10-06 first contact: 4 cells x ~6.5 s x 3 seeds = 1.3 min;
+             #: plus the S10x pool cell (30 retirements over 100 rows, ~10.7 s measured) x 3 seeds = 0.5 min
+             "z0e": 1.9,
              #: the HM cells on the real tiers (real library + real Hindsight, ``--controls real-tier``): 217 s measured at first contact (2026-10-06), with headroom
              "hm_cells": 5.0}
 #: seconds per cell that RAN, seed 1: H1 112 cells in 414 s, H2 55 in 662 s, H0 18 in 362 s
@@ -317,13 +318,17 @@ def phase_z0(ctx: Ctx, seeds: tuple, store: list, by_id: dict) -> None:
         phase_z0e(ctx, seed, world, store, by_id, inst)
 
 
+#: the one S10x cell whose number depends on the retrieval (the candidate stage: the old row in the top 3), so it runs on Z0e too
+Z0E_RETIREMENT_CELL = "S10x.pool_right_rows_retired"
+
+
 def phase_z0e(ctx: Ctx, seed: str, world: Any, store: list, by_id: dict, inst: dict) -> None:
-    """Z0e = Z0 over a REAL Chroma collection with the service's MiniLM embedder (as live), on the recall (D) cells: the lab's own Z0 ranks by bag-of-words, so
+    """Z0e = Z0 over a REAL Chroma collection with the service's MiniLM embedder (as live), on the recall (D) cells and the S10x candidate-stage cell: the lab's own Z0 ranks by bag-of-words, so
     the D axis compares an embedding arm with a real embedder, not with a word counter. Skipped (with the reason in the notes) where chromadb or the cached
     model is missing: the D baseline then falls back to Z0 and the report says so."""
     from . import artifact, runner
     from .arms import make_arm
-    cells = [c for c in store if c.id.startswith("D")]
+    cells = [c for c in store if c.id.startswith("D") or c.id == Z0E_RETIREMENT_CELL]
     arm = make_arm("Z0e")
     try:
         rows = runner.run_cells(cells, world, arm)
@@ -654,10 +659,10 @@ def plan_budget(cfg: Any, store: "Optional[list]" = None, runnable: "Optional[in
     """Three seeds of H1 inside the cap, one seed each for H2 and H0, the hard cap kept. ``store`` = the store-tier cells; the cells an H arm
     can run are those whose required capabilities it declares (the rest SKIP with the reason and cost nothing)."""
     arms = tuple(a for a in ARM_ORDER if a in cfg.arms)
+    from . import cells as cellmod
     if store is None:
         from . import spec
-        store = [c for c in spec.load_cells() if c.tier == "store"]
-    from . import cells as cellmod
+        store = [c for c in spec.load_cells() if c.tier == "store" and not cellmod.z0_only(c)]
     from .arms.hindsight import HindsightArm
     layered = set(HindsightArm.capabilities)
     if runnable is None:
@@ -683,7 +688,7 @@ def plan_table(cfg: Any, seeds: tuple, budget: "Optional[Budget]" = None) -> "li
     b = budget or plan_budget(cfg)
     rows = [("Z0 + Z0-off in the lab on 3 seeds, forgetting probes start (t+0), adapter negative controls", PHASE_MIN["lab"],
              "control, negative control; the real t+6 min check runs later between cells"),
-            ("Z0e (real Chroma + MiniLM) on the 4 recall cells x 3 seeds", PHASE_MIN["z0e"], "the D axis baseline: real retrieval on both engines")]
+            ("Z0e (real Chroma + MiniLM) on the 4 recall cells + the S10x candidate-stage cell x 3 seeds", PHASE_MIN["z0e"], "the D axis baseline: real retrieval on both engines")]
     concise_done = False
     for a in b.arms:
         if a == "HM":
@@ -918,9 +923,11 @@ def measure(win: Any) -> dict:
     from . import spec
     make_factories(win)
     cfg, host, log = win.cfg, win.host, win.log
+    from . import cells as cellmod
     everything = spec.load_cells()
     by_id = {c.id: c for c in everything}
-    store = [c for c in everything if c.tier == "store"]
+    z0_store = [c for c in everything if c.tier == "store"]                   # the lab phase: Z0 / Z0-off run every store cell
+    store = [c for c in z0_store if not cellmod.z0_only(c)]                  # the H arms: not Zoe's own quote-retirement cells (S10x)
     seeds = seeds_for(win.run_id)
     sampler = Sampler(win)
     sampler.start()
@@ -946,7 +953,7 @@ def measure(win: Any) -> dict:
     try:
         ctx.label("lab")
         sweep_stale_banks(ctx)
-        phase_z0(ctx, seeds, store, by_id)
+        phase_z0(ctx, seeds, z0_store, by_id)
         for v in (a for a in cfg.arms if a != "HM"):          # HM's forgetting is its own two cells (F1 / F2) on the real tiers, run in the HM driver
             ctx.forget[v] = ForgetProbe(ctx, v)
             ctx.label(f"{v}:forget")

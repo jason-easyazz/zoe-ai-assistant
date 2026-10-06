@@ -87,7 +87,7 @@ IDENTITIES = {
 
 class Z0Arm(Arm):
     name = "Z0"
-    capabilities = frozenset({"clock", "controls", "reader", "identities", "idle_pass", "conflict_pass", "edges"})
+    capabilities = frozenset({"clock", "controls", "reader", "identities", "idle_pass", "conflict_pass", "edges", "quote_retire"})
     #: ``disk`` = the arm can run a cell over REAL Chroma and byte-scan what is left on disk. Needs chromadb
     #: (not installed in the slim CI lane: the disk cells SKIP there with the reason, never pass).
     if importlib.util.find_spec("chromadb") is not None:
@@ -97,7 +97,7 @@ class Z0Arm(Arm):
         from .. import lab_driver
         self.embed = embed
         if embed:       # Z0e: the same MemoryService over a real Chroma + MiniLM; the disk cells stay Z0's (their embeddings are hash vectors on purpose)
-            self.capabilities = frozenset(set(self.capabilities) - {"disk"})
+            self.capabilities = frozenset((set(self.capabilities) - {"disk"}) | {"embedder"})
         self._lab = lab_driver
         self.svc = lab_driver.load_service()
         self.off = frozenset(off)
@@ -188,7 +188,10 @@ class Z0Arm(Arm):
                 "valid_from": meta.get("valid_from") if meta.get("valid_from") is not None else "",
                 "invalid_at": meta.get("invalid_at") if meta.get("invalid_at") is not None else "",
                 "supersedes_id": str(meta.get("supersedes_id") or ""),
-                "superseded_by_id": str(meta.get("superseded_by_id") or "")}
+                "superseded_by_id": str(meta.get("superseded_by_id") or ""),
+                "retire_quote": str(meta.get("retire_quote") or ""),
+                "retired_by": str(meta.get("retired_by") or ""),
+                "quote_elsewhere": str(meta.get("quote_elsewhere") or "")}
 
     def _rows(self) -> "list[dict[str, Any]]":
         col = self._lab_service.col
@@ -341,6 +344,54 @@ class Z0Arm(Arm):
         with self._ctl():
             out = self._run(md._implicit_conflict_pass(self._user))
         return dict(out) if out else {"pairs": 0, "superseded": 0, "enabled": False}
+
+    # ── quote-backed retirement (S10x): the real prefilter, candidates and wall; only the brain's CHOICE is scripted ────
+    #: lane + speaker verdict per bench speaker: a typed chat turn (the authenticated owner), a spoken turn the speaker gate
+    #: confirmed / refused / said nothing about
+    RETIRE_SPEAKERS = {"owner_typed": ("chat", None), "owner_voice_verified": ("voice", True),
+                       "panel_unverified": ("voice", False), "voice_no_verdict": ("voice", None)}
+
+    def quote_retire(self, text: str, *, lane: str = "chat", speaker_verified: "bool | None" = None,
+                     brain: "dict[str, Any] | None" = None, mode: str = "enforce") -> "dict[str, Any]":
+        """One candidate state change through ``memory_retire`` (``prepare`` -> the scripted brain's choice -> ``decide``), in the
+        live lane's shape. ``brain``: ``{"pick_text": exact row text}`` (an honest judge naming the row, or none when it was not
+        offered), ``{"pick": n}``, ``{"top1": true}`` (a hostile judge: always the first row offered), ``{"judge": async callable}`` (a real model's choice), ``{"row_containing": text}``
+        (a hostile judge naming any stored approved row by id). The ``retire_judge`` control replaces every choice by the retrieval's
+        top-1. Counts and ids only."""
+        with self._ctl():
+            return self._run(self._quote_retire(text, lane, speaker_verified, dict(brain or {}), mode))
+
+    def cue_gate(self, text: str) -> bool:
+        """The REAL prefilter (``memory_retire.pick_quote``), under the arm's controls."""
+        with self._ctl():
+            return importlib.import_module("memory_retire").pick_quote(text) is not None
+
+    async def _quote_retire(self, text, lane, speaker_verified, brain, mode) -> "dict[str, Any]":
+        mr = importlib.import_module("memory_retire")
+        prep = await mr.prepare(self.service, self._user, text, lane=lane, speaker_verified=speaker_verified,
+                                mode_override=mode)
+        if prep.decision is not None:
+            d = prep.decision
+            return {"action": d.action, "reason": d.reason, "offered": [], "chosen": ""}
+        offered = [r.id for r in prep.candidates]
+        pick: "int | None" = None
+        row_id: "str | None" = None
+        if self._lab.RETIRE["naive"]:
+            pick = 1                                            # the naive rule: no judgement, the top-1
+        elif "judge" in brain:                                  # a REAL judge: an async callable (quote, rows) -> pick | None (S10x live tier)
+            pick = await brain["judge"](prep.quote, prep.candidates)
+            pick = 0 if pick is None else pick
+        elif "pick_text" in brain:
+            pick = next((i for i, r in enumerate(prep.candidates, 1) if r.text == brain["pick_text"]), 0)
+        elif "pick" in brain:
+            pick = int(brain["pick"])
+        elif brain.get("top1"):
+            pick = 1
+        elif "row_containing" in brain:
+            want = str(brain["row_containing"])
+            row_id = next((r["id"] for r in self._rows() if want in r["text"] and r["status"] == "approved"), "")
+        d = await mr.decide(self.service, self._user, prep, pick=pick, row_id=row_id, mode_override=mode)
+        return {"action": d.action, "reason": d.reason, "offered": offered, "chosen": d.row_id}
 
     # ── the people graph (A8): the real writer over an in-memory SQLite (arms.people_graph) ────────────────
     def write_edge(self, a: str, b: str, rel: str, group: str, authority: str, origin: str) -> None:

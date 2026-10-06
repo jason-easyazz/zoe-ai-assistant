@@ -1755,6 +1755,12 @@ async def _run_flue_brain_streaming_turn(
     from recall_evidence import note_turn
 
     note_turn(uid, message)
+    # Quote-backed retirement (ZOE_QUOTE_RETIRE, default shadow): note THIS turn so the brain's `memory_retire` tool - which
+    # sends only a number - is about the owner's own sentence, put here by trusted code. A spoken turn is marked: its
+    # change of state is judged off the turn by the digest, never by the brain. Never raises; a dict write.
+    import memory_retire
+
+    memory_retire.note_turn(uid, message, voice=bool(kwargs.get("voice_mode")))
     # Back a claim up when challenged (ZOE_VERIFY_ON_CHALLENGE, default OFF; no
     # DB read, no search, no change to the bytes when off): "are you sure" after
     # a world-fact answer runs ONE bounded web search. A hit rides as a block

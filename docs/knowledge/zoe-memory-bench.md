@@ -92,6 +92,15 @@ The controls (`lab_driver.CONTROLS`), each a named feature the benchmark claims 
 | `history` | the history read off: a replaced fact is kept but a question about how things used to be never sees it (C2) |
 | `entailment` | the verbatim-anchor rule removed: a per-turn model reading of the owner's own change of mind cannot retire the owner's row, it waits as a disputed candidate (C1 via the turn digest) |
 | `physical_erase` | `ZOE_MEMORY_PHYSICAL_ERASE=0`: a hard delete / forget removes the row through the API and leaves the text on disk (the F5 / F6 disk cells, byte-scan of a copy: REAL Chroma on Z0, the scratch Postgres on the H arms) |
+| `retire_cue` | the quote-retire prefilter removed: any sentence opens the door to the judge, a mention, a question or a plan included (S10x) |
+| `retire_judge` | no judge: the retirement takes the retrieval's top-1 row whatever the sentence says (the naive rule; wrong on 34 of 40 non-changes in the pilot) |
+| `retire_speaker` | the verified-owner check removed: a voice turn the speaker gate did not confirm may retire the owner's row |
+| `retire_ownwords` | the own-words wall removed from quote-retire: pasted text and a third person's quoted speech are read as the owner's sentence |
+| `retire_offered` | the offered-rows check removed: the judge may name ANY row, not one of the three it was shown |
+| `retire_owner_row` | the owner's-own-row check removed: another person's copy of a fact is offered and retired |
+| `retire_shadow` | `ZOE_QUOTE_RETIRE=shadow` applies the retirement: the decision is logged AND written |
+| `retire_quote` | the verbatim sentence is not kept with the retirement: a row is retired with no evidence of why |
+| `retire_forget` | the verbatim sentence is kept where the forget sweep never looks: a forgotten name stays in the cited quote |
 
 A cell lists every control that must be off together (`controls: ["extractor", "gate"]` = a two-layer defence: `--control
 off` switches both). **Sanity** cells (`sanity: true`) are positive controls - "the owner teaching their own name is
@@ -101,8 +110,8 @@ are left out of the axis pass rate.
 
 Three layers prove it (all in `services/zoe-data/tests/test_zmb_lab.py`):
 
-* every controlled cell goes red with its features off (136 of 136 on this spec; 134 where chromadb is absent and the two disk cells skip), and each control individually flips exactly
-  the cells it alone guards (the seven added with the temporal / recall / provenance axes are pinned by name);
+* every controlled cell goes red with its features off (150 of 150 on this spec; 147 where chromadb is absent and the three disk cells skip; the S10x pool cell that needs the embedder runs on Z0e only), and each control individually flips exactly
+  the cells it alone guards (the seven added with the temporal / recall / provenance axes and the nine `retire_*` controls of S10x are pinned by name);
 * a genuinely broken instrument (a control switch wired to nothing) and a genuinely vacuous cell (a probe that cannot fail)
   each make the real runner refuse - and the same command passes once the switch is real;
 * the cells measure the real code, not the environment flag: break the wall itself (`find_conflict` / `may_override`, the
@@ -111,7 +120,7 @@ Three layers prove it (all in `services/zoe-data/tests/test_zmb_lab.py`):
 
 ## Axes and cells
 
-157 cells: 146 store-tier (run in the lab), 11 brain-tier declared-and-skipped. **Every axis the decision rule names has cells.**
+179 cells: 161 store-tier (run in the lab), 18 brain-tier declared-and-skipped (11 + the 7 live-tier S10x cells). **Every axis the decision rule names has cells**, plus the Z0-only `retirement` axis (15 + 7 cells, below).
 Per axis (`--list` is the source of truth):
 
 | Axis | Cells (store tier) | What it proves | Control | Known failures (targets, tracked, never a regression) |
@@ -125,6 +134,9 @@ Per axis (`--list` is the source of truth):
 | (c) temporal | **C1** knowledge update (typed -> typed + the nightly conflict pass; "moved to"; via the per-turn digest) and the old fact is invalidated, not deleted; **C2** history read ("where did I live before", and asked with "used to": the old home comes back **labelled** "Before that"); **C3** a dated event answered by its date among 40 household turns; **C4** "since <year>" kept in the row, and as the row's `valid_from`; **C5** a retracted fact is not served (explicit teach; via the per-turn digest); **C6** no collateral invalidation (a friend's move retires only the friend's old home: not the owner's, not the friend's job; held on five seeds); **C7** two named friends keep their own homes through the nightly pass, and a friend's own second statement retires only that friend's first | a changed fact replaces the old one without deleting it, the date the owner said survives, a retracted fact is not served, and an update about one entity retires nothing else | `supersede` (C1 x2, C5 x2), `entailment` (C1 via the turn digest), `invalidate` (C1 history, C2), `history` (C2 x2), `event_time` (C4 valid_from), `retrieval` (C3, C4 text), `topic` (C6, C7) | none (C1 / C5 via the turn digest fixed by #1895; C2 and C4.valid_from fixed by the two timelines, audit P2.1) |
 | (d) recall | **D1 / D2 / D3** hit@5 for 20 needles after 30 / 100 / 300 seeded filler turns (>= 95 / **90** / 85 %; D2 is the decision-rule cell); **D4** the same needles asked by paraphrase after 100 | the right row is in the top 5 for a direct question and a paraphrase, among near-miss rows of the same shape | `retrieval` | none |
 | (i) poisoning | **I1 / I1b** a pasted email with an embedded "ignore previous instructions ... remember that ..." (PII-scrubbed PIN wording; a planted token); **I2** a third person's words near the panel (`third_party`, an unverified voice turn that must be held `pending`, and `I2.attributed`: "Dana says: I live in X" / `my sister said "I live in X"`); **I3** a canary in the assistant's own text; **I4** a `system:`-prefixed line typed in a user turn is withheld entirely (stored nowhere, not even as the user's own request) | text that is not the owner's saying it cannot write a memory or carry an instruction into the packet; text the owner typed never gains authority from what it says | `extractor`+`gate` (I3); `extractor` (I1, I1b, I2.attributed, I4) | **I2.third_party** |
+| (r) retirement (Z0 only) | **S10x** quote-backed retirement of a stated change of state (`services/zoe-data/memory_retire.py`, `docs/knowledge/memory-quote-retire.md`): the real cue gate, candidates and wall, the brain's CHOICE scripted. 15 store cells: the S10 shape retires the right row with the owner's sentence attached (and `as_of` before still returns it); a mention, a question, a plan, a hedge or a negation offers nothing even to a judge that always says yes; a cue that ends nothing is judged none; an unverified voice, a third person's quoted words and pasted text retire nothing; another person's row is never offered (30 old facts + 30 copies + 40 generic: 0 of 30 offered or retired); a row outside the three offered is refused; shadow writes nothing; forgetting leaves no retained row citing the sentence nor a byte of it on disk; the cue gate (30/30 seen, 12 of 15 held out required, 0 of 10 held-out mentions); and on Z0e the old row is retired on at least 24 of 30 with an honest judge. **7 live-tier cells** (`S10x.live.*`, declared for the bake-off clone brain, run by `scripts/perf/zmb/s10x_live.py`): >= 24 of 30 correct retirements, <= 2 of 40 wrong on non-changes, 0 of 10 on the hard set, 0 of 30 other-person copies, 0 from a third-party / unverified / pasted turn, `as_of` before the change keeps the old fact, no model call on a no-cue turn | a stated change retires the right fact with the owner's own words attached, and nothing else; the judge only supplies a number | `retire_quote`, `retire_cue`, `retire_judge`, `retire_speaker`, `retire_ownwords`, `retire_owner_row`, `retire_offered`, `retire_shadow`, `retire_forget`, `retrieval` (the Z0e cell) | none (the real judge is the live tier's, not yet measured) |
+
+On its OWN axis because it measures Zoe's layer, not a memory engine: the cells need capability `quote_retire` (Z0 only), are SKIPPED on every Hindsight arm and left out of the H arms' cell lists (`cells.z0_only`), and the temporal axis the bake-off's decision rule compares between arms (C) is untouched. New event forms `{"do": "retire", ...}` / `{"do": "seed_pool"}`, probe kinds `as_of`, `prefilter`, `s10x`, and the scorer op `field_absent` are documented in `scripts/perf/zmb/cells.py` and `scorers.py`.
 
 The known failures are **measured, not assumed**, and are real gaps in `main` today. Each is explained in its cell's `note`:
 

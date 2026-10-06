@@ -2416,6 +2416,62 @@ class MemoryService:
         col.update(ids=[old_id, new_id], metadatas=[old_m, new_m])
         return True
 
+    async def retire_with_quote(
+        self, user_id: str, old_id: str, *, quote: str, turn_ref: str, lane: str, cue: str = "",
+        actor: str = "quote_retire",
+    ) -> bool:
+        """Retire ``old_id`` because the OWNER said, in their own words, that it is no longer true (``memory_retire``).
+
+        There is no successor row: the sentence IS the evidence. Under the per-user lock it re-reads the row and acts only
+        when the row belongs to ``user_id``, is still ``approved``, is a person-fact (not a tombstone), is not a row only an
+        operator may change, and ``quote`` is a non-empty sentence that survives the PII scrub. The row then goes to
+        ``status=superseded`` with ``invalid_at`` = now and ``expired_at`` (the two timelines: ``search(as_of=)`` before now still
+        returns it; the text is never touched, nothing is deleted) and carries the verbatim sentence (``retire_quote``), the
+        turn (``retire_turn_ref``), the lane and the cue that opened the door. ``col.update`` without documents keeps the
+        embedding. The audit row names the retirement and never the sentence. Never raises; True only when a row changed."""
+        quote = (scrub_source_excerpt(quote, limit=300) or "").strip()
+        if not user_id or not old_id or not quote or lane not in ("chat", "voice"):
+            return False
+        lock = self._user_locks.setdefault(user_id, asyncio.Lock())
+        try:
+            async with lock:
+                done = await self._run_sync(self._retire_with_quote_sync, user_id, old_id, quote, turn_ref, lane, cue)
+        except Exception as exc:
+            logger.warning("memory_service: retire_with_quote failed id=%s: %s", old_id, type(exc).__name__)
+            return False
+        if done:
+            await self._append_audit(
+                mem_id=old_id, user_id=user_id, actor=actor, action="supersede",
+                before={"status": "approved"}, after={"status": "superseded", "retired_by": "quote_retire"},
+                reason=f"quote-backed retirement ({lane})",
+            )
+            _invalidate_agent_user_facts_cache(user_id)
+        return bool(done)
+
+    def _retire_with_quote_sync(self, user_id: str, old_id: str, quote: str, turn_ref: str, lane: str, cue: str) -> bool:
+        from memory_supersede import _is_target          # lazy: memory_supersede imports the card, which reads this module
+
+        col = self._collection()
+        got = col.get(ids=[old_id], include=["metadatas", "documents"])
+        ids_ = got.get("ids") or []
+        if old_id not in ids_:
+            return False
+        meta = dict((got.get("metadatas") or [{}])[0] or {})
+        doc = (got.get("documents") or [""])[0] or ""
+        if str(meta.get("user_id") or meta.get("wing") or "") != user_id:
+            return False
+        if not _is_target(meta):                         # approved, a person-fact, not a tombstone
+            return False
+        if _auth.active() and not _auth.may_override(_auth.USER_RANK, _auth.row_class(meta, doc)):
+            return False                                 # the owner's words outrank everything but an operator's cleanup
+        now = datetime.datetime.now(datetime.timezone.utc).timestamp()
+        meta.update(status="superseded", retired_by="quote_retire", retire_quote=quote,
+                    retire_turn_ref=str(turn_ref or "")[:64], retire_lane=lane, retire_cue=str(cue or "")[:40],
+                    retire_at=now)
+        meta.update(_temporal.retire_fields(meta, None, now=now))
+        col.update(ids=[old_id], metadatas=[meta])
+        return True
+
     async def restore_superseded(
         self, user_id: str, mem_id: str, *, expected_successor_id: str, actor: str, note: str = "",
     ) -> Optional[dict[str, Any]]:
