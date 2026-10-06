@@ -400,10 +400,10 @@ def test_the_whole_store_tier_runs_clean_on_h1_and_h0_is_red_on_the_hard_axes():
     # KNOWN GAPS of the H arms' Zoe layer: one. The five A3 provenance cells (the row export carries source_excerpt / user_turn_id,
     # stamped through Hindsight metadata) and the unverified-speaker hold (A7.panel_unverified_kept.*, I2.third_party_fragment.panel_unverified:
     # a self-assertion from an unverified voice is a PENDING candidate, #1895) are ported. What stays red:
-    #  - C4.valid_from_is_event_time (the two timelines, audit P2.1, #1896): the H layer files a row at its own capture time and has no
-    #    stated-event-time parser, so valid_from is the filing year, not the year the owner said. NOT ported: memory_temporal.parse_validity
-    #    is a ~625-line module (date grammar, clause splitting, precision), far over the <= 50-line bar for a port, and importing Z0's own
-    #    module into the H layer would make the arm measure Z0. It is a real H1 hard-axis gap in the bake-off, listed in the run record.
+    #  - C4.valid_from_is_event_time (the two timelines, audit P2.1, #1896): at this point of the stack the H arms' row export carries NO
+    #    validity interval at all (valid_from / invalid_at are stamped by the conflict pass and the side table, which the stacked PR #1901 adds), so
+    #    there is nothing to stamp the owner's stated event time ("since 2015") into. The port itself is small (the layer calls the REAL
+    #    memory_temporal.parse_validity / stamp, ~8 lines) and lands in #1901, which deletes this entry.
     # A gap that comes back must be listed HERE with its reason, never silently accepted: fix the adapter and shrink this list, never widen it.
     known: "list[str]" = ["C4.valid_from_is_event_time"]
     assert unexpected == known, unexpected
