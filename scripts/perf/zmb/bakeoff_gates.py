@@ -104,7 +104,8 @@ def gate_g0(m: dict) -> "dict[str, dict]":
     return {
         "zero_nonloopback_connects": item(NA if m.get("nonloopback_connects") is None else
                                           (PASS if m["nonloopback_connects"] == 0 else FAIL), "0",
-                                          "not measured" if m.get("nonloopback_connects") is None else str(m["nonloopback_connects"])),
+                                          (m.get("egress") or {}).get("detail") or
+                                          ("not measured" if m.get("nonloopback_connects") is None else str(m["nonloopback_connects"]))),
         "installs_aarch64_py312": item(PASS if m.get("installs_ok", True) else FAIL, "installs",
                                        "measured 2026-10-05 (G0-install-report.md): pip install exit 0, wheels only"),
         "steady_rss": _le(rss.get("steady_mb"), RULE["steady_rss_mb"], " MB"),
@@ -128,6 +129,13 @@ def gate_g1(m: dict) -> "dict[str, dict]":
     }
 
 
+def _why(run: dict) -> str:
+    """`` (3 time box, 2 capability: disk)``: WHY hard cells did not run. A capability skip is structural (the arm cannot answer the cell, more time
+    does not help); a time-box skip is the budget. Both keep the gate red (a skip is never a pass); the split tells the owner which it was."""
+    why = run.get("hard_skipped_why") or {}
+    return " (" + ", ".join(f"{n} {k}" for k, n in why.items()) + ")" if why else ""
+
+
 def gate_g2(arm_runs: "dict[str, dict]", m: dict) -> "dict[str, dict]":
     """Zero violations on every hard invariant, on every seed, and every hard cell must have RUN."""
     viol = hard_violations(arm_runs)
@@ -140,7 +148,7 @@ def gate_g2(arm_runs: "dict[str, dict]", m: dict) -> "dict[str, dict]":
             "no seeds run" if not seeds else (("; ".join(f"{s}: {', '.join(v[:6])}{' ...' if len(v) > 6 else ''}" for s, v in bad.items()))
                                               if bad else f"0 over {seeds} seed(s)")),
         "hard_cells_all_ran": item(NA if not seeds else (FAIL if any(skipped.values()) else PASS), "no hard cell skipped",
-                                   ", ".join(f"{s}: {n} skipped" for s, n in skipped.items() if n) or "none skipped"),
+                                   ", ".join(f"{s}: {n} skipped" + _why(arm_runs[s]) for s, n in skipped.items() if n) or "none skipped"),
     }
     fg = m.get("forgetting") or {}
     for t in ("t0", "t6"):
@@ -230,13 +238,78 @@ def median(xs: "list[float]") -> "Optional[float]":
     return round(statistics.median(xs), 1) if xs else None
 
 
+def _letter_result(v: dict) -> str:
+    if v.get("note") == "no data" or not v.get("built", True):
+        return "no data"
+    cell = f"{v['arm'][0]}/{v['arm'][1]} ({v['arm'][2][0]:.2f}-{v['arm'][2][1]:.2f})" if v.get("arm") else ""
+    return f"{cell}: " + ("BEATS" if v["beats"] else "WORSE" if v["worse"] else "tie")
+
+
+def summary_block(arms: "dict[str, dict]", decision: dict, z0_axes: dict) -> "list[str]":
+    """The top of the run record: the rule's verdict, the winner clause per axis, and the plain answer to 'is it better than ours'."""
+    names = [n for n in ("H1", "H2", "H0") if n in arms]
+    L = [f"**Verdict by the pre-registered rule: `{decision['verdict']}`**", "", decision["text"], ""]
+    L += ["### Winner clause per axis", "",
+          "An arm wins an axis only when its Wilson 95% lower bound is above Z0's upper bound; it needs two of B/C/D/E and no axis where it is worse. "
+          "A tie goes to Z0.", "",
+          "| Letter | Axis | Z0 | " + " | ".join(names) + " |", "|---|---|---|" + "---|" * len(names)]
+    for letter, axis in WIN_AXES.items():
+        z = z0_axes.get(axis) or {}
+        zc = f"{z['pass']}/{z['n']} ({z['wilson95'][0]:.2f}-{z['wilson95'][1]:.2f})" if z.get("n") else "no data"
+        row = " | ".join(_letter_result((decision["compare"].get(n) or {}).get(letter) or {}) for n in names)
+        L.append(f"| {letter} | {axis} | {zc} | {row} |")
+    L += ["", "### Is it better than ours?", "", _better_line(arms, decision), ""]
+    L += ["Honest caveats:", ""] + [f"* {c}" for c in _caveats(arms, decision, z0_axes)] + [""]
+    return L
+
+
+def _better_line(arms: "dict[str, dict]", decision: dict) -> str:
+    pref = next((n for n in ("H1", "H2", "H0") if n in arms and arms[n].get("seeds_done")), None)
+    if pref is None:
+        return "Not answered: no Hindsight arm completed a seed. Keep Z0."
+    c = decision["compare"].get(pref) or {}
+    wins = [k for k, v in c.items() if v.get("beats")]
+    worse = [k for k, v in c.items() if v.get("worse")]
+    ties = [f"{k} {v['axis']}" for k, v in c.items() if v.get("built") and v.get("arm") and not v["beats"] and not v["worse"]]
+    nodata = [f"{k} {WIN_AXES.get(k) or v.get('axis')}" for k, v in c.items() if not v.get("arm")]
+    if decision["verdict"] == "ADOPT_CANDIDATE":
+        return (f"Yes, on what was measured: {decision['winner']} passes every built gate and beats Z0 beyond the Wilson interval on "
+                f"{', '.join(wins)} (the rule needs two). The owner decides.")
+    open_gates = [f"{g} {k}" for g, items in arms[pref]["gates"].items() for k, v in items.items() if v["state"] != PASS]
+    return (f"No evidence that {pref} is better than Z0: it " + (f"ties Z0 on {', '.join(ties)}" if ties else "ties Z0 on nothing that ran")
+            + (f", beats it on {', '.join(wins)}" if wins else ", beats it on no axis") + (f", is WORSE on {', '.join(worse)}" if worse else ", is worse on none")
+            + (f", and has no data for {', '.join(nodata)}" if nodata else "") + ". A tie goes to Z0, so the rule says keep Z0 (with audit P1-P3)"
+            + (f"; {pref} also does not pass every gate: {', '.join(open_gates[:6])}." if open_gates else "."))
+
+
+def _caveats(arms: "dict[str, dict]", decision: dict, z0_axes: dict) -> "list[str]":
+    pref = next((n for n in ("H1", "H2", "H0") if n in arms and arms[n].get("seeds_done")), None)
+    out = []
+    if pref:
+        a = arms[pref]
+        out.append(f"{pref} completed {a['seeds_done']}/{RULE['seeds_required']} seeds; an arm with fewer is INCOMPLETE by the rule, and H2 / H0 are planned at one seed "
+                   "(H1 is the preferred arm and runs first and complete).")
+        ns = {k: v["arm"][1] for k, v in (decision["compare"].get(pref) or {}).items() if v.get("arm")}
+        if ns:
+            out.append("The intervals are wide at these counts (cells that ran: " + ", ".join(f"{k} n={n}" for k, n in ns.items())
+                       + "): a tie on a handful of cells is absence of a measured difference, not proof of equivalence.")
+        skipped = {ax: s.get("skipped") for ax, s in a["axes"].items() if s.get("skipped")}
+        if skipped:
+            out.append("Cells the arm could not or did not run, per axis: " + ", ".join(f"{ax} {n}" for ax, n in sorted(skipped.items()))
+                       + ". Capability skips (conflict_pass, graph edges, on-disk residue) are structural: the H arms cannot answer those cells, "
+                       "so G2 `hard_cells_all_ran` stays red for them by the pre-registered rule (a skip is never a pass).")
+    out.append("Extraction quality (B) is measured through Hindsight's real extraction with the Gemma E4B clone; one server, one scratch Postgres, "
+               "synthetic households only. Net RSS is gross (the Chroma/ONNX that adoption frees is not subtracted).")
+    return out
+
+
 def render_markdown(meta: dict, arms: "dict[str, dict]", decision: dict, z0_axes: dict, z0_off: dict, notes: "list[str]") -> str:
     """The draft ``docs/research/bakeoff-run-<date>.md``: counts and labels only, never household text."""
     L: "list[str]" = []
     L += ["---", "type: Research / bake-off run record", f"title: \"Memory bake-off run {meta.get('date', '')}: the G0-G3 table per arm and the rule's verdict\"",
           "status: DRAFT written by scripts/perf/zmb/bakeoff.py; the owner reads it, nothing here is a decision until the owner says so",
           f"date: {meta.get('date', '')}", "---", "", f"# Memory bake-off run {meta.get('date', '')}", ""]
-    L += [f"**Verdict by the pre-registered rule: `{decision['verdict']}`**", "", decision["text"], "", f"> {decision['caveat']}", ""]
+    L += summary_block(arms, decision, z0_axes) + [f"> {decision['caveat']}", ""]
     L += ["## Run", "", f"* started {meta.get('started')}, finished {meta.get('finished')}, wall {meta.get('wall_min')} min (cap {meta.get('cap_min')} min)",
           f"* revision {meta.get('commit')}; Hindsight {meta.get('hindsight_version')}; clone `{meta.get('clone_model')}` --parallel 1 on :11500; embeddings {meta.get('embed_model')}",
           f"* seeds: {', '.join(meta.get('seeds', []))}; arms run: {', '.join(meta.get('arms_run', []))}; aborted: {meta.get('aborted') or 'no'}",
@@ -265,6 +338,7 @@ def render_markdown(meta: dict, arms: "dict[str, dict]", decision: dict, z0_axes
         L.append(f"| {axis} | {cell(z0_axes, axis)} | {cell(z0_off, axis)} | " + " | ".join(cell(arms[n]["axes"], axis) for n in names) + " |")
     L += ["", "## Winner clause (beats Z0 beyond the Wilson interval on 2 of B/C/D/E, no worse elsewhere)", ""]
     for n, c in decision["compare"].items():
-        L.append(f"* {n}: " + "; ".join(f"{k}={'beats' if v['beats'] else ('WORSE' if v['worse'] else 'tie' if v['built'] else 'not built')}" for k, v in c.items()))
+        L.append(f"* {n}: " + "; ".join(f"{k}={'beats' if v['beats'] else ('WORSE' if v['worse'] else ('no data' if v.get('note') == 'no data' else 'tie') if v['built'] else 'not built')}"
+                                        for k, v in c.items()))
     L += ["", "## What this run did not verify", ""] + [f"* {n}" for n in notes] + [""]
     return "\n".join(L)

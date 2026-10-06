@@ -41,6 +41,8 @@ from typing import Any, Callable, Optional
 
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "scripts" / "perf"))
+#: the in-process egress hook (``sitecustomize.py``) lives in the repo, so the instrument is reviewed and tested like the rest
+EGRESS_AUDIT_DIR = REPO / "scripts" / "perf" / "zmb" / "egress_audit"
 
 
 EXIT_OK, EXIT_REFUSED, EXIT_ABORTED, EXIT_RESTORE_FAILED = 0, 2, 3, 4
@@ -260,7 +262,8 @@ def hindsight_env(example: str, cfg: Cfg, run_id: str) -> str:
         "HINDSIGHT_API_HOST": "127.0.0.1",
         "HINDSIGHT_API_LLM_TRACE_ENABLED": "true",                      # scratch DB only: the JSON-validity count reads it
         "HINDSIGHT_API_ENABLE_DRY_RUN_EXTRACT": "true",
-        "PYTHONPATH": str(cfg.bakeoff_dir / "egress_audit"),             # the in-process egress audit hook (sitecustomize.py)
+        "PYTHONPATH": str(EGRESS_AUDIT_DIR),                             # the in-process egress audit hook (sitecustomize.py; it also blocks uvloop)
+        "PYTHONDONTWRITEBYTECODE": "1",                                  # the hook directory is in the repo: leave no bytecode behind
         "EGRESS_AUDIT_LOG": str(cfg.bakeoff_dir / f"egress-{run_id}.log"),
         "HOME": str(cfg.bakeoff_dir / "hs-home"),
     }
@@ -507,6 +510,7 @@ class Window:
         self.start_unit("hindsight", [str(cfg.hs_bin)], props={"EnvironmentFile": str(env_path), "MemoryMax": "1536M", "MemorySwapMax": "0"},
                         env={"HOME": str(cfg.bakeoff_dir / "hs-home")})
         self.wait_http(f"http://127.0.0.1:{cfg.hs_port}/health", "hindsight-api", max(cfg.health_wait_s, 300.0))   # first start runs the alembic migrations
+        self.check_egress_hook(cfg.bakeoff_dir / f"egress-{self.run_id}.log")
         self.log("step 6/6 window open at %.1f min; MemAvailable %.0f MB" % (self.elapsed_min(), self.mem()))
 
     # ── restore: always ──
@@ -541,6 +545,25 @@ class Window:
             self.restore_status = f"LIVE BRAIN NOT HEALTHY on :{cfg.live_port} after {cfg.health_wait_s:.0f}s - run `systemctl --user status {cfg.unit}`"
             self.log("RESTORE FAILED: " + self.restore_status)
         return ok
+
+    def check_egress_hook(self, log_path: Path) -> None:
+        """The G0 egress gate is only as good as its hook, and run 1's hook was silently blind. The server connects to Postgres and the
+        model server before it is healthy, so a live hook has written ``hook-loaded`` and at least one connect by now. If not, the window
+        would end with the egress gate NOT MEASURED: stop now (the brain is back in seconds) rather than 80 minutes from now."""
+        if self.dry:
+            self.log(f"DRY-RUN: would require {log_path.name} to hold hook-loaded and a connect once hindsight-api is healthy")
+            return
+        text = ""
+        for _ in range(10):
+            text = self.host.read(str(log_path))
+            if "hook-loaded" in text and " connect " in text:
+                break
+            self.host.sleep(1.5)
+        n = sum(1 for ln in text.splitlines() if " connect " in ln or " getaddrinfo " in ln)
+        if "hook-loaded" not in text or not n:
+            raise Aborted(f"the egress hook is not live ({log_path.name}: {'no log' if not text else 'no connect seen'}): the egress gate would "
+                          "be not measured. See egress_audit/sitecustomize.py (the server must start without uvloop)")
+        self.log(f"egress hook live: {n} connect/DNS event(s) already logged in {log_path.name}")
 
     # ── the whole window ──
     def run(self) -> int:

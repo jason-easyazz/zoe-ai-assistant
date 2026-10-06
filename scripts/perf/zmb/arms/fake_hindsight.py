@@ -210,7 +210,8 @@ class FakeHindsight:
 
     def _list(self, b: dict, q: dict) -> "tuple[int, Any]":
         limit, offset = int(q.get("limit", 100)), int(q.get("offset", 0))
-        items = [{k: v for k, v in u.items() if k not in ("consolidated", "sources", "key")} for u in b["units"]]
+        items = [{**{k: v for k, v in u.items() if k not in ("consolidated", "sources", "key")}, "source_memory_ids": list(u["sources"])}
+                 for u in b["units"]]                                  # the documented ListMemoryUnit shape: an observation names its source facts
         return 200, {"items": items[offset:offset + limit], "total": len(items), "limit": limit, "offset": offset}
 
     # ── a loopback http server over the same handler (one test uses it) ──
