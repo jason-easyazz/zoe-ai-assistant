@@ -61,6 +61,7 @@ from typing import Any, Callable, Iterable, Mapping, Optional
 import memory_authority as _auth
 import memory_forgotten as _forgotten
 import own_words as _own_words
+import memory_temporal as _temporal
 from live_store_guard import (
     LiveStoreViolation,
     assert_palace_open_allowed,
@@ -1062,14 +1063,6 @@ class _BoundedKeySet:
         self._items.pop(key, None)
 
 
-def _implicit_supersede_on() -> bool:
-    """``ZOE_MEMORY_IMPLICIT_SUPERSEDE`` (memory_supersede.enabled), read per call."""
-    try:
-        from memory_supersede import enabled
-        return enabled()
-    except Exception:
-        return False
-
 
 def _memory_visible_to_user(metadata: Mapping[str, Any], user_id: str) -> bool:
     """Return True only for the caller's personal rows or shared family rows."""
@@ -1400,7 +1393,7 @@ class MemoryService:
 
         ``captured_at`` (ISO-8601, optional) is for RESTORES only: the instant the fact was
         originally captured. It replaces "now" for ``added_at`` / ``added_ts`` / ``last_accessed``
-        (and ``valid_from`` when the validity flag is on), so a restored July memory still answers
+        (and ``valid_from``, unless the person's own words state an earlier event time), so a restored July memory still answers
         "when did I tell you" with July. Unparseable, or more than 5 minutes in the future → ignored with a
         WARNING naming the value's shape (never the value); the row is then stored as captured now.
 
@@ -1580,6 +1573,7 @@ class MemoryService:
                 anchor_text=anchor_text, source_excerpt=source_excerpt, user_turn_id=user_turn_id)
 
             metadata = self._build_metadata(
+                validity_span=self._validity_span(resolved, source_excerpt, scrubbed),
                 user_id=user_id,
                 source=source,
                 session_id=session_id,
@@ -1706,12 +1700,28 @@ class MemoryService:
         user_id: str,
         limit: int = 10,
         timeout_s: float = 2.0,
+        as_of: Any = None,
+        history: Optional[bool] = None,
     ) -> list[MemoryRef]:
+        """Semantic recall of this user's current facts.
+
+        ``as_of`` (epoch seconds, ISO-8601 or datetime) answers "what was true then": the rows whose half-open
+        validity interval ``[valid_from, end)`` contains the instant, ``superseded`` rows included (a row that was
+        replaced is history, not gone). ``history``: ``None`` = automatic - when the QUESTION asks how things used
+        to be ("where did I live before?", ``memory_temporal.is_history_question``) the facts that were replaced
+        are added, each labelled "Before that (...)" so it cannot be read as current; ``False`` = never (the write
+        path's own lookups); ``True`` = always. A plain question never sees history."""
         if is_guest_memory_user(user_id):
             return []
         self._require(user_id, "user_id is required")
         if not query or not query.strip():
             return []
+        as_of_ts: Optional[float] = None
+        if as_of is not None:
+            try:
+                as_of_ts = _temporal.to_epoch(as_of)
+            except ValueError as exc:     # a read must never quietly answer "now" for a time it could not read
+                raise MemoryServiceError(str(exc)) from exc
         t0 = time.monotonic()
         # Increment 2b: resolve the relationship-graph neighbourhood for the
         # query's person on the async side (the graph fetch is async + needs the
@@ -1721,7 +1731,8 @@ class MemoryService:
         try:
             rows = await asyncio.wait_for(
                 self._run_sync(
-                    self._semantic_search, query, user_id, limit, depth_by_pid
+                    self._semantic_search, query, user_id, limit, depth_by_pid,
+                    *(() if as_of_ts is None else (as_of_ts,)),
                 ),
                 timeout=timeout_s,
             )
@@ -1738,6 +1749,9 @@ class MemoryService:
         if _METRICS_OK:
             memory_search_hit_count.observe(len(rows))
         ids = [r.id for r in rows]
+        if as_of_ts is None and history is not False and limit > 1 and (
+                history is True or _temporal.is_history_question(query)):
+            rows = await self._with_history(rows, query, user_id, limit, timeout_s)
         if ids:
             # Pass query for unique_query_count tracking in dreaming memory
             self._track_background_task(
@@ -1745,6 +1759,92 @@ class MemoryService:
                 name="memory_tick_access_search",
             )
         return rows
+
+    async def _with_history(self, rows: list[MemoryRef], query: str, user_id: str, limit: int,
+                            timeout_s: float) -> list[MemoryRef]:
+        """``rows`` plus the facts they replaced, labelled "Before that (...)": each placed right after its
+        successor, the whole still within ``limit``. Best-effort: a failure leaves the plain answer."""
+        try:
+            old = await asyncio.wait_for(
+                self.history(query, user_id=user_id, anchors=rows, limit=min(_temporal.HISTORY_MAX, limit - 1)),
+                timeout=timeout_s)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("memory_service: history read failed user=%s: %s", user_id, type(exc).__name__)
+            return rows
+        if not old:
+            return rows
+        marked = [MemoryRef(id=o.id, text=_temporal.before_that(o.text, o.metadata), metadata=o.metadata,
+                            score=o.score) for o in old]
+        out = list(rows[: limit - len(marked)])
+        for m in marked:
+            at = next((i for i, r in enumerate(out) if r.id == str(m.metadata.get("superseded_by_id") or "")), None)
+            out.insert(len(out) if at is None else at + 1, m)
+        return out
+
+    async def history(
+        self,
+        query: Optional[str] = None,
+        *,
+        user_id: str,
+        entity_id: Optional[str] = None,
+        anchors: Iterable[MemoryRef] = (),
+        limit: int = _temporal.HISTORY_MAX,
+    ) -> list[MemoryRef]:
+        """The facts that WERE true and were replaced (``superseded`` rows, text untouched, ``metadata["history"]``
+        True), most relevant first, for a question about how things used to be, or for one ``entity_id``.
+        ``anchors`` are rows already retrieved: their predecessors (``supersedes_id`` chains) come first. A row that
+        names an entity the person asked Zoe to forget is never returned. Read-only."""
+        if is_guest_memory_user(user_id):
+            return []
+        self._require(user_id, "user_id is required")
+        seeds = [str(a.metadata.get("supersedes_id")) for a in anchors if a.metadata.get("supersedes_id")]
+        rows, chain = await self._run_sync(self._history_rows_sync, user_id, seeds)
+        ranked = _temporal.rank_history(query or "", rows, anchor_ids=chain, entity_id=entity_id or "", limit=limit * 3)
+        out: list[MemoryRef] = []
+        for rid, text, meta in ranked:
+            if await self._names_forgotten(user_id, text):
+                continue
+            out.append(MemoryRef(id=rid, text=text, metadata=dict(meta, history=True)))
+            if len(out) >= limit:
+                break
+        return out
+
+    async def _names_forgotten(self, user_id: str, text: str) -> bool:
+        """Does ``text`` name something the person asked to forget (ledger or tombstone)? Fails CLOSED: history is
+        optional, so an error hides the row rather than risk showing a forgotten name."""
+        try:
+            from memory_tombstones import matching_tombstone
+            return bool(matching_tombstone(user_id, text) or await _forgotten.matches(user_id, text))
+        except Exception:  # noqa: BLE001
+            return True
+
+    def _history_rows_sync(self, user_id: str, seed_ids: list[str]) -> tuple[list[tuple[str, str, dict]], list[str]]:
+        """The owner's ``superseded`` rows as ``(id, text, metadata)`` and the predecessor chain of ``seed_ids``."""
+        col = self._collection()
+        owner = dict()
+        owner["$or"] = [dict(user_id=user_id), dict(wing=user_id)]
+        where = dict()
+        where["$and"] = [owner, dict(status="superseded")]
+        got = col.get(where=where, include=["documents", "metadatas"])
+        now = datetime.datetime.now(datetime.timezone.utc)
+        rows: list[tuple[str, str, dict]] = []
+        for rid, doc, meta in zip(got.get("ids") or [], got.get("documents") or [], got.get("metadatas") or []):
+            md = dict(meta) if isinstance(meta, dict) else {}
+            if md.get("expires_at") and _memory_expired(md.get("expires_at"), now):
+                continue
+            rows.append((rid, doc or "", md))
+        by_id = {rid: md for rid, _t, md in rows}
+        chain: list[str] = []
+        frontier = list(seed_ids)
+        for _ in range(_temporal.HISTORY_MAX):
+            nxt = []
+            for rid in frontier:
+                if rid in by_id and rid not in chain:
+                    chain.append(rid)
+                    if by_id[rid].get("supersedes_id"):
+                        nxt.append(str(by_id[rid]["supersedes_id"]))
+            frontier = nxt
+        return rows, chain
 
     async def delete_user(self, user_id: str, *, actor: str, reason: str = "") -> int:
         """Right-to-be-forgotten. Returns number of rows removed.
@@ -2064,6 +2164,10 @@ class MemoryService:
                 new_meta["status"] = new_status
                 new_meta["reviewed_by"] = actor
                 new_meta["reviewed_at"] = datetime.datetime.utcnow().isoformat() + "Z"
+                if decision == "archive":
+                    # invalidate, never delete: the row is kept, with the instant it stopped being believed
+                    new_meta.update(_temporal.archive_fields(
+                        current.metadata, now=datetime.datetime.now(datetime.timezone.utc).timestamp()))
                 if note:
                     new_meta["review_note"] = note[:1024]
                 disputed = ""
@@ -2146,6 +2250,7 @@ class MemoryService:
                 # review UI is not a turn (and a stamped edit must not look like one)
                 user_turn_id=turn_ref if edit_res.cls in (_auth.USER_STATED_DERIVED, _auth.USER_UNVERIFIED) else None)
             new_meta = self._build_metadata(
+                validity_span=self._validity_span(edit_res, source_excerpt, scrubbed),
                 user_id=user_id,
                 source=edit_source,
                 session_id=session_id,
@@ -2185,7 +2290,7 @@ class MemoryService:
                 "source_excerpt", "scope", "supersedes_id", "reviewed_by", "reviewed_at",
                 "review_note", "superseded_by_id", "_query_hashes",
                 # validity interval: the NEW row's own (written by _build_metadata)
-                "valid_from", "invalid_at",
+                *_temporal.KEYS,
                 # importance is a computed function of the row's TEXT (like
                 # memory_type/confidence above), so it must be recomputed for the
                 # edited text by _build_metadata — never carried forward, or an
@@ -2220,8 +2325,8 @@ class MemoryService:
                 old_meta = dict(current.metadata)
                 old_meta["status"] = "superseded"
                 old_meta["superseded_by_id"] = new_id
-                if _implicit_supersede_on():
-                    old_meta["invalid_at"] = new_meta["added_ts"]
+                old_meta.update(_temporal.retire_fields(
+                    old_meta, new_meta, now=datetime.datetime.now(datetime.timezone.utc).timestamp()))
                 await self._run_sync(
                     self._write_row, mem_id, current.text, old_meta
                 )
@@ -2301,8 +2406,11 @@ class MemoryService:
                 if _auth.enabled():
                     return False
         now = datetime.datetime.now(datetime.timezone.utc).timestamp()
-        old_m.update(status="superseded", superseded_by_id=new_id, invalid_at=now)
         new_m.setdefault("valid_from", new_m.get("added_ts") or now)
+        old_m.update(status="superseded", superseded_by_id=new_id)
+        # the old row stopped being true where the new one began (half-open: its invalid_at is the successor's
+        # valid_from), and Zoe stopped believing it now
+        old_m.update(_temporal.retire_fields(old_m, new_m, now=now))
         if not new_m.get("supersedes_id"):
             new_m["supersedes_id"] = old_id
         col.update(ids=[old_id, new_id], metadatas=[old_m, new_m])
@@ -2516,6 +2624,8 @@ class MemoryService:
                 md.update(status="archived", reviewed_by=actor,
                           reviewed_at=datetime.datetime.utcnow().isoformat() + "Z",
                           review_note=note[:1024], duplicate_of=keeper_id)
+                md.update(_temporal.archive_fields(
+                    cur.metadata, now=datetime.datetime.now(datetime.timezone.utc).timestamp()))
                 await self._run_sync(self._write_row, mem_id, cur.text, md)
                 await self._append_audit(
                     mem_id=mem_id, user_id=uid, actor=actor, action="archive_duplicate",
@@ -2841,6 +2951,13 @@ class MemoryService:
         return hashlib.sha256(basis).hexdigest()
 
     @staticmethod
+    def _validity_span(resolved: Any, source_excerpt: Optional[str], text: str) -> Optional[str]:
+        """The words an event time may be read from: the person's own (a user-class write), never a model's."""
+        if getattr(resolved, "cls", "") not in (_auth.USER_STATED, _auth.USER_CONFIRMED):
+            return None
+        return source_excerpt or text
+
+    @staticmethod
     def _build_metadata(
         *,
         user_id: str,
@@ -2860,8 +2977,14 @@ class MemoryService:
         idem_key: str = "",
         text: str = "",
         captured_at: Optional[str] = None,
+        validity_span: Optional[str] = None,
     ) -> dict[str, Any]:
         """Build durable metadata for a memory row.
+
+        ``validity_span`` is the PERSON'S OWN words the fact came from (the caller passes it only for a
+        user-class write; a model's paraphrase never gets one): an event time stated in it ("since 2018")
+        becomes the row's ``valid_from``. Without it ``valid_from`` is the capture time. Two timelines on
+        every row, no flag (``memory_temporal``).
 
         When ``scope`` is None, ``extra_metadata["scope"]`` is promoted to the
         first-class Zoe memory scope and drives legacy visibility mapping.
@@ -2910,10 +3033,10 @@ class MemoryService:
             "unique_query_count": 0,   # distinct queries that have surfaced this memory
             "consolidation_count": 0,  # weekly deep-sleep passes that have touched this memory
         }
-        if _implicit_supersede_on():
-            # Validity interval (gap #4): valid_from = capture time; invalid_at is
-            # written when the row is superseded (supersede_by / review edit).
-            md["valid_from"] = md["added_ts"]
+        # Validity interval (audit P2.1), unconditional: valid_from = the event time the person stated, else the
+        # capture time (learned_at = added_ts). invalid_at is written when the row is superseded or archived.
+        stated = _temporal.parse_validity(validity_span or "", text, now=_now_dt) if validity_span else _temporal.Validity()
+        md.update(_temporal.stamp(stated, md["added_ts"]))
         if session_id:
             md["session_id"] = session_id
         if user_turn_id:
@@ -3194,12 +3317,25 @@ class MemoryService:
             dated.sort(key=lambda p: p[0], reverse=True)
         return [ref for _, ref in dated[:limit]]
 
+    @staticmethod
+    def _valid_as_of(col: Any, md: Mapping[str, Any], ts: float) -> bool:
+        """Was this row true at ``ts``? (``memory_temporal.valid_at``; a superseded row from before ``invalid_at`` was
+        stamped ends where its successor began, looked up here.)"""
+        successor_start = None
+        if (str(md.get("status") or "") == "superseded" and _temporal.row_end(md) is None
+                and md.get("superseded_by_id")):
+            got = col.get(ids=[str(md["superseded_by_id"])], include=["metadatas"])
+            metas = got.get("metadatas") or []
+            successor_start = _temporal.row_start(metas[0] or {}) if metas else None
+        return _temporal.valid_at(md, ts, successor_start=successor_start)
+
     def _semantic_search(
         self,
         query: str,
         user_id: str,
         limit: int,
         depth_by_pid: dict[str, int] | None = None,
+        as_of_ts: float | None = None,
     ) -> list[MemoryRef]:
         col = self._collection()
         where = {"$or": [{"user_id": user_id}, {"wing": user_id}, {"visibility": "family"}]}
@@ -3221,7 +3357,10 @@ class MemoryService:
                     continue
                 if not _memory_visible_to_user(md, user_id):
                     continue
-                if not _memory_status_visible(md):
+                if as_of_ts is None:
+                    if not _memory_status_visible(md):
+                        continue
+                elif not self._valid_as_of(col, md, as_of_ts):
                     continue
                 seen.add(rid)
                 hits.append(MemoryRef(id=rid, text=doc or "", metadata=md, score=float(dist or 0.0)))

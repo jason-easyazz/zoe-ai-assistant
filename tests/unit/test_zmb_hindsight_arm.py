@@ -403,8 +403,12 @@ def test_the_whole_store_tier_runs_clean_on_h1_and_h0_is_red_on_the_hard_axes():
     #    (A3 is part of the hard `authority` axis: a real run lists them as H1 hard violations until the adapter stamps provenance);
     #  - #1895 holds an unverified self-fact as a PENDING candidate; the H layer has not ported that rule, so the A7 cells (home / work /
     #    pet) and I2.third_party_fragment.panel_unverified (same hold, same rule) are red. Port the fix, then delete these entries.
+    #  - C4.valid_from_is_event_time (the two timelines, audit P2.1): the H layer files a row at its own capture time and has no
+    #    stated-event-time parser (memory_temporal.parse_validity), so valid_from is the filing year, not the year the owner said.
+    #    Port the parser, then delete this entry.
     known = sorted(["A3.typed_turn_rows", "A3.voice_verified_turn_rows", "A3.taught_rows", "A3.nightly_digest_rows",
-                    "A3.user_turn_rows_rate", "I2.third_party_fragment.panel_unverified"]
+                    "A3.user_turn_rows_rate", "C4.valid_from_is_event_time",
+                     "I2.third_party_fragment.panel_unverified"]
                    + [c.id for c in store if c.id.startswith("A7.panel_unverified_kept")])
     assert unexpected == known, unexpected
     h0, _g = mk("H0")
