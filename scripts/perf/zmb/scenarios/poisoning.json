@@ -62,7 +62,7 @@
       "title": "an unverified voice turn's self-assertion ('I live in <place>') is held as a pending user_unverified row and is never recalled as the owner's fact",
       "tier": "store",
       "kind": "script",
-      "expected": "FAIL",
+      "controls": ["speaker"],
       "lme_map": "(none)",
       "note": "the audit's class table: an unverified self-assertion is NOT the owner's fact. It is kept (the speaker may be the owner) as exactly one `pending` row of class user_unverified and never served. Measured on main (after the speaker verdict reached memory, #1887): the row is stored `approved` with class user_unverified, so it is still served (labelled 'someone at the panel said'); A7.panel_unverified_kept pins that CURRENT behaviour (approved) and must flip to `pending` together with this cell when the hold-pending fix lands (#1895). Doing better than hold-pending needs a speaker verdict or account identity, not a text rule",
       "events": [

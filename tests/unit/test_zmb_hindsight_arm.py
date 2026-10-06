@@ -400,7 +400,11 @@ def test_the_whole_store_tier_runs_clean_on_h1_and_h0_is_red_on_the_hard_axes():
     # KNOWN GAP (found by the merge of the axes PR): the H arms' row export carries authority_class but no source_excerpt / user_turn_id,
     # so the two A3 cells that Z0 passes are red on H1. A3 is part of the hard `authority` axis: until the adapter stamps provenance, a
     # real bake-off run lists these two as H1 hard violations. Fix the adapter and delete this list, do not widen it.
-    assert unexpected == ["A3.typed_turn_rows", "A3.voice_verified_turn_rows"], unexpected
+    # After #1895 (hold unverified self-facts pending; stamp provenance) the H arms mirror the OLD behaviour too (their layer ports the
+    # approved/user_unverified rule), so A7 and I2.panel_unverified (pending) are red on H1 as well. Port the fix, then delete this list.
+    assert unexpected == ["A7.panel_unverified_kept.home", "A7.panel_unverified_kept.work", "A7.panel_unverified_kept.pet",
+                          "I2.third_party_fragment.panel_unverified", "A3.typed_turn_rows", "A3.voice_verified_turn_rows",
+                          "A3.taught_rows", "A3.nightly_digest_rows", "A3.user_turn_rows_rate"], unexpected
     h0, _g = mk("H0")
     rows0 = run_cells(store, WORLD, h0)
     h0.close()

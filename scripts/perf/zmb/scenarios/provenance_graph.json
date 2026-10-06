@@ -47,7 +47,7 @@
       "title": "provenance: every row stored from an explicit 'remember that ...' teach carries the owner's excerpt, its turn id and its authority class (>= 95%)",
       "tier": "store",
       "kind": "script",
-      "expected": "FAIL",
+      "controls": ["provenance"],
       "lme_map": "(none)",
       "note": "measured: the teach lane (expert_dispatch store_fact, source voice_fact) stamps a stable user_turn_id and authority_class but passes NO source_excerpt, so none of its rows says which words it came from. The fix is one argument at that call site",
       "events": [
@@ -67,7 +67,7 @@
       "title": "provenance: a row the nightly digest mines from the owner's day carries an excerpt, a turn id and its authority class (>= 95%)",
       "tier": "store",
       "kind": "script",
-      "expected": "FAIL",
+      "controls": ["provenance"],
       "lme_map": "(none)",
       "note": "measured: the digest stamps authority_class (user_stated_derived when the day's words support the fact) but passes only anchor_text, which is not stored: no source_excerpt and no user_turn_id, so nothing says which turn the fact came from",
       "events": [
@@ -86,7 +86,7 @@
       "title": "provenance rate: of the rows stored from user turns across the typed, voice, teach and nightly-digest lanes (equal weight), >= 95% carry excerpt, turn id and authority class",
       "tier": "store",
       "kind": "script",
-      "expected": "FAIL",
+      "controls": ["provenance"],
       "lme_map": "(none)",
       "note": "the decision record's 'provenance >= 95% rows with an excerpt'. An equal-weight sample of the four lanes, NOT the live mix (the live palace holds 5 of 284 rows with an excerpt, measured 2026-10-05): the per-lane cells above say which lane is the gap",
       "events": [
