@@ -121,7 +121,7 @@ def test_it_will_not_bind_a_non_loopback_address():
 
 
 def test_main_refuses_a_non_loopback_host(monkeypatch, capsys):
-    monkeypatch.setattr(shim, "find_model", lambda explicit=None: (Path("m.onnx"), Path("t.json"), "cls", "bge-small-en-v1.5"))
+    monkeypatch.setattr(shim, "find_model", lambda explicit=None, prefer="auto": (Path("m.onnx"), Path("t.json"), "cls", "bge-small-en-v1.5"))
     assert shim.main(["--serve", "--host", "0.0.0.0"]) == 2
     assert "not a loopback address" in capsys.readouterr().err
 
@@ -159,6 +159,59 @@ def test_find_model_prefers_an_explicit_dir_and_picks_the_pooling(tmp_path, monk
     (mini / "tokenizer.json").write_text("{}")
     monkeypatch.setattr(shim, "_candidate_dirs", lambda explicit: [(mini, "mean", shim._MINILM_FILES)])
     assert shim.find_model()[2:] == ("mean", "all-MiniLM-L6-v2")
+
+
+def test_the_model_can_be_chosen_so_one_embedder_can_serve_zoes_minilm_or_the_routers_bge(tmp_path, monkeypatch):
+    """RAM lab 2026-10-06: the shim must be able to serve Chroma's MiniLM (zoe-data's live embedder, mean pooling) as well as the router's bge-small (CLS pooling), by NAME.
+    Before, a MiniLM directory handed to ``--model-dir`` was read with the BGE candidates first (``onnx/model.onnx`` is on that list too) and pooled by the CLS token: the
+    wrong vectors, silently, with the right dimension."""
+    orig = shim._candidate_dirs
+    monkeypatch.setattr(shim, "_candidate_dirs", lambda explicit: orig(explicit)[:2] if explicit else [])          # only the explicit directory: not this machine's caches
+    mini = tmp_path / "mini"
+    (mini / "onnx").mkdir(parents=True)
+    (mini / "onnx" / "model.onnx").write_bytes(b"x")
+    (mini / "onnx" / "tokenizer.json").write_text("{}")
+    assert shim.find_model(str(mini), prefer="minilm")[2:] == ("mean", "all-MiniLM-L6-v2")
+    bge = tmp_path / "bge"
+    bge.mkdir()
+    (bge / "model_optimized.onnx").write_bytes(b"x")
+    (bge / "tokenizer.json").write_text("{}")
+    assert shim.find_model(str(bge), prefer="bge")[2:] == ("cls", "bge-small-en-v1.5")
+    with pytest.raises(shim.ModelNotFound):                                   # asking for MiniLM never falls back to the bge directory
+        shim.find_model(str(bge), prefer="minilm")
+    assert shim.find_model(str(mini), prefer="auto")[2] in ("cls", "mean")    # auto keeps its old search order
+    with pytest.raises(ValueError, match="prefer"):
+        shim.find_model(str(mini), prefer="gemma")
+
+
+def test_the_cli_takes_a_model_name_and_the_default_stays_auto(monkeypatch, tmp_path, capsys):
+    seen = {}
+
+    def fake_find(explicit=None, prefer="auto"):
+        seen["prefer"] = prefer
+        raise shim.ModelNotFound("none")
+    monkeypatch.setattr(shim, "find_model", fake_find)
+    assert shim.main(["--find"]) == 2 and seen["prefer"] == "auto"
+    assert shim.main(["--find", "--model", "minilm"]) == 2 and seen["prefer"] == "minilm"
+    monkeypatch.setenv("ZMB_EMBED_MODEL", "bge")
+    assert shim.main(["--find"]) == 2 and seen["prefer"] == "bge"
+    capsys.readouterr()
+
+
+def test_ort_tuning_comes_from_the_environment_with_the_measured_defaults(monkeypatch):
+    for k in ("ZMB_ORT_THREADS", "ZMB_ORT_OPT"):
+        monkeypatch.delenv(k, raising=False)
+    assert shim.ort_settings() == {"threads": 2, "opt": "basic"}
+    monkeypatch.setenv("ZMB_ORT_THREADS", "1")
+    monkeypatch.setenv("ZMB_ORT_OPT", "all")
+    assert shim.ort_settings() == {"threads": 1, "opt": "all"}
+    monkeypatch.setenv("ZMB_ORT_THREADS", "0")
+    with pytest.raises(ValueError):
+        shim.ort_settings()
+    monkeypatch.setenv("ZMB_ORT_THREADS", "2")
+    monkeypatch.setenv("ZMB_ORT_OPT", "everything")
+    with pytest.raises(ValueError):
+        shim.ort_settings()
 
 
 # ── the selftest (red-before-green) ──────────────────────────────────────────

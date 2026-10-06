@@ -121,11 +121,24 @@ def _candidate_dirs(explicit: "Optional[str]") -> "list[tuple[Path, str, tuple[s
     return out
 
 
-def find_model(explicit: "Optional[str]" = None) -> "tuple[Path, Path, str, str]":
-    """``(onnx file, tokenizer.json, pooling, model_id)`` from what is ALREADY on disk, else ``ModelNotFound``."""
+MODEL_CHOICES = ("auto", "bge", "minilm")
+_POOLING_OF = {"bge": "cls", "minilm": "mean"}
+
+
+def find_model(explicit: "Optional[str]" = None, prefer: str = "auto") -> "tuple[Path, Path, str, str]":
+    """``(onnx file, tokenizer.json, pooling, model_id)`` from what is ALREADY on disk, else ``ModelNotFound``.
+
+    ``prefer`` names the model: ``bge`` (the router's bge-small, CLS pooling), ``minilm`` (Chroma's all-MiniLM-L6-v2, zoe-data's live embedder, mean pooling) or ``auto``
+    (the original search order: bge first, MiniLM as the fallback). A named model is never substituted by the other one: a MiniLM directory read with the bge candidates
+    would be pooled by the CLS token (the same dimension, the wrong vectors)."""
+    if prefer not in MODEL_CHOICES:
+        raise ValueError(f"prefer must be one of {MODEL_CHOICES}, not {prefer!r}")
     explicit = explicit or os.environ.get("ZMB_EMBED_MODEL_DIR")
     tried: list[str] = []
+    want = _POOLING_OF.get(prefer)
     for d, pooling, names in _candidate_dirs(explicit):
+        if want is not None and pooling != want:
+            continue
         tried.append(str(d))
         f = _pick_file(d, names)
         tok = d / "tokenizer.json"
@@ -140,6 +153,23 @@ def find_model(explicit: "Optional[str]" = None) -> "tuple[Path, Path, str, str]
 
 # ── the real embedder (onnxruntime + tokenizers, imported lazily) ────────────
 
+_OPT_LEVELS = ("disable", "basic", "extended", "all")
+
+
+def ort_settings() -> "dict[str, Any]":
+    """The ONNX Runtime knobs the RAM lab (2026-10-06) varies, read from ``ZMB_ORT_THREADS`` (default 2) and ``ZMB_ORT_OPT`` (default ``basic``: measured about -30 MB at load)."""
+    try:
+        threads = int(os.environ.get("ZMB_ORT_THREADS", "2"))
+    except ValueError:
+        raise ValueError("ZMB_ORT_THREADS must be an integer") from None
+    opt = os.environ.get("ZMB_ORT_OPT", "basic")
+    if threads < 1 or threads > 8:
+        raise ValueError(f"ZMB_ORT_THREADS must be 1..8, not {threads}")
+    if opt not in _OPT_LEVELS:
+        raise ValueError(f"ZMB_ORT_OPT must be one of {_OPT_LEVELS}, not {opt!r}")
+    return {"threads": threads, "opt": opt}
+
+
 class OnnxEmbedder:
     def __init__(self, onnx_path: Path, tokenizer_path: Path, pooling: str, model_id: str):
         import numpy as np
@@ -153,12 +183,14 @@ class OnnxEmbedder:
         self.model_id = model_id
         self.pooling = pooling
         so = ort.SessionOptions()
-        so.intra_op_num_threads = 2
+        knobs = ort_settings()
+        so.intra_op_num_threads = knobs["threads"]
         so.inter_op_num_threads = 1
         so.enable_cpu_mem_arena = False        # the arena is where onnxruntime's RSS goes to grow
         so.enable_mem_pattern = False
         so.log_severity_level = 3
-        so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC     # measured: about -30 MB at load
+        so.graph_optimization_level = {"disable": ort.GraphOptimizationLevel.ORT_DISABLE_ALL, "basic": ort.GraphOptimizationLevel.ORT_ENABLE_BASIC,
+                                       "extended": ort.GraphOptimizationLevel.ORT_ENABLE_EXTENDED, "all": ort.GraphOptimizationLevel.ORT_ENABLE_ALL}[knobs["opt"]]
         so.add_session_config_entry("session.disable_prepacking", "1")                # measured: no second copy of the weights
         so.add_session_config_entry("session.use_device_allocator_for_initializers", "1")
         self._sess = ort.InferenceSession(str(onnx_path), sess_options=so, providers=["CPUExecutionProvider"])
@@ -411,10 +443,12 @@ def main(argv: "Optional[list[str]]" = None) -> int:
     ap.add_argument("--host", default=DEFAULT_HOST)
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     ap.add_argument("--model-dir", default=None, help="a directory holding the .onnx file and tokenizer.json (default: search the disk)")
+    ap.add_argument("--model", choices=MODEL_CHOICES, default=os.environ.get("ZMB_EMBED_MODEL", "auto"),
+                    help="bge = the router's bge-small (CLS pooling), minilm = Chroma's MiniLM (zoe-data's live embedder, mean pooling), auto = bge then MiniLM")
     ap.add_argument("--rss-limit-mb", type=float, default=RSS_LIMIT_MB)
     args = ap.parse_args(argv)
     try:
-        onnx_path, tok_path, pooling, model_id = find_model(args.model_dir)
+        onnx_path, tok_path, pooling, model_id = find_model(args.model_dir, args.model)
     except ModelNotFound as exc:
         print(f"REFUSED: {exc}", file=sys.stderr)
         return 2
