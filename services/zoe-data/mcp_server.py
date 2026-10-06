@@ -1489,7 +1489,7 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         return {"events": [dict(r) for r in rows]}
 
     elif name == "calendar_create_event":
-        from calendar_service import create_event_record
+        from calendar_service import conversational_visibility, create_event_record
 
         record = await create_event_record(
             db,
@@ -1501,6 +1501,7 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             category=args.get("category", "general"),
             location=args.get("location"),
             all_day=bool(args.get("all_day")),
+            visibility=conversational_visibility(args["title"], args.get("category", "general")),
         )
         result = {"id": record["id"], "title": args["title"], "start_date": args["start_date"],
                   "start_time": args.get("start_time"), "category": args.get("category", "general")}

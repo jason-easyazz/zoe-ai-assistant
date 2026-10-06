@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-536 flags; 534 not documented in `.env.example`.
+537 flags; 535 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -72,6 +72,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_BRIEF_WINDOW_START` | `'05:00'` | no | NO | `services/zoe-data/brief_first_turn.py` |
 | `ZOE_BUFFER_DELAY_S` | `'0.8'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_BUFFER_PHRASES` | `'1'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
+| `ZOE_CALENDAR_HEALTH_PRIVATE` | `True` | yes | NO | `services/zoe-data/calendar_service.py` |
 | `ZOE_CAP_A2A_DELEGATE` | `3000` | yes | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_CAP_AMBIENT_ROWS` | `10` | yes | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_CAP_AMBIENT_SEARCH` | `0` | yes | NO | `services/zoe-data/zoe_agent.py` |
