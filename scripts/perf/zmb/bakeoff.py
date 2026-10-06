@@ -81,16 +81,29 @@ class Cfg:
     quiet_wait_max_min: float = float(os.environ.get("BAKEOFF_QUIET_WAIT_MIN", "180"))
     quiet_poll_s: float = float(os.environ.get("BAKEOFF_QUIET_POLL_S", "60"))
     sample_s: float = 2.0
+    #: TEST HOOK (default OFF; never set it for a real window). ``BAKEOFF_SKIP_BRAIN_STOP=1`` runs the whole window against the LIVE brain on
+    #: ``live_port`` instead of a clone: the brain is neither stopped nor restarted, the clone is not started, Hindsight's LLM points at the live port.
+    #: It exists so the window's phases, artifact, report and restore paths can be proven on the real stack in daylight. Numbers measured this way
+    #: (brain-slot seconds, G1) share the slot with the household and are NOT bake-off results; the report says so at the top.
+    skip_brain_stop: bool = os.environ.get("BAKEOFF_SKIP_BRAIN_STOP") == "1"
+    #: TEST HOOK (default 0 = off): ``BAKEOFF_SMOKE_CELLS=N`` limits each Hindsight arm to ONE seed of N store cells spread over the axes, and the
+    #: validity / slot phases to a handful of retains. The report is then marked a smoke run (nothing in it is a verdict).
+    smoke_cells: int = int(os.environ.get("BAKEOFF_SMOKE_CELLS", "0") or 0)
     health_wait_s: float = float(os.environ.get("BAKEOFF_HEALTH_WAIT_S", "180"))
     panel_host: str = os.environ.get("BAKEOFF_PANEL_HOST", "zoe-pi")
     panel_log: str = "/home/pi/.zoe-voice/voice.log"
     seeds: tuple = ()
-    arms: tuple = ("H1", "H2", "H0")
+    arms: tuple = ("H1", "H2", "HM", "H0")
     docs_dir: Optional[Path] = None
     meminfo: str = os.environ.get("BAKEOFF_MEMINFO", "/proc/meminfo")
     #: local-time maintenance windows (minutes since midnight) a window must not touch: the 01:45-03:15 nightly passes (decision record
     #: section 6) and the 04:18-04:52 nightly window the landing script also waits out. ``BAKEOFF_BLACKOUTS=none`` switches them off (tests).
     blackouts: tuple = () if os.environ.get("BAKEOFF_BLACKOUTS") == "none" else ((105, 195), (258, 292))
+
+    @property
+    def llm_port(self) -> int:
+        """The port Hindsight's LLM calls go to: the clone's, or (test hook) the live brain's."""
+        return self.live_port if self.skip_brain_stop else self.clone_port
 
     @property
     def compose(self) -> Path:
@@ -254,7 +267,7 @@ def hindsight_env(example: str, cfg: Cfg, run_id: str) -> str:
     """The server environment: ``hindsight.env.example`` (every variable checked against the installed package on 2026-10-05) with the
     run's overrides. Refuses any URL that is not loopback: a bake-off that can reach out has already failed G0."""
     over = {
-        "HINDSIGHT_API_LLM_BASE_URL": f"http://127.0.0.1:{cfg.clone_port}/v1",
+        "HINDSIGHT_API_LLM_BASE_URL": f"http://127.0.0.1:{cfg.llm_port}/v1",
         "HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL": f"http://127.0.0.1:{cfg.shim_port}/v1",
         "HINDSIGHT_API_EMBEDDINGS_OPENAI_BATCH_SIZE": "8",              # the shim's compute cap
         "HINDSIGHT_API_DATABASE_URL": f"postgresql://hindsight:hindsight@127.0.0.1:{cfg.pg_port}/hindsight",
@@ -264,6 +277,7 @@ def hindsight_env(example: str, cfg: Cfg, run_id: str) -> str:
         "HINDSIGHT_API_ENABLE_DRY_RUN_EXTRACT": "true",
         "PYTHONPATH": str(EGRESS_AUDIT_DIR),                             # the in-process egress audit hook (sitecustomize.py; it also blocks uvloop)
         "PYTHONDONTWRITEBYTECODE": "1",                                  # the hook directory is in the repo: leave no bytecode behind
+        "ORT_DISABLE_TELEMETRY": "1",                                    # onnxruntime >= 1.30 uploads telemetry to Microsoft from C: the Python hook cannot see it
         "EGRESS_AUDIT_LOG": str(cfg.bakeoff_dir / f"egress-{run_id}.log"),
         "HOME": str(cfg.bakeoff_dir / "hs-home"),
     }
@@ -312,6 +326,7 @@ class Window:
         self.lock_fd: "Optional[int]" = None
         self.opened = False
         self.t0 = host.mono()
+        self.t0_epoch = host.now()
         self.mem_floor = float("inf")
         self.abort_flag: "Optional[str]" = None
         self.started: "list[str]" = []           # things this window started, for the log
@@ -339,6 +354,19 @@ class Window:
             raise Aborted(f"MemAvailable {m:.0f} MB < {self.cfg.min_avail_mb:.0f} MB floor")
         if self.elapsed_min() >= self.cfg.cap_min and not self.dry:
             raise Aborted(f"hard cap {self.cfg.cap_min:.0f} min reached")
+        if self.cfg.skip_brain_stop and not self.dry and self.opened:
+            self.guard_panel()
+
+    def guard_panel(self) -> None:
+        """TEST HOOK only (the brain stays live): the household shares the brain slot, so a voice turn that STARTED after the window did ends it.
+        Polled at most every 30 s. A panel that cannot be reached says nothing (same convention as ``land_voice_pr.sh``)."""
+        now = self.host.mono()
+        if now - getattr(self, "_panel_polled", -1e9) < 30.0:
+            return
+        self._panel_polled = now
+        age = self.panel_age_s()
+        if age is not None and age < self.elapsed_min() * 60.0 + 30.0:
+            raise Aborted(f"a voice turn started {age:.0f}s ago while the live brain is shared (BAKEOFF_SKIP_BRAIN_STOP): stopping the window")
 
     # ── preflight ──
     def probe_lock(self) -> bool:
@@ -375,10 +403,37 @@ class Window:
         r = self.host.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6", self.cfg.panel_host, grep], timeout=10, mutating=False)
         return parse_panel_age(r.out, self.host.now()) if r.rc == 0 else None
 
+    #: What counts as "the brain is busy with someone else's work". ANCHORED to the interpreter / shell that RUNS the script: an unanchored
+    #: ``pgrep -f samantha_bar.py`` also matches an editor, a ``tail -f`` or the very shell that was asked (and misses ``samantha_bar_conv.py``,
+    #: the conversation bar, and the voice regression probe the landing script runs under ``/tmp/zoe-voice-harness.lock``).
+    BUSY_PATTERNS = (
+        ("a voice-PR landing", r"^bash .*/land_voice_pr\.sh"),
+        ("the samantha bar", r"^\S*python\S*( -\S+)* \S*(samantha_bar|samantha_bar_conv|samantha_day_sim)\.py"),
+        ("a voice regression probe", r"^\S*python\S*( -\S+)* \S*voice_regression_probe\.py"),
+    )
+    HARNESS_LOCK = os.environ.get("BAKEOFF_HARNESS_LOCK", "/tmp/zoe-voice-harness.lock")
+
+    def harness_lock_held(self) -> bool:
+        """The voice harness (regression probe / replay) serialises on this flock file; a held lock = a probe is using the brain."""
+        try:
+            fd = os.open(self.HARNESS_LOCK, os.O_RDONLY)
+        except OSError:
+            return False                                   # no file: nobody ever took it
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            return False
+        except BlockingIOError:
+            return True
+        finally:
+            os.close(fd)
+
     def landing_running(self) -> str:
-        for label, pat in (("a voice-PR landing", r"^bash .*/land_voice_pr\.sh"), ("the samantha bar", r"samantha_bar\.py|samantha_day_sim\.py")):
+        for label, pat in self.BUSY_PATTERNS:
             if self.host.run(["pgrep", "-f", pat], mutating=False).rc == 0:
                 return label
+        if self.harness_lock_held():
+            return f"the voice harness ({self.HARNESS_LOCK} is held)"
         return ""
 
     def busy_reason(self) -> str:
@@ -497,15 +552,20 @@ class Window:
             raise Aborted("scratch Postgres never became ready")
         self.log("step 2/6 loopback embeddings shim (:%d)" % cfg.shim_port)
         self.start_unit("shim", [str(cfg.hs_python), str(REPO / "scripts/perf/zmb/embed_shim.py"), "--serve", "--port", str(cfg.shim_port)],
-                        env={"HF_HUB_OFFLINE": "1"}, props={"MemoryMax": "300M", "MemorySwapMax": "0"})
+                        env={"HF_HUB_OFFLINE": "1", "ORT_DISABLE_TELEMETRY": "1"}, props={"MemoryMax": "300M", "MemorySwapMax": "0"})
         self.wait_http(f"http://127.0.0.1:{cfg.shim_port}/health", "the embeddings shim", 90)
         self.guard()
-        self.log("step 3/6 STOP the live brain (%s): the voice stack is down until restore" % cfg.unit)
-        if host.run(["systemctl", "--user", "stop", cfg.unit], timeout=90).rc != 0:
-            raise Aborted(f"could not stop {cfg.unit}")
-        self.log("step 4/6 Gemma clone on :%d (same model and flags, --parallel 1)" % cfg.clone_port)
-        self.start_unit("clone", self.clone["argv"], env=self.clone["env"], props=self.clone["props"])
-        self.wait_http(f"http://127.0.0.1:{cfg.clone_port}/health", "the Gemma clone", max(cfg.health_wait_s, 240.0), contains="ok")
+        if cfg.skip_brain_stop:
+            self.log(f"step 3/6 SKIPPED: BAKEOFF_SKIP_BRAIN_STOP=1 (test hook): {cfg.unit} stays UP and Hindsight talks to it on :{cfg.live_port}")
+            self.log("step 4/6 SKIPPED: no Gemma clone (the live brain's single slot is shared with the household: this is not a bake-off measurement)")
+            self.wait_http(f"http://127.0.0.1:{cfg.live_port}/health", "the live brain", 20, contains="ok")
+        else:
+            self.log("step 3/6 STOP the live brain (%s): the voice stack is down until restore" % cfg.unit)
+            if host.run(["systemctl", "--user", "stop", cfg.unit], timeout=90).rc != 0:
+                raise Aborted(f"could not stop {cfg.unit}")
+            self.log("step 4/6 Gemma clone on :%d (same model and flags, --parallel 1)" % cfg.clone_port)
+            self.start_unit("clone", self.clone["argv"], env=self.clone["env"], props=self.clone["props"])
+            self.wait_http(f"http://127.0.0.1:{cfg.clone_port}/health", "the Gemma clone", max(cfg.health_wait_s, 240.0), contains="ok")
         self.log("step 5/6 hindsight-api (loopback :%d, egress audit hook on)" % cfg.hs_port)
         self.start_unit("hindsight", [str(cfg.hs_bin)], props={"EnvironmentFile": str(env_path), "MemoryMax": "1536M", "MemorySwapMax": "0"},
                         env={"HOME": str(cfg.bakeoff_dir / "hs-home")})
@@ -519,11 +579,16 @@ class Window:
         cfg, host = self.cfg, self.host
         self.log("RESTORE: stopping what this window started")
         for key in ("hindsight", "clone", "shim"):
+            if key == "clone" and cfg.skip_brain_stop:
+                continue                                    # nothing was started under that name
             host.run(["systemctl", "--user", "stop", UNITS[key]], timeout=60)
             host.run(["systemctl", "--user", "reset-failed", UNITS[key]])
         host.run(["docker", "compose", "-f", str(cfg.compose), "down"], timeout=120)
-        self.log(f"RESTORE: starting {cfg.unit}")
-        host.run(["systemctl", "--user", "start", cfg.unit], timeout=200)
+        if cfg.skip_brain_stop:
+            self.log(f"RESTORE: {cfg.unit} was never stopped (test hook): checking it is still healthy")
+        else:
+            self.log(f"RESTORE: starting {cfg.unit}")
+            host.run(["systemctl", "--user", "start", cfg.unit], timeout=200)
         ok = False
         for _ in range(max(1, int(cfg.health_wait_s / 2))):
             if self.dry:
@@ -618,7 +683,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dry-run", action="store_true", help="print every step and the generated clone command; change nothing")
     ap.add_argument("--restore-only", action="store_true", help="just restore the live brain (stop the clone, Hindsight, the shim, the scratch DB; start the unit)")
-    ap.add_argument("--arms", default="H1,H2,H0", help="Hindsight arms to run, in priority order (Z0 and Z0-off always run in the lab)")
+    ap.add_argument("--arms", default="H1,H2,HM,H0", help="Hindsight arms to run, in priority order (Z0, Z0-off and Z0e always run in the lab)")
     ap.add_argument("--cap-min", type=float, default=None, help="hard cap in minutes (default 90)")
     ap.add_argument("--docs-dir", type=Path, default=None, help="where the draft markdown goes (default <repo>/docs/research)")
     return ap
@@ -630,9 +695,9 @@ def main(argv: "Optional[list[str]]" = None, host_factory: "Optional[Callable[[C
     if args.cap_min:
         cfg.cap_min = args.cap_min
     cfg.arms = tuple(a.strip() for a in args.arms.split(",") if a.strip())
-    bad = [a for a in cfg.arms if a not in ("H0", "H1", "H2")]
+    bad = [a for a in cfg.arms if a not in ("H0", "H1", "H2", "HM")]
     if bad:
-        print(f"unknown arm(s) {', '.join(bad)} (H0, H1, H2)", file=sys.stderr)
+        print(f"unknown arm(s) {', '.join(bad)} (H0, H1, H2, HM)", file=sys.stderr)
         return EXIT_REFUSED
     cfg.docs_dir = args.docs_dir
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M")
@@ -648,6 +713,10 @@ def main(argv: "Optional[list[str]]" = None, host_factory: "Optional[Callable[[C
     w = Window(cfg, host, log, dry=args.dry_run, run_id=stamp, measure_fn=(bakeoff_measure.dry_plan if args.dry_run else bakeoff_measure.measure))
     w.log_path = log_path
     log(("DRY-RUN " if args.dry_run else "") + f"memory bake-off window {stamp}: arms {','.join(cfg.arms)}, cap {cfg.cap_min:.0f} min, log {log_path}")
+    if cfg.skip_brain_stop or cfg.smoke_cells:
+        log("TEST HOOK ACTIVE" + (": BAKEOFF_SKIP_BRAIN_STOP=1 (the live brain is NOT stopped; no clone)" if cfg.skip_brain_stop else "")
+            + (f"; BAKEOFF_SMOKE_CELLS={cfg.smoke_cells} (one seed, {cfg.smoke_cells} cells per arm, short validity / slot phases)" if cfg.smoke_cells else "")
+            + ": nothing this run reports is a bake-off result")
     return w.run()
 
 

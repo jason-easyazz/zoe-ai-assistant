@@ -223,15 +223,31 @@ class ScratchPostgres:
 
     # ── the verifier ──
     def _relation_owners(self) -> "dict[str, str]":
-        """``{relation file path (no segment suffix): "table" | "table (index)" | "table (toast)"}``."""
+        """``{relation file path (no segment suffix): "table" | "table (index)" | "table (toast)"}`` for the relations of the engine's OWN schema
+        only. The system catalogs (``pg_proc``, ``pg_description``, ``sql_features`` ...) and every other database of the cluster are left out
+        on purpose: they hold ordinary English (``unicode``, ``lines``, ``Tove`` inside a description) and would read as household residue for any
+        short name (measured on the run-1 store: ``Ines`` 261 hits, ``Tove`` 20, ``Leo`` 3,556 in an EMPTY store)."""
         rows = self.psql(
             "SELECT pg_relation_filepath(c.oid) || '|' || CASE "
             "WHEN c.relkind = 'i' THEN coalesce(p.relname, c.relname) || ' (index)' "
             "WHEN c.relkind = 't' THEN coalesce(o.relname, c.relname) || ' (toast)' ELSE c.relname END "
             "FROM pg_class c LEFT JOIN pg_index i ON i.indexrelid = c.oid LEFT JOIN pg_class p ON p.oid = i.indrelid "
             "LEFT JOIN pg_class o ON o.reltoastrelid = c.oid "
-            "WHERE c.relkind IN ('r', 'i', 't', 'm') AND pg_relation_filepath(c.oid) IS NOT NULL;")
+            "JOIN pg_namespace n ON n.oid = coalesce(p.relnamespace, o.relnamespace, c.relnamespace) "
+            "WHERE c.relkind IN ('r', 'i', 't', 'm') AND pg_relation_filepath(c.oid) IS NOT NULL AND n.nspname = :'schema';", schema=self.schema)
         return {a: b for a, _, b in (ln.partition("|") for ln in rows)}
+
+    def _stats_rows(self, tokens: "Sequence[str]") -> "dict[str, int]":
+        """``{token: n}`` columns of the engine's own tables whose planner statistics (most-common values, histogram bounds) hold the token. Exact
+        and scoped to the schema: the byte scan cannot tell a statistics row of a text column from the catalogs' own."""
+        out: "dict[str, int]" = {}
+        for t in tokens:
+            n = self._counts(self.psql(
+                "SELECT 'pg_stats', count(*) FROM pg_stats WHERE schemaname = :'schema' AND (most_common_vals::text ILIKE :'pat' "
+                f"{_ESC} OR histogram_bounds::text ILIKE :'pat' {_ESC}) HAVING count(*) > 0;", schema=self.schema, pat=like_pattern(t)))
+            if n.get("pg_stats"):
+                out[t] = n["pg_stats"]
+        return out
 
     def _live_rows(self, tokens: "Sequence[str]") -> "dict[str, dict[str, int]]":
         """``{token: {table: n}}`` of tables with a LIVE row that names the token (the second instrument: a byte scan cannot see compressed TOAST)."""
@@ -240,6 +256,9 @@ class ScratchPostgres:
             stmts = [f"SELECT '{tb}', count(*) FROM {self._q(tb)} r WHERE r::text ILIKE :'pat' {_ESC} HAVING count(*) > 0;"
                      for tb in sorted(self.tables())]
             out[t] = self._counts(self.psql("\n".join(stmts), pat=like_pattern(t)))
+        stats = self._stats_rows(list(tokens))
+        for t, n in stats.items():
+            out[t]["pg_stats"] = n
         return out
 
     def snapshot(self, dest: Path) -> Path:
@@ -293,11 +312,16 @@ class ScratchPostgres:
         for t in toks:
             files: "dict[str, int]" = {}
             rel: "dict[str, int]" = {}
+            ignored = 0
             for v in spellings[t]:
                 for f, n in raw[v]["files"].items():
+                    owner = owners.get(re.sub(r"\.\d+$", "", f)) or ("pg_wal" if f.startswith("pg_wal/") else None)
+                    if owner is None:             # a system catalog, another database, global/, postgresql.conf: ordinary text, never household residue
+                        ignored += n
+                        continue
                     files[f] = files.get(f, 0) + n
-                    owner = owners.get(re.sub(r"\.\d+$", "", f)) or ("pg_wal" if f.startswith("pg_wal/") else f.split("/", 1)[0])
                     rel[owner] = rel.get(owner, 0) + n
-            out[t] = {"total": sum(files.values()) + sum(live[t].values()), "files": files, "pg_relations": rel, "live_rows": live[t]}
+            out[t] = {"total": sum(files.values()) + sum(live[t].values()), "files": files, "pg_relations": rel, "live_rows": live[t],
+                      "ignored_system_hits": ignored}
         return {"tokens": out, "clean": all(v["total"] == 0 for v in out.values()), "seconds": round(time.monotonic() - t0, 3)}
 

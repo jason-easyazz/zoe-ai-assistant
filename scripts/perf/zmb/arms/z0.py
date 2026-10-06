@@ -93,8 +93,11 @@ class Z0Arm(Arm):
     if importlib.util.find_spec("chromadb") is not None:
         capabilities = capabilities | {"disk"}
 
-    def __init__(self, off: "frozenset[str] | set[str]" = frozenset(), name: str | None = None):
+    def __init__(self, off: "frozenset[str] | set[str]" = frozenset(), name: str | None = None, embed: bool = False):
         from .. import lab_driver
+        self.embed = embed
+        if embed:       # Z0e: the same MemoryService over a real Chroma + MiniLM; the disk cells stay Z0's (their embeddings are hash vectors on purpose)
+            self.capabilities = frozenset(set(self.capabilities) - {"disk"})
         self._lab = lab_driver
         self.svc = lab_driver.load_service()
         self.off = frozenset(off)
@@ -119,7 +122,7 @@ class Z0Arm(Arm):
         if self._lab_service is not None:
             self._lab_service.close()
         self.graph.close()
-        self._lab_service = self._lab.LabService(self.svc, tag=self.name, disk=disk)
+        self._lab_service = self._lab.LabService(self.svc, tag=self.name, disk=disk, embed=self.embed and not disk)
         if disk and not self._heap_scrub_ours:
             # The disk cells measure the RECOMMENDED deployment: host heap scrubbing on (HNSW heap residue is a
             # separate class with its own fix; unscrubbed, chromadb 0.6.3 left a name in length.bin in 5 of 60

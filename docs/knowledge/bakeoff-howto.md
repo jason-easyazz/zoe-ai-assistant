@@ -1,7 +1,7 @@
 ---
 type: Runbook
 title: The Hindsight bake-off is one command (owner's page)
-description: How to run the pre-registered memory bake-off (Z0, Z0-off, H0, H1, H2) with one command inside a brain-stop window, what the window does to the box, how long it takes, how to read the verdict (G0-G3 per arm and the winner clause), how to abort, and what is still unverified. The embeddings shim, the Hindsight adapter and the runner are built and tested against fakes; the real Hindsight server has not yet been in the loop.
+description: How to run the pre-registered memory bake-off (Z0, Z0-off, Z0e, H0, H1, H2, HM) with one command inside a brain-stop window, what the window does to the box, how long it takes, how to read the verdict (G0-G3 per arm and the winner clause), how to abort, and what is still unverified. First contact with the real stack (real Hindsight server, scratch Postgres, embeddings shim, real MemPalace library, the live brain's LLM path) was made on 2026-10-06; see docs/research/bakeoff-setup-verification-2026-10-06.md for what it found and fixed.
 tags: [memory, bake-off, hindsight, zmb, runbook, brain-window, owner]
 timestamp: 2026-10-06T07:00:00Z
 ---
@@ -19,8 +19,20 @@ scripts/perf/zmb/bakeoff_window.sh --dry-run     # FIRST: prints every step, the
 scripts/perf/zmb/bakeoff_window.sh               # the window: about 85 minutes, hard cap 90, ends with the live brain restored
 ```
 
-Everything else (`--arms H1,H2`, `--cap-min`, `--docs-dir`) is optional. Run it from a worktree: it only writes an untracked markdown draft, but the
+Everything else (`--arms H1,H2`, `--cap-min`, `--docs-dir`) is optional; the default arms are `H1,H2,HM,H0` (Z0, Z0-off and Z0e always run in the lab). Run it from a worktree: it only writes an untracked markdown draft, but the
 usual rule stands (no work in the live checkout).
+
+### The test hook (daylight, brain NOT stopped; default OFF, never for a real window)
+
+`BAKEOFF_SKIP_BRAIN_STOP=1` runs the window against the LIVE brain on `:11434`: nothing is stopped or restarted, no clone starts, Hindsight's LLM points at the live port, and
+the restore only stops what the window started and checks the brain is still healthy. Because the household shares the brain's single slot, the window ends (and restores) if a
+voice turn starts while it runs, and the preflight still requires 10 minutes of panel quiet and no landing / bar / probe. `BAKEOFF_SMOKE_CELLS=N` limits each Hindsight arm to ONE
+seed of N cells spread over the axes and the validity / slot phases to a handful of calls. The report opens with a TEST-HOOK banner: nothing in such a run is a bake-off number.
+First use: 2026-10-06, `docs/research/bakeoff-setup-verification-2026-10-06.md`.
+
+```bash
+BAKEOFF_SKIP_BRAIN_STOP=1 BAKEOFF_SMOKE_CELLS=10 scripts/perf/zmb/bakeoff_window.sh --arms H1,HM --cap-min 40 --docs-dir /tmp/smoke-docs
+```
 
 ## What it does to the box
 
@@ -44,7 +56,9 @@ Guards: MemAvailable below 1.2 GB at any time aborts and restores; 90 minutes is
 
 0. Stale `zmb-` banks an earlier window left in the scratch store are deleted first (the disk cells scan the whole data directory: a live bank that holds a name they look for
    makes their residue unmeasurable, and the cell would say so as an ERROR). Only this tool's own prefix is touched.
-1. Z0 and Z0-off in the lab on three seeds (1): the control and the negative control. Seeds: `zmb-v1` (baseline) plus two held-out.
+1. Z0 and Z0-off in the lab on three seeds (1): the control and the negative control. Seeds: `zmb-v1` (baseline) plus two held-out. **Z0e** (the same `MemoryService` over a REAL Chroma collection
+   with the service's MiniLM embedder, as live; about 25 s per seed) runs the four recall (D) cells on the same seeds: the lab's own Z0 ranks by bag-of-words, so the D axis is compared with Z0e, and the
+   report says so (a missing chromadb or model is a skip, never a download, and D falls back to Z0 with a note).
 2. Forgetting probes start for each Hindsight arm (1): forget an invented friend, check at t+0. The **real t+6 min** check (wait, replay the transcript
    through the arm's own nightly pass and a late model writer, check again) runs later, between cells.
 3. Adapter negative controls on the real server (1): with a Zoe-layer protection OFF the cell that claims it must go red. Six claims: `authority` (A1), `identity`, `ledger`, and the three
@@ -55,6 +69,11 @@ Guards: MemAvailable below 1.2 GB at any time aborts and restores; 90 minutes is
    (H1 3.7, H2 12, H0 20) with headroom for the cells added since; a seed that finishes early hands its slack to the arms behind it. A cell the box did not reach is a SKIP, never a pass.
 5. **H2 then H0, one seed each**, taking what H1 left: seed 1, then latency, concise extraction validity (shared, 10) and slot. H0's latency and slot are "only if time remains" (not
    budgeted): H0 cannot win or complete, so its cells outrank its timings. The rule needs three seeds, so H2 and H0 are INCOMPLETE by design: measured for the comparison, never adopted.
+5b. **HM (Hindsight + MemPalace), one seed box**, after H2 and before H0 (the plan shows the minutes; H1 keeps its three full seeds). `hm_window.py` runs in the bake-off venv through `mp_run.sh` (the verbatim tier is
+   the REAL MemPalace 3.10.0 library under a scrubbed HOME; the distilled tier is this window's Hindsight over loopback HTTP, with the same scratch-Postgres scrub and scan as the H arms): the 21 HM cells on the real tiers
+   (about 4 min; the four protections whose effect runs through a real tier are broken one at a time and must turn their cell red; latencies are wall clocks, the two lookups in two threads), then the generic store
+   cells for one seed (about 1.3 s per cell). HM has no extraction or identity wall of its own, so many generic hard cells FAIL it by design and `hard_cells_all_ran` / the HM gate say so; it is INCOMPLETE (one seed), never adopted.
+   Its own gate block (`HM-G0a .. HM-G3a`) and its column in the winner clause are in the report. Its t+6 min forgetting check is HM-F2 on a virtual clock (the ledger is durable: there is no TTL to wait out).
 6. The t+6 min forgetting verdicts and the report (inside the 5 min tail). Fewer than three seeds makes an arm INCOMPLETE, which is not adoptable.
 7. Per arm: PSS of every candidate PID every 2 s (steady = median, burst = max, plus the scratch Postgres container), MemAvailable floor, and non-loopback
    connects (the egress hook log plus `ss` polling). The hook is `scripts/perf/zmb/egress_audit/sitecustomize.py` (in the repo; it also makes `import uvloop` fail, because
@@ -93,11 +112,10 @@ Exit codes: 0 done, 2 refused before anything was started, 3 aborted (restored),
 
 ## What is still unverified (be honest when you quote the result)
 
-* **The real Hindsight server has never been in the loop with this adapter.** The adapter, the Zoe layer and the runner are proven red-before-green
-  against `arms/fake_hindsight.py`, a test double of the documented API shapes; the request and response fields were read from the installed 0.10.2
-  source, and the embeddings shim was exercised with the openai SDK exactly as Hindsight calls it. The first real window is also the first real
-  contact: expect it to find adapter bugs (a field name, a timeout, an observation that behaves differently from the double). A `SKIP` with
-  "cannot reach Hindsight" or an `ERROR` is information, not a result.
+* **First contact was made on 2026-10-06** (docs/research/bakeoff-setup-verification-2026-10-06.md): the adapter ran its whole contract against the real 0.10.2 server, the real
+  scratch Postgres, the loopback shim, the live brain's LLM path and the real MemPalace library; the fakes now carry the shapes it found. What that run could NOT show: the Gemma CLONE
+  (the live brain served it, one slot shared with the household, so no timing is a bake-off number), a full-size seed (a 10-cell smoke ran, then the planner's numbers), and the
+  second window itself. A `SKIP` with "cannot reach Hindsight" or an `ERROR` is still information, not a result.
 * Extraction quality on the B cells under real Gemma (the double splits sentences; it says nothing about the model).
 * Net RSS: the Chroma / ONNX that adoption frees inside `zoe-data` is not subtracted, so the figure is gross (conservative).
 * G3 "delete >= 5,000 of 17,923 lines" is an estimate from a file list, not a proof that those files are deletable.

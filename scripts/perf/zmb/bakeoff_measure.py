@@ -21,6 +21,7 @@ import datetime as dt
 import hashlib
 import json
 import math
+import os
 import re
 import threading
 from pathlib import Path
@@ -31,22 +32,28 @@ from .bakeoff import PG_CONTAINER, UNITS, Aborted
 
 #: What run 1 (20261006-0935, ``run-20261006-0935.log``) MEASURED; the planner budgets from these, not from hope.
 #: minutes per fixed phase (Z0 lab + forgetting start + adapter controls; per-arm latency / slot; per-mode extraction validity)
-PHASE_MIN = {"lab": 2.1, "latency": {"H1": 1.0, "H2": 2.5, "H0": 5.1}, "slot": {"H1": 3.1, "H2": 5.2, "H0": 5.2},
-             "validity": {"verbatim": 6.0, "concise": 10.0}}
+PHASE_MIN = {"lab": 2.1, "latency": {"H1": 1.0, "H2": 2.5, "H0": 5.1, "HM": 0.0}, "slot": {"H1": 3.1, "H2": 5.2, "H0": 5.2, "HM": 0.0},
+             "validity": {"verbatim": 6.0, "concise": 10.0},
+             #: Z0e (real Chroma + MiniLM) on the D cells x 3 seeds, measured 2026-10-06 first contact: 4 cells x ~6.5 s x 3 seeds = 1.3 min
+             "z0e": 1.4,
+             #: the HM cells on the real tiers (real library + real Hindsight, ``--controls real-tier``): 217 s measured at first contact (2026-10-06), with headroom
+             "hm_cells": 5.0}
 #: seconds per cell that RAN, seed 1: H1 112 cells in 414 s, H2 55 in 662 s, H0 18 in 362 s
-S_PER_CELL = {"H1": 3.7, "H2": 12.0, "H0": 20.0}
+S_PER_CELL = {"H1": 3.7, "H2": 12.0, "H0": 20.0, "HM": 1.3}      # HM: 131 cells ran in 171 s on the real tiers at first contact (a verbatim write is no model call; most cells never distil)
 #: seeds per arm. H1 is the preferred arm and needs all three (the rule); H2 and H0 get one each and are INCOMPLETE by design
-SEEDS_PER_ARM = {"H1": 3, "H2": 1, "H0": 1}
-ARM_ORDER = ("H1", "H2", "H0")                    # priority: an earlier arm is finished before a later one starts
+SEEDS_PER_ARM = {"H1": 3, "H2": 1, "H0": 1, "HM": 1}
+ARM_ORDER = ("H1", "H2", "HM", "H0")              # priority: an earlier arm is finished before a later one starts (HM is a candidate, H0 only the native baseline)
 OPTIONAL_PHASES = ("H0",)                         # the arm's latency + slot run only if time remains, never budgeted: H0 cannot win or complete,
                                                   # so its CELLS (the baseline of what Hindsight does natively) outrank its timings
 H1_BOX_MARGIN = 1.25                             # the new cells (D recall, A3, C temporal) are unmeasured on real Hindsight: headroom over run 1's rate
 OPEN_MIN, TAIL_MIN = 0.5, 5.0                    # steps 1-6 of the window; the t+6 min wait + report at the end
 LATENCY_FACTS, LATENCY_QUERIES = 16, 50
 VALIDITY_CALLS = 104
+SMOKE_VALIDITY_CALLS, SMOKE_SLOT_RETAINS = 10, 4          # BAKEOFF_SMOKE_CELLS: a handful of brain calls, never a measurement
 SLOT_RETAINS, SLOT_TURNS_PER_CHUNK = 12, 10
 FORGET_WAIT_S = 360.0
 PROBE_USERS = {v: "demo_bar_" + hashlib.sha1(f"zmb-probe-{v}".encode()).hexdigest()[:8] for v in ("H0", "H1", "H2")}
+HM_DRIVER = Path(__file__).resolve().parent / "hm_window.py"
 
 _PLACES = ("Hobart", "Lisbon", "Perth", "Bergen", "Ghent", "Cork", "Dunedin", "Tauranga")
 _PEOPLE = ("Priya", "Ravi", "Anika", "Teodor", "Ines", "Oskar", "Saoirse", "Tomas")
@@ -77,6 +84,29 @@ def interleave(cells: list) -> list:
         if i > max(len(v) for v in fams.values()):
             break
     return out
+
+
+#: cells a smoke run always includes: the physical-erase cell proves the byte scan sees real Postgres residue on the real stack
+SMOKE_PRIORITY = ("F5.forgotten_text_not_on_disk",)
+
+
+def pick_smoke(cells: list, n: int) -> list:
+    """TEST HOOK (``BAKEOFF_SMOKE_CELLS=n``): ``n`` store cells spread over the axes: the priority cells, then one per family letter
+    (A B C D ...) round-robin, so a ten-cell smoke touches authority, extraction, temporal, recall, abstention, forgetting ..."""
+    chosen = [c for c in cells if c.id in SMOKE_PRIORITY][:n]
+    letters: "dict[str, list]" = {}
+    for c in cells:
+        if c not in chosen:
+            letters.setdefault(c.id[0], []).append(c)
+    i = 0
+    while len(chosen) < n and any(letters.values()):
+        for k in sorted(letters):
+            if len(chosen) < n and i < len(letters[k]):
+                chosen.append(letters[k][i])
+        i += 1
+        if i > max(len(v) for v in letters.values()):
+            break
+    return chosen
 
 
 def seeds_for(stamp: str) -> "tuple[str, str, str]":
@@ -139,11 +169,17 @@ class Sampler(threading.Thread):
             self._pg_mb = parse_mib(r.out.split("/")[0]) if r.rc == 0 else self._pg_mb
         self._n += 1
         ss = h.run(["ss", "-tnpH", "state", "established"], mutating=False).out
+        watch = set(pids)
+        drv = h.run(["pgrep", "-f", r"^\S*python\S* .*hm_window\.py"], mutating=False)       # the HM driver is a child process of the window: its sockets count too
+        if drv.rc == 0:
+            watch |= {int(x) for x in drv.out.split() if x.isdigit()}
         for line in ss.splitlines():
             parts = line.split()
-            if len(parts) < 4 or not any(f"pid={p}," in line for p in pids):
+            if len(parts) < 4 or not any(f"pid={p}," in line for p in watch):
                 continue
             peer = parts[3].rsplit(":", 1)[0].strip("[]")
+            if peer.startswith("::ffff:"):            # an IPv4 peer in its IPv6-mapped spelling is the same address
+                peer = peer[7:]
             if not (peer.startswith("127.") or peer == "::1"):
                 self.nonloopback.add(peer)
         return {"t": h.mono(), "label": self.label, "mem_available_mb": w.mem(), "rss_mb": round(rss_mb + self._pg_mb, 1), "pids": len(pids)}
@@ -226,7 +262,8 @@ class Ctx:
         self.seed_runs: "dict[str, dict[str, dict]]" = {}
         self.z0: "dict[str, dict]" = {}
         self.z0_off: "dict[str, dict]" = {}
-        self.measure: "dict[str, dict]" = {v: {} for v in ("H0", "H1", "H2")}
+        self.measure: "dict[str, dict]" = {v: {} for v in ("H0", "H1", "H2", "HM")}
+        self.z0e: "dict[str, dict]" = {}
         self.forget: "dict[str, ForgetProbe]" = {}
         self.notes: "list[str]" = []
         self.aborted = ""
@@ -238,7 +275,7 @@ class Ctx:
         return self.win.arm_factory(variant, **kw)
 
     def slot_seconds(self) -> "Optional[float]":
-        r = self.host.run(["curl", "-sf", "-m", "5", f"http://127.0.0.1:{self.cfg.clone_port}/metrics"], mutating=False)
+        r = self.host.run(["curl", "-sf", "-m", "5", f"http://127.0.0.1:{self.cfg.llm_port}/metrics"], mutating=False)
         return parse_metrics_seconds(r.out) if r.rc == 0 else None
 
     def label(self, name: str) -> None:
@@ -277,6 +314,27 @@ def phase_z0(ctx: Ctx, seeds: tuple, store: list, by_id: dict) -> None:
             sink[seed] = {"axes": artifact.axis_stats(rows, by_id, inst["ok"]), "hard_violations": artifact.hard_violations(rows, by_id),
                           "instrument": inst, "cells": _strip(rows)}
         ctx.log(f"Z0 seed {seed}: controls red {inst['lab_controls_red']} ok={inst['ok']}")
+        phase_z0e(ctx, seed, world, store, by_id, inst)
+
+
+def phase_z0e(ctx: Ctx, seed: str, world: Any, store: list, by_id: dict, inst: dict) -> None:
+    """Z0e = Z0 over a REAL Chroma collection with the service's MiniLM embedder (as live), on the recall (D) cells: the lab's own Z0 ranks by bag-of-words, so
+    the D axis compares an embedding arm with a real embedder, not with a word counter. Skipped (with the reason in the notes) where chromadb or the cached
+    model is missing: the D baseline then falls back to Z0 and the report says so."""
+    from . import artifact, runner
+    from .arms import make_arm
+    cells = [c for c in store if c.id.startswith("D")]
+    arm = make_arm("Z0e")
+    try:
+        rows = runner.run_cells(cells, world, arm)
+    finally:
+        arm.close()
+    ran = sum(1 for r in rows if r["verdict"] != "SKIP")
+    if not ran:
+        ctx.notes.append("Z0e did not run (no chromadb or no cached MiniLM model): the D axis is compared with the lab's bag-of-words Z0, which is not a retrieval baseline")
+        return
+    ctx.z0e[seed] = {"axes": artifact.axis_stats(rows, by_id, inst["ok"]), "cells": _strip(rows)}
+    ctx.log(f"Z0e seed {seed}: {sum(1 for r in rows if r['verdict'] == 'PASS')}/{ran} recall cells pass over real Chroma + MiniLM")
 
 
 def sweep_stale_banks(ctx: Ctx) -> int:
@@ -322,7 +380,7 @@ def phase_arm_controls(ctx: Ctx, store: list) -> None:
         ctx.log(f"adapter control: H1 with `{off}` OFF on {cid} -> {o.verdict} (must be FAIL)")
     ctx.measure["H1"]["arm_controls"] = f"{red}/{counted}"
     for v in ("H0", "H2"):
-        ctx.measure[v]["arm_controls"] = ctx.measure["H1"]["arm_controls"]
+        ctx.measure[v]["arm_controls"] = ctx.measure["H1"]["arm_controls"]        # HM has its own: the HM cells' real-tier controls (``phase_hm``)
     ctx.arm_controls_ok = counted >= 3 and red == counted
 
 
@@ -347,7 +405,7 @@ def run_arm_seed(ctx: Ctx, variant: str, seed: str, box_s: float, store: list, b
     ctx.label(f"{variant}:{seed}")
     t_end, rows, unreachable, t0 = ctx.host.mono() + box_s, [], 0, ctx.host.mono()
     try:
-        for cell in interleave(store):
+        for cell in (pick_smoke(store, ctx.cfg.smoke_cells) if ctx.cfg.smoke_cells else interleave(store)):
             ctx.win.guard()
             ctx.due_probes()
             if ctx.host.mono() >= t_end or unreachable >= 3:
@@ -372,6 +430,74 @@ def run_arm_seed(ctx: Ctx, variant: str, seed: str, box_s: float, store: list, b
         "retain": arm.measure()}
     ctx.log(f"{variant} {seed}: {ran}/{len(rows)} cells ran in {ctx.host.mono() - t0:.0f}s; hard violations {len(ctx.seed_runs[variant][seed]['hard_violations'])}"
             f"; hard skipped {hard_skipped}")
+
+
+def real_hm_runner(ctx: Ctx, seed: str, box_s: float) -> dict:
+    """Run ``hm_window.py`` in the bake-off venv (the verbatim tier is the real MemPalace 3.10.0 library, not the interpreter the window runs in) and read its JSON.
+    The Hindsight tier talks to this window's server over loopback; the Postgres scrub / scan go through ``docker exec``."""
+    cfg, host = ctx.cfg, ctx.host
+    out = cfg.bakeoff_dir / f"hm-{ctx.win.run_id}.json"
+    argv = ["bash", str(cfg.bakeoff_dir / "mp_run.sh"), str(HM_DRIVER), "--out", str(out), "--url", f"http://127.0.0.1:{cfg.hs_port}", "--seed", seed,
+            "--box-s", str(int(box_s)), "--controls", "real-tier"]
+    if cfg.smoke_cells:
+        argv += ["--smoke", str(cfg.smoke_cells)]
+    if cfg.skip_brain_stop:
+        argv += ["--quiet-since", str(ctx.win.t0_epoch)]
+    env = {**os.environ, "MALLOC_PERTURB_": "85", "PYTHONMALLOC": "malloc", "ORT_DISABLE_TELEMETRY": "1"}          # the scrubbing allocator HM-F6 needs (forgotten text in uninitialised heap)
+    r = host.run(argv, timeout=box_s + PHASE_MIN["hm_cells"] * 60.0 * 2 + 180.0, env=env)
+    text = host.read(str(out))
+    if not text:
+        return {"error": f"hm_window.py produced no result (rc={r.rc}): {r.out.strip()[-300:]}"}
+    return json.loads(text)
+
+
+def phase_hm(ctx: Ctx, seed: str, box_s: float, store: list, by_id: dict, instrument_of: "Callable[[str], dict]") -> None:
+    """The HM arm's one seed box: the HM cells on the real tiers plus the generic store cells for one seed (``hm_window.py``), folded into the same
+    structures an H arm's seed fills (axes, hard violations, gates), and the HM-only measurements (wall-clock latency, the verbatim tier's RAM)."""
+    from . import artifact
+    ctx.label(f"HM:{seed}")
+    t0 = ctx.host.mono()
+    res = (getattr(ctx.win, "hm_runner", None) or real_hm_runner)(ctx, seed, box_s)
+    ctx.win.guard()
+    why = res.get("aborted") or res.get("skipped") or res.get("error")
+    if why and not res.get("hm_cells"):
+        ctx.notes.append(f"HM did not run: {why}")
+        ctx.log(f"HM: not run ({why})")
+        if res.get("aborted"):
+            raise Aborted(str(res["aborted"]))
+        return
+    if why:
+        ctx.notes.append(f"HM stopped early: {why}")
+    cells = res.get("hm_cells") or {}
+    summ = cells.get("summary") or {}
+    m = ctx.measure["HM"]
+    cells = {**cells, "cells": [{k: v for k, v in r.items() if k != "title"} for r in cells.get("cells") or []]}       # titles name the household's pool names: counts and ids only
+    m["hm_cells"] = cells
+    m["hm_driver"] = res.get("driver") or {}
+    m["hm_library"] = res.get("library", "")
+    m["arm_controls"] = f"{summ.get('controls_checked', 0) - len(summ.get('not_instrumented') or [])}/{summ.get('controls_checked', 0)}"
+    by = {r["id"]: r for r in cells.get("cells") or []}
+    f1, f2 = by.get("HM-F1.forget.t0"), by.get("HM-F2.forget.t6min")
+    m["forgetting"] = {k: {"checked": 2, "resurrected": 0 if c["verdict"] == "PASS" else 1, "kept_others": 1,
+                           "how": how} for k, c, how in (
+        ("t0", f1, "HM-F1: both tiers, real library + real Hindsight, name / case / possessive / hyphen"),
+        ("t6", f2, "HM-F2: replay + the distiller's own re-proposal on a virtual 360 s clock (the ledger is durable: no TTL)")) if c}
+    gen = res.get("generic")
+    if gen and gen.get("rows"):
+        rows = gen["rows"]
+        inst = instrument_of(seed)
+        controls_ok = bool(summ.get("controls_checked")) and not summ.get("not_instrumented")
+        hard_skipped = sum(1 for r in rows if r["verdict"] == "SKIP" and artifact.is_hard(by_id[r["id"]]))
+        why_hard = skip_breakdown([r for r in rows if r["verdict"] == "SKIP" and artifact.is_hard(by_id[r["id"]])])
+        ctx.seed_runs.setdefault("HM", {})[seed] = {
+            "axes": artifact.axis_stats(rows, by_id, inst["ok"]), "hard_violations": artifact.hard_violations(rows, by_id),
+            "hard_skipped": hard_skipped, "hard_skipped_why": why_hard,
+            "instrument": {"ok": inst["ok"] and controls_ok, "lab_controls_red": inst["lab_controls_red"], "arm_controls": m["arm_controls"]},
+            "cells_ran": gen["cells_ran"], "cells_selected": gen["cells_selected"], "duration_s": gen["duration_s"], "cells": _strip(rows), "retain": {}}
+        ctx.log(f"HM {seed}: {gen['cells_ran']}/{gen['cells_selected']} generic cells ran in {gen['duration_s']:.0f}s; hard violations "
+                f"{len(ctx.seed_runs['HM'][seed]['hard_violations'])}; hard skipped {hard_skipped}")
+    ctx.log(f"HM cells on the real tiers: {summ.get('pass')}/{summ.get('graded')} graded pass; red {summ.get('fail')}; targets failing {summ.get('targets_failing')}; "
+            f"skipped {summ.get('skipped')}; controls {m['arm_controls']} red; {ctx.host.mono() - t0:.0f}s")
 
 
 def phase_latency(ctx: Ctx, variant: str) -> None:
@@ -405,7 +531,8 @@ def phase_validity(ctx: Ctx, mode: str, variants: "tuple[str, ...]", box_s: floa
     client.patch_config(bank, {**BANK_CONFIG["H2" if mode == "concise" else "H1"], "enable_observations": False})
     ok = n = 0
     max_in, t_end = 0, ctx.host.mono() + box_s
-    for s in probe_sentences(VALIDITY_CALLS):
+    t_start_iso = dt.datetime.now(dt.timezone.utc).isoformat()
+    for s in probe_sentences(SMOKE_VALIDITY_CALLS if ctx.cfg.smoke_cells else VALIDITY_CALLS):
         ctx.win.guard()
         if ctx.host.mono() >= t_end:
             break
@@ -419,7 +546,9 @@ def phase_validity(ctx: Ctx, mode: str, variants: "tuple[str, ...]", box_s: floa
     trace = ""
     try:
         t = client.call("trace", "GET", f"/v1/default/banks/{bank}/llm-requests", params={"operation": "retain", "limit": 500})
-        rows = t.get("items") or t.get("requests") or []
+        # the trace outlives its bank (a bank delete does not touch ``llm_requests``): rows of an EARLIER window's bank of the same name are
+        # not this window's calls (measured: 23 rows for 20 calls after a 3-call smoke on the same bank name)
+        rows = [x for x in (t.get("items") or t.get("requests") or []) if str(x.get("started_at") or "9") >= t_start_iso]
         if rows:
             good = sum(1 for x in rows if str(x.get("status")) == "success")
             trace = f"; LLM trace attempts {good}/{len(rows)} success"
@@ -445,7 +574,7 @@ def phase_slot(ctx: Ctx, variant: str) -> None:
     client.patch_config(bank, {**BANK_CONFIG[variant], "enable_observations": False})
     chunk = " ".join(probe_sentences(SLOT_TURNS_PER_CHUNK))
     before, n = ctx.slot_seconds(), 0
-    for i in range(SLOT_RETAINS):
+    for i in range(SMOKE_SLOT_RETAINS if ctx.cfg.smoke_cells else SLOT_RETAINS):
         ctx.win.guard()
         client.retain(bank, [{"content": f"{chunk} ({i})", "document_id": f"s{i:03d}", "context": "the user is speaking"}])
         n += 1
@@ -470,12 +599,18 @@ class Budget:
     seeds: dict                                      # arm -> seeds planned
     box_min: dict                                    # arm -> planned ceiling of ONE seed box, minutes
     runnable_h0: int = -1                            # the same for H0, which has no Zoe layer (no conflict_pass / edges); -1 = not computed
+    runnable_hm: int = -1                            # the same for HM: clock / identities / idle_pass / verbatim / reader only
 
     def runnable_for(self, arm: str) -> int:
+        if arm == "HM" and self.runnable_hm >= 0:
+            return self.runnable_hm
         return self.runnable_h0 if arm == "H0" and self.runnable_h0 >= 0 else self.runnable
 
     def fixed_min(self, arm: str) -> float:
-        """Budgeted latency + slot minutes for the arm (the extraction-validity phase is per MODE, see ``validity_min``). 0 for an optional arm."""
+        """Budgeted latency + slot minutes for the arm (the extraction-validity phase is per MODE, see ``validity_min``). 0 for an optional arm.
+        HM has neither phase (its latency is measured inside its cells, on the real tiers): its fixed time is the HM cells."""
+        if arm == "HM":
+            return PHASE_MIN["hm_cells"]
         return 0.0 if arm in OPTIONAL_PHASES else PHASE_MIN["latency"][arm] + PHASE_MIN["slot"][arm]
 
     def validity_min(self) -> float:
@@ -486,7 +621,7 @@ class Budget:
         return int(self.box_min[arm] * 60.0 / S_PER_CELL[arm])
 
     def total_min(self) -> float:
-        return PHASE_MIN["lab"] + self.validity_min() + sum(self.fixed_min(a) + self.seeds[a] * self.box_min[a] for a in self.arms)
+        return PHASE_MIN["lab"] + PHASE_MIN["z0e"] + self.validity_min() + sum(self.fixed_min(a) + self.seeds[a] * self.box_min[a] for a in self.arms)
 
     def seed_box_s(self, arm: str, time_left_s: float) -> float:
         """The ceiling for the next seed box of ``arm`` in seconds. H1: its planned ceiling. A lower arm: whatever is left behind the
@@ -495,7 +630,7 @@ class Budget:
         if arm == "H1" or arm not in ARM_ORDER:
             return min(planned, time_left_s)
         later = [a for a in ARM_ORDER[ARM_ORDER.index(arm) + 1:] if a in self.arms]
-        concise_here = arm == "H2" or (arm == "H0" and "H2" not in self.arms)
+        concise_here = arm == "H2" or (arm in ("H0", "HM") and "H2" not in self.arms)
         queued = (self.fixed_min(arm) + (PHASE_MIN["validity"]["concise"] if concise_here else 0.0)
                   + sum(self.fixed_min(a) + 2.0 for a in later)) * 60.0
         left = max(0.0, time_left_s - queued)
@@ -515,38 +650,46 @@ def plan_budget(cfg: Any, store: "Optional[list]" = None, runnable: "Optional[in
     if runnable is None:
         runnable = sum(1 for c in store if cellmod.required_capabilities(c) <= layered)
     runnable_h0 = sum(1 for c in store if cellmod.required_capabilities(c) <= layered - {"conflict_pass", "edges"})
+    from .arms.hm import HMArm
+    runnable_hm = sum(1 for c in store if cellmod.required_capabilities(c) <= set(HMArm.capabilities))
     avail = cfg.cap_min - cfg.reserve_min - TAIL_MIN - OPEN_MIN
     seeds = {a: SEEDS_PER_ARM[a] for a in arms}
     h1 = round(max(5.0, runnable * S_PER_CELL["H1"] * H1_BOX_MARGIN / 60.0) * 2) / 2.0          # to the half minute
     box = {"H1": h1} if "H1" in arms else {}
-    draft = Budget(avail, len(store), runnable, arms, seeds, {a: 0.0 for a in arms}, runnable_h0)
-    spare = avail - PHASE_MIN["lab"] - draft.validity_min() - sum(draft.fixed_min(a) for a in arms) - seeds.get("H1", 0) * box.get("H1", 0.0)
+    draft = Budget(avail, len(store), runnable, arms, seeds, {a: 0.0 for a in arms}, runnable_h0, runnable_hm)
+    spare = avail - PHASE_MIN["lab"] - PHASE_MIN["z0e"] - draft.validity_min() - sum(draft.fixed_min(a) for a in arms) - seeds.get("H1", 0) * box.get("H1", 0.0)
     lower = [a for a in arms if a != "H1"]
-    for i, a in enumerate(lower):                                                        # H2 gets twice H0's share of what H1 leaves
-        share = (2.0 / 3.0 if i == 0 else 1.0 / 3.0) if len(lower) == 2 else 1.0
-        box[a] = math.floor(max(1.0, spare * share) * 2) / 2.0                 # rounded DOWN: the plan must fit the cap, not just touch it
-    return Budget(avail, len(store), runnable, arms, seeds, {a: box.get(a, 0.0) for a in arms}, runnable_h0)
+    weights = {2: (2.0, 1.0), 3: (2.0, 1.5, 0.5)}.get(len(lower), (1.0,) * len(lower))      # H2 the biggest share, then HM (a candidate), H0 (the native baseline) the least
+    for a, w in zip(lower, weights):
+        box[a] = math.floor(max(1.0, spare * w / sum(weights)) * 2) / 2.0               # rounded DOWN: the plan must fit the cap, not just touch it
+    return Budget(avail, len(store), runnable, arms, seeds, {a: box.get(a, 0.0) for a in arms}, runnable_h0, runnable_hm)
 
 
 def plan_table(cfg: Any, seeds: tuple, budget: "Optional[Budget]" = None) -> "list[tuple[str, float, str]]":
     """The schedule in EXECUTION order: ``(what, minutes, note)``."""
     b = budget or plan_budget(cfg)
     rows = [("Z0 + Z0-off in the lab on 3 seeds, forgetting probes start (t+0), adapter negative controls", PHASE_MIN["lab"],
-             "control, negative control; the real t+6 min check runs later between cells")]
+             "control, negative control; the real t+6 min check runs later between cells"),
+            ("Z0e (real Chroma + MiniLM) on the 4 recall cells x 3 seeds", PHASE_MIN["z0e"], "the D axis baseline: real retrieval on both engines")]
     concise_done = False
     for a in b.arms:
+        if a == "HM":
+            rows.append(("HM cells on the REAL tiers (MemPalace 3.10.0 library + Hindsight): controls on the real-tier protections, wall-clock latencies",
+                         PHASE_MIN["hm_cells"], "run in the bake-off venv by hm_window.py; HM-F8 scans Hindsight's Postgres"))
         rows.append((f"{a} seed 1 ({seeds[0]}): store-tier cells", b.box_min[a],
                      f"ceiling; ~{b.cells_in_box(a)} of {b.runnable_for(a)} runnable cells at {S_PER_CELL[a]:g} s/cell (run 1)"))
         opt = a in OPTIONAL_PHASES
         why = f"only if time remains; ~{PHASE_MIN['latency'][a]:g} min at run 1's rate, not budgeted" if opt else "p50/p95 through the shim and Postgres"
-        rows.append((f"{a} recall latency n=50", 0.0 if opt else PHASE_MIN["latency"][a], why))
+        if a != "HM":           # HM's latency and slot are measured inside its cells (wall clocks on the real tiers): no separate phase
+            rows.append((f"{a} recall latency n=50", 0.0 if opt else PHASE_MIN["latency"][a], why))
         mode = "verbatim" if a == "H1" else "concise"
         if a == "H1" or not concise_done:
             rows.append((f"extraction JSON validity, {mode} (>= 100 retain calls)", PHASE_MIN["validity"][mode],
                          "shared by H0 and H2" if mode == "concise" else ""))
             concise_done = concise_done or mode == "concise"
-        rows.append((f"{a} brain-slot seconds per retained turn", 0.0 if opt else PHASE_MIN["slot"][a],
-                     f"only if time remains; ~{PHASE_MIN['slot'][a]:g} min at run 1's rate, not budgeted" if opt else "idle retain of 10-turn chunks"))
+        if a != "HM":
+            rows.append((f"{a} brain-slot seconds per retained turn", 0.0 if opt else PHASE_MIN["slot"][a],
+                         f"only if time remains; ~{PHASE_MIN['slot'][a]:g} min at run 1's rate, not budgeted" if opt else "idle retain of 10-turn chunks"))
         for k in range(2, b.seeds[a] + 1):
             rows.append((f"{a} seed {k} ({seeds[k - 1]}): store-tier cells", b.box_min[a], "ceiling, same box as seed 1"))
     rows.append(("t+6 min forgetting verdicts, report", 0.0, f"inside the {TAIL_MIN:g} min tail, not counted"))
@@ -625,7 +768,7 @@ def count_violations(path: Path) -> "Optional[int]":
 def phase_arm(label: str) -> str:
     """The arm a phase label belongs to (``H1:zmb-v1`` -> H1); a phase that serves every arm over the shared server is ``shared``."""
     head = label.split(":", 1)[0]
-    return head if head in ("H0", "H1", "H2") else "shared"
+    return head if head in ("H0", "H1", "H2", "HM") else "shared"
 
 
 def attribute_egress(parsed: dict, marks: "list[tuple[float, str]]", ref_epoch: float) -> "dict[str, dict]":
@@ -673,6 +816,12 @@ def egress_summary(path: Path, marks: "list[tuple[float, str]]", ref_epoch: floa
     return {"connects": total, "observed": parsed["observed"], "detail": detail, "by_arm": by_arm}
 
 
+def hm_glue_lines() -> int:
+    """Non-blank, non-comment lines of the HM arm's own glue (``arms/hm.py`` + ``arms/hm_policy.py``): decision-rule G3's 'Zoe layer' for HM (the H arms' ``ZoeLayer`` is not used by HM)."""
+    d = Path(__file__).resolve().parent / "arms"
+    return sum(1 for f in ("hm.py", "hm_policy.py") for ln in (d / f).read_text().splitlines() if ln.strip() and not ln.strip().startswith("#"))
+
+
 def git_commit(win: Any) -> str:
     r = win.host.run(["git", "-C", str(Path(__file__).resolve().parents[3]), "rev-parse", "--short", "HEAD"], mutating=False)
     return r.out.strip()[:12] if r.rc == 0 else "unknown"
@@ -684,6 +833,7 @@ def write_report(ctx: Ctx, win: Any, seeds: tuple, store: list, by_id: dict) -> 
     cfg, repo = win.cfg, Path(__file__).resolve().parents[3]
     z0_axes = gates.aggregate_axes(ctx.z0)
     z0_off_axes = gates.aggregate_axes(ctx.z0_off)
+    z0e_axes = gates.aggregate_axes(ctx.z0e) if ctx.z0e else {}
     eg = egress_summary(cfg.bakeoff_dir / f"egress-{win.run_id}.log", ctx.marks, ctx.ref_epoch, len(ctx.sampler.nonloopback) if ctx.sampler else 0)
     viol = eg["connects"]
     dl = sum(len((repo / "services/zoe-data" / f).read_text().splitlines()) for f in gates.DELETABLE_FILES if (repo / "services/zoe-data" / f).exists()) + 2500
@@ -691,21 +841,32 @@ def write_report(ctx: Ctx, win: Any, seeds: tuple, store: list, by_id: dict) -> 
     for v in cfg.arms:
         m = ctx.measure.setdefault(v, {})
         m["rss"] = ctx.sampler.summary(f"{v}:") if ctx.sampler else {}
+        if v == "HM" and m.get("hm_driver") and m["rss"].get("steady_mb") is not None:
+            # the verbatim tier hosted in-process under adoption adds what the driver's PSS grew by (the interpreter itself is zoe-data's, not an addition)
+            add, peak = float(m["hm_driver"].get("verbatim_added_mb") or 0.0), float(m["hm_driver"].get("peak_added_mb") or 0.0)
+            m["rss"] = {**m["rss"], "steady_mb": round(m["rss"]["steady_mb"] + add, 1), "burst_mb": round(m["rss"]["burst_mb"] + max(add, peak), 1),
+                        "note": f"the servers' PSS during the HM phase + the verbatim tier's own growth on a WARM shared embedder (+{add:g} MB steady, +{max(add, peak):g} MB burst; "
+                                    f"gross incl. a cold embedder load zoe-data already pays: +{m['hm_driver'].get('gross_added_mb', '?')} MB)"}
         m["nonloopback_connects"] = viol
         m["egress"] = {"observed": eg["observed"], "detail": eg["detail"], "by_arm": eg["by_arm"]}
         m["mem_available_floor_mb"] = None if win.mem_floor == float("inf") else round(win.mem_floor, 0)
-        m["layer_lines"] = zoe_layer_lines() if v != "H0" else 0
+        m["layer_lines"] = 0 if v == "H0" else hm_glue_lines() if v == "HM" else zoe_layer_lines()      # HM does not use the H arms' ZoeLayer: its glue is hm.py + hm_policy.py
         m["deletable_lines"], m["deletable_basis"] = dl, "wc -l of the 10 files in decision record 3.1 + its 2,500-line memory_service estimate"
-        m["forgetting"] = {"t0": ctx.forget[v].t0, "t6": ctx.forget[v].t6} if v in ctx.forget else {}
+        m["forgetting"] = {"t0": ctx.forget[v].t0, "t6": ctx.forget[v].t6} if v in ctx.forget else m.get("forgetting", {})
         pin = m.get("prompt_in_tokens_max")
         m["prompt_fits"] = None if pin is None else (pin + 2048 < gates.RULE["slot_tokens"])
         m["prompt_detail"] = f"max prompt {pin} tokens + 2,048 output cap < {gates.RULE['slot_tokens']}"
         arms[v] = gates.evaluate_arm(v, ctx.seed_runs.get(v, {}), m)
-    decision = gates.decide(arms, z0_axes)
+    decision = gates.decide(arms, z0_axes, z0e_axes)
     now = dt.datetime.now()
     meta = {"date": now.strftime("%Y-%m-%d"), "started": ctx.started_at, "finished": now.strftime("%Y-%m-%d %H:%M"), "wall_min": round(win.elapsed_min(), 1),
             "cap_min": cfg.cap_min, "commit": git_commit(win), "hindsight_version": ctx.version, "embed_model": ctx.embed_model, "clone_model": win.clone.get("model", "?"),
             "seeds": list(seeds), "arms_run": [a for a in cfg.arms if ctx.seed_runs.get(a)], "aborted": ctx.aborted, "restore": "pending (restore runs after this report is written)"}
+    hooks = [h for h in ((f"BAKEOFF_SKIP_BRAIN_STOP=1: the live brain was NOT stopped and no clone ran; the brain slot was shared with the household, so no timing in it is a bake-off number."
+                          if cfg.skip_brain_stop else ""),
+                         (f"BAKEOFF_SMOKE_CELLS={cfg.smoke_cells}: one seed, {cfg.smoke_cells} cells per arm, a handful of validity / slot calls." if cfg.smoke_cells else "")) if h]
+    if hooks:
+        meta["test_hook"] = " ".join(hooks)
     notes = list(ctx.notes) + [
         "the real Hindsight extraction quality on the B cells (the unit tests use a rule-based test double)",
         "net RSS (the Chroma/ONNX that adoption frees inside zoe-data was NOT subtracted: the figure is gross, so conservative)",
@@ -716,7 +877,11 @@ def write_report(ctx: Ctx, win: Any, seeds: tuple, store: list, by_id: dict) -> 
         "own writes were only MODELLED in the pre-window probe, so these are the first contact with the real rows (the adapter control `physical_erase` OFF must be red here)",
         "H2 and H0 ran one seed each by design (H1 first, three seeds): the rule needs three, so they can only be INCOMPLETE",
         "all arms share one Hindsight server and one egress log: the per-arm egress split is by wall-clock phase, the gate reads the whole window"]
-    md = gates.render_markdown(meta, arms, decision, z0_axes, z0_off_axes, notes)
+    if "HM" in cfg.arms:
+        notes.append("HM runs ONE seed by design (H1 keeps three): the rule needs three, so HM is INCOMPLETE, measured for the comparison; its verbatim tier is the REAL MemPalace "
+                     f"library ({ctx.measure['HM'].get('hm_library') or 'not run'}) in the bake-off venv and its distilled tier the window's Hindsight; HM-G3a (the verbatim tier replaces zoe-data's own "
+                     "palace) is a design review, not a measurement; its t+6 min forgetting check runs on a virtual clock (the ledger is durable, there is no TTL to wait out)")
+    md = gates.render_markdown(meta, arms, decision, z0_axes, z0_off_axes, notes, z0e_axes)
     docs = cfg.docs_dir or (repo / "docs" / "research")
     try:
         docs.mkdir(parents=True, exist_ok=True)
@@ -727,7 +892,8 @@ def write_report(ctx: Ctx, win: Any, seeds: tuple, store: list, by_id: dict) -> 
         md_path.write_text(md, encoding="utf-8")
     payload = {"run_id": win.run_id, "meta": meta, "decision": {k: v for k, v in decision.items() if k != "compare"}, "compare": decision["compare"],
                "arms": {v: {k: val for k, val in a.items()} for v, a in arms.items()}, "z0": {s: {k: r[k] for k in ("axes", "hard_violations", "instrument")} for s, r in ctx.z0.items()},
-               "z0_off": {s: {k: r[k] for k in ("axes", "hard_violations")} for s, r in ctx.z0_off.items()}, "seed_runs": ctx.seed_runs,
+               "z0_off": {s: {k: r[k] for k in ("axes", "hard_violations")} for s, r in ctx.z0_off.items()}, "z0e": {s: r["axes"] for s, r in ctx.z0e.items()},
+               "seed_runs": ctx.seed_runs,
                "measure": ctx.measure, "notes": notes, "docs_path": str(md_path)}
     artifact.write_json(cfg.bakeoff_dir / f"run-{win.run_id}.json", payload)
     win.log(f"VERDICT: {decision['verdict']} - {decision['text']}")
@@ -768,26 +934,28 @@ def measure(win: Any) -> dict:
         ctx.label("lab")
         sweep_stale_banks(ctx)
         phase_z0(ctx, seeds, store, by_id)
-        for v in cfg.arms:
+        for v in (a for a in cfg.arms if a != "HM"):          # HM's forgetting is its own two cells (F1 / F2) on the real tiers, run in the HM driver
             ctx.forget[v] = ForgetProbe(ctx, v)
             ctx.label(f"{v}:forget")
             ctx.forget[v].start()
             log(f"forgetting probe {v}: t+0 {ctx.forget[v].t0}")
         phase_arm_controls(ctx, store)
         for v in budget.arms:                 # H1 first and complete, then H2, then H0: a later arm only gets what the earlier one left
-            for k in range(budget.seeds[v]):
+            for k in range(1 if cfg.smoke_cells else budget.seeds[v]):
                 box = budget.seed_box_s(v, win.time_left_s() - tail_s)
-                if box >= 60.0:
+                if box >= 60.0 and v == "HM":
+                    phase_hm(ctx, seeds[k], box, store, by_id, instrument_of)
+                elif box >= 60.0:
                     run_arm_seed(ctx, v, seeds[k], box, store, by_id, instrument_of)
                 if k == 0:
-                    if win.time_left_s() > tail_s + 90:
+                    if win.time_left_s() > tail_s + 90 and v != "HM":
                         phase_latency(ctx, v)
                     mode_arms = ("H1",) if v == "H1" else (concise_arms if "concise" not in ctx.validity_done else ())
                     if mode_arms and win.time_left_s() > tail_s + 300:
                         mode = "verbatim" if v == "H1" else "concise"
                         phase_validity(ctx, mode, mode_arms, min(600.0, win.time_left_s() - tail_s))
                         ctx.validity_done.add(mode)
-                    if win.time_left_s() > tail_s + 90:
+                    if win.time_left_s() > tail_s + 90 and v != "HM":
                         phase_slot(ctx, v)
         for p in ctx.forget.values():            # a real t+6 min: wait out whatever is left, never skip it
             while p.t6 is None:

@@ -40,6 +40,7 @@ USER = "demo_bar_1a2b3c4d"
 OTHER = "owner_no_mode"          # a second household account (demo_bar_00000002) for the isolation cell
 VOICE_BUDGET_MS = 600.0
 CHAT_DELTA_BUDGET_MS = 25.0
+VERBATIM_BUDGET_MS = 100.0       # HM-G1a: the verbatim query alone, warm
 
 #: the decision-rule items these cells serve (docs/research/memory-arm-hm-hindsight-mempalace-2026-10-06.md section 6)
 RULE = {"F": "HM-G2a two-tier forget (t+0 / t+6 min)", "L": "HM-G1a two-lookup latency",
@@ -59,6 +60,7 @@ class HMCell:
     expected: str = "PASS"                      # FAIL = a known failure (a target), tracked, never a regression
     needs_disk: bool = False                    # only meaningful on the real library store
     needs_arm: bool = True
+    needs_pg: bool = False                      # only meaningful on the REAL distilled tier with the scratch Postgres handle
 
 
 def T(text: str, speaker: str = "owner_voice_verified", **kw: Any) -> Turn:
@@ -182,6 +184,18 @@ def cell_f6(arm: HMArm) -> scorers.Score:
     return _score(hits == 0 and files == 0, "write", residue_hits=hits, ledger_files_matching=files)
 
 
+def cell_f8(arm: HMArm) -> scorers.Score:
+    """Physical, the OTHER tier: after the forget the name is in no byte of Hindsight's own Postgres (its log tables, dead tuples, statistics, WAL). Needs the
+    scratch Postgres handle on the real tier; the scan runs BEFORE any read (a recall query is itself logged by the engine's audit log)."""
+    arm.reset(USER)
+    arm.ingest([T(t) for t in _MARISOL_TURNS[:3] + _KEEP_TURNS])
+    arm.run_idle_pass("", [])
+    arm.forget(FORGOTTEN)
+    res = arm.distilled.pg.scan([FORGOTTEN])
+    tok = res["tokens"][FORGOTTEN]
+    return _score(res["clean"], "write", residue_hits=tok["total"], relations=sorted(tok["pg_relations"]), live_rows=tok["live_rows"])
+
+
 # ── consent / guests / emotional ─────────────────────────────────────────────
 
 def cell_g1(arm: HMArm) -> scorers.Score:
@@ -278,7 +292,8 @@ def cell_l1(arm: HMArm) -> scorers.Score:
     arm.reset(USER)
     arm.ingest([T(_KEEP_TURNS[0]), T(_KEEP_TURNS[1])])
     p = arm.latency_percentiles(_QUERIES, lane="voice")
-    return _score(p["p95"] <= VOICE_BUDGET_MS, "read", p95_ms=p["p95"], p50_ms=p["p50"], budget_ms=VOICE_BUDGET_MS)
+    return _score(p["p95"] <= VOICE_BUDGET_MS, "read", p95_ms=p["p95"], p50_ms=p["p50"], budget_ms=VOICE_BUDGET_MS,
+                  measured="wall clock, real tiers" if arm.real_latency else "modelled")
 
 
 def cell_l2(arm: HMArm) -> scorers.Score:
@@ -286,11 +301,31 @@ def cell_l2(arm: HMArm) -> scorers.Score:
     two lookups run concurrently: max, not sum)."""
     arm.reset(USER)
     arm.ingest([T(_KEEP_TURNS[0]), T(_KEEP_TURNS[1])])
+    if arm.real_latency:      # REAL tiers: the distilled tier alone, the verbatim tier alone, then both at once - every number a wall clock
+        arm.run_idle_pass("", [])
+        d_alone = percentile(_time_calls(lambda q: arm.distilled.recall(USER, q, 10)), 0.95)
+        v_alone = percentile(_time_calls(lambda q: arm.verbatim.search(q, 10)), 0.95)
+        arm.real_ms["both"].clear()
+        both = arm.latency_percentiles(_QUERIES, lane="chat")
+        delta = round(both["p95"] - d_alone - arm.latency.merge, 2)
+        return _score(delta <= CHAT_DELTA_BUDGET_MS and v_alone <= VERBATIM_BUDGET_MS, "read", p95_both_ms=both["p95"],
+                      p95_distilled_alone_ms=d_alone, p95_verbatim_alone_ms=v_alone, added_ms=delta, budget_ms=CHAT_DELTA_BUDGET_MS,
+                      verbatim_budget_ms=VERBATIM_BUDGET_MS, measured="wall clock, real tiers")
     both = arm.latency_percentiles(_QUERIES, lane="chat")
     alone = percentile([LatencyModel.sample(arm.latency.distilled, i, 50) + arm.latency.merge for i in range(50)], 0.95)
     delta = round(both["p95"] - alone, 2)
     return _score(delta <= CHAT_DELTA_BUDGET_MS, "read", p95_both_ms=both["p95"], p95_distilled_alone_ms=alone,
-                  added_ms=delta, budget_ms=CHAT_DELTA_BUDGET_MS)
+                  added_ms=delta, budget_ms=CHAT_DELTA_BUDGET_MS, measured="modelled")
+
+
+def _time_calls(fn) -> "list[float]":
+    import time
+    out = []
+    for q in _QUERIES:
+        t0 = time.perf_counter()
+        fn(q)
+        out.append((time.perf_counter() - t0) * 1000.0)
+    return out
 
 
 # ── failure isolation, write path, wing isolation ────────────────────────────
@@ -399,6 +434,8 @@ CELLS: "list[HMCell]" = [
            ("requeue_siblings",), cell_f7),
     HMCell("HM-F6.forget.physical", "after a forget the name is in no file of the verbatim palace", "F",
            ("physical_erase",), cell_f6, needs_disk=True),
+    HMCell("HM-F8.forget.physical-distilled", "after a forget the name is in no byte of Hindsight's Postgres (log tables, dead tuples, statistics, WAL)", "F",
+           ("physical_erase",), cell_f8, needs_pg=True),
     HMCell("HM-F5.forget.stt-misspelling", "TARGET: an STT misspelling of the forgotten name survives (no deterministic route)",
            "F", (), cell_f5, expected="FAIL"),
     HMCell("HM-G1.consent.side-door", "guest words reach neither tier; a child's emotional turn is kept like any member's",
@@ -429,10 +466,11 @@ CELLS: "list[HMCell]" = [
 
 # ── the runner ───────────────────────────────────────────────────────────────
 
-def lab_arm(controls: Controls, store: str = "double", workdir: "Path | None" = None) -> HMArm:
+def lab_arm(controls: Controls, store: str = "double", workdir: "Path | None" = None, distilled: "Callable[[], Any] | None" = None,
+            real_latency: bool = False) -> HMArm:
     ver = MemPalaceVerbatimArm(store=InMemoryVerbatimStore() if store == "double" else None, controls=controls,
                                palace_dir=workdir)
-    return HMArm(distilled=FakeDistilledTier(), verbatim=ver, controls=controls)
+    return HMArm(distilled=distilled() if distilled else FakeDistilledTier(), verbatim=ver, controls=controls, real_latency=real_latency)
 
 
 def _run_cell(cell: HMCell, make: "Callable[[Controls], HMArm]", controls: Controls) -> scorers.Score:
@@ -445,18 +483,34 @@ def _run_cell(cell: HMCell, make: "Callable[[Controls], HMArm]", controls: Contr
         arm.close()
 
 
-def run_all(store: str = "double", only: "str | None" = None, workdir: "Path | None" = None) -> "dict[str, Any]":
-    """Controls first (each named switch OFF, one at a time: every one must turn its cell red), then the measurement."""
+#: protections whose effect runs through a REAL tier (the verbatim library, Hindsight's documents and Postgres): on the real stack these are the controls that
+#: say something the double could not. The rest are Zoe-layer glue, proven red-before-green on the double and the library in CI.
+REAL_TIER_CONTROLS = ("forget_verbatim", "physical_erase", "tier_isolation", "cascade_provenance")
+
+
+def run_all(store: str = "double", only: "str | None" = None, workdir: "Path | None" = None, *, distilled: "Callable[[], Any] | None" = None,
+            real_latency: bool = False, controls: str = "all", guard: "Callable[[], None] | None" = None) -> "dict[str, Any]":
+    """Controls first (each named switch OFF, one at a time: every one must turn its cell red), then the measurement.
+
+    ``distilled`` = a factory for the distilled tier (default: the test double). ``controls``: ``all`` (every named switch), ``real-tier``
+    (only ``REAL_TIER_CONTROLS``: the window, where each control costs real model calls), or ``none`` (measurement only)."""
     if store == "library" and not library_available():
         raise NotImplementedError("the real MemPalace library is not importable in this interpreter "
                                   "(run under the bake-off venv: bash /home/zoe/.zoe/bakeoff-2026-10/mp_run.sh ...)")
-    make = lambda c: lab_arm(c, store, workdir)  # noqa: E731
+    make = lambda c: lab_arm(c, store, workdir, distilled, real_latency)  # noqa: E731
+    real_tier = distilled is not None
     rows: "list[dict[str, Any]]" = []
     not_instrumented: "list[str]" = []
     selected = [c for c in CELLS if not only or c.id.startswith(only) or only in c.id]
     for cell in selected:
+        if guard is not None:
+            guard()                  # the window's panel check (the live brain is shared): raises to stop
         row: "dict[str, Any]" = {"id": cell.id, "rule": cell.rule, "controls": list(cell.controls), "sanity": cell.sanity,
                                  "expected": cell.expected, "title": cell.title}
+        if cell.needs_pg and not (real_tier and getattr(distilled(), "pg", None) is not None):
+            row.update(verdict="SKIP", reason="needs the real Hindsight tier with the scratch Postgres handle (the bake-off window)")
+            rows.append(row)
+            continue
         if cell.needs_disk and store != "library":
             row.update(verdict="SKIP", reason="needs the real library store (a disk palace): run with --store library")
             rows.append(row)
@@ -468,6 +522,8 @@ def run_all(store: str = "double", only: "str | None" = None, workdir: "Path | N
             continue
         red: "dict[str, str]" = {}
         for ctl in cell.controls:
+            if controls == "none" or (controls == "real-tier" and ctl not in REAL_TIER_CONTROLS):
+                continue
             if ctl == "RAM":
                 sc = cell_r1_control(None)
             else:
@@ -488,7 +544,8 @@ def run_all(store: str = "double", only: "str | None" = None, workdir: "Path | N
         "targets_failing": [r["id"] for r in rows if r["expected"] == "FAIL" and r["verdict"] == "FAIL"],
         "targets_now_passing": [r["id"] for r in rows if r["expected"] == "FAIL" and r["verdict"] == "PASS"],
         "skipped": [r["id"] for r in rows if r["verdict"] == "SKIP"],
-        "controls_checked": sum(len(r["controls"]) for r in rows if r["verdict"] != "SKIP"),
+        "controls_checked": sum(len(r.get("controls_verdicts") or {}) for r in rows if r["verdict"] != "SKIP"),
+        "controls_mode": controls, "distilled_tier": "real" if real_tier else "double", "latency": "wall clock" if real_latency else "modelled",
         "not_instrumented": not_instrumented,
         "wilson95": [round(x, 3) for x in scorers.wilson(sum(1 for r in graded if r["verdict"] == "PASS"), len(graded))],
     }

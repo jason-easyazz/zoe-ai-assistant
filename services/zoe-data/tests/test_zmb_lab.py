@@ -728,3 +728,52 @@ def test_no_cell_id_or_title_names_a_household_string():
         for text in (c.id, c.title):
             for name in pool:
                 assert name.lower() not in text.lower().replace(".", " ").replace("_", " ").split(), (c.id, name)
+
+
+# ── Z0e: the same MemoryService over a REAL Chroma collection with the service's MiniLM embedder (first contact 2026-10-06) ──
+
+needs_embedder = pytest.mark.skipif(not lab_driver.embedder_available(), reason="needs chromadb and Chroma's MiniLM ONNX model already on disk (never downloaded)")
+
+
+def test_z0e_is_a_registered_arm_without_the_disk_cells_and_skips_where_there_is_no_embedder(monkeypatch):
+    from zmb.arms import ARMS, make_arm
+    assert "Z0e" in ARMS
+    a = make_arm("Z0e")
+    assert a.name == "Z0e" and a.embed is True and "disk" not in a.capabilities and "conflict_pass" in a.capabilities       # F5 / F6 stay Z0's (hash vectors on purpose)
+    monkeypatch.setattr(lab_driver, "embedder_available", lambda: False)
+    o = _run("D1.hit5_after_30_filler", a)
+    assert o.verdict == "SKIP" and "never downloads" in o.reason                    # a missing model is a skip, never a pass and never a download
+    a.close()
+
+
+@needs_embedder
+def test_z0e_retrieves_with_real_embeddings_and_a_broken_retrieval_turns_it_red():
+    from zmb.arms import make_arm
+    e = make_arm("Z0e")
+    try:
+        for cid in ("D1.hit5_after_30_filler", "D4.hit5_paraphrase_after_100_filler"):
+            assert _run(cid, e).verdict == "PASS", cid
+        e.reset("demo_bar_0a1b2c3d")
+        assert isinstance(e._lab_service.col, lab_driver.EmbedCollection)                # real Chroma, not the bag-of-words dict
+    finally:
+        e.close()
+    broken = Z0Arm(name="Z0e", embed=True, off=frozenset({"retrieval"}))
+    try:
+        assert _run("D1.hit5_after_30_filler", broken).verdict == "FAIL"                  # the negative control reaches the embedder-backed arm too
+    finally:
+        broken.close()
+
+
+@needs_embedder
+def test_z0e_ranks_by_meaning_where_the_labs_bag_of_words_has_no_overlap_to_go_on():
+    """'what is the name of my pet' shares no content word with 'My dog is called Biscuit': the lab's word-overlap ranking ties at zero (its order is an accident
+    of the row ids), the embedder puts the dog first among distractors."""
+    from zmb.arms import make_arm
+    a = make_arm("Z0e")
+    try:
+        a.reset("demo_bar_0a1b2c3d")
+        a.ingest([Turn(t, "owner_taught") for t in ("Quarterly tax returns are due in October.", "My dog is called Biscuit.", "The boiler was serviced in March.",
+                                                     "I like crisp toast.")])
+        assert "Biscuit" in a.recall("what is the name of my pet", 1)[0]["text"]
+    finally:
+        a.close()
