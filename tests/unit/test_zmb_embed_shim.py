@@ -197,6 +197,7 @@ def _real():
 @pytest.mark.skipif(_real() is None, reason="needs the router's bge-small on disk plus onnxruntime/tokenizers (not in the slim lane)")
 def test_real_model_selftest_in_a_fresh_process_stays_under_the_memory_budget():
     """A FRESH process: the budget is the shim's own RSS, not pytest's. Prints the numbers on failure."""
+    import os
     import subprocess
     r = subprocess.run([sys.executable, str(REPO / "scripts/perf/zmb/embed_shim.py"), "--selftest"], capture_output=True, text=True, timeout=180)
     assert r.returncode == 0 and "SELFTEST PASS" in r.stdout, r.stdout[-1500:] + r.stderr[-500:]
@@ -212,3 +213,13 @@ def test_real_model_handles_eight_long_texts_in_token_budgeted_runs():
     assert st == 200 and len(body["data"]) == 9
     norms = [sum(x * x for x in d["embedding"]) ** 0.5 for d in body["data"]]
     assert all(abs(n - 1.0) < 1e-3 for n in norms)
+
+
+def test_importing_the_shim_forces_onnxruntimes_telemetry_off_even_when_the_environment_says_otherwise():
+    """onnxruntime >= 1.30 uploads 1DS telemetry to Microsoft over HTTPS (found at first contact, 2026-10-06, by the window's ss sampler). A fresh interpreter that
+    inherits ORT_DISABLE_TELEMETRY=0 must still end up with 1: the shim sets it before anything can load onnxruntime."""
+    import os
+    import subprocess
+    code = f"import sys; sys.path.insert(0, {str(Path(shim.__file__).parent)!r}); import embed_shim, os; print(os.environ['ORT_DISABLE_TELEMETRY'])"
+    out = subprocess.run([sys.executable, "-c", code], env={**os.environ, "ORT_DISABLE_TELEMETRY": "0"}, capture_output=True, text=True, timeout=60)
+    assert out.stdout.strip() == "1", out.stderr[-300:]

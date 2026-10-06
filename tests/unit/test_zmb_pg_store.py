@@ -31,6 +31,7 @@ class Docker:
     def __init__(self, files: "dict[str, bytes] | None" = None, live: str = "", other: str = ""):
         self.calls: "list[tuple[list[str], str]]" = []
         self.files, self.live, self.other = files or {}, live, other
+        self.stats = ""
         self.copied_to: "list[Path]" = []
 
     def __call__(self, argv, *, stdin=None, timeout=0):
@@ -49,6 +50,8 @@ class Docker:
             return 0, "audit_log\nllm_requests\n"
         if "pg_relation_filepath" in script:
             return 0, "base/16384/16400|audit_log\nbase/16384/16401|llm_requests\n"
+        if "FROM pg_stats" in script:
+            return 0, self.stats
         if "r.bank_id <>" in script:
             return 0, self.other
         if "r::text ILIKE" in script:
@@ -236,3 +239,37 @@ def test_compact_retries_a_lock_timeout_and_only_a_lock_timeout(monkeypatch):
     bad = ScratchPostgres(runner=lambda argv, **kw: (3, "ERROR: out of shared memory") if "VACUUM" in (kw.get("stdin") or "") else (0, TABLES + "\n"))
     with pytest.raises(RuntimeError, match="out of shared memory"):                      # any other failure is loud at once
         bad.compact()
+
+
+# ── first contact (2026-10-06): the scan reads the engine's own relations, not the system catalogs ─────────────────
+
+def test_a_short_name_inside_the_system_catalogs_is_not_residue_but_the_same_bytes_in_an_engine_relation_are(tmp_path):
+    """Measured on the real run-1 store, EMPTY of any household text: 'Ines' 261 byte-hits, 'Tove' 20, 'Leo' 3,556 - in ``pg_proc``, ``pg_description``,
+    ``sql_features`` ... (ordinary English: 'lines', 'unicode'). Two of the eight friends a seed can draw would have read as residue on a clean store, and a
+    HARD cell (F5 / F6) would have FAILED the arm for it."""
+    pg, d = mk(files={"base/16384/1259": b"... lines and engines, Ines, ines ...", "base/1/999": b"Ines in template1", "global/1262": b"ines",
+                      "base/16384/16400": b"... Ines ...", "pg_wal/000000010000000000000007": b"clean"})
+    pg._scratch = str(tmp_path)
+    t = pg.scan(["Ines"])["tokens"]["Ines"]
+    assert t["files"] == {"base/16384/16400": 1} and t["pg_relations"] == {"audit_log": 1}          # the one mapped engine relation
+    assert t["ignored_system_hits"] == 6 and t["total"] == 1                                         # catalogs / other databases / global: counted apart, never residue
+    script = d.scripts("pg_relation_filepath")[0]
+    assert "n.nspname = :'schema'" in script and "JOIN pg_namespace" in script                       # the owner map is the engine's schema only
+
+
+def test_an_empty_store_scans_clean_for_every_short_name_a_world_can_draw(tmp_path):
+    from zmb.world import pool_strings
+    pg, _d = mk(files={"base/16384/1259": b"Ari Cato Dev Ines Kit Leo Sage Tove ari cato dev ines kit leo sage tove", "base/16384/9": b"x"})
+    pg._scratch = str(tmp_path)
+    names = [n for n in pool_strings() if " " not in n]
+    out = pg.scan(names)
+    assert out["clean"] is True and all(v["total"] == 0 for v in out["tokens"].values())
+
+
+def test_planner_statistics_of_the_engines_tables_are_counted_exactly_not_by_bytes(tmp_path):
+    pg, d = mk(files={"base/16384/9": b"nothing"})
+    pg._scratch = str(tmp_path)
+    d.stats = "pg_stats|1\n"
+    t = pg.scan(["Marisol"])["tokens"]["Marisol"]
+    assert t["live_rows"] == {"pg_stats": 1} and t["total"] == 1
+    assert any("FROM pg_stats WHERE schemaname = :'schema'" in s for s in d.scripts("pg_stats"))

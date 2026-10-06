@@ -13,9 +13,11 @@ an evidence frame on every verbatim line, a voice-lane policy, and per-tier fail
 
 Two distilled tiers satisfy the ``DistilledTier`` protocol:
 
-* ``HindsightDistilledTier``  - the REAL one: still a stub (raises ``NotImplementedError`` with the install hint, the
-  same contract as ``arms.hindsight``): Hindsight 0.10.2 needs the scratch Postgres, the loopback embedding shim and
-  the clone brain in an operator-approved brain-stop window.
+* ``HindsightDistilledTier``  - the REAL one, over ``arms.hindsight.HindsightClient`` (HTTP only): one bank per user, a distilled
+  BUNDLE = one Hindsight document whose metadata names its verbatim chunk ids (so a deleted chunk cascades), the deterministic
+  owner_taught fact written by a no-model ``chunks`` strategy, authority-gated like the double. With no server it raises
+  ``HindsightUnavailable`` (a ``NotImplementedError``: the cell SKIPs, never passes). Hindsight 0.10.2 needs the scratch Postgres, the
+  loopback embedding shim and a brain (``bakeoff_window.sh``).
 * ``FakeDistilledTier``       - a TEST DOUBLE with the same contract (rule-based "model", authority-gated store,
   provenance by source id). It makes NO claim about Hindsight's quality; it exists so the glue (gate, ledger, cascade,
   authority, framing, lanes) is proven red-without / green-with in the slim CI lane.
@@ -27,7 +29,11 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from .base import Arm, IngestReport, ROW_KEYS, Turn
+import time
+from concurrent.futures import ThreadPoolExecutor
+
 from .hindsight import INSTALL_HINT as HINDSIGHT_HINT
+from .hindsight import HindsightClient, HindsightError
 from .hm_policy import (DEFAULT_ROOMS, MODEL_FROM_TRANSCRIPT, RANK, SPEAKER_LABEL, USER_STATED, USER_STATED_DERIVED,
                         Controls, HashedLedger, LatencyModel, frame, label_for, percentile)
 from .mempalace_verbatim import MemPalaceVerbatimArm, _name_pattern, _toks
@@ -37,17 +43,29 @@ from .mempalace_verbatim import MemPalaceVerbatimArm, _name_pattern, _toks
 _ATTR_PATTERNS = (
     ("home", re.compile(r"\b(?:live|lives|living|moved|moving|reside)s?\b[^.]*?\b(?:in|to)\s+([A-Z][\w-]+)")),
     ("name", re.compile(r"\b(?:my name is|i'm|i am|name is|goes by)\s+([A-Z][\w-]+)")),
-    ("work", re.compile(r"\b(?:work|works|working)\s+(?:at|for)\s+([A-Z][\w &-]+)")),
+    ("work", re.compile(r"\b(?:work|works|working)\s+(?:at|for)\s+(.+?)\s*[.,;!]?\s*$")),
     ("dentist", re.compile(r"\bdentist\b[^.]*?\b(?:is|was)\s+(?:Dr\.?\s+)?([A-Z][\w-]+)")),
+    ("age", re.compile(r"\b(\d{1,3})\s+years?\s+old\b")),
+    ("birthday", re.compile(r"\bbirthday\s+is\s+(?:on\s+)?(.+?)\s*[.!]?\s*$")),
+    ("spouse", re.compile(r"\b(?:wife|husband|spouse|partner)\s+(?:is\s+)?(?:named|called)\s+([A-Z][\w-]+)")),
+    ("pet", re.compile(r"\b(?:dog|cat|pet)\s+(?:is\s+)?(?:named|called)\s+([A-Z][\w-]+)")),
 )
 
 
+def _subject(head: str) -> str:
+    """Whose attribute it is: the last capitalised word before the attribute phrase ('User's friend Priya lives in ...' -> priya), else the user. First contact
+    (2026-10-06): without a subject, 'friend A lives in X' and 'friend B lives in Y' were one attribute, and the packet's authority rule dropped 6 of the 20 needles."""
+    caps = [w for w in re.findall(r"[A-Z][\w-]+", head) if w.lower() not in ("user", "i")]
+    return caps[-1].lower() if caps else "user"
+
+
 def attr_of(text: str) -> "tuple[str, str] | None":
-    """(attribute, value) for the few attributes the lab cells use, else None."""
+    """(attribute, value) for the attributes the cells use, else None. The attribute is ``home`` for the user's own and ``home:priya`` for somebody else's."""
     for attr, rx in _ATTR_PATTERNS:
         m = rx.search(text or "")
         if m:
-            return attr, m.group(1).strip().lower()
+            who = _subject((text or "")[:m.start()])
+            return (attr if who == "user" else f"{attr}:{who}"), m.group(1).strip().lower()
     return None
 
 
@@ -79,26 +97,202 @@ class DistilledTier(Protocol):
 
 
 class HindsightDistilledTier:
-    """The real distilled tier: a STUB until the bake-off runner fills it in (same contract as ``arms.hindsight``)."""
+    """The real distilled tier over Hindsight's HTTP API (``arms.hindsight.HindsightClient``): concise extraction, observations off, no reranker.
+
+    * one BANK per user (``zmb-hm-<user>``); a distilled bundle = one DOCUMENT whose item metadata ``source_ids`` names the verbatim chunk ids it was
+      distilled from (and one ``src:<id>`` tag per chunk), so deleting a chunk's documents is a provenance cascade (``delete_sources`` / ``siblings``);
+    * a deterministic fact (the owner's ``owner_taught`` sentence, a scripted proposal) is retained with the bank's ``det`` strategy (``chunks``
+      extraction: zero model calls) and is authority-gated here, in the tier, exactly as the double does: a lower-ranked writer cannot retire a
+      higher-ranked fact about the same attribute, the held-back proposal is kept as ``disputed`` (a side row, never in Hindsight, never recalled);
+    * ``forget`` deletes the documents whose units name the entity, remembers the verbatim chunks they were built from (``take_orphaned_sources``: the
+      caller re-queues the innocent ones) and, given the scratch Postgres handle, scrubs the log rows and compacts the relations."""
     name = "hindsight"
+    CONFIG = {"retain_extraction_mode": "concise", "enable_observations": False, "enable_reranking": False,
+              "retain_strategies": {"det": {"retain_extraction_mode": "chunks"}}}
 
-    def __init__(self, variant: str = "H2"):
+    def __init__(self, variant: str = "H2", *, client: "HindsightClient | None" = None, base_url: "str | None" = None, transport=None,
+                 pg: Any = None, keep_banks: bool = False):
         self.variant = variant
+        self.client = client or HindsightClient(base_url, transport)
+        self.pg = pg
+        self.keep_banks = keep_banks
+        self.fail = False                       # a cell flips this to simulate the tier being down (the real tier is never "down" by itself)
+        self.enforce_authority = True
+        self.model_calls = 0
+        self._banks: "set[str]" = set()
+        self._side: "dict[str, list[Fact]]" = {}
+        self._orphans: "dict[str, list[str]]" = {}
+        self._seq = 0
 
-    def _todo(self, what: str):
-        raise NotImplementedError(f"arm HM: Hindsight tier {what} is not implemented. {HINDSIGHT_HINT} "
-                                  "HM needs the `concise` extraction mode with provenance by document_id "
-                                  "(document = one bundle of verbatim chunk ids) so a deleted chunk cascades.")
+    # ── plumbing ──
+    def bank_for(self, user: str) -> str:
+        return f"zmb-hm-{user}".lower()
 
-    def reset(self, user_id): self._todo("reset")
-    def add_fact(self, user, text, authority_class, source_ids): self._todo("add_fact")
-    def distil(self, user, chunks, proposes): self._todo("distil")
-    def recall(self, user, query, k): self._todo("recall")
-    def forget(self, user, entity): self._todo("forget")
-    def delete_sources(self, user, source_ids): self._todo("delete_sources")
-    def siblings(self, user, source_ids): self._todo("siblings")
-    def rows(self, user): self._todo("rows")
-    def close(self): return None
+    def _check(self) -> None:
+        if self.fail:
+            raise RuntimeError("distilled tier unavailable")
+
+    def _bank(self, user: str) -> str:
+        bank = self.bank_for(user)
+        if bank not in self._banks:
+            self.client.delete_bank(bank)
+            self.client.put_bank(bank)
+            self.client.patch_config(bank, self.CONFIG)
+            self._banks.add(bank)
+        return bank
+
+    @staticmethod
+    def _class_of(tags: "list[str]") -> str:
+        return next((t[6:] for t in tags if t.startswith("class:")), "")
+
+    def _fact(self, u: dict) -> Fact:
+        meta = u.get("metadata") or {}
+        src = tuple(x for x in str(meta.get("source_ids") or "").split(",") if x)
+        a = attr_of(u.get("text") or "")
+        self._seq += 1
+        return Fact(id=str(u.get("id") or ""), text=str(u.get("text") or ""), authority_class=self._class_of(u.get("tags") or []) or USER_STATED_DERIVED,
+                    source_ids=src, attr=a[0] if a else "", seq=self._seq)
+
+    def _units(self, user: str) -> "list[dict]":
+        """The user's FACT units (an observation is a derived row of an arm with observations ON; this tier has them off)."""
+        if self.bank_for(user) not in self._banks:
+            return []
+        return [u for u in self.client.list_units(self.bank_for(user)) if u.get("fact_type") != "observation" and u.get("state", "valid") == "valid"]
+
+    def _doc_id(self, kind: str) -> str:
+        self._seq += 1
+        return f"{kind}-{self._seq:05d}"
+
+    def _retain(self, user: str, text: str, cls: str, source_ids: "tuple[str, ...]", *, det: bool) -> str:
+        doc = self._doc_id("f" if det else "b")
+        item: "dict[str, Any]" = {"content": text, "document_id": doc, "context": "the user is speaking",
+                                  "tags": [f"user:{user}", f"class:{cls}"] + [f"src:{s}" for s in source_ids],
+                                  "metadata": {"source_ids": ",".join(source_ids), "authority_class": cls}}
+        if det:
+            item["strategy"] = "det"
+        self.client.retain(self._bank(user), [item])
+        return doc
+
+    # ── the DistilledTier contract ──
+    def reset(self, user_id: str) -> None:
+        for b in list(self._banks):
+            if not self.keep_banks:
+                self.client.delete_bank(b)
+            self._banks.discard(b)
+        self._side, self._orphans, self.model_calls, self.fail = {}, {}, 0, False
+        self._bank(user_id)
+
+    def add_fact(self, user: str, text: str, authority_class: str, source_ids: "tuple[str, ...]" = ()) -> str:
+        self._check()
+        a = attr_of(text)
+        held = False
+        if a:
+            for u in self._units(user):
+                old = self._fact(u)
+                if old.attr == a[0] and attr_of(old.text) != a:
+                    if not self.enforce_authority or RANK[authority_class] >= RANK[old.authority_class]:
+                        doc = u.get("document_id")
+                        if doc:
+                            self.client.delete_document(self.bank_for(user), str(doc))        # newest evidence wins: the S1 signature when authority is OFF
+                        old.status = "superseded"
+                        self._side.setdefault(user, []).append(old)
+                    else:
+                        held = True
+        if held:
+            self._seq += 1
+            f = Fact(id=f"held-{self._seq:05d}", text=text, authority_class=authority_class, source_ids=tuple(source_ids), status="disputed",
+                     attr=a[0] if a else "", seq=self._seq)
+            self._side.setdefault(user, []).append(f)
+            return f.id
+        return self._retain(user, text, authority_class, tuple(source_ids), det=True)
+
+    def distil(self, user: str, chunks: "list[tuple[str, str]]", proposes: "list[str]") -> "dict[str, int]":
+        """The background model pass: ONE concise retain of the bundle (one model call, the document's provenance = its chunk ids); the scripted
+        proposals of a cell then go through ``add_fact`` (authority-gated, no model call)."""
+        self._check()
+        src = tuple(i for i, _t in chunks)
+        added = 0
+        calls = 0
+        if chunks:
+            doc = self._retain(user, "\n".join(t for _i, t in chunks), USER_STATED_DERIVED, src, det=False)
+            self.model_calls += 1
+            calls = 1
+            added += sum(1 for u in self._units(user) if u.get("document_id") == doc)
+        for p in proposes:
+            self.add_fact(user, p, USER_STATED_DERIVED, src)
+            added += 1
+        return {"facts": added, "model_calls": calls}
+
+    def recall(self, user: str, query: str, k: int) -> "list[Fact]":
+        self._check()
+        if self.bank_for(user) not in self._banks:
+            return []
+        res = self.client.recall(self.bank_for(user), query, tags=[f"user:{user}"])
+        out = [self._fact({**r, "state": "valid"}) for r in res if r.get("type") != "observation"]
+        return out[:k]
+
+    def forget(self, user: str, entity: str) -> int:
+        """The text route: delete every document with a unit naming the entity; remember the chunks those documents came from."""
+        self._check()
+        pat = _name_pattern(entity)
+        bank = self.bank_for(user)
+        gone_docs: "dict[str, list[str]]" = {}
+        if bank in self._banks:
+            for u in self.client.list_units(bank):
+                if u.get("document_id") and (pat.search(str(u.get("text") or "")) or pat.search(" ".join(str(v) for v in (u.get("metadata") or {}).values()))):
+                    gone_docs.setdefault(str(u["document_id"]), []).extend(x for x in str((u.get("metadata") or {}).get("source_ids") or "").split(",") if x)
+            for d in gone_docs:
+                self.client.delete_document(bank, d)
+        side = self._side.get(user, [])
+        self._side[user] = [f for f in side if not pat.search(f.text)]
+        self._orphans.setdefault(user, []).extend(s for ids in gone_docs.values() for s in ids)
+        return len(gone_docs) + (len(side) - len(self._side[user]))
+
+    def scrub(self, user: str, entity: str) -> None:
+        """Physical erase of Hindsight's own Postgres (the engine's delete leaves the text in its log tables, dead tuples, statistics and WAL): the same
+        scrub the H arms run (``arms.pg_store``). A no-op without the scratch Postgres handle."""
+        bank = self.bank_for(user)
+        if self.pg is not None and bank in self._banks:
+            self.pg.erase_text(bank, entity)
+            self.pg.compact()
+
+    def take_orphaned_sources(self, user: str) -> "list[str]":
+        """The verbatim chunk ids behind the documents ``forget`` just deleted (a bundle also held innocent chunks: the caller re-queues them)."""
+        out, self._orphans[user] = sorted(set(self._orphans.get(user, []))), []
+        return out
+
+    def siblings(self, user: str, source_ids: "list[str]") -> "list[str]":
+        gone, out = set(source_ids), set()
+        for u in self._units(user):
+            src = {x for x in str((u.get("metadata") or {}).get("source_ids") or "").split(",") if x}
+            if gone & src:
+                out |= src
+        return sorted(out)
+
+    def delete_sources(self, user: str, source_ids: "list[str]") -> int:
+        """The provenance route: delete every document derived from a deleted chunk (its text need not name anyone)."""
+        self._check()
+        gone, bank, n, docs = set(source_ids), self.bank_for(user), 0, set()
+        for u in (self.client.list_units(bank) if bank in self._banks else []):
+            src = {x for x in str((u.get("metadata") or {}).get("source_ids") or "").split(",") if x}
+            if gone & src and u.get("document_id"):
+                docs.add(str(u["document_id"]))
+        for d in sorted(docs):
+            n += self.client.delete_document(bank, d)
+        self._side[user] = [f for f in self._side.get(user, []) if not (gone & set(f.source_ids))]
+        return n
+
+    def rows(self, user: str) -> "list[Fact]":
+        return [self._fact(u) for u in self._units(user)] + list(self._side.get(user, []))
+
+    def close(self) -> None:
+        if not self.keep_banks:
+            for b in list(self._banks):
+                try:
+                    self.client.delete_bank(b)
+                except (HindsightError, NotImplementedError):
+                    pass
+        self._banks.clear()
 
 
 class FakeDistilledTier:
@@ -234,7 +428,11 @@ class HMArm(Arm):
 
     def __init__(self, distilled: "DistilledTier | None" = None, verbatim: "MemPalaceVerbatimArm | None" = None,
                  controls: "Controls | None" = None, latency: "LatencyModel | None" = None,
-                 ledger: "HashedLedger | None" = None):
+                 ledger: "HashedLedger | None" = None, real_latency: bool = False):
+        #: ``real_latency``: the two lookups run in two threads and the packet's ``elapsed_ms`` is the WALL CLOCK of the real tiers (the bake-off
+        #: window); off, the cells draw from ``LatencyModel`` (CI: a cell's p95 is a property of the model, not of the machine)
+        self.real_latency = real_latency
+        self.real_ms: "dict[str, list[float]]" = {"distilled": [], "verbatim": [], "both": [], "cache": []}
         self.controls = controls or Controls()
         self.ledger = ledger if ledger is not None else HashedLedger()
         self.distilled: DistilledTier = distilled if distilled is not None else HindsightDistilledTier()
@@ -376,8 +574,16 @@ class HMArm(Arm):
                             self._pending.append(Pending(sid, user, live[sid]["text"],
                                                          str(live[sid]["meta"].get("authority_class", ""))))
         n_d = self.distilled.forget(user, entity)
+        take = getattr(self.distilled, "take_orphaned_sources", None)
+        if take is not None and self.controls.cascade_provenance and self.controls.requeue_siblings:
+            live = {h["id"]: h for h in self.verbatim.store.get_all(user)}
+            for sid in take(user):                    # the documents the text route deleted held other chunks too: those chunks are distilled again
+                if sid in live and live[sid]["room"] in DEFAULT_ROOMS and not self.ledger.matches(user, live[sid]["text"]):
+                    self._pending.append(Pending(sid, user, live[sid]["text"], str(live[sid]["meta"].get("authority_class", ""))))
         if self.controls.forget_verbatim and self.controls.physical_erase:
             self.verbatim.store.erase_physical()
+        if self.controls.physical_erase and hasattr(self.distilled, "scrub"):
+            self.distilled.scrub(user, entity)
         if self.controls.distiller_skip:
             before = len(self._pending)
             self._pending = [p for p in self._pending if not self.ledger.matches(user, p.text)]
@@ -415,6 +621,8 @@ class HMArm(Arm):
 
     def _lookup(self, query: str, k: int, exact: bool, info: PacketInfo) -> "tuple[list[Fact], list[dict]]":
         user = self._user
+        if self.real_latency:
+            return self._lookup_real(user, query, k, exact, info)
         facts = self._consult("distilled", lambda: self.distilled.recall(user, query, k), info, [])
         chunks = self._consult("verbatim", lambda: self._verbatim_rows(user, query, k, exact), info, [])
         d_ms = self._lat("distilled")
@@ -425,6 +633,30 @@ class HMArm(Arm):
             info.elapsed_ms = max(d_ms, v_ms) + self.latency.merge
         else:
             info.elapsed_ms = d_ms + v_ms + self.latency.merge
+        info.tiers = ["distilled", "verbatim"]
+        return facts, chunks
+
+    def _lookup_real(self, user: str, query: str, k: int, exact: bool, info: PacketInfo) -> "tuple[list[Fact], list[dict]]":
+        """The two lookups against the REAL tiers: concurrent (the design) when ``parallel_lookup`` is on, one after the other when it is off; every
+        number is a wall clock."""
+        def timed(fn):
+            t0 = time.perf_counter()
+            r = fn()
+            return r, (time.perf_counter() - t0) * 1000.0
+        d_fn = lambda: timed(lambda: self._consult("distilled", lambda: self.distilled.recall(user, query, k), info, []))      # noqa: E731
+        v_fn = lambda: timed(lambda: self._consult("verbatim", lambda: self._verbatim_rows(user, query, k, exact), info, []))  # noqa: E731
+        t0 = time.perf_counter()
+        if self.controls.parallel_lookup or exact:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                fd, fv = pool.submit(d_fn), pool.submit(v_fn)
+                (facts, d_ms), (chunks, v_ms) = fd.result(), fv.result()
+        else:
+            (facts, d_ms), (chunks, v_ms) = d_fn(), v_fn()
+        merge0 = time.perf_counter()
+        info.elapsed_ms = (merge0 - t0) * 1000.0 + self.latency.merge
+        self.real_ms["distilled"].append(d_ms)
+        self.real_ms["verbatim"].append(v_ms)
+        self.real_ms["both"].append(info.elapsed_ms)
         info.tiers = ["distilled", "verbatim"]
         return facts, chunks
 
@@ -463,7 +695,13 @@ class HMArm(Arm):
             q = _toks(query)
             hits = [r for r in self._cache if q & _toks(r.get("raw") or r["text"])]
             info.cache_miss = not self._cache
-            info.elapsed_ms = self._lat("cache_read")
+            if self.real_latency:
+                t0 = time.perf_counter()
+                hits = [r for r in self._cache if q & _toks(r.get("raw") or r["text"])]
+                info.elapsed_ms = (time.perf_counter() - t0) * 1000.0
+                self.real_ms["cache"].append(info.elapsed_ms)
+            else:
+                info.elapsed_ms = self._lat("cache_read")
             info.tiers = ["cache"]
             return self._finish(hits, k, info, exact=False)
         facts, chunks = self._lookup(query, k, exact, info)

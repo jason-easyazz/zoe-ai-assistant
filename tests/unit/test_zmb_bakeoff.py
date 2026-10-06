@@ -324,7 +324,7 @@ def test_a_landing_or_the_bar_running_waits(box):
     w = make_window(box, host, measure_fn=lambda win: {})
     assert w.run() == bakeoff.EXIT_OK and any("voice-PR landing" in l for l in w.logs) and sum(host.slept) >= 180
     patterns = [a[-1] for a, _m in host.cmds if a[0] == "pgrep"]
-    assert r"^bash .*/land_voice_pr\.sh" in patterns and r"samantha_bar\.py|samantha_day_sim\.py" in patterns       # the anchored patterns, as the land script
+    assert r"^bash .*/land_voice_pr\.sh" in patterns and set(patterns) == {p for _l, p in bakeoff.Window.BUSY_PATTERNS}       # the ANCHORED patterns, as the land script
 
 
 def test_never_quiet_is_a_refusal_not_an_endless_wait(box):
@@ -439,6 +439,130 @@ def test_restore_only_touches_what_it_started_and_is_idempotent(box):
     assert stops == set(bakeoff.UNITS.values())                            # never llama-server, never zoe-data, never anything else
     assert not any(c.startswith("systemctl --user stop llama-server") for c in host.joined())
     assert all("zoe-bakeoff" in c or "scratch-postgres" in c for c in host.joined() if "compose" in c or "reset-failed" in c)
+
+
+
+# ── what counts as "the brain is busy": anchored, and complete (first contact 2026-10-06) ──────────────────────
+
+def _spawn(tmp_path, name, *, interp=True):
+    """A real process whose command line is ``python <tmp>/<name>`` (or, for a decoy, only MENTIONS the name)."""
+    import subprocess
+    script = tmp_path / name
+    script.write_text("import time\ntime.sleep(60)\n")
+    argv = [sys.executable, str(script)] if interp else ["bash", "-c", "sleep 60", f"watching-{name}"]
+    return subprocess.Popen(argv)
+
+
+@pytest.mark.parametrize("name,label", [("samantha_bar.py", "samantha bar"), ("samantha_bar_conv.py", "samantha bar"),
+                                        ("samantha_day_sim.py", "samantha bar"), ("voice_regression_probe.py", "voice regression probe")])
+def test_a_running_bar_or_probe_is_seen_by_its_interpreter_and_a_mere_mention_is_not(box, tmp_path, name, label):
+    w = make_window(box, bakeoff.Host(lambda _m: None))
+    assert w.landing_running() == ""
+    decoy = _spawn(tmp_path, name, interp=False)                 # an editor / tail / shell that only names the script
+    try:
+        assert w.landing_running() == "", "an unanchored pgrep would have waited on a process that is not the bar"
+        real = _spawn(tmp_path, name)
+        try:
+            assert label in w.landing_running()
+        finally:
+            real.kill()
+            real.wait()
+    finally:
+        decoy.kill()
+        decoy.wait()
+
+
+def test_the_voice_harness_lock_held_means_a_probe_is_using_the_brain(box, tmp_path, monkeypatch):
+    lock = tmp_path / "harness.lock"
+    monkeypatch.setattr(bakeoff.Window, "HARNESS_LOCK", str(lock))
+    w = make_window(box, bakeoff.Host(lambda _m: None))
+    assert w.landing_running() == ""                              # no file: nobody ever took it
+    fd = os.open(str(lock), os.O_CREAT | os.O_RDWR)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        assert "voice harness" in w.landing_running()
+    finally:
+        os.close(fd)
+    assert w.landing_running() == ""
+
+
+# ── the test hook: a window against the LIVE brain (default OFF) ─────────────────────────────────────────────
+
+def test_the_skip_brain_stop_hook_is_off_by_default_and_documented():
+    assert bakeoff.Cfg().skip_brain_stop is False and bakeoff.Cfg().smoke_cells == 0
+    assert "BAKEOFF_SKIP_BRAIN_STOP" in Path(bakeoff.__file__).read_text() and "BAKEOFF_SKIP_BRAIN_STOP" in (REPO / "docs/knowledge/bakeoff-howto.md").read_text()
+
+
+def test_with_the_hook_the_live_brain_is_never_stopped_or_started_no_clone_runs_and_hindsight_talks_to_the_live_port(box):
+    host = FakeHost(box)
+    w = make_window(box, host, measure_fn=lambda win: {"ok": 1}, skip_brain_stop=True)
+    assert w.run() == bakeoff.EXIT_OK
+    j = host.joined()
+    assert not any("stop llama-server" in c or "start llama-server" in c for c in j)
+    assert not any("zoe-bakeoff-gemma" in c for c in j)
+    assert any("--unit=zoe-bakeoff-hindsight" in c for c in j) and any("--unit=zoe-bakeoff-embed" in c for c in j)
+    env = (box / "hindsight-t1.env").read_text()
+    assert "HINDSIGHT_API_LLM_BASE_URL=http://127.0.0.1:11434/v1" in env
+    assert any("SKIPPED" in l for l in w.logs) and any("never stopped" in l for l in w.logs)
+    assert any("compose" in c and c.endswith("down") for c in j) and any("stop zoe-bakeoff-hindsight.service" in c for c in j)
+    assert not (box / "WINDOW_OPEN").exists() and w.restore_status.startswith("live brain healthy")
+
+
+def test_without_the_hook_the_brain_is_stopped_and_a_clone_runs_on_its_own_port(box):
+    host = FakeHost(box)
+    w = make_window(box, host, measure_fn=lambda win: {})
+    assert w.run() == bakeoff.EXIT_OK and any("stop llama-server" in c for c in host.joined()) and any("--unit=zoe-bakeoff-gemma" in c for c in host.joined())
+    assert "HINDSIGHT_API_LLM_BASE_URL=http://127.0.0.1:11500/v1" in (box / "hindsight-t1.env").read_text()
+
+
+def test_with_the_hook_a_voice_turn_that_starts_during_the_window_ends_it_and_the_restore_runs(box):
+    host = FakeHost(box)
+    state = {"n": 0}
+
+    def measure_fn(win):
+        host.t += 120.0                                          # two minutes into the window ...
+        host.panel_busy_until = host.t + 599.0 - 100.0           # ... the panel wakes: its last turn was ~100 s ago, newer than the window
+        win.guard()
+        state["n"] += 1
+        return {}
+    w = make_window(box, host, measure_fn=measure_fn, skip_brain_stop=True)
+    host.panel_busy_until = 0
+    assert w.run() == bakeoff.EXIT_ABORTED and state["n"] == 0
+    assert any("voice turn started" in l for l in w.logs) and any("stop zoe-bakeoff-hindsight.service" in c for c in host.joined())
+    assert not any("stop llama-server" in c for c in host.joined())
+
+
+def test_a_smoke_window_against_the_live_brain_runs_one_seed_marks_the_report_and_never_touches_the_brain(box, tmp_path, monkeypatch):
+    w, host = e2e_window(box, tmp_path, monkeypatch, extra=("F5.forgotten_text_not_on_disk",), pg=True)
+    w.cfg.skip_brain_stop, w.cfg.smoke_cells = True, 6
+    w.opened = True
+    monkeypatch.setattr(measure, "FORGET_WAIT_S", 0.0)
+    measure.measure(w)
+    art = json.loads((box / "run-t1.json").read_text())
+    md = Path(art["docs_path"]).read_text()
+    assert art["arms"]["H1"]["seeds_done"] == 1 and all(r["cells_selected"] == 6 for r in art["seed_runs"]["H1"].values())
+    assert "TEST-HOOK RUN, NOT A BAKE-OFF RESULT" in md and "BAKEOFF_SKIP_BRAIN_STOP=1" in art["meta"]["test_hook"] and "BAKEOFF_SMOKE_CELLS=6" in art["meta"]["test_hook"]
+    assert art["arms"]["H1"]["gates"]["G0"]["extraction_json_validity"]["state"] == gates.NA        # 10 calls: below the 100-call minimum, so not a measurement
+    assert not any(c.startswith(("systemctl --user stop llama", "systemctl --user start llama")) for c in host.joined())
+
+
+def test_a_smoke_run_picks_cells_across_the_axes_and_always_includes_the_physical_erase_cell():
+    store = [c for c in spec.load_cells() if c.tier == "store"]
+    chosen = measure.pick_smoke(store, 10)
+    ids = [c.id for c in chosen]
+    assert len(ids) == 10 and len(set(ids)) == 10 and "F5.forgotten_text_not_on_disk" in ids
+    assert len({i[0] for i in ids}) >= 8, ids                    # authority, extraction, temporal, recall, abstention, forgetting, ...
+
+
+def test_the_validity_count_ignores_the_trace_rows_of_an_earlier_windows_bank_of_the_same_name(box, tmp_path, monkeypatch):
+    """A bank delete does not touch ``llm_requests``: a finished run's rows for ``zmb-probe-verbatim`` are still there when the next window counts."""
+    w, _host = e2e_window(box, tmp_path, monkeypatch)
+    w.fake.llm_requests.extend({"status": "error", "operation": "retain", "started_at": "2020-01-01T00:00:00+00:00"} for _ in range(10))
+    ctx = measure.Ctx(w, None)
+    ctx.measure = {v: {} for v in ("H0", "H1", "H2")}
+    measure.phase_validity(ctx, "verbatim", ("H1",), 600.0)
+    assert ctx.measure["H1"]["json"] == {"calls": 104, "valid": 104, "source": ctx.measure["H1"]["json"]["source"]}
+    assert "104/104 success" in ctx.measure["H1"]["json"]["source"]
 
 
 # ── dry run and the shell wrapper, with every service command shimmed ────────
@@ -607,10 +731,27 @@ SUBSET = ("A1.digest.home", "A1.mcp.pet", "A1.digest.name", "A2.incident.home", 
           "F3.after_tombstone_ttl", "H1.digest", "H2.edit.digest", "E1.question_is_not_a_fact", "G3.consent.guest", "G3.consent.minor", "B2.pet_not_child")
 
 
+def canned_hm(cells):
+    """What ``hm_window.py`` would hand back, produced by the HM arm over the DOUBLES (no library, no server): the HM cells + the generic cells of one seed."""
+    from zmb import hm_cells, runner
+    from zmb.arms.hm import FakeDistilledTier, HMArm
+    from zmb.arms.mempalace_verbatim import InMemoryVerbatimStore, MemPalaceVerbatimArm
+
+    def run(ctx, seed, box_s):
+        arm = HMArm(distilled=FakeDistilledTier(), verbatim=MemPalaceVerbatimArm(store=InMemoryVerbatimStore()))
+        rows = runner.run_cells(cells, make_world(seed), arm, log=lambda m: None)
+        return {"library": "mempalace 3.10.0 (double)", "hm_cells": hm_cells.run_all("double", controls="real-tier"),
+                "generic": {"seed": seed, "rows": rows, "cells_ran": sum(1 for r in rows if r["verdict"] != "SKIP"), "cells_selected": len(rows), "duration_s": 1.0},
+                "driver": {"pss_before_mb": 60.0, "pss_after_mb": 80.0, "peak_rss_mb": 100.0, "verbatim_added_mb": 20.0, "peak_added_mb": 40.0}}
+    return run
+
+
 def e2e_window(box, tmp_path, monkeypatch, *, box_min=None, egress=True, extra=(), pg=False):
     cells = [c for c in spec.load_cells() if c.id in SUBSET + tuple(extra)]
     assert len(cells) == len(SUBSET) + len(extra)
     monkeypatch.setattr(spec, "load_cells", lambda directory=None: cells)
+    from zmb import lab_driver
+    monkeypatch.setattr(lab_driver, "embedder_available", lambda: False)       # Z0e: no real Chroma + MiniLM in this lane (its own tests below)
     monkeypatch.setattr(measure, "VALIDITY_CALLS", 104)
     monkeypatch.setattr(measure, "LATENCY_FACTS", 4)
     if box_min:
@@ -627,6 +768,7 @@ def e2e_window(box, tmp_path, monkeypatch, *, box_min=None, egress=True, extra=(
         fake = FakeHindsight()
         w.arm_factory = lambda v, **kw: HindsightArm(v, transport=fake, settle_poll_s=0, **kw)
     w.fake = fake
+    w.hm_runner = canned_hm(cells)
     w.client_factory = lambda: HindsightClient("http://127.0.0.1:18888", transport=fake)
     if egress:
         (box / "egress-t1.log").write_text("12:00:00 pid=1 ok connect ('127.0.0.1', 5432)\n12:00:01 pid=1 ok connect ('127.0.0.1', 11500)\n")
@@ -824,11 +966,27 @@ def test_a_live_egress_hook_is_logged_and_the_window_goes_on(box):
 def test_the_budget_fits_three_h1_seeds_inside_the_hard_cap(box):
     cfg = bakeoff.Cfg(bakeoff_dir=box)
     b = measure.plan_budget(cfg)
-    assert b.seeds == {"H1": 3, "H2": 1, "H0": 1} and b.arms == ("H1", "H2", "H0")
+    assert b.seeds == {"H1": 3, "H2": 1, "H0": 1, "HM": 1} and b.arms == ("H1", "H2", "HM", "H0")        # HM: one seed box; H1 keeps three
     assert b.total_min() <= b.avail_min <= cfg.cap_min - cfg.reserve_min - measure.TAIL_MIN              # the hard cap is kept, with the tail
     assert b.cells_in_box("H1") >= b.runnable > 100                     # one H1 seed box holds every runnable store cell at run 1's rate
-    assert b.box_min["H2"] >= 2.0 and b.box_min["H0"] >= 1.0 and b.store_cells == b.runnable > b.runnable_h0 > 100     # H1 / H2 run every store cell now; H0 has no Zoe layer
-    assert 3 * b.box_min["H1"] > b.box_min["H2"] + b.box_min["H0"]      # H1 is the preferred arm: the biggest share of the time
+    assert b.box_min["H2"] >= 2.0 and b.box_min["H0"] >= 1.0 and b.box_min["HM"] >= 1.0
+    assert b.store_cells == b.runnable > b.runnable_h0 > b.runnable_hm > 100     # H1 / H2 run every store cell now; H0 has no Zoe layer; HM runs what clock / identities / idle_pass / verbatim / reader can
+    assert 3 * b.box_min["H1"] > b.box_min["H2"] + b.box_min["H0"] + b.box_min["HM"]      # H1 is the preferred arm: the biggest share of the time
+    assert b.box_min["H2"] >= b.box_min["HM"] >= b.box_min["H0"]                          # HM is a candidate: ahead of the native baseline
+
+
+def test_a_run_of_h1_h2_h0_without_hm_keeps_the_pre_hm_budget_shape(box):
+    b = measure.plan_budget(bakeoff.Cfg(bakeoff_dir=box, arms=("H1", "H2", "H0")))
+    assert b.arms == ("H1", "H2", "H0") and "HM" not in b.seeds and b.total_min() <= b.avail_min
+
+
+def test_hm_fits_the_90_minute_cap_next_to_h1_x3_h2_and_h0_and_the_plan_says_what_it_costs(box):
+    """The owner's question (2026-10-06): can HM ride along? Yes, as ONE seed box: the HM cells (about 4 min measured on the real tiers) plus a store-cell box."""
+    cfg = bakeoff.Cfg(bakeoff_dir=box)
+    b = measure.plan_budget(cfg)
+    without = measure.plan_budget(bakeoff.Cfg(bakeoff_dir=box, arms=("H1", "H2", "H0")))
+    assert b.total_min() <= b.avail_min and b.box_min["H1"] == without.box_min["H1"]       # H1's three full seeds are untouched
+    assert b.box_min["H2"] < without.box_min["H2"] or b.box_min["H0"] < without.box_min["H0"]    # what HM costs: slack taken from H2 / H0's boxes, nothing from H1
 
 
 def test_a_lower_arm_only_gets_what_is_left_behind_the_work_queued_for_it(box):
@@ -847,7 +1005,7 @@ def test_h1_runs_first_and_complete_then_h2_then_h0(box, tmp_path, monkeypatch):
     calls, real = [], measure.run_arm_seed
     monkeypatch.setattr(measure, "run_arm_seed", lambda ctx, v, seed, *a, **k: (calls.append((v, seed)), real(ctx, v, seed, *a, **k))[1])
     measure.measure(w)
-    assert [v for v, _s in calls] == ["H1", "H1", "H1", "H2", "H0"]
+    assert [v for v, _s in calls] == ["H1", "H1", "H1", "H2", "H0"]                   # HM's seed box is run by its own driver (hm_window.py), in between: see below
     assert len({s for v, s in calls if v == "H1"}) == 3 and {s for v, s in calls if v != "H1"} == {calls[0][1]}
 
 
@@ -856,11 +1014,88 @@ def test_the_dry_plan_prints_the_per_arm_cell_budget_and_the_seed_counts(box):
     w = make_window(box, host, dry=True)
     measure.dry_plan(w)
     line = next(m for m in w.logs if m.startswith("per-arm cell budget"))
-    assert "H1 3 seeds x " in line and "H2 1 seed x " in line and "H0 1 seed x " in line and "all 3 seeds complete inside the cap" in line
+    assert "H1 3 seeds x " in line and "H2 1 seed x " in line and "H0 1 seed x " in line and "HM 1 seed x " in line and "all 3 seeds complete inside the cap" in line
     assert "SKIP by capability" in line
     out = "\n".join(w.logs)
-    assert out.index("H1 seed 1") < out.index("H1 seed 3") < out.index("H2 seed 1") < out.index("H0 seed 1")      # execution order: H1 first and complete
+    assert out.index("H1 seed 1") < out.index("H1 seed 3") < out.index("H2 seed 1") < out.index("HM seed 1") < out.index("H0 seed 1")      # execution order: H1 first and complete
+    assert "Z0e (real Chroma + MiniLM)" in out and "HM cells on the REAL tiers" in out
     assert "H2 seed 2" not in out and "H0 seed 2" not in out and "slack +" in out
+
+
+# ── HM and Z0e in the window (first contact 2026-10-06) ──────────────────────────────────────────────────────────
+
+def test_the_window_measures_hm_on_one_seed_and_the_record_has_its_own_line_gates_and_winner_column(box, tmp_path, monkeypatch):
+    w, _host = e2e_window(box, tmp_path, monkeypatch)
+    measure.measure(w)
+    art = json.loads((box / "run-t1.json").read_text())
+    md = Path(art["docs_path"]).read_text()
+    hm = art["arms"]["HM"]
+    assert hm["seeds_done"] == 1 and hm["seeds"]["state"] == gates.NA and hm["verdict"] in ("INCOMPLETE", "NOT_ADOPTABLE")      # one seed by design: measured for the comparison, never adopted
+    assert set(hm["gates"]) == {"G0", "G1", "G2", "G3", "HM"} and "hm_G1a_second_lookup_adds" in hm["gates"]["HM"] and "hm_G3a_replaces_zoe_datas_palace" in hm["gates"]["HM"]
+    assert hm["gates"]["HM"]["hm_G3a_replaces_zoe_datas_palace"]["state"] == gates.NA        # a design review, never a pass the window can give
+    assert hm["gates"]["G0"]["steady_rss"]["measured"].endswith("MB") and art["measure"]["HM"]["rss"]["note"].startswith("the servers' PSS during the HM phase")
+    assert art["measure"]["HM"]["forgetting"]["t0"]["resurrected"] == 0 and art["measure"]["HM"]["forgetting"]["t6"]["resurrected"] == 0
+    assert "## HM:" in md and "| Letter | Axis | Z0 | H1 | H2 | HM | H0 |" in md
+    assert any("HM runs ONE seed by design" in n for n in art["notes"]) and "HM" in art["compare"]
+    assert art["decision"]["verdict"] in ("KEEP_Z0", "ADOPT_CANDIDATE") and art["decision"]["winner"] != "HM"
+
+
+def test_an_hm_driver_that_did_not_run_is_reported_not_passed(box, tmp_path, monkeypatch):
+    w, _host = e2e_window(box, tmp_path, monkeypatch)
+    w.hm_runner = lambda ctx, seed, box_s: {"skipped": "the real MemPalace library is not importable in this interpreter"}
+    measure.measure(w)
+    art = json.loads((box / "run-t1.json").read_text())
+    assert art["arms"]["HM"]["seeds_done"] == 0 and art["arms"]["HM"]["verdict"] == "INCOMPLETE" and art["arms"]["HM"]["gates"]["HM"]["hm_cells_ran"]["state"] == gates.NA
+    assert any("HM did not run" in n for n in art["notes"])
+
+
+def test_an_hm_driver_stopped_by_a_voice_turn_aborts_the_window_and_the_rest_is_still_reported(box, tmp_path, monkeypatch):
+    w, _host = e2e_window(box, tmp_path, monkeypatch)
+    w.hm_runner = lambda ctx, seed, box_s: {"aborted": "a voice turn happened at 2026-10-06 20:00:00 after the window started: stopping (the live brain is shared)"}
+    with pytest.raises(bakeoff.Aborted, match="voice turn"):
+        measure.measure(w)
+    assert json.loads((box / "run-t1.json").read_text())["meta"]["aborted"].startswith("Aborted: a voice turn")
+
+
+def test_hm_gates_read_the_real_tiers_numbers_and_the_second_lookup_budget_is_pre_registered():
+    assert (gates.RULE["hm_voice_p95_ms"], gates.RULE["hm_second_lookup_ms"], gates.RULE["hm_verbatim_p95_ms"]) == (600.0, 25.0, 100.0)
+    cells = [{"id": "HM-L1.latency.voice-lane", "verdict": "PASS", "evidence": {"p95_ms": 0.01}},
+             {"id": "HM-L2.latency.two-lookups", "verdict": "FAIL", "evidence": {"added_ms": 29.77, "p95_verbatim_alone_ms": 72.8}}]
+    g = gates.gate_hm({"hm_cells": {"summary": {"pass": 1, "graded": 2, "fail": ["HM-L2.latency.two-lookups"], "skipped": [], "controls_checked": 5, "not_instrumented": []}, "cells": cells}})
+    assert g["hm_G1a_second_lookup_adds"]["state"] == gates.FAIL and g["hm_G1a_voice_lane_p95"]["state"] == gates.PASS and g["hm_G1a_verbatim_query_p95"]["state"] == gates.PASS
+    assert g["hm_cells_zero_violations"]["state"] == gates.FAIL and g["hm_G2a_forget_both_tiers_t0_t6"]["state"] == gates.NA        # F1 / F2 did not run: not a pass
+
+
+def test_the_recall_axis_is_compared_with_z0e_when_it_ran_and_with_z0_when_it_did_not():
+    arm = {"recall": {"pass": 20, "n": 20, "skipped": 0, "wilson95": [0.84, 1.0]}}
+    z0 = {"recall": {"pass": 4, "n": 4, "skipped": 0, "wilson95": [0.51, 1.0]}}
+    z0e = {"recall": {"pass": 12, "n": 12, "skipped": 0, "wilson95": [0.76, 1.0]}}
+    assert gates.compare_axes(arm, z0)["D"]["baseline"] == "Z0" and gates.compare_axes(arm, z0, z0e)["D"]["baseline"] == "Z0e"
+    assert gates.compare_axes(arm, z0, z0e)["D"]["z0"][1] == 12                       # the baseline's own counts, not the bag-of-words'
+    assert gates.compare_axes(arm, z0, z0e)["B"]["baseline"] == "Z0"                  # only D moves: B, C, E stay on the lab's Z0
+    bad = {"recall": {"pass": 0, "n": 20, "skipped": 0, "wilson95": [0.0, 0.16]}}
+    assert gates.compare_axes(bad, z0, z0e)["D"]["worse"] is True
+
+
+def test_z0e_runs_on_the_recall_cells_and_gets_its_own_column_and_the_d_baseline(box, tmp_path, monkeypatch):
+    from zmb import arms as armsmod
+    from zmb.arms import z0 as z0mod
+    w, _host = e2e_window(box, tmp_path, monkeypatch, extra=("D1.hit5_after_30_filler",))
+    real = armsmod.make_arm
+    monkeypatch.setattr(armsmod, "make_arm", lambda name: z0mod.Z0Arm(name="Z0e") if name == "Z0e" else real(name))      # the lab's Z0 stands in for the embedder-backed one
+    measure.measure(w)
+    art = json.loads((box / "run-t1.json").read_text())
+    md = Path(art["docs_path"]).read_text()
+    assert set(art["z0e"]) == set(art["z0"]) and all("recall" in a for a in art["z0e"].values())          # three seeds, the recall axis
+    assert "| Axis | Z0 | Z0e (real retrieval) | Z0-off" in md and "Z0e (the D baseline)" in md
+    assert art["compare"]["H1"]["D"]["baseline"] == "Z0e"
+
+
+def test_without_chroma_and_the_model_z0e_is_a_skip_and_the_record_says_the_d_baseline_is_bag_of_words(box, tmp_path, monkeypatch):
+    w, _host = e2e_window(box, tmp_path, monkeypatch, extra=("D1.hit5_after_30_filler",))
+    measure.measure(w)                                                                          # e2e_window made the embedder unavailable
+    art = json.loads((box / "run-t1.json").read_text())
+    assert art["z0e"] == {} and any("Z0e did not run" in n for n in art["notes"]) and art["compare"]["H1"]["D"]["baseline"] == "Z0"
 
 
 # ── why hard cells did not run, the winner-clause axes, and the top of the record ──────────────────────────────────
@@ -989,3 +1224,43 @@ def test_the_stale_bank_sweep_never_stops_the_window(box, tmp_path, monkeypatch)
     ctx = measure.Ctx(w, None)
     w.fake.down = True
     assert measure.sweep_stale_banks(ctx) == 0 and any("sweep skipped" in m for m in ctx.win.logs)
+
+
+# ── egress: the second instrument (first contact 2026-10-06 caught the embeddings shim uploading to Microsoft) ─────
+
+def _sampler_over(box, ss_lines, pgrep_out=""):
+    host = FakeHost(box)
+    base = host.run
+
+    def run(argv, timeout=60.0, mutating=True, env=None):
+        if argv[0] == "ss":
+            return bakeoff.Result(0, ss_lines)
+        if argv[0] == "pgrep" and any("hm_window" in a for a in argv):
+            return bakeoff.Result(0 if pgrep_out else 1, pgrep_out)
+        return base(argv, timeout, mutating, env)
+    host.run = run
+    w = make_window(box, host)
+    s = measure.Sampler(w)
+    s.snapshot()
+    return s
+
+
+def test_the_ss_sampler_flags_a_real_remote_peer_of_the_servers_and_not_the_ipv4_mapped_loopback_spelling(box):
+    s = _sampler_over(box, '0 0 [::ffff:127.0.0.1]:41112 [::ffff:127.0.0.1]:55432 users:(("python",pid=100,fd=7))\n'
+                           '0 85 192.168.1.218:57136 20.42.73.31:443 users:(("python",pid=100,fd=10))\n'
+                           '0 0 192.168.1.218:1 8.8.8.8:443 users:(("other",pid=999,fd=3))\n')
+    assert s.nonloopback == {"20.42.73.31"}                      # the shim's telemetry upload; a stranger's socket and the mapped loopback are not counted
+
+
+def test_the_hm_driver_is_a_process_of_the_window_so_its_sockets_are_watched_too(box):
+    s = _sampler_over(box, '0 0 192.168.1.218:5 1.2.3.4:443 users:(("python",pid=555,fd=9))\n', pgrep_out="555\n")
+    assert s.nonloopback == {"1.2.3.4"}
+    assert _sampler_over(box, '0 0 192.168.1.218:5 1.2.3.4:443 users:(("python",pid=555,fd=9))\n').nonloopback == set()        # no driver running: not ours
+
+
+def test_every_process_the_window_starts_forces_onnxruntimes_telemetry_off():
+    """onnxruntime >= 1.30 ships Microsoft's 1DS SDK and uploads over HTTPS unless ORT_DISABLE_TELEMETRY=1 is set before it initialises (measured: the shim
+    connected to Azure addresses every ~2 s). Python's audit hook cannot see a connect made from C, so the setting is pinned at every place a process starts."""
+    for name in ("bakeoff.py", "bakeoff_window.sh", "hm_window.py", "bakeoff_measure.py", "embed_shim.py", "lab_driver.py", "arms/mempalace_verbatim.py"):
+        assert "ORT_DISABLE_TELEMETRY" in (REPO / "scripts/perf/zmb" / name).read_text(), name
+    assert "ORT_DISABLE_TELEMETRY=1" in bakeoff.hindsight_env(ENV_EXAMPLE, bakeoff.Cfg(), "t")

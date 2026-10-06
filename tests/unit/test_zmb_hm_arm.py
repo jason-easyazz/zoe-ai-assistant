@@ -275,17 +275,16 @@ def test_attr_of_recognises_the_lab_attributes():
 
 # ── the stubs and the registry ───────────────────────────────────────────────
 
-def test_hm_and_mv_are_registered_and_the_hindsight_tier_is_a_declared_stub():
+def test_hm_and_mv_are_registered_and_the_hindsight_tier_without_a_server_is_a_declared_skip(monkeypatch):
+    monkeypatch.setenv("ZMB_HINDSIGHT_URL", "http://127.0.0.1:1")           # nothing listens there (and never the box's real bake-off server)
     assert "HM" in ARMS and "MV" in ARMS
     hm = make_arm("HM")
     assert isinstance(hm, HMArm) and isinstance(hm.distilled, HindsightDistilledTier)
     with pytest.raises(NotImplementedError) as e:
         hm.reset(USER)
-    assert "not installed" in str(e.value) and "hindsight-api-slim" in str(e.value)
+    assert "not installed or not reachable" in str(e.value) and "hindsight-api-slim" in str(e.value)
     tier = HindsightDistilledTier()
-    calls = [lambda: tier.add_fact(USER, "x", "user_stated", ()), lambda: tier.distil(USER, [], []),
-             lambda: tier.recall(USER, "q", 5), lambda: tier.forget(USER, "x"),
-             lambda: tier.delete_sources(USER, ["a"]), lambda: tier.rows(USER)]
+    calls = [lambda: tier.reset(USER), lambda: tier.add_fact(USER, "x", "user_stated", ()), lambda: tier.distil(USER, [("c", "x")], [])]
     for call in calls:
         with pytest.raises(NotImplementedError):
             call()
@@ -299,7 +298,7 @@ def test_every_hm_cell_goes_red_with_each_named_protection_off_and_green_with_al
     assert s["not_instrumented"] == [], s["not_instrumented"]
     assert s["fail"] == [] and s["sanity_fail"] == [], s
     assert s["targets_failing"] == ["HM-F5.forget.stt-misspelling"] and s["targets_now_passing"] == []
-    assert s["skipped"] == ["HM-F6.forget.physical"]                  # needs a disk store: run under the bake-off venv
+    assert s["skipped"] == ["HM-F6.forget.physical", "HM-F8.forget.physical-distilled"]      # F6 needs the library store, F8 the real Hindsight tier + its Postgres
     assert s["pass"] == s["graded"] == 16
     for row in res["cells"]:
         if row["verdict"] == "SKIP":
@@ -398,3 +397,111 @@ def test_real_library_runs_the_same_cells_with_the_same_controls():
                            capture_output=True, text=True, timeout=300, cwd=str(REPO), env=env)
         assert p.returncode == 0, p.stdout + p.stderr
         assert "PASS" in p.stdout and "REFUSED" not in p.stderr
+
+
+# ── the REAL distilled tier (over the Hindsight double), first contact 2026-10-06 ───────────────────────────
+
+def real_tier(**kw):
+    from zmb.arms.fake_hindsight import FakeHindsight
+    from zmb.arms.fake_postgres import FakePostgres
+    pg = FakePostgres()
+    fake = FakeHindsight(pg=pg)
+    return HindsightDistilledTier(transport=fake, pg=pg, **kw), fake, pg
+
+
+def test_the_real_tier_keeps_a_bundle_as_one_document_with_its_chunk_ids_and_cascades_by_provenance():
+    tier, fake, _pg = real_tier()
+    tier.reset(USER)
+    tier.distil(USER, [("c1", "Marisol's sister is called Ines and she lives in Porto"), ("c2", "My dentist is Dr Okonkwo.")], [])
+    (post,) = [b for m, pth, b in fake.bodies if m == "POST" and pth.endswith("/memories")][-1:]
+    item = post["items"][0]
+    assert item["metadata"]["source_ids"] == "c1,c2" and "src:c1" in item["tags"] and "strategy" not in item        # the bundle is a model retain
+    assert tier.siblings(USER, ["c1"]) == ["c1", "c2"]
+    assert tier.delete_sources(USER, ["c1"]) >= 1 and tier.rows(USER) == []                                           # the whole bundle goes with its chunk
+
+
+def test_the_real_tiers_deterministic_fact_costs_no_model_call_and_is_authority_gated():
+    tier, fake, _pg = real_tier()
+    tier.reset(USER)
+    tier.add_fact(USER, "I live in Hobart", "user_stated", ("c1",))
+    assert [b for m, pth, b in fake.bodies if m == "POST" and pth.endswith("/memories")][-1]["items"][0]["strategy"] == "det"
+    assert not [x for x in fake.llm_requests if x["operation"] == "retain"]                  # chunks extraction: no trace row, no model
+    tier.add_fact(USER, "User lives in Perth.", "model_from_transcript", ())
+    assert [f.status for f in tier.rows(USER)].count("disputed") == 1 and [f.text for f in tier.recall(USER, "where do I live", 5)] == ["I live in Hobart"]
+    tier.enforce_authority = False
+    tier.add_fact(USER, "User lives in Perth.", "model_from_transcript", ())                 # the negative control: the newest evidence wins
+    assert any(f.status == "superseded" and "Hobart" in f.text for f in tier.rows(USER))
+
+
+def test_the_real_tiers_forget_deletes_by_name_remembers_the_chunks_and_the_scrub_removes_the_postgres_residue():
+    tier, fake, pg = real_tier()
+    tier.reset(USER)
+    tier.distil(USER, [("c1", "Marisol is coming round on Saturday."), ("c2", "My dentist is Dr Okonkwo.")], [])
+    assert pg.scan(["Marisol"])["clean"] is False
+    assert tier.forget(USER, "Marisol") >= 1
+    assert tier.take_orphaned_sources(USER) == ["c1", "c2"] and tier.take_orphaned_sources(USER) == []
+    assert pg.scan(["Marisol"])["clean"] is False                                       # the engine's delete alone leaves the log rows + dead tuples ...
+    tier.scrub(USER, "Marisol")
+    assert pg.scan(["Marisol"])["clean"] is True                                        # ... the scrub is a separate, switchable step
+
+
+def test_the_real_tier_down_raises_so_the_arm_degrades_the_packet_and_says_so():
+    tier, _f, _pg = real_tier()
+    tier.reset(USER)
+    tier.fail = True
+    with pytest.raises(RuntimeError, match="unavailable"):
+        tier.recall(USER, "x", 5)
+
+
+def test_every_hm_cell_is_green_on_the_real_tier_over_the_double_and_each_real_tier_control_goes_red():
+    from zmb.arms.fake_hindsight import FakeHindsight
+    from zmb.arms.fake_postgres import FakePostgres
+    pg = FakePostgres()
+    fake = FakeHindsight(pg=pg)
+    res = hm_cells.run_all("double", distilled=lambda: HindsightDistilledTier(transport=fake, pg=pg), controls="real-tier")
+    s = res["summary"]
+    assert s["fail"] == [] and s["sanity_fail"] == [] and s["not_instrumented"] == [], s
+    assert s["distilled_tier"] == "real" and s["controls_mode"] == "real-tier" and s["controls_checked"] == 4       # F1, F3, F8, T1
+    f8 = next(r for r in res["cells"] if r["id"].startswith("HM-F8"))
+    assert f8["verdict"] == "PASS" and f8["controls_verdicts"] == {"physical_erase": "FAIL"}            # the scan found residue when the scrub was off
+
+
+def test_the_real_latency_mode_measures_wall_clocks_not_the_model():
+    from zmb.arms.mempalace_verbatim import InMemoryVerbatimStore, MemPalaceVerbatimArm
+    from zmb.arms.hm_policy import Controls
+    tier, _f, _pg = real_tier()
+    arm = HMArm(distilled=tier, verbatim=MemPalaceVerbatimArm(store=InMemoryVerbatimStore(), controls=Controls()), real_latency=True)
+    arm.reset(USER)
+    arm.ingest([Turn("My dentist is Dr Okonkwo.", "owner_voice_verified")])
+    arm.run_idle_pass("", [])
+    arm.packet("who is my dentist", 5)
+    arm.packet("who is my dentist", 5, lane="voice")
+    assert len(arm.real_ms["both"]) == 1 and len(arm.real_ms["distilled"]) == 1 and len(arm.real_ms["verbatim"]) == 1 and len(arm.real_ms["cache"]) == 1
+    assert arm.real_ms["both"][0] < 5000 and arm.last.tiers == ["cache"]
+
+
+# ── first contact (2026-10-06): the attribute key has a SUBJECT, and the lab's attributes cover the spec's slots ─────
+
+def test_two_friends_homes_are_two_attributes_not_one_so_the_packet_keeps_both():
+    """Measured on the real tiers: HM kept 14 of 20 needles at hit@5 because 'friend A lives in X' and 'friend B lives in Y' were ONE attribute ('home') and the
+    packet's authority rule dropped all but one of each shape (the same class of bug as memory_supersede.exclusive_conflict, which retires other friends' homes)."""
+    assert attr_of("User's friend Priya lives in Perth.") == ("home:priya", "perth")
+    assert attr_of("User's friend Ravi lives in Cork.") == ("home:ravi", "cork")
+    assert attr_of("User lives in Perth.") == ("home", "perth") and attr_of("I live in Hobart now") == ("home", "hobart")
+    arm = HMArm(distilled=FakeDistilledTier(), verbatim=MemPalaceVerbatimArm(store=InMemoryVerbatimStore()))
+    arm.reset(USER)
+    arm.ingest([Turn("User's friend Priya lives in Perth.", "owner_taught"), Turn("User's friend Ravi lives in Cork.", "owner_taught"),
+                Turn("User's friend Tove lives in Bergen.", "owner_taught")])
+    text = "\n".join(r["text"] for r in arm.packet("where do my friends live", 8))
+    assert "Perth" in text and "Cork" in text and "Bergen" in text
+
+
+def test_the_lab_attributes_cover_the_specs_slots_so_a_models_proposal_about_any_of_them_is_held_back():
+    for text, attr in (("User works at a ferry company.", "work"), ("User is 37 years old.", "age"), ("User's birthday is 3 October 1968.", "birthday"),
+                       ("User's wife is named Anika.", "spouse"), ("User's dog is named Juniper.", "pet"), ("User's name is Priya.", "name")):
+        assert attr_of(text)[0] == attr, text
+    tier = FakeDistilledTier()
+    tier.reset(USER)
+    tier.add_fact(USER, "User works at a ferry company.", "user_stated", ())
+    tier.add_fact(USER, "User works at the botanic garden.", "model_from_transcript", ())
+    assert [f.status for f in tier.rows(USER)] == ["approved", "disputed"]           # a model cannot replace what the user said about where they work

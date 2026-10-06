@@ -31,8 +31,8 @@ USER = "demo_bar_1a2b3c4d"
 RANK = {"user_stated": 4, "user_stated_derived": 3, "user_unverified": 2, "model_from_turn": 1, "model_from_transcript": 0}
 
 
-def mk(variant="H1", **kw):
-    fake = FakeHindsight()
+def mk(variant="H1", merge=False, **kw):
+    fake = FakeHindsight(merge_observations=merge)
     kw.setdefault("settle_poll_s", 0)
     arm = hs.HindsightArm(variant, transport=fake, **kw)
     return arm, fake
@@ -206,12 +206,75 @@ def test_h0_without_the_zoe_layer_is_red_and_h1_with_it_is_green(cid):
 
 
 def test_h0_s1_signature_the_owners_observation_is_replaced_by_the_newest_evidence():
-    """Native consolidation: 'PREFER UPDATE OVER CREATE'. The owner's belief is invalidated by a later model fact (incident S1, one layer up)."""
-    arm, _f = mk("H0")
+    """The DOCUMENTED consolidation: 'PREFER UPDATE OVER CREATE'. When the engine does retire an older observation, the adapter reads it as superseded
+    (incident S1, one layer up). FIRST CONTACT (2026-10-06): the real 0.10.2 server with Gemma E4B did NOT do this in the probe (see the next test)."""
+    arm, _f = mk("H0", merge=True)
     arm.reset(USER)
     arm.ingest([Turn("User lives in Perth.", "owner_taught")])
     arm.ingest([Turn("x", "system_writer", writer="digest", proposes=("User lives in Hobart.",))])
     assert any(r["status"] == "superseded" and "Perth" in r["text"] for r in arm.stats()["rows"])     # the owner's belief was retired by a model
+
+
+def test_first_contact_the_real_engine_keeps_both_observations_valid_so_the_h0_s1_signature_does_not_reproduce_by_default():
+    """Measured on the real server (hindsight-api 0.10.2, Gemma 4 E4B, 2026-10-06): 'I live in Perth' then 'I moved to Hobart last week' consolidated into THREE valid
+    observations (lives in Perth, moved from Perth to Hobart, dentist): nothing was invalidated. The double now says the same; the H0 cells that depend on the
+    older model are read from the real run, not assumed."""
+    arm, _f = mk("H0")
+    arm.reset(USER)
+    arm.ingest([Turn("User lives in Perth.", "owner_taught")])
+    arm.ingest([Turn("x", "system_writer", writer="digest", proposes=("User lives in Hobart.",))])
+    rows = arm.stats()["rows"]
+    assert not any(r["status"] == "superseded" for r in rows)
+    assert sum(1 for r in rows if "Perth" in r["text"] and r["status"] == "approved") >= 1 and any("Hobart" in r["text"] for r in rows)
+
+
+def test_first_contact_the_double_has_the_real_servers_row_shapes():
+    """Each assertion is a field the real 0.10.2 server returned and the double used to omit or spell differently."""
+    arm, fake = mk("H2")
+    arm.reset(USER)
+    arm.ingest([Turn("User's friend Priya lives in Perth.", "owner_taught")])
+    units = arm.client.list_units(arm.bank_for(USER))
+    facts = [u for u in units if u["fact_type"] == "world"]
+    obs = [u for u in units if u["fact_type"] == "observation"]
+    assert facts and obs
+    assert facts[0]["text"].endswith("| Involving: Priya, Perth") or "| Involving:" in facts[0]["text"]        # the concise extractor appends what it found
+    assert obs[0]["document_id"] is None and obs[0]["source_memory_ids"] == [facts[0]["id"]] and obs[0]["text"].startswith("The user")
+    assert not any(t.startswith("origin:") for t in obs[0]["tags"]) and any(t.startswith("class:") for t in obs[0]["tags"])       # scope tags only
+    for key in ("date", "mentioned_at", "occurred_start", "occurred_end", "chunk_id", "proof_count", "invalidated_at", "invalidation_reason", "updated_at"):
+        assert key in facts[0], key
+    r = fake("POST", "http://127.0.0.1:18888/v1/default/banks/" + arm.bank_for(USER) + "/memories/recall", json.dumps({"query": "Priya"}).encode(), 5)
+    assert "scores" in json.loads(r[1])["results"][0]
+    v = json.loads(fake("GET", "http://127.0.0.1:18888/version", None, 5)[1])
+    assert "features" in v
+
+
+def test_first_contact_an_extraction_mode_with_a_model_reports_tokens_and_chunks_does_not_and_a_strategy_picks_per_item():
+    fake = FakeHindsight()
+    c = hs.HindsightClient("http://127.0.0.1:18888", transport=fake)
+    c.put_bank("b")
+    c.patch_config("b", {"retain_extraction_mode": "concise", "retain_strategies": {"det": {"retain_extraction_mode": "chunks"}}})
+    llm = c.retain("b", [{"content": "Ravi works at a bakery.", "document_id": "a"}])
+    det = c.retain("b", [{"content": "Ravi works at a bakery.", "document_id": "b", "strategy": "det"}])
+    assert llm["usage"]["input_tokens"] > 0 and det["usage"]["input_tokens"] == 0
+    texts_ = {u["document_id"]: u["text"] for u in c.list_units("b")}
+    assert texts_["b"] == "Ravi works at a bakery." and texts_["a"].startswith("Ravi works at a bakery.") and "Involving" in texts_["a"]
+    assert len([x for x in fake.llm_requests if x["operation"] == "retain"]) == 1                 # the chunks retain wrote no trace row
+
+
+def test_first_contact_a_read_that_names_a_forgotten_person_after_the_forget_leaves_new_residue_in_the_audit_log():
+    """Real server, 2026-10-06: ``audit_log`` stores every recall QUERY. The forget's own scrub was clean; the verification recall that named her was not.
+    The disk cells therefore scan BEFORE any read (F5 / F6 order), and the forgetting probe's recall bank is never a scanned bank."""
+    from zmb.arms.fake_postgres import FakePostgres
+    pg = FakePostgres()
+    fake = FakeHindsight(pg=pg)
+    arm = hs.HindsightArm("H1", transport=fake, pg=pg, settle_poll_s=0)
+    arm.reset(USER)
+    arm.ingest([Turn("User's friend Marisol lives in Perth.", "owner_taught")])
+    arm.forget("Marisol")
+    assert arm.disk_residue(["Marisol"])["clean"] is True
+    arm.recall("tell me about Marisol", 5)
+    assert arm.disk_residue(["Marisol"])["clean"] is False
+    arm.close()
 
 
 def test_each_zoe_protection_has_a_control_that_turns_its_cell_red():
@@ -236,7 +299,7 @@ def test_the_target_f3_passes_on_a_durable_ledger_and_fails_without_one():
 def test_the_h2_fence_isolates_authority_scopes_even_when_the_wall_is_off():
     """Wall OFF: the model's fact IS retained, but under ITS OWN class scope, so consolidation (all_strict tag isolation) never updates the owner's
     observation: the owner's belief survives. H0 has no scopes: the owner's belief is retired."""
-    for variant, kw, owner_survives in (("H2", {"off": frozenset({"authority"})}, True), ("H0", {}, False)):
+    for variant, kw, owner_survives in (("H2", {"off": frozenset({"authority"})}, True), ("H0", {"merge": True}, False)):
         arm, _f = mk(variant, **kw)
         arm.reset(USER)
         arm.ingest([Turn("User lives in Perth.", "owner_taught")])

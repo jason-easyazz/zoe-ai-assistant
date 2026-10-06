@@ -284,6 +284,41 @@ class DiskCollection:
         return self._raw.query(**kw)
 
 
+# ── a REAL Chroma collection with the REAL embedder (arm Z0e: retrieval QUALITY, as live) ────
+
+MINILM_MODEL = Path.home() / ".cache" / "chroma" / "onnx_models" / "all-MiniLM-L6-v2" / "onnx" / "model.onnx"
+
+
+def embedder_available() -> bool:
+    """Chroma importable AND Chroma's MiniLM ONNX model already on disk: Z0e never downloads one (a missing model is a SKIP)."""
+    return chroma_available() and MINILM_MODEL.is_file()
+
+
+class EmbedCollection(DiskCollection):
+    """The drawers collection over an in-process Chroma with the service's own MiniLM embedding function (``memory_service._drawers_embedding_function``):
+    documents and queries are embedded by Chroma, exactly as in the live palace (l2 space, the live default). ``LabCollection`` ranks by bag-of-words, which
+    measures the store's filters and not retrieval; this is the arm that does."""
+
+    def _embed(self, kw: dict) -> dict:
+        return kw
+
+    def query(self, **kw):
+        kw.setdefault("include", ["documents", "metadatas", "distances"])
+        return self._raw.query(**kw)
+
+
+def make_embed_collection(svc: types.SimpleNamespace) -> "EmbedCollection":
+    if not embedder_available():
+        raise NotImplementedError("arm Z0e needs chromadb and Chroma's MiniLM ONNX model already on disk "
+                                  f"({MINILM_MODEL}); this arm never downloads one")
+    import chromadb
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    os.environ["ORT_DISABLE_TELEMETRY"] = "1"          # a newer onnxruntime uploads telemetry to Microsoft: the lab never does
+    ef = svc.memory_service._drawers_embedding_function()
+    client = chromadb.EphemeralClient()
+    return EmbedCollection(client.create_collection(f"zmb-z0e-{next(_DISK_SEQ)}-{os.getpid()}", embedding_function=ef))
+
+
 # ── the lazy extractor (the negative control for extraction / abstention) ────
 
 _FEMALE_NAMES = frozenset({"dana", "tove", "priya", "marisol", "anika", "odile", "ines", "saoirse",
@@ -481,8 +516,9 @@ class LabService:
     module patches the in-process forget handler needs. ``close()`` restores every patched attribute
     (the lab leaves nothing global behind, so it is safe inside a pytest session or a long process)."""
 
-    def __init__(self, svc: types.SimpleNamespace, tag: str = "bench", disk: bool = False):
+    def __init__(self, svc: types.SimpleNamespace, tag: str = "bench", disk: bool = False, embed: bool = False):
         self.svc = svc
+        self._embed_col = None
         self._undo: list[Any] = []
         self._disk = disk
         data_dir = os.path.join(scratch_root(), f"palace-{tag}-{os.getpid()}"
@@ -495,6 +531,8 @@ class LabService:
             os.makedirs(data_dir)
             client = svc.memory_service._palace_client(data_dir)   # the service's own cached client: one SQLite
             self.col = DiskCollection(client.get_or_create_collection("mempalace_drawers"))
+        elif embed:
+            self.col = self._embed_col = make_embed_collection(svc)
         else:
             self.col = LabCollection()
         self.service = svc.memory_service.MemoryService(data_dir=data_dir)
@@ -530,6 +568,12 @@ class LabService:
     def close(self) -> None:
         while self._undo:
             self._undo.pop()()
+        if self._embed_col is not None:
+            try:
+                self._embed_col._raw._client.delete_collection(self._embed_col._raw.name)       # the ephemeral client lives as long as the process: drop the collection
+            except Exception:  # noqa: BLE001
+                pass
+            self._embed_col = None
         if self._disk:   # a real palace is a directory on disk: forget the cached client and delete the files
             key = os.path.realpath(self.data_dir)
             try:

@@ -529,7 +529,7 @@ def test_turn_validates_its_vocabulary():
 
 
 def test_arm_registry_lists_every_arm_of_the_bakeoff():
-    assert set(ARMS) == {"Z0", "Z0-off", "H0", "H1", "H2", "G", "MV", "HM"}     # MV + HM: the verbatim and combined arms (2026-10-06)
+    assert set(ARMS) == {"Z0", "Z0-off", "Z0e", "H0", "H1", "H2", "G", "MV", "HM"}     # MV + HM: the verbatim and combined arms; Z0e: Z0 over real Chroma + MiniLM (2026-10-06)
     with pytest.raises(ValueError):
         make_arm("mem0")
 

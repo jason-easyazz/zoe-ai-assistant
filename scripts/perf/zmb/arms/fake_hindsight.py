@@ -15,6 +15,20 @@ the 0.10.2 docs / source read for the decision record (docs/research/memory-syst
 * recall = token overlap, ``tags`` + ``tags_match`` (``all_strict`` / ``any_strict`` / ``any``) honoured.
 * no belief-time filter (``as_of`` is not answerable).
 
+FIRST CONTACT (2026-10-06, ``docs/research/bakeoff-setup-verification-2026-10-06.md``): the shapes below were corrected against the REAL 0.10.2 server,
+each one a place where this double used to lie to the adapter's tests:
+
+* ``concise`` extraction writes ``"<fact> | Involving: <entities>"`` (and ``| When: ...`` for a dated fact), NOT the bare sentence;
+* an LLM extraction mode (verbatim included) answers ``usage`` with real token counts, ``chunks`` (no model) answers zeros; an item may name a
+  ``strategy`` the bank defined in ``retain_strategies`` (a per-item extraction mode);
+* observations are separate units (``fact_type: observation``, ``document_id: None``, tags = the consolidation scope only - no ``origin:``),
+  ONE per source fact, text ``"The user ..."``; the older observation of an attribute is NOT invalidated when a newer fact arrives (both stay
+  ``state: valid``: the engine does not retire a belief, the Zoe layer's document delete does, and that cascades to the observation at once);
+* list items carry ``date`` / ``mentioned_at`` / ``occurred_start`` / ``occurred_end`` / ``chunk_id`` / ``proof_count`` / ``invalidated_at`` ...;
+* recall results carry ``scores``; ``/version`` lists ``features``; operations end ``completed``;
+* ``audit_log`` records every recall QUERY (the text the owner asked): a read that names a forgotten person after the forget re-creates residue;
+* the LLM trace (``llm-requests``) has ``scope`` / ``started_at`` and outlives its bank (a bank delete does not touch it).
+
 ``FakeHindsight`` is a transport: ``FakeHindsight()(method, url, body, timeout) -> (status, bytes)``, so ``HindsightClient`` runs its
 real request-building code against it with no socket. ``serve()`` wraps the same handler in a loopback ``http.server`` for the one
 test that exercises the real urllib path.
@@ -29,6 +43,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+from datetime import datetime, timezone
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Optional
@@ -55,7 +70,8 @@ def _attr(text: str) -> str:
 
 
 class FakeHindsight:
-    def __init__(self, pg: Any = None) -> None:
+    def __init__(self, pg: Any = None, merge_observations: bool = False) -> None:
+        self.merge_observations = merge_observations      # True = the engine retires an older observation of the same attribute (the pre-first-contact model)
         self.pg = pg                                       # an ``arms.fake_postgres.FakePostgres``: the store the engine writes to, or None
         self.banks: "dict[str, dict[str, Any]]" = {}
         self.calls: "list[tuple[str, str]]" = []          # (method, path) of every request
@@ -86,7 +102,7 @@ class FakeHindsight:
         if path == "/health":
             return 200, {"status": "healthy"}
         if path == "/version":
-            return 200, {"api_version": "0.10.2-fake"}
+            return 200, {"api_version": "0.10.2-fake", "features": {"observations": False, "bank_config_api": True, "audit_log": True, "llm_trace": True}}
         if path == "/v1/default/banks" and method == "GET":
             q = str(q.get("q") or "").lower()
             return 200, {"banks": [{"bank_id": n} for n in sorted(self.banks) if q in n.lower()]}
@@ -120,7 +136,8 @@ class FakeHindsight:
             self._consolidate(b, body.get("observation_scopes"))
             return 200, {"operation_id": "op-1", "deduplicated": False}
         if rest == "/llm-requests" and method == "GET":
-            return 200, {"items": list(self.llm_requests), "total": len(self.llm_requests)}
+            return 200, {"bank_id": bank, "items": [x for x in self.llm_requests if x.get("operation") == (q.get("operation") or x.get("operation"))],
+                         "total": len(self.llm_requests), "limit": int(q.get("limit", 100)), "offset": 0}
         if rest == "/operations" and method == "GET":
             if self.busy_polls > 0:
                 self.busy_polls -= 1
@@ -135,39 +152,62 @@ class FakeHindsight:
         return 404, {"detail": f"no route {method} {rest}"}
 
     # ── retain / consolidate / delete ──
-    def _unit(self, b: dict, text: str, doc: str, tags: list, meta: dict, kind: str = "world") -> dict:
+    def _unit(self, b: dict, text: str, doc: str, tags: list, meta: dict, kind: str = "world", when: str = "") -> dict:
         self._n += 1
-        u = {"id": f"u{self._n:05d}", "text": text, "document_id": doc, "tags": list(tags), "metadata": dict(meta),
-             "state": "valid", "fact_type": kind, "entities": ", ".join(re.findall(r"\b[A-Z][a-z]{2,}\b", text)),
-             "context": "", "consolidated": False, "sources": []}
+        ents = re.findall(r"\b[A-Z][a-z]{2,}\b", text)
+        now = datetime.now(timezone.utc).isoformat()
+        u = {"id": f"u{self._n:05d}", "text": text, "document_id": doc or None, "tags": list(tags), "metadata": dict(meta),
+             "state": "valid", "fact_type": kind, "entities": ", ".join(ents), "context": "", "consolidated": False, "sources": [],
+             "date": when or now, "mentioned_at": when or now, "occurred_start": None, "occurred_end": None,
+             "chunk_id": f"{b['name']}_{doc}_0" if doc else None,
+             "proof_count": 1, "consolidated_at": None, "consolidation_failed_at": None, "invalidation_reason": None, "invalidated_at": None,
+             "edited_at": None, "updated_at": now}
         b["units"].append(u)
         return u
 
     def _retain(self, b: dict, body: dict) -> "tuple[int, Any]":
         if self.fail_retain > 0:
             self.fail_retain -= 1
-            self.llm_requests.append({"status": "error", "operation": "retain"})
+            self.llm_requests.append(self._trace("error", "retain"))
             return 500, {"detail": "extraction failed: invalid JSON from the model"}
-        self.llm_requests.append({"status": "success", "operation": "retain"})
         cfg = b["config"]
+        tokens = {"input_tokens": 0, "output_tokens": 0}
         for item in body.get("items") or []:
+            mode = cfg.get("retain_extraction_mode", "concise")
+            strat = (cfg.get("retain_strategies") or {}).get(item.get("strategy") or "")
+            if isinstance(strat, dict):                      # a per-item strategy overrides the bank's extraction mode
+                mode = strat.get("retain_extraction_mode", mode)
             doc = item.get("document_id") or f"auto-{self._n + 1}"
             self._drop_document(b, doc)                      # re-retaining a document replaces it and all its memories
             text = item.get("content") or ""
             b["docs"][doc] = {"text": text, "tags": item.get("tags") or []}
             if self.pg is not None:
-                self._pg_retain(b["name"], doc, text, item)
-            mode = cfg.get("retain_extraction_mode", "concise")
-            parts = [text] if mode in ("verbatim", "chunks") else [s for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+                self._pg_retain(b["name"], doc, text, item, llm=mode != "chunks")
+            if mode == "chunks":
+                parts = [text]
+            else:
+                self.llm_requests.append(self._trace("success", "retain", b["name"]))
+                tokens["input_tokens"] += 1380 if mode == "verbatim" else 2140
+                tokens["output_tokens"] += 110
+                parts = [text] if mode == "verbatim" else [s for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
             for p in parts:
-                self._unit(b, p, doc, item.get("tags") or [], item.get("metadata") or {})
+                ents = ", ".join(dict.fromkeys(re.findall(r"\b[A-Z][a-z]{2,}\b", p)))
+                shown = p if mode in ("chunks", "verbatim") or not ents else f"{p.rstrip()} | Involving: {ents}"      # the real concise extractor appends what it found
+                self._unit(b, shown, doc, item.get("tags") or [], item.get("metadata") or {})
             if cfg.get("enable_observations") and cfg.get("enable_auto_consolidation", True):
                 self._consolidate(b, item.get("observation_scopes") or None)
-        return 200, {"success": True, "bank_id": "x", "items_count": len(body.get("items") or []), "async": False,
-                     "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}}
+        tokens["total_tokens"] = tokens["input_tokens"] + tokens["output_tokens"]
+        return 200, {"success": True, "bank_id": b["name"], "items_count": len(body.get("items") or []), "async": False, "operation_id": None,
+                     "operation_ids": None, "usage": {**tokens, "cached_tokens": 0, "thoughts_tokens": 0}}
+
+    def _trace(self, status: str, op: str, bank: str = "") -> dict:
+        return {"status": status, "operation": op, "scope": "retain_extract_facts" if op == "retain" else op, "bank_id": bank,
+                "started_at": datetime.now(timezone.utc).isoformat(), "input_tokens": 1380, "output_tokens": 110}
 
     def _consolidate(self, b: dict, scopes: Any) -> None:
-        """Newest evidence wins inside a tag scope. ``scopes`` = tag sets to consolidate (None = one global scope)."""
+        """Observations over the facts of a tag scope (``scopes`` = tag sets, None = one global scope). Real 0.10.2: ONE observation per source fact,
+        tagged with the scope only, never retiring an older belief (both stay valid). ``merge_observations`` restores the older model, in which a
+        newer fact of the same attribute invalidated the older observation (newest evidence wins)."""
         if not b["config"].get("enable_observations", False):
             return
         scope_sets = [frozenset(s) for s in scopes] if scopes else [None]
@@ -177,18 +217,22 @@ class FakeHindsight:
                     continue
                 key = (_attr(u["text"]), sc if sc is not None else frozenset())
                 u["consolidated"] = True
-                if not key[0]:
-                    continue
-                for o in b["units"]:
-                    if o["fact_type"] == "observation" and o["state"] == "valid" and o.get("key") == key:
-                        o["state"] = "invalidated"            # "STATE CHANGES - UPDATE CONCISELY": the older belief is replaced
-                new = self._unit(b, u["text"], "", sorted(sc) if sc is not None else [], {}, "observation")
+                u["consolidated_at"] = datetime.now(timezone.utc).isoformat()
+                if self.merge_observations:
+                    if not key[0]:
+                        continue
+                    for o in b["units"]:
+                        if o["fact_type"] == "observation" and o["state"] == "valid" and o.get("key") == key:
+                            o["state"] = "invalidated"
+                base = u["text"].split(" | ")[0]
+                new = self._unit(b, f"The user: {base}", "", sorted(sc) if sc is not None else [], {}, "observation")
                 new["key"], new["sources"] = key, [u["id"]]
 
-    def _pg_retain(self, bank: str, doc: str, text: str, item: dict) -> None:
+    def _pg_retain(self, bank: str, doc: str, text: str, item: dict, llm: bool = True) -> None:
         """What one retained item leaves in Postgres (the real shapes: ``pilot/pg_erase_probe.py``)."""
         self.pg.write("audit_log", bank, json.dumps({"items": [item]}))
-        self.pg.write("llm_requests", bank, text)
+        if llm:                                              # chunks mode never calls the model: no trace row
+            self.pg.write("llm_requests", bank, text)
         self.pg.write("documents", bank, text, ref=doc)
         self.pg.write("memory_units", bank, text, ref=doc)
         have = {r["text"] for r in self.pg.rows.get("entities", []) if r["bank"] == bank and r["live"]}
@@ -235,8 +279,12 @@ class FakeHindsight:
             # so a zero-overlap unit is ranked last, not dropped (a token-overlap-only double could never answer a paraphrase)
             scored.append((len(q & _toks(u["text"])), u["id"], u))
         scored.sort(key=lambda t: (-t[0], t[1]))
+        if self.pg is not None:                              # audit_log keeps the whole request: the QUERY text is on disk until the bank / the name is erased
+            self.pg.write("audit_log", b["name"], json.dumps({"query": body.get("query") or ""}))
         res = [{"id": u["id"], "text": u["text"], "type": u["fact_type"], "tags": u["tags"], "document_id": u["document_id"] or None,
-                "metadata": u["metadata"], "entities": []} for _o, _i, u in scored[:20]]
+                "metadata": u["metadata"], "entities": None, "context": u["context"], "chunk_id": u["chunk_id"], "source_fact_ids": None,
+                "scores": {"final": round(1.0 + o * 0.1, 3), "reranker": None, "semantic": 0.5, "keyword": None}, "attachments": None}
+               for o, _i, u in scored[:20]]
         return 200, {"results": res}
 
     def _list(self, b: dict, q: dict) -> "tuple[int, Any]":

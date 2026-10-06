@@ -185,7 +185,7 @@ class MemPalaceLibraryStore:
             scratch_cache.parent.mkdir(parents=True, exist_ok=True)
             scratch_cache.symlink_to(real_cache)
         os.environ.update({"HOME": str(self.home), "MEMPALACE_CONFIG_DIR": str(self.home / ".mempalace-cfg"),
-                           "ANONYMIZED_TELEMETRY": "False", "HF_HUB_OFFLINE": "1"})
+                           "ANONYMIZED_TELEMETRY": "False", "HF_HUB_OFFLINE": "1", "ORT_DISABLE_TELEMETRY": "1"})
 
     def _restore_env(self) -> None:
         for k, v in self._saved.items():

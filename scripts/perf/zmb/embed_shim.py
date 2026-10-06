@@ -39,6 +39,10 @@ from typing import Any, Callable, Optional, Protocol, Sequence
 
 os.environ.setdefault("HF_HUB_OFFLINE", "1")          # belt and braces: nothing here may reach the network
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+# onnxruntime >= 1.30 ships Microsoft's 1DS telemetry SDK and UPLOADS events over HTTPS (mobile.events.data.microsoft.com, Azure addresses) by default: found at
+# first contact (2026-10-06) by the window's ``ss`` sampler, invisible to the Python-level egress hook (it connects from C). ``ORT_DISABLE_TELEMETRY=1`` before
+# ORT initialises creates no uploader, no events and no device id. FORCED, not defaulted: an inherited ``0`` must not win.
+os.environ["ORT_DISABLE_TELEMETRY"] = "1"
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 11501
@@ -141,6 +145,9 @@ class OnnxEmbedder:
         import numpy as np
         import onnxruntime as ort
         from tokenizers import Tokenizer
+
+        if hasattr(ort, "disable_telemetry_events"):      # the API route as well (the environment variable is the one that stops the uploader)
+            ort.disable_telemetry_events()
 
         self._np = np
         self.model_id = model_id
