@@ -902,6 +902,9 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
             except Exception:
                 pass
 
+            # which of the user's turns the fact came from (ZMB A3): its words and its chat_messages id
+            excerpt, turn_id = locate_turn(item, fact, chat_text)
+
             # ── Contradiction check ──────────────────────────────────────
             # Pull the top-3 semantically similar existing facts and ask
             # the LLM whether any of them contradict the new one. If yes,
@@ -931,6 +934,8 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                         # supports the fact, or the digest is an inference and cannot
                         # overrule what the user said
                         anchor_text=fact_anchor(item, chat_text) or "",
+                        source_excerpt=excerpt,
+                        turn_ref=turn_id,
                     )
                 except MemoryServiceError as exc:
                     logger.warning(
@@ -977,6 +982,8 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                         actor="digest",
                         note="nightly digest supersede (QA F9)",
                         anchor_text=fact_anchor(item, chat_text) or "",
+                        source_excerpt=excerpt,
+                        turn_ref=turn_id,
                     )
                     if new_ref is not None:
                         result["superseded"] += 1
@@ -994,6 +1001,8 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                     status="approved",
                     tags=tags,
                     anchor_text=fact_anchor(item, chat_text) or "",
+                    source_excerpt=excerpt,
+                    user_turn_id=turn_id,
                 )
             except MemoryServiceError as exc:
                 logger.warning("memory_digest: ingest failed for %s: %s", user_id, exc)
@@ -1095,11 +1104,24 @@ async def _emotional_memory_pass(user_id: str, chat_text: str, svc) -> int:
     return stored
 
 
+class Transcript(str):
+    """The day's user turns joined by newlines (a plain ``str`` everywhere it is used as one), that also
+    remembers which ``chat_messages`` row each turn came from: ``turns`` = ``((message_id, content), ...)``.
+    A loader that has no ids (a test double, the bench lab) returns a bare ``str`` and ``locate_turn`` falls back
+    to a content-addressed id."""
+    turns: tuple = ()
+
+    def __new__(cls, text: str = "", turns=()):
+        obj = super().__new__(cls, text)
+        obj.turns = tuple(turns)
+        return obj
+
+
 async def _load_todays_messages(user_id: str, db=None) -> str:
     """Load today's user-turn messages using per-message metadata ownership."""
     owner_expr = _message_owner_expr()
     sql = """
-            SELECT cm.content
+            SELECT cm.content, cm.id
             FROM chat_messages cm
             JOIN chat_sessions cs ON cm.session_id = cs.id
             WHERE """ + owner_expr + """ = ?
@@ -1128,9 +1150,18 @@ async def _load_todays_messages(user_id: str, db=None) -> str:
                 rows = await (await _db.execute(sql, params)).fetchall()
         if not rows:
             return ""
-        lines = [row[0] for row in rows if row[0]]
-        lines = await _skip_forgotten_turns(user_id, lines, "digest")
-        return "\n".join(lines)
+        pairs = [(row[0], (str(row[1]) if len(row) > 1 and row[1] is not None else ""))
+                 for row in rows if row[0]]
+        lines = await _skip_forgotten_turns(user_id, [c for c, _ in pairs], "digest")
+        # ``lines`` is a subsequence of the contents, in order: walk both to keep each kept turn's message id
+        turns, i = [], 0
+        for line in lines:
+            while i < len(pairs) and pairs[i][0] != line:
+                i += 1
+            if i < len(pairs):
+                turns.append((pairs[i][1], line))
+                i += 1
+        return Transcript("\n".join(lines), turns)
     except Exception as exc:
         logger.warning("memory_digest: could not load messages for %s: %s", user_id, exc)
         return ""
@@ -1169,6 +1200,29 @@ def fact_anchor(item: dict, user_text: str) -> str | None:
     if quote and any(quote in squash(line) for line in str(user_text or "").split("\n")):
         return str(item.get("quote")).strip()
     return None
+
+
+def locate_turn(item: dict, fact: str, user_text: str) -> tuple[str | None, str | None]:
+    """``(source_excerpt, user_turn_id)`` of the user turn a transcript-mined fact came from (ZMB A3).
+
+    The excerpt is the user's own verbatim words: the model's ``quote`` when it is a verbatim span of one turn
+    (``fact_anchor``), else the sentence that entails the fact (``memory_authority.supporting_span``). The id is
+    the ``chat_messages`` id of the turn that holds it when the loader recorded it (``Transcript.turns``), else
+    ``None`` and ``MemoryService.ingest`` stamps a content-addressed id of the excerpt. ``(None, None)`` when no
+    user turn holds the words: a fact no user sentence backs has no turn to point at."""
+    anchor = fact_anchor(item, user_text)
+    if anchor is None:
+        return None, None
+    quoted = isinstance(item, dict) and "quote" in item
+    span = str(anchor).strip() if quoted else memory_authority.supporting_span(fact, user_text)
+    if not span:
+        return None, None
+    squash = lambda t: re.sub(r"\s+", " ", str(t or "")).strip().lower()  # noqa: E731
+    want = squash(span)
+    for message_id, content in getattr(user_text, "turns", ()) or ():
+        if want in squash(content):
+            return span, (message_id or None)
+    return span, None
 
 
 class ExtractorError(RuntimeError):

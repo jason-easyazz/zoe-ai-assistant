@@ -396,12 +396,16 @@ async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
                                session_id: Optional[str], user_turn_id: Optional[str],
                                memory_type: str, confidence: float,
                                tags: list[str], anchor_text: Optional[str] = None,
+                               source_excerpt: Optional[str] = None,
                                speaker_verified: Optional[bool] = None) -> str:
     """Ingest a conversational fact, merging it with an equivalent existing row.
 
     ``anchor_text`` is the user's OWN turn text the fact was mined from (user turns only):
     a model-assisted source (idle consolidation) earns ``user_stated`` authority only when
     it supports the fact (memory_authority); without it the fact is ``inferred``.
+
+    ``source_excerpt`` is the user's verbatim utterance the row is written from (ZMB A3): the teach lane
+    passes the words it was taught; the write boundary scrubs and caps it.
 
     Returns an outcome string so callers can be HONEST about what happened
     (QA review F13 — teach replies must not claim success over a silent drop):
@@ -455,7 +459,7 @@ async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
         text, user_id=user_id, source=source,
         session_id=session_id, user_turn_id=user_turn_id,
         memory_type=memory_type, confidence=confidence, status="approved",
-        tags=tags, metadata=metadata, anchor_text=anchor_text,
+        tags=tags, metadata=metadata, anchor_text=anchor_text, source_excerpt=source_excerpt,
         **({} if speaker_verified is None else {"speaker_verified": speaker_verified}),
     )
     new_id = getattr(ref, "id", None)
@@ -523,6 +527,7 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
     text = (text or "").strip()
     if not text:
         return None
+    utterance = text   # what the person actually said: the evidence beside the row (the opener strip below edits `text`)
     # STORE (imperative teach) vs RECALL (a question). The tricky case: "Do you
     # remember what my mum's name is?" is a RECALL question that happens to contain
     # the word 'remember' — it must not be mistaken for the imperative "remember
@@ -668,6 +673,7 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
             svc, text, user_id=user_id, source="voice_fact",
             session_id=session_id or None, user_turn_id=user_turn_id,
             memory_type="fact", confidence=0.85, tags=["voice", "self"],
+            source_excerpt=utterance,
             **({} if speaker_verified is None else {"speaker_verified": speaker_verified}),
         )
     except Exception as exc:

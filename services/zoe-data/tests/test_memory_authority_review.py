@@ -166,7 +166,7 @@ def test_the_probe_end_to_end_a_relatives_sentence_cannot_supersede_the_owners_r
     finally:
         ma.supports = real
     assert win is None  # a derived paraphrase never overrides a DIRECT row even with a perfect anchor
-    derived = put(svc, "User lives in Alice Springs.", "turn_digest", source_excerpt="I live in Alice Springs",
+    derived = put(svc, "User lives in Alice Springs.", "turn_digest", source_excerpt="Alice Springs is where I live",
                   user_turn_id="d1")
     ma.supports = lambda *a, **k: True
     try:

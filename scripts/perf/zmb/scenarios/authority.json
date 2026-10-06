@@ -122,7 +122,7 @@
     },
     {
       "id": "A7.panel_unverified_kept.<attr.name>",
-      "title": "an unconfirmed panel voice's <attr.name> is KEPT as user_unverified (not lost, and not the owner's own statement)",
+      "title": "an unconfirmed panel voice's <attr.name> is KEPT as user_unverified (a pending candidate - not lost, and not the owner's own statement)",
       "tier": "store",
       "kind": "script",
       "controls": ["speaker"],
@@ -139,8 +139,8 @@
       ],
       "probes": [
         {"kind": "store", "assertions": [
-          {"op": "present", "contains": ["<attr.intruder_needle>"], "statuses": ["approved"]},
-          {"op": "all_have", "contains": ["<attr.intruder_needle>"], "statuses": ["approved"], "field": "authority_class", "equals": "user_unverified"}
+          {"op": "present", "contains": ["<attr.intruder_needle>"], "statuses": ["pending"]},
+          {"op": "all_have", "contains": ["<attr.intruder_needle>"], "statuses": ["pending"], "field": "authority_class", "equals": "user_unverified"}
         ]}
       ]
     },

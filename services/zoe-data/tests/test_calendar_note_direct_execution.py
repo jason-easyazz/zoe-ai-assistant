@@ -86,16 +86,16 @@ async def test_calendar_create_writes_event_and_confirms(monkeypatch):
 
     result = await execute_intent(
         Intent("calendar_create",
-               {"title": "Dentist", "date": "2026-07-10", "time": "14:30"}),
+               {"title": "School assembly", "date": "2026-07-10", "time": "14:30"}),
         "family-admin",
     )
 
     assert result is not None
-    assert result.startswith("Added Dentist to your calendar")
+    assert result.startswith("Added School assembly to your calendar")
     inserts = db.sql_matching("INSERT INTO events")
     assert len(inserts) == 1
     _sql, params = inserts[0]
-    assert "Dentist" in params
+    assert "School assembly" in params
     assert "2026-07-10" in params
     assert "14:30" in params
     # timed event → all_day 0, visibility family
