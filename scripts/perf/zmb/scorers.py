@@ -45,12 +45,17 @@ def merge(*scores: Score) -> Score:
 
 def score_disk(report: "dict[str, Any]", *, stage: str = "write") -> Score:
     """The forgotten text is PHYSICALLY gone: ``report`` is ``memory_residue.scan_palace``'s output (counts per
-    token / file / SQLite page owner - never text). Any byte-hit anywhere fails the cell at the write stage."""
+    token / file / SQLite page owner - never text) or ``pg_store.scan``'s (the same plus the Postgres relation each hit sits in and the tables with a
+    LIVE row naming the token). Any byte-hit, or live row, anywhere fails the cell at the write stage."""
     toks = report.get("tokens") or {}
     total = sum(int(t.get("total", 0)) for t in toks.values())
     where = sorted({f for t in toks.values() for f in (t.get("files") or {})})
     owners = sorted({o for t in toks.values() for o in (t.get("sqlite_pages") or {})})
+    pg_rel = sorted({o for t in toks.values() for o in (t.get("pg_relations") or {})})
+    live = sorted({o for t in toks.values() for o, n in (t.get("live_rows") or {}).items() if n})
     ev = {"tokens": len(toks), "byte_hits": total, "files": where[:8], "sqlite_page_owners": owners[:8]}
+    if pg_rel or live or any("pg_relations" in t for t in toks.values()):             # a Postgres store: say which relations / tables (names only)
+        ev.update(pg_relations=pg_rel[:8], live_row_tables=live[:8])
     ok = bool(toks) and total == 0
     return Score(ok=ok, stage="" if ok else stage, evidence=ev)
 

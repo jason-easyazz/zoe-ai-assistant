@@ -18,6 +18,11 @@ the 0.10.2 docs / source read for the decision record (docs/research/memory-syst
 ``FakeHindsight`` is a transport: ``FakeHindsight()(method, url, body, timeout) -> (status, bytes)``, so ``HindsightClient`` runs its
 real request-building code against it with no socket. ``serve()`` wraps the same handler in a loopback ``http.server`` for the one
 test that exercises the real urllib path.
+
+``FakeHindsight(pg=FakePostgres(...))`` also writes what the engine writes to its Postgres (``arms.fake_postgres``): a retain leaves a document,
+a memory unit, an entity, an ``audit_log`` row (the whole request) and an ``llm_requests`` row (the extraction prompt); a document delete kills the
+document and its units (their bytes stay until a VACUUM FULL) and leaves the entity and the log rows; a bank delete kills the bank's engine rows and
+leaves the log rows. That is the measured behaviour (``pilot/pg_erase_probe.py``) the Zoe layer's physical erase exists for.
 """
 from __future__ import annotations
 
@@ -50,7 +55,8 @@ def _attr(text: str) -> str:
 
 
 class FakeHindsight:
-    def __init__(self) -> None:
+    def __init__(self, pg: Any = None) -> None:
+        self.pg = pg                                       # an ``arms.fake_postgres.FakePostgres``: the store the engine writes to, or None
         self.banks: "dict[str, dict[str, Any]]" = {}
         self.calls: "list[tuple[str, str]]" = []          # (method, path) of every request
         self.bodies: "list[tuple[str, str, Any]]" = []     # (method, path, parsed body)
@@ -81,15 +87,23 @@ class FakeHindsight:
             return 200, {"status": "healthy"}
         if path == "/version":
             return 200, {"api_version": "0.10.2-fake"}
+        if path == "/v1/default/banks" and method == "GET":
+            q = str(q.get("q") or "").lower()
+            return 200, {"banks": [{"bank_id": n} for n in sorted(self.banks) if q in n.lower()]}
         m = re.match(r"^/v1/default/banks/([^/]+)(/.*)?$", path)
         if not m:
             return 404, {"detail": "no route"}
         bank, rest = m.group(1), m.group(2) or ""
         if rest == "" and method in ("PUT", "PATCH"):
-            self.banks.setdefault(bank, {"config": {}, "docs": {}, "units": []})
+            if bank not in self.banks and self.pg is not None:
+                self.pg.write("banks", bank, bank, ref=bank)
+            self.banks.setdefault(bank, {"config": {}, "docs": {}, "units": [], "name": bank})
             return 200, {"bank_id": bank}
         if rest == "" and method == "DELETE":
-            return (200, {"success": True}) if self.banks.pop(bank, None) is not None else (404, {"detail": "no bank"})
+            gone = self.banks.pop(bank, None)
+            if gone is not None and self.pg is not None:
+                self.pg.drop_bank(bank)
+            return (200, {"success": True}) if gone is not None else (404, {"detail": "no bank"})
         b = self.banks.get(bank)
         if b is None:
             return 404, {"detail": f"Bank '{bank}' not found"}
@@ -141,6 +155,8 @@ class FakeHindsight:
             self._drop_document(b, doc)                      # re-retaining a document replaces it and all its memories
             text = item.get("content") or ""
             b["docs"][doc] = {"text": text, "tags": item.get("tags") or []}
+            if self.pg is not None:
+                self._pg_retain(b["name"], doc, text, item)
             mode = cfg.get("retain_extraction_mode", "concise")
             parts = [text] if mode in ("verbatim", "chunks") else [s for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
             for p in parts:
@@ -169,7 +185,22 @@ class FakeHindsight:
                 new = self._unit(b, u["text"], "", sorted(sc) if sc is not None else [], {}, "observation")
                 new["key"], new["sources"] = key, [u["id"]]
 
+    def _pg_retain(self, bank: str, doc: str, text: str, item: dict) -> None:
+        """What one retained item leaves in Postgres (the real shapes: ``pilot/pg_erase_probe.py``)."""
+        self.pg.write("audit_log", bank, json.dumps({"items": [item]}))
+        self.pg.write("llm_requests", bank, text)
+        self.pg.write("documents", bank, text, ref=doc)
+        self.pg.write("memory_units", bank, text, ref=doc)
+        have = {r["text"] for r in self.pg.rows.get("entities", []) if r["bank"] == bank and r["live"]}
+        for word in re.findall(r"\b[A-Z][a-z]{2,}\b", text):
+            if word not in have and word != "User":
+                self.pg.write("entities", bank, word, ref=word)
+                have.add(word)
+
     def _drop_document(self, b: dict, doc: str) -> int:
+        if self.pg is not None:
+            self.pg.kill("documents", b["name"], doc)
+            self.pg.kill("memory_units", b["name"], doc)
         gone = {u["id"] for u in b["units"] if u["document_id"] == doc}
         b["units"] = [u for u in b["units"] if u["document_id"] != doc]
         for o in b["units"]:                                  # the stale-observation sweep
@@ -200,9 +231,9 @@ class FakeHindsight:
         for u in b["units"]:
             if u["state"] != "valid" or not self._tag_ok(u["tags"], body.get("tags") or [], body.get("tags_match", "any")):
                 continue
-            ov = len(q & _toks(u["text"]))
-            if ov:
-                scored.append((ov, u["id"], u))
+            # semantic recall returns the NEAREST units even when none shares a word with the query ("where do I live" -> "User moved to Perth"),
+            # so a zero-overlap unit is ranked last, not dropped (a token-overlap-only double could never answer a paraphrase)
+            scored.append((len(q & _toks(u["text"])), u["id"], u))
         scored.sort(key=lambda t: (-t[0], t[1]))
         res = [{"id": u["id"], "text": u["text"], "type": u["fact_type"], "tags": u["tags"], "document_id": u["document_id"] or None,
                 "metadata": u["metadata"], "entities": []} for _o, _i, u in scored[:20]]
