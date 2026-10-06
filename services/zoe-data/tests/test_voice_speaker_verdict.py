@@ -228,7 +228,7 @@ def test_a_verified_voice_self_fact_is_the_owners_own_statement(svc):
 
 def test_an_unverified_voice_self_fact_is_user_unverified(svc):
     assert _say(svc, "I live in Perth", False) == 1
-    assert _rows(svc, "Perth") == [("user_unverified", "approved")]
+    assert _rows(svc, "Perth") == [("user_unverified", "pending")]
 
 
 def test_no_verdict_leaves_the_class_unchanged(svc):
@@ -257,7 +257,7 @@ def _reconcile_into(monkeypatch, svc, needle):
 
 def test_a_later_verified_statement_supersedes_an_unverified_one(svc, monkeypatch):
     _say(svc, "I live in Hobart", False)
-    assert _rows(svc, "Hobart") == [("user_unverified", "approved")]
+    assert _rows(svc, "Hobart") == [("user_unverified", "pending")]
     _reconcile_into(monkeypatch, svc, "Hobart")
     _say(svc, "I live in Perth", True, session="s2")
     assert ("user_stated", "approved") in _rows(svc, "Perth")
@@ -282,7 +282,7 @@ def test_expert_dispatch_carries_the_verdict_to_the_voice_fact_writer(svc, monke
             memory_type="fact", confidence=0.85, tags=["voice", "self"], speaker_verified=verdict)
 
     asyncio.run(store("User's dog is named Biscuit.", False))
-    assert _rows(svc, "Biscuit") == [("user_unverified", "approved")]
+    assert _rows(svc, "Biscuit") == [("user_unverified", "pending")]
     asyncio.run(store("User's cat is named Pickle.", None))
     assert _rows(svc, "Pickle") == [("user_stated", "approved")]
 
@@ -304,6 +304,11 @@ def test_recall_labels_an_unverified_row_and_never_says_you_said(svc):
     from routers import memories
 
     _say(svc, "I live in Hobart", False)
+    # ZMB I2: a fresh unverified self-fact is held `pending` (never recalled at all), so the label guards the
+    # unverified rows that ARE approved - rows written before the hold existed. Simulate one.
+    for doc, meta in svc._col.rows.values():
+        if "Hobart" in doc:
+            meta["status"] = "approved"
     _say(svc, "I work at Acme", True, session="s2")
     refs = svc._metadata_read(UID, 50)
     assert {r.text for r in refs} >= {"User lives in Hobart.", "User works at Acme."} or len(refs) == 2
