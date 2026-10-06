@@ -19,7 +19,7 @@ What each ``Turn`` becomes (the lab has no brain, so a model writer's output is 
 * ``system_writer`` -> each proposed fact through ``ingest`` (``op=say``), ``review(edit)`` or
   ``review(archive)`` under the writer's own label, with the turn text as the user-evidence anchor
 
-Z0 runs with the flags the live service runs with, switched on around every operation (``_LIVE_FLAGS``): the code
+Z0 runs with the flags the live service runs with, switched on around every operation (``people_graph.LIVE_FLAGS``): the code
 defaults are OFF, ``services/zoe-data/.env`` turns them ON, and a bench that measured the defaults would be measuring
 a system that is not deployed. The ``supersede`` control switches ``ZOE_MEMORY_IMPLICIT_SUPERSEDE`` back off.
 """
@@ -30,17 +30,13 @@ import contextlib
 import hashlib
 import importlib
 import importlib.util
-import os
 import re
 import sys
 import types
 from typing import Any
 
 from .base import Arm, IngestReport, OPTIONAL_ROW_KEYS, ROW_KEYS, Turn
-
-#: the flags ``services/zoe-data/.env`` turns ON that the code leaves OFF (a bench of the defaults would measure
-#: a system that is not deployed): the implicit supersede (nightly conflict pass, ``invalid_at``) and temporal edges
-_LIVE_FLAGS = {"ZOE_MEMORY_IMPLICIT_SUPERSEDE": "1", "ZOE_TEMPORAL_RELATIONSHIPS_ENABLED": "1"}
+from .people_graph import PeopleGraph, live_context
 
 DEMO_USER_RE = re.compile(r"^demo_bar_[0-9a-f]{8}$")
 
@@ -112,7 +108,7 @@ class Z0Arm(Arm):
         self._clock = 0.0
         self._prev_user = ""
         self._refused = 0
-        self._edge_db = None
+        self.graph = PeopleGraph(self._run)       # the people graph (A8): arms.people_graph, shared with the Hindsight arms' Zoe layer
         self._heap_scrub_ours = False
 
     # ── lifecycle ─────────────────────────────────────────────────────────
@@ -121,7 +117,7 @@ class Z0Arm(Arm):
             raise ValueError(f"refusing non-demo identity {user_id!r} (must match {DEMO_USER_RE.pattern})")
         if self._lab_service is not None:
             self._lab_service.close()
-        self._close_edge_db()
+        self.graph.close()
         self._lab_service = self._lab.LabService(self.svc, tag=self.name, disk=disk)
         if disk and not self._heap_scrub_ours:
             # The disk cells measure the RECOMMENDED deployment: host heap scrubbing on (HNSW heap residue is a
@@ -135,16 +131,8 @@ class Z0Arm(Arm):
         self._refused = 0
         self.svc.memory_tombstones.clear_all(user_id)
 
-    def _close_edge_db(self) -> None:
-        if self._edge_db is not None and not self._loop.is_closed():
-            try:
-                self._run(self._edge_db.close())
-            except Exception:  # noqa: BLE001 - an in-memory database: nothing to lose
-                pass
-        self._edge_db = None
-
     def close(self) -> None:
-        self._close_edge_db()
+        self.graph.close()
         if self._lab_service is not None:
             self._lab_service.close()
             self._lab_service = None
@@ -169,29 +157,11 @@ class Z0Arm(Arm):
         real_time = mt.time
         clock = self._clock
         mt.time = types.SimpleNamespace(monotonic=lambda: real_time.monotonic() + clock)
-        stub = types.ModuleType("pending_suggestions")
-
-        async def no_offers(_uid, _name):
-            return 0
-        stub.resolve_person_offers_by_name = no_offers
-        had = sys.modules.get("pending_suggestions")
-        sys.modules["pending_suggestions"] = stub
-        saved_env = {k: os.environ.get(k) for k in _LIVE_FLAGS}
-        os.environ.update(_LIVE_FLAGS)
         try:
-            with self._lab.controls_off(self.off, self.svc):
+            with live_context(), self._lab.controls_off(self.off, self.svc):
                 yield
         finally:
-            for k, v in saved_env.items():
-                if v is None:
-                    os.environ.pop(k, None)
-                else:
-                    os.environ[k] = v
             mt.time = real_time
-            if had is None:
-                sys.modules.pop("pending_suggestions", None)
-            else:
-                sys.modules["pending_suggestions"] = had
 
     def _run(self, coro):
         return self._loop.run_until_complete(coro)
@@ -368,63 +338,15 @@ class Z0Arm(Arm):
             out = self._run(md._implicit_conflict_pass(self._user))
         return dict(out) if out else {"pairs": 0, "superseded": 0, "enabled": False}
 
-    # ── the people graph (A8): the real writer over an in-memory SQLite ────────────────────────────────────
-    _EDGE_DDL = (
-        "CREATE TABLE people (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, relationship TEXT, "
-        "circle TEXT, context TEXT, notes TEXT, visibility TEXT, deleted INTEGER NOT NULL DEFAULT 0, "
-        "is_partial INTEGER NOT NULL DEFAULT 0, last_contacted_at TEXT)",
-        "CREATE TABLE person_relationships (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, person_a_id TEXT NOT NULL, "
-        "person_b_id TEXT NOT NULL, rel_type TEXT NOT NULL, rel_a_to_b TEXT NOT NULL, rel_b_to_a TEXT NOT NULL, "
-        "rel_group TEXT NOT NULL, notes TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
-        # migrations 0015 (temporal edges) and 0037 (the writer's authority / origin stamp)
-        "ALTER TABLE person_relationships ADD COLUMN valid_from TEXT",
-        "ALTER TABLE person_relationships ADD COLUMN valid_to TEXT",
-        "ALTER TABLE person_relationships ADD COLUMN superseded_by TEXT",
-        "CREATE UNIQUE INDEX person_relationships_pair_active ON person_relationships(user_id, person_a_id, "
-        "person_b_id) WHERE valid_to IS NULL",
-        "ALTER TABLE person_relationships ADD COLUMN authority TEXT",
-        "ALTER TABLE person_relationships ADD COLUMN origin TEXT",
-    )
-
-    async def _open_edge_db(self):
-        import aiosqlite
-        db = await aiosqlite.connect(":memory:")
-        db.row_factory = aiosqlite.Row
-        for ddl in self._EDGE_DDL:
-            await db.execute(ddl)
-        await db.commit()
-        return db
-
-    async def _write_edge(self, a: str, b: str, rel: str, group: str, authority: str, origin: str) -> None:
-        pe = importlib.import_module("person_extractor")
-        if self._edge_db is None:
-            self._edge_db = await self._open_edge_db()
-        db = self._edge_db
-        for name in (a, b):  # real, non-partial people (a partial stub is never resolved: it would fork the pair)
-            async with db.execute("SELECT 1 FROM people WHERE user_id=? AND name=?", (self._user, name)) as cur:
-                if await cur.fetchone() is None:
-                    await db.execute("INSERT INTO people (id, user_id, name, deleted, is_partial, visibility) "
-                                     "VALUES (?,?,?,0,0,'personal')", (f"p-{_digest(self._user, name)}", self._user, name))
-        await db.commit()
-        await pe._write_relationship(self._user, a, b, rel, group, db, authority=authority, origin=origin)
-
+    # ── the people graph (A8): the real writer over an in-memory SQLite (arms.people_graph) ────────────────
     def write_edge(self, a: str, b: str, rel: str, group: str, authority: str, origin: str) -> None:
         """The REAL ``person_extractor._write_relationship`` (temporal edges, the authority wall, the held-back
         candidate through ``MemoryService.record_candidate``) over an in-memory SQLite with the 0007/0015/0037 shapes."""
         with self._ctl():
-            self._run(self._write_edge(a, b, rel, group, authority, origin))
+            self.graph.write(self._user, a, b, rel, group, authority, origin)
 
     def edges(self) -> "list[dict[str, Any]]":
-        async def read():
-            if self._edge_db is None:
-                return []
-            sql = ("SELECT pa.name AS a, pb.name AS b, r.rel_type, r.valid_to, r.authority, r.origin "
-                   "FROM person_relationships r JOIN people pa ON pa.id = r.person_a_id "
-                   "JOIN people pb ON pb.id = r.person_b_id WHERE r.user_id=? ORDER BY r.created_at, r.id")
-            async with self._edge_db.execute(sql, (self._user,)) as cur:
-                return [{"a": r["a"], "b": r["b"], "rel_type": r["rel_type"], "current": r["valid_to"] is None,
-                         "authority": r["authority"] or "", "origin": r["origin"] or ""} for r in await cur.fetchall()]
-        return self._run(read())
+        return self.graph.edges(self._user)
 
     def ingest_as(self, identity: str, turns: "list[Turn]") -> IngestReport:
         """Apply the turns as a household identity, with the member-mode lookup scripted per identity

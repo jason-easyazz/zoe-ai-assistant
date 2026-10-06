@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from . import bakeoff_gates as gates
-from .bakeoff import UNITS, Aborted
+from .bakeoff import PG_CONTAINER, UNITS, Aborted
 
 #: What run 1 (20261006-0935, ``run-20261006-0935.log``) MEASURED; the planner budgets from these, not from hope.
 #: minutes per fixed phase (Z0 lab + forgetting start + adapter controls; per-arm latency / slot; per-mode extraction validity)
@@ -172,7 +172,9 @@ class Sampler(threading.Thread):
 class ForgetProbe:
     """Forget an invented friend, check at t+0, wait a real six minutes (the driver keeps measuring meanwhile), then replay a transcript that
     still names her through the arm's OWN nightly pass and a late model writer, and check again."""
-    NAME, KEEP = "Marisol", "Priya"
+    #: invented names OUTSIDE every ``world.py`` pool: the probe's bank stays alive for the whole window, in the same scratch Postgres the F5 / F6 disk
+    #: cells byte-scan, so a name the seeded household also draws (Marisol, Priya, Hobart ...) would read as that cell's residue
+    NAME, KEEP, PLACE = "Zephyrine", "Cordelia", "Invercargill"
 
     def __init__(self, ctx: "Ctx", variant: str):
         self.ctx, self.variant = ctx, variant
@@ -193,7 +195,7 @@ class ForgetProbe:
     def start(self) -> None:
         from .arms.base import Turn
         self.arm.reset(self.user)
-        self.arm.ingest([Turn(f"User's friend {self.NAME} lives in Hobart.", "owner_taught"),
+        self.arm.ingest([Turn(f"User's friend {self.NAME} lives in {self.PLACE}.", "owner_taught"),
                          Turn(f"{self.NAME}'s birthday is the 3rd of March.", "owner_taught"),
                          Turn(f"User's friend {self.KEEP} works at the observatory.", "owner_taught")])
         self.arm.forget(self.NAME)
@@ -277,28 +279,51 @@ def phase_z0(ctx: Ctx, seeds: tuple, store: list, by_id: dict) -> None:
         ctx.log(f"Z0 seed {seed}: controls red {inst['lab_controls_red']} ok={inst['ok']}")
 
 
+def sweep_stale_banks(ctx: Ctx) -> int:
+    """Delete the ``zmb-`` banks an earlier (crashed or finished) window left in the scratch store, BEFORE this window's own forgetting probes start
+    their banks. They are nobody's data here, and a live bank that holds the name a disk cell (F5 / F6) scans for makes that cell's residue unmeasurable."""
+    try:
+        client = ctx.win.client_factory()
+        stale = client.list_banks("zmb-")
+        for bank in stale:
+            client.delete_bank(bank)
+    except Exception as exc:  # noqa: BLE001 - never stops the window: a stale bank only matters to a disk cell, which then says so itself
+        ctx.log(f"stale-bank sweep skipped ({type(exc).__name__}: {str(exc)[:80]})")
+        return 0
+    ctx.log(f"cleared {len(stale)} stale zmb- bank(s) left in the scratch store by an earlier window")
+    return len(stale)
+
+
 def phase_arm_controls(ctx: Ctx, store: list) -> None:
     """Instrument checks of the ADAPTER on the real server: with a Zoe-layer protection switched off the cell that claims it must go RED."""
     from . import cells as cellmod
     from .world import BASELINE_SEED, make_world
     world = make_world(BASELINE_SEED)
-    claims = (("authority", "A1.digest.home"), ("identity", "H1.digest"), ("ledger", "F2.late_writer.digest"))
-    red = 0
+    # the first three are required; the last three need what the window gives the arm (the people graph, the conflict pass, the scratch Postgres): the physical-erase
+    # control is the one that proves the byte scan sees REAL Postgres residue (F5 with the scrub OFF must be red on the real stack)
+    claims = (("authority", "A1.digest.home"), ("identity", "H1.digest"), ("ledger", "F2.late_writer.digest"),
+              ("authority", "A8.inferred_cannot_close_user_edge"), ("supersede", "C1.update_typed"), ("physical_erase", "F5.forgotten_text_not_on_disk"))
+    red = counted = 0
     for off, cid in claims:
         cell = next((c for c in store if c.id == cid), None)
         if cell is None:
             continue
         arm = ctx.new_arm("H1", off=frozenset({off}))
         try:
+            lacking = cellmod.required_capabilities(cell) - set(arm.capabilities)
+            if lacking:
+                ctx.log(f"adapter control: H1 with `{off}` OFF on {cid} NOT RUN (the arm lacks {', '.join(sorted(lacking))})")
+                continue
             o = cellmod.run_cell(cell.rendered(world), world, arm)
         finally:
             arm.close()
+        counted += 1
         red += 1 if o.verdict == "FAIL" else 0
         ctx.log(f"adapter control: H1 with `{off}` OFF on {cid} -> {o.verdict} (must be FAIL)")
-    ctx.measure["H1"]["arm_controls"] = f"{red}/{len(claims)}"
+    ctx.measure["H1"]["arm_controls"] = f"{red}/{counted}"
     for v in ("H0", "H2"):
         ctx.measure[v]["arm_controls"] = ctx.measure["H1"]["arm_controls"]
-    ctx.arm_controls_ok = red == len(claims)
+    ctx.arm_controls_ok = counted >= 3 and red == counted
 
 
 def skip_breakdown(rows: "list[dict]") -> "dict[str, int]":
@@ -440,10 +465,14 @@ class Budget:
     run 1's measured minutes; a seed's box is a CEILING (an arm that finishes early hands its slack to the arms behind it)."""
     avail_min: float
     store_cells: int
-    runnable: int                                   # store-tier cells an H arm can run at all (the rest SKIP: missing capability)
+    runnable: int                                   # store-tier cells a LAYERED H arm (H1 / H2, with the scratch Postgres) can run (the rest SKIP: missing capability)
     arms: tuple
     seeds: dict                                      # arm -> seeds planned
     box_min: dict                                    # arm -> planned ceiling of ONE seed box, minutes
+    runnable_h0: int = -1                            # the same for H0, which has no Zoe layer (no conflict_pass / edges); -1 = not computed
+
+    def runnable_for(self, arm: str) -> int:
+        return self.runnable_h0 if arm == "H0" and self.runnable_h0 >= 0 else self.runnable
 
     def fixed_min(self, arm: str) -> float:
         """Budgeted latency + slot minutes for the arm (the extraction-validity phase is per MODE, see ``validity_min``). 0 for an optional arm."""
@@ -480,21 +509,23 @@ def plan_budget(cfg: Any, store: "Optional[list]" = None, runnable: "Optional[in
     if store is None:
         from . import spec
         store = [c for c in spec.load_cells() if c.tier == "store"]
+    from . import cells as cellmod
+    from .arms.hindsight import HindsightArm
+    layered = set(HindsightArm.capabilities)
     if runnable is None:
-        from . import cells as cellmod
-        from .arms.hindsight import HindsightArm
-        runnable = sum(1 for c in store if cellmod.required_capabilities(c) <= set(HindsightArm.capabilities))
+        runnable = sum(1 for c in store if cellmod.required_capabilities(c) <= layered)
+    runnable_h0 = sum(1 for c in store if cellmod.required_capabilities(c) <= layered - {"conflict_pass", "edges"})
     avail = cfg.cap_min - cfg.reserve_min - TAIL_MIN - OPEN_MIN
     seeds = {a: SEEDS_PER_ARM[a] for a in arms}
     h1 = round(max(5.0, runnable * S_PER_CELL["H1"] * H1_BOX_MARGIN / 60.0) * 2) / 2.0          # to the half minute
     box = {"H1": h1} if "H1" in arms else {}
-    draft = Budget(avail, len(store), runnable, arms, seeds, {a: 0.0 for a in arms})
+    draft = Budget(avail, len(store), runnable, arms, seeds, {a: 0.0 for a in arms}, runnable_h0)
     spare = avail - PHASE_MIN["lab"] - draft.validity_min() - sum(draft.fixed_min(a) for a in arms) - seeds.get("H1", 0) * box.get("H1", 0.0)
     lower = [a for a in arms if a != "H1"]
     for i, a in enumerate(lower):                                                        # H2 gets twice H0's share of what H1 leaves
         share = (2.0 / 3.0 if i == 0 else 1.0 / 3.0) if len(lower) == 2 else 1.0
         box[a] = math.floor(max(1.0, spare * share) * 2) / 2.0                 # rounded DOWN: the plan must fit the cap, not just touch it
-    return Budget(avail, len(store), runnable, arms, seeds, {a: box.get(a, 0.0) for a in arms})
+    return Budget(avail, len(store), runnable, arms, seeds, {a: box.get(a, 0.0) for a in arms}, runnable_h0)
 
 
 def plan_table(cfg: Any, seeds: tuple, budget: "Optional[Budget]" = None) -> "list[tuple[str, float, str]]":
@@ -505,7 +536,7 @@ def plan_table(cfg: Any, seeds: tuple, budget: "Optional[Budget]" = None) -> "li
     concise_done = False
     for a in b.arms:
         rows.append((f"{a} seed 1 ({seeds[0]}): store-tier cells", b.box_min[a],
-                     f"ceiling; ~{b.cells_in_box(a)} of {b.runnable} runnable cells at {S_PER_CELL[a]:g} s/cell (run 1)"))
+                     f"ceiling; ~{b.cells_in_box(a)} of {b.runnable_for(a)} runnable cells at {S_PER_CELL[a]:g} s/cell (run 1)"))
         opt = a in OPTIONAL_PHASES
         why = f"only if time remains; ~{PHASE_MIN['latency'][a]:g} min at run 1's rate, not budgeted" if opt else "p50/p95 through the shim and Postgres"
         rows.append((f"{a} recall latency n=50", 0.0 if opt else PHASE_MIN["latency"][a], why))
@@ -534,9 +565,11 @@ def dry_plan(win: Any) -> dict:
     win.log(f"  {total:5.1f}  total planned work; hard cap {cfg.cap_min:.0f} min; {cfg.reserve_min:.0f} min always kept for restore + report; "
             f"{TAIL_MIN:.0f} min tail; {b.avail_min:.1f} min available for the phases above (slack {b.avail_min - b.total_min():+.1f})")
     win.log("per-arm cell budget (cells per seed box at run 1's seconds per cell): " + "; ".join(
-        f"{a} {b.seeds[a]} seed{'s' if b.seeds[a] > 1 else ''} x {b.box_min[a]:g} min = ~{b.cells_in_box(a)}/{b.runnable} runnable cells each"
+        f"{a} {b.seeds[a]} seed{'s' if b.seeds[a] > 1 else ''} x {b.box_min[a]:g} min = ~{b.cells_in_box(a)}/{b.runnable_for(a)} runnable cells each"
         + (" (all 3 seeds complete inside the cap)" if a == "H1" and b.cells_in_box(a) >= b.runnable else "")
-        for a in b.arms) + f"; {b.store_cells - b.runnable} of {b.store_cells} store cells SKIP by capability (conflict_pass / edges / disk)")
+        for a in b.arms) + f"; {b.store_cells - b.runnable} of {b.store_cells} store cells SKIP by capability on H1 / H2 (the Zoe layer runs the conflict pass and "
+        f"the people graph, the scratch Postgres gives them the disk cells)" + (f"; {b.store_cells - b.runnable_h0} on H0 (no Zoe layer: conflict_pass / edges)"
+                                                                               if "H0" in b.arms and b.runnable_h0 >= 0 else ""))
     win.log("seeds: " + ", ".join(seeds))
     win.log(f"outputs: {cfg.bakeoff_dir}/run-{win.run_id}.log, run-{win.run_id}.json, <docs>/bakeoff-run-{win.run_id}.md")
     win.log("RESTORE (always, on every exit path): stop zoe-bakeoff-hindsight/-gemma/-embed, docker compose down, "
@@ -547,9 +580,10 @@ def dry_plan(win: Any) -> dict:
 def make_factories(win: Any) -> None:
     """Real arm / client factories (tests replace them with ones over ``FakeHindsight``)."""
     from .arms.hindsight import HindsightArm, HindsightClient
+    from .arms.pg_store import ScratchPostgres
     base = f"http://127.0.0.1:{win.cfg.hs_port}"
-    if not hasattr(win, "arm_factory"):
-        win.arm_factory = lambda variant, **kw: HindsightArm(variant, base_url=base, **kw)
+    if not hasattr(win, "arm_factory"):         # every arm gets a handle on the window's scratch Postgres: that is what makes the F5 / F6 disk cells runnable
+        win.arm_factory = lambda variant, **kw: HindsightArm(variant, base_url=base, pg=ScratchPostgres(PG_CONTAINER), **kw)
     if not hasattr(win, "client_factory"):
         win.client_factory = lambda: HindsightClient(base)
 
@@ -676,8 +710,10 @@ def write_report(ctx: Ctx, win: Any, seeds: tuple, store: list, by_id: dict) -> 
         "the real Hindsight extraction quality on the B cells (the unit tests use a rule-based test double)",
         "net RSS (the Chroma/ONNX that adoption frees inside zoe-data was NOT subtracted: the figure is gross, so conservative)",
         "G3 deletable lines is an ESTIMATE of files judged deletable, never proven",
-        "cells an H arm cannot run (temporal cells that need the nightly conflict pass, A8 graph edges, F5/F6 on-disk residue) are SKIPs with the "
-        "reason; hard ones keep `hard_cells_all_ran` red by the pre-registered rule: not a pass, and not an engine result either",
+        "cells an arm cannot run (H0 has no Zoe layer: no nightly conflict pass, no A8 people graph; an arm without the scratch Postgres: no F5/F6 disk scan) "
+        "are SKIPs with the reason; hard ones keep `hard_cells_all_ran` red by the pre-registered rule: not a pass, and not an engine result either",
+        "F5/F6 (physical erase) and A8 (people graph) on H1/H2 run the Zoe layer's scrub and Zoe's own graph over Hindsight's real Postgres files; the engine's "
+        "own writes were only MODELLED in the pre-window probe, so these are the first contact with the real rows (the adapter control `physical_erase` OFF must be red here)",
         "H2 and H0 ran one seed each by design (H1 first, three seeds): the rule needs three, so they can only be INCOMPLETE",
         "all arms share one Hindsight server and one egress log: the per-arm egress split is by wall-clock phase, the gate reads the whole window"]
     md = gates.render_markdown(meta, arms, decision, z0_axes, z0_off_axes, notes)
@@ -725,11 +761,12 @@ def measure(win: Any) -> dict:
         return (ctx.z0.get(seed) or {}).get("instrument") or {"ok": False, "lab_controls_red": "?"}
     tail_s = TAIL_MIN * 60.0
     budget = plan_budget(cfg, store)
-    log("budget: " + "; ".join(f"{a} {budget.seeds[a]} seed(s) x <= {budget.box_min[a]:g} min (~{budget.cells_in_box(a)}/{budget.runnable} cells)"
+    log("budget: " + "; ".join(f"{a} {budget.seeds[a]} seed(s) x <= {budget.box_min[a]:g} min (~{budget.cells_in_box(a)}/{budget.runnable_for(a)} cells)"
                                for a in budget.arms) + f"; {budget.avail_min:.1f} min available, planned {budget.total_min():.1f}")
     concise_arms = tuple(a for a in cfg.arms if a != "H1")
     try:
         ctx.label("lab")
+        sweep_stale_banks(ctx)
         phase_z0(ctx, seeds, store, by_id)
         for v in cfg.arms:
             ctx.forget[v] = ForgetProbe(ctx, v)

@@ -27,7 +27,12 @@ is the same set of checks ``arms.z0`` exercises, REUSING the service's own modul
 classes and conflict wall (``memory_authority.resolve_write / find_conflict / may_override``), the identity wall
 (``identity_facts``), the affect-consent gate (``MemoryService._affect_allowed``, called unbound), the write-quality gate and the
 deterministic extractor (``memory_quality`` / ``memory_extractor``), and the durable hashed forget ledger
-(``memory_forgotten``, in-memory backend). Each protection has a named switch (``off=``) so a negative control can turn ONE off
+(``memory_forgotten``, in-memory backend). It also runs what is Zoe's whatever stores the facts: the PEOPLE GRAPH (``arms.people_graph``: the
+real ``person_extractor._write_relationship`` and its authority wall on edges; the graph is not a memory-engine feature, so under adoption it
+stays in Zoe's Postgres) and the nightly CONFLICT PASS (``memory_supersede.conflict_pairs`` over the arm's own exported rows: a newer fact that
+changes an older one retires it, history kept; the retirement is a document delete on Hindsight). PHYSICAL ERASE (``arms.pg_store``) is Zoe's
+too: Hindsight's delete leaves the text in its log tables, dead tuples, planner statistics and WAL, so a forget / a hard delete ends with the
+Postgres-level scrub. Each protection has a named switch (``off=``) so a negative control can turn ONE off
 and the cell that claims it must go red (``tests/unit/test_zmb_hindsight_arm.py``).
 """
 from __future__ import annotations
@@ -49,6 +54,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
 from .base import Arm, IngestReport, ROW_KEYS, Turn
+from .people_graph import CandidateSink, PeopleGraph, candidate_context, live_context
+from .pg_store import PgUnavailable, ScratchPostgres
 from .z0 import DEMO_USER_RE, IDENTITIES, reader_answer
 
 VARIANTS = {
@@ -76,7 +83,10 @@ BANK_CONFIG = {
            "enable_reranking": False},
 }
 #: Zoe-layer protections that can be switched OFF one at a time (negative controls)
-LAYER_FEATURES = ("guest", "affect", "identity", "ledger", "authority", "gate", "scrub", "provenance", "speaker")
+#: (``authority`` also guards the people graph's edges, ``supersede`` / ``topic`` / ``invalidate`` / ``entailment`` are the conflict pass's and the
+#: model-writer lane's controls, ``physical_erase`` is the Postgres scrub: the same names as ``lab_driver.CONTROLS``)
+LAYER_FEATURES = ("guest", "affect", "identity", "ledger", "authority", "gate", "scrub", "provenance", "speaker",
+                  "supersede", "topic", "invalidate", "entailment", "physical_erase")
 
 
 class HindsightUnavailable(NotImplementedError):
@@ -156,6 +166,18 @@ class HindsightClient:
         except HindsightError:
             return False
         return True
+
+    def list_banks(self, prefix: str = "") -> "list[str]":
+        """Bank ids starting with ``prefix`` (``GET /v1/default/banks?q=``, paged)."""
+        out: "list[str]" = []
+        offset = 0
+        while True:
+            page = self.call("banks", "GET", API, params={"q": prefix, "limit": 100, "offset": offset})
+            items = list(page.get("banks") or [])
+            out.extend(str(b.get("bank_id") or "") for b in items)
+            offset += len(items)
+            if len(items) < 100:
+                return [b for b in out if b.startswith(prefix)]
 
     def put_bank(self, bank: str) -> None:
         self.call("bank", "PUT", f"{API}/{bank}", {})
@@ -246,6 +268,11 @@ class Known:
     in_hindsight: bool = True       # False = a side-table row (held back / pending / retired): Hindsight has no status for it
     excerpt: str = ""               # provenance (ZMB A3): the owner's own words the row came from, and which turn
     turn_id: str = ""
+    added_at: str = ""              # ISO time the fact was written (the conflict pass orders by it); valid_from / invalid_at are epoch seconds
+    valid_from: Any = ""
+    invalid_at: Any = ""            # set when a newer fact replaced this one - the row stays (history), it is never deleted
+    supersedes_id: str = ""
+    superseded_by_id: str = ""
 
     def as_ref(self) -> Any:        # the MemoryRef shape ``find_conflict`` reads
         return types.SimpleNamespace(id=self.id, text=self.text,
@@ -287,9 +314,12 @@ class ZoeLayer:
         self.backend = self.mf.MemoryBackend()
         self.known: "dict[str, list[Known]]" = {}
         self.prev_user_text = ""
+        self._lab = lab_driver
         self._loop = asyncio.new_event_loop()
+        self.graph = PeopleGraph(self._run)
 
     def close(self) -> None:
+        self.graph.close()
         if not self._loop.is_closed():
             self._loop.close()
 
@@ -297,6 +327,11 @@ class ZoeLayer:
         self.known[user] = []
         self.prev_user_text = ""
         self.backend = self.mf.MemoryBackend()
+        self.graph.close()
+
+    def _lab_controls(self, *names: str) -> Any:
+        """The lab's own switch (``lab_driver.controls_off``) for the named controls that are OFF on this layer, for ONE operation."""
+        return self._lab.controls_off(self.off & set(names), self.svc)
 
     @contextlib.contextmanager
     def _ledger(self):
@@ -390,10 +425,14 @@ class ZoeLayer:
                                         user_turn_id=turn_id or None, teach=teach)
         return (self.svc.memory_service.scrub_source_excerpt(ex) or "" if ex else ""), tid or ""
 
-    def plan_fact(self, user: str, writer: str, fact: str, *, anchor: str, op: str = "say", attr: str = "",
-                  memory_type: str = "", verified: "Optional[bool]" = None, affect_ok: bool = True,
-                  excerpt: str = "", turn_id: str = "") -> Plan:
+    def plan_fact(self, *args: Any, **kw: Any) -> Plan:
         """The decision for one proposed fact from ``writer`` (a lane label: ``voice_fact``, ``chat_regex``, a model writer ...)."""
+        with self._lab_controls("entailment"):                  # the verbatim-anchor rule, switchable for the C1 model-writer cell's control
+            return self._plan_fact(*args, **kw)
+
+    def _plan_fact(self, user: str, writer: str, fact: str, *, anchor: str, op: str = "say", attr: str = "",
+                   memory_type: str = "", verified: "Optional[bool]" = None, affect_ok: bool = True,
+                   excerpt: str = "", turn_id: str = "") -> Plan:
         ma = self.ma
         if self.is_guest(user):
             return Plan("refuse", fact, reason="guest: owns no memory")
@@ -476,6 +515,47 @@ class ZoeLayer:
         pat = name_pattern(name)
         return " ".join(s for s in re.split(r"(?<=[.!?])\s+", text or "") if s.strip() and not pat.search(s))
 
+    # ── what is Zoe's whatever stores the facts: the people graph and the nightly conflict pass ──
+    def _edge_candidate(self, text: str, *, user_id: str, writer: str, contradicts: str = "", **kw: Any) -> str:
+        """``MemoryService.record_candidate`` for a relationship the authority wall held back: a ``disputed`` side-table row pointing at the edge."""
+        ma = self.ma
+        cls = ma.MODEL_FROM_TURN if ma.writer_class(writer) == ma.MODEL_FROM_TURN else ma.MODEL_FROM_TRANSCRIPT
+        rid = "zoe-edge-" + _digest(user_id, text, contradicts)
+        if not any(k.id == rid for k in self.known.get(user_id, [])):
+            self.remember(user_id, Known(rid, text, cls, "disputed", writer, str(kw.get("memory_type") or "person"), contradicts, in_hindsight=False))
+        return rid
+
+    def write_edge(self, user: str, a: str, b: str, rel: str, group: str, authority: str, origin: str) -> None:
+        """The REAL ``person_extractor._write_relationship`` over an in-memory SQLite (``arms.people_graph``), its held-back candidate in the side table."""
+        sink = CandidateSink(self._edge_candidate)
+        with live_context(), self._lab_controls("authority"), candidate_context(sink):
+            self.graph.write(user, a, b, rel, group, authority, origin)
+
+    def edges(self, user: str) -> "list[dict[str, Any]]":
+        return self.graph.edges(user)
+
+    def conflict_pairs(self, user: str) -> "tuple[int, list[tuple[Known, Known, str]]]":
+        """``(pairs found, [(newer, older, reason)] to apply)``: the REAL ``memory_supersede.conflict_pairs`` over this user's approved rows
+        (a newer change cue on the same topic, or a different home), capped per run. Nothing when the implicit supersede flag is off."""
+        ms = importlib.import_module("memory_supersede")
+        rows = [types.SimpleNamespace(id=k.id, text=k.text, metadata={"status": "approved", "added_at": k.added_at,
+                                                                      "memory_type": k.memory_type or "fact", "tags": ""})
+                for k in self.known.get(user, []) if k.status == "approved" and k.in_hindsight]
+        with live_context(), self._lab_controls("supersede", "topic"):
+            if not ms.enabled():
+                return 0, []
+            pairs = ms.conflict_pairs(rows)
+        by_id = {k.id: k for k in self.known.get(user, [])}
+        return len(pairs), [(by_id[n.id], by_id[o.id], why) for n, o, why in pairs[:ms.NIGHTLY_CAP]]
+
+    def supersede(self, user: str, old: Known, new: "Optional[Known]", now: float) -> None:
+        """Retire ``old`` as history: ``status=superseded``, ``invalid_at`` (and the links) - never deleted. With ``invalidate`` OFF the row is dropped."""
+        old.status, old.in_hindsight, old.invalid_at = "superseded", False, now
+        if new is not None:
+            old.superseded_by_id, new.supersedes_id = new.id, old.id
+        if "invalidate" in self.off:
+            self.known[user] = [k for k in self.known.get(user, []) if k is not old]
+
 # ── ZOE-LAYER-END ─────────────────────────────────────────────────────────────
 
 
@@ -490,16 +570,19 @@ def zoe_layer_lines(path: "Optional[str]" = None) -> int:
 # ── the arm ──────────────────────────────────────────────────────────────────
 
 class HindsightArm(Arm):
-    capabilities = frozenset({"clock", "idle_pass", "identities", "reader", "controls"})
-    #: What this arm CANNOT do, and why. A cell that needs one of these SKIPs with the reason (``cells.run_cell`` compares the declared
+    #: What a LAYERED arm with a scratch Postgres can do (what the run plan counts); an instance narrows it (``__init__``): no Zoe layer (H0) = no
+    #: ``conflict_pass`` / ``edges``, no ``pg=`` handle = no ``disk``.
+    capabilities = frozenset({"clock", "idle_pass", "identities", "reader", "controls", "conflict_pass", "edges", "disk"})
+    #: What an arm CANNOT do, and why. A cell that needs one of these SKIPs with the reason (``cells.run_cell`` compares the declared
     #: capabilities), never ERRORs and never passes. Under the rule a skipped HARD cell keeps `hard_cells_all_ran` red: that is the honest
-    #: reading of "the engine cannot answer this", and the run record says how many such cells there are.
+    #: reading of "the arm cannot answer this", and the run record says how many such cells there are.
     LACKS = {
-        "conflict_pass": "Hindsight has no nightly implicit-conflict pass: a newer fact does not retire an older one by cue (H2 consolidates "
-                         "observations, which is not a supersede with history)",
-        "edges": "the people graph (person_relationships) is Zoe's own Postgres graph, not part of the memory engine: Hindsight has no "
-                 "authority-labelled relationship edges to write or export",
-        "disk": "the store is a Postgres container whose data directory is not readable by the lab: no on-disk residue scan",
+        "conflict_pass": "no Zoe layer (H0): the nightly implicit-conflict pass is Zoe's own (memory_supersede over the exported rows) and Hindsight "
+                         "alone has none (H2 consolidates observations, which is not a supersede with history)",
+        "edges": "no Zoe layer (H0): the people graph (person_relationships) is Zoe's own Postgres graph, not part of the memory engine, and "
+                 "stays Zoe's under adoption; Hindsight alone has no authority-labelled relationship edges to write or export",
+        "disk": "the arm was built without a scratch-Postgres handle (pg=): the store's data directory is only reachable through docker, "
+                "so there is no on-disk residue scan",
     }
 
     def __init__(self, variant: str = "H1", *, base_url: "Optional[str]" = None,
@@ -507,7 +590,7 @@ class HindsightArm(Arm):
                  off: "frozenset[str] | set[str]" = frozenset(), layer: "Optional[bool]" = None,
                  keep_banks: bool = False, settle_timeout_s: float = 300.0, settle_poll_s: float = 1.0,
                  rss_probe: "Optional[Callable[[], dict]]" = None, reader_sycophantic: bool = False,
-                 clock: "Callable[[], datetime]" = lambda: datetime.now(timezone.utc)):
+                 clock: "Callable[[], datetime]" = lambda: datetime.now(timezone.utc), pg: "Optional[ScratchPostgres]" = None):
         if variant not in VARIANTS:
             raise ValueError(f"unknown Hindsight variant {variant!r} (known: {', '.join(VARIANTS)})")
         self.variant = variant
@@ -519,12 +602,20 @@ class HindsightArm(Arm):
             self.name = variant + "-nolayer"
         self.client = HindsightClient(base_url, transport)
         self.layer: "Optional[ZoeLayer]" = ZoeLayer(self.off) if self.has_layer else None
+        self.pg = pg
+        caps = set(self.capabilities)
+        if self.layer is None:
+            caps -= {"conflict_pass", "edges"}
+        if pg is None:
+            caps.discard("disk")
+        self.capabilities = frozenset(caps)
         self.keep_banks, self.settle_timeout_s, self.rss_probe = keep_banks, settle_timeout_s, rss_probe
         self.settle_poll_s = settle_poll_s
         self.sycophantic = reader_sycophantic
         self._now = clock
         self._user = ""
         self._banks: "set[str]" = set()
+        self._invalid_seen: "dict[str, float]" = {}
         self._seq = 0
         self._vclock = 0.0
         self._refused = 0
@@ -547,14 +638,20 @@ class HindsightArm(Arm):
         return bank
 
     # ── lifecycle ──
-    def reset(self, user_id: str) -> None:
+    def reset(self, user_id: str, *, disk: bool = False) -> None:
         if not DEMO_USER_RE.match(user_id or ""):
             raise ValueError(f"refusing non-demo identity {user_id!r} (must match {DEMO_USER_RE.pattern})")
         for b in list(self._banks):                 # one live bank per cell: the previous cell's is dropped, not accumulated
             if not self.keep_banks:
                 self.client.delete_bank(b)
             self._banks.discard(b)
+        if disk:                                    # a disk cell measures ITS OWN residue: the earlier cells' leftovers (same names) are cleared first
+            if self.pg is None:
+                raise PgUnavailable(self.LACKS["disk"])
+            self.pg.erase_orphans()
+            self.pg.compact()
         self._user, self._seq, self._vclock, self._refused = user_id, 0, 0.0, 0
+        self._invalid_seen = {}
         if self.layer:
             self.layer.reset(user_id)
             for _label, (uid, _m) in IDENTITIES.items():
@@ -620,15 +717,21 @@ class HindsightArm(Arm):
                                   excerpt=plan.excerpt, turn_id=plan.turn_id))
             rep.notes.append(plan.reason)
             return
+        t = None
         if plan.kind == "retire":
             t = plan.target
             self.client.delete_document(self.bank_for(uid), t.id)
-            t.status, t.in_hindsight = plan.status, False
+            t.status, t.in_hindsight, t.invalid_at = plan.status, False, self._now().timestamp()
             rep.retired += 1
             if not plan.text:
                 return
         doc = self._retain(uid, plan.text, self._tags(uid, plan, turn.speaker), plan.memory_type, turn.day_offset, plan.excerpt, plan.turn_id)
-        L.remember(uid, Known(doc, plan.text, plan.cls, "approved", plan.origin, plan.memory_type, excerpt=plan.excerpt, turn_id=plan.turn_id))
+        at = self._now() - timedelta(days=turn.day_offset)
+        new = Known(doc, plan.text, plan.cls, "approved", plan.origin, plan.memory_type, excerpt=plan.excerpt, turn_id=plan.turn_id,
+                    added_at=at.isoformat(timespec="seconds"), valid_from=at.timestamp())
+        L.remember(uid, new)
+        if t is not None and plan.status == "superseded":
+            L.supersede(uid, t, new, t.invalid_at)
         if plan.release_text:
             L.ledger_release(uid, plan.release_text)
         rep.written += 1
@@ -735,6 +838,10 @@ class HindsightArm(Arm):
         tags = [str(x) for x in (u.get("tags") or [])]
         tag = lambda p: next((x[len(p):] for x in tags if x.startswith(p)), "")  # noqa: E731
         k = side.get(str(u.get("document_id") or ""))
+        for src_id in (u.get("source_memory_ids") or []) if (k is None and by_id) else []:       # an observation is derived: its validity interval is its source fact's
+            k = side.get(str((by_id.get(str(src_id)) or {}).get("document_id") or ""))
+            if k is not None:
+                break
         meta = dict(u.get("metadata") or {})
         for src_id in (u.get("source_memory_ids") or []) if by_id else []:      # an observation is derived: its provenance is its source fact's
             src = (by_id.get(str(src_id)) or {}).get("metadata") or {}
@@ -743,12 +850,18 @@ class HindsightArm(Arm):
         status = {"valid": "approved", "": "approved"}.get(str(u.get("state") or ""), "superseded")
         if k and k.status != "approved":
             status = k.status
+        invalid_at = k.invalid_at if k else ""
+        if status == "superseded" and not invalid_at:     # an observation Hindsight itself invalidated: the time the arm first saw it so (Hindsight exports none)
+            invalid_at = self._invalid_seen.setdefault(str(u.get("id") or ""), self._now().timestamp())
         return {"id": str(u.get("id") or ""), "text": str(u.get("text") or ""), "status": status,
                 "authority_class": tag("class:"), "origin": tag("origin:"), "contradicts_id": "",
                 "entity_type": "", "memory_type": str(meta.get("memory_type") or (k.memory_type if k else "")),
                 "user_id": tag("user:"),
                 # provenance (ZMB A3): what the store HOLDS (Hindsight's own metadata and tags), never what the side table remembers
-                "source_excerpt": str(meta.get("source_excerpt") or ""), "user_turn_id": str(meta.get("user_turn_id") or tag("turn:"))}
+                "source_excerpt": str(meta.get("source_excerpt") or ""), "user_turn_id": str(meta.get("user_turn_id") or tag("turn:")),
+                # the validity interval (ZMB C1): the Zoe layer stamps it on its side table; a row the layer never saw says nothing
+                "valid_from": k.valid_from if k else "", "invalid_at": invalid_at,
+                "supersedes_id": k.supersedes_id if k else "", "superseded_by_id": k.superseded_by_id if k else ""}
 
     def _rows_for(self, uid: str) -> "list[dict[str, Any]]":
         if self.layer and self.layer.is_guest(uid):
@@ -757,12 +870,16 @@ class HindsightArm(Arm):
         units = self.client.list_units(self.bank_for(uid)) if self.bank_for(uid) in self._banks else []
         by_id = {str(u.get("id")): u for u in units}
         rows = [self._unit_row(u, side, by_id) for u in units]
+        if "invalidate" in self.off:                     # the control: history is not kept (a superseded row, Hindsight's invalidated observations too, is gone)
+            rows = [r for r in rows if r["status"] != "superseded"]
         first_unit = {}                                  # a held row links to the row the owner can see (a unit id), not to the document id
         for u in units:
             first_unit.setdefault(str(u.get("document_id") or ""), str(u.get("id") or ""))
         held = [{"id": k.id, "text": k.text, "status": k.status, "authority_class": k.cls, "origin": k.origin,
                  "contradicts_id": first_unit.get(k.contradicts_id, k.contradicts_id), "entity_type": "", "memory_type": k.memory_type,
-                 "user_id": uid, "source_excerpt": k.excerpt, "user_turn_id": k.turn_id}
+                 "user_id": uid, "source_excerpt": k.excerpt, "user_turn_id": k.turn_id,
+                 "valid_from": k.valid_from, "invalid_at": k.invalid_at, "supersedes_id": k.supersedes_id,
+                 "superseded_by_id": first_unit.get(k.superseded_by_id, k.superseded_by_id)}
                 for k in (self.layer.known.get(uid, []) if self.layer else []) if not k.in_hindsight]
         return rows + held
 
@@ -848,22 +965,67 @@ class HindsightArm(Arm):
                     doc = self._retain(uid, rest, tags, k.memory_type, 0, ex, k.turn_id)
                     self.layer.remember(uid, Known(doc, rest, k.cls, "approved", k.origin, k.memory_type, excerpt=ex, turn_id=k.turn_id))
         self._finish(uid)
+        if self._erasing():                              # the engine's delete leaves the text in its log tables, dead tuples, statistics and WAL
+            self.pg.erase_text(self.bank_for(uid), entity)
+            self.pg.compact()
         return f"Forgot everything about {entity}: {n} document(s) removed."
 
+    # ── the nightly conflict pass (capability ``conflict_pass``): Zoe's own, over the arm's exported rows ──
     def run_conflict_pass(self) -> "dict[str, Any]":
-        raise NotImplementedError(self.LACKS["conflict_pass"])
+        """``memory_supersede.conflict_pairs`` over this user's approved rows: a newer fact that changes an older one (a change cue on the same topic,
+        or a different home) retires it. On Hindsight a retirement is a document delete; the row stays in the export as ``superseded`` with its
+        ``invalid_at`` and the links, never deleted. Zeros when the implicit-supersede flag is off (the ``supersede`` control)."""
+        if self.layer is None:
+            raise NotImplementedError(self.LACKS["conflict_pass"])
+        uid, now = self._user, self._now().timestamp()
+        found, todo = self.layer.conflict_pairs(uid)
+        for newer, older, _why in todo:
+            self.client.delete_document(self.bank_for(uid), older.id)
+            self.layer.supersede(uid, older, newer, now)
+        self._finish(uid)
+        return {"pairs": found, "superseded": len(todo)}
 
+    # ── the people graph (capability ``edges``): Zoe's own, not the engine's ──
     def write_edge(self, a: str, b: str, rel: str, group: str, authority: str, origin: str) -> None:
-        raise NotImplementedError(self.LACKS["edges"])
+        if self.layer is None:
+            raise NotImplementedError(self.LACKS["edges"])
+        self.layer.write_edge(self._user, a, b, rel, group, authority, origin)
 
     def edges(self) -> "list[dict[str, Any]]":
-        raise NotImplementedError(self.LACKS["edges"])
+        if self.layer is None:
+            raise NotImplementedError(self.LACKS["edges"])
+        return self.layer.edges(self._user)
+
+    # ── physical erase (capability ``disk``): Hindsight's delete, then the Postgres-level scrub it does not do ──
+    def _erasing(self) -> bool:
+        """The scrub runs on a layered arm with a scratch Postgres. H0 (Hindsight natively) has none, and the ``physical_erase`` control removes it."""
+        return self.pg is not None and self.layer is not None and "physical_erase" not in self.off
 
     def hard_delete(self) -> int:
-        raise NotImplementedError(self.LACKS["disk"])
+        """The audited hard delete of this cell's user: the bank (documents, memories, observations, entities) through the API, the Zoe side
+        table, then the log rows the engine's bank delete does not touch and a rewrite of the relations. Returns the memories removed."""
+        if self.pg is None:
+            raise NotImplementedError(self.LACKS["disk"])
+        uid = self._user
+        bank = self.bank_for(uid)
+        n = len(self.client.list_units(bank)) if bank in self._banks else 0
+        self.client.delete_bank(bank)
+        self._banks.discard(bank)
+        if self.layer:
+            self.layer.known[uid] = []
+        if self._erasing():
+            self.pg.erase_bank(bank)
+            self.pg.compact()
+        return n
 
     def disk_residue(self, tokens: "list[str]") -> "dict[str, Any]":
-        raise NotImplementedError(self.LACKS["disk"])
+        """Byte-scan a COPY of the scratch Postgres' data directory (and ask it for live rows) for each token: counts only (``pg_store.scan``)."""
+        if self.pg is None:
+            raise NotImplementedError(self.LACKS["disk"])
+        clash = self.pg.other_banks(tokens, self.bank_for(self._user))
+        if clash:            # a byte scan cannot tell whose bytes they are: refuse to score (the cell ERRORs, loudly) rather than call another bank's text this cell's residue
+            raise RuntimeError(f"{sum(clash.values())} live row(s) of ANOTHER bank also name the scanned token(s): this cell's residue cannot be told from theirs")
+        return self.pg.scan(tokens)
 
     def as_of(self, query: str, ts: str) -> "list[dict[str, Any]]":
         raise NotImplementedError("Hindsight 0.10.2 has no belief-time read: recall's temporal_window only RANKS memories by their "

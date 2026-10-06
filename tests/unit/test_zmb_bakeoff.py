@@ -607,9 +607,9 @@ SUBSET = ("A1.digest.home", "A1.mcp.pet", "A1.digest.name", "A2.incident.home", 
           "F3.after_tombstone_ttl", "H1.digest", "H2.edit.digest", "E1.question_is_not_a_fact", "G3.consent.guest", "G3.consent.minor", "B2.pet_not_child")
 
 
-def e2e_window(box, tmp_path, monkeypatch, *, box_min=None, egress=True):
-    cells = [c for c in spec.load_cells() if c.id in SUBSET]
-    assert len(cells) == len(SUBSET)
+def e2e_window(box, tmp_path, monkeypatch, *, box_min=None, egress=True, extra=(), pg=False):
+    cells = [c for c in spec.load_cells() if c.id in SUBSET + tuple(extra)]
+    assert len(cells) == len(SUBSET) + len(extra)
     monkeypatch.setattr(spec, "load_cells", lambda directory=None: cells)
     monkeypatch.setattr(measure, "VALIDITY_CALLS", 104)
     monkeypatch.setattr(measure, "LATENCY_FACTS", 4)
@@ -618,9 +618,15 @@ def e2e_window(box, tmp_path, monkeypatch, *, box_min=None, egress=True):
     host = FakeHost(box)
     host.log = lambda _m: None
     w = make_window(box, host, docs_dir=tmp_path / "docs", sample_s=0.01)
-    fake = FakeHindsight()
+    if pg:                                   # the stack the window really has: Hindsight writing to a scratch Postgres the arm can read and scrub
+        from zmb.arms.fake_postgres import FakePostgres
+        store = FakePostgres()
+        fake = FakeHindsight(pg=store)
+        w.arm_factory = lambda v, **kw: HindsightArm(v, transport=fake, settle_poll_s=0, pg=store, **kw)
+    else:
+        fake = FakeHindsight()
+        w.arm_factory = lambda v, **kw: HindsightArm(v, transport=fake, settle_poll_s=0, **kw)
     w.fake = fake
-    w.arm_factory = lambda v, **kw: HindsightArm(v, transport=fake, settle_poll_s=0, **kw)
     w.client_factory = lambda: HindsightClient("http://127.0.0.1:18888", transport=fake)
     if egress:
         (box / "egress-t1.log").write_text("12:00:00 pid=1 ok connect ('127.0.0.1', 5432)\n12:00:01 pid=1 ok connect ('127.0.0.1', 11500)\n")
@@ -821,7 +827,7 @@ def test_the_budget_fits_three_h1_seeds_inside_the_hard_cap(box):
     assert b.seeds == {"H1": 3, "H2": 1, "H0": 1} and b.arms == ("H1", "H2", "H0")
     assert b.total_min() <= b.avail_min <= cfg.cap_min - cfg.reserve_min - measure.TAIL_MIN              # the hard cap is kept, with the tail
     assert b.cells_in_box("H1") >= b.runnable > 100                     # one H1 seed box holds every runnable store cell at run 1's rate
-    assert b.box_min["H2"] >= 2.0 and b.box_min["H0"] >= 1.0 and b.store_cells > b.runnable
+    assert b.box_min["H2"] >= 2.0 and b.box_min["H0"] >= 1.0 and b.store_cells == b.runnable > b.runnable_h0 > 100     # H1 / H2 run every store cell now; H0 has no Zoe layer
     assert 3 * b.box_min["H1"] > b.box_min["H2"] + b.box_min["H0"]      # H1 is the preferred arm: the biggest share of the time
 
 
@@ -905,3 +911,81 @@ def test_the_plain_answer_says_yes_only_when_the_rule_says_so():
     line = gates._better_line({"H1": {**arm, "verdict": "NOT_ADOPTABLE", "gates": {"G2": {"hard_cells_all_ran": {"state": gates.FAIL}}}}}, tie)
     assert line.startswith("No evidence that H1 is better than Z0") and "ties Z0 on B extraction" in line and "no data for C temporal" in line
     assert "A tie goes to Z0" in line and "G2 hard_cells_all_ran" in line
+
+
+# ── the H arms run the graph-edge, conflict-pass and physical-erase cells (the structural skips of run 1 are gone) ────────────────
+
+STRUCTURAL = ("A8.inferred_cannot_close_user_edge", "A8.refused_edge_is_held_not_lost", "A8.user_change_closes_edge_keeps_history",
+              "F5.forgotten_text_not_on_disk", "F6.hard_delete_not_on_disk", "C1.update_typed", "C1.old_fact_invalidated_not_deleted")
+
+
+def test_the_scratch_postgres_container_name_is_one_name_in_both_places():
+    from zmb.arms import pg_store
+    assert pg_store.PG_CONTAINER == bakeoff.PG_CONTAINER == "zoe-bakeoff-pg"
+
+
+def test_the_windows_arms_get_a_handle_on_the_scratch_postgres(box):
+    w = make_window(box, FakeHost(box))
+    measure.make_factories(w)
+    for v in ("H0", "H1", "H2"):
+        arm = w.arm_factory(v)
+        assert arm.pg is not None and arm.pg.container == bakeoff.PG_CONTAINER and "disk" in arm.capabilities, v
+        arm.close()
+    assert "edges" in w.arm_factory("H1").capabilities and "edges" not in w.arm_factory("H0").capabilities
+
+
+def test_the_dry_plan_counts_what_each_kind_of_arm_can_run(box):
+    w = make_window(box, FakeHost(box), dry=True)
+    measure.dry_plan(w)
+    line = next(m for m in w.logs if m.startswith("per-arm cell budget"))
+    b = measure.plan_budget(w.cfg)
+    assert b.runnable == b.store_cells and b.runnable_h0 < b.runnable
+    assert f"0 of {b.store_cells} store cells SKIP by capability on H1 / H2" in line
+    assert f"{b.store_cells - b.runnable_h0} on H0 (no Zoe layer: conflict_pass / edges)" in line
+    assert f"/{b.runnable_h0} runnable cells each" in line and f"/{b.runnable} runnable cells each" in line
+
+
+def test_measure_over_the_full_stack_runs_the_hard_edge_and_disk_cells_on_h1_and_h0_stays_red_by_design(box, tmp_path, monkeypatch):
+    w, _host = e2e_window(box, tmp_path, monkeypatch, extra=STRUCTURAL, pg=True)
+    measure.measure(w)
+    art = json.loads((box / "run-t1.json").read_text())
+    for v in ("H1", "H2"):
+        g2 = art["arms"][v]["gates"]["G2"]
+        assert g2["hard_cells_all_ran"]["state"] == gates.PASS and g2["hard_cells_zero_violations"]["state"] == gates.PASS, (v, g2)
+    h0 = art["arms"]["H0"]["gates"]["G2"]
+    assert h0["hard_cells_all_ran"]["state"] == gates.FAIL and "capability: edges" in h0["hard_cells_all_ran"]["measured"]   # A8 x2: no layer, no graph
+    h0_bad = art["seed_runs"]["H0"]["zmb-v1"]["hard_violations"]
+    assert "F5.forgotten_text_not_on_disk" in h0_bad and "F6.hard_delete_not_on_disk" in h0_bad                        # native Hindsight leaves the text on disk
+    assert not [b for v in ("H1", "H2") for s in art["seed_runs"][v].values() for b in s["hard_violations"] if b.startswith(("F5", "F6", "A8"))]
+
+
+def test_without_a_scratch_postgres_the_disk_cells_skip_by_capability_and_keep_the_hard_gate_red(box, tmp_path, monkeypatch):
+    w, _host = e2e_window(box, tmp_path, monkeypatch, extra=STRUCTURAL, pg=False)
+    measure.measure(w)
+    g2 = json.loads((box / "run-t1.json").read_text())["arms"]["H1"]["gates"]["G2"]["hard_cells_all_ran"]
+    assert g2["state"] == gates.FAIL and "capability: disk" in g2["measured"] and "capability: edges" not in g2["measured"]
+
+
+def test_the_forget_probes_names_are_outside_every_world_pool_so_they_cannot_read_as_a_disk_cells_residue():
+    from zmb import world
+    pools = {n.lower() for p in (world._FEMALE, world._MALE, world._NEUTRAL, world._PETS, world._INTRUDERS, world._SURNAMES, world._HOMES) for n in p}
+    mine = {measure.ForgetProbe.NAME, measure.ForgetProbe.KEEP, measure.ForgetProbe.PLACE}
+    assert len(mine) == 3 and not ({n.lower() for n in mine} & pools)      # its bank lives the whole window in the cluster F5 / F6 scan
+
+
+def test_a_window_clears_the_banks_an_earlier_window_left_before_its_own_probes_start(box, tmp_path, monkeypatch):
+    w, _host = e2e_window(box, tmp_path, monkeypatch, extra=STRUCTURAL, pg=True)
+    for stale in ("zmb-h1-demo_bar_deadbeef", "zmb-h0-demo_bar_cafef00d"):
+        w.fake.banks[stale] = {"config": {}, "docs": {}, "units": [], "name": stale}
+    w.fake.banks["someone-elses-bank"] = {"config": {}, "docs": {}, "units": [], "name": "x"}
+    measure.measure(w)
+    assert "zmb-h1-demo_bar_deadbeef" not in w.fake.banks and "zmb-h0-demo_bar_cafef00d" not in w.fake.banks
+    assert "someone-elses-bank" in w.fake.banks                                                          # only this tool's own prefix is touched
+    assert any("cleared 2 stale zmb- bank(s)" in m for m in w.logs)
+
+
+def test_the_stale_bank_sweep_never_stops_the_window(box, tmp_path, monkeypatch):
+    w, _host = e2e_window(box, tmp_path, monkeypatch)
+    ctx = measure.Ctx(w, None)
+    w.fake.down = True
+    assert measure.sweep_stale_banks(ctx) == 0 and any("sweep skipped" in m for m in ctx.win.logs)
