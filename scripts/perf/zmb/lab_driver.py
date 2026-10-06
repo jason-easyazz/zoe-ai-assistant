@@ -50,6 +50,7 @@ CONTROLS = {
     "invalidate": "a superseded row is DELETED instead of invalidated (no history is kept)",
     "retrieval": "search ignores the query and returns the newest rows (the ranking / owner filter is broken)",
     "provenance": "the write boundary drops source_excerpt and user_turn_id (a row no longer says which turn it came from)",
+    "entailment": "the verbatim-anchor rule removed (wall ON): a per-turn model reading of the owner's own change of mind cannot retire the owner's row, it waits as a disputed candidate",
     "topic": "the same-topic guard removed: a change retires every older fact, about anyone",
     "physical_erase": "ZOE_MEMORY_PHYSICAL_ERASE=0 - a hard delete / forget removes the row through the API and leaves the text on disk",
 }
@@ -440,6 +441,10 @@ def controls_off(features: "frozenset[str] | set[str]", svc: types.SimpleNamespa
                 return md
             ms._build_metadata = staticmethod(build_without_provenance)
             undo.append(lambda: setattr(ms, "_build_metadata", raw_build))
+        if "entailment" in features:
+            # the verbatim-anchor rule removed: a per-turn model writer never carries user_stated power, so the owner's own change
+            # of mind is held back as a disputed candidate (with the wall ON; with the wall OFF nothing is held back at all)
+            patch(importlib.import_module("memory_authority"), "entailing_span", lambda fact, user_text: None)
         if "topic" in features:
             sup = importlib.import_module("memory_supersede")
             patch(sup, "same_topic", lambda new, old: True)

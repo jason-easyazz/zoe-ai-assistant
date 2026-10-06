@@ -398,10 +398,13 @@ def test_the_whole_store_tier_runs_clean_on_h1_and_h0_is_red_on_the_hard_axes():
     assert [r["id"] for r in ran if r["verdict"] == "ERROR"] == []
     unexpected = sorted(r["id"] for r in ran if r["expected"] == "PASS" and r["verdict"] != "PASS")    # a target H1 PASSES is the point (F3)
     # KNOWN GAPS of the H arms' Zoe layer, each listed in the bake-off record. Fix the adapter and shrink this list, never widen it:
-    #  - the row export carries authority_class but no source_excerpt / user_turn_id, so the two A3 cells Z0 passes are red on H1
+    #  - the row export carries authority_class but no source_excerpt / user_turn_id, so the five A3 provenance cells Z0 passes
+    #    (typed / voice-verified / taught / nightly-digest / user-turn rate; #1895 stamps provenance on Z0) are red on H1
     #    (A3 is part of the hard `authority` axis: a real run lists them as H1 hard violations until the adapter stamps provenance);
-    #  - #1895 holds an unverified self-fact as a PENDING candidate; the H layer has not ported that rule, so the A7 cells are red.
-    known = sorted(["A3.typed_turn_rows", "A3.voice_verified_turn_rows"]
+    #  - #1895 holds an unverified self-fact as a PENDING candidate; the H layer has not ported that rule, so the A7 cells (home / work /
+    #    pet) and I2.third_party_fragment.panel_unverified (same hold, same rule) are red. Port the fix, then delete these entries.
+    known = sorted(["A3.typed_turn_rows", "A3.voice_verified_turn_rows", "A3.taught_rows", "A3.nightly_digest_rows",
+                    "A3.user_turn_rows_rate", "I2.third_party_fragment.panel_unverified"]
                    + [c.id for c in store if c.id.startswith("A7.panel_unverified_kept")])
     assert unexpected == known, unexpected
     h0, _g = mk("H0")

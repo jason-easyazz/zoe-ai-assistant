@@ -88,6 +88,7 @@ The controls (`lab_driver.CONTROLS`), each a named feature the benchmark claims 
 | `retrieval` | search ignores the query and returns the newest rows: the ranking / owner filter is broken (D1-D4, C3, C4) |
 | `provenance` | the write boundary drops `source_excerpt` and `user_turn_id`: a row no longer says which turn it came from (A3) |
 | `topic` | the same-topic guard removed: a change retires every older fact, about anyone (C6, collateral invalidation) |
+| `entailment` | the verbatim-anchor rule removed: a per-turn model reading of the owner's own change of mind cannot retire the owner's row, it waits as a disputed candidate (C1 via the turn digest) |
 | `physical_erase` | `ZOE_MEMORY_PHYSICAL_ERASE=0`: a hard delete / forget removes the row through the API and leaves the text on disk (the F5 / F6 disk cells, REAL Chroma, byte-scan of a copy) |
 
 A cell lists every control that must be off together (`controls: ["extractor", "gate"]` = a two-layer defence: `--control
@@ -147,6 +148,8 @@ The known failures are **measured, not assumed**, and are real gaps in `main` to
   sentence) IS detectable in the text and is a target until the own-words wall (PR #1894) lands.
 * **I4**: the `system:`-prefixed line is stored approved as the owner's request today; the cell now asserts the canary is stored nowhere.
   A known-FAIL target cannot declare controls (`spec.py`), so I4 and `I2.attributed` take the `extractor` control the day they flip to PASS.
+
+After #1895 (the owner's own change of mind, hold-pending for unverified self-facts, provenance stamping) these flipped to PASS with a control: C1.update_via_turn_digest (`entailment`; its store probe also requires the old row to be SUPERSEDED so a vacuous pass under the lazy extractor is impossible), C5.retracted_via_turn_digest (`supersede`), A3.taught_rows / A3.nightly_digest_rows / A3.user_turn_rows_rate (`provenance`), I2.panel_unverified (`speaker`); A7 now asserts the held row is `pending`. The H arms still mirror the old behaviour, so they are red on those cells until their layer ports the fix.
 
 Earlier history: B9, E1b and H5 were targets until #1882 fixed them (2026-10-06): the speaker's own name list is kept, an unpunctuated recall question is never stored, and every self-name template is walled. `H5` was (`identity_facts.asserted_user_name` had no `goes by`,
 yet the extractor's own template emits `User goes by {0}`). They are in the public table on purpose: a table without them
