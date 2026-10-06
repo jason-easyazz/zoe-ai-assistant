@@ -449,6 +449,72 @@ def _wrap_message_with_identity(message: str, user_id: str) -> str:
     return f"{_IDENTITY_ENVELOPE_PREFIX}{uid}\n{message}"
 
 
+# Machine-readable HOUSEHOLD-PERSONA envelope (ZOE_PERSONA_LAYER, persona_layer.py). MUST match
+# the sidecar parser (labs/flue-zoe-brain-2x src/persona.ts PERSONA_ENVELOPE_PREFIX / _RE).
+#
+# WHY: the fixed persona paragraphs live in the SIDECAR system prompt (src/soul.ts), so the
+# zoe-data-side swap in zoe_agent.py (legacy lane) never reached this lane: with the flag on,
+# the system prompt was byte-identical to flag off (2026-10-06 flag attribution, 2,384 tokens
+# both ways). zoe-data owns the persona DATA (household record + each member's mode), so it
+# renders the block here, per turn, and forwards it on one envelope line; the sidecar strips it
+# and swaps it for the fixed paragraphs in THAT turn's system prompt.
+#
+# WIRE ORDER: between the replay line and the identity line:
+#   " zoe-spec:<id>\n zoe-replay:1\n zoe-persona:<JSON string>\n zoe-uid:<id>\n<blocks>\n<message>"
+# Flag off, nothing loaded, a member held on the fixed persona (no opt-in row, a minor while
+# persona_layer.MINORS_GET_PERSONA is False, a failed lookup) or wire 1 = NO line = the bytes
+# are exactly what they were. The JSON string keeps the multi-line block on ONE line.
+_PERSONA_ENVELOPE_PREFIX = " zoe-persona:"
+_PERSONA_ENVELOPE_RE = re.compile(r"^ zoe-persona:[^\n]*\n")
+# The slot budget for the block, in tokens (persona_layer.estimate_tokens). The renderer itself
+# caps at 175; this is the wire-level ceiling the sidecar mirrors (PERSONA_MAX_TOKENS).
+_PERSONA_MAX_TOKENS = 400
+# A cold snapshot costs two small reads; the first token never waits longer than this for them.
+_PERSONA_REFRESH_BUDGET_S = 0.5
+
+
+async def _persona_context_block(user_id: str) -> str:
+    """The rendered household persona block for THIS member, or "" (= leave the fixed persona).
+
+    Never raises and never stalls the turn. The flag is read per call (``persona_layer.enabled``);
+    the member's mode comes from ``persona_layer.block_for(user_id)``, which already carries the
+    household policy: guests / synthetic ids get the household tone and no relationship mode, a
+    member with no stored mode (no opt-in) or whose lookup failed keeps the fixed persona, and a
+    minor keeps it while ``MINORS_GET_PERSONA`` is False. Keyed by the acting id only, so one
+    member's mode can never be rendered for another."""
+    try:
+        if _wire_version() < _WIRE_2:  # a 1.x sidecar does not parse the line: it would reach the model
+            return ""
+        import persona_layer
+
+        if not persona_layer.enabled():
+            return ""
+        uid = (user_id or "").strip()
+        try:
+            await asyncio.wait_for(persona_layer.refresh(uid), timeout=_PERSONA_REFRESH_BUDGET_S)
+        except asyncio.TimeoutError:
+            logger.warning("PERSONA_BLOCK refresh timed out; the fixed persona stands")
+            return ""
+        block = persona_layer.block_for(uid)
+        if not block:
+            return ""
+        if persona_layer.estimate_tokens(block) > _PERSONA_MAX_TOKENS:
+            logger.warning("PERSONA_BLOCK over the %d-token slot budget; the fixed persona stands", _PERSONA_MAX_TOKENS)
+            return ""
+        logger.info("PERSONA_BLOCK user=%s chars=%d", uid, len(block))
+        return block
+    except Exception:  # noqa: BLE001 - a persona is optional; the turn is not
+        logger.warning("PERSONA_BLOCK failed; the fixed persona stands", exc_info=True)
+        return ""
+
+
+def _wrap_message_with_persona(message: str, block: str) -> str:
+    """Prefix ``message`` with the persona envelope, or return it unchanged (no block)."""
+    if not block:
+        return message
+    return f"{_PERSONA_ENVELOPE_PREFIX}{json.dumps(block, ensure_ascii=True)}\n{message}"
+
+
 # Machine-readable REPLAY-ISOLATION envelope. MUST match the sidecar's parser
 # (labs/flue-zoe-brain-2x src/replay-mode.ts REPLAY_ENVELOPE_PREFIX / _RE).
 #
@@ -534,6 +600,8 @@ def _strip_replay_envelope(message: str) -> str:
         message = _REPLAY_ENVELOPE_RE.sub("", message)
         # The speculative-turn marker is trusted the same way: never user-forgeable.
         message = _SPECULATIVE_ENVELOPE_RE.sub("", message)
+        # ...and so is the persona block: only the seam may set it.
+        message = _PERSONA_ENVELOPE_RE.sub("", message)
     return message
 
 
@@ -844,7 +912,7 @@ def _recall_inject_enabled() -> bool:
     }
 
 
-async def _fetch_for_prompt_packet(user_id: str, message: str) -> str:
+async def _fetch_for_prompt_packet(user_id: str, message: str, focus=None) -> str:
     """The /api/memories/for-prompt packet text, fetched IN-PROCESS.
 
     Calls the composer function directly (routers.memories.memory_for_prompt)
@@ -853,33 +921,95 @@ async def _fetch_for_prompt_packet(user_id: str, message: str) -> str:
     HTTP surface, not in-process callers; the endpoint itself fails closed for
     guest/unknown users (empty packet). Lazy import keeps this module
     slim-importable for tests.
+
+    ``focus`` (the named-person floor: the people the question names, as
+    ``person_recall_floor.NamedPerson``) forces the semantic search and the
+    relational block, led by those people. Absent, the call is byte-identical to
+    what it always was.
     """
     from routers.memories import memory_for_prompt
 
+    extra: dict = {}
+    if focus:
+        import person_recall_floor
+
+        extra = dict(force_recall=True, focus_people=person_recall_floor.focus_ids(focus) or None)
     result = await memory_for_prompt(
         user_id=user_id,
         message=(message or "")[:512],
         limit=_RECALL_MAX_BULLETS,
         _=None,
+        **extra,
     )
     return str((result or {}).get("packet") or "")
 
 
-def _truncate_packet(packet: str, *, max_chars: int = _RECALL_MAX_CHARS) -> str:
-    """Cap the packet at _RECALL_MAX_BULLETS bullet lines / ``max_chars``."""
+def _truncate_packet(packet: str, *, max_chars: int = _RECALL_MAX_CHARS,
+                     max_bullets: int = _RECALL_MAX_BULLETS) -> str:
+    """Cap the packet at ``max_bullets`` (default _RECALL_MAX_BULLETS) bullet lines / ``max_chars``."""
     lines: list[str] = []
     bullets = 0
     total = 0
     for line in packet.splitlines():
         if line.lstrip().startswith(("-", "•", "*")):
             bullets += 1
-            if bullets > _RECALL_MAX_BULLETS:
+            if bullets > max_bullets:
                 break
         total += len(line) + 1
         if lines and total > max_chars:
             break
         lines.append(line)
     return "\n".join(lines).strip()
+
+
+# Named-person floor: the people-graph block is the part of the packet that answers "who is
+# X to me / how many children does X have", and it sits LAST in the packet - so under the
+# plain 12-bullet / 1600-char cap a full vector section would cut it off whole. Reserve it a
+# slice (still inside the same overall caps): the relational section is capped on its own, the
+# rest of the packet gets what is left.
+_RELATIONAL_HEADING = "## People & important dates"
+_PERSON_FLOOR_REL_BULLETS = 6
+_PERSON_FLOOR_REL_CHARS = 800
+
+
+def _truncate_packet_keeping_relational(packet: str) -> str:
+    """``_truncate_packet`` with the relational section guaranteed a reserved slice."""
+    sections = re.split(r"\n\n(?=## )", (packet or "").strip())
+    idx = next((i for i, s in enumerate(sections) if s.startswith(_RELATIONAL_HEADING)), None)
+    if idx is None:
+        return _truncate_packet(packet or "")
+    rel = _truncate_packet(sections[idx], max_chars=_PERSON_FLOOR_REL_CHARS,
+                           max_bullets=_PERSON_FLOOR_REL_BULLETS)
+    rel_bullets = sum(1 for ln in rel.splitlines() if ln.lstrip().startswith(("-", "•", "*")))
+    chars = _RECALL_MAX_CHARS - len(rel) - 2
+    bullets = _RECALL_MAX_BULLETS - rel_bullets
+    head = _truncate_packet("\n\n".join(sections[:idx]), max_chars=chars, max_bullets=bullets)
+    chars -= len(head) + 2
+    bullets -= sum(1 for ln in head.splitlines() if ln.lstrip().startswith(("-", "•", "*")))
+    tail = ""
+    if chars > 0 and bullets > 0:
+        tail = _truncate_packet("\n\n".join(sections[idx + 1:]), max_chars=chars, max_bullets=bullets)
+    return "\n\n".join(s for s in (head, rel, tail) if s)
+
+
+def _continuity_owns_sentence(sentence: str) -> bool:
+    """A first-person mood statement is the continuity block's, not the recall floor's
+    (the same rule ``_recall_floor_shape`` applies to an event question)."""
+    return _continuity_inject_enabled() and bool(_CONTINUITY_RE.search(sentence))
+
+
+async def _named_person_floor(message: str, user_id: str) -> list:
+    """The people a question-shaped sentence of ``message`` names among THIS user's own
+    people and person-fact entities (``person_recall_floor``; ZOE_PERSON_RECALL_FLOOR
+    enforce|shadow|off), or [] - never raises, so a failed lookup is just no floor."""
+    try:
+        import person_recall_floor
+
+        return await person_recall_floor.resolve_named_people(
+            message, user_id, lane="seam", exclude=_continuity_owns_sentence)
+    except Exception as exc:  # noqa: BLE001 — the floor must never break a turn
+        logger.debug("seam named-person floor failed (non-fatal): %s", type(exc).__name__)
+        return []
 
 
 async def _recall_context_block(message: str, user_id: str) -> str:
@@ -889,7 +1019,9 @@ async def _recall_context_block(message: str, user_id: str) -> str:
     matches a conservative recall-question shape the floor claims
     (``_recall_floor_shape``: a personal my/I question, an evidence-shaped
     question, or an event-shaped question not embedded in a first-person
-    feeling). A fetch failure logs
+    feeling) — or, when no shape claims it, a question that NAMES a person this user
+    knows (``_named_person_floor``, S21: "How many children does Dana Whitfield
+    have?"), whose packet keeps a reserved slice for the people-graph block. A fetch failure logs
     and returns '' — the turn always proceeds, at worst without the floor.
     """
     if not _recall_inject_enabled():
@@ -897,16 +1029,25 @@ async def _recall_context_block(message: str, user_id: str) -> str:
     if not (user_id or "").strip():
         return ""
     shape = _recall_floor_shape(message)
+    named: list = []
+    if not shape:
+        # No grammatical shape claims it. A question that NAMES a person the user knows is
+        # still a question about the stored record (S21): ZOE_PERSON_RECALL_FLOOR.
+        named = await _named_person_floor(message, user_id)
+        if named:
+            shape = "named_person"
     if not shape:
         return ""
     try:
-        packet = await _fetch_for_prompt_packet(user_id, message)
+        packet = await (_fetch_for_prompt_packet(user_id, message, focus=named) if named
+                        else _fetch_for_prompt_packet(user_id, message))
     except Exception as exc:  # noqa: BLE001 — the recall floor must never break a turn
         logger.warning(
             "seam recall inject: packet fetch failed, continuing without it: %s", exc
         )
         return ""
-    packet = _truncate_packet((packet or "").strip())
+    packet = (_truncate_packet_keeping_relational((packet or "").strip()) if named
+              else _truncate_packet((packet or "").strip()))
     bullets = sum(1 for ln in packet.splitlines() if ln.lstrip().startswith(("-", "•", "*")))
     logger.info("SEAM_RECALL user=%s shape=%s bullets=%d chars=%d",
                 user_id, shape, bullets, len(packet))
@@ -1699,6 +1840,9 @@ async def _run_flue_brain_streaming_turn(
         if hedge_block:
             brain_message = f"{brain_message}\n{hedge_block}"
     outbound_message = _wrap_message_with_identity(brain_message, uid)
+    # Household persona + this member's mode (ZOE_PERSONA_LAYER, default OFF): rides between the
+    # replay line and the identity line. "" (the default) = unchanged bytes.
+    outbound_message = _wrap_message_with_persona(outbound_message, await _persona_context_block(uid))
     # Replay isolation rides OUTSIDE the identity wrap so its line is first on the
     # wire. Only the replay harness ever passes this; absent → unchanged bytes.
     outbound_message = _wrap_message_with_replay(

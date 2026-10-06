@@ -109,6 +109,28 @@ ids only). Day 2 follows.
 | S21 | A correction reaches the record: "Biscuit is their dog" after "…has two kids, Mika and Biscuit." **Expected FAIL until `ZOE_CORRECTION_APPLY` is on — a target.** | deterministic: the correction turn must say what changed ("Fixed: …", not "next time"), the packet must hold Biscuit as a pet and no child line, and the count of the children must leave Biscuit out (Mika alone). |
 | S22 | Roles are stated, never guessed: a pasted list of four names (the intro mentions a partner and two children, no line ties a name to a role). **Expected FAIL until `ZOE_ROSTER_NEUTRAL_ASK` is on — a target.** | deterministic: no role word within 5 words of a roster first name in the roster reply, the follow-up reply or the packet, and the roster reply asks a question. |
 
+**S21's reply leg — the named-person recall floor (2026-10-06, `ZOE_PERSON_RECALL_FLOOR`).** With
+`ZOE_CORRECTION_APPLY=1` the store and acknowledgement legs of S21 pass, but the ask "How many children does
+Dana Whitfield have?" matched no recall-floor shape (no my/I, no event verb, no own-fact noun), so the brain
+answered "I don't have any information about Dana Whitfield's children" and `recall_memory` ran in 0 of 3
+recorded turns (the flag attribution, `docs/research/samantha-flags-ab-2026-10-06.md` on PR #1897). The floor is one more
+way into the existing `ZOE_SEAM_RECALL_INJECT` mechanism: a **question-shaped sentence that names a person this
+user knows** — a `people` row owned by the asker (exact whole-name match; a unique first name counts, a first
+name two contacts share does not), or a `person_pending` fact entity (`slug:<name>`, owner-scoped) — forces the
+for-prompt packet **and** the people-graph block, led by that person (`zoe_memory_compose` focus: her row, the
+edges that touch her, her dates; no household filler, no portrait). Same caps as every recall block (12
+bullets / 1600 chars) with a reserved relational slice (6 bullets / 800 chars) so a full vector section cannot
+cut the answer off. Statements, how-tos ("how do I add Dana…"), a first-person mood sentence (continuity's)
+and another user's contact never fire it. Code: `memory_gate.person_names_in_question` (pure),
+`person_recall_floor.resolve_named_people` (the reads), `zoe_flue_client._recall_context_block` (chat and the
+voice-mode turn), `routers.voice_tts._voice_relational_lines` (the voice recall packet).
+`ZOE_PERSON_RECALL_FLOOR` = `enforce` (default) | `shadow` (logs `RECALL_FLOOR reason=named_person mode=shadow
+forced=0`, forces nothing) | `off` (reads nothing). Every forced turn logs
+`RECALL_FLOOR reason=named_person lane=seam|voice mode=enforce user=… people=N linked=M forced=1` (counts only,
+no names). The master switch `ZOE_SEAM_RECALL_INJECT` still governs the seam, so flag off there = byte-identical
+outbound message. Voice-path files touched, so the landing goes through the replay gate; the S20/S21 x5 re-run
+(they are sampling-sensitive) is the acceptance measurement and is NOT in the PR.
+
 S13–S16 (2026-10-04, [contacts-conversation.md](contacts-conversation.md)) use synthetic people only
 (Ottoline Fenwick, Percival, Ignatius/Philippa/Barnaby), run last and same-day (contact writes are
 synchronous, so there is no capture wait or backdate), and are not `EXPECTED` targets: a baseline recorded
