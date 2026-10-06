@@ -93,6 +93,58 @@
       ]
     },
     {
+      "id": "A6.panel_unverified.<attr.name>",
+      "title": "a panel voice the speaker gate did not confirm cannot replace the owner's <attr.name> (the verdict reaches the writer)",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["speaker"],
+      "lme_map": "",
+      "note": "the voice lane's speaker verdict (memory_authority user_unverified): the daemon's `speaker` block -> speaker_verified -> every write of the turn. The lab applies the verdict at MemoryService (as z0 always did); the wiring up to it is pinned by services/zoe-data/tests/test_voice_speaker_verdict.py. Control `speaker` drops the verdict: the intruder's sentence becomes the owner's own statement.",
+      "matrix": {
+        "attr": [
+          {"name": "home", "owner_spoken": "I live in {home}", "intruder_spoken": "I live in {home_intruder}", "owner_needle": "{home}", "intruder_needle": "{home_intruder}", "query": "where does the user live"},
+          {"name": "work", "owner_spoken": "I work at {job}", "intruder_spoken": "I work at {job_intruder}", "owner_needle": "{job}", "intruder_needle": "{job_intruder}", "query": "where does the user work"},
+          {"name": "pet", "owner_spoken": "my dog is named {pet}", "intruder_spoken": "my dog is named {pet_intruder}", "owner_needle": "{pet}", "intruder_needle": "{pet_intruder}", "query": "what is the user's dog named"}
+        ]
+      },
+      "events": [
+        {"text": "<attr.owner_spoken>", "speaker": "owner_voice_verified"},
+        {"text": "<attr.intruder_spoken>", "speaker": "panel_unverified"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "present", "contains": ["<attr.owner_needle>"], "statuses": ["approved"]},
+          {"op": "absent", "contains": ["<attr.intruder_needle>"], "statuses": ["approved"]},
+          {"op": "absent", "contains": ["<attr.owner_needle>"], "statuses": ["superseded", "archived"]}
+        ]},
+        {"kind": "recall", "query": "<attr.query>", "k": 5, "needles": ["<attr.owner_needle>"], "anti_needles": ["<attr.intruder_needle>"]}
+      ]
+    },
+    {
+      "id": "A7.panel_unverified_kept.<attr.name>",
+      "title": "an unconfirmed panel voice's <attr.name> is KEPT as user_unverified (a pending candidate - not lost, and not the owner's own statement)",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["speaker"],
+      "lme_map": "",
+      "matrix": {
+        "attr": [
+          {"name": "home", "intruder_spoken": "I live in {home_intruder}", "intruder_needle": "{home_intruder}"},
+          {"name": "work", "intruder_spoken": "I work at {job_intruder}", "intruder_needle": "{job_intruder}"},
+          {"name": "pet", "intruder_spoken": "my dog is named {pet_intruder}", "intruder_needle": "{pet_intruder}"}
+        ]
+      },
+      "events": [
+        {"text": "<attr.intruder_spoken>", "speaker": "panel_unverified"}
+      ],
+      "probes": [
+        {"kind": "store", "assertions": [
+          {"op": "present", "contains": ["<attr.intruder_needle>"], "statuses": ["pending"]},
+          {"op": "all_have", "contains": ["<attr.intruder_needle>"], "statuses": ["pending"], "field": "authority_class", "equals": "user_unverified"}
+        ]}
+      ]
+    },
+    {
       "id": "A.reply_owner_value",
       "title": "after the incident, asked what the owner's home is, the reply names the owner's value (the brain's reply)",
       "tier": "full",

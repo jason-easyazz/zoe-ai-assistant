@@ -50,8 +50,8 @@ RETAINED = ("approved", "pending", "disputed")
 
 _TURN_KEYS = {"text", "speaker", "day_offset", "writer", "proposes", "op", "attr", "assistant_text",
               "memory_type"}
-_CAPS = {"advance_clock": "clock", "ingest_as": "identities", "idle_pass": "idle_pass", "hard_delete": "disk",
-         "conflict_pass": "conflict_pass", "edge": "edges"}
+_CAPS = {"advance_clock": "clock", "ingest_as": "identities", "idle_pass": "idle_pass",
+         "conflict_pass": "conflict_pass", "edge": "edges", "hard_delete": "disk"}
 _PROBE_KINDS = ("store", "facts", "entities", "recall", "answer", "edges", "hit_at_k", "disk")
 
 

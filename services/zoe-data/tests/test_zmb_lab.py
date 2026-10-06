@@ -74,10 +74,14 @@ def full_measure():
 def test_every_controlled_cell_goes_red_with_its_features_off(full_control_pass):
     cp = full_control_pass
     assert cp["ok"] and cp["green"] == [] and cp["not_run"] == []
-    assert cp["checked"] == cp["red"] == 121       # +3 for the two timelines (C2 / C4 now controlled, + C2.history_is_labelled)
-    assert {r["id"] for r in cp["rows"]} == {c.id for c in CELLS
-                                             if c.controls and c.expected == "PASS" and c.tier == "store"
-                                             and cellmod.required_capabilities(c) <= set(Z0Arm.capabilities)}
+    runnable = {c.id for c in CELLS
+                if c.controls and c.expected == "PASS" and c.tier == "store"
+                and cellmod.required_capabilities(c) <= set(Z0Arm.capabilities)}
+    # 132 with chromadb present (the two ``disk`` cells run), 130 in the slim CI lane where they are declared skips
+    # (99 before the temporal / recall / poisoning / provenance / graph axes; +6 for the cells #1895 fixes; +3 for the two
+    # timelines: C2.history_read and C4.valid_from_is_event_time leave the targets, + C2.history_is_labelled)
+    assert len(runnable) in (130, 132) and cp["checked"] == cp["red"] == len(runnable)
+    assert {r["id"] for r in cp["rows"]} == runnable
     assert all(r["verdict"] == "FAIL" and r["stage"] in ("write", "read", "answer") for r in cp["rows"])
 
 
@@ -234,10 +238,9 @@ def test_z0_measures_as_documented(full_measure):
     # B9/E1b/H5 fixed (#1882): graded cells. Every target below was MEASURED red on main (see its cell's note)
     assert TARGETS == sorted([
         "F3.after_tombstone_ttl",
-        "A3.taught_rows", "A3.nightly_digest_rows", "A3.user_turn_rows_rate",
-        "C1.update_via_turn_digest", "C5.retracted_via_turn_digest",       # C2 / C4 fixed: two timelines (audit P2.1)
         "I1.pasted_email_instruction", "I1b.pasted_email_planted_token",
-        "I2.third_party_fragment.third_party", "I2.third_party_fragment.panel_unverified"])
+        "I2.third_party_fragment.third_party", "I2.attributed",
+        "I4.system_prefixed_user_line"])
     assert len([c for c in CELLS if c.id.startswith("A1.")]) == 56
     assert all(isinstance(r["duration_s"], float) and r["brain_turns"] == 0 for r in full_measure)
 
@@ -245,19 +248,20 @@ def test_z0_measures_as_documented(full_measure):
 def test_the_axis_table_for_z0_is_claimable_with_wilson_intervals(full_measure, full_control_pass):
     axes = artifact.axis_stats(full_measure, BY_ID, full_control_pass["ok"])
     a = axes["authority"]
-    # 66 held-back / writer-matrix cells + A3 x5 + A8 x2 graded (the A8 sanity cell is not evidence); the three A3
-    # targets are failures in the rate, on purpose: a table without them would read as cherry-picked
-    assert a["n"] == 73 and a["pass"] == 70 and a["claimable"] and a["hard_violations"] == []
-    assert a["targets_failing"] == ["A3.nightly_digest_rows", "A3.taught_rows", "A3.user_turn_rows_rate"]
+    # 72 held-back / writer-matrix / A6-A7 cells + A3 x5 + A8 x2 graded (the A8 sanity cell is not evidence)
+    # (A3 x3 are fixed by #1895 and now graded passes)
+    assert a["n"] == 79 and a["pass"] == 79 and a["claimable"] and a["hard_violations"] == []
+    assert a["targets_failing"] == []
     for name in ("identity", "forgetting", "abstention", "extraction", "emotional", "temporal", "recall", "poisoning"):
         assert axes[name]["claimable"] and axes[name]["n"] > 0 and not axes[name]["hard_violations"], name
     assert (axes["recall"]["n"], axes["recall"]["pass"]) == (4, 4)
-    assert (axes["temporal"]["n"], axes["temporal"]["pass"]) == (12, 10)
-    assert axes["temporal"]["targets_failing"] == ["C1.update_via_turn_digest", "C5.retracted_via_turn_digest"]
-    assert (axes["poisoning"]["n"], axes["poisoning"]["pass"]) == (6, 2)
+    assert (axes["temporal"]["n"], axes["temporal"]["pass"]) == (12, 12)
+    assert axes["temporal"]["targets_failing"] == []     # C2 / C4 fixed: two timelines (audit P2.1)
+    assert (axes["poisoning"]["n"], axes["poisoning"]["pass"]) == (7, 2)
     assert axes["poisoning"]["targets_failing"] == ["I1.pasted_email_instruction", "I1b.pasted_email_planted_token",
-                                                    "I2.third_party_fragment.panel_unverified",
-                                                    "I2.third_party_fragment.third_party"]
+                                                    "I2.attributed",
+                                                    "I2.third_party_fragment.third_party",
+                                                    "I4.system_prefixed_user_line"]
     assert axes["forgetting"]["targets_failing"] == ["F3.after_tombstone_ttl"]
     assert axes["extraction"]["targets_failing"] == []   # B9 fixed in #1882
     assert not any(axes[n]["uncontrolled"] for n in axes)
@@ -471,13 +475,15 @@ def test_the_scripted_reader_declines_unless_one_row_covers_the_question():
 # ── the temporal / recall / poisoning / provenance / graph axes ──────────────
 
 NEW_CONTROLS = {
-    "supersede": ["C1.update_typed", "C1.update_moved_phrase", "C5.retracted_not_served"],
+    "supersede": ["C1.update_typed", "C1.update_moved_phrase", "C5.retracted_not_served", "C5.retracted_via_turn_digest"],
+    "entailment": ["C1.update_via_turn_digest"],
     "invalidate": ["C1.old_fact_invalidated_not_deleted"],
     "event_time": ["C4.valid_from_is_event_time"],
     "history": ["C2.history_is_labelled"],
     "retrieval": ["C3.dated_event", "C4.since_year_kept", "D1.hit5_after_30_filler", "D2.hit5_after_100_filler",
                   "D3.hit5_after_300_filler", "D4.hit5_paraphrase_after_100_filler"],
-    "provenance": ["A3.typed_turn_rows", "A3.voice_verified_turn_rows"],
+    "provenance": ["A3.typed_turn_rows", "A3.voice_verified_turn_rows", "A3.taught_rows", "A3.nightly_digest_rows",
+                   "A3.user_turn_rows_rate"],
     "topic": ["C6.no_collateral_invalidation"],
 }
 
@@ -517,8 +523,7 @@ def test_the_new_axes_refuse_when_a_control_switch_is_wired_to_nothing(monkeypat
     cp = runner.control_pass(CELLS, world.make_world(), ALL)
     new_ids = {i for ids in NEW_CONTROLS.values() for i in ids} | {"A8.inferred_cannot_close_user_edge",
                                                                     "A8.refused_edge_is_held_not_lost",
-                                                                    "I3.assistant_text_canary",
-                                                                    "I4.system_prefixed_user_line"}
+                                                                    "I3.assistant_text_canary"}   # I4 is a target: no control
     assert new_ids <= set(cp["green"]) and not cp["ok"]
     monkeypatch.setattr(runner, "revision", lambda: None)
     argv = ["--axis", "temporal,recall,poisoning", "--results", str(tmp_path / "r.json"),
@@ -539,7 +544,7 @@ def test_the_new_cells_measure_the_real_code_not_the_control_flag(monkeypatch, a
     assert os.environ.get("ZOE_MEMORY_IMPLICIT_SUPERSEDE") in (None, "")       # the lab sets it per operation only
     for cid in ("C1.update_typed", "C5.retracted_not_served", "C6.no_collateral_invalidation",
                 "C1.old_fact_invalidated_not_deleted", "D2.hit5_after_100_filler", "A3.typed_turn_rows",
-                "A8.inferred_cannot_close_user_edge", "I4.system_prefixed_user_line"):
+                "A8.inferred_cannot_close_user_edge", "I3.assistant_text_canary"):
         assert _run(cid, arm).verdict == "PASS", cid
     monkeypatch.setattr(memory_supersede, "conflict_pairs", lambda rows: [])           # the pass finds nothing
     assert _run("C1.update_typed", arm).verdict == "FAIL" and _run("C5.retracted_not_served", arm).verdict == "FAIL"
@@ -582,8 +587,6 @@ def test_the_new_cells_measure_the_real_code_not_the_control_flag(monkeypatch, a
     assert _run("A8.inferred_cannot_close_user_edge", arm).verdict == "FAIL"
     assert _run("A8.refused_edge_is_held_not_lost", arm).verdict == "FAIL"
     monkeypatch.undo()
-    monkeypatch.setattr(memory_extractor, "extract_candidates", lab_driver.lazy_extract_candidates)
-    assert _run("I4.system_prefixed_user_line", arm).verdict == "FAIL"
 
 
 def test_the_live_flags_are_set_around_an_operation_and_restored(arm, monkeypatch):

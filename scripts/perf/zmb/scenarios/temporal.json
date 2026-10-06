@@ -49,7 +49,7 @@
       "title": "knowledge update when the new fact is written by the per-turn digest (a model writer, anchored on the owner's own words): the current fact must win",
       "tier": "store",
       "kind": "script",
-      "expected": "FAIL",
+      "controls": ["entailment"],
       "lme_map": "knowledge-update",
       "note": "measured, not assumed: the digest's 'User lives in <new>' contradicts a user-stated row, so the authority wall (#1868) holds it back as a `disputed` candidate (user_stated_derived) and recall keeps serving the OLD home until the owner confirms. Safe against the 2026-10-05 incident, but the update does not land on its own: the decision rule's C1 >= 95% needs either the owner's confirmation in the loop (brain tier) or a rule that lets a verbatim user anchor retire the row. The scripted digest stands in for the model; the dispute question queue needs Postgres and is not run in the lab",
       "events": [
@@ -60,7 +60,8 @@
       "probes": [
         {"kind": "store", "assertions": [
           {"op": "present", "contains": ["{home}"], "statuses": ["approved"]},
-          {"op": "absent", "contains": ["{home_old}"], "statuses": ["approved", "pending", "disputed"]}
+          {"op": "absent", "contains": ["{home_old}"], "statuses": ["approved", "pending", "disputed"]},
+          {"op": "present", "contains": ["{home_old}"], "statuses": ["superseded"]}
         ]},
         {"kind": "recall", "query": "where do I live", "k": 5, "needles": ["{home}"], "anti_needles": ["{home_old}"]}
       ]
@@ -201,7 +202,7 @@
       "title": "stale-fact abstention when the retraction is written by the per-turn digest: the retracted fact must not be served as current",
       "tier": "store",
       "kind": "script",
-      "expected": "FAIL",
+      "controls": ["supersede"],
       "lme_map": "abstention (the stale fact)",
       "note": "measured: the digest's 'User no longer sees X' contradicts a user-stated row, so the authority wall holds it back as a `disputed` candidate and recall keeps serving the retracted dentist until the owner confirms (same mechanism as C1.update_via_turn_digest)",
       "events": [

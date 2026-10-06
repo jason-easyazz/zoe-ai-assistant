@@ -42,6 +42,7 @@ CONTROLS = {
     "tombstone": "the forget tombstone removed - a late extractor write may resurrect a forgotten name",
     "sweep": "the forget sweep archives nothing while still claiming it did",
     "affect": "ZOE_AFFECT_CONSENT_GATE=off - feelings are recorded for guests and children",
+    "speaker": "the speaker-gate verdict dropped on the voice lane - an unconfirmed panel voice's self-fact is written as the owner's own statement",
     "extractor": "a lazy extractor that flips day/month, guesses roles, mines questions and assistant text",
     "gate": "the write-quality gate removed - questions, meta-rambling and transcript echoes are stored",
     "reader": "a reader that always answers from the nearest row instead of declining",
@@ -49,6 +50,7 @@ CONTROLS = {
     "invalidate": "a superseded row is DELETED instead of invalidated (no history is kept)",
     "retrieval": "search ignores the query and returns the newest rows (the ranking / owner filter is broken)",
     "provenance": "the write boundary drops source_excerpt and user_turn_id (a row no longer says which turn it came from)",
+    "entailment": "the verbatim-anchor rule removed (wall ON): a per-turn model reading of the owner's own change of mind cannot retire the owner's row, it waits as a disputed candidate",
     "topic": "the same-topic guard removed: a change retires every older fact, about anyone",
     "event_time": "the stated-validity parser switched off: valid_from is always the capture time, never the date the person said",
     "history": "the history read switched off: a replaced fact is kept but a question about how things used to be never sees it",
@@ -367,6 +369,19 @@ def controls_off(features: "frozenset[str] | set[str]", svc: types.SimpleNamespa
             setenv("ZOE_AFFECT_CONSENT_GATE", "off")
         if "identity" in features:
             patch(svc.memory_service, "_identity_assertion_blocked", lambda *a, **k: False)
+        if "speaker" in features:
+            real_ingest = svc.memory_service.MemoryService.ingest
+            real_edit = svc.memory_service.MemoryService.review
+
+            async def ingest_no_verdict(self, *a, **kw):
+                kw.pop("speaker_verified", None)   # the voice lane reports nothing: today's behaviour
+                return await real_ingest(self, *a, **kw)
+
+            async def review_no_verdict(self, *a, **kw):
+                kw.pop("speaker_verified", None)
+                return await real_edit(self, *a, **kw)
+            patch(svc.memory_service.MemoryService, "ingest", ingest_no_verdict)
+            patch(svc.memory_service.MemoryService, "review", review_no_verdict)
         if "tombstone" in features:
             patch(svc.memory_tombstones, "matching_tombstone", lambda *a, **k: None)
             patch(svc.memory_tombstones, "add", lambda *a, **k: None)
@@ -432,6 +447,10 @@ def controls_off(features: "frozenset[str] | set[str]", svc: types.SimpleNamespa
                 return md
             ms._build_metadata = staticmethod(build_without_provenance)
             undo.append(lambda: setattr(ms, "_build_metadata", raw_build))
+        if "entailment" in features:
+            # the verbatim-anchor rule removed: a per-turn model writer never carries user_stated power, so the owner's own change
+            # of mind is held back as a disputed candidate (with the wall ON; with the wall OFF nothing is held back at all)
+            patch(importlib.import_module("memory_authority"), "entailing_span", lambda fact, user_text: None)
         if "topic" in features:
             sup = importlib.import_module("memory_supersede")
             patch(sup, "same_topic", lambda new, old: True)

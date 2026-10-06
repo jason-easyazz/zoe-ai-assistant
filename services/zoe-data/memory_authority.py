@@ -39,6 +39,21 @@ and the user's OWN text supports the fact (``supports``) — subject, value and 
 user sentence, and the user speaking in the first person for a fact about themself. Assistant
 turns never count; neither does a third person's name that merely appears in a transcript.
 
+Your own change of mind (ZMB C1 / C5): a PER-TURN writer (``turn_digest`` / ``voice_turn_digest``) whose
+anchor is the user's own turn and whose fact that turn ENTAILS - one verbatim sentence of it holds the
+subject, value, attribute, polarity and tense (``supporting_span`` / ``supports``) - from a speaker the lane did
+not reject (``speaker_verified`` is not False), about the speaker, is the user speaking: it is stamped
+``user_stated_derived`` / basis ``verbatim_user_span`` (the honest provenance) and carries ``user_stated``
+POWER and standing (``Resolved.promoted``; ``row_class`` reads it back as ``user_stated``), so "I moved to Hobart"
+updates "User lives in Perth" and "I don't see Dana anymore" retires "User's dentist is Dana" instead of waiting as
+a ``disputed`` candidate. The paraphrase-drift concern is answered by the entailment check, not by rank: a
+paraphrase the turn does not entail (a different value, a hypothetical, a relative's fact, a negation the turn
+lacks) stays ``user_stated_derived`` rank 3 / ``model_from_turn`` and is held back exactly as before. The nightly
+(whole-day transcript) writers are NOT promoted: a transcript has no single turn to quote.
+
+An unverified speaker's self-fact (``user_unverified``) is never the owner's fact: ``MemoryService.ingest``
+stores it ``pending`` (a candidate the owner confirms), not ``approved`` (``is_self_assertion``).
+
 ``ZOE_MEMORY_AUTHORITY`` = ``enforce`` (default) | ``shadow`` (log
 ``AUTHORITY_WOULD_BLOCK``, change nothing) | ``off``. Provenance is stamped in every mode.
 Default argued in docs/knowledge/memory-authority.md: the wall only ever parks a MODEL's
@@ -48,6 +63,7 @@ refused.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
@@ -195,6 +211,14 @@ MODEL_FROM_TURN_WRITERS = frozenset({
     "turn_digest", "voice_turn_digest", "person_extractor_llm", "brain_tool", "mcp",
     "zoe_agent", "decay_sweep",
 })
+#: Per-turn model writers whose anchor is ONE user turn: when that turn entails the fact (and the speaker is not
+#: rejected) the write carries ``user_stated`` power (``VERBATIM_BASIS``) - the owner's own change of mind, stated plainly.
+SPAN_WRITERS = frozenset({"turn_digest", "voice_turn_digest"})
+VERBATIM_BASIS = "verbatim_user_span"
+#: The teach lane: the text (or the user turn it was dictated from) IS the owner's own words.
+TEACH_WRITERS = frozenset({"voice_fact", "review_ui", "explicit_teach"})
+#: Writers whose evidence (``source_excerpt``) is, by contract, a USER turn: a row from one of them says which turn.
+USER_TURN_WRITERS = DETERMINISTIC_USER_WRITERS | TEACH_WRITERS
 #: Model writers that read a whole day's transcript: same, against the user turns of it.
 TRANSCRIPT_WRITERS = frozenset({"digest", "idle_consolidation"})
 #: Automatic writers that never read a user turn (beyond the two sets above).
@@ -249,6 +273,9 @@ def model_for(writer: str) -> str:
 class Resolved:
     cls: str
     basis: str
+    #: a per-turn model writer whose anchor turn ENTAILS the fact (``VERBATIM_BASIS``): the class stays the honest
+    #: ``user_stated_derived``, the power and standing are ``user_stated``'s
+    promoted: bool = False
 
     @property
     def authority(self) -> str:
@@ -257,13 +284,14 @@ class Resolved:
     @property
     def rank(self) -> int:
         """STANDING: how well the row it becomes is protected from later writes."""
-        return RANK[self.cls]
+        return USER_RANK if self.promoted else RANK[self.cls]
 
     @property
     def power(self) -> int:
         """POWER over existing rows (= ``rank``: a model's paraphrase of the user never
-        overrides a direct statement, however fresh the turn it paraphrases)."""
-        return RANK[self.cls]
+        overrides a direct statement, however fresh the turn it paraphrases) - UNLESS the user's own turn
+        entails it verbatim (``promoted``): then the user speaking, at ``user_stated`` power."""
+        return USER_RANK if self.promoted else RANK[self.cls]
 
 
 def resolve_write(writer: str, text: str, *, anchor_text: Optional[str] = None,
@@ -293,6 +321,11 @@ def resolve_write(writer: str, text: str, *, anchor_text: Optional[str] = None,
         if (anchor_text or prompt_text) and supports(text, anchor_text or "", prompt_text):
             if speaker_verified is False and w in VOICE_LANE_WRITERS:
                 return Resolved(USER_UNVERIFIED, "speaker_not_verified")
+            if (w in SPAN_WRITERS and anchor_text and is_self_assertion(text)
+                    and entailing_span(text, anchor_text) is not None):
+                # the owner's own words, one verbatim sentence, ENTAIL the fact: their change of mind
+                # (C1 / C5) is the user speaking, not a model's guess at them
+                return Resolved(USER_STATED_DERIVED, VERBATIM_BASIS, promoted=True)
             return Resolved(USER_STATED_DERIVED, "anchored_user_turn")
         return Resolved(base, "unanchored" if anchor_text else "no_user_evidence")
     return Resolved(MODEL_FROM_TRANSCRIPT, "automatic_writer")
@@ -339,6 +372,8 @@ def row_class(meta: Mapping[str, Any], text: str = "") -> str:
     meta = meta or {}
     c = str(meta.get("authority_class") or "")
     if c in RANK:
+        if c == USER_STATED_DERIVED and str(meta.get("authority_basis") or "") == VERBATIM_BASIS:
+            return USER_STATED   # the user's own turn entailed it verbatim: standing (and power) of the user's words
         return c
     a = str(meta.get("authority") or "")
     if a in AUTHORITIES:
@@ -609,9 +644,23 @@ def supports(fact: str, user_text: str, prompt_text: Optional[str] = None) -> bo
     """
     if not fact or not user_text:
         return False
+    if next(_support_windows(fact, user_text), None) is not None:
+        return True
     about_user, value, cues, other = _fact_parts(fact)
     if not (value or cues or other):
         return False
+    return _answers_a_question(fact, value, cues, user_text, prompt_text)
+
+
+def _support_windows(fact: str, user_text: str):
+    """Every sentence (or two adjacent sentences of one turn) of ``user_text`` that supports ``fact`` - the
+    DIRECT path of ``supports`` (no assistant question in play). The windows are cut from the date-normalised
+    text; ``supporting_span`` / ``entailing_span`` return the verbatim form of one."""
+    if not fact or not user_text:
+        return
+    about_user, value, cues, other = _fact_parts(fact)
+    if not (value or cues or other):
+        return
     # One TURN per line (the digests join user turns with newlines). A window is a sentence,
     # or two adjacent sentences of the SAME turn - never across turns: "my dog is Teddy"
     # on one turn plus "Rex is coming over" on the next is not "my dog is Rex".
@@ -632,8 +681,111 @@ def supports(fact: str, user_text: str, prompt_text: Optional[str] = None) -> bo
             continue
         if not _window_is_a_statement_about_the_user(win, fact):
             continue
-        return True
-    return _answers_a_question(fact, value, cues, user_text, prompt_text)
+        yield win
+
+
+def _squash(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "")).strip()
+
+
+def supporting_span(fact: str, user_text: str) -> Optional[str]:
+    """The user's own VERBATIM words that entail ``fact``: the sentence (or two adjacent sentences of one
+    turn) ``supports`` accepts, only if it appears, whitespace-folded, in ``user_text`` exactly as the user
+    wrote it - else None. The direct path only: an elliptical answer to an assistant question
+    (``prompt_text``) is never a span, and a window the date normaliser rewrote is not verbatim."""
+    return _verbatim(_support_windows(fact, user_text), user_text)
+
+
+def _verbatim(windows, user_text: str) -> Optional[str]:
+    squashed = _squash(user_text)
+    for win in windows:
+        w = _squash(win)
+        if w and w in squashed:
+            return w
+    return None
+
+
+#: a hedge, a report or a reported speaker is not a PLAIN statement ("a ferry company came up, I think", "Dana
+#: said she lives in Perth", "apparently I moved"). supports() tolerates these (it only decides whether a fact
+#: is the DERIVED one of the user); the power to overrule what they said before does not.
+_PLAIN_FIRST_PERSON = frozenset("i im ive id ill my me mine myself we weve our ours us".split())
+_HEDGE_VERBS = ("think", "guess", "suppose", "reckon", "believe", "figure", "assume", "wonder")
+_HEDGE_WORDS = (
+    "probably", "possibly", "apparently", "supposedly", "presumably", "sort of", "kind of", "came up",
+    "comes up", "coming up", "heard", "rumour", "rumor", "someone", "somebody", "they say", "people say",
+    "he says", "she says", "said", "told me", "tells me", "according to")
+_PIPE = chr(124)
+_HEDGE_RE = re.compile(
+    r"\b(?:i" + _PIPE + r"we)\s+(?:" + _PIPE.join(_HEDGE_VERBS) + r")\b" + _PIPE
+    + r"\b(?:" + _PIPE.join(re.escape(w) for w in _HEDGE_WORDS) + r")s?\b", re.IGNORECASE)
+
+
+def _plainly_first_person(win: str, fact: str) -> bool:
+    """The window is the speaker PLAINLY stating the fact about themself: no hedge or report in it, and the
+    first-person word comes BEFORE the first word of the claim (its attribute cue, value or other content) -
+    "I moved to Hobart", "I do not see Dana any more", "my dentist is Priya now"; not "a ferry company came up
+    I think" (the "I" trails the claim) nor "Dana is my dentist" (a third person leads)."""
+    if _HEDGE_RE.search(win):
+        return False
+    toks = [w.lower().replace("’", "").replace(chr(39), "") for w in _words(win)]
+    fp = next((i for i, w in enumerate(toks) if w in _PLAIN_FIRST_PERSON), None)
+    if fp is None:
+        return False
+    _, value, cues, other = _fact_parts(fact)
+    claim = value | other
+    for i, w in enumerate(_words(win)):
+        st = _stem(w)
+        if st in claim or (cues and _CUE_OF.get(st) in cues):
+            return fp < i
+    return True
+
+
+def entailing_span(fact: str, user_text: str) -> Optional[str]:
+    """The user's own VERBATIM sentence that PLAINLY entails ``fact`` (a fact about the speaker), else None:
+    ``supporting_span`` plus ``_plainly_first_person``. This is the test a per-turn model writer must pass to
+    carry ``user_stated`` power (``VERBATIM_BASIS``) - the owner's own change of mind, stated plainly."""
+    if not is_self_assertion(fact):
+        return None
+    return _verbatim((w for w in _support_windows(fact, user_text) if _plainly_first_person(w, fact)), user_text)
+
+
+def is_self_assertion(text: str) -> bool:
+    """Is this stored fact stated ABOUT the speaker ("User lives in ...", "User no longer sees ...",
+    "my ...", "I ...")? The only facts a panel that did not verify the speaker may not state for the owner."""
+    return bool(_USER_SUBJECT_RE.match(text or ""))
+
+
+def turn_evidence(writer: str, res: "Resolved", text: str, *, user_id: str,
+                  anchor_text: Optional[str], source_excerpt: Optional[str],
+                  user_turn_id: Optional[str], teach: bool = True) -> tuple[Optional[str], Optional[str]]:
+    """``(source_excerpt, user_turn_id)`` a row written from a user turn must carry (ZMB A3). What the
+    CALLER gave wins; the gaps are filled here, at the one write boundary, from evidence that is the user's
+    by construction:
+
+    * the TEACH lane (``voice_fact`` / ``review_ui`` / ``explicit_teach``): the user's own turn
+      (``anchor_text``) if the caller has it, else the taught text, which IS their words (``teach=False``
+      for an EDIT: a correction made in the review UI is not a chat turn, so it invents no turn id);
+    * a model writer whose anchor the user's turn supports (``user_stated_derived`` / ``user_unverified``):
+      the verbatim sentence that supports it (``supporting_span``) - nothing when none does, because a row
+      no user sentence supports has no user turn to point at.
+
+    The turn id, when not given, is a stable content id of that evidence (never random: a replay of the
+    same turn gives the same id). Rows of any other lane are left exactly as the caller built them.
+    """
+    w = (writer or "").strip()
+    excerpt = (source_excerpt or "").strip() or None
+    if excerpt is None:
+        if w in TEACH_WRITERS:
+            if teach:
+                excerpt = (anchor_text or text or "").strip() or None
+        elif res.cls in (USER_STATED_DERIVED, USER_UNVERIFIED) and anchor_text:
+            excerpt = supporting_span(text, anchor_text)
+    turn_id = (user_turn_id or "").strip() or None
+    if turn_id is None and excerpt and (w in USER_TURN_WRITERS or res.cls in (USER_STATED_DERIVED, USER_UNVERIFIED)):
+        basis = text if w in TEACH_WRITERS and not anchor_text else excerpt
+        prefix = "fact-" if w in TEACH_WRITERS else "ut-"
+        turn_id = prefix + hashlib.sha1(f"{user_id}|{_squash(basis).lower()}".encode("utf-8")).hexdigest()[:16]
+    return excerpt, turn_id
 
 
 #: a fact about one of the user's RELATIVES: "User's sister lives in Perth." / "My son is 12."
@@ -705,7 +857,10 @@ def _answers_a_question(fact: str, value: set[str], cues: set[str], user_text: s
 
 # ── same subject + same attribute, different value ───────────────────────────
 
-_WORK_RE = re.compile(r"\bworks?\s+(?:at|for|as|in)\s+(?P<v>[\w'’\- ]{2,40}?)(?:[.,;!?]|$)", re.IGNORECASE)
+# `works at/for X` is the voice extractor's own template (memory_extractor): the slash must read as the
+# preposition, or an unconfirmed panel voice's "I work at Acme" sat beside the owner's job instead of
+# being held back as a candidate (found by ZMB cell A6.panel_unverified.work).
+_WORK_RE = re.compile(r"\bworks?\s+(?:at|for|as|in)(?:/(?:at|for))?:?\s+(?P<v>[\w'’\- ]{2,40}?)(?:[.,;!?]|$)", re.IGNORECASE)
 _AGE_RE = re.compile(r"\b(?P<v>\d{1,3})\s+years?\s+old\b|\baged?\s+(?P<w>\d{1,3})\b", re.IGNORECASE)
 
 
@@ -868,6 +1023,17 @@ def find_conflict(new_text: str, rows: list[Any], writer_power: int, *,
         if kind:
             return r, kind
     return None
+
+
+#: How the recall packet labels a row a voice the speaker gate did NOT confirm said (it is
+#: stored, never the owner's own statement): the brain must not say "you told me".
+UNVERIFIED_RECALL_LABEL = "(someone at the panel said this; speaker not confirmed)"
+
+
+def is_unverified(meta: Optional[Mapping[str, Any]]) -> bool:
+    """Was this row stamped ``user_unverified`` at write time? Reads the STAMP only (a row written
+    before provenance existed derives a class on read and is never unverified)."""
+    return str((meta or {}).get("authority_class") or "") == USER_UNVERIFIED
 
 
 def is_candidate(ref: Any) -> bool:

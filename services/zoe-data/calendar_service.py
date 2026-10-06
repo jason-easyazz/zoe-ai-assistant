@@ -15,8 +15,53 @@ NULL / defaulted exactly as their narrower INSERTs did.
 
 from __future__ import annotations
 
+import re
 import uuid
 from typing import Optional
+
+# Conversational events: a health event is private.
+# Every event writer defaults to visibility='family' (the household calendar the panel shows)
+# and every calendar READ (the chat/voice show_calendar tool, the router, the MCP tool)
+# returns user_id = me OR visibility = 'family'. Measured 2026-10-06 (day-sim ask 8): the
+# user said "I've got the dentist on Friday for a cracked molar and I'm really nervous",
+# the brain called add_calendar_event unprompted (category "Health"), and a DIFFERENT
+# household member asking "what time is my dentist appointment on Friday?" was handed
+# "Dentist appointment for cracked molar on Friday" by show_calendar.
+# The chat/voice/MCP writers therefore store a health event as personal (the creator still sees it; the household does not).
+# ZOE_CALENDAR_HEALTH_PRIVATE=0 restores the old default.
+_HEALTH_CATEGORIES = frozenset([
+    "health", "medical", "medication", "therapy", "mental health", "wellbeing", "wellness",
+    "dental", "doctor",
+])
+_HEALTH_TITLE_RE = re.compile(
+    r"\b(?:dentist|dental|orthodontist|doctor|dr\.?|gp|physio(?:therapist)?|psycholog\w*|"
+    r"psychiatr\w*|therapist|therapy|counsell?or|specialist|surgeon|surgery|hospital|clinic|"
+    r"x-?ray|mri|blood\s+test|biopsy|chemo(?:therapy)?|dialysis|midwife|obstetrician|"
+    r"gyn(?:ae|e)\w*|optometrist|oncolog\w*|check-?up|vaccin\w*|molar|root\s+canal|"
+    r"prescription|medication)\b",
+    re.IGNORECASE,
+)
+
+
+def health_private_enabled() -> bool:
+    """ZOE_CALENDAR_HEALTH_PRIVATE - default ON (a privacy default), read per call."""
+    from typed_env import env_bool
+
+    return env_bool("ZOE_CALENDAR_HEALTH_PRIVATE", True)
+
+
+def is_health_event(title: str, category: str = "") -> bool:
+    return ((category or "").strip().lower() in _HEALTH_CATEGORIES
+            or bool(_HEALTH_TITLE_RE.search(title or "")))
+
+
+def conversational_visibility(title: str, category: str = "") -> str:
+    """The visibility for an event written FROM A CONVERSATION (chat, voice, the brain's
+    add_calendar_event tool, the MCP tool): personal for a health event, else the household
+    default family. The /api/calendar router is unaffected: there the caller chooses."""
+    if health_private_enabled() and is_health_event(title, category):
+        return "personal"
+    return "family"
 
 
 async def create_event_record(

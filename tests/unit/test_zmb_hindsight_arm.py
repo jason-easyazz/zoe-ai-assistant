@@ -391,14 +391,26 @@ def test_the_whole_store_tier_runs_clean_on_h1_and_h0_is_red_on_the_hard_axes():
     arm, _f = mk("H1")
     rows = run_cells(store, WORLD, arm)
     arm.close()
-    # every cell incl. the former targets - except the cells of the temporal / poisoning / provenance axes (#1893), which
-    # the Hindsight arm was not built against: its pasted-email and third-party writes are not walled, its rows carry no
-    # source_excerpt / user_turn_id, and it has no stated-event-time parser (C4: valid_from is its filing time). A cell
-    # that starts passing here is an improvement to lock in: remove it from this list.
-    assert [r["id"] for r in rows if r["verdict"] in ("FAIL", "ERROR")] == [
-        "I1.pasted_email_instruction", "I1b.pasted_email_planted_token", "I2.third_party_fragment.third_party",
-        "I2.third_party_fragment.panel_unverified", "A3.typed_turn_rows", "A3.voice_verified_turn_rows",
-        "A3.taught_rows", "A3.nightly_digest_rows", "A3.user_turn_rows_rate", "C4.valid_from_is_event_time"]
+    # every cell that RAN either matches its declared expectation or is a known H1 adapter gap. SKIPs are declared capability gaps
+    # (the temporal / edge / disk cells need conflict_pass / edges / disk, which only Z0 has); the targets (expected FAIL) are red on
+    # H1 as on Z0 unless a fix lands (F3 is the one H1 passes: its forgotten ledger).
+    ran = [r for r in rows if r["verdict"] != "SKIP"]
+    assert [r["id"] for r in ran if r["verdict"] == "ERROR"] == []
+    unexpected = sorted(r["id"] for r in ran if r["expected"] == "PASS" and r["verdict"] != "PASS")    # a target H1 PASSES is the point (F3)
+    # KNOWN GAPS of the H arms' Zoe layer, each listed in the bake-off record. Fix the adapter and shrink this list, never widen it:
+    #  - the row export carries authority_class but no source_excerpt / user_turn_id, so the five A3 provenance cells Z0 passes
+    #    (typed / voice-verified / taught / nightly-digest / user-turn rate; #1895 stamps provenance on Z0) are red on H1
+    #    (A3 is part of the hard `authority` axis: a real run lists them as H1 hard violations until the adapter stamps provenance);
+    #  - #1895 holds an unverified self-fact as a PENDING candidate; the H layer has not ported that rule, so the A7 cells (home / work /
+    #    pet) and I2.third_party_fragment.panel_unverified (same hold, same rule) are red. Port the fix, then delete these entries.
+    #  - C4.valid_from_is_event_time (the two timelines, audit P2.1): the H layer files a row at its own capture time and has no
+    #    stated-event-time parser (memory_temporal.parse_validity), so valid_from is the filing year, not the year the owner said.
+    #    Port the parser, then delete this entry.
+    known = sorted(["A3.typed_turn_rows", "A3.voice_verified_turn_rows", "A3.taught_rows", "A3.nightly_digest_rows",
+                    "A3.user_turn_rows_rate", "C4.valid_from_is_event_time",
+                     "I2.third_party_fragment.panel_unverified"]
+                   + [c.id for c in store if c.id.startswith("A7.panel_unverified_kept")])
+    assert unexpected == known, unexpected
     h0, _g = mk("H0")
     rows0 = run_cells(store, WORLD, h0)
     h0.close()

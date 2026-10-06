@@ -2798,7 +2798,7 @@ def _past_event_note(start_date: str, start_time: Optional[str], now) -> str:
 async def _execute_calendar_create_direct(intent: Intent, user_id: str) -> Optional[str]:
     """Create a calendar event straight through the DB, mirroring mcp_server's
     calendar_create_event tool (same events columns, category default 'general',
-    visibility 'family') so 'add X to my calendar' works when the mcporter
+    visibility 'family' except a health event, which is 'personal' - calendar_service) so 'add X to my calendar' works when the mcporter
     subprocess is down. Slots are normalised with the same _parse_date/_parse_time
     that _build_command's calendar_create branch used. Unlike the note/journal/
     people executors there is deliberately NO MemPalace mirror here — mcp_server's
@@ -2829,7 +2829,7 @@ async def _execute_calendar_create_direct(intent: Intent, user_id: str) -> Optio
     start_time = _parse_time(str(slots.get("time") or "")) if slots.get("time") else None
     category = str(slots.get("category") or "general").strip() or "general"
     try:
-        from calendar_service import create_event_record
+        from calendar_service import conversational_visibility, create_event_record
         from database import get_db_ctx
 
         async with get_db_ctx() as db:
@@ -2841,6 +2841,8 @@ async def _execute_calendar_create_direct(intent: Intent, user_id: str) -> Optio
                 start_time=start_time,
                 category=category,
                 all_day=not start_time,
+                # a health event written from a conversation is personal (calendar_service)
+                visibility=conversational_visibility(title, category),
             )
         event_id = record["id"]
         await _notify_ui_channel(

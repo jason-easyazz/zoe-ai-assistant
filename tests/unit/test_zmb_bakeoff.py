@@ -572,13 +572,15 @@ def test_the_winner_clause_beats_z0_beyond_the_wilson_interval_or_ties_to_z0():
     strong = {n: gates.evaluate_arm(n, three(axes=axes(30, 30)), good_measure()) for n in ("H1", "H2")}
     d = gates.decide(strong, z0)
     assert d["verdict"] == "ADOPT_CANDIDATE" and d["winner"] == "H1"                               # both pass: H1 (verbatim) over H2, per the rule
-    assert "NOT FINAL" in d["caveat"] and "A3 provenance honesty" in d["caveat"] and "temporal" in d["caveat"]
+    assert d["caveat"].startswith("Advisory") and "NOT FINAL" not in d["caveat"] and "not built" not in d["text"]
+    assert gates.WIN_AXES == {"B": "extraction", "C": "temporal", "D": "recall", "E": "abstention"} and "poisoning" in gates.HARD_AXES
+    assert not hasattr(gates, "UNBUILT")
     tie = {"H1": gates.evaluate_arm("H1", three(axes=axes(20, 30)), good_measure())}                # 60/90 vs 60/90: inside the interval
     d2 = gates.decide(tie, z0)
     assert d2["verdict"] == "KEEP_Z0" and "tie goes to Z0" in d2["text"] and d2["adoptable"] == ["H1"]
     only_one = {"H1": gates.evaluate_arm("H1", three(axes={"extraction": {"pass": 30, "n": 30, "skip": 0, "cells": 30}, "abstention": {"pass": 20, "n": 30, "skip": 0, "cells": 30}}),
                                          good_measure())}
-    assert gates.decide(only_one, z0)["verdict"] == "KEEP_Z0"                                       # needs TWO of B/C/D/E; C and D are not built
+    assert gates.decide(only_one, z0)["verdict"] == "KEEP_Z0"                                       # needs TWO of B/C/D/E
     worse = {"H1": gates.evaluate_arm("H1", three(axes={"extraction": {"pass": 30, "n": 30, "skip": 0, "cells": 30}, "abstention": {"pass": 5, "n": 30, "skip": 0, "cells": 30}}), good_measure())}
     assert gates.decide(worse, z0)["verdict"] == "KEEP_Z0"
 
@@ -630,7 +632,7 @@ def test_measure_end_to_end_writes_the_artifact_and_the_verdict_and_never_adopts
     arms = art["arms"]
     assert arms["H1"]["verdict"] == "PASSES_BUILT_GATES" and arms["H1"]["seeds_done"] == 3, arms["H1"]["gates"]
     assert arms["H0"]["verdict"] == "NOT_ADOPTABLE"                                                  # no Zoe layer: hard violations + a resurrection
-    assert art["decision"]["verdict"] in ("KEEP_Z0", "ADOPT_CANDIDATE") and "NOT FINAL" in art["decision"]["caveat"]
+    assert art["decision"]["verdict"] in ("KEEP_Z0", "ADOPT_CANDIDATE") and art["decision"]["caveat"].startswith("Advisory")
     assert arms["H0"]["gates"]["G2"]["hard_cells_zero_violations"]["state"] == gates.FAIL
     assert arms["H0"]["gates"]["G2"]["forget_t+6min_no_resurrection"]["state"] == gates.FAIL          # the replay resurrects her natively
     assert arms["H1"]["gates"]["G2"]["forget_t+6min_no_resurrection"]["state"] == gates.PASS
