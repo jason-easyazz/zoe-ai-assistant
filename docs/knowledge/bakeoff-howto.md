@@ -34,6 +34,14 @@ First use: 2026-10-06, `docs/research/bakeoff-setup-verification-2026-10-06.md`.
 BAKEOFF_SKIP_BRAIN_STOP=1 BAKEOFF_SMOKE_CELLS=10 scripts/perf/zmb/bakeoff_window.sh --arms H1,HM --cap-min 40 --docs-dir /tmp/smoke-docs
 ```
 
+### RAM settings (2026-10-06; docs/research/bakeoff-ram-latency-optimisation-2026-10-06.md)
+
+The window now starts the stack in its **lean** shape by default (measured on the real server: about -85 to -95 MB of the stack, recall latency unchanged): `hindsight-api` with migration isolation,
+a 1..2 connection pool, an import trim that stubs the MCP, Gemini and OTLP packages it never uses (it chains the egress hook; `scripts/perf/zmb/lean_imports/`), docstring-free bytecode and one BLAS thread; the
+embeddings shim with full graph optimisation and one malloc arena; the HM verbatim tier asking the window's shim for its vectors instead of loading its own ONNX session (about -190 MB of the driver).
+`BAKEOFF_LEAN=0` restores run 1/2's exact environment; `BAKEOFF_HM_SHARED_EMBEDDER=0` gives the HM driver its own session again; `BAKEOFF_SHIM_MODEL=minilm` serves zoe-data's MiniLM from the shim (NOT the default:
+every H arm's recall would move away from run 1's). The lab that measured all of it is `scripts/perf/zmb/ram_opt.py` (`--list`, `--config`, `--table`); it keeps MemAvailable >= 1.5 GB by construction and refuses to start otherwise.
+
 ## What it does to the box
 
 The voice stack is **down for the whole window** (the live `llama-server.service` is stopped; a clone of the same model on `:11500` takes

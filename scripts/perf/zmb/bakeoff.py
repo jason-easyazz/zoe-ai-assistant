@@ -43,6 +43,10 @@ REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "scripts" / "perf"))
 #: the in-process egress hook (``sitecustomize.py``) lives in the repo, so the instrument is reviewed and tested like the rest
 EGRESS_AUDIT_DIR = REPO / "scripts" / "perf" / "zmb" / "egress_audit"
+#: RAM lab 2026-10-06 (docs/research/bakeoff-ram-latency-optimisation-2026-10-06.md): an import trim for the Hindsight server (MCP, Gemini, the OTLP exporter are never used on
+#: a loopback, OpenAI-provider-only server). It chains the egress hook, so the G0 egress instrument is unchanged. Off with BAKEOFF_LEAN=0.
+LEAN_IMPORTS_DIR = REPO / "scripts" / "perf" / "zmb" / "lean_imports"
+LEAN_STUBS = "fastmcp,mcp,google.genai,google.oauth2,google.auth,google.api_core,opentelemetry.exporter.otlp"
 
 
 EXIT_OK, EXIT_REFUSED, EXIT_ABORTED, EXIT_RESTORE_FAILED = 0, 2, 3, 4
@@ -89,6 +93,13 @@ class Cfg:
     #: TEST HOOK (default 0 = off): ``BAKEOFF_SMOKE_CELLS=N`` limits each Hindsight arm to ONE seed of N store cells spread over the axes, and the
     #: validity / slot phases to a handful of retains. The report is then marked a smoke run (nothing in it is a verdict).
     smoke_cells: int = int(os.environ.get("BAKEOFF_SMOKE_CELLS", "0") or 0)
+    #: RAM lab 2026-10-06, all measured on the real server (the report names each saving): ``lean`` = migration isolation + a 1..2 connection pool + the import trim + docstring-free
+    #: bytecode + one BLAS thread on the Hindsight server, and full graph optimisation + one malloc arena on the embeddings shim (about -85 MB of the stack, recall latency unchanged).
+    #: ``BAKEOFF_LEAN=0`` restores run 1/2's exact settings. ``shim_model`` (``BAKEOFF_SHIM_MODEL``: auto = bge-small, ``minilm`` = zoe-data's live embedder) is NOT changed by default:
+    #: switching it would move every H arm's recall away from run 1's. ``hm_shared_embedder``: the HM verbatim tier asks the shim for its vectors instead of loading its own ONNX session.
+    lean: bool = os.environ.get("BAKEOFF_LEAN", "1") != "0"
+    shim_model: str = os.environ.get("BAKEOFF_SHIM_MODEL", "auto")
+    hm_shared_embedder: bool = os.environ.get("BAKEOFF_HM_SHARED_EMBEDDER", "1") != "0"
     health_wait_s: float = float(os.environ.get("BAKEOFF_HEALTH_WAIT_S", "180"))
     panel_host: str = os.environ.get("BAKEOFF_PANEL_HOST", "zoe-pi")
     panel_log: str = "/home/pi/.zoe-voice/voice.log"
@@ -281,6 +292,11 @@ def hindsight_env(example: str, cfg: Cfg, run_id: str) -> str:
         "EGRESS_AUDIT_LOG": str(cfg.bakeoff_dir / f"egress-{run_id}.log"),
         "HOME": str(cfg.bakeoff_dir / "hs-home"),
     }
+    if cfg.lean:
+        over.update({"HINDSIGHT_API_MIGRATION_ISOLATION": "true",        # alembic / SQLAlchemy / psycopg2 run in a child, not in the long-lived server (-12 MB measured)
+                     "HINDSIGHT_API_DB_POOL_MIN_SIZE": "1", "HINDSIGHT_API_DB_POOL_MAX_SIZE": "2",     # 2 asyncpg connections, not 8 (-4 MB server, -14 MB Postgres backends)
+                     "PYTHONPATH": f"{LEAN_IMPORTS_DIR}:{EGRESS_AUDIT_DIR}", "ZMB_LEAN_STUBS": LEAN_STUBS,    # -44 MB: MCP, Gemini and the OTLP exporter are never imported
+                     "PYTHONOPTIMIZE": "2", "OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"})
     seen: "set[str]" = set()
     out: "list[str]" = []
     for line in example.splitlines():
@@ -551,8 +567,13 @@ class Window:
         else:
             raise Aborted("scratch Postgres never became ready")
         self.log("step 2/6 loopback embeddings shim (:%d)" % cfg.shim_port)
-        self.start_unit("shim", [str(cfg.hs_python), str(REPO / "scripts/perf/zmb/embed_shim.py"), "--serve", "--port", str(cfg.shim_port)],
-                        env={"HF_HUB_OFFLINE": "1", "ORT_DISABLE_TELEMETRY": "1"}, props={"MemoryMax": "300M", "MemorySwapMax": "0"})
+        shim_argv = [str(cfg.hs_python), str(REPO / "scripts/perf/zmb/embed_shim.py"), "--serve", "--port", str(cfg.shim_port)]
+        shim_env = {"HF_HUB_OFFLINE": "1", "ORT_DISABLE_TELEMETRY": "1"}
+        if cfg.shim_model != "auto":
+            shim_argv += ["--model", cfg.shim_model]
+        if cfg.lean:
+            shim_env.update({"ZMB_ORT_OPT": "all", "MALLOC_ARENA_MAX": "1"})          # measured: -15 MB serving, -22% single-text latency (docs/research/bakeoff-ram-latency-optimisation-2026-10-06.md)
+        self.start_unit("shim", shim_argv, env=shim_env, props={"MemoryMax": "300M", "MemorySwapMax": "0"})
         self.wait_http(f"http://127.0.0.1:{cfg.shim_port}/health", "the embeddings shim", 90)
         self.guard()
         if cfg.skip_brain_stop:

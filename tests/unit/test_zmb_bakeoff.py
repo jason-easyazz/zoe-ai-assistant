@@ -124,7 +124,7 @@ def test_systemd_run_wraps_the_clone_in_a_named_transient_unit():
 
 
 def test_the_hindsight_environment_is_loopback_only_and_has_the_run_overrides():
-    env = bakeoff.hindsight_env(ENV_EXAMPLE, bakeoff.Cfg(bakeoff_dir=Path("/b")), "r1")
+    env = bakeoff.hindsight_env(ENV_EXAMPLE, bakeoff.Cfg(bakeoff_dir=Path("/b"), lean=False), "r1")          # run 1 / 2's exact settings (the lean ones are tested below)
     kv = dict(l.split("=", 1) for l in env.splitlines() if "=" in l and not l.startswith("#"))
     assert kv["HINDSIGHT_API_LLM_TRACE_ENABLED"] == "true" and kv["HINDSIGHT_API_EMBEDDINGS_OPENAI_BATCH_SIZE"] == "8"
     assert kv["HINDSIGHT_API_LLM_BASE_URL"] == "http://127.0.0.1:11500/v1" and kv["HINDSIGHT_API_DATABASE_URL"].endswith("127.0.0.1:55432/hindsight")
@@ -132,6 +132,63 @@ def test_the_hindsight_environment_is_loopback_only_and_has_the_run_overrides():
     assert (bakeoff.EGRESS_AUDIT_DIR / "sitecustomize.py").is_file() and kv["PYTHONDONTWRITEBYTECODE"] == "1"
     with pytest.raises(bakeoff.Refused, match="non-loopback"):
         bakeoff.hindsight_env(ENV_EXAMPLE + "HINDSIGHT_API_WEBHOOK_URL=https://hooks.example.com/x\n", bakeoff.Cfg(bakeoff_dir=Path("/b")), "r1")
+
+
+def test_the_lean_settings_are_on_by_default_chain_the_egress_hook_and_BAKEOFF_LEAN_0_restores_run_2s_environment():
+    """RAM lab 2026-10-06: migration isolation, a 1..2 connection pool, the import trim, docstring-free bytecode and one BLAS thread on the server (measured -44 to -64 MB). The import trim
+    must NEVER switch the G0 egress instrument off: it chains the audit hook, and both directories ship a sitecustomize."""
+    lean = bakeoff.hindsight_env(ENV_EXAMPLE, bakeoff.Cfg(bakeoff_dir=Path("/b")), "r1")
+    kv = dict(l.split("=", 1) for l in lean.splitlines() if "=" in l and not l.startswith("#"))
+    assert kv["HINDSIGHT_API_MIGRATION_ISOLATION"] == "true" and kv["HINDSIGHT_API_DB_POOL_MIN_SIZE"] == "1" and kv["HINDSIGHT_API_DB_POOL_MAX_SIZE"] == "2"
+    assert kv["PYTHONPATH"] == f"{bakeoff.LEAN_IMPORTS_DIR}:{bakeoff.EGRESS_AUDIT_DIR}" and kv["PYTHONOPTIMIZE"] == "2" and "fastmcp" in kv["ZMB_LEAN_STUBS"]
+    assert (bakeoff.LEAN_IMPORTS_DIR / "sitecustomize.py").is_file() and (bakeoff.EGRESS_AUDIT_DIR / "sitecustomize.py").is_file()
+    assert "egress_audit" in (bakeoff.LEAN_IMPORTS_DIR / "sitecustomize.py").read_text()                               # it chains the hook
+    assert "HINDSIGHT_API_WORKER_ENABLED" not in kv and "LOOP_WATCHDOG" not in lean                                    # the in-process worker (H2 / H0 consolidation) stays ON
+    off = bakeoff.hindsight_env(ENV_EXAMPLE, bakeoff.Cfg(bakeoff_dir=Path("/b"), lean=False), "r1")
+    okv = dict(l.split("=", 1) for l in off.splitlines() if "=" in l and not l.startswith("#"))
+    assert "ZMB_LEAN_STUBS" not in okv and "HINDSIGHT_API_MIGRATION_ISOLATION" not in okv and okv["PYTHONPATH"] == str(bakeoff.EGRESS_AUDIT_DIR)
+    import os
+    import subprocess
+    code = f"import sys; sys.path.insert(0, {str(Path(bakeoff.__file__).parents[1])!r}); from zmb import bakeoff; print(bakeoff.Cfg().lean, bakeoff.Cfg().hm_shared_embedder)"
+    for val, want in (("0", "False True"), ("", "True True")):
+        env = {k: v for k, v in os.environ.items() if k != "BAKEOFF_LEAN"}
+        if val:
+            env["BAKEOFF_LEAN"] = val
+        assert subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=60).stdout.strip() == want
+
+
+def test_the_shim_unit_gets_the_measured_settings_and_the_model_is_not_switched_by_default(box):
+    host = FakeHost(box)
+    w = make_window(box, host, measure_fn=lambda win: {"ok": 1})
+    assert w.run() == bakeoff.EXIT_OK
+    shim = next(c for c in host.joined() if "--unit=zoe-bakeoff-embed" in c)
+    assert "--setenv=ZMB_ORT_OPT=all" in shim and "--setenv=MALLOC_ARENA_MAX=1" in shim and "--setenv=ORT_DISABLE_TELEMETRY=1" in shim
+    assert "--model" not in shim                                            # run 1 / 2's embedder (bge-small) stays: a changed model would move every H arm's recall
+    host2 = FakeHost(box)
+    w2 = make_window(box, host2, measure_fn=lambda win: {"ok": 1}, lean=False, shim_model="minilm")
+    assert w2.run() == bakeoff.EXIT_OK
+    shim2 = next(c for c in host2.joined() if "--unit=zoe-bakeoff-embed" in c)
+    assert "ZMB_ORT_OPT" not in shim2 and "MALLOC_ARENA_MAX" not in shim2 and shim2.endswith("--model minilm")
+
+
+def test_the_hm_driver_is_pointed_at_the_windows_shim_so_one_embedder_serves_both_tiers(box):
+    import types
+    seen = {}
+
+    class H(FakeHost):
+        def run(self, argv, timeout=60.0, mutating=True, env=None):
+            if argv[:1] == ["bash"] and "mp_run.sh" in " ".join(argv):
+                seen["env"] = env or {}
+            return super().run(argv, timeout, mutating, env)
+    for shared in (True, False):
+        seen.clear()
+        host = H(box)
+        w = make_window(box, host, measure_fn=lambda win: {"ok": 1}, hm_shared_embedder=shared)
+        ctx = types.SimpleNamespace(cfg=w.cfg, host=host, win=w)
+        measure.real_hm_runner(ctx, "zmb-v1", 60.0)
+        assert ("ZMB_HM_EMBEDDER_URL" in seen["env"]) is shared
+        if shared:
+            assert seen["env"]["ZMB_HM_EMBEDDER_URL"] == "http://127.0.0.1:11501" and seen["env"]["PYTHONMALLOC"] == "malloc"      # the heap-scrub settings stay
 
 
 def test_the_generated_environment_has_no_inline_comments_systemd_would_read_as_part_of_the_value():

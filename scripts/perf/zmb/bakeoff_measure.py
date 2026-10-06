@@ -457,6 +457,8 @@ def real_hm_runner(ctx: Ctx, seed: str, box_s: float) -> dict:
     if cfg.skip_brain_stop:
         argv += ["--quiet-since", str(ctx.win.t0_epoch)]
     env = {**os.environ, "MALLOC_PERTURB_": "85", "PYTHONMALLOC": "malloc", "ORT_DISABLE_TELEMETRY": "1"}          # the scrubbing allocator HM-F6 needs (forgotten text in uninitialised heap)
+    if cfg.hm_shared_embedder:        # ONE embedder: the verbatim tier asks the window's shim (the session Hindsight already uses) instead of loading its own MiniLM session
+        env["ZMB_HM_EMBEDDER_URL"] = f"http://127.0.0.1:{cfg.shim_port}"
     r = host.run(argv, timeout=box_s + PHASE_MIN["hm_cells"] * 60.0 * 2 + 180.0, env=env)
     text = host.read(str(out))
     if not text:

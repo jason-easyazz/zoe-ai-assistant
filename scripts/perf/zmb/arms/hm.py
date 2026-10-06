@@ -444,6 +444,7 @@ class HMArm(Arm):
         self._user = ""
         self._pending: "list[Pending]" = []
         self._cache: "list[dict[str, Any]]" = []
+        self._cache_idx: "dict[str, list[int]]" = {}
         self._lat_n: "dict[str, int]" = {}
         self.last = PacketInfo()
         self.model_calls = 0
@@ -460,6 +461,7 @@ class HMArm(Arm):
         self._user = user_id
         self._pending = []
         self._cache = []
+        self._cache_idx = {}
         self._lat_n = {}
         self.last = PacketInfo()
         self.model_calls = 0
@@ -687,6 +689,24 @@ class HMArm(Arm):
         except Exception:                                  # noqa: BLE001
             return
         self._cache = rows
+        self._cache_idx = self._index_cache(rows)
+
+    @staticmethod
+    def _index_cache(rows: "list[dict[str, Any]]") -> "dict[str, list[int]]":
+        """token -> positions (ascending) of the cached rows that contain it. Built ONCE per refresh, off the voice path (RAM lab 2026-10-06: tokenising every cached row on
+        every voice turn cost 1.6 ms at 220 rows and 35 ms at 4,020 rows, the volume of one quarter; the lookup is now proportional to the rows that match)."""
+        idx: "dict[str, list[int]]" = {}
+        for i, r in enumerate(rows):
+            for t in _toks(r.get("raw") or r["text"]):
+                idx.setdefault(t, []).append(i)
+        return idx
+
+    def _cache_hits(self, query: str) -> "list[dict[str, Any]]":
+        """The cached rows sharing a content token with ``query``, in cache order (the same answer as scanning every row, without scanning every row)."""
+        pos: "set[int]" = set()
+        for t in _toks(query):
+            pos.update(self._cache_idx.get(t, ()))
+        return [self._cache[i] for i in sorted(pos)]
 
     def _verb_packet_row(self, r: "dict[str, Any]") -> "dict[str, Any]":
         cls = r["authority_class"]
@@ -702,15 +722,14 @@ class HMArm(Arm):
         info = PacketInfo(lane="exact" if exact else lane)
         self.last = info
         if lane == "voice" and not exact and self.controls.voice_policy:
-            q = _toks(query)
-            hits = [r for r in self._cache if q & _toks(r.get("raw") or r["text"])]
             info.cache_miss = not self._cache
             if self.real_latency:
                 t0 = time.perf_counter()
-                hits = [r for r in self._cache if q & _toks(r.get("raw") or r["text"])]
+                hits = self._cache_hits(query)
                 info.elapsed_ms = (time.perf_counter() - t0) * 1000.0
                 self.real_ms["cache"].append(info.elapsed_ms)
             else:
+                hits = self._cache_hits(query)
                 info.elapsed_ms = self._lat("cache_read")
             info.tiers = ["cache"]
             return self._finish(hits, k, info, exact=False)

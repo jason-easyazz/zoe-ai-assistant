@@ -393,6 +393,73 @@ def test_library_store_never_downloads_the_embedding_model(monkeypatch, tmp_path
     assert "will not download" in str(e.value)
 
 
+def test_shared_embedder_env_points_mempalace_at_the_shim_and_refuses_a_remote_one():
+    """RAM lab 2026-10-06: ONE embedder for both tiers. MemPalace's own openai-compat backend is told to ask the loopback shim; a non-loopback URL is refused."""
+    from zmb.arms.mempalace_verbatim import DEFAULT_SHARED_MODEL, StoreUnavailable, shared_embedder_env
+    env = shared_embedder_env("http://127.0.0.1:11501/")
+    assert env["MEMPALACE_EMBEDDING_MODEL"] == "openai-compat" and env["MEMPALACE_EMBEDDING_API_URL"] == "http://127.0.0.1:11501"
+    assert env["MEMPALACE_EMBEDDING_API_MODEL"] == DEFAULT_SHARED_MODEL
+    assert shared_embedder_env("http://localhost:1/", "m")["MEMPALACE_EMBEDDING_API_MODEL"] == "m"
+    for bad in ("http://192.0.2.1:11501", "https://api.openai.com", "http://example.com", "not a url", ""):
+        with pytest.raises(StoreUnavailable):
+            shared_embedder_env(bad)
+
+
+def test_library_store_in_shared_mode_loads_no_local_model_and_restores_the_environment(monkeypatch, tmp_path):
+    """In shared mode the store must not require (or pin) the local MiniLM files, must hand the library the shim's endpoint while it lives, and must give the environment back."""
+    import os
+    import types
+    from zmb.arms import mempalace_verbatim as mv
+    seen = {}
+
+    def get_collection(path, create=True, **_k):
+        seen["model"] = os.environ.get("MEMPALACE_EMBEDDING_MODEL")
+        seen["url"] = os.environ.get("MEMPALACE_EMBEDDING_API_URL")
+        return object()
+    fake = types.ModuleType("mempalace.palace")
+    fake.get_collection = get_collection
+    monkeypatch.setitem(sys.modules, "mempalace", types.ModuleType("mempalace"))
+    monkeypatch.setitem(sys.modules, "mempalace.palace", fake)
+    monkeypatch.setattr(mv.MemPalaceLibraryStore, "_pin_model_path", lambda self: (_ for _ in ()).throw(AssertionError("shared mode must not pin a local model")))
+    monkeypatch.setenv(mv.SHARED_EMBEDDER_URL_ENV, "http://127.0.0.1:11501")
+    monkeypatch.delenv("MEMPALACE_EMBEDDING_MODEL", raising=False)
+    store = mv.MemPalaceLibraryStore(tmp_path / "palace")
+    assert seen == {"model": "openai-compat", "url": "http://127.0.0.1:11501"}
+    store.close()
+    assert "MEMPALACE_EMBEDDING_MODEL" not in os.environ and "MEMPALACE_EMBEDDING_API_URL" not in os.environ
+    monkeypatch.delenv(mv.SHARED_EMBEDDER_URL_ENV)                                  # without the variable the old behaviour is untouched: the model is pinned
+    monkeypatch.setattr(mv.MemPalaceLibraryStore, "_pin_model_path", lambda self: seen.update(pinned=True))
+    mv.MemPalaceLibraryStore(tmp_path / "palace2").close()
+    assert seen.get("pinned") is True and seen["model"] is None
+
+
+def test_closing_a_store_releases_its_own_cached_chroma_client_and_no_other(monkeypatch, tmp_path):
+    """RAM lab 2026-10-06: the backend caches one PersistentClient per palace path for the life of the process and ``close()`` left them all: 4.8 MB per palace opened (110.6 MB over 24
+    palaces, measured), so an HM driver that opens a palace per cell grew by hundreds of MB. Closing releases THIS palace's client only."""
+    import types
+    from zmb.arms import mempalace_verbatim as mv
+    mine, other = object(), object()
+    closed = []
+    backend = types.SimpleNamespace(_clients={}, _freshness={})
+    palace = types.ModuleType("mempalace.palace")
+    palace._DEFAULT_BACKEND = backend
+    palace.get_collection = lambda path, create=True, **_k: backend._clients.setdefault(str(path), mine) and object()
+    chroma = types.ModuleType("mempalace.backends.chroma")
+    chroma._close_client = lambda c: closed.append(c)
+    for name, mod in (("mempalace", types.ModuleType("mempalace")), ("mempalace.palace", palace), ("mempalace.backends", types.ModuleType("mempalace.backends")),
+                      ("mempalace.backends.chroma", chroma)):
+        monkeypatch.setitem(sys.modules, name, mod)
+    monkeypatch.setattr(mv.MemPalaceLibraryStore, "_pin_model_path", lambda self: None)
+    store = mv.MemPalaceLibraryStore(tmp_path / "palace")
+    backend._clients[str(tmp_path / "other")] = other
+    backend._freshness[str(tmp_path / "palace")] = (1, 1.0)
+    store.close()
+    assert closed == [mine] and str(tmp_path / "palace") not in backend._clients and str(tmp_path / "palace") not in backend._freshness
+    assert backend._clients == {str(tmp_path / "other"): other}                      # another palace's client is untouched
+    store.close()                                                                      # closing twice is harmless
+    assert closed == [mine, None]
+
+
 # ── the REAL MemPalace library (only where the bake-off venv exists) ─────────
 
 _VENV_PY = BAKEOFF / "mempalace-venv" / "bin" / "python"
@@ -492,6 +559,39 @@ def test_the_real_latency_mode_measures_wall_clocks_not_the_model():
     arm.packet("who is my dentist", 5, lane="voice")
     assert len(arm.real_ms["both"]) == 1 and len(arm.real_ms["distilled"]) == 1 and len(arm.real_ms["verbatim"]) == 1 and len(arm.real_ms["cache"]) == 1
     assert arm.real_ms["both"][0] < 5000 and arm.last.tiers == ["cache"]
+
+
+def _voice_arm(n_filler: int):
+    arm = HMArm(distilled=FakeDistilledTier(), verbatim=MemPalaceVerbatimArm(store=InMemoryVerbatimStore()))
+    arm.reset(USER)
+    arm.ingest([Turn("User's friend Priya lives in Perth.", "owner_taught"), Turn("My dentist is Dr Okonkwo.", "owner_voice_verified")]
+               + [Turn(f"I like {w} number {i}", "owner_typed") for i in range(n_filler) for w in ("warm toast",)])
+    arm._refresh_cache(USER)
+    return arm
+
+
+def test_the_voice_cache_lookup_does_not_tokenise_every_cached_row_on_every_turn(monkeypatch):
+    """RAM lab 2026-10-06 (latency): the voice lane's 'write-behind cache hit' re-tokenised EVERY cached row for EVERY query: 1.6 ms at 220 rows, 35 ms at 4,020 (one quarter of
+    turns), twice per turn under real_latency, while the report quoted 0.01 ms from a 5-row cell. The index is built at refresh time; a query tokenises only itself."""
+    from zmb.arms import hm as hm_mod
+    arm = _voice_arm(300)
+    assert len(arm._cache) >= 300
+    calls = []
+    real = hm_mod._toks
+    monkeypatch.setattr(hm_mod, "_toks", lambda text: calls.append(text) or real(text))
+    arm.packet("where does Priya live", 5, lane="voice")
+    assert len(calls) <= 2, f"{len(calls)} tokenisations for one voice query (rows are indexed at refresh, not per query)"
+
+
+def test_the_voice_cache_index_returns_what_a_full_scan_returns_in_the_same_order():
+    from zmb.arms import hm as hm_mod
+    arm = _voice_arm(60)
+    for q in ("where does Priya live", "who is my dentist", "warm toast", "number 7 toast", "nothing matches zzz", "", "I like"):
+        naive = [r for r in arm._cache if hm_mod._toks(q) & hm_mod._toks(r.get("raw") or r["text"])]
+        assert arm._cache_hits(q) == naive, q
+    assert "Priya" in arm.packet("where does Priya live", 5, lane="voice")[0]["text"]
+    arm.reset(USER)
+    assert arm._cache == [] and arm._cache_idx == {} and arm.packet("who is my dentist", 5, lane="voice") == [] and arm.last.cache_miss
 
 
 # ── first contact (2026-10-06): the attribute key has a SUBJECT, and the lab's attributes cover the spec's slots ─────
