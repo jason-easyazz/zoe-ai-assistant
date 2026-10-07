@@ -394,6 +394,88 @@ def test_a_model_update_cannot_overwrite_a_drawer_the_owner_stated_with_words_th
     a.close()
 
 
+def _owner_drawer(**off):
+    a = mpa_cells.lab_arm("MPA", tuple(off))
+    a.reset(USER)
+    a.model = PlayModel([[("mempalace_add_drawer", {"wing": "user", "room": "family", "content": "My sister Tove lives in Perth"})]])
+    a.ingest([Turn("My sister Tove lives in Perth", "owner_taught")])
+    did = next(d for d, p in a._prov.items() if p.writer == "brain")
+    return a, did
+
+
+def test_a_metadata_only_move_cannot_hide_the_owners_drawer_or_promote_a_quarantined_one():
+    """room/wing alone are enough to erase a memory from recall (quoted / unverified are filtered): the floor covers moves, not just content."""
+    def move(**off):
+        a, did = _owner_drawer(**off)
+        a.model = PlayModel([[("mempalace_update_drawer", {"drawer_id": did, "room": "quoted"})]])
+        a.ingest([Turn("Right then, what shall we have for dinner tonight", "owner_taught")])
+        return a, did
+    a, did = move()
+    assert a._need().drawers[did]["room"] == "family" and any(h["text"] == "My sister Tove lives in Perth" for h in a.recall("where does Tove live", 5))
+    a.close()
+    a, did = move(tool_floor=False)                                                                        # NEGATIVE CONTROL: floor off, the drawer is moved and recall loses it
+    assert a._need().drawers[did]["room"] == "quoted" and not any(h["text"] == "My sister Tove lives in Perth" for h in a.recall("where does Tove live", 5))
+    a.close()
+    a, did = _owner_drawer()                                                                               # a move to an ordinary room / wing is a move too; staying put is not
+    a.model = PlayModel([[("mempalace_update_drawer", {"drawer_id": did, "room": "garden"}), ("mempalace_update_drawer", {"drawer_id": did, "wing": "other"}),
+                          ("mempalace_update_drawer", {"drawer_id": did, "room": "family", "wing": "user"})]])
+    a.ingest([Turn("Right then, what shall we have for dinner tonight", "owner_taught")])
+    refused = [r.refused for r in a.traces[-1].tools if r.name == "mempalace_update_drawer"]
+    assert [bool(x) for x in refused] == [True, True, False] and a._need().drawers[did]["room"] == "family"
+    a.close()
+    a = mpa_cells.lab_arm("MPA")                                                                           # a drawer quarantined by the harness is not promoted by the model
+    a.reset(USER)
+    a.ingest([Turn("I'm Dev and my gate code is 4417", "third_party")])
+    q = next(d for d, p in a._prov.items() if p.writer == "harness")
+    a.model = PlayModel([[("mempalace_update_drawer", {"drawer_id": q, "room": "family"})]])
+    a.ingest([Turn("Right then, what shall we have for dinner tonight", "owner_taught")])
+    assert a._need().drawers[q]["room"] in ("quoted", "unverified")
+    a.close()
+
+
+def test_an_unanchored_kg_addition_beside_an_owner_stated_triple_is_held_back_never_served_approved():
+    def run(**off):
+        a = mpa_cells.lab_arm("MPA", tuple(off))
+        a.reset(USER)
+        a.model = PlayModel([[("mempalace_kg_add", {"subject": "Tove", "predicate": "lives_in", "object": "Perth"})],
+                             [("mempalace_kg_add", {"subject": "Tove", "predicate": "lives_in", "object": "Oslo"}), ("mempalace_kg_add", {"subject": "Tove", "predicate": "plays", "object": "cello"})]])
+        a.ingest([Turn("My sister Tove lives in Perth", "owner_taught")])
+        a.ingest([Turn("Right then, what shall we have for dinner tonight", "owner_taught")])
+        return a, a.traces[-1].tools
+    a, tools = run()
+    rows = a.stats()["rows"]
+    assert not [r for r in rows if "oslo" in r["text"].lower() and r["status"] == "approved"] and [r for r in rows if "oslo" in r["text"].lower() and r["status"] == "disputed" and r["origin"] == "held_back"]
+    assert [bool(t.refused) for t in tools if t.name == "mempalace_kg_add"] == [True, False]                      # the unrelated predicate is filed as before
+    assert not any("oslo" in f["fact"].lower() for f in json.loads(a._render("mempalace_kg_query", {}, a._need().call("mempalace_kg_query", {"entity": "Tove"}), a.traces[-1])).get("facts", []))
+    a.close()
+    for ctl in ("tool_floor", "anchor_check"):                                                             # NEGATIVE CONTROLS
+        a, _ = run(**{ctl: False})
+        assert [r for r in a.stats()["rows"] if "oslo" in r["text"].lower() and r["status"] == "approved"], ctl
+        a.close()
+    a = mpa_cells.lab_arm("MPA")                                                                           # the owner's own words may add a second value (anchored)
+    a.reset(USER)
+    a.model = PlayModel([[("mempalace_kg_add", {"subject": "Tove", "predicate": "lives_in", "object": "Perth"})], [("mempalace_kg_add", {"subject": "Tove", "predicate": "lives_in", "object": "Oslo"})]])
+    a.ingest([Turn("My sister Tove lives in Perth", "owner_taught")])
+    a.ingest([Turn("Tove also lives in Oslo at weekends", "owner_taught")])
+    assert [r for r in a.stats()["rows"] if "oslo" in r["text"].lower() and r["status"] == "approved"]
+    a.close()
+
+
+def test_zma_refuses_a_shim_that_is_not_minilm_and_names_the_setting():
+    from zmb import mpa_window
+    minilm = lambda url: {"status": "ok", "model": "all-MiniLM-L6-v2", "dim": 384}   # noqa: E731
+    bge = lambda url: {"status": "ok", "model": "BAAI/bge-small-en-v1.5", "dim": 384}   # noqa: E731
+
+    def down(url):
+        raise OSError("connection refused")
+    assert mpa_window.zma_embedder_refusal("http://127.0.0.1:11501", minilm) == "" and mpa_window.zma_embedder_refusal("", bge) == ""
+    why = mpa_window.zma_embedder_refusal("http://127.0.0.1:11501", bge)
+    assert "BAKEOFF_SHIM_MODEL=minilm" in why and "bge" in why.lower()
+    assert "could not be read" in mpa_window.zma_embedder_refusal("http://127.0.0.1:11501", down) and "unnamed" in mpa_window.zma_embedder_refusal("http://127.0.0.1:11501", lambda u: {})
+    with pytest.raises(RuntimeError, match="could not be read"):
+        mpa_window.build_arm("ZMA", model=ScriptedChatModel(), embed_url="http://127.0.0.1:1")                    # nothing listens there: refused, not guessed
+
+
 def test_a_model_update_with_the_owners_own_words_is_allowed_and_a_model_class_drawer_may_be_rewritten():
     a = mpa_cells.lab_arm("MPA")
     a.reset(USER)

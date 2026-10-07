@@ -89,8 +89,30 @@ def percentile(xs: "list[float]", q: float) -> float:
     return round(s[min(len(s) - 1, max(0, int(round(q * len(s) + 0.5)) - 1))], 2) if s else 0.0
 
 
+def zma_embedder_refusal(embed_url: str, fetch: "Any" = None) -> str:
+    """"" when ZMA may share this embeddings shim, else why not. ZMA replaces Z0e's embedding function with the shim, and Z0e / production embed with MiniLM: a shim that
+    serves anything else (``BAKEOFF_SHIM_MODEL=auto`` picks the cached BGE first) would make ZMA's recall measure a different embedder from the baseline it is compared with.
+    An unreachable or unnamed shim is refused too: an embedder that cannot be named cannot be called MiniLM. ``fetch(url) -> dict`` is the test hook."""
+    if not embed_url:
+        return ""                                                    # no shim: ZMA's Z0e keeps its own (MiniLM) embedding function
+    try:
+        if fetch is not None:
+            h = fetch(embed_url.rstrip("/") + "/health")
+        else:
+            import urllib.request
+            with urllib.request.urlopen(embed_url.rstrip("/") + "/health", timeout=5) as r:  # noqa: S310 - loopback shim
+                h = json.loads(r.read().decode() or "{}")
+    except Exception as exc:  # noqa: BLE001
+        return f"ZMA needs the MiniLM shim but {embed_url}/health could not be read ({type(exc).__name__}): refusing to measure an embedder that cannot be named"
+    model = str((h or {}).get("model") or "")
+    if "minilm" not in model.lower():
+        return (f"ZMA must share the MiniLM embedder (Z0e's and production's) but the shim serves {model or 'an unnamed model'!r}: set BAKEOFF_SHIM_MODEL=minilm for a window that "
+                "includes ZMA (its recall and long-range numbers would otherwise measure a different embedder from Z0e)")
+    return ""
+
+
 def build_arm(kind: str, *, model: Any, embed_url: str = "", closet_url: str = "", closet_scripted: bool = False, hindsight_url: str = "", pg: Any = None,
-              tokenizer: Any = None, workdir: "Path | None" = None) -> Any:
+              tokenizer: Any = None, workdir: "Path | None" = None, check_embedder: bool = True) -> Any:
     """The REAL arm: the real MemPalace server per account, the brain ``model`` operating it; HMA over the window's Hindsight, ZMA over the lab's Z0e."""
     kw: "dict[str, Any]" = dict(model=model, embed_url=embed_url, closet_url=closet_url, closet_scripted=closet_scripted, tokenizer=tokenizer)
     if workdir is not None:
@@ -103,6 +125,9 @@ def build_arm(kind: str, *, model: Any, embed_url: str = "", closet_url: str = "
         return HMAArm(MemPalaceAgentArm(**kw), ReflectiveTier(HindsightClient(hindsight_url), pg=pg))
     if kind == "ZMA":
         from zmb.arms.zma import BRAIN_TOOLS, ZMAArm
+        why = zma_embedder_refusal(embed_url) if check_embedder else ""
+        if why:
+            raise RuntimeError(why)
         kw.update(tool_names=BRAIN_TOOLS, protocol_rules=(1, 2, 3), aaak=False, rules_paragraph=False)
         return ZMAArm(mpa=MemPalaceAgentArm(**kw), embed_url=embed_url)
     raise ValueError(kind)
@@ -233,6 +258,11 @@ def main(argv: "list[str] | None" = None) -> int:
             stub = ThreadingHTTPServer(("127.0.0.1", STUB_PORT), stub_embed.Handler)
             threading.Thread(target=stub.serve_forever, daemon=True).start()
             embed_url = f"http://127.0.0.1:{STUB_PORT}"
+        real_embedder = not (a.lab or a.stub_embedder)
+        if a.arm == "ZMA" and real_embedder:
+            why = zma_embedder_refusal(embed_url)                      # refuse BEFORE any cell runs: a window's ZMA numbers on the wrong embedder are worse than none
+            if why:
+                raise RuntimeError(why)
         if embed_url:
             os.environ["ZMB_HM_EMBEDDER_URL"] = embed_url              # the lab cells' arms ask the same loopback embedder
         closet_url, closet_scripted = "", False
@@ -249,7 +279,7 @@ def main(argv: "list[str] | None" = None) -> int:
             from zmb.arms.pg_store import PG_CONTAINER, ScratchPostgres
             pg = ScratchPostgres(PG_CONTAINER)
         tok = (lambda t: model.count_tokens(t)) if not a.lab and hasattr(model, "count_tokens") else None
-        mk = lambda: build_arm(a.arm, model=model, embed_url=embed_url, closet_url=closet_url, closet_scripted=closet_scripted, hindsight_url=a.hindsight_url, pg=pg, tokenizer=tok)  # noqa: E731
+        mk = lambda: build_arm(a.arm, model=model, embed_url=embed_url, closet_url=closet_url, closet_scripted=closet_scripted, hindsight_url=a.hindsight_url, pg=pg, tokenizer=tok, check_embedder=real_embedder)  # noqa: E731
         if a.smoke_live:
             arm = mk()
             try:

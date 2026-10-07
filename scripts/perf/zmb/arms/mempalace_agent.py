@@ -467,11 +467,28 @@ class MemPalaceAgentArm(BenchSurface, Arm):
             return "that names something you asked me to forget; it was not stored"
         if name == "mempalace_add_drawer" and str(args.get("room", "")).lower() in RESERVED_ROOMS:
             return f"the room {args.get('room')!r} is reserved"
-        if self.mc.anchor_check and name == "mempalace_update_drawer" and args.get("content"):
-            # the drawer is overwritten IN PLACE by the real server: the check has to run before the call, not after (``_record_write`` only relabels what is already gone)
+        if name == "mempalace_update_drawer":
+            # The drawer is changed IN PLACE by the real server: every check runs before the call (``_record_write`` only relabels what is already gone). Two ways to lose or
+            # forge an owner's memory: replace its words, or MOVE it (a drawer in quoted / unverified is filtered out of recall; a quoted one moved out becomes recallable as the owner's).
             pv = self._prov.get(str(args.get("drawer_id", "")))
-            if pv is not None and pv.authority_class == USER_STATED and not self._anchored(str(args["content"]), s):
+            moved = {k: str(args[k]) for k in ("room", "wing") if args.get(k) not in (None, "")}
+            if str(moved.get("room", "")).lower() in RESERVED_ROOMS:
+                return f"the room {moved['room']!r} is reserved"
+            if pv is not None and ((pv.room in RESERVED_ROOMS and moved.get("room", pv.room) != pv.room) or (self.mc.anchor_check and pv.authority_class == USER_STATED
+                                                                                                          and (moved.get("room", pv.room) != pv.room or moved.get("wing", pv.wing) != pv.wing))):
+                return "a drawer's place says who said it: a drawer is not moved between rooms or wings by the model"
+            if self.mc.anchor_check and args.get("content") and pv is not None and pv.authority_class == USER_STATED and not self._anchored(str(args["content"]), s):
                 return "a drawer holding what the owner said is only rewritten with the owner's own words"
+        if self.mc.anchor_check and name == "mempalace_kg_add" and not self._anchored(str(args.get("object", "")), s):
+            subj, pred, obj = (str(args.get(k, "")).lower() for k in ("subject", "predicate", "object"))
+            for t in self._kg_dump():
+                other = str(t["object"]).lower()
+                pv = self._kg_prov.get((subj, pred, other))
+                if str(t["subject"]).lower() == subj and str(t["predicate"]).lower() == pred and other != obj and not t.get("valid_to") and pv is not None and pv.authority_class == USER_STATED:
+                    # held back, never filed: a second value beside the owner's is a rival belief the model made up; only kg_supersede with the owner's words changes the owner's
+                    self._side.append({"text": f"{args.get('subject')} {str(args.get('predicate')).replace('_', ' ')} {args.get('object')}", "status": "disputed",
+                                       "contradicts_id": f"kg:{t['subject']}|{t['predicate']}|{t['object']}".lower()})
+                    return "that conflicts with something the owner stated; it was held back (retire the old value with kg_supersede and the owner's words)"
         if self.mc.anchor_check and name in ("mempalace_kg_supersede", "mempalace_kg_invalidate"):
             old = args.get("old_object") if name == "mempalace_kg_supersede" else args.get("object")
             pv = self._kg_prov.get((str(args.get("subject", "")).lower(), str(args.get("predicate", "")).lower(), str(old).lower()))
