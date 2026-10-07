@@ -636,3 +636,40 @@ async def test_memory_service_delete_user_fails_when_the_verbatim_erase_fails_an
     with pytest.raises(memory_service.MemoryServiceError, match="exact-turn erasure failed"):
         await svc.delete_user(USER, actor="admin", reason="rtbf")
     assert touched == []                                                      # no half-done delete, no "done" audit row
+
+
+# ── the entity forget fails closed (PR #1911 round 3) ────────────────────────
+
+class _BrokenIndex(xw.MemoryBackend):
+    def __init__(self, *, on):
+        super().__init__()
+        self._on = on
+
+    async def rows_matching(self, user_id, needle):
+        if self._on == "read":
+            raise RuntimeError("db blip")
+        return await super().rows_matching(user_id, needle)
+
+    async def delete(self, user_id, turn_ids):
+        if self._on == "delete":
+            raise RuntimeError("db blip")
+        return await super().delete(user_id, turn_ids)
+
+
+@pytest.mark.parametrize("phase", ["read", "delete"])
+def test_an_entity_erase_that_fails_is_raised_not_counted_as_no_matches(phase):
+    be = _BrokenIndex(on=phase)
+    xw.set_backend(be)
+    assert run(xw.index_turn(USER, SENTENCE, said_at=NOW))
+    with pytest.raises(RuntimeError):
+        run(xw.erase_entity(USER, "Dana"))
+    assert run(xw.erase_entity(USER, "")) == 0                              # no name is still quiet
+
+
+@pytest.mark.parametrize("phase", ["read", "delete"])
+def test_the_forget_handler_does_not_confirm_when_the_verbatim_rows_could_not_be_erased(svc, no_offers, phase):
+    xw.set_backend(_BrokenIndex(on=phase))
+    assert run(xw.index_turn(USER, SENTENCE, said_at=NOW))
+    reply = run(intent_router.execute_intent(intent_router.Intent("memory_forget_entity", {"name": "Dana"}), USER))
+    assert "forgotten" in reply and "can't say it's forgotten" in reply
+    assert "I've forgotten" not in reply and "I don't have anything saved" not in reply

@@ -3674,7 +3674,11 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             if _xw:
                 logger.info("memory_forget_entity: erased %d indexed turn(s)", _xw)
         except Exception as exc:  # noqa: BLE001
+            # Fail closed: the verbatim rows may still be stored, so this forget is NOT confirmed. The tombstone and the ledger
+            # above already keep the name off every read; saying it again redoes the whole (idempotent) forget.
             logger.warning("memory_forget_entity: exact-words erase failed (%s)", type(exc).__name__)
+            return ("I couldn't finish erasing my copy of your own words about that just now, so I can't say it's forgotten yet. "
+                    "I won't bring it up meanwhile - please tell me again in a moment.")
         try:
             svc = get_memory_service()
             # Semantic search surfaces the ranked rows; the approved list makes

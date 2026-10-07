@@ -26,7 +26,7 @@ The rules (each pinned by ``tests/test_exact_words.py``):
 * **off the voice turn's critical path** - writes are a post-turn background step and a nightly catch-up; the read is one
   indexed SELECT bounded to ``MAX_CANDIDATES`` rows and it fires only on a question that asks for the owner's words or a date
   (``wants``: ``memory_gate.is_evidence_question`` "said" / "when" kinds), every other turn is untouched;
-* **never raises**: a failure is "no exact words", the turn proceeds as before - except ``delete_user``, which fails closed (a
+* **never raises**: a failure is "no exact words", the turn proceeds as before - except ``delete_user`` and ``erase_entity``, which fail closed (a
   right-to-be-forgotten must not report success over rows it could not erase);
 * **the catch-up obeys the hook's walls**: ``backfill_recent`` skips a user who opted out of memory and a voice turn the speaker
   gate rejected (the voice lane persists the verdict in ``chat_messages.metadata``), and reads the whole window page by page.
@@ -478,20 +478,18 @@ def question_for(user_id: str, message: str) -> str:
 
 async def erase_entity(user_id: str, name: str) -> int:
     """Delete this user's indexed turns that name ``name`` (a whole word / phrase, case-blind, separator-blind: the same
-    pattern the forget sweep uses). Returns the rows removed. Never raises."""
-    try:
-        if not (user_id or "").strip() or not (name or "").strip():
-            return 0
-        from memory_forgotten import name_pattern, normalise_key
-        pat = name_pattern(name)
-        key = normalise_key(name)
-        needle = (key.split(" ")[0] if key else name.strip().split(" ")[0]).lower()
-        backend = get_backend()
-        ids = [tid for tid, text in await backend.rows_matching(user_id, needle) if pat.search(text or "")]
-        return await backend.delete(user_id, ids) if ids else 0
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("exact_words: erase for a forgotten entity failed (%s)", type(exc).__name__)
+    pattern the forget sweep uses). Returns the rows removed (0 = nothing matched). A store failure on the read or the delete is
+    RAISED, never folded into that 0: a forget that could not erase the words must not be confirmed
+    (``memory_forget_entity`` reports the failure instead of "I've forgotten ...")."""
+    if not (user_id or "").strip() or not (name or "").strip():
         return 0
+    from memory_forgotten import name_pattern, normalise_key
+    pat = name_pattern(name)
+    key = normalise_key(name)
+    needle = (key.split(" ")[0] if key else name.strip().split(" ")[0]).lower()
+    backend = get_backend()
+    ids = [tid for tid, text in await backend.rows_matching(user_id, needle) if pat.search(text or "")]
+    return int(await backend.delete(user_id, ids) or 0) if ids else 0
 
 
 async def delete_user(user_id: str) -> int:
