@@ -1,0 +1,124 @@
+---
+type: Research / ranked synthesis
+title: "What gets us closer to Samantha: three scouts folded into one ranked list (2026-10-07)"
+status: Research only. Synthesis of three scouting records; nothing was installed, run, bought or flashed, and no live store, DB or brain was touched. Every verdict is a proposal; the owner decides.
+date: 2026-10-07
+description: One top-12 ranking across the memory/cognition, companion/voice/persona and setups/inference/hardware scouts, with cost, licence, verdict and a concrete next step per row, grouped into bench arms, shadow trials, a borrow list and owner decisions.
+sources: "scout-memory-cognition-2026-10-07.md (M), scout-companion-voice-persona-2026-10-07.md (C), scout-setups-inference-hardware-2026-10-07.md (S), all in this directory"
+evidence_labels: "Facts are carried from the three records and keep their labels there ([gh], [readme], [web], [fetched], [box], [derived], [unverified]). Hour estimates in the cost column are this note's own and are marked est."
+---
+
+# What gets us closer: three scouts, one ranked list (2026-10-07)
+
+Three scouts looked at programs, setups and GitHub projects that could close the Zoe-to-Samantha gap, one slice each:
+memory and cognition ([M](./scout-memory-cognition-2026-10-07.md)), companion / voice / persona
+([C](./scout-companion-voice-persona-2026-10-07.md)), setups / inference / hardware
+([S](./scout-setups-inference-hardware-2026-10-07.md)). This note does not re-research anything. It ranks across
+the slices, says what each item gives Zoe that she lacks today, and turns the verdicts into next steps. For the
+detail behind any row, open the record named in the "slice" column.
+
+## 0. Rules this ranking obeys (the owner's, kept visible)
+
+1. **Ties go to maintained projects.** When two routes close the same gap, the one with live commits, several authors and a real licence wins.
+2. **No Zoe-grown look-alikes.** If a maintained project does the thing, we use or trial that project; we do not rebuild it. A BORROW is a semantic or a threshold taken into an existing seam, not a second implementation of someone's product. Where a borrow could drift into a look-alike (kiwi-mem's dream next to EverOS reflection; Callhome next to the proactive chain) the note says which one wins the tie.
+3. **The thin layer stays thin.** `memory_authority.py` and the Zoe layer around Hindsight stay a small authority wrapper. Nothing here adds a second proxy, a second store or a second brain loop in front of Flue.
+4. **Safety = floors, capability = the contest.** The authority rule (user-stated outranks confirmed outranks inferred), G0-G3, the 2 GB voice-RAM floor, the replay gate and the rocks (Gemma 4 E4B + MTP, Moonshine v2 Medium, Kokoro, Flue 2.x + pi, openWakeWord) are floors: an arm that breaks one is out, whatever it scores. Above the floors, arms compete on capability (profile accuracy, persona stability, backchannel quality, TTFA, headroom).
+
+What no scout found: a maintained project that models a household of several people, decides to speak first,
+and measures whether the persona stays itself (M section 0). Nobody has solved the whole gap. The finds are parts and instruments.
+
+## 1. The ranked top 12
+
+Ranking rule: gap closed for Zoe first, then maintenance, then fit with the thin layer, then cost. Hours are est.
+(this note's guess at engineer time for the first step); RAM and money are the scouts' numbers, with their caveats.
+
+| # | Name | Slice | What it gives Zoe that she lacks today | Maintained? / licence | Cost (RAM, money, hours) | Verdict | Concrete next step |
+|---|---|---|---|---|---|---|---|
+| 1 | **MaAI** `bc_det` + `vap_bc` (Kyoto Univ.) | C | A trained answer to "was that short sound a backchannel or a turn?" (the false-cancel barge-in still has) and a learned "now is a good moment for mm-hm" signal for W11.2, in place of a pause-length rule | Yes: 154 stars, 12 contributors, push 2026-10-01, 0.2.0 on 2026-04-17. Code MIT; weights mixed: `vap_bc_en` MIT, `vap_en` / `vad_en` CC-BY-NC-ND, **`bc_det_en` has no licence tag** | RAM: `bc_det_en` head 17.4 MB + shared Mimi int8 encoder 156 MB, on the Pi (about 5.6 GB free), 0 Orin RAM. Money 0. Hours est. 8-16 for a log-only probe. Pi latency / RTF unpublished and unmeasured | **ADOPT-TRIAL** (shadow only) | Ask the authors for the `bc_det_en` licence. Build a log-only probe on the Pi that records `p_bc_det` (threshold 0.45) and `p_bc` against the replay corpus, with Zoe's own playback fed in as the "user" channel as the negative control (it must not fire). No behaviour change; flag-dark |
+| 2 | **go-emotions ONNX classifier** (`Cohee/distilbert-base-uncased-go-emotions-onnx`), with SillyTavern's expression pattern | C | Panel orb colour and expression per reply sentence with zero Gemma tokens, and the text-valence half of W4 (arousal from audio, valence from text). Removes the need for B5.2's brain-emitted emotion tags on the display side | Model MIT (HF metadata). SillyTavern is AGPL-3.0, so model and pattern only, no code. Alternative `SamLowe/roberta-base-go_emotions-onnx` 125 MB, MIT | RAM 67.6 MB int8 on the Pi or in zoe-data (CPU), 0 Orin RAM. Money 0. Hours est. 6-12. Label quality is modest (F1 about 0.447 at 0.5): colour, not truth; never written to memory | **ADOPT-TRIAL** (model), **BORROW** (pattern) | Lab CPU probe on the Jason corpus transcripts: collapse 28 labels to 6-8 groups, top label above a margin, map to orb colour behind a flag. Replay-gated; measure latency on the Pi |
+| 3 | **JetPack 7.2 trial** (Jetson Linux R39.2, CUDA 13.2) | S | Possible RAM headroom on the brain box: Seeed measured -40 % post-load memory and +28-42 % speed on AGX Orin 32 GB with a 27B model, probably the weights no longer held twice (our 2.03 GB RssFile / 1.95 GB VmLck). Also the only road to TensorRT Edge-LLM and vLLM 0.22+. RAM gates everything else on the Orin | NVIDIA release; Seeed BSP for the J401 / J501 carriers (SSH-key bug in its backup / restore scripts). Unmeasured on Orin NX with Gemma 4 E4B + MTP | Money about $0-100 (spare NVMe or USB-NVMe). Hours est. 6-10 plus a brain-stop window. Risk: Kokoro torch and CUDA 13 wheels; QSPI firmware may not return to R36 [unverified] | **OWNER DECISION** (trial recommended) | Owner approves a brain-stop window. Flash 7.2 to a separate NVMe, same GGUF, same flags; record `RssAnon` / `RssFile` / MemAvailable and run the replay corpus. Kill criterion: no RAM gain, or Kokoro / CUDA 13 pain. Test the drive-swap rollback before relying on it. See 4(d) |
+| 4 | **EverOS** (`EverMind-AI/EverMemOS`) | M | A per-user profile refined between sessions (the closest maintained thing to "model each household member") plus offline reflection that merges episode clusters into one narrative and soft-archives the originals with `deprecated_by` | Yes: 13,352 stars, push 2026-10-06, 81 commits / 8 authors in 90 days. Apache-2.0. Markdown source of truth, SQLite + LanceDB, rebuildable | RAM and calls per turn unmeasured; defaults point at cloud endpoints and a 4B embedder that is too heavy, so a small local embedder and a llama.cpp endpoint must be configured. Money 0. Hours est. 20-30 for the arm | **ADOPT-TRIAL** (second bake-off arm, profile + reflection only) | Add an EverOS arm to the bake-off, profile and reflection strategies only, on a synthetic household for four simulated weeks against the same ZMB probes. Pass: profile facts correct, no user-stated row altered, RAM inside the 2 GB headroom. Newest-wins reflection may only touch the inference tier; check for phone-home first |
+| 5 | **PersonaMem-v2, ATRBench, ANCHOR** (evaluation instruments) | M | Numbers for the three gaps nobody sells a fix for: implicit user model, asking-to-remember (initiative), persona collapse over months. ANCHOR found 44.4 % trajectory accuracy over 2,008 companion conversations and no memory setup fixing it, so a scored "stays herself" scenario is a differentiator | PersonaMem-v2: code public, 44 stars, **no licence file**, 1 commit in 90 days. ATRBench: EMNLP 2026 paper. ANCHOR: paper only, no code or dataset found | RAM 0. Money 0. Hours est. 12-24 per scoring arm; ANCHOR needs a Zoe-scripted copy of its two probe shapes | **ADOPT-TRIAL** (scoring arms, not engines) | Add three scoring arms to ZMB (see 4(a)); re-check ANCHOR for a code release; read the PersonaMem-v2 licence situation before copying any data |
+| 6 | **Mac mini M6 32 GB** as speech + memory + data box | S | About 4.0 GB freed on the Orin (Kokoro 2.1 + zoe-data / Moonshine 1.4 + memory engine 0.46) and 10+ GB spare on the Mac for Hindsight + MemPalace + reflection resident; likely lower TTFA (CoreML Kokoro: 28 s of audio in about 1.1 s) | Apple hardware. Moonshine has official macOS support; Kokoro CoreML / MLX builds are small third-party repos. llama.cpp MTP is a net loss on Metal, so the brain stays on the Orin | Money from $899 (16 GB); the 32 GB price was **not found**, scout estimate $1.2-1.4k [unverified]. Free step 0 first. Hours est. 12-20 for step 0 | **OWNER DECISION** (free trial first, purchase after) | Step 0 on the existing Mac over the VPN: Moonshine + kokoro-mlx (`af_sky`) + the Hindsight stack for two days; replay the corpus remotely; measure TTFA and prove the 4 GB claim. Confirm the existing Mac is Apple silicon. Buy only if step 0 passes. See 4(d) |
+| 7 | **kiwi-mem** (`LucieEveille/kiwi-mem`) | M | The richest bundle of months-scale continuity mechanics: heat (time decay + recall reinforcement + query diversity + emotional weight), nightly blur, day / week / month / quarter / year summaries (recent days in full, older as gist), a three-layer dream, user locks that never decay, machine locks that expire | Yes: 329 stars, push 2026-10-05, 49 commits / 2 authors in 90 days. README says AGPL-3.0-or-later (API: NOASSERTION): **ideas only, do not run or copy code** | RAM 0 (ideas). Money 0. Hours est. 16-30 to prototype the day / week summaries and heat in an arm. Local-4B viability of the dream unverified | **BORROW** | Take the calendar hierarchy and the heat / decay rule into a bench arm or the digest design; take "user lock = never decays" as another dress of the authority rule. If the EverOS arm wins, its reflection takes the dream's slot (maintained project wins the tie). See 4(c) |
+| 8 | **tigerless agent-memory** (`tigerless-labs/agent-memory`) | M | The only worked design that matches the authority doctrine: an unattended sleep-time pass may add and update; deletion arrives only as a proposal the user confirms; supersede keeps the chain; `recall --as-of <date>`; a test that deleting the index and rebuilding loses nothing | Young: created 2026-09-01, 2,377 stars, 100+ commits / 9 authors in 90 days, MIT, version 0.1.0. Hosts today are Claude Code / Codex CLI | RAM trivial (no model inside). Money 0. Hours est. 4-8 to write the design into the authority note | **BORROW** (design); re-check in 60 days for a trial | Fold "delete = proposal", the supersede chain and an `as-of` recall into the authority design and the forget-ledger tests. Re-scout on or after 2026-12-06 |
+| 9 | **Pipecat backchannel guards** (`pipecat-ai/pipecat`, `maisterr/pipecat-backchannel`, Smart Turn v3.x) | C | Independent confirmation of B1.4's 2.5 s cooldown plus two guards it lacks: skip about 20 % of eligible pauses (`fire_probability` 0.8) and ignore the first 0.7 s of a turn (`min_speech_before_eligible_s`) | Yes: Pipecat 16.2k stars, BSD-2, push 2026-10-07, v1.12.0 on 2026-09-26; pipecat-backchannel 23 stars, BSD-2 | RAM 0 (spec text). The full scheme costs about 2x inference while the user speaks, which Zoe does not adopt. Hours est. 1-2 | **BORROW** | Add the two guards to the B1.4 spec text now; no code until W11.2 starts. Let MaAI (row 1) replace the rule if the shadow trial proves out |
+| 10 | **SillyTavern World Info + Character Card V3** | C, M | Vocabulary and semantics for persona and household lore without spam or drift: `sticky` (stay active N messages), `cooldown`, `delay`, constant entries, inclusion groups, a token budget with constant entries first, insertion depth. Zero LLM calls. Card V3 is the portable persona format | Yes: 34.2k stars, AGPL-3.0, push 2026-10-02: **spec and semantics only, no code** | RAM 0. Money 0. Hours est. 3-6 for a design note | **BORROW** | Put sticky / cooldown / delay into the B2.5 ("don't mention this again") design note and the persona-lore split the 2026-10-04 design deferred; adopt Card V3 field semantics when the persona config is written |
+| 11 | **Miru** (`kiyotakali/Miru`) | M | Initiative decided by a model, not a timer (an AttentionEngine that stays quiet when you are deep in work), the commitment list as a first-class object, and the rule "the chat agent only reads memory; every write is derived from something that happened" | Yes: 173 stars, push 2026-09-23, 49 commits / 3 authors in 90 days, Apache-2.0; ships as prebuilt releases, so pattern only | RAM 0. Money 0. Hours est. 3-6 | **BORROW** (pattern) | Write "chat only reads, writes come from events" into the authority design as a stated invariant and test; use the AttentionEngine idea in the B2.x proactivity work. ATRBench (row 5) is its measure |
+| 12 | **Serein quote binding + DuduLove rejection records** | M | Evidence binding: verbatim quotes stored apart from memory text with a record of which quotes support which memory; and rejection records so background consolidation cannot rewrite what the user rejected, plus a recall ledger that stops the same memory resurfacing in a session | Serein: 149 stars, MIT, 100+ commits / 2 authors, created 2026-07-18. DuduLove Memory: 25 stars, MIT, **two days old** (created 2026-10-05), too new to trust | RAM 0. Money 0. Hours est. 4-8 | **BORROW** (ideas) | Check Zoe's forget-ledger and provenance cells against the two patterns; add a rejection-record cell and a quote-support link to the bench where missing. Do not depend on either repo |
+
+Also read and not in the top 12 (their rows live in the records): CrewAI's recall blend (4(c)), Callhome's soft-hangup and check-in rules (4(c), idea only), the overnight digest on a parallel engine (4(d)), LightMem (4(a), optional), the jetson-voice-assistant audio-in recipe, TensorRT Edge-LLM (watch), `jetson-memory-audit` and per-unit hardware profiles (free, borrow).
+
+## 2. Why this order
+
+- **Rows 1 and 2 first** because they are the only two items that are cheap, maintained, local and off the W3 RAM gate (they run on the Pi, which has the most spare RAM Zoe owns), and each closes a named, tracked gap (false-cancel barge-in and W11.2; display emotion and the text half of W4).
+- **Row 3 before the engine arms** because RAM gates everything on the Orin (the bake-off's 463 MB is still over the 2 GB floor). It is high-upside and unmeasured, so it stays a trial behind an owner decision, not a plan.
+- **Rows 4 and 5 together** because the engine arm needs an instrument that scores what it claims. Without PersonaMem-v2 / ATRBench / ANCHOR-shaped scenarios, "profile + reflection" has no number.
+- **Row 6** is the one hardware recommendation that survived a repriced market: a bigger Jetson is now a bad buy (module $599 to $999, AGX Orin 64 GB to $2,999, Thor kit to $5,499, DGX Spark to $4,699), while a Mac mini adds RAM at a lower price. It is gated by a free step first.
+- **Rows 7 to 12** are borrows: they cost design time, not RAM, and each is routed into an existing seam (the digest, B1.4, B2.5, the authority design, the forget ledger) rather than a new component.
+
+## 3. Floors and tie-breaks to apply while doing the work
+
+- EverOS and kiwi-mem both resolve conflicts newest-wins. They may only ever operate on the derived (inference) tier, never on user-stated rows, and they sit under `memory_authority.py`.
+- CrewAI's consolidation lets an LLM decide keep / update / delete / insert. That violates the authority rule, so only its recall-score formula is borrowed, never its delete step.
+- Repeated re-consolidation is lossy (EverOS's own warning, hence weekly). Any reflection arm needs a dry-run view of what it would change before it applies it (MIRIX's `dry_run` idea).
+- The Mac trial changes nothing on the Orin until the owner buys one; the brain stays on llama.cpp MTP there. A Mac-hosted brain is a rock change and is not proposed.
+- Licences that block code reuse (kiwi-mem AGPL, SillyTavern AGPL, Callhome PolyForm Noncommercial, `bc_det_en` untagged, PersonaMem-v2 no licence file, memU unresolved) mean ideas or shadow trials only until the LICENSE file is read by a human.
+
+## 4. Next steps, grouped
+
+### (a) Bench arms to add (ZMB / bake-off)
+
+| Arm | Type | What it measures | Pass / note |
+|---|---|---|---|
+| **EverOS profile + reflection arm** | engine arm (row 4) | Profile correctness per household member; reflection on four simulated weeks; user-stated rows unaltered | Profile facts right, no user-stated row changed, RAM inside the 2 GB headroom. Reflection weekly, at most 10 clusters per run; run it with a dry-run view first |
+| **LightMem arm** (optional) | engine arm, just outside the top 12 | Cheapest-in-calls engine: pre-compression and an offline sleep-time update; Ollama / vLLM / Transformers back ends | Only if a third arm is wanted. MIT, ICLR 2026, 12 commits / 5 authors, benchmarked on gpt-4o-mini and Qwen3-30B-A3B, not a 4B. Its companion rig `zjunlp/MemBase` (MIT) can run mem0, A-MEM, EverMemOS and LangMem on LoCoMo / LongMemEval as a ready comparison |
+| **PersonaMem-v2 scoring arm** | scoring arm (row 5) | Implicit user model: 1,000 personas, 20,000+ implicit preferences. Frontier models 37-48 %; a Qwen3-4B RL-trained on it reached 53 %, so a 4B is on-class | Read the licence situation first (no licence file) |
+| **ATRBench scoring arm** | scoring arm (row 5) | Acquisition, not storage: does Zoe ask to remember a reusable preference. Agents fall at least 62 points behind an oracle | The scored version of "initiative" and "builds a user model deliberately" |
+| **ANCHOR-shaped persona-stability scenario** | scoring arm (row 5) | Persona collapse and drift over months: copy its two probe shapes (a sealed identity questionnaire; counterfactual trajectory questions) into a Zoe-scripted scenario until its code lands | Read WrenWen's field notes (unread by the scout) before writing it; re-check ANCHOR for a release |
+
+ZMB already separates scenario data from the driver (M 3.5), so scoring arms are low cost. All arms keep the pre-registered G0-G3 rule and its negative controls; a tie goes to the incumbent Z0 as in run 1.
+
+### (b) Shadow trials beside the live rocks (Pi, flag-dark, no behaviour change)
+
+1. **MaAI backchannel detector on the Pi** (row 1). Log-only; `p_bc_det` and `p_bc` against the replay corpus; Zoe's own playback as the negative control; licence question to the authors first; measure real CPU latency, because none is published. Feeds B1.3 / B1.4 and W11.2.
+2. **go-emotions ONNX classifier** (row 2). CPU probe on the Jason corpus transcripts; 28 labels to 6-8 groups; orb colour behind a flag; text-valence input to W4. Never persisted to memory.
+3. (Related, W3-gated, lab only after B0.1 / B5.1) reproduce the `jetson-voice-assistant` Gemma 4 audio-in recipe with E4B and compare against B5.5's "closed upstream" assumption; correct the note only if the pinned llama.cpp commit reproduces.
+
+### (c) Borrow list (design inputs; no new component)
+
+| Source | Take | Route into |
+|---|---|---|
+| **kiwi-mem** | Heat (decay + recall reinforcement + query diversity + emotional weight); calendar summaries day / week / month / quarter / year with recent days full and older as gist; nightly blur with a 21-day cooldown; user locks never decay, machine locks demote after 90 days and are reversible | Digest and reflection design; a bench arm for months-scale continuity |
+| **Miru** | AttentionEngine as a model-made decision; commitments as an object; "chat only reads, writes come from events" | Authority design invariant; B2.x proactivity |
+| **CrewAI recall blend** | recall score = 0.5 x similarity + 0.3 x 0.5^(age / half-life) + 0.2 x importance, importance set at encode time. Not the LLM delete step | Recall ranking experiment in the bench |
+| **SillyTavern world-info timed effects + Character Card V3** | sticky / cooldown / delay, constant entries, inclusion groups, token budget, insertion depth; Card V3 persona semantics | B2.5 design note; persona config |
+| **Serein quote binding** | Quotes kept apart from memory text with support links; Scene vs Event split; a rerank gate between "found" and "injected" | Provenance cells and verbatim-recall design |
+| **DuduLove rejection records** | Rejected memories leave a record so consolidation cannot rewrite them; recall ledger within a session; identity from the connection credential; an admission gate on writes | Forget-ledger tests |
+| **Pipecat backchannel guards** | `fire_probability` 0.8; `min_speech_before_eligible_s` 0.7; the 2.5 s cooldown | B1.4 spec text |
+| **Callhome soft-hangup and check-in rules** (PolyForm Noncommercial: idea only) | Escalation (one check-in at most once a day, never at night or in do-not-disturb); a soft goodbye then a 15-20 s linger where speaking cancels the hangup; per-speaker baselines for emotion features | Zoe's 5 s follow-up listening window; B2.x; AS-norm in P3. Adopt nothing from the code |
+| **tigerless agent-memory authority design** | Unattended pass may add and update; delete is only a proposal; supersede keeps the chain; `recall --as-of`; index deletable and rebuildable | Authority design and forget-ledger tests |
+
+Free, read-only extras from the setups scout: NVIDIA's `jetson-memory-audit` (from `NVIDIA-AI-IOT/jetson-device-skills`) as an instrument, and a `profiles/orin-nx-16.env` per-unit RAM budget that the W3 gate reads (from `ShayneP/local-voice-ai`'s hardware-profile idea).
+
+### (d) Owner decisions (nothing here is started without the owner)
+
+1. **JetPack 7.2 trial on a spare NVMe** (row 3). Needs a brain-stop window and a spare NVMe or USB-NVMe (about $0-100). Recommended: yes, on a separate drive so rollback is a drive swap. Kill on no RAM gain or Kokoro / CUDA 13 pain.
+2. **Mac mini M6 32 GB as speech + memory + data box**, after a free trial on the existing Mac (row 6). Recommended: run the free step 0 now; decide the purchase on its numbers. Brain and router stay on the Orin. The 32 GB price needs a real quote before any purchase.
+3. **Overnight digest on a parallel engine** (vLLM container `ghcr.io/nvidia-ai-iot/vllm:gemma4-jetson-orin`, or llama.cpp `--parallel`) in a nightly brain-stop window. Never the voice lane (+2 GB RAM, loses the MTP / cache-ram path). The digest's current wall-time is not recorded in the docs the scout read, so measure that first.
+4. **Nothing bigger-Jetson.** No AGX Orin 64 GB ($2,999 module), Thor module or kit, or DGX Spark ($4,699) at this price for a household. Also not recommended: Kokoro on the Pi (costs about 0.4-0.6 s of TTFA), Pi AI HAT+ 2, the memory engine on the Pi's SD card, a carveout BSP rebuild. A Mac mini M5 Pro 48 / 64 GB (about $2.3k / $2.7k, derived) and a 12B or 26B-A4B brain would be a rock change: decide only after the M6 trial, and only with explicit owner approval.
+
+## 5. Suggested order
+
+1. Free and no-risk this week: the Pipecat guards into B1.4 text, SillyTavern vocabulary into B2.5, the licence email to the MaAI authors, the Mac step 0 prep.
+2. Shadow trials (b) once the Pi probe is written; the bench arms (a) alongside bake-off run 2 prep.
+3. Owner decisions (d) as windows allow; JetPack 7.2 before any engine decision that depends on RAM.
+4. Re-scout dates: agent-memory on or after 2026-12-06; ANCHOR and TensorRT Edge-LLM (Gemma 4 bench issue #230) in four weeks; the awesome-ai-companion list monthly.
+
+## 6. What this synthesis cannot claim
+
+- No RAM, latency or calls-per-turn number exists for EverOS, kiwi-mem, MaAI on the Pi, go-emotions on the Pi, or JetPack 7.2 on Orin NX with E4B. Every "local viability" statement is read from docs and marked unverified in the records.
+- Hour estimates in the cost column are this note's, not the scouts'.
+- Seeed's JetPack 7.2 result is AGX Orin 32 GB with a 27B model; the mechanism is inferred. Mac token rates are projections on most pages; the Metal-MTP loss rests on one M1 Max report.
+- Vendor benchmarks (MemOS, EverOS) are self-reported. Star counts on young repos are volatile.
+- Several facts came through WebFetch summaries rather than full pages (see each record's caveats).
