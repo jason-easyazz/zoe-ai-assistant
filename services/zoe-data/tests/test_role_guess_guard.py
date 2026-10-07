@@ -141,9 +141,9 @@ def test_the_owner_check_keeps_what_the_user_or_an_unowned_row_states():
     assert rg.role_supported_for("Anika Reyes", "wife", "Anika Reyes is Callum Reyes's wife", ("name", ("callum",)))
 
 
-def test_guarded_people_include_those_the_packet_relates_only_to_someone_else():
+def test_every_named_person_stays_guarded_whatever_the_packet_states():
     packet = ROLELESS + "- Anika Reyes is Callum Reyes's wife\n- User's brother is Callum Reyes\n"
-    assert rg.guarded_people(NAMES, packet) == ["Anika Reyes"]          # Callum is the user's brother
+    assert rg.guarded_people(NAMES, packet) == NAMES
     assert rg.unstated_people(NAMES, packet) == []                        # the rule line stays quiet
 
 
@@ -199,6 +199,68 @@ def test_nested_possessives_compare_equal_however_the_user_is_worded():
     # ... and the user's OWN wife is a different claim than a friend's wife
     assert rg.neutralise("Anika Reyes is your wife.", NAMES, packet, user_text=ASK)[1] == ["anika~wife"]
     assert rg.neutralise("Anika Reyes is your brother's wife.", NAMES, packet, user_text=ASK)[1] == ["anika~wife"]
+
+
+def test_one_stated_role_does_not_license_a_different_one():
+    packet = ROLELESS + "- User's sister is Anika Reyes [mem:aaaa7777]\n"
+    assert rg.neutralise("Anika Reyes is your sister.", NAMES, packet, user_text=ASK) == ("Anika Reyes is your sister.", [])
+    out, guessed = rg.neutralise("Anika Reyes is your mother.", NAMES, packet, user_text=ASK)
+    assert guessed == ["anika~mother"] and "mother" not in out.lower()
+
+
+async def test_s22_one_stated_role_still_runs_the_filter_end_to_end(monkeypatch):
+    packet = ROLELESS + "- User's sister is Anika Reyes [mem:aaaa7777]\n"
+    reply, _ = await _ask(monkeypatch, ASK, "Anika Reyes is your mother.", packet=packet)
+    assert "mother" not in reply.lower() and reply.endswith("tell me?")
+
+
+@pytest.mark.parametrize("user_text", [
+    "Is my mother Anika Reyes?",
+    "My mother is Anika Reyes?",
+    "I think Anika Reyes is my mother",
+    "Maybe Anika Reyes is my mother. Who is she?",
+    "What if Anika Reyes were my mother",
+])
+def test_a_question_or_a_hypothetical_never_evidences_a_role(user_text):
+    out, guessed = rg.neutralise("Yes, Anika Reyes is your mother.", NAMES, ROLELESS, user_text=user_text)
+    assert guessed == ["anika~mother"], (user_text, out)
+
+
+def test_a_statement_beside_a_question_still_evidences_the_role():
+    for said in ("Anika Reyes is my mother, who is she again?", "Anika Reyes is my mother. Who is she?",
+                 "My mother is Anika Reyes, right?"):
+        assert rg.neutralise("Anika Reyes is your mother.", NAMES, ROLELESS, user_text=said)[1] == [], said
+
+
+@pytest.mark.parametrize("reply", [
+    "She is your mother, born on November 2, 1985.",
+    "She's your mother.",
+    "He is probably your father.",
+])
+def test_a_pronoun_role_claim_on_a_guarded_turn_is_rewritten(reply):
+    out, guessed = rg.neutralise(reply, NAMES, ROLELESS, user_text=ASK)
+    assert guessed and out.endswith("could you tell me?") and "someone you've told me about" in out, out
+    assert "mother" not in out.lower().split("someone")[0] and "father" not in out.lower().split("someone")[0]
+
+
+def test_a_pronoun_claim_a_named_person_is_evidenced_for_is_left_alone():
+    packet = ROLELESS + "- User's mother is Anika Reyes\n"
+    assert rg.neutralise("She is your mother, born in 1985.", NAMES, packet, user_text=ASK) == (
+        "She is your mother, born in 1985.", [])
+    assert rg.neutralise("She was born in 1985.", NAMES, ROLELESS, user_text=ASK) == ("She was born in 1985.", [])
+
+
+@pytest.mark.parametrize("reply", [
+    "Anika Reyes is the wife of your brother.",
+    "Anika Reyes is the wife of the user.",
+    "Anika Reyes is the wife of me.",
+])
+def test_a_lowercase_owner_after_of_is_compared_with_the_packet_owner(reply):
+    packet = ROLELESS + "- Anika Reyes is Callum's wife\n"
+    assert rg.neutralise(reply, NAMES, packet, user_text=ASK)[1] == ["anika~wife"], reply
+    assert rg.neutralise("Anika Reyes is the wife of Callum.", NAMES, packet, user_text=ASK)[1] == []
+    stated = ROLELESS + "- User's brother's wife is Anika Reyes\n"
+    assert rg.neutralise("Anika Reyes is the wife of your brother.", NAMES, stated, user_text=ASK)[1] == []
 
 
 def test_a_first_name_two_people_share_is_not_a_handle():

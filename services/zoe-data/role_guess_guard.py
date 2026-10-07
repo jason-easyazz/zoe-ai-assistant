@@ -119,7 +119,8 @@ _USER_WORDS = frozenset({"user", "your", "my", "our", "you", "i", "me", "mine", 
 _NAME_OWNER = r"(?:[A-Z][\w-]*\s+){0,2}[\w-]+"        # no apostrophe inside a token: it IS the possessive
 _OWNER_POSS = re.compile(rf"(?P<own>{_NAME_OWNER})['\u2019]s\s+$")
 _OWNER_DET = re.compile(r"\b(?P<own>your|my|our)\s+$", re.IGNORECASE)
-_OWNER_OF = re.compile(r"^s?\s+(?:of|to)\s+(?P<own>(?:[A-Z][\w'\u2019-]*\s?){1,3})")
+_OWNER_OF = re.compile(r"^s?\s+(?:of|to)\s+(?:(?P<det>(?i:(?:your|my|our)(?:\s+[a-z]+)?|the\s+user|you|me|us))\b"
+                       r"|(?P<own>(?:[A-Z][\w'\u2019-]*\s?){1,3}))")
 
 
 def _is_relation(tok: str) -> bool:
@@ -145,7 +146,12 @@ def _owner_at(text: str, start: int, end: int):
     ``('rel', ('friend',))``: a leading user is implicit, so the two wordings compare equal."""
     m = _OWNER_OF.match(text[end:])
     if m:
-        return _owner_key(m.group("own"))
+        if m.group("det"):                     # "the wife of your brother" / "of the user" / "of me"
+            parts = m.group("det").lower().split()
+            if parts[0] in _USER_WORDS or parts[:2] == ["the", "user"]:
+                rest = [] if parts[0] == "the" else parts[1:]
+                return ("rel", (rest[0],)) if rest else "user"
+        return _owner_key(m.group("own") or "")
     pos = text[:start]
     found = _OWNER_POSS.search(pos) or _OWNER_DET.search(pos)
     if not found:                              # "Callum's lovely wife": one adjective may sit between
@@ -239,11 +245,37 @@ def role_supported_for(name: str, role: str, evidence: str, owner="user") -> boo
     return _owners_compatible(owner, _evidence_owners(name, role, evidence))
 
 
-def guarded_people(names: Iterable[str], packet: str) -> list[str]:
-    """The named people whose packet states no relationship role TO THE USER: the unstated ones,
-    plus those the packet relates only to somebody else ("Anika is Callum's wife")."""
-    return [n for n in names if n and n.strip()
-            and not any(role_supported_for(n, r, packet, "user") for r in GUESS_ROLES)]
+def guarded_people(names: Iterable[str], packet: str = "") -> list[str]:
+    """The people the reply is checked for: EVERY named person. A person with one stated role is
+    still guarded - "User's sister is Anika" licenses "your sister", never "your mother" - so the
+    role-specific evidence check (``role_supported_for``) decides each claim, not membership here."""
+    return [n for n in names if n and n.strip()]
+
+
+# -- what the user's own words can evidence -----------------------------------------
+_HYPO_LEAD = re.compile(
+    r"^\W*(?:is|are|was|were|am|do|does|did|can|could|would|should|will|may|might|who|whom|whose|what|which|"
+    r"whether|if|maybe|perhaps|possibly|probably|i\s+(?:wonder|think|guess|suppose|believe|doubt|bet)|"
+    r"not\s+sure|no\s+idea|i'?m\s+not\s+sure)\b", re.IGNORECASE)
+_HYPO_ANY = re.compile(r"\b(?:if|whether|wonder|wondering|suppose|supposing|hypothetically|might\s+be|could\s+be)\b",
+                       re.IGNORECASE)
+
+
+def stated_text(user_text: str) -> str:
+    """The part of the user's message that STATES things. A question ("Is my mother Anika?"), a
+    wondering or a hypothetical ("maybe", "if", "I think") asks about a relationship; it never
+    evidences one. Clause-wise, so "Anika is my mother, who is she again?" keeps its statement."""
+    kept: list[str] = []
+    for sent in _pr._sentences(user_text or ""):
+        clauses = [c for c in re.split(r"\s*[,;]\s*|\s+(?:but|and)\s+", sent) if c.strip()]
+        asks = sent.rstrip().endswith("?")
+        for idx, c in enumerate(clauses):
+            if _HYPO_LEAD.search(c) or _HYPO_ANY.search(c):
+                continue
+            if asks and len(clauses) == 1:     # "My mother is Anika?" - a question, not a statement
+                continue
+            kept.append(c.strip().rstrip("?"))
+    return ". ".join(kept)
 
 
 # -- the reply backstop -----------------------------------------------------------
@@ -260,6 +292,10 @@ def _claim_patterns(handle_alt: str) -> list[tuple[str, "re.Pattern[str]"]]:
         ("cop", re.compile(
             rf"(?P<role>\b(?:{_DET}\s+)+(?:\w+\s+){{0,1}}(?P<r>{_ROLE})s?(?:['’]s\s+name)?)"
             rf"(?P<mid>\s*,?\s*{_VERB}\s+(?:called\s+|named\s+)?){n}\b", re.IGNORECASE)),
+        # She is your mother / He's Callum's brother - a pronoun on a guarded turn is the person asked about
+        ("pron", re.compile(
+            rf"\b(?P<pron>she|he|they)(?P<mid>(?:\s+{_VERB}|['’]s)\s+)(?P<role>(?:{_DET}\s+)+"
+            rf"(?:\w+\s+){{0,1}}(?P<r>{_ROLE})s?\b)", re.IGNORECASE)),
         # your mother Anika / your mother, Anika / Callum's wife Anika
         ("pre", re.compile(rf"(?P<role>\b{_DET}\s+(?:\w+\s+){{0,1}}(?P<r>{_ROLE})s?,?\s+)(?={n}\b)",
                            re.IGNORECASE)),
@@ -274,10 +310,12 @@ def neutralise(reply: str, names: Iterable[str], packet: str, user_text: str = "
     rewritten neutrally and ONE who's-who question added; ``guessed`` lists ``name~role`` per
     rewrite. Unchanged (and ``[]``) when nothing was guessed. Pure."""
     text = reply or ""
-    handles = _handles(names)
+    names_l = list(names)
+    handles = _handles(names_l)
     if not text.strip() or not handles:
         return text, []
-    evidence = f"{packet or ''}\n{user_text or ''}"
+    evidence = f"{packet or ''}\n{stated_text(user_text)}"
+    fulls = list(dict.fromkeys(f for f in (n.strip() for n in names_l) if f))
     by_handle = {h.lower(): full for h, full in handles}
     alt = "|".join(re.escape(h) for h, _ in handles)
     guessed: list[str] = []
@@ -294,7 +332,14 @@ def neutralise(reply: str, names: Iterable[str], packet: str, user_text: str = "
         def sub(m: "re.Match[str]", kind: str = kind) -> str:
             grp = "r" if m.group("r") else "r2"
             role = m.group(grp) or ""
-            full = _unsupported(m.group("n"), role, _owner_at(m.string, m.start(grp), m.end(grp)))
+            owner = _owner_at(m.string, m.start(grp), m.end(grp))
+            if kind == "pron":
+                # no name to resolve: guilty only when NO named person is evidenced in that role
+                if any(role_supported_for(f, role.lower(), evidence, owner) for f in fulls):
+                    return m.group(0)
+                full = fulls[0]
+            else:
+                full = _unsupported(m.group("n"), role, owner)
             if not full:
                 return m.group(0)
             guessed.append(f"{full.split()[0].lower()}~{role.lower()}")
@@ -304,6 +349,8 @@ def neutralise(reply: str, names: Iterable[str], packet: str, user_text: str = "
                 return f"{m.group('n')}{m.group('mid')}{_NEUTRAL}"
             if kind == "cop":
                 return f"{m.group('n')} is {_NEUTRAL}"
+            if kind == "pron":
+                return f"{m.group('pron')}{m.group('mid')}{_NEUTRAL}"
             if kind == "pre":
                 return ""
             return m.group("n") + (" " if m.groupdict().get("tc") else "")
