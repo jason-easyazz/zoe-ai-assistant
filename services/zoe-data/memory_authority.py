@@ -458,7 +458,7 @@ _USER_SUBJECT_RE = re.compile(r"^\s*(?:the\s+)?(?:user|speaker|i|my)\b", re.IGNO
 _STOP = frozenset("""
 the and but for with from into onto this that these those there here their them they his her its
 user users speaker have has had was were been being are not never longer anymore any more
-dropped stopped quit gave given used really very just also still currently now then than year years
+dropped stopped quit cancelled canceled gave given used really very just also still currently now then than year years
 who whom what when where while which about some one ones got get gets going doing does did
 """.split())
 _DIGIT_ORD = re.compile(r"^(\d+)(?:st|nd|rd|th)$")
@@ -527,8 +527,16 @@ def _fold(text: str) -> str:
     return "".join(c for c in unicodedata.normalize("NFKD", text or "") if not unicodedata.combining(c))
 
 
+_ATTACHED_NOT_RE = re.compile(r"^(?P<head>.+?)-+(?P<neg>not)$", re.IGNORECASE)
+
+
 def _words(text: str) -> list[str]:
-    return re.findall(r"[A-Za-z0-9][A-Za-z0-9'’\-]*", _fold(text))
+    out: list[str] = []
+    for w in re.findall(r"[A-Za-z0-9][A-Za-z0-9'’\-]*", _fold(text)):
+        # "Bendigo-not Ballarat": an attached hyphen would fuse the value with the contrast word
+        m = _ATTACHED_NOT_RE.match(w)
+        out += [m.group("head"), m.group("neg")] if m else [w]
+    return out
 
 
 def _sentences(text: str) -> list[str]:
@@ -545,13 +553,33 @@ def _normalise_dates(text: str) -> str:
         return text
 
 
+#: A bare base-form action verb in a fact ("plans to stop treatment", "will cancel the booking", "a drop in
+#: price") is the CLAIM: the user's sentence must say that verb (in any form). The 60%-of-other-words
+#: tolerance would otherwise let "I plan to continue treatment" support its opposite (review of #1913;
+#: true on main before this PR too).
+_ACTION_FAMILIES = {
+    "drop": re.compile(r"\bdrop(?:s|ped|ping)?\b", re.IGNORECASE),
+    "stop": re.compile(r"\bstop(?:s|ped|ping)?\b", re.IGNORECASE),
+    "cancel": re.compile(r"\bcancel(?:s|led|ed|ling|ing)?\b", re.IGNORECASE),
+    "quit": re.compile(r"\bquit(?:s|ting)?\b", re.IGNORECASE),
+    "leave": re.compile(r"\b(?:leave|leaves|left|leaving)\b", re.IGNORECASE),
+}
+
+
+def _required_actions(fact: str) -> list["re.Pattern[str]"]:
+    plain = _ENDED_BASE_RE.sub(" ", fact or "")   # "did not drop X": a cue, not a claim word
+    return [_ACTION_FAMILIES[w.lower()] for w in _words(plain) if w.lower() in _ACTION_FAMILIES]
+
+
 def _fact_parts(fact: str) -> tuple[bool, set[str], set[str], set[str]]:
     """``(about_user, value_tokens, cue_classes, other_tokens)`` of a stored fact."""
     about_user = bool(_USER_SUBJECT_RE.match(fact or ""))
     value: set[str] = set()
     cues: set[str] = set()
     other: set[str] = set()
-    for i, w in enumerate(_words(fact)):
+    # "did not drop X": the end-state phrase is a CUE (polarity + ended, enforced in the statement check),
+    # not a content word the user has to repeat - the bare verbs stay content ("plans to stop treatment").
+    for i, w in enumerate(_words(_ENDED_BASE_RE.sub(" ", fact or ""))):
         low = w.lower()
         base = re.sub(r"['’]s$", "", low)
         if low in _STOP or base in _STOP or low in _FIRST_PERSON:
@@ -584,7 +612,12 @@ _NEG_RE = re.compile(r"\b(?:not|never|no|none|nobody|nothing|neither|nor)\b|n['�
                      re.IGNORECASE)
 _USED_TO_RE = re.compile(r"\bused to\b|\bformerly\b|\bpreviously\b|\bwas living\b", re.IGNORECASE)
 #: a stated END of a state ("no longer" / "any more" are also negations above)
-_ENDED_RE = re.compile(r"\b(?:stopped|dropped|quit|gave up|given up|ended|left|no longer)\b|\bany ?more\b", re.IGNORECASE)
+#: the BASE form after a negated auxiliary is the same end-state verb: the digest words a denial "User did not
+#: drop X", the owner says "I haven't dropped X" (review of #1913)
+_ENDED_BASE = r"\b(?:did|do|does|will|would|can|could)(?:\s+not|n['\u2019]t)\s+(?:drop|quit|stop|cancel|give\s+up|leave)\b"
+_ENDED_BASE_RE = re.compile(_ENDED_BASE, re.IGNORECASE)
+_ENDED_RE = re.compile(r"\b(?:stopped|dropped|quit|cancell?ed|gave up|given up|ended|left|no longer)\b|\bany ?more\b|"
+                       + _ENDED_BASE, re.IGNORECASE)
 _HYPOTHETICAL_RE = re.compile(
     r"\b(?:wish|if|maybe|perhaps|might|hope|hoping|someday|supposedly|apparently|imagine|pretend|"
     r"would|could)\b", re.IGNORECASE)
@@ -596,6 +629,79 @@ _LEAD_INTERJECTION_RE = re.compile(r"^\s*(?:(?:no|nope|nah|yes|yeah|yep|actually
                                    re.IGNORECASE)
 
 
+# "my mum lives in Bendigo, NOT BALLARAT" - a CONTRAST names the value being corrected away; it is
+# not a denial of the fact beside it. Counting that "not" as a polarity mismatch made the owner's own
+# explicit correction unsupported (class model_from_turn), so the stale row it corrects OUTRANKED it:
+# the new value was parked as a dispute, the old one stayed approved and was served as current
+# (day-sim "how's my mum" 2026-10-07: "...getting good care in Ballarat"). Only a clause that
+# names something the fact does not is a contrast; "not in Perth" beside "User lives in Perth" is
+# a denial and stays one.
+# The delimiter is a comma / semicolon or a dash, spaced OR attached ("Bendigo\u2014not Ballarat",
+# "Bendigo - not Ballarat", "Bendigo-not Ballarat"; ``_words`` splits an attached "-not" off its value).
+# A bare "but not" / "and not" is a delimiter too: speech-to-text carries no commas ("lives in Bendigo but
+# not Ballarat", "a nurse and not a doctor").
+_CONTRAST_RE = re.compile(r"(?:(?:,|;|\s*[-\u2013\u2014]+)\s*(?:and\s+|but\s+)?|\s+(?:and|but)\s+)"
+                          r"not\s+(?P<neg>[^,;.!?]{1,40}?)\s*(?=[,;.!?]|$)", re.IGNORECASE)
+_NOT_A_CONTRAST = frozenset({"sure", "really", "yet", "quite", "very", "just", "too", "even", "much", "anymore",
+                             "any", "always", "often", "now", "going", "been", "true", "right", "well", "good",
+                             "great", "bad", "happy", "ok", "okay", "if", "when", "that", "this", "so"})
+
+
+_ARTICLES = frozenset({"a", "an", "the", "in", "at", "on", "to", "of"})
+#: a TIME qualifier is not a corrected-away value: "but not at the moment" denies the fact for now
+_TEMPORAL = frozenset({"moment", "now", "today", "tonight", "currently", "present", "lately", "recently", "days",
+                       "week", "weeks", "month", "months", "year", "years", "weekend", "yesterday", "tomorrow",
+                       "ever", "then", "atm", "time", "times", "longer", "anymore", "morning", "afternoon",
+                       "evening", "night", "while", "meantime", "mean", "moment's"})
+#: a clause that points BACK at the fact ("not there", "not in it", "not that place") stems to nothing
+#: the fact says, but it is a denial OF the fact - never a corrected-away value (review of #1913).
+_ANAPHORA = frozenset({"there", "here", "it", "its", "that", "this", "those", "these", "them", "they", "him",
+                       "her", "she", "he", "so", "same", "such"})
+
+
+def _without_contrast(win: str, fact: str) -> str:
+    """``win`` with each ", not <other value>" correction clause removed for the POLARITY check
+    only. A clause whose words appear in the fact (or that is a hedge, "not sure") is kept."""
+    fact_stems = {_stem(w) for w in _words(fact or "") if w.lower() not in _STOP | _ARTICLES}
+
+    def keep_or_drop(m: "re.Match[str]") -> str:
+        neg = _words(m.group("neg"))
+        if not neg or len(neg) > 4 or neg[0].lower() in _NOT_A_CONTRAST:
+            return m.group(0)
+        if any(w.lower() in _TEMPORAL for w in neg):
+            return m.group(0)   # "but not at the moment": a denial for now, not a corrected-away value
+        if any(w.lower() in _ANAPHORA for w in neg):
+            return m.group(0)   # "not there" / "not in it": a denial of the fact, not a corrected-away value
+        if {_stem(w) for w in neg if w.lower() not in _STOP | _ARTICLES} & fact_stems:
+            return m.group(0)
+        return ""
+    return _CONTRAST_RE.sub(keep_or_drop, win)
+
+
+_ENDED_VERB_RE = re.compile(r"\b(?:stopped|dropped|quit|cancell?ed|gave up|given up|ended|left)\b|" + _ENDED_BASE,
+                            re.IGNORECASE)
+
+
+_CLAUSE_BREAK_RE = re.compile(r"[,;.!?]|\b(?:so|but|and|because|then|though|although|while)\b", re.IGNORECASE)
+
+
+def _negated(text: str) -> bool:
+    """Effective polarity of the STATE: "I've dropped / quit / stopped / cancelled X" is the owner's word
+    that X is over - the polarity of the fact "User no longer does X" (day-sim race swap,
+    AUTHORITY_BLOCKED writer=turn_digest action=supersede). An end-state VERB makes a plain sentence
+    negative; a negation BOUND to that verb ("I haven't dropped X", "did not drop X": same clause, before
+    it) says the end did not happen, so the denial of an end never matches the end itself. A negation
+    elsewhere ("I did not enjoy X, so I dropped it") is about something else (review of #1913). The
+    tense/ended cue below still has to agree, so "I live in X" never supports "User quit living in X"."""
+    m = _ENDED_VERB_RE.search(text)
+    if not m:
+        return bool(_NEG_RE.search(text))
+    if _ENDED_BASE_RE.match(text, m.start()):
+        return False   # "did not drop": the negation is part of the verb phrase
+    clause = _CLAUSE_BREAK_RE.split(text[:m.start()])[-1]
+    return not _NEG_RE.search(clause)
+
+
 def _window_is_a_statement_about_the_user(win: str, fact: str) -> bool:
     """The user's OWN, affirmative, first-person statement - not a question, a wish, a
     negation the fact does not share, or a sentence about someone else's relative.
@@ -603,7 +709,7 @@ def _window_is_a_statement_about_the_user(win: str, fact: str) -> bool:
     win = _LEAD_INTERJECTION_RE.sub("", win)
     if "?" in win or _QUESTION_START_RE.match(win):
         return False
-    if bool(_NEG_RE.search(win)) != bool(_NEG_RE.search(fact or "")):
+    if _negated(_without_contrast(win, fact)) != _negated(fact or ""):
         return False
     if _HYPOTHETICAL_RE.search(win):
         return False
@@ -663,6 +769,7 @@ def _support_windows(fact: str, user_text: str):
     about_user, value, cues, other = _fact_parts(fact)
     if not (value or cues or other):
         return
+    actions = _required_actions(fact)
     # One TURN per line (the digests join user turns with newlines). A window is a sentence,
     # or two adjacent sentences of the SAME turn - never across turns: "my dog is Teddy"
     # on one turn plus "Rex is coming over" on the next is not "my dog is Rex".
@@ -680,6 +787,8 @@ def _support_windows(fact: str, user_text: str):
         if other and len(other & stems) / len(other) < 0.6:
             continue
         if about_user and not any(w.lower() in _FIRST_PERSON for w in ws):
+            continue
+        if actions and not all(rx.search(win) for rx in actions):
             continue
         if not _window_is_a_statement_about_the_user(win, fact):
             continue

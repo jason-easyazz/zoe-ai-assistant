@@ -134,10 +134,29 @@ def test_score_diet(reply, verdict):
     ("Ingrid in Bendigo is recovering from the hip op.", "PASS"),
     ("She lives in Bendigo now, not Ballarat, and the hip is healing.", "PASS"),  # negated
     ("Your mum in Ballarat is recovering from her hip.", "FAIL"),
+    # the 2026-10-07 incident reply, verbatim: the corrected-away home asserted
+    ("Ingrid is recovering from her hip replacement, which is a big deal. I hope she's feeling "
+     "comfortable and getting good care in Ballarat.", "FAIL"),
     ("I don't know how she is.", "FAIL"),
 ])
 def test_score_mum(reply, verdict):
     assert ds.score_mum(reply)[0] == verdict
+
+
+def test_the_mum_correction_is_the_owners_own_statement(monkeypatch):
+    """Lane 2 pin of the cause (full store-level test: services/zoe-data/tests/test_user_correction_contrast.py):
+    the day-sim's d2-mum-fix sentence must SUPPORT the digest fact "User's mum lives in Bendigo". When the
+    ", not Ballarat" clause counted as a polarity mismatch the fact was a model-class write, was parked as
+    a dispute against the older Ballarat row, and the stale home stayed approved and served as current."""
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "services" / "zoe-data"))
+    sys.modules.pop("memory_authority", None)
+    import memory_authority as ma
+
+    said = ds.SAY["d2-mum-fix"]
+    assert ma.supports("User's mum lives in Bendigo", said) is True
+    assert ma.supports("User's mum lives in Ballarat", said) is False        # the corrected-away value stays unsupported
+    assert ma.resolve_write("turn_digest", "User's mum lives in Bendigo", anchor_text=said,
+                            user_id="demo").cls == ma.USER_STATED_DERIVED
 
 
 PACKET = ("(Dates show when the user told you each note — use them for \"when\" questions.)\n"
