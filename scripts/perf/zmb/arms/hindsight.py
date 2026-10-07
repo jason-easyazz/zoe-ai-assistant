@@ -592,6 +592,7 @@ def zoe_layer_lines(path: "Optional[str]" = None) -> int:
 # ── the arm ──────────────────────────────────────────────────────────────────
 
 class HindsightArm(Arm):
+    nightly_model = "own"          # the observation layer is Hindsight's own consolidation: the lab injects nothing into it (``reflect_pass``)
     #: What a LAYERED arm with a scratch Postgres can do (what the run plan counts); an instance narrows it (``__init__``): no Zoe layer (H0) = no
     #: ``conflict_pass`` / ``edges``, no ``pg=`` handle = no ``disk``.
     capabilities = frozenset({"clock", "idle_pass", "identities", "reader", "controls", "conflict_pass", "edges", "disk",
@@ -840,6 +841,11 @@ class HindsightArm(Arm):
         self._finish(self._user)
         self._refused += rep.refused
         return {"retained": rep.written, "refused": rep.refused, "retired": rep.retired}
+
+    def reflect_pass(self) -> "dict[str, Any]":
+        """Hindsight's own reflection over what the life ingested: consolidate and settle. Nothing is retained, nothing is proposed."""
+        self._finish(self._user)
+        return {"retained": 0, "refused": 0, "retired": 0}
 
     def ingest_as(self, identity: str, turns: "list[Turn]") -> IngestReport:
         if identity not in IDENTITIES:

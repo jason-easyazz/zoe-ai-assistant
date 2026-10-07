@@ -39,7 +39,17 @@ INSTALL_HINT = (
     "$HOME/.cache/chroma/onnx_models (no network at run time: HF_HUB_OFFLINE=1)."
 )
 DAY_S = 86400.0
-BASE_TS = 1_790_000_000.0          # 2026-09-21: a fixed origin so a backdated run is reproducible
+BASE_TS = 1_790_000_000.0          # 2026-09-21: the run's "now", a fixed origin so a backdated run is reproducible
+
+
+def filed_ts_for(day_offset: float) -> float:
+    """The filing time of a turn said ``day_offset`` DAYS AGO (the Turn contract): older turns are EARLIER than ``BASE_TS``, never later."""
+    return BASE_TS - float(day_offset) * DAY_S
+
+
+def days_ago(filed_ts: float) -> int:
+    """The inverse of ``filed_ts_for``: how many days before ``BASE_TS`` a row was filed (rounded; the arm's clock / sequence nudges are sub-day)."""
+    return round((BASE_TS - float(filed_ts)) / DAY_S)
 
 
 class StoreUnavailable(RuntimeError):
@@ -457,7 +467,7 @@ class MemPalaceVerbatimArm(Arm):
         """One drawer, no model call. Returns its id."""
         self._seq += 1
         rid = "v" + hashlib.sha1(f"{user}|{d.room}|{self._seq}|{turn.text}".encode()).hexdigest()[:14]
-        ts = BASE_TS + turn.day_offset * DAY_S + self._clock + self._seq * 0.001
+        ts = filed_ts_for(turn.day_offset) + self._clock + self._seq * 0.001
         self._need().add(rid, user, d.room, turn.text,
                          {"authority_class": d.authority_class, "speaker": turn.speaker,
                           "speaker_verified": d.authority_class == "user_stated", "filed_ts": ts,
@@ -513,8 +523,8 @@ class MemPalaceVerbatimArm(Arm):
 
     def recall_exact(self, query: str, k: int = 5) -> "list[dict[str, Any]]":
         """(j) The owner's own words, as filed: each drawer is one verified turn, unchanged, with the day it was filed (the ``day_offset`` it was
-        written with: the arm's filing clock is ``BASE_TS + day_offset * DAY_S``)."""
-        return [{"text": r["text"], "day_offset": round((float(r["filed_ts"]) - BASE_TS) / DAY_S)} for r in self.search(query, k)]
+        written with, DAYS AGO: the arm's filing clock is ``BASE_TS - day_offset * DAY_S``)."""
+        return [{"text": r["text"], "day_offset": days_ago(r["filed_ts"])} for r in self.search(query, k)]
 
     def forget(self, entity: str) -> str:
         """What MemPalace ALONE can do: delete the user's chunks whose text names ``entity`` (a case-blind lexical

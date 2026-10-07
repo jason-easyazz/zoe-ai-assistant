@@ -20,7 +20,7 @@ Event forms (a dict in ``cell.events``):
     {"do": "exact_needles"}                                    (j) teach the 20 sentences the owner SAID, each on its day (``life.exact_turns``)
     {"do": "hop_facts", "which": "a"|"b"}                      (l) teach the first / the second fact of the 20 two-fact questions (``life.hop_corpus``)
     {"do": "life"}                                             (k) thirty days of a household's turns, each on its day (``life.life``)
-    {"do": "life_pass", "propose": ["true", "fabricated", ...]} (k) the nightly model's SCRIPTED proposals (the truth, and each kind of mistake)
+    {"do": "life_pass", "propose": ["true", "fabricated", ...]} (k) the nightly model's SCRIPTED proposals (the truth, and each kind of mistake), to an arm whose model the lab scripts; an own-model arm gets none
     {"do": "protocol_facts"}                                   (m) teach the facts the protocol prompts ask about (``life.protocol_corpus``)
 
 Probe forms (a dict in ``cell.probes``; every probe must pass):
@@ -175,11 +175,15 @@ _LIFE_KINDS = {"true": "proposals_true", "fabricated": "proposals_fabricated", "
 
 
 def _life_pass(arm: Arm, seed: str, kinds: "list[str]") -> "dict[str, Any]":
-    """The nightly pass over the life's user turns, with the model's output SCRIPTED: the truths and each kind of mistake a model makes (an
-    arm that runs its own extraction ignores the script and reads the transcript)."""
+    """The nightly pass over the life. An arm whose nightly model the LAB scripts (``nightly_model == "scripted"``: Z0's digest) is handed the
+    truths and each kind of mistake a model makes, as ``proposes``. An arm that runs its OWN model (``"own"``: Hindsight's observation layer) is
+    handed NOTHING: the scripted lies (fabricated links, stale facts, mis-attributions) would be retained as facts and consolidated into its
+    observations, so K1-K3 would measure the harness's falsehoods instead of the arm's own derivation. It reflects over the life it already ingested."""
     bad = [k for k in kinds if k not in _LIFE_KINDS]
     if bad:
         raise ValueError(f"unknown life_pass kind(s) {', '.join(bad)} (known: {', '.join(_LIFE_KINDS)})")
+    if getattr(arm, "nightly_model", "scripted") == "own":
+        return arm.reflect_pass()
     lf = lifemod.life(seed)
     proposes: "list[str]" = []
     for k in kinds:

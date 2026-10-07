@@ -319,6 +319,11 @@ def _strip(rows: "list[dict]") -> "list[dict]":
     return [{k: v for k, v in r.items() if k != "evidence"} for r in rows]
 
 
+def _k1(rows: "list[dict]") -> "list[dict]":
+    """The K1 precision counts of a seed's rows (the observation veto reads these; ``_strip`` drops the evidence they come from)."""
+    return [gates.k1_evidence(r) for r in rows if str(r.get("id", "")).startswith("K1.") and r.get("verdict") != "SKIP"]
+
+
 def phase_z0(ctx: Ctx, seeds: tuple, store: list, by_id: dict) -> None:
     from . import artifact, runner
     from .arms import make_arm
@@ -326,18 +331,20 @@ def phase_z0(ctx: Ctx, seeds: tuple, store: list, by_id: dict) -> None:
     from .world import make_world
     for seed in seeds:
         world = make_world(seed)
+        # the capability cells run on the FIRST seed only, for every arm (``run_arm_seed``): a baseline pooled over three households would be compared with a candidate's one
+        seed_store = store if seed == seeds[0] else [c for c in store if c.axis not in CAP_AXES]
         cp = runner.control_pass(store, world, frozenset(CONTROLS))
         inst = runner.instrument_block(cp, store)
         for label, arm_name, sink in (("Z0", "Z0", ctx.z0), ("Z0-off", "Z0-off", ctx.z0_off)):
             arm = make_arm(arm_name)
             try:
-                rows = runner.run_cells(store, world, arm)
+                rows = runner.run_cells(seed_store, world, arm)
             finally:
                 arm.close()
             sink[seed] = {"axes": artifact.axis_stats(rows, by_id, inst["ok"]), "hard_violations": artifact.hard_violations(rows, by_id),
                           "instrument": inst, "cells": _strip(rows)}
         ctx.log(f"Z0 seed {seed}: controls red {inst['lab_controls_red']} ok={inst['ok']}")
-        phase_z0e(ctx, seed, world, store, by_id, inst)
+        phase_z0e(ctx, seed, world, seed_store, by_id, inst)
 
 
 def phase_z0e(ctx: Ctx, seed: str, world: Any, store: list, by_id: dict, inst: dict) -> None:
@@ -468,7 +475,7 @@ def run_arm_seed(ctx: Ctx, variant: str, seed: str, box_s: float, store: list, b
         "hard_skipped": hard_skipped, "hard_skipped_why": hard_skip_why, "instrument": {"ok": inst["ok"] and getattr(ctx, "arm_controls_ok", False),
                                                       "lab_controls_red": inst["lab_controls_red"], "arm_controls": ctx.measure[variant].get("arm_controls")},
         "cells_ran": ran, "cells_selected": len(rows), "duration_s": round(ctx.host.mono() - t0, 1), "cells": _strip(rows),
-        "retain": arm.measure()}
+        "k1": _k1(rows), "retain": arm.measure()}
     ctx.log(f"{variant} {seed}: {ran}/{len(rows)} cells ran in {ctx.host.mono() - t0:.0f}s; hard violations {len(ctx.seed_runs[variant][seed]['hard_violations'])}"
             f"; hard skipped {hard_skipped}")
 
