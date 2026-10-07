@@ -329,6 +329,12 @@ def resolve_write(writer: str, text: str, *, anchor_text: Optional[str] = None,
                 # (C1 / C5) is the user speaking, not a model's guess at them
                 return Resolved(USER_STATED_DERIVED, VERBATIM_BASIS, promoted=True)
             return Resolved(USER_STATED_DERIVED, "anchored_user_turn")
+        if w in TRANSCRIPT_WRITERS and anchor_text and observation_gate_mode() != "off":
+            # a nightly paraphrase that joins two things the owner put in ONE sentence ("X accepted the offer from Y" from
+            # "X got the offer from Y!"): the owner's words carry it, the wording is the model's (``costated_span``)
+            got = costated_span(text, anchor_text)
+            if got:
+                return Resolved(USER_STATED_DERIVED, COSTATED_BASIS)
         return Resolved(base, "unanchored" if anchor_text else "no_user_evidence")
     return Resolved(MODEL_FROM_TRANSCRIPT, "automatic_writer")
 
@@ -458,7 +464,7 @@ _USER_SUBJECT_RE = re.compile(r"^\s*(?:the\s+)?(?:user|speaker|i|my)\b", re.IGNO
 _STOP = frozenset("""
 the and but for with from into onto this that these those there here their them they his her its
 user users speaker have has had was were been being are not never longer anymore any more
-dropped stopped quit gave given used really very just also still currently now then than year years
+dropped stopped quit cancelled canceled gave given used really very just also still currently now then than year years
 who whom what when where while which about some one ones got get gets going doing does did
 """.split())
 _DIGIT_ORD = re.compile(r"^(\d+)(?:st|nd|rd|th)$")
@@ -527,8 +533,16 @@ def _fold(text: str) -> str:
     return "".join(c for c in unicodedata.normalize("NFKD", text or "") if not unicodedata.combining(c))
 
 
+_ATTACHED_NOT_RE = re.compile(r"^(?P<head>.+?)-+(?P<neg>not)$", re.IGNORECASE)
+
+
 def _words(text: str) -> list[str]:
-    return re.findall(r"[A-Za-z0-9][A-Za-z0-9'’\-]*", _fold(text))
+    out: list[str] = []
+    for w in re.findall(r"[A-Za-z0-9][A-Za-z0-9'’\-]*", _fold(text)):
+        # "Bendigo-not Ballarat": an attached hyphen would fuse the value with the contrast word
+        m = _ATTACHED_NOT_RE.match(w)
+        out += [m.group("head"), m.group("neg")] if m else [w]
+    return out
 
 
 def _sentences(text: str) -> list[str]:
@@ -545,13 +559,33 @@ def _normalise_dates(text: str) -> str:
         return text
 
 
+#: A bare base-form action verb in a fact ("plans to stop treatment", "will cancel the booking", "a drop in
+#: price") is the CLAIM: the user's sentence must say that verb (in any form). The 60%-of-other-words
+#: tolerance would otherwise let "I plan to continue treatment" support its opposite (review of #1913;
+#: true on main before this PR too).
+_ACTION_FAMILIES = {
+    "drop": re.compile(r"\bdrop(?:s|ped|ping)?\b", re.IGNORECASE),
+    "stop": re.compile(r"\bstop(?:s|ped|ping)?\b", re.IGNORECASE),
+    "cancel": re.compile(r"\bcancel(?:s|led|ed|ling|ing)?\b", re.IGNORECASE),
+    "quit": re.compile(r"\bquit(?:s|ting)?\b", re.IGNORECASE),
+    "leave": re.compile(r"\b(?:leave|leaves|left|leaving)\b", re.IGNORECASE),
+}
+
+
+def _required_actions(fact: str) -> list["re.Pattern[str]"]:
+    plain = _ENDED_BASE_RE.sub(" ", fact or "")   # "did not drop X": a cue, not a claim word
+    return [_ACTION_FAMILIES[w.lower()] for w in _words(plain) if w.lower() in _ACTION_FAMILIES]
+
+
 def _fact_parts(fact: str) -> tuple[bool, set[str], set[str], set[str]]:
     """``(about_user, value_tokens, cue_classes, other_tokens)`` of a stored fact."""
     about_user = bool(_USER_SUBJECT_RE.match(fact or ""))
     value: set[str] = set()
     cues: set[str] = set()
     other: set[str] = set()
-    for i, w in enumerate(_words(fact)):
+    # "did not drop X": the end-state phrase is a CUE (polarity + ended, enforced in the statement check),
+    # not a content word the user has to repeat - the bare verbs stay content ("plans to stop treatment").
+    for i, w in enumerate(_words(_ENDED_BASE_RE.sub(" ", fact or ""))):
         low = w.lower()
         base = re.sub(r"['’]s$", "", low)
         if low in _STOP or base in _STOP or low in _FIRST_PERSON:
@@ -584,7 +618,12 @@ _NEG_RE = re.compile(r"\b(?:not|never|no|none|nobody|nothing|neither|nor)\b|n['�
                      re.IGNORECASE)
 _USED_TO_RE = re.compile(r"\bused to\b|\bformerly\b|\bpreviously\b|\bwas living\b", re.IGNORECASE)
 #: a stated END of a state ("no longer" / "any more" are also negations above)
-_ENDED_RE = re.compile(r"\b(?:stopped|dropped|quit|gave up|given up|ended|left|no longer)\b|\bany ?more\b", re.IGNORECASE)
+#: the BASE form after a negated auxiliary is the same end-state verb: the digest words a denial "User did not
+#: drop X", the owner says "I haven't dropped X" (review of #1913)
+_ENDED_BASE = r"\b(?:did|do|does|will|would|can|could)(?:\s+not|n['\u2019]t)\s+(?:drop|quit|stop|cancel|give\s+up|leave)\b"
+_ENDED_BASE_RE = re.compile(_ENDED_BASE, re.IGNORECASE)
+_ENDED_RE = re.compile(r"\b(?:stopped|dropped|quit|cancell?ed|gave up|given up|ended|left|no longer)\b|\bany ?more\b|"
+                       + _ENDED_BASE, re.IGNORECASE)
 _HYPOTHETICAL_RE = re.compile(
     r"\b(?:wish|if|maybe|perhaps|might|hope|hoping|someday|supposedly|apparently|imagine|pretend|"
     r"would|could)\b", re.IGNORECASE)
@@ -596,6 +635,79 @@ _LEAD_INTERJECTION_RE = re.compile(r"^\s*(?:(?:no|nope|nah|yes|yeah|yep|actually
                                    re.IGNORECASE)
 
 
+# "my mum lives in Bendigo, NOT BALLARAT" - a CONTRAST names the value being corrected away; it is
+# not a denial of the fact beside it. Counting that "not" as a polarity mismatch made the owner's own
+# explicit correction unsupported (class model_from_turn), so the stale row it corrects OUTRANKED it:
+# the new value was parked as a dispute, the old one stayed approved and was served as current
+# (day-sim "how's my mum" 2026-10-07: "...getting good care in Ballarat"). Only a clause that
+# names something the fact does not is a contrast; "not in Perth" beside "User lives in Perth" is
+# a denial and stays one.
+# The delimiter is a comma / semicolon or a dash, spaced OR attached ("Bendigo\u2014not Ballarat",
+# "Bendigo - not Ballarat", "Bendigo-not Ballarat"; ``_words`` splits an attached "-not" off its value).
+# A bare "but not" / "and not" is a delimiter too: speech-to-text carries no commas ("lives in Bendigo but
+# not Ballarat", "a nurse and not a doctor").
+_CONTRAST_RE = re.compile(r"(?:(?:,|;|\s*[-\u2013\u2014]+)\s*(?:and\s+|but\s+)?|\s+(?:and|but)\s+)"
+                          r"not\s+(?P<neg>[^,;.!?]{1,40}?)\s*(?=[,;.!?]|$)", re.IGNORECASE)
+_NOT_A_CONTRAST = frozenset({"sure", "really", "yet", "quite", "very", "just", "too", "even", "much", "anymore",
+                             "any", "always", "often", "now", "going", "been", "true", "right", "well", "good",
+                             "great", "bad", "happy", "ok", "okay", "if", "when", "that", "this", "so"})
+
+
+_ARTICLES = frozenset({"a", "an", "the", "in", "at", "on", "to", "of"})
+#: a TIME qualifier is not a corrected-away value: "but not at the moment" denies the fact for now
+_TEMPORAL = frozenset({"moment", "now", "today", "tonight", "currently", "present", "lately", "recently", "days",
+                       "week", "weeks", "month", "months", "year", "years", "weekend", "yesterday", "tomorrow",
+                       "ever", "then", "atm", "time", "times", "longer", "anymore", "morning", "afternoon",
+                       "evening", "night", "while", "meantime", "mean", "moment's"})
+#: a clause that points BACK at the fact ("not there", "not in it", "not that place") stems to nothing
+#: the fact says, but it is a denial OF the fact - never a corrected-away value (review of #1913).
+_ANAPHORA = frozenset({"there", "here", "it", "its", "that", "this", "those", "these", "them", "they", "him",
+                       "her", "she", "he", "so", "same", "such"})
+
+
+def _without_contrast(win: str, fact: str) -> str:
+    """``win`` with each ", not <other value>" correction clause removed for the POLARITY check
+    only. A clause whose words appear in the fact (or that is a hedge, "not sure") is kept."""
+    fact_stems = {_stem(w) for w in _words(fact or "") if w.lower() not in _STOP | _ARTICLES}
+
+    def keep_or_drop(m: "re.Match[str]") -> str:
+        neg = _words(m.group("neg"))
+        if not neg or len(neg) > 4 or neg[0].lower() in _NOT_A_CONTRAST:
+            return m.group(0)
+        if any(w.lower() in _TEMPORAL for w in neg):
+            return m.group(0)   # "but not at the moment": a denial for now, not a corrected-away value
+        if any(w.lower() in _ANAPHORA for w in neg):
+            return m.group(0)   # "not there" / "not in it": a denial of the fact, not a corrected-away value
+        if {_stem(w) for w in neg if w.lower() not in _STOP | _ARTICLES} & fact_stems:
+            return m.group(0)
+        return ""
+    return _CONTRAST_RE.sub(keep_or_drop, win)
+
+
+_ENDED_VERB_RE = re.compile(r"\b(?:stopped|dropped|quit|cancell?ed|gave up|given up|ended|left)\b|" + _ENDED_BASE,
+                            re.IGNORECASE)
+
+
+_CLAUSE_BREAK_RE = re.compile(r"[,;.!?]|\b(?:so|but|and|because|then|though|although|while)\b", re.IGNORECASE)
+
+
+def _negated(text: str) -> bool:
+    """Effective polarity of the STATE: "I've dropped / quit / stopped / cancelled X" is the owner's word
+    that X is over - the polarity of the fact "User no longer does X" (day-sim race swap,
+    AUTHORITY_BLOCKED writer=turn_digest action=supersede). An end-state VERB makes a plain sentence
+    negative; a negation BOUND to that verb ("I haven't dropped X", "did not drop X": same clause, before
+    it) says the end did not happen, so the denial of an end never matches the end itself. A negation
+    elsewhere ("I did not enjoy X, so I dropped it") is about something else (review of #1913). The
+    tense/ended cue below still has to agree, so "I live in X" never supports "User quit living in X"."""
+    m = _ENDED_VERB_RE.search(text)
+    if not m:
+        return bool(_NEG_RE.search(text))
+    if _ENDED_BASE_RE.match(text, m.start()):
+        return False   # "did not drop": the negation is part of the verb phrase
+    clause = _CLAUSE_BREAK_RE.split(text[:m.start()])[-1]
+    return not _NEG_RE.search(clause)
+
+
 def _window_is_a_statement_about_the_user(win: str, fact: str) -> bool:
     """The user's OWN, affirmative, first-person statement - not a question, a wish, a
     negation the fact does not share, or a sentence about someone else's relative.
@@ -603,7 +715,7 @@ def _window_is_a_statement_about_the_user(win: str, fact: str) -> bool:
     win = _LEAD_INTERJECTION_RE.sub("", win)
     if "?" in win or _QUESTION_START_RE.match(win):
         return False
-    if bool(_NEG_RE.search(win)) != bool(_NEG_RE.search(fact or "")):
+    if _negated(_without_contrast(win, fact)) != _negated(fact or ""):
         return False
     if _HYPOTHETICAL_RE.search(win):
         return False
@@ -663,6 +775,7 @@ def _support_windows(fact: str, user_text: str):
     about_user, value, cues, other = _fact_parts(fact)
     if not (value or cues or other):
         return
+    actions = _required_actions(fact)
     # One TURN per line (the digests join user turns with newlines). A window is a sentence,
     # or two adjacent sentences of the SAME turn - never across turns: "my dog is Teddy"
     # on one turn plus "Rex is coming over" on the next is not "my dog is Rex".
@@ -680,6 +793,8 @@ def _support_windows(fact: str, user_text: str):
         if other and len(other & stems) / len(other) < 0.6:
             continue
         if about_user and not any(w.lower() in _FIRST_PERSON for w in ws):
+            continue
+        if actions and not all(rx.search(win) for rx in actions):
             continue
         if not _window_is_a_statement_about_the_user(win, fact):
             continue
@@ -1050,3 +1165,199 @@ def log_blocked(writer: str, kind: str, *, user_id: str = "", action: str = "") 
     tag = "AUTHORITY_BLOCKED" if enabled() else "AUTHORITY_WOULD_BLOCK"
     logger.info("%s writer=%s kind=%s%s%s", tag, writer, kind or "other",
                 f" action={action}" if action else "", f" user={user_id}" if user_id else "")
+
+
+# ── the observation gate: a model's NIGHTLY reading of the user is stored only when the user's words carry it ──────
+#
+# Why (ZMB reflection axis, K1 / K5, measured on main 2026-10-07): the nightly digest asked a model for "facts" from the
+# day's transcript and stored every one as an APPROVED row of class ``model_from_transcript``. Three kinds of it were
+# false and served: a link nobody stated ("Dagny is Jarvis's husband"; 5 of 10 observations in the lab), a hedged
+# restatement of what the owner had said plainly ("Jarvis probably lives in Pellham": the owner's certainty turned into
+# a guess), and a "you told me ..." the owner never said (an inference presented as the owner's own words). One class:
+# the row's CLAIM was never checked against the owner's words. The gate, in the nightly digest and as pure helpers here
+# (``supports`` / ``costated_span`` / ``cited_support``):
+#
+#   supported     the owner's words (a verbatim span via ``supports``, a single sentence that names every entity the
+#                 claim names, or an approved user-class row the item CITES via ``source_memory_ids``) carry it: stored
+#                 as before, and a co-stated paraphrase is stamped ``user_stated_derived`` (the honest class: a model's
+#                 paraphrase that the owner's turn supports)
+#   restatement   supported AND hedged: the owner said it plainly, the model made it a guess: dropped, the owner's row stands
+#   unsupported   anything else: a ``pending`` candidate (never served), reject-ledger reason ``guard_observation_unsupported``;
+#                 "you told me ..." from a model is removed (a supported claim is stored plain; an unsupported one is
+#                 reworded as an inference, "Possibly ...")
+#
+# ``ZOE_DIGEST_OBSERVATION_GATE`` = enforce (default) | shadow (log what WOULD be held, change nothing) | off.
+
+OBSERVATION_GATE_ENV = "ZOE_DIGEST_OBSERVATION_GATE"
+#: a nightly writer's stored basis when a sentence of the owner's names everything the claim names
+COSTATED_BASIS = "co_stated_user_turn"
+CITED_BASIS = "cited_user_rows"
+
+
+def observation_gate_mode() -> str:
+    """``enforce`` (default) | ``shadow`` | ``off``. Per-call env read."""
+    raw = os.environ.get(OBSERVATION_GATE_ENV)
+    if raw is None:
+        return "enforce"
+    v = raw.strip().lower()
+    if v in ("0", "false", "no", "off", ""):
+        return "off"
+    if v == "shadow":
+        return "shadow"
+    return "enforce"
+
+
+#: "You told me ...", "You said ...", "As you mentioned, ...": the model claims the OWNER said it
+_ATTRIBUTION_RE = re.compile(
+    r"^\s*(?:as\s+)?you(?:['’]ve|\s+have|\s+did|\s+had)?\s+(?:told|said|mentioned|shared|let me know|noted|explained)\b"
+    r"\s*(?:me|us)?\s*(?:that\b|,|:)?\s*", re.IGNORECASE)
+#: a model's guess about a thing the owner may have said plainly
+_GUESS_RE = re.compile(
+    r"\b(?:probably|possibly|perhaps|maybe|likely|seems?(?:\s+to)?|appears?(?:\s+to)?|apparently|presumably|supposedly|"
+    r"might|may\s+be|could\s+be|i\s+(?:think|guess|suspect)|looks\s+like|sounds\s+like)\b[,]?\s*", re.IGNORECASE)
+_ENTITY_STOP = frozenset({"user", "users", "you", "your"})
+
+
+def split_attribution(text: str) -> tuple[bool, str]:
+    """``(attributed, claim)``: does the text open by saying the OWNER said it, and the claim without that opening."""
+    t = (text or "").strip()
+    m = _ATTRIBUTION_RE.match(t)
+    if not m:
+        return False, t
+    rest = t[m.end():].strip()
+    return True, (rest[:1].upper() + rest[1:]) if rest else rest
+
+
+def is_hedged(text: str) -> bool:
+    return bool(_GUESS_RE.search(text or "")) or bool(_HEDGE_RE.search(text or ""))
+
+
+def strip_hedge(text: str) -> str:
+    """The claim with its guess words removed ("Jarvis probably lives in Pellham" -> "Jarvis lives in Pellham"):
+    what the support test reads, so a guess about a plainly stated fact is recognised as that fact."""
+    out = _GUESS_RE.sub("", text or "")
+    out = re.sub(r"\bto be\b\s+(?=\w+ing\b)", "", out)          # "seems to be starting at X" -> "starting at X"
+    return re.sub(r"\s{2,}", " ", out).strip()
+
+
+def claim_entities(text: str) -> list[str]:
+    """The named people / places / organisations a statement names (capitalised runs; the owner and the
+    pronouns are not entities). Pure."""
+    try:
+        from memory_gate import person_candidate_names
+    except Exception:  # noqa: BLE001
+        return []
+    out: list[str] = []
+    for name in person_candidate_names(text or ""):
+        parts = [p for p in name.split() if p.casefold() not in _ENTITY_STOP]
+        if parts and " ".join(parts) not in out:
+            out.append(" ".join(parts))
+    return out
+
+
+def _names_in(sentence: str, name: str) -> bool:
+    low = " " + re.sub(r"[^a-z0-9' ]+", " ", _fold(sentence).lower()) + " "
+    low = re.sub(r"['’]s\b", "", low)
+    n = re.sub(r"[^a-z0-9' ]+", " ", _fold(name).lower()).strip()
+    return bool(n) and re.search(r"(?<![a-z0-9])" + re.escape(n) + r"(?![a-z0-9])", low) is not None
+
+
+def _relation_words(text: str) -> set[str]:
+    return {m.group(0).lower() for m in re.finditer(rf"\b{_RELATION}\b", text or "", re.IGNORECASE)}
+
+
+def _polarity_tense_agree(win: str, claim: str) -> bool:
+    if bool(_NEG_RE.search(win)) != bool(_NEG_RE.search(claim or "")):
+        return False
+    for cue in (_USED_TO_RE, _ENDED_RE):
+        if bool(cue.search(win)) != bool(cue.search(claim or "")):
+            return False
+    return True
+
+
+def costated_span(claim: str, user_text: str) -> Optional[str]:
+    """The ONE sentence of the owner's own words that names EVERY entity the claim names (two or more), or None.
+    A claim that links two named things is as true as the owner's having put them in one sentence: that is what a
+    link is. It is NOT enough alone for a role ("X is Y's husband": the sentence must carry the relation word too),
+    nor across a polarity / tense change ("quit" against "starts"). One entity or none: never (``supports`` decides)."""
+    ents = claim_entities(claim)
+    if len(ents) < 2 or not user_text:
+        return None
+    want_rel = _relation_words(claim)
+    for line in _normalise_dates(str(user_text)).split("\n"):
+        for sent in _sentences(line):
+            if "?" in sent or _QUESTION_START_RE.match(sent) or _HYPOTHETICAL_RE.search(sent):
+                continue
+            if not all(_names_in(sent, e) for e in ents):
+                continue
+            if want_rel and not want_rel <= _relation_words(sent):
+                continue
+            if not _polarity_tense_agree(sent, claim):
+                continue
+            return _squash(sent)
+    return None
+
+
+def observation_support(claim: str, user_text: str) -> Optional[tuple[str, str]]:
+    """``(basis, span)`` when the owner's words carry the claim, else None: ``supports`` first (entailment of the
+    attribute, value and speaker), then a single sentence that names everything the claim names (``costated_span``)."""
+    if not claim or not user_text:
+        return None
+    if supports(claim, user_text):
+        return "anchored_user_turn", (supporting_span(claim, user_text) or "")
+    span = costated_span(claim, user_text)
+    return (COSTATED_BASIS, span) if span else None
+
+
+def cited_support(claim: str, cited_texts: "list[str]") -> Optional[tuple[str, str]]:
+    """Support from the approved user-class rows an observation CITES (``source_memory_ids``): the same two tests
+    over those rows' texts (each row is one statement; they are joined one per line, never across rows)."""
+    texts = [str(t).strip() for t in cited_texts or () if str(t or "").strip()]
+    if not texts:
+        return None
+    got = observation_support(claim, "\n".join(texts))
+    return (CITED_BASIS, got[1]) if got else None
+
+
+@dataclass(frozen=True)
+class ObservationVerdict:
+    kind: str                     # supported | restatement | unsupported
+    text: str                     # what to store (the attribution removed / an inference reworded)
+    basis: str = ""               # anchored_user_turn | co_stated_user_turn | cited_user_rows
+    reasons: tuple = ()           # labels only: attributed, hedged, no_support, quote_not_verbatim
+    span: str = ""                # the owner's words that carry it (never logged)
+    anchor: str = ""              # the user-class text to pass as ``anchor_text`` when it is stored
+
+
+_FUNCTION_LEADS = frozenset("the a an he she they it his her their its my our this that these those there".split())
+
+
+def _decapitalise(claim: str) -> str:
+    """Lower-case the first letter of a claim that opens with a function word ("The knee ..." -> "possibly the knee ...");
+    a name keeps its capital ("Possibly Brynja moved ...")."""
+    first = (claim.split(None, 1) or [""])[0]
+    return claim[:1].lower() + claim[1:] if first.casefold() in _FUNCTION_LEADS else claim
+
+
+def check_observation(fact: str, user_text: Optional[str], *, cited_texts: "list[str]" = ()) -> ObservationVerdict:
+    """Judge ONE model-written statement against the owner's words. ``user_text`` is the owner's turns only (the
+    nightly transcript, or the verbatim quote the model gave), ``None`` when the model's quote was NOT verbatim (a
+    hallucinated span is no evidence); ``cited_texts`` are the texts of the approved user-class rows it cites."""
+    attributed, claim = split_attribution(fact)
+    hedged = is_hedged(claim)
+    core = strip_hedge(claim) if hedged else claim
+    reasons: list[str] = (["attributed"] if attributed else []) + (["hedged"] if hedged else [])
+    got = observation_support(core, user_text) if user_text else None
+    if got is None:
+        got = cited_support(core, list(cited_texts))
+    if got is None:
+        reasons.append("quote_not_verbatim" if user_text is None else "no_support")
+        # an inference stays an inference: never "you told me"
+        text = claim if (hedged or not attributed) else "Possibly " + _decapitalise(claim)
+        return ObservationVerdict("unsupported", text, reasons=tuple(reasons))
+    basis, span = got
+    anchor = ("\n".join(str(t).strip() for t in cited_texts if str(t or "").strip())
+              if basis == CITED_BASIS else str(user_text or ""))
+    if hedged:
+        return ObservationVerdict("restatement", core, basis, tuple(reasons), span, anchor)
+    return ObservationVerdict("supported", claim, basis, tuple(reasons), span, anchor)

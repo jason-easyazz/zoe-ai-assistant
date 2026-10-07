@@ -204,9 +204,9 @@ def test_verbatim_arm_ledger_sweep_deletes_without_the_plaintext():
 
 def test_verbatim_arm_as_of_is_a_filter_on_filing_time():
     arm = _mv()
-    arm.ingest([Turn("I live in Perth", "owner_voice_verified", day_offset=0),
-                Turn("I live in Hobart", "owner_voice_verified", day_offset=5)])
-    early = arm.as_of("where do I live", "2026-09-22T00:00:00")
+    arm.ingest([Turn("I live in Perth", "owner_voice_verified", day_offset=5),      # said 5 days ago
+                Turn("I live in Hobart", "owner_voice_verified", day_offset=0)])    # said just now
+    early = arm.as_of("where do I live", "2026-09-19T00:00:00")
     assert [r["text"] for r in early] == ["I live in Perth"]
 
 
@@ -299,7 +299,7 @@ def test_every_hm_cell_goes_red_with_each_named_protection_off_and_green_with_al
     assert s["fail"] == [] and s["sanity_fail"] == [], s
     assert s["targets_failing"] == [] and s["targets_now_passing"] == []          # HM-F5 closed by the forget-alias sweep: graded, not a target
     assert s["skipped"] == ["HM-F6.forget.physical", "HM-F8.forget.physical-distilled"]      # F6 needs the library store, F8 the real Hindsight tier + its Postgres
-    assert s["pass"] == s["graded"] == 17
+    assert s["pass"] == s["graded"] == 18                                           # + HM-J1 (exact words, control `exact_lookup`)
     for row in res["cells"]:
         if row["verdict"] == "SKIP":
             continue

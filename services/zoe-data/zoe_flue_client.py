@@ -1790,6 +1790,11 @@ async def _run_flue_brain_streaming_turn(
     from recall_evidence import note_turn
 
     note_turn(uid, message)
+    # the owner asked for their own words ("what exactly did I say about ..."): the recall_memory tool call made during this
+    # turn carries only the model's query, so the turn's question is noted for /for-prompt's exact-words block (exact_words)
+    from exact_words import note_turn as note_exact_turn
+
+    note_exact_turn(uid, message)
     # Back a claim up when challenged (ZOE_VERIFY_ON_CHALLENGE, default OFF; no
     # DB read, no search, no change to the bytes when off): "are you sure" after
     # a world-fact answer runs ONE bounded web search. A hit rides as a block

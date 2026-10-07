@@ -193,7 +193,7 @@ class FakeHindsight:
             for p in parts:
                 ents = ", ".join(dict.fromkeys(re.findall(r"\b[A-Z][a-z]{2,}\b", p)))
                 shown = p if mode in ("chunks", "verbatim") or not ents else f"{p.rstrip()} | Involving: {ents}"      # the real concise extractor appends what it found
-                self._unit(b, shown, doc, item.get("tags") or [], item.get("metadata") or {})
+                self._unit(b, shown, doc, item.get("tags") or [], item.get("metadata") or {}, when=str(item.get("timestamp") or ""))
             if cfg.get("enable_observations") and cfg.get("enable_auto_consolidation", True):
                 self._consolidate(b, item.get("observation_scopes") or None)
         tokens["total_tokens"] = tokens["input_tokens"] + tokens["output_tokens"]
@@ -273,6 +273,8 @@ class FakeHindsight:
         q = _toks(body.get("query") or "")
         scored = []
         for u in b["units"]:
+            if body.get("types") and u["fact_type"] not in body["types"] and not (u["fact_type"] == "world" and "experience" in body["types"]):
+                continue
             if u["state"] != "valid" or not self._tag_ok(u["tags"], body.get("tags") or [], body.get("tags_match", "any")):
                 continue
             # semantic recall returns the NEAREST units even when none shares a word with the query ("where do I live" -> "User moved to Perth"),
@@ -282,7 +284,7 @@ class FakeHindsight:
         if self.pg is not None:                              # audit_log keeps the whole request: the QUERY text is on disk until the bank / the name is erased
             self.pg.write("audit_log", b["name"], json.dumps({"query": body.get("query") or ""}))
         res = [{"id": u["id"], "text": u["text"], "type": u["fact_type"], "tags": u["tags"], "document_id": u["document_id"] or None,
-                "metadata": u["metadata"], "entities": None, "context": u["context"], "chunk_id": u["chunk_id"], "source_fact_ids": None,
+                "metadata": u["metadata"], "entities": None, "context": u["context"], "chunk_id": u["chunk_id"], "source_fact_ids": None, "mentioned_at": u["mentioned_at"],
                 "scores": {"final": round(1.0 + o * 0.1, 3), "reranker": None, "semantic": 0.5, "keyword": None}, "attachments": None}
                for o, _i, u in scored[:20]]
         return 200, {"results": res}

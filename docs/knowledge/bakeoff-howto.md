@@ -1,9 +1,9 @@
 ---
 type: Runbook
 title: The Hindsight bake-off is one command (owner's page)
-description: How to run the pre-registered memory bake-off (Z0, Z0-off, Z0e, H0, H1, H2, HM) with one command inside a brain-stop window, what the window does to the box, how long it takes, how to read the verdict (G0-G3 per arm and the winner clause), how to abort, and what is still unverified. First contact with the real stack (real Hindsight server, scratch Postgres, embeddings shim, real MemPalace library, the live brain's LLM path) was made on 2026-10-06; see docs/research/bakeoff-setup-verification-2026-10-06.md for what it found and fixed.
+description: How to run the pre-registered memory bake-off (Z0, Z0-off, Z0e, H0, H1, H2, HM) with one command inside a brain-stop window, what the window does to the box, how long it takes, how to read the verdict (the G0-G3 floors per arm and the capability winner clause: exact words, reflection, long-range recall, protocol, temporal, recall at distance), how to abort, and what is still unverified. First contact with the real stack (real Hindsight server, scratch Postgres, embeddings shim, real MemPalace library, the live brain's LLM path) was made on 2026-10-06; see docs/research/bakeoff-setup-verification-2026-10-06.md for what it found and fixed.
 tags: [memory, bake-off, hindsight, zmb, runbook, brain-window, owner]
-timestamp: 2026-10-06T07:00:00Z
+timestamp: 2026-10-07T15:00:00Z
 ---
 
 # The Hindsight bake-off: one command
@@ -65,18 +65,18 @@ Guards: MemAvailable below 1.2 GB at any time aborts and restores; 90 minutes is
 0. Stale `zmb-` banks an earlier window left in the scratch store are deleted first (the disk cells scan the whole data directory: a live bank that holds a name they look for
    makes their residue unmeasurable, and the cell would say so as an ERROR). Only this tool's own prefix is touched.
 1. Z0 and Z0-off in the lab on three seeds (1): the control and the negative control. Seeds: `zmb-v1` (baseline) plus two held-out. **Z0e** (the same `MemoryService` over a REAL Chroma collection
-   with the service's MiniLM embedder, as live; about 25 s per seed) runs the four recall (D) cells on the same seeds: the lab's own Z0 ranks by bag-of-words, so the D axis is compared with Z0e, and the
-   report says so (a missing chromadb or model is a skip, never a download, and D falls back to Z0 with a note).
+   with the service's MiniLM embedder, as live; about 50 s per seed) runs the four recall (D) cells AND the long-range (L) cells on the same seeds: the lab's own Z0 ranks by bag-of-words, so D and L are compared with Z0e, and the
+   report says so (a missing chromadb or model is a skip, never a download, and they fall back to Z0 with a note).
 2. Forgetting probes start for each Hindsight arm (1): forget an invented friend, check at t+0. The **real t+6 min** check (wait, replay the transcript
    through the arm's own nightly pass and a late model writer, check again) runs later, between cells.
 3. Adapter negative controls on the real server (1): with a Zoe-layer protection OFF the cell that claims it must go red. Six claims: `authority` (A1), `identity`, `ledger`, and the three
    that need what this change gave the arm: `authority` on the people graph (A8), `supersede` on the conflict pass (C1) and **`physical_erase` on F5** (the byte scan must find REAL Postgres
    residue on the real stack when the scrub is off; if it does not, the scan is blind and the run says so).
-4. **H1 first and complete** (run 2 plan; `--dry-run` prints the minutes and the per-arm cell budget): seed 1 (ceiling ~10), recall latency n=50 (1), verbatim extraction JSON
+4. **H1 first and complete** (run 2 plan; `--dry-run` prints the minutes and the per-arm cell budget): seed 1 (ceiling ~10, **+8 for the capability cells**), recall latency n=50 (1), verbatim extraction JSON
    validity over >= 100 retain calls (6), brain-slot seconds per retained turn (3), then seeds 2 and 3 (ceiling ~10 each). The ceilings come from run 1's measured seconds per cell
    (H1 3.7, H2 12, H0 20) with headroom for the cells added since; a seed that finishes early hands its slack to the arms behind it. A cell the box did not reach is a SKIP, never a pass.
-5. **H2 then H0, one seed each**, taking what H1 left: seed 1, then latency, concise extraction validity (shared, 10) and slot. H0's latency and slot are "only if time remains" (not
-   budgeted): H0 cannot win or complete, so its cells outrank its timings. The rule needs three seeds, so H2 and H0 are INCOMPLETE by design: measured for the comparison, never adopted.
+5. **H2 then H0, one seed each**, taking what H1 left: seed 1 (H2 + 3 min for the observation layer's cells), then latency, concise extraction validity (shared, 10) and slot **only if time remains** (CUT for the capability axes, see below).
+   H0's latency and slot are "only if time remains" too (not budgeted): H0 cannot win or complete, so its cells outrank its timings. The rule needs three seeds, so H2 and H0 are INCOMPLETE by design: measured for the comparison, never adopted.
 5b. **HM (Hindsight + MemPalace), one seed box**, after H2 and before H0 (the plan shows the minutes; H1 keeps its three full seeds). `hm_window.py` runs in the bake-off venv through `mp_run.sh` (the verbatim tier is
    the REAL MemPalace 3.10.0 library under a scrubbed HOME; the distilled tier is this window's Hindsight over loopback HTTP, with the same scratch-Postgres scrub and scan as the H arms): the 21 HM cells on the real tiers
    (about 4 min; the four protections whose effect runs through a real tier are broken one at a time and must turn their cell red; latencies are wall clocks, the two lookups in two threads), then the generic store
@@ -88,18 +88,44 @@ Guards: MemAvailable below 1.2 GB at any time aborts and restores; 90 minutes is
    run 1's hook was blind: `hindsight-api` runs on uvloop, whose C-level connects never raise the audit event). The window refuses to go on if the hook has not logged `hook-loaded` and a connect
    once the server is healthy. The gate reads `0 non-loopback connects over N observed` with a split by phase (arm); a missing, empty or connect-less log is "not measured" (NA), never "zero".
 
+## The capability axes in the window, and what the plan cut to fit them (2026-10-07)
+
+The contest is no longer storage hygiene. Four axes measure what Hindsight and MemPalace are built for (`docs/knowledge/zoe-memory-bench.md`, "Capability axes"): **J exact words**
+(20 sentences the owner said, word for word, with the day), **K reflection** (30 days of a household: are the derived observations true, current, attributed; do they cover the
+stories), **L long-range associative recall** (20 questions that need two facts said weeks apart, at 100 and 300 filler turns) and **M the memory protocol** (the lab half runs; the
+brain half is declared). `--dry-run` prints their rows. To keep the window at 90 minutes with the restore reserve:
+
+* the capability cells run on **seed 1 only** (`zmb-v1`); seeds 2 and 3 run the ordinary cells, so H1's three-seed rule for the floors is untouched. Their n is items (20 per cell), not cells.
+* each arm runs the ones it is the evidence for: **H1 and HM** run exact words, long-range recall and the protocol's lab half (HM's verbatim write is no model call: +2 min; H1's is a model call per retained fact: +8 min);
+  **H2 and H0** run **reflection** (the observation layer is what H2 adds over H1 and what H0 does natively; +3 min each) and their J / L / M cells are **cut** (they would only be H1's retrieval behind a concise rewrite).
+  H1 and HM have no observation layer, so their K cells are capability SKIPs, not cuts.
+* **cut: H2's latency (2.5) and slot (5.2) phases and the concise extraction-validity phase (10) became "only if time remains"** (-17.7 min). H2 and H0 are INCOMPLETE by design (one seed), so
+  their G0 / G1 items for those phases show `NA` unless time was left; H1, the arm that can be adopted, keeps every floor measurement.
+* Z0e gains the long-range cells (+1.3 min); the Z0 lab phase +0.3.
+
+Planned total 77.2 of 77.5 available minutes (`--dry-run` prints the slack). A cell the box did not reach is a SKIP with the reason (`time box` / `planner cut` / `capability`), never a pass.
+
 ## Reading the verdict
 
 Output: `~/.zoe/bakeoff-2026-10/run-<stamp>.log`, `run-<stamp>.json`, and a **draft** `docs/research/bakeoff-run-<stamp>.md`.
-The top of the markdown states plainly (1) the verdict by the pre-registered rule, (2) the winner clause per axis (B extraction, C temporal, D recall, E abstention: Z0 vs each arm, with the
-Wilson 95% interval and beats / tie / WORSE / no data), and (3) a one-line "is it better than ours?" with the honest caveats (a tie goes to Z0). The rule is `bakeoff_gates.py`; a test pins every threshold:
+The top of the markdown states plainly (1) the verdict by the pre-registered rule, (2) the rule in one paragraph, (3) the winner clause per **capability** axis (C temporal, D recall at distance, J exact words, K reflection,
+L long-range recall, M protocol: Z0 [Z0e for D and L] vs each arm, with the Wilson 95% interval and beats / tie / WORSE / no data; J / K / L in items), then the floors reported beside the contest (B extraction, E abstention:
+never deciding), and (4) a one-line "is it better than ours?" with the honest caveats. The rule is `bakeoff_gates.py`; a test pins every threshold.
 
-* **`KEEP_Z0`** - no arm passes every built gate and beats Z0 beyond the Wilson interval on two of B/C/D/E (ties go to Z0). The rule says: keep Z0, finish audit P1-P3.
-* **`ADOPT_CANDIDATE <arm>`** - passes every built gate and beats Z0 on two axes. Advisory: every axis the rule names now exists in the spec (C = `temporal`, D = `recall`, A3 / A8 under `authority`, `poisoning` a hard axis);
-  known-failing targets count against an arm and the owner decides. The report prints a one-line advisory note under the verdict.
+**The rule has two parts (owner direction, 2026-10-07: "never overwrite the owner" had been given too much weight; the goal is the best memory for a Samantha-grade companion).**
+**G0-G3 are FLOORS** (RAM, egress, extraction validity, latency, zero hard violations on authority / forgetting / poisoning / identity, forgetting at t+6): fail one and the arm is not adoptable, pass them and you have earned
+nothing. **The contest is the capability axes.** An arm that passes the floors and beats Z0 beyond the Wilson interval on at least two of them (worse on none) wins; with fewer wins and no axis where it is worse
+(and data on at least three axes) the capabilities **tie, and ties on capability go to the maintained candidate** (H1, then H2: Hindsight is upstream-maintained, so it is the one we maintain less of). Authority,
+forgetting and provenance scores no longer break ties. K1 (observation precision >= 95%) is hard: an arm whose observation layer fabricates is vetoed with observations on.
+
+The verdicts:
+
+* **`KEEP_Z0`** - no arm passes the floors, or the ones that do are worse than Z0 on a capability axis, vetoed (fabricated observations) or have too little capability evidence to call a tie. The rule says: keep Z0, finish audit P1-P3.
+* **`ADOPT_CANDIDATE <arm>`** - passes the floors and beats Z0 beyond the Wilson interval on two capability axes, worse on none (H1 over H2 when both). Advisory: known-failing targets count against an arm and the owner decides.
+* **`ADOPT_ON_TIE <arm>`** - passes the floors, beats Z0 on fewer than two capability axes, is worse on none and has data on at least three: the owner's rule sends a capability tie to the maintained candidate.
 * Per arm: `NOT_ADOPTABLE` (a gate item failed), `INCOMPLETE` (something was not measured or fewer than three seeds ran; not a pass),
   `PASSES_BUILT_GATES`. If H1 and H2 both pass the rule chooses H1. H0 is the measurement of what Hindsight does with no Zoe layer; it cannot win.
-* Gate tables list each item as threshold / measured / `PASS | FAIL | NA`. The axes table shows pass / n with Wilson 95% for Z0, Z0-off, H0, H1, H2.
+* Gate tables list each item as threshold / measured / `PASS | FAIL | NA`. The axes table shows pass / n with Wilson 95% (and `items p/n` for the capability axes) for Z0, Z0e, Z0-off, H0, H1, H2, HM.
   Z0-off must be red on the authority cells (the negative control) and every run records `controls red x/y`.
 * "Not verified" at the bottom lists what the run could not establish.
 

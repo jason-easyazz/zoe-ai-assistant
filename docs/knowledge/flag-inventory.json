@@ -1295,6 +1295,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_EXACT_WORDS_BACKFILL_HOURS": {
+        "defaults": [
+          "'36'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/exact_words.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_EXPERT_ACTIVE_DOMAINS": {
         "defaults": [
           "dynamic"

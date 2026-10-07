@@ -196,8 +196,10 @@ class HindsightClient:
         return self.call("retain", "POST", f"{API}/{bank}/memories", {"items": items, "async": False})
 
     def recall(self, bank: str, query: str, *, tags: "Optional[list[str]]" = None, tags_match: str = "all_strict",
-               max_tokens: int = 1200, budget: str = "low") -> "list[dict]":
+               max_tokens: int = 1200, budget: str = "low", types: "Optional[list[str]]" = None) -> "list[dict]":
         body: "dict[str, Any]" = {"query": query, "max_tokens": max_tokens, "budget": budget}
+        if types:                  # RecallRequest.types: 'world' / 'experience' / 'observation' (default: all)
+            body["types"] = list(types)
         if tags:
             body["tags"], body["tags_match"] = tags, tags_match
         return list(self.call("recall", "POST", f"{API}/{bank}/memories/recall", body).get("results") or [])
@@ -590,9 +592,12 @@ def zoe_layer_lines(path: "Optional[str]" = None) -> int:
 # ── the arm ──────────────────────────────────────────────────────────────────
 
 class HindsightArm(Arm):
+    nightly_model = "own"          # the observation layer is Hindsight's own consolidation: the lab injects nothing into it (``reflect_pass``)
     #: What a LAYERED arm with a scratch Postgres can do (what the run plan counts); an instance narrows it (``__init__``): no Zoe layer (H0) = no
     #: ``conflict_pass`` / ``edges``, no ``pg=`` handle = no ``disk``.
-    capabilities = frozenset({"clock", "idle_pass", "identities", "reader", "controls", "conflict_pass", "edges", "disk"})
+    capabilities = frozenset({"clock", "idle_pass", "identities", "reader", "controls", "conflict_pass", "edges", "disk",
+                              # the capability axes: exact words, the observation layer (H0 / H2 only), the link graph, the protocol reader
+                              "exact_words", "observations", "multi_hop", "protocol"})
     #: What an arm CANNOT do, and why. A cell that needs one of these SKIPs with the reason (``cells.run_cell`` compares the declared
     #: capabilities), never ERRORs and never passes. Under the rule a skipped HARD cell keeps `hard_cells_all_ran` red: that is the honest
     #: reading of "the arm cannot answer this", and the run record says how many such cells there are.
@@ -603,6 +608,7 @@ class HindsightArm(Arm):
                  "stays Zoe's under adoption; Hindsight alone has no authority-labelled relationship edges to write or export",
         "disk": "the arm was built without a scratch-Postgres handle (pg=): the store's data directory is only reachable through docker, "
                 "so there is no on-disk residue scan",
+        "observations": "observations are OFF in this variant (H1: verbatim mode, enable_observations=false): there is no derived layer to export",
     }
 
     def __init__(self, variant: str = "H1", *, base_url: "Optional[str]" = None,
@@ -628,6 +634,8 @@ class HindsightArm(Arm):
             caps -= {"conflict_pass", "edges"}
         if pg is None:
             caps.discard("disk")
+        if not self.cfg.get("enable_observations"):
+            caps.discard("observations")
         self.capabilities = frozenset(caps)
         self.keep_banks, self.settle_timeout_s, self.rss_probe = keep_banks, settle_timeout_s, rss_probe
         self.settle_poll_s = settle_poll_s
@@ -825,7 +833,7 @@ class HindsightArm(Arm):
         self._consolidate_scoped(uid)
         self._settle(uid)
 
-    def run_idle_pass(self, transcript: str, proposes: "list[str]") -> "dict[str, Any]":
+    def run_idle_pass(self, transcript: str, proposes: "list[str]", *, judge: bool = True) -> "dict[str, Any]":
         """The nightly pass: the model's extraction over the day's transcript (scripted as ``proposes``) handed to the store
         under the digest's own label, anchored to the transcript. Hindsight has no digest of its own to run."""
         rep = IngestReport()
@@ -833,6 +841,11 @@ class HindsightArm(Arm):
         self._finish(self._user)
         self._refused += rep.refused
         return {"retained": rep.written, "refused": rep.refused, "retired": rep.retired}
+
+    def reflect_pass(self) -> "dict[str, Any]":
+        """Hindsight's own reflection over what the life ingested: consolidate and settle. Nothing is retained, nothing is proposed."""
+        self._finish(self._user)
+        return {"retained": 0, "refused": 0, "retired": 0}
 
     def ingest_as(self, identity: str, turns: "list[Turn]") -> IngestReport:
         if identity not in IDENTITIES:
@@ -882,7 +895,9 @@ class HindsightArm(Arm):
                 "source_excerpt": str(meta.get("source_excerpt") or ""), "user_turn_id": str(meta.get("user_turn_id") or tag("turn:")),
                 # the validity interval (ZMB C1): the Zoe layer stamps it on its side table; a row the layer never saw says nothing
                 "valid_from": k.valid_from if k else "", "invalid_at": invalid_at,
-                "supersedes_id": k.supersedes_id if k else "", "superseded_by_id": k.superseded_by_id if k else ""}
+                "supersedes_id": k.supersedes_id if k else "", "superseded_by_id": k.superseded_by_id if k else "",
+                # when Hindsight dates the unit (the retain's ``timestamp``): what "when did I say it" reads (axis j)
+                "said_at": str(u.get("mentioned_at") or u.get("date") or "")}
 
     def _rows_for(self, uid: str) -> "list[dict[str, Any]]":
         if self.layer and self.layer.is_guest(uid):
@@ -935,13 +950,13 @@ class HindsightArm(Arm):
                 out["rss"] = self.rss_probe()
         return out
 
-    def recall(self, query: str, k: int = 10) -> "list[dict[str, Any]]":
+    def recall(self, query: str, k: int = 10, *, budget: str = "low") -> "list[dict[str, Any]]":
         uid = self._user
         if self.layer and self.layer.is_guest(uid):
             return []
         t0 = time.monotonic()
         try:
-            results = self.client.recall(self.bank_for(uid), query, tags=[f"user:{uid}"] if self.layer else None)
+            results = self.client.recall(self.bank_for(uid), query, tags=[f"user:{uid}"] if self.layer else None, budget=budget)
         finally:
             self.recall_ms.append((time.monotonic() - t0) * 1000.0)
         side = {x.id: x for x in (self.layer.known.get(uid, []) if self.layer else [])}
@@ -956,6 +971,63 @@ class HindsightArm(Arm):
 
     def answer(self, query: str, k: int = 5) -> str:
         return reader_answer(self.recall(query, k), query, sycophantic=self.sycophantic)
+
+    # ── the capability axes (j exact words, k reflection, l multi-hop, m protocol) ──
+    def _days_ago(self, said_at: str) -> "Optional[int]":
+        """Whole days between the instant Hindsight dates a unit (``mentioned_at`` / ``date``, the ``timestamp`` the retain carried) and now."""
+        if not said_at:
+            return None
+        try:
+            at = datetime.fromisoformat(str(said_at).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if at.tzinfo is None:
+            at = at.replace(tzinfo=timezone.utc)
+        return round((self._now() - at).total_seconds() / 86400.0)
+
+    def recall_exact(self, query: str, k: int = 5) -> "list[dict[str, Any]]":
+        """(j) What this arm keeps of the owner's words, found by the question: the recall rows' text (verbatim mode keeps the retained item's text;
+        concise mode keeps an extraction of it) with the day each was said. H1 retains what Zoe's deterministic extractor stores as a FACT, not the
+        raw turn (a model call per raw turn is the cost the HM verbatim tier exists to avoid), so a sentence the extractor does not take is not kept."""
+        return [{"text": r["text"], "day_offset": self._days_ago(r.get("said_at", ""))} for r in self.recall(query, k)]
+
+    def recall_linked(self, query: str, k: int = 8) -> "list[dict[str, Any]]":
+        """(l) Hindsight's associative recall: the engine's own retrieval (semantic + keyword + the link graph + temporal, reranked) at the HIGH budget,
+        which is what explores the entity and causal links from the first hits - the second fact of a join is reached through the place the first names."""
+        return self.recall(query, k, budget="high")
+
+    def observations(self, query: str = "") -> "dict[str, Any]":
+        """(k) Hindsight's observation layer: the CURRENT (``state`` valid) ``observation`` units of this user's bank, with the class of the facts they were
+        consolidated from (the H2 fence consolidates per authority scope, so an observation carries its source class). ``query`` = the engine's own
+        recall restricted to observations (top 5). The model is Hindsight's own (the clone brain): ``model`` = ``own``."""
+        uid = self._user
+        if self.layer and self.layer.is_guest(uid):
+            return {"items": [], "model": "own"}
+        bank = self.bank_for(uid)
+        if bank not in self._banks:
+            return {"items": [], "model": "own"}
+        if query:
+            units = self.client.recall(bank, query, tags=[f"user:{uid}"] if self.layer else None, types=["observation"])[:5]
+        else:
+            units = [u for u in self.client.list_units(bank) if str(u.get("fact_type") or u.get("type") or "") == "observation"
+                     and str(u.get("state") or "valid") == "valid"]
+        out = []
+        for u in units:
+            tags = [str(x) for x in (u.get("tags") or [])]
+            cls = next((x[len("class:"):] for x in tags if x.startswith("class:")), "")
+            stated = ""
+            if cls and self.layer:
+                ma = self.layer.ma
+                stated = "user" if ma.authority_of(cls) in (ma.USER_STATED, ma.USER_CONFIRMED) else "inferred"
+            out.append({"id": str(u.get("id") or ""), "text": str(u.get("text") or ""), "stated_by": stated})
+        return {"items": out, "model": "own"}
+
+    def protocol_answer(self, prompt: str, anchor: "tuple[str, ...]", fired: bool, k: int = 5) -> str:
+        """(m, lab half) The scripted reader over this arm's packet when recall fired; nothing to answer from when it did not."""
+        from .. import life as lifemod
+        if not fired:
+            return lifemod.DECLINE
+        return lifemod.anchored_reader(self.recall(prompt, k), anchor, sycophantic=self.sycophantic)
 
     # ── forgetting ──
     def _sweep(self, uid: str, entity: str) -> "tuple[int, list[tuple[str, str]]]":
