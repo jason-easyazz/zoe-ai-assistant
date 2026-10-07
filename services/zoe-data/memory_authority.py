@@ -458,7 +458,7 @@ _USER_SUBJECT_RE = re.compile(r"^\s*(?:the\s+)?(?:user|speaker|i|my)\b", re.IGNO
 _STOP = frozenset("""
 the and but for with from into onto this that these those there here their them they his her its
 user users speaker have has had was were been being are not never longer anymore any more
-dropped drop stopped stop quit cancelled canceled cancel gave given used really very just also still currently now then than year years
+dropped stopped quit cancelled canceled gave given used really very just also still currently now then than year years
 who whom what when where while which about some one ones got get gets going doing does did
 """.split())
 _DIGIT_ORD = re.compile(r"^(\d+)(?:st|nd|rd|th)$")
@@ -553,13 +553,33 @@ def _normalise_dates(text: str) -> str:
         return text
 
 
+#: A bare base-form action verb in a fact ("plans to stop treatment", "will cancel the booking", "a drop in
+#: price") is the CLAIM: the user's sentence must say that verb (in any form). The 60%-of-other-words
+#: tolerance would otherwise let "I plan to continue treatment" support its opposite (review of #1913;
+#: true on main before this PR too).
+_ACTION_FAMILIES = {
+    "drop": re.compile(r"\bdrop(?:s|ped|ping)?\b", re.IGNORECASE),
+    "stop": re.compile(r"\bstop(?:s|ped|ping)?\b", re.IGNORECASE),
+    "cancel": re.compile(r"\bcancel(?:s|led|ed|ling|ing)?\b", re.IGNORECASE),
+    "quit": re.compile(r"\bquit(?:s|ting)?\b", re.IGNORECASE),
+    "leave": re.compile(r"\b(?:leave|leaves|left|leaving)\b", re.IGNORECASE),
+}
+
+
+def _required_actions(fact: str) -> list["re.Pattern[str]"]:
+    plain = _ENDED_BASE_RE.sub(" ", fact or "")   # "did not drop X": a cue, not a claim word
+    return [_ACTION_FAMILIES[w.lower()] for w in _words(plain) if w.lower() in _ACTION_FAMILIES]
+
+
 def _fact_parts(fact: str) -> tuple[bool, set[str], set[str], set[str]]:
     """``(about_user, value_tokens, cue_classes, other_tokens)`` of a stored fact."""
     about_user = bool(_USER_SUBJECT_RE.match(fact or ""))
     value: set[str] = set()
     cues: set[str] = set()
     other: set[str] = set()
-    for i, w in enumerate(_words(fact)):
+    # "did not drop X": the end-state phrase is a CUE (polarity + ended, enforced in the statement check),
+    # not a content word the user has to repeat - the bare verbs stay content ("plans to stop treatment").
+    for i, w in enumerate(_words(_ENDED_BASE_RE.sub(" ", fact or ""))):
         low = w.lower()
         base = re.sub(r"['’]s$", "", low)
         if low in _STOP or base in _STOP or low in _FIRST_PERSON:
@@ -595,6 +615,7 @@ _USED_TO_RE = re.compile(r"\bused to\b|\bformerly\b|\bpreviously\b|\bwas living\
 #: the BASE form after a negated auxiliary is the same end-state verb: the digest words a denial "User did not
 #: drop X", the owner says "I haven't dropped X" (review of #1913)
 _ENDED_BASE = r"\b(?:did|do|does|will|would|can|could)(?:\s+not|n['\u2019]t)\s+(?:drop|quit|stop|cancel|give\s+up|leave)\b"
+_ENDED_BASE_RE = re.compile(_ENDED_BASE, re.IGNORECASE)
 _ENDED_RE = re.compile(r"\b(?:stopped|dropped|quit|cancell?ed|gave up|given up|ended|left|no longer)\b|\bany ?more\b|"
                        + _ENDED_BASE, re.IGNORECASE)
 _HYPOTHETICAL_RE = re.compile(
@@ -661,14 +682,24 @@ _ENDED_VERB_RE = re.compile(r"\b(?:stopped|dropped|quit|cancell?ed|gave up|given
                             re.IGNORECASE)
 
 
+_CLAUSE_BREAK_RE = re.compile(r"[,;.!?]|\b(?:so|but|and|because|then|though|although|while)\b", re.IGNORECASE)
+
+
 def _negated(text: str) -> bool:
     """Effective polarity of the STATE: "I've dropped / quit / stopped / cancelled X" is the owner's word
     that X is over - the polarity of the fact "User no longer does X" (day-sim race swap,
-    AUTHORITY_BLOCKED writer=turn_digest action=supersede). An end-state VERB therefore flips a plain
-    sentence to negative, and a negation of that verb ("I haven't dropped X", "didn't quit") flips it
-    back, so the denial of an end never matches the end itself (review of #1913). The tense/ended cue
-    below still has to agree, so "I live in X" never supports "User quit living in X"."""
-    return bool(_NEG_RE.search(text)) != bool(_ENDED_VERB_RE.search(text))
+    AUTHORITY_BLOCKED writer=turn_digest action=supersede). An end-state VERB makes a plain sentence
+    negative; a negation BOUND to that verb ("I haven't dropped X", "did not drop X": same clause, before
+    it) says the end did not happen, so the denial of an end never matches the end itself. A negation
+    elsewhere ("I did not enjoy X, so I dropped it") is about something else (review of #1913). The
+    tense/ended cue below still has to agree, so "I live in X" never supports "User quit living in X"."""
+    m = _ENDED_VERB_RE.search(text)
+    if not m:
+        return bool(_NEG_RE.search(text))
+    if _ENDED_BASE_RE.match(text, m.start()):
+        return False   # "did not drop": the negation is part of the verb phrase
+    clause = _CLAUSE_BREAK_RE.split(text[:m.start()])[-1]
+    return not _NEG_RE.search(clause)
 
 
 def _window_is_a_statement_about_the_user(win: str, fact: str) -> bool:
@@ -738,6 +769,7 @@ def _support_windows(fact: str, user_text: str):
     about_user, value, cues, other = _fact_parts(fact)
     if not (value or cues or other):
         return
+    actions = _required_actions(fact)
     # One TURN per line (the digests join user turns with newlines). A window is a sentence,
     # or two adjacent sentences of the SAME turn - never across turns: "my dog is Teddy"
     # on one turn plus "Rex is coming over" on the next is not "my dog is Rex".
@@ -755,6 +787,8 @@ def _support_windows(fact: str, user_text: str):
         if other and len(other & stems) / len(other) < 0.6:
             continue
         if about_user and not any(w.lower() in _FIRST_PERSON for w in ws):
+            continue
+        if actions and not all(rx.search(win) for rx in actions):
             continue
         if not _window_is_a_statement_about_the_user(win, fact):
             continue

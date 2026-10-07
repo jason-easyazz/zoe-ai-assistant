@@ -115,6 +115,18 @@ RACE = "Change of plan: I've dropped the Harbourtown half-marathon. I'm doing th
     ("User did not leave Perth", "I didn't leave Perth.", True),
     ("User did not drop the Harbourtown half-marathon", "I dropped the Harbourtown half-marathon.", False),
     ("User dropped the Harbourtown half-marathon", "I did not drop the Harbourtown half-marathon.", False),
+    # review round 4 of #1913: the negation binds to ITS verb (same clause, before it)
+    ("User did not drop the Harbourtown marathon", "I did not enjoy the Harbourtown marathon, so I dropped it.", False),
+    ("User dropped the Harbourtown marathon", "I did not enjoy the Harbourtown marathon, so I dropped it.", True),
+    ("User dropped the Harbourtown marathon", "I didn't enjoy the Harbourtown marathon and I dropped it.", True),
+    # ... and a bare action verb in the fact is the CLAIM, never an optional paraphrase word
+    ("User plans to stop treatment", "I plan to continue treatment.", False),
+    ("User will cancel the booking", "I will keep the booking.", False),
+    ("User expects a drop in price", "I expect an increase in price.", False),
+    ("User did not stop treatment", "I plan to continue treatment.", False),
+    ("User plans to stop treatment", "I plan to stop treatment.", True),
+    ("User will cancel the booking", "I will cancel the booking.", True),
+    ("User expects a drop in price", "I expect a drop in price.", True),
 ])
 def test_retraction_verbs_are_the_owners_word_about_their_own_fact(fact, said, want):
     assert ma.supports(fact, said) is want
