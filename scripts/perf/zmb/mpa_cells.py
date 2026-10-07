@@ -84,8 +84,9 @@ ALL_CONTROLS = tuple(dict.fromkeys(Controls.names() + MpaControls.names() + ("on
 
 
 def lab_arm(kind: str, off: "tuple[str, ...]" = (), store: str = "double", model: Any = None, workdir: "Optional[Path]" = None, closet_url: str = "",
-            closet_scripted: bool = True) -> Any:
-    """``kind`` in MPA / HMA / ZMA with the named switches OFF. ``store``: ``double`` (test double of the MemPalace tool shapes) or ``library`` (the real server)."""
+            closet_scripted: bool = True, z0_embed: bool = True) -> Any:
+    """``kind`` in MPA / HMA / ZMA with the named switches OFF. ``z0_embed=False`` (ZMA): Z0's store is the bag-of-words lab collection instead of Z0e's Chroma + MiniLM, so the glue
+    runs with no model on disk (the CI lane); the default keeps Z0e, which raises ``NotImplementedError`` when the model is not on disk. ``store``: ``double`` (test double of the MemPalace tool shapes) or ``library`` (the real server)."""
     bad = [n for n in off if n not in ALL_CONTROLS]
     if bad:
         raise ValueError(f"unknown control(s) {', '.join(bad)}")
@@ -109,7 +110,11 @@ def lab_arm(kind: str, off: "tuple[str, ...]" = (), store: str = "double", model
         return HMAArm(MemPalaceAgentArm(**kw), refl, **{k: v for k, v in flags.items() if k != "one_packet"}, **({"one_packet": False} if "one_packet" in flags else {}))
     if kind == "ZMA":
         from zmb.arms.zma import BRAIN_TOOLS, ZMAArm
-        return ZMAArm(mpa=MemPalaceAgentArm(tool_names=BRAIN_TOOLS, protocol_rules=(1, 2, 3), aaak=False, rules_paragraph=False, **kw), **flags)
+        z0 = None
+        if not z0_embed:
+            from zmb.arms.z0 import Z0Arm
+            z0 = Z0Arm(name="Z0", embed=False)
+        return ZMAArm(z0=z0, mpa=MemPalaceAgentArm(tool_names=BRAIN_TOOLS, protocol_rules=(1, 2, 3), aaak=False, rules_paragraph=False, **kw), **flags)
     raise ValueError(f"unknown arm kind {kind!r}")
 
 
@@ -411,8 +416,8 @@ CELLS: "list[Cell]" = [
 ]
 
 
-def _run_cell(cell: Cell, kind: str, off: "tuple[str, ...]", store: str, workdir: "Optional[Path]") -> scorers.Score:
-    arm = lab_arm(kind, off, store, workdir=workdir)
+def _run_cell(cell: Cell, kind: str, off: "tuple[str, ...]", store: str, workdir: "Optional[Path]", z0_embed: bool = True) -> scorers.Score:
+    arm = lab_arm(kind, off, store, workdir=workdir, z0_embed=z0_embed)
     try:
         return cell.run(arm)
     finally:
@@ -420,7 +425,7 @@ def _run_cell(cell: Cell, kind: str, off: "tuple[str, ...]", store: str, workdir
 
 
 def run_all(kind: str = "MPA", store: str = "double", only: "Optional[str]" = None, *, controls: str = "all", guard: "Optional[Callable[[], None]]" = None,
-            workdir: "Optional[Path]" = None) -> "dict[str, Any]":
+            workdir: "Optional[Path]" = None, z0_embed: bool = True) -> "dict[str, Any]":
     """Controls first (each named switch OFF, one at a time: every one must turn its cell red), then the measurement. ``controls``: ``all`` or ``none``."""
     if store == "library" and not library_available():
         raise NotImplementedError("the real MemPalace server is not available here (run through the bake-off venv)")
@@ -444,12 +449,12 @@ def run_all(kind: str = "MPA", store: str = "double", only: "Optional[str]" = No
             for ctl in cell.controls:
                 if controls == "none":
                     continue
-                sc = _run_cell(cell, kind, (ctl,), store, workdir)
+                sc = _run_cell(cell, kind, (ctl,), store, workdir, z0_embed)
                 red[ctl] = sc.verdict
                 if sc.ok:
                     not_instrumented.append(f"{cell.id} stayed green with {ctl} off")
             row["controls_verdicts"] = red
-            sc = _run_cell(cell, kind, (), store, workdir)
+            sc = _run_cell(cell, kind, (), store, workdir, z0_embed)
             row.update(verdict=sc.verdict, stage=sc.stage, evidence=sc.evidence)
         except NotImplementedError as exc:
             row.update(verdict="SKIP", reason=str(exc)[:300])

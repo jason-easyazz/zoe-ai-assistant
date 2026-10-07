@@ -27,12 +27,25 @@ from zmb.arms.zma import BRAIN_TOOLS, INTEGRATION, ShimEmbeddingFunction, ZMAArm
 USER = "demo_bar_1a2b3c4d"
 
 
-@pytest.fixture
-def zma():
-    a = mpa_cells.lab_arm("ZMA")
-    a.reset(USER)
+NO_MODEL = "Z0e needs the on-disk MiniLM model"
+
+
+@pytest.fixture(params=["scripted", "z0e"])
+def zma(request):
+    """Both stores under the same glue. ``scripted`` = Z0's bag-of-words lab collection (no model: CI proves the plumbing here); ``z0e`` = Z0e's Chroma + MiniLM, which the
+    bench never downloads, so a box without the model on disk SKIPS it (the bench's control-refusal pattern), never errors."""
+    try:
+        a = mpa_cells.lab_arm("ZMA", z0_embed=request.param == "z0e")
+        a.reset(USER)
+    except NotImplementedError:
+        pytest.skip(NO_MODEL)
     yield a
     a.close()
+
+
+def _skip_if_z0e_cells_could_not_run(res, z0_embed):
+    if z0_embed and any("Z0e needs" in str(r.get("reason", "")) for r in res["cells"] if r["verdict"] == "SKIP"):
+        pytest.skip(NO_MODEL)
 
 
 def test_zma_is_registered_and_declares_both_stacks_capabilities():
@@ -59,8 +72,10 @@ def test_a_user_turn_is_written_once_and_z0_reads_it_from_the_chunk(zma):
     assert not zma.mpa.model.calls                      # no model call on the write path (the owner's design)
 
 
-def test_the_integration_cells_go_red_with_their_switch_off_and_the_floors_hold():
-    res = mpa_cells.run_all("ZMA", "double", controls="all")
+@pytest.mark.parametrize("z0_embed", [False, True], ids=["scripted", "z0e"])
+def test_the_integration_cells_go_red_with_their_switch_off_and_the_floors_hold(z0_embed):
+    res = mpa_cells.run_all("ZMA", "double", controls="all", z0_embed=z0_embed)
+    _skip_if_z0e_cells_could_not_run(res, z0_embed)
     s = res["summary"]
     assert s["not_instrumented"] == [] and s["fail"] == [] and s["sanity_fail"] == []
     by = {r["id"]: r for r in res["cells"]}
@@ -134,7 +149,9 @@ def test_the_forgetting_cells_are_also_reported_under_the_zma_prefix_the_gate_re
     assert {"MPA-F1.forget.both-tiers", "ZMA-F1.forget.both-tiers", "MPA-F5.forget.alias-sweep", "ZMA-F5.forget.alias-sweep"} <= ids
 
 
-def test_z0_outranks_a_conflicting_chunk_and_the_cell_goes_red_without_the_authority_floor():
-    res = mpa_cells.run_all("ZMA", "double", only="MPA-A3", controls="all")
+@pytest.mark.parametrize("z0_embed", [False, True], ids=["scripted", "z0e"])
+def test_z0_outranks_a_conflicting_chunk_and_the_cell_goes_red_without_the_authority_floor(z0_embed):
+    res = mpa_cells.run_all("ZMA", "double", only="MPA-A3", controls="all", z0_embed=z0_embed)
+    _skip_if_z0e_cells_could_not_run(res, z0_embed)
     r = res["cells"][0]
     assert r["verdict"] == "PASS" and r["controls_verdicts"] == {"authority": "FAIL"}
