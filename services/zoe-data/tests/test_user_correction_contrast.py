@@ -64,6 +64,18 @@ M = "User's mum lives in Bendigo"
     ("User's mum lives in Ballarat", "My mum lives in Bendigo-not Ballarat.", False),
     ("User lives in Perth", "I live in Perth\u2014not in Perth.", False),
     ("User lives in Perth", "I live in Perth\u2014not sure about it.", False),
+    # review round 2 of #1913: a TIME qualifier is a denial for now, not a corrected-away value
+    (M, "My mum lives in Bendigo, but not at the moment.", False),
+    (M, "My mum lives in Bendigo but not right now.", False),
+    (M, "My mum lives in Bendigo\u2014not this year.", False),
+    # ... and a conjunction alone is a delimiter: speech-to-text carries no commas
+    (M, "My mum lives in Bendigo but not Ballarat", True),
+    (M, "My mum lives in Bendigo and not Ballarat", True),
+    ("User is a nurse", "I am a nurse and not a doctor", True),
+    ("User's mum lives in Ballarat", "My mum lives in Bendigo but not Ballarat", False),
+    ("User is a doctor", "I am a nurse and not a doctor", False),
+    (M, "My mum lives in Bendigo and not there", False),
+    ("User lives in Perth", "I live in Perth and not sure about it", False),
 ])
 def test_contrast_clause_supports_the_new_value_only(fact, said, want):
     assert ma.supports(fact, said) is want
@@ -89,6 +101,13 @@ RACE = "Change of plan: I've dropped the Harbourtown half-marathon. I'm doing th
     ("User is doing the Harbourtown half-marathon", RACE.split(". ")[0] + ".", False),
     ("User plays squash", "I quit squash.", False),
     ("User lives in Perth", "I live in Perth.", True),
+    # review round 2 of #1913: the NEGATION of an end-state verb is not the end itself
+    ("User dropped the Harbourtown half-marathon", "I haven't dropped the Harbourtown half-marathon.", False),
+    ("User cancelled the gym membership", "I haven't cancelled the gym membership.", False),
+    ("User quit squash", "I didn't quit squash.", False),
+    ("User no longer does the Harbourtown half-marathon", "I haven't dropped the Harbourtown half-marathon.", False),
+    ("User has not dropped the Harbourtown half-marathon", "I haven't dropped the Harbourtown half-marathon.", True),
+    ("User dropped the Harbourtown half-marathon", "I dropped the Harbourtown half-marathon.", True),
 ])
 def test_retraction_verbs_are_the_owners_word_about_their_own_fact(fact, said, want):
     assert ma.supports(fact, said) is want

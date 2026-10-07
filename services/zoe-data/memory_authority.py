@@ -614,14 +614,21 @@ _LEAD_INTERJECTION_RE = re.compile(r"^\s*(?:(?:no|nope|nah|yes|yeah|yep|actually
 # a denial and stays one.
 # The delimiter is a comma / semicolon or a dash, spaced OR attached ("Bendigo\u2014not Ballarat",
 # "Bendigo - not Ballarat", "Bendigo-not Ballarat"; ``_words`` splits an attached "-not" off its value).
-_CONTRAST_RE = re.compile(r"(?:,|;|\s*[-\u2013\u2014]+)\s*(?:and\s+|but\s+)?not\s+(?P<neg>[^,;.!?]{1,40}?)\s*(?=[,;.!?]|$)",
-                          re.IGNORECASE)
+# A bare "but not" / "and not" is a delimiter too: speech-to-text carries no commas ("lives in Bendigo but
+# not Ballarat", "a nurse and not a doctor").
+_CONTRAST_RE = re.compile(r"(?:(?:,|;|\s*[-\u2013\u2014]+)\s*(?:and\s+|but\s+)?|\s+(?:and|but)\s+)"
+                          r"not\s+(?P<neg>[^,;.!?]{1,40}?)\s*(?=[,;.!?]|$)", re.IGNORECASE)
 _NOT_A_CONTRAST = frozenset({"sure", "really", "yet", "quite", "very", "just", "too", "even", "much", "anymore",
                              "any", "always", "often", "now", "going", "been", "true", "right", "well", "good",
                              "great", "bad", "happy", "ok", "okay", "if", "when", "that", "this", "so"})
 
 
 _ARTICLES = frozenset({"a", "an", "the", "in", "at", "on", "to", "of"})
+#: a TIME qualifier is not a corrected-away value: "but not at the moment" denies the fact for now
+_TEMPORAL = frozenset({"moment", "now", "today", "tonight", "currently", "present", "lately", "recently", "days",
+                       "week", "weeks", "month", "months", "year", "years", "weekend", "yesterday", "tomorrow",
+                       "ever", "then", "atm", "time", "times", "longer", "anymore", "morning", "afternoon",
+                       "evening", "night", "while", "meantime", "mean", "moment's"})
 #: a clause that points BACK at the fact ("not there", "not in it", "not that place") stems to nothing
 #: the fact says, but it is a denial OF the fact - never a corrected-away value (review of #1913).
 _ANAPHORA = frozenset({"there", "here", "it", "its", "that", "this", "those", "these", "them", "they", "him",
@@ -637,6 +644,8 @@ def _without_contrast(win: str, fact: str) -> str:
         neg = _words(m.group("neg"))
         if not neg or len(neg) > 4 or neg[0].lower() in _NOT_A_CONTRAST:
             return m.group(0)
+        if any(w.lower() in _TEMPORAL for w in neg):
+            return m.group(0)   # "but not at the moment": a denial for now, not a corrected-away value
         if any(w.lower() in _ANAPHORA for w in neg):
             return m.group(0)   # "not there" / "not in it": a denial of the fact, not a corrected-away value
         if {_stem(w) for w in neg if w.lower() not in _STOP | _ARTICLES} & fact_stems:
@@ -645,12 +654,17 @@ def _without_contrast(win: str, fact: str) -> str:
     return _CONTRAST_RE.sub(keep_or_drop, win)
 
 
+_ENDED_VERB_RE = re.compile(r"\b(?:stopped|dropped|quit|cancell?ed|gave up|given up|ended|left)\b", re.IGNORECASE)
+
+
 def _negated(text: str) -> bool:
-    """Negative polarity: a negation word, OR a stated end of the state. "I've dropped / quit / stopped /
-    cancelled X" is the owner's word that X is over - the same polarity as the fact "User no longer does
-    X" (the day-sim race swap, AUTHORITY_BLOCKED writer=turn_digest action=supersede). The tense/ended
-    cue below still has to agree, so "I live in X" never supports "User quit living in X"."""
-    return bool(_NEG_RE.search(text)) or bool(_ENDED_RE.search(text))
+    """Effective polarity of the STATE: "I've dropped / quit / stopped / cancelled X" is the owner's word
+    that X is over - the polarity of the fact "User no longer does X" (day-sim race swap,
+    AUTHORITY_BLOCKED writer=turn_digest action=supersede). An end-state VERB therefore flips a plain
+    sentence to negative, and a negation of that verb ("I haven't dropped X", "didn't quit") flips it
+    back, so the denial of an end never matches the end itself (review of #1913). The tense/ended cue
+    below still has to agree, so "I live in X" never supports "User quit living in X"."""
+    return bool(_NEG_RE.search(text)) != bool(_ENDED_VERB_RE.search(text))
 
 
 def _window_is_a_statement_about_the_user(win: str, fact: str) -> bool:
