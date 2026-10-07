@@ -245,8 +245,10 @@ def test_a_pronoun_role_claim_on_a_guarded_turn_is_rewritten(reply):
 
 def test_a_pronoun_claim_a_named_person_is_evidenced_for_is_left_alone():
     packet = ROLELESS + "- User's mother is Anika Reyes\n"
-    assert rg.neutralise("She is your mother, born in 1985.", NAMES, packet, user_text=ASK) == (
+    assert rg.neutralise("She is your mother, born in 1985.", ["Anika Reyes"], packet, user_text=ASK) == (
         "She is your mother, born in 1985.", [])
+    # two people named and no antecedent: ambiguous, so it fails closed even though one of them is the mother
+    assert rg.neutralise("She is your mother, born in 1985.", NAMES, packet, user_text=ASK)[1]
     assert rg.neutralise("She was born in 1985.", NAMES, ROLELESS, user_text=ASK) == ("She was born in 1985.", [])
 
 
@@ -284,6 +286,54 @@ def test_each_role_occurrence_binds_to_its_own_holder():
     swapped = ROLELESS + "- Mary is Callum's wife, while Anika is your wife\n"
     assert rg.neutralise("Anika Reyes is your wife.", NAMES, swapped, user_text=ASK)[1] == []
     assert rg.neutralise("Anika Reyes is Callum's wife.", NAMES, swapped, user_text=ASK)[1] == ["anika~wife"]
+
+
+def test_a_pronoun_binds_to_its_local_antecedent_not_to_anyone_who_has_the_role():
+    packet = ROLELESS + "- User's mother is Callum Reyes\n"      # Callum is the mother; Anika has no role
+    out, guessed = rg.neutralise("Anika was born in 1985. She is your mother.", NAMES, packet, user_text=ASK)
+    assert guessed == ["anika~mother"] and out.endswith("could you tell me?")
+    # ... the same sentence is fine when the antecedent IS the mother
+    packet2 = ROLELESS + "- User's mother is Anika Reyes\n"
+    reply = "Anika was born in 1985. She is your mother."
+    assert rg.neutralise(reply, NAMES, packet2, user_text=ASK) == (reply, [])
+    # no antecedent and several people named: the claim must hold for all of them (fail closed)
+    assert rg.neutralise("She is your mother.", NAMES, packet, user_text=ASK)[1]
+
+
+@pytest.mark.parametrize("packet_row", ["- Anika is his mother\n", "- Anika Reyes is her mother\n", "- Anika Reyes is their mother\n"])
+def test_a_third_person_owner_is_not_a_wildcard(packet_row):
+    packet = ROLELESS + packet_row
+    assert rg.neutralise("Anika Reyes is your mother.", NAMES, packet, user_text=ASK)[1] == ["anika~mother"]
+    assert rg.neutralise("Anika Reyes is his mother.", NAMES, packet, user_text=ASK)[1] == []
+    assert rg.role_supported_for("Anika Reyes", "mother", packet, "user") is False
+    assert rg.role_supported_for("Anika Reyes", "mother", ROLELESS + "- Anika Reyes is my mother\n", "user")
+
+
+def test_a_coordinating_and_before_another_named_subject_is_a_clause_boundary():
+    packet = ROLELESS + "- Anika is Callum's wife and Mary is your wife\n"
+    assert rg.neutralise("Anika Reyes is Callum's wife.", NAMES, packet, user_text=ASK)[1] == []
+    assert rg.neutralise("Anika Reyes is your wife.", NAMES, packet, user_text=ASK)[1] == ["anika~wife"]
+    ok = ROLELESS + "- Mary is Callum's wife and Anika is your wife\n"
+    assert rg.neutralise("Anika Reyes is your wife.", NAMES, ok, user_text=ASK)[1] == []
+
+
+def test_shadow_mode_does_not_change_the_models_input(monkeypatch):
+    assert rg.rule_line(NAMES, ROLELESS).startswith("Relationship not stated")
+    monkeypatch.setenv(rg.ENV, "shadow")
+    assert rg.rule_line(NAMES, ROLELESS) == ""
+    monkeypatch.setenv(rg.ENV, "off")
+    assert rg.rule_line(NAMES, ROLELESS) == ""
+
+
+async def test_s22_shadow_sends_no_marker_but_still_detects_and_logs(monkeypatch, caplog):
+    import logging
+
+    caplog.set_level(logging.INFO, logger=rg.__name__)
+    monkeypatch.setenv(rg.ENV, "shadow")
+    reply, sent = await _ask(monkeypatch, ASK, GUESSED)
+    assert "Relationship not stated" not in sent          # the prompt is byte-identical to guard-off
+    assert reply == GUESSED                                 # nothing rewritten ...
+    assert any("ROLE_GUESS_GUARD mode=shadow" in r.message for r in caplog.records)   # ... but it was seen
 
 
 def test_a_first_name_two_people_share_is_not_a_handle():

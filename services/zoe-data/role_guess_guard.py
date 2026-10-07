@@ -101,8 +101,8 @@ def unstated_people(names: Iterable[str], packet: str) -> list[str]:
 def rule_line(names: Iterable[str], packet: str) -> str:
     """The explicit ``role: unknown`` marker + rule for the recall block ('' when every named
     person has a stated role, the guard is off, or nobody is named)."""
-    if mode() == "off":
-        return ""
+    if mode() != "on":
+        return ""   # off: nothing; shadow: detection + logging only - the model's input must not change
     unknown = unstated_people(names, packet)
     if not unknown:
         return ""
@@ -118,7 +118,8 @@ def rule_line(names: Iterable[str], packet: str) -> str:
 _USER_WORDS = frozenset({"user", "your", "my", "our", "you", "i", "me", "mine", "yours", "ours"})
 _NAME_OWNER = r"(?:[A-Z][\w-]*\s+){0,2}[\w-]+"        # no apostrophe inside a token: it IS the possessive
 _OWNER_POSS = re.compile(rf"(?P<own>{_NAME_OWNER})['\u2019]s\s+$")
-_OWNER_DET = re.compile(r"\b(?P<own>your|my|our)\s+$", re.IGNORECASE)
+_OWNER_DET = re.compile(r"\b(?P<own>your|my|our|his|her|their)\s+$", re.IGNORECASE)
+_THIRD = frozenset({"his", "her", "their"})
 _OWNER_OF = re.compile(r"^s?\s+(?:of|to)\s+(?:(?P<det>(?i:(?:your|my|our)(?:\s+[a-z]+)?|the\s+user|you|me|us))\b"
                        r"|(?P<own>(?:[A-Z][\w'\u2019-]*\s?){1,3}))")
 
@@ -134,6 +135,8 @@ def _owner_key(raw: str):
         return None
     if len(toks) == 1 and toks[0] in _USER_WORDS:
         return "user"
+    if len(toks) == 1 and toks[0] in _THIRD:
+        return ("pron", toks[0])               # somebody else - never the user
     if len(toks) == 1 and _is_relation(toks[0]):
         return ("rel", toks[0])
     return ("name", tuple(toks))
@@ -169,7 +172,7 @@ def _owner_at(text: str, start: int, end: int):
         if k is None:
             break
         comps.append(k)
-        if k == "user" or k[0] == "name":
+        if k == "user" or k[0] in ("name", "pron"):
             break
         pos = pos[:found.start()]
         found = _OWNER_POSS.search(pos) or _OWNER_DET.search(pos)
@@ -179,7 +182,7 @@ def _owner_at(text: str, start: int, end: int):
         comps.pop()
         if not comps:
             return "user"
-    if comps[-1][0] == "name":                 # the outermost component is a named person
+    if comps[-1][0] in ("name", "pron"):       # the outermost component is a (named or pronoun) person
         return comps[-1]
     return ("rel", tuple(c[1] for c in reversed(comps)))
 
@@ -199,6 +202,9 @@ def _owners_compatible(claim, evidenced: list) -> bool:
     for e in evidenced:
         if claim == "user" and e == "user":
             return True
+        if (isinstance(claim, tuple) and claim[0] == "pron" and e != "user") or \
+                (isinstance(e, tuple) and e[0] == "pron" and claim != "user"):
+            return True                        # "his"/"her": somebody else - fits any owner but the user
         if isinstance(claim, tuple) and isinstance(e, tuple) and claim[0] == e[0]:
             if claim[0] == "name" and _same_person(claim[1], e[1]):
                 return True
@@ -207,7 +213,9 @@ def _owners_compatible(claim, evidenced: list) -> bool:
     return False
 
 
-_CLAUSE_SPLIT = re.compile(r"\s*;\s*|,?\s+\b(?:while|whereas|but|however)\b\s+", re.IGNORECASE)
+_CLAUSE_SPLIT = re.compile(
+    r"\s*;\s*|,?\s+\b(?:while|whereas|but|however)\b\s+"
+    r"|,?\s+\band\b\s+(?=(?-i:[A-Z][a-z]\w*)\s+(?:\w+\s+){0,2}?(?:is|was|are|were|has|had)\b)", re.IGNORECASE)
 _CAPS = re.compile(r"\b[A-Z][a-z][\w'’-]*")
 _NOT_NAMES = frozenset({"the", "a", "an", "my", "your", "his", "her", "their", "our", "user", "i", "it", "she", "he",
                         "they", "we", "and", "but", "while", "whereas", "however", "yes", "no", "so"})
@@ -346,6 +354,7 @@ def neutralise(reply: str, names: Iterable[str], packet: str, user_text: str = "
     fulls = list(dict.fromkeys(f for f in (n.strip() for n in names_l) if f))
     by_handle = {h.lower(): full for h, full in handles}
     alt = "|".join(re.escape(h) for h, _ in handles)
+    handle_rx = re.compile(rf"\b(?:{alt})\b", re.IGNORECASE)
     guessed: list[str] = []
     asked: list[str] = []
 
@@ -363,9 +372,14 @@ def neutralise(reply: str, names: Iterable[str], packet: str, user_text: str = "
             owner = _owner_at(m.string, m.start(grp), m.end(grp))
             if kind == "pron":
                 # no name to resolve: guilty only when NO named person is evidenced in that role
-                if any(role_supported_for(f, role.lower(), evidence, owner) for f in fulls):
+                # bind it to its local antecedent (the nearest name before it); with none, a lone
+                # named person is it, and with several the claim must hold for ALL of them (fail closed)
+                prior = list(handle_rx.finditer(m.string[:m.start()]))
+                cands = [by_handle[prior[-1].group(0).lower()]] if prior else fulls
+                check = all if (len(cands) > 1) else any
+                if check(role_supported_for(f, role.lower(), evidence, owner) for f in cands):
                     return m.group(0)
-                full = fulls[0]
+                full = cands[0]
             else:
                 full = _unsupported(m.group("n"), role, owner)
             if not full:
