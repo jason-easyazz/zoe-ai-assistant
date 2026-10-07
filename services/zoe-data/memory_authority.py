@@ -458,7 +458,7 @@ _USER_SUBJECT_RE = re.compile(r"^\s*(?:the\s+)?(?:user|speaker|i|my)\b", re.IGNO
 _STOP = frozenset("""
 the and but for with from into onto this that these those there here their them they his her its
 user users speaker have has had was were been being are not never longer anymore any more
-dropped stopped quit cancelled canceled gave given used really very just also still currently now then than year years
+dropped drop stopped stop quit cancelled canceled cancel gave given used really very just also still currently now then than year years
 who whom what when where while which about some one ones got get gets going doing does did
 """.split())
 _DIGIT_ORD = re.compile(r"^(\d+)(?:st|nd|rd|th)$")
@@ -592,8 +592,11 @@ _NEG_RE = re.compile(r"\b(?:not|never|no|none|nobody|nothing|neither|nor)\b|n['â
                      re.IGNORECASE)
 _USED_TO_RE = re.compile(r"\bused to\b|\bformerly\b|\bpreviously\b|\bwas living\b", re.IGNORECASE)
 #: a stated END of a state ("no longer" / "any more" are also negations above)
-_ENDED_RE = re.compile(r"\b(?:stopped|dropped|quit|cancell?ed|gave up|given up|ended|left|no longer)\b|\bany ?more\b",
-                       re.IGNORECASE)
+#: the BASE form after a negated auxiliary is the same end-state verb: the digest words a denial "User did not
+#: drop X", the owner says "I haven't dropped X" (review of #1913)
+_ENDED_BASE = r"\b(?:did|do|does|will|would|can|could)(?:\s+not|n['\u2019]t)\s+(?:drop|quit|stop|cancel|give\s+up|leave)\b"
+_ENDED_RE = re.compile(r"\b(?:stopped|dropped|quit|cancell?ed|gave up|given up|ended|left|no longer)\b|\bany ?more\b|"
+                       + _ENDED_BASE, re.IGNORECASE)
 _HYPOTHETICAL_RE = re.compile(
     r"\b(?:wish|if|maybe|perhaps|might|hope|hoping|someday|supposedly|apparently|imagine|pretend|"
     r"would|could)\b", re.IGNORECASE)
@@ -654,7 +657,8 @@ def _without_contrast(win: str, fact: str) -> str:
     return _CONTRAST_RE.sub(keep_or_drop, win)
 
 
-_ENDED_VERB_RE = re.compile(r"\b(?:stopped|dropped|quit|cancell?ed|gave up|given up|ended|left)\b", re.IGNORECASE)
+_ENDED_VERB_RE = re.compile(r"\b(?:stopped|dropped|quit|cancell?ed|gave up|given up|ended|left)\b|" + _ENDED_BASE,
+                            re.IGNORECASE)
 
 
 def _negated(text: str) -> bool:

@@ -108,6 +108,13 @@ RACE = "Change of plan: I've dropped the Harbourtown half-marathon. I'm doing th
     ("User no longer does the Harbourtown half-marathon", "I haven't dropped the Harbourtown half-marathon.", False),
     ("User has not dropped the Harbourtown half-marathon", "I haven't dropped the Harbourtown half-marathon.", True),
     ("User dropped the Harbourtown half-marathon", "I dropped the Harbourtown half-marathon.", True),
+    # review round 3 of #1913: the digest words a denial with the BASE form ("did not drop")
+    ("User did not drop the Harbourtown half-marathon", "I haven't dropped the Harbourtown half-marathon.", True),
+    ("User did not cancel the gym membership", "I haven't cancelled the gym membership.", True),
+    ("User did not quit squash", "I didn't quit squash.", True),
+    ("User did not leave Perth", "I didn't leave Perth.", True),
+    ("User did not drop the Harbourtown half-marathon", "I dropped the Harbourtown half-marathon.", False),
+    ("User dropped the Harbourtown half-marathon", "I did not drop the Harbourtown half-marathon.", False),
 ])
 def test_retraction_verbs_are_the_owners_word_about_their_own_fact(fact, said, want):
     assert ma.supports(fact, said) is want
