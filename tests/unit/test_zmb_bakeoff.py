@@ -2296,6 +2296,17 @@ def test_a_clone_that_will_not_unload_keeps_the_unit_stopped_until_the_restore_h
     assert stop_clone < host.index("systemctl --user start kokoro-tts.service") and w.stopped_extra == []
 
 
+def test_a_listed_unit_that_was_not_active_before_the_window_is_left_alone(box):
+    """Restore the host to its pre-window state, never past it: an intentionally stopped Kokoro is not started by the window."""
+    host = ReflectHost(box)
+    w = make_window(box, host, deep_unit=DEEP, reflect_stop_units=("kokoro-tts.service",))
+    host.live_active = False                                                                       # is-active answers "inactive"
+    w.stop_extra_units(w.cfg.reflect_stop_units)
+    assert w.stopped_extra == [] and "systemctl --user stop kokoro-tts.service" not in "\n".join(host.joined())
+    assert w.start_extra_units() is True and w.restore() is not None
+    assert "systemctl --user start kokoro-tts.service" not in "\n".join(host.joined())
+
+
 def test_a_unit_that_never_became_active_stays_listed_so_the_restore_retries_it(box):
     host = ReflectHost(box)
     w = make_window(box, host, deep_unit=DEEP, reflect_stop_units=("kokoro-tts.service",))

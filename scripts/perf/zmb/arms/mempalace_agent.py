@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .base import Arm, IngestReport, Turn
-from .hm_policy import (Controls, HashedLedger, MODEL_FROM_TRANSCRIPT, ROOM_QUOTED, ROOM_UNVERIFIED, USER_STATED, alias_candidates, classify, frame, label_for)
+from .hm_policy import (GUEST_IDS, Controls, HashedLedger, MODEL_FROM_TRANSCRIPT, ROOM_QUOTED, ROOM_UNVERIFIED, USER_STATED, alias_candidates, classify, frame, label_for)
 from .mpa_bench import DAY_S, DECLINE, RESERVED_ROOMS, SIM_TODAY, BenchSurface, _epoch  # noqa: F401
 from .mpa_model import BudgetExhausted, ChatModel, Reply
 from .mpa_palace import (INSTALL_HINT, Backend, McpStdioBackend, PalaceUnavailable, ToolError, est_tokens, extra_keys, kg_delete_naming, library_available,
@@ -297,6 +297,12 @@ class MemPalaceAgentArm(BenchSurface, Arm):
         from .mempalace_verbatim import MemPalaceVerbatimArm
         return self._ingest_for(MemPalaceVerbatimArm._identity_user(identity), turns)
 
+    def _refuse_cross_account(self, user: str) -> None:
+        """One palace per account (one backend, one wing): a turn that WOULD be stored for another account cannot be filed here - it would land in this account's palace and be
+        absent from the target's. A control-refusal (the cell SKIPs with the reason), never a silent cross-write."""
+        if (user or "") != self._user and (user or "").strip().lower() not in GUEST_IDS:      # a guest owns no palace: with the guest gate OFF its words landing HERE is the control's red path
+            raise NotImplementedError(f"arm {self.name}: one palace per account - a turn stored for {user!r} cannot be filed in {self._user!r}'s palace (cross-account ingestion is not supported)")
+
     def _ingest_for(self, user: str, turns: "list[Turn]") -> IngestReport:
         rep = IngestReport()
         prev_day: "Optional[int]" = None
@@ -307,6 +313,7 @@ class MemPalaceAgentArm(BenchSurface, Arm):
                     rep.refused += len(t.proposes) or 1
                     rep.notes.append("guest / unknown principal: owns no memory")
                     continue
+                self._refuse_cross_account(user)
                 for p in t.proposes:
                     ok = self._file_proposal(user, p, t)
                     rep.written += int(ok)
@@ -317,6 +324,7 @@ class MemPalaceAgentArm(BenchSurface, Arm):
                 rep.refused += 1
                 rep.notes.append(d.reason)
                 continue
+            self._refuse_cross_account(user)
             if self.controls.ledger_write_check and self.ledger.matches(user, t.text):
                 if t.speaker == "owner_taught" and d.authority_class == USER_STATED:
                     self.ledger.release_text(user, t.text)       # an explicit re-teach by the verified person
@@ -479,7 +487,7 @@ class MemPalaceAgentArm(BenchSurface, Arm):
                 return "a drawer's place says who said it: a drawer is not moved between rooms or wings by the model"
             if self.mc.anchor_check and args.get("content") and pv is not None and pv.authority_class == USER_STATED and not self._anchored(str(args["content"]), s):
                 return "a drawer holding what the owner said is only rewritten with the owner's own words"
-        if self.mc.anchor_check and name == "mempalace_kg_add" and not self._anchored(str(args.get("object", "")), s):
+        if self.mc.anchor_check and name == "mempalace_kg_add" and not self._anchored_claim(str(args.get("subject", "")), str(args.get("object", "")), s):
             subj, pred, obj = (str(args.get(k, "")).lower() for k in ("subject", "predicate", "object"))
             for t in self._kg_dump():
                 other = str(t["object"]).lower()
@@ -493,7 +501,7 @@ class MemPalaceAgentArm(BenchSurface, Arm):
             old = args.get("old_object") if name == "mempalace_kg_supersede" else args.get("object")
             pv = self._kg_prov.get((str(args.get("subject", "")).lower(), str(args.get("predicate", "")).lower(), str(old).lower()))
             backing = args.get("new_object") if name == "mempalace_kg_supersede" else args.get("object")
-            if pv is not None and pv.authority_class == USER_STATED and not self._anchored(str(backing), s):
+            if pv is not None and pv.authority_class == USER_STATED and not self._anchored_claim(str(args.get("subject", "")), str(backing), s):
                 return "a fact the owner stated is only retired by something the owner said"
         return ""
 
@@ -530,6 +538,26 @@ class MemPalaceAgentArm(BenchSurface, Arm):
         t = _norm(text)
         return bool(t) and any(t in _norm(o) for o in s["owner"])
 
+    _OWNER_SUBJECTS = frozenset({"", "user", "owner", "me", "i", "myself"})
+
+    def _anchored_claim(self, subject: str, obj: str, s: "dict[str, Any]") -> bool:
+        """Is the CLAIM the owner's, not just its object token? The object and the subject (the owner's own words about themselves need no name) must appear in ONE owner
+        utterance as whole words: an unrelated sentence that mentions "Oslo" does not make ``Tove lives_in Oslo`` the owner's statement."""
+        o, sub = f" {_norm(obj)} ", _norm(subject)
+        if o.strip() == "":
+            return False
+        for u in s["owner"]:
+            n = f" {_norm(u)} "
+            if o in n and (sub in self._OWNER_SUBJECTS or f" {sub} " in n):
+                return True
+        return False
+
+    def _klass_claim(self, subject: str, obj: str, s: "dict[str, Any]") -> "tuple[str, bool]":
+        if not self.mc.anchor_check:
+            return USER_STATED, True
+        ok = self._anchored_claim(subject, obj, s)
+        return (USER_STATED if ok else MODEL_FROM_TRANSCRIPT), ok
+
     def _klass(self, text: str, s: "dict[str, Any]") -> "tuple[str, bool]":
         if not self.mc.anchor_check:
             return USER_STATED, True
@@ -553,7 +581,7 @@ class MemPalaceAgentArm(BenchSurface, Arm):
         elif name in ("mempalace_kg_add", "mempalace_kg_supersede"):
             new = str(args.get("object") if name == "mempalace_kg_add" else args.get("new_object"))
             key = (str(args["subject"]).lower(), str(args["predicate"]).lower(), new.lower())
-            cls, anchored = self._klass(new, s) if self.mc.anchor_check else (USER_STATED, True)
+            cls, anchored = self._klass_claim(str(args["subject"]), new, s)
             self._kg_prov[key] = Prov(cls, speaker, day_offset, f"t{self._seq}", new, anchored=anchored, seq=self._seq)
             if name == "mempalace_kg_supersede":
                 old = (str(args["subject"]).lower(), str(args["predicate"]).lower(), str(args["old_object"]).lower())

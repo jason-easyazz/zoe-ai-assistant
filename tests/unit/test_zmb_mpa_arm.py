@@ -461,6 +461,54 @@ def test_an_unanchored_kg_addition_beside_an_owner_stated_triple_is_held_back_ne
     a.close()
 
 
+def test_ingest_as_another_household_account_is_refused_not_written_into_this_palace():
+    """One palace per account: a ``consenting_owner`` turn used to land in the original user's palace while ``stats_as`` for the target stayed empty. Break the refusal and it does."""
+    for kind in ("MPA", "HMA"):
+        a = mpa_cells.lab_arm(kind)
+        a.reset(USER)
+        with pytest.raises(NotImplementedError, match="one palace per account"):
+            a.ingest_as("consenting_owner", [Turn("My dentist is Dr Okonkwo and the surgery is on Elm Street.", "owner_taught")])
+        with pytest.raises(NotImplementedError, match="one palace per account"):
+            a.ingest_as("consenting_owner", [Turn("", "system_writer", proposes=("User's friend Aldo lives in Bergvik.",), writer="digest")])
+        mpa = a.mpa if hasattr(a, "mpa") else a
+        assert not mpa._need().drawers and not mpa.stats()["rows"]
+        rep = a.ingest_as("guest", [Turn("the gate code is 4417", "owner_voice_verified")])           # a guest owns no palace: refused by the gate, as before
+        assert rep.refused == 1 and not mpa._need().drawers
+        a.ingest([Turn("My dentist is Dr Okonkwo.", "owner_taught")])                                  # the arm's own account still works
+        assert mpa._need().drawers
+        a.close()
+
+
+def test_a_kg_claim_is_anchored_by_subject_and_object_in_one_owner_utterance_not_by_the_object_token():
+    def run(owner_line, second, **off):
+        a = mpa_cells.lab_arm("MPA", tuple(off))
+        a.reset(USER)
+        a.model = PlayModel([[("mempalace_kg_add", {"subject": "Tove", "predicate": "lives_in", "object": "Perth"})], [second]])
+        a.ingest([Turn("My sister Tove lives in Perth", "owner_taught")])
+        a.ingest([Turn(owner_line, "owner_taught")])
+        return a
+    # (1) provenance: an unrelated sentence that merely contains "Oslo" does not make the model's triple the owner's
+    a = run("We flew over Oslo last summer", ("mempalace_kg_add", {"subject": "Tove", "predicate": "visits", "object": "Oslo"}))
+    kg = [r for r in a.stats()["rows"] if r["origin"] == "brain:kg" and "oslo" in r["text"].lower()]
+    assert kg and all(r["authority_class"] == "model_from_transcript" for r in kg)
+    a.close()
+    a = run("Tove moved to Oslo last week", ("mempalace_kg_add", {"subject": "Tove", "predicate": "visits", "object": "Oslo"}))
+    assert all(r["authority_class"] == "user_stated" for r in a.stats()["rows"] if r["origin"] == "brain:kg" and "oslo" in r["text"].lower())          # the claim IS the owner's
+    a.close()
+    # (2) the floor: that token cannot retire the owner's fact either
+    sup = ("mempalace_kg_supersede", {"subject": "Tove", "predicate": "lives_in", "old_object": "Perth", "new_object": "Oslo"})
+    a = run("We flew over Oslo last summer", sup)
+    assert [bool(t.refused) for t in a.traces[-1].tools if t.name == "mempalace_kg_supersede"] == [True]
+    assert any("perth" in r["text"].lower() and r["status"] == "approved" for r in a.stats()["rows"] if r["origin"] == "brain:kg")
+    a.close()
+    a = run("Tove moved to Oslo last week", sup)                                                       # the owner's own words about Tove retire it
+    assert [bool(t.refused) for t in a.traces[-1].tools if t.name == "mempalace_kg_supersede"] == [False]
+    a.close()
+    a = run("We flew over Oslo last summer", sup, anchor_check=False)                                  # NEGATIVE CONTROL
+    assert any("oslo" in r["text"].lower() and r["status"] == "approved" for r in a.stats()["rows"] if r["origin"] == "brain:kg")
+    a.close()
+
+
 def test_zma_refuses_a_shim_that_is_not_minilm_and_names_the_setting():
     from zmb import mpa_window
     minilm = lambda url: {"status": "ok", "model": "all-MiniLM-L6-v2", "dim": 384}   # noqa: E731

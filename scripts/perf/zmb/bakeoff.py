@@ -659,6 +659,9 @@ class Window:
     def stop_extra_units(self, units: "tuple[str, ...]") -> None:
         """Stop exactly the units the owner listed in ``cfg.reflect_stop_units`` (never anything else), remembering each so ``start_extra_units`` / ``restore`` bring it back."""
         for u in units:
+            if self.host.run(["systemctl", "--user", "is-active", u], mutating=False).out.strip() != "active":
+                self.log(f"{u} was not active before the window: left alone (it is not started afterwards either)")      # restore the host to its pre-window state, never past it
+                continue
             self.log(f"stopping {u} for the 12B reflection pair (it is started again right after, on every exit path)")
             self.host.run(["systemctl", "--user", "stop", u], timeout=60)
             if u not in self.stopped_extra:
