@@ -434,6 +434,19 @@ def test_mempalace_filing_time_runs_forward_from_the_days_ago_offsets():
     arm.close()
 
 
+def test_the_linked_probes_ask_the_distilled_tier_for_the_high_budget_like_the_direct_hindsight_arm():
+    """The HM packet's ordinary lookups stay at the low budget; ONLY the linked (L) probe asks for ``high`` (the link graph), as Hindsight's own ``recall_linked`` does."""
+    arm = hm()
+    arm.reset("demo_bar_1a2b3c4d")
+    seen = []
+    real = arm.distilled.recall
+    arm.distilled.recall = lambda user, query, k, **kw: (seen.append(kw.get("budget", "low")), real(user, query, k, **kw))[1]
+    arm.recall_linked("Osric ferry", 5)
+    arm.recall("Osric ferry", 5)
+    assert seen == ["high", "low"]
+    arm.close()
+
+
 def test_hindsight_rows_carry_the_day_they_were_said():
     arm = HindsightArm("H2", transport=FakeHindsight(), settle_poll_s=0)
     arm.reset("demo_bar_1a2b3c4d")
