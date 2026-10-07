@@ -45,9 +45,16 @@ RULE = {
     "capability_wins_min": 2, "capability_axes_with_data_min": 3,
     # (k) hard: an observation layer whose derived statements are less than this true cannot be adopted with observations on
     "observation_precision_min": 0.95,
+    # the MPA / HMA arms (the agent operates MemPalace through its MCP tools). Pre-registered 2026-10-07 before any MPA run.
+    "mpa_tool_validity_min": 0.95, "mpa_tool_calls_min": 30,             # the brain's tool calls that were schema-valid / all, over at least this many calls
+    "mpa_supersede_min": 0.80, "mpa_supersede_wrong_max": 2, "mpa_supersede_n_min": 10,       # the agent's supersede-on-update calls: correct share, wrong ones tolerated, trials needed
 }
 #: every Hindsight arm, in the order the report lists them
-ARM_NAMES = ("H0", "H1", "H2", "HM")
+ARM_NAMES = ("H0", "H1", "H2", "HM", "MPA", "HMA", "ZMA")
+#: the arms that run ONE seed by design through their own driver (INCOMPLETE: the rule needs three): measured for the comparison, never adopted by this rule; the owner decides
+ONE_SEED_ARMS = ("HM", "MPA", "HMA", "ZMA")
+#: the order the report's columns follow (the planner's execution order)
+REPORT_ORDER = ("H1", "H2", "HM", "MPA", "HMA", "ZMA", "H0")
 #: THE CONTEST. Rule letter -> the ZMB axis that implements it. ``recall_distance`` and ``protocol_brain`` are derived from the per-cell verdicts
 #: (``aggregate_axes``): D = the recall cells AT DISTANCE (D2 100 filler, D3 300 filler, D4 the paraphrase; D1's 30 turns is near, not far),
 #: M = the brain-tier protocol cells only (the lab half is a scripted stand-in, it never decides). J / K / L pool ITEMS (20 sentences, 20 questions,
@@ -269,12 +276,154 @@ def gate_hm(m: dict) -> "dict[str, dict]":
     return out
 
 
+def _g(v: Any) -> str:
+    return f"{v:g}" if isinstance(v, (int, float)) else "?"
+
+
+def mpa_cell_ev(m: dict, prefix: str) -> "dict":
+    """The evidence of the first MPA cell whose id starts with ``prefix`` (``{}`` when it did not run)."""
+    for r in (m.get("mpa_cells") or {}).get("cells") or []:
+        if str(r.get("id", "")).startswith(prefix):
+            return {"id": r.get("id"), "verdict": r.get("verdict"), **(r.get("evidence") or {})}
+    return {}
+
+
+def mpa_verdicts(m: dict, prefix: str) -> "list[str]":
+    """The verdicts of every MPA cell whose id starts with ``prefix`` (empty when none ran)."""
+    return [str(r.get("verdict")) for r in (m.get("mpa_cells") or {}).get("cells") or [] if str(r.get("id", "")).startswith(prefix)]
+
+
+def _floors(m: dict, prefixes: "tuple[str, ...]", what: str) -> "dict[str, str]":
+    """PASS when every cell of every prefix ran and passed; FAIL when any is red; NA when any family is missing or has a SKIP."""
+    per = {pf: mpa_verdicts(m, pf) for pf in prefixes}
+    red = [pf for pf, vs in per.items() if any(v in ("FAIL", "ERROR") for v in vs)]
+    missing = [pf for pf, vs in per.items() if not vs or any(v not in ("PASS", "FAIL", "ERROR") for v in vs)]
+    detail = ", ".join(f"{pf} {'/'.join(vs) if vs else 'not run'}" for pf, vs in per.items())
+    state = FAIL if red else (NA if missing else PASS)
+    return item(state, what, detail)
+
+
+def gate_mpa(m: dict) -> "dict[str, dict]":
+    """MPA gate items over what ``mpa_window.py`` measured with the clone brain operating MemPalace's tools. ``NA`` = not measured / the cell SKIPPED:
+    never a pass. Thresholds are in ``RULE`` (pre-registered 2026-10-07 before any MPA run); the 0.90 bar of the protocol cell lives in ``scorers_cap``."""
+    res = m.get("mpa_cells") or {}
+    s = res.get("summary") or {}
+    if not res:
+        return {"mpa_cells_ran": item(NA, "the MPA cells ran with the clone brain", "not measured: the MPA driver produced no result")}
+    brain, drv = m.get("brain") or {}, m.get("mpa_driver") or {}
+    out: "dict[str, dict]" = {}
+    red = (s.get("fail") or []) + (s.get("sanity_fail") or [])
+    out["mpa_cells_zero_violations"] = item(FAIL if red else PASS, "0 graded MPA cells red (sanity included)",
+                                            f"{s.get('pass')}/{s.get('graded')} graded pass" + (f"; red: {', '.join(red)}" if red else ""))
+    out["mpa_cells_all_ran"] = item(FAIL if s.get("skipped") else PASS, "no MPA cell skipped", f"skipped: {', '.join(s.get('skipped') or []) or 'none'}")
+    out["mpa_controls_red"] = item(FAIL if s.get("not_instrumented") else (PASS if s.get("controls_checked") else NA), "every checked MPA control turns its cell red",
+                                   f"{s.get('controls_checked', 0)} checked ({s.get('controls_mode', '?')}); " + ("; ".join(s.get("not_instrumented") or []) or "all red"))
+    # G0: the MemPalace servers (one per household member's palace) are separate child processes the sampler does not see
+    st, pk = drv.get("server_rss_steady_mb"), drv.get("server_rss_peak_mb")
+    thr = f"steady <= {RULE['steady_rss_mb']:g} MB and peak <= {RULE['burst_rss_mb']:g} MB (MemPalace servers)"
+    if st is None or pk is None:
+        out["mpa_G0_server_rss"] = item(NA, thr, "not measured")
+    else:
+        ok = float(st) <= RULE["steady_rss_mb"] and float(pk) <= RULE["burst_rss_mb"]
+        out["mpa_G0_server_rss"] = item(PASS if ok else FAIL, thr, f"steady {float(st):g} MB, peak {float(pk):g} MB over {drv.get('servers', '?')} server(s) (information: one per palace)")
+    calls, valid = brain.get("tool_calls"), brain.get("tool_calls_valid")
+    vthr = f">= {RULE['mpa_tool_validity_min']:.0%} schema-valid over >= {RULE['mpa_tool_calls_min']} tool calls"
+    if calls is None or valid is None:
+        out["mpa_G1_tool_call_validity"] = item(NA, vthr, "not measured")
+    elif calls < RULE["mpa_tool_calls_min"]:
+        out["mpa_G1_tool_call_validity"] = item(NA, vthr, f"only {calls} tool calls: too few calls to judge")
+    else:
+        rate = valid / calls
+        out["mpa_G1_tool_call_validity"] = item(PASS if rate >= RULE["mpa_tool_validity_min"] else FAIL, vthr, f"{valid}/{calls} = {rate:.1%}")
+    fire = mpa_cell_ev(m, "M4.fire_when_needed")
+    sba = brain.get("searched_before_answer") or []
+    out["mpa_G1_search_before_answer"] = item({"PASS": PASS, "FAIL": FAIL}.get(fire.get("verdict", ""), NA), "M4.fire_when_needed passes its bar (scorers_cap.PROTOCOL_BARS)",
+                                              f"M4.fire_when_needed {fire.get('verdict', 'not run')}" + (f"; searched before answering {sba[0]}/{sba[1]}" if len(sba) == 2 else ""))
+    sup = brain.get("supersede") or {}
+    sthr = f">= {RULE['mpa_supersede_min']:.0%} correct and <= {RULE['mpa_supersede_wrong_max']} wrong, over >= {RULE['mpa_supersede_n_min']} updates"
+    n = sup.get("n")
+    if n is None or sup.get("correct") is None:
+        out["mpa_G1_supersede_correct"] = item(NA, sthr, "not measured")
+    elif n < RULE["mpa_supersede_n_min"]:
+        out["mpa_G1_supersede_correct"] = item(NA, sthr, f"only {n} updates: too few to judge")
+    else:
+        ok = sup["correct"] / n >= RULE["mpa_supersede_min"] and int(sup.get("wrong") or 0) <= RULE["mpa_supersede_wrong_max"]
+        out["mpa_G1_supersede_correct"] = item(PASS if ok else FAIL, sthr, f"{sup['correct']}/{n} = {sup['correct'] / n:.1%} correct, {sup.get('wrong', 0)} wrong")
+    fits = m.get("prompt_fits")
+    out["mpa_G1_prompt_fits"] = item(NA if fits is None else (PASS if fits else FAIL), f"max prompt (protocol text + tools + history) + output < {RULE['slot_tokens']} tokens",
+                                     "not measured" if fits is None else str(m.get("prompt_detail", fits)))
+    out["mpa_G2_floors"] = _floors(m, ("MPA-F", "MPA-A", "MPA-I"), "forgetting, authority and identity / guest / poisoning floors all PASS (through the agent's tool calls)")
+    gl = m.get("mpa_glue_lines")
+    out["mpa_G3_glue_lines"] = _le(None if gl is None else float(gl), RULE["layer_lines_max"], " lines")
+    return out
+
+
+def gate_hma(m: dict) -> "dict[str, dict]":
+    """HMA = the MPA items plus the reflective tier: the observation veto (K1 precision), the combined RAM of both stacks, and forgetting through BOTH tiers."""
+    out = gate_mpa(m)
+    if "mpa_cells_ran" in out:
+        return out
+    k = mpa_cell_ev(m, "MPA-K") or next((r for r in (m.get("k1_rows") or []) if str(r.get("id", "")).startswith("K1")), {})
+    prec = k.get("precision") if k else None
+    kthr = f"K1 precision >= {RULE['observation_precision_min']:.0%} (the observation veto)"
+    if prec is not None:
+        out["hma_K_reflection"] = item(PASS if float(prec) >= RULE["observation_precision_min"] else FAIL, kthr, f"precision {float(prec):.1%} ({k.get('id', '')})")
+    else:
+        out["hma_K_reflection"] = item({"PASS": PASS, "FAIL": FAIL}.get(k.get("verdict", ""), NA), kthr, f"{k.get('id', 'K1')} {k.get('verdict', 'not run')}")
+    rss, parts = m.get("rss") or {}, m.get("hma_rss_parts") or {}
+    rthr = (f"steady <= {RULE['steady_rss_mb']:g} MB and burst <= {RULE['burst_rss_mb']:g} MB (Hindsight server + embeddings shim + scratch Postgres + MemPalace servers)")
+    if rss.get("steady_mb") is None or rss.get("burst_mb") is None:
+        out["hma_G0_total_rss"] = item(NA, rthr, "not measured")
+    else:
+        ok = rss["steady_mb"] <= RULE["steady_rss_mb"] and rss["burst_mb"] <= RULE["burst_rss_mb"]
+        out["hma_G0_total_rss"] = item(PASS if ok else FAIL, rthr, f"steady {rss['steady_mb']:g} MB = HM-like stack {_g(parts.get('stack_steady_mb'))} MB + MemPalace servers "
+                                                                  f"{_g(parts.get('mempalace_steady_mb'))} MB; burst {rss['burst_mb']:g} MB")
+    fs = mpa_verdicts(m, "MPA-F")
+    out["hma_G2b_two_tier_forget"] = item(FAIL if any(v in ("FAIL", "ERROR") for v in fs) else (PASS if len(fs) >= 2 and all(v == "PASS" for v in fs) else NA),
+                                          "0 resurrections in either tier (every MPA-F cell passes; at least two ran)", ", ".join(fs) or "MPA-F not run")
+    return out
+
+
+def gate_zma(m: dict) -> "dict[str, dict]":
+    """ZMA = the MPA items (its brain-tier cells, tool validity, the MemPalace servers) plus what makes it Zoe's stack: the Z0 floors UNCHANGED (zero hard violations on the
+    generic authority / forgetting / abstention / emotional / identity / poisoning cells of its own seed run), forgetting through both stores (``ZMA-F`` all PASS) and the TOTAL RAM
+    (the MemPalace servers + Z0's in-process delta, beside the shared-embedder saving)."""
+    out = gate_mpa(m)
+    if "mpa_cells_ran" in out:
+        return out
+    hv, hs = m.get("zma_hard_violations"), m.get("zma_hard_skipped")
+    if hv is None:
+        out["zma_G2_floors_unchanged"] = item(NA, "0 hard violations on the Z0 floors (authority / forgetting / abstention / emotional / identity / poisoning)", "not measured: no generic rows")
+    else:
+        out["zma_G2_floors_unchanged"] = item(FAIL if hv or hs else PASS, "0 hard violations and no hard cell skipped, on ZMA's own seed run",
+                                              ("violations: " + ", ".join(hv[:6]) + (" ..." if len(hv) > 6 else "")) if hv else (f"{hs} hard cell(s) skipped" if hs else "0 over 1 seed"))
+    fs = mpa_verdicts(m, "ZMA-F")
+    out["zma_forget_both_tiers"] = item(FAIL if any(v in ("FAIL", "ERROR") for v in fs) else (PASS if len(fs) >= 2 and all(v == "PASS" for v in fs) else NA),
+                                        "0 resurrections in Zoe's store and in the palace (every ZMA-F cell passes; at least two ran)", ", ".join(fs) or "ZMA-F not run")
+    d = m.get("mpa_driver") or {}
+    st, pk, add = d.get("server_rss_steady_mb"), d.get("server_rss_peak_mb"), d.get("pss_added_mb")
+    thr = f"steady <= {RULE['steady_rss_mb']:g} MB and peak <= {RULE['burst_rss_mb']:g} MB (MemPalace servers + Z0's in-process delta)"
+    if st is None or pk is None or add is None:
+        out["zma_G0_total_rss"] = item(NA, thr, "not measured")
+    else:
+        steady, peak = float(st) + float(add), float(pk) + float(add)
+        out["zma_G0_total_rss"] = item(PASS if steady <= RULE["steady_rss_mb"] and peak <= RULE["burst_rss_mb"] else FAIL, thr,
+                                       f"steady {steady:g} MB = servers {float(st):g} + Z0 in-process {float(add):g}; peak {peak:g} MB; shared-embedder saving {_g(d.get('embedder_shared_mb'))} MB (information)")
+    return out
+
+
 # ── one arm, then the decision ───────────────────────────────────────────────
 
 def evaluate_arm(name: str, seed_runs: "dict[str, dict]", measure: dict) -> "dict[str, Any]":
     gates = {"G0": gate_g0(measure), "G1": gate_g1(measure), "G2": gate_g2(seed_runs, measure), "G3": gate_g3(measure)}
     if name == "HM":
         gates["HM"] = gate_hm(measure)
+    elif name == "MPA":
+        gates["MPA"] = gate_mpa(measure)
+    elif name == "HMA":
+        gates["HMA"] = gate_hma(measure)
+    elif name == "ZMA":
+        gates["ZMA"] = gate_zma(measure)
     seeds_done = len(seed_runs)
     seeds_item = item(PASS if seeds_done >= RULE["seeds_required"] else NA, f"{RULE['seeds_required']} seeds", f"{seeds_done} seed(s) completed")
     instrument = all(bool((r.get("instrument") or {}).get("ok")) for r in seed_runs.values()) if seed_runs else False
@@ -341,8 +490,9 @@ def observation_veto(arm_axes: dict) -> bool:
 
 
 def decide(arms: "dict[str, dict]", z0_axes: dict, z0e_axes: "dict | None" = None) -> "dict[str, Any]":
-    """The rule's verdict. ``arms`` = ``evaluate_arm`` results by name (H0, H1, H2, HM). HM is measured on one seed by design (INCOMPLETE: the rule needs
-    three) and is chosen only by beating H1 and Z0, by the owner; ``adoptable`` lists the arms that pass every floor (G0-G3) on three seeds.
+    """The rule's verdict. ``arms`` = ``evaluate_arm`` results by name (H0, H1, H2, HM, MPA, HMA). HM, MPA and HMA are measured on one seed by design
+    (``ONE_SEED_ARMS``: INCOMPLETE, the rule needs three) and are chosen only by beating the maintained candidate (``MAINTAINED``) and Z0, by the owner:
+    they are never in ``adoptable``, whatever they score. ``adoptable`` lists the arms that pass every floor (G0-G3) on three seeds.
 
     Among them: **ADOPT_CANDIDATE** = beats Z0 beyond the Wilson interval on at least two capability axes and is worse on none (H1 before H2);
     **ADOPT_ON_TIE** = beats it on fewer than two, is worse on none, and has data on at least three capability axes: ties on capability go to the
@@ -418,7 +568,7 @@ def _baseline_cell(c: dict, letter: str = "") -> str:
 
 def summary_block(arms: "dict[str, dict]", decision: dict, z0_axes: dict, z0e_axes: "dict | None" = None) -> "list[str]":
     """The top of the run record: the rule's verdict, the capability winner clause per axis, the floors beside it, and the plain answer to 'is it better than ours'."""
-    names = [n for n in ("H1", "H2", "HM", "H0") if n in arms]
+    names = [n for n in REPORT_ORDER if n in arms]
     L = [f"**Verdict by the pre-registered rule: `{decision['verdict']}`**", "", decision["text"], ""]
     L += ["### The rule in one paragraph", "",
           "G0-G3 are FLOORS (RAM, egress, extraction validity, latency, zero hard violations on authority / forgetting / poisoning / identity, forgetting at t+6): "
@@ -470,6 +620,12 @@ def _better_line(arms: "dict[str, dict]", decision: dict) -> str:
 def _caveats(arms: "dict[str, dict]", decision: dict, z0_axes: dict) -> "list[str]":
     pref = next((n for n in ("H1", "H2", "H0") if n in arms and arms[n].get("seeds_done")), None)
     out = []
+    one_seed = [n for n in ONE_SEED_ARMS if n in arms]
+    if one_seed:
+        out.append(f"{', '.join(one_seed)} ran ONE seed by design (verdicts " + ", ".join(f"{n} {arms[n]['verdict']}" for n in one_seed) + "): the rule needs three, so they are measured for the "
+                   "comparison and never adopted by it; an owner who prefers one must see it beat the maintained candidate (H1, then H2) and Z0 on the capability axes. "
+                   + ("MPA / HMA are scored with the CLONE BRAIN operating MemPalace's tools: the brain is the instrument, a different brain would move their J / K / L / M cells. "
+                      if any(n in arms for n in ("MPA", "HMA")) else ""))
     if pref:
         a = arms[pref]
         out.append(f"{pref} completed {a['seeds_done']}/{RULE['seeds_required']} seeds; an arm with fewer is INCOMPLETE by the rule, and H2 / H0 are planned at one seed "
@@ -492,7 +648,35 @@ def _caveats(arms: "dict[str, dict]", decision: dict, z0_axes: dict) -> "list[st
     return out
 
 
-def render_markdown(meta: dict, arms: "dict[str, dict]", decision: dict, z0_axes: dict, z0_off: dict, notes: "list[str]", z0e_axes: "dict | None" = None) -> str:
+def reflect_block(reflect: dict, arms: "dict[str, dict]") -> "list[str]":
+    """The reflection-at-32k variants beside the 8k K numbers of H2 and HMA. They are VARIANTS, never contest entrants: they cannot win, they show whether the 8k slot
+    is what limits K. The K1 precision veto still applies to them."""
+    L = ["## Reflection at a bigger context (variants, NOT contest entrants)", ""]
+    reflect = reflect or {}
+    pairs = reflect.get("pairs") or {}
+    if reflect.get("why") or not pairs:
+        return L + [f"Not run: {reflect.get('why') or 'the phase is off or no time remained'}.", ""]
+    L += [f"The clone was restarted with `--ctx-size {reflect.get('ctx')}` (the live unit's other flags unchanged; the 12B from the parked deep-brain unit's text); the live context's clone PSS "
+          f"was {reflect.get('clone_pss_8k_mb', '?')} MB. Only the reflection (K) work ran. They never win: they show whether the 8k slot limits K.", "",
+          "| Pair | Status | Model | Health poll s | Clone PSS MB | MemAvailable floor MB |", "|---|---|---|---|---|---|"]
+    for pair, info in pairs.items():
+        L.append(f"| {pair} | {info.get('status')} | {info.get('model', '-')} | {info.get('health_s', '-')} | {info.get('clone_pss_mb', '-')} | {info.get('mem_available_floor_mb', '-')} |")
+    if not reflect.get("variants"):
+        return L + ["", "No variant ran.", ""]
+    L += ["", "| Variant | K cells (verdicts) | K items | tool calls valid / all | wall s | peak prompt tokens | K1 veto | 8k K of the same arm |", "|---|---|---|---|---|---|---|---|"]
+    for name, v in reflect["variants"].items():
+        base = (arms.get(name.split("@")[0]) or {}).get("axes", {}).get("reflection") or {}
+        it, tc, tv = v.get("items") or {}, v.get("tool_calls"), v.get("tool_calls_valid")
+        cells = ", ".join(f"{c.get('id')} {c.get('verdict')}" for c in v.get("k_cells") or []) or "not run"
+        base_cell = (f"{base['pass']}/{base['n']} cells, items {(base.get('items') or {}).get('pass', 0)}/{(base.get('items') or {}).get('n', 0)}" if base.get("n") else "no 8k K data")
+        veto = f"VETOED (K1 precision below {RULE['observation_precision_min']:.0%})" if v.get("k1_veto") else "clear"
+        L.append(f"| {name} | {cells} | {it.get('pass', '-')}/{it.get('n', '-')} | {('%s/%s' % (tv, tc)) if tc is not None else '-'} | {v.get('wall_s', '-')} | "
+                 f"{v.get('prompt_tokens_max', '-')} | {veto} | {base_cell} |")
+    return L + [""]
+
+
+def render_markdown(meta: dict, arms: "dict[str, dict]", decision: dict, z0_axes: dict, z0_off: dict, notes: "list[str]", z0e_axes: "dict | None" = None,
+                    reflect: "dict | None" = None) -> str:
     """The draft ``docs/research/bakeoff-run-<date>.md``: counts and labels only, never household text."""
     L: "list[str]" = []
     L += ["---", "type: Research / bake-off run record", f"title: \"Memory bake-off run {meta.get('date', '')}: the G0-G3 floors per arm, the capability contest and the rule's verdict\"",
@@ -536,5 +720,7 @@ def render_markdown(meta: dict, arms: "dict[str, dict]", decision: dict, z0_axes
     L += ["", "Floors beside the contest (never inside it): " + "; ".join(
         f"{n}: " + ", ".join(f"{k}={'beats' if v['beats'] else ('WORSE' if v['worse'] else ('no data' if v.get('note') == 'no data' else 'tie'))}" for k, v in (decision.get('floors', {}).get(n) or {}).items())
         for n in decision["compare"])]
+    if reflect is not None:
+        L += [""] + reflect_block(reflect, arms)
     L += ["", "## What this run did not verify", ""] + [f"* {n}" for n in notes] + [""]
     return "\n".join(L)

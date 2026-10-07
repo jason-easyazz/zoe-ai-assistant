@@ -104,7 +104,17 @@ class Cfg:
     panel_host: str = os.environ.get("BAKEOFF_PANEL_HOST", "zoe-pi")
     panel_log: str = "/home/pi/.zoe-voice/voice.log"
     seeds: tuple = ()
-    arms: tuple = ("H1", "H2", "HM", "H0")
+    #: priority order; MPA = MemPalace operated by the AGENT (the clone brain calls its tools), HMA = MPA as the episodic tier + Hindsight (concise + observations) as the reflective tier,
+    #: ZMA = Zoe's live stack (Z0e: MemoryService over Chroma + MiniLM, the authority classes, the forget ledger, the nightly passes) with MemPalace integrated
+    arms: tuple = ("H1", "H2", "HM", "MPA", "HMA", "ZMA", "H0")
+    #: the REFLECTION PHASE (optional, runs only if time remains): the clone is restarted with this ``--ctx-size`` (the live unit's other flags unchanged; KV cache type as live) and ONLY the
+    #: reflection (K) work runs against it, for the variants ``H2@32k`` and ``HMA@32k``. ``BAKEOFF_REFLECT_CTX``; 0 switches the phase off.
+    reflect_ctx: int = int(os.environ.get("BAKEOFF_REFLECT_CTX", "32768") or 0)
+    #: the PARKED 12B deep-brain unit: only READ (``host.read``) to generate the 12B reflection clone from its ExecStart; never enabled, edited or started
+    deep_unit: str = os.environ.get("BAKEOFF_DEEP_UNIT", "/home/zoe/.config/systemd/user/llama-server-12b-deepbrain.service.disabled")
+    #: user units stopped ONLY for the 12B reflection pair (to make room for it) and started again right after on EVERY exit path; default EMPTY: nothing else is ever stopped.
+    #: ``BAKEOFF_REFLECT_STOP_UNITS=kokoro-tts.service`` (a voice-only sidecar, down-time anyway during the window) frees about 2.3 GB.
+    reflect_stop_units: tuple = tuple(u.strip() for u in os.environ.get("BAKEOFF_REFLECT_STOP_UNITS", "").split(",") if u.strip())
     docs_dir: Optional[Path] = None
     meminfo: str = os.environ.get("BAKEOFF_MEMINFO", "/proc/meminfo")
     #: local-time maintenance windows (minutes since midnight) a window must not touch: the 01:45-03:15 nightly passes (decision record
@@ -180,6 +190,15 @@ class Host:
         except OSError:
             return ""
 
+    def exists(self, path: str) -> bool:
+        return Path(path).exists()
+
+    def file_size(self, path: str) -> "Optional[int]":
+        try:
+            return Path(path).stat().st_size
+        except OSError:
+            return None
+
 
 class DryHost(Host):
     """Reads for real (the unit text, the panel log, pgrep); prints every command that would change something and does not run it."""
@@ -233,12 +252,13 @@ def _flag_value(argv: "list[str]", flag: str) -> "Optional[str]":
     return argv[argv.index(flag) + 1] if flag in argv and argv.index(flag) + 1 < len(argv) else None
 
 
-def clone_command(unit_text: str, home: str, port: int) -> "dict[str, Any]":
-    """The clone's command: the live argv with ``--port`` swapped and ``--parallel 1`` forced (and nothing else changed)."""
+def clone_command(unit_text: str, home: str, port: int, ctx_size: "Optional[int]" = None) -> "dict[str, Any]":
+    """The clone's command: the live argv with ``--port`` swapped and ``--parallel 1`` forced (and nothing else changed). ``ctx_size`` is used ONLY by the
+    optional reflection phase (``--ctx-size 32768``); the window's own clone never passes it, so it keeps the live unit's context."""
     u = parse_unit(unit_text, home)
     live = list(u["argv"])
     argv = list(live)
-    for flag, value in (("--port", str(port)), ("--parallel", "1")):
+    for flag, value in (("--port", str(port)), ("--parallel", "1")) + ((("--ctx-size", str(ctx_size)),) if ctx_size else ()):
         if flag in argv:
             argv[argv.index(flag) + 1] = value
         else:
@@ -251,6 +271,35 @@ def clone_command(unit_text: str, home: str, port: int) -> "dict[str, Any]":
     diff = [(a, b) for a, b in zip(live, argv) if a != b]
     return {"argv": argv, "live_argv": live, "env": u["env"], "props": u["props"], "diff": diff,
             "model": os.path.basename(_flag_value(argv, "--model") or "")}
+
+
+def deep_clone_command(unit_text: str, home: str, port: int, ctx_size: int) -> "dict[str, Any]":
+    """The 12B reflection clone, generated from the PARKED deep-brain unit's text: its ExecStart verbatim with ONLY these overridden: ``--host 127.0.0.1``, ``--port``,
+    ``--ctx-size``, ``--parallel 1``, and the vision flags dropped (``--mmproj <file>`` and ``--no-mmproj-offload``: no vision is needed). Everything else (the binary, the
+    model, ``--cache-type-k/v q8_0``, ``--flash-attn``, ``--jinja``, ``--chat-template-kwargs``, ``--mlock``, ``--n-gpu-layers``) and the unit's Environment / carried properties stay."""
+    u = parse_unit(unit_text, home)
+    live = list(u["argv"])
+    argv: "list[str]" = []
+    i = 0
+    while i < len(live):
+        if live[i] == "--mmproj":
+            i += 2
+            continue
+        if live[i] == "--no-mmproj-offload":
+            i += 1
+            continue
+        argv.append(live[i])
+        i += 1
+    for flag, value in (("--host", "127.0.0.1"), ("--port", str(port)), ("--ctx-size", str(ctx_size)), ("--parallel", "1")):
+        if flag in argv:
+            argv[argv.index(flag) + 1] = value
+        else:
+            argv += [flag, value]
+    model = _flag_value(argv, "--model")
+    if not model:
+        raise Refused("the parked 12B unit has no --model: not the unit this tool expects (refusing to guess)")
+    return {"argv": argv, "live_argv": live, "env": u["env"], "props": u["props"], "binary": argv[0], "model_path": model, "model": os.path.basename(model),
+            "diff": [(a, b) for a, b in zip(live, argv) if a != b]}
 
 
 def systemd_run(unit: str, argv: "list[str]", *, env: "Optional[dict]" = None, props: "Optional[dict]" = None) -> "list[str]":
@@ -347,6 +396,8 @@ class Window:
         self.abort_flag: "Optional[str]" = None
         self.started: "list[str]" = []           # things this window started, for the log
         self.clone: "dict[str, Any]" = {}
+        self.unit_text = ""
+        self.stopped_extra: "list[str]" = []        # the user units the reflection phase stopped (cfg.reflect_stop_units) and has not started again yet
         self.restore_status = "not needed"
 
     # ── time and memory ──
@@ -542,6 +593,7 @@ class Window:
     def open_window(self) -> None:
         cfg, host = self.cfg, self.host
         unit_text = host.run(["systemctl", "--user", "cat", cfg.unit], mutating=False).out
+        self.unit_text = unit_text                 # kept for the optional reflection restart (read-only: the live unit is never edited)
         self.clone = clone_command(unit_text, os.environ.get("HOME", "/home/zoe"), cfg.clone_port)
         self.log("clone command (generated from `systemctl --user cat " + cfg.unit + "`): " + shlex.join(self.clone["argv"]))
         self.log("clone differs from the live ExecStart in exactly: " + ", ".join(f"{a} -> {b}" for a, b in self.clone["diff"]))
@@ -594,11 +646,52 @@ class Window:
         self.check_egress_hook(cfg.bakeoff_dir / f"egress-{self.run_id}.log")
         self.log("step 6/6 window open at %.1f min; MemAvailable %.0f MB" % (self.elapsed_min(), self.mem()))
 
+    def swap_clone(self, spec: "dict[str, Any]", what: str, wait_s: float) -> None:
+        """Stop THIS window's clone and start ``spec`` under the same unit name and port (so ``restore`` stops it like any clone), then poll its /health. The live unit is
+        never touched: every spec is GENERATED from unit text (``systemctl --user cat`` for the 4B, the parked file's text for the 12B)."""
+        cfg = self.cfg
+        self.log(f"restarting the clone as {what}: " + shlex.join(spec["argv"]))
+        self.host.run(["systemctl", "--user", "stop", UNITS["clone"]], timeout=90)
+        self.host.run(["systemctl", "--user", "reset-failed", UNITS["clone"]])
+        self.start_unit("clone", spec["argv"], env=spec["env"], props=spec["props"])
+        self.wait_http(f"http://127.0.0.1:{cfg.clone_port}/health", f"the Gemma clone ({what})", wait_s, contains="ok")
+
+    def stop_extra_units(self, units: "tuple[str, ...]") -> None:
+        """Stop exactly the units the owner listed in ``cfg.reflect_stop_units`` (never anything else), remembering each so ``start_extra_units`` / ``restore`` bring it back."""
+        for u in units:
+            self.log(f"stopping {u} for the 12B reflection pair (it is started again right after, on every exit path)")
+            self.host.run(["systemctl", "--user", "stop", u], timeout=60)
+            if u not in self.stopped_extra:
+                self.stopped_extra.append(u)
+
+    def start_extra_units(self) -> bool:
+        """Start every unit ``stop_extra_units`` stopped and poll it until active. Idempotent, never raises (it runs inside ``finally`` and in ``restore``)."""
+        ok = True
+        for u in list(self.stopped_extra):
+            self.host.run(["systemctl", "--user", "start", u], timeout=120)
+            up = False
+            for _ in range(max(1, int(self.cfg.health_wait_s / 2))):
+                if self.host.run(["systemctl", "--user", "is-active", u], mutating=False).out.strip() == "active":
+                    up = True
+                    break
+                self.host.sleep(2.0)
+            self.log(f"{u} started again: {'active' if up else 'NOT ACTIVE after ' + format(self.cfg.health_wait_s, '.0f') + 's'}")
+            ok = ok and up
+            self.stopped_extra.remove(u)
+        return ok
+
+    def restart_clone(self, ctx_size: "Optional[int]") -> None:
+        """The 4B clone again from the live unit's text, with ``--ctx-size`` swapped (``None`` = the live context: the way back after the reflection phase)."""
+        spec = clone_command(self.unit_text, os.environ.get("HOME", "/home/zoe"), self.cfg.clone_port, ctx_size)
+        self.swap_clone(spec, f"4B at {'--ctx-size ' + str(ctx_size) if ctx_size else 'the live context'}", max(self.cfg.health_wait_s, 240.0))
+
     # ── restore: always ──
     def restore(self) -> bool:
         """Put everything back. Idempotent; stops only the units and the container this tool started; never raises."""
         cfg, host = self.cfg, self.host
         self.log("RESTORE: stopping what this window started")
+        if self.stopped_extra:
+            self.start_extra_units()                    # a unit the reflection phase stopped for the 12B pair comes back whatever happened
         for key in ("hindsight", "clone", "shim"):
             if key == "clone" and cfg.skip_brain_stop:
                 continue                                    # nothing was started under that name
@@ -704,7 +797,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dry-run", action="store_true", help="print every step and the generated clone command; change nothing")
     ap.add_argument("--restore-only", action="store_true", help="just restore the live brain (stop the clone, Hindsight, the shim, the scratch DB; start the unit)")
-    ap.add_argument("--arms", default="H1,H2,HM,H0", help="Hindsight arms to run, in priority order (Z0, Z0-off and Z0e always run in the lab)")
+    ap.add_argument("--arms", default="H1,H2,HM,MPA,HMA,ZMA,H0", help="arms to run, in priority order (Z0, Z0-off and Z0e always run in the lab)")
     ap.add_argument("--cap-min", type=float, default=None, help="hard cap in minutes (default 90)")
     ap.add_argument("--docs-dir", type=Path, default=None, help="where the draft markdown goes (default <repo>/docs/research)")
     return ap
@@ -716,9 +809,9 @@ def main(argv: "Optional[list[str]]" = None, host_factory: "Optional[Callable[[C
     if args.cap_min:
         cfg.cap_min = args.cap_min
     cfg.arms = tuple(a.strip() for a in args.arms.split(",") if a.strip())
-    bad = [a for a in cfg.arms if a not in ("H0", "H1", "H2", "HM")]
+    bad = [a for a in cfg.arms if a not in ("H0", "H1", "H2", "HM", "MPA", "HMA", "ZMA")]
     if bad:
-        print(f"unknown arm(s) {', '.join(bad)} (H0, H1, H2, HM)", file=sys.stderr)
+        print(f"unknown arm(s) {', '.join(bad)} (H0, H1, H2, HM, MPA, HMA, ZMA)", file=sys.stderr)
         return EXIT_REFUSED
     cfg.docs_dir = args.docs_dir
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M")
