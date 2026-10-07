@@ -331,18 +331,20 @@ def phase_z0(ctx: Ctx, seeds: tuple, store: list, by_id: dict) -> None:
     from .world import make_world
     for seed in seeds:
         world = make_world(seed)
+        # the capability cells run on the FIRST seed only, for every arm (``run_arm_seed``): a baseline pooled over three households would be compared with a candidate's one
+        seed_store = store if seed == seeds[0] else [c for c in store if c.axis not in CAP_AXES]
         cp = runner.control_pass(store, world, frozenset(CONTROLS))
         inst = runner.instrument_block(cp, store)
         for label, arm_name, sink in (("Z0", "Z0", ctx.z0), ("Z0-off", "Z0-off", ctx.z0_off)):
             arm = make_arm(arm_name)
             try:
-                rows = runner.run_cells(store, world, arm)
+                rows = runner.run_cells(seed_store, world, arm)
             finally:
                 arm.close()
             sink[seed] = {"axes": artifact.axis_stats(rows, by_id, inst["ok"]), "hard_violations": artifact.hard_violations(rows, by_id),
                           "instrument": inst, "cells": _strip(rows)}
         ctx.log(f"Z0 seed {seed}: controls red {inst['lab_controls_red']} ok={inst['ok']}")
-        phase_z0e(ctx, seed, world, store, by_id, inst)
+        phase_z0e(ctx, seed, world, seed_store, by_id, inst)
 
 
 def phase_z0e(ctx: Ctx, seed: str, world: Any, store: list, by_id: dict, inst: dict) -> None:

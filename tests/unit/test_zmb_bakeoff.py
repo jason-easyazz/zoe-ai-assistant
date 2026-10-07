@@ -1395,6 +1395,22 @@ def test_the_capability_cells_run_on_seed_one_only_and_each_arm_runs_the_ones_it
     assert art["decision"]["verdict"] in ("KEEP_Z0", "ADOPT_CANDIDATE", "ADOPT_ON_TIE")
 
 
+def test_the_baseline_runs_the_capability_cells_on_the_same_seed_as_the_candidates_and_only_that_one(monkeypatch):
+    """The candidates run J/K/L/M on seed 1 only; Z0 / Z0-off / Z0e pooled over three households would be compared with ONE, so they get seed 1 only too."""
+    import types
+    from zmb import runner
+    ran = []
+    monkeypatch.setattr(runner, "control_pass", lambda *a, **k: {})
+    monkeypatch.setattr(runner, "instrument_block", lambda *a, **k: {"ok": True, "lab_controls_red": "0/0"})
+    monkeypatch.setattr(runner, "run_cells", lambda cells, world, arm: (ran.append([c.axis for c in cells]), [])[1])
+    ctx = types.SimpleNamespace(z0={}, z0_off={}, z0e={}, notes=[], log=lambda *a, **k: None)
+    store = [c for c in spec.load_cells() if c.tier == "store"]
+    assert {c.axis for c in store} & set(measure.CAP_AXES)
+    measure.phase_z0(ctx, ("s1", "s2", "s3"), store, {c.id: c for c in store})
+    per_seed = [any(a in measure.CAP_AXES for a in axes) for axes in ran]
+    assert len(ran) == 3 * 3 and per_seed == [True, True, True, False, False, False, False, False, False]      # (Z0, Z0-off, Z0e) x (s1, s2, s3)
+
+
 def test_the_dry_plan_states_what_it_cut_to_fit_the_capability_axes_under_the_cap(box):
     w = make_window(box, FakeHost(box), dry=True)
     measure.dry_plan(w)
