@@ -329,6 +329,12 @@ def resolve_write(writer: str, text: str, *, anchor_text: Optional[str] = None,
                 # (C1 / C5) is the user speaking, not a model's guess at them
                 return Resolved(USER_STATED_DERIVED, VERBATIM_BASIS, promoted=True)
             return Resolved(USER_STATED_DERIVED, "anchored_user_turn")
+        if w in TRANSCRIPT_WRITERS and anchor_text and observation_gate_mode() != "off":
+            # a nightly paraphrase that joins two things the owner put in ONE sentence ("X accepted the offer from Y" from
+            # "X got the offer from Y!"): the owner's words carry it, the wording is the model's (``costated_span``)
+            got = costated_span(text, anchor_text)
+            if got:
+                return Resolved(USER_STATED_DERIVED, COSTATED_BASIS)
         return Resolved(base, "unanchored" if anchor_text else "no_user_evidence")
     return Resolved(MODEL_FROM_TRANSCRIPT, "automatic_writer")
 
@@ -1159,3 +1165,199 @@ def log_blocked(writer: str, kind: str, *, user_id: str = "", action: str = "") 
     tag = "AUTHORITY_BLOCKED" if enabled() else "AUTHORITY_WOULD_BLOCK"
     logger.info("%s writer=%s kind=%s%s%s", tag, writer, kind or "other",
                 f" action={action}" if action else "", f" user={user_id}" if user_id else "")
+
+
+# ── the observation gate: a model's NIGHTLY reading of the user is stored only when the user's words carry it ──────
+#
+# Why (ZMB reflection axis, K1 / K5, measured on main 2026-10-07): the nightly digest asked a model for "facts" from the
+# day's transcript and stored every one as an APPROVED row of class ``model_from_transcript``. Three kinds of it were
+# false and served: a link nobody stated ("Dagny is Jarvis's husband"; 5 of 10 observations in the lab), a hedged
+# restatement of what the owner had said plainly ("Jarvis probably lives in Pellham": the owner's certainty turned into
+# a guess), and a "you told me ..." the owner never said (an inference presented as the owner's own words). One class:
+# the row's CLAIM was never checked against the owner's words. The gate, in the nightly digest and as pure helpers here
+# (``supports`` / ``costated_span`` / ``cited_support``):
+#
+#   supported     the owner's words (a verbatim span via ``supports``, a single sentence that names every entity the
+#                 claim names, or an approved user-class row the item CITES via ``source_memory_ids``) carry it: stored
+#                 as before, and a co-stated paraphrase is stamped ``user_stated_derived`` (the honest class: a model's
+#                 paraphrase that the owner's turn supports)
+#   restatement   supported AND hedged: the owner said it plainly, the model made it a guess: dropped, the owner's row stands
+#   unsupported   anything else: a ``pending`` candidate (never served), reject-ledger reason ``guard_observation_unsupported``;
+#                 "you told me ..." from a model is removed (a supported claim is stored plain; an unsupported one is
+#                 reworded as an inference, "Possibly ...")
+#
+# ``ZOE_DIGEST_OBSERVATION_GATE`` = enforce (default) | shadow (log what WOULD be held, change nothing) | off.
+
+OBSERVATION_GATE_ENV = "ZOE_DIGEST_OBSERVATION_GATE"
+#: a nightly writer's stored basis when a sentence of the owner's names everything the claim names
+COSTATED_BASIS = "co_stated_user_turn"
+CITED_BASIS = "cited_user_rows"
+
+
+def observation_gate_mode() -> str:
+    """``enforce`` (default) | ``shadow`` | ``off``. Per-call env read."""
+    raw = os.environ.get(OBSERVATION_GATE_ENV)
+    if raw is None:
+        return "enforce"
+    v = raw.strip().lower()
+    if v in ("0", "false", "no", "off", ""):
+        return "off"
+    if v == "shadow":
+        return "shadow"
+    return "enforce"
+
+
+#: "You told me ...", "You said ...", "As you mentioned, ...": the model claims the OWNER said it
+_ATTRIBUTION_RE = re.compile(
+    r"^\s*(?:as\s+)?you(?:['’]ve|\s+have|\s+did|\s+had)?\s+(?:told|said|mentioned|shared|let me know|noted|explained)\b"
+    r"\s*(?:me|us)?\s*(?:that\b|,|:)?\s*", re.IGNORECASE)
+#: a model's guess about a thing the owner may have said plainly
+_GUESS_RE = re.compile(
+    r"\b(?:probably|possibly|perhaps|maybe|likely|seems?(?:\s+to)?|appears?(?:\s+to)?|apparently|presumably|supposedly|"
+    r"might|may\s+be|could\s+be|i\s+(?:think|guess|suspect)|looks\s+like|sounds\s+like)\b[,]?\s*", re.IGNORECASE)
+_ENTITY_STOP = frozenset({"user", "users", "you", "your"})
+
+
+def split_attribution(text: str) -> tuple[bool, str]:
+    """``(attributed, claim)``: does the text open by saying the OWNER said it, and the claim without that opening."""
+    t = (text or "").strip()
+    m = _ATTRIBUTION_RE.match(t)
+    if not m:
+        return False, t
+    rest = t[m.end():].strip()
+    return True, (rest[:1].upper() + rest[1:]) if rest else rest
+
+
+def is_hedged(text: str) -> bool:
+    return bool(_GUESS_RE.search(text or "")) or bool(_HEDGE_RE.search(text or ""))
+
+
+def strip_hedge(text: str) -> str:
+    """The claim with its guess words removed ("Jarvis probably lives in Pellham" -> "Jarvis lives in Pellham"):
+    what the support test reads, so a guess about a plainly stated fact is recognised as that fact."""
+    out = _GUESS_RE.sub("", text or "")
+    out = re.sub(r"\bto be\b\s+(?=\w+ing\b)", "", out)          # "seems to be starting at X" -> "starting at X"
+    return re.sub(r"\s{2,}", " ", out).strip()
+
+
+def claim_entities(text: str) -> list[str]:
+    """The named people / places / organisations a statement names (capitalised runs; the owner and the
+    pronouns are not entities). Pure."""
+    try:
+        from memory_gate import person_candidate_names
+    except Exception:  # noqa: BLE001
+        return []
+    out: list[str] = []
+    for name in person_candidate_names(text or ""):
+        parts = [p for p in name.split() if p.casefold() not in _ENTITY_STOP]
+        if parts and " ".join(parts) not in out:
+            out.append(" ".join(parts))
+    return out
+
+
+def _names_in(sentence: str, name: str) -> bool:
+    low = " " + re.sub(r"[^a-z0-9' ]+", " ", _fold(sentence).lower()) + " "
+    low = re.sub(r"['’]s\b", "", low)
+    n = re.sub(r"[^a-z0-9' ]+", " ", _fold(name).lower()).strip()
+    return bool(n) and re.search(r"(?<![a-z0-9])" + re.escape(n) + r"(?![a-z0-9])", low) is not None
+
+
+def _relation_words(text: str) -> set[str]:
+    return {m.group(0).lower() for m in re.finditer(rf"\b{_RELATION}\b", text or "", re.IGNORECASE)}
+
+
+def _polarity_tense_agree(win: str, claim: str) -> bool:
+    if bool(_NEG_RE.search(win)) != bool(_NEG_RE.search(claim or "")):
+        return False
+    for cue in (_USED_TO_RE, _ENDED_RE):
+        if bool(cue.search(win)) != bool(cue.search(claim or "")):
+            return False
+    return True
+
+
+def costated_span(claim: str, user_text: str) -> Optional[str]:
+    """The ONE sentence of the owner's own words that names EVERY entity the claim names (two or more), or None.
+    A claim that links two named things is as true as the owner's having put them in one sentence: that is what a
+    link is. It is NOT enough alone for a role ("X is Y's husband": the sentence must carry the relation word too),
+    nor across a polarity / tense change ("quit" against "starts"). One entity or none: never (``supports`` decides)."""
+    ents = claim_entities(claim)
+    if len(ents) < 2 or not user_text:
+        return None
+    want_rel = _relation_words(claim)
+    for line in _normalise_dates(str(user_text)).split("\n"):
+        for sent in _sentences(line):
+            if "?" in sent or _QUESTION_START_RE.match(sent) or _HYPOTHETICAL_RE.search(sent):
+                continue
+            if not all(_names_in(sent, e) for e in ents):
+                continue
+            if want_rel and not want_rel <= _relation_words(sent):
+                continue
+            if not _polarity_tense_agree(sent, claim):
+                continue
+            return _squash(sent)
+    return None
+
+
+def observation_support(claim: str, user_text: str) -> Optional[tuple[str, str]]:
+    """``(basis, span)`` when the owner's words carry the claim, else None: ``supports`` first (entailment of the
+    attribute, value and speaker), then a single sentence that names everything the claim names (``costated_span``)."""
+    if not claim or not user_text:
+        return None
+    if supports(claim, user_text):
+        return "anchored_user_turn", (supporting_span(claim, user_text) or "")
+    span = costated_span(claim, user_text)
+    return (COSTATED_BASIS, span) if span else None
+
+
+def cited_support(claim: str, cited_texts: "list[str]") -> Optional[tuple[str, str]]:
+    """Support from the approved user-class rows an observation CITES (``source_memory_ids``): the same two tests
+    over those rows' texts (each row is one statement; they are joined one per line, never across rows)."""
+    texts = [str(t).strip() for t in cited_texts or () if str(t or "").strip()]
+    if not texts:
+        return None
+    got = observation_support(claim, "\n".join(texts))
+    return (CITED_BASIS, got[1]) if got else None
+
+
+@dataclass(frozen=True)
+class ObservationVerdict:
+    kind: str                     # supported | restatement | unsupported
+    text: str                     # what to store (the attribution removed / an inference reworded)
+    basis: str = ""               # anchored_user_turn | co_stated_user_turn | cited_user_rows
+    reasons: tuple = ()           # labels only: attributed, hedged, no_support, quote_not_verbatim
+    span: str = ""                # the owner's words that carry it (never logged)
+    anchor: str = ""              # the user-class text to pass as ``anchor_text`` when it is stored
+
+
+_FUNCTION_LEADS = frozenset("the a an he she they it his her their its my our this that these those there".split())
+
+
+def _decapitalise(claim: str) -> str:
+    """Lower-case the first letter of a claim that opens with a function word ("The knee ..." -> "possibly the knee ...");
+    a name keeps its capital ("Possibly Brynja moved ...")."""
+    first = (claim.split(None, 1) or [""])[0]
+    return claim[:1].lower() + claim[1:] if first.casefold() in _FUNCTION_LEADS else claim
+
+
+def check_observation(fact: str, user_text: Optional[str], *, cited_texts: "list[str]" = ()) -> ObservationVerdict:
+    """Judge ONE model-written statement against the owner's words. ``user_text`` is the owner's turns only (the
+    nightly transcript, or the verbatim quote the model gave), ``None`` when the model's quote was NOT verbatim (a
+    hallucinated span is no evidence); ``cited_texts`` are the texts of the approved user-class rows it cites."""
+    attributed, claim = split_attribution(fact)
+    hedged = is_hedged(claim)
+    core = strip_hedge(claim) if hedged else claim
+    reasons: list[str] = (["attributed"] if attributed else []) + (["hedged"] if hedged else [])
+    got = observation_support(core, user_text) if user_text else None
+    if got is None:
+        got = cited_support(core, list(cited_texts))
+    if got is None:
+        reasons.append("quote_not_verbatim" if user_text is None else "no_support")
+        # an inference stays an inference: never "you told me"
+        text = claim if (hedged or not attributed) else "Possibly " + _decapitalise(claim)
+        return ObservationVerdict("unsupported", text, reasons=tuple(reasons))
+    basis, span = got
+    anchor = ("\n".join(str(t).strip() for t in cited_texts if str(t or "").strip())
+              if basis == CITED_BASIS else str(user_text or ""))
+    if hedged:
+        return ObservationVerdict("restatement", core, basis, tuple(reasons), span, anchor)
+    return ObservationVerdict("supported", claim, basis, tuple(reasons), span, anchor)

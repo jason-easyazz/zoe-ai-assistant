@@ -851,6 +851,13 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
         "superseded": 0,
     }
     try:
+        # The owner's verbatim turns of the last day or so, caught up into the exact-words index (idle work; the post-turn
+        # hook indexes each turn as it is said, this closes any gap it left). Bounded, never raises.
+        try:
+            import exact_words
+            await exact_words.backfill_recent(user_id)
+        except Exception:  # noqa: BLE001
+            pass
         chat_text = await _load_todays_messages(user_id, db)
         if not chat_text or len(chat_text.split()) < 20:
             logger.info("memory_digest: skipping %s — not enough chat activity today", user_id)
@@ -911,6 +918,45 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
             except Exception:
                 pass
 
+            # The observation gate (ZMB K1 / K5): a model's reading of the day is stored only when the OWNER'S words
+            # carry it. A fabricated link, a "you told me" nobody said and a guess about something said plainly used to
+            # be stored approved and served; now they wait (pending, never served), are reworded, or are dropped.
+            anchor_for_write = fact_anchor(item, chat_text) or ""
+            gate_mode = memory_authority.observation_gate_mode()
+            if gate_mode != "off":
+                verdict = await _observation_verdict(svc, user_id, item, fact, chat_text)
+                if verdict.kind != "supported" or verdict.text != fact:
+                    logger.info("memory_digest: observation gate %s kind=%s reasons=%s basis=%s user=%s",
+                                "ENFORCED" if gate_mode == "enforce" else "WOULD_HOLD",
+                                verdict.kind, ",".join(verdict.reasons) or "-", verdict.basis or "-", user_id)
+                if gate_mode == "enforce":
+                    if verdict.kind == "restatement":
+                        _count_drop("digest", "observation_restates_user")
+                        result["observations_restated"] = result.get("observations_restated", 0) + 1
+                        continue
+                    if verdict.kind == "unsupported":
+                        _count_drop("digest", "observation_unsupported")
+                        if "attributed" in verdict.reasons:
+                            _count_drop("digest", "observation_attributed_to_user")
+                        result["observations_held"] = result.get("observations_held", 0) + 1
+                        if _passes_quality_gate(verdict.text):
+                            try:
+                                # stored PENDING (never served) - or, when it disputes something the owner said, as the
+                                # disputed candidate the authority wall always made of it (the owner is asked)
+                                held = await svc.ingest(
+                                    verdict.text, user_id=user_id, source="digest",
+                                    memory_type=item.get("type", "fact"), confidence=0.5, status="approved",
+                                    tags=["digest", item.get("type", "unknown"), "unsupported_observation"],
+                                    anchor_text=anchor_for_write, hold="unsupported_observation")
+                                if held is not None and memory_authority.is_candidate(held):
+                                    result["candidates"] = result.get("candidates", 0) + 1
+                            except MemoryServiceError as exc:
+                                logger.debug("memory_digest: held observation not stored: %s", exc)
+                        continue
+                    fact = verdict.text
+                    if verdict.basis == memory_authority.CITED_BASIS:
+                        anchor_for_write = verdict.anchor
+
             # which of the user's turns the fact came from (ZMB A3): its words and its chat_messages id
             excerpt, turn_id = locate_turn(item, fact, chat_text)
 
@@ -942,7 +988,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                         # the day's USER turns (never assistant text): a verbatim user quote
                         # supports the fact, or the digest is an inference and cannot
                         # overrule what the user said
-                        anchor_text=fact_anchor(item, chat_text) or "",
+                        anchor_text=anchor_for_write,
                         source_excerpt=excerpt,
                         turn_ref=turn_id,
                     )
@@ -990,7 +1036,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                         edits=fact,
                         actor="digest",
                         note="nightly digest supersede (QA F9)",
-                        anchor_text=fact_anchor(item, chat_text) or "",
+                        anchor_text=anchor_for_write,
                         source_excerpt=excerpt,
                         turn_ref=turn_id,
                     )
@@ -1009,7 +1055,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                     confidence=0.8,
                     status="approved",
                     tags=tags,
-                    anchor_text=fact_anchor(item, chat_text) or "",
+                    anchor_text=anchor_for_write,
                     source_excerpt=excerpt,
                     user_turn_id=turn_id,
                 )
@@ -1200,6 +1246,40 @@ async def _skip_forgotten_turns(user_id: str, turns: list, reader: str) -> list:
         logger.info("memory_digest: %s skipped %d turn(s) naming a forgotten entity user=%s",
                     reader, dropped, user_id)
     return kept
+
+
+async def _cited_user_row_texts(svc, user_id: str, ids) -> list:
+    """The texts of the approved USER-class rows (the owner's own statements) an observation cites in
+    ``source_memory_ids``: this owner's, approved, rank >= ``user_stated``. A row that is not the owner's, not
+    approved, or a model's paraphrase supports nothing. Bounded (5 ids); a lookup failure cites nothing."""
+    out: list = []
+    if not isinstance(ids, (list, tuple)):
+        return out
+    for rid in list(ids)[:5]:
+        try:
+            ref = await svc.get(str(rid))
+        except Exception:  # noqa: BLE001
+            continue
+        if ref is None:
+            continue
+        md = ref.metadata or {}
+        if str(md.get("user_id") or md.get("wing") or "") != user_id:
+            continue
+        if str(md.get("status") or "").strip().lower() != "approved":
+            continue
+        if memory_authority.row_rank(md, ref.text) < memory_authority.USER_RANK:
+            continue
+        out.append(ref.text)
+    return out
+
+
+async def _observation_verdict(svc, user_id: str, item: dict, fact: str, chat_text: str):
+    """``memory_authority.check_observation`` for one extracted fact: the owner's words are the verbatim quote the
+    model gave (``None`` = a quote that is not verbatim: no evidence) or the day's user turns, plus the approved
+    user-class rows the item cites."""
+    cited = await _cited_user_row_texts(svc, user_id, item.get("source_memory_ids")) if isinstance(item, dict) else []
+    anchor = fact_anchor(item, chat_text)
+    return memory_authority.check_observation(fact, None if anchor is None else str(anchor), cited_texts=cited)
 
 
 def fact_anchor(item: dict, user_text: str) -> str | None:

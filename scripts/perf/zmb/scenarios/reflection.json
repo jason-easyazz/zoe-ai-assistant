@@ -8,8 +8,8 @@
       "tier": "store",
       "kind": "script",
       "lme_map": "",
-      "note": "gold is generated: an observation is TRUE when every pair of entities it names was said together by the owner, FALSE when it names an entity from another household, a pair never said together (the fabricated link) or an invalidated value as current; fewer than two entities = neutral, reported and not counted. The nightly model is SCRIPTED on an arm with no model of its own (Z0): the cell then measures what the STORE keeps of a night's proposals (a model that lies must not become a belief); an arm that runs its own model (Hindsight's observation layer) reads the life itself. Needs >= 3 decidable observations: a layer that reflects nothing has not passed. Z0's digest has no truth gate on a proposal (it keeps the fabricated link as an approved model row), so this is a TARGET on Z0",
-      "expected": "FAIL",
+      "note": "gold is generated: an observation is TRUE when every pair of entities it names was said together by the owner, FALSE when it names an entity from another household, a pair never said together (the fabricated link) or an invalidated value as current; fewer than two entities = neutral, reported and not counted. The nightly model is SCRIPTED on an arm with no model of its own (Z0): the cell then measures what the STORE keeps of a night's proposals (a model that lies must not become a belief); an arm that runs its own model (Hindsight's observation layer) reads the life itself. Needs >= 3 decidable observations: a layer that reflects nothing has not passed. Z0 was a TARGET here (5 of 10 observations were fabricated links: the nightly digest stored every model proposal approved). Fixed by the observation gate (memory_authority.check_observation, wired into run_memory_digest, ZOE_DIGEST_OBSERVATION_GATE): a model-written statement is stored only when the owner's words carry it (a verbatim span, one sentence naming everything it names, or an approved user-class row it cites), else it waits as a pending candidate; control observation_gate",
+      "expected": "PASS",
       "params": {
         "play_group": "K"
       },
@@ -35,6 +35,9 @@
           "min_precision": 0.95,
           "min_decidable": 3
         }
+      ],
+      "controls": [
+        "observation_gate"
       ]
     },
     {
@@ -109,7 +112,8 @@
       "tier": "store",
       "kind": "script",
       "controls": [
-        "authority"
+        "authority",
+        "observation_gate"
       ],
       "lme_map": "knowledge update; abstaining on a stale value",
       "note": "the owner both said the change in ordinary speech and taught the new value; the night's scripted model restates the OLD value as if current. An observation that names the old value with no history marker ('used to', 'left', 'moved from', 'before') is stale. The arm's authority wall is what stands between a model's restatement and the owner's current word: the `authority` control (a model write may supersede / archive what the user said) turns it red. Needs >= 3 observations (a layer that reflects nothing is empty, not current)",
@@ -146,7 +150,7 @@
       "kind": "script",
       "lme_map": "",
       "note": "both directions of attribution over the observation export: a restatement of a stated claim that is hedged or labelled inferred is a violation, and so is an observation that says 'you told me / you said' (or is labelled user-stated) about a link the owner never stated. Zero violations over >= 3 observations. The night's scripted model proposes both kinds of mistake on an arm with no model of its own. MEASURED on Z0: the nightly digest APPROVES the hedged restatement and the 'you told me' invention as ordinary model rows (class model_from_transcript, no anchor required for a non-relationship fact), so this is a TARGET on Z0",
-      "expected": "FAIL",
+      "expected": "PASS",
       "params": {
         "play_group": "K"
       },
@@ -171,6 +175,9 @@
           "score": "attributed",
           "min_observations": 3
         }
+      ],
+      "controls": [
+        "observation_gate"
       ]
     }
   ]

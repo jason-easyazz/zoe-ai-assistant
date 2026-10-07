@@ -136,6 +136,10 @@ def svc(monkeypatch):
     monkeypatch.setattr(service, "_audit_collection", lambda: audit)
     service._fake = fake
     service._audit_fake = audit
+    # delete_user also erases the owner's verbatim turns (exact_words) and FAILS CLOSED when it cannot: no pool in this lane,
+    # so the in-process index stands in for the Postgres table
+    import exact_words
+    monkeypatch.setattr(exact_words, "_backend", exact_words.MemoryBackend())     # restored by monkeypatch
     return service
 
 
