@@ -36,7 +36,7 @@ from .hindsight import INSTALL_HINT as HINDSIGHT_HINT
 from .hindsight import HindsightClient, HindsightError
 from .hm_policy import (DEFAULT_ROOMS, MODEL_FROM_TRANSCRIPT, RANK, SPEAKER_LABEL, USER_STATED, USER_STATED_DERIVED,
                         Controls, HashedLedger, LatencyModel, alias_candidates, frame, label_for, percentile)
-from .mempalace_verbatim import MemPalaceVerbatimArm, _name_pattern, _toks
+from .mempalace_verbatim import MemPalaceVerbatimArm, _name_pattern, _toks, days_ago
 
 # ── attribute keys: how the lab decides two statements are about the same thing ───────────────────────────────
 
@@ -712,7 +712,7 @@ class HMArm(Arm):
 
     def _verb_packet_row(self, r: "dict[str, Any]") -> "dict[str, Any]":
         cls = r["authority_class"]
-        date = f"day {int((r['filed_ts'] - 1_790_000_000.0) // 86400)}"
+        date = f"{days_ago(r['filed_ts'])} days ago"
         return {**r, "raw": r["text"], "label": label_for(cls),
                 "text": frame(r["text"], authority_class=cls, speaker_label=SPEAKER_LABEL.get(cls, "unknown"),
                               date=date, enabled=self.controls.frame)}
@@ -791,12 +791,11 @@ class HMArm(Arm):
     def recall_exact(self, query: str, k: int = 5) -> "list[dict[str, Any]]":
         """(j) "What exactly did I say": the EXACT lane of the packet (the verbatim tier first, quarantine rooms included, every chunk the owner's words
         unchanged) with the day each was filed. ``exact_lookup`` OFF = the request is served from the distilled facts alone (the negative control)."""
-        from .mempalace_verbatim import BASE_TS, DAY_S
         rows = self.packet(query, max(k, 1), exact=True)
         if not self.controls.exact_lookup:
             rows = [r for r in rows if not str(r.get("origin", "")).startswith("verbatim")]
         return [{"text": r.get("raw") or r["text"],
-                 "day_offset": round((float(r["filed_ts"]) - BASE_TS) / DAY_S) if r.get("filed_ts") else None} for r in rows[:k]]
+                 "day_offset": days_ago(r["filed_ts"]) if r.get("filed_ts") else None} for r in rows[:k]]
 
     def recall_linked(self, query: str, k: int = 8) -> "list[dict[str, Any]]":
         """(l) HM's packet: the distilled tier (Hindsight's retrieval, link graph included) and the verbatim tier, merged and de-duplicated."""

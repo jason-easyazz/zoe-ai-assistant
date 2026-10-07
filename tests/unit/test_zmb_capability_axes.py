@@ -148,6 +148,15 @@ def test_precision_is_hard_at_95_percent_over_at_least_three_decidable_observati
     assert not cap.score_observations([], GOLD, kind="true").ok
 
 
+def test_an_insufficient_k1_sample_publishes_no_items_so_it_cannot_enter_the_winner_pool():
+    """Class: a cell that failed for want of a sample is not a measurement. Its counts stay in the evidence; its ``items`` must be [0, 0]."""
+    for texts in ([], [LF.proposals_true[0]], [LF.proposals_true[0], LF.proposals_true[1]]):
+        s = cap.score_observations(obs(*texts), GOLD, kind="true")
+        assert not s.ok and s.evidence["items"] == [0, 0] and "too few decidable" in s.evidence["observations_judged"]["reason"]
+    row = runner._row(CELLS["K1.observations_are_true"], cellmod.Outcome("FAIL", "read", {"probes": [cap.score_observations(obs(LF.proposals_true[0]), GOLD, kind="true").evidence]}))
+    assert artifact.axis_stats([row], CELLS, True)["reflection"]["items"] == {"pass": 0, "n": 0}
+
+
 def test_a_stale_restatement_and_an_empty_layer_both_fail_currency():
     ok = cap.score_observations(obs(*LF.proposals_true[:3]), GOLD, kind="current")
     assert ok.ok
@@ -408,6 +417,20 @@ def test_h2_exports_its_observation_layer_with_the_class_of_the_facts_it_came_fr
     ex = arm.observations()
     assert ex["model"] == "own" and ex["items"] and all(i["stated_by"] == "user" for i in ex["items"])           # consolidated from a user-stated fact
     assert arm.observations("where does Aldo live")["items"]
+    arm.close()
+
+
+def test_mempalace_filing_time_runs_forward_from_the_days_ago_offsets():
+    """Class: ``Turn.day_offset`` is DAYS AGO. A turn said 9 days ago is filed EARLIER than one said 2 days ago, and the age read back is the offset."""
+    arm = hm()
+    arm.reset("demo_bar_1a2b3c4d")
+    arm.ingest([Turn("Osric booked the ferry for Friday morning.", "owner_typed", day_offset=9),
+                Turn("Osric moved the ferry to Saturday evening.", "owner_typed", day_offset=2)])
+    rows = {r["text"]: r for r in arm.verbatim.stats()["rows"]}
+    old, new = rows["Osric booked the ferry for Friday morning."], rows["Osric moved the ferry to Saturday evening."]
+    assert old["filed_ts"] < new["filed_ts"]
+    got = {r["text"]: r["day_offset"] for r in arm.recall_exact("Osric ferry", 5)}
+    assert got["Osric booked the ferry for Friday morning."] == 9 and got["Osric moved the ferry to Saturday evening."] == 2
     arm.close()
 
 

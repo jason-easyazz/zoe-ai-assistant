@@ -204,9 +204,9 @@ def test_verbatim_arm_ledger_sweep_deletes_without_the_plaintext():
 
 def test_verbatim_arm_as_of_is_a_filter_on_filing_time():
     arm = _mv()
-    arm.ingest([Turn("I live in Perth", "owner_voice_verified", day_offset=0),
-                Turn("I live in Hobart", "owner_voice_verified", day_offset=5)])
-    early = arm.as_of("where do I live", "2026-09-22T00:00:00")
+    arm.ingest([Turn("I live in Perth", "owner_voice_verified", day_offset=5),      # said 5 days ago
+                Turn("I live in Hobart", "owner_voice_verified", day_offset=0)])    # said just now
+    early = arm.as_of("where do I live", "2026-09-19T00:00:00")
     assert [r["text"] for r in early] == ["I live in Perth"]
 
 

@@ -142,7 +142,8 @@ def score_observations(items: Sequence[Any], gold: "dict[str, Any]", *, kind: st
     if kind == "true":
         dec = nt + nf
         if dec < min_decidable:
-            return Score(False, "read", {"observations_judged": {**base, "decidable": dec, "reason": "too few decidable observations"}, "items": [nt, max(dec, 0)]})
+            # items [0, 0]: an insufficient sample is not a measurement, so it must not enter the winner's pooled Wilson interval (the counts stay in the evidence)
+            return Score(False, "read", {"observations_judged": {**base, "decidable": dec, "reason": "too few decidable observations"}, "items": [0, 0]})
         return _items_score(nt, dec, label="observations_judged", min_rate=min_precision, stage="write", extra={**base, "decidable": dec, "min_decidable": min_decidable})
     if kind == "current":
         stale = why["stale"]
