@@ -215,6 +215,9 @@ class ScriptArm(Arm):
     def __init__(self, *, verbatim=True, days=True, linked=True, obs=None, model="own", caps=("exact_words", "multi_hop", "observations", "protocol", "idle_pass")):
         self.capabilities = frozenset(caps)
         self.verbatim, self.days, self.linked, self.obs, self.model = verbatim, days, linked, obs or [], model
+        self.nightly_model = model                      # the arm's contract: whose model writes the nightly observations
+        self.proposed: "list[str]" = []                 # every proposal the lab handed this arm
+        self.reflections = 0
         self.resets = 0
         self.played: "list[Turn]" = []
         self.facts: "list[tuple[str, int]]" = []
@@ -229,7 +232,12 @@ class ScriptArm(Arm):
         return IngestReport(turns=len(turns), written=len(turns))
 
     def run_idle_pass(self, transcript, proposes, *, judge=True):
+        self.proposed += list(proposes)
         return {"retained": len(proposes)}
+
+    def reflect_pass(self):
+        self.reflections += 1
+        return {"retained": 0}
 
     def _ranked(self, query):
         """The facts that share a word of more than three letters with the query, most shared first (ties: said first)."""
@@ -307,6 +315,24 @@ def test_the_reflection_cells_judge_what_the_arm_derived_and_skip_a_scripted_mod
     assert scripted.verdict == "SKIP" and "scripted" in scripted.reason                                       # what a scripted model says is the script's
     assert run("K3.useful_answers", ScriptArm(obs=lf.proposals_true, model="scripted")).verdict == "SKIP"
     assert run("K1.observations_are_true", ScriptArm(obs=lf.proposals_true, model="scripted")).verdict == "PASS"      # the store's keeping is measured either way
+
+
+def test_an_own_model_arm_is_never_handed_the_labs_scripted_proposals_and_a_scripted_arm_is():
+    """The scripted proposals are DELIBERATE lies (fabricated links, stale facts, mis-attributions). An arm with its own nightly model that were handed them
+    would retain them as facts and consolidate its observations partly from them: K1-K3 would measure the harness, not the arm."""
+    lf = LF
+    own = ScriptArm(obs=lf.proposals_true, model="own")
+    for cid in ("K1.observations_are_true", "K2.thread_recall", "K3.useful_answers", "K4.invalidated_fact_not_restated"):
+        run(cid, own)
+    assert own.proposed == [] and own.reflections >= 1                                  # it reflected over the life it ingested, with nothing injected
+    assert own.resets == 1 and any(t.text for t in own.played)                          # ... and ONE play served all four K cells (the group), over a real life
+    scripted = ScriptArm(obs=lf.proposals_true, model="scripted")
+    run("K1.observations_are_true", scripted)
+    lies = set(lf.proposals_fabricated + lf.proposals_stale + lf.proposals_hedged + lf.proposals_presented_as_said)
+    assert lies and lies <= set(scripted.proposed) and scripted.reflections == 0         # the script reaches the arm whose model the lab scripts
+    h2 = HindsightArm("H2", transport=FakeHindsight(), settle_poll_s=0)
+    assert h2.nightly_model == "own" and HindsightArm.nightly_model == "own" and Arm.nightly_model == "scripted"
+    h2.close()
 
 
 def test_an_arm_without_the_capability_skips_with_the_reason_and_never_errors_or_passes():
@@ -395,6 +421,24 @@ def test_hindsight_rows_carry_the_day_they_were_said():
 
 
 # ── the spec and the artifact ────────────────────────────────────────────────
+
+def test_the_protocol_cells_share_one_play_group_so_the_corpus_is_taught_once():
+    """M1-M3 ingest the same 14 protocol facts: without a shared play_group each replays the corpus (3 x 14 retains, unbudgeted, ~43 s on H1)."""
+    ms = [CELLS[i] for i in ("M1.answered_when_recall_fired", "M2.cites_only_the_right_fact", "M3.says_idk_when_the_store_is_silent")]
+    assert {c.params.get("play_group") for c in ms} == {"M"} and all(c.events == ms[0].events for c in ms)
+    # the class: any capability-axis store cells that teach the SAME event list must name ONE shared group (else each replays the whole corpus)
+    for axis in ("exact_words", "reflection", "multi_hop", "protocol"):
+        by_events: "dict[str, list]" = {}
+        for c in CELLS.values():
+            if c.axis == axis and c.tier == "store" and c.events:
+                by_events.setdefault(json.dumps(c.events, sort_keys=True), []).append(c)
+        for group in (g for g in by_events.values() if len(g) > 1):
+            assert len({c.params.get("play_group") for c in group}) == 1 and group[0].params.get("play_group"), [c.id for c in group]
+    arm = ScriptArm(caps=("protocol", "idle_pass"))
+    runner.run_cells(ms, W, arm)
+    assert arm.resets == 1 and len(arm.played) == 14                                      # ONE play of the 14 facts, read three times
+    assert len(life.protocol_corpus(SEED)[0]) == 14 and __import__("zmb.bakeoff_measure", fromlist=["x"]).CAP_RETAINS["protocol"] == 14
+
 
 def test_the_capability_axes_are_in_the_spec_with_the_cells_the_brief_names():
     assert {"j": "exact_words", "k": "reflection", "l": "multi_hop", "m": "protocol"}.items() <= spec.AXES.items()

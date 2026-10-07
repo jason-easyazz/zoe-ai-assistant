@@ -815,14 +815,66 @@ def test_the_winner_clause_is_decided_on_the_capability_axes_and_a_tie_goes_to_t
     assert gates.decide(bad, z0w)["verdict"] == "KEEP_Z0"
 
 
+def _k1_row(verdict="FAIL", stage="write", decidable=20, false=2, reason=""):
+    """A K1 cell row as ``runner._row`` makes it, with the evidence shape ``scorers_cap.score_observations`` writes."""
+    if verdict == "ERROR":
+        ev = {}
+    elif decidable < 3:
+        ev = {"probes": [{"observations_judged": {"observations": decidable, "true": decidable - false, "false": false, "neutral": 0, "decidable": decidable,
+                                                   "reason": "too few decidable observations"}, "items": [decidable - false, decidable]}]}
+    else:
+        ev = {"probes": [{"observations_judged": {"n": decidable, "hits": decidable - false, "false": false, "decidable": decidable}, "items": [decidable - false, decidable]}]}
+    return {"id": "K1.observations_are_true", "verdict": verdict, "stage": stage, "evidence": ev, "reason": reason}
+
+
+def _h2_with_k1(*rows, failing=("K1.observations_are_true",)):
+    runs = three(axes=cap(exact=(20, 20), hops=(20, 20), reflection=(20, 20)))
+    runs["s0"]["k1"] = [gates.k1_evidence(r) for r in rows]
+    a = gates.evaluate_arm("H2", runs, good_measure())
+    a["axes"]["reflection"]["failing"] = list(failing)             # K1 is in the axis' failing list whatever the reason it failed
+    return a
+
+
 def test_fabricated_observations_veto_an_arm_whatever_else_it_wins():
     z0 = gates.aggregate_axes({"s": {"axes": cap(hops=(5, 20))}})
-    liar = {"H2": gates.evaluate_arm("H2", three(axes=cap(exact=(20, 20), hops=(20, 20), reflection=(20, 20))), good_measure())}
-    liar["H2"]["axes"]["reflection"]["failing"] = ["K1.observations_are_true"]            # K1 failed on some seed
+    # a MEASURED false rate above the limit (2 of 20 = 10%) over enough decidable observations: vetoed
+    liar = {"H2": _h2_with_k1(_k1_row(decidable=20, false=2))}
+    st = gates.observation_status(liar["H2"]["axes"])
+    assert st["status"] == "vetoed" and st["evidence"][0]["decidable"] == 20 and st["evidence"][0]["false_rate"] == 0.1 and st["evidence"][0]["seed"] == "s0"
     d = gates.decide(liar, z0)
-    assert gates.observation_veto(liar["H2"]["axes"]) and d["verdict"] == "KEEP_Z0" and "H2" in d["vetoed"] and "VETOED" in d["text"]
+    assert gates.observation_veto(liar["H2"]["axes"]) and d["verdict"] == "KEEP_Z0" and "H2" in d["vetoed"] and "VETOED" in d["text"] and "2 false of 20" in d["text"]
+    # exactly three decidable is enough to measure; one false of three is 33%
+    assert gates.observation_veto(_h2_with_k1(_k1_row(decidable=3, false=1))["axes"])
     honest = {"H2": gates.evaluate_arm("H2", three(axes=cap(exact=(20, 20), hops=(20, 20), reflection=(20, 20))), good_measure())}
     assert not gates.observation_veto(honest["H2"]["axes"]) and gates.decide(honest, z0)["verdict"] == "ADOPT_CANDIDATE"
+    assert gates.observation_status(honest["H2"]["axes"])["status"] == "not_run"
+
+
+def test_a_k1_that_did_not_measure_is_reported_as_insufficient_or_error_and_never_vetoes():
+    """K1 also fails at stage ``read`` (fewer than three decidable observations) and an ERROR cell lands in the axis' failing list: neither says the layer fabricates."""
+    z0 = gates.aggregate_axes({"s": {"axes": cap(hops=(5, 20))}})
+    # precision 100% over two decidable observations: the cell FAILs at read, the evidence is insufficient, the arm is not vetoed
+    thin = {"H2": _h2_with_k1(_k1_row(verdict="FAIL", stage="read", decidable=2, false=0))}
+    st = gates.observation_status(thin["H2"]["axes"])
+    assert st["status"] == "insufficient" and st["evidence"][0]["false_rate"] == 0.0 and "too few decidable" in st["reason"]
+    d = gates.decide(thin, z0)
+    assert not gates.observation_veto(thin["H2"]["axes"]) and d["vetoed"] == [] and d["verdict"] == "ADOPT_CANDIDATE"
+    assert d["observations"]["H2"]["status"] == "insufficient" and "NOT established" in d["text"] and "VETOED" not in d["text"]
+    # zero observations at all (an empty layer): also insufficient, never fabrication
+    assert gates.observation_status(_h2_with_k1(_k1_row(verdict="FAIL", stage="read", decidable=0, false=0))["axes"])["status"] == "insufficient"
+    # an ERROR cell is a measurement error
+    err = {"H2": _h2_with_k1(_k1_row(verdict="ERROR", stage="", reason="RuntimeError: the idle pass did not run"))}
+    assert gates.observation_status(err["H2"]["axes"])["status"] == "measurement_error" and not gates.observation_veto(err["H2"]["axes"])
+    assert gates.decide(err, z0)["vetoed"] == []
+    # an old record that has K1 in failing and no counts cannot be read as fabrication either
+    old = gates.evaluate_arm("H2", three(axes=cap(exact=(20, 20), hops=(20, 20), reflection=(20, 20))), good_measure())
+    old["axes"]["reflection"]["failing"] = ["K1.observations_are_true"]
+    assert gates.observation_status(old["axes"])["status"] == "insufficient" and not gates.observation_veto(old["axes"])
+    # a clean K1 reads clean
+    assert gates.observation_status(_h2_with_k1(_k1_row(verdict="PASS", stage="", decidable=20, false=0), failing=())["axes"])["status"] == "clean"
+    # the evidence of a seed that measured fabrication still vetoes beside a thin one
+    mixed = _h2_with_k1(_k1_row(verdict="FAIL", stage="read", decidable=2, false=0), _k1_row(decidable=20, false=4))
+    assert gates.observation_veto(mixed["axes"])
 
 
 def test_the_derived_axes_are_built_from_the_per_cell_verdicts():

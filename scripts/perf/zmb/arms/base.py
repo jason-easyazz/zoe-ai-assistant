@@ -92,6 +92,10 @@ class Arm(ABC):
     #: optional abilities a cell may require: ``clock`` (advance_clock), ``controls`` (a lab arm that
     #: can switch its features off)
     capabilities: frozenset[str] = frozenset()
+    #: whose model writes the nightly observations: ``"scripted"`` = the LAB scripts it (Z0's digest: the cell hands it the night's proposals and
+    #: measures what the store KEEPS of them); ``"own"`` = the arm runs its own model (Hindsight's observation layer): the lab hands it NOTHING to
+    #: believe - ``reflect_pass`` only lets it consolidate what the life already ingested. Must agree with ``observations()["model"]``.
+    nightly_model: str = "scripted"
 
     @abstractmethod
     def reset(self, user_id: str) -> None:
@@ -128,6 +132,11 @@ class Arm(ABC):
         ``memory_digest.run_memory_digest`` incl. its contradiction check) over a day ``transcript`` of the
         user's turns, with the model's extraction scripted to ``proposes``. Returns the pass's counters."""
         raise NotImplementedError(f"{self.name} has no idle pass")
+
+    def reflect_pass(self) -> "dict[str, Any]":  # pragma: no cover
+        """Optional, for an arm with ``nightly_model == "own"``: let the arm's OWN model reflect over what was ingested (consolidate and settle),
+        with NOTHING injected - no scripted proposals, no transcript handed over as a writer's claim. Returns the pass's counters."""
+        raise NotImplementedError(f"{self.name} has no own-model reflection pass")
 
     def ingest_as(self, identity: str, turns: "list[Turn]") -> IngestReport:  # pragma: no cover
         """Optional capability ``identities``: apply the turns AS a named household identity

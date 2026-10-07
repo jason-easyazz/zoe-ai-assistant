@@ -44,7 +44,7 @@ RULE = {
     # the capability winner clause (owner direction 2026-10-07): beat Z0 on this many capability axes; at least this many must have data for a tie to count
     "capability_wins_min": 2, "capability_axes_with_data_min": 3,
     # (k) hard: an observation layer whose derived statements are less than this true cannot be adopted with observations on
-    "observation_precision_min": 0.95,
+    "observation_precision_min": 0.95, "observation_min_decidable": 3,
     # the MPA / HMA arms (the agent operates MemPalace through its MCP tools). Pre-registered 2026-10-07 before any MPA run.
     "mpa_tool_validity_min": 0.95, "mpa_tool_calls_min": 30,             # the brain's tool calls that were schema-valid / all, over at least this many calls
     "mpa_supersede_min": 0.80, "mpa_supersede_wrong_max": 2, "mpa_supersede_n_min": 10,       # the agent's supersede-on-update calls: correct share, wrong ones tolerated, trials needed
@@ -110,7 +110,9 @@ def aggregate_axes(seed_runs: "dict[str, dict]") -> "dict[str, dict]":
     unit of J / K / L); ``failing`` = the ids of the cells that failed, on any seed. The derived axes of the contest (``DERIVED_AXES``: recall AT
     DISTANCE, the brain-tier protocol cells) are built from the per-cell verdicts the seed runs carry."""
     out: "dict[str, dict]" = {}
-    for run in seed_runs.values():
+    k1: "list[dict]" = []
+    for seed, run in seed_runs.items():
+        k1 += [{"seed": seed, **e} for e in (run.get("k1") or ()) if isinstance(e, dict)]
         for axis, s in (run.get("axes") or {}).items():
             a = out.setdefault(axis, {"pass": 0, "n": 0, "skipped": 0, "cells": 0, "items": {"pass": 0, "n": 0}, "failing": []})
             a["pass"] += int(s.get("pass") or 0)
@@ -131,6 +133,8 @@ def aggregate_axes(seed_runs: "dict[str, dict]") -> "dict[str, dict]":
             a["n"] += len(ran)
             a["cells"] += len(ran)
             a["failing"] = sorted(set(a["failing"]) | {c["id"] for c in ran if c["verdict"] != "PASS"})
+    if k1 and "reflection" in out:
+        out["reflection"]["k1"] = k1                  # the K1 precision evidence per seed (counts only): what the observation veto reads
     for a in out.values():
         lo, hi = wilson(a["pass"], a["n"])
         a["wilson95"] = [round(lo, 4), round(hi, 4)]
@@ -483,10 +487,57 @@ def compare_floors(arm_axes: dict, z0_axes: dict) -> "dict[str, dict]":
     return {letter: _compare_letter(letter, axis, arm_axes, z0_axes, None) for letter, axis in FLOOR_AXES.items()}
 
 
+def k1_evidence(row: dict) -> "dict[str, Any]":
+    """The K1 precision evidence of ONE seed from its cell row (counts only, never an observation's text): the verdict, the stage, how many observations
+    were decidable and how many of those were false, the measured false rate, and the reason when the cell did not measure (an ERROR, or too few decidable)."""
+    probes = (row.get("evidence") or {}).get("probes") or []
+    j = next((p["observations_judged"] for p in probes if isinstance(p, dict) and isinstance(p.get("observations_judged"), dict)), {})
+    dec, false = j.get("decidable"), j.get("false")
+    ok = isinstance(dec, int) and isinstance(false, int) and dec > 0
+    return {"verdict": row.get("verdict"), "stage": row.get("stage") or "", "decidable": dec if isinstance(dec, int) else None,
+            "false": false if isinstance(false, int) else None, "false_rate": round(false / dec, 4) if ok else None,
+            "reason": str(j.get("reason") or row.get("reason") or "")[:200]}
+
+
+def k1_status(e: dict) -> str:
+    """One seed's K1 reading: ``fabricating`` ONLY when the measured false rate exceeds the limit over at least the minimum decidable observations;
+    ``measurement_error`` when the cell ERRORed; ``insufficient`` when there was not enough to judge (fewer than the minimum decidable, or no counts);
+    else ``clean``. A read-stage failure or an ERROR is never a finding that the layer fabricates."""
+    if e.get("verdict") == "ERROR":
+        return "measurement_error"
+    dec, rate = e.get("decidable"), e.get("false_rate")
+    if dec is None or rate is None or dec < RULE["observation_min_decidable"]:
+        return "insufficient"
+    return "fabricating" if rate > 1.0 - RULE["observation_precision_min"] else "clean"
+
+
+def observation_status(arm_axes: dict) -> "dict[str, Any]":
+    """(k) The observation layer's standing: ``vetoed`` (a seed measured a false rate above the limit over enough decidable observations), ``clean``,
+    ``insufficient`` (K1 did not have enough decidable observations, or its failure carries no precision evidence), ``measurement_error`` (K1 ERRORed)
+    or ``not_run``. Only ``vetoed`` blocks adoption; the others are reported as what they are."""
+    refl = arm_axes.get("reflection") or {}
+    ev = [e for e in refl.get("k1") or [] if isinstance(e, dict)]
+    states = [k1_status(e) for e in ev]
+    if not ev:                                                    # no per-seed evidence: an old record, or K1 never ran
+        failing = [i for i in refl.get("failing", []) if i.startswith("K1.")]
+        return {"status": "insufficient" if failing else "not_run", "evidence": [],
+                "reason": "K1 failed but the record carries no precision counts" if failing else "K1 did not run"}
+    for status in ("fabricating", "measurement_error", "insufficient"):
+        if status in states:
+            bad = next(e for e, st in zip(ev, states) if st == status)
+            return {"status": "vetoed" if status == "fabricating" else status, "evidence": ev,
+                    "reason": (f"K1 measured {bad['false']} false of {bad['decidable']} decidable ({bad['false_rate']:.0%} > "
+                               f"{1 - RULE['observation_precision_min']:.0%})" if status == "fabricating"
+                               else bad.get("reason") or f"K1 {bad.get('stage') or 'unmeasured'}: {bad.get('decidable')} decidable "
+                                    f"(needs {RULE['observation_min_decidable']})")}
+    return {"status": "clean", "evidence": ev, "reason": ""}
+
+
 def observation_veto(arm_axes: dict) -> bool:
-    """(k) hard: the arm HAS an observation layer (K1 ran) and its derived statements were not at least 95% true on some seed: it cannot be adopted with
-    observations on."""
-    return any(i.startswith("K1.") for i in (arm_axes.get("reflection") or {}).get("failing", []))
+    """(k) hard: the arm HAS an observation layer and its derived statements were MEASURED more than 5% false on some seed (over at least the minimum
+    decidable observations): it cannot be adopted with observations on. A K1 that did not measure (too few decidable observations, an ERROR) is not a
+    fabrication finding: see ``observation_status``."""
+    return observation_status(arm_axes)["status"] == "vetoed"
 
 
 def decide(arms: "dict[str, dict]", z0_axes: dict, z0e_axes: "dict | None" = None) -> "dict[str, Any]":
@@ -501,10 +552,11 @@ def decide(arms: "dict[str, dict]", z0_axes: dict, z0e_axes: "dict | None" = Non
     adoptable = [n for n in ("H1", "H2", "H0") if arms.get(n, {}).get("verdict") == "PASSES_BUILT_GATES"]
     cmp_by_arm = {n: compare_axes(a["axes"], z0_axes, z0e_axes) for n, a in arms.items()}
     floors_by_arm = {n: compare_floors(a["axes"], z0_axes) for n, a in arms.items()}
-    vetoed = [n for n in MAINTAINED if n in arms and observation_veto(arms[n]["axes"])]
+    obs_status = {n: observation_status(a["axes"]) for n, a in arms.items()}
+    vetoed = [n for n in MAINTAINED if n in arms and obs_status[n]["status"] == "vetoed"]
     caveat = ("Advisory: the floors (G0-G3) are hard gates, the CONTEST is the capability axes (exact words, reflection, long-range recall, protocol, temporal and "
               "recall at distance); known-failing targets count as failures, a skipped cell is never a pass, and the owner decides.")
-    base = {"adoptable": adoptable, "compare": cmp_by_arm, "floors": floors_by_arm, "vetoed": vetoed, "caveat": caveat}
+    base = {"adoptable": adoptable, "compare": cmp_by_arm, "floors": floors_by_arm, "vetoed": vetoed, "observations": obs_status, "caveat": caveat}
     if not adoptable:
         incomplete = [n for n, a in arms.items() if a["verdict"] == "INCOMPLETE"]
         text = ("KEEP_Z0: no arm passes every floor (G0-G3)" + (f" ({', '.join(incomplete)} incomplete: not a pass)" if incomplete else "")
@@ -518,8 +570,10 @@ def decide(arms: "dict[str, dict]", z0_axes: dict, z0e_axes: "dict | None" = Non
         wins = [k for k, v in c.items() if v.get("beats")]
         worse = [k for k, v in c.items() if v.get("worse")]
         if n in vetoed:
-            notes.append(f"{n} is VETOED: its observation layer fabricates (K1 precision < {RULE['observation_precision_min']:.0%}); it cannot be adopted with observations on")
+            notes.append(f"{n} is VETOED: its observation layer fabricates ({obs_status[n]['reason']}); it cannot be adopted with observations on")
             continue
+        if obs_status[n]["status"] in ("insufficient", "measurement_error"):
+            notes.append(f"{n}: K1 observation precision is NOT established ({obs_status[n]['status'].replace('_', ' ')}: {obs_status[n]['reason']}); not a veto, not a clean bill")
         if worse:
             notes.append(f"{n} is WORSE than Z0 beyond the interval on {', '.join(worse)}")
             continue
@@ -641,7 +695,12 @@ def _caveats(arms: "dict[str, dict]", decision: dict, z0_axes: dict) -> "list[st
                        + ". A capability skip is structural (the arm lacks what the cell needs: H0 has no Zoe layer, so no people graph or nightly pass; H1 has no observation "
                        "layer; any arm built without the scratch Postgres has no disk scan), so G2 `hard_cells_all_ran` stays red for it by the pre-registered rule (a skip is never a pass).")
     if decision.get("vetoed"):
-        out.append(f"{', '.join(decision['vetoed'])}: the observation layer fabricated (K1 precision below {RULE['observation_precision_min']:.0%}); observations stay OFF until it does not.")
+        out.append(f"{', '.join(decision['vetoed'])}: the observation layer fabricated (K1 measured more than {1 - RULE['observation_precision_min']:.0%} of the decidable "
+                   "observations false); observations stay OFF until it does not.")
+    unproven = {n: o for n, o in (decision.get("observations") or {}).items() if o.get("status") in ("insufficient", "measurement_error")}
+    if unproven:
+        out.append("K1 observation precision is not established (insufficient evidence or a measurement error, NOT a fabrication finding, so no veto): "
+                   + "; ".join(f"{n} {o['status'].replace('_', ' ')} ({o['reason']})" for n, o in unproven.items()) + ".")
     out.append("Reflection (K) and the memory protocol (M) measure the arm's own model through the Gemma E4B clone; the lab half of M is a scripted stand-in for each protocol's "
                "text and never decides. Extraction quality (B) is a floor, measured the same way. One server, one scratch Postgres, synthetic households only. "
                "Net RSS is gross (the Chroma/ONNX that adoption frees is not subtracted).")

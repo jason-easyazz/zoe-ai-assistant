@@ -10,6 +10,7 @@
       "controls": ["retrieval"],
       "lme_map": "",
       "note": "brain-free: Zoe's protocol (the imperative recall doctrine) decides when recall fires; the arm builds the packet; a scripted reader answers from the first row that names the person (or the favourite) asked about and otherwise says it does not know. This is the PACKET half of the protocol. Evidence also carries every protocol's numbers (MemPalace's five rules, Hindsight's recall-every-turn) as counts: those policies are deterministic stand-ins for what each protocol's TEXT tells a brain, not a brain",
+      "params": {"play_group": "M"},
       "events": [{"do": "protocol_facts"}],
       "probes": [
         {"kind": "protocol", "metric": "answered_when_fired", "protocol": "zoe"}
@@ -23,6 +24,7 @@
       "controls": ["reader"],
       "lme_map": "",
       "note": "precision of what is cited, over needed AND silent prompts together: the sycophantic reader (the `reader` control: answer from the nearest row whatever it says) cites a wrong fact on the silent prompts and drops the share below the bar. A reader that never answers has no precision to speak of and fails (no answer cited anything)",
+      "params": {"play_group": "M"},
       "events": [{"do": "protocol_facts"}],
       "probes": [
         {"kind": "protocol", "metric": "cite_precision", "protocol": "zoe"}
@@ -36,6 +38,7 @@
       "controls": ["reader"],
       "lme_map": "abstention (LongMemEval)",
       "note": "the packet may hold near rows (a vector query always returns k); the scripted reader answers only from a row that names the person asked about, so a packet that carries nothing relevant ends in 'I don't have that saved'. With the `reader` control it answers from the nearest row instead and goes red",
+      "params": {"play_group": "M"},
       "events": [{"do": "protocol_facts"}],
       "probes": [
         {"kind": "protocol", "metric": "idk_when_silent", "protocol": "zoe"}

@@ -404,6 +404,11 @@ def _strip(rows: "list[dict]") -> "list[dict]":
     return [{k: v for k, v in r.items() if k != "evidence"} for r in rows]
 
 
+def _k1(rows: "list[dict]") -> "list[dict]":
+    """The K1 precision counts of a seed's rows (the observation veto reads these; ``_strip`` drops the evidence they come from)."""
+    return [gates.k1_evidence(r) for r in rows if str(r.get("id", "")).startswith("K1.") and r.get("verdict") != "SKIP"]
+
+
 def phase_z0(ctx: Ctx, seeds: tuple, store: list, by_id: dict) -> None:
     from . import artifact, runner
     from .arms import make_arm
@@ -553,7 +558,7 @@ def run_arm_seed(ctx: Ctx, variant: str, seed: str, box_s: float, store: list, b
         "hard_skipped": hard_skipped, "hard_skipped_why": hard_skip_why, "instrument": {"ok": inst["ok"] and getattr(ctx, "arm_controls_ok", False),
                                                       "lab_controls_red": inst["lab_controls_red"], "arm_controls": ctx.measure[variant].get("arm_controls")},
         "cells_ran": ran, "cells_selected": len(rows), "duration_s": round(ctx.host.mono() - t0, 1), "cells": _strip(rows),
-        "retain": arm.measure()}
+        "k1": _k1(rows), "retain": arm.measure()}
     ctx.log(f"{variant} {seed}: {ran}/{len(rows)} cells ran in {ctx.host.mono() - t0:.0f}s; hard violations {len(ctx.seed_runs[variant][seed]['hard_violations'])}"
             f"; hard skipped {hard_skipped}")
 
