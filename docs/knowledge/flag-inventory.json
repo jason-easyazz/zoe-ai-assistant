@@ -4186,6 +4186,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_ROLE_GUESS_GUARD": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/role_guess_guard.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_ROSTER_NEUTRAL_ASK": {
         "defaults": [
           "False"
