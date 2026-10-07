@@ -21,52 +21,47 @@ pytestmark = pytest.mark.ci_safe
 
 # ── Minimal stubs so intent_router can be imported without infra ──────────────
 
-# Names WE inserted into sys.modules (not ones that were already imported).
-# teardown_module pops them so later test files import the real modules —
-# leaking the stubs broke e.g. `from openclaw_ws import NODE_BIN` downstream.
-_INSERTED_STUBS: list[str] = []
+# The stubs live ONLY while this module's tests run: a module-scoped autouse
+# fixture installs them and restores sys.modules afterwards. They must never be
+# installed at import/collection time — that leaks a stub `memory_digest` (no
+# `_load_todays_messages`, no `_AFFECT_STOPWORDS`) into every other test module
+# in the same process, and a `teardown_module` hook cannot undo it when this
+# module's tests are deselected (`-k`, `-m`, `--deselect`) because it never runs.
+def _build_stubs() -> dict[str, types.ModuleType]:
+    def mod(name: str, **attrs) -> types.ModuleType:
+        m = types.ModuleType(name)
+        for k, v in attrs.items():
+            setattr(m, k, v)
+        return m
+
+    stubs = {
+        "psycopg2": mod("psycopg2", connect=mock.MagicMock(return_value=mock.MagicMock())),
+        "database": mod("database", get_db=mock.MagicMock()),
+        "db_pool": mod("db_pool", get_db_ctx=mock.MagicMock()),
+        "zoe_agent": mod("zoe_agent", run_zoe_agent=mock.AsyncMock(return_value="ok")),
+        "openclaw_ws": mod("openclaw_ws", openclaw_cli=mock.AsyncMock(return_value="ok")),
+        "multica_client": mod("multica_client", MULClient=mock.MagicMock()),
+        "background_runner": mod("background_runner", enqueue_background_task=mock.AsyncMock()),
+    }
+    for name in ["agents_registry", "a2a_client", "evolution_notice", "memory_digest", "agent_sync"]:
+        stubs[name] = mod(name)
+    return stubs
 
 
-def _stub_psycopg2():
-    m = types.ModuleType("psycopg2")
-    m.connect = mock.MagicMock(return_value=mock.MagicMock())
-    if "psycopg2" not in sys.modules:
-        sys.modules["psycopg2"] = m
-        _INSERTED_STUBS.append("psycopg2")
+@pytest.fixture(scope="module", autouse=True)
+def _intent_router_stubs():
+    """Stub the infra modules (only the ones not already importable/imported) for this module's tests, then restore."""
+    inserted: list[str] = []
+    for name, stub in _build_stubs().items():
+        if name not in sys.modules:
+            sys.modules[name] = stub
+            inserted.append(name)
+    try:
+        yield
+    finally:
+        for name in inserted:
+            sys.modules.pop(name, None)
 
-
-def _stub_module(name: str, **attrs):
-    m = types.ModuleType(name)
-    for k, v in attrs.items():
-        setattr(m, k, v)
-    if name not in sys.modules:
-        sys.modules[name] = m
-        _INSERTED_STUBS.append(name)
-
-
-def teardown_module(module):  # noqa: ARG001 — pytest hook signature
-    """Remove our sys.modules stubs so other test files see real modules."""
-    for name in _INSERTED_STUBS:
-        sys.modules.pop(name, None)
-    _INSERTED_STUBS.clear()
-
-
-def _setup_stubs():
-    _stub_psycopg2()
-    _stub_module("database", get_db=mock.MagicMock())
-    _stub_module("db_pool", get_db_ctx=mock.MagicMock())
-    _stub_module("zoe_agent", run_zoe_agent=mock.AsyncMock(return_value="ok"))
-    _stub_module("openclaw_ws", openclaw_cli=mock.AsyncMock(return_value="ok"))
-    _stub_module("multica_client", MULClient=mock.MagicMock())
-    _stub_module("background_runner", enqueue_background_task=mock.AsyncMock())
-    for mod in [
-        "agents_registry", "a2a_client",
-        "evolution_notice", "memory_digest", "agent_sync",
-    ]:
-        _stub_module(mod)
-
-
-_setup_stubs()
 
 # Now we can import intent_router
 import importlib.util, pathlib, os
@@ -89,7 +84,7 @@ def _load_intent_router():
 
 
 @pytest.fixture(scope="module")
-def ir():
+def ir(_intent_router_stubs):
     return _load_intent_router()
 
 
