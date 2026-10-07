@@ -467,6 +467,11 @@ class MemPalaceAgentArm(BenchSurface, Arm):
             return "that names something you asked me to forget; it was not stored"
         if name == "mempalace_add_drawer" and str(args.get("room", "")).lower() in RESERVED_ROOMS:
             return f"the room {args.get('room')!r} is reserved"
+        if self.mc.anchor_check and name == "mempalace_update_drawer" and args.get("content"):
+            # the drawer is overwritten IN PLACE by the real server: the check has to run before the call, not after (``_record_write`` only relabels what is already gone)
+            pv = self._prov.get(str(args.get("drawer_id", "")))
+            if pv is not None and pv.authority_class == USER_STATED and not self._anchored(str(args["content"]), s):
+                return "a drawer holding what the owner said is only rewritten with the owner's own words"
         if self.mc.anchor_check and name in ("mempalace_kg_supersede", "mempalace_kg_invalidate"):
             old = args.get("old_object") if name == "mempalace_kg_supersede" else args.get("object")
             pv = self._kg_prov.get((str(args.get("subject", "")).lower(), str(args.get("predicate", "")).lower(), str(old).lower()))

@@ -677,7 +677,8 @@ class Window:
                 self.host.sleep(2.0)
             self.log(f"{u} started again: {'active' if up else 'NOT ACTIVE after ' + format(self.cfg.health_wait_s, '.0f') + 's'}")
             ok = ok and up
-            self.stopped_extra.remove(u)
+            if up:
+                self.stopped_extra.remove(u)                 # a unit that never became active stays listed: restore() retries it (and may stop the clone first)
         return ok
 
     def restart_clone(self, ctx_size: "Optional[int]") -> None:
@@ -690,13 +691,13 @@ class Window:
         """Put everything back. Idempotent; stops only the units and the container this tool started; never raises."""
         cfg, host = self.cfg, self.host
         self.log("RESTORE: stopping what this window started")
-        if self.stopped_extra:
-            self.start_extra_units()                    # a unit the reflection phase stopped for the 12B pair comes back whatever happened
         for key in ("hindsight", "clone", "shim"):
             if key == "clone" and cfg.skip_brain_stop:
                 continue                                    # nothing was started under that name
             host.run(["systemctl", "--user", "stop", UNITS[key]], timeout=60)
             host.run(["systemctl", "--user", "reset-failed", UNITS[key]])
+        if self.stopped_extra:
+            self.start_extra_units()                        # a unit the reflection phase stopped for the 12B pair comes back whatever happened - AFTER the clone (maybe the 12B) is stopped
         host.run(["docker", "compose", "-f", str(cfg.compose), "down"], timeout=120)
         if cfg.skip_brain_stop:
             self.log(f"RESTORE: {cfg.unit} was never stopped (test hook): checking it is still healthy")

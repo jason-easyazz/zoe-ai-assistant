@@ -289,6 +289,9 @@ class HMAArm(Arm):
         for u in self.refl.recall(self._user, query, budget=budget):
             text = str(u.get("text") or "")
             if self.refl.kind(u) == "observation":
+                if self.controls.authority and self._attr_conflict(text, hits):      # the SAME authority gate as a fact: a derived line never rides ahead of the owner's exact words
+                    self.authority_dropped += 1
+                    continue
                 obs.append({"text": text, "class": self.refl.cls_of(u)})
                 continue
             if self.one_packet and (self.refl.sources(u) & have_ids or " ".join(text.lower().split()) in have_text or any(t and t in " ".join(text.lower().split()) for t in have_text if len(t) > 20)):

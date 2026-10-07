@@ -2226,6 +2226,70 @@ def test_a_listed_unit_comes_back_on_an_abort_and_on_the_windows_restore(box, tm
     assert w2.stop_extra_units(()) is None and w2.start_extra_units() is True                          # idempotent, nothing listed = nothing stopped
 
 
+def _kokoro_after_the_12b_is_unloaded(host):
+    """Index check on the command stream: the 12B clone start, the next clone start (the unload: back to the 4B at the live context), and the Kokoro start."""
+    j = host.joined()
+    i12 = next(i for i, c in enumerate(j) if c.startswith("systemd-run") and MODEL12 in c)
+    unload = next(i for i, c in enumerate(j) if i > i12 and c.startswith("systemd-run"))
+    start = next(i for i, c in enumerate(j) if "systemctl --user start kokoro-tts.service" in c)
+    return i12, unload, start, j[unload]
+
+
+def test_a_stopped_unit_is_started_only_after_the_12b_is_unloaded_on_the_pass_path_and_on_an_abort(box, tmp_path, monkeypatch):
+    """Kokoro was stopped because the 12B pair does not fit beside it: starting it while the 12B holds ~7.5 GB can fail or OOM. Put the start back before the unload and this goes red."""
+    host = ReflectHost(box)
+    w, ctx, store, by_id = reflect_env(box, tmp_path, monkeypatch, host, reflect_stop_units=("kokoro-tts.service",))
+    measure.phase_reflect(ctx, "zmb-v1", store, by_id, INST)
+    i12, unload, start, cmd = _kokoro_after_the_12b_is_unloaded(host)
+    assert i12 < unload < start and "--ctx-size 8192" in cmd and MODEL12 not in cmd and len(host.starts()) == 3 and w.stopped_extra == []        # one unload, not two
+    host2 = ReflectHost(box)
+    w2, ctx2, store, by_id = reflect_env(box, tmp_path, monkeypatch, host2, reflect_stop_units=("kokoro-tts.service",))
+    calls = []
+
+    def boom(*a, **k):
+        calls.append(1)
+        if len(calls) >= 2:
+            raise bakeoff.Aborted("a voice turn started while the 12B was up")
+        return {"k_cells": [], "items": {"pass": 0, "n": 0}}
+    monkeypatch.setattr(measure, "reflect_variant_h2", boom)
+    with pytest.raises(bakeoff.Aborted, match="voice turn"):
+        measure.phase_reflect(ctx2, "zmb-v1", store, by_id, INST)
+    i12, unload, start, cmd = _kokoro_after_the_12b_is_unloaded(host2)
+    assert i12 < unload < start and "--ctx-size 8192" in cmd and w2.stopped_extra == []
+
+
+def test_a_clone_that_will_not_unload_keeps_the_unit_stopped_until_the_restore_has_stopped_the_clone(box, tmp_path, monkeypatch):
+    host = ReflectHost(box)
+    w, ctx, store, by_id = reflect_env(box, tmp_path, monkeypatch, host, reflect_stop_units=("kokoro-tts.service",))
+    real = w.restart_clone
+    n = []
+
+    def flaky(ctx_size):
+        n.append(ctx_size)
+        if len(n) == 1:                                                                            # the unload after the 12B pair (the first restart_clone call of the phase)
+            raise bakeoff.Aborted("the 4B would not come back")
+        return real(ctx_size)
+    monkeypatch.setattr(w, "restart_clone", flaky)
+    w.stop_extra_units(w.cfg.reflect_stop_units)
+    measure.phase_reflect(ctx, "zmb-v1", store, by_id, INST)
+    assert "systemctl --user start kokoro-tts.service" not in "\n".join(host.joined()) and w.stopped_extra == ["kokoro-tts.service"]
+    assert any("was not unloaded" in x for x in ctx.notes)
+    assert w.restore()
+    j = host.joined()
+    stop_clone = max(i for i, c in enumerate(j) if "systemctl --user stop zoe-bakeoff-gemma.service" in c)
+    assert stop_clone < host.index("systemctl --user start kokoro-tts.service") and w.stopped_extra == []
+
+
+def test_a_unit_that_never_became_active_stays_listed_so_the_restore_retries_it(box):
+    host = ReflectHost(box)
+    w = make_window(box, host, deep_unit=DEEP, reflect_stop_units=("kokoro-tts.service",))
+    w.stop_extra_units(w.cfg.reflect_stop_units)
+    host.live_active = False                                                                       # is-active answers "inactive" for everything
+    assert w.start_extra_units() is False and w.stopped_extra == ["kokoro-tts.service"]
+    host.live_active = True
+    assert w.start_extra_units() is True and w.stopped_extra == []
+
+
 # ══ ZMA: Zoe's live stack + MemPalace (2026-10-07) ═════════════════════════════════════════════════════════════════════════════════════════════════════
 
 def zma_m(**over):

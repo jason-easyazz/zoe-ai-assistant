@@ -370,6 +370,68 @@ def test_the_one_tool_one_packet_search_carries_reflections_beside_the_exact_wor
     a.close()
 
 
+def test_a_model_update_cannot_overwrite_a_drawer_the_owner_stated_with_words_the_owner_did_not_say():
+    """The real server rewrites a drawer IN PLACE, so the check is before the call: a refused update leaves the owner's exact words in the store. Break the floor and the text is gone."""
+    def run(**off):
+        a = mpa_cells.lab_arm("MPA", tuple(off))
+        a.reset(USER)
+        a.model = PlayModel([[("mempalace_add_drawer", {"wing": "user", "room": "family", "content": "My sister Tove lives in Perth"})]])
+        a.ingest([Turn("My sister Tove lives in Perth", "owner_taught")])
+        did = next(d for d, p in a._prov.items() if p.writer == "brain")
+        assert a._prov[did].authority_class == "user_stated"
+        a.model = PlayModel([[("mempalace_update_drawer", {"drawer_id": did, "content": "Tove has moved to Oslo"})]])
+        tr = a.ingest([Turn("Right then, what shall we have for dinner tonight", "owner_taught")]) and a.traces[-1]
+        return a, did, tr
+    a, did, tr = run()
+    assert a._need().drawers[did]["text"] == "My sister Tove lives in Perth" and a._prov[did].authority_class == "user_stated"
+    assert any(r.name == "mempalace_update_drawer" and r.refused and "owner" in r.refused for r in tr.tools)
+    a.close()
+    a, did, _tr = run(tool_floor=False)                                                                    # NEGATIVE CONTROL: the floor off, the owner's words are overwritten
+    assert a._need().drawers[did]["text"] == "Tove has moved to Oslo"
+    a.close()
+    a, did, _tr = run(anchor_check=False)
+    assert a._need().drawers[did]["text"] == "Tove has moved to Oslo"
+    a.close()
+
+
+def test_a_model_update_with_the_owners_own_words_is_allowed_and_a_model_class_drawer_may_be_rewritten():
+    a = mpa_cells.lab_arm("MPA")
+    a.reset(USER)
+    a.model = PlayModel([[("mempalace_add_drawer", {"wing": "user", "room": "family", "content": "My sister Tove lives in Perth"}),
+                          ("mempalace_add_drawer", {"wing": "user", "room": "notes", "content": "Tove seems happy in Perth"})]])
+    a.ingest([Turn("My sister Tove lives in Perth", "owner_taught")])
+    by_text = {a._need().drawers[d]["text"]: d for d, p in a._prov.items() if p.writer == "brain"}
+    own, composed = by_text["My sister Tove lives in Perth"], by_text["Tove seems happy in Perth"]
+    assert a._prov[composed].authority_class == "model_from_transcript"
+    a.model = PlayModel([[("mempalace_update_drawer", {"drawer_id": own, "content": "My sister Tove lives in Perth"}),
+                          ("mempalace_update_drawer", {"drawer_id": composed, "content": "Tove is delighted in Perth"})]])
+    a.ingest([Turn("Right then, what shall we have for dinner tonight", "owner_taught")])
+    assert a._need().drawers[composed]["text"] == "Tove is delighted in Perth"
+    assert a._need().drawers[own]["text"] == "My sister Tove lives in Perth" and a._prov[own].authority_class == "user_stated"
+    a.close()
+
+
+def test_a_reflective_observation_that_contradicts_the_owners_words_is_gated_like_a_fact():
+    """The observation branch used to append and ``continue`` before the authority check: the derived line rode ahead of the owner's exact words and into the exported packet."""
+    def run(authority: bool):
+        a = mpa_cells.lab_arm("HMA", () if authority else ("authority",))
+        a.reset(USER)
+        a.ingest([Turn("User's friend Aldo lives in Bergvik.", "owner_taught")])
+        a.refl.recall = lambda user, query, budget="low": [{"id": "o1", "text": "User's friend Aldo lives in Oldmere.", "fact_type": "observation", "tags": ["class:model_from_transcript"]},
+                                                          {"id": "o2", "text": "Aldo enjoys long walks.", "fact_type": "observation", "tags": ["class:model_from_transcript"]}]
+        a.packet_before = a.authority_dropped
+        rows = a.packet("where does Aldo live", 8)
+        aug = a._augment("where does Aldo live", [{"drawer_id": d, "text": r["text"]} for d, r in ((r["id"], r) for r in a.mpa.search("where does Aldo live", 8))])
+        return a, rows, aug
+    a, rows, aug = run(True)
+    shown = " ".join(r["text"].lower() for r in rows) + " " + " ".join(x["text"].lower() for x in aug)
+    assert "bergvik" in shown and "oldmere" not in shown and "long walks" in shown and a.authority_dropped >= 2     # the contradicting one dropped, the harmless one kept
+    a.close()
+    a, rows, aug = run(False)                                                                                     # NEGATIVE CONTROL: the gate off, the contradiction is exported
+    assert "oldmere" in " ".join(r["text"].lower() for r in rows)
+    a.close()
+
+
 def test_the_glue_is_counted_for_decision_rule_g3():
     assert 300 < mpa_glue_lines() < 1000
 

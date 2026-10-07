@@ -895,7 +895,7 @@ def phase_reflect(ctx: Ctx, seed: str, store: list, by_id: dict, instrument_of: 
         ctx.reflect = {"ctx": cfg.reflect_ctx, "pairs": {}, "variants": {}, "why": "neither H2 nor HMA is in this window"}
         return
     rec = ctx.reflect = {"ctx": cfg.reflect_ctx, "pairs": {}, "variants": {}, "clone_pss_8k_mb": unit_pss_mb(ctx, UNITS_CLONE)}
-    swapped, stopped = False, False
+    swapped, stopped, at_live = False, False, True            # at_live: the clone runs the 4B at the LIVE context (nothing big is resident)
     for pair in pairs:
         need_s = reflect_pair_min(pair, cfg.arms) * 60.0
         left = win.time_left_s() - TAIL_MIN * 60.0
@@ -919,6 +919,7 @@ def phase_reflect(ctx: Ctx, seed: str, store: list, by_id: dict, instrument_of: 
                         if not fits:
                             raise _PairStop("the floor would be breached: " + arith)
                     t_load = host.mono()
+                    at_live = False                                  # from here the big model may be resident, even if the swap itself raises half way
                     win.swap_clone(spec, pair, max(cfg.health_wait_s * (2.0 if pair == "12B@32k" else 1.0), 240.0))
                     info["health_s"] = round(host.mono() - t_load, 1)
                     info["model"] = spec["model"]
@@ -945,12 +946,22 @@ def phase_reflect(ctx: Ctx, seed: str, store: list, by_id: dict, instrument_of: 
                     ctx.notes.append(f"reflection {pair} stopped: {exc}")
                 finally:
                     if pair == "12B@32k":
-                        win.start_extra_units()                  # the listed units come back on EVERY exit path (pass, skip, abort)
+                        # The listed units come back on EVERY exit path (pass, skip, abort) - but only AFTER the 12B is unloaded: Kokoro was stopped because the 12B pair does not
+                        # fit beside it (docs/knowledge/zoe-memory-bench.md), so starting it while the 12B holds ~7.5 GB can fail or OOM. If the unload fails, the unit stays in
+                        # ``stopped_extra`` and the window's restore (which stops the clone first) starts it.
+                        if not at_live:
+                            try:
+                                win.restart_clone(None)
+                                at_live = True
+                            except Exception as exc:             # noqa: BLE001 - a finally must not mask the pair's own outcome; restore() retries the unload and the start
+                                ctx.notes.append(f"reflection {pair}: the 12B was not unloaded ({exc}); the listed units stay stopped until the window's restore")
+                        if at_live:
+                            win.start_extra_units()
                     floors = [x["mem_available_mb"] for x in (ctx.sampler.samples if ctx.sampler else []) if x["label"].startswith(label)]
                     info["mem_available_floor_mb"] = round(min(floors), 0) if floors else None
         if info["status"].startswith("skipped"):
             ctx.notes.append(f"reflection {pair}: {info['status']}")
-    if swapped:
+    if swapped and not at_live:
         win.restart_clone(None)                                    # back to the live context: the forgetting probes' t+6 replay and the report still use the clone
     ctx.log("reflection phase: " + "; ".join(f"{k} {v['status']}" for k, v in rec["pairs"].items()))
 
