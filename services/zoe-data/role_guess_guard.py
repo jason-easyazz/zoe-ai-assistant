@@ -207,17 +207,40 @@ def _owners_compatible(claim, evidenced: list) -> bool:
     return False
 
 
+_CLAUSE_SPLIT = re.compile(r"\s*;\s*|,?\s+\b(?:while|whereas|but|however)\b\s+", re.IGNORECASE)
+_CAPS = re.compile(r"\b[A-Z][a-z][\w'’-]*")
+_NOT_NAMES = frozenset({"the", "a", "an", "my", "your", "his", "her", "their", "our", "user", "i", "it", "she", "he",
+                        "they", "we", "and", "but", "while", "whereas", "however", "yes", "no", "so"})
+
+
 def _evidence_owners(name: str, role: str, evidence: str) -> list:
     """The owners the evidence gives ``role`` in the sentences that tie it to ``name``."""
     variants = {v.lower() for v in _pr._variants(role.lower())}
     role_rx = re.compile(r"\b(?:" + "|".join(sorted((re.escape(v) for v in variants), key=len, reverse=True)) + r")s?\b",
                          re.IGNORECASE)
+    first = re.compile(rf"\b{re.escape(name.split()[0])}\b", re.IGNORECASE)
     owners: list = []
     for sent in _pr._sentences(evidence):
         if not _pr.role_assignment_supported(name, role, sent):
             continue
-        for rm in role_rx.finditer(sent):
-            owners.append(_owner_at(sent, rm.start(), rm.end()))
+        # Bind each role occurrence to ITS holder: "Anika is Callum's wife, while Mary is your wife"
+        # gives Anika Callum, not Callum AND the user. A clause that names somebody else and not her is
+        # that person's; a clause naming nobody (or her) is hers.
+        bound: list = []
+        every: list = []
+        pos = 0
+        for clause in _CLAUSE_SPLIT.split(sent):
+            at = sent.find(clause, pos)
+            pos = at + len(clause)
+            others = [w for w in _CAPS.findall(clause) if w.lower() not in _NOT_NAMES
+                      and w.lower() != name.split()[0].lower()]
+            hers = bool(first.search(clause))
+            for rm in role_rx.finditer(clause):
+                o = _owner_at(sent, at + rm.start(), at + rm.end())
+                every.append(o)
+                if hers or not others:
+                    bound.append(o)
+        owners.extend(bound or every)
     return owners
 
 
@@ -261,16 +284,21 @@ _HYPO_ANY = re.compile(r"\b(?:if|whether|wonder|wondering|suppose|supposing|hypo
                        re.IGNORECASE)
 
 
+# A denial ("Anika is not my mother", "was never my wife") is the opposite of a stated role.
+_NEGATED = re.compile(r"\b(?:not|never|no\s+longer|isn'?t|wasn'?t|aren'?t|weren'?t|ain'?t|nobody|neither|nor)\b|n['’]t\b",
+                      re.IGNORECASE)
+
+
 def stated_text(user_text: str) -> str:
     """The part of the user's message that STATES things. A question ("Is my mother Anika?"), a
-    wondering or a hypothetical ("maybe", "if", "I think") asks about a relationship; it never
-    evidences one. Clause-wise, so "Anika is my mother, who is she again?" keeps its statement."""
+    wondering or a hypothetical ("maybe", "if", "I think") asks about a relationship, and a denial
+    ("is not my mother") says the opposite; none of them evidences one. Clause-wise, so "Anika is my mother, who is she again?" keeps its statement."""
     kept: list[str] = []
     for sent in _pr._sentences(user_text or ""):
         clauses = [c for c in re.split(r"\s*[,;]\s*|\s+(?:but|and)\s+", sent) if c.strip()]
         asks = sent.rstrip().endswith("?")
         for idx, c in enumerate(clauses):
-            if _HYPO_LEAD.search(c) or _HYPO_ANY.search(c):
+            if _HYPO_LEAD.search(c) or _HYPO_ANY.search(c) or _NEGATED.search(c):
                 continue
             if asks and len(clauses) == 1:     # "My mother is Anika?" - a question, not a statement
                 continue

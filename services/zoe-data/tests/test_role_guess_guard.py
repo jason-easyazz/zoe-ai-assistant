@@ -263,6 +263,29 @@ def test_a_lowercase_owner_after_of_is_compared_with_the_packet_owner(reply):
     assert rg.neutralise("Anika Reyes is the wife of your brother.", NAMES, stated, user_text=ASK)[1] == []
 
 
+@pytest.mark.parametrize("user_text", [
+    "Anika Reyes is not my mother",
+    "Anika Reyes was never my wife.",
+    "Anika Reyes isn't my mother, she's my aunt",
+    "No, Anika Reyes is no longer my wife",
+])
+def test_a_denial_never_evidences_the_role_it_denies(user_text):
+    role = "wife" if "wife" in user_text else "mother"
+    reply = f"Anika Reyes is your {role}."
+    out, guessed = rg.neutralise(reply, NAMES, ROLELESS, user_text=user_text)
+    assert guessed == [f"anika~{role}"] and role not in out.lower(), (user_text, out)
+    assert rg.stated_text(user_text) == "" or role not in rg.stated_text(user_text)
+
+
+def test_each_role_occurrence_binds_to_its_own_holder():
+    packet = ROLELESS + "- Anika is Callum's wife, while Mary is your wife\n"
+    assert rg.neutralise("Anika Reyes is Callum's wife.", NAMES, packet, user_text=ASK)[1] == []
+    assert rg.neutralise("Anika Reyes is your wife.", NAMES, packet, user_text=ASK)[1] == ["anika~wife"]
+    swapped = ROLELESS + "- Mary is Callum's wife, while Anika is your wife\n"
+    assert rg.neutralise("Anika Reyes is your wife.", NAMES, swapped, user_text=ASK)[1] == []
+    assert rg.neutralise("Anika Reyes is Callum's wife.", NAMES, swapped, user_text=ASK)[1] == ["anika~wife"]
+
+
 def test_a_first_name_two_people_share_is_not_a_handle():
     out, guessed = rg.neutralise("Dana is your sister.", ["Dana Reyes", "Dana Whitfield"], "- Dana Reyes: 1 May 1990", "")
     assert guessed == []
