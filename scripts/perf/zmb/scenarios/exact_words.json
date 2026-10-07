@@ -40,8 +40,8 @@
       "tier": "store",
       "kind": "script",
       "lme_map": "information extraction, verbatim; MemPalace's and Hindsight's verbatim modes are built for it",
-      "note": "scored by EXACT SUBSTRING of the normalised sentence (case, accents, whitespace, closing punctuation) in what the arm's exact-words lookup returns, one hit per needle; n = 20 items. A same-shape decoy sentence about someone else is taught beside every choice needle, so a nearest-row answer is wrong. An arm that keeps only a rewritten fact (Z0's extractor, a concise Hindsight extraction) returns the rewrite and FAILS, which is the finding: Z0 has no exact-reference index (the chat history is not searchable by the brain), so this is a TARGET on Z0",
-      "expected": "FAIL",
+      "note": "scored by EXACT SUBSTRING of the normalised sentence (case, accents, whitespace, closing punctuation) in what the arm's exact-words lookup returns, one hit per needle; n = 20 items. A same-shape decoy sentence about someone else is taught beside every choice needle, so a nearest-row answer is wrong. An arm that keeps only a rewritten fact (Z0's extractor, a concise Hindsight extraction) returns the rewrite and FAILS, which is the finding: Z0 has no exact-reference index (the chat history is not searchable by the brain), so this is a TARGET on Z0 FIXED 2026-10-07 (this PR): an exact-words index over the owner's own verbatim turns (`exact_words.py`: written post-turn by `memory_extractor.extract_and_ingest` on both lanes and caught up nightly from `chat_messages`; own-words wall, per user, forget-erased, ledger-checked on read) read by the for-prompt packet when the question asks what the owner said or when (`wants`). Before: Z0 J1 0 of 20, J2 0 of 20. Control `exact_index` (ZOE_EXACT_WORDS=off)",
+      "expected": "PASS",
       "params": {
         "play_group": "J"
       },
@@ -61,6 +61,9 @@
           "k": 5,
           "min_rate": 0.9
         }
+      ],
+      "controls": [
+        "exact_index"
       ]
     },
     {
@@ -69,8 +72,8 @@
       "tier": "store",
       "kind": "script",
       "lme_map": "temporal reasoning; knowledge update's 'when'",
-      "note": "shares one play with J1 (one ingest, two probes). The hit is the first returned row that names the needle's subject (the topic / the person), so an arm that kept only a rewritten fact can still answer 'when' from that row's date; a decoy filed a day earlier is a wrong answer. day = days ago, the number the turn was ingested with. A TARGET on Z0: its deterministic extractor keeps nothing about most of these sentences (they are ordinary speech, not facts), so there is no row about the person or the topic to carry a date; the service does date every row it writes (captured_at / added_ts), which is why this cell can turn green without a new store",
-      "expected": "FAIL",
+      "note": "shares one play with J1 (one ingest, two probes). The hit is the first returned row that names the needle's subject (the topic / the person), so an arm that kept only a rewritten fact can still answer 'when' from that row's date; a decoy filed a day earlier is a wrong answer. day = days ago, the number the turn was ingested with. A TARGET on Z0: its deterministic extractor keeps nothing about most of these sentences (they are ordinary speech, not facts), so there is no row about the person or the topic to carry a date; the service does date every row it writes (captured_at / added_ts), which is why this cell can turn green without a new store FIXED 2026-10-07 (this PR): an exact-words index over the owner's own verbatim turns (`exact_words.py`: written post-turn by `memory_extractor.extract_and_ingest` on both lanes and caught up nightly from `chat_messages`; own-words wall, per user, forget-erased, ledger-checked on read) read by the for-prompt packet when the question asks what the owner said or when (`wants`). Before: Z0 J1 0 of 20, J2 0 of 20. Control `exact_index` (ZOE_EXACT_WORDS=off)",
+      "expected": "PASS",
       "params": {
         "play_group": "J"
       },
@@ -90,6 +93,9 @@
           "k": 5,
           "min_rate": 0.9
         }
+      ],
+      "controls": [
+        "exact_index"
       ]
     }
   ]

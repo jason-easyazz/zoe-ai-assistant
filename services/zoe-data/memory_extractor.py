@@ -9,6 +9,7 @@ persist them through MemoryService. It is intentionally lightweight:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import re
@@ -986,6 +987,16 @@ async def extract_and_ingest(
             except Exception as exc:
                 logger.debug("pronoun chain-anchor lookback failed: %s", exc)
     own = _own_words.analyze(user_message)
+    # The owner's own verbatim words, indexed beside the facts (exact_words: "what exactly did I say about X", "when did I
+    # say it" - ZMB J1 / J2). Post-turn (this runs in a background task on both lanes), bounded, never raises; a turn the
+    # speaker gate did not confirm, a pasted block and a question are not indexed (exact_words.index_turn decides).
+    try:
+        if speaker_verified is not False and not await _memory_opted_out(user_id):
+            import exact_words
+            await asyncio.wait_for(
+                exact_words.index_turn(user_id, user_message, source=source, speaker_verified=speaker_verified), 3.0)
+    except Exception as exc:  # noqa: BLE001 - the index is an extra: a turn's facts never wait on it
+        logger.debug("memory_extractor: exact-words index skipped (%s)", type(exc).__name__)
     try:
         candidates, guard_drops = _extract_with_drops(
             user_message, assistant_response, prev_user_message=prev_user_message

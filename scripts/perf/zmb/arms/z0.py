@@ -138,8 +138,11 @@ class Z0Arm(Arm):
         self._prev_user = ""
         self._refused = 0
         self.svc.memory_tombstones.clear_all(user_id)
+        xw = importlib.import_module("exact_words")        # the owner's verbatim turns (j): the lab's own in-process index, as the tests' (the SQL one is Postgres)
+        xw.set_backend(xw.MemoryBackend())
 
     def close(self) -> None:
+        importlib.import_module("exact_words").set_backend(None)
         self.graph.close()
         if self._lab_service is not None:
             self._lab_service.close()
@@ -227,6 +230,12 @@ class Z0Arm(Arm):
             rep.written += 1
         return ref
 
+    async def _index_exact(self, t: Turn, source: str, verified: "bool | None") -> None:
+        """The post-turn hook of ``memory_extractor.extract_and_ingest``: the owner's verbatim words into the exact-words index, said ``day_offset`` days ago."""
+        xw = importlib.import_module("exact_words")
+        when = _dt.datetime.now(_dt.timezone.utc).timestamp() - float(self._cur_day or 0) * 86400.0
+        await xw.index_turn(self._user, t.text, said_at=when, source=source, speaker_verified=verified)
+
     def _extract(self, t: Turn, prev: str):
         return self.svc.memory_extractor.extract_candidates(
             t.text, t.assistant_text, prev_user_message=prev or None)
@@ -238,6 +247,7 @@ class Z0Arm(Arm):
             rep.notes.append("assistant turn: never mined")
             return
         if sp == "owner_taught":
+            await self._index_exact(t, "voice_fact", None)
             # the live teach path (expert_dispatch store_fact) stamps a stable turn id and passes NO excerpt
             norm = re.sub(r"\s+", " ", t.text.lower()).strip()
             await self._ingest(t.text, "voice_fact", rep, confidence=0.9,
@@ -246,6 +256,7 @@ class Z0Arm(Arm):
         if sp in ("owner_typed", "owner_voice_verified", "panel_unverified", "third_party", "pasted_email"):
             source = "chat_regex" if sp in ("owner_typed", "third_party", "pasted_email") else "voice_regex"
             verified = {"owner_voice_verified": True, "panel_unverified": False}.get(sp)
+            await self._index_exact(t, source, verified)
             try:
                 from memory_quality import is_storable_fact
             except Exception:  # noqa: BLE001
@@ -406,13 +417,19 @@ class Z0Arm(Arm):
 
     # ── the capability axes ───────────────────────────────────────────────────
     def recall_exact(self, query: str, k: int = 5) -> "list[dict[str, Any]]":
-        """(j) What Z0's recall packet holds for "what exactly did I say about ...": the top-``k`` rows' TEXT (the extracted fact, as the brain sees it)
-        and the day each was captured. Z0 also keeps the owner's whole turn as ``source_excerpt`` metadata on the rows it extracted - but nothing
-        searches it and the packet does not carry it, so it is not an answer path (the nearest fix; measured by this cell turning green)."""
+        """(j) What Z0's recall packet holds for "what exactly did I say about ...": the owner's own VERBATIM turns that best match
+        (``exact_words.lookup``: the index the for-prompt packet's "Your own words" block reads, each with the day it was said), then the
+        ordinary top rows' TEXT (the extracted fact, as the brain sees it) and the day each was captured. Before the index (2026-10-07) only
+        the rows were there and the whole turn survived only as ``source_excerpt`` on the rows the extractor happened to extract: J1 / J2 0 of 20."""
         col = self._lab_service.col
         now = _dt.datetime.now(_dt.timezone.utc).timestamp()
         out = []
-        for r in self.recall(query, k):
+        xw = importlib.import_module("exact_words")
+        if xw.wants(query):          # the for-prompt packet's exact-words block: the owner's own verbatim turns, each with the day it was said
+            with self._ctl():
+                hits = self._run(xw.lookup(self._user, query, k=k))
+            out += [{"text": h.text, "day_offset": round((now - h.said_at) / 86400.0)} for h in hits]
+        for r in self.recall(query, max(k - len(out), 1)):
             ts = (col.rows.get(r["id"]) or ("", {}))[1].get("added_ts")
             out.append({"text": r["text"], "day_offset": round((now - float(ts)) / 86400.0) if ts else None})
         return out
@@ -434,8 +451,16 @@ class Z0Arm(Arm):
 
     def recall_linked(self, query: str, k: int = 8) -> "list[dict[str, Any]]":
         """(l) Z0's packet for a question that needs two facts: its ordinary recall. The relational block (people / dates from Postgres, behind
-        ``ZOE_MEMORY_COMPOSE_ENABLED``) is not in the lab, and it holds the people graph, not these facts: there is no associative second hop."""
-        return self.recall(query, k)
+        ``ZOE_MEMORY_COMPOSE_ENABLED``) is not in the lab, and it holds the people graph, not these facts. The second hop is
+        ``multi_hop_recall`` (subjects of a comparison searched one by one; a bridge through the entity the first fact names), the
+        same function the for-prompt packet calls."""
+        mh = importlib.import_module("multi_hop_recall")
+
+        async def search(q: str, limit: int = k):
+            return await self.service.search(q, user_id=self._user, limit=limit)
+        with self._ctl():
+            refs = self._run(mh.expand(search, query, self._run(search(query, k)), limit=k))
+        return [self._row(r.id, r.text, r.metadata) for r in refs]
 
     def protocol_answer(self, prompt: str, anchor: "tuple[str, ...]", fired: bool, k: int = 5) -> str:
         """(m, lab half) The scripted reader over Z0's packet when recall fired; nothing to answer from when it did not."""
