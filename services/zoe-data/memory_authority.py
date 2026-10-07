@@ -596,6 +596,38 @@ _LEAD_INTERJECTION_RE = re.compile(r"^\s*(?:(?:no|nope|nah|yes|yeah|yep|actually
                                    re.IGNORECASE)
 
 
+# "my mum lives in Bendigo, NOT BALLARAT" - a CONTRAST names the value being corrected away; it is
+# not a denial of the fact beside it. Counting that "not" as a polarity mismatch made the owner's own
+# explicit correction unsupported (class model_from_turn), so the stale row it corrects OUTRANKED it:
+# the new value was parked as a dispute, the old one stayed approved and was served as current
+# (day-sim "how's my mum" 2026-10-07: "...getting good care in Ballarat"). Only a clause that
+# names something the fact does not is a contrast; "not in Perth" beside "User lives in Perth" is
+# a denial and stays one.
+_CONTRAST_RE = re.compile(r"(?:,|;|\s[-\u2013\u2014])\s*(?:and\s+|but\s+)?not\s+(?P<neg>[^,;.!?]{1,40}?)\s*(?=[,;.!?]|$)",
+                          re.IGNORECASE)
+_NOT_A_CONTRAST = frozenset({"sure", "really", "yet", "quite", "very", "just", "too", "even", "much", "anymore",
+                             "any", "always", "often", "now", "going", "been", "true", "right", "well", "good",
+                             "great", "bad", "happy", "ok", "okay", "if", "when", "that", "this", "so"})
+
+
+_ARTICLES = frozenset({"a", "an", "the", "in", "at", "on", "to", "of"})
+
+
+def _without_contrast(win: str, fact: str) -> str:
+    """``win`` with each ", not <other value>" correction clause removed for the POLARITY check
+    only. A clause whose words appear in the fact (or that is a hedge, "not sure") is kept."""
+    fact_stems = {_stem(w) for w in _words(fact or "") if w.lower() not in _STOP | _ARTICLES}
+
+    def keep_or_drop(m: "re.Match[str]") -> str:
+        neg = _words(m.group("neg"))
+        if not neg or len(neg) > 4 or neg[0].lower() in _NOT_A_CONTRAST:
+            return m.group(0)
+        if {_stem(w) for w in neg if w.lower() not in _STOP | _ARTICLES} & fact_stems:
+            return m.group(0)
+        return ""
+    return _CONTRAST_RE.sub(keep_or_drop, win)
+
+
 def _window_is_a_statement_about_the_user(win: str, fact: str) -> bool:
     """The user's OWN, affirmative, first-person statement - not a question, a wish, a
     negation the fact does not share, or a sentence about someone else's relative.
@@ -603,7 +635,7 @@ def _window_is_a_statement_about_the_user(win: str, fact: str) -> bool:
     win = _LEAD_INTERJECTION_RE.sub("", win)
     if "?" in win or _QUESTION_START_RE.match(win):
         return False
-    if bool(_NEG_RE.search(win)) != bool(_NEG_RE.search(fact or "")):
+    if bool(_NEG_RE.search(_without_contrast(win, fact))) != bool(_NEG_RE.search(fact or "")):
         return False
     if _HYPOTHETICAL_RE.search(win):
         return False

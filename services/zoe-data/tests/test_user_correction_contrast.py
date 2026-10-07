@@ -1,0 +1,97 @@
+"""The owner's own correction "X, not Y" is the owner's word - it must retire Y, not be parked.
+
+Regression 2026-10-07 (live main 4ceb35ec): day-sim "how's my mum" answered "...getting good care
+in Ballarat" after "Actually, I got that wrong earlier - my mum lives in Bendigo, not Ballarat."
+Trace (logs + a live repro with a synthetic user): the turn digest's "User's mum lives in Bendigo"
+was classed ``model_from_turn`` because ``memory_authority._window_is_a_statement_about_the_user``
+counted the "not" of ", not Ballarat" as a polarity mismatch with the fact. A model-class write
+cannot contradict an earlier user-class row, so it was written ``disputed`` (AUTHORITY_BLOCKED
+kind=home) and "User's mum Ingrid lives in Ballarat" stayed ``approved`` - served as current beside
+the new value. Whether the reply asserted Ballarat then depended on the 4B's sampling.
+
+A ", not <other value>" clause is a contrast naming the value being corrected away; a clause that
+names the fact's own value, or a hedge ("not sure"), still counts as a denial.
+
+Break-the-fix control: with ``_without_contrast`` disabled the correction is parked as a dispute
+and the stale row stays approved (the incident). Real MemoryService over a fake collection, no
+model, no DB; synthetic names only.
+"""
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+
+import memory_authority as ma
+import memory_digest
+from test_memory_implicit_supersede import UID, _by_text, _flag, _patch_llm, _svc  # noqa: F401
+import memory_supersede as ms
+
+pytestmark = pytest.mark.ci_safe
+
+FIX = "Actually, I got that wrong earlier - my mum lives in Bendigo, not Ballarat."
+SAID_BALLARAT = "My mum Ingrid lives in Ballarat, and she's recovering from a hip replacement."
+OLD = "User's mum Ingrid lives in Ballarat"
+NEW = "User's mum lives in Bendigo"
+M = "User's mum lives in Bendigo"
+
+
+@pytest.mark.parametrize("fact,said,want", [
+    (M, FIX, True),
+    (M, "My mum lives in Bendigo, not Ballarat.", True),
+    ("User's birthday is 7 August", "My birthday is 7 August, not 8 July.", True),
+    ("User is a nurse", "I am a nurse, not a doctor.", True),
+    # the clause names the FACT's own value: that is a denial of it, not a contrast
+    ("User's mum lives in Ballarat", "My mum lives in Bendigo, not Ballarat.", False),
+    ("User's birthday is 8 July", "My birthday is 7 August, not 8 July.", False),
+    ("User is a doctor", "I am a nurse, not a doctor.", False),
+    # plain denials and hedges are unchanged
+    ("User lives in Perth", "I don't live in Perth.", False),
+    ("User lives in Perth", "I live in Perth, not in Perth.", False),
+    ("User lives in Perth", "I live in Perth, not sure about it.", False),
+])
+def test_contrast_clause_supports_the_new_value_only(fact, said, want):
+    assert ma.supports(fact, said) is want
+
+
+def test_the_correction_is_the_owners_own_derived_statement():
+    r = ma.resolve_write("turn_digest", NEW, anchor_text=FIX, user_id=UID)
+    assert r.cls == ma.USER_STATED_DERIVED and r.power >= ma.DERIVED_RANK
+
+
+def _run(monkeypatch):
+    _flag(monkeypatch, True)
+    svc, col = _svc(monkeypatch)
+    _patch_llm(monkeypatch, [{"type": "profile", "fact": NEW}])
+
+    async def go():
+        old = await svc.ingest(OLD, user_id=UID, source="turn_digest", memory_type="profile", confidence=0.82,
+                               status="approved", source_excerpt=SAID_BALLARAT, anchor_text=SAID_BALLARAT,
+                               user_turn_id="t-1")
+        assert col.rows[old.id][1]["authority_class"] == ma.USER_STATED_DERIVED   # the seed is the owner's word
+        res = await memory_digest.run_turn_digest(UID, FIX, session_id="s-fix")
+        return old.id, res
+
+    old, res = asyncio.run(go())
+    return svc, col, old, res
+
+
+def test_the_correction_retires_the_stale_home_and_the_packet_serves_only_the_new_one(monkeypatch):
+    svc, col, old, res = _run(monkeypatch)
+    new_id, new = _by_text(col, NEW)
+    assert new["status"] == "approved"                              # not parked as a dispute
+    assert col.rows[old][1]["status"] == "superseded"               # kept, never deleted
+    assert col.rows[old][1]["superseded_by_id"] == new_id
+    assert res["superseded"] == 1
+    served = [r.text for r in asyncio.run(svc.list_by_status(user_id=UID, status="approved"))]
+    assert served == [NEW]                                          # Ballarat is never served as current
+
+
+def test_negative_control_without_the_contrast_rule_the_stale_home_stays_current(monkeypatch):
+    monkeypatch.setattr(ma, "_without_contrast", lambda win, fact: win)   # the pre-fix behaviour
+    svc, col, old, res = _run(monkeypatch)
+    _, new = _by_text(col, NEW)
+    assert new["status"] == "disputed"                              # the incident: AUTHORITY_BLOCKED kind=home
+    assert col.rows[old][1]["status"] == "approved"                 # ... and Ballarat is still served
+    served = [r.text for r in asyncio.run(svc.list_by_status(user_id=UID, status="approved"))]
+    assert served == [OLD]
