@@ -182,3 +182,49 @@ def test_durable_user_fact_reads_the_class_and_never_raises():
     assert memory_service._durable_user_fact({"authority_class": "model_from_turn"}, "x") is False
     assert memory_service._durable_user_fact({}, "") is False
     assert memory_service._durable_user_fact(None, "") is False                                                 # never raises
+
+
+# ── an empty first hop (PR #1911 review round 2) ─────────────────────────────
+
+def test_a_comparison_whose_whole_sentence_missed_still_searches_each_subject():
+    dob = ref("dob", "Dana's birthday is on 14 March.")
+    appt = ref("appt", "User's dentist appointment is on 9 March.")
+    search = FakeSearch({"Dana": [dob], "dentist": [appt]})
+    got = run(mh.expand(search, "is Dana's birthday before my dentist appointment", [], limit=4))
+    assert [r.id for r in got] == ["dob", "appt"] and len(search.calls) == 2
+    # a relational question has nothing to bridge from with no first fact: unchanged, no search
+    search = FakeSearch({"Marlowby": [ref("b", "User's sister Tamsin lives in Marlowby.")]})
+    assert run(mh.expand(search, "who in my family lives near Rowan's school", [], limit=4)) == [] and search.calls == []
+
+
+def test_the_packet_endpoint_runs_the_second_hop_when_the_first_search_returns_nothing(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import auth
+    from routers import memories as memories_mod
+    dob = ref("dob", "Dana's birthday is on 14 March.")
+    appt = ref("appt", "User's dentist appointment is on 9 March.")
+    question = "is Dana's birthday before my dentist appointment"
+
+    class FakeSvc:
+        async def load_for_prompt(self, user_id, *, limit=20):
+            return []
+
+        async def search(self, q, *, user_id, limit=10, **_kw):
+            if q == question:
+                return []                                   # the whole sentence misses
+            return [dob] if "Dana" in q else [appt] if "dentist" in q else []
+
+        async def load_recent_for_prompt(self, user_id, **kw):
+            return []
+
+    monkeypatch.setattr(memory_service, "is_guest_memory_user", lambda uid: False)
+    monkeypatch.setattr(memories_mod, "_svc", lambda: FakeSvc())
+    monkeypatch.setattr(auth, "_ZOE_INTERNAL_TOKEN", "tok")
+    app = FastAPI()
+    app.include_router(memories_mod.router)
+    r = TestClient(app).get("/api/memories/for-prompt", headers={"X-Internal-Token": "tok"},
+                            params={"user_id": "u", "message": question, "limit": "12"})
+    assert r.status_code == 200
+    assert "14 March" in r.json()["packet"] and "9 March" in r.json()["packet"]

@@ -430,3 +430,209 @@ async def test_an_opted_out_user_is_not_indexed(svc, index, monkeypatch):
     await memory_extractor.extract_and_ingest("I told Dr Okafor I can only manage Tuesday afternoons for the dentist",
                                               user_id=USER, source="chat_regex")
     assert len(index.rows) == 0
+
+
+# ── the nightly catch-up obeys the hook's walls (PR #1911 review round 2) ────
+
+class _SqlLike(xw.SqlBackend):
+    """Passes the catch-up's ``isinstance(SqlBackend)`` gate but stores in the in-process index (the lab has no chat_messages)."""
+
+    def __init__(self, mem):
+        self._m = mem
+
+    async def add(self, *a, **k):
+        return await self._m.add(*a, **k)
+
+    async def count(self, user_id):
+        return await self._m.count(user_id)
+
+    async def delete_user(self, user_id):
+        return await self._m.delete_user(user_id)
+
+
+def _fake_history(monkeypatch, rows, *, page=None):
+    """Replace the Postgres page read with an in-memory keyset-paginated one over ``rows`` =
+    ``(id, content, epoch, metadata, created_at)``; returns the list of cursors it was called with."""
+    cursors: list = []
+    ordered = sorted(rows, key=lambda r: (r[4], r[0]), reverse=True)
+
+    async def fake_page(user_id, hours, cursor, limit):
+        cursors.append(cursor)
+        pool = [r for r in ordered if cursor is None or (r[4], r[0]) < cursor]
+        return pool[:limit]
+    monkeypatch.setattr(xw, "_backfill_page", fake_page)
+    if page:
+        monkeypatch.setattr(xw, "BACKFILL_PAGE", page)
+    return cursors
+
+
+def _turn(i, **kw):
+    t = NOW - 3600 - i * 700.0                      # 700 s apart: never one dedup bucket
+    return (f"m{i:04d}", f"I told Dana the garden gate number {i} is painted green now", t, kw.get("metadata"), f"2026-10-07T{i // 60:02d}:{i % 60:02d}:00")
+
+
+def _catch_up(monkeypatch, index, rows, **kw):
+    xw.set_backend(_SqlLike(index))
+    cursors = _fake_history(monkeypatch, rows, **kw)
+    return run(xw.backfill_recent(USER, hours=24)), cursors
+
+
+def test_the_catch_up_skips_a_user_who_opted_out_before_any_read(monkeypatch, index):
+    import user_prefs
+
+    async def opted_out(_uid, **_kw):
+        return True
+    monkeypatch.setattr(user_prefs, "is_memory_opted_out", opted_out)
+    wrote, cursors = _catch_up(monkeypatch, index, [_turn(1), _turn(2)])
+    assert wrote == 0 and not index.rows and cursors == []                 # nothing read, nothing written
+
+
+def test_the_catch_up_fails_closed_when_the_opt_out_cannot_be_read(monkeypatch, index):
+    import user_prefs
+
+    async def boom(_uid, **_kw):
+        raise RuntimeError("prefs down")
+    monkeypatch.setattr(user_prefs, "is_memory_opted_out", boom)
+    wrote, cursors = _catch_up(monkeypatch, index, [_turn(1)])
+    assert wrote == 0 and not index.rows and cursors == []
+
+
+def test_control_an_opted_in_user_is_caught_up(monkeypatch, index):
+    import user_prefs
+
+    async def opted_in(_uid, **_kw):
+        return False
+    monkeypatch.setattr(user_prefs, "is_memory_opted_out", opted_in)
+    wrote, _ = _catch_up(monkeypatch, index, [_turn(1), _turn(2)])
+    assert wrote == 2 and len(index.rows) == 2
+
+
+def test_the_catch_up_never_indexes_a_turn_the_speaker_gate_rejected(monkeypatch, index):
+    import user_prefs
+
+    async def opted_in(_uid, **_kw):
+        return False
+    monkeypatch.setattr(user_prefs, "is_memory_opted_out", opted_in)
+    rows = [_turn(1, metadata='{"user_id": "' + USER + '", "speaker_verified": false}'),
+            _turn(2, metadata='{"user_id": "' + USER + '"}'),
+            _turn(3, metadata="not json at all"),                           # malformed metadata is no verdict, not a rejection
+            _turn(4, metadata=None)]
+    wrote, _ = _catch_up(monkeypatch, index, rows)
+    assert wrote == 3
+    assert not any("number 1 " in r["text"] for r in index.rows.values())
+
+
+def test_speaker_rejected_reads_only_an_explicit_rejection():
+    assert xw.speaker_rejected('{"speaker_verified": false}') is True
+    assert xw.speaker_rejected('{"speaker_verified": true}') is False
+    assert xw.speaker_rejected('{"user_id": "u"}') is False
+    assert xw.speaker_rejected(None) is False and xw.speaker_rejected("{broken") is False
+
+
+def test_the_catch_up_reaches_every_turn_of_a_long_window_not_the_first_page(monkeypatch, index):
+    import user_prefs
+
+    async def opted_in(_uid, **_kw):
+        return False
+    monkeypatch.setattr(user_prefs, "is_memory_opted_out", opted_in)
+    rows = [_turn(i) for i in range(1, 12)]                                  # 11 turns, 3 per page
+    wrote, cursors = _catch_up(monkeypatch, index, rows, page=3)
+    assert wrote == 11 and len(index.rows) == 11                              # the oldest AND the newest are both indexed
+    assert cursors[0] is None and len(cursors) == 4 and len(set(cursors)) == 4   # advanced, never re-read the same page
+
+
+def test_the_ballast_bound_gives_up_the_oldest_rows_never_the_newest(monkeypatch, index):
+    import user_prefs
+
+    async def opted_in(_uid, **_kw):
+        return False
+    monkeypatch.setattr(user_prefs, "is_memory_opted_out", opted_in)
+    monkeypatch.setattr(xw, "BACKFILL_MAX_ROWS", 6)
+    wrote, _ = _catch_up(monkeypatch, index, [_turn(i) for i in range(1, 12)], page=3)
+    assert wrote == 6
+    assert any("number 11 " in r["text"] for r in index.rows.values()) and not any("number 1 " in r["text"] for r in index.rows.values())
+
+
+@pytest.mark.asyncio
+async def test_the_voice_lane_persists_the_speaker_rejection_with_the_row(monkeypatch):
+    import json
+
+    from routers import chat as chat_mod
+    seen = []
+
+    class _Db:
+        async def execute(self, sql, params=()):
+            seen.append(params)
+
+        async def commit(self):
+            return None
+
+    import contextlib
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield _Db()
+
+    async def touch(*_a, **_k):
+        return None
+    import db_pool
+    monkeypatch.setattr(db_pool, "get_db_ctx", ctx)
+    monkeypatch.setattr(chat_mod, "_touch_chat_session", touch)
+    assert await chat_mod._save_chat_message("s1", "user", "I told Dana the gate is green", user_id=USER, speaker_verified=False)
+    assert await chat_mod._save_chat_message("s1", "user", "I told Dana the gate is blue", user_id=USER, speaker_verified=True)
+    assert await chat_mod._save_chat_message("s1", "user", "I told Dana the gate is red", user_id=USER)
+    metas = [json.loads(p[4]) for p in seen]
+    assert metas[0] == {"user_id": USER, "speaker_verified": False}
+    assert metas[1] == {"user_id": USER} and metas[2] == {"user_id": USER}     # only a rejection is recorded
+
+
+@pytest.mark.asyncio
+async def test_a_voice_save_of_a_rejected_speaker_carries_the_verdict_to_the_row(monkeypatch):
+    from routers import chat as chat_mod
+    from routers import voice_tts
+    calls = []
+
+    async def fake_save(session_id, role, content, user_id=None, **kw):
+        calls.append((role, kw))
+        return True
+
+    async def fake_ensure(*_a, **_k):
+        return None
+    tasks = []
+    monkeypatch.setattr(chat_mod, "_save_chat_message", fake_save)
+    monkeypatch.setattr(chat_mod, "_ensure_user_and_chat_session", fake_ensure)
+    monkeypatch.setattr(voice_tts, "_spawn_bg", lambda coro: tasks.append(coro))
+    await voice_tts._schedule_voice_chat_save("s1", "I told Dana the gate is green", "ok", USER, speaker_verified=False)
+    await voice_tts._schedule_voice_chat_save("s1", "I told Dana the gate is blue", "ok", USER)
+    for t in tasks:
+        await t
+    assert calls == [("user", {"speaker_verified": False}), ("assistant", {}), ("user", {}), ("assistant", {})]
+
+
+# ── the audited delete fails closed ──────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_a_store_failure_in_the_user_delete_is_raised_not_swallowed(monkeypatch):
+    class Broken:
+        async def delete_user(self, user_id):
+            raise RuntimeError("db blip")
+
+    xw.set_backend(Broken())
+    with pytest.raises(RuntimeError):
+        await xw.delete_user(USER)
+    assert await xw.delete_user("") == 0                                      # "no rows" and "no user" stay quiet
+
+
+@pytest.mark.asyncio
+async def test_memory_service_delete_user_fails_when_the_verbatim_erase_fails_and_touches_nothing_else(svc, monkeypatch):
+    class Broken:
+        async def delete_user(self, user_id):
+            raise RuntimeError("db blip")
+
+    touched = []
+    monkeypatch.setattr(svc, "_list_ids_for_user", lambda uid: touched.append("list") or ["a"])
+    monkeypatch.setattr(svc, "_delete_ids", lambda ids: touched.append("delete"))
+    xw.set_backend(Broken())
+    with pytest.raises(memory_service.MemoryServiceError, match="exact-turn erasure failed"):
+        await svc.delete_user(USER, actor="admin", reason="rtbf")
+    assert touched == []                                                      # no half-done delete, no "done" audit row

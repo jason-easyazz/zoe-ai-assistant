@@ -907,13 +907,14 @@ async def memory_for_prompt(
             hits = []
         # A question that needs TWO facts ("is Dana's birthday before my dentist appointment", "who in my family lives
         # near Rowan's school") gets a bounded second hop: each subject of a comparison searched on its own, and the
-        # entity the first fact names followed. Only those two shapes; any other turn is unchanged (multi_hop_recall).
-        if hits:
-            from multi_hop_recall import expand as _second_hop
+        # entity the first fact names followed. Only those two shapes; any other turn is unchanged (multi_hop_recall). Runs
+        # on an EMPTY first hop too: the whole sentence missing is exactly when each subject searched alone finds its fact
+        # (the relational bridge, which needs a first fact to read an entity from, simply has nothing to follow).
+        from multi_hop_recall import expand as _second_hop
 
-            async def _search(q: str, limit: int = 4):
-                return await svc.search(q, user_id=user_id, limit=limit, timeout_s=1.0)
-            hits = await _second_hop(_search, message, hits, limit=len(hits) + 4)
+        async def _search(q: str, limit: int = 4):
+            return await svc.search(q, user_id=user_id, limit=limit, timeout_s=1.0)
+        hits = await _second_hop(_search, message, hits, limit=len(hits) + 4)
     # On an emotional turn, PIN the user's emotional moments to the front of the
     # packet (ahead of semantic hits) so continuity survives even when generic
     # ranking would bury them. Filtered from the rows already loaded above — no

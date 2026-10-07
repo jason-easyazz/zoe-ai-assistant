@@ -1890,6 +1890,14 @@ class MemoryService:
         assert_write_allowed(getattr(self, "_data_dir", _MEMPALACE_DATA), user_id, "delete_user")
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())
         async with lock:
+            # The owner's verbatim turns (exact_words) go with the rows: a right-to-be-forgotten leaves no copy of the words.
+            # FIRST, and fail closed: if they cannot be erased nothing else is touched (no "done" audit row, no success), so the
+            # caller retries the whole delete - a store blip must never read as "forgotten" while the words stay readable.
+            try:
+                import exact_words
+                await exact_words.delete_user(user_id)
+            except Exception as exc:
+                raise MemoryServiceError(f"delete_user failed: exact-turn erasure failed ({type(exc).__name__})") from exc
             needles: list[str] = []
             try:
                 ids = await self._run_sync(self._list_ids_for_user, user_id)
@@ -1917,12 +1925,6 @@ class MemoryService:
             # dirs): erase it physically and verify. Best-effort — the rows ARE gone either way.
             if ids or audit_removed:
                 self.last_erase_report = await self._physical_erase(needles)
-            # The owner's verbatim turns (exact_words) go with the rows: a right-to-be-forgotten leaves no copy of the words.
-            try:
-                import exact_words
-                await exact_words.delete_user(user_id)
-            except Exception:  # noqa: BLE001 - best-effort beside the palace delete (never raises itself)
-                pass
             # Purge this user's idempotency-cache entries so re-teaching a
             # previously known fact after a forget isn't dropped as a
             # duplicate for the rest of the process lifetime.

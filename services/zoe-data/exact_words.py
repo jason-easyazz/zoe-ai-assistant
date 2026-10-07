@@ -26,7 +26,10 @@ The rules (each pinned by ``tests/test_exact_words.py``):
 * **off the voice turn's critical path** - writes are a post-turn background step and a nightly catch-up; the read is one
   indexed SELECT bounded to ``MAX_CANDIDATES`` rows and it fires only on a question that asks for the owner's words or a date
   (``wants``: ``memory_gate.is_evidence_question`` "said" / "when" kinds), every other turn is untouched;
-* **never raises**: a failure is "no exact words", the turn proceeds as before.
+* **never raises**: a failure is "no exact words", the turn proceeds as before - except ``delete_user``, which fails closed (a
+  right-to-be-forgotten must not report success over rows it could not erase);
+* **the catch-up obeys the hook's walls**: ``backfill_recent`` skips a user who opted out of memory and a voice turn the speaker
+  gate rejected (the voice lane persists the verdict in ``chat_messages.metadata``), and reads the whole window page by page.
 
 Physical erase, honestly: the row is DELETEd (Postgres; an in-process dict in the lab). The byte-level machinery of
 ``memory_residue`` covers the Chroma palace; this table lives in Postgres beside ``chat_messages`` (which keeps the same
@@ -492,42 +495,103 @@ async def erase_entity(user_id: str, name: str) -> int:
 
 
 async def delete_user(user_id: str) -> int:
-    """Remove every indexed turn of a user (the audited right-to-be-forgotten path). Never raises."""
-    try:
-        return await get_backend().delete_user(user_id) if (user_id or "").strip() else 0
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("exact_words: user delete failed (%s)", type(exc).__name__)
+    """Remove every indexed turn of a user (the audited right-to-be-forgotten path). Returns the rows removed (0 when there were
+    none). UNLIKE every other function here this does NOT swallow a store failure: a right-to-be-forgotten that could not erase the
+    words must fail, not report success while the verbatim rows stay readable - ``MemoryService.delete_user`` lets it propagate."""
+    if not (user_id or "").strip():
         return 0
+    return int(await get_backend().delete_user(user_id) or 0)
 
 
 # ── the nightly catch-up ─────────────────────────────────────────────────────
 
+#: rows read per page of the catch-up (keyset-paginated, newest first)
+BACKFILL_PAGE = 500
+#: the most rows one catch-up looks at, however long the window (a safety bound; the OLDEST rows are the ones given up)
+BACKFILL_MAX_ROWS = 100_000
+
+
+async def _opted_out(user_id: str, *, fail_closed: bool) -> bool:
+    """Per-user ``memory_opt_out`` (``user_prefs``, cached). The catch-up fails CLOSED (a lookup that cannot say is "skip the
+    night", the next run catches up); the hook-side check stays fail-open like the rest of the memory writers."""
+    try:
+        import user_prefs
+        return bool(await user_prefs.is_memory_opted_out(user_id))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("exact_words: opt-out lookup failed (%s)", type(exc).__name__)
+        return fail_closed
+
+
+def speaker_rejected(metadata: Any) -> bool:
+    """Does a ``chat_messages.metadata`` blob carry the speaker gate's rejection (``{"speaker_verified": false}``, written by
+    the voice lane's save)? Malformed / absent metadata is "no verdict" (the lane reported none), never a rejection."""
+    try:
+        import json
+        meta = json.loads(metadata) if isinstance(metadata, (str, bytes)) and metadata else metadata
+        return isinstance(meta, dict) and meta.get("speaker_verified") is False
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def _backfill_page(user_id: str, hours: int, cursor: Optional[tuple[str, str]], limit: int) -> list[tuple]:
+    """One page of the owner's user turns inside the window, NEWEST first, strictly before ``cursor`` (``(created_at, id)`` of the
+    last row of the previous page; None = the first page). Rows: ``(id, content, epoch, metadata, created_at)``. Postgres only
+    (``chat_messages.created_at`` is TEXT there); tests replace this seam."""
+    from db_pool import get_db_ctx  # type: ignore[import]
+    from user_filters import message_owner_expr
+    sql = ("SELECT cm.id, cm.content, EXTRACT(EPOCH FROM cm.created_at::timestamptz), cm.metadata, cm.created_at "
+           "FROM chat_messages cm JOIN chat_sessions cs ON cm.session_id = cs.id "
+           "WHERE " + message_owner_expr() + " = ? AND cm.role = 'user' "
+           "AND cm.created_at::timestamptz >= (now()::timestamptz - make_interval(hours => ?::int))")
+    params: list[Any] = [user_id, int(hours)]
+    if cursor is not None:
+        sql += " AND (cm.created_at::timestamptz, cm.id) < (?::timestamptz, ?)"
+        params += [cursor[0], cursor[1]]
+    sql += " ORDER BY cm.created_at::timestamptz DESC, cm.id DESC LIMIT ?"
+    params.append(int(limit))
+    async with get_db_ctx() as db:
+        return [tuple(r) for r in await (await db.execute(sql, tuple(params))).fetchall()]
+
+
 async def backfill_recent(user_id: str, *, hours: Optional[int] = None) -> int:
     """Index the owner's user turns of the last ``hours`` hours from ``chat_messages`` (chat AND voice are saved there) that the
-    post-turn hook missed; idempotent (the row id is the message id). Only with the SQL index (the lab and tests have no
-    ``chat_messages``). Returns rows written. Never raises."""
+    post-turn hook missed; idempotent (the key is the content key the hook uses). Only with the SQL index (the lab and tests have
+    no ``chat_messages``). The catch-up obeys the SAME walls as the hook: a user who opted out of memory is skipped (before any
+    read or write), and a voice turn the speaker gate rejected (``metadata.speaker_verified is false``) is never indexed. The
+    window is read page by page (keyset on ``(created_at, id)``, newest first) so a long window reaches every turn, not the
+    first 2,000 of it. Returns rows written. Never raises."""
     try:
-        if not enabled() or not isinstance(get_backend(), SqlBackend):
+        if not enabled() or not (user_id or "").strip() or not isinstance(get_backend(), SqlBackend):
+            return 0
+        if await _opted_out(user_id, fail_closed=True):
             return 0
         if hours is None:
             try:
                 hours = int(os.environ.get("ZOE_EXACT_WORDS_BACKFILL_HOURS", "36"))
             except ValueError:
                 hours = 36
-        from db_pool import get_db_ctx  # type: ignore[import]
-        from user_filters import message_owner_expr
-        sql = ("SELECT cm.id, cm.content, EXTRACT(EPOCH FROM cm.created_at::timestamptz) "
-               "FROM chat_messages cm JOIN chat_sessions cs ON cm.session_id = cs.id "
-               "WHERE " + message_owner_expr() + " = ? AND cm.role = 'user' "
-               "AND cm.created_at::timestamptz >= (now()::timestamptz - make_interval(hours => ?::int)) "
-               "ORDER BY cm.created_at ASC LIMIT 2000")
-        async with get_db_ctx() as db:
-            rows = await (await db.execute(sql, (user_id, int(hours)))).fetchall()
         wrote = 0
-        for _mid, content, epoch in rows:
-            # no turn id: the content key (the post-turn hook's), so a turn the hook already indexed is one row, not two
-            if await index_turn(user_id, str(content or ""), said_at=float(epoch or time.time()), source="backfill"):
-                wrote += 1
+        seen = 0
+        cursor: Optional[tuple[str, str]] = None
+        while seen < BACKFILL_MAX_ROWS:
+            rows = await _backfill_page(user_id, int(hours), cursor, BACKFILL_PAGE)
+            if not rows:
+                break
+            seen += len(rows)
+            for row in rows:
+                _mid, content, epoch, metadata = row[0], row[1], row[2], row[3]
+                if speaker_rejected(metadata):
+                    continue
+                # no turn id: the content key (the post-turn hook's), so a turn the hook already indexed is one row, not two
+                if await index_turn(user_id, str(content or ""), said_at=float(epoch or time.time()), source="backfill"):
+                    wrote += 1
+            last = rows[-1]
+            nxt = (str(last[4]), str(last[0]))
+            if len(rows) < BACKFILL_PAGE or nxt == cursor:
+                break
+            cursor = nxt
+        else:
+            logger.warning("exact_words: catch-up stopped at the %d-row bound user=%s", BACKFILL_MAX_ROWS, user_id)
         if wrote:
             logger.info("exact_words: caught up %d turn(s) from chat_messages user=%s", wrote, user_id)
         return wrote
