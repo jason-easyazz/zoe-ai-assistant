@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-539 flags; 537 not documented in `.env.example`.
+540 flags; 538 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -427,6 +427,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_RIG_NOVNC_PORT` | `'6080'` | no | NO | `services/zoe-data/ytmusic_signin.py` |
 | `ZOE_RIG_USER_AGENT` | `-` | no | NO | `services/zoe-data/ytmusic_signin.py` |
 | `ZOE_RIG_VNC_PORT` | `'5900'` | no | NO | `services/zoe-data/ytmusic_signin.py` |
+| `ZOE_ROLE_GUESS_GUARD` | `-` | no | NO | `services/zoe-data/role_guess_guard.py` |
 | `ZOE_ROSTER_NEUTRAL_ASK` | `False` | yes | NO | `services/zoe-data/fast_tiers.py` |
 | `ZOE_ROUTER_ARCHIVE_KEEP` | `'3'` | no | NO | `scripts/maintenance/router_selftrain.py` |
 | `ZOE_ROUTER_BASE_HF` | `'/home/zoe/models/lab/functiongemma-270m-it-hf'` | no | NO | `scripts/maintenance/router_selftrain.py` |
