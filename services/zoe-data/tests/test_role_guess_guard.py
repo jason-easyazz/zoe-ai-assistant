@@ -91,6 +91,62 @@ def test_a_role_stated_for_another_person_does_not_carry_over():
     assert rg.neutralise(GUESSED, NAMES, packet, user_text=ASK)[1] == ["anika~mother"]
 
 
+@pytest.mark.parametrize("reply,role", [
+    ("Your mother is Anika Reyes.", "mother"),
+    ("Your mother is Anika Reyes, born on November 2, 1985.", "mother"),
+    ("Your mum's name is Anika.", "mum"),
+    ("Your sister was Anika Reyes.", "sister"),
+    ("Callum's wife is Anika Reyes.", "wife"),
+    ("Your wife is called Anika.", "wife"),
+])
+def test_a_role_first_copular_claim_is_rewritten_too(reply, role):
+    out, guessed = rg.neutralise(reply, NAMES, ROLELESS, user_text=ASK)
+    assert guessed and guessed[0].endswith("~" + role), (reply, guessed)
+    assert role not in out.lower().replace("someone you've told me about", "")
+    assert "someone you've told me about" in out and out.count("?") == 1
+
+
+def test_a_role_first_copular_claim_the_evidence_states_is_untouched():
+    for packet, reply in [
+        (ROLELESS + "- User's mum is Anika Reyes [mem:cccc3333]\n", "Your mother is Anika Reyes."),
+        (ROLELESS + "- Anika Reyes is Callum Reyes's wife\n", "Callum's wife is Anika Reyes."),
+    ]:
+        assert rg.neutralise(reply, NAMES, packet, user_text=ASK) == (reply, [])
+    assert rg.neutralise("Your mother is Anika Reyes.", NAMES, ROLELESS, "Anika Reyes is my mother") == (
+        "Your mother is Anika Reyes.", [])
+
+
+@pytest.mark.parametrize("packet_row", [
+    "- Anika Reyes is Callum Reyes's wife [mem:eeee5555]\n",
+    "- Anika Reyes is the wife of Callum Reyes [mem:eeee5555]\n",
+    "- Callum Reyes's wife is Anika Reyes [mem:eeee5555]\n",
+])
+def test_a_role_tied_to_someone_elses_relative_does_not_license_it_for_the_user(packet_row):
+    packet = ROLELESS + packet_row
+    # stated for Callum: answering it as stated is fine ...
+    assert rg.neutralise("Anika Reyes is Callum's wife.", NAMES, packet, user_text=ASK)[1] == []
+    # ... but the same role claimed for the USER is a guess
+    for reply in ("Anika Reyes is your wife.", "Your wife is Anika Reyes.", "Anika Reyes, your wife, was born in 1985."):
+        out, guessed = rg.neutralise(reply, NAMES, packet, user_text=ASK)
+        assert guessed == ["anika~wife"], (reply, guessed)
+        assert "wife" not in out.lower() and out.endswith("could you tell me?"), out
+
+
+def test_the_owner_check_keeps_what_the_user_or_an_unowned_row_states():
+    assert rg.role_supported_for("Anika Reyes", "wife", "Anika Reyes is my wife", "user")
+    assert rg.role_supported_for("Anika Reyes", "wife", "- User's wife is Anika Reyes", "user")
+    assert rg.role_supported_for("Anika Reyes", "wife", "- Anika, wife", "user")          # owner unspecified
+    assert not rg.role_supported_for("Anika Reyes", "wife", "Anika Reyes is Callum's wife", "user")
+    assert not rg.role_supported_for("Anika Reyes", "wife", "Anika Reyes is my wife", frozenset({"callum"}))
+    assert rg.role_supported_for("Anika Reyes", "wife", "Anika Reyes is Callum Reyes's wife", frozenset({"callum"}))
+
+
+def test_guarded_people_include_those_the_packet_relates_only_to_someone_else():
+    packet = ROLELESS + "- Anika Reyes is Callum Reyes's wife\n- User's brother is Callum Reyes\n"
+    assert rg.guarded_people(NAMES, packet) == ["Anika Reyes"]          # Callum is the user's brother
+    assert rg.unstated_people(NAMES, packet) == []                        # the rule line stays quiet
+
+
 def test_a_first_name_two_people_share_is_not_a_handle():
     out, guessed = rg.neutralise("Dana is your sister.", ["Dana Reyes", "Dana Whitfield"], "- Dana Reyes: 1 May 1990", "")
     assert guessed == []
@@ -261,3 +317,16 @@ async def test_a_turn_where_the_floor_did_not_fire_is_untouched(monkeypatch):
     msg = "Tell me a joke"
     reply, sent = await _ask(monkeypatch, msg, GUESSED, floor=False)
     assert reply == GUESSED and "Relationship not stated" not in sent
+
+
+async def test_s22_a_wife_of_someone_else_is_not_answered_as_the_users_wife_end_to_end(monkeypatch):
+    packet = ROLELESS + "- Anika Reyes is Callum Reyes's wife [mem:eeee5555]\n"
+    reply, sent = await _ask(monkeypatch, ASK, "Anika Reyes is your wife.", packet=packet)
+    assert "wife" not in reply.lower() and "someone you've told me about" in reply and reply.endswith("tell me?")
+    # the packet states a role for her, so no "not stated" marker contradicts it
+    assert "Relationship not stated for: Anika Reyes" not in sent
+
+
+async def test_s22_a_role_first_copular_guess_is_caught_end_to_end(monkeypatch):
+    reply, _ = await _ask(monkeypatch, ASK, "Your mother is Anika Reyes, born on November 2, 1985.")
+    assert "mother" not in reply.lower() and "November 2, 1985" in reply and reply.endswith("tell me?")

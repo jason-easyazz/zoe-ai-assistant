@@ -102,6 +102,80 @@ def rule_line(names: Iterable[str], packet: str) -> str:
     return RULE.format(names=", ".join(unknown))
 
 
+# -- whose relative: the relationship OWNER ---------------------------------------
+# A role is a relation BETWEEN two people. "Anika is Callum's wife" evidences Anika~wife for CALLUM;
+# it licenses nothing about the user. So a claim is trusted only when the evidence ties the role to
+# the same owner the claim names ("your" = the user; "Callum's" / "of Callum" = Callum). An owner the
+# claim or the evidence leaves unspecified ("the wife", "a friend's wife") is not a conflict.
+
+_USER_WORDS = frozenset({"user", "your", "my", "our", "you", "i", "me", "mine", "yours", "ours"})
+_NAME_OWNER = r"(?:[A-Z][\w'\u2019-]*\s+){0,2}[\w'\u2019-]+"
+_OWNER_POSS = re.compile(rf"(?P<own>{_NAME_OWNER})['\u2019]s\s+(?:\w+\s+)?$")
+_OWNER_DET = re.compile(r"\b(?P<own>your|my|our)\s+(?:\w+\s+)?$", re.IGNORECASE)
+_OWNER_OF = re.compile(r"^s?\s+(?:of|to)\s+(?P<own>(?:[A-Z][\w'\u2019-]*\s?){1,3})")
+
+
+def _owner_key(raw: str):
+    """``'user'`` | a frozenset of lower-cased name tokens | ``None`` (unspecified)."""
+    toks = [t for t in re.findall(r"[\w'\u2019-]+", raw.lower()) if t not in ("s", "'s")]
+    if not toks:
+        return None
+    if toks[-1] in _USER_WORDS or toks[0] in _USER_WORDS:
+        return "user"
+    if all(t in GUESS_ROLES or t in _pr._LOOSE_ROLES for t in toks):
+        return None  # "a friend's wife" names a kind of person, not WHO
+    return frozenset(toks)
+
+
+def _owner_at(text: str, start: int, end: int):
+    """The owner the text gives the role word at ``text[start:end]``."""
+    m = _OWNER_OF.match(text[end:])
+    if m:
+        return _owner_key(m.group("own"))
+    prefix = text[:start]
+    m = _OWNER_POSS.search(prefix) or _OWNER_DET.search(prefix)
+    return _owner_key(m.group("own")) if m else None
+
+
+def _owners_compatible(claim, evidenced: list) -> bool:
+    if claim is None or not evidenced or None in evidenced:
+        return True
+    for e in evidenced:
+        if claim == "user" and e == "user":
+            return True
+        if isinstance(claim, frozenset) and isinstance(e, frozenset) and claim & e:
+            return True
+    return False
+
+
+def _evidence_owners(name: str, role: str, evidence: str) -> list:
+    """The owners the evidence gives ``role`` in the sentences that tie it to ``name``."""
+    variants = {v.lower() for v in _pr._variants(role.lower())}
+    role_rx = re.compile(r"\b(?:" + "|".join(sorted((re.escape(v) for v in variants), key=len, reverse=True)) + r")s?\b",
+                         re.IGNORECASE)
+    owners: list = []
+    for sent in _pr._sentences(evidence):
+        if not _pr.role_assignment_supported(name, role, sent):
+            continue
+        for rm in role_rx.finditer(sent):
+            owners.append(_owner_at(sent, rm.start(), rm.end()))
+    return owners
+
+
+def role_supported_for(name: str, role: str, evidence: str, owner="user") -> bool:
+    """``name`` is ``role`` of ``owner`` (default: the user) per the evidence - the role AND whose."""
+    if not _pr.role_assignment_supported(name, role, evidence or ""):
+        return False
+    return _owners_compatible(owner, _evidence_owners(name, role, evidence or ""))
+
+
+def guarded_people(names: Iterable[str], packet: str) -> list[str]:
+    """The named people whose packet states no relationship role TO THE USER: the unstated ones,
+    plus those the packet relates only to somebody else ("Anika is Callum's wife")."""
+    return [n for n in names if n and n.strip()
+            and not any(role_supported_for(n, r, packet, "user") for r in GUESS_ROLES)]
+
+
 # -- the reply backstop -----------------------------------------------------------
 
 def _claim_patterns(handle_alt: str) -> list[tuple[str, "re.Pattern[str]"]]:
@@ -112,6 +186,10 @@ def _claim_patterns(handle_alt: str) -> list[tuple[str, "re.Pattern[str]"]]:
             rf"\b{n}\b(?P<mid>[^.!?\n]{{0,25}}?\b(?:is|was|are|were)\s+)(?P<role>(?:{_DET}\s+)+"
             rf"(?:\w+\s+){{0,1}}(?P<r>{_ROLE})s?\b(?:\s+(?:of|to)\s+[A-Z][\w'’-]+(?:\s[A-Z][\w'’-]+)?)?)",
             re.IGNORECASE)),
+        # Your mother is Anika Reyes / Callum's wife is Anika / your mother's name is Anika
+        ("cop", re.compile(
+            rf"(?P<role>\b(?:{_DET}\s+)+(?:\w+\s+){{0,1}}(?P<r>{_ROLE})s?(?:['’]s\s+name)?)"
+            rf"(?P<mid>\s*,?\s*(?:is|was|are|were)\s+(?:called\s+|named\s+)?){n}\b", re.IGNORECASE)),
         # your mother Anika / your mother, Anika / Callum's wife Anika
         ("pre", re.compile(rf"(?P<role>\b{_DET}\s+(?:\w+\s+){{0,1}}(?P<r>{_ROLE})s?,?\s+)(?={n}\b)",
                            re.IGNORECASE)),
@@ -135,17 +213,18 @@ def neutralise(reply: str, names: Iterable[str], packet: str, user_text: str = "
     guessed: list[str] = []
     asked: list[str] = []
 
-    def _unsupported(handle: str, role: str) -> Optional[str]:
+    def _unsupported(handle: str, role: str, owner=None) -> Optional[str]:
         full = by_handle.get(handle.lower())
-        if full and not _pr.role_assignment_supported(full, role.lower(), evidence):
+        if full and not role_supported_for(full, role.lower(), evidence, owner):
             return full
         return None
 
     out = text
     for kind, rx in _claim_patterns(alt):
         def sub(m: "re.Match[str]", kind: str = kind) -> str:
-            role = m.group("r") or (m.groupdict().get("r2") or "")
-            full = _unsupported(m.group("n"), role)
+            grp = "r" if m.group("r") else "r2"
+            role = m.group(grp) or ""
+            full = _unsupported(m.group("n"), role, _owner_at(m.string, m.start(grp), m.end(grp)))
             if not full:
                 return m.group(0)
             guessed.append(f"{full.split()[0].lower()}~{role.lower()}")
@@ -153,6 +232,8 @@ def neutralise(reply: str, names: Iterable[str], packet: str, user_text: str = "
                 asked.append(full)
             if kind == "holder":
                 return f"{m.group('n')}{m.group('mid')}{_NEUTRAL}"
+            if kind == "cop":
+                return f"{m.group('n')} is {_NEUTRAL}"
             if kind == "pre":
                 return ""
             return m.group("n") + (" " if m.groupdict().get("tc") else "")

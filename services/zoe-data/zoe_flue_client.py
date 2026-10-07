@@ -1071,9 +1071,13 @@ async def _recall_context_block(message: str, user_id: str) -> str:
             names = [p.name for p in named if getattr(p, "name", "")]
             rule = role_guess_guard.rule_line(names, packet)
             guard_sink = _ROLE_GUARD_SINK.get()
-            if rule and guard_sink is not None:
-                guard_sink["names"] = role_guess_guard.unstated_people(names, packet)
-                guard_sink["packet"] = packet
+            if guard_sink is not None and role_guess_guard.mode() != "off":
+                # not only the unstated people: also those the packet relates to SOMEBODY ELSE only
+                # ("Anika is Callum's wife" licenses nothing about the user)
+                guarded = role_guess_guard.guarded_people(names, packet)
+                if guarded:
+                    guard_sink["names"] = guarded
+                    guard_sink["packet"] = packet
         except Exception as exc:  # noqa: BLE001 - the guard must never break a turn
             logger.debug("role guess guard setup failed (non-fatal): %s", type(exc).__name__)
     body = f"{packet}\n{rule}" if rule else packet
