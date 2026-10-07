@@ -752,22 +752,92 @@ def axes(p, n, skip=0):
     return {"extraction": {"pass": p, "n": n, "skip": skip, "cells": n}, "abstention": {"pass": p, "n": n, "skip": 0, "cells": n}}
 
 
-def test_the_winner_clause_beats_z0_beyond_the_wilson_interval_or_ties_to_z0():
-    z0 = gates.aggregate_axes({"s": {"axes": axes(60, 90)}})
-    strong = {n: gates.evaluate_arm(n, three(axes=axes(30, 30)), good_measure()) for n in ("H1", "H2")}
-    d = gates.decide(strong, z0)
-    assert d["verdict"] == "ADOPT_CANDIDATE" and d["winner"] == "H1"                               # both pass: H1 (verbatim) over H2, per the rule
-    assert d["caveat"].startswith("Advisory") and "NOT FINAL" not in d["caveat"] and "not built" not in d["text"]
-    assert gates.WIN_AXES == {"B": "extraction", "C": "temporal", "D": "recall", "E": "abstention"} and "poisoning" in gates.HARD_AXES
-    assert not hasattr(gates, "UNBUILT")
-    tie = {"H1": gates.evaluate_arm("H1", three(axes=axes(20, 30)), good_measure())}                # 60/90 vs 60/90: inside the interval
+def ax_c(p, n):
+    return {"pass": p, "n": n, "skip": 0, "cells": n, "items": {"pass": 0, "n": 0}, "failing": []}
+
+
+def ax_i(p, n, failing=()):
+    """A capability axis measured in ITEMS (20 sentences, 20 questions, the observations judged): one cell, n items."""
+    return {"pass": 1 if p == n else 0, "n": 1, "skip": 0, "cells": 1, "items": {"pass": p, "n": n}, "failing": list(failing)}
+
+
+def cap(temporal=(10, 20), recall=(10, 20), exact=(10, 20), reflection=None, hops=None, **extra):
+    out = {"temporal": ax_c(*temporal), "recall": ax_c(*recall), "exact_words": ax_i(*exact), **extra}
+    if reflection:
+        out["reflection"] = ax_i(*reflection)
+    if hops:
+        out["multi_hop"] = ax_i(*hops)
+    return out
+
+
+def test_the_winner_clause_is_decided_on_the_capability_axes_and_a_tie_goes_to_the_maintained_candidate():
+    """Owner direction 2026-10-07: G0-G3 are floors; the contest is exact words / reflection / long-range recall / protocol + temporal and recall AT DISTANCE.
+    Two wins beyond the Wilson interval (worse on none) wins; fewer wins and no axis where it is worse is a capability tie, which goes to the maintained
+    candidate (H1 before H2); authority / forgetting / extraction / abstention scores no longer break ties."""
+    assert gates.WIN_AXES == {"C": "temporal", "D": "recall_distance", "J": "exact_words", "K": "reflection", "L": "multi_hop", "M": "protocol_brain"}
+    assert gates.FLOOR_AXES == {"B": "extraction", "E": "abstention"} and "poisoning" in gates.HARD_AXES and gates.MAINTAINED == ("H1", "H2")
+    assert (gates.RULE["capability_wins_min"], gates.RULE["capability_axes_with_data_min"], gates.RULE["observation_precision_min"]) == (2, 3, 0.95)
+    z0 = gates.aggregate_axes({"s": {"axes": cap()}})
+    # a win: exact words 20 / 20 vs Z0's 10 / 20 and multi-hop 20 / 20 vs 5 / 20 (items), worse on none
+    strong = {n: gates.evaluate_arm(n, three(axes=cap(exact=(20, 20), hops=(20, 20))), good_measure()) for n in ("H1", "H2")}
+    z0w = gates.aggregate_axes({"s": {"axes": cap(hops=(5, 20))}})
+    d = gates.decide(strong, z0w)
+    assert d["verdict"] == "ADOPT_CANDIDATE" and d["winner"] == "H1" and "exact_words" not in d["text"] and "J" in d["text"] and "L" in d["text"]
+    assert d["caveat"].startswith("Advisory") and "floors" in d["caveat"]
+    # a tie on capability, with data on at least three axes: the maintained candidate
+    tie = {"H1": gates.evaluate_arm("H1", three(axes=cap()), good_measure())}
     d2 = gates.decide(tie, z0)
-    assert d2["verdict"] == "KEEP_Z0" and "tie goes to Z0" in d2["text"] and d2["adoptable"] == ["H1"]
-    only_one = {"H1": gates.evaluate_arm("H1", three(axes={"extraction": {"pass": 30, "n": 30, "skip": 0, "cells": 30}, "abstention": {"pass": 20, "n": 30, "skip": 0, "cells": 30}}),
-                                         good_measure())}
-    assert gates.decide(only_one, z0)["verdict"] == "KEEP_Z0"                                       # needs TWO of B/C/D/E
-    worse = {"H1": gates.evaluate_arm("H1", three(axes={"extraction": {"pass": 30, "n": 30, "skip": 0, "cells": 30}, "abstention": {"pass": 5, "n": 30, "skip": 0, "cells": 30}}), good_measure())}
-    assert gates.decide(worse, z0)["verdict"] == "KEEP_Z0"
+    assert d2["verdict"] == "ADOPT_ON_TIE" and d2["winner"] == "H1" and "maintained candidate" in d2["text"] and d2["adoptable"] == ["H1"]
+    # store hygiene does not break a tie: an arm far WORSE than Z0 on extraction and abstention (the floors' axes) still takes a capability tie
+    hyg = {"H1": gates.evaluate_arm("H1", three(axes={**cap(), "extraction": ax_c(0, 30), "abstention": ax_c(0, 30)}), good_measure())}
+    z0h = gates.aggregate_axes({"s": {"axes": {**cap(), "extraction": ax_c(30, 30), "abstention": ax_c(30, 30)}}})
+    dh = gates.decide(hyg, z0h)
+    assert dh["verdict"] == "ADOPT_ON_TIE" and dh["floors"]["H1"]["B"]["worse"] is True and "B" not in dh["compare"]["H1"]
+    # too little capability evidence is not a tie
+    thin = {"H1": gates.evaluate_arm("H1", three(axes={"temporal": ax_c(10, 20), "exact_words": ax_i(10, 20)}), good_measure())}
+    assert gates.decide(thin, z0)["verdict"] == "KEEP_Z0" and "too thin" in gates.decide(thin, z0)["text"]
+    # worse beyond the interval on one capability axis: not adoptable, however many it wins
+    worse = {"H1": gates.evaluate_arm("H1", three(axes=cap(temporal=(1, 20), exact=(20, 20), hops=(20, 20))), good_measure())}
+    dw = gates.decide(worse, z0w)
+    assert dw["verdict"] == "KEEP_Z0" and "WORSE" in dw["text"]
+    # a floor still fails the arm whatever it wins
+    bad = {"H1": gates.evaluate_arm("H1", three(axes=cap(exact=(20, 20), hops=(20, 20)), hard=["A1.digest.home"]), good_measure())}
+    assert gates.decide(bad, z0w)["verdict"] == "KEEP_Z0"
+
+
+def test_fabricated_observations_veto_an_arm_whatever_else_it_wins():
+    z0 = gates.aggregate_axes({"s": {"axes": cap(hops=(5, 20))}})
+    liar = {"H2": gates.evaluate_arm("H2", three(axes=cap(exact=(20, 20), hops=(20, 20), reflection=(20, 20))), good_measure())}
+    liar["H2"]["axes"]["reflection"]["failing"] = ["K1.observations_are_true"]            # K1 failed on some seed
+    d = gates.decide(liar, z0)
+    assert gates.observation_veto(liar["H2"]["axes"]) and d["verdict"] == "KEEP_Z0" and "H2" in d["vetoed"] and "VETOED" in d["text"]
+    honest = {"H2": gates.evaluate_arm("H2", three(axes=cap(exact=(20, 20), hops=(20, 20), reflection=(20, 20))), good_measure())}
+    assert not gates.observation_veto(honest["H2"]["axes"]) and gates.decide(honest, z0)["verdict"] == "ADOPT_CANDIDATE"
+
+
+def test_the_derived_axes_are_built_from_the_per_cell_verdicts():
+    """D = the recall cells AT DISTANCE (D2 / D3 / D4; D1's 30 turns is near); M = the brain-tier protocol cells only (the lab half never decides)."""
+    cells = [{"id": "D1.hit5_after_30_filler", "verdict": "FAIL", "sanity": False}, {"id": "D2.hit5_after_100_filler", "verdict": "PASS", "sanity": False},
+             {"id": "D3.hit5_after_300_filler", "verdict": "PASS", "sanity": False}, {"id": "D4.hit5_paraphrase_after_100_filler", "verdict": "FAIL", "sanity": False},
+             {"id": "M1.answered_when_recall_fired", "verdict": "PASS", "sanity": False}, {"id": "M4.fire_when_needed.zoe", "verdict": "SKIP", "sanity": False}]
+    a = gates.aggregate_axes({"s": {"axes": {"recall": ax_c(2, 4)}, "cells": cells}})
+    assert (a["recall_distance"]["pass"], a["recall_distance"]["n"]) == (2, 3) and a["recall_distance"]["failing"] == ["D4.hit5_paraphrase_after_100_filler"]
+    assert "protocol_brain" not in a                                                              # M4 cells all SKIPped (no brain): no data, so M never counts
+    ran = gates.aggregate_axes({"s": {"axes": {}, "cells": cells[:5] + [{"id": "M4.fire_when_needed.zoe", "verdict": "PASS", "sanity": False}]}})
+    assert (ran["protocol_brain"]["pass"], ran["protocol_brain"]["n"]) == (1, 1)
+    c = gates.compare_axes(gates.aggregate_axes({"s": {"axes": {"recall": ax_c(20, 20)}}}), gates.aggregate_axes({"s": {"axes": {"recall": ax_c(4, 20)}}}))                       # an old record with no per-cell verdicts: D falls back to the recall axis
+    assert c["D"]["axis"] == "recall_distance" and c["D"]["beats"]
+
+
+def test_items_are_the_unit_of_the_item_axes_and_cells_are_not():
+    """Two cells of 0 / 2 vs 2 / 2 cannot separate; 20 of 20 items vs 0 of 20 can. That is why J / K / L pool items."""
+    arm = {"exact_words": ax_i(20, 20)}
+    z0 = {"exact_words": ax_i(0, 20)}
+    agg = lambda x: gates.aggregate_axes({"s": {"axes": x}})  # noqa: E731
+    c = gates.compare_axes(agg(arm), agg(z0))["J"]
+    assert c["unit"] == "items" and c["beats"] and c["arm"][:2] == [20, 20] and c["z0"][:2] == [0, 20]
+    cells_only = gates.compare_axes(agg({"exact_words": ax_c(2, 2)}), agg({"exact_words": ax_c(0, 2)}))["J"]
+    assert cells_only["unit"] == "cells" and not cells_only["beats"]                              # two cells say nothing beyond the interval
 
 
 def test_no_adoptable_arm_keeps_z0_and_says_which_are_incomplete():
@@ -1048,13 +1118,14 @@ def test_hm_fits_the_90_minute_cap_next_to_h1_x3_h2_and_h0_and_the_plan_says_wha
 
 def test_a_lower_arm_only_gets_what_is_left_behind_the_work_queued_for_it(box):
     b = measure.plan_budget(bakeoff.Cfg(bakeoff_dir=box))
-    assert b.seed_box_s("H1", 3600.0) == b.box_min["H1"] * 60.0 and b.seed_box_s("H1", 120.0) == 120.0     # H1: its ceiling, never over the time left
-    assert b.fixed_min("H0") == 0.0                     # H0's latency / slot are "only if time remains": its cells outrank its timings
-    queued_h2 = (b.fixed_min("H2") + measure.PHASE_MIN["validity"]["concise"] + 2.0) * 60.0       # its own phases + H0's 2 min seed box
+    assert b.seed_box_s("H1", 3600.0, first=False) == b.box_min["H1"] * 60.0 and b.seed_box_s("H1", 120.0) == 120.0     # H1: its ceiling, never over the time left
+    assert b.seed_box_s("H1", 3600.0) == (b.box_min["H1"] + b.extra_min["H1"]) * 60.0                  # seed 1 also holds the capability cells; seeds 2 and 3 do not
+    assert b.fixed_min("H0") == 0.0 and b.fixed_min("H2") == 0.0     # H0's and H2's latency / slot are "only if time remains": their cells outrank their timings (CUT for the capability axes)
+    queued_h2 = (b.fixed_min("H2") + 2.0) * 60.0       # its own phases (none budgeted) + H0's 2 min seed box
     assert b.seed_box_s("H2", queued_h2 - 1.0) == 0.0                                  # nothing left behind its own queue: no box, no starving H0
-    assert 0 < b.seed_box_s("H2", 3000.0) <= 2 * b.box_min["H2"] * 60.0
-    assert b.seed_box_s("H2", 6000.0) == 2 * b.box_min["H2"] * 60.0                    # an early H1 hands its slack on, up to twice the plan
-    assert b.seed_box_s("H0", 100.0 * 60) <= 2 * b.box_min["H0"] * 60.0
+    assert 0 < b.seed_box_s("H2", 3000.0) <= 2 * (b.box_min["H2"] + b.extra_min["H2"]) * 60.0
+    assert b.seed_box_s("H2", 6000.0) == 2 * (b.box_min["H2"] + b.extra_min["H2"]) * 60.0     # an early H1 hands its slack on, up to twice the plan
+    assert b.seed_box_s("H0", 100.0 * 60) <= 2 * (b.box_min["H0"] + b.extra_min["H0"]) * 60.0
 
 
 def test_h1_runs_first_and_complete_then_h2_then_h0(box, tmp_path, monkeypatch):
@@ -1129,7 +1200,7 @@ def test_the_recall_axis_is_compared_with_z0e_when_it_ran_and_with_z0_when_it_di
     z0e = {"recall": {"pass": 12, "n": 12, "skipped": 0, "wilson95": [0.76, 1.0]}}
     assert gates.compare_axes(arm, z0)["D"]["baseline"] == "Z0" and gates.compare_axes(arm, z0, z0e)["D"]["baseline"] == "Z0e"
     assert gates.compare_axes(arm, z0, z0e)["D"]["z0"][1] == 12                       # the baseline's own counts, not the bag-of-words'
-    assert gates.compare_axes(arm, z0, z0e)["B"]["baseline"] == "Z0"                  # only D moves: B, C, E stay on the lab's Z0
+    assert gates.compare_floors(arm, z0)["B"]["baseline"] == "Z0" and gates.compare_axes(arm, z0, z0e)["C"]["baseline"] == "Z0"      # only D and L move: the rest stay on the lab's Z0
     bad = {"recall": {"pass": 0, "n": 20, "skipped": 0, "wilson95": [0.0, 0.16]}}
     assert gates.compare_axes(bad, z0, z0e)["D"]["worse"] is True
 
@@ -1144,7 +1215,7 @@ def test_z0e_runs_on_the_recall_cells_and_gets_its_own_column_and_the_d_baseline
     art = json.loads((box / "run-t1.json").read_text())
     md = Path(art["docs_path"]).read_text()
     assert set(art["z0e"]) == set(art["z0"]) and all("recall" in a for a in art["z0e"].values())          # three seeds, the recall axis
-    assert "| Axis | Z0 | Z0e (real retrieval) | Z0-off" in md and "Z0e (the D baseline)" in md
+    assert "| Axis | Z0 | Z0e (real retrieval) | Z0-off" in md and "Z0e (the D baseline)" in md and "multi_hop" in md
     assert art["compare"]["H1"]["D"]["baseline"] == "Z0e"
 
 
@@ -1169,15 +1240,17 @@ def test_skips_are_split_into_time_box_and_capability_and_the_gate_says_which():
 
 
 def test_the_winner_clause_reads_the_temporal_and_recall_axes_the_axes_pr_built():
-    assert gates.WIN_AXES == {"B": "extraction", "C": "temporal", "D": "recall", "E": "abstention"}
+    assert gates.WIN_AXES["C"] == "temporal" and gates.WIN_AXES["D"] == "recall_distance"
     def ax(p, n):
         lo, hi = gates.wilson(p, n)
         return {"pass": p, "n": n, "wilson95": [round(lo, 4), round(hi, 4)]}
     z0 = {"extraction": ax(20, 20), "temporal": ax(10, 20), "recall": ax(4, 20), "abstention": ax(10, 10)}
     arm = {"extraction": ax(20, 20), "temporal": ax(20, 20), "recall": ax(20, 20), "abstention": ax(10, 10)}
     c = gates.compare_axes(arm, z0)
-    assert c["C"]["axis"] == "temporal" and c["C"]["beats"] and c["D"]["axis"] == "recall" and c["D"]["beats"]       # two beats: the rule's win
-    assert not c["B"]["beats"] and not c["E"]["beats"] and not any(v["worse"] for v in c.values())
+    assert c["C"]["axis"] == "temporal" and c["C"]["beats"] and c["D"]["axis"] == "recall_distance" and c["D"]["beats"]       # two beats: the rule's win
+    assert not any(v["worse"] for v in c.values()) and "B" not in c and "E" not in c
+    fl = gates.compare_floors(arm, z0)
+    assert not fl["B"]["beats"] and not fl["E"]["beats"]                                                             # the floors are reported, they decide nothing
     assert gates.compare_axes({}, z0)["C"]["note"] == "no data"                                                       # an arm that ran none: no data, not a tie
 
 
@@ -1186,23 +1259,28 @@ def test_the_run_record_opens_with_the_verdict_the_clause_per_axis_and_the_plain
     measure.measure(w)
     md = Path(json.loads((box / "run-t1.json").read_text())["docs_path"]).read_text()
     head = md.split("## Run")[0]
-    assert "**Verdict by the pre-registered rule:" in head and "### Winner clause per axis" in head and "### Is it better than ours?" in head
-    assert "| B | extraction |" in head and "| C | temporal |" in head and "| D | recall |" in head and "| E | abstention |" in head
-    assert "A tie goes to Z0" in head and "Honest caveats:" in head
-    assert head.index("Verdict by") < head.index("Winner clause per axis") < head.index("Is it better than ours?")
+    assert "**Verdict by the pre-registered rule:" in head and "### Winner clause per capability axis" in head and "### Is it better than ours?" in head
+    assert "| C | temporal |" in head and "| D | recall_distance" in head and "| J | exact_words" in head and "| K | reflection" in head
+    assert "| L | multi_hop" in head and "| M | protocol_brain" in head and "| B | extraction |" in head and "| E | abstention |" in head
+    assert "FLOORS" in head and "ties on capability go to the maintained candidate" in head and "no longer break ties" in head and "Honest caveats:" in head
+    assert head.index("Verdict by") < head.index("Winner clause per capability axis") < head.index("Floors reported beside the contest") < head.index("Is it better than ours?")
 
 
 def test_the_plain_answer_says_yes_only_when_the_rule_says_so():
     ax = {"extraction": {"pass": 18, "n": 18, "wilson95": [0.82, 1.0], "skipped": 0}}
     arm = {"verdict": "PASSES_BUILT_GATES", "seeds_done": 3, "axes": ax, "gates": {"G0": {"x": {"state": gates.PASS}}}}
-    won = {"verdict": "ADOPT_CANDIDATE", "winner": "H1", "compare": {"H1": {"B": {"axis": "extraction", "built": True, "beats": True, "worse": False},
-                                                                        "D": {"axis": "recall", "built": True, "beats": True, "worse": False}}}}
-    assert gates._better_line({"H1": arm}, won).startswith("Yes, on what was measured: H1 passes every built gate")
-    tie = {"verdict": "KEEP_Z0", "compare": {"H1": {"B": {"axis": "extraction", "built": True, "beats": False, "worse": False, "arm": [18, 18, [0.82, 1.0]]},
-                                                  "C": {"axis": "temporal", "built": True, "beats": False, "worse": False, "note": "no data"}}}}
+    won = {"verdict": "ADOPT_CANDIDATE", "winner": "H1", "compare": {"H1": {"J": {"axis": "exact_words", "built": True, "beats": True, "worse": False},
+                                                                        "L": {"axis": "multi_hop", "built": True, "beats": True, "worse": False}}}}
+    assert gates._better_line({"H1": arm}, won).startswith("Yes, on what was measured: H1 passes every floor")
+    tied = {"verdict": "ADOPT_ON_TIE", "winner": "H1", "compare": {"H1": {"C": {"axis": "temporal", "built": True, "beats": False, "worse": False, "arm": [9, 9, [0.7, 1.0]]},
+                                                                         "K": {"axis": "reflection", "built": True, "beats": False, "worse": False, "note": "no data"}}}}
+    line = gates._better_line({"H1": arm}, tied)
+    assert line.startswith("Not shown to be better, not shown to be worse: H1 passes every floor") and "maintained candidate" in line and "no data for K reflection" in line
+    tie = {"verdict": "KEEP_Z0", "compare": {"H1": {"C": {"axis": "temporal", "built": True, "beats": False, "worse": False, "arm": [18, 18, [0.82, 1.0]]},
+                                                  "J": {"axis": "exact_words", "built": True, "beats": False, "worse": False, "note": "no data"}}}}
     line = gates._better_line({"H1": {**arm, "verdict": "NOT_ADOPTABLE", "gates": {"G2": {"hard_cells_all_ran": {"state": gates.FAIL}}}}}, tie)
-    assert line.startswith("No evidence that H1 is better than Z0") and "ties Z0 on B extraction" in line and "no data for C temporal" in line
-    assert "A tie goes to Z0" in line and "G2 hard_cells_all_ran" in line
+    assert line.startswith("No evidence that H1 is better than Z0") and "ties Z0 on C temporal" in line and "no data for J exact_words" in line
+    assert "keep Z0" in line and "G2 hard_cells_all_ran" in line
 
 
 # ── the H arms run the graph-edge, conflict-pass and physical-erase cells (the structural skips of run 1 are gone) ────────────────
@@ -1232,9 +1310,63 @@ def test_the_dry_plan_counts_what_each_kind_of_arm_can_run(box):
     line = next(m for m in w.logs if m.startswith("per-arm cell budget"))
     b = measure.plan_budget(w.cfg)
     assert b.runnable == b.store_cells and b.runnable_h0 < b.runnable
-    assert f"0 of {b.store_cells} store cells SKIP by capability on H1 / H2" in line
+    assert f"0 of {b.store_cells} ordinary store cells SKIP by capability on H1 / H2" in line
     assert f"{b.store_cells - b.runnable_h0} on H0 (no Zoe layer: conflict_pass / edges)" in line
     assert f"/{b.runnable_h0} runnable cells each" in line and f"/{b.runnable} runnable cells each" in line
+
+
+CAP_IDS = ("J1.exact_sentence_after_100_filler", "J2.when_did_i_say_it", "K1.observations_are_true", "K2.thread_recall", "K4.invalidated_fact_not_restated",
+           "L1.two_facts_after_100_filler", "M1.answered_when_recall_fired")
+
+
+def test_the_capability_cells_run_on_seed_one_only_and_each_arm_runs_the_ones_it_is_the_evidence_for(box, tmp_path, monkeypatch):
+    w, _host = e2e_window(box, tmp_path, monkeypatch, extra=CAP_IDS)
+    measure.measure(w)
+    art = json.loads((box / "run-t1.json").read_text())
+    h1 = art["seed_runs"]["H1"]
+    seeds = list(h1)
+    ids = lambda run: {c["id"]: c for c in run["cells"]}  # noqa: E731
+    held = [k for k in h1 if k != "zmb-v1"]                                                                               # the artifact sorts its keys: seed 1 is the baseline seed
+    first, later = ids(h1["zmb-v1"]), ids(h1[held[0]])
+    assert set(CAP_IDS) <= set(first) and not set(CAP_IDS) & set(later) and not set(CAP_IDS) & set(ids(h1[held[1]]))        # seed 1 only
+    assert first["J1.exact_sentence_after_100_filler"]["verdict"] == "FAIL"                                               # H1 keeps the extractor's facts, not the raw turn
+    assert first["K1.observations_are_true"]["verdict"] == "SKIP" and "observations" in first["K1.observations_are_true"]["reason"]     # no observation layer: a capability skip, not a cut
+    h2 = ids(art["seed_runs"]["H2"]["zmb-v1"])
+    assert h2["J1.exact_sentence_after_100_filler"]["verdict"] == "SKIP" and "planner cut" in h2["J1.exact_sentence_after_100_filler"]["reason"]    # the plan's cut, said so
+    assert h2["K1.observations_are_true"]["verdict"] != "SKIP" and h2["K2.thread_recall"]["verdict"] != "SKIP"                        # H2 runs the observation layer's cells
+    assert art["arms"]["H1"]["axes"]["exact_words"]["items"]["n"] == 40 and art["arms"]["H2"]["axes"]["reflection"]["n"] >= 3
+    why = art["arms"]["H2"]["gates"]["G2"]["hard_cells_all_ran"]["measured"]
+    assert "planner cut" not in why or "hard" in why                                                                    # the cut cells are not hard cells: they cannot keep a floor red
+    md = Path(art["docs_path"]).read_text()
+    assert "### Winner clause per capability axis" in md and "| J | exact_words" in md and "FLOORS" in md and "no longer break ties" in md
+    assert set(art["compare"]["H1"]) == {"C", "D", "J", "K", "L", "M"} and set(art["decision"]["floors"]["H1"]) == {"B", "E"}
+    assert art["decision"]["verdict"] in ("KEEP_Z0", "ADOPT_CANDIDATE", "ADOPT_ON_TIE")
+
+
+def test_the_dry_plan_states_what_it_cut_to_fit_the_capability_axes_under_the_cap(box):
+    w = make_window(box, FakeHost(box), dry=True)
+    measure.dry_plan(w)
+    out = "\n".join(w.logs)
+    b = measure.plan_budget(w.cfg)
+    assert b.total_min() <= b.avail_min and b.avail_min <= w.cfg.cap_min - w.cfg.reserve_min - measure.TAIL_MIN               # inside the 90 minute cap with the restore reserve kept
+    assert "CUT to fit the capability axes under the cap" in out and "H2: exact_words, multi_hop, protocol cut" in out and "H0: exact_words, multi_hop, protocol cut" in out
+    assert "H1: nothing cut" in out and "capability cells run on seed 1 only" in out and "(-17.7 min)" in out
+    for arm in ("H1", "H2", "HM", "H0"):
+        assert f"{arm} seed 1: capability cells (" in out, arm
+    assert "H1 seed 1: capability cells (exact_words, multi_hop, protocol)" in out and "H2 seed 1: capability cells (reflection)" in out
+    assert "only if time remains; ~10 min, not budgeted" in out                                                           # the concise validity phase
+    assert b.extra_min["H1"] > b.extra_min["H2"] > 0 and b.extra_min["HM"] == measure.HM_CAP_MIN
+    assert measure.cap_extra_min("H1") == round(sum(measure.CAP_RETAINS[x] for x in measure.CAP_PLANNED["H1"]) * measure.S_PER_RETAIN["H1"] / 60.0 * 2) / 2.0
+    assert "Z0e (real Chroma + MiniLM) on the 4 recall (D) + 3 long-range (L) cells" in out
+
+
+def test_the_planner_does_not_count_the_capability_cells_in_the_box_run_1_measured(box):
+    b = measure.plan_budget(bakeoff.Cfg(bakeoff_dir=box))
+    from zmb import cells as cellmod
+    cap_cells = [c for c in spec.load_cells() if c.tier == "store" and c.axis in measure.CAP_AXES]
+    assert cap_cells and b.store_cells == len([c for c in spec.load_cells() if c.tier == "store"]) - len(cap_cells)
+    assert set(measure.CAP_AXES) == {"exact_words", "reflection", "multi_hop", "protocol"} and set(measure.CAP_CUT) == {"H0", "H1", "H2", "HM"}
+    assert all(set(measure.CAP_CUT[a]) | set(measure.CAP_PLANNED[a]) <= set(measure.CAP_AXES) for a in measure.CAP_CUT)
 
 
 def test_measure_over_the_full_stack_runs_the_hard_edge_and_disk_cells_on_h1_and_h0_stays_red_by_design(box, tmp_path, monkeypatch):

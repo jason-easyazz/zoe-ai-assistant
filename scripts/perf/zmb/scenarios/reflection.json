@@ -1,0 +1,177 @@
+{
+  "spec_version": 1,
+  "axis": "reflection",
+  "cells": [
+    {
+      "id": "K1.observations_are_true",
+      "title": "reflection: after thirty days of a household and one night's pass that also proposes fabricated links, stale facts and mis-attributions, every DERIVED observation is true - none joins two things the owner never said together (precision >= 95%, hard)",
+      "tier": "store",
+      "kind": "script",
+      "lme_map": "",
+      "note": "gold is generated: an observation is TRUE when every pair of entities it names was said together by the owner, FALSE when it names an entity from another household, a pair never said together (the fabricated link) or an invalidated value as current; fewer than two entities = neutral, reported and not counted. The nightly model is SCRIPTED on an arm with no model of its own (Z0): the cell then measures what the STORE keeps of a night's proposals (a model that lies must not become a belief); an arm that runs its own model (Hindsight's observation layer) reads the life itself. Needs >= 3 decidable observations: a layer that reflects nothing has not passed. Z0's digest has no truth gate on a proposal (it keeps the fabricated link as an approved model row), so this is a TARGET on Z0",
+      "expected": "FAIL",
+      "params": {
+        "play_group": "K"
+      },
+      "events": [
+        {
+          "do": "life"
+        },
+        {
+          "do": "life_pass",
+          "propose": [
+            "true",
+            "fabricated",
+            "stale",
+            "hedged",
+            "said"
+          ]
+        }
+      ],
+      "probes": [
+        {
+          "kind": "observations",
+          "score": "true",
+          "min_precision": 0.95,
+          "min_decidable": 3
+        }
+      ]
+    },
+    {
+      "id": "K2.thread_recall",
+      "title": "reflection: of the four stories that developed over the thirty days (a friend's job, a colleague's move, the owner's knee, a child's concert) the observations cover at least 70%, none of them false",
+      "tier": "store",
+      "kind": "script",
+      "lme_map": "",
+      "note": "an observation covers a thread when it holds the thread's subject and its key token and is not itself false. Measures the arm's OWN model (what it chose to notice), so an arm whose nightly model the lab scripts SKIPs it (Z0): what a scripted model says is the script's. n = 4 threads",
+      "expected": "PASS",
+      "params": {
+        "play_group": "K"
+      },
+      "events": [
+        {
+          "do": "life"
+        },
+        {
+          "do": "life_pass",
+          "propose": [
+            "true",
+            "fabricated",
+            "stale",
+            "hedged",
+            "said"
+          ]
+        }
+      ],
+      "probes": [
+        {
+          "kind": "threads",
+          "min_recall": 0.7
+        }
+      ]
+    },
+    {
+      "id": "K3.useful_answers",
+      "title": "reflection: asked 'what's been going on with <friend> lately', '... with <colleague> lately' and 'how has my week been', the observations offered surface the stories each should (>= 70% of the three)",
+      "tier": "store",
+      "kind": "script",
+      "lme_map": "",
+      "note": "the observations the arm ranks first for each question (top 5) must cover at least half of the threads it should surface and none of them false; the week question wants two of three. The arm's OWN model: SKIP where the lab scripts it. n = 3 questions",
+      "expected": "PASS",
+      "params": {
+        "play_group": "K"
+      },
+      "events": [
+        {
+          "do": "life"
+        },
+        {
+          "do": "life_pass",
+          "propose": [
+            "true",
+            "fabricated",
+            "stale",
+            "hedged",
+            "said"
+          ]
+        }
+      ],
+      "probes": [
+        {
+          "kind": "useful",
+          "min_rate": 0.7
+        }
+      ]
+    },
+    {
+      "id": "K4.invalidated_fact_not_restated",
+      "title": "reflection: the sister's old town and the friend's old employer were invalidated during the month - no observation states either as current when the night's pass restates them",
+      "tier": "store",
+      "kind": "script",
+      "controls": [
+        "authority"
+      ],
+      "lme_map": "knowledge update; abstaining on a stale value",
+      "note": "the owner both said the change in ordinary speech and taught the new value; the night's scripted model restates the OLD value as if current. An observation that names the old value with no history marker ('used to', 'left', 'moved from', 'before') is stale. The arm's authority wall is what stands between a model's restatement and the owner's current word: the `authority` control (a model write may supersede / archive what the user said) turns it red. Needs >= 3 observations (a layer that reflects nothing is empty, not current)",
+      "params": {
+        "play_group": "K"
+      },
+      "events": [
+        {
+          "do": "life"
+        },
+        {
+          "do": "life_pass",
+          "propose": [
+            "true",
+            "fabricated",
+            "stale",
+            "hedged",
+            "said"
+          ]
+        }
+      ],
+      "probes": [
+        {
+          "kind": "observations",
+          "score": "current",
+          "min_observations": 3
+        }
+      ]
+    },
+    {
+      "id": "K5.user_stated_is_never_restated_as_inference",
+      "title": "reflection: a fact the owner stated is never re-stated as an inference ('probably', 'seems', labelled inferred), and an inference is never presented as something the owner said ('you told me')",
+      "tier": "store",
+      "kind": "script",
+      "lme_map": "",
+      "note": "both directions of attribution over the observation export: a restatement of a stated claim that is hedged or labelled inferred is a violation, and so is an observation that says 'you told me / you said' (or is labelled user-stated) about a link the owner never stated. Zero violations over >= 3 observations. The night's scripted model proposes both kinds of mistake on an arm with no model of its own. MEASURED on Z0: the nightly digest APPROVES the hedged restatement and the 'you told me' invention as ordinary model rows (class model_from_transcript, no anchor required for a non-relationship fact), so this is a TARGET on Z0",
+      "expected": "FAIL",
+      "params": {
+        "play_group": "K"
+      },
+      "events": [
+        {
+          "do": "life"
+        },
+        {
+          "do": "life_pass",
+          "propose": [
+            "true",
+            "fabricated",
+            "stale",
+            "hedged",
+            "said"
+          ]
+        }
+      ],
+      "probes": [
+        {
+          "kind": "observations",
+          "score": "attributed",
+          "min_observations": 3
+        }
+      ]
+    }
+  ]
+}

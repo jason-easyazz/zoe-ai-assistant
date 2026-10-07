@@ -17,6 +17,11 @@ Event forms (a dict in ``cell.events``):
     {"do": "needles"}                                          teach the seeded recall corpus (``needles.corpus``)
     {"do": "filler", "turns": 100}                             N seeded household-chatter turns (``needles.chatter``)
     {"do": "hard_delete"}                                      the audited hard delete of the user (capability ``disk``)
+    {"do": "exact_needles"}                                    (j) teach the 20 sentences the owner SAID, each on its day (``life.exact_turns``)
+    {"do": "hop_facts", "which": "a"|"b"}                      (l) teach the first / the second fact of the 20 two-fact questions (``life.hop_corpus``)
+    {"do": "life"}                                             (k) thirty days of a household's turns, each on its day (``life.life``)
+    {"do": "life_pass", "propose": ["true", "fabricated", ...]} (k) the nightly model's SCRIPTED proposals (the truth, and each kind of mistake)
+    {"do": "protocol_facts"}                                   (m) teach the facts the protocol prompts ask about (``life.protocol_corpus``)
 
 Probe forms (a dict in ``cell.probes``; every probe must pass):
 
@@ -29,6 +34,15 @@ Probe forms (a dict in ``cell.probes``; every probe must pass):
     {"kind": "edges",   "assertions": [...]}                   the people graph (``scorers.score_edges``; ``edges``)
     {"kind": "hit_at_k", "k": 5, "min_rate": 0.9, "queries": "direct"|"paraphrase"}   the corpus's needles retrieved
     {"kind": "answer",  "query": "...", "needles": [], "canaries": []}   the scripted reader (capability ``reader``)
+    {"kind": "exact", "k": 5, "min_rate": 0.9}                 (j) every exact needle's sentence is in ``recall_exact`` word for word (``exact_words``)
+    {"kind": "exact_when", "k": 5, "min_rate": 0.9}            (j) ... and the arm says which day it was said (``exact_words``)
+    {"kind": "hops", "k": 8, "min_rate": 0.7}                  (l) both facts of every two-fact question are in ``recall_linked`` (``multi_hop``)
+    {"kind": "observations", "score": "true"|"current"|"attributed"}   (k) the arm's observation export vs the life's gold (``observations``)
+    {"kind": "threads", "min_recall": 0.7} / {"kind": "useful"}        (k) thread recall / the "what's been going on" answers (``observations``,
+                                                               the arm's OWN model: a scripted-model arm SKIPs)
+    {"kind": "protocol", "metric": "fire_when_needed", "protocol": "zoe"}   (m) the protocol's trigger + the arm's packet + the scripted reader (``protocol``)
+
+``params.play_group``: cells that share a group and a seed share ONE play of their events (one expensive ingest, several read-only probes).
 
 A probe or event the arm cannot do (a stub arm, a missing capability) makes the cell SKIP with the reason -
 never PASS. ``LiveStoreViolation`` (a ``BaseException``) is never caught: it aborts the run.
@@ -40,7 +54,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import needles as needlemod, scorers
+from . import life as lifemod, needles as needlemod, scorers, scorers_cap as cap
 from .arms.base import Arm, Turn
 from .spec import Cell
 from .world import World
@@ -51,8 +65,11 @@ RETAINED = ("approved", "pending", "disputed")
 _TURN_KEYS = {"text", "speaker", "day_offset", "writer", "proposes", "op", "attr", "assistant_text",
               "memory_type"}
 _CAPS = {"advance_clock": "clock", "ingest_as": "identities", "idle_pass": "idle_pass",
-         "conflict_pass": "conflict_pass", "edge": "edges", "hard_delete": "disk"}
-_PROBE_KINDS = ("store", "facts", "entities", "recall", "answer", "edges", "hit_at_k", "disk")
+         "conflict_pass": "conflict_pass", "edge": "edges", "hard_delete": "disk", "life_pass": "idle_pass"}
+#: the capability axes' probes (j exact words, k reflection, l multi-hop, m protocol): the capability an arm must DECLARE for the probe
+_PROBE_CAPS = {"exact": "exact_words", "exact_when": "exact_words", "hops": "multi_hop", "observations": "observations",
+               "threads": "observations", "useful": "observations", "protocol": "protocol"}
+_PROBE_KINDS = ("store", "facts", "entities", "recall", "answer", "edges", "hit_at_k", "disk") + tuple(_PROBE_CAPS)
 
 
 @dataclass
@@ -66,8 +83,8 @@ class Outcome:
 
 
 def demo_user(world: World, cell: Cell) -> str:
-    """A deterministic ``demo_bar_<8 hex>`` id for this cell on this seed."""
-    return "demo_bar_" + hashlib.sha1(f"{world.seed}:{cell.id}".encode()).hexdigest()[:8]
+    """A deterministic ``demo_bar_<8 hex>`` id for this cell on this seed (cells of one ``play_group`` share it: they share one store)."""
+    return "demo_bar_" + hashlib.sha1(f"{world.seed}:{cell.params.get('play_group') or cell.id}".encode()).hexdigest()[:8]
 
 
 def make_turn(ev: "dict[str, Any]") -> Turn:
@@ -93,6 +110,8 @@ def required_capabilities(cell: Cell) -> "set[str]":
             need.add("disk")
         if p.get("as"):
             need.add("identities")
+        if p.get("kind") in _PROBE_CAPS:
+            need.add(_PROBE_CAPS[p["kind"]])
     return need
 
 
@@ -129,9 +148,117 @@ def _play(cell: Cell, arm: Arm, world: "World | None" = None) -> "list[dict[str,
                                                                                    str(ev.get("salt", "")))])
         elif do == "hard_delete":
             arm.hard_delete()
+        elif do == "exact_needles":
+            arm.ingest([Turn(t["text"], "owner_typed", day_offset=t["day_offset"]) for t in lifemod.exact_turns(seed)])
+        elif do == "hop_facts":
+            which = str(ev.get("which", "a"))
+            if which not in ("a", "b"):
+                raise ValueError(f"hop_facts which must be 'a' or 'b', got {which!r}")
+            items = lifemod.hop_corpus(seed)
+            turns = [(x.day_a, x.fact_a) if which == "a" else (x.day_b, x.fact_b) for x in items]
+            arm.ingest([Turn(text, "owner_taught", day_offset=d) for d, text in sorted(turns, key=lambda t: -t[0])])
+        elif do == "life":
+            lf = lifemod.life(seed)
+            arm.ingest([Turn(t["text"], "owner_taught" if t["speaker"] == "taught" else "owner_typed", day_offset=30 - t["day"]) for t in lf.turns])
+        elif do == "life_pass":
+            passes.append(_life_pass(arm, seed, list(ev.get("propose") or ())))
+        elif do == "protocol_facts":
+            sentences, _prompts = lifemod.protocol_corpus(seed)
+            arm.ingest([Turn(s, "owner_taught") for s in sentences])
         else:
             raise ValueError(f"unknown event action {do!r}")
     return passes
+
+
+_LIFE_KINDS = {"true": "proposals_true", "fabricated": "proposals_fabricated", "stale": "proposals_stale", "hedged": "proposals_hedged",
+               "said": "proposals_presented_as_said"}
+
+
+def _life_pass(arm: Arm, seed: str, kinds: "list[str]") -> "dict[str, Any]":
+    """The nightly pass over the life's user turns, with the model's output SCRIPTED: the truths and each kind of mistake a model makes (an
+    arm that runs its own extraction ignores the script and reads the transcript)."""
+    bad = [k for k in kinds if k not in _LIFE_KINDS]
+    if bad:
+        raise ValueError(f"unknown life_pass kind(s) {', '.join(bad)} (known: {', '.join(_LIFE_KINDS)})")
+    lf = lifemod.life(seed)
+    proposes: "list[str]" = []
+    for k in kinds:
+        proposes += getattr(lf, _LIFE_KINDS[k])
+    return arm.run_idle_pass("\n".join(t["text"] for t in lf.turns if t["speaker"] == "typed"), proposes, judge=False)
+
+
+def _norm_day(d: Any) -> "float | None":
+    return None if d is None or d == "" else float(d)
+
+
+def _exact(p: "dict[str, Any]", arm: Arm, seed: str) -> scorers.Score:
+    """(j) For every exact needle: ask for it the way the owner would; PASS the item when one hit holds the sentence word for word."""
+    k = int(p.get("k", 5))
+    corpus = lifemod.exact_corpus(seed)
+    hits, days = [], []
+    for x in corpus:
+        got = arm.recall_exact(x.question, k)
+        found = [h for h in got if cap.contains_span(h.get("text", ""), x.sentence)]
+        hits.append(bool(found))
+        about = [h for h in got if scorers.contains_phrase(h.get("text", ""), x.subject)]     # "when": the first row that is ABOUT it, its words or not
+        days.append(_norm_day(about[0].get("day_offset")) if about else None)
+    if p["kind"] == "exact_when":
+        return cap.score_when(days, [x.day_offset for x in corpus], min_rate=float(p.get("min_rate", 0.9)))
+    return cap.score_exact(hits, [x.style for x in corpus], k=k, min_rate=float(p.get("min_rate", 0.9)))
+
+
+def _hops(p: "dict[str, Any]", arm: Arm, seed: str) -> scorers.Score:
+    """(l) For every two-fact question: both facts must be in the arm's associative packet (a row holding the subject and the answer token each)."""
+    k = int(p.get("k", 8))
+    both, kinds, a_only, b_only = [], [], 0, 0
+    for it in lifemod.hop_corpus(seed):
+        texts = [r.get("text", "") for r in arm.recall_linked(it.question, k)]
+        a, b = cap.fact_in_rows(texts, it.a_need), cap.fact_in_rows(texts, it.b_need)
+        both.append(a and b)
+        kinds.append(it.kind)
+        a_only += int(a and not b)
+        b_only += int(b and not a)
+    return cap.score_hops(both, kinds, a_only, b_only, k=k, min_rate=float(p.get("min_rate", 0.7)))
+
+
+def _reflection(p: "dict[str, Any]", arm: Arm, seed: str) -> scorers.Score:
+    """(k) The observation export against the life's gold. ``threads`` / ``useful`` need the arm's OWN model: where the lab scripted it the cell
+    SKIPs (what a scripted model says is the script's, not the store's)."""
+    gold = lifemod.gold_for_scoring(lifemod.life(seed))
+    kind = p["kind"]
+    if kind == "observations":
+        return cap.score_observations(arm.observations().get("items") or [], gold, kind=str(p.get("score", "true")),
+                                      min_precision=float(p.get("min_precision", 0.95)), min_decidable=int(p.get("min_decidable", 3)),
+                                      min_observations=int(p.get("min_observations", 3)))
+    first = arm.observations()
+    if first.get("model") == "scripted":
+        raise NotImplementedError(f"arm {arm.name}: the nightly model is scripted in this lab, so what an observation SAYS is the script's: "
+                                  "thread recall and usefulness are measured only on an arm that runs its own model")
+    if kind == "threads":
+        return cap.score_threads(first.get("items") or [], gold, min_recall=float(p.get("min_recall", 0.7)))
+    lf = lifemod.life(seed)
+    answers = [arm.observations(q).get("items") or [] for q, _ids in lf.questions]
+    return cap.score_useful(answers, [ids for _q, ids in lf.questions], gold, min_rate=float(p.get("min_rate", 0.7)))
+
+
+def _protocol(p: "dict[str, Any]", arm: Arm, seed: str) -> scorers.Score:
+    """(m) The lab half: each protocol's trigger policy decides whether recall FIRES; the arm builds the packet and the scripted reader answers from
+    it (or says it does not know). The verdict is on ``p["protocol"]``; the numbers of every protocol ride in the evidence (counts only)."""
+    _facts, prompts = lifemod.protocol_corpus(seed)
+    want = str(p.get("protocol", "zoe"))
+    if want not in lifemod.POLICIES:
+        raise ValueError(f"unknown protocol {want!r} (known: {', '.join(lifemod.POLICIES)})")
+    per: "dict[str, list[dict[str, Any]]]" = {}
+    for name, (policy, _src) in lifemod.POLICIES.items():
+        recs = []
+        for pr in prompts:
+            fired = bool(policy(pr.text))
+            recs.append({"kind": pr.kind, "fired": fired, "gold": pr.gold,
+                         "answer": arm.protocol_answer(pr.text, lifemod.prompt_anchor(pr), fired, int(p.get("k", 5)))})
+        per[name] = recs
+    s = cap.score_protocol(per[want], str(p["metric"]))
+    s.evidence["compared"] = {name: cap.protocol_metrics(recs)[str(p["metric"])] for name, recs in per.items()}
+    return s
 
 
 def _hit_at_k(p: "dict[str, Any]", arm: Arm, seed: str) -> scorers.Score:
@@ -162,6 +289,14 @@ def _probe(p: "dict[str, Any]", arm: Arm, seed: str = "zmb-v1") -> scorers.Score
         return scorers.score_edges(arm.edges(), p["assertions"], stage=p.get("stage", "write"))
     if kind == "hit_at_k":
         return _hit_at_k(p, arm, seed)
+    if kind in ("exact", "exact_when"):
+        return _exact(p, arm, seed)
+    if kind == "hops":
+        return _hops(p, arm, seed)
+    if kind in ("observations", "threads", "useful"):
+        return _reflection(p, arm, seed)
+    if kind == "protocol":
+        return _protocol(p, arm, seed)
     if kind in ("facts", "entities"):
         texts = _retained_texts(arm.stats()["rows"])
         if kind == "facts":
@@ -200,12 +335,19 @@ def run_cell(cell: Cell, world: World, arm: Arm) -> Outcome:
         return done(Outcome("ERROR", reason="a store-tier cell with no probes proves nothing"))
     try:
         needs_disk = "disk" in required_capabilities(cell)
-        arm.reset(demo_user(world, cell), **({"disk": True} if needs_disk else {}))
-        passes = _play(cell, arm, world)
+        group = cell.params.get("play_group")
+        key = (str(group), world.seed, hashlib.sha1(repr(cell.events).encode()).hexdigest()) if group else None
+        if key is not None and getattr(arm, "_zmb_played", None) == key:
+            passes = []                       # the same group, seed and events were just played into THIS store: read it again (probes never write)
+        else:
+            arm._zmb_played = None
+            arm.reset(demo_user(world, cell), **({"disk": True} if needs_disk else {}))
+            passes = _play(cell, arm, world)
         for rep in passes:
             if rep.get("skipped_reason") or rep.get("error"):
                 raise RuntimeError("the idle pass did not run (" + str(rep.get("skipped_reason")
                                                                      or rep.get("error"))[:60] + ")")
+        arm._zmb_played = key
         scores = [_probe(p, arm, world.seed) for p in cell.probes]
     except NotImplementedError as exc:  # a stub arm / a call the arm does not have: a SKIP, never a PASS
         return done(Outcome("SKIP", reason=str(exc)[:300]))

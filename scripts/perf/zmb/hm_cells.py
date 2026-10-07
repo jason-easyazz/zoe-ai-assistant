@@ -46,7 +46,8 @@ VERBATIM_BUDGET_MS = 100.0       # HM-G1a: the verbatim query alone, warm
 RULE = {"F": "HM-G2a two-tier forget (t+0 / t+6 min)", "L": "HM-G1a two-lookup latency",
         "R": "HM-G0a two-store RAM", "G": "G2 affect/consent (both tiers)", "I": "G2 poisoning (verbatim)",
         "H": "G2 identity", "A": "G2 authority (two tiers)", "T": "HM-G1b one tier down", "W": "owner: no model call on write",
-        "V": "multi-user isolation (wing)", "S": "sanity (positive controls)"}
+        "V": "multi-user isolation (wing)", "S": "sanity (positive controls)",
+        "J": "capability axis (j): exact words, the verbatim tier's own job"}
 
 
 @dataclass
@@ -429,9 +430,32 @@ def cell_r1_control(_arm: Optional[HMArm]) -> scorers.Score:
     return _score(bad["ok"], "write", **bad["numbers"])
 
 
+def cell_j1(arm: HMArm) -> scorers.Score:
+    """(j) EXACT WORDS through HM's exact lane: 20 sentences the verified owner said (each on its own day), 30 household turns after - the answer to
+    "what exactly did I say about ..." holds each sentence word for word (>= 90%) AND says which day it was said. The generic spec's J1 / J2 cells are
+    this on every arm; this one carries the negative control the HM glue owns: ``exact_lookup`` OFF = the request is served from the distilled facts alone."""
+    from zmb import life as lifemod, needles as needlemod, scorers_cap as cap
+    seed = "zmb-v1"
+    arm.reset(USER)
+    arm.ingest([T(t["text"], "owner_typed", day_offset=t["day_offset"]) for t in lifemod.exact_turns(seed)])
+    arm.ingest([T(f["text"], f["speaker"]) for f in needlemod.chatter(seed, 30, "hm-j")])
+    corpus = lifemod.exact_corpus(seed)
+    hits, days = [], []
+    for x in corpus:
+        got = arm.recall_exact(x.question, 5)
+        hits.append(any(cap.contains_span(h["text"], x.sentence) for h in got))
+        about = [h for h in got if scorers.contains_phrase(h["text"], x.subject)]
+        days.append(about[0]["day_offset"] if about else None)
+    words = cap.score_exact(hits, [x.style for x in corpus], k=5, min_rate=0.9)
+    when = cap.score_when(days, [x.day_offset for x in corpus], min_rate=0.9)
+    return scorers.merge(words, when)
+
+
 CELLS: "list[HMCell]" = [
     HMCell("HM-S1.sanity.verified-stored", "the verified user's own words are stored, recalled and distilled", "S", (),
            cell_s1, sanity=True),
+    HMCell("HM-J1.exact-words", "(j) 'what exactly did I say': the verbatim tier returns each of 20 sentences word for word, with the day it was said", "J",
+           ("exact_lookup",), cell_j1),
     HMCell("HM-F4.sanity.reteach", "after a forget, a deliberate re-teach by the verified person is stored", "S", (),
            cell_f4, sanity=True),
     HMCell("HM-F1.forget.t0", "forget at t+0 clears BOTH tiers (name, case, possessive, hyphen) and keeps the rest", "F",

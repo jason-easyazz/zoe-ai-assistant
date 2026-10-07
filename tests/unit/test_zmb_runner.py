@@ -89,7 +89,7 @@ def test_a_clean_run_is_ok_and_the_artifact_has_the_contract_fields(bench):
     assert a["status"] == "ok" and a["run_kind"] == "measure" and a["partial"] is False
     assert a["arm"] == "Z0" and a["tier"] == "store" and a["corpus_seed"] == world.BASELINE_SEED
     assert a["held_out"] is False and a["spec_digest"] and a["revision"] == {"commit": "c0ffee", "dirty": False}
-    assert a["instrument"]["ok"] and a["instrument"]["checked"] == 137
+    assert a["instrument"]["ok"] and a["instrument"]["checked"] == 143
     assert a["instrument"]["lab_controls_red"] == f"{a['instrument']['red']}/{a['instrument']['checked']}"
     assert a["teardown"]["proven"] is True and a["hard_violations"] == []
     for c in a["cells"]:                                  # per-cell duration and brain turns, always

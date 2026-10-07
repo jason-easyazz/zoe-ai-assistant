@@ -420,7 +420,9 @@ class HMArm(Arm):
     """Distilled + verbatim, composed. ``distilled`` defaults to the Hindsight stub (so ``--arm HM`` in the runner is a
     declared SKIP with the install hint, exactly like H1)."""
     name = "HM"
-    capabilities = frozenset({"clock", "identities", "idle_pass", "verbatim", "reader"})
+    capabilities = frozenset({"clock", "identities", "idle_pass", "verbatim", "reader",
+                              # the capability axes: the verbatim tier is the exact-words channel; the packet is the associative one; the reader the protocol's
+                              "exact_words", "multi_hop", "protocol"})
 
     #: bullets the packet may carry and the share the verbatim tier may take of them on an ordinary turn
     PACKET_MAX = 12
@@ -546,7 +548,7 @@ class HMArm(Arm):
             self.model_calls += int(r.get("model_calls", 0))
         return out
 
-    def run_idle_pass(self, transcript: str, proposes: "list[str]") -> "dict[str, Any]":
+    def run_idle_pass(self, transcript: str, proposes: "list[str]", *, judge: bool = True) -> "dict[str, Any]":
         """The background distiller: drain the pending verbatim chunks into the distilled tier (the scripted model
         output is ``proposes``), skipping what the ledger matches, then refresh the voice-lane packet cache."""
         out = self._drain(self._user, list(proposes))
@@ -785,6 +787,27 @@ class HMArm(Arm):
 
     def recall(self, query: str, k: int = 10) -> "list[dict[str, Any]]":
         return self.packet(query, k)
+
+    def recall_exact(self, query: str, k: int = 5) -> "list[dict[str, Any]]":
+        """(j) "What exactly did I say": the EXACT lane of the packet (the verbatim tier first, quarantine rooms included, every chunk the owner's words
+        unchanged) with the day each was filed. ``exact_lookup`` OFF = the request is served from the distilled facts alone (the negative control)."""
+        from .mempalace_verbatim import BASE_TS, DAY_S
+        rows = self.packet(query, max(k, 1), exact=True)
+        if not self.controls.exact_lookup:
+            rows = [r for r in rows if not str(r.get("origin", "")).startswith("verbatim")]
+        return [{"text": r.get("raw") or r["text"],
+                 "day_offset": round((float(r["filed_ts"]) - BASE_TS) / DAY_S) if r.get("filed_ts") else None} for r in rows[:k]]
+
+    def recall_linked(self, query: str, k: int = 8) -> "list[dict[str, Any]]":
+        """(l) HM's packet: the distilled tier (Hindsight's retrieval, link graph included) and the verbatim tier, merged and de-duplicated."""
+        return [{**r, "text": r.get("raw") or r["text"]} for r in self.packet(query, k)]
+
+    def protocol_answer(self, prompt: str, anchor: "tuple[str, ...]", fired: bool, k: int = 5) -> str:
+        """(m, lab half) The scripted reader over the HM packet when recall fired."""
+        from .. import life as lifemod
+        if not fired:
+            return lifemod.DECLINE
+        return lifemod.anchored_reader([{**r, "text": r.get("raw") or r["text"]} for r in self.packet(prompt, k)], anchor)
 
     def recall_timed(self, query: str, k: int = 10, *, lane: str = "chat",
                      exact: bool = False) -> "tuple[list[dict[str, Any]], float]":

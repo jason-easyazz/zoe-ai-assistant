@@ -299,7 +299,7 @@ def test_every_hm_cell_goes_red_with_each_named_protection_off_and_green_with_al
     assert s["fail"] == [] and s["sanity_fail"] == [], s
     assert s["targets_failing"] == [] and s["targets_now_passing"] == []          # HM-F5 closed by the forget-alias sweep: graded, not a target
     assert s["skipped"] == ["HM-F6.forget.physical", "HM-F8.forget.physical-distilled"]      # F6 needs the library store, F8 the real Hindsight tier + its Postgres
-    assert s["pass"] == s["graded"] == 17
+    assert s["pass"] == s["graded"] == 18                                           # + HM-J1 (exact words, control `exact_lookup`)
     for row in res["cells"]:
         if row["verdict"] == "SKIP":
             continue

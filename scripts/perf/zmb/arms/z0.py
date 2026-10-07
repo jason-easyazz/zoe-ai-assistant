@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import datetime as _dt
 import hashlib
 import importlib
 import os
@@ -87,7 +88,9 @@ IDENTITIES = {
 
 class Z0Arm(Arm):
     name = "Z0"
-    capabilities = frozenset({"clock", "controls", "reader", "identities", "idle_pass", "conflict_pass", "edges"})
+    capabilities = frozenset({"clock", "controls", "reader", "identities", "idle_pass", "conflict_pass", "edges",
+                              # the capability axes: Z0 DECLARES all four and is MEASURED on them (a known gap is a target, never a skip)
+                              "exact_words", "observations", "multi_hop", "protocol"})
     #: ``disk`` = the arm can run a cell over REAL Chroma and byte-scan what is left on disk. Needs chromadb
     #: (not installed in the slim CI lane: the disk cells SKIP there with the reason, never pass).
     if importlib.util.find_spec("chromadb") is not None:
@@ -112,6 +115,7 @@ class Z0Arm(Arm):
         self._clock = 0.0
         self._prev_user = ""
         self._refused = 0
+        self._cur_day = 0
         self.graph = PeopleGraph(self._run)       # the people graph (A8): arms.people_graph, shared with the Hindsight arms' Zoe layer
         self._heap_scrub_ours = False
 
@@ -214,6 +218,8 @@ class Z0Arm(Arm):
         return rep
 
     async def _ingest(self, text: str, source: str, rep: IngestReport, **kw) -> Any:
+        if self._cur_day and "captured_at" not in kw:      # a turn said N days ago is captured N days ago (the service's own restore parameter)
+            kw["captured_at"] = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=self._cur_day)).isoformat()
         ref = await self.service.ingest(text, user_id=self._user, source=source, **kw)
         if ref is None:
             rep.refused += 1
@@ -226,6 +232,7 @@ class Z0Arm(Arm):
             t.text, t.assistant_text, prev_user_message=prev or None)
 
     async def _one(self, t: Turn, rep: IngestReport) -> None:
+        self._cur_day = int(t.day_offset or 0)
         sp = t.speaker
         if sp == "assistant":
             rep.notes.append("assistant turn: never mined")
@@ -292,10 +299,12 @@ class Z0Arm(Arm):
                     best = key
         return best[1] if best else None
 
-    def run_idle_pass(self, transcript: str, proposes: "list[str]") -> "dict[str, Any]":
+    def run_idle_pass(self, transcript: str, proposes: "list[str]", *, judge: bool = True) -> "dict[str, Any]":
         """The REAL nightly digest (``memory_digest.run_memory_digest``: dedup, anchor validation, the
         contradiction pass, ``MemoryService`` writes) over ``transcript``; only the model calls are scripted
-        (the fact extraction returns ``proposes``; the contradiction judge says yes, as the incident's did)."""
+        (the fact extraction returns ``proposes``; the contradiction judge says yes, as the incident's did -
+        ``judge=False`` scripts it to say "no contradiction": the reflection cells (k) are about what the digest
+        KEEPS of a night's proposals, not about it retiring one proposal with the next)."""
         md = importlib.import_module("memory_digest")
         stub = types.ModuleType("zoe_agent")
 
@@ -311,7 +320,7 @@ class Z0Arm(Arm):
             return [{"fact": f, "type": "profile"} for f in proposes]
 
         async def contradiction(*_a, **_k):
-            return True
+            return bool(judge)
 
         async def no_emotions(*_a, **_k):
             return 0
@@ -394,6 +403,48 @@ class Z0Arm(Arm):
         rows = self.recall(query, k)
         with self._ctl():  # the control scope is what flips the reader, exactly like every other feature
             return reader_answer(rows, query, sycophantic=self._lab.READER["sycophantic"])
+
+    # ── the capability axes ───────────────────────────────────────────────────
+    def recall_exact(self, query: str, k: int = 5) -> "list[dict[str, Any]]":
+        """(j) What Z0's recall packet holds for "what exactly did I say about ...": the top-``k`` rows' TEXT (the extracted fact, as the brain sees it)
+        and the day each was captured. Z0 also keeps the owner's whole turn as ``source_excerpt`` metadata on the rows it extracted - but nothing
+        searches it and the packet does not carry it, so it is not an answer path (the nearest fix; measured by this cell turning green)."""
+        col = self._lab_service.col
+        now = _dt.datetime.now(_dt.timezone.utc).timestamp()
+        out = []
+        for r in self.recall(query, k):
+            ts = (col.rows.get(r["id"]) or ("", {}))[1].get("added_ts")
+            out.append({"text": r["text"], "day_offset": round((now - float(ts)) / 86400.0) if ts else None})
+        return out
+
+    def observations(self, query: str = "") -> "dict[str, Any]":
+        """(k) Z0's derived statements: the approved rows a MODEL wrote (the nightly digest and the per-turn digest) - not what the owner said and not
+        what the wall held back (a ``disputed`` / ``pending`` / ``superseded`` row is not a belief the packet serves). ``stated_by`` is the
+        owner's own three-way view of the class (``memory_authority.authority_of``). The lab scripts the nightly model: ``model`` = ``scripted``."""
+        ma = self.svc.memory_authority
+        derived = [r for r in self._rows() if r["status"] == "approved"
+                   and r["authority_class"] in (ma.USER_STATED_DERIVED, ma.MODEL_FROM_TURN, ma.MODEL_FROM_TRANSCRIPT)]
+        items = [{"id": r["id"], "text": r["text"], "stated_by": "user" if ma.authority_of(r["authority_class"]) in (ma.USER_STATED, ma.USER_CONFIRMED) else "inferred"}
+                 for r in derived]
+        if query:
+            q = content_tokens(query)
+            items = sorted(items, key=lambda i: (-len(q & content_tokens(i["text"])), i["id"]))[:5]
+            items = [i for i in items if q & content_tokens(i["text"])]
+        return {"items": items, "model": "scripted"}
+
+    def recall_linked(self, query: str, k: int = 8) -> "list[dict[str, Any]]":
+        """(l) Z0's packet for a question that needs two facts: its ordinary recall. The relational block (people / dates from Postgres, behind
+        ``ZOE_MEMORY_COMPOSE_ENABLED``) is not in the lab, and it holds the people graph, not these facts: there is no associative second hop."""
+        return self.recall(query, k)
+
+    def protocol_answer(self, prompt: str, anchor: "tuple[str, ...]", fired: bool, k: int = 5) -> str:
+        """(m, lab half) The scripted reader over Z0's packet when recall fired; nothing to answer from when it did not."""
+        from .. import life as lifemod
+        if not fired:
+            return lifemod.DECLINE
+        rows = self.recall(prompt, k)
+        with self._ctl():                       # the control scope flips the reader exactly as it does for ``answer``
+            return lifemod.anchored_reader(rows, anchor, sycophantic=self._lab.READER["sycophantic"])
 
     def forget(self, entity: str) -> str:
         ir = importlib.import_module("intent_router")
