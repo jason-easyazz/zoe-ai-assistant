@@ -291,7 +291,7 @@ def main(argv: "list[str] | None" = None) -> int:
             out["reflect"] = run_reflect(a.arm, mk, a.seed, guard)
             out["reflect"]["model"], out["reflect"]["ctx"] = out["model"], a.ctx
         else:
-            lab = mpa_cells.run_all(a.arm, "library", controls=a.controls, guard=guard, workdir=None)
+            lab = mpa_cells.run_all(a.arm, "library", controls=a.controls, guard=guard, workdir=None, hindsight_url=a.hindsight_url if a.arm == "HMA" else "", pg=pg)
             cells_out = lab
             if not a.lab:
                 arm = mk()

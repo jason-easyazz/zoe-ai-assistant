@@ -63,9 +63,10 @@ class ReflectiveTier:
     CONFIG = {"retain_extraction_mode": "concise", "enable_observations": True, "enable_auto_consolidation": False, "enable_reranking": False}
 
     def __init__(self, client: "Optional[HindsightClient]" = None, *, base_url: "Optional[str]" = None, transport=None, pg: Any = None, keep_banks: bool = False,
-                 settle_timeout_s: float = 240.0, settle_poll_s: float = 2.0):
+                 settle_timeout_s: float = 240.0, settle_poll_s: float = 2.0, fake: bool = False):
         self.client = client or HindsightClient(base_url, transport)
         self.pg, self.keep_banks = pg, keep_banks
+        self.fake = fake                     # True only for the in-process stand-in (the double / CI lane); a stand-in's evidence never certifies a gate
         self.settle_timeout_s, self.settle_poll_s = settle_timeout_s, settle_poll_s
         self.fail = False
         self.model_calls = 0
@@ -172,6 +173,16 @@ class ReflectiveTier:
         if self.pg is not None and self.bank_for(user) in self._banks:
             self.pg.erase_text(self.bank_for(user), entity)
             self.pg.compact()
+
+    def residue(self, entity: str) -> int:
+        """Bytes-level hits of the forgotten name in the reflective tier's storage (the scratch Postgres: live rows, dead tuples, statistics, WAL). A real tier with no
+        verifier cannot say it is clean: that is a SKIP (NotImplementedError), never a zero."""
+        if self.pg is None:
+            if self.fake:
+                return 0
+            raise NotImplementedError("the reflective tier's physical residue needs the scratch Postgres verifier (ScratchPostgres); without it Hindsight cannot be shown clean")
+        res = self.pg.scan([entity])
+        return sum(int(v.get("total", 0)) for v in (res.get("tokens") or {}).values())
 
     def close(self) -> None:
         if not self.keep_banks:
@@ -401,7 +412,8 @@ class HMAArm(Arm):
         return self.mpa.stats_as(identity)
 
     def residue(self, entity: str) -> int:
-        return self.mpa.residue(entity)
+        """Both tiers: the MemPalace files AND the reflective tier's scratch Postgres - the name is physically gone only when neither holds it."""
+        return self.mpa.residue(entity) + self.refl.residue(entity)
 
     def protocol_cost(self) -> "dict[str, Any]":
         """The ONE prompt protocol's tokens against the unmerged alternative (MemPalace's protocol + Hindsight's recommended usage + Hindsight's three tools' schemas)."""

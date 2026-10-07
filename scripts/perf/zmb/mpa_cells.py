@@ -84,7 +84,7 @@ ALL_CONTROLS = tuple(dict.fromkeys(Controls.names() + MpaControls.names() + ("on
 
 
 def lab_arm(kind: str, off: "tuple[str, ...]" = (), store: str = "double", model: Any = None, workdir: "Optional[Path]" = None, closet_url: str = "",
-            closet_scripted: bool = True, z0_embed: bool = True) -> Any:
+            closet_scripted: bool = True, z0_embed: bool = True, hindsight_url: str = "", pg: Any = None) -> Any:
     """``kind`` in MPA / HMA / ZMA with the named switches OFF. ``z0_embed=False`` (ZMA): Z0's store is the bag-of-words lab collection instead of Z0e's Chroma + MiniLM, so the glue
     runs with no model on disk (the CI lane); the default keeps Z0e, which raises ``NotImplementedError`` when the model is not on disk. ``store``: ``double`` (test double of the MemPalace tool shapes) or ``library`` (the real server)."""
     bad = [n for n in off if n not in ALL_CONTROLS]
@@ -106,7 +106,12 @@ def lab_arm(kind: str, off: "tuple[str, ...]" = (), store: str = "double", model
         from zmb.arms.fake_hindsight import FakeHindsight
         from zmb.arms.hindsight import HindsightClient
         from zmb.arms.hma import HMAArm, ReflectiveTier
-        refl = ReflectiveTier(HindsightClient("http://127.0.0.1:18888", transport=FakeHindsight()), settle_poll_s=0.0)
+        if store == "library":              # the window: the RUNNING Hindsight and the scratch Postgres, never the stand-in
+            if not hindsight_url:
+                raise NotImplementedError("HMA over the real MemPalace needs the window's real Hindsight (hindsight_url): the in-process stand-in never certifies a library run")
+            refl = ReflectiveTier(HindsightClient(hindsight_url), pg=pg)
+        else:
+            refl = ReflectiveTier(HindsightClient("http://127.0.0.1:18888", transport=FakeHindsight()), settle_poll_s=0.0, fake=True)
         return HMAArm(MemPalaceAgentArm(**kw), refl, **{k: v for k, v in flags.items() if k != "one_packet"}, **({"one_packet": False} if "one_packet" in flags else {}))
     if kind == "ZMA":
         from zmb.arms.zma import BRAIN_TOOLS, ZMAArm
@@ -416,8 +421,8 @@ CELLS: "list[Cell]" = [
 ]
 
 
-def _run_cell(cell: Cell, kind: str, off: "tuple[str, ...]", store: str, workdir: "Optional[Path]", z0_embed: bool = True) -> scorers.Score:
-    arm = lab_arm(kind, off, store, workdir=workdir, z0_embed=z0_embed)
+def _run_cell(cell: Cell, kind: str, off: "tuple[str, ...]", store: str, workdir: "Optional[Path]", z0_embed: bool = True, hindsight_url: str = "", pg: Any = None) -> scorers.Score:
+    arm = lab_arm(kind, off, store, workdir=workdir, z0_embed=z0_embed, hindsight_url=hindsight_url, pg=pg)
     try:
         return cell.run(arm)
     finally:
@@ -425,8 +430,10 @@ def _run_cell(cell: Cell, kind: str, off: "tuple[str, ...]", store: str, workdir
 
 
 def run_all(kind: str = "MPA", store: str = "double", only: "Optional[str]" = None, *, controls: str = "all", guard: "Optional[Callable[[], None]]" = None,
-            workdir: "Optional[Path]" = None, z0_embed: bool = True) -> "dict[str, Any]":
+            workdir: "Optional[Path]" = None, z0_embed: bool = True, hindsight_url: str = "", pg: Any = None) -> "dict[str, Any]":
     """Controls first (each named switch OFF, one at a time: every one must turn its cell red), then the measurement. ``controls``: ``all`` or ``none``."""
+    if kind == "HMA" and store == "library" and not hindsight_url:
+        raise NotImplementedError("HMA over the real MemPalace needs the window's real Hindsight (hindsight_url): the in-process stand-in never certifies a library run")
     if store == "library" and not library_available():
         raise NotImplementedError("the real MemPalace server is not available here (run through the bake-off venv)")
     rows: "list[dict[str, Any]]" = []
@@ -449,12 +456,12 @@ def run_all(kind: str = "MPA", store: str = "double", only: "Optional[str]" = No
             for ctl in cell.controls:
                 if controls == "none":
                     continue
-                sc = _run_cell(cell, kind, (ctl,), store, workdir, z0_embed)
+                sc = _run_cell(cell, kind, (ctl,), store, workdir, z0_embed, hindsight_url, pg)
                 red[ctl] = sc.verdict
                 if sc.ok:
                     not_instrumented.append(f"{cell.id} stayed green with {ctl} off")
             row["controls_verdicts"] = red
-            sc = _run_cell(cell, kind, (), store, workdir, z0_embed)
+            sc = _run_cell(cell, kind, (), store, workdir, z0_embed, hindsight_url, pg)
             row.update(verdict=sc.verdict, stage=sc.stage, evidence=sc.evidence)
         except NotImplementedError as exc:
             row.update(verdict="SKIP", reason=str(exc)[:300])
@@ -466,6 +473,7 @@ def run_all(kind: str = "MPA", store: str = "double", only: "Optional[str]" = No
                "fail": [r["id"] for r in graded if r["verdict"] == "FAIL"], "sanity_fail": [r["id"] for r in rows if r["sanity"] and r["verdict"] not in ("PASS", "SKIP")],
                "targets_failing": [r["id"] for r in rows if r["expected"] == "FAIL" and r["verdict"] == "FAIL"],
                "skipped": [r["id"] for r in rows if r["verdict"] == "SKIP"], "controls_checked": sum(len(r.get("controls_verdicts") or {}) for r in rows if r["verdict"] != "SKIP"),
+               "reflective_tier": ("real" if store == "library" else "fake") if kind == "HMA" else "n/a",      # WHICH tier produced the evidence: only a real one certifies a gate
                "controls_mode": controls, "not_instrumented": not_instrumented, "wilson95": [round(x, 3) for x in scorers.wilson(sum(1 for r in graded if r["verdict"] == "PASS"), len(graded))]}
     return {"summary": summary, "cells": rows}
 

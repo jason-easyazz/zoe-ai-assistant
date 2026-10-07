@@ -82,8 +82,9 @@ class BenchSurface:
             except ToolError:
                 continue
             for f in res.get("active_facts") or []:
+                pv = self._kg_prov.get((str(f.get("subject")).lower(), str(f.get("predicate")).lower(), str(f.get("object")).lower()))      # the brain's own composition is not the owner's word
                 rows.append({"id": f"kg:{f.get('subject')}|{f.get('predicate')}|{f.get('object')}", "text": f"{f.get('subject')} {f.get('predicate')} {f.get('object')}", "status": "approved",
-                             "authority_class": USER_STATED, "origin": "mempalace:kg", "contradicts_id": "", "entity_type": "", "memory_type": "fact", "user_id": self._user})
+                             "authority_class": pv.authority_class if pv is not None else MODEL_FROM_TRANSCRIPT, "origin": "mempalace:kg", "contradicts_id": "", "entity_type": "", "memory_type": "fact", "user_id": self._user})
         return rows[: k + 8]
 
     def protocol_answer(self, prompt: str, anchor: "tuple[str, ...]", fired: bool, k: int = 5) -> str:

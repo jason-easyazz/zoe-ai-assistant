@@ -501,8 +501,13 @@ class MemPalaceAgentArm(BenchSurface, Arm):
             old = args.get("old_object") if name == "mempalace_kg_supersede" else args.get("object")
             pv = self._kg_prov.get((str(args.get("subject", "")).lower(), str(args.get("predicate", "")).lower(), str(old).lower()))
             backing = args.get("new_object") if name == "mempalace_kg_supersede" else args.get("object")
-            if pv is not None and pv.authority_class == USER_STATED and not self._anchored_claim(str(args.get("subject", "")), str(backing), s):
-                return "a fact the owner stated is only retired by something the owner said"
+            if pv is not None and pv.authority_class == USER_STATED:
+                if name == "mempalace_kg_invalidate":
+                    # proof that the fact WAS stated is not proof it has ended: the owner's utterance of THIS turn has to be a correction or a negation of this very claim
+                    if not self._invalidation_evidence(str(args.get("subject", "")), str(backing), s):
+                        return "a fact the owner stated is only ended by the owner saying, in this message, that it no longer holds"
+                elif not self._anchored_claim(str(args.get("subject", "")), str(backing), s):
+                    return "a fact the owner stated is only retired by something the owner said"
         return ""
 
     def _pin(self, name: str, args: "dict[str, Any]", s: "dict[str, Any]") -> "dict[str, Any]":
@@ -551,6 +556,17 @@ class MemPalaceAgentArm(BenchSurface, Arm):
             if o in n and (sub in self._OWNER_SUBJECTS or f" {sub} " in n):
                 return True
         return False
+
+    _NEGATION = frozenset({"not", "no", "never", "longer", "anymore", "isn", "isnt", "doesn", "doesnt", "don", "dont", "wasn", "wasnt", "wrong", "incorrect", "actually", "instead",
+                           "moved", "left", "changed", "stopped", "quit", "ended", "over", "mistake", "correction", "sold", "divorced", "retired", "former", "ex"})
+
+    def _invalidation_evidence(self, subject: str, obj: str, s: "dict[str, Any]") -> bool:
+        """The CURRENT owner message names the claim (subject and object as whole words) AND carries a correction / negation marker."""
+        if not s["owner"]:
+            return False
+        u = f" {_norm(s['owner'][-1])} "
+        o, sub = f" {_norm(obj)} ", _norm(subject)
+        return o.strip() != "" and o in u and (sub in self._OWNER_SUBJECTS or f" {sub} " in u) and bool(set(u.split()) & self._NEGATION)
 
     def _klass_claim(self, subject: str, obj: str, s: "dict[str, Any]") -> "tuple[str, bool]":
         if not self.mc.anchor_check:

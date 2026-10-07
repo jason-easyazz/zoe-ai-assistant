@@ -509,6 +509,57 @@ def test_a_kg_claim_is_anchored_by_subject_and_object_in_one_owner_utterance_not
     a.close()
 
 
+def test_the_library_run_of_hma_refuses_the_stand_in_and_the_summary_names_the_tier():
+    with pytest.raises(NotImplementedError, match="real Hindsight"):
+        mpa_cells.run_all("HMA", "library")
+    assert mpa_cells.run_all("HMA", "double", only="HMA-W1", controls="none")["summary"]["reflective_tier"] == "fake"
+    assert mpa_cells.run_all("MPA", "double", only="MPA-T1", controls="none")["summary"]["reflective_tier"] == "n/a"
+
+
+def test_hma_physical_residue_counts_the_reflective_tier_too():
+    """The name must be gone from Hindsight's storage as well: MemPalace clean + Postgres dirty is NOT clean; a real tier with no verifier is a SKIP, not a zero."""
+    class Pg:
+        def scan(self, tokens):
+            return {"tokens": {t: {"total": 3} for t in tokens}, "clean": False}
+    a = mpa_cells.lab_arm("HMA")
+    a.reset(USER)
+    assert a.residue("Marisol") == 0                                                   # the stand-in with no verifier: nothing to scan
+    a.refl.pg = Pg()
+    assert a.residue("Marisol") == 3                                                   # MemPalace holds nothing, the scratch Postgres does
+    a.refl.pg, a.refl.fake = None, False
+    with pytest.raises(NotImplementedError, match="ScratchPostgres"):
+        a.residue("Marisol")
+    a.close()
+
+
+def test_a_hallucinated_invalidate_needs_a_correction_in_this_message_not_just_proof_the_fact_was_stated():
+    def run(owner_line, **off):
+        a = mpa_cells.lab_arm("MPA", tuple(off))
+        a.reset(USER)
+        a.model = PlayModel([[("mempalace_kg_add", {"subject": "Tove", "predicate": "lives_in", "object": "Perth"})],
+                             [("mempalace_kg_invalidate", {"subject": "Tove", "predicate": "lives_in", "object": "Perth"})]])
+        a.ingest([Turn("My sister Tove lives in Perth", "owner_taught")])
+        a.ingest([Turn(owner_line, "owner_taught")])
+        refused = [bool(t.refused) for t in a.traces[-1].tools if t.name == "mempalace_kg_invalidate"]
+        live = any("perth" in r["text"].lower() and r["status"] == "approved" for r in a.stats()["rows"] if r["origin"] == "brain:kg")
+        a.close()
+        return refused, live
+    assert run("What shall we have for dinner tonight") == ([True], True)                    # the old statement is still in the session: it is not a correction
+    assert run("Tove lives in Perth, we visited her there") == ([True], True)                # names the claim but nothing ends it
+    assert run("Tove no longer lives in Perth") == ([False], False)                          # a negation of this very claim
+    assert run("What shall we have for dinner tonight", anchor_check=False) == ([False], False)       # NEGATIVE CONTROL
+
+
+def test_linked_recall_carries_each_triples_own_authority():
+    a = mpa_cells.lab_arm("MPA")
+    a.reset(USER)
+    a.model = PlayModel([[("mempalace_kg_add", {"subject": "Tove", "predicate": "lives_in", "object": "Perth"}), ("mempalace_kg_add", {"subject": "Tove", "predicate": "plays", "object": "violin"})]])
+    a.ingest([Turn("My sister Tove lives in Perth", "owner_taught")])
+    rows = {r["text"].lower(): r["authority_class"] for r in a.recall_linked("tell me about Tove", 8) if r["origin"] == "mempalace:kg"}
+    assert rows["tove lives_in perth"] == "user_stated" and rows["tove plays violin"] == "model_from_transcript"          # the invented violin is not the owner's word
+    a.close()
+
+
 def test_zma_refuses_a_shim_that_is_not_minilm_and_names_the_setting():
     from zmb import mpa_window
     minilm = lambda url: {"status": "ok", "model": "all-MiniLM-L6-v2", "dim": 384}   # noqa: E731

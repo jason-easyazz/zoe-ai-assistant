@@ -385,6 +385,11 @@ def gate_hma(m: dict) -> "dict[str, dict]":
     fs = mpa_verdicts(m, "MPA-F")
     out["hma_G2b_two_tier_forget"] = item(FAIL if any(v in ("FAIL", "ERROR") for v in fs) else (PASS if len(fs) >= 2 and all(v == "PASS" for v in fs) else NA),
                                           "0 resurrections in either tier (every MPA-F cell passes; at least two ran)", ", ".join(fs) or "MPA-F not run")
+    tier = ((m.get("mpa_cells") or {}).get("summary") or {}).get("reflective_tier")
+    if tier != "real":                     # a stand-in (or an unrecorded) reflective tier proves nothing about Hindsight: no HMA item may stay a pass on its evidence
+        for it in out.values():
+            if it["state"] == PASS:
+                it["state"], it["measured"] = NA, f"{it['measured']} [not certified: the cells ran over the {tier or 'unrecorded'} reflective tier, not the window's real Hindsight]"
     return out
 
 

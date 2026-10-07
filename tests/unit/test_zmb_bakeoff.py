@@ -1642,7 +1642,7 @@ def mpa_m(verdicts=None, **over):
     verdicts = verdicts or {}
     cells = [{"id": i, "verdict": verdicts.get(i, "PASS"), "evidence": {}} for i in MPA_IDS]
     m = {"mpa_cells": {"summary": {"pass": len(cells), "graded": len(cells), "fail": [], "sanity_fail": [], "skipped": [], "not_instrumented": [], "controls_checked": 6,
-                                   "controls_mode": "real", "targets_failing": []}, "cells": cells},
+                                   "controls_mode": "real", "targets_failing": [], "reflective_tier": "real"}, "cells": cells},
          "brain": {"model_calls": 300, "prompt_tokens_max": 3000, "model_s_total": 900.0, "tool_calls": 120, "tool_calls_valid": 118, "searched_before_answer": [18, 20],
                    "supersede": {"correct": 9, "n": 10, "wrong": 1}},
          "mpa_driver": {"server_rss_steady_mb": 120.0, "server_rss_peak_mb": 180.0, "servers": 3, "pss_before_mb": 60.0, "peak_rss_mb": 100.0},
@@ -1755,6 +1755,23 @@ def test_hma_adds_the_observation_veto_the_total_ram_and_the_two_tier_forget():
     assert set(gates.gate_hma({})) == {"mpa_cells_ran"}
 
 
+def test_a_stand_in_reflective_tier_never_certifies_an_hma_gate():
+    """Which tier produced the evidence is recorded; only the window's real Hindsight can pass an HMA item."""
+    real = gates.gate_hma(hma_m())
+    assert any(v["state"] == gates.PASS for v in real.values()) and not any("not certified" in v["measured"] for v in real.values())
+    for tier in ("fake", None):
+        m = hma_m()
+        if tier is None:
+            m["mpa_cells"]["summary"].pop("reflective_tier")
+        else:
+            m["mpa_cells"]["summary"]["reflective_tier"] = tier
+        g = gates.gate_hma(m)
+        assert not any(v["state"] == gates.PASS for v in g.values()) and g["hma_G2b_two_tier_forget"]["state"] == gates.NA and "not certified" in g["hma_G2b_two_tier_forget"]["measured"]
+    f = hma_m(verdicts={"MPA-F2.forget.t6min": "FAIL"})
+    f["mpa_cells"]["summary"]["reflective_tier"] = "fake"
+    assert gates.gate_hma(f)["hma_G2b_two_tier_forget"]["state"] == gates.FAIL                       # a red stays red whatever tier produced it
+
+
 def test_evaluate_arm_adds_the_mpa_and_hma_blocks_and_one_seed_is_incomplete_even_when_every_gate_passes():
     m = good_measure(**mpa_m())
     a = gates.evaluate_arm("MPA", {"zmb-v1": seed_run()}, m)
@@ -1797,7 +1814,7 @@ def canned_mpa(cells, *, arm="MPA", verdicts=None, **over):
         cs = [{"id": i, "verdict": (verdicts or {}).get(i, "PASS"), "evidence": {}, "title": f"title of {i}"} for i in MPA_IDS]
         res = {"started": "t", "finished": "t", "library": "mempalace 3.10.0", "model": "gemma-4-E4B", "generic": gen,
                "mpa_cells": {"summary": {"pass": len(cs), "graded": len(cs), "fail": [], "sanity_fail": [], "skipped": [], "not_instrumented": [], "controls_checked": 6,
-                                         "controls_mode": "real", "targets_failing": []}, "cells": cs},
+                                         "controls_mode": "real", "targets_failing": [], "reflective_tier": "real"}, "cells": cs},
                "brain": {"model_calls": 300, "prompt_tokens_max": 3000, "model_s_total": 900.0, "tool_calls": 120, "tool_calls_valid": 118,
                          "searched_before_answer": [18, 20], "supersede": {"correct": 9, "n": 10, "wrong": 1}},
                "driver": {"server_rss_steady_mb": 120.0, "server_rss_peak_mb": 180.0, "pss_before_mb": 60.0, "peak_rss_mb": 100.0, "servers": 3, "tool_ms": {"search": {"n": 5, "p50": 4.0, "p95": 9.0}}}}
