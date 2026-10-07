@@ -42,7 +42,9 @@ SCENARIO_DIR = Path(__file__).resolve().parent / "scenarios"
 
 #: the nine axes (letter -> name), the same vocabulary as samantha_bar.AXES
 AXES = {"a": "authority", "b": "extraction", "c": "temporal", "d": "recall", "e": "abstention",
-        "f": "forgetting", "g": "emotional", "h": "identity", "i": "poisoning"}
+        "f": "forgetting", "g": "emotional", "h": "identity", "i": "poisoning",
+        # the capability axes (2026-10-07): what Hindsight and MemPalace are built for, not storage hygiene
+        "j": "exact_words", "k": "reflection", "l": "multi_hop", "m": "protocol"}
 TIERS = ("store", "full")
 EXPECTED = ("PASS", "FAIL")
 _CELL_KEYS = {"id", "title", "tier", "kind", "expected", "controls", "sanity", "skip_reason", "lme_map",

@@ -1,0 +1,126 @@
+{
+  "spec_version": 1,
+  "axis": "multi_hop",
+  "cells": [
+    {
+      "id": "L0.two_facts_one_question",
+      "title": "multi-hop, sanity: two facts told in different weeks and a question that names both - both are in the packet",
+      "tier": "store",
+      "kind": "script",
+      "sanity": true,
+      "controls": [
+        "retrieval"
+      ],
+      "note": "the positive control of the multi-hop scorer: a question that names a person and an appointment finds both facts when the store ranks by the query, and neither when search ignores it (the retrieval control)",
+      "events": [
+        {
+          "text": "{friend}'s birthday is on {dob_text}.",
+          "speaker": "owner_taught"
+        },
+        {
+          "do": "filler",
+          "turns": 20,
+          "salt": "l0a"
+        },
+        {
+          "text": "User's {clinic} appointment is on {appt_date}.",
+          "speaker": "owner_taught"
+        },
+        {
+          "do": "filler",
+          "turns": 20,
+          "salt": "l0b"
+        }
+      ],
+      "probes": [
+        {
+          "kind": "recall",
+          "query": "is {friend}'s birthday before my {clinic} appointment",
+          "k": 8,
+          "needles": [
+            "{dob_text}",
+            "{appt_date}"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "L1.two_facts_after_100_filler",
+      "title": "long-range associative recall: 20 questions that need TWO facts said weeks apart (is X's birthday before my dentist appointment / who in my family lives near Y's school), 100 household turns between and after - both facts are in the packet (>= 70%)",
+      "tier": "store",
+      "kind": "script",
+      "lme_map": "multi-session reasoning (LongMemEval); BEAM multi-session",
+      "note": "10 date comparisons and 10 place joins. A hit = the packet (the arm's associative recall, 8 rows) holds a row naming the subject and the answer token for the first fact AND for the second. The join questions name only the first fact's subject: the second fact is reachable only through the place the first one names, so a plain top-k over the question misses it where an associative step (Hindsight's link graph) finds it. The first fact is 14-28 days old, the second 1-9. MEASURED on the lab's Z0 (bag-of-words ranking + the service's 70-day recency decay): 3 of 20 at 100 filler, the joins 0 of 10 - an older fact loses to a newer near-miss, and the second fact of a join is never reached. A TARGET on Z0; Z0e (the same service over a real Chroma + MiniLM, the baseline an embedding arm is measured against) reaches 14 of 20: dates 10 of 10, joins 4 of 10 - the first fact is found, the second is not, which is the missing associative step",
+      "params": {
+        "play_group": "L1"
+      },
+      "events": [
+        {
+          "do": "hop_facts",
+          "which": "a"
+        },
+        {
+          "do": "filler",
+          "turns": 50,
+          "salt": "l1a"
+        },
+        {
+          "do": "hop_facts",
+          "which": "b"
+        },
+        {
+          "do": "filler",
+          "turns": 50,
+          "salt": "l1b"
+        }
+      ],
+      "probes": [
+        {
+          "kind": "hops",
+          "k": 8,
+          "min_rate": 0.7
+        }
+      ],
+      "expected": "FAIL"
+    },
+    {
+      "id": "L2.two_facts_after_300_filler",
+      "title": "long-range associative recall: the same 20 two-fact questions with 300 household turns between and after (>= 50%)",
+      "tier": "store",
+      "kind": "script",
+      "lme_map": "multi-session reasoning at scale",
+      "note": "same corpus and scoring as L1 at three times the distance; the bar is lower because every extra near-miss row competes for the same eight slots. MEASURED on the lab's Z0 (bag-of-words ranking + the service's 70-day recency decay): 3 of 20 at 100 filler, the joins 0 of 10 - an older fact loses to a newer near-miss, and the second fact of a join is never reached. A TARGET on Z0; Z0e (the same service over a real Chroma + MiniLM, the baseline an embedding arm is measured against) reaches 14 of 20: dates 10 of 10, joins 4 of 10 - the first fact is found, the second is not, which is the missing associative step",
+      "params": {
+        "play_group": "L2"
+      },
+      "events": [
+        {
+          "do": "hop_facts",
+          "which": "a"
+        },
+        {
+          "do": "filler",
+          "turns": 150,
+          "salt": "l2a"
+        },
+        {
+          "do": "hop_facts",
+          "which": "b"
+        },
+        {
+          "do": "filler",
+          "turns": 150,
+          "salt": "l2b"
+        }
+      ],
+      "probes": [
+        {
+          "kind": "hops",
+          "k": 8,
+          "min_rate": 0.5
+        }
+      ],
+      "expected": "FAIL"
+    }
+  ]
+}

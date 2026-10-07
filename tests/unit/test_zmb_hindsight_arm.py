@@ -455,10 +455,11 @@ def test_the_whole_store_tier_runs_clean_on_h1_and_h0_is_red_on_the_hard_axes():
     rows = run_cells(store, WORLD, arm)
     arm.close()
     # every cell that RAN either matches its declared expectation or is a known H1 adapter gap. The only SKIPs left are the disk cells (F5 / F6):
-    # this arm was built without a scratch-Postgres handle (the next test gives it one); the targets (expected FAIL) are red on H1 as on Z0
-    # unless a fix lands (F3 is the one H1 passes: its forgotten ledger).
+    # this arm was built without a scratch-Postgres handle (the next test gives it one), and the reflection cells (K): H1 has no observation
+    # layer (verbatim mode, observations off); the targets (expected FAIL) are red on H1 as on Z0 unless a fix lands (F3 is the one H1 passes: its
+    # forgotten ledger).
     assert sorted(r["id"] for r in rows if r["verdict"] == "SKIP") == sorted(
-        c.id for c in store if "disk" in cellmod.required_capabilities(c))
+        c.id for c in store if cellmod.required_capabilities(c) & {"disk", "observations"})
     ran = [r for r in rows if r["verdict"] != "SKIP"]
     assert [r["id"] for r in ran if r["verdict"] == "ERROR"] == []
     unexpected = sorted(r["id"] for r in ran if r["expected"] == "PASS" and r["verdict"] != "PASS")    # a target H1 PASSES is the point (F3)
@@ -557,11 +558,13 @@ def pgmk(variant="H1", **kw):
 
 
 def test_the_capabilities_follow_the_layer_and_the_scratch_postgres_handle():
-    full = {"clock", "idle_pass", "identities", "reader", "controls", "conflict_pass", "edges", "disk"}
+    full = {"clock", "idle_pass", "identities", "reader", "controls", "conflict_pass", "edges", "disk", "exact_words", "observations", "multi_hop", "protocol"}
     assert hs.HindsightArm.capabilities == full                                    # what a layered arm with a scratch Postgres can do (the plan counts this)
     for variant, has_layer in (("H0", False), ("H1", True), ("H2", True)):
         arm, _f = mk(variant)
         assert ("conflict_pass" in arm.capabilities) is has_layer and ("edges" in arm.capabilities) is has_layer
+        assert {"exact_words", "multi_hop", "protocol"} <= arm.capabilities          # every Hindsight arm declares the capability axes it can be measured on ...
+        assert ("observations" in arm.capabilities) is (variant != "H1")             # ... and H1 (observations off) has no observation layer to export
         assert "disk" not in arm.capabilities                                      # no pg= handle: no way to read the store's disk
         arm2, _f2, _pg = pgmk(variant)
         assert "disk" in arm2.capabilities and ("edges" in arm2.capabilities) is has_layer
@@ -831,8 +834,9 @@ def test_the_whole_store_tier_runs_on_h1_with_a_scratch_postgres_and_nothing_ski
     arm, _f, _pg = pgmk("H1")
     rows = run_cells(store, WORLD, arm)
     arm.close()
-    assert [r["id"] for r in rows if r["verdict"] in ("SKIP", "ERROR")] == []
-    assert sorted(r["id"] for r in rows if r["expected"] == "PASS" and r["verdict"] != "PASS") == []
+    assert [r["id"] for r in rows if r["verdict"] in ("SKIP", "ERROR") and "observations" not in cellmod.required_capabilities(CELLS[r["id"]])] == []
+    assert {r["id"] for r in rows if r["verdict"] == "SKIP"} == {c.id for c in store if "observations" in cellmod.required_capabilities(c)}      # H1 has no observation layer
+    assert sorted(r["id"] for r in rows if r["expected"] == "PASS" and r["verdict"] not in ("PASS", "SKIP")) == []
 
 
 def test_a_token_another_live_bank_holds_makes_the_cell_an_error_not_a_verdict():

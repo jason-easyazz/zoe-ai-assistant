@@ -1,0 +1,96 @@
+{
+  "spec_version": 1,
+  "axis": "exact_words",
+  "cells": [
+    {
+      "id": "J0.taught_sentence_is_returned_whole",
+      "title": "exact words, sanity: a sentence the owner TAUGHT (remember that ...) is stored as said, and the question that asks for it back returns it word for word",
+      "tier": "store",
+      "kind": "script",
+      "sanity": true,
+      "controls": [
+        "retrieval"
+      ],
+      "note": "the positive control of the exact-words scorer: where the store keeps the sentence whole and finds it, the cell goes green; with search ignoring the query (the retrieval control) the newest filler rows come back and it goes red. It says nothing about what the owner SAID in ordinary speech (J1)",
+      "events": [
+        {
+          "text": "{friend}'s two kids are {kid1} and {kid2} and they both start school in January.",
+          "speaker": "owner_taught"
+        },
+        {
+          "do": "filler",
+          "turns": 30,
+          "salt": "j0"
+        }
+      ],
+      "probes": [
+        {
+          "kind": "recall",
+          "query": "read me back what I told you about {friend}'s kids",
+          "k": 5,
+          "needles": [
+            "{friend}'s two kids are {kid1} and {kid2} and they both start school in January"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "J1.exact_sentence_after_100_filler",
+      "title": "exact words: 20 sentences the owner said in ordinary speech (what exactly did I say about the dentist / read me back what I told you about X's kids / did I tell X Tuesday or Thursday), 100 household turns after - the answer holds each sentence word for word (>= 90%)",
+      "tier": "store",
+      "kind": "script",
+      "lme_map": "information extraction, verbatim; MemPalace's and Hindsight's verbatim modes are built for it",
+      "note": "scored by EXACT SUBSTRING of the normalised sentence (case, accents, whitespace, closing punctuation) in what the arm's exact-words lookup returns, one hit per needle; n = 20 items. A same-shape decoy sentence about someone else is taught beside every choice needle, so a nearest-row answer is wrong. An arm that keeps only a rewritten fact (Z0's extractor, a concise Hindsight extraction) returns the rewrite and FAILS, which is the finding: Z0 has no exact-reference index (the chat history is not searchable by the brain), so this is a TARGET on Z0",
+      "expected": "FAIL",
+      "params": {
+        "play_group": "J"
+      },
+      "events": [
+        {
+          "do": "exact_needles"
+        },
+        {
+          "do": "filler",
+          "turns": 100,
+          "salt": "j"
+        }
+      ],
+      "probes": [
+        {
+          "kind": "exact",
+          "k": 5,
+          "min_rate": 0.9
+        }
+      ]
+    },
+    {
+      "id": "J2.when_did_i_say_it",
+      "title": "exact words: the same 20 sentences - the arm also says WHICH DAY each was said (within half a day), the date that goes with the words (>= 90%)",
+      "tier": "store",
+      "kind": "script",
+      "lme_map": "temporal reasoning; knowledge update's 'when'",
+      "note": "shares one play with J1 (one ingest, two probes). The hit is the first returned row that names the needle's subject (the topic / the person), so an arm that kept only a rewritten fact can still answer 'when' from that row's date; a decoy filed a day earlier is a wrong answer. day = days ago, the number the turn was ingested with. A TARGET on Z0: its deterministic extractor keeps nothing about most of these sentences (they are ordinary speech, not facts), so there is no row about the person or the topic to carry a date; the service does date every row it writes (captured_at / added_ts), which is why this cell can turn green without a new store",
+      "expected": "FAIL",
+      "params": {
+        "play_group": "J"
+      },
+      "events": [
+        {
+          "do": "exact_needles"
+        },
+        {
+          "do": "filler",
+          "turns": 100,
+          "salt": "j"
+        }
+      ],
+      "probes": [
+        {
+          "kind": "exact_when",
+          "k": 5,
+          "min_rate": 0.9
+        }
+      ]
+    }
+  ]
+}

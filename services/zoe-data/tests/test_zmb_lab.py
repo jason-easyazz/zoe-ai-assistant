@@ -77,10 +77,11 @@ def test_every_controlled_cell_goes_red_with_its_features_off(full_control_pass)
     runnable = {c.id for c in CELLS
                 if c.controls and c.expected == "PASS" and c.tier == "store"
                 and cellmod.required_capabilities(c) <= set(Z0Arm.capabilities)}
-    # 137 with chromadb present (the two ``disk`` cells run), 135 in the slim CI lane where they are declared skips
+    # 143 with chromadb present (the two ``disk`` cells run), 141 in the slim CI lane where they are declared skips
     # (99 before the temporal / recall / poisoning / provenance / graph axes; +6 for the cells #1895 fixes; +3 for the two
-    # timelines: C2.history_read and C4.valid_from_is_event_time leave the targets, + C2.history_is_labelled)
-    assert len(runnable) in (135, 137) and cp["checked"] == cp["red"] == len(runnable)
+    # timelines: C2.history_read and C4.valid_from_is_event_time leave the targets, + C2.history_is_labelled;
+    # +6 for the capability axes: J0 + L0 + M1 (retrieval), M2 + M3 (reader), K4 (authority))
+    assert len(runnable) in (141, 143) and cp["checked"] == cp["red"] == len(runnable)
     assert {r["id"] for r in cp["rows"]} == runnable
     assert all(r["verdict"] == "FAIL" and r["stage"] in ("write", "read", "answer") for r in cp["rows"])
 
@@ -228,6 +229,9 @@ def test_z0_measures_as_documented(full_measure):
         elif cellmod.required_capabilities(c) - set(Z0Arm.capabilities):
             # a disk cell where chromadb is not installed (the slim CI lane): a declared SKIP, never a PASS
             assert r["verdict"] == "SKIP" and "lacks capability" in r["reason"], (c.id, r)
+        elif any(p["kind"] in ("threads", "useful") for p in c.probes):
+            # the lab SCRIPTS Z0's nightly model: what an observation says is the script's, so thread recall / usefulness are measured only on an arm with its own model
+            assert r["verdict"] == "SKIP" and "scripted" in r["reason"], (c.id, r)
         elif c.is_target:
             # a KNOWN failure. If this starts passing you fixed the thing: flip `expected` to PASS in the
             # spec, give the cell a control, and re-record the baseline.
@@ -237,9 +241,15 @@ def test_z0_measures_as_documented(full_measure):
     assert artifact.hard_violations(full_measure, BY_ID) == []
     # B9/E1b/H5 fixed (#1882); I1/I1b/I2.attributed/I4 fixed by the own-words wall (#1894): graded cells.
     # Every target below was MEASURED red on main (see its cell's note)
+    # + the capability axes (2026-10-07), each MEASURED red on Z0 (see the cell's note and test_z0_on_the_capability_axes): no exact-reference index (J1, J2),
+    # no associative second hop on the lab's bag-of-words + recency ranking (L1, L2; Z0e, the real embedder, clears both), the nightly digest keeps a model's
+    # fabricated link and mis-attribution (K1, K5)
     assert TARGETS == sorted([
         "F3.after_tombstone_ttl",
-        "I2.third_party_fragment.third_party"])
+        "I2.third_party_fragment.third_party",
+        "J1.exact_sentence_after_100_filler", "J2.when_did_i_say_it",
+        "K1.observations_are_true", "K5.user_stated_is_never_restated_as_inference",
+        "L1.two_facts_after_100_filler", "L2.two_facts_after_300_filler"])
     assert len([c for c in CELLS if c.id.startswith("A1.")]) == 56
     assert all(isinstance(r["duration_s"], float) and r["brain_turns"] == 0 for r in full_measure)
 
@@ -261,6 +271,12 @@ def test_the_axis_table_for_z0_is_claimable_with_wilson_intervals(full_measure, 
     assert axes["poisoning"]["targets_failing"] == ["I2.third_party_fragment.third_party"]
     assert axes["forgetting"]["targets_failing"] == ["F3.after_tombstone_ttl"]
     assert axes["extraction"]["targets_failing"] == []   # B9 fixed in #1882
+    # the capability axes: Z0's measured state (J / L / K in ITEMS, the unit the winner clause pools)
+    assert (axes["exact_words"]["n"], axes["exact_words"]["pass"]) == (2, 0) and axes["exact_words"]["items"] == {"pass": 0, "n": 40}
+    assert (axes["multi_hop"]["n"], axes["multi_hop"]["pass"]) == (2, 0) and axes["multi_hop"]["items"] == {"pass": 6, "n": 40}
+    assert (axes["reflection"]["n"], axes["reflection"]["pass"], axes["reflection"]["skip"]) == (3, 1, 2)          # K1 / K5 targets, K4 passes (authority), K2 / K3 need an own model
+    assert axes["reflection"]["failing"] == ["K1.observations_are_true", "K5.user_stated_is_never_restated_as_inference"]
+    assert (axes["protocol"]["n"], axes["protocol"]["pass"], axes["protocol"]["skip"]) == (3, 3, 12)               # the lab half passes; the 12 brain-tier cells are declared
     assert not any(axes[n]["uncontrolled"] for n in axes)
 
 
@@ -478,7 +494,8 @@ NEW_CONTROLS = {
     "event_time": ["C4.valid_from_is_event_time"],
     "history": ["C2.history_is_labelled"],
     "retrieval": ["C3.dated_event", "C4.since_year_kept", "D1.hit5_after_30_filler", "D2.hit5_after_100_filler",
-                  "D3.hit5_after_300_filler", "D4.hit5_paraphrase_after_100_filler"],
+                  "D3.hit5_after_300_filler", "D4.hit5_paraphrase_after_100_filler",
+                  "J0.taught_sentence_is_returned_whole", "L0.two_facts_one_question", "M1.answered_when_recall_fired"],
     "provenance": ["A3.typed_turn_rows", "A3.voice_verified_turn_rows", "A3.taught_rows", "A3.nightly_digest_rows",
                    "A3.user_turn_rows_rate"],
     "topic": ["C6.no_collateral_invalidation", "C7.named_friends_keep_their_homes"],

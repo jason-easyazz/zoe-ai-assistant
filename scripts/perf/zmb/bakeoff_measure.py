@@ -7,8 +7,12 @@ Order of work, by value, because 90 minutes cannot hold everything at full size 
     3  adapter negative controls on the real server (a bypassed gate must write the intruder row)
     4  H1, the preferred arm, FIRST and COMPLETE: seed 1, recall latency (n=50), verbatim extraction validity (>=100 calls), brain-slot
        seconds per retained turn, then seeds 2 and 3 (each seed box is a ceiling sized from run 1's measured seconds per cell)
-    5  H2 (one seed, then its latency / concise validity / slot) and H0 (same) take what H1 left: they are INCOMPLETE by design
-       (the rule needs three seeds), so they are measured for the comparison, never for adoption
+    5  H2 (one seed: the observation layer's cells, then its latency / concise validity / slot IF TIME REMAINS) and H0 (same) take what H1
+       left: they are INCOMPLETE by design (the rule needs three seeds), so they are measured for the comparison, never for adoption
+
+The capability axes (j exact words, k reflection, l long-range recall, m protocol; the owner's contest, 2026-10-07) run on SEED 1 only, and each
+arm runs the ones it is the evidence for (``CAP_PLANNED``): that, H2's and H0's latency / slot phases and the concise-validity phase becoming "only
+if time remains" are what the plan CUT to fit them under the 90 minute cap (``--dry-run`` prints both).
     6  the t+6 min forgetting verdicts, the report
 
 A cell the time box did not reach is a SKIP with the reason, never a pass; an arm with fewer than three seeds is INCOMPLETE and cannot be
@@ -32,10 +36,11 @@ from .bakeoff import PG_CONTAINER, UNITS, Aborted
 
 #: What run 1 (20261006-0935, ``run-20261006-0935.log``) MEASURED; the planner budgets from these, not from hope.
 #: minutes per fixed phase (Z0 lab + forgetting start + adapter controls; per-arm latency / slot; per-mode extraction validity)
-PHASE_MIN = {"lab": 2.1, "latency": {"H1": 1.0, "H2": 2.5, "H0": 5.1, "HM": 0.0}, "slot": {"H1": 3.1, "H2": 5.2, "H0": 5.2, "HM": 0.0},
+PHASE_MIN = {"lab": 2.4, "latency": {"H1": 1.0, "H2": 2.5, "H0": 5.1, "HM": 0.0}, "slot": {"H1": 3.1, "H2": 5.2, "H0": 5.2, "HM": 0.0},
              "validity": {"verbatim": 6.0, "concise": 10.0},
              #: Z0e (real Chroma + MiniLM) on the D cells x 3 seeds, measured 2026-10-06 first contact: 4 cells x ~6.5 s x 3 seeds = 1.3 min
-             "z0e": 1.4,
+             #: ... plus the two long-range cells (L1 9 s, L2 17 s per seed measured 2026-10-07): 2.7 min
+             "z0e": 2.7,
              #: the HM cells on the real tiers (real library + real Hindsight, ``--controls real-tier``): 217 s measured at first contact (2026-10-06), with headroom
              "hm_cells": 5.0}
 #: seconds per cell that RAN, seed 1: H1 112 cells in 414 s, H2 55 in 662 s, H0 18 in 362 s
@@ -43,8 +48,26 @@ S_PER_CELL = {"H1": 3.7, "H2": 12.0, "H0": 20.0, "HM": 1.3}      # HM: 131 cells
 #: seeds per arm. H1 is the preferred arm and needs all three (the rule); H2 and H0 get one each and are INCOMPLETE by design
 SEEDS_PER_ARM = {"H1": 3, "H2": 1, "H0": 1, "HM": 1}
 ARM_ORDER = ("H1", "H2", "HM", "H0")              # priority: an earlier arm is finished before a later one starts (HM is a candidate, H0 only the native baseline)
-OPTIONAL_PHASES = ("H0",)                         # the arm's latency + slot run only if time remains, never budgeted: H0 cannot win or complete,
-                                                  # so its CELLS (the baseline of what Hindsight does natively) outrank its timings
+OPTIONAL_PHASES = ("H2", "H0")                    # the arm's latency + slot run only if time remains, never budgeted: H0 cannot win or complete, and H2 is
+                                                  # INCOMPLETE by design (one seed), so their CELLS (what Hindsight does natively; the observation layer) outrank
+                                                  # their timings. CUT 2026-10-07 to make room for the capability cells: H2's latency 2.5 + slot 5.2 min
+OPTIONAL_VALIDITY = ("concise",)                  # the concise-mode extraction-validity phase (10 min, shared by H2 and H0) runs only if time remains: both arms are
+                                                  # INCOMPLETE by design, the verbatim phase (H1, the arm that can be adopted) stays budgeted. CUT 2026-10-07: 10 min
+
+#: the capability axes (the owner's contest). They run on seed 1 only, and an arm runs the ones it is the EVIDENCE for:
+#:   H1 / HM  exact words, long-range recall and the protocol's lab half (H1's verbatim write is one model call per fact; HM's is none)
+#:   H2 / H0  reflection: the observation layer is what H2 adds over H1 and what H0 does natively; their exact-words / multi-hop / protocol would only be
+#:            H1's retrieval again behind a concise rewrite (CUT: ~15 min of H2 time the window does not have)
+CAP_AXES = ("exact_words", "reflection", "multi_hop", "protocol")
+CAP_PLANNED = {"H1": ("exact_words", "multi_hop", "protocol"), "H2": ("reflection",), "H0": ("reflection",), "HM": ("exact_words", "multi_hop", "protocol")}
+#: what an arm DECLARES (it could run it) and the plan drops: H1 and HM have no observation layer, so reflection is a capability skip for them, not a cut
+CAP_CUT = {"H1": (), "HM": (), "H2": ("exact_words", "multi_hop", "protocol"), "H0": ("exact_words", "multi_hop", "protocol")}
+#: retained model calls one seed-1 play makes per axis (counted from the corpora: filler that is stored + the facts taught) and seconds per call
+#: (``slot_s_per_turn``: H1 1.52, H2 2.56 at run 1), plus the observation consolidation (measured by nobody yet: 90 s is a guess, the box is a ceiling)
+CAP_RETAINS = {"exact_words": 45, "multi_hop": 260, "protocol": 14, "reflection": 37}
+S_PER_RETAIN = {"H1": 1.52, "H2": 2.56, "H0": 2.56}
+CONSOLIDATE_S = 90.0
+HM_CAP_MIN = 2.0                                  # HM: the verbatim write is no model call; the same corpora took ~100 s on the real tiers in the lab
 H1_BOX_MARGIN = 1.25                             # the new cells (D recall, A3, C temporal) are unmeasured on real Hindsight: headroom over run 1's rate
 OPEN_MIN, TAIL_MIN = 0.5, 5.0                    # steps 1-6 of the window; the t+6 min wait + report at the end
 LATENCY_FACTS, LATENCY_QUERIES = 16, 50
@@ -296,6 +319,11 @@ def _strip(rows: "list[dict]") -> "list[dict]":
     return [{k: v for k, v in r.items() if k != "evidence"} for r in rows]
 
 
+def _k1(rows: "list[dict]") -> "list[dict]":
+    """The K1 precision counts of a seed's rows (the observation veto reads these; ``_strip`` drops the evidence they come from)."""
+    return [gates.k1_evidence(r) for r in rows if str(r.get("id", "")).startswith("K1.") and r.get("verdict") != "SKIP"]
+
+
 def phase_z0(ctx: Ctx, seeds: tuple, store: list, by_id: dict) -> None:
     from . import artifact, runner
     from .arms import make_arm
@@ -303,18 +331,20 @@ def phase_z0(ctx: Ctx, seeds: tuple, store: list, by_id: dict) -> None:
     from .world import make_world
     for seed in seeds:
         world = make_world(seed)
+        # the capability cells run on the FIRST seed only, for every arm (``run_arm_seed``): a baseline pooled over three households would be compared with a candidate's one
+        seed_store = store if seed == seeds[0] else [c for c in store if c.axis not in CAP_AXES]
         cp = runner.control_pass(store, world, frozenset(CONTROLS))
         inst = runner.instrument_block(cp, store)
         for label, arm_name, sink in (("Z0", "Z0", ctx.z0), ("Z0-off", "Z0-off", ctx.z0_off)):
             arm = make_arm(arm_name)
             try:
-                rows = runner.run_cells(store, world, arm)
+                rows = runner.run_cells(seed_store, world, arm)
             finally:
                 arm.close()
             sink[seed] = {"axes": artifact.axis_stats(rows, by_id, inst["ok"]), "hard_violations": artifact.hard_violations(rows, by_id),
                           "instrument": inst, "cells": _strip(rows)}
         ctx.log(f"Z0 seed {seed}: controls red {inst['lab_controls_red']} ok={inst['ok']}")
-        phase_z0e(ctx, seed, world, store, by_id, inst)
+        phase_z0e(ctx, seed, world, seed_store, by_id, inst)
 
 
 def phase_z0e(ctx: Ctx, seed: str, world: Any, store: list, by_id: dict, inst: dict) -> None:
@@ -323,7 +353,7 @@ def phase_z0e(ctx: Ctx, seed: str, world: Any, store: list, by_id: dict, inst: d
     model is missing: the D baseline then falls back to Z0 and the report says so."""
     from . import artifact, runner
     from .arms import make_arm
-    cells = [c for c in store if c.id.startswith("D")]
+    cells = [c for c in store if c.id.startswith(("D", "L"))]          # recall (D) and long-range recall (L): both are retrieval, both need the real embedder
     arm = make_arm("Z0e")
     try:
         rows = runner.run_cells(cells, world, arm)
@@ -334,7 +364,7 @@ def phase_z0e(ctx: Ctx, seed: str, world: Any, store: list, by_id: dict, inst: d
         ctx.notes.append("Z0e did not run (no chromadb or no cached MiniLM model): the D axis is compared with the lab's bag-of-words Z0, which is not a retrieval baseline")
         return
     ctx.z0e[seed] = {"axes": artifact.axis_stats(rows, by_id, inst["ok"]), "cells": _strip(rows)}
-    ctx.log(f"Z0e seed {seed}: {sum(1 for r in rows if r['verdict'] == 'PASS')}/{ran} recall cells pass over real Chroma + MiniLM")
+    ctx.log(f"Z0e seed {seed}: {sum(1 for r in rows if r['verdict'] == 'PASS')}/{ran} recall + long-range cells pass over real Chroma + MiniLM")
 
 
 def sweep_stale_banks(ctx: Ctx) -> int:
@@ -391,7 +421,7 @@ def skip_breakdown(rows: "list[dict]") -> "dict[str, int]":
     for r in rows:
         why = str(r.get("reason") or "")
         m = re.search(r"lacks capability: (.+)", why)
-        key = ("time box" if "time box" in why else f"capability: {m.group(1).strip()}" if m else
+        key = ("time box" if "time box" in why else "planner cut" if "planner cut" in why else f"capability: {m.group(1).strip()}" if m else
                "unreachable" if "reach Hindsight" in why else "other")
         out[key] = out.get(key, 0) + 1
     return out
@@ -404,13 +434,13 @@ def skip_breakdown(rows: "list[dict]") -> "dict[str, int]":
     for r in rows:
         why = str(r.get("reason") or "")
         m = re.search(r"lacks capability: (.+)", why)
-        key = ("time box" if "time box" in why else f"capability: {m.group(1).strip()}" if m else
+        key = ("time box" if "time box" in why else "planner cut" if "planner cut" in why else f"capability: {m.group(1).strip()}" if m else
                "unreachable" if "reach Hindsight" in why else "other")
         out[key] = out.get(key, 0) + 1
     return out
 
 
-def run_arm_seed(ctx: Ctx, variant: str, seed: str, box_s: float, store: list, by_id: dict, instrument_of: "Callable[[str], dict]") -> None:
+def run_arm_seed(ctx: Ctx, variant: str, seed: str, box_s: float, store: list, by_id: dict, instrument_of: "Callable[[str], dict]", first: bool = True) -> None:
     from . import artifact, cells as cellmod, runner
     from .world import make_world
     world = make_world(seed)
@@ -418,10 +448,15 @@ def run_arm_seed(ctx: Ctx, variant: str, seed: str, box_s: float, store: list, b
     ctx.label(f"{variant}:{seed}")
     t_end, rows, unreachable, t0 = ctx.host.mono() + box_s, [], 0, ctx.host.mono()
     try:
-        for cell in (pick_smoke(store, ctx.cfg.smoke_cells) if ctx.cfg.smoke_cells else interleave(store)):
+        ordered = pick_smoke(store, ctx.cfg.smoke_cells) if ctx.cfg.smoke_cells else interleave(store)
+        if not first:                                            # seeds 2 and 3: the capability cells ran on seed 1 (the budget), the ordinary ones are the three-seed rule
+            ordered = [c for c in ordered if c.axis not in CAP_AXES]
+        for cell in ordered:
             ctx.win.guard()
             ctx.due_probes()
-            if ctx.host.mono() >= t_end or unreachable >= 3:
+            if cell.axis in CAP_CUT.get(variant, ()):
+                o = cellmod.Outcome("SKIP", reason=f"planner cut: {variant} does not run the {cell.axis} cells in this window (H2 / H0 run reflection; the rest is H1's retrieval again)")
+            elif ctx.host.mono() >= t_end or unreachable >= 3:
                 o = cellmod.Outcome("SKIP", reason="time box reached" if unreachable < 3 else "Hindsight unreachable")
             else:
                 o = cellmod.run_cell(cell.rendered(world), world, arm)
@@ -440,7 +475,7 @@ def run_arm_seed(ctx: Ctx, variant: str, seed: str, box_s: float, store: list, b
         "hard_skipped": hard_skipped, "hard_skipped_why": hard_skip_why, "instrument": {"ok": inst["ok"] and getattr(ctx, "arm_controls_ok", False),
                                                       "lab_controls_red": inst["lab_controls_red"], "arm_controls": ctx.measure[variant].get("arm_controls")},
         "cells_ran": ran, "cells_selected": len(rows), "duration_s": round(ctx.host.mono() - t0, 1), "cells": _strip(rows),
-        "retain": arm.measure()}
+        "k1": _k1(rows), "retain": arm.measure()}
     ctx.log(f"{variant} {seed}: {ran}/{len(rows)} cells ran in {ctx.host.mono() - t0:.0f}s; hard violations {len(ctx.seed_runs[variant][seed]['hard_violations'])}"
             f"; hard skipped {hard_skipped}")
 
@@ -603,6 +638,17 @@ def phase_slot(ctx: Ctx, variant: str) -> None:
 
 # ── the schedule, the report ─────────────────────────────────────────────────
 
+def cap_extra_min(arm: str) -> float:
+    """Minutes the capability cells add to ``arm``'s FIRST seed box (0 for an arm that does not run them)."""
+    if arm == "HM":
+        return HM_CAP_MIN
+    if arm not in S_PER_RETAIN:
+        return 0.0
+    sec = sum(CAP_RETAINS[ax] * S_PER_RETAIN[arm] for ax in CAP_PLANNED.get(arm, ()))
+    sec += CONSOLIDATE_S if "reflection" in CAP_PLANNED.get(arm, ()) else 0.0
+    return round(sec / 60.0 * 2) / 2.0            # to the half minute
+
+
 @dataclasses.dataclass
 class Budget:
     """The phase budget of one window. ``avail_min`` = cap - the restore/report reserve - the tail - the window-open steps. Fixed phases are
@@ -615,6 +661,7 @@ class Budget:
     box_min: dict                                    # arm -> planned ceiling of ONE seed box, minutes
     runnable_h0: int = -1                            # the same for H0, which has no Zoe layer (no conflict_pass / edges); -1 = not computed
     runnable_hm: int = -1                            # the same for HM: clock / identities / idle_pass / verbatim / reader only
+    extra_min: dict = dataclasses.field(default_factory=dict)   # arm -> minutes the capability cells add to its FIRST seed box (seeds 2 and 3 do not run them)
 
     def runnable_for(self, arm: str) -> int:
         if arm == "HM" and self.runnable_hm >= 0:
@@ -629,23 +676,25 @@ class Budget:
         return 0.0 if arm in OPTIONAL_PHASES else PHASE_MIN["latency"][arm] + PHASE_MIN["slot"][arm]
 
     def validity_min(self) -> float:
-        return ((PHASE_MIN["validity"]["verbatim"] if "H1" in self.arms else 0.0)
-                + (PHASE_MIN["validity"]["concise"] if any(a != "H1" for a in self.arms) else 0.0))
+        return ((PHASE_MIN["validity"]["verbatim"] if "H1" in self.arms and "verbatim" not in OPTIONAL_VALIDITY else 0.0)
+                + (PHASE_MIN["validity"]["concise"] if any(a != "H1" for a in self.arms) and "concise" not in OPTIONAL_VALIDITY else 0.0))
 
     def cells_in_box(self, arm: str) -> int:
         return int(self.box_min[arm] * 60.0 / S_PER_CELL[arm])
 
     def total_min(self) -> float:
-        return PHASE_MIN["lab"] + PHASE_MIN["z0e"] + self.validity_min() + sum(self.fixed_min(a) + self.seeds[a] * self.box_min[a] for a in self.arms)
+        return (PHASE_MIN["lab"] + PHASE_MIN["z0e"] + self.validity_min()
+                + sum(self.fixed_min(a) + self.seeds[a] * self.box_min[a] + self.extra_min.get(a, 0.0) for a in self.arms))
 
-    def seed_box_s(self, arm: str, time_left_s: float) -> float:
+    def seed_box_s(self, arm: str, time_left_s: float, first: bool = True) -> float:
         """The ceiling for the next seed box of ``arm`` in seconds. H1: its planned ceiling. A lower arm: whatever is left behind the
-        work still queued for it and for the arms after it (a lower arm may use up to 2x its plan when H1 finished early, never more)."""
-        planned = self.box_min[arm] * 60.0
+        work still queued for it and for the arms after it (a lower arm may use up to 2x its plan when H1 finished early, never more).
+        ``first`` = seed 1, whose box also holds the capability cells."""
+        planned = (self.box_min[arm] + (self.extra_min.get(arm, 0.0) if first else 0.0)) * 60.0
         if arm == "H1" or arm not in ARM_ORDER:
             return min(planned, time_left_s)
         later = [a for a in ARM_ORDER[ARM_ORDER.index(arm) + 1:] if a in self.arms]
-        concise_here = arm == "H2" or (arm in ("H0", "HM") and "H2" not in self.arms)
+        concise_here = (arm == "H2" or (arm in ("H0", "HM") and "H2" not in self.arms)) and "concise" not in OPTIONAL_VALIDITY
         queued = (self.fixed_min(arm) + (PHASE_MIN["validity"]["concise"] if concise_here else 0.0)
                   + sum(self.fixed_min(a) + 2.0 for a in later)) * 60.0
         left = max(0.0, time_left_s - queued)
@@ -662,22 +711,25 @@ def plan_budget(cfg: Any, store: "Optional[list]" = None, runnable: "Optional[in
     from . import cells as cellmod
     from .arms.hindsight import HindsightArm
     layered = set(HindsightArm.capabilities)
+    ordinary = [c for c in store if c.axis not in CAP_AXES]       # the base box is sized from the cells run 1 measured; the capability cells are budgeted apart
     if runnable is None:
-        runnable = sum(1 for c in store if cellmod.required_capabilities(c) <= layered)
-    runnable_h0 = sum(1 for c in store if cellmod.required_capabilities(c) <= layered - {"conflict_pass", "edges"})
+        runnable = sum(1 for c in ordinary if cellmod.required_capabilities(c) <= layered)
+    runnable_h0 = sum(1 for c in ordinary if cellmod.required_capabilities(c) <= layered - {"conflict_pass", "edges"})
     from .arms.hm import HMArm
-    runnable_hm = sum(1 for c in store if cellmod.required_capabilities(c) <= set(HMArm.capabilities))
+    runnable_hm = sum(1 for c in ordinary if cellmod.required_capabilities(c) <= set(HMArm.capabilities))
     avail = cfg.cap_min - cfg.reserve_min - TAIL_MIN - OPEN_MIN
     seeds = {a: SEEDS_PER_ARM[a] for a in arms}
     h1 = round(max(5.0, runnable * S_PER_CELL["H1"] * H1_BOX_MARGIN / 60.0) * 2) / 2.0          # to the half minute
     box = {"H1": h1} if "H1" in arms else {}
-    draft = Budget(avail, len(store), runnable, arms, seeds, {a: 0.0 for a in arms}, runnable_h0, runnable_hm)
-    spare = avail - PHASE_MIN["lab"] - PHASE_MIN["z0e"] - draft.validity_min() - sum(draft.fixed_min(a) for a in arms) - seeds.get("H1", 0) * box.get("H1", 0.0)
+    extra = {a: cap_extra_min(a) for a in arms}
+    draft = Budget(avail, len(ordinary), runnable, arms, seeds, {a: 0.0 for a in arms}, runnable_h0, runnable_hm, extra)
+    spare = (avail - PHASE_MIN["lab"] - PHASE_MIN["z0e"] - draft.validity_min() - sum(draft.fixed_min(a) for a in arms) - seeds.get("H1", 0) * box.get("H1", 0.0)
+             - sum(extra.values()))
     lower = [a for a in arms if a != "H1"]
     weights = {2: (2.0, 1.0), 3: (2.0, 1.5, 0.5)}.get(len(lower), (1.0,) * len(lower))      # H2 the biggest share, then HM (a candidate), H0 (the native baseline) the least
     for a, w in zip(lower, weights):
         box[a] = math.floor(max(1.0, spare * w / sum(weights)) * 2) / 2.0               # rounded DOWN: the plan must fit the cap, not just touch it
-    return Budget(avail, len(store), runnable, arms, seeds, {a: box.get(a, 0.0) for a in arms}, runnable_h0, runnable_hm)
+    return Budget(avail, len(ordinary), runnable, arms, seeds, {a: box.get(a, 0.0) for a in arms}, runnable_h0, runnable_hm, extra)
 
 
 def plan_table(cfg: Any, seeds: tuple, budget: "Optional[Budget]" = None) -> "list[tuple[str, float, str]]":
@@ -685,7 +737,7 @@ def plan_table(cfg: Any, seeds: tuple, budget: "Optional[Budget]" = None) -> "li
     b = budget or plan_budget(cfg)
     rows = [("Z0 + Z0-off in the lab on 3 seeds, forgetting probes start (t+0), adapter negative controls", PHASE_MIN["lab"],
              "control, negative control; the real t+6 min check runs later between cells"),
-            ("Z0e (real Chroma + MiniLM) on the 4 recall cells x 3 seeds", PHASE_MIN["z0e"], "the D axis baseline: real retrieval on both engines")]
+            ("Z0e (real Chroma + MiniLM) on the 4 recall (D) + 3 long-range (L) cells x 3 seeds", PHASE_MIN["z0e"], "the D and L axes' baseline: real retrieval on both engines")]
     concise_done = False
     for a in b.arms:
         if a == "HM":
@@ -693,20 +745,27 @@ def plan_table(cfg: Any, seeds: tuple, budget: "Optional[Budget]" = None) -> "li
                          PHASE_MIN["hm_cells"], "run in the bake-off venv by hm_window.py; HM-F8 scans Hindsight's Postgres"))
         rows.append((f"{a} seed 1 ({seeds[0]}): store-tier cells", b.box_min[a],
                      f"ceiling; ~{b.cells_in_box(a)} of {b.runnable_for(a)} runnable cells at {S_PER_CELL[a]:g} s/cell (run 1)"))
+        if b.extra_min.get(a):
+            rows.append((f"{a} seed 1: capability cells ({', '.join(CAP_PLANNED[a])})", b.extra_min[a],
+                         "exact words / reflection / long-range recall / protocol, seed 1 only: " + ("no model call on the verbatim write" if a == "HM"
+                                                                                                     else f"~{sum(CAP_RETAINS[x] for x in CAP_PLANNED[a])} retained calls x {S_PER_RETAIN[a]:g} s"
+                                                                                                     + (f" + {CONSOLIDATE_S:g} s consolidation" if "reflection" in CAP_PLANNED[a] else ""))))
         opt = a in OPTIONAL_PHASES
         why = f"only if time remains; ~{PHASE_MIN['latency'][a]:g} min at run 1's rate, not budgeted" if opt else "p50/p95 through the shim and Postgres"
         if a != "HM":           # HM's latency and slot are measured inside its cells (wall clocks on the real tiers): no separate phase
             rows.append((f"{a} recall latency n=50", 0.0 if opt else PHASE_MIN["latency"][a], why))
         mode = "verbatim" if a == "H1" else "concise"
         if a == "H1" or not concise_done:
-            rows.append((f"extraction JSON validity, {mode} (>= 100 retain calls)", PHASE_MIN["validity"][mode],
-                         "shared by H0 and H2" if mode == "concise" else ""))
+            opt_v = mode in OPTIONAL_VALIDITY
+            rows.append((f"extraction JSON validity, {mode} (>= 100 retain calls)", 0.0 if opt_v else PHASE_MIN["validity"][mode],
+                         (f"only if time remains; ~{PHASE_MIN['validity'][mode]:g} min, not budgeted (CUT for the capability cells; H2 / H0 are INCOMPLETE by design)" if opt_v
+                          else "shared by H0 and H2" if mode == "concise" else "")))
             concise_done = concise_done or mode == "concise"
         if a != "HM":
             rows.append((f"{a} brain-slot seconds per retained turn", 0.0 if opt else PHASE_MIN["slot"][a],
                          f"only if time remains; ~{PHASE_MIN['slot'][a]:g} min at run 1's rate, not budgeted" if opt else "idle retain of 10-turn chunks"))
         for k in range(2, b.seeds[a] + 1):
-            rows.append((f"{a} seed {k} ({seeds[k - 1]}): store-tier cells", b.box_min[a], "ceiling, same box as seed 1"))
+            rows.append((f"{a} seed {k} ({seeds[k - 1]}): store-tier cells", b.box_min[a], "ceiling, same box as seed 1 (the capability cells ran on seed 1)"))
     rows.append(("t+6 min forgetting verdicts, report", 0.0, f"inside the {TAIL_MIN:g} min tail, not counted"))
     return rows
 
@@ -725,9 +784,13 @@ def dry_plan(win: Any) -> dict:
     win.log("per-arm cell budget (cells per seed box at run 1's seconds per cell): " + "; ".join(
         f"{a} {b.seeds[a]} seed{'s' if b.seeds[a] > 1 else ''} x {b.box_min[a]:g} min = ~{b.cells_in_box(a)}/{b.runnable_for(a)} runnable cells each"
         + (" (all 3 seeds complete inside the cap)" if a == "H1" and b.cells_in_box(a) >= b.runnable else "")
-        for a in b.arms) + f"; {b.store_cells - b.runnable} of {b.store_cells} store cells SKIP by capability on H1 / H2 (the Zoe layer runs the conflict pass and "
+        for a in b.arms) + f"; {b.store_cells - b.runnable} of {b.store_cells} ordinary store cells SKIP by capability on H1 / H2 (the Zoe layer runs the conflict pass and "
         f"the people graph, the scratch Postgres gives them the disk cells)" + (f"; {b.store_cells - b.runnable_h0} on H0 (no Zoe layer: conflict_pass / edges)"
                                                                                if "H0" in b.arms and b.runnable_h0 >= 0 else ""))
+    win.log("CUT to fit the capability axes under the cap: " + "; ".join(
+        f"{a}: {', '.join(CAP_CUT[a]) or 'nothing'} cut" for a in b.arms if a in CAP_CUT)
+        + f"; H2 / H0 latency + slot phases and the concise validity phase only if time remains (-{PHASE_MIN['latency']['H2'] + PHASE_MIN['slot']['H2'] + PHASE_MIN['validity']['concise']:g} min);"
+        " the capability cells run on seed 1 only")
     win.log("seeds: " + ", ".join(seeds))
     win.log(f"outputs: {cfg.bakeoff_dir}/run-{win.run_id}.log, run-{win.run_id}.json, <docs>/bakeoff-run-{win.run_id}.md")
     win.log("RESTORE (always, on every exit path): stop zoe-bakeoff-hindsight/-gemma/-embed, docker compose down, "
@@ -891,6 +954,12 @@ def write_report(ctx: Ctx, win: Any, seeds: tuple, store: list, by_id: dict) -> 
         "F5/F6 (physical erase) and A8 (people graph) on H1/H2 run the Zoe layer's scrub and Zoe's own graph over Hindsight's real Postgres files; the engine's "
         "own writes were only MODELLED in the pre-window probe, so these are the first contact with the real rows (the adapter control `physical_erase` OFF must be red here)",
         "H2 and H0 ran one seed each by design (H1 first, three seeds): the rule needs three, so they can only be INCOMPLETE",
+        "the capability axes (J exact words, K reflection, L long-range recall, M protocol) ran on seed 1 only and each arm ran the ones it is the evidence for "
+        "(H1 / HM: J, L, M; H2 / H0: K): the other arms' cells are `planner cut` or capability SKIPs, never passes; H2's and H0's latency / slot phases and the concise "
+        "validity phase ran only if time remained (their G0 / G1 items are NA otherwise)",
+        "the lab half of M (the protocol) is a scripted stand-in for each protocol's text and never decides; its brain half is declared and did not run, so M is `no data`; "
+        "K on Z0 scripts the nightly model (K2 / K3 SKIP, K1 / K4 / K5 measure what Z0's store keeps of a night's proposals)",
+        "the capability cells' thresholds were written before any Hindsight arm ran them; Z0e's long-range numbers were seen afterwards",
         "all arms share one Hindsight server and one egress log: the per-arm egress split is by wall-clock phase, the gate reads the whole window"]
     if "HM" in cfg.arms:
         notes.append("HM runs ONE seed by design (H1 keeps three): the rule needs three, so HM is INCOMPLETE, measured for the comparison; its verbatim tier is the REAL MemPalace "
@@ -957,11 +1026,11 @@ def measure(win: Any) -> dict:
         phase_arm_controls(ctx, store)
         for v in budget.arms:                 # H1 first and complete, then H2, then H0: a later arm only gets what the earlier one left
             for k in range(1 if cfg.smoke_cells else budget.seeds[v]):
-                box = budget.seed_box_s(v, win.time_left_s() - tail_s)
+                box = budget.seed_box_s(v, win.time_left_s() - tail_s, first=(k == 0))
                 if box >= 60.0 and v == "HM":
                     phase_hm(ctx, seeds[k], box, store, by_id, instrument_of)
                 elif box >= 60.0:
-                    run_arm_seed(ctx, v, seeds[k], box, store, by_id, instrument_of)
+                    run_arm_seed(ctx, v, seeds[k], box, store, by_id, instrument_of, first=(k == 0))
                 if k == 0:
                     if win.time_left_s() > tail_s + 90 and v != "HM":
                         phase_latency(ctx, v)

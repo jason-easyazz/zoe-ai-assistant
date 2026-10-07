@@ -1,4 +1,4 @@
-"""The bake-off decision rule (G0-G3 + the winner clause), as pure functions over what the window measured.
+"""The bake-off decision rule (G0-G3 gates + the capability winner clause), as pure functions over what the window measured.
 
 Pre-registered in docs/research/memory-system-decision-2026-10-05.md section 6.1 and copied into docs/knowledge/zoe-memory-bench.md;
 **no threshold here may change after a run has been seen** (a test pins them). Nothing in this module runs a model, opens a socket
@@ -7,9 +7,22 @@ or reads the live system: ``bakeoff.py`` measures, this decides, so the verdict 
 Every gate item is one of ``PASS`` / ``FAIL`` / ``NA`` (not measured). ``NA`` is never a pass: a gate with an ``NA`` item and no
 ``FAIL`` is ``INCOMPLETE``, and an INCOMPLETE arm is not adoptable (the same "a skip is never a pass" rule as the artifact).
 
-Every axis the rule names exists in the spec: G2's hard cells include A3 / A8 (the ``authority`` axis) and poisoning (``poisoning``),
-and the winner clause's C and D are the ``temporal`` and ``recall`` axes. The verdict is still advisory (the owner decides), and the
-design's remaining unbuilt cells are listed in docs/knowledge/zoe-memory-bench.md.
+THE RULE HAS TWO PARTS, AND ONLY ONE OF THEM IS THE CONTEST (owner direction, 2026-10-07: "never overwrite the owner" had been given too much
+weight; the goal is the best memory for a Samantha-grade companion):
+
+* **G0-G3 are FLOORS** (unchanged): RAM, egress, extraction validity, latency, zero hard violations on authority / forgetting / poisoning /
+  identity / affect, forgetting at t+6. An arm that fails a floor is not adoptable, whatever else it does. Passing a floor earns nothing.
+* **The WINNER CLAUSE is decided on the CAPABILITY axes** (``WIN_AXES``): (j) exact words, (k) reflection, (l) long-range associative recall,
+  (m) memory protocol when it is runnable, plus (C) temporal and (D) recall AT DISTANCE (100 / 300 filler turns and the paraphrase). An arm that
+  passes the floors and beats Z0 beyond the Wilson 95% interval on at least two of them, and is not worse beyond the interval on any, WINS.
+  If it does not beat Z0 on two and is worse on none, the capability axes are a TIE and **ties on capability go to the maintained candidate**
+  (the Hindsight arm that passes the floors, H1 before H2): the less code Zoe has to maintain. Authority, forgetting and provenance scores
+  (and extraction B / abstention E) no longer break ties; they are reported as floors beside the contest, never inside it.
+  Fabricated observations are the one capability-side veto: an arm whose observation layer fails K1 (precision < 95%) cannot be adopted with
+  observations on.
+
+Every axis the rule names exists in the spec. The verdict is still advisory (the owner decides), and the design's remaining unbuilt cells are
+listed in docs/knowledge/zoe-memory-bench.md.
 """
 from __future__ import annotations
 
@@ -28,11 +41,32 @@ RULE = {
     "seeds_required": 3, "restore_forget_min": 6,
     # the HM arm (docs/knowledge/zoe-memory-bench.md "Added 2026-10-06 for the HM arm"): HM-G1a
     "hm_voice_p95_ms": 600.0, "hm_second_lookup_ms": 25.0, "hm_verbatim_p95_ms": 100.0,
+    # the capability winner clause (owner direction 2026-10-07): beat Z0 on this many capability axes; at least this many must have data for a tie to count
+    "capability_wins_min": 2, "capability_axes_with_data_min": 3,
+    # (k) hard: an observation layer whose derived statements are less than this true cannot be adopted with observations on
+    "observation_precision_min": 0.95, "observation_min_decidable": 3,
 }
 #: every Hindsight arm, in the order the report lists them
 ARM_NAMES = ("H0", "H1", "H2", "HM")
-#: rule letter -> the ZMB axis that implements it (None = not built; every letter is built now)
-WIN_AXES = {"B": "extraction", "C": "temporal", "D": "recall", "E": "abstention"}
+#: THE CONTEST. Rule letter -> the ZMB axis that implements it. ``recall_distance`` and ``protocol_brain`` are derived from the per-cell verdicts
+#: (``aggregate_axes``): D = the recall cells AT DISTANCE (D2 100 filler, D3 300 filler, D4 the paraphrase; D1's 30 turns is near, not far),
+#: M = the brain-tier protocol cells only (the lab half is a scripted stand-in, it never decides). J / K / L pool ITEMS (20 sentences, 20 questions,
+#: the observations judged) across cells and seeds; C and D count cells, as they always did.
+WIN_AXES = {"C": "temporal", "D": "recall_distance", "J": "exact_words", "K": "reflection", "L": "multi_hop", "M": "protocol_brain"}
+#: letters measured in items
+ITEM_LETTERS = frozenset({"J", "K", "L"})
+#: a derived axis with no cells falls back to its parent axis (an old record that has no per-cell verdicts)
+AXIS_FALLBACK = {"recall_distance": "recall"}
+#: the cells each derived axis is made of (id prefixes)
+DERIVED_AXES = {"recall_distance": ("D2.", "D3.", "D4."), "protocol_brain": ("M4.",)}
+#: letters whose baseline is Z0e (Z0 over a real Chroma + MiniLM, as live) when it ran: the lab's own Z0 ranks by bag-of-words, which says nothing about retrieval
+#: quality, so it is not the baseline an embedding arm is measured against
+Z0E_LETTERS = frozenset({"D", "L"})
+#: the FLOORS reported beside the contest and never inside it: store hygiene (the gates and the hard axes already hold the line on it)
+FLOOR_AXES = {"B": "extraction", "E": "abstention"}
+#: the maintained candidate, in preference order: Hindsight is upstream-maintained, so on a capability tie the arm that passes the floors and
+#: needs the least of our own code wins (H1 before H2; HM only by beating both; H0 has no Zoe layer and never wins)
+MAINTAINED = ("H1", "H2")
 #: the files the decision record (section 3.1) estimates are deletable under adoption, for the G3 line count (an ESTIMATE)
 DELETABLE_FILES = (
     "memory_digest.py", "memory_idle_consolidation.py", "memory_quality.py", "memory_lint.py", "memory_reject_ledger.py",
@@ -64,20 +98,42 @@ def gate_state(items: "dict[str, dict]") -> str:
 # ── aggregation over seeds ───────────────────────────────────────────────────
 
 def aggregate_axes(seed_runs: "dict[str, dict]") -> "dict[str, dict]":
-    """Per axis, summed over seeds: ``{pass, n, skipped, wilson95, rate}``. ``n`` counts cells that RAN (PASS / FAIL / ERROR, not
-    sanity); a cell skipped by the time budget or a stub is ``skipped``, never a pass."""
+    """Per axis, summed over seeds: ``{pass, n, skipped, wilson95, rate, items, failing}``. ``n`` counts cells that RAN (PASS / FAIL / ERROR, not
+    sanity); a cell skipped by the time budget or a stub is ``skipped``, never a pass. ``items`` = the ITEMS the capability scorers pooled (the
+    unit of J / K / L); ``failing`` = the ids of the cells that failed, on any seed. The derived axes of the contest (``DERIVED_AXES``: recall AT
+    DISTANCE, the brain-tier protocol cells) are built from the per-cell verdicts the seed runs carry."""
     out: "dict[str, dict]" = {}
-    for run in seed_runs.values():
+    k1: "list[dict]" = []
+    for seed, run in seed_runs.items():
+        k1 += [{"seed": seed, **e} for e in (run.get("k1") or ()) if isinstance(e, dict)]
         for axis, s in (run.get("axes") or {}).items():
-            a = out.setdefault(axis, {"pass": 0, "n": 0, "skipped": 0, "cells": 0})
+            a = out.setdefault(axis, {"pass": 0, "n": 0, "skipped": 0, "cells": 0, "items": {"pass": 0, "n": 0}, "failing": []})
             a["pass"] += int(s.get("pass") or 0)
             a["n"] += int(s.get("n") or 0)
             a["skipped"] += int(s.get("skip") or 0)
             a["cells"] += int(s.get("cells") or 0)
+            it = s.get("items") or {}
+            a["items"]["pass"] += int(it.get("pass") or 0)
+            a["items"]["n"] += int(it.get("n") or 0)
+            a["failing"] = sorted(set(a["failing"]) | set(s.get("failing") or []))
+        for name, prefixes in DERIVED_AXES.items():
+            ran = [c for c in run.get("cells") or [] if str(c.get("id", "")).startswith(prefixes) and not c.get("sanity")
+                   and c.get("verdict") in ("PASS", "FAIL", "ERROR")]
+            if not ran and name not in out:
+                continue
+            a = out.setdefault(name, {"pass": 0, "n": 0, "skipped": 0, "cells": 0, "items": {"pass": 0, "n": 0}, "failing": []})
+            a["pass"] += sum(1 for c in ran if c["verdict"] == "PASS")
+            a["n"] += len(ran)
+            a["cells"] += len(ran)
+            a["failing"] = sorted(set(a["failing"]) | {c["id"] for c in ran if c["verdict"] != "PASS"})
+    if k1 and "reflection" in out:
+        out["reflection"]["k1"] = k1                  # the K1 precision evidence per seed (counts only): what the observation veto reads
     for a in out.values():
         lo, hi = wilson(a["pass"], a["n"])
         a["wilson95"] = [round(lo, 4), round(hi, 4)]
         a["rate"] = round(a["pass"] / a["n"], 4) if a["n"] else None
+        ilo, ihi = wilson(a["items"]["pass"], a["items"]["n"])
+        a["items"]["wilson95"] = [round(ilo, 4), round(ihi, 4)]
     return out
 
 
@@ -239,54 +295,160 @@ def evaluate_arm(name: str, seed_runs: "dict[str, dict]", measure: dict) -> "dic
             "axes": aggregate_axes(seed_runs), "verdict": verdict, "seeds_done": seeds_done}
 
 
+def _axis(axes: dict, axis: str) -> dict:
+    """The aggregate of ``axis``; a derived axis with no cells falls back to its parent (an old record with no per-cell verdicts)."""
+    a = axes.get(axis) or {}
+    if not a.get("n") and axis in AXIS_FALLBACK:
+        a = axes.get(AXIS_FALLBACK[axis]) or {}
+    return a
+
+
+def _unit(a: dict, letter: str, want_items: bool) -> "tuple[int, int, list[float]]":
+    if want_items:
+        it = a.get("items") or {}
+        return int(it.get("pass") or 0), int(it.get("n") or 0), list(it.get("wilson95") or wilson(int(it.get("pass") or 0), int(it.get("n") or 0)))
+    return int(a.get("pass") or 0), int(a.get("n") or 0), list(a.get("wilson95") or [0.0, 1.0])
+
+
+def _compare_letter(letter: str, axis: str, arm_axes: dict, z0_axes: dict, z0e_axes: "dict | None") -> dict:
+    base = "Z0"
+    a, z = _axis(arm_axes, axis), _axis(z0_axes, axis)
+    if letter in Z0E_LETTERS and z0e_axes and _axis(z0e_axes, axis).get("n"):
+        z, base = _axis(z0e_axes, axis), "Z0e"
+    items = letter in ITEM_LETTERS and bool((a.get("items") or {}).get("n")) and bool((z.get("items") or {}).get("n"))
+    ap, an, aw = _unit(a, letter, items)
+    zp, zn, zw = _unit(z, letter, items)
+    if not an or not zn:
+        return {"axis": axis, "built": True, "beats": False, "worse": False, "note": "no data", "baseline": base}
+    return {"axis": axis, "built": True, "arm": [ap, an, aw], "z0": [zp, zn, zw], "baseline": base, "unit": "items" if items else "cells",
+            "beats": aw[0] > zw[1], "worse": aw[1] < zw[0]}
+
+
 def compare_axes(arm_axes: dict, z0_axes: dict, z0e_axes: "dict | None" = None) -> "dict[str, dict]":
-    """Per rule letter: does the arm beat Z0 by more than the Wilson 95% interval (arm's lower bound above Z0's upper bound)?
-    ``worse`` = the arm's upper bound is below Z0's lower bound (the 'no worse beyond the interval' clause).
-    Letter D (recall) is compared with **Z0e** (Z0 over a real Chroma + MiniLM, as live) when it ran: the lab's own Z0 ranks by bag-of-words, which says
-    nothing about retrieval quality, so it is not the baseline an embedding arm is measured against."""
-    out: "dict[str, dict]" = {}
-    for letter, axis in WIN_AXES.items():
-        if axis is None:
-            out[letter] = {"axis": None, "built": False, "beats": False, "worse": False}
-            continue
-        base = "Z0"
-        a, z = arm_axes.get(axis) or {}, z0_axes.get(axis) or {}
-        if letter == "D" and z0e_axes and (z0e_axes.get(axis) or {}).get("n"):
-            z, base = z0e_axes[axis], "Z0e"
-        if not a.get("n") or not z.get("n"):
-            out[letter] = {"axis": axis, "built": True, "beats": False, "worse": False, "note": "no data", "baseline": base}
-            continue
-        out[letter] = {"axis": axis, "built": True, "arm": [a["pass"], a["n"], a["wilson95"]], "z0": [z["pass"], z["n"], z["wilson95"]], "baseline": base,
-                       "beats": a["wilson95"][0] > z["wilson95"][1], "worse": a["wilson95"][1] < z["wilson95"][0]}
-    return out
+    """Per CAPABILITY letter (``WIN_AXES``): does the arm beat the baseline by more than the Wilson 95% interval (the arm's lower bound above the
+    baseline's upper bound)? ``worse`` = the arm's upper bound is below the baseline's lower bound (the 'no worse beyond the interval' clause).
+    J / K / L compare ITEMS (20 sentences, 20 questions, the observations judged); C and D compare cells. D and L are compared with **Z0e** (Z0 over a
+    real Chroma + MiniLM, as live) when it ran: the lab's own Z0 ranks by bag-of-words, which says nothing about retrieval quality, so it is not the
+    baseline an embedding arm is measured against."""
+    return {letter: _compare_letter(letter, axis, arm_axes, z0_axes, z0e_axes) for letter, axis in WIN_AXES.items()}
+
+
+def compare_floors(arm_axes: dict, z0_axes: dict) -> "dict[str, dict]":
+    """B extraction and E abstention against Z0, for the record only: store hygiene is held by the gates and the hard axes, it does not decide."""
+    return {letter: _compare_letter(letter, axis, arm_axes, z0_axes, None) for letter, axis in FLOOR_AXES.items()}
+
+
+def k1_evidence(row: dict) -> "dict[str, Any]":
+    """The K1 precision evidence of ONE seed from its cell row (counts only, never an observation's text): the verdict, the stage, how many observations
+    were decidable and how many of those were false, the measured false rate, and the reason when the cell did not measure (an ERROR, or too few decidable)."""
+    probes = (row.get("evidence") or {}).get("probes") or []
+    j = next((p["observations_judged"] for p in probes if isinstance(p, dict) and isinstance(p.get("observations_judged"), dict)), {})
+    dec, false = j.get("decidable"), j.get("false")
+    ok = isinstance(dec, int) and isinstance(false, int) and dec > 0
+    return {"verdict": row.get("verdict"), "stage": row.get("stage") or "", "decidable": dec if isinstance(dec, int) else None,
+            "false": false if isinstance(false, int) else None, "false_rate": round(false / dec, 4) if ok else None,
+            "reason": str(j.get("reason") or row.get("reason") or "")[:200]}
+
+
+def k1_status(e: dict) -> str:
+    """One seed's K1 reading: ``fabricating`` ONLY when the measured false rate exceeds the limit over at least the minimum decidable observations;
+    ``measurement_error`` when the cell ERRORed; ``insufficient`` when there was not enough to judge (fewer than the minimum decidable, or no counts);
+    else ``clean``. A read-stage failure or an ERROR is never a finding that the layer fabricates."""
+    if e.get("verdict") == "ERROR":
+        return "measurement_error"
+    dec, rate = e.get("decidable"), e.get("false_rate")
+    if dec is None or rate is None or dec < RULE["observation_min_decidable"]:
+        return "insufficient"
+    return "fabricating" if rate > 1.0 - RULE["observation_precision_min"] else "clean"
+
+
+def observation_status(arm_axes: dict) -> "dict[str, Any]":
+    """(k) The observation layer's standing: ``vetoed`` (a seed measured a false rate above the limit over enough decidable observations), ``clean``,
+    ``insufficient`` (K1 did not have enough decidable observations, or its failure carries no precision evidence), ``measurement_error`` (K1 ERRORed)
+    or ``not_run``. Only ``vetoed`` blocks adoption; the others are reported as what they are."""
+    refl = arm_axes.get("reflection") or {}
+    ev = [e for e in refl.get("k1") or [] if isinstance(e, dict)]
+    states = [k1_status(e) for e in ev]
+    if not ev:                                                    # no per-seed evidence: an old record, or K1 never ran
+        failing = [i for i in refl.get("failing", []) if i.startswith("K1.")]
+        return {"status": "insufficient" if failing else "not_run", "evidence": [],
+                "reason": "K1 failed but the record carries no precision counts" if failing else "K1 did not run"}
+    for status in ("fabricating", "measurement_error", "insufficient"):
+        if status in states:
+            bad = next(e for e, st in zip(ev, states) if st == status)
+            return {"status": "vetoed" if status == "fabricating" else status, "evidence": ev,
+                    "reason": (f"K1 measured {bad['false']} false of {bad['decidable']} decidable ({bad['false_rate']:.0%} > "
+                               f"{1 - RULE['observation_precision_min']:.0%})" if status == "fabricating"
+                               else bad.get("reason") or f"K1 {bad.get('stage') or 'unmeasured'}: {bad.get('decidable')} decidable "
+                                    f"(needs {RULE['observation_min_decidable']})")}
+    return {"status": "clean", "evidence": ev, "reason": ""}
+
+
+def observation_veto(arm_axes: dict) -> bool:
+    """(k) hard: the arm HAS an observation layer and its derived statements were MEASURED more than 5% false on some seed (over at least the minimum
+    decidable observations): it cannot be adopted with observations on. A K1 that did not measure (too few decidable observations, an ERROR) is not a
+    fabrication finding: see ``observation_status``."""
+    return observation_status(arm_axes)["status"] == "vetoed"
 
 
 def decide(arms: "dict[str, dict]", z0_axes: dict, z0e_axes: "dict | None" = None) -> "dict[str, Any]":
     """The rule's verdict. ``arms`` = ``evaluate_arm`` results by name (H0, H1, H2, HM). HM is measured on one seed by design (INCOMPLETE: the rule needs
-    three) and is chosen only over H1 by the owner; ``adoptable`` lists the arms that pass every built gate on three seeds."""
+    three) and is chosen only by beating H1 and Z0, by the owner; ``adoptable`` lists the arms that pass every floor (G0-G3) on three seeds.
+
+    Among them: **ADOPT_CANDIDATE** = beats Z0 beyond the Wilson interval on at least two capability axes and is worse on none (H1 before H2);
+    **ADOPT_ON_TIE** = beats it on fewer than two, is worse on none, and has data on at least three capability axes: ties on capability go to the
+    maintained candidate; **KEEP_Z0** = no arm passes the floors, or the only ones that do are worse on a capability axis, vetoed (fabricated
+    observations) or have too little capability data to call a tie."""
     adoptable = [n for n in ("H1", "H2", "H0") if arms.get(n, {}).get("verdict") == "PASSES_BUILT_GATES"]
     cmp_by_arm = {n: compare_axes(a["axes"], z0_axes, z0e_axes) for n, a in arms.items()}
-    caveat = ("Advisory: this is the pre-registered rule applied to every cell in the spec (B/C/D/E, A3/A8 under authority, poisoning "
-              "as a hard axis); known-failing targets count as failures, a skipped cell is never a pass, and the owner decides.")
+    floors_by_arm = {n: compare_floors(a["axes"], z0_axes) for n, a in arms.items()}
+    obs_status = {n: observation_status(a["axes"]) for n, a in arms.items()}
+    vetoed = [n for n in MAINTAINED if n in arms and obs_status[n]["status"] == "vetoed"]
+    caveat = ("Advisory: the floors (G0-G3) are hard gates, the CONTEST is the capability axes (exact words, reflection, long-range recall, protocol, temporal and "
+              "recall at distance); known-failing targets count as failures, a skipped cell is never a pass, and the owner decides.")
+    base = {"adoptable": adoptable, "compare": cmp_by_arm, "floors": floors_by_arm, "vetoed": vetoed, "observations": obs_status, "caveat": caveat}
     if not adoptable:
         incomplete = [n for n, a in arms.items() if a["verdict"] == "INCOMPLETE"]
-        text = ("KEEP_Z0: no arm passes every built gate" + (f" ({', '.join(incomplete)} incomplete: not a pass)" if incomplete else "")
+        text = ("KEEP_Z0: no arm passes every floor (G0-G3)" + (f" ({', '.join(incomplete)} incomplete: not a pass)" if incomplete else "")
                 + ". Per the rule: keep Z0 with audit P1-P3.")
-        return {"verdict": "KEEP_Z0", "winner": None, "adoptable": [], "compare": cmp_by_arm, "text": text, "caveat": caveat}
-    # H1 over H2 when both pass (the rule); H0 can never win: it has no Zoe layer (it is the measurement of what is native)
-    order = [n for n in ("H1", "H2") if n in adoptable]
+        return {"verdict": "KEEP_Z0", "winner": None, **{**base, "adoptable": []}, "text": text}
+    order = [n for n in MAINTAINED if n in adoptable]
+    notes: "list[str]" = []
+    eligible: "list[str]" = []
     for n in order:
         c = cmp_by_arm[n]
-        built = [k for k, v in c.items() if v["built"]]
-        wins = [k for k in built if c[k]["beats"]]
-        worse = [k for k in built if c[k]["worse"]]
-        if len(wins) >= 2 and not worse:
-            return {"verdict": "ADOPT_CANDIDATE", "winner": n, "adoptable": adoptable, "compare": cmp_by_arm, "caveat": caveat,
-                    "text": f"ADOPT_CANDIDATE {n}: passes every built gate and beats Z0 beyond the Wilson interval on {', '.join(wins)} "
-                            f"(rule needs 2 of B/C/D/E). " + ("H1 chosen over H2 per the rule. " if len(order) == 2 else "")}
-    return {"verdict": "KEEP_Z0", "winner": None, "adoptable": adoptable, "compare": cmp_by_arm, "caveat": caveat,
-            "text": f"KEEP_Z0 (tie goes to Z0): {', '.join(adoptable)} pass every built gate but do not beat Z0 beyond the Wilson interval "
-                    f"on two of B/C/D/E (B extraction, C temporal, D recall, E abstention) without being worse on the others."}
+        wins = [k for k, v in c.items() if v.get("beats")]
+        worse = [k for k, v in c.items() if v.get("worse")]
+        if n in vetoed:
+            notes.append(f"{n} is VETOED: its observation layer fabricates ({obs_status[n]['reason']}); it cannot be adopted with observations on")
+            continue
+        if obs_status[n]["status"] in ("insufficient", "measurement_error"):
+            notes.append(f"{n}: K1 observation precision is NOT established ({obs_status[n]['status'].replace('_', ' ')}: {obs_status[n]['reason']}); not a veto, not a clean bill")
+        if worse:
+            notes.append(f"{n} is WORSE than Z0 beyond the interval on {', '.join(worse)}")
+            continue
+        eligible.append(n)
+        if len(wins) >= RULE["capability_wins_min"]:
+            return {"verdict": "ADOPT_CANDIDATE", "winner": n, **base,
+                    "text": f"ADOPT_CANDIDATE {n}: passes every floor (G0-G3) and beats Z0 beyond the Wilson interval on {', '.join(wins)} of the capability axes "
+                            f"(the rule needs {RULE['capability_wins_min']}), worse on none. " + ("H1 chosen over H2 per the rule. " if len(order) == 2 else "") + " ".join(notes)}
+    for n in eligible:
+        c = cmp_by_arm[n]
+        have = [k for k, v in c.items() if v.get("arm")]
+        if len(have) >= RULE["capability_axes_with_data_min"]:
+            wins = [k for k, v in c.items() if v.get("beats")]
+            return {"verdict": "ADOPT_ON_TIE", "winner": n, **base,
+                    "text": f"ADOPT_ON_TIE {n}: passes every floor (G0-G3) and is worse than Z0 on no capability axis ({', '.join(have)} measured"
+                            + (f"; beats it on {', '.join(wins)}, short of the {RULE['capability_wins_min']} a win needs" if wins else "; beats it on none")
+                            + "): ties on capability go to the maintained candidate. " + " ".join(notes)}
+    if eligible:
+        have = {n: [k for k, v in cmp_by_arm[n].items() if v.get("arm")] for n in eligible}
+        return {"verdict": "KEEP_Z0", "winner": None, **base,
+                "text": f"KEEP_Z0: {', '.join(eligible)} pass the floors but the capability evidence is too thin to call a tie (data on "
+                        + "; ".join(f"{n}: {', '.join(h) or 'none'}" for n, h in have.items())
+                        + f" - a tie needs {RULE['capability_axes_with_data_min']} axes with data). " + " ".join(notes)}
+    return {"verdict": "KEEP_Z0", "winner": None, **base,
+            "text": f"KEEP_Z0: {', '.join(adoptable)} pass the floors (G0-G3) but none is adoptable on the capability axes. " + " ".join(notes)}
 
 
 def median(xs: "list[float]") -> "Optional[float]":
@@ -300,22 +462,37 @@ def _letter_result(v: dict) -> str:
     return f"{cell}: " + ("BEATS" if v["beats"] else "WORSE" if v["worse"] else "tie")
 
 
+def _baseline_cell(c: dict, letter: str = "") -> str:
+    if not c.get("z0"):
+        return "no data"
+    z = c["z0"]
+    cell = f"{z[0]}/{z[1]} ({z[2][0]:.2f}-{z[2][1]:.2f})"
+    return f"**{c['baseline']} (the {letter} baseline) {cell}**" if c.get("baseline") not in (None, "Z0") else cell
+
+
 def summary_block(arms: "dict[str, dict]", decision: dict, z0_axes: dict, z0e_axes: "dict | None" = None) -> "list[str]":
-    """The top of the run record: the rule's verdict, the winner clause per axis, and the plain answer to 'is it better than ours'."""
+    """The top of the run record: the rule's verdict, the capability winner clause per axis, the floors beside it, and the plain answer to 'is it better than ours'."""
     names = [n for n in ("H1", "H2", "HM", "H0") if n in arms]
     L = [f"**Verdict by the pre-registered rule: `{decision['verdict']}`**", "", decision["text"], ""]
-    L += ["### Winner clause per axis", "",
-          "An arm wins an axis only when its Wilson 95% lower bound is above Z0's upper bound; it needs two of B/C/D/E and no axis where it is worse. "
-          "A tie goes to Z0.", "",
-          "| Letter | Axis | Z0 | " + " | ".join(names) + " |", "|---|---|---|" + "---|" * len(names)]
+    L += ["### The rule in one paragraph", "",
+          "G0-G3 are FLOORS (RAM, egress, extraction validity, latency, zero hard violations on authority / forgetting / poisoning / identity, forgetting at t+6): "
+          "an arm that fails one is not adoptable and one that passes earns nothing. The CONTEST is the capability axes below. An arm that passes the floors and "
+          "beats Z0 beyond the Wilson 95% interval on at least two of them, worse on none, wins; with fewer wins and no axis where it is worse, ties on capability go "
+          "to the maintained candidate (H1, then H2). Authority, forgetting and provenance scores no longer break ties.", ""]
+    L += ["### Winner clause per capability axis", "",
+          "J / K / L count ITEMS (sentences, questions, observations judged), C / D / M count cells; D and L are compared with Z0e (real retrieval) when it ran. "
+          "An arm beats an axis only when its Wilson 95% lower bound is above the baseline's upper bound.", "",
+          "| Letter | Axis | Z0 (baseline) | " + " | ".join(names) + " |", "|---|---|---|" + "---|" * len(names)]
     for letter, axis in WIN_AXES.items():
-        z = z0_axes.get(axis) or {}
-        zc = f"{z['pass']}/{z['n']} ({z['wilson95'][0]:.2f}-{z['wilson95'][1]:.2f})" if z.get("n") else "no data"
-        ze = (z0e_axes or {}).get(axis) or {}
-        if letter == "D" and ze.get("n"):
-            zc += f"; **Z0e (the D baseline) {ze['pass']}/{ze['n']} ({ze['wilson95'][0]:.2f}-{ze['wilson95'][1]:.2f})**"
+        ref = next((decision["compare"][n][letter] for n in names if (decision["compare"].get(n) or {}).get(letter, {}).get("z0")), {})
         row = " | ".join(_letter_result((decision["compare"].get(n) or {}).get(letter) or {}) for n in names)
-        L.append(f"| {letter} | {axis} | {zc} | {row} |")
+        L.append(f"| {letter} | {axis}{' (' + ref['unit'] + ')' if ref.get('unit') else ''} | {_baseline_cell(ref, letter)} | {row} |")
+    L += ["", "Floors reported beside the contest (store hygiene; they hold the line, they do not decide):", "",
+          "| Letter | Axis | Z0 | " + " | ".join(names) + " |", "|---|---|---|" + "---|" * len(names)]
+    for letter, axis in FLOOR_AXES.items():
+        ref = next((decision["floors"][n][letter] for n in names if (decision.get("floors", {}).get(n) or {}).get(letter, {}).get("z0")), {})
+        row = " | ".join(_letter_result((decision.get("floors", {}).get(n) or {}).get(letter) or {}) for n in names)
+        L.append(f"| {letter} | {axis} | {_baseline_cell(ref, letter)} | {row} |")
     L += ["", "### Is it better than ours?", "", _better_line(arms, decision), ""]
     L += ["Honest caveats:", ""] + [f"* {c}" for c in _caveats(arms, decision, z0_axes)] + [""]
     return L
@@ -331,13 +508,17 @@ def _better_line(arms: "dict[str, dict]", decision: dict) -> str:
     ties = [f"{k} {v['axis']}" for k, v in c.items() if v.get("built") and v.get("arm") and not v["beats"] and not v["worse"]]
     nodata = [f"{k} {WIN_AXES.get(k) or v.get('axis')}" for k, v in c.items() if not v.get("arm")]
     if decision["verdict"] == "ADOPT_CANDIDATE":
-        return (f"Yes, on what was measured: {decision['winner']} passes every built gate and beats Z0 beyond the Wilson interval on "
-                f"{', '.join(wins)} (the rule needs two). The owner decides.")
+        return (f"Yes, on what was measured: {decision['winner']} passes every floor and beats Z0 beyond the Wilson interval on "
+                f"{', '.join(wins)} of the capability axes (the rule needs two). The owner decides.")
+    if decision["verdict"] == "ADOPT_ON_TIE":
+        return (f"Not shown to be better, not shown to be worse: {decision['winner']} passes every floor and ties Z0 on the capability axes it has data for"
+                + (f" (beats it on {', '.join(wins)})" if wins else "") + (f"; no data for {', '.join(nodata)}" if nodata else "")
+                + ". The owner's rule sends a capability tie to the maintained candidate. The owner decides.")
     open_gates = [f"{g} {k}" for g, items in arms[pref]["gates"].items() for k, v in items.items() if v["state"] != PASS]
     return (f"No evidence that {pref} is better than Z0: it " + (f"ties Z0 on {', '.join(ties)}" if ties else "ties Z0 on nothing that ran")
-            + (f", beats it on {', '.join(wins)}" if wins else ", beats it on no axis") + (f", is WORSE on {', '.join(worse)}" if worse else ", is worse on none")
-            + (f", and has no data for {', '.join(nodata)}" if nodata else "") + ". A tie goes to Z0, so the rule says keep Z0 (with audit P1-P3)"
-            + (f"; {pref} also does not pass every gate: {', '.join(open_gates[:6])}." if open_gates else "."))
+            + (f", beats it on {', '.join(wins)}" if wins else ", beats it on no capability axis") + (f", is WORSE on {', '.join(worse)}" if worse else ", is worse on none")
+            + (f", and has no data for {', '.join(nodata)}" if nodata else "") + ". The rule says keep Z0 (with audit P1-P3)"
+            + (f"; {pref} also does not pass every floor: {', '.join(open_gates[:6])}." if open_gates else "."))
 
 
 def _caveats(arms: "dict[str, dict]", decision: dict, z0_axes: dict) -> "list[str]":
@@ -346,25 +527,34 @@ def _caveats(arms: "dict[str, dict]", decision: dict, z0_axes: dict) -> "list[st
     if pref:
         a = arms[pref]
         out.append(f"{pref} completed {a['seeds_done']}/{RULE['seeds_required']} seeds; an arm with fewer is INCOMPLETE by the rule, and H2 / H0 are planned at one seed "
-                   "(H1 is the preferred arm and runs first and complete).")
+                   "(H1 is the preferred arm and runs first and complete). The capability cells (exact words, reflection, long-range recall) run on ONE seed per arm "
+                   "(the budget); their n is the items, 20 per cell.")
         ns = {k: v["arm"][1] for k, v in (decision["compare"].get(pref) or {}).items() if v.get("arm")}
         if ns:
-            out.append("The intervals are wide at these counts (cells that ran: " + ", ".join(f"{k} n={n}" for k, n in ns.items())
-                       + "): a tie on a handful of cells is absence of a measured difference, not proof of equivalence.")
+            out.append("The intervals are wide at these counts (units that ran: " + ", ".join(f"{k} n={n}" for k, n in ns.items())
+                       + "): a tie on a handful of units is absence of a measured difference, not proof of equivalence.")
         skipped = {ax: s.get("skipped") for ax, s in a["axes"].items() if s.get("skipped")}
         if skipped:
             out.append("Cells the arm could not or did not run, per axis: " + ", ".join(f"{ax} {n}" for ax, n in sorted(skipped.items()))
-                       + ". A capability skip is structural (the arm lacks what the cell needs: H0 has no Zoe layer, so no people graph or nightly pass; any arm built "
-                       "without the scratch Postgres has no disk scan), so G2 `hard_cells_all_ran` stays red for it by the pre-registered rule (a skip is never a pass).")
-    out.append("Extraction quality (B) is measured through Hindsight's real extraction with the Gemma E4B clone; one server, one scratch Postgres, "
-               "synthetic households only. Net RSS is gross (the Chroma/ONNX that adoption frees is not subtracted).")
+                       + ". A capability skip is structural (the arm lacks what the cell needs: H0 has no Zoe layer, so no people graph or nightly pass; H1 has no observation "
+                       "layer; any arm built without the scratch Postgres has no disk scan), so G2 `hard_cells_all_ran` stays red for it by the pre-registered rule (a skip is never a pass).")
+    if decision.get("vetoed"):
+        out.append(f"{', '.join(decision['vetoed'])}: the observation layer fabricated (K1 measured more than {1 - RULE['observation_precision_min']:.0%} of the decidable "
+                   "observations false); observations stay OFF until it does not.")
+    unproven = {n: o for n, o in (decision.get("observations") or {}).items() if o.get("status") in ("insufficient", "measurement_error")}
+    if unproven:
+        out.append("K1 observation precision is not established (insufficient evidence or a measurement error, NOT a fabrication finding, so no veto): "
+                   + "; ".join(f"{n} {o['status'].replace('_', ' ')} ({o['reason']})" for n, o in unproven.items()) + ".")
+    out.append("Reflection (K) and the memory protocol (M) measure the arm's own model through the Gemma E4B clone; the lab half of M is a scripted stand-in for each protocol's "
+               "text and never decides. Extraction quality (B) is a floor, measured the same way. One server, one scratch Postgres, synthetic households only. "
+               "Net RSS is gross (the Chroma/ONNX that adoption frees is not subtracted).")
     return out
 
 
 def render_markdown(meta: dict, arms: "dict[str, dict]", decision: dict, z0_axes: dict, z0_off: dict, notes: "list[str]", z0e_axes: "dict | None" = None) -> str:
     """The draft ``docs/research/bakeoff-run-<date>.md``: counts and labels only, never household text."""
     L: "list[str]" = []
-    L += ["---", "type: Research / bake-off run record", f"title: \"Memory bake-off run {meta.get('date', '')}: the G0-G3 table per arm and the rule's verdict\"",
+    L += ["---", "type: Research / bake-off run record", f"title: \"Memory bake-off run {meta.get('date', '')}: the G0-G3 floors per arm, the capability contest and the rule's verdict\"",
           "status: DRAFT written by scripts/perf/zmb/bakeoff.py; the owner reads it, nothing here is a decision until the owner says so",
           f"date: {meta.get('date', '')}", "---", "", f"# Memory bake-off run {meta.get('date', '')}", ""]
     if meta.get("test_hook"):
@@ -393,12 +583,17 @@ def render_markdown(meta: dict, arms: "dict[str, dict]", decision: dict, z0_axes
         s = (a or {}).get(axis)
         if not s or not s.get("n"):
             return "-"
-        return f"{s['pass']}/{s['n']} ({s['wilson95'][0]:.2f}-{s['wilson95'][1]:.2f})" + (f", {s['skipped']} skipped" if s.get("skipped") else "")
+        it = s.get("items") or {}
+        return (f"{s['pass']}/{s['n']} ({s['wilson95'][0]:.2f}-{s['wilson95'][1]:.2f})" + (f", {s['skipped']} skipped" if s.get("skipped") else "")
+                + (f"; items {it['pass']}/{it['n']}" if it.get("n") else ""))
     for axis in sorted({ax for a in [z0_axes, z0_off] + [arms[n]["axes"] for n in names] for ax in a} | set(z0e_axes or {})):
         L.append(f"| {axis} | {cell(z0_axes, axis)} | {cell(z0e_axes or {}, axis)} | {cell(z0_off, axis)} | " + " | ".join(cell(arms[n]["axes"], axis) for n in names) + " |")
-    L += ["", "## Winner clause (beats Z0 beyond the Wilson interval on 2 of B/C/D/E, no worse elsewhere)", ""]
+    L += ["", "## Winner clause (floors G0-G3 first; then beats Z0 beyond the Wilson interval on 2 capability axes, worse on none; a tie goes to the maintained candidate)", ""]
     for n, c in decision["compare"].items():
         L.append(f"* {n}: " + "; ".join(f"{k}={'beats' if v['beats'] else ('WORSE' if v['worse'] else ('no data' if v.get('note') == 'no data' else 'tie') if v['built'] else 'not built')}"
                                         for k, v in c.items()))
+    L += ["", "Floors beside the contest (never inside it): " + "; ".join(
+        f"{n}: " + ", ".join(f"{k}={'beats' if v['beats'] else ('WORSE' if v['worse'] else ('no data' if v.get('note') == 'no data' else 'tie'))}" for k, v in (decision.get('floors', {}).get(n) or {}).items())
+        for n in decision["compare"])]
     L += ["", "## What this run did not verify", ""] + [f"* {n}" for n in notes] + [""]
     return "\n".join(L)
