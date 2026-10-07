@@ -458,7 +458,7 @@ _USER_SUBJECT_RE = re.compile(r"^\s*(?:the\s+)?(?:user|speaker|i|my)\b", re.IGNO
 _STOP = frozenset("""
 the and but for with from into onto this that these those there here their them they his her its
 user users speaker have has had was were been being are not never longer anymore any more
-dropped stopped quit gave given used really very just also still currently now then than year years
+dropped stopped quit cancelled canceled gave given used really very just also still currently now then than year years
 who whom what when where while which about some one ones got get gets going doing does did
 """.split())
 _DIGIT_ORD = re.compile(r"^(\d+)(?:st|nd|rd|th)$")
@@ -527,8 +527,16 @@ def _fold(text: str) -> str:
     return "".join(c for c in unicodedata.normalize("NFKD", text or "") if not unicodedata.combining(c))
 
 
+_ATTACHED_NOT_RE = re.compile(r"^(?P<head>.+?)-+(?P<neg>not)$", re.IGNORECASE)
+
+
 def _words(text: str) -> list[str]:
-    return re.findall(r"[A-Za-z0-9][A-Za-z0-9'’\-]*", _fold(text))
+    out: list[str] = []
+    for w in re.findall(r"[A-Za-z0-9][A-Za-z0-9'’\-]*", _fold(text)):
+        # "Bendigo-not Ballarat": an attached hyphen would fuse the value with the contrast word
+        m = _ATTACHED_NOT_RE.match(w)
+        out += [m.group("head"), m.group("neg")] if m else [w]
+    return out
 
 
 def _sentences(text: str) -> list[str]:
@@ -584,7 +592,8 @@ _NEG_RE = re.compile(r"\b(?:not|never|no|none|nobody|nothing|neither|nor)\b|n['�
                      re.IGNORECASE)
 _USED_TO_RE = re.compile(r"\bused to\b|\bformerly\b|\bpreviously\b|\bwas living\b", re.IGNORECASE)
 #: a stated END of a state ("no longer" / "any more" are also negations above)
-_ENDED_RE = re.compile(r"\b(?:stopped|dropped|quit|gave up|given up|ended|left|no longer)\b|\bany ?more\b", re.IGNORECASE)
+_ENDED_RE = re.compile(r"\b(?:stopped|dropped|quit|cancell?ed|gave up|given up|ended|left|no longer)\b|\bany ?more\b",
+                       re.IGNORECASE)
 _HYPOTHETICAL_RE = re.compile(
     r"\b(?:wish|if|maybe|perhaps|might|hope|hoping|someday|supposedly|apparently|imagine|pretend|"
     r"would|could)\b", re.IGNORECASE)
@@ -603,7 +612,9 @@ _LEAD_INTERJECTION_RE = re.compile(r"^\s*(?:(?:no|nope|nah|yes|yeah|yep|actually
 # (day-sim "how's my mum" 2026-10-07: "...getting good care in Ballarat"). Only a clause that
 # names something the fact does not is a contrast; "not in Perth" beside "User lives in Perth" is
 # a denial and stays one.
-_CONTRAST_RE = re.compile(r"(?:,|;|\s[-\u2013\u2014])\s*(?:and\s+|but\s+)?not\s+(?P<neg>[^,;.!?]{1,40}?)\s*(?=[,;.!?]|$)",
+# The delimiter is a comma / semicolon or a dash, spaced OR attached ("Bendigo\u2014not Ballarat",
+# "Bendigo - not Ballarat", "Bendigo-not Ballarat"; ``_words`` splits an attached "-not" off its value).
+_CONTRAST_RE = re.compile(r"(?:,|;|\s*[-\u2013\u2014]+)\s*(?:and\s+|but\s+)?not\s+(?P<neg>[^,;.!?]{1,40}?)\s*(?=[,;.!?]|$)",
                           re.IGNORECASE)
 _NOT_A_CONTRAST = frozenset({"sure", "really", "yet", "quite", "very", "just", "too", "even", "much", "anymore",
                              "any", "always", "often", "now", "going", "been", "true", "right", "well", "good",
@@ -611,6 +622,10 @@ _NOT_A_CONTRAST = frozenset({"sure", "really", "yet", "quite", "very", "just", "
 
 
 _ARTICLES = frozenset({"a", "an", "the", "in", "at", "on", "to", "of"})
+#: a clause that points BACK at the fact ("not there", "not in it", "not that place") stems to nothing
+#: the fact says, but it is a denial OF the fact - never a corrected-away value (review of #1913).
+_ANAPHORA = frozenset({"there", "here", "it", "its", "that", "this", "those", "these", "them", "they", "him",
+                       "her", "she", "he", "so", "same", "such"})
 
 
 def _without_contrast(win: str, fact: str) -> str:
@@ -622,10 +637,20 @@ def _without_contrast(win: str, fact: str) -> str:
         neg = _words(m.group("neg"))
         if not neg or len(neg) > 4 or neg[0].lower() in _NOT_A_CONTRAST:
             return m.group(0)
+        if any(w.lower() in _ANAPHORA for w in neg):
+            return m.group(0)   # "not there" / "not in it": a denial of the fact, not a corrected-away value
         if {_stem(w) for w in neg if w.lower() not in _STOP | _ARTICLES} & fact_stems:
             return m.group(0)
         return ""
     return _CONTRAST_RE.sub(keep_or_drop, win)
+
+
+def _negated(text: str) -> bool:
+    """Negative polarity: a negation word, OR a stated end of the state. "I've dropped / quit / stopped /
+    cancelled X" is the owner's word that X is over - the same polarity as the fact "User no longer does
+    X" (the day-sim race swap, AUTHORITY_BLOCKED writer=turn_digest action=supersede). The tense/ended
+    cue below still has to agree, so "I live in X" never supports "User quit living in X"."""
+    return bool(_NEG_RE.search(text)) or bool(_ENDED_RE.search(text))
 
 
 def _window_is_a_statement_about_the_user(win: str, fact: str) -> bool:
@@ -635,7 +660,7 @@ def _window_is_a_statement_about_the_user(win: str, fact: str) -> bool:
     win = _LEAD_INTERJECTION_RE.sub("", win)
     if "?" in win or _QUESTION_START_RE.match(win):
         return False
-    if bool(_NEG_RE.search(_without_contrast(win, fact))) != bool(_NEG_RE.search(fact or "")):
+    if _negated(_without_contrast(win, fact)) != _negated(fact or ""):
         return False
     if _HYPOTHETICAL_RE.search(win):
         return False

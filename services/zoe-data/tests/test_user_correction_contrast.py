@@ -49,8 +49,48 @@ M = "User's mum lives in Bendigo"
     ("User lives in Perth", "I don't live in Perth.", False),
     ("User lives in Perth", "I live in Perth, not in Perth.", False),
     ("User lives in Perth", "I live in Perth, not sure about it.", False),
+    # review of #1913: a clause that points BACK at the fact is a denial of it, not a corrected-away value
+    (M, "My mum lives near Bendigo, but not there.", False),
+    (M, "My mum lives in Bendigo, not in it.", False),
+    (M, "My mum lives in Bendigo, and not that place.", False),
+    ("User's mum lives in Bendigo", "My mum lives in Bendigo, she doesn't live there.", False),
+    # review of #1913: the contrast also reads after an ATTACHED dash (em / en / hyphen / double hyphen)
+    (M, "My mum lives in Bendigo\u2014not Ballarat.", True),
+    (M, "My mum lives in Bendigo\u2013not Ballarat.", True),
+    (M, "My mum lives in Bendigo-not Ballarat.", True),
+    (M, "My mum lives in Bendigo--not Ballarat.", True),
+    (M, "My mum lives in Bendigo - not Ballarat.", True),
+    ("User's mum lives in Ballarat", "My mum lives in Bendigo\u2014not Ballarat.", False),
+    ("User's mum lives in Ballarat", "My mum lives in Bendigo-not Ballarat.", False),
+    ("User lives in Perth", "I live in Perth\u2014not in Perth.", False),
+    ("User lives in Perth", "I live in Perth\u2014not sure about it.", False),
 ])
 def test_contrast_clause_supports_the_new_value_only(fact, said, want):
+    assert ma.supports(fact, said) is want
+
+
+# The retraction shape: "I've dropped / quit / stopped / cancelled X" is the owner's word that X is over -
+# the same polarity as the fact "User no longer does X" (day-sim race swap: AUTHORITY_BLOCKED
+# writer=turn_digest action=supersede). Tense must still agree: a live statement never supports an ended one.
+RACE = "Change of plan: I've dropped the Harbourtown half-marathon. I'm doing the Lakeside 12k in August instead."
+
+
+@pytest.mark.parametrize("fact,said,want", [
+    ("User is no longer doing the Harbourtown half-marathon", RACE, True),
+    ("User dropped the Harbourtown half-marathon", RACE, True),
+    ("User no longer plays squash", "I stopped playing squash.", True),
+    ("User no longer plays squash", "I quit playing squash.", True),
+    ("User no longer plays squash", "I cancelled my squash membership.", False),   # a membership is not the sport
+    ("User cancelled their gym membership", "I cancelled my gym membership.", True),
+    ("User no longer has a gym membership", "I cancelled my gym membership.", True),
+    ("User no longer plays squash", "I no longer play squash.", True),
+    # the other direction stays closed: a live statement does not support the end of the state, and back
+    ("User is no longer doing the Harbourtown half-marathon", "I'm doing the Harbourtown half-marathon.", False),
+    ("User is doing the Harbourtown half-marathon", RACE.split(". ")[0] + ".", False),
+    ("User plays squash", "I quit squash.", False),
+    ("User lives in Perth", "I live in Perth.", True),
+])
+def test_retraction_verbs_are_the_owners_word_about_their_own_fact(fact, said, want):
     assert ma.supports(fact, said) is want
 
 
