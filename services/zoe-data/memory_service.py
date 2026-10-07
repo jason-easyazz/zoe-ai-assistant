@@ -1064,6 +1064,25 @@ class _BoundedKeySet:
 
 
 
+#: ``ZOE_RECALL_DURABLE_NO_DECAY`` (default ON): a row the owner stated does not age out of search ranking
+_NO_DECAY_ENV = "ZOE_RECALL_DURABLE_NO_DECAY"
+#: types that are moments, not facts: they keep decaying whoever wrote them
+_DECAYING_TYPES = frozenset({"emotional_moment", "state_change", "episode", "moment"})
+
+
+def _durable_user_fact(metadata: Mapping[str, Any], text: str = "") -> bool:
+    """Is this row a durable fact the OWNER stated (class ``user_stated`` or above, never an emotional moment), so
+    its age must not lower its rank in a semantic search? Never raises: a row that cannot be classified decays as before."""
+    if os.environ.get(_NO_DECAY_ENV, "1").strip().lower() in ("0", "false", "no", "off"):
+        return False
+    try:
+        if str(metadata.get("memory_type") or "").lower() in _DECAYING_TYPES:
+            return False
+        return _auth.row_rank(metadata, text) >= _auth.USER_RANK
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _memory_visible_to_user(metadata: Mapping[str, Any], user_id: str) -> bool:
     """Return True only for the caller's personal rows or shared family rows."""
 
@@ -1388,8 +1407,14 @@ class MemoryService:
         prompt_text: Optional[str] = None,
         speaker_verified: Optional[bool] = None,
         captured_at: Optional[str] = None,
+        hold: Optional[str] = None,
     ) -> Optional[MemoryRef]:
         """Store a fact. Returns None when silently dropped.
+
+        ``hold`` (a short reason label) is the CALLER's verdict that the user's own words do not carry this fact (the nightly
+        digest's observation gate, ``memory_authority.check_observation``): an ``approved`` write is stored ``pending`` - a
+        candidate, never served - unless it disputes a row the user said, which stays the ``disputed`` candidate it always was
+        (linked by ``contradicts_id``, so the owner is asked).
 
         ``captured_at`` (ISO-8601, optional) is for RESTORES only: the instant the fact was
         originally captured. It replaces "now" for ``added_at`` / ``added_ts`` / ``last_accessed``
@@ -1560,6 +1585,9 @@ class MemoryService:
             # a self-assertion from `user_unverified` is a CANDIDATE the owner confirms (`pending`), never an
             # approved row and never served as "you told me". A dispute (above) keeps its own, stronger status.
             write_status = "disputed" if clash is not None else status
+            if clash is None and status == "approved" and hold:
+                self._bump("observation_hold", source)
+                write_status = "pending"
             if (clash is None and status == "approved" and resolved.cls == _auth.USER_UNVERIFIED
                     and _auth.is_self_assertion(scrubbed)):
                 self._bump("unverified_pending", source)
@@ -1889,6 +1917,12 @@ class MemoryService:
             # dirs): erase it physically and verify. Best-effort — the rows ARE gone either way.
             if ids or audit_removed:
                 self.last_erase_report = await self._physical_erase(needles)
+            # The owner's verbatim turns (exact_words) go with the rows: a right-to-be-forgotten leaves no copy of the words.
+            try:
+                import exact_words
+                await exact_words.delete_user(user_id)
+            except Exception:  # noqa: BLE001 - best-effort beside the palace delete (never raises itself)
+                pass
             # Purge this user's idempotency-cache entries so re-teaching a
             # previously known fact after a forget isn't dropped as a
             # duplicate for the rest of the process lifetime.
@@ -3540,7 +3574,12 @@ class MemoryService:
                 age_days = max(0.0, (now - dt).total_seconds() / 86400.0) if dt else 0.0
             except Exception:
                 age_days = 0.0
-            semantic = (1.0 / (1.0 + dist)) * conf * math.exp(-_LAMBDA * age_days)
+            # A fact the OWNER stated is durable: it does not become less true, or less relevant to a question about it,
+            # with age (audit P2.4; ZMB L: with the 70-day half-life the older of two facts the owner told Zoe
+            # was buried under last week's chatter, and a two-fact question lost it). Model-written rows and
+            # moods still decay.
+            decays = not _durable_user_fact(md, ref.text)
+            semantic = (1.0 / (1.0 + dist)) * conf * (math.exp(-_LAMBDA * age_days) if decays else 1.0)
             hotness  = _HOTNESS_WEIGHT * math.log1p(access_count)
             base = semantic + hotness
             # 7th signal: relationship-graph adjacency. depth 0 = the person the

@@ -50,7 +50,7 @@
       "tier": "store",
       "kind": "script",
       "lme_map": "multi-session reasoning (LongMemEval); BEAM multi-session",
-      "note": "10 date comparisons and 10 place joins. A hit = the packet (the arm's associative recall, 8 rows) holds a row naming the subject and the answer token for the first fact AND for the second. The join questions name only the first fact's subject: the second fact is reachable only through the place the first one names, so a plain top-k over the question misses it where an associative step (Hindsight's link graph) finds it. The first fact is 14-28 days old, the second 1-9. MEASURED on the lab's Z0 (bag-of-words ranking + the service's 70-day recency decay): 3 of 20 at 100 filler, the joins 0 of 10 - an older fact loses to a newer near-miss, and the second fact of a join is never reached. A TARGET on Z0; Z0e (the same service over a real Chroma + MiniLM, the baseline an embedding arm is measured against) reaches 14 of 20: dates 10 of 10, joins 4 of 10 - the first fact is found, the second is not, which is the missing associative step",
+      "note": "10 date comparisons and 10 place joins. A hit = the packet (the arm's associative recall, 8 rows) holds a row naming the subject and the answer token for the first fact AND for the second. The join questions name only the first fact's subject: the second fact is reachable only through the place the first one names, so a plain top-k over the question misses it where an associative step (Hindsight's link graph) finds it. The first fact is 14-28 days old, the second 1-9. MEASURED on the lab's Z0 (bag-of-words ranking + the service's 70-day recency decay): 3 of 20 at 100 filler, the joins 0 of 10 - an older fact loses to a newer near-miss, and the second fact of a join is never reached. Was a TARGET on Z0; Z0e (the same service over a real Chroma + MiniLM, the baseline an embedding arm is measured against) reaches 14 of 20: dates 10 of 10, joins 4 of 10 - the first fact is found, the second is not, which is the missing associative step FIXED 2026-10-07 (this PR): no age decay on a durable fact the OWNER stated (`memory_service._durable_user_fact`, `ZOE_RECALL_DURABLE_NO_DECAY`) and a bounded second hop in the packet builder (`multi_hop_recall.expand`, `ZOE_MULTI_HOP_RECALL`: the subjects of a comparison searched one by one, and a bridge through the entity the first fact names). Before: Z0 3 of 20 at 100 and at 300 filler (joins 0 of 10), Z0e 14 of 20 at both (joins 4 of 10). After: Z0 19 of 20 and 20 of 20; Z0e 20 of 20 and 18 of 20. Control `multi_hop` (second hop off AND the decay restored)",
       "params": {
         "play_group": "L1"
       },
@@ -81,7 +81,10 @@
           "min_rate": 0.7
         }
       ],
-      "expected": "FAIL"
+      "expected": "PASS",
+      "controls": [
+        "multi_hop"
+      ]
     },
     {
       "id": "L2.two_facts_after_300_filler",
@@ -89,7 +92,7 @@
       "tier": "store",
       "kind": "script",
       "lme_map": "multi-session reasoning at scale",
-      "note": "same corpus and scoring as L1 at three times the distance; the bar is lower because every extra near-miss row competes for the same eight slots. MEASURED on the lab's Z0 (bag-of-words ranking + the service's 70-day recency decay): 3 of 20 at 100 filler, the joins 0 of 10 - an older fact loses to a newer near-miss, and the second fact of a join is never reached. A TARGET on Z0; Z0e (the same service over a real Chroma + MiniLM, the baseline an embedding arm is measured against) reaches 14 of 20: dates 10 of 10, joins 4 of 10 - the first fact is found, the second is not, which is the missing associative step",
+      "note": "same corpus and scoring as L1 at three times the distance; the bar is lower because every extra near-miss row competes for the same eight slots. MEASURED on the lab's Z0 (bag-of-words ranking + the service's 70-day recency decay): 3 of 20 at 100 filler, the joins 0 of 10 - an older fact loses to a newer near-miss, and the second fact of a join is never reached. Was a TARGET on Z0; Z0e (the same service over a real Chroma + MiniLM, the baseline an embedding arm is measured against) reaches 14 of 20: dates 10 of 10, joins 4 of 10 - the first fact is found, the second is not, which is the missing associative step FIXED 2026-10-07 (this PR): no age decay on a durable fact the OWNER stated (`memory_service._durable_user_fact`, `ZOE_RECALL_DURABLE_NO_DECAY`) and a bounded second hop in the packet builder (`multi_hop_recall.expand`, `ZOE_MULTI_HOP_RECALL`: the subjects of a comparison searched one by one, and a bridge through the entity the first fact names). Before: Z0 3 of 20 at 100 and at 300 filler (joins 0 of 10), Z0e 14 of 20 at both (joins 4 of 10). After: Z0 19 of 20 and 20 of 20; Z0e 20 of 20 and 18 of 20. Control `multi_hop` (second hop off AND the decay restored)",
       "params": {
         "play_group": "L2"
       },
@@ -120,7 +123,10 @@
           "min_rate": 0.5
         }
       ],
-      "expected": "FAIL"
+      "expected": "PASS",
+      "controls": [
+        "multi_hop"
+      ]
     }
   ]
 }

@@ -40,12 +40,12 @@
       "title": "the real nightly digest over a day with a panel speech-to-text fragment never rewrites the owner's <attr.name>",
       "tier": "store",
       "kind": "script",
-      "controls": ["authority"],
+      "controls": ["authority", "observation_gate"],
       "lme_map": "BEAM contradiction_resolution (the case where 'newest wins' is wrong)",
       "note": "the 2026-10-05 incident shape: one genuine owner statement plus a fragment naming a third person, then memory_digest.run_memory_digest (its dedup, anchor validation and contradiction pass are the REAL ones; only the model's extraction and its contradiction verdict are scripted)",
       "matrix": {
         "attr": [
-          {"name": "name", "owner_fact": "User's name is {owner}.", "intruder_fact": "User's name is {intruder}.", "owner_needle": "{owner}", "intruder_needle": "{intruder}", "_controls": ["authority", "identity"]},
+          {"name": "name", "owner_fact": "User's name is {owner}.", "intruder_fact": "User's name is {intruder}.", "owner_needle": "{owner}", "intruder_needle": "{intruder}", "_controls": ["authority", "identity", "observation_gate"]},
           {"name": "home", "owner_fact": "User lives in {home}.", "intruder_fact": "User lives in {home_intruder}.", "owner_needle": "{home}", "intruder_needle": "{home_intruder}"},
           {"name": "work", "owner_fact": "User works at {job}.", "intruder_fact": "User works at {job_intruder}.", "owner_needle": "{job}", "intruder_needle": "{job_intruder}"},
           {"name": "pet", "owner_fact": "User's dog is named {pet}.", "intruder_fact": "User's dog is named {pet_intruder}.", "owner_needle": "{pet}", "intruder_needle": "{pet_intruder}"}

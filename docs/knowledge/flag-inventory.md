@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-539 flags; 537 not documented in `.env.example`.
+540 flags; 538 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -144,6 +144,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_ESPEAK_PITCH` | `dynamic` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_ESPEAK_SPEED` | `dynamic` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_ESPEAK_VOLUME` | `dynamic` | no | NO | `services/zoe-data/routers/voice_tts.py` |
+| `ZOE_EXACT_WORDS_BACKFILL_HOURS` | `'36'` | no | NO | `services/zoe-data/exact_words.py` |
 | `ZOE_EXPERT_ACTIVE_DOMAINS` | `dynamic` | no | NO | `services/zoe-data/expert_dispatch.py` |
 | `ZOE_EXPERT_ALLOW_WRITES` | `'0'` | no | NO | `services/zoe-data/expert_dispatch.py` |
 | `ZOE_EXPERT_ENABLED` | `'1'` | no | NO | `services/zoe-data/expert_dispatch.py` |

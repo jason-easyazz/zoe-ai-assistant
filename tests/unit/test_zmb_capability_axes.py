@@ -419,7 +419,14 @@ def test_every_cell_that_can_pass_on_z0_has_a_control_and_every_target_names_its
             assert not c.controls and "Z0" in c.note, c.id                                                      # a target is already red: no control, and it says whose gap it is
         elif not c.sanity and c.id not in ("K2.thread_recall", "K3.useful_answers"):
             assert c.controls, c.id                                                                             # K2 / K3 never run on Z0 (a scripted model): their instrument proof is the scripted-arm cells above
-    assert CELLS["K4.invalidated_fact_not_restated"].controls == ("authority",)
+    # K4 is a two-layer defence since the observation gate: the authority wall holds a stale restatement as a disputed candidate AND the gate
+    # holds a claim the owner's words do not carry; both off together turn it red
+    assert CELLS["K4.invalidated_fact_not_restated"].controls == ("authority", "observation_gate")
+    # the three gaps the first run of these axes measured on Z0 are fixed: graded cells, each with the switch that turns it red
+    for cid, ctl in (("J1.exact_sentence_after_100_filler", "exact_index"), ("J2.when_did_i_say_it", "exact_index"),
+                     ("K1.observations_are_true", "observation_gate"), ("K5.user_stated_is_never_restated_as_inference", "observation_gate"),
+                     ("L1.two_facts_after_100_filler", "multi_hop"), ("L2.two_facts_after_300_filler", "multi_hop")):
+        assert CELLS[cid].expected == "PASS" and CELLS[cid].controls == (ctl,), cid
     assert CELLS["J0.taught_sentence_is_returned_whole"].sanity and CELLS["L0.two_facts_one_question"].sanity
 
 

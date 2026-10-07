@@ -905,6 +905,15 @@ async def memory_for_prompt(
         except Exception:
             logger.exception("memories: semantic prompt search failed")
             hits = []
+        # A question that needs TWO facts ("is Dana's birthday before my dentist appointment", "who in my family lives
+        # near Rowan's school") gets a bounded second hop: each subject of a comparison searched on its own, and the
+        # entity the first fact names followed. Only those two shapes; any other turn is unchanged (multi_hop_recall).
+        if hits:
+            from multi_hop_recall import expand as _second_hop
+
+            async def _search(q: str, limit: int = 4):
+                return await svc.search(q, user_id=user_id, limit=limit, timeout_s=1.0)
+            hits = await _second_hop(_search, message, hits, limit=len(hits) + 4)
     # On an emotional turn, PIN the user's emotional moments to the front of the
     # packet (ahead of semantic hits) so continuity survives even when generic
     # ranking would bury them. Filtered from the rows already loaded above — no
@@ -952,6 +961,21 @@ async def memory_for_prompt(
                     user_id, int(quotes), result.get("count", 0), ev.get("dated", 0),
                     ev.get("quoted", 0), len(result.get("packet") or ""))
     result["user_scoped"] = True
+    # The owner's OWN WORDS (exact_words, ZMB J1 / J2): a question that asks what they said, or when, gets their verbatim
+    # turns beside the facts, each with the day it was said. One indexed read, only on that question shape (the message
+    # itself, or - on the recall_memory tool path - the user's question of this turn); every other turn is unchanged.
+    # Never in continuity mode (that block is budgeted around its closing ask).
+    if not continuity and message.strip():
+        try:
+            import exact_words
+
+            xw_question = exact_words.question_for(user_id, message)
+            xw_block = await exact_words.packet_block(user_id, xw_question) if xw_question else ""
+        except Exception:  # noqa: BLE001 - an extra read: the packet is complete without it
+            xw_block = ""
+        if xw_block:
+            result["packet"] = (result["packet"] + "\n" + xw_block) if result.get("packet") else xw_block
+            result["exact_words"] = sum(1 for ln in xw_block.split("\n") if ln.startswith("- "))
     if continuity:
         focus = _continuity_focus(recent or [], result.get("refs") or [])
         if focus:

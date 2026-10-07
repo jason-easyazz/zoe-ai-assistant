@@ -3666,6 +3666,15 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
                                        else memory_forgotten.SCOPE_ENTITY)
         except Exception as exc:
             logger.warning("memory_forget_entity: forgotten ledger failed (%s)", type(exc).__name__)
+        # ... and the owner's verbatim turns that name the entity (exact_words): deleted, not merely hidden - every exit path
+        # below leaves them gone, and a count only is logged
+        try:
+            import exact_words
+            _xw = await exact_words.erase_entity(user_id, name)
+            if _xw:
+                logger.info("memory_forget_entity: erased %d indexed turn(s)", _xw)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_forget_entity: exact-words erase failed (%s)", type(exc).__name__)
         try:
             svc = get_memory_service()
             # Semantic search surfaces the ranked rows; the approved list makes
