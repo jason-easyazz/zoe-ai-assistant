@@ -2967,6 +2967,14 @@ async def _run_voice_memory_passes(
     person-facts (the two person extractors) are not self-assertions and are unaffected.
     """
     try:
+        # Mirror of the chat lane: a reply the hold-the-fact tier wrote means the owner's contradicting
+        # claim was not accepted this turn, so it is not mined (routers/chat.py::_persist_memory_candidates_impl).
+        try:
+            from hold_the_fact import is_own_reply as _htf_own_reply
+            if _htf_own_reply(reply):
+                return
+        except Exception:
+            pass
         # Mirror of the chat-lane guard: an EXPLICIT "remember/note that …"
         # spoken turn clears any forget tombstone it names, whichever lane
         # answers (see routers/chat.py::_persist_memory_candidates).
