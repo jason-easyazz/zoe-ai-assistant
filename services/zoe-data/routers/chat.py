@@ -1761,6 +1761,10 @@ async def chat_stream_generator(
                     type=EventType.TEXT_MESSAGE_END,
                     message_id=assistant_message_id,
                 ))
+                # A pull's one-tap "was that welcome?" row (proactive.pull.welcome_component).
+                _fp_comp = (getattr(_fp_res, "ui", None) or {}).get("zoe_component")
+                if _fp_comp:
+                    yield emit(CustomEvent(name="zoe.component", value=_fp_comp))
                 asyncio.ensure_future(chat_inject_background(message_for_processing, _fp_reply, f"fast:{_fp_res.domain}", user_id, session_id))
                 asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, _fp_reply))
                 asyncio.ensure_future(_save_chat_message(session_id, "assistant", _fp_reply, user_id=user_id))

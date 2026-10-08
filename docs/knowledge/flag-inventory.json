@@ -1062,6 +1062,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_DELIVERY_LEDGER": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/proactive/lines.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_DEVICE_TOKEN": {
         "defaults": [
           "-"
@@ -4003,6 +4013,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/auth_handoff.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_PULL_NOT_PUSH": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/proactive/pull.py"
         ],
         "typed_env": false
       },

@@ -929,6 +929,9 @@ class _ScriptedLive(sb.Live):
                  "b-ask": "I have no idea who is visiting.",
                  "long-ask-sister": "Marisol.", "long-ask-dad": "He kept a lighthouse.",
                  "s5-open-1": "Good! How did the aquarium interview go?",
+                 "s26-pull-1": "You mentioned you're anxious about a job interview at the aquarium "
+                               "on Friday - how's that going?",
+                 "s26-pull-2": "Nothing new for you right now.",
                  "c-ask-list": "You have 2 contacts. Friend: Ottoline Fenwick. Brother: Percival.",
                  "c-ask-rel": "Percival is your brother.",
                  "c-ask-dup": "Ottoline Fenwick is your friend.",
@@ -971,6 +974,15 @@ class _ScriptedLive(sb.Live):
 
     def run_selector(self, user):
         return self.selector_hook
+
+    def rearm(self, user):
+        return {"rows": 1, "armed": 1}
+
+    def inbox(self, user):
+        pulled = "s26-pull-1" in self.chats
+        if user is None or pulled:
+            return {"enabled": True, "count": 0, "top": None, "quiet": False}
+        return {"enabled": True, "count": 1, "top": "question", "quiet": False}
 
     def raise_state(self, user):
         return [{"kind": "emotional", "carries": True, "surfaced": 1}]
@@ -1469,3 +1481,119 @@ def test_selected_none_is_the_full_bar_unchanged(monkeypatch):
     assert set(res) == set(sb.SCENARIO_IDS)
     live2, res2 = _drive(monkeypatch, selected=frozenset(sb.SCENARIO_IDS))
     assert live.chats == live2.chats and set(res2) == set(res)
+
+
+# ── S26 / S27 (2026-10-09): pull, not push — "what's up?" delivers once; the orb is a count ──
+# Negative controls (each run red before commit): score_s26 accepting a repeat / a missing "nothing
+# new" / surfaced != 1; score_s27 accepting words in the state / a non-clearing state / a guest count;
+# run_pull reporting PASS when the feature is off (the live server answers the greeting and
+# ``enabled: false``).
+
+_PULL1 = "You mentioned you're anxious about a job interview at the aquarium on Friday - how's that going?"
+_NOTHING = "Nothing new for you right now."
+_CARRY = [{"kind": "open_loop", "carries": True, "surfaced": 1}]
+_STATE = {"enabled": True, "count": 1, "top": "question", "quiet": False}
+_CLEAR = {"enabled": True, "count": 0, "top": None, "quiet": False}
+
+
+def test_s26_pass_and_every_failure_mode():
+    assert sb.score_s26(_PULL1, _NOTHING, _CARRY)[0] == "PASS"
+    assert sb.score_s26("Hi! Not much, how are you?", _NOTHING, _CARRY)[0] == "FAIL"          # no delivery
+    assert sb.score_s26(_PULL1, _PULL1, _CARRY)[0] == "FAIL"                                  # delivered again
+    v, ev = sb.score_s26(_PULL1, "All quiet on my side.", _CARRY)                              # no "nothing new"
+    assert v == "FAIL" and "nothing new" in ev["why"]
+    v, ev = sb.score_s26(_PULL1, "Nothing new - though that aquarium interview is still on.", _CARRY)
+    assert v == "FAIL" and ev["repeated_second"] and ev["nothing_new_second"]   # says it AND repeats it
+    assert sb.score_s26(_PULL1, _NOTHING, [{"carries": True, "surfaced": 2}])[0] == "FAIL"
+    assert sb.score_s26(_PULL1, _NOTHING, [{"carries": True, "surfaced": 0}])[0] == "FAIL"
+    assert sb.score_s26(_PULL1, _NOTHING, [])[0] == "FAIL"
+    assert sb.score_s26(_PULL1, _NOTHING, [{"carries": False, "surfaced": 1}])[0] == "FAIL"
+
+
+def test_s27_pass_and_every_failure_mode():
+    assert sb.score_s27(_STATE, _CLEAR, _CLEAR)[0] == "PASS"
+    assert sb.score_s27(None, _CLEAR, _CLEAR)[0] == "FAIL"                                    # route absent
+    assert sb.score_s27(_STATE, None, _CLEAR)[0] == "FAIL"
+    assert sb.score_s27({**_STATE, "enabled": False}, _CLEAR, _CLEAR)[0] == "FAIL"            # flag off
+    assert sb.score_s27({**_STATE, "count": 0}, _CLEAR, _CLEAR)[0] == "FAIL"                  # pending not counted
+    assert sb.score_s27({**_STATE, "top": "emotional"}, _CLEAR, _CLEAR)[0] == "FAIL"          # not a coarse class
+    v, ev = sb.score_s27({**_STATE, "text": "Job interview at the aquarium"}, _CLEAR, _CLEAR)  # content
+    assert v == "FAIL" and ev["content_free"] is False
+    assert sb.score_s27({**_STATE, "top": "aquarium interview"}, _CLEAR, _CLEAR)[0] == "FAIL"
+    v, ev = sb.score_s27(_STATE, {**_CLEAR, "top": "job interview"}, _CLEAR)                  # words in a cleared state
+    assert v == "FAIL" and ev["content_free"] is False
+    assert sb.score_s27(_STATE, _STATE, _CLEAR)[0] == "FAIL"                                  # never clears
+    assert sb.score_s27(_STATE, _CLEAR, _STATE)[0] == "FAIL"                                  # guest sees a count
+
+
+def test_s26_s27_are_registered_and_ride_on_s5():
+    assert {"S26", "S27"} <= set(sb.SCENARIO_IDS)
+    assert sb.seed_closure({"S26"}) == frozenset({"S26", "S5", "S4"})
+    assert {"S26", "S27"} <= sb.MULTI_DAY and sb.AXIS_OF["S26"] == "emotional"
+    assert "S26" not in sb.EXPECTED and "S27" not in sb.EXPECTED     # real bars, not targets
+    assert "S26" in sb.plan_text(1) and "S27" in sb.plan_text(1)
+
+
+def test_healthy_run_passes_the_pull_scenarios(monkeypatch):
+    live, res = _drive(monkeypatch, selector_hook={"enabled": True, "kept": 1})
+    assert res["S26"]["verdict"] == "PASS" and res["S27"]["verdict"] == "PASS"
+    assert "s26-pull-1" in live.chats and "s26-pull-2" in live.chats
+    assert live.chats.index("s26-pull-1") > live.chats.index("s5-open-2")   # after S5/S12 used the raise
+
+
+def test_the_pull_scenarios_skip_when_the_selector_hook_is_off(monkeypatch):
+    live, res = _drive(monkeypatch, selector_hook=None)
+    assert res["S26"]["verdict"] == "SKIP" and res["S27"]["verdict"] == "SKIP"
+    assert "s26-pull-1" not in live.chats
+
+
+def test_partial_run_of_s26_runs_the_s5_block_and_reports_only_s26(monkeypatch):
+    live, res = _drive(monkeypatch, selector_hook={"enabled": True, "kept": 1},
+                       selected=frozenset({"S26"}))
+    assert set(res) == {"S26"} and res["S26"]["verdict"] == "PASS"
+    assert "d1-worry" in live.chats and "s5-open-1" in live.chats
+
+
+def test_nothing_to_re_arm_is_a_skip_not_a_pass(monkeypatch):
+    monkeypatch.setattr(_ScriptedLive, "rearm", lambda self, user: {"rows": 0, "armed": 0})
+    live, res = _drive(monkeypatch, selector_hook={"enabled": True, "kept": 1})
+    assert res["S26"]["verdict"] == "SKIP" and "s26-pull-1" not in live.chats
+
+
+def test_the_feature_off_is_red_not_green(monkeypatch):
+    """Control: a server without ZOE_PULL_NOT_PUSH answers the greeting and reports the orb disabled."""
+    monkeypatch.setattr(_ScriptedLive, "inbox",
+                        lambda self, user: {"enabled": False, "count": 0, "top": None, "quiet": False})
+    orig = _ScriptedLive.chat
+
+    def greeting(self, user, tag, message):
+        out = orig(self, user, tag, message)
+        if tag.startswith("s26-pull"):
+            out["reply"] = "Not much! How are you doing?"
+        return out
+    monkeypatch.setattr(_ScriptedLive, "chat", greeting)
+    live, res = _drive(monkeypatch, selector_hook={"enabled": True, "kept": 1})
+    assert res["S26"]["verdict"] == "FAIL" and res["S27"]["verdict"] == "FAIL"
+
+
+def test_a_guest_reading_a_count_turns_s27_red(monkeypatch):
+    monkeypatch.setattr(_ScriptedLive, "inbox",
+                        lambda self, user: {"enabled": True, "count": 0 if "s26-pull-1" in self.chats else 1,
+                                            "top": "question", "quiet": False})
+    live, res = _drive(monkeypatch, selector_hook={"enabled": True, "kept": 1})
+    assert res["S27"]["verdict"] == "FAIL" and "guest" in res["S27"]["evidence"]["why"]
+    assert res["S26"]["verdict"] == "PASS"
+
+
+def test_a_pull_turn_error_is_an_error_not_a_verdict(monkeypatch):
+    live, res = _drive(monkeypatch, selector_hook={"enabled": True, "kept": 1},
+                       seed_errors={"s26-pull-2"})
+    assert res["S26"]["verdict"] == "ERROR"
+
+
+def test_the_pull_scenarios_never_touch_a_non_demo_user():
+    live = sb.Live("tok", "", "postgresql://x", False)
+    with pytest.raises(Exception):
+        live.rearm("real-user")
+    with pytest.raises(Exception):
+        live.inbox("real-user")

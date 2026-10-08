@@ -294,6 +294,70 @@ for the lane that is actually used (record §2.5).
   first two weeks are the W16 baseline. The head (P10) needs >=200 labelled rows with >=40
   positives (record §3.5). Pinned by `tests/test_proactive_ledger.py`.
 
+## Pull, not push (BH1) and the delivery lines (BH2)
+
+Register rows BH1 and BH2 of [best-ideas-register-2026-10-09](../research/best-ideas-register-2026-10-09.md),
+the PR 2 / PR 3 slice of the [pull-not-push record](../research/pull-not-push-inbox-2026-10-04.md) §3.3-§3.4.
+Nothing new is GENERATED: the pending queue is the nightly selector's own `proactive_candidates`
+(not expired, out of cooldown, raised < `MAX_SURFACED`). The owner's rule (no unprompted speech,
+`ZOE_PROACTIVE_SPOKEN=0`) is strengthened: no path here enqueues an announcement or a toast.
+
+- **Flags.** `ZOE_PULL_NOT_PUSH` - default ON, `off` is the kill switch (read per call; removes the
+  tier, the tap phrases and the orb state). Needs `ZOE_PROACTIVE_SELECTOR` (no selector, no queue).
+  `ZOE_DELIVERY_LEDGER` = `shadow` (default) | `on` | `off`: shadow logs everything and changes
+  nothing; `on` lets the person's "not now" taps tune RAISING per item class; `off` writes nothing.
+  Migration `0040` (`proactive_ledger_lines`). Code: `proactive/pull.py`, `proactive/lines.py`,
+  hooks in `proactive/selector.py`, `fast_tiers._pull_tier`, `routers/proactive.py`.
+- **The orb.** `GET /api/proactive/inbox` -> `{enabled, count, top, quiet}`: a count and the coarse
+  class of the top item (`question` | `notify`), never an item's words, kind or sensitivity. A guest
+  (the kiosk before a member signs in), a member with nothing pending, the flag off and any error all
+  read `count: 0`. The estate (`touch/home.html`) polls it every 60 s for a signed-in member and shows
+  a small warm dot on the orb (`#orb.has::after`), hidden while the orb is busy/listening and in quiet
+  hours. No toast, no sound, no speech. (A `/ws/push` event is not sent: the poll is the carrier, one
+  fewer moving part; add the event if 60 s proves slow.)
+- **The pull** (a deterministic tier in `fast_tiers.resolve`, before identity, Tier-0 and the router).
+  Whole-utterance phrases only: "what's up?", "anything for me?", "what have I got?", "do you have
+  anything for me?", "anything I need to know?", "what's waiting?" (+ greeting leads / "Zoe" / "please").
+  "what's new", "what's happening", "what's on today" and "what have I got today" are NOT pulls: they
+  stay greetings / calendar asks, so the bar's S5 / S12 open turns and the day-sim's 1r / 7r / 7s are
+  unchanged. A pull delivers every pending item once, highest salience first, in Zoe's voice (events
+  told; loops and moments asked after, in the second person), and marks each exactly as a raise is
+  (count, 3-day cooldown, session), so the selector never re-raises it and the brief skips what was
+  pulled today (`brief_first_turn.without_refs`). Spoken (`voice` / `livekit`): at most three, the rest
+  stay pending ("I've got 2 more - ask me again"); chat / telegram: all of them plus a one-tap row.
+  Empty: "Nothing new for you right now." - except when the morning brief is about to speak (then the
+  brain answers, as before). A pull ignores the raise gap, the daily cap and the class back-off: the
+  person asked. A guest gets nothing (the tier returns None and the turn goes on).
+  Compare-and-set on `surfaced_count`: two overlapping asks deliver once.
+- **Lines** (BH2, `proactive_ledger_lines`): one line per `raised` (with `open_turn` / `cue` / `brief`
+  and the selector's score), `withheld` (the gate that held it: `brief`, `held`, `gap`, `daily_cap`,
+  `class_backoff`, `class_off`, `sensitivity_unverified`), `would_withhold` (shadow: the back-off WOULD
+  have held it), `pulled` (`asked`) and `welcome` (the tap). One line per item / reason / day. No item
+  text is stored or logged. `lines.summary(db, user, days)` reads counts and the intrusive-tap rate per
+  class (the register's < 10 % bar).
+- **The welcome tap.** Chat: the pull's reply carries a `zoe.component` row (Welcome / Fine / Not now)
+  whose buttons send "That was welcome" / "That was fine" / "Not now" as the next turn. Voice: say "not
+  now". Both are caught by the same tier, and only when the member has a raised / pulled line in the
+  last 10 minutes (otherwise the phrase is an ordinary utterance). `POST /api/proactive/welcome`
+  `{signal, line_id?}` is the programmatic form. Effect, in mode `on` only: one "not now" in 7 days
+  doubles the raise gap for THAT item class (open_loop / emotional / event) for that member; two switch
+  the class off for the 7 days. `welcome` / `neutral` are labels for the later acceptance head (>= 200
+  labelled rows, >= 40 positives) and never relax a hold - a signal that can only raise the rate of
+  raising is the engagement trap. Tone and warmth are never touched.
+- **The restraint tier** (`feat/restraint-in-code`, not yet merged): a `sensitivity` column on
+  `proactive_candidates` is read BY NAME when it exists (probed on its own connection, cached 5 min);
+  absent = no effect. A sensitive item is not SPOKEN to a voice whose `speaker_verified` is False (it
+  stays pending, chat offers it, and a `withheld / sensitivity_unverified` line says so). The tag is
+  copied onto the ledger line, never interpreted further.
+- **Voice path.** `fast_tiers.py` is in `VOICE_PATH_PATTERNS`: the PR needs the replay gate bound to its
+  head. The tier acts only on the whole-utterance phrases above, so replay utterances without them
+  take exactly the old path; the three pull phrases are not yet in the replay corpus (the
+  `~/.zoe-voice-samples` rule: Moonshine must be confirmed on them before the flag is relied on by voice).
+- **Measure it.** Bar S26 / S27 (the pull delivers once and clears; the orb is a count); `SELECT line,
+  reason, count(*) FROM proactive_ledger_lines GROUP BY 1, 2` is the live rate of every held gate and
+  the first week is the baseline for the household tier. Pinned by `tests/test_pull_not_push.py` and
+  `tests/unit/test_samantha_bar.py`.
+
 ## Open-loop lifecycle (flag-dark)
 
 `ZOE_LOOP_LIFECYCLE=1` (default off, read per call; off = byte-identical) closes four gaps the

@@ -133,7 +133,7 @@ AUTH_OWNED_TABLES = frozenset({
 })
 SCENARIO_IDS = ("S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S10", "S11", "S12",
                 "S13", "S14", "S15", "S16",
-                "S20", "S21", "S22")
+                "S20", "S21", "S22", "S26", "S27")
 VERDICTS = ("PASS", "FAIL", "SKIP", "ERROR")
 
 
@@ -163,6 +163,7 @@ ASK_LONG_DAD = "What did my dad do for work before he retired?"
 # in a fresh session — the first should raise the day-1 worry, the second must not.
 ASK_OPEN_1 = "Hi Zoe, how are things?"
 ASK_OPEN_2 = "Hey Zoe, what's new?"
+ASK_PULL = "What's up?"   # S26: a pull (proactive/pull.py), not a greeting - "what's new" stays one
 S5_NEEDLES = ("interview", "aquarium")
 # S10: a one-word change of state. "gave up" is a supersede cue, but the tombstone
 # ("User gave up the cello") shares one topic word with the old row, so
@@ -324,6 +325,15 @@ SCENARIOS: tuple[dict[str, Any], ...] = (
                "first names, in the reply or the store, and one question asks who's who — a TARGET "
                "until ZOE_ROSTER_NEUTRAL_ASK is on (people_roles.py)",
      "turns": [("A", "s22-roster", SAY_ROSTER)], "asks": [("A", ASK_ROSTER)]},
+    {"id": "S26", "title": "pull, not push: 'what's up?' delivers what is pending, once", "judged": False,
+     "proves": "with the worry pending again (S5's raise re-armed), 'What's up?' delivers it ONCE, "
+               "marks it delivered, and a second 'What's up?' says nothing new "
+               "(ZOE_PULL_NOT_PUSH, proactive/pull.py; FAIL with the flag off)",
+     "turns": [], "asks": [("A", ASK_PULL), ("A", ASK_PULL)]},
+    {"id": "S27", "title": "pull, not push: the orb state is a count, never content", "judged": False,
+     "proves": "GET /api/proactive/inbox reads count >= 1 and a coarse class (no words of the worry) "
+               "while it is pending, 0 once pulled, and 0 for a guest",
+     "turns": [], "asks": []},
 )
 EXPECTED ={s["id"]: s["expected"] for s in SCENARIOS if s.get("expected")}
 
@@ -336,14 +346,16 @@ AXIS_OF = {"S1": "recall", "S7": "recall", "S8": "recall",
            "S2": "temporal", "S10": "temporal",
            "S3": "abstention",
            "S4": "emotional", "S5": "emotional", "S12": "emotional",
+           "S26": "emotional", "S27": "emotional",
            "S6": "authority",
            "S13": "extraction", "S14": "extraction", "S15": "extraction", "S16": "extraction",
            "S20": "extraction", "S21": "extraction", "S22": "extraction"}
 # A scenario that only ASKS about facts another scenario SEEDS: selecting it still runs those
 # seed turns (the asks and verdicts of the unselected scenario are NOT run or reported).
-SEED_DEPS = {"S5": ("S4",), "S12": ("S5",), "S6": ("S1", "S7"), "S8": ("S1", "S7")}
+SEED_DEPS = {"S5": ("S4",), "S12": ("S5",), "S26": ("S5",), "S27": ("S5",),
+             "S6": ("S1", "S7"), "S8": ("S1", "S7")}
 # Scenarios whose setup needs the day-1 -> day-2 backdate.
-MULTI_DAY = frozenset({"S2", "S4", "S5", "S7", "S10", "S12"})
+MULTI_DAY = frozenset({"S2", "S4", "S5", "S7", "S10", "S12", "S26", "S27"})
 
 
 def parse_selection(only: str | None, axis: str | None) -> frozenset[str] | None:
@@ -715,6 +727,81 @@ def score_s12(rows: list[dict], s1: str, s2: str) -> tuple[str, dict]:
     if s1 not in sessions:
         return "SKIP", {**ev, "why": "nothing was raised on the first open turn — spacing not exercised"}
     return "PASS", ev
+
+
+NOTHING_NEW = "nothing new"
+INBOX_KEYS = {"enabled", "count", "top", "quiet"}
+INBOX_CLASSES = ("question", "notify")
+
+
+def score_s26(reply1: str, reply2: str, rows: list[dict]) -> tuple[str, dict]:
+    """rows: proactive_candidates for demo A AFTER both asks ({carries, surfaced}). The pull
+    delivered the worry once (it is voiced, the candidate is marked surfaced exactly once) and the
+    second ask says nothing new and does not repeat it."""
+    carrying = [r for r in rows if r.get("carries")]
+    ev: dict[str, Any] = {"method": "deterministic", "carrying": len(carrying),
+                          "delivered_first": contains_any(reply1, S5_NEEDLES),
+                          "repeated_second": contains_any(reply2, S5_NEEDLES),
+                          "nothing_new_second": NOTHING_NEW in normalize(reply2),
+                          "surfaced": max((int(r.get("surfaced") or 0) for r in carrying), default=0)}
+    if not carrying:
+        return "FAIL", {**ev, "why": "no candidate carrying the worry to pull"}
+    if not ev["delivered_first"]:
+        return "FAIL", {**ev, "why": "'What's up?' did not deliver the pending worry"}
+    if ev["repeated_second"]:
+        return "FAIL", {**ev, "why": "the second ask delivered the worry again"}
+    if not ev["nothing_new_second"]:
+        return "FAIL", {**ev, "why": "the second ask did not say there is nothing new"}
+    if ev["surfaced"] != 1:
+        return "FAIL", {**ev, "why": f"surfaced_count={ev['surfaced']}, expected exactly 1"}
+    return "PASS", {**ev, "why": "delivered once, cleared, nothing new on the second ask"}
+
+
+def score_s27(before: dict | None, after: dict | None, guest: dict | None) -> tuple[str, dict]:
+    """The orb's state (``GET /api/proactive/inbox``) for demo A while the worry is pending
+    (``before``), after the pull (``after``), and for a guest. A count and a coarse class only:
+    no word of the worry may appear anywhere in any of the three bodies."""
+    ev: dict[str, Any] = {"method": "deterministic", "before": before, "after": after, "guest": guest}
+    if before is None or after is None or guest is None:
+        return "FAIL", {**ev, "why": "the inbox state route is not there (or answered an error)"}
+    blob = json.dumps([before, after, guest], sort_keys=True)
+    ev["content_free"] = not contains_any(blob, S5_NEEDLES + ("anxious", "worry", "job"))
+    if not before.get("enabled"):
+        return "FAIL", {**ev, "why": "the orb state is disabled (ZOE_PULL_NOT_PUSH or the selector is off)"}
+    if int(before.get("count") or 0) < 1:
+        return "FAIL", {**ev, "why": "a pending worry is not counted"}
+    if before.get("top") not in INBOX_CLASSES:
+        return "FAIL", {**ev, "why": "the top class is not a coarse class"}
+    if any(set(b) != INBOX_KEYS for b in (before, after, guest)):
+        return "FAIL", {**ev, "why": "the state carries fields beyond count / class / quiet"}
+    if not ev["content_free"]:
+        return "FAIL", {**ev, "why": "the state names what is pending"}
+    if int(after.get("count") or 0) != 0:
+        return "FAIL", {**ev, "why": "the state does not clear once pulled"}
+    if int(guest.get("count") or 0) != 0:
+        return "FAIL", {**ev, "why": "a guest's panel reads a non-zero count"}
+    return "PASS", {**ev, "why": "count and class only; cleared by the pull; a guest reads 0"}
+
+
+def run_pull(live: "Live", a: str) -> tuple[tuple[str, dict], tuple[str, dict]]:
+    """S26 + S27 on demo A, after S5/S12 have used the selector's raise: re-arm the worry's
+    candidate (a harness-only DB step on the demo id), read the orb state, ask 'What's up?' twice,
+    read the state again. Returns ((v26, ev26), (v27, ev27))."""
+    armed = live.rearm(a)
+    if not armed.get("armed"):
+        why = {"why": "no candidate carrying the day-1 worry to re-arm", "rearm": armed}
+        return ("SKIP", why), ("SKIP", why)
+    before, guest = live.inbox(a), live.inbox(None)
+    t1 = live.chat(a, "s26-pull-1", ASK_PULL)
+    t2 = live.chat(a, "s26-pull-2", ASK_PULL)
+    after = live.inbox(a)
+    rows = live.raise_state(a)
+    if t1["error"] or t2["error"]:
+        err = {"why": "a pull turn failed", "asks": [live.evidence(t1), live.evidence(t2)]}
+        return ("ERROR", err), score_s27(before, after, guest)
+    v26, ev26 = score_s26(t1["reply"], t2["reply"], rows)
+    ev26["asks"] = [live.evidence(t1), live.evidence(t2)]
+    return (v26, ev26), score_s27(before, after, guest)
 
 
 def score_s13(reply: str) -> tuple[str, dict]:
@@ -1331,6 +1418,29 @@ class Live:
                     for r in rows]
         return self.db(_f)
 
+    def rearm(self, user: str) -> dict:
+        """Make the demo user's candidates pending again after S5's raise (cooldown, count and
+        session cleared) so S26 has something to pull. Harness-only, demo id only."""
+        assert_demo_user(user)
+
+        async def _f(conn):
+            n = await conn.execute(
+                "UPDATE proactive_candidates SET cooldown_until = NULL, surfaced_count = 0, "
+                "last_surfaced_session = NULL, last_surfaced_at = NULL WHERE user_id = $1", user)
+            rows = await conn.fetch("SELECT text FROM proactive_candidates WHERE user_id = $1", user)
+            return {"rows": int(str(n).split()[-1] or 0),
+                    "armed": sum(1 for r in rows if contains_any(r["text"] or "", S5_NEEDLES))}
+        return self.db(_f)
+
+    def inbox(self, user: str | None) -> dict | None:
+        """GET /api/proactive/inbox as demo ``user`` (internal token + acting-user header), or as
+        a guest (no credentials) when None. None = the route answered an error."""
+        if user is not None:
+            assert_demo_user(user)
+        headers = {"X-Internal-Token": self.token, "X-Zoe-User-Id": user} if user else {}
+        code, body = self._req("GET", f"{DATA_BASE}/api/proactive/inbox", headers, None, timeout=30)
+        return body if code == 200 and isinstance(body, dict) else None
+
     def proactive_hooks(self, user: str) -> list[dict]:
         assert_demo_user(user)
 
@@ -1711,6 +1821,7 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
     if seed("S5"):
         if setup_ok("S5", ("d1-worry",), ("S4", "backdate")):  # no open loop seeded = nothing to carry
             v12, ev12 = "SKIP", {"why": "ZOE_PROACTIVE_SELECTOR off or the hook unavailable"}
+            pulled = (("SKIP", dict(ev12)), ("SKIP", dict(ev12)))
             try:
                 hook = live.run_selector(a)
                 if not (hook or {}).get("enabled"):
@@ -1723,18 +1834,28 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
                     if t1["error"] or t2["error"]:
                         v, ev = "ERROR", {"why": "an open turn failed", "asks": asks}
                         v12, ev12 = "ERROR", {"why": "an S5 open turn failed"}
+                        pulled = (("ERROR", {"why": "an S5 open turn failed"}),) * 2
                     else:
                         rows = live.raise_state(a)
                         v, ev = score_s5_raise(hook, t1["reply"], t2["reply"], rows)
                         ev["asks"] = asks
                         v12, ev12 = score_s12(rows, t1["session"], t2["session"])
+                        # S26/S27 ride on the same worry (candidate re-armed, pulled, cleared); they do
+                        # not need the brain to have VOICED S5's raise, only the candidate to exist.
+                        if need & {"S26", "S27"}:
+                            pulled = run_pull(live, a)
             except Exception as exc:  # noqa: BLE001
                 v, ev = "ERROR", {"why": f"hook/read failed: {type(exc).__name__}"}
                 v12, ev12 = "ERROR", {"why": f"hook/read failed: {type(exc).__name__}"}
+                pulled = (("ERROR", dict(ev)), ("ERROR", dict(ev)))
             put("S5", v, **ev)
             put("S12", v12, **ev12)
+            put("S26", pulled[0][0], **pulled[0][1])
+            put("S27", pulled[1][0], **pulled[1][1])
         else:
             put("S12", "ERROR", why="S5's setup was not exercised, so its open turns never ran")
+            put("S26", "ERROR", why="S5's setup was not exercised, so there is no worry to pull")
+            put("S27", "ERROR", why="S5's setup was not exercised, so there is no worry to pull")
 
     # S20/S21/S22: the three conversation-quality classes (2026-10-04) ------------
     if seed("S20"):
