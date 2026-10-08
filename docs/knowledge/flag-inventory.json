@@ -350,6 +350,7 @@
           "scripts/perf/recall_evidence_probe.py",
           "scripts/perf/samantha_bar.py",
           "scripts/perf/samantha_day_sim.py",
+          "scripts/perf/samantha_person.py",
           "scripts/perf/user_model_ab.py"
         ],
         "typed_env": false
@@ -3349,6 +3350,7 @@
           "scripts/perf/recall_evidence_probe.py",
           "scripts/perf/samantha_bar.py",
           "scripts/perf/samantha_day_sim.py",
+          "scripts/perf/samantha_person.py",
           "scripts/perf/user_model_ab.py"
         ],
         "typed_env": false
