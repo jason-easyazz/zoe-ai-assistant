@@ -470,7 +470,12 @@ def get_quick_auth_manager(device_id: str, location: str = "unknown") -> QuickAu
             device_id=device_id,
             location=location,
             allowed_auth_methods=["passcode"],
-            offline_enabled=True
+            # The offline cache was designed for a panel-side daemon syncing from a
+            # REMOTE auth server. Embedded in zoe-auth, `server_url` is this very
+            # service, and the sync hits /api/admin/sync-data with no credential —
+            # a 401 every five minutes, forever (1,071 in the week to 2026-10-08),
+            # and a cache that never fills. Off unless explicitly enabled.
+            offline_enabled=os.getenv("ZOE_TOUCH_PANEL_OFFLINE_CACHE", "0") == "1",
         )
         _auth_managers[device_id] = QuickAuthManager(config)
     
