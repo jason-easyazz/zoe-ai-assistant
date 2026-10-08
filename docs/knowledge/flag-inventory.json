@@ -467,6 +467,7 @@
         ],
         "in_env_example": false,
         "readers": [
+          "services/zoe-data/digest_pack.py",
           "services/zoe-data/memory_digest.py",
           "services/zoe-data/zoe_agent.py"
         ],
@@ -1139,6 +1140,66 @@
         "in_env_example": false,
         "readers": [
           "scripts/maintenance/music_discovery_batch.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DIGEST_CHUNKED": {
+        "defaults": [
+          "'1'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/digest_pack.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DIGEST_CHUNK_TOKENS": {
+        "defaults": [
+          "0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/digest_pack.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DIGEST_DECODE_TOK_S": {
+        "defaults": [
+          "60.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/digest_pack.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DIGEST_LLM_TIMEOUT_SCALE": {
+        "defaults": [
+          "'1'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_digest.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DIGEST_MAX_CHUNKS": {
+        "defaults": [
+          "5"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/digest_pack.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DIGEST_MAX_FACTS": {
+        "defaults": [
+          "40"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/digest_pack.py"
         ],
         "typed_env": false
       },
