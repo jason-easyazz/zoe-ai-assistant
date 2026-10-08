@@ -241,6 +241,16 @@ class FakeHost(bakeoff.Host):
         self.buddy_text = HEALTHY_BUDDY if buddy is None else buddy      # /proc/buddyinfo as the box shows it; a compaction heals it unless compaction_heals=False
         self.sudo_ok, self.compaction_heals = sudo_ok, compaction_heals
         self.main_pids: "list[int]" = []                                  # successive MainPID answers (then 0)
+        self.pgdata_mb = 37                                               # what `du` says the scratch data directory holds
+        self.queue_outputs: "list[str]" = []                              # successive answers of the job-queue psql (the last one repeats); empty = an empty queue
+        self.psql_rc = 0
+        self.journal = ""                                                 # what `journalctl` shows for the hindsight-api unit
+
+    def _empty(self, path: str) -> None:
+        """What a real wipe does to the bind-mounted data directory (the double deletes the files so a test can see the directory is empty afterwards)."""
+        import shutil
+        for child in Path(path).iterdir():
+            shutil.rmtree(child) if child.is_dir() else child.unlink()
 
     def joined(self) -> "list[str]":
         return [" ".join(a) for a, _m in self.cmds]
@@ -259,6 +269,14 @@ class FakeHost(bakeoff.Host):
             return bakeoff.Result(1, "injected failure")
         prog = argv[0]
         if prog == "sudo":
+            if argv[1:3] == ["-n", "du"]:
+                return bakeoff.Result(0, f"{self.pgdata_mb}\t{argv[-1]}\n")
+            if argv[1:3] == ["-n", "find"] and "-delete" in argv:
+                if Path(argv[3]).is_dir():
+                    self._empty(argv[3])
+                return bakeoff.Result(0, "")
+            if argv[1:3] == ["-n", "find"] and "-print" in argv:
+                return bakeoff.Result(0, "\n".join(str(c) for c in Path(argv[3]).iterdir()) if Path(argv[3]).is_dir() else "")
             if argv[1:] == ["-n", "true"]:
                 return bakeoff.Result(0 if self.sudo_ok else 1, "" if self.sudo_ok else "sudo: a password is required")
             if "compact_memory" in line and self.compaction_heals:
@@ -291,7 +309,18 @@ class FakeHost(bakeoff.Host):
                 self.metrics_calls += 1
                 return bakeoff.Result(0, f"llamacpp:prompt_seconds_total {self.metrics_calls * 6.0}\nllamacpp:tokens_predicted_seconds_total {self.metrics_calls * 4.0}\n")
             return bakeoff.Result(0, '{"status":"ok"}')
+        if prog == "journalctl":
+            return bakeoff.Result(0, self.journal)
         if prog == "docker":
+            if argv[1:2] == ["exec"] and "psql" in argv:
+                if self.psql_rc:
+                    return bakeoff.Result(self.psql_rc, 'ERROR:  relation "public.async_operations" does not exist')
+                return bakeoff.Result(0, (self.queue_outputs.pop(0) if len(self.queue_outputs) > 1 else self.queue_outputs[0]) if self.queue_outputs else "")
+            if argv[1:2] == ["run"]:
+                mount = argv[argv.index("-v") + 1].split(":")[0]
+                if Path(mount).is_dir():
+                    self._empty(mount)
+                return bakeoff.Result(0, f"{self.pgdata_mb}\n")
             return bakeoff.Result(0, "50MiB / 256MiB" if "stats" in argv else "")
         if prog == "git":
             return bakeoff.Result(0, "abc1234\n")
@@ -313,6 +342,8 @@ class FakeHost(bakeoff.Host):
     def read(self, path):
         if path.endswith("buddyinfo"):
             return self.buddy_text
+        if path.endswith(".compose.yml"):
+            return Path(path).read_text()
         if path.endswith("cgroup.procs"):
             return "100\n"
         if path.endswith("smaps_rollup"):
@@ -2691,3 +2722,219 @@ def test_the_wrapper_dry_run_prints_the_buddyinfo_and_the_compaction_it_would_ru
     (shim / "sudo").write_text("#!/bin/bash\nexit 1\n")
     r2 = subprocess.run(["bash", str(REPO / "scripts/perf/zmb/bakeoff_window.sh"), "--dry-run"], capture_output=True, text=True, env=env, timeout=120)
     assert r2.returncode == 0 and "a real run started now would be REFUSED: physical memory is fragmented" in r2.stdout
+
+
+# ── 2026-10-08: a fresh scratch Postgres per window; Hindsight's job queue must be empty before the window opens ──────────────────────────────
+
+#: hindsight-api's journal as the 2026-10-08 17:08 window saw it (the stale zmb-h2-demo_bar_* banks of the 14:16 window, consolidated against the clone's single 8,192-token slot)
+STALE_JOURNAL = textwrap.dedent("""\
+    2026-10-08 17:09:44,140 - INFO - hindsight_api.worker.poller - [WORKER_STATS] worker=hindsight-bakeoff slots=1/10 | reserved: [consolidation=1/2(avail=1)] | shared=0/8(avail=8) | global: pending=3 (queried=1/1 schemas: default) | others: none
+    2026-10-08 17:09:46,140 - WARNING - hindsight_api.engine.providers.openai_compatible_llm - APIStatusError (openai/gemma-4-e4b, scope=consolidation, attempt 1/3): HTTP 400: {"code": 400, "message": "request (8421 tokens) exceeds the available context size (8192 tokens), try increasing it", "type": "exceed_context_size_error", "n_prompt_tokens": 8421, "n_ctx": 8192}
+    2026-10-08 17:09:47,032 - WARNING - hindsight_api.engine.providers.openai_compatible_llm - APIStatusError (openai/gemma-4-e4b, scope=consolidation, attempt 2/3): HTTP 400: {"code": 400, "message": "request (8421 tokens) exceeds the available context size (8192 tokens), try increasing it", "type": "exceed_context_size_error", "n_prompt_tokens": 8421, "n_ctx": 8192}
+    2026-10-08 17:09:48,691 - ERROR - hindsight_api.engine.providers.openai_compatible_llm - API error after 3 attempts (openai/gemma-4-e4b, scope=consolidation): HTTP 400: {"code": 400, "message": "request (8421 tokens) exceeds the available context size (8192 tokens), try increasing it", "type": "exceed_context_size_error", "n_prompt_tokens": 8421, "n_ctx": 8192}
+    2026-10-08 17:09:50,691 - ERROR - hindsight_api.engine.providers.openai_compatible_llm - API error after 3 attempts (openai/gemma-4-e4b, scope=consolidation): HTTP 400: {"code": 400, "message": "request (8841 tokens) exceeds the available context size (8192 tokens), try increasing it", "type": "exceed_context_size_error", "n_prompt_tokens": 8841, "n_ctx": 8192}
+    2026-10-08 17:09:52,000 - ERROR - hindsight_api.engine.providers.openai_compatible_llm - API error after 3 attempts (openai/gemma-4-e4b, scope=retain): HTTP 400: {"code": 400, "message": "request (9000 tokens) exceeds", "type": "exceed_context_size_error", "n_prompt_tokens": 9000, "n_ctx": 8192}
+    """)
+
+
+def _pg_box(box, mb_files=("PG_VERSION", "base")):
+    pg = box / "pgdata"
+    pg.mkdir()
+    for f in mb_files:
+        (pg / f).write_text("stale hindsight bank")
+    return pg
+
+
+def test_the_scratch_postgres_is_wiped_before_it_starts_and_the_log_says_how_much(box):
+    pg = _pg_box(box)
+    host = FakeHost(box)
+    w = make_window(box, host, measure_fn=lambda win: {"ok": 1})
+    assert w.run() == bakeoff.EXIT_OK
+    j = host.joined()
+    down_v = host.index("docker compose -f " + str(box / "scratch-postgres.compose.yml") + " down -v")
+    wipe = host.index("sudo -n find " + str(pg) + " -mindepth 1 -delete")
+    up = host.index("scratch-postgres.compose.yml up -d")
+    assert down_v < wipe < up, j                                         # the volume goes, then the root-owned files, THEN the database starts
+    assert pg.is_dir() and list(pg.iterdir()) == []                      # the directory is back (the bind mount needs it) and empty
+    assert "scratch Postgres: fresh (wiped 37 MB)" in w.logs
+    assert w.pg_state == {"fresh": True, "kept": False, "wiped_mb": 37, "how": "sudo"}
+
+
+def test_without_sudo_the_wipe_runs_in_a_throwaway_container_from_the_composes_own_image(box):
+    pg = _pg_box(box)
+    (box / "scratch-postgres.compose.yml").write_text("services:\n  zoe-bakeoff-pg:\n    image: pgvector/pgvector:pg17\n")
+    host = FakeHost(box, sudo_ok=False)
+    w = make_window(box, host, measure_fn=lambda win: {"ok": 1})
+    assert w.run() == bakeoff.EXIT_OK
+    run = next(c for c in host.joined() if c.startswith("docker run --rm"))
+    assert f"-v {pg}:/d pgvector/pgvector:pg17" in run and "find /d -mindepth 1 -delete" in run
+    assert not any(c.startswith("sudo -n find") for c in host.joined()) and list(pg.iterdir()) == []
+    assert host.index("down -v") < host.index("docker run --rm") < host.index("up -d")
+    assert "scratch Postgres: fresh (wiped 37 MB)" in w.logs
+
+
+def test_neither_sudo_nor_docker_refuses_before_the_live_brain_is_stopped_with_the_operator_command(box):
+    pg = _pg_box(box)
+    host = FakeHost(box, sudo_ok=False, fail=("docker image inspect",))
+    w = make_window(box, host, measure_fn=lambda win: pytest.fail("the window must not open"))
+    assert w.run() == bakeoff.EXIT_REFUSED
+    refusal = next(m for m in w.logs if m.startswith("REFUSED"))
+    assert "down -v" in refusal and f"sudo find {pg} -mindepth 1 -delete" in refusal and "Nothing was stopped" in refusal
+    assert not any("stop llama-server.service" in c for c in host.mutating_cmds()) and not any("up -d" in c for c in host.joined())
+    assert list(pg.iterdir()) != []                                      # nothing was touched
+    assert not (box / "WINDOW_OPEN").exists()
+
+
+def test_a_data_directory_that_is_a_symlink_is_never_wiped_through(box, tmp_path):
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    (target / "precious").write_text("x")
+    (box / "pgdata").symlink_to(target)
+    host = FakeHost(box)
+    w = make_window(box, host, measure_fn=lambda win: pytest.fail("the window must not open"))
+    assert w.run() == bakeoff.EXIT_REFUSED and (target / "precious").exists()
+    assert not any("-delete" in c for c in host.joined())
+
+
+def test_BAKEOFF_KEEP_PG_keeps_the_database_and_says_loudly_that_the_results_are_confounded(box):
+    pg = _pg_box(box)
+    host = FakeHost(box)
+    w = make_window(box, host, measure_fn=lambda win: {"ok": 1}, keep_pg=True)
+    assert w.run() == bakeoff.EXIT_OK
+    assert not any("down -v" in c or "-delete" in c or c.startswith("docker run") for c in host.joined())
+    assert (pg / "PG_VERSION").exists()
+    assert any("CONFOUNDED" in m and "KEPT" in m for m in w.logs) and w.pg_state["kept"] is True
+    assert bakeoff.Cfg().keep_pg is False                                 # off unless the owner sets it
+
+
+def test_a_missing_data_directory_needs_no_wipe_tool_at_all(box):
+    host = FakeHost(box, sudo_ok=False, fail=("docker image inspect",))   # no sudo, no image: and nothing to wipe
+    w = make_window(box, host, measure_fn=lambda win: {"ok": 1})
+    assert w.run() == bakeoff.EXIT_OK and "scratch Postgres: fresh (wiped 0 MB)" in w.logs
+
+
+def test_the_window_aborts_on_stale_jobs_in_hindsights_queue_and_restores_the_live_brain(box):
+    host = FakeHost(box)
+    host.queue_outputs = ["consolidation|pending|3\nconsolidation|processing|1\n"]
+    called = []
+    w = make_window(box, host, measure_fn=lambda win: called.append(1) or {"ok": 1})
+    assert w.run() == bakeoff.EXIT_ABORTED
+    msg = next(m for m in w.logs if m.startswith("ABORTED"))
+    assert "stale bank is a confound" in msg and "4 pending/running" in msg and "consolidation:pending=3" in msg and "60 s" in msg
+    assert not called and restored(host)                                  # step 6 never opened; the live brain came back
+    assert sum(host.slept) >= 60                                          # it waited the 60 s before giving up
+
+
+def test_a_queue_that_drains_inside_the_wait_opens_the_window_and_logs_the_count(box):
+    host = FakeHost(box)
+    host.queue_outputs = ["consolidation|pending|2\n", "consolidation|processing|1\n", ""]
+    w = make_window(box, host, measure_fn=lambda win: {"ok": 1})
+    assert w.run() == bakeoff.EXIT_OK and w.queue_at_open == 0
+    assert any(m.startswith("hindsight job queue: 0 pending/running operations") for m in w.logs)
+    assert next(i for i, m in enumerate(w.logs) if m.startswith("hindsight job queue: 0")) < next(i for i, m in enumerate(w.logs) if m.startswith("step 6/6"))
+
+
+def test_an_unreadable_queue_is_not_an_empty_one(box):
+    host = FakeHost(box)
+    host.psql_rc = 1                                                      # no async_operations table / no container, and no WORKER_STATS line in the journal either
+    w = make_window(box, host, measure_fn=lambda win: pytest.fail("the window must not open"))
+    assert w.run() == bakeoff.EXIT_ABORTED and any("could not be read" in m for m in w.logs)
+    host2 = FakeHost(box)
+    host2.psql_rc = 1
+    host2.journal = STALE_JOURNAL.splitlines()[0].replace("pending=3", "pending=0").replace("slots=1/10", "slots=0/10")      # the worker's own line says idle: that is readable and clean
+    w2 = make_window(box, host2, measure_fn=lambda win: {"ok": 1})
+    assert w2.run() == bakeoff.EXIT_OK and w2.queue_at_open == 0
+
+
+def test_with_BAKEOFF_KEEP_PG_stale_jobs_do_not_abort_but_are_recorded(box):
+    host = FakeHost(box)
+    host.queue_outputs = ["consolidation|pending|3\n"]
+    w = make_window(box, host, measure_fn=lambda win: {"ok": 1}, keep_pg=True)
+    assert w.run() == bakeoff.EXIT_OK and w.queue_at_open == 3 and any("CONFOUNDED" in m and "job queue" in m for m in w.logs)
+
+
+def test_the_dry_run_prints_the_wipe_and_the_job_check(box):
+    pg = _pg_box(box)
+
+    class DryFake(FakeHost):
+        """DryHost's contract over the shimmed commands: reads run, every mutating command is printed and NOT executed."""
+        def run(self, argv, timeout=60.0, mutating=True, env=None):
+            if mutating:
+                self.log("DRY-RUN would run: " + " ".join(argv))
+                return bakeoff.Result(0, "")
+            return super().run(argv, timeout, mutating, env)
+    host = DryFake(box)
+    w = make_window(box, host, dry=True)
+    host.log = w.log
+    w.wipe_scratch_pg()
+    w.require_quiet_hindsight()
+    out = "\n".join(w.logs)
+    assert "DRY-RUN would run: docker compose -f" in out and " down -v" in out
+    assert f"DRY-RUN would run: sudo -n find {pg} -mindepth 1 -delete" in out and "scratch Postgres: fresh (wiped 37 MB)" in out
+    assert "ZERO pending / processing operations" in out
+    assert (pg / "PG_VERSION").exists()                                   # a dry run wipes nothing
+
+
+def test_the_dry_run_names_the_job_queue_check_before_step_6(box):
+    w = make_window(box, FakeHost(box), dry=True)
+    w.require_quiet_hindsight()
+    out = "\n".join(w.logs)
+    assert "ZERO pending / processing operations" in out and "async_operations" in out and "ABORT" in out
+
+
+def test_the_prompt_tokens_are_parsed_from_every_exceed_context_size_error():
+    p = bakeoff.parse_consolidation_prompt_tokens(STALE_JOURNAL)
+    assert p["consolidation_max"] == 8841 and p["any_max"] == 9000 and p["n_ctx"] == 8192        # the retain-scope 9000 is not a consolidation prompt
+    assert p["consolidation_failed_calls"] == 2 and p["failed_calls"] == 3 and p["failed_attempts"] == 2
+    fallback = '2026-10-08 17:09:46,140 - WARNING - x - APIStatusError (m, scope=consolidation, attempt 1/3): HTTP 400: request (8100 tokens) exceeds the available context size, "type": "exceed_context_size_error"'
+    assert bakeoff.parse_consolidation_prompt_tokens(fallback)["consolidation_max"] == 8100        # the text form, when the JSON field is absent
+    none = bakeoff.parse_consolidation_prompt_tokens("INFO - all good\nWARNING - HTTP 400 something else\n")
+    assert none["consolidation_max"] is None and none["any_max"] is None and none["failed_calls"] == 0
+    assert bakeoff.parse_worker_stats(STALE_JOURNAL) == (1, 3) and bakeoff.parse_worker_stats("nothing") is None
+
+
+def test_the_caveat_is_stated_only_when_a_consolidation_call_exceeded_the_slot():
+    c = bakeoff.consolidation_caveat({"hindsight_consolidation_prompt_tokens_max": 8841, "n_ctx": 8192})
+    assert c == ("Hindsight consolidation does not fit the 8,192-token live slot (max 8,841 tokens): "
+                 "K on the live context is failed by construction; only the 32k/12B reflection phase measures K")
+    assert bakeoff.consolidation_caveat({"hindsight_consolidation_prompt_tokens_max": None}) == ""
+
+
+def test_the_window_reads_only_its_own_hindsight_journal(box):
+    host = FakeHost(box)
+    host.journal = STALE_JOURNAL
+    w = make_window(box, host, measure_fn=lambda win: {"ok": 1})
+    assert w.run() == bakeoff.EXIT_OK
+    instr = w.collect_hindsight_instrument()
+    assert instr["hindsight_consolidation_prompt_tokens_max"] == 8841 and instr["hindsight_consolidation_failed_calls"] == 2
+    cmd = next(c for c in host.joined() if c.startswith("journalctl --user -u zoe-bakeoff-hindsight.service --since") and "-o cat" in c)
+    assert "--since " + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(w.hs_started_epoch - 5)) in cmd        # the unit name is reused by every window: only THIS window's lines
+
+
+def test_the_report_and_artifact_carry_the_instrument_and_the_caveat(box, tmp_path, monkeypatch):
+    host = FakeHost(box)
+    host.journal = STALE_JOURNAL
+    w, host = e2e_window(box, tmp_path, monkeypatch, host=host)
+    w.pg_state, w.queue_at_open = {"fresh": True, "kept": False, "wiped_mb": 37}, 0
+    measure.measure(w)
+    art = json.loads((box / "run-t1.json").read_text())
+    md = Path(art["docs_path"]).read_text()
+    assert art["instruments"]["hindsight_consolidation_prompt_tokens_max"] == 8841 and art["meta"]["hindsight_consolidation_prompt_tokens_max"] == 8841
+    assert "Hindsight consolidation does not fit the 8,192-token live slot (max 8,841 tokens): K on the live context is failed by construction; only the 32k/12B reflection phase measures K" in md
+    assert "`hindsight_consolidation_prompt_tokens_max` = 8841" in md and "scratch Postgres: fresh (wiped 37 MB)" in md
+    assert any("cannot be paused" in n for n in art["notes"])             # the background-consolidation caveat (no control in the installed version)
+    # a window whose consolidation fit says so and states no caveat
+    host2 = FakeHost(box)
+    host2.journal = "INFO - nothing exceeded\n"
+    w2, _ = e2e_window(box, tmp_path, monkeypatch, host=host2)
+    measure.measure(w2)
+    art2 = json.loads((box / "run-t1.json").read_text())
+    assert art2["instruments"]["hindsight_consolidation_prompt_tokens_max"] is None and not any("does not fit" in n for n in art2["notes"])
+
+
+def test_an_arm_that_starts_with_queued_hindsight_work_is_flagged(box, tmp_path, monkeypatch):
+    w, host = e2e_window(box, tmp_path, monkeypatch)
+    host.queue_outputs = ["consolidation|pending|2\n"]
+    ctx = measure.Ctx(w, None)
+    assert measure.check_hindsight_idle(ctx, "H2") == 2 and any("H2 started with 2 operation(s)" in n for n in ctx.notes)
+    assert measure.check_hindsight_idle(ctx, "Z0") is None and measure.check_hindsight_idle(ctx, "MPA") is None      # arms that do not use the server are not asked

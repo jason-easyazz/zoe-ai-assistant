@@ -467,6 +467,29 @@ def sweep_stale_banks(ctx: Ctx) -> int:
     return len(stale)
 
 
+#: arms whose cells run against the window's Hindsight server (their calls share the clone's single slot with whatever Hindsight's worker is doing in the background)
+HINDSIGHT_ARMS = ("H0", "H1", "H2", "HM", "HMA")
+
+
+def check_hindsight_idle(ctx: Ctx, arm: str) -> "Optional[int]":
+    """Before an arm's cells: how many operations is Hindsight's worker still holding (pending + processing)? The installed Hindsight (0.10.2) has NO control that pauses consolidation in the
+    background (``HINDSIGHT_API_WORKER_CONSOLIDATION_RESERVED_SLOTS`` is a FLOOR, not a ceiling; there is no pause flag; ``enable_auto_consolidation`` is per bank and H2 / HMA already run
+    it off and trigger it explicitly), so this DETECTS instead of preventing: a non-zero count is a noted confound on that arm. Never raises."""
+    if arm not in HINDSIGHT_ARMS:
+        return None
+    try:
+        n, detail = ctx.win.hindsight_queue()
+    except Exception as exc:  # noqa: BLE001 - an instrument for the report, never a reason to stop the window
+        ctx.log(f"hindsight job queue before {arm}: unreadable ({type(exc).__name__}: {str(exc)[:80]})")
+        return None
+    if n:
+        ctx.log(f"hindsight job queue before {arm}: {n} operation(s) still queued/running ({detail}) - background work shares the clone's single slot with {arm}'s cells")
+        ctx.notes.append(f"{arm} started with {n} operation(s) still queued or running in Hindsight's worker ({detail}): an earlier arm's background consolidation shared the clone's single slot with its cells")
+    else:
+        ctx.log(f"hindsight job queue before {arm}: empty" if n == 0 else f"hindsight job queue before {arm}: unreadable ({detail})")
+    return n
+
+
 def phase_arm_controls(ctx: Ctx, store: list) -> None:
     """Instrument checks of the ADAPTER on the real server: with a Zoe-layer protection switched off the cell that claims it must go RED."""
     from . import cells as cellmod
@@ -1382,6 +1405,8 @@ def dry_plan(win: Any) -> dict:
                  f"context; on any abort the normal restore stops the clone and starts {cfg.unit} at its own ctx-size, which is never edited")
         win.log(steps)
         win.log("reflection constants: REFLECT_CALLS = " + str(REFLECT_CALLS) + "; REFLECT_S_PER_CALL = " + str(REFLECT_S_PER_CALL) + "; REFLECT_LOAD_MIN = " + str(REFLECT_LOAD_MIN))
+    win.log("INSTRUMENT hindsight_consolidation_prompt_tokens_max: read from hindsight-api's journal at the end of the measurement (every exceed_context_size_error's n_prompt_tokens); "
+            "recorded in run-<id>.json and the report, with the caveat 'Hindsight consolidation does not fit the 8,192-token live slot' when any consolidation call exceeded the slot")
     win.log("seeds: " + ", ".join(seeds))
     win.log(f"outputs: {cfg.bakeoff_dir}/run-{win.run_id}.log, run-{win.run_id}.json, <docs>/bakeoff-run-{win.run_id}.md")
     win.log("RESTORE (always, on every exit path): stop zoe-bakeoff-hindsight/-gemma/-embed, docker compose down, "
@@ -1519,6 +1544,7 @@ def git_commit(win: Any) -> str:
 def write_report(ctx: Ctx, win: Any, seeds: tuple, store: list, by_id: dict) -> dict:
     from . import artifact
     from .arms.hindsight import zoe_layer_lines
+    from .bakeoff import consolidation_caveat
     cfg, repo = win.cfg, Path(__file__).resolve().parents[3]
     z0_axes = gates.aggregate_axes(ctx.z0)
     z0_off_axes = gates.aggregate_axes(ctx.z0_off)
@@ -1570,10 +1596,20 @@ def write_report(ctx: Ctx, win: Any, seeds: tuple, store: list, by_id: dict) -> 
         m["prompt_detail"] = f"max prompt {pin} tokens + 2,048 output cap < {gates.RULE['slot_tokens']}"
         arms[v] = gates.evaluate_arm(v, ctx.seed_runs.get(v, {}), m)
     decision = gates.decide(arms, z0_axes, z0e_axes)
+    instr = win.collect_hindsight_instrument() if hasattr(win, "collect_hindsight_instrument") else {}
     now = dt.datetime.now()
     meta = {"date": now.strftime("%Y-%m-%d"), "started": ctx.started_at, "finished": now.strftime("%Y-%m-%d %H:%M"), "wall_min": round(win.elapsed_min(), 1),
             "cap_min": cfg.cap_min, "commit": git_commit(win), "hindsight_version": ctx.version, "embed_model": ctx.embed_model, "clone_model": win.clone.get("model", "?"),
             "seeds": list(seeds), "arms_run": [a for a in cfg.arms if ctx.seed_runs.get(a)], "aborted": ctx.aborted, "restore": "pending (restore runs after this report is written)"}
+    pg = getattr(win, "pg_state", None) or {}
+    if pg:
+        meta["scratch_postgres"] = ("KEPT (BAKEOFF_KEEP_PG=1): CONFOUNDED by the previous window's banks and jobs" if pg.get("kept")
+                                    else f"fresh (wiped {pg.get('wiped_mb') if pg.get('wiped_mb') is not None else '?'} MB)")
+    if getattr(win, "queue_at_open", None) is not None:
+        meta["hindsight_queue_at_open"] = win.queue_at_open
+    if instr.get("log_readable"):
+        meta["hindsight_consolidation_prompt_tokens_max"] = instr.get("hindsight_consolidation_prompt_tokens_max")
+        meta["hindsight_consolidation_failed_calls"] = instr.get("hindsight_consolidation_failed_calls")
     hooks = [h for h in ((f"BAKEOFF_SKIP_BRAIN_STOP=1: the live brain was NOT stopped and no clone ran; the brain slot was shared with the household, so no timing in it is a bake-off number."
                           if cfg.skip_brain_stop else ""),
                          (f"BAKEOFF_SMOKE_CELLS={cfg.smoke_cells}: one seed, {cfg.smoke_cells} cells per arm, a handful of validity / slot calls." if cfg.smoke_cells else "")) if h]
@@ -1608,6 +1644,16 @@ def write_report(ctx: Ctx, win: Any, seeds: tuple, store: list, by_id: dict) -> 
                      "MemPalace's tools: the brain is the instrument, a different brain would move them; MPA's protocol text costs extra prompt tokens (reported as the max prompt, "
                      "gate `mpa_G1_prompt_fits`); K (reflection) comes from the closet pass summaries the clone brain makes" + (" and, for HMA, from Hindsight's observations" if "HMA" in cfg.arms else "")
                      + "; they run L0 only (no 100 / 300 filler: each filler turn is a brain call); the MemPalace servers' RAM is the driver's own measurement")
+    caveat = consolidation_caveat(instr)
+    if caveat:
+        notes.append(caveat + f" ({instr.get('hindsight_consolidation_failed_calls')} consolidation call(s) failed on a context-size error, {instr.get('hindsight_failed_attempts')} further retries logged)")
+    if instr and not instr.get("log_readable") and not win.dry:
+        notes.append("hindsight_consolidation_prompt_tokens_max could not be read (hindsight-api's journal was unavailable: " + str(instr.get("log_note", "no reason given")) + "): whether consolidation fits the live slot is NOT measured")
+    if pg.get("kept"):
+        notes.append("BAKEOFF_KEEP_PG=1: this window started on the previous window's scratch Postgres (its Hindsight banks and queued consolidation jobs), so every arm's cells share the clone's single slot with that work: CONFOUNDED, not a verdict")
+    notes.append("Hindsight's background consolidation cannot be paused in the installed version (0.10.2: the worker claims any pending operation; the per-type slot setting is a reserved FLOOR, not a cap; there is no pause flag). "
+                 "The window therefore starts on a fresh database with an empty job queue, H1 / H2 / HMA run no auto-consolidation (H2 / HMA trigger it explicitly in their own step), H0's auto-consolidation is that arm's native behaviour, "
+                 "and an arm that STARTS with queued work is flagged in these notes")
     if ctx.reflect is not None:
         notes.append("the reflection variants (H2@32k, HMA@32k, H2@12B, HMA@12B) are VARIANTS, never contest entrants: they show whether the 8k slot limits K and what a 12B brain does with the same "
                      "cells; the K1 precision veto applies to them; the 12B model is the parked deep-brain unit's, generated from its text and never enabled")
@@ -1624,7 +1670,7 @@ def write_report(ctx: Ctx, win: Any, seeds: tuple, store: list, by_id: dict) -> 
                "arms": {v: {k: val for k, val in a.items()} for v, a in arms.items()}, "z0": {s: {k: r[k] for k in ("axes", "hard_violations", "instrument")} for s, r in ctx.z0.items()},
                "z0_off": {s: {k: r[k] for k in ("axes", "hard_violations")} for s, r in ctx.z0_off.items()}, "z0e": {s: r["axes"] for s, r in ctx.z0e.items()},
                "seed_runs": ctx.seed_runs, "reflect": ctx.reflect,
-               "measure": ctx.measure, "notes": notes, "docs_path": str(md_path)}
+               "measure": ctx.measure, "notes": notes, "docs_path": str(md_path), "instruments": instr, "scratch_postgres": pg}
     artifact.write_json(cfg.bakeoff_dir / f"run-{win.run_id}.json", payload)
     win.log(f"VERDICT: {decision['verdict']} - {decision['text']}")
     win.log(f"report: {md_path}  artifact: {cfg.bakeoff_dir}/run-{win.run_id}.json")
@@ -1671,6 +1717,7 @@ def measure(win: Any) -> dict:
             log(f"forgetting probe {v}: t+0 {ctx.forget[v].t0}")
         phase_arm_controls(ctx, store)
         for v in budget.arms:                 # H1 first and complete, then H2, then H0: a later arm only gets what the earlier one left
+            check_hindsight_idle(ctx, v)
             for k in range(1 if cfg.smoke_cells else budget.seeds[v]):
                 box = budget.seed_box_s(v, win.time_left_s() - tail_s, first=(k == 0))
                 if box >= 60.0 and v == "HM":
