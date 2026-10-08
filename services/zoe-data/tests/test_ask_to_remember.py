@@ -477,3 +477,84 @@ def test_a_bare_delete_that_is_still_the_heads_call_negative_control(monkeypatch
 def test_with_the_gate_off_everything_is_allowed_as_before(monkeypatch):
     monkeypatch.setenv("ZOE_INTENT_ROUTER_GATE", "0")
     assert fast_tiers.intent_gate("memory_forget_last", "delete that", lane="chat") is True
+
+
+# ── PR #1932 review sweep: recall verdict, sibling scope, re-teach after forget ───────────────
+
+def test_recall_is_not_read_aloud_to_a_rejected_speaker():
+    # a failed voice verdict must not hear the owner's saved asks (the recall branch used to ignore it)
+    class _Boom:
+        async def list_by_status(self, **_kw):
+            raise AssertionError("the owner's rows were read for an unverified speaker")
+
+    out = run(atr.handle("What did I ask you to remember?", UID, "s1", speaker_verified=False, svc=_Boom()))
+    assert out == atr.UNVERIFIED_RECALL
+
+
+def test_recall_still_answers_a_verified_or_unjudged_speaker(svc):
+    say(svc, TEA)
+    for verdict in (True, None):
+        assert "lapsang" in say(svc, "What did I ask you to remember?", speaker_verified=verdict)
+
+
+def test_forget_that_leaves_a_different_person_with_the_same_predicate_alone(svc):
+    say(svc, "Remember that my son Rowan is allergic to peanuts")
+    run(svc.ingest("My daughter Wren is allergic to peanuts", user_id=UID, source="voice_fact", status="approved"))
+    out = _execute(svc, "memory_forget_last")       # retracts the newest write only
+    assert out.startswith("Done — I forgot")
+    assert [r.text for r in rows(svc)] == ["my son Rowan is allergic to peanuts"], \
+        "a separate fact that shares two content words was retracted with the capture's copy"
+
+
+class _Ref:
+    def __init__(self, id, text, **meta):
+        self.id, self.text, self.metadata = id, text, {"added_ts": 1000.0, **meta}
+
+
+class _Listing:
+    def __init__(self, *rows):
+        self._rows = list(rows)
+
+    async def list_by_status(self, **_kw):
+        return self._rows
+
+
+def test_siblings_need_the_same_turn_or_a_twin_inside_it():
+    ask = _Ref("a", "my son Rowan is allergic to peanuts", tags="explicit,ask_to_remember",
+               source_excerpt="Remember that my son Rowan is allergic to peanuts")
+    twin_no_excerpt = _Ref("t", "User's son Rowan is allergic to peanuts")
+    neighbour_no_excerpt = _Ref("n", "My daughter Wren is allergic to peanuts")
+    twin_same_turn = _Ref("s", "User's son is allergic to peanuts, Rowan",
+                          source_excerpt="Remember that my son Rowan is allergic to peanuts")
+    neighbour_other_turn = _Ref("o", "User's son Rowan is allergic to peanuts",
+                                source_excerpt="my daughter Wren is allergic to peanuts")
+    svc_ = _Listing(twin_no_excerpt, neighbour_no_excerpt, twin_same_turn, neighbour_other_turn)
+    assert {r.id for r in run(atr.siblings_of(svc_, UID, ask))} == {"t", "s"}
+
+
+def test_reteach_after_forget_stores_a_row_instead_of_saying_already(svc, monkeypatch):
+    monkeypatch.setenv("ZOE_MEMORY_PHYSICAL_ERASE", "1")
+    monkeypatch.setattr(svc, "_physical_erase", lambda needles: _done({}))
+    monkeypatch.setattr(svc, "_append_audit_sync", lambda *a, **k: None)
+    monkeypatch.setattr(svc, "_delete_audit_for_rows_sync", lambda ids: 0)
+    monkeypatch.setattr(svc, "_delete_ids", lambda ids: [svc._col.rows.pop(i, None) for i in ids])
+    say(svc, TEA)
+    ids = [r.id for r in rows(svc)]
+    run(svc.erase_rows(UID, ids, actor=UID))
+    assert rows(svc) == []
+    out = say(svc, TEA)
+    assert out in atr._CONFIRM, out                  # not "I've already got that one" over nothing
+    assert [r.text for r in rows(svc)] == ["my favourite tea is lapsang souchong"]
+
+
+def test_already_is_said_only_over_a_live_row(svc):
+    say(svc, TEA)
+    assert say(svc, TEA) == atr.ALREADY               # a live equivalent row: honest
+    # the row is rejected (retired) but its idempotency key / mem_id still answers "skip": nothing is saved
+    run(svc.review(rows(svc)[0].id, decision="reject", actor=UID, note="test"))
+    assert rows(svc) == []
+    assert say(svc, TEA) == atr.DROPPED
+
+
+async def _done(v):
+    return v

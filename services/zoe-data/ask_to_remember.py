@@ -220,6 +220,7 @@ DROPPED = "I couldn't keep that one — nothing was saved."
 NO_STORE = "I couldn't reach my memory just now, so I haven't saved that. Try again in a moment."
 SLOW = "That's taking longer than usual, so I can't promise it's saved — ask me again in a moment."
 NOTHING_ASKED = "You haven't asked me to remember anything specific yet."
+UNVERIFIED_RECALL = "I couldn't tell who was speaking, so I won't read out what's been saved — ask me again in a moment."
 
 
 def _confirm(clause: str) -> str:
@@ -334,7 +335,29 @@ async def remember(clause: str, user_id: str, *, utterance: str = "", session_id
         pass
     if cue == "note":
         await _also_note(clause, user_id)
+    if outcome == "skip" and not await _live_equivalent(svc, user_id, clause):
+        # "I've already got that one" is said only over a LIVE approved row: a skip with nothing behind it (a
+        # rejected / retired row, a stale idempotency key) saved nothing, and Zoe must not claim it did
+        logger.info("ASK_TO_REMEMBER user=%s outcome=skip_without_live_row", user_id)
+        return DROPPED
     return ALREADY if outcome == "skip" else _confirm(clause)
+
+
+async def _live_equivalent(svc: Any, user_id: str, clause: str) -> bool:
+    """Is there an approved row of this owner's that says what ``clause`` says? Fail-open (True) when the store
+    cannot be listed - the skip already came from the store, so a listing blip must not turn it into a refusal."""
+    try:
+        from memory_service import get_memory_service
+
+        rows = await (svc or get_memory_service()).list_by_status(user_id=user_id, status="approved", limit=1000)
+        uid = (user_id or "").strip().lower()
+        return any(
+            str((r.metadata or {}).get("user_id") or (r.metadata or {}).get("wing") or "").strip().lower() == uid
+            and _overlap(clause, r.text or "") >= SIBLING_MIN_OVERLAP
+            for r in rows)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("ask_to_remember: live-row check skipped (%s)", type(exc).__name__)
+        return True
 
 
 async def _also_note(clause: str, user_id: str) -> None:
@@ -395,6 +418,10 @@ async def handle(text: str, user_id: str, session_id: str = "", *, speaker_verif
         if p is None:
             return None
         if p.kind == "recall":
+            if speaker_verified is False:
+                # the owner's rows are read aloud only to the owner: a rejected voice verdict gets nothing
+                logger.info("ASK_TO_REMEMBER user=%s outcome=unverified_recall", user_id)
+                return UNVERIFIED_RECALL
             return await recall_reply(user_id, svc=svc)
         return await remember(p.clause, user_id, utterance=p.utterance, session_id=session_id,
                               speaker_verified=speaker_verified, cue=p.cue, svc=svc)
@@ -430,7 +457,8 @@ def _added_ts(meta: dict) -> float:
 async def siblings_of(svc: Any, user_id: str, ref: Any) -> list:
     """The OTHER rows one explicit ask left behind, for "forget that": the owner's verbatim row and the near-identical
     row the post-turn capture derived from the same turn (``ref`` is whichever the forget found first). Same owner,
-    within ``SIBLING_WINDOW_S``, text overlap >= ``SIBLING_MIN_OVERLAP``; when ``ref`` is the derived row only an
+    within ``SIBLING_WINDOW_S``, the same turn (equal source excerpts, then overlap >= ``SIBLING_MIN_OVERLAP``)
+    or, with no excerpt on one side, one row's content words wholly inside the other's; when ``ref`` is the derived row only an
     ask row counts. Never raises."""
     try:
         meta = ref.metadata or {}
@@ -448,7 +476,18 @@ async def siblings_of(svc: Any, user_id: str, ref: Any) -> list:
                 continue
             if not ref_is_ask and not is_ask_row(m):
                 continue
-            if _overlap(ref.text or "", r.text or "") >= SIBLING_MIN_OVERLAP:
+            # the same TURN: when both rows carry the words they were written from, those words must agree (the
+            # capture truncates, so one containing the other counts); a different turn is a different fact
+            ex_a, ex_b = _norm(meta.get("source_excerpt")), _norm(m.get("source_excerpt"))
+            same_turn = False
+            if ex_a and ex_b:
+                if ex_a not in ex_b and ex_b not in ex_a:
+                    continue
+                same_turn = True
+            # no shared turn evidence: the shorter row must sit wholly inside the other (a twin, never a
+            # neighbour that merely shares the predicate: "my son Rowan is allergic to peanuts" vs "my daughter
+            # Wren is ...")
+            if _overlap(ref.text or "", r.text or "") >= (SIBLING_MIN_OVERLAP if same_turn else 1.0):
                 out.append(r)
         return out
     except Exception as exc:  # noqa: BLE001

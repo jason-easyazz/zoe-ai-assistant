@@ -1566,6 +1566,13 @@ def test_s11_partial_run_sends_only_its_own_turns(monkeypatch):
     assert all(c.startswith("s11-") for c in live.chats)
 
 
+def test_s11_unfinished_capture_is_error_never_pass(monkeypatch):
+    # PR #1932 review: the three wait_captured() results used to be evidence only; a stalled capture scored PASS
+    live, res = _drive(monkeypatch, capture_stalls=True, selected=frozenset({"S11"}))
+    assert res["S11"]["verdict"] == "ERROR"
+    assert "capture not observed" in res["S11"]["evidence"]["why"]
+
+
 def test_s11_failed_turn_is_error(monkeypatch):
     live, res = _drive(monkeypatch, seed_errors=["s11-forget"])
     assert res["S11"]["verdict"] == "ERROR"

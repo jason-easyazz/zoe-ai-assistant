@@ -913,8 +913,14 @@ def run_hop_ask(live: "DayLive", user: str, aid: str, samples: int, asks_log: li
         v, ev = score_personal(aid, t["reply"], lambda r=t["reply"]: live.judge_rubric(rubric, question, r))
         verdicts.append(v)
         per.append({"verdict": v, **ev, **live.evidence(t)})
-    return sb.majority_vote(verdicts), {"samples": per, "votes": verdicts, "hop_in_packet": hop_in_packet,
-                                        "card_mode": mode == "allowlisted"}
+    verdict = sb.majority_vote(verdicts)
+    ev = {"samples": per, "votes": verdicts, "hop_in_packet": hop_in_packet, "card_mode": mode == "allowlisted"}
+    # The packet is the contract: a tailored reply from a card or another recall path does not certify the hop
+    if hop_in_packet is None:
+        return "ERROR", {**ev, "why": "the recall packet could not be read, so the hop is unproven"}
+    if not hop_in_packet and verdict != "ERROR":
+        return "FAIL", {**ev, "why": f"the packet's '{HOP_HEADING}' section does not carry the fact ({needle!r})"}
+    return verdict, ev
 
 
 def run_only(live: "DayLive", user: str, only: frozenset, samples: int, log) -> dict[str, Any]:

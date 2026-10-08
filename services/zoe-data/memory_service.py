@@ -3071,6 +3071,10 @@ class MemoryService:
                     {"rows_removed": len(owned)}, None, "")
             except Exception as exc:
                 raise MemoryServiceError(f"erase_rows failed: {exc}") from exc
+            # The erased rows' idempotency keys must not outlive them: left in the fast-path cache, an explicit
+            # re-teach of the same words would be dropped as a duplicate of a row that no longer exists.
+            for key in self._seen_keys_by_user.pop(user_id, None) or ():
+                self._seen_keys.discard(key)
             report = await self._physical_erase(needles)
             self.last_erase_report = report
             _invalidate_agent_user_facts_cache(user_id)

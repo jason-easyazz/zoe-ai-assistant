@@ -1792,8 +1792,12 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
         t["packet_final"] = live.packet(a, ASK_TEA + " coriander")
         errs = [x for x in (r1, r2, r3, r4, r5, r6) if x["error"]]
         waits = {"after_say": w1, "after_keep": w2, "after_repeat": w3}
+        unseen = [k for k, w in waits.items() if not (w or {}).get("landed")]
         if errs:
             put("S11", "ERROR", why="a turn failed: " + "; ".join(e["error"] for e in errs), waits=waits)
+        elif unseen:
+            # the capture's copy is what "forget that" must also retract: unobserved, the verdict is unproven
+            put("S11", "ERROR", why="capture not observed after: " + ", ".join(unseen), waits=waits)
         else:
             v, ev = score_s11(t)
             if live.keep:   # --keep-replies: the replies themselves (debug only; they are synthetic)

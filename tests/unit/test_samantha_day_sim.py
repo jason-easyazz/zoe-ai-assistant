@@ -482,6 +482,22 @@ def test_hop_asks_fail_when_the_hop_is_off_negative_control(aid):
     assert ev["hop_in_packet"] is False
 
 
+def test_hop_ask_fails_when_the_packet_lacks_the_fact_even_with_a_tailored_reply():
+    # PR #1932 review: a good reply from a card / another recall path must not certify a hop that is not in the packet
+    live = _HopLive(hop=False)
+    live.chat = lambda user, tag, message: {"reply": "Since you sleep during the day after your night shifts...",
+                                           "error": None, "ms": 1, "session": tag}
+    v, ev = ds.run_hop_ask(live, "demo_bar_0a1b2c3d", "S9a", 1, [], *SEEDED, "default")
+    assert ev["votes"] == ["PASS"] and v == "FAIL" and ev["hop_in_packet"] is False
+
+
+def test_hop_ask_with_an_unreadable_packet_is_error():
+    live = _HopLive(hop=True)
+    live.packet = lambda user, message: None
+    v, ev = ds.run_hop_ask(live, "demo_bar_0a1b2c3d", "S9b", 1, [], *SEEDED, "default")
+    assert v == "ERROR" and ev["hop_in_packet"] is None
+
+
 def test_hop_ask_with_an_unlanded_seed_is_error_and_asks_nothing():
     live = _HopLive()
     seeds, landed = SEEDED[0], {"d1-shift": {"landed": False}, "d1-dog": {"landed": True}}
