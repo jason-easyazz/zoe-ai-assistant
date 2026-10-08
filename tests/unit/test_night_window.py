@@ -896,6 +896,14 @@ def test_a_trial_phase_without_a_result_is_not_an_ok_outcome_and_the_12b_timeout
     assert w2.trial_timeout_12b() <= (w2.cap_min - w2.cfg.reserve_min) * 60 - 300
 
 
+def test_skip_4b_ends_an_exploratory_trial_after_the_12b_phase_and_still_restores(tmp_path):
+    w, host, _ = make(tmp_path, argv=["--trial", "--skip-4b"], start=at(3, 5), llm_dies=True)
+    assert w.run() == nw.EXIT_ABORTED and "did not load" in w.outcome
+    assert not any("zoe-night-4b32k" in c for c in host.joined() if c.startswith("systemd-run")) and wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]
+    w2, host2, _ = make(tmp_path, argv=["--trial", "--skip-4b"], start=at(3, 5))
+    assert w2.run() == nw.EXIT_OK and "4B@32k" not in w2.rec["trial"] and w2.rec["trial"]["12B"]["pass"] == 2
+
+
 def test_a_trial_is_refused_across_03_00_because_it_has_no_digest_job_to_cover_the_skipped_loop(tmp_path):
     w, host, _ = make(tmp_path, argv=["--trial"], start=at(2, 50))
     assert w.run() == nw.EXIT_REFUSED and "maintenance loop" in w.outcome and stopped_nothing(host)

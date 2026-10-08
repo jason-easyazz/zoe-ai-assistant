@@ -271,6 +271,8 @@ class NightCfg(bk.Cfg):
     #: after this many CONSECUTIVE windows (same boot) on which the 12B failed to load, a timer-started window refuses before stopping anything: Zoe is not put to sleep every night for a load that fails
     max_load_failures: int = 2
     retry_load: bool = False
+    #: trial only: skip the 4B@32k phase (an exploratory attempt that is expected to fail fast should not also cost two minutes of silence for a baseline already measured)
+    skip_4b: bool = False
     busy_units: tuple = ("zoe-training.service", "zoe-backup.service", "zoe-backup-verify.service", "zoe-memory-export.service", "zoe-dreaming.service")
     busy_wait_max_min: float = 20.0
     busy_poll_s: float = 30.0
@@ -1047,6 +1049,11 @@ class NightWindow(bk.Window):
         except LoadFailed as exc:
             failed = exc
             self.trial_results["12B"] = {"label": "12B", "error": str(exc), "cells": [], "pass": 0, "graded": 0, "items": [0, 0], "load_failed": True}
+        if self.cfg.skip_4b:
+            self.rec["trial"] = self.trial_results
+            if failed:
+                raise failed
+            return
         self.event("trial: unloading the 12B, loading the live 4B at --ctx-size 32768 on the same port")
         self.unload_llm()
         self.before_model_start("before the 4B@32k clone", NIGHT_UNITS["llm"])
@@ -1410,6 +1417,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--no-mlock", action="store_true", help="drop --mlock from the 12B command (the locked mmap of the file plus the CUDA copy is about 2x the file at load)")
     ap.add_argument("--ngl", type=int, default=None, help="--n-gpu-layers for the 12B (default: the parked unit's 99); fewer layers = a smaller single CUDA allocation, the rest stays in RAM")
     ap.add_argument("--no-unified", action="store_true", help="do NOT set GGML_CUDA_ENABLE_UNIFIED_MEMORY=1 for the 12B (default ON on a Jetson: cudaMallocManaged avoids the per-allocation limit)")
+    ap.add_argument("--skip-4b", action="store_true", help="trial only: do not run the 4B@32k phase (exploratory attempts)")
     ap.add_argument("--retry-load", action="store_true", help="ignore the 'the 12B failed to load on the last N windows' guard")
     ap.add_argument("--job-reserve-mib", type=float, default=None, help="resident size budgeted for the job processes beside the 12B (default 700)")
     ap.add_argument("--margin-mib", type=float, default=None, help="extra margin demanded by the lever choice (default 0)")
@@ -1445,6 +1453,7 @@ def configure(args: argparse.Namespace, cfg: "Optional[NightCfg]" = None) -> Nig
     cfg.ngl = args.ngl if args.ngl is not None else cfg.ngl
     cfg.retry_load = cfg.retry_load or args.retry_load
     cfg.unified = cfg.unified and not args.no_unified
+    cfg.skip_4b = args.skip_4b
     if args.job_reserve_mib is not None:
         cfg.job_reserve_mib = args.job_reserve_mib
     if args.margin_mib is not None:
