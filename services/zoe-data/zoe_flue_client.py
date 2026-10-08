@@ -1069,7 +1069,23 @@ async def _recall_context_block(message: str, user_id: str) -> str:
             import role_guess_guard
 
             names = [p.name for p in named if getattr(p, "name", "")]
-            rule = role_guess_guard.rule_line(names, packet)
+            # Structural floors (ZOE_STRUCTURAL_CLAIMS shadow|enforce): the role guard's evidence is the user's people-graph id
+            # TRIPLES (role_triples; one bounded read, only on a turn that already named a person). enforce awaits it here (the
+            # "not stated" marker below reads it; <= 0.4 s, a failed read fails closed); shadow starts it as a background task the
+            # reply filter collects AFTER the brain has answered, so shadow adds nothing to the time before first audio. Off: no read.
+            triples, ids, pending = None, {}, None
+            if role_guess_guard.mode() != "off":
+                import structural_claims
+
+                if structural_claims.active():
+                    import role_triples
+
+                    ids = {p.name: getattr(p, "person_id", "") for p in named if getattr(p, "name", "")}
+                    if structural_claims.enforcing():
+                        triples = await role_triples.fetch(user_id)
+                    else:
+                        pending = asyncio.ensure_future(role_triples.fetch(user_id))
+            rule = role_guess_guard.rule_line(names, packet, triples=triples, ids=ids)
             guard_sink = _ROLE_GUARD_SINK.get()
             if guard_sink is not None and role_guess_guard.mode() != "off":
                 # not only the unstated people: also those the packet relates to SOMEBODY ELSE only
@@ -1078,6 +1094,13 @@ async def _recall_context_block(message: str, user_id: str) -> str:
                 if guarded:
                     guard_sink["names"] = guarded
                     guard_sink["packet"] = packet
+                    if triples is not None:
+                        guard_sink["triples"] = triples
+                    if pending is not None:
+                        guard_sink["triples_task"] = pending
+                    guard_sink["ids"] = ids
+            if pending is not None and (guard_sink is None or "triples_task" not in guard_sink):
+                pending.cancel()      # nobody will collect it
         except Exception as exc:  # noqa: BLE001 - the guard must never break a turn
             logger.debug("role guess guard setup failed (non-fatal): %s", type(exc).__name__)
     body = f"{packet}\n{rule}" if rule else packet

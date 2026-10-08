@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import time
 import uuid
 
 import httpx
@@ -369,6 +370,38 @@ User said: {user_message}
 """
 
 
+# The CLAIM ROW (structural floors, ZOE_STRUCTURAL_CLAIMS shadow|enforce): each fact is also read ONCE into a structured row -
+# subject, predicate, value, polarity, modality, tense, and the user's own words - so polarity / hedge / tense are decided
+# here, in the model that reads every language, and never re-derived from English word lists later
+# (docs/research/structural-floors-2026-10-09.md section 5.1). The fact sentence and its type are exactly as before.
+_CLAIM_ROW_RULES = """\
+Each item ALSO has "claim": the same fact as a structured row, read ONLY from what the user said:
+  "subj": "user" | "rel:<relation>" for the user's relative by relation (rel:mother, rel:father, rel:wife, rel:husband, rel:sister, rel:brother, rel:son, rel:daughter, ...) | "person:<Name>" for a named third party
+  "pred": residence | employer | occupation | birthday | age | name | pet_name | allergy | health | activity | membership | plan | preference | kin:<relation> | other
+  "obj": the value, copied from the user's own words (a place, a name, a date, a thing)
+  "pol": "affirm" | "negate" (the user says it is NOT so) | "ended" (it was so and stopped: no longer, quit, dropped)
+  "mod": "asserted" (plainly stated) | "hedged" (I think, probably) | "hypothetical" (a wish, might, if) | "question" | "reported" (someone else said it)
+  "tense": "current" | "past" | "future"   (a plan or intention that exists now is "current")
+  "quote": the user's own words that state it, copied EXACTLY from the message (the shortest span)
+  "lang": the language code of the message (en, es, fr, de, zh, ja, ...)
+A correction or a contrast ("my mum lives in Bendigo, not Ballarat") is TWO items: the new fact (pol affirm) and the old value (pol negate, quote "not Ballarat").
+
+"""
+_TURN_EXTRACTION_PROMPT_CLAIMS = _TURN_EXTRACTION_PROMPT.replace(
+    "If nothing personal was stated, return: []\n", _CLAIM_ROW_RULES + "If nothing personal was stated, return: []\n", 1)
+_CLAIM_MAX_TOKENS = 640        # ~20 s at the brain's measured decode rate: a worst-case claim-row call stays under the timeout
+_CLAIM_TIMEOUT_S = 30.0
+
+
+def _turn_prompt():
+    """The turn-digest prompt and its token budget: the legacy prompt unless the claim row is asked for."""
+    import structural_claims
+
+    if structural_claims.active():
+        return _TURN_EXTRACTION_PROMPT_CLAIMS, _CLAIM_MAX_TOKENS
+    return _TURN_EXTRACTION_PROMPT, 256
+
+
 _AFFECT_STOPWORDS = frozenset({
     "user", "users", "user's", "their", "they", "about", "with", "that", "this",
     "have", "has", "will", "from", "into", "when", "what", "been", "being",
@@ -466,6 +499,20 @@ def _affect_for_fact(fact: str, affect: str, sentence: str, message: str = "") -
 _ROW_LOG_WORDING_MAX = 200
 
 
+def _claim_label(md: dict) -> str:
+    """``<pred>/<pol>/<mod>/<tense>:<lexical>><structural>`` of a row's claim row, or ``-``: what the extractor read and what
+    each floor made of it (labels only)."""
+    raw = md.get("claim")
+    if not raw:
+        return "-"
+    try:
+        c = json.loads(raw) if isinstance(raw, str) else dict(raw)
+        return "%s/%s/%s/%s:%s>%s" % (c.get("pred"), c.get("pol"), c.get("mod"), c.get("tense"),
+                                      md.get("claim_lexical") or "-", md.get("claim_structural") or "-")
+    except Exception:  # noqa: BLE001
+        return "-"
+
+
 def log_row(lane: str, user_id: str, ref, outcome: str) -> None:
     """ONE INFO line per row a digest stored or parked, so a live incident can be REPLAYED instead of guessed at
     (the day-sim 6n diagnosis had no record of what the extractor wrote or how the row was classed):
@@ -490,6 +537,11 @@ def log_row(lane: str, user_id: str, ref, outcome: str) -> None:
             lane, outcome, user_id, getattr(ref, "id", "-"), md.get("authority_class") or "-",
             "yes" if basis == memory_authority.VERBATIM_BASIS else "no", basis,
             md.get("status") or "-", md.get("memory_type") or "-", wording)
+        label = _claim_label(md)
+        if label != "-":
+            # the claim row's own line (the MEMORY_ROW format above is a pinned contract): what the extractor read, and what each
+            # floor made of it
+            logger.info("MEMORY_ROW_CLAIM lane=%s id=%s claim=%s", lane, getattr(ref, "id", "-"), label)
     except Exception:  # noqa: BLE001 - a log line must never fail a digest
         pass
 
@@ -558,6 +610,116 @@ async def latest_user_turn(user_id: str, *, within_minutes: int = 10, db=None) -
         return ""
 
 
+def _salvage_items(raw: str) -> list:
+    """The complete top-level ``{...}`` items of a JSON array reply that did not parse whole (cut off mid-item)."""
+    out: list = []
+    depth, begin, in_str, esc = 0, -1, False, False
+    for i, ch in enumerate(raw):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                begin = i
+            depth += 1
+        elif ch == "}" and depth:
+            depth -= 1
+            if depth == 0 and begin >= 0:
+                try:
+                    item = json.loads(raw[begin:i + 1])
+                except (json.JSONDecodeError, ValueError):
+                    item = None
+                if isinstance(item, dict):
+                    out.append(item)
+                begin = -1
+    return out
+
+
+def _read_claims(facts: list) -> list:
+    """The parsed claim row of each extracted item (None where absent / malformed / the flag is off)."""
+    import structural_claims as sc
+
+    if not sc.active():
+        return [None] * len(facts)
+    out: list = []
+    for item in facts:
+        claim = None
+        if isinstance(item, dict):
+            claim, why = sc.parse_claim(item.get("claim"))
+            sc.STATS[("claim_parse", "ok" if claim is not None else (why if item.get("claim") else "absent"))] += 1
+        out.append(claim)
+    if any(out):
+        logger.info("STRUCTURAL_CLAIMS rows=%d with_claim=%d", len(out), sum(1 for c in out if c is not None))
+    return out
+
+
+def _contrast_negations(claims: list) -> set:
+    """Indexes of the "not Y" halves of a contrast: a negate claim beside an affirm claim of the same subject and
+    predicate with a different value. They retire Y's row by key; they are not facts to store."""
+    import structural_claims as sc
+
+    out: set = set()
+    for i, c in enumerate(claims):
+        if c is None or c.pol != "negate" or c.mod != "asserted":
+            continue
+        for j, o in enumerate(claims):
+            if j != i and o is not None and o.pol == "affirm" and o.mod == "asserted" and o.subj == c.subj \
+                    and o.pred == c.pred and not sc.value_match(o.obj, c.obj):
+                out.add(i)
+                break
+    return out
+
+
+def _claim_kwargs(claims: list, idx: int) -> dict:
+    """``claim`` / ``claim_siblings`` keyword arguments for the write of item ``idx`` (empty when it has no claim row,
+    so a write without one is byte-for-byte the call it always was)."""
+    c = claims[idx] if idx < len(claims) else None
+    if c is None:
+        return {}
+    return {"claim": c, "claim_siblings": tuple(o for j, o in enumerate(claims) if j != idx and o is not None)}
+
+
+async def _structural_post(svc, user_id: str, user_message: str, stored: list, claims: list, consumed: set,
+                           result: dict) -> None:
+    """After the turn's rows are written: retire older rows BY CLAIM KEY (shadow logs what it would retire, enforce
+    retires) and queue the ambiguous residue for the off-path verifier (shadow-only: it logs, it never decides).
+    Never raises into the digest."""
+    try:
+        import structural_claims as sc
+        import structural_verifier
+        from memory_supersede import retire_by_claims
+
+        mine = [(ref, c) for ref, c, _fact in stored if c is not None]
+        denials = [(None, c) for i, c in enumerate(claims) if i in consumed and c is not None]
+        sup = await retire_by_claims(svc, user_id, mine + denials)
+        if sup.get("retired"):
+            result["superseded"] = result.get("superseded", 0) + sup["retired"]
+            from user_model_card import rebuild_user_model_card
+
+            await rebuild_user_model_card(user_id)
+        queue = []
+        for ref, c, fact in stored:
+            if c is None:
+                continue
+            d = sc.decide(fact, c, user_message, siblings=[o for o in claims if o is not None and o is not c])
+            md = getattr(ref, "metadata", None) or {}
+            lexical = str(md.get("claim_lexical") or "")
+            if d.ambiguous or (lexical and lexical != d.label):
+                queue.append(structural_verifier.Item(fact=fact, quote=c.quote, lexical=lexical, structural=d.label,
+                                                      lang=d.lang, ambiguous=d.ambiguous, said=user_message))
+        if queue:
+            await structural_verifier.verify_post_turn(queue, user_id=user_id)
+    except Exception as exc:  # noqa: BLE001 - the structural half never costs the digest its result
+        logger.warning("structural post-turn step failed for %s: %s", user_id, type(exc).__name__)
+
+
 async def run_turn_digest(
     user_id: str,
     user_message: str,
@@ -624,7 +786,8 @@ async def run_turn_digest(
         # them — its default is month-first ("7/8/1991" -> "July 8"). The stored
         # evidence excerpt below stays the user's verbatim words.
         from date_locale import normalize_numeric_dates
-        prompt = _TURN_EXTRACTION_PROMPT.format(
+        _prompt_template, _max_tokens = _turn_prompt()
+        prompt = _prompt_template.format(
             user_message=(f"(replying to Zoe's question: \"{prompt_text}\") " if prompt_text else "")
             + normalize_numeric_dates(user_message)[:600])
         payload = {
@@ -633,16 +796,20 @@ async def run_turn_digest(
                 {"role": "system", "content": "You are a precise fact extractor. Return ONLY valid JSON."},
                 {"role": "user", "content": prompt},
             ],
-            "max_tokens": 256,
+            "max_tokens": _max_tokens,
             "temperature": 0.1,
             "stream": False,
         }
 
         try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
+            _t_llm = time.monotonic()
+            async with httpx.AsyncClient(timeout=20.0 if _max_tokens == 256 else _CLAIM_TIMEOUT_S) as client:
                 resp = await client.post(f"{_GEMMA_URL}/v1/chat/completions", json=payload)
                 resp.raise_for_status()
                 raw = resp.json()["choices"][0]["message"]["content"].strip()
+            if _max_tokens != 256:
+                # the claim row costs output tokens on the brain's one slot: log the call so the delta is measurable
+                logger.info("STRUCTURAL_EXTRACT lane=%s ms=%d max_tokens=%d", source, int((time.monotonic() - _t_llm) * 1000), _max_tokens)
         except Exception as exc:
             logger.debug("turn_digest: LLM call failed for %s: %s", user_id, exc)
             return result
@@ -652,12 +819,19 @@ async def run_turn_digest(
             start = raw.find("[")
             end = raw.rfind("]") + 1
             if start == -1 or end == 0:
-                return result
-            facts = json.loads(raw[start:end])
-            if not isinstance(facts, list):
-                return result
+                # the claim rows make the reply longer: a reply cut by max_tokens (no closing bracket) still yields every item that
+                # COMPLETED. The legacy prompt keeps its all-or-nothing parse, byte for byte.
+                facts = _salvage_items(raw) if (_max_tokens != 256 and start != -1) else None
+                if not facts:
+                    return result
+            else:
+                facts = json.loads(raw[start:end])
+                if not isinstance(facts, list):
+                    return result
         except (json.JSONDecodeError, ValueError):
-            return result
+            facts = _salvage_items(raw) if _max_tokens != 256 else None
+            if not facts:
+                return result
 
         if not facts:
             return result
@@ -687,10 +861,19 @@ async def run_turn_digest(
         fresh_candidates: list = []
         existing_rows = None  # approved rows, read once, only for a cue turn
 
+        # The claim rows the extractor attached (ZOE_STRUCTURAL_CLAIMS shadow|enforce): parsed once, validated against the
+        # closed vocabularies; a fact whose claim is missing or malformed is simply judged by the lexical floor, as before.
+        item_claims = _read_claims(facts)
+        consumed = _contrast_negations(item_claims)
+        stored_claims: list = []        # (ref, claim, fact) for every row this turn wrote or edited
+
         for idx, item in enumerate(facts):
+            if idx in consumed:
+                continue          # the "not Y" half of a contrast: it retires Y's row (below); it is not a fact to store
             fact = (item.get("fact") or "").strip()
             if not fact or len(fact) < 8:
                 continue
+            claim_kw = _claim_kwargs(item_claims, idx)
             fact_type = item.get("type", "fact")
             fact_tags = ["turn_digest", "auto_extract"]
             fact_changes = False
@@ -792,9 +975,11 @@ async def run_turn_digest(
                         turn_ref=f"{base_turn_id}-td{idx}",
                         prompt_text=prompt_text or None,
                         speaker_verified=speaker_verified,
+                        **claim_kw,
                     )
                     if new_ref is not None:
                         result["new"] += 1
+                        stored_claims.append((new_ref, item_claims[idx], fact))
                         log_row("turn_digest", user_id, new_ref, "edited")
                         logger.info("turn_digest: superseded %s with %r", target_id, fact[:60])
                         if fact_changes:
@@ -819,7 +1004,10 @@ async def run_turn_digest(
                     anchor_text=user_message,
                     prompt_text=prompt_text or None,
                     speaker_verified=speaker_verified,
+                    **claim_kw,
                 )
+                if ref is not None:
+                    stored_claims.append((ref, item_claims[idx], fact))
                 if ref is not None and memory_authority.is_candidate(ref):
                     # held back (it disputes something the user said): ask ONE question
                     result["skipped_low_quality"] += 1
@@ -841,6 +1029,9 @@ async def run_turn_digest(
             # becomes ONE question through the offer mechanism (never a lost row)
             result["dispute_questions"] = await memory_disputes.queue_questions(
                 svc, user_id, session_id, user_message, fresh=fresh_candidates)
+
+        if item_claims and any(item_claims):
+            await _structural_post(svc, user_id, user_message, stored_claims, item_claims, consumed, result)
 
         if changed_refs:
             from memory_supersede import supersede_for_turn

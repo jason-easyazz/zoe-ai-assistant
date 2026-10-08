@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-542 flags; 540 not documented in `.env.example`.
+544 flags; 542 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -480,6 +480,8 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_STICKY_SESSION` | `True` | yes | NO | `services/zoe-data/session_continuity.py` |
 | `ZOE_STICKY_SESSION_MINUTES` | `dynamic` | yes | NO | `services/zoe-data/session_continuity.py` |
 | `ZOE_STRIP_NARRATION` | `-` | no | NO | `services/zoe-data/narration_filter.py` |
+| `ZOE_STRUCTURAL_CLAIMS` | `-` | no | NO | `services/zoe-data/structural_claims.py` |
+| `ZOE_STRUCTURAL_VERIFIER` | `-` | no | NO | `services/zoe-data/structural_verifier.py` |
 | `ZOE_STT_BACKEND` | `'moonshine'` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_STT_PREWARM_ON_WAKE` | `True` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_SUBPROCESS_QUEUE_WAIT_S` | `30.0` | yes | NO | `services/zoe-data/async_subprocess.py` |

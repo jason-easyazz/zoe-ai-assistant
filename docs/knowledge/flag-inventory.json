@@ -4710,6 +4710,26 @@
         ],
         "typed_env": false
       },
+      "ZOE_STRUCTURAL_CLAIMS": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/structural_claims.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_STRUCTURAL_VERIFIER": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/structural_verifier.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_STT_BACKEND": {
         "defaults": [
           "'moonshine'"

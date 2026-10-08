@@ -670,3 +670,81 @@ async def nightly_conflict_pass(svc, user_id: str, *, cap: int = NIGHTLY_CAP,
     logger.info("MEMORY_CONFLICT_PASS user=%s pairs=%d superseded=%d%s", user_id,
                 len(pairs), done, " dry_run=1" if dry_run else "")
     return {"pairs": len(pairs), "superseded": done}
+
+
+# ── Retirement BY CLAIM KEY (ZOE_STRUCTURAL_CLAIMS) ─────────────────────────────────────────────────────────
+# The owner's retraction / correction pairs an older row by the (subject, predicate, value) KEY of the extractor's claim
+# rows (``structural_claims.retires``) - decided from stored fields, in any language, never from the words of the two
+# sentences. An older row with no claim row of its own (every row written before this) falls back to the text key
+# (``owner_key_match``), so enforcing it never costs a pairing the lexical path would have made. The older row is retired
+# by id with ``supersede_by`` (invalidate, never delete; both timelines: ``invalid_at`` = the new row's ``valid_from``,
+# ``expired_at`` = now). ``shadow`` logs what WOULD be retired and changes nothing; ``off`` does nothing.
+
+async def retire_by_claims(svc, user_id: str, entries: Iterable[tuple[Any, Any]]) -> dict:
+    """``entries``: ``[(ref or None, Claim)]`` - the rows this turn wrote (with their claim rows) plus the turn's consumed
+    denials (``None``: "not Ballarat" has no row of its own). Returns ``{"retired": n, "would": n}``. Never raises."""
+    out = {"retired": 0, "would": 0}
+    try:
+        import structural_claims as sc
+
+        mode = sc.mode()
+        if mode == sc.OFF:
+            return out
+        rows_in = [(r, c) for r, c in entries if c is not None]
+        acts = [(r, c) for r, c in rows_in
+                if c.mod == "asserted" and c.tense != "future"
+                and (c.pol in ("negate", "ended") or c.pred in sc.SLOT_PREDICATES)]
+        if not acts:
+            return out
+        writers = [r for r, _ in rows_in if r is not None]
+
+        def owners_word(r: Any) -> bool:
+            # the row's class says so; in shadow the lexical class may not (it cannot read this language), so the structural
+            # label stands in - to LOG what enforce would retire, never to retire
+            return is_owner_word(r.metadata, r.text) or (
+                mode == sc.SHADOW and str((r.metadata or {}).get("claim_structural") or "") in ("promote", "anchor"))
+
+        if not writers or not any(owners_word(r) for r in writers):
+            return out        # only the OWNER'S word retires a row (a model's guess never does)
+        own = {r.id for r in writers}
+        rows = await svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT)
+        taken: set[str] = set()
+        retired: list[tuple[str, str]] = []
+        reasons: list[str] = []
+        for ref, c in acts:
+            by = ref or next((w for w, wc in rows_in if w is not None and wc.pred == c.pred), writers[0])
+            hits = 0
+            for old in rows:
+                if hits >= MAX_PER_FACT:
+                    break
+                if old.id in own or old.id in taken or not _is_target(old.metadata or {}):
+                    continue
+                old_claim = sc.claim_from_metadata(old.metadata)
+                why = sc.retires(c, old_claim) if old_claim is not None else ""
+                if not why and old_claim is None and ref is not None:
+                    cue = Cue("claim", "end" if c.pol in ("negate", "ended") else "swap", re.compile(r"(?!x)x"), False)
+                    why = owner_key_match(ref.text, old.text, cue)
+                if not why:
+                    continue
+                hits += 1
+                taken.add(old.id)
+                reasons.append(why.split(":")[0])
+                if mode == sc.ENFORCE:
+                    if await svc.supersede_by(user_id, old.id, by.id, actor=ACTOR, note=f"claim key ({why})"):
+                        out["retired"] += 1
+                        retired.append((old.text, by.text))
+                    else:
+                        taken.discard(old.id)
+                else:
+                    out["would"] += 1
+        if taken:
+            logger.info("STRUCTURAL_RETIRE mode=%s user=%s %s=%d keys=%s", mode, user_id,
+                        "retired" if mode == sc.ENFORCE else "would_retire", len(taken), ",".join(sorted(set(reasons))))
+        if retired:
+            from open_loop_lifecycle import resolve_for_supersede
+
+            await resolve_for_supersede(user_id, retired, ended=True, source="claim")
+    except Exception as exc:  # noqa: BLE001 - the write path must never fail on this
+        logger.warning("claim-key retirement failed user=%s: %s", user_id, type(exc).__name__)
+    return out
+

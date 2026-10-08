@@ -1162,6 +1162,30 @@ def _invalidate_agent_user_facts_cache(user_id: str) -> None:
         logger.debug("memory_service: user facts cache invalidation skipped: %s", exc)
 
 
+def _stamp_claim(md: dict[str, Any], claim: Any) -> None:
+    """Store the extractor's claim row on the row being written (``metadata["claim"]``, JSON): polarity, modality and
+    tense decided ONCE, with the owner's verbatim quote. Nothing when there is no valid claim or the flag is off."""
+    if not claim:
+        return
+    try:
+        import structural_claims as sc
+
+        if not sc.active():
+            return
+        parsed = claim if isinstance(claim, sc.Claim) else sc.parse_claim(claim)[0]
+        if parsed is None:
+            return
+        # the quote and the value are slices of the owner's turn: they pass the SAME PII scrub the evidence excerpt does, and a claim
+        # that would carry anything the scrub touches is not stored at all (the fact beside it was scrubbed separately)
+        for field_ in (parsed.quote, parsed.obj):
+            scrubbed, reject = scrub_pii(field_)
+            if reject or scrubbed != field_:
+                return
+        md["claim"] = parsed.to_json()
+    except Exception:  # noqa: BLE001 - a stamp never costs a write
+        pass
+
+
 def _promote_event_metadata(md: dict[str, Any], extra: dict[str, Any]) -> None:
     for key in ("event_id", "evidence_refs", "relationships", "supersedes", "retention_policy"):
         value = extra.get(key)
@@ -1408,8 +1432,16 @@ class MemoryService:
         speaker_verified: Optional[bool] = None,
         captured_at: Optional[str] = None,
         hold: Optional[str] = None,
+        claim: Any = None,
+        claim_siblings: Any = (),
     ) -> Optional[MemoryRef]:
         """Store a fact. Returns None when silently dropped.
+
+        ``claim`` is the extractor's structured CLAIM ROW for this fact (``structural_claims``; a dict or ``Claim``): stored
+        on the row as ``metadata["claim"]`` (polarity / modality / tense decided once, with the owner's verbatim quote),
+        consulted by ``memory_authority.resolve_write`` per ``ZOE_STRUCTURAL_CLAIMS`` (shadow logs it beside the lexical
+        decision; enforce lets it decide). ``claim_siblings`` are the other claims of the same owner sentence (a
+        contrast's "not Y"). Without a claim the write is exactly what it was.
 
         ``hold`` (a short reason label) is the CALLER's verdict that the user's own words do not carry this fact (the nightly
         digest's observation gate, ``memory_authority.check_observation``): an ``approved`` write is stored ``pending`` - a
@@ -1565,8 +1597,9 @@ class MemoryService:
                 writer, scrubbed,
                 anchor_text=anchor_text if anchor_text is not None else source_excerpt,
                 claimed=authority, user_id=user_id, prompt_text=prompt_text,
-                speaker_verified=speaker_verified,
+                speaker_verified=speaker_verified, claim=claim, claim_siblings=claim_siblings,
             )
+            _auth.note_structural(resolved, lane=writer, user_id=user_id)
             clash = None
             if resolved.power < _auth.RANK[_auth.OPERATOR] and status == "approved" and _auth.active():
                 clash = await self._protected_conflict(user_id, scrubbed, resolved.power)
@@ -1621,6 +1654,7 @@ class MemoryService:
                 captured_at=captured_at,
             )
             metadata.update(_auth.provenance(writer, resolved, turn_ref=turn_ref or ev_turn_id))
+            _stamp_claim(metadata, claim)
             if clash is not None:
                 metadata["contradicts_id"] = clash[0].id
                 metadata["authority_blocked"] = True
@@ -2077,8 +2111,12 @@ class MemoryService:
         origin: Optional[str] = None,
         prompt_text: Optional[str] = None,
         speaker_verified: Optional[bool] = None,
+        claim: Any = None,
+        claim_siblings: Any = (),
     ) -> Optional[MemoryRef]:
         """Approve / reject / edit a pending memory.
+
+        ``claim`` / ``claim_siblings`` (``edit`` only): the claim row of the NEW fact, exactly as ``ingest`` takes it.
 
         Authority (``memory_authority``): an ``edit`` writes a NEW row stamped with the
         NEW writer's provenance - ``source`` / ``origin`` = this ``actor``, ``session_id`` =
@@ -2183,7 +2221,7 @@ class MemoryService:
             current, decision=decision, actor=origin or actor, user_id=user_id, edits=edits,
             anchor_text=anchor_text if anchor_text is not None else source_excerpt,
             authority=authority, session_id=session_id, prompt_text=prompt_text,
-            speaker_verified=speaker_verified,
+            speaker_verified=speaker_verified, claim=claim, claim_siblings=claim_siblings,
         ):
             self._bump("authority_block", actor)
             return None
@@ -2270,8 +2308,9 @@ class MemoryService:
                 writer, scrubbed,
                 anchor_text=anchor_text if anchor_text is not None else source_excerpt,
                 claimed=authority, user_id=user_id, prompt_text=prompt_text,
-                speaker_verified=speaker_verified,
+                speaker_verified=speaker_verified, claim=claim, claim_siblings=claim_siblings,
             )
+            _auth.note_structural(edit_res, lane=writer, user_id=user_id)
             edit_source = writer if _auth.is_known_writer(writer) else "review_ui"
             carried_excerpt = (
                 None if edit_res.rank < _auth.USER_RANK
@@ -2341,6 +2380,7 @@ class MemoryService:
                     continue
                 new_meta[key] = value
             new_meta.update(_auth.provenance(writer, edit_res, turn_ref=turn_ref))
+            _stamp_claim(new_meta, claim)
             new_id = _memory_id(user_id, scrubbed, new_meta)
             new_meta["supersedes_id"] = mem_id
             new_meta["reviewed_by"] = actor
@@ -2680,6 +2720,8 @@ class MemoryService:
         session_id: Optional[str],
         prompt_text: Optional[str] = None,
         speaker_verified: Optional[bool] = None,
+        claim: Any = None,
+        claim_siblings: Any = (),
     ) -> bool:
         """True when ``actor`` (a writer below the user classes) may not apply ``decision`` to
         ``current`` because ``current`` outranks it. Logs ``AUTHORITY_BLOCKED`` (labels
@@ -2703,7 +2745,7 @@ class MemoryService:
                 res = _auth.resolve_write(
                     actor, (edits or current.text).strip(), anchor_text=anchor_text,
                     claimed=authority, user_id=user_id, prompt_text=prompt_text,
-                    speaker_verified=speaker_verified)
+                    speaker_verified=speaker_verified, claim=claim, claim_siblings=claim_siblings)
             else:  # archive / reject: the actor's own standing, no text to anchor
                 res = _auth.Resolved(_auth.writer_class(actor, user_id=user_id), "action")
             if _auth.may_override(res.power, _auth.row_class(meta, current.text)):

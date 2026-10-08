@@ -44,6 +44,9 @@ os.environ["MEMPALACE_DATA_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "mempalace")
 os.environ["ZOE_VOICE_STT_LOG"] = os.path.join(ZOE_TEST_STORE_DIR, "voice_stt.jsonl")
 # The write-time reject ledger (memory_reject_ledger) persists day counters under ~/.zoe by default.
 os.environ["ZOE_MEMORY_REJECT_LEDGER"] = os.path.join(ZOE_TEST_STORE_DIR, "memory-reject-ledger.json")
+# The structural floors' off-path verifier is the one caller of the LIVE brain's endpoint in the memory path; a test that exercises it
+# turns it on with a stubbed client (test_structural_verifier.py, test_structural_claims_digest.py). No other test may reach it.
+os.environ["ZOE_STRUCTURAL_VERIFIER"] = "off"
 
 
 import pytest  # noqa: E402
