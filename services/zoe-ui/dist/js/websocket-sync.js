@@ -29,6 +29,7 @@ class ZoeWebSocketSync {
     }
     
     connect() {
+        this.stopped = false;   // a deliberate connect() re-arms reconnection
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             console.log(`✅ WebSocket already connected: ${this.endpoint}`);
             return;
@@ -139,6 +140,10 @@ class ZoeWebSocketSync {
         if (this.reconnectTimeout) {
             clearTimeout(this.reconnectTimeout);
         }
+        // disconnect() closes the socket, which fires onclose → reconnect(): without this
+        // guard a deliberate stop (e.g. the panel executor giving up after a 403)
+        // reconnected forever anyway.
+        if (this.stopped) return;
         
         const canRetry = this.maxReconnectAttempts <= 0 || this.reconnectAttempts < this.maxReconnectAttempts;
         if (canRetry) {
@@ -166,6 +171,7 @@ class ZoeWebSocketSync {
     
     disconnect() {
         console.log(`🔌 Disconnecting WebSocket: ${this.endpoint}`);
+        this.stopped = true;
         this.stopPingInterval();
         if (this.reconnectTimeout) {
             clearTimeout(this.reconnectTimeout);

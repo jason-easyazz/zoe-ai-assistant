@@ -32,9 +32,6 @@
     </script>
     <title>Zoe - Journal</title>
     
-    <!-- FilePond CSS — VENDORED, see services/zoe-ui/AGENTS.md -->
-    <link href="/lib/filepond/filepond.min.css" rel="stylesheet">
-    <link href="/lib/filepond/plugins/filepond-plugin-image-preview.min.css" rel="stylesheet">
     
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -1026,47 +1023,8 @@
             padding: 0;
         }
         
-        /* FilePond Customization */
-        .filepond--root {
-            font-family: inherit;
-        }
-        
-        .filepond--drop-label {
-            color: var(--text-secondary);
-        }
-        
-        .filepond--panel-root {
-            background-color: rgba(123, 97, 255, 0.02);
-            border: 2px dashed rgba(123, 97, 255, 0.3);
-        }
-        
-        .filepond--item-panel {
-            background-color: rgba(123, 97, 255, 0.05);
-        }
-        
-        .filepond--drip-blob {
-            background-color: var(--primary-purple);
-        }
-        
-        .image-upload-area {
-            border: 2px dashed rgba(123, 97, 255, 0.3);
-            border-radius: 12px;
-            padding: 40px;
-            text-align: center;
-            cursor: pointer;
-            transition: all 0.3s;
-            background: rgba(123, 97, 255, 0.02);
-        }
-        
-        .image-upload-area:hover {
-            border-color: var(--primary-purple);
-            background: rgba(123, 97, 255, 0.05);
-        }
-        
-        .upload-icon { font-size: 48px; margin-bottom: 12px; }
-        .upload-text { font-size: 14px; color: var(--text-secondary); margin-bottom: 8px; }
-        .upload-hint { font-size: 12px; color: var(--text-tertiary); }
-        
+        /* Entry form (tags, privacy, actions) — restored 2026-10-09: the FilePond cleanup
+           had removed these shared rules with the photo styles. */
         .tag-input-container {
             display: flex;
             flex-wrap: wrap;
@@ -1932,13 +1890,9 @@
                     <textarea class="form-textarea" id="entryContent" placeholder="Start writing your thoughts..."></textarea>
         </div>
 
-                <div class="form-field">
-                    <label class="form-label">Photos</label>
-                    <input type="file" class="filepond" name="photos" multiple 
-                           data-allow-reorder="true"
-                           data-max-file-size="10MB"
-                           data-max-files="10">
-    </div>
+                <!-- Photos: removed 2026-10-09 — there is no media upload route, so the picker
+                     accepted files and every upload failed. Re-add the field (and the vendored
+                     FilePond tags) when a media endpoint exists. -->
 
                 <div class="form-field">
                     <label class="form-label">People</label>
@@ -2005,13 +1959,6 @@
         </div>
     </div>
 
-    <!-- FilePond Scripts — VENDORED -->
-    <script src="/lib/filepond/plugins/filepond-plugin-image-preview.min.js"></script>
-    <script src="/lib/filepond/plugins/filepond-plugin-image-resize.min.js"></script>
-    <script src="/lib/filepond/plugins/filepond-plugin-image-transform.min.js"></script>
-    <script src="/lib/filepond/plugins/filepond-plugin-file-validate-size.min.js"></script>
-    <script src="/lib/filepond/plugins/filepond-plugin-file-validate-type.min.js"></script>
-    <script src="/lib/filepond/filepond.min.js"></script>
 
     <!-- Browser Image Compression — VENDORED -->
     
@@ -2025,117 +1972,7 @@
 
     <script>
         // Initialize FilePond
-        function initializeFilePond() {
-            // Register FilePond plugins
-            FilePond.registerPlugin(
-                FilePondPluginImagePreview,
-                FilePondPluginImageResize,
-                FilePondPluginImageTransform,
-                FilePondPluginFileValidateSize,
-                FilePondPluginFileValidateType
-            );
-            
-            // Create FilePond instance
-            const inputElement = document.querySelector('input[type="file"].filepond');
-            const pond = FilePond.create(inputElement, {
-                labelIdle: '📷 Drop images here or <span class="filepond--label-action">Browse</span><br><small>Supports iPhone HEIC, JPG, PNG, GIF, WEBP (up to 50MB)</small>',
-                acceptedFileTypes: ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp', 'image/heic', 'image/heif'],
-                maxFileSize: '50MB',
-                maxFiles: 10,
-                credits: false,
-                allowReorder: true,
-                allowMultiple: true,
-                server: {
-                    process: async (fieldName, file, metadata, load, error, progress, abort) => {
-                        const formData = new FormData();
-                        formData.append('files', file, file.name);  // Explicitly set filename
-                        // Enforce authenticated user_id for user isolation
-                        const session = window.zoeAuth?.getCurrentSession?.();
-                        const userId = session?.user_info?.user_id || session?.user_id;
-                        if (!userId) {
-                            console.error('❌ Upload blocked: missing user_id/session');
-                            if (typeof window.zoeAuth?.enforceAuth === 'function') {
-                                window.zoeAuth.enforceAuth();
-                            }
-                            alert('Authentication required. Please log in again.');
-                            error('Authentication required');
-                            abort();
-                            return;
-                        }
-                        formData.append('user_id', userId);
-                        
-                        console.log('📤 Uploading file:', file.name, 'Size:', (file.size / 1024 / 1024).toFixed(2), 'MB');
-                        
-                        try {
-                            const xhr = new XMLHttpRequest();
-                            xhr.open('POST', '/api/media/upload');
-                            // Include session header; XHR bypasses fetch interceptor
-                            try {
-                                const sessionId = window.zoeAuth?.getSession?.();
-                                if (sessionId) {
-                                    xhr.setRequestHeader('X-Session-ID', sessionId);
-                                }
-                            } catch (_e) {}
-                            
-                            xhr.upload.onprogress = (e) => {
-                                if (e.lengthComputable) {
-                                    progress(e.lengthComputable, e.loaded, e.total);
-                                }
-                            };
-                            
-                            xhr.onload = () => {
-                                if (xhr.status >= 200 && xhr.status < 300) {
-                                    const response = JSON.parse(xhr.responseText);
-                                    // Store uploaded photos globally
-                                    if (window.uploadedPhotos) {
-                                        window.uploadedPhotos.push(...response);
-                                    } else {
-                                        window.uploadedPhotos = response;
-                                    }
-                                    load(response[0].photo_id);
-                                } else {
-                                    // Show detailed error message
-                                    try {
-                                        const errorData = JSON.parse(xhr.responseText);
-                                        const errorMsg = errorData.detail || errorData.message || 'Upload failed';
-                                        console.error('Upload error:', errorMsg);
-                                        error(errorMsg);
-                                    } catch (e) {
-                                        console.error('Upload failed with status:', xhr.status, xhr.responseText);
-                                        error(`Upload failed (${xhr.status})`);
-                                    }
-                                }
-                            };
-                            
-                            xhr.onerror = () => {
-                                console.error('Network error during upload');
-                                error('Network error - upload failed');
-                            };
-                            
-                            xhr.send(formData);
-                            
-                            return {
-                                abort: () => {
-                                    xhr.abort();
-                                    abort();
-                                }
-                            };
-                        } catch (err) {
-                            console.error('Upload error:', err);
-                            error('Upload failed');
-                        }
-                    }
-                },
-                onaddfile: (error, file) => {
-                    if (!error) {
-                        console.log('File added:', file.filename);
-                    }
-                },
-                onremovefile: (error, file) => {
-                    console.log('File removed:', file.filename);
-                }
-            });
-        }
+        // FilePond photo upload removed 2026-10-09: there is no media upload route.
         
         // Initialize global state
         window.uploadedPhotos = [];
@@ -2148,7 +1985,6 @@
             newEntryModal.classList.add('active');
             if (!initialized) {
                 setTimeout(() => {
-                    initializeFilePond();
                     initialized = true;
                 }, 100);
             }

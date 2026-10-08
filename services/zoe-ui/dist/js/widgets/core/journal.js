@@ -11,7 +11,6 @@ class JournalWidget extends WidgetModule {
             defaultSize: 'size-medium',
             updateInterval: null
         });
-        this.uploadedPhoto = null;
     }
     
     getTemplate() {
@@ -24,22 +23,7 @@ class JournalWidget extends WidgetModule {
                 </button>
             </div>
             <div class="widget-content" style="padding: 16px;">
-                <!-- Photo Upload Area -->
-                <div id="journalPhotoArea" style="margin-bottom: 12px;">
-                    <input type="file" id="journalPhotoInput" accept="image/*" style="display: none;">
-                    <button id="journalPhotoBtn" onclick="event.stopPropagation(); journalWidget.selectPhoto()" 
-                        style="width: 100%; padding: 40px; border: 2px dashed rgba(123, 97, 255, 0.3); border-radius: 12px; background: rgba(123, 97, 255, 0.05); cursor: pointer; transition: all 0.3s; display: flex; flex-direction: column; align-items: center; gap: 8px;">
-                        <span style="font-size: 32px;">📷</span>
-                        <span style="color: #7B61FF; font-weight: 500; font-size: 14px;">Add Photo</span>
-                    </button>
-                    <div id="journalPhotoPreview" style="display: none; position: relative; border-radius: 12px; overflow: hidden; margin-bottom: 12px;">
-                        <img id="journalPhotoImg" style="width: 100%; height: 200px; object-fit: cover;">
-                        <button onclick="event.stopPropagation(); journalWidget.removePhoto()" 
-                            style="position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,0.7); color: white; border: none; border-radius: 50%; width: 28px; height: 28px; cursor: pointer; display: flex; align-items: center; justify-content: center;">
-                            ✕
-                        </button>
-                    </div>
-                </div>
+                <!-- photo upload removed 2026-10-09: no media upload route exists -->
                 
                 <!-- Title Input -->
                 <input type="text" id="journalTitle" placeholder="Title your entry..." 
@@ -71,7 +55,6 @@ class JournalWidget extends WidgetModule {
         // Set up event listeners
         const titleInput = this.element.querySelector('#journalTitle');
         const contentArea = this.element.querySelector('#journalContent');
-        const photoInput = this.element.querySelector('#journalPhotoInput');
         const saveBtn = this.element.querySelector('#journalSaveBtn');
         
         // Enable save button when content exists
@@ -83,94 +66,19 @@ class JournalWidget extends WidgetModule {
             
             // Show clear button if any content exists
             const clearBtn = this.element.querySelector('#clearJournalBtn');
-            clearBtn.style.display = (hasContent || this.uploadedPhoto) ? 'block' : 'none';
+            clearBtn.style.display = hasContent ? 'block' : 'none';
         };
         
         titleInput?.addEventListener('input', checkContent);
         contentArea?.addEventListener('input', checkContent);
         
-        // Handle photo selection
-        photoInput?.addEventListener('change', (e) => {
-            const file = e.target.files[0];
-            if (file) {
-                this.handlePhotoUpload(file);
-            }
-        });
-        
         // Focus on content area for quick entry
         setTimeout(() => contentArea?.focus(), 100);
     }
     
-    selectPhoto() {
-        this.element.querySelector('#journalPhotoInput')?.click();
-    }
     
-    handlePhotoUpload(file) {
-        // Show preview immediately
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            const photoPreview = this.element.querySelector('#journalPhotoPreview');
-            const photoBtn = this.element.querySelector('#journalPhotoBtn');
-            const photoImg = this.element.querySelector('#journalPhotoImg');
-            
-            if (photoPreview && photoBtn && photoImg) {
-                photoImg.src = e.target.result;
-                photoPreview.style.display = 'block';
-                photoBtn.style.display = 'none';
-            }
-        };
-        reader.readAsDataURL(file);
-        
-        // Upload to server
-        this.uploadPhotoToServer(file);
-    }
     
-    async uploadPhotoToServer(file) {
-        const formData = new FormData();
-        formData.append('files', file);
-        
-        // Get user_id from session
-        const session = window.zoeAuth?.getCurrentSession?.();
-        const userId = session?.user_info?.user_id || session?.user_id || 'default';
-        formData.append('user_id', userId);
-        
-        try {
-            const response = await fetch('/api/media/upload', {
-                method: 'POST',
-                body: formData,
-                headers: window.zoeAuth?.getSession?.() 
-                    ? { 'X-Session-ID': window.zoeAuth.getSession() } 
-                    : {}
-            });
-            
-            if (response.ok) {
-                const photos = await response.json();
-                this.uploadedPhoto = photos[0];
-                this.showStatus('Photo uploaded ✓', 'success');
-            } else {
-                throw new Error('Upload failed');
-            }
-        } catch (error) {
-            console.error('Photo upload failed:', error);
-            this.showStatus('Photo upload failed', 'error');
-        }
-    }
     
-    removePhoto() {
-        this.uploadedPhoto = null;
-        const photoPreview = this.element.querySelector('#journalPhotoPreview');
-        const photoBtn = this.element.querySelector('#journalPhotoBtn');
-        const photoInput = this.element.querySelector('#journalPhotoInput');
-        
-        if (photoPreview && photoBtn) {
-            photoPreview.style.display = 'none';
-            photoBtn.style.display = 'flex';
-        }
-        
-        if (photoInput) {
-            photoInput.value = '';
-        }
-    }
     
     async saveEntry() {
         const titleInput = this.element.querySelector('#journalTitle');
@@ -193,7 +101,7 @@ class JournalWidget extends WidgetModule {
             title,
             content,
             privacy_level: 'private',
-            photos: this.uploadedPhoto ? [this.uploadedPhoto.url] : [],
+            photos: [],
             tags: []
         };
         
@@ -240,8 +148,6 @@ class JournalWidget extends WidgetModule {
         
         if (titleInput) titleInput.value = '';
         if (contentArea) contentArea.value = '';
-        
-        this.removePhoto();
         
         if (saveBtn) {
             saveBtn.disabled = true;

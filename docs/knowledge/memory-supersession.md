@@ -90,6 +90,45 @@ presents conflicting bullets newest-first; the Dunedin row is retired later by a
   `MEMORY_CONFLICT_PASS user=<id> pairs=<n> superseded=<n>` (zoe-data logs to
   `~/.zoe-logs/`, not journald).
 
+### The owner's retraction / correction retires by KEY, not by words (2026-10-09)
+
+Found by the agent of #1916: after "Good news: I no longer get the migraines since I switched to new glasses." the
+retraction landed approved as `user_stated_derived`, but "User has been getting migraines most afternoons lately"
+stayed approved beside it (`superseded=0` with the flag on); the day-sim passed only because the new row was served
+too. Cause: `same_topic` asks the change to name at least half of the OLD sentence's content words, and "User no
+longer gets migraines" names 1 of 3. Whether a pair formed depended on how much the 4B extractor wrote, not on whose
+fact it was.
+
+When the new row is the **owner's word** (`memory_supersede.is_owner_word`: authority rank >= `user_stated_derived`;
+a model's guess and an unconfirmed panel voice never qualify) the pair is decided by `owner_key_match(new, old, cue)`
+(subject, attribute), in the write-time pass and the nightly pass alike; `same_topic` / the home slot still apply
+first and are unchanged:
+
+- **slot** - a swap/correction on a one-valued attribute (`SLOT_ATTRIBUTES`: home, birthday, age, job) with the same
+  attribute set on the same subject (`same_subject`, so another person's row is never touched). A job is replaced only
+  by a change in the fact's own words or an explicit correction, not by any cue elsewhere in the turn.
+- **retraction** - an "ended" fact with a predicate ("no longer GETS migraines", "has stopped GETTING migraines"): the
+  older row states the same predicate (by stem) and everything the retraction names (its reason clause - "since
+  switching to new glasses" - is not the thing that ended). A light verb ("gets", "has") needs its object; an end with
+  no predicate ("dropped the half-marathon") is left to the overlap rule.
+
+The old row is retired by id (`supersede_by`: `superseded_by_id`, `invalid_at`, `expired_at`; never deleted; the two
+timelines of #1896) and the audit note says `key slot:home` / `key retraction`. An over-retirement is reversible
+(`MemoryService.restore_superseded`). Pinned by `tests/test_owner_retraction_retires_old_row.py` (turn and nightly lanes,
+break-the-fix controls, the day-sim 6 and 6n seed turns).
+
+### Replaying an incident: the `MEMORY_ROW` line
+
+Every row the turn digest (`lane=turn_digest`), the nightly digest (`lane=digest`) or the emotional pass
+(`lane=emotional`) stores, parks, edits or holds logs ONE INFO line after the turn (never on the voice hot path):
+
+`MEMORY_ROW lane=<lane> outcome=<stored|parked|edited|held> user=<id> id=<row id> class=<authority class> promoted=<yes|no> basis=<authority basis> status=<status> type=<type> wording='<row text>'`
+
+`promoted=yes` = the owner's one verbatim sentence entailed the fact (`authority_basis=verbatim_user_span`); `no` is why
+a retraction was parked as a dispute (`class=model_from_turn promoted=no status=disputed` is the 6n signature). The
+wording is the row's own text - the extractor's sentence after the write boundary's scrub - never the owner's turn.
+Pinned by `tests/test_memory_digest_row_log.py`. Writer: `memory_digest.log_row`.
+
 ## Validity metadata (Chroma drawer metadata, no migration)
 
 | Key | Type | Written |
@@ -115,4 +154,4 @@ read superseded rows, which every read path hides by design).
 3. Rollback: unset the flag. A wrongly retired row is recoverable:
    `review(<id>, decision="approve", actor="operator")` (the row is kept).
 
-Tests: `services/zoe-data/tests/test_memory_implicit_supersede.py` (ci_safe).
+Tests: `services/zoe-data/tests/test_memory_implicit_supersede.py` (ci_safe), `tests/test_owner_retraction_retires_old_row.py`, `tests/test_memory_digest_row_log.py`.
