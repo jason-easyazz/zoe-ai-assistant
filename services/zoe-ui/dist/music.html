@@ -1032,9 +1032,10 @@
             S.wsRetryTimer = setTimeout(connectWS, S.wsRetryDelay);
             return;
         }
-        // The backend answered "down" (definitive), or it is unreachable and the
-        // socket keeps failing — either way the player is not coming back on its own.
-        if (status || S.wsRetries >= 3) showOffline('offline');
+        // The backend answered "down", or it is unreachable: either way the socket is
+        // gone and the player on screen is stale, so say so NOW — never leave an old
+        // track and live-looking controls up through an outage.
+        showOffline('offline');
         watchForMA();
     }
 
@@ -1046,7 +1047,8 @@
         if (_maWatchTimer) return;
         _maWatchTimer = setInterval(async () => {
             const status = await refreshMAStatus();
-            if (!status || !status.available) return;
+            if (!status) return;                                   // backend unreachable: keep watching
+            if (!status.available) { showOffline('offline'); return; }   // definitive "down": idempotent
             clearInterval(_maWatchTimer); _maWatchTimer = null;
             await onMAUp(status);
         }, 15000);

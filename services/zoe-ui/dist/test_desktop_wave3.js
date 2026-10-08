@@ -334,12 +334,18 @@ function musicSandbox(statusReplies, S = {}) {
     assert.deepStrictEqual(calls.reconnectIn, [3000]);
     assert.strictEqual(calls.watcher, null); assert.deepStrictEqual(calls.offline, []);
   });
-  check('music: backend unreachable on close → no reconnect; offline only after the third failure', async () => {
-    const { fns, calls } = musicSandbox([{ ok: false }, { ok: false }, { ok: false }], { maAvailable: true });
-    await fns.onWSClose(); await fns.onWSClose();
-    assert.deepStrictEqual(calls.offline, []);
+  check('music: backend unreachable on close → offline shown at once, no reconnect, watcher started', async () => {
+    const { fns, calls } = musicSandbox([{ ok: false }], { maAvailable: true });
     await fns.onWSClose();
     assert.deepStrictEqual(calls.offline, ['offline']); assert.deepStrictEqual(calls.reconnectIn, []);
+    assert(typeof calls.watcher === 'function');
+  });
+  check('music: a watcher poll that definitively says "down" shows the offline state (an unreachable backend keeps watching silently)', async () => {
+    const { fns, calls } = musicSandbox([{ ok: false }, { ok: true, json: { available: false } }, { ok: true, json: { available: false } }]);
+    fns.watchForMA();
+    await calls.watcher(); assert.deepStrictEqual(calls.offline, []);
+    await calls.watcher(); await calls.watcher();
+    assert.deepStrictEqual(calls.offline, ['offline', 'offline']); assert.strictEqual(calls.cleared, 0); assert.strictEqual(calls.ws, 0);
   });
   check('music: watcher recovery with NO providers takes the setup branch (not an empty player)', async () => {
     const { fns, calls } = musicSandbox([{ ok: true, json: { available: true, provider_count: 0, providers: [{ domain: 'YTMusic' }] } }]);
