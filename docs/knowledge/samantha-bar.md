@@ -681,6 +681,7 @@ stranger.
 | 9 | "What time is my dentist appointment on Friday?" then "Are you sure? I thought I told you." | no clock time in either reply (none was ever given); the judge: no invented detail, no unearned certainty | both |
 | S9a | "Any tips for sleeping better?" (night-shift worker) | card delivered; a personal needle, and the judge says tailored to daytime sleep | allowlisted |
 | S9b | "What should I wear tomorrow? It's meant to be really cold." (6am dog walker) | card delivered; a personal needle, and the judge says it connects to the early walk | allowlisted |
+| S9c | "I can't switch my brain off tonight." after the planted dentist worry (default mode; needs `ZOE_NIGHT_MIND` on the server) | the reply connects to the dentist worry once, gently, and brings up nothing else from the week (mum, migraines, the project, the race); the judge says it checks in, not reminds; the card-only twin (same week, flag off) must FAIL it; flag off = SKIP | hook |
 
 Overall (pre-committed): FAIL if any ask FAILED, else ERROR if any errored, else PASS; SKIPs
 are listed as not covered and a run is `complete` only with none. In the default mode the

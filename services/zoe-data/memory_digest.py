@@ -1078,6 +1078,17 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
             result["emotional_error"] = f"{type(exc).__name__}: {exc}"
             logger.debug("memory_digest: emotional pass failed (non-fatal) user=%s: %s", user_id, exc)
 
+        # ── Night mind (ZOE_NIGHT_MIND, default OFF) ─────────────────────────
+        # The chunked, cited reflection over the WHOLE day's own-words turns (the extractors above cut the transcript at 3,000 characters).
+        # After the facts, so its stale-quote test sees tonight's changes. A failure is its own nested result, never the digest's ``error``.
+        try:
+            import night_mind
+            if night_mind.mode() != "off":
+                result["night_mind"] = await night_mind.run_for_user(user_id, chat_text, svc)
+        except Exception as exc:  # noqa: BLE001
+            result["night_mind"] = {"status": "error", "error": type(exc).__name__}
+            logger.warning("memory_digest: night mind failed (non-fatal) user=%s: %s", user_id, type(exc).__name__)
+
     except Exception as exc:
         logger.error("memory_digest: failed for %s: %s", user_id, exc, exc_info=True)
         result["error"] = str(exc)
@@ -1165,18 +1176,31 @@ class Transcript(str):
     A loader that has no ids (a test double, the bench lab) returns a bare ``str`` and ``locate_turn`` falls back
     to a content-addressed id."""
     turns: tuple = ()
+    #: ``times[i]`` = when ``turns[i]`` was said (the stored ISO timestamp as text; ``()`` when the loader has none): the night mind's
+    #: "since when / last mentioned"
+    times: tuple = ()
 
-    def __new__(cls, text: str = "", turns=()):
+    def __new__(cls, text: str = "", turns=(), times=()):
         obj = super().__new__(cls, text)
         obj.turns = tuple(turns)
+        obj.times = tuple(times)
         return obj
+
+
+def _turn_limit() -> int:
+    """Rows the day's loader reads: 200 as ever; the night mind chunks the day instead of cutting it, so with it on a busy day is read whole (up to 600)."""
+    try:
+        import night_mind
+        return 600 if night_mind.mode() != "off" else 200
+    except Exception:  # noqa: BLE001
+        return 200
 
 
 async def _load_todays_messages(user_id: str, db=None) -> str:
     """Load today's user-turn messages using per-message metadata ownership."""
     owner_expr = _message_owner_expr()
     sql = """
-            SELECT cm.content, cm.id
+            SELECT cm.content, cm.id, cm.created_at
             FROM chat_messages cm
             JOIN chat_sessions cs ON cm.session_id = cs.id
             WHERE """ + owner_expr + """ = ?
@@ -1189,7 +1213,7 @@ async def _load_todays_messages(user_id: str, db=None) -> str:
               AND cm.created_at::timestamptz >=
                   (now()::timestamptz - make_interval(hours => ?::int))
             ORDER BY cm.created_at ASC
-            LIMIT 200
+            LIMIT """ + str(_turn_limit()) + """
             """
     params = (user_id, _DIGEST_LOOKBACK_HOURS)
     try:
@@ -1205,28 +1229,65 @@ async def _load_todays_messages(user_id: str, db=None) -> str:
                 rows = await (await _db.execute(sql, params)).fetchall()
         if not rows:
             return ""
-        pairs = [(row[0], (str(row[1]) if len(row) > 1 and row[1] is not None else ""))
-                 for row in rows if row[0]]
-        # pasted / third-person text is not the owner's (ZMB I1/I2): each turn is cut to the owner's own words
-        # (or dropped) BEFORE the forgotten-turn skip, keeping the message id beside what is left of it
-        owned = []
-        for content, mid in pairs:
-            kept = own_words.filter_turns([content], "digest")
-            if kept:
-                owned.append((kept[0], mid))
-        pairs = owned
-        lines = await _skip_forgotten_turns(user_id, [c for c, _ in pairs], "digest")
-        # ``lines`` is a subsequence of the contents, in order: walk both to keep each kept turn's message id
-        turns, i = [], 0
-        for line in lines:
-            while i < len(pairs) and pairs[i][0] != line:
-                i += 1
-            if i < len(pairs):
-                turns.append((pairs[i][1], line))
-                i += 1
-        return Transcript("\n".join(lines), turns)
+        return await _transcript_from_rows(user_id, rows)
     except Exception as exc:
         logger.warning("memory_digest: could not load messages for %s: %s", user_id, exc)
+        return ""
+
+
+async def _transcript_from_rows(user_id: str, rows) -> "Transcript":
+    """``(content, id, created_at)`` chat rows -> the day's ``Transcript`` of the OWNER's own words: pasted / third-person text is cut away (``own_words``),
+    turns naming a forgotten entity are skipped, each kept turn keeps its message id and time."""
+    pairs = [(row[0], (str(row[1]) if len(row) > 1 and row[1] is not None else ""),
+              (str(row[2]) if len(row) > 2 and row[2] is not None else ""))
+             for row in rows if row[0]]
+    # pasted / third-person text is not the owner's (ZMB I1/I2): each turn is cut to the owner's own words
+    # (or dropped) BEFORE the forgotten-turn skip, keeping the message id beside what is left of it
+    owned = []
+    for content, mid, at in pairs:
+        kept = own_words.filter_turns([content], "digest")
+        if kept:
+            owned.append((kept[0], mid, at))
+    pairs = owned
+    lines = await _skip_forgotten_turns(user_id, [c for c, _, _ in pairs], "digest")
+    # ``lines`` is a subsequence of the contents, in order: walk both to keep each kept turn's message id (and time)
+    turns, times, i = [], [], 0
+    for line in lines:
+        while i < len(pairs) and pairs[i][0] != line:
+            i += 1
+        if i < len(pairs):
+            turns.append((pairs[i][1], line))
+            times.append(pairs[i][2])
+            i += 1
+    return Transcript("\n".join(lines), turns, times)
+
+
+async def load_day_messages(user_id: str, start_iso: str, end_iso: str, db=None) -> str:
+    """The owner's own-words turns between two instants (ISO, timezone-aware): the standalone night-mind run's ``--date`` loader. Same filters as the
+    nightly loader (``_message_owner_expr`` ownership, own words, forgotten turns skipped); the turn cap is the night mind's."""
+    owner_expr = _message_owner_expr()
+    sql = """
+            SELECT cm.content, cm.id, cm.created_at
+            FROM chat_messages cm
+            JOIN chat_sessions cs ON cm.session_id = cs.id
+            WHERE """ + owner_expr + """ = ?
+              AND cm.role = 'user'
+              AND cm.created_at::timestamptz >= ?::timestamptz
+              AND cm.created_at::timestamptz < ?::timestamptz
+            ORDER BY cm.created_at ASC
+            LIMIT """ + str(_turn_limit()) + """
+            """
+    params = (user_id, start_iso, end_iso)
+    try:
+        from db_pool import get_db_ctx  # type: ignore[import]
+        if db is not None:
+            rows = await (await db.execute(sql, params)).fetchall()
+        else:
+            async with get_db_ctx() as _db:
+                rows = await (await _db.execute(sql, params)).fetchall()
+        return await _transcript_from_rows(user_id, rows) if rows else ""
+    except Exception as exc:
+        logger.warning("memory_digest: could not load the day's messages for %s: %s", user_id, exc)
         return ""
 
 

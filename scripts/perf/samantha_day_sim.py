@@ -177,6 +177,7 @@ ASK_TIME = "What time is my dentist appointment on Friday?"
 ASK_SURE = "Are you sure? I thought I told you."
 ASK_SLEEP = "Any tips for sleeping better?"
 ASK_COLD = "What should I wear tomorrow? It's meant to be really cold."
+ASK_BRAIN = "I can't switch my brain off tonight."
 STRANGER_ASKS = (("x-mum", ASK_MUM), ("x-time", ASK_TIME), ("x-open", OPEN_1))
 
 MEAT = ("chicken", "beef", "pork", "lamb", "bacon", "ham", "steak", "sausage", "turkey",
@@ -250,6 +251,13 @@ ASKS: tuple[dict[str, Any], ...] = (
      "needs": "allowlisted",
      "criterion": "card delivered; a personal needle (walk / Juniper / 6am …) AND the judge says the "
                   "advice connects to the early dog walk"},
+    {"id": "S9c", "title": "the night mind: 'I can't switch my brain off tonight' meets the planted dentist worry",
+     "needs": "hook",
+     "criterion": "the night_mind intent ran for the user (the hook answered enabled=true for it); the reply "
+                  "connects to the dentist worry (dentist / molar / Friday) AND brings up nothing else from the "
+                  "week (mum, migraines, the project, the race) AND the judge says it checks in once, gently, "
+                  "not as a reminder; the card-only twin (same week, ZOE_NIGHT_MIND off) must FAIL this ask: "
+                  "without the night pass the card holds facts, not the worry; night_mind off on the server = SKIP"},
 )
 ASK_IDS = tuple(a["id"] for a in ASKS)
 NEEDS_TEXT = {
@@ -286,6 +294,11 @@ JUDGE_RUBRICS: dict[str, str] = {
               "asked for tips on sleeping better. PASS if the advice is clearly tailored to daytime "
               "sleep after night shifts (for example blackout curtains, a daytime sleep routine). "
               "FAIL if it is generic night-time sleep advice that ignores their night shifts."),
+    "worry": ("The user told Zoe a few days ago that they were nervous about a dentist appointment on Friday "
+              "for a cracked molar. Tonight they say they cannot switch their brain off. PASS if the reply "
+              "gently connects to the dentist worry once, in warm human words (for example asking how they are "
+              "feeling about Friday). FAIL if it ignores the worry, reads it back like a reminder or a list, "
+              "gives generic sleep advice only, or brings up anything else from their life."),
     "cold": ("Every morning at 6am the user walks their kelpie Juniper along the river before going "
              "to bed. They asked what to wear because it will be cold tomorrow. PASS if the reply "
              "connects the advice to that early-morning dog walk. FAIL if it is generic clothing "
@@ -335,7 +348,7 @@ def day_plan(mode: str, today: dt.date) -> list[dict[str, Any]]:
                           "text": seed_text(tag, today)})
         if mode == "default":
             steps.append({"step": f"night-{day}", "kind": "night", "trigger": "synthetic",
-                          "text": "run-synthetic hook: open-loop extraction + selector ranking"})
+                          "text": "run-synthetic hook: open-loop extraction + selector ranking + the night mind (?night_mind=1, ZOE_NIGHT_MIND)"})
         else:
             steps.append({"step": f"night-{day}", "kind": "night", "trigger": "not-run",
                           "text": "the hook refuses an allowlisted id; no nightly stand-in"})
@@ -347,7 +360,7 @@ def day_plan(mode: str, today: dt.date) -> list[dict[str, Any]]:
         steps.append({"step": "card", "kind": "card", "trigger": "synthetic",
                       "text": "portrait_refresh intent (the nightly card rebuild) + wait for the "
                               "sidecar to fetch the new card version"})
-    for i, t in (("2", ASK_COOK), ("S9a", ASK_SLEEP), ("S9b", ASK_COLD), ("3", ASK_MUM),
+    for i, t in (("2", ASK_COOK), ("S9a", ASK_SLEEP), ("S9b", ASK_COLD), ("S9c", ASK_BRAIN), ("3", ASK_MUM),
                  ("4", ASK_WHEN), ("5", ASK_QUOTE), ("6", ASK_RACE), ("6n", ASK_MIGRAINE),
                  ("9", f"{ASK_TIME} / {ASK_SURE}")):
         steps.append({"step": f"ask-{i}", "kind": "ask", "trigger": "real", "text": t})
@@ -570,6 +583,22 @@ def score_certainty(reply_time: str, reply_sure: str,
     return _judged(ev, judge)
 
 
+WORRY_TOPIC = ("dentist", "molar", "friday")
+WORRY_OFF_TOPIC = ("ingrid", "hip", "migraine", "kestrel", "juniper", "kelpie", "rottnest", "city to surf", "pescatarian", "night shift", "pharmacy")
+
+
+def score_worry(reply: str, night_ran: bool, judge: Callable[[], tuple[str, str]] | None) -> tuple[str, dict]:
+    """S9c. The reply must carry the dentist worry (the night mind's thread) and nothing else from the week; the judge decides gentle-once vs reminder."""
+    ev = {"worry": uma.word_hits(reply, WORRY_TOPIC), "off_topic": uma.word_hits(reply, WORRY_OFF_TOPIC), "night_ran": night_ran}
+    if not night_ran:
+        return _r("SKIP", **ev, why="the night_mind intent did not run for this user (ZOE_NIGHT_MIND off on the server, or the pass was skipped)")
+    if not ev["worry"]:
+        return _r("FAIL", **ev, method="deterministic", why="the reply does not connect to the planted dentist worry")
+    if ev["off_topic"]:
+        return _r("FAIL", **ev, method="deterministic", why="brings up something else from the week that nobody asked about")
+    return _judged(ev, judge)
+
+
 PERSONAL = {"S9a": ("night shift", "night shifts", "shift", "shifts", "during the day", "daytime",
                     "day time", "blackout", "pharmacy"),
             "S9b": ("walk", "walking", "juniper", "kelpie", "dog", "6am", "6 am", "river", "early")}
@@ -613,7 +642,7 @@ def score_isolation(replies: list[str], packet: str | None, user_model: str | No
 
 
 _BRIEF_RE = re.compile(r"BRIEF_FIRST_TURN user=(?P<user>[^\s\"]+) items=(?P<items>\d+) "
-                       r"shape=(?P<shape>\w+) injected=(?P<injected>\d) claimed=(?P<claimed>\d)")
+                       r"shape=(?P<shape>\w+) injected=(?P<injected>\d) claimed=(?P<claimed>\d)(?: night=(?P<night>\d+))?")
 _RAISE_RE = re.compile(r"PROACTIVE_RAISE user=(?P<user>[^\s\"]+) kind=(?P<kind>\S+) "
                        r"shape=(?P<shape>\w+) injected=(?P<injected>\d) settled=(?P<settled>\d)"
                        r"(?: reason=(?P<reason>\S+))?")
@@ -732,10 +761,11 @@ class DayLive(sb.Live):
             return "ERROR", "judge returned no choice"
         return sb.parse_judge_verdict(msg.get("content") or msg.get("reasoning_content") or "")
 
-    def hook(self, user: str) -> tuple[int, dict]:
-        """run-synthetic with the error DETAIL kept (the allowlist answer lives there)."""
+    def hook(self, user: str, night_mind: bool = True) -> tuple[int, dict]:
+        """run-synthetic with the error DETAIL kept (the allowlist answer lives there). ``night_mind`` adds the night mind's intent (``?night_mind=1``): the real
+        pass over this id's own-words turns, standing in for the 03:00 digest the day-sim does not run."""
         sb.assert_demo_user(user)
-        req = urllib.request.Request(f"{sb.DATA_BASE}/api/proactive/selector/run-synthetic/{user}",
+        req = urllib.request.Request(f"{sb.DATA_BASE}/api/proactive/selector/run-synthetic/{user}" + ("?night_mind=1" if night_mind else ""),
                                      data=b"{}", method="POST",
                                      headers={"Content-Type": "application/json",
                                               "X-Internal-Token": self.token})
@@ -906,7 +936,7 @@ def run_week(live: DayLive, user: str, stranger: str, mode: str, samples: int,
             nights[day] = {"trigger": "synthetic (run-synthetic hook)", "code": code,
                            "open_loops": body.get("open_loops"), "kept": body.get("kept"),
                            "kinds": body.get("kinds"), "enabled": body.get("enabled"),
-                           "detail": body.get("detail")}
+                           "detail": body.get("detail"), "night_mind": body.get("night_mind")}
             log(f"  night {day}: {json.dumps(nights[day])}")
         else:
             nights[day] = {"trigger": "not-run", "why": NEEDS_TEXT["hook"]}
@@ -1006,6 +1036,26 @@ def run_week(live: DayLive, user: str, stranger: str, mode: str, samples: int,
         "S9a", r, lambda: live.judge_rubric("sleep", ASK_SLEEP, r)))
     card_ask("S9b", ASK_COLD, lambda r: score_personal(
         "S9b", r, lambda: live.judge_rubric("cold", ASK_COLD, r)))
+
+    # S9c: the night mind. The week's dentist worry was voiced on day 3 and a night pass ran after it; tonight they cannot switch their brain off.
+    if mode == "default":
+        nm_ran = any(((n.get("night_mind") or {}).get("status") == "ran") and (n.get("night_mind") or {}).get("observations_written", 0) for n in nights.values())
+        nm_on = any((n.get("night_mind") or {}).get("enabled") for n in nights.values())
+        if not nm_on:
+            put("S9c", "SKIP", {"why": "ZOE_NIGHT_MIND is off on the server (the hook answered enabled=false for the night_mind intent)", "nights": {d: n.get("night_mind") for d, n in nights.items()}})
+        else:
+            verdicts, per = [], []
+            for i in range(samples):
+                t = _ask(live, user, f"q-s9c-s{i}", ASK_BRAIN, asks_log)
+                if t["error"]:
+                    verdicts.append("ERROR")
+                    per.append({"verdict": "ERROR", "why": t["error"]})
+                    continue
+                v, ev = score_worry(t["reply"], nm_ran, lambda: live.judge_rubric("worry", ASK_BRAIN, t["reply"]))
+                verdicts.append(v)
+                per.append({"verdict": v, **ev, **live.evidence(t)})
+            put("S9c", sb.majority_vote(verdicts), {"samples": per, "votes": verdicts, "nights": {d: n.get("night_mind") for d, n in nights.items()}},
+                steps=("night-d1", "night-d2", "night-d3"))
 
     def simple(aid: str, tag: str, question: str, scorer: Callable[[str], tuple[str, dict]],
                setup: Iterable[str] = ()) -> None:

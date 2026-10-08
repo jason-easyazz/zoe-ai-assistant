@@ -160,6 +160,8 @@ SLOT_RETAINS, SLOT_TURNS_PER_CHUNK = 12, 10
 FORGET_WAIT_S = 360.0
 PROBE_USERS = {v: "demo_bar_" + hashlib.sha1(f"zmb-probe-{v}".encode()).hexdigest()[:8] for v in ("H0", "H1", "H2", "MPA", "HMA", "ZMA")}      # the driver arms run theirs inside their driver
 HM_DRIVER = Path(__file__).resolve().parent / "hm_window.py"
+Z0N_DRIVER = Path(__file__).resolve().parent / "z0n_window.py"          # Z0n's K1-K12 and Z0's protocol_brain half, on the clone (BAKEOFF_Z0N=1)
+Z0N_MIN = 35.0                                                            # minutes the phase needs (about 30 clone calls for K, 45 for the brain half, at ~20 s a call)
 MPA_DRIVER = Path(__file__).resolve().parent / "mpa_window.py"          # one driver for MPA and (``--arm HMA``) HMA, and for the reflection variants (``--reflect-only``)
 
 _PLACES = ("Hobart", "Lisbon", "Perth", "Bergen", "Ghent", "Cork", "Dunedin", "Tauranga")
@@ -372,6 +374,7 @@ class Ctx:
         self.measure: "dict[str, dict]" = {v: {} for v in ("H0", "H1", "H2", "HM", "MPA", "HMA", "ZMA")}
         self.reflect: "Optional[dict]" = None                  # the reflection phase's record (variants, never contest entrants); None = not attempted
         self.z0e: "dict[str, dict]" = {}
+        self.z0n: "dict[str, dict]" = {}                    # Z0 + the night mind on the clone: {seed: {"axes", "cells", "k1", "night", "brain"}} (BAKEOFF_Z0N=1)
         self.forget: "dict[str, ForgetProbe]" = {}
         self.notes: "list[str]" = []
         self.aborted = ""
@@ -450,6 +453,48 @@ def phase_z0e(ctx: Ctx, seed: str, world: Any, store: list, by_id: dict, inst: d
         return
     ctx.z0e[seed] = {"axes": artifact.axis_stats(rows, by_id, inst["ok"]), "cells": _strip(rows)}
     ctx.log(f"Z0e seed {seed}: {sum(1 for r in rows if r['verdict'] == 'PASS')}/{ran} recall + long-range cells pass over real Chroma + MiniLM")
+
+
+def real_z0n_runner(ctx: Ctx, seed: str, box_s: float) -> dict:
+    """``z0n_window.py`` against the clone, run with THIS interpreter (Z0 needs zoe-data's modules): K1-K12 on Z0n with the real night pass, and Z0's protocol brain half."""
+    cfg = ctx.cfg
+    out = cfg.bakeoff_dir / f"z0n-{ctx.win.run_id}.json"
+    argv = [sys.executable, str(Z0N_DRIVER), "--clone-url", f"http://127.0.0.1:{cfg.llm_port}", "--ctx", str(getattr(cfg, "live_ctx", 8192)), "--seed", seed, "--out", str(out)]
+    r = ctx.host.run(argv, timeout=box_s + 180.0, env=driver_env(cfg))
+    text = ctx.host.read(str(out))
+    if not text:
+        return {"error": f"z0n_window.py produced no result (rc={r.rc}): {r.out.strip()[-300:]}"}
+    return json.loads(text)
+
+
+def phase_z0n(ctx: Ctx, seed: str, store: list, by_id: dict) -> None:
+    """The Z0n phase (flag-dark): rows into ``ctx.z0n`` (the K cells with the REAL nightly model, K1's judged / true / false counts kept) and Z0's ``M4.*.zoe`` rows into the
+    baseline seed run, where ``aggregate_axes`` turns them into Z0's ``protocol_brain`` axis. Skipped, with the reason in the notes, when the time or the clone is not there."""
+    from . import artifact
+    if not ctx.cfg.z0n:
+        return
+    left = ctx.win.time_left_s() - TAIL_MIN * 60.0
+    if left < Z0N_MIN * 60.0:
+        ctx.notes.append(f"the Z0n phase (K1-K12 with the real night pass; Z0's protocol_brain) was skipped: {left / 60.0:.1f} min left behind the tail, it needs {Z0N_MIN:g}")
+        return
+    ctx.label("z0n")
+    t0 = ctx.host.mono()
+    res = (getattr(ctx.win, "z0n_runner", None) or real_z0n_runner)(ctx, seed, min(left, Z0N_MIN * 60.0 * 2))
+    ctx.win.guard()
+    if res.get("error") or not (res.get("k_cells") or res.get("protocol_brain")):
+        ctx.notes.append("the Z0n phase did not produce a result: " + str(res.get("error") or "no cells"))
+        return
+    rows = res.get("k_cells") or []
+    inst = (ctx.z0.get(seed) or {}).get("instrument") or {"ok": False}
+    if rows:
+        ctx.z0n[seed] = {"axes": artifact.axis_stats(rows, by_id, inst.get("ok", False)), "cells": _strip(rows), "k1": res.get("k1") or {}, "night": res.get("night") or {},
+                         "calls": res.get("calls"), "model": res.get("model")}
+    pb = res.get("protocol_brain") or {}
+    if pb.get("cells") and seed in ctx.z0:
+        ctx.z0[seed]["cells"] = list(ctx.z0[seed].get("cells") or []) + [{k: v for k, v in c.items() if k != "evidence"} for c in pb["cells"]]
+        ctx.z0[seed]["brain"] = pb.get("brain") or {}
+    ctx.log(f"Z0n: K {(res.get('k_summary') or {}).get('pass')}/{(res.get('k_summary') or {}).get('graded')} graded pass with the real night pass; "
+            f"protocol_brain {(pb.get('summary') or {}).get('pass')}/{(pb.get('summary') or {}).get('graded')}; {res.get('calls')} model calls; {ctx.host.mono() - t0:.0f}s")
 
 
 def sweep_stale_banks(ctx: Ctx) -> int:
@@ -1627,8 +1672,10 @@ def write_report(ctx: Ctx, win: Any, seeds: tuple, store: list, by_id: dict) -> 
         "the capability axes (J exact words, K reflection, L long-range recall, M protocol) ran on seed 1 only and each arm ran the ones it is the evidence for "
         "(H1 / HM: J, L, M; H2 / H0: K): the other arms' cells are `planner cut` or capability SKIPs, never passes; H2's and H0's latency / slot phases and the concise "
         "validity phase ran only if time remained (their G0 / G1 items are NA otherwise)",
-        "the lab half of M (the protocol) is a scripted stand-in for each protocol's text and never decides; its brain half is declared and did not run, so M is `no data`; "
-        "K on Z0 scripts the nightly model (K2 / K3 SKIP, K1 / K4 / K5 measure what Z0's store keeps of a night's proposals)",
+        "the lab half of M (the protocol) is a scripted stand-in for each protocol's text and never decides; its brain half (`protocol_brain`) is Z0's own only when the Z0n phase ran "
+        "(`BAKEOFF_Z0N=1`: Z0's recall floor + `recall_memory` on the clone, rows `M4.*.zoe`), else M is `no data`; "
+        "K on Z0 scripts the nightly model (K2 / K3 SKIP, K1 / K4 / K5 measure what Z0's store keeps of a night's proposals); with the Z0n phase K1-K12 are also measured with the REAL night pass "
+        "(Z0n, reported beside Z0, never the baseline)" + (" - Z0n ran on seed 1: " + "; ".join(f"{k}: {v}" for k, v in sorted(((ctx.z0n.get(seeds[0]) or {}).get('k1') or {}).items())) if ctx.z0n else ""),
         "the capability cells' thresholds were written before any Hindsight arm ran them; Z0e's long-range numbers were seen afterwards",
         "all arms share one Hindsight server and one egress log: the per-arm egress split is by wall-clock phase, the gate reads the whole window"]
     if "HM" in cfg.arms:
@@ -1669,7 +1716,7 @@ def write_report(ctx: Ctx, win: Any, seeds: tuple, store: list, by_id: dict) -> 
     payload = {"run_id": win.run_id, "meta": meta, "decision": {k: v for k, v in decision.items() if k != "compare"}, "compare": decision["compare"],
                "arms": {v: {k: val for k, val in a.items()} for v, a in arms.items()}, "z0": {s: {k: r[k] for k in ("axes", "hard_violations", "instrument")} for s, r in ctx.z0.items()},
                "z0_off": {s: {k: r[k] for k in ("axes", "hard_violations")} for s, r in ctx.z0_off.items()}, "z0e": {s: r["axes"] for s, r in ctx.z0e.items()},
-               "seed_runs": ctx.seed_runs, "reflect": ctx.reflect,
+               "seed_runs": ctx.seed_runs, "reflect": ctx.reflect, "z0n": ctx.z0n,
                "measure": ctx.measure, "notes": notes, "docs_path": str(md_path), "instruments": instr, "scratch_postgres": pg}
     artifact.write_json(cfg.bakeoff_dir / f"run-{win.run_id}.json", payload)
     win.log(f"VERDICT: {decision['verdict']} - {decision['text']}")
@@ -1710,6 +1757,7 @@ def measure(win: Any) -> dict:
         ctx.label("lab")
         sweep_stale_banks(ctx)
         phase_z0(ctx, seeds, store, by_id)
+        phase_z0n(ctx, seeds[0], store, by_id)                              # flag-dark (BAKEOFF_Z0N=1): the real night pass's K cells and Z0's protocol_brain baseline
         for v in (a for a in cfg.arms if a not in DRIVER_ARMS):          # HM's / MPA's / HMA's forgetting is their own cells (F1 / F2), run in their drivers
             ctx.forget[v] = ForgetProbe(ctx, v)
             ctx.label(f"{v}:forget")

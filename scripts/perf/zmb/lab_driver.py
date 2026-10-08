@@ -54,6 +54,14 @@ CONTROLS = {
     "exact_index": "ZOE_EXACT_WORDS=off - the owner's verbatim turns are not indexed: \"what exactly did I say about X\" has nothing to quote and no date to give",
     "multi_hop": "ZOE_MULTI_HOP_RECALL=off and ZOE_RECALL_DURABLE_NO_DECAY=0 - a two-fact question is one search, and the older of two facts the owner stated is buried by the 70-day recency decay",
     "observation_gate": "ZOE_DIGEST_OBSERVATION_GATE=off - the nightly digest stores every model-written observation approved: a fabricated link, a hedged restatement and a \"you told me\" nobody said are served",
+    "night_mind": "ZOE_NIGHT_MIND=off - the nightly reflection pass does not run: no threads, no observations, nothing for the packet or the brief to say",
+    "night_citations": "the night pass's verbatim-quote, cited-turn and observation-gate checks removed - a model's quote is believed as written (a fabricated link is stored)",
+    "night_chunking": "the night pass reads the day the way the old digest did: no routine drop, no chunks, the transcript cut at 3,000 characters",
+    "night_echo": "a copying reflection: every owner turn becomes an observation, no selection (the instrument's compression control)",
+    "night_restraint": "the raise / leave floor removed - every open thread is raised, sensitive ones too, several a morning",
+    "night_absence": "absence is contradiction - an open thread tonight's moments do not mention is closed",
+    "night_notice": "an always-notice reflection - every thread is reported as changed or quiet, every night",
+    "night_weights": "moment kind / feeling / weight scrambled (a random labeller)",
     "topic": "the same-topic guard removed: a change retires every older fact, about anyone",
     "event_time": "the stated-validity parser switched off: valid_from is always the capture time, never the date the person said",
     "history": "the history read switched off: a replaced fact is kept but a question about how things used to be never sees it",
@@ -509,6 +517,17 @@ def controls_off(features: "frozenset[str] | set[str]", svc: types.SimpleNamespa
             setenv("ZOE_RECALL_DURABLE_NO_DECAY", "0")
         if "observation_gate" in features:
             setenv("ZOE_DIGEST_OBSERVATION_GATE", "off")
+        if "night_mind" in features:
+            setenv("ZOE_NIGHT_MIND", "off")
+        nm_faults = {"night_citations": "citations", "night_chunking": "chunking", "night_echo": "echo", "night_restraint": "restraint",
+                     "night_absence": "absence", "night_notice": "notice", "night_weights": "weights"}
+        for control, name in nm_faults.items():                 # night_mind.FAULTS: the bench seam, empty in production
+            if control in features:
+                nmod = importlib.import_module("night_mind")
+                added = name not in nmod.FAULTS
+                nmod.FAULTS.add(name)
+                if added:
+                    undo.append(lambda n=name, m=nmod: m.FAULTS.discard(n))
         if "topic" in features:
             sup = importlib.import_module("memory_supersede")
             patch(sup, "same_topic", lambda new, old: True)

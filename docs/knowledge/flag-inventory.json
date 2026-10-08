@@ -3191,6 +3191,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_NIGHT_MIND": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/perf/zmb/arms/z0.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_NVM_NODE_BIN": {
         "defaults": [
           "-"

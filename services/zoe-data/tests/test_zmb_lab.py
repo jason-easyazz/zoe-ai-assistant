@@ -81,8 +81,10 @@ def test_every_controlled_cell_goes_red_with_its_features_off(full_control_pass)
     # (99 before the temporal / recall / poisoning / provenance / graph axes; +6 for the cells #1895 fixes; +3 for the two
     # timelines: C2.history_read and C4.valid_from_is_event_time leave the targets, + C2.history_is_labelled;
     # +6 for the capability axes: J0 + L0 + M1 (retrieval), M2 + M3 (reader), K4 (authority); +6 for the three capability gaps
-    # this change fixes: J1 + J2 (exact_index), K1 + K5 (observation_gate), L1 + L2 (multi_hop))
-    assert len(runnable) in (147, 149) and cp["checked"] == cp["red"] == len(runnable)
+    # this change fixes: J1 + J2 (exact_index), K1 + K5 (observation_gate), L1 + L2 (multi_hop); +10 for the night mind: K2 + K3 (night_mind),
+    # K6 (night_echo), K7 (night_chunking), K8 (night_citations), K9 x2 (night_mind, night_notice), K10 (night_restraint), K11 (night_absence),
+    # K12 (night_weights) - proven on Z0n, the arm with the night pass)
+    assert len(runnable) in (157, 159) and cp["checked"] == cp["red"] == len(runnable)
     assert {r["id"] for r in cp["rows"]} == runnable
     assert all(r["verdict"] == "FAIL" and r["stage"] in ("write", "read", "answer") for r in cp["rows"])
 
@@ -230,8 +232,9 @@ def test_z0_measures_as_documented(full_measure):
         elif cellmod.required_capabilities(c) - set(Z0Arm.capabilities):
             # a disk cell where chromadb is not installed (the slim CI lane): a declared SKIP, never a PASS
             assert r["verdict"] == "SKIP" and "lacks capability" in r["reason"], (c.id, r)
-        elif any(p["kind"] in ("threads", "useful") for p in c.probes):
-            # the lab SCRIPTS Z0's nightly model: what an observation says is the script's, so thread recall / usefulness are measured only on an arm with its own model
+        elif any(p["kind"] in ("threads", "useful") or p["kind"] in cellmod.NIGHT_PROBES for p in c.probes) or any(e.get("do") in ("night_pass", "dense_life") for e in c.events):
+            # the lab SCRIPTS Z0's nightly model: what an observation says is the script's, so thread recall / usefulness and the night mind's cells (K6-K12) are
+            # measured only on an arm with its own model (Z0n: the night pass with the lab's fake brain, or the clone)
             assert r["verdict"] == "SKIP" and "scripted" in r["reason"], (c.id, r)
         elif c.is_target:
             # a KNOWN failure. If this starts passing you fixed the thing: flip `expected` to PASS in the
@@ -274,7 +277,7 @@ def test_the_axis_table_for_z0_is_claimable_with_wilson_intervals(full_measure, 
     # K1 / K5 5 of 10 fabricated -> 3 of 3 decidable true (observation gate)
     assert (axes["exact_words"]["n"], axes["exact_words"]["pass"]) == (2, 2) and axes["exact_words"]["items"] == {"pass": 40, "n": 40}
     assert (axes["multi_hop"]["n"], axes["multi_hop"]["pass"]) == (2, 2) and axes["multi_hop"]["items"] == {"pass": 39, "n": 40}
-    assert (axes["reflection"]["n"], axes["reflection"]["pass"], axes["reflection"]["skip"]) == (3, 3, 2)          # K1 / K4 / K5 pass, K2 / K3 need an own model
+    assert (axes["reflection"]["n"], axes["reflection"]["pass"], axes["reflection"]["skip"]) == (3, 3, 10)         # K1 / K4 / K5 pass; K2 / K3 and K6-K12 need an own model (Z0n)
     assert axes["reflection"]["failing"] == []
     assert (axes["protocol"]["n"], axes["protocol"]["pass"], axes["protocol"]["skip"]) == (3, 3, 12)               # the lab half passes; the 12 brain-tier cells are declared
     assert not any(axes[n]["uncontrolled"] for n in axes)

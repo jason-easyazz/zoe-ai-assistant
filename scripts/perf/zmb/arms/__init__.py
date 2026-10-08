@@ -7,6 +7,7 @@ from .base import Arm, IngestReport, Turn
 ARMS = {
     "Z0": "the current MemoryService, in-process over the lab store (implemented)",
     "Z0-off": "Z0 with every control switched off: the negative control (implemented)",
+    "Z0n": "Z0 + the night mind (services/zoe-data/night_mind.py): the nightly reflection pass with its OWN model - the lab's fake brain, or the clone at --model-url - so K2 / K3 (and K6-K12) are measured, not scripted",
     "Z0e": "Z0 over a REAL Chroma collection with Chroma's MiniLM embedder, as live: the lab's retrieval is bag-of-words, this arm measures retrieval (needs chromadb + the MiniLM model on disk, else SKIP)",
     "H0": "Hindsight concise + observations, no Zoe layer (implemented over its HTTP API; needs the bake-off server, else every cell SKIPs)",
     "H1": "Hindsight verbatim, observations off, Zoe layer on (implemented; needs the bake-off server)",
@@ -28,6 +29,9 @@ def make_arm(name: str) -> Arm:
     if name == "Z0":
         from .z0 import Z0Arm
         return Z0Arm()
+    if name == "Z0n":
+        from .z0 import Z0Arm
+        return Z0Arm(name="Z0n", night=True)
     if name == "Z0e":
         from .z0 import Z0Arm
         return Z0Arm(name="Z0e", embed=True)

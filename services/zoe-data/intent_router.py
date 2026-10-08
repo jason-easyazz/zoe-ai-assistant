@@ -3679,6 +3679,16 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             logger.warning("memory_forget_entity: exact-words erase failed (%s)", type(exc).__name__)
             return ("I couldn't finish erasing my copy of your own words about that just now, so I can't say it's forgotten yet. "
                     "I won't bring it up meanwhile - please tell me again in a moment.")
+        # ... and what the night mind noticed from those words (observations + threads naming the entity): same rule, fail closed
+        try:
+            import night_mind
+            _nm = await night_mind.erase_entity(user_id, name)
+            if _nm:
+                logger.info("memory_forget_entity: erased %d night-mind row(s)", _nm)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_forget_entity: night-mind erase failed (%s)", type(exc).__name__)
+            return ("I couldn't finish erasing what I'd noticed about that just now, so I can't say it's forgotten yet. "
+                    "I won't bring it up meanwhile - please tell me again in a moment.")
         try:
             svc = get_memory_service()
             # Semantic search surfaces the ranked rows; the approved list makes

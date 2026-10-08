@@ -559,6 +559,28 @@ Record: `docs/research/mempalace-agent-arm-2026-10-07.md`. Three arms, one runne
   `MPA-J4` exact words >= 90%, `MPA-L4` two-fact >= 70%. A scripted brain never answers these.
 * The window's REFLECTION PHASE (K only; variants `H2@32k`, `HMA@32k`, `ZMA@32k`, then `H2@12B`, `HMA@12B`, `ZMA@12B`) runs the closet / consolidation work on a 32k-context clone so the 8k slot does not decide axis K.
 
+## The night mind's cells and Z0n (added 2026-10-09)
+
+`docs/knowledge/night-mind.md` has the design. In the bench: **Z0n** = Z0 + the night pass with its own model (`--arm Z0n`; the lab's fake nightly brain, or the clone with `--model-url URL [--ctx-tokens N]`),
+so K2 / K3 are real cells instead of scripted-model SKIPs. Plain Z0 is unchanged (its K cells and baseline stay the scripted digest; K2 / K3 / K6-K12 SKIP there with the reason "scripted").
+
+| Cell | Claim | Control that must turn it red |
+|---|---|---|
+| K1 | derived observations are true (precision >= 95%, hard); every run stores its judged / true / false counts | `observation_gate`, `night_citations` |
+| K2, K3 | thread recall; "what's been going on with X" / "how has my week been" | `night_mind` (the pass off) |
+| K6 compression | 1-3 observations per story, no more than 60% as many as the owner's turns - **a copy of every turn fails** (the echo arm passes K1, K2, K4 and fails K6) | `night_echo` |
+| K7 dense day | 1,200 routine commands around the life; two stories planted late in each day; recall >= 70% overall and on the late ones | `night_chunking` (the old 3,000-char cut) |
+| K8 citation validity | every exported observation points at a real turn and is an exact span of it (100%) | `night_citations` |
+| K9 change and quiet; K9 flat week | the story that went quiet and the plan that changed are reported with >= 2 cited turns; with nothing changed <= 5% false notices | `night_mind`; `night_notice` |
+| K10 restraint | over 14 mornings with every raise ignored: no withheld story raised, <= 1 raise a morning, the back-off doubles, the withheld story is still recalled when asked | `night_restraint` |
+| K11 resolution | a plan with no outcome stays open; a finished plan resolves; a story nobody mentions again is never closed | `night_absence` |
+| K12 weight calibration | kind / feeling accuracy >= 85% and weight rank correlation >= 0.5 on twelve labelled moments (the fake brain proves the plumbing only; the clone is the measurement) | `night_weights` |
+
+The control pass (`runner.control_pass`) proves the cells that need an own model on Z0n and every other cell on plain Z0 (`cells.uses_night`). Z0's `protocol_brain` baseline is `scripts/perf/zmb/z0_brain.py`
+(rows `M4.<metric>.zoe`: the 32 protocol prompts through Z0's recall floor and `recall_memory` tool); `z0n_window.py` runs K1-K12 and that half on a clone (`--lab` for the fake brain; `--smoke-live --max-calls 20` via
+`z0n_smoke.sh` against the live brain under the window's guards); the bake-off runs it with `BAKEOFF_Z0N=1`. **Known pre-existing failure**: `tests/unit/test_zmb_bakeoff.py::test_a_smoke_window_against_the_live_brain...`
+fails when the whole `tests/unit` tree is collected in one process (reproduced on `origin/main` b2ec3ef5 before this change: another test module leaves `memory_digest` without `_load_todays_messages`); it passes when the file is run alone, as `validate.yml` effectively does per file set.
+
 ## Not built yet (the build plan continues)
 
 Synthetic store routes in zoe-data (`synthetic-ingest`, `synthetic-digest`, `capture-synthetic`) and the live driver that uses

@@ -52,6 +52,7 @@ _ITEM_MAX_CHARS = 140
 _HHMM_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})")
 _FOLLOW, _OVERDUE = "To follow up: ", "Overdue: "
 _MOMENT = "Recently on their mind (at most a gentle check-in): "
+_NIGHT = "From the last few days (mention it only if it fits; one gentle line): "
 
 # In-process throttles only; once-per-day correctness rests on the claim row.
 _settled: dict[str, str] = {}  # user -> local date whose claim is known taken
@@ -228,6 +229,9 @@ def day_items(ctx: dict, local_now: datetime) -> tuple[list[str], list[str]]:
     for moment in ((ctx or {}).get("emotional_moments") or [])[:1]:
         if _clean(moment):
             items.append(_MOMENT + _clean(moment))
+    for note in ((ctx or {}).get("night_items") or [])[:1]:      # the night mind's one raise (``leave`` threads never reach ctx)
+        if _clean(note.get("text")):
+            items.append(_NIGHT + _clean(note.get("text")))
     critical = [soonest[1]] if soonest else ([overdue] if overdue else [])
     return items, critical
 
@@ -245,6 +249,9 @@ def mentioned(ctx: dict, lines: list[str]) -> list[tuple[str, str, str]]:
     ids = (ctx or {}).get("emotional_moment_ids") or []
     if moments and ids and _MOMENT + _clean(moments[0]) in said:
         out.append(("emotional", f"memory:{ids[0]}", str(moments[0])))
+    for note in (ctx or {}).get("night_items") or []:           # a night thread the brief said is marked exactly like a loop or a moment
+        if note.get("source_ref") and _clean(note.get("text")) and _NIGHT + _clean(note.get("text")) in said:
+            out.append(("night_thread", str(note["source_ref"]), str(note.get("text") or "")))
     return out
 
 
@@ -273,6 +280,7 @@ class DayBrief:
     token: str = ""  # this turn's hold on a queued 07:30 brief (``_briefing``)
     session_id: str = ""
     surfaced: tuple = ()  # ``mentioned`` items, marked at settle (ZOE_LOOP_LIFECYCLE)
+    night_refs: tuple = ()  # ``night_threads:<id>`` the brief voiced (the night mind's back-off; marked at settle whatever ZOE_LOOP_LIFECYCLE says)
     trigger: str = ""  # ``trigger_key`` of the utterance this brief rode in on
 
     @property
@@ -335,9 +343,10 @@ async def _take_claim(user_id: str, now: datetime) -> bool:
     return claim_id is not None
 
 
-def _log(brief_user: str, items: int, shape: str, injected: bool, claimed: bool) -> None:
-    logger.info("BRIEF_FIRST_TURN user=%s items=%d shape=%s injected=%d claimed=%d",
-                brief_user, items, shape, int(injected), int(claimed))
+def _log(brief_user: str, items: int, shape: str, injected: bool, claimed: bool, night: int = 0) -> None:
+    # ``night`` = how many of the items came from the night mind (the day-sim reads it to see the pass; 0 with ZOE_NIGHT_MIND off)
+    logger.info("BRIEF_FIRST_TURN user=%s items=%d shape=%s injected=%d claimed=%d night=%d",
+                brief_user, items, shape, int(injected), int(claimed), night)
 
 
 async def _prepare(message: str, uid: str, now: datetime, sid: str = "") -> DayBrief | None:
@@ -370,16 +379,17 @@ async def _prepare(message: str, uid: str, now: datetime, sid: str = "") -> DayB
         return None  # nothing on: no filler, no claim — a later turn may have something
     shape = turn_shape(message)
     if shape == "command" and not critical:
-        _log(uid, len(items), shape, injected=False, claimed=False)
+        _log(uid, len(items), shape, injected=False, claimed=False, night=len(ctx.get("night_items") or []))
         return None
     lines = items if shape == "greeting" else critical
     from open_loop_lifecycle import lifecycle_enabled
 
     surfaced = tuple(mentioned(ctx, lines)) if sid and lifecycle_enabled() else ()
+    night_refs = tuple(ref for kind, ref, _t in mentioned(ctx, lines) if kind == "night_thread")
     token = uuid.uuid4().hex
     _briefing.setdefault(uid, {})[token] = time.monotonic()
     return DayBrief(uid, shape, len(items), render_body(shape, lines, local_date), now,
-                    local_date, token, sid, surfaced, trigger_key(message))
+                    local_date, token, sid, surfaced, night_refs, trigger_key(message))
 
 
 async def prepare(message: str, user_id: str, session_id: str = "") -> DayBrief | None:
@@ -441,7 +451,16 @@ async def _settle(brief: DayBrief, produced: bool) -> bool:
 
         await mark_brief_surfaced(brief.user_id, brief.session_id, list(brief.surfaced),
                                   **({"trigger": brief.trigger} if brief.trigger else {}))
-    _log(brief.user_id, brief.items, brief.shape, injected=True, claimed=claimed)
+
+    if produced and brief.night_refs:
+        # the night mind's back-off: a thread the brief voiced is not raised again tomorrow (last_raised_at / next_raise_after). Never raises.
+        try:
+            import night_mind
+
+            await night_mind.note_raised(brief.user_id, list(brief.night_refs))
+        except Exception:  # noqa: BLE001
+            pass
+    _log(brief.user_id, brief.items, brief.shape, injected=True, claimed=claimed, night=len(brief.night_refs))
     return claimed
 
 
