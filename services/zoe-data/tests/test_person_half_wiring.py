@@ -236,4 +236,4 @@ def test_the_seam_cleans_a_hooked_goodbye_and_leaves_every_other_turn_alone(monk
         "Good evening. ", "Sunny, 22 degrees. How else can I help?"]
     monkeypatch.setenv(cg.ENV, "shadow")
     assert _run(_collect(zc.run_flue_brain_streaming("night Zoe", "s-3", UID))) == [
-        "Good evening. How can I help you settle in for the night?"]               # shadow: logged, not changed
+        "Good evening. ", "How can I help you settle in for the night?"]          # shadow: logged, not changed
