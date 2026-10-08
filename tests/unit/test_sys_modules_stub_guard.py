@@ -91,4 +91,8 @@ def test_one_leak_is_evicted_not_just_reported_so_it_does_not_cascade_into_every
     r = _run_pytest_on({"test_a_leaker.py": _LEAKER, "test_b_later.py": later, "test_c_later.py": later})
     out = r.stdout + r.stderr
     assert "2 passed" in out, out[-1500:]  # both later modules saw the real module
-    assert out.count("sys.modules stub leak") == 1, out[-1500:]  # one leak, one failure
+    # One leak, one failure. Count the pytest SUMMARY ("2 passed, 1 error"), not the message text: pytest echoes the
+    # failure message in both the error section and the short test summary (and more with -r flags), so a text
+    # count of the message is 2 on CI and 1 elsewhere.
+    assert "1 error" in out and "2 passed" in out, out[-1500:]
+    assert out.count("ERROR at setup of") == 1, out[-1500:]
