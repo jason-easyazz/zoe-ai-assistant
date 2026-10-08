@@ -198,6 +198,8 @@ credentials/
 # only copies. Negate rather than `git add -f`, so the next file added here is
 # not silently ignored too.
 !services/zoe-ui/dist/manifest.json
+# The MPA arm's frozen MemPalace surface (tool schemas, protocol text): the slim CI lane reads it, so it must be tracked (the blanket *.json rule would hide it).
+!scripts/perf/zmb/arms/mpa_snapshot.json
 !services/zoe-ui/dist/js/widgets/widget-manifest.json
 # zoe-core's Pi project settings: compaction sized for ONE 8192-token llama-server
 # slot (Pi 0.82.1 defaults reserve 16384 / keep 20000 assume a 128k+ window).

@@ -317,6 +317,11 @@ _REMOVERS = {
     ("scripts/perf/zmb/arms/mempalace_verbatim.py", "delete"), ("scripts/perf/zmb/arms/mempalace_verbatim.py", "forget"),
     ("scripts/perf/zmb/arms/mempalace_verbatim.py", "forget_ids"), ("scripts/perf/zmb/arms/mempalace_verbatim.py", "sweep_ledger"),
     ("scripts/perf/zmb/pilot/forget_probe.py", "main"),
+    # the ZMB disk lab's collection wrapper tears down its OWN throwaway collection (scratch root, never the palace)
+    ("scripts/perf/zmb/lab_driver.py", "close"),
+    # the owner's verbatim-turn index (``exact_turns``, Postgres - never palace rows): the forget's erase of the rows that
+    # name a forgotten entity; the audited whole-user removal is ``backend.delete_user`` behind ``MemoryService.delete_user``
+    ("exact_words.py", "erase_entity"),
 }
 
 

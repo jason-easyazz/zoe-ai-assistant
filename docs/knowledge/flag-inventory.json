@@ -1295,6 +1295,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_EXACT_WORDS_BACKFILL_HOURS": {
+        "defaults": [
+          "'36'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/exact_words.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_EXPERT_ACTIVE_DOMAINS": {
         "defaults": [
           "dynamic"
@@ -4183,6 +4193,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/ytmusic_signin.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ROLE_GUESS_GUARD": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/role_guess_guard.py"
         ],
         "typed_env": false
       },

@@ -1,0 +1,65 @@
+{
+  "spec_version": 1,
+  "axis": "protocol",
+  "cells": [
+    {
+      "id": "M1.answered_when_recall_fired",
+      "title": "memory protocol (lab half, packet level): when the brain DOES call recall for a question the store can answer, the packet holds the fact and the scripted reader answers with it (>= 90%)",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["retrieval"],
+      "lme_map": "",
+      "note": "brain-free: Zoe's protocol (the imperative recall doctrine) decides when recall fires; the arm builds the packet; a scripted reader answers from the first row that names the person (or the favourite) asked about and otherwise says it does not know. This is the PACKET half of the protocol. Evidence also carries every protocol's numbers (MemPalace's five rules, Hindsight's recall-every-turn) as counts: those policies are deterministic stand-ins for what each protocol's TEXT tells a brain, not a brain",
+      "params": {"play_group": "M"},
+      "events": [{"do": "protocol_facts"}],
+      "probes": [
+        {"kind": "protocol", "metric": "answered_when_fired", "protocol": "zoe"}
+      ]
+    },
+    {
+      "id": "M2.cites_only_the_right_fact",
+      "title": "memory protocol (lab half): of every answer the scripted reader gives from the packet, the share that cites the RIGHT fact (>= 95%); an answer about someone the owner never mentioned is a wrong citation",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["reader"],
+      "lme_map": "",
+      "note": "precision of what is cited, over needed AND silent prompts together: the sycophantic reader (the `reader` control: answer from the nearest row whatever it says) cites a wrong fact on the silent prompts and drops the share below the bar. A reader that never answers has no precision to speak of and fails (no answer cited anything)",
+      "params": {"play_group": "M"},
+      "events": [{"do": "protocol_facts"}],
+      "probes": [
+        {"kind": "protocol", "metric": "cite_precision", "protocol": "zoe"}
+      ]
+    },
+    {
+      "id": "M3.says_idk_when_the_store_is_silent",
+      "title": "memory protocol (lab half): asked about eight people the owner never mentioned, the reply says it does not know (>= 90%), never an invented answer",
+      "tier": "store",
+      "kind": "script",
+      "controls": ["reader"],
+      "lme_map": "abstention (LongMemEval)",
+      "note": "the packet may hold near rows (a vector query always returns k); the scripted reader answers only from a row that names the person asked about, so a packet that carries nothing relevant ends in 'I don't have that saved'. With the `reader` control it answers from the nearest row instead and goes red",
+      "params": {"play_group": "M"},
+      "events": [{"do": "protocol_facts"}],
+      "probes": [
+        {"kind": "protocol", "metric": "idk_when_silent", "protocol": "zoe"}
+      ]
+    },
+    {
+      "id": "M4.<m.id>.<p>",
+      "title": "memory protocol (brain tier, declared): <m.what> under the <p> protocol, on the clone brain in a window",
+      "tier": "full",
+      "skip_reason": "brain tier: needs the clone brain in a window (it measures what the brain DOES under the protocol's text); the scorer (scorers_cap.score_protocol) and the lab half exist, the brain driver is the next build",
+      "lme_map": "",
+      "note": "<m.how>. Three protocols compared on the same prompts and store: Zoe's imperative recall doctrine, MemPalace's five-rule PALACE_PROTOCOL (rules 2 and 3), Hindsight's recommended usage (recall on every turn). Per prompt the brain's trace gives fired (did it call recall) and its reply; the scorer is the one the lab half uses",
+      "matrix": {
+        "m": [
+          {"id": "fire_when_needed", "what": "recall fires on the questions the store can answer (>= 90%)", "how": "the 14 needed prompts of the protocol corpus: a recall tool call before the reply"},
+          {"id": "quiet_when_not_needed", "what": "recall stays quiet on device commands, small talk and world questions (>= 90%)", "how": "the 10 unneeded prompts: no recall call (a packet for 'turn on the kitchen lights' is wasted slot)"},
+          {"id": "cite_precision", "what": "what the reply cites is the right fact (>= 95%)", "how": "every reply that cites a fact: the cited fact is the gold one"},
+          {"id": "idk_when_silent", "what": "the reply says it does not know when the store is silent (>= 90%)", "how": "the 8 silent prompts: no invented answer"}
+        ],
+        "p": ["zoe", "mempalace5", "hindsight"]
+      }
+    }
+  ]
+}

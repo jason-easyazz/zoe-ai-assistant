@@ -51,6 +51,9 @@ CONTROLS = {
     "retrieval": "search ignores the query and returns the newest rows (the ranking / owner filter is broken)",
     "provenance": "the write boundary drops source_excerpt and user_turn_id (a row no longer says which turn it came from)",
     "entailment": "the verbatim-anchor rule removed (wall ON): a per-turn model reading of the owner's own change of mind cannot retire the owner's row, it waits as a disputed candidate",
+    "exact_index": "ZOE_EXACT_WORDS=off - the owner's verbatim turns are not indexed: \"what exactly did I say about X\" has nothing to quote and no date to give",
+    "multi_hop": "ZOE_MULTI_HOP_RECALL=off and ZOE_RECALL_DURABLE_NO_DECAY=0 - a two-fact question is one search, and the older of two facts the owner stated is buried by the 70-day recency decay",
+    "observation_gate": "ZOE_DIGEST_OBSERVATION_GATE=off - the nightly digest stores every model-written observation approved: a fabricated link, a hedged restatement and a \"you told me\" nobody said are served",
     "topic": "the same-topic guard removed: a change retires every older fact, about anyone",
     "event_time": "the stated-validity parser switched off: valid_from is always the capture time, never the date the person said",
     "history": "the history read switched off: a replaced fact is kept but a question about how things used to be never sees it",
@@ -552,6 +555,13 @@ def controls_off(features: "frozenset[str] | set[str]", svc: types.SimpleNamespa
                     col.update(ids=[old_id], metadatas=[meta])
                 return done
             patch(ms_cls, "_retire_with_quote_sync", retire_without_quote)
+        if "exact_index" in features:
+            setenv("ZOE_EXACT_WORDS", "off")
+        if "multi_hop" in features:
+            setenv("ZOE_MULTI_HOP_RECALL", "off")
+            setenv("ZOE_RECALL_DURABLE_NO_DECAY", "0")
+        if "observation_gate" in features:
+            setenv("ZOE_DIGEST_OBSERVATION_GATE", "off")
         if "topic" in features:
             sup = importlib.import_module("memory_supersede")
             patch(sup, "same_topic", lambda new, old: True)

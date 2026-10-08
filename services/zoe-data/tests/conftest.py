@@ -44,3 +44,17 @@ os.environ["MEMPALACE_DATA_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "mempalace")
 os.environ["ZOE_VOICE_STT_LOG"] = os.path.join(ZOE_TEST_STORE_DIR, "voice_stt.jsonl")
 # The write-time reject ledger (memory_reject_ledger) persists day counters under ~/.zoe by default.
 os.environ["ZOE_MEMORY_REJECT_LEDGER"] = os.path.join(ZOE_TEST_STORE_DIR, "memory-reject-ledger.json")
+
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _exact_words_in_process_index():
+    """The owner's verbatim-turn index (``exact_words``) is a Postgres table in production; no test has that pool. Since
+    ``MemoryService.delete_user`` FAILS CLOSED when the verbatim erase fails, a test of the delete must not reach for a pool
+    that is not there: every test gets the in-process index (a test that wants the SQL one sets it itself)."""
+    import exact_words
+    exact_words.set_backend(exact_words.MemoryBackend())
+    yield
+    exact_words.set_backend(None)

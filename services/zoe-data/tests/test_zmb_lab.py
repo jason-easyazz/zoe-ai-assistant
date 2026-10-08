@@ -77,12 +77,14 @@ def test_every_controlled_cell_goes_red_with_its_features_off(full_control_pass)
     runnable = {c.id for c in CELLS
                 if c.controls and c.expected == "PASS" and c.tier == "store"
                 and cellmod.required_capabilities(c) <= set(Z0Arm.capabilities)}
-    # 136 with chromadb present (the two ``disk`` cells run), 134 in the slim CI lane where they are declared skips
+    # 149 with chromadb present (the two ``disk`` cells run), 147 in the slim CI lane where they are declared skips
     # (99 before the temporal / recall / poisoning / provenance / graph axes; +6 for the cells #1895 fixes; +3 for the two
-    # timelines: C2.history_read and C4.valid_from_is_event_time leave the targets, + C2.history_is_labelled; +13 for the S10x
-    # quote-backed retirement cells (12 without chromadb: S10x.forgotten_quote_not_on_disk is a ``disk`` cell; the 14th controlled
+    # timelines: C2.history_read and C4.valid_from_is_event_time leave the targets, + C2.history_is_labelled;
+    # +6 for the capability axes: J0 + L0 + M1 (retrieval), M2 + M3 (reader), K4 (authority); +6 for the three capability gaps
+    # this change fixes: J1 + J2 (exact_index), K1 + K5 (observation_gate), L1 + L2 (multi_hop));
+    # +13 for the S10x quote-backed retirement cells (12 without chromadb: S10x.forgotten_quote_not_on_disk is a ``disk`` cell; the 14th controlled
     # one, S10x.pool_right_rows_retired, needs the embedder and runs on Z0e only)
-    assert len(runnable) in (147, 150) and cp["checked"] == cp["red"] == len(runnable)
+    assert len(runnable) in (160, 162) and cp["checked"] == cp["red"] == len(runnable)
     assert {r["id"] for r in cp["rows"]} == runnable
     assert all(r["verdict"] == "FAIL" and r["stage"] in ("write", "read", "answer") for r in cp["rows"])
 
@@ -230,6 +232,9 @@ def test_z0_measures_as_documented(full_measure):
         elif cellmod.required_capabilities(c) - set(Z0Arm.capabilities):
             # a disk cell where chromadb is not installed (the slim CI lane): a declared SKIP, never a PASS
             assert r["verdict"] == "SKIP" and "lacks capability" in r["reason"], (c.id, r)
+        elif any(p["kind"] in ("threads", "useful") for p in c.probes):
+            # the lab SCRIPTS Z0's nightly model: what an observation says is the script's, so thread recall / usefulness are measured only on an arm with its own model
+            assert r["verdict"] == "SKIP" and "scripted" in r["reason"], (c.id, r)
         elif c.is_target:
             # a KNOWN failure. If this starts passing you fixed the thing: flip `expected` to PASS in the
             # spec, give the cell a control, and re-record the baseline.
@@ -239,6 +244,9 @@ def test_z0_measures_as_documented(full_measure):
     assert artifact.hard_violations(full_measure, BY_ID) == []
     # B9/E1b/H5 fixed (#1882); I1/I1b/I2.attributed/I4 fixed by the own-words wall (#1894): graded cells.
     # Every target below was MEASURED red on main (see its cell's note)
+    # The capability axes' three real gaps (J1 / J2 no exact-reference index, K1 / K5 the nightly digest keeps a model's fabricated link and
+    # mis-attribution, L1 / L2 no second hop and a recency decay on a durable fact) were MEASURED red on Z0 on 2026-10-07 and are FIXED: graded
+    # cells with controls (exact_index, observation_gate, multi_hop). What is left is the two older targets.
     assert TARGETS == sorted([
         "F3.after_tombstone_ttl",
         "I2.third_party_fragment.third_party"])
@@ -263,6 +271,14 @@ def test_the_axis_table_for_z0_is_claimable_with_wilson_intervals(full_measure, 
     assert axes["poisoning"]["targets_failing"] == ["I2.third_party_fragment.third_party"]
     assert axes["forgetting"]["targets_failing"] == ["F3.after_tombstone_ttl"]
     assert axes["extraction"]["targets_failing"] == []   # B9 fixed in #1882
+    # the capability axes: Z0's measured state (J / L / K in ITEMS, the unit the winner clause pools). The three gaps the first run of these
+    # axes found are FIXED (2026-10-07): J 0 / 40 -> 40 / 40 (exact-words index), L 6 / 40 -> 39 / 40 (no decay on a durable fact + the second hop),
+    # K1 / K5 5 of 10 fabricated -> 3 of 3 decidable true (observation gate)
+    assert (axes["exact_words"]["n"], axes["exact_words"]["pass"]) == (2, 2) and axes["exact_words"]["items"] == {"pass": 40, "n": 40}
+    assert (axes["multi_hop"]["n"], axes["multi_hop"]["pass"]) == (2, 2) and axes["multi_hop"]["items"] == {"pass": 39, "n": 40}
+    assert (axes["reflection"]["n"], axes["reflection"]["pass"], axes["reflection"]["skip"]) == (3, 3, 2)          # K1 / K4 / K5 pass, K2 / K3 need an own model
+    assert axes["reflection"]["failing"] == []
+    assert (axes["protocol"]["n"], axes["protocol"]["pass"], axes["protocol"]["skip"]) == (3, 3, 12)               # the lab half passes; the 12 brain-tier cells are declared
     assert not any(axes[n]["uncontrolled"] for n in axes)
 
 
@@ -480,7 +496,8 @@ NEW_CONTROLS = {
     "event_time": ["C4.valid_from_is_event_time"],
     "history": ["C2.history_is_labelled"],
     "retrieval": ["C3.dated_event", "C4.since_year_kept", "D1.hit5_after_30_filler", "D2.hit5_after_100_filler",
-                  "D3.hit5_after_300_filler", "D4.hit5_paraphrase_after_100_filler"],
+                  "D3.hit5_after_300_filler", "D4.hit5_paraphrase_after_100_filler",
+                  "J0.taught_sentence_is_returned_whole", "L0.two_facts_one_question", "M1.answered_when_recall_fired"],
     "provenance": ["A3.typed_turn_rows", "A3.voice_verified_turn_rows", "A3.taught_rows", "A3.nightly_digest_rows",
                    "A3.user_turn_rows_rate"],
     "topic": ["C6.no_collateral_invalidation", "C7.named_friends_keep_their_homes"],
@@ -804,3 +821,78 @@ def test_z0e_ranks_by_meaning_where_the_labs_bag_of_words_has_no_overlap_to_go_o
         assert "Biscuit" in a.recall("what is the name of my pet", 1)[0]["text"]
     finally:
         a.close()
+
+
+# ── the three gaps the capability axes found (2026-10-07), fixed: J exact words, K reflection, L two-hop recall ───────────────────
+
+def test_the_three_fixed_gaps_measure_the_real_code_not_the_control_flag(monkeypatch, arm):
+    """Break the REAL function (no ZMB switch touched) and the cell that claims it goes red; restore it and it is green."""
+    import exact_words
+    import memory_authority
+    import multi_hop_recall
+    ids = ("J1.exact_sentence_after_100_filler", "J2.when_did_i_say_it", "K1.observations_are_true",
+           "K5.user_stated_is_never_restated_as_inference", "K4.invalidated_fact_not_restated",
+           "L1.two_facts_after_100_filler", "L2.two_facts_after_300_filler")
+    for cid in ids:
+        assert _run(cid, arm).verdict == "PASS", cid
+    real_lookup, real_index = exact_words.lookup, exact_words.index_turn
+
+    async def nothing(*_a, **_k):
+        return []
+
+    async def not_indexed(*_a, **_k):
+        return False
+    monkeypatch.setattr(exact_words, "lookup", nothing)                      # the exact-words block reads nothing
+    assert _run("J1.exact_sentence_after_100_filler", arm).verdict == "FAIL" and _run("J2.when_did_i_say_it", arm).verdict == "FAIL"
+    monkeypatch.undo()
+    monkeypatch.setattr(exact_words, "index_turn", not_indexed)              # the post-turn hook indexes nothing
+    arm._zmb_played = None                                                   # (cells of one play group share the play: play it again with the broken code)
+    assert _run("J1.exact_sentence_after_100_filler", arm).verdict == "FAIL"
+    monkeypatch.undo()
+    real_check = memory_authority.check_observation
+    monkeypatch.setattr(memory_authority, "check_observation",
+                        lambda fact, user_text, cited_texts=(): memory_authority.ObservationVerdict("supported", fact))   # a gate that believes everything
+    for cid in ("K1.observations_are_true", "K5.user_stated_is_never_restated_as_inference"):
+        arm._zmb_played = None
+        assert _run(cid, arm).verdict == "FAIL", cid
+    arm._zmb_played = None
+    assert _run("K4.invalidated_fact_not_restated", arm).verdict == "PASS"   # two walls: the authority wall alone still holds the stale restatement
+    monkeypatch.undo()
+    arm._zmb_played = None
+    assert real_lookup is exact_words.lookup and real_index is exact_words.index_turn and real_check is memory_authority.check_observation
+
+    async def passthrough(search, question, first, *, limit):
+        return list(first)[:limit]
+    monkeypatch.setattr(multi_hop_recall, "expand", passthrough)             # no second hop ...
+    monkeypatch.setattr(memory_service, "_durable_user_fact", lambda *a, **k: False)    # ... and the old recency decay on a durable fact
+    assert _run("L1.two_facts_after_100_filler", arm).verdict == "FAIL" and _run("L2.two_facts_after_300_filler", arm).verdict == "FAIL"
+
+
+def _hops(cell_id, arm, monkeypatch, **env):
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    out = _run(cell_id, arm)
+    h = out.evidence["probes"][0]["hops"]
+    return h["by_kind"]["date"][0], h["by_kind"]["join"][0], out.verdict
+
+
+def test_l_each_half_of_the_fix_does_its_own_work(arm, monkeypatch):
+    """Measured on the baseline seed (the lab's bag-of-words ranking): the recency decay alone buries the older of two facts (dates 3 of 10),
+    the missing second hop alone leaves every join unanswered (0 of 10); the two fixes together answer 10 + 9 of 20 at 100 filler."""
+    both = _hops("L1.two_facts_after_100_filler", arm, monkeypatch)
+    assert both[0] == 10 and both[1] >= 8 and both[2] == "PASS"
+    decay_only = _hops("L1.two_facts_after_100_filler", arm, monkeypatch, ZOE_MULTI_HOP_RECALL="off")
+    assert decay_only[0] == 10 and decay_only[1] <= 6                       # no second hop: the joins stay mostly unanswered
+    monkeypatch.delenv("ZOE_MULTI_HOP_RECALL")
+    hop_only = _hops("L1.two_facts_after_100_filler", arm, monkeypatch, ZOE_RECALL_DURABLE_NO_DECAY="0")
+    assert hop_only[1] == 0 and hop_only[2] == "FAIL"                        # the decay still buries the older fact the hop starts from
+    monkeypatch.delenv("ZOE_RECALL_DURABLE_NO_DECAY")
+    neither = _hops("L1.two_facts_after_100_filler", arm, monkeypatch, ZOE_MULTI_HOP_RECALL="off", ZOE_RECALL_DURABLE_NO_DECAY="0")
+    assert neither[0] <= 3 and neither[1] == 0 and neither[2] == "FAIL"
+
+
+@pytest.mark.parametrize("seed", ["fresh", "s3", "s4"])
+def test_the_three_fixed_gap_cells_hold_on_other_seeds(seed, arm):
+    for cid in ("J1.exact_sentence_after_100_filler", "J2.when_did_i_say_it", "K1.observations_are_true",
+                "K5.user_stated_is_never_restated_as_inference", "L1.two_facts_after_100_filler", "L2.two_facts_after_300_filler"):
+        assert _run(cid, arm, seed).verdict == "PASS", (cid, seed)

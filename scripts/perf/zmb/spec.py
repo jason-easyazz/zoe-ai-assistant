@@ -43,6 +43,8 @@ SCENARIO_DIR = Path(__file__).resolve().parent / "scenarios"
 #: the axes (letter -> name): the nine of samantha_bar.AXES, plus ``retirement``
 AXES = {"a": "authority", "b": "extraction", "c": "temporal", "d": "recall", "e": "abstention",
         "f": "forgetting", "g": "emotional", "h": "identity", "i": "poisoning",
+        # the capability axes (2026-10-07): what Hindsight and MemPalace are built for, not storage hygiene
+        "j": "exact_words", "k": "reflection", "l": "multi_hop", "m": "protocol",
         # Zoe's own quote-backed retirement (S10x): measured on Z0 only, and on its OWN axis so that its cells never move the
         # temporal axis (C) the bake-off's pre-registered decision rule compares between arms
         "r": "retirement"}

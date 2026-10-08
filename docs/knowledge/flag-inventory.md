@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Auto-generated inventory of every ZOE_* environment flag read in the codebase — defaults, readers, typed_env adoption, and .env.example coverage.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-10-07T00:00:00Z
+timestamp: 2026-10-09T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-10-07T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-10-07. The table body is deterministic (sorted, no
+Last generated: 2026-10-09. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Default `dynamic` = not statically extractable; `(required)` = bare
@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-540 flags; 538 not documented in `.env.example`.
+542 flags; 540 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -144,6 +144,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_ESPEAK_PITCH` | `dynamic` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_ESPEAK_SPEED` | `dynamic` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_ESPEAK_VOLUME` | `dynamic` | no | NO | `services/zoe-data/routers/voice_tts.py` |
+| `ZOE_EXACT_WORDS_BACKFILL_HOURS` | `'36'` | no | NO | `services/zoe-data/exact_words.py` |
 | `ZOE_EXPERT_ACTIVE_DOMAINS` | `dynamic` | no | NO | `services/zoe-data/expert_dispatch.py` |
 | `ZOE_EXPERT_ALLOW_WRITES` | `'0'` | no | NO | `services/zoe-data/expert_dispatch.py` |
 | `ZOE_EXPERT_ENABLED` | `'1'` | no | NO | `services/zoe-data/expert_dispatch.py` |
@@ -428,6 +429,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_RIG_NOVNC_PORT` | `'6080'` | no | NO | `services/zoe-data/ytmusic_signin.py` |
 | `ZOE_RIG_USER_AGENT` | `-` | no | NO | `services/zoe-data/ytmusic_signin.py` |
 | `ZOE_RIG_VNC_PORT` | `'5900'` | no | NO | `services/zoe-data/ytmusic_signin.py` |
+| `ZOE_ROLE_GUESS_GUARD` | `-` | no | NO | `services/zoe-data/role_guess_guard.py` |
 | `ZOE_ROSTER_NEUTRAL_ASK` | `False` | yes | NO | `services/zoe-data/fast_tiers.py` |
 | `ZOE_ROUTER_ARCHIVE_KEEP` | `'3'` | no | NO | `scripts/maintenance/router_selftrain.py` |
 | `ZOE_ROUTER_BASE_HF` | `'/home/zoe/models/lab/functiongemma-270m-it-hf'` | no | NO | `scripts/maintenance/router_selftrain.py` |

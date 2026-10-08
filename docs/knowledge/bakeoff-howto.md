@@ -1,9 +1,9 @@
 ---
 type: Runbook
 title: The Hindsight bake-off is one command (owner's page)
-description: How to run the pre-registered memory bake-off (Z0, Z0-off, Z0e, H0, H1, H2, HM) with one command inside a brain-stop window, what the window does to the box, how long it takes, how to read the verdict (G0-G3 per arm and the winner clause), how to abort, and what is still unverified. First contact with the real stack (real Hindsight server, scratch Postgres, embeddings shim, real MemPalace library, the live brain's LLM path) was made on 2026-10-06; see docs/research/bakeoff-setup-verification-2026-10-06.md for what it found and fixed.
+description: How to run the pre-registered memory bake-off (Z0, Z0-off, Z0e, H0, H1, H2, HM, MPA, HMA, ZMA) with one command inside a brain-stop window, what the window does to the box, how long it takes, how to read the verdict (the G0-G3 floors per arm and the capability winner clause: exact words, reflection, long-range recall, protocol, temporal, recall at distance), how to abort, and what is still unverified. First contact with the real stack (real Hindsight server, scratch Postgres, embeddings shim, real MemPalace library, the live brain's LLM path) was made on 2026-10-06; see docs/research/bakeoff-setup-verification-2026-10-06.md for what it found and fixed.
 tags: [memory, bake-off, hindsight, zmb, runbook, brain-window, owner]
-timestamp: 2026-10-06T07:00:00Z
+timestamp: 2026-10-07T15:00:00Z
 ---
 
 # The Hindsight bake-off: one command
@@ -19,7 +19,7 @@ scripts/perf/zmb/bakeoff_window.sh --dry-run     # FIRST: prints every step, the
 scripts/perf/zmb/bakeoff_window.sh               # the window: about 85 minutes, hard cap 90, ends with the live brain restored
 ```
 
-Everything else (`--arms H1,H2`, `--cap-min`, `--docs-dir`) is optional; the default arms are `H1,H2,HM,H0` (Z0, Z0-off and Z0e always run in the lab). Run it from a worktree: it only writes an untracked markdown draft, but the
+Everything else (`--arms H1,H2`, `--cap-min`, `--docs-dir`) is optional; the default arms are `H1,H2,HM,MPA,HMA,ZMA,H0` (Z0, Z0-off and Z0e always run in the lab). Run it from a worktree: it only writes an untracked markdown draft, but the
 usual rule stands (no work in the live checkout).
 
 ### The test hook (daylight, brain NOT stopped; default OFF, never for a real window)
@@ -34,6 +34,14 @@ First use: 2026-10-06, `docs/research/bakeoff-setup-verification-2026-10-06.md`.
 BAKEOFF_SKIP_BRAIN_STOP=1 BAKEOFF_SMOKE_CELLS=10 scripts/perf/zmb/bakeoff_window.sh --arms H1,HM --cap-min 40 --docs-dir /tmp/smoke-docs
 ```
 
+### RAM settings (2026-10-06; docs/research/bakeoff-ram-latency-optimisation-2026-10-06.md)
+
+The window now starts the stack in its **lean** shape by default (measured on the real server: about -85 to -95 MB of the stack, recall latency unchanged): `hindsight-api` with migration isolation,
+a 1..2 connection pool, an import trim that stubs the MCP, Gemini and OTLP packages it never uses (it chains the egress hook; `scripts/perf/zmb/lean_imports/`), docstring-free bytecode and one BLAS thread; the
+embeddings shim with full graph optimisation and one malloc arena; the HM verbatim tier asking the window's shim for its vectors instead of loading its own ONNX session (about -190 MB of the driver).
+`BAKEOFF_KEEP_PG=1` keeps the previous window's scratch database (debugging only; the results are then confounded and the report says so); `BAKEOFF_HS_QUIET_WAIT_S` (default 60) is how long Hindsight's job queue gets to empty before the window refuses to open; `BAKEOFF_LEAN=0` restores run 1/2's exact environment; `BAKEOFF_HM_SHARED_EMBEDDER=0` gives the HM driver its own session again; `BAKEOFF_SHIM_MODEL=minilm` serves zoe-data's MiniLM from the shim (NOT the default:
+every H arm's recall would move away from run 1's). The lab that measured all of it is `scripts/perf/zmb/ram_opt.py` (`--list`, `--config`, `--table`); it keeps MemAvailable >= 1.5 GB by construction and refuses to start otherwise.
+
 ## What it does to the box
 
 The voice stack is **down for the whole window** (the live `llama-server.service` is stopped; a clone of the same model on `:11500` takes
@@ -42,58 +50,131 @@ its RAM). Nothing else is touched: no `zoe-data` restart, no live Postgres, no p
 | Step | What | Undone by |
 |---|---|---|
 | preflight | refuses if `/tmp/zoe-brain-window.lock` is held; waits until the panel has been quiet 10 min (the `land_voice_pr.sh` check) and no landing / samantha bar runs (anchored `pgrep`); refuses if MemAvailable < 1.2 GB, the router's embedding model is not on disk, the live brain is not active, or the window would overlap 01:45-03:15 / 04:18-04:52 | nothing was started |
-| 1 | scratch Postgres `zoe-bakeoff-pg` (compose, 256 MB cap, loopback `:55432`) | `docker compose down` |
+| 1 | scratch Postgres `zoe-bakeoff-pg` (compose, 256 MB cap, loopback `:55432`), always started FRESH: `docker compose down -v`, then the root-owned `pgdata` emptied (`sudo -n find ... -delete` when `sudo -n true` works, else a throwaway container over the bind mount from the compose file's own image; with neither the window REFUSES in preflight, before the live brain is stopped, and prints the operator command). Logs `scratch Postgres: fresh (wiped N MB)`. `BAKEOFF_KEEP_PG=1` keeps it for debugging and the window says loudly that its results are confounded | `docker compose down` |
 | 2 | loopback embeddings shim `zoe-bakeoff-embed` (`:11501`, the router's bge-small ONNX, about 135 MB) | `systemctl --user stop` |
 | 3 | **stop `llama-server.service`** | `systemctl --user start` + health poll |
 | 4 | Gemma clone `zoe-bakeoff-gemma` (`:11500`): command GENERATED from `systemctl --user cat llama-server.service` and its drop-ins, same model and flags, `--parallel 1`, same MemorySwapMax / MemoryLow | `systemctl --user stop` |
 | 5 | `hindsight-api` `zoe-bakeoff-hindsight` (`:18888`, loopback env from `hindsight.env.example`, in-process egress audit hook on) | `systemctl --user stop` |
+| 5b | job-queue gate: once `hindsight-api` is healthy its worker queue (`async_operations`, pending + processing) must be EMPTY, polled for 60 s (`BAKEOFF_HS_QUIET_WAIT_S`); the count is logged and anything left aborts the window before step 6 (a stale bank is a confound) | |
 | measure | see below | |
 | restore | stops the three units and the container, starts the live brain, polls `:11434/health`, releases the lock. Runs on EVERY exit path (refusal after start, memory floor, hard cap, any exception, Ctrl-C); a marker file `WINDOW_OPEN` makes the shell wrapper re-run it if the driver is killed hard | |
 
-Guards: MemAvailable below 1.2 GB at any time aborts and restores; 90 minutes is a hard cap (7 minutes are always kept for restore and report).
+Why step 1 wipes (2026-10-08 17:09): the scratch Postgres was never wiped, so the SECOND window of the day inherited the first window's Hindsight banks (`zmb-h2-demo_bar_*`). Within 60 s of step 5 the new worker resumed their pending
+consolidation jobs, each failing with `HTTP 400 exceed_context_size_error: request (8841 tokens) exceeds the available context size (8192 tokens)` against the clone (3 retries per batch), all competing for its single slot (`--parallel 1`):
+a confound for every arm in that window and a plausible cause of the first window's cells running 3x slower than planned.
+
+The report and `run-<id>.json` record `hindsight_consolidation_prompt_tokens_max` (every `exceed_context_size_error`'s `n_prompt_tokens` in hindsight-api's journal for THIS window) and, when a consolidation call exceeded the slot, state: "Hindsight
+consolidation does not fit the 8,192-token live slot (max N tokens): K on the live context is failed by construction; only the 32k/12B reflection phase measures K". Background consolidation cannot be paused in the installed Hindsight (0.10.2): the worker claims
+any pending operation, `HINDSIGHT_API_WORKER_CONSOLIDATION_RESERVED_SLOTS` is a reserved FLOOR (not a cap) and there is no pause flag; `enable_auto_consolidation` is per bank and H2 / HMA already run it off and trigger it explicitly. The window therefore
+detects instead of preventing: the job queue is read before every Hindsight arm's cells and an arm that starts with queued work is flagged in the report's notes.
+
+Guards: MemAvailable below 1.2 GB at any time aborts and restores; physical memory is compacted before every model start (next section); 90 minutes is a hard cap (7 minutes are always kept for restore and report).
 
 ## What it measures, and how long (planned minutes; `--dry-run` prints the live numbers)
 
 0. Stale `zmb-` banks an earlier window left in the scratch store are deleted first (the disk cells scan the whole data directory: a live bank that holds a name they look for
    makes their residue unmeasurable, and the cell would say so as an ERROR). Only this tool's own prefix is touched.
 1. Z0 and Z0-off in the lab on three seeds (1): the control and the negative control. Seeds: `zmb-v1` (baseline) plus two held-out. **Z0e** (the same `MemoryService` over a REAL Chroma collection
-   with the service's MiniLM embedder, as live; about 25 s per seed) runs the four recall (D) cells on the same seeds: the lab's own Z0 ranks by bag-of-words, so the D axis is compared with Z0e, and the
-   report says so (a missing chromadb or model is a skip, never a download, and D falls back to Z0 with a note).
+   with the service's MiniLM embedder, as live; about 50 s per seed) runs the four recall (D) cells AND the long-range (L) cells on the same seeds: the lab's own Z0 ranks by bag-of-words, so D and L are compared with Z0e, and the
+   report says so (a missing chromadb or model is a skip, never a download, and they fall back to Z0 with a note).
 2. Forgetting probes start for each Hindsight arm (1): forget an invented friend, check at t+0. The **real t+6 min** check (wait, replay the transcript
    through the arm's own nightly pass and a late model writer, check again) runs later, between cells.
 3. Adapter negative controls on the real server (1): with a Zoe-layer protection OFF the cell that claims it must go red. Six claims: `authority` (A1), `identity`, `ledger`, and the three
    that need what this change gave the arm: `authority` on the people graph (A8), `supersede` on the conflict pass (C1) and **`physical_erase` on F5** (the byte scan must find REAL Postgres
    residue on the real stack when the scrub is off; if it does not, the scan is blind and the run says so).
-4. **H1 first and complete** (run 2 plan; `--dry-run` prints the minutes and the per-arm cell budget): seed 1 (ceiling ~10), recall latency n=50 (1), verbatim extraction JSON
+4. **H1 first and complete** (run 2 plan; `--dry-run` prints the minutes and the per-arm cell budget): seed 1 (ceiling ~10, **+8 for the capability cells**), recall latency n=50 (1), verbatim extraction JSON
    validity over >= 100 retain calls (6), brain-slot seconds per retained turn (3), then seeds 2 and 3 (ceiling ~10 each). The ceilings come from run 1's measured seconds per cell
    (H1 3.7, H2 12, H0 20) with headroom for the cells added since; a seed that finishes early hands its slack to the arms behind it. A cell the box did not reach is a SKIP, never a pass.
-5. **H2 then H0, one seed each**, taking what H1 left: seed 1, then latency, concise extraction validity (shared, 10) and slot. H0's latency and slot are "only if time remains" (not
-   budgeted): H0 cannot win or complete, so its cells outrank its timings. The rule needs three seeds, so H2 and H0 are INCOMPLETE by design: measured for the comparison, never adopted.
+5. **H2 then H0, one seed each**, taking what H1 left: seed 1 (H2 + 3 min for the observation layer's cells), then latency, concise extraction validity (shared, 10) and slot **only if time remains** (CUT for the capability axes, see below).
+   H0's latency and slot are "only if time remains" too (not budgeted): H0 cannot win or complete, so its cells outrank its timings. The rule needs three seeds, so H2 and H0 are INCOMPLETE by design: measured for the comparison, never adopted.
 5b. **HM (Hindsight + MemPalace), one seed box**, after H2 and before H0 (the plan shows the minutes; H1 keeps its three full seeds). `hm_window.py` runs in the bake-off venv through `mp_run.sh` (the verbatim tier is
    the REAL MemPalace 3.10.0 library under a scrubbed HOME; the distilled tier is this window's Hindsight over loopback HTTP, with the same scratch-Postgres scrub and scan as the H arms): the 21 HM cells on the real tiers
    (about 4 min; the four protections whose effect runs through a real tier are broken one at a time and must turn their cell red; latencies are wall clocks, the two lookups in two threads), then the generic store
    cells for one seed (about 1.3 s per cell). HM has no extraction or identity wall of its own, so many generic hard cells FAIL it by design and `hard_cells_all_ran` / the HM gate say so; it is INCOMPLETE (one seed), never adopted.
    Its own gate block (`HM-G0a .. HM-G3a`) and its column in the winner clause are in the report. Its t+6 min forgetting check is HM-F2 on a virtual clock (the ledger is durable: there is no TTL to wait out).
+5c. **MPA, HMA and ZMA (the agent operates MemPalace), one seed box each**, after HM and before H0 (`--arms` default `H1,H2,HM,MPA,HMA,ZMA,H0`). **MPA** = MemPalace set up as designed: the clone brain
+   calls its tools; **HMA** = MPA as the episodic tier + Hindsight (concise + observations) as the reflective tier; **ZMA** = Zoe's live stack (Z0e) with MemPalace integrated. All three run `mpa_window.py`
+   (MPA and HMA in the bake-off venv through `mp_run.sh`, HMA with `--arm HMA`; ZMA with the window's own interpreter, `--arm ZMA`, because Z0 needs zoe-data's modules) and write `mpa-` / `hma-` / `zma-<run_id>.json`.
+   Their cells phase is **computed from model calls**: `MPA_CALLS`, `HMA_CALLS` (+60 observation calls + 90 s consolidation), `ZMA_CALLS` x `MPA_S_PER_CALL` in `bakeoff_measure.py` (the ONLY place these numbers
+   live; `--dry-run` prints them and the minutes). J / K / L / M and each arm's own floors are INSIDE those minutes; they run L0 only (no 100 / 300 filler: each filler turn is a brain call). Their J / K / L / M cells
+   are measured with the CLONE BRAIN operating MemPalace's tools, so the brain is the instrument; the protocol text costs prompt tokens (gate `mpa_G1_prompt_fits`). Gates (thresholds in `RULE`, pre-registered
+   2026-10-07 before any MPA run): `mpa_G0_server_rss`, `mpa_G1_tool_call_validity` (>= 95% over >= 30 calls), `mpa_G1_search_before_answer`, `mpa_G1_supersede_correct`, `mpa_G1_prompt_fits`, `mpa_G2_floors`,
+   `mpa_G3_glue_lines`; HMA adds the K1 observation veto, the total RAM and forgetting through both tiers; ZMA adds the unchanged Z0 floors and its total RAM. All are one-seed INCOMPLETE and never adopted by the
+   rule. **At the 90-minute cap this default list does NOT fit**: `--dry-run` prints `DOES NOT FIT` with the deficit and how many MPA + HMA brain calls the cap holds (the other boxes sit on their 1 minute floors;
+   shedding order H0, then HM, then H2, never H1's three seeds); cut the call constants, drop an arm (`--arms`) or raise `--cap-min`.
+5d. **The reflection phase (optional, only if time remains)**: after the live-slot phases and before the t+6 min wait the clone is restarted with `--ctx-size 32768` (`BAKEOFF_REFLECT_CTX`, 0 = off; the live unit
+   is only read, never edited) and then, from the PARKED `llama-server-12b-deepbrain.service.disabled` text (read only, never enabled), as the 12B; only the K work runs, as the variants `H2@32k`, `HMA@32k`, `ZMA@32k`,
+   `H2@12B`, `HMA@12B`, `ZMA@12B` (never contest entrants: they show whether the 8k slot limits K; the K1 veto applies). The 12B pair is preflighted by arithmetic (model file + KV + 600 MB + the 1,200 MB floor against
+   the MemAvailable measured once the 4B is stopped) and skipped with the numbers when it would breach the floor; `BAKEOFF_REFLECT_STOP_UNITS=kokoro-tts.service` stops that listed unit for the 12B pair only and
+   starts it again on every exit path. H0's box is cut first (then HM's) to leave the phase room; on any abort the normal restore brings the live unit back at its own context.
 6. The t+6 min forgetting verdicts and the report (inside the 5 min tail). Fewer than three seeds makes an arm INCOMPLETE, which is not adoptable.
 7. Per arm: PSS of every candidate PID every 2 s (steady = median, burst = max, plus the scratch Postgres container), MemAvailable floor, and non-loopback
    connects (the egress hook log plus `ss` polling). The hook is `scripts/perf/zmb/egress_audit/sitecustomize.py` (in the repo; it also makes `import uvloop` fail, because
    run 1's hook was blind: `hindsight-api` runs on uvloop, whose C-level connects never raise the audit event). The window refuses to go on if the hook has not logged `hook-loaded` and a connect
    once the server is healthy. The gate reads `0 non-loopback connects over N observed` with a split by phase (arm); a missing, empty or connect-less log is "not measured" (NA), never "zero".
 
+## The capability axes in the window, and what the plan cut to fit them (2026-10-07)
+
+The contest is no longer storage hygiene. Four axes measure what Hindsight and MemPalace are built for (`docs/knowledge/zoe-memory-bench.md`, "Capability axes"): **J exact words**
+(20 sentences the owner said, word for word, with the day), **K reflection** (30 days of a household: are the derived observations true, current, attributed; do they cover the
+stories), **L long-range associative recall** (20 questions that need two facts said weeks apart, at 100 and 300 filler turns) and **M the memory protocol** (the lab half runs; the
+brain half is declared). `--dry-run` prints their rows. To keep the window at 90 minutes with the restore reserve:
+
+* the capability cells run on **seed 1 only** (`zmb-v1`); seeds 2 and 3 run the ordinary cells, so H1's three-seed rule for the floors is untouched. Their n is items (20 per cell), not cells.
+* each arm runs the ones it is the evidence for: **H1 and HM** run exact words, long-range recall and the protocol's lab half (HM's verbatim write is no model call: +2 min; H1's is a model call per retained fact: +8 min);
+  **H2 and H0** run **reflection** (the observation layer is what H2 adds over H1 and what H0 does natively; +3 min each) and their J / L / M cells are **cut** (they would only be H1's retrieval behind a concise rewrite).
+  H1 and HM have no observation layer, so their K cells are capability SKIPs, not cuts.
+* **cut: H2's latency (2.5) and slot (5.2) phases and the concise extraction-validity phase (10) became "only if time remains"** (-17.7 min). H2 and H0 are INCOMPLETE by design (one seed), so
+  their G0 / G1 items for those phases show `NA` unless time was left; H1, the arm that can be adopted, keeps every floor measurement.
+* Z0e gains the long-range cells (+1.3 min); the Z0 lab phase +0.3.
+
+Planned total 77.2 of 77.5 available minutes (`--dry-run` prints the slack). A cell the box did not reach is a SKIP with the reason (`time box` / `planner cut` / `capability`), never a pass.
+
 ## Reading the verdict
 
 Output: `~/.zoe/bakeoff-2026-10/run-<stamp>.log`, `run-<stamp>.json`, and a **draft** `docs/research/bakeoff-run-<stamp>.md`.
-The top of the markdown states plainly (1) the verdict by the pre-registered rule, (2) the winner clause per axis (B extraction, C temporal, D recall, E abstention: Z0 vs each arm, with the
-Wilson 95% interval and beats / tie / WORSE / no data), and (3) a one-line "is it better than ours?" with the honest caveats (a tie goes to Z0). The rule is `bakeoff_gates.py`; a test pins every threshold:
+The top of the markdown states plainly (1) the verdict by the pre-registered rule, (2) the rule in one paragraph, (3) the winner clause per **capability** axis (C temporal, D recall at distance, J exact words, K reflection,
+L long-range recall, M protocol: Z0 [Z0e for D and L] vs each arm, with the Wilson 95% interval and beats / tie / WORSE / no data; J / K / L in items), then the floors reported beside the contest (B extraction, E abstention:
+never deciding), and (4) a one-line "is it better than ours?" with the honest caveats. The rule is `bakeoff_gates.py`; a test pins every threshold.
 
-* **`KEEP_Z0`** - no arm passes every built gate and beats Z0 beyond the Wilson interval on two of B/C/D/E (ties go to Z0). The rule says: keep Z0, finish audit P1-P3.
-* **`ADOPT_CANDIDATE <arm>`** - passes every built gate and beats Z0 on two axes. Advisory: every axis the rule names now exists in the spec (C = `temporal`, D = `recall`, A3 / A8 under `authority`, `poisoning` a hard axis);
-  known-failing targets count against an arm and the owner decides. The report prints a one-line advisory note under the verdict.
+**The rule has two parts (owner direction, 2026-10-07: "never overwrite the owner" had been given too much weight; the goal is the best memory for a Samantha-grade companion).**
+**G0-G3 are FLOORS** (RAM, egress, extraction validity, latency, zero hard violations on authority / forgetting / poisoning / identity, forgetting at t+6): fail one and the arm is not adoptable, pass them and you have earned
+nothing. **The contest is the capability axes.** An arm that passes the floors and beats Z0 beyond the Wilson interval on at least two of them (worse on none) wins; with fewer wins and no axis where it is worse
+(and data on at least three axes) the capabilities **tie, and ties on capability go to the maintained candidate** (H1, then H2: Hindsight is upstream-maintained, so it is the one we maintain less of). Authority,
+forgetting and provenance scores no longer break ties. K1 (observation precision >= 95%) is hard: an arm whose observation layer fabricates is vetoed with observations on.
+
+The verdicts:
+
+* **`KEEP_Z0`** - no arm passes the floors, or the ones that do are worse than Z0 on a capability axis, vetoed (fabricated observations) or have too little capability evidence to call a tie. The rule says: keep Z0, finish audit P1-P3.
+* **`ADOPT_CANDIDATE <arm>`** - passes the floors and beats Z0 beyond the Wilson interval on two capability axes, worse on none (H1 over H2 when both). Advisory: known-failing targets count against an arm and the owner decides.
+* **`ADOPT_ON_TIE <arm>`** - passes the floors, beats Z0 on fewer than two capability axes, is worse on none and has data on at least three: the owner's rule sends a capability tie to the maintained candidate.
 * Per arm: `NOT_ADOPTABLE` (a gate item failed), `INCOMPLETE` (something was not measured or fewer than three seeds ran; not a pass),
   `PASSES_BUILT_GATES`. If H1 and H2 both pass the rule chooses H1. H0 is the measurement of what Hindsight does with no Zoe layer; it cannot win.
-* Gate tables list each item as threshold / measured / `PASS | FAIL | NA`. The axes table shows pass / n with Wilson 95% for Z0, Z0-off, H0, H1, H2.
+* Gate tables list each item as threshold / measured / `PASS | FAIL | NA`. The axes table shows pass / n with Wilson 95% (and `items p/n` for the capability axes) for Z0, Z0e, Z0-off, H0, H1, H2, HM.
   Z0-off must be red on the authority cells (the negative control) and every run records `controls red x/y`.
 * "Not verified" at the bottom lists what the run could not establish.
+
+## Fragmentation: "cudaMalloc failed: out of memory" with 6 GB free (incident 2026-10-08 13:33)
+
+Signature: the Gemma clone (and then the live brain on restore) dies in about 6 s with `ggml_backend_cuda_buffer_type_alloc_buffer: allocating 118.30 MiB on device 0: cudaMalloc failed: out of memory`
+and `NvMapMemAllocInternalTagged ... error 12`, while `MemAvailable` is above 6 GB. Cause: Tegra NvMap needs CONTIGUOUS physical blocks and ~24 h of test / agent churn left the page cache
+fragmenting RAM: `tegrastats` shows `lfb 11x2MB`, `/proc/buddyinfo` has no free block at order >= 10 (2 MB is order 9). It is not a RAM shortage, so more free memory does not help.
+
+What the window does about it (all through the `Host` seam; `bakeoff.py` `fragmentation()` / `contiguous_ok()` / `compact_memory()`):
+
+* logs the order 9-12 free-block counts at preflight, after step 3 (brain stopped), before step 4, before every clone restart (the 32k and 12B reflection pairs) and before the live brain restarts on restore;
+* runs `sudo -n sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches; echo 1 > /proc/sys/vm/compact_memory'` after the live brain's `MainPID` is 0 (polled, at most 30 s) and before EVERY clone start, and in restore before
+  `systemctl --user start llama-server.service` - only when `sudo -n true` works. `BAKEOFF_DROP_CACHES=0` keeps compaction and skips the cache drop (compaction alone is the minimum);
+* preflight: fragmented (fewer than `BAKEOFF_MIN_CONTIG_BLOCKS`, default 64, free blocks of order >= 9) and no passwordless sudo -> REFUSED before anything is stopped, with the command below; otherwise it
+  compacts, re-checks and prints `order9+ blocks 184 -> 420` on the `preflight ok` line (still fragmented after compaction -> refused);
+* restore with no sudo and fragmented RAM prints a `RESTORE ALARM` line with the command (it still tries to start the brain).
+
+Operator command (run it, then start the window or the brain again):
+
+```bash
+sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches; echo 1 > /proc/sys/vm/compact_memory'
+awk '{print $1,$2,$3,$4,$(NF-1),$NF}' /proc/buddyinfo   # orders 10 and 11 should be well above 0 (67 / 9 after the 2026-10-08 fix)
+```
 
 ## How to abort
 
@@ -104,6 +185,7 @@ scripts/perf/zmb/bakeoff_window.sh --restore-only      # idempotent; stops only 
 # by hand, the same thing:
 systemctl --user stop zoe-bakeoff-hindsight zoe-bakeoff-gemma zoe-bakeoff-embed
 docker compose -f /home/zoe/.zoe/bakeoff-2026-10/scratch-postgres.compose.yml down
+sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches; echo 1 > /proc/sys/vm/compact_memory'   # first, if the brain refuses to start with cudaMalloc / NvMap error 12 (see Fragmentation)
 systemctl --user start llama-server.service && curl -sf http://127.0.0.1:11434/health
 ```
 

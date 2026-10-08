@@ -39,11 +39,44 @@ INSTALL_HINT = (
     "$HOME/.cache/chroma/onnx_models (no network at run time: HF_HUB_OFFLINE=1)."
 )
 DAY_S = 86400.0
-BASE_TS = 1_790_000_000.0          # 2026-09-21: a fixed origin so a backdated run is reproducible
+BASE_TS = 1_790_000_000.0          # 2026-09-21: the run's "now", a fixed origin so a backdated run is reproducible
+
+
+def filed_ts_for(day_offset: float) -> float:
+    """The filing time of a turn said ``day_offset`` DAYS AGO (the Turn contract): older turns are EARLIER than ``BASE_TS``, never later."""
+    return BASE_TS - float(day_offset) * DAY_S
+
+
+def days_ago(filed_ts: float) -> int:
+    """The inverse of ``filed_ts_for``: how many days before ``BASE_TS`` a row was filed (rounded; the arm's clock / sequence nudges are sub-day)."""
+    return round((BASE_TS - float(filed_ts)) / DAY_S)
 
 
 class StoreUnavailable(RuntimeError):
     """The real MemPalace library cannot be opened in this interpreter."""
+
+
+#: RAM lab 2026-10-06 (docs/research/bakeoff-ram-latency-optimisation-2026-10-06.md): the verbatim tier's own ONNX session is +120 MB (a second MiniLM session, measured)
+#: to +191 MB (the driver's growth over the cells). With this variable set to a LOOPBACK ``/v1/embeddings`` endpoint (the embeddings shim the Hindsight server already
+#: uses), MemPalace's own ``openai-compat`` embedding backend asks that one session for its vectors: ONE embedder serves both tiers and the driver loads no onnxruntime.
+SHARED_EMBEDDER_URL_ENV = "ZMB_HM_EMBEDDER_URL"
+SHARED_EMBEDDER_MODEL_ENV = "ZMB_HM_EMBEDDER_MODEL"
+DEFAULT_SHARED_MODEL = "bge-small-en-v1.5"
+
+
+def shared_embedder_env(url: str, model: str = "") -> "dict[str, str]":
+    """The MemPalace environment that routes every embedding call to ``url``; refuses anything that is not a loopback address (the bake-off is loopback-only)."""
+    import ipaddress
+    import urllib.parse
+    host = urllib.parse.urlparse(url).hostname or ""
+    try:
+        loopback = host == "localhost" or ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        loopback = False
+    if not loopback:
+        raise StoreUnavailable(f"refusing the non-loopback shared embedder {url!r}: the bake-off is loopback-only")
+    return {"MEMPALACE_EMBEDDING_MODEL": "openai-compat", "MEMPALACE_EMBEDDING_API_URL": url.rstrip("/"),
+            "MEMPALACE_EMBEDDING_API_MODEL": model or DEFAULT_SHARED_MODEL, "MEMPALACE_EMBEDDING_API_KEY": "local-none"}
 
 
 class VerbatimStore(Protocol):
@@ -147,9 +180,12 @@ class MemPalaceLibraryStore:
         self.after_child = self.after_reopen = 0
         self.palace_dir.mkdir(parents=True, exist_ok=True)
         self.home = Path(home) if home else self.palace_dir.parent / "mp-home"
-        self._saved = {k: os.environ.get(k) for k in ("HOME", "MEMPALACE_CONFIG_DIR", "ANONYMIZED_TELEMETRY",
-                                                      "HF_HUB_OFFLINE")}
-        self._pin_model_path()                  # BEFORE the HOME switch: a missing model must never be downloaded
+        self._saved = {k: os.environ.get(k) for k in ("HOME", "MEMPALACE_CONFIG_DIR", "ANONYMIZED_TELEMETRY", "HF_HUB_OFFLINE", "MEMPALACE_EMBEDDING_MODEL",
+                                                      "MEMPALACE_EMBEDDING_API_URL", "MEMPALACE_EMBEDDING_API_MODEL", "MEMPALACE_EMBEDDING_API_KEY")}
+        shared = os.environ.get(SHARED_EMBEDDER_URL_ENV, "")
+        self._shared = shared_embedder_env(shared, os.environ.get(SHARED_EMBEDDER_MODEL_ENV, "")) if shared else {}
+        if not self._shared:
+            self._pin_model_path()              # BEFORE the HOME switch: a missing model must never be downloaded (shared mode loads no local model at all)
         self._scratch_env()
         try:
             from mempalace.palace import get_collection  # noqa: WPS433 - lazy: only the real store needs it
@@ -185,7 +221,7 @@ class MemPalaceLibraryStore:
             scratch_cache.parent.mkdir(parents=True, exist_ok=True)
             scratch_cache.symlink_to(real_cache)
         os.environ.update({"HOME": str(self.home), "MEMPALACE_CONFIG_DIR": str(self.home / ".mempalace-cfg"),
-                           "ANONYMIZED_TELEMETRY": "False", "HF_HUB_OFFLINE": "1", "ORT_DISABLE_TELEMETRY": "1"})
+                           "ANONYMIZED_TELEMETRY": "False", "HF_HUB_OFFLINE": "1", "ORT_DISABLE_TELEMETRY": "1", **self._shared})
 
     def _restore_env(self) -> None:
         for k, v in self._saved.items():
@@ -282,8 +318,22 @@ class MemPalaceLibraryStore:
         """Files of the palace in which the LEDGER still matches a forgotten entity (no plaintext needed)."""
         return sum(1 for f in self.palace_dir.rglob("*") if f.is_file() and ledger.scan_bytes(user, f.read_bytes()))
 
+    def _release_client(self) -> None:
+        """Close and forget THIS palace's cached Chroma client. ``close()`` used to drop only the collection: the MemPalace backend keeps one ``PersistentClient`` per palace path for the
+        life of the process, so a driver that opens a palace per cell grew about 4.8 MB for every palace it had ever opened (RAM lab 2026-10-06, ``pilot/palace_release_probe.py``: 110.6 MB
+        over 24 palaces; 30.8 MB when each client is released). Only this path is released: another store's client in the same process is untouched."""
+        try:
+            import mempalace.backends.chroma as mc
+            import mempalace.palace as mp
+            backend, path = mp._DEFAULT_BACKEND, str(self.palace_dir)
+            mc._close_client(backend._clients.pop(path, None))
+            backend._freshness.pop(path, None)
+        except Exception:                                  # noqa: BLE001 - a library that moved these internals: the store still closes, the memory just stays
+            pass
+
     def close(self):
         self.col = None
+        self._release_client()
         self._restore_env()
 
 
@@ -318,7 +368,7 @@ class MemPalaceVerbatimArm(Arm):
     ``ingest`` stores one chunk per VERIFIED user turn with NO model call (the owner's design: the verbatim tier is
     written instantly). Quarantine rooms hold unverified / pasted text; guests own no wing."""
     name = "MV"
-    capabilities = frozenset({"clock", "identities", "verbatim"})
+    capabilities = frozenset({"clock", "identities", "verbatim", "exact_words"})
 
     def __init__(self, store: "VerbatimStore | None" = None, *, controls: "Controls | None" = None,
                  ledger: "HashedLedger | None" = None, palace_dir: "str | Path | None" = None):
@@ -417,7 +467,7 @@ class MemPalaceVerbatimArm(Arm):
         """One drawer, no model call. Returns its id."""
         self._seq += 1
         rid = "v" + hashlib.sha1(f"{user}|{d.room}|{self._seq}|{turn.text}".encode()).hexdigest()[:14]
-        ts = BASE_TS + turn.day_offset * DAY_S + self._clock + self._seq * 0.001
+        ts = filed_ts_for(turn.day_offset) + self._clock + self._seq * 0.001
         self._need().add(rid, user, d.room, turn.text,
                          {"authority_class": d.authority_class, "speaker": turn.speaker,
                           "speaker_verified": d.authority_class == "user_stated", "filed_ts": ts,
@@ -470,6 +520,11 @@ class MemPalaceVerbatimArm(Arm):
 
     def recall(self, query: str, k: int = 10) -> "list[dict[str, Any]]":
         return self.search(query, k)
+
+    def recall_exact(self, query: str, k: int = 5) -> "list[dict[str, Any]]":
+        """(j) The owner's own words, as filed: each drawer is one verified turn, unchanged, with the day it was filed (the ``day_offset`` it was
+        written with, DAYS AGO: the arm's filing clock is ``BASE_TS - day_offset * DAY_S``)."""
+        return [{"text": r["text"], "day_offset": days_ago(r["filed_ts"])} for r in self.search(query, k)]
 
     def forget(self, entity: str) -> str:
         """What MemPalace ALONE can do: delete the user's chunks whose text names ``entity`` (a case-blind lexical
