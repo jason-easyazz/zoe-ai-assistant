@@ -213,8 +213,18 @@ def test_small_parsers():
 
 # ── the host double: the same trick the deploy tests use ─────────────────────
 
+#: /proc/buddyinfo, one node, two zones; columns are orders 0..10. The 2026-10-08 abort: nothing at order >= 10 and a handful at order 9 (tegrastats ``lfb 11x2MB``).
+FRAGMENTED_BUDDY = textwrap.dedent("""\
+    Node 0, zone       DMA   1200    900    700    500    300    200    100     50     20     11      0
+    Node 0, zone    Normal  60000  30000  15000   7000   3000   1000    300    100     30      0      0
+    """)
+HEALTHY_BUDDY = textwrap.dedent("""\
+    Node 0, zone       DMA   1200    900    700    500    300    200    100     50     20    100     30
+    Node 0, zone    Normal  60000  30000  15000   7000   3000   1000    300    100     30    320     37
+    """)
+
 class FakeHost(bakeoff.Host):
-    def __init__(self, tmp: Path, *, panel_busy_for=0.0, landing_for=0.0, mem=None, live_ok=True, fail=(), hook_live=True):
+    def __init__(self, tmp: Path, *, panel_busy_for=0.0, landing_for=0.0, mem=None, live_ok=True, fail=(), hook_live=True, buddy=None, sudo_ok=True, compaction_heals=True):
         self.t = 1_800_000_000.0
         self.t0 = self.t
         self.cmds: "list[tuple[list[str], bool]]" = []
@@ -228,6 +238,19 @@ class FakeHost(bakeoff.Host):
         self.tmp = tmp
         self.metrics_calls = 0
         self.log = lambda _m: None
+        self.buddy_text = HEALTHY_BUDDY if buddy is None else buddy      # /proc/buddyinfo as the box shows it; a compaction heals it unless compaction_heals=False
+        self.sudo_ok, self.compaction_heals = sudo_ok, compaction_heals
+        self.main_pids: "list[int]" = []                                  # successive MainPID answers (then 0)
+        self.pgdata_mb = 37                                               # what `du` says the scratch data directory holds
+        self.queue_outputs: "list[str]" = []                              # successive answers of the job-queue psql (the last one repeats); empty = an empty queue
+        self.psql_rc = 0
+        self.journal = ""                                                 # what `journalctl` shows for the hindsight-api unit
+
+    def _empty(self, path: str) -> None:
+        """What a real wipe does to the bind-mounted data directory (the double deletes the files so a test can see the directory is empty afterwards)."""
+        import shutil
+        for child in Path(path).iterdir():
+            shutil.rmtree(child) if child.is_dir() else child.unlink()
 
     def joined(self) -> "list[str]":
         return [" ".join(a) for a, _m in self.cmds]
@@ -245,6 +268,20 @@ class FakeHost(bakeoff.Host):
         if any(f in line for f in self.fail):
             return bakeoff.Result(1, "injected failure")
         prog = argv[0]
+        if prog == "sudo":
+            if argv[1:3] == ["-n", "du"]:
+                return bakeoff.Result(0, f"{self.pgdata_mb}\t{argv[-1]}\n")
+            if argv[1:3] == ["-n", "find"] and "-delete" in argv:
+                if Path(argv[3]).is_dir():
+                    self._empty(argv[3])
+                return bakeoff.Result(0, "")
+            if argv[1:3] == ["-n", "find"] and "-print" in argv:
+                return bakeoff.Result(0, "\n".join(str(c) for c in Path(argv[3]).iterdir()) if Path(argv[3]).is_dir() else "")
+            if argv[1:] == ["-n", "true"]:
+                return bakeoff.Result(0 if self.sudo_ok else 1, "" if self.sudo_ok else "sudo: a password is required")
+            if "compact_memory" in line and self.compaction_heals:
+                self.buddy_text = HEALTHY_BUDDY
+            return bakeoff.Result(0 if self.sudo_ok else 1, "")
         if prog == "systemctl":
             sub = argv[2]
             if sub == "cat":
@@ -252,6 +289,8 @@ class FakeHost(bakeoff.Host):
             if sub == "is-active":
                 return bakeoff.Result(0, "active\n" if self.live_active else "inactive\n")
             if sub == "show":
+                if "MainPID" in line:
+                    return bakeoff.Result(0, f"MainPID={self.main_pids.pop(0) if self.main_pids else 0}\n")
                 return bakeoff.Result(0, "/system.slice/zoe-bakeoff.service\n" if "ControlGroup" in line else "")
             if sub == "start" and argv[3] == "llama-server.service":
                 self.live_active = True
@@ -270,7 +309,18 @@ class FakeHost(bakeoff.Host):
                 self.metrics_calls += 1
                 return bakeoff.Result(0, f"llamacpp:prompt_seconds_total {self.metrics_calls * 6.0}\nllamacpp:tokens_predicted_seconds_total {self.metrics_calls * 4.0}\n")
             return bakeoff.Result(0, '{"status":"ok"}')
+        if prog == "journalctl":
+            return bakeoff.Result(0, self.journal)
         if prog == "docker":
+            if argv[1:2] == ["exec"] and "psql" in argv:
+                if self.psql_rc:
+                    return bakeoff.Result(self.psql_rc, 'ERROR:  relation "public.async_operations" does not exist')
+                return bakeoff.Result(0, (self.queue_outputs.pop(0) if len(self.queue_outputs) > 1 else self.queue_outputs[0]) if self.queue_outputs else "")
+            if argv[1:2] == ["run"]:
+                mount = argv[argv.index("-v") + 1].split(":")[0]
+                if Path(mount).is_dir():
+                    self._empty(mount)
+                return bakeoff.Result(0, f"{self.pgdata_mb}\n")
             return bakeoff.Result(0, "50MiB / 256MiB" if "stats" in argv else "")
         if prog == "git":
             return bakeoff.Result(0, "abc1234\n")
@@ -290,6 +340,10 @@ class FakeHost(bakeoff.Host):
         return self.mem(self)
 
     def read(self, path):
+        if path.endswith("buddyinfo"):
+            return self.buddy_text
+        if path.endswith(".compose.yml"):
+            return Path(path).read_text()
         if path.endswith("cgroup.procs"):
             return "100\n"
         if path.endswith("smaps_rollup"):
@@ -297,6 +351,12 @@ class FakeHost(bakeoff.Host):
         if "/egress-" in path and self.hook_live:           # the server's egress hook, as a healthy one writes it
             return "12:00:00 pid=1 ok hook-loaded uvloop=blocked\n12:00:01 pid=1 ok connect ('127.0.0.1', 55432)\n"
         return ""
+
+
+@pytest.fixture(autouse=True)
+def _private_harness_lock(tmp_path, monkeypatch):
+    """The window refuses while ``/tmp/zoe-voice-harness.lock`` is held: a real probe on the dev box (or another session's test lane) must not turn these tests red."""
+    monkeypatch.setattr(bakeoff.Window, "HARNESS_LOCK", str(tmp_path / "harness.lock"))
 
 
 @pytest.fixture
@@ -310,6 +370,10 @@ def box(tmp_path):
     py.chmod(0o755)
     (b / "hindsight.env.example").write_text(ENV_EXAMPLE)
     return b
+
+
+#: the arm list before MPA / HMA joined the default: the older planner tests pin the shapes of THIS plan (a changed default list is why they name it)
+HM_ERA = ("H1", "H2", "HM", "H0")
 
 
 def make_window(box, host, *, measure_fn=None, dry=False, **cfg_kw):
@@ -752,22 +816,144 @@ def axes(p, n, skip=0):
     return {"extraction": {"pass": p, "n": n, "skip": skip, "cells": n}, "abstention": {"pass": p, "n": n, "skip": 0, "cells": n}}
 
 
-def test_the_winner_clause_beats_z0_beyond_the_wilson_interval_or_ties_to_z0():
-    z0 = gates.aggregate_axes({"s": {"axes": axes(60, 90)}})
-    strong = {n: gates.evaluate_arm(n, three(axes=axes(30, 30)), good_measure()) for n in ("H1", "H2")}
-    d = gates.decide(strong, z0)
-    assert d["verdict"] == "ADOPT_CANDIDATE" and d["winner"] == "H1"                               # both pass: H1 (verbatim) over H2, per the rule
-    assert d["caveat"].startswith("Advisory") and "NOT FINAL" not in d["caveat"] and "not built" not in d["text"]
-    assert gates.WIN_AXES == {"B": "extraction", "C": "temporal", "D": "recall", "E": "abstention"} and "poisoning" in gates.HARD_AXES
-    assert not hasattr(gates, "UNBUILT")
-    tie = {"H1": gates.evaluate_arm("H1", three(axes=axes(20, 30)), good_measure())}                # 60/90 vs 60/90: inside the interval
+def ax_c(p, n):
+    return {"pass": p, "n": n, "skip": 0, "cells": n, "items": {"pass": 0, "n": 0}, "failing": []}
+
+
+def ax_i(p, n, failing=()):
+    """A capability axis measured in ITEMS (20 sentences, 20 questions, the observations judged): one cell, n items."""
+    return {"pass": 1 if p == n else 0, "n": 1, "skip": 0, "cells": 1, "items": {"pass": p, "n": n}, "failing": list(failing)}
+
+
+def cap(temporal=(10, 20), recall=(10, 20), exact=(10, 20), reflection=None, hops=None, **extra):
+    out = {"temporal": ax_c(*temporal), "recall": ax_c(*recall), "exact_words": ax_i(*exact), **extra}
+    if reflection:
+        out["reflection"] = ax_i(*reflection)
+    if hops:
+        out["multi_hop"] = ax_i(*hops)
+    return out
+
+
+def test_the_winner_clause_is_decided_on_the_capability_axes_and_a_tie_goes_to_the_maintained_candidate():
+    """Owner direction 2026-10-07: G0-G3 are floors; the contest is exact words / reflection / long-range recall / protocol + temporal and recall AT DISTANCE.
+    Two wins beyond the Wilson interval (worse on none) wins; fewer wins and no axis where it is worse is a capability tie, which goes to the maintained
+    candidate (H1 before H2); authority / forgetting / extraction / abstention scores no longer break ties."""
+    assert gates.WIN_AXES == {"C": "temporal", "D": "recall_distance", "J": "exact_words", "K": "reflection", "L": "multi_hop", "M": "protocol_brain"}
+    assert gates.FLOOR_AXES == {"B": "extraction", "E": "abstention"} and "poisoning" in gates.HARD_AXES and gates.MAINTAINED == ("H1", "H2")
+    assert (gates.RULE["capability_wins_min"], gates.RULE["capability_axes_with_data_min"], gates.RULE["observation_precision_min"]) == (2, 3, 0.95)
+    z0 = gates.aggregate_axes({"s": {"axes": cap()}})
+    # a win: exact words 20 / 20 vs Z0's 10 / 20 and multi-hop 20 / 20 vs 5 / 20 (items), worse on none
+    strong = {n: gates.evaluate_arm(n, three(axes=cap(exact=(20, 20), hops=(20, 20))), good_measure()) for n in ("H1", "H2")}
+    z0w = gates.aggregate_axes({"s": {"axes": cap(hops=(5, 20))}})
+    d = gates.decide(strong, z0w)
+    assert d["verdict"] == "ADOPT_CANDIDATE" and d["winner"] == "H1" and "exact_words" not in d["text"] and "J" in d["text"] and "L" in d["text"]
+    assert d["caveat"].startswith("Advisory") and "floors" in d["caveat"]
+    # a tie on capability, with data on at least three axes: the maintained candidate
+    tie = {"H1": gates.evaluate_arm("H1", three(axes=cap()), good_measure())}
     d2 = gates.decide(tie, z0)
-    assert d2["verdict"] == "KEEP_Z0" and "tie goes to Z0" in d2["text"] and d2["adoptable"] == ["H1"]
-    only_one = {"H1": gates.evaluate_arm("H1", three(axes={"extraction": {"pass": 30, "n": 30, "skip": 0, "cells": 30}, "abstention": {"pass": 20, "n": 30, "skip": 0, "cells": 30}}),
-                                         good_measure())}
-    assert gates.decide(only_one, z0)["verdict"] == "KEEP_Z0"                                       # needs TWO of B/C/D/E
-    worse = {"H1": gates.evaluate_arm("H1", three(axes={"extraction": {"pass": 30, "n": 30, "skip": 0, "cells": 30}, "abstention": {"pass": 5, "n": 30, "skip": 0, "cells": 30}}), good_measure())}
-    assert gates.decide(worse, z0)["verdict"] == "KEEP_Z0"
+    assert d2["verdict"] == "ADOPT_ON_TIE" and d2["winner"] == "H1" and "maintained candidate" in d2["text"] and d2["adoptable"] == ["H1"]
+    # store hygiene does not break a tie: an arm far WORSE than Z0 on extraction and abstention (the floors' axes) still takes a capability tie
+    hyg = {"H1": gates.evaluate_arm("H1", three(axes={**cap(), "extraction": ax_c(0, 30), "abstention": ax_c(0, 30)}), good_measure())}
+    z0h = gates.aggregate_axes({"s": {"axes": {**cap(), "extraction": ax_c(30, 30), "abstention": ax_c(30, 30)}}})
+    dh = gates.decide(hyg, z0h)
+    assert dh["verdict"] == "ADOPT_ON_TIE" and dh["floors"]["H1"]["B"]["worse"] is True and "B" not in dh["compare"]["H1"]
+    # too little capability evidence is not a tie
+    thin = {"H1": gates.evaluate_arm("H1", three(axes={"temporal": ax_c(10, 20), "exact_words": ax_i(10, 20)}), good_measure())}
+    assert gates.decide(thin, z0)["verdict"] == "KEEP_Z0" and "too thin" in gates.decide(thin, z0)["text"]
+    # worse beyond the interval on one capability axis: not adoptable, however many it wins
+    worse = {"H1": gates.evaluate_arm("H1", three(axes=cap(temporal=(1, 20), exact=(20, 20), hops=(20, 20))), good_measure())}
+    dw = gates.decide(worse, z0w)
+    assert dw["verdict"] == "KEEP_Z0" and "WORSE" in dw["text"]
+    # a floor still fails the arm whatever it wins
+    bad = {"H1": gates.evaluate_arm("H1", three(axes=cap(exact=(20, 20), hops=(20, 20)), hard=["A1.digest.home"]), good_measure())}
+    assert gates.decide(bad, z0w)["verdict"] == "KEEP_Z0"
+
+
+def _k1_row(verdict="FAIL", stage="write", decidable=20, false=2, reason=""):
+    """A K1 cell row as ``runner._row`` makes it, with the evidence shape ``scorers_cap.score_observations`` writes."""
+    if verdict == "ERROR":
+        ev = {}
+    elif decidable < 3:
+        ev = {"probes": [{"observations_judged": {"observations": decidable, "true": decidable - false, "false": false, "neutral": 0, "decidable": decidable,
+                                                   "reason": "too few decidable observations"}, "items": [decidable - false, decidable]}]}
+    else:
+        ev = {"probes": [{"observations_judged": {"n": decidable, "hits": decidable - false, "false": false, "decidable": decidable}, "items": [decidable - false, decidable]}]}
+    return {"id": "K1.observations_are_true", "verdict": verdict, "stage": stage, "evidence": ev, "reason": reason}
+
+
+def _h2_with_k1(*rows, failing=("K1.observations_are_true",)):
+    runs = three(axes=cap(exact=(20, 20), hops=(20, 20), reflection=(20, 20)))
+    runs["s0"]["k1"] = [gates.k1_evidence(r) for r in rows]
+    a = gates.evaluate_arm("H2", runs, good_measure())
+    a["axes"]["reflection"]["failing"] = list(failing)             # K1 is in the axis' failing list whatever the reason it failed
+    return a
+
+
+def test_fabricated_observations_veto_an_arm_whatever_else_it_wins():
+    z0 = gates.aggregate_axes({"s": {"axes": cap(hops=(5, 20))}})
+    # a MEASURED false rate above the limit (2 of 20 = 10%) over enough decidable observations: vetoed
+    liar = {"H2": _h2_with_k1(_k1_row(decidable=20, false=2))}
+    st = gates.observation_status(liar["H2"]["axes"])
+    assert st["status"] == "vetoed" and st["evidence"][0]["decidable"] == 20 and st["evidence"][0]["false_rate"] == 0.1 and st["evidence"][0]["seed"] == "s0"
+    d = gates.decide(liar, z0)
+    assert gates.observation_veto(liar["H2"]["axes"]) and d["verdict"] == "KEEP_Z0" and "H2" in d["vetoed"] and "VETOED" in d["text"] and "2 false of 20" in d["text"]
+    # exactly three decidable is enough to measure; one false of three is 33%
+    assert gates.observation_veto(_h2_with_k1(_k1_row(decidable=3, false=1))["axes"])
+    honest = {"H2": gates.evaluate_arm("H2", three(axes=cap(exact=(20, 20), hops=(20, 20), reflection=(20, 20))), good_measure())}
+    assert not gates.observation_veto(honest["H2"]["axes"]) and gates.decide(honest, z0)["verdict"] == "ADOPT_CANDIDATE"
+    assert gates.observation_status(honest["H2"]["axes"])["status"] == "not_run"
+
+
+def test_a_k1_that_did_not_measure_is_reported_as_insufficient_or_error_and_never_vetoes():
+    """K1 also fails at stage ``read`` (fewer than three decidable observations) and an ERROR cell lands in the axis' failing list: neither says the layer fabricates."""
+    z0 = gates.aggregate_axes({"s": {"axes": cap(hops=(5, 20))}})
+    # precision 100% over two decidable observations: the cell FAILs at read, the evidence is insufficient, the arm is not vetoed
+    thin = {"H2": _h2_with_k1(_k1_row(verdict="FAIL", stage="read", decidable=2, false=0))}
+    st = gates.observation_status(thin["H2"]["axes"])
+    assert st["status"] == "insufficient" and st["evidence"][0]["false_rate"] == 0.0 and "too few decidable" in st["reason"]
+    d = gates.decide(thin, z0)
+    assert not gates.observation_veto(thin["H2"]["axes"]) and d["vetoed"] == [] and d["verdict"] == "ADOPT_CANDIDATE"
+    assert d["observations"]["H2"]["status"] == "insufficient" and "NOT established" in d["text"] and "VETOED" not in d["text"]
+    # zero observations at all (an empty layer): also insufficient, never fabrication
+    assert gates.observation_status(_h2_with_k1(_k1_row(verdict="FAIL", stage="read", decidable=0, false=0))["axes"])["status"] == "insufficient"
+    # an ERROR cell is a measurement error
+    err = {"H2": _h2_with_k1(_k1_row(verdict="ERROR", stage="", reason="RuntimeError: the idle pass did not run"))}
+    assert gates.observation_status(err["H2"]["axes"])["status"] == "measurement_error" and not gates.observation_veto(err["H2"]["axes"])
+    assert gates.decide(err, z0)["vetoed"] == []
+    # an old record that has K1 in failing and no counts cannot be read as fabrication either
+    old = gates.evaluate_arm("H2", three(axes=cap(exact=(20, 20), hops=(20, 20), reflection=(20, 20))), good_measure())
+    old["axes"]["reflection"]["failing"] = ["K1.observations_are_true"]
+    assert gates.observation_status(old["axes"])["status"] == "insufficient" and not gates.observation_veto(old["axes"])
+    # a clean K1 reads clean
+    assert gates.observation_status(_h2_with_k1(_k1_row(verdict="PASS", stage="", decidable=20, false=0), failing=())["axes"])["status"] == "clean"
+    # the evidence of a seed that measured fabrication still vetoes beside a thin one
+    mixed = _h2_with_k1(_k1_row(verdict="FAIL", stage="read", decidable=2, false=0), _k1_row(decidable=20, false=4))
+    assert gates.observation_veto(mixed["axes"])
+
+
+def test_the_derived_axes_are_built_from_the_per_cell_verdicts():
+    """D = the recall cells AT DISTANCE (D2 / D3 / D4; D1's 30 turns is near); M = the brain-tier protocol cells only (the lab half never decides)."""
+    cells = [{"id": "D1.hit5_after_30_filler", "verdict": "FAIL", "sanity": False}, {"id": "D2.hit5_after_100_filler", "verdict": "PASS", "sanity": False},
+             {"id": "D3.hit5_after_300_filler", "verdict": "PASS", "sanity": False}, {"id": "D4.hit5_paraphrase_after_100_filler", "verdict": "FAIL", "sanity": False},
+             {"id": "M1.answered_when_recall_fired", "verdict": "PASS", "sanity": False}, {"id": "M4.fire_when_needed.zoe", "verdict": "SKIP", "sanity": False}]
+    a = gates.aggregate_axes({"s": {"axes": {"recall": ax_c(2, 4)}, "cells": cells}})
+    assert (a["recall_distance"]["pass"], a["recall_distance"]["n"]) == (2, 3) and a["recall_distance"]["failing"] == ["D4.hit5_paraphrase_after_100_filler"]
+    assert "protocol_brain" not in a                                                              # M4 cells all SKIPped (no brain): no data, so M never counts
+    ran = gates.aggregate_axes({"s": {"axes": {}, "cells": cells[:5] + [{"id": "M4.fire_when_needed.zoe", "verdict": "PASS", "sanity": False}]}})
+    assert (ran["protocol_brain"]["pass"], ran["protocol_brain"]["n"]) == (1, 1)
+    c = gates.compare_axes(gates.aggregate_axes({"s": {"axes": {"recall": ax_c(20, 20)}}}), gates.aggregate_axes({"s": {"axes": {"recall": ax_c(4, 20)}}}))                       # an old record with no per-cell verdicts: D falls back to the recall axis
+    assert c["D"]["axis"] == "recall_distance" and c["D"]["beats"]
+
+
+def test_items_are_the_unit_of_the_item_axes_and_cells_are_not():
+    """Two cells of 0 / 2 vs 2 / 2 cannot separate; 20 of 20 items vs 0 of 20 can. That is why J / K / L pool items."""
+    arm = {"exact_words": ax_i(20, 20)}
+    z0 = {"exact_words": ax_i(0, 20)}
+    agg = lambda x: gates.aggregate_axes({"s": {"axes": x}})  # noqa: E731
+    c = gates.compare_axes(agg(arm), agg(z0))["J"]
+    assert c["unit"] == "items" and c["beats"] and c["arm"][:2] == [20, 20] and c["z0"][:2] == [0, 20]
+    cells_only = gates.compare_axes(agg({"exact_words": ax_c(2, 2)}), agg({"exact_words": ax_c(0, 2)}))["J"]
+    assert cells_only["unit"] == "cells" and not cells_only["beats"]                              # two cells say nothing beyond the interval
 
 
 def test_no_adoptable_arm_keeps_z0_and_says_which_are_incomplete():
@@ -803,7 +989,7 @@ def canned_hm(cells):
     return run
 
 
-def e2e_window(box, tmp_path, monkeypatch, *, box_min=None, egress=True, extra=(), pg=False):
+def e2e_window(box, tmp_path, monkeypatch, *, box_min=None, egress=True, extra=(), pg=False, host=None, **cfg_kw):
     cells = [c for c in spec.load_cells() if c.id in SUBSET + tuple(extra)]
     assert len(cells) == len(SUBSET) + len(extra)
     monkeypatch.setattr(spec, "load_cells", lambda directory=None: cells)
@@ -813,9 +999,9 @@ def e2e_window(box, tmp_path, monkeypatch, *, box_min=None, egress=True, extra=(
     monkeypatch.setattr(measure, "LATENCY_FACTS", 4)
     if box_min:
         monkeypatch.setattr(measure, "BOX_MIN", box_min)
-    host = FakeHost(box)
+    host = host or FakeHost(box)
     host.log = lambda _m: None
-    w = make_window(box, host, docs_dir=tmp_path / "docs", sample_s=0.01)
+    w = make_window(box, host, docs_dir=tmp_path / "docs", sample_s=0.01, **cfg_kw)
     if pg:                                   # the stack the window really has: Hindsight writing to a scratch Postgres the arm can read and scrub
         from zmb.arms.fake_postgres import FakePostgres
         store = FakePostgres()
@@ -1021,7 +1207,7 @@ def test_a_live_egress_hook_is_logged_and_the_window_goes_on(box):
 # ── the phase budget: three H1 seeds inside the cap, H2 and H0 one seed each ──────────────────────────────────────
 
 def test_the_budget_fits_three_h1_seeds_inside_the_hard_cap(box):
-    cfg = bakeoff.Cfg(bakeoff_dir=box)
+    cfg = bakeoff.Cfg(bakeoff_dir=box, arms=HM_ERA)
     b = measure.plan_budget(cfg)
     assert b.seeds == {"H1": 3, "H2": 1, "H0": 1, "HM": 1} and b.arms == ("H1", "H2", "HM", "H0")        # HM: one seed box; H1 keeps three
     assert b.total_min() <= b.avail_min <= cfg.cap_min - cfg.reserve_min - measure.TAIL_MIN              # the hard cap is kept, with the tail
@@ -1039,7 +1225,7 @@ def test_a_run_of_h1_h2_h0_without_hm_keeps_the_pre_hm_budget_shape(box):
 
 def test_hm_fits_the_90_minute_cap_next_to_h1_x3_h2_and_h0_and_the_plan_says_what_it_costs(box):
     """The owner's question (2026-10-06): can HM ride along? Yes, as ONE seed box: the HM cells (about 4 min measured on the real tiers) plus a store-cell box."""
-    cfg = bakeoff.Cfg(bakeoff_dir=box)
+    cfg = bakeoff.Cfg(bakeoff_dir=box, arms=HM_ERA)
     b = measure.plan_budget(cfg)
     without = measure.plan_budget(bakeoff.Cfg(bakeoff_dir=box, arms=("H1", "H2", "H0")))
     assert b.total_min() <= b.avail_min and b.box_min["H1"] == without.box_min["H1"]       # H1's three full seeds are untouched
@@ -1047,14 +1233,15 @@ def test_hm_fits_the_90_minute_cap_next_to_h1_x3_h2_and_h0_and_the_plan_says_wha
 
 
 def test_a_lower_arm_only_gets_what_is_left_behind_the_work_queued_for_it(box):
-    b = measure.plan_budget(bakeoff.Cfg(bakeoff_dir=box))
-    assert b.seed_box_s("H1", 3600.0) == b.box_min["H1"] * 60.0 and b.seed_box_s("H1", 120.0) == 120.0     # H1: its ceiling, never over the time left
-    assert b.fixed_min("H0") == 0.0                     # H0's latency / slot are "only if time remains": its cells outrank its timings
-    queued_h2 = (b.fixed_min("H2") + measure.PHASE_MIN["validity"]["concise"] + 2.0) * 60.0       # its own phases + H0's 2 min seed box
+    b = measure.plan_budget(bakeoff.Cfg(bakeoff_dir=box, arms=HM_ERA, reflect_ctx=0))
+    assert b.seed_box_s("H1", 3600.0, first=False) == b.box_min["H1"] * 60.0 and b.seed_box_s("H1", 120.0) == 120.0     # H1: its ceiling, never over the time left
+    assert b.seed_box_s("H1", 3600.0) == (b.box_min["H1"] + b.extra_min["H1"]) * 60.0                  # seed 1 also holds the capability cells; seeds 2 and 3 do not
+    assert b.fixed_min("H0") == 0.0 and b.fixed_min("H2") == 0.0     # H0's and H2's latency / slot are "only if time remains": their cells outrank their timings (CUT for the capability axes)
+    queued_h2 = (b.fixed_min("H2") + 2.0) * 60.0       # its own phases (none budgeted) + H0's 2 min seed box
     assert b.seed_box_s("H2", queued_h2 - 1.0) == 0.0                                  # nothing left behind its own queue: no box, no starving H0
-    assert 0 < b.seed_box_s("H2", 3000.0) <= 2 * b.box_min["H2"] * 60.0
-    assert b.seed_box_s("H2", 6000.0) == 2 * b.box_min["H2"] * 60.0                    # an early H1 hands its slack on, up to twice the plan
-    assert b.seed_box_s("H0", 100.0 * 60) <= 2 * b.box_min["H0"] * 60.0
+    assert 0 < b.seed_box_s("H2", 3000.0) <= 2 * (b.box_min["H2"] + b.extra_min["H2"]) * 60.0
+    assert b.seed_box_s("H2", 6000.0) == 2 * (b.box_min["H2"] + b.extra_min["H2"]) * 60.0     # an early H1 hands its slack on, up to twice the plan
+    assert b.seed_box_s("H0", 100.0 * 60) <= 2 * (b.box_min["H0"] + b.extra_min["H0"]) * 60.0
 
 
 def test_h1_runs_first_and_complete_then_h2_then_h0(box, tmp_path, monkeypatch):
@@ -1068,7 +1255,7 @@ def test_h1_runs_first_and_complete_then_h2_then_h0(box, tmp_path, monkeypatch):
 
 def test_the_dry_plan_prints_the_per_arm_cell_budget_and_the_seed_counts(box):
     host = FakeHost(box)
-    w = make_window(box, host, dry=True)
+    w = make_window(box, host, dry=True, arms=HM_ERA)
     measure.dry_plan(w)
     line = next(m for m in w.logs if m.startswith("per-arm cell budget"))
     assert "H1 3 seeds x " in line and "H2 1 seed x " in line and "H0 1 seed x " in line and "HM 1 seed x " in line and "all 3 seeds complete inside the cap" in line
@@ -1092,7 +1279,7 @@ def test_the_window_measures_hm_on_one_seed_and_the_record_has_its_own_line_gate
     assert hm["gates"]["HM"]["hm_G3a_replaces_zoe_datas_palace"]["state"] == gates.NA        # a design review, never a pass the window can give
     assert hm["gates"]["G0"]["steady_rss"]["measured"].endswith("MB") and art["measure"]["HM"]["rss"]["note"].startswith("the servers' PSS during the HM phase")
     assert art["measure"]["HM"]["forgetting"]["t0"]["resurrected"] == 0 and art["measure"]["HM"]["forgetting"]["t6"]["resurrected"] == 0
-    assert "## HM:" in md and "| Letter | Axis | Z0 | H1 | H2 | HM | H0 |" in md
+    assert "## HM:" in md and "| Letter | Axis | Z0 | H1 | H2 | HM | MPA | HMA | ZMA | H0 |" in md
     assert any("HM runs ONE seed by design" in n for n in art["notes"]) and "HM" in art["compare"]
     assert art["decision"]["verdict"] in ("KEEP_Z0", "ADOPT_CANDIDATE") and art["decision"]["winner"] != "HM"
 
@@ -1129,7 +1316,7 @@ def test_the_recall_axis_is_compared_with_z0e_when_it_ran_and_with_z0_when_it_di
     z0e = {"recall": {"pass": 12, "n": 12, "skipped": 0, "wilson95": [0.76, 1.0]}}
     assert gates.compare_axes(arm, z0)["D"]["baseline"] == "Z0" and gates.compare_axes(arm, z0, z0e)["D"]["baseline"] == "Z0e"
     assert gates.compare_axes(arm, z0, z0e)["D"]["z0"][1] == 12                       # the baseline's own counts, not the bag-of-words'
-    assert gates.compare_axes(arm, z0, z0e)["B"]["baseline"] == "Z0"                  # only D moves: B, C, E stay on the lab's Z0
+    assert gates.compare_floors(arm, z0)["B"]["baseline"] == "Z0" and gates.compare_axes(arm, z0, z0e)["C"]["baseline"] == "Z0"      # only D and L move: the rest stay on the lab's Z0
     bad = {"recall": {"pass": 0, "n": 20, "skipped": 0, "wilson95": [0.0, 0.16]}}
     assert gates.compare_axes(bad, z0, z0e)["D"]["worse"] is True
 
@@ -1144,7 +1331,7 @@ def test_z0e_runs_on_the_recall_cells_and_gets_its_own_column_and_the_d_baseline
     art = json.loads((box / "run-t1.json").read_text())
     md = Path(art["docs_path"]).read_text()
     assert set(art["z0e"]) == set(art["z0"]) and all("recall" in a for a in art["z0e"].values())          # three seeds, the recall axis
-    assert "| Axis | Z0 | Z0e (real retrieval) | Z0-off" in md and "Z0e (the D baseline)" in md
+    assert "| Axis | Z0 | Z0e (real retrieval) | Z0-off" in md and "Z0e (the D baseline)" in md and "multi_hop" in md
     assert art["compare"]["H1"]["D"]["baseline"] == "Z0e"
 
 
@@ -1169,15 +1356,17 @@ def test_skips_are_split_into_time_box_and_capability_and_the_gate_says_which():
 
 
 def test_the_winner_clause_reads_the_temporal_and_recall_axes_the_axes_pr_built():
-    assert gates.WIN_AXES == {"B": "extraction", "C": "temporal", "D": "recall", "E": "abstention"}
+    assert gates.WIN_AXES["C"] == "temporal" and gates.WIN_AXES["D"] == "recall_distance"
     def ax(p, n):
         lo, hi = gates.wilson(p, n)
         return {"pass": p, "n": n, "wilson95": [round(lo, 4), round(hi, 4)]}
     z0 = {"extraction": ax(20, 20), "temporal": ax(10, 20), "recall": ax(4, 20), "abstention": ax(10, 10)}
     arm = {"extraction": ax(20, 20), "temporal": ax(20, 20), "recall": ax(20, 20), "abstention": ax(10, 10)}
     c = gates.compare_axes(arm, z0)
-    assert c["C"]["axis"] == "temporal" and c["C"]["beats"] and c["D"]["axis"] == "recall" and c["D"]["beats"]       # two beats: the rule's win
-    assert not c["B"]["beats"] and not c["E"]["beats"] and not any(v["worse"] for v in c.values())
+    assert c["C"]["axis"] == "temporal" and c["C"]["beats"] and c["D"]["axis"] == "recall_distance" and c["D"]["beats"]       # two beats: the rule's win
+    assert not any(v["worse"] for v in c.values()) and "B" not in c and "E" not in c
+    fl = gates.compare_floors(arm, z0)
+    assert not fl["B"]["beats"] and not fl["E"]["beats"]                                                             # the floors are reported, they decide nothing
     assert gates.compare_axes({}, z0)["C"]["note"] == "no data"                                                       # an arm that ran none: no data, not a tie
 
 
@@ -1186,23 +1375,28 @@ def test_the_run_record_opens_with_the_verdict_the_clause_per_axis_and_the_plain
     measure.measure(w)
     md = Path(json.loads((box / "run-t1.json").read_text())["docs_path"]).read_text()
     head = md.split("## Run")[0]
-    assert "**Verdict by the pre-registered rule:" in head and "### Winner clause per axis" in head and "### Is it better than ours?" in head
-    assert "| B | extraction |" in head and "| C | temporal |" in head and "| D | recall |" in head and "| E | abstention |" in head
-    assert "A tie goes to Z0" in head and "Honest caveats:" in head
-    assert head.index("Verdict by") < head.index("Winner clause per axis") < head.index("Is it better than ours?")
+    assert "**Verdict by the pre-registered rule:" in head and "### Winner clause per capability axis" in head and "### Is it better than ours?" in head
+    assert "| C | temporal |" in head and "| D | recall_distance" in head and "| J | exact_words" in head and "| K | reflection" in head
+    assert "| L | multi_hop" in head and "| M | protocol_brain" in head and "| B | extraction |" in head and "| E | abstention |" in head
+    assert "FLOORS" in head and "ties on capability go to the maintained candidate" in head and "no longer break ties" in head and "Honest caveats:" in head
+    assert head.index("Verdict by") < head.index("Winner clause per capability axis") < head.index("Floors reported beside the contest") < head.index("Is it better than ours?")
 
 
 def test_the_plain_answer_says_yes_only_when_the_rule_says_so():
     ax = {"extraction": {"pass": 18, "n": 18, "wilson95": [0.82, 1.0], "skipped": 0}}
     arm = {"verdict": "PASSES_BUILT_GATES", "seeds_done": 3, "axes": ax, "gates": {"G0": {"x": {"state": gates.PASS}}}}
-    won = {"verdict": "ADOPT_CANDIDATE", "winner": "H1", "compare": {"H1": {"B": {"axis": "extraction", "built": True, "beats": True, "worse": False},
-                                                                        "D": {"axis": "recall", "built": True, "beats": True, "worse": False}}}}
-    assert gates._better_line({"H1": arm}, won).startswith("Yes, on what was measured: H1 passes every built gate")
-    tie = {"verdict": "KEEP_Z0", "compare": {"H1": {"B": {"axis": "extraction", "built": True, "beats": False, "worse": False, "arm": [18, 18, [0.82, 1.0]]},
-                                                  "C": {"axis": "temporal", "built": True, "beats": False, "worse": False, "note": "no data"}}}}
+    won = {"verdict": "ADOPT_CANDIDATE", "winner": "H1", "compare": {"H1": {"J": {"axis": "exact_words", "built": True, "beats": True, "worse": False},
+                                                                        "L": {"axis": "multi_hop", "built": True, "beats": True, "worse": False}}}}
+    assert gates._better_line({"H1": arm}, won).startswith("Yes, on what was measured: H1 passes every floor")
+    tied = {"verdict": "ADOPT_ON_TIE", "winner": "H1", "compare": {"H1": {"C": {"axis": "temporal", "built": True, "beats": False, "worse": False, "arm": [9, 9, [0.7, 1.0]]},
+                                                                         "K": {"axis": "reflection", "built": True, "beats": False, "worse": False, "note": "no data"}}}}
+    line = gates._better_line({"H1": arm}, tied)
+    assert line.startswith("Not shown to be better, not shown to be worse: H1 passes every floor") and "maintained candidate" in line and "no data for K reflection" in line
+    tie = {"verdict": "KEEP_Z0", "compare": {"H1": {"C": {"axis": "temporal", "built": True, "beats": False, "worse": False, "arm": [18, 18, [0.82, 1.0]]},
+                                                  "J": {"axis": "exact_words", "built": True, "beats": False, "worse": False, "note": "no data"}}}}
     line = gates._better_line({"H1": {**arm, "verdict": "NOT_ADOPTABLE", "gates": {"G2": {"hard_cells_all_ran": {"state": gates.FAIL}}}}}, tie)
-    assert line.startswith("No evidence that H1 is better than Z0") and "ties Z0 on B extraction" in line and "no data for C temporal" in line
-    assert "A tie goes to Z0" in line and "G2 hard_cells_all_ran" in line
+    assert line.startswith("No evidence that H1 is better than Z0") and "ties Z0 on C temporal" in line and "no data for J exact_words" in line
+    assert "keep Z0" in line and "G2 hard_cells_all_ran" in line
 
 
 # ── the H arms run the graph-edge, conflict-pass and physical-erase cells (the structural skips of run 1 are gone) ────────────────
@@ -1232,9 +1426,79 @@ def test_the_dry_plan_counts_what_each_kind_of_arm_can_run(box):
     line = next(m for m in w.logs if m.startswith("per-arm cell budget"))
     b = measure.plan_budget(w.cfg)
     assert b.runnable == b.store_cells and b.runnable_h0 < b.runnable
-    assert f"0 of {b.store_cells} store cells SKIP by capability on H1 / H2" in line
+    assert f"0 of {b.store_cells} ordinary store cells SKIP by capability on H1 / H2" in line
     assert f"{b.store_cells - b.runnable_h0} on H0 (no Zoe layer: conflict_pass / edges)" in line
     assert f"/{b.runnable_h0} runnable cells each" in line and f"/{b.runnable} runnable cells each" in line
+
+
+CAP_IDS = ("J1.exact_sentence_after_100_filler", "J2.when_did_i_say_it", "K1.observations_are_true", "K2.thread_recall", "K4.invalidated_fact_not_restated",
+           "L1.two_facts_after_100_filler", "M1.answered_when_recall_fired")
+
+
+def test_the_capability_cells_run_on_seed_one_only_and_each_arm_runs_the_ones_it_is_the_evidence_for(box, tmp_path, monkeypatch):
+    w, _host = e2e_window(box, tmp_path, monkeypatch, extra=CAP_IDS)
+    measure.measure(w)
+    art = json.loads((box / "run-t1.json").read_text())
+    h1 = art["seed_runs"]["H1"]
+    seeds = list(h1)
+    ids = lambda run: {c["id"]: c for c in run["cells"]}  # noqa: E731
+    held = [k for k in h1 if k != "zmb-v1"]                                                                               # the artifact sorts its keys: seed 1 is the baseline seed
+    first, later = ids(h1["zmb-v1"]), ids(h1[held[0]])
+    assert set(CAP_IDS) <= set(first) and not set(CAP_IDS) & set(later) and not set(CAP_IDS) & set(ids(h1[held[1]]))        # seed 1 only
+    assert first["J1.exact_sentence_after_100_filler"]["verdict"] == "FAIL"                                               # H1 keeps the extractor's facts, not the raw turn
+    assert first["K1.observations_are_true"]["verdict"] == "SKIP" and "observations" in first["K1.observations_are_true"]["reason"]     # no observation layer: a capability skip, not a cut
+    h2 = ids(art["seed_runs"]["H2"]["zmb-v1"])
+    assert h2["J1.exact_sentence_after_100_filler"]["verdict"] == "SKIP" and "planner cut" in h2["J1.exact_sentence_after_100_filler"]["reason"]    # the plan's cut, said so
+    assert h2["K1.observations_are_true"]["verdict"] != "SKIP" and h2["K2.thread_recall"]["verdict"] != "SKIP"                        # H2 runs the observation layer's cells
+    assert art["arms"]["H1"]["axes"]["exact_words"]["items"]["n"] == 40 and art["arms"]["H2"]["axes"]["reflection"]["n"] >= 3
+    why = art["arms"]["H2"]["gates"]["G2"]["hard_cells_all_ran"]["measured"]
+    assert "planner cut" not in why or "hard" in why                                                                    # the cut cells are not hard cells: they cannot keep a floor red
+    md = Path(art["docs_path"]).read_text()
+    assert "### Winner clause per capability axis" in md and "| J | exact_words" in md and "FLOORS" in md and "no longer break ties" in md
+    assert set(art["compare"]["H1"]) == {"C", "D", "J", "K", "L", "M"} and set(art["decision"]["floors"]["H1"]) == {"B", "E"}
+    assert art["decision"]["verdict"] in ("KEEP_Z0", "ADOPT_CANDIDATE", "ADOPT_ON_TIE")
+
+
+def test_the_baseline_runs_the_capability_cells_on_the_same_seed_as_the_candidates_and_only_that_one(monkeypatch):
+    """The candidates run J/K/L/M on seed 1 only; Z0 / Z0-off / Z0e pooled over three households would be compared with ONE, so they get seed 1 only too."""
+    import types
+    from zmb import runner
+    ran = []
+    monkeypatch.setattr(runner, "control_pass", lambda *a, **k: {})
+    monkeypatch.setattr(runner, "instrument_block", lambda *a, **k: {"ok": True, "lab_controls_red": "0/0"})
+    monkeypatch.setattr(runner, "run_cells", lambda cells, world, arm: (ran.append([c.axis for c in cells]), [])[1])
+    ctx = types.SimpleNamespace(z0={}, z0_off={}, z0e={}, notes=[], log=lambda *a, **k: None)
+    store = [c for c in spec.load_cells() if c.tier == "store"]
+    assert {c.axis for c in store} & set(measure.CAP_AXES)
+    measure.phase_z0(ctx, ("s1", "s2", "s3"), store, {c.id: c for c in store})
+    per_seed = [any(a in measure.CAP_AXES for a in axes) for axes in ran]
+    assert len(ran) == 3 * 3 and per_seed == [True, True, True, False, False, False, False, False, False]      # (Z0, Z0-off, Z0e) x (s1, s2, s3)
+
+
+def test_the_dry_plan_states_what_it_cut_to_fit_the_capability_axes_under_the_cap(box):
+    w = make_window(box, FakeHost(box), dry=True, arms=HM_ERA)
+    measure.dry_plan(w)
+    out = "\n".join(w.logs)
+    b = measure.plan_budget(w.cfg)
+    assert b.total_min() <= b.avail_min and b.avail_min <= w.cfg.cap_min - w.cfg.reserve_min - measure.TAIL_MIN               # inside the 90 minute cap with the restore reserve kept
+    assert "CUT to fit the capability axes under the cap" in out and "H2: exact_words, multi_hop, protocol cut" in out and "H0: exact_words, multi_hop, protocol cut" in out
+    assert "H1: nothing cut" in out and "capability cells run on seed 1 only" in out and "(-17.7 min)" in out
+    for arm in ("H1", "H2", "HM", "H0"):
+        assert f"{arm} seed 1: capability cells (" in out, arm
+    assert "H1 seed 1: capability cells (exact_words, multi_hop, protocol)" in out and "H2 seed 1: capability cells (reflection)" in out
+    assert "only if time remains; ~10 min, not budgeted" in out                                                           # the concise validity phase
+    assert b.extra_min["H1"] > b.extra_min["H2"] > 0 and b.extra_min["HM"] == measure.HM_CAP_MIN
+    assert measure.cap_extra_min("H1") == round(sum(measure.CAP_RETAINS[x] for x in measure.CAP_PLANNED["H1"]) * measure.S_PER_RETAIN["H1"] / 60.0 * 2) / 2.0
+    assert "Z0e (real Chroma + MiniLM) on the 4 recall (D) + 3 long-range (L) cells" in out
+
+
+def test_the_planner_does_not_count_the_capability_cells_in_the_box_run_1_measured(box):
+    b = measure.plan_budget(bakeoff.Cfg(bakeoff_dir=box, arms=HM_ERA))
+    from zmb import cells as cellmod
+    cap_cells = [c for c in spec.load_cells() if c.tier == "store" and c.axis in measure.CAP_AXES]
+    assert cap_cells and b.store_cells == len([c for c in spec.load_cells() if c.tier == "store"]) - len(cap_cells)
+    assert set(measure.CAP_AXES) == {"exact_words", "reflection", "multi_hop", "protocol"} and set(measure.CAP_CUT) == {"H0", "H1", "H2", "HM", "MPA", "HMA", "ZMA"}
+    assert all(set(measure.CAP_CUT[a]) | set(measure.CAP_PLANNED[a]) <= set(measure.CAP_AXES) for a in measure.CAP_CUT)
 
 
 def test_measure_over_the_full_stack_runs_the_hard_edge_and_disk_cells_on_h1_and_h0_stays_red_by_design(box, tmp_path, monkeypatch):
@@ -1321,3 +1585,1356 @@ def test_every_process_the_window_starts_forces_onnxruntimes_telemetry_off():
     for name in ("bakeoff.py", "bakeoff_window.sh", "hm_window.py", "bakeoff_measure.py", "embed_shim.py", "lab_driver.py", "arms/mempalace_verbatim.py"):
         assert "ORT_DISABLE_TELEMETRY" in (REPO / "scripts/perf/zmb" / name).read_text(), name
     assert "ORT_DISABLE_TELEMETRY=1" in bakeoff.hindsight_env(ENV_EXAMPLE, bakeoff.Cfg(), "t")
+
+
+# ══ MPA / HMA: the agent operates MemPalace (2026-10-07). Planner, gates, driver fold, report ═══════════════════════════════════════════════════════════
+
+import math as _math  # noqa: E402
+
+
+def test_the_default_arm_list_and_the_execution_order_include_mpa_and_hma():
+    assert bakeoff.Cfg().arms == ("H1", "H2", "HM", "MPA", "HMA", "ZMA", "H0") == measure.ARM_ORDER
+    assert measure.SEEDS_PER_ARM["MPA"] == 1 and measure.SEEDS_PER_ARM["HMA"] == 1 and measure.SEEDS_PER_ARM["ZMA"] == 1 and measure.SEEDS_PER_ARM["H1"] == 3
+    assert gates.ARM_NAMES[-3:] == ("MPA", "HMA", "ZMA") and gates.MAINTAINED == ("H1", "H2") and set(gates.ONE_SEED_ARMS) == {"HM", "MPA", "HMA", "ZMA"}
+    assert measure.CAP_PLANNED["MPA"] == ("exact_words", "reflection", "multi_hop", "protocol") == measure.CAP_PLANNED["HMA"]
+    assert measure.CAP_CUT["MPA"] == () and measure.cap_extra_min("MPA") == 0.0 and measure.cap_extra_min("HMA") == 0.0
+    assert measure.PHASE_MIN["latency"]["MPA"] == 0.0 and measure.PHASE_MIN["slot"]["HMA"] == 0.0
+
+
+def test_the_mpa_cells_minutes_are_computed_from_model_calls_in_one_constants_block(monkeypatch):
+    assert measure.MPA_CALLS == {"protocol": 85, "exact_words": 32, "multi_hop": 36, "reflection": 86, "behaviour": 50, "closet": 12} and measure.MPA_S_PER_CALL == 3.0
+    assert measure.HMA_CALLS == {**measure.MPA_CALLS, "observations": 60}
+    assert measure.mpa_cells_min() == _math.ceil(301 * 3.0 / 60.0 * 2) / 2.0 == measure.PHASE_MIN["mpa_cells"]       # round UP to the half minute
+    assert measure.hma_cells_min() == _math.ceil((361 * 3.0 + measure.CONSOLIDATE_S) / 60.0 * 2) / 2.0 == measure.PHASE_MIN["hma_cells"]
+    b = measure.plan_budget(bakeoff.Cfg(bakeoff_dir=Path("/x")))
+    assert b.fixed_min("MPA") == measure.mpa_cells_min() and b.fixed_min("HMA") == measure.hma_cells_min()
+    monkeypatch.setattr(measure, "MPA_S_PER_CALL", 6.0)                                                          # tune the one number: the minutes follow
+    assert measure.mpa_cells_min() == _math.ceil(301 * 6.0 / 60.0 * 2) / 2.0 and b.fixed_min("MPA") == measure.mpa_cells_min()
+
+
+def test_the_dry_plan_prints_the_mpa_and_hma_rows_the_constants_and_what_each_costs_and_cut(box):
+    w = make_window(box, FakeHost(box), dry=True)
+    measure.dry_plan(w)
+    out = "\n".join(w.logs)
+    assert "MPA cells on the clone brain: protocol 85, exact_words 32, multi_hop 36, reflection 86, behaviour 50, closet 12 = 301 model calls x 3 s" in out
+    assert "HMA cells on the clone brain:" in out and "observations 60" in out and "Hindsight consolidation" in out
+    assert "MPA seed 1 (" in out and "HMA seed 1 (" in out and "store-tier cells" in out
+    assert out.index("HM seed 1") < out.index("MPA cells on the clone brain") < out.index("MPA seed 1") < out.index("HMA cells on the clone brain") < out.index("HMA seed 1") < out.index("H0 seed 1")
+    assert "MPA_CALLS = {" in out and "MPA_S_PER_CALL = 3 s" in out and "HMA_CALLS = {" in out
+    assert "MPA runs L0 only (no 100/300 filler: each filler turn is a brain call)" in out
+    assert "WHAT MPA COSTS AND WHAT WAS CUT: MPA adds " in out and "WHAT HMA COSTS AND WHAT WAS CUT: HMA adds " in out
+    assert "the cut order when the plan is over is H0's box, then HM's, then H2's, never H1's seeds" in out
+    assert "MPA recall latency" not in out and "MPA brain-slot" not in out                      # no latency / slot phases: their numbers come from their own cells
+
+
+def test_the_cost_sentence_names_exactly_the_boxes_that_shrank_and_h1_is_untouched(box):
+    cfg = bakeoff.Cfg(bakeoff_dir=box)
+    store = [c for c in spec.load_cells() if c.tier == "store"]
+    with_b = measure.plan_budget(cfg, store)
+    without = measure.plan_budget(bakeoff.Cfg(bakeoff_dir=box, arms=("H1", "H2", "HM", "HMA", "H0")), store)
+    assert with_b.box_min["H1"] == without.box_min["H1"] and with_b.seeds["H1"] == 3 and with_b.extra_min["H1"] == without.extra_min["H1"]       # H1 keeps 3 seeds and its box
+    changed = {a for a in without.arms if with_b.box_min[a] != without.box_min[a]}
+    assert "H1" not in changed
+    for a in without.arms:                                                                       # everything that is not a lower arm's BOX is identical with and without MPA
+        assert with_b.fixed_min(a) == without.fixed_min(a) and with_b.extra_min[a] == without.extra_min[a], a
+    sentence = measure.cost_sentence(cfg, "MPA", store, with_b)
+    for a in changed:
+        assert f"{a} box {without.box_min[a]:g} -> {with_b.box_min[a]:g} min" in sentence
+    assert ("no other box shrank" in sentence) == (not changed) and "H1's box unchanged" in sentence
+
+
+def test_when_the_arms_ask_for_more_than_the_cap_holds_the_plan_says_so_and_the_boxes_sit_on_the_floor(box):
+    """With the constants as first written (402 + 462 calls x 3 s) the 90-minute cap cannot hold H1 x3 + HM + MPA + HMA: the plan prints the deficit and what would fit."""
+    w = make_window(box, FakeHost(box), dry=True)
+    measure.dry_plan(w)
+    out = "\n".join(w.logs)
+    b = measure.plan_budget(w.cfg)
+    assert b.slack_min() < 0 and "DOES NOT FIT" in out and f"over by {-b.slack_min():.1f}" in out
+    assert all(b.box_min[a] == measure.BOX_FLOOR_MIN for a in b.arms if a != "H1") and b.seeds["H1"] == 3
+    head = measure.driver_call_headroom(b)
+    assert head is not None and f"~{head} MPA + HMA + ZMA brain calls" in out and head < sum(measure.MPA_CALLS.values()) + sum(measure.HMA_CALLS.values()) + sum(measure.ZMA_CALLS.values())
+
+
+def test_the_plan_with_mpa_and_hma_fits_a_cap_that_holds_it_and_h1_keeps_three_seeds_and_its_box(box):
+    """At 90 minutes even ZERO MPA / HMA brain calls leave almost no headroom (H1's three ceilings + the capability cells are 42.5 of the 77.5 available minutes): the constants as
+    first written fit a longer cap, and the plan then shows FITS with H1's three seeds and box untouched."""
+    cfg90 = bakeoff.Cfg(bakeoff_dir=box)
+    assert measure.driver_call_headroom(measure.plan_budget(cfg90)) < 100                         # the 90-minute headroom, in calls: next to nothing
+    w = make_window(box, FakeHost(box), dry=True, cap_min=170.0)
+    b = measure.plan_budget(w.cfg)
+    assert b.slack_min() >= 0 and b.total_min() <= b.avail_min <= w.cfg.cap_min - w.cfg.reserve_min - measure.TAIL_MIN
+    assert b.seeds["H1"] == 3 and b.arms == ("H1", "H2", "HM", "MPA", "HMA", "ZMA", "H0") and all(b.box_min[a] >= measure.BOX_FLOOR_MIN for a in b.arms)
+    assert b.box_min["H1"] == measure.plan_budget(bakeoff.Cfg(bakeoff_dir=box, arms=HM_ERA, cap_min=170.0)).box_min["H1"]
+    measure.dry_plan(w)
+    assert any(m.startswith("FITS: slack +") for m in w.logs) and not any("DOES NOT FIT" in m for m in w.logs)
+
+
+def test_the_weights_shed_h0_first_then_hm_then_h2_and_never_h1(box):
+    w = measure.LOWER_WEIGHTS
+    assert w["H0"] < w["MPA"] <= w["HM"] < w["H2"] and w["HMA"] == w["MPA"]
+    b6 = measure.plan_budget(bakeoff.Cfg(bakeoff_dir=box, arms=("H1", "H2", "HM", "MPA", "HMA", "H0"), cap_min=240.0))     # a long cap: spare minutes split by the weights
+    assert b6.box_min["H2"] >= b6.box_min["HM"] >= b6.box_min["MPA"] >= b6.box_min["H0"] and b6.box_min["H2"] > b6.box_min["H0"]
+
+
+def test_an_mpa_arm_runs_the_ordinary_cells_it_declares_capabilities_for(box):
+    from zmb.arms.mempalace_agent import MemPalaceAgentArm
+    b = measure.plan_budget(bakeoff.Cfg(bakeoff_dir=box))
+    from zmb import cells as cellmod
+    ordinary = [c for c in spec.load_cells() if c.tier == "store" and c.axis not in measure.CAP_AXES]
+    assert b.runnable_mpa == sum(1 for c in ordinary if cellmod.required_capabilities(c) <= set(MemPalaceAgentArm.capabilities)) and 0 < b.runnable_mpa <= b.runnable
+    assert b.runnable_for("MPA") == b.runnable_mpa and b.cells_in_box("MPA") == int(b.box_min["MPA"] * 60.0 / measure.S_PER_CELL["MPA"])
+
+
+# ── the gate items ────────────────────────────────────────────────────────────
+
+MPA_IDS = ("M4.fire_when_needed.mempalace5", "M4.quiet_when_not_needed.mempalace5", "M4.cite_precision.mempalace5", "M4.idk_when_silent.mempalace5",
+           "MPA-T1.schema", "MPA-B2.supersede", "MPA-F1.forget.t0", "MPA-F2.forget.t6min", "MPA-A1.authority", "MPA-I1.guest", "MPA-C1.closet", "MPA-G0.rss")
+
+
+def mpa_m(verdicts=None, **over):
+    """A measure dict in which every MPA item PASSES; ``verdicts`` overrides cell verdicts by id."""
+    verdicts = verdicts or {}
+    cells = [{"id": i, "verdict": verdicts.get(i, "PASS"), "evidence": {}} for i in MPA_IDS]
+    m = {"mpa_cells": {"summary": {"pass": len(cells), "graded": len(cells), "fail": [], "sanity_fail": [], "skipped": [], "not_instrumented": [], "controls_checked": 6,
+                                   "controls_mode": "real", "targets_failing": [], "reflective_tier": "real"}, "cells": cells},
+         "brain": {"model_calls": 300, "prompt_tokens_max": 3000, "model_s_total": 900.0, "tool_calls": 120, "tool_calls_valid": 118, "searched_before_answer": [18, 20],
+                   "supersede": {"correct": 9, "n": 10, "wrong": 1}},
+         "mpa_driver": {"server_rss_steady_mb": 120.0, "server_rss_peak_mb": 180.0, "servers": 3, "pss_before_mb": 60.0, "peak_rss_mb": 100.0},
+         "prompt_fits": True, "prompt_detail": "max prompt 3000 + 2048 < 8192", "mpa_glue_lines": 800}
+    m.update(over)
+    return m
+
+
+MPA_ITEMS = {"mpa_cells_zero_violations", "mpa_cells_all_ran", "mpa_controls_red", "mpa_G0_server_rss", "mpa_G1_tool_call_validity", "mpa_G1_search_before_answer",
+             "mpa_G1_supersede_correct", "mpa_G1_prompt_fits", "mpa_G2_floors", "mpa_G3_glue_lines"}
+
+
+def test_the_mpa_thresholds_are_pre_registered():
+    r = gates.RULE
+    assert (r["mpa_tool_validity_min"], r["mpa_tool_calls_min"], r["mpa_supersede_min"], r["mpa_supersede_wrong_max"], r["mpa_supersede_n_min"]) == (0.95, 30, 0.80, 2, 10)
+    assert "pre-registered 2026-10-07 before any MPA run" in (REPO / "scripts/perf/zmb/bakeoff_gates.py").read_text()
+    assert (r["steady_rss_mb"], r["burst_rss_mb"], r["layer_lines_max"]) == (600.0, 900.0, 1000)          # MPA reuses the G0 / G3 numbers
+
+
+def test_a_clean_mpa_measurement_passes_every_item_and_a_missing_driver_is_not_a_pass():
+    g = gates.gate_mpa(mpa_m())
+    assert set(g) == MPA_ITEMS and all(v["state"] == gates.PASS for v in g.values()), {k: v for k, v in g.items() if v["state"] != gates.PASS}
+    assert "3 server(s)" in g["mpa_G0_server_rss"]["measured"]                                       # information: one MemPalace server per palace
+    none = gates.gate_mpa({})
+    assert set(none) == {"mpa_cells_ran"} and none["mpa_cells_ran"]["state"] == gates.NA
+
+
+def test_mpa_cells_red_skipped_and_controls():
+    red = mpa_m(verdicts={"MPA-F1.forget.t0": "FAIL"})
+    red["mpa_cells"]["summary"]["fail"] = ["MPA-F1.forget.t0"]
+    g = gates.gate_mpa(red)
+    assert g["mpa_cells_zero_violations"]["state"] == gates.FAIL and "MPA-F1.forget.t0" in g["mpa_cells_zero_violations"]["measured"] and g["mpa_G2_floors"]["state"] == gates.FAIL
+    sk = mpa_m(verdicts={"MPA-A1.authority": "SKIP"})
+    sk["mpa_cells"]["summary"]["skipped"] = ["MPA-A1.authority"]
+    g = gates.gate_mpa(sk)
+    assert g["mpa_cells_all_ran"]["state"] == gates.FAIL and g["mpa_G2_floors"]["state"] == gates.NA                        # a skipped floor is not a pass either
+    ni = mpa_m()
+    ni["mpa_cells"]["summary"]["not_instrumented"] = ["MPA-F1.forget.t0"]
+    assert gates.gate_mpa(ni)["mpa_controls_red"]["state"] == gates.FAIL
+    nc = mpa_m()
+    nc["mpa_cells"]["summary"]["controls_checked"] = 0
+    assert gates.gate_mpa(nc)["mpa_controls_red"]["state"] == gates.NA
+
+
+@pytest.mark.parametrize("steady,peak,state", [(600.0, 900.0, gates.PASS), (600.1, 900.0, gates.FAIL), (100.0, 900.1, gates.FAIL), (None, 100.0, gates.NA), (100.0, None, gates.NA)])
+def test_mpa_g0_server_rss(steady, peak, state):
+    m = mpa_m(mpa_driver={"server_rss_steady_mb": steady, "server_rss_peak_mb": peak, "servers": 2})
+    assert gates.gate_mpa(m)["mpa_G0_server_rss"]["state"] == state
+
+
+@pytest.mark.parametrize("calls,valid,state", [(100, 94, gates.FAIL), (100, 95, gates.PASS), (29, 29, gates.NA), (30, 30, gates.PASS), (30, 28, gates.FAIL), (None, None, gates.NA)])
+def test_mpa_g1_tool_call_validity(calls, valid, state):
+    m = mpa_m()
+    m["brain"].update({"tool_calls": calls, "tool_calls_valid": valid})
+    g = gates.gate_mpa(m)["mpa_G1_tool_call_validity"]
+    assert g["state"] == state and (calls != 29 or "too few calls to judge" in g["measured"])
+
+
+@pytest.mark.parametrize("verdict,state", [("PASS", gates.PASS), ("FAIL", gates.FAIL), ("SKIP", gates.NA), (None, gates.NA)])
+def test_mpa_g1_search_before_answer_reads_the_protocol_cells_verdict(verdict, state):
+    m = mpa_m(verdicts={"M4.fire_when_needed.mempalace5": verdict} if verdict else {})
+    if verdict is None:
+        m["mpa_cells"]["cells"] = [c for c in m["mpa_cells"]["cells"] if not c["id"].startswith("M4.fire")]
+    assert gates.gate_mpa(m)["mpa_G1_search_before_answer"]["state"] == state
+
+
+@pytest.mark.parametrize("correct,n,wrong,state", [(8, 10, 2, gates.PASS), (7, 10, 3, gates.FAIL), (9, 10, 3, gates.FAIL), (9, 9, 0, gates.NA), (None, None, 0, gates.NA)])
+def test_mpa_g1_supersede(correct, n, wrong, state):
+    m = mpa_m()
+    m["brain"]["supersede"] = {"correct": correct, "n": n, "wrong": wrong} if n is not None else {}
+    assert gates.gate_mpa(m)["mpa_G1_supersede_correct"]["state"] == state
+
+
+def test_mpa_prompt_fit_floors_and_glue_lines():
+    assert gates.gate_mpa(mpa_m(prompt_fits=False))["mpa_G1_prompt_fits"]["state"] == gates.FAIL and gates.gate_mpa(mpa_m(prompt_fits=None))["mpa_G1_prompt_fits"]["state"] == gates.NA
+    for fam in ("MPA-F", "MPA-A", "MPA-I"):
+        ids = [i for i in MPA_IDS if i.startswith(fam)]
+        assert gates.gate_mpa(mpa_m(verdicts={ids[0]: "FAIL"}))["mpa_G2_floors"]["state"] == gates.FAIL, fam
+        assert gates.gate_mpa(mpa_m(verdicts={ids[0]: "SKIP"}))["mpa_G2_floors"]["state"] == gates.NA, fam
+    assert gates.gate_mpa(mpa_m(mpa_glue_lines=1000))["mpa_G3_glue_lines"]["state"] == gates.PASS and gates.gate_mpa(mpa_m(mpa_glue_lines=1001))["mpa_G3_glue_lines"]["state"] == gates.FAIL
+    assert gates.gate_mpa(mpa_m(mpa_glue_lines=None))["mpa_G3_glue_lines"]["state"] == gates.NA
+    assert measure.mpa_glue_lines() >= 0 and measure.hma_glue_lines() >= measure.mpa_glue_lines()
+
+
+def hma_m(verdicts=None, **over):
+    m = mpa_m(verdicts, rss={"steady_mb": 520.0, "burst_mb": 700.0}, hma_rss_parts={"stack_steady_mb": 400.0, "mempalace_steady_mb": 120.0})
+    m["mpa_cells"]["cells"].append({"id": "MPA-K1.closet_summaries_true", "verdict": "PASS", "evidence": {"precision": 0.96}})
+    m.update(over)
+    return m
+
+
+def test_hma_adds_the_observation_veto_the_total_ram_and_the_two_tier_forget():
+    g = gates.gate_hma(hma_m())
+    assert set(g) == MPA_ITEMS | {"hma_K_reflection", "hma_G0_total_rss", "hma_G2b_two_tier_forget"} and all(v["state"] == gates.PASS for v in g.values())
+    assert "HM-like stack 400 MB + MemPalace servers 120 MB" in g["hma_G0_total_rss"]["measured"]
+    low = hma_m()
+    low["mpa_cells"]["cells"][-1]["evidence"]["precision"] = 0.94
+    assert gates.gate_hma(low)["hma_K_reflection"]["state"] == gates.FAIL
+    low["mpa_cells"]["cells"] = [c for c in low["mpa_cells"]["cells"] if not c["id"].startswith("MPA-K")]
+    assert gates.gate_hma(low)["hma_K_reflection"]["state"] == gates.NA
+    low["k1_rows"] = [{"id": "K1.observations_are_true", "verdict": "FAIL"}]                       # the generic K1 row is the fallback
+    assert gates.gate_hma(low)["hma_K_reflection"]["state"] == gates.FAIL
+    assert gates.gate_hma(hma_m(rss={"steady_mb": 601.0, "burst_mb": 700.0}))["hma_G0_total_rss"]["state"] == gates.FAIL
+    assert gates.gate_hma(hma_m(rss={}))["hma_G0_total_rss"]["state"] == gates.NA
+    f = hma_m(verdicts={"MPA-F2.forget.t6min": "FAIL"})
+    assert gates.gate_hma(f)["hma_G2b_two_tier_forget"]["state"] == gates.FAIL
+    one = hma_m()
+    one["mpa_cells"]["cells"] = [c for c in one["mpa_cells"]["cells"] if c["id"] != "MPA-F2.forget.t6min"]
+    assert gates.gate_hma(one)["hma_G2b_two_tier_forget"]["state"] == gates.NA                     # one tier measured is not both tiers
+    assert set(gates.gate_hma({})) == {"mpa_cells_ran"}
+
+
+def test_a_stand_in_reflective_tier_never_certifies_an_hma_gate():
+    """Which tier produced the evidence is recorded; only the window's real Hindsight can pass an HMA item."""
+    real = gates.gate_hma(hma_m())
+    assert any(v["state"] == gates.PASS for v in real.values()) and not any("not certified" in v["measured"] for v in real.values())
+    for tier in ("fake", None):
+        m = hma_m()
+        if tier is None:
+            m["mpa_cells"]["summary"].pop("reflective_tier")
+        else:
+            m["mpa_cells"]["summary"]["reflective_tier"] = tier
+        g = gates.gate_hma(m)
+        assert not any(v["state"] == gates.PASS for v in g.values()) and g["hma_G2b_two_tier_forget"]["state"] == gates.NA and "not certified" in g["hma_G2b_two_tier_forget"]["measured"]
+    f = hma_m(verdicts={"MPA-F2.forget.t6min": "FAIL"})
+    f["mpa_cells"]["summary"]["reflective_tier"] = "fake"
+    assert gates.gate_hma(f)["hma_G2b_two_tier_forget"]["state"] == gates.FAIL                       # a red stays red whatever tier produced it
+
+
+def test_evaluate_arm_adds_the_mpa_and_hma_blocks_and_one_seed_is_incomplete_even_when_every_gate_passes():
+    m = good_measure(**mpa_m())
+    a = gates.evaluate_arm("MPA", {"zmb-v1": seed_run()}, m)
+    assert set(a["gates"]) == {"G0", "G1", "G2", "G3", "MPA"} and all(s == gates.PASS for s in a["gate_states"].values()), a["gate_states"]
+    assert a["verdict"] == "INCOMPLETE" and a["seeds"]["state"] == gates.NA                         # every gate PASSES; ONE seed by design: never adoptable
+    h = gates.evaluate_arm("HMA", {"zmb-v1": seed_run()}, good_measure(**hma_m()))
+    assert "HMA" in h["gates"] and h["verdict"] == "INCOMPLETE" and all(s == gates.PASS for s in h["gate_states"].values())
+    three_seeds = gates.evaluate_arm("MPA", three(), m)
+    assert three_seeds["verdict"] == "PASSES_BUILT_GATES"                                           # the verdict logic is the existing one: only the seed count holds it back
+    red = mpa_m(verdicts={"MPA-F1.forget.t0": "FAIL"})
+    red["mpa_cells"]["summary"]["fail"] = ["MPA-F1.forget.t0"]
+    assert gates.evaluate_arm("MPA", {"zmb-v1": seed_run()}, good_measure(**red))["verdict"] == "NOT_ADOPTABLE"
+
+
+def test_decide_never_lets_a_one_seed_arm_win_and_mpa_beats_the_maintained_candidate_or_nothing():
+    z0 = gates.aggregate_axes({"s": {"axes": cap(hops=(5, 20))}})
+    strong = cap(exact=(20, 20), hops=(20, 20))
+    h1 = gates.evaluate_arm("H1", three(axes=cap(hops=(5, 20))), good_measure())               # H1 ties Z0
+    mpa = gates.evaluate_arm("MPA", three(axes=strong), good_measure(**mpa_m()))                # a hypothetical MPA with three clean seeds and two wins
+    assert mpa["verdict"] == "PASSES_BUILT_GATES"
+    d = gates.decide({"H1": h1, "MPA": mpa}, z0)
+    assert d["winner"] == "H1" and d["verdict"] in ("ADOPT_ON_TIE", "KEEP_Z0") and "MPA" not in d["adoptable"]
+    d2 = gates.decide({"MPA": mpa, "HMA": gates.evaluate_arm("HMA", three(axes=strong), good_measure(**hma_m()))}, z0)
+    assert d2["winner"] is None and d2["verdict"] == "KEEP_Z0" and d2["adoptable"] == []              # the maintained candidates did not pass: nothing wins by default
+    assert d["compare"]["MPA"]["J"]["beats"] and d["compare"]["MPA"]["L"]["beats"]                  # the report still shows what MPA beat, for the owner
+
+
+# ── the driver run: the argv, the fold, the report ────────────────────────────
+
+def _subset():
+    return [c for c in spec.load_cells() if c.id in SUBSET]
+
+
+def canned_mpa(cells, *, arm="MPA", verdicts=None, **over):
+    """What ``mpa_window.py`` would hand back (the generic rows come from the HM doubles; the brain cells and counters are canned)."""
+    base = canned_hm(cells)
+
+    def run(ctx, seed, box_s):
+        gen = base(ctx, seed, box_s)["generic"]
+        cs = [{"id": i, "verdict": (verdicts or {}).get(i, "PASS"), "evidence": {}, "title": f"title of {i}"} for i in MPA_IDS]
+        res = {"started": "t", "finished": "t", "library": "mempalace 3.10.0", "model": "gemma-4-E4B", "generic": gen,
+               "mpa_cells": {"summary": {"pass": len(cs), "graded": len(cs), "fail": [], "sanity_fail": [], "skipped": [], "not_instrumented": [], "controls_checked": 6,
+                                         "controls_mode": "real", "targets_failing": [], "reflective_tier": "real"}, "cells": cs},
+               "brain": {"model_calls": 300, "prompt_tokens_max": 3000, "model_s_total": 900.0, "tool_calls": 120, "tool_calls_valid": 118,
+                         "searched_before_answer": [18, 20], "supersede": {"correct": 9, "n": 10, "wrong": 1}},
+               "driver": {"server_rss_steady_mb": 120.0, "server_rss_peak_mb": 180.0, "pss_before_mb": 60.0, "peak_rss_mb": 100.0, "servers": 3, "server_samples": 40, "tool_ms": {"search": {"n": 5, "p50": 4.0, "p95": 9.0}}},
+               "forget_probe": {"t0": {"checked": 2, "resurrected": 0, "kept_others": 1, "how": "store export + recall packet naming her"},
+                                "t6": {"checked": 2, "resurrected": 0, "kept_others": 1, "how": "store export + recall packet naming her", "waited_s": 361.0}}}
+        if arm == "HMA":
+            res["hindsight"] = {"observations": 12, "model_calls": 60}
+        res.update(over)
+        return res
+    return run
+
+
+def test_without_a_real_delayed_probe_the_t6_forgetting_item_is_na_never_a_pass_from_the_immediate_refile_cell(box, tmp_path, monkeypatch):
+    """MPA-F2 is an immediate refile test (no clock, no wait): it must not stand in for the t+6 min result."""
+    w, _h = e2e_window(box, tmp_path, monkeypatch, arms=("H1", "MPA"))
+    base = canned_mpa(_subset())
+
+    def no_probe(ctx, seed, box_s):
+        res = base(ctx, seed, box_s)
+        res["forget_probe"] = {"unmeasured": "start failed: x"}
+        return res
+    w.mpa_runner = no_probe
+    measure.measure(w)
+    art = json.loads((box / "run-t1.json").read_text())
+    mm = art["measure"]["MPA"]
+    assert "t6" not in mm["forgetting"] and mm["forgetting"]["t0"]["resurrected"] == 0
+    assert art["arms"]["MPA"]["gates"]["G2"]["forget_t+6min_no_resurrection"]["state"] == gates.NA and any("t+6 min forgetting probe is unmeasured" in n for n in art["notes"])
+
+
+def test_the_driver_runs_the_generic_forget_probe_at_a_real_t6_and_it_goes_red_with_the_protections_off():
+    sys.path.insert(0, str(REPO / "scripts" / "perf"))
+    from zmb import mpa_cells as mc, mpa_window
+    for off, red in (((), False), (("ledger_write_check", "tool_floor", "distiller_skip"), True)):
+        d = mpa_window.DelayedForget("MPA", lambda off=off: mc.lab_arm("MPA", off))
+        assert not d.error and d.probe.t6 is None
+        d.poll()
+        assert d.probe.t6 is None                                                   # not due: the wall clock has not run six minutes
+        d.probe.t_forget -= 361.0                                                    # six minutes of wall clock later
+        out = d.finish(lambda: None)
+        assert out["t6"]["waited_s"] >= 361.0 and (out["t6"]["resurrected"] > 0) is red and out["t0"]["resurrected"] == 0
+    d = mpa_window.DelayedForget("MPA", lambda: (_ for _ in ()).throw(RuntimeError("no palace")))
+    assert "start failed" in d.error and d.finish(lambda: None) == {"unmeasured": d.error}                     # a probe that cannot run is unmeasured, never a pass
+
+
+def test_the_mpa_server_rss_gate_reads_na_when_the_sampler_saw_no_server():
+    from zmb import mpa_window
+    s = mpa_window.ServerSampler()
+    assert s.summary()["server_rss_steady_mb"] is None and s.summary()["server_rss_peak_mb"] is None and s.summary()["server_samples"] == 0
+    for fn, extra in ((gates.gate_mpa, {}), (gates.gate_zma, {"pss_added_mb": 90.0})):
+        m = mpa_m()
+        m["mpa_driver"].update({"server_rss_steady_mb": 0.0, "server_rss_peak_mb": 0.0, "server_samples": 0, **extra})
+        g = fn(m)
+        assert g["mpa_G0_server_rss" if fn is gates.gate_mpa else "zma_G0_total_rss"]["state"] == gates.NA, fn.__name__
+        m["mpa_driver"].update({"server_rss_steady_mb": 120.0, "server_rss_peak_mb": 180.0, "server_samples": 40})
+        assert fn(m)["mpa_G0_server_rss" if fn is gates.gate_mpa else "zma_G0_total_rss"]["state"] == gates.PASS
+
+
+def test_the_mpa_driver_is_run_like_hm_through_mp_run_sh_with_the_clone_brains_url_and_the_shared_embedder(box):
+    import types
+    seen = {}
+
+    class H(FakeHost):
+        def run(self, argv, timeout=60.0, mutating=True, env=None):
+            if argv[:1] == ["bash"] and "mp_run.sh" in " ".join(argv):
+                seen.update(argv=list(argv), env=env or {}, timeout=timeout)
+            return super().run(argv, timeout, mutating, env)
+    host = H(box)
+    w = make_window(box, host, measure_fn=lambda win: {"ok": 1})
+    ctx = types.SimpleNamespace(cfg=w.cfg, host=host, win=w)
+    r = measure.real_mpa_runner(ctx, "zmb-v1", 120.0)
+    a = seen["argv"]
+    assert a[2].endswith("scripts/perf/zmb/mpa_window.py") and a[a.index("--out") + 1].endswith("mpa-t1.json") and a[a.index("--clone-url") + 1] == "http://127.0.0.1:11500"
+    assert a[a.index("--seed") + 1] == "zmb-v1" and a[a.index("--box-s") + 1] == "120" and "--arm" not in a and "--hindsight-url" not in a and "--smoke" not in a
+    assert seen["env"]["ZMB_HM_EMBEDDER_URL"] == "http://127.0.0.1:11501" and seen["env"]["PYTHONMALLOC"] == "malloc" and seen["env"]["MALLOC_PERTURB_"] == "85"
+    assert seen["timeout"] == 120.0 + measure.PHASE_MIN["mpa_cells"] * 60.0 * 2 + 180.0 and "no result" in r["error"]            # nothing wrote the file: an error, not a pass
+    seen.clear()
+    measure.real_hma_runner(ctx, "zmb-v1", 120.0)
+    a = seen["argv"]
+    assert a[a.index("--arm") + 1] == "HMA" and a[a.index("--hindsight-url") + 1] == "http://127.0.0.1:18888" and a[a.index("--out") + 1].endswith("hma-t1.json")
+    assert seen["timeout"] == 120.0 + measure.PHASE_MIN["hma_cells"] * 60.0 * 2 + 180.0
+    w2 = make_window(box, H(box), measure_fn=lambda win: {"ok": 1}, smoke_cells=7, skip_brain_stop=True)
+    seen.clear()
+    measure.real_mpa_runner(types.SimpleNamespace(cfg=w2.cfg, host=w2.host, win=w2), "zmb-v1", 60.0)
+    a = seen["argv"]
+    assert a[a.index("--clone-url") + 1] == "http://127.0.0.1:11434" and a[a.index("--smoke") + 1] == "7" and "--quiet-since" in a          # the live port under the test hook
+
+
+def test_phase_mpa_folds_the_generic_rows_the_protocol_cells_the_brain_and_the_forgetting(box, tmp_path, monkeypatch):
+    w, _h = e2e_window(box, tmp_path, monkeypatch, arms=("H1", "MPA"))
+    w.mpa_runner = canned_mpa(_subset())
+    measure.measure(w)
+    art = json.loads((box / "run-t1.json").read_text())
+    md = Path(art["docs_path"]).read_text()
+    a = art["arms"]["MPA"]
+    assert a["seeds_done"] == 1 and a["verdict"] in ("INCOMPLETE", "NOT_ADOPTABLE") and set(a["gates"]) == {"G0", "G1", "G2", "G3", "MPA"}      # one seed by design: never adopted
+    run = art["seed_runs"]["MPA"]["zmb-v1"]
+    assert run["cells_ran"] > 0 and run["cells_selected"] == len(SUBSET) and not any(c["id"].startswith("MPA-") for c in run["cells"])
+    m4 = [c["id"] for c in run["cells"] if c["id"].startswith("M4.")]
+    assert len(m4) == 4 and a["axes"]["protocol_brain"]["n"] == 4 and a["axes"]["protocol_brain"]["pass"] == 4          # the four brain-tier cells feed the derived axis M
+    mm = art["measure"]["MPA"]
+    assert all("title" not in c for c in mm["mpa_cells"]["cells"]) and mm["brain"]["tool_calls"] == 120 and mm["mpa_driver"]["servers"] == 3
+    assert mm["prompt_in_tokens_max"] == 3000 and mm["prompt_fits"] is True and a["gates"]["G0"]["prompt_fits_slot"]["state"] == gates.PASS
+    assert mm["forgetting"]["t0"]["resurrected"] == 0 and mm["forgetting"]["t6"]["resurrected"] == 0 and mm["arm_controls"] == "6/6" and "real 361.0 s" in mm["forgetting"]["t6"]["how"]
+    assert mm["rss"]["steady_mb"] == round(mm["rss"]["steady_mb"], 1) and "MemPalace servers' own RSS" in mm["rss"]["note"] and mm["rss"]["steady_mb"] >= 120.0
+    assert mm["layer_lines"] == mm["mpa_glue_lines"] == measure.mpa_glue_lines()
+    assert a["gates"]["MPA"]["mpa_G1_tool_call_validity"]["state"] == gates.PASS and a["gates"]["MPA"]["mpa_G2_floors"]["state"] == gates.PASS
+    assert "## MPA:" in md and "| Letter | Axis | Z0 | H1 | MPA |" in md
+    assert any("MPA / HMA run ONE seed by design" in n and "CLONE BRAIN" in n and "no 100 / 300 filler" in n for n in art["notes"])
+    assert art["decision"]["winner"] != "MPA" and "MPA" in art["compare"]
+
+
+def test_phase_hma_reports_the_total_rss_the_two_tier_forget_and_the_k1_rows(box, tmp_path, monkeypatch):
+    w, _h = e2e_window(box, tmp_path, monkeypatch, extra=("K1.observations_are_true",), arms=("H1", "H2", "HMA"))
+    w.hma_runner = canned_mpa([c for c in spec.load_cells() if c.id in SUBSET + ("K1.observations_are_true",)], arm="HMA")
+    measure.measure(w)
+    art = json.loads((box / "run-t1.json").read_text())
+    h = art["arms"]["HMA"]
+    assert set(h["gates"]) == {"G0", "G1", "G2", "G3", "HMA"} and h["verdict"] in ("INCOMPLETE", "NOT_ADOPTABLE") and h["seeds_done"] == 1
+    mm = art["measure"]["HMA"]
+    assert mm["hindsight"] == {"observations": 12, "model_calls": 60} and mm["hma_rss_parts"]["mempalace_steady_mb"] == 120.0 and mm["k1_rows"]
+    assert "HM-like stack" in h["gates"]["HMA"]["hma_G0_total_rss"]["measured"] and h["gates"]["HMA"]["hma_G2b_two_tier_forget"]["state"] == gates.PASS
+    assert h["gates"]["HMA"]["hma_K_reflection"]["state"] == gates.NA and "K1.observations_are_true" in h["gates"]["HMA"]["hma_K_reflection"]["measured"]       # the generic K1 row (a SKIP on the double): a skip is not a pass
+    assert measure.mpa_glue_lines() <= mm["layer_lines"]
+
+
+@pytest.mark.parametrize("res,note", [({"skipped": "the real MemPalace library is not importable"}, "MPA did not run"), ({"error": "mpa_window.py produced no result (rc=1)"}, "MPA did not run")])
+def test_an_mpa_driver_that_did_not_run_is_reported_not_passed(box, tmp_path, monkeypatch, res, note):
+    w, _h = e2e_window(box, tmp_path, monkeypatch, arms=("H1", "MPA"))
+    w.mpa_runner = lambda ctx, seed, box_s: res
+    measure.measure(w)
+    art = json.loads((box / "run-t1.json").read_text())
+    assert art["arms"]["MPA"]["seeds_done"] == 0 and art["arms"]["MPA"]["verdict"] == "INCOMPLETE" and art["arms"]["MPA"]["gates"]["MPA"]["mpa_cells_ran"]["state"] == gates.NA
+    assert any(note in n for n in art["notes"])
+
+
+def test_an_mpa_driver_stopped_by_a_voice_turn_aborts_the_window_and_a_partial_result_is_kept(box, tmp_path, monkeypatch):
+    w, _h = e2e_window(box, tmp_path, monkeypatch, arms=("H1", "MPA"))
+    w.mpa_runner = lambda ctx, seed, box_s: {"aborted": "a voice turn happened after the window started: stopping (the live brain is shared)"}
+    with pytest.raises(bakeoff.Aborted, match="voice turn"):
+        measure.measure(w)
+    assert json.loads((box / "run-t1.json").read_text())["meta"]["aborted"].startswith("Aborted: a voice turn")
+    w2, _h2 = e2e_window(box, tmp_path, monkeypatch, arms=("H1", "MPA"))                         # stopped EARLY but with cells: folded, with a note
+    full = canned_mpa(_subset(), error="the brain stopped answering")
+    w2.mpa_runner = full
+    measure.measure(w2)
+    art = json.loads((box / "run-t1.json").read_text())
+    assert art["arms"]["MPA"]["seeds_done"] == 1 and any("MPA stopped early: the brain stopped answering" in n for n in art["notes"])
+
+
+def test_the_sampler_watches_the_mpa_driver_too_and_the_phases_know_the_new_arms(box):
+    s = _sampler_over(box, '0 0 192.168.1.218:5 1.2.3.4:443 users:(("python",pid=777,fd=9))\n', pgrep_out="777\n")
+    assert s.nonloopback == {"1.2.3.4"} and "mpa_window" in (REPO / "scripts/perf/zmb/bakeoff_measure.py").read_text()
+    assert measure.phase_arm("MPA:zmb-v1") == "MPA" and measure.phase_arm("HMA:zmb-v1") == "HMA" and measure.phase_arm("reflect:12B@32k") == "shared"
+
+
+def test_mpa_and_hma_have_no_forget_probe_validity_or_latency_phase_of_their_own(box, tmp_path, monkeypatch):
+    w, _h = e2e_window(box, tmp_path, monkeypatch)
+    w.mpa_runner = canned_mpa(_subset())
+    w.hma_runner = canned_mpa(_subset(), arm="HMA")
+    seen = []
+    real = measure.phase_latency
+    monkeypatch.setattr(measure, "phase_latency", lambda ctx, v: (seen.append(v), real(ctx, v))[1])
+    measure.measure(w)
+    art = json.loads((box / "run-t1.json").read_text())
+    assert "MPA" not in seen and "HMA" not in seen and "HM" not in seen
+    assert art["measure"]["MPA"]["forgetting"] != {} and art["measure"]["MPA"].get("json") is None                    # forgetting from MPA-F cells; no extraction JSON phase for the verbatim arm
+
+
+# ══ the REFLECTION phase: K only, against a restarted clone (variants, never contest entrants) ═══════════════════════════════════════════════════════
+
+PARKED_12B = textwrap.dedent("""\
+    # /home/zoe/.config/systemd/user/llama-server-12b-deepbrain.service.disabled
+    [Service]
+    LimitMEMLOCK=infinity
+    MemorySwapMax=0
+    MemoryLow=8G
+    Environment=LD_LIBRARY_PATH=/home/zoe/llama.cpp/build-jetson-new/bin
+    ExecStart=/home/zoe/llama.cpp/build-jetson-new/bin/llama-server \\
+      --model /home/zoe/models/gemma4-12b-qat/gemma-4-12b-it-qat-q4_0.gguf \\
+      --mmproj /home/zoe/models/gemma4-12b-qat/mmproj.gguf \\
+      --no-mmproj-offload \\
+      --host 0.0.0.0 \\
+      --port 11434 \\
+      --ctx-size 8192 \\
+      --parallel 2 \\
+      --cache-type-k q8_0 \\
+      --cache-type-v q8_0 \\
+      --flash-attn on \\
+      --jinja \\
+      --chat-template-kwargs '{"enable_thinking":false}' \\
+      --mlock \\
+      --n-gpu-layers 99 \\
+      --metrics
+    """)
+DEEP = "/x/llama-server-12b-deepbrain.service.disabled"
+BIN12 = "/home/zoe/llama.cpp/build-jetson-new/bin/llama-server"
+MODEL12 = "/home/zoe/models/gemma4-12b-qat/gemma-4-12b-it-qat-q4_0.gguf"
+
+
+class ReflectHost(FakeHost):
+    """The fake host plus the parked 12B unit's text, a set of files that exist, and a MemAvailable that drops while a BIG model is the last one started."""
+
+    def __init__(self, tmp, *, parked=PARKED_12B, exist=(BIN12, MODEL12), low_when=None, **kw):
+        kw.setdefault("mem", lambda h: 20000.0)                                                      # room for the 12B pair's preflight unless a test says otherwise
+        super().__init__(tmp, **kw)
+        self.parked, self.exist, self.low_when = parked, set(exist), low_when
+        if low_when:
+            self.mem = lambda h: 500.0 if h.big_is_up() else 3000.0
+
+    def starts(self):
+        return [c for c in self.joined() if c.startswith("systemd-run")]
+
+    def big_is_up(self):
+        st = self.starts()
+        return bool(st) and self.low_when in st[-1]
+
+    def read(self, path):
+        return self.parked if path == DEEP else super().read(path)
+
+    def exists(self, path):
+        return path in self.exist
+
+    def file_size(self, path):
+        return 6_975_877_728 if path == MODEL12 else None
+
+
+def reflect_env(box, tmp_path, monkeypatch, host, *, arms=("H1", "H2", "HMA"), **cfg_kw):
+    w, _h = e2e_window(box, tmp_path, monkeypatch, extra=("K1.observations_are_true", "K2.thread_recall"), host=host, arms=arms, deep_unit=DEEP, **cfg_kw)
+    w.unit_text = LIVE_UNIT
+    w.hma_reflect_runner = lambda ctx, seed, box_s, pair: {"reflect": {"k_cells": [{"id": "MPA-K1.closet", "verdict": "PASS", "evidence": {"precision": 0.97, "items": [18, 20]}},
+                                                                                  {"id": "MPA-K2.thread", "verdict": "PASS", "evidence": {"items": [4, 5]}}],
+                                                                        "wall_s": 120.0, "model_calls": 70, "tool_calls": 50, "tool_calls_valid": 49, "prompt_tokens_max": 20000,
+                                                                        "model": "m", "closet": {"processed": 5, "failed": 0, "tokens": 9000}}}
+    cells = spec.load_cells()
+    ctx = measure.Ctx(w, None)
+    ctx.arm_controls_ok = True
+    return w, ctx, [c for c in cells if c.tier == "store"], {c.id: c for c in cells}
+
+
+INST = lambda seed: {"ok": True, "lab_controls_red": "9/9"}  # noqa: E731
+
+
+def test_the_12b_clone_is_generated_from_the_parked_unit_with_only_the_documented_overrides():
+    spec12 = bakeoff.deep_clone_command(PARKED_12B, HOME, 11500, 32768)
+    live = bakeoff.parse_unit(PARKED_12B, HOME)["argv"]
+    argv = spec12["argv"]
+    assert argv[0] == BIN12 and spec12["binary"] == BIN12 and spec12["model_path"] == MODEL12 and spec12["model"] == "gemma-4-12b-it-qat-q4_0.gguf"
+    assert "--mmproj" not in argv and "--no-mmproj-offload" not in argv and MODEL12.replace("gemma-4-12b-it-qat-q4_0.gguf", "mmproj.gguf") not in argv
+    for flag, value in (("--host", "127.0.0.1"), ("--port", "11500"), ("--ctx-size", "32768"), ("--parallel", "1")):
+        assert argv[argv.index(flag) + 1] == value
+    rest = [t for t in live if t not in ("--no-mmproj-offload",)]
+    i = rest.index("--mmproj")
+    del rest[i:i + 2]                                                                              # the only removals
+    for flag, value in (("--host", "127.0.0.1"), ("--port", "11500"), ("--ctx-size", "32768"), ("--parallel", "1")):
+        rest[rest.index(flag) + 1] = value
+    assert argv == rest                                                                            # and NOTHING else changed: cache types, flash-attn, jinja, template kwargs, mlock, gpu layers
+    for kept in ("--cache-type-k", "--cache-type-v", "--flash-attn", "--jinja", "--chat-template-kwargs", "--mlock", "--n-gpu-layers", "--metrics"):
+        assert kept in argv
+    assert spec12["env"] == {"LD_LIBRARY_PATH": "/home/zoe/llama.cpp/build-jetson-new/bin"} and spec12["props"]["MemorySwapMax"] == "0"
+    with pytest.raises(bakeoff.Refused):
+        bakeoff.deep_clone_command("[Service]\nExecStart=/bin/llama-server --port 1\n", HOME, 11500, 32768)          # no --model: refused, never guessed
+
+
+def test_the_4b_clone_gets_a_big_context_only_in_the_reflection_restart():
+    plain = bakeoff.clone_command(LIVE_UNIT, HOME, 11500)
+    big = bakeoff.clone_command(LIVE_UNIT, HOME, 11500, 32768)
+    assert plain["argv"][plain["argv"].index("--ctx-size") + 1] == "8192" and big["argv"][big["argv"].index("--ctx-size") + 1] == "32768"
+    assert [a for a, b in zip(plain["argv"], big["argv"]) if a != b] == ["8192"] and "--swa-full" in big["argv"] and ("8192", "32768") in big["diff"]
+    assert bakeoff.Cfg().reflect_ctx == 32768 and bakeoff.Cfg(reflect_ctx=0).reflect_ctx == 0 and "BAKEOFF_REFLECT_CTX" in (REPO / "scripts/perf/zmb/bakeoff.py").read_text()
+
+
+def test_the_reflection_phase_restarts_the_clone_big_runs_the_four_variants_and_puts_the_live_context_back(box, tmp_path, monkeypatch):
+    host = ReflectHost(box)
+    w, ctx, store, by_id = reflect_env(box, tmp_path, monkeypatch, host)
+    measure.phase_reflect(ctx, "zmb-v1", store, by_id, INST)
+    starts = host.starts()
+    assert len(starts) == 3 and "--ctx-size 32768" in starts[0] and "--model" in starts[0] and "gemma-4-E4B" in starts[0]
+    assert "--ctx-size 32768" in starts[1] and MODEL12 in starts[1] and "--mmproj" not in starts[1] and "--host 127.0.0.1" in starts[1] and "--port 11500" in starts[1]
+    assert "--ctx-size 8192" in starts[2] and "32768" not in starts[2]                               # and back to the live context at the end
+    assert not any("llama-server.service" in c for c in host.mutating_cmds()), [c for c in host.mutating_cmds() if "llama-server.service" in c]                       # the live unit is never stopped, started or edited by the phase
+    assert not any(c.startswith(("systemctl --user edit", "systemctl --user enable", "systemctl --user set-property")) or "deepbrain" in c for c in host.mutating_cmds())
+    r = ctx.reflect
+    assert set(r["variants"]) == {"H2@32k", "HMA@32k", "H2@12B", "HMA@12B"} and all(p["status"] == "ran" for p in r["pairs"].values())
+    assert r["pairs"]["12B@32k"]["model"] == "gemma-4-12b-it-qat-q4_0.gguf" and r["pairs"]["12B@32k"]["clone_pss_mb"] == 200.0 and r["clone_pss_8k_mb"] == 200.0
+    v = r["variants"]["HMA@12B"]
+    assert (v["tool_calls"], v["tool_calls_valid"], v["prompt_tokens_max"], v["wall_s"]) == (50, 49, 20000, 120.0) and v["closet"]["processed"] == 5 and v["items"] == {"pass": 22, "n": 25}
+    assert v["k1_veto"] is False and r["variants"]["H2@32k"]["tool_calls"] is None and r["variants"]["H2@32k"]["k_cells"]
+
+
+def test_the_k1_precision_veto_applies_to_the_variants(box, tmp_path, monkeypatch):
+    host = ReflectHost(box)
+    w, ctx, store, by_id = reflect_env(box, tmp_path, monkeypatch, host)
+    w.hma_reflect_runner = lambda ctx, seed, box_s, pair: {"reflect": {"k_cells": [{"id": "MPA-K1.closet", "verdict": "PASS", "evidence": {"precision": 0.90}}], "wall_s": 1.0}}
+    measure.phase_reflect(ctx, "zmb-v1", store, by_id, INST)
+    assert ctx.reflect["variants"]["HMA@32k"]["k1_veto"] is True and ctx.reflect["variants"]["HMA@12B"]["k1_veto"] is True
+
+
+def test_a_missing_12b_model_skips_the_pair_with_the_reason_and_never_fakes_it(box, tmp_path, monkeypatch):
+    host = ReflectHost(box, exist=(BIN12,))
+    w, ctx, store, by_id = reflect_env(box, tmp_path, monkeypatch, host)
+    measure.phase_reflect(ctx, "zmb-v1", store, by_id, INST)
+    p = ctx.reflect["pairs"]["12B@32k"]["status"]
+    assert p.startswith("skipped") and "gemma-4-12b-it-qat-q4_0.gguf does not exist" in p and not any(k.endswith("@12B") for k in ctx.reflect["variants"])
+    assert not any(MODEL12 in c for c in host.starts()) and "--ctx-size 8192" in host.starts()[-1] and any("12B@32k" in n and "does not exist" in n for n in ctx.notes)
+    host2 = ReflectHost(box, parked="")
+    _w, ctx2, store, by_id = reflect_env(box, tmp_path, monkeypatch, host2)
+    measure.phase_reflect(ctx2, "zmb-v1", store, by_id, INST)
+    assert "missing or empty" in ctx2.reflect["pairs"]["12B@32k"]["status"] and set(ctx2.reflect["variants"]) == {"H2@32k", "HMA@32k"}
+
+
+def test_memavailable_below_the_floor_once_the_model_is_up_stops_the_pair_and_restores_the_clone(box, tmp_path, monkeypatch):
+    host = ReflectHost(box, low_when="--ctx-size 32768")
+    w, ctx, store, by_id = reflect_env(box, tmp_path, monkeypatch, host)
+    measure.phase_reflect(ctx, "zmb-v1", store, by_id, INST)
+    r = ctx.reflect
+    assert r["pairs"]["4B@32k"]["status"].startswith("stopped: MemAvailable") and r["pairs"]["12B@32k"]["status"].startswith("skipped: an earlier pair stopped") and r["variants"] == {}
+    assert "--ctx-size 8192" in host.starts()[-1] and w.abort_flag is None and any("stopped: MemAvailable" in n for n in ctx.notes)
+    host2 = ReflectHost(box, low_when="--ctx-size 32768")                                         # the explicit check after the health poll (the guard saw nothing)
+    w2, ctx2, store, by_id = reflect_env(box, tmp_path, monkeypatch, host2)
+    w2.guard = lambda: None
+    measure.phase_reflect(ctx2, "zmb-v1", store, by_id, INST)
+    assert ctx2.reflect["pairs"]["4B@32k"]["status"].startswith("stopped: MemAvailable") and ctx2.reflect["variants"] == {} and "--ctx-size 8192" in host2.starts()[-1]
+
+
+def test_an_abort_in_the_middle_of_the_reflection_phase_restores_the_live_brain_at_its_normal_context(box, monkeypatch):
+    host = ReflectHost(box)
+
+    def phase(win):
+        ctx = measure.Ctx(win, None)
+        monkeypatch.setattr(measure, "reflect_variant_h2", lambda *a, **k: (_ for _ in ()).throw(bakeoff.Aborted("a voice turn started during the reflection phase")))
+        measure.phase_reflect(ctx, "zmb-v1", [], {}, INST)
+    w = make_window(box, host, measure_fn=phase, arms=("H1", "H2"), deep_unit=DEEP)
+    rc = w.run()
+    assert rc == bakeoff.EXIT_ABORTED and restored(host), w.logs[-12:]
+    j = host.joined()
+    big = max(i for i, c in enumerate(j) if c.startswith("systemd-run") and "--ctx-size 32768" in c)
+    assert j.index("systemctl --user start llama-server.service") > big and not (box / "WINDOW_OPEN").exists()
+    assert j[big + 1:].count("systemctl --user stop zoe-bakeoff-gemma.service") >= 1 and not any("--ctx-size 32768" in c for c in j[big + 1:] if c.startswith("systemd-run"))
+    assert "--ctx-size 8192" in next(c for c in j if "--unit=zoe-bakeoff-gemma" in c)             # the window's own clone never had the big context
+    assert not any(("systemctl --user edit" in c or "set-property" in c) for c in j)
+
+
+def test_the_parked_unit_file_is_only_read_never_written_or_started(box, tmp_path, monkeypatch):
+    parked = tmp_path / "llama-server-12b-deepbrain.service.disabled"
+    parked.write_text(PARKED_12B)
+    before = (parked.read_bytes(), parked.stat().st_mtime_ns)
+
+    class H(ReflectHost):
+        def read(self, path):
+            return parked.read_text() if path == str(parked) else FakeHost.read(self, path)
+    host = H(box)
+    w, ctx, store, by_id = reflect_env(box, tmp_path, monkeypatch, host)
+    w.cfg.deep_unit = str(parked)
+    measure.phase_reflect(ctx, "zmb-v1", store, by_id, INST)
+    assert (parked.read_bytes(), parked.stat().st_mtime_ns) == before and set(ctx.reflect["variants"]) == {"H2@32k", "HMA@32k", "H2@12B", "HMA@12B"}
+    assert not any(parked.name in c for c in host.joined()) and sorted(p.name for p in tmp_path.glob("*.disabled")) == [parked.name]
+    src = (REPO / "scripts/perf/zmb/bakeoff_measure.py").read_text() + (REPO / "scripts/perf/zmb/bakeoff.py").read_text()
+    assert "write_text(cfg.deep_unit" not in src and "systemctl\", \"--user\", \"enable" not in src
+
+
+def test_the_phase_is_off_with_ctx_zero_and_with_the_live_brain_hook_and_without_time(box, tmp_path, monkeypatch):
+    host = ReflectHost(box)
+    w, ctx, store, by_id = reflect_env(box, tmp_path, monkeypatch, host, reflect_ctx=0)
+    measure.phase_reflect(ctx, "zmb-v1", store, by_id, INST)
+    assert ctx.reflect is None and host.starts() == [] and measure.plan_budget(w.cfg).reflect_min == {}
+    host2 = ReflectHost(box)
+    w2, ctx2, store, by_id = reflect_env(box, tmp_path, monkeypatch, host2, skip_brain_stop=True)
+    measure.phase_reflect(ctx2, "zmb-v1", store, by_id, INST)
+    assert "BAKEOFF_SKIP_BRAIN_STOP" in ctx2.reflect["why"] and host2.starts() == []
+    host3 = ReflectHost(box)
+    w3, ctx3, store, by_id = reflect_env(box, tmp_path, monkeypatch, host3)
+    host3.t += 82 * 60                                                                              # almost no time left behind the tail: the pairs are skipped, with the minutes said
+    measure.phase_reflect(ctx3, "zmb-v1", store, by_id, INST)
+    assert all(p["status"].startswith("skipped") and "min left behind the tail" in p["status"] for p in ctx3.reflect["pairs"].values()) and host3.starts() == []
+    host4 = ReflectHost(box)
+    w4, ctx4, store, by_id = reflect_env(box, tmp_path, monkeypatch, host4, arms=("H1", "H2", "H0"))
+    measure.phase_reflect(ctx4, "zmb-v1", store, by_id, INST)
+    assert set(ctx4.reflect["variants"]) == {"H2@32k", "H2@12B"}                                    # only the arms in the window get a variant
+
+
+def test_the_reflection_minutes_are_computed_optional_and_taken_from_h0_then_hm(box):
+    assert measure.REFLECT_CALLS == {"H2@32k": 60, "HMA@32k": 80, "ZMA@32k": 40, "H2@12B": 60, "HMA@12B": 80, "ZMA@12B": 40} and measure.REFLECT_S_PER_CALL == {"4B@32k": 4.0, "12B@32k": 12.0}
+    assert measure.REFLECT_LOAD_MIN == {"4B@32k": 1.5, "12B@32k": 3.0}
+    assert measure.reflect_pair_min("4B@32k", ("H2", "HMA")) == _math.ceil((140 * 4.0 / 60.0 + 1.5) * 2) / 2.0
+    assert measure.reflect_pair_min("4B@32k", ("H2", "HMA", "ZMA")) == _math.ceil((180 * 4.0 / 60.0 + 1.5) * 2) / 2.0 == measure.PHASE_MIN["reflect32k"]
+    assert measure.reflect_pair_min("12B@32k", ("H2", "HMA", "ZMA")) == _math.ceil((180 * 12.0 / 60.0 + 3.0) * 2) / 2.0 == measure.PHASE_MIN["reflect12b"]
+    assert measure.reflect_pair_min("4B@32k", ("H1", "H0")) == 0.0
+    b = measure.plan_budget(bakeoff.Cfg(bakeoff_dir=box))
+    nob = measure.plan_budget(bakeoff.Cfg(bakeoff_dir=box, reflect_ctx=0))
+    assert set(b.reflect_min) == {"4B@32k", "12B@32k"} and b.total_min() == nob.total_min()      # optional: never inside the planned total
+    h0_plain, h0_cut = nob.seed_box_s("H0", 20 * 60.0), b.seed_box_s("H0", 20 * 60.0)
+    assert h0_cut < h0_plain                                                                        # H0's box pays for the reflection reserve first
+    hm_plain, hm_cut = nob.seed_box_s("HM", 70 * 60.0), b.seed_box_s("HM", 70 * 60.0)
+    assert hm_cut <= hm_plain and hm_cut >= min(hm_plain, measure.BOX_FLOOR_MIN * 60.0)             # then HM's, never below the minute that keeps HM running
+    w = make_window(box, FakeHost(box), dry=True)
+    measure.dry_plan(w)
+    out = "\n".join(w.logs)
+    assert "REFLECTION PHASE (optional" in out and f"--ctx-size {w.cfg.reflect_ctx}" in out and "PARKED unit llama-server-12b-deepbrain.service.disabled" in out and "never edited" in out
+    assert "reflection phase, 4B@32k" in out and "reflection phase, 12B@32k" in out and "REFLECT_CALLS" in out
+
+
+def test_the_measure_end_to_end_reports_the_reflection_variants_beside_the_8k_k_numbers_and_they_never_win(box, tmp_path, monkeypatch):
+    host = ReflectHost(box)
+    w, _ctx, _store, _by = reflect_env(box, tmp_path, monkeypatch, host, arms=("H1", "H2", "HMA"))
+    w.hma_runner = canned_mpa([c for c in spec.load_cells() if c.id in SUBSET + ("K1.observations_are_true", "K2.thread_recall")], arm="HMA")
+    measure.measure(w)
+    art = json.loads((box / "run-t1.json").read_text())
+    md = Path(art["docs_path"]).read_text()
+    assert set(art["reflect"]["variants"]) == {"H2@32k", "HMA@32k", "H2@12B", "HMA@12B"} and set(art["arms"]) == {"H1", "H2", "HMA"} and set(art["compare"]) == set(art["arms"])
+    assert "## Reflection at a bigger context (variants, NOT contest entrants)" in md and "| H2@12B |" in md and "| HMA@32k |" in md and "8k K of the same arm" in md
+    assert art["decision"]["winner"] not in art["reflect"]["variants"] and any("VARIANTS, never contest entrants" in n for n in art["notes"])
+    assert "--ctx-size 8192" in host.starts()[-1]                                                   # the report was written after the clone went back to the live context
+
+
+# ── the 12B pair's RAM preflight and the owner's listed units ─────────────────────────────────────────────────────────────────────────────────────────
+
+def test_the_12b_ram_arithmetic_is_the_header_measured_one():
+    assert measure.REFLECT_12B_MODEL_BYTES == 6_975_877_728 and measure.REFLECT_COMPUTE_MB == 600.0
+    assert abs(measure.kv_est_mb(32768) - 486.0) < 2.0                                                # global 268M + SWA 189M elements x 1.0625 B
+    assert measure.need_mb_12b(None, 32768, 1200.0) == round(6975.877728 + measure.kv_est_mb(32768) + 600.0 + 1200.0, 0)
+    assert measure.need_mb_12b(6_500_000_000, 32768, 1200.0) < measure.need_mb_12b(None, 32768, 1200.0)      # the real file size wins when known
+    assert measure.kv_est_mb(8192) < measure.kv_est_mb(32768)
+    assert bakeoff.Cfg().reflect_stop_units == () and "BAKEOFF_REFLECT_STOP_UNITS" in (REPO / "scripts/perf/zmb/bakeoff.py").read_text()
+
+
+def test_the_dry_plan_prints_the_12b_preflight_and_the_margin_with_and_without_the_listed_unit(box):
+    w = make_window(box, FakeHost(box), dry=True)
+    measure.dry_plan(w)
+    out = next(m for m in w.logs if m.startswith("12B PREFLIGHT"))
+    need = measure.need_mb_12b(None, w.cfg.reflect_ctx, w.cfg.min_avail_mb)
+    assert f"need {need:.0f} MB = model 6976 + KV 486 + compute 600 + floor 1200" in out and "expected: skip unless extra headroom" in out
+    assert f"with kokoro-tts.service stopped for the 12B pair (BAKEOFF_REFLECT_STOP_UNITS=kokoro-tts.service, default none) the margin = {8400 + 2300 - need:+.0f} MB" in out
+    assert "units stopped for the pair: none" in out and "nothing unlisted is ever stopped" in out
+    w2 = make_window(box, FakeHost(box), dry=True, reflect_stop_units=("kokoro-tts.service",))
+    measure.dry_plan(w2)
+    out2 = next(m for m in w2.logs if m.startswith("12B PREFLIGHT"))
+    assert "expected to fit" in out2 and "units stopped for the pair: kokoro-tts.service" in out2
+
+
+def test_the_12b_pair_is_skipped_with_the_arithmetic_when_the_floor_would_be_breached(box, tmp_path, monkeypatch):
+    host = ReflectHost(box, mem=lambda h: 8400.0)                                                    # the box with the 4B stopped: under the 12B's need
+    w, ctx, store, by_id = reflect_env(box, tmp_path, monkeypatch, host)
+    measure.phase_reflect(ctx, "zmb-v1", store, by_id, INST)
+    p = ctx.reflect["pairs"]["12B@32k"]
+    need = measure.need_mb_12b(6_975_877_728, 32768, 1200.0)
+    assert p["status"].startswith("stopped: the floor would be breached") and f"need {need:.0f} MB = model 6976 + KV 486 + compute 600 + floor 1200" in p["status"]
+    assert f"= 8400 MB (margin {8400 - need:+.0f} MB)" in p["status"] and "--ctx-size 8192" in host.starts()[-1]
+    assert not any(MODEL12 in c for c in host.starts()) and set(ctx.reflect["variants"]) == {"H2@32k", "HMA@32k"} and ctx.reflect["pairs"]["4B@32k"]["status"] == "ran"
+
+
+def test_a_listed_unit_is_stopped_only_for_the_12b_pair_and_started_again_and_nothing_else_is_stopped(box, tmp_path, monkeypatch):
+    def mem(h):
+        j = h.joined()
+        stopped = [i for i, c in enumerate(j) if c == "systemctl --user stop kokoro-tts.service"]
+        started = [i for i, c in enumerate(j) if c == "systemctl --user start kokoro-tts.service"]
+        return 8400.0 + (2300.0 if stopped and (not started or started[-1] < stopped[-1]) else 0.0)
+    host = ReflectHost(box, mem=mem)
+    w, ctx, store, by_id = reflect_env(box, tmp_path, monkeypatch, host, reflect_stop_units=("kokoro-tts.service",))
+    measure.phase_reflect(ctx, "zmb-v1", store, by_id, INST)
+    j = host.joined()
+    stop, start = j.index("systemctl --user stop kokoro-tts.service"), j.index("systemctl --user start kokoro-tts.service")
+    twelve = next(i for i, c in enumerate(j) if c.startswith("systemd-run") and MODEL12 in c)
+    assert j.count("systemctl --user stop kokoro-tts.service") == 1 and stop < twelve < start                 # only the 12B pair; back right after it
+    assert ctx.reflect["pairs"]["12B@32k"]["status"] == "ran" and "margin +" in ctx.reflect["pairs"]["12B@32k"]["preflight"] and w.stopped_extra == []
+    stops = {c.split()[-1] for c in j if c.startswith("systemctl --user stop")}
+    assert stops <= {"zoe-bakeoff-gemma.service", "kokoro-tts.service"} and not any("llama-server.service" in c for c in host.mutating_cmds())
+
+
+def test_a_listed_unit_comes_back_on_an_abort_and_on_the_windows_restore(box, tmp_path, monkeypatch):
+    host = ReflectHost(box)
+    w, ctx, store, by_id = reflect_env(box, tmp_path, monkeypatch, host, reflect_stop_units=("kokoro-tts.service",))
+    calls = []
+
+    def boom(*a, **k):
+        calls.append(1)
+        if len(calls) >= 2:                                                                        # the 12B pair's H2 variant (one call per pair)
+            raise bakeoff.Aborted("a voice turn started while the 12B was up")
+        return {"k_cells": [], "items": {"pass": 0, "n": 0}}
+    monkeypatch.setattr(measure, "reflect_variant_h2", boom)
+    with pytest.raises(bakeoff.Aborted, match="voice turn"):
+        measure.phase_reflect(ctx, "zmb-v1", store, by_id, INST)
+    j = host.joined()
+    assert "systemctl --user stop kokoro-tts.service" in j and j.index("systemctl --user start kokoro-tts.service") > j.index("systemctl --user stop kokoro-tts.service") and w.stopped_extra == []
+    host2 = ReflectHost(box)                                                                       # a hard kill between stop and start: the window's restore starts it
+    w2 = make_window(box, host2, deep_unit=DEEP, reflect_stop_units=("kokoro-tts.service",))
+    w2.stop_extra_units(w2.cfg.reflect_stop_units)
+    assert w2.stopped_extra == ["kokoro-tts.service"]
+    assert w2.restore() and "systemctl --user start kokoro-tts.service" in host2.joined() and w2.stopped_extra == []
+    assert w2.stop_extra_units(()) is None and w2.start_extra_units() is True                          # idempotent, nothing listed = nothing stopped
+
+
+def _kokoro_after_the_12b_is_unloaded(host):
+    """Index check on the command stream: the 12B clone start, the next clone start (the unload: back to the 4B at the live context), and the Kokoro start."""
+    j = host.joined()
+    i12 = next(i for i, c in enumerate(j) if c.startswith("systemd-run") and MODEL12 in c)
+    unload = next(i for i, c in enumerate(j) if i > i12 and c.startswith("systemd-run"))
+    start = next(i for i, c in enumerate(j) if "systemctl --user start kokoro-tts.service" in c)
+    return i12, unload, start, j[unload]
+
+
+def test_a_stopped_unit_is_started_only_after_the_12b_is_unloaded_on_the_pass_path_and_on_an_abort(box, tmp_path, monkeypatch):
+    """Kokoro was stopped because the 12B pair does not fit beside it: starting it while the 12B holds ~7.5 GB can fail or OOM. Put the start back before the unload and this goes red."""
+    host = ReflectHost(box)
+    w, ctx, store, by_id = reflect_env(box, tmp_path, monkeypatch, host, reflect_stop_units=("kokoro-tts.service",))
+    measure.phase_reflect(ctx, "zmb-v1", store, by_id, INST)
+    i12, unload, start, cmd = _kokoro_after_the_12b_is_unloaded(host)
+    assert i12 < unload < start and "--ctx-size 8192" in cmd and MODEL12 not in cmd and len(host.starts()) == 3 and w.stopped_extra == []        # one unload, not two
+    host2 = ReflectHost(box)
+    w2, ctx2, store, by_id = reflect_env(box, tmp_path, monkeypatch, host2, reflect_stop_units=("kokoro-tts.service",))
+    calls = []
+
+    def boom(*a, **k):
+        calls.append(1)
+        if len(calls) >= 2:
+            raise bakeoff.Aborted("a voice turn started while the 12B was up")
+        return {"k_cells": [], "items": {"pass": 0, "n": 0}}
+    monkeypatch.setattr(measure, "reflect_variant_h2", boom)
+    with pytest.raises(bakeoff.Aborted, match="voice turn"):
+        measure.phase_reflect(ctx2, "zmb-v1", store, by_id, INST)
+    i12, unload, start, cmd = _kokoro_after_the_12b_is_unloaded(host2)
+    assert i12 < unload < start and "--ctx-size 8192" in cmd and w2.stopped_extra == []
+
+
+def test_a_clone_that_will_not_unload_keeps_the_unit_stopped_until_the_restore_has_stopped_the_clone(box, tmp_path, monkeypatch):
+    host = ReflectHost(box)
+    w, ctx, store, by_id = reflect_env(box, tmp_path, monkeypatch, host, reflect_stop_units=("kokoro-tts.service",))
+    real = w.restart_clone
+    n = []
+
+    def flaky(ctx_size):
+        n.append(ctx_size)
+        if len(n) == 1:                                                                            # the unload after the 12B pair (the first restart_clone call of the phase)
+            raise bakeoff.Aborted("the 4B would not come back")
+        return real(ctx_size)
+    monkeypatch.setattr(w, "restart_clone", flaky)
+    w.stop_extra_units(w.cfg.reflect_stop_units)
+    measure.phase_reflect(ctx, "zmb-v1", store, by_id, INST)
+    assert "systemctl --user start kokoro-tts.service" not in "\n".join(host.joined()) and w.stopped_extra == ["kokoro-tts.service"]
+    assert any("was not unloaded" in x for x in ctx.notes)
+    assert w.restore()
+    j = host.joined()
+    stop_clone = max(i for i, c in enumerate(j) if "systemctl --user stop zoe-bakeoff-gemma.service" in c)
+    assert stop_clone < host.index("systemctl --user start kokoro-tts.service") and w.stopped_extra == []
+
+
+def test_a_listed_unit_that_was_not_active_before_the_window_is_left_alone(box):
+    """Restore the host to its pre-window state, never past it: an intentionally stopped Kokoro is not started by the window."""
+    host = ReflectHost(box)
+    w = make_window(box, host, deep_unit=DEEP, reflect_stop_units=("kokoro-tts.service",))
+    host.live_active = False                                                                       # is-active answers "inactive"
+    w.stop_extra_units(w.cfg.reflect_stop_units)
+    assert w.stopped_extra == [] and "systemctl --user stop kokoro-tts.service" not in "\n".join(host.joined())
+    assert w.start_extra_units() is True and w.restore() is not None
+    assert "systemctl --user start kokoro-tts.service" not in "\n".join(host.joined())
+
+
+def test_a_unit_that_never_became_active_stays_listed_so_the_restore_retries_it(box):
+    host = ReflectHost(box)
+    w = make_window(box, host, deep_unit=DEEP, reflect_stop_units=("kokoro-tts.service",))
+    w.stop_extra_units(w.cfg.reflect_stop_units)
+    host.live_active = False                                                                       # is-active answers "inactive" for everything
+    assert w.start_extra_units() is False and w.stopped_extra == ["kokoro-tts.service"]
+    host.live_active = True
+    assert w.start_extra_units() is True and w.stopped_extra == []
+
+
+# ══ ZMA: Zoe's live stack + MemPalace (2026-10-07) ═════════════════════════════════════════════════════════════════════════════════════════════════════
+
+def zma_m(**over):
+    m = mpa_m(verdicts={})
+    m["mpa_cells"]["cells"] += [{"id": "ZMA-F1.forget.store", "verdict": "PASS", "evidence": {}}, {"id": "ZMA-F2.forget.palace", "verdict": "PASS", "evidence": {}}]
+    m["mpa_driver"].update({"pss_added_mb": 90.0, "embedder_shared_mb": 85.0})
+    m.update({"zma_hard_violations": [], "zma_hard_skipped": 0})
+    m.update(over)
+    return m
+
+
+def test_zma_gate_items_the_z0_floors_unchanged_both_stores_forgetting_and_the_total_ram():
+    g = gates.gate_zma(zma_m())
+    assert set(g) == MPA_ITEMS | {"zma_G2_floors_unchanged", "zma_forget_both_tiers", "zma_G0_total_rss"} and all(v["state"] == gates.PASS for v in g.values())
+    assert "servers 120 + Z0 in-process 90" in g["zma_G0_total_rss"]["measured"] and "shared-embedder saving 85 MB" in g["zma_G0_total_rss"]["measured"]
+    assert gates.gate_zma(zma_m(zma_hard_violations=["A1.digest.home"]))["zma_G2_floors_unchanged"]["state"] == gates.FAIL
+    assert gates.gate_zma(zma_m(zma_hard_skipped=2))["zma_G2_floors_unchanged"]["state"] == gates.FAIL                 # a hard cell that never ran is not a clean bill
+    assert gates.gate_zma(zma_m(zma_hard_violations=None))["zma_G2_floors_unchanged"]["state"] == gates.NA
+    f = zma_m()
+    f["mpa_cells"]["cells"][-1]["verdict"] = "FAIL"
+    assert gates.gate_zma(f)["zma_forget_both_tiers"]["state"] == gates.FAIL
+    one = zma_m()
+    one["mpa_cells"]["cells"].pop()
+    assert gates.gate_zma(one)["zma_forget_both_tiers"]["state"] == gates.NA                                          # one store measured is not both
+    d = zma_m()
+    d["mpa_driver"].update({"server_rss_steady_mb": 300.0, "pss_added_mb": 301.0})
+    assert gates.gate_zma(d)["zma_G0_total_rss"]["state"] == gates.FAIL                                              # 601 MB steady
+    d2 = zma_m()
+    d2["mpa_driver"].pop("pss_added_mb")
+    assert gates.gate_zma(d2)["zma_G0_total_rss"]["state"] == gates.NA and set(gates.gate_zma({})) == {"mpa_cells_ran"}
+    a = gates.evaluate_arm("ZMA", {"zmb-v1": seed_run()}, good_measure(**zma_m()))
+    assert "ZMA" in a["gates"] and a["verdict"] == "INCOMPLETE" and a["seeds"]["state"] == gates.NA                      # one seed by design
+
+
+def test_zma_runs_in_the_windows_own_interpreter_not_through_mp_run_sh(box):
+    import types
+    seen = {}
+
+    class H(FakeHost):
+        def run(self, argv, timeout=60.0, mutating=True, env=None):
+            if "mpa_window.py" in " ".join(argv):
+                seen.update(argv=list(argv), env=env or {}, timeout=timeout)
+            return super().run(argv, timeout, mutating, env)
+    host = H(box)
+    w = make_window(box, host, measure_fn=lambda win: {"ok": 1})
+    r = measure.real_zma_runner(types.SimpleNamespace(cfg=w.cfg, host=host, win=w), "zmb-v1", 90.0)
+    a = seen["argv"]
+    assert a[0] == sys.executable and a[1].endswith("scripts/perf/zmb/mpa_window.py") and "mp_run.sh" not in " ".join(a) and a[a.index("--arm") + 1] == "ZMA"
+    assert a[a.index("--out") + 1].endswith("zma-t1.json") and a[a.index("--clone-url") + 1] == "http://127.0.0.1:11500" and a[a.index("--box-s") + 1] == "90"
+    assert seen["env"]["ZMB_HM_EMBEDDER_URL"] == "http://127.0.0.1:11501" and seen["timeout"] == 90.0 + measure.PHASE_MIN["zma_cells"] * 60.0 * 2 + 180.0 and "no result" in r["error"]
+    assert measure.zma_cells_min() == _math.ceil(180 * 3.0 / 60.0 * 2) / 2.0 == measure.PHASE_MIN["zma_cells"] and measure.ZMA_CALLS == {
+        "protocol": 60, "exact_words": 20, "multi_hop": 40, "behaviour": 30, "reflection": 30}
+
+
+def test_zma_gets_a_normal_box_that_holds_all_axes_and_its_cost_is_stated_with_mpa_and_hma(box):
+    from zmb.arms.zma import ZMAArm
+    from zmb import cells as cellmod
+    b = measure.plan_budget(bakeoff.Cfg(bakeoff_dir=box))
+    store = [c for c in spec.load_cells() if c.tier == "store"]
+    assert b.runnable_zma == sum(1 for c in store if cellmod.required_capabilities(c) <= set(ZMAArm.capabilities)) > b.runnable_mpa                  # ALL axes A-M, not the ordinary ones only
+    assert b.fixed_min("ZMA") == measure.zma_cells_min() and b.extra_min["ZMA"] == 0.0 and b.seeds["ZMA"] == 1 and b.box_min["ZMA"] >= measure.BOX_FLOOR_MIN
+    assert measure.S_PER_CELL["ZMA"] == 6.5 and measure.LOWER_WEIGHTS["ZMA"] == 1.0 and measure.CAP_PLANNED["ZMA"] == measure.CAP_AXES
+    w = make_window(box, FakeHost(box), dry=True)
+    measure.dry_plan(w)
+    out = "\n".join(w.logs)
+    assert "ZMA cells on the clone brain: protocol 60, exact_words 20, multi_hop 40, behaviour 30, reflection 30 = 180 model calls x 3 s" in out
+    assert "ZMA seed 1 (" in out and "ALL store-tier cells (axes A-M: its write path has no model call)" in out and "--arm ZMA" in out
+    assert "WHAT ZMA COSTS AND WHAT WAS CUT: ZMA adds " in out and "WHAT MPA + HMA + ZMA COST TOGETHER AND WHAT WAS CUT: together they add " in out
+    run2 = next(m for m in w.logs if m.startswith("RUN-2 ARM LIST: "))
+    assert run2.index("H1 (3 seeds") < run2.index("H2 (") < run2.index("HM (") < run2.index("MPA (") < run2.index("HMA (") < run2.index("ZMA (") < run2.index("H0 (")
+    assert out.index("HMA seed 1") < out.index("ZMA cells on the clone brain") < out.index("ZMA seed 1") < out.index("H0 seed 1")
+    with_b = measure.plan_budget(w.cfg, store)
+    without = measure.plan_budget(bakeoff.Cfg(bakeoff_dir=box, arms=tuple(a for a in w.cfg.arms if a not in ("MPA", "HMA", "ZMA"))), store)
+    assert with_b.box_min["H1"] == without.box_min["H1"] and with_b.seeds["H1"] == 3                                                                    # H1 untouched by all three
+    assert "ZMA@32k" in out and "ZMA@12B" in out
+
+
+def test_phase_zma_folds_the_rows_the_hard_violations_the_total_rss_and_names_the_embedder(box, tmp_path, monkeypatch):
+    w, _h = e2e_window(box, tmp_path, monkeypatch, arms=("H1", "ZMA"))
+    w.zma_runner = canned_mpa(_subset(), arm="ZMA", driver={"server_rss_steady_mb": 120.0, "server_rss_peak_mb": 180.0, "servers": 3, "pss_added_mb": 90.0, "embedder_shared_mb": 85.0})
+    measure.measure(w)
+    art = json.loads((box / "run-t1.json").read_text())
+    md = Path(art["docs_path"]).read_text()
+    z = art["arms"]["ZMA"]
+    assert set(z["gates"]) == {"G0", "G1", "G2", "G3", "ZMA"} and z["seeds_done"] == 1 and z["verdict"] in ("INCOMPLETE", "NOT_ADOPTABLE") and "## ZMA:" in md
+    mm = art["measure"]["ZMA"]
+    run = art["seed_runs"]["ZMA"]["zmb-v1"]
+    assert mm["zma_hard_violations"] == run["hard_violations"] and mm["zma_hard_skipped"] == run["hard_skipped"]
+    assert z["gates"]["ZMA"]["zma_G2_floors_unchanged"]["state"] == (gates.FAIL if run["hard_violations"] or run["hard_skipped"] else gates.PASS)
+    assert mm["rss"]["steady_mb"] == 210.0 and mm["rss"]["burst_mb"] == 270.0 and "Z0's in-process delta" in mm["rss"]["note"]
+    assert z["gates"]["ZMA"]["zma_G0_total_rss"]["state"] == gates.PASS and mm["zma_embedder"]
+    assert any("ZMA = Zoe's live stack" in n and "beating the maintained candidate AND Z0e" in n for n in art["notes"])
+    assert art["decision"]["winner"] != "ZMA" and "ZMA" in art["compare"] and "ZMA" not in art["decision"]["adoptable"]
+
+
+def test_the_zma_reflection_variants_run_through_the_same_driver_with_k_only(box, tmp_path, monkeypatch):
+    host = ReflectHost(box)
+    w, ctx, store, by_id = reflect_env(box, tmp_path, monkeypatch, host, arms=("H1", "H2", "HMA", "ZMA"))
+    seen = []
+    w.zma_reflect_runner = lambda c, seed, box_s, pair: (seen.append(pair), {"reflect": {"k_cells": [{"id": "MPA-K1.closet", "verdict": "PASS", "evidence": {"precision": 0.96}}],
+                                                                                         "wall_s": 5.0, "tool_calls": 30, "tool_calls_valid": 30, "prompt_tokens_max": 9000}})[1]
+    measure.phase_reflect(ctx, "zmb-v1", store, by_id, INST)
+    assert set(ctx.reflect["variants"]) == {"H2@32k", "HMA@32k", "ZMA@32k", "H2@12B", "HMA@12B", "ZMA@12B"} and seen == ["4B@32k", "12B@32k"]
+    assert ctx.reflect["variants"]["ZMA@12B"]["tool_calls_valid"] == 30 and ctx.reflect["variants"]["ZMA@32k"]["k1_veto"] is False
+    argv = measure._mpa_argv(ctx, "ZMA", Path("/x/o.json"), "s", 10.0, ("--reflect-only", "--ctx", "32768"))
+    assert argv[0] == sys.executable and "--reflect-only" in argv and argv[argv.index("--arm") + 1] == "ZMA"
+
+
+def test_decide_never_lets_zma_win_either_even_when_it_beats_z0e_on_two_axes():
+    z0 = gates.aggregate_axes({"s": {"axes": cap(hops=(5, 20))}})
+    z = gates.evaluate_arm("ZMA", three(axes=cap(exact=(20, 20), hops=(20, 20))), good_measure(**zma_m()))
+    d = gates.decide({"ZMA": z}, z0)
+    assert d["winner"] is None and d["verdict"] == "KEEP_Z0" and d["compare"]["ZMA"]["J"]["beats"]
+
+
+# ── physical-memory fragmentation: the 2026-10-08 bake-off abort ─────────────
+#
+# Step 3 stopped the live brain, step 4 started the Gemma clone a second later and it died in 6 s with ``cudaMalloc failed: out of memory`` /
+# ``NvMapMemAllocInternalTagged error 12`` while MemAvailable was > 6 GB: /proc/buddyinfo had NO free block at order >= 10 (Tegra NvMap needs contiguous
+# blocks). ``sync; drop_caches; compact_memory`` fixed it by hand. The class: every model start (clone, 32k and 12B restarts, the live brain on restore) must be
+# preceded by a compaction the window runs itself, and a window that cannot compact refuses BEFORE it stops anything.
+
+COMPACT = "sudo -n sh -c sync; echo 3 > /proc/sys/vm/drop_caches; echo 1 > /proc/sys/vm/compact_memory"
+
+
+def _compactions(host) -> "list[int]":
+    return [i for i, c in enumerate(host.joined()) if c.startswith("sudo -n sh -c") and "compact_memory" in c]
+
+
+def _clone_starts(host) -> "list[int]":
+    return [i for i, c in enumerate(host.joined()) if c.startswith("systemd-run") and "--unit=zoe-bakeoff-gemma" in c]
+
+
+def test_buddyinfo_is_parsed_per_order_summed_over_zones_and_the_predicate_reads_order_9_and_up(box):
+    frag = bakeoff.parse_buddyinfo(FRAGMENTED_BUDDY)
+    assert frag[0] == 61200 and frag[9] == 11 and frag[10] == 0 and len(frag) == 11              # zones are summed; the incident's order-9 = 11, order-10 = 0
+    assert bakeoff.blocks_at_or_above(frag, 9) == 11 and bakeoff.blocks_at_or_above(frag, 10) == 0
+    assert bakeoff.parse_buddyinfo("") == {} and bakeoff.parse_buddyinfo("garbage\nNode x") == {}
+    assert "o9=11 o10=0 o11=0 o12=0" in bakeoff.frag_summary(frag) and bakeoff.frag_summary({}) == "buddyinfo unreadable"
+    w = make_window(box, FakeHost(box, buddy=FRAGMENTED_BUDDY))
+    assert w.fragmentation()[9] == 11 and not w.contiguous_ok()
+    assert w.contiguous_ok(min_order=9, min_blocks=11) and not w.contiguous_ok(min_order=10, min_blocks=1)
+    assert make_window(box, FakeHost(box)).contiguous_ok() and make_window(box, FakeHost(box, buddy="")).contiguous_ok()      # unreadable = cannot judge: not a refusal
+
+
+def test_a_fragmented_box_without_passwordless_sudo_is_refused_before_anything_is_stopped_with_the_exact_command(box):
+    host = FakeHost(box, buddy=FRAGMENTED_BUDDY, sudo_ok=False)
+    w = make_window(box, host, measure_fn=lambda win: {"ok": 1})
+    assert w.run() == bakeoff.EXIT_REFUSED
+    out = "\n".join(w.logs)
+    assert "REFUSED" in out and "fragmented" in out and "sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches; echo 1 > /proc/sys/vm/compact_memory'" in out
+    assert "fragmentation at preflight" in out and "o9=11" in out
+    assert host.mutating_cmds() == [] and w.probe_lock() and not (box / "WINDOW_OPEN").exists()      # nothing stopped, started or locked
+    ok = FakeHost(box, sudo_ok=False)                                                             # healthy RAM + no sudo: no compaction needed, the window goes on
+    w2 = make_window(box, ok, measure_fn=lambda win: {"ok": 1})
+    assert w2.run() == bakeoff.EXIT_OK and _compactions(ok) == []
+    assert any("SKIPPED - passwordless sudo is not available" in m for m in w2.logs)               # and the skipped compactions are said, never silent
+
+
+def test_preflight_compacts_first_rechecks_and_logs_the_before_and_after_on_the_preflight_ok_line(box):
+    host = FakeHost(box, buddy=FRAGMENTED_BUDDY)
+    w = make_window(box, host, measure_fn=lambda win: {"ok": 1})
+    assert w.run() == bakeoff.EXIT_OK
+    first = _compactions(host)[0]
+    assert first < host.index("compose -f") and first < host.index("stop llama-server.service")        # before anything is touched
+    ok_line = next(m for m in w.logs if m.startswith("preflight ok"))
+    assert "order9+ blocks 11 -> 487" in ok_line
+    stuck = FakeHost(box, buddy=FRAGMENTED_BUDDY, compaction_heals=False)                          # compaction ran and RAM is STILL fragmented: refuse, nothing stopped
+    w2 = make_window(box, stuck, measure_fn=lambda win: {"ok": 1})
+    assert w2.run() == bakeoff.EXIT_REFUSED and "still fragmented after compaction" in "\n".join(w2.logs)
+    assert not any(c.startswith("systemd-run") or "compose -f" in c and c.endswith(" up -d") or "stop llama-server" in c for c in stuck.mutating_cmds())      # (the lock-holder's restore is a no-op on a brain that never stopped)
+
+
+def test_the_compaction_runs_after_the_brain_stop_once_its_pid_is_gone_and_before_the_clone_starts(box):
+    host = FakeHost(box)
+    host.main_pids = [4242, 4242, 0]                                                               # the stopped brain's process lingers for two polls
+    w = make_window(box, host, measure_fn=lambda win: {"ok": 1})
+    assert w.run() == bakeoff.EXIT_OK
+    j = host.joined()
+    stop, clone = host.index("stop llama-server.service"), _clone_starts(host)[0]
+    shows = [i for i, c in enumerate(j) if "show -p MainPID llama-server.service" in c]
+    after_stop = [i for i in _compactions(host) if stop < i < clone]
+    assert len(shows) == 3 and shows[0] > stop and len(after_stop) == 1 and after_stop[0] > shows[-1]       # polled until MainPID=0, THEN compacted, THEN the clone
+    assert j[after_stop[0]] == COMPACT
+    out = "\n".join(w.logs)
+    assert "fragmentation after step 3 (live brain stopped)" in out and "fragmentation before step 4 (clone start)" in out and "fragmentation at preflight" in out
+    assert "before compaction (before step 4" in out and "after compaction (before step 4" in out
+
+
+def test_the_pid_wait_is_bounded_at_30_seconds(box):
+    host = FakeHost(box)
+    host.main_pids = [4242] * 1000
+    w = make_window(box, host)
+    w.wait_pid_gone("llama-server.service")
+    assert 29.0 <= sum(host.slept) <= 32.0 and any("still present after 30s" in m for m in w.logs)
+
+
+def test_every_clone_start_in_the_window_is_preceded_by_its_own_compaction_including_both_reflection_pairs(box, monkeypatch):
+    host = ReflectHost(box)
+
+    def phase(win):
+        ctx = measure.Ctx(win, None)
+        monkeypatch.setattr(measure, "reflect_variant_h2", lambda *a, **k: {})
+        monkeypatch.setattr(measure, "reflect_variant_hma", lambda *a, **k: {})
+        measure.phase_reflect(ctx, "zmb-v1", [], {}, INST)
+        return {"ok": 1}
+    w = make_window(box, host, measure_fn=phase, arms=("H1", "H2", "HMA"), deep_unit=DEEP)
+    assert w.run() == bakeoff.EXIT_OK, w.logs[-10:]
+    starts = _clone_starts(host)
+    assert len(starts) == 4                                                                       # step 4, 4B@32k, 12B@32k, back to the live context
+    marks = [host.index("stop llama-server.service")] + starts
+    for prev, cur in zip(marks, marks[1:]):
+        between = [i for i in _compactions(host) if prev < i < cur]
+        assert len(between) == 1, f"no compaction (or more than one) between {host.joined()[prev]!r} and {host.joined()[cur]!r}"
+    j = host.joined()
+    assert all(any(c == "systemctl --user stop zoe-bakeoff-gemma.service" for c in j[p:c]) for p, c in zip(starts, starts[1:]))        # each start follows the previous clone's stop
+    assert "fragmentation after the 4B clone and the listed units stopped" in "\n".join(w.logs)
+
+
+def test_restore_compacts_before_starting_the_live_brain_and_waits_for_the_clone_to_be_gone(box):
+    host = FakeHost(box)
+    w = make_window(box, host)
+    assert w.restore()
+    j = host.joined()
+    start = j.index("systemctl --user start llama-server.service")
+    comp = _compactions(host)
+    assert len(comp) == 1 and comp[0] < start and comp[0] > host.index("stop zoe-bakeoff-gemma.service")
+    assert any("show -p MainPID zoe-bakeoff-gemma.service" in c for c in j[:comp[0]])
+    assert "fragmentation before restarting the live brain" in "\n".join(w.logs)
+
+
+def test_restore_without_sudo_and_with_fragmented_ram_raises_a_loud_alarm_with_the_command_and_still_starts_the_brain(box):
+    host = FakeHost(box, buddy=FRAGMENTED_BUDDY, sudo_ok=False)
+    w = make_window(box, host)
+    assert w.restore()
+    alarm = [m for m in w.logs if "RESTORE ALARM" in m]
+    assert len(alarm) == 1 and "sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches; echo 1 > /proc/sys/vm/compact_memory'" in alarm[0] and "systemctl --user start llama-server.service" in alarm[0]
+    assert _compactions(host) == [] and "systemctl --user start llama-server.service" in host.joined()        # the start is still attempted
+    healthy = FakeHost(box, sudo_ok=False)
+    w2 = make_window(box, healthy)
+    assert w2.restore() and not any("RESTORE ALARM" in m for m in w2.logs)
+
+
+def test_a_restore_that_never_stopped_the_live_brain_does_not_compact(box):
+    host = FakeHost(box)
+    w = make_window(box, host, skip_brain_stop=True)
+    assert w.restore() and _compactions(host) == []
+
+
+def test_BAKEOFF_DROP_CACHES_0_keeps_compaction_and_drops_only_the_cache_drop(box):
+    host = FakeHost(box)
+    w = make_window(box, host, drop_caches=False)
+    assert w.compact_memory("t")
+    cmd = next(c for c in host.joined() if c.startswith("sudo -n sh -c"))
+    assert cmd == "sudo -n sh -c echo 1 > /proc/sys/vm/compact_memory" and "drop_caches" not in cmd
+    assert bakeoff.operator_compact_command(False) == "sudo sh -c 'echo 1 > /proc/sys/vm/compact_memory'"
+    code = f"import sys; sys.path.insert(0, {str(Path(bakeoff.__file__).parents[1])!r}); from zmb import bakeoff; print(bakeoff.Cfg().drop_caches)"
+    for val, want in (("0", "False"), ("", "True")):
+        env = {k: v for k, v in os.environ.items() if k != "BAKEOFF_DROP_CACHES"}
+        if val:
+            env["BAKEOFF_DROP_CACHES"] = val
+        assert subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=60).stdout.strip() == want
+
+
+def test_a_failing_or_throwing_compaction_never_crashes_the_window(box):
+    host = FakeHost(box, fail=("compact_memory",))
+    w = make_window(box, host)
+    assert w.compact_memory("t") is False and any("FAILED rc=1" in m for m in w.logs)
+    w.host.read = lambda p: (_ for _ in ()).throw(RuntimeError("boom"))
+    assert w.compact_memory("t2") is False and any("ERROR RuntimeError" in m for m in w.logs)
+    w.restore_compaction()                                                                          # never raises either
+
+
+def test_the_wrapper_dry_run_prints_the_buddyinfo_and_the_compaction_it_would_run_and_says_when_it_would_be_refused(box, tmp_path):
+    shim, _log, env = _shims(tmp_path, box)
+    bi = tmp_path / "buddyinfo"
+    bi.write_text(FRAGMENTED_BUDDY)
+    env["BAKEOFF_BUDDYINFO"] = str(bi)
+    (shim / "sudo").write_text("#!/bin/bash\nexit 0\n")
+    (shim / "sudo").chmod(0o755)
+    r = subprocess.run(["bash", str(REPO / "scripts/perf/zmb/bakeoff_window.sh"), "--dry-run"], capture_output=True, text=True, env=env, timeout=120)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "fragmentation at preflight: free blocks o9=11 o10=0" in r.stdout and "FRAGMENTED" in r.stdout
+    assert "DRY-RUN would run: sudo -n sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches; echo 1 > /proc/sys/vm/compact_memory'" in r.stdout
+    (shim / "sudo").write_text("#!/bin/bash\nexit 1\n")
+    r2 = subprocess.run(["bash", str(REPO / "scripts/perf/zmb/bakeoff_window.sh"), "--dry-run"], capture_output=True, text=True, env=env, timeout=120)
+    assert r2.returncode == 0 and "a real run started now would be REFUSED: physical memory is fragmented" in r2.stdout
+
+
+# ── 2026-10-08: a fresh scratch Postgres per window; Hindsight's job queue must be empty before the window opens ──────────────────────────────
+
+#: hindsight-api's journal as the 2026-10-08 17:08 window saw it (the stale zmb-h2-demo_bar_* banks of the 14:16 window, consolidated against the clone's single 8,192-token slot)
+STALE_JOURNAL = textwrap.dedent("""\
+    2026-10-08 17:09:44,140 - INFO - hindsight_api.worker.poller - [WORKER_STATS] worker=hindsight-bakeoff slots=1/10 | reserved: [consolidation=1/2(avail=1)] | shared=0/8(avail=8) | global: pending=3 (queried=1/1 schemas: default) | others: none
+    2026-10-08 17:09:46,140 - WARNING - hindsight_api.engine.providers.openai_compatible_llm - APIStatusError (openai/gemma-4-e4b, scope=consolidation, attempt 1/3): HTTP 400: {"code": 400, "message": "request (8421 tokens) exceeds the available context size (8192 tokens), try increasing it", "type": "exceed_context_size_error", "n_prompt_tokens": 8421, "n_ctx": 8192}
+    2026-10-08 17:09:47,032 - WARNING - hindsight_api.engine.providers.openai_compatible_llm - APIStatusError (openai/gemma-4-e4b, scope=consolidation, attempt 2/3): HTTP 400: {"code": 400, "message": "request (8421 tokens) exceeds the available context size (8192 tokens), try increasing it", "type": "exceed_context_size_error", "n_prompt_tokens": 8421, "n_ctx": 8192}
+    2026-10-08 17:09:48,691 - ERROR - hindsight_api.engine.providers.openai_compatible_llm - API error after 3 attempts (openai/gemma-4-e4b, scope=consolidation): HTTP 400: {"code": 400, "message": "request (8421 tokens) exceeds the available context size (8192 tokens), try increasing it", "type": "exceed_context_size_error", "n_prompt_tokens": 8421, "n_ctx": 8192}
+    2026-10-08 17:09:50,691 - ERROR - hindsight_api.engine.providers.openai_compatible_llm - API error after 3 attempts (openai/gemma-4-e4b, scope=consolidation): HTTP 400: {"code": 400, "message": "request (8841 tokens) exceeds the available context size (8192 tokens), try increasing it", "type": "exceed_context_size_error", "n_prompt_tokens": 8841, "n_ctx": 8192}
+    2026-10-08 17:09:52,000 - ERROR - hindsight_api.engine.providers.openai_compatible_llm - API error after 3 attempts (openai/gemma-4-e4b, scope=retain): HTTP 400: {"code": 400, "message": "request (9000 tokens) exceeds", "type": "exceed_context_size_error", "n_prompt_tokens": 9000, "n_ctx": 8192}
+    """)
+
+
+def _pg_box(box, mb_files=("PG_VERSION", "base")):
+    pg = box / "pgdata"
+    pg.mkdir()
+    for f in mb_files:
+        (pg / f).write_text("stale hindsight bank")
+    return pg
+
+
+def test_the_scratch_postgres_is_wiped_before_it_starts_and_the_log_says_how_much(box):
+    pg = _pg_box(box)
+    host = FakeHost(box)
+    w = make_window(box, host, measure_fn=lambda win: {"ok": 1})
+    assert w.run() == bakeoff.EXIT_OK
+    j = host.joined()
+    down_v = host.index("docker compose -f " + str(box / "scratch-postgres.compose.yml") + " down -v")
+    wipe = host.index("sudo -n find " + str(pg) + " -mindepth 1 -delete")
+    up = host.index("scratch-postgres.compose.yml up -d")
+    assert down_v < wipe < up, j                                         # the volume goes, then the root-owned files, THEN the database starts
+    assert pg.is_dir() and list(pg.iterdir()) == []                      # the directory is back (the bind mount needs it) and empty
+    assert "scratch Postgres: fresh (wiped 37 MB)" in w.logs
+    assert w.pg_state == {"fresh": True, "kept": False, "wiped_mb": 37, "how": "sudo"}
+
+
+def test_without_sudo_the_wipe_runs_in_a_throwaway_container_from_the_composes_own_image(box):
+    pg = _pg_box(box)
+    (box / "scratch-postgres.compose.yml").write_text("services:\n  zoe-bakeoff-pg:\n    image: pgvector/pgvector:pg17\n")
+    host = FakeHost(box, sudo_ok=False)
+    w = make_window(box, host, measure_fn=lambda win: {"ok": 1})
+    assert w.run() == bakeoff.EXIT_OK
+    run = next(c for c in host.joined() if c.startswith("docker run --rm"))
+    assert f"-v {pg}:/d pgvector/pgvector:pg17" in run and "find /d -mindepth 1 -delete" in run
+    assert not any(c.startswith("sudo -n find") for c in host.joined()) and list(pg.iterdir()) == []
+    assert host.index("down -v") < host.index("docker run --rm") < host.index("up -d")
+    assert "scratch Postgres: fresh (wiped 37 MB)" in w.logs
+
+
+def test_neither_sudo_nor_docker_refuses_before_the_live_brain_is_stopped_with_the_operator_command(box):
+    pg = _pg_box(box)
+    host = FakeHost(box, sudo_ok=False, fail=("docker image inspect",))
+    w = make_window(box, host, measure_fn=lambda win: pytest.fail("the window must not open"))
+    assert w.run() == bakeoff.EXIT_REFUSED
+    refusal = next(m for m in w.logs if m.startswith("REFUSED"))
+    assert "down -v" in refusal and f"sudo find {pg} -mindepth 1 -delete" in refusal and "Nothing was stopped" in refusal
+    assert not any("stop llama-server.service" in c for c in host.mutating_cmds()) and not any("up -d" in c for c in host.joined())
+    assert list(pg.iterdir()) != []                                      # nothing was touched
+    assert not (box / "WINDOW_OPEN").exists()
+
+
+def test_a_data_directory_that_is_a_symlink_is_never_wiped_through(box, tmp_path):
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    (target / "precious").write_text("x")
+    (box / "pgdata").symlink_to(target)
+    host = FakeHost(box)
+    w = make_window(box, host, measure_fn=lambda win: pytest.fail("the window must not open"))
+    assert w.run() == bakeoff.EXIT_REFUSED and (target / "precious").exists()
+    assert not any("-delete" in c for c in host.joined())
+
+
+def test_BAKEOFF_KEEP_PG_keeps_the_database_and_says_loudly_that_the_results_are_confounded(box):
+    pg = _pg_box(box)
+    host = FakeHost(box)
+    w = make_window(box, host, measure_fn=lambda win: {"ok": 1}, keep_pg=True)
+    assert w.run() == bakeoff.EXIT_OK
+    assert not any("down -v" in c or "-delete" in c or c.startswith("docker run") for c in host.joined())
+    assert (pg / "PG_VERSION").exists()
+    assert any("CONFOUNDED" in m and "KEPT" in m for m in w.logs) and w.pg_state["kept"] is True
+    assert bakeoff.Cfg().keep_pg is False                                 # off unless the owner sets it
+
+
+def test_a_missing_data_directory_needs_no_wipe_tool_at_all(box):
+    host = FakeHost(box, sudo_ok=False, fail=("docker image inspect",))   # no sudo, no image: and nothing to wipe
+    w = make_window(box, host, measure_fn=lambda win: {"ok": 1})
+    assert w.run() == bakeoff.EXIT_OK and "scratch Postgres: fresh (wiped 0 MB)" in w.logs
+
+
+def test_the_window_aborts_on_stale_jobs_in_hindsights_queue_and_restores_the_live_brain(box):
+    host = FakeHost(box)
+    host.queue_outputs = ["consolidation|pending|3\nconsolidation|processing|1\n"]
+    called = []
+    w = make_window(box, host, measure_fn=lambda win: called.append(1) or {"ok": 1})
+    assert w.run() == bakeoff.EXIT_ABORTED
+    msg = next(m for m in w.logs if m.startswith("ABORTED"))
+    assert "stale bank is a confound" in msg and "4 pending/running" in msg and "consolidation:pending=3" in msg and "60 s" in msg
+    assert not called and restored(host)                                  # step 6 never opened; the live brain came back
+    assert sum(host.slept) >= 60                                          # it waited the 60 s before giving up
+
+
+def test_a_queue_that_drains_inside_the_wait_opens_the_window_and_logs_the_count(box):
+    host = FakeHost(box)
+    host.queue_outputs = ["consolidation|pending|2\n", "consolidation|processing|1\n", ""]
+    w = make_window(box, host, measure_fn=lambda win: {"ok": 1})
+    assert w.run() == bakeoff.EXIT_OK and w.queue_at_open == 0
+    assert any(m.startswith("hindsight job queue: 0 pending/running operations") for m in w.logs)
+    assert next(i for i, m in enumerate(w.logs) if m.startswith("hindsight job queue: 0")) < next(i for i, m in enumerate(w.logs) if m.startswith("step 6/6"))
+
+
+def test_an_unreadable_queue_is_not_an_empty_one(box):
+    host = FakeHost(box)
+    host.psql_rc = 1                                                      # no async_operations table / no container, and no WORKER_STATS line in the journal either
+    w = make_window(box, host, measure_fn=lambda win: pytest.fail("the window must not open"))
+    assert w.run() == bakeoff.EXIT_ABORTED and any("could not be read" in m for m in w.logs)
+    host2 = FakeHost(box)
+    host2.psql_rc = 1
+    host2.journal = STALE_JOURNAL.splitlines()[0].replace("pending=3", "pending=0").replace("slots=1/10", "slots=0/10")      # the worker's own line says idle: that is readable and clean
+    w2 = make_window(box, host2, measure_fn=lambda win: {"ok": 1})
+    assert w2.run() == bakeoff.EXIT_OK and w2.queue_at_open == 0
+
+
+def test_with_BAKEOFF_KEEP_PG_stale_jobs_do_not_abort_but_are_recorded(box):
+    host = FakeHost(box)
+    host.queue_outputs = ["consolidation|pending|3\n"]
+    w = make_window(box, host, measure_fn=lambda win: {"ok": 1}, keep_pg=True)
+    assert w.run() == bakeoff.EXIT_OK and w.queue_at_open == 3 and any("CONFOUNDED" in m and "job queue" in m for m in w.logs)
+
+
+def test_the_dry_run_prints_the_wipe_and_the_job_check(box):
+    pg = _pg_box(box)
+
+    class DryFake(FakeHost):
+        """DryHost's contract over the shimmed commands: reads run, every mutating command is printed and NOT executed."""
+        def run(self, argv, timeout=60.0, mutating=True, env=None):
+            if mutating:
+                self.log("DRY-RUN would run: " + " ".join(argv))
+                return bakeoff.Result(0, "")
+            return super().run(argv, timeout, mutating, env)
+    host = DryFake(box)
+    w = make_window(box, host, dry=True)
+    host.log = w.log
+    w.wipe_scratch_pg()
+    w.require_quiet_hindsight()
+    out = "\n".join(w.logs)
+    assert "DRY-RUN would run: docker compose -f" in out and " down -v" in out
+    assert f"DRY-RUN would run: sudo -n find {pg} -mindepth 1 -delete" in out and "scratch Postgres: fresh (wiped 37 MB)" in out
+    assert "ZERO pending / processing operations" in out
+    assert (pg / "PG_VERSION").exists()                                   # a dry run wipes nothing
+
+
+def test_the_dry_run_names_the_job_queue_check_before_step_6(box):
+    w = make_window(box, FakeHost(box), dry=True)
+    w.require_quiet_hindsight()
+    out = "\n".join(w.logs)
+    assert "ZERO pending / processing operations" in out and "async_operations" in out and "ABORT" in out
+
+
+def test_the_prompt_tokens_are_parsed_from_every_exceed_context_size_error():
+    p = bakeoff.parse_consolidation_prompt_tokens(STALE_JOURNAL)
+    assert p["consolidation_max"] == 8841 and p["any_max"] == 9000 and p["n_ctx"] == 8192        # the retain-scope 9000 is not a consolidation prompt
+    assert p["consolidation_failed_calls"] == 2 and p["failed_calls"] == 3 and p["failed_attempts"] == 2
+    fallback = '2026-10-08 17:09:46,140 - WARNING - x - APIStatusError (m, scope=consolidation, attempt 1/3): HTTP 400: request (8100 tokens) exceeds the available context size, "type": "exceed_context_size_error"'
+    assert bakeoff.parse_consolidation_prompt_tokens(fallback)["consolidation_max"] == 8100        # the text form, when the JSON field is absent
+    none = bakeoff.parse_consolidation_prompt_tokens("INFO - all good\nWARNING - HTTP 400 something else\n")
+    assert none["consolidation_max"] is None and none["any_max"] is None and none["failed_calls"] == 0
+    assert bakeoff.parse_worker_stats(STALE_JOURNAL) == (1, 3) and bakeoff.parse_worker_stats("nothing") is None
+
+
+def test_the_caveat_is_stated_only_when_a_consolidation_call_exceeded_the_slot():
+    c = bakeoff.consolidation_caveat({"hindsight_consolidation_prompt_tokens_max": 8841, "n_ctx": 8192})
+    assert c == ("Hindsight consolidation does not fit the 8,192-token live slot (max 8,841 tokens): "
+                 "K on the live context is failed by construction; only the 32k/12B reflection phase measures K")
+    assert bakeoff.consolidation_caveat({"hindsight_consolidation_prompt_tokens_max": None}) == ""
+
+
+def test_the_window_reads_only_its_own_hindsight_journal(box):
+    host = FakeHost(box)
+    host.journal = STALE_JOURNAL
+    w = make_window(box, host, measure_fn=lambda win: {"ok": 1})
+    assert w.run() == bakeoff.EXIT_OK
+    instr = w.collect_hindsight_instrument()
+    assert instr["hindsight_consolidation_prompt_tokens_max"] == 8841 and instr["hindsight_consolidation_failed_calls"] == 2
+    cmd = next(c for c in host.joined() if c.startswith("journalctl --user -u zoe-bakeoff-hindsight.service --since") and "-o cat" in c)
+    assert "--since " + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(w.hs_started_epoch - 5)) in cmd        # the unit name is reused by every window: only THIS window's lines
+
+
+def test_the_report_and_artifact_carry_the_instrument_and_the_caveat(box, tmp_path, monkeypatch):
+    host = FakeHost(box)
+    host.journal = STALE_JOURNAL
+    w, host = e2e_window(box, tmp_path, monkeypatch, host=host)
+    w.pg_state, w.queue_at_open = {"fresh": True, "kept": False, "wiped_mb": 37}, 0
+    measure.measure(w)
+    art = json.loads((box / "run-t1.json").read_text())
+    md = Path(art["docs_path"]).read_text()
+    assert art["instruments"]["hindsight_consolidation_prompt_tokens_max"] == 8841 and art["meta"]["hindsight_consolidation_prompt_tokens_max"] == 8841
+    assert "Hindsight consolidation does not fit the 8,192-token live slot (max 8,841 tokens): K on the live context is failed by construction; only the 32k/12B reflection phase measures K" in md
+    assert "`hindsight_consolidation_prompt_tokens_max` = 8841" in md and "scratch Postgres: fresh (wiped 37 MB)" in md
+    assert any("cannot be paused" in n for n in art["notes"])             # the background-consolidation caveat (no control in the installed version)
+    # a window whose consolidation fit says so and states no caveat
+    host2 = FakeHost(box)
+    host2.journal = "INFO - nothing exceeded\n"
+    w2, _ = e2e_window(box, tmp_path, monkeypatch, host=host2)
+    measure.measure(w2)
+    art2 = json.loads((box / "run-t1.json").read_text())
+    assert art2["instruments"]["hindsight_consolidation_prompt_tokens_max"] is None and not any("does not fit" in n for n in art2["notes"])
+
+
+def test_an_arm_that_starts_with_queued_hindsight_work_is_flagged(box, tmp_path, monkeypatch):
+    w, host = e2e_window(box, tmp_path, monkeypatch)
+    host.queue_outputs = ["consolidation|pending|2\n"]
+    ctx = measure.Ctx(w, None)
+    assert measure.check_hindsight_idle(ctx, "H2") == 2 and any("H2 started with 2 operation(s)" in n for n in ctx.notes)
+    assert measure.check_hindsight_idle(ctx, "Z0") is None and measure.check_hindsight_idle(ctx, "MPA") is None      # arms that do not use the server are not asked

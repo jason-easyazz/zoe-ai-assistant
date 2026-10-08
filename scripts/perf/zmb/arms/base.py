@@ -92,6 +92,10 @@ class Arm(ABC):
     #: optional abilities a cell may require: ``clock`` (advance_clock), ``controls`` (a lab arm that
     #: can switch its features off)
     capabilities: frozenset[str] = frozenset()
+    #: whose model writes the nightly observations: ``"scripted"`` = the LAB scripts it (Z0's digest: the cell hands it the night's proposals and
+    #: measures what the store KEEPS of them); ``"own"`` = the arm runs its own model (Hindsight's observation layer): the lab hands it NOTHING to
+    #: believe - ``reflect_pass`` only lets it consolidate what the life already ingested. Must agree with ``observations()["model"]``.
+    nightly_model: str = "scripted"
 
     @abstractmethod
     def reset(self, user_id: str) -> None:
@@ -123,11 +127,16 @@ class Arm(ABC):
         instrument check only - the real reply is the brain tier's."""
         raise NotImplementedError(f"{self.name} has no scripted reader")
 
-    def run_idle_pass(self, transcript: str, proposes: "list[str]") -> "dict[str, Any]":  # pragma: no cover
+    def run_idle_pass(self, transcript: str, proposes: "list[str]", *, judge: bool = True) -> "dict[str, Any]":  # pragma: no cover
         """Optional capability ``idle_pass``: run the arm's own nightly pass (Z0: the REAL
         ``memory_digest.run_memory_digest`` incl. its contradiction check) over a day ``transcript`` of the
         user's turns, with the model's extraction scripted to ``proposes``. Returns the pass's counters."""
         raise NotImplementedError(f"{self.name} has no idle pass")
+
+    def reflect_pass(self) -> "dict[str, Any]":  # pragma: no cover
+        """Optional, for an arm with ``nightly_model == "own"``: let the arm's OWN model reflect over what was ingested (consolidate and settle),
+        with NOTHING injected - no scripted proposals, no transcript handed over as a writer's claim. Returns the pass's counters."""
+        raise NotImplementedError(f"{self.name} has no own-model reflection pass")
 
     def ingest_as(self, identity: str, turns: "list[Turn]") -> IngestReport:  # pragma: no cover
         """Optional capability ``identities``: apply the turns AS a named household identity
@@ -155,6 +164,33 @@ class Arm(ABC):
 
     def advance_clock(self, seconds: float) -> None:  # pragma: no cover - optional capability
         raise NotImplementedError(f"{self.name} has no controllable clock")
+
+    # ── the capability axes (2026-10-07): j exact words, k reflection, l multi-hop, m protocol ──────────────────────────────────
+    # An arm DECLARES the capability in ``capabilities``; a cell that needs one the arm lacks SKIPs with the reason (never ERRORs, never passes).
+    # The default bodies raise ``NotImplementedError``, which ``cells.run_cell`` also reports as a SKIP.
+
+    def recall_exact(self, query: str, k: int = 5) -> "list[dict[str, Any]]":  # pragma: no cover
+        """Optional capability ``exact_words``: the arm's answer to "what EXACTLY did I say about ...": up to ``k`` hits, each
+        ``{"text": <the words as stored: a verbatim turn, or whatever the arm kept>, "day_offset": <days ago it was said, or None>}``. The cell scores the
+        exact sentence as a substring of ``text``; an arm that keeps only a rewritten fact returns the rewrite and fails honestly."""
+        raise NotImplementedError(f"{self.name} has no exact-words lookup")
+
+    def observations(self, query: str = "") -> "dict[str, Any]":  # pragma: no cover
+        """Optional capability ``observations``: the arm's DERIVED statements about the household (Hindsight's observation layer, Z0's nightly
+        digest rows), optionally ranked for ``query`` (top 5). ``{"items": [{"text", "stated_by": "user"|"inferred"|"", "id"}], "model": "own"|"scripted"}``
+        where ``model`` says whether the arm's own model produced them ("scripted": the lab scripted the nightly model, so what the store KEEPS is
+        measured and what the model would have SAID is not)."""
+        raise NotImplementedError(f"{self.name} has no observation layer")
+
+    def recall_linked(self, query: str, k: int = 8) -> "list[dict[str, Any]]":  # pragma: no cover
+        """Optional capability ``multi_hop``: the arm's ASSOCIATIVE packet for a question that needs two facts said weeks apart (Hindsight's link graph,
+        a relational block): up to ``k`` rows. An arm with no associative step returns its ordinary recall (and is measured as that)."""
+        raise NotImplementedError(f"{self.name} has no associative recall")
+
+    def protocol_answer(self, prompt: str, anchor: "tuple[str, ...]", fired: bool, k: int = 5) -> str:  # pragma: no cover
+        """Optional capability ``protocol``: the reply of the scripted reader to ``prompt`` when the brain DID (``fired``) or did NOT call recall.
+        Not fired = no packet = nothing to answer from. The lab half of axis (m): the packet's quality and the instrument, never a brain."""
+        raise NotImplementedError(f"{self.name} has no protocol reader")
 
     def close(self) -> None:
         """Release the arm's resources (idempotent)."""

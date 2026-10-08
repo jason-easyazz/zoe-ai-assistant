@@ -204,3 +204,12 @@ Two things the landing taught, both now load-bearing:
 10. **Later / design:** estate onto the design-system tokens, filled glyphs, 48 px targets, reduced-motion; desktop Wave 4b/5/6 per the overhaul plan.
 
 Related: [desktop-ui-overhaul-plan](../architecture/desktop-ui-overhaul-plan.md) · [skybridge-design-system](../architecture/skybridge-design-system.md) · [runtime-topology](runtime-topology.md) · [feature-audit-2026-09-25](feature-audit-2026-09-25.md)
+
+## 10. Follow-up hunt — 2026-10-08
+
+Evidence-first pass three days after the waves: 72 h of nginx + zoe-data logs, the live kiosk observed for 25 s (5 MB heap, 164 DOM nodes, no console errors after 3.5 days), and a logged-in crawl of all 21 desktop pages in a real browser.
+
+- **Not bugs:** the 502 bursts are deploy restarts (zoe-data restarted 4× on 10-08 for other PRs); the kiosk's one 401 pair per restart is the guest session being refilled; the 230 `db_pool not initialised` tracebacks in the operator log come from CI/worktree test processes (0 from the live tree); Music Assistant being stopped since 10-05 is `ZOE_MA_IDLE_REAP` doing its job.
+- **Fixed (one PR):** (1) `music.html` and `settings.html` never loaded `js/auth.js` — ungated, and music's notifications call 403'd; (2) the shopping widget's `/api/lists/ws/{user}` socket never sent the session and was refused every 2–30 s for every member (the class fix is in `ZoeWebSocketSync.connect()`); (3) `music.html` retried the MA socket forever while MA was reaped (502s through nginx) — now watches `/api/music/status` instead.
+- **Left as is:** `journal-api.js` probes `/journeys` on purpose (feature detection; the browser logs the 404); the push permission prompt fires on every members' page load until decided (intended); `setup-music.html`'s sign-in iframe carries `allow-same-origin` + `allow-scripts` (same-origin content, the warning is honest but harmless).
+

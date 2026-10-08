@@ -1120,7 +1120,7 @@ async def _ensure_user_and_chat_session(session_id: str, user_id: str) -> None:
 
 async def _save_chat_message(
     session_id: str, role: str, content: str, user_id: str | None = None,
-    *, truncated: bool = False,
+    *, truncated: bool = False, speaker_verified: bool | None = None,
 ) -> bool:
     """Persist a single chat turn to chat_messages.
 
@@ -1147,6 +1147,11 @@ async def _save_chat_message(
         # Flags a partial reply persisted after a mid-stream failure (P3-A): the
         # tokens the user saw before the brain raised, saved so history isn't lost.
         meta["truncated"] = True
+    if speaker_verified is False:
+        # The voice speaker gate's REJECTION travels with the row, so a later pass that reads chat_messages (the exact-words
+        # catch-up) cannot reclassify a turn the gate refused as the owner's own words. Only a rejection is recorded:
+        # no verdict / verified leaves the metadata exactly as before.
+        meta["speaker_verified"] = False
     metadata = json.dumps(meta) if meta else None
     # Use the context-managed pool acquire (deterministic release). The bare
     # `async for db in get_db(): ... break` form leaves the generator suspended

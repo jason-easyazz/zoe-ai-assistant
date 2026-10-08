@@ -1,15 +1,15 @@
 ---
 type: Reference
 title: Zoe Memory Bench (ZMB) - foundation
-description: The benchmark that measures what no public memory benchmark does - authority (who may change what the user said), forgetting, identity, extraction fidelity, abstention, and now temporal updates, multi-session recall at 30/100/300 filler turns, poisoning, provenance and graph edges (every axis the decision rule names has cells) - with generated gold, deterministic scorers, a negative control on every claim, per-axis Wilson intervals, an in-process lab driver, an arm-adapter interface for the memory-system bake-off (Z0, Hindsight, Graphiti) and the pre-registered bake-off decision rule. What is built, how to run it, what each axis proves, the artifact format, and what is stubbed.
+description: The benchmark that measures what no public memory benchmark does - authority (who may change what the user said), forgetting, identity, extraction fidelity, abstention, and now temporal updates, multi-session recall at 30/100/300 filler turns, poisoning, provenance and graph edges (every axis the decision rule names has cells) and the four capability axes Hindsight and MemPalace are built for - exact words, reflection, long-range associative recall and the memory protocol - with generated gold, deterministic scorers, a negative control on every claim, per-axis Wilson intervals, an in-process lab driver, an arm-adapter interface for the memory-system bake-off (Z0, Hindsight, Graphiti) and the pre-registered bake-off decision rule. What is built, how to run it, what each axis proves, the artifact format, and what is stubbed.
 tags: [memory, benchmark, zmb, authority, forgetting, negative-control, bake-off, eval, zoe-data]
-timestamp: 2026-10-06T14:30:00Z
+timestamp: 2026-10-07T15:00:00Z
 ---
 
 # Zoe Memory Bench (ZMB) - foundation
 
 Code: `scripts/perf/zmb/` (package), `scripts/perf/zoe_memory_bench.py` (entry point).
-Tests: `tests/unit/test_zmb_scorers.py`, `tests/unit/test_zmb_runner.py`, `tests/unit/test_zmb_axes.py`, `services/zoe-data/tests/test_zmb_lab.py`, and for the bake-off `tests/unit/test_zmb_bakeoff.py`, `test_zmb_hindsight_arm.py`, `test_zmb_embed_shim.py` (all `ci_safe`).
+Tests: `tests/unit/test_zmb_scorers.py`, `tests/unit/test_zmb_runner.py`, `tests/unit/test_zmb_axes.py`, `tests/unit/test_zmb_capability_axes.py` (the capability axes), `services/zoe-data/tests/test_zmb_lab.py`, and for the bake-off `tests/unit/test_zmb_bakeoff.py`, `test_zmb_hindsight_arm.py`, `test_zmb_embed_shim.py` (all `ci_safe`).
 Design record: `/home/zoe/.zoe/agent-tools/research-drop/zoe-memory-bench-design-2026-10-05.md`; the bake-off it serves:
 `/home/zoe/.zoe/agent-tools/research-drop/memory-system-decision-2026-10-05.md` section 6. This is build-plan "PR 3" (the
 foundation); the live driver (synthetic store routes, the chat tier, Telegram, the timer) is not in it.
@@ -92,6 +92,9 @@ The controls (`lab_driver.CONTROLS`), each a named feature the benchmark claims 
 | `history` | the history read off: a replaced fact is kept but a question about how things used to be never sees it (C2) |
 | `entailment` | the verbatim-anchor rule removed: a per-turn model reading of the owner's own change of mind cannot retire the owner's row, it waits as a disputed candidate (C1 via the turn digest) |
 | `physical_erase` | `ZOE_MEMORY_PHYSICAL_ERASE=0`: a hard delete / forget removes the row through the API and leaves the text on disk (the F5 / F6 disk cells, byte-scan of a copy: REAL Chroma on Z0, the scratch Postgres on the H arms) |
+| `exact_index` | `ZOE_EXACT_WORDS=off`: the owner's verbatim turns are not indexed, so "what exactly did I say about X" has nothing to quote and no date to give (J1, J2) |
+| `observation_gate` | `ZOE_DIGEST_OBSERVATION_GATE=off`: the nightly digest stores every model-written observation approved - a fabricated link, a hedged restatement and a "you told me" nobody said are served (K1, K5; K4 and A2 are two-layer with `authority`) |
+| `multi_hop` | `ZOE_MULTI_HOP_RECALL=off` AND `ZOE_RECALL_DURABLE_NO_DECAY=0`: a two-fact question is one search and the older of two facts the owner stated is buried by the 70-day recency decay (L1, L2) |
 
 A cell lists every control that must be off together (`controls: ["extractor", "gate"]` = a two-layer defence: `--control
 off` switches both). **Sanity** cells (`sanity: true`) are positive controls - "the owner teaching their own name is
@@ -101,7 +104,7 @@ are left out of the axis pass rate.
 
 Three layers prove it (all in `services/zoe-data/tests/test_zmb_lab.py`):
 
-* every controlled cell goes red with its features off (137 of 137 on this spec; 135 where chromadb is absent and the two disk cells skip), and each control individually flips exactly
+* every controlled cell goes red with its features off (149 of 149 on this spec; 147 where chromadb is absent and the two disk cells skip), and each control individually flips exactly
   the cells it alone guards (the seven added with the temporal / recall / provenance axes are pinned by name);
 * a genuinely broken instrument (a control switch wired to nothing) and a genuinely vacuous cell (a probe that cannot fail)
   each make the real runner refuse - and the same command passes once the switch is real;
@@ -111,7 +114,7 @@ Three layers prove it (all in `services/zoe-data/tests/test_zmb_lab.py`):
 
 ## Axes and cells
 
-157 cells: 146 store-tier (run in the lab), 11 brain-tier declared-and-skipped. **Every axis the decision rule names has cells.**
+183 cells: 160 store-tier (run in the lab), 23 brain-tier declared-and-skipped (11 + the 12 protocol cells of axis m). The nine storage-hygiene axes below are the FLOORS of the bake-off; the four capability axes (section "Capability axes") are the CONTEST. **Every axis the decision rule names has cells.**
 Per axis (`--list` is the source of truth):
 
 | Axis | Cells (store tier) | What it proves | Control | Known failures (targets, tracked, never a regression) |
@@ -193,6 +196,57 @@ emotional thread (G; S4, judged). `--tier full` lists them as SKIP; the live dri
 * `claimable` in the artifact means the instrument is proven for that axis (controls red, no uncontrolled passing cell, no
   ERROR). A *public number* also needs the n in the design's pass-bar table; it is quoted with n, k and the Wilson 95%
   interval, never as a bare percentage.
+
+## Capability axes (j, k, l, m), added 2026-10-07: what Hindsight and MemPalace are built for
+
+The first nine axes measure **storage hygiene**: who may change what the user said, whether a forgotten thing stays forgotten, provenance, extraction, identity.
+Every engine behind the Zoe layer ties on them (the layer is the same). They do **not** measure the things Hindsight (observations, reflection, the link graph, verbatim
+mode) and MemPalace (the verbatim drawer, the agent protocol) are actually built for. The owner (2026-10-07: "I still feel that Hindsight + MemPalace have more to
+offer") is probably right about that, so these four axes exist, each with synthetic seeded data, a deterministic scorer, a negative control and a capability declaration.
+Corpora: `scripts/perf/zmb/life.py`; scorers: `scripts/perf/zmb/scorers_cap.py`; cells: `scenarios/exact_words.json`, `reflection.json`, `multi_hop.json`, `protocol.json`;
+tests: `tests/unit/test_zmb_capability_axes.py` (slim lane) and the Z0 pins in `services/zoe-data/tests/test_zmb_lab.py`.
+
+**Capabilities.** An arm declares what it can be measured on (`Arm.capabilities`); a cell that needs one it lacks SKIPs with the reason - never ERRORs, never passes.
+
+| Capability | The arm method | Arms that declare it |
+|---|---|---|
+| `exact_words` | `recall_exact(query, k)`: hits `{text, day_offset}` | Z0, Z0e (its recall packet: measured, a TARGET), H0 / H1 / H2 (recall rows, dated by Hindsight's `mentioned_at`), MV (the drawers as filed), HM (the exact lane of the packet: verbatim first, quarantine rooms in) |
+| `observations` | `observations(query="")`: derived statements `{text, stated_by}` + `model` (`own` / `scripted`) | Z0, Z0e (the approved model-written rows, `model=scripted`: the lab scripts the nightly model), H0 and H2 (Hindsight's observation layer, `model=own`). **H1 has none** (observations off) and HM's distilled tier exports facts, not observations: SKIP |
+| `multi_hop` | `recall_linked(query, k)`: the arm's associative packet | Z0, Z0e (its ordinary recall: there is no second hop), H0 / H1 / H2 (recall at the HIGH budget: the engine's own link graph), HM (the merged packet) |
+| `protocol` | `protocol_answer(prompt, anchor, fired)`: the scripted reader over the packet when recall fired | Z0, Z0e, H0 / H1 / H2, HM |
+
+| Axis | Cells (store tier) | Items (n) | Scorer and bar | Negative control | Z0 measured (seed `zmb-v1`) |
+|---|---|---|---|---|---|
+| **(j) exact words** | **J0** sanity (a taught sentence comes back whole); **J1** 20 sentences the owner SAID in ordinary speech (7 "what exactly did I say about the dentist", 7 "read me back what I told you about X's kids", 6 "did I tell X Tuesday or Thursday", each choice needle with a same-shape decoy about someone else), 100 filler turns after, the answer holds each sentence word for word; **J2** the same 20 + the day each was said (within half a day). J1 / J2 share one play | 20 + 20 | exact substring of the normalised sentence (case, accents, whitespace, closing punctuation) in the hits; >= 90%; `when`: the first hit about the subject, within 0.5 day | J0: `retrieval` (red when search ignores the query). The HM glue's own switch: HM-J1 + `exact_lookup`. Scorer red/green: `test_zmb_capability_axes.py` (a verbatim arm green, a rewriting arm and an undated arm red) | **J1 20/20, J2 20/20 (FIXED 2026-10-07; was 0/20 and 0/20).** The exact-words index (`exact_words.py`): the owner's own verbatim turns, written post-turn by `memory_extractor.extract_and_ingest` (both lanes) and caught up nightly from `chat_messages`, read by the for-prompt packet's "Your own words" block when the question asks what the owner said or when. Control `exact_index`. |
+| **(k) reflection** | **K1** after 30 days of a household (4 developing threads, 2 changed facts) and one night's pass that also proposes a fabricated link, a stale fact, a hedged restatement and a "you told me" invention: every derived observation is TRUE; **K2** thread recall; **K3** "what's been going on with X lately" / "how has my week been"; **K4** the invalidated fact is not restated as current; **K5** attribution both ways. K1-K5 share one play | observations judged (K1), 4 threads (K2), 3 questions (K3) | gold is generated: TRUE = every pair of entities the observation names was said together by the owner; FALSE = a pair never said together, a foreign entity, or an invalidated value as current; fewer than two entities = neutral, never counted. **K1 precision >= 95% (hard)** over >= 3 decidable; K2 >= 70%; K3 >= 70%; K4 zero stale; K5 zero violations | K4: `authority` (a model write may supersede / archive what the user said). K2 / K3 use the arm's OWN model, so Z0 SKIPs them (scripted): their instrument proof is the scripted-arm cells in the slim lane. A **veto**: an arm whose K1 fails cannot be adopted with observations on | **K1 PASS (3 of 3 decidable true; was 5/10 with 5 fabricated links approved), K5 PASS (was 5 violations), K4 PASS (two walls now). K2 / K3 SKIP (scripted model).** FIXED 2026-10-07 by the observation gate (`memory_authority.check_observation`, wired into `run_memory_digest`): a model-written statement is stored only when the owner's words carry it, else it waits as a pending candidate. Control `observation_gate` |
+| **(l) long-range associative recall** | **L0** sanity; **L1** 20 two-fact questions (10 "is X's birthday before my dentist appointment", 10 "who in my family lives near Y's school"), the first fact 14-28 days old, the second 1-9, 100 filler turns between and after, both facts in the 8-row packet; **L2** the same at 300 | 20 + 20 | a row holds the subject AND the answer token, for each fact; >= 70% (L1), >= 50% (L2). The join questions name only the first fact: the second is reachable only through the place the first one names | L0: `retrieval` | **L1 19/20 and L2 20/20 on the lab's bag-of-words Z0 (FIXED 2026-10-07; was 3/20 and 3/20); Z0e (real Chroma + MiniLM) 20/20 and 18/20 (was 14/20 and 14/20, joins 4/10).** No age decay on a durable fact the owner stated (`memory_service._durable_user_fact`) and a bounded second hop in the packet builder (`multi_hop_recall.expand`: each subject of a comparison searched on its own; a bridge through the entity the first fact names). Ablation on Z0: decay fix alone = dates 10/10, joins 5/10; hop alone = dates 9/10, joins 0/10; on Z0e the hop does the work (decay alone moves joins 4 to 2). Control `multi_hop` |
+| **(m) memory protocol** | **M1-M3** the lab half (packet level): answered when recall fired (>= 90%), cites only the right fact (>= 95%), says "I don't know" when the store is silent (>= 90%); **M4.\<metric\>.\<protocol\>** 12 brain-tier cells declared (fire when needed, quiet when not needed, cite precision, idk when silent) x 3 protocols | 14 / 14 / 8 prompts | a scripted reader answers only from a packet row that names what was asked (`life.anchored_reader`); the three protocols' trigger policies (Zoe's imperative recall doctrine, MemPalace's five-rule PALACE_PROTOCOL rules 2-3, Hindsight's recall-on-every-turn) are deterministic STAND-INS in `life.POLICIES`, never a measurement of a brain; their numbers ride in the evidence (zoe fire 14/14, quiet 10/10; mempalace5 fire 10/14, quiet 8/10; hindsight fire 14/14, quiet 0/10) | M1: `retrieval`; M2, M3: `reader` (answer from the nearest row) | **M1 14/14, M2 14/14, M3 8/8 PASS.** The brain half (M4) is declared with its reason and its scorer (`scorers_cap.score_protocol`): it needs the clone brain in a window and is the next build |
+
+How to read it. J / K / L count **items** (20 sentences, 20 questions, the observations judged) pooled across cells and seeds, because a Wilson interval over two or three
+cells cannot tell 20 of 20 from 0 of 20 and over the items it can (`artifact.axis_stats` pools them; `bakeoff_gates.compare_axes` compares them). Cells that share a
+`params.play_group` share ONE ingest and several read-only probes, so the 30-day life is played once per seed. The artifact still carries counts and labels only (a test greps
+it for every corpus string). The Hindsight link graph is exercised through the engine's own recall at the high budget; **mental models** (user-curated living summaries) are not
+measured: they need curated definitions and there is no ground truth for what they should say.
+
+What the Z0 numbers are and are not. Z0 runs the REAL service code over the lab's in-memory store; the nightly model is scripted, so K measures what Z0's store KEEPS of a
+night's proposals (it keeps a model's lie) and never what its model would have said. `J` / `L` on the lab's bag-of-words ranking are a floor for an embedding arm; the bake-off
+compares D and L with Z0e. The thresholds above were written before any Hindsight arm ran these cells; Z0e's L numbers were seen afterwards (it clears both bars).
+
+How strict K is, so a real run is read correctly. TRUE is judged on the entities an observation names, not on its meaning: an observation that MERGES two of the household's stories ("a friend starts at X while a colleague buys a house in Y") joins two entities the owner never said together and is judged FALSE even if both halves are true. That is deliberate (a merge is exactly where a fabricated link hides) and it costs precision, so a Hindsight observation layer that consolidates across threads will show it. The scorer reports `false_by` (foreign / stale / link) and the neutral count in the evidence so the owner can see which kind of loss it was; the pairs a change of fact legitimately links (the old town and the new one) are allowed. A text with fewer than two entities ("the knee is recovering") is neutral and never counted for or against.
+
+### The winner clause, rewritten (owner direction 2026-10-07)
+
+"Never overwrite the owner" had been given too much weight; the goal is the best memory for a Samantha-grade companion. **G0-G3 stay hard GATES - floors, not the contest**
+(RAM, egress, validity, latency, zero hard violations on authority / forgetting / poisoning / identity / affect, forgetting at t+6). The **winner clause is decided on the
+capability axes**: C temporal, D recall at distance (D2 100 filler, D3 300 filler, D4 the paraphrase; D1's 30 turns is near), J exact words, K reflection, L long-range
+recall, M protocol (counted only when the brain half ran: a lab stand-in never decides). An arm that passes the floors and beats Z0 beyond the Wilson 95% interval on **at
+least two** of them, worse on none, **wins** (`ADOPT_CANDIDATE`, H1 before H2). If it beats Z0 on fewer than two and is worse on none, with data on at least three capability
+axes, the capabilities are a **tie and ties on capability go to the maintained candidate** (`ADOPT_ON_TIE`: the Hindsight arm that passes the floors, H1 then H2; HM only by
+beating both; H0 never). Authority, forgetting, provenance - and extraction B, abstention E - scores **no longer break ties**: they are reported as floors beside the contest.
+Two bars stay hard inside the contest: K1 precision >= 95% (an arm whose observation layer fabricates is vetoed: observations stay off) and "worse beyond the interval on any
+capability axis" (not adoptable). D and L are compared with Z0e when it ran. `bakeoff_gates.py` carries every number; a test pins them; the verdict stays advisory.
+
+*(Interpretation to confirm with the owner: "the maintained candidate" is read as the upstream-maintained Hindsight arm that passes the floors, not Z0.)*
 
 ## The spec format
 
@@ -316,8 +370,8 @@ MALLOC_PERTURB_=85 PYTHONMALLOC=malloc bash /home/zoe/.zoe/bakeoff-2026-10/mp_ru
 ```
 
 The distilled tier in every cell is `FakeDistilledTier`, a TEST DOUBLE (the real `HindsightDistilledTier` is a stub). The cells prove the
-GLUE, never Hindsight's or MemPalace's retrieval quality. Result (2026-10-07, after the forget-alias sweep closed HM-F5, the last tracked target): 21 cells (19 graded, 2 sanity, 0 targets). On the
-double 17/17 runnable graded cells are green with 18 negative controls all red (HM-F6 needs a disk store, HM-F8 the real Hindsight tier); the
+GLUE, never Hindsight's or MemPalace's retrieval quality. Result (2026-10-07, after the forget-alias sweep closed HM-F5, the last tracked target, and HM-J1 added for exact words): 22 cells (20 graded, 2 sanity, 0 targets). On the
+double 18/18 runnable graded cells are green with 19 negative controls all red (HM-F6 needs a disk store, HM-F8 the real Hindsight tier); the
 library run adds HM-F6 under a scrubbed heap.
 
 | Cell | Claim | Controls (each alone) |
@@ -335,6 +389,7 @@ library run adds HM-F6 under a scrubbed heap.
 | HM-W1 | a verified turn is one chunk and zero model calls on the write path | `sync_distill` |
 | HM-V1 | another member's chunk is never in this member's packet | `isolate_wing` |
 | HM-R1 | the verbatim tier hosted in zoe-data fits the RAM gate (arithmetic over measured numbers) | the sidecar + second-session + batch-32 shape is red |
+| HM-J1 | (j) exact words through HM's exact lane: 20 sentences, each word for word AND with the day it was said | `exact_lookup` (the request served from the distilled facts alone) |
 | HM-S1, HM-F4 | sanity: the verified user's words are stored/recalled/distilled; a deliberate re-teach after a forget is stored | none (positive controls) |
 
 Pilot instruments (`scripts/perf/zmb/pilot/`, run with the bake-off venv): `household.py` (a deterministic 1,000-turn synthetic household +
@@ -354,6 +409,8 @@ day-1 backdate runs only when a multi-day scenario is in play. See `docs/knowled
 ## The bake-off decision rule (pre-registered; copied from the decision record, section 6.1)
 
 Fixed in advance; no threshold changes after seeing results.
+
+> **Winner clause superseded 2026-10-07 (owner direction), before run 2.** G0-G3 below are unchanged and are now explicitly FLOORS. The paragraph that starts "Among adoptable arms, ADOPT the one that wins" (2 of B/C/D/E, "Ties go to Z0") is replaced by the capability clause in "Capability axes" above: the contest is exact words, reflection, long-range recall, protocol, temporal and recall at distance; ties on capability go to the maintained candidate; authority / forgetting / provenance (and extraction B, abstention E) no longer break ties. Run 1 (`KEEP_Z0`) never saw the new axes, so no number was seen before this change. The text below is kept as the record of what was pre-registered on 2026-10-05.
 
 A candidate arm is **ADOPTABLE** only if **all** hard gates pass, measured on three seeds with the Zoe thin layer ON and no
 fork of the candidate's source (config, tags, wrapper only):
@@ -487,6 +544,20 @@ disk: under adoption it is Postgres rows and the same scrub would cover it.
 
 **Remaining `LACKS` after this change** (`HindsightArm.LACKS`, per instance): H0 has no `conflict_pass` and no `edges` (no Zoe layer: 3 A8 cells including the 2 hard ones, 8 temporal cells SKIP, so the hard gate
 stays red for H0 by design); an arm built without `pg=` has no `disk`. H1 / H2 in a window lack nothing (`0 of 144 store cells SKIP by capability`; H0: 11).
+
+## MPA / HMA / ZMA cells (`scripts/perf/zmb/mpa_cells.py`): MemPalace operated by the agent, and the integrations (added 2026-10-07)
+
+Record: `docs/research/mempalace-agent-arm-2026-10-07.md`. Three arms, one runner (`mpa_cells.py`), the same negative-control rule as the HM cells: each cell names the switch it claims
+(`hm_policy.Controls`, `mempalace_agent.MpaControls`, or an integration flag), `run_all` builds the arm with EACH switch off and the cell must go red, else the run is refused (exit 2).
+
+* **MPA** (`arms/mempalace_agent.py`): the brain calls MemPalace's own tools (10 of 45) through a faithful shim; the protocol is injected (3,370 tokens with the tools, reported part by part);
+  hooks map session start / stop / end; the closet pass runs at idle; Zoe's floors (gate, router bypass, identity pinning, authority anchor, quarantine, frame, forget ledger + palace rebuild) sit around every write.
+* **HMA** (`arms/hma.py`): MPA + Hindsight (concise + observations) as the reflective tier: one ingest path (a drawer is Hindsight's only document), one embedder, one packet, one protocol, one forget.
+* **ZMA** (`arms/zma.py`): Z0e + MemPalace: the harness files each owner turn ONCE as a chunk, Z0's extractor reads it back and cites its id, the brain reads (status, search) and never writes, one forget.
+* Lab cells (test double or the real server): `MPA-T1/T2` (schemas, prompt cost), `S1/S2`, `O1` (hooks), `R1` (router), `G1`, `I1/I2`, `H1` (identity), `F1/F2/F3/F5` (forgetting), `A1/A2/A3` (authority; A3 = ZMA: Z0 outranks a conflicting chunk), `C1` (closet pass), `ZMA-W1/W2`, `HMA-W1/W2/F6`.
+* Brain cells (`run_brain`, window only; bars in `BRAIN_BARS`): `M4.<metric>.mempalace5` (the four protocol metrics), `MPA-B1` tool-call validity >= 95% over >= 30 calls, `MPA-B2` supersede >= 80% right / <= 2 wrong,
+  `MPA-J4` exact words >= 90%, `MPA-L4` two-fact >= 70%. A scripted brain never answers these.
+* The window's REFLECTION PHASE (K only; variants `H2@32k`, `HMA@32k`, `ZMA@32k`, then `H2@12B`, `HMA@12B`, `ZMA@12B`) runs the closet / consolidation work on a 32k-context clone so the 8k slot does not decide axis K.
 
 ## Not built yet (the build plan continues)
 
