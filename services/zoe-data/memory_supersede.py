@@ -18,6 +18,12 @@ match, a subject guard and one exclusive slot (home). No model call.
 * Nightly (``memory_digest._implicit_conflict_pass`` in the dreaming cycle): the same
   rule over stored pairs, plus a differing home-slot value, capped per user per run.
 
+* The owner's own retraction / correction is paired by KEY, not by words (``owner_key_match``): the
+  same subject (``same_subject``) and the same attribute (``attributes_of`` slot, or the object the
+  retraction names plus its predicate) retire the older row BY ID whatever else the older sentence
+  says. "User no longer gets migraines" retires "User has been getting migraines most afternoons
+  lately" although the older row is mostly other words (the overlap rule needs half of THEM).
+
 The old row is never deleted: ``status=superseded``, ``superseded_by_id``, ``invalid_at``
 (epoch seconds: where the successor's ``valid_from`` begins) and ``expired_at``; the successor
 gets ``supersedes_id`` and ``valid_from`` (``memory_temporal``: the stated event time, else
@@ -163,15 +169,19 @@ def cue_applies(cue_name: str, new: str, old: str) -> bool:
     return any(w.startswith(stem) for w in words)
 
 
-def changes_existing(fact: str, rows: Iterable[Any]) -> bool:
-    """Does this cue-less fact replace an approved row (same topic, or the exclusive
-    home slot)? Used by the turn digest so the word-overlap dedup cannot drop a
-    corrected fact as a duplicate of the row it retires."""
+def changes_existing(fact: str, rows: Iterable[Any], cue: Optional[str] = None) -> bool:
+    """Does this cue-less fact replace an approved row (same topic, the exclusive home slot,
+    or - given the turn's ``cue`` - the same one-valued attribute slot)? Used by the turn digest
+    so the word-overlap dedup cannot drop a corrected fact as a duplicate of the row it retires.
+    Only a flag: the retirement itself is decided (and authority-gated) by ``supersede_for_turn``."""
+    swap = _utterance_swap(cue)
     for old in rows:
         if not _is_target(getattr(old, "metadata", None) or {}):
             continue
         text = getattr(old, "text", "") or ""
         if exclusive_conflict(fact, text) or same_topic(fact, text):
+            return True
+        if swap is not None and owner_key_match(fact, text, swap):
             return True
     return False
 
@@ -444,6 +454,102 @@ def _is_target(meta: dict[str, Any]) -> bool:
             and STATE_CHANGE not in tags)
 
 
+# ── The owner's retraction / correction: paired by KEY, not by words ─────────────
+# The overlap rule (``same_topic``) asks that the change name half of the OLD fact's words, so a
+# retraction that names only the thing ("User no longer gets migraines") never reached an older
+# sentence with three other content words ("...has been getting migraines most afternoons
+# lately"): the owner's word was stored approved beside the row it ended, and the older row kept
+# being served (found by the day-sim 6n agent, #1916). When the new row is the OWNER'S word, the
+# pair is decided by the key instead: (subject, attribute) - who the fact is about and what
+# about them it states - never by how much of the sentence is shared.
+#
+#   slot       a correction / change on a classified one-valued attribute (home, birthday, age,
+#              job): the same set of attributes on the same subject
+#   retraction an "ended" fact ("User no longer gets migraines"): the older row states the same
+#              predicate (the verb after the cue, by stem) and everything the retraction names
+SLOT_ATTRIBUTES = frozenset({"home", "birthday", "age", "job"})
+# Words after an end cue that do not name a predicate ("is no longer DOING the ...", "quit THE ...").
+_NOT_A_PREDICATE = frozenset({
+    "the", "a", "an", "my", "his", "her", "their", "our", "to", "any", "this", "that", "these",
+    "those", "doing", "being", "having", "going", "been", "be", "do", "does", "did", "have",
+    "has", "had", "is", "are", "was", "were", "am", "it", "them", "so", "at", "in", "on", "for"})
+_LIGHT_VERBS = frozenset({"get", "take", "make", "need", "keep", "feel", "see", "use", "want", "like", "go"})
+_PREDICATE_AFTER_END = re.compile(
+    r"\b(?:no longer|(?:not|n't|never)\b[^.!?]{0,40}?\bany ?more|stopped|quit|gave up|given up|"
+    r"cancel(?:l)?ed|dropped)\s+(?P<v>[a-z]+)", re.I)
+
+
+def is_owner_word(meta: Optional[dict[str, Any]], text: str = "") -> bool:
+    """Is this row the OWNER'S word (``memory_authority``: a stated or derived user class, so a
+    model's guess and an unconfirmed panel voice never qualify)? Legacy rows derive their class."""
+    try:
+        import memory_authority as ma
+
+        return ma.RANK[ma.row_class(meta or {}, text)] >= ma.DERIVED_RANK
+    except Exception:  # noqa: BLE001 - a matcher outage never retires anything
+        return False
+
+
+def _predicate_stem(text: str) -> str:
+    """The stem of the verb an 'ended' fact ends ("no longer GETS migraines", "stopped GETTING
+    migraines" -> "get"); "" when the cue is followed by an object or an auxiliary."""
+    m = _PREDICATE_AFTER_END.search(text or "")
+    if not m or m.group("v").lower() in _NOT_A_PREDICATE:
+        return ""
+    from memory_authority import _stem
+
+    return _stem(m.group("v"))
+
+
+# The REASON an ended thing ended ("... since switching to new glasses") is not the thing that ended.
+_REASON_CLAUSE = re.compile(
+    r"\b(?:since|because|after|once|as a result|thanks to|due to|owing to|following|when|now that|"
+    r"ever since|by)\b.*$", re.I)
+
+
+def _retraction_object(text: str, predicate: str) -> set[str]:
+    """What an 'ended' fact names: its topic tokens minus the subject's own words, the predicate and
+    the reason clause."""
+    from memory_authority import _stem
+
+    out = topic_tokens(_REASON_CLAUSE.sub("", text or "")) - _subject_tokens(text)
+    return {t for t in out if not (predicate and _stem(t) == predicate)}
+
+
+def owner_key_match(new: str, old: str, cue: Optional[Cue]) -> str:
+    """The reason ("slot:home", "retraction") the OWNER'S fact ``new`` retires ``old`` by the
+    (subject, attribute) key, or "". The caller checks ``is_owner_word`` and the old row's
+    ``_is_target``; the word overlap between the two sentences is never consulted."""
+    if cue is None or not same_subject(new, old):
+        return ""
+    if cue.kind == "swap":
+        attrs = attributes_of(new)
+        if attrs and attrs == attributes_of(old) and attrs <= SLOT_ATTRIBUTES:
+            # a second job is not a replaced one: "job" needs the change in the fact's own words
+            # or the owner's explicit correction, not just a cue elsewhere in the turn
+            if attrs == {"job"} and not (cue.fact_level or cue.name == "correction"):
+                return ""
+            return "slot:" + "+".join(sorted(attrs))
+        return ""
+    if not same_attribute(new, old):
+        return ""
+    predicate = _predicate_stem(new)
+    if not predicate:
+        return ""        # no predicate named: only the overlap rule may pair it
+    from memory_authority import _stem
+
+    old_stems = {_stem(w) for w in re.findall(r"[a-z']+", (old or "").lower())}
+    if predicate not in old_stems:
+        return ""
+    obj = _retraction_object(new, predicate)
+    # a light verb ("gets", "has") is not the thing that ended: it needs an object ("quit smoking" does not)
+    if not obj and predicate in _LIGHT_VERBS:
+        return ""
+    if obj <= topic_tokens(old):
+        return "retraction"
+    return ""
+
+
 # ── Write time ──────────────────────────────────────────────────────────────────
 
 async def supersede_for_turn(svc, user_id: str, cue: str, written: Iterable[Any]) -> dict:
@@ -478,12 +584,18 @@ async def supersede_for_turn(svc, user_id: str, cue: str, written: Iterable[Any]
                     break
                 if old.id in own or old.id in taken or not _is_target(old.metadata or {}):
                     continue
+                why = ""
                 if not (same_topic(ref.text, old.text) or exclusive_conflict(ref.text, old.text)):
-                    continue
+                    # not the same words: is it the owner's word about the same (subject, attribute)?
+                    if not is_owner_word(ref.metadata, ref.text):
+                        continue
+                    why = owner_key_match(ref.text, old.text, c)
+                    if not why:
+                        continue
                 if not cue_applies(c.name, ref.text, old.text):
                     continue
                 if await svc.supersede_by(user_id, old.id, by.id, actor=ACTOR,
-                                          note=f"implicit change ({c.name})"):
+                                          note=f"implicit change ({c.name}{'; key ' + why if why else ''})"):
                     taken.add(old.id)
                     retired.append((old.text, by.text))
                     hits += 1
@@ -524,6 +636,10 @@ def conflict_pairs(rows: list[Any]) -> list[tuple[Any, Any, str]]:
                 reason = cue.name
             elif exclusive_conflict(newer.text, older.text):
                 reason = "home"
+            elif (cue is not None and is_owner_word(newer.metadata, newer.text)
+                  and cue_applies(cue.name, newer.text, older.text)
+                  and owner_key_match(newer.text, older.text, cue)):
+                reason = f"{cue.name}; key"
             else:
                 continue
             pairs.append((newer, older, reason))
