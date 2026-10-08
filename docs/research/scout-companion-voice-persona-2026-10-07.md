@@ -13,7 +13,7 @@ instead. **[unverified]** marks anything I could not confirm first-hand. Nothing
 Owner rules applied: ties go to the maintained project; no Zoe-grown look-alikes. So where a maintained artefact
 exists I name it. Where only an idea exists (Callhome, NC licence) I say so, and the verdict is idea-only.
 
-Hard constraints respected: rocks are Gemma 4 E4B+MTP, Moonshine v2 Medium, Kokoro, Flue 2.x + pi, openWakeWord.
+Hard constraints respected: the locked rocks in `docs/CANONICAL.md` are Gemma 4 E4B+MTP, Moonshine v2 Medium, Kokoro (PyTorch / CUDA sidecar) and the two-stage router shape. Flue 2.x + pi (the selected brain lane) and openWakeWord (the current wake-word engine) are current dependencies, not rocks: trials of another lane or engine are valid experiments.
 The W3 RAM gate binds every Jetson-side item below.
 
 ## 0. Where the gap actually is (read against Zoe's own tracker)
@@ -100,7 +100,7 @@ Zoe-rule route; Pipecat (push today, v1.12.0 2026-09-26) beats any in-house turn
 - Gives Zoe: (a) a working audio-in recipe to read before B5.5 (Gemma hears "how", not just "what", which is the only local route to emotional prosody in without a SER model
   and its licence problem); (b) it truncates the stored assistant turn to what was actually spoken on interrupt, matching B1.7; (c) a reminder that audio context ages out and the model then remembers the
   question rather than the fact (their README line ~139).
-- Fit: E4B's mmproj is larger and the W3 gate stands. Lab only after B0.1/B5.1. I did not verify that the pinned commit matches Zoe's llama.cpp build.
+- Fit: E4B's mmproj is larger and the W3 gate stands. Lab only, gated on the W3 / RAM decision in `docs/architecture/beat-the-bar-2026-program.md` (B0.1 is complete; B5.1 is a parked, failed experiment that no longer gates anything). I did not verify that the pinned commit matches Zoe's llama.cpp build.
 - Verdict: **BORROW** (read the recipe, correct the "closed upstream" note in B5.5 once the pinned-commit claim is reproduced in a lab).
 
 ### 1.4 Pipecat family (rank 4)
@@ -220,5 +220,5 @@ I found no open Samantha attempt with memory, initiative and a measured bar. Zoe
 1. Ask the MaAI authors for the `bc_det_en` weights licence. Write the shadow-mode probe: log `p_bc_det` and `p_bc` on the Pi against the replay corpus, with Zoe's own playback fed in as the "user" channel as the negative control. No behaviour change.
 2. Drop the 67.6 MB go-emotions ONNX into a lab CPU probe: accuracy on the Jason corpus transcripts, map 28 to 6 or 8 groups, wire to orb colour behind a flag.
 3. Add `fire_probability` and `min_speech_before_eligible_s` guards to B1.4's spec text; no new code needed until W11.2 starts.
-4. When B0.1 frees RAM, reproduce the jetson-voice-assistant llama.cpp audio-in recipe with E4B in a lab and compare against B5.5's assumption.
+4. Once the W3 / RAM decision allows it (B0.1 is complete; B5.1 no longer gates anything), reproduce the jetson-voice-assistant llama.cpp audio-in recipe with E4B in a lab and compare against B5.5's assumption.
 5. Put SillyTavern's sticky / cooldown / delay vocabulary into the B2.5 design note.

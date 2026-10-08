@@ -130,7 +130,7 @@ Not recommended: AGX Orin 64, Thor, DGX Spark (price), Kokoro-on-Pi (TTFA), Pi A
 
 ## 4. The one hardware recommendation
 
-**Buy one always-on Mac mini (M6, 32 GB) as Zoe's second box - after the free Step-0 trial on the existing Mac passes - and keep the Orin as brain-only.** It is the only option that adds RAM (~4 GB freed on the Orin, 10+ GB spare on the Mac), keeps all three rocks as the same models, costs about what the Orin module alone costs now, and leaves the door open to an M5 Pro 64 GB later if the owner ever approves a 12B / 26B-A4B brain.
+**Buy one always-on Mac mini (M6, 32 GB) as Zoe's second box - after the free Step-0 trial on the existing Mac passes - and keep the Orin as brain-only.** It is the only option that adds RAM (~4 GB freed on the Orin, 10+ GB spare on the Mac), keeps all three rocks as the same models (Gemma 4 E4B + MTP, Moonshine v2 Medium, Kokoro) but **changes Kokoro's runtime**: `kokoro-mlx` on Apple silicon replaces the canonical PyTorch / CUDA sidecar that `docs/CANONICAL.md` lists as load-bearing, so adopting it is a deliberate, owner-approved edit to that row (CANONICAL plus its lock-in test), not a free move, costs about what the Orin module alone costs now, and leaves the door open to an M5 Pro 64 GB later if the owner ever approves a 12B / 26B-A4B brain.
 
 ## 5. Open items I could not close (honest limits)
 
