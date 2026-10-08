@@ -115,7 +115,10 @@ From the report ("What this run did not verify"):
 * G3 deletable lines is an estimate of files judged deletable, never proven.
 * Cells an arm cannot run are skips with the reason; hard ones keep `hard_cells_all_ran` red by the pre-registered rule.
 * F5/F6 (physical erase) and A8 (people graph) on the Hindsight arms are the first contact with the real rows; the engine's own writes were only modelled beforehand.
-* The capability axes ran on seed 1 only; the lab half of M (protocol) is a scripted stand-in and never decides; M is "no data".
+* The capability axes ran on seed 1 only. M reads "no data" in the winner clause because Z0 has no matching
+  brain-half baseline for `protocol_brain`, not because the candidates were unmeasured: each candidate recorded
+  `protocol_brain` 3/4 (table above). The report's own caveat line ("its brain half is declared and did not run") is
+  superseded by this correction; the missing piece for M is a Z0 baseline on the same cells, not a candidate re-run.
 * The capability thresholds were written before any Hindsight arm ran them; Z0e's long-range numbers were seen afterwards.
 * All arms share one Hindsight server and one egress log; the per-arm egress split is by wall-clock phase.
 * Hindsight consolidation does not fit the 8,192 slot (max 8,313 tokens), and its background consolidation cannot be paused in 0.10.2.
@@ -127,7 +130,11 @@ Added by this record:
 * The candidate arms were written this week by agents (about 12 review rounds); an arm's weakness may be the adapter's, not the engine's.
 * The per-call cost `MPA_S_PER_CALL = 3 s` used to plan the MPA / HMA phases was a placeholder; the real cost is about 20 s per call (about 3.9k prompt tokens, about 8 decode tok/s).
 * Kokoro was stopped by hand for the window (the run log: "kokoro-tts.service was not active before the window").
-* The lab forget ledger salt was unset in the lab environment (`ZOE_FORGET_LEDGER_SALT` unset: only the 300 s tombstone shield was active in the lab), so the durable forget ledger was not exercised by this run.
+* The BASELINE lab ran with `ZOE_FORGET_LEDGER_SALT` unset (log line at window open): Z0/Z0e's durable forget ledger
+  was not exercised in this run and only the 300 s tombstone shielded a forgotten name there, which can only penalise
+  the baseline. The candidates are different: `ZMAArm` supplies a salt when none is set, and the Hindsight layer runs
+  `memory_forgotten` with an in-memory backend and its own salt, so their ledger checks did run; what is unverified for
+  them is persistence across restarts.
 
 ## 6. What this means for the program (direction, not new work)
 
