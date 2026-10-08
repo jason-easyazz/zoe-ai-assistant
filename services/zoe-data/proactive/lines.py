@@ -27,10 +27,11 @@ no item text, utterance or reply text is stored or logged.
 from __future__ import annotations
 
 import logging
-import os
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+
+from typed_env import env_str
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,7 @@ _sens_cache: tuple[float, bool] | None = None
 def delivery_ledger_mode() -> str:
     """``ZOE_DELIVERY_LEDGER``: off | shadow (default) | on. Unknown values read as shadow (the
     safe middle: it records and changes nothing)."""
-    raw = (os.environ.get("ZOE_DELIVERY_LEDGER", "") or "").strip().lower()
+    raw = env_str("ZOE_DELIVERY_LEDGER", "").lower()
     if raw in {"0", "false", "no", "none"}:
         return "off"
     if raw in {"1", "true", "yes", "active"}:
@@ -224,7 +225,9 @@ async def class_hold(db, user_id: str, kind: str, last_stamp: str | None, now: d
     try:
         since = _iso(now - BACKOFF_WINDOW)
         async with db.execute(
-            "SELECT COUNT(*) FROM proactive_ledger_lines WHERE user_id = ? AND line = 'welcome' "
+            # DISTINCT created_at: one tap writes one row per item it covers, all stamped alike -
+            # that is ONE "not now", not one per item.
+            "SELECT COUNT(DISTINCT created_at) FROM proactive_ledger_lines WHERE user_id = ? AND line = 'welcome' "
             "AND signal = 'not_now' AND kind = ? AND created_at >= ?",
             (user_id, kind, since),
         ) as cur:

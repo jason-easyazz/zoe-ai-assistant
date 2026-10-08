@@ -31,12 +31,12 @@ chat instead. No item text is ever logged.
 from __future__ import annotations
 
 import logging
-import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from proactive import lines
+from typed_env import env_str
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ def pull_enabled() -> bool:
     """``ZOE_PULL_NOT_PUSH`` - default ON, read per call. ``0`` / ``off`` / ``false`` / ``no``
     removes the tier, the welcome phrases and the orb state (the pending endpoint answers
     ``enabled: false``)."""
-    return (os.environ.get("ZOE_PULL_NOT_PUSH", "") or "").strip().lower() not in _OFF
+    return env_str("ZOE_PULL_NOT_PUSH", "").lower() not in _OFF
 
 
 # ── what counts as a pull (whole-utterance, deterministic, no model) ──────────────────────
@@ -373,7 +373,7 @@ async def pull(uid: str, session_id: str, *, channel: str = "chat",
                 return PullResult(EMPTY_REPLY)
             # The restraint tier (when it exists): a sensitive item is not SPOKEN to an
             # unverified voice; it stays pending and chat offers it.
-            held = [i for i in items if i.sensitivity and spoken and speaker_verified is False]
+            held = [i for i in items if i.sensitivity and spoken and speaker_verified is not True]
             ready = [i for i in items if i not in held]
             take = ready[:SPOKEN_CAP] if spoken else ready
             delivered: list[Item] = []

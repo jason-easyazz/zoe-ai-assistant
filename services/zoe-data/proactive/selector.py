@@ -475,7 +475,7 @@ async def _prepare(message: str, uid: str, sid: str, brief_active: bool) -> Rais
                 _log(uid, r[1], shape, False, False, chold + ("" if lines.backoff_active() else "-shadow"))
                 await _held_line(r, uid, sid, shape, chold, shadow=not lines.backoff_active())
                 if lines.backoff_active():
-                    return None
+                    continue  # this CLASS waits; another class's candidate stays eligible
             # Per member, not per conversation. No await from this check to the hold
             # below, so two overlapping turns cannot both pass it.
             why = "held" if _held(("u", uid)) else _spacing(rows, now_dt)

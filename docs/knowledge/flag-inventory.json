@@ -1070,7 +1070,7 @@
         "readers": [
           "services/zoe-data/proactive/lines.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_DEVICE_TOKEN": {
         "defaults": [
@@ -4024,7 +4024,7 @@
         "readers": [
           "services/zoe-data/proactive/pull.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_QUIET_END_HOUR": {
         "defaults": [

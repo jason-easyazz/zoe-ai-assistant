@@ -708,7 +708,12 @@ async def test_one_not_now_doubles_the_gap_for_that_class_only(env, monkeypatch)
     _cand(env, kind="open_loop", sal=0.9)
     _cand(env, kind="event", text="Dentist (Thu 10:00)", sal=0.8, cues="dentist")
     await _tap_not_now(env, "open_loop", at=NOW - timedelta(minutes=80))
-    # the open-loop class waits twice as long...
+    # the open-loop class waits twice as long (the event class is untouched, so it is raised)...
+    held_for = await sel.prepare("Hi Zoe, how are things?", MEMBER, "s0")
+    assert held_for is not None and held_for.kind == "event"
+    sel._reset_state()
+    env["db"].conn.execute("DELETE FROM proactive_candidates WHERE kind = 'event'")
+    env["db"].conn.commit()
     assert await sel.prepare("Hi Zoe, how are things?", MEMBER, "s1") is None
     assert [(h[0], h[2], h[1]) for h in _lines(env, "withheld")] == [("withheld", "class_backoff", "open_loop")]
     # ...once the doubled gap has passed it is raised again
@@ -855,3 +860,53 @@ async def test_the_bar_sequence_offline_s5_s12_then_the_pull(env):
     # the ledger saw both deliveries, each with its reason (the one candidate was cooling after its
     # raise, so there was nothing for the spacing gate to hold on the second open turn)
     assert [(r[0], r[2]) for r in _lines(env)] == [("raised", "open_turn"), ("pulled", "asked")]
+
+
+# ── review sweep (PR #1935 pass 1) ────────────────────────────────────────────────────────
+async def test_an_unknown_speaker_verdict_is_not_verified_for_a_sensitive_item(env):
+    """LiveKit passes no verdict (None): a sensitive item must be HELD, spoken only on True."""
+    env["db"].conn.execute("ALTER TABLE proactive_candidates ADD COLUMN sensitivity TEXT")
+    cid = _cand(env, text="User has a clinic appointment", sal=0.9, cues="clinic")
+    env["db"].conn.execute("UPDATE proactive_candidates SET sensitivity = 'health' WHERE id = ?", (cid,))
+    env["db"].conn.commit()
+    lines._reset_state()
+    res = await pull.pull(MEMBER, "s1", channel="livekit", speaker_verified=None, now=NOW)
+    assert res.delivered == 0 and "clinic" not in res.reply and "something private" in res.reply
+    assert (await pull.pending_state(MEMBER, NOW))["count"] == 1
+
+
+async def test_one_not_now_covering_two_items_is_one_tap_not_two(env, monkeypatch):
+    monkeypatch.setenv("ZOE_DELIVERY_LEDGER", "on")
+    monkeypatch.setenv("ZOE_PROACTIVE_RAISE_GAP_S", "3600")
+    monkeypatch.setenv("ZOE_PROACTIVE_RAISE_PER_DAY", "0")
+    at = NOW - timedelta(minutes=80)
+    for ref in ("open_loops:1", "open_loops:2"):
+        await lines.record(env["db"], user_id=MEMBER, line="pulled", kind="open_loop",
+                           source_ref=ref, now=at)
+    assert await lines.record_tap(MEMBER, "not_now", now=at) == 2          # two labelled rows...
+    last = (NOW - timedelta(minutes=90)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _cand(env, kind="open_loop", text="User has a vet visit", cues="vet", sal=0.3, surfaced=1,
+          cooldown=NOW + timedelta(days=2), last=last)
+    _cand(env, kind="open_loop", sal=0.9)
+    # ...but ONE tap: the class doubles its gap, it is not switched off for the week.
+    assert await sel.prepare("Hi Zoe, how are things?", MEMBER, "s1") is None
+    assert _lines(env, "withheld")[-1][2] == "class_backoff"
+
+
+async def test_a_held_class_does_not_hide_another_class(env, monkeypatch):
+    monkeypatch.setenv("ZOE_DELIVERY_LEDGER", "on")
+    _cand(env, kind="open_loop", sal=0.9)
+    _cand(env, kind="event", text="Dentist (Thu 10:00)", sal=0.8, cues="dentist")
+    await _tap_not_now(env, "open_loop", at=NOW - timedelta(days=2))
+    await _tap_not_now(env, "open_loop", at=NOW - timedelta(days=1))
+    raised = await sel.prepare("Hi Zoe, how are things?", MEMBER, "s1")
+    assert raised is not None and raised.kind == "event"
+
+
+def test_the_new_flag_readers_use_typed_env_and_the_inbox_poll_is_quiet():
+    import middleware.logging as mw
+
+    for mod in (pull, lines):
+        src = Path(mod.__file__).read_text()
+        assert "os.environ" not in src and "typed_env" in src, mod.__name__
+    assert mw.is_quiet_poll("/api/proactive/inbox", 200, 12) is True
