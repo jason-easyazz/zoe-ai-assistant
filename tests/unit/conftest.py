@@ -12,7 +12,8 @@ The rule this file enforces: stubs belong in a fixture (``monkeypatch.setitem(sy
 snapshot/restore fixture), never at module scope. After every test module (and before the first), any entry in
 ``sys.modules`` whose name is one of the repo's own ``services/zoe-data`` modules but which is a stub — a
 ``MagicMock``/``SimpleNamespace`` or a module object with no ``__file__`` — fails the run with a message that names
-the module and the way to fix it. Pinned by ``test_sys_modules_stub_guard.py``.
+the module and the way to fix it. Stubs are also evicted at collection time (``pytest_collectstart``) so a later
+module's module-scope ``from x import y`` cannot hit one. Pinned by ``test_sys_modules_stub_guard.py``.
 """
 from __future__ import annotations
 
@@ -33,8 +34,9 @@ def _repo_module_names() -> frozenset[str]:
 
 
 _REPO_MODULES = _repo_module_names()
-# Names already reported, so one leak is one failure and not a cascade across every later module.
-_REPORTED: set[str] = set()
+# Stubs found while COLLECTING (they were installed at import time by an earlier module). They are evicted
+# immediately - so the next module's collection-time imports get the real module - and reported by the fixture below.
+_PENDING: dict[str, str] = {}
 
 
 def stubbed_repo_modules(modules=None) -> dict[str, str]:
@@ -52,18 +54,39 @@ def stubbed_repo_modules(modules=None) -> dict[str, str]:
     return found
 
 
+def _evict_stubs() -> dict[str, str]:
+    """Remove every stub from sys.modules (the next import loads the real module again) and return what was removed."""
+    stubs = stubbed_repo_modules()
+    for name in stubs:
+        sys.modules.pop(name, None)
+    return stubs
+
+
+def pytest_collectstart(collector) -> None:
+    """Collection-time guard: evict stubs left by an already-imported module BEFORE the next module is imported.
+
+    Import time is collection time, so a module-scoped fixture alone runs too late - a later module doing
+    ``from memory_digest import _load_todays_messages`` at module scope would already have died with a collection
+    error on the stub. The leak is recorded in ``_PENDING`` and surfaced as a failure by the fixture.
+    """
+    if isinstance(collector, pytest.Module):
+        _PENDING.update(_evict_stubs())
+
+
 def _fail_on_stubs(when: str, module_name: str) -> None:
-    fresh = {n: why for n, why in stubbed_repo_modules().items() if n not in _REPORTED}
-    if not fresh:
+    # Evict (not just report): a stub left in sys.modules would make every later module fail the same way, which is
+    # the cascade this guard exists to stop.
+    found = {**_PENDING, **_evict_stubs()}
+    _PENDING.clear()
+    if not found:
         return
-    _REPORTED.update(fresh)
-    lines = "\n".join(f"  - sys.modules[{n!r}] is {why}" for n, why in sorted(fresh.items()))
+    lines = "\n".join(f"  - sys.modules[{n!r}] is {why}" for n, why in sorted(found.items()))
     pytest.fail(
-        f"sys.modules stub leak ({when} {module_name}):\n{lines}\n"
+        f"sys.modules stub leak ({when} {module_name}; the stubs were evicted so later modules see the real ones):\n{lines}\n"
         "A test module left a stub under a real repo module's name, so every later `import` of it gets the empty "
         "stub (e.g. \"module 'memory_digest' has no attribute '_load_todays_messages'\"). Install stubs in a "
-        "fixture — `monkeypatch.setitem(sys.modules, name, stub)` or a module-scoped fixture that restores the "
-        "original entries in a finally — never at import/module scope; `teardown_module` does not run when the "
+        "fixture - `monkeypatch.setitem(sys.modules, name, stub)` or a module-scoped fixture that restores the "
+        "original entries in a finally - never at import/module scope; `teardown_module` does not run when the "
         "module's tests are deselected.",
         pytrace=False,
     )
