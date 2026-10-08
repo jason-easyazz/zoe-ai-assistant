@@ -635,7 +635,7 @@ are `BH3` and so on; floors steps are `M1` to `M7`.
    P-bench, K repair, census, claim rows       restraint in code, 155-token manner,           stages 1-4, pointers,        RAM contract, 12B (E8),
    in shadow, ledger shadow, brief marks,      pull-not-push, "why did you say that",          thread lookup, card line,    doctrine lab (Lane C),
    retire-by-quote, schema on every step       verifier live, entity-gated recall              household shadow             router lane
-        |  \__ measurement-only starts: E3 (night stage 2 on the real 4B), slot contention for speculative start
+        |  \__ measurement-only starts: E8 (the 12B trial — owner priority), E3 (night stage 2 on the real 4B), slot contention for speculative start
         \_ parallel Pi-only track from W2: duck-decide-resume (BV1) ........................................ W5 THE SAME PERSON, IN THE HOUSE
                                                                                                            household tier, persona trials, self-thread,
                                                                                                            presence track (BV3, BV4, BV5, BV6), M7 cleanup
