@@ -589,6 +589,23 @@ def test_the_brain_cells_report_telemetry_from_every_block_not_just_the_last():
     assert whole["prompt_tokens_max"] == max(p["prompt_tokens_max"] for p in parts) and sum(whole["by_tool"].values()) == whole["tool_calls"]
 
 
+def test_a_saturated_verbatim_search_still_leaves_room_for_the_reflective_tier():
+    """k verbatim rows used to fill the whole packet and crowd out every Hindsight row: HMA was measured as if Hindsight were absent. Break the reservation and the observation vanishes."""
+    a = mpa_cells.lab_arm("HMA")
+    a.reset(USER)
+    a.ingest([Turn(f"My sister Tove plays the {inst} on {day}.", "owner_taught") for inst, day in (("cello", "Tuesdays"), ("flute", "Mondays"), ("oboe", "Fridays"), ("harp", "Sundays"), ("viola", "Thursdays"))])
+    obs = {"id": "o1", "text": "Tove is the musician of the family.", "fact_type": "observation", "tags": ["class:user_stated_derived"]}
+    a.refl.recall = lambda user, query, budget="low": [obs]
+    assert len(a.mpa.search("Tove plays", 4)) == 4                                                       # MemPalace alone fills k
+    rows = a.packet("Tove plays", 4)
+    assert len(rows) == 4 and [r["origin"] for r in rows].count("distilled:observation") == 1 and rows[0]["origin"] != "distilled:observation"      # verbatim first, then the reserved slot
+    assert a.packet_split["reflective"] == 1 and a.packet_split["verbatim"] == 3 and a.packet_split["reserved_per_packet"] == 1 and a.stats()["packet_split"]["packets"] == 1
+    assert any("musician" in r["text"] for r in a.recall("Tove plays", 4)) and any("musician" in r["text"] for r in a.recall_linked("Tove plays", 4))
+    a.refl.recall = lambda user, query, budget="low": []                                                 # no reflective rows: the verbatim tier keeps the whole budget
+    assert len(a.packet("Tove plays", 4)) == 4 and a.packet_split["reflective"] == 3
+    a.close()
+
+
 def test_zma_refuses_a_shim_that_is_not_minilm_and_names_the_setting():
     from zmb import mpa_window
     minilm = lambda url: {"status": "ok", "model": "all-MiniLM-L6-v2", "dim": 384}   # noqa: E731

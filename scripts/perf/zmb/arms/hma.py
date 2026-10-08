@@ -211,6 +211,7 @@ class HMAArm(Arm):
         self.packets = 0
         self.dedup_dropped = 0
         self.authority_dropped = 0
+        self.packet_split = {"packets": 0, "verbatim": 0, "reflective": 0, "reserved_per_packet": 0}      # the packet budget's two tiers, summed over every packet
         self.reflections_served = 0
         self.mpa.on_write = self._on_write
         self.mpa.search_augment = self._augment
@@ -227,6 +228,7 @@ class HMAArm(Arm):
         self.refl.reset(user_id)
         self._user, self._pending = user_id, []
         self.packets = self.dedup_dropped = self.authority_dropped = self.reflections_served = 0
+        self.packet_split = {"packets": 0, "verbatim": 0, "reflective": 0, "reserved_per_packet": 0}
         self.mpa.on_write, self.mpa.search_augment = self._on_write, self._augment
         self.mpa.extra_protocol = REFLECTIONS_PARAGRAPH if self.merged_protocol else ""
 
@@ -332,11 +334,22 @@ class HMAArm(Arm):
             facts, obs = self._reflective(query, rows, budget)
         except Exception:                                                  # noqa: BLE001 - tier isolation: the reflective tier down = the verbatim packet alone
             return rows
-        extra = [{"id": f"refl:{i}", "text": f["text"], "status": "approved", "authority_class": f["class"], "origin": "distilled", "contradicts_id": "", "entity_type": "",
-                  "memory_type": "distilled", "user_id": self._user} for i, f in enumerate(facts)]
-        extra += [{"id": f"obs:{i}", "text": o["text"], "status": "approved", "authority_class": o["class"] or USER_STATED_DERIVED, "origin": "distilled:observation",
-                   "contradicts_id": "", "entity_type": "", "memory_type": "observation", "user_id": self._user} for i, o in enumerate(obs)]
-        return (rows + extra)[:max(k, len(rows))]
+        extra = [{"id": f"obs:{i}", "text": o["text"], "status": "approved", "authority_class": o["class"] or USER_STATED_DERIVED, "origin": "distilled:observation",
+                  "contradicts_id": "", "entity_type": "", "memory_type": "observation", "user_id": self._user} for i, o in enumerate(obs)]               # observations first, as in the search result
+        extra += [{"id": f"refl:{i}", "text": f["text"], "status": "approved", "authority_class": f["class"], "origin": "distilled", "contradicts_id": "", "entity_type": "",
+                   "memory_type": "distilled", "user_id": self._user} for i, f in enumerate(facts)]
+        # ONE budget, two tiers: a saturated verbatim search (k rows) must not crowd every reflective row out, or HMA is measured as if Hindsight were absent. Reserve
+        # r = min(#reflective, max(1, k // 3)) slots; verbatim keeps the rest (and any slot the reflective tier leaves unused is not wasted). Deterministic.
+        budget = max(k, len(rows))
+        r = min(len(extra), max(1, budget // 3)) if extra else 0
+        keep = rows[:max(budget - r, 0)]
+        out = keep + extra[:max(budget - len(keep), 0)]
+        sp = self.packet_split
+        sp["packets"] += 1
+        sp["verbatim"] += len(keep)
+        sp["reflective"] += len(out) - len(keep)
+        sp["reserved_per_packet"] = max(sp["reserved_per_packet"], r)
+        return out
 
     def recall(self, query: str, k: int = 10) -> "list[dict[str, Any]]":
         return self.packet(query, k)
@@ -406,7 +419,7 @@ class HMAArm(Arm):
         for r in rows:
             counts[r["status"]] = counts.get(r["status"], 0) + 1
         return {**v, "rows": rows, "counts": counts, "model_calls": v["model_calls"] + self.refl.model_calls, "pending": len(self._pending),
-                "tiers": {"mempalace": len(v["rows"]), "hindsight": len(rows) - len(v["rows"])}}
+                "tiers": {"mempalace": len(v["rows"]), "hindsight": len(rows) - len(v["rows"])}, "packet_split": dict(self.packet_split)}
 
     def stats_as(self, identity: str) -> "dict[str, Any]":
         return self.mpa.stats_as(identity)
