@@ -235,15 +235,8 @@ async def _gather(db, user_id: str, now: datetime) -> tuple[list, list, list]:
 
 
 async def _people_names(db, user_id: str) -> list[str]:
-    """The member's contacts' names (the ``other_member`` class names a person the row talks about);
-    [] when the table is unreadable."""
-    try:
-        async with db.execute(
-            "SELECT name FROM people WHERE user_id = ? AND (deleted = 0 OR deleted IS NULL)", (user_id,),
-        ) as cur:
-            return [str(r[0]) for r in await cur.fetchall() if r[0]]
-    except Exception:  # noqa: BLE001
-        return []
+    """The member's contacts' names (see ``restraint.people_names``)."""
+    return await restraint.people_names(db, user_id)
 
 
 async def select_for_user(user_id: str, *, now: datetime | None = None) -> dict | None:

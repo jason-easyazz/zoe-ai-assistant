@@ -2056,10 +2056,33 @@ def seed_user(live: PersonLive, user: str, world: World, log) -> dict[str, Any]:
     return seeds
 
 
+def seed_blocks(seeds: dict[str, Any]) -> "tuple[dict[str, str], dict[str, str]]":
+    """What a failed seed makes unaskable: ``({cell: why}, {ask kind: why})``. A restraint half passes
+    vacuously when the worry it guards never reached memory, so those asks are ERRORs (setup), never asked."""
+    cells: dict[str, str] = {}
+    kinds: dict[str, str] = {}
+    d = seeds.get("dentist") or {}
+    if d.get("error") or not d.get("landed"):
+        why = f"setup: the dentist worry seed did not land (error={d.get('error')}, landed={d.get('landed')})"
+        cells.update({c: why for c in ("P2", "P5a", "P7", "P9", "P12")})
+    f = seeds.get("diet") or {}
+    if f.get("error") or not f.get("landed"):
+        kinds["diet"] = f"setup: the diet seed did not land (error={f.get('error')}, landed={f.get('landed')})"
+    return cells, kinds
+
+
 def run_chat_asks(live: PersonLive, user: str, asks: list[Ask], arm: str, ctx: ScoreCtx, log,
-                  keep: bool, reset_candidates: bool = False) -> "tuple[_Agg, list[tuple[str, str]], dict, list]":
+                  keep: bool, reset_candidates: bool = False, blocked_cells: "dict[str, str] | None" = None,
+                  blocked_kinds: "dict[str, str] | None" = None
+                  ) -> "tuple[_Agg, list[tuple[str, str]], dict, list]":
     agg, replies_all, tier1, evid = _Agg(), [], {}, []
     for i, ask in enumerate(asks):
+        why = (blocked_cells or {}).get(ask.cell) or (blocked_kinds or {}).get(ask.kind)
+        if why:
+            for half in ask.scores:
+                agg.add(half, None, {"error": why}, error=True)
+            evid.append({"ask": ask.id, "error": why})
+            continue
         if reset_candidates and ask.kind == "open":
             live.reset_candidates(user)
         sid_tag = f"{arm}-{ask.id}"
@@ -2207,6 +2230,8 @@ def run_family(live: PersonLive, user: str, worlds: list[World], arms: tuple[str
     run_cells = selected | ({"P2", "P6", "P7"} if "P10" in selected else set())
     chat_cells = run_cells & {"P2", "P3", "P5a", "P5b", "P5c", "P6", "P7", "P8", "P9", "P10", "P11", "P12"}
     needs_seed = chat_cells & {"P2", "P3", "P5a", "P7", "P9", "P12"}
+    blocked_cells: dict[str, str] = {}
+    blocked_kinds: dict[str, str] = {}
     hook_enabled: bool | None = None
     nights: dict[str, Any] = {}
     if needs_seed:
@@ -2226,6 +2251,9 @@ def run_family(live: PersonLive, user: str, worlds: list[World], arms: tuple[str
         bad = [t for t, v in out["seeds"].items() if v.get("error")]
         if bad:
             log(f"  WARNING seed turns errored: {bad}")
+        blocked_cells, blocked_kinds = seed_blocks(out["seeds"])
+        if blocked_cells or blocked_kinds:
+            log(f"  seeds did not land: asks of {sorted(blocked_cells)} {sorted(blocked_kinds)} are not asked")
     # 4. P3 (hook tier) --------------------------------------------------------------------------
     p3_agg = _Agg()
     if "P3" in selected:
@@ -2253,7 +2281,8 @@ def run_family(live: PersonLive, user: str, worlds: list[World], arms: tuple[str
         for w in worlds:
             asks += build_asks(w, run_cells, cap, p12_sessions)
         agg, replies_all, tier1, evid = run_chat_asks(live, user, asks, arm, ctx, log, keep,
-                                                       reset_candidates=bool(hook_enabled))
+                                                       reset_candidates=bool(hook_enabled),
+                                                       blocked_cells=blocked_cells, blocked_kinds=blocked_kinds)
         # fold in the tiers that do not depend on the arm
         for src in (sel_agg, p3_agg):
             for key in ("k", "n", "none", "err"):
@@ -2303,6 +2332,14 @@ def overall(res: dict[str, Any]) -> dict[str, Any]:
     errs = [h["id"] for h in res["halves"] if h["gate"] and h["verdict"] == "ERROR"]
     return {"failed_halves": fails, "errored_halves": errs, "counts": res["counts"],
             "tier1": res["tier1"]["count"]}
+
+
+def exit_code(status: str, summary: dict[str, Any]) -> int:
+    """2 = the run is not evidence (error status, or a gating half ERRORED: every chat failed, a judge down);
+    1 = a gating half FAILED or a Tier-1 red line occurred; 0 = ran clean."""
+    if status == "error" or summary.get("errored_halves"):
+        return 2
+    return 1 if (summary.get("failed_halves") or summary.get("tier1")) else 0
 
 
 def rescore(payload: dict[str, Any]) -> dict[str, Any]:
@@ -2487,6 +2524,12 @@ def main(argv: list[str] | None = None) -> int:
     if os.environ.get("ZOE_PERF") != "1":
         print("samantha_person: skipped - live runs require ZOE_PERF=1 (see --dry-run, --controls)")
         return 0
+    if len(seeds) > 1:
+        # one demo user is seeded with worlds[0] only; asks and session tags are keyed by ask id, so a
+        # second world would run against the first world's conversation and unseeded contacts
+        print("samantha_person: a live run takes ONE world seed (--seeds a,b is for --checkout); "
+              f"got {len(seeds)}", file=sys.stderr)
+        return 2
 
     log = lambda m: print(m, flush=True)  # noqa: E731
     service_dir = sb.resolve_service_dir(args.service_dir)
@@ -2582,9 +2625,7 @@ def main(argv: list[str] | None = None) -> int:
     for a, r in arm_results.items():
         print("\n" + render_markdown(a, r))
     log(f"\nstatus={status} failed_halves={summary.get('failed_halves')} results={args.results}")
-    if status == "error":
-        return 2
-    return 1 if summary.get("failed_halves") else 0
+    return exit_code(status, summary)
 
 
 if __name__ == "__main__":

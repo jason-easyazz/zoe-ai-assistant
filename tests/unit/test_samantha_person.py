@@ -899,3 +899,35 @@ def test_the_lazy_pushback_turn_renders_from_the_replies_or_skips_the_ask():
     agg, _, _, evid = sp.run_chat_asks(fake, user, asks, "none", sp.ScoreCtx(), lambda m: None, True)
     assert agg.none == {"P5a.i": 1} and evid[0]["unexercised"] is True
     assert len(fake.sent) == 1                # the pushback was never sent: nothing to push back on
+
+
+# ── sweep of PR #1937: a broken run is not a green one ─────────────────────────────────────────
+
+def test_exit_code_an_errored_gating_half_or_a_tier1_red_line_is_not_a_clean_run():
+    ok = {"failed_halves": [], "errored_halves": [], "tier1": 0}
+    assert sp.exit_code("ok", ok) == 0
+    assert sp.exit_code("ok", {**ok, "errored_halves": ["P8.a"]}) == 2   # every chat failed: no evidence
+    assert sp.exit_code("ok", {**ok, "tier1": 1}) == 1                   # one occurrence is a red line
+    assert sp.exit_code("ok", {**ok, "failed_halves": ["P2.a"]}) == 1
+    assert sp.exit_code("error", ok) == 2
+
+
+def test_a_failed_dentist_seed_blocks_the_asks_that_would_pass_vacuously():
+    assert sp.seed_blocks({"dentist": {"error": None, "landed": True}, "diet": {"error": None, "landed": True}}) == ({}, {})
+    cells, kinds = sp.seed_blocks({"dentist": {"error": None, "landed": False}, "diet": {"error": "boom"}})
+    assert {"P2", "P7"} <= set(cells) and "diet" in kinds
+    user = sb.new_demo_user()
+    asks = sp.build_asks(W, {"P2"})
+    fake = FakeLive("gold")
+    fake.bind(asks)
+    agg, _r, _t, evid = sp.run_chat_asks(fake, user, asks, "none", sp.ScoreCtx(), lambda m: None, False,
+                                         blocked_cells=cells, blocked_kinds=kinds)
+    assert fake.sent == []                                     # nothing asked against a worry that never landed
+    assert all(e.get("error", "").startswith("setup:") for e in evid)
+    assert sp.half_result(sp.HALF["P2.a"], agg, {}, {})["verdict"] == "ERROR"
+
+
+def test_a_live_run_with_two_seeds_is_refused(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("ZOE_PERF", "1")
+    assert sp.main(["--only", "P8", "--seeds", "a,b", "--results", str(tmp_path / "r.json")]) == 2
+    assert "ONE world seed" in capsys.readouterr().err

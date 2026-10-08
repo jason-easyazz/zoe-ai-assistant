@@ -1227,3 +1227,97 @@ async def test_the_brief_filter_adds_nothing_the_context_did_not_already_hold(en
     assert all(lp in ctx["open_loops"] for lp in out["open_loops"])
     assert all(m in ctx["emotional_moments"] for m in out["emotional_moments"])
     assert set(out) == set(ctx)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# review sweep (PR #1937): unverified speaker, brief classes, stale name signals, one transaction
+# ═════════════════════════════════════════════════════════════════════════════
+async def test_an_unverified_speaker_at_a_member_panel_cannot_set_or_lift_a_mute(env, monkeypatch):
+    for mode_ in ("enforce", "shadow"):
+        monkeypatch.setenv("ZOE_RESTRAINT", mode_)
+        restraint.bind_verdict(False)
+        try:
+            assert await restraint.handle_turn("stop mentioning the dentist", MEMBER, "s1") == ""
+        finally:
+            restraint.bind_verdict(None)
+        assert _mutes(env) == [], mode_                      # nothing recorded, in either mode
+    monkeypatch.setenv("ZOE_RESTRAINT", "enforce")
+    assert await restraint.handle_turn("stop mentioning the dentist", MEMBER, "s1") == restraint.ACK_MUTE
+    restraint.bind_verdict(False)
+    try:
+        assert await restraint.handle_turn("you can mention the dentist again", MEMBER, "s2") == ""
+    finally:
+        restraint.bind_verdict(None)
+    assert [r[8] for r in _mutes(env)] == ["active"]          # the guest's release did not lift it
+
+
+PARCEL_DANA = "check in with Dana about the parcel pickup"
+
+
+async def test_the_brief_uses_the_saved_class_and_the_contact_names_like_the_selector(env):
+    env["db"].conn.execute("INSERT INTO people (id, user_id, name) VALUES ('p1', ?, 'Dana')", (MEMBER,))
+    ctx = {"calendar": [], "open_loops": [{"id": 7, "text": PARCEL_DANA, "hint": "", "due": None}],
+           "emotional_moments": [], "emotional_moment_ids": []}
+    # no saved row yet: the contact-name fallback still classes it other_member and the greeting withholds it
+    out = await restraint.filter_brief_ctx(ctx, MEMBER, "good morning")
+    assert out["open_loops"] == []
+    # saved by the nightly pass: the SAVED class decides (even if the contact is later removed)
+    restraint._reset_state()
+    env["db"].conn.execute("DELETE FROM people")
+    await restraint.store_thread_classes(env["db"], MEMBER, [("open_loops:7", PARCEL_DANA, "open_loop")], ["Dana"])
+    out = await restraint.filter_brief_ctx(ctx, MEMBER, "good morning")
+    assert out["open_loops"] == []
+    assert (await restraint.filter_brief_ctx(ctx, MEMBER, "what's up"))["open_loops"] == ctx["open_loops"]
+
+
+async def test_a_contact_added_after_the_thread_was_classified_reclassifies_it(env):
+    items = [("open_loops:7", PARCEL_DANA, "open_loop")]
+    assert await restraint.store_thread_classes(env["db"], MEMBER, items, []) == 1
+    stored = await restraint.load_thread_classes(env["db"], MEMBER)
+    assert restraint.thread_classes("open_loops:7", PARCEL_DANA, "open_loop", stored) == ()
+    assert await restraint.store_thread_classes(env["db"], MEMBER, items, ["Dana"]) == 1   # same text, new signal
+    stored = await restraint.load_thread_classes(env["db"], MEMBER)
+    assert restraint.thread_classes("open_loops:7", PARCEL_DANA, "open_loop", stored) == ("other_member",)
+    assert await restraint.store_thread_classes(env["db"], MEMBER, items, ["Dana"]) == 0   # and then idempotent
+
+
+class _TxSqlite(_Sqlite):
+    """A SQLite double with a real transaction block and a switch that fails the class INSERT."""
+    def __init__(self, path):
+        super().__init__(path)
+        self.in_txn, self.fail_insert = False, False
+
+    def execute(self, sql, params=()):
+        async def _run():
+            if self.fail_insert and sql.lstrip().startswith("INSERT INTO restraint_classes"):
+                raise RuntimeError("insert failed")
+            cur = self.conn.execute(sql, tuple(params))
+            rows = cur.fetchall()
+            if not self.in_txn:
+                self.conn.commit()
+            return _Cursor(rows, rowcount=cur.rowcount)
+        return _ExecResult(_run())
+
+    @contextlib.asynccontextmanager
+    async def transaction(self):
+        self.in_txn = True
+        try:
+            yield
+            self.conn.commit()
+        except BaseException:
+            self.conn.rollback()
+            raise
+        finally:
+            self.in_txn = False
+
+
+async def test_a_failed_class_insert_leaves_the_old_valid_class_in_place(env):
+    db = _TxSqlite(env["db"].conn.execute("PRAGMA database_list").fetchone()[2])
+    await restraint.store_thread_classes(db, MEMBER, [("open_loops:1", DENTIST, "open_loop")])
+    db.fail_insert = True
+    assert await restraint.store_thread_classes(db, MEMBER, [("open_loops:1", PARCEL, "open_loop")]) == 0
+    db.fail_insert = False
+    assert db.rows("SELECT COUNT(*) FROM restraint_classes WHERE subject_ref = 'open_loops:1' "
+                   "AND invalid_at IS NULL") == [(1,)]       # the UPDATE rolled back with the failed INSERT
+    stored = await restraint.load_thread_classes(db, MEMBER)
+    assert restraint.thread_classes("open_loops:1", DENTIST, "open_loop", stored) == ("health", "affect")

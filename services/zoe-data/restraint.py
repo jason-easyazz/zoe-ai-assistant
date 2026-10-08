@@ -41,6 +41,7 @@ guest rule, which is pure code with no I/O to fail.
 """
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import hashlib
 import logging
@@ -531,13 +532,25 @@ async def filter_brief_ctx(ctx: dict, user_id: str, message: Any) -> dict:
     try:
         turn = make_turn(message, verdict=current_verdict())
         mutes = await list_mutes(user_id)
+        # the SAME class the selector saved for this thread (and the same contact-name fallback), so a
+        # loop that mentions a contact is not unclassified here
+        stored: dict = {}
+        names: list[str] = []
+        try:
+            from db_compat import get_compat_db
+
+            async with get_compat_db() as db:
+                stored, names = await load_thread_classes(db, user_id), await people_names(db, user_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("restraint: brief class read failed (text classes only): %r", exc)
         out = dict(ctx)
         enforced = m == "enforce"
         reasons: dict[str, int] = {}
         classes: dict[str, int] = {}
 
         def allowed(text: str, ref: str, kind: str) -> bool:
-            dec = decide(text, classify(text, kind=kind), turn, mutes, surface="brief", source_ref=ref)
+            dec = decide(text, thread_classes(ref, text, kind, stored, names), turn, mutes,
+                         surface="brief", source_ref=ref)
             if not dec.allow:
                 reasons[dec.reason] = reasons.get(dec.reason, 0) + 1
                 for c in dec.classes:
@@ -766,6 +779,11 @@ async def handle_turn(message: Any, user_id: str, session_id: str = "") -> str:
 
         if uid in GUEST_USERS:
             return ""  # a guest has no memory to mute and no standing to set a preference
+        if current_verdict() is False:
+            # the speaker gate did NOT confirm this voice at a member-bound panel: it may be a guest, and a
+            # guest cannot set (or lift) the member's saved mutes, in shadow or in enforce
+            logger.info("RESTRAINT_MUTE user=%s action=refused_unverified_speaker mode=%s", uid, m)
+            return ""
         u = parse_utterance(message)
         if u is None:
             return ""
@@ -881,13 +899,13 @@ async def erase_user(user_id: str) -> int:
 
 
 # ── 1b. thread classes: stored, invalidate-never-delete (migration 0040) ─────
-def thread_classes(source_ref: str, text: Any, kind: str, stored: dict) -> tuple[str, ...]:
+def thread_classes(source_ref: str, text: Any, kind: str, stored: dict, names: Iterable[str] = ()) -> tuple[str, ...]:
     """Classes of a candidate / loop / moment: the stored row while its version and text hash match, else
     a fresh classification. Pure; ``stored`` is ``load_thread_classes``'s map."""
     hit = stored.get(source_ref)
     if hit and hit[0] == VERSION and hit[1] == text_hash(text):
         return _parse_csv(hit[2])
-    return classify(text, kind=kind)
+    return classify(text, kind=kind, names=names)
 
 
 async def load_thread_classes(db, user_id: str) -> dict:
@@ -902,6 +920,25 @@ async def load_thread_classes(db, user_id: str) -> dict:
     except Exception as exc:  # noqa: BLE001
         logger.debug("restraint: thread classes read failed: %r", exc)
         return {}
+
+
+def _txn(db):
+    """The connection's transaction block (asyncpg via the pool wrapper); a no-op context on a
+    connection without one (the SQLite test double commits per statement)."""
+    t = getattr(db, "transaction", None)
+    return t() if callable(t) else contextlib.nullcontext()
+
+
+async def people_names(db, user_id: str) -> list[str]:
+    """The member's contacts' names (the ``other_member`` class names a person the row talks about);
+    [] when the table is unreadable."""
+    try:
+        async with db.execute(
+            "SELECT name FROM people WHERE user_id = ? AND (deleted = 0 OR deleted IS NULL)", (user_id,),
+        ) as cur:
+            return [str(r[0]) for r in await cur.fetchall() if r[0]]
+    except Exception:  # noqa: BLE001
+        return []
 
 
 async def store_thread_classes(db, user_id: str, items: Iterable[tuple[str, str, str]],
@@ -919,20 +956,25 @@ async def store_thread_classes(db, user_id: str, items: Iterable[tuple[str, str,
         for ref, text, kind in items:
             h = text_hash(text)
             cur_ = valid.get(ref)
-            if cur_ and cur_[0] == VERSION and cur_[1] == h:
-                continue
+            # classified BEFORE the skip: the contact names are an input too, so a thread stored before
+            # a contact was added is re-derived (same text, new class) rather than kept stale
             classes, signals = classify_full(text, kind=kind, names=names)
-            await db.execute(
-                "UPDATE restraint_classes SET invalid_at = ? WHERE user_id = ? AND subject_ref = ? "
-                "AND invalid_at IS NULL", (stamp_, user_id, ref))
-            await db.execute(
-                """INSERT INTO restraint_classes (id, user_id, subject_ref, classes, signals, version,
-                       text_hash, derived_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                   ON CONFLICT (user_id, subject_ref, version, text_hash)
-                   DO UPDATE SET invalid_at = NULL, classes = excluded.classes,
-                       signals = excluded.signals, derived_at = excluded.derived_at""",
-                (uuid.uuid4().hex, user_id, ref, ",".join(classes), ",".join(signals), VERSION, h, stamp_))
+            if cur_ and cur_[0] == VERSION and cur_[1] == h and _parse_csv(cur_[2]) == classes:
+                continue
+            # invalidate + insert are ONE transaction: a failed insert must not leave the thread with
+            # no valid saved class (db-safety: multi-step writes are transactional)
+            async with _txn(db):
+                await db.execute(
+                    "UPDATE restraint_classes SET invalid_at = ? WHERE user_id = ? AND subject_ref = ? "
+                    "AND invalid_at IS NULL", (stamp_, user_id, ref))
+                await db.execute(
+                    """INSERT INTO restraint_classes (id, user_id, subject_ref, classes, signals, version,
+                           text_hash, derived_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                       ON CONFLICT (user_id, subject_ref, version, text_hash)
+                       DO UPDATE SET invalid_at = NULL, classes = excluded.classes,
+                           signals = excluded.signals, derived_at = excluded.derived_at""",
+                    (uuid.uuid4().hex, user_id, ref, ",".join(classes), ",".join(signals), VERSION, h, stamp_))
             written += 1
     except Exception as exc:  # noqa: BLE001
         logger.warning("restraint: thread class store failed user=%s: %r", user_id, exc)
