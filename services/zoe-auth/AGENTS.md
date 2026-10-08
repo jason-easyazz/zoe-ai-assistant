@@ -35,3 +35,4 @@ Service tests in `tests/`, then live login plus `/api/auth/` flow through nginx.
 ## Child DOX Index
 
 No child AGENTS.md files.
+- **The embedded quick-auth offline cache does not sync from itself** (`touch_panel/quick_auth.py`, 2026-10-09): `QuickAuthManager` was written for a panel-side daemon syncing from a REMOTE auth server; inside zoe-auth its `server_url` is this service and the sync hit `/api/admin/sync-data` (admin permission) with no credential — a logged 401 every five minutes forever (1,071 in a week) and a cache that never filled. `offline_enabled` is now `ZOE_TOUCH_PANEL_OFFLINE_CACHE=1` opt-in (default off); the server-first passcode path is unchanged, and with the flag off the cache is neither written on a successful login nor read as a fallback (a centrally revoked session must not outlive the cache TTL) and the cached-users listing is empty. Pinned by `tests/test_touch_panel_offline_cache.py`.
