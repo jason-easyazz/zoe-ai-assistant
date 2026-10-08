@@ -264,6 +264,10 @@ class NightCfg(bk.Cfg):
     #: ``--n-gpu-layers`` override (None = the parked unit's 99): a partial offload keeps part of the weights in ordinary RAM, so the single CUDA allocation that failed on 2026-10-09
     #: (6,637 MiB; the 4B's 4.2 GB one succeeds) shrinks. Untested: the first thing to try, see docs/knowledge/night-window.md.
     ngl: "Optional[int]" = None
+    #: ``GGML_CUDA_ENABLE_UNIFIED_MEMORY=1`` in the 12B's environment: ggml then allocates with cudaMallocManaged, which is not bound by the per-allocation limit that refused the
+    #: 12B's single 6,637 MiB weight buffer on 2026-10-09 (the 4B's ~4.4 GB buffer loads) and pages on demand; some speed cost, no quality cost. Default ON on a Jetson
+    #: (/etc/nv_tegra_release exists); ``--no-unified`` / ``NIGHT_NO_UNIFIED=1`` turns it off. Only the 12B gets it: the 4B at 32k stays exactly the live brain's configuration.
+    unified: bool = os.path.exists("/etc/nv_tegra_release") and os.environ.get("NIGHT_NO_UNIFIED") != "1"
     #: after this many CONSECUTIVE windows (same boot) on which the 12B failed to load, a timer-started window refuses before stopping anything: Zoe is not put to sleep every night for a load that fails
     max_load_failures: int = 2
     retry_load: bool = False
@@ -410,6 +414,8 @@ def llm_spec(parked_text: str, cfg: NightCfg, lv: Levers) -> "dict[str, Any]":
             argv = [argv[0]] + translate_for_new_build(argv[1:])
         spec["env"] = {**spec["env"], "LD_LIBRARY_PATH": str(Path(cfg.binary).parent)}
     props = {**spec["props"], "MemorySwapMax": "0"}
+    if cfg.unified:
+        spec["env"] = {**spec["env"], "GGML_CUDA_ENABLE_UNIFIED_MEMORY": "1"}
     return {**spec, "argv": argv, "props": props, "model": os.path.basename(cfg.model_path(lv.model)), "diff": argv_diff(spec["live_argv"], argv)}
 
 
@@ -882,6 +888,9 @@ class NightWindow(bk.Window):
         spec = llm_spec(self.parked_text, cfg, pick["levers"])
         self.event("12B command (generated from the parked unit's ExecStart, which is read and never edited): " + shlex.join(spec["argv"]))
         self.event("12B differs from the parked ExecStart in: " + "; ".join(spec["diff"]))
+        self.event(f"12B environment: GGML_CUDA_ENABLE_UNIFIED_MEMORY={'1 (set: cudaMallocManaged)' if 'GGML_CUDA_ENABLE_UNIFIED_MEMORY' in spec['env'] else 'NOT set (plain cudaMalloc)'}; levers ngl={cfg.ngl or 'parked 99'}, mlock={cfg.mlock}")
+        self.rec["arith"]["unified_memory"] = "GGML_CUDA_ENABLE_UNIFIED_MEMORY" in spec["env"]
+        self.rec["arith"]["load_started_s"] = self.host.mono()
         self.start_transient("llm", spec)
         url = f"http://127.0.0.1:{cfg.port}/health"
         if not self.poll_health(url, _status_ok, 480.0, unit=NIGHT_UNITS["llm"]):
@@ -891,6 +900,7 @@ class NightWindow(bk.Window):
         self.record_load(True)
         self.floor_armed = True
         m = self.mem()
+        self.rec["arith"]["load_s"] = round(self.host.mono() - self.rec["arith"].pop("load_started_s", self.host.mono()), 1)
         self.rec["arith"]["avail_after_load_mib"] = round(m, 0)
         self.event(f"12B healthy; MemAvailable {m:.0f} MiB (floor {cfg.min_avail_mb:.0f})")
         self.guard()
@@ -1388,6 +1398,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--fit-off", action="store_true", help="add --fit off to the 12B command (not the default: see NightCfg.fit_off)")
     ap.add_argument("--no-mlock", action="store_true", help="drop --mlock from the 12B command (the locked mmap of the file plus the CUDA copy is about 2x the file at load)")
     ap.add_argument("--ngl", type=int, default=None, help="--n-gpu-layers for the 12B (default: the parked unit's 99); fewer layers = a smaller single CUDA allocation, the rest stays in RAM")
+    ap.add_argument("--no-unified", action="store_true", help="do NOT set GGML_CUDA_ENABLE_UNIFIED_MEMORY=1 for the 12B (default ON on a Jetson: cudaMallocManaged avoids the per-allocation limit)")
     ap.add_argument("--retry-load", action="store_true", help="ignore the 'the 12B failed to load on the last N windows' guard")
     ap.add_argument("--job-reserve-mib", type=float, default=None, help="resident size budgeted for the job processes beside the 12B (default 700)")
     ap.add_argument("--margin-mib", type=float, default=None, help="extra margin demanded by the lever choice (default 0)")
@@ -1422,6 +1433,7 @@ def configure(args: argparse.Namespace, cfg: "Optional[NightCfg]" = None) -> Nig
     cfg.mlock = cfg.mlock and not args.no_mlock
     cfg.ngl = args.ngl if args.ngl is not None else cfg.ngl
     cfg.retry_load = cfg.retry_load or args.retry_load
+    cfg.unified = cfg.unified and not args.no_unified
     if args.job_reserve_mib is not None:
         cfg.job_reserve_mib = args.job_reserve_mib
     if args.margin_mib is not None:

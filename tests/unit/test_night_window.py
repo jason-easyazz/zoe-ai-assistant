@@ -705,6 +705,26 @@ def test_nvmaps_own_largest_block_is_read_logged_and_recorded_without_blocking_t
     assert "NvMap largest allocatable block 12000 MiB" in w3.rec["load_diagnosis"]["ram"]
 
 
+def test_unified_memory_is_an_env_lever_on_the_12b_only_default_on_for_a_jetson(tmp_path, monkeypatch):
+    """2026-10-09: the 12B's one 6,637 MiB weight buffer is refused by cudaMalloc with 4-5 GB spare; GGML_CUDA_ENABLE_UNIFIED_MEMORY=1 makes ggml use cudaMallocManaged."""
+    lv = nw.Levers("qat", 16384, "q8_0")
+    on = nw.llm_spec(PARKED, nw.NightCfg(unified=True), lv)
+    off = nw.llm_spec(PARKED, nw.NightCfg(unified=False), lv)
+    assert on["env"]["GGML_CUDA_ENABLE_UNIFIED_MEMORY"] == "1" and "GGML_CUDA_ENABLE_UNIFIED_MEMORY" not in off["env"]
+    assert on["env"]["LD_LIBRARY_PATH"] == off["env"]["LD_LIBRARY_PATH"]                       # nothing else about the environment changes
+    assert "--batch-size" in on["argv"] and on["argv"][on["argv"].index("--ubatch-size") + 1] == "128"       # June's small compute buffer stays
+    assert "GGML_CUDA_ENABLE_UNIFIED_MEMORY" not in nw.clone4_spec(LIVE_UNIT, nw.NightCfg(unified=True))["env"]   # the 4B at 32k is exactly the live brain's setup
+    assert nw.configure(nw.build_parser().parse_args(["--no-unified"]), nw.NightCfg(unified=True)).unified is False
+    assert nw.configure(nw.build_parser().parse_args([]), nw.NightCfg(unified=True)).unified is True
+    w, host, _ = make(tmp_path, cfg_kw={"unified": True})
+    assert w.run() == nw.EXIT_OK
+    assert "--setenv=GGML_CUDA_ENABLE_UNIFIED_MEMORY=1" in next(c for c in host.joined() if "zoe-night-12b" in c and c.startswith("systemd-run"))
+    assert w.rec["arith"]["unified_memory"] is True and w.rec["arith"]["load_s"] >= 0 and any("UNIFIED_MEMORY=1 (set" in e["msg"] for e in w.rec["events"])
+    w2, host2, _ = make(tmp_path, argv=["--no-unified"], cfg_kw={"unified": True})
+    w2.run()
+    assert "UNIFIED_MEMORY" not in next(c for c in host2.joined() if "zoe-night-12b" in c and c.startswith("systemd-run")) and w2.rec["arith"]["unified_memory"] is False
+
+
 def test_ngl_nomlock_and_fit_are_levers_that_change_only_their_flag():
     base = nw.llm_spec(PARKED, nw.NightCfg(), nw.Levers("qat", 32768, "q8_0"))["argv"]
     ngl = nw.llm_spec(PARKED, nw.NightCfg(ngl=28), nw.Levers("qat", 32768, "q8_0"))["argv"]
