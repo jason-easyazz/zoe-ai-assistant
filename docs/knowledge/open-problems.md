@@ -9,7 +9,7 @@ timestamp: 2026-10-05T22:10:00+08:00
 # Open problems
 
 Format: **found** · where · what · evidence · owner · verified fixed when.
-Add a line the moment a problem is found and not fixed. Remove it only with the fix merged or applied and
+This file is append-only and merges by union (`.gitattributes`: `merge=union`) — concurrent PRs that each add lines never conflict; after a merge, check for duplicate lines. Add a line the moment a problem is found and not fixed. Remove it only with the fix merged or applied and
 the "verified fixed when" check done. Operator items also go in the current morning/operator pack.
 
 Evidence codes in the 2026-10-05 lines are records under `docs/research/` (gap ids in the record): MC = `mempalace-chroma-best-practice`, PG = `people-graph-temporal-model`, BX = `brain-extraction-stack-best-practice`, ZMB = `zoe-memory-bench-design`, SP = `speech-stack-docs-vs-zoe`, IN = `integration-stack-docs-vs-zoe`, FA = `memory-fidelity-audit`; "program item N" is `tools-best-practice-program-2026-10-05.md`.
