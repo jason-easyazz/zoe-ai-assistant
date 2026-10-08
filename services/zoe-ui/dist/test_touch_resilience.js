@@ -146,6 +146,14 @@ let n = 0; const ok = (m) => { n++; console.log('  ok  ' + m); };
       assert(/ctx\.globalAlpha=RM\?\.72:/.test(homeSrc) && /if\(RM\)\{setTimeout\(function\(\)\{requestAnimationFrame\(frame\);\},1000\);\}/.test(homeSrc), 'star canvas is still under reduced motion');
       assert(/if\(RM\|\|Math\.abs\(target-_cf\.focus\)>CF_WIN_DRAG\)\{/.test(homeSrc), 'Cover Flow spring lands directly under reduced motion');
       ok('polish: steppers/sources/settings/list/day-view/queue controls ≥48 px; JS motion honours reduced motion');
+      // 2026-10-09: ONE stop for every panel-scoped auth failure. A member not bound to the panel
+      // got 403 on bind/sync/poll; the poll stopped itself while the 5 s sync went on forever.
+      assert(/function stopPanelServices\(reason\) \{[\s\S]{0,400}clearInterval\(state\.syncTimer\)[\s\S]{0,900}stopServiceWorkerPanelPoll\(\);/.test(execSrc), 'stopPanelServices clears poll+sync timers and the SW poll');
+      assert(/if \(panelAuthFailed\(res\)\) stopPanelServices\(`bind refused/.test(execSrc) && /if \(panelAuthFailed\(res\)\) stopPanelServices\(`sync refused/.test(execSrc) && /if \(panelAuthFailed\(res\)\) stopPanelServices\(`poll refused/.test(execSrc), 'bind, sync and poll all route a 401/403 to stopPanelServices');
+      assert(/async function syncState\(\) \{\s*if \(state\.panelServicesStopped\) return;/.test(execSrc), 'a stopped sync never posts again');
+      assert(/function stopPanelServices\(reason\) \{[\s\S]{0,900}state\.pushWs\.close\(\)[\s\S]{0,300}window\.zoePushWs\.disconnect\(\)/.test(execSrc), 'stopPanelServices closes the fallback push socket and the shared push channel');
+      assert(/if \(state\.unloading \|\| state\.pushRetry \|\| state\.panelServicesStopped\) return;/.test(execSrc), 'the fallback push backoff never reschedules after a stop');
+      ok('executor: a panel 401/403 on bind, sync or poll stops every panel service once (push channel included)');
       // 2026-10-05: a member's laptop with a STALE session was bounced to the retired
       // /touch/index.html by the estate's own 401 path. Off-kiosk auth failures raise the
       // estate card in place; the estate never navigates to the old login page.
