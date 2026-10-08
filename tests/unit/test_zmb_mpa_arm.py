@@ -556,7 +556,10 @@ def test_a_hallucinated_invalidate_needs_a_correction_in_this_message_not_just_p
         return refused, live
     assert run("What shall we have for dinner tonight") == ([True], True)                    # the old statement is still in the session: it is not a correction
     assert run("Tove lives in Perth, we visited her there") == ([True], True)                # names the claim but nothing ends it
-    assert run("Tove no longer lives in Perth") == ([False], False)                          # a negation of this very claim
+    assert run("Actually, Tove lives in Perth") == ([True], True)                           # a cue word is not a negation: this REAFFIRMS the fact
+    assert run("Tove moved to Oslo") == ([True], True)                                       # says nothing about Perth
+    for line in ("Tove no longer lives in Perth", "Tove doesn't live in Perth anymore", "Tove lives in Oslo, not Perth", "Tove moved from Perth to Oslo"):
+        assert run(line) == ([False], False), line                                           # a negation / contrast of the OLD object itself
     assert run("What shall we have for dinner tonight", anchor_check=False) == ([False], False)       # NEGATIVE CONTROL
 
 

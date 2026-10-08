@@ -27,7 +27,9 @@ The brain NEVER writes in ZMA (no model call on the write path, the owner's desi
 from __future__ import annotations
 
 import dataclasses
+import importlib.util
 import json
+import os
 import re
 import urllib.request
 from pathlib import Path
@@ -127,10 +129,13 @@ class ZMAArm(Arm):
         self.shim_ef = ShimEmbeddingFunction(self.embed_url, self.embed_model)
         self.z0.svc.memory_service._drawers_embedding_function = lambda: self.shim_ef      # Z0e's collection now embeds through the shim (one model resident)
 
-    def reset(self, user_id: str, **kw: Any) -> None:
+    def reset(self, user_id: str, *, disk: bool = False, **kw: Any) -> None:
+        """``disk=True``: Z0's store is REAL Chroma in a throwaway directory (hash vectors) so ``residue`` can byte-scan what a forget leaves behind (the physical-forget cell)."""
+        if disk and not importlib.util.find_spec("chromadb"):
+            raise NotImplementedError("ZMA's physical-forget cell needs chromadb to open Z0's store on disk (not installed here)")
         self.mpa.reset(user_id)                               # first: an unavailable MemPalace is a SKIP before Z0's store is built
         self._share_embedder()
-        self.z0.reset(user_id)
+        self.z0.reset(user_id, disk=disk)
         self._user, self.chunk_of, self.chunks, self.dedup_dropped = user_id, {}, 0, 0
 
     def close(self) -> None:
@@ -285,7 +290,13 @@ class ZMAArm(Arm):
         return self.forget(alias)
 
     def residue(self, entity: str) -> int:
-        return self.mpa.residue(entity)
+        """BOTH stores: MemPalace's files AND Z0's data directory (Chroma / SQLite / FTS / WAL / HNSW, byte-scanned with the forgotten name's spellings). A Z0 store with no
+        directory to scan cannot be shown clean: that is a SKIP (NotImplementedError), never a zero."""
+        lab = getattr(self.z0, "_lab_service", None)
+        if lab is None or not os.path.isdir(getattr(lab, "data_dir", "") or ""):
+            raise NotImplementedError("ZMA's physical residue needs Z0's store open on disk (reset(..., disk=True)); an in-memory Z0 cannot be shown clean")
+        z = self.z0.disk_residue([entity])
+        return self.mpa.residue(entity) + sum(int(v.get("total", 0)) for v in (z.get("tokens") or {}).values())
 
     # ── export ─────────────────────────────────────────────────────────────────────────────────────────────────────
     def stats(self) -> "dict[str, Any]":

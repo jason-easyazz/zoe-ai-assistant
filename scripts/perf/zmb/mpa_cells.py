@@ -250,8 +250,8 @@ def cell_h1(arm: Any) -> scorers.Score:
     return _score(ok, "write", writes_seen=len(adds) + len(diaries), identity_fields_pinned=ok)
 
 
-def _marisol(arm: Any) -> None:
-    arm.reset(USER)
+def _marisol(arm: Any, **reset_kw: Any) -> None:
+    arm.reset(USER, **reset_kw)
     arm.ingest([T("My sister Marisol lives in Perth.", "owner_taught"), T("Marisol is allergic to cats so keep Biscuit out of the lounge"),
                 T("My dentist is Dr Okonkwo and the surgery is on Elm Street.", "owner_taught"), T("MARISOL called about the lift on Friday")])
     arm.run_idle_pass("", [])
@@ -280,7 +280,7 @@ def cell_f2(arm: Any) -> scorers.Score:
 
 
 def cell_f3(arm: Any) -> scorers.Score:
-    _marisol(arm)
+    _marisol(arm, **({"disk": True} if arm.name == "ZMA" else {}))          # ZMA: Z0's store on real Chroma, so both stores' bytes can be scanned
     arm.forget("Marisol")
     n = arm.residue("Marisol")
     return _score(n == 0, "write", files_still_holding_the_name=n)

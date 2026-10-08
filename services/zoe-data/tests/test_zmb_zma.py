@@ -155,3 +155,23 @@ def test_z0_outranks_a_conflicting_chunk_and_the_cell_goes_red_without_the_autho
     _skip_if_z0e_cells_could_not_run(res, z0_embed)
     r = res["cells"][0]
     assert r["verdict"] == "PASS" and r["controls_verdicts"] == {"authority": "FAIL"}
+
+
+def test_zma_residue_scans_z0s_store_as_well_as_memplaces_files():
+    """MPA-F3 / G2 for ZMA: the name must be gone from Z0's Chroma / SQLite / WAL bytes too. Drop the Z0 half and a name left in Z0 reads as 0."""
+    pytest.importorskip("chromadb")
+    a = mpa_cells.lab_arm("ZMA", z0_embed=False)
+    try:
+        a.reset(USER, disk=True)
+        a.ingest([Turn("My sister Marisol lives in Perth.", "owner_taught")])
+        a.mpa.residue = lambda entity: 0                                                  # MemPalace holds nothing: only Z0's directory can say
+        assert a.residue("Marisol") > 0
+        a.forget("Marisol")
+        assert a.residue("Marisol") == 0
+        a.z0.disk_residue = lambda tokens: {"tokens": {t: {"total": 4} for t in tokens}}   # a Z0 store that still holds the name
+        assert a.residue("Marisol") == 4
+        a.reset(USER)                                                                       # an in-memory Z0 cannot be shown clean: a SKIP, never a zero
+        with pytest.raises(NotImplementedError, match="on disk"):
+            a.residue("Marisol")
+    finally:
+        a.close()

@@ -545,7 +545,7 @@ class MemPalaceAgentArm(BenchSurface, Arm):
 
     _PREDICATE_STOP = frozenset({"in", "at", "to", "of", "is", "are", "has", "have", "the", "for", "a", "an", "on", "with", "as", "by", "from"})
     #: stem -> other words an owner uses for the same relation (the predicate is snake_case, the owner speaks naturally)
-    _PREDICATE_SYN = {"liv": ("moved", "move", "home", "resid", "relocat", "based", "stay", "settled"), "work": ("job", "employ", "hired", "career"),
+    _PREDICATE_SYN = {"liv": ("moved", "move", "home", "resid", "relocat", "based", "stay", "settled", "left", "leav"), "work": ("job", "employ", "hired", "career"),
                       "own": ("have", "has", "got", "bought"), "lik": ("love", "enjoy", "fond", "prefer", "favourite", "favorite"),
                       "marri": ("husband", "wife", "spouse", "wed"), "born": ("birth", "birthday"), "visit": ("went", "trip", "stayed")}
 
@@ -570,17 +570,19 @@ class MemPalaceAgentArm(BenchSurface, Arm):
                 return True
         return False
 
-    _NEGATION = frozenset({"not", "no", "never", "longer", "anymore", "isn", "isnt", "doesn", "doesnt", "don", "dont", "wasn", "wasnt", "wrong", "incorrect", "actually", "instead",
-                           "moved", "left", "changed", "stopped", "quit", "ended", "over", "mistake", "correction", "sold", "divorced", "retired", "former", "ex"})
+    #: a negation or a "from" shortly BEFORE the old object ("not Perth", "doesn't live in Perth", "moved from Perth"), or "anymore" / "no longer" shortly AFTER it
+    _ENDS_BEFORE = re.compile(r"\b(?:not|never|no|isn|doesn|don|wasn|didn|from|left|leaving)\b(?: \w+){0,5} $")
+    _ENDS_AFTER = re.compile(r"^(?:\w+ ){0,3}(?:anymore|longer)\b")
 
     def _invalidation_evidence(self, subject: str, predicate: str, obj: str, s: "dict[str, Any]") -> bool:
-        """The CURRENT owner message names the claim (subject, relation and object) AND carries a correction / negation marker."""
+        """The CURRENT owner message names the claim (subject, relation, object) AND negates or contrasts the OLD object itself. 'Actually, Tove lives in Perth' / 'Tove moved to Oslo'
+        (no Perth in a negation) reaffirm or say nothing about Perth: a cue word on its own ('actually', 'moved', 'correction') ends nothing."""
         if not s["owner"]:
             return False
-        u = f" {_norm(s['owner'][-1])} "
-        o, sub = f" {_norm(obj)} ", _norm(subject)
-        return o.strip() != "" and o in u and (sub in self._OWNER_SUBJECTS or f" {sub} " in u) and self._predicate_in(predicate, set(u.split())) \
-            and bool(set(u.split()) & self._NEGATION)
+        u, o, sub = f" {_norm(s['owner'][-1])} ", f" {_norm(obj)} ", _norm(subject)
+        if o.strip() == "" or not (sub in self._OWNER_SUBJECTS or f" {sub} " in u) or not self._predicate_in(predicate, set(u.split())):
+            return False
+        return any(self._ENDS_BEFORE.search(u[:m.start() + 1]) or self._ENDS_AFTER.match(u[m.end():]) for m in re.finditer(re.escape(o), u))
 
     def _klass(self, text: str, s: "dict[str, Any]") -> "tuple[str, bool]":
         if not self.mc.anchor_check:
