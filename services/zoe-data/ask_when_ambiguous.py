@@ -33,12 +33,13 @@ of the first names that repeat, so a turn that names nobody costs a set lookup a
 from __future__ import annotations
 
 import logging
-import os
 import re
 import time
 import unicodedata
 from dataclasses import dataclass
 from typing import Optional
+
+from typed_env import env_str
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,7 @@ _GUEST_IDS = ("", "guest", "anonymous", "voice-guest", "voice-daemon")
 
 def mode() -> str:
     """``shadow`` (default, unset/unknown) | ``enforce`` | ``off``. Per-call env read."""
-    raw = (os.environ.get("ZOE_ASK_WHEN_AMBIGUOUS") or "").strip().lower()
+    raw = env_str("ZOE_ASK_WHEN_AMBIGUOUS").lower()
     if raw in ("0", "false", "no", "off", "disabled"):
         return "off"
     if raw in ("1", "true", "yes", "on", "enforce"):
@@ -304,6 +305,11 @@ def pick(answer: str, candidates: tuple) -> Optional[Candidate]:
     return None
 
 
+_REFUSAL_RX = re.compile(
+    r"\b(?:not|no|nope|never|neither|nor|none|isn['’]?t|wasn['’]?t|aren['’]?t|don['’]?t|doesn['’]?t|didn['’]?t|"
+    r"other\s+than|except|besides|instead\s+of|anyone\s+but)\b", re.IGNORECASE)
+
+
 def resolve_followup(message: str, user_id: str, session_id: str) -> Optional[str]:
     """The original request with the full name in place of the bare first name, when ``message`` answers the
     question Zoe asked; else None. The pending question is consumed either way - one question per request, no
@@ -311,6 +317,8 @@ def resolve_followup(message: str, user_id: str, session_id: str) -> Optional[st
     p = _PENDING.pop(_key(user_id, session_id), None)
     if p is None or time.monotonic() - p.at >= PENDING_TTL_S:
         return None
+    if _REFUSAL_RX.search(message or ""):
+        return None                                # "not my sister" refuses a person; it never chooses one
     chosen = pick(message, p.candidates)
     if chosen is None:
         return None

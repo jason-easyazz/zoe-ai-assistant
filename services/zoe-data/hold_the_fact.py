@@ -41,10 +41,11 @@ fact must have been answered in the SAME session's recent history; English only.
 from __future__ import annotations
 
 import logging
-import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
+
+from typed_env import env_str
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,7 @@ _GUEST_IDS = ("", "guest", "anonymous", "voice-guest", "voice-daemon")
 
 def mode() -> str:
     """``shadow`` (default, unset/unknown) | ``enforce`` | ``off``. Per-call env read."""
-    raw = (os.environ.get("ZOE_HOLD_THE_FACT") or "").strip().lower()
+    raw = env_str("ZOE_HOLD_THE_FACT").lower()
     if raw in ("0", "false", "no", "off", "disabled"):
         return "off"
     if raw in ("1", "true", "yes", "on", "enforce"):
@@ -402,6 +403,46 @@ def _row_replace(text: str, held: Atom, pushed: Atom) -> str:
     return text[:a.start] + rep + text[a.end:]
 
 
+# -- an evidence update must be about THE SAME THING --------------------------------------------------
+
+_ACTOR_VERBS = (r"(?:just\s+)?(?:called|rang|phoned|emailed|texted|messaged|said|says|told|confirmed|moved|changed|"
+                r"rescheduled|cancelled|canceled|postponed|shows|showed|reads)")
+_ACTOR_NOUN_RX = re.compile(r"\b(?:the|my|our|a|an)\s+([a-z][a-z'-]{2,})\s+" + _ACTOR_VERBS + r"\b", re.IGNORECASE)
+_ACTOR_NAME_RX = re.compile(r"\b([A-Z][a-z]{2,})\s+" + _ACTOR_VERBS + r"\b")
+# who/what can be the source of news about ANY appointment: the record, the venue, the office
+_GENERIC_SOURCES = frozenset({
+    "calendar", "diary", "planner", "email", "emails", "inbox", "invite", "booking", "confirmation", "receipt",
+    "letter", "text", "message", "app", "website", "ticket", "reminder", "card", "appointment", "event", "meeting",
+    "clinic", "office", "surgery", "practice", "reception", "receptionist", "hospital", "school", "team", "airline",
+    "company", "venue", "restaurant", "system", "schedule", "one", "other", "new", "same", "notification", "page",
+    "time", "date", "day", "doctor", "nurse", "secretary", "assistant", "admin",
+})
+_NOT_NAMES = frozenset({"the", "they", "she", "her", "his", "this", "that", "there", "what", "who", "yes", "no"})
+
+
+def _words_of(text: str) -> set:
+    return set(re.findall(r"[a-z]+", (text or "").lower()))
+
+
+def foreign_subject(message: str, question: str, answer: str) -> bool:
+    """Does an EVIDENCE message report news from a source that has nothing to do with the held exchange - "The
+    plumber called, it is Thursday now." against "your dentist appointment is on Friday"? A different weekday alone
+    is not a correction of THIS fact; with the source named and absent from the exchange, the owner's row is not
+    edited (the turn goes on to the brain as before). A generic source (calendar, clinic, email...) or one the
+    exchange itself names is about the same thing."""
+    msg = _strip_hint(message)
+    seen = _words_of(question) | _words_of(answer)
+    stems = seen | {w[:-1] for w in seen if w.endswith("s")}
+    cands = [m.group(1).lower() for m in _ACTOR_NOUN_RX.finditer(msg)]
+    cands += [m.group(1).lower() for m in _ACTOR_NAME_RX.finditer(msg) if m.group(1).lower() not in _NOT_NAMES]
+    for c in cands:
+        base = c[:-2] if c.endswith("'s") else c
+        if base in _GENERIC_SOURCES or base in stems or base.rstrip("s") in stems:
+            continue
+        return True
+    return False
+
+
 # -- history + the owner-stated row -----------------------------------------------------------------
 
 @dataclass
@@ -525,6 +566,8 @@ async def plan(message: str, user_id: str, session_id: str, *, speaker_verified:
                 hit = contradiction(answer, rd.text)
                 if hit is None:
                     continue
+                if evidence and foreign_subject(rd.text, question, answer):
+                    continue                        # news about something else is not a correction of this fact
                 held, pushed = hit
             else:                                   # "That's wrong." - the newest answer that states one value
                 vals = [a for a in atoms(answer) if a.kind in ("day", "date", "time")]
@@ -559,24 +602,28 @@ async def _update(row: Any, held: Atom, pushed: Atom, subject: str, message: str
 
 
 async def _confirm(ex: list, message: str, user_id: str, session_id: str, apply: bool) -> Optional[Plan]:
-    """The owner answered Zoe's hold. ``ex[0]`` is (their pushback, the hold reply); ``ex[1]`` is (the original
-    question, the answer that was held)."""
+    """The owner answered Zoe's hold. ``ex[0]`` is (their pushback, the hold reply); the held answer is the
+    nearest older answer (``ex[1:]``, however many filler exchanges lie between) that the pushed value
+    contradicts - the same search ``plan`` used to make the hold."""
     if len(ex) < 2:
         return None
     prd = read(ex[0][0])
-    q2, a2 = ex[1]
     if prd.kind != "bare" or not prd.pushed:
         return None
-    hit = contradiction(a2, prd.text)
-    if hit is None:
-        return None
-    held, pushed = hit
-    if not reads_as_confirmation(message, prd.pushed, held):
-        return None
-    row = await _owner_row(user_id, q2, held)
-    if row is None:
-        return Plan("none", held=held.shown, reason="no_owner_row")
-    return await _update(row, held, pushed, subject_of(q2), message, user_id, session_id, apply, "confirmed")
+    for q2, a2 in ex[1:]:
+        if is_own_reply(a2):
+            continue
+        hit = contradiction(a2, prd.text)
+        if hit is None:
+            continue
+        held, pushed = hit
+        if not reads_as_confirmation(message, prd.pushed, held):
+            return None
+        row = await _owner_row(user_id, q2, held)
+        if row is None:
+            return Plan("none", held=held.shown, reason="no_owner_row")
+        return await _update(row, held, pushed, subject_of(q2), message, user_id, session_id, apply, "confirmed")
+    return None
 
 
 async def handle(message: str, user_id: str, session_id: str, *, speaker_verified: Optional[bool] = None) -> str:

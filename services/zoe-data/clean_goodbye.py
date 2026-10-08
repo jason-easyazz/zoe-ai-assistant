@@ -29,10 +29,11 @@ other turn streams byte-identical. A reply that is already clean is returned unc
 from __future__ import annotations
 
 import logging
-import os
 import re
 import unicodedata
 from typing import Any, AsyncIterator, Iterable
+
+from typed_env import env_str
 
 logger = logging.getLogger(__name__)
 
@@ -43,12 +44,25 @@ MAX_WORDS = 14
 
 def mode() -> str:
     """``shadow`` (default, unset/unknown) | ``enforce`` | ``off``. Per-call env read."""
-    raw = (os.environ.get("ZOE_CLEAN_GOODBYE") or "").strip().lower()
+    raw = env_str("ZOE_CLEAN_GOODBYE").lower()
     if raw in ("0", "false", "no", "off", "disabled"):
         return "off"
     if raw in ("1", "true", "yes", "on", "enforce"):
         return "enforce"
     return "shadow"
+
+
+def _strip_intent_hint(message: str) -> str:
+    """Drop a leading balanced ``[Intent hint: ...]`` prefix (the hint's brackets nest: scan by depth)."""
+    msg = message or ""
+    if not msg.startswith("[Intent hint:"):
+        return msg
+    depth = 0
+    for i, ch in enumerate(msg):
+        depth += (ch == "[") - (ch == "]")
+        if depth == 0:
+            return msg[i + 1:].lstrip()
+    return msg
 
 
 def _norm(text: str) -> str:
@@ -287,12 +301,20 @@ async def filter_stream(turn: AsyncIterator[str], message: str, passthrough: Ite
     the turn, naming the questions the reply is supposed to voice (see ``voices_owed_question``). Closing this
     closes the inner turn."""
     m = mode()
+    # classify the owner's own words: chat.py prepends "[Intent hint: ...]" on the streaming path, which would
+    # defeat the anchored farewell / presence checks
+    message = _strip_intent_hint(message)
     kind = classify(message) if m != "off" else ""
     held: list = []
     skip = set(passthrough)
     try:
         async for delta in turn:
-            if not kind or delta.startswith(("__TOOL__:", "__THINKING__:", "__UI__:")):
+            if delta.startswith(("__TOOL__:", "__THINKING__:", "__UI__:")):
+                yield delta
+            elif not kind:
+                yield delta
+            elif m != "enforce":
+                held.append(delta)                  # shadow: the original chunk goes out NOW; the copy is only compared
                 yield delta
             else:
                 held.append(delta)
@@ -307,7 +329,8 @@ async def filter_stream(turn: AsyncIterator[str], message: str, passthrough: Ite
             changed = fixed != raw
             if changed:
                 logger.info("CLEAN_GOODBYE mode=%s kind=%s would_change=1", m, kind)
-            yield fixed if (changed and m == "enforce") else raw
+            if m == "enforce":
+                yield fixed if changed else raw
     finally:
         aclose = getattr(turn, "aclose", None)
         if aclose is not None:

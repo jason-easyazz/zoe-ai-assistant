@@ -215,3 +215,19 @@ def test_the_never_ask_and_always_ask_policies_each_fail_one_half(monkeypatch):
         assert (asked_ambig == len(AMBIG)) is ambiguous_ok
         assert (asked_clear == 0) is clear_ok
         awa._PENDING.clear()
+
+
+@pytest.mark.parametrize("answer", ["Not my sister", "no, not the sister", "not the first one", "it isn't the colleague",
+                                    "anyone but Okafor", "I don't mean the sister"])
+def test_a_refusal_never_chooses_a_person(answer, monkeypatch):
+    """A refusal names a role or surname but chooses nobody: the owner's words go on untouched, no rewrite."""
+    _ask("Tell me about Marisol.", monkeypatch)
+    assert awa.resolve_followup(answer, UID, SID) is None
+    assert not awa.has_pending(UID, SID)
+
+
+def test_the_flag_reader_goes_through_typed_env(monkeypatch):
+    import inspect
+    assert "os.environ" not in inspect.getsource(awa)
+    monkeypatch.setenv(awa.ENV, " Enforce ")
+    assert awa.mode() == "enforce"

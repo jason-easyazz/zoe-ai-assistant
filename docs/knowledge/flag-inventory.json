@@ -232,7 +232,7 @@
         "readers": [
           "services/zoe-data/ask_when_ambiguous.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_ASSISTANT_ROOT": {
         "defaults": [
@@ -765,7 +765,7 @@
         "readers": [
           "services/zoe-data/clean_goodbye.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_COMPOSE_MAX_TOKENS": {
         "defaults": [
@@ -1651,7 +1651,7 @@
         "readers": [
           "services/zoe-data/hold_the_fact.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_HOME_SETUP_SECRET": {
         "defaults": [

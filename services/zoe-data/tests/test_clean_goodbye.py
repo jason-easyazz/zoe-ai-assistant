@@ -246,3 +246,45 @@ def test_the_seam_wraps_the_turn_in_the_guard():
 
     src = inspect.getsource(zc.run_flue_brain_streaming)
     assert "clean_goodbye.filter_stream(turn, message" in src
+
+
+# -- sweep 1936: the intent hint, and shadow never delays ---------------------------------------------
+
+HINT = "[Intent hint: greeting, confidence 0.81, slots {'who': ['zoe']}] "
+
+
+@pytest.mark.parametrize("message", ["night Zoe", "are you there?", "..."])
+def test_a_chat_intent_hint_does_not_hide_the_owners_words(monkeypatch, message):
+    monkeypatch.setenv(cg.ENV, "enforce")
+    bare = _collect(cg.filter_stream(_stream("Good evening. How can I help you settle in for the night? I don't know."), message))
+    hinted = _collect(cg.filter_stream(_stream("Good evening. How can I help you settle in for the night? I don't know."), HINT + message))
+    assert hinted == bare and hinted != ["Good evening. How can I help you settle in for the night? I don't know."]
+
+
+def test_shadow_streams_every_chunk_as_it_arrives(monkeypatch):
+    """The shadow contract is 'change nothing': the first chunk must be out before the brain finishes."""
+    monkeypatch.setenv(cg.ENV, "shadow")
+    seen = []
+
+    async def inner():
+        yield "Good evening. "
+        seen.append("first-consumed")
+        yield "How can I help?"
+        seen.append("brain-finished")
+
+    async def go():
+        g = cg.filter_stream(inner(), "night Zoe")
+        first = await g.__anext__()
+        at_first = list(seen)
+        rest = [d async for d in g]
+        return first, at_first, rest
+
+    first, at_first, rest = _run(go())
+    assert first == "Good evening. " and "brain-finished" not in at_first and rest == ["How can I help?"]
+
+
+def test_the_flag_reader_goes_through_typed_env(monkeypatch):
+    import inspect
+    assert "os.environ" not in inspect.getsource(cg)
+    monkeypatch.setenv(cg.ENV, " ENFORCE ")
+    assert cg.mode() == "enforce"

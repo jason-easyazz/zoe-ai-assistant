@@ -374,3 +374,39 @@ def test_subject_and_replacement_helpers():
     assert htf.subject_of("What day is it?") == ""
     h = htf.contradiction(A, PUSH)
     assert htf._row_replace(ROW_TEXT, h[0], h[1]) == "User has a dentist appointment on Thursday for a cracked molar."
+
+
+# -- sweep 1936: same-subject evidence, and the confirmation finds the held exchange -----------------
+
+@pytest.mark.parametrize("msg", ["The plumber called, it is Thursday now.", "My neighbour rang, it's Thursday now.",
+                                 "Sally texted, it's Thursday now."])
+def test_news_about_something_else_never_edits_the_held_fact(world, monkeypatch, msg):
+    """A different weekday from an UNRELATED source is not a correction of the dentist row."""
+    monkeypatch.setenv(htf.ENV, "enforce")
+    _after_question(world)
+    assert _run(htf.handle(msg, UID, SID)) == ""
+    assert world.svc.review_calls == []
+
+
+def test_news_from_the_same_subject_still_updates(world, monkeypatch):
+    monkeypatch.setenv(htf.ENV, "enforce")
+    _after_question(world)
+    assert _run(htf.handle("The dentist called, it's Thursday now.", UID, SID)).startswith("Done - I've changed")
+    assert len(world.svc.review_calls) == 1
+
+
+def test_the_confirmation_finds_the_held_answer_past_filler_exchanges(world, monkeypatch):
+    monkeypatch.setenv(htf.ENV, "enforce")
+    _after_question(world)
+    world.hist += [("user", "set a timer for 5 minutes"), ("assistant", "Timer set.")]
+    world.hist += [("user", PUSH), ("assistant", htf.hold_reply("your dentist appointment", "Friday", "Thursday"))]
+    assert _run(htf.handle("Yes, I'm sure.", UID, SID)) == "Done - I've changed your dentist appointment to Thursday in my notes."
+    (mem_id, kw), = world.svc.review_calls
+    assert mem_id == "r1" and kw["edits"] == "User has a dentist appointment on Thursday for a cracked molar."
+
+
+def test_the_flag_reader_goes_through_typed_env(monkeypatch):
+    import inspect
+    assert "os.environ" not in inspect.getsource(htf)
+    monkeypatch.setenv(htf.ENV, " ENFORCE ")
+    assert htf.mode() == "enforce"
