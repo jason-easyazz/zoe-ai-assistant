@@ -252,8 +252,14 @@ async function runWrite(
   dryRunItem: string,
   successFallback: string,
   signal?: AbortSignal,
+  // `isRead = true` marks a dispatch that CHANGES NOTHING but still must not run on a replay turn (it may stage per-turn state
+  // server-side). It keeps the REPLAY gate below and drops only the two gates that exist to stop a WRITE: ZOE_BRAIN_ALLOW_WRITES
+  // (a read has nothing to disable) and the untrusted-turn tier (a read of the owner's own notes cannot be steered into a change).
+  // The one caller is memory_retire step 1. It exists so that dispatch stays INSIDE this chokepoint rather than becoming a bare
+  // `dispatchIntent` call site that test_replay_write_isolation.py would need classified as a read.
+  isRead = false,
 ): Promise<string> {
-  if (!allowWrites()) {
+  if (!isRead && !allowWrites()) {
     return `WRITE DISABLED — ${dryRunItem} was NOT saved (this is a lab build; set ` +
       `ZOE_BRAIN_ALLOW_WRITES=true to enable writes). Tell the user you can't do that yet — ` +
       `do NOT claim it was done.`;
@@ -261,7 +267,7 @@ async function runWrite(
   // W15 PER-SOURCE TOOL TIER — untrusted web content was returned into this turn,
   // so nothing may change state until the turn ends (src/untrusted-content.ts).
   // Ahead of replay isolation: a tainted turn must refuse, not fake a success.
-  if (isTurnUntrusted(signal)) return untrustedWriteRefusal(dryRunItem);
+  if (!isRead && isTurnUntrusted(signal)) return untrustedWriteRefusal(dryRunItem);
   // REPLAY ISOLATION — this turn came from the replay gate, so report the write as
   // done and commit nothing. Checked AFTER the ALLOW_WRITES gate on purpose: a lab
   // build with writes off keeps its loud "WRITE DISABLED" honesty, and this branch
@@ -1065,7 +1071,8 @@ const rememberEmotionalMoment = defineTool({
  * owner's own row, a chosen row among the three shown, the forgotten ledger) is enforced server-side, whatever this tool sends.
  * Identity is bound in trusted code like every other tool. The zoe-data intent is `memory_retire` (_DISPATCHABLE_INTENTS).
  *
- * Step 1 is a READ (it shows notes the brain could already recall; nothing changes), so it is not behind the write gate; step 2 is
+ * Step 1 is a READ (it shows notes the brain could already recall; nothing changes), so it is not behind the write gate - but it
+ * is REPLAY-GATED (runWrite read mode: a replay turn never dispatches it); step 2 is
  * a WRITE (ZOE_BRAIN_ALLOW_WRITES, replay isolation, the untrusted-turn tier) exactly like remember_fact. On a SPOKEN turn the
  * server refuses both steps (the voice lane's judge is the per-turn digest, off the turn) and the reply is a bare "Noted.".
  * ZOE_QUOTE_RETIRE=shadow (the default) logs the decision and applies nothing; the reply then never claims a change.
@@ -1092,9 +1099,11 @@ const memoryRetire = defineTool({
   run: async ({ data, signal }) => {
     const pick = typeof data?.pick === 'number' && Number.isInteger(data.pick) ? data.pick : undefined;
     if (pick === undefined) {
-      // step 1: show the notes (a read: nothing changes)
-      const out = await dispatchIntent('memory_retire', {}, 'memory', signal);
-      return out.ok ? out.text || 'Noted.' : out.text;
+      // step 1: show the notes. Nothing changes (a read: not behind ZOE_BRAIN_ALLOW_WRITES or the untrusted tier), but it is
+      // REPLAY-GATED: it goes through runWrite's chokepoint (read mode), so a replay turn never reaches zoe-data and hears 'Noted.'
+      // (an OK-scoring line) - the same as step 2. Deliberately NOT a bare dispatchIntent call: that would put `memory_retire` in
+      // test_replay_write_isolation.py's bare-read allowlist, which is the owner's call, not a tool's.
+      return runWrite('memory_retire', {}, 'memory', 'that change', 'Noted.', signal, true);
     }
     return runWrite('memory_retire', { pick }, 'memory', 'that change', 'Noted.', signal);
   },

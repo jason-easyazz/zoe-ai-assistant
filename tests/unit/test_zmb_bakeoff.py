@@ -1496,7 +1496,8 @@ def test_the_planner_does_not_count_the_capability_cells_in_the_box_run_1_measur
     b = measure.plan_budget(bakeoff.Cfg(bakeoff_dir=box, arms=HM_ERA))
     from zmb import cells as cellmod
     cap_cells = [c for c in spec.load_cells() if c.tier == "store" and c.axis in measure.CAP_AXES]
-    assert cap_cells and b.store_cells == len([c for c in spec.load_cells() if c.tier == "store"]) - len(cap_cells)
+    z0_only = [c for c in spec.load_cells() if c.tier == "store" and cellmod.z0_only(c)]                  # Zoe's own S10x cells: Z0 only, never in an H arm's list
+    assert cap_cells and z0_only and b.store_cells == len([c for c in spec.load_cells() if c.tier == "store"]) - len(cap_cells) - len(z0_only)
     assert set(measure.CAP_AXES) == {"exact_words", "reflection", "multi_hop", "protocol"} and set(measure.CAP_CUT) == {"H0", "H1", "H2", "HM", "MPA", "HMA", "ZMA"}
     assert all(set(measure.CAP_CUT[a]) | set(measure.CAP_PLANNED[a]) <= set(measure.CAP_AXES) for a in measure.CAP_CUT)
 

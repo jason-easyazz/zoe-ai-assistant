@@ -72,7 +72,7 @@ def test_the_nine_axes_of_the_decision_rule_are_unchanged():
     assert {"authority", "extraction", "temporal", "recall", "abstention", "forgetting", "emotional", "identity", "poisoning"} <= set(spec.AXES.values())
     assert spec.AXES["r"] == "retirement"
     from zmb import bakeoff_gates
-    assert bakeoff_gates.WIN_AXES == {"B": "extraction", "C": "temporal", "D": "recall", "E": "abstention"}     # S10x is on none of them
+    assert "retirement" not in set(bakeoff_gates.WIN_AXES.values()) and bakeoff_gates.WIN_AXES["C"] == "temporal"     # S10x is on none of them (main's winner clause is the capability axes)
     assert "retirement" not in bakeoff_gates.HARD_AXES
 
 

@@ -1346,8 +1346,8 @@ def together_sentence(cfg: Any, names: "list[str]", store: list, with_b: Budget)
 def dry_plan(win: Any) -> dict:
     cfg = win.cfg
     seeds = seeds_for(win.run_id)
-    from . import spec as specmod
-    store = [c for c in specmod.load_cells() if c.tier == "store"]
+    from . import spec as specmod, cells as cellmod
+    store = [c for c in specmod.load_cells() if c.tier == "store" and not cellmod.z0_only(c)]
     b = plan_budget(cfg, store)
     win.log("PLAN (the measurement phases, in execution order; est. minutes from run 1's measured rates; H1 first and complete):")
     total = 0.0

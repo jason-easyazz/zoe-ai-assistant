@@ -335,6 +335,25 @@ def test_shadow_logs_the_decision_and_applies_nothing(lab, caplog):
     assert "cello" not in line and "orchestra" not in line               # ids, ranks and counts only: never the household's text
 
 
+def test_shadow_and_enforce_reach_the_same_decision_on_the_same_turn(lab, caplog):
+    """S10, the operator's flip: the shadow log must name EXACTLY the row, rank and cue that enforce then retires - or shadow is no evidence
+    for turning enforce on. Same store, same turn, same scripted judge; only the mode differs."""
+    seed(lab, CELLO, OAT)
+    caplog.set_level(logging.INFO, logger="memory_retire")
+    shadow, _ = attempt(lab, SAID, brain={"pick": 1}, mode="shadow")
+    assert status(lab, "plays the cello") == "approved"
+    enforced, _ = attempt(lab, SAID, brain={"pick": 1}, mode="enforce")
+    assert (shadow.action, enforced.action) == ("shadow", "retired")
+    assert shadow.row_id and shadow.row_id == enforced.row_id
+    assert status(lab, "plays the cello") == "superseded" and status(lab, "oat milk") == "approved"
+    lines = {m: next(r.getMessage() for r in caplog.records if "QUOTE_RETIRE" in r.getMessage() and f"mode={m}" in r.getMessage())
+             for m in ("shadow", "enforce")}
+
+    def keyed(line, drop):
+        return {k: v for k, v in (t.split("=", 1) for t in line.split() if "=" in t) if k not in drop}
+    assert keyed(lines["shadow"], {"mode", "action", "reason"}) == keyed(lines["enforce"], {"mode", "action", "reason"})
+
+
 def test_off_does_nothing_and_logs_nothing(lab, caplog):
     seed(lab, CELLO, OAT)
     caplog.set_level(logging.INFO, logger="memory_retire")

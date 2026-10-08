@@ -121,6 +121,15 @@ most 40 ms on a turn with no change cue. The driver is an instrument: `--self-ch
   invalidates at the capture time); a similarity floor on the candidates (the judge's 0 is the floor); a successor tombstone row (the per-turn digest still writes its own `state_change`
   row for the same sentence, which is why a retired row is never offered twice).
 
+## Replay isolation (step 1 is a read, but REPLAY-GATED)
+
+The replay gate feeds recorded voice through the live pipeline and must never write, so no tool may dispatch on a replay turn. Step 2 (`pick=N`) is a write: `runWrite`, like every other write.
+Step 1 (no argument) changes nothing, but it stages per-turn state in zoe-data, so it is gated as well - and it is NOT listed in `_BARE_DISPATCH_READS` of `test_replay_write_isolation.py`
+(that allowlist is the owner's decision, and that file is untouched). Instead it goes through `runWrite`'s chokepoint in READ mode (`isRead`, the 7th argument): the replay gate stays, and only the two gates that
+exist to stop a WRITE (`ZOE_BRAIN_ALLOW_WRITES`, the untrusted-turn tier) are dropped, so on a live turn step 1 behaves exactly as before. On a replay turn it never reaches zoe-data and the tool hears `Noted.`.
+Pinned from both lanes, red-when-removed: `labs/flue-zoe-brain-2x/test/replay_isolation.test.ts` (the `memory_retire` no-pick case: a POST on a replay turn is red) and
+`services/zoe-data/tests/test_memory_retire_replay_gate.py` (a bare `dispatchIntent('memory_retire', ...)`, the replay gate deleted from `runWrite`, or the read flag on step 2 is red).
+
 ## Voice-path files (the replay gate applies)
 
 `labs/flue-zoe-brain-2x/src/tools/zoe-tools.ts` and `tool-groups.ts` (a new tool and a disclosure trigger; the always-on system prompt, the group catalogue and every existing tool's
