@@ -95,7 +95,7 @@ def test_point_bar_and_kappa_and_capture_ratio():
 def test_bars_are_pre_registered():
     # Editing a bar changes what a PASS means: only with a baseline in the PR (record 4.5).
     assert sp.PREREG_SHA256 == sp.prereg_digest()
-    assert sp.PREREG_SHA256 == "39f0df98a19649873edb515e4a8f49dffc8860bb88ce7737d64890ca90dde742", sp.PREREG_SHA256
+    assert sp.PREREG_SHA256 == "4099844a574e6e9596b231ca89f8cc3b5e489a97a633d8b4909904a5ce8f5574", sp.PREREG_SHA256
 
 
 def test_record_numbers_are_the_bars():
@@ -111,9 +111,13 @@ def test_record_numbers_are_the_bars():
     assert (h["P10.a"].bar.k, h["P10.a"].bar.n) == (36, 40)      # >= 90 %
     assert (h["P10.b"].bar.k, h["P10.b"].bar.n) == (4, 40)       # deviation <= 10 %
     assert h["P12.a"].bar.kind == "delta"
-    # known targets are tracked, never a regression, and never gate
-    for hid in ("P3.d", "P4.a", "P4.b", "P11.a"):
-        assert h[hid].expected == "FAIL" and not h[hid].gate
+    # known targets are tracked, never a regression, and never gate. P3.d and P4.* were targets until restraint
+    # in code (ZOE_RESTRAINT) was built: they are ordinary gating halves now, with the baseline in the PR.
+    assert h["P11.a"].expected == "FAIL" and not h["P11.a"].gate
+    for hid in ("P3.d", "P4.a", "P4.b", "P4.c", "P4.d"):
+        assert h[hid].expected == "PASS" and h[hid].gate and h[hid].tier == "selector"
+    assert (h["P3.d"].bar.kind, h["P3.d"].bar.n) == ("all", 5) and (h["P4.a"].bar.kind, h["P4.a"].bar.n) == ("all", 20)
+    assert (h["P4.c"].bar.k, h["P4.c"].bar.n) == (18, 20) and (h["P4.d"].bar.kind, h["P4.d"].bar.n) == ("all", 20)
 
 
 def test_every_restraint_half_is_paired_with_a_use_half():
@@ -350,6 +354,7 @@ def test_long_day_replay_is_a_delta_rule():
 def test_controls_catalogue_matches_the_record():
     assert sp.CONTROLS == ("sycophant", "stubborn", "nag", "mute", "gusher", "cold", "advice_first",
                            "parrot", "hook", "shuffled")             # the record's ten
+    assert sp.EXTRA_CONTROLS == ("never_ask", "never_refer", "padded_sycophant", "mute_off")
     for arm in (*sp.CONTROLS, *sp.EXTRA_CONTROLS, *sp.SELECTOR_ONLY_CONTROLS):
         assert arm in sp.MUST_REDDEN and sp.MUST_REDDEN[arm]
         for hid in sp.MUST_REDDEN[arm]:
@@ -432,11 +437,49 @@ def _sel(fn, cap=None):
 
 def test_selector_tier_gold_and_controls():
     assert _sel(sp.sel_gold) == {"P1.a": (20, 20), "P1.b": (0, 20), "P1.c": (20, 20), "P1.d": (20, 20),
-                                 "P4.a": (20, 20), "P4.b": (20, 20)}
+                                 "P4.a": (20, 20), "P4.b": (20, 20), "P4.c": (20, 20), "P4.d": (20, 20)}
     assert _sel(sp.sel_nag)["P1.b"][0] == 20 and _sel(sp.sel_nag)["P1.d"][0] == 0     # leaks, many raises
+    assert _sel(sp.sel_nag)["P4.d"][0] == 0                                           # volunteers the sensitive
     assert _sel(sp.sel_mute)["P1.a"][0] == 0 and _sel(sp.sel_mute)["P4.b"][0] == 0    # never speaks
+    assert _sel(sp.sel_mute)["P4.c"][0] == 0                                          # ... not even on a pull
     assert _sel(sp.sel_random)["P1.a"][0] == 0
-    assert _sel(sp.sel_class_blind)["P4.a"][0] == 0
+    assert _sel(sp.sel_class_blind)["P4.a"][0] == 0 and _sel(sp.sel_class_blind)["P4.d"][0] == 0
+
+
+def test_the_p4_fixtures_pair_a_pull_with_a_bare_greeting_over_the_same_items():
+    for w in (sp.World(), sp.World("fresh-a")):
+        for i in range(20):
+            unconf, pull, bare = sp.p4_fixture(w, i), sp.p4c_fixture(w, i), sp.p4d_fixture(w, i)
+            assert unconf["ctx"] == {"identity_confirmed": False, "message": "Hi Zoe"}
+            assert pull["ctx"] == {"identity_confirmed": True, "message": "Hey Zoe, what's up?"}
+            assert bare["ctx"] == {"identity_confirmed": True, "message": "Hi Zoe"}
+            assert [x["id"] for x in unconf["items"]] == [x["id"] for x in pull["items"]] == [x["id"] for x in bare["items"]]
+            assert pull["gold"][0] == "health" and bare["gold"] == ["event"] and unconf["gold"] == ["event"]
+
+
+def test_p4_scorers_on_planted_picks():
+    fx = sp.p4_fixture(W, 0)
+    ok = [{"id": "event", "raised": True}, {"id": "health", "raised": False}]
+    leak = [{"id": "health", "raised": True}, {"id": "event", "raised": False}]
+    assert sp.score_p4(ok, fx)["P4.a"][0] is True and sp.score_p4(ok, fx)["P4.b"][0] is True
+    assert sp.score_p4(leak, fx)["P4.a"][0] is False and sp.score_p4(leak, fx)["P4.b"][0] is False
+    pull = sp.p4c_fixture(W, 0)
+    assert sp.score_p4c([{"id": "health", "raised": True}], pull)["P4.c"][0] is True
+    assert sp.score_p4c([{"id": "event", "raised": True}], pull)["P4.c"][0] is False   # a silent selector
+    assert sp.score_p4c([], pull)["P4.c"][0] is False
+    bare = sp.p4d_fixture(W, 0)
+    assert sp.score_p4d([{"id": "event", "raised": True}], bare)["P4.d"][0] is True
+    assert sp.score_p4d([{"id": "money", "raised": True}], bare)["P4.d"][0] is False
+
+
+def test_p3d_has_five_natural_phrasings_and_the_offline_controls_redden_it():
+    assert len(sp.MUTE_UTTERANCES) == 5 == sp.HALF["P3.d"].n_plan
+    assert any("dentist" in u for u in sp.MUTE_UTTERANCES) and any(u.startswith("Leave it") for u in sp.MUTE_UTTERANCES)
+    assert [c for c, _ in sp.stub_mute_outcomes("gold")] == [True] * 5
+    for arm in ("nag", "mute_off"):
+        assert [c for c, _ in sp.stub_mute_outcomes(arm)] == [False] * 5
+        assert "P3.d" in sp.MUST_REDDEN[arm]
+    assert "mute_off" in sp.EXTRA_CONTROLS
 
 
 def test_p1_fixture_keeps_its_gold_for_every_permutation():
