@@ -72,13 +72,17 @@ All three ran one seed by design (the rule needs three), so none could be adopte
 
 ## 3. What the run proved about the engines on this brain
 
-* **The 4B uses MemPalace's tool schemas perfectly (172/172, 89/89 valid) but does not reach for memory first (36%
-  searched-before-answering for MPA and HMA; 78/100 for ZMA) and never retires a fact
-  correctly (0/10 in all three).** The engine is not the weak part; the brain's use of it is.
+* **For MPA and HMA, the 4B uses MemPalace's tool schemas perfectly (172/172 valid) but does not reach for memory first
+  (36/100 searched-before-answering in both) and never retires a fact correctly (0/10 in both).** The engine is not the
+  weak part; the brain's use of it is. ZMA is different by design: its brain only reads (`mempalace_status`,
+  `mempalace_search`; 89/89 valid, 78/100 searched first), the harness writes the facts and Z0 retires them, so ZMA's
+  0/10 on the shared MemPalace-triple supersede test measures the integration's write path, not the brain.
 * **Hindsight's consolidation prompt does not fit the 8,192-token live slot:** max 8,313 tokens, 3 consolidation calls
   failed on a context-size error. Its reflection on the live brain fails by construction.
-* **At 32k context the reflection (K) variants were run for HMA and ZMA, and both were VETOED on K1 precision**
-  (observations that were not true of the store). Cell verdicts from the report:
+* **At 32k context the reflection (K) variants were run for HMA and ZMA, and both carry the instrument's `VETOED`
+  label on K1.** That label fires on any K1 failure or error, including too few judgeable observations, and the run
+  artefact records no judged/false counts for the 32k variants, so this is an instrument outcome, not proof that the
+  observations were false. Cell verdicts from the report:
   * HMA@32k: K1 observations_are_true FAIL, K2 thread_recall PASS, K3 useful_answers FAIL, K4 invalidated_fact_not_restated FAIL, K5 user_stated_is_never_restated_as_inference FAIL.
   * ZMA@32k: K1 FAIL, K2 PASS, K3 PASS, K4 FAIL, K5 FAIL.
   The 8k K1 records for the three arms carry no precision counts (insufficient evidence, no veto at 8k); the veto
