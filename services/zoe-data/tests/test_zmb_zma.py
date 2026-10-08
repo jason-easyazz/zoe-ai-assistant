@@ -175,3 +175,22 @@ def test_zma_residue_scans_z0s_store_as_well_as_memplaces_files():
             a.residue("Marisol")
     finally:
         a.close()
+
+
+def test_a_saturated_z0_packet_still_carries_the_memplace_verbatim_rows():
+    """Z0 returning k rows used to fill the whole packet: ZMA was measured as Z0 alone. Break the reservation and the exact-words row vanishes."""
+    a = mpa_cells.lab_arm("ZMA", z0_embed=False)
+    try:
+        a.reset(USER)
+        a.ingest([Turn(f"My friend {n} lives in {p}.", "owner_taught") for n, p in (("Aldo", "Bergvik"), ("Brigid", "Tarnholt"), ("Caspian", "Saltreach"), ("Delphine", "Marlowby"), ("Evander", "Pellham"))])
+        a._z0_rows = lambda query, k: [{"text": f"z0 row {i}", "status": "approved", "authority_class": "user_stated", "source_excerpt": f"x{i}", "memory_type": "fact"} for i in range(k)]   # Z0 saturates k
+        a.mpa.search = lambda query, k: [{"text": "Aldo said it exactly: I keep the key under the blue pot", "status": "approved", "authority_class": "user_stated", "origin": "mempalace:verbatim",
+                                          "memory_type": "verbatim", "id": "v1"}]
+        rows = a.packet("blue pot key", 6)
+        assert len(rows) == 6 and sum(1 for r in rows if r.get("origin") == "mempalace:verbatim") == 1 and rows[0]["text"] == "z0 row 0"        # Z0 first, the verbatim row in the reserved slot
+        assert a.packet_split["mempalace"] == 1 and a.packet_split["z0"] == 5 and a.packet_split["reserved_per_packet"] == 1 and a.stats()["packet_split"]["packets"] == 1
+        assert any("blue pot" in r["text"] for r in a.recall("blue pot key", 6))
+        a.mpa.search = lambda query, k: []                                                                    # nothing verbatim: Z0 keeps the whole budget
+        assert [r["text"] for r in a.packet("blue pot key", 6)] == [f"z0 row {i}" for i in range(6)]
+    finally:
+        a.close()

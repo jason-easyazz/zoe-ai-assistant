@@ -606,6 +606,32 @@ def test_a_saturated_verbatim_search_still_leaves_room_for_the_reflective_tier()
     a.close()
 
 
+def test_a_departure_never_anchors_the_place_the_owner_left_but_the_destination_does():
+    """'moved from Oslo to Perth': Perth is where Tove lives, Oslo is where she no longer does. Both directions, add and supersede."""
+    def label(owner_line, place):
+        a = mpa_cells.lab_arm("MPA")
+        a.reset(USER)
+        a.model = PlayModel([[("mempalace_kg_add", {"subject": "Tove", "predicate": "plays", "object": "cello"})], [("mempalace_kg_add", {"subject": "Tove", "predicate": "lives_in", "object": place})]])
+        a.ingest([Turn("My sister Tove plays the cello", "owner_taught")])
+        a.ingest([Turn(owner_line, "owner_taught")])
+        out = [r["authority_class"] for r in a.stats()["rows"] if r["origin"] == "brain:kg" and place.lower() in r["text"].lower()]
+        a.close()
+        return out
+    for line in ("Tove moved from Oslo to Perth", "Tove left Oslo for Perth", "Tove moved out of Oslo last year"):
+        assert label(line, "Oslo") == ["model_from_transcript"], line                                  # the departure
+    for line in ("Tove moved from Oslo to Perth", "Tove left Oslo for Perth"):
+        assert label(line, "Perth") == ["user_stated"], line                                            # the destination
+    assert label("Tove moved to Oslo", "Oslo") == ["user_stated"] and label("Tove lives in Oslo", "Oslo") == ["user_stated"]
+    a = mpa_cells.lab_arm("MPA")                                                                          # the floor: a departure does not back a supersede into the place she left
+    a.reset(USER)
+    a.model = PlayModel([[("mempalace_kg_add", {"subject": "Tove", "predicate": "lives_in", "object": "Perth"})],
+                         [("mempalace_kg_supersede", {"subject": "Tove", "predicate": "lives_in", "old_object": "Perth", "new_object": "Oslo"})]])
+    a.ingest([Turn("My sister Tove lives in Perth", "owner_taught")])
+    a.ingest([Turn("Tove moved from Oslo to Perth", "owner_taught")])
+    assert [bool(t.refused) for t in a.traces[-1].tools if t.name == "mempalace_kg_supersede"] == [True]
+    a.close()
+
+
 def test_zma_refuses_a_shim_that_is_not_minilm_and_names_the_setting():
     from zmb import mpa_window
     minilm = lambda url: {"status": "ok", "model": "all-MiniLM-L6-v2", "dim": 384}   # noqa: E731

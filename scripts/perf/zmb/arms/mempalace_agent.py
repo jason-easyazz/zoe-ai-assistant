@@ -562,14 +562,11 @@ class MemPalaceAgentArm(BenchSurface, Arm):
         unrelated sentence that mentions "Oslo", or "Tove visited Oslo", does not make ``Tove lives_in Oslo`` the owner's statement. The owner's own words about
         themselves need no subject name."""
         o, sub = f" {_norm(obj)} ", _norm(subject)
-        if o.strip() == "":
-            return False
-        for u in s["owner"]:
-            n = f" {_norm(u)} "
-            if o in n and (sub in self._OWNER_SUBJECTS or f" {sub} " in n) and self._predicate_in(predicate, set(n.split())):
-                return True
-        return False
+        # an occurrence of the object that is a DEPARTURE ("moved from Oslo", "left Oslo", "out of Oslo") never anchors a ``lives_in Oslo``: only the destination does
+        return o.strip() != "" and any((sub in self._OWNER_SUBJECTS or f" {sub} " in n) and self._predicate_in(predicate, set(n.split()))
+                                       and any(not self._DEPARTURE.search(n[:m.start() + 1]) for m in re.finditer(re.escape(o), n)) for n in (f" {_norm(u)} " for u in s["owner"]))
 
+    _DEPARTURE = re.compile(r"\b(?:from|left|leaving|out of)\b(?: (?!(?:to|into|for|towards)\b)\w+){0,2} $")      # a "to / into / for" in between makes the object the destination
     #: a negation or a "from" shortly BEFORE the old object ("not Perth", "doesn't live in Perth", "moved from Perth"), or "anymore" / "no longer" shortly AFTER it
     _ENDS_BEFORE = re.compile(r"\b(?:not|never|no|isn|doesn|don|wasn|didn|from|left|leaving)\b(?: \w+){0,5} $")
     _ENDS_AFTER = re.compile(r"^(?:\w+ ){0,3}(?:anymore|longer)\b")

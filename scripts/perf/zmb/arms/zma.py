@@ -117,6 +117,7 @@ class ZMAArm(Arm):
         self.chunk_of: "dict[str, str]" = {}                 # normalised turn text -> chunk id (the provenance every Z0 row of that turn cites)
         self.chunks = 0
         self.dedup_dropped = 0
+        self.packet_split = {"packets": 0, "z0": 0, "mempalace": 0, "reserved_per_packet": 0}     # the packet budget's two tiers, summed over every packet
 
     @property
     def ledger(self):
@@ -137,6 +138,7 @@ class ZMAArm(Arm):
         self._share_embedder()
         self.z0.reset(user_id, disk=disk)
         self._user, self.chunk_of, self.chunks, self.dedup_dropped = user_id, {}, 0, 0
+        self.packet_split = {"packets": 0, "z0": 0, "mempalace": 0, "reserved_per_packet": 0}
 
     def close(self) -> None:
         self.mpa.close()
@@ -221,7 +223,16 @@ class ZMAArm(Arm):
                 self.dedup_dropped += 1                         # Z0's authority order wins over a verbatim line about the same attribute
                 continue
             extra.append(v)
-        return (rows + extra)[:max(k, len(rows))]
+        # ONE budget, two tiers: Z0 returning k rows must not crowd every MemPalace row out (ZMA would be measured as Z0 alone). Reserve r = min(#extra, max(1, budget // 3))
+        # slots for the verbatim rows (after Z0's, deterministic); a slot the verbatim tier does not use goes back to Z0. Dedup and the authority gate above still apply.
+        budget = max(k, len(rows))
+        r = min(len(extra), max(1, budget // 3)) if extra else 0
+        keep = rows[:max(budget - r, 0)]
+        out = keep + extra[:max(budget - len(keep), 0)]
+        sp = self.packet_split
+        sp["packets"], sp["z0"], sp["mempalace"] = sp["packets"] + 1, sp["z0"] + len(keep), sp["mempalace"] + len(out) - len(keep)
+        sp["reserved_per_packet"] = max(sp["reserved_per_packet"], r)
+        return out
 
     def _packet_text(self, text: str) -> str:
         return "\n".join(f"- {r['text']}" for r in self._z0_rows(text, 5))
@@ -314,7 +325,7 @@ class ZMAArm(Arm):
         counts: "dict[str, int]" = {}
         for r in rows:
             counts[r["status"]] = counts.get(r["status"], 0) + 1
-        return {**z, "rows": rows, "counts": counts, "tiers": {"z0": len(z["rows"]), "mempalace": len(verb)}, "chunks": self.chunks}
+        return {**z, "rows": rows, "counts": counts, "tiers": {"z0": len(z["rows"]), "mempalace": len(verb)}, "chunks": self.chunks, "packet_split": dict(self.packet_split)}
 
     def stats_as(self, identity: str) -> "dict[str, Any]":
         return self.z0.stats_as(identity)
