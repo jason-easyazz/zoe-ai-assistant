@@ -984,6 +984,14 @@
         } catch { return null; }
     }
 
+    // MA is down per the backend (or its socket is gone): ONE transition for every
+    // path — leave the setup wizard (and its 7 s provider poll) before showing the
+    // offline state, or the two views render together with both loops running.
+    function goOffline() {
+        hideSetup();
+        showOffline('offline');
+    }
+
     // MA is up per the backend — the SAME branch at startup and on recovery:
     // no providers → setup wizard; providers → players, then the event socket.
     async function onMAUp(status) {
@@ -1035,7 +1043,7 @@
         // The backend answered "down", or it is unreachable: either way the socket is
         // gone and the player on screen is stale, so say so NOW — never leave an old
         // track and live-looking controls up through an outage.
-        showOffline('offline');
+        goOffline();
         watchForMA();
     }
 
@@ -1048,7 +1056,7 @@
         _maWatchTimer = setInterval(async () => {
             const status = await refreshMAStatus();
             if (!status) return;                                   // backend unreachable: keep watching
-            if (!status.available) { showOffline('offline'); return; }   // definitive "down": idempotent
+            if (!status.available) { goOffline(); return; }   // definitive "down": idempotent
             clearInterval(_maWatchTimer); _maWatchTimer = null;
             await onMAUp(status);
         }, 15000);
@@ -1568,7 +1576,7 @@
         if (status && status.available) { await onMAUp(status); return; }
         // Backend says MA is not up (reaped/offline), or the backend itself was
         // unreachable: say so and watch — never hammer the MA socket.
-        showOffline('offline');
+        goOffline();
         watchForMA();
     })();
     </script>

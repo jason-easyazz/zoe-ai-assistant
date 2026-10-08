@@ -309,14 +309,14 @@ function musicSandbox(statusReplies, S = {}) {
     MA_WS: 'wss://zoe.local/modules/music-assistant/ws', zoeHdrs: () => ({}),
     fetch: async () => { const r = statusReplies.shift() || { ok: false }; return { ok: !!r.ok, json: async () => r.json }; },
     WebSocket: class { constructor() { calls.ws++; } close() {} },
-    showOffline: (k) => calls.offline.push(k), showSetup: (ids) => calls.setup.push([...ids]),
+    showOffline: (k) => calls.offline.push(k), showSetup: (ids) => calls.setup.push([...ids]), hideSetup: () => { calls.hideSetup = (calls.hideSetup || 0) + 1; },
     fetchPlayersFromBackend: async () => { calls.players++; }, onWSOpen() {}, onWSMsg() {},
     setTimeout: (fn, ms) => { calls.reconnectIn.push(ms); return 1; }, clearTimeout() {},
     setInterval: (fn, ms) => { calls.watcher = fn; calls.watcherMs = ms; return 7; }, clearInterval: () => { calls.cleared++; },
     Set, Math, JSON, console: { log() {}, warn() {} },
   };
-  const code = ['refreshMAStatus', 'onMAUp', 'connectWS', 'onWSClose', 'watchForMA'].map(n => extractFunction(musicHtml, n)).join('\n')
-    + '\nlet _maWatchTimer = null;\n; ({ refreshMAStatus, onMAUp, connectWS, onWSClose, watchForMA })';
+  const code = ['refreshMAStatus', 'goOffline', 'onMAUp', 'connectWS', 'onWSClose', 'watchForMA'].map(n => extractFunction(musicHtml, n)).join('\n')
+    + '\nlet _maWatchTimer = null;\n; ({ refreshMAStatus, goOffline, onMAUp, connectWS, onWSClose, watchForMA })';
   return { fns: vm.runInNewContext(code, ctx), calls, S: ctx.S };
 }
 {
@@ -326,6 +326,7 @@ function musicSandbox(statusReplies, S = {}) {
     assert.strictEqual(S.maAvailable, false);
     assert.deepStrictEqual(calls.reconnectIn, []);
     assert.deepStrictEqual(calls.offline, ['offline']);
+    assert.strictEqual(calls.hideSetup, 1, 'the setup wizard (and its poll) is left before going offline');
     assert(typeof calls.watcher === 'function' && calls.watcherMs === 15000);
   });
   check('music: a socket close while the backend says MA is up → one reconnect with backoff, no watcher', async () => {
@@ -345,7 +346,7 @@ function musicSandbox(statusReplies, S = {}) {
     fns.watchForMA();
     await calls.watcher(); assert.deepStrictEqual(calls.offline, []);
     await calls.watcher(); await calls.watcher();
-    assert.deepStrictEqual(calls.offline, ['offline', 'offline']); assert.strictEqual(calls.cleared, 0); assert.strictEqual(calls.ws, 0);
+    assert.deepStrictEqual(calls.offline, ['offline', 'offline']); assert.strictEqual(calls.hideSetup, 2); assert.strictEqual(calls.cleared, 0); assert.strictEqual(calls.ws, 0);
   });
   check('music: watcher recovery with NO providers takes the setup branch (not an empty player)', async () => {
     const { fns, calls } = musicSandbox([{ ok: true, json: { available: true, provider_count: 0, providers: [{ domain: 'YTMusic' }] } }]);
