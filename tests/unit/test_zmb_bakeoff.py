@@ -213,8 +213,18 @@ def test_small_parsers():
 
 # ── the host double: the same trick the deploy tests use ─────────────────────
 
+#: /proc/buddyinfo, one node, two zones; columns are orders 0..10. The 2026-10-08 abort: nothing at order >= 10 and a handful at order 9 (tegrastats ``lfb 11x2MB``).
+FRAGMENTED_BUDDY = textwrap.dedent("""\
+    Node 0, zone       DMA   1200    900    700    500    300    200    100     50     20     11      0
+    Node 0, zone    Normal  60000  30000  15000   7000   3000   1000    300    100     30      0      0
+    """)
+HEALTHY_BUDDY = textwrap.dedent("""\
+    Node 0, zone       DMA   1200    900    700    500    300    200    100     50     20    100     30
+    Node 0, zone    Normal  60000  30000  15000   7000   3000   1000    300    100     30    320     37
+    """)
+
 class FakeHost(bakeoff.Host):
-    def __init__(self, tmp: Path, *, panel_busy_for=0.0, landing_for=0.0, mem=None, live_ok=True, fail=(), hook_live=True):
+    def __init__(self, tmp: Path, *, panel_busy_for=0.0, landing_for=0.0, mem=None, live_ok=True, fail=(), hook_live=True, buddy=None, sudo_ok=True, compaction_heals=True):
         self.t = 1_800_000_000.0
         self.t0 = self.t
         self.cmds: "list[tuple[list[str], bool]]" = []
@@ -228,6 +238,9 @@ class FakeHost(bakeoff.Host):
         self.tmp = tmp
         self.metrics_calls = 0
         self.log = lambda _m: None
+        self.buddy_text = HEALTHY_BUDDY if buddy is None else buddy      # /proc/buddyinfo as the box shows it; a compaction heals it unless compaction_heals=False
+        self.sudo_ok, self.compaction_heals = sudo_ok, compaction_heals
+        self.main_pids: "list[int]" = []                                  # successive MainPID answers (then 0)
 
     def joined(self) -> "list[str]":
         return [" ".join(a) for a, _m in self.cmds]
@@ -245,6 +258,12 @@ class FakeHost(bakeoff.Host):
         if any(f in line for f in self.fail):
             return bakeoff.Result(1, "injected failure")
         prog = argv[0]
+        if prog == "sudo":
+            if argv[1:] == ["-n", "true"]:
+                return bakeoff.Result(0 if self.sudo_ok else 1, "" if self.sudo_ok else "sudo: a password is required")
+            if "compact_memory" in line and self.compaction_heals:
+                self.buddy_text = HEALTHY_BUDDY
+            return bakeoff.Result(0 if self.sudo_ok else 1, "")
         if prog == "systemctl":
             sub = argv[2]
             if sub == "cat":
@@ -252,6 +271,8 @@ class FakeHost(bakeoff.Host):
             if sub == "is-active":
                 return bakeoff.Result(0, "active\n" if self.live_active else "inactive\n")
             if sub == "show":
+                if "MainPID" in line:
+                    return bakeoff.Result(0, f"MainPID={self.main_pids.pop(0) if self.main_pids else 0}\n")
                 return bakeoff.Result(0, "/system.slice/zoe-bakeoff.service\n" if "ControlGroup" in line else "")
             if sub == "start" and argv[3] == "llama-server.service":
                 self.live_active = True
@@ -290,6 +311,8 @@ class FakeHost(bakeoff.Host):
         return self.mem(self)
 
     def read(self, path):
+        if path.endswith("buddyinfo"):
+            return self.buddy_text
         if path.endswith("cgroup.procs"):
             return "100\n"
         if path.endswith("smaps_rollup"):
@@ -2494,3 +2517,177 @@ def test_decide_never_lets_zma_win_either_even_when_it_beats_z0e_on_two_axes():
     z = gates.evaluate_arm("ZMA", three(axes=cap(exact=(20, 20), hops=(20, 20))), good_measure(**zma_m()))
     d = gates.decide({"ZMA": z}, z0)
     assert d["winner"] is None and d["verdict"] == "KEEP_Z0" and d["compare"]["ZMA"]["J"]["beats"]
+
+
+# ── physical-memory fragmentation: the 2026-10-08 bake-off abort ─────────────
+#
+# Step 3 stopped the live brain, step 4 started the Gemma clone a second later and it died in 6 s with ``cudaMalloc failed: out of memory`` /
+# ``NvMapMemAllocInternalTagged error 12`` while MemAvailable was > 6 GB: /proc/buddyinfo had NO free block at order >= 10 (Tegra NvMap needs contiguous
+# blocks). ``sync; drop_caches; compact_memory`` fixed it by hand. The class: every model start (clone, 32k and 12B restarts, the live brain on restore) must be
+# preceded by a compaction the window runs itself, and a window that cannot compact refuses BEFORE it stops anything.
+
+COMPACT = "sudo -n sh -c sync; echo 3 > /proc/sys/vm/drop_caches; echo 1 > /proc/sys/vm/compact_memory"
+
+
+def _compactions(host) -> "list[int]":
+    return [i for i, c in enumerate(host.joined()) if c.startswith("sudo -n sh -c") and "compact_memory" in c]
+
+
+def _clone_starts(host) -> "list[int]":
+    return [i for i, c in enumerate(host.joined()) if c.startswith("systemd-run") and "--unit=zoe-bakeoff-gemma" in c]
+
+
+def test_buddyinfo_is_parsed_per_order_summed_over_zones_and_the_predicate_reads_order_9_and_up(box):
+    frag = bakeoff.parse_buddyinfo(FRAGMENTED_BUDDY)
+    assert frag[0] == 61200 and frag[9] == 11 and frag[10] == 0 and len(frag) == 11              # zones are summed; the incident's order-9 = 11, order-10 = 0
+    assert bakeoff.blocks_at_or_above(frag, 9) == 11 and bakeoff.blocks_at_or_above(frag, 10) == 0
+    assert bakeoff.parse_buddyinfo("") == {} and bakeoff.parse_buddyinfo("garbage\nNode x") == {}
+    assert "o9=11 o10=0 o11=0 o12=0" in bakeoff.frag_summary(frag) and bakeoff.frag_summary({}) == "buddyinfo unreadable"
+    w = make_window(box, FakeHost(box, buddy=FRAGMENTED_BUDDY))
+    assert w.fragmentation()[9] == 11 and not w.contiguous_ok()
+    assert w.contiguous_ok(min_order=9, min_blocks=11) and not w.contiguous_ok(min_order=10, min_blocks=1)
+    assert make_window(box, FakeHost(box)).contiguous_ok() and make_window(box, FakeHost(box, buddy="")).contiguous_ok()      # unreadable = cannot judge: not a refusal
+
+
+def test_a_fragmented_box_without_passwordless_sudo_is_refused_before_anything_is_stopped_with_the_exact_command(box):
+    host = FakeHost(box, buddy=FRAGMENTED_BUDDY, sudo_ok=False)
+    w = make_window(box, host, measure_fn=lambda win: {"ok": 1})
+    assert w.run() == bakeoff.EXIT_REFUSED
+    out = "\n".join(w.logs)
+    assert "REFUSED" in out and "fragmented" in out and "sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches; echo 1 > /proc/sys/vm/compact_memory'" in out
+    assert "fragmentation at preflight" in out and "o9=11" in out
+    assert host.mutating_cmds() == [] and w.probe_lock() and not (box / "WINDOW_OPEN").exists()      # nothing stopped, started or locked
+    ok = FakeHost(box, sudo_ok=False)                                                             # healthy RAM + no sudo: no compaction needed, the window goes on
+    w2 = make_window(box, ok, measure_fn=lambda win: {"ok": 1})
+    assert w2.run() == bakeoff.EXIT_OK and _compactions(ok) == []
+    assert any("SKIPPED - passwordless sudo is not available" in m for m in w2.logs)               # and the skipped compactions are said, never silent
+
+
+def test_preflight_compacts_first_rechecks_and_logs_the_before_and_after_on_the_preflight_ok_line(box):
+    host = FakeHost(box, buddy=FRAGMENTED_BUDDY)
+    w = make_window(box, host, measure_fn=lambda win: {"ok": 1})
+    assert w.run() == bakeoff.EXIT_OK
+    first = _compactions(host)[0]
+    assert first < host.index("compose -f") and first < host.index("stop llama-server.service")        # before anything is touched
+    ok_line = next(m for m in w.logs if m.startswith("preflight ok"))
+    assert "order9+ blocks 11 -> 487" in ok_line
+    stuck = FakeHost(box, buddy=FRAGMENTED_BUDDY, compaction_heals=False)                          # compaction ran and RAM is STILL fragmented: refuse, nothing stopped
+    w2 = make_window(box, stuck, measure_fn=lambda win: {"ok": 1})
+    assert w2.run() == bakeoff.EXIT_REFUSED and "still fragmented after compaction" in "\n".join(w2.logs)
+    assert not any(c.startswith("systemd-run") or "compose -f" in c and c.endswith(" up -d") or "stop llama-server" in c for c in stuck.mutating_cmds())      # (the lock-holder's restore is a no-op on a brain that never stopped)
+
+
+def test_the_compaction_runs_after_the_brain_stop_once_its_pid_is_gone_and_before_the_clone_starts(box):
+    host = FakeHost(box)
+    host.main_pids = [4242, 4242, 0]                                                               # the stopped brain's process lingers for two polls
+    w = make_window(box, host, measure_fn=lambda win: {"ok": 1})
+    assert w.run() == bakeoff.EXIT_OK
+    j = host.joined()
+    stop, clone = host.index("stop llama-server.service"), _clone_starts(host)[0]
+    shows = [i for i, c in enumerate(j) if "show -p MainPID llama-server.service" in c]
+    after_stop = [i for i in _compactions(host) if stop < i < clone]
+    assert len(shows) == 3 and shows[0] > stop and len(after_stop) == 1 and after_stop[0] > shows[-1]       # polled until MainPID=0, THEN compacted, THEN the clone
+    assert j[after_stop[0]] == COMPACT
+    out = "\n".join(w.logs)
+    assert "fragmentation after step 3 (live brain stopped)" in out and "fragmentation before step 4 (clone start)" in out and "fragmentation at preflight" in out
+    assert "before compaction (before step 4" in out and "after compaction (before step 4" in out
+
+
+def test_the_pid_wait_is_bounded_at_30_seconds(box):
+    host = FakeHost(box)
+    host.main_pids = [4242] * 1000
+    w = make_window(box, host)
+    w.wait_pid_gone("llama-server.service")
+    assert 29.0 <= sum(host.slept) <= 32.0 and any("still present after 30s" in m for m in w.logs)
+
+
+def test_every_clone_start_in_the_window_is_preceded_by_its_own_compaction_including_both_reflection_pairs(box, monkeypatch):
+    host = ReflectHost(box)
+
+    def phase(win):
+        ctx = measure.Ctx(win, None)
+        monkeypatch.setattr(measure, "reflect_variant_h2", lambda *a, **k: {})
+        monkeypatch.setattr(measure, "reflect_variant_hma", lambda *a, **k: {})
+        measure.phase_reflect(ctx, "zmb-v1", [], {}, INST)
+        return {"ok": 1}
+    w = make_window(box, host, measure_fn=phase, arms=("H1", "H2", "HMA"), deep_unit=DEEP)
+    assert w.run() == bakeoff.EXIT_OK, w.logs[-10:]
+    starts = _clone_starts(host)
+    assert len(starts) == 4                                                                       # step 4, 4B@32k, 12B@32k, back to the live context
+    marks = [host.index("stop llama-server.service")] + starts
+    for prev, cur in zip(marks, marks[1:]):
+        between = [i for i in _compactions(host) if prev < i < cur]
+        assert len(between) == 1, f"no compaction (or more than one) between {host.joined()[prev]!r} and {host.joined()[cur]!r}"
+    j = host.joined()
+    assert all(any(c == "systemctl --user stop zoe-bakeoff-gemma.service" for c in j[p:c]) for p, c in zip(starts, starts[1:]))        # each start follows the previous clone's stop
+    assert "fragmentation after the 4B clone and the listed units stopped" in "\n".join(w.logs)
+
+
+def test_restore_compacts_before_starting_the_live_brain_and_waits_for_the_clone_to_be_gone(box):
+    host = FakeHost(box)
+    w = make_window(box, host)
+    assert w.restore()
+    j = host.joined()
+    start = j.index("systemctl --user start llama-server.service")
+    comp = _compactions(host)
+    assert len(comp) == 1 and comp[0] < start and comp[0] > host.index("stop zoe-bakeoff-gemma.service")
+    assert any("show -p MainPID zoe-bakeoff-gemma.service" in c for c in j[:comp[0]])
+    assert "fragmentation before restarting the live brain" in "\n".join(w.logs)
+
+
+def test_restore_without_sudo_and_with_fragmented_ram_raises_a_loud_alarm_with_the_command_and_still_starts_the_brain(box):
+    host = FakeHost(box, buddy=FRAGMENTED_BUDDY, sudo_ok=False)
+    w = make_window(box, host)
+    assert w.restore()
+    alarm = [m for m in w.logs if "RESTORE ALARM" in m]
+    assert len(alarm) == 1 and "sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches; echo 1 > /proc/sys/vm/compact_memory'" in alarm[0] and "systemctl --user start llama-server.service" in alarm[0]
+    assert _compactions(host) == [] and "systemctl --user start llama-server.service" in host.joined()        # the start is still attempted
+    healthy = FakeHost(box, sudo_ok=False)
+    w2 = make_window(box, healthy)
+    assert w2.restore() and not any("RESTORE ALARM" in m for m in w2.logs)
+
+
+def test_a_restore_that_never_stopped_the_live_brain_does_not_compact(box):
+    host = FakeHost(box)
+    w = make_window(box, host, skip_brain_stop=True)
+    assert w.restore() and _compactions(host) == []
+
+
+def test_BAKEOFF_DROP_CACHES_0_keeps_compaction_and_drops_only_the_cache_drop(box):
+    host = FakeHost(box)
+    w = make_window(box, host, drop_caches=False)
+    assert w.compact_memory("t")
+    cmd = next(c for c in host.joined() if c.startswith("sudo -n sh -c"))
+    assert cmd == "sudo -n sh -c echo 1 > /proc/sys/vm/compact_memory" and "drop_caches" not in cmd
+    assert bakeoff.operator_compact_command(False) == "sudo sh -c 'echo 1 > /proc/sys/vm/compact_memory'"
+    code = f"import sys; sys.path.insert(0, {str(Path(bakeoff.__file__).parents[1])!r}); from zmb import bakeoff; print(bakeoff.Cfg().drop_caches)"
+    for val, want in (("0", "False"), ("", "True")):
+        env = {k: v for k, v in os.environ.items() if k != "BAKEOFF_DROP_CACHES"}
+        if val:
+            env["BAKEOFF_DROP_CACHES"] = val
+        assert subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=60).stdout.strip() == want
+
+
+def test_a_failing_or_throwing_compaction_never_crashes_the_window(box):
+    host = FakeHost(box, fail=("compact_memory",))
+    w = make_window(box, host)
+    assert w.compact_memory("t") is False and any("FAILED rc=1" in m for m in w.logs)
+    w.host.read = lambda p: (_ for _ in ()).throw(RuntimeError("boom"))
+    assert w.compact_memory("t2") is False and any("ERROR RuntimeError" in m for m in w.logs)
+    w.restore_compaction()                                                                          # never raises either
+
+
+def test_the_wrapper_dry_run_prints_the_buddyinfo_and_the_compaction_it_would_run_and_says_when_it_would_be_refused(box, tmp_path):
+    shim, _log, env = _shims(tmp_path, box)
+    bi = tmp_path / "buddyinfo"
+    bi.write_text(FRAGMENTED_BUDDY)
+    env["BAKEOFF_BUDDYINFO"] = str(bi)
+    (shim / "sudo").write_text("#!/bin/bash\nexit 0\n")
+    (shim / "sudo").chmod(0o755)
+    r = subprocess.run(["bash", str(REPO / "scripts/perf/zmb/bakeoff_window.sh"), "--dry-run"], capture_output=True, text=True, env=env, timeout=120)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "fragmentation at preflight: free blocks o9=11 o10=0" in r.stdout and "FRAGMENTED" in r.stdout
+    assert "DRY-RUN would run: sudo -n sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches; echo 1 > /proc/sys/vm/compact_memory'" in r.stdout
+    (shim / "sudo").write_text("#!/bin/bash\nexit 1\n")
+    r2 = subprocess.run(["bash", str(REPO / "scripts/perf/zmb/bakeoff_window.sh"), "--dry-run"], capture_output=True, text=True, env=env, timeout=120)
+    assert r2.returncode == 0 and "a real run started now would be REFUSED: physical memory is fragmented" in r2.stdout

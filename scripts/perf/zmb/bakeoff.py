@@ -15,6 +15,9 @@ owner starts the window. What a window does (and ALWAYS undoes, on every exit pa
                 release the lock. Hard cap 90 min. MemAvailable < 1.2 GB at any point aborts and restores.
     report      run-<date>.json, run-<date>.log, and a DRAFT docs/research/bakeoff-run-<date>.md with the G0-G3 table per arm and the rule's verdict
 
+Before every model start (the clone, its reflection restarts, the live brain on restore) physical memory is compacted with ``sudo -n`` when it is available, and the free-block
+counts of /proc/buddyinfo are logged; a fragmented box without sudo is refused before anything is stopped (the 2026-10-08 NvMap abort; docs/knowledge/bakeoff-howto.md).
+
     --dry-run        print every step and the generated clone command; execute nothing that changes anything
     --restore-only   just put the live brain back (idempotent; safe to run twice; stops only what this tool started)
 
@@ -115,6 +118,13 @@ class Cfg:
     #: user units stopped ONLY for the 12B reflection pair (to make room for it) and started again right after on EVERY exit path; default EMPTY: nothing else is ever stopped.
     #: ``BAKEOFF_REFLECT_STOP_UNITS=kokoro-tts.service`` (a voice-only sidecar, down-time anyway during the window) frees about 2.3 GB.
     reflect_stop_units: tuple = tuple(u.strip() for u in os.environ.get("BAKEOFF_REFLECT_STOP_UNITS", "").split(",") if u.strip())
+    #: Physical-memory fragmentation guard (see COMPACT_DROP). ``BAKEOFF_DROP_CACHES=0`` keeps compaction but skips dropping the page cache (compaction alone is the minimum);
+    #: ``BAKEOFF_MIN_CONTIG_BLOCKS`` = how many free blocks of order >= 9 (2 MB) a clone start needs (the 2026-10-08 abort had 11; a healthy box has hundreds).
+    drop_caches: bool = os.environ.get("BAKEOFF_DROP_CACHES", "1") != "0"
+    buddyinfo: str = os.environ.get("BAKEOFF_BUDDYINFO", "/proc/buddyinfo")
+    contig_order: int = 9
+    contig_min_blocks: int = int(os.environ.get("BAKEOFF_MIN_CONTIG_BLOCKS", "64"))
+    pid_wait_s: float = 30.0
     docs_dir: Optional[Path] = None
     meminfo: str = os.environ.get("BAKEOFF_MEMINFO", "/proc/meminfo")
     #: local-time maintenance windows (minutes since midnight) a window must not touch: the 01:45-03:15 nightly passes (decision record
@@ -380,6 +390,46 @@ def parse_panel_age(out: str, now: float) -> "Optional[float]":
     return None
 
 
+# ── physical-memory fragmentation (the 2026-10-08 abort) ─────────────────────
+
+#: A Jetson's NvMap needs CONTIGUOUS physical blocks for a CUDA allocation. After ~24 h of test / agent churn the page cache fragments RAM: MemAvailable says 6 GB,
+#: ``/proc/buddyinfo`` has no free block at order >= 10, and a freshly started llama-server dies in seconds with ``cudaMalloc failed: out of memory`` /
+#: ``NvMapMemAllocInternalTagged ... error 12`` (the Gemma clone one second after the live brain stopped; then the live brain itself, on restore). The cure is to compact
+#: before every model start; the operator command below is exactly what the window runs (and what it tells the owner to run when sudo is not passwordless).
+COMPACT_DROP = "sync; echo 3 > /proc/sys/vm/drop_caches; echo 1 > /proc/sys/vm/compact_memory"
+COMPACT_ONLY = "echo 1 > /proc/sys/vm/compact_memory"
+
+
+def compact_script(drop_caches: bool = True) -> str:
+    return COMPACT_DROP if drop_caches else COMPACT_ONLY
+
+
+def operator_compact_command(drop_caches: bool = True) -> str:
+    return f"sudo sh -c '{compact_script(drop_caches)}'"
+
+
+def parse_buddyinfo(text: str) -> "dict[int, int]":
+    """``/proc/buddyinfo`` -> free blocks per order, summed over every node / zone. ``{}`` when unreadable. A block of order N is 2^N pages (order 9 = 2 MB on 4 KB pages)."""
+    out: "dict[int, int]" = {}
+    for line in (text or "").splitlines():
+        m = re.search(r"zone\s+\S+\s+((?:\d+\s*)+)$", line.strip())
+        if not m:
+            continue
+        for order, n in enumerate(int(x) for x in m.group(1).split()):
+            out[order] = out.get(order, 0) + n
+    return out
+
+
+def blocks_at_or_above(frag: "dict[int, int]", min_order: int) -> int:
+    return sum(n for o, n in frag.items() if o >= min_order)
+
+
+def frag_summary(frag: "dict[int, int]", lo: int = 9, hi: int = 12) -> str:
+    if not frag:
+        return "buddyinfo unreadable"
+    return "free blocks " + " ".join(f"o{o}={frag.get(o, 0)}" for o in range(lo, hi + 1)) + f" (order{lo}+ total {blocks_at_or_above(frag, lo)})"
+
+
 # ── the window ───────────────────────────────────────────────────────────────
 
 class Window:
@@ -434,6 +484,75 @@ class Window:
         age = self.panel_age_s()
         if age is not None and age < self.elapsed_min() * 60.0 + 30.0:
             raise Aborted(f"a voice turn started {age:.0f}s ago while the live brain is shared (BAKEOFF_SKIP_BRAIN_STOP): stopping the window")
+
+    # ── physical-memory fragmentation ──
+    def fragmentation(self) -> "dict[int, int]":
+        """Free blocks per order (sum of zones) from ``cfg.buddyinfo``; ``{}`` = unreadable."""
+        return parse_buddyinfo(self.host.read(self.cfg.buddyinfo))
+
+    def contiguous_ok(self, min_order: "Optional[int]" = None, min_blocks: "Optional[int]" = None, frag: "Optional[dict[int, int]]" = None) -> bool:
+        """True when at least ``min_blocks`` free blocks of order >= ``min_order`` exist. An unreadable buddyinfo cannot be judged: True (the log line says it was unreadable)."""
+        frag = self.fragmentation() if frag is None else frag
+        if not frag:
+            return True
+        return blocks_at_or_above(frag, self.cfg.contig_order if min_order is None else min_order) >= (self.cfg.contig_min_blocks if min_blocks is None else min_blocks)
+
+    def log_frag(self, where: str) -> "dict[int, int]":
+        frag = self.fragmentation()
+        self.log(f"fragmentation {where}: {frag_summary(frag, self.cfg.contig_order, self.cfg.contig_order + 3)}"
+                 + ("" if self.contiguous_ok(frag=frag) else f" - FRAGMENTED (< {self.cfg.contig_min_blocks} blocks of order {self.cfg.contig_order}+)"))
+        return frag
+
+    def sudo_ok(self) -> bool:
+        """Passwordless sudo available (``sudo -n true``)? A read-only probe, cached for the window."""
+        if getattr(self, "_sudo", None) is None:
+            self._sudo = self.host.run(["sudo", "-n", "true"], timeout=10, mutating=False).rc == 0
+        return self._sudo
+
+    def compact_memory(self, where: str) -> bool:
+        """Drop the page cache and compact physical memory, ONLY when ``sudo -n true`` works; buddyinfo is logged before and after. Never raises. False = not done."""
+        try:
+            if not self.sudo_ok():
+                self.log(f"compact_memory {where}: SKIPPED - passwordless sudo is not available. Run by hand: {operator_compact_command(self.cfg.drop_caches)}")
+                return False
+            before = self.log_frag(f"before compaction ({where})")
+            r = self.host.run(["sudo", "-n", "sh", "-c", compact_script(self.cfg.drop_caches)], timeout=120)
+            if self.dry:                                    # DryHost printed the command and ran nothing: there is no "after" to report
+                return True
+            if r.rc != 0:
+                self.log(f"compact_memory {where}: FAILED rc={r.rc}: {r.out.strip()[:200]}")
+                return False
+            after = self.log_frag(f"after compaction ({where})")
+            if before and after:
+                self.log(f"compact_memory {where}: order{self.cfg.contig_order}+ blocks {blocks_at_or_above(before, self.cfg.contig_order)} -> {blocks_at_or_above(after, self.cfg.contig_order)}")
+            return True
+        except Exception as exc:  # noqa: BLE001 - compaction is an optimisation of the start, never a reason to crash the window or its restore
+            self.log(f"compact_memory {where}: ERROR {type(exc).__name__}: {exc}")
+            return False
+
+    def wait_pid_gone(self, unit: str) -> None:
+        """Poll ``systemctl --user show -p MainPID`` until it is 0 (the process, and with it its NvMap allocations, is gone), bounded by ``cfg.pid_wait_s``."""
+        if self.dry:
+            return
+        t_end = self.host.mono() + self.cfg.pid_wait_s
+        while True:
+            out = self.host.run(["systemctl", "--user", "show", "-p", "MainPID", unit], mutating=False).out
+            m = re.search(r"MainPID=(\d+)", out or "")
+            if not m or int(m.group(1)) == 0:
+                return
+            if self.host.mono() >= t_end:
+                self.log(f"{unit} MainPID {m.group(1)} still present after {self.cfg.pid_wait_s:.0f}s: compacting anyway")
+                return
+            self.host.sleep(1.0)
+
+    def before_model_start(self, where: str, unit: str) -> None:
+        """Called after a model server was stopped and before the next one starts: wait for the old process to be gone, compact, and warn loudly when RAM is still fragmented."""
+        self.wait_pid_gone(unit)
+        self.compact_memory(where)
+        frag = self.fragmentation()
+        if frag and not self.contiguous_ok(frag=frag):
+            self.log(f"WARNING fragmentation {where}: only {blocks_at_or_above(frag, self.cfg.contig_order)} free blocks of order {self.cfg.contig_order}+ "
+                     f"(< {self.cfg.contig_min_blocks}): the model start is likely to die on cudaMalloc / NvMap error 12. Operator fix: {operator_compact_command(self.cfg.drop_caches)}")
 
     # ── preflight ──
     def probe_lock(self) -> bool:
@@ -557,6 +676,15 @@ class Window:
         m = self.mem()
         if m < self.cfg.min_avail_mb:
             raise Refused(f"MemAvailable {m:.0f} MB < {self.cfg.min_avail_mb:.0f} MB: refusing to start")
+        frag0 = self.log_frag("at preflight")
+        have_sudo = self.sudo_ok()
+        if not self.contiguous_ok(frag=frag0) and not have_sudo:
+            msg = (f"physical memory is fragmented ({blocks_at_or_above(frag0, self.cfg.contig_order)} free blocks of order {self.cfg.contig_order}+, need {self.cfg.contig_min_blocks}) "
+                   f"and passwordless sudo is not available, so the window cannot compact it: the Gemma clone would die on cudaMalloc / NvMap error 12 (the 2026-10-08 abort). "
+                   f"Run this, then start the window again: {operator_compact_command(self.cfg.drop_caches)}")
+            if not self.dry:
+                raise Refused(msg)
+            self.log("DRY-RUN: a real run started now would be REFUSED: " + msg)
         waiting = self.wait_until_quiet()
         if not self.dry:
             self.take_lock()
@@ -566,7 +694,18 @@ class Window:
             why = self.busy_reason()                       # a voice turn can land while we waited for the lock
             if why:
                 raise Refused(f"not quiet after taking the lock: {why}")
-        self.log(f"preflight ok: lock {'free (dry-run: not taken)' if self.dry else 'held'}, MemAvailable {m:.0f} MB, "
+        contig = f"order{self.cfg.contig_order}+ blocks {blocks_at_or_above(frag0, self.cfg.contig_order)}" if frag0 else "buddyinfo unreadable"
+        if have_sudo:
+            self.compact_memory("at preflight")
+            if not self.dry and frag0:
+                frag1 = self.fragmentation()
+                contig += f" -> {blocks_at_or_above(frag1, self.cfg.contig_order)}"
+                if not self.contiguous_ok(frag=frag1):
+                    raise Refused(f"physical memory is still fragmented after compaction ({contig}, need {self.cfg.contig_min_blocks}): the clone would die on cudaMalloc / NvMap error 12. "
+                                  f"Stop the heaviest consumers (tests, agents) or reboot, then start again. Nothing was stopped.")
+            elif self.dry:
+                contig += " (dry-run: compaction not executed)"
+        self.log(f"preflight ok: lock {'free (dry-run: not taken)' if self.dry else 'held'}, MemAvailable {m:.0f} MB, {contig}, "
                  + (f"NOT quiet right now ({waiting})" if waiting else "panel quiet, no landing/bar"))
 
     # ── open the window ──
@@ -636,7 +775,10 @@ class Window:
             self.log("step 3/6 STOP the live brain (%s): the voice stack is down until restore" % cfg.unit)
             if host.run(["systemctl", "--user", "stop", cfg.unit], timeout=90).rc != 0:
                 raise Aborted(f"could not stop {cfg.unit}")
+            self.log_frag("after step 3 (live brain stopped)")
+            self.before_model_start("before step 4 (Gemma clone)", cfg.unit)
             self.log("step 4/6 Gemma clone on :%d (same model and flags, --parallel 1)" % cfg.clone_port)
+            self.log_frag("before step 4 (clone start)")
             self.start_unit("clone", self.clone["argv"], env=self.clone["env"], props=self.clone["props"])
             self.wait_http(f"http://127.0.0.1:{cfg.clone_port}/health", "the Gemma clone", max(cfg.health_wait_s, 240.0), contains="ok")
         self.log("step 5/6 hindsight-api (loopback :%d, egress audit hook on)" % cfg.hs_port)
@@ -653,6 +795,7 @@ class Window:
         self.log(f"restarting the clone as {what}: " + shlex.join(spec["argv"]))
         self.host.run(["systemctl", "--user", "stop", UNITS["clone"]], timeout=90)
         self.host.run(["systemctl", "--user", "reset-failed", UNITS["clone"]])
+        self.before_model_start(f"before the clone restart as {what}", UNITS["clone"])
         self.start_unit("clone", spec["argv"], env=spec["env"], props=spec["props"])
         self.wait_http(f"http://127.0.0.1:{cfg.clone_port}/health", f"the Gemma clone ({what})", wait_s, contains="ok")
 
@@ -690,6 +833,23 @@ class Window:
         self.swap_clone(spec, f"4B at {'--ctx-size ' + str(ctx_size) if ctx_size else 'the live context'}", max(self.cfg.health_wait_s, 240.0))
 
     # ── restore: always ──
+    def restore_compaction(self) -> None:
+        """Before the live brain is started again: compact (the clone that just died may have left RAM fragmented, and the live brain failed to restart the same way on 2026-10-08).
+        Without sudo and with fragmented RAM this is a loud ALARM naming the command, never a silent failure. Never raises."""
+        try:
+            self.log_frag("before restarting the live brain")
+            if self.sudo_ok():
+                self.wait_pid_gone(UNITS["clone"])
+                self.compact_memory("before restarting the live brain")
+            elif not self.contiguous_ok():
+                self.log(f"RESTORE ALARM: RAM is fragmented ({frag_summary(self.fragmentation(), self.cfg.contig_order, self.cfg.contig_order + 3)}) and passwordless sudo is not available: "
+                         f"{self.cfg.unit} is likely to fail with cudaMalloc out of memory / NvMap error 12. Run: {operator_compact_command(self.cfg.drop_caches)} "
+                         f"and then: systemctl --user start {self.cfg.unit}")
+            else:
+                self.log("RESTORE: sudo is not available; RAM is not fragmented, so no compaction is needed")
+        except Exception as exc:  # noqa: BLE001 - restore never raises
+            self.log(f"RESTORE ALARM: compaction before the live brain start errored ({type(exc).__name__}: {exc}); if it fails to start run: {operator_compact_command(self.cfg.drop_caches)}")
+
     def restore(self) -> bool:
         """Put everything back. Idempotent; stops only the units and the container this tool started; never raises."""
         cfg, host = self.cfg, self.host
@@ -705,6 +865,7 @@ class Window:
         if cfg.skip_brain_stop:
             self.log(f"RESTORE: {cfg.unit} was never stopped (test hook): checking it is still healthy")
         else:
+            self.restore_compaction()
             self.log(f"RESTORE: starting {cfg.unit}")
             host.run(["systemctl", "--user", "start", cfg.unit], timeout=200)
         ok = False

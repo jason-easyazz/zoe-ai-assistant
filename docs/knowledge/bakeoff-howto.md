@@ -58,7 +58,7 @@ its RAM). Nothing else is touched: no `zoe-data` restart, no live Postgres, no p
 | measure | see below | |
 | restore | stops the three units and the container, starts the live brain, polls `:11434/health`, releases the lock. Runs on EVERY exit path (refusal after start, memory floor, hard cap, any exception, Ctrl-C); a marker file `WINDOW_OPEN` makes the shell wrapper re-run it if the driver is killed hard | |
 
-Guards: MemAvailable below 1.2 GB at any time aborts and restores; 90 minutes is a hard cap (7 minutes are always kept for restore and report).
+Guards: MemAvailable below 1.2 GB at any time aborts and restores; physical memory is compacted before every model start (next section); 90 minutes is a hard cap (7 minutes are always kept for restore and report).
 
 ## What it measures, and how long (planned minutes; `--dry-run` prints the live numbers)
 
@@ -144,6 +144,28 @@ The verdicts:
   Z0-off must be red on the authority cells (the negative control) and every run records `controls red x/y`.
 * "Not verified" at the bottom lists what the run could not establish.
 
+## Fragmentation: "cudaMalloc failed: out of memory" with 6 GB free (incident 2026-10-08 13:33)
+
+Signature: the Gemma clone (and then the live brain on restore) dies in about 6 s with `ggml_backend_cuda_buffer_type_alloc_buffer: allocating 118.30 MiB on device 0: cudaMalloc failed: out of memory`
+and `NvMapMemAllocInternalTagged ... error 12`, while `MemAvailable` is above 6 GB. Cause: Tegra NvMap needs CONTIGUOUS physical blocks and ~24 h of test / agent churn left the page cache
+fragmenting RAM: `tegrastats` shows `lfb 11x2MB`, `/proc/buddyinfo` has no free block at order >= 10 (2 MB is order 9). It is not a RAM shortage, so more free memory does not help.
+
+What the window does about it (all through the `Host` seam; `bakeoff.py` `fragmentation()` / `contiguous_ok()` / `compact_memory()`):
+
+* logs the order 9-12 free-block counts at preflight, after step 3 (brain stopped), before step 4, before every clone restart (the 32k and 12B reflection pairs) and before the live brain restarts on restore;
+* runs `sudo -n sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches; echo 1 > /proc/sys/vm/compact_memory'` after the live brain's `MainPID` is 0 (polled, at most 30 s) and before EVERY clone start, and in restore before
+  `systemctl --user start llama-server.service` - only when `sudo -n true` works. `BAKEOFF_DROP_CACHES=0` keeps compaction and skips the cache drop (compaction alone is the minimum);
+* preflight: fragmented (fewer than `BAKEOFF_MIN_CONTIG_BLOCKS`, default 64, free blocks of order >= 9) and no passwordless sudo -> REFUSED before anything is stopped, with the command below; otherwise it
+  compacts, re-checks and prints `order9+ blocks 184 -> 420` on the `preflight ok` line (still fragmented after compaction -> refused);
+* restore with no sudo and fragmented RAM prints a `RESTORE ALARM` line with the command (it still tries to start the brain).
+
+Operator command (run it, then start the window or the brain again):
+
+```bash
+sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches; echo 1 > /proc/sys/vm/compact_memory'
+awk '{print $1,$2,$3,$4,$(NF-1),$NF}' /proc/buddyinfo   # orders 10 and 11 should be well above 0 (67 / 9 after the 2026-10-08 fix)
+```
+
 ## How to abort
 
 Ctrl-C in the terminal (the wrapper's trap restores), or `kill <pid of bakeoff_window.sh>`. If the terminal is gone:
@@ -153,6 +175,7 @@ scripts/perf/zmb/bakeoff_window.sh --restore-only      # idempotent; stops only 
 # by hand, the same thing:
 systemctl --user stop zoe-bakeoff-hindsight zoe-bakeoff-gemma zoe-bakeoff-embed
 docker compose -f /home/zoe/.zoe/bakeoff-2026-10/scratch-postgres.compose.yml down
+sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches; echo 1 > /proc/sys/vm/compact_memory'   # first, if the brain refuses to start with cudaMalloc / NvMap error 12 (see Fragmentation)
 systemctl --user start llama-server.service && curl -sf http://127.0.0.1:11434/health
 ```
 

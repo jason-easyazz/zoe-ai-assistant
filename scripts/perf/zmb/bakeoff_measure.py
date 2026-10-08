@@ -812,6 +812,7 @@ def deep_preflight(ctx: Ctx, spec: dict) -> "tuple[bool, str]":
     host.run(["systemctl", "--user", "reset-failed", UNITS_CLONE])
     if cfg.reflect_stop_units:
         win.stop_extra_units(cfg.reflect_stop_units)
+    win.log_frag("after the 4B clone and the listed units stopped (before the 12B start)")
     avail = win.mem()
     size = host.file_size(spec["model_path"])
     need = need_mb_12b(size, cfg.reflect_ctx, cfg.min_avail_mb)
