@@ -1029,13 +1029,21 @@ class NightWindow(bk.Window):
                 return {k: v for k, v in d["cells"].items() if isinstance(v, (str, int))}
         return {"error": f"no cells object in the output (rc {res.rc})"}
 
+    def trial_timeout_12b(self) -> float:
+        """720 s at the 4B-like speed the phase was sized for; longer in proportion when the measured decode is slower (2026-10-09: 5.4 tok/s with 24 layers on the GPU timed out at 720 s),
+        never beyond what the cap leaves after reserving the restore and the 4B phase."""
+        tps = self.speed.get("decode_tps") or 11.0
+        want = 720.0 * max(1.0, 11.0 / tps)
+        room = (self.cap_min - self.cfg.reserve_min) * 60.0 - self.elapsed_min() * 60.0 - 300.0
+        return max(300.0, min(want, room))
+
     def run_trial(self, pick: "dict[str, Any]") -> None:
         """12B first; a 12B that does not load is recorded and the 4B at 32k is STILL measured (the baseline is worth having), then the failure is raised so the exit code says so."""
         self.start_shim()
         failed: "Optional[LoadFailed]" = None
         try:
             self.load_12b(pick)
-            self.trial_results["12B"] = self.trial_phase("12B", 720.0)
+            self.trial_results["12B"] = self.trial_phase("12B", self.trial_timeout_12b())
         except LoadFailed as exc:
             failed = exc
             self.trial_results["12B"] = {"label": "12B", "error": str(exc), "cells": [], "pass": 0, "graded": 0, "items": [0, 0], "load_failed": True}
@@ -1053,6 +1061,9 @@ class NightWindow(bk.Window):
         self.rec["trial"] = self.trial_results
         if failed:
             raise failed
+        empty = [k for k, t in self.trial_results.items() if t.get("error")]
+        if empty:                                              # the box is fine, the measurement is not: say so in the outcome and the exit code (the restore still runs)
+            raise Aborted("trial phase(s) without a result: " + ", ".join(f"{k} ({self.trial_results[k]['error'][:80]})" for k in empty))
 
     # ── the minutes helper ──
     def minutes_now(self) -> float:

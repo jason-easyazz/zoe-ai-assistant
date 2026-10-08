@@ -873,6 +873,29 @@ def test_the_trial_scores_the_12b_then_the_4b_at_32k_and_restores(tmp_path):
     assert "| K2.a | PASS | FAIL |" in md and "Trial: K cells, 12B vs the 4B at 32k" in md
 
 
+def test_a_trial_phase_without_a_result_is_not_an_ok_outcome_and_the_12b_timeout_follows_its_speed(tmp_path):
+    w, host, cfg = make(tmp_path, argv=["--trial"], start=at(3, 5))
+    real = host.run_watched
+
+    def rw(argv, timeout, env, tick, log_path, interval=5.0):
+        if "--out" in argv and argv[argv.index("--model-name") + 1] == "12B":
+            host.cmds.append((list(argv), True))
+            host.t += 720
+            return bk.Result(124, "")                                              # the driver timed out and wrote nothing
+        return real(argv, timeout, env, tick, log_path, interval)
+    host.run_watched = rw
+    assert w.run() == nw.EXIT_ABORTED and "without a result" in w.outcome and "12B" in w.outcome
+    assert w.rec["trial"]["4B@32k"]["pass"] == 1 and wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]
+    w2, _, _ = make(tmp_path, argv=["--trial"], start=at(3, 5))
+    w2.cap_min = 65.0
+    w2.speed = {"decode_tps": 5.42}
+    assert w2.trial_timeout_12b() == pytest.approx(720 * 11 / 5.42, rel=1e-6)
+    w2.speed = {"decode_tps": 40.0}
+    assert w2.trial_timeout_12b() == 720.0
+    w2.speed = {"decode_tps": 1.0}
+    assert w2.trial_timeout_12b() <= (w2.cap_min - w2.cfg.reserve_min) * 60 - 300
+
+
 def test_a_trial_is_refused_across_03_00_because_it_has_no_digest_job_to_cover_the_skipped_loop(tmp_path):
     w, host, _ = make(tmp_path, argv=["--trial"], start=at(2, 50))
     assert w.run() == nw.EXIT_REFUSED and "maintenance loop" in w.outcome and stopped_nothing(host)
