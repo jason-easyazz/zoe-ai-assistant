@@ -1142,6 +1142,17 @@
         ],
         "typed_env": false
       },
+      "ZOE_DIGEST_LLM_TIMEOUT_SCALE": {
+        "defaults": [
+          "'1'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/night/jobs/night_digest.py",
+          "services/zoe-data/memory_digest.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_DISCOVERY_DEFAULT_MOOD": {
         "defaults": [
           "''"

@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Auto-generated inventory of every ZOE_* environment flag read in the codebase — defaults, readers, typed_env adoption, and .env.example coverage.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-10-08T00:00:00Z
+timestamp: 2026-10-09T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-10-08T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-10-08. The table body is deterministic (sorted, no
+Last generated: 2026-10-09. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Default `dynamic` = not statically extractable; `(required)` = bare
@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-541 flags; 539 not documented in `.env.example`.
+542 flags; 540 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -129,6 +129,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_DIGARR_PASSWORD` | `''` | no | NO | `scripts/maintenance/music_discovery_batch.py` |
 | `ZOE_DIGARR_PORT` | `'3199'` | no | NO | `scripts/maintenance/music_discovery_batch.py` |
 | `ZOE_DIGARR_USER` | `'zoe'` | no | NO | `scripts/maintenance/music_discovery_batch.py` |
+| `ZOE_DIGEST_LLM_TIMEOUT_SCALE` | `'1'` | no | NO | `scripts/night/jobs/night_digest.py`<br>`services/zoe-data/memory_digest.py` |
 | `ZOE_DISCOVERY_DEFAULT_MOOD` | `''` | no | NO | `scripts/maintenance/music_discovery_batch.py` |
 | `ZOE_DISCOVERY_MAX_USERS` | `'4'` | no | NO | `scripts/maintenance/music_discovery_batch.py` |
 | `ZOE_DISCOVERY_MIN_FREE_MB` | `'1500'` | no | NO | `scripts/maintenance/music_discovery_batch.py` |

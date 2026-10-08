@@ -48,6 +48,22 @@ def _normalize_gemma_base(raw: str) -> str:
 _GEMMA_URL = _normalize_gemma_base(os.environ.get("GEMMA_SERVER_URL", "http://127.0.0.1:11434"))
 _ZOE_TIMEZONE = os.environ.get("ZOE_TIMEZONE", "Australia/Perth")
 
+
+def _llm_timeout(seconds: float) -> float:
+    """A model-call timeout, scaled by ``ZOE_DIGEST_LLM_TIMEOUT_SCALE`` (default 1.0 = unchanged).
+
+    The nightly passes were sized for the 4B (about 8 tok/s: a 500-token reply is about 62 s against a 45 s
+    timeout, already marginal). The 12B night window (``scripts/night/``) serves the same passes from a model
+    that decodes several times slower and sets the scale for ITS processes only; the live service never does.
+    Read at call time so a test or a runner can set it after import. An unparsable or non-positive value is 1.0.
+    """
+    try:
+        scale = float(os.environ.get("ZOE_DIGEST_LLM_TIMEOUT_SCALE", "1") or 1)
+    except ValueError:
+        scale = 1.0
+    return seconds * (scale if scale > 0 else 1.0)
+
+
 # Rolling lookback for the nightly digest, in hours. 30h (not 24h) so a 03:00
 # run covers the whole previous calendar day plus the 3h offset, with slack for
 # a late or retried run. Overlap between nights is harmless — the extractor
@@ -607,7 +623,7 @@ async def run_turn_digest(
         }
 
         try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
+            async with httpx.AsyncClient(timeout=_llm_timeout(20.0)) as client:
                 resp = await client.post(f"{_GEMMA_URL}/v1/chat/completions", json=payload)
                 resp.raise_for_status()
                 raw = resp.json()["choices"][0]["message"]["content"].strip()
@@ -1103,7 +1119,7 @@ async def _emotional_memory_pass(user_id: str, chat_text: str, svc) -> int:
         "stream": False,
     }
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=_llm_timeout(30.0)) as client:
             resp = await client.post(f"{_GEMMA_URL}/v1/chat/completions", json=payload)
             resp.raise_for_status()
             raw = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "[]").strip()
@@ -1362,7 +1378,7 @@ async def _extract_facts_with_gemma(chat_text: str) -> list[dict]:
         "stream": False,
     }
     try:
-        async with httpx.AsyncClient(timeout=45.0) as client:
+        async with httpx.AsyncClient(timeout=_llm_timeout(45.0)) as client:
             resp = await client.post(f"{_GEMMA_URL}/v1/chat/completions", json=payload)
             resp.raise_for_status()
             raw = resp.json()
@@ -1407,7 +1423,7 @@ async def _is_contradiction(new_fact: str, existing_fact: str) -> bool:
         "stream": False,
     }
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=_llm_timeout(15.0)) as client:
             resp = await client.post(f"{_GEMMA_URL}/v1/chat/completions", json=payload)
             resp.raise_for_status()
             text = resp.json()["choices"][0]["message"]["content"].strip()
@@ -1794,7 +1810,7 @@ async def _extract_concept_tags(fact: str) -> list[str]:
     """Use Gemma to extract concept tags from a fact. Returns [] on failure."""
     prompt = _CONCEPT_EXTRACTION_PROMPT.format(fact=fact[:300])
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=_llm_timeout(10.0)) as client:
             resp = await client.post(
                 f"{_GEMMA_URL}/v1/chat/completions",
                 json={
@@ -1803,7 +1819,7 @@ async def _extract_concept_tags(fact: str) -> list[str]:
                     "max_tokens": 60,
                     "temperature": 0.1,
                 },
-                timeout=10.0,
+                timeout=_llm_timeout(10.0),
             )
         text = resp.json()["choices"][0]["message"]["content"].strip()
         start = text.find("[")
@@ -2094,7 +2110,7 @@ async def _synthesis_pass(user_id: str) -> dict:
             prompt = _build_synthesis_prompt(tag, sample)
 
             try:
-                async with httpx.AsyncClient(timeout=20.0) as client:
+                async with httpx.AsyncClient(timeout=_llm_timeout(20.0)) as client:
                     resp = await client.post(
                         f"{_GEMMA_URL}/v1/chat/completions",
                         json={
@@ -2332,7 +2348,7 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
         "stream": False,
     }
     try:
-        async with httpx.AsyncClient(timeout=45.0) as client:
+        async with httpx.AsyncClient(timeout=_llm_timeout(45.0)) as client:
             resp = await client.post(f"{_GEMMA_URL}/v1/chat/completions", json=payload)
             resp.raise_for_status()
             raw = resp.json()["choices"][0]["message"]["content"] or ""
