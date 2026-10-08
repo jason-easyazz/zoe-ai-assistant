@@ -1023,6 +1023,141 @@
             padding: 0;
         }
         
+        /* Entry form (tags, privacy, actions) — restored 2026-10-09: the FilePond cleanup
+           had removed these shared rules with the photo styles. */
+        .tag-input-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            padding: 12px;
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.8);
+            min-height: 48px;
+        }
+        
+        .tag-chip {
+            padding: 6px 12px;
+            background: rgba(123, 97, 255, 0.1);
+            border: 1px solid rgba(123, 97, 255, 0.2);
+            border-radius: 12px;
+            font-size: 13px;
+            color: var(--primary-purple);
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .tag-chip.person-tag {
+            background: rgba(255, 107, 107, 0.1);
+            border-color: rgba(255, 107, 107, 0.2);
+            color: #FF6B6B;
+        }
+        
+        .tag-chip.place-tag {
+            background: rgba(90, 224, 224, 0.1);
+            border-color: rgba(90, 224, 224, 0.2);
+            color: var(--primary-teal);
+        }
+        
+        .tag-remove {
+            cursor: pointer;
+            font-weight: bold;
+        }
+        
+        .tag-input {
+            flex: 1;
+            min-width: 120px;
+            border: none;
+            background: transparent;
+            font-size: 14px;
+            padding: 6px;
+        }
+        
+        .tag-input:focus { outline: none; }
+        
+        .privacy-selector {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+        }
+        
+        .privacy-option {
+            padding: 16px;
+            border: 2px solid transparent;
+            border-radius: 12px;
+            background: rgba(0, 0, 0, 0.03);
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .privacy-option:hover { background: rgba(123, 97, 255, 0.05); }
+        
+        .privacy-option.selected {
+            background: rgba(123, 97, 255, 0.1);
+            border-color: var(--primary-purple);
+        }
+        
+        .privacy-option-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 24px;
+            margin-bottom: 8px;
+        }
+        
+        .privacy-option-label {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        .privacy-option-desc {
+            font-size: 10px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+        
+        .entry-form-actions {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 24px;
+            border-top: 1px solid rgba(0, 0, 0, 0.05);
+        }
+        
+        .action-buttons { display: flex; gap: 12px; }
+        
+        .btn-secondary {
+            padding: 10px 20px;
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            border-radius: 10px;
+            background: white;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .btn-secondary:hover { background: rgba(0, 0, 0, 0.05); }
+        
+        .btn-primary {
+            padding: 12px 32px;
+            border: none;
+            border-radius: 12px;
+            background: var(--gradient);
+            color: white;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(123, 97, 255, 0.3);
+        }
+
         /* More Overlay */
         .more-overlay {
             position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
