@@ -39,7 +39,7 @@ BAKEOFF_SKIP_BRAIN_STOP=1 BAKEOFF_SMOKE_CELLS=10 scripts/perf/zmb/bakeoff_window
 The window now starts the stack in its **lean** shape by default (measured on the real server: about -85 to -95 MB of the stack, recall latency unchanged): `hindsight-api` with migration isolation,
 a 1..2 connection pool, an import trim that stubs the MCP, Gemini and OTLP packages it never uses (it chains the egress hook; `scripts/perf/zmb/lean_imports/`), docstring-free bytecode and one BLAS thread; the
 embeddings shim with full graph optimisation and one malloc arena; the HM verbatim tier asking the window's shim for its vectors instead of loading its own ONNX session (about -190 MB of the driver).
-`BAKEOFF_LEAN=0` restores run 1/2's exact environment; `BAKEOFF_HM_SHARED_EMBEDDER=0` gives the HM driver its own session again; `BAKEOFF_SHIM_MODEL=minilm` serves zoe-data's MiniLM from the shim (NOT the default:
+`BAKEOFF_KEEP_PG=1` keeps the previous window's scratch database (debugging only; the results are then confounded and the report says so); `BAKEOFF_HS_QUIET_WAIT_S` (default 60) is how long Hindsight's job queue gets to empty before the window refuses to open; `BAKEOFF_LEAN=0` restores run 1/2's exact environment; `BAKEOFF_HM_SHARED_EMBEDDER=0` gives the HM driver its own session again; `BAKEOFF_SHIM_MODEL=minilm` serves zoe-data's MiniLM from the shim (NOT the default:
 every H arm's recall would move away from run 1's). The lab that measured all of it is `scripts/perf/zmb/ram_opt.py` (`--list`, `--config`, `--table`); it keeps MemAvailable >= 1.5 GB by construction and refuses to start otherwise.
 
 ## What it does to the box
@@ -50,13 +50,23 @@ its RAM). Nothing else is touched: no `zoe-data` restart, no live Postgres, no p
 | Step | What | Undone by |
 |---|---|---|
 | preflight | refuses if `/tmp/zoe-brain-window.lock` is held; waits until the panel has been quiet 10 min (the `land_voice_pr.sh` check) and no landing / samantha bar runs (anchored `pgrep`); refuses if MemAvailable < 1.2 GB, the router's embedding model is not on disk, the live brain is not active, or the window would overlap 01:45-03:15 / 04:18-04:52 | nothing was started |
-| 1 | scratch Postgres `zoe-bakeoff-pg` (compose, 256 MB cap, loopback `:55432`) | `docker compose down` |
+| 1 | scratch Postgres `zoe-bakeoff-pg` (compose, 256 MB cap, loopback `:55432`), always started FRESH: `docker compose down -v`, then the root-owned `pgdata` emptied (`sudo -n find ... -delete` when `sudo -n true` works, else a throwaway container over the bind mount from the compose file's own image; with neither the window REFUSES in preflight, before the live brain is stopped, and prints the operator command). Logs `scratch Postgres: fresh (wiped N MB)`. `BAKEOFF_KEEP_PG=1` keeps it for debugging and the window says loudly that its results are confounded | `docker compose down` |
 | 2 | loopback embeddings shim `zoe-bakeoff-embed` (`:11501`, the router's bge-small ONNX, about 135 MB) | `systemctl --user stop` |
 | 3 | **stop `llama-server.service`** | `systemctl --user start` + health poll |
 | 4 | Gemma clone `zoe-bakeoff-gemma` (`:11500`): command GENERATED from `systemctl --user cat llama-server.service` and its drop-ins, same model and flags, `--parallel 1`, same MemorySwapMax / MemoryLow | `systemctl --user stop` |
 | 5 | `hindsight-api` `zoe-bakeoff-hindsight` (`:18888`, loopback env from `hindsight.env.example`, in-process egress audit hook on) | `systemctl --user stop` |
+| 5b | job-queue gate: once `hindsight-api` is healthy its worker queue (`async_operations`, pending + processing) must be EMPTY, polled for 60 s (`BAKEOFF_HS_QUIET_WAIT_S`); the count is logged and anything left aborts the window before step 6 (a stale bank is a confound) | |
 | measure | see below | |
 | restore | stops the three units and the container, starts the live brain, polls `:11434/health`, releases the lock. Runs on EVERY exit path (refusal after start, memory floor, hard cap, any exception, Ctrl-C); a marker file `WINDOW_OPEN` makes the shell wrapper re-run it if the driver is killed hard | |
+
+Why step 1 wipes (2026-10-08 17:09): the scratch Postgres was never wiped, so the SECOND window of the day inherited the first window's Hindsight banks (`zmb-h2-demo_bar_*`). Within 60 s of step 5 the new worker resumed their pending
+consolidation jobs, each failing with `HTTP 400 exceed_context_size_error: request (8841 tokens) exceeds the available context size (8192 tokens)` against the clone (3 retries per batch), all competing for its single slot (`--parallel 1`):
+a confound for every arm in that window and a plausible cause of the first window's cells running 3x slower than planned.
+
+The report and `run-<id>.json` record `hindsight_consolidation_prompt_tokens_max` (every `exceed_context_size_error`'s `n_prompt_tokens` in hindsight-api's journal for THIS window) and, when a consolidation call exceeded the slot, state: "Hindsight
+consolidation does not fit the 8,192-token live slot (max N tokens): K on the live context is failed by construction; only the 32k/12B reflection phase measures K". Background consolidation cannot be paused in the installed Hindsight (0.10.2): the worker claims
+any pending operation, `HINDSIGHT_API_WORKER_CONSOLIDATION_RESERVED_SLOTS` is a reserved FLOOR (not a cap) and there is no pause flag; `enable_auto_consolidation` is per bank and H2 / HMA already run it off and trigger it explicitly. The window therefore
+detects instead of preventing: the job queue is read before every Hindsight arm's cells and an arm that starts with queued work is flagged in the report's notes.
 
 Guards: MemAvailable below 1.2 GB at any time aborts and restores; physical memory is compacted before every model start (next section); 90 minutes is a hard cap (7 minutes are always kept for restore and report).
 

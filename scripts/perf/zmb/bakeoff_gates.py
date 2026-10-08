@@ -752,7 +752,13 @@ def render_markdown(meta: dict, arms: "dict[str, dict]", decision: dict, z0_axes
     L += ["## Run", "", f"* started {meta.get('started')}, finished {meta.get('finished')}, wall {meta.get('wall_min')} min (cap {meta.get('cap_min')} min)",
           f"* revision {meta.get('commit')}; Hindsight {meta.get('hindsight_version')}; clone `{meta.get('clone_model')}` --parallel 1 on :11500; embeddings {meta.get('embed_model')}",
           f"* seeds: {', '.join(meta.get('seeds', []))}; arms run: {', '.join(meta.get('arms_run', []))}; aborted: {meta.get('aborted') or 'no'}",
-          f"* brain restored: {meta.get('restore')}", ""]
+          f"* brain restored: {meta.get('restore')}"]
+    if meta.get("scratch_postgres"):
+        L.append(f"* scratch Postgres: {meta['scratch_postgres']}; Hindsight job queue at open: {meta.get('hindsight_queue_at_open', 'not read')} pending/running operations")
+    if "hindsight_consolidation_prompt_tokens_max" in meta:
+        L.append(f"* instrument `hindsight_consolidation_prompt_tokens_max` = {meta['hindsight_consolidation_prompt_tokens_max'] if meta['hindsight_consolidation_prompt_tokens_max'] is not None else 'none exceeded the slot'} "
+                 f"({meta.get('hindsight_consolidation_failed_calls', 0)} consolidation call(s) failed on a context-size error; from hindsight-api's journal)")
+    L.append("")
     for name in ARM_NAMES:
         a = arms.get(name)
         if not a:

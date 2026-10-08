@@ -6,8 +6,9 @@ owner starts the window. What a window does (and ALWAYS undoes, on every exit pa
 
     preflight   refuse if /tmp/zoe-brain-window.lock is held; wait until the panel has been quiet 10 min (the land_voice_pr.sh check) and no
                 landing / samantha bar is running (anchored pgrep); take the lock; refuse if MemAvailable < 1.2 GB
-    open        scratch Postgres (compose, 256 MB cap) -> loopback embeddings shim :11501 -> STOP llama-server.service -> Gemma clone :11500
+    open        scratch Postgres (compose, 256 MB cap; ALWAYS fresh: down -v + the data directory emptied) -> loopback embeddings shim :11501 -> STOP llama-server.service -> Gemma clone :11500
                 (the SAME model and flags, generated from `systemctl --user cat llama-server.service`, --parallel 1) -> hindsight-api :18888
+                (hindsight-api's job queue must then be EMPTY before the window opens: a stale bank's consolidation would share the clone's single slot)
     measure     Z0 / Z0-off in the lab, then H1 / H2 / H0 over the real server: store-tier cells on three seeds (time-boxed), recall latency,
                 extraction JSON validity, brain-slot seconds per retained turn, RSS (PSS of every candidate PID), non-loopback connects,
                 forgetting at t+0 and a REAL t+6 min after the arm's own replay
@@ -125,6 +126,11 @@ class Cfg:
     contig_order: int = 9
     contig_min_blocks: int = int(os.environ.get("BAKEOFF_MIN_CONTIG_BLOCKS", "64"))
     pid_wait_s: float = 30.0
+    #: 2026-10-08 17:09: the scratch Postgres was never wiped, so a SECOND window of the day inherited the first window's Hindsight banks and their pending consolidation jobs (each failing
+    #: against the clone's single slot). Step 1 now always starts from a FRESH database. ``BAKEOFF_KEEP_PG=1`` keeps it (debugging only) and the window says, loudly, that its results are confounded.
+    keep_pg: bool = os.environ.get("BAKEOFF_KEEP_PG") == "1"
+    #: how long hindsight-api's job queue (pending / processing operations) gets to be empty once the server is healthy, before the window refuses to open (``BAKEOFF_HS_QUIET_WAIT_S``)
+    hs_quiet_wait_s: float = float(os.environ.get("BAKEOFF_HS_QUIET_WAIT_S", "60"))
     docs_dir: Optional[Path] = None
     meminfo: str = os.environ.get("BAKEOFF_MEMINFO", "/proc/meminfo")
     #: local-time maintenance windows (minutes since midnight) a window must not touch: the 01:45-03:15 nightly passes (decision record
@@ -139,6 +145,11 @@ class Cfg:
     @property
     def compose(self) -> Path:
         return self.bakeoff_dir / "scratch-postgres.compose.yml"
+
+    @property
+    def pgdata(self) -> Path:
+        """The scratch Postgres data directory: the compose file's bind mount (``<bakeoff_dir>/pgdata``, owned by the container's postgres user)."""
+        return self.bakeoff_dir / "pgdata"
 
     @property
     def hs_python(self) -> Path:
@@ -432,6 +443,91 @@ def frag_summary(frag: "dict[int, int]", lo: int = 9, hi: int = 12) -> str:
 
 # ── the window ───────────────────────────────────────────────────────────────
 
+# ── the scratch database and Hindsight's job queue (2026-10-08) ─────────────
+
+#: one row per (operation type, status) of the work Hindsight's in-process worker has not finished: ``type|status|count``. ``async_operations`` is the worker's queue (statuses pending / processing /
+#: completed / failed; hindsight-api 0.10.2 ``worker/poller.py``), so "pending or processing" IS "the worker has something to do".
+PG_QUEUE_SQL = ("SELECT operation_type || '|' || status || '|' || count(*) FROM public.async_operations "
+                "WHERE status IN ('pending', 'processing') GROUP BY operation_type, status ORDER BY 1")
+WORKER_STATS_RX = re.compile(r"\[WORKER_STATS\].*?slots=(\d+)/(\d+).*?global: pending=(\d+)")
+_NPT_RX = re.compile(r'"n_prompt_tokens":\s*(\d+)')
+_REQ_TOKENS_RX = re.compile(r"request \((\d+) tokens\) exceeds")
+_NCTX_RX = re.compile(r'"n_ctx":\s*(\d+)')
+_SCOPE_RX = re.compile(r"scope=(\w+)")
+_FINAL_FAIL_RX = re.compile(r"API error after \d+ attempts")
+SLOT_TOKENS = 8192
+
+
+def compose_image(compose_text: str) -> str:
+    """The image the scratch compose file runs (``image: pgvector/pgvector:pg17``): present locally, so it can also do the root-owned wipe without a pull."""
+    m = re.search(r"^\s*image:\s*(\S+)", compose_text, re.M)
+    return m.group(1).strip("\"'") if m else ""
+
+
+def first_int(text: str) -> "Optional[int]":
+    m = re.search(r"^\s*(\d+)(?:\s|$)", text, re.M)
+    return int(m.group(1)) if m else None
+
+
+def parse_queue_rows(out: str) -> "Optional[dict[str, int]]":
+    """``PG_QUEUE_SQL``'s output as ``{"consolidation:pending": 3}``; ``{}`` = an empty queue; ``None`` = not the shape we asked for (an error text is not 'zero jobs')."""
+    rows: "dict[str, int]" = {}
+    for ln in out.splitlines():
+        if not ln.strip():
+            continue
+        parts = ln.strip().split("|")
+        if len(parts) != 3 or not parts[2].isdigit():
+            return None
+        rows[f"{parts[0]}:{parts[1]}"] = int(parts[2])
+    return rows
+
+
+def parse_worker_stats(text: str) -> "Optional[tuple[int, int]]":
+    """The LAST ``[WORKER_STATS]`` line of hindsight-api's log as (slots in flight, global pending); None when there is none (it logs every ~30 s)."""
+    last = None
+    for m in WORKER_STATS_RX.finditer(text):
+        last = (int(m.group(1)), int(m.group(3)))
+    return last
+
+
+def parse_consolidation_prompt_tokens(text: str) -> "dict[str, Any]":
+    """Hindsight's log -> how big its prompts got, read from every ``exceed_context_size_error`` (``n_prompt_tokens``; the ``request (N tokens)`` text as a fallback). Only the calls that were
+    TOO big are logged with a size, so the maximum is the largest prompt seen and a lower bound for the largest sent. ``consolidation_max`` is the ``scope=consolidation`` calls' maximum."""
+    out: "dict[str, Any]" = {"consolidation_max": None, "any_max": None, "n_ctx": None, "failed_calls": 0, "failed_attempts": 0, "consolidation_failed_calls": 0}
+    for ln in text.splitlines():
+        if "exceed_context_size_error" not in ln:
+            continue
+        m = _NPT_RX.search(ln) or _REQ_TOKENS_RX.search(ln)
+        if not m:
+            continue
+        n = int(m.group(1))
+        sc = _SCOPE_RX.search(ln)
+        scope = sc.group(1) if sc else "unknown"
+        final = bool(_FINAL_FAIL_RX.search(ln))
+        out["any_max"] = n if out["any_max"] is None else max(out["any_max"], n)
+        if scope == "consolidation":
+            out["consolidation_max"] = n if out["consolidation_max"] is None else max(out["consolidation_max"], n)
+        nc = _NCTX_RX.search(ln)
+        if nc:
+            out["n_ctx"] = int(nc.group(1))
+        out["failed_calls" if final else "failed_attempts"] += 1
+        if final and scope == "consolidation":
+            out["consolidation_failed_calls"] += 1
+    return out
+
+
+def consolidation_caveat(instr: "dict[str, Any]") -> str:
+    """The report's stated caveat when any consolidation call exceeded the slot (decision-relevant evidence for K); empty otherwise."""
+    n = instr.get("hindsight_consolidation_prompt_tokens_max")
+    if not n:
+        return ""
+    slot = int(instr.get("n_ctx") or SLOT_TOKENS)
+    return (f"Hindsight consolidation does not fit the {slot:,}-token live slot (max {n:,} tokens): "
+            "K on the live context is failed by construction; only the 32k/12B reflection phase measures K")
+
+
+# ── the window ───────────────────────────────────────────────────────────────
+
 class Window:
     def __init__(self, cfg: Cfg, host: Host, log: "Callable[[str], None]", *, dry: bool = False, run_id: str = "",
                  measure_fn: "Optional[Callable[[Window], dict]]" = None):
@@ -449,6 +545,10 @@ class Window:
         self.unit_text = ""
         self.stopped_extra: "list[str]" = []        # the user units the reflection phase stopped (cfg.reflect_stop_units) and has not started again yet
         self.restore_status = "not needed"
+        self.pg_plan: "dict[str, Any]" = {}               # how step 1 will wipe the scratch database (decided in preflight, before anything is stopped)
+        self.pg_state: "dict[str, Any]" = {}              # what step 1 did: fresh / wiped_mb / kept
+        self.queue_at_open: "Optional[int]" = None        # Hindsight's pending + processing operations when the window opened
+        self.hs_started_epoch = 0.0                       # when this window started hindsight-api (its journal is read from here on: the unit name is reused by every window)
 
     # ── time and memory ──
     def elapsed_min(self) -> float:
@@ -673,6 +773,7 @@ class Window:
                           "reboot clears): " + found.out.strip()[-300:] + " - nothing was started")
         if self.host.run(["systemctl", "--user", "is-active", self.cfg.unit], mutating=False).out.strip() != "active":
             raise Refused(f"{self.cfg.unit} is not active: there is no live brain to take over. Nothing was started.")
+        self.pg_plan = self.plan_scratch_wipe()
         m = self.mem()
         if m < self.cfg.min_avail_mb:
             raise Refused(f"MemAvailable {m:.0f} MB < {self.cfg.min_avail_mb:.0f} MB: refusing to start")
@@ -708,6 +809,133 @@ class Window:
         self.log(f"preflight ok: lock {'free (dry-run: not taken)' if self.dry else 'held'}, MemAvailable {m:.0f} MB, {contig}, "
                  + (f"NOT quiet right now ({waiting})" if waiting else "panel quiet, no landing/bar"))
 
+    # ── the scratch database: always fresh ──
+    def wipe_operator_command(self) -> str:
+        cfg = self.cfg
+        return f"docker compose -f {cfg.compose} down -v && sudo find {cfg.pgdata} -mindepth 1 -delete"
+
+    def plan_scratch_wipe(self) -> "dict[str, Any]":
+        """Decide, in PREFLIGHT (nothing stopped yet), how step 1 will empty the root-owned data directory: ``sudo -n`` when it works, else a throwaway container over the bind mount from the
+        compose file's own image (or alpine) when docker has one locally; with neither, REFUSE with the operator command, before the live brain is touched."""
+        cfg = self.cfg
+        if cfg.keep_pg:
+            plan = {"how": "keep"}
+            self.log("scratch Postgres: BAKEOFF_KEEP_PG=1 - the previous window's Hindsight banks and queued jobs are KEPT; this window's results are CONFOUNDED (debugging only, never a verdict)")
+        elif cfg.pgdata.is_symlink():
+            raise Refused(f"{cfg.pgdata} is a symlink: refusing to wipe through it. Nothing was started.")
+        elif not self.host.exists(str(cfg.pgdata)):
+            plan = {"how": "none"}
+        elif self.sudo_ok():
+            plan = {"how": "sudo"}
+        else:
+            plan = {}
+            for img in (compose_image(self.host.read(str(cfg.compose))), "alpine"):
+                if img and self.host.run(["docker", "image", "inspect", img], timeout=20, mutating=False).rc == 0:
+                    plan = {"how": "docker", "image": img}
+                    break
+            if not plan:
+                raise Refused(f"the scratch Postgres data directory {cfg.pgdata} is root-owned, passwordless sudo is not available and docker has no local image to wipe it with: a stale database would "
+                              f"hand this window the previous window's Hindsight banks and their pending consolidation jobs (the 2026-10-08 confound). Run: {self.wipe_operator_command()} - then start "
+                              "the window again (or BAKEOFF_KEEP_PG=1 for a debugging run whose results are confounded). Nothing was stopped.")
+        self.log("preflight: scratch Postgres will be " + ("KEPT (BAKEOFF_KEEP_PG=1: confounded)" if plan["how"] == "keep" else
+                 "fresh: nothing to wipe (no data directory yet)" if plan["how"] == "none" else
+                 f"wiped fresh ({'sudo -n' if plan['how'] == 'sudo' else 'docker run ' + plan['image']})"))
+        return plan
+
+    def wipe_scratch_pg(self) -> None:
+        """Step 1: ``docker compose down -v`` (a still-running container from a crashed window dies first) and the data directory emptied. Logs ``scratch Postgres: fresh (wiped N MB)``."""
+        cfg, host = self.cfg, self.host
+        plan = self.pg_plan or self.plan_scratch_wipe()
+        pg = str(cfg.pgdata)
+        if plan["how"] == "keep":
+            self.log("scratch Postgres: KEPT (BAKEOFF_KEEP_PG=1) - NOT wiped. Every bank and queued job the previous window left is still in it: THIS WINDOW'S RESULTS ARE CONFOUNDED")
+            self.pg_state = {"fresh": False, "kept": True, "wiped_mb": 0}
+            if not self.dry:
+                cfg.pgdata.mkdir(parents=True, exist_ok=True)
+            return
+        down = host.run(["docker", "compose", "-f", str(cfg.compose), "down", "-v"], timeout=180)
+        if down.rc != 0:
+            self.log(f"scratch Postgres: `compose down -v` rc={down.rc}: {down.out.strip()[:160]} (continuing: the wipe below is what makes it fresh)")
+        mb: "Optional[int]" = 0
+        if plan["how"] == "sudo":
+            mb = first_int(host.run(["sudo", "-n", "du", "-sm", pg], timeout=120, mutating=False).out)
+            r = host.run(["sudo", "-n", "find", pg, "-mindepth", "1", "-delete"], timeout=300)
+            if r.rc != 0:
+                raise Aborted(f"could not empty the scratch Postgres data directory with sudo: {r.out.strip()[:200]}. Run: {self.wipe_operator_command()}")
+            left = "" if self.dry else host.run(["sudo", "-n", "find", pg, "-mindepth", "1", "-print", "-quit"], timeout=60, mutating=False).out.strip()
+            if left:
+                raise Aborted(f"the scratch Postgres data directory is not empty after the wipe ({left[:120]}): a stale bank would be a confound. Run: {self.wipe_operator_command()}")
+        elif plan["how"] == "docker":
+            r = host.run(["docker", "run", "--rm", "--entrypoint", "sh", "-v", f"{pg}:/d", plan["image"], "-c", "du -sm /d | cut -f1; find /d -mindepth 1 -delete"], timeout=300)
+            if r.rc != 0:
+                raise Aborted(f"could not empty the scratch Postgres data directory through docker: {r.out.strip()[:200]}. Run: {self.wipe_operator_command()}")
+            mb = first_int(r.out)
+        if not self.dry:
+            cfg.pgdata.mkdir(parents=True, exist_ok=True)
+        size = "size unknown in a dry run" if self.dry and plan["how"] == "docker" else f"wiped {mb if mb is not None else '?'} MB"
+        self.log(f"scratch Postgres: fresh ({size})")
+        self.pg_state = {"fresh": True, "kept": False, "wiped_mb": mb, "how": plan["how"]}
+
+    # ── Hindsight's job queue ──
+    def hindsight_queue(self) -> "tuple[Optional[int], str]":
+        """(operations the worker still has to do, a breakdown) from the scratch Postgres' ``async_operations``; the worker's own [WORKER_STATS] log line when the database cannot be read;
+        ``None`` when neither can (an unreadable queue is not an empty one)."""
+        host = self.host
+        r = host.run(["docker", "exec", PG_CONTAINER, "psql", "-X", "-At", "-U", "hindsight", "-d", "hindsight", "-c", PG_QUEUE_SQL], timeout=30, mutating=False)
+        rows = parse_queue_rows(r.out) if r.rc == 0 else None
+        if rows is not None:
+            return sum(rows.values()), (", ".join(f"{k}={v}" for k, v in sorted(rows.items())) or "none")
+        since = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.hs_started_epoch - 5))
+        j = host.run(["journalctl", "--user", "-u", UNITS["hindsight"], "--since", since, "--no-pager", "-o", "cat"], timeout=60, mutating=False)
+        st = parse_worker_stats(j.out) if j.rc == 0 else None
+        if st:
+            return st[0] + st[1], f"WORKER_STATS: {st[0]} in flight, {st[1]} globally pending (psql: {r.out.strip()[:80] or 'no output'})"
+        return None, f"neither psql ({r.rc}: {r.out.strip()[:80]}) nor the WORKER_STATS log could be read"
+
+    def require_quiet_hindsight(self) -> None:
+        """After hindsight-api is healthy and BEFORE step 6 opens the window: its job queue must be EMPTY (pending + processing = 0), polled for ``cfg.hs_quiet_wait_s``. A stale bank's worker resumes
+        its consolidation within a minute, against the clone's single slot: every arm measured afterwards would share the slot with it. Non-zero after the wait aborts, with the reason."""
+        cfg = self.cfg
+        if self.dry:
+            self.log(f"DRY-RUN: would require ZERO pending / processing operations in Hindsight's job queue (async_operations in {PG_CONTAINER}; fallback: the worker's [WORKER_STATS] log line) "
+                     f"for up to {cfg.hs_quiet_wait_s:.0f} s once it is healthy, before step 6 opens the window; non-zero after that = ABORT (a stale bank is a confound)")
+            return
+        t_end = self.host.mono() + cfg.hs_quiet_wait_s
+        while True:
+            self.guard()
+            n, detail = self.hindsight_queue()
+            if n == 0:
+                self.queue_at_open = 0
+                self.log(f"hindsight job queue: 0 pending/running operations ({detail}): clean start")
+                return
+            if self.host.mono() >= t_end:
+                self.queue_at_open = n
+                what = ("could not be read (" + detail + ")") if n is None else f"held {n} pending/running operation(s) ({detail})"
+                if cfg.keep_pg:
+                    self.log(f"hindsight job queue {what} after {cfg.hs_quiet_wait_s:.0f} s: BAKEOFF_KEEP_PG=1, so the window goes on - its results are CONFOUNDED by that work")
+                    return
+                raise Aborted(f"Hindsight's job queue {what} {cfg.hs_quiet_wait_s:.0f} s after it became healthy: a stale bank is a confound (its worker consolidates against the clone's single slot "
+                              "while every arm is measured). Step 1 should have wiped the scratch Postgres - see the log above; BAKEOFF_KEEP_PG=1 keeps it knowingly")
+            self.log(f"hindsight job queue: {n if n is not None else 'unreadable'} ({detail}); waiting")
+            self.host.sleep(5.0)
+
+    def collect_hindsight_instrument(self) -> "dict[str, Any]":
+        """``hindsight_consolidation_prompt_tokens_max`` from hindsight-api's log FOR THIS WINDOW (the transient unit's name is reused, so the journal is read from when this window started it)."""
+        instr: "dict[str, Any]" = {"hindsight_consolidation_prompt_tokens_max": None, "hindsight_prompt_tokens_max_any_scope": None, "hindsight_consolidation_failed_calls": 0,
+                                   "hindsight_failed_attempts": 0, "n_ctx": None, "log_readable": False}
+        if self.dry:
+            return instr
+        since = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime((self.hs_started_epoch or self.t0_epoch) - 5))
+        r = self.host.run(["journalctl", "--user", "-u", UNITS["hindsight"], "--since", since, "--no-pager", "-o", "cat"], timeout=120, mutating=False)
+        if r.rc != 0:
+            instr["log_note"] = f"journalctl rc={r.rc}: {r.out.strip()[:120]}"
+            return instr
+        p = parse_consolidation_prompt_tokens(r.out)
+        instr.update({"hindsight_consolidation_prompt_tokens_max": p["consolidation_max"], "hindsight_prompt_tokens_max_any_scope": p["any_max"],
+                      "hindsight_consolidation_failed_calls": p["consolidation_failed_calls"], "hindsight_failed_calls": p["failed_calls"],
+                      "hindsight_failed_attempts": p["failed_attempts"], "n_ctx": p["n_ctx"], "log_readable": True})
+        return instr
+
     # ── open the window ──
     def wait_http(self, url: str, what: str, timeout_s: float, contains: str = "") -> None:
         t_end = self.host.mono() + timeout_s
@@ -740,10 +968,10 @@ class Window:
         env_path = cfg.bakeoff_dir / f"hindsight-{self.run_id}.env"
         if not self.dry:
             env_path.write_text(env_text)
-            (cfg.bakeoff_dir / "pgdata").mkdir(parents=True, exist_ok=True)
             cfg.marker.write_text(json.dumps({"pid": os.getpid(), "run_id": self.run_id, "started": dt.datetime.now().isoformat()}))
         self.opened = True                       # from here on, restore is mandatory
-        self.log("step 1/6 scratch Postgres (256 MB cap, loopback :%d)" % cfg.pg_port)
+        self.log("step 1/6 scratch Postgres (256 MB cap, loopback :%d), always started FRESH (down -v + the data directory emptied)" % cfg.pg_port)
+        self.wipe_scratch_pg()
         if host.run(["docker", "compose", "-f", str(cfg.compose), "up", "-d"], timeout=180).rc != 0:
             raise Aborted("scratch Postgres did not start")
         self.started.append(PG_CONTAINER)
@@ -782,10 +1010,12 @@ class Window:
             self.start_unit("clone", self.clone["argv"], env=self.clone["env"], props=self.clone["props"])
             self.wait_http(f"http://127.0.0.1:{cfg.clone_port}/health", "the Gemma clone", max(cfg.health_wait_s, 240.0), contains="ok")
         self.log("step 5/6 hindsight-api (loopback :%d, egress audit hook on)" % cfg.hs_port)
+        self.hs_started_epoch = host.now()
         self.start_unit("hindsight", [str(cfg.hs_bin)], props={"EnvironmentFile": str(env_path), "MemoryMax": "1536M", "MemorySwapMax": "0"},
                         env={"HOME": str(cfg.bakeoff_dir / "hs-home")})
         self.wait_http(f"http://127.0.0.1:{cfg.hs_port}/health", "hindsight-api", max(cfg.health_wait_s, 300.0))   # first start runs the alembic migrations
         self.check_egress_hook(cfg.bakeoff_dir / f"egress-{self.run_id}.log")
+        self.require_quiet_hindsight()
         self.log("step 6/6 window open at %.1f min; MemAvailable %.0f MB" % (self.elapsed_min(), self.mem()))
 
     def swap_clone(self, spec: "dict[str, Any]", what: str, wait_s: float) -> None:
