@@ -1305,7 +1305,7 @@
         function endSeek() {
             if (!S.seeking) return;
             S.seeking = false;
-            haService('media_seek', { seek_position: Math.round(S.currentTime) });
+            maSeek(Math.round(S.currentTime));
         }
 
         track.addEventListener('mousedown', e => {
@@ -1334,7 +1334,7 @@
         if (sendToDevice) {
             clearTimeout(S.volumeTimer);
             S.volumeTimer = setTimeout(() => {
-                haService('volume_set', { volume_level: val / 100 });
+                maControl('volume_set', Math.round(val));   // MA volume_level is 0–100
             }, 300);
         }
     }
@@ -1345,52 +1345,57 @@
     function playPause() {
         const playing = document.getElementById('playPauseBtn').dataset.playing === '1';
         if (playing) {
-            haService('media_pause');
+            maControl('pause');
             S.playerState = 'paused';
             clearInterval(S.tickTimer);
         } else {
-            haService('media_play');
+            maControl('play');
             S.playerState = 'playing';
             tickStart();
         }
         updatePlayPause(!playing);
     }
 
-    function prevTrack() { haService('media_previous_track'); }
-    function nextTrack() { haService('media_next_track'); }
+    function prevTrack() { maControl('previous'); }
+    function nextTrack() { maControl('next'); }
 
     function toggleShuffle() {
         S.shuffle = !S.shuffle;
         document.getElementById('shuffleBtn').classList.toggle('active', S.shuffle);
-        haService('shuffle_set', { shuffle: S.shuffle });
+        maControl('shuffle_set', !!S.shuffle);
     }
 
     function toggleRepeat() {
         S.repeat = !S.repeat;
         document.getElementById('repeatBtn').classList.toggle('active', S.repeat);
-        haService('repeat_set', { repeat: S.repeat ? 'all' : 'off' });
+        maControl('repeat_set', S.repeat ? 'all' : 'off');
     }
 
-    /* ── HA bridge ───────────────────────────────────────────────────────── */
-    function activeEntityId() {
-        if (!S.activeId && S.players.length) S.activeId = S.players[0].player_id || S.players[0].id;
-        const p = S.players.find(x => (x.player_id || x.id) === S.activeId);
-        return p?.entity_id || (S.activeId ? `media_player.${S.activeId}` : null);
-    }
-
-    async function haService(service, extra) {
-        const eid = activeEntityId();
+    /* ── Transport: Music Assistant's own routes ─────────────────────────────
+       Players here are MA players (RINCON_…, the AirPlay panel…), not HA entities, so
+       transport goes through /api/music/control|seek|queue/clear with the MA player_id —
+       never a fabricated media_player.<id> on the HA route (2026-10-09). The backend
+       wakes a reaped MA on these calls. */
+    async function maPost(path, body) {
         try {
-            await fetch('/api/ha/service', {
-                method: 'POST',
-                headers: zoeHdrs(),
-                body: JSON.stringify({
-                    domain: 'media_player',
-                    service,
-                    data: { ...(eid ? { entity_id: eid } : {}), ...extra }
-                })
-            });
-        } catch {}
+            await fetch(path, { method: 'POST', headers: zoeHdrs(), body: JSON.stringify(body) });
+        } catch (e) {
+            console.warn('music control failed', path, e);
+        }
+    }
+    function maControl(action, value) {
+        if (!S.activeId) return Promise.resolve();
+        const body = { action, player_id: S.activeId };
+        if (value !== undefined) body.value = value;
+        return maPost('/api/music/control', body);
+    }
+    function maSeek(seconds) {
+        if (!S.activeId) return Promise.resolve();
+        return maPost('/api/music/seek', { position_seconds: seconds, player_id: S.activeId });
+    }
+    function maQueueClear() {
+        if (!S.activeId) return Promise.resolve();
+        return maPost('/api/music/queue/clear', { queue_id: S.activeId });
     }
 
     /* ── Source selector ─────────────────────────────────────────────────── */
@@ -1406,7 +1411,7 @@
     /* ── Queue clear ─────────────────────────────────────────────────────── */
     async function clearQueue() {
         if (!S.activeId) return;
-        haService('clear_playlist');
+        maQueueClear();
         S.queue = [];
         renderQueue([]);
     }

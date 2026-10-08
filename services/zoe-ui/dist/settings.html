@@ -2207,8 +2207,8 @@ async function loadTouchPanels() {
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
           <button class="btn btn-ghost btn-sm" onclick="panelSSHTest('${escHtml(p.panel_id)}')">SSH Test</button>
-          <button class="btn btn-ghost btn-sm" onclick="panelRestart('${escHtml(p.panel_id)}')">Restart Kiosk</button>
-          <button class="btn btn-ghost btn-sm" onclick="panelLogs('${escHtml(p.panel_id)}')">Logs</button>
+          <!-- Restart/Logs removed 2026-10-09: they posted to an endpoint that has never existed
+               (panel_ssh_exec is an MCP tool with no HTTP path) — ssh to the panel instead. -->
         </div>
       </div>`;
     }).join('');
@@ -2224,24 +2224,6 @@ async function panelSSHTest(panelId) {
     const ok = data.ssh_reachable;
     toast(`SSH to ${panelId}: ${ok ? '✅ reachable' : '❌ unreachable'}`, ok ? 'success' : 'error');
   } catch (e) { toast('SSH test failed: ' + e.message, 'error'); }
-}
-
-async function panelRestart(panelId) {
-  if (!confirm(`Restart the kiosk service on ${panelId}?`)) return;
-  try {
-    toast(`Restarting kiosk on ${panelId}…`, 'info');
-    await apiCall('POST', '/api/tools/call', { name: 'panel_ssh_exec', arguments: { panel_id: panelId, command: 'sudo systemctl restart zoe-kiosk' } });
-    toast('Kiosk restarted', 'success');
-  } catch (e) { toast('Restart failed: ' + e.message, 'error'); }
-}
-
-async function panelLogs(panelId) {
-  try {
-    toast(`Fetching logs from ${panelId}…`, 'info');
-    const r = await apiCall('POST', '/api/tools/call', { name: 'panel_ssh_exec', arguments: { panel_id: panelId, command: 'journalctl -u zoe-kiosk -n 40 --no-pager' } });
-    const logs = (r.result && r.result.stdout) || JSON.stringify(r);
-    alert(`Logs from ${panelId}:\n\n${logs.substring(0, 3000)}`);
-  } catch (e) { toast('Failed to fetch logs: ' + e.message, 'error'); }
 }
 
 async function confirmPanelCode() {

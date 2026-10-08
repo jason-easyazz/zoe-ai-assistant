@@ -87,14 +87,7 @@ function initOrbChat() {
     console.log('✅ Zoe orb initialized');
     
     // Pre-warm Hermes session for this orb so the first message is fast.
-    if (_getOrbSessionId()) {
-        var session = window.zoeAuth ? window.zoeAuth.getCurrentSession() : null;
-        var warmHeaders = { 'Content-Type': 'application/json' };
-        if (session && session.session_id) warmHeaders['X-Session-ID'] = session.session_id;
-        fetch('/api/chat/warm/' + encodeURIComponent(_getOrbSessionId()), {
-            method: 'POST', headers: warmHeaders
-        }).catch(function() {});
-    }
+    // (the chat warm-up POST was removed 2026-10-09 — its route never existed)
 
     // Initialize intelligence WebSocket
     initIntelligenceWS();
