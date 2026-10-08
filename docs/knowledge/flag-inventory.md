@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-542 flags; 540 not documented in `.env.example`.
+543 flags; 541 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -129,7 +129,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_DIGARR_PASSWORD` | `''` | no | NO | `scripts/maintenance/music_discovery_batch.py` |
 | `ZOE_DIGARR_PORT` | `'3199'` | no | NO | `scripts/maintenance/music_discovery_batch.py` |
 | `ZOE_DIGARR_USER` | `'zoe'` | no | NO | `scripts/maintenance/music_discovery_batch.py` |
-| `ZOE_DIGEST_LLM_TIMEOUT_SCALE` | `'1'` | no | NO | `scripts/night/jobs/night_digest.py`<br>`services/zoe-data/memory_digest.py` |
+| `ZOE_DIGEST_LLM_TIMEOUT_SCALE` | `'1'`, `1.0` | yes | NO | `scripts/night/jobs/night_digest.py`<br>`services/zoe-data/memory_digest.py` |
 | `ZOE_DISCOVERY_DEFAULT_MOOD` | `''` | no | NO | `scripts/maintenance/music_discovery_batch.py` |
 | `ZOE_DISCOVERY_MAX_USERS` | `'4'` | no | NO | `scripts/maintenance/music_discovery_batch.py` |
 | `ZOE_DISCOVERY_MIN_FREE_MB` | `'1500'` | no | NO | `scripts/maintenance/music_discovery_batch.py` |

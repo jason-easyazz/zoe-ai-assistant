@@ -24,6 +24,7 @@ import memory_authority
 import own_words
 from memory_overlap import dedup_verdict, richness
 from routers.journal import CREATED_AT_VALID_TIMESTAMP_SQL
+from typed_env import env_float
 from user_filters import GUEST_USERS, drop_synthetic_users, message_owner_expr
 
 logger = logging.getLogger(__name__)
@@ -55,12 +56,10 @@ def _llm_timeout(seconds: float) -> float:
     The nightly passes were sized for the 4B (about 8 tok/s: a 500-token reply is about 62 s against a 45 s
     timeout, already marginal). The 12B night window (``scripts/night/``) serves the same passes from a model
     that decodes several times slower and sets the scale for ITS processes only; the live service never does.
-    Read at call time so a test or a runner can set it after import. An unparsable or non-positive value is 1.0.
+    Read at call time so a test or a runner can set it after import. An unparsable value is 1.0 (with typed_env's one
+    journal warning); a non-positive one is 1.0 too.
     """
-    try:
-        scale = float(os.environ.get("ZOE_DIGEST_LLM_TIMEOUT_SCALE", "1") or 1)
-    except ValueError:
-        scale = 1.0
+    scale = env_float("ZOE_DIGEST_LLM_TIMEOUT_SCALE", 1.0)
     return seconds * (scale if scale > 0 else 1.0)
 
 

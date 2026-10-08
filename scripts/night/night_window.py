@@ -839,8 +839,23 @@ class NightWindow(bk.Window):
         if self.dry:
             return {}
         payload = json.dumps({"model": "local", "messages": [{"role": "user", "content": speed_prompt()}], "max_tokens": 96, "temperature": 0, "stream": False})
-        r = self.host.run(["curl", "-sf", "-m", "900", "-H", "Content-Type: application/json", "-d", payload, f"http://127.0.0.1:{self.cfg.port}/v1/chat/completions"], timeout=910, mutating=False)
-        d = _json(r.out)
+        # Watched, not a bare blocking call: the memory floor and the hard cap are checked every poll, and the request is bounded by the time left before the restore
+        # reserve (a stuck or RAM-hungry first request must never keep Zoe's brain down past the cap).
+        left = self.time_left_s()
+        if left < 60:
+            self.event(f"speed {label}: probe skipped - no time left ({left:.0f}s before the restore reserve)")
+            return {}
+        budget = min(900.0, left)
+        log_path = self.cfg.night_dir / "logs" / f"{self.run_id}-speed-{label.replace('@', '-')}.log"
+        if log_path.exists():
+            log_path.unlink()
+        r = self.host.run_watched(["curl", "-sf", "-m", f"{budget:.0f}", "-H", "Content-Type: application/json", "-d", payload, f"http://127.0.0.1:{self.cfg.port}/v1/chat/completions"],
+                                  budget + 10.0, None, self.guard, log_path, self.cfg.metrics_poll_s)
+        try:
+            body = self.host.read(str(log_path))
+        finally:
+            log_path.unlink(missing_ok=True)                    # the probe's reply is synthetic text, but nothing needs to keep it
+        d = _json(body)
         t, u = d.get("timings") or {}, d.get("usage") or {}
         out = {"label": label, "prompt_tokens": u.get("prompt_tokens"), "completion_tokens": u.get("completion_tokens"),
                "prefill_tps": round(float(t["prompt_per_second"]), 1) if t.get("prompt_per_second") else None,
@@ -943,7 +958,7 @@ class NightWindow(bk.Window):
             return rec
         left = self.time_left_s() if backend == "12B" else (self.cfg.blackout_list[0][0] - self.minutes_now()) * 60.0     # a 4B fallback must end before the voice gate
         if left < 120:
-            rec.update(status="skipped", notes=[f"no time left ({left:.0f}s before the restore reserve)"])
+            rec.update(status="no time", notes=[f"no time left ({left:.0f}s before the restore reserve)"])      # NOT "skipped": a requested job that never ran is unfinished work (exit 5 unless the 4B covered it)
             self.event(f"job {job.name}: skipped - no time left")
             return rec
         timeout = min(job.timeout_s, left)
@@ -1053,6 +1068,7 @@ class NightWindow(bk.Window):
             self.rec["trial"] = self.trial_results
             if failed:
                 raise failed
+            self.raise_if_empty_trial()
             return
         self.event("trial: unloading the 12B, loading the live 4B at --ctx-size 32768 on the same port")
         self.unload_llm()
@@ -1068,6 +1084,9 @@ class NightWindow(bk.Window):
         self.rec["trial"] = self.trial_results
         if failed:
             raise failed
+        self.raise_if_empty_trial()
+
+    def raise_if_empty_trial(self) -> None:
         empty = [k for k, t in self.trial_results.items() if t.get("error")]
         if empty:                                              # the box is fine, the measurement is not: say so in the outcome and the exit code (the restore still runs)
             raise Aborted("trial phase(s) without a result: " + ", ".join(f"{k} ({self.trial_results[k]['error'][:80]})" for k in empty))
@@ -1220,6 +1239,16 @@ class NightWindow(bk.Window):
             comp = JobSpec("index_compaction", [cfg.py, str(REPO / "scripts" / "maintenance" / "zoe-nightly-dreaming.py"), "--only-compaction"], cfg.job_timeout_s["compaction"])
             self.exec_job(comp, "4B", cfg.live_health_port, "", 1)
 
+    def fallback_clearance(self) -> str:
+        """A refused window may still run the night's jobs on the live 4B, but ONLY with the same guarantees as a real window: the brain-window lock is ours (a landing, the
+        samantha bar, the bake-off or another window may hold it), the nightly timer jobs / LoRA training are not running, and the panel is quiet. '' when clear, else why not."""
+        if self.lock_fd is None:
+            try:
+                self.take_lock()
+            except Refused as exc:
+                return f"the brain-window lock is held by someone else ({exc})"
+        return self.busy_now() or self.busy_reason()
+
     # ── the run ──
     def run(self) -> int:
         if self.dry:
@@ -1255,7 +1284,12 @@ class NightWindow(bk.Window):
             if self.opened or self.stopped:
                 restored = self.restore()
             elif self.cfg.fallback_4b and self.mode == "night" and self.fallback_allowed:
-                self.restore_ok = True                              # nothing was stopped: the fallbacks below may still run
+                why = self.fallback_clearance()
+                if why:
+                    self.event(f"no 4B fallback jobs: {why}")
+                    self.rec["notes"].append(f"no 4B fallback jobs: {why}")
+                else:
+                    self.restore_ok = True                          # nothing was stopped, the lock is ours and the box is idle: the fallbacks below may run
             if not restored:
                 rc = EXIT_RESTORE_FAILED
             try:
@@ -1484,15 +1518,28 @@ def main(argv: "Optional[list[str]]" = None, host_factory: "Optional[Callable[[C
     host = make_host(log)
     w = NightWindow(cfg, host, log, dry=args.dry_run, run_id=stamp, mode=mode)
     if args.restore_only:
-        if not w.load_marker():
-            log("restore-only: no marker file, so this tool has stopped nothing; stopping any leftover night units only")
-        elif w.marker_owner_alive:
-            log("restore-only: the window that wrote the marker is still running and will wake everything itself; doing nothing")
-            return EXIT_OK
-        return EXIT_OK if w.restore() else EXIT_RESTORE_FAILED
+        if not args.dry_run:
+            try:
+                w.take_lock()                  # BEFORE the marker is read, and held through the restore: two recoveries (or a recovery and a new window) must never overlap
+            except Refused as exc:
+                log(f"restore-only: {exc}; a window (or another recovery) holds the brain lock and owns the wake-up, so this one does nothing")
+                return EXIT_REFUSED
+        try:
+            return restore_only(w, log)
+        finally:
+            w.release_lock()
     log(("DRY-RUN " if args.dry_run else "") + f"night window {stamp} ({mode}): cap {cfg.cap_min:.0f} min, end by {cfg.end_by // 60:02d}:{cfg.end_by % 60:02d}, "
         f"jobs {','.join(cfg.jobs) or '-'}, zoe-data {'stopped' if cfg.stop_zoe_data else 'kept up'}")
     return w.run()
+
+
+def restore_only(w: NightWindow, log: "Callable[[str], None]") -> int:
+    if not w.load_marker():
+        log("restore-only: no marker file, so this tool has stopped nothing; stopping any leftover night units only")
+    elif w.marker_owner_alive:
+        log("restore-only: the window that wrote the marker is still running and will wake everything itself; doing nothing")
+        return EXIT_OK
+    return EXIT_OK if w.restore() else EXIT_RESTORE_FAILED
 
 
 if __name__ == "__main__":

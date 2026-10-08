@@ -99,7 +99,7 @@ class FakeHost(nw.NightHost):
     """Answers every command the window issues. State: which units are active, which are healthy, whether the 12B / the clone is up, the memory arithmetic."""
 
     def __init__(self, tmp: Path, *, start=None, base=1200.0, freed=1.0, sudo=True, active=None, unhealthy=(), job_rc=None, job_s=600.0, fail_run=(), models=None, busy=(),
-                 panel_busy=False, llm_cost=7500.0, free_gap=0.0, gap_heal=0.0, llm_dies=False, boot_id="boot-1", nvmap_mib=12000.0):
+                 panel_busy=False, llm_cost=7500.0, free_gap=0.0, gap_heal=0.0, llm_dies=False, boot_id="boot-1", nvmap_mib=12000.0, trial_no_output=False, probe_hang_drop=0.0):
         self.t = start if start is not None else at(2, 50)
         self.cmds: "list[tuple[list[str], bool]]" = []
         self.tmp = tmp
@@ -115,6 +115,7 @@ class FakeHost(nw.NightHost):
         self.sizes = {f"{HOME}/models/gemma4-12b-qat/gemma-4-12b-it-qat-q4_0.gguf": QAT, f"{HOME}/models/gemma4-12b/gemma-4-12B-it-Q4_K_M.gguf": Q4KM} if models is None else models
         self.present: "set[str]" = {"/home/zoe/llama.cpp/build-jetson-new/bin/llama-server"}
         self.jobs_run: "list[dict]" = []
+        self.watched_timeouts: "list[float]" = []
         self.job_mem_drop = 0.0
         self.tokens = 0
         self.buddy = HEALTHY_BUDDY
@@ -122,6 +123,7 @@ class FakeHost(nw.NightHost):
         self.log = lambda _m: None
         self.dry = False
         self.llm_dies, self.boot_id, self.nvmap_mib = llm_dies, boot_id, nvmap_mib
+        self.trial_no_output, self.probe_hang_drop = trial_no_output, probe_hang_drop
         self.free_gap, self.gap_heal = free_gap, gap_heal          # MemFree = MemAvailable - gap (page cache that is 'available' but not FREE); each compaction heals gap_heal of it
 
     def mem_field_mb(self, path, name):
@@ -254,6 +256,16 @@ class FakeHost(nw.NightHost):
         return 32768
 
     def run_watched(self, argv, timeout, env, tick, log_path, interval=5.0):
+        if argv[0] == "curl":                                       # the speed probe: a watched curl whose reply lands in the log file
+            self.cmds.append((list(argv), False))
+            self.watched_timeouts.append(timeout)
+            if self.probe_hang_drop:
+                self.base -= self.probe_hang_drop                   # a stuck / RAM-hungry first request: memory falls while it blocks
+            tick()
+            res = self.run(argv, mutating=False)
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_text(res.out)
+            return bk.Result(res.rc, "")
         name = os.path.basename(argv[1]) if len(argv) > 1 else argv[0]
         self.cmds.append((list(argv), True))
         self.in_job = True
@@ -269,7 +281,7 @@ class FakeHost(nw.NightHost):
             rc = rc.pop(0) if len(rc) > 1 else rc[0]
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text(f"NIGHT_JOB {name} ok\nsecret household text that must stay out of the report\n")
-        if "--out" in argv:                         # the trial driver
+        if "--out" in argv and not self.trial_no_output:            # the trial driver
             label = argv[argv.index("--model-name") + 1]
             Path(argv[argv.index("--out") + 1]).write_text(json.dumps({"reflect": {"k_cells": [
                 {"id": "K1.a", "verdict": "PASS", "evidence": {"items": [4, 4]}}, {"id": "K2.a", "verdict": "FAIL" if label == "4B@32k" else "PASS", "evidence": {"items": [2, 4]}}],
@@ -619,10 +631,63 @@ def test_the_hard_cap_keeps_a_late_job_from_starting_and_the_wake_still_happens(
     w.run()
     assert wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]
     on12 = [j for j in w.jobs if j["backend"] == "12B"]
-    assert on12[0]["status"] == "ok" and on12[1]["status"] == "skipped" and "no time left" in on12[1]["notes"][0]          # 52 min used: dreaming could not start inside the cap
+    assert on12[0]["status"] == "ok" and on12[1]["status"] == "no time" and "no time left" in on12[1]["notes"][0]          # 52 min used: dreaming could not start inside the cap
     for j in host.jobs_run:                                                                                            # and every 4B fallback is bounded by the voice gate
         if j["env"]["GEMMA_SERVER_URL"].endswith(":11434/v1"):
             assert j["timeout"] <= (250 - (time.localtime(j["t"]).tm_hour * 60 + time.localtime(j["t"]).tm_min)) * 60 + 60
+
+
+def test_a_requested_job_that_never_ran_for_lack_of_time_is_not_a_success(tmp_path):
+    """Greptile 1929: 'no time left' shared the status of the intentionally absent night-mind script, and the final check accepted both: --no-fallback + a slow digest exited 0 with dreaming unrun."""
+    w, host, _ = make(tmp_path, argv=["--no-fallback"], job_s=52 * 60.0)
+    assert w.run() == nw.EXIT_JOBS_FAILED
+    assert [j["status"] for j in w.jobs if j["backend"] == "12B"][:2] == ["ok", "no time"]
+    w2, _, _ = make(tmp_path, job_s=60.0)
+    assert w2.run() == nw.EXIT_OK and any(j["name"] == "night_mind" and j["status"] == "skipped" for j in w2.jobs)        # the absent optional script stays a plain skip
+
+
+def test_a_refused_window_runs_no_fallback_job_without_the_lock_or_while_the_box_is_busy(tmp_path):
+    """Greptile 1929: a refusal (lock held, nightly job / training running) still set restore_ok and ran dreaming on the live 4B WITHOUT owning the lock or idle checks."""
+    w, host, cfg = make(tmp_path)
+    fd = os.open(cfg.lock_path, os.O_CREAT | os.O_RDWR, 0o666)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        assert w.run() == nw.EXIT_REFUSED
+    finally:
+        os.close(fd)
+    assert host.jobs_run == [] and stopped_nothing(host) and any("lock is held" in n for n in w.rec["notes"])
+    (tmp_path / "b").mkdir()
+    w2, host2, cfg2 = make(tmp_path / "b")
+    host2.files[cfg2.training_lock] = str(os.getpid())                                      # LoRA training holds its lock (this pid is alive)
+    host2.present.add(f"/proc/{os.getpid()}")
+    assert w2.run() == nw.EXIT_REFUSED and host2.jobs_run == [] and w2.lock_fd is None
+    (tmp_path / "c").mkdir()
+    w3, host3, _ = make(tmp_path / "c", panel_busy=True)
+    w3.cfg.max_load_failures = 0                                                            # the load-failure breaker refuses; the panel is mid-conversation: no fallback either
+    assert w3.run() == nw.EXIT_REFUSED and host3.jobs_run == []
+    (tmp_path / "d").mkdir()
+    w4, host4, _ = make(tmp_path / "d")
+    w4.cfg.max_load_failures = 0                                                            # same refusal, idle box, lock free: the 4B fallback is still wanted, and it runs under the lock
+    assert w4.run() == nw.EXIT_REFUSED and {j["name"] for j in host4.jobs_run} >= {"zoe-nightly-dreaming.py"} and w4.lock_fd is None
+
+
+def test_the_speed_probe_is_watched_so_a_stuck_first_request_cannot_keep_the_brain_down(tmp_path):
+    """Greptile 1929: probe_speed blocked in Host.run for up to 900 s with no memory-floor or cap check."""
+    w, host, _ = make(tmp_path, probe_hang_drop=9000.0)
+    assert w.run() == nw.EXIT_ABORTED and "floor" in w.outcome
+    assert host.watched_timeouts and wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA] and not any(j["env"]["GEMMA_SERVER_URL"].endswith(":11500/v1") for j in host.jobs_run)
+    (tmp_path / "b").mkdir()
+    w2, host2, _ = make(tmp_path / "b")
+    w2.cap_min = 40.0
+    host2.t += (40 - w2.cfg.reserve_min) * 60.0 - 600.0                                      # 600 s left before the restore reserve
+    assert w2.probe_speed("12B")["decode_tps"] == 4.2
+    curl = next(a for a, _m in host2.cmds if a[0] == "curl" and a[-1].endswith("/v1/chat/completions"))
+    assert int(curl[curl.index("-m") + 1]) == 600 and host2.watched_timeouts[0] == pytest.approx(610.0)        # bounded by the time left, not a flat 900 s
+    (tmp_path / "c").mkdir()
+    w3, host3, _ = make(tmp_path / "c")
+    w3.cap_min = 40.0
+    host3.t += 40 * 60.0 - 30                                                                # nothing left before the restore reserve: no probe at all
+    assert w3.probe_speed("12B") == {} and not host3.watched_timeouts
 
 
 def test_any_exception_still_restores_everything(tmp_path):
@@ -802,6 +867,21 @@ def test_restore_only_wakes_exactly_what_the_marker_lists_in_the_owners_order(tm
     assert not w2.load_marker() and w2.restore() is True and wake_order(host2) == []
 
 
+def test_a_restore_only_takes_the_brain_lock_first_so_two_recoveries_never_overlap(tmp_path):
+    """Greptile 1929: --restore-only read the marker and restored without the lock; two recoveries (or a recovery and a new window) could overlap."""
+    w, host, cfg = make(tmp_path, argv=["--restore-only"], active={u: False for u in nw.STOP_ORDER})
+    host.files[str(cfg.marker)] = json.dumps({"pid": 1, "run_id": "x", "stopped": [nw.BRAIN]})
+    fd = os.open(cfg.lock_path, os.O_CREAT | os.O_RDWR, 0o666)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)                                           # another recovery / a window is running
+    try:
+        assert nw.main(["--restore-only", "--night-dir", str(cfg.night_dir)], host_factory=lambda lg: host, cfg=cfg) == nw.EXIT_REFUSED
+    finally:
+        os.close(fd)
+    assert wake_order(host) == []                                                           # it woke nothing
+    assert nw.main(["--restore-only", "--night-dir", str(cfg.night_dir)], host_factory=lambda lg: host, cfg=cfg) == nw.EXIT_OK and wake_order(host) == [nw.BRAIN]
+    assert w.probe_lock()                                                                   # and it released the lock afterwards
+
+
 def test_a_restore_only_never_races_a_window_that_is_still_running(tmp_path):
     """2026-10-09: a second start was refused (the lock was held), its shell trap ran --restore-only on the FIRST window's marker, and the two restores raced into a false ALARM."""
     w, host, cfg = make(tmp_path, argv=["--restore-only"], active={u: False for u in nw.STOP_ORDER})
@@ -902,6 +982,9 @@ def test_skip_4b_ends_an_exploratory_trial_after_the_12b_phase_and_still_restore
     assert not any("zoe-night-4b32k" in c for c in host.joined() if c.startswith("systemd-run")) and wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]
     w2, host2, _ = make(tmp_path, argv=["--trial", "--skip-4b"], start=at(3, 5))
     assert w2.run() == nw.EXIT_OK and "4B@32k" not in w2.rec["trial"] and w2.rec["trial"]["12B"]["pass"] == 2
+    (tmp_path / "e").mkdir()
+    w3, host3, _ = make(tmp_path / "e", argv=["--trial", "--skip-4b"], start=at(3, 5), trial_no_output=True)        # Greptile 1929: the driver wrote nothing; the early return reported ok
+    assert w3.run() == nw.EXIT_ABORTED and "without a result" in w3.outcome and wake_order(host3) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]
 
 
 def test_a_trial_is_refused_across_03_00_because_it_has_no_digest_job_to_cover_the_skipped_loop(tmp_path):
@@ -961,6 +1044,48 @@ def test_the_installer_adds_two_units_absorbs_dreaming_and_the_uninstaller_undoe
     un = subprocess.run(["bash", script, "--uninstall"], capture_output=True, text=True, env=env, timeout=60)
     assert un.returncode == 0 and list((tmp_path / "units").iterdir()) == [] and not (tmp_path / "nd" / "INSTALLED").exists()
     assert "enable --now zoe-dreaming.timer" in (tmp_path / "calls").read_text().split("disable --now zoe-night-window.timer")[1]
+
+
+def _stateful_systemctl(tmp_path, fail_enable_window=False):
+    """A systemctl double that remembers zoe-dreaming.timer's state in a file (enable/disable change it), so a sequence of installs can be played."""
+    state = tmp_path / "dreaming.state"
+    state.write_text("enabled\n")
+    shim = tmp_path / "systemctl"
+    shim.write_text(textwrap.dedent(f"""\
+        #!/bin/bash
+        echo "systemctl $*" >> {tmp_path}/calls
+        case "$*" in
+          *"is-enabled zoe-dreaming.timer"*) cat {state};;
+          *"disable --now zoe-dreaming.timer"*) echo disabled > {state};;
+          *"enable --now zoe-dreaming.timer"*) echo enabled > {state};;
+          *"enable --now zoe-night-window.timer"*) {"exit 1" if fail_enable_window else "exit 0"};;
+          *"is-enabled"*) echo disabled; exit 1;;
+        esac
+        exit 0
+        """))
+    shim.chmod(0o755)
+    env = {**os.environ, "NIGHT_SYSTEMCTL": str(shim), "NIGHT_UNIT_DIR": str(tmp_path / "units"), "NIGHT_DIR": str(tmp_path / "nd"), "HOME": str(tmp_path)}
+    return env, state
+
+
+def test_reinstalling_keeps_the_original_dreaming_state_so_uninstall_still_restores_it(tmp_path):
+    """Greptile 1929: the second install saw the timer already disabled and recorded dreaming_timer_was=disabled; uninstall then left neither nightly schedule running."""
+    env, state = _stateful_systemctl(tmp_path)
+    script = str(REPO / "scripts/night/install_night_window.sh")
+    for _ in range(2):
+        assert subprocess.run(["bash", script], capture_output=True, text=True, env=env, timeout=60).returncode == 0
+    assert state.read_text().strip() == "disabled" and "dreaming_timer_was=enabled" in (tmp_path / "nd" / "INSTALLED").read_text()
+    assert subprocess.run(["bash", script, "--uninstall"], capture_output=True, text=True, env=env, timeout=60).returncode == 0
+    assert state.read_text().strip() == "enabled"                                              # the dreaming timer is back
+
+
+def test_a_failed_install_rolls_dreaming_back_and_leaves_a_record_for_uninstall(tmp_path):
+    """Greptile 1929: disable-dreaming ran before the record was saved; a failing enable of the window timer then lost the night schedule with no way to restore it."""
+    env, state = _stateful_systemctl(tmp_path, fail_enable_window=True)
+    script = str(REPO / "scripts/night/install_night_window.sh")
+    r = subprocess.run(["bash", script], capture_output=True, text=True, env=env, timeout=60)
+    assert r.returncode != 0 and state.read_text().strip() == "enabled"                        # rolled back: dreaming still runs tonight
+    assert "dreaming_timer_was=enabled" in (tmp_path / "nd" / "INSTALLED").read_text()         # and the record was saved before anything was flipped
 
 
 def test_the_wrapper_is_shell_clean_and_has_the_restore_net():

@@ -1144,14 +1144,15 @@
       },
       "ZOE_DIGEST_LLM_TIMEOUT_SCALE": {
         "defaults": [
-          "'1'"
+          "'1'",
+          "1.0"
         ],
         "in_env_example": false,
         "readers": [
           "scripts/night/jobs/night_digest.py",
           "services/zoe-data/memory_digest.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_DISCOVERY_DEFAULT_MOOD": {
         "defaults": [
