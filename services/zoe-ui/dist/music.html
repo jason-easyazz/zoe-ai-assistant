@@ -970,7 +970,36 @@
         finally { clearTimeout(t); }
     }
 
-    /* ── WebSocket ───────────────────────────────────────────────────────── */
+    /* ── Backend view of MA ─────────────────────────────────────────────
+       The ONLY authority on whether Music Assistant is up. ZOE_MA_IDLE_REAP stops MA
+       when idle and reads never wake it, so "down" is the designed state most of the
+       day; the MA socket 502s through nginx the whole time. */
+    async function refreshMAStatus() {
+        try {
+            const res = await fetch('/api/music/status', { headers: zoeHdrs() });
+            if (!res.ok) return null;
+            const status = await res.json();
+            S.maAvailable = !!status.available;
+            return status;
+        } catch { return null; }
+    }
+
+    // MA is up per the backend — the SAME branch at startup and on recovery:
+    // no providers → setup wizard; providers → players, then the event socket.
+    async function onMAUp(status) {
+        if ((status.provider_count || 0) === 0) {
+            const connectedIds = new Set(
+                (status.providers || []).map(p => (p.domain || p.id || '').toLowerCase())
+            );
+            showSetup(connectedIds);
+            connectWS();
+            return;
+        }
+        await fetchPlayersFromBackend();
+        connectWS();
+    }
+
+    /* ── WebSocket ──────────────────────────────────────────────────────── */
     function connectWS() {
         clearTimeout(S.wsRetryTimer);
         try {
@@ -991,35 +1020,35 @@
         // Initial player state is loaded via the Zoe backend proxy in init().
     }
 
-    function onWSClose() {
+    async function onWSClose() {
         S.wsRetries++;
-        // Only show "offline" if MA was never confirmed available AND WS keeps failing.
-        // If MA is confirmed running (S.maAvailable), the WS retry is transparent.
-        if (S.wsRetries >= 3 && !S.maAvailable) showOffline('offline');
         S.wsRetryDelay = Math.min(S.wsRetryDelay * 1.5, 30000);
-        // Retry the MA socket only while the backend says MA is up. When MA is reaped
-        // (ZOE_MA_IDLE_REAP stops it when idle — the designed state most of the day)
-        // the socket 502s forever; the status watcher below is what brings it back.
-        if (S.maAvailable) S.wsRetryTimer = setTimeout(connectWS, S.wsRetryDelay);
-        else watchForMA();
+        // A closed socket is the one signal that MA may have been REAPED since the
+        // page loaded, so ask the backend before deciding: retry (with backoff) only
+        // while it says MA is up; otherwise show the offline state and hand over to
+        // the watcher. Never retry the socket on a stale S.maAvailable.
+        const status = await refreshMAStatus();
+        if (status && status.available) {
+            S.wsRetryTimer = setTimeout(connectWS, S.wsRetryDelay);
+            return;
+        }
+        // The backend answered "down" (definitive), or it is unreachable and the
+        // socket keeps failing — either way the player is not coming back on its own.
+        if (status || S.wsRetries >= 3) showOffline('offline');
+        watchForMA();
     }
 
-    // MA asleep/offline: re-check the backend's view every 15 s and open the socket
-    // the moment it is up (a play/search from any surface wakes a reaped MA).
+    // MA asleep/offline: re-check the backend's view every 15 s and take the
+    // startup branch the moment it is up (a play/search from any surface wakes a
+    // reaped MA).
     let _maWatchTimer = null;
     function watchForMA() {
         if (_maWatchTimer) return;
         _maWatchTimer = setInterval(async () => {
-            try {
-                const res = await fetch('/api/music/status', { headers: zoeHdrs() });
-                if (!res.ok) return;
-                const status = await res.json();
-                S.maAvailable = !!status.available;
-                if (!S.maAvailable) return;
-                clearInterval(_maWatchTimer); _maWatchTimer = null;
-                await fetchPlayersFromBackend();
-                connectWS();
-            } catch {}
+            const status = await refreshMAStatus();
+            if (!status || !status.available) return;
+            clearInterval(_maWatchTimer); _maWatchTimer = null;
+            await onMAUp(status);
         }, 15000);
     }
 
@@ -1532,34 +1561,11 @@
 
     /* ── Init ────────────────────────────────────────────────────────────── */
     (async function init() {
-        // 1. Check via Zoe backend — authoritative MA availability and provider list.
-        try {
-            const statusRes = await fetch('/api/music/status', { headers: zoeHdrs() });
-            if (statusRes.ok) {
-                const status = await statusRes.json();
-                S.maAvailable = !!status.available;
-
-                if (status.available) {
-                    if (status.provider_count === 0) {
-                        // MA is running but no music/streaming services configured → setup wizard
-                        const connectedIds = new Set(
-                            (status.providers || []).map(p => (p.domain || p.id || '').toLowerCase())
-                        );
-                        showSetup(connectedIds);
-                        connectWS();
-                        return;
-                    }
-                    // MA is running with providers → load players via Zoe proxy then open WS
-                    await fetchPlayersFromBackend();
-                    connectWS();
-                    return;
-                }
-            }
-        } catch {}
-
-        // 2. Backend says MA is not up (reaped/offline), or the backend itself was
-        // unreachable: say so and watch the backend — never hammer the MA socket
-        // (it 502s through nginx while MA is stopped).
+        // The backend is the authority on MA availability and the provider list.
+        const status = await refreshMAStatus();
+        if (status && status.available) { await onMAUp(status); return; }
+        // Backend says MA is not up (reaped/offline), or the backend itself was
+        // unreachable: say so and watch — never hammer the MA socket.
         showOffline('offline');
         watchForMA();
     })();
