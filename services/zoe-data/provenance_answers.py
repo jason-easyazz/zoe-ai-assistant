@@ -725,6 +725,9 @@ async def evidence_for_row(user_id: str, row_id: str, *, svc: Any = None) -> Evi
             ev.quote, said = await _verbatim_turn(user_id, ev.wording, meta)
             if ev.quote and said:
                 ev.said_at = said
+    if ev.quote and not ev.sensitive:
+        # what would be SPOKEN is the quote, not the stored fact: a private clause beside a public fact must still be held back
+        ev.sensitive = sensitive_class(ev.quote, meta)
     if ev.said_at is None:
         ep = _row_epoch(meta)
         ev.said_at = None if (ep is None or ev.batch) else ep
@@ -747,7 +750,8 @@ async def evidence_for_turn(user_id: str, turn_id: str) -> Evidence:
             return Evidence(refusal=FORGOTTEN_REPLY)
     except Exception:  # noqa: BLE001
         pass
-    return Evidence(turn_id=turn_id, quote=trim(text, QUOTE_MAX_CHARS), said_at=float(said_at), wording=text)
+    return Evidence(turn_id=turn_id, quote=trim(text, QUOTE_MAX_CHARS), said_at=float(said_at), wording=text,
+                    sensitive=sensitive_class(text))
 
 
 def render_explanation(ev: Evidence, *, more: int, voice: bool, now: Optional[float] = None) -> str:
@@ -951,6 +955,27 @@ async def twins_of(user_id: str, ref: Any, *, svc: Any = None) -> list:
         return []
 
 
+async def _erase_words(user_id: str, exp: "mp.Explained", *extra: str) -> int:
+    """Erase the owner's words behind an explained answer: the quoted ``exact_words`` turn (by id when known - a displayed quote can
+    be shortened), every indexed turn holding those words, and flag the saved transcript turn ``off_record`` so the nightly catch-up
+    cannot index it again. RAISES on a store failure (the caller must not confirm a forget that did not hold). Returns what it removed
+    or flagged."""
+    import exact_words
+
+    n = 0
+    if exp.turn_id:
+        n += await exact_words.erase_turn(user_id, exp.turn_id)
+    for words in {w for w in (exp.quote, exp.text, *extra) if w}:
+        n += await exact_words.erase_text(user_id, words)
+        n += await exact_words.forget_transcript(user_id, words)
+    return n
+
+
+def _rearm(user_id: str, exp: "mp.Explained") -> None:
+    """A forget that could not finish keeps its target for the very next turn ("forget it" again retries)."""
+    mp.mark_explained(user_id, exp.row_id, text=exp.text, quote=exp.quote, turn_id=exp.turn_id)
+
+
 async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speaker_verified: Optional[bool] = None) -> str:
     """"forget it" right after an answer named a row: reject THAT row and its twins, erase the text for real (when physical erase is
     on), and delete the owner's quoted turn from the exact-words index. NEVER raises."""
@@ -961,9 +986,19 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
     try:
         svc = svc or _svc_default()
         ref = await asyncio.wait_for(svc.get(exp.row_id), READ_BUDGET_S)
-        if ref is None or not _owns(ref.metadata or {}, user_id) or str((ref.metadata or {}).get("status") or "approved").lower() != "approved":
+        if ref is None or not _owns(ref.metadata or {}, user_id):
             mp.clear_explained(user_id)
             return FORGET_GONE_REPLY
+        if str((ref.metadata or {}).get("status") or "approved").lower() != "approved":
+            # the row was rejected already - possibly by an earlier "forget it" whose word erase failed: finish that job (idempotent)
+            try:
+                left = await _erase_words(user_id, exp, ref.text or "")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("provenance_answers: word erase retry failed (%s)", type(exc).__name__)
+                _rearm(user_id, exp)
+                return STORE_DOWN_REPLY
+            mp.clear_explained(user_id)
+            return f"Done - I forgot: \"{trim((ref.text or '').strip(), 80)}\"." if left else FORGET_GONE_REPLY
         twins = await twins_of(user_id, ref, svc=svc)
         await _speculation_barrier()
         done = await svc.review(ref.id, decision="reject", actor=user_id, note="forget_explained")
@@ -982,13 +1017,11 @@ async def forget_it(user_id: str, exp: "mp.Explained", *, svc: Any = None, speak
             except Exception as exc:  # noqa: BLE001 - the reject already hid the rows
                 logger.warning("provenance_answers: physical erase failed (%s) - rows stay rejected", type(exc).__name__)
         try:
-            import exact_words
-
-            for words in {exp.quote, ref.text or ""}:
-                if words:
-                    await exact_words.erase_text(user_id, words)
-        except Exception as exc:  # noqa: BLE001
+            await _erase_words(user_id, exp, ref.text or "")
+        except Exception as exc:  # noqa: BLE001 - the words stay recallable: do NOT say "forgot"; the state is kept for a retry
             logger.warning("provenance_answers: exact-words erase failed (%s)", type(exc).__name__)
+            _rearm(user_id, exp)
+            return STORE_DOWN_REPLY
         mp.clear_explained(user_id)
         logger.info("PROVENANCE_FORGET user=%s rows=%d", user_id, len(gone))
         return f"Done - I forgot: \"{trim((ref.text or '').strip(), 80)}\"."
@@ -1002,10 +1035,13 @@ async def _forget_turn(user_id: str, exp: "mp.Explained", *, svc: Any = None) ->
     retract the rows the same utterance produced (their evidence is that turn). NEVER raises."""
     try:
         svc = svc or _svc_default()
-        import exact_words
-
         await _speculation_barrier()
-        erased = await exact_words.erase_text(user_id, exp.quote or exp.text)
+        try:
+            erased = await _erase_words(user_id, exp)
+        except Exception as exc:  # noqa: BLE001 - the words stay recallable: say so, and keep the target for a retry
+            logger.warning("provenance_answers: exact-words erase failed (%s)", type(exc).__name__)
+            _rearm(user_id, exp)
+            return STORE_DOWN_REPLY
         gone = 0
         key = re.sub(r"\s+", " ", exp.text or exp.quote).strip().lower()
         if key:

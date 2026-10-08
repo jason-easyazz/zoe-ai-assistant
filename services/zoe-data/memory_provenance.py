@@ -447,6 +447,11 @@ _OTR_TAIL_RE = re.compile(
     rf"^(?P<payload>.{{6,}}?)[,.;:\-–—]\s*(?:and\s+)?(?:please\s+)?{_OTR_CUE}\W*$", re.IGNORECASE | re.DOTALL)
 
 
+#: past this length the cue is looked for only at the head / tail of the message (the whole message is then the payload)
+_OTR_MAX_CHARS = 1200
+_OTR_EDGE_CHARS = 300
+
+
 @dataclass(frozen=True)
 class OffRecord:
     """An off-the-record cue. ``payload`` is what followed (or preceded) it in the SAME utterance - "" for a bare cue, which
@@ -470,8 +475,17 @@ def parse_off_record(text: str) -> Optional[OffRecord]:
     after a comma: "what does off the record mean?" and "is this off the record?" are questions about the phrase, not cues;
     "can we go off the record?" is one (a bare cue)."""
     t = (text or "").strip()
-    if not t or len(t) > 1200:
+    if not t:
         return None
+    if len(t) > _OTR_MAX_CHARS:
+        # A long message is still off the record when it OPENS or CLOSES with the cue (chat accepts any length; skipping it here
+        # would store the very thing the owner asked us not to). Only the head / tail is matched, so the lazy tail pattern stays
+        # bounded; the whole message is the payload.
+        m = _OTR_LEAD_RE.match(t[:_OTR_EDGE_CHARS])
+        if m and m.group("cue"):
+            return OffRecord(_cue_label(m.group("cue")), t)
+        m = _OTR_TAIL_RE.match(t[-_OTR_EDGE_CHARS:])
+        return OffRecord(_cue_label(m.group("cue")), t) if m else None
     m = _OTR_LEAD_RE.match(t)
     if m:
         rest = (m.group("rest") or "").strip(" \t\r\n,:;.-–—")

@@ -323,7 +323,7 @@ _REMOVERS = {
     # name a forgotten entity; the audited whole-user removal is ``backend.delete_user`` behind ``MemoryService.delete_user``
     ("exact_words.py", "erase_entity"),
     # "forget it" after "why did you say that?" deletes the owner's quoted turn from the same index (BM5, provenance_answers.forget_it)
-    ("exact_words.py", "erase_text"),
+    ("exact_words.py", "erase_text"), ("exact_words.py", "erase_turn"),
 }
 
 

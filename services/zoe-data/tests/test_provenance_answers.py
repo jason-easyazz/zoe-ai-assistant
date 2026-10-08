@@ -1054,3 +1054,97 @@ def test_the_flue_seam_labels_the_stored_context_blocks_it_carries():
     """Pin (source-level; the seam's own behaviour is pinned by the flue seam tests): the labels reach the ledger."""
     src = (Path(memory_service.__file__).parent / "zoe_flue_client.py").read_text()
     assert "note_context(uid" in src and '("offer", offer_block)' in src and '("raise", raise_block)' in src
+
+
+# ── review sweep (PR #1938): the private-quote wall, the long off-the-record turn, the forget that must hold ─────
+
+def test_a_private_clause_beside_a_public_fact_is_not_spoken_on_voice(svc):
+    """The row path classifies the QUOTE that would be spoken, not only the stored fact (the fact here is ordinary)."""
+    said = "I picked up my insulin today and my sister Marisol is flying in from Lisbon on Thursday."
+    put(svc, ROW_SISTER, excerpt=said)
+    brain_turn(ASK_SISTER, REPLY_SISTER)
+    out = say("why did you say that", channel="voice")
+    assert "insulin" not in out and "won't read it out loud" in out
+
+
+def test_an_exact_words_turn_that_is_private_is_not_spoken_on_voice(svc):
+    private = "I told Dana my diabetes results came back worse and she should not tell anyone."
+    run(xw.get_backend().add(UID, "xw-p", NOW - 86400, private, xw.tokens_column(private), "chat"))
+    ev = run(pa.evidence_for_turn(UID, "xw-p"))
+    assert ev.sensitive
+    out = pa.render_explanation(ev, more=0, voice=True, now=NOW)
+    assert "diabetes" not in out and "won't read it out loud" in out
+    assert "diabetes" in pa.render_explanation(ev, more=0, voice=False, now=NOW)         # chat still shows it
+
+
+def test_a_long_off_the_record_message_is_still_off_the_record():
+    body = "my brother Cormac is getting a divorce and he has not told his kids yet, " * 30         # > 1200 chars
+    assert len(body) > 1200
+    for text in (f"Off the record: {body}", f"{body.strip().rstrip(',')}, this stays between us"):
+        cue = mp.parse_off_record(text)
+        assert cue is not None and cue.payload, text[:40]
+        assert mp.claim_turn(UID, text) is True and mp.is_off_record(UID, text) is True
+        mp.reset()
+    assert mp.parse_off_record("what does off the record mean? " + body) is None            # a mid-text mention is not a cue
+
+
+class _Transcript:
+    """A stand-in for the chat_messages table behind exact_words.forget_transcript's two SQL seams."""
+
+    def __init__(self, rows):
+        self.rows = {rid: [content, meta] for rid, content, meta in rows}
+
+    async def candidates(self, user_id, needle):
+        return [(rid, c, m) for rid, (c, m) in self.rows.items() if needle in c.lower()]
+
+    async def setmeta(self, rid, meta):
+        self.rows[rid][1] = meta
+
+
+@pytest.fixture
+def transcript(monkeypatch):
+    t = _Transcript([("m1", GATE, None), ("m2", "what time is it", None)])
+    monkeypatch.setattr(xw, "_transcript_candidates", t.candidates)
+    monkeypatch.setattr(xw, "_set_transcript_metadata", t.setmeta)
+    monkeypatch.setattr(xw, "SqlBackend", type(xw.get_backend()))          # the lab backend stands in for the SQL one
+    return t
+
+
+def test_forget_it_flags_the_saved_turn_so_the_nightly_catch_up_cannot_reindex_it(svc, transcript):
+    exact_words_state(svc)
+    assert say("forget it") == "Done - I forgot what you said there."
+    assert run(xw.get_backend().count(UID)) == 0
+    assert mp.OFF_RECORD_JSON_MARK in transcript.rows["m1"][1] and transcript.rows["m2"][1] is None
+    assert json.loads(transcript.rows["m1"][1]) == {"off_record": True}
+
+
+def test_a_failed_word_erase_is_not_reported_as_forgotten_and_the_retry_finishes_the_job(svc, monkeypatch):
+    ref = explained_state(svc)
+    run(xw.get_backend().add(UID, "xw-9", NOW - 3 * 86400, SAY_SISTER, xw.tokens_column(SAY_SISTER), "chat"))
+    real = xw.erase_text
+    calls = {"n": 0}
+
+    async def flaky(user_id, text):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("store down")
+        return await real(user_id, text)
+
+    monkeypatch.setattr(xw, "erase_text", flaky)
+    assert say("forget it") == pa.STORE_DOWN_REPLY                         # never "Done - I forgot"
+    assert run(xw.get_backend().count(UID)) == 1                           # the words are still there
+    out = say("Yes, forget that")                                          # the retry still has its target
+    assert out.startswith("Done - I forgot")
+    assert run(xw.get_backend().count(UID)) == 0
+
+
+def test_a_shortened_quote_still_erases_the_indexed_turn(svc):
+    long_turn = "I think " + "the lighthouse keeper's cottage on the northern coast had a green door and " * 6 + "a blue gate."
+    run(xw.get_backend().add(UID, "xw-long", NOW - 86400, long_turn, xw.tokens_column(long_turn), "chat"))
+    quote = pa.trim(long_turn, pa.QUOTE_MAX_CHARS)
+    assert quote.endswith("...") and len(quote) < len(long_turn)
+    exp = mp.Explained(seq=1, row_id="", ts=NOW, text=long_turn, quote=quote, turn_id="xw-long")
+    assert run(pa._erase_words(UID, exp)) >= 1
+    assert run(xw.get_backend().count(UID)) == 0
+    run(xw.get_backend().add(UID, "xw-long", NOW - 86400, long_turn, xw.tokens_column(long_turn), "chat"))
+    assert run(xw.erase_text(UID, quote)) == 1                              # and the displayed prefix alone matches too
