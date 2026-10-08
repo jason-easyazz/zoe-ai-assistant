@@ -30,11 +30,7 @@ const TOUCH_WIDGET_DEFAULTS = {
     'week-planner': { defaultW: 8, defaultH: 4, minW: 6, minH: 3 },
     music:       { defaultW: 6, defaultH: 4, minW: 4, minH: 3 },
     'music-player': { defaultW: 6, defaultH: 5, minW: 4, minH: 4 },
-    'music-library': { defaultW: 8, defaultH: 5, minW: 6, minH: 4 },
-    'music-search': { defaultW: 8, defaultH: 5, minW: 6, minH: 4 },
-    'music-queue': { defaultW: 6, defaultH: 5, minW: 4, minH: 4 },
-    'music-playlists': { defaultW: 6, defaultH: 5, minW: 4, minH: 4 },
-    'music-suggestions': { defaultW: 8, defaultH: 5, minW: 6, minH: 4 }
+    'music-library': { defaultW: 8, defaultH: 5, minW: 6, minH: 4 }
 };
 
 /**

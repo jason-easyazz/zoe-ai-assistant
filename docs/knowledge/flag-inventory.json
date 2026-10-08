@@ -4888,6 +4888,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_TOUCH_PANEL_OFFLINE_CACHE": {
+        "defaults": [
+          "'0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-auth/touch_panel/quick_auth.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_TOUCH_PROBE_DEVICE_TOKEN": {
         "defaults": [
           "''"
