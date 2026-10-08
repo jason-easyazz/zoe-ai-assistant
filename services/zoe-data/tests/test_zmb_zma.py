@@ -194,3 +194,14 @@ def test_a_saturated_z0_packet_still_carries_the_memplace_verbatim_rows():
         assert [r["text"] for r in a.packet("blue pot key", 6)] == [f"z0 row {i}" for i in range(6)]
     finally:
         a.close()
+
+
+def test_zma_keeps_one_verbatim_copy_z0s_exact_words_index_is_bypassed_and_w1_counts_both_stores(zma):
+    """Every owner turn used to be stored in MemPalace AND again in Z0's exact-words index, and W1 saw only MemPalace. Give Z0 its index back and W1 goes red."""
+    assert zma.z0.index_exact is False
+    s = mpa_cells.cell_w1_zma(zma)
+    assert s.ok and s.evidence["in_mempalace"] == 1 and s.evidence["in_z0_exact_index"] == 0
+    zma.z0.index_exact = True                                                                  # the second door reopened
+    s2 = mpa_cells.cell_w1_zma(zma)
+    assert not s2.ok and s2.evidence["in_z0_exact_index"] == 1 and s2.evidence["verbatim_copies_of_a_sentence"] == 2
+    assert mpa_cells.lab_arm("ZMA", ("one_ingest",), z0_embed=False).z0.index_exact is True    # the control restores Z0's own copy

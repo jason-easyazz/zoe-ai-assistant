@@ -111,6 +111,7 @@ class ZMAArm(Arm):
         self.mpa.turn_context = self._packet_text
         self.embed_url, self.embed_model = embed_url, embed_model
         self.one_ingest, self.one_packet = one_ingest, one_packet          # named switches: a negative control turns ONE integration off
+        self.z0.index_exact = not one_ingest                               # one ingest path: MemPalace is the verbatim tier, Z0 keeps no exact-words copy (the control gives it back)
         self.shim_ef: "Optional[ShimEmbeddingFunction]" = None
         self.controls = self.mpa.controls
         self._user = ""

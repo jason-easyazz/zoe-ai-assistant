@@ -355,7 +355,9 @@ def cell_w1_zma(arm: Any) -> scorers.Score:
     z0 = [r for r in allrows[:arm.stats()["tiers"]["z0"]] if r.get("status") in RETAINED]
     cited = [r for r in z0 if r.get("user_turn_id") in arm.mpa._prov]
     copies = sum(1 for r in arm.mpa.stats()["rows"] if "aldo lives in bergvik" in r["text"].lower() and r.get("origin", "").startswith("harness"))
-    return _score(bool(z0) and len(cited) == len(z0) and copies == 1, "write", z0_rows=len(z0), citing_a_chunk=len(cited), verbatim_copies_of_a_sentence=copies, chunks=arm.chunks)
+    z0_copies = arm.z0.exact_index_copies("aldo lives in bergvik")          # Z0's own exact-words index is a second verbatim store
+    return _score(bool(z0) and len(cited) == len(z0) and copies + z0_copies == 1, "write", z0_rows=len(z0), citing_a_chunk=len(cited), verbatim_copies_of_a_sentence=copies + z0_copies,
+                  in_mempalace=copies, in_z0_exact_index=z0_copies, chunks=arm.chunks)
 
 
 def cell_w2_zma(arm: Any) -> scorers.Score:

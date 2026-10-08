@@ -158,7 +158,7 @@ VALIDITY_CALLS = 104
 SMOKE_VALIDITY_CALLS, SMOKE_SLOT_RETAINS = 10, 4          # BAKEOFF_SMOKE_CELLS: a handful of brain calls, never a measurement
 SLOT_RETAINS, SLOT_TURNS_PER_CHUNK = 12, 10
 FORGET_WAIT_S = 360.0
-PROBE_USERS = {v: "demo_bar_" + hashlib.sha1(f"zmb-probe-{v}".encode()).hexdigest()[:8] for v in ("H0", "H1", "H2")}
+PROBE_USERS = {v: "demo_bar_" + hashlib.sha1(f"zmb-probe-{v}".encode()).hexdigest()[:8] for v in ("H0", "H1", "H2", "MPA", "HMA", "ZMA")}      # the driver arms run theirs inside their driver
 HM_DRIVER = Path(__file__).resolve().parent / "hm_window.py"
 MPA_DRIVER = Path(__file__).resolve().parent / "mpa_window.py"          # one driver for MPA and (``--arm HMA``) HMA, and for the reflection variants (``--reflect-only``)
 
@@ -726,10 +726,15 @@ def _phase_driver_arm(ctx: Ctx, arm: str, seed: str, box_s: float, store: list, 
     m["arm_controls"] = f"{summ.get('controls_checked', 0) - len(summ.get('not_instrumented') or [])}/{summ.get('controls_checked', 0)}"
     by = {r["id"]: r for r in cells["cells"]}
     f1 = next((r for i, r in by.items() if i.startswith("MPA-F1")), None)
-    f2 = next((r for i, r in by.items() if i.startswith("MPA-F2")), None)
+    fp = res.get("forget_probe") or {}
     m["forgetting"] = {k: {"checked": 2, "resurrected": 0 if c["verdict"] == "PASS" else 1, "kept_others": 1, "how": how} for k, c, how in (
-        ("t0", f1, "MPA-F1: the forget call through the agent's tools, both tiers where there are two"),
-        ("t6", f2, "MPA-F2: replay + the closet pass's own re-proposal on a virtual 360 s clock")) if c}
+        ("t0", f1, "MPA-F1: the forget call through the agent's tools, both tiers where there are two"),) if c}
+    if fp.get("t0"):
+        m["forgetting"]["t0"] = {**fp["t0"], "how": "the driver's probe, t+0: " + fp["t0"].get("how", "")}
+    if fp.get("t6"):         # ONLY a real wall-clock t+6 min counts (the same ForgetProbe the H arms get); MPA-F2 is an immediate refile test and stays its own cell
+        m["forgetting"]["t6"] = {**fp["t6"], "how": f"the driver's probe after a real {fp['t6'].get('waited_s', '?')} s: " + fp["t6"].get("how", "")}
+    else:
+        ctx.notes.append(f"{arm}: the t+6 min forgetting probe is unmeasured ({fp.get('unmeasured') or 'the driver reported none'}): the gate item reads NA")
     k1 = [{"id": r["id"], "verdict": r["verdict"]} for r in (res.get("generic") or {}).get("rows") or [] if str(r.get("id", "")).startswith("K1")]
     if k1:
         m["k1_rows"] = k1

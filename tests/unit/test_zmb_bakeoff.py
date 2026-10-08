@@ -1817,12 +1817,59 @@ def canned_mpa(cells, *, arm="MPA", verdicts=None, **over):
                                          "controls_mode": "real", "targets_failing": [], "reflective_tier": "real"}, "cells": cs},
                "brain": {"model_calls": 300, "prompt_tokens_max": 3000, "model_s_total": 900.0, "tool_calls": 120, "tool_calls_valid": 118,
                          "searched_before_answer": [18, 20], "supersede": {"correct": 9, "n": 10, "wrong": 1}},
-               "driver": {"server_rss_steady_mb": 120.0, "server_rss_peak_mb": 180.0, "pss_before_mb": 60.0, "peak_rss_mb": 100.0, "servers": 3, "tool_ms": {"search": {"n": 5, "p50": 4.0, "p95": 9.0}}}}
+               "driver": {"server_rss_steady_mb": 120.0, "server_rss_peak_mb": 180.0, "pss_before_mb": 60.0, "peak_rss_mb": 100.0, "servers": 3, "server_samples": 40, "tool_ms": {"search": {"n": 5, "p50": 4.0, "p95": 9.0}}},
+               "forget_probe": {"t0": {"checked": 2, "resurrected": 0, "kept_others": 1, "how": "store export + recall packet naming her"},
+                                "t6": {"checked": 2, "resurrected": 0, "kept_others": 1, "how": "store export + recall packet naming her", "waited_s": 361.0}}}
         if arm == "HMA":
             res["hindsight"] = {"observations": 12, "model_calls": 60}
         res.update(over)
         return res
     return run
+
+
+def test_without_a_real_delayed_probe_the_t6_forgetting_item_is_na_never_a_pass_from_the_immediate_refile_cell(box, tmp_path, monkeypatch):
+    """MPA-F2 is an immediate refile test (no clock, no wait): it must not stand in for the t+6 min result."""
+    w, _h = e2e_window(box, tmp_path, monkeypatch, arms=("H1", "MPA"))
+    base = canned_mpa(_subset())
+
+    def no_probe(ctx, seed, box_s):
+        res = base(ctx, seed, box_s)
+        res["forget_probe"] = {"unmeasured": "start failed: x"}
+        return res
+    w.mpa_runner = no_probe
+    measure.measure(w)
+    art = json.loads((box / "run-t1.json").read_text())
+    mm = art["measure"]["MPA"]
+    assert "t6" not in mm["forgetting"] and mm["forgetting"]["t0"]["resurrected"] == 0
+    assert art["arms"]["MPA"]["gates"]["G2"]["forget_t+6min_no_resurrection"]["state"] == gates.NA and any("t+6 min forgetting probe is unmeasured" in n for n in art["notes"])
+
+
+def test_the_driver_runs_the_generic_forget_probe_at_a_real_t6_and_it_goes_red_with_the_protections_off():
+    sys.path.insert(0, str(REPO / "scripts" / "perf"))
+    from zmb import mpa_cells as mc, mpa_window
+    for off, red in (((), False), (("ledger_write_check", "tool_floor", "distiller_skip"), True)):
+        d = mpa_window.DelayedForget("MPA", lambda off=off: mc.lab_arm("MPA", off))
+        assert not d.error and d.probe.t6 is None
+        d.poll()
+        assert d.probe.t6 is None                                                   # not due: the wall clock has not run six minutes
+        d.probe.t_forget -= 361.0                                                    # six minutes of wall clock later
+        out = d.finish(lambda: None)
+        assert out["t6"]["waited_s"] >= 361.0 and (out["t6"]["resurrected"] > 0) is red and out["t0"]["resurrected"] == 0
+    d = mpa_window.DelayedForget("MPA", lambda: (_ for _ in ()).throw(RuntimeError("no palace")))
+    assert "start failed" in d.error and d.finish(lambda: None) == {"unmeasured": d.error}                     # a probe that cannot run is unmeasured, never a pass
+
+
+def test_the_mpa_server_rss_gate_reads_na_when_the_sampler_saw_no_server():
+    from zmb import mpa_window
+    s = mpa_window.ServerSampler()
+    assert s.summary()["server_rss_steady_mb"] is None and s.summary()["server_rss_peak_mb"] is None and s.summary()["server_samples"] == 0
+    for fn, extra in ((gates.gate_mpa, {}), (gates.gate_zma, {"pss_added_mb": 90.0})):
+        m = mpa_m()
+        m["mpa_driver"].update({"server_rss_steady_mb": 0.0, "server_rss_peak_mb": 0.0, "server_samples": 0, **extra})
+        g = fn(m)
+        assert g["mpa_G0_server_rss" if fn is gates.gate_mpa else "zma_G0_total_rss"]["state"] == gates.NA, fn.__name__
+        m["mpa_driver"].update({"server_rss_steady_mb": 120.0, "server_rss_peak_mb": 180.0, "server_samples": 40})
+        assert fn(m)["mpa_G0_server_rss" if fn is gates.gate_mpa else "zma_G0_total_rss"]["state"] == gates.PASS
 
 
 def test_the_mpa_driver_is_run_like_hm_through_mp_run_sh_with_the_clone_brains_url_and_the_shared_embedder(box):
@@ -1870,7 +1917,7 @@ def test_phase_mpa_folds_the_generic_rows_the_protocol_cells_the_brain_and_the_f
     mm = art["measure"]["MPA"]
     assert all("title" not in c for c in mm["mpa_cells"]["cells"]) and mm["brain"]["tool_calls"] == 120 and mm["mpa_driver"]["servers"] == 3
     assert mm["prompt_in_tokens_max"] == 3000 and mm["prompt_fits"] is True and a["gates"]["G0"]["prompt_fits_slot"]["state"] == gates.PASS
-    assert mm["forgetting"]["t0"]["resurrected"] == 0 and mm["forgetting"]["t6"]["resurrected"] == 0 and mm["arm_controls"] == "6/6"
+    assert mm["forgetting"]["t0"]["resurrected"] == 0 and mm["forgetting"]["t6"]["resurrected"] == 0 and mm["arm_controls"] == "6/6" and "real 361.0 s" in mm["forgetting"]["t6"]["how"]
     assert mm["rss"]["steady_mb"] == round(mm["rss"]["steady_mb"], 1) and "MemPalace servers' own RSS" in mm["rss"]["note"] and mm["rss"]["steady_mb"] >= 120.0
     assert mm["layer_lines"] == mm["mpa_glue_lines"] == measure.mpa_glue_lines()
     assert a["gates"]["MPA"]["mpa_G1_tool_call_validity"]["state"] == gates.PASS and a["gates"]["MPA"]["mpa_G2_floors"]["state"] == gates.PASS

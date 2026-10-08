@@ -325,8 +325,8 @@ def gate_mpa(m: dict) -> "dict[str, dict]":
     # G0: the MemPalace servers (one per household member's palace) are separate child processes the sampler does not see
     st, pk = drv.get("server_rss_steady_mb"), drv.get("server_rss_peak_mb")
     thr = f"steady <= {RULE['steady_rss_mb']:g} MB and peak <= {RULE['burst_rss_mb']:g} MB (MemPalace servers)"
-    if st is None or pk is None:
-        out["mpa_G0_server_rss"] = item(NA, thr, "not measured")
+    if st is None or pk is None or drv.get("server_samples") == 0:
+        out["mpa_G0_server_rss"] = item(NA, thr, "not measured: the sampler saw no MemPalace server (0 samples)")
     else:
         ok = float(st) <= RULE["steady_rss_mb"] and float(pk) <= RULE["burst_rss_mb"]
         out["mpa_G0_server_rss"] = item(PASS if ok else FAIL, thr, f"steady {float(st):g} MB, peak {float(pk):g} MB over {drv.get('servers', '?')} server(s) (information: one per palace)")
@@ -412,8 +412,8 @@ def gate_zma(m: dict) -> "dict[str, dict]":
     d = m.get("mpa_driver") or {}
     st, pk, add = d.get("server_rss_steady_mb"), d.get("server_rss_peak_mb"), d.get("pss_added_mb")
     thr = f"steady <= {RULE['steady_rss_mb']:g} MB and peak <= {RULE['burst_rss_mb']:g} MB (MemPalace servers + Z0's in-process delta)"
-    if st is None or pk is None or add is None:
-        out["zma_G0_total_rss"] = item(NA, thr, "not measured")
+    if st is None or pk is None or add is None or d.get("server_samples") == 0:
+        out["zma_G0_total_rss"] = item(NA, thr, "not measured" + (": the sampler saw no MemPalace server (0 samples)" if d.get("server_samples") == 0 else ""))
     else:
         steady, peak = float(st) + float(add), float(pk) + float(add)
         out["zma_G0_total_rss"] = item(PASS if steady <= RULE["steady_rss_mb"] and peak <= RULE["burst_rss_mb"] else FAIL, thr,

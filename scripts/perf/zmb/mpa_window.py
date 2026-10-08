@@ -77,8 +77,8 @@ class ServerSampler:
 
     def summary(self) -> "dict[str, float]":
         xs = sorted(self.samples)
-        return {"server_rss_steady_mb": round(xs[len(xs) // 2], 1) if xs else 0.0, "server_rss_peak_mb": round(xs[-1], 1) if xs else 0.0, "servers": self.max_servers,
-                "server_samples": len(xs)}
+        return {"server_rss_steady_mb": round(xs[len(xs) // 2], 1) if xs else None, "server_rss_peak_mb": round(xs[-1], 1) if xs else None, "servers": self.max_servers,
+                "server_samples": len(xs)}          # None = the sampler never saw a server: unmeasured, not 0 MB
 
     def stop(self) -> None:
         self._stop.set()
@@ -131,6 +131,44 @@ def build_arm(kind: str, *, model: Any, embed_url: str = "", closet_url: str = "
         kw.update(tool_names=BRAIN_TOOLS, protocol_rules=(1, 2, 3), aaak=False, rules_paragraph=False)
         return ZMAArm(mpa=MemPalaceAgentArm(**kw), embed_url=embed_url)
     raise ValueError(kind)
+
+
+class DelayedForget:
+    """The generic ``ForgetProbe`` (one mechanism for every arm) run INSIDE the driver, where the real arm lives: forget an invented friend at t+0, keep measuring, and at a real
+    wall-clock t+6 min replay a transcript that still names her through the arm's own idle pass and a late writer, then check again. Polled from the cells' guard."""
+
+    def __init__(self, kind: str, mk: Any):
+        import types
+        from zmb.bakeoff_measure import FORGET_WAIT_S, ForgetProbe
+        self.wait_s, self.error, self.closed, self.probe = FORGET_WAIT_S, "", False, None
+        try:
+            self.probe = ForgetProbe(types.SimpleNamespace(new_arm=lambda _v, **_kw: mk(), host=types.SimpleNamespace(now=time.monotonic)), kind)
+            self.probe.start()
+        except BaseException as exc:  # noqa: BLE001 - a probe that cannot start is unmeasured, never a pass
+            self.error = f"start failed: {type(exc).__name__}: {exc}"
+
+    def poll(self) -> None:
+        if not self.error and self.probe.due():
+            try:
+                self.probe.finish()
+            except Exception as exc:  # noqa: BLE001
+                self.error = f"finish failed: {type(exc).__name__}: {exc}"
+
+    def finish(self, guard: Any) -> dict:
+        """Wait out what is left of the six minutes (the cells usually took longer), then report; whatever did not complete is ``unmeasured``."""
+        while not self.error and self.probe.t6 is None:
+            guard()
+            self.poll()
+            if self.probe.t6 is None and not self.error:
+                time.sleep(5.0)
+        out = {"t0": self.probe.t0, "t6": self.probe.t6} if not self.error else {"unmeasured": self.error}
+        self.close()
+        return out
+
+    def close(self) -> None:
+        if not self.closed and self.probe is not None:
+            self.closed = True
+            self.probe.close()
 
 
 def run_generic(kind: str, mk, seed: str, box_s: float, smoke: int, guard) -> dict:
@@ -241,7 +279,7 @@ def main(argv: "list[str] | None" = None) -> int:
         a.out.write_text(json.dumps(out))
         return 0
     guard = PanelGuard(a.quiet_since)
-    srv = stub = None
+    srv = stub = fprobe = None
     try:
         import mempalace  # noqa: F401  (only to record the version when running inside the venv)
         out["library"] = f"mempalace {getattr(mempalace, '__version__', '?')}"
@@ -291,6 +329,10 @@ def main(argv: "list[str] | None" = None) -> int:
             out["reflect"] = run_reflect(a.arm, mk, a.seed, guard)
             out["reflect"]["model"], out["reflect"]["ctx"] = out["model"], a.ctx
         else:
+            if not a.lab:                          # a real wall-clock probe needs the real arm and brain; the scripted lab has neither time nor a brain to wait on
+                fprobe = DelayedForget(a.arm, mk)
+                base_guard = guard
+                guard = lambda: (base_guard(), fprobe.poll())  # noqa: E731 - every cell and turn polls the probe
             lab = mpa_cells.run_all(a.arm, "library", controls=a.controls, guard=guard, workdir=None, hindsight_url=a.hindsight_url if a.arm == "HMA" else "", pg=pg)
             cells_out = lab
             if not a.lab:
@@ -307,6 +349,8 @@ def main(argv: "list[str] | None" = None) -> int:
                 if b2:
                     out["brain"]["supersede"] = b2["evidence"]["supersede"]
             out["mpa_cells"] = cells_out
+            if fprobe is not None:
+                out["forget_probe"] = fprobe.finish(guard)
             if a.box_s > 0 and not a.lab:
                 out["generic"] = run_generic(a.arm, mk, a.seed, a.box_s, a.smoke, guard)
         out["driver"] = {"pss_before_mb": round(base_pss, 1), "pss_after_mb": round(pss_mb(), 1), "peak_rss_mb": round(hwm_mb(), 1), "glue_lines": mpa_glue_lines(),
@@ -322,6 +366,8 @@ def main(argv: "list[str] | None" = None) -> int:
         out["error"] = f"{type(exc).__name__}: {exc}"
     finally:
         sampler.stop()
+        if fprobe is not None:
+            fprobe.close()
         for s in (srv,):
             if s is not None:
                 s.close()
