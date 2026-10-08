@@ -485,6 +485,7 @@ def test_digest_replay_break_the_fix_control(svc, monkeypatch):
     """With the wall off the SAME replay reproduces the incident: the genuine row is
     superseded and the new row's provenance LOOKS like the user's (it is the digest's)."""
     monkeypatch.setenv("ZOE_MEMORY_AUTHORITY", "0")
+    monkeypatch.setenv("ZOE_DIGEST_OBSERVATION_GATE", "off")      # the gate is the second wall: a model's claim the owner's words do not carry is held first
     seed = put(svc, "User's dog is named Teddy.", "voice_fact")
     out = _digest(svc, monkeypatch, transcript=STT,
                   facts=[{"fact": "User's dog is named Rex.", "type": "profile"}], seed_id=seed.id)
@@ -492,6 +493,19 @@ def test_digest_replay_break_the_fix_control(svc, monkeypatch):
     new = meta(svc, meta(svc, seed.id)["superseded_by_id"])
     assert new["authority"] == ma.INFERRED and new["origin"] == "digest"   # stamped honestly even then
     assert new["source"] == "digest"                                        # no carried-forward lie
+
+
+def test_digest_replay_the_observation_gate_alone_holds_the_incident_with_the_wall_off(svc, monkeypatch):
+    """Two walls, each enough alone: with the authority wall OFF the nightly digest's unsupported "Rex" is still not stored as a
+    fact and never touches the owner's row - the observation gate holds it (pending) before it reaches the contradiction pass."""
+    monkeypatch.setenv("ZOE_MEMORY_AUTHORITY", "0")
+    seed = put(svc, "User's dog is named Teddy.", "voice_fact")
+    out = _digest(svc, monkeypatch, transcript=STT,
+                  facts=[{"fact": "User's dog is named Rex.", "type": "profile"}], seed_id=seed.id)
+    assert out["superseded"] == 0 and meta(svc, seed.id)["status"] == "approved"
+    assert out.get("observations_held") == 1
+    assert [d for d, m in svc._col.rows.values() if m["status"] == "approved"] == ["User's dog is named Teddy."]
+    assert [d for d, m in svc._col.rows.values() if m["status"] == "pending"] == ["User's dog is named Rex."]
 
 
 def test_third_person_fragment_creates_no_user_fact_and_a_person_candidate(svc, monkeypatch, caplog):

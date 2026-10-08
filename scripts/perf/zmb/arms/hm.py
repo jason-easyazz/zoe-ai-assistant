@@ -36,7 +36,7 @@ from .hindsight import INSTALL_HINT as HINDSIGHT_HINT
 from .hindsight import HindsightClient, HindsightError
 from .hm_policy import (DEFAULT_ROOMS, MODEL_FROM_TRANSCRIPT, RANK, SPEAKER_LABEL, USER_STATED, USER_STATED_DERIVED,
                         Controls, HashedLedger, LatencyModel, alias_candidates, frame, label_for, percentile)
-from .mempalace_verbatim import MemPalaceVerbatimArm, _name_pattern, _toks
+from .mempalace_verbatim import MemPalaceVerbatimArm, _name_pattern, _toks, days_ago
 
 # ── attribute keys: how the lab decides two statements are about the same thing ───────────────────────────────
 
@@ -88,7 +88,7 @@ class DistilledTier(Protocol):
     def reset(self, user_id: str) -> None: ...
     def add_fact(self, user: str, text: str, authority_class: str, source_ids: "tuple[str, ...]") -> str: ...
     def distil(self, user: str, chunks: "list[tuple[str, str]]", proposes: "list[str]") -> "dict[str, int]": ...
-    def recall(self, user: str, query: str, k: int) -> "list[Fact]": ...
+    def recall(self, user: str, query: str, k: int, *, budget: str = "low") -> "list[Fact]": ...
     def forget(self, user: str, entity: str) -> int: ...
     def delete_sources(self, user: str, source_ids: "list[str]") -> int: ...
     def siblings(self, user: str, source_ids: "list[str]") -> "list[str]": ...
@@ -223,11 +223,11 @@ class HindsightDistilledTier:
             added += 1
         return {"facts": added, "model_calls": calls}
 
-    def recall(self, user: str, query: str, k: int) -> "list[Fact]":
+    def recall(self, user: str, query: str, k: int, *, budget: str = "low") -> "list[Fact]":
         self._check()
         if self.bank_for(user) not in self._banks:
             return []
-        res = self.client.recall(self.bank_for(user), query, tags=[f"user:{user}"])
+        res = self.client.recall(self.bank_for(user), query, tags=[f"user:{user}"], budget=budget)
         out = [self._fact({**r, "state": "valid"}) for r in res if r.get("type") != "observation"]
         return out[:k]
 
@@ -347,7 +347,7 @@ class FakeDistilledTier:
             added += 1
         return {"facts": added, "model_calls": 1}
 
-    def recall(self, user: str, query: str, k: int) -> "list[Fact]":
+    def recall(self, user: str, query: str, k: int, *, budget: str = "low") -> "list[Fact]":
         self._check()
         q = _toks(query)
         scored = []
@@ -420,7 +420,9 @@ class HMArm(Arm):
     """Distilled + verbatim, composed. ``distilled`` defaults to the Hindsight stub (so ``--arm HM`` in the runner is a
     declared SKIP with the install hint, exactly like H1)."""
     name = "HM"
-    capabilities = frozenset({"clock", "identities", "idle_pass", "verbatim", "reader"})
+    capabilities = frozenset({"clock", "identities", "idle_pass", "verbatim", "reader",
+                              # the capability axes: the verbatim tier is the exact-words channel; the packet is the associative one; the reader the protocol's
+                              "exact_words", "multi_hop", "protocol"})
 
     #: bullets the packet may carry and the share the verbatim tier may take of them on an ordinary turn
     PACKET_MAX = 12
@@ -546,7 +548,7 @@ class HMArm(Arm):
             self.model_calls += int(r.get("model_calls", 0))
         return out
 
-    def run_idle_pass(self, transcript: str, proposes: "list[str]") -> "dict[str, Any]":
+    def run_idle_pass(self, transcript: str, proposes: "list[str]", *, judge: bool = True) -> "dict[str, Any]":
         """The background distiller: drain the pending verbatim chunks into the distilled tier (the scripted model
         output is ``proposes``), skipping what the ledger matches, then refresh the voice-lane packet cache."""
         out = self._drain(self._user, list(proposes))
@@ -631,11 +633,11 @@ class HMArm(Arm):
             info.degraded.append(name)
             return default
 
-    def _lookup(self, query: str, k: int, exact: bool, info: PacketInfo) -> "tuple[list[Fact], list[dict]]":
+    def _lookup(self, query: str, k: int, exact: bool, info: PacketInfo, budget: str = "low") -> "tuple[list[Fact], list[dict]]":
         user = self._user
         if self.real_latency:
-            return self._lookup_real(user, query, k, exact, info)
-        facts = self._consult("distilled", lambda: self.distilled.recall(user, query, k), info, [])
+            return self._lookup_real(user, query, k, exact, info, budget)
+        facts = self._consult("distilled", lambda: self.distilled.recall(user, query, k, budget=budget), info, [])
         chunks = self._consult("verbatim", lambda: self._verbatim_rows(user, query, k, exact), info, [])
         d_ms = self._lat("distilled")
         v_ms = self._lat("verbatim")
@@ -648,14 +650,14 @@ class HMArm(Arm):
         info.tiers = ["distilled", "verbatim"]
         return facts, chunks
 
-    def _lookup_real(self, user: str, query: str, k: int, exact: bool, info: PacketInfo) -> "tuple[list[Fact], list[dict]]":
+    def _lookup_real(self, user: str, query: str, k: int, exact: bool, info: PacketInfo, budget: str = "low") -> "tuple[list[Fact], list[dict]]":
         """The two lookups against the REAL tiers: concurrent (the design) when ``parallel_lookup`` is on, one after the other when it is off; every
         number is a wall clock."""
         def timed(fn):
             t0 = time.perf_counter()
             r = fn()
             return r, (time.perf_counter() - t0) * 1000.0
-        d_fn = lambda: timed(lambda: self._consult("distilled", lambda: self.distilled.recall(user, query, k), info, []))      # noqa: E731
+        d_fn = lambda: timed(lambda: self._consult("distilled", lambda: self.distilled.recall(user, query, k, budget=budget), info, []))      # noqa: E731
         v_fn = lambda: timed(lambda: self._consult("verbatim", lambda: self._verbatim_rows(user, query, k, exact), info, []))  # noqa: E731
         t0 = time.perf_counter()
         if self.controls.parallel_lookup or exact:
@@ -710,12 +712,12 @@ class HMArm(Arm):
 
     def _verb_packet_row(self, r: "dict[str, Any]") -> "dict[str, Any]":
         cls = r["authority_class"]
-        date = f"day {int((r['filed_ts'] - 1_790_000_000.0) // 86400)}"
+        date = f"{days_ago(r['filed_ts'])} days ago"
         return {**r, "raw": r["text"], "label": label_for(cls),
                 "text": frame(r["text"], authority_class=cls, speaker_label=SPEAKER_LABEL.get(cls, "unknown"),
                               date=date, enabled=self.controls.frame)}
 
-    def packet(self, query: str, k: int = 10, *, lane: str = "chat", exact: bool = False) -> "list[dict[str, Any]]":
+    def packet(self, query: str, k: int = 10, *, lane: str = "chat", exact: bool = False, budget: str = "low") -> "list[dict[str, Any]]":
         """The recall packet for ``query``. ``lane``: ``voice`` (served from the write-behind cache when the voice
         policy is on), ``chat`` (both tiers, in parallel), ``exact`` / ``exact=True`` (an explicit request for the
         user's own words: verbatim first, quarantine rooms included, every line framed)."""
@@ -733,7 +735,7 @@ class HMArm(Arm):
                 info.elapsed_ms = self._lat("cache_read")
             info.tiers = ["cache"]
             return self._finish(hits, k, info, exact=False)
-        facts, chunks = self._lookup(query, k, exact, info)
+        facts, chunks = self._lookup(query, k, exact, info, budget)
         d_rows = [self._fact_row(f) for f in facts]
         v_rows = [self._verb_packet_row(r) for r in chunks]
         return self._finish(self._merge(d_rows, v_rows, exact, info), k, info, exact=exact)
@@ -785,6 +787,27 @@ class HMArm(Arm):
 
     def recall(self, query: str, k: int = 10) -> "list[dict[str, Any]]":
         return self.packet(query, k)
+
+    def recall_exact(self, query: str, k: int = 5) -> "list[dict[str, Any]]":
+        """(j) "What exactly did I say": the EXACT lane of the packet (the verbatim tier first, quarantine rooms included, every chunk the owner's words
+        unchanged) with the day each was filed. ``exact_lookup`` OFF = the request is served from the distilled facts alone (the negative control)."""
+        rows = self.packet(query, max(k, 1), exact=True)
+        if not self.controls.exact_lookup:
+            rows = [r for r in rows if not str(r.get("origin", "")).startswith("verbatim")]
+        return [{"text": r.get("raw") or r["text"],
+                 "day_offset": days_ago(r["filed_ts"]) if r.get("filed_ts") else None} for r in rows[:k]]
+
+    def recall_linked(self, query: str, k: int = 8) -> "list[dict[str, Any]]":
+        """(l) HM's packet: the distilled tier (Hindsight's retrieval, link graph included) and the verbatim tier, merged and de-duplicated. The distilled lookup runs
+        at the HIGH recall budget, the same as the direct Hindsight arm's ``recall_linked``: the low budget does not explore the link graph, so the join's second fact is missed."""
+        return [{**r, "text": r.get("raw") or r["text"]} for r in self.packet(query, k, budget="high")]
+
+    def protocol_answer(self, prompt: str, anchor: "tuple[str, ...]", fired: bool, k: int = 5) -> str:
+        """(m, lab half) The scripted reader over the HM packet when recall fired."""
+        from .. import life as lifemod
+        if not fired:
+            return lifemod.DECLINE
+        return lifemod.anchored_reader([{**r, "text": r.get("raw") or r["text"]} for r in self.packet(prompt, k)], anchor)
 
     def recall_timed(self, query: str, k: int = 10, *, lane: str = "chat",
                      exact: bool = False) -> "tuple[list[dict[str, Any]], float]":

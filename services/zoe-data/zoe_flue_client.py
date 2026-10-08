@@ -89,6 +89,7 @@ and never changes what is yielded or retried.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import errno
 import json
 import logging
@@ -998,6 +999,12 @@ def _continuity_owns_sentence(sentence: str) -> bool:
     return _continuity_inject_enabled() and bool(_CONTINUITY_RE.search(sentence))
 
 
+# The turn's role-guard sink (``role_guess_guard``): set by ``_run_flue_brain_streaming_turn`` just before
+# the recall block is built, read by ``_recall_context_block`` - a context variable rather than a new
+# parameter so the block builder keeps its (message, user_id) signature for every caller and stub.
+_ROLE_GUARD_SINK: "contextvars.ContextVar[dict | None]" = contextvars.ContextVar("role_guard_sink", default=None)
+
+
 async def _named_person_floor(message: str, user_id: str) -> list:
     """The people a question-shaped sentence of ``message`` names among THIS user's own
     people and person-fact entities (``person_recall_floor``; ZOE_PERSON_RECALL_FLOOR
@@ -1053,7 +1060,28 @@ async def _recall_context_block(message: str, user_id: str) -> str:
                 user_id, shape, bullets, len(packet))
     if not packet:
         return ""
-    return f"{_recall_block_open()}\n{packet}\n{_RECALL_BLOCK_CLOSE}"
+    rule = ""
+    if named:
+        # Roles are stated, never guessed (S22, ZOE_ROLE_GUESS_GUARD): a named person whose
+        # relationship no row states is marked "not stated" INSIDE the block, and the turn's
+        # reply is checked against the same evidence (``guard_sink`` -> role_guess_guard).
+        try:
+            import role_guess_guard
+
+            names = [p.name for p in named if getattr(p, "name", "")]
+            rule = role_guess_guard.rule_line(names, packet)
+            guard_sink = _ROLE_GUARD_SINK.get()
+            if guard_sink is not None and role_guess_guard.mode() != "off":
+                # not only the unstated people: also those the packet relates to SOMEBODY ELSE only
+                # ("Anika is Callum's wife" licenses nothing about the user)
+                guarded = role_guess_guard.guarded_people(names, packet)
+                if guarded:
+                    guard_sink["names"] = guarded
+                    guard_sink["packet"] = packet
+        except Exception as exc:  # noqa: BLE001 - the guard must never break a turn
+            logger.debug("role guess guard setup failed (non-fatal): %s", type(exc).__name__)
+    body = f"{packet}\n{rule}" if rule else packet
+    return f"{_recall_block_open()}\n{body}\n{_RECALL_BLOCK_CLOSE}"
 
 
 # ── Continuity injection (ZOE_SEAM_CONTINUITY_INJECT, default ON) ───────────
@@ -1664,10 +1692,17 @@ async def run_flue_brain_streaming(
     brief = await brief_first_turn.prepare(message, user_id, session_id)
     raised = await proactive_selector.prepare(
         message, user_id, session_id, brief_active=brief is not None)
+    # Roles are stated, never guessed (S22, ZOE_ROLE_GUESS_GUARD): the recall block fills this
+    # sink when the named-person floor fired for a person no row relates to the user; every
+    # other turn passes through untouched.
+    role_guard: dict[str, Any] = {}
     turn = _run_flue_brain_streaming_turn(
         message, session_id, user_id, day_brief_block=brief.block if brief else "",
-        raise_block=raised.block if raised else "", **kwargs,
+        raise_block=raised.block if raised else "", _role_guard=role_guard, **kwargs,
     )
+    import role_guess_guard
+
+    turn = role_guess_guard.filter_stream(turn, role_guard, user_text=message)
     if _strip_narration_enabled():
         # ZOE_STRIP_NARRATION (default OFF): drop a leading "I'll check what I've
         # got on file…" sentence when the real answer follows. Sentinels pass
@@ -1755,6 +1790,11 @@ async def _run_flue_brain_streaming_turn(
     from recall_evidence import note_turn
 
     note_turn(uid, message)
+    # the owner asked for their own words ("what exactly did I say about ..."): the recall_memory tool call made during this
+    # turn carries only the model's query, so the turn's question is noted for /for-prompt's exact-words block (exact_words)
+    from exact_words import note_turn as note_exact_turn
+
+    note_exact_turn(uid, message)
     # Back a claim up when challenged (ZOE_VERIFY_ON_CHALLENGE, default OFF; no
     # DB read, no search, no change to the bytes when off): "are you sure" after
     # a world-fact answer runs ONE bounded web search. A hit rides as a block
@@ -1771,6 +1811,7 @@ async def _run_flue_brain_streaming_turn(
     # electing to call its recall_memory tool. Placed BEFORE the identity wrap
     # so the block rides AFTER the identity line on the wire (the sidecar's
     # single-line strip regex is anchored at message start).
+    _ROLE_GUARD_SINK.set(kwargs.get("_role_guard"))
     recall_block = "" if verify_block else await _recall_context_block(message, uid)
     # Continuity (default ON): a first-person mood/state STATEMENT gets the
     # recent-first packet so yesterday's worry reaches today's reply. Never on
