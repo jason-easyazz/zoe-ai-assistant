@@ -523,6 +523,9 @@ html.light-mode .topbar { background: rgba(244,244,248,0.90); }
   </div>
 </div>
 
+<!-- auth.js FIRST: members-only gate (a guest or a dead session is bounced to the login page
+     before any settings fetch runs — this page was ungated until 2026-10-08) -->
+<script src="js/auth.js"></script>
 <script>
 'use strict';
 

@@ -254,6 +254,119 @@ function makeDoc() {
   check('push: subscription id is never stored as the string "undefined"', () => assert(/data\.subscription_id != null/.test(pushSrc)));
 }
 
+// ── every members-only desktop page loads js/auth.js (the gate + the interceptor) ──
+// 2026-10-08: music.html and settings.html never loaded it — ungated, and music.html's
+// notifications panel 403'd because nothing attached the session to its fetches.
+check('gate: every desktop page outside DESKTOP_PUBLIC_PATHS loads js/auth.js', () => {
+  const PUBLIC = vm.runInNewContext(extractConst(authSrc, 'DESKTOP_PUBLIC_PATHS') + '\n; DESKTOP_PUBLIC_PATHS', {});
+  const pages = fs.readdirSync(__dirname).filter(f => f.endsWith('.html'));
+  const missing = pages.filter(f => !PUBLIC.has('/' + f) && !/<script src="\/?js\/auth\.js[^"]*"/.test(read(f)));
+  assert.deepStrictEqual(missing, [], 'members-only pages without js/auth.js: ' + missing.join(', '));
+  assert(pages.includes('music.html') && pages.includes('settings.html'));
+});
+
+// ── websocket-sync: per-resource sockets carry the session (behavioural) ──────────
+// The server closes 1008 before accept without ?session_id= (a browser cannot set
+// X-Session-ID on a handshake). Run the real class against a fake WebSocket.
+function wsSandbox({ zoeAuthSession, storedSession }) {
+  const made = []; const warned = [];
+  class FakeWS { constructor(url) { this.url = url; this.readyState = 0; made.push(url); } close() {} send() {} }
+  FakeWS.OPEN = 1;
+  const window = { location: { protocol: 'https:', host: 'zoe.local' }, addEventListener() {}, WebSocket: FakeWS };
+  if (zoeAuthSession !== undefined) window.zoeAuth = { getSession: () => zoeAuthSession };
+  const ctx = { window, self: window, document: { hidden: false, addEventListener() {} },
+    localStorage: { getItem: () => storedSession === undefined ? null : JSON.stringify({ session_id: storedSession }) },
+    WebSocket: FakeWS, console: { log() {}, warn: (m) => warned.push(m), error() {} },
+    setInterval: () => 1, clearInterval() {}, setTimeout: () => 1, clearTimeout() {}, Number, JSON, String, Math, URLSearchParams };
+  const { ZoeWebSocketSync } = vm.runInNewContext(read('js/websocket-sync.js') + '\n; ({ ZoeWebSocketSync })', ctx);
+  return { ZoeWebSocketSync, made, warned };
+}
+check('ws: connect() appends the zoeAuth session, URL-encoded', () => {
+  const { ZoeWebSocketSync, made } = wsSandbox({ zoeAuthSession: 'sid with/slash' });
+  new ZoeWebSocketSync('/api/lists/ws', 'jason').connect();
+  assert.deepStrictEqual(made, ['wss://zoe.local/api/lists/ws/jason?session_id=sid%20with%2Fslash']);
+});
+check('ws: without zoeAuth the stored zoe_session is used', () => {
+  const { ZoeWebSocketSync, made } = wsSandbox({ storedSession: 'abc123' });
+  new ZoeWebSocketSync('/api/calendar/ws', 'jason').connect();
+  assert.deepStrictEqual(made, ['wss://zoe.local/api/calendar/ws/jason?session_id=abc123']);
+});
+check('ws: no session at all → no query, and a warning (the server will refuse it)', () => {
+  const { ZoeWebSocketSync, made, warned } = wsSandbox({});
+  new ZoeWebSocketSync('/api/lists/ws', 'jason').connect();
+  assert.deepStrictEqual(made, ['wss://zoe.local/api/lists/ws/jason']);
+  assert(warned.some(m => /no session/.test(m)));
+});
+
+// ── music.html: the MA socket is retried only while the BACKEND says MA is up ──────
+// Runs the page's real refreshMAStatus/onMAUp/connectWS/onWSClose/watchForMA against
+// fake fetch/WebSocket/timers. statusReplies are consumed one per /api/music/status call.
+const musicHtml = read('music.html');
+function musicSandbox(statusReplies, S = {}) {
+  const calls = { ws: 0, setup: [], players: 0, offline: [], reconnectIn: [], watcher: null, cleared: 0 };
+  const ctx = {
+    S: Object.assign({ ws: null, wsRetries: 0, wsRetryDelay: 2000, wsRetryTimer: null, maAvailable: false }, S),
+    MA_WS: 'wss://zoe.local/modules/music-assistant/ws', zoeHdrs: () => ({}),
+    fetch: async () => { const r = statusReplies.shift() || { ok: false }; return { ok: !!r.ok, json: async () => r.json }; },
+    WebSocket: class { constructor() { calls.ws++; } close() {} },
+    showOffline: (k) => calls.offline.push(k), showSetup: (ids) => calls.setup.push([...ids]), hideSetup: () => { calls.hideSetup = (calls.hideSetup || 0) + 1; },
+    fetchPlayersFromBackend: async () => { calls.players++; }, onWSOpen() {}, onWSMsg() {},
+    setTimeout: (fn, ms) => { calls.reconnectIn.push(ms); return 1; }, clearTimeout() {},
+    setInterval: (fn, ms) => { calls.watcher = fn; calls.watcherMs = ms; return 7; }, clearInterval: () => { calls.cleared++; },
+    Set, Math, JSON, console: { log() {}, warn() {} },
+  };
+  const code = ['refreshMAStatus', 'goOffline', 'onMAUp', 'connectWS', 'onWSClose', 'watchForMA'].map(n => extractFunction(musicHtml, n)).join('\n')
+    + '\nlet _maWatchTimer = null;\n; ({ refreshMAStatus, goOffline, onMAUp, connectWS, onWSClose, watchForMA })';
+  return { fns: vm.runInNewContext(code, ctx), calls, S: ctx.S };
+}
+{
+  check('music: a socket close re-asks the backend — MA reaped after load → offline + watcher, NO reconnect', async () => {
+    const { fns, calls, S } = musicSandbox([{ ok: true, json: { available: false } }], { maAvailable: true });
+    await fns.onWSClose();
+    assert.strictEqual(S.maAvailable, false);
+    assert.deepStrictEqual(calls.reconnectIn, []);
+    assert.deepStrictEqual(calls.offline, ['offline']);
+    assert.strictEqual(calls.hideSetup, 1, 'the setup wizard (and its poll) is left before going offline');
+    assert(typeof calls.watcher === 'function' && calls.watcherMs === 15000);
+  });
+  check('music: a socket close while the backend says MA is up → one reconnect with backoff, no watcher', async () => {
+    const { fns, calls } = musicSandbox([{ ok: true, json: { available: true, provider_count: 2 } }], { maAvailable: true });
+    await fns.onWSClose();
+    assert.deepStrictEqual(calls.reconnectIn, [3000]);
+    assert.strictEqual(calls.watcher, null); assert.deepStrictEqual(calls.offline, []);
+  });
+  check('music: backend unreachable on close → offline shown at once, no reconnect, watcher started', async () => {
+    const { fns, calls } = musicSandbox([{ ok: false }], { maAvailable: true });
+    await fns.onWSClose();
+    assert.deepStrictEqual(calls.offline, ['offline']); assert.deepStrictEqual(calls.reconnectIn, []);
+    assert(typeof calls.watcher === 'function');
+  });
+  check('music: a watcher poll that definitively says "down" shows the offline state (an unreachable backend keeps watching silently)', async () => {
+    const { fns, calls } = musicSandbox([{ ok: false }, { ok: true, json: { available: false } }, { ok: true, json: { available: false } }]);
+    fns.watchForMA();
+    await calls.watcher(); assert.deepStrictEqual(calls.offline, []);
+    await calls.watcher(); await calls.watcher();
+    assert.deepStrictEqual(calls.offline, ['offline', 'offline']); assert.strictEqual(calls.hideSetup, 2); assert.strictEqual(calls.cleared, 0); assert.strictEqual(calls.ws, 0);
+  });
+  check('music: watcher recovery with NO providers takes the setup branch (not an empty player)', async () => {
+    const { fns, calls } = musicSandbox([{ ok: true, json: { available: true, provider_count: 0, providers: [{ domain: 'YTMusic' }] } }]);
+    fns.watchForMA(); await calls.watcher();
+    assert.deepStrictEqual(calls.setup, [['ytmusic']]); assert.strictEqual(calls.players, 0);
+    assert.strictEqual(calls.ws, 1); assert.strictEqual(calls.cleared, 1);
+  });
+  check('music: watcher recovery with providers loads players then opens the socket', async () => {
+    const { fns, calls } = musicSandbox([{ ok: true, json: { available: true, provider_count: 1 } }]);
+    fns.watchForMA(); await calls.watcher();
+    assert.strictEqual(calls.players, 1); assert.strictEqual(calls.ws, 1); assert.deepStrictEqual(calls.setup, []);
+  });
+  check('music: watcher tick while MA is still down opens nothing and keeps watching', async () => {
+    const { fns, calls } = musicSandbox([{ ok: true, json: { available: false } }, { ok: false }]);
+    fns.watchForMA(); await calls.watcher(); await calls.watcher();
+    assert.strictEqual(calls.ws, 0); assert.strictEqual(calls.players, 0); assert.strictEqual(calls.cleared, 0);
+    fns.watchForMA(); // idempotent: a second call does not start a second interval
+  });
+}
+
 // ── chat.html: the guest pool is never listed ────────────────────────────────
 check('chat: loadSessions refuses to list sessions without a member session, and sends no ?user_id=', () => {
   const body = extractFunction(chatHtml, 'loadSessions');
