@@ -1,0 +1,387 @@
+---
+type: Research / design record
+title: "The night mind (2026-10-09): sleep-time reflection for a small local model"
+status: DRAFT for the owner. Research and design only. No code, flag, service, store, database or live brain was touched; nothing here is a decision until the owner says so. All household names are synthetic (the bench's own pools).
+date: 2026-10-09
+description: How Zoe gets a nightly pass that turns each household member's day into a living, cited model (threads in progress, what they carry, mood trajectory, what to raise and what to leave alone, what changed) on the 8,192-token Gemma 4 E4B slot, with a 12B variant for a night-only window. Adopts Hindsight's consolidation/delta schema and prompts for the merge step and MemPalace's verbatim-quote discipline for the evidence step; replaces the model's "insights" with deterministic statistics; measures K2/K3 on the real nightly model; ranks ten experiments with pass bars.
+evidence_labels: "[src] file:line read today | [read] installed package source read today | [doc] page or paper fetched today (URL in section 12; fetch-tool summaries are flagged, because the fetch tool returns a small model's summary of a page) | [measured] a command run today, or a figure copied from a cited measured repo record | [derived] arithmetic on measured numbers | [inferred] reasoned, not run | [unverified] not confirmed"
+---
+
+# The night mind (2026-10-09)
+
+Read with: `docs/research/memory-bakeoff-decision-2026-10-08.md`, `docs/research/bakeoff-run-20261008-1805.md`, `docs/research/mempalace-deep-dive-2026-10-06.md`, `docs/architecture/samantha-evolution-plan.md`, `docs/knowledge/samantha-bar.md`, and two records that are on open PR branches and not yet on `main` (read from their branches): `docs/research/samantha-mind-layer-2026-10-07.md` (branch `docs/mind-layer-2026-10-07`, PR 1908) and `docs/research/what-gets-us-closer-2026-10-07.md` (branch `docs/research-what-gets-us-closer-2026-10-07`, PR 1909). They are cited below as "mind-layer" and "closer".
+
+## 0. Answer first
+
+1. **The design in one line.** A four-stage nightly pass where the 4B only does the two things the evidence says a 4B can do (copy a verbatim span with its turn id, and merge/update a short list), and code does everything a 4B is bad at (counting, trends, dormancy, sensitivity, deciding what to raise). Stage 1 (code) packs the member's day into chunks that fit 8,192 tokens. Stage 2 (model, per chunk) emits only *moments*: turn ids, a verbatim quote, and a few enums. Stage 3 (model, once per member) merges moments into a short list of *threads* using Hindsight's create/update/delete schema with `source` ids and a `reason`. Stage 4 (code) decides raise/leave, computes mood trajectory and "what changed" from timestamps and counts, and renders a day card under 350 tokens. Every sentence the card contains is either a verbatim owner quote with its turn id or a template over counts. Section 4.
+2. **Adopt, per the standing rule.** The merge step and its prompt rules come from **Hindsight 0.10.2** (MIT; `consolidation/prompts.py`, `reflect/prompts.py:1098-1250`, read in the installed venv): create/update/delete with `source_fact_ids` and a mandatory `reason`, "PREFER UPDATE OVER CREATE", "ONE OBSERVATION PER DISTINCT FACET", "PRESERVE HISTORY", "NO COMPUTATION". The evidence step comes from **MemPalace's closet prompt** (`closet_llm.py`, "EXACT verbatim from the content, not paraphrased") plus Hindsight's own map prompt for over-budget reflection (`CLAIMS_SYSTEM_PROMPT`, `reflect/prompts.py:926`). The "5 insights with citations" step of **Generative Agents** is deliberately *not* taken for the 4B (section 3.2). Hindsight as an engine is not adopted (the bake-off verdict is `KEEP_Z0`); we take its prompts and schema into Zoe's existing nightly cycle and record that this is a port of pieces, not a look-alike product.
+3. **The current nightly pass drops most of a busy day.** The nightly digest cuts the transcript to 3,000 characters before the model sees it (`memory_digest.py:1346-1353`, a logged warning says "dropped N tail chars"), reads at most 200 turns (`:1192`), and the open-loop pass reads at most 50 turns of the last two days (`LIMIT 50` at `:2287`). The emotional pass cuts at 3,000 as well (`:1094`). [src] On a 200-turn day of 8-word turns that is roughly 10,000 characters, so about 70 % of the day never reaches the model [derived; the real turn-length distribution is unmeasured, experiment E1]. Chunking is not an optimisation here; it is the missing first stage.
+4. **The K axis cannot yet tell reflection from copying.** I ran the bench's own scorers on an "echo" arm whose observations are simply the owner's non-superseded turns, unchanged: it passes K1 (10/10 decidable true), K2 (4/4 threads), K4 (0 stale) and fails only K5 on one hedged owner sentence [measured today, `scripts/perf/zmb/scorers_cap.py`]; with all turns offered for every question it also passes K3 (3/3). The planted life is also tiny: 24 typed turns, about 257 tokens over 30 days, no routine commands [measured today, `life.life("zmb-v1")`]. So a K2/K3 PASS on the real nightly model would not yet mean the model *understood* anything, and would not exercise chunking at all. Section 7 adds a compression control, a dense life and a late-in-the-day cell.
+5. **K2/K3 on the real nightly model need one new arm.** Both cells SKIP on Z0 because the lab scripts Z0's nightly model (`cells.py:_reflection` raises `NotImplementedError` when `observations()["model"] == "scripted"`; `arms/base.py:95-98`). The fix is an arm with `nightly_model = "own"` whose `reflect_pass()` runs the real night-mind code against the clone brain on the 8k slot and whose `observations(q)` exports the real cards. No scripted proposals are handed to it, so K1/K4/K5 then measure what the real model says. Section 7.
+6. **Day-sim 1b/7b/S9 cannot see the night mind today**: the day-sim stands in the open-loop pass and the card rebuild and does not run the 03:00 digest, the only writer of the emotional rows the brief reads (`docs/knowledge/samantha-bar.md`, "Nightly passes"; `scripts/perf/samantha_day_sim.py` header). The night mind therefore needs a synthetic-run hook, and its threads must carry the same `source_ref` key the brief uses (`brief_first_turn.mentioned`, `open_loops:<id>` / `memory:<id>`), or the "brief then raise the same thing" repeat the bar already lists as unobservable happens with night threads too. Section 6.
+7. **Honest status of the evidence.** No source I found measures sleep-time reflection quality on a personal-memory task with a model near 4B. Letta's sleep-time paper is math and software-engineering; Generative Agents used a GPT-3.5-class model; every consolidation system with an LLM prompt that I read (Mem0, Zep/Graphiti, Nemori, RMM, LightMem, MemoryOS) reports GPT-class or 30B models. The nearest small-model data are A-MEM (1B-3B, QA quality only), RL-trained 3B-7B memory managers, and one young AGPL project reporting 60-83 % for local 8-20B engines. So the pass bars in section 10 are our own, and the first deliverable of the program is the measurement, not the build.
+
+## 1. Method, scope and limits
+
+* **Read-only.** I read the repo at `origin/main` b2ec3ef5, the two open-PR records above from their branches, the installed Hindsight package (`~/.zoe/bakeoff-2026-10/hindsight-venv`, 0.10.2) and MemPalace package (`mempalace-venv`, 3.10.0), and fetched sources. I ran the bench's pure scorers offline on synthetic data (the echo control, section 7.1), `free -m` and `ps` once (read-only), and nothing else. I opened no store, called no live endpoint, did not run the brain, and did not touch the live checkout.
+* **Web evidence** was gathered 2026-10-09 by me and by one Sonnet research sub-agent (the metered-model rule). Where a figure rests on a fetch-tool summary, an abstract or a search snippet, it is labelled. I re-fetched four load-bearing facts myself: Generative Agents' prompts and 150 threshold (ar5iv), the llama.cpp `json_schema` / grammar support text, Letta's sleep-time blog and the sleep-time-compute abstract, and the Recordare README. Section 11 lists what I could not verify.
+* **What I do not claim.** I do not claim a 4B can run this well; nobody has measured it. I do not claim the 12B helps; it could not be loaded (section 8.3). Timings are derived from the bake-off's measured per-call cost, not from a night-mind run.
+
+## 2. What Zoe has tonight (file:line) and where it falls short for a night mind
+
+| Piece | What it does | Gap for a night mind |
+|---|---|---|
+| Nightly digest `run_memory_digest` (`memory_digest.py:836`) | Loads the day's owner turns (`_load_todays_messages`, `:1175`, `LIMIT 200`), asks the 4B for facts with a verbatim `quote`, runs the observation gate per fact, supersedes or ingests | Transcript cut to 3,000 chars (`:1346-1353`); one call, no chunking; output is isolated facts, not threads; no mood, no raise/leave |
+| Observation gate (`memory_authority.check_observation`, `memory_authority.py:1364`; used at `memory_digest.py:925-960`) | A model-written statement is stored only when the owner's words carry it (verbatim span, one sentence naming everything it names, or a cited approved user-class row); otherwise held pending | Sentence-level only: it cannot admit a multi-turn pattern (a design constraint, section 4.4) |
+| Turn provenance (`Transcript.turns`, `:1162`; `fact_anchor` `:1285`; `locate_turn` `:1302`) | The digest already records which `chat_messages` id a quote came from | This is the citation mechanism the night mind needs; it exists |
+| Open loops (`_extract_open_loops`, `:2223`; prompt `_OPEN_LOOPS_PROMPT` `:2162`) | One call over the last 50 turns of two days, up to 5 loops, weight 1-5, `follow_up_in_days` | No thread identity across nights, no closure by the owner's later words except the lifecycle flag, no sensitivity policy; the day-sim measured stale loops surviving a correction (`samantha-bar.md`, "Mechanism findings") |
+| Emotional pass (`_emotional_memory_pass`, `:1087`; prompt `:336`) | Moments with emotion and significance 1-3, from the first 3,000 chars | Per-moment rows; no trajectory, no "leave alone" |
+| Dreaming cycle (`run_dreaming_cycle`, `:2407`) | REM reinforce, open loops, selector, implicit conflicts, Sunday deep sleep + synthesis + portrait, nightly card rebuild | The only reflection products are uncited prose (`_synthesis_pass` `:2055`, portrait), measured inert: portrait 3 vs 4 of 21 (mind-layer section 2.3, citing `user-model-ab.md` run 1) |
+| Brief on first turn (`brief_first_turn.day_items`, `brief_first_turn.py:197`; context `proactive/triggers/morning_checkin.py:34-124`) | Calendar, up to 3 open loops, up to 2 emotional moments from the last 3 days; the first moment goes into the brief as "Recently on their mind (at most a gentle check-in)" | No restraint: any emotional moment from the last 3 days is eligible, regardless of whether the member would want it raised; no mood trajectory; no "what changed" |
+| Selector (`proactive/selector.py:104`) | salience = importance x 0.5^(age/72 h) x relevance; cap, raise gap | Importance is the open loop's 1-5 weight or the three safety-keyword tiers (`memory_importance.py:60`) |
+| User-model card (`user_model_card.py`, 1,400 chars) | Deterministic card of current facts; the measured +6/21 winner | Facts only; nothing about what the person is carrying now |
+| llama-server constrained output | Already used: `response_format: json_schema` in `ui_compose.py:136-138`; `grammar` in `router_two_stage.py:294` | Not used by any nightly extractor, which parse free text with `_parse_json_array` (`memory_digest.py:2184`) |
+
+## 3. What the sources give, and what each is worth to a 4B
+
+### 3.1 Sleep-time compute and Letta
+
+* **The paper** (arXiv 2504.13171) [doc, abstract fetched]: offline "thinking" about a context before queries arrive cuts test-time compute about 5x for equal accuracy on Stateful GSM-Symbolic and Stateful AIME, up to +13 % and +18 % accuracy, and 2.5x lower cost per query when several questions share a context. The sub-agent reports that the gain tracks "query predictability" [fetch-summary]. Everything it measures is math and one software-engineering case study; nothing is personal memory. What transfers is the *argument*: the next questions are predictable ("how is the thing with X going?", "what's on today?"), so precompute for them. That is exactly the morning brief and the recall packet.
+* **Letta's implementation** [doc, blog fetched; forum guide via sub-agent, fetch-summary]: two agents, a primary that cannot edit core memory and a sleep-time agent that can; tools `memory_insert`, `memory_replace`, `memory_rethink` (the large rewrite) and a commit step; frequency set in steps (an example uses every 5 messages); a larger, slower model is recommended for the sleep-time agent than for the primary (the opposite of our constraint). Letta's current "dreaming" (`/sleeptime` in letta-code) triggers "after a set number of completed agent steps or when the context window is compacted" and has an optional "Agent reviews before applying" second pass [doc]. Context repositories give the sleep-time work git worktrees so slices of history can be processed in parallel and merged [doc, fetch-summary].
+* **What we take:** (a) the *shape* (primary never writes durable understanding; a separate background pass does), which Zoe's dreaming cycle already is; (b) the review-before-apply pass, which maps onto our observation gate; (c) the map-reduce over slices of history. **What we do not take:** `memory_rethink`, a free-form block rewrite by the model. For a 4B it is the exact failure the portrait showed (a rewrite that loses the specifics and, a week later, re-asserts a superseded fact; mind-layer section 2.3). I could not read Letta's sleep-time prompt or the `memory_rethink` docstring (raw paths 404, DeepWiki rate-limited); that is a stated gap.
+
+### 3.2 Generative Agents (Park et al., 2023)
+
+[doc, ar5iv fetched; PDF read in full by the sub-agent] Importance is an LLM-asked integer: "On the scale of 1 to 10, where 1 is purely mundane (e.g., brushing teeth, making bed) and 10 is extremely poignant (e.g., a break up, college acceptance), rate the likely poignancy of the following piece of memory." Reflection fires when the summed importance of recent events passes 150 (about two to three times a day in the simulation). Step 1 gives the model the 100 most recent records and asks "what 3 most salient high-level questions we can answer about the subjects in the statements"; step 2 retrieves for each question and asks "What 5 high-level insights can you infer from the above statements? (example format: insight (because of 1, 5, 3))". Ablation TrueSkill: full 29.89, no reflection 26.88, no reflection or planning 25.64, no memory 21.21. The paper itself has a section on confabulation ("remember, but with embellishments").
+
+What it is worth here:
+* **The citation is a bare index into a numbered list, with no quote and no verification.** Our K1 is the check the original never had.
+* **I found no replication of importance scoring or the insight step on a ~4B model** (sub-agent search; a snippet only said generic 7B agent tasks are hard). TofuEval, the nearest proxy, measures summary hallucination: sentence-level error 8.8 % for GPT-3.5-Turbo, 14.6 % for a 30B WizardLM and 19.6 % for Vicuna-7B, with low self-agreement for small models (kappa 0.35-0.47 vs 0.96 for GPT-4) [fetch-summary; 2023-era models, may not transfer to Gemma 4]. Inference over several statements ("insights") is where the 4B is least reliable (mind-layer section 3.3: belief inference collapses at 3B and below; FANToM, OpenToM).
+* **Decision:** keep the *trigger idea* (do not spend the 4B on a quiet day: run the model stages only when the day's summed weights pass a threshold; the existing 20-word floor at `memory_digest.py:862` is the crude version) and keep *importance as a small integer*, but use Zoe's existing 1-3 scale (`_EMOTIONAL_EXTRACTION_PROMPT`, `memory_digest.py:336`) instead of 1-10, because a 4B will not use ten levels reliably [inferred; to be measured by E3 as rank correlation with a labelled set]. Replace the "5 insights" step with code-computed statistics (section 4.5). A 12B may be given a *hypothesis* step (section 4.8).
+
+### 3.3 Hindsight (read in the installed package)
+
+* **Observation schema and consolidation prompt** [read, `hindsight_api/engine/consolidation/prompts.py`, 240 lines, about 17,300 characters]. Output is `{"creates": [...], "updates": [...], "deletes": [...]}`; every entry carries a mandatory `reason`; creates and updates carry `source_fact_ids` copied from the input; updates carry the existing `observation_id`; "AT MOST ONE UPDATE PER observation_id"; a delete without an id "is rejected, and rejecting it discards the whole response". Rules worth copying verbatim in spirit: PREFER UPDATE OVER CREATE (with the CREATE default when no existing observation covers the facet); ONE OBSERVATION PER DISTINCT FACET; MATCH BY ENTITY/FACET, NOT TOPIC; STATE CHANGES - UPDATE CONCISELY ("User owned a dog named Rex who died on March 15, 2025"); PRESERVE HISTORY ("never DELETE" significant events); **NO COMPUTATION** ("you do not have the full picture - never calculate, derive, or adjust numeric values"); KEEP DISTINCT TOPICS DISTINCT. The `reason` for a CREATE must say which existing observation was considered, "audited to catch duplicate creates". The mission (what to track) rides in the user message so the system prefix is cacheable (`build_consolidation_input`).
+* **Why it does not fit 8k as shipped** [measured, run-2 record]: the maximum consolidation prompt was 8,313 tokens, 3 calls failed on a context-size error. The reason is that the prompt batches new facts together with *recalled existing observations and their source memories* (`_OBSERVATION_FIELDS`); our stage 3 bounds both (section 4.3).
+* **Mental-model refresh** [read, `reflect/prompts.py:1098-1250`]: a structured document of sections and blocks with stable ids; the model emits `{"operations": [...]}` (`append_block`, `insert_block`, `replace_block`, `remove_block`, `add_section`, ...), each justified by a "SUPPORTING FACT"; two rules are the best-written statements of restraint I read: **"Absence is not contradiction"** (an entity missing from this batch is not thereby wrong or removed) and a **refutation threshold for removal** (only a fact that explicitly refutes that exact detail, or a later-*dated* statement about the same facet, may remove or overwrite; facts arrive out of date order, so "later" is the date the text gives, never arrival). The synthesis is labelled UNTRUSTED. We take these two rules into stage 3, because the failure they prevent (a thread silently dropped because today's batch did not mention it) is the one a per-day pass will hit every quiet day.
+* **Map-reduce for over-budget evidence** [read, `reflect/prompts.py:591-1000`]: when retrieved data exceeds the context budget it is split into chunks (floor 1,024 tokens per chunk, `_MIN_SPLIT_CHUNK_TOKENS`), each chunk is compressed to "dated, cited claims" by `CLAIMS_SYSTEM_PROMPT` ("Do NOT synthesize, conclude, resolve conflicts, or answer the question - report conflicting claims as separate bullets with their dates; a later pass reconciles them"), and one reduce call applies "the claim with the LATEST mentioned_at date is authoritative". That is our stage 2 -> stage 3 split, already written and shipped by a maintained project.
+* **Fact schema** [read, `retain/fact_extraction.py:255-285`]: `what / when / where / who / why`, `entities`, and `causal_relations` restricted to *earlier* facts by index ("prevents hallucination of invalid indices"). The `why` field is the cause; under our authority rule a cause is stored only as a span of the owner's words (mind-layer row 4).
+* **Cost on this brain** [measured, run-2 record]: HMA@32k reflection (the full engine) took 632 s wall on the 4B for the tiny life with 52/52 valid tool calls and a peak prompt of 4,562 tokens, and was vetoed on K1; the 8k run could not complete. The peak of 4,562 even at 32k shows the engine's own need for this life is well under 8k when it does not accumulate.
+
+### 3.4 MemPalace closets
+
+[read, `mempalace/closet_llm.py`, 400 lines] `PROMPT_TEMPLATE` asks for JSON with `topics` (8-15 distinctive words, "NOT generic words like 'conversation'"), `quotes` ("2-5 entries. EXACT verbatim from the content, not paraphrased. Attribute with [Speaker] prefix") and a `summary` ("2-3 sentences ... mention WHO, WHAT, and WHY. No filler"), then converts them to pointer lines `topic|entities|->drawer`. It is an *index* for finding content later, optional, with a three-attempt retry on invalid JSON, `MAX_CONTENT_CHARS = 30000` and `MAX_OUTPUT_TOKENS = 1500`. In run 2 the closet pass summaries were the reflection (K) source for the MPA arm and scored 0/5 cells (items 5/12) [run-2 record]. What it gives us: the **quote-first discipline** (a quote field that is checked against the source) and the **topic list as a cheap thread key**. It does not give a user model, and its 30,000-character window is irrelevant on 8k.
+
+### 3.5 A-MEM, Mem0 graph memory, Zep/Graphiti
+
+* **A-MEM** (arXiv 2502.12110) [doc, PDF grepped by the sub-agent; mind-layer read it as text]: notes with LLM-written keywords and context, links to neighbours, and in-place "memory evolution" of neighbours. It ran on 1B-3B models (Qwen 1.5B/3B, Llama 3.2 1B/3B via Ollama) with about 1,200 tokens per operation, but the metrics are QA ROUGE/METEOR, not faithfulness, and it loses on adversarial/abstention questions (50.03 vs 69.23). Overwriting history is the opposite of our authority rule; **not taken**.
+* **Mem0 / Mem0g** (arXiv 2504.19413) [doc, grepped]: an LLM chooses ADD / UPDATE / DELETE / NOOP by function calling; Mem0g converts messages to entity-relation triples and an "LLM-based update resolver" marks relations "invalid rather than physically removing them". All numbers use GPT-4o-mini; Mem0's extraction prompt alone is 8,131 tokens, so it cannot run on our slot (mind-layer, citing the decision record). **Taken as a pattern only:** mark invalid, never remove.
+* **Zep / Graphiti** (arXiv 2501.13956; prompts at `getzep/graphiti/.../prompts`) [doc, grepped by the sub-agent]: every edge has `t_valid` / `t_invalid` (event time) and created/expired (transaction time); a new fact is compared with related existing edges and the old one gets `t_invalid` = the new fact's `t_valid`; communities are summarised by "an iterative map-reduce-style summarization". The `dedupe_edges` prompt is the most small-model-friendly design I saw: the model is given a *numbered* list of existing facts and candidates and returns two lists of **indices** (`duplicate_facts`, `contradicted_facts`), not new text. **Taken:** validity interval fields on every observation (section 5) and *index-valued* outputs wherever possible (stage 3 outputs thread ids and moment ids, never retyped text).
+* **Not taken from any of the three:** the graph database, and any LLM-written free text that becomes a durable claim without a quote.
+
+### 3.6 2025-26 work on reflection with small or local models
+
+| Work | What it does | Model scale | What it gives us |
+|---|---|---|---|
+| LightMem (arXiv 2510.18866, ICLR 2026) [doc, fetch-summary] | Soft write now, offline "sleep-time" update queue later; token reduction up to 38x (GPT) | GPT-4o-mini, Qwen3-30B-A3B | The soft-then-offline pattern. Caution: offline update was not clearly better than soft updates in its own table, and a reproduction is titled "Naive RAG Is Just as Good for Memory Management" (arXiv 2607.29104) [title/summary only]. Offline consolidation must beat plain retrieval on *our* bench before it ships |
+| Nemori (arXiv 2508.03341) [fetch-summary] | Episode segmentation, then a predict-calibrate loop: predict the episode from existing semantic memory, keep only the gap | GPT-4o-mini / 4.1-mini | **The best novelty filter for "what changed"**: store/raise only what the existing model of the person would not have predicted. We approximate it deterministically (state diff against last night's threads) |
+| RMM (arXiv 2503.08026) [fetch-summary] | Per-session topic summaries with merge-or-add decisions; RL reranker | Gemini 1.5 | Per-session topic extraction with merge-or-add is our stage 3 |
+| MemoryOS (arXiv 2506.06326) [doc, partly read] | Segments by similarity; a heat score promotes segments over a threshold into a persona update | GPT-4o-mini main; Qwen2.5-3B/7B appear as baseline rows | A deterministic *heat* trigger for what updates the persona, instead of a model deciding |
+| MemInsight (arXiv 2503.21760) [doc, grepped] | Attribute-value annotations per memory | Claude 3 Sonnet, Llama-3-70B, Mistral-7B | The only per-annotation groundedness figure found: 99.14 % of annotations grounded in the dialogue (mostly by larger models) |
+| Memory-R1 (arXiv 2508.19828), Mem-alpha (arXiv 2509.25911) [snippet] | RL-trained memory managers | Qwen 3B-14B, LLaMA-3.1-8B; Qwen3-4B 0.389 to 0.642 | A ceiling with training only; out of scope |
+| Recordare (`arkimedehq/recordare`) [doc, README fetched] | Per-person nightly job writes day and month diaries, "zero LLM calls when nothing is new"; "what you say counts as your memory, what someone else tells you stays theirs, and what the assistant only guessed never becomes a fact"; "if you never say how it went, it does not assume you went" | "Local 8-20B engines score 60-83 %, below the project's 95 % bar" | The closest design match and the only stated local-model number. **AGPL-3.0, 0 stars, first release 2026-10-08: ideas only, never code, never a dependency.** The two plan/guess rules go into stage 3 (a plan stays open until the owner reports the outcome; a model's guess is never a fact) |
+| Kiwi-mem, tigerless agent-memory, EverOS (closer rows 4, 7, 8) | Day/week/month summaries with recent days in full and older as gist; unattended pass may add and update but delete is only a proposal; per-user profile refined between sessions | n/a | Already ranked in `closer`: tigerless's "delete = proposal" is the authority doctrine and the night mind follows it (it never deletes an owner-stated row) |
+
+**Structured output on small models.** arXiv 2609.23742 (Qwen3 0.6B/4B, Llama 3.2 1B/3B, Phi-4-mini, 14 tasks) [fetch-summary]: constrained decoding takes schema validity from 78.6-92.9 % to 100 % but "rescues form; it does not rescue scale" and "schema conformance is necessary but not sufficient for semantic correctness". arXiv 2605.02363 [fetch-summary] warns that grammar-constrained decoding cost 3.6x-8.2x latency in its engine on math tasks and sometimes lowered accuracy; I found no llama.cpp measurement, so the grammar overhead on the Orin is an experiment (E3), not an assumption. llama-server supports a `json_schema` body field and, on chat completions, `response_format`, plus raw `grammar` [doc, llama.cpp grammars README]; the schema "is only used to constrain the model output and is not injected into the prompt", so the prompt must describe the fields in words, and `additionalProperties`, `uniqueItems`, `contains`, conditionals and remote `$ref` are unsupported. Zoe already ships both mechanisms (section 2, last row).
+
+### 3.7 Restraint: what the evidence says about "what to leave alone"
+
+* CIMemories (arXiv 2511.14937) [abstract/snippet]: models leak memory attributes into tasks where they are inappropriate in 14 % (GPT-4o) to 69 % (Qwen-3 32B) of cases, and the rate accumulates across tasks and varies between runs of the same prompt. PersistBench (arXiv 2602.01146) [fetch-summary]: median failure 53 % on cross-domain samples and 97 % on sycophancy samples across 18 models. BenchPreS (arXiv 2603.16557) [fetch-summary]: models apply stored preferences as global rules.
+* "Remembering or monitoring?" (Frontiers in Psychology 17, 2026; six experiments, N = 2,140, simulated chat) [fetch-summary]: a relevant memory cue raised trust and an intrusive one lowered it, with a larger penalty in a sleep-health scenario than in apparel; a transparency dashboard did not remove the penalty. "After Talking with 1,000 Personas" (arXiv 2602.04000) [fetch-summary]: proactive assistants are rejected at inconvenient times.
+* The mind-layer record adds the field evidence: mid-task interventions dismissed 62 % of the time, OpenAI retiring its proactive feed, and the owner's own decision to switch the spoken brief off (mind-layer section 3.4).
+* **Design consequence [inferred]:** sensitivity is context-dependent and unstable under resampling, so restraint cannot be a model judgement. It is deterministic floors in code (topic classes, minors, time, cooldown, the owner's own "don't bring that up"), and the model may only *propose a reason to leave something alone* (it can demote, never promote).
+
+## 4. The design
+
+### 4.1 Pipeline
+
+```
+ 02:05+ (existing window)         per member, owner-attributed turns only (guests/anonymous: nothing)
+ ┌───────────────┐   ┌──────────────────┐   ┌─────────────────────┐   ┌───────────────────┐
+ │ 1 PACK (code) │ → │ 2 MOMENTS (4B)   │ → │ 3 THREADS (4B)      │ → │ 4 DECIDE+RENDER   │
+ │ turns, ids,   │   │ per chunk:       │   │ once per member:    │   │ (code) trend, diff,│
+ │ drop commands,│   │ id+quote+enums,  │   │ create/update/close │   │ raise/leave, card  │
+ │ chunk ≤2.4k tk│   │ quote verified   │   │ + source ids+reason │   │ ≤350 tokens        │
+ └───────────────┘   └──────────────────┘   └─────────────────────┘   └───────────────────┘
+        no model            grammar-constrained       grammar-constrained         no model
+```
+
+### 4.2 Stage 1: pack (code only)
+
+* **Input:** the member's owner-attributed user turns since the last watermark (not "the last 24 hours"; store the highest `chat_messages` id processed in the run row), already filtered by `own_words.filter_turns` and `_skip_forgotten_turns` as the digest does now (`memory_digest.py:1175-1230`). Remove the `LIMIT 200` and the 3,000-character cut for this pass; bound by chunk count instead.
+* **Drop routine commands deterministically** before the model sees them (timers, lights, music, weather, maths). The two-stage router has already classified most such turns; if the route label is stored per turn, use it, else reuse `open_loop_quality.loop_turn_is_meta` plus a no-first-person/no-name/no-date rule. [inferred; E1 measures the share.] The MemPalace pilot found real household speech is mostly routine commands and that a recency tail held 0 of 9 durable facts (mind-layer / deep-dive section 4.5), so this step is also the importance prior.
+* **Pre-score in code:** `memory_gate.extract_affect` (`memory_gate.py:664`) for feeling words, `memory_importance.score_importance` (`:60`) for safety/diet/vital, presence of a name, date or "I'm/my". A turn with none of these and fewer than five content tokens is not sent.
+* **Chunk** by token estimate to at most **2,400 tokens of turns per call**, breaking on turn boundaries, in time order, with one turn of overlap. Budget on the 8,192 slot [derived, token ~ 4 characters]: system prompt about 450 + yesterday's open threads (at most 8 x 40 = 320) + chunk 2,400 + output cap 450 = about 3,600, leaving over 4,500 tokens of margin against the failure the bake-off hit (Hindsight's 8,313-token consolidation prompt). 2,400 is a starting value; the bake-off's measured extraction ran at a 1,358-token maximum prompt with 104/104 valid JSON, so E3 sweeps 1,200 / 1,800 / 2,400 / 3,200 and takes the largest value that holds the bar.
+* **Cap** at 6 chunks per member-night; beyond that, keep the highest pre-scored turns and log a count of what was skipped. A quiet day (fewer than 20 words, the digest's current floor) makes no model call at all (Recordare's "zero LLM calls when nothing is new"; Generative Agents' threshold idea).
+
+### 4.3 Stage 2: moments (map, 4B, one call per chunk)
+
+Adopted: MemPalace's quote discipline and Hindsight's map prompt ("report, do not conclude"). The model never writes prose that becomes a claim; it points.
+
+System prompt (about 330 tokens; the words below are the proposal, to be sha-pinned like the bar's rubrics):
+
+```
+You read one person's own words from today. Each line is [id] words.
+Pick the moments that matter for knowing this person: something in progress,
+a plan or date, a feeling, a change from how things were, something about
+someone they know, a health matter. Skip commands (lights, timers, music,
+weather, sums) and small talk. Do not explain, conclude or guess a reason.
+Return JSON: {"moments":[{"ids":[...],"quote":"...","kind":"...","who":[...],
+"feeling":"...","weight":1,"later":"..."}]}, at most 8.
+ids: the line ids it comes from (1-3). quote: copied EXACTLY, letter for letter,
+from ONE of those lines (3-25 words). kind: progress|plan|feeling|change|person|health|other.
+who: names the person mentions in it ([] if only themselves).
+feeling: none|worried|sad|angry|stressed|happy|excited|proud|relieved|other.
+weight: 1 minor, 2 notable, 3 major. later: open (still to happen or unresolved) | done | na.
+If nothing matters, return {"moments":[]}.
+```
+
+Enforcement: `response_format: json_schema` with `enum` for `kind`, `feeling`, `later`, integer range for `weight`, `maxItems: 8`, and `quote` as a string (the schema cannot make it verbatim). **Verbatim check in code:** `quote` must be a whitespace-and-case-normalised substring of one cited turn (the same `squash` test as `fact_anchor`, `memory_digest.py:1285-1299`); a moment that fails is dropped and counted, never repaired. The cited ids must exist in the chunk. Surviving moments are written with the turn id (K1's "said together" test is sentence-level; a quote is one sentence by construction).
+
+Why this surface: quote-and-enums is the narrowest thing a 4B can be asked that still carries information. The constrained-decoding literature says form is solved and content is not; the only remaining content risks are *which* moments it picks (recall, measured by K2/K7) and whether it mislabels `kind`/`feeling` (measured against a labelled set). Neither can fabricate a sentence the owner did not say.
+
+### 4.4 Stage 3: threads (reduce, 4B, once per member)
+
+Input (target under 2,500 tokens): last night's open threads (id, title, `state` text, last-seen day, at most 8 lines) + tonight's verified moments across all chunks, de-duplicated by quote and sorted by weight (cap 24 lines, each `m7 [day-of-week] kind feeling: "quote"`). Output, adopted from Hindsight's create/update/delete schema with the two refutation rules above:
+
+```
+{"threads":[
+  {"op":"create","title":"<=8 words","moments":["m3","m7"],"status":"open","reason":"..."},
+  {"op":"update","thread":"t12","moments":["m5"],"status":"open|resolved|changed|quiet","reason":"..."}],
+ "unchanged":["t4","t9"]}
+```
+
+Rules in the prompt, taken from Hindsight (`consolidation/prompts.py`, `reflect/prompts.py`) and adapted: PREFER UPDATE OVER CREATE; ONE THREAD PER PERSON-OR-MATTER; copy ids exactly; a CREATE's `reason` names the existing thread considered and why none matched; ABSENCE IS NOT CONTRADICTION (a thread not mentioned tonight goes in `unchanged`, never closed); a thread is `resolved` only when a moment says it finished (Recordare's "if you never say how it went, it does not assume you went"); NO COMPUTATION and NO CAUSES (never write "because" unless a cited quote says it; the model writes no text beyond the 8-word title and a one-sentence `reason` that is audit-only and never shown). Thread *state text shown to the brain is not model prose*: it is rendered by code from the newest cited quote ("Mon: \"my knee has been sore since rowing on Sunday\""), which is how the sentence-level K1 rule is satisfied by construction.
+
+**Why threads are lists of sentence-level observations, not paragraphs.** `scorers_cap.classify_observation` marks an observation FALSE/`link` when it names two entities the owner never put in one sentence (`scorers_cap.py:91-118`). A model-written thread summary ("Tamsin is unhappy at Quillmoor and interviewing at Pinecrest Mills") joins two sentences said days apart and would be judged a fabricated link even if true. So each stored observation is one verified quote (or a template over counts); the *thread* is the structure that groups them (`thread_id`), never prose that merges them. Cross-turn causal or explanatory joins are not observations; they are hypotheses (section 4.8) and are not exported to K1.
+
+Index-valued outputs (Graphiti's `dedupe_edges` lesson): the model returns ids; text is looked up. A returned id that does not exist, an `update` for a thread not in the input, or a duplicate `update` for the same thread discards that operation (Hindsight rejects the whole response; we drop the single operation and log it, because a 4B will occasionally mis-copy an id).
+
+### 4.5 Stage 4: decide and render (code only; no model)
+
+All numbers are computed, not asked (Hindsight's NO COMPUTATION, generalised):
+
+* **Mood trajectory.** Per day, from the owner's own affect: feeling enums on verified moments (valence sign and weight) plus `extract_affect` hits. A 7-day window yields counts ("4 of the last 5 days included a worry") and a sign (steadier / lower / higher than the member's own 14-day baseline, with a minimum-days rule). Rendered by template. Mood is stored under the existing household affect policy (`docs/governance/emotional-safety-note.md` section 6: emotional memory on for every household member, never for guests, owner decision 2026-10-05, as the mind-layer record cites it); any *derived mood trajectory score* is an "other affective record" which that policy keeps adult-opt-in and 0 rows for minors and guests (mind-layer M6 text). **The trajectory is therefore computed only for opted-in adults; for everyone else only the per-moment affect rows that policy already allows are used.** [Flag for the owner: this is the one place the design touches the policy boundary.]
+* **What changed.** Diff of tonight's thread set against last night's: new, advanced, resolved, and **quiet** (a thread mentioned weekly that has not been mentioned for N days, N from its own cadence; a gap is a fact about counts, never an interpretation). Nemori's predict-calibrate idea, approximated: a change is a thread whose status moved or whose newest quote contradicts a stored current fact (an existing supersede signal), not a model's feeling that something is different.
+* **Salience** (what to raise): `weight` (1-3) x recency decay x open/resolved factor, the same shape as `selector.salience` (`proactive/selector.py:104`); it becomes the candidate importance for the existing selector, so the night mind feeds the machinery that already enforces the raise gap and daily cap rather than adding a second scheduler.
+* **Raise / leave policy** (deterministic, the model cannot override). Each thread gets `raise_policy` in {`raise`, `wait`, `leave`} and, for `leave`, a `leave_reason` enum:
+  * `leave` if: topic class is health, grief, money trouble, or conflict with a named household member (word lists in code, like `memory_importance`); the member is a minor and the thread is not child-appropriate by an allow list; the owner said anything matching "don't bring that up / between us / forget it" (this must also reach the existing forget path); the thread is a `feeling` of weight 3 less than 24 h old and the member has not mentioned it today (let them come to it); or two earlier raises of the thread were ignored (Nomi-style back-off: the interval doubles after each ignored raise, mind-layer section 3.4).
+  * `raise` only if: open, weight >= 2, due by its own `follow_up` horizon, not in a `leave` class, no raise in the last 24 h for the member, and at most **one** raise per morning (the bar's S12 spacing).
+  * Everything else is `wait`.
+  * The model's only say is a per-thread `suggest_leave: true` flag, which can add a `leave` but never remove one.
+* **Render** one card per member, at most 350 tokens, at most 4 threads:
+  `Lately: ` up to 3 lines `<day>: "<owner's quote>"`; `Carrying: ` at most 2 lines (open weight-3 or repeated worries, by quote); `Mood: ` one template sentence or nothing; `Changed: ` at most 2 template lines; `Raise: ` at most 1 line (the selector's candidate). **`Leave` items never appear in any prompt**: naming them would prime the 4B to say them (the day-sim's 1r result is the cautionary case: an injected raise the brain read as a past event it knew nothing about; `samantha-bar.md` first live run). They exist only as a deny-list that the brief builder, the selector and the unprompted-recall floor consult by thread id and by source row id. A `leave` item stays fully recallable when the member asks about it.
+
+### 4.6 Citations, validity, affect, salience: the fields (data model in section 5)
+
+An observation row is: the owner's quote, the `chat_messages` id, the day, the kind, the feeling (affect), the weight, the thread, a validity interval, and the policy. There is no field for model-written prose that carries a claim.
+
+### 4.7 Weekly roll-up (Sunday deep sleep, replacing the uncited synthesis)
+
+Map-reduce over days, not over raw turns: the week's day cards for a member (at most 7 x 350 tokens) go into one stage-3-shaped call that closes threads, promotes a thread seen on 3 or more days to `recurring`, and demotes quiet ones. Older days are kept as gist (the thread title and the newest quote), recent days in full (kiwi-mem's hierarchy, ideas only; closer row 7). The weekly narrative portrait and the uncited `_synthesis_pass` output stay dark; they were measured inert and the card is the winner.
+
+### 4.8 The 12B variant (night-only)
+
+Same four stages, same schemas, same checks. What changes, all [inferred] until E8 measures it:
+* **Chunk size** up to about 8,000 tokens of turns at `--ctx-size 32768` (fewer calls, more cross-turn context per call); stage 3 sees the whole week's moments.
+* **A verifier pass** (Letta's "agent reviews before applying", and TofuEval's finding that self-agreement tracks factual consistency): for every proposed `update`/`create`, ask the 12B, given only the cited quotes, "does the title follow from these quotes, yes/no/unsure". Drop on no/unsure. This targets the K1 failure the veto is about.
+* **A hypothesis step** (the Generative Agents "insight (because of ...)" idea, now allowed because the checker is stronger): propose at most 3 cross-turn hypotheses per member per week, each citing at least two moments, stored in a separate tier `kind = hypothesis`, **never served as fact, never exported to K1, never in the card**. Their only use is as a *question* the brain may ask once ("is the knee why you moved your run?"), after which the owner's answer (a new verbatim turn) either promotes it to a stated observation or retires it.
+* **RAM and time** in section 8.3.
+
+## 5. The data model
+
+Design rule: **an observation is a pointer to the owner's words, never a copy and never prose.** The text is looked up from `chat_messages` when it is served, so a forgotten or erased turn drops out of every card by construction (the user-model card already re-checks its source rows on every serve, `user_model_card.py:339-355`), and the quote cannot drift from what was said. This is MemPalace's verbatim stance and the "return the stored text by id" argument [doc, snippet; unverified source], applied at the row level. Counts-only tables hold the run record. Postgres, alembic migration, all `user_id`-scoped, all new tables covered by the forget cascade (`memory_forget_cascade.py`).
+
+```
+night_runs          one row per member-night; COUNTS ONLY, no text
+  id, user_id, night_date, model_id, prompt_sha, schema_sha, watermark_msg_id,
+  turns_in, turns_dropped_routine, turns_skipped_cap, chunks, calls_ok, calls_invalid,
+  moments_proposed, moments_dropped_quote, moments_dropped_id, ops_applied, ops_dropped,
+  wall_s, status (ok|quiet_day|llm_error|parse_error|partial), error_class
+
+night_observations  the surviving, verified moments (a pointer + enums)
+  id, user_id, thread_id, turn_id (chat_messages.id), span_start, span_end, quote_sha,
+  kind (progress|plan|feeling|change|person|health|other),
+  who text[], feeling (enum), valence (-1|0|1), weight (1-3), day,
+  valid_from, valid_to NULL,            -- validity interval (Graphiti's t_valid/t_invalid shape)
+  state (current|history|retracted),    -- history: a later moment on the thread changed/closed it
+  origin (stated|stat|hypothesis),      -- stated = a verified quote; stat = template over counts;
+                                        -- hypothesis = 12B only, never served as fact, never exported to K1
+  run_id
+
+night_threads       the structure that groups observations (no claim text of its own)
+  id, user_id, title (<= 8 words, audit/display only, never injected),
+  status (open|resolved|changed|quiet|recurring), first_day, last_mention_day, mentions_n,
+  weight_max, last_feeling,
+  raise_policy (raise|wait|leave), leave_reason (health|grief|money|household_conflict|minor|
+                owner_said_no|too_fresh|ignored_twice|other), next_raise_after, last_raised_at,
+  ignored_raises, source_ref ('night_threads:<id>', the key brief_first_turn.mentioned uses),
+  opened_run, closed_run
+```
+
+* **Cited to the owner's words:** every `stated` observation has `turn_id` + `span`, verified at write by substring (section 4.3) and re-verified at serve (the turn exists, is the member's, is not forgotten). A `stat` observation (e.g. "mentioned on 3 of the last 5 days") stores the ids of the days' observations it counts; a stat with fewer than two ids does not exist.
+* **Validity:** `valid_from` is the day it was said; `valid_to` is set when a later moment on the thread has `kind = change` or the thread resolves, and `state` becomes `history`. History rows render only with a "was ... then" template, which is how K4's history marker is satisfied and how a superseded value can never be served as current. When the digest supersedes a stored fact (`MemoryService.review(decision="edit")`, `memory_digest.py:746` and `:966`), threads whose newest quote is the superseded row's source get `changed`: this closes the day-sim finding that open loops are "never reconciled with corrections" (`samantha-bar.md`, mechanism findings).
+* **Affect:** `feeling`, `valence`, `weight` per observation fall under the household policy (emotional memory on for every member, 0 rows for guests). Any *trajectory* derived from them is computed only for opted-in adults (section 4.5).
+* **Salience:** `weight` x recency x open factor at selection time; not stored as a number that can go stale.
+* **Raise/leave:** on the thread, set by code every night. `leave` rows are a deny-list consulted by the brief, the selector and the unprompted-recall floor; they are never rendered into a prompt.
+* **Authority:** the night mind never writes an owner-stated memory row and never edits one. Everything it adds sits below `user_stated` in the authority rank (it is a model's pointer to the owner's words), the same wall `check_observation` enforces for the digest. Deletion of anything the owner said stays a proposal to the owner (tigerless's design; closer row 8).
+* **Retention:** `night_observations` follow their thread; threads `resolved` or `quiet` for 90 days keep their title and counts and drop their pointers. `night_runs` 400 days (counts only).
+* **Size:** at most 8 moments x 6 chunks = 48 pointer rows per member-night, typically under 15 [derived from the caps; real volume is E1].
+
+## 6. How it feeds the morning, the recall packet and the card
+
+### 6.1 The morning brief (day-sim 1b / 7b)
+
+* **Smallest integration:** the night mind becomes the producer of `open_loops` rows (replacing `_extract_open_loops`'s one-call extraction behind a flag, A/B against it): `loop_text` and `follow_up_hint` rendered from the newest quote ("Mon: '...'"), `emotional_weight` from `weight`, `follow_up_after` from the policy. Everything downstream (selector, `ZOE_LOOP_LIFECYCLE`, `_build_morning_context`, `day_items`) is unchanged, which keeps the change small and the bar comparable. `open_loops` gains `thread_id`.
+* **Restraint is a filter in `_build_morning_context`** (`proactive/triggers/morning_checkin.py:34`), applied before `brief_first_turn.day_items` (`brief_first_turn.py:197`): drop any open loop or emotional moment whose thread is `leave`; keep at most one `raise` item, tagged `source_ref = night_threads:<id>`. Today any emotional moment from the last 3 days is eligible (`morning_checkin.py:84-111`).
+* **1b needs a new log field and a synthetic run:** `BRIEF_FIRST_TURN ... items=N` gets `night=M`, and the day-sim's `run-synthetic` hook (which already stands in open loops and the selector after each simulated day, `samantha-bar.md` "Nightly passes") gains a `night_mind` intent that runs the real stages on the backdated turns (about 3 min a day on the 4B, section 8.2). Criterion added to 1b: the reply names a night-sourced item *and* the twin run with the night mind off does not (otherwise 1b measures the calendar, which it already does).
+* **7b and the repeat the bar cannot observe:** the bar notes that after a brief the selector can raise the same loop in the next conversation because `brief_active` does not mark the candidate surfaced (`samantha-bar.md`, "Not observable here at all"). The night thread must be marked by `mentioned()` (`brief_first_turn.py:235`) exactly as loops and moments are, so the next conversation neither re-briefs nor re-raises it; this is a prerequisite fix, with a cell: a thread briefed in conversation A has `ignored_raises` and `last_raised_at` set and is absent from conversation B (7b + 7r + 7s extended).
+* **Wording risk, from the first live run:** an injected raise phrased as "Earlier they told you: ... ask how that is going" was read by the 4B as a past event it knew nothing about and answered "I don't have any information about it" (`samantha-bar.md`, 1r). The night render therefore states the owner's dated words as a present fact ("On Monday they said: '...'"), and the 1r judge rubric stays in force on every night-sourced raise.
+
+### 6.2 The recall packet ("what's been going on with X lately")
+
+K3's three questions are "what's been going on with <friend> lately", "... <colleague> lately" and "how has my week been". Add a thread-level lookup to the existing deterministic floor (`zoe_flue_client._recall_context_block`, `zoe_flue_client.py:1015`; named-person floor `:1001`): a question naming a subject returns that subject's thread: newest three quotes with days, plus `status`, rendered through the existing evidence suffix (`recall_evidence.py`, dates and the owner's own quote), inside the 12-bullet / 1,600-character cap (mind-layer row 4 budget: about +30-60 tokens per cited bullet). "How has my week been" returns the member's top three threads by salience plus the mood template. The brain's `recall_memory` tool reads the same function, so the brain skipping the tool (0 of 3 on a named-person question, mind-layer section 3.3) is covered by the floor.
+
+### 6.3 The user-model card (S9a / S9b)
+
+S9a/S9b already pass on the card's *facts* (night shift, 6 am dog walk; `samantha_day_sim.py:573-575`), so the night mind's job there is to **not regress them** and to add at most one `Lately` line, only when a thread has quotes on at least two different days (the mind-layer's "cite at least two source rows or it does not enter the card" rule), at most +90 tokens on the 1,400-character card (`user_model_card.py:33`), rebuilt nightly so it stays byte-stable between builds (prefix cache stays warm). The twin A/B harness (`scripts/perf/user_model_ab.py`) is the gate; the guards that must stay green are `race` (a superseded fact must not return) and `leak` (a member must not see another's card). A new ask **S9c** makes the night mind earn its place: a planted thread (the dentist worry) plus "I can't switch my brain off tonight"; PASS = the reply connects to the thread once, gently, by the owner's own words, and does not name any `leave` item; the card-only twin must fail it.
+
+## 7. Measuring K2 / K3 on the REAL nightly model
+
+### 7.1 What the instrument does and does not tell us today [measured today]
+
+I ran `scripts/perf/zmb/scorers_cap.py` offline (no model) on `life("zmb-v1")`: 24 typed turns over 30 days (one sentence a day, about 257 tokens), 4 planted threads, 3 questions.
+
+| Echo arm (observations = the owner's own turns, unchanged) | K1 | K2 | K3 | K4 | K5 |
+|---|---|---|---|---|---|
+| all 24 turns | FAIL (10/11, 0.909 < 0.95; the one false item is the owner's own *old* value) | PASS 4/4 | PASS 3/3 (all turns offered) | FAIL (1 stale) | FAIL (2 violations) |
+| the 23 turns that are not superseded | PASS (10/10 decidable) | PASS 4/4 | FAIL with a naive lexical top-5 | PASS | FAIL (1 violation) |
+
+Reading: K1, K2 and K4 are satisfied by copying the owner's words, and K2 by copying even the stale ones. They measure *do not lie and do not lose the four stories*, not reflection. K3 (top-5 ranking) is the only one an echo does not trivially pass, which is why the arm's ranking matters. The life is also too thin to touch chunking or the routine-command noise that is most of a real day. Neither is a defect of K as written (it was designed for engines whose reflection is their own); both matter now that K is going to score a pass whose whole point is compression.
+
+### 7.2 The new arm
+
+`Z0n`, a ZMB arm with `nightly_model = "own"` (`arms/base.py:95-98`) whose `reflect_pass()` runs the real night-mind stages against the clone brain on the **8,192 slot** (the bake-off driver already runs a clone with `--ctx-size 8192`; `bakeoff-run-20261008-1805.md` "Reflection at a bigger context") over the life's ingested turns with *nothing scripted* (`cells._life_pass` hands an own-model arm no proposals), and whose `observations(query)` returns the rendered observations ranked by the same thread-lookup the packet uses, `model: "own"`. K2 and K3 then stop SKIPping (`cells._reflection` raises only when `model == "scripted"`), and K1/K4/K5 measure what the real model says rather than what the store keeps of scripted lies. Run K on the 4B at 8k first (the live configuration) and on the 4B at 32k and the 12B as variants (variants never win, per the run-2 rule).
+
+### 7.3 New cells (deterministic where possible; each with the control that must go red)
+
+| Id | Cell | Scoring | Control that must go red |
+|---|---|---|---|
+| K6 | **Compression**: for 30 days the export holds at most 3 observations per thread and at least 1 per thread (so a layer that copies every turn fails) | counted | the echo arm; a "no thread" arm |
+| K7 | **Dense day**: the same threads plus about 100-150 routine commands a day; one thread's key sentence is planted in the last 15 % of a day's turns | thread recall >= 0.7 overall AND >= 0.7 on late-in-the-day plants | the current digest (3,000-char cut) is expected to fail the late plants: this is the baseline (E2); a chunking-off arm |
+| K8 | **Citation validity**: every served `stated` observation's `turn_id` exists, belongs to the member, and its span is a substring of that turn | 100 %, deterministic | a double that returns a fabricated quote and a nonexistent id must be dropped (stays green only because the check works); with the check disabled the cell must go red |
+| K9 | **Change and quiet**: planted drift (a thread that stops being mentioned for 9 days, a status change) and a flat-week control with no change | the card states the change with >= 2 cited ids; flat week false-notice rate <= 5 % | flat-week control; an "always notice" arm |
+| K10 | **Restraint**: a planted sensitive set (health, grief, money, household conflict, a minor's thread, an owner "don't bring that up") over 14 simulated mornings | 0 raises of `leave` threads, <= 1 raise per morning, back-off doubles after an ignored raise; the thread stays recallable when asked | an "always raise" arm; a boost-everything arm (the mind-layer M6/M7 controls) |
+| K11 | **Resolution**: a plan with no reported outcome stays `open` ("if you never say how it went, it does not assume you went"); a plan the owner reports finished becomes `resolved` and stops being briefed; an *absent* thread is never closed | state checks | a "close if not mentioned" arm |
+| K12 | **Weight calibration**: moment `weight` and `kind`/`feeling` against a labelled set (rank correlation and accuracy) | Spearman >= 0.5 and accuracy >= 85 % to count as useful; below that, weights are reported not trusted | a random-weight arm |
+
+Pre-registered, like the rest of the bench: seeds `zmb-v1` plus two fresh ones; Wilson 95 % on every rate; a SKIP is never a PASS; and **every K1 record, at every context size and for every variant, stores its judged / true / false counts**, because the run-2 `VETOED` label fired on a 32k K1 FAIL that "the run artefact records no judged/false counts for" (decision record section 3). A veto must always be able to say whether it saw false observations or too few.
+
+### 7.4 The oracle arm
+
+Inject the gold cards (the life's gold threads, rendered by the real renderer) into the same brief and packet slots, byte-budgeted as in production. Capture ratio = (system - none) / (oracle - none) per the mind-layer bench design (section 6.1 there). If `oracle` on K3-reply and the 1b-night criterion is below 0.5 with the 4B as the answerer, **stop building the night mind and decide the brain question first** (the mind-layer stop rule 1).
+
+## 8. RAM and time budget
+
+### 8.1 The 4B at night (the live configuration)
+
+* **RAM: 0 extra.** The night mind calls the same llama-server the brain runs (one slot, `--ctx-size 8192 --parallel 1`); the job itself is Python and a few Postgres rows. Measured today (`free -m`, `ps`, read-only): MemAvailable 2,769 MB with the brain at 5.72 GB RSS, Kokoro 2.48 GB, zoe-data 1.35 GB, the router 0.64 GB. No new resident process. The job is out-of-process already (`scripts/maintenance/zoe-nightly-dreaming.py`, run from the `zoe-dreaming.timer` window, `docs/knowledge/chroma-1-5-migration.md` table).
+* **The slot is shared.** A night call blocks a live voice turn on the same slot ("a busy brain queues the request and the timeout bounds the wait", `_extract_open_loops` docstring). The window (about 02:05-04:30 AWST: training 02:05, dreaming 02:33, digest 03:00; `feature-audit-2026-09-25.md` row 17) is the household's quiet period; the job must check the slot is idle before each call, treat a live turn as higher priority, and finish before the brief window opens at 05:00 (`ZOE_BRIEF_WINDOW_START`).
+
+### 8.2 Time [derived]
+
+Cost model: call time = prompt / 650 tok/s + output / 8 tok/s. The 650 figure is the mind-layer's derived prefill rate; the 8 tok/s decode and "about 20 s per call at about 3.9k prompt tokens" are the run-2 measurement on this brain (decision record section 5). **There are two decode figures in the repo**: 8 tok/s (run 2, the owner's figure) and 33 tok/s (mind-layer row 2, presumably with MTP). I use 8 (conservative); if the live brain's real night rate is 33, divide the decode part by about 4. Decode dominates, so the output caps in the prompts are the budget.
+
+| Call | In / out tokens | Time |
+|---|---|---|
+| Stage 2 (one chunk) | 2,800 / 300 | 4.3 s + 37.5 s = about 42 s |
+| Stage 3 (once per member) | 2,200 / 400 | 3.4 s + 50 s = about 53 s |
+| Member-night, 3 chunks | | 3 x 42 + 53 = about 3 min |
+| Member-night, 6 chunks (cap) | | 6 x 42 + 53 = about 5 min |
+| Household of 5, typical / worst | | about 15 min / about 25 min |
+| Sunday roll-up (stage-3 shape, 7 day cards) | 2,600 / 400 | about 54 s per member |
+
+Two existing numbers to fix while there: the nightly extractors use `httpx` `timeout=45.0` with `max_tokens` 500-512 (`memory_digest.py:1365,2335`); at 8 tok/s a 500-token output takes about 62 s, so those calls can time out by arithmetic. Night-mind calls take their timeout from the output cap (cap / 8 + prefill + 20 s slack) and a retry that halves the chunk (Hindsight's `_split_chunk_for_output_retry` idea, `retain/fact_extraction.py`). Grammar-constrained decoding adds an unmeasured overhead (a different engine measured 3.6-8.2x on math; sub-agent, fetch-summary): E3 measures it on llama.cpp here; if it doubles the times above the worst case is about 50 minutes, still inside the window but with no slack for retries.
+
+### 8.3 The 12B variant
+
+* **It could not be loaded in run 2:** with the 4B and Kokoro stopped, 8,003 MB available against 9,262 MB needed at 32k (model 6,976 + KV 486 + compute 600 + the 1,200 MB floor): margin -1,259 MB [measured, run-2 record].
+* **Where the 1.3 GB comes from [derived from today's `ps`]:** zoe-data (1.35 GB RSS) plus the router (0.64 GB) is about 2.0 GB, so stopping both during the window closes the 1,259 MB gap with about 0.7 GB to spare, minus whatever the night-mind script itself needs (unmeasured), which is the decision record's owner step ("stop zoe-data and the router during a night window, or use the Mac mini"). The panel's voice is down for that window. The alternative is the Mac mini (closer row 6, an owner decision).
+* **Sequence:** stop the 4B and Kokoro, stop zoe-data and the router, start the 12B at 32k, run stages with the verifier and hypothesis step, stop the 12B, restart the 4B, router and zoe-data, poll `/health` (not `systemctl is-active`, per the standing note), and refuse to start the window unless the floor holds. Stage 1 and 4 are unchanged code.
+* **Time: unmeasured.** The 12B QAT file is 6,976 MB against 5,335 MB for the E4B Q4_K_M file on disk (`ls`, today; the live unit's UD-Q4_K_XL file was not listed, so treat the ratio as approximate), only about 1.3x the weight bytes, but the 12B has roughly three times the active parameters, and the 4B's 8 tok/s is far below this device's memory-bandwidth bound, so compute probably dominates. A first guess is 1.3x-3x slower per token, i.e. 3-6 tok/s [inferred]. At 3 tok/s a 400-token reduce is about 130 s and a 5-member night would take about 45-60 minutes; at 6 tok/s about 25-30. E8 measures it.
+
+## 9. Risks
+
+1. **K1 precision, and the 32k veto.** In run 2, K1 FAILed for both reflection variants that ran at 32k (HMA, ZMA), so both carry `VETOED`; K2 PASSed for both, K3 PASSed for ZMA only, K4 and K5 FAILed for both (`bakeoff-run-20261008-1805.md` lines 199-202). The records state the label fires on *any* K1 failure or error, including too few judgeable observations, and no judged/false counts were stored, so this is **not** evidence the observations were false (decision record section 3). It is also not evidence they were true. At 8k the K1 records carry no precision counts at all (no veto at 8k). What this design changes about K1: observations are verified pointers to single sentences, so the fabricated-link and mis-attribution classes are closed by construction; the residual risks are the ones K1 does not score (wrong thread grouping, a wrong `kind`/`feeling` enum, a wrong `changed` status). E4 (K12 and the thread-purity checks) score those. **Do not read a K1 PASS on pointers as "the model understands"; read it with K6/K7/K9.**
+2. **Copying passes the instrument** (section 7.1). Mitigated by K6; the risk that remains is a model that picks the wrong four moments, which K2/K7 measure.
+3. **The model picks the wrong moments (recall).** The 4B skipped `recall_memory` in some runs and surfaces unprompted things about 1 time in 5 (mind-layer section 3.3); picking moments from a chunk is an easier task than either, but unmeasured. Stop rule: if stage-2 recall on planted dense-day threads is under 0.6, this brain cannot do this stage and the 12B / second-box decision comes first.
+4. **Stale and zombie threads.** Absence is not contradiction (kept), but a thread must still close: by the owner's word (K11), by a supersede signal from the digest (section 5), and by a 90-day quiet rule. The day-sim showed stale loops surviving a correction today.
+5. **Creepy or mistimed recall.** The evidence (section 3.7) says sensitivity is unstable under resampling and intrusive cues cost trust, most in health/sleep topics. Restraint is code; `leave` items are never in a prompt; one raise per morning; back-off on ignored raises; E10 asks members directly.
+6. **Policy boundary on mood.** The household policy keeps per-moment affect for every member and 0 rows for guests; derived trajectories are "other affective records" (adult opt-in; 0 rows for minors and guests; mind-layer M6 text). The design computes trajectories only for opted-in adults. An owner call (section 11).
+7. **Slot contention and failure.** A failed night leaves yesterday's card; a card older than 36 hours is not served (a stale "Lately" is worse than none); `night_runs.status` records the class of failure with counts only (no text, no driver message).
+8. **Prompt, schema or model drift.** The prompts, schemas and model id are sha-pinned in `night_runs`; any change reruns E3/E4 before it ships (the bar's pinned-rubric practice).
+9. **Forgetting.** Pointers re-check the forget ledger at serve; stage 1 skips forgotten turns (the digest already does, `_skip_forgotten_turns`, `memory_digest.py:1233`); the new tables join the forget cascade. A cell: forget a name on day 5, run the night, the name appears in no card, no thread title and no `night_runs` row.
+10. **The "adopt, don't rebuild" tension, stated plainly.** The rule says take the maintained project; the measured result says Hindsight's engine could not run its consolidation on 8k and was vetoed on K1 at 32k, so the decision is `KEEP_Z0`. This design ports Hindsight's *prompts and schema* (MIT) and MemPalace's quote discipline into Zoe's existing nightly cycle; the new Zoe code is stage 1 (pack), the verifiers and stage 4 (decide/render), roughly 600-800 lines [inferred, unwritten], inside the 1,000-line ceiling the bake-off used. It is a port of pieces, not a second product, and the choice is reversible: if E8 shows Hindsight at 32k with stored counts beating this pipeline on K1/K3/K7, the maintained project wins the tie and the pointer/raise-leave layer sits on top of it.
+11. **Maintenance and lab-vs-household.** All numbers above are from a synthetic household and a lab clone. The only evidence about this household is E10.
+
+## 10. Ranked experiments with pass bars
+
+Ordered by information per hour; each is cheap before the next is built. "Real 4B" means the clone brain on the 8,192 slot under the harness lock, outside the voice gate; nothing runs on the live checkout.
+
+| # | Experiment | Needs | Pass bar (pre-registered) | Kills / decides |
+|---|---|---|---|---|
+| E0 | **Repair the instrument**: add the echo arm as a control cell, K6 compression, store judged/true/false counts on every K1 (all variants) | no model; offline, about half a day | Echo arm FAILS K6 and still PASSes K2 (proving the control bites); every K1 record carries counts; the new scorers are `ci_safe`-marked | Without it no later PASS means reflection |
+| E1 | **Census** (counts only, no text): per member-day owner turns, tokens, share dropped as routine, chunks at 2,400 tokens | read-only counts over a month of `chat_messages` | Reports p50/p95 per member; p95 <= 6 chunks, else the cap rule is the common case | Sets chunk size, cap and the real time budget; checks the "70 % lost" estimate (section 0 item 3) |
+| E3 | **Stage 2 alone on the real 4B at 8k**, dense life, grammar vs no grammar, chunk size 1,200 / 1,800 / 2,400 / 3,200 | clone brain, one lab window (about 200 calls x 42 s = about 2.5 h) | JSON valid 100 % with grammar; raw verbatim-quote rate (before the check) >= 90 %; moment recall of planted turns >= 90 %; `kind`/`feeling` accuracy >= 85 %; max prompt <= 4,500 tokens; grammar overhead <= 2x the no-grammar time | Stop rule: raw verbatim rate < 80 % even with grammar means pointers must be id-only with the quote cut from the turn deterministically |
+| E2 | **Baseline: the current digest on the dense life** (K7, real 4B) | same window as E3 | None (a baseline); the night mind must beat it by >= 30 points on late-in-the-day thread recall | Quantifies the 3,000-char loss |
+| E4 | **Stages 2+3 end to end on K1-K11 with `Z0n` at 8k**, 3 seeds | E0, E3 | K1 precision >= 95 % **and** Wilson lower bound >= 0.85 over >= 40 decidable observations; K4 = 0 stale; K5 = 0 violations; K2 >= 10/12 threads; K3 >= 7/9; K6, K7 (>= 0.7, late plants >= 0.7), K8 = 100 %, K9 false-notice <= 5 %, K11 pass. Controls red: no-verify, echo, no-grammar, close-if-absent | Ship/no-ship for the 4B night mind |
+| E5 | **Oracle arm**: gold cards in the brief and packet slots | E4's renderer | Capture ratio >= 0.8; oracle < 0.5 means stop and decide the brain first | Whether the brain, not the memory, is the limit |
+| E6 | **Day-sim with the real night mind** (`run-synthetic` `night_mind` intent): 1b, 7b, 7r, 7s, S9a, S9b, new S9c, 3 runs | E4, the `mentioned()` fix | 1b names a night item and the off-twin does not; 7b/7r/7s PASS including the brief-then-raise repeat; S9a/S9b/2/6/6n unchanged; S9c PASS and the card-only twin FAILs; `race` and `leak` guards green | Whether the morning's first turn changes |
+| E7 | **Restraint battery** (K10) with a boost-everything and always-raise control | E4 | Leave-class detection = 100 % on the planted set; 0 raises of `leave` threads over 14 mornings; <= 1 raise/morning; back-off doubles; a `leave` thread is still recallable on request | Whether it is safe to serve |
+| E9 | **14-night time-compressed soak** (explicit timestamps) | E4 | Thread count bounded; 0 resurrected resolved threads; flat-week false-notice <= 5 %; quote validity 100 % over every night; no growth in `night_runs.calls_invalid` | Drift over weeks |
+| E10 | **Real-household shadow, 2 weeks, nothing served**: cards written to a table; consenting adults tap true / false / creepy per line on the phone (QR hand-off, never typed on the panel; counts export only) | owner opt-in, E7 | >= 95 % "true"; 0 "creepy" among `raise` lines; >= 80 % "I'd want that raised" on raise lines; then flag-dark serve | The only evidence about this household |
+| E8 | **The 12B night variant** (verifier + hypothesis step) at 32k | +1.3 GB headroom (stop zoe-data and the router for the window) or the Mac mini | Same cells as E4; K1 >= 95 % **and** either K3/K7 up >= 15 points on the 4B or the K1 Wilson lower bound up >= 0.05; measured wall per member-night <= 15 min; else stay on the 4B | Whether a bigger night model is worth a window |
+
+If E0-E3 pass, E4 is one to two lab windows. The first thing the owner gets is a number on whether a 4B can do stage 2, which no source can currently supply.
+
+## 11. Decisions for the owner, and what I could not verify
+
+**Decisions**
+1. **Port the pieces?** Approve taking Hindsight's consolidation/delta prompts and schema (MIT) and MemPalace's quote discipline into Zoe's nightly cycle as above (section 9, item 10), with the tie clause that a measured win for the maintained engine at 32k moves the layer onto it.
+2. **Mood trajectories:** confirm they are computed only for opted-in adults (section 4.5), or widen/narrow the policy.
+3. **Producer swap:** allow the night mind to replace `_extract_open_loops`'s extraction behind a flag, A/B against it (section 6.1).
+4. **The 12B window:** approve stopping zoe-data and the router for a night window to measure E8, or approve the Mac-mini free trial instead (closer row 6). A rocks-rule question; the live brain stays Gemma 4 E4B.
+5. **E10 participants:** which adults, for how long; no minor, guest or non-participating member is ever labelled or scored.
+
+**Not verified or not read**
+* Letta's actual sleep-time prompt and the `memory_rethink` docstring (raw GitHub paths 404; DeepWiki rate-limited).
+* Any measurement of a ~4B model on sleep-time reflection quality, importance scoring or citation faithfulness for personal memory; none found.
+* llama.cpp grammar-constrained decode overhead on this hardware (E3).
+* The real distribution of owner turns per member-day (E1); the "70 % lost" figure is arithmetic on an assumed 200 x 8-word day.
+* Several sources are fetch-tool or search summaries (flagged inline): LightMem, Nemori, RMM, TiMem, Memory-R1/Mem-alpha, TofuEval's per-model rates, CIMemories, PersistBench, BenchPreS, the Frontiers study, arXiv 2602.04000, arXiv 2609.23742 and 2605.02363. The sub-agent flagged two summaries it found wrong (Nemori's model family, a TofuEval figure) and I excluded both. A-MEM, Mem0, Zep and MemInsight figures were checked in downloaded PDFs by the sub-agent.
+* The decode rate of the live brain at night (8 vs 33 tok/s, section 8.2).
+* Whether the live env runs the `household` affect policy or the older `optin` default (the mind-layer record flagged this as unverified; I did not read the live `.env`).
+
+## 12. Sources
+
+Repo (read today at `origin/main` b2ec3ef5 unless noted): `docs/research/memory-bakeoff-decision-2026-10-08.md`; `docs/research/bakeoff-run-20261008-1805.md`; `docs/research/mempalace-deep-dive-2026-10-06.md`; `docs/architecture/samantha-evolution-plan.md`; `docs/knowledge/samantha-bar.md`; `scripts/perf/samantha_day_sim.py`; `scripts/perf/zmb/scenarios/reflection.json`, `scripts/perf/zmb/cells.py`, `scorers_cap.py`, `life.py`, `arms/base.py`; `services/zoe-data/memory_digest.py`, `memory_authority.py`, `brief_first_turn.py`, `proactive/triggers/morning_checkin.py`, `proactive/selector.py`, `user_model_card.py`, `memory_gate.py`, `memory_importance.py`, `ui_compose.py`, `router_two_stage.py`; from open-PR branches: `docs/research/samantha-mind-layer-2026-10-07.md` (PR 1908), `docs/research/what-gets-us-closer-2026-10-07.md` (PR 1909).
+
+Installed packages: Hindsight 0.10.2 `hindsight_api/engine/consolidation/prompts.py`, `reflect/prompts.py`, `retain/fact_extraction.py` (`~/.zoe/bakeoff-2026-10/hindsight-venv`); MemPalace 3.10.0 `mempalace/closet_llm.py` (`~/.zoe/bakeoff-2026-10/mempalace-venv`).
+
+Web (fetched 2026-10-09):
+* Sleep-time compute: https://arxiv.org/abs/2504.13171 ; Letta blog https://www.letta.com/blog/sleep-time-compute ; Letta docs https://docs.letta.com/guides/agents/architectures/sleeptime ; Letta forum guide https://forum.letta.com/t/sleeptime-agents-for-memory-consolidation-best-practices-guide/154 ; context repositories https://www.letta.com/blog/context-repositories/
+* Generative Agents: https://arxiv.org/abs/2304.03442 (prompts via https://ar5iv.labs.arxiv.org/html/2304.03442)
+* A-MEM https://arxiv.org/abs/2502.12110 ; Mem0 https://arxiv.org/abs/2504.19413 ; Zep https://arxiv.org/abs/2501.13956 ; Graphiti prompts https://github.com/getzep/graphiti/tree/main/graphiti_core/prompts
+* LightMem https://arxiv.org/abs/2510.18866 (reproduction arXiv 2607.29104) ; Nemori https://arxiv.org/abs/2508.03341 ; RMM https://arxiv.org/abs/2503.08026 ; MemoryOS https://arxiv.org/abs/2506.06326 ; MemInsight https://arxiv.org/abs/2503.21760 ; TiMem https://arxiv.org/abs/2601.02845 ; Memory-R1 https://arxiv.org/abs/2508.19828 ; Mem-alpha https://arxiv.org/abs/2509.25911 ; Recordare https://github.com/arkimedehq/recordare (AGPL-3.0; ideas only)
+* Structured output: llama.cpp grammars https://github.com/ggml-org/llama.cpp/blob/master/grammars/README.md ; https://arxiv.org/abs/2609.23742 ; https://arxiv.org/abs/2605.02363
+* Hallucination and restraint: TofuEval https://arxiv.org/abs/2402.13249 ; CIMemories https://arxiv.org/abs/2511.14937 ; PersistBench https://arxiv.org/abs/2602.01146 ; BenchPreS https://arxiv.org/abs/2603.16557 ; "Remembering or monitoring?" https://www.frontiersin.org/journals/psychology/articles/10.3389/fpsyg.2026.1934857/full ; https://arxiv.org/abs/2602.04000 ; users' privacy perceptions of RAG memory https://arxiv.org/abs/2508.07664 [snippet only]
