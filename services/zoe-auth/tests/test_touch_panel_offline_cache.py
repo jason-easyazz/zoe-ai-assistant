@@ -63,3 +63,56 @@ def test_opt_in_starts_the_loop(monkeypatch):
     mgr, created = _spawned(monkeypatch, "1")
     assert mgr.config.offline_enabled is True
     assert len(created) == 1
+
+
+# --- with the cache off, the server's verdict is final ---------------------------
+
+class _CacheWithSession(_NoCache):
+    """A cache that still holds a session (e.g. written before the flag was turned off)."""
+    def __init__(self):
+        super().__init__(); self.writes = []
+    def get_cached_session(self, session_id):
+        import types
+        return types.SimpleNamespace(user_id="asya", session_id=session_id, permissions=[], expires_at=None)
+    def cache_session(self, *a): self.writes.append(a)
+
+
+def _manager_with(monkeypatch, env_value):
+    cache = _CacheWithSession()
+    monkeypatch.setattr(qa.cache_manager, "get_cache", lambda device_id: cache)
+    if env_value is None: monkeypatch.delenv("ZOE_TOUCH_PANEL_OFFLINE_CACHE", raising=False)
+    else: monkeypatch.setenv("ZOE_TOUCH_PANEL_OFFLINE_CACHE", env_value)
+    async def _make():
+        monkeypatch.setattr(qa.asyncio, "create_task", lambda coro: (coro.close(), None)[1])
+        return qa.get_quick_auth_manager("unit-panel", "lab")
+    return asyncio.run(_make()), cache
+
+
+def test_revoked_session_is_not_resurrected_from_the_cache_when_offline_is_off(monkeypatch):
+    mgr, cache = _manager_with(monkeypatch, None)
+    async def _rejected(session_id): return qa.QuickAuthResult(success=False, error_message="revoked")
+    monkeypatch.setattr(mgr, "_validate_session_with_server", _rejected)
+    result = asyncio.run(mgr.validate_session("sess-1"))
+    assert result.success is False
+
+
+def test_cached_session_is_honoured_only_when_offline_is_on(monkeypatch):
+    mgr, cache = _manager_with(monkeypatch, "1")
+    async def _rejected(session_id): return qa.QuickAuthResult(success=False, error_message="server down")
+    monkeypatch.setattr(mgr, "_validate_session_with_server", _rejected)
+    result = asyncio.run(mgr.validate_session("sess-1"))
+    assert result.success is True and result.offline_mode is True
+
+
+def test_successful_login_is_not_cached_when_offline_is_off(monkeypatch):
+    mgr, cache = _manager_with(monkeypatch, None)
+    async def _ok(username, passcode, device_info):
+        return qa.QuickAuthResult(success=True, user_id="asya", session_id="s-ok", permissions=[])
+    monkeypatch.setattr(mgr, "_authenticate_with_server", _ok)
+    result = asyncio.run(mgr.authenticate_passcode("asya", "1234"))
+    assert result.success is True and cache.writes == []
+
+
+def test_cached_users_listing_is_empty_when_offline_is_off(monkeypatch):
+    mgr, cache = _manager_with(monkeypatch, None)
+    assert asyncio.run(mgr.get_cached_users()) == []

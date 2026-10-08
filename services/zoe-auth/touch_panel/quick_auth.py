@@ -77,12 +77,15 @@ class QuickAuthManager:
             if not self.offline_mode:
                 server_result = await self._authenticate_with_server(username, passcode, device_info)
                 if server_result.success:
-                    # Cache successful auth for offline use
-                    self.cache.cache_session(
-                        server_result.session_id,
-                        server_result.user_id,
-                        server_result.permissions or []
-                    )
+                    # Cache successful auth for offline use — only when the offline
+                    # cache is enabled: a cached session would otherwise outlive a
+                    # central revocation for the cache TTL.
+                    if self.config.offline_enabled:
+                        self.cache.cache_session(
+                            server_result.session_id,
+                            server_result.user_id,
+                            server_result.permissions or []
+                        )
                     return server_result
                 
                 # If server is unreachable, switch to offline mode
@@ -148,8 +151,9 @@ class QuickAuthManager:
                 if server_result.success:
                     return server_result
 
-            # Check local cache
-            cached_session = self.cache.get_cached_session(session_id)
+            # Check local cache — never when the offline cache is disabled: the server's
+            # verdict (including a revocation) is final then.
+            cached_session = self.cache.get_cached_session(session_id) if self.config.offline_enabled else None
             if cached_session:
                 return QuickAuthResult(
                     success=True,
@@ -174,6 +178,8 @@ class QuickAuthManager:
 
     async def get_cached_users(self) -> List[Dict[str, Any]]:
         """Get list of cached users for offline display"""
+        if not self.config.offline_enabled:
+            return []
         try:
             users = []
             with self.cache.lock:
