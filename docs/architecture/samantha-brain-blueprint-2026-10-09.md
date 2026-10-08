@@ -83,7 +83,10 @@ room.
 
 **What it costs.** Nothing new stays in memory by day. At night, on the nights the bigger 12-billion-parameter model is used,
 the voice is off for the window (about 02:00 to 04:10), because the box cannot hold both. Until that is proven worth it, the
-night mind runs on the same small brain with no downtime.
+night mind runs on the same small brain with no downtime. **Owner decision (2026-10-09 01:30): the 12B night is the
+priority.** So the first 12B trial (E8) is a wave-1 measurement, not a wave-4 afterthought: the window is being built now,
+its first run scores the same reflection cells on the 12B and on the small brain, and the small-brain night is the fallback
+if the 12B does not earn its 85 minutes of downtime.
 
 **What could go wrong, and the answer.** A small brain may not be able to do the night work at all: the first experiment is a
 number, and the plan stops and decides about the brain if the number is low (section 4, W3). Her judge is her own brain, so the
@@ -802,7 +805,8 @@ the brain, not the memory, is the limit.
 
 ### W4. The window and the lab
 
-*What the owner gets:* a deeper night (if the 12B proves worth it), and Zoe proposing improvements to her own manners that a person merges.
+*What the owner gets:* the 12B as the night engine (the owner's stated priority; E8 starts in W1 and this wave makes it the
+default once it passes, with the small-brain night as the fallback), and Zoe proposing improvements to her own manners that a person merges.
 
 **In flight.** `feat/12b-night-window` (reported in flight; not on origin at last check; the conductor and its whole-window stop list,
 which the 2026-10-08 open-problems row asks for).
@@ -884,7 +888,7 @@ Recommendations in italics are mine; each is the owner's call.
 2. **Port the pieces, not the engines**: Hindsight's consolidation prompts and schema (MIT) and MemPalace's quote discipline into the nightly cycle, with the tie clause that a measured win for a maintained engine at 32k moves the layer onto it. *Yes.*
 3. **Producer swap**: may the night mind replace `_extract_open_loops` behind a flag, A/B against it? *Yes.*
 4. **"I noticed you've been ..." (D2) at all?** If yes: counts only, >= 2 cited days, adults, once a week, never in a sensitive class. Mood trajectories only for opted-in adults. *Yes under those limits; else D2 drops and BP5 is card-only.*
-5. **The 12B window**: stop zoe-data and the router for a window (voice down about 85 minutes on those nights), or the Mac-mini free trial, or an off-box strong model on synthetic text only; and the JetPack 7.2 trial on a spare NVMe. A rocks-rule question; the live brain stays Gemma 4 E4B. *Run E8 on one Sunday night; decide from the number.*
+5. **The 12B window** — DECIDED by the owner 2026-10-09 01:30: the 12B night is the priority; stop zoe-data and the router for the window (voice down about 85 minutes on those nights), E8 runs in W1; the Mac-mini free trial and an off-box strong model on synthetic text stay as alternatives if the arithmetic fails; and the JetPack 7.2 trial on a spare NVMe. A rocks-rule question; the live brain stays Gemma 4 E4B. *Run E8 on one Sunday night; decide from the number.*
 6. **Sensitive classes that wait for a pull** (health, money, family conflict, grief, anything about another member), applied to everyone until the speaker gate enforces identity; and "disagree once, kindly" as the default. *Yes to both.*
 7. **May the manner block reach minors before the distress hand-off ships?** *Adults now; minors after.*
 8. **Language scope**: which second language the twin cells use, and whether the first non-English surface is typed chat and Telegram or voice (a second Moonshine model, selected by the enrolled speaker). *Name one language, start with typed chat.*
@@ -928,8 +932,7 @@ observations off. (9) A control that does not redden voids the cell and the run.
   rate. The 12B's speed (3 to 6 tok/s) is a guess; grammar-constrained decoding cost on llama.cpp here was never measured (E3); the
   per-turn embedding for the entity gate is unmeasured; the two Node sidecars are not in the 12B RAM arithmetic.
 * **Inconsistent figures in the records, handled conservatively.** Decode speed: 8 tok/s (run 2, the owner's figure), 20.1 (panel lane,
-  2026-07-26), 33 (mind-layer, derived); night arithmetic uses 8. Brain RSS 5.72 to 6.74 GB across the week. `ZOE_PROACTIVE_SELECTOR` is a
-  code default OFF but recorded ON live since 2026-09-30; the live `.env` was not read here.
+  2026-07-26), 33 (mind-layer, derived); night arithmetic uses 8. Brain RSS 5.72 to 6.74 GB across the week. `ZOE_PROACTIVE_SELECTOR=1` and `ZOE_BRIEF_ON_FIRST_TURN=1` are LIVE (read from the live env on 2026-10-09; the code default is off, the live pin is on).
 * **No source measures sleep-time reflection quality, importance scoring or citation faithfulness for personal memory at or near 4B.** The
   only small-local-model memory number found is LeanMem on Qwen3-8B (authors' own table, register), watch for replication.
 * **The structural-floors numbers are small-n and optimistic where noted**: the labelled set is author-written, E1's templates mirror the
