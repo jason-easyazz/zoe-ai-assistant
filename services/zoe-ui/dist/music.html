@@ -1381,14 +1381,14 @@
     async function haService(service, extra) {
         const eid = activeEntityId();
         try {
-            await fetch('/api/ha/service', {
+            // /api/ha/control (routers/ha_control.py) is the ONLY HA write route; the
+            // old /api/ha/service never existed, so every transport button 404'd (2026-10-09).
+            // It takes the HA service name as `action` and the service data as `params`.
+            if (!eid) return;
+            await fetch('/api/ha/control', {
                 method: 'POST',
                 headers: zoeHdrs(),
-                body: JSON.stringify({
-                    domain: 'media_player',
-                    service,
-                    data: { ...(eid ? { entity_id: eid } : {}), ...extra }
-                })
+                body: JSON.stringify({ entity_id: eid, action: service, params: extra || {} })
             });
         } catch {}
     }

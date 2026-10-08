@@ -367,6 +367,26 @@ function musicSandbox(statusReplies, S = {}) {
   });
 }
 
+// ── 2026-10-09: dead API paths are gone; music transport uses the real HA control route ──
+check('no desktop page or script calls a route that never existed (warm-up, tools, media upload, HA service, music similar)', () => {
+  const dead = ['/api/chat/warm', '/api/tools/call', '/api/media/upload', '/api/ha/service', '/api/music/similar'];
+  const files = ['music.html', 'settings.html', 'journal.html', 'js/zoe-orb.js', 'js/chat-sessions.js', 'js/widgets/core/journal.js', 'js/widgets/music/library.js'];
+  for (const f of files) { const src = read(f); for (const d of dead) assert(!src.includes("'" + d) && !src.includes('`' + d), f + ' still calls ' + d); }
+  for (const gone of ['js/widgets/music/suggestions.js', 'js/widgets/music/playlists.js', 'js/widgets/music/queue.js', 'js/widgets/music/search.js', 'js/voice/voice-controller.js'])
+    assert(!fs.existsSync(path.join(__dirname, gone)), gone + ' should be deleted (no page loads it)');
+});
+check('music: transport posts {entity_id, action, params} to /api/ha/control and does nothing without an entity', () => {
+  const body = extractFunction(read('music.html'), 'haService');
+  assert(/fetch\('\/api\/ha\/control'/.test(body));
+  assert(/JSON\.stringify\(\{ entity_id: eid, action: service, params: extra \|\| \{\} \}\)/.test(body));
+  assert(/if \(!eid\) return;/.test(body));
+});
+check('journal: no photo picker is offered while there is no upload backend (page + dashboard widget)', () => {
+  assert(!/class="filepond"|FilePond\.|\/lib\/filepond/.test(read('journal.html')), 'journal.html must carry no FilePond wiring while there is no upload backend');
+  assert(!/journalPhoto/.test(read('js/widgets/core/journal.js')));
+});
+check('updates: the page header wraps at phone width', () => assert(/@media \(max-width: 600px\) \{\s*\.page-header \{ flex-wrap: wrap; \}/.test(read('updates.html'))));
+
 // ── chat.html: the guest pool is never listed ────────────────────────────────
 check('chat: loadSessions refuses to list sessions without a member session, and sends no ?user_id=', () => {
   const body = extractFunction(chatHtml, 'loadSessions');
