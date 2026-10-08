@@ -973,6 +973,16 @@ async def _persist_memory_candidates_impl(user_id: str, session_id: str, user_me
     False when any pass raised — logged here, counted by the wrapper."""
     if user_id == "guest":
         return True
+    # BM5: an off-the-record turn reaches no extractor, no digest, no person extractor, no suggestion detector (the audit
+    # line is written where the turn was marked; nothing here logs the words).
+    try:
+        import memory_provenance as _mp
+
+        if _mp.is_off_record(user_id, user_message):
+            logger.info("OFF_RECORD user=%s skipped=memory_passes lane=chat", user_id)
+            return True
+    except Exception:  # noqa: BLE001
+        pass
     # A memory COMMAND ("forget everything about Delia", "forget that") is an
     # instruction, not a fact — mining it minted junk rows ("Gift idea for
     # everything about: Delia", live repro 2026-07-13) that resurrected the
@@ -1120,7 +1130,7 @@ async def _ensure_user_and_chat_session(session_id: str, user_id: str) -> None:
 
 async def _save_chat_message(
     session_id: str, role: str, content: str, user_id: str | None = None,
-    *, truncated: bool = False, speaker_verified: bool | None = None,
+    *, truncated: bool = False, speaker_verified: bool | None = None, count_turn: bool = True,
 ) -> bool:
     """Persist a single chat turn to chat_messages.
 
@@ -1152,6 +1162,22 @@ async def _save_chat_message(
         # catch-up) cannot reclassify a turn the gate refused as the owner's own words. Only a rejection is recorded:
         # no verdict / verified leaves the metadata exactly as before.
         meta["speaker_verified"] = False
+    # BM5 (ZOE_MEMORY_PROVENANCE_ANSWERS): number the user's turn (so "why did you say that?" can find the reply before it) and
+    # claim an off-the-record turn at its FIRST sight. An off-the-record user turn - and the reply to it, which can restate it -
+    # is saved flagged `off_record`, so the readers that rebuild memory from this table at night (digest, idle consolidation, the
+    # exact-words catch-up, the pronoun-anchor lookback) leave it out. The row is still stored: it is the conversation's history.
+    try:
+        import memory_provenance as _mp
+
+        if user_id and role == "user":
+            if count_turn:   # the voice lane saves the same user turn twice (at its start and with the reply): count it once
+                _mp.note_user_turn(user_id, clean_content, session_id)
+            if _mp.claim_turn(user_id, clean_content):
+                meta["off_record"] = True
+        elif user_id and role == "assistant" and _mp.reply_is_off_record(user_id):
+            meta["off_record"] = True
+    except Exception:  # noqa: BLE001 - bookkeeping must never lose a saved turn
+        pass
     metadata = json.dumps(meta) if meta else None
     # Use the context-managed pool acquire (deterministic release). The bare
     # `async for db in get_db(): ... break` form leaves the generator suspended

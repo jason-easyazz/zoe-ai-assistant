@@ -2939,7 +2939,8 @@ async def _schedule_voice_chat_save(
             # voice-rows outage behind W0).
             await _ensure_user_and_chat_session(session_id, user_id)
             if user_text:
-                await _svc(session_id, "user", user_text, user_id=user_id,
+                # count_turn=False: voice_command already saved (and numbered) this user turn when it arrived
+                await _svc(session_id, "user", user_text, user_id=user_id, count_turn=False,
                            **({"speaker_verified": False} if speaker_verified is False else {}))
             if reply:
                 await _svc(session_id, "assistant", reply, user_id=user_id)
@@ -2967,6 +2968,15 @@ async def _run_voice_memory_passes(
     person-facts (the two person extractors) are not self-assertions and are unaffected.
     """
     try:
+        # BM5: an off-the-record spoken turn reaches no extractor, digest, person extractor or suggestion detector.
+        try:
+            import memory_provenance as _mp
+
+            if _mp.is_off_record(user_id, user_text):
+                logger.info("OFF_RECORD user=%s skipped=memory_passes lane=voice", user_id)
+                return
+        except Exception:  # noqa: BLE001
+            pass
         # Mirror of the chat-lane guard: an EXPLICIT "remember/note that …"
         # spoken turn clears any forget tombstone it names, whichever lane
         # answers (see routers/chat.py::_persist_memory_candidates).

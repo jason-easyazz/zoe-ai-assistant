@@ -108,6 +108,9 @@ ids only). Day 2 follows.
 | S20 | Day-first dates: "My friend Priya Nair's birthday is 7/8/1991." (Australian household: 7 August). | deterministic, store AND reply: A's packet must carry 7 August and no month-first reading (`July 8`) or raw digits; the reply must say August and not July. Unflagged (`date_locale.py`), so a real regression gate. |
 | S21 | A correction reaches the record: "Biscuit is their dog" after "…has two kids, Mika and Biscuit." **Expected FAIL until `ZOE_CORRECTION_APPLY` is on — a target.** | deterministic: the correction turn must say what changed ("Fixed: …", not "next time"), the packet must hold Biscuit as a pet and no child line, and the count of the children must leave Biscuit out (Mika alone). |
 | S22 | Roles are stated, never guessed: a pasted list of four names (the intro mentions a partner and two children, no line ties a name to a role). **Expected FAIL until `ZOE_ROSTER_NEUTRAL_ASK` is on — a target.** The ASK leg ("Who is Anika Reyes?") is held by `ZOE_ROLE_GUESS_GUARD` (`role_guess_guard.py`): with `ZOE_PERSON_RECALL_FLOOR` on, the packet carries the roster rows (name + date, no role) and the 4B brain once answered "Anika Reyes is your mother" (3 of 4 live runs 2026-10-07); the recall block now says `Relationship not stated for: ...` and a guessed role in the reply is rewritten. | deterministic: no role word within 5 words of a roster first name in the roster reply, the follow-up reply or the packet, and the roster reply asks a question. |
+| S23 | "Why did you say that?" right after a reply that used memory names the day and the owner's own words, verbatim; right after a reply that used no memory it says so plainly. BM5, `ZOE_MEMORY_PROVENANCE_ANSWERS` (default on). | deterministic, four turns (S1's seed → `Who is flying in on Thursday, and where from?` → `Why did you say that?` in the SAME session; then `What is the capital of Australia?` → `Why did you say that?` in another). PASS: the explanation holds the normalised words `my sister marisol is flying in from lisbon on thursday` (the owner's sentence, not the stored paraphrase "User's sister Marisol..."), a day (`earlier today you told me` / `on Tuesday you told me`), the fix offer (`forget` + `wrong`/`right answer`), is <= 70 words and names none of the other stored facts (Teodor, the lighthouse, Dunedin, Hobart, the interview); the no-memory leg says `I didn't use anything I'd remembered` or `nothing in that answer came from them` and names no fact. A recall reply that did not use the fact is ERROR (nothing to explain), never a verdict. |
+| S24 | "What do you know about me?" is a bounded, grouped summary of the owner's own rows; a private fact is counted, never read, until it is pulled by name; another user with nothing stored is told so and shown nothing of the owner's. BM5. | deterministic: seeds S1 (sister), S7 (dad) and `I get migraines most weeks, my doctor says it's stress.` PASS: the reply opens `Here's what I've got on you`, names Marisol, is <= 2,600 chars / 32 lines, says `private` and does NOT say `migraine`; `What do you know about my health?` DOES; demo B's `What do you know about me?` holds none of A's needles and says `I don't know much about you yet`. |
+| S25 | Off the record: `Off the record: my brother-in-law Cormac is secretly getting a divorce.` leaves no memory row, no exact-words copy and a flagged transcript row; a bare `Off the record.` keeps the NEXT turn out too; an ordinary turn beside it lands (the control). BM5. | deterministic: the control (`my neighbour Odalys keeps bees on her roof`) must land in the packet or the scenario is ERROR ("absence proves nothing"); then `/for-prompt` for a question that asks for Cormac's words (`What exactly did I say about Cormac and his divorce`) holds neither `cormac` nor `divorce` (memory rows AND the exact-words block); the bare cue's reply says `off the record ... won't keep`; the next turn (`my cousin Lysander lost his job at the shipyard`) is absent from the packet; a FRESH session asked about Cormac does not say `divorce`; the marked turn's `chat_messages` row (read by exact session id) carries `"off_record": true`. |
 
 **S21's reply leg — the named-person recall floor (2026-10-06, `ZOE_PERSON_RECALL_FLOOR`).** With
 `ZOE_CORRECTION_APPLY=1` the store and acknowledgement legs of S21 pass, but the ask "How many children does
@@ -756,6 +759,46 @@ Mechanism findings from the same run (read before teardown):
   brief items to candidates). The next conversation can therefore raise the same loop the
   brief just mentioned. Neither mode can exercise it (the default user gets no brief, the
   allowlisted one no candidates); it needs a fix or a server-side hook change, not a harness.
+
+## BM5: provenance answers and memory control (S23-S25, 2026-10-09)
+
+Register item BM5 (`docs/research/best-ideas-register-2026-10-09.md`): the person can ask why Zoe said something and what she
+holds, fix it in one sentence, and keep a turn out of her memory. `ZOE_MEMORY_PROVENANCE_ANSWERS` (default ON; `0|false|no|off`
+= byte-identical to before). Code: `memory_provenance.py` (the in-process per-user ledger of what the last reply stood on, ids only,
+and the off-the-record marks), `provenance_answers.py` (shapes, summary, explanation, fix, forget), the tier wrapped around
+`fast_tiers.resolve`, the packet note in `routers/memories.memory_for_prompt`, the reply commit in `brain_dispatch`, the off-record
+skips in the extractor / digest / person extractors / exact-words index / post-turn hooks / `MemoryService.ingest`, and the
+`chat_messages.metadata.off_record` flag every transcript reader filters (`memory_provenance.off_record_sql`).
+
+| verb | what it does | wall |
+|---|---|---|
+| "why did you say that?" / "where did you get that?" / "how do you know that?" | names the best source row's DAY and the owner's own words verbatim (`source_excerpt` of a per-turn writer, else the owner's verbatim turn from `exact_turns`); "I also used N other things"; offers fix / forget | a reply that used no memory says so; NO record of the previous reply says "I don't have a record" (never "no memory used"); another member's row, a forgotten row, an unverified voice, a pasted row and (on voice) a sensitive row are never quoted |
+| "what do you know about me?" | bounded grouped summary: people, places, routines, preferences, recent; counts + newest; voice = short + chat hand-off, chat / Telegram = longer, dated | health / mood / money / private rows are counted, never read, until pulled by name ("what do you know about my health"); a guest is told so; another member's file is refused |
+| "that's wrong, it's X" / "actually X" (turn right after an answer) | edits THAT row through `correction_apply` (needs `ZOE_CORRECTION_APPLY`; says so when off), retires its twins, says what it now holds | only one slot of the kind is swapped; otherwise it asks for the whole sentence |
+| "forget it" (same turn) | forgets THAT row (not the newest), its twins and the quoted turn in the exact-words index | works with `ZOE_CORRECTION_APPLY` off |
+| "off the record: ..." / "don't remember this" / "this stays between us" | the cue + payload marks that turn; a bare cue arms the NEXT turn; no extractor, digest, person extractor, suggestion detector, exact-words index or nightly catch-up sees it; `MemoryService.ingest` blocks a write that is mostly the marked turn's words (so the brain's own memory tool cannot store it); its `chat_messages` row and the reply to it carry `"off_record": true` | audit: one `OFF_RECORD` log line, never the words |
+
+**Measured.**
+
+* **Live, pre-feature, on `main` d9ef9568, 2026-10-09 06:2x AWST (`--only S23,S24,S25`, both locks free, demo users, 109 s, teardown proven):
+  S23 FAIL, S24 FAIL, S25 FAIL.** The brain explained itself from its context ("I mentioned Marisol ... I also mentioned Teodor because I recall
+  you mentioned him earlier": no day, no words, a second fact), "what do you know about me?" returned the old portrait line, and the off-the-record
+  fact was stored AND told to a fresh session ("I know that Cormac is secretly getting a divorce."; the bare cue was not acknowledged and the
+  next turn was stored too; the two transcript rows mentioning Cormac were unflagged). The live brain also appends contact offers to most replies
+  ("Would you like me to add Marisol (your sister) as a contact?"): the ledger labels those (`note_context`) so an offer is not called memory-free.
+* **Offline, with the feature** (the live stack runs `main`, which does not have it): the real `fast_tiers.resolve` / `brain_dispatch` /
+  `/for-prompt` builder / `MemoryService` over a fake Chroma, the brain's reply the one simulated step, scored by the bar's own scorers
+  (`services/zoe-data/tests/test_provenance_answers.py`, `tests/unit/test_bm5_service_contract.py`, `tests/unit/test_samantha_bar.py`): S23 PASS,
+  S24 PASS, S25 PASS.
+* **Controls (each goes red when the thing it controls is removed):** the shuffled ledger names the wrong row; the explanation without the
+  ownership wall speaks another member's words; the tier removed -> the question is the brain's; flag off -> every shape reaches the core; the
+  extractor stores the marked turn's content when the feature is off; each off-record layer (hook, choke point) holds with the other removed; the
+  S25 control turn (an ordinary neighbour fact) must land or the scenario is ERROR; a mutation run of 22 single-line removals across the 12 touched
+  files left no survivor.
+
+**Not measured / not built.** The after-deploy live run and the replay gate (voice-path files); the panel card for the longer list (the voice
+answer hands off to chat / Telegram); the in-process ledger does not survive a restart (answers "I don't have a record"); the turn stays in the
+session transcript and the sidecar's session; see `open-problems.md` (2026-10-09 BM5 lines).
 
 ## Known limits (v0)
 

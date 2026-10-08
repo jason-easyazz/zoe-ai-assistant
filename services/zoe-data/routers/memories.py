@@ -966,17 +966,33 @@ async def memory_for_prompt(
     # turns beside the facts, each with the day it was said. One indexed read, only on that question shape (the message
     # itself, or - on the recall_memory tool path - the user's question of this turn); every other turn is unchanged.
     # Never in continuity mode (that block is budgeted around its closing ask).
+    xw_hits: list = []
     if not continuity and message.strip():
         try:
             import exact_words
 
             xw_question = exact_words.question_for(user_id, message)
-            xw_block = await exact_words.packet_block(user_id, xw_question) if xw_question else ""
+            xw_hits = await exact_words.lookup(user_id, xw_question) if xw_question else []
+            xw_block = exact_words.render_block(xw_hits)
         except Exception:  # noqa: BLE001 - an extra read: the packet is complete without it
-            xw_block = ""
+            xw_block, xw_hits = "", []
         if xw_block:
             result["packet"] = (result["packet"] + "\n" + xw_block) if result.get("packet") else xw_block
             result["exact_words"] = sum(1 for ln in xw_block.split("\n") if ln.startswith("- "))
+    # BM5 (ZOE_MEMORY_PROVENANCE_ANSWERS): note which rows and which of the owner's own turns this packet hands the brain, so
+    # "why did you say that?" can name the source of the reply that follows. In memory only, reduced to ids when the reply ends.
+    try:
+        import memory_provenance
+
+        if memory_provenance.enabled():
+            text_by_id = {r.id: r.text for r in (list(facts) + list(hits) + list(recent or []))}
+            memory_provenance.note_served(
+                user_id,
+                [(e["id"], text_by_id[e["id"]]) for e in (result.get("refs") or []) if e.get("id") in text_by_id],
+                [(h.turn_id, h.said_at, h.text) for h in xw_hits],
+            )
+    except Exception:  # noqa: BLE001 - bookkeeping must never fail a packet
+        pass
     if continuity:
         focus = _continuity_focus(recent or [], result.get("refs") or [])
         if focus:

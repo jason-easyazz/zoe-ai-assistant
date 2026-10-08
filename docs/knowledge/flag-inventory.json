@@ -2799,6 +2799,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_MEMORY_PROVENANCE_ANSWERS": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_provenance.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_MEMORY_REJECT_LEDGER": {
         "defaults": [
           "-"

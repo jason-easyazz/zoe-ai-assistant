@@ -1451,6 +1451,19 @@ class MemoryService:
             self._bump("opt_out", source)
             return None
 
+        # Off the record (BM5, ZOE_MEMORY_PROVENANCE_ANSWERS): what the owner asked Zoe not to keep is not stored by ANY writer - the
+        # per-turn extractors skip a marked turn, and this is the content test for everything else (the brain's own memory tool,
+        # called during the marked turn, included). A row about something else is untouched. Audit: the counter, never the words.
+        try:
+            import memory_provenance as _mp
+
+            if _mp.blocks_write(user_id, text, source_excerpt or ""):
+                self._bump("off_record", source)
+                logger.info("OFF_RECORD user=%s blocked=ingest source=%s", user_id, source)
+                return None
+        except Exception:  # noqa: BLE001 - the wall must never break a write that is not off the record
+            pass
+
         # Identity is an ACCOUNT fact, never a recalled one: an automatic writer (regex,
         # digest, consolidation, person extractor…) must not store "the user's name is X"
         # — it mishears and mis-attributes (a speech-to-text fragment naming a third
@@ -1933,6 +1946,11 @@ class MemoryService:
                 for key in stale_keys:
                     self._seen_keys.discard(key)
             _invalidate_agent_user_facts_cache(user_id)
+            try:   # BM5: the in-process "what my last reply stood on" ledger and off-the-record marks go with the user
+                import memory_provenance
+                memory_provenance.reset(user_id)
+            except Exception:  # noqa: BLE001
+                pass
             return len(ids)
 
     async def list_by_status(
