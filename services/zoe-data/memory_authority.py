@@ -486,6 +486,10 @@ _CUE_WORDS = {
 }
 
 
+#: nouns that END in s but are not plurals: "Good news: I switched to new glasses" is not the word "new"
+_NO_PLURAL = frozenset({"news", "series", "species", "lens"})
+
+
 def _stem(tok: str) -> str:
     t = tok.lower().strip("'’")
     if t.endswith(("'s", "’s")):
@@ -493,18 +497,25 @@ def _stem(tok: str) -> str:
     m = _DIGIT_ORD.match(t)
     if m:
         return m.group(1)
+    if t in _NO_PLURAL:
+        return t
+    undouble = False
     if len(t) > 4 and t.endswith("ies"):
         t = t[:-3] + "y"
     elif len(t) > 5 and t.endswith("ing"):
         t = t[:-3]
+        undouble = True
     elif len(t) > 4 and t.endswith("ed"):
         t = t[:-2]
+        undouble = True
     elif len(t) > 4 and t.endswith("es"):
         t = t[:-2]
     elif len(t) > 3 and t.endswith("s") and not t.endswith("ss"):
         t = t[:-1]
     if len(t) > 3 and t.endswith("e"):
         t = t[:-1]
+    if undouble and len(t) > 3 and t[-1] == t[-2] and t[-1] in "bgmnprt":
+        t = t[:-1]   # "getting" -> "get", "dropped" -> "drop", "planned" -> "plan" (the inflection doubled it)
     return t
 
 
@@ -844,6 +855,10 @@ def _plainly_first_person(win: str, fact: str) -> bool:
     I think" (the "I" trails the claim) nor "Dana is my dentist" (a third person leads)."""
     if _HEDGE_RE.search(win):
         return False
+    # a lead-in label ("Good news: I ...", "Change of plan: I ...") is not part of the claim
+    lead = re.match(r"^\s*[^:]{1,25}:\s+(?=.*\b(?:I|we|my|our)\b)", win)
+    if lead:
+        win = win[lead.end():]
     toks = [w.lower().replace("’", "").replace(chr(39), "") for w in _words(win)]
     fp = next((i for i, w in enumerate(toks) if w in _PLAIN_FIRST_PERSON), None)
     if fp is None:
