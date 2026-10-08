@@ -516,8 +516,16 @@ def test_digest_replay_of_the_live_incident_leaves_the_genuine_row(svc, monkeypa
     asyncio.run(memory_digest.run_memory_digest(UID))
     assert rows[seed.id][1]["status"] == "approved"
 
-    # break-the-fix control: with BOTH walls removed the SAME replay reproduces the incident
+    # the nightly observation gate (ZMB K1/K5) is a THIRD wall in front of the contradiction pass: with the identity wall
+    # AND the authority rule removed, a fragment-derived name still cannot retire the genuine row - the gate holds it
+    # (never an approved row, never served)
     monkeypatch.setenv("ZOE_MEMORY_AUTHORITY", "0")
+    asyncio.run(memory_digest.run_memory_digest(UID))
+    assert rows[seed.id][1]["status"] == "approved"
+    assert not any(m.get("status") == "approved" and WRONG in doc for doc, m in rows.values())
+
+    # break-the-fix control: with ALL THREE walls removed the SAME replay reproduces the incident
+    monkeypatch.setenv("ZOE_DIGEST_OBSERVATION_GATE", "off")
     asyncio.run(memory_digest.run_memory_digest(UID))
     assert rows[seed.id][1]["status"] == "superseded"
     assert any(WRONG in doc for doc, _ in rows.values())

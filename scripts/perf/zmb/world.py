@@ -126,7 +126,8 @@ def make_world(seed: "str | int" = BASELINE_SEED) -> World:
 def pool_strings() -> list[str]:
     """Every invented name / place / employer a world can draw from (the public pools, not one world's pick):
     spec titles, ids and skip reasons must never name one, or an artifact would carry household-shaped text."""
-    pools = (_FEMALE, _MALE, _NEUTRAL, _PETS, _INTRUDERS, _SURNAMES, _HOMES, _JOBS)
+    from .life import POOL_STRINGS          # the capability axes' (j / k / l / m) invented people, places and organisations
+    pools = (_FEMALE, _MALE, _NEUTRAL, _PETS, _INTRUDERS, _SURNAMES, _HOMES, _JOBS, POOL_STRINGS)
     return sorted({x for pool in pools for x in pool})
 
 

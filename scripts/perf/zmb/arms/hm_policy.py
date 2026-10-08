@@ -63,6 +63,7 @@ class Controls:
     tier_isolation: bool = True        # one tier failing degrades the packet, it does not fail the turn
     isolate_wing: bool = True          # every verbatim read is scoped to the asking member's wing
     alias_sweep: bool = True           # a forget also PROPOSES the name's STT misspellings / split spellings (the owner confirms)
+    exact_lookup: bool = True          # "what exactly did I say": the verbatim tier answers it (an exact-words request is NOT served from the distilled facts alone)
     sync_distill: bool = False         # (inverted: ON = a model call on the write path) the owner's "no model call"
 
     @classmethod

@@ -129,7 +129,9 @@ def _nightly(monkeypatch, svc, fact, blob=BLOB):
         return [{"fact": fact, "type": "fact"}]
 
     async def messages(*a, **k):
-        return "user: " + " ".join(["words"] * 30)
+        # the day's user turns carry the fact (the observation gate holds a fact no user sentence carries: that is its own tests);
+        # this file is about the token-level dedup
+        return fact + ". " + " ".join(["words"] * 30)
 
     async def no_contradiction(*a, **k):
         return False

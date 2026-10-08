@@ -2916,7 +2916,8 @@ async def _handle_introduce_intent(
 
 
 async def _schedule_voice_chat_save(
-    session_id: str, user_text: str, reply: str, user_id: str
+    session_id: str, user_text: str, reply: str, user_id: str,
+    speaker_verified: Optional[bool] = None,
 ) -> None:
     """Fire-and-forget: persist both turns of a voice exchange to chat_messages.
 
@@ -2938,7 +2939,8 @@ async def _schedule_voice_chat_save(
             # voice-rows outage behind W0).
             await _ensure_user_and_chat_session(session_id, user_id)
             if user_text:
-                await _svc(session_id, "user", user_text, user_id=user_id)
+                await _svc(session_id, "user", user_text, user_id=user_id,
+                           **({"speaker_verified": False} if speaker_verified is False else {}))
             if reply:
                 await _svc(session_id, "assistant", reply, user_id=user_id)
 
@@ -3280,7 +3282,8 @@ async def voice_command(
                 # Same FK guard as _schedule_voice_chat_save: voice session ids
                 # never pass through POST /sessions/, so mint the parent row.
                 await _ensure_sess_user_turn(session_id, effective_user)
-                await _svc_user_turn(session_id, "user", text, user_id=effective_user)
+                await _svc_user_turn(session_id, "user", text, user_id=effective_user,
+                                     **({"speaker_verified": False} if _speaker_verified is False else {}))
 
             _spawn_bg(_persist_user_turn())
         except Exception as exc:
@@ -3511,7 +3514,7 @@ async def voice_command(
                     await _bc_conf.broadcast("all", "voice:done", {"panel_id": panel_id})
                 except Exception:
                     pass
-                await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
+                await _schedule_voice_chat_save(session_id, text, reply_text, effective_user, speaker_verified=_speaker_verified)
                 _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id, speaker_verified=_speaker_verified))
                 return {"ok": True, "panel_id": panel_id, "reply": reply_text,
                         "audio_base64": audio_b64_conf, "content_type": ct_conf}
@@ -3600,7 +3603,7 @@ async def voice_command(
                         await _bc_pi_done.broadcast("all", "voice:done", {"panel_id": panel_id})
                     except Exception:
                         pass
-                    await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
+                    await _schedule_voice_chat_save(session_id, text, reply_text, effective_user, speaker_verified=_speaker_verified)
                     _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id, speaker_verified=_speaker_verified))
                     return {
                         "ok": True,
@@ -3735,7 +3738,7 @@ async def voice_command(
                 await _bc_sky.broadcast("all", "voice:done", {"panel_id": panel_id})
             except Exception:
                 pass
-            await _schedule_voice_chat_save(session_id, text, _skybridge_reply, _skybridge_user)
+            await _schedule_voice_chat_save(session_id, text, _skybridge_reply, _skybridge_user, speaker_verified=_speaker_verified)
             _spawn_bg(_run_voice_memory_passes(text, _skybridge_reply, _skybridge_user, session_id, speaker_verified=_speaker_verified))
             return {
                 "ok": True,
@@ -3820,7 +3823,7 @@ async def voice_command(
                         "expires": time.monotonic() + 120,
                     }
                     _intro_audio = await synthesize({"text": reply_text}, caller=caller)
-                    await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
+                    await _schedule_voice_chat_save(session_id, text, reply_text, effective_user, speaker_verified=_speaker_verified)
                     _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id, speaker_verified=_speaker_verified))
                     return {
                         "ok": True,
@@ -3909,7 +3912,7 @@ async def voice_command(
                         turn_key=_turn_key,
                     )
                     _list_audio = await synthesize({"text": reply_text}, caller=caller)
-                    await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
+                    await _schedule_voice_chat_save(session_id, text, reply_text, effective_user, speaker_verified=_speaker_verified)
                     _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id, speaker_verified=_speaker_verified))
                     return {
                         "ok": True,
@@ -3961,7 +3964,7 @@ async def voice_command(
                         turn_key=_turn_key,
                     )
                     _cal_audio = await synthesize({"text": reply_text}, caller=caller)
-                    await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
+                    await _schedule_voice_chat_save(session_id, text, reply_text, effective_user, speaker_verified=_speaker_verified)
                     _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id, speaker_verified=_speaker_verified))
                     return {
                         "ok": True,
@@ -3990,7 +3993,7 @@ async def voice_command(
                     reply_text = _rem_reply or "I set that reminder."
                     await _broadcast_reminder_ui(panel_id=panel_id, summary=reply_text, turn_key=_turn_key)
                     _rem_audio = await synthesize({"text": reply_text}, caller=caller)
-                    await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
+                    await _schedule_voice_chat_save(session_id, text, reply_text, effective_user, speaker_verified=_speaker_verified)
                     _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id, speaker_verified=_speaker_verified))
                     return {
                         "ok": True,
@@ -4138,7 +4141,7 @@ async def voice_command(
                     resource="intent_fast",
                     action=_pub_intent.name,
                 )
-                await _schedule_voice_chat_save(session_id, text, _pub_reply, effective_user)
+                await _schedule_voice_chat_save(session_id, text, _pub_reply, effective_user, speaker_verified=_speaker_verified)
                 _spawn_bg(_run_voice_memory_passes(text, _pub_reply, effective_user, session_id, speaker_verified=_speaker_verified))
                 return {
                     "ok": True, "panel_id": panel_id,
@@ -4163,7 +4166,7 @@ async def voice_command(
             if _weather_fb_reply:
                 await _broadcast_weather_ui(panel_id, _weather_fb_reply, turn_key=_turn_key)
                 _weather_fb_audio = await synthesize({"text": _weather_fb_reply}, caller=caller)
-                await _schedule_voice_chat_save(session_id, text, _weather_fb_reply, effective_user)
+                await _schedule_voice_chat_save(session_id, text, _weather_fb_reply, effective_user, speaker_verified=_speaker_verified)
                 _spawn_bg(_run_voice_memory_passes(text, _weather_fb_reply, effective_user, session_id, speaker_verified=_speaker_verified))
                 return {
                     "ok": True,
@@ -4224,7 +4227,7 @@ async def voice_command(
                 await _bc_xd.broadcast("all", "voice:done", {"panel_id": panel_id})
             except Exception:
                 pass
-            await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
+            await _schedule_voice_chat_save(session_id, text, reply_text, effective_user, speaker_verified=_speaker_verified)
             _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id, speaker_verified=_speaker_verified))
             return {
                 "ok": True, "panel_id": panel_id, "reply": reply_text,
@@ -4600,7 +4603,7 @@ async def voice_command(
                     if heard_reply:
                         # Safe during GeneratorExit unwind: neither call suspends
                         # (_schedule_voice_chat_save only spawns a bg task).
-                        await _schedule_voice_chat_save(session_id, "", heard_reply, effective_user)
+                        await _schedule_voice_chat_save(session_id, "", heard_reply, effective_user, speaker_verified=_speaker_verified)
                         _spawn_bg(_run_voice_memory_passes(text, heard_reply, effective_user, session_id, speaker_verified=_speaker_verified))
 
             return StreamingResponse(
@@ -4864,7 +4867,7 @@ async def voice_command(
     # _schedule_voice_chat_save handles the DB write; _run_voice_memory_passes
     # handles both regex and LLM extraction passes in the background.
     if reply_text and effective_user and effective_user not in ("guest", "voice-daemon"):
-        await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
+        await _schedule_voice_chat_save(session_id, text, reply_text, effective_user, speaker_verified=_speaker_verified)
         _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id, speaker_verified=_speaker_verified))
 
     return {

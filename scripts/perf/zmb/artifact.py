@@ -68,7 +68,8 @@ def axis_stats(results: "list[dict]", cells: "dict[str, Cell]", instrument_ok: b
         if not rs:
             out[axis] = {"cells": 0, "n": 0, "pass": 0, "fail": 0, "skip": 0, "error": 0,
                          "sanity_pass": 0, "sanity_fail": 0, "pass_rate": None, "wilson95": [0.0, 1.0],
-                         "hard_violations": [], "targets_failing": [], "uncontrolled": [], "claimable": False}
+                         "hard_violations": [], "targets_failing": [], "uncontrolled": [], "claimable": False,
+                         "items": {"pass": 0, "n": 0}, "failing": []}
             continue
         scored = [r for r in rs if not r["sanity"] and r["verdict"] in ("PASS", "FAIL", "ERROR")]
         p = sum(1 for r in scored if r["verdict"] == "PASS")
@@ -87,8 +88,22 @@ def axis_stats(results: "list[dict]", cells: "dict[str, Cell]", instrument_ok: b
             "targets_failing": sorted(r["id"] for r in rs if r["expected"] == "FAIL" and r["verdict"] == "FAIL"),
             "uncontrolled": uncontrolled,
             "claimable": bool(instrument_ok and n and not errs and not uncontrolled),
+            # the capability axes (j / k / l / m) count ITEMS (20 sentences, 20 questions, the observations judged), not cells: a Wilson interval over
+            # two or three cells cannot tell 20 of 20 from 0 of 20, over the items it can. Pooled from what the scorers report; absent = a cell axis
+            "items": _pool_items(scored),
+            "failing": sorted(r["id"] for r in scored if r["verdict"] in ("FAIL", "ERROR")),
         }
     return out
+
+
+def _pool_items(scored: "list[dict]") -> "dict[str, int]":
+    p = n = 0
+    for r in scored:
+        for pe in (r.get("evidence") or {}).get("probes") or []:
+            it = pe.get("items") if isinstance(pe, dict) else None
+            if isinstance(it, (list, tuple)) and len(it) == 2:
+                p, n = p + int(it[0]), n + int(it[1])
+    return {"pass": p, "n": n}
 
 
 def hard_violations(results: "list[dict]", cells: "dict[str, Cell]") -> "list[str]":
