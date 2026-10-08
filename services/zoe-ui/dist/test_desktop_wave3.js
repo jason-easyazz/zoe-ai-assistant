@@ -385,6 +385,15 @@ check('no desktop page or script calls a route that never existed (warm-up, tool
   for (const gone of ['js/widgets/music/suggestions.js', 'js/widgets/music/playlists.js', 'js/widgets/music/queue.js', 'js/widgets/music/search.js', 'js/voice/voice-controller.js'])
     assert(!fs.existsSync(path.join(__dirname, gone)), gone + ' should be deleted (no page loads it)');
 });
+check('widgets: every manifest path exists, and the dashboard size map names only manifest widgets', () => {
+  const manifest = JSON.parse(read('js/widgets/widget-manifest.json'));
+  const widgets = Array.isArray(manifest.widgets) ? manifest.widgets : Object.values(manifest.widgets);
+  const ids = new Set(widgets.map(w => w.id));
+  for (const w of widgets) assert(fs.existsSync(path.join(__dirname, w.path.replace(/^\//, ''))), 'manifest widget ' + w.id + ' points at a missing file ' + w.path);
+  for (const gone of ['music-search', 'music-queue', 'music-playlists', 'music-suggestions']) assert(!ids.has(gone), gone + ' still advertised');
+  const sizeMap = read('js/dashboard.js'); for (const gone of ['music-search', 'music-queue', 'music-playlists', 'music-suggestions']) assert(!sizeMap.includes("'" + gone + "'"), 'dashboard size map still names ' + gone);
+  const wsys = read('js/widget-system.js'); for (const cls of ['MusicSearchWidget', 'MusicQueueWidget', 'MusicPlaylistsWidget', 'MusicSuggestionsWidget']) assert(!wsys.includes(cls), 'widget-system still maps ' + cls);
+});
 check('music: transport uses Music Assistant routes with the MA player_id, never a fabricated HA entity', () => {
   const src = read('music.html');
   assert(!/haService|activeEntityId|\/api\/ha\/control|media_player\.\$\{/.test(src));
