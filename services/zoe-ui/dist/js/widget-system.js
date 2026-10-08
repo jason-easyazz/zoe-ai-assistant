@@ -143,10 +143,6 @@ function getWidgetClassName(manifestName) {
         'Music Player': 'MusicWidget',
         'Music Player (New)': 'MusicPlayerWidget',
         'Music Library': 'MusicLibraryWidget',
-        'Music Search': 'MusicSearchWidget',
-        'Queue': 'MusicQueueWidget',
-        'Playlists': 'MusicPlaylistsWidget',
-        'Music Suggestions': 'MusicSuggestionsWidget'
     };
     
     // Check special cases first
