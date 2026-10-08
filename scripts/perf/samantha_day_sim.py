@@ -13,6 +13,8 @@ WHAT IS REAL AND WHAT IS STOOD IN (printed in every result, per step):
   * real   — every turn goes through the live ``/api/chat`` (``X-Internal-Token`` +
              ``X-Zoe-User-Id``); write-time capture, digest, implicit supersede,
              evidence recall, continuity, the brief and the raise all run as in prod.
+  * S9a / S9b (the personalisation hop) are scored in BOTH modes: the hop puts the durable fact into the recall
+             packet itself (``personalisation_hop``), so no card is needed.
   * stood in — the NIGHTLY passes. ``POST /api/proactive/selector/run-synthetic/{id}``
              (open-loop extraction + selector ranking, the dreaming phases 1.5/1.6)
              after each simulated day; the ``portrait_refresh`` chat intent for the
@@ -48,6 +50,8 @@ Usage:
     ZOE_PERF=1 ZOE_BAR_ADMIN_SESSION=<admin X-Session-ID> flock /tmp/zoe-voice-harness.lock \\
         nice -n 5 python3 scripts/perf/samantha_day_sim.py --allowlisted   # 05:00-12:00
     ... --teardown-only        # clean up a run killed before its own teardown
+    ... --only S9a,S9b         # PARTIAL: just the personalisation-hop asks (no card, no hook, no stranger);
+                               # status=partial, never complete - the full week is the gate
 
 Exit: 0 every scored ask PASS | 1 an ask FAILED | 2 refused / error (an ask or the run) /
 teardown unproven |
@@ -243,13 +247,15 @@ ASKS: tuple[dict[str, Any], ...] = (
      "criterion": "neither reply states a clock time (the user never gave one); the judge confirms the "
                   "follow-up neither invents a detail nor claims certainty it lacks"},
     {"id": "S9a", "title": "personalisation hop: sleep tips for a night-shift worker",
-     "needs": "allowlisted",
-     "criterion": "card delivered; a personal needle (night shift / daytime / pharmacy …) AND the judge "
-                  "says the advice is tailored to daytime sleep"},
+     "needs": "any",
+     "criterion": "a personal needle (night shift / daytime / pharmacy …) AND the judge says the advice is "
+                  "tailored to daytime sleep; the recall packet for the ask carries the night-shift fact under "
+                  "'Shape the answer by' (ZOE_PERSONALISATION_HOP, no card needed)"},
     {"id": "S9b", "title": "personalisation hop: cold-weather clothes for a 6am dog walker",
-     "needs": "allowlisted",
-     "criterion": "card delivered; a personal needle (walk / Juniper / 6am …) AND the judge says the "
-                  "advice connects to the early dog walk"},
+     "needs": "any",
+     "criterion": "a personal needle (walk / Juniper / 6am …) AND the judge says the advice connects to the "
+                  "early dog walk; the recall packet for the ask carries the walk fact under "
+                  "'Shape the answer by' (ZOE_PERSONALISATION_HOP, no card needed)"},
 )
 ASK_IDS = tuple(a["id"] for a in ASKS)
 NEEDS_TEXT = {
@@ -859,6 +865,93 @@ def _wait_card_delivery(live: DayLive, user: str, version: str, offset: int, wai
     return {"delivered": False, "waited_s": round(time.monotonic() - t0, 1), "warm_turns": k}
 
 
+def seed_one(live: "DayLive", user: str, day: str, tag: str, today: dt.date,
+             seeds: dict, landed: dict, log) -> None:
+    """One seeding turn of the week: send it, wait for its capture, and wait for it to LAND in the recall packet."""
+    before = live.capture_status(user)
+    t = live.chat(user, f"{day}-{tag.split('-', 1)[1]}", seed_text(tag, today))
+    seeds[tag] = {"error": t["error"], "ms": t["ms"], "session": t["session"]}
+    if t["error"]:
+        log(f"    seed {tag} error: {t['error']}")
+    # A calendar request is a deterministic intent: its capture may never run, so
+    # do not spend the full capture timeout on it.
+    cap = live.wait_captured(user, before, timeout_s=60 if tag == "d3-calendar" else 180)
+    if tag in LAND:
+        lq = SAY[tag]
+        lnd = None
+        for needle in LAND[tag]:
+            lnd = live.wait_landed(user, lq, (needle,), timeout_s=45)
+            if lnd["landed"]:
+                lnd["needle"] = needle
+                break
+        landed[tag] = {**(lnd or {}), "captured": cap.get("landed")}
+
+
+#: S9a / S9b: (ask, the seed it depends on, a word the packet's hop section must carry, the judge rubric)
+HOP_ASKS = {"S9a": (ASK_SLEEP, "d1-shift", "night shift", "sleep"),
+            "S9b": (ASK_COLD, "d1-dog", "6am", "cold")}
+HOP_HEADING = "Shape the answer by"
+
+
+def run_hop_ask(live: "DayLive", user: str, aid: str, samples: int, asks_log: list, seeds: dict, landed: dict,
+                mode: str) -> tuple[str, dict]:
+    """S9a / S9b - NO card needed: the recall packet for the ask must carry the durable fact under "Shape the
+    answer by" (the personalisation hop) and the reply must be shaped by it. A seed that did not land is ERROR
+    (an ask whose fact was never stored proves nothing)."""
+    question, seed_tag, needle, rubric = HOP_ASKS[aid]
+    if seeds.get(seed_tag, {}).get("error") or not landed.get(seed_tag, {}).get("landed"):
+        return "ERROR", {"why": f"setup not exercised: {seed_tag}"}
+    pkt = live.packet(user, question)
+    hop_in_packet = None if pkt is None else (HOP_HEADING in pkt and needle in pkt.lower())
+    verdicts, per = [], []
+    for i in range(samples):
+        t = _ask(live, user, f"q-{aid.lower()}-s{i}", question, asks_log)
+        if t["error"]:
+            verdicts.append("ERROR")
+            per.append({"verdict": "ERROR", "why": t["error"]})
+            continue
+        v, ev = score_personal(aid, t["reply"], lambda r=t["reply"]: live.judge_rubric(rubric, question, r))
+        verdicts.append(v)
+        per.append({"verdict": v, **ev, **live.evidence(t)})
+    return sb.majority_vote(verdicts), {"samples": per, "votes": verdicts, "hop_in_packet": hop_in_packet,
+                                        "card_mode": mode == "allowlisted"}
+
+
+def run_only(live: "DayLive", user: str, only: frozenset, samples: int, log) -> dict[str, Any]:
+    """A PARTIAL run (``--only S9a,S9b``): seed only the facts the selected asks depend on, ask only those. Never
+    ``complete``; the full week is the gate."""
+    today = dt.date.today()
+    seeds: dict[str, dict] = {}
+    landed: dict[str, dict] = {}
+    asks_log: list[dict] = []
+    res: dict[str, dict] = {}
+    for aid in sorted(only):
+        seed_tag = HOP_ASKS[aid][1]
+        if seed_tag not in seeds:
+            log(f"seed {seed_tag}")
+            seed_one(live, user, seed_tag.split("-", 1)[0], seed_tag, today, seeds, landed, log)
+    for aid in sorted(only):
+        v, ev = run_hop_ask(live, user, aid, samples, asks_log, seeds, landed, "default")
+        spec = next(a for a in ASKS if a["id"] == aid)
+        res[aid] = {"id": aid, "title": spec["title"], "verdict": v, "criterion": spec["criterion"],
+                    "synthetic_steps": [], "evidence": ev}
+        log(f"  ask {aid:<4} {v:<5} {spec['title']}")
+    return {"today": today.isoformat(), "seeds": seeds, "landed": landed, "turns": asks_log,
+            "asks": [res[a] for a in sorted(res)]}
+
+
+def parse_only(raw: str | None) -> frozenset | None:
+    """``--only S9a,S9b`` (or ``9a,9b``) -> {"S9a","S9b"}; None = the full week. Only the hop asks have a
+    partial runner; anything else is a ValueError (a typo must never run nothing, or everything)."""
+    if raw is None:
+        return None
+    norm = {"S" + t.strip().lower().lstrip("s") for t in raw.split(",") if t.strip()}
+    unknown = sorted(norm - set(HOP_ASKS))
+    if not norm or unknown:
+        raise ValueError(f"--only supports {', '.join(HOP_ASKS)} (got {raw!r})")
+    return frozenset(norm)
+
+
 def run_week(live: DayLive, user: str, stranger: str, mode: str, samples: int,
              card_wait_s: int, log) -> dict[str, Any]:
     today = dt.date.today()
@@ -883,23 +976,7 @@ def run_week(live: DayLive, user: str, stranger: str, mode: str, samples: int,
     for day, tags in DAYS.items():
         log(f"{day}: {len(tags)} turn(s)")
         for tag in tags:
-            before = live.capture_status(user)
-            t = live.chat(user, f"{day}-{tag.split('-', 1)[1]}", seed_text(tag, today))
-            seeds[tag] = {"error": t["error"], "ms": t["ms"], "session": t["session"]}
-            if t["error"]:
-                log(f"    seed {tag} error: {t['error']}")
-            # A calendar request is a deterministic intent: its capture may never run, so
-            # do not spend the full capture timeout on it.
-            cap = live.wait_captured(user, before, timeout_s=60 if tag == "d3-calendar" else 180)
-            if tag in LAND:
-                lq = SAY[tag]
-                lnd = None
-                for needle in LAND[tag]:
-                    lnd = live.wait_landed(user, lq, (needle,), timeout_s=45)
-                    if lnd["landed"]:
-                        lnd["needle"] = needle
-                        break
-                landed[tag] = {**(lnd or {}), "captured": cap.get("landed")}
+            seed_one(live, user, day, tag, today, seeds, landed, log)
         if mode == "default":
             _settle_capture(live, user)
             code, body = live.hook(user)
@@ -1002,10 +1079,10 @@ def run_week(live: DayLive, user: str, stranger: str, mode: str, samples: int,
             put(aid, verdict, {"samples": per, "votes": verdicts}, steps=("card",))
 
     card_ask("2", ASK_COOK, score_diet)
-    card_ask("S9a", ASK_SLEEP, lambda r: score_personal(
-        "S9a", r, lambda: live.judge_rubric("sleep", ASK_SLEEP, r)))
-    card_ask("S9b", ASK_COLD, lambda r: score_personal(
-        "S9b", r, lambda: live.judge_rubric("cold", ASK_COLD, r)))
+
+    for hop_id in ("S9a", "S9b"):
+        v, ev = run_hop_ask(live, user, hop_id, samples, asks_log, seeds, landed, mode)
+        put(hop_id, v, ev)
 
     def simple(aid: str, tag: str, question: str, scorer: Callable[[str], tuple[str, dict]],
                setup: Iterable[str] = ()) -> None:
@@ -1121,6 +1198,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--keep-replies", action="store_true",
                     help="store 240-char reply excerpts in the local results file (debug)")
     ap.add_argument("--teardown-only", action="store_true")
+    ap.add_argument("--only", default=None,
+                    help="a PARTIAL run of the personalisation-hop asks only (S9a,S9b / 9a,9b): seeds just their "
+                         "facts, asks just them, status=partial, never complete (default mode only)")
     ap.add_argument("--service-dir", default=None)
     ap.add_argument("--results", type=Path, default=DEFAULT_RESULTS)
     ap.add_argument("--trend", type=Path, default=DEFAULT_TREND)
@@ -1131,6 +1211,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.samples < 1 or args.samples % 2 == 0:
         ap.error("--samples must be a positive odd number (majority vote)")
     mode = "allowlisted" if args.allowlisted else "default"
+    try:
+        only = parse_only(args.only)
+    except ValueError as exc:
+        ap.error(str(exc))
+    if only and mode == "allowlisted":
+        ap.error("--only is a default-mode partial run (the hop needs no card)")
     if args.dry_run:
         print(plan_text(mode, dt.date.today(), args.samples))
         return 0
@@ -1194,7 +1280,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         sb.write_json(args.pending, {"users": [user, stranger], "sessions": [],
                                      "started_at": started.isoformat()})
-        week = run_week(live, user, stranger, mode, args.samples, args.card_wait_s, log)
+        week = (run_only(live, user, only, args.samples, log) if only
+                else run_week(live, user, stranger, mode, args.samples, args.card_wait_s, log))
     except BaseException as exc:  # noqa: BLE001 — teardown must still run
         run_error = f"{type(exc).__name__}: {str(exc)[:200]}"
         log(f"run aborted: {run_error}")
@@ -1210,7 +1297,8 @@ def main(argv: list[str] | None = None) -> int:
 
     asks = week.get("asks", [])
     summary = overall(asks)
-    status = "error" if (run_error or not td["proven"] or len(asks) != len(ASK_IDS)) else "ok"
+    status = "error" if (run_error or not td["proven"] or len(asks) != (len(only) if only else len(ASK_IDS))) \
+        else ("partial" if only else "ok")
     payload = {"harness_version": HARNESS_VERSION, "status": status, "mode": mode, "run_error": run_error,
                "started_at": started.isoformat(timespec="seconds"),
                "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),

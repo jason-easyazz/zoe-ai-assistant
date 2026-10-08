@@ -39,14 +39,14 @@ P = ds.ALLOWLISTED_USER
 def test_criteria_and_rubrics_are_pinned():
     # Editing a criterion or a rubric changes what PASS means: update this pin deliberately.
     assert ds.CRITERIA_SHA256 == ds.criteria_digest()
-    assert ds.CRITERIA_SHA256 == "d96853b91995f006229fc3ff7288f7f7a1e6ce4782a7629e955deac6b15bf5b0"
+    assert ds.CRITERIA_SHA256 == "ada2a91c328f92da197a0e1f0eb024aedc2ab9090569d75900f29c3a964d83ee"
 
 
 def test_every_ask_has_a_criterion_and_a_known_mode():
     assert len(ds.ASK_IDS) == len(set(ds.ASK_IDS)) == 15
     for a in ds.ASKS:
         assert a["criterion"] and a["needs"] in ("any", "allowlisted", "hook")
-    assert {a["id"] for a in ds.ASKS if a["needs"] == "allowlisted"} == {"1b", "2", "7b", "S9a", "S9b"}
+    assert {a["id"] for a in ds.ASKS if a["needs"] == "allowlisted"} == {"1b", "2", "7b"}  # S9a / S9b need no card since the hop (2026-10-09)
     assert {a["id"] for a in ds.ASKS if a["needs"] == "hook"} == {"1r", "7r", "7s"}
 
 
@@ -426,3 +426,87 @@ def test_backdate_candidates_refuses_foreign_sessions():
     live = ds.DayLive.__new__(ds.DayLive)
     with pytest.raises(ValueError):
         live.backdate_candidates("demo_bar_00000001", "web-", 10)
+
+
+# ── S9a / S9b without a card: the personalisation hop (2026-10-09) ───────────
+
+class _HopLive:
+    """The live API reduced to what run_hop_ask touches. ``hop`` = the service runs ZOE_PERSONALISATION_HOP."""
+
+    def __init__(self, hop=True):
+        self.hop, self.asked = hop, []
+
+    def packet(self, user, message):
+        base = "## What I know about you\n- I work night shifts in the hospital pharmacy [mem:a]\n"
+        if not self.hop:
+            return base
+        night = "- I work night shifts in the hospital pharmacy, so I sleep during the day. [mem:a]"
+        walk = "- Every morning at 6am I walk our kelpie Juniper along the river. [mem:b]"
+        return base + "## Shape the answer by\n" + (night if "sleep" in message else walk) + "\nShape the answer by ..."
+
+    def chat(self, user, tag, message):
+        self.asked.append(message)
+        if self.hop:
+            reply = ("Since you sleep during the day after your night shifts, try blackout curtains." if "sleep" in message
+                     else "Layer up for the 6am walk with Juniper, it's freezing.")
+        else:
+            reply = ("Keep a regular bedtime and avoid screens." if "sleep" in message
+                     else "A warm coat should be fine.")
+        return {"reply": reply, "error": None, "ms": 1, "session": tag}
+
+    def evidence(self, t):
+        return {"ms": t["ms"]}
+
+    def judge_rubric(self, key, user_said, reply, **fmt):
+        return "PASS", "tailored"
+
+
+SEEDED = ({"d1-shift": {"error": None}, "d1-dog": {"error": None}},
+          {"d1-shift": {"landed": True}, "d1-dog": {"landed": True}})
+
+
+@pytest.mark.parametrize("aid", ["S9a", "S9b"])
+def test_hop_asks_pass_without_a_card_when_the_hop_runs(aid):
+    live = _HopLive(hop=True)
+    v, ev = ds.run_hop_ask(live, "demo_bar_0a1b2c3d", aid, 1, [], *SEEDED, "default")
+    assert v == "PASS", ev
+    assert ev["hop_in_packet"] is True and ev["card_mode"] is False
+
+
+@pytest.mark.parametrize("aid", ["S9a", "S9b"])
+def test_hop_asks_fail_when_the_hop_is_off_negative_control(aid):
+    # ZOE_PERSONALISATION_HOP off: the packet has no "Shape the answer by" section and the reply is generic
+    live = _HopLive(hop=False)
+    v, ev = ds.run_hop_ask(live, "demo_bar_0a1b2c3d", aid, 1, [], *SEEDED, "default")
+    assert v == "FAIL", ev
+    assert ev["hop_in_packet"] is False
+
+
+def test_hop_ask_with_an_unlanded_seed_is_error_and_asks_nothing():
+    live = _HopLive()
+    seeds, landed = SEEDED[0], {"d1-shift": {"landed": False}, "d1-dog": {"landed": True}}
+    v, ev = ds.run_hop_ask(live, "demo_bar_0a1b2c3d", "S9a", 1, [], seeds, landed, "default")
+    assert v == "ERROR" and "d1-shift" in ev["why"] and live.asked == []
+
+
+def test_hop_asks_are_scored_in_the_default_mode_now():
+    for aid in ("S9a", "S9b"):
+        needs = next(a["needs"] for a in ds.ASKS if a["id"] == aid)
+        assert ds.mode_covers("default", needs) and ds.mode_covers("allowlisted", needs)
+
+
+def test_only_flag_parses_the_hop_asks_and_refuses_the_rest():
+    assert ds.parse_only(None) is None
+    assert ds.parse_only("9a,9b") == frozenset({"S9a", "S9b"}) == ds.parse_only("S9a, s9b")
+    for bad in ("3", "S9c", "", "1b"):
+        with pytest.raises(ValueError):
+            ds.parse_only(bad)
+
+
+def test_run_only_seeds_just_the_selected_facts(monkeypatch):
+    seeded = []
+    monkeypatch.setattr(ds, "seed_one", lambda live, user, day, tag, today, seeds, landed, log: (
+        seeded.append(tag), seeds.__setitem__(tag, {"error": None}), landed.__setitem__(tag, {"landed": True})))
+    out = ds.run_only(_HopLive(), "demo_bar_0a1b2c3d", frozenset({"S9a"}), 1, lambda m: None)
+    assert seeded == ["d1-shift"] and [a["id"] for a in out["asks"]] == ["S9a"]
+    assert out["asks"][0]["verdict"] == "PASS"

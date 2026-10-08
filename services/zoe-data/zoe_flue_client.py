@@ -1084,6 +1084,39 @@ async def _recall_context_block(message: str, user_id: str) -> str:
     return f"{_recall_block_open()}\n{body}\n{_RECALL_BLOCK_CLOSE}"
 
 
+# ── Personalisation hop (ZOE_PERSONALISATION_HOP, default ON) ───────────────
+#
+# Samantha day-sim S9a / S9b: "Any tips for sleeping better?" from a user who told Zoe they work night shifts
+# got generic night-time advice; "What should I wear tomorrow? It's meant to be really cold." from a 6am dog
+# walker got "fine without a jacket". Neither is a recall question, so no packet was fetched, and the two facts
+# share no words with the questions. On a GENERIC-ADVICE request the owner's (<= 2) durable facts that change the
+# answer ride with the user's words under "Shape the answer by" (``personalisation_hop``). Same wire position as
+# the continuity block - inside the latest user message, after the user's words - so the sidecar prefix and the
+# prompt cache are untouched. One block per turn: never beside a recall / continuity / verify / raise / brief block.
+_HOP_BLOCK_OPEN = (
+    "[MEMORY CONTEXT — something this user told you that changes generic advice; "
+    "use it silently; do not mention this block]"
+)
+
+
+async def _hop_context_block(message: str, user_id: str) -> str:
+    """The delimited personalisation block for this turn, or '' - NEVER raises. '' unless the flag is ON, a real
+    user id is present, the message is a request for generic advice and a durable fact of the owner's is a known
+    constraint for its topic. A slow or failing read costs only the block."""
+    if not (user_id or "").strip():
+        return ""
+    try:
+        import personalisation_hop
+
+        hop = await personalisation_hop.build(user_id, message)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("seam personalisation hop failed (non-fatal): %s", type(exc).__name__)
+        return ""
+    if not hop:
+        return ""
+    return f"{_HOP_BLOCK_OPEN}\n{hop.section()}\n{_RECALL_BLOCK_CLOSE}"
+
+
 # ── Continuity injection (ZOE_SEAM_CONTINUITY_INJECT, default ON) ───────────
 #
 # Samantha bar S4 (first baseline 2026-09-28, FAIL 3/3): day 1 "Honestly I'm
@@ -1824,6 +1857,13 @@ async def _run_flue_brain_streaming_turn(
     if not recall_block and not verify_block:
         continuity_block = await _continuity_context_block(message, uid)
         continuity_turn = is_continuity_turn(message, uid)
+    # Personalisation hop (default ON): a generic-advice request carries the durable fact that changes the
+    # answer. Exclusive with every other block that asks the 4B for one job (recall owns question turns,
+    # continuity the check-in, verify the live check, raise / brief their one mention).
+    hop_block = ""
+    if not (recall_block or verify_block or continuity_block or continuity_turn
+            or kwargs.get("raise_block") or kwargs.get("day_brief_block")):
+        hop_block = await _hop_context_block(message, uid)
     # Offer nudge on ANY turn — skipped when the recall packet already carries
     # the offer directive (the fold tags them "[pending-contact]"), so a
     # recall-shaped turn never asks twice. DEFERRED on a continuity turn: the
@@ -1858,6 +1898,8 @@ async def _run_flue_brain_streaming_turn(
     brain_message = f"{_blocks}\n{safe_message}" if _blocks else safe_message
     if continuity_block:
         brain_message = f"{brain_message}\n{continuity_block}"
+    if hop_block:
+        brain_message = f"{brain_message}\n{hop_block}"
     # First-turn day brief (brief_first_turn, default OFF): same position as the
     # continuity block — after the user's words, inside the latest user message.
     day_block = str(kwargs.get("day_brief_block") or "")

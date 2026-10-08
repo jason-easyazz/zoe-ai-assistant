@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Auto-generated inventory of every ZOE_* environment flag read in the codebase — defaults, readers, typed_env adoption, and .env.example coverage.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-10-08T00:00:00Z
+timestamp: 2026-10-09T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-10-08T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-10-08. The table body is deterministic (sorted, no
+Last generated: 2026-10-09. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Default `dynamic` = not statically extractable; `(required)` = bare
@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-541 flags; 539 not documented in `.env.example`.
+543 flags; 541 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -40,6 +40,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_ANNOUNCE_STRICT_PANEL` | `''` | no | NO | `services/zoe-data/voice_announce.py` |
 | `ZOE_ANNOUNCE_TTL_S` | `''` | no | NO | `services/zoe-data/voice_announce.py` |
 | `ZOE_APP_LOG` | `dynamic` | no | NO | `scripts/perf/user_model_ab.py` |
+| `ZOE_ASK_TO_REMEMBER` | `True` | yes | NO | `services/zoe-data/ask_to_remember.py` |
 | `ZOE_ASSISTANT_ROOT` | `-`, `dynamic` | no | NO | `scripts/maintenance/zoe_cheap_pr_agent.py`<br>`services/zoe-data/greploop_guard.py`<br>`services/zoe-data/multica_ticket_contract.py` |
 | `ZOE_AUTH_ALLOWED_ORIGINS` | `'http://localhost,http://localhost:3000,http://localhost:8000,http://127.0.0.1,http://127.0.0.1:8000,https://zoe.the411.life,http://zoe.local'` | no | NO | `services/zoe-auth/main.py` |
 | `ZOE_AUTH_FAIL_CLOSED` | `'true'` | no | NO | `services/zoe-data/auth.py` |
@@ -345,6 +346,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_PANEL_ID` | `'post-merge-probe'`, `'zoe-touch-pi'` | no | NO | `scripts/maintenance/zoe_latency_probe.py`<br>`services/zoe-data/zoe_agent.py` |
 | `ZOE_PANEL_SESSION_TRUST_WINDOW_S` | `'900'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_PERF` | `-` | no | NO | `scripts/perf/measure_speed.py`<br>`scripts/perf/measure_tts.py`<br>`scripts/perf/measure_voice.py`<br>`scripts/perf/recall_evidence_probe.py`<br>`scripts/perf/samantha_bar.py`<br>`scripts/perf/samantha_day_sim.py`<br>`scripts/perf/user_model_ab.py` |
+| `ZOE_PERSONALISATION_HOP` | `True` | yes | NO | `services/zoe-data/personalisation_hop.py` |
 | `ZOE_PERSONA_DRIFT` | `False` | yes | NO | `services/zoe-data/persona_drift.py` |
 | `ZOE_PERSONA_LAYER` | `False` | yes | NO | `services/zoe-data/persona_layer.py` |
 | `ZOE_PERSON_BIRTHDAY_CAPTURE_ENABLED` | `''` | no | NO | `services/zoe-data/person_extractor.py` |

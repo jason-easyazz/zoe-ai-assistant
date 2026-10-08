@@ -15,7 +15,9 @@ Scenarios (docs/knowledge/samantha-bar.md has what each one proves):
   S3 decline when nothing was said        S7 keep the richer fact over a short dup
   S4 the emotional thread, gently         S8 recall after 30+ turns of filler
   S10 one-word change ("gave up the cello") — expected FAIL today: a TARGET, not a regression
-  S11 ask-to-remember — expected SKIP: the behaviour is not built
+  S11 ask-to-remember — "Remember that ..." / "Keep in mind ..." is stored verbatim and confirmed in one
+      sentence, is idempotent, answers "do you remember what I asked you to remember?", and "Forget that" retracts
+      it (ZOE_ASK_TO_REMEMBER, default on; flag off = FAIL)
   S12 raise spacing — two open conversations minutes apart must not both open with a raise
   S13-S16 contacts conversation (2026-10-04): list-all, "my brother X" -> relationship, one
           record per person, one enumerated offer question + one yes (S15/S16 need the
@@ -172,8 +174,16 @@ SAY_CELLO_STOP = "I gave up the cello."
 ASK_CELLO = "Do I still play the cello?"
 S10_STOP_CUES = ("gave up", "given up", "stopped", "quit", "no longer", "not anymore",
                  "don't play", "do not play", "not playing", "no more")
-S11_WHY = ("not built: zoe-data has no ask-to-remember behaviour (nothing asks the user for a "
-           "reusable preference when a task would benefit); reserved so the gap stays visible")
+# S11 (2026-10-09): the owner's EXPLICIT memory ask (ask_to_remember.py). Synthetic facts only.
+SAY_REMEMBER = "Remember that my favourite tea is lapsang souchong."
+SAY_KEEP_IN_MIND = "Keep in mind that I can't stand coriander."
+ASK_TEA = "What's my favourite tea?"
+ASK_REMEMBERED = "Do you remember what I asked you to remember?"
+SAY_FORGET_THAT = "Forget that."
+S11_NEEDLES = ("lapsang", "coriander")
+S11_NARRATION = ("let me", "one moment", "hold on", "i'll check", "i will check", "checking", "saving that",
+                 "let me save", "give me a second", "bear with me")
+S11_MAX_WORDS = 16   # "one short sentence": the deterministic confirmations are 4-5 words
 
 # S13-S16 (2026-10-04): the contacts conversation classes. Synthetic people only.
 # The regex lane, the Flue people tool and the voice handler all end in the same
@@ -285,9 +295,14 @@ SCENARIOS: tuple[dict[str, Any], ...] = (
                "the reply says they stopped — the known supersede miss, a target not a regression",
      "turns": [("A", "d1-cello", SAY_CELLO), ("A", "d2-cello", SAY_CELLO_STOP)],
      "asks": [("A", ASK_CELLO)]},
-    {"id": "S11", "title": "ask-to-remember (not built)", "judged": False, "expected": "SKIP",
-     "proves": "Zoe asks for a reusable preference when a task would benefit — " + S11_WHY,
-     "turns": [], "asks": []},
+    {"id": "S11", "title": "ask-to-remember", "judged": False,
+     "proves": "'Remember that my favourite tea is lapsang souchong' and 'Keep in mind that I can't stand "
+               "coriander' are each stored verbatim and confirmed in ONE short sentence that is never "
+               "'I'll remember' without a row; a repeat adds no row; a fresh session recalls the tea; "
+               "'Do you remember what I asked you to remember?' gives both back; 'Forget that' retracts "
+               "the newest (coriander) and leaves the tea (ZOE_ASK_TO_REMEMBER; flag off = FAIL)",
+     "turns": [("A", "s11-say", SAY_REMEMBER), ("A", "s11-keep", SAY_KEEP_IN_MIND), ("A", "s11-repeat", SAY_REMEMBER)],
+     "asks": [("A", ASK_TEA), ("A", ASK_REMEMBERED), ("A", SAY_FORGET_THAT)]},
     {"id": "S12", "title": "raise spacing", "judged": False,
      "proves": "of S5's two open turns minutes apart, the second carries no raise of ANY candidate "
                "(the regression check for #1801's per-member raise gap, ZOE_PROACTIVE_RAISE_GAP_S)",
@@ -336,7 +351,7 @@ AXIS_OF = {"S1": "recall", "S7": "recall", "S8": "recall",
            "S2": "temporal", "S10": "temporal",
            "S3": "abstention",
            "S4": "emotional", "S5": "emotional", "S12": "emotional",
-           "S6": "authority",
+           "S6": "authority", "S11": "authority",
            "S13": "extraction", "S14": "extraction", "S15": "extraction", "S16": "extraction",
            "S20": "extraction", "S21": "extraction", "S22": "extraction"}
 # A scenario that only ASKS about facts another scenario SEEDS: selecting it still runs those
@@ -699,6 +714,59 @@ def score_s10(reply: str, packet: str | None) -> tuple[str, dict]:
     return "PASS", ev
 
 
+def short_confirmation(reply: str) -> dict:
+    """One short sentence that confirms and does not narrate (the shape ask-to-remember promises)."""
+    words = len((reply or "").split())
+    sentences = len([x for x in re.split(r"(?<=[.!?])\s+", (reply or "").strip()) if x])
+    low = normalize(reply)
+    return {"words": words, "sentences": sentences,
+            "confirms": contains_any(low, ("remember", "got it", "noted", "already got")),
+            "narrates": contains_any(low, S11_NARRATION),
+            "short": 0 < words <= S11_MAX_WORDS and sentences <= 1}
+
+
+def score_s11(t: dict) -> tuple[str, dict]:
+    """The whole ask-to-remember contract from the turns' replies and the recall packets:
+
+    ``t`` keys - say_tea / say_keep (replies), packet_after_say / packet_after_keep / packet_final (recall
+    packets, None = the read failed), count_once / count_repeat (rows in the packet after the ask / after the
+    repeat), repeat_reply, tea_reply (a FRESH session's answer), recall_reply, forget_reply.
+    ERROR when a packet could not be read (a store that was not inspected is never certified)."""
+    for k in ("packet_after_say", "packet_after_keep", "packet_final"):
+        if t.get(k) is None:
+            return "ERROR", {"method": "deterministic", "why": f"recall packet read failed ({k})"}
+    conf_tea, conf_keep = short_confirmation(t["say_tea"]), short_confirmation(t["say_keep"])
+    why = []
+    for name, c in (("tea", conf_tea), ("coriander", conf_keep)):
+        if not (c["confirms"] and c["short"]) or c["narrates"]:
+            why.append(f"the {name} ask is not confirmed in one short sentence ({c})")
+    if "lapsang" not in normalize(t["packet_after_say"]):
+        why.append("'I'll remember' with no row: the tea is not in the recall packet")
+    if "coriander" not in normalize(t["packet_after_keep"]):
+        why.append("'I'll remember' with no row: the coriander is not in the recall packet")
+    n1, n2 = t.get("count_once"), t.get("count_repeat")
+    if n1 is None or n2 is None:
+        why.append("the row count could not be read, so idempotency is unproven")
+    elif n2 != n1:
+        why.append(f"a repeat of the same ask added rows ({n1} -> {n2})")
+    if not short_confirmation(t["repeat_reply"])["confirms"]:
+        why.append("the repeat was not acknowledged")
+    if "lapsang" not in normalize(t["tea_reply"]):
+        why.append("a fresh session does not recall the tea")
+    if len(found_needles(t["recall_reply"], S11_NEEDLES)) < len(S11_NEEDLES):
+        why.append("'do you remember what I asked you to remember?' did not give both back")
+    final = normalize(t["packet_final"])
+    if "coriander" in final:
+        why.append("'Forget that' left the coriander in the recall packet")
+    if "lapsang" not in final:
+        why.append("'Forget that' also removed the tea (it must retract only the newest)")
+    if not contains_any(t["forget_reply"], ("forgot", "forgotten")):
+        why.append("'Forget that' did not say it forgot")
+    ev = {"method": "deterministic", "confirm_tea": conf_tea, "confirm_keep": conf_keep,
+          "rows_after_ask": n1, "rows_after_repeat": n2}
+    return ("FAIL", {**ev, "why": "; ".join(why)}) if why else ("PASS", ev)
+
+
 def score_s12(rows: list[dict], s1: str, s2: str) -> tuple[str, dict]:
     """rows: proactive_candidates ({surfaced, session}) after S5's two open turns.
     PASS iff no candidate was surfaced in the second session; SKIP when nothing was
@@ -1047,7 +1115,7 @@ def plan_text(samples: int, selected: "frozenset[str] | None" = None) -> str:
              f"  judged scenarios ask {samples}x, majority vote; judge rubric sha {JUDGE_PROMPT_SHA256[:12]}",
              "  order: day 1 (S1 seed+ask, S2/S4/S7 seeds) -> backdate day-1 sessions 26h ->",
              "         day 2 (S2 move+ask, S7 short dup+ask, S10 'gave up'+ask, S4 ask, S3 ask) -> S5 selector"
-         " hook + 2 open turns (S12 scores their spacing) -> S20/S21/S22 (dates, corrections, roles) -> S6 -> S8 -> contacts S13-S16; S11 is a reserved SKIP"]
+         " hook + 2 open turns (S12 scores their spacing) -> S11 (ask-to-remember) -> S20/S21/S22 (dates, corrections, roles) -> S6 -> S8 -> contacts S13-S16"]
     need = seed_closure(selected) if selected is not None else None
     if selected is not None and selected != frozenset(SCENARIO_IDS):
         lines.append(f"  PARTIAL RUN (--only/--axis): {', '.join(s for s in SCENARIO_IDS if s in selected)}"
@@ -1695,7 +1763,42 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
         else:
             v, ev = score_s10(t["reply"], pkt)
             put("S10", v, ask={**live.evidence(t), **ev})
-    put("S11", "SKIP", why=S11_WHY)
+    # S11: the owner's explicit memory ask. Same-session, no backdate: the ask is a synchronous write; the
+    # post-turn capture (which derives a near-identical row from the same turn) is OBSERVED before each read.
+    if ask("S11"):
+        log("S11: remember / keep in mind / repeat / fresh-session recall / recall question / forget that")
+        t = {}
+        cap = live.capture_status(a)
+        r1 = say(a, "s11-say", SAY_REMEMBER)
+        w1 = live.wait_captured(a, cap)
+        t["say_tea"] = r1["reply"]
+        t["packet_after_say"] = live.packet(a, ASK_TEA)
+        cap = live.capture_status(a)
+        r2 = say(a, "s11-keep", SAY_KEEP_IN_MIND)
+        w2 = live.wait_captured(a, cap)
+        t["say_keep"] = r2["reply"]
+        t["packet_after_keep"] = live.packet(a, "coriander")
+        t["count_once"] = live.packet_count(a)
+        cap = live.capture_status(a)
+        r3 = say(a, "s11-repeat", SAY_REMEMBER)
+        w3 = live.wait_captured(a, cap)
+        t["repeat_reply"] = r3["reply"]
+        t["count_repeat"] = live.packet_count(a)
+        r4 = say(a, "s11-fresh-ask", ASK_TEA)          # a different session: the row, not the context, answers
+        r5 = say(a, "s11-recall-q", ASK_REMEMBERED)
+        t["tea_reply"], t["recall_reply"] = r4["reply"], r5["reply"]
+        r6 = say(a, "s11-forget", SAY_FORGET_THAT)
+        t["forget_reply"] = r6["reply"]
+        t["packet_final"] = live.packet(a, ASK_TEA + " coriander")
+        errs = [x for x in (r1, r2, r3, r4, r5, r6) if x["error"]]
+        waits = {"after_say": w1, "after_keep": w2, "after_repeat": w3}
+        if errs:
+            put("S11", "ERROR", why="a turn failed: " + "; ".join(e["error"] for e in errs), waits=waits)
+        else:
+            v, ev = score_s11(t)
+            if live.keep:   # --keep-replies: the replies themselves (debug only; they are synthetic)
+                ev["replies"] = {k: x for k, x in t.items() if k.endswith("_reply")}
+            put("S11", v, waits=waits, **ev)
 
     if ask("S4") and setup_ok("S4", ("d1-worry",), ("S4", "backdate")):
         v, ev = _ask_judged(live, a, "d2-edge", ASK_WORRY, samples, score_s4, "S4")

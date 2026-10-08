@@ -224,6 +224,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_ASK_TO_REMEMBER": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/ask_to_remember.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_ASSISTANT_ROOT": {
         "defaults": [
           "-",
@@ -3352,6 +3362,16 @@
           "scripts/perf/user_model_ab.py"
         ],
         "typed_env": false
+      },
+      "ZOE_PERSONALISATION_HOP": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/personalisation_hop.py"
+        ],
+        "typed_env": true
       },
       "ZOE_PERSONA_DRIFT": {
         "defaults": [
