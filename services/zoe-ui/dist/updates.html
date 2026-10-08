@@ -259,6 +259,9 @@
         }
         html.dark-mode .empty { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.1); color: rgba(255,255,255,0.6); }
 
+        @media (max-width: 600px) {
+            .page-header { flex-wrap: wrap; }          /* title + actions stack at phone width (390 px overflowed by 5 px) */
+        }
         @media (max-width: 900px) {
             .nav-menu { display: none !important; }
             .more-nav-btn { display: none !important; }

@@ -463,11 +463,14 @@
       "ZOE_BRAIN_SLOT_TOKENS": {
         "defaults": [
           "'8192'",
-          "8192"
+          "8192",
+          "dynamic"
         ],
         "in_env_example": false,
         "readers": [
+          "services/zoe-data/digest_pack.py",
           "services/zoe-data/memory_digest.py",
+          "services/zoe-data/night_mind.py",
           "services/zoe-data/zoe_agent.py"
         ],
         "typed_env": true
@@ -1139,6 +1142,67 @@
         "in_env_example": false,
         "readers": [
           "scripts/maintenance/music_discovery_batch.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DIGEST_CHUNKED": {
+        "defaults": [
+          "-",
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/digest_pack.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_DIGEST_CHUNK_TOKENS": {
+        "defaults": [
+          "0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/digest_pack.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DIGEST_DECODE_TOK_S": {
+        "defaults": [
+          "60.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/digest_pack.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DIGEST_LLM_TIMEOUT_SCALE": {
+        "defaults": [
+          "1.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_digest.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_DIGEST_MAX_CHUNKS": {
+        "defaults": [
+          "5"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/digest_pack.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_DIGEST_MAX_FACTS": {
+        "defaults": [
+          "40"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/digest_pack.py"
         ],
         "typed_env": false
       },
@@ -4895,6 +4959,16 @@
           "services/zoe-data/routers/weather.py",
           "services/zoe-data/time_utils.py",
           "services/zoe-data/voice_greeting.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_TOUCH_PANEL_OFFLINE_CACHE": {
+        "defaults": [
+          "'0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-auth/touch_panel/quick_auth.py"
         ],
         "typed_env": false
       },

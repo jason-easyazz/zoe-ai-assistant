@@ -522,8 +522,12 @@ def test_the_digest_runs_the_pass_after_its_facts_and_a_failure_is_its_own_resul
 def test_the_day_loader_reads_the_whole_day_and_the_old_cut_is_not_applied(monkeypatch):
     import memory_digest as md
     monkeypatch.delenv(nm.ENV, raising=False)
+    monkeypatch.setenv("ZOE_DIGEST_CHUNKED", "0")      # the legacy cut: only the night mind (below) widens the read
     assert md._turn_limit() == 200
     monkeypatch.setenv(nm.ENV, "shadow")
+    assert md._turn_limit() == 600
+    monkeypatch.delenv(nm.ENV, raising=False)
+    monkeypatch.delenv("ZOE_DIGEST_CHUNKED", raising=False)      # the chunked pack step (default on) reads the whole day too
     assert md._turn_limit() == 600
     tr = run(md._transcript_from_rows(UID, [("I am worried about the loan.", "m1", "2026-10-08T01:00:00+00:00"), ("Tamsin got the offer!", "m2", "2026-10-08T02:00:00+00:00")]))
     assert tr.turns == (("m1", "I am worried about the loan."), ("m2", "Tamsin got the offer!")) and len(tr.times) == 2

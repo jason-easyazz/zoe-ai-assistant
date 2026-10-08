@@ -18,12 +18,15 @@ import logging
 import os
 import re
 import uuid
+from typing import Any, Callable
 
+import digest_pack
 import httpx
 import memory_authority
 import own_words
 from memory_overlap import dedup_verdict, richness
 from routers.journal import CREATED_AT_VALID_TIMESTAMP_SQL
+from typed_env import env_float
 from user_filters import GUEST_USERS, drop_synthetic_users, message_owner_expr
 
 logger = logging.getLogger(__name__)
@@ -47,6 +50,26 @@ def _normalize_gemma_base(raw: str) -> str:
 
 _GEMMA_URL = _normalize_gemma_base(os.environ.get("GEMMA_SERVER_URL", "http://127.0.0.1:11434"))
 _ZOE_TIMEZONE = os.environ.get("ZOE_TIMEZONE", "Australia/Perth")
+
+
+def _llm_timeout(seconds: float) -> float:
+    """A model-call timeout, scaled by ``ZOE_DIGEST_LLM_TIMEOUT_SCALE`` (default 1.0 = unchanged).
+
+    The nightly passes were sized for the 4B (about 8 tok/s: a 500-token reply is about 62 s against a 45 s
+    timeout, already marginal). The 12B night window (``scripts/night/``) serves the same passes from a model
+    that decodes several times slower and sets the scale for ITS processes only; the live service never does.
+    Read at call time so a test or a runner can set it after import. An unparsable or non-positive value is 1.0.
+    """
+    scale = env_float("ZOE_DIGEST_LLM_TIMEOUT_SCALE", 1.0)
+    return seconds * (scale if scale > 0 else 1.0)
+
+
+def _pass_timeout(legacy_s: float, system: str, prompt: str, max_tokens: int) -> float:
+    """The timeout of one chunked-mode map call: the output cap at the configured decode rate (``ZOE_DIGEST_DECODE_TOK_S``, 60 on the live 4B) plus
+    the prefill and slack, never shorter than the fixed timeout the pass always had, then the night window's scale."""
+    return _llm_timeout(digest_pack.call_timeout(
+        legacy_s, digest_pack.est_tokens(system) + digest_pack.est_tokens(prompt), max_tokens))
+
 
 # Rolling lookback for the nightly digest, in hours. 30h (not 24h) so a 03:00
 # run covers the whole previous calendar day plus the 3h offset, with slack for
@@ -462,6 +485,38 @@ def _affect_for_fact(fact: str, affect: str, sentence: str, message: str = "") -
     return affect
 
 
+#: A row's wording is logged whole up to this many characters (a distilled sentence is <= 150 by the extractor prompt).
+_ROW_LOG_WORDING_MAX = 200
+
+
+def log_row(lane: str, user_id: str, ref, outcome: str) -> None:
+    """ONE INFO line per row a digest stored or parked, so a live incident can be REPLAYED instead of guessed at
+    (the day-sim 6n diagnosis had no record of what the extractor wrote or how the row was classed):
+
+        MEMORY_ROW lane=<turn_digest|digest|emotional> outcome=<stored|parked|edited|held> user=<id> id=<row id>
+        class=<authority class> promoted=<yes|no> basis=<authority basis> status=<row status> type=<memory type>
+        wording='<the ROW text, as stored>'
+
+    ``promoted`` is the promotion verdict: yes = the owner's one verbatim sentence ENTAILED the fact
+    (``memory_authority.VERBATIM_BASIS``), so a retraction earns the standing of the owner's own words; no = it did
+    not (a candidate is parked as a dispute instead). The wording is the row's own text - the extractor's distilled
+    sentence after the write boundary's scrub - never the owner's turn (no ``source_excerpt`` / anchor is read here).
+    Post-turn only (the background digest); never raises; ``%r`` so a newline in a wording cannot forge a line."""
+    try:
+        if ref is None:
+            return
+        md = getattr(ref, "metadata", None) or {}
+        basis = str(md.get("authority_basis") or "-")
+        wording = " ".join(str(getattr(ref, "text", "") or "").split())[:_ROW_LOG_WORDING_MAX]
+        logger.info(
+            "MEMORY_ROW lane=%s outcome=%s user=%s id=%s class=%s promoted=%s basis=%s status=%s type=%s wording=%r",
+            lane, outcome, user_id, getattr(ref, "id", "-"), md.get("authority_class") or "-",
+            "yes" if basis == memory_authority.VERBATIM_BASIS else "no", basis,
+            md.get("status") or "-", md.get("memory_type") or "-", wording)
+    except Exception:  # noqa: BLE001 - a log line must never fail a digest
+        pass
+
+
 def _implicit_change_cue(user_message: str) -> str | None:
     """The utterance's change-of-state cue when ZOE_MEMORY_IMPLICIT_SUPERSEDE is on,
     else None (memory_supersede; off = the turn digest is unchanged)."""
@@ -678,7 +733,7 @@ async def run_turn_digest(
                         except Exception:
                             existing_rows = []
                     from memory_supersede import changes_existing
-                    fact_changes = changes_existing(fact, existing_rows)
+                    fact_changes = changes_existing(fact, existing_rows, change_cue)
                 if is_tombstone(fact):
                     # "User dropped the half-marathon" records a change, never a
                     # current fact: the card and the recall packet treat it so.
@@ -763,6 +818,7 @@ async def run_turn_digest(
                     )
                     if new_ref is not None:
                         result["new"] += 1
+                        log_row("turn_digest", user_id, new_ref, "edited")
                         logger.info("turn_digest: superseded %s with %r", target_id, fact[:60])
                         if fact_changes:
                             changed_refs.append(new_ref)
@@ -791,8 +847,10 @@ async def run_turn_digest(
                     # held back (it disputes something the user said): ask ONE question
                     result["skipped_low_quality"] += 1
                     fresh_candidates.append(ref)
+                    log_row("turn_digest", user_id, ref, "parked")
                 elif ref is not None:
                     result["new"] += 1
+                    log_row("turn_digest", user_id, ref, "stored")
                     logger.info("turn_digest: stored for %s: %s", user_id, fact[:80])
                     if fact_changes:
                         changed_refs.append(ref)
@@ -850,6 +908,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
         "skipped_duplicates": 0,
         "superseded": 0,
     }
+    run_cov, run_token = digest_pack.begin_run()
     try:
         # The owner's verbatim turns of the last day or so, caught up into the exact-words index (idle work; the post-turn
         # hook indexes each turn as it is said, this closes any gap it left). Bounded, never raises.
@@ -948,6 +1007,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                                     memory_type=item.get("type", "fact"), confidence=0.5, status="approved",
                                     tags=["digest", item.get("type", "unknown"), "unsupported_observation"],
                                     anchor_text=anchor_for_write, hold="unsupported_observation")
+                                log_row("digest", user_id, held, "held")
                                 if held is not None and memory_authority.is_candidate(held):
                                     result["candidates"] = result.get("candidates", 0) + 1
                             except MemoryServiceError as exc:
@@ -1000,6 +1060,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                 if new_ref is not None:
                     superseded_any = True
                     result["superseded"] += 1
+                    log_row("digest", user_id, new_ref, "edited")
                     logger.info(
                         "memory_digest: superseded %s -> %s user=%s",
                         candidate.id, new_ref.id, user_id,
@@ -1042,6 +1103,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                     )
                     if new_ref is not None:
                         result["superseded"] += 1
+                        log_row("digest", user_id, new_ref, "edited")
                         logger.info("memory_digest: superseded %s with %r", target_id, fact[:60])
                         continue
                 except Exception as exc:
@@ -1064,8 +1126,10 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                 continue
             if ref is not None and memory_authority.is_candidate(ref):
                 result["candidates"] = result.get("candidates", 0) + 1
+                log_row("digest", user_id, ref, "parked")
             elif ref is not None:
                 result["new"] += 1
+                log_row("digest", user_id, ref, "stored")
                 logger.info("memory_digest: stored for %s: %s", user_id, fact[:80])
 
         # ── Emotional memory pass ──────────────────────────────────────────
@@ -1092,46 +1156,90 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
     except Exception as exc:
         logger.error("memory_digest: failed for %s: %s", user_id, exc, exc_info=True)
         result["error"] = str(exc)
+    finally:
+        digest_pack.end_run(run_token)
+        if run_cov.passes:
+            _loops_log.info("%s", run_cov.line("nightly", user_id))   # counts only: how much of the day the model read
     return result
 
 
-async def _emotional_memory_pass(user_id: str, chat_text: str, svc) -> int:
-    """Extract emotionally significant moments from today's chat and store them.
+_EMOTIONAL_SYSTEM = "You are an empathetic listener. Return ONLY valid JSON."
+_EMOTIONAL_MAX_TOKENS = 256
 
-    Returns the number of new emotional memories stored.
-    """
-    from memory_service import MemoryServiceError  # type: ignore[import]
 
-    prompt = _EMOTIONAL_EXTRACTION_PROMPT.format(chat_text=chat_text[:3000])
+async def _emotional_call(transcript: str, timeout: float) -> "list | None":
+    """ONE emotional-moments call over ``transcript``: the parsed list, or ``None`` when the call or its JSON failed (a miss, never an error)."""
+    prompt = _EMOTIONAL_EXTRACTION_PROMPT.format(chat_text=transcript)
     payload = {
         "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
         "messages": [
-            {"role": "system", "content": "You are an empathetic listener. Return ONLY valid JSON."},
+            {"role": "system", "content": _EMOTIONAL_SYSTEM},
             {"role": "user", "content": prompt},
         ],
-        "max_tokens": 256,
+        "max_tokens": _EMOTIONAL_MAX_TOKENS,
         "temperature": 0.2,
         "stream": False,
     }
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(f"{_GEMMA_URL}/v1/chat/completions", json=payload)
             resp.raise_for_status()
             raw = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "[]").strip()
     except Exception as exc:
         logger.debug("emotional_pass: LLM call failed: %s", exc)
-        return 0
+        return None
 
     # Parse JSON
     try:
         start = raw.find("[")
         end = raw.rfind("]") + 1
         if start == -1 or end == 0:
-            return 0
+            return None
         moments = json.loads(raw[start:end])
         if not isinstance(moments, list):
-            return 0
+            return None
     except (json.JSONDecodeError, ValueError):
+        return None
+    return moments
+
+
+async def _emotional_memory_pass(user_id: str, chat_text: str, svc) -> int:
+    """Extract emotionally significant moments from today's chat and store them.
+
+    Reads the whole day like the fact extractor (``digest_pack``: chunks that fit the slot, one call each, the moments merged by the existing token-level
+    dedup); ``ZOE_DIGEST_CHUNKED=0`` reads the first 3,000 characters in one call, as before.
+
+    Returns the number of new emotional memories stored.
+    """
+    from memory_service import MemoryServiceError  # type: ignore[import]
+
+    if not digest_pack.enabled():
+        cov = _pass_cov("emotional", chat_text, chunked=False)
+        if cov is not None:
+            cov.chunks, cov.calls, cov.turns_read = 1, 1, _legacy_turns_read(chat_text)
+            cov.skipped_cap = max(0, cov.turns_total - cov.turns_read)
+        moments = await _emotional_call(chat_text[:_LEGACY_TRANSCRIPT_CHARS], _llm_timeout(30.0))
+    else:
+        fixed = digest_pack.est_tokens(_EMOTIONAL_SYSTEM) + digest_pack.est_tokens(_EMOTIONAL_EXTRACTION_PROMPT.format(chat_text=""))
+        packed = digest_pack.pack_text(str(chat_text or ""), digest_pack.chunk_budget(fixed, _EMOTIONAL_MAX_TOKENS))
+        cov = _pass_cov("emotional", chat_text, chunked=True)
+        if cov is not None:
+            cov.chunks, cov.skipped_cap = len(packed.chunks), packed.skipped_cap
+        answers: "list[list]" = []
+        for chunk in packed.chunks:
+            if cov is not None:
+                cov.calls += 1
+            got = await _emotional_call(chunk.text, _pass_timeout(
+                30.0, _EMOTIONAL_SYSTEM, _EMOTIONAL_EXTRACTION_PROMPT.format(chat_text=chunk.text), _EMOTIONAL_MAX_TOKENS))
+            if got is None:
+                if cov is not None:
+                    cov.failed += 1
+                continue
+            answers.append(got)
+            if cov is not None:
+                cov.mark_read(chunk)
+        moments = _merge_by_text(answers, "moment") if answers else None
+    if moments is None:
         return 0
 
     stored = 0
@@ -1164,6 +1272,7 @@ async def _emotional_memory_pass(user_id: str, chat_text: str, svc) -> int:
             )
             if ref is not None:
                 stored += 1
+                log_row("emotional", user_id, ref, "stored")
                 logger.info("emotional_pass: stored user=%s [%s] %s", user_id, emotion, moment[:60])
         except MemoryServiceError as exc:
             logger.debug("emotional_pass: ingest failed: %s", exc)
@@ -1187,13 +1296,20 @@ class Transcript(str):
         return obj
 
 
+_LEGACY_TURN_LIMIT = 200
+_LEGACY_LOOP_TURN_LIMIT = 50
+_CHUNKED_TURN_LIMIT = 600
+
+
 def _turn_limit() -> int:
-    """Rows the day's loader reads: 200 as ever; the night mind chunks the day instead of cutting it, so with it on a busy day is read whole (up to 600)."""
+    """Rows the day's loader reads: the legacy 200, or 600 when the chunked pack step reads the whole day (``ZOE_DIGEST_CHUNKED``; ~5 chunks hold it) or the night mind chunks the day instead of cutting it."""
+    if digest_pack.enabled():
+        return _CHUNKED_TURN_LIMIT
     try:
         import night_mind
-        return 600 if night_mind.mode() != "off" else 200
+        return _CHUNKED_TURN_LIMIT if night_mind.mode() != "off" else _LEGACY_TURN_LIMIT
     except Exception:  # noqa: BLE001
-        return 200
+        return _LEGACY_TURN_LIMIT
 
 
 async def _load_todays_messages(user_id: str, db=None) -> str:
@@ -1229,6 +1345,9 @@ async def _load_todays_messages(user_id: str, db=None) -> str:
                 rows = await (await _db.execute(sql, params)).fetchall()
         if not rows:
             return ""
+        if len(rows) >= _turn_limit():
+            logger.warning("memory_digest: %s has >= %d user turns in the lookback window; the read stops at the cap (the newest are not read)",
+                           user_id, _turn_limit())
         return await _transcript_from_rows(user_id, rows)
     except Exception as exc:
         logger.warning("memory_digest: could not load messages for %s: %s", user_id, exc)
@@ -1396,34 +1515,50 @@ class ExtractorError(RuntimeError):
         self.kind = kind
 
 
-async def _extract_facts_with_gemma(chat_text: str) -> list[dict]:
-    """Send chat transcript to the LLM and parse the JSON fact list.
+_FACTS_SYSTEM = "You are a precise fact extractor. Return ONLY valid JSON."
+_FACTS_MAX_TOKENS = 512
+_LEGACY_TRANSCRIPT_CHARS = 3000   # the cut the chunked pack step replaces (ZOE_DIGEST_CHUNKED=0 restores it)
 
-    Returns ``[]`` only when the model answered and stated no facts. Every
-    failure to get a parseable answer raises :class:`ExtractorError` so callers
-    can tell an outage from an empty transcript (``memory_idle_consolidation``
-    already catches it and leaves its watermark un-advanced).
-    """
-    if len(chat_text) > 3000:
-        logger.warning(
-            "memory_digest: transcript truncated to 3000 chars for fact "
-            "extraction; dropped %d tail chars (may lose late-conversation facts)",
-            len(chat_text) - 3000,
-        )
-    from date_locale import normalize_numeric_dates
-    prompt = _EXTRACTION_PROMPT.format(chat_text=normalize_numeric_dates(chat_text)[:3000])
+
+def _legacy_turns_read(chat_text: str, limit: int = _LEGACY_TRANSCRIPT_CHARS) -> int:
+    """How many transcript lines the legacy ``[:limit]`` cut leaves WHOLE in the prompt (the coverage line's ``turns_read`` in legacy mode)."""
+    used = read = 0
+    for ln in str(chat_text or "").split("\n"):
+        if not ln.strip():
+            continue
+        used += len(ln) + 1
+        if used > limit + 1:
+            break
+        read += 1
+    return read
+
+
+def _pass_cov(name: str, chat_text: str, *, chunked: bool):
+    """The current run's coverage record for pass ``name`` (None outside a run), with the day's turn count set."""
+    run = digest_pack.current()
+    if run is None:
+        return None
+    cov = run.for_pass(name)
+    cov.chunked = chunked
+    cov.turns_total = max(cov.turns_total, sum(1 for ln in str(chat_text or "").split("\n") if ln.strip()))
+    return cov
+
+
+async def _facts_call(transcript: str, timeout: float) -> list[dict]:
+    """ONE fact-extraction call over ``transcript`` (the exact words the model is to read). Raises :class:`ExtractorError`."""
+    prompt = _EXTRACTION_PROMPT.format(chat_text=transcript)
     payload = {
         "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
         "messages": [
-            {"role": "system", "content": "You are a precise fact extractor. Return ONLY valid JSON."},
+            {"role": "system", "content": _FACTS_SYSTEM},
             {"role": "user", "content": prompt},
         ],
-        "max_tokens": 512,
+        "max_tokens": _FACTS_MAX_TOKENS,
         "temperature": 0.1,
         "stream": False,
     }
     try:
-        async with httpx.AsyncClient(timeout=45.0) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(f"{_GEMMA_URL}/v1/chat/completions", json=payload)
             resp.raise_for_status()
             raw = resp.json()
@@ -1443,6 +1578,116 @@ async def _extract_facts_with_gemma(chat_text: str) -> list[dict]:
     except Exception as exc:
         logger.warning("memory_digest: LLM call failed: %s", exc)
         raise ExtractorError(type(exc).__name__, str(exc)) from exc
+
+
+_NEGATION_WORDS = frozenset({
+    "no", "not", "never", "none", "nobody", "nothing", "longer", "stopped", "quit", "left", "ended", "cancelled", "canceled", "without",
+    "isn't", "aren't", "wasn't", "weren't", "don't", "doesn't", "didn't", "won't", "can't", "cannot", "hasn't", "haven't", "hadn't",
+})
+
+
+def _negation_signature(text: str) -> frozenset:
+    """The negation words in ``text`` (apostrophes folded): two statements that differ here do not say the same thing even when most words overlap."""
+    words = re.findall(r"[a-z']+", str(text or "").lower().replace("\u2019", "'"))
+    return frozenset(w for w in words if w in _NEGATION_WORDS or w.endswith("n't"))
+
+
+def _merge_by_text(per_chunk: "list[list]", key: str, cap: int | None = None,
+                   supported: "Callable[[Any], bool] | None" = None) -> list:
+    """The REDUCE of a map over chunks, in code: the per-chunk answers in chunk (= time) order with a near-duplicate dropped by the existing token-level
+    dedup (``memory_overlap.dedup_verdict``: a restatement with nothing new is dropped, a richer statement REPLACES the thinner one it extends,
+    anything with a new name / number / date is kept). ``key`` is the item's text field. A change of meaning is never a duplicate: two statements whose
+    negation words differ ("works at X" / "no longer works at X") are both kept, so a later correction survives to the write checks. A richer
+    statement replaces an earlier one only when ``supported(item)`` holds (the observation gate's anchor test), so an unbacked answer cannot displace a
+    backed one. The result is bounded by ``cap`` on every path (order kept)."""
+    if len(per_chunk) == 1:
+        return list(per_chunk[0])[:cap] if cap else list(per_chunk[0])
+    kept: list = []
+    for items in per_chunk:
+        for item in items:
+            text = str(item.get(key) or "").strip() if isinstance(item, dict) else ""
+            if not text:
+                kept.append(item)
+                continue
+            replaced = dropped = False
+            for i, other in enumerate(kept):
+                other_text = str(other.get(key) or "").strip() if isinstance(other, dict) else ""
+                if not other_text:
+                    continue
+                if _negation_signature(text) != _negation_signature(other_text):
+                    continue                                   # a correction / reversal is new information, not a restatement
+                verdict, _line = dedup_verdict(text, other_text)
+                if verdict == "duplicate":
+                    dropped = True
+                    break
+                if verdict == "extends":
+                    if supported is None or supported(item):
+                        kept[i], replaced = item, True
+                    else:
+                        dropped = True                          # the richer answer has no valid evidence: the backed earlier one stands
+                    break
+            if not dropped and not replaced:
+                kept.append(item)
+    return kept[:cap] if cap else kept
+
+
+async def _extract_facts_with_gemma(chat_text: str) -> list[dict]:
+    """Send chat transcript to the LLM and parse the JSON fact list.
+
+    Returns ``[]`` only when the model answered and stated no facts. Every
+    failure to get a parseable answer raises :class:`ExtractorError` so callers
+    can tell an outage from an empty transcript (``memory_idle_consolidation``
+    already catches it and leaves its watermark un-advanced).
+
+    The WHOLE transcript is read (``digest_pack``): cut into chunks that fit the slot, one call per chunk (at most ``ZOE_DIGEST_MAX_CHUNKS``), the
+    answers merged in code. Inside a nightly run (``digest_pack.begin_run``) a failed chunk costs that chunk only (the overlapping lookback re-reads it
+    tomorrow) unless EVERY chunk failed; outside one (the idle consolidation, whose watermark must hold) any failed chunk raises. With
+    ``ZOE_DIGEST_CHUNKED=0``: one call over the first 3,000 characters, as before.
+    """
+    from date_locale import normalize_numeric_dates
+    if not digest_pack.enabled():
+        if len(chat_text) > _LEGACY_TRANSCRIPT_CHARS:
+            logger.warning(
+                "memory_digest: transcript truncated to 3000 chars for fact "
+                "extraction; dropped %d tail chars (may lose late-conversation facts)",
+                len(chat_text) - _LEGACY_TRANSCRIPT_CHARS,
+            )
+        cov = _pass_cov("facts", chat_text, chunked=False)
+        text = normalize_numeric_dates(chat_text)[:_LEGACY_TRANSCRIPT_CHARS]
+        if cov is not None:
+            cov.chunks, cov.calls, cov.turns_read = 1, 1, _legacy_turns_read(chat_text)
+            cov.skipped_cap = max(0, cov.turns_total - cov.turns_read)
+        return await _facts_call(text, _llm_timeout(45.0))
+
+    fixed = digest_pack.est_tokens(_FACTS_SYSTEM) + digest_pack.est_tokens(_EXTRACTION_PROMPT.format(chat_text=""))
+    packed = digest_pack.pack_text(str(chat_text or ""), digest_pack.chunk_budget(fixed, _FACTS_MAX_TOKENS))
+    cov = _pass_cov("facts", chat_text, chunked=True)
+    tolerant = digest_pack.current() is not None
+    if cov is not None:
+        cov.chunks, cov.skipped_cap = len(packed.chunks), packed.skipped_cap
+    answers: "list[list[dict]]" = []
+    first_error: "ExtractorError | None" = None
+    for chunk in packed.chunks:
+        text = normalize_numeric_dates(chunk.text)
+        if cov is not None:
+            cov.calls += 1
+        try:
+            answers.append(await _facts_call(text, _pass_timeout(45.0, _FACTS_SYSTEM, _EXTRACTION_PROMPT.format(chat_text=text), _FACTS_MAX_TOKENS)))
+        except ExtractorError as exc:
+            if cov is not None:
+                cov.failed += 1
+            if not tolerant:
+                raise
+            first_error = first_error or exc
+            logger.warning("memory_digest: fact chunk %d/%d failed (%s); the other chunks are kept", len(answers) + 1, len(packed.chunks), exc.kind)
+            continue
+        if cov is not None:
+            cov.mark_read(chunk)
+    if not answers:
+        if first_error is not None:
+            raise first_error
+        return []
+    return _merge_by_text(answers, "fact", digest_pack.max_facts(), supported=lambda it: fact_anchor(it, chat_text) is not None)
 
 
 async def _is_contradiction(new_fact: str, existing_fact: str) -> bool:
@@ -2212,6 +2457,9 @@ async def _synthesis_pass(user_id: str) -> dict:
 # dedupes against the user's unresolved loops and ages out stale ones — otherwise the 48h window re-inserts the same loop every
 # night and the brief (oldest first) repeats it forever.
 _OPEN_LOOPS_MAX_PER_RUN = 5
+_OPEN_LOOPS_MAX_PER_RUN_CHUNKED = 8   # a day read whole in several chunks; the best by weight (newest on a tie) are kept
+_OPEN_LOOPS_SYSTEM = "You extract open loops from conversations. Return ONLY a valid JSON array."
+_OPEN_LOOPS_MAX_TOKENS = 500
 _OPEN_LOOPS_TRANSCRIPT_CHARS = 3000   # same budget as the nightly fact extractor
 _OPEN_LOOPS_DUP_OVERLAP = 0.6         # content-token containment ⇒ same loop
 _OPEN_LOOPS_TTL_DAYS = 14             # unresolved loops older than this age out
@@ -2271,6 +2519,11 @@ def _bounded_int(value, lo: int, hi: int, default: int) -> int:
         return default
 
 
+def _turn_limit_loops() -> int:
+    """Rows the open-loop pass reads from the last two days (newest first): the legacy 50, or 600 when the chunked pack step reads the window whole."""
+    return _CHUNKED_TURN_LIMIT if digest_pack.enabled() else _LEGACY_LOOP_TURN_LIMIT
+
+
 def _loop_is_dup(tokens: set[str], seen: list[set[str]]) -> bool:
     """Dedupe key: the loop's content tokens. A paraphrase of an unresolved loop
     (or of one accepted earlier this run) is the same loop once containment
@@ -2300,9 +2553,15 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
 
     result = {"user_id": user_id, "extracted": 0, "inserted": 0, "skipped_dup": 0,
               "expired": 0, "discarded_meta": 0, "skipped_turns": 0, "status": "ok"}
+    chunked = digest_pack.enabled()
+    loop_run = digest_pack.RunCoverage()
+    cov = loop_run.for_pass("loops")
+    cov.chunked = chunked
 
     def _done(status: str) -> dict:
         result["status"] = status
+        if cov.turns_total:
+            _loops_log.info("%s", loop_run.line("open_loops", user_id))   # counts only: how much of the window the model read
         _loops_log.info(
             "OPEN_LOOPS user=%s extracted=%d inserted=%d skipped_dup=%d expired=%d "
             "discarded_meta=%d skipped_turns=%d status=%s",
@@ -2345,7 +2604,7 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
                            THEN cm.created_at::timestamptz
                            ELSE NULL
                          END > CURRENT_TIMESTAMP - INTERVAL '2 days'
-                   ORDER BY cm.created_at DESC LIMIT 50""",
+                   ORDER BY cm.created_at DESC LIMIT {_turn_limit_loops()}""",
                 (user_id,),
             ) as cur:
                 rows = await cur.fetchall()
@@ -2364,7 +2623,8 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
     except Exception as exc:  # noqa: BLE001 - fail-open; the loop text is scrubbed again below
         logger.debug("open_loops: forgotten-turn filter unavailable (%s)", type(exc).__name__)
 
-    # Newest turns win the budget; the prompt reads oldest first.
+    # Legacy: the newest turns win a 3,000-character budget. Chunked: every turn read is kept (the loader's newest-600), packed below.
+    # Either way the prompt reads oldest first.
     lines: list[str] = []
     budget = _OPEN_LOOPS_TRANSCRIPT_CHARS
     for row in rows:
@@ -2373,6 +2633,10 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
             result["skipped_turns"] += 1
             continue
         line = "User: " + text
+        if chunked:
+            if len(line) > 6:
+                lines.append(line)
+            continue
         if len(line) <= 6 or len(line) > budget:
             continue
         lines.append(line)
@@ -2380,31 +2644,62 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
     if not lines:
         return _done("no_messages")
     lines.reverse()
+    cov.turns_total = len(lines)
 
-    payload = {
-        "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
-        "messages": [
-            {"role": "system", "content": "You extract open loops from conversations. Return ONLY a valid JSON array."},
-            {"role": "user", "content": _OPEN_LOOPS_PROMPT.format(messages="\n".join(lines))
-             + (_OPEN_LOOPS_HORIZON if lifecycle else "")},
-        ],
-        "max_tokens": 500,
-        "temperature": 0.1,
-        "stream": False,
-    }
-    try:
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            resp = await client.post(f"{_GEMMA_URL}/v1/chat/completions", json=payload)
-            resp.raise_for_status()
-            raw = resp.json()["choices"][0]["message"]["content"] or ""
-    except Exception as exc:
-        logger.warning("open_loops: LLM call failed user=%s: %s: %s", user_id, type(exc).__name__, exc)
-        return _done("llm_error")
+    horizon = _OPEN_LOOPS_HORIZON if lifecycle else ""
+    if chunked:
+        fixed = (digest_pack.est_tokens(_OPEN_LOOPS_SYSTEM)
+                 + digest_pack.est_tokens(_OPEN_LOOPS_PROMPT.format(messages="") + horizon))
+        packed = digest_pack.pack_lines(lines, digest_pack.chunk_budget(fixed, _OPEN_LOOPS_MAX_TOKENS))
+        cov.chunks, cov.skipped_cap = len(packed.chunks), packed.skipped_cap
+        batches = [(c, c.text) for c in packed.chunks]
+    else:
+        # legacy: the lines are already within the 3,000-character budget
+        cov.chunks = 1
+        batches = [(None, "\n".join(lines))]
 
-    parsed = _parse_json_array(raw)
-    if parsed is None:
-        logger.warning("open_loops: no JSON array in LLM reply user=%s (len=%d)", user_id, len(raw))
-        return _done("parse_error")
+    parsed_all: list = []
+    llm_failed = parse_failed = 0
+    for chunk, text in batches:
+        user_prompt = _OPEN_LOOPS_PROMPT.format(messages=text) + horizon
+        payload = {
+            "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
+            "messages": [
+                {"role": "system", "content": _OPEN_LOOPS_SYSTEM},
+                {"role": "user", "content": user_prompt},
+            ],
+            "max_tokens": _OPEN_LOOPS_MAX_TOKENS,
+            "temperature": 0.1,
+            "stream": False,
+        }
+        timeout = (_pass_timeout(45.0, _OPEN_LOOPS_SYSTEM, user_prompt, _OPEN_LOOPS_MAX_TOKENS)
+                   if chunked else _llm_timeout(45.0))
+        cov.calls += 1
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(f"{_GEMMA_URL}/v1/chat/completions", json=payload)
+                resp.raise_for_status()
+                raw = resp.json()["choices"][0]["message"]["content"] or ""
+        except Exception as exc:
+            logger.warning("open_loops: LLM call failed user=%s: %s: %s", user_id, type(exc).__name__, exc)
+            cov.failed += 1
+            llm_failed += 1
+            continue
+        parsed_chunk = _parse_json_array(raw)
+        if parsed_chunk is None:
+            logger.warning("open_loops: no JSON array in LLM reply user=%s (len=%d)", user_id, len(raw))
+            cov.failed += 1
+            parse_failed += 1
+            continue
+        if chunk is not None:
+            cov.mark_read(chunk)
+        else:
+            cov.turns_read = len(lines)
+        parsed_all.extend(parsed_chunk)
+    if llm_failed + parse_failed == len(batches):
+        return _done("llm_error" if llm_failed else "parse_error")
+    parsed = parsed_all
+    several = len(batches) > 1     # one chunk is the legacy pass over the same words: its order, its cap of five
 
     from memory_service import scrub_pii  # type: ignore[import]
     candidates: list[tuple[str, str, int, int]] = []
@@ -2428,8 +2723,21 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
             # is computed in SQL (the column is TIMESTAMP — a string bind fails).
             _bounded_int(item.get("follow_up_in_days"), 0, _OPEN_LOOPS_MAX_FOLLOW_UP_DAYS, 1),
         ))
-        if len(candidates) >= _OPEN_LOOPS_MAX_PER_RUN:
+        if not several and len(candidates) >= _OPEN_LOOPS_MAX_PER_RUN:
             break
+    if several:
+        # REDUCE in code: the same loop raised by two chunks is one (the existing content-token containment), then the best by weight, the newest on a
+        # tie, up to the cap. (Legacy: the first five in the model's order, as ever.)
+        picked: list[tuple[int, tuple[str, str, int, int]]] = []
+        seen_tokens: list[set[str]] = []
+        for order, cand in enumerate(candidates):
+            tokens = _content_tokens(cand[0])
+            if _loop_is_dup(tokens, seen_tokens):
+                continue
+            seen_tokens.append(tokens)
+            picked.append((order, cand))
+        picked.sort(key=lambda oc: (-oc[1][2], -oc[0]))
+        candidates = [c for _, c in picked[:_OPEN_LOOPS_MAX_PER_RUN_CHUNKED]]
     result["extracted"] = len(candidates)
     if not candidates:
         return _done("ok")
