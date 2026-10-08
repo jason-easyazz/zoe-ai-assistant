@@ -4,6 +4,17 @@
  */
 
 class ZoeWebSocketSync {
+    /** The stored member/guest session id, or '' — read at connect time so a re-login is honoured. */
+    static sessionId() {
+        try {
+            if (window.zoeAuth && typeof window.zoeAuth.getSession === 'function') {
+                const s = window.zoeAuth.getSession();
+                if (s) return String(s);
+            }
+            return String(JSON.parse(localStorage.getItem('zoe_session') || '{}').session_id || '');
+        } catch (_) { return ''; }
+    }
+
     constructor(endpoint, userId) {
         this.endpoint = endpoint;
         this.userId = userId;
@@ -24,9 +35,17 @@ class ZoeWebSocketSync {
         }
         
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}${this.endpoint}/${this.userId}`;
+        // The per-resource endpoints (/api/{lists,calendar,…}/ws/{user_id}) require the
+        // session as a QUERY param — a browser cannot set X-Session-ID on a WebSocket
+        // handshake, and without it the server closes 1008 before accepting (the
+        // shopping widget's lists socket failed every 2–30 s for every member until
+        // 2026-10-08). Same contract as the push socket in initPush() below.
+        const sessionId = ZoeWebSocketSync.sessionId();
+        const wsUrl = `${protocol}//${window.location.host}${this.endpoint}/${this.userId}`
+            + (sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : '');
+        if (!sessionId) console.warn(`[ZoeWS] no session for ${this.endpoint}; the server will refuse it`);
         
-        console.log(`🔌 Connecting WebSocket: ${wsUrl}`);
+        console.log(`🔌 Connecting WebSocket: ${this.endpoint}`);
         
         try {
             this.ws = new WebSocket(wsUrl);

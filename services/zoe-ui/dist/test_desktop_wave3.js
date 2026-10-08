@@ -254,6 +254,31 @@ function makeDoc() {
   check('push: subscription id is never stored as the string "undefined"', () => assert(/data\.subscription_id != null/.test(pushSrc)));
 }
 
+// ── every members-only desktop page loads js/auth.js (the gate + the interceptor) ──
+// 2026-10-08: music.html and settings.html never loaded it — ungated, and music.html's
+// notifications panel 403'd because nothing attached the session to its fetches.
+check('gate: every desktop page outside DESKTOP_PUBLIC_PATHS loads js/auth.js', () => {
+  const PUBLIC = vm.runInNewContext(extractConst(authSrc, 'DESKTOP_PUBLIC_PATHS') + '\n; DESKTOP_PUBLIC_PATHS', {});
+  const pages = fs.readdirSync(__dirname).filter(f => f.endsWith('.html'));
+  const missing = pages.filter(f => !PUBLIC.has('/' + f) && !/<script src="\/?js\/auth\.js[^"]*"/.test(read(f)));
+  assert.deepStrictEqual(missing, [], 'members-only pages without js/auth.js: ' + missing.join(', '));
+  assert(pages.includes('music.html') && pages.includes('settings.html'));
+});
+
+// ── websocket-sync: per-resource sockets carry the session; music.html never hammers a reaped MA ──
+check('ws: ZoeWebSocketSync.connect() appends ?session_id= (server closes 1008 without it)', () => {
+  const wsSrc = read('js/websocket-sync.js');
+  assert(/static sessionId\(\)/.test(wsSrc));
+  assert(/\$\{this\.endpoint\}\/\$\{this\.userId\}`\s*\+\s*\(sessionId \? `\?session_id=\$\{encodeURIComponent\(sessionId\)\}` : ''\)/.test(wsSrc));
+});
+check('music: the MA socket is retried only while the backend says MA is up; otherwise the status watcher runs', () => {
+  const musicHtml = read('music.html');
+  assert(/if \(S\.maAvailable\) S\.wsRetryTimer = setTimeout\(connectWS, S\.wsRetryDelay\);\s*else watchForMA\(\);/.test(musicHtml));
+  assert(/function watchForMA\(\)/.test(musicHtml));
+  assert(!/unreachable\) — keep connecting state, WS will retry\s*connectWS\(\);/.test(musicHtml));
+  assert(/showOffline\('offline'\);\s*watchForMA\(\);\s*\}\)\(\);/.test(musicHtml));
+});
+
 // ── chat.html: the guest pool is never listed ────────────────────────────────
 check('chat: loadSessions refuses to list sessions without a member session, and sends no ?user_id=', () => {
   const body = extractFunction(chatHtml, 'loadSessions');
