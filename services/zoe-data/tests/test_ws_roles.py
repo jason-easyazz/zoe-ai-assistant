@@ -138,3 +138,34 @@ def test_default_user_role_opens_the_push_socket(client, monkeypatch):
     _resolver(monkeypatch, {"user_id": "asya", "role": "user"})
     with client.websocket_connect("/ws/push?channel=all&session_id=s", headers=ORIGIN) as ws:
         assert ws.receive_json()["type"] == "connected"
+
+
+# --- delegated sockets receive the member's scoped broadcasts ----------------
+
+def test_delegated_socket_is_registered_under_the_requested_user(client, monkeypatch):
+    # The broadcaster filters scoped deliveries by the user_id a socket was REGISTERED
+    # under; an admin subscribed to /api/lists/ws/asya must therefore register as asya.
+    _resolver(monkeypatch, {"user_id": "jason", "role": "family-admin"})
+    with client.websocket_connect("/api/lists/ws/asya?session_id=s", headers=ORIGIN) as ws:
+        assert ws.receive_json()["type"] == "connected"
+        owners = set(main.broadcaster._ws_users.values())
+        assert "asya" in owners and "jason" not in owners
+
+
+@pytest.mark.anyio
+async def test_scoped_broadcast_reaches_the_channel_owner_only():
+    from push import PushBroadcaster
+
+    class _WS:
+        def __init__(self): self.sent = []
+        async def accept(self): pass
+        async def send_json(self, m): self.sent.append(m)
+
+    bc = PushBroadcaster()
+    delegated, other = _WS(), _WS()
+    await bc.connect(delegated, "lists", user_id="asya")   # an admin registered under asya
+    await bc.connect(other, "lists", user_id="jason")
+    delivered = await bc.broadcast("lists", "list_updated", {"id": 1}, user_id="asya")
+    assert delivered == 1
+    assert [m["type"] for m in delegated.sent] == ["connected", "list_updated"]
+    assert [m["type"] for m in other.sent] == ["connected"]

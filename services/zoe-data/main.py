@@ -2652,7 +2652,7 @@ async def calendar_ws(websocket: WebSocket, user_id: str):
         await websocket.close(1008, "Forbidden")
         return
     await broadcaster.connect(
-        websocket, "calendar", user_id=str(user.get("user_id") or user_id)
+        websocket, "calendar", user_id=user_id  # the channel OWNER (ownership enforced above); delegated admin/agent sockets must register under the member, or scoped broadcasts never reach them
     )
     await _run_push_ws_loop(websocket, "calendar")
 
@@ -2671,7 +2671,7 @@ async def lists_ws_with_user(websocket: WebSocket, user_id: str):
         await websocket.close(1008, "Forbidden")
         return
     await broadcaster.connect(
-        websocket, "lists", user_id=str(user.get("user_id") or user_id)
+        websocket, "lists", user_id=user_id  # the channel OWNER (ownership enforced above); delegated admin/agent sockets must register under the member, or scoped broadcasts never reach them
     )
     await _run_push_ws_loop(websocket, "lists")
 
@@ -2705,7 +2705,7 @@ async def people_ws(websocket: WebSocket, user_id: str):
         await websocket.close(1008, "Forbidden")
         return
     await broadcaster.connect(
-        websocket, "people", user_id=str(user.get("user_id") or user_id)
+        websocket, "people", user_id=user_id  # the channel OWNER (ownership enforced above); delegated admin/agent sockets must register under the member, or scoped broadcasts never reach them
     )
     await _run_push_ws_loop(websocket, "people")
 
@@ -2724,7 +2724,7 @@ async def reminders_ws(websocket: WebSocket, user_id: str):
         await websocket.close(1008, "Forbidden")
         return
     await broadcaster.connect(
-        websocket, "reminders", user_id=str(user.get("user_id") or user_id)
+        websocket, "reminders", user_id=user_id  # the channel OWNER (ownership enforced above); delegated admin/agent sockets must register under the member, or scoped broadcasts never reach them
     )
     await _run_push_ws_loop(websocket, "reminders")
 
@@ -2743,7 +2743,7 @@ async def notes_ws(websocket: WebSocket, user_id: str):
         await websocket.close(1008, "Forbidden")
         return
     await broadcaster.connect(
-        websocket, "notes", user_id=str(user.get("user_id") or user_id)
+        websocket, "notes", user_id=user_id  # the channel OWNER (ownership enforced above); delegated admin/agent sockets must register under the member, or scoped broadcasts never reach them
     )
     await _run_push_ws_loop(websocket, "notes")
 
@@ -2761,7 +2761,7 @@ async def journal_ws(websocket: WebSocket, user_id: str):
         await websocket.close(1008, "Forbidden")
         return
     await broadcaster.connect(
-        websocket, "journal", user_id=str(user.get("user_id") or user_id)
+        websocket, "journal", user_id=user_id  # the channel OWNER (ownership enforced above); delegated admin/agent sockets must register under the member, or scoped broadcasts never reach them
     )
     await _run_push_ws_loop(websocket, "journal")
 
