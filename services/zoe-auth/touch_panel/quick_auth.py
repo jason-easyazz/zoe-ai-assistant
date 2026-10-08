@@ -77,12 +77,15 @@ class QuickAuthManager:
             if not self.offline_mode:
                 server_result = await self._authenticate_with_server(username, passcode, device_info)
                 if server_result.success:
-                    # Cache successful auth for offline use
-                    self.cache.cache_session(
-                        server_result.session_id,
-                        server_result.user_id,
-                        server_result.permissions or []
-                    )
+                    # Cache successful auth for offline use — only when the offline
+                    # cache is enabled: a cached session would otherwise outlive a
+                    # central revocation for the cache TTL.
+                    if self.config.offline_enabled:
+                        self.cache.cache_session(
+                            server_result.session_id,
+                            server_result.user_id,
+                            server_result.permissions or []
+                        )
                     return server_result
                 
                 # If server is unreachable, switch to offline mode
@@ -148,8 +151,9 @@ class QuickAuthManager:
                 if server_result.success:
                     return server_result
 
-            # Check local cache
-            cached_session = self.cache.get_cached_session(session_id)
+            # Check local cache — never when the offline cache is disabled: the server's
+            # verdict (including a revocation) is final then.
+            cached_session = self.cache.get_cached_session(session_id) if self.config.offline_enabled else None
             if cached_session:
                 return QuickAuthResult(
                     success=True,
@@ -174,6 +178,8 @@ class QuickAuthManager:
 
     async def get_cached_users(self) -> List[Dict[str, Any]]:
         """Get list of cached users for offline display"""
+        if not self.config.offline_enabled:
+            return []
         try:
             users = []
             with self.cache.lock:
@@ -470,7 +476,12 @@ def get_quick_auth_manager(device_id: str, location: str = "unknown") -> QuickAu
             device_id=device_id,
             location=location,
             allowed_auth_methods=["passcode"],
-            offline_enabled=True
+            # The offline cache was designed for a panel-side daemon syncing from a
+            # REMOTE auth server. Embedded in zoe-auth, `server_url` is this very
+            # service, and the sync hits /api/admin/sync-data with no credential —
+            # a 401 every five minutes, forever (1,071 in the week to 2026-10-08),
+            # and a cache that never fills. Off unless explicitly enabled.
+            offline_enabled=os.getenv("ZOE_TOUCH_PANEL_OFFLINE_CACHE", "0") == "1",
         )
         _auth_managers[device_id] = QuickAuthManager(config)
     
