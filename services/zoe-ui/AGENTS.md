@@ -26,7 +26,7 @@ The Zoe web frontend. `dist/` is the nginx docroot (hand-maintained HTML/CSS/JS,
 
 ## Local Contracts
 
-- ALWAYS bump `SW_VERSION` in `dist/sw.js` when editing ANY file in the Workbox `precacheAndRoute([...])` array (currently `chat.html`, `/`, and other precached HTML/JS/CSS). Skipping this is the #1 cause of "my changes aren't showing up" on mobile.
+- **ENFORCED since 2026-10-09:** `tools/audit/sw_precache_digest.py` records a digest of the precached files next to `SW_VERSION` (`// PRECACHE_DIGEST=…`) and `tests/unit/test_sw_precache_digest.py` (`ci_safe`) fails on drift — after editing a precached file, bump `SW_VERSION` and run the tool with `--write`. ALWAYS bump `SW_VERSION` in `dist/sw.js` when editing ANY file in the Workbox `precacheAndRoute([...])` array (currently `chat.html`, `/`, and other precached HTML/JS/CSS). Skipping this is the #1 cause of "my changes aren't showing up" on mobile.
 - **Workbox is served LOCALLY from `dist/workbox/`, never from a CDN** (Zoe is local-first: the box may be offline, and a CDN import pings Google from every client on every SW boot). Two settings hold this together and BOTH are load-bearing:
   - `importScripts('/workbox/workbox-sw.js')`, and
   - `workbox.setConfig({ modulePathPrefix: '/workbox/' })` — `workbox-sw.js` is only a lazy *loader*; on first access of `workbox.core` / `workbox.routing` / … it `importScripts`es that module, defaulting to Google's CDN. Vendoring the loader alone does NOT remove the CDN dependency.
