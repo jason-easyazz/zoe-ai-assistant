@@ -77,8 +77,15 @@ def test_negative_control_without_the_promotion_the_retraction_is_parked(monkeyp
     # the lead-in label is not a claim word: "Good news" must not read as the "new" of "new glasses"
     ("User no longer gets migraines since switching to new glasses", T2, True),
     ("User is doing the Lakeside 12k in August", "Change of plan: I'm doing the Lakeside 12k in August.", True),
+    ("User no longer gets migraines since switching to new glasses",
+     "GOOD NEWS: I no longer get the migraines since I switched to new glasses.", True),
+    ("User is doing the Lakeside 12k in August", "Update: I'm doing the Lakeside 12k in August.", True),
     # a claim word BEFORE the "I" still fails the plain-first-person test (not a lead-in colon)
     ("User lives in Perth", "Perth is where I live.", False),
+    # review of #1916: a TOPIC before the colon says who the sentence is about - never a lead-in label
+    ("User's birthday is May 5", "Dana's birthday: I organized a party on May 5.", False),
+    ("User's birthday is May 5", "My sister's birthday: I organized a party on May 5.", False),
+    ("User's mum lives in Bendigo", "Ingrid: I visit her in Bendigo.", False),
 ])
 def test_a_lead_in_label_is_not_part_of_the_claim(fact, said, want):
     assert (ma.entailing_span(fact, said) is not None) is want
@@ -97,3 +104,9 @@ def test_news_is_not_the_word_new_and_real_words_are_unchanged():
     assert ma._stem("glasses") == ma._stem("glass")
     assert ma._stem("added") == ma._stem("adding")           # no false undoubling of 'dd'
     assert ma._stem("called") == ma._stem("call")
+
+
+def test_a_third_partys_topic_label_is_not_promoted_to_the_owners_word():
+    res = ma.resolve_write("turn_digest", "User's birthday is May 5",
+                           anchor_text="Dana's birthday: I organized a party on May 5.", user_id=UID)
+    assert not res.promoted

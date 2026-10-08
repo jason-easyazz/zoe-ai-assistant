@@ -848,6 +848,13 @@ _HEDGE_RE = re.compile(
     + r"\b(?:" + _PIPE.join(re.escape(w) for w in _HEDGE_WORDS) + r")s?\b", re.IGNORECASE)
 
 
+#: A CLOSED list of discourse labels. Anything else before a colon ("Dana's birthday: I organized a party on May 5.")
+#: is a TOPIC - it says who the sentence is about - and is never stripped (review of #1916).
+_LEAD_IN_LABEL_RE = re.compile(
+    r"^\s*(?:(?:good|bad|great|big|sad|exciting|quick)\s+news|(?:quick\s+)?update|change\s+of\s+plans?|correction|fyi|"
+    r"heads[\s-]?up|by\s+the\s+way|btw|also|oh\s+and)\s*:\s+(?=.*\b(?:I|we|my|our)\b)", re.IGNORECASE)
+
+
 def _plainly_first_person(win: str, fact: str) -> bool:
     """The window is the speaker PLAINLY stating the fact about themself: no hedge or report in it, and the
     first-person word comes BEFORE the first word of the claim (its attribute cue, value or other content) -
@@ -856,7 +863,7 @@ def _plainly_first_person(win: str, fact: str) -> bool:
     if _HEDGE_RE.search(win):
         return False
     # a lead-in label ("Good news: I ...", "Change of plan: I ...") is not part of the claim
-    lead = re.match(r"^\s*[^:]{1,25}:\s+(?=.*\b(?:I|we|my|our)\b)", win)
+    lead = _LEAD_IN_LABEL_RE.match(win)
     if lead:
         win = win[lead.end():]
     toks = [w.lower().replace("’", "").replace(chr(39), "") for w in _words(win)]
