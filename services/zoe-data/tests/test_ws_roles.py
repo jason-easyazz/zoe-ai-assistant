@@ -29,24 +29,32 @@ ORIGIN = {"origin": "https://zoe.local"}
 
 # --- policy -----------------------------------------------------------------
 
-@pytest.mark.parametrize("role", ["user", "family_member", "child", "member", "admin", "agent"])
-def test_every_signed_in_role_is_admitted(role):
+@pytest.mark.parametrize("role", ["user", "family_member", "child", "member", "admin", "family-admin", "agent", "teenager", "housemate"])
+def test_every_signed_in_role_is_admitted_including_custom_ones(role):
+    # zoe-auth admins can create arbitrary roles; signed-in is decided by exclusion.
     assert main._ws_role_signed_in({"user_id": "u1", "role": role}) is True
 
 
-@pytest.mark.parametrize("user", [None, {}, {"user_id": "guest", "role": "guest"}, {"user_id": "u1"}, {"user_id": "u1", "role": ""}])
-def test_guest_or_roleless_is_refused(user):
+@pytest.mark.parametrize("user", [
+    None, {}, "not-a-dict",
+    {"user_id": "guest", "role": "guest"},      # the guest sentinel
+    {"user_id": "guest", "role": "admin"},      # a guest identity never gets in, whatever the role says
+    {"user_id": "u1", "role": "guest"},
+    {"user_id": "u1"}, {"user_id": "u1", "role": ""}, {"user_id": "u1", "role": None},
+    {"user_id": "", "role": "user"}, {"role": "user"},
+])
+def test_guest_or_identity_less_is_refused(user):
     assert main._ws_role_signed_in(user) is False
 
 
-@pytest.mark.parametrize("role", ["user", "family_member", "child", "member"])
+@pytest.mark.parametrize("role", ["user", "family_member", "child", "member", "teenager"])
 def test_non_admin_roles_are_scoped_to_their_own_channel(role):
     assert main._ws_channel_forbidden({"user_id": "asya", "role": role}, "asya") is False
     assert main._ws_channel_forbidden({"user_id": "asya", "role": role}, "jason") is True
 
 
-@pytest.mark.parametrize("role", ["admin", "agent"])
-def test_admin_and_agent_may_subscribe_for_anyone(role):
+@pytest.mark.parametrize("role", ["admin", "family-admin", "agent"])
+def test_admin_alias_and_agent_may_subscribe_for_anyone(role):
     assert main._ws_channel_forbidden({"user_id": "jason", "role": role}, "asya") is False
 
 
@@ -55,6 +63,14 @@ def test_no_handler_inlines_a_role_tuple():
     src = Path(main.__file__).read_text(encoding="utf-8")
     assert '("member", "admin", "agent")' not in src
     assert 'user.get("role") == "member" and' not in src
+
+
+def test_every_per_user_socket_enforces_ownership():
+    # Every /api/<x>/ws/{user_id} handler must call _ws_channel_forbidden (journal did not).
+    import re
+    src = Path(main.__file__).read_text(encoding="utf-8")
+    for m in re.finditer(r'@app\.websocket\("(/api/\w+/ws/\{user_id\})"\)\n(async def \w+\(.*?\n(?:(?!@app\.).*\n)*)', src):
+        assert "_ws_channel_forbidden(user, user_id)" in m.group(2), m.group(1) + " does not enforce channel ownership"
 
 
 # --- wiring, with the real default role ---------------------------------------
@@ -99,6 +115,23 @@ def test_admin_may_subscribe_on_behalf_of_another_user(client, monkeypatch):
     _resolver(monkeypatch, {"user_id": "jason", "role": "admin"})
     with client.websocket_connect("/api/lists/ws/asya?session_id=s", headers=ORIGIN) as ws:
         assert ws.receive_json()["type"] == "connected"
+
+
+def test_custom_role_opens_its_own_socket_and_family_admin_alias_may_subscribe_for_anyone(client, monkeypatch):
+    _resolver(monkeypatch, {"user_id": "kid", "role": "teenager"})
+    with client.websocket_connect("/api/notes/ws/kid?session_id=s", headers=ORIGIN) as ws:
+        assert ws.receive_json()["type"] == "connected"
+    _resolver(monkeypatch, {"user_id": "jason", "role": "family-admin"})
+    with client.websocket_connect("/api/notes/ws/kid?session_id=s", headers=ORIGIN) as ws:
+        assert ws.receive_json()["type"] == "connected"
+
+
+def test_default_user_role_cannot_open_someone_elses_journal(client, monkeypatch):
+    _resolver(monkeypatch, {"user_id": "asya", "role": "user"})
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with client.websocket_connect("/api/journal/ws/jason?session_id=s", headers=ORIGIN):
+            pass
+    assert exc.value.code == 1008
 
 
 def test_default_user_role_opens_the_push_socket(client, monkeypatch):

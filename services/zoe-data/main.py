@@ -2757,6 +2757,9 @@ async def journal_ws(websocket: WebSocket, user_id: str):
     if not _ws_role_signed_in(user):
         await websocket.close(1008, "Unauthorized")
         return
+    if _ws_channel_forbidden(user, user_id):
+        await websocket.close(1008, "Forbidden")
+        return
     await broadcaster.connect(
         websocket, "journal", user_id=str(user.get("user_id") or user_id)
     )
@@ -2764,31 +2767,35 @@ async def journal_ws(websocket: WebSocket, user_id: str):
 
 
 # ── WebSocket role policy (one rule, every socket) ───────────────────────────
-# zoe-auth's roles are admin, user (the DEFAULT for every ordinary account),
-# family_member, child, guest (services/zoe-auth/models/database.py UserRole) and
-# zoe-data passes them through verbatim (auth._normalize_auth_user). "member" is
-# zoe-data's own name used by degraded pass-through sessions and older callers.
-# Until 2026-10-08 every socket below accepted only member/admin/agent, so every
-# real "user" account was closed 1008 on EVERY socket — push and per-resource
-# alike — and reconnected forever. Guests stay refused: a socket is a signed-in
-# channel.
-_WS_SIGNED_IN_ROLES = frozenset({"user", "family_member", "child", "member", "admin", "agent"})
-# Non-admin roles may subscribe only to their OWN {user_id} channel; admin/agent may
-# subscribe on behalf of any user (background sync).
-_WS_OWN_CHANNEL_ONLY_ROLES = frozenset({"user", "family_member", "child", "member"})
-
-
+# A socket is a SIGNED-IN channel. zoe-auth's built-in roles are admin, user (the
+# DEFAULT for every ordinary account), family_member, child, guest — and admins can
+# create ARBITRARY roles (api/admin.py::create_role) and assign them, so signed-in is
+# decided by EXCLUSION (a real identity that is not the guest sentinel and carries a
+# non-empty role), never by enumerating roles zoe-auth can extend. Until 2026-10-08
+# every socket accepted only member/admin/agent, so every real "user" account was
+# closed 1008 on EVERY socket — push and per-resource alike — and reconnected forever.
+# Admin is decided by auth.is_admin_role (honours the family-admin alias, fail-closed);
+# "agent" is the internal background-sync caller. Those two may subscribe on behalf of
+# any user; everyone else only to their OWN {user_id} channel.
 def _ws_role_signed_in(user: dict | None) -> bool:
-    return bool(user) and user.get("role") in _WS_SIGNED_IN_ROLES
+    from auth import GUEST_USER_ID
+    if not isinstance(user, dict):
+        return False
+    uid = user.get("user_id")
+    role = user.get("role")
+    if not isinstance(uid, str) or not uid or uid == GUEST_USER_ID:
+        return False
+    return isinstance(role, str) and bool(role) and role != "guest"
+
+
+def _ws_may_subscribe_for_anyone(user: dict) -> bool:
+    from auth import is_admin_role
+    return is_admin_role(user.get("role")) or user.get("role") == "agent"
 
 
 def _ws_channel_forbidden(user: dict, user_id: str) -> bool:
-    """True when a non-admin session asks for a channel that is not its own."""
-    return (
-        user.get("role") in _WS_OWN_CHANNEL_ONLY_ROLES
-        and bool(user.get("user_id"))
-        and user.get("user_id") != user_id
-    )
+    """True when a session that is not admin/agent asks for a channel that is not its own."""
+    return (not _ws_may_subscribe_for_anyone(user)) and user.get("user_id") != user_id
 
 
 async def _resolve_ws_session(session_id: str | None) -> dict | None:
