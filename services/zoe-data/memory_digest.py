@@ -462,6 +462,38 @@ def _affect_for_fact(fact: str, affect: str, sentence: str, message: str = "") -
     return affect
 
 
+#: A row's wording is logged whole up to this many characters (a distilled sentence is <= 150 by the extractor prompt).
+_ROW_LOG_WORDING_MAX = 200
+
+
+def log_row(lane: str, user_id: str, ref, outcome: str) -> None:
+    """ONE INFO line per row a digest stored or parked, so a live incident can be REPLAYED instead of guessed at
+    (the day-sim 6n diagnosis had no record of what the extractor wrote or how the row was classed):
+
+        MEMORY_ROW lane=<turn_digest|digest|emotional> outcome=<stored|parked|edited|held> user=<id> id=<row id>
+        class=<authority class> promoted=<yes|no> basis=<authority basis> status=<row status> type=<memory type>
+        wording='<the ROW text, as stored>'
+
+    ``promoted`` is the promotion verdict: yes = the owner's one verbatim sentence ENTAILED the fact
+    (``memory_authority.VERBATIM_BASIS``), so a retraction earns the standing of the owner's own words; no = it did
+    not (a candidate is parked as a dispute instead). The wording is the row's own text - the extractor's distilled
+    sentence after the write boundary's scrub - never the owner's turn (no ``source_excerpt`` / anchor is read here).
+    Post-turn only (the background digest); never raises; ``%r`` so a newline in a wording cannot forge a line."""
+    try:
+        if ref is None:
+            return
+        md = getattr(ref, "metadata", None) or {}
+        basis = str(md.get("authority_basis") or "-")
+        wording = " ".join(str(getattr(ref, "text", "") or "").split())[:_ROW_LOG_WORDING_MAX]
+        logger.info(
+            "MEMORY_ROW lane=%s outcome=%s user=%s id=%s class=%s promoted=%s basis=%s status=%s type=%s wording=%r",
+            lane, outcome, user_id, getattr(ref, "id", "-"), md.get("authority_class") or "-",
+            "yes" if basis == memory_authority.VERBATIM_BASIS else "no", basis,
+            md.get("status") or "-", md.get("memory_type") or "-", wording)
+    except Exception:  # noqa: BLE001 - a log line must never fail a digest
+        pass
+
+
 def _implicit_change_cue(user_message: str) -> str | None:
     """The utterance's change-of-state cue when ZOE_MEMORY_IMPLICIT_SUPERSEDE is on,
     else None (memory_supersede; off = the turn digest is unchanged)."""
@@ -678,7 +710,7 @@ async def run_turn_digest(
                         except Exception:
                             existing_rows = []
                     from memory_supersede import changes_existing
-                    fact_changes = changes_existing(fact, existing_rows)
+                    fact_changes = changes_existing(fact, existing_rows, change_cue)
                 if is_tombstone(fact):
                     # "User dropped the half-marathon" records a change, never a
                     # current fact: the card and the recall packet treat it so.
@@ -763,6 +795,7 @@ async def run_turn_digest(
                     )
                     if new_ref is not None:
                         result["new"] += 1
+                        log_row("turn_digest", user_id, new_ref, "edited")
                         logger.info("turn_digest: superseded %s with %r", target_id, fact[:60])
                         if fact_changes:
                             changed_refs.append(new_ref)
@@ -791,8 +824,10 @@ async def run_turn_digest(
                     # held back (it disputes something the user said): ask ONE question
                     result["skipped_low_quality"] += 1
                     fresh_candidates.append(ref)
+                    log_row("turn_digest", user_id, ref, "parked")
                 elif ref is not None:
                     result["new"] += 1
+                    log_row("turn_digest", user_id, ref, "stored")
                     logger.info("turn_digest: stored for %s: %s", user_id, fact[:80])
                     if fact_changes:
                         changed_refs.append(ref)
@@ -948,6 +983,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                                     memory_type=item.get("type", "fact"), confidence=0.5, status="approved",
                                     tags=["digest", item.get("type", "unknown"), "unsupported_observation"],
                                     anchor_text=anchor_for_write, hold="unsupported_observation")
+                                log_row("digest", user_id, held, "held")
                                 if held is not None and memory_authority.is_candidate(held):
                                     result["candidates"] = result.get("candidates", 0) + 1
                             except MemoryServiceError as exc:
@@ -1000,6 +1036,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                 if new_ref is not None:
                     superseded_any = True
                     result["superseded"] += 1
+                    log_row("digest", user_id, new_ref, "edited")
                     logger.info(
                         "memory_digest: superseded %s -> %s user=%s",
                         candidate.id, new_ref.id, user_id,
@@ -1042,6 +1079,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                     )
                     if new_ref is not None:
                         result["superseded"] += 1
+                        log_row("digest", user_id, new_ref, "edited")
                         logger.info("memory_digest: superseded %s with %r", target_id, fact[:60])
                         continue
                 except Exception as exc:
@@ -1064,8 +1102,10 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                 continue
             if ref is not None and memory_authority.is_candidate(ref):
                 result["candidates"] = result.get("candidates", 0) + 1
+                log_row("digest", user_id, ref, "parked")
             elif ref is not None:
                 result["new"] += 1
+                log_row("digest", user_id, ref, "stored")
                 logger.info("memory_digest: stored for %s: %s", user_id, fact[:80])
 
         # ── Emotional memory pass ──────────────────────────────────────────
@@ -1153,6 +1193,7 @@ async def _emotional_memory_pass(user_id: str, chat_text: str, svc) -> int:
             )
             if ref is not None:
                 stored += 1
+                log_row("emotional", user_id, ref, "stored")
                 logger.info("emotional_pass: stored user=%s [%s] %s", user_id, emotion, moment[:60])
         except MemoryServiceError as exc:
             logger.debug("emotional_pass: ingest failed: %s", exc)
