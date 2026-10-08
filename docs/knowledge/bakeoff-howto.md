@@ -1,7 +1,7 @@
 ---
 type: Runbook
 title: The Hindsight bake-off is one command (owner's page)
-description: How to run the pre-registered memory bake-off (Z0, Z0-off, Z0e, H0, H1, H2, HM) with one command inside a brain-stop window, what the window does to the box, how long it takes, how to read the verdict (the G0-G3 floors per arm and the capability winner clause: exact words, reflection, long-range recall, protocol, temporal, recall at distance), how to abort, and what is still unverified. First contact with the real stack (real Hindsight server, scratch Postgres, embeddings shim, real MemPalace library, the live brain's LLM path) was made on 2026-10-06; see docs/research/bakeoff-setup-verification-2026-10-06.md for what it found and fixed.
+description: How to run the pre-registered memory bake-off (Z0, Z0-off, Z0e, H0, H1, H2, HM, MPA, HMA, ZMA) with one command inside a brain-stop window, what the window does to the box, how long it takes, how to read the verdict (the G0-G3 floors per arm and the capability winner clause: exact words, reflection, long-range recall, protocol, temporal, recall at distance), how to abort, and what is still unverified. First contact with the real stack (real Hindsight server, scratch Postgres, embeddings shim, real MemPalace library, the live brain's LLM path) was made on 2026-10-06; see docs/research/bakeoff-setup-verification-2026-10-06.md for what it found and fixed.
 tags: [memory, bake-off, hindsight, zmb, runbook, brain-window, owner]
 timestamp: 2026-10-07T15:00:00Z
 ---
@@ -19,7 +19,7 @@ scripts/perf/zmb/bakeoff_window.sh --dry-run     # FIRST: prints every step, the
 scripts/perf/zmb/bakeoff_window.sh               # the window: about 85 minutes, hard cap 90, ends with the live brain restored
 ```
 
-Everything else (`--arms H1,H2`, `--cap-min`, `--docs-dir`) is optional; the default arms are `H1,H2,HM,H0` (Z0, Z0-off and Z0e always run in the lab). Run it from a worktree: it only writes an untracked markdown draft, but the
+Everything else (`--arms H1,H2`, `--cap-min`, `--docs-dir`) is optional; the default arms are `H1,H2,HM,MPA,HMA,ZMA,H0` (Z0, Z0-off and Z0e always run in the lab). Run it from a worktree: it only writes an untracked markdown draft, but the
 usual rule stands (no work in the live checkout).
 
 ### The test hook (daylight, brain NOT stopped; default OFF, never for a real window)
@@ -82,6 +82,21 @@ Guards: MemAvailable below 1.2 GB at any time aborts and restores; 90 minutes is
    (about 4 min; the four protections whose effect runs through a real tier are broken one at a time and must turn their cell red; latencies are wall clocks, the two lookups in two threads), then the generic store
    cells for one seed (about 1.3 s per cell). HM has no extraction or identity wall of its own, so many generic hard cells FAIL it by design and `hard_cells_all_ran` / the HM gate say so; it is INCOMPLETE (one seed), never adopted.
    Its own gate block (`HM-G0a .. HM-G3a`) and its column in the winner clause are in the report. Its t+6 min forgetting check is HM-F2 on a virtual clock (the ledger is durable: there is no TTL to wait out).
+5c. **MPA, HMA and ZMA (the agent operates MemPalace), one seed box each**, after HM and before H0 (`--arms` default `H1,H2,HM,MPA,HMA,ZMA,H0`). **MPA** = MemPalace set up as designed: the clone brain
+   calls its tools; **HMA** = MPA as the episodic tier + Hindsight (concise + observations) as the reflective tier; **ZMA** = Zoe's live stack (Z0e) with MemPalace integrated. All three run `mpa_window.py`
+   (MPA and HMA in the bake-off venv through `mp_run.sh`, HMA with `--arm HMA`; ZMA with the window's own interpreter, `--arm ZMA`, because Z0 needs zoe-data's modules) and write `mpa-` / `hma-` / `zma-<run_id>.json`.
+   Their cells phase is **computed from model calls**: `MPA_CALLS`, `HMA_CALLS` (+60 observation calls + 90 s consolidation), `ZMA_CALLS` x `MPA_S_PER_CALL` in `bakeoff_measure.py` (the ONLY place these numbers
+   live; `--dry-run` prints them and the minutes). J / K / L / M and each arm's own floors are INSIDE those minutes; they run L0 only (no 100 / 300 filler: each filler turn is a brain call). Their J / K / L / M cells
+   are measured with the CLONE BRAIN operating MemPalace's tools, so the brain is the instrument; the protocol text costs prompt tokens (gate `mpa_G1_prompt_fits`). Gates (thresholds in `RULE`, pre-registered
+   2026-10-07 before any MPA run): `mpa_G0_server_rss`, `mpa_G1_tool_call_validity` (>= 95% over >= 30 calls), `mpa_G1_search_before_answer`, `mpa_G1_supersede_correct`, `mpa_G1_prompt_fits`, `mpa_G2_floors`,
+   `mpa_G3_glue_lines`; HMA adds the K1 observation veto, the total RAM and forgetting through both tiers; ZMA adds the unchanged Z0 floors and its total RAM. All are one-seed INCOMPLETE and never adopted by the
+   rule. **At the 90-minute cap this default list does NOT fit**: `--dry-run` prints `DOES NOT FIT` with the deficit and how many MPA + HMA brain calls the cap holds (the other boxes sit on their 1 minute floors;
+   shedding order H0, then HM, then H2, never H1's three seeds); cut the call constants, drop an arm (`--arms`) or raise `--cap-min`.
+5d. **The reflection phase (optional, only if time remains)**: after the live-slot phases and before the t+6 min wait the clone is restarted with `--ctx-size 32768` (`BAKEOFF_REFLECT_CTX`, 0 = off; the live unit
+   is only read, never edited) and then, from the PARKED `llama-server-12b-deepbrain.service.disabled` text (read only, never enabled), as the 12B; only the K work runs, as the variants `H2@32k`, `HMA@32k`, `ZMA@32k`,
+   `H2@12B`, `HMA@12B`, `ZMA@12B` (never contest entrants: they show whether the 8k slot limits K; the K1 veto applies). The 12B pair is preflighted by arithmetic (model file + KV + 600 MB + the 1,200 MB floor against
+   the MemAvailable measured once the 4B is stopped) and skipped with the numbers when it would breach the floor; `BAKEOFF_REFLECT_STOP_UNITS=kokoro-tts.service` stops that listed unit for the 12B pair only and
+   starts it again on every exit path. H0's box is cut first (then HM's) to leave the phase room; on any abort the normal restore brings the live unit back at its own context.
 6. The t+6 min forgetting verdicts and the report (inside the 5 min tail). Fewer than three seeds makes an arm INCOMPLETE, which is not adoptable.
 7. Per arm: PSS of every candidate PID every 2 s (steady = median, burst = max, plus the scratch Postgres container), MemAvailable floor, and non-loopback
    connects (the egress hook log plus `ss` polling). The hook is `scripts/perf/zmb/egress_audit/sitecustomize.py` (in the repo; it also makes `import uvloop` fail, because

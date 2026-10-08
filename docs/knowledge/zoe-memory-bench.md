@@ -545,6 +545,20 @@ disk: under adoption it is Postgres rows and the same scrub would cover it.
 **Remaining `LACKS` after this change** (`HindsightArm.LACKS`, per instance): H0 has no `conflict_pass` and no `edges` (no Zoe layer: 3 A8 cells including the 2 hard ones, 8 temporal cells SKIP, so the hard gate
 stays red for H0 by design); an arm built without `pg=` has no `disk`. H1 / H2 in a window lack nothing (`0 of 144 store cells SKIP by capability`; H0: 11).
 
+## MPA / HMA / ZMA cells (`scripts/perf/zmb/mpa_cells.py`): MemPalace operated by the agent, and the integrations (added 2026-10-07)
+
+Record: `docs/research/mempalace-agent-arm-2026-10-07.md`. Three arms, one runner (`mpa_cells.py`), the same negative-control rule as the HM cells: each cell names the switch it claims
+(`hm_policy.Controls`, `mempalace_agent.MpaControls`, or an integration flag), `run_all` builds the arm with EACH switch off and the cell must go red, else the run is refused (exit 2).
+
+* **MPA** (`arms/mempalace_agent.py`): the brain calls MemPalace's own tools (10 of 45) through a faithful shim; the protocol is injected (3,370 tokens with the tools, reported part by part);
+  hooks map session start / stop / end; the closet pass runs at idle; Zoe's floors (gate, router bypass, identity pinning, authority anchor, quarantine, frame, forget ledger + palace rebuild) sit around every write.
+* **HMA** (`arms/hma.py`): MPA + Hindsight (concise + observations) as the reflective tier: one ingest path (a drawer is Hindsight's only document), one embedder, one packet, one protocol, one forget.
+* **ZMA** (`arms/zma.py`): Z0e + MemPalace: the harness files each owner turn ONCE as a chunk, Z0's extractor reads it back and cites its id, the brain reads (status, search) and never writes, one forget.
+* Lab cells (test double or the real server): `MPA-T1/T2` (schemas, prompt cost), `S1/S2`, `O1` (hooks), `R1` (router), `G1`, `I1/I2`, `H1` (identity), `F1/F2/F3/F5` (forgetting), `A1/A2/A3` (authority; A3 = ZMA: Z0 outranks a conflicting chunk), `C1` (closet pass), `ZMA-W1/W2`, `HMA-W1/W2/F6`.
+* Brain cells (`run_brain`, window only; bars in `BRAIN_BARS`): `M4.<metric>.mempalace5` (the four protocol metrics), `MPA-B1` tool-call validity >= 95% over >= 30 calls, `MPA-B2` supersede >= 80% right / <= 2 wrong,
+  `MPA-J4` exact words >= 90%, `MPA-L4` two-fact >= 70%. A scripted brain never answers these.
+* The window's REFLECTION PHASE (K only; variants `H2@32k`, `HMA@32k`, `ZMA@32k`, then `H2@12B`, `HMA@12B`, `ZMA@12B`) runs the closet / consolidation work on a 32k-context clone so the 8k slot does not decide axis K.
+
 ## Not built yet (the build plan continues)
 
 Synthetic store routes in zoe-data (`synthetic-ingest`, `synthetic-digest`, `capture-synthetic`) and the live driver that uses

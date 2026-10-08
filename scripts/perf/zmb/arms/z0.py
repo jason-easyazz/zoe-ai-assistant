@@ -230,8 +230,18 @@ class Z0Arm(Arm):
             rep.written += 1
         return ref
 
+    #: False when another store holds the owner's verbatim words (ZMA: MemPalace is the verbatim tier): Z0 extracts, it does not keep a second copy
+    index_exact = True
+
+    def exact_index_copies(self, needle: str) -> int:
+        """How many entries of Z0's own exact-words index hold ``needle`` (the integration cell counts a second verbatim copy here)."""
+        xw = importlib.import_module("exact_words")
+        return len(self._run(xw.get_backend().rows_matching(self._user, needle)))
+
     async def _index_exact(self, t: Turn, source: str, verified: "bool | None") -> None:
         """The post-turn hook of ``memory_extractor.extract_and_ingest``: the owner's verbatim words into the exact-words index, said ``day_offset`` days ago."""
+        if not self.index_exact:
+            return
         xw = importlib.import_module("exact_words")
         when = _dt.datetime.now(_dt.timezone.utc).timestamp() - float(self._cur_day or 0) * 86400.0
         await xw.index_turn(self._user, t.text, said_at=when, source=source, speaker_verified=verified)

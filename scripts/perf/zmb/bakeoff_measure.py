@@ -27,6 +27,7 @@ import json
 import math
 import os
 import re
+import sys
 import threading
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -34,9 +35,12 @@ from typing import Any, Callable, Optional
 from . import bakeoff_gates as gates
 from .bakeoff import PG_CONTAINER, UNITS, Aborted
 
+UNITS_CLONE = UNITS["clone"]
+
 #: What run 1 (20261006-0935, ``run-20261006-0935.log``) MEASURED; the planner budgets from these, not from hope.
 #: minutes per fixed phase (Z0 lab + forgetting start + adapter controls; per-arm latency / slot; per-mode extraction validity)
-PHASE_MIN = {"lab": 2.4, "latency": {"H1": 1.0, "H2": 2.5, "H0": 5.1, "HM": 0.0}, "slot": {"H1": 3.1, "H2": 5.2, "H0": 5.2, "HM": 0.0},
+PHASE_MIN = {"lab": 2.4, "latency": {"H1": 1.0, "H2": 2.5, "H0": 5.1, "HM": 0.0, "MPA": 0.0, "HMA": 0.0, "ZMA": 0.0},        # MPA / HMA / ZMA: their latency and slot numbers come from their own cells
+             "slot": {"H1": 3.1, "H2": 5.2, "H0": 5.2, "HM": 0.0, "MPA": 0.0, "HMA": 0.0, "ZMA": 0.0},
              "validity": {"verbatim": 6.0, "concise": 10.0},
              #: Z0e (real Chroma + MiniLM) on the D cells x 3 seeds, measured 2026-10-06 first contact: 4 cells x ~6.5 s x 3 seeds = 1.3 min
              #: ... plus the two long-range cells (L1 9 s, L2 17 s per seed measured 2026-10-07): 2.7 min
@@ -44,10 +48,12 @@ PHASE_MIN = {"lab": 2.4, "latency": {"H1": 1.0, "H2": 2.5, "H0": 5.1, "HM": 0.0}
              #: the HM cells on the real tiers (real library + real Hindsight, ``--controls real-tier``): 217 s measured at first contact (2026-10-06), with headroom
              "hm_cells": 5.0}
 #: seconds per cell that RAN, seed 1: H1 112 cells in 414 s, H2 55 in 662 s, H0 18 in 362 s
-S_PER_CELL = {"H1": 3.7, "H2": 12.0, "H0": 20.0, "HM": 1.3}      # HM: 131 cells ran in 171 s on the real tiers at first contact (a verbatim write is no model call; most cells never distil)
+S_PER_CELL = {"H1": 3.7, "H2": 12.0, "H0": 20.0, "HM": 1.3, "MPA": 6.0, "HMA": 8.0,
+              "ZMA": 6.5}      # ZMA: Z0e's rate (4 cells x ~6.5 s measured 2026-10-06): its write path has no model call, Chroma + MiniLM are real (a constant to tune)      # HM: 131 cells ran in 171 s on the real tiers at first contact (a verbatim write is no model call; most cells never distil)
 #: seeds per arm. H1 is the preferred arm and needs all three (the rule); H2 and H0 get one each and are INCOMPLETE by design
-SEEDS_PER_ARM = {"H1": 3, "H2": 1, "H0": 1, "HM": 1}
-ARM_ORDER = ("H1", "H2", "HM", "H0")              # priority: an earlier arm is finished before a later one starts (HM is a candidate, H0 only the native baseline)
+SEEDS_PER_ARM = {"H1": 3, "H2": 1, "H0": 1, "HM": 1, "MPA": 1, "HMA": 1, "ZMA": 1}
+ARM_ORDER = ("H1", "H2", "HM", "MPA", "HMA", "ZMA", "H0")  # priority: an earlier arm is finished before a later one starts (HM / MPA / HMA are candidates, H0 only the native baseline)
+DRIVER_ARMS = ("HM", "MPA", "HMA", "ZMA")                 # the arms whose one seed box + own cells run in a DRIVER process (hm_window.py / mpa_window.py), not in this interpreter
 OPTIONAL_PHASES = ("H2", "H0")                    # the arm's latency + slot run only if time remains, never budgeted: H0 cannot win or complete, and H2 is
                                                   # INCOMPLETE by design (one seed), so their CELLS (what Hindsight does natively; the observation layer) outrank
                                                   # their timings. CUT 2026-10-07 to make room for the capability cells: H2's latency 2.5 + slot 5.2 min
@@ -59,14 +65,91 @@ OPTIONAL_VALIDITY = ("concise",)                  # the concise-mode extraction-
 #:   H2 / H0  reflection: the observation layer is what H2 adds over H1 and what H0 does natively; their exact-words / multi-hop / protocol would only be
 #:            H1's retrieval again behind a concise rewrite (CUT: ~15 min of H2 time the window does not have)
 CAP_AXES = ("exact_words", "reflection", "multi_hop", "protocol")
-CAP_PLANNED = {"H1": ("exact_words", "multi_hop", "protocol"), "H2": ("reflection",), "H0": ("reflection",), "HM": ("exact_words", "multi_hop", "protocol")}
+CAP_PLANNED = {"H1": ("exact_words", "multi_hop", "protocol"), "H2": ("reflection",), "H0": ("reflection",), "HM": ("exact_words", "multi_hop", "protocol"),
+               #: MPA / HMA are the evidence for ALL FOUR (MPA: reflection via the closet pass summaries the clone brain makes; HMA: via Hindsight's observations). Their capability
+               #: work is INSIDE their own cells phase (``mpa_cells`` / ``hma_cells`` minutes), so ``cap_extra_min`` is 0 for them.
+               "MPA": ("exact_words", "reflection", "multi_hop", "protocol"), "HMA": ("exact_words", "reflection", "multi_hop", "protocol"),
+               "ZMA": ("exact_words", "reflection", "multi_hop", "protocol")}      # ZMA's store cells run ALL axes on seed 1 inside its own box (no model call on its write path)
 #: what an arm DECLARES (it could run it) and the plan drops: H1 and HM have no observation layer, so reflection is a capability skip for them, not a cut
-CAP_CUT = {"H1": (), "HM": (), "H2": ("exact_words", "multi_hop", "protocol"), "H0": ("exact_words", "multi_hop", "protocol")}
+CAP_CUT = {"H1": (), "HM": (), "H2": ("exact_words", "multi_hop", "protocol"), "H0": ("exact_words", "multi_hop", "protocol"), "MPA": (), "HMA": (), "ZMA": ()}
 #: retained model calls one seed-1 play makes per axis (counted from the corpora: filler that is stored + the facts taught) and seconds per call
 #: (``slot_s_per_turn``: H1 1.52, H2 2.56 at run 1), plus the observation consolidation (measured by nobody yet: 90 s is a guess, the box is a ceiling)
 CAP_RETAINS = {"exact_words": 45, "multi_hop": 260, "protocol": 14, "reflection": 37}
 S_PER_RETAIN = {"H1": 1.52, "H2": 2.56, "H0": 2.56}
 CONSOLIDATE_S = 90.0
+
+# ── THE MPA / HMA / REFLECTION COST CONSTANTS: the ONLY place these numbers live (the dry-run plan prints them; tune them after a smoke run) ──────────────────────
+#: brain model calls per cell family for ONE MPA seed: the clone brain operates MemPalace's MCP tools, every turn of every cell is a model call
+MPA_CALLS = {"protocol": 85, "exact_words": 32, "multi_hop": 36, "reflection": 86, "behaviour": 50, "closet": 12}      # 301 calls: the coordinator's count from the cells
+MPA_S_PER_CALL = 3.0                              # seconds per brain call on the 8k clone (prefill of the protocol text + tool schemas + decode)
+#: HMA = MPA + Hindsight's observation consolidation (the reflective tier): the same cells plus this many extra calls (plus ``CONSOLIDATE_S``, as H2)
+HMA_CALLS = {**MPA_CALLS, "observations": 60}
+#: ZMA = Zoe's live stack + MemPalace: its WRITE path has no model call (the harness files the verbatim chunk, Z0's extractor reads from it), so only its brain-tier cells (the protocol M4,
+#: tool validity, search-before-answer, J4 / L4 on the clone) cost calls; its generic store cells run all axes A-M in the seed box
+ZMA_CALLS = {"protocol": 60, "exact_words": 20, "multi_hop": 40, "behaviour": 30, "reflection": 30}
+#: the REFLECTION PHASE (optional): K work only, per variant, against a restarted clone: ``<arm>@32k`` (the live 4B at ``--ctx-size 32768``) and ``<arm>@12B`` (the parked 12B deep-brain model)
+REFLECT_CALLS = {"H2@32k": 60, "HMA@32k": 80, "ZMA@32k": 40, "H2@12B": 60, "HMA@12B": 80, "ZMA@12B": 40}
+REFLECT_S_PER_CALL = {"4B@32k": 4.0, "12B@32k": 12.0}      # seconds per call at 32k, per model (placeholders until the first window measures them)
+REFLECT_LOAD_MIN = {"4B@32k": 1.5, "12B@32k": 3.0}          # restart + health poll (and the restart back), minutes
+#: the 12B pair's RAM arithmetic (measured from the GGUF header by the coordinator, 2026-10-07): the weights are the file's size; KV at q8_0 (1.0625 bytes/element) with llama.cpp's
+#: reduced-SWA cache = 8 global layers x 1 kv head x (512+512) elements per token x ctx + 189 M SWA elements; compute / output buffers ~0.6 GB (262k vocab, ubatch 128)
+REFLECT_12B_MODEL_BYTES = 6_975_877_728
+REFLECT_12B_KV_GLOBAL_ELEMS_PER_TOKEN, REFLECT_12B_KV_SWA_ELEMS, REFLECT_KV_BYTES_PER_ELEM = 8 * 1024, 189_000_000, 1.0625
+REFLECT_COMPUTE_MB = 600.0
+REFLECT_AFTER_STOP_MB = 8400.0                    # MemAvailable measured on this box with the live 4B stopped (about 1.7 GB with it running), minus nothing: the preflight re-measures it
+REFLECT_STOP_UNIT_MB = {"kokoro-tts.service": 2300.0}    # what a listed unit frees (information for the dry plan; the preflight measures the real number)
+REFLECT_PAIRS = ("4B@32k", "12B@32k")                        # execution order: the 4B pair, then the 12B pair; each pair = the variants of the arms in the window
+REFLECT_VARIANTS = {"4B@32k": ("H2@32k", "HMA@32k", "ZMA@32k"), "12B@32k": ("H2@12B", "HMA@12B", "ZMA@12B")}
+
+
+def half_up(minutes: float) -> float:
+    """Round UP to the half minute (a plan must not under-budget)."""
+    return math.ceil(minutes * 2.0 - 1e-9) / 2.0
+
+
+def kv_est_mb(ctx: int) -> float:
+    """The 12B's KV cache at ``ctx`` (q8_0, reduced-SWA cache), in MB (decimal): about 486 at 32768."""
+    return (REFLECT_12B_KV_GLOBAL_ELEMS_PER_TOKEN * ctx + REFLECT_12B_KV_SWA_ELEMS) * REFLECT_KV_BYTES_PER_ELEM / 1e6
+
+
+def need_mb_12b(model_bytes: "Optional[int]", ctx: int, floor_mb: float) -> float:
+    """MemAvailable the 12B pair needs once the 4B is stopped: ``model_file_mb + kv_est_mb(ctx) + 600 + cfg.min_avail_mb``."""
+    return round((model_bytes or REFLECT_12B_MODEL_BYTES) / 1e6 + kv_est_mb(ctx) + REFLECT_COMPUTE_MB + floor_mb, 0)
+
+
+def mpa_cells_min() -> float:
+    """Minutes of MPA's fixed cells phase, COMPUTED from the model calls (``MPA_CALLS`` x ``MPA_S_PER_CALL``)."""
+    return half_up(sum(MPA_CALLS.values()) * MPA_S_PER_CALL / 60.0)
+
+
+def hma_cells_min() -> float:
+    """Minutes of HMA's fixed cells phase: ``HMA_CALLS`` x the MPA seconds per call + Hindsight's consolidation (as H2)."""
+    return half_up((sum(HMA_CALLS.values()) * MPA_S_PER_CALL + CONSOLIDATE_S) / 60.0)
+
+
+def zma_cells_min() -> float:
+    """Minutes of ZMA's fixed cells phase (its brain-tier cells), COMPUTED from ``ZMA_CALLS`` x ``MPA_S_PER_CALL``."""
+    return half_up(sum(ZMA_CALLS.values()) * MPA_S_PER_CALL / 60.0)
+
+
+def driver_calls(arm: str) -> dict:
+    """The model-call constants of an MPA-driver arm (read at call time, so a test or a tuning edit is followed)."""
+    return {"MPA": MPA_CALLS, "HMA": HMA_CALLS, "ZMA": ZMA_CALLS}[arm]
+
+
+def reflect_pair_min(pair: str, arms: tuple) -> float:
+    """Minutes of one reflection pair (``4B@32k`` / ``12B@32k``) for the arms in the window (0.0 when no arm of the pair is in it)."""
+    names = [v for v in REFLECT_VARIANTS[pair] if v.split("@")[0] in arms]
+    if not names:
+        return 0.0
+    return half_up(sum(REFLECT_CALLS[v] for v in names) * REFLECT_S_PER_CALL[pair] / 60.0 + REFLECT_LOAD_MIN[pair])
+
+
+PHASE_MIN["mpa_cells"] = mpa_cells_min()
+PHASE_MIN["hma_cells"] = hma_cells_min()
+PHASE_MIN["zma_cells"] = zma_cells_min()
+PHASE_MIN["reflect32k"] = reflect_pair_min("4B@32k", ("H2", "HMA", "ZMA"))
+PHASE_MIN["reflect12b"] = reflect_pair_min("12B@32k", ("H2", "HMA", "ZMA"))
 HM_CAP_MIN = 2.0                                  # HM: the verbatim write is no model call; the same corpora took ~100 s on the real tiers in the lab
 H1_BOX_MARGIN = 1.25                             # the new cells (D recall, A3, C temporal) are unmeasured on real Hindsight: headroom over run 1's rate
 OPEN_MIN, TAIL_MIN = 0.5, 5.0                    # steps 1-6 of the window; the t+6 min wait + report at the end
@@ -75,8 +158,9 @@ VALIDITY_CALLS = 104
 SMOKE_VALIDITY_CALLS, SMOKE_SLOT_RETAINS = 10, 4          # BAKEOFF_SMOKE_CELLS: a handful of brain calls, never a measurement
 SLOT_RETAINS, SLOT_TURNS_PER_CHUNK = 12, 10
 FORGET_WAIT_S = 360.0
-PROBE_USERS = {v: "demo_bar_" + hashlib.sha1(f"zmb-probe-{v}".encode()).hexdigest()[:8] for v in ("H0", "H1", "H2")}
+PROBE_USERS = {v: "demo_bar_" + hashlib.sha1(f"zmb-probe-{v}".encode()).hexdigest()[:8] for v in ("H0", "H1", "H2", "MPA", "HMA", "ZMA")}      # the driver arms run theirs inside their driver
 HM_DRIVER = Path(__file__).resolve().parent / "hm_window.py"
+MPA_DRIVER = Path(__file__).resolve().parent / "mpa_window.py"          # one driver for MPA and (``--arm HMA``) HMA, and for the reflection variants (``--reflect-only``)
 
 _PLACES = ("Hobart", "Lisbon", "Perth", "Bergen", "Ghent", "Cork", "Dunedin", "Tauranga")
 _PEOPLE = ("Priya", "Ravi", "Anika", "Teodor", "Ines", "Oskar", "Saoirse", "Tomas")
@@ -193,7 +277,7 @@ class Sampler(threading.Thread):
         self._n += 1
         ss = h.run(["ss", "-tnpH", "state", "established"], mutating=False).out
         watch = set(pids)
-        drv = h.run(["pgrep", "-f", r"^\S*python\S* .*hm_window\.py"], mutating=False)       # the HM driver is a child process of the window: its sockets count too
+        drv = h.run(["pgrep", "-f", r"^\S*python\S* .*(hm_window|mpa_window)\.py"], mutating=False)       # the HM / MPA drivers are child processes of the window: their sockets count too
         if drv.rc == 0:
             watch |= {int(x) for x in drv.out.split() if x.isdigit()}
         for line in ss.splitlines():
@@ -285,7 +369,8 @@ class Ctx:
         self.seed_runs: "dict[str, dict[str, dict]]" = {}
         self.z0: "dict[str, dict]" = {}
         self.z0_off: "dict[str, dict]" = {}
-        self.measure: "dict[str, dict]" = {v: {} for v in ("H0", "H1", "H2", "HM")}
+        self.measure: "dict[str, dict]" = {v: {} for v in ("H0", "H1", "H2", "HM", "MPA", "HMA", "ZMA")}
+        self.reflect: "Optional[dict]" = None                  # the reflection phase's record (variants, never contest entrants); None = not attempted
         self.z0e: "dict[str, dict]" = {}
         self.forget: "dict[str, ForgetProbe]" = {}
         self.notes: "list[str]" = []
@@ -550,6 +635,344 @@ def phase_hm(ctx: Ctx, seed: str, box_s: float, store: list, by_id: dict, instru
             f"skipped {summ.get('skipped')}; controls {m['arm_controls']} red; {ctx.host.mono() - t0:.0f}s")
 
 
+def driver_env(cfg: Any) -> dict:
+    """The environment of every driver process (HM, MPA, HMA, the reflection runs): the scrubbing allocator the forgetting cells need, no telemetry, the shared embedder."""
+    env = {**os.environ, "MALLOC_PERTURB_": "85", "PYTHONMALLOC": "malloc", "ORT_DISABLE_TELEMETRY": "1"}
+    if cfg.hm_shared_embedder:
+        env["ZMB_HM_EMBEDDER_URL"] = f"http://127.0.0.1:{cfg.shim_port}"
+    return env
+
+
+def _mpa_argv(ctx: Ctx, arm: str, out: Path, seed: str, box_s: float, extra: "tuple[str, ...]" = ()) -> "list[str]":
+    """The CLI of ``mpa_window.py``: the clone brain's URL (the live port under BAKEOFF_SKIP_BRAIN_STOP), the seed, the box; HMA adds ``--arm HMA`` + Hindsight's URL."""
+    cfg = ctx.cfg
+    head = [sys.executable, str(MPA_DRIVER), "--arm", "ZMA"] if arm == "ZMA" else ["bash", str(cfg.bakeoff_dir / "mp_run.sh"), str(MPA_DRIVER)]     # ZMA: the window's own interpreter, NOT mp_run.sh
+    argv = head + ["--out", str(out), "--clone-url", f"http://127.0.0.1:{cfg.llm_port}", "--seed", seed, "--box-s", str(int(box_s))]
+    if arm == "HMA":
+        argv += ["--arm", "HMA", "--hindsight-url", f"http://127.0.0.1:{cfg.hs_port}"]
+    argv += list(extra)
+    if cfg.smoke_cells:
+        argv += ["--smoke", str(cfg.smoke_cells)]
+    if cfg.skip_brain_stop:
+        argv += ["--quiet-since", str(ctx.win.t0_epoch)]
+    return argv
+
+
+def _run_mpa_driver(ctx: Ctx, arm: str, out: Path, argv: "list[str]", timeout: float) -> dict:
+    r = ctx.host.run(argv, timeout=timeout, env=driver_env(ctx.cfg))
+    text = ctx.host.read(str(out))
+    if not text:
+        return {"error": f"mpa_window.py ({arm}) produced no result (rc={r.rc}): {r.out.strip()[-300:]}"}
+    return json.loads(text)
+
+
+def real_mpa_runner(ctx: Ctx, seed: str, box_s: float) -> dict:
+    """Run ``mpa_window.py`` (MPA) in the bake-off venv, through the same ``mp_run.sh`` as HM, and read ``mpa-<run_id>.json``. The clone brain operates MemPalace's tools."""
+    out = ctx.cfg.bakeoff_dir / f"mpa-{ctx.win.run_id}.json"
+    return _run_mpa_driver(ctx, "MPA", out, _mpa_argv(ctx, "MPA", out, seed, box_s), box_s + PHASE_MIN["mpa_cells"] * 60.0 * 2 + 180.0)
+
+
+def real_hma_runner(ctx: Ctx, seed: str, box_s: float) -> dict:
+    """The same driver with ``--arm HMA``: MPA as the episodic tier + Hindsight (concise + observations) as the reflective tier; reads ``hma-<run_id>.json``."""
+    out = ctx.cfg.bakeoff_dir / f"hma-{ctx.win.run_id}.json"
+    return _run_mpa_driver(ctx, "HMA", out, _mpa_argv(ctx, "HMA", out, seed, box_s), box_s + PHASE_MIN["hma_cells"] * 60.0 * 2 + 180.0)
+
+
+def real_zma_runner(ctx: Ctx, seed: str, box_s: float) -> dict:
+    """``mpa_window.py --arm ZMA`` run with THIS interpreter (the zoe-data venv: Z0 needs zoe-data's modules; MemPalace is a subprocess the driver starts itself), reads ``zma-<run_id>.json``."""
+    out = ctx.cfg.bakeoff_dir / f"zma-{ctx.win.run_id}.json"
+    return _run_mpa_driver(ctx, "ZMA", out, _mpa_argv(ctx, "ZMA", out, seed, box_s), box_s + PHASE_MIN["zma_cells"] * 60.0 * 2 + 180.0)
+
+
+def _brain_rows(cells: "list[dict]") -> "list[dict]":
+    """The brain-tier protocol cells (``M4.*``) as seed-run rows, so ``aggregate_axes`` builds the derived axis ``protocol_brain`` (the M letter) from them."""
+    return [{"id": c["id"], "axis": "protocol", "tier": "full", "verdict": c["verdict"], "stage": "", "expected": "PASS", "controls": [], "sanity": False,
+             "duration_s": 0.0, "brain_turns": 0, "reason": "", "lme_map": None} for c in cells if str(c.get("id", "")).startswith("M4.")]
+
+
+def _phase_driver_arm(ctx: Ctx, arm: str, seed: str, box_s: float, store: list, by_id: dict, instrument_of: "Callable[[str], dict]") -> None:
+    """One seed box of an MPA-driver arm (MPA, HMA): the arm's own cells with the clone brain plus the generic store cells for one seed (``mpa_window.py``), folded into the
+    same structures an H arm's seed fills (axes, hard violations, gates), and the arm-only measurements (the brain's tool calls, the MemPalace servers' RAM)."""
+    from . import artifact
+    ctx.label(f"{arm}:{seed}")
+    t0 = ctx.host.mono()
+    hook = getattr(ctx.win, f"{arm.lower()}_runner", None)
+    res = (hook or {"MPA": real_mpa_runner, "HMA": real_hma_runner, "ZMA": real_zma_runner}[arm])(ctx, seed, box_s)
+    ctx.win.guard()
+    why = res.get("aborted") or res.get("skipped") or res.get("error")
+    if why and not res.get("mpa_cells"):
+        ctx.notes.append(f"{arm} did not run: {why}")
+        ctx.log(f"{arm}: not run ({why})")
+        if res.get("aborted"):
+            raise Aborted(str(res["aborted"]))
+        return
+    if why:
+        ctx.notes.append(f"{arm} stopped early: {why}")
+    cells = res.get("mpa_cells") or {}
+    summ = cells.get("summary") or {}
+    m = ctx.measure[arm]
+    cells = {**cells, "cells": [{k: v for k, v in r.items() if k != "title"} for r in cells.get("cells") or []]}          # titles name the household's pool names: counts and ids only
+    m["mpa_cells"] = cells
+    m["mpa_driver"] = res.get("driver") or {}
+    m["brain"] = res.get("brain") or {}
+    m["mpa_library"], m["mpa_model"] = res.get("library", ""), res.get("model", "")
+    if res.get("hindsight"):
+        m["hindsight"] = res["hindsight"]
+    if arm == "ZMA":
+        m["zma_embedder"] = getattr(ctx, "embed_model", "") or "unknown"          # which embedder the shim served, for the record (ZMA states the one it shared)
+    pin = (m["brain"] or {}).get("prompt_tokens_max")
+    if pin is not None:
+        m["prompt_in_tokens_max"] = int(pin)
+    m["arm_controls"] = f"{summ.get('controls_checked', 0) - len(summ.get('not_instrumented') or [])}/{summ.get('controls_checked', 0)}"
+    by = {r["id"]: r for r in cells["cells"]}
+    f1 = next((r for i, r in by.items() if i.startswith("MPA-F1")), None)
+    fp = res.get("forget_probe") or {}
+    m["forgetting"] = {k: {"checked": 2, "resurrected": 0 if c["verdict"] == "PASS" else 1, "kept_others": 1, "how": how} for k, c, how in (
+        ("t0", f1, "MPA-F1: the forget call through the agent's tools, both tiers where there are two"),) if c}
+    if fp.get("t0"):
+        m["forgetting"]["t0"] = {**fp["t0"], "how": "the driver's probe, t+0: " + fp["t0"].get("how", "")}
+    if fp.get("t6"):         # ONLY a real wall-clock t+6 min counts (the same ForgetProbe the H arms get); MPA-F2 is an immediate refile test and stays its own cell
+        m["forgetting"]["t6"] = {**fp["t6"], "how": f"the driver's probe after a real {fp['t6'].get('waited_s', '?')} s: " + fp["t6"].get("how", "")}
+    else:
+        ctx.notes.append(f"{arm}: the t+6 min forgetting probe is unmeasured ({fp.get('unmeasured') or 'the driver reported none'}): the gate item reads NA")
+    k1 = [{"id": r["id"], "verdict": r["verdict"]} for r in (res.get("generic") or {}).get("rows") or [] if str(r.get("id", "")).startswith("K1")]
+    if k1:
+        m["k1_rows"] = k1
+    gen = res.get("generic")
+    if gen and gen.get("rows"):
+        rows = gen["rows"]
+        inst = instrument_of(seed)
+        controls_ok = bool(summ.get("controls_checked")) and not summ.get("not_instrumented")
+        hard_skipped = sum(1 for r in rows if r["verdict"] == "SKIP" and artifact.is_hard(by_id[r["id"]]))
+        why_hard = skip_breakdown([r for r in rows if r["verdict"] == "SKIP" and artifact.is_hard(by_id[r["id"]])])
+        ctx.seed_runs.setdefault(arm, {})[seed] = {
+            "axes": artifact.axis_stats(rows, by_id, inst["ok"]), "hard_violations": artifact.hard_violations(rows, by_id),
+            "hard_skipped": hard_skipped, "hard_skipped_why": why_hard,
+            "instrument": {"ok": inst["ok"] and controls_ok, "lab_controls_red": inst["lab_controls_red"], "arm_controls": m["arm_controls"]},
+            "cells_ran": gen["cells_ran"], "cells_selected": gen["cells_selected"], "duration_s": gen["duration_s"],
+            "cells": _strip(rows) + _brain_rows(cells["cells"]), "retain": {}}
+        if arm == "ZMA":
+            m["zma_hard_violations"], m["zma_hard_skipped"] = ctx.seed_runs[arm][seed]["hard_violations"], hard_skipped
+        ctx.log(f"{arm} {seed}: {gen['cells_ran']}/{gen['cells_selected']} generic cells ran in {gen['duration_s']:.0f}s; hard violations "
+                f"{len(ctx.seed_runs[arm][seed]['hard_violations'])}; hard skipped {hard_skipped}")
+    ctx.log(f"{arm} cells with the clone brain: {summ.get('pass')}/{summ.get('graded')} graded pass; red {summ.get('fail')}; targets failing {summ.get('targets_failing')}; "
+            f"skipped {summ.get('skipped')}; controls {m['arm_controls']} red; brain calls {(m['brain'] or {}).get('model_calls')}; {ctx.host.mono() - t0:.0f}s")
+
+
+def phase_mpa(ctx: Ctx, seed: str, box_s: float, store: list, by_id: dict, instrument_of: "Callable[[str], dict]") -> None:
+    _phase_driver_arm(ctx, "MPA", seed, box_s, store, by_id, instrument_of)
+
+
+def phase_hma(ctx: Ctx, seed: str, box_s: float, store: list, by_id: dict, instrument_of: "Callable[[str], dict]") -> None:
+    _phase_driver_arm(ctx, "HMA", seed, box_s, store, by_id, instrument_of)
+
+
+def phase_zma(ctx: Ctx, seed: str, box_s: float, store: list, by_id: dict, instrument_of: "Callable[[str], dict]") -> None:
+    _phase_driver_arm(ctx, "ZMA", seed, box_s, store, by_id, instrument_of)
+
+
+# ── the REFLECTION phase: K only, against a restarted clone (variants, never contest entrants) ────────────────────────────────
+
+class _PairStop(Exception):
+    """One reflection pair is not run (a precondition failed, or MemAvailable fell below the floor once its model was up): the clone goes back to the live context."""
+
+
+def unit_pss_mb(ctx: Ctx, unit: str) -> float:
+    h = ctx.host
+    cg = h.run(["systemctl", "--user", "show", "-p", "ControlGroup", "--value", unit], mutating=False).out.strip()
+    procs = h.read(f"/sys/fs/cgroup{cg}/cgroup.procs") if cg else ""
+    return round(sum(parse_pss_kb(h.read(f"/proc/{int(x)}/smaps_rollup")) for x in procs.split() if x.isdigit()) / 1024.0, 1)
+
+
+def reflect_spec(ctx: Ctx, pair: str) -> "tuple[Optional[dict], str]":
+    """The clone to start for ``pair``, GENERATED (never hand-written): the 4B from the live unit's text with ``--ctx-size``; the 12B from the PARKED unit's text (read, never
+    enabled / modified / started). ``(None, reason)`` when a precondition fails: the pair is skipped with the reason, never faked."""
+    from .bakeoff import Refused, clone_command, deep_clone_command
+    cfg, host, home = ctx.cfg, ctx.host, os.environ.get("HOME", "/home/zoe")
+    try:
+        if pair == "4B@32k":
+            return clone_command(ctx.win.unit_text, home, cfg.clone_port, cfg.reflect_ctx), ""
+        text = host.read(cfg.deep_unit)
+        if not text.strip():
+            return None, f"the parked 12B unit {cfg.deep_unit} is missing or empty"
+        spec = deep_clone_command(text, home, cfg.clone_port, cfg.reflect_ctx)
+    except Refused as exc:
+        return None, str(exc)
+    for what, path in (("binary", spec["binary"]), ("model file", spec["model_path"])):
+        if not host.exists(path):
+            return None, f"the 12B {what} {path} does not exist"
+    return spec, ""
+
+
+def deep_preflight(ctx: Ctx, spec: dict) -> "tuple[bool, str]":
+    """BEFORE the 12B starts: stop the 4B clone (this window's own), stop the owner's listed units, measure MemAvailable and compare with the arithmetic
+    ``need = model file MB + KV estimate + 600 + floor``. ``(False, arithmetic)`` skips the pair (the caller restarts the 4B at the live context)."""
+    win, cfg, host = ctx.win, ctx.cfg, ctx.host
+    host.run(["systemctl", "--user", "stop", UNITS_CLONE], timeout=90)
+    host.run(["systemctl", "--user", "reset-failed", UNITS_CLONE])
+    if cfg.reflect_stop_units:
+        win.stop_extra_units(cfg.reflect_stop_units)
+    avail = win.mem()
+    size = host.file_size(spec["model_path"])
+    need = need_mb_12b(size, cfg.reflect_ctx, cfg.min_avail_mb)
+    arith = (f"need {need:.0f} MB = model {(size or REFLECT_12B_MODEL_BYTES) / 1e6:.0f} + KV {kv_est_mb(cfg.reflect_ctx):.0f} + compute {REFLECT_COMPUTE_MB:.0f} + floor {cfg.min_avail_mb:.0f}; "
+             f"MemAvailable with the 4B stopped" + (f" and {', '.join(cfg.reflect_stop_units)} stopped" if cfg.reflect_stop_units else "") + f" = {avail:.0f} MB (margin {avail - need:+.0f} MB)")
+    return avail >= need, arith
+
+
+def _k1_veto(cells: "list[dict]") -> bool:
+    """The observation veto for a variant: any K1 cell red, or an evidence precision below the rule's."""
+    for c in cells:
+        if str(c.get("id", "")).startswith(("K1", "MPA-K1")):
+            prec = (c.get("evidence") or {}).get("precision")
+            if c.get("verdict") in ("FAIL", "ERROR") or (prec is not None and float(prec) < gates.RULE["observation_precision_min"]):
+                return True
+    return False
+
+
+def reflect_variant_h2(ctx: Ctx, seed: str, store: list, by_id: dict, instrument_of: "Callable[[str], dict]") -> dict:
+    """H2 restricted to the reflection cells (K1-K5) on the restarted clone: the observation layer, consolidation and the mental-model refresh run against it."""
+    from . import artifact, cells as cellmod, runner
+    from .world import make_world
+    world, arm, rows, t0 = make_world(seed), ctx.new_arm("H2"), [], ctx.host.mono()
+    try:
+        for cell in (c for c in store if c.axis == "reflection"):
+            ctx.win.guard()
+            rows.append(runner._row(cell, cellmod.run_cell(cell.rendered(world), world, arm)))
+    finally:
+        arm.close()
+    st = artifact.axis_stats(rows, by_id, instrument_of(seed)["ok"]).get("reflection") or {}
+    return {"k_cells": [{"id": r["id"], "verdict": r["verdict"]} for r in rows], "items": st.get("items") or {"pass": 0, "n": 0},
+            "cells": {"pass": st.get("pass", 0), "n": st.get("n", 0)}, "wall_s": round(ctx.host.mono() - t0, 1), "model_calls": None, "tool_calls": None,
+            "tool_calls_valid": None, "prompt_tokens_max": None, "k1_veto": _k1_veto(rows)}
+
+
+def real_reflect_runner(ctx: Ctx, arm: str, seed: str, box_s: float, pair: str) -> dict:
+    """``mpa_window.py --arm <HMA|ZMA> --reflect-only`` against the restarted clone (same port): re-runs the closet pass (and Hindsight's consolidation for HMA) and scores K."""
+    out = ctx.cfg.bakeoff_dir / f"{arm.lower()}-reflect-{ctx.win.run_id}-{pair.replace('@', '-')}.json"
+    argv = _mpa_argv(ctx, arm, out, seed, box_s, ("--reflect-only", "--ctx", str(ctx.cfg.reflect_ctx)))
+    return _run_mpa_driver(ctx, arm, out, argv, box_s * 2 + 180.0)
+
+
+def real_hma_reflect_runner(ctx: Ctx, seed: str, box_s: float, pair: str) -> dict:
+    return real_reflect_runner(ctx, "HMA", seed, box_s, pair)
+
+
+def real_zma_reflect_runner(ctx: Ctx, seed: str, box_s: float, pair: str) -> dict:
+    return real_reflect_runner(ctx, "ZMA", seed, box_s, pair)
+
+
+def reflect_variant_hma(ctx: Ctx, name: str, pair: str, seed: str, box_s: float) -> dict:
+    """The reflection variant of an MPA-driver arm (HMA or ZMA: the arm is the name's prefix) through its driver."""
+    arm = name.split("@")[0]
+    res = (getattr(ctx.win, f"{arm.lower()}_reflect_runner", None) or {"HMA": real_hma_reflect_runner, "ZMA": real_zma_reflect_runner}[arm])(ctx, seed, box_s, pair)
+    ctx.win.guard()
+    why = res.get("aborted") or res.get("skipped") or res.get("error")
+    r = res.get("reflect") or {}
+    if why and not r:
+        if res.get("aborted"):
+            raise Aborted(str(res["aborted"]))
+        return {"error": str(why)}
+    cells = [{"id": c.get("id"), "verdict": c.get("verdict"), "evidence": c.get("evidence") or {}} for c in r.get("k_cells") or []]
+    ip = sum(int((c["evidence"].get("items") or [0, 0])[0]) if isinstance(c["evidence"].get("items"), (list, tuple)) else 0 for c in cells)
+    iN = sum(int(c["evidence"]["items"][1]) if isinstance(c["evidence"].get("items"), (list, tuple)) else 0 for c in cells)
+    graded = [c for c in cells if c["verdict"] in ("PASS", "FAIL", "ERROR")]
+    out = {"k_cells": [{"id": c["id"], "verdict": c["verdict"]} for c in cells], "items": {"pass": ip, "n": iN},
+           "cells": {"pass": sum(1 for c in graded if c["verdict"] == "PASS"), "n": len(graded)}, "wall_s": r.get("wall_s"), "model_calls": r.get("model_calls"),
+           "tool_calls": r.get("tool_calls"), "tool_calls_valid": r.get("tool_calls_valid"), "prompt_tokens_max": r.get("prompt_tokens_max"),
+           "model": r.get("model"), "closet": r.get("closet"), "k1_veto": _k1_veto(cells)}
+    if why:
+        out["stopped_early"] = str(why)
+    return out
+
+
+def phase_reflect(ctx: Ctx, seed: str, store: list, by_id: dict, instrument_of: "Callable[[str], dict]") -> None:
+    """The optional reflection phase. Runs only when the clone is a clone (not under BAKEOFF_SKIP_BRAIN_STOP), ``cfg.reflect_ctx`` > 0, and at least a pair's minutes remain
+    behind the tail. For each pair (the 4B at ``reflect_ctx``, then the parked 12B): the clone is regenerated and restarted, its health polled, MemAvailable required >= the
+    floor AFTER its model is up (else the pair is stopped and the clone goes back), then H2 restricted to K and HMA ``--reflect-only`` run against it. At the end the clone is
+    restarted at the LIVE context. A guard that aborts (hard cap, a voice turn, a dead server) propagates: the window's restore puts the live unit back."""
+    win, cfg, host = ctx.win, ctx.cfg, ctx.host
+    if cfg.reflect_ctx <= 0:
+        return
+    if cfg.skip_brain_stop:
+        ctx.reflect = {"ctx": cfg.reflect_ctx, "pairs": {}, "variants": {}, "why": "BAKEOFF_SKIP_BRAIN_STOP: there is no clone to restart (the live brain is shared)"}
+        return
+    pairs = [pr for pr in REFLECT_PAIRS if reflect_pair_min(pr, cfg.arms)]
+    if not pairs:
+        ctx.reflect = {"ctx": cfg.reflect_ctx, "pairs": {}, "variants": {}, "why": "neither H2 nor HMA is in this window"}
+        return
+    rec = ctx.reflect = {"ctx": cfg.reflect_ctx, "pairs": {}, "variants": {}, "clone_pss_8k_mb": unit_pss_mb(ctx, UNITS_CLONE)}
+    swapped, stopped, at_live = False, False, True            # at_live: the clone runs the 4B at the LIVE context (nothing big is resident)
+    for pair in pairs:
+        need_s = reflect_pair_min(pair, cfg.arms) * 60.0
+        left = win.time_left_s() - TAIL_MIN * 60.0
+        info = rec["pairs"][pair] = {"status": "not run"}
+        if stopped:
+            info["status"] = "skipped: an earlier pair stopped on MemAvailable"
+        elif left < need_s:
+            info["status"] = f"skipped: {left / 60.0:.1f} min left behind the tail, the pair needs {need_s / 60.0:g}"
+        else:
+            spec, why = reflect_spec(ctx, pair)
+            if spec is None:
+                info["status"] = f"skipped: {why}"
+            else:
+                label = f"reflect:{pair}"
+                ctx.label(label)
+                swapped = True
+                try:
+                    if pair == "12B@32k":
+                        fits, arith = deep_preflight(ctx, spec)
+                        info["preflight"] = arith
+                        if not fits:
+                            raise _PairStop("the floor would be breached: " + arith)
+                    t_load = host.mono()
+                    at_live = False                                  # from here the big model may be resident, even if the swap itself raises half way
+                    win.swap_clone(spec, pair, max(cfg.health_wait_s * (2.0 if pair == "12B@32k" else 1.0), 240.0))
+                    info["health_s"] = round(host.mono() - t_load, 1)
+                    info["model"] = spec["model"]
+                    if win.mem() < cfg.min_avail_mb:
+                        raise _PairStop(f"MemAvailable {win.mem():.0f} MB < {cfg.min_avail_mb:.0f} MB floor once the model was up")
+                    info["clone_pss_mb"] = unit_pss_mb(ctx, UNITS_CLONE)
+                    for name in REFLECT_VARIANTS[pair]:
+                        arm = name.split("@")[0]
+                        if arm not in cfg.arms:
+                            continue
+                        ctx.label(f"{label}:{arm}")
+                        box = REFLECT_CALLS[name] * REFLECT_S_PER_CALL[pair] * 2.0
+                        v = (reflect_variant_h2(ctx, seed, store, by_id, instrument_of) if arm == "H2" else reflect_variant_hma(ctx, name, pair, seed, box))
+                        v.update({"pair": pair, "clone_pss_mb": info.get("clone_pss_mb"), "health_s": info.get("health_s")})
+                        rec["variants"][name] = v
+                        ctx.log(f"reflection {name}: K {v.get('cells') or v.get('error')}, items {v.get('items')}, {v.get('wall_s')}s, veto {v.get('k1_veto')}")
+                    info["status"] = "ran"
+                except (_PairStop, Aborted) as exc:
+                    if isinstance(exc, Aborted) and not str(exc).startswith("MemAvailable"):
+                        raise                                    # the cap, a voice turn, a dead server: the window aborts and its restore puts the live unit back
+                    win.abort_flag = None                         # a memory stop on the big model: skip the pair, not the window; the clone goes back below
+                    info["status"] = f"stopped: {exc}"
+                    stopped = True
+                    ctx.notes.append(f"reflection {pair} stopped: {exc}")
+                finally:
+                    if pair == "12B@32k":
+                        # The listed units come back on EVERY exit path (pass, skip, abort) - but only AFTER the 12B is unloaded: Kokoro was stopped because the 12B pair does not
+                        # fit beside it (docs/knowledge/zoe-memory-bench.md), so starting it while the 12B holds ~7.5 GB can fail or OOM. If the unload fails, the unit stays in
+                        # ``stopped_extra`` and the window's restore (which stops the clone first) starts it.
+                        if not at_live:
+                            try:
+                                win.restart_clone(None)
+                                at_live = True
+                            except Exception as exc:             # noqa: BLE001 - a finally must not mask the pair's own outcome; restore() retries the unload and the start
+                                ctx.notes.append(f"reflection {pair}: the 12B was not unloaded ({exc}); the listed units stay stopped until the window's restore")
+                        if at_live:
+                            win.start_extra_units()
+                    floors = [x["mem_available_mb"] for x in (ctx.sampler.samples if ctx.sampler else []) if x["label"].startswith(label)]
+                    info["mem_available_floor_mb"] = round(min(floors), 0) if floors else None
+        if info["status"].startswith("skipped"):
+            ctx.notes.append(f"reflection {pair}: {info['status']}")
+    if swapped and not at_live:
+        win.restart_clone(None)                                    # back to the live context: the forgetting probes' t+6 replay and the report still use the clone
+    ctx.log("reflection phase: " + "; ".join(f"{k} {v['status']}" for k, v in rec["pairs"].items()))
+
+
 def phase_latency(ctx: Ctx, variant: str) -> None:
     from .arms.base import Turn
     ctx.label(f"{variant}:latency")
@@ -642,6 +1065,8 @@ def cap_extra_min(arm: str) -> float:
     """Minutes the capability cells add to ``arm``'s FIRST seed box (0 for an arm that does not run them)."""
     if arm == "HM":
         return HM_CAP_MIN
+    if arm in ("MPA", "HMA", "ZMA"):
+        return 0.0                                  # their capability work (J, K, L, M) is INSIDE ``mpa_cells`` / ``hma_cells`` (computed from model calls), not an extra on the seed box
     if arm not in S_PER_RETAIN:
         return 0.0
     sec = sum(CAP_RETAINS[ax] * S_PER_RETAIN[arm] for ax in CAP_PLANNED.get(arm, ()))
@@ -662,10 +1087,20 @@ class Budget:
     runnable_h0: int = -1                            # the same for H0, which has no Zoe layer (no conflict_pass / edges); -1 = not computed
     runnable_hm: int = -1                            # the same for HM: clock / identities / idle_pass / verbatim / reader only
     extra_min: dict = dataclasses.field(default_factory=dict)   # arm -> minutes the capability cells add to its FIRST seed box (seeds 2 and 3 do not run them)
+    runnable_mpa: int = -1                           # the same for MPA / HMA (store cells whose required capabilities the arm declares)
+    runnable_hma: int = -1
+    runnable_zma: int = -1
+    reflect_min: dict = dataclasses.field(default_factory=dict)  # reflection pair ("4B@32k" / "12B@32k") -> minutes; OPTIONAL (runs only if time remains), never in ``total_min``
 
     def runnable_for(self, arm: str) -> int:
         if arm == "HM" and self.runnable_hm >= 0:
             return self.runnable_hm
+        if arm == "MPA" and self.runnable_mpa >= 0:
+            return self.runnable_mpa
+        if arm == "HMA" and self.runnable_hma >= 0:
+            return self.runnable_hma
+        if arm == "ZMA" and self.runnable_zma >= 0:
+            return self.runnable_zma
         return self.runnable_h0 if arm == "H0" and self.runnable_h0 >= 0 else self.runnable
 
     def fixed_min(self, arm: str) -> float:
@@ -673,11 +1108,24 @@ class Budget:
         HM has neither phase (its latency is measured inside its cells, on the real tiers): its fixed time is the HM cells."""
         if arm == "HM":
             return PHASE_MIN["hm_cells"]
+        if arm == "MPA":
+            return mpa_cells_min()                  # computed from MPA_CALLS x MPA_S_PER_CALL (PHASE_MIN["mpa_cells"] holds the same number at import)
+        if arm == "HMA":
+            return hma_cells_min()
+        if arm == "ZMA":
+            return zma_cells_min()
         return 0.0 if arm in OPTIONAL_PHASES else PHASE_MIN["latency"][arm] + PHASE_MIN["slot"][arm]
 
     def validity_min(self) -> float:
         return ((PHASE_MIN["validity"]["verbatim"] if "H1" in self.arms and "verbatim" not in OPTIONAL_VALIDITY else 0.0)
                 + (PHASE_MIN["validity"]["concise"] if any(a != "H1" for a in self.arms) and "concise" not in OPTIONAL_VALIDITY else 0.0))
+
+    def slack_min(self) -> float:
+        return self.avail_min - self.total_min()
+
+    def reflect_reserve_s(self) -> float:
+        """Seconds the optional reflection phase would like to keep for itself at the end: taken from H0's box first, then HM's (never from H1, H2, MPA or HMA)."""
+        return sum(self.reflect_min.values()) * 60.0
 
     def cells_in_box(self, arm: str) -> int:
         return int(self.box_min[arm] * 60.0 / S_PER_CELL[arm])
@@ -698,12 +1146,54 @@ class Budget:
         queued = (self.fixed_min(arm) + (PHASE_MIN["validity"]["concise"] if concise_here else 0.0)
                   + sum(self.fixed_min(a) + 2.0 for a in later)) * 60.0
         left = max(0.0, time_left_s - queued)
-        return min(2.0 * planned, left * (2.0 / 3.0 if later else 1.0))
+        frac = 2.0 / 3.0 if later else 1.0
+        box = min(2.0 * planned, left * frac)
+        reserve = self.reflect_reserve_s()
+        if reserve and arm == "H0":                                  # the optional reflection phase's minutes come out of H0's box first (it may go to nothing) ...
+            box = min(2.0 * planned, max(0.0, left - reserve) * frac)
+        elif reserve and arm == "HM" and "H0" in self.arms:          # ... then out of HM's, for what H0's whole box cannot cover, but never below the 1 min floor that keeps HM running
+            cut = max(0.0, reserve - (self.box_min.get("H0", 0.0) + self.extra_min.get("H0", 0.0)) * 60.0)
+            box = max(min(2.0 * planned, max(0.0, left - cut) * frac), min(box, BOX_FLOOR_MIN * 60.0))
+        return box
+
+
+#: the share of the spare minutes each lower arm's seed box gets when MPA / HMA are in the window. Said plainly: H2 the biggest (its cells are the observation layer's), HM next (a
+#: candidate with no model call on its write), MPA and HMA a modest box each (their generic store cells mostly need the brain on every turn, and their own cells phase is fixed
+#: apart), H0 the least (the native baseline cannot win). When the plan does not fit, the boxes sit on their floor and the SHEDDING ORDER is H0's, then HM's, then H2's: never H1's
+#: three seeds. Without MPA / HMA the older (2.0, 1.0) / (2.0, 1.5, 0.5) weights stand.
+LOWER_WEIGHTS = {"H2": 2.0, "HM": 1.5, "MPA": 0.75, "HMA": 0.75, "ZMA": 1.0, "H0": 0.5}      # ZMA: a normal box like HM's (no model call on its write path), a little under
+BOX_FLOOR_MIN = 1.0
+
+
+def _driver_capabilities(arm: str) -> "Optional[set]":
+    """The capabilities MPA / HMA declare (None when the arm module cannot be imported here: the planner then counts every ordinary cell as runnable)."""
+    try:
+        if arm == "MPA":
+            from .arms.mempalace_agent import MemPalaceAgentArm
+            return set(MemPalaceAgentArm.capabilities)
+        if arm == "ZMA":
+            try:
+                from .arms.zma import ZMAArm
+                return set(ZMAArm.capabilities)
+            except ImportError:                                   # ZMA = Z0's capabilities + MPA's, until its own module lands
+                from .arms.mempalace_agent import MemPalaceAgentArm
+                from .arms.z0 import Z0Arm
+                return set(Z0Arm.capabilities) | set(MemPalaceAgentArm.capabilities)
+        try:
+            from .arms.hma import HMAArm
+            return set(HMAArm.capabilities)
+        except ImportError:                                   # HMA = MPA's tier + Hindsight H2-style: the union until its own module lands
+            from .arms.hindsight import HindsightArm
+            from .arms.mempalace_agent import MemPalaceAgentArm
+            return set(MemPalaceAgentArm.capabilities) | set(HindsightArm.capabilities)
+    except Exception:  # noqa: BLE001 - a planner must not die on an arm module that fails to import
+        return None
 
 
 def plan_budget(cfg: Any, store: "Optional[list]" = None, runnable: "Optional[int]" = None) -> Budget:
-    """Three seeds of H1 inside the cap, one seed each for H2 and H0, the hard cap kept. ``store`` = the store-tier cells; the cells an H arm
-    can run are those whose required capabilities it declares (the rest SKIP with the reason and cost nothing)."""
+    """Three seeds of H1 inside the cap, one seed each for the other arms, the hard cap kept. ``store`` = the store-tier cells; the cells an H arm
+    can run are those whose required capabilities it declares (the rest SKIP with the reason and cost nothing). When the arms ask for more than the cap holds
+    (``Budget.slack_min() < 0``) the lower arms' boxes sit on ``BOX_FLOOR_MIN`` and the dry run says so: the plan never hides a deficit."""
     arms = tuple(a for a in ARM_ORDER if a in cfg.arms)
     if store is None:
         from . import spec
@@ -717,19 +1207,28 @@ def plan_budget(cfg: Any, store: "Optional[list]" = None, runnable: "Optional[in
     runnable_h0 = sum(1 for c in ordinary if cellmod.required_capabilities(c) <= layered - {"conflict_pass", "edges"})
     from .arms.hm import HMArm
     runnable_hm = sum(1 for c in ordinary if cellmod.required_capabilities(c) <= set(HMArm.capabilities))
+    caps = {a: _driver_capabilities(a) for a in ("MPA", "HMA", "ZMA") if a in arms}
+    # ZMA's seed box holds ALL store cells (axes A-M: its write path has no model call), the others the ordinary ones (their capability cells run inside their own cells phase)
+    runnable_d = {a: (-1 if c is None else sum(1 for x in (store if a == "ZMA" else ordinary) if cellmod.required_capabilities(x) <= c)) for a, c in caps.items()}
     avail = cfg.cap_min - cfg.reserve_min - TAIL_MIN - OPEN_MIN
     seeds = {a: SEEDS_PER_ARM[a] for a in arms}
     h1 = round(max(5.0, runnable * S_PER_CELL["H1"] * H1_BOX_MARGIN / 60.0) * 2) / 2.0          # to the half minute
     box = {"H1": h1} if "H1" in arms else {}
     extra = {a: cap_extra_min(a) for a in arms}
-    draft = Budget(avail, len(ordinary), runnable, arms, seeds, {a: 0.0 for a in arms}, runnable_h0, runnable_hm, extra)
+    reflect = ({pr: reflect_pair_min(pr, arms) for pr in REFLECT_PAIRS if reflect_pair_min(pr, arms)}
+               if getattr(cfg, "reflect_ctx", 0) > 0 and not cfg.skip_brain_stop else {})
+    kw = dict(runnable_mpa=runnable_d.get("MPA", -1), runnable_hma=runnable_d.get("HMA", -1), runnable_zma=runnable_d.get("ZMA", -1), reflect_min=reflect)
+    draft = Budget(avail, len(ordinary), runnable, arms, seeds, {a: 0.0 for a in arms}, runnable_h0, runnable_hm, extra, **kw)
     spare = (avail - PHASE_MIN["lab"] - PHASE_MIN["z0e"] - draft.validity_min() - sum(draft.fixed_min(a) for a in arms) - seeds.get("H1", 0) * box.get("H1", 0.0)
              - sum(extra.values()))
     lower = [a for a in arms if a != "H1"]
-    weights = {2: (2.0, 1.0), 3: (2.0, 1.5, 0.5)}.get(len(lower), (1.0,) * len(lower))      # H2 the biggest share, then HM (a candidate), H0 (the native baseline) the least
+    if "MPA" in arms or "HMA" in arms or "ZMA" in arms:
+        weights = tuple(LOWER_WEIGHTS[a] for a in lower)
+    else:
+        weights = {2: (2.0, 1.0), 3: (2.0, 1.5, 0.5)}.get(len(lower), (1.0,) * len(lower))      # H2 the biggest share, then HM (a candidate), H0 (the native baseline) the least
     for a, w in zip(lower, weights):
-        box[a] = math.floor(max(1.0, spare * w / sum(weights)) * 2) / 2.0               # rounded DOWN: the plan must fit the cap, not just touch it
-    return Budget(avail, len(ordinary), runnable, arms, seeds, {a: box.get(a, 0.0) for a in arms}, runnable_h0, runnable_hm, extra)
+        box[a] = math.floor(max(BOX_FLOOR_MIN, spare * w / sum(weights)) * 2) / 2.0               # rounded DOWN: the plan must fit the cap, not just touch it
+    return Budget(avail, len(ordinary), runnable, arms, seeds, {a: box.get(a, 0.0) for a in arms}, runnable_h0, runnable_hm, extra, **kw)
 
 
 def plan_table(cfg: Any, seeds: tuple, budget: "Optional[Budget]" = None) -> "list[tuple[str, float, str]]":
@@ -743,8 +1242,15 @@ def plan_table(cfg: Any, seeds: tuple, budget: "Optional[Budget]" = None) -> "li
         if a == "HM":
             rows.append(("HM cells on the REAL tiers (MemPalace 3.10.0 library + Hindsight): controls on the real-tier protections, wall-clock latencies",
                          PHASE_MIN["hm_cells"], "run in the bake-off venv by hm_window.py; HM-F8 scans Hindsight's Postgres"))
-        rows.append((f"{a} seed 1 ({seeds[0]}): store-tier cells", b.box_min[a],
-                     f"ceiling; ~{b.cells_in_box(a)} of {b.runnable_for(a)} runnable cells at {S_PER_CELL[a]:g} s/cell (run 1)"))
+        if a in ("MPA", "HMA", "ZMA"):
+            calls = driver_calls(a)
+            rows.append((f"{a} cells on the clone brain: " + ", ".join(f"{k} {v}" for k, v in calls.items()) + f" = {sum(calls.values())} model calls x {MPA_S_PER_CALL:g} s"
+                         + (f" + {CONSOLIDATE_S:g} s Hindsight consolidation" if a == "HMA" else ""), b.fixed_min(a),
+                         ("run with the window's own interpreter (--arm ZMA: Z0 needs zoe-data's modules; MemPalace is a subprocess) by mpa_window.py" if a == "ZMA" else "run in the bake-off venv by mpa_window.py" + (" --arm HMA" if a == "HMA" else ""))
+                         + ": J / K / L / M and the arm's own floors INSIDE these minutes (no separate capability row); "
+                         f"{a} runs L0 only (no 100/300 filler: each filler turn is a brain call)"))
+        rows.append((f"{a} seed 1 ({seeds[0]}): " + ("ALL store-tier cells (axes A-M: its write path has no model call)" if a == "ZMA" else "store-tier cells"), b.box_min[a],
+                     f"ceiling; ~{b.cells_in_box(a)} of {b.runnable_for(a)} runnable cells at {S_PER_CELL[a]:g} s/cell " + ("(estimate: the brain is called per turn)" if a in ("MPA", "HMA") else "(Z0e's rate)" if a == "ZMA" else "(run 1)")))
         if b.extra_min.get(a):
             rows.append((f"{a} seed 1: capability cells ({', '.join(CAP_PLANNED[a])})", b.extra_min[a],
                          "exact words / reflection / long-range recall / protocol, seed 1 only: " + ("no model call on the verbatim write" if a == "HM"
@@ -752,28 +1258,68 @@ def plan_table(cfg: Any, seeds: tuple, budget: "Optional[Budget]" = None) -> "li
                                                                                                      + (f" + {CONSOLIDATE_S:g} s consolidation" if "reflection" in CAP_PLANNED[a] else ""))))
         opt = a in OPTIONAL_PHASES
         why = f"only if time remains; ~{PHASE_MIN['latency'][a]:g} min at run 1's rate, not budgeted" if opt else "p50/p95 through the shim and Postgres"
-        if a != "HM":           # HM's latency and slot are measured inside its cells (wall clocks on the real tiers): no separate phase
+        if a not in DRIVER_ARMS:           # HM / MPA / HMA: latency and slot are measured inside their own cells (wall clocks on the real tiers): no separate phase
             rows.append((f"{a} recall latency n=50", 0.0 if opt else PHASE_MIN["latency"][a], why))
         mode = "verbatim" if a == "H1" else "concise"
-        if a == "H1" or not concise_done:
+        if (a == "H1" or not concise_done) and a != "MPA":
             opt_v = mode in OPTIONAL_VALIDITY
             rows.append((f"extraction JSON validity, {mode} (>= 100 retain calls)", 0.0 if opt_v else PHASE_MIN["validity"][mode],
                          (f"only if time remains; ~{PHASE_MIN['validity'][mode]:g} min, not budgeted (CUT for the capability cells; H2 / H0 are INCOMPLETE by design)" if opt_v
                           else "shared by H0 and H2" if mode == "concise" else "")))
             concise_done = concise_done or mode == "concise"
-        if a != "HM":
+        if a not in DRIVER_ARMS:
             rows.append((f"{a} brain-slot seconds per retained turn", 0.0 if opt else PHASE_MIN["slot"][a],
                          f"only if time remains; ~{PHASE_MIN['slot'][a]:g} min at run 1's rate, not budgeted" if opt else "idle retain of 10-turn chunks"))
         for k in range(2, b.seeds[a] + 1):
             rows.append((f"{a} seed {k} ({seeds[k - 1]}): store-tier cells", b.box_min[a], "ceiling, same box as seed 1 (the capability cells ran on seed 1)"))
+    for pr, mins in b.reflect_min.items():
+        names = [v for v in REFLECT_VARIANTS[pr] if v.split("@")[0] in b.arms]
+        rows.append((f"reflection phase, {pr}: restart the clone with the K work only ({', '.join(names)})", 0.0,
+                     f"OPTIONAL, only if >= {mins:g} min remain behind the tail (not budgeted); H0's box is cut first, then HM's, to leave it room"))
     rows.append(("t+6 min forgetting verdicts, report", 0.0, f"inside the {TAIL_MIN:g} min tail, not counted"))
     return rows
+
+
+def driver_call_headroom(b: Budget) -> "Optional[int]":
+    """How many MPA + HMA brain calls the cap would hold at ``MPA_S_PER_CALL`` with every OTHER planned minute as it is (None when neither arm is in the plan)."""
+    names = [a for a in ("MPA", "HMA", "ZMA") if a in b.arms]
+    if not names:
+        return None
+    room_min = b.avail_min - (b.total_min() - sum(b.fixed_min(a) for a in names))
+    return max(0, int((room_min * 60.0 - (CONSOLIDATE_S if "HMA" in names else 0.0)) / MPA_S_PER_CALL))
+
+
+def cost_sentence(cfg: Any, arm: str, store: list, with_b: Budget) -> str:
+    """``WHAT <arm> COSTS AND WHAT WAS CUT``: plan_budget called with and without ``arm``; the minutes it adds and exactly which other boxes shrank."""
+    without_b = plan_budget(dataclasses.replace(cfg, arms=tuple(a for a in cfg.arms if a != arm)), store)
+    added = with_b.fixed_min(arm) + with_b.seeds[arm] * with_b.box_min[arm] + with_b.extra_min.get(arm, 0.0)
+    calls = driver_calls(arm)
+    shrunk = [f"{a} box {without_b.box_min[a]:g} -> {with_b.box_min[a]:g} min ({with_b.box_min[a] - without_b.box_min[a]:+g})" for a in without_b.arms
+              if a != "H1" and with_b.box_min.get(a) != without_b.box_min[a]]
+    return (f"WHAT {arm} COSTS AND WHAT WAS CUT: {arm} adds {added:.1f} min ({with_b.fixed_min(arm):g} min of cells on the clone brain = {sum(calls.values())} model calls x "
+            f"{MPA_S_PER_CALL:g} s" + (f" + {CONSOLIDATE_S:g} s consolidation" if arm == "HMA" else "") + f", plus a {with_b.box_min[arm]:g} min store-cell box); against the plan without {arm}: "
+            + ("; ".join(shrunk) if shrunk else ("no other box shrank" + (" (the plan is over the cap either way: the lower boxes were already on their floor without it, see DOES NOT FIT)" if without_b.slack_min() < 0 else "")))
+            + f"; H1 keeps {with_b.seeds.get('H1', 0)} seeds x {with_b.box_min.get('H1', 0):g} min "
+            f"(H1's box {'unchanged' if with_b.box_min.get('H1') == without_b.box_min.get('H1') else 'CHANGED'}); the cut order when the plan is over is H0's box, then HM's, then H2's, never H1's seeds")
+
+
+def together_sentence(cfg: Any, names: "list[str]", store: list, with_b: Budget) -> str:
+    """``WHAT MPA + HMA + ZMA COST TOGETHER``: plan_budget with and without every new arm at once; the minutes they add and which other boxes shrank."""
+    without_b = plan_budget(dataclasses.replace(cfg, arms=tuple(a for a in cfg.arms if a not in names)), store)
+    added = sum(with_b.fixed_min(a) + with_b.seeds[a] * with_b.box_min[a] + with_b.extra_min.get(a, 0.0) for a in names)
+    shrunk = [f"{a} box {without_b.box_min[a]:g} -> {with_b.box_min[a]:g} min ({with_b.box_min[a] - without_b.box_min[a]:+g})" for a in without_b.arms
+              if a != "H1" and with_b.box_min.get(a) != without_b.box_min[a]]
+    return (f"WHAT {' + '.join(names)} COST TOGETHER AND WHAT WAS CUT: together they add {added:.1f} min ({', '.join(f'{a} {with_b.fixed_min(a):g} cells + {with_b.box_min[a]:g} box' for a in names)}); "
+            f"against the plan without them: " + ("; ".join(shrunk) if shrunk else "no other box shrank") + f"; H1 keeps {with_b.seeds.get('H1', 0)} seeds x {with_b.box_min.get('H1', 0):g} min "
+            f"(H1's box {'unchanged' if with_b.box_min.get('H1') == without_b.box_min.get('H1') else 'CHANGED'}); slack {with_b.slack_min():+.1f} min")
 
 
 def dry_plan(win: Any) -> dict:
     cfg = win.cfg
     seeds = seeds_for(win.run_id)
-    b = plan_budget(cfg)
+    from . import spec as specmod
+    store = [c for c in specmod.load_cells() if c.tier == "store"]
+    b = plan_budget(cfg, store)
     win.log("PLAN (the measurement phases, in execution order; est. minutes from run 1's measured rates; H1 first and complete):")
     total = 0.0
     for name, mins, note in plan_table(cfg, seeds, b):
@@ -791,6 +1337,50 @@ def dry_plan(win: Any) -> dict:
         f"{a}: {', '.join(CAP_CUT[a]) or 'nothing'} cut" for a in b.arms if a in CAP_CUT)
         + f"; H2 / H0 latency + slot phases and the concise validity phase only if time remains (-{PHASE_MIN['latency']['H2'] + PHASE_MIN['slot']['H2'] + PHASE_MIN['validity']['concise']:g} min);"
         " the capability cells run on seed 1 only")
+    new_arms = [a for a in ("MPA", "HMA", "ZMA") if a in b.arms]
+    if new_arms:
+        win.log(f"MPA / HMA / ZMA brain-call constants (bakeoff_measure.py: the only place they live): MPA_CALLS = {MPA_CALLS} ({sum(MPA_CALLS.values())} calls); HMA_CALLS = {HMA_CALLS} "
+                f"({sum(HMA_CALLS.values())} calls); ZMA_CALLS = {ZMA_CALLS} ({sum(ZMA_CALLS.values())} calls); MPA_S_PER_CALL = {MPA_S_PER_CALL:g} s -> mpa_cells {mpa_cells_min():g} min, "
+                f"hma_cells {hma_cells_min():g} min, zma_cells {zma_cells_min():g} min")
+        for a in new_arms:
+            win.log(cost_sentence(cfg, a, store, b))
+        if len(new_arms) > 1:
+            win.log(together_sentence(cfg, new_arms, store, b))
+        win.log("RUN-2 ARM LIST: " + ", ".join(f"{a} ({b.seeds[a]} seed{'s' if b.seeds[a] > 1 else ''}, box {b.box_min[a]:g} min" + (f" + {b.fixed_min(a):g} min cells" if b.fixed_min(a) else "") + ")"
+                                                 for a in b.arms) + " (Z0, Z0-off and Z0e always run in the lab)")
+        head = driver_call_headroom(b)
+        if b.slack_min() < 0:
+            need = b.total_min() + cfg.reserve_min + TAIL_MIN + OPEN_MIN
+            win.log(f"DOES NOT FIT: the planned work is {b.total_min():.1f} min and the cap leaves {b.avail_min:.1f} (over by {-b.slack_min():.1f}) with every lower arm's box already on its "
+                    f"{BOX_FLOOR_MIN:g} min floor. To hold this plan as written the cap would be about {need:.0f} min (BAKEOFF_CAP_MIN / --cap-min); inside {cfg.cap_min:.0f} min the cap holds at most "
+                    f"~{head} MPA + HMA + ZMA brain calls at {MPA_S_PER_CALL:g} s (the plan asks for {sum(sum(driver_calls(a).values()) for a in new_arms)}): "
+                    "cut MPA_CALLS / HMA_CALLS / ZMA_CALLS or an arm, or raise the cap; at run time an arm that gets less than a minute of box is skipped, H0 first")
+        else:
+            win.log(f"FITS: slack {b.slack_min():+.1f} min with MPA / HMA in the plan (the cap would hold ~{head} MPA + HMA brain calls at {MPA_S_PER_CALL:g} s)")
+    if b.reflect_min:
+        size = None
+        try:
+            from .bakeoff import deep_clone_command
+            size = win.host.file_size(deep_clone_command(win.host.read(cfg.deep_unit), os.environ.get("HOME", "/home/zoe"), cfg.clone_port, cfg.reflect_ctx)["model_path"])
+        except Exception:  # noqa: BLE001 - the dry plan falls back to the header-measured constant
+            size = None
+        need = need_mb_12b(size, cfg.reflect_ctx, cfg.min_avail_mb)
+        listed = sum(REFLECT_STOP_UNIT_MB.get(u, 0.0) for u in cfg.reflect_stop_units)
+        win.log(f"12B PREFLIGHT (before anything is stopped for it): need {need:.0f} MB = model {(size or REFLECT_12B_MODEL_BYTES) / 1e6:.0f} + KV {kv_est_mb(cfg.reflect_ctx):.0f} + compute "
+                f"{REFLECT_COMPUTE_MB:.0f} + floor {cfg.min_avail_mb:.0f}; MemAvailable with the 4B stopped is about {REFLECT_AFTER_STOP_MB:.0f} MB, so the margin is "
+                f"{REFLECT_AFTER_STOP_MB + listed - need:+.0f} MB: " + ("expected to fit" if REFLECT_AFTER_STOP_MB + listed - need >= 0 else "expected: skip unless extra headroom")
+                + f"; with kokoro-tts.service stopped for the 12B pair (BAKEOFF_REFLECT_STOP_UNITS=kokoro-tts.service, default none) the margin = "
+                f"{REFLECT_AFTER_STOP_MB + REFLECT_STOP_UNIT_MB['kokoro-tts.service'] - need:+.0f} MB; units stopped for the pair: "
+                f"{', '.join(cfg.reflect_stop_units) or 'none'} (started again on every exit path; nothing unlisted is ever stopped); the pair is skipped with this arithmetic when the floor would be breached")
+        steps = (f"REFLECTION PHASE (optional: it runs only if >= its minutes remain behind the tail; H0's box is cut first, then HM's, to leave room): after the live-slot phases and "
+                 f"before the t+6 min wait, for each pair ({', '.join(f'{k} {v:g} min' for k, v in b.reflect_min.items())}; total {sum(b.reflect_min.values()):g}) the window "
+                 f"(1) records the clone's PSS at the live context, (2) stops the clone and starts it from the live unit's text with --ctx-size {cfg.reflect_ctx} (the 12B pair: from the PARKED "
+                 f"unit {Path(cfg.deep_unit).name}, read only, its ExecStart verbatim with only --host 127.0.0.1 / --port {cfg.clone_port} / --ctx-size {cfg.reflect_ctx} / --parallel 1 and the "
+                 f"vision flags dropped; skipped with the reason if its binary or model file is missing), (3) polls /health (x2 for the 12B load), (4) requires MemAvailable >= {cfg.min_avail_mb:.0f} MB "
+                 "once the model is up (else the pair is stopped), (5) runs ONLY the K work for H2@, HMA@ and ZMA@ (variants, never contest entrants), (6) at the end restarts the clone at the LIVE "
+                 f"context; on any abort the normal restore stops the clone and starts {cfg.unit} at its own ctx-size, which is never edited")
+        win.log(steps)
+        win.log("reflection constants: REFLECT_CALLS = " + str(REFLECT_CALLS) + "; REFLECT_S_PER_CALL = " + str(REFLECT_S_PER_CALL) + "; REFLECT_LOAD_MIN = " + str(REFLECT_LOAD_MIN))
     win.log("seeds: " + ", ".join(seeds))
     win.log(f"outputs: {cfg.bakeoff_dir}/run-{win.run_id}.log, run-{win.run_id}.json, <docs>/bakeoff-run-{win.run_id}.md")
     win.log("RESTORE (always, on every exit path): stop zoe-bakeoff-hindsight/-gemma/-embed, docker compose down, "
@@ -846,7 +1436,7 @@ def count_violations(path: Path) -> "Optional[int]":
 def phase_arm(label: str) -> str:
     """The arm a phase label belongs to (``H1:zmb-v1`` -> H1); a phase that serves every arm over the shared server is ``shared``."""
     head = label.split(":", 1)[0]
-    return head if head in ("H0", "H1", "H2", "HM") else "shared"
+    return head if head in ("H0", "H1", "H2", "HM", "MPA", "HMA", "ZMA") else "shared"
 
 
 def attribute_egress(parsed: dict, marks: "list[tuple[float, str]]", ref_epoch: float) -> "dict[str, dict]":
@@ -900,6 +1490,26 @@ def hm_glue_lines() -> int:
     return sum(1 for f in ("hm.py", "hm_policy.py") for ln in (d / f).read_text().splitlines() if ln.strip() and not ln.strip().startswith("#"))
 
 
+def _glue_lines(files: "tuple[str, ...]") -> int:
+    d = Path(__file__).resolve().parent / "arms"
+    return sum(1 for f in files if (d / f).exists() for ln in (d / f).read_text().splitlines() if ln.strip() and not ln.strip().startswith("#"))
+
+
+def mpa_glue_lines() -> int:
+    """Non-blank, non-comment lines of MPA's own glue (``arms/mempalace_agent.py`` + ``arms/hm_policy.py``): the ``mpa_G3_glue_lines`` gate item."""
+    return _glue_lines(("mempalace_agent.py", "hm_policy.py"))
+
+
+def hma_glue_lines() -> int:
+    """HMA's glue: MPA's files plus the combination's own (``arms/hma.py`` when it exists)."""
+    return _glue_lines(("mempalace_agent.py", "hm_policy.py", "hma.py"))
+
+
+def zma_glue_lines() -> int:
+    """ZMA's glue: ``arms/zma.py`` (Zoe's own MemoryService is not glue we add) + MPA's files."""
+    return _glue_lines(("zma.py", "mempalace_agent.py", "hm_policy.py"))
+
+
 def git_commit(win: Any) -> str:
     r = win.host.run(["git", "-C", str(Path(__file__).resolve().parents[3]), "rev-parse", "--short", "HEAD"], mutating=False)
     return r.out.strip()[:12] if r.rc == 0 else "unknown"
@@ -925,10 +1535,33 @@ def write_report(ctx: Ctx, win: Any, seeds: tuple, store: list, by_id: dict) -> 
             m["rss"] = {**m["rss"], "steady_mb": round(m["rss"]["steady_mb"] + add, 1), "burst_mb": round(m["rss"]["burst_mb"] + max(add, peak), 1),
                         "note": f"the servers' PSS during the HM phase + the verbatim tier's own growth on a WARM shared embedder (+{add:g} MB steady, +{max(add, peak):g} MB burst; "
                                     f"gross incl. a cold embedder load zoe-data already pays: +{m['hm_driver'].get('gross_added_mb', '?')} MB)"}
+        if v == "ZMA" and m.get("mpa_driver"):
+            # Z0 runs in-process in the driver and MemPalace is a child process: the servers' RSS + Z0's in-process delta is the whole footprint (the Hindsight stack idles, not counted)
+            d = m["mpa_driver"]
+            srv_s, srv_p, add = d.get("server_rss_steady_mb"), d.get("server_rss_peak_mb"), d.get("pss_added_mb")
+            if srv_s is not None and srv_p is not None and add is not None:
+                m["rss"] = {**m["rss"], "steady_mb": round(float(srv_s) + float(add), 1), "burst_mb": round(float(srv_p) + float(add), 1),
+                            "note": f"the MemPalace servers' RSS (+{float(srv_s):g} steady / +{float(srv_p):g} peak) + Z0's in-process delta (+{float(add):g} MB); the shared embedder saves "
+                                    f"{d.get('embedder_shared_mb', '?')} MB"}
+        if v in ("MPA", "HMA") and m.get("mpa_driver"):
+            # the MemPalace servers (one per palace) are separate child processes the sampler does not see: the sampler's PSS of the window's servers during the arm's phase
+            # (for HMA that IS the HM-like Hindsight + shim + scratch Postgres stack) + the driver's own server RSS
+            d = m["mpa_driver"]
+            srv_s, srv_p = d.get("server_rss_steady_mb"), d.get("server_rss_peak_mb")
+            if srv_s is not None and srv_p is not None:
+                st0, bu0 = m["rss"].get("steady_mb"), m["rss"].get("burst_mb")
+                m["rss"] = {**m["rss"], "steady_mb": round((st0 or 0.0) + float(srv_s), 1), "burst_mb": round((bu0 or 0.0) + float(srv_p), 1),
+                            "note": f"the servers' PSS during the {v} phase ({'no samples' if st0 is None else str(st0) + ' MB steady'}) + the MemPalace servers' own RSS "
+                                    f"(+{float(srv_s):g} MB steady, +{float(srv_p):g} MB peak over {d.get('servers', '?')} server(s)): conservative, the Hindsight stack idles during MPA"}
+                if v == "HMA":
+                    m["hma_rss_parts"] = {"stack_steady_mb": st0, "stack_burst_mb": bu0, "mempalace_steady_mb": float(srv_s), "mempalace_peak_mb": float(srv_p)}
         m["nonloopback_connects"] = viol
         m["egress"] = {"observed": eg["observed"], "detail": eg["detail"], "by_arm": eg["by_arm"]}
         m["mem_available_floor_mb"] = None if win.mem_floor == float("inf") else round(win.mem_floor, 0)
-        m["layer_lines"] = 0 if v == "H0" else hm_glue_lines() if v == "HM" else zoe_layer_lines()      # HM does not use the H arms' ZoeLayer: its glue is hm.py + hm_policy.py
+        m["layer_lines"] = (0 if v == "H0" else hm_glue_lines() if v == "HM" else mpa_glue_lines() if v == "MPA" else hma_glue_lines() if v == "HMA"
+                            else zma_glue_lines() if v == "ZMA" else zoe_layer_lines())          # HM / MPA / HMA do not use the H arms' ZoeLayer: their glue is their own files
+        if v in ("MPA", "HMA", "ZMA"):
+            m["mpa_glue_lines"] = m["layer_lines"]
         m["deletable_lines"], m["deletable_basis"] = dl, "wc -l of the 10 files in decision record 3.1 + its 2,500-line memory_service estimate"
         m["forgetting"] = {"t0": ctx.forget[v].t0, "t6": ctx.forget[v].t6} if v in ctx.forget else m.get("forgetting", {})
         pin = m.get("prompt_in_tokens_max")
@@ -965,7 +1598,19 @@ def write_report(ctx: Ctx, win: Any, seeds: tuple, store: list, by_id: dict) -> 
         notes.append("HM runs ONE seed by design (H1 keeps three): the rule needs three, so HM is INCOMPLETE, measured for the comparison; its verbatim tier is the REAL MemPalace "
                      f"library ({ctx.measure['HM'].get('hm_library') or 'not run'}) in the bake-off venv and its distilled tier the window's Hindsight; HM-G3a (the verbatim tier replaces zoe-data's own "
                      "palace) is a design review, not a measurement; its t+6 min forgetting check runs on a virtual clock (the ledger is durable, there is no TTL to wait out)")
-    md = gates.render_markdown(meta, arms, decision, z0_axes, z0_off_axes, notes, z0e_axes)
+    if "ZMA" in cfg.arms:
+        notes.append("ZMA = Zoe's live stack (Z0e: MemoryService over Chroma + MiniLM, the authority classes, the forget ledger, the nightly passes) with MemPalace integrated; ONE seed by "
+                     f"design, INCOMPLETE; its write path has no model call so its store cells run all axes A-M on seed 1; it can win only by beating the maintained candidate AND Z0e on at least "
+                     f"two capability axes; shared embedder: {ctx.measure['ZMA'].get('zma_embedder') or 'not run'}")
+    if "MPA" in cfg.arms or "HMA" in cfg.arms:
+        notes.append("MPA / HMA run ONE seed by design (H1 keeps three): INCOMPLETE, measured for the comparison. Their J / K / L / M cells are measured with the CLONE BRAIN operating "
+                     "MemPalace's tools: the brain is the instrument, a different brain would move them; MPA's protocol text costs extra prompt tokens (reported as the max prompt, "
+                     "gate `mpa_G1_prompt_fits`); K (reflection) comes from the closet pass summaries the clone brain makes" + (" and, for HMA, from Hindsight's observations" if "HMA" in cfg.arms else "")
+                     + "; they run L0 only (no 100 / 300 filler: each filler turn is a brain call); the MemPalace servers' RAM is the driver's own measurement")
+    if ctx.reflect is not None:
+        notes.append("the reflection variants (H2@32k, HMA@32k, H2@12B, HMA@12B) are VARIANTS, never contest entrants: they show whether the 8k slot limits K and what a 12B brain does with the same "
+                     "cells; the K1 precision veto applies to them; the 12B model is the parked deep-brain unit's, generated from its text and never enabled")
+    md = gates.render_markdown(meta, arms, decision, z0_axes, z0_off_axes, notes, z0e_axes, reflect=ctx.reflect)
     docs = cfg.docs_dir or (repo / "docs" / "research")
     try:
         docs.mkdir(parents=True, exist_ok=True)
@@ -977,7 +1622,7 @@ def write_report(ctx: Ctx, win: Any, seeds: tuple, store: list, by_id: dict) -> 
     payload = {"run_id": win.run_id, "meta": meta, "decision": {k: v for k, v in decision.items() if k != "compare"}, "compare": decision["compare"],
                "arms": {v: {k: val for k, val in a.items()} for v, a in arms.items()}, "z0": {s: {k: r[k] for k in ("axes", "hard_violations", "instrument")} for s, r in ctx.z0.items()},
                "z0_off": {s: {k: r[k] for k in ("axes", "hard_violations")} for s, r in ctx.z0_off.items()}, "z0e": {s: r["axes"] for s, r in ctx.z0e.items()},
-               "seed_runs": ctx.seed_runs,
+               "seed_runs": ctx.seed_runs, "reflect": ctx.reflect,
                "measure": ctx.measure, "notes": notes, "docs_path": str(md_path)}
     artifact.write_json(cfg.bakeoff_dir / f"run-{win.run_id}.json", payload)
     win.log(f"VERDICT: {decision['verdict']} - {decision['text']}")
@@ -1013,12 +1658,12 @@ def measure(win: Any) -> dict:
     budget = plan_budget(cfg, store)
     log("budget: " + "; ".join(f"{a} {budget.seeds[a]} seed(s) x <= {budget.box_min[a]:g} min (~{budget.cells_in_box(a)}/{budget.runnable_for(a)} cells)"
                                for a in budget.arms) + f"; {budget.avail_min:.1f} min available, planned {budget.total_min():.1f}")
-    concise_arms = tuple(a for a in cfg.arms if a != "H1")
+    concise_arms = tuple(a for a in cfg.arms if a not in ("H1", "MPA", "ZMA"))          # MPA / ZMA have no extraction call: its tool-call validity is its own gate item
     try:
         ctx.label("lab")
         sweep_stale_banks(ctx)
         phase_z0(ctx, seeds, store, by_id)
-        for v in (a for a in cfg.arms if a != "HM"):          # HM's forgetting is its own two cells (F1 / F2) on the real tiers, run in the HM driver
+        for v in (a for a in cfg.arms if a not in DRIVER_ARMS):          # HM's / MPA's / HMA's forgetting is their own cells (F1 / F2), run in their drivers
             ctx.forget[v] = ForgetProbe(ctx, v)
             ctx.label(f"{v}:forget")
             ctx.forget[v].start()
@@ -1029,18 +1674,25 @@ def measure(win: Any) -> dict:
                 box = budget.seed_box_s(v, win.time_left_s() - tail_s, first=(k == 0))
                 if box >= 60.0 and v == "HM":
                     phase_hm(ctx, seeds[k], box, store, by_id, instrument_of)
+                elif box >= 60.0 and v == "MPA":
+                    phase_mpa(ctx, seeds[k], box, store, by_id, instrument_of)
+                elif box >= 60.0 and v == "HMA":
+                    phase_hma(ctx, seeds[k], box, store, by_id, instrument_of)
+                elif box >= 60.0 and v == "ZMA":
+                    phase_zma(ctx, seeds[k], box, store, by_id, instrument_of)
                 elif box >= 60.0:
                     run_arm_seed(ctx, v, seeds[k], box, store, by_id, instrument_of, first=(k == 0))
                 if k == 0:
-                    if win.time_left_s() > tail_s + 90 and v != "HM":
+                    if win.time_left_s() > tail_s + 90 and v not in DRIVER_ARMS:
                         phase_latency(ctx, v)
                     mode_arms = ("H1",) if v == "H1" else (concise_arms if "concise" not in ctx.validity_done else ())
                     if mode_arms and win.time_left_s() > tail_s + 300:
                         mode = "verbatim" if v == "H1" else "concise"
                         phase_validity(ctx, mode, mode_arms, min(600.0, win.time_left_s() - tail_s))
                         ctx.validity_done.add(mode)
-                    if win.time_left_s() > tail_s + 90 and v != "HM":
+                    if win.time_left_s() > tail_s + 90 and v not in DRIVER_ARMS:
                         phase_slot(ctx, v)
+        phase_reflect(ctx, seeds[0], store, by_id, instrument_of)          # optional, K only, against a restarted clone: skips itself when off / no time / a precondition fails
         for p in ctx.forget.values():            # a real t+6 min: wait out whatever is left, never skip it
             while p.t6 is None:
                 win.guard()

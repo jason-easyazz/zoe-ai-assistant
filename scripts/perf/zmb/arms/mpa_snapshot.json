@@ -1,0 +1,371 @@
+{
+ "aaak_spec": "AAAK is a compressed memory dialect that MemPalace uses for efficient storage.\nIt is designed to be readable by both humans and LLMs without decoding.\n\nFORMAT:\n  ENTITIES: 3-letter uppercase codes. ALC=Alice, JOR=Jordan, RIL=Riley, MAX=Max, BEN=Ben.\n  EMOTIONS: *action markers* before/during text. *warm*=joy, *fierce*=determined, *raw*=vulnerable, *bloom*=tenderness.\n  STRUCTURE: Pipe-separated fields. FAM: family | PROJ: projects | ⚠: warnings/reminders.\n  DATES: ISO format (2026-03-31). COUNTS: Nx = N mentions (e.g., 570x).\n  IMPORTANCE: ★ to ★★★★★ (1-5 scale).\n  HALLS: hall_facts, hall_events, hall_discoveries, hall_preferences, hall_advice.\n  WINGS: wing_user, wing_agent, wing_team, wing_code, wing_myproject, wing_hardware, wing_ue5, wing_ai_research.\n  ROOMS: Hyphenated slugs representing named ideas (e.g., chromadb-setup, gpu-pricing).\n\nEXAMPLE:\n  FAM: ALC→♡JOR | 2D(kids): RIL(18,sports) MAX(11,chess+swimming) | BEN(contributor)\n\nRead AAAK naturally — expand codes mentally, treat *markers* as emotional context.\nWhen WRITING AAAK: use entity codes, mark emotions, keep structure tight.",
+ "all_tool_names": [
+  "mempalace_add_drawer",
+  "mempalace_artifact_get",
+  "mempalace_artifact_put",
+  "mempalace_check_duplicate",
+  "mempalace_checkpoint",
+  "mempalace_create_tunnel",
+  "mempalace_delete_by_source",
+  "mempalace_delete_drawer",
+  "mempalace_delete_hallway",
+  "mempalace_delete_tunnel",
+  "mempalace_diary_read",
+  "mempalace_diary_write",
+  "mempalace_event_ack",
+  "mempalace_event_append",
+  "mempalace_event_list",
+  "mempalace_event_wait",
+  "mempalace_find_tunnels",
+  "mempalace_follow_tunnels",
+  "mempalace_get_aaak_spec",
+  "mempalace_get_drawer",
+  "mempalace_get_taxonomy",
+  "mempalace_graph_stats",
+  "mempalace_hook_settings",
+  "mempalace_kg_add",
+  "mempalace_kg_invalidate",
+  "mempalace_kg_query",
+  "mempalace_kg_stats",
+  "mempalace_kg_supersede",
+  "mempalace_kg_timeline",
+  "mempalace_list_drawers",
+  "mempalace_list_hallways",
+  "mempalace_list_rooms",
+  "mempalace_list_tunnels",
+  "mempalace_list_wings",
+  "mempalace_memories_filed_away",
+  "mempalace_mesh_peers",
+  "mempalace_mine",
+  "mempalace_patch_submit",
+  "mempalace_reconnect",
+  "mempalace_search",
+  "mempalace_status",
+  "mempalace_sync",
+  "mempalace_task_create",
+  "mempalace_traverse",
+  "mempalace_update_drawer"
+ ],
+ "memory_rules": "Memory (recall + writing):\n- Before answering about past work, decisions, people, or projects,\n  search the palace (mempalace_search; mempalace_kg_query for\n  relational/temporal facts). Quote results verbatim — never paraphrase\n  stored content. If the palace has nothing, say so; don't guess.\n- File durable outcomes (decisions, conclusions, learned facts) with\n  mempalace_add_drawer. New KG facts: mempalace_kg_add. When a\n  single-valued fact changes: mempalace_kg_supersede. When a fact ended\n  without replacement: mempalace_kg_invalidate. Don't file secrets or\n  tokens.",
+ "mempalace_version": "3.10.0",
+ "palace_protocol": "IMPORTANT — MemPalace Memory Protocol:\n1. ON WAKE-UP: Call mempalace_status to load palace overview + AAAK spec.\n2. BEFORE RESPONDING about any person, project, or past event: call mempalace_kg_query or mempalace_search FIRST. Never guess — verify.\n3. IF UNSURE about a fact (name, gender, age, relationship): say \"let me check\" and query the palace. Wrong is worse than slow.\n4. AFTER EACH SESSION: call mempalace_diary_write to record what happened, what you learned, what matters.\n5. WHEN A SINGLE-VALUED FACT CHANGES (model, employer, address): call mempalace_kg_supersede(subject, predicate, old, new) to replace it atomically at one boundary — do NOT hand-roll invalidate + add, which leaves the old and new values overlapping at the boundary. Use mempalace_kg_invalidate for a fact that simply ended, and mempalace_kg_add to add an independent (possibly concurrent) fact.\n\nThis protocol ensures the AI KNOWS before it speaks. Storage is not memory — but storage + this protocol = memory.",
+ "save_interval": 15,
+ "stop_block_reason": "MemPalace auto-save checkpoint. Use mempalace_diary_write (session summary) and mempalace_add_drawer (quotes, decisions, code) to save session content. Do NOT use native auto-memory files.",
+ "tools": {
+  "mempalace_add_drawer": {
+   "description": "File verbatim content into the palace. Checks for duplicates first.",
+   "input_schema": {
+    "properties": {
+     "added_by": {
+      "description": "Who is filing this (default: mcp)",
+      "type": "string"
+     },
+     "content": {
+      "description": "Verbatim content to store — exact words, never summarized",
+      "type": "string"
+     },
+     "room": {
+      "description": "Room (aspect: backend, decisions, meetings...)",
+      "type": "string"
+     },
+     "source_file": {
+      "description": "Where this came from (optional)",
+      "type": "string"
+     },
+     "wing": {
+      "description": "Wing (project name)",
+      "type": "string"
+     }
+    },
+    "required": [
+     "wing",
+     "room",
+     "content"
+    ],
+    "type": "object"
+   }
+  },
+  "mempalace_diary_write": {
+   "description": "Write to your personal agent diary in AAAK format. Your observations, thoughts, what you worked on, what matters. Each agent has their own diary with full history. Write in AAAK for compression — e.g. 'SESSION:2026-04-04|built.palace.graph+diary.tools|ALC.req:agent.diaries.in.aaak|★★★'. Use entity codes from the AAAK spec.",
+   "input_schema": {
+    "properties": {
+     "agent_name": {
+      "description": "Your name — each agent gets their own diary wing",
+      "type": "string"
+     },
+     "content": {
+      "description": "Alias for 'entry' — accepted because add_drawer uses 'content'. Provide either 'entry' or 'content'; 'entry' wins if both are given.",
+      "type": "string"
+     },
+     "entry": {
+      "description": "Your diary entry in AAAK format — compressed, entity-coded, emotion-marked",
+      "type": "string"
+     },
+     "topic": {
+      "description": "Topic tag (optional, default: general)",
+      "type": "string"
+     },
+     "wing": {
+      "description": "Target wing for this diary entry (optional). If omitted, uses wing_{agent_name}. Use this to write diary entries to a project wing instead of an agent-specific wing.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "agent_name"
+    ],
+    "type": "object"
+   }
+  },
+  "mempalace_kg_add": {
+   "description": "Add a fact to the knowledge graph. Subject → predicate → object with optional time window. E.g. ('Max', 'started_school', 'Year 7', valid_from='2026-09-01'). Pass valid_to to backfill an already-ended historical fact in a single call.",
+   "input_schema": {
+    "properties": {
+     "object": {
+      "description": "The entity being connected to",
+      "type": "string"
+     },
+     "predicate": {
+      "description": "The relationship type (e.g. 'loves', 'works_on', 'daughter_of')",
+      "type": "string"
+     },
+     "source_closet": {
+      "description": "Closet ID where this fact appears (optional)",
+      "type": "string"
+     },
+     "source_drawer_id": {
+      "description": "Drawer ID the fact was extracted from (optional, RFC 002 provenance)",
+      "type": "string"
+     },
+     "source_file": {
+      "description": "Source file path the fact was extracted from (optional)",
+      "type": "string"
+     },
+     "subject": {
+      "description": "The entity doing/being something",
+      "type": "string"
+     },
+     "valid_from": {
+      "description": "When this became true (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ, optional)",
+      "type": "string"
+     },
+     "valid_to": {
+      "description": "When this stopped being true (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ, optional). Use for backfilling already-ended historical facts.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "subject",
+     "predicate",
+     "object"
+    ],
+    "type": "object"
+   }
+  },
+  "mempalace_kg_invalidate": {
+   "description": "Mark a fact as no longer true. E.g. ankle injury resolved, job ended, moved house.",
+   "input_schema": {
+    "properties": {
+     "ended": {
+      "description": "When it stopped being true (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ, default: today)",
+      "type": "string"
+     },
+     "object": {
+      "description": "Connected entity",
+      "type": "string"
+     },
+     "predicate": {
+      "description": "Relationship",
+      "type": "string"
+     },
+     "subject": {
+      "description": "Entity",
+      "type": "string"
+     }
+    },
+    "required": [
+     "subject",
+     "predicate",
+     "object"
+    ],
+    "type": "object"
+   }
+  },
+  "mempalace_kg_query": {
+   "description": "Query the knowledge graph for an entity's relationships. Returns typed facts with temporal validity. E.g. 'Max' → child_of Alice, loves chess, does swimming. Filter by date with as_of to see what was true at a point in time.",
+   "input_schema": {
+    "properties": {
+     "as_of": {
+      "description": "Date/datetime filter — only facts valid at this time (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ, optional)",
+      "type": "string"
+     },
+     "direction": {
+      "description": "outgoing (entity→?), incoming (?→entity), or both (default: both)",
+      "type": "string"
+     },
+     "entity": {
+      "description": "Entity to query (e.g. 'Max', 'MyProject', 'Alice')",
+      "type": "string"
+     }
+    },
+    "required": [
+     "entity"
+    ],
+    "type": "object"
+   }
+  },
+  "mempalace_kg_supersede": {
+   "description": "Atomically replace a fact with its successor at a shared boundary. Use when a single-valued fact changes (model, employer, address) instead of separate kg_invalidate + kg_add — a point-in-time query at the boundary then returns only the new value.",
+   "input_schema": {
+    "properties": {
+     "at": {
+      "description": "Boundary instant (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ, optional; defaults to now UTC)",
+      "type": "string"
+     },
+     "new_object": {
+      "description": "The new value",
+      "type": "string"
+     },
+     "old_object": {
+      "description": "The value being replaced",
+      "type": "string"
+     },
+     "predicate": {
+      "description": "The relationship type (e.g. 'uses_model', 'works_at')",
+      "type": "string"
+     },
+     "subject": {
+      "description": "The entity whose fact is changing",
+      "type": "string"
+     }
+    },
+    "required": [
+     "subject",
+     "predicate",
+     "old_object",
+     "new_object"
+    ],
+    "type": "object"
+   }
+  },
+  "mempalace_kg_timeline": {
+   "description": "Chronological timeline of facts with pagination. Shows the story of an entity (or everything) in order. Returns total matching count for pagination.",
+   "input_schema": {
+    "properties": {
+     "entity": {
+      "description": "Entity to get timeline for (optional — omit for full timeline)",
+      "type": "string"
+     },
+     "limit": {
+      "description": "Max facts per page (default 100, max 100)",
+      "maximum": 100,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "offset": {
+      "description": "Offset for pagination (default 0)",
+      "minimum": 0,
+      "type": "integer"
+     }
+    },
+    "type": "object"
+   }
+  },
+  "mempalace_search": {
+   "description": "Semantic search. Returns verbatim drawer content with similarity scores. IMPORTANT: 'query' must contain ONLY search keywords. Use 'context' for background. Results with cosine distance > max_distance are filtered out.",
+   "input_schema": {
+    "properties": {
+     "before": {
+      "description": "Only drawers filed strictly before this ISO date or datetime (exclusive). Same comparison rules as 'since'.",
+      "type": "string"
+     },
+     "candidate_strategy": {
+      "description": "Candidate source strategy. 'vector' preserves default semantic search; 'union' also merges backend BM25 lexical candidates before reranking.",
+      "enum": [
+       "vector",
+       "union"
+      ],
+      "type": "string"
+     },
+     "cli_compatible": {
+      "description": "Preserve standalone CLI candidate selection, ranking, and output. Used by the CLI Hub forwarder.",
+      "type": "boolean"
+     },
+     "context": {
+      "description": "Background context for the search (optional). NOT used for embedding — only for future re-ranking.",
+      "type": "string"
+     },
+     "limit": {
+      "description": "Max results (default 5)",
+      "maximum": 100,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "max_distance": {
+      "description": "Max cosine distance threshold (0=identical, 2=opposite). Results further than this are dropped. Lower = stricter. Default 1.5. Set to 0 to disable.",
+      "type": "number"
+     },
+     "query": {
+      "description": "Short search query ONLY — keywords or a question. Max 250 chars.",
+      "maxLength": 250,
+      "type": "string"
+     },
+     "room": {
+      "description": "Filter by room (optional)",
+      "type": "string"
+     },
+     "since": {
+      "description": "Only drawers filed on/after this ISO date or datetime (inclusive), e.g. '2026-04-01' or '2026-04-01T09:30:00'. Compares the drawer's created_at (filed_at) wall-clock; drawers without a filed_at are excluded while set.",
+      "type": "string"
+     },
+     "source_file": {
+      "description": "Filter to one exact source_file (optional). Matches the full stored path exactly (leading/trailing whitespace trimmed); no glob or basename matching. Pass the value from a result's 'source_path' field; the displayed 'source_file' is only a basename.",
+      "type": "string"
+     },
+     "wing": {
+      "description": "Filter by wing (optional)",
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ],
+    "type": "object"
+   }
+  },
+  "mempalace_status": {
+   "description": "Palace overview — total drawers, wing and room counts",
+   "input_schema": {
+    "properties": {},
+    "type": "object"
+   }
+  },
+  "mempalace_update_drawer": {
+   "description": "Update an existing drawer's content and/or metadata (wing, room). Fetches existing drawer first; returns error if not found.",
+   "input_schema": {
+    "properties": {
+     "content": {
+      "description": "New content (optional — omit to keep existing)",
+      "type": "string"
+     },
+     "drawer_id": {
+      "description": "ID of the drawer to update",
+      "type": "string"
+     },
+     "room": {
+      "description": "New room (optional — omit to keep existing)",
+      "type": "string"
+     },
+     "wing": {
+      "description": "New wing (optional — omit to keep existing)",
+      "type": "string"
+     }
+    },
+    "required": [
+     "drawer_id"
+    ],
+    "type": "object"
+   }
+  }
+ }
+}
