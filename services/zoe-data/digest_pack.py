@@ -31,10 +31,11 @@ from __future__ import annotations
 
 import contextvars
 import math
-import os
 import re
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Sequence
+
+from typed_env import env_bool, env_float, env_int, env_str
 
 ENV = "ZOE_DIGEST_CHUNKED"
 MAX_CHUNKS_ENV = "ZOE_DIGEST_MAX_CHUNKS"
@@ -53,21 +54,17 @@ MIN_BUDGET = 120
 
 def enabled() -> bool:
     """Is the chunked pack step ON? Default yes; ``0/false/no/off`` is the legacy truncation. Read per call."""
-    return (os.environ.get("ZOE_DIGEST_CHUNKED", "1") or "").strip().lower() not in ("0", "false", "no", "off")
+    return env_bool("ZOE_DIGEST_CHUNKED", True) if env_str("ZOE_DIGEST_CHUNKED") else True          # a blank line (``KEY=``) is unset here, as ever
 
 
 def _env_int(name: str, default: int, lo: int, hi: int) -> int:
-    try:
-        return max(lo, min(hi, int((os.environ.get(name) or "").strip() or default)))
-    except ValueError:
-        return default
+    """``typed_env.env_int`` (unparseable -> default + one warning), then this module's bounds."""
+    return max(lo, min(hi, env_int(name, default)))
 
 
 def _env_float(name: str, default: float, lo: float, hi: float) -> float:
-    try:
-        return max(lo, min(hi, float((os.environ.get(name) or "").strip() or default)))
-    except ValueError:
-        return default
+    """``typed_env.env_float`` (unparseable -> default + one warning), then this module's bounds."""
+    return max(lo, min(hi, env_float(name, default)))
 
 
 def est_tokens(text: str) -> int:
@@ -225,7 +222,15 @@ def pack_lines(lines: Sequence[str], budget: int, *, cap: Optional[int] = None,
                 continue
             chosen.add(k)
             used += cost
-        chunks = build([it for k, it in enumerate(items) if k in chosen])[:cap]       # boundary slack can spill one chunk past the cap: it is cut and counted
+        chunks = build([it for k, it in enumerate(items) if k in chosen])
+        # Boundary slack (a turn that does not fit the room left in a chunk starts the next one) can make the chosen turns need more than ``cap`` chunks.
+        # Shed the LOWEST-scoring chosen turn (the oldest on a tie) and re-pack until they fit, so the cut falls on the least useful turn and never on
+        # whichever turn happens to be the newest.
+        for k in sorted(chosen, key=lambda k: (score(items[k][1]), k)):
+            if len(chunks) <= cap:
+                break
+            chosen.discard(k)
+            chunks = build([it for j, it in enumerate(items) if j in chosen])
         packed.skipped_cap = len(items) - len({t for c in chunks for t in c.turns})
     packed.chunks = chunks
     return packed

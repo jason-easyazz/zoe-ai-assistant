@@ -434,6 +434,27 @@ def test_the_same_fact_from_two_chunks_is_stored_once_and_a_richer_one_replaces_
     assert len(md._merge_by_text([[thin], [other] * 5], "fact", 3)) <= 3        # the per-night fact cap
 
 
+def test_a_later_correction_is_never_merged_away_as_a_duplicate_of_the_fact_it_corrects():
+    old = {"type": "profile", "fact": "User works at the hospital pharmacy", "quote": "q1"}
+    fix = {"type": "profile", "fact": "User no longer works at the hospital pharmacy", "quote": "q2"}
+    assert md._merge_by_text([[old], [fix]], "fact") == [old, fix]
+    assert md._merge_by_text([[old], [dict(old, quote="q3")]], "fact") == [old]       # a true restatement is still dropped
+
+
+def test_a_richer_answer_without_valid_evidence_cannot_displace_the_backed_earlier_one():
+    thin = {"type": "profile", "fact": "User is training for a half-marathon", "quote": "I am training for a half-marathon"}
+    rich = {"type": "profile", "fact": "User is training for the Rottnest half-marathon in February", "quote": "never said this"}
+    day_text = "I am training for a half-marathon"
+    ok = lambda it: md.fact_anchor(it, day_text) is not None          # noqa: E731
+    assert md._merge_by_text([[thin], [rich]], "fact", supported=ok) == [thin]
+    assert md._merge_by_text([[thin], [rich]], "fact") == [rich]       # (without the gate hook the richer one replaces, as before)
+
+
+def test_the_fact_cap_bounds_a_single_chunks_answer_too():
+    facts = [{"type": "profile", "fact": "User likes thing %d" % i} for i in range(5)]
+    assert md._merge_by_text([facts], "fact", 2) == facts[:2]
+
+
 def test_a_fabricated_quote_is_still_not_stored_in_chunked_mode(monkeypatch, day):
     """The observation gate is unchanged: a fact whose 'quote' the owner never said is held, wherever in the day the model put it."""
     svc = _Svc()

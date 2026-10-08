@@ -1145,13 +1145,14 @@
       },
       "ZOE_DIGEST_CHUNKED": {
         "defaults": [
-          "'1'"
+          "-",
+          "True"
         ],
         "in_env_example": false,
         "readers": [
           "services/zoe-data/digest_pack.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_DIGEST_CHUNK_TOKENS": {
         "defaults": [
@@ -1175,13 +1176,13 @@
       },
       "ZOE_DIGEST_LLM_TIMEOUT_SCALE": {
         "defaults": [
-          "'1'"
+          "1.0"
         ],
         "in_env_example": false,
         "readers": [
           "services/zoe-data/memory_digest.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_DIGEST_MAX_CHUNKS": {
         "defaults": [

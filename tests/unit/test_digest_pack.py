@@ -118,6 +118,15 @@ def test_over_the_cap_the_highest_signal_turns_survive_in_time_order_and_the_res
     assert dp.pack_lines(lines, 150, cap=2).skipped_cap == packed.skipped_cap
 
 
+def test_boundary_slack_sheds_the_lowest_signal_turn_not_the_newest():
+    """Three 61-token turns do not fit two 100-token chunks (each needs its own); the cut must fall on the least useful turn, never on the newest."""
+    pad = lambda lead: lead + " " + "x" * (int(61 * 3.3) - len(lead) - 3)          # noqa: E731 - ~61 estimated tokens
+    lines = [pad("I am so worried about my mum Ingrid"), pad("turn the lights off"), pad("My daughter Rowan starts school on the 3rd")]
+    packed = dp.pack_lines(lines, 100, cap=2)
+    kept = {t for c in packed.chunks for t in c.turns}
+    assert len(packed.chunks) <= 2 and kept == {0, 2} and packed.skipped_cap == 1
+
+
 def test_one_overlong_turn_is_split_not_dropped_and_not_truncated():
     long = "I keep thinking about " + " ".join(f"word{i}" for i in range(2000))
     packed = dp.pack_lines(["short one", long, "short two"], 300, cap=50)
@@ -190,3 +199,16 @@ def test_the_oracle_answers_only_for_the_pass_it_is_asked():
     assert "dentist" in dd.oracle_reply("You are an empathetic listener.", prompt, day)
     assert "Halloran" in dd.oracle_reply("You extract open loops from conversations.", prompt, day)
     assert dd.oracle_reply("something else", prompt, day) == "[]"
+
+
+def test_invalid_numeric_settings_fall_back_with_one_warning_via_typed_env(monkeypatch, caplog):
+    import logging
+    import typed_env
+    typed_env._warned.clear()
+    monkeypatch.setenv(dp.MAX_CHUNKS_ENV, "lots")
+    monkeypatch.setenv(dp.DECODE_ENV, "fast")
+    with caplog.at_level(logging.WARNING, logger="typed_env"):
+        assert dp.max_chunks() == 5 and dp.decode_tok_s() == 60.0
+    assert sum("typed_env" in r.getMessage() for r in caplog.records) == 2
+    monkeypatch.setenv(dp.MAX_CHUNKS_ENV, "99")
+    assert dp.max_chunks() == 20                                          # the module's own bound still applies

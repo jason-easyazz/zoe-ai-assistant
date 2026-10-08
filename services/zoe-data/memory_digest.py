@@ -18,6 +18,7 @@ import logging
 import os
 import re
 import uuid
+from typing import Any, Callable
 
 import digest_pack
 import httpx
@@ -25,6 +26,7 @@ import memory_authority
 import own_words
 from memory_overlap import dedup_verdict, richness
 from routers.journal import CREATED_AT_VALID_TIMESTAMP_SQL
+from typed_env import env_float
 from user_filters import GUEST_USERS, drop_synthetic_users, message_owner_expr
 
 logger = logging.getLogger(__name__)
@@ -58,10 +60,7 @@ def _llm_timeout(seconds: float) -> float:
     that decodes several times slower and sets the scale for ITS processes only; the live service never does.
     Read at call time so a test or a runner can set it after import. An unparsable or non-positive value is 1.0.
     """
-    try:
-        scale = float(os.environ.get("ZOE_DIGEST_LLM_TIMEOUT_SCALE", "1") or 1)
-    except ValueError:
-        scale = 1.0
+    scale = env_float("ZOE_DIGEST_LLM_TIMEOUT_SCALE", 1.0)
     return seconds * (scale if scale > 0 else 1.0)
 
 
@@ -1523,12 +1522,28 @@ async def _facts_call(transcript: str, timeout: float) -> list[dict]:
         raise ExtractorError(type(exc).__name__, str(exc)) from exc
 
 
-def _merge_by_text(per_chunk: "list[list]", key: str, cap: int | None = None) -> list:
+_NEGATION_WORDS = frozenset({
+    "no", "not", "never", "none", "nobody", "nothing", "longer", "stopped", "quit", "left", "ended", "cancelled", "canceled", "without",
+    "isn't", "aren't", "wasn't", "weren't", "don't", "doesn't", "didn't", "won't", "can't", "cannot", "hasn't", "haven't", "hadn't",
+})
+
+
+def _negation_signature(text: str) -> frozenset:
+    """The negation words in ``text`` (apostrophes folded): two statements that differ here do not say the same thing even when most words overlap."""
+    words = re.findall(r"[a-z']+", str(text or "").lower().replace("\u2019", "'"))
+    return frozenset(w for w in words if w in _NEGATION_WORDS or w.endswith("n't"))
+
+
+def _merge_by_text(per_chunk: "list[list]", key: str, cap: int | None = None,
+                   supported: "Callable[[Any], bool] | None" = None) -> list:
     """The REDUCE of a map over chunks, in code: the per-chunk answers in chunk (= time) order with a near-duplicate dropped by the existing token-level
     dedup (``memory_overlap.dedup_verdict``: a restatement with nothing new is dropped, a richer statement REPLACES the thinner one it extends,
-    anything with a new name / number / date is kept). ``key`` is the item's text field. A single chunk is returned untouched."""
+    anything with a new name / number / date is kept). ``key`` is the item's text field. A change of meaning is never a duplicate: two statements whose
+    negation words differ ("works at X" / "no longer works at X") are both kept, so a later correction survives to the write checks. A richer
+    statement replaces an earlier one only when ``supported(item)`` holds (the observation gate's anchor test), so an unbacked answer cannot displace a
+    backed one. The result is bounded by ``cap`` on every path (order kept)."""
     if len(per_chunk) == 1:
-        return list(per_chunk[0])
+        return list(per_chunk[0])[:cap] if cap else list(per_chunk[0])
     kept: list = []
     for items in per_chunk:
         for item in items:
@@ -1541,12 +1556,17 @@ def _merge_by_text(per_chunk: "list[list]", key: str, cap: int | None = None) ->
                 other_text = str(other.get(key) or "").strip() if isinstance(other, dict) else ""
                 if not other_text:
                     continue
+                if _negation_signature(text) != _negation_signature(other_text):
+                    continue                                   # a correction / reversal is new information, not a restatement
                 verdict, _line = dedup_verdict(text, other_text)
                 if verdict == "duplicate":
                     dropped = True
                     break
                 if verdict == "extends":
-                    kept[i], replaced = item, True
+                    if supported is None or supported(item):
+                        kept[i], replaced = item, True
+                    else:
+                        dropped = True                          # the richer answer has no valid evidence: the backed earlier one stands
                     break
             if not dropped and not replaced:
                 kept.append(item)
@@ -1609,7 +1629,7 @@ async def _extract_facts_with_gemma(chat_text: str) -> list[dict]:
         if first_error is not None:
             raise first_error
         return []
-    return _merge_by_text(answers, "fact", digest_pack.max_facts())
+    return _merge_by_text(answers, "fact", digest_pack.max_facts(), supported=lambda it: fact_anchor(it, chat_text) is not None)
 
 
 async def _is_contradiction(new_fact: str, existing_fact: str) -> bool:
