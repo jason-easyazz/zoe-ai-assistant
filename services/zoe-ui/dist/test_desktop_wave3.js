@@ -291,6 +291,16 @@ check('ws: without zoeAuth the stored zoe_session is used', () => {
   new ZoeWebSocketSync('/api/calendar/ws', 'jason').connect();
   assert.deepStrictEqual(made, ['wss://zoe.local/api/calendar/ws/jason?session_id=abc123']);
 });
+check('ws: disconnect() is a STOP — the close it triggers schedules no reconnect; connect() re-arms', () => {
+  const { ZoeWebSocketSync, made } = wsSandbox({ zoeAuthSession: 'sid' });
+  const sock = new ZoeWebSocketSync('/api/lists/ws', 'jason'); sock.connect();
+  assert.strictEqual(made.length, 1);
+  const ws = sock.ws; sock.disconnect();
+  ws.onclose && ws.onclose();            // the browser fires close after a deliberate close()
+  assert.strictEqual(made.length, 1, 'no new socket after disconnect');
+  assert(!sock.reconnectTimeout, 'no reconnect timer armed');
+  sock.connect(); assert.strictEqual(made.length, 2, 'a deliberate connect() re-arms');
+});
 check('ws: no session at all → no query, and a warning (the server will refuse it)', () => {
   const { ZoeWebSocketSync, made, warned } = wsSandbox({});
   new ZoeWebSocketSync('/api/lists/ws', 'jason').connect();
@@ -375,11 +385,13 @@ check('no desktop page or script calls a route that never existed (warm-up, tool
   for (const gone of ['js/widgets/music/suggestions.js', 'js/widgets/music/playlists.js', 'js/widgets/music/queue.js', 'js/widgets/music/search.js', 'js/voice/voice-controller.js'])
     assert(!fs.existsSync(path.join(__dirname, gone)), gone + ' should be deleted (no page loads it)');
 });
-check('music: transport posts {entity_id, action, params} to /api/ha/control and does nothing without an entity', () => {
-  const body = extractFunction(read('music.html'), 'haService');
-  assert(/fetch\('\/api\/ha\/control'/.test(body));
-  assert(/JSON\.stringify\(\{ entity_id: eid, action: service, params: extra \|\| \{\} \}\)/.test(body));
-  assert(/if \(!eid\) return;/.test(body));
+check('music: transport uses Music Assistant routes with the MA player_id, never a fabricated HA entity', () => {
+  const src = read('music.html');
+  assert(!/haService|activeEntityId|\/api\/ha\/control|media_player\.\$\{/.test(src));
+  assert(/function maControl\(action, value\)[\s\S]{0,300}maPost\('\/api\/music\/control', body\)/.test(src));
+  assert(/maPost\('\/api\/music\/seek', \{ position_seconds: seconds, player_id: S\.activeId \}\)/.test(src));
+  assert(/maPost\('\/api\/music\/queue\/clear', \{ queue_id: S\.activeId \}\)/.test(src));
+  for (const call of ["maControl('pause')", "maControl('play')", "maControl('previous')", "maControl('next')", "maControl('volume_set', Math.round(val))", "maControl('shuffle_set', !!S.shuffle)", "maControl('repeat_set', S.repeat ? 'all' : 'off')", "maSeek(Math.round(S.currentTime))", "maQueueClear()"]) assert(src.includes(call), 'missing ' + call);
 });
 check('journal: no photo picker is offered while there is no upload backend (page + dashboard widget)', () => {
   assert(!/class="filepond"|FilePond\.|\/lib\/filepond/.test(read('journal.html')), 'journal.html must carry no FilePond wiring while there is no upload backend');

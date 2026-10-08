@@ -363,6 +363,13 @@
         state.panelServicesStopped = true;
         if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
         if (state.syncTimer) { clearInterval(state.syncTimer); state.syncTimer = null; }
+        // The push channel too, on BOTH paths: the shared ZoeWebSockets socket (its
+        // disconnect() now stays down) and the fallback socket with its own backoff —
+        // an unbound member otherwise kept generating refused handshakes forever.
+        if (state.pushRetry) { clearTimeout(state.pushRetry); state.pushRetry = null; }
+        if (state.pushPing) { clearInterval(state.pushPing); state.pushPing = null; }
+        if (state.pushWs) { try { state.pushWs.onclose = null; state.pushWs.close(); } catch (_) { /* already closed */ } state.pushWs = null; }
+        try { if (window.zoePushWs && typeof window.zoePushWs.disconnect === 'function') window.zoePushWs.disconnect(); } catch (_) { /* non-fatal */ }
         stopServiceWorkerPanelPoll();
         console.warn(`[executor] panel services stopped: ${reason}`);
     }
@@ -979,7 +986,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
     // Exponential backoff, capped: a dead server must not be hammered, and a
     // panel must never stay deaf for longer than the cap once it is back.
     function schedulePushReconnect() {
-        if (state.unloading || state.pushRetry) return;
+        if (state.unloading || state.pushRetry || state.panelServicesStopped) return;
         state.pushAttempts += 1;
         const delay = Math.min(1000 * Math.pow(2, state.pushAttempts), PUSH_RETRY_MAX_MS);
         state.pushRetry = setTimeout(() => {
