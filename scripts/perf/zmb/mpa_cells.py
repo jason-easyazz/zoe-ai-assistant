@@ -488,6 +488,21 @@ def _fired(tr: Any) -> bool:
     return any(r.name in ("mempalace_search", "mempalace_kg_query", "mempalace_kg_timeline") for r in tr.tools)
 
 
+def _merge_tool_stats(total: "dict[str, Any]", st: "dict[str, Any]") -> None:
+    """Fold one block's ``tool_stats()`` into the running totals (``arm.reset`` between blocks clears the arm's own counters)."""
+    for k in ("tool_calls", "tool_calls_valid", "extra_keys", "refused", "turns", "filter_misses", "model_calls", "checkpoints", "routed", "hook_calls"):
+        total[k] = total.get(k, 0) + int(st.get(k) or 0)
+    total["model_s"] = round(total.get("model_s", 0.0) + float(st.get("model_s") or 0.0), 2)
+    total["prompt_tokens_max"] = max(total.get("prompt_tokens_max", 0), int(st.get("prompt_tokens_max") or 0))
+    by = total.setdefault("by_tool", {})
+    for n, c in (st.get("by_tool") or {}).items():
+        by[n] = by.get(n, 0) + c
+    got, of = (st.get("searched_before_answer") or [0, 0])
+    prev = total.get("searched_before_answer") or [0, 0]
+    total["searched_before_answer"] = [prev[0] + got, prev[1] + of]
+    total["supersedes"] = (total.get("supersedes") or []) + list(st.get("supersedes") or [])
+
+
 def run_brain(arm: Any, seed: str, *, protocol: bool = True, behaviour: int = 10, exact: int = 8, hops: int = 6, guard: "Optional[Callable[[], None]]" = None) -> "dict[str, Any]":
     """Measure what the brain DOES (the model must be a real one: a scripted brain answers the plumbing, never these cells). Returns summary + cells in the lab format."""
     from zmb import life as lifemod
@@ -495,9 +510,19 @@ def run_brain(arm: Any, seed: str, *, protocol: bool = True, behaviour: int = 10
     rows: "list[dict[str, Any]]" = []
     m = _mpa(arm)
     g = guard or (lambda: None)
+    totals: "dict[str, Any]" = {}
+    banked = False
+
+    def fresh() -> None:
+        """Reset the arm for the next block AFTER banking the telemetry of the block that just ran: G1's validity, call count, search rate and max prompt cover every block."""
+        nonlocal banked
+        if banked:
+            _merge_tool_stats(totals, m.tool_stats())
+        banked = True
+        arm.reset(USER)
     if protocol:
         facts, prompts = lifemod.protocol_corpus(seed)
-        arm.reset(USER)
+        fresh()
         m.mc.router_bypass = False                        # the protocol's job is to stay quiet on device turns: they must reach the brain to be measured
         for s in facts:
             g()
@@ -512,7 +537,7 @@ def run_brain(arm: Any, seed: str, *, protocol: bool = True, behaviour: int = 10
             rows.append({"id": f"M4.{metric}.mempalace5", "verdict": sc.verdict, "evidence": sc.evidence, "sanity": False, "expected": "PASS", "controls": [], "rule": "M"})
         m.mc.router_bypass = True
     if behaviour:
-        arm.reset(USER)
+        fresh()
         pairs = [("Aldo", "Bergvik", "Oldmere"), ("Brigid", "Tarnholt", "Quinford"), ("Caspian", "Saltreach", "Wenlow"), ("Delphine", "Marlowby", "Ashgrove"), ("Evander", "Pellham", "Cragmoor"),
                  ("Fenella", "Dunwich", "Eldermoss"), ("Gideon", "Fallowby", "Gannet"), ("Hestia", "Harrowdale", "Ironbridge"), ("Ivo", "Jessop", "Kelmarsh"), ("Juniper", "Lowthorpe", "Mistley")][:behaviour]
         for n, a, _b in pairs:
@@ -532,7 +557,7 @@ def run_brain(arm: Any, seed: str, *, protocol: bool = True, behaviour: int = 10
         rows.append({"id": "MPA-B2.supersede_correct", "verdict": "PASS" if (len(pairs) >= BRAIN_BARS["supersede_n_min"] and correct / len(pairs) >= BRAIN_BARS["supersede_correct"] and wrong <= BRAIN_BARS["supersede_wrong_max"]) else "FAIL",
                      "evidence": {"supersede": {"correct": correct, "n": len(pairs), "wrong": wrong}, "bar": [BRAIN_BARS["supersede_correct"], BRAIN_BARS["supersede_wrong_max"]]}, "sanity": False, "expected": "PASS", "controls": [], "rule": "B"})
     if exact:
-        arm.reset(USER)
+        fresh()
         corpus = lifemod.exact_corpus(seed, exact)
         for x in corpus:
             g()
@@ -545,7 +570,7 @@ def run_brain(arm: Any, seed: str, *, protocol: bool = True, behaviour: int = 10
         sc = cap.score_exact([i < hit for i in range(len(corpus))], [x.style for x in corpus], k=5, min_rate=BRAIN_BARS["exact_words"])
         rows.append({"id": "MPA-J4.exact-words.brain", "verdict": sc.verdict, "evidence": sc.evidence, "sanity": False, "expected": "PASS", "controls": [], "rule": "J"})
     if hops:
-        arm.reset(USER)
+        fresh()
         items = lifemod.hop_corpus(seed)[:hops]
         for it in items:
             g()
@@ -558,7 +583,11 @@ def run_brain(arm: Any, seed: str, *, protocol: bool = True, behaviour: int = 10
             both.append(cap.fact_in_rows(tr.seen_text, it.a_need) and cap.fact_in_rows(tr.seen_text, it.b_need))
         sc = cap.score_hops(both, [it.kind for it in items], 0, 0, k=8, min_rate=BRAIN_BARS["two_fact"])
         rows.append({"id": "MPA-L4.two-facts.brain", "verdict": sc.verdict, "evidence": sc.evidence, "sanity": False, "expected": "PASS", "controls": [], "rule": "L"})
-    st = m.tool_stats()
+    if banked:
+        _merge_tool_stats(totals, m.tool_stats())
+        st = totals
+    else:
+        st = m.tool_stats()
     valid = st["tool_calls_valid"] / st["tool_calls"] if st["tool_calls"] else 0.0
     rows.append({"id": "MPA-B1.tool_call_validity", "verdict": "PASS" if st["tool_calls"] >= BRAIN_BARS["tool_calls_min"] and valid >= BRAIN_BARS["tool_call_validity"] else ("FAIL" if st["tool_calls"] >= BRAIN_BARS["tool_calls_min"] else "SKIP"),
                  "evidence": {"tool_calls": st["tool_calls"], "valid": st["tool_calls_valid"], "rate": round(valid, 4), "bar": BRAIN_BARS["tool_call_validity"], "min_calls": BRAIN_BARS["tool_calls_min"],

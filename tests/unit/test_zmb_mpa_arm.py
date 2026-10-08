@@ -488,18 +488,28 @@ def test_a_kg_claim_is_anchored_by_subject_and_object_in_one_owner_utterance_not
         a.ingest([Turn(owner_line, "owner_taught")])
         return a
     # (1) provenance: an unrelated sentence that merely contains "Oslo" does not make the model's triple the owner's
-    a = run("We flew over Oslo last summer", ("mempalace_kg_add", {"subject": "Tove", "predicate": "visits", "object": "Oslo"}))
-    kg = [r for r in a.stats()["rows"] if r["origin"] == "brain:kg" and "oslo" in r["text"].lower()]
-    assert kg and all(r["authority_class"] == "model_from_transcript" for r in kg)
-    a.close()
-    a = run("Tove moved to Oslo last week", ("mempalace_kg_add", {"subject": "Tove", "predicate": "visits", "object": "Oslo"}))
-    assert all(r["authority_class"] == "user_stated" for r in a.stats()["rows"] if r["origin"] == "brain:kg" and "oslo" in r["text"].lower())          # the claim IS the owner's
-    a.close()
+    def label(owner_line, claim):
+        a = mpa_cells.lab_arm("MPA")                                                                   # no conflicting owner triple: the claim is FILED, the question is how it is labelled
+        a.reset(USER)
+        a.model = PlayModel([[("mempalace_kg_add", {"subject": "Tove", "predicate": "plays", "object": "cello"})], [claim]])
+        a.ingest([Turn("My sister Tove plays the cello", "owner_taught")])
+        a.ingest([Turn(owner_line, "owner_taught")])
+        out = [r["authority_class"] for r in a.stats()["rows"] if r["origin"] == "brain:kg" and "oslo" in r["text"].lower()]
+        a.close()
+        return out
+    lives = ("mempalace_kg_add", {"subject": "Tove", "predicate": "lives_in", "object": "Oslo"})
+    assert label("We flew over Oslo last summer", lives) == ["model_from_transcript"]                  # an unrelated sentence that merely contains "Oslo"
+    assert label("Tove visited Oslo last summer", lives) == ["model_from_transcript"]                  # subject and object, but a different RELATION: still not the owner's claim
+    for line in ("Tove moved to Oslo last week", "Tove is living in Oslo now", "Tove's home is Oslo these days"):
+        assert label(line, lives) == ["user_stated"], line                                             # the relation in the owner's own words (live / moved / home)
     # (2) the floor: that token cannot retire the owner's fact either
     sup = ("mempalace_kg_supersede", {"subject": "Tove", "predicate": "lives_in", "old_object": "Perth", "new_object": "Oslo"})
     a = run("We flew over Oslo last summer", sup)
     assert [bool(t.refused) for t in a.traces[-1].tools if t.name == "mempalace_kg_supersede"] == [True]
     assert any("perth" in r["text"].lower() and r["status"] == "approved" for r in a.stats()["rows"] if r["origin"] == "brain:kg")
+    a.close()
+    a = run("Tove visited Oslo last summer", sup)                                                      # right subject and object, wrong relation: not a move
+    assert [bool(t.refused) for t in a.traces[-1].tools if t.name == "mempalace_kg_supersede"] == [True]
     a.close()
     a = run("Tove moved to Oslo last week", sup)                                                       # the owner's own words about Tove retire it
     assert [bool(t.refused) for t in a.traces[-1].tools if t.name == "mempalace_kg_supersede"] == [False]
@@ -558,6 +568,22 @@ def test_linked_recall_carries_each_triples_own_authority():
     rows = {r["text"].lower(): r["authority_class"] for r in a.recall_linked("tell me about Tove", 8) if r["origin"] == "mempalace:kg"}
     assert rows["tove lives_in perth"] == "user_stated" and rows["tove plays violin"] == "model_from_transcript"          # the invented violin is not the owner's word
     a.close()
+
+
+def test_the_brain_cells_report_telemetry_from_every_block_not_just_the_last():
+    """``arm.reset`` between blocks cleared the counters: G1's validity / call count / search rate / max prompt covered only the hops block."""
+    def totals(**blocks):
+        a = mpa_cells.lab_arm("MPA")
+        a.reset(USER)
+        res = mpa_cells.run_brain(a, "zmb-v1", protocol=False, **{"behaviour": 0, "exact": 0, "hops": 0, **blocks})
+        a.close()
+        return res["summary"]["tools"]
+    parts = [totals(behaviour=2), totals(exact=2), totals(hops=2)]
+    whole = totals(behaviour=2, exact=2, hops=2)
+    assert all(p["tool_calls"] > 0 for p in parts)
+    assert whole["tool_calls"] == sum(p["tool_calls"] for p in parts) and whole["tool_calls_valid"] == sum(p["tool_calls_valid"] for p in parts)
+    assert whole["searched_before_answer"][1] == sum(p["searched_before_answer"][1] for p in parts) and whole["model_calls"] == sum(p["model_calls"] for p in parts)
+    assert whole["prompt_tokens_max"] == max(p["prompt_tokens_max"] for p in parts) and sum(whole["by_tool"].values()) == whole["tool_calls"]
 
 
 def test_zma_refuses_a_shim_that_is_not_minilm_and_names_the_setting():

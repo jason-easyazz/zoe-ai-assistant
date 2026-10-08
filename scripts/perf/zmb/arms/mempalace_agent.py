@@ -482,31 +482,29 @@ class MemPalaceAgentArm(BenchSurface, Arm):
             moved = {k: str(args[k]) for k in ("room", "wing") if args.get(k) not in (None, "")}
             if str(moved.get("room", "")).lower() in RESERVED_ROOMS:
                 return f"the room {moved['room']!r} is reserved"
-            if pv is not None and ((pv.room in RESERVED_ROOMS and moved.get("room", pv.room) != pv.room) or (self.mc.anchor_check and pv.authority_class == USER_STATED
-                                                                                                          and (moved.get("room", pv.room) != pv.room or moved.get("wing", pv.wing) != pv.wing))):
+            changes_place = pv is not None and (moved.get("room", pv.room) != pv.room or moved.get("wing", pv.wing) != pv.wing)
+            if pv is not None and ((pv.room in RESERVED_ROOMS and changes_place) or (self.mc.anchor_check and pv.authority_class == USER_STATED and changes_place)):
                 return "a drawer's place says who said it: a drawer is not moved between rooms or wings by the model"
             if self.mc.anchor_check and args.get("content") and pv is not None and pv.authority_class == USER_STATED and not self._anchored(str(args["content"]), s):
                 return "a drawer holding what the owner said is only rewritten with the owner's own words"
-        if self.mc.anchor_check and name == "mempalace_kg_add" and not self._anchored_claim(str(args.get("subject", "")), str(args.get("object", "")), s):
-            subj, pred, obj = (str(args.get(k, "")).lower() for k in ("subject", "predicate", "object"))
+        sp, pr = str(args.get("subject", "")), str(args.get("predicate", ""))
+        if self.mc.anchor_check and name == "mempalace_kg_add" and not self._anchored_claim(sp, pr, str(args.get("object", "")), s):
+            subj, pred, obj = sp.lower(), pr.lower(), str(args.get("object", "")).lower()
             for t in self._kg_dump():
-                other = str(t["object"]).lower()
-                pv = self._kg_prov.get((subj, pred, other))
-                if str(t["subject"]).lower() == subj and str(t["predicate"]).lower() == pred and other != obj and not t.get("valid_to") and pv is not None and pv.authority_class == USER_STATED:
+                pv = self._kg_prov.get((subj, pred, str(t["object"]).lower()))
+                if str(t["subject"]).lower() == subj and str(t["predicate"]).lower() == pred and str(t["object"]).lower() != obj and not t.get("valid_to") and pv is not None and pv.authority_class == USER_STATED:
                     # held back, never filed: a second value beside the owner's is a rival belief the model made up; only kg_supersede with the owner's words changes the owner's
-                    self._side.append({"text": f"{args.get('subject')} {str(args.get('predicate')).replace('_', ' ')} {args.get('object')}", "status": "disputed",
-                                       "contradicts_id": f"kg:{t['subject']}|{t['predicate']}|{t['object']}".lower()})
+                    self._side.append({"text": f"{sp} {pr.replace('_', ' ')} {args.get('object')}", "status": "disputed", "contradicts_id": f"kg:{t['subject']}|{t['predicate']}|{t['object']}".lower()})
                     return "that conflicts with something the owner stated; it was held back (retire the old value with kg_supersede and the owner's words)"
         if self.mc.anchor_check and name in ("mempalace_kg_supersede", "mempalace_kg_invalidate"):
             old = args.get("old_object") if name == "mempalace_kg_supersede" else args.get("object")
-            pv = self._kg_prov.get((str(args.get("subject", "")).lower(), str(args.get("predicate", "")).lower(), str(old).lower()))
-            backing = args.get("new_object") if name == "mempalace_kg_supersede" else args.get("object")
+            pv = self._kg_prov.get((sp.lower(), pr.lower(), str(old).lower()))
+            backing = str(args.get("new_object") if name == "mempalace_kg_supersede" else args.get("object"))
             if pv is not None and pv.authority_class == USER_STATED:
-                if name == "mempalace_kg_invalidate":
-                    # proof that the fact WAS stated is not proof it has ended: the owner's utterance of THIS turn has to be a correction or a negation of this very claim
-                    if not self._invalidation_evidence(str(args.get("subject", "")), str(backing), s):
+                if name == "mempalace_kg_invalidate":      # proof that the fact WAS stated is not proof it has ended: THIS message has to correct or negate this very claim
+                    if not self._invalidation_evidence(sp, pr, backing, s):
                         return "a fact the owner stated is only ended by the owner saying, in this message, that it no longer holds"
-                elif not self._anchored_claim(str(args.get("subject", "")), str(backing), s):
+                elif not self._anchored_claim(sp, pr, backing, s):
                     return "a fact the owner stated is only retired by something the owner said"
         return ""
 
@@ -545,34 +543,44 @@ class MemPalaceAgentArm(BenchSurface, Arm):
 
     _OWNER_SUBJECTS = frozenset({"", "user", "owner", "me", "i", "myself"})
 
-    def _anchored_claim(self, subject: str, obj: str, s: "dict[str, Any]") -> bool:
-        """Is the CLAIM the owner's, not just its object token? The object and the subject (the owner's own words about themselves need no name) must appear in ONE owner
-        utterance as whole words: an unrelated sentence that mentions "Oslo" does not make ``Tove lives_in Oslo`` the owner's statement."""
+    _PREDICATE_STOP = frozenset({"in", "at", "to", "of", "is", "are", "has", "have", "the", "for", "a", "an", "on", "with", "as", "by", "from"})
+    #: stem -> other words an owner uses for the same relation (the predicate is snake_case, the owner speaks naturally)
+    _PREDICATE_SYN = {"liv": ("moved", "move", "home", "resid", "relocat", "based", "stay", "settled"), "work": ("job", "employ", "hired", "career"),
+                      "own": ("have", "has", "got", "bought"), "lik": ("love", "enjoy", "fond", "prefer", "favourite", "favorite"),
+                      "marri": ("husband", "wife", "spouse", "wed"), "born": ("birth", "birthday"), "visit": ("went", "trip", "stayed")}
+
+    def _predicate_in(self, predicate: str, words: "set[str]") -> bool:
+        """Does one owner utterance (as a word set) express the relation the predicate names? A predicate with no content word (``is_a``) cannot be checked and does not block."""
+        toks = [t for t in re.split(r"[^a-z0-9]+", (predicate or "").lower()) if t and t not in self._PREDICATE_STOP]
+        stems = [(t[:-1] if t.endswith("s") and len(t) > 3 else t) for t in toks]
+        stems = [(t[:-1] if t.endswith("e") and len(t) > 3 else t) for t in stems]                       # lives / live / living all share "liv"
+        syn = lambda st: next((v for k, v in self._PREDICATE_SYN.items() if st.startswith(k)), ())  # noqa: E731
+        return not stems or any(w.startswith(st) or any(w.startswith(x) for x in syn(st)) for st in stems for w in words)
+
+    def _anchored_claim(self, subject: str, predicate: str, obj: str, s: "dict[str, Any]") -> bool:
+        """Is the whole CLAIM the owner's, not one token of it? Subject, predicate (its relation, in the owner's words) and object must all be in ONE owner utterance: an
+        unrelated sentence that mentions "Oslo", or "Tove visited Oslo", does not make ``Tove lives_in Oslo`` the owner's statement. The owner's own words about
+        themselves need no subject name."""
         o, sub = f" {_norm(obj)} ", _norm(subject)
         if o.strip() == "":
             return False
         for u in s["owner"]:
             n = f" {_norm(u)} "
-            if o in n and (sub in self._OWNER_SUBJECTS or f" {sub} " in n):
+            if o in n and (sub in self._OWNER_SUBJECTS or f" {sub} " in n) and self._predicate_in(predicate, set(n.split())):
                 return True
         return False
 
     _NEGATION = frozenset({"not", "no", "never", "longer", "anymore", "isn", "isnt", "doesn", "doesnt", "don", "dont", "wasn", "wasnt", "wrong", "incorrect", "actually", "instead",
                            "moved", "left", "changed", "stopped", "quit", "ended", "over", "mistake", "correction", "sold", "divorced", "retired", "former", "ex"})
 
-    def _invalidation_evidence(self, subject: str, obj: str, s: "dict[str, Any]") -> bool:
-        """The CURRENT owner message names the claim (subject and object as whole words) AND carries a correction / negation marker."""
+    def _invalidation_evidence(self, subject: str, predicate: str, obj: str, s: "dict[str, Any]") -> bool:
+        """The CURRENT owner message names the claim (subject, relation and object) AND carries a correction / negation marker."""
         if not s["owner"]:
             return False
         u = f" {_norm(s['owner'][-1])} "
         o, sub = f" {_norm(obj)} ", _norm(subject)
-        return o.strip() != "" and o in u and (sub in self._OWNER_SUBJECTS or f" {sub} " in u) and bool(set(u.split()) & self._NEGATION)
-
-    def _klass_claim(self, subject: str, obj: str, s: "dict[str, Any]") -> "tuple[str, bool]":
-        if not self.mc.anchor_check:
-            return USER_STATED, True
-        ok = self._anchored_claim(subject, obj, s)
-        return (USER_STATED if ok else MODEL_FROM_TRANSCRIPT), ok
+        return o.strip() != "" and o in u and (sub in self._OWNER_SUBJECTS or f" {sub} " in u) and self._predicate_in(predicate, set(u.split())) \
+            and bool(set(u.split()) & self._NEGATION)
 
     def _klass(self, text: str, s: "dict[str, Any]") -> "tuple[str, bool]":
         if not self.mc.anchor_check:
@@ -597,7 +605,8 @@ class MemPalaceAgentArm(BenchSurface, Arm):
         elif name in ("mempalace_kg_add", "mempalace_kg_supersede"):
             new = str(args.get("object") if name == "mempalace_kg_add" else args.get("new_object"))
             key = (str(args["subject"]).lower(), str(args["predicate"]).lower(), new.lower())
-            cls, anchored = self._klass_claim(str(args["subject"]), new, s)
+            anchored = not self.mc.anchor_check or self._anchored_claim(str(args["subject"]), str(args["predicate"]), new, s)
+            cls = USER_STATED if anchored else MODEL_FROM_TRANSCRIPT
             self._kg_prov[key] = Prov(cls, speaker, day_offset, f"t{self._seq}", new, anchored=anchored, seq=self._seq)
             if name == "mempalace_kg_supersede":
                 old = (str(args["subject"]).lower(), str(args["predicate"]).lower(), str(args["old_object"]).lower())
