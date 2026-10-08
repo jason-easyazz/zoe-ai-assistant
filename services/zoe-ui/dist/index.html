@@ -1232,6 +1232,15 @@
                     localStorage.removeItem('zoe_session');
                 }
             }
+            // Sent here by the members-only gate (js/auth.js desktopAuthGate) or by a
+            // dead session: the person came to sign in, so open the sign-in overlay
+            // straight away instead of showing the orb splash and waiting for a tap
+            // on it (2026-10-09: a gate redirect landed on "Touch the orb to begin").
+            try {
+                if (sessionStorage.getItem('zoe_redirect_after_login') || new URLSearchParams(location.search).get('login') === '1') {
+                    showLoginForm();
+                }
+            } catch (_) { /* storage unavailable: the orb still opens it */ }
         });
 
         // Keyboard support for PIN entry

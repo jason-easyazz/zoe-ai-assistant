@@ -44,6 +44,7 @@
         processing: false,
         pollTimer: null,
         syncTimer: null,
+        panelServicesStopped: false,
         seenActions: new Set(),
         seenAuthChallenges: new Set(),
         pushWs: null,
@@ -353,8 +354,32 @@
         }, AUTO_HOME_TIMEOUT_S * 1000);
     }
 
+    // A 401/403 on ANY panel-scoped call means this session is not allowed to act on
+    // this panel (a member who is not bound to it — routers/ui_actions._authorize_panel —
+    // or a dead session). Stop every panel service at once: pollActions used to stop
+    // itself while syncState kept posting a refused sync every 5 s forever (2026-10-09).
+    function stopPanelServices(reason) {
+        if (state.panelServicesStopped) return;
+        state.panelServicesStopped = true;
+        if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
+        if (state.syncTimer) { clearInterval(state.syncTimer); state.syncTimer = null; }
+        // The push channel too, on BOTH paths: the shared ZoeWebSockets socket (its
+        // disconnect() now stays down) and the fallback socket with its own backoff —
+        // an unbound member otherwise kept generating refused handshakes forever.
+        if (state.pushRetry) { clearTimeout(state.pushRetry); state.pushRetry = null; }
+        if (state.pushPing) { clearInterval(state.pushPing); state.pushPing = null; }
+        if (state.pushWs) { try { state.pushWs.onclose = null; state.pushWs.close(); } catch (_) { /* already closed */ } state.pushWs = null; }
+        try { if (window.zoePushWs && typeof window.zoePushWs.disconnect === 'function') window.zoePushWs.disconnect(); } catch (_) { /* non-fatal */ }
+        stopServiceWorkerPanelPoll();
+        console.warn(`[executor] panel services stopped: ${reason}`);
+    }
+
+    function panelAuthFailed(res) {
+        return !!res && (res.status === 401 || res.status === 403);
+    }
+
     async function bindPanel() {
-        await api('/api/ui/panel/bind', {
+        const res = await api('/api/ui/panel/bind', {
             method: 'POST',
             body: JSON.stringify({
                 panel_id: state.panelId,
@@ -364,11 +389,13 @@
                 ui_context: buildContext(),
             }),
         });
+        if (panelAuthFailed(res)) stopPanelServices(`bind refused: HTTP ${res.status}`);
     }
 
     async function syncState() {
+        if (state.panelServicesStopped) return;
         try {
-            await api('/api/ui/state/sync', {
+            const res = await api('/api/ui/state/sync', {
                 method: 'POST',
                 body: JSON.stringify({
                     panel_id: state.panelId,
@@ -378,6 +405,7 @@
                     ui_context: buildContext(),
                 }),
             });
+            if (panelAuthFailed(res)) stopPanelServices(`sync refused: HTTP ${res.status}`);
         } catch (e) {
             // Non-fatal; periodic sync retries.
         }
@@ -958,7 +986,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
     // Exponential backoff, capped: a dead server must not be hammered, and a
     // panel must never stay deaf for longer than the cap once it is back.
     function schedulePushReconnect() {
-        if (state.unloading || state.pushRetry) return;
+        if (state.unloading || state.pushRetry || state.panelServicesStopped) return;
         state.pushAttempts += 1;
         const delay = Math.min(1000 * Math.pow(2, state.pushAttempts), PUSH_RETRY_MAX_MS);
         state.pushRetry = setTimeout(() => {
@@ -1370,16 +1398,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
         try {
             const res = await api(`/api/ui/actions/pending?panel_id=${encodeURIComponent(state.panelId)}&limit=10`);
             if (!res.ok) {
-                if (res.status === 401 || res.status === 403) {
-                    if (state.pollTimer) {
-                        clearInterval(state.pollTimer);
-                        state.pollTimer = null;
-                    }
-                    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-                        navigator.serviceWorker.controller.postMessage({ type: 'STOP_PANEL_POLL' });
-                    }
-                    console.warn(`Touch action polling stopped after auth failure: HTTP ${res.status}`);
-                }
+                if (panelAuthFailed(res)) stopPanelServices(`poll refused: HTTP ${res.status}`);
                 return;
             }
             const data = await res.json();
