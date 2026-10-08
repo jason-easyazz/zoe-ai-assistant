@@ -291,6 +291,16 @@ check('ws: without zoeAuth the stored zoe_session is used', () => {
   new ZoeWebSocketSync('/api/calendar/ws', 'jason').connect();
   assert.deepStrictEqual(made, ['wss://zoe.local/api/calendar/ws/jason?session_id=abc123']);
 });
+check('ws: disconnect() is a STOP — the close it triggers schedules no reconnect; connect() re-arms', () => {
+  const { ZoeWebSocketSync, made } = wsSandbox({ zoeAuthSession: 'sid' });
+  const sock = new ZoeWebSocketSync('/api/lists/ws', 'jason'); sock.connect();
+  assert.strictEqual(made.length, 1);
+  const ws = sock.ws; sock.disconnect();
+  ws.onclose && ws.onclose();            // the browser fires close after a deliberate close()
+  assert.strictEqual(made.length, 1, 'no new socket after disconnect');
+  assert(!sock.reconnectTimeout, 'no reconnect timer armed');
+  sock.connect(); assert.strictEqual(made.length, 2, 'a deliberate connect() re-arms');
+});
 check('ws: no session at all → no query, and a warning (the server will refuse it)', () => {
   const { ZoeWebSocketSync, made, warned } = wsSandbox({});
   new ZoeWebSocketSync('/api/lists/ws', 'jason').connect();
@@ -366,6 +376,43 @@ function musicSandbox(statusReplies, S = {}) {
     fns.watchForMA(); // idempotent: a second call does not start a second interval
   });
 }
+
+// ── 2026-10-09: dead API paths are gone; music transport uses the real HA control route ──
+check('no desktop page or script calls a route that never existed (warm-up, tools, media upload, HA service, music similar)', () => {
+  const dead = ['/api/chat/warm', '/api/tools/call', '/api/media/upload', '/api/ha/service', '/api/music/similar'];
+  const files = ['music.html', 'settings.html', 'journal.html', 'js/zoe-orb.js', 'js/chat-sessions.js', 'js/widgets/core/journal.js', 'js/widgets/music/library.js'];
+  for (const f of files) { const src = read(f); for (const d of dead) assert(!src.includes("'" + d) && !src.includes('`' + d), f + ' still calls ' + d); }
+  for (const gone of ['js/widgets/music/suggestions.js', 'js/widgets/music/playlists.js', 'js/widgets/music/queue.js', 'js/widgets/music/search.js', 'js/voice/voice-controller.js'])
+    assert(!fs.existsSync(path.join(__dirname, gone)), gone + ' should be deleted (no page loads it)');
+});
+check('widgets: every manifest path exists, and the dashboard size map names only manifest widgets', () => {
+  const manifest = JSON.parse(read('js/widgets/widget-manifest.json'));
+  const widgets = Array.isArray(manifest.widgets) ? manifest.widgets : Object.values(manifest.widgets);
+  const ids = new Set(widgets.map(w => w.id));
+  for (const w of widgets) assert(fs.existsSync(path.join(__dirname, w.path.replace(/^\//, ''))), 'manifest widget ' + w.id + ' points at a missing file ' + w.path);
+  for (const gone of ['music-search', 'music-queue', 'music-playlists', 'music-suggestions']) assert(!ids.has(gone), gone + ' still advertised');
+  const sizeMap = read('js/dashboard.js'); for (const gone of ['music-search', 'music-queue', 'music-playlists', 'music-suggestions']) assert(!sizeMap.includes("'" + gone + "'"), 'dashboard size map still names ' + gone);
+  const wsys = read('js/widget-system.js'); for (const cls of ['MusicSearchWidget', 'MusicQueueWidget', 'MusicPlaylistsWidget', 'MusicSuggestionsWidget']) assert(!wsys.includes(cls), 'widget-system still maps ' + cls);
+});
+check('music: transport uses Music Assistant routes with the MA player_id, never a fabricated HA entity', () => {
+  const src = read('music.html');
+  assert(!/haService|activeEntityId|\/api\/ha\/control|media_player\.\$\{/.test(src));
+  assert(/function maControl\(action, value\)[\s\S]{0,300}maPost\('\/api\/music\/control', body\)/.test(src));
+  assert(/maPost\('\/api\/music\/seek', \{ position_seconds: seconds, player_id: S\.activeId \}\)/.test(src));
+  assert(/maPost\('\/api\/music\/queue\/clear', \{ queue_id: S\.activeId \}\)/.test(src));
+  for (const call of ["maControl('pause')", "maControl('play')", "maControl('previous')", "maControl('next')", "maControl('volume_set', Math.round(val))", "maControl('shuffle_set', !!S.shuffle)", "maControl('repeat_set', S.repeat ? 'all' : 'off')", "maSeek(Math.round(S.currentTime))", "maQueueClear()"]) assert(src.includes(call), 'missing ' + call);
+});
+check('journal: no photo picker is offered while there is no upload backend (page + dashboard widget)', () => {
+  assert(!/class="filepond"|FilePond\.|\/lib\/filepond/.test(read('journal.html')), 'journal.html must carry no FilePond wiring while there is no upload backend');
+  assert(!/journalPhoto/.test(read('js/widgets/core/journal.js')));
+});
+check('updates: the page header wraps at phone width', () => assert(/@media \(max-width: 600px\) \{\s*\.page-header \{ flex-wrap: wrap; \}/.test(read('updates.html'))));
+
+check('index: the sign-in overlay opens by itself after a gate redirect (zoe_redirect_after_login) or ?login=1', () => {
+  const src = read('index.html');
+  assert(/if \(sessionStorage\.getItem\('zoe_redirect_after_login'\) \|\| new URLSearchParams\(location\.search\)\.get\('login'\) === '1'\) \{\s*showLoginForm\(\);/.test(src));
+  assert(/async function showLoginForm\(\)/.test(src));
+});
 
 // ── chat.html: the guest pool is never listed ────────────────────────────────
 check('chat: loadSessions refuses to list sessions without a member session, and sends no ?user_id=', () => {

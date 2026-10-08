@@ -111,12 +111,9 @@ class ChatSessionManager {
      * first user message is responded to quickly rather than cold-starting.
      */
     warmSession(sessionId) {
-        if (!sessionId) return;
-        const session = window.zoeAuth?.getCurrentSession();
-        const headers = { 'Content-Type': 'application/json' };
-        if (session?.session_id) headers['X-Session-ID'] = session.session_id;
-        fetch(`/api/chat/warm/${encodeURIComponent(sessionId)}`, { method: 'POST', headers })
-            .catch(() => {}); // Best-effort — ignore failures
+        // No-op since 2026-10-09: the warm-up route never existed, so this was a guaranteed
+        // 404 on every session load. Kept as a method because callers remain.
+        void sessionId;
     }
 
     async loadSession(sessionId) {

@@ -60,7 +60,6 @@ class MusicLibraryWidget extends WidgetModule {
                     <div class="ml-foryou-tabs">
                         <button class="ml-foryou-tab active" data-type="radio">Personal Radio</button>
                         <button class="ml-foryou-tab" data-type="discover">Discover</button>
-                        <button class="ml-foryou-tab" data-type="similar">Similar</button>
                     </div>
                     <div class="ml-track-list" id="ml-foryou-list">
                         <div class="ml-loading">
@@ -538,21 +537,8 @@ class MusicLibraryWidget extends WidgetModule {
         
         let tracks = [];
         
-        if (type === 'similar') {
-            const trackId = MusicState.state.currentTrack?.id;
-            if (trackId) {
-                const data = await MusicState.apiRequest(`/api/music/similar/${trackId}?limit=15`);
-                tracks = data?.tracks || [];
-            } else {
-                container.innerHTML = `
-                    <div class="ml-empty-state">
-                        <span class="ml-empty-icon">🎵</span>
-                        <p>Play a track to see similar music</p>
-                    </div>
-                `;
-                return;
-            }
-        } else {
+        {
+            // ('similar' tab removed 2026-10-09: its route never existed)
             tracks = await MusicState.loadRecommendations(type);
         }
         
