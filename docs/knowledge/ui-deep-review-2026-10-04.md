@@ -221,3 +221,9 @@ A static audit of every `/api/...` literal in the desktop UI against the live Op
 - **Gaps left (allowlisted in the audit):** the dashboard week-planner widget expects a finance week payload nobody serves (it is not instantiated by default); `voice.html`'s AG-UI approval decision has no decide route; `memories.html` tile layout saves hit a stub router.
 - **Panel policy, for the operator:** only members BOUND to a panel (`panel_user_bindings`) may drive its services; `zoe-touch-pi` binds `jason` as default with no allowed list, so another member signing in on it will see the services stop. Add members under Settings → Panels if they should be able to.
 
+## 12. Login after a gate redirect, and zoe-auth polling itself — 2026-10-09
+
+- **Fixed:** a browser sent to `index.html` by the members-only gate landed on the orb splash ("Touch the orb to begin") and had to tap the orb before any sign-in UI appeared; the overlay now opens itself when the redirect key or `?login=1` is present. Proven end to end on a worktree edge: logged-out `/dashboard.html` → `/index.html` with the overlay and six profile tiles open → Jason → PIN tab → PIN → `/dashboard.html` with a member session.
+- **Fixed:** zoe-auth's embedded quick-auth "offline cache" synced from itself (`/api/admin/sync-data`, admin permission) with no credential — a logged 401 every five minutes forever (1,071 in the week to 10-08) and a cache that never filled. Off by default now (`ZOE_TOUCH_PANEL_OFFLINE_CACHE=1` to opt in).
+- **Checked, not bugs:** every HTML/JS/CSS asset is served `no-cache, must-revalidate` with an ETag, so returning browsers cannot be stuck on stale scripts after a deploy; the service worker's precached pages have not changed since `SW_VERSION` 4.84.1 (a change to a precached page still needs a bump — the pre-existing class risk stands).
+
