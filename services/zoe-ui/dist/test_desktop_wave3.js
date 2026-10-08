@@ -408,6 +408,12 @@ check('journal: no photo picker is offered while there is no upload backend (pag
 });
 check('updates: the page header wraps at phone width', () => assert(/@media \(max-width: 600px\) \{\s*\.page-header \{ flex-wrap: wrap; \}/.test(read('updates.html'))));
 
+check('index: the sign-in overlay opens by itself after a gate redirect (zoe_redirect_after_login) or ?login=1', () => {
+  const src = read('index.html');
+  assert(/if \(sessionStorage\.getItem\('zoe_redirect_after_login'\) \|\| new URLSearchParams\(location\.search\)\.get\('login'\) === '1'\) \{\s*showLoginForm\(\);/.test(src));
+  assert(/async function showLoginForm\(\)/.test(src));
+});
+
 // ── chat.html: the guest pool is never listed ────────────────────────────────
 check('chat: loadSessions refuses to list sessions without a member session, and sends no ?user_id=', () => {
   const body = extractFunction(chatHtml, 'loadSessions');
