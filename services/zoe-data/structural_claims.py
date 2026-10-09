@@ -17,7 +17,8 @@ English, 0.50 - never fires - on es/fr/de/zh/ja). The cure is to separate READIN
   hedge the claim row calls asserted") and flag it for the off-path verifier. They never authorise one.
 
 Modes (``ZOE_STRUCTURAL_CLAIMS``, per-call env read): ``off`` (nothing asked of the extractor, nothing logged),
-``shadow`` (DEFAULT: the extractor is asked for the claim row, the structural decision is computed and logged beside the
+``shadow`` (DEFAULT: the legacy extraction runs UNCHANGED - same prompt, same token budget, same facts as ``off`` - and the claim row
+is read by a separate bounded post-turn call over the facts it stored; the structural decision is computed and logged beside the
 lexical one, the lexical decision stays authoritative), ``enforce`` (the structural decision is authoritative wherever a
 valid claim row exists; a fact without one keeps the lexical decision).
 
@@ -60,8 +61,38 @@ def enforcing() -> bool:
 
 
 def active() -> bool:
-    """Is the claim row asked of the extractor and the decision computed (``shadow`` or ``enforce``)?"""
+    """Is the claim row read and the decision computed (``shadow`` or ``enforce``)?"""
     return mode() != OFF
+
+
+def inline() -> bool:
+    """Is the claim row asked for INSIDE the per-turn extraction call (``enforce`` only)?
+
+    ``shadow`` must not touch the extraction itself: asking the 4B for a longer, differently-shaped JSON changes WHICH facts it
+    returns and how it words them (live 2026-10-09: "Dana has two kids, Mika and Biscuit" began to yield a "Dana has a child named
+    Biscuit" row, and "I live in Hobart now" a differently-worded fact that the fragment beside it then out-deduped). In ``shadow`` the
+    legacy extraction runs byte for byte as in ``off`` and the claim row is read by a SEPARATE bounded post-turn call
+    (``structural_reader``) over the facts that call stored; only ``enforce``, where the claim row decides, needs it at write time."""
+    return mode() == ENFORCE
+
+
+def post_read() -> bool:
+    """Is the claim row read by the separate post-turn call (``shadow``)?"""
+    return mode() == SHADOW
+
+
+#: The field definitions the claim row is read against - ONE text shared by the in-call prompt (``enforce``) and the post-turn
+#: reader (``shadow``), so the two cannot drift apart.
+CLAIM_FIELD_RULES = """\
+  "subj": "user" | "rel:<relation>" for the user's relative by relation (rel:mother, rel:father, rel:wife, rel:husband, rel:sister, rel:brother, rel:son, rel:daughter, ...) | "person:<Name>" for a named third party
+  "pred": residence | employer | occupation | birthday | age | name | pet_name | allergy | health | activity | membership | plan | preference | kin:<relation> | other
+  "obj": the value, copied from the user's own words (a place, a name, a date, a thing)
+  "pol": "affirm" | "negate" (the user says it is NOT so) | "ended" (it was so and stopped: no longer, quit, dropped)
+  "mod": "asserted" (plainly stated) | "hedged" (I think, probably) | "hypothetical" (a wish, might, if) | "question" | "reported" (someone else said it)
+  "tense": "current" | "past" | "future"   (a plan or intention that exists now is "current")
+  "quote": the user's own words that state it, copied EXACTLY from the message (the shortest span)
+  "lang": the language code of the message (en, es, fr, de, zh, ja, ...)
+"""
 
 
 # -- the closed vocabularies ------------------------------------------------------------------------------
