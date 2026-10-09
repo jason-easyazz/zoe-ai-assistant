@@ -3489,6 +3489,7 @@
           "scripts/perf/samantha_bar.py",
           "scripts/perf/samantha_day_sim.py",
           "scripts/perf/samantha_person.py",
+          "scripts/perf/tool_use_bench.py",
           "scripts/perf/user_model_ab.py"
         ],
         "typed_env": false
@@ -4733,6 +4734,16 @@
         "in_env_example": true,
         "readers": [
           "services/zoe-data/web_search_provider.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_SELF_MODEL": {
+        "defaults": [
+          "'shadow'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/self_model.py"
         ],
         "typed_env": true
       },

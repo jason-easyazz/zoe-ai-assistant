@@ -719,6 +719,17 @@ async def resolve(text: str, user_id: str, session_id: str, **kwargs):  # noqa: 
     answered = await _provenance_tier(text, user_id, session_id, kwargs)
     if answered is not None:
         return answered
+    # self_model (ZOE_SELF_MODEL, default shadow = a log line and nothing else): "what can you do?", "can you order groceries?",
+    # "are you always listening?" are answered from the model GENERATED from the real registries, never from the 4B's imagination.
+    try:
+        import self_model as _sm
+
+        answered = await _sm.tier(text, user_id, session_id, channel=kwargs.get("channel"),
+                                  speaker_verified=(kwargs.get("extra_ctx") or {}).get("speaker_verified"))
+    except Exception:  # noqa: BLE001 - the tier never breaks a turn
+        answered = None
+    if answered is not None:
+        return answered
     res = await _resolve_core(text, user_id, session_id, **kwargs)
     if res is not None and getattr(res, "reply", ""):
         try:
