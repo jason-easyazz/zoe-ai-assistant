@@ -215,6 +215,36 @@ def test_cells_mode_aggregates_the_model_counters_and_names_the_reason_for_an_er
         srv.close()
 
 
+def test_cells_mode_logs_one_progress_line_per_cell_so_a_killed_run_keeps_its_verdicts():
+    srv = FakeNightServer(FakeNightBrain())
+    try:
+        r = _run_py(["scripts/maintenance/zoe-night-mind.py", "--model-url", srv.url, "--ctx-tokens", "8192", "--cells", "--decode-tok-s", "50", "--prefill-tok-s", "900"])
+        assert r.returncode == 0, r.stderr[-800:]
+        import re
+        lines = re.findall(r"^NIGHT_CELL id=(K\d+f?) verdict=(\w+) wall_s=", r.stderr, re.M)
+        cells = json.loads(r.stdout)["cells"]
+        assert [k for k, _v in lines] == ["K1", "K2", "K3", "K4", "K5", "K6", "K7", "K8", "K9", "K9f", "K10", "K11", "K12"]
+        assert all(cells[k] == v for k, v in lines) and cells["skipped_budget"] == []
+    finally:
+        srv.close()
+
+
+def test_cell_budget_stops_starting_cells_that_would_overrun_and_still_prints_the_one_json_line():
+    """The 2026-10-09 failure was a kill with NO output. With a budget the CLI skips (and names) the cells it cannot finish, and prints what it has."""
+    srv = FakeNightServer(FakeNightBrain())
+    try:
+        r = _run_py(["scripts/maintenance/zoe-night-mind.py", "--model-url", srv.url, "--ctx-tokens", "8192", "--cells", "--decode-tok-s", "3", "--prefill-tok-s", "100", "--cell-budget", "30"])
+        assert r.returncode == 0, r.stderr[-800:]
+        assert len(r.stdout.strip().splitlines()) == 1
+        c = json.loads(r.stdout)["cells"]
+        assert c["skipped_budget"] == ["K1", "K2", "K3", "K4", "K5", "K6", "K7", "K8", "K9", "K9f", "K10", "K11", "K12"] and c["skip"] == 13 and c["pass"] == 0
+        assert "cell_budget" in c["reasons"]["K1"] and srv.requests <= 2                      # no cell was started: only the model probe touched the server
+        ok = _run_py(["scripts/maintenance/zoe-night-mind.py", "--model-url", srv.url, "--ctx-tokens", "8192", "--cells", "--decode-tok-s", "50", "--prefill-tok-s", "900", "--cell-budget", "3000"])
+        assert json.loads(ok.stdout)["cells"]["skipped_budget"] == [] and json.loads(ok.stdout)["cells"]["pass"] > 0
+    finally:
+        srv.close()
+
+
 def test_a_cell_that_cannot_reach_its_model_is_an_error_that_says_why(tmp_path):
     srv = FakeNightServer(FakeNightBrain())
     srv.up = False

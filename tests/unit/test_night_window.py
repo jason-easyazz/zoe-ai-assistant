@@ -855,8 +855,205 @@ def _trial_cells(tmp_path, *, pretty):
     assert w.rec["trial"]["12B"]["night_mind_cells"]["K6"] == "FAIL"
     twelve = cells_argv[0]                                                                       # the 12B phase: the cells get the measured rates (they used the 4B's, 2026-10-09)
     assert twelve[twelve.index("--decode-tok-s") + 1] == "4.20" and twelve[twelve.index("--prefill-tok-s") + 1] == "120.5" and twelve[twelve.index("--model-name") + 1] == "12B"
-    assert all("--decode-tok-s" not in a for a in cells_argv[1:])                                # the 4B@32k phase is not sized by the 12B's speed
+    four = w.rec["speed"]["4B@32k"]                                                              # the 4B@32k phase is sized by ITS OWN probe, never the 12B's
+    for a in cells_argv[1:]:
+        assert a[a.index("--decode-tok-s") + 1] == f"{four['decode_tps']:.2f}" and a[a.index("--prefill-tok-s") + 1] == f"{four['prefill_tps']:.1f}"
     assert "| K6 | FAIL | FAIL |" in next(cfg.report_dir.glob("*-trial*.md")).read_text()
+
+
+# ── --cells-only, the cells' budget, the 12B's -ngl default (2026-10-09 evening: a fixed 420 s watchdog killed the cells after two members; ngl 38 was refused twice) ──
+
+#: the 12B's last real probe (run 20261009-182701, ngl 34)
+D12, P12 = 6.24, 158.7
+
+
+def test_the_cells_budget_is_the_measured_speed_through_the_member_pass_formula():
+    from zmb import cells_budget as cb
+    sys.path.insert(0, str(REPO / "services" / "zoe-data"))
+    import night_mind as nm
+    # one MOMENTS call (700 prompt tokens, cap 640) at today's 12B: 700/158.7 + 0.6 x 640/6.24 = 65.9 s; the worst case is night_mind.timeout_for itself
+    assert cb.call_expected_s(700, 640, D12, P12) == pytest.approx(700 / P12 + 0.6 * 640 / D12)
+    assert cb.cell_worst_s("K12", D12, P12) == pytest.approx(nm.timeout_for(700, 640, D12, P12))
+    assert cb.cell_expected_s("K1", D12, P12) == pytest.approx(2 * cb.call_expected_s(700, 640, D12, P12) + cb.call_expected_s(600, 450, D12, P12))
+    assert all(cb.cell_expected_s(k, D12, P12) == 0 for k in ("K2", "K3", "K4", "K5", "K6"))           # they read the pass K1 played: no calls of their own
+    total = sum(cb.cell_expected_s(k, D12, P12) for k in cb.CELL_ORDER)
+    assert 1040 < total < 1070                                                                          # the 13 cell runs (K1-K12, K9 twice) need ~1,055 s at 6.24 tok/s
+    fast = sum(cb.cell_expected_s(k, 2 * D12, P12) for k in cb.CELL_ORDER)                             # twice the decode speed: about half the decode time
+    assert fast < 0.6 * total
+    assert sum(cb.cell_worst_s(k, D12, P12) for k in cb.CELL_ORDER) > total                           # the ceiling is above the expectation
+    assert 0 < cb.cell_expected_s("K1", 1e9, 1e9) < 1                                                 # a model that costs nothing costs nothing (no hidden constant per cell)
+
+
+def test_the_plan_fits_all_cells_with_room_and_a_prefix_when_the_cap_leaves_less():
+    from zmb import cells_budget as cb
+    full = cb.plan(D12, P12, 1640.0)
+    assert full["fits_all"] and full["selected"] == list(cb.CELL_ORDER) and full["expected_s"] == pytest.approx(1055, abs=15)
+    assert full["cell_budget_s"] <= 1640 - cb.GRACE_S and full["watchdog_s"] <= 1640                     # never past what the cap leaves
+    assert full["watchdog_s"] > 420                                                                      # the fixed 420 s that killed the 2026-10-09 run is gone
+    part = cb.plan(D12, P12, 700.0)
+    assert 0 < len(part["selected"]) < len(cb.CELL_ORDER) and part["dropped"] == list(cb.CELL_ORDER[len(part["selected"]):]) and not part["fits_all"]
+    assert part["selected"][:6] == ["K1", "K2", "K3", "K4", "K5", "K6"] and part["needed_s"] <= 700 - cb.GRACE_S and part["watchdog_s"] <= 700
+    assert cb.plan(D12, P12, 200.0)["selected"] == [] and cb.plan(D12, P12, 200.0)["watchdog_s"] == 0       # nothing fits: no run, no watchdog
+    assert len(cb.plan(D12 / 2, P12, 1640.0)["selected"]) < len(full["selected"])                          # a slower model fits fewer
+    huge = cb.plan(D12, P12, 50000.0)
+    assert huge["cell_budget_s"] == pytest.approx(cb.STARTUP_S + huge["worst_s"], abs=1) and huge["watchdog_s"] == pytest.approx(huge["cell_budget_s"] + cb.GRACE_S, abs=1)
+
+
+def test_the_cli_go_no_go_before_a_cell_is_time_spent_plus_the_cells_expected_time():
+    from zmb import cells_budget as cb
+    k7 = cb.cell_expected_s("K7", D12, P12)
+    assert cb.fits_next(0, 1000, "K7", D12, P12)
+    assert not cb.fits_next(1000 - cb.SLACK * k7 + 1, 1000, "K7", D12, P12) and cb.fits_next(1000 - cb.SLACK * k7 - 1, 1000, "K7", D12, P12)
+    assert cb.fits_next(10 ** 6, 0, "K7", D12, P12) and cb.fits_next(10 ** 6, None, "K7", D12, P12)        # no budget given = the old behaviour
+
+
+def _cells_host(tmp_path, *, kill=False, verdicts=None, argv=("--cells-only",), start=None, **kw):
+    """A cells-only window on the fake host. The night-mind CLI stand-in writes the one-JSON-object log (or, ``kill``, only per-cell progress lines and returns rc 124 at the watchdog)."""
+    script = tmp_path / "zoe-night-mind.py"
+    script.write_text("# stand-in")
+    w, host, cfg = make(tmp_path, argv=list(argv), start=start or at(3, 5), cfg_kw={"night_mind_script": script, **kw})
+    real = host.run_watched
+    calls: list = []
+    verdicts = verdicts or {"K1": "PASS", "K2": "PASS", "K6": "FAIL", "K7": "ERROR"}
+
+    def rw(argv_, timeout, env, tick, log_path, interval=5.0):
+        if "--cells" in argv_:
+            calls.append({"argv": list(argv_), "timeout": timeout})
+            host.cmds.append((list(argv_), True))
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            n = {v: sum(1 for x in verdicts.values() if x == v) for v in ("PASS", "FAIL", "SKIP", "ERROR")}
+            progress = "".join(f"NIGHT_CELL id={k} verdict={v} wall_s=12.0\n" for k, v in verdicts.items())
+            if kill:
+                log_path.write_text(progress + "NIGHT_MIND user=- status=running\n")
+                host.t += timeout
+                return bk.Result(124, "")
+            obj = {"status": "ok", "model": "12B", "members": [], "totals": {"calls": 9},
+                   "cells": {**verdicts, "pass": n["PASS"], "fail": n["FAIL"], "skip": n["SKIP"], "error": n["ERROR"], "k1": {"judged": 4}, "reasons": {"K7": "llm_timeout budget_s=148.0"},
+                             "skipped_budget": [], "model_totals": {"calls": 18, "prompt_tokens": 9000, "completion_tokens": 4000}}}
+            log_path.write_text(progress + json.dumps(obj) + "\ndone {}\n")
+            host.t += 300
+            return bk.Result(0, "")
+        if "mpa_window.py" in " ".join(argv_):
+            calls.append({"zma": list(argv_)})
+        return real(argv_, timeout, env, tick, log_path, interval)
+    host.run_watched = rw
+    return w, host, cfg, calls
+
+
+def test_cells_only_loads_probes_scores_the_night_mind_cells_and_restores_without_the_zma_arm_or_the_4b(tmp_path):
+    w, host, cfg, calls = _cells_host(tmp_path)
+    assert w.run() == nw.EXIT_OK, w.outcome
+    assert cfg.trial and cfg.cells_only and cfg.skip_4b and cfg.jobs == () and not cfg.fallback_4b and cfg.cap_min == 40.0
+    cells = [c for c in calls if "argv" in c]
+    assert len(cells) == 1 and not [c for c in calls if "zma" in c]                                      # the ZMA-arm pass was never started
+    systemd = [c for c in host.joined() if c.startswith("systemd-run")]
+    assert any("zoe-night-12b" in c for c in systemd) and not any("zoe-night-embed" in c or "zoe-night-4b32k" in c for c in systemd)     # no shim, no 4B clone
+    assert wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]                            # restored, brain first
+    assert w.rec["trial"]["12B"]["night_mind_cells"]["K6"] == "FAIL" and list(w.rec["trial"]) == ["12B"]
+    argv = cells[0]["argv"]
+    assert argv[argv.index("--model-name") + 1] == "12B" and argv[argv.index("--decode-tok-s") + 1] == "4.20" and argv[argv.index("--prefill-tok-s") + 1] == "120.5"
+    js = json.loads(next(cfg.report_dir.glob("*-cells*.json")).read_text())
+    assert js["trial_mode"] == "cells-only" and js["mode"] == "trial" and js["trial"]["12B"]["night_mind_cells"]["K1"] == "PASS" and js["cells_plan"]["12B"]["selected"]
+
+
+def test_the_watchdog_around_the_cells_is_computed_from_the_measured_speed_and_the_cap_never_a_constant(tmp_path):
+    from zmb import cells_budget as cb
+    w, host, cfg, calls = _cells_host(tmp_path)
+    assert w.run() == nw.EXIT_OK, w.outcome
+    c = next(c for c in calls if "argv" in c)
+    plan = w.rec["cells_plan"]["12B"]
+    # the planned room is the cap minus the restore reserve minus what elapsed before the cells started; the fake's 12B measured 4.20 / 120.5
+    assert plan["decode_tok_s"] == 4.2 and plan["prefill_tok_s"] == 120.5 and c["timeout"] == plan["watchdog_s"] != 420.0
+    assert plan["watchdog_s"] <= plan["room_s"] <= (cfg.cap_min - cfg.reserve_min) * 60 and plan["cell_budget_s"] == pytest.approx(plan["watchdog_s"] - cb.GRACE_S, abs=1) or plan["fits_all"]
+    assert c["argv"][c["argv"].index("--cell-budget") + 1] == f"{plan['cell_budget_s']:.0f}"
+    assert any("night-mind cells budget:" in e["msg"] and "watchdog" in e["msg"] for e in w.rec["events"])      # the computed budget is logged
+    assert w.cells_room_s("12B") == w.time_left_s()                                                     # cells-only: no later phase keeps a reserve
+    (tmp_path / "full").mkdir()
+    wf, _h, cf = make(tmp_path / "full", argv=["--trial"], start=at(3, 5))
+    assert wf.cells_room_s("12B") == wf.time_left_s() - 300.0 and wf.cells_room_s("4B@32k") == wf.time_left_s()      # a full trial leaves the 4B@32k phase its 300 s
+
+
+def test_a_cap_that_cannot_hold_all_cells_runs_a_prefix_says_so_and_tells_the_cli_its_budget(tmp_path):
+    w, host, cfg, calls = _cells_host(tmp_path, argv=("--cells-only", "--cap-min", "26"))
+    assert w.run() == nw.EXIT_OK, w.outcome
+    plan = w.rec["cells_plan"]["12B"]
+    assert plan["selected"] and plan["dropped"] and not plan["fits_all"]
+    c = next(c for c in calls if "argv" in c)
+    assert c["timeout"] == plan["watchdog_s"] <= plan["room_s"] and c["argv"][c["argv"].index("--cell-budget") + 1] == f"{plan['cell_budget_s']:.0f}"
+    assert any("DROPPED (cannot fit)" in e["msg"] and plan["dropped"][0] in e["msg"] for e in w.rec["events"])
+    md = next(cfg.report_dir.glob("*-cells*.md")).read_text()
+    assert "DROPPED (cannot fit)" in md
+
+
+def test_no_cell_fitting_the_cap_is_an_error_row_not_a_silent_empty_run(tmp_path):
+    w, host, cfg, calls = _cells_host(tmp_path, argv=("--cells-only", "--cap-min", "14"))
+    rc = w.run()
+    assert rc == nw.EXIT_ABORTED and not [c for c in calls if "argv" in c]                              # the CLI was never started with a budget of zero
+    assert "no night-mind cell fits" in w.outcome
+    assert wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]
+
+
+def test_a_watchdog_kill_keeps_the_verdicts_the_cli_logged_cell_by_cell(tmp_path):
+    w, host, cfg, calls = _cells_host(tmp_path, kill=True, verdicts={"K1": "PASS", "K2": "PASS", "K3": "FAIL"})
+    assert w.run() == nw.EXIT_ABORTED                                                                    # incomplete measurement: loud exit, box restored
+    nmc = w.rec["trial"]["12B"]["night_mind_cells"]
+    assert nmc["K1"] == "PASS" and nmc["K3"] == "FAIL" and nmc["partial"] and nmc["pass"] == 2 and nmc["fail"] == 1 and "killed by the" in nmc["why"] and "rc 124" in nmc["why"]
+    md = next(cfg.report_dir.glob("*-cells*.md")).read_text()
+    assert "| K1 | PASS |" in md and "| K3 | FAIL |" in md and "killed by the" in md
+    assert wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]
+
+
+def test_the_report_and_the_json_carry_every_cell_verdict_the_reason_and_the_mode(tmp_path):
+    w, host, cfg, calls = _cells_host(tmp_path)
+    assert w.run() == nw.EXIT_OK, w.outcome
+    md = next(cfg.report_dir.glob("*-cells*.md")).read_text()
+    assert "(trial, cells-only)" in md.splitlines()[0] and "## Trial (cells-only)" in md and "no ZMA-arm pass, no 4B phase" in md
+    assert "| K1 | PASS | - |" in md and "| K6 | FAIL | - |" in md and "| K7 | ERROR | - | llm_timeout budget_s=148.0 |" in md           # verdicts and the reason of an ERROR
+    assert "PASS 2 / FAIL 1 / SKIP 0 / ERROR 1" in md and "model calls 18" in md and "cells budget (12B)" in md
+    assert "no cells object" not in md                                                                   # the bug this PR fixes: an error row INSTEAD of the verdicts
+    js = json.loads(next(cfg.report_dir.glob("*-cells*.json")).read_text())
+    assert js["trial"]["12B"]["night_mind_cells"]["K7"] == "ERROR" and js["trial"]["12B"]["night_mind_cells"]["reasons"]["K7"].startswith("llm_timeout")
+
+
+def test_the_dry_run_table_shows_the_mode_and_what_does_not_run(tmp_path):
+    out: list = []
+    w, host, cfg = make(tmp_path, argv=["--dry-run", "--cells-only"], start=at(3, 5))
+    w.log = lambda m: out.append(m)
+    host.log = w.log
+    w.run()
+    text = "\n".join(out)
+    assert "MODE cells-only" in text and "NOT run: the ZMA-arm reflection pass" in text and "cells budget" in text and "watchdog" in text
+    (tmp_path / "x").mkdir()
+    w2, host2, cfg2 = make(tmp_path / "x", argv=["--dry-run", "--trial"], start=at(3, 5))
+    out2: list = []
+    w2.log = lambda m: out2.append(m)
+    host2.log = w2.log
+    w2.run()
+    assert "MODE cells-only" not in "\n".join(out2) and "trial (full)" in "\n".join(out2)
+
+
+def test_trial_keeps_its_behaviour_and_cells_only_is_a_trial_that_cannot_be_combined_with_the_sweep():
+    assert nw.configure(nw.build_parser().parse_args(["--trial"])).cells_only is False
+    c = nw.configure(nw.build_parser().parse_args(["--cells-only"]))
+    assert c.trial and c.cells_only and c.skip_4b and c.trial_mode == "cells-only" and c.night_only is False and c.jobs == ()
+    assert nw.configure(nw.build_parser().parse_args(["--trial"])).trial_mode == "full"
+    with pytest.raises(nw.Refused):
+        nw.configure(nw.build_parser().parse_args(["--cells-only", "--speed-sweep"]))
+
+
+def test_the_12b_default_is_ngl_34_because_38_was_refused_twice_and_38_stays_selectable(tmp_path):
+    assert nw.NightCfg().ngl == 34
+    for argv in ([], ["--trial"], ["--cells-only"]):
+        assert nw.configure(nw.build_parser().parse_args(argv)).ngl == 34
+    cfg38 = nw.configure(nw.build_parser().parse_args(["--cells-only", "--ngl", "38"]))
+    assert cfg38.ngl == 38
+    assert nw.llm_spec(PARKED, nw.NightCfg(), nw.Levers("qat", 8192, "q8_0"))["argv"].count("34") >= 1
+    argv38 = nw.llm_spec(PARKED, cfg38, nw.Levers("qat", 8192, "q8_0"))["argv"]
+    assert argv38[argv38.index("--n-gpu-layers") + 1] == "38"
+    w, host, cfg, calls = _cells_host(tmp_path)
+    assert w.run() == nw.EXIT_OK, w.outcome
+    start = next(c for c in host.joined() if c.startswith("systemd-run") and "zoe-night-12b" in c)
+    assert "--n-gpu-layers 34" in start
 
 
 # ── loud failure ─────────────────────────────────────────────────────────────
@@ -976,7 +1173,7 @@ def test_the_trial_scores_the_12b_then_the_4b_at_32k_and_restores(tmp_path):
     assert t["12B"]["pass"] == 2 and t["4B@32k"]["pass"] == 1 and t["12B"]["items"] == [6, 8] and t["12B"]["tokens_predicted"] == 1000
     assert wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]
     md = next(cfg.report_dir.glob("*-trial*.md")).read_text()
-    assert "| K2.a | PASS | FAIL |" in md and "Trial: K cells, 12B vs the 4B at 32k" in md
+    assert "| K2.a | PASS | FAIL |" in md and "Trial (full): K cells, 12B vs the 4B at 32k" in md
 
 
 def test_a_trial_phase_without_a_result_is_not_an_ok_outcome_and_the_12b_timeout_follows_its_speed(tmp_path):

@@ -20,10 +20,11 @@ scripts/night/night_window.sh --trial            # manual, any hour, about 25 mi
 scripts/night/night_window.sh                    # the window itself (the timer runs this at 02:50; a manual run outside 01:30-03:40 needs --anytime)
 scripts/night/night_window.sh --restore-only     # put everything back (idempotent; a window that is still running is left alone)
 scripts/night/night_window.sh --speed-sweep      # manual, any hour, hard cap 45 min: one 12B per config of the speed grid, one restore at the end (section 11)
+scripts/night/night_window.sh --cells-only       # manual, any hour, cap 40 min: load the 12B, one speed probe, ONLY the night mind's own cells (K1-K12), restore (section 12)
 scripts/night/install_night_window.sh --dry-run  # then without --dry-run: the OPERATOR installs the two units (section 6)
 ```
 
-Levers and pins (defaults are the 2026-10-09 sweep's winner, section 11): `--model auto|qat|q4km`, `--ctx 8192|16384|32768` (default 8192), `--kv q8_0|q4_0` (default q8_0), `--ngl N` (default 38), `--batch-size N` / `--ubatch-size N` (512 / 128), `--no-mlock`, `--fit-off` / `--fit-default`, `--binary PATH` (default: the b11194 build), `--speed-sweep`, `--sweep-stages`, `--sweep-fresh`, `--keep-zoe-data`, `--cap-min`, `--end-by HH:MM`, `--jobs digest,dreaming,night_mind`, `--night-mind-cmd "..."`, `--no-fallback`, `--retry-load`, `--job-reserve-mib`, `--margin-mib`. Every external command goes through the bake-off `Host` seam, so `tests/unit/test_night_window.py` (see the test file) runs the real step logic with a double.
+Levers and pins (defaults are the 2026-10-09 sweep's winner, section 11): `--model auto|qat|q4km`, `--ctx 8192|16384|32768` (default 8192), `--kv q8_0|q4_0` (default q8_0), `--ngl N` (default 34; 38 is the sweep's faster winner but was refused twice the same evening, section 11 'Why -ngl 34'), `--batch-size N` / `--ubatch-size N` (512 / 128), `--no-mlock`, `--fit-off` / `--fit-default`, `--binary PATH` (default: the b11194 build), `--speed-sweep`, `--cells-only`, `--sweep-stages`, `--sweep-fresh`, `--keep-zoe-data`, `--cap-min`, `--end-by HH:MM`, `--jobs digest,dreaming,night_mind`, `--night-mind-cmd "..."`, `--no-fallback`, `--retry-load`, `--job-reserve-mib`, `--margin-mib`. Every external command goes through the bake-off `Host` seam, so `tests/unit/test_night_window.py` (see the test file) runs the real step logic with a double.
 
 ## 2. What sleeps, when, and what is unavailable
 
@@ -190,9 +191,21 @@ Owner question (11:45): the live 4B was squeezed with a measured flag research (
 
 Stage 8 (a 12B draft / MTP head) had nothing to test: no draft GGUF exists under `~/models/gemma4-12b*`.
 
-### The winner, now the window's default
+### The winner (the window's default, except `-ngl`: see 'Why -ngl 34')
 
 **4-38: llama.cpp build b11194, QAT q4_0 GGUF, `-ngl 38`, ctx 8192, KV q8_0, `-b 512 -ub 128`, mlock (`--load-mode mmap+mlock` on this build), `--fit off`, unified memory on.** Night-shape decode **6.89 tok/s**, prefill **182.4 tok/s** (1.6k probe: 6.84 / 175.4); loaded in 14.3 s, MemAvailable 4,469 MiB after the load (the floor is 1,200), served ctx 8192. The parked unit's own flags (control C0: b9733, `-ngl 30`) measured **5.46 / 141.2** in the same run, so the default is +26 % decode and +29 % prefill. These values are `NightCfg`'s defaults and the `--trial` defaults, and `llm_spec` writes every one of them into the generated command explicitly (`--n-gpu-layers`, `--batch-size`, `--ubatch-size`, `--fit off`, the b11194 binary with its renamed flags, `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` on a Jetson) on top of the parked unit's ExecStart (`llama-server-12b-deepbrain.service.disabled`, read by preflight and never edited), so a change to that file cannot change what the window runs. Each is overridable: `--ngl` / `NIGHT_NGL`, `--ctx` / `NIGHT_CTX`, `--kv` / `NIGHT_KV`, `--batch-size` / `NIGHT_BATCH`, `--ubatch-size` / `NIGHT_UBATCH`, `--binary` / `NIGHT_LLAMA_BINARY` (`parked` = the parked unit's b9733), `--fit-default` / `NIGHT_FIT_OFF=0`, `--no-mlock` / `NIGHT_NO_MLOCK=1`, `--no-unified` / `NIGHT_NO_UNIFIED=1`. Because ctx and KV are now pins of the lever choice (8192, q8_0), the window no longer "chooses the biggest set that fits" (section 4's order applies only when both are unpinned, which needs explicit overrides); the night jobs' prompts are 3-8k tokens.
+
+### Why `-ngl 34` is the default (2026-10-09 evening) and 38 is only selectable
+
+The sweep chose 38 on speed alone (night-shape decode 6.89 tok/s against 6.13 at `-ngl 34`, row 4-34). The same evening, with the 38 default, two real trials did not start:
+
+| run | `-ngl` | what the window measured before the start | result |
+|---|---|---|---|
+| 20261009-182205 | 38 | MemFree 12,991 MiB, but only 6,006 MiB in free blocks of 2 MB and up after six compactions (the smallest 12B wants 7,390 of each) | `cudaMalloc` of 159 MiB failed; RAM when it failed: 2,312 MiB in free 2 MB+ blocks |
+| 20261009-182549 | 38 | MemFree 12,961 MiB, 7,068 MiB in 2 MB+ blocks at the last reading before the start (after two compactions; the smallest 12B wants 7,390) | `load_model: failed to load model`; MemFree 5,574 MiB, 2,070 MiB in 2 MB+ blocks when it failed |
+| 20261009-182701 | **34** | MemFree 13,071 MiB, one compaction (order 9+ free blocks 1,059 -> 2,124) | **loaded first time**, healthy in 15 s, MemAvailable 4,190 MiB after the load, prefill 158.7 / decode 6.24 tok/s |
+
+Two out of two refusals at 38 and one clean load at 34 on the same box in the same ten minutes: the layers on the GPU set the size of the CUDA allocations that must be found in 2 MB+ blocks (sweep rows 4-42 and 5a/5b/7a died on the same small `cudaMalloc` family at more layers), and 38 sits on the edge of what a fragmented Tegra can serve. A night that does not start measures nothing and puts Zoe to sleep for the attempt. 34 costs **11 %** of decode (6.89 to 6.13 in the sweep; 6.24 measured in the real run) and about 10 % of prefill (182 to 164.5). The default is therefore the layer count that loads (`NightCfg.ngl`, `NIGHT_NGL`, `--ngl`); `--ngl 38` (or `NIGHT_NGL=38`) selects the faster setting when the box has just been rebooted or is known to be unfragmented. The load-failure guard (section 8) still counts a failed 38.
 
 ### The ceiling: full offload is impossible on JetPack 6.2.1
 
@@ -211,3 +224,29 @@ Four variants of full offload (`-ngl 99` / auto) all died on the same single all
 - **A newer build alone** (C0 5.46 -> 1e 5.70 at the same `-ngl 30`) is worth about +4 %; the rest of the gain is the layers (38 instead of 30).
 
 Nothing here changes the K1-K5 situation (section 8): the speed is known, a 12B reflection pass at it has still to be scored by a `--trial`.
+
+## 12. `--cells-only` and the night-mind cells' budget (2026-10-09)
+
+**What it is.** `--trial` runs three measurements in order: the ZMA-arm reflection pass with its K cells (about 18 minutes on the 12B; a memory arm the bake-off rejected), then the night mind's own cells (`zoe-night-mind.py --cells`, K1-K12 on lab stores: the measurement that matters for the night), then optionally the 4B at 32k. `--cells-only` is a trial that loads the 12B, takes the one speed probe, runs ONLY the night mind's cells, and restores: no ZMA-arm pass, no embeddings shim, no 4B phase. The dry-run table and the report show the mode (`MODE cells-only`; report title `(trial, cells-only)`, file `<date>-cells[-HHMM].md/.json`, JSON key `trial_mode`).
+
+```bash
+scripts/night/night_window.sh --dry-run --cells-only     # reads the box, prints the mode, the command, the cells budget at the last measured speed; changes nothing
+scripts/night/night_window.sh --cells-only               # the run (any hour; stops Zoe's voice, zoe-data and the 4B for about 25 minutes, then restores)
+scripts/night/night_window.sh --cells-only --ngl 38      # the sweep's faster -ngl, if the box was just rebooted
+```
+
+**Why the watchdog was wrong.** The first full trial of the evening (run 20261009-182701) loaded the 12B at `-ngl 34` (prefill 158.7, decode 6.24 tok/s), spent 1,055 s on the ZMA pass, then ran the night-mind CLI under a FIXED 420 s watchdog. One member's pass is three model calls, about 150-200 s on the 12B, so the CLI was killed (rc 124, `no cells object in the output`) after two passes and the report showed only that error row. PR #1946 had scaled the CLI's per-call timeouts from the measured rates; the window's own kill was left a constant. The class: every budget in the window derives from the measured rate and the time the cap leaves.
+
+**The formula** (`scripts/perf/zmb/cells_budget.py`, used by the window AND the CLI; same family as `night_mind.timeout_for`):
+
+- a call costs `prompt_tokens / prefill_tok_s + output_tokens / decode_tok_s`; EXPECTED output is `0.6 x max_tokens` (measured: a 3-call pass took 150-200 s at 6.24 tok/s), WORST case is `night_mind.timeout_for` itself (output at the cap, +20 s);
+- which calls a cell makes is measured on the lab household: MOMENTS calls (prompt about 700 tokens, cap 640) and THREADS calls (about 600, cap 450); K1, K7, K8: 2+1; K9, K9f, K10, K11: 1+1; K12: 1+0; K2-K6 read K1's pass and make none;
+- **expected** = sum over the cells; **needed** = 45 s startup + 1.25 x expected; **worst** = sum of the worst cases;
+- **room** = `cap_min - reserve_min - elapsed` (minus 300 s in a full `--trial` for the 4B phase that still follows the 12B's cells);
+- **selected** = the longest prefix of K1..K12 whose *needed* fits `room - 60 s`; **CLI budget** (`--cell-budget`) = `min(room - 60, 45 + worst)`; **watchdog** = `min(room, CLI budget + 60)`. Nothing fits -> no CLI run, an error row that says why.
+
+**At the 12B's last measured speed (6.24 decode / 158.7 prefill):** one MOMENTS call 65.9 s, one THREADS call 47.1 s, K1/K7/K8 178.9 s each, K9/K9f/K10/K11 113.0 s each, K12 65.9 s: **1,055 s expected for the 13 cell runs**, 1,364 s needed with the slack and startup, 2,068 s worst case. A 40-minute cap with the 12-minute restore reserve leaves about 1,640 s after a ~40 s load: everything fits, CLI budget 1,580 s, watchdog 1,640 s. At a slower speed the plan drops the tail (K8..K12 first) and says so in the log, the report and `cells_plan` of the JSON; give it `--cap-min 55` for the full set. A full `--trial` after an 18-minute ZMA pass has under 100 s left, which is why the cells-only mode exists.
+
+**What the CLI does with the budget.** Before each cell it asks `fits_next(elapsed, budget, cell)`; a cell that would overrun is not started (it and the rest are `SKIP`, reason `cell_budget`, listed in `cells.skipped_budget`) and the one JSON line is still printed. Each finished cell logs `NIGHT_CELL id=K1 verdict=PASS wall_s=..` on stderr, so even a run the watchdog kills leaves its verdicts: the window recovers them from the log (`partial`, with the reason). The report's "Night-mind cells" table lists every verdict, the reason of every ERROR/SKIP, PASS/FAIL/SKIP/ERROR counts, the model calls and tokens, and the budget line; the JSON carries the same under `trial.12B.night_mind_cells`.
+
+**Still fixed (not cells):** the 4B@32k phase's own ZMA pass keeps its 420 s timeout and a full `--trial`'s ZMA pass keeps `trial_timeout_12b()`; neither was part of this change.
