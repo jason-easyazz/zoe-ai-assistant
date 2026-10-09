@@ -514,13 +514,13 @@ def run_cell(cell: Cell, world: World, arm: Arm) -> Outcome:
         for rep in passes:
             if rep.get("skipped_reason") or rep.get("error"):
                 raise RuntimeError("the idle pass did not run (" + str(rep.get("skipped_reason")
-                                                                     or rep.get("error"))[:60] + ")")
+                                                                     or rep.get("error"))[:280] + ")")
         arm._zmb_played = key
         scores = [_probe(p, arm, world.seed) for p in cell.probes]
     except NotImplementedError as exc:  # a stub arm / a call the arm does not have: a SKIP, never a PASS
         return done(Outcome("SKIP", reason=str(exc)[:300]))
     except (ValueError, KeyError, TypeError, RuntimeError) as exc:  # a broken cell or arm: loud
-        return done(Outcome("ERROR", reason=f"{type(exc).__name__}: {str(exc)[:200]}"))
+        return done(Outcome("ERROR", reason=f"{type(exc).__name__}: {str(exc)[:320]}"))
     merged = scorers.merge(*scores)
     return done(Outcome("PASS" if merged.ok else "FAIL", stage=merged.stage,
                         evidence={"probes": [s.evidence for s in scores],

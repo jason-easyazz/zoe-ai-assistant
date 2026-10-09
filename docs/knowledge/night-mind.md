@@ -50,8 +50,12 @@ enums, a validity interval, `state` (current | history | held), `authority_class
 ## Call budget per member per night (measured by the counters in every run row)
 
 `max_calls` = 7: up to **6 MOMENTS calls + 1 THREADS call**. A quiet day (< 3 turns or < 20 words after the routine drop) is **0 calls**; one chunk with nothing open is **2**; the cap is enforced in code and
-reported (`capped`, `turns_skipped_cap`). Every prompt is sized with a conservative token estimate so prompt + output stay inside `ctx_tokens`. The HTTP timeout is
-`prompt/650 + max_tokens/decode_tok_s + 20 s` per call (the nightly extractors' flat 45 s is shorter than a 450-token output at 8 tok/s). **Never half a night**: the pass computes the whole night in
+reported (`capped`, `turns_skipped_cap`). Every prompt is sized with a conservative token estimate so prompt + output stay inside `ctx_tokens`. The HTTP budget of EVERY call
+(member pass, `--cells`, K12 alike - one function, `Config.timeout_for`) is `prompt_tokens/prefill_tok_s + max_tokens/decode_tok_s + 20 s`, at least 30 s. Both rates are the server's MEASURED ones:
+`--prefill-tok-s` / `ZOE_NIGHT_MIND_PREFILL_TOK_S` (default 650 = the live 4B) and `--decode-tok-s` / `ZOE_NIGHT_MIND_DECODE_TOK_S` (default 8); the 12B night window probes both and passes both to the member pass AND the
+`--cells` run (2026-10-09: the 12B measured prefill 136 / decode 3.62; the cells ran on the 4B's constants and 8 of 10 came back ERROR on ReadTimeout). The in-run decode adaptation is only a safety net (it can only lower the
+rate after a slow answer, so it cannot save the first call). A timeout logs `NIGHT_MIND user=... status=llm_timeout budget_s=... prompt_tokens=... max_tokens=... decode_tok_s=... prefill_tok_s=...`; the member row keeps
+`status: llm_unreachable` with `llm_timeout: true`, `timeout_budget_s` and the counters of the calls it made; `--cells` prints `cells.reasons` (the reason of every ERROR/SKIP) and aggregates `totals`/`cells.model_totals`. **Never half a night**: the pass computes the whole night in
 memory, probes the server first and commits at the end; an unreachable model or a transport error mid-night writes nothing (not even a run row).
 
 ### Measured on the live 4B at its 8k slot (2026-10-09 smoke, `z0n_smoke.sh`, 17 model calls, the bench's synthetic household, scratch stores)
