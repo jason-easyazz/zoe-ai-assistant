@@ -17,17 +17,17 @@
     "smoke": "./smoke-built.sh"
   },
   "dependencies": {
-    "@flue/runtime": "2.1.1",
-    "grammy": "1.44.0",
-    "hono": "^4.13.9",
+    "@flue/runtime": "2.2.2",
+    "grammy": "1.46.0",
+    "hono": "^4.13.13",
     "valibot": "^1.1.0"
   },
   "devDependencies": {
-    "@flue/cli": "2.1.1",
-    "@flue/vite": "2.1.1",
+    "@flue/cli": "2.2.2",
+    "@flue/vite": "2.2.2",
     "@types/node": "22.20.1",
     "typescript": "5.7.2",
-    "vite": "^8.1.2"
+    "vite": "^8.3.2"
   },
   "overrides": {
     "@modelcontextprotocol/client": "2.2.0",
