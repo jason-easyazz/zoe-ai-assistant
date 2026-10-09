@@ -662,7 +662,7 @@ async def run_turn_digest(
         }
 
         try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
+            async with httpx.AsyncClient(timeout=_llm_timeout(20.0)) as client:
                 resp = await client.post(f"{_GEMMA_URL}/v1/chat/completions", json=payload)
                 resp.raise_for_status()
                 raw = resp.json()["choices"][0]["message"]["content"].strip()
@@ -1655,7 +1655,7 @@ async def _is_contradiction(new_fact: str, existing_fact: str) -> bool:
         "stream": False,
     }
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=_llm_timeout(15.0)) as client:
             resp = await client.post(f"{_GEMMA_URL}/v1/chat/completions", json=payload)
             resp.raise_for_status()
             text = resp.json()["choices"][0]["message"]["content"].strip()
@@ -2042,7 +2042,7 @@ async def _extract_concept_tags(fact: str) -> list[str]:
     """Use Gemma to extract concept tags from a fact. Returns [] on failure."""
     prompt = _CONCEPT_EXTRACTION_PROMPT.format(fact=fact[:300])
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=_llm_timeout(10.0)) as client:
             resp = await client.post(
                 f"{_GEMMA_URL}/v1/chat/completions",
                 json={
@@ -2051,7 +2051,7 @@ async def _extract_concept_tags(fact: str) -> list[str]:
                     "max_tokens": 60,
                     "temperature": 0.1,
                 },
-                timeout=10.0,
+                timeout=_llm_timeout(10.0),
             )
         text = resp.json()["choices"][0]["message"]["content"].strip()
         start = text.find("[")
@@ -2342,7 +2342,7 @@ async def _synthesis_pass(user_id: str) -> dict:
             prompt = _build_synthesis_prompt(tag, sample)
 
             try:
-                async with httpx.AsyncClient(timeout=20.0) as client:
+                async with httpx.AsyncClient(timeout=_llm_timeout(20.0)) as client:
                     resp = await client.post(
                         f"{_GEMMA_URL}/v1/chat/completions",
                         json={

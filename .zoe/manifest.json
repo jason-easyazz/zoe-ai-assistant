@@ -108,6 +108,7 @@
     "pytest.ini",
     "LICENSE",
     ".gitignore",
+    ".gitattributes",
     ".dockerignore",
     ".env.example",
     ".cursorrules",
