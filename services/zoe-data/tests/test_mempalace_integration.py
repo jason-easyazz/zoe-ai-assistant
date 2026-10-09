@@ -301,8 +301,14 @@ async def test_user_isolation_independent_counts():
 
 @pytest.mark.asyncio
 async def test_upsert_same_fact_stored_once():
-    """Writing the same fact twice should result in only one record."""
-    fact = "User's name is Jason"
+    """Writing the same fact twice should result in only one record.
+
+    The fact is deliberately NOT a name assertion: since #1866 an automatic writer
+    (``_mempalace_add``'s ``zoe_agent`` source) can never assert the user's own name
+    (``IDENTITY_FACT_BLOCKED``) - identity comes from the account - so a name fact is
+    dropped before it reaches the store and the dedup path is never exercised.
+    """
+    fact = "User's favourite colour is green"
     await _mempalace_add(fact, user_id="jason")
     await _mempalace_add(fact, user_id="jason")
 
@@ -313,8 +319,11 @@ async def test_upsert_same_fact_stored_once():
 
 @pytest.mark.asyncio
 async def test_upsert_updates_added_at():
-    """Second upsert of same fact should update added_at, not create a new record."""
-    fact = "User's name is Jason"
+    """Second upsert of same fact should update added_at, not create a new record.
+
+    Not a name assertion for the same reason as above (identity-fact wall, #1866).
+    """
+    fact = "User's favourite colour is green"
     await _mempalace_add(fact, user_id="jason")
     time.sleep(0.01)
     await _mempalace_add(fact, user_id="jason")
@@ -323,6 +332,15 @@ async def test_upsert_updates_added_at():
     records = [r for r in col._store.values() if r["metadata"].get("wing") == "jason"]
     assert len(records) == 1
     assert "added_at" in records[0]["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_automatic_writer_cannot_assert_the_users_name():
+    """Pin the policy that made the two upsert tests above change facts (#1866): an
+    automatic source never stores a user-name assertion - nothing reaches the store."""
+    await _mempalace_add("User's name is Jason", user_id="jason")
+    assert [r for r in _GLOBAL_COLLECTION._store.values()
+            if r["metadata"].get("wing") == "jason"] == []
 
 
 # ---------------------------------------------------------------------------
