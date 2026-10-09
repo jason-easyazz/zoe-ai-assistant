@@ -166,6 +166,82 @@ def test_the_hop_finds_the_facts_for_the_day_sim_asks(svc):
     assert [f.text for f in build(svc, COLD_ASK).facts] == [WALK]
 
 
+# ── S9b 2026-10-09: the live stored wording of the seeded facts (rows=3 facts=0) ──────────────
+
+#: EXACTLY what the turn digest stored (``MEMORY_ROW ... class=user_stated_derived promoted=no basis=anchored_user_turn``) for
+#: WALK ("... walk OUR kelpie ...": the paraphrase changed a word, so it is a derived row, rank 3, not promoted to user_stated)
+LIVE_WALK = "User walks their kelpie Juniper along the river every morning at 6am."
+LIVE_PET = "User's kelpie is named Juniper."
+LIVE_SHIFT = "User works night shifts in the hospital pharmacy"
+LIVE_SLEEPS = "User sleeps during the day"
+
+
+def put_digest(svc, text, anchor, user=UID):
+    """A row as the live per-turn digest writes it: a model paraphrase anchored on the owner's own turn."""
+    return asyncio.run(svc.ingest(text, user_id=user, source="turn_digest", status="approved", anchor_text=anchor))
+
+
+def test_the_live_walk_row_is_a_derived_row_the_hop_must_read(svc):
+    import memory_authority as ma
+
+    ref = put_digest(svc, LIVE_WALK, WALK)
+    # the instrument: the row really is the live class (derived, not promoted) - else this test proves nothing
+    assert ma.row_class(ref.metadata, LIVE_WALK) == ma.USER_STATED_DERIVED
+    assert ma.row_rank(ref.metadata, LIVE_WALK) == ma.DERIVED_RANK < ma.USER_RANK
+    assert [r.text for r in asyncio.run(svc.load_durable_for_hop(UID))] == [LIVE_WALK]
+    assert [f.text for f in build(svc, COLD_ASK).facts] == [LIVE_WALK]
+
+
+def test_the_live_week_of_rows_the_cold_ask_finds_the_walk_and_the_sleep_ask_the_shift(svc):
+    for t, a in ((LIVE_SHIFT, NIGHT), (LIVE_SLEEPS, NIGHT), (LIVE_WALK, WALK), (LIVE_PET, WALK)):
+        put_digest(svc, t, a)
+    assert [f.text for f in build(svc, COLD_ASK).facts] == [LIVE_WALK]            # the pet's NAME is not a clothing constraint
+    assert LIVE_SHIFT in [f.text for f in build(svc, SLEEP_ASK).facts]
+
+
+def test_relevance_is_the_fact_content_for_the_clothing_lens():
+    cold = hop.select(COLD_ASK, [row(1, LIVE_WALK)]).facts
+    assert [f.text for f in cold] == [LIVE_WALK]
+    control = hop.select(COLD_ASK, [row(2, "User likes jazz."), row(3, LIVE_PET)]).facts
+    assert control == ()
+    assert hop.select(SLEEP_ASK, [row(4, "User likes jazz.")]).facts == ()
+
+
+@pytest.mark.parametrize("text", [
+    "User takes their dog out along the river every morning at 6am.",             # no "walk" word at all
+    "User cycles to the depot at 5:30am.",
+    "User goes surfing before dawn every day.",
+    "User jogs the beach loop at first light.",
+    "User drives to the quarry site at 5am each day.",
+    "Routine: dog walk, 6am daily.",                                              # a structural / role style row
+    "User is a dog-walker, out the door at 6am.",
+])
+def test_an_outdoor_routine_at_a_fixed_time_is_clothing_relevant_whatever_the_wording(text):
+    assert [f.text for f in hop.select(COLD_ASK, [row(1, text)]).facts] == [text]
+
+
+@pytest.mark.parametrize("text", [
+    "User likes jazz.",
+    "User runs a bakery every day.",                       # "runs" + a daily cue is a job, not an outing
+    "User eats fish every day.",
+    "User's kelpie is named Juniper.",
+    "User has a meeting at 6am.",                          # a time with no going-out verb
+])
+def test_a_time_or_a_verb_alone_is_not_a_clothing_constraint(text):
+    assert hop.select(COLD_ASK, [row(1, text)]).facts == ()
+
+
+def test_a_model_only_row_and_an_unverified_speaker_are_still_not_durable(svc):
+    put(svc, "User walks the dog at 6am every morning.", source="digest")            # a nightly model's inference: no anchor
+    put_digest(svc, "User walks the dog at 6am every morning.", "What a lovely day it is today.", user=UID)  # anchor does not support
+    assert asyncio.run(svc.load_durable_for_hop(UID)) == []
+
+
+def test_a_derived_row_of_another_member_is_not_read(svc):
+    put_digest(svc, LIVE_WALK, WALK, user=OTHER)
+    assert asyncio.run(svc.load_durable_for_hop(UID)) == []
+
+
 def test_the_rows_the_hop_served_are_recorded_for_why_did_you_say_that(svc):
     """The hop puts a durable fact in front of the brain without the recall tool: provenance must know, on the Flue path and on the packet path."""
     import memory_provenance as mp
