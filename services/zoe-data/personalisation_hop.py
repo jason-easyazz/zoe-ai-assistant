@@ -329,8 +329,8 @@ async def _restrained(user_id: str, message: str, hop: Hop) -> Hop:
         return hop
 
 
-async def build(user_id: str, message: str, *, svc: Any = None) -> Hop:
-    """The hop for this turn: flag on, a real owner, an advice request, one bounded read of the owner's durable rows.
+async def build(user_id: str, message: str, *, svc: Any = None, session_id: Optional[str] = None) -> Hop:
+    """The hop for this turn (``session_id``: the conversation it is for - the relevance gate counts turns per (user, session); None = this task's own): flag on, a real owner, an advice request, one bounded read of the owner's durable rows.
     An empty ``Hop`` otherwise. NEVER raises; a slow or failing store is simply no hop."""
     try:
         if not enabled() or not (user_id or "").strip() or not is_advice_request(message):
@@ -345,6 +345,11 @@ async def build(user_id: str, message: str, *, svc: Any = None) -> Hop:
         svc = svc or get_memory_service()
         rows = await asyncio.wait_for(svc.load_durable_for_hop(user_id), timeout=TIMEOUT_S)
         hop = select(message, rows)
+        # the relevance gate (ZOE_RECALL_GATE, recall_gate.py): this word-list match is ONE signal of several; shadow returns ``hop``
+        # unchanged (and logs what the gate would add or drop), enforce returns the gate's selection. Fail-open to ``hop``.
+        import recall_gate
+
+        hop = await recall_gate.hop_surface(user_id, message, rows, hop, session_id)
         if hop.facts:
             hop = await _restrained(user_id, message, hop)
         logger.info("PERSONALISATION_HOP user=%s topics=%s rows=%d facts=%d", user_id, ",".join(topics), len(rows),

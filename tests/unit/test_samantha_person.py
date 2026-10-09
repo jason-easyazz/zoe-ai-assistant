@@ -289,6 +289,23 @@ def test_goodbye_hooks_and_silence():
                             sp.ScoreCtx())["P8.b"][0] is False
 
 
+def test_p8c_reads_the_probes_the_first_baseline_slipped_past():
+    """Prerequisite (f): 7 of the 10 baseline replies to "...", "mm", "hmm" were probes the old lexicon did not list and scored
+    10/10. Each of these is a remark on the silence; each was green before the phrases were added (break-the-fix: revert the
+    lexicon and this goes red)."""
+    s = sp.Ask("t", "P8", "silence", [sp.Turn("...")], ("P8.c",), {}, "s")
+    for probe in ("It seems like you might have trailed off. Is there something on your mind?",
+                  "That sounds thoughtful - take your time.",
+                  "Hmm, you're just saying that, aren't you?",
+                  "I'm here if you want to chat.",
+                  "Do you want to chat about something?",
+                  "Are you okay?",
+                  "Take a moment, I'll wait."):
+        assert sp.score_silence(s, [probe], sp.ScoreCtx())["P8.c"][0] is False, probe
+    for clean in ("Okay.", "I'm here.", "Mm-hm.", "Sure, whenever you're ready."):
+        assert sp.score_silence(s, [clean], sp.ScoreCtx())["P8.c"][0] is True, clean
+
+
 def test_a_callback_that_sounds_like_a_person():
     o = ask("open")
     f = lambda r: sp.score_open(o, [r], sp.ScoreCtx())                      # noqa: E731

@@ -1321,3 +1321,65 @@ async def test_a_failed_class_insert_leaves_the_old_valid_class_in_place(env):
                    "AND invalid_at IS NULL") == [(1,)]       # the UPDATE rolled back with the failed INSERT
     stored = await restraint.load_thread_classes(db, MEMBER)
     assert restraint.thread_classes("open_loops:1", DENTIST, "open_loop", stored) == ("health", "affect")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# prerequisite (d): a spoken mute is captured on the CORE lane too (zoe_core_client), not only the Flue lane
+# ═════════════════════════════════════════════════════════════════════════════
+async def test_the_core_lane_records_a_spoken_mute_and_speaks_the_acknowledgement(env, monkeypatch):
+    import zoe_core_client as zcc
+
+    calls = []
+
+    async def worker(*_a, **_k):                    # the brain must NOT be reached on a mute in enforce
+        calls.append("worker")
+        raise AssertionError("the core worker was started for a mute")
+
+    monkeypatch.setattr(zcc, "_worker_for", worker)
+    out = [c async for c in zcc.run_zoe_core_streaming("stop mentioning the dentist", "s1", MEMBER)]
+    assert out == [restraint.ACK_MUTE] and calls == [] and len(_mutes(env)) == 1
+
+
+async def test_the_core_lane_in_shadow_records_the_mute_and_still_runs_the_brain(env, monkeypatch):
+    import zoe_core_client as zcc
+
+    monkeypatch.setenv("ZOE_RESTRAINT", "shadow")
+    started = []
+
+    async def worker(*_a, **_k):
+        started.append(1)
+        raise RuntimeError("brain reached")        # the brain is reached in shadow: that is the point
+
+    monkeypatch.setattr(zcc, "_worker_for", worker)
+    with pytest.raises(RuntimeError, match="brain reached"):
+        _ = [c async for c in zcc.run_zoe_core_streaming("stop mentioning the dentist", "s1", MEMBER)]
+    assert started == [1] and len(_mutes(env)) == 1
+
+
+async def test_the_core_lane_notes_the_owners_turn_for_the_tool_path(env, monkeypatch):
+    import zoe_core_client as zcc
+
+    async def worker(*_a, **_k):
+        raise RuntimeError("stop")
+
+    monkeypatch.setattr(zcc, "_worker_for", worker)
+    with pytest.raises(RuntimeError):
+        _ = [c async for c in zcc.run_zoe_core_streaming("how is my dentist appointment", "s1", MEMBER)]
+    assert restraint._marks[MEMBER][0] == "how is my dentist appointment"
+
+
+async def test_break_the_fix_without_the_core_lane_hook_no_mute_is_recorded(env, monkeypatch):
+    import zoe_core_client as zcc
+
+    async def no_mute(*_a, **_k):
+        return ""
+
+    monkeypatch.setattr(restraint, "handle_turn", no_mute)
+
+    async def worker(*_a, **_k):
+        raise RuntimeError("brain reached")
+
+    monkeypatch.setattr(zcc, "_worker_for", worker)
+    with pytest.raises(RuntimeError):
+        _ = [c async for c in zcc.run_zoe_core_streaming("stop mentioning the dentist", "s1", MEMBER)]
+    assert _mutes(env) == []

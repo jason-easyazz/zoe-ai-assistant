@@ -1209,6 +1209,17 @@ async def run_zoe_core_streaming(
     # The first-turn day brief is prepared alongside the packet (both never
     # raise); its claim is settled in the finally below, by whether text went out.
     from proactive import selector as proactive_selector
+    import restraint
+
+    # A spoken mute ("don't mention that again", "leave it"; ZOE_RESTRAINT) is recorded HERE too: the Flue lane records it in
+    # run_flue_brain_streaming and this lane used to honour an existing mute (the shared filters) but never write a new one.
+    # In enforce the acknowledgement is spoken by code and the brain is not called; in shadow it is recorded and the brain
+    # replies as usual. ``note_turn`` marks the owner's words so the recall packet judges THEM, not the model's query.
+    ack = await restraint.handle_turn(message, user_id, session_id)
+    if ack:
+        yield ack
+        return
+    restraint.note_turn(user_id, message)
 
     briefs: list = []
     raises: list = []

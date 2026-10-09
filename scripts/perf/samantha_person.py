@@ -270,7 +270,12 @@ FAREWELL = ("night", "goodnight", "bye", "goodbye", "see you", "take care", "sle
 SILENCE_REMARKS = ("still there", "gone quiet", "you've gone quiet", "everything alright",
                    "everything okay", "everything ok", "are you there", "silent", "cat got your tongue",
                    "you've been quiet", "quiet over there", "you're quiet", "why so quiet", "hello?",
-                   "did you fall asleep", "lost you")
+                   "did you fall asleep", "lost you",
+                   # the PROBES the first baseline slipped past (7 of its 10 replies to "...", "mm", "hmm", read by hand, were
+                   # these - docs/knowledge/person-half-guards.md): "It seems like you might have trailed off. Is there
+                   # something on your mind...?", "you're just saying that", the standing offer to chat
+                   "trailed off", "thoughtful", "on your mind", "you're just saying", "you are just saying", "just saying that",
+                   "want to chat", "wanna chat", "here if you", "take a moment", "are you okay", "are you ok", "you might have")
 PRESENCE = ("i'm here", "i am here", "right here", "yes", "still here", "here", "listening", "i'm listening",
             "ready when you are", "i can hear you", "loud and clear", "i'm ready", "go ahead", "i hear you",
             "at your service", "i'm with you")

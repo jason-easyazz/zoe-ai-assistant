@@ -321,5 +321,44 @@
   "obwohl",
   "während"
  ],
- "pronoun_required": true
+ "pronoun_required": true,
+ "restraint": {
+  "_note": "Restraint lexicon: author-written, NOT native-reviewed (reviewed:false on this file). A PRE-FILTER that can only WITHHOLD; the structured signals (type, entity, tags, captured affect) decide without it. Labelled sentences: tests/test_restraint_lexicon.py.",
+  "health": ["migräne", "kopfschmerz\\w*", "verletz\\w*", "krank\\w*", "grippe", "fieber", "husten", "infektion", "symptom\\w*", "diagnos\\w*", "medikament\\w*", "tabletten", "rezept", "schlaflosigkeit", "angststörung", "depress\\w*", "asthma", "allerg\\w*", "operation\\w*", "chirurg\\w*", "krankenhaus", "klinik", "arzt", "ärztin", "zahnarzt", "zahnärztin", "zahn", "zähne", "weisheitszahn", "physiotherap\\w*", "therapie", "therapeut\\w*", "krebs", "chemo\\w*", "tumor", "blutdruck", "diabet\\w*", "schwanger\\w*", "fehlgeburt", "biopsie", "bluttest", "knochenbruch", "reha\\w*", "übelkeit", "schwindel", "panikattacke\\w*", "impf\\w*", "psychiater\\w*", "psycholog\\w*", "anfall", "schlaganfall", "herzinfarkt", "schmerz\\w*", "gesundheit"],
+  "money": ["geld", "kredit\\w*", "schulden", "hypothek", "überzogen", "kreditkarte", "gehalt", "lohn", "gehaltserhöhung", "rechnung\\w*", "miete", "pleite", "bankrott", "ersparnisse", "budget", "steuer\\w*", "entlassen", "gekündigt", "arbeitslos\\w*", "job verloren"],
+  "grief": ["gestorben", "verstorben", "tod", "beerdigung", "begräbnis", "trauerfeier", "trauer\\w*", "einäscher\\w*", "beileid", "asche", "witwe\\w*", "waise\\w*", "verlor(?:en)? (?:meine?n?|seine?n?|ihre?n?) \\w+"],
+  "conflict": ["streit\\w*", "gestritten", "stritt", "zoff", "krach", "angeschrien", "anschrei\\w*", "wütend auf", "sauer auf", "spricht nicht mehr", "reden nicht mehr", "verkracht"],
+  "kin": ["mutter", "mama", "mutti", "vater", "papa", "vati", "frau", "mann", "ehemann", "ehefrau", "partner\\w*", "sohn", "tochter", "kinder?", "bruder", "schwester", "geschwister", "oma", "opa", "großmutter", "großvater", "tante", "onkel", "cousin\\w*", "schwiegermutter", "schwiegervater", "eltern", "familie", "freundin"],
+  "family_other": ["scheidung", "geschieden", "trennung", "sorgerecht", "affäre", "fremdgeg\\w*", "betrog\\w*"],
+  "possessive": ["mein\\w*", "sein\\w*", "ihr\\w*", "unser\\w*", "dein\\w*"],
+  "kin_possessive_suffix": [],
+  "not_a_name": [],
+  "affect": ["ängstlich", "nervös", "besorgt", "gestresst", "verängstigt", "panisch", "überfordert", "deprimiert", "traurig", "verzweifelt", "einsam", "niedergeschlagen", "bedrückt"],
+  "feel_lead": ["ich fühle mich", "ich fühl mich", "ich bin", "mir geht es", "mir geht's"],
+  "feel_low": ["schlecht", "mies", "down", "leer", "fertig", "elend"],
+  "health_safety": ["allerg\\w*", "anaphyla\\w*", "epi-?pen", "asthma", "diabet\\w*", "epilep\\w*", "krampf\\w*", "medikament\\w*", "schwanger\\w*", "herzschrittmacher", "taub", "gehörlos\\w*", "rollstuhl", "behinder\\w*"],
+  "stop": ["nutzer", "benutzer", "heute", "morgen", "gestern", "abend", "woche", "monat", "jahr", "montag", "dienstag", "mittwoch", "donnerstag", "freitag", "samstag", "sonntag", "sache", "sachen", "etwas", "nichts", "gut", "hallo", "danke", "bitte", "okay"],
+  "kin_canon": {"mutter": "mutter", "mama": "mutter", "mutti": "mutter", "vater": "vater", "papa": "vater", "vati": "vater", "frau": "frau", "ehefrau": "frau", "mann": "mann", "ehemann": "mann", "sohn": "sohn", "tochter": "tochter", "bruder": "bruder", "schwester": "schwester", "oma": "oma", "großmutter": "oma", "opa": "opa", "großvater": "opa", "tante": "tante", "onkel": "onkel", "kinder": "kinder", "kind": "kinder"},
+  "pull_leads": ["hallo", "hi", "hey", "guten", "morgen", "tag", "abend", "also", "na", "ok", "okay", "zoe"],
+  "pull_tail": ["zoe", "dann", "heute", "bitte", "mal"],
+  "pull_phrases": ["bring mich auf den neuesten stand", "gibt es etwas das ich wissen sollte", "was gibt es neues", "was gibts neues", "was ist los", "was weißt du von mir", "was weißt du über mich", "wie geht es so", "wie läuft es", "wie läufts"],
+  "obj_drop": ["wieder", "mehr", "nie", "niemals", "nicht", "das", "dies", "es", "der", "die", "das", "den", "dem", "über", "von", "zu", "mit", "mein", "meine", "meinen", "sein", "ihr", "thema", "bitte", "mir", "mich", "dich", "dir", "und", "oder", "aber", "noch", "mal", "kein", "keine"],
+  "person_obj": ["mich", "mir", "uns", "dich", "dir"],
+  "mute_patterns": {
+   "filler_lead": "^(?:(?:ok|okay|hey|hallo|zoe|bitte|also|und|aber|hör|hoer|danke|na|naja|ja|nein)\\b\\s*)+",
+   "modal_lead": "^(?:(?:kannst du|könntest du|koenntest du|würdest du|wuerdest du|ich möchte dass du|ich moechte dass du|ich will dass du|ich wünsche mir dass du)\\s+(?:bitte\\s+)?)",
+   "neg": "^(?:sprich|sprichst|rede|redest|erwähne|erwaehne|erwähnst|erwaehnst|bring|bringe)\\s+(?P<mid>(?:\\S+\\s+){0,3}?)(?:nicht|nie|niemals)\\s+(?:mehr\\s+|wieder\\s+)?(?:mit mir\\s+)?(?:davon|darüber|über|ueber|von|zur sprache)?\\s*(?P<rest>.*)$",
+   "want": "^ich will nicht (?:mehr )?(?:darüber |ueber )?(?:reden|sprechen)\\s*(?:über|ueber|von)?\\s*(?P<rest>.*)$",
+   "enough": "^(?:genug|schluss|schluß|das reicht)\\s+(?:mit|von|über|ueber)\\s+(?P<rest>.*)$",
+   "leave": "^lass\\s+(?P<rest>(?:\\S+\\s+){0,3}?\\S+?)\\s+(?:in ruhe|ruhen)$",
+   "leave_bare": "^(?:lass (?:es|das|gut)|vergiss es|lass gut sein)$",
+   "lets": "^reden wir nicht (?:über|ueber|von)\\s+(?P<rest>.*)$",
+   "release": "^(?:du kannst|du darfst)\\s+(?:gern\\s+)?(?:wieder\\s+)?(?:(?:über|ueber|von)\\s+(?P<rest>.*?)\\s+(?:wieder\\s+)?(?:reden|sprechen)|(?P<mid>(?:\\S+\\s+){0,3}?)(?:wieder\\s+)?(?:erwähnen|erwaehnen|ansprechen))$"
+  },
+  "ack_mute": "In Ordnung, ich spreche das nicht mehr an.",
+  "ack_release": "In Ordnung, ich darf es wieder erwähnen.",
+  "ack_release_none": "Ich habe nichts zurückgehalten, also kein Problem.",
+  "ack_ask": "Worüber soll ich nicht mehr reden? Sag es mir."
+ },
+ "recall_gate": {"caps_entity":false,"stop":["der","die","das","den","dem","des","ein","eine","einen","einem","einer","und","oder","aber","von","zu","zum","zur","in","im","an","am","auf","mit","für","aus","bei","nach","wie","ist","sind","war","waren","sein","bin","habe","hat","haben","ich","mich","mir","mein","meine","meinen","meiner","wir","unser","du","dein","nicht","kein","auch","sehr","noch","nur","über","als","wenn","wo","wer","was","benutzer"],"plan_cues":["morgen","heute","heute abend","später","bald","dieses wochenende","diese woche","nächste woche","nächsten monat"],"routine_cues":["jeden","jede","jedes","täglich","immer","normalerweise","wöchentlich","jeden tag","unter der woche"],"dayparts":["morgen","morgens","abend","abends","nacht","nachts","nachmittag","mittag","mitternacht","sonnenaufgang"],"am_words":[],"pm_words":[],"clock_suffix":["uhr"],"months":["januar","februar","märz","april","mai","juni","juli","august","september","oktober","november","dezember"],"weekdays":["montag","dienstag","mittwoch","donnerstag","freitag","samstag","sonntag"],"stop_chars":[]}
 }

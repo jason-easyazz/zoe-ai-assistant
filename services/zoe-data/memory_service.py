@@ -3382,6 +3382,11 @@ class MemoryService:
         import restraint
 
         restraint.stamp(md, text)
+        # Recall-gate triggers (recall_gate.py, ZOE_RECALL_GATE): names, distinctive keys, clock times and a routine flag derived from
+        # the row's own text at write time, stored beside the row; a reader trusts them only while version and hash match. No-op when off.
+        import recall_gate
+
+        recall_gate.stamp(md, text)
         return md
 
     def _remember_seen_key(self, user_id: str, idem_key: str) -> None:

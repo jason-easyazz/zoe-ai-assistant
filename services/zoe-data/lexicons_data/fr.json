@@ -334,5 +334,44 @@
   "donc",
   "alors"
  ],
- "pronoun_required": true
+ "pronoun_required": true,
+ "restraint": {
+  "_note": "Restraint lexicon: author-written, NOT native-reviewed (reviewed:false on this file). A PRE-FILTER that can only WITHHOLD; the structured signals (type, entity, tags, captured affect) decide without it. Labelled sentences: tests/test_restraint_lexicon.py.",
+  "health": ["migraines?", "maux? de t[êe]te", "blessure\\w*", "maladie", "malade", "grippe", "fi[èe]vre", "toux", "infection", "sympt[ôo]mes?", "diagnostic\\w*", "m[ée]dicaments?", "m[ée]dical\\w*", "ordonnance", "insomnie", "anxi[ée]t[ée]", "d[ée]pression", "asthme", "allerg\\w*", "chirurgie", "chirurgien", "op[ée]ration", "h[ôo]pital", "hospitalis\\w*", "clinique", "m[ée]decin", "docteur", "dentiste", "dentaire", "dents?", "molaire", "kin[ée]sith[ée]rapeute", "th[ée]rapie", "cancer", "chimio\\w*", "tumeur", "tension art[ée]rielle", "diab[èe]te", "enceinte", "grossesse", "fausse couche", "biopsie", "prise de sang", "fracture", "nausées?", "vertiges?", "crises? de panique", "vaccin\\w*", "psychiatr\\w*", "psycholog\\w*", "[ée]pilep\\w*", "avc", "infarctus", "saignement", "sant[ée]"],
+  "money": ["argent", "pr[êe]ts?", "dettes?", "hypoth[èe]que", "d[ée]couvert", "carte de cr[ée]dit", "salaire", "fiche de paie", "augmentation", "factures?", "loyer", "ruin[ée]\\w*", "faillite", "[ée]conomies", "budget", "imp[ôo]ts?", "licenci\\w*", "ch[ôo]mage", "perdu mon travail"],
+  "grief": ["mort", "d[ée]c[èe]s", "d[ée]c[ée]d[ée]\\w*", "fun[ée]railles", "enterrement", "incin[ée]r\\w*", "deuil", "condol[ée]ances", "d[ée]funt\\w*", "cendres", "veuf", "veuve", "orphelin\\w*", "perdu (?:mon|ma|mes) \\w+"],
+  "conflict": ["disput\\w*", "engueul\\w*", "f[âa]ch\\w*", "cri[ée]\\w*", "brouill\\w*", "ne (?:se |me |lui )?parl\\w* plus", "querelle\\w*", "[ée]trang\\w*"],
+  "kin": ["m[èe]re", "p[èe]re", "maman", "papa", "femme", "mari", "[ée]poux", "[ée]pouse", "conjoint\\w*", "compagn\\w*", "fils", "fille", "enfants?", "fr[èe]re", "s[œo]ur", "grand-m[èe]re", "grand-p[èe]re", "mamie", "papi", "tante", "oncle", "cousin\\w*", "belle-m[èe]re", "beau-p[èe]re", "beau-fr[èe]re", "belle-s[œo]ur", "parents", "famille", "copine", "copain"],
+  "family_other": ["divorc\\w*", "s[ée]paration", "infid[ée]lit[ée]", "tromp[ée]\\w*"],
+  "possessive": ["mon", "ma", "mes", "son", "sa", "ses", "leurs?", "notre", "nos", "ton", "ta", "tes"],
+  "kin_possessive_suffix": [],
+  "not_a_name": [],
+  "affect": ["anxieu\\w*", "nerveu\\w*", "inqui[èe]t\\w*", "stress[ée]\\w*", "effray[ée]\\w*", "terrifi[ée]\\w*", "d[ée]bord[ée]\\w*", "d[ée]prim[ée]\\w*", "triste\\w*", "angoiss[ée]\\w*", "d[ée]sesp[ée]r[ée]\\w*", "solitude", "an[ée]anti\\w*"],
+  "feel_lead": ["je me sens", "je suis", "je me suis senti\\w*"],
+  "feel_low": ["mal", "bas", "vide", "d[ée]prim[ée]\\w*"],
+  "health_safety": ["allerg\\w*", "anaphyla\\w*", "epi-?pen", "asthme", "diab[èe]te", "[ée]pilep\\w*", "m[ée]dicaments?", "enceinte", "grossesse", "stimulateur cardiaque", "sourd\\w*", "fauteuil roulant", "handicap\\w*"],
+  "stop": ["utilisateur", "sujet", "aujourd'hui", "demain", "hier", "soir", "semaine", "mois", "année", "annee", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche", "chose", "choses", "quelque", "rien", "bien", "bonjour", "merci", "salut", "coucou"],
+  "kin_canon": {"mère": "mère", "mere": "mère", "maman": "mère", "père": "père", "pere": "père", "papa": "père", "femme": "femme", "épouse": "femme", "mari": "mari", "époux": "mari", "fils": "fils", "fille": "fille", "frère": "frère", "frere": "frère", "sœur": "sœur", "soeur": "sœur", "tante": "tante", "oncle": "oncle", "cousin": "cousin", "cousine": "cousin", "enfants": "enfants", "enfant": "enfants"},
+  "pull_leads": ["salut", "bonjour", "coucou", "hey", "oui", "alors", "bon", "ok", "okay", "zoe", "dis"],
+  "pull_tail": ["zoe", "alors", "aujourd hui", "s il te plait", "stp", "maintenant"],
+  "pull_phrases": ["comment vont les choses", "dis moi tout", "il y a du nouveau", "mets moi au courant", "que sais tu de moi", "quelque chose que je dois savoir", "quest ce que tu sais sur moi", "quest ce qui se passe", "quoi de neuf", "y a t il du nouveau", "y a t il quelque chose que je dois savoir"],
+  "obj_drop": ["plus", "jamais", "encore", "pas", "ça", "ca", "cela", "ce", "le", "la", "les", "du", "des", "de", "d", "sur", "propos", "mon", "ma", "mes", "son", "sa", "ses", "sujet", "stp", "moi", "me", "m", "toi", "en", "y", "et", "ou", "mais", "nouveau", "nouveau"],
+  "person_obj": ["moi", "toi", "nous", "me", "te"],
+  "mute_patterns": {
+   "filler_lead": "^(?:(?:ok|okay|salut|bonjour|zoe|s il te plait|stp|alors|et|mais|écoute|ecoute|merci|bon|dis|ben)\\b\\s*)+",
+   "modal_lead": "^(?:(?:peux tu|pourrais tu|tu peux|tu pourrais|je voudrais que tu|j aimerais que tu|je prefere que tu|je préfère que tu|je veux que tu)\\s+)",
+   "neg": "^(?:ne\\s+)?(?:\\S+\\s+){0,2}?(?P<verb>parle|parles|mentionne|mentionnes|reparle|reparles|évoque|évoques|rappelle|rappelles|ramène|ramènes|reviens)\\s+(?:plus|jamais|pas)\\s*(?:de|du|des|sur|à propos de)?\\s*(?P<rest>.*)$",
+   "want": "^(?:arrête|arrete|arrêtes|arretes|cesse|cesses)\\s+(?:de|d)\\s+(?:m\\s+|me\\s+)?(?P<verb>parler|mentionner|en parler|évoquer|rappeler|ramener)\\s*(?:de|du|des|sur|à propos de)?\\s*(?P<rest>.*)$",
+   "enough": "^(?:ça|ca)\\s+suffit\\s+(?:de|avec|sur)\\s+(?P<rest>.*)$",
+   "leave": "^laisse\\s+(?P<rest>(?:\\S+\\s+){0,3}?\\S+?)\\s+tranquille$",
+   "leave_bare": "^(?:laisse tomber|laisse|oublie)(?: ça| ca| le| la)?$",
+   "lets": "^ne parlons (?:pas|plus) (?:de|du|des)\\s+(?P<rest>.*)$",
+   "release": "^(?:tu peux|tu pourras|vous pouvez)\\s+(?:de nouveau\\s+|à nouveau\\s+|a nouveau\\s+)?(?P<verb>en parler|parler|mentionner|évoquer|rappeler)\\s*(?:de|du|des|sur)?\\s*(?P<rest>.*)$"
+  },
+  "ack_mute": "D'accord, je n'en reparlerai plus.",
+  "ack_release": "D'accord, je peux en reparler.",
+  "ack_release_none": "Je ne retenais rien, donc pas de souci.",
+  "ack_ask": "De quoi dois-je arrêter de parler ? Dis-moi."
+ },
+ "recall_gate": {"caps_entity":true,"stop":["le","la","les","un","une","des","du","de","d","l","et","ou","mais","à","au","aux","en","dans","sur","avec","pour","par","comme","est","sont","était","être","suis","ai","a","ont","que","qui","je","me","moi","mon","ma","mes","nous","notre","ne","pas","plus","très","aussi","se","son","sa","ses","ce","cet","cette","ces","il","elle","ils","elles","on","y","utilisateur"],"plan_cues":["demain","ce soir","aujourd'hui","plus tard","bientôt","ce matin","cet après-midi","ce week-end","cette semaine","la semaine prochaine","le mois prochain"],"routine_cues":["chaque","tous","toutes","quotidien","toujours","habituellement","hebdomadaire","tous les jours","en semaine"],"dayparts":["matin","soir","après-midi","nuit","aube","midi","minuit","crépuscule"],"am_words":[],"pm_words":[],"clock_suffix":["h"],"months":["janvier","février","mars","avril","mai","juin","juillet","août","septembre","octobre","novembre","décembre"],"weekdays":["lundi","mardi","mercredi","jeudi","vendredi","samedi","dimanche"],"stop_chars":[]}
 }

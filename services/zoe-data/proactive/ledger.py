@@ -297,6 +297,7 @@ async def sweep(*, now: datetime | None = None) -> int:
                 (_SWEEP_BATCH,),
             ) as cur:
                 rows = [tuple(r) for r in await cur.fetchall()]
+            deferred = 0
             for row in rows:
                 rid, uid, kind = row[0], row[1], row[2]
                 judge_by = _parse(row[6]) or ((_parse(row[5]) or now) + JUDGE_BY)
@@ -308,6 +309,7 @@ async def sweep(*, now: datetime | None = None) -> int:
                 if outcome is None and now >= judge_by:
                     outcome = "unknown"  # never strands
                 if outcome is None:
+                    deferred += 1
                     continue
                 cur = await db.execute(
                     "UPDATE proactive_deliveries SET outcome = ?, outcome_at = ?, voiced = ? "
@@ -316,6 +318,11 @@ async def sweep(*, now: datetime | None = None) -> int:
                     closed += 1
                     logger.info("PROACTIVE_LEDGER_OUTCOME user=%s kind=%s outcome=%s voiced=%s",
                                 uid, kind, outcome, "?" if voiced is None else voiced)
+        if rows:
+            # One line per sweep that had anything to judge (counts only): the back-off (restraint.py section 4) lives on the
+            # ``ignored`` rows this closes, and before this line a ledger that was written but never closed (58 rows over
+            # four days, not one PROACTIVE_LEDGER_OUTCOME line) was indistinguishable from "nothing to close".
+            logger.info("PROACTIVE_LEDGER_SWEEP open=%d closed=%d deferred=%d", len(rows), closed, deferred)
     except Exception as exc:  # noqa: BLE001
         logger.warning("proactive-ledger: sweep failed: %r", exc)
     return closed

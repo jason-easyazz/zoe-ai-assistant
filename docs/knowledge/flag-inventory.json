@@ -514,6 +514,7 @@
         "readers": [
           "scripts/perf/hop_placement_ab.py",
           "scripts/perf/measure_tts_cadence.py",
+          "scripts/perf/person_half_enforce_ab.py",
           "scripts/perf/user_model_ab.py",
           "services/zoe-data/zoe_flue_client.py"
         ],
@@ -1572,6 +1573,58 @@
           "services/zoe-data/routers/face_id.py"
         ],
         "typed_env": false
+      },
+      "ZOE_FIRST_SOUND_CLAUSE": {
+        "defaults": [
+          "-",
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/narration_filter.py",
+          "services/zoe-data/voice_first_sound.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_FIRST_SOUND_CLAUSE_MIN_CHARS": {
+        "defaults": [
+          "24"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_first_sound.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_FIRST_SOUND_CLAUSE_MIN_WORDS": {
+        "defaults": [
+          "4"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_first_sound.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_FIRST_SOUND_NARRATION_EARLY": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/narration_filter.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_FIRST_SOUND_TOOL_ACK": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_first_sound.py"
+        ],
+        "typed_env": true
       },
       "ZOE_FLUE_ABORT_ON_CANCEL": {
         "defaults": [
@@ -3573,13 +3626,16 @@
         "in_env_example": false,
         "readers": [
           "scripts/perf/hop_placement_ab.py",
+          "scripts/perf/measure_first_sound.py",
           "scripts/perf/measure_speed.py",
           "scripts/perf/measure_tts.py",
           "scripts/perf/measure_voice.py",
+          "scripts/perf/person_half_enforce_ab.py",
           "scripts/perf/recall_evidence_probe.py",
           "scripts/perf/samantha_bar.py",
           "scripts/perf/samantha_day_sim.py",
           "scripts/perf/samantha_person.py",
+          "scripts/perf/tool_use_bench.py",
           "scripts/perf/user_model_ab.py"
         ],
         "typed_env": false
@@ -4337,6 +4393,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_RECALL_GATE": {
+        "defaults": [
+          "'shadow'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/recall_gate.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_RECALL_PRESENT_STATE_SHAPES": {
         "defaults": [
           "-"
@@ -4824,6 +4890,16 @@
         "in_env_example": true,
         "readers": [
           "services/zoe-data/web_search_provider.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_SELF_MODEL": {
+        "defaults": [
+          "'shadow'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/self_model.py"
         ],
         "typed_env": true
       },
