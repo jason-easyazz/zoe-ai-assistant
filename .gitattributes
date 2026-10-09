@@ -1,0 +1,3 @@
+# Append-only ledgers: a union merge keeps BOTH sides' added lines, so two PRs
+# that each append a line never conflict on the same file (see the ledger header).
+docs/knowledge/open-problems.md merge=union
