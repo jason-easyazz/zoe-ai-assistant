@@ -234,6 +234,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_ASK_WHEN_AMBIGUOUS": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/ask_when_ambiguous.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_ASSISTANT_ROOT": {
         "defaults": [
           "-",
@@ -760,6 +770,16 @@
           "services/zoe-data/greploop_guard.py"
         ],
         "typed_env": false
+      },
+      "ZOE_CLEAN_GOODBYE": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/clean_goodbye.py"
+        ],
+        "typed_env": true
       },
       "ZOE_COMPOSE_MAX_TOKENS": {
         "defaults": [
@@ -1709,6 +1729,16 @@
           "services/zoe-data/zoe_agent.py"
         ],
         "typed_env": false
+      },
+      "ZOE_HOLD_THE_FACT": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/hold_the_fact.py"
+        ],
+        "typed_env": true
       },
       "ZOE_HOME_SETUP_SECRET": {
         "defaults": [
@@ -3490,6 +3520,16 @@
           "services/zoe-data/persona_layer.py"
         ],
         "typed_env": true
+      },
+      "ZOE_PERSON_BENCH_DIR": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/perf/person_half_replay.py"
+        ],
+        "typed_env": false
       },
       "ZOE_PERSON_BIRTHDAY_CAPTURE_ENABLED": {
         "defaults": [

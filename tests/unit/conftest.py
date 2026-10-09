@@ -98,3 +98,25 @@ def _no_sys_modules_stub_leaks(request):
     _fail_on_stubs("present before", name)
     yield
     _fail_on_stubs("left behind by", name)
+
+
+@pytest.fixture(autouse=True)
+def _verbatim_and_night_stores_in_process():
+    """``MemoryService.delete_user`` erases the owner's verbatim turns (``exact_words``) AND the night mind's rows
+    (``night_store``) and FAILS CLOSED when either erase fails. Both are Postgres tables in production and no unit test has
+    that pool, so every unit test gets the in-process stores (the same rule as ``services/zoe-data/tests/conftest.py``);
+    a test that wants the SQL backend sets it itself. A real erase failure is NOT hidden by this: it only supplies a
+    working store where the test has no pool (pinned by the two test_delete_user_*night* tests in test_memory_service_fixes.py)."""
+    try:
+        import exact_words
+        import night_store
+    except Exception:  # noqa: BLE001 - a lane without the service modules on its path has no delete_user to protect
+        yield
+        return
+    exact_words.set_backend(exact_words.MemoryBackend())
+    night_store.set_backend(night_store.MemoryBackend())
+    try:
+        yield
+    finally:
+        exact_words.set_backend(None)
+        night_store.set_backend(None)
