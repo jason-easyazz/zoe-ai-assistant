@@ -15,10 +15,11 @@ it is a wall that does not trust the model:
     candidates the owner's top 3 CURRENT rows on the sentence (``MemoryService.search``), each one the
                owner's own, about the owner (or about someone the sentence names), a person-fact type,
                not a tombstone, not pasted, not above a user's own words in authority.
-    judge      CHAT lane: the Flue brain, as the ``memory_retire`` tool (two calls: it is shown the three
-               notes, then names one number or 0). VOICE lane: never in the turn - the per-turn digest
-               (``memory_digest.run_turn_digest``, which already runs after the reply) asks the same
-               question of the local model. The judge sees numbers; it never supplies text.
+    judge      BOTH lanes, off the turn: the per-turn digest (``memory_digest.run_turn_digest``, which already runs
+               after the reply) asks the local model the same question (``distill_turn``). CHAT also has the Flue brain's
+               ``memory_retire`` tool (two calls: it is shown the three notes, then names one number or 0) as an optional
+               extra - the 4B brain does not call a tool on a statement that asks it nothing, so the tool alone was
+               never reached live (S10, 2026-10-09). The judge sees numbers; it never supplies text.
     wall       enforced HERE, whatever the judge said (``decide``): (a) the choice is one of the three
                offered rows; (b) the quote is the owner's verbatim sentence, cut from their own words, and is
                stored with the retirement; (c) the speaker is the verified owner - an authenticated chat
@@ -450,31 +451,37 @@ async def ask_judge(quote: str, rows: list, *, timeout_s: float = 20.0, base_url
     return parse_pick(raw, len(rows))
 
 
-async def distill_turn(user_id: str, user_message: str, *, speaker_verified: Optional[bool],
+async def distill_turn(user_id: str, user_message: str, *, speaker_verified: Optional[bool] = None,
                        judge: "Optional[Callable[[str, list], Awaitable[Optional[int]]]]" = None,
-                       svc: Any = None) -> Decision:
-    """The VOICE lane's judge, off the turn: called by the per-turn digest after the reply was spoken. Every
-    deterministic check runs first, so a turn with no change cue, an unverified speaker or no candidate row costs no
-    model call. Never raises."""
+                       svc: Any = None, lane: str = "voice") -> Decision:
+    """The off-the-turn judge, called by the per-turn digest after the reply was given. VOICE (``lane="voice"``): the
+    only judge a spoken turn has. CHAT (``lane="chat"``): the DETERMINISTIC judge of every typed turn - the brain's
+    ``memory_retire`` tool is optional on top of it, because a 4B model does not call a tool on a statement that asks it
+    nothing (the S10 live failure 2026-10-09: the tool was disclosed and never called, so the path was never reached, not
+    even in shadow). A chat turn the brain already decided is not judged twice. Every deterministic check runs first, so a
+    turn with no change cue, an unverified speaker or no candidate row costs no model call. Never raises."""
+    ln = lane if lane in LANES else "voice"
     try:
         if mode() == "off":
-            return Decision("off", R_OFF, lane="voice", mode="off")
+            return Decision("off", R_OFF, lane=ln, mode="off")
         if svc is None:
             from memory_service import get_memory_service
             svc = get_memory_service()
-        prep = await prepare(svc, user_id, user_message, lane="voice", speaker_verified=speaker_verified)
+        if ln == "chat" and brain_decided(user_id, user_message):
+            return Decision("none", "brain_already_decided", lane=ln, mode=mode())
+        prep = await prepare(svc, user_id, user_message, lane=ln, speaker_verified=speaker_verified)
         if prep.decision is not None:
             return prep.decision
         pick = await (judge or ask_judge)(prep.quote, prep.candidates)
         if pick is None:
-            d = Decision("refused", R_JUDGE_FAILED, lane="voice", n_candidates=len(prep.candidates), cue=prep.cue,
+            d = Decision("refused", R_JUDGE_FAILED, lane=ln, n_candidates=len(prep.candidates), cue=prep.cue,
                          mode=mode())
             _log(user_id, d)
             return d
         return await decide(svc, user_id, prep, pick=pick)
     except Exception as exc:  # noqa: BLE001 - the digest must never fail on this
         logger.warning("quote_retire: distill failed user=%s: %s", user_id, type(exc).__name__)
-        return Decision("refused", "error", lane="voice", mode=mode())
+        return Decision("refused", "error", lane=ln, mode=mode())
 
 
 # ── the CHAT lane: the Flue brain's ``memory_retire`` tool (via intent-dispatch) ────────────────
@@ -485,6 +492,17 @@ _TURN_MAX = 256
 _turns: "dict[str, tuple[str, bool, float]]" = {}
 #: user id -> (turn ref, the offered rows, offered at): what the brain was SHOWN, so what it names is checked against it
 _offers: "dict[str, tuple[str, list, float]]" = {}
+#: user id -> (turn ref, decided at): the turns the brain's tool already put to the wall, so the digest does not judge them twice
+_decided: "dict[str, tuple[str, float]]" = {}
+
+
+def brain_decided(user_id: str, message: str) -> bool:
+    """Did the brain's ``memory_retire`` tool already make a CHOICE (a pick, even 0) on this owner sentence in the last few minutes?"""
+    got = _decided.get((user_id or "").strip())
+    if got is None or time.monotonic() - got[1] > _TURN_TTL_S:
+        return False
+    own, _ = own_part(message)
+    return got[0] == turn_ref_for(own)
 
 
 def note_turn(user_id: str, message: str, *, voice: bool = False) -> None:
@@ -516,6 +534,7 @@ def _noted(user_id: str) -> "Optional[tuple[str, bool]]":
 def reset_state() -> None:
     _turns.clear()
     _offers.clear()
+    _decided.clear()
 
 
 def _listing(rows: list) -> str:
@@ -562,6 +581,9 @@ async def handle(user_id: str, slots: dict, *, svc: Any = None) -> str:
         prep.candidates = list(offered[1])        # the notes the brain was SHOWN: its number means those
     d = await decide(svc, uid, prep, pick=slots.get("pick"), row_id=slots.get("row_id"))
     _offers.pop(uid, None)
+    _decided[uid] = (prep.turn_ref, time.monotonic())
+    while len(_decided) > _TURN_MAX:
+        _decided.pop(next(iter(_decided)))
     if d.action == "retired":
         return ("Done: that note is now marked as no longer true, and I kept their own sentence as the reason. "
                 "Acknowledge the change briefly in your own words.")

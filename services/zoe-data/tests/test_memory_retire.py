@@ -459,22 +459,61 @@ async def _inner(user_id, user_message, assistant_response="", *, session_id=Non
     return {"new": 0}
 
 
-def test_the_per_turn_digest_hands_a_spoken_turn_to_the_judge_and_a_typed_one_to_nobody(monkeypatch):
+def test_the_per_turn_digest_hands_a_spoken_turn_and_a_typed_one_to_the_judge_each_on_its_own_lane(monkeypatch):
     import memory_digest
     seen = []
 
-    async def distill(user_id, user_message, *, speaker_verified, **kw):
-        seen.append((user_id, user_message, speaker_verified))
-        return mr.Decision("shadow", "would_retire", lane="voice")
+    async def distill(user_id, user_message, *, speaker_verified, lane, **kw):
+        seen.append((user_id, user_message, speaker_verified, lane))
+        return mr.Decision("shadow", "would_retire", lane=lane)
     monkeypatch.setattr(mr, "distill_turn", distill)
     digest = memory_digest._then_quote_retire(_inner)
     out = run(digest(U, SAID, "ok", source="voice_turn_digest", speaker_verified=True))
-    assert seen == [(U, SAID, True)] and out == {"new": 0, "quote_retire": "shadow"}
+    assert seen == [(U, SAID, True, "voice")] and out == {"new": 0, "quote_retire": "shadow"}
     seen.clear()
+    # S10 live failure 2026-10-09: a typed turn was left to the brain's tool, the 4B brain never called it, and the path
+    # was not reached at all (no QUOTE_RETIRE line, not even in shadow). The digest now judges it too.
     out = run(digest(U, SAID, "ok", source="turn_digest"))
-    assert seen == [] and "quote_retire" not in out                       # the chat lane's judge is the brain, not the digest
+    assert seen == [(U, SAID, None, "chat")] and out == {"new": 0, "quote_retire": "shadow"}
+    seen.clear()
     out = run(digest(U, SAID, source="voice_turn_digest"))                # the lane's real call shape (positional text, keyword source)
-    assert seen == [(U, SAID, None)]
+    assert seen == [(U, SAID, None, "voice")]
+    seen.clear()
+    run(digest(U, SAID, source="idle_digest"))                            # any other writer is nobody's turn
+    assert seen == []
+
+
+def test_every_per_turn_digest_call_site_names_a_source_the_judge_listens_to():
+    """The wiring, pinned from the call sites: the chat lane's post-turn hook and the voice lane's both call ``run_turn_digest`` with a
+    ``source`` that ``memory_digest._QUOTE_RETIRE_LANES`` maps to a lane. Rename a source (or drop the chat entry) and the retire path is
+    silently unreachable again - which is exactly how S10 failed live."""
+    import inspect
+    import memory_digest
+    from routers import chat, voice_tts
+    assert memory_digest._QUOTE_RETIRE_LANES == {"turn_digest": "chat", "voice_turn_digest": "voice"}
+    assert 'source="turn_digest"' in inspect.getsource(chat._persist_memory_candidates_impl)
+    assert 'source="voice_turn_digest"' in inspect.getsource(voice_tts._run_voice_memory_passes)
+
+
+def test_the_typed_turn_off_the_record_or_about_a_third_person_or_opted_out_is_not_judged(monkeypatch):
+    import memory_digest
+    import user_prefs
+    seen = []
+
+    async def distill(user_id, user_message, **kw):
+        seen.append(user_message)
+        return mr.Decision("shadow", "would_retire", lane="chat")
+    monkeypatch.setattr(mr, "distill_turn", distill)
+
+    for skip in ({"off_record": True}, {"skipped_reason": "pronoun_subject_no_context"}):
+        assert "quote_retire" not in run(memory_digest._quote_retire_pass(dict(skip), U, SAID, "turn_digest", None))
+    assert seen == []
+
+    async def opted_out(uid, **kw):
+        return True
+    monkeypatch.setattr(user_prefs, "is_memory_opted_out", opted_out)
+    assert "quote_retire" not in run(memory_digest._quote_retire_pass({}, U, SAID, "turn_digest", None))
+    assert seen == []
 
 
 def test_the_per_turn_digest_result_survives_a_failing_judge(monkeypatch):
@@ -499,6 +538,76 @@ def test_the_per_turn_digest_is_the_same_function_with_one_more_step_after_it():
     assert fn.__name__ == "run_turn_digest" and fn.__wrapped__.__name__ == "run_turn_digest"
     assert "memory_disputes.queue_questions" in inspect.getsource(fn)
     assert list(inspect.signature(fn).parameters) == ["user_id", "user_message", "assistant_response", "session_id", "source", "speaker_verified"]
+
+
+# ── the CHAT lane's deterministic judge: the same digest, no tool call needed (the S10 live fix) ───────
+
+def test_a_typed_turn_is_judged_by_the_digest_with_no_brain_tool_call_and_retires_in_enforce(lab):
+    seed(lab, CELLO, OAT)
+    calls = []
+    d = run(mr.distill_turn(U, SAID, lane="chat", svc=lab.service,
+                            judge=_scripted(lambda rows: 1 + next(i for i, r in enumerate(rows) if r.text == CELLO), calls)))
+    assert d.action == "retired" and d.lane == "chat" and len(calls) == 1 and calls[0][0] == SAID
+    assert status(lab, "plays the cello") == "superseded" and status(lab, "oat milk") == "approved"
+    assert row(lab, "plays the cello")[2].get("retire_quote") == SAID and row(lab, "plays the cello")[2].get("retire_lane") == "chat"
+
+
+def test_a_typed_turn_in_shadow_logs_the_decision_on_the_chat_lane_and_writes_nothing(lab, monkeypatch, caplog):
+    seed(lab, CELLO, OAT)
+    monkeypatch.setenv("ZOE_QUOTE_RETIRE", "shadow")
+    with caplog.at_level(logging.INFO, logger="memory_retire"):
+        d = run(mr.distill_turn(U, SAID, lane="chat", svc=lab.service, judge=_scripted(1, [])))
+    assert d.action == "shadow" and status(lab, "plays the cello") == "approved"
+    lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("QUOTE_RETIRE")]
+    assert lines and "lane=chat" in lines[-1] and "mode=shadow" in lines[-1] and "action=shadow" in lines[-1]
+    assert "cello" not in " ".join(lines)                                   # ids, ranks and counts - never the words
+
+
+def test_a_typed_turn_with_no_change_cue_or_from_a_guest_costs_no_model_call(lab):
+    seed(lab, CELLO, OAT)
+    calls = []
+    assert run(mr.distill_turn(U, "I saw a cello today.", lane="chat", svc=lab.service, judge=_scripted(1, calls))).action == "nothing_to_offer"
+    assert run(mr.distill_turn("guest", SAID, lane="chat", svc=lab.service, judge=_scripted(1, calls))).action == "refused"
+    assert calls == [] and status(lab, "plays the cello") == "approved"
+
+
+def test_a_typed_turn_the_brain_already_decided_is_not_judged_twice(lab):
+    seed(lab, CELLO, OAT)
+    mr.note_turn(U, SAID)
+    run(mr.handle(U, {}, svc=lab.service))                                   # step 1: the notes
+    run(mr.handle(U, {"pick": 0}, svc=lab.service))                          # the brain says: none of them
+    calls = []
+    d = run(mr.distill_turn(U, SAID, lane="chat", svc=lab.service, judge=_scripted(1, calls)))
+    assert d.reason == "brain_already_decided" and calls == [] and status(lab, "plays the cello") == "approved"
+    # ... but a DIFFERENT sentence of the same user is its own turn
+    d = run(mr.distill_turn(U, "I sold the Corolla.", lane="chat", svc=lab.service, judge=_scripted(0, calls)))
+    assert d.reason != "brain_already_decided"
+
+
+def test_a_typed_turn_the_brain_only_listed_is_still_judged(lab):
+    seed(lab, CELLO, OAT)
+    mr.note_turn(U, SAID)
+    run(mr.handle(U, {}, svc=lab.service))                                   # the brain looked, and never picked
+    calls = []
+    d = run(mr.distill_turn(U, SAID, lane="chat", svc=lab.service,
+                            judge=_scripted(lambda rows: 1 + next(i for i, r in enumerate(rows) if r.text == CELLO), calls)))
+    assert d.action == "retired" and len(calls) == 1
+
+
+def test_the_chat_lane_keeps_every_wall_the_voice_lane_has(lab):
+    seed(lab, CELLO, SISTER)
+    for text in ("Dana says: I gave up the cello.", "Subject: hi\n\nFrom: Dana\nI gave up the cello."):
+        d = run(mr.distill_turn(U, text, lane="chat", svc=lab.service, judge=_scripted(1, [])))
+        assert d.action in ("nothing_to_offer", "refused")
+    d = run(mr.distill_turn(U, SAID, lane="chat", svc=lab.service, judge=_scripted(lambda rows: 1, [])))
+    assert d.action == "retired" and status(lab, "User plays the cello") == "superseded"
+    assert status(lab, "Odette plays the cello") == "approved"               # the sister's copy is never offered for the owner's sentence
+
+
+def test_an_unknown_lane_is_treated_as_the_voice_lane_and_so_needs_a_verified_speaker(lab):
+    seed(lab, CELLO, OAT)
+    d = run(mr.distill_turn(U, SAID, lane="telegram", svc=lab.service, judge=_scripted(1, [])))
+    assert d.action == "refused" and d.reason == mr.R_SPEAKER and status(lab, "plays the cello") == "approved"
 
 
 # ── the CHAT lane: the brain's tool, two calls ──────────────────────────────────────────────────────
