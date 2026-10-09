@@ -1,23 +1,24 @@
 ---
 type: Runbook
 title: The 12B night window (owner's page)
-description: A nightly window in which Zoe sleeps (voice, the app, Telegram brain replies and the live 4B are down for about an hour), the 12B runs the night jobs (the nightly digest, zoe-nightly-dreaming, the night-mind pass) at a bigger context, and everything is woken again, brain first, each unit's own /health polled. What sleeps and when, the RAM arithmetic and the levers, the safety properties, how to dry-run, trial, install, abort and read the night report, the first real attempts (2026-10-09: the 12B did not load; why that is not a RAM-arithmetic problem) and the ordered next experiments.
+description: A nightly window in which Zoe sleeps (voice, the app, Telegram brain replies and the live 4B are down for about an hour), the 12B runs the night jobs (the nightly digest, zoe-nightly-dreaming, the night-mind pass) at a bigger context, and everything is woken again, brain first, each unit's own /health polled. What sleeps and when, the RAM arithmetic and the levers, the safety properties, how to dry-run, trial, install, abort and read the night report, the first real attempts (2026-10-09: the 12B did not load; why that is not a RAM-arithmetic problem), the ordered next experiments, the decode-variance finding (6.24 vs 3.9 tok/s was a 16-token measurement artefact), what the first real night will do, and the operator pack (install the timer, first-night checklist, morning report, rollback).
 tags: [night, 12b, dreaming, brain-window, runbook, owner, memory, night-mind]
-timestamp: 2026-10-09T02:30:00+08:00
+timestamp: 2026-10-09T21:30:00+08:00
 ---
 
 # The 12B night window
 
 Owner priority, 2026-10-09 01:30: "using the 12B for dreaming and improving Zoe during the night needs to be a priority." Research: `docs/research/night-mind-2026-10-09.md` (section 8.3), `docs/research/memory-bakeoff-decision-2026-10-08.md` (the 12B preflight arithmetic). Built on the bake-off runner's pieces (`scripts/perf/zmb/bakeoff.py`: the `Host` seam, the brain-window lock, `compact_memory` / buddyinfo, `clone_command` / `deep_clone_command`), not beside them.
 
-**Status: built and tested; the 12B LOADS with unified memory plus `--ngl 24` (03:06 on 2026-10-09: 14 s to healthy, 5.4 tok/s decode), but no K numbers exist for it yet and no night job has run on it.** Five earlier attempts (01:57-02:06) and one at 03:02 (unified memory, full offload) died on the 12B's own `cudaMalloc`; every attempt restored the box healthy. Nothing is installed; the timer does not exist on the host. Read section 8 before installing.
+**Status (2026-10-09 evening): the window runs.** The 12B loads at `--ngl 34` (the sweep winner, section 11), the cells-only trial scored the night mind's cells on it (section 12: 9/13 against the 4B's 7/13, before the K9-K12 code fixes), the units are ready to install (section 14), and **the timer is not installed: that is the owner's step** (section 15 has the commands and the first-night checklist). Section 13 explains why "6.24 tok/s at 18:27, 3.9 at 19:38" was one 16-token measurement, not a slower machine. Nothing has run end to end on the 12B yet: no digest, no dreaming, no real-household night-mind pass (section 14 says exactly what the first one does).
 
 ## 1. The commands
 
 ```bash
 scripts/night/night_window.sh --dry-run          # FIRST. Reads the box, prints the arithmetic for every lever combination, which fits TODAY, the generated 12B command, the plan. Changes nothing.
 scripts/night/night_window.sh --trial            # manual, any hour, about 25 min: 12B alone, K1-K5 on it and on the 4B at 32k, restore
-scripts/night/night_window.sh                    # the window itself (the timer runs this at 02:50; a manual run outside 01:30-03:40 needs --anytime)
+scripts/night/night_window.sh                    # the window itself (the timer runs it at 02:50 with every lever written out, section 14; a manual run outside 01:30-03:40 needs --anytime)
+scripts/night/night_window.sh --summary          # ONE line about the newest real night (outcome, exit, minutes, jobs, restore); read-only; the unit pipes it to the journal
 scripts/night/night_window.sh --restore-only     # put everything back (idempotent; a window that is still running is left alone)
 scripts/night/night_window.sh --speed-sweep      # manual, any hour, hard cap 45 min: one 12B per config of the speed grid, one restore at the end (section 11)
 scripts/night/night_window.sh --cells-only       # manual, any hour, cap 40 min: load the 12B, one speed probe, ONLY the night mind's own cells (K1-K12), restore (section 12)
@@ -51,7 +52,7 @@ After a restart zoe-data's digest loop sleeps until the NEXT 03:00 and its in-pr
 | 02:30 (+0-10 min) | `zoe-backup` | Postgres first, then the palace tarball |
 | 02:32 | `zoe-dreaming` | **absorbed**: the installer disables `zoe-dreaming.timer`; the window runs `zoe-nightly-dreaming.py` itself (12B first, then the 4B if the 12B could not). Two runs would double the work and race for the model |
 | 02:40 (+0-5 min) | `zoe-memory-export` | its own header wants "a copy BEFORE the digest mutates the store"; the window starts after it, so the export is now a copy before EVERYTHING mutates |
-| **02:50 (+0-2 min)** | **`zoe-night-window`** | waits (up to 20 min) for training / backup / export / dreaming to be inactive, up to 30 min for the panel to be quiet (10 min since the last voice turn) |
+| **02:50 (+0-2 min)** | **`zoe-night-window`** | waits (up to 20 min) for training / backup / export / dreaming to be inactive, up to 30 min for the panel to be quiet (10 min since the last voice turn). The unit runs `night_window.sh --jobs digest,dreaming,night_mind --ngl 34 --ctx 8192 --kv q8_0 --end-by 03:55` (section 14) |
 | 03:00 | (zoe-data's digest loop) | not alive: stopped (the window runs the body) |
 | **03:55** | **the window must be over** | hard cap 65 min, shrunk to fit; zoe-data must be back before the Sunday 04:00 consolidation loop and the voice gate |
 | 04:10-04:52 | voice gate (Serena restart 04:15, gate 04:30) | a blackout: the window never overlaps it, and a 4B fallback job is cut at 04:10 |
@@ -250,3 +251,176 @@ scripts/night/night_window.sh --cells-only --ngl 38      # the sweep's faster -n
 **What the CLI does with the budget.** Before each cell it asks `fits_next(elapsed, budget, cell)`; a cell that would overrun is not started (it and the rest are `SKIP`, reason `cell_budget`, listed in `cells.skipped_budget`) and the one JSON line is still printed. Each finished cell logs `NIGHT_CELL id=K1 verdict=PASS wall_s=..` on stderr, so even a run the watchdog kills leaves its verdicts: the window recovers them from the log (`partial`, with the reason). The report's "Night-mind cells" table lists every verdict, the reason of every ERROR/SKIP, PASS/FAIL/SKIP/ERROR counts, the model calls and tokens, and the budget line; the JSON carries the same under `trial.12B.night_mind_cells`.
 
 **Still fixed (not cells):** the 4B@32k phase's own ZMA pass keeps its 420 s timeout and a full `--trial`'s ZMA pass keeps `trial_timeout_12b()`; neither was part of this change.
+
+## 13. The decode variance of 2026-10-09 (6.24 vs 3.9 tok/s): one 16-token sample, not a slower machine
+
+**Question.** At identical levers (`-ngl 34`, ctx 8192, KV q8_0, b512/ub128, UMA, mlock) the window's speed probe read **6.24 tok/s at 18:27** (run 20261009-182701) and **3.9 tok/s at 19:38** (run 20261009-193743). Earlier probes read 3.62 (the night-mind docs) and 2.06 (sweep row C0's 1.6k decode column).
+
+**Answer: there was no variance in the machine.** The probe prompt ends "In one sentence: ...", so the model answers in **16 tokens**, and a rate over 16 tokens is one stall wide. The server's own journal (`journalctl --user`, the `llama-server[pid]` lines of each transient `zoe-night-12b` unit) has every request of both loads:
+
+| run | the probe: tokens, decode time, rate | prefill (the 1.6k prompt) | every later call of 64+ tokens on the SAME server |
+|---|---|---|---|
+| 18:27 (`...182701`) | 16 tokens, 2,402 ms, **6.24** | 158.7 tok/s | 54 calls, median **6.89**, token-weighted **6.63** (min 5.99, max 7.05) |
+| 19:38 (`...193743`) | 16 tokens, 3,845 ms, **3.90** | 156.5 tok/s | 18 calls, median **6.56**, token-weighted **6.56** (min 6.40, max 7.02) |
+
+The 19:38 server decoded 6.71 tok/s over its next request's first 100 tokens, 14 s after the "3.9" probe. The two loads differ by **1 % in sustained decode** and **1.4 % in prefill**; the probe differs by 37 %. About 1.4 s extra landed in the first 16 tokens of a fresh load (the first generation builds the decode graphs and first-touches the CPU-side layers' pages in unified memory; the exact stall is not isolated and does not need to be). The sweep shows the same disease: its 1.6k probe (96 tokens) read 30-60 % under the 320-token "night shape" figure in 3 of 16 loaded configs (C0 2.06 against 5.46, 6a 4.57 against 6.65, 7b 3.28 against 5.59), which is why the sweep's winner was chosen on the night-shape column and stands.
+
+**What was ruled out, and with what.**
+
+| Suspect | Evidence | Verdict |
+|---|---|---|
+| Thermal throttling | prefill is GPU-bound and was equal to 1.4 %; sustained decode equal to 1 % in the SAME load. Read-only queries now: `nvpmodel -q` MAXN_SUPER, `jetson_clocks --show` GPU 1173 MHz and CPUs 1984 MHz with min == max (pinned), tj 46-49 C idle, lowest throttle trip 95 C. **No thermal log exists for 18:27 or 19:38** (tegrastats was not recording): the case against throttling is the equal prefill and sustained decode, not a reading | no |
+| CPU governor / power mode | MAXN_SUPER, `schedutil` with min == max (jetson_clocks): cannot vary | no |
+| Layer placement / fragmentation | same generated command (`--n-gpu-layers 34`); order-9+ free blocks after compaction 2,124 (18:27) against 2,123-2,133 (19:37); both loaded first time | no |
+| UMA page migration | would slow EVERY token of that load; the later calls were normal. It can explain the one-off first-generation stall, which is a one-time cost | at most the 1.4 s |
+| A concurrent load (pytest, an agent) | the jobs' rates were equal; a load in the first 4 seconds cannot be excluded (nothing recorded the CPU) | possible for the first 16 tokens only; now logged |
+
+**Why it matters (it already cost something).** Every budget the window derives is `f(decode tok/s)`: the digest's timeout scale (`ceil(1.5 x 11.4 / tps)`: 5 at 3.9, 3 at 6.6), the night mind's `--decode-tok-s`, the cells budget. At the false 3.9 the cells plan said `DROPPED (cannot fit): K10,K11,K12`; at the true 6.56 the same plan fits all 13 (`cells_budget.plan(6.56, 156.5, 1644)`). The 19:56 report's plan line and its "decode 3.9" were wrong by this.
+
+**The cheapest fix, built (this PR).** Not a refusal (a measurement should not stop a night): make the probe stop lying and make a genuinely slow night name its cause.
+
+1. `probe_speed`: a first sample under 48 generated tokens is followed by a **steady probe** (a short prompt, 96 tokens). `decode_tps` becomes the steady figure; `decode_tps_first` keeps the first. If the steady probe also fails the first figure is kept and the report says LOWER BOUND. Prefill still comes from the 1.6k request.
+2. `check_box`: before the 12B starts (with Zoe's services stopped, CPU busy % over one second) and again at the probe, the log and the report carry `box clocks (phase): tj .. C; GPU cur/max MHz; CPU0 cur/max MHz governor; power mode; load; CPU busy %`, from read-only sysfs files and `nvpmodel -q` (no sudo).
+3. **WARNINGS, never a refusal**, in the log, the report's notes and `rec["clocks"]`: the SoC within 10 C of the lowest throttle trip (85 C); a power mode that is not MAXN; a GPU / CPU max clock below 95 % of the hardware maximum; a pinned clock running under 90 %; CPUs 30 % or more busy before the load (something else is on the box); 1-minute load 4 or more on 8 cores. `night_window.sh --dry-run` prints the box line too.
+
+Tests: `test_a_short_first_probe_is_followed_by_a_steady_one_and_the_steady_figure_is_used`, `..._a_long_first_probe_needs_no_second_request`, `test_box_clock_warnings_*`, `test_a_hot_throttled_busy_box_warns_but_the_night_still_runs`. To confirm the explanation on the next real load: the run log's `speed 12B:` lines now show both figures, and `~/.zoe/night-reports/<date>.md` lists the box at pre-load and at the probe.
+
+## 14. What the first real night will do
+
+**The command** (`scripts/night/systemd/zoe-night-window.service`, a test parses it and checks it against the code's defaults):
+
+```
+TIMER_SLOT OnCalendar=*-*-* 02:50:00 RandomizedDelaySec=120 END_BY 03:55
+ExecStart=%h/assistant/scripts/night/night_window.sh --jobs digest,dreaming,night_mind --ngl 34 --ctx 8192 --kv q8_0 --end-by 03:55
+ExecStopPost=%h/assistant/scripts/night/night_window.sh --restore-only          # every way out
+ExecStopPost=-... night_window.sh --summary | systemd-cat -t zoe-night-window    # ONE journal line
+MemorySwapMax=0   TimeoutStartSec=6000
+```
+
+**The slot.** Zoe sleeps from about 02:50 (the window waits for the 02:03 training, the 02:35 backup and the 02:41-02:46 memory export, which keeps the export's "copy BEFORE the digest mutates the store" guarantee) until at most 03:55: a 65-minute hard cap, 12 minutes of it reserved for the restore, so the jobs have about 52 minutes. The owner's record is "asleep about 02:00-04:10"; the end is 03:55 because zoe-data must be back before the Sunday 04:00 consolidation loop (a zoe-data that restarts at 04:05 on a Sunday waits a week for it) and the 04:10 voice-gate blackout (`--end-by` past 04:10 is refused). `Persistent=false`: a missed 02:50 never fires at the next boot in daylight, and the script refuses outside 01:30-03:40 without `--anytime`.
+
+**The dry run of that exact command** (`night_window.sh --dry-run --anytime --jobs digest,dreaming,night_mind --ngl 34 --ctx 8192 --kv q8_0 --end-by 03:55`, 2026-10-09 20:54, on a BUSY evening box with 1.3 GB MemAvailable; `--anytime` only because it is daytime; process names and the long table trimmed; changes nothing):
+
+```
+DRY-RUN night window (night): cap 65 min, end by 03:55, jobs digest,dreaming,night_mind, zoe-data stopped
+preflight ok: lock free (dry-run: not taken), MemAvailable 1309 MB, cap 65 min, will stop zoe-data.service, functiongemma-router.service, kokoro-tts.service, llama-server.service
+  held by the units a window stops (cgroup memory.current): zoe-data 1734, functiongemma-router 543, kokoro-tts 2537, llama-server 6286
+  stop set: stop all (default) -> zoe-data, functiongemma-router, kokoro-tts, llama-server; predicted MemAvailable 10177
+    qat ctx 8192 KV q8_0   model 6653  KV 260  compute 600  floor 1200  NEED 8712  +jobs 9412  avail 10177  margin +765  CHOSEN
+  (keep zoe-data: predicted 8790, margin -664 .. -1255: NO / load only;  keep zoe-data + router: predicted 8356: NO)
+FITS TODAY (predicted, default stop set): qat ctx 8192 KV q8_0, margin +765 MiB with the jobs beside it
+the 12B command: .../llama.cpp-b11194/build-jetson/bin/llama-server --model .../gemma4-12b-qat/gemma-4-12b-it-qat-q4_0.gguf --host 127.0.0.1 --port 11500
+  --ctx-size 8192 --n-gpu-layers 34 --parallel 1 --batch-size 512 --ubatch-size 128 --cont-batching --cache-type-k q8_0 --cache-type-v q8_0 --flash-attn on
+  --temp 0.7 --top-k 64 --top-p 0.95 --jinja --reasoning off --load-mode mmap+mlock --metrics --cache-ram 512 --fit off     [GGML_CUDA_ENABLE_UNIFIED_MEMORY=1]
+  transient unit properties: LimitMEMLOCK=infinity, MemorySwapMax=0
+the box right now: tj 47.2 C (cpu-thermal); GPU 1173/1173 MHz; CPU0 1984/1984 MHz schedutil; power mode MAXN_SUPER; load 5.91
+PLAN: cap 65 min, must end by 03:55; sleep zoe-data > router > kokoro > llama-server; wake llama-server > kokoro > router > zoe-data (each polled on its OWN /health, one retry, then ALARM + exit 4)
+  job digest:     scripts/night/jobs/night_digest.py                                   [timeout 1500s; 4B fallback yes]
+  job dreaming:   scripts/maintenance/zoe-nightly-dreaming.py --skip-compaction        [timeout 1200s; 4B fallback yes]
+  job night_mind: scripts/maintenance/zoe-night-mind.py --model-url http://127.0.0.1:11500/v1 --ctx-tokens 8192 --all-members [+ --decode-tok-s/--prefill-tok-s measured]  [timeout 1500s; 4B fallback no]
+  every job gets GEMMA_SERVER_URL=http://127.0.0.1:11500/v1, ZOE_DIGEST_LLM_TIMEOUT_SCALE=<from the measured decode speed>, MALLOC_ARENA_MAX=2
+DRY-RUN: nothing was changed.
+```
+
+At 02:50 the box is quieter than at 20:54 (the real run MEASURES MemAvailable after the stops, not this prediction): the last measured stop cycle gave **12,603 MiB available** after the stops, **4,000-4,190 MiB after the 12B loaded**, a low of 3,287 MiB during 18 model calls, against the 1,200 MiB floor.
+
+### The jobs, in order, on whose data
+
+| # | Job | Whose data | What it writes | Gate |
+|---|---|---|---|---|
+| 1 | **digest** (`jobs/night_digest.py`: the body of zoe-data's 03:00 loop, then the evolution NOTICE and MEASURE phases; prints counts only) | every chat-turn owner with a **user turn in the last 30 h** (`ZOE_MEMORY_DIGEST_LOOKBACK_HOURS`, default 30, floor 27); the per-turn `metadata.user_id` wins (a kiosk session is guest-owned, each turn names the speaker), guest sentinels resolve to nobody; off-the-record turns and forgotten entities are skipped. **Household members, and also any synthetic id with chat rows in that window**: `run_digest_for_all_active_users` does not call `drop_synthetic_users` (dreaming, consolidation, the music digest and the night-mind CLI do), exactly as the live 03:00 loop behaves today | facts into the memory store (MemPalace drawers + `memory_items`) after the observation gate and the dedup below; the emotional moments (affect ON for the household, never guests); the exact-words index catch-up; reject-ledger lines; evolution rows. The loop's in-process gauges are NOT shared (section 2) | none new: the same code the 4B runs at 03:00 today, on the 12B. The inline night-mind hook (`result["night_mind"]`) fires only if `night_mind.mode() != off` in the job's environment (the unit's `EnvironmentFile`; off live) |
+| 2 | **dreaming** (`zoe-nightly-dreaming.py --skip-compaction`; the installer disables `zoe-dreaming.timer`) | every chat-turn owner ever, **minus synthetic ids** (`drop_synthetic_users`) | a memory-quality snapshot line in `~/training/data/memory-quality-log.jsonl`; per user: REM reinforce (access counts, `related_ids`, concept tags on existing drawers), open loops extracted from the last 48 h of turns into `open_loops` (deduped against the unresolved ones), flag-dark passes (selector, implicit supersede, person-link resolver) only if their flags are on; the music-taste digest's preference facts. **On a Monday morning (UTC Sunday: `utcnow().weekday() == 6`) it also runs the weekly deep sleep, synthesis, portrait and agent-sync phases**, so that night is the heavy one | the flags it already has |
+| 3 | **night_mind** (`zoe-night-mind.py --all-members`) | every chat-turn owner, **synthetic ids dropped**; each member's own rolling 30 h of own-words turns | per member, ONE transaction at the end of that member: `night_observations` (a pointer + an exact quote of one of that member's turns, enums, a validity interval), `night_threads`, one counts-only `night_runs` row. A quiet day (< 3 turns or < 20 words after routine commands) is 0 calls; a member's night is at most 7 calls | see below |
+
+**What night_mind does when `ZOE_NIGHT_MIND` is off, shadow or enforce.** The flag lives in zoe-data's environment; **the standalone CLI does not read it for its own mode**: `zoe-night-mind.py` calls the pass with `force_mode` = `enforce` unless `--dry-run` / `--mode shadow` is given, and the window passes neither. So:
+
+- **Flag off (live today):** the window's night_mind job still **runs and writes** real rows for the household (mode `enforce` is forced by the CLI). Nothing is *served*: every reader (the "What I've noticed" packet block, the morning brief item, the mood check-in) is gated on `night_mind.enabled()` = the flag being `enforce` in zoe-data, and `snapshot` serves only `state = current` observations. The digest's inline hook does nothing (`mode() == off`). So with the flag off the first nights are a **silent accumulation**: tables fill, the morning looks exactly as it does today.
+- **Flag shadow:** zoe-data still serves nothing; the digest job's inline hook runs the pass in shadow (calls and checks, counts only, no writes) **in addition to** the standalone job, which writes. Use it only to read the `NIGHT_MIND ...` log lines.
+- **Flag enforce:** the rows from earlier nights become visible to the readers (the voice-path packet block included: the replay gate in `night-mind.md` 'Operator steps' applies before this flip), and the digest job's inline hook also reflects each member at the digest's own context. Both passes use deterministic ids (`_oid(user, turn, quote)`), so the second pass upserts the same observations instead of duplicating them, but the THREADS call runs twice, which is the double-reflection question already in section 5: decide which one a window night keeps before flipping the flag past `off`.
+- **A limit found while writing this (not fixed here):** the CLI process has `ZOE_NIGHT_MIND` unset, so `memory_digest._turn_limit()` gives the loader the legacy **200 turns** (`ORDER BY created_at ASC LIMIT 200`: the OLDEST 200 of the 30 h) instead of the 600 the chunked pass is designed for. A very full day loses its newest turns, which is the class of loss K7 and K9 were built to catch. One line in the CLI (`os.environ.setdefault("ZOE_NIGHT_MIND", mode)` before the first import) fixes it; recorded in `open-problems.md`.
+
+**Does the window's digest re-digest the same day? Yes in the data, no in the effect; and on a normal night it is the only one.**
+
+- The digest has **no watermark**. Every run reads the rolling last 30 h (a 24 h cadence on a 30 h window: 6 h of every night's input is read twice even without the window). The dedup is **per fact, at write time**: `dedup_verdict(fact, existing_text)` (`memory_overlap`, token level) compares each extracted fact with the user's 100 newest stored facts; a "duplicate" is skipped and counted (`skipped_duplicates`; `NIGHT_JOB digest` prints it), a fact that holds a new name, number or date is kept, one that extends a stored fact supersedes it at reconcile. Open loops dedupe against the unresolved ones (`SELECT loop_text ... resolved IS NOT TRUE`). Night-mind observations upsert on `(user, turn, quote)`.
+- **One digest per night:** zoe-data's `_memory_digest_loop` sleeps until 03:00. The window stops zoe-data at ~02:51, so the loop is not alive at 03:00; after the restart it sleeps to the NEXT 03:00. The window's digest is the night's only one; `digest_loop_missed()` is what lets the 4B fallback run it after the restore (only when zoe-data was down across 03:00 and the 12B did not finish).
+- **Two digests in one night happen only if** the window ends before 03:00 (every job done within ~8 minutes of 02:51: a night with almost no chat) so zoe-data is back before its loop fires, or the window refuses before stopping anything (then the loop is the only digest, on the 4B, as today). The second pass is safe by the dedup above and costs only repeated model calls.
+- `GET /api/system/memory-loops/status` shows the digest `stale` until the next 03:00 after a window night. That is expected (the gauges are in-process); the night report is the truth.
+
+### What the morning shows
+
+| Reader | What it shows after the first night |
+|---|---|
+| `~/.zoe/night-reports/2026-10-10.md` (+ `.json`) | outcome line and exit code, levers, MemAvailable before / after the load, the speed probe (steady figure, first figure, box clocks), the jobs table (wall, tokens, status per job), the wake table (each unit's healthy-after and seconds down), notes (any warning, any fallback), the last 30 timeline events |
+| `journalctl --user -t zoe-night-window -n 5` | ONE line: `NIGHT_WINDOW_SUMMARY run=.. outcome=.. exit=.. min=elapsed/cap levers=.. decode_tps=.. jobs=digest:ok@12B,dreaming:ok@12B,night_mind:ok@12B restore=..` (priority err when the unit failed) |
+| `~/.zoe-logs/night-window.log` | the run log, with the same summary line at the end |
+| Zoe herself | digest facts and open loops arrive through the readers that exist today (recall, the brief, `ZOE_BRIEF_ON_FIRST_TURN`); **night-mind rows are not visible while the flag is off** |
+| `~/.zoe/night-reports/ALARM` | exists only if a unit did not come back healthy: it names the units and the exact commands |
+| the tables (counts only; an operator step) | `SELECT night_date, status, counts FROM night_runs ORDER BY created_at DESC LIMIT 10;` |
+
+### Rollback
+
+- **A night-mind night, by run id.** The pass stamps `night_observations.run_id` = the night date, opens threads with `opened_run` = the night date and writes one `night_runs` row per member-night. `scripts/maintenance/night_mind_retire_run.py --night-date 2026-10-10` counts them (a dry run, counts only); `--apply` marks them `retracted` (rows are kept for audit; readers serve `current` only, and a thread without a current observation is not served); `--user ID` limits it to one member. For the FIRST night nothing existed before, so this undoes it completely. Later nights can also rewrite earlier rows (a change moment turns older observations into `history`); retiring night N does not undo that (the script's docstring says so).
+- **The digest's and dreaming's facts.** There is no per-run switch: they are ordinary memory rows with provenance. The undo is the 02:41 `zoe-memory-export` copy taken just before the window (`~/.zoe/memory-exports/`, 14 kept, plain JSON) plus the tombstone / forget paths for single facts; the Postgres dump from the 02:35 backup covers `open_loops` and `memory_items`.
+- **The whole window.** `systemctl --user disable --now zoe-night-window.timer` (or `scripts/night/install_night_window.sh --uninstall`, which re-enables `zoe-dreaming.timer`); `night_window.sh --restore-only` wakes anything a half-finished run left stopped.
+
+### The RAM and time arithmetic, with today's numbers
+
+| Line | Figure | Source |
+|---|---|---|
+| 12B weights (QAT q4_0 file) | 6,653 MiB | file size |
+| KV at ctx 8192, q8_0 | 260 MiB | `(8192 x ctx + 189e6) x 1.0625` |
+| compute buffer / floor / job processes | 600 / 1,200 / 700 MiB | window constants |
+| **need** | **9,412 MiB** | sum |
+| available after the stops (last measured stop cycle, 19:37) | 12,603 MiB | run log |
+| margin | **+3,190 MiB** (the evening dry run, busy box, predicted: +765) | run log / dry run |
+| after the 12B loaded / lowest during 18 calls | 4,000-4,190 / 3,287 MiB | runs 182701, 193743 |
+| decode, sustained (section 13) | **6.5-6.9 tok/s** (steady), not the 3.9 / 6.24 first-sample figures | journal |
+| prefill | 156-159 tok/s | probe |
+
+The load is about 15 s. A member-night of the night mind is 3 calls: a MOMENTS call (about 700 prompt tokens, cap 640 out, expected 0.6 x cap) costs 700/157 + 384/6.6 = 4.5 + 58 = **about 63 s**, the THREADS call (about 600 in, cap 450) **about 45 s**; K1's measured 2 + 1 calls took 179 s. So **3-6 minutes per active member, 15-30 minutes for a household of five**, fewer when a member's day was quiet. The digest is an estimate, not a measurement (it has never run on the 12B): per member one fact extraction (cap 512 out: up to 78 s, usually about 30 s), contradiction checks on the surviving facts, the emotional pass: **2-4 minutes per member, 10-20 for five**. Dreaming: REM concept-tag calls (60 tokens, about 10 s each) and one open-loops call per member: **5-12 minutes**, more on a Monday morning. Total expected **30-60 minutes against about 52 available** (jobs may start at ~02:52 and must end by 03:43): **the first night may not finish all three**. The order is deliberate: digest first (the 4B fallback covers it after the restore if zoe-data was down across 03:00), dreaming second (the 4B fallback runs it in full, compaction included), night_mind last (12B only, no fallback: a night without time for it is exit 5 `no time`). Each job's timeout is capped by the time left, and every job's model-call timeouts scale from the steady decode figure. The first report is the measurement of all of the above.
+
+## 15. Operator pack: install the timer, the first night, the morning
+
+**Install (the OWNER's step; nothing here installs anything):**
+
+```bash
+cd /home/zoe/assistant                                # the checkout must be on main with this PR merged and zoe-data/units untouched
+scripts/night/night_window.sh --dry-run --anytime     # 1. read-only: does it fit TODAY, what would it run (a "REFUSED ... starts between 01:30 and 03:40" line is the hour, not a fault)
+scripts/night/install_night_window.sh --dry-run       # 2. prints every step
+scripts/night/install_night_window.sh                 # 3. copies the 2 units to ~/.config/systemd/user, daemon-reload, DISABLES zoe-dreaming.timer (the window runs dreaming), enables the window timer
+scripts/night/install_night_window.sh --check         # 4. read-only status
+systemctl --user list-timers | grep -E 'night|dreaming'    # 5. next elapse should be 02:50 tonight; zoe-dreaming.timer should be gone from the list
+```
+
+Undo: `scripts/night/install_night_window.sh --uninstall` (re-enables `zoe-dreaming.timer` only if the install disabled it).
+
+**Before the first night (5 minutes):**
+
+1. Passwordless sudo works for `zoe` (`sudo -n true`): the window compacts RAM with it; without it a fragmented box refuses.
+2. The parked 12B unit `~/.config/systemd/user/llama-server-12b-deepbrain.service.disabled`, the QAT file `~/models/gemma4-12b-qat/gemma-4-12b-it-qat-q4_0.gguf` and `~/.zoe/venvs/zoe-data-py312` exist (the installer warns about each).
+3. Migration `0040` is applied (`alembic current` in zoe-data shows `0042` or later): without the night tables the night_mind job writes nothing it cannot and reports a nested error; the digest and dreaming are unaffected.
+4. Leave `ZOE_NIGHT_MIND` **off** for the first nights (section 14: the job still writes, nothing is served). Do not run a pytest / build / agent session on the box at 02:45-03:50 (an evening dry run saw 1.3 GB available because of exactly that; the window measures after the stops and refuses cleanly, but a quiet box is what makes `-ngl 34` load first time).
+5. Known interactions, not blockers: **Sunday 03:38** `zoe-backup-verify.timer` runs inside that night's window (the window's busy list only checks at the start, and the verify needs RAM beside the 12B): the first one is 2026-10-11; the 1,200 MiB floor kills the running job and restores if RAM runs out, so the worst case is a lost job, never a stuck box. **Monday 02:50** is the weekly dreaming night (UTC Sunday: deep sleep, synthesis, portrait, agent sync): the heaviest, expect the dreaming timeout there. Installed tonight, the first window is Saturday 2026-10-10 02:50.
+
+**First-night checklist (while you sleep; look at it at breakfast):**
+
+| Check | Where | Good |
+|---|---|---|
+| The unit ran and ended | `systemctl --user status zoe-night-window.service` and `journalctl --user -t zoe-night-window -n 5` | `Result: success`; summary line `exit=0` (exit 5 = a job had no time, 4 = a unit did not wake: see ALARM, 3 = aborted, 2 = refused) |
+| Everything is awake | `curl -s localhost:8000/health; curl -s localhost:11434/health; curl -s localhost:10201/health; curl -s localhost:11436/health` | four `ok` (Kokoro: `pipeline_loaded` and `device: cuda`) |
+| No alarm | `ls ~/.zoe/night-reports/ALARM` | no such file |
+| Voice works | say a sentence to the panel | a normal reply, no chopping (a chopped reply = Kokoro on CPU; `curl localhost:10201/health`) |
+| The report | `~/.zoe/night-reports/<date>.md` | read the points below |
+
+**What to look at in the morning report:**
+
+1. **Outcome and cap**: `ok`, minutes used of 65, restore "everything back and healthy". `refused: ...` means nothing was stopped (the reason is printed; the 4B fallback jobs still ran if the box was clear).
+2. **Levers**: `qat ctx 8192 KV q8_0` chosen, MemAvailable after the stops (about 12 GB expected) and after the load (about 4 GB), and whether it loaded first time (`load_failures.json` counts consecutive failures; two in a row refuse the next timer run until `--retry-load` or a reboot).
+3. **Speed**: the steady decode figure (expect 6.5-6.9 tok/s) and prefill (about 157). A steady figure far under 6 with a `WARNING` in "box at pre-load / probe" names the cause (heat, power mode, a busy CPU).
+4. **Jobs table**: each of digest / dreaming / night_mind: `ok` on `12B`, wall time, tokens. A job `timeout` or `no time` is the arithmetic (section 14), not a failure of the night; note which one and how far the budget fell short. The digest line carries `users`, `skipped` (duplicates) and `verdict` (counts only).
+5. **Wake table**: every unit healthy on attempt 1, seconds down (about 40-100 s each after the 12B stops).
+6. **Notes**: any 4B fallback that ran and why; any box warning.
+7. The digest `stale` in `/api/system/memory-loops/status` until the next 03:00 is expected.
+8. Counts of what the night mind wrote: `night_runs` rows (operator SQL in section 14). If anything about it looks wrong: `scripts/maintenance/night_mind_retire_run.py --night-date <date>` (dry run first).
+
+What to send back: the report path, the summary line, and anything in section 14's "What the first real night will do" that did not happen. The ledger lines for this are in `docs/knowledge/open-problems.md` (2026-10-09, night window).

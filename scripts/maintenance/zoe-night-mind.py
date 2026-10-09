@@ -26,6 +26,7 @@ Flags
   --dry-run            run every call and check, write NOTHING (mode shadow). Without it: mode enforce. (--mode shadow|enforce overrides.)
   --transcript-file F  synthetic runs without Postgres: a JSON list of {"id","text","at"} (turns of ONE member, given by --user).
   --cells              do not touch any member: score the reflection cells K1-K12 (the lab, scratch stores) against --model-url and print the counts.
+  --only K9,K10        with --cells: run just these cells (K9f = the flat week); the others are neither run nor reported. The output is still the one JSON line.
   --cell-budget S      with --cells: the seconds this whole process may take (the window passes what its cap leaves, minus a grace). Before each cell the CLI asks
                        ``zmb.cells_budget.fits_next`` (time spent + the cell's expected time x1.25, from the measured --decode-tok-s / --prefill-tok-s); a cell that would
                        overrun is NOT started: it and every later one is reported ``SKIP`` with its reason in ``cells.reasons`` and listed in ``cells.skipped_budget``, and the
@@ -40,7 +41,7 @@ Output
      "totals": {"members", "calls", "prompt_tokens", "completion_tokens", "wall_s", "observations_written", "observations_pending", "calls_invalid",
                 "completion_tokens_per_wall_s", "members_written"},
      "members_written": N, "members_total": M,      (members whose pass committed rows / members the run reached: partial completion is visible here)
-     "cells": {"K1": "PASS", ..., "pass", "fail", "skip", "error", "k1": {"judged", "true", "false"}}      (only with --cells)}
+     "cells": {"K1": "PASS", ..., "pass", "fail", "skip", "error", "k1": {"judged", "true", "false"}, "evidence": {"K9": [<what the failed cell scored>]}}      (only with --cells)}
 Exit codes: 0 ok / nothing to do, 1 error, 2 the model is unreachable. The "nothing was written" guarantee is PER MEMBER: each member's night is computed in memory
 and committed at the end of that member, and the server is probed first. With --all-members an earlier member's committed night stays when a later member
 fails or the server drops, so exit 2 / 1 can follow earlier writes: read ``members_written`` / ``members_total`` in the JSON (and stderr's exit-2 line) for how far it got.
@@ -78,6 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--allow-remote", action="store_true", help="allow a non-loopback --model-url (the box's rule is: nothing leaves it)")
     ap.add_argument("--date", default="")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--only", default="", help="with --cells: run only these cells, comma separated (K9,K9f,K10); the others are not run and not reported")
     ap.add_argument("--mode", choices=("shadow", "enforce"), default="")
     ap.add_argument("--transcript-file", default="")
     ap.add_argument("--cells", action="store_true")
@@ -203,10 +205,14 @@ def run_cells(args, url: str, cfg) -> dict:
     out: dict = {}
     reasons: dict = {}
     k1: dict = {}
+    evidence: dict = {}
     skipped: "list[str]" = []
+    only = {x.strip().upper() for x in str(getattr(args, "only", "") or "").split(",") if x.strip()}      # "K9,K10" -> {"K9", "K10"}; "K9F" is the flat week
     try:
         for c in (c for c in spec.load_cells() if c.axis == "reflection"):
             key = c.id.split(".")[0] + ("f" if c.id.endswith("flat_week") else "")
+            if only and key.upper() not in only:
+                continue                                         # --only: a cell that was not asked for is neither run nor reported
             if skipped or not cells_budget.fits_next(time.monotonic() - _STARTED, args.cell_budget, key, cfg.decode_tok_s, cfg.prefill_tok_s):
                 skipped.append(key)                              # once one cell is out, every later one is (a prefix of the order, as the window planned it)
                 out[key] = "SKIP"
@@ -217,6 +223,8 @@ def run_cells(args, url: str, cfg) -> dict:
             o = cellmod.run_cell(c.rendered(w), w, arm)
             out[key] = o.verdict
             logging.getLogger(__name__).info("NIGHT_CELL id=%s verdict=%s wall_s=%.1f", key, o.verdict, time.monotonic() - t_cell)
+            if o.verdict in ("FAIL", "ERROR"):
+                evidence[key] = o.evidence.get("probes") or []        # the numbers a failed cell scored (counts and the lab's invented names, never household text): diagnosing a FAIL no longer needs a re-run by hand
             if o.verdict in ("ERROR", "SKIP") and o.reason:
                 reasons[key] = o.reason                           # an ERROR names WHY (e.g. ``... status=llm_timeout budget_s=148.0``), never a bare verdict
             if c.id.startswith("K1."):
@@ -227,7 +235,7 @@ def run_cells(args, url: str, cfg) -> dict:
         arm.close()
     verdicts = list(out.values())
     out.update({"pass": verdicts.count("PASS"), "fail": verdicts.count("FAIL"), "skip": verdicts.count("SKIP"), "error": verdicts.count("ERROR"), "k1": k1,
-                "reasons": reasons, "model_totals": totals_seen, "skipped_budget": skipped,
+                "reasons": reasons, "evidence": evidence, "model_totals": totals_seen, "skipped_budget": skipped,
                 "wall_s": round(time.monotonic() - _STARTED, 1)})
     return out
 

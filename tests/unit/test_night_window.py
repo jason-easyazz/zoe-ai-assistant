@@ -1230,7 +1230,7 @@ def test_the_service_template_survives_a_long_night_and_always_restores():
     text = (SYSTEMD / "zoe-night-window.service").read_text()
     body = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
     assert "Type=oneshot" in body and re.search(r"TimeoutStartSec=(\d+)", body) and int(re.search(r"TimeoutStartSec=(\d+)", body).group(1)) >= 65 * 60 + 600
-    assert "ExecStopPost=%h/assistant/scripts/night/night_window.sh --restore-only" in body and "ExecStart=%h/assistant/scripts/night/night_window.sh\n" in body + "\n"
+    assert "ExecStopPost=%h/assistant/scripts/night/night_window.sh --restore-only" in body and re.search(r"^ExecStart=%h/assistant/scripts/night/night_window\.sh( .*)?$", body, re.M)
     assert "EnvironmentFile=%h/assistant/services/zoe-data/.env" in body and "[Install]" not in body              # never enabled by itself: the timer is the entry
     assert not re.search(r"^(After|Requires|Wants|BindsTo)=.*(zoe-data|llama-server)", body, re.M)               # it STOPS those units: it must not depend on them
 
@@ -1243,6 +1243,69 @@ def test_the_timer_template_never_fires_in_the_daytime_and_starts_after_the_othe
     assert (int(h) * 60 + int(m)) > 2 * 60 + 40 + 5                       # after the 02:40 (+5 min) memory export
     latest = int(h) * 60 + int(m) + 2                                      # RandomizedDelaySec=120
     assert nw.NightCfg().end_by - latest >= 35 + nw.NightCfg().reserve_min   # even the latest start leaves a usable window before 03:55 (the cap shrinks to fit)
+
+
+def _unit_body(name: str) -> str:
+    return "\n".join(ln for ln in (SYSTEMD / name).read_text().splitlines() if not ln.lstrip().startswith("#"))
+
+
+def _exec_start_args() -> "list[str]":
+    import shlex
+    line = next(ln for ln in _unit_body("zoe-night-window.service").splitlines() if ln.startswith("ExecStart="))
+    argv = shlex.split(line.removeprefix("ExecStart="))
+    assert argv[0] == "%h/assistant/scripts/night/night_window.sh"
+    return argv[1:]
+
+
+def _documented_slot() -> "tuple[str, int, str]":
+    """The slot as night-window.md states it (one machine-readable line in section 14): (OnCalendar, RandomizedDelaySec, END_BY)."""
+    m = re.search(r"^TIMER_SLOT OnCalendar=(\S+ \S+) RandomizedDelaySec=(\d+) END_BY (\d\d:\d\d)$", (REPO / "docs/knowledge/night-window.md").read_text(), re.M)
+    assert m, "docs/knowledge/night-window.md section 14 must carry the TIMER_SLOT line"
+    return m.group(1), int(m.group(2)), m.group(3)
+
+
+def test_the_real_night_command_in_the_unit_carries_every_lever_and_equals_the_codes_defaults():
+    args = _exec_start_args()
+    parsed = nw.build_parser().parse_args(args)                                   # every flag in the unit is a flag the script accepts
+    cfg = nw.configure(parsed)
+    assert args[args.index("--jobs") + 1] == "digest,dreaming,night_mind" and cfg.jobs == ("digest", "dreaming", "night_mind")
+    assert (cfg.ngl, cfg.ctx_choice, cfg.kv_choice) == (34, 8192, "q8_0") and "--ngl" in args and "--ctx" in args and "--kv" in args
+    assert args[args.index("--end-by") + 1] == "03:55" and cfg.end_by == 3 * 60 + 55
+    defaults = nw.configure(nw.build_parser().parse_args([]))                     # written-out levers == the code's defaults: a changed default cannot silently change the night
+    assert (defaults.ngl, defaults.ctx_choice, defaults.kv_choice, defaults.end_by, defaults.jobs) == (cfg.ngl, cfg.ctx_choice, cfg.kv_choice, cfg.end_by, cfg.jobs)
+    for forbidden in ("--trial", "--cells-only", "--speed-sweep", "--anytime", "--keep-zoe-data", "--no-fallback", "--dry-run", "--restore-only"):
+        assert forbidden not in args                                              # a real, unattended night: nothing exploratory, no daylight override
+    assert cfg.end_by <= cfg.blackouts[0][0] - 10                                 # voice is back at least 10 minutes before the 04:10 voice-gate blackout
+    assert cfg.stop_zoe_data and cfg.fallback_4b and not cfg.exploratory
+
+
+def test_the_timer_slot_is_the_documented_slot_and_the_window_fits_inside_it():
+    on_calendar, delay, end_by = _documented_slot()
+    timer = _unit_body("zoe-night-window.timer")
+    assert f"OnCalendar={on_calendar}" in timer and f"RandomizedDelaySec={delay}" in timer and "Persistent=false" in timer
+    assert end_by == _exec_start_args()[_exec_start_args().index("--end-by") + 1]
+    h, m = (int(x) for x in on_calendar.split()[1].split(":")[:2])
+    start, latest = h * 60 + m, h * 60 + m + delay // 60
+    assert start >= 2 * 60 + 41 + 5                                               # after the 02:41 memory export (+ its 5 min random delay): the export keeps its 'copy before the digest' promise
+    cfg = nw.NightCfg()
+    assert cfg.night_hours[0] <= start <= cfg.night_hours[1]                       # inside the hours the script itself accepts without --anytime
+    assert cfg.end_by - latest >= 35 + cfg.reserve_min                              # even the latest start leaves a usable window
+    assert cfg.end_by - start == cfg.cap_min                                       # the nominal start gets exactly the default 65-minute cap: nothing shrinks it
+
+
+def test_the_service_guards_memory_restores_on_every_exit_and_writes_one_journal_line():
+    body = _unit_body("zoe-night-window.service")
+    assert "MemorySwapMax=0" in body and "MemoryMax" not in body                    # the voice stack's rule: never swapped; no hard ceiling that turns a spike into a kill
+    stops = [ln for ln in body.splitlines() if ln.startswith("ExecStopPost=")]
+    assert stops[0] == "ExecStopPost=%h/assistant/scripts/night/night_window.sh --restore-only"          # the restore first, always
+    assert "night_window.sh --summary" in stops[1] and "systemd-cat -t zoe-night-window" in stops[1] and stops[1].startswith("ExecStopPost=-")      # then ONE journal line, whose failure never fails the unit
+    assert "SERVICE_RESULT" in stops[1]                                              # priority err when the unit failed
+    assert "Type=oneshot" in body and int(re.search(r"TimeoutStartSec=(\d+)", body).group(1)) >= 65 * 60 + 600
+
+
+def test_the_shell_wrapper_needs_no_restore_net_for_a_summary():
+    sh = (REPO / "scripts/night/night_window.sh").read_text()
+    assert '*" --summary "*' in sh.split("case")[1].split("esac")[0].split(";;")[0]
 
 
 def test_the_installer_adds_two_units_absorbs_dreaming_and_the_uninstaller_undoes_it(tmp_path):
@@ -1383,3 +1446,160 @@ def test_the_digest_runner_copies_the_loops_body_and_reports_counts_only():
     rc2, _ = asyncio.run(d.run_digest_body(run_pass=run_pass, record=lambda r, input_seen=None: {"verdict": "extractor_errors"}, evolution=evo, measure=evo))
     assert rc2 == 3                                                                               # the 12B could not serve the pass: the window runs it again on the 4B
     assert d.scalars({"a": 1, "b": "text", "c": None, "d": True}) == {"a": 1, "c": None, "d": True}
+
+
+# ── the decode-variance finding: a steady probe, the box's clocks, the one-line summary ─────────
+
+def _sysfs(**over) -> "dict[str, str]":
+    f = {f"{nw.SYS_THERMAL}/thermal_zone0/type": "cpu-thermal", f"{nw.SYS_THERMAL}/thermal_zone0/temp": "46375",
+         f"{nw.SYS_THERMAL}/thermal_zone1/type": "tj-thermal", f"{nw.SYS_THERMAL}/thermal_zone1/temp": "46531",
+         f"{nw.SYS_GPU}/cur_freq": "1173000000", f"{nw.SYS_GPU}/max_freq": "1173000000", f"{nw.SYS_GPU}/min_freq": "1173000000",
+         f"{nw.SYS_GPU}/available_frequencies": "306000000 612000000 1173000000",
+         f"{nw.SYS_CPU0}/scaling_cur_freq": "1984000", f"{nw.SYS_CPU0}/scaling_max_freq": "1984000", f"{nw.SYS_CPU0}/scaling_min_freq": "1984000",
+         f"{nw.SYS_CPU0}/cpuinfo_max_freq": "1984000", f"{nw.SYS_CPU0}/scaling_governor": "schedutil", "/proc/loadavg": "0.50 0.40 0.30 1/900 123\n",
+         "/proc/stat": "cpu  100 0 100 800 0 0 0 0 0 0\n"}
+    f.update(over)
+    return f
+
+
+def _fake_sysfs(host, files, nvpmodel="NV Power Mode: MAXN_SUPER\n0\n"):
+    """Pin every sysfs / procfs read and the nvpmodel query to a fixed answer: the double must never read the machine the tests happen to run on."""
+    host.files.update(files)
+    host.fixed_reads = set(files)
+    real_read, real_run = host.read, host.run
+
+    def read(path):
+        if path.startswith(("/sys/", "/proc/loadavg", "/proc/stat")):
+            return files.get(path, "")
+        return real_read(path)
+
+    def run(argv, timeout=60.0, mutating=True, env=None):
+        if argv and argv[0] == "nvpmodel":
+            host.cmds.append((list(argv), mutating))
+            return bk.Result(0, nvpmodel)
+        return real_run(argv, timeout, mutating, env)
+    host.read, host.run = read, run
+
+
+def _script_completions(host, replies):
+    """The chat-completions curl answers successive replies (completion_tokens, predicted_per_second), the last one repeating."""
+    real_run, seq = host.run, list(replies)
+
+    def run(argv, timeout=60.0, mutating=True, env=None):
+        if argv and argv[0] == "curl" and argv[-1].endswith("/v1/chat/completions"):
+            host.cmds.append((list(argv), mutating))
+            n, tps = seq.pop(0) if len(seq) > 1 else seq[0]
+            host.sent.append(json.loads(argv[argv.index("-d") + 1]))
+            return bk.Result(0, json.dumps({"usage": {"prompt_tokens": 1630, "completion_tokens": n}, "timings": {"prompt_per_second": 158.7, "predicted_per_second": tps}}))
+        return real_run(argv, timeout, mutating, env)
+    host.run, host.sent = run, []
+
+
+def test_a_short_first_probe_is_followed_by_a_steady_one_and_the_steady_figure_is_used(tmp_path):
+    """The 2026-10-09 finding: 16 tokens generated -> 3.9 tok/s, while the same server sustains 6.6. The window must budget from the steady figure."""
+    w, host, _ = make(tmp_path)
+    _fake_sysfs(host, _sysfs())
+    _script_completions(host, [(16, 3.9), (96, 6.6)])
+    out = w.probe_speed("12B")
+    assert out["decode_tps"] == 6.6 and out["decode_tps_first"] == 3.9 and out["decode_basis"] == "steady" and out["steady_tokens"] == 96
+    assert out["prefill_tps"] == 158.7 and out["completion_tokens"] == 16                                  # prefill and the first request's counts stay the 1.6k request's
+    assert len(host.sent) == 2 and nw.STEADY_PROMPT in host.sent[1]["messages"][0]["content"] and host.sent[1]["max_tokens"] == 96
+    assert nw.digest_timeout_scale(out["decode_tps"]) == 3 and nw.digest_timeout_scale(3.9) == 5              # the budgets that follow it are 3x, not 5x
+    assert any("steady decode 6.6" in e for e in w.rec["events"]) or any("steady decode 6.6" in str(e) for e in w.rec["events"])
+    # control: the OLD behaviour (one request, take its figure) is what a 96-token first sample must not trigger a second request for
+    (tmp_path / "b").mkdir()
+    w2, host2, _ = make(tmp_path / "b")
+    _fake_sysfs(host2, _sysfs())
+    _script_completions(host2, [(96, 6.4), (96, 1.0)])
+    long = w2.probe_speed("12B")
+    assert long["decode_tps"] == 6.4 and long["decode_basis"] == "first-request" and len(host2.sent) == 1 and "decode_tps_first" not in long
+
+
+def test_a_steady_probe_that_also_comes_back_short_keeps_the_first_figure_and_says_it_is_a_lower_bound(tmp_path):
+    w, host, _ = make(tmp_path)
+    _fake_sysfs(host, _sysfs())
+    _script_completions(host, [(16, 3.9), (20, 5.0)])
+    out = w.probe_speed("12B")
+    assert out["decode_tps"] == 3.9 and out["decode_basis"] == "first-request-short" and "decode_tps_first" not in out
+    w.rec["speed"] = {"12B": out}
+    assert any("LOWER BOUND" in ln for ln in w.report_lines(0))
+
+
+def test_box_clock_warnings_name_each_cause_and_a_healthy_box_has_none():
+    ok = {"temp_max_c": 46.5, "temp_zone": "tj-thermal", "gpu_cur_hz": 1.173e9, "gpu_max_hz": 1.173e9, "gpu_min_hz": 1.173e9, "gpu_avail_max_hz": 1.173e9,
+          "cpu_cur_khz": 1984000, "cpu_max_khz": 1984000, "cpu_min_khz": 1984000, "cpu_hw_max_khz": 1984000, "governor": "schedutil", "power_mode": "MAXN_SUPER", "loadavg1": 0.5, "cpu_busy_pct": 3.0}
+    assert nw.clock_warnings(ok, "pre-load") == [] and nw.clock_warnings(ok, "probe") == []
+    hot = nw.clock_warnings({**ok, "temp_max_c": 88.0}, "probe")
+    assert len(hot) == 1 and "88 C" in hot[0] and "throttles from 95" in hot[0]
+    assert any("power mode is 15W" in w for w in nw.clock_warnings({**ok, "power_mode": "15W"}, "pre-load"))
+    capped = nw.clock_warnings({**ok, "gpu_max_hz": 612e6, "gpu_cur_hz": 612e6, "gpu_min_hz": 306e6}, "probe")
+    assert any("GPU max clock is capped at 52 %" in w for w in capped)
+    dipped = nw.clock_warnings({**ok, "cpu_cur_khz": 1_200_000}, "probe")
+    assert any("CPU is running at 60 % of its pinned clock" in w for w in dipped)
+    idle_ok = nw.clock_warnings({**ok, "gpu_cur_hz": 306e6, "gpu_min_hz": 306e6}, "probe")               # min != max: an idle governor, not a throttle
+    assert idle_ok == []
+    busy = nw.clock_warnings({**ok, "cpu_busy_pct": 55.0, "loadavg1": 6.2}, "pre-load")
+    assert any("55 % busy" in w for w in busy) and any("load average 6.2" in w for w in busy)
+    assert nw.clock_warnings({**ok, "cpu_busy_pct": 55.0, "loadavg1": 6.2}, "probe") == []                # the 12B's own load is not a finding at the probe
+    assert nw.parse_cpu_busy("cpu  100 0 100 800 0 0 0 0\n", "cpu  200 0 200 900 0 0 0 0\n") == 66.7
+    assert nw.parse_cpu_busy("", "cpu  1 0 1 1 0 0 0 0\n") is None
+
+
+def test_a_hot_throttled_busy_box_warns_but_the_night_still_runs(tmp_path):
+    """A warning is not a refusal: Zoe is not put to sleep and woken for nothing, and a slow night is still a night."""
+    w, host, _ = make(tmp_path)
+    _fake_sysfs(host, _sysfs(**{f"{nw.SYS_THERMAL}/thermal_zone1/temp": "91000", f"{nw.SYS_GPU}/max_freq": "612000000", f"{nw.SYS_GPU}/cur_freq": "612000000"}),
+                nvpmodel="NV Power Mode: 15W\n1\n")
+    assert w.run() == nw.EXIT_OK, w.outcome
+    ev = "\n".join(str(e) for e in w.rec["events"])
+    assert "box clocks (pre-load):" in ev and "box clocks (probe):" in ev and "WARNING (probe): the SoC is at 91 C" in ev and "WARNING (pre-load): power mode is 15W" in ev
+    assert set(w.rec["clocks"]) == {"pre-load", "probe"} and w.rec["clocks"]["probe"]["warnings"] and any(n.startswith("box (probe):") for n in w.rec["notes"])
+    assert wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]
+    report = "\n".join(w.report_lines(0))
+    assert "box at probe:" in report and "WARNINGS:" in report
+    # control: a healthy box logs the same two lines and no WARNING
+    (tmp_path / "b").mkdir()
+    w2, host2, _ = make(tmp_path / "b")
+    _fake_sysfs(host2, _sysfs())
+    assert w2.run() == nw.EXIT_OK and not any("WARNING (" in str(e) for e in w2.rec["events"]) and not w2.rec["clocks"]["probe"]["warnings"]
+
+
+def test_an_unreadable_instrument_never_ends_a_night(tmp_path):
+    w, host, _ = make(tmp_path)
+
+    def boom(*a, **k):
+        raise OSError("sysfs gone")
+    host.read = boom
+    assert w.check_box("probe") == {}                                                   # logged, swallowed
+    (tmp_path / "b").mkdir()
+    w2, host2, _ = make(tmp_path / "b")
+    _fake_sysfs(host2, {})                                                              # every file absent: an empty reading, no crash, no warning
+    assert w2.check_box("probe") == {"power_mode": "MAXN_SUPER"} and w2.rec["clocks"]["probe"]["warnings"] == []
+
+
+def test_the_summary_line_is_one_line_of_counts_and_the_newest_real_night_wins(tmp_path):
+    rec = {"run_id": "t1", "mode": "night", "outcome": "ok", "exit": 0, "elapsed_min": 58.2, "cap_min": 65.0, "restore_status": "everything back and healthy",
+           "arith": {"chosen": "qat ctx 8192 KV q8_0"}, "speed": {"12B": {"decode_tps": 6.6}},
+           "jobs": [{"name": "digest", "backend": "12B", "status": "ok"}, {"name": "dreaming", "backend": "12B", "status": "timeout"}, {"name": "night_mind", "backend": "12B", "status": "ok"}]}
+    line = nw.summary_line(rec)
+    assert "\n" not in line and line.startswith("NIGHT_WINDOW_SUMMARY run=t1 ") and "exit=0" in line and "min=58.2/65.0" in line and "decode_tps=6.6" in line
+    assert "jobs=digest:ok@12B,dreaming:timeout@12B,night_mind:ok@12B" in line and "restore='everything back and healthy'" in line
+    d = tmp_path / "reports"
+    d.mkdir()
+    (d / "2026-10-10.json").write_text(json.dumps(rec))
+    os.utime(d / "2026-10-10.json", (1000, 1000))
+    (d / "2026-10-10-trial.json").write_text(json.dumps({**rec, "mode": "trial", "run_id": "trial"}))        # newer, but a trial: never reported as the night
+    (d / "broken.json").write_text("{not json")
+    assert "run=t1" in nw.latest_night_summary(d) and "trial" not in nw.latest_night_summary(d)
+    assert nw.latest_night_summary(tmp_path / "none").startswith("NIGHT_WINDOW_SUMMARY none:")
+    # the CLI path: --summary prints it and exits 0 without taking any lock or touching a unit
+    out = subprocess.run([sys.executable, str(REPO / "scripts/night/night_window.py"), "--summary", "--report-dir", str(d)], capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0 and out.stdout.strip() == line
+
+
+def test_a_real_run_logs_the_summary_line_and_a_dry_run_does_not(tmp_path):
+    w, host, cfg = make(tmp_path)
+    logged: "list[str]" = []
+    w.log = logged.append
+    assert w.run() == nw.EXIT_OK
+    assert sum(1 for m in logged if str(m).startswith("NIGHT_WINDOW_SUMMARY ")) == 1

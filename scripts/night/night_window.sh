@@ -24,7 +24,7 @@ restore() {
   fi
 }
 case " $* " in
-  *" --restore-only "*|*" --dry-run "*) ;;          # these two never need the net (a dry run changes nothing; restore-only IS the net)
+  *" --restore-only "*|*" --dry-run "*|*" --summary "*) ;;          # these never need the net (a dry run and a summary change nothing; restore-only IS the net)
   *) trap restore EXIT; trap 'exit 130' INT; trap 'exit 143' TERM ;;
 esac
 

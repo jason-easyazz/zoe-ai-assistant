@@ -91,6 +91,7 @@ MAX_OPEN_THREADS_LISTED = 8
 TURN_CHARS = 600
 QUOTE_MIN_WORDS, QUOTE_MAX_WORDS = 2, 40
 MOMENT_MAX_TOKENS = 640          # 8 moments of ~55 tokens each plus the wrapper: the first live smoke measured 450 as too tight (3 of 14 replies were cut off)
+MOMENT_TOKENS_EACH = 70          # one compact moment is ~55 tokens, a pretty-printed one ~85 (a model that ignores the one-line instruction): room for the cap's worth plus the wrapper
 THREAD_MAX_TOKENS = 450
 QUIET_AFTER_DAYS = 9
 RESOLVED_SHOW_DAYS = 14
@@ -332,13 +333,14 @@ You read one person's own words from today. Each line is [id] day: words.
 
 {lines}
 
-Pick EVERY line that matters for knowing this person - something in progress, a plan or date, a feeling, a change from how things were, something about someone they know, a health matter - up to {cap}; one moment per line. Skip commands (lights, timers, music, weather, sums) and small talk. Do not explain, conclude or guess a reason.
-Return JSON: {{"moments":[{{"ids":["m3"],"quote":"...","kind":"progress","who":["Dagny"],"feeling":"none","weight":2,"later":"open"}}]}}, at most {cap}.
+Pick EVERY line that matters for knowing this person - something in progress (a project, a habit, a practice, a person they keep doing something with), a plan or date, a feeling, a change from how things were, something about someone they know, a health matter - up to {cap}; one moment per line. Skip commands (lights, timers, music, weather, sums) and small talk. Do not explain, conclude or guess a reason.
+Return JSON, one object per moment (two shown): {{"moments":[{{"ids":["m3"],"quote":"...","kind":"progress","who":["Dagny"],"feeling":"none","weight":2,"later":"open"}},{{"ids":["m5"],"quote":"...","kind":"feeling","who":[],"feeling":"worried","weight":2,"later":"na"}}]}}, at most {cap}.
 ids: the line ids it comes from (1-3). quote: copied EXACTLY, letter for letter, from ONE of those lines (3-25 words).
 kind: progress|plan|feeling|change|person|health|other. who: names the person mentions in it ([] if only themselves).
 feeling: none|worried|sad|angry|stressed|happy|excited|proud|relieved|other. weight: 1 minor, 2 notable, 3 major.
 later: open (still to happen or unresolved) | done | na.
-If nothing matters, return {{"moments":[]}}."""
+If nothing matters, return {{"moments":[]}}.
+Write the JSON on ONE line: no code fence, no indentation, no line breaks (the reply has a hard length limit and a cut-off reply loses the newest lines)."""
 
 THREADS_SYSTEM = "You tidy one person's night notes. You only choose and group by id; you never write new sentences. Return ONLY valid JSON."
 
@@ -352,6 +354,11 @@ TONIGHT'S MOMENTS (id [day] kind feeling: "quote"):
 Group tonight's moments into threads. One thread per person-or-matter. Prefer to UPDATE an open thread over creating a new one; a create must say in its reason which open thread you considered and why none matched. A thread that is not mentioned tonight is left alone (put it in "unchanged"): not being mentioned is not the same as being over. A thread is "resolved" only when a moment says it finished. Copy ids exactly. Never write a cause ("because") unless a quote says it.
 Return JSON: {{"threads":[{{"op":"create","title":"<=8 words","moments":["q3","q7"],"status":"open","reason":"..."}},{{"op":"update","thread":"t2","moments":["q5"],"status":"open","reason":"..."}}],"unchanged":["t4"]}}
 status: open|resolved|changed. If there are no moments, return {{"threads":[],"unchanged":[]}}."""
+
+
+def moment_max_tokens(cap: int = MAX_MOMENTS_PER_CHUNK) -> int:
+    """The output limit of ONE MOMENTS call that may return ``cap`` moments: never below ``MOMENT_MAX_TOKENS`` (the 8-moment limit), more when a caller asks for more (the K12 labelling)."""
+    return max(MOMENT_MAX_TOKENS, 80 + MOMENT_TOKENS_EACH * max(1, int(cap)))
 
 
 def fixed_prompt_tokens() -> int:
@@ -708,23 +715,31 @@ def _unstorable(span: str) -> bool:
         return False
 
 
-def parse_moments(raw: str, chunk: "Sequence[Turn]", chunk_no: int, counts: "dict[str, int]") -> "Optional[list[Moment]]":
-    """The verified moments of one reply; ``None`` = the reply was not usable JSON (counted as invalid), ``[]`` = a valid empty answer."""
+def parse_moments(raw: str, chunk: "Sequence[Turn]", chunk_no: int, counts: "dict[str, int]", cap: int = MAX_MOMENTS_PER_CHUNK) -> "Optional[list[Moment]]":
+    """The verified moments of one reply (at most ``cap``); ``None`` = the reply was not usable JSON (counted as invalid), ``[]`` = a valid empty answer."""
     got = _reply_object(raw, "moments", counts)
     if got is None or not isinstance(got.get("moments"), list):
         return None
     alias = {f"m{i}": t for i, t in enumerate(chunk, 1)}
     out: "list[Moment]" = []
-    for item in got["moments"][:MAX_MOMENTS_PER_CHUNK * 2]:
+    for item in got["moments"][:cap * 2]:
         m = verify_moment(item, chunk, alias, chunk_no, counts)
         if m is not None:
             out.append(m)
-        if len(out) >= MAX_MOMENTS_PER_CHUNK:
+        if len(out) >= cap:
             break
     return out
 
 
 # ═══ judging a verified quote ═════════════════════════════════════════════════════════════════════════════════════════════
+
+def unreached_tail(chunk: "Sequence[Turn]", got: "Sequence[Moment]") -> "list[Turn]":
+    """The lines of ``chunk`` after the last one a reply that stopped short (cut off, or at its cap) reached: the model lists moments in line order, so what it never got to is the
+    tail, and the tail is the NEWEST part of the day (a change, a finish). ``[]`` when the reply cited nothing (no way to tell where it stopped) or reached the last line."""
+    pos = {id(t): i for i, t in enumerate(chunk)}
+    last = max((pos[id(m.turn)] for m in got if m.turn is not None and id(m.turn) in pos), default=-1)
+    return list(chunk[last + 1:]) if last >= 0 else []
+
 
 def judge_moment(m: Moment) -> None:
     """``memory_authority.check_observation`` over the quote and the turn it points at: supported -> ``current`` (class ``user_stated_derived``); a
@@ -824,7 +839,9 @@ _ANCHOR_STOP = frozenset({"offer", "house", "week", "today", "morning", "night",
                           "have", "much", "really", "after", "soon", "next", "there", "with"})
 
 
-_NOT_NAMES = frozenset({"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "january", "february", "march", "april", "may", "june", "july",
+#: the model writes the OWNER into ``who`` as "self" / "me" / "user" (measured, K10): that is nobody's name, and as an anchor it glued a sore knee and a loan into one thread
+_SELF_WORDS = frozenset({"self", "myself", "me", "user", "owner", "you", "them", "themselves", "someone", "somebody", "everyone", "nobody", "family", "friend", "friends"})
+_NOT_NAMES = _SELF_WORDS | frozenset({"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "january", "february", "march", "april", "may", "june", "july",
                         "august", "september", "october", "november", "december", "zoe", "dr", "mum", "dad"})
 
 
@@ -948,6 +965,28 @@ def apply_threads(raw: str, moments: "list[Moment]", threads: "list[dict]", coun
     return groups
 
 
+def finishes(current: "Sequence[Moment]", model_status: str, old_rows: "Sequence[dict]" = ()) -> bool:
+    """Does this thread END tonight? A moment must say a thing finished (``later: done``) AND a second reading must agree: either the THREADS call calls the thread ``resolved``, or the thread
+    holds a dated PLAN (kind ``plan``, still open) said before the finish - 'the quiz night is on the 20th' ... 'the quiz night went really well'. A habit's single occasion ('Jorunn and I ran
+    5k today', later=done) is a finished EVENT, not a finished story: with neither reading it stays open (measured, K9: every run and garden line carried ``done`` and both threads were closed)."""
+    done = [x for x in current if x.later == "done"]
+    if not done:
+        return False
+    if model_status == "resolved":
+        return True
+    at = max(x.turn.at for x in done)
+    return (any(x.kind == "plan" and x.later == "open" and x.turn.at < at for x in current)
+            or any(o.get("kind") == "plan" and o.get("later") == "open" and float(o.get("said_at") or 0) < at.timestamp() for o in old_rows))
+
+
+def merge_status(a: str, b: str) -> str:
+    """Two groups of one thread merged: what either reading asserted survives (finished > changed > open)."""
+    for s in ("resolved", "changed"):
+        if s in (a, b):
+            return s
+    return "open"
+
+
 def merge_groups(groups: "list[Group]") -> "list[Group]":
     """ONE THREAD PER PERSON-OR-MATTER, enforced by code: two groups tonight that ``thread_match`` each other (the same named person; or, for nameless
     remarks, a shared matter word) are one thread, whatever the model grouped. A group already tied to a stored thread keeps that thread."""
@@ -959,6 +998,7 @@ def merge_groups(groups: "list[Group]") -> "list[Group]":
             if (not g.thread_id or not h.thread_id or g.thread_id == h.thread_id) and (thread_match(g.moments, a) or thread_match(h.moments, b)):
                 h.moments += g.moments
                 h.thread_id = h.thread_id or g.thread_id
+                h.model_status = merge_status(h.model_status, g.model_status)
                 break
         else:
             out.append(Group(list(g.moments), g.thread_id, g.title, g.model_status, g.reason))
@@ -1179,7 +1219,7 @@ async def run_for_user(user_id: str, transcript: Any, svc: Any = None, *, now: "
         res["wall_s"] = round(time.monotonic() - t0, 2)
 
 
-COUNT_KEYS = ("turns_in", "turns_dropped_routine", "turns_skipped_cap", "chunks", "calls", "moments_calls", "threads_calls", "calls_invalid", "calls_salvaged",
+COUNT_KEYS = ("turns_in", "turns_dropped_routine", "turns_skipped_cap", "chunks", "calls", "moments_calls", "threads_calls", "calls_invalid", "calls_salvaged", "tail_calls", "tail_lost",
               "moments_proposed", "moments_dropped_id", "moments_dropped_quote", "moments_verified", "moments_held", "moments_history", "ops_applied",
               "ops_dropped", "groups_split", "observations_written", "observations_pending", "threads_created", "threads_updated", "threads_resolved", "threads_quiet",
               "prompt_tokens", "completion_tokens", "prompt_tokens_est_max")
@@ -1219,15 +1259,28 @@ async def _run(user_id: str, transcript: Any, svc: Any, m: str, now: "_dt.dateti
     # ── stage 2: MOMENTS (one call per chunk) ─────────────────────────────────────────────────────────────────────
     moments: "list[Moment]" = []
     for n, chunk in enumerate([] if fault("echo") else chunks):
-        prompt = MOMENTS_USER.format(lines="\n".join(_line(f"m{i}", t) for i, t in enumerate(chunk, 1)), cap=MAX_MOMENTS_PER_CHUNK)
-        raw = await call([{"role": "system", "content": MOMENTS_SYSTEM}, {"role": "user", "content": prompt}], MOMENT_MAX_TOKENS, _MOMENT_SCHEMA)
-        counts["moments_calls"] += 1
-        got = parse_moments(raw, chunk, n, counts)
-        if got is None:
-            counts["calls_invalid"] += 1
-            res["partial"] = True
-            continue
-        moments += got
+        part = chunk
+        for attempt in (0, 1):                                    # attempt 1 = the TAIL of this chunk the model never got to, asked once, only if a call is to spare
+            prompt = MOMENTS_USER.format(lines="\n".join(_line(f"m{i}", t) for i, t in enumerate(part, 1)), cap=MAX_MOMENTS_PER_CHUNK)
+            salvaged, proposed = counts["calls_salvaged"], counts["moments_proposed"]
+            raw = await call([{"role": "system", "content": MOMENTS_SYSTEM}, {"role": "user", "content": prompt}], MOMENT_MAX_TOKENS, _MOMENT_SCHEMA)
+            counts["moments_calls"] += 1
+            got = parse_moments(raw, part, n, counts)
+            if got is None:
+                counts["calls_invalid"] += 1
+                res["partial"] = True
+                break
+            moments += got
+            # the model lists moments in line order and stops at its cap (or is cut off): what it never got to is the NEWEST part of the day - a change, a finish, the story that
+            # kept going - so the tail is asked for once more rather than silently lost (measured: the 4B stopped at 8 of 12-13 lines, and "quiet" / "changed" read the old half)
+            stopped_short = counts["calls_salvaged"] > salvaged or counts["moments_proposed"] - proposed >= MAX_MOMENTS_PER_CHUNK
+            tail = unreached_tail(part, got) if stopped_short else []
+            spare = counts["calls"] + (len(chunks) - n - 1) + 2 <= cfg.max_calls        # this call + every later chunk's + the THREADS call stay inside the cap
+            if not tail or attempt or not spare or len(moments) >= MAX_MOMENTS_TO_THREADS:
+                counts["tail_lost"] += len(tail)
+                break
+            counts["tail_calls"] += 1
+            part = tail
     if fault("echo"):                                            # the bench's copying reflection: every turn is a moment, no model, no selection
         moments = [Moment(turn=t, quote=_sq(t.text)) for c in chunks for t in c]
         counts["moments_proposed"] = len(moments)
@@ -1382,7 +1435,7 @@ def _build_plan(user_id: str, groups: "list[Group]", threads: "list[dict]", old_
             if feel:
                 t["last_feeling"] = feel[-1].feeling
         cur = [x for x in live if x.state == "current"]
-        done = any(x.later == "done" for x in cur)
+        done = finishes(cur, g.model_status, [o for o in old_obs if o["thread_id"] == t["id"]])
         changed_kind = any(x.kind == "change" for x in cur)
         new_status = t["status"] if before_status else "open"
         if done:

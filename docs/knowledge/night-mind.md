@@ -26,8 +26,12 @@ runs, counts only, nothing is written. Enforce: written and served. `ZOE_NIGHT_M
 2. **MOMENTS (4B, one call per chunk)** - the model emits only `{ids, quote, kind, who, feeling, weight, later}`. Code drops a moment whose cited id is not in the
    chunk or whose quote is not an exact span of one cited turn (counted, never repaired), then runs `memory_authority.check_observation` on the quote against that
    turn (a hedged or unsupported quote is **held**, class `pending`, never served) and the authority wall's conflict test (a quote the owner's later word replaced is **history**).
+   The reply is **one line of compact JSON** (the prompt says so and shows two moments; a pretty-printed moment costs ~85 tokens against ~55, and 640 tokens then held 7). A reply that stops at its 8-moment cap, or
+   is cut off mid-object, is followed **once** by a call for the lines it never reached (`unreached_tail`: the model lists moments in line order, so the unread tail is the NEWEST part of the day - a plan that changed, a story that
+   kept going). It takes one of the 6 MOMENTS calls and is made only when a call is to spare after every later chunk and the THREADS call (`tail_calls`; `tail_lost` counts the lines no spare call could cover).
 3. **THREADS (4B, one call per member)** - Hindsight's create / update shape: `{op, title|thread, moments, status, reason}` with ids in and ids out; the mandatory
-   `reason`, PREFER UPDATE OVER CREATE (enforced again in code: `merge_groups`, `link_existing`), ABSENCE IS NOT CONTRADICTION (a thread not mentioned tonight is left alone), a thread is **resolved only by a moment that says it finished**. A bad id drops that one operation.
+   `reason`, PREFER UPDATE OVER CREATE (enforced again in code: `merge_groups`, `link_existing`), ABSENCE IS NOT CONTRADICTION (a thread not mentioned tonight is left alone), a thread is **resolved only by a moment that says it finished** (`later: done`) **and** a second reading that agrees (`finishes`): the THREADS call calls the thread `resolved`, or the thread holds a dated plan (kind `plan`, open) said before the finish. A
+   finished event with neither ("Jorunn and I ran 5k today") leaves a habit open. The owner is never a name: `who: ["self"]` / `me` / `user` are not anchors (`@self` once glued a sore knee and a loan into one thread). A bad id drops that one operation.
 4. **DECIDE (code)** - quiet (an open thread unmentioned for max(9 days, twice its own usual gap)), what changed (new / advanced / resolved / quiet, with the cited turn ids),
    the mood line (a template over counts, only for a member the household affect policy allows), salience, and the raise / leave policy. **Leave** is a deny-list - health
    conditions, grief, money trouble, a quarrel, "don't bring that up", two ignored raises, too fresh - and is **never written into any prompt**; at most **one** thread is `raise` for the morning;
@@ -49,7 +53,7 @@ enums, a validity interval, `state` (current | history | held), `authority_class
 
 ## Call budget per member per night (measured by the counters in every run row)
 
-`max_calls` = 7: up to **6 MOMENTS calls + 1 THREADS call**. A quiet day (< 3 turns or < 20 words after the routine drop) is **0 calls**; one chunk with nothing open is **2**; the cap is enforced in code and
+`max_calls` = 7: up to **6 MOMENTS calls (a tail ask is one of them) + 1 THREADS call**. A quiet day (< 3 turns or < 20 words after the routine drop) is **0 calls**; one chunk with nothing open is **2**; the cap is enforced in code and
 reported (`capped`, `turns_skipped_cap`). Every prompt is sized with a conservative token estimate so prompt + output stay inside `ctx_tokens`. The HTTP budget of EVERY call
 (member pass, `--cells`, K12 alike - one function, `Config.timeout_for`) is `prompt_tokens/prefill_tok_s + max_tokens/decode_tok_s + 20 s`, at least 30 s. Both rates are the server's MEASURED ones:
 `--prefill-tok-s` / `ZOE_NIGHT_MIND_PREFILL_TOK_S` (default 650 = the live 4B) and `--decode-tok-s` / `ZOE_NIGHT_MIND_DECODE_TOK_S` (default 8); the 12B night window probes both and passes both to the member pass AND the
@@ -111,3 +115,43 @@ the bake-off window runs them with `BAKEOFF_Z0N=1`.
 Landed: the four stages, the store + migration, the digest hook, the readers (packet block, brief item with `source_ref`, mood-turn check-in), forget / delete / opt-out integration, the standalone CLI, Z0n + the fake brain, K1-K12 with negative controls, Z0's `protocol_brain` baseline, the window driver + flag-dark phase, the day-sim `night_mind` intent / `night=` field / S9c, tests in both lanes.
 
 Deferred (recorded in `open-problems.md`): the fact extractor / emotional pass / open-loop pass still cut the day (3,000 chars; 50 turns) - only the night pass chunks; the night mind does not yet replace `_extract_open_loops` as the producer of `open_loops` rows (record section 6.1); the weekly roll-up (4.7); the 12B verifier + hypothesis tier (4.8); one-turn chunk overlap; grammar-constrained decoding is wired (`ZOE_NIGHT_MIND_SCHEMA`) but unmeasured; the owner's call on derived mood trajectories (the pass computes the mood line only for a member `_affect_allowed` covers, and no trajectory score is stored); minors are not special-cased beyond that gate; E10 (the two-week household shadow) is an owner step.
+
+## 12B vs 4B on the cells (2026-10-09)
+
+The same cells (`zoe-night-mind.py --cells`, K1-K12 on lab stores, seed `zmb-v1`, ctx 8192) on both brains. 12B: the cells-only trial of the night window (`~/.zoe/night-reports/2026-10-09-cells.md` + `.json`, cell log `~/.zoe/night-window/logs/20261009-193743-trial-nm-12B.log`).
+4B: the live brain at :11434 (`~/.zoe/agent-tools/logs/e8_4b.json` + `e8_4b.err`, run 09:56).
+
+| cell | 12B | 4B | 12B wall (s) |
+|---|---|---|---|
+| K1 | PASS | PASS | 193.0 |
+| K2 | PASS | PASS | 0.0 |
+| K3 | PASS | PASS | 0.0 |
+| K4 | PASS | PASS | 0.0 |
+| K5 | PASS | PASS | 0.0 |
+| K6 | PASS | FAIL | 0.0 |
+| K7 | PASS | PASS | 189.6 |
+| K8 | PASS | PASS | 189.8 |
+| K9 change and quiet | FAIL | FAIL | 91.2 |
+| K9f flat week | FAIL | FAIL | 98.7 |
+| K10 restraint | FAIL | FAIL | 145.6 |
+| K11 resolution | PASS | FAIL | 65.7 |
+| K12 weight calibration | FAIL | FAIL | 96.0 |
+| **total** | **9 / 13** | **7 / 13** | 1,075 s whole run (the 4B: 135.9 s) |
+
+* **Levers (12B)**: QAT q4_0 (`gemma-4-12b-it-qat-q4_0.gguf`), `-ngl 34`, ctx 8192, KV q8_0, flash-attn on, `--reasoning off`, mlock. Probe (one ~1.5k-token prompt): **prefill 156.5 tok/s, decode 3.9 tok/s this load**; an hour earlier at the same levers it measured decode 6.24
+  (over the whole run: 6,517 generated tokens in 1,070 s of wall time, prefill included). MemAvailable 12,603 MiB after the stops, 4,000 MiB after the 12B loaded (floor 1,200); lowest during the run 3,287 MiB. 18 model calls, 9,541 prompt / 6,517 generated tokens. Whole run 1,075 s of the 40-minute cap (19.2 min with the restore); all four services came back healthy on the first attempt.
+* **Gains (12B over 4B): K6 compression and K11 resolution.** The 4B fails K6 (the smoke of the same day: it never picked the knee story) and K11 (re-run by hand today: it returned one moment of the four turns, so nothing finished).
+* **A report inconsistency**: the window's plan line says `DROPPED (cannot fit): K10,K11,K12`, yet the CLI ran all 13 (it is given a budget, not a list) and the table above has all 13 verdicts. The plan is an estimate, not an outcome (open-problems).
+* **Four cells failed on BOTH models**: K9, K9f, K10, K12. Two models of different size failing the same cell pointed at the code; it was. Re-run by hand on the live 4B with the per-cell evidence printed (the CLI now prints the numbers of every FAILED cell in `cells.evidence`):
+
+| cell | what the 4B scored (before) | cause | class | fix |
+|---|---|---|---|---|
+| K9 | drift 0 of 2 (quiet 'running' missed, changed 'trip' missed); 7 moments for 10 turns | (a) the reply was pretty-printed JSON and the 640-token cap cut it after 7 moments, so the newest lines (the 'trip is off' line, the last garden lines) were never read; (b) `later: done` on 'ran 5k today' alone resolved the habit threads, which then never reached the quiet check | night-mind code + prompt | one-line JSON prompt with two example moments; a tail ask for the lines a reply never reached; resolution needs two readings (`finishes`) |
+| K9f | 1 false notice of 3 threads (0.333 against 0.05): the birthday trip read 'quiet' | the same cut: its day-20 'booked the train' line was in the unread tail (the 12B log shows `moments=4/4` for 12 turns) | night-mind code | the tail ask |
+| K10 | leave threads found 4 of 5, benign thread raised 0 times | (a) the model writes the owner into `who` as `self`, and `@self` glued the sore knee and the loan into one thread (a PRODUCTION defect, not a cell artefact: every nameless remark would join one thread); (b) the cut lost the later concert lines, so the benign thread read 'quiet'; (c) the 4B then under-picked the ordinary 'practised the cello for an hour' lines (1 of 3 concert lines in the runs inspected) | night-mind code + prompt; residual = 4B capability | `_SELF_WORDS` are not names; the tail ask; the pick list now names 'a project, a habit, a practice' |
+| K12 | 7 of 12 labelled moments matched (0.583 against 0.75), accuracy 0.929, rank correlation 0.54 | **cell design**: the production cap is 8 moments a call and the bar asks 9 of 12 matched, so no model could pass (8/12 = 0.667); plus the same pretty-print cut at 7 | cell design + prompt format | the labelling call allows one moment per labelled line (`moment_max_tokens(12)`); K6 still measures selectivity |
+
+* **Live 4B after the fixes** (`--only K9,K9f,K10,K11,K12`, CLI, 71 s): K9 PASS, K9f PASS, K10 PASS, K11 FAIL (4B: the THREADS call said `open`; offline replay of its recorded replies through the final resolution rule passes K11 3 of 3 checks - not re-run live, the brain-time budget was spent), K12 FAIL (matched 0.917, rank correlation 0.579 pass; kind / feeling accuracy 0.773 against 0.85; stand-alone runs scored 0.955 four times before the K10 prompt hint and 0.773, 0.773, 0.909 after it - the hint bought K10 and may have cost K12 some kind accuracy).
+  Before the fixes the four cells were 0 of 4 on the 4B. The 12B has NOT been re-run: the next `--cells-only` trial must show K9, K9f, K10 PASS and K11 still PASS (the resolution rule changed under it).
+* **What stays model capability**: the 4B's ordinary-turn under-selection (K10's benign thread, K11's single moment) and K12's kind / weight calibration, both borderline run to run (temperature 0.1; the same cell scored 0.579 and 0.289 rank correlation); open-problems has the lines with what would prove them.
+

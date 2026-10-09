@@ -607,6 +607,111 @@ def speed_prompt() -> str:
     return notes + "\nIn one sentence: who practised the cello, and what did Aldo water?"
 
 
+# ── the box's clocks and heat, and a decode figure that means something ──────
+# Finding of 2026-10-09 (docs/knowledge/night-window.md section 13): the "12B decode 6.24 tok/s at 18:27, 3.9 tok/s at 19:38 at identical levers" was NOT a slower
+# machine. The probe's prompt ends "In one sentence: ...", so the model answers in 16 tokens, and tok/s over 16 tokens is dominated by one stall at the start of
+# the first generation (3,845 ms for the 16 tokens against 2,402 ms an hour earlier). The same server, one request later, decoded 6.5-6.7 tok/s over 100-640 tokens
+# in BOTH runs (journal: 54 calls of 64+ tokens at a median 6.89 / weighted 6.63; 18 calls at a median 6.56 / weighted 6.56). Every budget the window derives from
+# the probe (the digest's timeout scale, the cells budget, the night mind's --decode-tok-s) therefore inherits that noise. Two changes: (1) a first sample under
+# ``STEADY_MIN_TOKENS`` is followed by a steady probe that generates 96 tokens, and the steady figure is the one the window uses; (2) the box's heat, clocks, power mode and
+# CPU load are logged before the load and at the probe, with a WARNING (never a refusal) when something is off, so a genuinely slow night names its cause.
+STEADY_MIN_TOKENS = 48
+STEADY_PROMPT = "List sixty different small jobs a gardener might do in spring, one per line, numbered, no commentary."
+THROTTLE_WARN_C = 85.0              # the Orin's lowest throttle trip is 95 C (thermal_zone trip_point_*_temp: 95000, 99000, critical 104500): warn 10 C before it
+BUSY_WARN_PCT = 30.0                # CPU busy before the 12B starts, with Zoe's own services stopped: something else is on the box (pytest, an agent, a build)
+THERMAL_ZONES = tuple(range(12))
+SYS_GPU = "/sys/devices/platform/17000000.gpu/devfreq/17000000.gpu"
+SYS_CPU0 = "/sys/devices/system/cpu/cpu0/cpufreq"
+SYS_THERMAL = "/sys/devices/virtual/thermal"
+
+
+def _num(text: str) -> "Optional[float]":
+    try:
+        return float(str(text).strip().split()[0])
+    except (ValueError, IndexError):
+        return None
+
+
+def parse_cpu_busy(a: str, b: str) -> "Optional[float]":
+    """CPU busy % between two readings of the first line of /proc/stat (user nice system idle iowait irq softirq steal)."""
+    def fields(text: str) -> "Optional[list[float]]":
+        for line in str(text).splitlines():
+            if line.startswith("cpu "):
+                try:
+                    return [float(x) for x in line.split()[1:9]]
+                except ValueError:
+                    return None
+        return None
+    fa, fb = fields(a), fields(b)
+    if not fa or not fb or len(fa) < 5 or len(fb) < 5:
+        return None
+    total = sum(fb) - sum(fa)
+    idle = (fb[3] + fb[4]) - (fa[3] + fa[4])
+    if total <= 0:
+        return None
+    return round(100.0 * (1.0 - idle / total), 1)
+
+
+def clock_warnings(state: "dict[str, Any]", phase: str) -> "list[str]":
+    """What in a box reading could make the 12B slow. Pure. Warnings only: a slow night is still a night (the jobs' budgets follow the measured speed)."""
+    out: "list[str]" = []
+    t = state.get("temp_max_c")
+    if t is not None and t >= THROTTLE_WARN_C:
+        out.append(f"the SoC is at {t:.0f} C ({state.get('temp_zone')}): the Orin throttles from 95 C, so decode may be slow")
+    mode = state.get("power_mode")
+    if mode and not str(mode).upper().startswith("MAXN"):
+        out.append(f"power mode is {mode}, not MAXN: the CPU / GPU clocks are capped")
+    for what, cur, mx, lo, avail in (("GPU", state.get("gpu_cur_hz"), state.get("gpu_max_hz"), state.get("gpu_min_hz"), state.get("gpu_avail_max_hz")),
+                                     ("CPU", state.get("cpu_cur_khz"), state.get("cpu_max_khz"), state.get("cpu_min_khz"), state.get("cpu_hw_max_khz"))):
+        if mx and avail and mx < 0.95 * avail:
+            out.append(f"{what} max clock is capped at {mx / avail * 100:.0f} % of the hardware maximum (a power or thermal cap)")
+        if cur and mx and lo and lo >= 0.99 * mx and cur < 0.9 * mx:       # min == max (jetson_clocks): any dip is a throttle, not an idle governor
+            out.append(f"{what} is running at {cur / mx * 100:.0f} % of its pinned clock")
+    if state.get("governor") not in (None, "", "performance", "schedutil") :
+        out.append(f"CPU governor is {state.get('governor')}")
+    busy = state.get("cpu_busy_pct")
+    if phase == "pre-load" and busy is not None and busy >= BUSY_WARN_PCT:
+        out.append(f"the CPUs are {busy:.0f} % busy with Zoe's services stopped: something else is running and shares the memory bandwidth the 12B's CPU layers need")
+    la = state.get("loadavg1")
+    if phase == "pre-load" and la is not None and la >= 4.0:
+        out.append(f"1-minute load average {la:.1f} on 8 cores before the 12B starts")
+    return out
+
+
+def describe_state(state: "dict[str, Any]") -> str:
+    def mhz(x: "Optional[float]", div: float) -> str:
+        return "?" if not x else f"{x / div:.0f}"
+    return (f"tj {state.get('temp_max_c', '?')} C ({state.get('temp_zone', '?')}); GPU {mhz(state.get('gpu_cur_hz'), 1e6)}/{mhz(state.get('gpu_max_hz'), 1e6)} MHz; "
+            f"CPU0 {mhz(state.get('cpu_cur_khz'), 1e3)}/{mhz(state.get('cpu_max_khz'), 1e3)} MHz {state.get('governor') or '?'}; power mode {state.get('power_mode') or '?'}; "
+            f"load {state.get('loadavg1', '?')}" + (f"; CPU busy {state['cpu_busy_pct']} %" if state.get("cpu_busy_pct") is not None else ""))
+
+
+def summary_line(rec: "dict[str, Any]") -> str:
+    """ONE line for the journal: how the night went, in words and counts only (never a job's output)."""
+    jobs = ",".join(f"{j.get('name')}:{j.get('status')}@{j.get('backend')}" for j in rec.get("jobs") or []) or "-"
+    sp = (rec.get("speed") or {}).get("12B") or {}
+    a = rec.get("arith") or {}
+    outcome = re.sub(r"\s+", " ", str(rec.get("outcome", "?")))[:90]
+    return (f"NIGHT_WINDOW_SUMMARY run={rec.get('run_id', '?')} outcome={outcome!r} exit={rec.get('exit', '?')} min={rec.get('elapsed_min', '?')}/{rec.get('cap_min', '?')} "
+            f"levers={a.get('chosen', '-')!r} decode_tps={sp.get('decode_tps', '-')} jobs={jobs} restore={str(rec.get('restore_status') or '-')[:60]!r}")
+
+
+def latest_night_summary(report_dir: Path) -> str:
+    """The summary line of the newest REAL night report (mode ``night``) in ``report_dir``, or a line saying there is none. Read-only."""
+    best: "tuple[float, dict]" = (-1.0, {})
+    try:
+        for f in report_dir.glob("*.json"):
+            try:
+                d = json.loads(f.read_text())
+            except (OSError, ValueError):
+                continue
+            if isinstance(d, dict) and d.get("mode") == "night" and f.stat().st_mtime > best[0]:
+                best = (f.stat().st_mtime, d)
+    except OSError:
+        pass
+    return summary_line(best[1]) if best[1] else "NIGHT_WINDOW_SUMMARY none: no night report yet (refused before anything ran, or no run)"
+
+
 # ── the window ───────────────────────────────────────────────────────────────
 
 class NightWindow(bk.Window):
@@ -941,19 +1046,73 @@ class NightWindow(bk.Window):
         self.host.run(["systemctl", "--user", "stop", NIGHT_UNITS[key]], timeout=90)
         self.host.run(["systemctl", "--user", "reset-failed", NIGHT_UNITS[key]])
 
-    def probe_speed(self, label: str) -> "dict[str, Any]":
-        """One fixed ~1.5k-token completion: prefill and decode tok/s of the model that just loaded (llama-server's own ``timings``)."""
-        if self.dry:
+    def box_state(self, *, sample_busy: bool = False) -> "dict[str, Any]":
+        """Heat, clocks, power mode and load of the box, from read-only sysfs / procfs files and ``nvpmodel -q`` (no sudo). Every field is optional: a file that is absent
+        or unreadable is simply missing from the dict. ``sample_busy`` takes two /proc/stat readings one second apart (CPU busy %)."""
+        h = self.host
+        st: "dict[str, Any]" = {}
+        temps: "dict[str, float]" = {}
+        for i in THERMAL_ZONES:
+            name, raw = h.read(f"{SYS_THERMAL}/thermal_zone{i}/type").strip(), _num(h.read(f"{SYS_THERMAL}/thermal_zone{i}/temp"))
+            if name and raw is not None:
+                temps[name] = round(raw / 1000.0, 1)
+        if temps:
+            hot = max(temps, key=lambda k: temps[k])
+            st.update(temp_max_c=temps[hot], temp_zone=hot, temps_c=temps)
+        for key, path, div in (("gpu_cur_hz", f"{SYS_GPU}/cur_freq", 1), ("gpu_max_hz", f"{SYS_GPU}/max_freq", 1), ("gpu_min_hz", f"{SYS_GPU}/min_freq", 1),
+                               ("cpu_cur_khz", f"{SYS_CPU0}/scaling_cur_freq", 1), ("cpu_max_khz", f"{SYS_CPU0}/scaling_max_freq", 1), ("cpu_min_khz", f"{SYS_CPU0}/scaling_min_freq", 1),
+                               ("cpu_hw_max_khz", f"{SYS_CPU0}/cpuinfo_max_freq", 1)):
+            v = _num(h.read(path))
+            if v is not None:
+                st[key] = v / div
+        avail = [x for x in (_num(t) for t in h.read(f"{SYS_GPU}/available_frequencies").split()) if x]
+        if avail:
+            st["gpu_avail_max_hz"] = max(avail)
+        gov = h.read(f"{SYS_CPU0}/scaling_governor").strip()
+        if gov:
+            st["governor"] = gov
+        la = _num(h.read("/proc/loadavg"))
+        if la is not None:
+            st["loadavg1"] = la
+        mode = h.run(["nvpmodel", "-q"], timeout=10.0, mutating=False).out
+        m = re.search(r"NV Power Mode:\s*(\S+)", mode or "")
+        if m:
+            st["power_mode"] = m.group(1)
+        if sample_busy and not self.dry:
+            a = h.read("/proc/stat")
+            h.sleep(1.0)
+            busy = parse_cpu_busy(a, h.read("/proc/stat"))
+            if busy is not None:
+                st["cpu_busy_pct"] = busy
+        return st
+
+    def check_box(self, phase: str, *, sample_busy: bool = False) -> "dict[str, Any]":
+        """Log the box's heat / clocks / load at ``phase`` (``pre-load``, ``probe``) into the run log and the report, and WARN (never refuse) about anything that could slow the 12B."""
+        try:
+            st = self.box_state(sample_busy=sample_busy)
+        except Exception as exc:  # noqa: BLE001 - an instrument must never end a night
+            self.event(f"box clocks ({phase}): could not read ({type(exc).__name__})")
             return {}
-        payload = json.dumps({"model": "local", "messages": [{"role": "user", "content": speed_prompt()}], "max_tokens": 96, "temperature": 0, "stream": False})
+        warns = clock_warnings(st, phase)
+        self.event(f"box clocks ({phase}): {describe_state(st)}")
+        for w in warns:
+            self.event(f"WARNING ({phase}): {w}")
+        self.rec.setdefault("clocks", {})[phase] = {**{k: v for k, v in st.items() if k != "temps_c"}, "warnings": warns}
+        if warns:
+            self.rec["notes"].append(f"box ({phase}): " + "; ".join(warns))
+        return st
+
+    def _speed_request(self, label: str, prompt: str, max_tokens: int, tag: str) -> "Optional[dict[str, Any]]":
+        """One watched completion request to the model on ``cfg.port``: prefill and decode tok/s (llama-server's own ``timings``) and the token counts. None = no time left."""
+        payload = json.dumps({"model": "local", "messages": [{"role": "user", "content": prompt}], "max_tokens": max_tokens, "temperature": 0, "stream": False})
         # Watched, not a bare blocking call: the memory floor and the hard cap are checked every poll, and the request is bounded by the time left before the restore
         # reserve (a stuck or RAM-hungry first request must never keep Zoe's brain down past the cap).
         left = self.time_left_s()
         if left < 60:
-            self.event(f"speed {label}: probe skipped - no time left ({left:.0f}s before the restore reserve)")
-            return {}
+            self.event(f"speed {label}{tag}: probe skipped - no time left ({left:.0f}s before the restore reserve)")
+            return None
         budget = min(900.0, left)
-        log_path = self.cfg.night_dir / "logs" / f"{self.run_id}-speed-{label.replace('@', '-')}.log"
+        log_path = self.cfg.night_dir / "logs" / f"{self.run_id}-speed-{label.replace('@', '-')}{tag}.log"
         if log_path.exists():
             log_path.unlink()
         r = self.host.run_watched(["curl", "-sf", "-m", f"{budget:.0f}", "-H", "Content-Type: application/json", "-d", payload, f"http://127.0.0.1:{self.cfg.port}/v1/chat/completions"],
@@ -964,10 +1123,34 @@ class NightWindow(bk.Window):
             log_path.unlink(missing_ok=True)                    # the probe's reply is synthetic text, but nothing needs to keep it
         d = _json(body)
         t, u = d.get("timings") or {}, d.get("usage") or {}
-        out = {"label": label, "prompt_tokens": u.get("prompt_tokens"), "completion_tokens": u.get("completion_tokens"),
-               "prefill_tps": round(float(t["prompt_per_second"]), 1) if t.get("prompt_per_second") else None,
-               "decode_tps": round(float(t["predicted_per_second"]), 2) if t.get("predicted_per_second") else None, "ok": r.rc == 0}
-        self.event(f"speed {label}: prefill {out['prefill_tps']} tok/s, decode {out['decode_tps']} tok/s ({out['prompt_tokens']} prompt tokens)")
+        return {"label": label, "prompt_tokens": u.get("prompt_tokens"), "completion_tokens": u.get("completion_tokens"),
+                "prefill_tps": round(float(t["prompt_per_second"]), 1) if t.get("prompt_per_second") else None,
+                "decode_tps": round(float(t["predicted_per_second"]), 2) if t.get("predicted_per_second") else None, "ok": r.rc == 0}
+
+    def probe_speed(self, label: str) -> "dict[str, Any]":
+        """One fixed ~1.5k-token completion: prefill and decode tok/s of the model that just loaded. The decode figure is only believed over >= ``STEADY_MIN_TOKENS`` generated tokens:
+        the fixed prompt ends "in one sentence", so the first request usually generates ~16 tokens and its rate is dominated by one start-up stall (2026-10-09: 3.9 against a steady 6.6
+        tok/s on the same server). A short first sample is followed by a steady probe (a short prompt, 96 tokens); ``decode_tps`` is then the steady figure and
+        ``decode_tps_first`` keeps the first one. Prefill always comes from the first request (its prompt is the 1.6k one)."""
+        if self.dry:
+            return {}
+        out = self._speed_request(label, speed_prompt(), 96, "")
+        if out is None:
+            return {}
+        self.check_box("probe")
+        self.event(f"speed {label}: prefill {out['prefill_tps']} tok/s, decode {out['decode_tps']} tok/s ({out['prompt_tokens']} prompt tokens, {out['completion_tokens']} generated)")
+        n = out.get("completion_tokens") or 0
+        if n < STEADY_MIN_TOKENS:
+            self.event(f"speed {label}: only {n} tokens generated - a decode rate over so few is dominated by one start-up stall; measuring a steady 96-token sample")
+            steady = self._speed_request(label, STEADY_PROMPT, 96, "-steady")
+            if steady and steady.get("decode_tps") and (steady.get("completion_tokens") or 0) >= STEADY_MIN_TOKENS:
+                out.update(decode_tps_first=out["decode_tps"], decode_tps=steady["decode_tps"], steady_tokens=steady["completion_tokens"], decode_basis="steady")
+                self.event(f"speed {label}: steady decode {steady['decode_tps']} tok/s over {steady['completion_tokens']} tokens (the first request said {out['decode_tps_first']}); the jobs' budgets use the steady figure")
+            else:
+                out["decode_basis"] = "first-request-short"
+                self.event(f"speed {label}: the steady probe did not return {STEADY_MIN_TOKENS}+ tokens; keeping the first figure ({out['decode_tps']} tok/s) - treat it as a LOWER bound")
+        else:
+            out["decode_basis"] = "first-request"
         return out
 
     # ── 12B load failures: diagnose, count, stop retrying every night ──
@@ -1014,6 +1197,7 @@ class NightWindow(bk.Window):
         self.event("12B differs from the parked ExecStart in: " + "; ".join(spec["diff"]))
         self.event(f"12B environment: GGML_CUDA_ENABLE_UNIFIED_MEMORY={'1 (set: cudaMallocManaged)' if 'GGML_CUDA_ENABLE_UNIFIED_MEMORY' in spec['env'] else 'NOT set (plain cudaMalloc)'}; levers ngl={cfg.ngl or 'parked 99'}, batch={cfg.batch}/{cfg.ubatch}, fit_off={cfg.fit_off}, mlock={cfg.mlock}, binary={spec['argv'][0]}")
         self.rec["arith"]["unified_memory"] = "GGML_CUDA_ENABLE_UNIFIED_MEMORY" in spec["env"]
+        self.check_box("pre-load", sample_busy=True)
         self.rec["arith"]["load_started_s"] = self.host.mono()
         self.start_transient("llm", spec)
         url = f"http://127.0.0.1:{cfg.port}/health"
@@ -1681,7 +1865,14 @@ class NightWindow(bk.Window):
         elif a:
             L += ["## Levers", "", f"- nothing fit at {a.get('avail_measured_mib')} MiB; see the table in the log", ""]
         if r.get("speed"):
-            L += ["## Speed (one fixed ~1.5k-token probe)", ""] + [f"- {k}: prefill {v.get('prefill_tps')} tok/s, decode {v.get('decode_tps')} tok/s" for k, v in r["speed"].items()] + [""]
+            L += ["## Speed (one fixed ~1.5k-token probe)", ""] + [
+                f"- {k}: prefill {v.get('prefill_tps')} tok/s, decode {v.get('decode_tps')} tok/s"
+                + (f" (steady, {v.get('steady_tokens')} tokens; the first request said {v.get('decode_tps_first')} over {v.get('completion_tokens')} tokens)" if v.get("decode_basis") == "steady" else
+                   " (LOWER BOUND: only %s tokens generated, no steady sample)" % v.get("completion_tokens") if v.get("decode_basis") == "first-request-short" else "")
+                for k, v in r["speed"].items()] + [""]
+            for phase, c in (r.get("clocks") or {}).items():
+                L.append(f"- box at {phase}: {describe_state(c)}" + ("; **WARNINGS: " + "; ".join(c.get("warnings") or []) + "**" if c.get("warnings") else ""))
+            L.append("")
         if self.jobs:
             L += ["## Jobs", "", "| job | on | status | wall | prompt tok | generated tok | MemAvailable low | note |", "|---|---|---|---|---|---|---|---|"]
             for j in self.jobs:
@@ -1763,6 +1954,9 @@ class NightWindow(bk.Window):
                 os.chmod(p, 0o600)
             self.report_paths = [md, js]
             self.log(f"report: {md} and {js.name}")
+            if self.mode == "night":
+                self.log(summary_line({**self.rec, "outcome": self.outcome, "exit": rc, "jobs": self.jobs, "elapsed_min": round(self.elapsed_min(), 1), "cap_min": self.cap_min,
+                                       "restore_status": getattr(self, "restore_status", ""), "run_id": self.run_id}))
         except OSError as exc:
             self.log(f"could not write the report: {exc}")
 
@@ -1827,6 +2021,14 @@ class NightWindow(bk.Window):
         else:
             self.log("DOES NOT FIT TODAY (predicted, default stop set): no lever set clears the floor with the jobs beside it; a real run would stop, measure, refuse and restore")
         self.log("")
+        try:
+            st = self.box_state()
+            self.log("the box right now (read-only; the real run logs the same before the load and at the probe): " + describe_state(st))
+            for w in clock_warnings(st, "now"):
+                self.log("  WARNING: " + w)
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"the box right now: could not read ({type(exc).__name__})")
+        self.log("")
         self.log(f"PLAN: cap {self.cap_min:.0f} min, must end by {cfg.end_by // 60:02d}:{cfg.end_by % 60:02d}; sleep {' > '.join(self.stop_set)}; wake {' > '.join(u for u in RESTORE_ORDER if u in self.stop_set)}")
         for u in RESTORE_ORDER:
             if u in self.stop_set:
@@ -1856,6 +2058,7 @@ def build_parser() -> argparse.ArgumentParser:
                     "one restore at the end; manual, any hour, hard cap 45 min (docs/knowledge/night-window.md '12B speed sweep')")
     ap.add_argument("--sweep-stages", default="all", help="stages of the grid to run: all | 0-4 | 5,6,7 (0 control, 1 offload, 2 q4km, 3 quant, 4 ngl, 5 kv, 6 batch, 7 threads, 8 draft); later stages start from the best row an earlier run saved")
     ap.add_argument("--sweep-fresh", action="store_true", help="ignore the rows an earlier invocation saved in sweep-state.json")
+    ap.add_argument("--summary", action="store_true", help="print ONE line about the newest real night (outcome, exit, minutes, jobs, restore) from its report and exit; read-only (the timer unit pipes it to the journal)")
     ap.add_argument("--restore-only", action="store_true", help="put back whatever the marker file says a window stopped (idempotent)")
     ap.add_argument("--anytime", action="store_true", help="allow a start outside 01:30-03:40 (manual runs)")
     ap.add_argument("--keep-zoe-data", action="store_true", help="do NOT stop zoe-data (needs ~2 GB of other headroom; refused if the window would cross 03:00 / the Sunday 04:00 loop)")
@@ -1949,6 +2152,9 @@ def main(argv: "Optional[list[str]]" = None, host_factory: "Optional[Callable[[C
     except Refused as exc:
         print(f"REFUSED: {exc}", file=sys.stderr)
         return EXIT_REFUSED
+    if args.summary:
+        print(latest_night_summary(cfg.report_dir))
+        return EXIT_OK
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     mode = "restore" if args.restore_only else "trial" if cfg.trial else "sweep" if cfg.sweep else "night"
     if not args.dry_run:
