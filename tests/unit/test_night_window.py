@@ -113,7 +113,7 @@ class FakeHost(nw.NightHost):
         self.fail_run = tuple(fail_run)
         self.files: "dict[str, str]" = {}
         self.sizes = {f"{HOME}/models/gemma4-12b-qat/gemma-4-12b-it-qat-q4_0.gguf": QAT, f"{HOME}/models/gemma4-12b/gemma-4-12B-it-Q4_K_M.gguf": Q4KM} if models is None else models
-        self.present: "set[str]" = {"/home/zoe/llama.cpp/build-jetson-new/bin/llama-server"}
+        self.present: "set[str]" = {"/home/zoe/llama.cpp/build-jetson-new/bin/llama-server", nw.WINNER_BINARY}
         self.jobs_run: "list[dict]" = []
         self.watched_timeouts: "list[float]" = []
         self.job_mem_drop = 0.0
@@ -377,7 +377,7 @@ def test_prediction_and_timeout_scale():
 # ── the 12B command is generated from the parked unit, never hand-written ────
 
 def test_the_12b_command_is_the_parked_execstart_with_only_the_listed_changes(tmp_path):
-    cfg = nw.NightCfg()
+    cfg = nw.NightCfg(binary=None, ngl=None, fit_off=False)                    # the PARKED shape (b9733, -ngl 99, no --fit): the measured defaults are tested below
     spec = nw.llm_spec(PARKED, cfg, nw.Levers("qat", 32768, "q8_0"))
     a = spec["argv"]
     assert a[0] == "/home/zoe/llama.cpp/build-jetson-new/bin/llama-server"                          # the parked binary, verbatim
@@ -388,7 +388,7 @@ def test_the_12b_command_is_the_parked_execstart_with_only_the_listed_changes(tm
     assert "--mmproj" not in a and "--no-mmproj-offload" not in a and "--mlock" in a and "--metrics" in a and "--jinja" in a
     assert spec["props"]["MemorySwapMax"] == "0" and spec["props"]["LimitMEMLOCK"] == "infinity"
     assert any("--host 0.0.0.0 -> 127.0.0.1" in d for d in spec["diff"]) and any(d.startswith("+ --cache-ram") for d in spec["diff"])
-    assert nw.llm_spec(PARKED, nw.NightCfg(fit_off=True), nw.Levers("qat", 32768, "q8_0"))["argv"].count("--fit") == 1
+    assert nw.llm_spec(PARKED, nw.NightCfg(binary=None, fit_off=True), nw.Levers("qat", 32768, "q8_0"))["argv"].count("--fit") == 1
     kv4 = nw.llm_spec(PARKED, cfg, nw.Levers("q4km", 16384, "q4_0"))["argv"]
     assert kv4[kv4.index("--model") + 1].endswith("gemma-4-12B-it-Q4_K_M.gguf") and kv4[kv4.index("--cache-type-v") + 1] == "q4_0" and kv4[kv4.index("--ctx-size") + 1] == "16384"
 
@@ -516,7 +516,7 @@ def test_missing_files_inactive_brain_and_an_impossible_fit_are_refused_before_a
 # ── the window: sleep, load, jobs, wake ──────────────────────────────────────
 
 def test_a_full_night_sleeps_in_order_runs_the_jobs_on_the_12b_and_wakes_in_the_owners_order(tmp_path):
-    w, host, cfg = make(tmp_path)
+    w, host, cfg = make(tmp_path, argv=["--ctx", "32768"])
     assert w.run() == nw.EXIT_OK, w.outcome
     stops = [u for u in nw.STOP_ORDER if any(f"--user stop {u}" in c for c in host.joined())]
     assert stops == [nw.ZOE_DATA, nw.ROUTER, nw.KOKORO, nw.BRAIN]
@@ -545,7 +545,7 @@ def test_a_full_night_sleeps_in_order_runs_the_jobs_on_the_12b_and_wakes_in_the_
 
 
 def test_the_report_is_written_private_with_counts_and_no_job_output(tmp_path):
-    w, host, cfg = make(tmp_path)
+    w, host, cfg = make(tmp_path, argv=["--ctx", "32768"])
     assert w.run() == nw.EXIT_OK
     md = next(cfg.report_dir.glob("*.md"))
     js = json.loads(md.with_suffix(".json").read_text())
@@ -795,45 +795,67 @@ def test_unified_memory_is_an_env_lever_on_the_12b_only_default_on_for_a_jetson(
 
 
 def test_ngl_nomlock_and_fit_are_levers_that_change_only_their_flag():
-    base = nw.llm_spec(PARKED, nw.NightCfg(), nw.Levers("qat", 32768, "q8_0"))["argv"]
-    ngl = nw.llm_spec(PARKED, nw.NightCfg(ngl=28), nw.Levers("qat", 32768, "q8_0"))["argv"]
+    base = nw.llm_spec(PARKED, nw.NightCfg(binary=None, ngl=None), nw.Levers("qat", 32768, "q8_0"))["argv"]
+    ngl = nw.llm_spec(PARKED, nw.NightCfg(binary=None, ngl=28), nw.Levers("qat", 32768, "q8_0"))["argv"]
     assert ngl[ngl.index("--n-gpu-layers") + 1] == "28" and base[base.index("--n-gpu-layers") + 1] == "99"
-    assert "--mlock" not in nw.llm_spec(PARKED, nw.NightCfg(mlock=False), nw.Levers("qat", 32768, "q8_0"))["argv"] and "--mlock" in base
+    assert "--mlock" not in nw.llm_spec(PARKED, nw.NightCfg(binary=None, mlock=False), nw.Levers("qat", 32768, "q8_0"))["argv"] and "--mlock" in base
+    nolock = nw.llm_spec(PARKED, nw.NightCfg(mlock=False), nw.Levers("qat", 32768, "q8_0"))["argv"]          # the default b11194 build: no lock flag at all
+    assert "--load-mode" not in nolock and "--mlock" not in nolock
     args = nw.build_parser().parse_args(["--ngl", "30", "--no-mlock", "--fit-off", "--retry-load"])
     cfg = nw.configure(args, nw.NightCfg())
     assert (cfg.ngl, cfg.mlock, cfg.fit_off, cfg.retry_load) == (30, False, True, True)
+    assert nw.configure(nw.build_parser().parse_args(["--fit-default"]), nw.NightCfg()).fit_off is False
 
 
 def test_the_night_mind_entry_point_is_used_as_soon_as_it_exists_with_the_served_context_and_speed(tmp_path):
     script = tmp_path / "zoe-night-mind.py"
     script.write_text("# stand-in")
-    w, host, _ = make(tmp_path, cfg_kw={"night_mind_script": script})
+    w, host, _ = make(tmp_path, argv=["--ctx", "32768"], cfg_kw={"night_mind_script": script})
     assert w.run() == nw.EXIT_OK, w.outcome
     nm = next(j for j in host.jobs_run if j["name"] == "zoe-night-mind.py")
-    assert nm["argv"][2:] == ["--model-url", "http://127.0.0.1:11500/v1", "--ctx-tokens", "32768", "--all-members", "--decode-tok-s", "4.20"]
+    assert nm["argv"][2:] == ["--model-url", "http://127.0.0.1:11500/v1", "--ctx-tokens", "32768", "--all-members", "--decode-tok-s", "4.20", "--prefill-tok-s", "120.5"]     # both measured rates
     assert [j["name"] for j in host.jobs_run][:3] == ["night_digest.py", "zoe-nightly-dreaming.py", "zoe-night-mind.py"]
     assert not any(r["name"] == "night_mind" and r["backend"] == "4B" for r in w.jobs)                  # no 4B fallback for the new pass
-    custom = nw.build_jobs(nw.NightCfg(night_mind_cmd="python /x/nm.py --u {model_url} --c {ctx_tokens} --t {decode_tps}", night_mind_script=tmp_path / "no.py"), 16384, 11.5)
-    assert custom[-1].argv == ["python", "/x/nm.py", "--u", "http://127.0.0.1:11500", "--c", "16384", "--t", "11.50"]
+    custom = nw.build_jobs(nw.NightCfg(night_mind_cmd="python /x/nm.py --u {model_url} --c {ctx_tokens} --t {decode_tps} --p {prefill_tps}", night_mind_script=tmp_path / "no.py"), 16384, 11.5, 136.0)
+    assert custom[-1].argv == ["python", "/x/nm.py", "--u", "http://127.0.0.1:11500", "--c", "16384", "--t", "11.50", "--p", "136.0"]
+    script2 = tmp_path / "nm2.py"
+    script2.write_text("# stand-in")
+    only_decode = nw.build_jobs(nw.NightCfg(night_mind_script=script2), 16384, 3.62)[-1].argv
+    assert "--decode-tok-s" in only_decode and "--prefill-tok-s" not in only_decode                 # no probe result for prefill: the pass keeps its own default
     assert nw.build_jobs(nw.NightCfg(night_mind_script=tmp_path / "no.py"))[-1].skip_reason.startswith("no.py not found")
 
 
 def test_the_trial_also_scores_the_night_mind_cells_when_the_entry_point_exists(tmp_path):
+    _trial_cells(tmp_path, pretty=True)
+
+
+def test_the_cells_object_is_read_from_the_compact_one_line_stdout_too(tmp_path):
+    _trial_cells(tmp_path, pretty=False)
+
+
+def _trial_cells(tmp_path, *, pretty):
     script = tmp_path / "zoe-night-mind.py"
     script.write_text("# stand-in")
     w, host, cfg = make(tmp_path, argv=["--trial"], start=at(3, 5), cfg_kw={"night_mind_script": script})
     real = host.run_watched
+    cells_argv: list = []
 
     def rw(argv, timeout, env, tick, log_path, interval=5.0):
         if "--cells" in argv:
+            cells_argv.append(list(argv))
             host.cmds.append((list(argv), True))
             log_path.parent.mkdir(parents=True, exist_ok=True)
-            log_path.write_text("log noise\n" + json.dumps({"status": "ok", "cells": {"K1": "PASS", "K6": "FAIL", "pass": 1, "fail": 1}}) + "\n")
+            obj = {"status": "ok", "model": "12B", "members": [], "totals": {"calls": 9}, "cells": {"K1": "PASS", "K6": "FAIL", "pass": 1, "fail": 1, "k1": {"judged": 4}}}
+            # the real log: stderr lines (some with braces) around the CLI's stdout object - indented over many lines (the old CLI) or one compact line (the new one)
+            log_path.write_text("NIGHT_MIND user=- status={ok}\nloading {model}\n" + (json.dumps(obj, indent=2, sort_keys=True) if pretty else json.dumps(obj)) + "\ndone {}\n")
             return bk.Result(0, "")
         return real(argv, timeout, env, tick, log_path, interval)
     host.run_watched = rw
     assert w.run() == nw.EXIT_OK, w.outcome
     assert w.rec["trial"]["12B"]["night_mind_cells"]["K6"] == "FAIL"
+    twelve = cells_argv[0]                                                                       # the 12B phase: the cells get the measured rates (they used the 4B's, 2026-10-09)
+    assert twelve[twelve.index("--decode-tok-s") + 1] == "4.20" and twelve[twelve.index("--prefill-tok-s") + 1] == "120.5" and twelve[twelve.index("--model-name") + 1] == "12B"
+    assert all("--decode-tok-s" not in a for a in cells_argv[1:])                                # the 4B@32k phase is not sized by the 12B's speed
     assert "| K6 | FAIL | FAIL |" in next(cfg.report_dir.glob("*-trial*.md")).read_text()
 
 
@@ -905,7 +927,7 @@ def test_a_restore_only_never_races_a_window_that_is_still_running(tmp_path):
 
 def test_the_dry_run_prints_the_table_says_what_fits_and_changes_nothing(tmp_path):
     lines = []
-    w, host, cfg = make(tmp_path, argv=["--dry-run"], base=3000.0)
+    w, host, cfg = make(tmp_path, argv=["--dry-run", "--ctx", "32768"], base=3000.0)
     w.log = lines.append
     assert w.run() == nw.EXIT_OK
     out = "\n".join(lines)

@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Optional
 
@@ -186,6 +187,8 @@ class FakeNightServer:
         self.requests = 0
         self.up = True
         self.last_body: "dict[str, Any]" = {}
+        #: seconds to hold each chat completion before answering (a slow model: the 12B decodes at ~3.6 tok/s); a callable gets the request body and returns seconds
+        self.delay_s: Any = 0.0
         outer = self
 
         class H(BaseHTTPRequestHandler):
@@ -214,6 +217,9 @@ class FakeNightServer:
                 if not outer.up:
                     return self._send(503, {"error": "down"})
                 text = outer.brain(body.get("messages") or [], int(body.get("max_tokens") or 0))
+                wait = outer.delay_s(body) if callable(outer.delay_s) else float(outer.delay_s or 0.0)
+                if wait > 0:
+                    time.sleep(wait)
                 prompt = sum(len(str(m.get("content", ""))) for m in body.get("messages") or []) // 4
                 self._send(200, {"choices": [{"message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
                                  "usage": {"prompt_tokens": prompt, "completion_tokens": len(text) // 4}})

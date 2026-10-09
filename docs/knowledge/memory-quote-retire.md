@@ -1,7 +1,7 @@
 ---
 type: Reference
 title: Memory quote-backed retirement - a one-word change of state retires the right fact, with the owner's own words attached (Samantha bar S10)
-description: How "I gave up the cello" retires "User plays the cello ..." without a rule that guesses and without a model that is trusted. A deterministic cue gate opens the door; the owner's top three current rows are offered; a judge (the Flue brain's memory_retire tool on the chat lane, the per-turn digest off the turn on the voice lane) names ONE number or none; the server enforces every wall whatever the judge said (the choice is one of the three, the quote is the owner's verbatim sentence, the speaker is the verified owner and the words are their own, the row is the owner's own); the retirement invalidates, never deletes, and cites the quote, which the forget sweep erases. ZOE_QUOTE_RETIRE = shadow | enforce | off, default shadow. What was measured, what is built, the guards, the proof (store-tier S10x cells with controls, the live-tier cells and driver), the voice-path files, and what is not measured yet.
+description: How "I gave up the cello" retires "User plays the cello ..." without a rule that guesses and without a model that is trusted. A deterministic cue gate opens the door; the owner's top three current rows are offered; a judge (the per-turn digest off the turn, on BOTH lanes; the Flue brain's memory_retire tool is an optional extra on chat) names ONE number or none; the server enforces every wall whatever the judge said (the choice is one of the three, the quote is the owner's verbatim sentence, the speaker is the verified owner and the words are their own, the row is the owner's own); the retirement invalidates, never deletes, and cites the quote, which the forget sweep erases. ZOE_QUOTE_RETIRE = shadow | enforce | off, default shadow. What was measured, what is built, the guards, the proof (store-tier S10x cells with controls, the live-tier cells and driver), the voice-path files, and what is not measured yet.
 tags: [memory, supersede, temporal, provenance, forgetting, s10, samantha-bar, zmb, quote-retire, voice-path]
 timestamp: 2026-10-07T00:30:00Z
 ---
@@ -55,12 +55,20 @@ names (`subject_ok`: "User's sister Odette plays the cello" is never offered for
 
 **The judge** sees the sentence and numbered notes, and answers `{"pick": N}` (N = 0 none). It never supplies text, an id or an identity.
 
-* CHAT lane: the Flue brain, as the `memory_retire` tool, two calls. No arguments: zoe-data shows the (up to three) notes. `pick=<n>`: the one it ends, or 0.
+* CHAT lane, the DETERMINISTIC judge (2026-10-09, the S10 live fix): the same per-turn digest pass as voice (`memory_digest._quote_retire_pass` ->
+  `memory_retire.distill_turn(lane="chat")`), after the reply, for any named account (a guest has no store; no speaker verdict is needed on a typed turn). It exists
+  because the brain tool alone was NOT reached live: on main 4bb903d2 the S10 turn "I gave up the cello." was served by the Flue brain in ONE round with the
+  tool disclosed (the `memory` group trigger matched) and never called - a 4B model does not call a tool on a statement that asks it nothing - so no `QUOTE_RETIRE`
+  line was written, not even in shadow, and the bar read `store_retired: false`. The class: a capability must never depend on the model CHOOSING to call a tool
+  when the server can see the cue itself. A chat turn the brain's tool already decided (a pick, even 0) is not judged twice (`memory_retire.brain_decided`);
+  a turn that is off the record, opted out of memory, or the digest skipped for a third-person pronoun subject is not judged.
+* CHAT lane, the optional extra: the Flue brain, as the `memory_retire` tool, two calls. No arguments: zoe-data shows the (up to three) notes. `pick=<n>`: the one it ends, or 0.
   The sentence is the turn `zoe_flue_client` noted (`memory_retire.note_turn`) - the tool sends only a number. The tool is in the `memory` group and is
   pre-disclosed when the owner's message states that something ended or changed (the group's trigger regex), so the always-on system prompt is
   byte-identical (the group catalogue is untouched; pinned in the sidecar tests).
 * VOICE lane: never in the turn. `memory_digest.run_turn_digest` (which already runs after the reply is spoken) asks the local model the same question
-  (`memory_retire.distill_turn`) once every deterministic check has passed: no cue, an unverified speaker or no candidate costs NO model call.
+  (`memory_retire.distill_turn`) once every deterministic check has passed: no cue, an unverified speaker or no candidate costs NO model call. A chat turn with a
+  cue now pays the same one extra local-model call (max 24 tokens, after the reply, inside the capture the bar already waits on).
 
 **The wall** (`memory_retire.decide`; each check is a module function so a bench control can break it alone), enforced whatever the judge said:
 
@@ -86,7 +94,7 @@ whose own text never names the cello but whose cited sentence does (bench cells 
 
 | Value | What happens |
 |---|---|
-| `shadow` (DEFAULT; also any unrecognised value) | the cue gate, the candidates and (voice) the judge run; the decision is LOGGED (`QUOTE_RETIRE user= lane= mode= action= reason= cue= rank= cands= row=`: ids, ranks and counts, never text) and NOTHING is written. The brain tool's reply never claims a change. |
+| `shadow` (DEFAULT; also any unrecognised value) | the cue gate, the candidates and the judge (both lanes) run; the decision is LOGGED (`QUOTE_RETIRE user= lane= mode= action= reason= cue= rank= cands= row=`: ids, ranks and counts, never text) and NOTHING is written. The brain tool's reply never claims a change. |
 | `enforce` (`1`, `true`, `yes`, `on`) | the same, and a retirement that passes every wall is applied |
 | `off` (`0`, `false`, `no`, `off`) | inert: no note, no search, no model call |
 

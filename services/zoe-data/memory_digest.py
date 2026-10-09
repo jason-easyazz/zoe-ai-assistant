@@ -399,31 +399,29 @@ User said: {user_message}
 # subject, predicate, value, polarity, modality, tense, and the user's own words - so polarity / hedge / tense are decided
 # here, in the model that reads every language, and never re-derived from English word lists later
 # (docs/research/structural-floors-2026-10-09.md section 5.1). The fact sentence and its type are exactly as before.
-_CLAIM_ROW_RULES = """\
-Each item ALSO has "claim": the same fact as a structured row, read ONLY from what the user said:
-  "subj": "user" | "rel:<relation>" for the user's relative by relation (rel:mother, rel:father, rel:wife, rel:husband, rel:sister, rel:brother, rel:son, rel:daughter, ...) | "person:<Name>" for a named third party
-  "pred": residence | employer | occupation | birthday | age | name | pet_name | allergy | health | activity | membership | plan | preference | kin:<relation> | other
-  "obj": the value, copied from the user's own words (a place, a name, a date, a thing)
-  "pol": "affirm" | "negate" (the user says it is NOT so) | "ended" (it was so and stopped: no longer, quit, dropped)
-  "mod": "asserted" (plainly stated) | "hedged" (I think, probably) | "hypothetical" (a wish, might, if) | "question" | "reported" (someone else said it)
-  "tense": "current" | "past" | "future"   (a plan or intention that exists now is "current")
-  "quote": the user's own words that state it, copied EXACTLY from the message (the shortest span)
-  "lang": the language code of the message (en, es, fr, de, zh, ja, ...)
-A correction or a contrast ("my mum lives in Bendigo, not Ballarat") is TWO items: the new fact (pol affirm) and the old value (pol negate, quote "not Ballarat").
+def _claim_row_rules() -> str:
+    import structural_claims
 
-"""
-_TURN_EXTRACTION_PROMPT_CLAIMS = _TURN_EXTRACTION_PROMPT.replace(
-    "If nothing personal was stated, return: []\n", _CLAIM_ROW_RULES + "If nothing personal was stated, return: []\n", 1)
+    return ("Each item ALSO has \"claim\": the same fact as a structured row, read ONLY from what the user said:\n"
+            + structural_claims.CLAIM_FIELD_RULES
+            + "A correction or a contrast (\"my mum lives in Bendigo, not Ballarat\") is TWO items: the new fact (pol affirm) and the old value (pol negate, quote \"not Ballarat\").\n\n")
+
+
+def _turn_prompt_claims() -> str:
+    """The ``enforce`` prompt: the legacy one with the claim-row rules added (built per call; ``shadow`` and ``off`` never use it)."""
+    return _TURN_EXTRACTION_PROMPT.replace(
+        "If nothing personal was stated, return: []\n", _claim_row_rules() + "If nothing personal was stated, return: []\n", 1)
 _CLAIM_MAX_TOKENS = 640        # ~20 s at the brain's measured decode rate: a worst-case claim-row call stays under the timeout
 _CLAIM_TIMEOUT_S = 30.0
 
 
 def _turn_prompt():
-    """The turn-digest prompt and its token budget: the legacy prompt unless the claim row is asked for."""
+    """The turn-digest prompt and its token budget: the legacy prompt, byte for byte, in ``off`` AND ``shadow``. Only ``enforce`` asks
+    the extractor for the claim row in the same call (``structural_claims.inline``)."""
     import structural_claims
 
-    if structural_claims.active():
-        return _TURN_EXTRACTION_PROMPT_CLAIMS, _CLAIM_MAX_TOKENS
+    if structural_claims.inline():
+        return _turn_prompt_claims(), _CLAIM_MAX_TOKENS
     return _TURN_EXTRACTION_PROMPT, 256
 
 
@@ -676,7 +674,7 @@ def _read_claims(facts: list) -> list:
     """The parsed claim row of each extracted item (None where absent / malformed / the flag is off)."""
     import structural_claims as sc
 
-    if not sc.active():
+    if not sc.inline():
         return [None] * len(facts)
     out: list = []
     for item in facts:
@@ -714,6 +712,49 @@ def _claim_kwargs(claims: list, idx: int) -> dict:
     if c is None:
         return {}
     return {"claim": c, "claim_siblings": tuple(o for j, o in enumerate(claims) if j != idx and o is not None)}
+
+
+def structural_claims_post_read() -> bool:
+    try:
+        import structural_reader
+
+        return structural_reader.enabled()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def _shadow_claims_post(svc, user_id: str, user_message: str, stored: list, result: dict) -> None:
+    """``ZOE_STRUCTURAL_CLAIMS=shadow``: AFTER the turn's rows are written by the unchanged legacy extraction, read the claim row of
+    what was stored with ONE separate bounded call (``structural_reader``), then run the same measurement ``enforce`` runs inline:
+    the structural decision beside the lexical one (``STRUCTURAL_FLOOR lane=turn_digest_post``), the would-retire log and the
+    off-path verifier's queue. Nothing here writes, edits or retires a row. Never raises into the digest."""
+    try:
+        import types
+
+        import memory_authority
+        import structural_claims as sc
+        import structural_reader
+
+        rows = [(ref, fact) for ref, _c, fact in stored if ref is not None][: structural_reader.MAX_FACTS]
+        if not rows:
+            return
+        claims = await structural_reader.read_claims(user_message, [fact for _ref, fact in rows])
+        if not any(claims):
+            return
+        shown: list = []
+        for (ref, fact), claim in zip(rows, claims):
+            if claim is None:
+                continue
+            md = dict(getattr(ref, "metadata", None) or {})
+            d = sc.decide(fact, claim, user_message, siblings=[o for o in claims if o is not None and o is not claim])
+            lexical = memory_authority.label_of_meta(md)
+            sc.record("support", "turn_digest_post", d.lang, lexical, d.label, reasons=d.reasons, ambiguous=d.ambiguous)
+            md.update({"claim": claim.to_json(), "claim_lexical": lexical, "claim_structural": d.label})
+            shown.append((types.SimpleNamespace(id=ref.id, text=getattr(ref, "text", fact), metadata=md), claim, fact))
+        if shown:
+            await _structural_post(svc, user_id, user_message, shown, [c for _r, c, _f in shown], set(), result)
+    except Exception as exc:  # noqa: BLE001 - the measurement never costs the digest its result
+        logger.warning("structural shadow reader failed for %s: %s", user_id, type(exc).__name__)
 
 
 async def _structural_post(svc, user_id: str, user_message: str, stored: list, claims: list, consumed: set,
@@ -754,19 +795,32 @@ async def _structural_post(svc, user_id: str, user_message: str, stored: list, c
         logger.warning("structural post-turn step failed for %s: %s", user_id, type(exc).__name__)
 
 
-async def _quote_retire_pass(result: dict, user_id: str, user_message: str, source: str, speaker_verified: "bool | None") -> dict:
-    """The per-turn digest's second half for a SPOKEN turn: the quote-backed retirement judge (``memory_retire.distill_turn``).
+#: the digest's ``source`` -> the lane the retirement judge speaks for. A source not listed here is left alone.
+_QUOTE_RETIRE_LANES = {"turn_digest": "chat", "voice_turn_digest": "voice"}
 
-    A voice turn never lets the brain retire a saved note in the turn (the speaker may not be the owner, and a spoken sentence is
-    the speech-to-text's guess): the change of state it carries ("I gave up the cello") is judged HERE, after the reply was spoken,
-    once the server's own speaker gate has confirmed the owner. ``ZOE_QUOTE_RETIRE`` = shadow (default: log the decision, change
-    nothing) | enforce | off. The chat lane's judge is the brain's ``memory_retire`` tool, so any other ``source`` is left alone.
-    Never raises; ``result`` is returned (with ``quote_retire`` = the decision's action when one was made)."""
-    if source == "voice_turn_digest":
+
+async def _quote_retire_pass(result: dict, user_id: str, user_message: str, source: str, speaker_verified: "bool | None") -> dict:
+    """The per-turn digest's second half: the quote-backed retirement judge (``memory_retire.distill_turn``), on BOTH lanes.
+
+    The change of state a turn carries ("I gave up the cello") is judged HERE, after the reply was given, never in the turn. A voice
+    turn is judged once the server's own speaker gate has confirmed the owner. A chat turn is judged for any named account: the
+    brain's ``memory_retire`` tool is only an optional extra, because the 4B brain does not call a tool on a statement that asks it
+    nothing (S10, 2026-10-09: the tool was disclosed and never called, so nothing ran, not even in shadow). ``ZOE_QUOTE_RETIRE`` =
+    shadow (default: log the decision, change nothing) | enforce | off. Never raises; ``result`` is returned (with ``quote_retire`` =
+    the decision's action when one was made). An off-the-record turn and a turn the digest skipped for a third-person pronoun
+    subject ("she sold the Corolla") are not judged: they are not the owner stating a change of their own. A memory opt-out stops it too."""
+    lane = _QUOTE_RETIRE_LANES.get(source)
+    if lane and not result.get("off_record") and result.get("skipped_reason") != "pronoun_subject_no_context":
         try:
             import memory_retire
+            import user_prefs
 
-            decision = await memory_retire.distill_turn(user_id, user_message, speaker_verified=speaker_verified)
+            try:                                    # an automatic memory write: the owner's opt-out stops it too
+                if await user_prefs.is_memory_opted_out(user_id):
+                    return result
+            except Exception:  # noqa: BLE001 - an unreadable pref must not stop the walls from judging
+                pass
+            decision = await memory_retire.distill_turn(user_id, user_message, speaker_verified=speaker_verified, lane=lane)
             if decision.action not in ("off", "nothing_to_offer"):
                 result["quote_retire"] = decision.action
         except Exception as exc:  # noqa: BLE001 - the digest result is already in hand
@@ -1109,6 +1163,9 @@ async def run_turn_digest(
 
         if item_claims and any(item_claims):
             await _structural_post(svc, user_id, user_message, stored_claims, item_claims, consumed, result)
+        elif stored_claims and structural_claims_post_read():
+            # shadow: the extraction above was the legacy call, untouched; the claim row is read now, by a separate bounded call
+            await _shadow_claims_post(svc, user_id, user_message, stored_claims, result)
 
         if changed_refs:
             from memory_supersede import supersede_for_turn

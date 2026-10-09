@@ -500,6 +500,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_STICKY_SESSION_MINUTES` | `dynamic` | yes | NO | `services/zoe-data/session_continuity.py` |
 | `ZOE_STRIP_NARRATION` | `-` | no | NO | `services/zoe-data/narration_filter.py` |
 | `ZOE_STRUCTURAL_CLAIMS` | `-` | no | NO | `services/zoe-data/structural_claims.py` |
+| `ZOE_STRUCTURAL_READER` | `'shadow'` | yes | NO | `services/zoe-data/structural_reader.py` |
 | `ZOE_STRUCTURAL_VERIFIER` | `-` | no | NO | `services/zoe-data/structural_verifier.py` |
 | `ZOE_STT_BACKEND` | `'moonshine'` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_STT_PREWARM_ON_WAKE` | `True` | yes | NO | `services/zoe-data/routers/voice_tts.py` |

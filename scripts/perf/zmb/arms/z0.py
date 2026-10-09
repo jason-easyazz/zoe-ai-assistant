@@ -98,7 +98,7 @@ class Z0Arm(Arm):
 
     def __init__(self, off: "frozenset[str] | set[str]" = frozenset(), name: str | None = None, embed: bool = False, *,
                  night: bool = False, night_url: str = "", night_model: str = "", night_ctx: int = 8192, night_chunk_tokens: int = 0,
-                 night_max_calls: int = 7):
+                 night_max_calls: int = 7, night_decode_tok_s: float = 0.0, night_prefill_tok_s: float = 0.0):
         from .. import lab_driver
         self.embed = embed
         #: Z0n: Z0 + the night mind (``night_mind.py``) as the nightly reflection, with its OWN model (the lab's fake brain, or the clone at ``night_url``):
@@ -107,6 +107,11 @@ class Z0Arm(Arm):
         self.night_url, self.night_model, self.night_ctx = night_url, night_model, int(night_ctx)
         self.night_chunk_tokens = int(night_chunk_tokens or (400 if night_url else 150))
         self.night_max_calls = int(night_max_calls)
+        #: the server's MEASURED rates (the window probes and passes them): they size every call's HTTP budget through ``night_mind.Config.timeout_for``, in the
+        #: pass AND in K12's labelling. 0 = the env / the module defaults (the live 4B's).
+        self.night_decode_tok_s, self.night_prefill_tok_s = float(night_decode_tok_s or 0.0), float(night_prefill_tok_s or 0.0)
+        #: lifetime counters of every model call the arm made (NOT cleared by ``reset``: a cells run resets per cell), so ``--cells`` reports what the model did
+        self.night_totals: "dict[str, int]" = {}
         self.nightly_model = "own" if self.night else "scripted"
         self.takes_lies = self.night and not night_url          # the lab's fake brain makes the planted mistakes; a real model makes its own
         self._night_turns: "list[tuple[int, int, str]]" = []       # (seq, day_offset, text): every owner turn, plus night-only routine commands
@@ -571,8 +576,7 @@ class Z0Arm(Arm):
         had = sys.modules.get("zoe_agent")
         sys.modules["zoe_agent"] = stub
         md._load_todays_messages, md._extract_facts_with_gemma, md._emotional_memory_pass = todays, no_facts, no_emotions
-        cfg = nm.config_from_env(url=self.night_url or "http://127.0.0.1:1", model=self.night_model, ctx_tokens=self.night_ctx,
-                                 chunk_tokens=self.night_chunk_tokens, max_calls=self.night_max_calls)
+        cfg = self._night_cfg(chunk_tokens=self.night_chunk_tokens, max_calls=self.night_max_calls)
         persona = importlib.import_module("persona_layer")             # the real affect gate runs; only the Postgres read behind it is scripted: an adult member
         real_mode = persona.load_member_mode
 
@@ -602,6 +606,7 @@ class Z0Arm(Arm):
                 os.environ["ZOE_NIGHT_MIND"] = prev_env
         night = dict(out.get("night_mind") or {})
         self.last_night = night
+        self._tally(night)
         self.night_ran = True
         flat = {k: v for k, v in night.items() if isinstance(v, (int, float, bool))}
         # the digest ran for its own reasons too; a pass that did not RUN proves nothing (``cells.run_cell`` raises on skipped_reason / error)
@@ -609,12 +614,25 @@ class Z0Arm(Arm):
         if out.get("skipped_reason"):
             rep["skipped_reason"] = out["skipped_reason"]
         if night.get("status") in ("error", "llm_unreachable"):
-            rep["error"] = f"night_mind:{night.get('status')}:{night.get('error', '')}"
+            rep["error"] = f"night_mind:{'llm_timeout' if night.get('llm_timeout') else night.get('status')}:{night.get('error', '')}"
         elif night.get("status") == "skipped":
             rep["skipped_reason"] = f"night_mind:{night.get('skipped_reason')}"
         elif night.get("status") == "off" and "night_mind" not in self.off:
             rep["error"] = "night_mind:off"
         return rep
+
+    def _night_cfg(self, **kw: Any):
+        """The night mind's Config for this arm: the clone's URL / model / context and the measured rates the window passed (one place, so no code path can
+        build a config that forgets them)."""
+        nm = importlib.import_module("night_mind")
+        return nm.config_from_env(url=self.night_url or "http://127.0.0.1:1", model=self.night_model, ctx_tokens=self.night_ctx,
+                                  decode_tok_s=self.night_decode_tok_s or None, prefill_tok_s=self.night_prefill_tok_s or None, **kw)
+
+    def _tally(self, counters: "dict[str, Any]") -> None:
+        for k in ("calls", "moments_calls", "threads_calls", "calls_invalid", "prompt_tokens", "completion_tokens", "observations_written", "moments_verified"):
+            v = counters.get(k)
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                self.night_totals[k] = self.night_totals.get(k, 0) + int(v)
 
     def _night_snapshot(self):
         nm = importlib.import_module("night_mind")
@@ -654,20 +672,23 @@ class Z0Arm(Arm):
         from ..night_brain import FakeNightBrain
         now = _dt.datetime.now(_dt.timezone.utc)
         turns = [nm.Turn(f"lbl-{i}", t, now) for i, t in enumerate(texts)]
-        cfg = nm.config_from_env(url=self.night_url or "http://127.0.0.1:1", model=self.night_model, ctx_tokens=self.night_ctx)
+        cfg = self._night_cfg()
         prev = nm.set_llm(None if self.night_url else FakeNightBrain())
         counts = {k: 0 for k in nm.COUNT_KEYS}
         usage = {"prompt_tokens": 0, "completion_tokens": 0}
         out: "list[dict[str, Any]]" = []
+        calls = 0
         try:
             with self._ctl():
                 for n, chunk in enumerate(nm.chunk_turns(turns, nm.Config(ctx_tokens=cfg.ctx_tokens, chunk_tokens=self.night_chunk_tokens).chunk_budget)):
                     prompt = nm.MOMENTS_USER.format(lines="\n".join(nm._line(f"m{i}", t) for i, t in enumerate(chunk, 1)), cap=nm.MAX_MOMENTS_PER_CHUNK)
+                    calls += 1
                     raw = self._run(nm._complete([{"role": "system", "content": nm.MOMENTS_SYSTEM}, {"role": "user", "content": prompt}], nm.MOMENT_MAX_TOKENS, cfg, usage))
                     for m in nm.parse_moments(raw, chunk, n, counts) or []:
                         out.append({"quote": m.quote, "kind": m.kind, "feeling": m.feeling, "weight": m.weight})
         finally:
             nm.set_llm(prev)
+            self._tally({"calls": calls, "moments_calls": calls, **usage})
         return out
 
     def observations(self, query: str = "") -> "dict[str, Any]":

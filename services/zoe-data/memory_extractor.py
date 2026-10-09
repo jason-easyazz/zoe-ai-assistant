@@ -670,6 +670,26 @@ def _remember_is_a_question(text: str, m: "re.Match[str]") -> bool:
     return bool(_ADDRESSED_TO_YOU_RE.search(text[:rpos]))
 
 
+#: the templates whose single capture is a PLACE (home, workplace, origin): ``memory_quality.clean_place_value`` decides what is left of it
+_PLACE_TEMPLATES = frozenset({"User lives in {0}", "User works at/for {0}", "User is from {0}"})
+_AUX_BEFORE_SUBJECT_RE = re.compile(
+    r"\b(?:do|does|did|can|could|would|will|should|am|are|is|where|what|which|who|how)\s*$", re.IGNORECASE)
+
+
+def _asked_not_said(text: str, m: "re.Match[str]", template: str) -> bool:
+    """True when the "I <verb> ..." a template matched sits inside a QUESTION ("Which city do I live in these days?", "Do I like
+    pizza?"): the auxiliary / wh-word comes straight before the "I", so the sentence asks and states nothing about the speaker.
+    The explicit teach templates have their own guard (``_remember_is_a_question``)."""
+    if template.startswith(("User asked me to remember", "Important note")):
+        return False
+    if not re.match(r"i(?:\s|'m\b)", m.group(0), re.IGNORECASE):
+        return False          # "you can call me Mika": the auxiliary belongs to a different subject than the template's
+    start = 0
+    for sm in re.finditer(r"[.!?\n]\s*", text[: m.start()]):
+        start = sm.end()
+    return bool(_AUX_BEFORE_SUBJECT_RE.search(text[start:m.start()]))
+
+
 def _mine_templates(text: str, source_excerpt: str, seen: set[str]) -> list[MemoryCandidate]:
     """Run the template patterns over ``text`` (behavior-identical extraction loop)."""
     out: list[MemoryCandidate] = []
@@ -679,7 +699,15 @@ def _mine_templates(text: str, source_excerpt: str, seen: set[str]) -> list[Memo
             continue
         if template.startswith("User asked me to remember") and _remember_is_a_question(text, m):
             continue
+        if _asked_not_said(text, m, template):
+            continue
         groups = tuple(_clean(g) for g in m.groups())
+        if template in _PLACE_TEMPLATES and groups:
+            # a place fact is a full clause: the discourse tail is dropped ("Hobart now" -> "Hobart"), a value that names no place
+            # ("these days") is a fragment and stores nothing
+            from memory_quality import clean_place_value
+
+            groups = (clean_place_value(groups[0]),) + groups[1:]
         if text.startswith(_own_words.MASK, m.end()) and groups:
             # the capture ends at a region own_words removed (someone else's speech, a pasted block):
             # "I live in Hobart and <Dana's words>" keeps "Hobart"; "remember that my mum said <her words>" keeps nothing
