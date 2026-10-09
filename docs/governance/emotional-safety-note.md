@@ -16,8 +16,8 @@ measurement), or keeps anything *about* how a person feels. It does not replace 
 record for voiceprints and faceprints.
 
 **Honest status of enforcement.** This note is ahead of the code in two places, stated so nobody
-assumes otherwise: (1) there is **no deterministic crisis path in the tree today** (§7 is the
-requirement, not a description); (2) the persona layer is flag-dark and, in its first PR, is wired
+assumes otherwise: (1) the deterministic crisis path of §7 is **built and enforced by default** (`distress_handoff.py`,
+[docs/knowledge/distress-handoff.md](../knowledge/distress-handoff.md)) but its recall on unseen phrasings is measured at about two thirds, so §7 stays the requirement; (2) the persona layer is flag-dark and, in its first PR, is wired
 into the dormant legacy lane only — the live Flue brain still carries the fixed `ZOE_SOUL`. Where
 this note says "must", the table in §10 says what pins it today and what does not yet.
 
@@ -160,7 +160,7 @@ A guest is the sentinel principal (`guest`, `anonymous`, `voice-guest`, `voice-d
 
 ## 7. Crisis language
 
-**Requirement (not yet implemented in code).** When a turn contains language about self-harm,
+**Requirement. Implemented 2026-10-09 as `distress_handoff.py` (design, per-tier measurement, known limits and the operator block: [distress-handoff.md](../knowledge/distress-handoff.md)); this edit to the note ships in that PR.** When a turn contains language about self-harm,
 suicide, harming someone, abuse, or being in immediate danger, Zoe takes a **deterministic
 escalate-to-human path** that does not depend on the persona, the member's mode, a boundary, the
 model's mood, or an arousal score. The path:
@@ -185,12 +185,12 @@ model's mood, or an arousal score. The path:
   preferred to missing), tested with positive and negative fixtures, and replay-gated because it
   is on the voice path.
 
-Until this path exists, Zoe's behaviour in these moments is the base model's and the existing
+Where the hand-off does not fire (a phrasing it does not know, or the flag off), Zoe's behaviour in these moments is the base model's and the existing
 "acknowledge it first" instruction, and **the persona layer does not reach any member who is a
 minor** — that is the one place this note blocks a rollout, and it is enforced in code rather than
 left to the operator: `persona_layer.MINORS_GET_PERSONA` is `False`, so `block_for` returns `""` (the
 fixed persona stays) for a minor and the routes report `held_for_minor`. The constant is flipped only
-in the PR that ships and pins this path.
+in the PR that ships and pins this path; the hand-off PR ships the path but leaves it `False` (kid mode is not built; the flip is the owner's decision).
 
 ## 8. Mood is not the persona
 
@@ -256,5 +256,5 @@ the PR.
 | Guests / synthetic users get no member mode | `tests/test_persona_layer.py` |
 | Persona writes are admin-only; no model-driven writer exists | `tests/test_persona_routes.py` (403s, static scan of callers) |
 | Drift scorer skips kid turns AND unlabeled rows (plain text needs `--member`) and keeps no per-person row | `tests/test_persona_drift.py` |
-| Crisis path | **not pinned — not built (§7)** |
+| Crisis path: hand-off before every tier and the brain, fixed pointer, no store / digest / night mind, negation and quotation guards, per-tier precision and recall | `tests/test_distress_handoff.py`, `tests/test_distress_no_store.py` (recall on unseen phrasing is NOT pinned: see the doc) |
 | Affective-record consent/retention | **not pinned — no affective record exists yet (§6)** |
