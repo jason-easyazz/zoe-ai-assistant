@@ -175,7 +175,42 @@ def weekly_index_compaction(now_local: datetime.datetime | None = None) -> int:
     return 0 if status == 200 and result.get("ok") else 1
 
 
-async def main() -> int:
+def parse_args(argv: list[str] | None = None):
+    """``--skip-compaction`` / ``--only-compaction``: the 12B night window (scripts/night/) runs this script
+    while zoe-data is DOWN. The weekly index-compaction trigger asks zoe-data over HTTP, so in that run it is
+    skipped (``--skip-compaction``) and run again after zoe-data is back (``--only-compaction``); without
+    this a Sunday's compaction would be silently lost ("index health unavailable" returns 0)."""
+    import argparse
+
+    ap = argparse.ArgumentParser(description=__doc__)
+    group = ap.add_mutually_exclusive_group()
+    group.add_argument("--skip-compaction", action="store_true",
+                       help="memory snapshot + dreaming + music digest only (zoe-data is down)")
+    group.add_argument("--only-compaction", action="store_true",
+                       help="only the weekly drawers-index compaction trigger (needs zoe-data up)")
+    return ap.parse_args(argv)
+
+
+def run_compaction_trigger() -> int:
+    print("\n=== Weekly drawers index compaction ===")
+    try:
+        rc = weekly_index_compaction()
+    except Exception as exc:  # noqa: BLE001 — never let the trigger fail the night's run
+        print(f"Index compaction trigger failed: {exc}", file=sys.stderr)
+        rc = 0
+    if rc:
+        print("Index compaction FAILED — see MEMORY_INDEX_COMPACT in the zoe-data log", file=sys.stderr)
+        return 1
+    return 0
+
+
+async def main(skip_compaction: bool = False, only_compaction: bool = False) -> int:
+    if only_compaction:
+        rc = run_compaction_trigger()
+        if not rc:
+            print("\nzoe-nightly-dreaming: compaction trigger complete")
+        return rc
+
     from db_pool import close_pool, get_db_ctx, init_pool
 
     surface_count_logs()
@@ -216,14 +251,10 @@ async def main() -> int:
                 print(f"Music taste digest failed: {exc}", file=sys.stderr)
                 return 1
 
-        print("\n=== Weekly drawers index compaction ===")
-        try:
-            rc = weekly_index_compaction()
-        except Exception as exc:  # noqa: BLE001 — never let the trigger fail the night's run
-            print(f"Index compaction trigger failed: {exc}", file=sys.stderr)
-            rc = 0
-        if rc:
-            print("Index compaction FAILED — see MEMORY_INDEX_COMPACT in the zoe-data log", file=sys.stderr)
+        if skip_compaction:
+            print("\n=== Weekly drawers index compaction === skipped (--skip-compaction: zoe-data is down; "
+                  "the night window runs --only-compaction once it is back)")
+        elif run_compaction_trigger():
             return 1
 
         print("\nzoe-nightly-dreaming: complete")
@@ -233,4 +264,6 @@ async def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(asyncio.run(main()))
+    _args = parse_args()
+    raise SystemExit(asyncio.run(main(skip_compaction=_args.skip_compaction,
+                                      only_compaction=_args.only_compaction)))
