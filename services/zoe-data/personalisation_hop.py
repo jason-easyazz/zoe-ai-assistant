@@ -122,10 +122,9 @@ _TOPICS: dict[str, tuple[re.Pattern, re.Pattern]] = {
         re.compile(r"\b(?:wear(?:ing)?|clothes|clothing|outfit|dress(?:ed|ing)?|jacket|coat|jumper|sweater|layers?|"
                    r"umbrella|raincoat|boots|shoes|gloves|beanie|scarf|warm|cold|freezing|chilly|hot|rain(?:y|ing)?|"
                    r"snow|weather|sunscreen|sun\s?hat)\b", re.I),
-        re.compile(r"\b(?:walk(?:s|ing)?|dogs?|jog(?:s|ging)?|runs?|running|cycl\w+|bike|biking|commut\w+|rides?\s+to|"
+        re.compile(r"\b(?:(?:dog[- ]?)?walk\w*|strolls?|jog(?:s|ging)?|running|cycl\w+|bike|biking|commut\w+|rides?\s+to|"
                    r"outdoors?|outside|garden\w*|hik\w+|surf\w*|swim\w*|early\s+morning|dawn|before\s+(?:work|sunrise|dawn)|"
-                   r"school\s+run|bus\s+stop|construction|eczema|sensitive\s+skin|arthritis|raynaud\w*|"
-                   r"(?:at|by|around)\s+\d{1,2}\s?(?:am|a\.m\.)|\d{1,2}\s?(?:am|a\.m\.)\b)", re.I),
+                   r"school\s+run|bus\s+stop|construction|eczema|sensitive\s+skin|arthritis|raynaud\w*)\b", re.I),
     ),
     "food": (
         re.compile(r"\b(?:cook(?:ing)?|dinner|lunch|breakfast|meals?|recipes?|eat(?:ing)?|food|snacks?|dessert|restaurants?|"
@@ -164,6 +163,33 @@ _TOPICS: dict[str, tuple[re.Pattern, re.Pattern]] = {
 LENS = {"sleep": "sleep and daily rhythm", "clothing": "weather and their usual outings", "food": "diet and allergies",
         "activity": "fitness and health", "travel": "who is travelling", "kids": "the children's ages",
         "routine": "their working pattern"}
+
+
+#: the CONTENT of a routine, wording-independent: WHEN it happens (a time of day, a daily rhythm) and a GOING-OUT verb. A fact that
+#: says both ("walks the dog along the river every morning at 6am", "cycles to the depot at 5:30", "User: dog walk, dawn") is a
+#: constraint on what to wear / the weather whichever sentence shape the store kept (an NL row, a structural row, a role row)
+_WHEN_RE = re.compile(
+    r"\b(?:every\s+(?:single\s+)?(?:morning|evening|day|dawn|night|weekday)|each\s+(?:morning|evening|day)|daily|"
+    r"(?:at|by|around|before|from)\s+\d{1,2}(?::\d{2})?\s?(?:am|a\.m\.)?|\d{1,2}(?::\d{2})?\s?(?:am|a\.m\.)\b|"
+    r"dawn|sunrise|sun-?up|first\s+thing|early\s+(?:morning|mornings|start)|at\s+first\s+light)\b", re.I)
+_GOING_OUT_RE = re.compile(
+    r"\b(?:walk\w*|strolls?|jog\w*|running|runs?\s+(?:\d|to\b|along|around|the\b|laps)|cycl\w+|bik(?:e|es|ing)|rides?|riding|commut\w+|drives?\s+to|catch(?:es)?\s+the|"
+    r"head(?:s|ing)?\s+out|goes?\s+out|takes?\s+(?:the|their|his|her|my|our)\s+\w+\s+out|"
+    r"(?:along|by|down\s+to|at|around)\s+the\s+(?:river|beach|park|oval|jetty|foreshore|trail|paddock|bush|creek|lake|ocean|shore)|"
+    r"surf\w*|swim\w*|paddl\w+|kayak\w*|hik\w+|fishing|garden\w*|"
+    r"train(?:s|ing)?\s+(?:outside|outdoors)|plays?\s+(?:football|soccer|cricket|golf|tennis)|dog[- ]?walk\w*|"
+    r"school\s+run|paper\s+round|farm\w*|site|outdoors?|outside)\b", re.I)
+_OUTDOOR_TOPICS = frozenset({"clothing"})
+
+
+def fact_hits(topic: str, text: str) -> set[str]:
+    """The distinct constraint cues of ``text`` for ``topic``: the topic's word list PLUS, for the weather / what-to-wear lens, the
+    shape of a routine that takes the owner outdoors at a fixed time (a time cue AND a going-out verb) - so relevance follows what
+    the fact SAYS, not whether it happens to name "walk"."""
+    hits = {m.group(0).lower() for m in _TOPICS[topic][1].finditer(text or "")}
+    if topic in _OUTDOOR_TOPICS and _WHEN_RE.search(text or "") and _GOING_OUT_RE.search(text or ""):
+        hits.add("<outdoor-routine>")
+    return hits
 
 
 def is_advice_request(message: str) -> bool:
@@ -260,7 +286,7 @@ def select(message: str, rows: list) -> Hop:
             continue
         best: Optional[tuple[int, str]] = None
         for t in topics:
-            hits = {m.group(0).lower() for m in _TOPICS[t][1].finditer(text)}
+            hits = fact_hits(t, text)
             if hits and (best is None or len(hits) > best[0]):
                 best = (len(hits), t)
         if best is None:

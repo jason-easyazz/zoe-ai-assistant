@@ -1746,7 +1746,8 @@ class MemoryService:
 
     async def load_durable_for_hop(self, user_id: str) -> list[MemoryRef]:
         """The OWNER's durable facts, newest first, for the personalisation hop (``personalisation_hop``): approved rows
-        the owner stated (``memory_authority`` class ``user_stated`` or above), never a mood or a recorded change, never
+        the owner stated (``memory_authority`` class ``user_stated`` or above, or ``user_stated_derived``: a paraphrase the
+        owner's own turn supports), never a mood or a recorded change, never
         a pasted row, and only rows this user owns (a family-visible row another member wrote is not theirs). NO age
         cut and no rank cut: ``load_for_prompt`` ranks by a 70-day decay, which is exactly what buries "I work night
         shifts" under last week's chatter. Read-only, no access ticks. Raises nothing the caller must handle: a
@@ -1775,7 +1776,13 @@ class MemoryService:
             if _own_words.is_pasted_row(md) or _own_words.instruction_shaped(ref.text or ""):
                 continue
             try:
-                if _auth.row_rank(md, ref.text) < _auth.USER_RANK:
+                # the owner's words (``user_stated``+) OR a model's paraphrase the owner's OWN turn supports
+                # (``user_stated_derived``, e.g. "User walks their kelpie Juniper ... at 6am." from "I walk OUR kelpie ...":
+                # the digest does not promote a paraphrase that changes a word, so it stays rank 3 - and was dropped here,
+                # which is why the 6am walk never reached the hop: S9b 2026-10-09 rows=3 facts=0). The hop only SHAPES advice;
+                # nothing here overrides anything, so the authority wall (who may supersede whom) is untouched. An unverified
+                # speaker (2) and every model-only class (<2) stay out.
+                if _auth.row_rank(md, ref.text) < _auth.DERIVED_RANK:
                     continue
             except Exception:  # noqa: BLE001 - an unclassifiable row is not provably the owner's
                 continue
