@@ -681,10 +681,13 @@ class Z0Arm(Arm):
         try:
             with self._ctl():
                 for n, chunk in enumerate(nm.chunk_turns(turns, nm.Config(ctx_tokens=cfg.ctx_tokens, chunk_tokens=self.night_chunk_tokens).chunk_budget)):
-                    prompt = nm.MOMENTS_USER.format(lines="\n".join(nm._line(f"m{i}", t) for i, t in enumerate(chunk, 1)), cap=nm.MAX_MOMENTS_PER_CHUNK)
+                    # K12 measures the CALIBRATION of the labels, not the pass's selectivity (K6): every labelled line is a moment worth labelling, so the cap is the
+                    # number of lines (with the production cap of 8, twelve labelled lines could never reach the cell's 75 % matched bar: 8 / 12 = 67 %)
+                    cap = max(nm.MAX_MOMENTS_PER_CHUNK, len(chunk))
+                    prompt = nm.MOMENTS_USER.format(lines="\n".join(nm._line(f"m{i}", t) for i, t in enumerate(chunk, 1)), cap=cap)
                     calls += 1
-                    raw = self._run(nm._complete([{"role": "system", "content": nm.MOMENTS_SYSTEM}, {"role": "user", "content": prompt}], nm.MOMENT_MAX_TOKENS, cfg, usage))
-                    for m in nm.parse_moments(raw, chunk, n, counts) or []:
+                    raw = self._run(nm._complete([{"role": "system", "content": nm.MOMENTS_SYSTEM}, {"role": "user", "content": prompt}], nm.moment_max_tokens(cap), cfg, usage))
+                    for m in nm.parse_moments(raw, chunk, n, counts, cap) or []:
                         out.append({"quote": m.quote, "kind": m.kind, "feeling": m.feeling, "weight": m.weight})
         finally:
             nm.set_llm(prev)
