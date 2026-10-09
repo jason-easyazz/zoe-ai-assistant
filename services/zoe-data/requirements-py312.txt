@@ -27,7 +27,7 @@
 # cap, APScheduler 3.10.4 pickled-pytz jobstore, chromadb 0.6.3 palace format,
 # aiortc/av moving together) are not repeated; they still apply.
 # ═══════════════════════════════════════════════════════════════════════════
-fastapi==0.141.1
+fastapi==0.142.2
 # 0.53.0 since 2026-09-27 (voice path, replay-gated). From 0.50 `--ws auto`
 # resolves to uvicorn.protocols.websockets.websockets_sansio_impl — the SAME
 # `websockets` library (16.1.1 below; `wsproto` is NOT installed) driven through
@@ -35,18 +35,18 @@ fastapi==0.141.1
 # websockets` restores the legacy impl with no code change (rollback lever). Why
 # it moved, and the real-socket A/B that proved it: see requirements.txt (whose
 # 3.10 rollback lane deliberately stays on 0.49.0 — STEP_UP_DIVERGENCE).
-uvicorn[standard]==0.53.0
+uvicorn[standard]==0.54.0
 pydantic==2.13.5
 aiosqlite==0.22.1
-asyncpg==0.31.0
+asyncpg==0.32.0
 alembic==1.20.0
 psycopg2-binary==2.9.13
 python-multipart==0.0.32
 httpx==0.28.1
-aiohttp==3.14.3
+aiohttp==3.14.4
 # 16.1.1 has a cp312 wheel; 17.x (>=3.11 only) is a separate replay-gated step.
 websockets==16.1.1
-PyJWT==2.15.0
+PyJWT==2.15.1
 # 1.0.0 since 2026-09-27: emitted SSE is byte-identical to 0.1.19 (see requirements.txt).
 ag-ui-protocol==1.0.0
 python-json-logger==4.2.0
@@ -72,7 +72,7 @@ chromadb==1.5.9
 # in the first cut; numpy 2 is the runbook's step 2, gated on its own.
 numpy==1.26.4
 # 1.23.2 ships a cp312 wheel; 1.30.0 (>=3.11 only) is the runbook's step-up.
-onnxruntime==1.23.2
+onnxruntime==1.30.0
 edge-tts==7.2.8
 # py3-none aarch64 wheels (manylinux_2_31 and _2_34; glibc 2.35 takes either):
 # ABI-independent (ctypes-loaded .so), the SAME wheel the 3.10 box runs — the STT
@@ -81,17 +81,17 @@ edge-tts==7.2.8
 # first load the venv fetches 0.1.3's own model bundle, `quantized_26_07_30`
 # (~/.cache/moonshine_voice/…/medium-streaming-en/) — the one the box already uses.
 moonshine-voice==0.1.3
-transformers==5.17.0
+transformers==5.19.0
 fastembed==0.8.1
 # scikit-learn/joblib: NOT imported at runtime (router heads are numpy since
 # 2026-09-27, router_heads_numpy.py). Installed anyway as librosa requirements
 # (Resemblyzer block below); held at the training pins while the one-release
 # ZOE_ROUTER_HEADS_BACKEND=joblib fallback can still unpickle the .joblib heads.
-scikit-learn==1.7.2
-joblib==1.5.3
-APScheduler==3.10.4
+scikit-learn==1.9.1
+joblib==1.6.0
+APScheduler==3.11.3
 tzlocal==2.1
-SQLAlchemy==2.0.54
+SQLAlchemy==2.1.3
 pywebpush==2.5.0
 py-vapid==1.9.4
 # DIRECT, UNGUARDED module-level imports (memory_metrics.py, voice_metrics.py,
@@ -120,7 +120,7 @@ torch @ https://download.pytorch.org/whl/cpu/torch-2.14.0%2Bcpu-cp312-cp312-many
 # librosa 1.0.0 (>=3.12 only, API removals) is what an uncapped resolve picks on
 # this interpreter; Resemblyzer was written against 0.x, so it is held.
 librosa==0.11.0
-scipy==1.17.1
+scipy==1.18.1
 
 # ── WebRTC / LiveKit ──────────────────────────────────────────────────────
 livekit==1.1.20
@@ -135,6 +135,6 @@ av==17.1.0
 
 # ── A2A federation + skill discovery + web search ─────────────────────────
 ddgs==9.16.0
-cloakbrowser==0.3.28
+cloakbrowser==0.5.12
 PyYAML==6.0.3
 segno==1.6.6
