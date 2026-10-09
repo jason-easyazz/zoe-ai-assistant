@@ -3,6 +3,7 @@
 
 "Forgotten means forever": the forget ledger (hashes, no names) knows which spans of a text are forgotten. This applies it to
   * the palace JSON exports  ~/.zoe/memory-exports/*.json(.gz)  (nightly)  and  ~/.zoe/palace-backups/*.json  (every compaction),
+  * with ``--chat-hours N``, the verbatim ``chat_messages`` of every user with a forgotten entry (the one-time scrub of the live store),
   * optionally the brain's durable conversation store (``--flue-db``: the Flue sidecar's SQLite; the sidecar must be STOPPED).
 Each file is rewritten atomically (0600) only when a span was found and the result still verifies (record counts and ids unchanged);
 a file that would stop verifying is left as it is and reported. Nothing else in a file changes.
@@ -15,6 +16,7 @@ Run with the service environment (the database and ``ZOE_FORGET_LEDGER_SALT``) l
     python3 scripts/maintenance/redact_backups.py                       # dry run: what would change
     python3 scripts/maintenance/redact_backups.py --apply
     python3 scripts/maintenance/redact_backups.py --apply --delete-pre-compact-tars
+    python3 scripts/maintenance/redact_backups.py --chat-hours 100000 --apply     # the whole chat history, once
     python3 scripts/maintenance/redact_backups.py --flue-db labs/flue-zoe-brain-2x/data/zoe-brain.db --apply --i-stopped-the-brain
 """
 from __future__ import annotations
@@ -116,13 +118,16 @@ def redact_flue_db(db_path: Path, red, *, apply: bool) -> dict:
     return counts
 
 
-async def _redactor():
+async def _redactor(chat_hours: int = 0, apply: bool = False):
+    """The ledger as a redactor and, with ``chat_hours``, the chat sweep: ``(redactor, {user: (rows, spans)})``."""
     import forget_redact
     from db_pool import close_pool, init_pool
 
     await init_pool()
     try:
-        return await forget_redact.load_redactor()
+        red = await forget_redact.load_redactor()
+        chat = {u: await forget_redact.sweep_transcripts(u, hours=chat_hours, apply=apply) for u in red.sets} if chat_hours else {}
+        return red, chat
     finally:
         await close_pool()
 
@@ -132,6 +137,7 @@ def main(argv: "list[str] | None" = None) -> int:
     ap.add_argument("--dir", action="append", default=None, help="a directory of exports (default: the two above)")
     ap.add_argument("--apply", action="store_true", help="rewrite the files (default: count only)")
     ap.add_argument("--delete-pre-compact-tars", action="store_true", help="remove mempalace-pre-compact-*.tar from the directories")
+    ap.add_argument("--chat-hours", type=int, default=0, help="also redact the users' chat_messages from the last N hours (100000 = all)")
     ap.add_argument("--flue-db", default="", help="the Flue sidecar SQLite to redact (needs --i-stopped-the-brain with --apply)")
     ap.add_argument("--i-stopped-the-brain", action="store_true", help="acknowledge the Flue sidecar is stopped (it holds its own copy in memory)")
     args = ap.parse_args(argv)
@@ -139,10 +145,12 @@ def main(argv: "list[str] | None" = None) -> int:
         print("REFUSED: stop the brain's Flue sidecar first, then pass --i-stopped-the-brain", file=sys.stderr)
         return 2
     try:
-        red = asyncio.run(_redactor())
+        red, chat = asyncio.run(_redactor(args.chat_hours, args.apply))
     except Exception as exc:  # noqa: BLE001
         print(f"cannot load the forget ledger ({type(exc).__name__}): load the service environment", file=sys.stderr)
         return 1
+    for u, (rows, spans) in sorted(chat.items()):
+        print(json.dumps({"chat_messages": {"user": u, "rows": rows, "spans": spans}}, sort_keys=True))
     dirs = [Path(os.path.expanduser(d)) for d in (args.dir or DEFAULT_DIRS)]
     bad = 0
     for d in dirs:

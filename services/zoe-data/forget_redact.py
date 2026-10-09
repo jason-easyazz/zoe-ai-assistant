@@ -115,7 +115,7 @@ async def redact_transcripts(user_id: str, name: str, *, db=None) -> "tuple[int,
     return rows, spans
 
 
-async def sweep_transcripts(user_id: str, *, hours: int = 72, db=None) -> "tuple[int, int]":
+async def sweep_transcripts(user_id: str, *, hours: int = 72, db=None, apply: bool = True) -> "tuple[int, int]":
     """Redact, by the LEDGER alone (exact words, never a near spelling - that is the owner's call), the owner's recent
     ``chat_messages`` that still name a forgotten entity: the reply saved after the forget turn, a later mention. Run by the nightly
     digest before it reads the day; a no-op for a user with nothing forgotten. Returns ``(rows, spans)``; raises on a store failure."""
@@ -137,16 +137,17 @@ async def sweep_transcripts(user_id: str, *, hours: int = 72, db=None) -> "tuple
             found = await mf.spans(user_id, str(content or ""), near=False)
             if found:
                 new, n = fm.redact(str(content), found)
-                await db.execute("UPDATE chat_messages SET content = ? WHERE id = ?", (new, rid))
+                if apply:
+                    await db.execute("UPDATE chat_messages SET content = ? WHERE id = ?", (new, rid))
                 rows += 1
                 spans += n
         if len(page) < _PAGE * 5:
             break
         after = str(page[-1][0])
     commit = getattr(db, "commit", None)
-    if rows and callable(commit):
+    if rows and apply and callable(commit):
         await commit()
-    if rows:
+    if rows and apply:
         logger.info("FORGET_REDACT user=%s rows=%d spans=%d (nightly sweep)", user_id, rows, spans)
     return rows, spans
 

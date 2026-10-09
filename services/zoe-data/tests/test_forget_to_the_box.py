@@ -284,6 +284,10 @@ async def test_w2_the_nightly_sweep_redacts_by_the_ledger_alone(ledger_env, chat
     assert (rows, spans) == (3, 4) and got["m6"][3] == "I have forgotten [forgotten]."
     assert got["m4"][3] == "Marisal sent the photos" and got["m5"][3] == "my own friend Marisol is different"
     assert (await forget_redact.sweep_transcripts(USER, hours=since_hours, db=chat_db)) == (0, 0)      # idempotent
+    await chat_db.execute("UPDATE chat_messages SET content = 'dry Marisol' WHERE id = 'm6'")
+    assert (await forget_redact.sweep_transcripts(USER, hours=since_hours, db=chat_db, apply=False)) == (1, 1)   # the dry run counts...
+    assert (await _chat(chat_db))["m6"][3] == "dry Marisol"                                              # ...and changes nothing
+    await forget_redact.sweep_transcripts(USER, hours=since_hours, db=chat_db)
     await chat_db.execute("INSERT INTO chat_messages (id, session_id, role, content, created_at) VALUES "
                           "('m7', 's1', 'assistant', 'and again Marisol', datetime('now'))")
     await md._load_todays_messages(USER, chat_db)                                             # the digest reads the day: the hook redacts first
