@@ -813,30 +813,49 @@ def test_the_night_mind_entry_point_is_used_as_soon_as_it_exists_with_the_served
     w, host, _ = make(tmp_path, argv=["--ctx", "32768"], cfg_kw={"night_mind_script": script})
     assert w.run() == nw.EXIT_OK, w.outcome
     nm = next(j for j in host.jobs_run if j["name"] == "zoe-night-mind.py")
-    assert nm["argv"][2:] == ["--model-url", "http://127.0.0.1:11500/v1", "--ctx-tokens", "32768", "--all-members", "--decode-tok-s", "4.20"]
+    assert nm["argv"][2:] == ["--model-url", "http://127.0.0.1:11500/v1", "--ctx-tokens", "32768", "--all-members", "--decode-tok-s", "4.20", "--prefill-tok-s", "120.5"]     # both measured rates
     assert [j["name"] for j in host.jobs_run][:3] == ["night_digest.py", "zoe-nightly-dreaming.py", "zoe-night-mind.py"]
     assert not any(r["name"] == "night_mind" and r["backend"] == "4B" for r in w.jobs)                  # no 4B fallback for the new pass
-    custom = nw.build_jobs(nw.NightCfg(night_mind_cmd="python /x/nm.py --u {model_url} --c {ctx_tokens} --t {decode_tps}", night_mind_script=tmp_path / "no.py"), 16384, 11.5)
-    assert custom[-1].argv == ["python", "/x/nm.py", "--u", "http://127.0.0.1:11500", "--c", "16384", "--t", "11.50"]
+    custom = nw.build_jobs(nw.NightCfg(night_mind_cmd="python /x/nm.py --u {model_url} --c {ctx_tokens} --t {decode_tps} --p {prefill_tps}", night_mind_script=tmp_path / "no.py"), 16384, 11.5, 136.0)
+    assert custom[-1].argv == ["python", "/x/nm.py", "--u", "http://127.0.0.1:11500", "--c", "16384", "--t", "11.50", "--p", "136.0"]
+    script2 = tmp_path / "nm2.py"
+    script2.write_text("# stand-in")
+    only_decode = nw.build_jobs(nw.NightCfg(night_mind_script=script2), 16384, 3.62)[-1].argv
+    assert "--decode-tok-s" in only_decode and "--prefill-tok-s" not in only_decode                 # no probe result for prefill: the pass keeps its own default
     assert nw.build_jobs(nw.NightCfg(night_mind_script=tmp_path / "no.py"))[-1].skip_reason.startswith("no.py not found")
 
 
 def test_the_trial_also_scores_the_night_mind_cells_when_the_entry_point_exists(tmp_path):
+    _trial_cells(tmp_path, pretty=True)
+
+
+def test_the_cells_object_is_read_from_the_compact_one_line_stdout_too(tmp_path):
+    _trial_cells(tmp_path, pretty=False)
+
+
+def _trial_cells(tmp_path, *, pretty):
     script = tmp_path / "zoe-night-mind.py"
     script.write_text("# stand-in")
     w, host, cfg = make(tmp_path, argv=["--trial"], start=at(3, 5), cfg_kw={"night_mind_script": script})
     real = host.run_watched
+    cells_argv: list = []
 
     def rw(argv, timeout, env, tick, log_path, interval=5.0):
         if "--cells" in argv:
+            cells_argv.append(list(argv))
             host.cmds.append((list(argv), True))
             log_path.parent.mkdir(parents=True, exist_ok=True)
-            log_path.write_text("log noise\n" + json.dumps({"status": "ok", "cells": {"K1": "PASS", "K6": "FAIL", "pass": 1, "fail": 1}}) + "\n")
+            obj = {"status": "ok", "model": "12B", "members": [], "totals": {"calls": 9}, "cells": {"K1": "PASS", "K6": "FAIL", "pass": 1, "fail": 1, "k1": {"judged": 4}}}
+            # the real log: stderr lines (some with braces) around the CLI's stdout object - indented over many lines (the old CLI) or one compact line (the new one)
+            log_path.write_text("NIGHT_MIND user=- status={ok}\nloading {model}\n" + (json.dumps(obj, indent=2, sort_keys=True) if pretty else json.dumps(obj)) + "\ndone {}\n")
             return bk.Result(0, "")
         return real(argv, timeout, env, tick, log_path, interval)
     host.run_watched = rw
     assert w.run() == nw.EXIT_OK, w.outcome
     assert w.rec["trial"]["12B"]["night_mind_cells"]["K6"] == "FAIL"
+    twelve = cells_argv[0]                                                                       # the 12B phase: the cells get the measured rates (they used the 4B's, 2026-10-09)
+    assert twelve[twelve.index("--decode-tok-s") + 1] == "4.20" and twelve[twelve.index("--prefill-tok-s") + 1] == "120.5" and twelve[twelve.index("--model-name") + 1] == "12B"
+    assert all("--decode-tok-s" not in a for a in cells_argv[1:])                                # the 4B@32k phase is not sized by the 12B's speed
     assert "| K6 | FAIL | FAIL |" in next(cfg.report_dir.glob("*-trial*.md")).read_text()
 
 

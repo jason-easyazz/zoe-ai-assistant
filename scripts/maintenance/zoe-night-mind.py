@@ -17,23 +17,28 @@ Flags
   --ctx-tokens N       the server's context size (default 8192). The chunk budget derives from it: 2,400 turn-tokens at 8k, proportionally more
                        (16k -> 4,800, 32k -> 9,600), capped so prompt + output stay inside N.
   --chunk-tokens N     override the derived chunk budget.   --max-calls N   model calls per member per night (default 7 = 6 MOMENTS + 1 THREADS).
-  --decode-tok-s X     the server's measured decode rate (default 8.0; the HTTP timeout is prompt/650 + max_tokens/X + 20 s per call).
+  --decode-tok-s X     the server's measured decode rate (default 8.0, env ZOE_NIGHT_MIND_DECODE_TOK_S).
+  --prefill-tok-s X    the server's measured prompt rate (default 650, env ZOE_NIGHT_MIND_PREFILL_TOK_S). The HTTP budget of EVERY call (members and --cells alike) is
+                       prompt_tokens/prefill + max_tokens/decode + 20 s, at least 30 s; a timeout is logged as ``status=llm_timeout budget_s=...``. The 12B window measured
+                       prefill 136 / decode 3.62: pass both or the 4B's constants under-size the budget ~2x.
   --user ID | --all-members   one member, or every chat-turn owner minus synthetic ids (--allow-synthetic keeps the demo ids).
   --date YYYY-MM-DD    reflect on that Zoe-local day (00:00-24:00). Default: the digest's rolling lookback (the last ~30 h).
   --dry-run            run every call and check, write NOTHING (mode shadow). Without it: mode enforce. (--mode shadow|enforce overrides.)
   --transcript-file F  synthetic runs without Postgres: a JSON list of {"id","text","at"} (turns of ONE member, given by --user).
   --cells              do not touch any member: score the reflection cells K1-K12 (the lab, scratch stores) against --model-url and print the counts.
 Output
-  ONE JSON object on stdout (logs go to stderr):
+  ONE JSON object on stdout, ONE compact line (``--pretty`` indents it; the window parses either), logs go to stderr:
     {"status": "ok"|"nothing_to_do"|"llm_unreachable"|"error", "mode", "dry_run", "model_url", "model", "ctx_tokens", "chunk_budget", "max_calls", "date",
      "members": [{"user_id", "status", "turns_in", "turns_dropped_routine", "turns_skipped_cap", "chunks", "calls", "calls_invalid", "moments_proposed",
                   "moments_verified", "moments_held", "observations_written", "observations_pending", "threads_created", "threads_updated",
                   "prompt_tokens", "completion_tokens", "wall_s", "written", "skipped_reason"?, "error"?}],
      "totals": {"members", "calls", "prompt_tokens", "completion_tokens", "wall_s", "observations_written", "observations_pending", "calls_invalid",
-                "completion_tokens_per_wall_s"},
+                "completion_tokens_per_wall_s", "members_written"},
+     "members_written": N, "members_total": M,      (members whose pass committed rows / members the run reached: partial completion is visible here)
      "cells": {"K1": "PASS", ..., "pass", "fail", "skip", "error", "k1": {"judged", "true", "false"}}      (only with --cells)}
-Exit codes: 0 ok / nothing to do, 1 error, 2 the model is unreachable (NOTHING was written: the pass computes the whole night in memory and commits at the end,
-and probes the server first).
+Exit codes: 0 ok / nothing to do, 1 error, 2 the model is unreachable. The "nothing was written" guarantee is PER MEMBER: each member's night is computed in memory
+and committed at the end of that member, and the server is probed first. With --all-members an earlier member's committed night stays when a later member
+fails or the server drops, so exit 2 / 1 can follow earlier writes: read ``members_written`` / ``members_total`` in the JSON (and stderr's exit-2 line) for how far it got.
 Never prints environment, tokens or the text of what the owner said (counts and ids only).
 """
 from __future__ import annotations
@@ -58,6 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--chunk-tokens", type=int, default=0)
     ap.add_argument("--max-calls", type=int, default=0)
     ap.add_argument("--decode-tok-s", type=float, default=0.0)
+    ap.add_argument("--prefill-tok-s", type=float, default=0.0)
     who = ap.add_mutually_exclusive_group()
     who.add_argument("--user", default="")
     who.add_argument("--all-members", action="store_true")
@@ -69,6 +75,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--transcript-file", default="")
     ap.add_argument("--cells", action="store_true")
     ap.add_argument("--seed", default="zmb-v1", help="--cells: the corpus seed")
+    ap.add_argument("--pretty", action="store_true", help="indent the stdout JSON for reading by eye (default: ONE compact line, which is what the 12B window parses)")
     return ap
 
 
@@ -167,28 +174,41 @@ def totals(members: "list[dict]") -> dict:
     return t
 
 
-def run_cells(args, url: str) -> dict:
+def written_tally(members: "list[dict]") -> "tuple[int, int]":
+    """(members whose pass committed rows, members reached). ``written`` is the pass's own count of committed observations."""
+    done = sum(1 for m in members if int(m.get("written") or 0) > 0 or int(m.get("observations_written") or 0) > 0)
+    return done, len(members)
+
+
+def run_cells(args, url: str, cfg) -> dict:
     """Score the reflection cells K1-K12 (the lab: scratch stores, synthetic household) against the model at ``url``. Touches no member."""
     sys.path.insert(0, str(REPO / "scripts" / "perf"))
     from zmb import cells as cellmod, spec, world
     from zmb.arms.z0 import Z0Arm
 
     base = url[:-3] if url.rstrip("/").endswith("/v1") else url
-    arm = Z0Arm(name="Z0n", night=True, night_url=base.rstrip("/"), night_model=args.model_name, night_ctx=args.ctx_tokens)
+    arm = Z0Arm(name="Z0n", night=True, night_url=base.rstrip("/"), night_model=args.model_name, night_ctx=args.ctx_tokens,
+                night_decode_tok_s=cfg.decode_tok_s, night_prefill_tok_s=cfg.prefill_tok_s)
     w = world.make_world(args.seed)
     out: dict = {}
+    reasons: dict = {}
     k1: dict = {}
     try:
         for c in (c for c in spec.load_cells() if c.axis == "reflection"):
             o = cellmod.run_cell(c.rendered(w), w, arm)
-            out[c.id.split(".")[0] + ("f" if c.id.endswith("flat_week") else "")] = o.verdict
+            key = c.id.split(".")[0] + ("f" if c.id.endswith("flat_week") else "")
+            out[key] = o.verdict
+            if o.verdict in ("ERROR", "SKIP") and o.reason:
+                reasons[key] = o.reason                           # an ERROR names WHY (e.g. ``... status=llm_timeout budget_s=148.0``), never a bare verdict
             if c.id.startswith("K1."):
                 ev = ((o.evidence.get("probes") or [{}])[0]).get("observations_judged") or {}
                 k1 = {"judged": ev.get("decidable", ev.get("n")), "true": ev.get("true"), "false": ev.get("false"), "observations": ev.get("observations")}
     finally:
+        totals_seen = dict(arm.night_totals)
         arm.close()
     verdicts = list(out.values())
-    out.update({"pass": verdicts.count("PASS"), "fail": verdicts.count("FAIL"), "skip": verdicts.count("SKIP"), "error": verdicts.count("ERROR"), "k1": k1})
+    out.update({"pass": verdicts.count("PASS"), "fail": verdicts.count("FAIL"), "skip": verdicts.count("SKIP"), "error": verdicts.count("ERROR"), "k1": k1,
+                "reasons": reasons, "model_totals": totals_seen})
     return out
 
 
@@ -211,7 +231,8 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
 
     url = _loopback(args.model_url or "", args.allow_remote) if args.model_url else ""
     cfg = nm.config_from_env(url=url, model=args.model_name, ctx_tokens=args.ctx_tokens, max_calls=args.max_calls or None,
-                             chunk_tokens=args.chunk_tokens or None, decode_tok_s=args.decode_tok_s or None)
+                             chunk_tokens=args.chunk_tokens or None, decode_tok_s=args.decode_tok_s or None,
+                             prefill_tok_s=args.prefill_tok_s or None)
     mode = args.mode or ("shadow" if args.dry_run else "enforce")
     summary: dict = {"status": "ok", "mode": mode, "dry_run": mode == "shadow", "model_url": cfg.url, "model": cfg.model, "ctx_tokens": cfg.ctx_tokens,
                      "chunk_budget": cfg.chunk_budget, "max_calls": cfg.max_calls, "date": args.date or None, "members": [], "totals": {}}
@@ -221,12 +242,15 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
         return 2, summary
     t0 = time.monotonic()
     if args.cells:
-        summary["cells"] = await asyncio.to_thread(run_cells, args, cfg.url + "/v1")           # the lab arm drives its own event loop: not inside this one
-        summary["totals"] = {**totals([]), "wall_s": round(time.monotonic() - t0, 2)}
+        summary["cells"] = await asyncio.to_thread(run_cells, args, cfg.url + "/v1", cfg)      # the lab arm drives its own event loop: not inside this one
+        mt = summary["cells"].get("model_totals") or {}
+        summary["totals"] = {**totals([mt]), "members": 0, "wall_s": round(time.monotonic() - t0, 2)}      # the counters of every call the cells made, aggregated
         return 0, summary
     res = await run_members(args, cfg, mode)
     summary["members"] = res["members"]
     summary["totals"] = totals(res["members"])
+    summary["members_written"], summary["members_total"] = written_tally(res["members"])
+    summary["totals"]["members_written"] = summary["members_written"]
     statuses = {m.get("status") for m in res["members"]}
     if "llm_unreachable" in statuses:
         summary["status"] = "llm_unreachable"
@@ -243,8 +267,12 @@ def main(argv: "list[str] | None" = None) -> int:
     import logging
 
     logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(message)s")
+    pretty = bool(argv and "--pretty" in argv) if argv is not None else "--pretty" in sys.argv[1:]
     code, summary = asyncio.run(amain(argv))
-    print(json.dumps(summary, indent=2, sort_keys=True))
+    if code == 2 and summary.get("members_written"):
+        print(f"exit 2: the model went away after {summary['members_written']} of {summary.get('members_total')} members had committed their night "
+              f"(those rows stay; the guarantee is per member)", file=sys.stderr)
+    print(json.dumps(summary, indent=2 if pretty else None, sort_keys=True, separators=None if pretty else (",", ":")))
     return code
 
 

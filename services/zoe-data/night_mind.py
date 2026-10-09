@@ -67,6 +67,7 @@ MAX_CALLS_ENV = "ZOE_NIGHT_MIND_MAX_CALLS"
 CHUNK_ENV = "ZOE_NIGHT_MIND_CHUNK_TOKENS"
 CTX_ENV = "ZOE_NIGHT_MIND_CTX_TOKENS"
 DECODE_ENV = "ZOE_NIGHT_MIND_DECODE_TOK_S"
+PREFILL_ENV = "ZOE_NIGHT_MIND_PREFILL_TOK_S"
 SCHEMA_ENV = "ZOE_NIGHT_MIND_SCHEMA"
 
 WRITER = "night_mind"
@@ -96,7 +97,9 @@ SHOW_LINES = 3
 MORNING_DAYS = 3
 STALE_CARD_HOURS = 36
 DEFAULT_DECODE_TOK_S = 8.0          # the run-2 measurement on this brain; the 12B is slower (the CLI measures and overrides)
-PREFILL_TOK_S = 650.0
+PREFILL_TOK_S = 650.0               # the live 4B's prompt rate; the 12B prefills at ~136 tok/s (2026-10-09 window): the window MEASURES it and passes it (--prefill-tok-s / PREFILL_ENV)
+TIMEOUT_MARGIN_S = 20.0             # queueing / tokenisation / template slack on top of prefill + decode
+TIMEOUT_FLOOR_S = 30.0              # no call is ever given less than this, however fast the rates claim the model is
 _CACHE_TTL_S = 90.0
 
 #: the bench seam: names of faults the lab switches ON to prove a cell turns red (``zmb.lab_driver`` controls). Empty in production, always.
@@ -161,7 +164,13 @@ class Config:
     url: str = ""
     model: str = ""
     decode_tok_s: float = DEFAULT_DECODE_TOK_S
+    prefill_tok_s: float = PREFILL_TOK_S
     schema: bool = False
+
+    def timeout_for(self, prompt_tokens: int, max_tokens: int) -> float:
+        """THE per-call HTTP budget for this run: ``timeout_for`` at this config's two rates. Every model call in the layer (the member pass, the bench's cells,
+        the K12 labelling) gets its timeout from here and nowhere else."""
+        return timeout_for(prompt_tokens, max_tokens, self.decode_tok_s, self.prefill_tok_s)
 
     @property
     def chunk_budget(self) -> int:
@@ -175,7 +184,7 @@ def default_chunk_tokens(ctx_tokens: int) -> int:
 
 
 def config_from_env(*, url: str = "", model: str = "", ctx_tokens: Optional[int] = None, max_calls: Optional[int] = None,
-                    chunk_tokens: Optional[int] = None, decode_tok_s: Optional[float] = None) -> Config:
+                    chunk_tokens: Optional[int] = None, decode_tok_s: Optional[float] = None, prefill_tok_s: Optional[float] = None) -> Config:
     ctx = int(ctx_tokens or _int_env(CTX_ENV, 0, 0, 262144) or _int_env("ZOE_BRAIN_SLOT_TOKENS", BASE_CTX, 2048, 262144))
     chunk = int(chunk_tokens or _int_env(CHUNK_ENV, 0, 0, 20000) or default_chunk_tokens(ctx))
     return Config(
@@ -183,6 +192,7 @@ def config_from_env(*, url: str = "", model: str = "", ctx_tokens: Optional[int]
         url=_normalize_base(url or os.environ.get(URL_ENV) or os.environ.get("GEMMA_SERVER_URL") or ""),
         model=model or os.environ.get(MODEL_ENV) or os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
         decode_tok_s=float(decode_tok_s or _float_env(DECODE_ENV, DEFAULT_DECODE_TOK_S, 0.5, 200.0)),
+        prefill_tok_s=max(5.0, float(prefill_tok_s or _float_env(PREFILL_ENV, PREFILL_TOK_S, 5.0, 20000.0))),
         schema=(os.environ.get(SCHEMA_ENV) or "").strip().lower() in ("1", "true", "yes", "on"))
 
 
@@ -197,23 +207,41 @@ def set_config(cfg: "Optional[Config]") -> "Optional[Config]":
     return prev
 
 
-def timeout_for(prompt_tokens: int, max_tokens: int, decode_tok_s: float) -> float:
-    """The HTTP timeout for ONE call: prefill + the output cap at the measured decode rate + 20 s of slack (the nightly extractors' flat 45 s is shorter than
-    a 500-token output at 8 tok/s, which takes ~62 s)."""
-    return round(prompt_tokens / PREFILL_TOK_S + max_tokens / max(decode_tok_s, 0.5) + 20.0, 1)
+def timeout_for(prompt_tokens: int, max_tokens: int, decode_tok_s: float, prefill_tok_s: float = PREFILL_TOK_S, *, margin_s: Optional[float] = None) -> float:
+    """The HTTP budget for ONE call, the single formula the whole layer uses: ``prompt_tokens / prefill_rate + max_tokens / decode_rate + margin``, never below
+    ``TIMEOUT_FLOOR_S``. Both rates are the server's MEASURED ones (the night window probes them and passes ``--decode-tok-s`` / ``--prefill-tok-s``): the 12B prefills
+    at ~136 tok/s and decodes at ~3.6, so a 3,000-token prompt with a 640-token cap needs ~220 s, not the ~100 s the 4B's constants give."""
+    return round(max(TIMEOUT_FLOOR_S, prompt_tokens / max(prefill_tok_s, 5.0) + max_tokens / max(decode_tok_s, 0.5) + (TIMEOUT_MARGIN_S if margin_s is None else margin_s)), 1)
 
 
 def observe_decode_rate(cfg: "Config", prompt_tokens: int, completion_tokens: int, seconds: float) -> None:
-    """A model slower than the configured decode rate (the 12B is) gets LONGER timeouts from then on, never shorter: after a call that generated >= 100 tokens the
-    configured rate drops to 90% of what that call measured if that is lower (prefill taken off at ``PREFILL_TOK_S``). Pure but for ``cfg``."""
+    """A model slower than the configured decode rate gets LONGER timeouts from then on, never shorter: after a call that generated >= 100 tokens the configured rate
+    drops to 90% of what that call measured if that is lower (prefill taken off at ``cfg.prefill_tok_s``). A SAFETY NET only: the first calls of a run use the rates
+    they were given (an answer that never arrives is never observed), so the window must pass the measured rates. Calls within one Config run one after the other and the
+    update is a monotone ``min``, so it cannot race. Pure but for ``cfg``."""
     if completion_tokens < 100 or seconds <= 0:
         return
-    gen_s = max(seconds - prompt_tokens / PREFILL_TOK_S, 0.1)
+    gen_s = max(seconds - prompt_tokens / max(cfg.prefill_tok_s, 5.0), 0.1)
     cfg.decode_tok_s = max(0.5, min(cfg.decode_tok_s, 0.9 * completion_tokens / gen_s))
 
 
 class ModelUnreachable(RuntimeError):
-    """A transport failure: the server did not answer. The member-night is abandoned with nothing written."""
+    """A transport failure: the server did not answer. The member-night is abandoned with nothing written. ``counts`` carries the counters of the calls made
+    so far (attached by the call wrapper), so an abandoned night still reports what it spent."""
+
+    def __init__(self, *a: Any):
+        super().__init__(*a)
+        self.counts: "dict[str, int]" = {}
+
+
+class ModelTimeout(ModelUnreachable):
+    """The server accepted the call and did not answer within the computed budget. Names the budget and the rates it came from, so a slow model reads as a slow
+    model (an instrument setting) and not as a dead one."""
+
+    def __init__(self, budget_s: float, prompt_tokens: int, max_tokens: int, cfg: "Config"):
+        self.budget_s, self.prompt_tokens, self.max_tokens = budget_s, prompt_tokens, max_tokens
+        self.decode_tok_s, self.prefill_tok_s = cfg.decode_tok_s, cfg.prefill_tok_s
+        super().__init__(f"ReadTimeout budget_s={budget_s} (prompt~{prompt_tokens} tok @ {cfg.prefill_tok_s:g} tok/s + {max_tokens} tok @ {cfg.decode_tok_s:g} tok/s + {TIMEOUT_MARGIN_S:g} s)")
 
 
 #: the lab / test seam: ``async|sync (messages, max_tokens) -> str``. The bench's fake brain (``zmb.night_brain``) and the unit tests set it.
@@ -271,14 +299,16 @@ async def _complete(messages: list, max_tokens: int, cfg: Config, usage: "dict[s
     if schema is not None and cfg.schema:
         payload["response_format"] = {"type": "json_schema", "json_schema": {"name": "night_mind", "strict": True, "schema": schema}}
     prompt_est = sum(est_tokens(m["content"]) for m in messages)
-    timeout = timeout_for(prompt_est, max_tokens, cfg.decode_tok_s)
+    timeout = cfg.timeout_for(prompt_est, max_tokens)
     t_call = time.monotonic()
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=8.0)) as client:
             resp = await client.post(f"{cfg.url}/v1/chat/completions", json=payload)
         resp.raise_for_status()
         body = resp.json()
-    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.RemoteProtocolError, httpx.ReadError) as exc:
+    except httpx.ReadTimeout as exc:
+        raise ModelTimeout(timeout, prompt_est, max_tokens, cfg) from exc
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.RemoteProtocolError, httpx.ReadError) as exc:
         raise ModelUnreachable(type(exc).__name__) from exc
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code >= 500:
@@ -1131,7 +1161,13 @@ async def run_for_user(user_id: str, transcript: Any, svc: Any = None, *, now: "
     try:
         return await _run(user_id, transcript, svc, m, now, cfg, ledger_rows, night_date or local_day(now), res)
     except ModelUnreachable as exc:
-        logger.warning("NIGHT_MIND user=%s status=llm_unreachable kind=%s (nothing written)", user_id, exc)
+        if isinstance(exc, ModelTimeout):
+            logger.warning("NIGHT_MIND user=%s status=llm_timeout budget_s=%s prompt_tokens=%d max_tokens=%d decode_tok_s=%g prefill_tok_s=%g (nothing written)",
+                           user_id, exc.budget_s, exc.prompt_tokens, exc.max_tokens, exc.decode_tok_s, exc.prefill_tok_s)
+            res.update(llm_timeout=True, timeout_budget_s=exc.budget_s)
+        else:
+            logger.warning("NIGHT_MIND user=%s status=llm_unreachable kind=%s (nothing written)", user_id, exc)
+        res.update(exc.counts)                                   # what the abandoned night spent: calls made (the failed one included), tokens
         res.update(status="llm_unreachable", error=str(exc), written=0)
         return res
     except Exception as exc:  # noqa: BLE001 - the digest must go on
@@ -1173,7 +1209,11 @@ async def _run(user_id: str, transcript: Any, svc: Any, m: str, now: "_dt.dateti
     async def call(messages: list, max_tokens: int, schema: "Optional[dict]" = None) -> str:
         counts["calls"] += 1
         counts["prompt_tokens_est_max"] = max(counts["prompt_tokens_est_max"], sum(est_tokens(x["content"]) for x in messages))
-        return await _complete(messages, max_tokens, cfg, usage, schema=schema)
+        try:
+            return await _complete(messages, max_tokens, cfg, usage, schema=schema)
+        except ModelUnreachable as exc:
+            exc.counts = {**counts, **usage}
+            raise
 
     # ── stage 2: MOMENTS (one call per chunk) ─────────────────────────────────────────────────────────────────────
     moments: "list[Moment]" = []

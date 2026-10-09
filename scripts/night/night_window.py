@@ -69,6 +69,21 @@ RESTORE_ORDER = (BRAIN, KOKORO, ROUTER, ZOE_DATA)
 NIGHT_UNITS = {"llm": "zoe-night-12b.service", "clone4": "zoe-night-4b32k.service", "shim": "zoe-night-embed.service"}
 
 
+def _json_objects(text: str):
+    """Every JSON object in ``text``, whether it sits on one line or is indented across many (a log mixes stderr lines with the CLI's stdout object)."""
+    dec = json.JSONDecoder()
+    i = text.find("{")
+    while i != -1:
+        try:
+            v, end = dec.raw_decode(text, i)
+        except ValueError:
+            i = text.find("{", i + 1)
+            continue
+        if isinstance(v, dict):
+            yield v
+        i = text.find("{", end)
+
+
 def _json(text: str) -> dict:
     try:
         v = json.loads(text)
@@ -528,10 +543,10 @@ class JobSpec:
     skip_reason: str = ""
 
 
-def build_jobs(cfg: NightCfg, ctx_tokens: int = 16384, decode_tps: "Optional[float]" = None) -> "list[JobSpec]":
+def build_jobs(cfg: NightCfg, ctx_tokens: int = 16384, decode_tps: "Optional[float]" = None, prefill_tps: "Optional[float]" = None) -> "list[JobSpec]":
     """The night's jobs, in order: the digest first (reflection and dreaming read what it stores: ``zoe-nightly-dreaming`` documents its phase 1 as 'after fact
     extraction'), the dreaming cycle, then the night-mind pass. ``night_mind``: ``--night-mind-cmd`` / ``NIGHT_MIND_CMD`` wins (``{model_url}`` is the 12B's base URL,
-    ``{model_url_v1}`` the same with /v1, ``{ctx_tokens}`` the served context, ``{decode_tps}`` the measured decode speed); otherwise ``zoe-night-mind.py --all-members`` when
+    ``{model_url_v1}`` the same with /v1, ``{ctx_tokens}`` the served context, ``{decode_tps}`` / ``{prefill_tps}`` the measured decode / prefill speeds); otherwise ``zoe-night-mind.py --all-members`` when
     that file exists (its branch is not merged at the time of writing); otherwise it is reported as skipped, never faked."""
     t = cfg.job_timeout_s
     base = f"http://127.0.0.1:{cfg.port}"
@@ -540,11 +555,12 @@ def build_jobs(cfg: NightCfg, ctx_tokens: int = 16384, decode_tps: "Optional[flo
         "dreaming": JobSpec("dreaming", [cfg.py, str(REPO / "scripts" / "maintenance" / "zoe-nightly-dreaming.py"), "--skip-compaction"], t["dreaming"], fallback_4b=True),
     }
     tps = f"{decode_tps:.2f}" if decode_tps else "8.0"
+    pps = f"{prefill_tps:.1f}" if prefill_tps else "650.0"                 # the 4B's rate: only when the probe gave none
     if cfg.night_mind_cmd.strip():
-        cmd = (cfg.night_mind_cmd.replace("{model_url_v1}", base + "/v1").replace("{model_url}", base).replace("{ctx_tokens}", str(ctx_tokens)).replace("{decode_tps}", tps))
+        cmd = (cfg.night_mind_cmd.replace("{model_url_v1}", base + "/v1").replace("{model_url}", base).replace("{ctx_tokens}", str(ctx_tokens)).replace("{decode_tps}", tps).replace("{prefill_tps}", pps))
         jobs["night_mind"] = JobSpec("night_mind", shlex.split(cmd), t["night_mind"])
     elif cfg.night_mind_script.exists():
-        argv = [cfg.py, str(cfg.night_mind_script), "--model-url", base + "/v1", "--ctx-tokens", str(ctx_tokens), "--all-members"] + (["--decode-tok-s", tps] if decode_tps else [])
+        argv = [cfg.py, str(cfg.night_mind_script), "--model-url", base + "/v1", "--ctx-tokens", str(ctx_tokens), "--all-members"] + (["--decode-tok-s", tps] if decode_tps else []) + (["--prefill-tok-s", pps] if prefill_tps else [])
         jobs["night_mind"] = JobSpec("night_mind", argv, t["night_mind"])
     else:
         jobs["night_mind"] = JobSpec("night_mind", [], t["night_mind"], skip_reason=f"{cfg.night_mind_script.name} not found (night-mind v1 is not merged); set --night-mind-cmd / NIGHT_MIND_CMD to wire another entry point")
@@ -1062,7 +1078,7 @@ class NightWindow(bk.Window):
         model_name = os.path.basename(self.cfg.model_path(self.levers.model)) if self.levers else ""
         scale = digest_timeout_scale(self.speed.get("decode_tps"))
         self.event(f"model-call timeouts scaled x{scale} for the 12B's measured decode speed ({self.speed.get('decode_tps')} tok/s)")
-        for job in build_jobs(self.cfg, self.levers.ctx if self.levers else 16384, self.speed.get("decode_tps")):
+        for job in build_jobs(self.cfg, self.levers.ctx if self.levers else 16384, self.speed.get("decode_tps"), self.speed.get("prefill_tps")):
             self.guard()
             self.exec_job(job, "12B", self.cfg.port, model_name, scale)
 
@@ -1107,11 +1123,14 @@ class NightWindow(bk.Window):
             return {}
         log = cfg.night_dir / "logs" / f"{self.run_id}-trial-nm-{label.replace('@', '-')}.log"
         ctx = self.levers.ctx if label == "12B" and self.levers else 32768
-        argv = [cfg.py, str(cfg.night_mind_script), "--model-url", f"http://127.0.0.1:{cfg.port}/v1", "--ctx-tokens", str(ctx), "--cells"]
+        argv = [cfg.py, str(cfg.night_mind_script), "--model-url", f"http://127.0.0.1:{cfg.port}/v1", "--ctx-tokens", str(ctx), "--cells", "--model-name", label]
+        if label == "12B" and self.speed.get("decode_tps"):    # the cells' calls get the same measured-rate budget as the member pass (a 12B at 3.6 tok/s is not the 4B at 60)
+            argv += ["--decode-tok-s", f"{self.speed['decode_tps']:.2f}"]
+        if label == "12B" and self.speed.get("prefill_tps"):
+            argv += ["--prefill-tok-s", f"{self.speed['prefill_tps']:.1f}"]
         res = self.host.run_watched(argv, 420.0, {**os.environ, "ZOE_HARNESS": "1"}, lambda: self.guard(), log, cfg.metrics_poll_s)
-        for line in reversed(self.host.read(str(log)).splitlines()):
-            d = _json(line.strip())
-            if d.get("cells"):
+        for d in reversed(list(_json_objects(self.host.read(str(log))))):          # the whole object, compact or indented: the CLI's stdout is not guaranteed one line
+            if isinstance(d.get("cells"), dict) and d["cells"]:
                 return {k: v for k, v in d["cells"].items() if isinstance(v, (str, int))}
         return {"error": f"no cells object in the output (rc {res.rc})"}
 
