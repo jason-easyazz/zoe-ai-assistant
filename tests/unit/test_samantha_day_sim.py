@@ -39,15 +39,15 @@ P = ds.ALLOWLISTED_USER
 def test_criteria_and_rubrics_are_pinned():
     # Editing a criterion or a rubric changes what PASS means: update this pin deliberately.
     assert ds.CRITERIA_SHA256 == ds.criteria_digest()
-    assert ds.CRITERIA_SHA256 == "d96853b91995f006229fc3ff7288f7f7a1e6ce4782a7629e955deac6b15bf5b0"
+    assert ds.CRITERIA_SHA256 == "5fbe29bdaa12f6132de12754c42b038e760422c27436dfcdeb3f4483d18f5a06"
 
 
 def test_every_ask_has_a_criterion_and_a_known_mode():
-    assert len(ds.ASK_IDS) == len(set(ds.ASK_IDS)) == 15
+    assert len(ds.ASK_IDS) == len(set(ds.ASK_IDS)) == 16
     for a in ds.ASKS:
         assert a["criterion"] and a["needs"] in ("any", "allowlisted", "hook")
     assert {a["id"] for a in ds.ASKS if a["needs"] == "allowlisted"} == {"1b", "2", "7b", "S9a", "S9b"}
-    assert {a["id"] for a in ds.ASKS if a["needs"] == "hook"} == {"1r", "7r", "7s"}
+    assert {a["id"] for a in ds.ASKS if a["needs"] == "hook"} == {"1r", "7r", "7s", "S9c"}
 
 
 @pytest.mark.parametrize("mode, needs, covered", [
@@ -426,3 +426,28 @@ def test_backdate_candidates_refuses_foreign_sessions():
     live = ds.DayLive.__new__(ds.DayLive)
     with pytest.raises(ValueError):
         live.backdate_candidates("demo_bar_00000001", "web-", 10)
+
+
+# ── S9c: the night mind meets "I can't switch my brain off tonight" ─────────────────────────────────────────────────
+
+def test_s9c_needs_the_dentist_worry_and_nothing_else_from_the_week():
+    judge_pass = lambda: ("PASS", "gentle")  # noqa: E731
+    good = "That sounds like a lot - how are you feeling about Friday at the dentist?"
+    assert ds.score_worry(good, True, judge_pass)[0] == "PASS"
+    assert ds.score_worry("Try some warm milk and a quiet room.", True, judge_pass)[0] == "FAIL"          # generic sleep advice: the card-only twin's answer
+    assert ds.score_worry(good + " And how is your mum Ingrid's hip?", True, judge_pass)[0] == "FAIL"     # brings up another story nobody asked about
+    assert ds.score_worry(good, True, lambda: ("FAIL", "reads it back"))[0] == "FAIL"                      # a reminder, not a check-in
+    assert ds.score_worry(good, False, judge_pass)[0] == "SKIP"                                             # the night pass did not run: not a finding
+
+
+def test_the_brief_log_line_parses_with_and_without_the_night_field():
+    P = "demo_bar_da7e0001"
+    old = ds.parse_lines([f"BRIEF_FIRST_TURN user={P} items=2 shape=greeting injected=1 claimed=1"], P)["brief"][0]
+    new = ds.parse_lines([f"BRIEF_FIRST_TURN user={P} items=2 shape=greeting injected=1 claimed=1 night=1"], P)["brief"][0]
+    assert "night" not in old and new["night"] == "1" and new["items"] == "2"
+
+
+def test_the_plan_names_the_night_mind_intent_and_s9c():
+    import datetime as dt
+    text = ds.plan_text("default", dt.date(2026, 10, 9), 1)
+    assert "night_mind=1" in text and "S9c" in text

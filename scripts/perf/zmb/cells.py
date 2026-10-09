@@ -26,6 +26,9 @@ Event forms (a dict in ``cell.events``):
     {"do": "life"}                                             (k) thirty days of a household's turns, each on its day (``life.life``)
     {"do": "life_pass", "propose": ["true", "fabricated", ...]} (k) the nightly model's SCRIPTED proposals (the truth, and each kind of mistake), to an arm whose model the lab scripts; an own-model arm gets none
     {"do": "protocol_facts"}                                   (m) teach the facts the protocol prompts ask about (``life.protocol_corpus``)
+    {"do": "night_pass", "propose": [...]}                     (k) the night mind's pass, own-model arms only (the model the lab scripts is a SKIP); ``propose`` = the mistakes the fake brain makes
+    {"do": "dense_life", "per_day": 40}                        (k) thirty days with ``per_day`` routine commands a day around the life's turns (two threads planted late in the day)
+    {"do": "variant_life", "name": "drift|flat|restraint|resolution"}   (k) a small synthetic month for one night-mind cell
 
 Probe forms (a dict in ``cell.probes``; every probe must pass):
 
@@ -51,6 +54,8 @@ Probe forms (a dict in ``cell.probes``; every probe must pass):
     {"kind": "threads", "min_recall": 0.7} / {"kind": "useful"}        (k) thread recall / the "what's been going on" answers (``observations``,
                                                                the arm's OWN model: a scripted-model arm SKIPs)
     {"kind": "protocol", "metric": "fire_when_needed", "protocol": "zoe"}   (m) the protocol's trigger + the arm's packet + the scripted reader (``protocol``)
+    {"kind": "compression"} / {"kind": "late_threads"} / {"kind": "citations"} / {"kind": "change_quiet", "variant": "drift|flat"} / {"kind": "restraint"} /
+    {"kind": "resolution"} / {"kind": "weights"}              (k) K6-K12, the night mind's cells (own-model arms only)
 
 ``params.play_group``: cells that share a group and a seed share ONE play of their events (one expensive ingest, several read-only probes).
 
@@ -75,10 +80,11 @@ RETAINED = ("approved", "pending", "disputed")
 _TURN_KEYS = {"text", "speaker", "day_offset", "writer", "proposes", "op", "attr", "assistant_text",
               "memory_type"}
 _CAPS = {"advance_clock": "clock", "ingest_as": "identities", "idle_pass": "idle_pass",
-         "conflict_pass": "conflict_pass", "edge": "edges", "hard_delete": "disk", "life_pass": "idle_pass", "retire": "quote_retire"}
+         "conflict_pass": "conflict_pass", "edge": "edges", "hard_delete": "disk", "life_pass": "idle_pass", "retire": "quote_retire", "night_pass": "idle_pass"}
 #: the capability axes' probes (j exact words, k reflection, l multi-hop, m protocol): the capability an arm must DECLARE for the probe
+NIGHT_PROBES = ("compression", "late_threads", "citations", "change_quiet", "restraint", "resolution", "weights")
 _PROBE_CAPS = {"exact": "exact_words", "exact_when": "exact_words", "hops": "multi_hop", "observations": "observations",
-               "threads": "observations", "useful": "observations", "protocol": "protocol"}
+               "threads": "observations", "useful": "observations", "protocol": "protocol", **{k: "observations" for k in NIGHT_PROBES}}
 _PROBE_KINDS = ("store", "facts", "entities", "recall", "answer", "edges", "hit_at_k", "disk", "as_of", "prefilter", "s10x") + tuple(_PROBE_CAPS)
 
 
@@ -192,6 +198,20 @@ def _play(cell: Cell, arm: Arm, world: "World | None" = None) -> "list[dict[str,
             arm.ingest([Turn(t["text"], "owner_taught" if t["speaker"] == "taught" else "owner_typed", day_offset=30 - t["day"]) for t in lf.turns])
         elif do == "life_pass":
             passes.append(_life_pass(arm, seed, list(ev.get("propose") or ())))
+        elif do == "night_pass":
+            if getattr(arm, "nightly_model", "scripted") != "own":
+                raise NotImplementedError(f"arm {arm.name}: the nightly model is scripted in this lab, so there is no night pass to run (use Z0n)")
+            passes.append(arm.reflect_pass(propose=list(ev.get("propose") or ()), seed=seed) if getattr(arm, "takes_lies", False) else arm.reflect_pass())
+        elif do == "dense_life":
+            items, _late = lifemod.dense_layout(seed, int(ev.get("per_day", 40)))
+            for it in items:
+                if it.kind == "life":
+                    arm.ingest([Turn(it.text, "owner_typed", day_offset=30 - it.day)])
+                else:
+                    arm.add_night_turns([it.text], 30 - it.day)
+        elif do == "variant_life":
+            for t in lifemod.variant_life(str(ev["name"]), seed).turns:
+                arm.ingest([Turn(t["text"], "owner_typed", day_offset=30 - t["day"])])
         elif do == "protocol_facts":
             sentences, _prompts = lifemod.protocol_corpus(seed)
             arm.ingest([Turn(s, "owner_taught") for s in sentences])
@@ -213,7 +233,8 @@ def _life_pass(arm: Arm, seed: str, kinds: "list[str]") -> "dict[str, Any]":
     if bad:
         raise ValueError(f"unknown life_pass kind(s) {', '.join(bad)} (known: {', '.join(_LIFE_KINDS)})")
     if getattr(arm, "nightly_model", "scripted") == "own":
-        return arm.reflect_pass()
+        # an arm whose model is the LAB's fake brain (Z0n) is handed the mistakes a model makes, to show the checks around it hold; a real model gets nothing
+        return arm.reflect_pass(propose=kinds, seed=seed) if getattr(arm, "takes_lies", False) else arm.reflect_pass()
     lf = lifemod.life(seed)
     proposes: "list[str]" = []
     for k in kinds:
@@ -270,9 +291,45 @@ def _reflection(p: "dict[str, Any]", arm: Arm, seed: str) -> scorers.Score:
                                   "thread recall and usefulness are measured only on an arm that runs its own model")
     if kind == "threads":
         return cap.score_threads(first.get("items") or [], gold, min_recall=float(p.get("min_recall", 0.7)))
+    if kind in NIGHT_PROBES:
+        return _night(p, arm, seed, first)
     lf = lifemod.life(seed)
     answers = [arm.observations(q).get("items") or [] for q, _ids in lf.questions]
     return cap.score_useful(answers, [ids for _q, ids in lf.questions], gold, min_rate=float(p.get("min_rate", 0.7)))
+
+
+def _night(p: "dict[str, Any]", arm: Arm, seed: str, first: "dict[str, Any]") -> scorers.Score:
+    """(k) K6-K12, the night mind's cells: what the pass COMPRESSED, found in a dense day, POINTED at, noticed, held back, resolved and labelled."""
+    kind = p["kind"]
+    lf = lifemod.life(seed)
+    gold = lifemod.gold_for_scoring(lf)
+    items = first.get("items") or []
+    if kind == "compression":
+        return cap.score_compression(items, gold, n_turns=sum(1 for t in lf.turns if t["speaker"] == "typed"), max_per_thread=int(p.get("max_per_thread", 3)),
+                                     max_share=float(p.get("max_share", 0.6)))
+    if kind == "late_threads":
+        _items, late = lifemod.dense_layout(seed, int(p.get("per_day", 40)))
+        return cap.score_late_threads(items, gold, late, min_recall=float(p.get("min_recall", 0.7)))
+    if kind == "citations":
+        return cap.score_citations(items, arm.turn_text, min_observations=int(p.get("min_observations", 3)))
+    if kind == "change_quiet":
+        flat = str(p.get("variant")) == "flat"
+        return cap.score_change_quiet(arm.threads(), arm.changes(), lifemod.variant_life(str(p["variant"]), seed).gold, flat=flat,
+                                      max_false=float(p.get("max_false", 0.05)))
+    if kind == "restraint":
+        g = lifemod.variant_life("restraint", seed).gold
+        asked = [(key, any(key in str(i.get("text", "")).lower() for i in (arm.observations(q).get("items") or []))) for q, key in g["asks"]]
+        return cap.score_restraint(arm.morning_plan(int(p.get("days", 14))), arm.threads(), g, asked)
+    if kind == "resolution":
+        return cap.score_resolution(arm.threads(), lifemod.variant_life("resolution", seed).gold)
+    gold_labels = lifemod.labelled_moments()
+    return cap.score_weights(arm.moment_labels([g["text"] for g in gold_labels]), gold_labels, min_spearman=float(p.get("min_spearman", 0.5)),
+                             min_accuracy=float(p.get("min_accuracy", 0.85)))
+
+
+def uses_night(cell: Cell) -> bool:
+    """Does this cell need an arm with its own nightly model (Z0n) to be proven? Any ``night_*`` control, or a night-mind probe."""
+    return any(c.startswith("night") for c in cell.controls) or any(p.get("kind") in NIGHT_PROBES for p in cell.probes)
 
 
 def _protocol(p: "dict[str, Any]", arm: Arm, seed: str) -> scorers.Score:
@@ -398,7 +455,7 @@ def _probe(p: "dict[str, Any]", arm: Arm, seed: str = "zmb-v1") -> scorers.Score
         return _exact(p, arm, seed)
     if kind == "hops":
         return _hops(p, arm, seed)
-    if kind in ("observations", "threads", "useful"):
+    if kind in ("observations", "threads", "useful") or kind in NIGHT_PROBES:
         return _reflection(p, arm, seed)
     if kind == "protocol":
         return _protocol(p, arm, seed)

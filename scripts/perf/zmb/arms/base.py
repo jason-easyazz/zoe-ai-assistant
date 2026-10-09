@@ -195,6 +195,31 @@ class Arm(ABC):
         measured and what the model would have SAID is not)."""
         raise NotImplementedError(f"{self.name} has no observation layer")
 
+    # ── the night mind's surface (K6-K12): an arm with ``nightly_model == "own"`` that runs a reflection pass exposes these; the rest SKIP ────────────────────
+    def add_night_turns(self, texts: "list[str]", day_offset: int) -> None:  # pragma: no cover
+        """Owner turns that reach ONLY the nightly pass (routine commands that no extractor mines): the dense-day cell (K7)."""
+        raise NotImplementedError(f"{self.name} has no night pass")
+
+    def threads(self) -> "list[dict[str, Any]]":  # pragma: no cover
+        """The pass's threads (``title``, ``status``, ``anchors``, ``raise_policy``, ``leave_reason``): K9 / K10 / K11."""
+        raise NotImplementedError(f"{self.name} has no night threads")
+
+    def changes(self) -> "list[dict[str, Any]]":  # pragma: no cover
+        """What changed in the last pass: ``[{"type": new|advanced|resolved|quiet, "thread", "ids"}]`` (K9)."""
+        raise NotImplementedError(f"{self.name} has no night changes")
+
+    def morning_plan(self, days: int = 14) -> "list[dict[str, Any]]":  # pragma: no cover
+        """``days`` simulated mornings against the stored threads, every raise ignored: ``[{"day", "raised": [thread ids]}]`` (K10)."""
+        raise NotImplementedError(f"{self.name} has no morning plan")
+
+    def turn_text(self, turn_id: str) -> "str | None":  # pragma: no cover
+        """The text of one of this member's owner turns by id, or None (K8's pointer check)."""
+        raise NotImplementedError(f"{self.name} cannot look a turn up by id")
+
+    def moment_labels(self, texts: "list[str]") -> "list[dict[str, Any]]":  # pragma: no cover
+        """Stage 2 alone over labelled turns: the ``{"quote", "kind", "feeling", "weight"}`` the model gave each turn it picked (K12)."""
+        raise NotImplementedError(f"{self.name} has no moment labeller")
+
     def recall_linked(self, query: str, k: int = 8) -> "list[dict[str, Any]]":  # pragma: no cover
         """Optional capability ``multi_hop``: the arm's ASSOCIATIVE packet for a question that needs two facts said weeks apart (Hindsight's link graph,
         a relational block): up to ``k`` rows. An arm with no associative step returns its ordinary recall (and is measured as that)."""

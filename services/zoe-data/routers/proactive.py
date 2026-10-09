@@ -208,7 +208,7 @@ async def dismiss_pending_suggestion(
 
 
 @router.post("/selector/run-synthetic/{target_user}")
-async def run_selector_synthetic(target_user: str, request: Request):
+async def run_selector_synthetic(target_user: str, request: Request, night_mind: int = 0):
     """Run the nightly selector steps (open-loop extraction, then ranking) NOW for
     ONE harness-minted id — the hook Samantha bar S5 waits on. The nightly pass
     never sees such ids (dreaming drops synthetic users). Guards are the
@@ -236,4 +236,27 @@ async def run_selector_synthetic(target_user: str, request: Request):
         return {"enabled": False}
     loops = await _extract_open_loops(target_user)
     selected = await select_for_user(target_user) or {}
-    return {"enabled": True, "open_loops": loops.get("status"), **selected}
+    out = {"enabled": True, "open_loops": loops.get("status"), **selected}
+    if night_mind:
+        out["night_mind"] = await _run_night_mind_synthetic(target_user)
+    return out
+
+
+async def _run_night_mind_synthetic(user_id: str) -> dict:
+    """The day-sim's ``night_mind`` intent (``?night_mind=1``): the REAL night pass over this harness id's own-words turns (the digest's loader, so the same
+    own-words / forgotten-turn filters), standing in for the 03:00 digest the day-sim does not run. Counts only; ``{"enabled": false}`` with ``ZOE_NIGHT_MIND`` off
+    (no work); never raises (a failure is its own status). Reached only through the guards above: a harness-minted, unregistered id."""
+    try:
+        import night_mind
+        if night_mind.mode() == "off":
+            return {"enabled": False}
+        from memory_digest import _load_todays_messages
+        from memory_service import get_memory_service
+
+        transcript = await _load_todays_messages(user_id)
+        res = await night_mind.run_for_user(user_id, transcript, get_memory_service())
+        keep = ("status", "mode", "turns_in", "turns_dropped_routine", "chunks", "calls", "moments_verified", "moments_held", "observations_written",
+                "observations_pending", "threads_created", "threads_updated", "calls_invalid", "skipped_reason", "error")
+        return {"enabled": True, **{k: res[k] for k in keep if k in res}}
+    except Exception as exc:  # noqa: BLE001
+        return {"enabled": True, "status": "error", "error": type(exc).__name__}

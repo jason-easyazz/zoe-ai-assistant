@@ -96,9 +96,23 @@ class Z0Arm(Arm):
     if importlib.util.find_spec("chromadb") is not None:
         capabilities = capabilities | {"disk"}
 
-    def __init__(self, off: "frozenset[str] | set[str]" = frozenset(), name: str | None = None, embed: bool = False):
+    def __init__(self, off: "frozenset[str] | set[str]" = frozenset(), name: str | None = None, embed: bool = False, *,
+                 night: bool = False, night_url: str = "", night_model: str = "", night_ctx: int = 8192, night_chunk_tokens: int = 0,
+                 night_max_calls: int = 7):
         from .. import lab_driver
         self.embed = embed
+        #: Z0n: Z0 + the night mind (``night_mind.py``) as the nightly reflection, with its OWN model (the lab's fake brain, or the clone at ``night_url``):
+        #: K2 / K3 stop being scripted-model SKIPs. Plain Z0 keeps the scripted digest (its measured baseline is unchanged).
+        self.night = bool(night)
+        self.night_url, self.night_model, self.night_ctx = night_url, night_model, int(night_ctx)
+        self.night_chunk_tokens = int(night_chunk_tokens or (400 if night_url else 150))
+        self.night_max_calls = int(night_max_calls)
+        self.nightly_model = "own" if self.night else "scripted"
+        self.takes_lies = self.night and not night_url          # the lab's fake brain makes the planted mistakes; a real model makes its own
+        self._night_turns: "list[tuple[int, int, str]]" = []       # (seq, day_offset, text): every owner turn, plus night-only routine commands
+        self._night_seq = 0
+        self.night_ran = False
+        self.last_night: "dict[str, Any]" = {}
         if embed:       # Z0e: the same MemoryService over a real Chroma + MiniLM; the disk cells stay Z0's (their embeddings are hash vectors on purpose)
             self.capabilities = frozenset((set(self.capabilities) - {"disk"}) | {"embedder"})
         self._lab = lab_driver
@@ -137,12 +151,17 @@ class Z0Arm(Arm):
         self._clock = 0.0
         self._prev_user = ""
         self._refused = 0
+        self._night_turns, self._night_seq, self.night_ran, self.last_night = [], 0, False, {}
+        ns = importlib.import_module("night_store")                # the night mind's tables: the lab's own in-process store (the SQL one is Postgres)
+        ns.set_backend(ns.MemoryBackend())
+        importlib.import_module("night_mind")._reset_state()
         self.svc.memory_tombstones.clear_all(user_id)
         xw = importlib.import_module("exact_words")        # the owner's verbatim turns (j): the lab's own in-process index, as the tests' (the SQL one is Postgres)
         xw.set_backend(xw.MemoryBackend())
 
     def close(self) -> None:
         importlib.import_module("exact_words").set_backend(None)
+        importlib.import_module("night_store").set_backend(None)
         self.graph.close()
         if self._lab_service is not None:
             self._lab_service.close()
@@ -219,6 +238,9 @@ class Z0Arm(Arm):
         with self._ctl():
             for t in turns:
                 rep.turns += 1
+                if self.night and t.speaker in ("owner_typed", "owner_voice_verified"):
+                    self._night_seq += 1
+                    self._night_turns.append((self._night_seq, int(t.day_offset or 0), t.text))
                 self._run(self._one(t, rep))
         self._refused += rep.refused
         return rep
@@ -495,10 +517,165 @@ class Z0Arm(Arm):
             out.append({"text": r["text"], "day_offset": round((now - float(ts)) / 86400.0) if ts else None})
         return out
 
+    # ── the night mind (Z0n) ──────────────────────────────────────────────────────────────────────────────────────
+    def add_night_turns(self, texts: "list[str]", day_offset: int) -> None:
+        """Owner turns that reach ONLY the night pass (routine commands: they are in ``chat_messages`` but no memory extractor mines them)."""
+        self._need_night()
+        for text in texts:
+            self._night_seq += 1
+            self._night_turns.append((self._night_seq, int(day_offset), text))
+
+    def _night_transcript(self, now: "_dt.datetime"):
+        """The lab's ``chat_messages`` for the night pass: every owner turn in time order with an id and the time it was said (``day_offset`` days ago)."""
+        md = importlib.import_module("memory_digest")
+        rows = sorted(self._night_turns, key=lambda r: (-r[1], r[0]))
+        turns = [(f"lab-{seq:05d}", text) for seq, _d, text in rows]
+        times = [(now - _dt.timedelta(days=d) + _dt.timedelta(seconds=seq % 3600)).isoformat() for seq, d, _t in rows]
+        return md.Transcript("\n".join(t for _i, t in turns), turns, times)
+
+    def turn_text(self, turn_id: str) -> "str | None":
+        """The text of one of this store's owner turns by id (the citation-validity cell K8 checks every observation's pointer here)."""
+        self._need_night()
+        for seq, _d, text in self._night_turns:
+            if turn_id == f"lab-{seq:05d}":
+                return text
+        return None
+
+    def reflect_pass(self, propose: "list[str] | None" = None, seed: str = "zmb-v1") -> "dict[str, Any]":
+        """The night: the REAL nightly digest (``memory_digest.run_memory_digest``) over the lab's owner turns, with fact extraction stubbed out and the night
+        mind switched on - its ``night_mind.run_for_user`` hook does the reflection. The model is the lab's fake brain (``propose`` = the mistakes it
+        makes: the planted fabricated links, stale values, hedges and 'you told me's), or the clone at ``night_url`` with nothing planted."""
+        if not self.night:
+            raise NotImplementedError(f"arm {self.name} has no own-model reflection pass (use Z0n)")
+        from .. import life as lifemod
+        from ..night_brain import FakeNightBrain
+        md, nm = importlib.import_module("memory_digest"), importlib.import_module("night_mind")
+        now = _dt.datetime.now(_dt.timezone.utc)
+        transcript = self._night_transcript(now)
+        stub = types.ModuleType("zoe_agent")
+
+        async def no_blob(*_a, **_k):
+            return ""
+        stub._mempalace_load_user_facts = no_blob
+        stub._invalidate_user_facts_cache = lambda *a, **k: None
+
+        async def todays(*_a, **_k):
+            return transcript
+
+        async def no_facts(_text):
+            return []
+
+        async def no_emotions(*_a, **_k):
+            return 0
+        saved = {n: getattr(md, n) for n in ("_load_todays_messages", "_extract_facts_with_gemma", "_emotional_memory_pass")}
+        had = sys.modules.get("zoe_agent")
+        sys.modules["zoe_agent"] = stub
+        md._load_todays_messages, md._extract_facts_with_gemma, md._emotional_memory_pass = todays, no_facts, no_emotions
+        cfg = nm.config_from_env(url=self.night_url or "http://127.0.0.1:1", model=self.night_model, ctx_tokens=self.night_ctx,
+                                 chunk_tokens=self.night_chunk_tokens, max_calls=self.night_max_calls)
+        persona = importlib.import_module("persona_layer")             # the real affect gate runs; only the Postgres read behind it is scripted: an adult member
+        real_mode = persona.load_member_mode
+
+        async def adult_member(user_id, db=None):
+            return persona.MemberMode(mode="companion", minor=False)
+        persona.load_member_mode = adult_member
+        prev_llm = nm.set_llm(None if self.night_url else FakeNightBrain(lies=tuple(propose or ()), life=lifemod.life(seed)))
+        prev_cfg = nm.set_config(cfg)
+        prev_env = os.environ.get("ZOE_NIGHT_MIND")
+        os.environ["ZOE_NIGHT_MIND"] = "enforce"                   # the arm turns the pass on; the ``night_mind`` control (applied inside ``_ctl``) turns it off again
+        try:
+            with self._ctl():
+                out = self._run(md.run_memory_digest(self._user))
+        finally:
+            for n, fn in saved.items():
+                setattr(md, n, fn)
+            if had is None:
+                sys.modules.pop("zoe_agent", None)
+            else:
+                sys.modules["zoe_agent"] = had
+            nm.set_llm(prev_llm)
+            nm.set_config(prev_cfg)
+            persona.load_member_mode = real_mode
+            if prev_env is None:
+                os.environ.pop("ZOE_NIGHT_MIND", None)
+            else:
+                os.environ["ZOE_NIGHT_MIND"] = prev_env
+        night = dict(out.get("night_mind") or {})
+        self.last_night = night
+        self.night_ran = True
+        flat = {k: v for k, v in night.items() if isinstance(v, (int, float, bool))}
+        # the digest ran for its own reasons too; a pass that did not RUN proves nothing (``cells.run_cell`` raises on skipped_reason / error)
+        rep = {**{k: v for k, v in out.items() if k != "night_mind"}, **flat}
+        if out.get("skipped_reason"):
+            rep["skipped_reason"] = out["skipped_reason"]
+        if night.get("status") in ("error", "llm_unreachable"):
+            rep["error"] = f"night_mind:{night.get('status')}:{night.get('error', '')}"
+        elif night.get("status") == "skipped":
+            rep["skipped_reason"] = f"night_mind:{night.get('skipped_reason')}"
+        elif night.get("status") == "off" and "night_mind" not in self.off:
+            rep["error"] = "night_mind:off"
+        return rep
+
+    def _night_snapshot(self):
+        nm = importlib.import_module("night_mind")
+        return self._run(nm.snapshot(self._user))
+
+    def _need_night(self) -> None:
+        if not self.night:
+            raise NotImplementedError(f"arm {self.name}: the nightly model is scripted in this lab, so there is no night pass to read (use Z0n)")
+
+    def threads(self) -> "list[dict[str, Any]]":
+        """(k) Every night thread (title, status, policy, source_ref, anchors): the structure the cells K9 / K10 / K11 read."""
+        self._need_night()
+        return [dict(t) for t in self._run(importlib.import_module("night_store").get_backend().threads(self._user))]
+
+    def changes(self) -> "list[dict[str, Any]]":
+        """(k) What changed in the last pass (new / advanced / resolved / quiet, with the cited turn ids)."""
+        self._need_night()
+        return list(self.last_night.get("changes") or [])
+
+    def morning_plan(self, days: int = 14) -> "list[dict[str, Any]]":
+        """(k) ``night_mind.plan_mornings``: ``days`` simulated mornings against the stored threads, every raise ignored (K10)."""
+        self._need_night()
+        nm = importlib.import_module("night_mind")
+        threads = self.threads()
+        obs = self._run(importlib.import_module("night_store").get_backend().observations(self._user))
+        quotes: "dict[str, list[str]]" = {}
+        for o in obs:
+            quotes.setdefault(o["thread_id"], []).append(o["quote"])
+        with self._ctl():
+            plan = nm.plan_mornings(threads, quotes, _dt.date.today(), days)
+        return plan
+
+    def moment_labels(self, texts: "list[str]") -> "list[dict[str, Any]]":
+        """(k) Stage 2 alone over labelled turns (K12): the kind / feeling / weight the model gave each turn it picked, by quote."""
+        self._need_night()
+        nm = importlib.import_module("night_mind")
+        from ..night_brain import FakeNightBrain
+        now = _dt.datetime.now(_dt.timezone.utc)
+        turns = [nm.Turn(f"lbl-{i}", t, now) for i, t in enumerate(texts)]
+        cfg = nm.config_from_env(url=self.night_url or "http://127.0.0.1:1", model=self.night_model, ctx_tokens=self.night_ctx)
+        prev = nm.set_llm(None if self.night_url else FakeNightBrain())
+        counts = {k: 0 for k in nm.COUNT_KEYS}
+        usage = {"prompt_tokens": 0, "completion_tokens": 0}
+        out: "list[dict[str, Any]]" = []
+        try:
+            with self._ctl():
+                for n, chunk in enumerate(nm.chunk_turns(turns, nm.Config(ctx_tokens=cfg.ctx_tokens, chunk_tokens=self.night_chunk_tokens).chunk_budget)):
+                    prompt = nm.MOMENTS_USER.format(lines="\n".join(nm._line(f"m{i}", t) for i, t in enumerate(chunk, 1)), cap=nm.MAX_MOMENTS_PER_CHUNK)
+                    raw = self._run(nm._complete([{"role": "system", "content": nm.MOMENTS_SYSTEM}, {"role": "user", "content": prompt}], nm.MOMENT_MAX_TOKENS, cfg, usage))
+                    for m in nm.parse_moments(raw, chunk, n, counts) or []:
+                        out.append({"quote": m.quote, "kind": m.kind, "feeling": m.feeling, "weight": m.weight})
+        finally:
+            nm.set_llm(prev)
+        return out
+
     def observations(self, query: str = "") -> "dict[str, Any]":
         """(k) Z0's derived statements: the approved rows a MODEL wrote (the nightly digest and the per-turn digest) - not what the owner said and not
         what the wall held back (a ``disputed`` / ``pending`` / ``superseded`` row is not a belief the packet serves). ``stated_by`` is the
         owner's own three-way view of the class (``memory_authority.authority_of``). The lab scripts the nightly model: ``model`` = ``scripted``."""
+        if self.night:
+            return self._night_observations(query)
         ma = self.svc.memory_authority
         derived = [r for r in self._rows() if r["status"] == "approved"
                    and r["authority_class"] in (ma.USER_STATED_DERIVED, ma.MODEL_FROM_TURN, ma.MODEL_FROM_TRANSCRIPT)]
@@ -509,6 +686,31 @@ class Z0Arm(Arm):
             items = sorted(items, key=lambda i: (-len(q & content_tokens(i["text"])), i["id"]))[:5]
             items = [i for i in items if q & content_tokens(i["text"])]
         return {"items": items, "model": "scripted"}
+
+    def _night_observations(self, query: str) -> "dict[str, Any]":
+        """The night mind's CURRENT observations (the owner's quotes, each a pointer to its turn). No query: the newest two per thread (what the card holds);
+        a query: ``night_mind.lookup`` - the very ranking the recall packet's block uses - at most five. ``model: own`` (the pass's model, not a script)."""
+        nm = importlib.import_module("night_mind")
+        with self._ctl():                                        # the control scope: the bench's copying fault lifts the serving filters too
+            threads, obs = self._night_snapshot()
+            return self._night_export(nm, threads, obs, query)
+
+    def _night_export(self, nm: Any, threads: "list[dict]", obs: "list[dict]", query: str) -> "dict[str, Any]":
+        today = _dt.date.today()
+        if query:
+            rows = nm.lookup(threads, obs, query, today, limit=5, per_thread=3)
+        else:
+            by: "dict[str, list[dict]]" = {}
+            for o in obs:
+                by.setdefault(o["thread_id"], []).append(o)
+            tmap = {t["id"]: t for t in threads}
+            rows = []
+            for tid, items in by.items():
+                for o in sorted(items, key=lambda r: (r["said_at"], r["id"]), reverse=True)[:(None if "echo" in nm.FAULTS else 2)]:
+                    rows.append({**o, "thread": tmap.get(tid, {})})
+        items = [{"id": o["id"], "text": o["quote"], "stated_by": "user", "thread": o["thread_id"], "turn_id": o["turn_id"], "day": o["day"],
+                  "kind": o["kind"], "weight": o["weight"], "feeling": o["feeling"]} for o in rows]
+        return {"items": items, "model": "own"}
 
     def recall_linked(self, query: str, k: int = 8) -> "list[dict[str, Any]]":
         """(l) Z0's packet for a question that needs two facts: its ordinary recall. The relational block (people / dates from Postgres, behind

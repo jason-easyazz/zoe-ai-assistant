@@ -464,12 +464,14 @@
       "ZOE_BRAIN_SLOT_TOKENS": {
         "defaults": [
           "'8192'",
-          "8192"
+          "8192",
+          "dynamic"
         ],
         "in_env_example": false,
         "readers": [
           "services/zoe-data/digest_pack.py",
           "services/zoe-data/memory_digest.py",
+          "services/zoe-data/night_mind.py",
           "services/zoe-data/zoe_agent.py"
         ],
         "typed_env": true
@@ -3253,6 +3255,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/music_setup.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_NIGHT_MIND": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/perf/zmb/arms/z0.py"
         ],
         "typed_env": false
       },

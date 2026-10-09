@@ -477,7 +477,9 @@ def test_the_whole_store_tier_runs_clean_on_h1_and_h0_is_red_on_the_hard_axes():
     bad = artifact.hard_violations(rows0, CELLS)
     assert len(bad) >= 60 and any(b.startswith("A1.") for b in bad)                       # what Hindsight does natively, on the same spec
     skipped0 = sorted(r["id"] for r in rows0 if r["verdict"] == "SKIP")                   # no Zoe layer: no people graph, no conflict pass (and no pg here)
-    assert skipped0 == sorted(c.id for c in store if cellmod.required_capabilities(c) & {"edges", "conflict_pass", "disk"})
+    # ... and the night mind's cells that need its threads / day plan / labeller (K7, K9 x2, K10, K11, K12): Hindsight's observations carry no thread structure to read
+    night_only = {c.id for c in store if any(p["kind"] in ("late_threads", "change_quiet", "restraint", "resolution", "weights") for p in c.probes)}
+    assert skipped0 == sorted({c.id for c in store if cellmod.required_capabilities(c) & {"edges", "conflict_pass", "disk"}} | night_only)
 
 
 def test_the_artifact_of_an_h_arm_run_carries_no_household_text():

@@ -1898,6 +1898,12 @@ class MemoryService:
                 await exact_words.delete_user(user_id)
             except Exception as exc:
                 raise MemoryServiceError(f"delete_user failed: exact-turn erasure failed ({type(exc).__name__})") from exc
+            # ... and the night mind's observations (quotes of the same words), threads and run counts - same rule, fail closed
+            try:
+                import night_mind
+                await night_mind.delete_user(user_id)
+            except Exception as exc:
+                raise MemoryServiceError(f"delete_user failed: night-mind erasure failed ({type(exc).__name__})") from exc
             needles: list[str] = []
             try:
                 ids = await self._run_sync(self._list_ids_for_user, user_id)

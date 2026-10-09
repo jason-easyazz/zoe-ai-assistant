@@ -977,6 +977,18 @@ async def memory_for_prompt(
         if xw_block:
             result["packet"] = (result["packet"] + "\n" + xw_block) if result.get("packet") else xw_block
             result["exact_words"] = sum(1 for ln in xw_block.split("\n") if ln.startswith("- "))
+    # What the night mind noticed (ZOE_NIGHT_MIND=enforce, default OFF = no read, no I/O): at most three dated quotes of the owner's own words, only when the
+    # message names a story or is an open check-in. Relevance mode only (the continuity block is budgeted around its closing ask). Fail-open.
+    if not continuity and message.strip():
+        try:
+            import night_mind
+
+            nm_block = await night_mind.prompt_block(user_id, message)
+        except Exception:  # noqa: BLE001 - an extra block: the packet is complete without it
+            nm_block = ""
+        if nm_block:
+            result["packet"] = (result["packet"] + "\n" + nm_block) if result.get("packet") else nm_block
+            result["night_notes"] = sum(1 for ln in nm_block.split("\n") if ln.startswith("- "))
     if continuity:
         focus = _continuity_focus(recent or [], result.get("refs") or [])
         if focus:

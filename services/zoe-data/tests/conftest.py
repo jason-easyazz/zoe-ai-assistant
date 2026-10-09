@@ -55,6 +55,9 @@ def _exact_words_in_process_index():
     ``MemoryService.delete_user`` FAILS CLOSED when the verbatim erase fails, a test of the delete must not reach for a pool
     that is not there: every test gets the in-process index (a test that wants the SQL one sets it itself)."""
     import exact_words
+    import night_store
     exact_words.set_backend(exact_words.MemoryBackend())
+    night_store.set_backend(night_store.MemoryBackend())     # the night mind's tables are Postgres in production; same rule
     yield
     exact_words.set_backend(None)
+    night_store.set_backend(None)
