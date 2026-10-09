@@ -24,9 +24,29 @@ sm = cells.sm
 def _fresh(monkeypatch):
     for d in sm.neutral()["dark_flags"]:
         monkeypatch.delenv(d["flag"], raising=False)
+    monkeypatch.delenv("AMBIENT_CAPTURE_ENABLED", raising=False)       # never inherit the operator's capture setting
     sm.reset()
     yield
     sm.reset()
+
+
+def test_the_controls_hold_when_this_box_has_background_capture_on(monkeypatch):
+    """Greptile #1965 round 2: with capture ON the truthful answer drops the wake-word-only promise; the instrument must not ERROR."""
+    monkeypatch.setenv("AMBIENT_CAPTURE_ENABLED", "true")
+    sm.reset()
+    assert cells._model()["ambient"] is True
+    assert cells.run_controls() == []
+
+
+def test_s30_follows_the_capture_setting():
+    quiet = {**cells._model(), "ambient": False}
+    amb = {**quiet, "ambient": True}
+    promise = cells.WAKE_ONLY_PROMISE.format(wake=quiet["wake"])
+    truthful = cells._render(cells.ASK_LISTEN, ambient_recent=1)
+    assert cells.score_s30(promise, quiet)[0] == "PASS"         # capture off: the promise is the truth
+    assert cells.score_s30(promise, amb)[0] == "FAIL"           # capture on: the same promise is false
+    assert cells.score_s30(truthful, amb)[0] == "PASS"
+    assert cells.score_s30(truthful, quiet)[0] == "FAIL"        # capture off: an answer that admits room capture is not the quiet truth
 
 
 def test_the_controls_all_go_the_way_they_are_declared():

@@ -37,7 +37,8 @@ UID = "demo_bar_00000001"
 def _fresh(monkeypatch):
     """Every test starts from the real registry and a clean environment for the flags this module reads."""
     for flag in [d["flag"] for d in sm.neutral()["dark_flags"]] + ["ZOE_SELF_MODEL", "ZOE_VOICE_SAVE_AUDIO", "ZOE_ASK_TO_REMEMBER",
-                                                                    "ZOE_MEMORY_PROVENANCE_ANSWERS", "ZOE_FORGOTTEN_SHIELD_DAYS"]:
+                                                                    "ZOE_MEMORY_PROVENANCE_ANSWERS", "ZOE_FORGOTTEN_SHIELD_DAYS",
+                                                                    "AMBIENT_CAPTURE_ENABLED"]:
         monkeypatch.delenv(flag, raising=False)
     sm.reset()
     yield
