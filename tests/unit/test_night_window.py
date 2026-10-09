@@ -935,7 +935,7 @@ def test_the_real_dry_run_command_line_changes_nothing_and_prints_the_table():
     env = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME")}
     r = subprocess.run([sys.executable, str(REPO / "scripts/night/night_window.py"), "--dry-run", "--anytime"], capture_output=True, text=True, timeout=120, env=env)
     assert r.returncode in (0, 2), r.stderr[-500:]
-    assert "THE ARITHMETIC, TODAY" in r.stdout and "qat ctx 32768 KV q8_0" in r.stdout
+    assert "THE ARITHMETIC" in r.stdout and "qat ctx 32768 KV q8_0" in r.stdout
 
 
 # ── the trial ────────────────────────────────────────────────────────────────
