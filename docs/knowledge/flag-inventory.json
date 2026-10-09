@@ -5127,6 +5127,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_STT_STREAM_UPLOAD": {
+        "defaults": [
+          "'false'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/zoe_voice_daemon.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_SUBPROCESS_QUEUE_WAIT_S": {
         "defaults": [
           "30.0"
