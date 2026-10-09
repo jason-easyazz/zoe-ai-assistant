@@ -169,11 +169,12 @@ class FakeNightBrain:
                         and ((names and names & {n.lower() for n in _names(t[1] + " " + t[2])})
                              or (not names and len(toks & set(_WORD.findall((t[1] + " " + t[2]).lower()))) >= 2))), None)
             newest = keys[idxs[-1]][1]
+            status = "resolved" if any(classify(keys[i][1])["later"] == "done" for i in idxs) else "open"       # an honest THREADS reader: a quote that says it finished finishes the thread
             if hit:
                 touched.add(hit[0])
-                ops.append({"op": "update", "thread": hit[0], "moments": qids, "status": "open", "reason": "the same person or matter as the open thread"})
+                ops.append({"op": "update", "thread": hit[0], "moments": qids, "status": status, "reason": "the same person or matter as the open thread"})
             else:
-                ops.append({"op": "create", "title": " ".join(newest.split()[:6]), "moments": qids, "status": "open",
+                ops.append({"op": "create", "title": " ".join(newest.split()[:6]), "moments": qids, "status": status,
                             "reason": "no open thread is about this person or matter"})
         return json.dumps({"threads": ops, "unchanged": [t[0] for t in old if t[0] not in touched]})
 
