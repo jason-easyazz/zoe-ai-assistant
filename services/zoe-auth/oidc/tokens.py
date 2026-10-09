@@ -1,7 +1,10 @@
 """JWT token issuance for the OIDC provider."""
 import logging
 import time
-from jose import jwt
+
+import jwt
+from jwt.algorithms import RSAAlgorithm
+
 from oidc.keys import ensure_signing_key
 
 logger = logging.getLogger(__name__)
@@ -74,18 +77,22 @@ def issue_access_token(
 
 
 def verify_access_token(token: str, issuer: str, jwks: dict) -> dict | None:
-    """Verify and decode an access token. Returns claims or None."""
+    """Verify and decode an access token. Returns claims or None.
+
+    Only RS256 is ever accepted (explicit ``algorithms``): a token cannot pick
+    its own algorithm, so ``none`` and HMAC-with-the-public-key confusion are
+    rejected before the signature is looked at.
+    """
     try:
-        from jose import jwk as jose_jwk
         unverified_header = jwt.get_unverified_header(token)
         kid = unverified_header.get("kid")
         key_data = next((k for k in jwks["keys"] if k.get("kid") == kid), None)
         if key_data is None:
             return None
-        public_key = jose_jwk.construct(key_data, algorithm="RS256")
+        public_key = RSAAlgorithm.from_jwk(key_data)
         claims = jwt.decode(
             token,
-            public_key.to_pem().decode(),
+            public_key,
             algorithms=["RS256"],
             audience="zoe-auth",
             issuer=issuer,

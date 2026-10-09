@@ -80,7 +80,7 @@ def step(name, fn):
         failed += 1; print(f"  FAIL {name}: {type(e).__name__}: {str(e)[:140]}")
 step("python", lambda: sys.version.split()[0])
 for m in ("fastapi", "pydantic", "sqlalchemy", "apscheduler", "tzlocal", "pytz", "psycopg2", "asyncpg",
-          "alembic", "jose", "jwt", "chromadb", "mempalace", "moonshine_voice", "fastembed", "transformers",
+          "alembic", "jwt", "chromadb", "mempalace", "moonshine_voice", "fastembed", "transformers",
           "av", "aiortc", "livekit.rtc", "edge_tts", "pywebpush", "segno", "ddgs", "cloakbrowser", "yaml",
           "prometheus_client", "webrtcvad", "resemblyzer"):
     step(m, lambda m=m: getattr(importlib.import_module(m), "__version__", "imported"))
