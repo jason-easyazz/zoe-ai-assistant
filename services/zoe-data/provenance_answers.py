@@ -117,6 +117,7 @@ _DIRECT_TEXT = {
     "correction": "That was me acting on what you'd just told me.",
     "ask_to_remember": "That was me acting on what you'd just asked me to keep.",
     "roster": "That was me checking the list you gave me, not something I'd remembered.",
+    "self_model": "That was me describing myself from my own settings, not something you told me.",
 }
 _DIRECT_LOOKUP_DOMAINS = frozenset({"time", "weather", "lists", "calendar", "reminders", "timers", "music", "smart_home"})
 _DIRECT_STORED_DOMAINS = frozenset({"memory", "people"})

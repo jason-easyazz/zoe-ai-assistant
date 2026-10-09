@@ -1,0 +1,21 @@
+{
+ "_note": "Language-neutral facts for self_model.py (ids, proper nouns, flag names). NO prose here: every sentence lives in self_model_<lang>.json. The tool groups, their tools and the router domains are NOT here - they are read from the real registries at startup (labs/flue-zoe-brain-2x/src/tools/tool-groups.ts, router_two_stage.DOMAIN_TOOLS). tests/test_self_model.py pins every flag name below against docs/knowledge/flag-inventory.json.",
+ "wake_phrase": "Hey Zoe",
+ "surfaces": ["panel", "voice", "chat", "telegram"],
+ "models": [{"role": "brain", "name": "Gemma 4 E4B"}, {"role": "router", "name": "FunctionGemma 270M"}, {"role": "stt", "name": "Moonshine"}, {"role": "tts", "name": "Kokoro"}],
+ "hardware": "Jetson Orin NX 16 GB",
+ "feature_order": ["memory", "lists", "timers", "reminders", "media", "home", "weather", "calendar", "notes", "journal", "people"],
+ "service_of_group": {"media": "music", "home": "home"},
+ "dark_flags": [{"key": "web_lookup", "flag": "ZOE_WEB_SEARCH_TOOL", "default": "off"}, {"key": "spoken_brief", "flag": "ZOE_PROACTIVE_SPOKEN", "default": "off"}, {"key": "fix_note", "flag": "ZOE_CORRECTION_APPLY", "default": "off"}, {"key": "retire_fact", "flag": "ZOE_QUOTE_RETIRE", "default": "shadow"}, {"key": "verify", "flag": "ZOE_VERIFY_ON_CHALLENGE", "default": "off"}, {"key": "persona", "flag": "ZOE_PERSONA_LAYER", "default": "off"}, {"key": "face_id", "flag": "ZOE_FACE_ID_ENABLED", "default": "off"}, {"key": "music_discovery", "flag": "ZOE_MUSIC_DISCOVERY", "default": "off"}, {"key": "telegram_media", "flag": "ZOE_TELEGRAM_MEDIA", "default": "off"}],
+ "memory_rules": [{"key": "kept"}, {"key": "remember_ask", "flag": "ZOE_ASK_TO_REMEMBER", "default": "on"}, {"key": "never_kept"}, {"key": "off_record", "flag": "ZOE_MEMORY_PROVENANCE_ANSWERS", "default": "on"}, {"key": "forgotten"}, {"key": "provenance", "flag": "ZOE_MEMORY_PROVENANCE_ANSWERS", "default": "on"}, {"key": "local_store"}],
+ "egress": [{"key": "web_lookup", "flag": "ZOE_WEB_SEARCH_TOOL", "default": "off"}, {"key": "telegram"}],
+ "unsupported": [{"id": "purchase", "alt": "lists"}, {"id": "message_others", "alt": "reminders"}, {"id": "phone", "alt": "reminders"}, {"id": "money", "alt": "reminders"}, {"id": "devices", "alt": "home"}, {"id": "travel", "alt": "calendar"}],
+ "drop_order": ["runs_on", "memory", "surfaces", "who", "now"],
+ "max_block_chars": 2400,
+ "probe": {
+  "music": {"url_env": "MUSIC_ASSISTANT_URL", "default": "http://localhost:8095"},
+  "home": {"url_env": "ZOE_HA_BRIDGE_URL", "default": "http://127.0.0.1:8007"},
+  "timeout_s": 0.4,
+  "ttl_s": 20
+ }
+}
