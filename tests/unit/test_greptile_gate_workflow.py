@@ -275,6 +275,49 @@ def test_request_label_hands_off_a_routine_pr(tmp_path):
     assert r["addLabels"] == 1
 
 
+def test_voice_path_mirror_matches_the_canonical_definition():
+    """The gate's VOICE_PATH is a MIRROR of scripts/maintenance/voice_gate_check.py
+    VOICE_PATH_PATTERNS (the voice-gate's own definition). Every pattern there must
+    appear in the workflow as the same regex, so the two cannot drift apart."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("vgc", REPO / "scripts" / "maintenance" / "voice_gate_check.py")
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+
+    def glob_to_js(p):
+        out = ""
+        for ch in p:
+            if ch == "*": out += ".*"
+            elif ch in ".^$+?()[]{}|\\/": out += "\\" + ch
+            else: out += ch
+        return "/^" + out + "$/"
+
+    script = _script()
+    missing = [p for p in mod.VOICE_PATH_PATTERNS if glob_to_js(p) not in script]
+    assert not missing, f"voice-path patterns missing from greptile-gate.yml VOICE_PATH: {missing}"
+
+
+def test_voice_runtime_file_is_handed_off(tmp_path):
+    # tts_waterfall.py is in the canonical voice path but was not in the first draft's list.
+    r = _run(tmp_path, _script(), files=[{"filename": "services/zoe-data/tts_waterfall.py", "additions": 2, "deletions": 2}])
+    assert r["addLabels"] == 1
+
+
+def test_real_migration_directory_is_handed_off(tmp_path):
+    r = _run(tmp_path, _script(), files=[{"filename": "services/zoe-data/alembic/versions/0042_x.py", "additions": 30, "deletions": 0}])
+    assert r["addLabels"] == 1
+
+
+def test_generated_churn_does_not_buy_a_review(tmp_path):
+    """Size is measured the way pr-hygiene measures it: generated files excluded."""
+    r = _run(tmp_path, _script(), files=[
+        {"filename": "package-lock.json", "additions": 400, "deletions": 400},
+        {"filename": "docs/knowledge/flag-inventory.json", "additions": 300, "deletions": 300},
+        {"filename": "docs/knowledge/x.md", "additions": 5, "deletions": 1},
+    ])
+    assert r["addLabels"] == 0
+    assert any("settled but routine" in line for line in r["log"])
+
+
 def test_unreadable_files_hold(tmp_path):
     """Never summon blind: if the file list cannot be read, hold rather than bill."""
     r = _run(tmp_path, _script(), filesFetchFails=True)

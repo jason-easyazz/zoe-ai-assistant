@@ -253,9 +253,11 @@ is dashboard-filtered to PRs carrying the `greptile` label, and the workflow app
 label only once a PR is settled (up to date, no unresolved threads) **and eligible**, then
 summons once. **Eligible = load-bearing or big** (operator decision 2026-10-09, "only use
 Greptile for the big things, it costs per run"; before that every settled PR was handed off,
-12 of the last 12): a changed file under a load-bearing path (voice path, `auth.py`, `main.py`,
-`db_pool.py`, zoe-auth, alembic, workflows, nginx, compose, systemd units, panel auth / UI
-actions), or a diff at pr-hygiene's warn ceiling (≥10 files or ≥400 lines), or the explicit
+12 of the last 12): a changed file under a load-bearing path (the voice path — MIRRORED from
+`scripts/maintenance/voice_gate_check.py` `VOICE_PATH_PATTERNS`, drift-pinned — `auth.py`,
+`main.py`, `db_pool.py`, zoe-auth, `services/zoe-data/alembic/`, workflows, nginx, compose,
+systemd units, panel auth / UI actions), or a diff at pr-hygiene's warn ceiling (≥10 files or
+≥400 lines, generated files excluded exactly as pr-hygiene excludes them), or the explicit
 **`greptile-request`** label. A routine PR (docs, UI, tests, config) is never handed off
 unless you ask with that label. An unreadable file list holds — the gate never summons blind.
 Pinned by `tests/unit/test_greptile_gate_workflow.py`.
