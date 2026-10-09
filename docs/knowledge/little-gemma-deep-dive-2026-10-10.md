@@ -1,0 +1,48 @@
+---
+type: Reference
+title: Little Gemma deep dive and the Jetson field scan (2026-10-10)
+description: How Zoe compares with the other assistants that run on a Jetson (Little Gemma, Jarvis-home, dwain-barnes, Seeed), a source-level deep dive on cortexist/little-gemma (engine, benchmarks, paper, limits), why it is not a drop-in replacement for Zoe's llama-server, and the four ideas taken from it, each tested as its own experiment.
+tags: [benchmark, jetson, little-gemma, latency, mtp, prefill, tts, field-scan]
+timestamp: 2026-10-10T08:00:00+08:00
+---
+
+# Little Gemma deep dive and the Jetson field scan (2026-10-10)
+
+The question was whether Zoe is the fastest and smartest AI running on a Jetson. **Fastest: no.** On the same Orin NX 16GB, cortexist/little-gemma decodes Gemma 4 E4B faster and runs a far shorter voice loop. **Smartest: no other project publishes a measure to compare against.** No other Jetson project found publishes a memory, tool or household benchmark. The claim that holds up is that Zoe is *the most complete and best-measured private household assistant running fully on one Jetson*.
+
+## Field scan (public projects, 2026-10-10)
+
+| project | board / model | speed | voice latency | memory / tools / home |
+|---|---|---|---|---|
+| [little-gemma](https://github.com/cortexist/little-gemma) | Orin NX 16GB, Gemma 4 E2B/E4B/12B QAT + MTP | E4B 38.1 tok/s (3-prompt mean, greedy), prose 33.0 | 0.65 s composed headline (E2B, piper), E4B ~0.8 s on a conversational turn | none (engine + voice demo) |
+| [Jarvis-home](https://github.com/itsMustafamr/Jarvis-home) | Orin Nano 8GB, Gemma 4 E2B | - | ~3-4 s from button press to speech | lights, weather, vision; no memory |
+| [dwain-barnes](https://github.com/dwain-barnes/jetson-voice-assistant) | Orin Nano Super, E2B with native audio input | TTFT 0.37-0.56 s | ~1.5 s to first sound (web UI) | context window only |
+| [Seeed Local Voice Service](https://www.seeed.cc/solutions/reference-designs/jetson_voice_assistant) | Orin NX | - | 58 ms p50, measured with **no LLM** in the loop | not an assistant |
+| **Zoe** | Orin NX 16GB Super, E4B QAT + MTP on llama.cpp b11194 | ~28 bench / 34.7 all-traffic (temp 0.7) | 2.8-3.4 s end of speech to sound (2.0-2.5 s with flag-dark levers) | household identity, measured memory (ZMB), two-stage router, HA + MA, night mind |
+
+## Little Gemma, from the source
+
+- **What it is.** A C/CUDA Gemma 4 runner of about 9.9k lines, MIT-licensed, from Cortexist LLC (Shaw and Claire Tan). It was built to teach, in the `llama2.c` spirit, and has 350 commits from 2026-06-07 to 2026-09-17. Its benchmark harness is in a private research repository. Its preprint is *"Fluent and Cohesive: Sub-Second Voice Interaction with General-Purpose Open-Weight Models on a 20-Watt Edge Device"* (2026-07-28). Sibling repos: `little-gemma-tools` (voicecat, clausecat and a Flask OpenAI adapter) and `little-gemma-cognition` (camera and mic signals turned into dated text spans; "everything reaches the model as text, the GPU belongs to the LM").
+- **Why its decode is faster.** Nsight Compute shows that llama.cpp's `mul_mat_vec_q` uses only 45% of the Orin's memory bandwidth, because it is compute-bound on 8 SMs. Little Gemma's wide int8 loads reach 84%. A Q4_0 specialization (2026-09-06) adds more on top. The paper puts the E4B/12B QAT lead at 1.08-1.11x. The README's 25.9 vs 19.0 figure compares a serving probe against `llama-bench`.
+- **Why its prefill is faster.** It is 1.55x llama.cpp on E4B because of cache-only prefill, which stops after the last needed KV write. It is slower on the 12B.
+- **Benchmark conditions.** Greedy decoding, pinned `jetson_clocks` (GPU 918 MHz), first turn discarded, replies required to be byte-identical. All of its MTP numbers are greedy. With sampling, acceptance falls from 77% to 28-46% (E2B, temperature 1.0). Zoe samples at 0.7.
+- **The 0.65 s headline.** It is built from separately measured stages (first clause 0.549 s + first streaming-piper PCM 0.10 s). The README says the one-command end-to-end run "is still to be done". It excludes the ASR final commit (~1.0 s to turn close with a live mic), uses E2B, and uses a bare voice system prompt with no recall, router or tools.
+
+## Why it is not a drop-in brain for Zoe
+
+- **Prompt size.** `src/run.c` caps each turn's prompt at `promptv[4096]` tokens and each conversation at `SERVE_SEQ 8192`. The OpenAI adapter rejects inputs over 3,500 bytes. Zoe's brain prompts run to p99 3,280 tokens (`brain-flags-tuning-2026-09.md`), and the adapter's byte cap is far below that.
+- **No cross-request prefix cache.** It keeps a prefix only for a fixed `-sys` system prompt, so every request re-reads its whole history. Zoe's `--cache-ram` re-reads a median of 1 token, so switching would add 1.5-2.5 s of prefill per turn.
+- **Missing features.** The adapter has no tool calling, no per-request sampling and no usage counts. The engine serves one conversation at a time, caps output at 1,024 tokens, and has no health or metrics endpoints.
+- **Speed gain is small for our workload.** On chat prose the decode gain is ~10-20% (33.0 vs ~28 tok/s), and it is greedy-only. The project also deliberately gives up speed to keep the code readable.
+
+## Ideas taken from it, each tested as its own experiment
+
+| # | idea | Little Gemma's evidence | Zoe experiment | verdict |
+|---|---|---|---|---|
+| 0 | the engine itself | see above | head-to-head on this box, Zoe's prompts, temp 0.7 and greedy | pending |
+| 1 | prefill under speech | E4B TTFT after last word 2.04 -> 0.16 s | measure what is movable under speech; cache-warm / B1.1 / streaming Moonshine | pending |
+| 2 | model as its own clause splitter | first audio 1.21 -> 0.82 s | voice-mode prompt flag, A/B against `ZOE_FIRST_SOUND_CLAUSE`, plus a quality check | pending |
+| 3 | streaming vocoder | first PCM ~0.10 s (piper) | Kokoro first-chunk levers; Kokoro stays (rock) | pending |
+| 4 | MTP draft-head vocabulary trim | E4B +7.6%, byte-identical | patched llama.cpp copy with a Zoe-domain d2t subset | pending |
+
+Each experiment writes its own record in this bundle and links it from this table.
