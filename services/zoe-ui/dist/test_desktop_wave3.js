@@ -414,6 +414,52 @@ check('index: the sign-in overlay opens by itself after a gate redirect (zoe_red
   assert(/async function showLoginForm\(\)/.test(src));
 });
 
+// ── every inline event handler on every desktop page calls a function that exists ──
+// Load-time crawls never see this class: a handler that names a missing function only
+// throws when clicked. 2026-10-09: generateWidgetWithAI() (dashboard, lists) never existed;
+// music.html's mobile menu, More and Sign out called helpers it never defined.
+check('handlers: no desktop page has an inline on* handler naming an undefined function', () => {
+  const SKIP = new Set(['if','for','while','return','function','event','confirm','alert','prompt','parseInt','String','Number','setTimeout','JSON','document','window','location','encodeURIComponent','decodeURIComponent','Boolean','Array','Object','Promise','fetch','console','localStorage','sessionStorage','history','open','print','close','blur','focus','toggle','stopPropagation','preventDefault','getElementById','querySelector','classList','remove','add','reload','push','scrollTo','scrollIntoView','click','submit','Date','Math','Element']);
+  const problems = [];
+  for (const f of fs.readdirSync(__dirname).filter(x => x.endsWith('.html'))) {
+    const html = read(f);
+    let code = (html.match(/<script(?![^>]*src=)[^>]*>([\s\S]*?)<\/script>/g) || []).join('\n');
+    for (const m of html.matchAll(/<script[^>]+src="([^"]+)"/g)) {
+      const src = m[1].split('?')[0]; if (/^https?:/.test(src)) continue;
+      const p = path.join(__dirname, src.replace(/^\//, '')); if (fs.existsSync(p)) code += '\n' + fs.readFileSync(p, 'utf8');
+    }
+    const defined = new Set([...code.matchAll(/\bfunction\s+([A-Za-z_$][\w$]*)\s*\(/g)].map(x => x[1]));
+    for (const x of code.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>/g)) defined.add(x[1]);
+    for (const x of code.matchAll(/window\.([A-Za-z_$][\w$]*)\s*=/g)) defined.add(x[1]);
+    for (const h of html.matchAll(/\son(?:click|change|input|submit|keydown|keyup|keypress|touchstart|touchend)="([^"]*)"/g)) {
+      for (const c of h[1].matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)\s*\(/g)) {
+        const name = c[1]; if (SKIP.has(name) || defined.has(name)) continue;
+        if (new RegExp('\\b' + name + '\\s*[:=]\\s*(?:async\\s*)?function').test(code) || new RegExp('\\b' + name + '\\s*\\([^)]*\\)\\s*\\{').test(code)) continue;
+        problems.push(f + ': ' + name);
+      }
+    }
+  }
+  assert.deepStrictEqual([...new Set(problems)], [], 'handlers naming undefined functions: ' + [...new Set(problems)].join(', '));
+});
+check('syntax: every inline <script> block on every desktop page parses', () => {
+  const bad = [];
+  for (const f of fs.readdirSync(__dirname).filter(x => x.endsWith('.html'))) {
+    const html = read(f);
+    for (const m of html.matchAll(/<script(?![^>]*src=)[^>]*>([\s\S]*?)<\/script>/g)) {
+      try { new Function(m[1]); } catch (e) { bad.push(f + ': ' + e.message); }
+    }
+  }
+  assert.deepStrictEqual(bad, [], 'inline script blocks that do not parse: ' + bad.join(' | '));
+});
+check('chat: session titles and meta are readable on the dark card', () => {
+  const css = read('css/dark-mode-shared.css');
+  assert(/html\.dark-mode \.session-item \.session-title \{ color: rgba\(255, 255, 255, 0\.93\) !important; \}/.test(css));
+  assert(/html\.dark-mode \.session-item \.session-meta \{ color: rgba\(255, 255, 255, 0\.62\) !important; \}/.test(css));
+});
+check('widgets: the AI-generate tab that never had a function behind it is gone', () => {
+  for (const f of ['dashboard.html', 'lists.html']) assert(!/aiGenerate|generateWidgetWithAI/.test(read(f)), f);
+});
+
 // ── chat.html: the guest pool is never listed ────────────────────────────────
 check('chat: loadSessions refuses to list sessions without a member session, and sends no ?user_id=', () => {
   const body = extractFunction(chatHtml, 'loadSessions');
