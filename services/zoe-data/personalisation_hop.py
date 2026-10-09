@@ -22,6 +22,17 @@ What this does, on a GENERIC ADVICE request only (``advice_topics``: "any tips f
 4. surface them with ONE rule line - "Shape the answer by these facts ..." - as a short block in the recall packet
    (``routers.memories.memory_for_prompt``) and on the Flue seam (``zoe_flue_client._hop_context_block``).
 
+WHERE the facts ride on the Flue wire is its own flag (``ZOE_PERSONALISATION_HOP_PLACEMENT`` = ``block`` | ``suffix`` |
+``preamble``, ``placement()``). The live acceptance of 2026-10-09 (S9b FAIL with ``hop_in_packet`` true, P2.b 8/20) looked like
+"the 4B ignores the hop"; it was not (the A/B below: the block already moves a hop that REACHES the brain 84/90). The two
+causes were upstream of the brain: (1) S9b was never a brain turn - the weather expert answered "What should I wear tomorrow?"
+from the forecast (``fast_tiers`` now defers a request this module owns, ``_hop_owns_turn``), and (2) the request-shape
+regex recognised only 2 of the 5 phrasings of the P family's diet ask ("Any dinner ideas?", "What's a good dinner for
+tonight?", "I can't decide what to make for tea." were not hop turns: 2 x 4 asks = the 8/20). The placements stay as options:
+``block`` is the delimited block after the words (the default - measured best), ``suffix`` is ONE parenthetical line after
+the words ("(you know this about me: ...)"), ``preamble`` is the delimited block BEFORE the words.
+``scripts/perf/hop_placement_ab.py`` is the measurement (docs/knowledge/samantha-bar.md has the table).
+
 A question that is not a request for advice, or whose topic matches no durable fact, adds NOTHING (the bytes are
 what they were). Bounded: <= 2 facts, each <= ``FACT_CHARS`` chars, one read of the owner's rows under a hard
 ``TIMEOUT_S`` (a slow store costs the block, never the turn). Counts only are logged (``PERSONALISATION_HOP``),
@@ -46,6 +57,24 @@ RULE = ("Shape the answer by these facts the user told you: fit the advice to th
         "do not recite them or mention this note.")
 
 
+PLACEMENT_ENV = "ZOE_PERSONALISATION_HOP_PLACEMENT"
+PLACEMENTS = ("block", "suffix", "preamble")
+DEFAULT_PLACEMENT = "block"
+#: the suffix line opens with this and ends with ")": ONE line, so the sidecar can elide it from older turns
+#: (``labs/flue-zoe-brain-2x/src/context-blocks.ts`` ``HOP_NOTE_PREFIX``; pinned equal by a test)
+SUFFIX_OPEN = "(you know this about me: "
+
+
+def placement() -> str:
+    """Where the facts ride on the Flue wire: ``block`` | ``suffix`` | ``preamble``; per-call read, an unknown value
+    (a typo) is the default - the hop must degrade to the shipped placement, never to none."""
+    from typed_env import env_str
+
+    # the flag name and its default are LITERALS here: tools/audit/flag_inventory.py reads them off the call site
+    v = env_str("ZOE_PERSONALISATION_HOP_PLACEMENT", "block").lower()
+    return v if v in PLACEMENTS else DEFAULT_PLACEMENT
+
+
 def enabled() -> bool:
     """``ZOE_PERSONALISATION_HOP`` - default ON, per-call read; ``0|false|no|off`` (or set-but-empty) = off."""
     from typed_env import env_bool
@@ -57,7 +86,7 @@ def enabled() -> bool:
 
 _ADVICE_RE = re.compile(
     r"\b(?:"
-    r"any\s+(?:tips?|advice|suggestions?|ideas?|recommendations?|thoughts|pointers|hints?)"
+    r"any\s+(?:(?:good|great|nice|easy|quick|healthy|new|other)\s+)?(?:\w+\s+)?(?:tips?|advice|suggestions?|ideas?|recommendations?|thoughts|pointers|hints?)"
     r"|(?:some|a\s+few|got\s+any|have\s+you\s+got\s+any)\s+(?:tips?|advice|suggestions?|ideas?|recommendations?)"
     r"|(?:tips?|advice|ideas?|suggestions?|recommendations?)\s+(?:for|on|about|to)\b"
     r"|what\s+(?:should|shall|can|could|would)\s+(?:i|we)\s+(?:wear|eat|cook|make|have|do|pack|bring|get|buy|try|take|drink|order|plan|pick)"
@@ -67,6 +96,7 @@ _ADVICE_RE = re.compile(
     r"|how\s+(?:can|do|should|could)\s+(?:i|we)\s+(?:sleep|rest|relax|unwind|stay|keep|get\s+(?:better|more|enough|some|good)|"
     r"improve|boost|fall\s+asleep|wake|feel\s+(?:better|more)|be\s+more|avoid|prepare|plan|pack|dress)"
     r"|what(?:['’]s|\s+is)\s+(?:a\s+)?(?:good|best|better|the\s+best)\s+(?:way|thing|food|meal|time|idea)"
+    r"|what(?:['’]?s|\s+is)\s+(?:an?\s+)?(?:good|best|better|nice|decent|easy|quick|healthy|light)\s+\w+(?:\s+\w+)?\s+(?:for|to)\b"
     r"|(?:help|advise)\s+me\s+(?:to\s+)?(?:plan|choose|decide|pick|sleep|dress|pack|cook)"
     r"|should\s+(?:i|we)\s+(?:wear|bring|take|pack|eat|cook|have|drink|go|stay|do)\b"
     r"|(?:i\s+need|i\s+want|looking\s+for)\s+(?:some\s+)?(?:tips?|advice|ideas?|suggestions?|a\s+recommendation)"
@@ -99,7 +129,7 @@ _TOPICS: dict[str, tuple[re.Pattern, re.Pattern]] = {
     ),
     "food": (
         re.compile(r"\b(?:cook(?:ing)?|dinner|lunch|breakfast|meals?|recipes?|eat(?:ing)?|food|snacks?|dessert|restaurants?|"
-                   r"takeaway|menu|bak(?:e|ing)|groceries|picnic|barbecue|bbq|drinks?|cocktails?|wine)\b", re.I),
+                   r"takeaway|menu|bak(?:e|ing)|groceries|picnic|barbecue|bbq|drinks?|cocktails?|wine|tea|supper|brunch)\b", re.I),
         re.compile(r"\b(?:vegetarian|vegan|pescatarian|gluten|coeliac|celiac|dairy|lactose|nuts?|peanuts?|shellfish|"
                    r"allerg\w+|intoleran\w+|halal|kosher|diabet\w+|keto|low[- ]carb|fodmap|(?:don['’]?t|doesn['’]?t|can['’]?t)\s+eat|"
                    r"no\s+meat|picky|fussy|fish)\b", re.I),
@@ -182,6 +212,12 @@ class HopFact:
     score: int
 
 
+def _one_line(text: str) -> str:
+    """A fact as one line with no paren that could close or reopen the suffix early."""
+    t = re.sub(r"\s+", " ", text or "").strip().rstrip(".;")
+    return t.replace("(", "[").replace(")", "]")
+
+
 @dataclass(frozen=True)
 class Hop:
     """The facts a generic-advice request should be shaped by, and the one rule that says so."""
@@ -201,6 +237,13 @@ class Hop:
             lines.append(f"- {f.text} [mem:{str(f.id)[:8]}]")
         lines.append(RULE)
         return "\n".join(lines)
+
+    def suffix_line(self) -> str:
+        """The ``suffix`` placement: ONE parenthetical line - no heading, no rule line, no ids - that reads like the
+        user adding what they know about themselves to their own question. '' when there are no facts."""
+        if not self.facts:
+            return ""
+        return SUFFIX_OPEN + "; ".join(_one_line(f.text) for f in self.facts) + ")"
 
 
 def select(message: str, rows: list) -> Hop:

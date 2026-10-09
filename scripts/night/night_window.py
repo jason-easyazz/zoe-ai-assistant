@@ -5,6 +5,7 @@
     night_window.sh               the window (timer 02:50, hard cap 65 min, ends before 03:55)
     night_window.sh --trial       load the 12B only, score the reflection cells (K1-K5) on it and on the 4B at 32k, restore. Manual, about 25 min.
     night_window.sh --restore-only   put everything back (idempotent; reads the marker file the window leaves while it is open)
+    night_window.sh --speed-sweep    the 12B SPEED SWEEP: one 12B per config (build, load mode, offload, quant, KV, batch, threads) with a fixed speed probe each, one restore at the end
 
 What a window does (and ALWAYS undoes, on every exit path):
 
@@ -46,8 +47,10 @@ from typing import Any, Callable, Optional
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts" / "perf"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from zmb import bakeoff as bk  # noqa: E402 - the bake-off's Host seam, lock, compaction, buddyinfo, clone generators
+import speed_sweep as ss  # noqa: E402 - the speed sweep's pure pieces (grid, probes, parsers, winner, table)
 
 Refused, Aborted, Result = bk.Refused, bk.Aborted, bk.Result
 EXIT_OK, EXIT_REFUSED, EXIT_ABORTED, EXIT_RESTORE_FAILED = bk.EXIT_OK, bk.EXIT_REFUSED, bk.EXIT_ABORTED, bk.EXIT_RESTORE_FAILED
@@ -64,6 +67,21 @@ STOP_ORDER = (ZOE_DATA, ROUTER, KOKORO, BRAIN)
 RESTORE_ORDER = (BRAIN, KOKORO, ROUTER, ZOE_DATA)
 #: transient units this tool starts (systemd-run --user); the 12B and the 4B-at-32k both take port 11500, never together
 NIGHT_UNITS = {"llm": "zoe-night-12b.service", "clone4": "zoe-night-4b32k.service", "shim": "zoe-night-embed.service"}
+
+
+def _json_objects(text: str):
+    """Every JSON object in ``text``, whether it sits on one line or is indented across many (a log mixes stderr lines with the CLI's stdout object)."""
+    dec = json.JSONDecoder()
+    i = text.find("{")
+    while i != -1:
+        try:
+            v, end = dec.raw_decode(text, i)
+        except ValueError:
+            i = text.find("{", i + 1)
+            continue
+        if isinstance(v, dict):
+            yield v
+        i = text.find("{", end)
 
 
 def _json(text: str) -> dict:
@@ -111,6 +129,8 @@ COMPUTE_MIB = 600.0                      # compute buffers (the bake-off's figur
 #: the share of a stopped unit's PSS that the dry run counts as freed. 0.8, not 1.0: run 2 measured less headroom after the 4B + Kokoro stopped than their RSS suggests.
 #: ONLY the dry run and the refuse-before-stopping check use a prediction; the choice of lever set is made on the MEASURED MemAvailable after the stops.
 FREED_FACTOR = 0.8
+#: the llama.cpp build the speed sweep's winner ran on (the live 4B's build; the parked unit points at the older b9733)
+WINNER_BINARY = f"{HOME}/llama.cpp-b11194/build-jetson/bin/llama-server"
 MODEL_FILES = {"qat": "models/gemma4-12b-qat/gemma-4-12b-it-qat-q4_0.gguf", "q4km": "models/gemma4-12b/gemma-4-12B-it-Q4_K_M.gguf"}
 CTX_OPTIONS = (32768, 16384, 8192)
 KV_OPTIONS = ("q8_0", "q4_0")
@@ -220,6 +240,10 @@ def digest_timeout_scale(decode_tps: "Optional[float]") -> int:
     return int(min(20, max(1, math.ceil(1.5 * 11.4 / decode_tps))))
 
 
+class FloorBreach(Exception):
+    """A sweep config took the box under the MemAvailable floor: that config is stopped and recorded; the sweep goes on."""
+
+
 class LoadFailed(Aborted):
     """The 12B never became healthy (cudaMalloc / NvMap, or the process died): the window ends, restores, and counts it (``load_failures.json``)."""
 
@@ -250,20 +274,27 @@ class NightCfg(bk.Cfg):
     night_hours: "tuple[int, int]" = (90, 220)                               # a window may START between 01:30 and 03:40
     stop_zoe_data: bool = True
     model_choice: str = "auto"
-    ctx_choice: "Optional[int]" = None
-    kv_choice: "Optional[str]" = None
+    #: MEASURED DEFAULTS (12B speed sweep, 2026-10-09, docs/knowledge/night-window.md '12B speed sweep 2026-10-09'): the winner of 26 configs, night-shape decode 6.89 tok/s / prefill
+    #: 182 tok/s (the parked unit's flags: 5.46 / 141). Every one is applied EXPLICITLY to the generated command (``llm_spec``), never left to the parked unit's ExecStart, and every one
+    #: has a flag and a NIGHT_* variable that overrides it. ctx 8192 + KV q8_0 are pins of the lever choice (``--ctx`` / ``--kv`` / ``NIGHT_CTX`` / ``NIGHT_KV`` replace them).
+    ctx_choice: "Optional[int]" = int(os.environ.get("NIGHT_CTX", "8192"))
+    kv_choice: "Optional[str]" = os.environ.get("NIGHT_KV", "q8_0")
     margin_mib: float = float(os.environ.get("NIGHT_MARGIN_MIB", "0"))
     job_reserve_mib: float = float(os.environ.get("NIGHT_JOB_RESERVE_MIB", "700"))
     cache_ram_mib: int = int(os.environ.get("NIGHT_CACHE_RAM_MIB", "512"))
-    binary: "Optional[str]" = os.environ.get("NIGHT_LLAMA_BINARY") or None
-    #: ``--fit off`` is NOT added by default: the parked unit does not have it, and the first real load (2026-10-09 01:57, with it) died on cudaMalloc of the 6.6 GB model buffer
-    #: with 12.7 GB free while the June 2026 bring-up that worked ran with the default (fit ON). ``--fit-off`` / ``NIGHT_FIT_OFF=1`` re-adds it (tested as a variable).
-    fit_off: bool = os.environ.get("NIGHT_FIT_OFF") == "1"
+    #: the live 4B's llama.cpp build (b11194; read, never edited): the sweep's winner ran on it. ``--binary`` / ``NIGHT_LLAMA_BINARY`` replace it; ``NIGHT_LLAMA_BINARY=parked`` = the parked unit's own (b9733).
+    binary: "Optional[str]" = (None if os.environ.get("NIGHT_LLAMA_BINARY") == "parked" else os.environ.get("NIGHT_LLAMA_BINARY") or WINNER_BINARY)
+    #: ``--fit off`` is the DEFAULT now: with full offload (``-ngl 99``) it died on cudaMalloc of the 6.6 GB buffer (2026-10-09 01:57), but at the measured ``-ngl 38`` the winner ran with it (every loading b11194 config of the
+    #: sweep did; 26-row table). ``--fit-default`` / ``NIGHT_FIT_OFF=0`` omits the flag (llama.cpp's own default).
+    fit_off: bool = os.environ.get("NIGHT_FIT_OFF", "1") != "0"
     #: the parked unit passes ``--mlock``: the model file is mapped, locked in RAM AND copied into the CUDA buffer, so loading needs about twice the file size at once. ``--no-mlock`` drops it.
     mlock: bool = os.environ.get("NIGHT_NO_MLOCK") != "1"
-    #: ``--n-gpu-layers`` override (None = the parked unit's 99): a partial offload keeps part of the weights in ordinary RAM, so the single CUDA allocation that failed on 2026-10-09
-    #: (6,637 MiB; the 4B's 4.2 GB one succeeds) shrinks. Untested: the first thing to try, see docs/knowledge/night-window.md.
-    ngl: "Optional[int]" = None
+    #: ``--n-gpu-layers``: 38 of 48 (the sweep's winner; 42 and up die on cudaMalloc, full offload is refused by this JetPack). A partial offload keeps the other layers' weights in ordinary
+    #: RAM, so the single 6,637 MiB CUDA allocation that failed on 2026-10-09 does not exist. ``--ngl N`` / ``NIGHT_NGL=N`` override; None would leave the parked unit's 99 (never loads).
+    ngl: "Optional[int]" = int(os.environ.get("NIGHT_NGL", "38"))
+    #: ``--batch-size`` / ``--ubatch-size``: 512 / 128 (the winner: b2048/ub512 gave prefill 237 but decode 6.65, b512/ub256 6.03). Written into the command explicitly.
+    batch: int = int(os.environ.get("NIGHT_BATCH", "512"))
+    ubatch: int = int(os.environ.get("NIGHT_UBATCH", "128"))
     #: ``GGML_CUDA_ENABLE_UNIFIED_MEMORY=1`` in the 12B's environment: ggml then allocates with cudaMallocManaged, which is not bound by the per-allocation limit that refused the
     #: 12B's single 6,637 MiB weight buffer on 2026-10-09 (the 4B's ~4.4 GB buffer loads) and pages on demand; some speed cost, no quality cost. Default ON on a Jetson
     #: (/etc/nv_tegra_release exists); ``--no-unified`` / ``NIGHT_NO_UNIFIED=1`` turns it off. Only the 12B gets it: the 4B at 32k stays exactly the live brain's configuration.
@@ -271,6 +302,11 @@ class NightCfg(bk.Cfg):
     #: after this many CONSECUTIVE windows (same boot) on which the 12B failed to load, a timer-started window refuses before stopping anything: Zoe is not put to sleep every night for a load that fails
     max_load_failures: int = 2
     retry_load: bool = False
+    #: ``--speed-sweep``: one 12B per config of the grid (``speed_sweep.py``), measured, one restore at the end
+    sweep: bool = False
+    sweep_stages: tuple = tuple(range(9))
+    sweep_fresh: bool = False                       # ignore the rows an earlier invocation left in ``sweep-state.json``
+    sweep_b11194: str = WINNER_BINARY      # the live 4B's build (read, never edited)
     #: trial only: skip the 4B@32k phase (an exploratory attempt that is expected to fail fast should not also cost two minutes of silence for a baseline already measured)
     skip_4b: bool = False
     busy_units: tuple = ("zoe-training.service", "zoe-backup.service", "zoe-backup-verify.service", "zoe-memory-export.service", "zoe-dreaming.service")
@@ -290,6 +326,18 @@ class NightCfg(bk.Cfg):
     @property
     def marker(self) -> Path:
         return self.night_dir / "WINDOW_OPEN"
+
+    @property
+    def exploratory(self) -> bool:
+        """A manual measurement run (the trial, the speed sweep): any hour, no jobs, no 4B fallbacks, no load-failure counting."""
+        return self.trial or self.sweep
+
+    @property
+    def sweep_state_path(self) -> Path:
+        return self.night_dir / "sweep-state.json"
+
+    def sweep_model_path(self, key: str) -> str:
+        return f"{self.home}/{ss.SWEEP_MODEL_FILES[key]}"
 
     @property
     def training_lock(self) -> str:
@@ -394,7 +442,8 @@ def translate_for_new_build(argv: "list[str]") -> "list[str]":
 
 def llm_spec(parked_text: str, cfg: NightCfg, lv: Levers) -> "dict[str, Any]":
     """The 12B command: the parked deep-brain unit's ExecStart (``bakeoff.deep_clone_command``: loopback, the port, ``--ctx-size``, ``--parallel 1``, no vision flags) with
-    ONLY these further changes, each logged: the chosen model file, the KV cache types, ``--cache-ram`` capped (the llama.cpp default of 8 GiB is an OOM hazard on 15.6 GB
+    ONLY these further changes, each logged: the chosen model file, the KV cache types, the MEASURED DEFAULTS written explicitly (``--n-gpu-layers``, ``--batch-size``/``--ubatch-size``,
+    ``--fit off``, the b11194 binary with its renamed flags, unified memory: ``NightCfg``), ``--cache-ram`` capped (the llama.cpp default of 8 GiB is an OOM hazard on 15.6 GB
     of unified memory), ``--metrics`` ensured (the job accounting reads it), MemorySwapMax=0, and ``--fit off`` only when asked for (``cfg.fit_off``)."""
     spec = bk.deep_clone_command(parked_text, cfg.home, cfg.port, lv.ctx)
     argv = list(spec["argv"])
@@ -408,6 +457,8 @@ def llm_spec(parked_text: str, cfg: NightCfg, lv: Levers) -> "dict[str, Any]":
         argv = [a for a in argv if a != "--mlock"]
     if cfg.ngl is not None:
         _set_flag(argv, "--n-gpu-layers", str(cfg.ngl))
+    _set_flag(argv, "--batch-size", str(cfg.batch))                  # explicit: the measured defaults are not left to whatever the parked unit's ExecStart says today
+    _set_flag(argv, "--ubatch-size", str(cfg.ubatch))
     if "--metrics" not in argv:
         argv.append("--metrics")
     if cfg.binary:
@@ -442,6 +493,39 @@ def argv_diff(before: "list[str]", after: "list[str]") -> "list[str]":
     return out
 
 
+def sweep_spec(parked_text: str, cfg: NightCfg, sc: "ss.SweepConfig") -> "dict[str, Any]":
+    """One sweep config's 12B command: the same generator as the window's (``llm_spec``: the parked unit's ExecStart with the listed changes), then the config's own levers on top.
+    Nothing is hand-written: the build, the locked-mmap spelling (``--mlock`` on b9733, ``--load-mode mmap+mlock`` on b11194), fit, offload, KV, batch, threads and the environment
+    all come from ``sc``, and the audit diff against the parked ExecStart is recomputed."""
+    b11194 = sc.build == "b11194"
+    c = dataclasses.replace(cfg, binary=cfg.sweep_b11194 if b11194 else None, ngl=sc.ngl, mlock=sc.load_mode == "mlock", fit_off=sc.fit == "off", unified=sc.unified)
+    spec = llm_spec(parked_text, c, Levers("qat", sc.ctx, sc.kv))
+    argv = list(spec["argv"])
+    _set_flag(argv, "--model", cfg.sweep_model_path(sc.model))
+    if sc.ngl is None:
+        i = argv.index("--n-gpu-layers") if "--n-gpu-layers" in argv else -1
+        if i >= 0:
+            del argv[i:i + 2]
+    _set_flag(argv, "--batch-size", str(sc.batch))
+    _set_flag(argv, "--ubatch-size", str(sc.ubatch))
+    if sc.threads:
+        _set_flag(argv, "--threads", str(sc.threads))
+    if sc.fit == "on":
+        _set_flag(argv, "--fit", "on")
+    if sc.no_kv_offload:
+        argv.append("--no-kv-offload")
+    if sc.load_mode == "mmap" and b11194:
+        _set_flag(argv, "--load-mode", "mmap")
+    elif sc.load_mode == "none":
+        if b11194:
+            _set_flag(argv, "--load-mode", "none")
+        else:
+            argv.append("--no-mmap")
+    if sc.draft:
+        argv += ["--model-draft", sc.draft, "--spec-type", "draft-mtp", "--spec-draft-n-max", "4", "--spec-draft-p-min", "0.6", "--spec-draft-ngl", "99"]
+    return {**spec, "argv": argv, "model": os.path.basename(cfg.sweep_model_path(sc.model)), "diff": argv_diff(spec["live_argv"], argv)}
+
+
 def clone4_spec(live_unit_text: str, cfg: NightCfg) -> "dict[str, Any]":
     """The live 4B at ``--ctx-size 32768`` on port 11500, generated from ``systemctl --user cat llama-server.service`` (the bake-off's reflection clone)."""
     return bk.clone_command(live_unit_text, cfg.home, cfg.port, 32768)
@@ -459,10 +543,10 @@ class JobSpec:
     skip_reason: str = ""
 
 
-def build_jobs(cfg: NightCfg, ctx_tokens: int = 16384, decode_tps: "Optional[float]" = None) -> "list[JobSpec]":
+def build_jobs(cfg: NightCfg, ctx_tokens: int = 16384, decode_tps: "Optional[float]" = None, prefill_tps: "Optional[float]" = None) -> "list[JobSpec]":
     """The night's jobs, in order: the digest first (reflection and dreaming read what it stores: ``zoe-nightly-dreaming`` documents its phase 1 as 'after fact
     extraction'), the dreaming cycle, then the night-mind pass. ``night_mind``: ``--night-mind-cmd`` / ``NIGHT_MIND_CMD`` wins (``{model_url}`` is the 12B's base URL,
-    ``{model_url_v1}`` the same with /v1, ``{ctx_tokens}`` the served context, ``{decode_tps}`` the measured decode speed); otherwise ``zoe-night-mind.py --all-members`` when
+    ``{model_url_v1}`` the same with /v1, ``{ctx_tokens}`` the served context, ``{decode_tps}`` / ``{prefill_tps}`` the measured decode / prefill speeds); otherwise ``zoe-night-mind.py --all-members`` when
     that file exists (its branch is not merged at the time of writing); otherwise it is reported as skipped, never faked."""
     t = cfg.job_timeout_s
     base = f"http://127.0.0.1:{cfg.port}"
@@ -471,11 +555,12 @@ def build_jobs(cfg: NightCfg, ctx_tokens: int = 16384, decode_tps: "Optional[flo
         "dreaming": JobSpec("dreaming", [cfg.py, str(REPO / "scripts" / "maintenance" / "zoe-nightly-dreaming.py"), "--skip-compaction"], t["dreaming"], fallback_4b=True),
     }
     tps = f"{decode_tps:.2f}" if decode_tps else "8.0"
+    pps = f"{prefill_tps:.1f}" if prefill_tps else "650.0"                 # the 4B's rate: only when the probe gave none
     if cfg.night_mind_cmd.strip():
-        cmd = (cfg.night_mind_cmd.replace("{model_url_v1}", base + "/v1").replace("{model_url}", base).replace("{ctx_tokens}", str(ctx_tokens)).replace("{decode_tps}", tps))
+        cmd = (cfg.night_mind_cmd.replace("{model_url_v1}", base + "/v1").replace("{model_url}", base).replace("{ctx_tokens}", str(ctx_tokens)).replace("{decode_tps}", tps).replace("{prefill_tps}", pps))
         jobs["night_mind"] = JobSpec("night_mind", shlex.split(cmd), t["night_mind"])
     elif cfg.night_mind_script.exists():
-        argv = [cfg.py, str(cfg.night_mind_script), "--model-url", base + "/v1", "--ctx-tokens", str(ctx_tokens), "--all-members"] + (["--decode-tok-s", tps] if decode_tps else [])
+        argv = [cfg.py, str(cfg.night_mind_script), "--model-url", base + "/v1", "--ctx-tokens", str(ctx_tokens), "--all-members"] + (["--decode-tok-s", tps] if decode_tps else []) + (["--prefill-tok-s", pps] if prefill_tps else [])
         jobs["night_mind"] = JobSpec("night_mind", argv, t["night_mind"])
     else:
         jobs["night_mind"] = JobSpec("night_mind", [], t["night_mind"], skip_reason=f"{cfg.night_mind_script.name} not found (night-mind v1 is not merged); set --night-mind-cmd / NIGHT_MIND_CMD to wire another entry point")
@@ -586,8 +671,8 @@ class NightWindow(bk.Window):
         start = now.hour * 60 + now.minute
         end = start + self.cap_min
         spans = list(self.cfg.blackout_list)
-        if self.cfg.trial and self.cfg.stop_zoe_data:
-            spans.append((179, 181))               # a trial has no digest job: zoe-data down across 03:00 would silently skip that night's digest
+        if self.cfg.exploratory and self.cfg.stop_zoe_data:
+            spans.append((179, 181))               # a trial / sweep has no digest job: zoe-data down across 03:00 would silently skip that night's digest
         if not self.cfg.stop_zoe_data:
             spans += [(179, 181)] + ([(239, 241)] if now.weekday() == 6 else [])    # zoe-data stays up: its 03:00 digest and Sunday 04:00 consolidation would hit a dead brain
         for a, b in spans:
@@ -678,7 +763,7 @@ class NightWindow(bk.Window):
             self.fallback_allowed = False
             self.refuse(f"it is {now:%H:%M}: a night window starts between 01:30 and 03:40 (a manual run at another hour needs --anytime: Zoe would go silent while the household is awake)")
         self.cap_min = self.compute_cap()
-        need_min = min(30.0 if cfg.trial else 35.0, cfg.cap_min)         # an operator's own smaller --cap-min is not the end-by squeeze this check is about
+        need_min = min(30.0 if cfg.exploratory else 35.0, cfg.cap_min)         # an operator's own smaller --cap-min is not the end-by squeeze this check is about
         if self.cap_min < need_min:
             self.refuse(f"only {self.cap_min:.0f} min remain before {cfg.end_by // 60:02d}:{cfg.end_by % 60:02d} (zoe-data must be back before the 04:00 Sunday loop and the 04:10 voice gate); a window needs {need_min:.0f}")
         clash = self.blackout_conflict()
@@ -703,7 +788,7 @@ class NightWindow(bk.Window):
             for need in (cfg.hs_python, Path(bk.REPO) / "scripts/perf/zmb/mpa_window.py", cfg.bakeoff_dir / "mempalace-venv" / "bin" / "mempalace-mcp"):
                 if not host.exists(str(need)):
                     self.refuse(f"the trial needs {need} (the bake-off install): not found")
-        if not cfg.trial and not cfg.retry_load and self.load_failures() >= cfg.max_load_failures:
+        if not cfg.exploratory and not cfg.retry_load and self.load_failures() >= cfg.max_load_failures:
             self.fallback_allowed = True
             self.refuse(f"the 12B failed to load on the last {self.load_failures()} windows on this boot (see {self.failures_path}); not putting Zoe to sleep for another try. "
                         "Fix the load (docs/knowledge/night-window.md 'when the 12B will not load'), then run once with --retry-load (or --trial); a reboot also resets this")
@@ -905,7 +990,7 @@ class NightWindow(bk.Window):
         spec = llm_spec(self.parked_text, cfg, pick["levers"])
         self.event("12B command (generated from the parked unit's ExecStart, which is read and never edited): " + shlex.join(spec["argv"]))
         self.event("12B differs from the parked ExecStart in: " + "; ".join(spec["diff"]))
-        self.event(f"12B environment: GGML_CUDA_ENABLE_UNIFIED_MEMORY={'1 (set: cudaMallocManaged)' if 'GGML_CUDA_ENABLE_UNIFIED_MEMORY' in spec['env'] else 'NOT set (plain cudaMalloc)'}; levers ngl={cfg.ngl or 'parked 99'}, mlock={cfg.mlock}")
+        self.event(f"12B environment: GGML_CUDA_ENABLE_UNIFIED_MEMORY={'1 (set: cudaMallocManaged)' if 'GGML_CUDA_ENABLE_UNIFIED_MEMORY' in spec['env'] else 'NOT set (plain cudaMalloc)'}; levers ngl={cfg.ngl or 'parked 99'}, batch={cfg.batch}/{cfg.ubatch}, fit_off={cfg.fit_off}, mlock={cfg.mlock}, binary={spec['argv'][0]}")
         self.rec["arith"]["unified_memory"] = "GGML_CUDA_ENABLE_UNIFIED_MEMORY" in spec["env"]
         self.rec["arith"]["load_started_s"] = self.host.mono()
         self.start_transient("llm", spec)
@@ -993,7 +1078,7 @@ class NightWindow(bk.Window):
         model_name = os.path.basename(self.cfg.model_path(self.levers.model)) if self.levers else ""
         scale = digest_timeout_scale(self.speed.get("decode_tps"))
         self.event(f"model-call timeouts scaled x{scale} for the 12B's measured decode speed ({self.speed.get('decode_tps')} tok/s)")
-        for job in build_jobs(self.cfg, self.levers.ctx if self.levers else 16384, self.speed.get("decode_tps")):
+        for job in build_jobs(self.cfg, self.levers.ctx if self.levers else 16384, self.speed.get("decode_tps"), self.speed.get("prefill_tps")):
             self.guard()
             self.exec_job(job, "12B", self.cfg.port, model_name, scale)
 
@@ -1038,11 +1123,14 @@ class NightWindow(bk.Window):
             return {}
         log = cfg.night_dir / "logs" / f"{self.run_id}-trial-nm-{label.replace('@', '-')}.log"
         ctx = self.levers.ctx if label == "12B" and self.levers else 32768
-        argv = [cfg.py, str(cfg.night_mind_script), "--model-url", f"http://127.0.0.1:{cfg.port}/v1", "--ctx-tokens", str(ctx), "--cells"]
+        argv = [cfg.py, str(cfg.night_mind_script), "--model-url", f"http://127.0.0.1:{cfg.port}/v1", "--ctx-tokens", str(ctx), "--cells", "--model-name", label]
+        if label == "12B" and self.speed.get("decode_tps"):    # the cells' calls get the same measured-rate budget as the member pass (a 12B at 3.6 tok/s is not the 4B at 60)
+            argv += ["--decode-tok-s", f"{self.speed['decode_tps']:.2f}"]
+        if label == "12B" and self.speed.get("prefill_tps"):
+            argv += ["--prefill-tok-s", f"{self.speed['prefill_tps']:.1f}"]
         res = self.host.run_watched(argv, 420.0, {**os.environ, "ZOE_HARNESS": "1"}, lambda: self.guard(), log, cfg.metrics_poll_s)
-        for line in reversed(self.host.read(str(log)).splitlines()):
-            d = _json(line.strip())
-            if d.get("cells"):
+        for d in reversed(list(_json_objects(self.host.read(str(log))))):          # the whole object, compact or indented: the CLI's stdout is not guaranteed one line
+            if isinstance(d.get("cells"), dict) and d["cells"]:
                 return {k: v for k, v in d["cells"].items() if isinstance(v, (str, int))}
         return {"error": f"no cells object in the output (rc {res.rc})"}
 
@@ -1090,6 +1178,168 @@ class NightWindow(bk.Window):
         empty = [k for k, t in self.trial_results.items() if t.get("error")]
         if empty:                                              # the box is fine, the measurement is not: say so in the outcome and the exit code (the restore still runs)
             raise Aborted("trial phase(s) without a result: " + ", ".join(f"{k} ({self.trial_results[k]['error'][:80]})" for k in empty))
+
+    # ── the speed sweep ──
+    def nvmap_client_mib(self, pid: "Optional[int]") -> "Optional[float]":
+        """NvMap's own size for the 12B's process (read-only ``sudo -n cat`` of a debugfs file): what the GPU side of the process holds, whatever the load mode."""
+        if not self.sudo_ok():
+            return None
+        return ss.parse_nvmap_client_mib(self.host.run(["sudo", "-n", "cat", "/sys/kernel/debug/nvmap/iovmm/clients"], mutating=False).out, pid)
+
+    def llm_journal(self) -> str:
+        return self.host.run(["journalctl", "--user", "-u", NIGHT_UNITS["llm"], "-n", "1500", "--no-pager", "-o", "cat"], mutating=False).out
+
+    def sweep_probe(self, label: str, prompt: str, max_tokens: int, low: "list[float]") -> "dict[str, Any]":
+        """One fixed completion against the 12B on the sweep port: prefill and decode tok/s from llama-server's own ``timings``. Watched like the speed probe (the memory floor kills
+        THIS config, not the box; the hard cap ends the sweep); the request is bounded by the time left before the restore reserve."""
+        left = self.time_left_s()
+        if left < 60:
+            self.event(f"sweep probe {label}: skipped - no time left ({left:.0f}s before the restore reserve)")
+            return {}
+        budget = min(900.0, left)
+        log_path = self.cfg.night_dir / "logs" / f"{self.run_id}-sweep-{label}.log"
+        if log_path.exists():
+            log_path.unlink()
+
+        def tick() -> None:
+            m = self.mem()
+            low[0] = min(low[0], m)
+            if self.abort_flag:
+                raise Aborted(self.abort_flag)
+            if self.elapsed_min() >= self.cap_min:
+                raise Aborted(f"hard cap {self.cap_min:.0f} min reached")
+            if m < self.cfg.min_avail_mb:
+                raise FloorBreach(f"MemAvailable {m:.0f} MiB < {self.cfg.min_avail_mb:.0f} MiB floor")
+
+        t0 = self.host.mono()
+        r = self.host.run_watched(["curl", "-sf", "-m", f"{budget:.0f}", "-H", "Content-Type: application/json", "-d", ss.chat_payload(prompt, max_tokens),
+                                   f"http://127.0.0.1:{self.cfg.port}/v1/chat/completions"], budget + 10.0, None, tick, log_path, self.cfg.metrics_poll_s)
+        try:
+            body = self.host.read(str(log_path))
+        finally:
+            log_path.unlink(missing_ok=True)
+        out = ss.parse_probe(body)
+        out.update({"wall_s": round(self.host.mono() - t0, 1), "rc": r.rc})
+        return out
+
+    def sweep_one(self, sc: "ss.SweepConfig") -> "dict[str, Any]":
+        """Start the 12B with ``sc``'s command, wait for /health, measure, stop it, compact. A config that does not load is a ROW, not a failure of the sweep."""
+        cfg = self.cfg
+        row: "dict[str, Any]" = {"name": sc.name, "family": sc.family, "desc": sc.desc(), "note": sc.note, "config": dataclasses.asdict(sc), "loaded": False, "status": "", "why": "",
+                                 "load_s": None, "nvmap_mib": None, "mem_low_mib": None, "avail_after_load_mib": None}
+        spec = sweep_spec(self.parked_text, cfg, sc)
+        row["command_diff"] = spec["diff"]
+        self.event(f"sweep {sc.name}: {sc.desc()}")
+        self.event(f"sweep {sc.name} command (generated from the parked unit's ExecStart, never edited): {shlex.join(spec['argv'])}")
+        if not self.host.exists(spec["argv"][0]):
+            row.update(status="not run", why=f"the binary {spec['argv'][0]} does not exist")
+            return row
+        if sc.draft and not self.host.exists(sc.draft):
+            row.update(status="not run", why=f"the draft file {sc.draft} does not exist")
+            return row
+        low = [self.mem()]
+        t0 = self.host.mono()
+        try:
+            self.start_transient("llm", spec)
+            ok = self.poll_health(f"http://127.0.0.1:{cfg.port}/health", _status_ok, 150.0, unit=NIGHT_UNITS["llm"])
+            journal = self.llm_journal()
+            if not ok:
+                self.diagnose_load_failure()                 # events only: what the 12B said and the RAM state when it died
+                row.update(status="did not load", why=ss.failure_reason(journal), buffers=ss.parse_buffers(journal))
+                self.event(f"sweep {sc.name}: DID NOT LOAD - {row['why']}")
+                return row
+            row.update(loaded=True, load_s=round(self.host.mono() - t0, 1), avail_after_load_mib=round(self.mem(), 0), buffers=ss.parse_buffers(journal))
+            pid = ss.parse_main_pid(self.host.run(["systemctl", "--user", "show", "-p", "MainPID", "--value", NIGHT_UNITS["llm"]], mutating=False).out)
+            row["nvmap_mib"] = self.nvmap_client_mib(pid)
+            props = _json(self.host.run(["curl", "-sf", "-m", "5", f"http://127.0.0.1:{cfg.port}/props"], mutating=False).out)
+            row["served_ctx"] = ((props.get("default_generation_settings") or {}).get("n_ctx")) or props.get("n_ctx")
+            self.event(f"sweep {sc.name}: healthy in {row['load_s']} s, MemAvailable {row['avail_after_load_mib']:.0f} MiB, nvmap client {row['nvmap_mib']} MiB, buffers {row['buffers']}")
+            a = self.sweep_probe("A", speed_prompt(), ss.SPEED_ANSWER_TOKENS, low)
+            b = self.sweep_probe("B", ss.night_prompt(), ss.NIGHT_ANSWER_TOKENS, low) if a else {}
+            row.update(a_prefill=a.get("prefill_tps"), a_decode=a.get("decode_tps"), a_prompt_tokens=a.get("prompt_tokens"),
+                       b_prefill=b.get("prefill_tps"), b_decode=b.get("decode_tps"), b_prompt_tokens=b.get("prompt_tokens"), b_completion_tokens=b.get("completion_tokens"), b_wall_s=b.get("wall_s"))
+            row["status"] = "ok" if (b.get("decode_tps") or a.get("decode_tps")) else "no probe result"
+            row["why"] = "" if row["status"] == "ok" else "loaded, but the probe returned no timings (cap / curl error)"
+            self.event(f"sweep {sc.name}: 1.6k prefill {row['a_prefill']} / decode {row['a_decode']} tok/s; night shape ({row['b_prompt_tokens']} in, {row['b_completion_tokens']} out) "
+                       f"prefill {row['b_prefill']} / decode {row['b_decode']} tok/s in {row['b_wall_s']} s")
+            return row
+        except FloorBreach as exc:
+            row.update(status="floor breach", why=str(exc))
+            self.event(f"sweep {sc.name}: {exc} - this config is stopped, the sweep goes on")
+            return row
+        finally:
+            row["mem_low_mib"] = round(min(low[0], self.mem()), 0)
+            self.unload_llm()
+            self.before_model_start(f"after sweep config {sc.name}", NIGHT_UNITS["llm"])
+            if self.unit_state(NIGHT_UNITS["llm"]) == "active":
+                raise Aborted(f"{NIGHT_UNITS['llm']} is still active after the stop: ending the sweep (the restore stops it)")
+
+    def find_draft(self) -> "Optional[str]":
+        r = self.host.run(["sh", "-c", f"ls {self.cfg.home}/models/gemma4-12b*/*.gguf 2>/dev/null"], mutating=False)
+        found = ss.draft_candidates(r.out)
+        return found[0] if found else None
+
+    def save_sweep_state(self, rows: "list[dict[str, Any]]", best: "Optional[dict[str, Any]]") -> None:
+        if self.dry:
+            return
+        try:
+            self.cfg.night_dir.mkdir(parents=True, exist_ok=True)
+            self.cfg.sweep_state_path.write_text(json.dumps({"rows": rows, "best": best, "updated": dt.datetime.fromtimestamp(self.host.now()).isoformat(timespec="seconds")}, indent=1, default=str))
+        except OSError as exc:
+            self.log(f"could not write the sweep state: {exc}")
+
+    def run_sweep(self) -> None:
+        """The grid, stage by stage. The best DEFAULT-ELIGIBLE config so far (the QAT or Q4_K_M file, highest decode on the night shape) seeds the next stage; a config that does not load ends
+        its ascending family; a config that loses by more than a quarter ends its family; when the time is short the rest is recorded as 'not run'. One restore at the very end."""
+        cfg = self.cfg
+        prior = [] if cfg.sweep_fresh else ss.load_state(self.host.read(str(cfg.sweep_state_path)))["rows"]
+        have = {k for k in ss.SWEEP_MODEL_FILES if self.host.file_size(cfg.sweep_model_path(k))}
+        draft = self.find_draft()
+        self.rec["sweep"] = {"rows": [], "draft": draft, "models_on_disk": sorted(have), "stages": list(cfg.sweep_stages), "prior_rows": len(prior)}
+        self.event(f"speed sweep: stages {list(cfg.sweep_stages)}; models on disk {sorted(have)}; 12B draft GGUF: {draft or 'none'}; {len(prior)} row(s) from earlier invocations")
+        rows: "list[dict[str, Any]]" = []
+        merged = lambda: ss.merge_rows(prior, rows)  # noqa: E731
+        best_row = ss.pick_best(merged())
+        best = ss.config_from_row(best_row) if best_row else ss.CONTROL
+        out_of_time = False
+        for stage in cfg.sweep_stages:
+            ended: "set[str]" = set()
+            prev_loaded: "Optional[bool]" = None
+            for sc in ss.stage_configs(stage, best, draft, have):
+                skip = ""
+                if out_of_time or self.time_left_s() < 240:
+                    out_of_time = True
+                    skip = "not run: the time cap (restore reserve) was reached"
+                elif sc.family in ended:
+                    skip = f"not run: an earlier config of the {sc.family} family ended it"
+                elif sc.only_if_prev_failed and prev_loaded:
+                    skip = "not run: the config before it loaded"
+                if skip:
+                    rows.append({"name": sc.name, "family": sc.family, "desc": sc.desc(), "note": sc.note, "config": dataclasses.asdict(sc), "loaded": False, "status": "not run", "why": skip})
+                    continue
+                self.guard()
+                row = self.sweep_one(sc)
+                rows.append(row)
+                prev_loaded = bool(row.get("loaded"))
+                self.rec["sweep"]["rows"] = rows
+                nb = ss.pick_best(merged())
+                if not row.get("loaded") and sc.stop_family_on_fail:
+                    ended.add(sc.family)
+                best_decode = ss.decode_of(nb) if nb else None
+                if ss.clearly_loses(row, best_decode):
+                    ended.add(sc.family)
+                    self.event(f"sweep {sc.name}: decode {ss.decode_of(row)} tok/s is below {ss.LOSE_RATIO:.0%} of the best ({best_decode}): the {sc.family} family ends here")
+                if nb and nb is not best_row:
+                    best_row, best = nb, ss.config_from_row(nb)
+                    self.event(f"sweep: new best default-eligible config {nb['name']}: {nb['desc']} at {ss.decode_of(nb)} tok/s")
+                self.save_sweep_state(merged(), best_row)
+            if stage == 8 and not draft:
+                self.event("sweep stage 8: no 12B draft GGUF on disk (ls ~/models/gemma4-12b*): nothing to test")
+        final = merged()
+        best_row = ss.pick_best(final)
+        self.rec["sweep"].update(best=best_row, best_overall=ss.pick_best(final, tuple(ss.SWEEP_MODEL_FILES)), all_rows=len(final))
+        self.save_sweep_state(final, best_row)
+        self.event("speed sweep done: " + (f"best default-eligible {best_row['name']} ({best_row['desc']}) at {ss.decode_of(best_row)} tok/s" if best_row else "no config produced a decode figure"))
 
     # ── the minutes helper ──
     def minutes_now(self) -> float:
@@ -1261,13 +1511,17 @@ class NightWindow(bk.Window):
             self.opened = True
             self.write_marker()
             avail, free = self.sleep_units()
-            pick = self.choose(avail, free)
-            if self.cfg.trial:
-                self.run_trial(pick)
+            if self.cfg.sweep:
+                self.event(f"speed sweep: MemAvailable {avail:.0f} MiB, MemFree {free:.0f} MiB after the stops and the compaction")
+                self.run_sweep()
             else:
-                self.load_12b(pick)
-                self.guard()
-                self.run_jobs()
+                pick = self.choose(avail, free)
+                if self.cfg.trial:
+                    self.run_trial(pick)
+                else:
+                    self.load_12b(pick)
+                    self.guard()
+                    self.run_jobs()
             self.outcome = "ok"
         except Refused as exc:
             self.event(f"REFUSED: {exc}")
@@ -1349,6 +1603,12 @@ class NightWindow(bk.Window):
                 L.append(f"| **{lab}** | cells {t.get('pass')}/{t.get('graded')}, items {t.get('items')}, {t.get('wall_total_s')} s, {t.get('tokens_prompt')} prompt / {t.get('tokens_predicted')} generated tokens, MemAvailable low {t.get('mem_low_mib')} MiB, model calls {t.get('model_calls')}"
                          + (f", ERROR {t['error']}" if t.get("error") else "") + " | |")
             L.append("")
+        if r.get("sweep"):
+            sw = r["sweep"]
+            L += [f"## 12B speed sweep (stages {sw.get('stages')}, models on disk {sw.get('models_on_disk')}, 12B draft GGUF: {sw.get('draft') or 'none'})", ""]
+            L += ss.table_lines(sw.get("rows") or []) + [""]
+            b = sw.get("best")
+            L += [f"- best default-eligible config: **{b['name']}** {b['desc']}: night-shape decode {ss.decode_of(b)} tok/s, prefill {b.get('b_prefill')} tok/s" if b else "- no config produced a decode figure", ""]
         if r.get("restore"):
             L += ["## Wake", "", "| unit | healthy | attempts | down |", "|---|---|---|---|"] + [f"| {u} | {i['ok']} | {i['attempts']} | {i.get('down_s')} s |" for u, i in r["restore"].items()] + [""]
         if r.get("notes"):
@@ -1362,7 +1622,7 @@ class NightWindow(bk.Window):
         try:
             self.cfg.report_dir.mkdir(parents=True, exist_ok=True)
             os.chmod(self.cfg.report_dir, 0o700)
-            base = self.cfg.report_dir / (self.started_iso[:10] + ("-trial" if self.cfg.trial else ""))
+            base = self.cfg.report_dir / (self.started_iso[:10] + ("-trial" if self.cfg.trial else "-sweep" if self.cfg.sweep else ""))
             if base.with_suffix(".md").exists():
                 base = Path(str(base) + "-" + self.started_iso[11:16].replace(":", ""))
             md, js = Path(str(base) + ".md"), Path(str(base) + ".json")
@@ -1375,6 +1635,27 @@ class NightWindow(bk.Window):
             self.log(f"report: {md} and {js.name}")
         except OSError as exc:
             self.log(f"could not write the report: {exc}")
+
+    def dry_plan_sweep(self) -> None:
+        """The sweep's config list (stages 2+ are derived from the winner at run time, so they are shown from the seed) and the first commands, generated from the parked unit."""
+        cfg = self.cfg
+        have = {k for k in ss.SWEEP_MODEL_FILES if self.host.file_size(cfg.sweep_model_path(k))}
+        prior = ss.load_state(self.host.read(str(cfg.sweep_state_path)))["rows"] if not cfg.sweep_fresh else []
+        best_row = ss.pick_best(prior)
+        seed = ss.config_from_row(best_row) if best_row else ss.CONTROL
+        draft = self.find_draft()
+        self.log(f"  SPEED SWEEP: stages {list(cfg.sweep_stages)}, cap {self.cap_min:.0f} min (restore reserve {cfg.reserve_min:.0f}), models on disk {sorted(have)}, {len(prior)} earlier row(s), seed {seed.name}")
+        for ln in ss.plan_text(seed, cfg.sweep_stages, draft, have):
+            self.log("    " + ln)
+        self.log("  per config: start the 12B on :%d from the generated command, poll /health (150 s), read NvMap's client size and llama.cpp's buffer lines, run the 1.6k/96 and the 2.8k/320 probes, "
+                 "stop, compact; the live units stay asleep until the single restore at the end" % cfg.port)
+        for sc in ss.stage_configs(0, seed, draft, have)[:1] + ss.stage_configs(1, seed, draft, have)[:1]:
+            try:
+                sp = sweep_spec(self.parked_text, cfg, sc)
+                self.log(f"  command {sc.name}: " + shlex.join(sp["argv"]))
+                self.log(f"    differs from the parked ExecStart in: " + "; ".join(sp["diff"]))
+            except Refused as exc:
+                self.log(f"  could not generate the command for {sc.name}: {exc}")
 
     # ── the dry run ──
     def dry_plan(self) -> None:
@@ -1420,7 +1701,9 @@ class NightWindow(bk.Window):
         for u in RESTORE_ORDER:
             if u in self.stop_set:
                 self.log(f"  wake {u}: poll {HEALTH[u].url} up to {HEALTH[u].wait_s:.0f}s ({HEALTH[u].what}); one retry; then an ALARM file and exit {EXIT_RESTORE_FAILED}")
-        if cfg.trial:
+        if cfg.sweep:
+            self.dry_plan_sweep()
+        elif cfg.trial:
             self.log("  trial: 12B K1-K5 (ZMA reflection pass, shim on :%d), unload, 4B at --ctx-size 32768, same cells, restore" % cfg.shim_port)
         else:
             for job in build_jobs(cfg, default_pick["levers"].ctx if default_pick else 16384):
@@ -1435,21 +1718,28 @@ def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dry-run", action="store_true", help="print the arithmetic for every lever combination, which fits today, the generated 12B command and the plan; change nothing")
     ap.add_argument("--trial", action="store_true", help="load the 12B only; score K1-K5 on it and on the 4B at 32k; restore (manual, any hour)")
+    ap.add_argument("--speed-sweep", action="store_true", help="measure the 12B across the config grid (build, load mode, offload, quant, KV, batch, threads): one 12B per config, a fixed speed probe each, "
+                    "one restore at the end; manual, any hour, hard cap 45 min (docs/knowledge/night-window.md '12B speed sweep')")
+    ap.add_argument("--sweep-stages", default="all", help="stages of the grid to run: all | 0-4 | 5,6,7 (0 control, 1 offload, 2 q4km, 3 quant, 4 ngl, 5 kv, 6 batch, 7 threads, 8 draft); later stages start from the best row an earlier run saved")
+    ap.add_argument("--sweep-fresh", action="store_true", help="ignore the rows an earlier invocation saved in sweep-state.json")
     ap.add_argument("--restore-only", action="store_true", help="put back whatever the marker file says a window stopped (idempotent)")
     ap.add_argument("--anytime", action="store_true", help="allow a start outside 01:30-03:40 (manual runs)")
     ap.add_argument("--keep-zoe-data", action="store_true", help="do NOT stop zoe-data (needs ~2 GB of other headroom; refused if the window would cross 03:00 / the Sunday 04:00 loop)")
     ap.add_argument("--model", choices=("auto", "qat", "q4km"), default="auto", help="auto = the QAT q4_0 file (smaller and trained for q4_0)")
-    ap.add_argument("--ctx", type=int, choices=CTX_OPTIONS, default=None, help="pin --ctx-size (default: the largest that fits)")
-    ap.add_argument("--kv", choices=KV_OPTIONS, default=None, help="pin the KV cache type (default: q8_0 if it fits)")
+    ap.add_argument("--ctx", type=int, choices=CTX_OPTIONS, default=None, help="pin --ctx-size (default: 8192, the measured winner; NIGHT_CTX)")
+    ap.add_argument("--kv", choices=KV_OPTIONS, default=None, help="pin the KV cache type (default: q8_0, the measured winner: q4_0 OOMs at -ngl 38; NIGHT_KV)")
     ap.add_argument("--cap-min", type=float, default=None, help="hard cap in minutes (default 65; never past --end-by)")
     ap.add_argument("--end-by", default=None, help="HH:MM local; the window must be over (zoe-data back) by then (default 03:55)")
     ap.add_argument("--jobs", default=None, help="comma list, in order (default digest,dreaming,night_mind)")
     ap.add_argument("--night-mind-cmd", default=None, help="the night-mind pass command line; {model_url} / {model_url_v1} are the 12B's base URL")
     ap.add_argument("--no-fallback", action="store_true", help="do not run a job on the live 4B after the restore when it did not finish on the 12B")
-    ap.add_argument("--binary", default=None, help="llama-server binary other than the parked unit's (flags are translated for the b11194 build)")
-    ap.add_argument("--fit-off", action="store_true", help="add --fit off to the 12B command (not the default: see NightCfg.fit_off)")
+    ap.add_argument("--binary", default=None, help="llama-server binary other than the default b11194 build (flags are translated for any build but the parked unit's b9733)")
+    ap.add_argument("--fit-off", action="store_true", help="add --fit off to the 12B command (the default since the 2026-10-09 sweep; see NightCfg.fit_off)")
+    ap.add_argument("--fit-default", action="store_true", help="do NOT add --fit off: leave llama.cpp's own fit at its default")
     ap.add_argument("--no-mlock", action="store_true", help="drop --mlock from the 12B command (the locked mmap of the file plus the CUDA copy is about 2x the file at load)")
-    ap.add_argument("--ngl", type=int, default=None, help="--n-gpu-layers for the 12B (default: the parked unit's 99); fewer layers = a smaller single CUDA allocation, the rest stays in RAM")
+    ap.add_argument("--ngl", type=int, default=None, help="--n-gpu-layers for the 12B (default 38 of 48, the measured winner; NIGHT_NGL); fewer layers = a smaller single CUDA allocation, the rest stays in RAM")
+    ap.add_argument("--batch-size", type=int, default=None, help="--batch-size for the 12B (default 512; NIGHT_BATCH)")
+    ap.add_argument("--ubatch-size", type=int, default=None, help="--ubatch-size for the 12B (default 128; NIGHT_UBATCH)")
     ap.add_argument("--no-unified", action="store_true", help="do NOT set GGML_CUDA_ENABLE_UNIFIED_MEMORY=1 for the 12B (default ON on a Jetson: cudaMallocManaged avoids the per-allocation limit)")
     ap.add_argument("--skip-4b", action="store_true", help="trial only: do not run the 4B@32k phase (exploratory attempts)")
     ap.add_argument("--retry-load", action="store_true", help="ignore the 'the 12B failed to load on the last N windows' guard")
@@ -1463,28 +1753,43 @@ def build_parser() -> argparse.ArgumentParser:
 def configure(args: argparse.Namespace, cfg: "Optional[NightCfg]" = None) -> NightCfg:
     cfg = cfg or NightCfg()
     cfg.trial = bool(args.trial)
-    cfg.night_only = not (args.anytime or args.trial)
+    cfg.sweep = bool(args.speed_sweep)
+    if cfg.sweep and cfg.trial:
+        raise Refused("--speed-sweep and --trial are two different measurements: run them one at a time")
+    try:
+        cfg.sweep_stages = ss.parse_stages(args.sweep_stages)
+    except ValueError as exc:
+        raise Refused(str(exc))
+    cfg.sweep_fresh = bool(args.sweep_fresh)
+    cfg.night_only = not (args.anytime or args.trial or args.speed_sweep)
     cfg.stop_zoe_data = not args.keep_zoe_data
-    cfg.model_choice, cfg.ctx_choice, cfg.kv_choice = args.model, args.ctx, args.kv
+    cfg.model_choice = args.model
+    cfg.ctx_choice = args.ctx if args.ctx is not None else cfg.ctx_choice          # an absent flag keeps the measured default (ctx 8192, KV q8_0)
+    cfg.kv_choice = args.kv if args.kv is not None else cfg.kv_choice
     if args.cap_min:
         cfg.cap_min = args.cap_min
     elif cfg.trial:
         cfg.cap_min = min(cfg.cap_min, 40.0)
+    if cfg.sweep:
+        cfg.cap_min = min(cfg.cap_min, 45.0)
+        cfg.reserve_min = 6.0                          # the unload, four restarts (about 100 s measured) and the report; the sweep has no jobs to finish
     if args.end_by:
         cfg.end_by = _hhmm(args.end_by)
     if cfg.end_by > cfg.blackouts[0][0]:
         raise Refused(f"--end-by {cfg.end_by // 60:02d}:{cfg.end_by % 60:02d} is inside the voice gate ({cfg.blackouts[0][0] // 60:02d}:{cfg.blackouts[0][0] % 60:02d}-)")
     if args.jobs is not None:
         cfg.jobs = tuple(j.strip() for j in args.jobs.split(",") if j.strip())
-    if cfg.trial:
+    if cfg.exploratory:
         cfg.jobs = ()
     if args.night_mind_cmd is not None:
         cfg.night_mind_cmd = args.night_mind_cmd
-    cfg.fallback_4b = not args.no_fallback and not cfg.trial
+    cfg.fallback_4b = not args.no_fallback and not cfg.exploratory
     cfg.binary = args.binary or cfg.binary
-    cfg.fit_off = cfg.fit_off or args.fit_off
+    cfg.fit_off = (cfg.fit_off or args.fit_off) and not args.fit_default
     cfg.mlock = cfg.mlock and not args.no_mlock
     cfg.ngl = args.ngl if args.ngl is not None else cfg.ngl
+    cfg.batch = args.batch_size if args.batch_size is not None else cfg.batch
+    cfg.ubatch = args.ubatch_size if args.ubatch_size is not None else cfg.ubatch
     cfg.retry_load = cfg.retry_load or args.retry_load
     cfg.unified = cfg.unified and not args.no_unified
     cfg.skip_4b = args.skip_4b
@@ -1510,7 +1815,7 @@ def main(argv: "Optional[list[str]]" = None, host_factory: "Optional[Callable[[C
         print(f"REFUSED: {exc}", file=sys.stderr)
         return EXIT_REFUSED
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    mode = "restore" if args.restore_only else "trial" if cfg.trial else "night"
+    mode = "restore" if args.restore_only else "trial" if cfg.trial else "sweep" if cfg.sweep else "night"
     if not args.dry_run:
         cfg.night_dir.mkdir(parents=True, exist_ok=True)
     log = bk.Logger(None if args.dry_run else cfg.night_dir / f"{'restore' if args.restore_only else 'run'}-{stamp}.log")

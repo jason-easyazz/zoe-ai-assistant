@@ -630,6 +630,12 @@ async def resolve(
         })
         if prof.get("binds_followups") is False:
             ctx["binds_followups"] = False
+        # A request for generic advice that one of the owner's durable facts changes ("What should I wear tomorrow? It's meant to
+        # be really cold." from a 6 am dog walker) is the BRAIN's, with the hop's facts in front of it: the weather expert answered
+        # it from the forecast alone ("Yes, I'd take a jacket, it's around 19 degrees") and the fact never got a say (day-sim S9b).
+        if await _hop_owns_turn(text, user_id):
+            logger.info("fast_tiers defer domain=%s (personalisation hop owns the turn) → brain", domain)
+            return None
         res = await _xd.dispatch(domain, text, ctx, write_ok=allow_writes)
         if res is not None and not getattr(res, "tier", ""):
             try:
@@ -640,6 +646,21 @@ async def resolve(
     except Exception as exc:  # never let the fast path break a turn
         logger.warning("fast_tiers.resolve failed (non-fatal): %s", exc)
         return None
+
+
+async def _hop_owns_turn(text: str, user_id: str) -> bool:
+    """True when ``text`` is a generic-advice request with at least one durable owner fact that changes the answer
+    (``personalisation_hop``): a domain expert must not answer it. The pure shape check comes first, so every other
+    turn pays nothing; the one bounded read is the hop's own (it logs counts only). NEVER raises - a failure is False."""
+    try:
+        import personalisation_hop as _ph
+
+        if not _ph.advice_topics(text):
+            return False
+        return bool(await _ph.build(user_id, text))
+    except Exception as exc:  # noqa: BLE001 - the hop must never break a turn
+        logger.debug("fast_tiers hop check failed (non-fatal): %s", type(exc).__name__)
+        return False
 
 
 # `TurnOutcome` is the channel-neutral alias for the core's return type so callers

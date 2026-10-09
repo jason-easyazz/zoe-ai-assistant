@@ -42,11 +42,13 @@ MAX_CHUNKS_ENV = "ZOE_DIGEST_MAX_CHUNKS"
 MAX_FACTS_ENV = "ZOE_DIGEST_MAX_FACTS"
 CHUNK_TOKENS_ENV = "ZOE_DIGEST_CHUNK_TOKENS"
 DECODE_ENV = "ZOE_DIGEST_DECODE_TOK_S"
+PREFILL_ENV = "ZOE_DIGEST_PREFILL_TOK_S"
 SLOT_ENV = "ZOE_BRAIN_SLOT_TOKENS"            # the slot every digest pass talks to (memory_digest already reads it for the synthesis budget)
 
 BASE_CTX = 8192
 BASE_CHUNK_TOKENS = 2400                       # owner's words per map call at the 8k slot (night_mind.BASE_CHUNK_TOKENS)
 PREFILL_TOK_S = 650.0                          # night_mind.PREFILL_TOK_S (the mind-layer's derived prefill rate)
+FLOOR_S = 30.0                                 # night_mind.TIMEOUT_FLOOR_S
 SLACK_S = 20.0                                 # night_mind.timeout_for's slack: a busy slot queues the request, the timeout bounds the wait
 MARGIN_TOKENS = 300                            # night_mind.Config.chunk_budget's margin against the estimator and the chat template
 MIN_BUDGET = 120
@@ -91,6 +93,12 @@ def decode_tok_s() -> float:
     return _env_float("ZOE_DIGEST_DECODE_TOK_S", 60.0, 0.5, 500.0)
 
 
+def prefill_tok_s() -> float:
+    """The prompt-processing rate the timeouts are sized for: ``ZOE_DIGEST_PREFILL_TOK_S``, default 650 = the live 4B (``night_mind.PREFILL_TOK_S``). The 12B night
+    window measures its own (~136) and exports it beside ``ZOE_DIGEST_DECODE_TOK_S``."""
+    return _env_float(PREFILL_ENV, PREFILL_TOK_S, 5.0, 20000.0)
+
+
 def default_chunk_tokens(ctx: int) -> int:
     return int(max(600, min(12000, BASE_CHUNK_TOKENS * (ctx / BASE_CTX))))
 
@@ -104,9 +112,9 @@ def chunk_budget(fixed_tokens: int, out_tokens: int, *, ctx: Optional[int] = Non
     return max(MIN_BUDGET, min(want, room))
 
 
-def timeout_for(prompt_tokens: int, max_tokens: int, *, rate: Optional[float] = None) -> float:
-    """The HTTP timeout one call needs: prefill + the reply cap at the decode rate + slack (``night_mind.timeout_for``)."""
-    return round(prompt_tokens / PREFILL_TOK_S + max_tokens / max(rate or decode_tok_s(), 0.5) + SLACK_S, 1)
+def timeout_for(prompt_tokens: int, max_tokens: int, *, rate: Optional[float] = None, prefill: Optional[float] = None) -> float:
+    """The HTTP timeout one call needs: prompt / prefill rate + the reply cap / decode rate + slack, floored (``night_mind.timeout_for``, the same formula)."""
+    return round(max(FLOOR_S, prompt_tokens / max(prefill or prefill_tok_s(), 5.0) + max_tokens / max(rate or decode_tok_s(), 0.5) + SLACK_S), 1)
 
 
 def call_timeout(legacy_s: float, prompt_tokens: int, max_tokens: int) -> float:
