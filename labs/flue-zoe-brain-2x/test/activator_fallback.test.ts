@@ -214,3 +214,27 @@ test('the memory group discloses remember_emotional_moment on clear emotional tu
 test('remember_emotional_moment is a registered Zoe tool in the memory group', () => {
   assert.ok(zoeTools.some((t) => t.name === 'remember_emotional_moment'));
 });
+
+test('the memory group discloses memory_retire on a plain statement that something ENDED or CHANGED, and not on a mention', () => {
+  for (const prompt of [
+    'I gave up the cello.',
+    'I sold the Corolla last week',
+    'the goldfish died',
+    'I switched to tea',
+    "we got rid of the standing desk",
+    'I no longer go swimming',
+    'I gave my guitar away',
+  ]) {
+    const active = activeToolNames([userMsg(prompt)]);
+    assert.ok(active.has('memory_retire'), `a statement of change should pre-disclose memory_retire: "${prompt}"`);
+  }
+  for (const prompt of ['I saw a cello today', 'what time is it', 'play some jazz', 'I played the cello last night']) {
+    const active = activeToolNames([userMsg(prompt)]);
+    assert.ok(!active.has('memory_retire'), `a mention must not disclose memory_retire: "${prompt}"`);
+  }
+});
+
+test('memory_retire is a registered Zoe tool in the memory group, and the always-on system prompt is untouched by it', () => {
+  assert.ok(zoeTools.some((t) => t.name === 'memory_retire'));
+  assert.ok(!GROUP_SUMMARY.includes('retire'), 'the group catalogue (in the system prompt) must not change: the prompt cache and the replay gate depend on it');
+});

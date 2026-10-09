@@ -480,7 +480,7 @@ def test_the_capability_axes_are_in_the_spec_with_the_cells_the_brief_names():
     assert {"j": "exact_words", "k": "reflection", "l": "multi_hop", "m": "protocol"}.items() <= spec.AXES.items()
     by_axis = {a: sorted(c.id for c in CELLS.values() if c.axis == a and c.tier == "store") for a in ("exact_words", "reflection", "multi_hop", "protocol")}
     assert by_axis["exact_words"] == ["J0.taught_sentence_is_returned_whole", "J1.exact_sentence_after_100_filler", "J2.when_did_i_say_it"]
-    assert [i.split(".")[0] for i in by_axis["reflection"]] == ["K1", "K2", "K3", "K4", "K5"]
+    assert sorted(i.split(".")[0] for i in by_axis["reflection"]) == sorted(["K1", "K2", "K3", "K4", "K5", "K6", "K7", "K8", "K9", "K9", "K10", "K11", "K12"])
     assert by_axis["multi_hop"] == ["L0.two_facts_one_question", "L1.two_facts_after_100_filler", "L2.two_facts_after_300_filler"]
     assert by_axis["protocol"] == ["M1.answered_when_recall_fired", "M2.cites_only_the_right_fact", "M3.says_idk_when_the_store_is_silent"]
     j1 = CELLS["J1.exact_sentence_after_100_filler"]
@@ -497,16 +497,18 @@ def test_every_cell_that_can_pass_on_z0_has_a_control_and_every_target_names_its
             continue
         if c.expected == "FAIL":
             assert not c.controls and "Z0" in c.note, c.id                                                      # a target is already red: no control, and it says whose gap it is
-        elif not c.sanity and c.id not in ("K2.thread_recall", "K3.useful_answers"):
-            assert c.controls, c.id                                                                             # K2 / K3 never run on Z0 (a scripted model): their instrument proof is the scripted-arm cells above
+        elif not c.sanity:
+            assert c.controls, c.id                                                                             # K2 / K3 and K6-K12 need an own model (Z0n): their controls are the night mind's faults
     # K4 is a two-layer defence since the observation gate: the authority wall holds a stale restatement as a disputed candidate AND the gate
     # holds a claim the owner's words do not carry; both off together turn it red
     assert CELLS["K4.invalidated_fact_not_restated"].controls == ("authority", "observation_gate")
     # the three gaps the first run of these axes measured on Z0 are fixed: graded cells, each with the switch that turns it red
     for cid, ctl in (("J1.exact_sentence_after_100_filler", "exact_index"), ("J2.when_did_i_say_it", "exact_index"),
-                     ("K1.observations_are_true", "observation_gate"), ("K5.user_stated_is_never_restated_as_inference", "observation_gate"),
+                     ("K5.user_stated_is_never_restated_as_inference", "observation_gate"),
                      ("L1.two_facts_after_100_filler", "multi_hop"), ("L2.two_facts_after_300_filler", "multi_hop")):
         assert CELLS[cid].expected == "PASS" and CELLS[cid].controls == (ctl,), cid
+    # K1 is two walls since the night mind: the observation gate (the digest's, and the pass's) and the pass's verbatim-quote / cited-turn check
+    assert CELLS["K1.observations_are_true"].expected == "PASS" and CELLS["K1.observations_are_true"].controls == ("observation_gate", "night_citations")
     assert CELLS["J0.taught_sentence_is_returned_whole"].sanity and CELLS["L0.two_facts_one_question"].sanity
 
 

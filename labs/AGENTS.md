@@ -144,11 +144,12 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   local Gemma brain (the `flue` lane behind the `run_zoe_core` seam, per
   `docs/architecture/zoe-flue-integration.md`), cut over 2026-08-09 from the
   retired 1.x `flue-zoe-brain/` beta lane (stopped, disabled and source-removed
-  2026-08-10). Serves 21 tools (20 capability tools against zoe-data + the
+  2026-08-10). Serves 22 tools (21 capability tools against zoe-data + the
   `activate_abilities` activator; Waves 1–3 of the cut-list record
   `docs/knowledge/flue-cutover-tool-cut-list.md` §3, plus the
   `remember_emotional_moment` emotional-thread capture signal per
-  `docs/architecture/zoe-memory-emotional-thread-handoff.md`) with progressive
+  `docs/architecture/zoe-memory-emotional-thread-handoff.md`, plus `memory_retire`: the chat lane's judge for a
+  change of state, `docs/knowledge/memory-quote-retire.md`) with progressive
   tool disclosure at the wire (always-on core + activated groups per call;
   `src/tools/tool-groups.ts`) — the disclosed tool block is APPEND-ONLY per
   session (session-sticky groups, activation order) because it renders ahead of
@@ -190,7 +191,7 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   the per-turn tool-iteration cap re-seats (still OUR code — pi-agent-core 0.83's
   loop is still `while (true)` with no first-party ceiling); the agent module's
   `export const route` auth convention → Hono middleware in `src/auth.ts`;
-  `run({ input })` → `run({ data })` across all 21 tools.
+  `run({ input })` → `run({ data })` across all 22 tools.
   **The wire contract changed and is NOT backward-compatible**: `?wait=result` is
   actively rejected, and the POST body is a top-level DeliveredMessage
   (`{"kind":"user","body":"…"}`). The live `services/zoe-data/zoe_flue_client.py`

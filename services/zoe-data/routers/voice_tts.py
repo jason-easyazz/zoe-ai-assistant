@@ -2939,7 +2939,8 @@ async def _schedule_voice_chat_save(
             # voice-rows outage behind W0).
             await _ensure_user_and_chat_session(session_id, user_id)
             if user_text:
-                await _svc(session_id, "user", user_text, user_id=user_id,
+                # count_turn=False: voice_command already saved (and numbered) this user turn when it arrived
+                await _svc(session_id, "user", user_text, user_id=user_id, count_turn=False,
                            **({"speaker_verified": False} if speaker_verified is False else {}))
             if reply:
                 await _svc(session_id, "assistant", reply, user_id=user_id)
@@ -2967,6 +2968,23 @@ async def _run_voice_memory_passes(
     person-facts (the two person extractors) are not self-assertions and are unaffected.
     """
     try:
+        # Mirror of the chat lane: a reply the hold-the-fact tier wrote means the owner's contradicting
+        # claim was not accepted this turn, so it is not mined (routers/chat.py::_persist_memory_candidates_impl).
+        try:
+            from hold_the_fact import is_own_reply as _htf_own_reply
+            if _htf_own_reply(reply):
+                return
+        except Exception:
+            pass
+        # BM5: an off-the-record spoken turn reaches no extractor, digest, person extractor or suggestion detector.
+        try:
+            import memory_provenance as _mp
+
+            if _mp.is_off_record(user_id, user_text):
+                logger.info("OFF_RECORD user=%s skipped=memory_passes lane=voice", user_id)
+                return
+        except Exception:  # noqa: BLE001
+            pass
         # Mirror of the chat-lane guard: an EXPLICIT "remember/note that …"
         # spoken turn clears any forget tombstone it names, whichever lane
         # answers (see routers/chat.py::_persist_memory_candidates).
@@ -3071,6 +3089,11 @@ async def voice_command(
         if _speaker_verified is not None:
             logger.info("voice speaker verdict panel=%s verified=%s",
                         str((payload or {}).get("panel_id") or "")[:40], _speaker_verified)
+    # ZOE_RESTRAINT: a voice the gate did NOT confirm (False) may be a guest in the room; the brief, the raise and
+    # the recall packet withhold sensitive classes for this turn whatever it asks (restraint.decide, "guest").
+    from restraint import bind_verdict as _restraint_bind_verdict
+
+    _restraint_bind_verdict(_speaker_verified)
     # Forwarded by /voice/turn so end-to-end total can be recorded from the
     # true start of the request (audio upload). Falls back to command start.
     _t_turn_start = (payload or {}).get("_t_turn_start")

@@ -47,15 +47,71 @@ def test_the_in_tree_selector_passes_the_salience_cell():
     assert res["P1.a"] == (20, 20) and res["P1.b"] == (0, 20) and res["P1.c"] == (20, 20) and res["P1.d"] == (20, 20)
 
 
-def test_the_in_tree_selector_has_no_sensitive_class_p4_is_the_known_target():
+def _counts(acc):
+    return {h: (sum(1 for c, _ in v if c), len(v)) for h, v in acc.items()}
+
+
+def test_the_in_tree_selector_passes_the_sensitive_class_cell():
+    """P4 was the known target while no sensitivity class existed; with restraint in code it is a gating
+    cell: nothing sensitive to an unconfirmed voice, nothing sensitive to a bare greeting, and the sensitive
+    item still delivered on an open question (the use half). Three worlds: the permuted names and ailments."""
     real = _real_selector_or_skip()
-    acc = sp.run_selector_tier(sp.World(), real)
-    sensitive_raised = sum(1 for c, _ in acc["P4.a"] if c)
-    # EXPECTED FAIL until SAL3 exists (record 5.1): the health worry is raised to an unconfirmed
-    # voice. When this starts passing the class was built: move P4.a out of the targets deliberately.
-    assert sensitive_raised == 0 and sp.HALF["P4.a"].expected == "FAIL"
-    first = acc["P4.a"][0][1]
-    assert first["sensitive_raised"]
+    for w in (sp.World(), sp.World("fresh-a"), sp.World("fresh-b")):
+        res = _counts(sp.run_selector_tier(w, real))
+        assert res["P4.a"] == (20, 20) and res["P4.b"] == (20, 20), (w.seed, res)
+        assert res["P4.c"] == (20, 20) and res["P4.d"] == (20, 20), (w.seed, res)
+        assert res["P1.a"] == (20, 20) and res["P1.d"] == (20, 20)    # salience is untouched
+
+
+def test_negative_control_the_same_selector_with_restraint_off_fails_p4():
+    """RED WHEN REMOVED: with ZOE_RESTRAINT=off the in-tree selector volunteers the health worry to a stranger
+    and to a bare greeting. If this ever passes the cell is not measuring restraint."""
+    _real_selector_or_skip()
+    res = _counts(sp.run_selector_tier(sp.World(), sp.real_selector_restraint_off))
+    assert res["P4.a"][0] == 0 and res["P4.d"][0] == 0 and res["P4.b"][0] == 0
+    assert res["P4.c"] == (20, 20)   # the pull still works: the item is simply never held back
+
+
+def test_shadow_mode_is_not_enforcement():
+    _real_selector_or_skip()
+    fx = sp.p4_fixture(sp.World(), 0)
+    shadow = sp.real_selector(fx, "shadow")
+    assert [p["id"] for p in shadow if p["raised"]] == ["health"]    # shadow raises what the old selector raised
+    assert [p["id"] for p in sp.real_selector(fx, "enforce") if p["raised"]] == ["event"]
+
+
+def test_the_mute_probe_passes_on_the_real_code_and_reddens_without_it():
+    _real_selector_or_skip()
+    w = sp.World()
+    assert all(c for c, _ in sp.run_mute_probes(w, "gold")), sp.run_mute_probes(w, "gold")
+    assert not any(c for c, _ in sp.run_mute_probes(w, "mute_off"))     # recorded, never honoured
+    assert not any(c for c, _ in sp.run_mute_probes(w, "nag"))          # the selector bypassed
+    ev = sp.mute_probe(w, "Stop bringing that up.", "gold")[1]
+    assert ev["ack_spoken"] is True and ev["re_raised"] is False
+
+
+def test_the_mute_probe_never_touches_the_live_database_or_the_live_palace():
+    _real_selector_or_skip()
+    import db_compat
+    import memory_service
+    before = (db_compat.get_compat_db, memory_service.get_memory_service)
+    sp.mute_probe(sp.World(), "Leave it.", "gold")
+    assert (db_compat.get_compat_db, memory_service.get_memory_service) == before   # restored
+    src = (PERF / "samantha_person.py").read_text()
+    body = src[src.index("def mute_probe("):src.index("def run_mute_probes(")]
+    assert body.index("db_compat.get_compat_db = fake_db") < body.index("asyncio.run(go(db))")
+    assert body.index("memory_service.get_memory_service = ") < body.index("asyncio.run(go(db))")
+
+
+def test_the_checkout_cli_measures_and_proves_its_controls(tmp_path, capsys):
+    _real_selector_or_skip()
+    out = tmp_path / "checkout.json"
+    assert sp.run_checkout(("zmb-v1",), None, out) == 0
+    printed = capsys.readouterr().out
+    assert "checkout measurement: OK" in printed and "no live database" in printed
+    import json as _json
+    body = _json.loads(out.read_text())
+    assert body["problems"] == [] and set(body["arms"]) == {"system", "restraint_off+mute_off", "selector_bypassed"}
 
 
 def test_the_real_selector_adapter_drops_what_gather_drops():
@@ -102,3 +158,61 @@ def test_the_bar_and_day_sim_constants_the_family_relies_on():
     assert live.session("demo_bar_0123abcd", "x").startswith("bar-pf-x-")
     with pytest.raises(ValueError):
         live.chat("jason", "x", "hello")             # the demo-user guard fires before any request
+
+
+# ── the bar and the day-sim must not regress under ZOE_RESTRAINT=enforce ──────────────────────────────
+def _restraint():
+    sys.path.insert(0, str(ZD))
+    try:
+        import restraint
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"restraint not importable here: {type(exc).__name__}")
+    return restraint
+
+
+def test_the_open_turns_of_the_bar_and_the_day_sim_are_pulls_a_bare_greeting_is_not():
+    rs = _restraint()
+    for opener in (sp.sb.ASK_OPEN_1, sp.sb.ASK_OPEN_2, sp.ds.OPEN_1, sp.ds.OPEN_2):
+        assert rs.is_pull(opener), opener
+    assert not rs.is_pull("Hi Zoe") and not rs.is_pull("Good morning")
+
+
+def test_every_bar_and_day_sim_ask_still_gets_the_row_it_was_written_to_find():
+    """Offline analysis of the live scenarios (the live run is the owner's gate before the flag flips): for each
+    (seeded sentence, ask) pair the packet filter must DELIVER the row in enforce. A pair whose row is not
+    sensitive passes trivially; the sensitive ones must be pulled by the ask's own words."""
+    rs = _restraint()
+    sb, ds = sp.sb, sp.ds
+    pairs = [
+        ("S1", sb.SAY_SISTER, sb.ASK_SISTER), ("S1-long", sb.SAY_SISTER, sb.ASK_LONG_SISTER),
+        ("S7", sb.SAY_DAD_RICH, sb.ASK_DAD), ("S7-long", sb.SAY_DAD_RICH, sb.ASK_LONG_DAD),
+        ("S7-short", sb.SAY_DAD_SHORT, sb.ASK_DAD), ("S20", sb.SAY_DOB, sb.ASK_DOB),
+        ("S21", sb.SAY_KIDS, sb.ASK_KIDS), ("S22", sb.SAY_ROSTER, sb.ASK_ROSTER),
+        ("S2", sb.SAY_NEW_HOME, sb.ASK_HOME), ("S10", sb.SAY_CELLO, sb.ASK_CELLO),
+        ("day-3", ds.SAY["d1-mum"], ds.ASK_MUM), ("day-3b", ds.SAY["d2-mum-fix"], ds.ASK_MUM),
+        ("day-4", ds.SAY["d3-dentist"], ds.ASK_WHEN), ("day-time", ds.SAY["d3-dentist"], ds.ASK_TIME),
+        ("day-5", ds.SAY["d1-project"], ds.ASK_QUOTE), ("day-6", ds.SAY["d1-race"], ds.ASK_RACE),
+        ("day-6b", ds.SAY["d2-race-swap"], ds.ASK_RACE), ("day-6n", ds.SAY["d1-health"], ds.ASK_MIGRAINE),
+        ("day-6nb", ds.SAY["d2-migraine-neg"], ds.ASK_MIGRAINE), ("day-2", ds.SAY["d1-diet"], ds.ASK_COOK),
+    ]
+    sensitive_pairs = 0
+    for tag, said, asked in pairs:
+        classes = rs.classify(said)
+        sensitive_pairs += bool(classes)
+        dec = rs.decide(said, classes, rs.make_turn(asked), surface="packet")
+        assert dec.allow, (tag, classes, dec)
+    assert sensitive_pairs >= 8   # the check is not vacuous: most of these rows ARE in a sensitive class
+
+
+def test_the_s4_worry_is_delivered_to_the_mood_turn_and_the_brief_to_the_open_question():
+    rs = _restraint()
+    worry = sp.sb.SAY_WORRY
+    assert rs.classify(worry) == ("affect",)
+    mood = rs.make_turn(sp.sb.ASK_WORRY, mood=True)
+    assert rs.decide(worry, ("affect",), mood, surface="packet").allow
+    assert rs.decide(worry, ("affect",), rs.make_turn("what should I cook tonight"), surface="packet").allow is False
+
+
+def test_the_night_shift_and_dog_walk_facts_the_personalisation_hop_relies_on_are_not_sensitive():
+    rs = _restraint()
+    assert rs.classify(sp.ds.SAY["d1-shift"]) == () and rs.classify(sp.ds.SAY["d1-dog"]) == ()

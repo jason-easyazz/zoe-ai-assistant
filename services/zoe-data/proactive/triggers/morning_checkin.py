@@ -110,6 +110,17 @@ async def _build_morning_context(db, user_id: str, today: str, *, include_board:
     except Exception as exc:
         log.debug("morning_checkin: emotional moments load failed (non-fatal): %s", exc)
 
+    # What the night mind decided to raise this morning (ZOE_NIGHT_MIND=enforce; [] with the flag off, no I/O): at most ONE thread, the owner's
+    # dated words, keyed ``night_threads:<id>`` so the brief's ``mentioned()`` marks it. A ``leave`` thread is never in this list.
+    try:
+        import night_mind
+
+        items = await night_mind.morning_items(user_id)
+        if items:
+            ctx["night_items"] = items
+    except Exception as exc:  # noqa: BLE001
+        log.debug("morning_checkin: night items load failed (non-fatal): %s", exc)
+
     # Portrait snippet (first 200 chars — enough for personal note)
     try:
         async with db.execute(

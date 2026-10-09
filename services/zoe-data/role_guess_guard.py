@@ -23,11 +23,13 @@ plus ``people_roles``; never raises.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
 from typing import Any, AsyncIterator, Iterable, Optional
 
+import lexicons as _lexicons
 import people_roles as _pr
 
 logger = logging.getLogger(__name__)
@@ -36,19 +38,13 @@ ENV = "ZOE_ROLE_GUESS_GUARD"
 
 # Relationship roles a name can never decide. "friend" / "colleague" are loose labels, not a
 # gender or family guess (people_roles._LOOSE_ROLES), so they are not policed here.
-GUESS_ROLES = (
-    "wife", "husband", "spouse", "partner", "girlfriend", "boyfriend", "fiancée", "fiancé",
-    "fiancee", "fiance", "mother", "mum", "mom", "mummy", "mommy", "father", "dad", "daddy",
-    "son", "daughter", "sister", "brother", "sibling", "aunt", "auntie", "aunty", "uncle", "niece",
-    "nephew", "cousin", "grandmother", "grandma", "granny", "nan", "nana", "grandfather",
-    "grandpa", "grandad", "parent", "grandparent", "child", "kid", "stepmother", "stepfather",
-    "stepson", "stepdaughter", "mother-in-law", "father-in-law", "sister-in-law", "brother-in-law",
-)
+_EN = _lexicons.load("en")      # the words live in lexicons_data/en.json (data, not logic)
+GUESS_ROLES = tuple(_EN["guess_roles"])
 _ROLE = "|".join(sorted((re.escape(r) for r in GUESS_ROLES), key=len, reverse=True))
 _DET = (r"(?:your|his|her|their|my|our|the|a|an|(?-i:[A-Z][\w-]{1,30}\s[A-Z][\w-]{1,30})['’]s"
         r"|[A-Z][\w'’-]{1,30}['’]s)")
 # "is" and its hedged cousins - a modal or a "seems" only softens the guess, it is still a guess.
-_ADV = r"(?:probably|likely|possibly|perhaps|maybe|presumably|apparently|surely|certainly|definitely|actually|really|just|also|still)"
+_ADV = r"(?:" + _lexicons.alt(_EN["reply_adverbs"]) + r")"
 _VERB = (rf"(?:(?:might|may|could|must|should|would|can)(?:\s+(?:well|{_ADV}))?\s+be"
          rf"|(?:seems?|seemed|appears?|appeared|sounds?|sounded|looks?|looked)(?:\s+{_ADV})?\s+(?:to\s+be|like)"
          rf"|(?:is|was|are|were)(?:\s+{_ADV})*)")
@@ -98,12 +94,27 @@ def unstated_people(names: Iterable[str], packet: str) -> list[str]:
     return [n for n in names if n and n.strip() and not stated_roles(n, packet)]
 
 
-def rule_line(names: Iterable[str], packet: str) -> str:
+def rule_line(names: Iterable[str], packet: str, *, triples: Any = None, ids: Optional[dict] = None) -> str:
     """The explicit ``role: unknown`` marker + rule for the recall block ('' when every named
-    person has a stated role, the guard is off, or nobody is named)."""
+    person has a stated role, the guard is off, or nobody is named).
+
+    With ``triples`` (``role_triples.TripleSet``) and ``ZOE_STRUCTURAL_CLAIMS=enforce`` a person is "stated" only when an id
+    triple ties their people.id to the owner - the packet's prose is not read. In ``shadow`` the triple verdict is logged beside
+    the lexical one and the lexical one is used."""
     if mode() != "on":
         return ""   # off: nothing; shadow: detection + logging only - the model's input must not change
+    names = list(names)
     unknown = unstated_people(names, packet)
+    if triples is not None:
+        import structural_claims as sc
+
+        if sc.mode() != sc.OFF:
+            by_id = ids or {}
+            st_unknown = [n for n in names if n and n.strip() and not triples.has_role_for(by_id.get(n, ""))]
+            sc.record("role_marker", "recall", "en", "marked" if unknown else "none", "marked" if st_unknown else "none",
+                      applied=sc.enforcing())
+            if sc.enforcing():
+                unknown = st_unknown
     if not unknown:
         return ""
     return RULE.format(names=", ".join(unknown))
@@ -284,17 +295,13 @@ def guarded_people(names: Iterable[str], packet: str = "") -> list[str]:
 
 
 # -- what the user's own words can evidence -----------------------------------------
-_HYPO_LEAD = re.compile(
-    r"^\W*(?:is|are|was|were|am|do|does|did|can|could|would|should|will|may|might|who|whom|whose|what|which|"
-    r"whether|if|maybe|perhaps|possibly|probably|i\s+(?:wonder|think|guess|suppose|believe|doubt|bet)|"
-    r"not\s+sure|no\s+idea|i'?m\s+not\s+sure)\b", re.IGNORECASE)
-_HYPO_ANY = re.compile(r"\b(?:if|whether|wonder|wondering|suppose|supposing|hypothetically|might\s+be|could\s+be)\b",
-                       re.IGNORECASE)
+_HYPO_LEAD = re.compile(r"^\W*(?:" + _lexicons.alt(_EN["role_hypo_lead"]) + r")\b", re.IGNORECASE)
+_HYPO_ANY = re.compile(r"\b(?:" + _lexicons.alt(_EN["role_hypo_any"]) + r")\b", re.IGNORECASE)
 
 
 # A denial ("Anika is not my mother", "was never my wife") is the opposite of a stated role.
-_NEGATED = re.compile(r"\b(?:not|never|no\s+longer|isn'?t|wasn'?t|aren'?t|weren'?t|ain'?t|nobody|neither|nor)\b|n['’]t\b",
-                      re.IGNORECASE)
+_NEGATED = re.compile(r"\b(?:" + _lexicons.alt(_EN["role_negated"]) + r")\b|"
+                      + _lexicons.alt(x + r"\b" for x in _EN["role_negated_suffix"]), re.IGNORECASE)
 
 
 def stated_text(user_text: str) -> str:
@@ -322,7 +329,7 @@ def _claim_patterns(handle_alt: str) -> list[tuple[str, "re.Pattern[str]"]]:
         # Anika Reyes is your mother / Anika was Callum's wife (+ "of Callum")
         ("holder", re.compile(
             rf"\b{n}\b(?P<mid>[^.!?\n]{{0,25}}?\b{_VERB}\s+)(?P<role>(?:{_DET}\s+)+"
-            rf"(?:\w+\s+){{0,1}}(?P<r>{_ROLE})s?\b(?:\s+(?:of|to)\s+[A-Z][\w'’-]+(?:\s[A-Z][\w'’-]+)?)?)",
+            rf"(?:\w+\s+){{0,1}}(?P<r>{_ROLE})s?\b(?!['’]s\b)(?:\s+(?:of|to)\s+[A-Z][\w'’-]+(?:\s[A-Z][\w'’-]+)?)?)",
             re.IGNORECASE)),
         # Your mother is Anika Reyes / Callum's wife is Anika / your mother's name is Anika
         ("cop", re.compile(
@@ -331,7 +338,7 @@ def _claim_patterns(handle_alt: str) -> list[tuple[str, "re.Pattern[str]"]]:
         # She is your mother / He's Callum's brother - a pronoun on a guarded turn is the person asked about
         ("pron", re.compile(
             rf"\b(?P<pron>she|he|they)(?P<mid>(?:\s+{_VERB}|['’]s)\s+)(?P<role>(?:{_DET}\s+)+"
-            rf"(?:\w+\s+){{0,1}}(?P<r>{_ROLE})s?\b)", re.IGNORECASE)),
+            rf"(?:\w+\s+){{0,1}}(?P<r>{_ROLE})s?\b(?!['’]s\b))", re.IGNORECASE)),
         # your mother Anika / your mother, Anika / Callum's wife Anika
         ("pre", re.compile(rf"(?P<role>\b{_DET}\s+(?:\w+\s+){{0,1}}(?P<r>{_ROLE})s?,?\s+)(?={n}\b)",
                            re.IGNORECASE)),
@@ -341,10 +348,19 @@ def _claim_patterns(handle_alt: str) -> list[tuple[str, "re.Pattern[str]"]]:
     ]
 
 
-def neutralise(reply: str, names: Iterable[str], packet: str, user_text: str = "") -> tuple[str, list[str]]:
+def neutralise(reply: str, names: Iterable[str], packet: str, user_text: str = "", *,
+               triples: Any = None, ids: Optional[dict] = None) -> tuple[str, list[str]]:
     """``(reply, guessed)``: ``reply`` with every role the evidence never ties to a named person
     rewritten neutrally and ONE who's-who question added; ``guessed`` lists ``name~role`` per
-    rewrite. Unchanged (and ``[]``) when nothing was guessed. Pure."""
+    rewrite. Unchanged (and ``[]``) when nothing was guessed. Pure.
+
+    ``triples`` / ``ids`` (``role_triples``): the user's people-graph id triples and ``name -> people.id`` of the named people.
+    With ``ZOE_STRUCTURAL_CLAIMS=enforce`` a claim is supported ONLY by a triple (full-name id, kin code, owner id): the packet and
+    the owner's turn are not parsed for evidence, and a claim about a person with no id fails closed. In ``shadow`` the
+    triple verdict is logged beside the lexical one (``STRUCTURAL_FLOOR floor=role``) and the lexical one decides."""
+    import structural_claims as _sc
+
+    smode = _sc.mode() if triples is not None else _sc.OFF
     text = reply or ""
     names_l = list(names)
     handles = _handles(names_l)
@@ -358,9 +374,20 @@ def neutralise(reply: str, names: Iterable[str], packet: str, user_text: str = "
     guessed: list[str] = []
     asked: list[str] = []
 
+    def _supported(full: str, role: str, owner=None) -> bool:
+        if smode == _sc.ENFORCE:
+            ok = triples.supports((ids or {}).get(full, ""), role, owner)
+            _sc.record("role", "reply", "en", "-", "allow" if ok else "deny", applied=True)
+            return ok
+        lex_ok = role_supported_for(full, role.lower(), evidence, owner)
+        if smode == _sc.SHADOW:
+            st_ok = triples.supports((ids or {}).get(full, ""), role, owner)
+            _sc.record("role", "reply", "en", "allow" if lex_ok else "deny", "allow" if st_ok else "deny")
+        return lex_ok
+
     def _unsupported(handle: str, role: str, owner=None) -> Optional[str]:
         full = by_handle.get(handle.lower())
-        if full and not role_supported_for(full, role.lower(), evidence, owner):
+        if full and not _supported(full, role, owner):
             return full
         return None
 
@@ -377,7 +404,7 @@ def neutralise(reply: str, names: Iterable[str], packet: str, user_text: str = "
                 prior = list(handle_rx.finditer(m.string[:m.start()]))
                 cands = [by_handle[prior[-1].group(0).lower()]] if prior else fulls
                 check = all if (len(cands) > 1) else any
-                if check(role_supported_for(f, role.lower(), evidence, owner) for f in cands):
+                if check(_supported(f, role, owner) for f in cands):
                     return m.group(0)
                 full = cands[0]
             else:
@@ -427,8 +454,16 @@ async def filter_stream(turn: AsyncIterator[str], sink: dict[str, Any],
         if held:
             raw = "".join(held)
             names, packet = sink.get("names") or [], sink.get("packet") or ""
+            triples = sink.get("triples")
+            task = sink.get("triples_task")
+            if triples is None and task is not None:
+                # shadow: the triples were fetched in the background while the brain answered; collect them (bounded, never raises)
+                try:
+                    triples = await asyncio.wait_for(asyncio.shield(task), 0.5)
+                except Exception:  # noqa: BLE001 - no triples = the lexical guard alone, as before
+                    triples = None
             try:
-                fixed, guessed = neutralise(raw, names, packet, user_text)
+                fixed, guessed = neutralise(raw, names, packet, user_text, triples=triples, ids=sink.get("ids"))
             except Exception as exc:  # noqa: BLE001 - the guard must never lose a reply
                 logger.warning("role guess guard failed (%s) - reply passed through", type(exc).__name__)
                 fixed, guessed = raw, []
@@ -436,6 +471,9 @@ async def filter_stream(turn: AsyncIterator[str], sink: dict[str, Any],
                 logger.info("ROLE_GUESS_GUARD mode=%s people=%d guessed=%d", mode(), len(names), len(guessed))
             yield fixed if (guessed and mode() == "on") else raw
     finally:
+        task = sink.get("triples_task")
+        if task is not None and not task.done():
+            task.cancel()
         aclose = getattr(turn, "aclose", None)
         if aclose is not None:
             await aclose()

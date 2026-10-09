@@ -60,6 +60,10 @@ const WRITE_CASES: Array<{ name: string; input: Record<string, unknown>; expect:
   { name: 'people', input: { action: 'create', name: 'Sarah', relationship: 'colleague' }, expect: /Added Sarah to your contacts\./ },
   { name: 'remember_fact', input: { fact: 'my anniversary is June 3rd' }, expect: /Got it — I'll remember that\./ },
   { name: 'remember_emotional_moment', input: { moment: 'anxious about settlement' }, expect: /Got it — I'll keep that in mind\./ },
+  { name: 'memory_retire', input: { pick: 1 }, expect: /Noted\./ },
+  // step 1 (no pick) is a READ, but REPLAY-GATED: it goes through runWrite's read mode, never a bare dispatchIntent. Remove that gate and the
+  // ISOLATED test below sees a POST on a replay turn.
+  { name: 'memory_retire', input: {}, expect: /Noted\./ },
   { name: 'media', input: { action: 'play', query: 'some jazz' }, expect: /Playing some jazz\./ },
   { name: 'media', input: { action: 'control', command: 'pause' }, expect: /Done\./ },
   { name: 'media', input: { action: 'set_music_volume', level: 30 }, expect: /Music volume set to 30\./ },

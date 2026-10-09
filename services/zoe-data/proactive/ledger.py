@@ -128,8 +128,12 @@ def _local_day(now: datetime) -> str:
 # ── writer ────────────────────────────────────────────────────────────────────
 async def record(db, *, user_id: str, candidate_id: str | None, kind: str, source_ref: str,
                  shape: str, delivered_by: str, session_id: str, cue_words: str,
-                 now: datetime, trigger: str = "") -> bool:
-    """Insert the delivery, open (idempotent). True when a NEW row was written. Never raises."""
+                 now: datetime, trigger: str = "", outcome: str | None = None,
+                 voiced: int | None = None) -> bool:
+    """Insert the delivery, open (idempotent). True when a NEW row was written. Never raises.
+
+    ``outcome`` / ``voiced`` close the row at birth: a PULL (``delivered_by='pull'``) is voiced by
+    construction (the reply is built from the item) and was asked for, so it needs no sweep."""
     if not ledger_enabled():
         return False
     try:
@@ -137,13 +141,14 @@ async def record(db, *, user_id: str, candidate_id: str | None, kind: str, sourc
         cur = await db.execute(
             """INSERT INTO proactive_deliveries (id, idem_key, user_id, candidate_id, kind,
                    source_ref, shape, delivered_by, session_id, cue_words, trigger_key,
-                   surfaced_at, expires_at, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   surfaced_at, expires_at, created_at, voiced, outcome, outcome_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT (idem_key) DO NOTHING""",
             (uuid.uuid4().hex,
              idem_key(user_id, session_id, kind, source_ref, delivered_by, _local_day(now)),
              user_id, candidate_id, kind, source_ref, shape, delivered_by, session_id,
-             cue_words or "", trigger or "", stamp, _iso_us(now + JUDGE_BY), stamp),
+             cue_words or "", trigger or "", stamp, _iso_us(now + JUDGE_BY), stamp, voiced,
+             outcome, _iso(now) if outcome else None),
         )
         new = (getattr(cur, "rowcount", 1) or 0) > 0
     except Exception as exc:  # noqa: BLE001 — the ledger must never break a settle

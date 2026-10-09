@@ -170,8 +170,9 @@ def test_s5_flag_off_keeps_the_legacy_skip_and_flag_on_runs_two_open_turns(monke
 
 def test_s10_and_s11_are_marked_targets_not_regressions():
     # S21/S22 (2026-10-04) are flag-dark targets: ZOE_CORRECTION_APPLY / ZOE_ROSTER_NEUTRAL_ASK
-    assert sb.EXPECTED == {"S10": "FAIL", "S11": "SKIP", "S21": "FAIL", "S22": "FAIL"}
-    assert "S9" not in sb.SCENARIO_IDS  # the card hop lives in samantha_day_sim.py
+    # S11 (ask-to-remember) was a reserved SKIP target until ZOE_ASK_TO_REMEMBER (2026-10-09): now a verdict
+    assert sb.EXPECTED == {"S10": "FAIL", "S21": "FAIL", "S22": "FAIL"}
+    assert "S9" not in sb.SCENARIO_IDS  # the personalisation hop lives in samantha_day_sim.py
 
 
 @pytest.mark.parametrize("reply, packet, verdict", [
@@ -259,7 +260,7 @@ def test_s10_s11_s12_in_the_run(monkeypatch):
     live, res = _drive(monkeypatch, selector_hook={"enabled": True, "kept": 2})
     assert res["S5"]["verdict"] == "PASS"            # the worry was raised once ...
     assert res["S12"]["verdict"] == "FAIL"           # ... but the next conversation opened with a raise too
-    assert res["S11"]["verdict"] == "SKIP" and res["S11"]["expected"] == "SKIP"
+    assert res["S11"]["verdict"] == "PASS" and "expected" not in res["S11"]
     assert res["S10"]["expected"] == "FAIL" and "d2-ask-cello" in live.chats
     live, res = _drive(monkeypatch, seed_errors=["d2-cello"])
     assert res["S10"]["verdict"] == "ERROR" and "d2-ask-cello" not in live.chats
@@ -894,13 +895,24 @@ def test_setup_problems_names_each_failed_seed_and_unlanded_fact():
                      "S2_new never landed in the recall packet"]
 
 
+BM5_WHY = {
+    "s23": 'I said that because earlier today you told me, "Just so you know, my sister Marisol is flying in from Lisbon on '
+           'Thursday". If that\'s wrong, tell me the right answer, or say forget it.',
+    "s23-nomem": "I didn't use anything I'd remembered about you for that - it was just my answer to what you said.",
+}
+BM5_SUMMARY = ("Here's what I've got on you, newest first.\n**People** (1): Marisol (sister)\n"
+               "I've also kept 1 private thing (health). I only share those if you ask directly.")
+BM5_PULLED = "Here's what I've kept about your health:\n- you get migraines most weeks (3 Oct)"
+
+
 class _ScriptedLive(sb.Live):
     """Drives run_scenarios with no network: every turn answers with the needles
     the scenario wants, so the ONLY way a scenario errors is a setup problem."""
 
     def __init__(self, seed_errors=(), unlanded=(), filler_errors=0, capture_stalls=False,
-                 backdate_incomplete=False, selector_hook=None, store=None):
+                 backdate_incomplete=False, selector_hook=None, store=None, s11="ok"):
         super().__init__("tok", "", "postgresql://x", False)
+        self.s11, self.s11_rows = s11, []  # "ok" = the tier runs; "off" = the brain answers and stores nothing
         self.store = store  # when set, a fact "lands" only if every needle is in this text
         self.selector_hook = selector_hook
         self.seed_errors, self.unlanded = set(seed_errors), set(unlanded)
@@ -924,11 +936,24 @@ class _ScriptedLive(sb.Live):
                                        and len([c for c in self.chats if c.startswith("filler-")])
                                        <= self.filler_errors):
             return {"reply": "", "error": "HTTP 503", "ms": 1, "session": tag}
+        if tag.startswith("s11-"):
+            return {"reply": self._s11(tag), "error": None, "ms": 1, "session": tag}
+        if message == sb.ASK_WHY:
+            return {"reply": BM5_WHY.get(tag, "ok"), "error": None, "ms": 1, "session": tag}
         reply = {"d1-ask-sister": "Your sister Marisol is flying in from Lisbon.",
+                 "s23": "Your sister Marisol is flying in on Thursday from Lisbon.",
+                 "s23-nomem": "The capital of Australia is Canberra.",
+                 "s24-ask": BM5_SUMMARY if message == sb.ASK_KNOW_ME else BM5_PULLED,
+                 "s24-b": "I don't know much about you yet. Tell me something and say \"remember that\" and I'll keep it.",
+                 "s25-bare": "Okay, off the record - I won't keep your next message.",
+                 "s25-fresh": "I don't have anything about a brother-in-law called Cormac.",
                  "d2-ask-dad": "Your dad Teodor is a retired lighthouse keeper.",
                  "b-ask": "I have no idea who is visiting.",
                  "long-ask-sister": "Marisol.", "long-ask-dad": "He kept a lighthouse.",
                  "s5-open-1": "Good! How did the aquarium interview go?",
+                 "s26-pull-1": "You mentioned you're anxious about a job interview at the aquarium "
+                               "on Friday - how's that going?",
+                 "s26-pull-2": "Nothing new for you right now.",
                  "c-ask-list": "You have 2 contacts. Friend: Ottoline Fenwick. Brother: Percival.",
                  "c-ask-rel": "Percival is your brother.",
                  "c-ask-dup": "Ottoline Fenwick is your friend.",
@@ -940,6 +965,29 @@ class _ScriptedLive(sb.Live):
                  }.get(tag, "ok")
         return {"reply": reply, "error": None, "ms": 1, "session": tag}
 
+    def _s11(self, tag):
+        if self.s11 == "off":   # flag off: the brain chats and says it will remember; nothing is stored
+            return {"s11-recall-q": "I'm not sure I can recall that.", "s11-fresh-ask": "I don't have that.",
+                    "s11-forget": "Okay."}.get(tag, "Sure thing! I'll remember that your favourite tea is lapsang "
+                                               "souchong, a lovely smoky cup. Anything else you would like me to remember?")
+        if tag == "s11-say":
+            self.s11_rows.append("my favourite tea is lapsang souchong")
+            return "Got it — I'll remember that."
+        if tag == "s11-keep":
+            self.s11_rows.append("I can't stand coriander")
+            return "Noted — I'll remember that."
+        if tag == "s11-repeat":
+            return "I've already got that one."
+        if tag == "s11-fresh-ask":
+            return "Your favourite tea is lapsang souchong."
+        if tag == "s11-recall-q":
+            return "You asked me to remember: my favourite tea is lapsang souchong; and I can't stand coriander."
+        self.s11_rows = [r for r in self.s11_rows if "coriander" not in r]   # "Forget that." retracts the newest
+        return 'Done — I forgot: "I can\'t stand coriander".'
+
+    def packet_count(self, user):
+        return 5 + len(self.s11_rows)
+
     def wait_landed(self, user, message, needles, timeout_s=90):
         if self.store is not None:
             landed = all(n.lower() in self.store.lower() for n in needles)
@@ -947,9 +995,18 @@ class _ScriptedLive(sb.Live):
         landed = not (set(needles) & self.unlanded)
         return {"landed": landed, "waited_s": 0}
 
+    def transcript_off_record(self, user, needle):
+        return {"rows": 1, "flagged": 1}
+
     def packet(self, user, message):
         if user == B:
             return ""
+        if "tea" in message or "coriander" in message:
+            return "\n".join(f"- {r}" for r in self.s11_rows)
+        if "Odalys" in message:
+            return "- User's neighbour Odalys keeps bees on her roof"
+        if "Cormac" in message or "Lysander" in message:
+            return "- User's dad Teodor is a retired lighthouse keeper"
         if "Priya" in message:
             return "- Priya Nair's birthday is 7 August 1991"
         if "Biscuit" in message:
@@ -971,6 +1028,15 @@ class _ScriptedLive(sb.Live):
 
     def run_selector(self, user):
         return self.selector_hook
+
+    def rearm(self, user):
+        return {"rows": 1, "armed": 1}
+
+    def inbox(self, user):
+        pulled = "s26-pull-1" in self.chats
+        if user is None or pulled:
+            return {"enabled": True, "count": 0, "top": None, "quiet": False}
+        return {"enabled": True, "count": 1, "top": "question", "quiet": False}
 
     def raise_state(self, user):
         return [{"kind": "emotional", "carries": True, "surfaced": 1}]
@@ -1316,7 +1382,7 @@ def test_parse_selection_full_run_is_none_and_filters_are_validated():
     assert sb.parse_selection(None, "temporal,e") == frozenset({"S2", "S10", "S3"})
     assert sb.parse_selection("S21,S1", "b") == frozenset({"S21"})              # intersection
     for only, axis in (("S99", None), ("S1,SX", None), ("", None), (None, "zz"), (None, ""),
-                       (None, "f"), (None, "h"),                # axes with no bar scenario
+                       (None, "i"), (None, "h"),                # axes with no bar scenario (f has one: S25)
                        ("S1", "b")):                            # empty intersection
         with pytest.raises(ValueError):
             sb.parse_selection(only, axis)
@@ -1469,3 +1535,270 @@ def test_selected_none_is_the_full_bar_unchanged(monkeypatch):
     assert set(res) == set(sb.SCENARIO_IDS)
     live2, res2 = _drive(monkeypatch, selected=frozenset(sb.SCENARIO_IDS))
     assert live.chats == live2.chats and set(res2) == set(res)
+
+
+# ── S11 (2026-10-09): ask-to-remember ────────────────────────────────────────
+
+def _s11_turns(**over):
+    t = {"say_tea": "Got it — I'll remember that.", "say_keep": "Noted — I'll remember that.",
+         "packet_after_say": "- my favourite tea is lapsang souchong",
+         "packet_after_keep": "- I can't stand coriander\n- my favourite tea is lapsang souchong",
+         "count_once": 7, "count_repeat": 7, "repeat_reply": "I've already got that one.",
+         "tea_reply": "Your favourite tea is lapsang souchong.",
+         "recall_reply": "You asked me to remember: my favourite tea is lapsang souchong; and I can't stand coriander.",
+         "forget_reply": 'Done — I forgot: "I can\'t stand coriander".',
+         "packet_final": "- my favourite tea is lapsang souchong"}
+    t.update(over)
+    return t
+
+
+def test_s11_passes_the_whole_contract():
+    v, ev = sb.score_s11(_s11_turns())
+    assert v == "PASS", ev
+
+
+@pytest.mark.parametrize("over, why", [
+    # "I'll remember" with no row behind it (the brain without the tier): the headline failure
+    ({"packet_after_say": "- something else"}, "no row"),
+    ({"packet_after_keep": "- my favourite tea is lapsang souchong"}, "no row"),
+    # narration / more than one sentence / long
+    ({"say_tea": "Let me save that for you. Done, I'll remember it."}, "one short sentence"),
+    ({"say_keep": "Sure thing! I'll remember that you can't stand coriander, it's a very divisive herb indeed."},
+     "one short sentence"),
+    ({"say_tea": "Okay."}, "one short sentence"),                      # confirms nothing
+    # not idempotent / unreadable count
+    ({"count_repeat": 8}, "added rows"),
+    ({"count_once": None}, "idempotency is unproven"),
+    ({"repeat_reply": "Okay."}, "repeat was not acknowledged"),
+    # recall
+    ({"tea_reply": "I don't know your favourite tea."}, "fresh session"),
+    ({"recall_reply": "You asked me to remember: my favourite tea is lapsang souchong."}, "give both back"),
+    # retraction
+    ({"packet_final": "- I can't stand coriander\n- my favourite tea is lapsang souchong"}, "left the coriander"),
+    ({"packet_final": ""}, "also removed the tea"),
+    ({"forget_reply": "Okay."}, "did not say it forgot"),
+])
+def test_s11_fails_each_broken_part(over, why):
+    v, ev = sb.score_s11(_s11_turns(**over))
+    assert v == "FAIL" and why in ev["why"], ev
+
+
+@pytest.mark.parametrize("key", ["packet_after_say", "packet_after_keep", "packet_final"])
+def test_s11_unread_packet_is_error_never_pass(key):
+    assert sb.score_s11(_s11_turns(**{key: None}))[0] == "ERROR"
+
+
+def test_s11_in_the_run_passes_and_negative_control_is_red(monkeypatch):
+    live, res = _drive(monkeypatch)                      # the tier answers: PASS, a verdict not a target
+    assert res["S11"]["verdict"] == "PASS" and "expected" not in res["S11"]
+    assert [c for c in live.chats if c.startswith("s11-")] == [
+        "s11-say", "s11-keep", "s11-repeat", "s11-fresh-ask", "s11-recall-q", "s11-forget"]
+    live, res = _drive(monkeypatch, s11="off")            # ZOE_ASK_TO_REMEMBER off: the brain says it will, stores nothing
+    assert res["S11"]["verdict"] == "FAIL" and "no row" in res["S11"]["evidence"]["why"]
+
+
+def test_s11_partial_run_sends_only_its_own_turns(monkeypatch):
+    live, res = _drive(monkeypatch, selected=frozenset({"S11"}))
+    assert set(res) == {"S11"} and res["S11"]["verdict"] == "PASS"
+    assert all(c.startswith("s11-") for c in live.chats)
+
+
+def test_s11_unfinished_capture_is_error_never_pass(monkeypatch):
+    # PR #1932 review: the three wait_captured() results used to be evidence only; a stalled capture scored PASS
+    live, res = _drive(monkeypatch, capture_stalls=True, selected=frozenset({"S11"}))
+    assert res["S11"]["verdict"] == "ERROR"
+    assert "capture not observed" in res["S11"]["evidence"]["why"]
+
+
+def test_s11_failed_turn_is_error(monkeypatch):
+    live, res = _drive(monkeypatch, seed_errors=["s11-forget"])
+    assert res["S11"]["verdict"] == "ERROR"
+
+
+def test_s11_fixtures_are_synthetic_and_in_the_plan():
+    assert "S11" not in sb.EXPECTED
+    plan = sb.plan_text(1, frozenset({"S11"}))
+    assert "S11 ask-to-remember" in plan and "reserved" not in plan.lower()
+
+
+# ── S26 / S27 (2026-10-09): pull, not push — "what's up?" delivers once; the orb is a count ──
+# Negative controls (each run red before commit): score_s26 accepting a repeat / a missing "nothing
+# new" / surfaced != 1; score_s27 accepting words in the state / a non-clearing state / a guest count;
+# run_pull reporting PASS when the feature is off (the live server answers the greeting and
+# ``enabled: false``).
+
+_PULL1 = "You mentioned you're anxious about a job interview at the aquarium on Friday - how's that going?"
+_NOTHING = "Nothing new for you right now."
+_CARRY = [{"kind": "open_loop", "carries": True, "surfaced": 1}]
+_STATE = {"enabled": True, "count": 1, "top": "question", "quiet": False}
+_CLEAR = {"enabled": True, "count": 0, "top": None, "quiet": False}
+
+
+def test_s26_pass_and_every_failure_mode():
+    assert sb.score_s26(_PULL1, _NOTHING, _CARRY)[0] == "PASS"
+    assert sb.score_s26("Hi! Not much, how are you?", _NOTHING, _CARRY)[0] == "FAIL"          # no delivery
+    assert sb.score_s26(_PULL1, _PULL1, _CARRY)[0] == "FAIL"                                  # delivered again
+    v, ev = sb.score_s26(_PULL1, "All quiet on my side.", _CARRY)                              # no "nothing new"
+    assert v == "FAIL" and "nothing new" in ev["why"]
+    v, ev = sb.score_s26(_PULL1, "Nothing new - though that aquarium interview is still on.", _CARRY)
+    assert v == "FAIL" and ev["repeated_second"] and ev["nothing_new_second"]   # says it AND repeats it
+    assert sb.score_s26(_PULL1, _NOTHING, [{"carries": True, "surfaced": 2}])[0] == "FAIL"
+    assert sb.score_s26(_PULL1, _NOTHING, [{"carries": True, "surfaced": 0}])[0] == "FAIL"
+    assert sb.score_s26(_PULL1, _NOTHING, [])[0] == "FAIL"
+    assert sb.score_s26(_PULL1, _NOTHING, [{"carries": False, "surfaced": 1}])[0] == "FAIL"
+
+
+def test_s27_pass_and_every_failure_mode():
+    assert sb.score_s27(_STATE, _CLEAR, _CLEAR)[0] == "PASS"
+    assert sb.score_s27(None, _CLEAR, _CLEAR)[0] == "FAIL"                                    # route absent
+    assert sb.score_s27(_STATE, None, _CLEAR)[0] == "FAIL"
+    assert sb.score_s27({**_STATE, "enabled": False}, _CLEAR, _CLEAR)[0] == "FAIL"            # flag off
+    assert sb.score_s27({**_STATE, "count": 0}, _CLEAR, _CLEAR)[0] == "FAIL"                  # pending not counted
+    assert sb.score_s27({**_STATE, "top": "emotional"}, _CLEAR, _CLEAR)[0] == "FAIL"          # not a coarse class
+    v, ev = sb.score_s27({**_STATE, "text": "Job interview at the aquarium"}, _CLEAR, _CLEAR)  # content
+    assert v == "FAIL" and ev["content_free"] is False
+    assert sb.score_s27({**_STATE, "top": "aquarium interview"}, _CLEAR, _CLEAR)[0] == "FAIL"
+    v, ev = sb.score_s27(_STATE, {**_CLEAR, "top": "job interview"}, _CLEAR)                  # words in a cleared state
+    assert v == "FAIL" and ev["content_free"] is False
+    assert sb.score_s27(_STATE, _STATE, _CLEAR)[0] == "FAIL"                                  # never clears
+    assert sb.score_s27(_STATE, _CLEAR, _STATE)[0] == "FAIL"                                  # guest sees a count
+
+
+def test_s26_s27_are_registered_and_ride_on_s5():
+    assert {"S26", "S27"} <= set(sb.SCENARIO_IDS)
+    assert sb.seed_closure({"S26"}) == frozenset({"S26", "S5", "S4"})
+    assert {"S26", "S27"} <= sb.MULTI_DAY and sb.AXIS_OF["S26"] == "emotional"
+    assert "S26" not in sb.EXPECTED and "S27" not in sb.EXPECTED     # real bars, not targets
+    assert "S26" in sb.plan_text(1) and "S27" in sb.plan_text(1)
+
+
+def test_healthy_run_passes_the_pull_scenarios(monkeypatch):
+    live, res = _drive(monkeypatch, selector_hook={"enabled": True, "kept": 1})
+    assert res["S26"]["verdict"] == "PASS" and res["S27"]["verdict"] == "PASS"
+    assert "s26-pull-1" in live.chats and "s26-pull-2" in live.chats
+    assert live.chats.index("s26-pull-1") > live.chats.index("s5-open-2")   # after S5/S12 used the raise
+
+
+def test_the_pull_scenarios_skip_when_the_selector_hook_is_off(monkeypatch):
+    live, res = _drive(monkeypatch, selector_hook=None)
+    assert res["S26"]["verdict"] == "SKIP" and res["S27"]["verdict"] == "SKIP"
+    assert "s26-pull-1" not in live.chats
+
+
+def test_partial_run_of_s26_runs_the_s5_block_and_reports_only_s26(monkeypatch):
+    live, res = _drive(monkeypatch, selector_hook={"enabled": True, "kept": 1},
+                       selected=frozenset({"S26"}))
+    assert set(res) == {"S26"} and res["S26"]["verdict"] == "PASS"
+    assert "d1-worry" in live.chats and "s5-open-1" in live.chats
+
+
+def test_nothing_to_re_arm_is_a_skip_not_a_pass(monkeypatch):
+    monkeypatch.setattr(_ScriptedLive, "rearm", lambda self, user: {"rows": 0, "armed": 0})
+    live, res = _drive(monkeypatch, selector_hook={"enabled": True, "kept": 1})
+    assert res["S26"]["verdict"] == "SKIP" and "s26-pull-1" not in live.chats
+
+
+def test_the_feature_off_is_red_not_green(monkeypatch):
+    """Control: a server without ZOE_PULL_NOT_PUSH answers the greeting and reports the orb disabled."""
+    monkeypatch.setattr(_ScriptedLive, "inbox",
+                        lambda self, user: {"enabled": False, "count": 0, "top": None, "quiet": False})
+    orig = _ScriptedLive.chat
+
+    def greeting(self, user, tag, message):
+        out = orig(self, user, tag, message)
+        if tag.startswith("s26-pull"):
+            out["reply"] = "Not much! How are you doing?"
+        return out
+    monkeypatch.setattr(_ScriptedLive, "chat", greeting)
+    live, res = _drive(monkeypatch, selector_hook={"enabled": True, "kept": 1})
+    assert res["S26"]["verdict"] == "FAIL" and res["S27"]["verdict"] == "FAIL"
+
+
+def test_a_guest_reading_a_count_turns_s27_red(monkeypatch):
+    monkeypatch.setattr(_ScriptedLive, "inbox",
+                        lambda self, user: {"enabled": True, "count": 0 if "s26-pull-1" in self.chats else 1,
+                                            "top": "question", "quiet": False})
+    live, res = _drive(monkeypatch, selector_hook={"enabled": True, "kept": 1})
+    assert res["S27"]["verdict"] == "FAIL" and "guest" in res["S27"]["evidence"]["why"]
+    assert res["S26"]["verdict"] == "PASS"
+
+
+def test_a_pull_turn_error_is_an_error_not_a_verdict(monkeypatch):
+    live, res = _drive(monkeypatch, selector_hook={"enabled": True, "kept": 1},
+                       seed_errors={"s26-pull-2"})
+    assert res["S26"]["verdict"] == "ERROR"
+
+
+def test_the_pull_scenarios_never_touch_a_non_demo_user():
+    live = sb.Live("tok", "", "postgresql://x", False)
+    with pytest.raises(Exception):
+        live.rearm("real-user")
+    with pytest.raises(Exception):
+        live.inbox("real-user")
+
+
+# ── S23-S25 (BM5, 2026-10-09): provenance answers and memory control ───────────────────────
+
+def test_bm5_scenarios_run_pass_on_a_healthy_service_and_are_regression_gates(monkeypatch):
+    live, res = _drive(monkeypatch)
+    for sid in ("S23", "S24", "S25"):
+        assert res[sid]["verdict"] == "PASS", res[sid]
+        assert "expected" not in res[sid]                    # not a flag-dark target: a real regression gate
+    # S23's explain asks ride the SAME session as the recall reply they explain; the no-memory leg has its own
+    assert live.chats.count("s23") == 2 and live.chats.count("s23-nomem") == 2
+    assert {"s24-ask", "s24-b", "s24-private", "s25-control", "s25-secret", "s25-bare", "s25-next", "s25-fresh"} <= set(live.chats)
+    assert sb.AXIS_OF["S23"] == "recall" and sb.AXIS_OF["S25"] == "forgetting"
+    assert sb.SEED_DEPS["S23"] == ("S1",) and sb.SEED_DEPS["S24"] == ("S1", "S7")
+
+
+def test_s23_and_s24_ride_on_the_seeds_they_read_and_only_those(monkeypatch):
+    live, res = _drive(monkeypatch, selected=frozenset({"S23"}))
+    assert set(res) == {"S23"} and res["S23"]["verdict"] == "PASS"
+    assert "d1-sister" in live.chats and "d1-dad" not in live.chats and "s24-private" not in live.chats
+    live, res = _drive(monkeypatch, selected=frozenset({"S24"}))
+    assert set(res) == {"S24"} and res["S24"]["verdict"] == "PASS"
+    assert {"d1-sister", "d1-dad", "s24-private"} <= set(live.chats) and "s23" not in live.chats
+    live, res = _drive(monkeypatch, selected=frozenset({"S25"}))
+    assert set(res) == {"S25"} and res["S25"]["verdict"] == "PASS" and "d1-sister" not in live.chats
+
+
+def test_a_failed_seed_makes_s23_an_error_and_the_ask_is_not_sent(monkeypatch):
+    live, res = _drive(monkeypatch, selected=frozenset({"S23"}), seed_errors={"d1-sister"})
+    assert res["S23"]["verdict"] == "ERROR" and "s23" not in live.chats
+    live, res = _drive(monkeypatch, selected=frozenset({"S24"}), seed_errors={"s24-private"})
+    assert res["S24"]["verdict"] == "ERROR" and "s24-ask" not in live.chats
+
+
+def test_s25_is_an_error_when_the_control_never_landed_or_the_transcript_cannot_be_read(monkeypatch):
+    live, res = _drive(monkeypatch, selected=frozenset({"S25"}), unlanded={"odalys"})
+    assert res["S25"]["verdict"] == "ERROR" and "s25-fresh" not in live.chats          # absence proves nothing
+    monkeypatch.setattr(_ScriptedLive, "transcript_off_record", lambda self, user, needle: None)
+    live, res = _drive(monkeypatch, selected=frozenset({"S25"}))
+    assert res["S25"]["verdict"] == "ERROR"
+
+
+def test_a_pre_feature_service_fails_all_three_in_the_harness(monkeypatch):
+    """The pre-feature shape (the live run against main, 2026-10-09): the brain explains from its own context, the old portrait
+    line answers 'what do you know about me', and the off-the-record fact is stored and told to a fresh session."""
+    monkeypatch.setattr(_ScriptedLive, "transcript_off_record", lambda self, user, needle: {"rows": 1, "flagged": 0})
+    monkeypatch.setitem(BM5_WHY, "s23", "I mentioned Marisol was flying in because you asked who was flying in on Thursday.")
+    monkeypatch.setitem(BM5_WHY, "s23-nomem", "I was just offering to save some names since you mentioned them earlier.")
+    monkeypatch.setattr(sys.modules[__name__], "BM5_SUMMARY", "I don't have a deep portrait of you yet.")
+    monkeypatch.setattr(sys.modules[__name__], "BM5_PULLED", "I don't have any information stored about your health.")
+    orig = _ScriptedLive.packet
+    monkeypatch.setattr(_ScriptedLive, "packet", lambda self, user, message: (
+        "- User's brother-in-law Cormac is secretly getting a divorce\n- User's cousin Lysander lost his job at the shipyard"
+        if "Cormac" in message or "Lysander" in message else orig(self, user, message)))
+    live, res = _drive(monkeypatch, selected=frozenset({"S23", "S24", "S25"}))
+    assert {s: res[s]["verdict"] for s in ("S23", "S24", "S25")} == {"S23": "FAIL", "S24": "FAIL", "S25": "FAIL"}
+
+
+def test_the_bm5_scorers_never_pass_on_empty_or_canned_text():
+    assert sb.score_s23("", "", "", "")[0] == "ERROR"                    # the recall reply never used the fact: nothing to explain
+    assert sb.score_s24("", "", "")[0] == "FAIL"
+    assert sb.score_s25("", "", "", "", "", {"rows": 1, "flagged": 1})[0] == "ERROR"      # the control never landed
+
+
+def test_plan_text_lists_the_bm5_scenarios():
+    text = sb.plan_text(1)
+    assert all(f"{sid} " in text for sid in ("S23", "S24", "S25"))
