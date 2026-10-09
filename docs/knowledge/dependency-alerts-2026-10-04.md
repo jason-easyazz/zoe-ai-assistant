@@ -165,3 +165,24 @@ Keep `--no-deps` — without it compose also reconciles `zoe-database` (pinned b
 - `npm ci` for zoe-core (see above): resolvable + in sync, not installed.
 - The 4 zoe-auth test modules that need zoe-data's `sqlite_compat` on `PYTHONPATH` — CI's
   lane runs them; they do not touch JWTs.
+
+## Addendum 2026-10-09 — python-jose removed (CRITICAL #86/#87/#88, GHSA-3qf3-8w2g-rqmx)
+
+The PyJWT section above is superseded in one respect: **zoe-auth now runs on PyJWT.**
+
+- Advisory: python-jose `<= 3.5.0`, **no patched release** (CVE-2026-85394; incomplete fix of
+  CVE-2024-33663). HMAC init accepts a DER-encoded public key (no PEM armour / SSH prefix) as an
+  HS256 secret, so anyone holding the public key can forge HS256 tokens when `algorithms` is not
+  restricted.
+- Reachability here was low (`oidc/tokens.py` already passed `algorithms=["RS256"]`, and only
+  RS256 was ever issued), but a critical with no fix must not stay pinned, so the dependency is gone:
+  `oidc/tokens.py` + `oidc/keys.py` use `jwt` / `jwt.algorithms.RSAAlgorithm` (PyJWT 2.15.0, already
+  pinned). zoe-data never imported `jose` — its two manifest pins were dead weight and are removed.
+- Token and JWKS format are unchanged: same RS256 compact JWS and `{alg,kid,typ}` header, same claims,
+  same published JWK members (PyJWT's extra `key_ops` is stripped). `tests/test_oidc_jwt_compat.py`
+  carries a token pair and JWK minted by python-jose 3.5.0 and proves the new code verifies them;
+  the new-token-under-old-library direction was run once at swap time. HS256-with-DER-public-key and
+  `alg=none` forgeries are pinned as rejected.
+- Operator step: the live zoe-data venv(s) still have python-jose installed until rebuilt; it is
+  unimported, so this is hygiene. The zoe-auth image drops it on the deploy rebuild.
+
