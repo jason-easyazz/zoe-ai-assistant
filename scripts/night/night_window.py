@@ -66,6 +66,21 @@ RESTORE_ORDER = (BRAIN, KOKORO, ROUTER, ZOE_DATA)
 NIGHT_UNITS = {"llm": "zoe-night-12b.service", "clone4": "zoe-night-4b32k.service", "shim": "zoe-night-embed.service"}
 
 
+def _json_objects(text: str):
+    """Every JSON object in ``text``, whether it sits on one line or is indented across many (a log mixes stderr lines with the CLI's stdout object)."""
+    dec = json.JSONDecoder()
+    i = text.find("{")
+    while i != -1:
+        try:
+            v, end = dec.raw_decode(text, i)
+        except ValueError:
+            i = text.find("{", i + 1)
+            continue
+        if isinstance(v, dict):
+            yield v
+        i = text.find("{", end)
+
+
 def _json(text: str) -> dict:
     try:
         v = json.loads(text)
@@ -1045,9 +1060,8 @@ class NightWindow(bk.Window):
         if label == "12B" and self.speed.get("prefill_tps"):
             argv += ["--prefill-tok-s", f"{self.speed['prefill_tps']:.1f}"]
         res = self.host.run_watched(argv, 420.0, {**os.environ, "ZOE_HARNESS": "1"}, lambda: self.guard(), log, cfg.metrics_poll_s)
-        for line in reversed(self.host.read(str(log)).splitlines()):
-            d = _json(line.strip())
-            if d.get("cells"):
+        for d in reversed(list(_json_objects(self.host.read(str(log))))):          # the whole object, compact or indented: the CLI's stdout is not guaranteed one line
+            if isinstance(d.get("cells"), dict) and d["cells"]:
                 return {k: v for k, v in d["cells"].items() if isinstance(v, (str, int))}
         return {"error": f"no cells object in the output (rc {res.rc})"}
 

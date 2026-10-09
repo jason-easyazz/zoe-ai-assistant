@@ -205,6 +205,7 @@ def test_cells_mode_aggregates_the_model_counters_and_names_the_reason_for_an_er
     try:
         r = _run_py(["scripts/maintenance/zoe-night-mind.py", "--model-url", srv.url, "--ctx-tokens", "8192", "--cells", "--decode-tok-s", "50", "--prefill-tok-s", "900"])
         assert r.returncode == 0, r.stderr[-800:]
+        assert len(r.stdout.strip().splitlines()) == 1, "stdout must be ONE compact line: the 12B window reads the cells object from it (PR #1946 review)"
         d = json.loads(r.stdout)
         t = d["totals"]
         assert t["calls"] > 0 and t["prompt_tokens"] > 0 and t["completion_tokens"] > 0 and t["members"] == 0       # was calls == 0
@@ -222,3 +223,43 @@ def test_a_cell_that_cannot_reach_its_model_is_an_error_that_says_why(tmp_path):
         assert r.returncode == 2 and json.loads(r.stdout)["status"] == "llm_unreachable" and json.loads(r.stdout)["reason"]
     finally:
         srv.close()
+
+
+def test_pretty_is_the_only_way_to_get_a_multi_line_stdout():
+    srv = FakeNightServer(FakeNightBrain())
+    try:
+        r = _run_py(["scripts/maintenance/zoe-night-mind.py", "--model-url", srv.url, "--cells", "--pretty"])
+        assert r.returncode == 0, r.stderr[-800:]
+        assert len(r.stdout.strip().splitlines()) > 5 and "cells" in json.loads(r.stdout)
+    finally:
+        srv.close()
+
+
+def _cli_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("zoe_night_mind_cli", REPO / "scripts" / "maintenance" / "zoe-night-mind.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_exit_2_after_an_earlier_member_committed_says_how_far_it_got(monkeypatch, capsys):
+    cli = _cli_module()
+    members = [{"user_id": "a", "status": "ran", "written": 3, "observations_written": 3}, {"user_id": "b", "status": "ran", "written": 0, "observations_written": 0},
+               {"user_id": "c", "status": "llm_unreachable", "written": 0}]
+    assert cli.written_tally(members) == (1, 3)
+
+    async def fake_amain(argv=None):
+        return 2, {"status": "llm_unreachable", "members": members, "members_written": 1, "members_total": 3, "totals": {}}
+    monkeypatch.setattr(cli, "amain", fake_amain)
+    assert cli.main(["--all-members"]) == 2
+    out = capsys.readouterr()
+    assert json.loads(out.out)["members_written"] == 1 and "after 1 of 3 members had committed" in out.err and "per member" in out.err
+    assert "PER MEMBER" in cli.__doc__                                      # the contract text states the guarantee per member, not run-wide
+
+
+def test_a_pin_or_a_card_said_in_a_turn_is_never_kept_as_a_night_quote():
+    for secret in ("my pin is 4826 and I always forget it", "my card number is 4111 1111 1111 1111 and I am nervous about it"):
+        assert nm._unstorable(secret) is True, secret                       # the scrubbed text differs from the words: the quote is rejected, never rewritten
+    assert nm._unstorable("I felt really proud of the way the rehearsal went on Sunday") is False

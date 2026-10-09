@@ -27,16 +27,18 @@ Flags
   --transcript-file F  synthetic runs without Postgres: a JSON list of {"id","text","at"} (turns of ONE member, given by --user).
   --cells              do not touch any member: score the reflection cells K1-K12 (the lab, scratch stores) against --model-url and print the counts.
 Output
-  ONE JSON object on stdout (logs go to stderr):
+  ONE JSON object on stdout, ONE compact line (``--pretty`` indents it; the window parses either), logs go to stderr:
     {"status": "ok"|"nothing_to_do"|"llm_unreachable"|"error", "mode", "dry_run", "model_url", "model", "ctx_tokens", "chunk_budget", "max_calls", "date",
      "members": [{"user_id", "status", "turns_in", "turns_dropped_routine", "turns_skipped_cap", "chunks", "calls", "calls_invalid", "moments_proposed",
                   "moments_verified", "moments_held", "observations_written", "observations_pending", "threads_created", "threads_updated",
                   "prompt_tokens", "completion_tokens", "wall_s", "written", "skipped_reason"?, "error"?}],
      "totals": {"members", "calls", "prompt_tokens", "completion_tokens", "wall_s", "observations_written", "observations_pending", "calls_invalid",
-                "completion_tokens_per_wall_s"},
+                "completion_tokens_per_wall_s", "members_written"},
+     "members_written": N, "members_total": M,      (members whose pass committed rows / members the run reached: partial completion is visible here)
      "cells": {"K1": "PASS", ..., "pass", "fail", "skip", "error", "k1": {"judged", "true", "false"}}      (only with --cells)}
-Exit codes: 0 ok / nothing to do, 1 error, 2 the model is unreachable (NOTHING was written: the pass computes the whole night in memory and commits at the end,
-and probes the server first).
+Exit codes: 0 ok / nothing to do, 1 error, 2 the model is unreachable. The "nothing was written" guarantee is PER MEMBER: each member's night is computed in memory
+and committed at the end of that member, and the server is probed first. With --all-members an earlier member's committed night stays when a later member
+fails or the server drops, so exit 2 / 1 can follow earlier writes: read ``members_written`` / ``members_total`` in the JSON (and stderr's exit-2 line) for how far it got.
 Never prints environment, tokens or the text of what the owner said (counts and ids only).
 """
 from __future__ import annotations
@@ -73,6 +75,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--transcript-file", default="")
     ap.add_argument("--cells", action="store_true")
     ap.add_argument("--seed", default="zmb-v1", help="--cells: the corpus seed")
+    ap.add_argument("--pretty", action="store_true", help="indent the stdout JSON for reading by eye (default: ONE compact line, which is what the 12B window parses)")
     return ap
 
 
@@ -171,6 +174,12 @@ def totals(members: "list[dict]") -> dict:
     return t
 
 
+def written_tally(members: "list[dict]") -> "tuple[int, int]":
+    """(members whose pass committed rows, members reached). ``written`` is the pass's own count of committed observations."""
+    done = sum(1 for m in members if int(m.get("written") or 0) > 0 or int(m.get("observations_written") or 0) > 0)
+    return done, len(members)
+
+
 def run_cells(args, url: str, cfg) -> dict:
     """Score the reflection cells K1-K12 (the lab: scratch stores, synthetic household) against the model at ``url``. Touches no member."""
     sys.path.insert(0, str(REPO / "scripts" / "perf"))
@@ -240,6 +249,8 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
     res = await run_members(args, cfg, mode)
     summary["members"] = res["members"]
     summary["totals"] = totals(res["members"])
+    summary["members_written"], summary["members_total"] = written_tally(res["members"])
+    summary["totals"]["members_written"] = summary["members_written"]
     statuses = {m.get("status") for m in res["members"]}
     if "llm_unreachable" in statuses:
         summary["status"] = "llm_unreachable"
@@ -256,8 +267,12 @@ def main(argv: "list[str] | None" = None) -> int:
     import logging
 
     logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(message)s")
+    pretty = bool(argv and "--pretty" in argv) if argv is not None else "--pretty" in sys.argv[1:]
     code, summary = asyncio.run(amain(argv))
-    print(json.dumps(summary, indent=2, sort_keys=True))
+    if code == 2 and summary.get("members_written"):
+        print(f"exit 2: the model went away after {summary['members_written']} of {summary.get('members_total')} members had committed their night "
+              f"(those rows stay; the guarantee is per member)", file=sys.stderr)
+    print(json.dumps(summary, indent=2 if pretty else None, sort_keys=True, separators=None if pretty else (",", ":")))
     return code
 
 

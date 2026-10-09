@@ -823,6 +823,14 @@ def test_the_night_mind_entry_point_is_used_as_soon_as_it_exists_with_the_served
 
 
 def test_the_trial_also_scores_the_night_mind_cells_when_the_entry_point_exists(tmp_path):
+    _trial_cells(tmp_path, pretty=True)
+
+
+def test_the_cells_object_is_read_from_the_compact_one_line_stdout_too(tmp_path):
+    _trial_cells(tmp_path, pretty=False)
+
+
+def _trial_cells(tmp_path, *, pretty):
     script = tmp_path / "zoe-night-mind.py"
     script.write_text("# stand-in")
     w, host, cfg = make(tmp_path, argv=["--trial"], start=at(3, 5), cfg_kw={"night_mind_script": script})
@@ -834,7 +842,9 @@ def test_the_trial_also_scores_the_night_mind_cells_when_the_entry_point_exists(
             cells_argv.append(list(argv))
             host.cmds.append((list(argv), True))
             log_path.parent.mkdir(parents=True, exist_ok=True)
-            log_path.write_text("log noise\n" + json.dumps({"status": "ok", "cells": {"K1": "PASS", "K6": "FAIL", "pass": 1, "fail": 1}}) + "\n")
+            obj = {"status": "ok", "model": "12B", "members": [], "totals": {"calls": 9}, "cells": {"K1": "PASS", "K6": "FAIL", "pass": 1, "fail": 1, "k1": {"judged": 4}}}
+            # the real log: stderr lines (some with braces) around the CLI's stdout object - indented over many lines (the old CLI) or one compact line (the new one)
+            log_path.write_text("NIGHT_MIND user=- status={ok}\nloading {model}\n" + (json.dumps(obj, indent=2, sort_keys=True) if pretty else json.dumps(obj)) + "\ndone {}\n")
             return bk.Result(0, "")
         return real(argv, timeout, env, tick, log_path, interval)
     host.run_watched = rw
