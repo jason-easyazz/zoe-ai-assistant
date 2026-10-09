@@ -271,6 +271,84 @@ jobs:
                 continue;
               }
 
+              // ELIGIBILITY — Greptile is billed per review, so a settled PR is handed off
+              // only when it is load-bearing or big (AGENTS.md Tier 3: routine docs /
+              // config / tests / UI changes skip it). Operator decision 2026-10-09: "only
+              // use Greptile for the big things, it costs per run" — before this every
+              // settled PR was labelled and summoned, routine or not (12 of the last 12).
+              // Three ways in: the `greptile-request` label (an explicit ask), a changed
+              // file under a load-bearing path, or a diff at pr-hygiene's warn ceiling.
+              const REQUEST_LABEL = 'greptile-request';
+              // The voice path is the repo's canonical definition, MIRRORED from
+              // scripts/maintenance/voice_gate_check.py VOICE_PATH_PATTERNS (fnmatch → regex);
+              // tests/unit/test_greptile_gate_workflow.py fails if the two drift.
+              const VOICE_PATH = [
+                /^services\/zoe-data\/routers\/voice_tts\.py$/,
+                /^services\/zoe-data\/zoe_core_client\.py$/,
+                /^services\/zoe-data\/fast_tiers\.py$/,
+                /^services\/zoe-data\/voice_delivery\.py$/,
+                /^services\/zoe-data\/tts_waterfall\.py$/,
+                /^services\/zoe-data\/requirements\.txt$/,
+                /^services\/zoe-data\/requirements-py312\.txt$/,
+                /^scripts\/setup\/build_py312_venv\.sh$/,
+                /^scripts\/lib\/service_python\.py$/,
+                /^scripts\/setup\/systemd\/zoe-voice-regression\.service$/,
+                /^scripts\/deploy\/zoe_data_python\.sh$/,
+                /^.*kokoro.*$/,
+                /^.*moonshine.*$/,
+                /^services\/zoe-data\/models\/.*$/,
+                /^services\/zoe-data\/tests\/replay_samples\.py$/,
+                /^scripts\/setup\/systemd\/llama-server\.service$/,
+                /^services\/zoe-core\/package\.json$/,
+                /^services\/zoe-core\/package-lock\.json$/,
+                /^labs\/flue-zoe-brain-2x\/src\/.*$/,
+                /^labs\/flue-zoe-brain-2x\/package\.json$/,
+                /^labs\/flue-zoe-brain-2x\/package-lock\.json$/,
+                /^labs\/flue-zoe-brain-2x\/flue\.config\.ts$/,
+                /^labs\/flue-zoe-brain-2x\/tsconfig\.json$/,
+                /^labs\/flue-zoe-brain-2x\/vite\.config\.ts$/,
+                /^scripts\/setup\/systemd\/flue-zoe-brain-2x\.service$/,
+                /^services\/zoe-data\/zoe_flue_client\.py$/,
+                /^services\/zoe-data\/brain_dispatch\.py$/,
+                /^services\/zoe-data\/routers\/memories\.py$/,
+                /^services\/zoe-data\/user_portrait\.py$/,
+                /^services\/zoe-data\/memory_gate\.py$/,
+                /^scripts\/setup\/systemd\/functiongemma-router\.service$/,
+                /^services\/zoe-data\/router_two_stage\.py$/,
+                /^services\/zoe-data\/semantic_router\.py$/,
+                /^services\/zoe-data\/router_heads_numpy\.py$/,
+                /^services\/zoe-data\/livekit_aiortc\.py$/,
+                /^services\/zoe-data\/routers\/voice_livekit\.py$/,
+                /^services\/livekit\/config\.yaml$/,
+                /^services\/zoe-data\/voice_vad\.py$/,
+                /^services\/zoe-data\/voice_turn\.py$/,
+                /^.*silero.*$/
+              ];
+              const LOAD_BEARING = [
+                ...VOICE_PATH,
+                /^services\/zoe-data\/(auth|main|db_pool)\.py$/, /^services\/zoe-data\/routers\/(panel_auth|ui_actions)\.py$/,
+                /^services\/zoe-auth\//, /^services\/zoe-data\/alembic\//, /^\.github\/workflows\//, /^services\/zoe-ui\/nginx/,
+                /^docker-compose\.yml$/, /^scripts\/setup\/systemd\//,
+              ];
+              // Size is measured the way pr-hygiene measures it: generated files excluded
+              // (a lockfile or flag-inventory churn must not buy a review). The
+              // load-bearing check runs over the FULL list.
+              const GENERATED = [/^docs\/knowledge\/flag-inventory\.(md|json)$/, /^services\/zoe-ui\/dist\/lib\//, /package-lock\.json$/];
+              const BIG = { files: 10, lines: 400 };   // pr-hygiene's warn ceiling
+              const files = await ok(`PR #${pr.number} files`, () =>
+                github.paginate(github.rest.pulls.listFiles, { ...base, pull_number: pr.number, per_page: 100 }));
+              if (!files) { core.info(`PR #${pr.number}: could not read files — holding (never summon blind)`); continue; }
+              const requested = (prFull.labels || []).some(l => l.name === REQUEST_LABEL);
+              const loadBearing = files.filter(f => LOAD_BEARING.some(re => re.test(f.filename))).map(f => f.filename);
+              const counted = files.filter(f => !GENERATED.some(re => re.test(f.filename)));
+              const nLines = counted.reduce((n, f) => n + (f.additions || 0) + (f.deletions || 0), 0);
+              const big = counted.length >= BIG.files || nLines >= BIG.lines;
+              if (!(requested || loadBearing.length || big)) {
+                core.info(`PR #${pr.number}: settled but routine (${counted.length} files / ${nLines} lines counted, no load-bearing path) — not handing off to Greptile; add the '${REQUEST_LABEL}' label to ask`);
+                continue;
+              }
+              core.info(`PR #${pr.number}: eligible — ${requested ? 'requested' : loadBearing.length ? 'load-bearing: ' + loadBearing.slice(0, 3).join(', ') : 'big: ' + counted.length + ' files / ' + nLines + ' lines'}`);
+
               // Head check LAST, immediately before acting. GitHub offers no
               // compare-and-swap, so the window between the final read and the write
               // cannot be eliminated, only narrowed. The residual is self-correcting:
