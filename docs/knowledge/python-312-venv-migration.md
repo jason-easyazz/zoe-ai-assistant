@@ -54,7 +54,7 @@ also resolves on 3.12, held for its own gated move.
 | websockets | 16.1.1 | 16.1.1 | cp312 + pure | **step-up 17.1** (≥3.11): keeps `websockets.legacy.*` and the deprecated `websockets.server.WebSocketServerProtocol` lazy alias that uvicorn's legacy impl (the `--ws websockets` rollback; 0.53.0's default is sans-I/O) imports (verified in source + by import). Replay-gate the move. |
 | pydantic / -core | 2.13.5 | 2.13.5 | cp312 | imports |
 | aiosqlite, asyncpg, alembic, psycopg2-binary, python-multipart, httpx, aiohttp | as pinned | same | cp312 / pure | all import; asyncpg 0.31.0 `manylinux_2_28`, psycopg2-binary 2.9.12 `2_27/2_28` |
-| python-jose[cryptography], PyJWT | 3.5.0 / 2.15.0 | same | pure; cryptography 50.0.1 cp312 abi3 | imports |
+| PyJWT (python-jose removed 2026-10-09, GHSA-3qf3-8w2g-rqmx) | 2.15.0 | same | pure; cryptography 50.0.1 cp312 abi3 | imports |
 | ag-ui-protocol, python-json-logger, PyYAML, segno | pinned | pinned exact | pure | imports (ag-ui-protocol 1.0.0 since 2026-09-27: emitted SSE byte-identical to 0.1.19) |
 | mempalace | 3.3.1 | 3.3.1 | pure | imports on 3.12 (declares `>=3.9`). B0.8 moves it with chromadb. |
 | chromadb | 0.6.3 | 0.6.3 | pure + chroma-hnswlib 0.7.6 cp312 `manylinux_2_17` | **PersistentClient add/query works on 3.12.** Its telemetry logs `capture() takes 1 positional argument` against posthog 7.x (box: 7.12.0, same class) — noise, not a failure. 1.5.9 (abi3 aarch64 wheel) is B0.8. |
@@ -133,7 +133,7 @@ measured, with the existing tool pointed at the venv interpreter:
    exact.
 
 No blocker in: onnxruntime, websockets, numpy, scikit-learn, chromadb/mempalace 0.6.3/3.3.1,
-moonshine-voice, fastembed, APScheduler+tzlocal 2.x, python-jose, psycopg2-binary, asyncpg,
+moonshine-voice, fastembed, APScheduler+tzlocal 2.x, psycopg2-binary, asyncpg,
 cloakbrowser — each has a cp312 (or ABI-independent) aarch64 wheel at the current pin.
 
 ## 4. Switching the service interpreter — a DROP-IN, not a template copy

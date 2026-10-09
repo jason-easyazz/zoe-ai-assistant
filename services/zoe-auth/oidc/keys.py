@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timezone
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from jose import jwk
+from jwt.algorithms import RSAAlgorithm
 from models.database import get_db
 
 
@@ -69,8 +69,10 @@ def get_jwks() -> dict:
     keys = []
     for kid, public_pem in rows:
         public_key = serialization.load_pem_public_key(public_pem.encode())
-        jwk_key = jwk.construct(public_key, algorithm="RS256")
-        key_dict = jwk_key.to_dict()
+        key_dict = RSAAlgorithm.to_jwk(public_key, as_dict=True)
+        # PyJWT adds key_ops=["verify"]; python-jose never did. Keep the
+        # published JWKS member set identical so relying parties see no change.
+        key_dict.pop("key_ops", None)
         key_dict["kid"] = kid
         key_dict["use"] = "sig"
         key_dict["alg"] = "RS256"
