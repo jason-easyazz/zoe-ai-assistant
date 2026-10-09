@@ -521,6 +521,37 @@ def test_the_chat_summary_lists_more_with_dates_and_still_counts_the_private_cla
     assert len(out.splitlines()) < 30
 
 
+def test_the_people_group_is_one_entry_per_person_so_every_person_is_named(svc):
+    """S24 live (2026-10-09): the dad was 3 natural-language rows + 2 derived `name: ...` projection rows, which spent the five
+    People slots on one person and pushed the sister Marisol off the bounded list."""
+    put(svc, "User's sister is named Marisol", excerpt="My sister Marisol is flying in.", when="2026-10-08T02:00:00Z")
+    put(svc, "User's dad is named Teodor", excerpt="My dad is Teodor.", when="2026-10-09T02:00:00Z")
+    put(svc, "User's dad Teodor is a retired lighthouse keeper", excerpt="My dad Teodor is a retired lighthouse keeper.", when="2026-10-09T03:00:00Z")
+    put(svc, "User's dad Teodor builds model ships in his shed", excerpt="He builds model ships in his shed.", when="2026-10-09T04:00:00Z")
+    put(svc, "teodor: dad of user", source="person_extractor", memory_type="person", when="2026-10-09T05:00:00Z")
+    put(svc, "teodor: build[s] model ships in his shed", source="person_extractor", memory_type="person", when="2026-10-09T05:01:00Z")
+    put(svc, "User lives in Hobart", excerpt="I live in Hobart now.", when="2026-10-02T02:00:00Z")
+    out = say("What do you know about me?", channel="chat")
+    assert "marisol" in out.lower()
+    assert out.lower().count("teodor") == 1                                       # the dad appears once, not once per row
+    assert "**People** (2):" in out and "- Teodor (dad): builds model ships in his shed; is a retired lighthouse keeper" in out
+    assert "teodor:" not in out.lower().replace("teodor (dad):", "")              # no derived `name: fact` item of its own
+    assert out.lower().count("model ships") == 1                                  # the derived twin of the NL row is dropped
+    assert len(out) <= 2600 and out.count("\n") <= 32
+    voice = say("What do you know about me?", channel="voice")
+    assert "2 people, newest Teodor (dad)" in voice
+
+
+def test_many_people_are_all_named_and_the_summary_stays_bounded(svc):
+    names = ["Anya", "Boris", "Cleo", "Dmitri", "Edda", "Farid", "Greta"]
+    for i, n in enumerate(names):
+        put(svc, f"User's friend {n} likes sailing and keeps bees and plays the oboe in the evening", when=f"2026-10-0{i + 1}T02:00:00Z")
+        put(svc, f"{n.lower()}: friend of user", source="person_extractor", memory_type="person", when=f"2026-10-0{i + 1}T03:00:00Z")
+    out = say("What do you know about me?", channel="chat")
+    assert all(n in out for n in names) and f"**People** ({len(names)}):" in out
+    assert len(out) <= 2600 and out.count("\n") <= 32
+
+
 def test_a_private_class_is_pulled_by_name(svc):
     seed_household(svc)
     v = say("What do you know about my health?", channel="voice")
