@@ -33,7 +33,7 @@ sys.path.insert(0, str(REPO / "scripts" / "night"))
 import night_window as nw  # noqa: E402
 from zmb import bakeoff as bk  # noqa: E402
 
-HOME = "/home/zoe"
+HOME = nw.HOME                    # the code derives every path from this HOME (the runner's is /home/runner); never a literal
 PARKED = textwrap.dedent("""\
     [Unit]
     Description=Gemma 4 12B-QAT deep-brain (PARKED)
@@ -333,14 +333,18 @@ def test_need_is_model_plus_kv_plus_compute_plus_floor_in_mib_not_the_bakeoffs_m
     assert n["need_load"] < 9262 - 300            # run 2 divided the file by 1e6 but compared it with MemAvailable in MiB: its -1,259 was really about -936
     assert nw.need_mib(QAT, nw.Levers("qat", 32768, "q8_0"), 1200.0, 700.0)["need_jobs"] == pytest.approx(n["need_load"] + 700)
     assert nw.kv_mib(16384, "q8_0") < nw.kv_mib(32768, "q8_0") and nw.kv_mib(32768, "q4_0") < nw.kv_mib(32768, "q8_0")
+    assert nw.CTX_OPTIONS == (32768, 16384, 8192) and nw.kv_mib(8192, "q8_0") < nw.kv_mib(16384, "q8_0") and nw.kv_mib(8192, "q4_0") == pytest.approx(137.4, abs=0.1)
+    assert nw.need_mib(QAT, nw.Levers("qat", 8192, "q4_0"), 1200.0, 700.0)["need_jobs"] == pytest.approx(9290.1, abs=0.2)     # 8192 is a lever the table and the budget accept
 
 
 @pytest.mark.parametrize("avail,want", [
     (12000, "qat ctx 32768 KV q8_0"),            # everything fits: the biggest context at the better cache type (needs 9,616 with the jobs beside it)
     (9550, "qat ctx 16384 KV q8_0"),             # 9,480: the context is given up before the cache type is
-    (9450, "qat ctx 32768 KV q4_0"),             # 9,398
-    (9350, "qat ctx 16384 KV q4_0"),             # 9,326: the smallest set
-    (9300, None),                                # nothing
+    (9450, "qat ctx 8192 KV q8_0"),              # 9,412: 8k at the better cache type beats 32k at the worse one (the proven 8k trial set)
+    (9400, "qat ctx 32768 KV q4_0"),             # 9,398
+    (9350, "qat ctx 16384 KV q4_0"),             # 9,326
+    (9300, "qat ctx 8192 KV q4_0"),              # 9,290: the smallest set
+    (9250, None),                                # nothing
 ])
 def test_the_best_lever_set_that_fits_is_chosen(avail, want):
     pick = nw.choose_levers(nw.evaluate({"qat": QAT, "q4km": Q4KM}, avail, 1200.0, 700.0))

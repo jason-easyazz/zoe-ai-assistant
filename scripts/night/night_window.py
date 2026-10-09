@@ -13,7 +13,7 @@ What a window does (and ALWAYS undoes, on every exit path):
                 04:10-04:52 voice gate, fragmented RAM without passwordless sudo, or even the optimistic RAM prediction cannot fit the smallest 12B
     sleep       stop zoe-data, the router, Kokoro, then the 4B brain (the marker file lists each BEFORE it is stopped); wait for the processes to be
                 gone; compact physical memory (sudo -n) and log /proc/buddyinfo
-    choose      MEASURE MemAvailable now; pick the best lever set that fits by arithmetic (QAT q4_0 file > Q4_K_M, ctx 32768 > 16384, KV q8_0 > q4_0);
+    choose      MEASURE MemAvailable now; pick the best lever set that fits by arithmetic (QAT q4_0 file > Q4_K_M, ctx 32768 > 16384 > 8192, KV q8_0 > q4_0);
                 nothing fits -> REFUSE, put everything back (one to two minutes of silence), exit 2
     load        the 12B from the PARKED deep-brain unit's ExecStart text (read, never edited), levers applied, port 11500, health polled, MemAvailable
                 >= 1,200 MB required once loaded, one speed probe (prefill / decode tok/s)
@@ -112,7 +112,7 @@ COMPUTE_MIB = 600.0                      # compute buffers (the bake-off's figur
 #: ONLY the dry run and the refuse-before-stopping check use a prediction; the choice of lever set is made on the MEASURED MemAvailable after the stops.
 FREED_FACTOR = 0.8
 MODEL_FILES = {"qat": "models/gemma4-12b-qat/gemma-4-12b-it-qat-q4_0.gguf", "q4km": "models/gemma4-12b/gemma-4-12B-it-Q4_K_M.gguf"}
-CTX_OPTIONS = (32768, 16384)
+CTX_OPTIONS = (32768, 16384, 8192)
 KV_OPTIONS = ("q8_0", "q4_0")
 #: preference: the QAT file first (it is TRAINED for q4_0 and is the smaller file; Q4_K_M is only offered by --model or when it is the only file on disk), then KV q8_0
 #: (a q4_0 cache costs long-context accuracy; the jobs' prompts are 3-8k tokens, so 16k with q8_0 beats 32k with q4_0), then the larger context
