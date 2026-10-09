@@ -63,6 +63,35 @@ def _row_metadata(conn: sqlite3.Connection, rowid: int) -> tuple[str | None, dic
     return doc, meta
 
 
+def _apply_forget_ledger(collections: dict) -> tuple[str, int]:
+    """Redact what the user asked Zoe to forget from the export BEFORE it is written ("forgotten means forever": a plaintext
+    backup must not keep the name). Uses the forget ledger (hashes only; needs the service environment and the database, which the
+    unit loads). Never fails the backup: when the ledger cannot be loaded the export is written whole, says so in its payload and in
+    the log, and ``redact_backups.py`` redacts it later. Returns ``(status, spans replaced)``."""
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    sys.path.insert(0, os.path.join(repo, "services", "zoe-data"))
+    try:
+        import asyncio
+
+        import forget_redact
+        from db_pool import close_pool, init_pool
+
+        async def load():
+            await init_pool()
+            try:
+                return await forget_redact.load_redactor()
+            finally:
+                await close_pool()
+
+        red = asyncio.run(load())
+        n = forget_redact.redact_export({"collections": collections}, red)
+        return "applied", n
+    except Exception as exc:  # noqa: BLE001 - the backup matters more than the redaction; the maintenance command closes the gap
+        print(f"memory export: FORGET LEDGER NOT APPLIED ({type(exc).__name__}) - run scripts/maintenance/redact_backups.py",
+              file=sys.stderr)
+        return f"skipped: {type(exc).__name__}", 0
+
+
 def export(db_path: str, out_dir: str, *, compress: bool, keep: int) -> str:
     conn = _connect_ro(db_path)
     # SNAPSHOT CONSISTENCY (review: Greptile). The scan issues one query per
@@ -94,6 +123,7 @@ def export(db_path: str, out_dir: str, *, compress: bool, keep: int) -> str:
     conn.execute("COMMIT")
     conn.close()
 
+    ledger_status, ledger_spans = _apply_forget_ledger(collections)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     # PERMISSIONS (review: Greptile). This file is the household's complete
     # personal-memory payload in plaintext. `os.makedirs`/`open` take their mode
@@ -114,6 +144,8 @@ def export(db_path: str, out_dir: str, *, compress: bool, keep: int) -> str:
         "source_db": db_path,
         "total_records": total,
         "collection_counts": {k: len(v) for k, v in collections.items()},
+        "forget_ledger": ledger_status,
+        "forget_spans_redacted": ledger_spans,
         "collections": collections,
     }
     blob = json.dumps(payload, ensure_ascii=False, indent=1).encode("utf-8")
@@ -132,6 +164,7 @@ def export(db_path: str, out_dir: str, *, compress: bool, keep: int) -> str:
     os.replace(tmp, path)  # rename preserves the 0600 mode
 
     print(f"memory export: {total} records across {len(collections)} collections -> {path}")
+    print(f"  forget ledger: {ledger_status}, {ledger_spans} span(s) redacted")
     for cname, recs in sorted(collections.items()):
         if recs:
             print(f"  {cname:32s} {len(recs)}")

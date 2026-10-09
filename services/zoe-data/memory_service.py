@@ -1570,8 +1570,8 @@ class MemoryService:
                 pass  # the guard must never break ingestion
             try:
                 evidence = anchor_text if anchor_text is not None else source_excerpt
-                if await _forgotten.matches(user_id, scrubbed) or (
-                        evidence and await _forgotten.matches(user_id, evidence)):
+                if await _forgotten.matches(user_id, scrubbed, near=True) or (
+                        evidence and await _forgotten.matches(user_id, evidence, near=True)):
                     self._bump("forgotten_drop", source)
                     logger.info(
                         "memory_service: ingest dropped — names a forgotten entity (ledger) "

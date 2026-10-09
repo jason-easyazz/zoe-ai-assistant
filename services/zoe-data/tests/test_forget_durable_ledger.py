@@ -410,7 +410,7 @@ async def test_forget_with_no_matching_rows_still_writes_the_ledger(svc, no_offe
     """The in-flight race: the forget lands before any row exists. The ledger covers that exit too."""
     reply = await _forget()
     assert "don't have anything saved about Dana" in reply
-    assert len(ledger_env.rows) == 1
+    assert len([r for r in ledger_env.rows.values() if r["scope"] != mf.SCOPE_NEAR]) == 1   # the near probes are extra rows, never the entry
     assert await mf.matches(USER, "Dana rang")
 
 
@@ -598,7 +598,7 @@ async def test_the_table_holds_no_text_after_a_full_forget(svc, monkeypatch, no_
         await _teach(svc)
         await _forget("Dana Whitfield")
         await _forget()
-        rows = await table_dump(db, "memory_forgotten")
+        rows = [r for r in await table_dump(db, "memory_forgotten") if r[2] != "near"]
         assert len(rows) == 2
         blob = " ".join(str(v) for r in rows for v in r).lower()
         for needle in ("dana", "whitfield", "hobart", "garden", "friend"):
