@@ -1789,6 +1789,15 @@ async def run_flue_brain_streaming(
     # the brain gets the original request with the full name in it (ask_when_ambiguous, ZOE_ASK_WHEN_AMBIGUOUS).
     # In-memory dict lookup, no I/O; the pending question is consumed by the next turn whatever it says.
     _spoken = message   # the member's own words, for the mute check (the clarification rewrite below is Zoe's)
+    # The distress hand-off (ZOE_DISTRESS_HANDOFF, default enforce) is the FIRST thing a brain turn does: the fixed pointer to a human, and the brain, recall, brief, raise
+    # and persona never see the turn.
+    import distress_handoff
+
+    _dh = await distress_handoff.handle(_spoken, user_id, dry=bool(kwargs.get("replay_isolation")))
+    if _dh:
+        _record_outcome(kwargs.get("outcome_sink"), FLUE_OUTCOME_SEAM_REPLY, "distress_handoff")
+        yield _dh
+        return
     message = _resolve_clarification(message, user_id, session_id)
     # A spoken mute ("don't mention that again", "leave it"; ZOE_RESTRAINT): recorded here, before the
     # brain, so the very next brief / raise / packet honours it. In enforce the acknowledgement is

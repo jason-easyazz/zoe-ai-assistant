@@ -30,6 +30,7 @@ from memory_overlap import dedup_verdict, richness
 from routers.journal import CREATED_AT_VALID_TIMESTAMP_SQL
 from typed_env import env_float
 from user_filters import GUEST_USERS, drop_synthetic_users, message_owner_expr
+import distress_handoff   # the distress hand-off's text test: a turn it enforces is never digested
 from memory_provenance import off_record_sql as _off_record_sql
 
 logger = logging.getLogger(__name__)
@@ -1662,7 +1663,7 @@ async def _transcript_from_rows(user_id: str, rows) -> "Transcript":
     turns naming a forgotten entity are skipped, each kept turn keeps its message id and time."""
     pairs = [(row[0], (str(row[1]) if len(row) > 1 and row[1] is not None else ""),
               (str(row[2]) if len(row) > 2 and row[2] is not None else ""))
-             for row in rows if row[0]]
+             for row in rows if row[0] and not distress_handoff.guarded_text(str(row[0]))]
     # pasted / third-person text is not the owner's (ZMB I1/I2): each turn is cut to the owner's own words
     # (or dropped) BEFORE the forgotten-turn skip, keeping the message id beside what is left of it
     owned = []
@@ -2917,6 +2918,7 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
         logger.warning("open_loops: message load failed user=%s: %s", user_id, exc)
         return _done("load_error")
 
+    rows = [r for r in rows if not distress_handoff.guarded_text(str(r[0]))]   # a distress hand-off turn is never mined for open loops
     # A turn naming a forgotten entity is skipped, not re-mined (memory_forgotten; ZMB F3).
     try:
         import memory_forgotten

@@ -1290,6 +1290,66 @@
         ],
         "typed_env": false
       },
+      "ZOE_DISTRESS_CONTACT_NAME": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/distress_handoff.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_DISTRESS_CONTACT_USER": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/distress_handoff.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_DISTRESS_GENTLE": {
+        "defaults": [
+          "'shadow'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/distress_handoff.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_DISTRESS_HANDOFF": {
+        "defaults": [
+          "'enforce'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/distress_handoff.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_DISTRESS_LINES_FILE": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/distress_handoff.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_DISTRESS_NOTIFY": {
+        "defaults": [
+          "'all'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/distress_handoff.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_EDGE_TTS_TIMEOUT_S": {
         "defaults": [
           "'5'"
@@ -1770,6 +1830,16 @@
         "readers": [
           "services/zoe-data/main.py",
           "services/zoe-data/zoe_agent.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_HOUSEHOLD_COUNTRY": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/distress_handoff.py"
         ],
         "typed_env": true
       },
@@ -2505,10 +2575,11 @@
         ],
         "in_env_example": false,
         "readers": [
+          "services/zoe-data/distress_handoff.py",
           "services/zoe-data/identity_facts.py",
           "services/zoe-data/routers/weather.py"
         ],
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_LOCATION_LAT": {
         "defaults": [

@@ -55,6 +55,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Iterable, Optional, Sequence
 
+import distress_handoff
 import memory_authority as _ma
 import night_store
 
@@ -446,7 +447,7 @@ def turns_of(transcript: Any, now: "_dt.datetime") -> "list[Turn]":
     out: "list[Turn]" = []
     for i, (mid, text) in enumerate(pairs):
         mid, text = str(mid or "").strip(), re.sub(r"\s+", " ", str(text or "")).strip()
-        if mid and text:
+        if mid and text and not distress_handoff.guarded_text(text):   # a distress hand-off turn is never reflected on, raised or quoted (docs/knowledge/distress-handoff.md)
             out.append(Turn(mid, text, (parse_ts(times[i]) if i < len(times) else None) or now))
     return out
 

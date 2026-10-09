@@ -456,3 +456,5 @@ labs/router-90-campaign/results/gen1-lineage.json
 /polly-verify-*/
 /wt-*/
 modules/omnigent/wheels/
+# The distress hand-off's per-country crisis-line table (reference data keyed by ZOE_HOUSEHOLD_COUNTRY): tracked data, no secrets.
+!services/zoe-data/distress_data/*.json

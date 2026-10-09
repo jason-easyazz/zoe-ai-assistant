@@ -714,8 +714,26 @@ async def _provenance_tier(text: str, user_id: str, session_id: str, kwargs: dic
         return None
 
 
+async def _distress_tier(text: str, user_id: str, kwargs: dict):
+    """The distress hand-off (``ZOE_DISTRESS_HANDOFF``, default enforce): FIRST, before any tier that could answer; the fixed pointer to a human, no brain. NEVER raises."""
+    try:
+        import distress_handoff as _dh
+
+        reply = await _dh.handle(text, user_id, dry=kwargs.get("allow_writes") is False)
+        if reply:
+            import expert_dispatch as _xd
+
+            return _xd.DispatchResult(domain="safety", reply=reply, intent="distress_handoff", tier="distress_handoff")
+    except Exception as exc:  # never let the tier break a turn
+        logger.warning("fast_tiers distress tier failed (non-fatal): %s", exc)
+    return None
+
+
 @_functools.wraps(_resolve_core)
 async def resolve(text: str, user_id: str, session_id: str, **kwargs):  # noqa: F811 - the documented wrapper
+    answered = await _distress_tier(text, user_id, kwargs)
+    if answered is not None:
+        return answered
     answered = await _provenance_tier(text, user_id, session_id, kwargs)
     if answered is not None:
         return answered

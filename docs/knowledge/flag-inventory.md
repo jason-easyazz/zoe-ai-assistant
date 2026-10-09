@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-564 flags; 562 not documented in `.env.example`.
+571 flags; 569 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -143,6 +143,12 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_DISCOVERY_MAX_USERS` | `'4'` | no | NO | `scripts/maintenance/music_discovery_batch.py` |
 | `ZOE_DISCOVERY_MIN_FREE_MB` | `'1500'` | no | NO | `scripts/maintenance/music_discovery_batch.py` |
 | `ZOE_DISCOVERY_MIN_PLAYS` | `'10'` | no | NO | `scripts/maintenance/music_discovery_batch.py` |
+| `ZOE_DISTRESS_CONTACT_NAME` | `''` | yes | NO | `services/zoe-data/distress_handoff.py` |
+| `ZOE_DISTRESS_CONTACT_USER` | `''` | yes | NO | `services/zoe-data/distress_handoff.py` |
+| `ZOE_DISTRESS_GENTLE` | `'shadow'` | yes | NO | `services/zoe-data/distress_handoff.py` |
+| `ZOE_DISTRESS_HANDOFF` | `'enforce'` | yes | NO | `services/zoe-data/distress_handoff.py` |
+| `ZOE_DISTRESS_LINES_FILE` | `''` | yes | NO | `services/zoe-data/distress_handoff.py` |
+| `ZOE_DISTRESS_NOTIFY` | `'all'` | yes | NO | `services/zoe-data/distress_handoff.py` |
 | `ZOE_EDGE_TTS_TIMEOUT_S` | `'5'` | no | NO | `services/zoe-data/tts_waterfall.py` |
 | `ZOE_EDGE_TTS_VOICE` | `dynamic` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_EMBEDDING_MODEL_VERSION` | `'minilm-v1'` | no | NO | `services/zoe-data/memory_service.py` |
@@ -190,6 +196,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_HOME_SETUP_SECRET` | `-` | no | NO | `services/zoe-data/smart_home_setup.py` |
 | `ZOE_HOME_SETUP_TTL_S` | `'900'` | no | NO | `services/zoe-data/smart_home_setup.py` |
 | `ZOE_HOST_LAN_IP` | `'192.168.1.218'`, `-` | yes | NO | `services/zoe-data/main.py`<br>`services/zoe-data/zoe_agent.py` |
+| `ZOE_HOUSEHOLD_COUNTRY` | `''` | yes | NO | `services/zoe-data/distress_handoff.py` |
 | `ZOE_HYBRID_RETRIEVAL_ENABLED` | `''` | no | NO | `services/zoe-data/memory_service.py` |
 | `ZOE_IDENTITY_BLOCK` | `True` | yes | NO | `services/zoe-data/identity_facts.py` |
 | `ZOE_IDLE_CONSOLIDATION_CHECK_S` | `60` | no | NO | `services/zoe-data/memory_idle_consolidation.py` |
@@ -261,7 +268,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_LOCAL_MODEL` | `'Gemma 4 E4B-QAT'` | no | NO | `services/zoe-data/routers/system.py` |
 | `ZOE_LOCAL_TTS_URL` | `''` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_LOCATION_CITY` | `''`, `'Geraldton'`, `dynamic` | no | NO | `services/zoe-data/identity_facts.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/weather.py`<br>`services/zoe-data/voice_stitch.py` |
-| `ZOE_LOCATION_COUNTRY` | `''`, `dynamic` | no | NO | `services/zoe-data/identity_facts.py`<br>`services/zoe-data/routers/weather.py` |
+| `ZOE_LOCATION_COUNTRY` | `''`, `dynamic` | yes | NO | `services/zoe-data/distress_handoff.py`<br>`services/zoe-data/identity_facts.py`<br>`services/zoe-data/routers/weather.py` |
 | `ZOE_LOCATION_LAT` | `'-28.7774'`, `dynamic` | no | NO | `services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/weather.py` |
 | `ZOE_LOCATION_LON` | `'114.6158'`, `dynamic` | no | NO | `services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/weather.py` |
 | `ZOE_LOCATION_REGION` | `''` | no | NO | `services/zoe-data/identity_facts.py` |

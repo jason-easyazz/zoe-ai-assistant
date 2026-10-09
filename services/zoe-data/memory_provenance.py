@@ -78,6 +78,26 @@ def off_record_sql(alias: str = "cm") -> str:
     return f"COALESCE({alias}.metadata, '') NOT LIKE '%{OFF_RECORD_JSON_MARK}%'"
 
 
+def _distress(text: str) -> bool:
+    """A turn ``distress_handoff`` ENFORCES (stateless text test). Independent of ``ZOE_MEMORY_PROVENANCE_ANSWERS``: a floor, not a feature."""
+    try:
+        import distress_handoff
+
+        return distress_handoff.guarded_text(text)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def mark_turn(user_id: str, text: str, *, now: Optional[float] = None) -> None:
+    """Mark ``text`` (and the reply to it) off the record without a cue: the distress hand-off. Idempotent; untracked ids keep no state."""
+    st = _state(user_id)
+    if st is not None:
+        t = _now(now)
+        _add_mark(st, text, t)
+        _mark_current(st, t)
+        st.distress_until = t + TURN_IN_FLIGHT_S
+
+
 def enabled() -> bool:
     """``ZOE_MEMORY_PROVENANCE_ANSWERS`` - default ON, per-call read; ``0|false|no|off`` (or set-but-empty) = every function
     here does nothing and every turn is exactly what it was before BM5."""
@@ -167,6 +187,7 @@ class _State:
     pending_otr_until: float = 0.0
     cur_marked_seq: int = -1        # the turn (seq) that is off the record, whatever text variant a later hook sees
     cur_marked_ts: float = 0.0
+    distress_until: float = 0.0     # a distress hand-off turn was sighted: the reply saved before this is flagged too
 
 
 _STATES: "OrderedDict[str, _State]" = OrderedDict()
@@ -527,8 +548,11 @@ def claim_turn(user_id: str, text: str, *, now: Optional[float] = None) -> bool:
     * the turn is a BARE cue                                                 -> arm the next turn, False (the cue itself is nothing)
     * a bare cue is pending (``PENDING_TTL_S``) and this is the next turn     -> mark it, True (audit ``next_turn``)
 
-    Never raises; False when the feature is off."""
+    Never raises; False when the feature is off (a distress hand-off turn is claimed whatever the flag says)."""
     try:
+        if _distress(text):
+            mark_turn(user_id, text, now=now)
+            return True
         if not enabled() or not (text or "").strip():
             return False
         st = _state(user_id)
@@ -568,6 +592,8 @@ def is_off_record(user_id: str, text: str, *, now: Optional[float] = None) -> bo
     """Exact-turn test for the per-turn writers (extractor, digest, person extractors, exact-words index, transcript save): is
     THIS turn marked? Does not arm or claim anything. Never raises."""
     try:
+        if _distress(text):
+            return True
         if not enabled() or not (text or "").strip():
             return False
         st = _state(user_id, create=False)
@@ -586,9 +612,11 @@ def reply_is_off_record(user_id: str, *, now: Optional[float] = None) -> bool:
     """Is the user's CURRENT turn (the one a reply is being saved for) off the record? The assistant's reply to a marked turn is
     not indexed either - it can restate the words."""
     try:
+        st = _state(user_id, create=False)
+        if st is not None and st.distress_until >= _now(now):
+            return True
         if not enabled():
             return False
-        st = _state(user_id, create=False)
         if st is None or not st.last_note_h:
             return False
         t = _now(now)
@@ -604,10 +632,8 @@ def blocks_write(user_id: str, text: str, excerpt: str = "", *, now: Optional[fl
     when most of the row's content words (``BLOCK_OVERLAP``) are the marked turn's. The ONE choke point is
     ``MemoryService.ingest``. A row about something else is never blocked. Never raises."""
     try:
-        if not enabled():
-            return False
         st = _state(user_id, create=False)
-        if st is None:
+        if st is None or not (enabled() or st.distress_until):
             return False
         marks = _live_marks(st, _now(now))
         if not marks:

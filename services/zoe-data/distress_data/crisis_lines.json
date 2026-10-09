@@ -1,0 +1,8 @@
+{
+ "_note": "Reference table keyed by the household country (ZOE_HOUSEHOLD_COUNTRY). OPERATOR: verify every number for your country before relying on it, or point ZOE_DISTRESS_LINES_FILE at your own file of the same shape (it overrides entries here). A country with no entry gets no number: Zoe says 'your local crisis line / emergency number' instead of guessing. 'kids' is offered to a member flagged as a minor.",
+ "countries": {
+  "AU": {"emergency": "000", "crisis": {"name": "Lifeline", "number": "13 11 14"}, "kids": {"name": "Kids Helpline", "number": "1800 55 1800"}},
+  "US": {"emergency": "911", "crisis": {"name": "the 988 Lifeline", "number": "988"}, "kids": {"name": "the 988 Lifeline", "number": "988"}},
+  "GB": {"emergency": "999", "crisis": {"name": "Samaritans", "number": "116 123"}, "kids": {"name": "Childline", "number": "0800 1111"}}
+ }
+}
