@@ -1643,6 +1643,26 @@
         ],
         "typed_env": false
       },
+      "ZOE_FORGET_NEAR": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_forgotten.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_FORGET_REDACT": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/forget_redact.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_FORGOTTEN_SHIELD_DAYS": {
         "defaults": [
           "-"

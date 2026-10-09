@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Auto-generated inventory of every ZOE_* environment flag read in the codebase — defaults, readers, typed_env adoption, and .env.example coverage.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-10-09T00:00:00Z
+timestamp: 2026-10-10T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-10-09T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-10-09. The table body is deterministic (sorted, no
+Last generated: 2026-10-10. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Default `dynamic` = not statically extractable; `(required)` = bare
@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-571 flags; 569 not documented in `.env.example`.
+573 flags; 571 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -178,6 +178,8 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_FLUE_WIRE` | `-` | no | NO | `services/zoe-data/zoe_flue_client.py` |
 | `ZOE_FORGET_ALIAS_SWEEP` | `-` | no | NO | `services/zoe-data/memory_forget_alias.py` |
 | `ZOE_FORGET_LEDGER_SALT` | `-` | no | NO | `services/zoe-data/memory_forgotten.py` |
+| `ZOE_FORGET_NEAR` | `-` | no | NO | `services/zoe-data/memory_forgotten.py` |
+| `ZOE_FORGET_REDACT` | `-` | no | NO | `services/zoe-data/forget_redact.py` |
 | `ZOE_FORGOTTEN_SHIELD_DAYS` | `-` | no | NO | `services/zoe-data/memory_forgotten.py` |
 | `ZOE_FRUSTRATION_MAX_SESSIONS` | `'2000'` | no | NO | `services/zoe-data/routers/chat.py` |
 | `ZOE_GITHUB_DEFAULT_BRANCH` | `'main'` | no | NO | `services/zoe-data/greploop_guard.py` |

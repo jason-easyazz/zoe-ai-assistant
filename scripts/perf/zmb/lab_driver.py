@@ -40,6 +40,7 @@ CONTROLS = {
     "authority": "ZOE_MEMORY_AUTHORITY=off - a model write may supersede / archive what the user said",
     "identity": "the automatic-writer name wall removed - a digest may assert the owner's name",
     "tombstone": "the forget tombstone removed - a late extractor write may resurrect a forgotten name",
+    "forget_ledger": "the durable forget ledger removed - once the 300 s tombstone has expired a late writer resurrects a forgotten name",
     "sweep": "the forget sweep archives nothing while still claiming it did",
     "affect": "ZOE_AFFECT_CONSENT_GATE=off - feelings are recorded for guests and children",
     "speaker": "the speaker-gate verdict dropped on the voice lane - an unconfirmed panel voice's self-fact is written as the owner's own statement",
@@ -455,6 +456,16 @@ def controls_off(features: "frozenset[str] | set[str]", svc: types.SimpleNamespa
         if "tombstone" in features:
             patch(svc.memory_tombstones, "matching_tombstone", lambda *a, **k: None)
             patch(svc.memory_tombstones, "add", lambda *a, **k: None)
+        if "forget_ledger" in features:
+            import memory_forgotten as _mf
+
+            async def _never(*_a, **_k):
+                return False
+
+            async def _keep_all(_user, items, **_k):
+                return list(items), 0
+            patch(_mf, "matches", _never)
+            patch(_mf, "keep_unforgotten", _keep_all)
         if "sweep" in features:
             real_review = svc.memory_service.MemoryService.review
 

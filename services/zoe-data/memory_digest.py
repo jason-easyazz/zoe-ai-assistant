@@ -1617,6 +1617,7 @@ def _turn_limit() -> int:
 
 async def _load_todays_messages(user_id: str, db=None) -> str:
     """Load today's user-turn messages using per-message metadata ownership."""
+    await _redact_forgotten_transcript(user_id, db)
     owner_expr = _message_owner_expr()
     sql = """
             SELECT cm.content, cm.id, cm.created_at
@@ -1713,6 +1714,17 @@ async def load_day_messages(user_id: str, start_iso: str, end_iso: str, db=None)
     except Exception as exc:
         logger.warning("memory_digest: could not load the day's messages for %s: %s", user_id, exc)
         return ""
+
+
+async def _redact_forgotten_transcript(user_id: str, db=None) -> None:
+    """Before the day is read: the owner's recent ``chat_messages`` that still name a forgotten entity (the reply saved after the
+    forget turn, a later mention) get the span replaced by a fixed marker, by the ledger alone (``forget_redact``). Counts only
+    are logged. Fail-open: the transcript filter below is the second wall."""
+    try:
+        import forget_redact
+        await forget_redact.sweep_transcripts(user_id, db=db)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("memory_digest: transcript redaction unavailable (%s)", type(exc).__name__)
 
 
 async def _skip_forgotten_turns(user_id: str, turns: list, reader: str) -> list:

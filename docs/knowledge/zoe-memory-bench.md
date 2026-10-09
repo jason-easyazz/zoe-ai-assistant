@@ -143,7 +143,7 @@ On its OWN axis because it measures Zoe's layer, not a memory engine: the cells 
 
 The known failures are **measured, not assumed**, and are real gaps in `main` today. Each is explained in its cell's `note`:
 
-* `F3` (audit F10: the tombstone is an in-process dict, 300 s).
+* `F3` (audit F10: the tombstone is an in-process dict, 300 s) is GRADED since the Z0 arm supplies a lab ledger secret (control `forget_ledger`); the 2026-10-08 baseline ran with the secret unset and showed it red 3 of 3 seeds (forgetting 18/21 -> 21/21 offline, 2026-10-09).
 * **C1.update_via_turn_digest / C5.retracted_via_turn_digest**: the per-turn digest's "User lives in <new>" / "User no longer sees X"
   contradicts a user-stated row, so the authority wall (#1868) holds it back as a `disputed` candidate and recall keeps serving
   the OLD fact until the owner confirms. Safe against the 2026-10-05 incident, but an update through a model writer does not land

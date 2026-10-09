@@ -28,6 +28,8 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Any, Iterable, Optional
 
+import forget_match as fm
+
 logger = logging.getLogger(__name__)
 
 ENV = "ZOE_FORGET_ALIAS_SWEEP"
@@ -52,13 +54,12 @@ def mode() -> str:
 
 # ── the rule ─────────────────────────────────────────────────────────────────
 
-def max_edits(letters: int) -> int:
-    """7+ letters -> 2 edits, 5-6 -> 1, 4 or fewer -> 0 (none: a 2-edit radius round a 3-4 letter name holds 41-363 ordinary words)."""
-    if letters >= 7:
-        return 2
-    if letters >= 5:
-        return 1
-    return 0
+def max_edits(letters: "int | str") -> int:
+    """7+ codepoints -> 2 edits, 5-6 -> 1, 4 or fewer -> 0 (none: a 2-edit radius round a 3-4 letter name holds 41-363 ordinary words);
+    a script written without spaces -> 1 from 3 codepoints (``forget_match``). Pass the joined name for the script rule; an int is Latin."""
+    if isinstance(letters, str):
+        return fm.max_edits(letters)
+    return 2 if letters >= 7 else (1 if letters >= 5 else 0)
 
 
 def edit_distance(a: str, b: str, limit: Optional[int] = None) -> int:
@@ -84,6 +85,10 @@ def _words(text: str) -> "list[str]":
     return _WORD_RE.findall(unicodedata.normalize("NFKC", str(text or "")))
 
 
+def _fold(w: str) -> str:
+    return fm.fold(w)
+
+
 @dataclass
 class Alias:
     """One candidate spelling: first written form, normalised key (what the ledger would hash), and where it was found."""
@@ -102,9 +107,9 @@ class _Probe:
 
     @classmethod
     def of(cls, name: str) -> "Optional[_Probe]":
-        toks = [w.casefold() for w in _words(name)][:6]
+        toks = [_fold(w) for w in _words(name)][:6]
         joined = "".join(toks)
-        k = max_edits(len(joined))
+        k = max_edits(joined)
         if k == 0 or not toks or not joined.isalpha():
             return None
         return cls(toks, joined, k, max(k - 1, 0))
@@ -121,8 +126,15 @@ def find_in_text(name: str, text: str) -> "list[tuple[str, str]]":
     if probe is None:
         return []
     words = _words(text)
-    low = [w.casefold() for w in words]
+    low = [_fold(w) for w in words]
     out: "dict[str, str]" = {}
+    for t in fm.tokens(text):               # a name inside a run of a script written without spaces: windows of the run
+        if t.uns and len(t.text) == t.end - t.start:
+            for a in range(len(t.text)):
+                for ln in range(max(2, len(probe.joined) - probe.budget_single), len(probe.joined) + probe.budget_single + 1):
+                    w = t.text[a:a + ln]
+                    if len(w) == ln and w != probe.joined and edit_distance(w, probe.joined, probe.budget_single) <= probe.budget_single:
+                        out.setdefault(w, text[t.start + a:t.start + a + ln])
     longest = min(MAX_RUN, max(len(probe.tokens) + 2, 2))
     for i in range(len(words)):
         for n in range(1, longest + 1):
@@ -206,6 +218,8 @@ def _where(a: Alias) -> str:
 
 
 def question_text(a: Alias) -> str:
+    if not (a.memories or a.contacts):
+        return f'Did you also mean "{a.display}"? I came across it just now.'
     return f'Did you also mean "{a.display}"? I found it in {_where(a)}.'
 
 
@@ -304,6 +318,38 @@ async def offer(user_id: str, name: str, svc: Any) -> str:
     except Exception as exc:  # noqa: BLE001 - the forget itself already happened
         logger.warning("forget_alias: sweep failed (%s) - nothing asked", type(exc).__name__)
         return ""
+
+
+MAX_OPEN = 6    # unanswered near-spelling questions at once; the rest wait for the next sighting
+
+
+async def queue_spellings(user_id: str, spellings: "Iterable[str]") -> int:
+    """A write was held out because it names a NEAR spelling of a forgotten name (``memory_forgotten`` near guard): ask the owner
+    about each (once; not while a question is open; not past ``MAX_OPEN``). Returns the questions stored. Never raises."""
+    if mode() != "on" or not user_id:
+        return 0
+    try:
+        import pending_suggestions as ps
+
+        open_qs = await _open_questions(user_id)
+        asked = {str(q["alias"]).casefold() for q in open_qs}
+        room = MAX_OPEN - len(open_qs)
+        stored = 0
+        for sp in dict.fromkeys(str(x).strip() for x in spellings if str(x).strip()):
+            if room <= 0 or sp.casefold() in asked:
+                continue
+            q = question_text(Alias(display=sp, key=fm.joined_key(sp)))
+            stored += await ps.store_suggestions(user_id, SESSION, [{
+                "action_type": ACTION, "description": q[:500], "offer_phrase": q[:300],
+                "pre_filled_slots": {"alias": sp, "memories": 0, "contacts": 0}}])
+            asked.add(sp.casefold())
+            room -= 1
+        if stored:
+            logger.info("FORGET_NEAR_ASK user=%s asked=%d", user_id, stored)
+        return stored
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("forget_alias: near-spelling question not stored (%s)", type(exc).__name__)
+        return 0
 
 
 # ── the answer ───────────────────────────────────────────────────────────────

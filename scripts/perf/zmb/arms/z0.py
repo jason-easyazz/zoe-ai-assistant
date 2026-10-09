@@ -40,6 +40,7 @@ from typing import Any
 from .base import Arm, IngestReport, OPTIONAL_ROW_KEYS, ROW_KEYS, Turn
 from .people_graph import PeopleGraph, live_context
 
+_LAB_SALT = "zmb-lab-forget-ledger-secret-0123456789"      # the lab ledger secret (synthetic; the same string the Hindsight and ZMA arms use)
 DEMO_USER_RE = re.compile(r"^demo_bar_[0-9a-f]{8}$")
 
 _STOP = frozenset("""a an the is are was were be been am do does did what whats when where who whom whose why how which
@@ -137,6 +138,7 @@ class Z0Arm(Arm):
         self._cur_day = 0
         self.graph = PeopleGraph(self._run)       # the people graph (A8): arms.people_graph, shared with the Hindsight arms' Zoe layer
         self._heap_scrub_ours = False
+        self._salt_ours = False
 
     # ── lifecycle ─────────────────────────────────────────────────────────
     def reset(self, user_id: str, *, disk: bool = False) -> None:
@@ -163,8 +165,18 @@ class Z0Arm(Arm):
         self.svc.memory_tombstones.clear_all(user_id)
         xw = importlib.import_module("exact_words")        # the owner's verbatim turns (j): the lab's own in-process index, as the tests' (the SQL one is Postgres)
         xw.set_backend(xw.MemoryBackend())
+        mf = importlib.import_module("memory_forgotten")   # the durable forget ledger (F3): ON, in memory, with a LAB secret. The 2026-10-08 baseline ran with the
+        if not mf.configured():                            # secret unset, so only the 300 s tombstone shielded and F3 failed 3 of 3 seeds - an instrument gap, not a defect
+            os.environ[mf.SALT_ENV] = _LAB_SALT
+            self._salt_ours = True
+        mf.set_backend(mf.MemoryBackend())
 
     def close(self) -> None:
+        mf = importlib.import_module("memory_forgotten")
+        mf.set_backend(None)
+        if self._salt_ours:
+            os.environ.pop(mf.SALT_ENV, None)
+            self._salt_ours = False
         importlib.import_module("exact_words").set_backend(None)
         importlib.import_module("night_store").set_backend(None)
         self.graph.close()

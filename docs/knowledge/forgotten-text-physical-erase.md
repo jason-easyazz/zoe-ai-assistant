@@ -158,3 +158,7 @@ of the data directory (`docker cp`; the directory itself is mode 0700 for the co
 compressed TOAST value is invisible to a byte scan; a scan of files sees only what was checkpointed) are in `docs/knowledge/zoe-memory-bench.md` ("H arms run the graph-edge,
 conflict-pass and physical-erase cells"); re-run them with `python3 scripts/perf/zmb/pilot/pg_erase_probe.py` (and `--cells` for F5 / F6 through the real arm) while the scratch
 container is up. For the LIVE zoe-data Postgres (`chat_messages`, `user_portraits`, `people`) the same classes apply and remain unmeasured: that is a separate, operator-gated job.
+
+## Decision: `ZOE_MEMORY_HEAP_SCRUB` (2026-10-09, forgetting-to-the-box PR)
+
+Recommended default: **ON** (`ZOE_MEMORY_HEAP_SCRUB=1` in the zoe-data service `.env`). Cost re-measured on this box (chromadb 0.6.3, 40 rounds of add / 5 queries / update / delete, `mallopt(M_PERTURB, 85)`, fresh process per run, alternating): median 4.085 s off vs 4.138 s on = **+1.3 %** (5 pairs; one 6.57 s outlier on the "on" side, noise); the earlier lab figure was +2 % (`mallopt`) to +4 % (env pair). RSS unchanged. It is process-wide, so the voice path inherits it - hence the operator flips it after a voice-gate replay. The code default stays OFF so a deploy never flips it silently. Residue is shape-dependent (5/60 on 0.6.3): `test_scrub_sqlite_erases_it_and_the_store_keeps_working` failed once in about five runs on this box.
