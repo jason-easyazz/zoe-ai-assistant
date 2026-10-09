@@ -405,3 +405,180 @@ async def test_a_recall_shaped_turn_keeps_its_recall_block_and_gets_no_second_bl
 async def test_a_guest_turn_never_reads_the_store(seeded, monkeypatch):
     sent = await _send(monkeypatch, SLEEP_ASK, uid="")
     assert hop.HEADING not in sent
+
+
+# ── where the facts ride on the wire (ZOE_PERSONALISATION_HOP_PLACEMENT) ─────────────────────
+
+def test_placement_default_values_and_a_typo_degrades_to_the_default(monkeypatch):
+    monkeypatch.delenv(hop.PLACEMENT_ENV, raising=False)
+    assert hop.placement() == hop.DEFAULT_PLACEMENT
+    for v in hop.PLACEMENTS:
+        monkeypatch.setenv(hop.PLACEMENT_ENV, v.upper())
+        assert hop.placement() == v
+    for junk in ("", "  ", "system", "after"):
+        monkeypatch.setenv(hop.PLACEMENT_ENV, junk)
+        assert hop.placement() == hop.DEFAULT_PLACEMENT
+
+
+def test_the_suffix_is_one_parenthetical_line_without_a_heading_a_rule_or_an_id():
+    h = hop.select(SLEEP_ASK, [row(1, NIGHT)])
+    line = h.suffix_line()
+    assert line.startswith(hop.SUFFIX_OPEN) and line.endswith(")") and "\n" not in line
+    assert "night shifts" in line and hop.HEADING not in line and hop.RULE not in line and "[mem:" not in line
+    assert hop.select(COOK_ASK, []).suffix_line() == ""
+    nasty = hop.select(SLEEP_ASK, [row(1, "I work night shifts (nights) and\nsleep days.) (you know this about me: x")])
+    assert nasty.suffix_line().count("\n") == 0 and nasty.suffix_line().count(")") == 1   # only the closing paren
+
+
+def test_the_suffix_prefix_is_pinned_to_the_sidecars_elision_rule():
+    import re
+    from pathlib import Path
+
+    ts = (Path(__file__).resolve().parents[3] / "labs/flue-zoe-brain-2x/src/context-blocks.ts").read_text()
+    m = re.search(r"HOP_NOTE_PREFIX = '([^']*)'", ts)
+    assert m and m.group(1) == hop.SUFFIX_OPEN   # a drift is silent: every stale note would be replayed forever
+
+
+async def test_block_placement_is_what_it_was(seeded, monkeypatch):
+    monkeypatch.setenv(hop.PLACEMENT_ENV, "block")
+    sent = await _send(monkeypatch, SLEEP_ASK)
+    assert sent.index(SLEEP_ASK) < sent.index(zc._HOP_BLOCK_OPEN) < sent.index(hop.HEADING) < sent.index(hop.RULE)
+    assert hop.SUFFIX_OPEN not in sent
+
+
+async def test_suffix_placement_is_one_line_after_the_words_and_no_block(seeded, monkeypatch):
+    monkeypatch.setenv(hop.PLACEMENT_ENV, "suffix")
+    sent = await _send(monkeypatch, COLD_ASK)
+    assert sent.endswith(COLD_ASK + "\n" + hop.select(COLD_ASK, [row(1, WALK)]).suffix_line())
+    assert zc._HOP_BLOCK_OPEN not in sent and hop.HEADING not in sent and hop.RULE not in sent
+    assert NIGHT not in sent and FISH not in sent
+
+
+async def test_preamble_placement_is_the_block_before_the_words(seeded, monkeypatch):
+    monkeypatch.setenv(hop.PLACEMENT_ENV, "preamble")
+    sent = await _send(monkeypatch, SLEEP_ASK)
+    assert sent.index(zc._HOP_BLOCK_OPEN) < sent.index(hop.HEADING) < sent.index(zc._RECALL_BLOCK_CLOSE) < sent.index(SLEEP_ASK)
+    assert sent.count(hop.HEADING) == 1 and sent.endswith(SLEEP_ASK) and hop.SUFFIX_OPEN not in sent
+
+
+@pytest.mark.parametrize("placement", hop.PLACEMENTS)
+async def test_no_placement_touches_the_users_own_words(seeded, monkeypatch, placement):
+    """The own-words wall: the hop text reaches the BRAIN's copy of the turn only. Everything that records or quotes what
+    the owner said (exact words, quote-backed retirement, recall evidence, restraint) is handed the raw message."""
+    import exact_words
+    import memory_retire
+    import recall_evidence
+    import restraint
+
+    monkeypatch.setenv(hop.PLACEMENT_ENV, placement)
+    seen: list[tuple[str, str]] = []
+    for mod in (exact_words, memory_retire, recall_evidence, restraint):
+        monkeypatch.setattr(mod, "note_turn", lambda uid, msg, *a, _m=mod.__name__, **k: seen.append((_m, msg)))
+    sent = await _send(monkeypatch, COLD_ASK)
+    assert "kelpie Juniper" in sent and "kelpie" not in COLD_ASK              # the hop did ride the wire ...
+    assert seen and all(msg == COLD_ASK for _m, msg in seen), seen             # ... and only the wire
+    assert {m for m, _ in seen} == {"exact_words", "memory_retire", "recall_evidence", "restraint"}
+
+
+async def test_suffix_is_never_written_into_the_stored_chat_transcript(seeded, monkeypatch):
+    """The wire copy carries the suffix; the sidecar's session store then holds it - so the elision rule must drop it
+    from every OLDER turn (ZOE_BRAIN_ELIDE_STALE_BLOCKS). The suffix is exactly the one-line shape that rule matches."""
+    monkeypatch.setenv(hop.PLACEMENT_ENV, "suffix")
+    sent = await _send(monkeypatch, COLD_ASK)
+    last = sent.splitlines()[-1]
+    assert last.startswith(hop.SUFFIX_OPEN) and last.endswith(")")
+    assert sent.splitlines()[-2] == COLD_ASK
+
+
+@pytest.mark.parametrize("placement", hop.PLACEMENTS)
+async def test_a_non_advice_turn_is_byte_identical_under_every_placement(seeded, monkeypatch, placement):
+    """S1-S8 / day-sim 1r / 7r are not advice requests: the placement flag must not move one byte of their wire message."""
+    monkeypatch.setenv(hop.PLACEMENT_ENV, "block")
+    base = {m: await _send(monkeypatch, m) for m in ("Who is flying in on Thursday?", "Tell me a fun fact about octopuses.",
+                                                      "I've been feeling a bit on edge today.")}
+    monkeypatch.setenv(hop.PLACEMENT_ENV, placement)
+    for m, was in base.items():
+        assert await _send(monkeypatch, m) == was
+
+
+# ── an advice request the owner's facts change is the brain's, not a domain expert's (day-sim S9b) ────────────────────────────
+
+def _tiers(monkeypatch, dispatch):
+    import expert_dispatch
+    import intent_router
+    import semantic_router
+
+    monkeypatch.setattr(expert_dispatch, "is_enabled", lambda: True)
+    monkeypatch.setattr(semantic_router, "is_enabled", lambda: True)
+    monkeypatch.setattr(intent_router, "detect_intent", lambda text, log_miss=False: None)
+    monkeypatch.setattr(expert_dispatch, "dispatch", dispatch)
+    return expert_dispatch
+
+
+def _stub_build(monkeypatch, facts):
+    async def _build(user_id, message, *, svc=None):
+        return hop.select(message, [row(i, t) for i, t in enumerate(facts)])
+
+    monkeypatch.setattr(hop, "build", _build)
+
+
+async def _resolve(text):
+    import fast_tiers
+
+    return await fast_tiers.resolve(text, UID, "s", channel="chat", router_decision={"domain": "weather", "score": 0.95})
+
+
+async def test_the_weather_expert_does_not_answer_an_advice_request_a_durable_fact_changes(monkeypatch):
+    """Day-sim S9b 2026-10-09: 'What should I wear tomorrow? It's meant to be really cold.' (6 am dog walker) was answered by the
+    weather expert - 'Yes, I'd take a jacket, it's around 19 degrees' - and the brain, with the fact in front of it, never ran."""
+    ran = []
+
+    async def dispatch(domain, text, ctx, *, write_ok=True):
+        ran.append(domain)
+        return ed.DispatchResult(domain=domain, reply="Yes, I'd take a jacket, it's around 19 degrees.")
+
+    ed = _tiers(monkeypatch, dispatch)
+    _stub_build(monkeypatch, [WALK])
+    assert await _resolve(COLD_ASK) is None and ran == []
+
+
+async def test_without_a_relevant_fact_or_without_an_advice_shape_the_expert_still_answers(monkeypatch):
+    ran = []
+
+    async def dispatch(domain, text, ctx, *, write_ok=True):
+        ran.append(domain)
+        return ed.DispatchResult(domain=domain, reply="Take a jacket.")
+
+    ed = _tiers(monkeypatch, dispatch)
+    _stub_build(monkeypatch, [NIGHT])                      # a durable fact, but not a constraint on clothing
+    assert await _resolve(COLD_ASK) is not None and ran == ["weather"]
+    ran.clear()
+    _stub_build(monkeypatch, [WALK])
+    assert await _resolve("What's the weather tomorrow?") is not None and ran == ["weather"]   # not an advice request
+
+
+async def test_a_failing_hop_check_is_no_deferral(monkeypatch):
+    async def dispatch(domain, text, ctx, *, write_ok=True):
+        return ed.DispatchResult(domain=domain, reply="Take a jacket.")
+
+    ed = _tiers(monkeypatch, dispatch)
+
+    async def boom(*a, **k):
+        raise RuntimeError("store down")
+
+    monkeypatch.setattr(hop, "build", boom)
+    assert await _resolve(COLD_ASK) is not None
+
+
+# ── the request shapes the P-family diet asks use (P2.b was 8/20: only 2 of its 5 phrasings were hop turns) ──────────────────────
+
+@pytest.mark.parametrize("ask", ["What should I cook tonight?", "Any dinner ideas?", "What's a good dinner for tonight?",
+                                 "I can't decide what to make for tea.", "Suggest something for dinner."])
+def test_every_phrasing_of_the_p2b_diet_asks_is_a_food_advice_request(ask):
+    assert hop.advice_topics(ask) == ("food",), ask
+    assert [f.id for f in hop.select(ask, [row(3, FISH)]).facts] == ["mem3"]
+
+
+@pytest.mark.parametrize("msg", ["Any news today?", "Any updates on dinner?", "What's a good book", "What's for dinner at the Hendersons?"])
+def test_the_wider_shapes_do_not_make_everything_an_advice_request(msg):
+    assert hop.advice_topics(msg) == ()

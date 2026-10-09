@@ -34,6 +34,22 @@ it('never leaks: forged close extends the region; an unterminated block elides t
   assert.equal(stripContextBlocks(mismatched), '');
 });
 
+it("drops the personalisation hop's one-line suffix, only as a whole line, and keeps the user's words", () => {
+  const note = '(you know this about me: User walks their dog Juniper at 6am)';
+  assert.equal(stripContextBlocks(`What should I wear tomorrow?\n${note}`), 'What should I wear tomorrow?');
+  assert.equal(stripContextBlocks(`${note}\nWhat should I wear?`), 'What should I wear?');
+  const inline = `I said (you know this about me: x) and meant it`;
+  assert.equal(stripContextBlocks(inline), inline, 'a mention inside a sentence is the user\'s own words');
+  assert.equal(stripContextBlocks('(you know this about me: unterminated'), '(you know this about me: unterminated');
+  const msgs = [
+    { role: 'user' as const, content: `What should I wear?\n${note}`, timestamp: 0 },
+    { role: 'user' as const, content: `And tomorrow?\n${note}`, timestamp: 0 },
+  ];
+  const out = elideStaleBlocks(msgs);
+  assert.equal(out[0].content, 'What should I wear?');
+  assert.equal(out[1].content, msgs[1].content, 'the newest message keeps its note');
+});
+
 it('only the newest user message keeps its blocks; same array when nothing changes', () => {
   const msgs = [
     { role: 'user' as const, content: `${recall('- a')}\none`, timestamp: 0 },

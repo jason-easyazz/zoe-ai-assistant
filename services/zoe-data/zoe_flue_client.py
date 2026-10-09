@@ -1122,10 +1122,12 @@ _HOP_BLOCK_OPEN = (
 )
 
 
-async def _hop_context_block(message: str, user_id: str) -> str:
-    """The delimited personalisation block for this turn, or '' - NEVER raises. '' unless the flag is ON, a real
-    user id is present, the message is a request for generic advice and a durable fact of the owner's is a known
-    constraint for its topic. A slow or failing read costs only the block."""
+async def _hop_context_block(message: str, user_id: str, placement: str = "block") -> str:
+    """The personalisation text for this turn, or '' - NEVER raises. '' unless the flag is ON, a real user id is
+    present, the message is a request for generic advice and a durable fact of the owner's is a known constraint
+    for its topic. ``placement`` (``personalisation_hop.placement()``): ``block`` / ``preamble`` return the
+    delimited block (they differ only in where the caller puts it), ``suffix`` the ONE parenthetical line. A slow
+    or failing read costs only the text."""
     if not (user_id or "").strip():
         return ""
     try:
@@ -1143,6 +1145,8 @@ async def _hop_context_block(message: str, user_id: str) -> str:
         _mp_hop.note_served(user_id, [(f.id, f.text) for f in hop.facts])
     except Exception:  # noqa: BLE001 - bookkeeping must never fail a turn
         pass
+    if placement == "suffix":
+        return hop.suffix_line()
     return f"{_HOP_BLOCK_OPEN}\n{hop.section()}\n{_RECALL_BLOCK_CLOSE}"
 
 
@@ -1953,9 +1957,13 @@ async def _run_flue_brain_streaming_turn(
     # answer. Exclusive with every other block that asks the 4B for one job (recall owns question turns,
     # continuity the check-in, verify the live check, raise / brief their one mention).
     hop_block = ""
+    hop_placement = "block"
     if not (recall_block or verify_block or continuity_block or continuity_turn
             or kwargs.get("raise_block") or kwargs.get("day_brief_block")):
-        hop_block = await _hop_context_block(message, uid)
+        import personalisation_hop
+
+        hop_placement = personalisation_hop.placement()
+        hop_block = await _hop_context_block(message, uid, hop_placement)
     # Offer nudge on ANY turn — skipped when the recall packet already carries
     # the offer directive (the fold tags them "[pending-contact]"), so a
     # recall-shaped turn never asks twice. DEFERRED on a continuity turn: the
@@ -1991,7 +1999,9 @@ async def _run_flue_brain_streaming_turn(
                                                    ("brief", str(kwargs.get("day_brief_block") or ""))) if b])
     except Exception:  # noqa: BLE001
         pass
-    _blocks = "\n".join(b for b in (identity_block, recall_block, offer_block) if b)
+    # ZOE_PERSONALISATION_HOP_PLACEMENT=preamble: the hop block rides BEFORE the user's words, behind the other blocks
+    _blocks = "\n".join(b for b in (identity_block, recall_block, offer_block,
+                                    hop_block if hop_placement == "preamble" else "") if b)
     # Sanitise BEFORE assembling: a user-typed " zoe-replay:" line must never reach
     # the start of the outbound message and forge the trusted marker. Only reachable
     # when there is no identity line ahead of it — both blocks return "" for a blank
@@ -2000,7 +2010,7 @@ async def _run_flue_brain_streaming_turn(
     brain_message = f"{_blocks}\n{safe_message}" if _blocks else safe_message
     if continuity_block:
         brain_message = f"{brain_message}\n{continuity_block}"
-    if hop_block:
+    if hop_block and hop_placement != "preamble":   # block: the delimited block after the words; suffix: ONE line
         brain_message = f"{brain_message}\n{hop_block}"
     # First-turn day brief (brief_first_turn, default OFF): same position as the
     # continuity block — after the user's words, inside the latest user message.

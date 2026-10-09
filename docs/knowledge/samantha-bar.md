@@ -201,6 +201,35 @@ class fix is in this PR (`fast_tiers.intent_gate`: an explicit forget command is
 S9a,S9b`: **FAIL / FAIL** — `hop_in_packet: False`, generic replies with no personal detail (the miss, reproduced on live). The
 after-deploy re-run (same two commands) is the acceptance measurement and is on the open-problems ledger.
 
+**Acceptance 2026-10-09 (live `main` 4bb903d2) and what it was really measuring.** S9a PASS, **S9b FAIL with `hop_in_packet: true`** (reply
+"Yes, I'd take a jacket, it's around 19 degrees and wet in Geraldton"), and P-family P2.b 8/20. The first reading was "the packet has the fact,
+the 4B ignores it, so the lever is placement". It was wrong, twice, and the app log shows why: (1) **S9b was never a brain turn** - the
+semantic router sent "What should I wear tomorrow? It's meant to be really cold." to the weather expert (`EXPERT_ACTIVE domain=weather ...
+reply_chars=68`, the exact length of that reply, no `PROVENANCE_REPLY kind=brain` for the turn), so the hop block had nowhere to ride. Fix:
+`fast_tiers._hop_owns_turn` - a generic-advice request with a relevant durable owner fact skips Tier-1.5 and goes to the brain
+(a request with no relevant fact, and every non-advice turn, still gets the expert). (2) **P2.b's 8 = exactly the two phrasings of its five
+that the hop's request-shape regex recognised** ("What should I cook tonight?", "Suggest something for dinner." x 4 asks each; "Any dinner ideas?",
+"What's a good dinner for tonight?", "I can't decide what to make for tea." were not hop turns at all - and every hop turn passed, 8/8). Fix:
+the shapes now cover "any <noun> ideas/tips", "what's a good <noun> for ...", and `tea|supper|brunch` are food cues. The day-sim now
+says which it was: `seam_hops` / `seam_hops_expected` in the S9 evidence, and a FAIL with the fact in the packet but fewer brain turns than
+samples is attributed to the routing, not to the 4B.
+
+**Placement A/B (`scripts/perf/hop_placement_ab.py`, 3 runs x 10 per cell, two fact forms, the real `zoe_flue_client` composition against the live
+sidecar and brain, per-run env so the live flags are untouched; PASS counts).** The hop reaches the brain on 100% of these turns, so this is the
+pure "does the 4B use it, from where" question. `ZOE_PERSONALISATION_HOP_PLACEMENT`: `block` (default, the delimited block after the
+user's words), `suffix` (one parenthetical line after the words), `preamble` (the block before the words).
+
+| placement | S9a (sleep) | S9b (cold, 6am walk) | P2.b (diet, all 5 phrasings) | total |
+|---|---|---|---|---|
+| block (default) | 30/30 | 24/30 | 30/30 | **84/90** |
+| preamble | 30/30 | 16/30 | 26/30 | 72/90 |
+| suffix | 30/30 | 8/30 | 30/30 | 68/90 |
+
+`block` wins on the measured rate and stays the default; the other two stay as options (the suffix is stripped from older turns by the sidecar's
+elision rule like a block, `context-blocks.ts` `HOP_NOTE_PREFIX`, and never touches the owner's recorded words). The remaining S9b misses under
+every placement are "I need to check the forecast first - where are you?" (the 4B asks instead of calling `get_weather`), a tool-use
+question, not a hop one.
+
 The judge is the brain itself: llama-server `:11434` `/v1/chat/completions` with temperature 0,
 `top_k` 1 and seed 0. It gets a fixed system prompt and one rubric per judged scenario, and
 must answer `VERDICT: PASS|FAIL` / `REASON: …`. Its verdict and reason are recorded, and an

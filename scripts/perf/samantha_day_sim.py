@@ -923,6 +923,17 @@ HOP_ASKS = {"S9a": (ASK_SLEEP, "d1-shift", "night shift", "sleep"),
 HOP_HEADING = "Shape the answer by"
 
 
+_HOP_LINE_RE = re.compile(r"PERSONALISATION_HOP user=(?P<user>[^\s]+) ")
+
+
+def count_seam_hops(lines: Iterable[str], user: str) -> int:
+    """PERSONALISATION_HOP log lines for ``user`` over an ask's turns, minus the ONE the harness's own packet read makes: a
+    brain-bound turn builds the hop on the Flue seam (``zoe_flue_client._hop_context_block``; twice when the fast tiers
+    deferred the turn to it), a turn a fast tier / domain expert answered builds none."""
+    n = sum(1 for ln in lines for m in [_HOP_LINE_RE.search(ln)] if m and m.group("user") == user)
+    return max(0, n - 1)
+
+
 def run_hop_ask(live: "DayLive", user: str, aid: str, samples: int, asks_log: list, seeds: dict, landed: dict,
                 mode: str) -> tuple[str, dict]:
     """S9a / S9b - NO card needed: the recall packet for the ask must carry the durable fact under "Shape the
@@ -934,6 +945,7 @@ def run_hop_ask(live: "DayLive", user: str, aid: str, samples: int, asks_log: li
     pkt = live.packet(user, question)
     hop_in_packet = None if pkt is None else (HOP_HEADING in pkt and needle in pkt.lower())
     verdicts, per = [], []
+    log_off = uma.log_offset()
     for i in range(samples):
         t = _ask(live, user, f"q-{aid.lower()}-s{i}", question, asks_log)
         if t["error"]:
@@ -944,7 +956,14 @@ def run_hop_ask(live: "DayLive", user: str, aid: str, samples: int, asks_log: li
         verdicts.append(v)
         per.append({"verdict": v, **ev, **live.evidence(t)})
     verdict = sb.majority_vote(verdicts)
-    ev = {"samples": per, "votes": verdicts, "hop_in_packet": hop_in_packet, "card_mode": mode == "allowlisted"}
+    seam_hops = count_seam_hops(uma.read_app_log(log_off), user)
+    ev = {"samples": per, "votes": verdicts, "hop_in_packet": hop_in_packet, "card_mode": mode == "allowlisted",
+          "seam_hops": seam_hops, "seam_hops_expected": samples}
+    if verdict == "FAIL" and hop_in_packet and seam_hops < samples:
+        # 2026-10-09: S9b failed with hop_in_packet true and was read as "the 4B ignores the hop"; the weather expert had answered the
+        # ask and the brain never ran. The packet proves the store, not the turn - the seam's own log line proves the turn.
+        ev["why"] = (f"the hop reached the brain on {seam_hops} of {samples} turns: a fast tier / domain expert answered the rest, "
+                     "so the reply is not the brain's (the packet carries the fact, the turn never saw it)")
     # The packet is the contract: a tailored reply from a card or another recall path does not certify the hop
     if hop_in_packet is None:
         return "ERROR", {**ev, "why": "the recall packet could not be read, so the hop is unproven"}

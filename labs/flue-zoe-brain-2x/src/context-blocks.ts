@@ -32,6 +32,18 @@ export const FLUE_CONTEXT_BLOCKS: readonly (readonly [string, string])[] = [
   ['[RAISE', '[END RAISE]'],
 ];
 
+/**
+ * The personalisation hop's `suffix` placement (zoe-data `ZOE_PERSONALISATION_HOP_PLACEMENT=suffix`) is ONE line,
+ * not a delimited block: `(you know this about me: <fact>; <fact>)`. It is a whole line that starts with this prefix
+ * and ends with `)`, dropped from older user messages like a block. Pinned equal to `SUFFIX_OPEN` in
+ * services/zoe-data/personalisation_hop.py.
+ */
+export const HOP_NOTE_PREFIX = '(you know this about me: ';
+
+function isHopNote(line: string): boolean {
+  return line.startsWith(HOP_NOTE_PREFIX) && line.endsWith(')');
+}
+
 const OPEN_BY_CLOSE = new Map(FLUE_CONTEXT_BLOCKS.map(([open, close]) => [close, open]));
 
 /** `ZOE_BRAIN_ELIDE_STALE_BLOCKS`: default OFF; read per call. */
@@ -58,6 +70,10 @@ export function stripContextBlocks(text: string): string {
   const mark = (from: number, to: number) => drop.fill(true, from, to + 1);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trimEnd(); // composition never indents a delimiter
+    if (start < 0 && isHopNote(line)) {
+      mark(i, i); // a one-line note outside any block: drop just that line
+      continue;
+    }
     const open = openType(line);
     if (open) {
       if (start < 0) start = i;
