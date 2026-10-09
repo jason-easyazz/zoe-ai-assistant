@@ -359,5 +359,6 @@
   "ack_release": "In Ordnung, ich darf es wieder erwähnen.",
   "ack_release_none": "Ich habe nichts zurückgehalten, also kein Problem.",
   "ack_ask": "Worüber soll ich nicht mehr reden? Sag es mir."
- }
+ },
+ "recall_gate": {"caps_entity":false,"stop":["der","die","das","den","dem","des","ein","eine","einen","einem","einer","und","oder","aber","von","zu","zum","zur","in","im","an","am","auf","mit","für","aus","bei","nach","wie","ist","sind","war","waren","sein","bin","habe","hat","haben","ich","mich","mir","mein","meine","meinen","meiner","wir","unser","du","dein","nicht","kein","auch","sehr","noch","nur","über","als","wenn","wo","wer","was","benutzer"],"plan_cues":["morgen","heute","heute abend","später","bald","dieses wochenende","diese woche","nächste woche","nächsten monat"],"routine_cues":["jeden","jede","jedes","täglich","immer","normalerweise","wöchentlich","jeden tag","unter der woche"],"dayparts":["morgen","morgens","abend","abends","nacht","nachts","nachmittag","mittag","mitternacht","sonnenaufgang"],"am_words":[],"pm_words":[],"clock_suffix":["uhr"],"months":["januar","februar","märz","april","mai","juni","juli","august","september","oktober","november","dezember"],"weekdays":["montag","dienstag","mittwoch","donnerstag","freitag","samstag","sonntag"],"stop_chars":[]}
 }

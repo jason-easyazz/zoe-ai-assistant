@@ -382,5 +382,6 @@
   "ack_release": "Vale, puedo volver a mencionarlo.",
   "ack_release_none": "No estaba callando nada, así que no hay problema.",
   "ack_ask": "¿De qué tema debo dejar de hablar? Dímelo."
- }
+ },
+ "recall_gate": {"caps_entity":true,"stop":["el","la","los","las","un","una","unos","unas","y","o","pero","de","del","al","a","en","con","por","para","como","es","son","era","fue","ser","estar","estoy","esta","están","que","lo","le","les","se","su","sus","mi","mis","tu","tus","yo","me","nos","nuestro","nuestra","no","sí","si","más","muy","también","sobre","entre","desde","hasta","cuando","donde","quien","cual","usuario"],"plan_cues":["mañana","hoy","esta noche","esta tarde","esta mañana","luego","más tarde","pronto","este fin de semana","esta semana","la próxima semana","el próximo mes"],"routine_cues":["cada","todos","todas","diario","diaria","siempre","normalmente","semanal","todos los días","entre semana"],"dayparts":["mañana","tarde","noche","madrugada","amanecer","atardecer","mediodía","medianoche"],"am_words":["a. m.","a.m.","am"],"pm_words":["p. m.","p.m.","pm"],"clock_suffix":[],"months":["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"],"weekdays":["lunes","martes","miércoles","jueves","viernes","sábado","domingo"],"stop_chars":[]}
 }
