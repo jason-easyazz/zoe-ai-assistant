@@ -1,0 +1,266 @@
+{
+ "lang": "ja",
+ "name": "Japanese",
+ "reviewed": false,
+ "enabled": true,
+ "_note": "Author-written, NOT native-reviewed (research note E6). Pre-filter data only: a marker here may veto a promotion or flag a claim for the off-path verifier; it never authorises one.",
+ "cjk": true,
+ "negation_scope": "before",
+ "negation_suffix": [],
+ "negation_phrases": [],
+ "ended_aux": [],
+ "ended_base_verbs": [],
+ "hedge_subjects": [],
+ "question_aux": [],
+ "question_subjects": [],
+ "question_words": [
+  "ですか",
+  "ますか",
+  "でしょうか"
+ ],
+ "question_marks": [
+  "?",
+  "？"
+ ],
+ "loose_codes": [
+  "friend",
+  "colleague",
+  "boss",
+  "neighbour"
+ ],
+ "negation_words": [
+  "ではありません",
+  "ではなく",
+  "じゃなく",
+  "じゃない",
+  "ません",
+  "ない",
+  "なかった",
+  "違います",
+  "違う"
+ ],
+ "ended_verbs": [
+  "やめ",
+  "止め",
+  "辞め",
+  "引退",
+  "解約",
+  "キャンセル",
+  "諦め",
+  "あきらめ"
+ ],
+ "ended_phrases": [
+  "もう[^、。,.！？!?]{0,8}(?:ない|ません)"
+ ],
+ "past_markers": [
+  "以前",
+  "かつて",
+  "昔",
+  "前は"
+ ],
+ "hypothetical": [
+  "かもしれ",
+  "かも",
+  "たら",
+  "もし",
+  "でしょう",
+  "つもり"
+ ],
+ "hedge_verbs": [
+  "と思います",
+  "と思う",
+  "と思い",
+  "と聞",
+  "らしい",
+  "そうです"
+ ],
+ "hedge_words": [
+  "みたい"
+ ],
+ "contrast_connectors": [
+  "が、",
+  "けど",
+  "けれど",
+  "しかし",
+  "でも",
+  "ですが"
+ ],
+ "contrast_exempt": [
+  "確か",
+  "本当",
+  "とても",
+  "まだ",
+  "いつも"
+ ],
+ "temporal": [
+  "今は",
+  "今",
+  "現在",
+  "今日",
+  "今週",
+  "今月",
+  "最近",
+  "当分",
+  "しばらく",
+  "今年"
+ ],
+ "anaphora": [
+  "そこ",
+  "それ",
+  "そちら",
+  "ここ",
+  "これ",
+  "あそこ"
+ ],
+ "user_markers": [
+  "ユーザー",
+  "使用者",
+  "利用者"
+ ],
+ "first_person": [
+  "私",
+  "僕",
+  "俺",
+  "わたし"
+ ],
+ "you_possessive": [
+  "あなたの",
+  "君の"
+ ],
+ "copula": [
+  "です",
+  "だ",
+  "でした"
+ ],
+ "of_markers": [
+  "の"
+ ],
+ "kin_codes": {
+  "mother": [
+   "お母さん",
+   "母親",
+   "おかあさん",
+   "ママ",
+   "母"
+  ],
+  "father": [
+   "お父さん",
+   "父親",
+   "おとうさん",
+   "パパ",
+   "父"
+  ],
+  "parent": [
+   "両親",
+   "親"
+  ],
+  "wife": [
+   "奥さん",
+   "お嫁さん",
+   "家内",
+   "妻",
+   "嫁"
+  ],
+  "husband": [
+   "ご主人",
+   "旦那",
+   "主人",
+   "夫"
+  ],
+  "spouse": [
+   "配偶者"
+  ],
+  "partner": [
+   "パートナー"
+  ],
+  "girlfriend": [
+   "彼女"
+  ],
+  "boyfriend": [
+   "彼氏"
+  ],
+  "fiance": [
+   "婚約者"
+  ],
+  "son": [
+   "息子"
+  ],
+  "daughter": [
+   "娘"
+  ],
+  "child": [
+   "子供",
+   "子ども",
+   "お子さん"
+  ],
+  "sister": [
+   "お姉さん",
+   "姉妹",
+   "姉",
+   "妹"
+  ],
+  "brother": [
+   "お兄さん",
+   "兄",
+   "弟"
+  ],
+  "sibling": [
+   "兄弟姉妹"
+  ],
+  "aunt": [
+   "叔母",
+   "伯母",
+   "おばさん"
+  ],
+  "uncle": [
+   "叔父",
+   "伯父",
+   "おじさん"
+  ],
+  "niece": [
+   "姪"
+  ],
+  "nephew": [
+   "甥"
+  ],
+  "cousin": [
+   "いとこ",
+   "従兄弟",
+   "従姉妹"
+  ],
+  "grandmother": [
+   "おばあちゃん",
+   "おばあさん",
+   "祖母"
+  ],
+  "grandfather": [
+   "おじいちゃん",
+   "おじいさん",
+   "祖父"
+  ],
+  "mother_in_law": [
+   "義母"
+  ],
+  "father_in_law": [
+   "義父"
+  ],
+  "friend": [
+   "友達",
+   "友人"
+  ],
+  "colleague": [
+   "同僚"
+  ],
+  "boss": [
+   "上司"
+  ],
+  "neighbour": [
+   "隣人",
+   "ご近所"
+  ]
+ },
+ "clause_words": [
+  "ので",
+  "のに"
+ ]
+}

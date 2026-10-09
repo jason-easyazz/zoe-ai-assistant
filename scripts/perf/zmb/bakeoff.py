@@ -114,6 +114,9 @@ class Cfg:
     #: the REFLECTION PHASE (optional, runs only if time remains): the clone is restarted with this ``--ctx-size`` (the live unit's other flags unchanged; KV cache type as live) and ONLY the
     #: reflection (K) work runs against it, for the variants ``H2@32k`` and ``HMA@32k``. ``BAKEOFF_REFLECT_CTX``; 0 switches the phase off.
     reflect_ctx: int = int(os.environ.get("BAKEOFF_REFLECT_CTX", "32768") or 0)
+    #: the Z0n PHASE (default OFF; ``BAKEOFF_Z0N=1``): Z0 + the night mind's reflection cells K1-K12 and Z0's brain half of the protocol axis (``M4.*.zoe``) on the clone, so K2 / K3 stop
+    #: being scripted-model SKIPs and rule M has a Z0 ``protocol_brain`` baseline (``z0n_window.py``). About half an hour of clone calls; runs only if the time is there.
+    z0n: bool = os.environ.get("BAKEOFF_Z0N") == "1"
     #: the PARKED 12B deep-brain unit: only READ (``host.read``) to generate the 12B reflection clone from its ExecStart; never enabled, edited or started
     deep_unit: str = os.environ.get("BAKEOFF_DEEP_UNIT", "/home/zoe/.config/systemd/user/llama-server-12b-deepbrain.service.disabled")
     #: user units stopped ONLY for the 12B reflection pair (to make room for it) and started again right after on EVERY exit path; default EMPTY: nothing else is ever stopped.

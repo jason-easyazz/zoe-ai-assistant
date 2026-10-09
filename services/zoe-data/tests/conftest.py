@@ -44,6 +44,9 @@ os.environ["MEMPALACE_DATA_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "mempalace")
 os.environ["ZOE_VOICE_STT_LOG"] = os.path.join(ZOE_TEST_STORE_DIR, "voice_stt.jsonl")
 # The write-time reject ledger (memory_reject_ledger) persists day counters under ~/.zoe by default.
 os.environ["ZOE_MEMORY_REJECT_LEDGER"] = os.path.join(ZOE_TEST_STORE_DIR, "memory-reject-ledger.json")
+# The structural floors' off-path verifier is the one caller of the LIVE brain's endpoint in the memory path; a test that exercises it
+# turns it on with a stubbed client (test_structural_verifier.py, test_structural_claims_digest.py). No other test may reach it.
+os.environ["ZOE_STRUCTURAL_VERIFIER"] = "off"
 
 
 import pytest  # noqa: E402
@@ -55,6 +58,9 @@ def _exact_words_in_process_index():
     ``MemoryService.delete_user`` FAILS CLOSED when the verbatim erase fails, a test of the delete must not reach for a pool
     that is not there: every test gets the in-process index (a test that wants the SQL one sets it itself)."""
     import exact_words
+    import night_store
     exact_words.set_backend(exact_words.MemoryBackend())
+    night_store.set_backend(night_store.MemoryBackend())     # the night mind's tables are Postgres in production; same rule
     yield
     exact_words.set_backend(None)
+    night_store.set_backend(None)

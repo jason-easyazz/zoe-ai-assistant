@@ -278,6 +278,126 @@ def life(seed: str) -> Life:
     return lf
 
 
+# ── (k) the night mind's extra lives (K6-K12): a dense day, drift and a flat week, a restraint set, a resolution set, labelled moments ───────────────────
+
+#: routine household commands (never memory-worthy): a real day is mostly these (the pilot found a recency tail held 0 of 9 durable facts)
+ROUTINE_TEMPLATES = ("turn on the {room} lights", "turn off the {room} lamp", "set a timer for {k} minutes", "pause the music", "play {genre} in the {room}",
+                     "what's the weather like in {city}", "what time is it in {city}", "skip this song", "turn the volume down a bit", "stop the timer",
+                     "dim the {room} lights to {k} percent", "set an alarm for seven fifteen", "how many ounces in a cup", "turn on the porch light")
+_ROOMS = ("kitchen", "lounge", "bedroom", "hall", "study")
+_GENRES2 = ("jazz", "classical", "folk", "acoustic", "ambient", "soul")
+_CITIES = ("Lisbon", "Oslo", "Perth", "Cork", "Turin")
+
+
+def routine_commands(seed: str, day: int, n: int) -> "list[str]":
+    """``n`` routine commands for one day (seeded; none names a person, a date or a feeling, so stage 1 of the night mind drops every one)."""
+    rng = random.Random(f"zmb-k-routine:{seed}:{day}")
+    return [rng.choice(ROUTINE_TEMPLATES).format(room=rng.choice(_ROOMS), k=rng.randint(2, 45), genre=rng.choice(_GENRES2), city=rng.choice(_CITIES))
+            for _ in range(n)]
+
+
+@dataclass(frozen=True)
+class LayoutItem:
+    kind: str          # life | cmd
+    day: int           # 1..30 (30 = today)
+    text: str
+
+
+def dense_layout(seed: str, per_day: int = 40) -> "tuple[list[LayoutItem], list[str]]":
+    """The DENSE life (K7): the same thirty days, with ``per_day`` routine commands around the life turns of every day. The turns of the 'knee' and
+    'concert' threads are said at the START of their day; the turns of the 'job' and 'move' threads are PLANTED LATE, after 90 % of the day's commands -
+    where a transcript cut at 3,000 characters never reaches. Returns ``(items in time order, the late thread ids)``."""
+    lf = life(seed)
+    late_ids = ["job", "move"]
+    late_tokens = [t.identity[0] for t in lf.threads if t.id in late_ids]
+    items: "list[LayoutItem]" = []
+    cut = int(per_day * 0.9)
+    for day in range(1, 31):
+        mine = [t for t in lf.turns if t["day"] == day and t["speaker"] == "typed"]
+        late = [t for t in mine if any(tok in t["text"].lower() for tok in late_tokens)]
+        early = [t for t in mine if t not in late]
+        cmds = routine_commands(seed, day, per_day)
+        items += [LayoutItem("life", day, t["text"]) for t in early] + [LayoutItem("cmd", day, c) for c in cmds[:cut]]
+        items += [LayoutItem("life", day, t["text"]) for t in late] + [LayoutItem("cmd", day, c) for c in cmds[cut:]]
+    return items, late_ids
+
+
+@dataclass
+class Variant:
+    """A small synthetic month for one K cell: turns (day 1..30, text) and the gold the cell reads."""
+    name: str
+    turns: "list[dict]" = field(default_factory=list)
+    gold: "dict[str, object]" = field(default_factory=dict)
+
+
+def variant_life(name: str, seed: str) -> Variant:
+    """``drift`` (a thread goes quiet, another changes), ``flat`` (the same cadence with neither), ``restraint`` (sensitive threads and one benign), ``resolution``
+    (a plan with no outcome, a plan that finished, a thread nobody mentions again). Names are drawn from the pools above (invented)."""
+    rng = random.Random(f"zmb-k-variant:{name}:{seed}")
+    ppl, places, kids = rng.sample(_PEOPLE, 10), rng.sample(_PLACES2, 4), rng.sample(_KIDS, 3)
+    friend, nbr, sis, uncle, third, club_host, cousin = ppl[0], ppl[1], ppl[2], ppl[3], ppl[4], ppl[5], ppl[6]
+    pl1, pl2 = places[0], places[1]
+    schools, instr = rng.sample(_SCHOOLS, 1)[0], rng.choice(_INSTR)
+    v = Variant(name)
+
+    def say(day: int, text: str) -> None:
+        v.turns.append({"day": day, "text": text})
+    if name in ("drift", "flat"):
+        for d in (2, 9, 16) + ((23, 29) if name == "flat" else ()):
+            say(d, {2: f"I went for a run with {friend} this morning.", 9: f"Running with {friend} again, we are building up to the fun run.",
+                    16: f"{friend} and I ran 5k today.", 23: f"{friend} and I ran along the river this morning.", 29: f"Another run with {friend} before work."}[d])
+        say(5, f"We are going to {pl1} on the 12th for {kids[0]}'s birthday.")
+        say(20, f"The {pl1} trip is off, we are going to {pl2} instead." if name == "drift" else f"Booked the train to {pl1} for {kids[0]}'s birthday.")
+        for d, t in ((3, f"My neighbour {nbr} gave me seedlings for the garden."), (10, f"{nbr} helped me plant the garden beds."),
+                     (17, f"The garden beds are doing well, thanks to {nbr}."), (24, f"{nbr} brought round more seedlings for the garden."),
+                     (29, f"Picked the first tomatoes from the garden with {nbr}.")):
+            say(d, t)
+        v.gold = ({"quiet": [friend.lower()], "changed": [pl1.lower()], "steady": [nbr.lower()]} if name == "drift"
+                  else {"quiet": [], "changed": [], "steady": [nbr.lower(), friend.lower(), pl1.lower()]})
+    elif name == "restraint":
+        for d, t in ((17, "My knee has been sore since rowing on Sunday."), (24, "I saw Dr Okafor about my knee and the physio starts soon."),
+                     (19, f"My uncle {uncle} died last week and I miss him."), (22, f"The funeral for uncle {uncle} is on Friday."),
+                     (20, f"I'm worried about the loan repayments, I can't afford them."), (26, "The loan is behind again and I owe more now."),
+                     (21, f"I argued with my sister {sis} again about mum's house."), (27, f"{sis} and I fought about the house again."),
+                     (18, f"I'm worried about {third}'s test results."), (23, f"Don't bring up {third}'s test results again, that is between us."),
+                     (16, f"{kids[1]} has a school concert at {schools} on the 20th."), (23, f"{kids[1]} is learning the {instr} for the concert."),
+                     (28, f"{kids[1]} practised the {instr} for an hour today.")):
+            say(d, t)
+        v.gold = {"leave": ["knee", uncle.lower(), "loan", sis.lower(), third.lower()], "benign": [kids[1].lower()],
+                  "asks": [("how is my knee", "knee"), (f"what did I say about uncle {uncle}", uncle.lower())]}
+    elif name == "resolution":
+        say(3, f"I am planning a surprise party for {third} on Saturday.")
+        say(6, f"The {club_host} quiz night is on the 20th.")
+        say(22, f"The {club_host} quiz night went really well, we came second.")
+        say(4, f"My cousin {cousin} is visiting from {pl1} next month.")
+        v.gold = {"open": [third.lower()], "resolved": [club_host.lower()], "absent": [cousin.lower()]}
+    else:
+        raise ValueError(f"unknown variant life {name!r} (known: drift, flat, restraint, resolution)")
+    v.turns.sort(key=lambda t: t["day"])
+    return v
+
+
+#: K12: turns with the kind / feeling / weight a careful reader gives them (the labels are written, not generated; the cell scores the model against them)
+LABELLED_MOMENTS = (
+    ("I'm really worried about my mum's operation on Thursday.", "health", "worried", 3),
+    ("Tamsin got the offer from Pinecrest Mills!", "progress", "none", 3),
+    ("I'm tired after a long week but happy.", "feeling", "happy", 2),
+    ("The Saltreach trip is off, we are going to Oldmere instead.", "change", "none", 2),
+    ("My knee is so much better after the physio.", "health", "relieved", 2),
+    ("Dagny's offer on the house was accepted.", "progress", "none", 3),
+    ("I'm stressed about the deadline on Friday.", "feeling", "stressed", 2),
+    ("Rowan has a school concert on the 14th.", "plan", "none", 2),
+    ("Faramir lives in Quinford.", "person", "none", 1),
+    ("I'm so proud of how Hazel played at the recital.", "feeling", "proud", 2),
+    ("I'm dreading the dentist appointment next Tuesday.", "health", "worried", 2),
+    ("My sister Brynja has moved to Pellham.", "change", "none", 2),
+)
+
+
+def labelled_moments() -> "list[dict]":
+    return [{"text": t, "kind": k, "feeling": f, "weight": w} for t, k, f, w in LABELLED_MOMENTS]
+
+
 def entity_tokens(text: str, entities: "frozenset[str]") -> "set[str]":
     """The life's entities a text names (whole-word, case-blind, multi-word names matched whole)."""
     low = " " + re.sub(r"[^a-z0-9' ]+", " ", (text or "").lower()) + " "

@@ -1,7 +1,7 @@
 ---
 type: Reference
 title: Samantha bar harness (samantha_bar.py v0)
-description: The Samantha-quality regression gate. Eighteen scripted multi-day memory and companion scenarios (S1–S8, S10–S16, S20–S22) run against throwaway demo users through the live API, plus the week-in-the-life day simulation (samantha_day_sim.py) that proves the whole knows-you chain for one user. Covers how to run them, what each scenario and ask proves, the scoring and judge, the baseline and teardown contracts, what a simulation can and cannot fake, and known limits.
+description: The Samantha-quality regression gate. Twenty scripted multi-day memory and companion scenarios (S1–S8, S10–S16, S20–S22, S26–S27) run against throwaway demo users through the live API, plus the week-in-the-life day simulation (samantha_day_sim.py) that proves the whole knows-you chain for one user. Covers how to run them, what each scenario and ask proves, the scoring and judge, the baseline and teardown contracts, what a simulation can and cannot fake, and known limits.
 tags: [memory, samantha, eval, regression-gate, harness, zoe-data]
 timestamp: 2026-10-03T14:00:00Z
 ---
@@ -14,7 +14,7 @@ Tests: `tests/unit/test_samantha_bar.py` (ci_safe, pure).
 It is the memory and companion counterpart of the voice replay gate. Each run creates two
 fresh users, `demo_bar_<8 hex>` A and B, and talks to the live zoe-data API as them
 (`POST /api/chat/?stream=false` with `X-Internal-Token` + `X-Zoe-User-Id`). It scores
-eighteen scenarios (S1–S8, S10–S16, S20–S22; S9 lives in the [day simulation](#week-in-the-life-day-simulation-samantha_day_simpy))
+twenty scenarios (S1–S8, S10–S16, S20–S22, S26–S27; S9 lives in the [day simulation](#week-in-the-life-day-simulation-samantha_day_simpy))
 and compares them against a baseline. A scenario is red only when it
 passed before and does not pass now.
 
@@ -98,8 +98,8 @@ ids only). Day 2 follows.
 | S6 | Demo B never sees demo A's facts. | Deterministic: no A needle may appear in B's reply or in B's `/for-prompt` packet. If A's own packet holds none of them, the result is SKIP, because the test would be vacuous. A packet read that FAILS (either user) is ERROR — a boundary that was not inspected is never certified. |
 | S7 | A short duplicate ("my dad is Teodor") does not erase the richer fact. | The reply must name Teodor and lighthouse, and A's packet must still hold `lighthouse`. A failed packet read is ERROR. The duplicate's capture must be OBSERVED first: the harness waits on `/api/memories/capture-status` (the turn's background extraction + digest completed, nothing in flight, and `failed` did not advance — a memory pass that raised is completed-but-FAILED; bounded timeout) — not observed or failed = ERROR, never PASS. |
 | S8 | S1 and S7 facts survive 32 filler turns spread over 3 sessions. | deterministic: `marisol` and `lighthouse`. ANY failed filler turn is ERROR, even when both names come back — the long history was not built, so the recall proves nothing. |
-| S10 | A one-word change of state retires the old fact: "I gave up the cello." after "I play the cello in a community orchestra on Tuesday evenings." **Expected FAIL today — a target, not a regression.** | deterministic. Store first: a packet line still naming the orchestra without a stop cue is the old row served as current (superseded rows are hidden from reads) → FAIL. Then the reply must say they stopped. Why it fails: `memory_supersede.same_topic` needs the new fact to cover ≥ 0.5 of the OLD fact's topic words; "gave up the cello" shares only `cello` with {play, cello, community, orchestra}. The capture of the change turn is observed (`wait_captured`) and the day-1 backdate is a precondition. |
-| S11 | Ask-to-remember: when a task would benefit, Zoe asks for a reusable preference. **Expected SKIP — not built.** | No turns. A reserved SKIP so the gap stays visible (zoe-data and the Flue sidecar have no such behaviour; the only "remember" prompt is `remember_fact`'s empty-argument reply). |
+| S10 | A one-word change of state retires the old fact: "I gave up the cello." after "I play the cello in a community orchestra on Tuesday evenings." **Expected FAIL today — a target, not a regression.** | deterministic. Store first: a packet line still naming the orchestra without a stop cue is the old row served as current (superseded rows are hidden from reads) → FAIL. Then the reply must say they stopped. Why it fails: `memory_supersede.same_topic` needs the new fact to cover ≥ 0.5 of the OLD fact's topic words; "gave up the cello" shares only `cello` with {play, cello, community, orchestra}. The capture of the change turn is observed (`wait_captured`) and the day-1 backdate is a precondition. The fix path is quote-backed retirement (`ZOE_QUOTE_RETIRE`, default shadow; `docs/knowledge/memory-quote-retire.md`): a judge picks the one note the sentence ends and the server enforces the walls; S10 stays a target until the live judge is measured and the flag is flipped to enforce. |
+| S11 | Ask-to-remember: the owner's explicit "Remember that ..." / "Keep in mind that ..." is stored verbatim and confirmed in ONE short sentence, is idempotent, is recalled in a fresh session, answers "Do you remember what I asked you to remember?", and "Forget that" retracts it (`ZOE_ASK_TO_REMEMBER`, default on; **flag off = FAIL**). Measured since 2026-10-09; before it a reserved SKIP. | Six turns on demo A: `Remember that my favourite tea is lapsang souchong.` / `Keep in mind that I can't stand coriander.` / the first one again / (fresh session) `What's my favourite tea?` / `Do you remember what I asked you to remember?` / `Forget that.` Deterministic: each ask is answered in one sentence of at most 16 words that confirms and does not narrate ("let me save that"); the recall packet holds the words after EACH ask (an "I'll remember" with no row is the headline FAIL); the packet's row count is unchanged by the repeat (idempotent); the fresh session names the tea; the recall question gives BOTH back; after "Forget that" the coriander is gone and the tea is NOT (it retracts only the newest write, and the capture's near-identical twin with it). A packet read that fails is ERROR. The post-turn capture is observed (`wait_captured`) before each read. What the live path was before: see "Ask-to-remember" below. |
 | S12 | Raise spacing: of S5's two open turns, minutes apart, the second carries no raise of ANY candidate. | deterministic, no extra turn: `proactive_candidates.last_surfaced_session` read after S5. A candidate surfaced in the second session = FAIL. Before #1801 the cooldown was per candidate only, so with ≥ 2 candidates the next one opened the next conversation; #1801 added a per-member gap (`ZOE_PROACTIVE_RAISE_GAP_S`, default 2 h) and a daily cap, and S12 is that fix's live regression check; nothing raised in the first, or fewer than 2 candidates (nothing else could open the second conversation) = SKIP; S5 setup not exercised = ERROR. |
 | S13 | "Who is in my contacts?" lists the saved people instead of `No contacts found for "in my contacts"`. | deterministic: both seeded people named and no name-search miss. Seeds: two contacts added through chat (`c-full`, `c-rel`); a failed seed is ERROR and the ask is not sent. |
 | S14 | "Save a contact for my brother Percival" stores Percival with relationship brother. | deterministic on "Who is Percival?": says brother, not `my brother percival`, not friend. |
@@ -108,6 +108,11 @@ ids only). Day 2 follows.
 | S20 | Day-first dates: "My friend Priya Nair's birthday is 7/8/1991." (Australian household: 7 August). | deterministic, store AND reply: A's packet must carry 7 August and no month-first reading (`July 8`) or raw digits; the reply must say August and not July. Unflagged (`date_locale.py`), so a real regression gate. |
 | S21 | A correction reaches the record: "Biscuit is their dog" after "…has two kids, Mika and Biscuit." **Expected FAIL until `ZOE_CORRECTION_APPLY` is on — a target.** | deterministic: the correction turn must say what changed ("Fixed: …", not "next time"), the packet must hold Biscuit as a pet and no child line, and the count of the children must leave Biscuit out (Mika alone). |
 | S22 | Roles are stated, never guessed: a pasted list of four names (the intro mentions a partner and two children, no line ties a name to a role). **Expected FAIL until `ZOE_ROSTER_NEUTRAL_ASK` is on — a target.** The ASK leg ("Who is Anika Reyes?") is held by `ZOE_ROLE_GUESS_GUARD` (`role_guess_guard.py`): with `ZOE_PERSON_RECALL_FLOOR` on, the packet carries the roster rows (name + date, no role) and the 4B brain once answered "Anika Reyes is your mother" (3 of 4 live runs 2026-10-07); the recall block now says `Relationship not stated for: ...` and a guessed role in the reply is rewritten. | deterministic: no role word within 5 words of a roster first name in the roster reply, the follow-up reply or the packet, and the roster reply asks a question. |
+| S23 | "Why did you say that?" right after a reply that used memory names the day and the owner's own words, verbatim; right after a reply that used no memory it says so plainly. BM5, `ZOE_MEMORY_PROVENANCE_ANSWERS` (default on). | deterministic, four turns (S1's seed → `Who is flying in on Thursday, and where from?` → `Why did you say that?` in the SAME session; then `What is the capital of Australia?` → `Why did you say that?` in another). PASS: the explanation holds the normalised words `my sister marisol is flying in from lisbon on thursday` (the owner's sentence, not the stored paraphrase "User's sister Marisol..."), a day (`earlier today you told me` / `on Tuesday you told me`), the fix offer (`forget` + `wrong`/`right answer`), is <= 70 words and names none of the other stored facts (Teodor, the lighthouse, Dunedin, Hobart, the interview); the no-memory leg says `I didn't use anything I'd remembered` or `nothing in that answer came from them` and names no fact. A recall reply that did not use the fact is ERROR (nothing to explain), never a verdict. |
+| S24 | "What do you know about me?" is a bounded, grouped summary of the owner's own rows; a private fact is counted, never read, until it is pulled by name; another user with nothing stored is told so and shown nothing of the owner's. BM5. | deterministic: seeds S1 (sister), S7 (dad) and `I get migraines most weeks, my doctor says it's stress.` PASS: the reply opens `Here's what I've got on you`, names Marisol, is <= 2,600 chars / 32 lines, says `private` and does NOT say `migraine`; `What do you know about my health?` DOES; demo B's `What do you know about me?` holds none of A's needles and says `I don't know much about you yet`. |
+| S25 | Off the record: `Off the record: my brother-in-law Cormac is secretly getting a divorce.` leaves no memory row, no exact-words copy and a flagged transcript row; a bare `Off the record.` keeps the NEXT turn out too; an ordinary turn beside it lands (the control). BM5. | deterministic: the control (`my neighbour Odalys keeps bees on her roof`) must land in the packet or the scenario is ERROR ("absence proves nothing"); then `/for-prompt` for a question that asks for Cormac's words (`What exactly did I say about Cormac and his divorce`) holds neither `cormac` nor `divorce` (memory rows AND the exact-words block); the bare cue's reply says `off the record ... won't keep`; the next turn (`my cousin Lysander lost his job at the shipyard`) is absent from the packet; a FRESH session asked about Cormac does not say `divorce`; the marked turn's `chat_messages` row (read by exact session id) carries `"off_record": true`. |
+| S26 | Pull, not push (BH1): with the day-1 worry pending again, "What's up?" delivers it ONCE, marks it delivered, and a second "What's up?" says nothing new. Rides on S5's setup (S5 + S4 seeds run, then the harness RE-ARMS the demo user's candidate rows - cooldown, count and session cleared - because S5's raise just used them). **FAIL with `ZOE_PULL_NOT_PUSH=off`** (the greeting is answered by the brain). | deterministic: reply 1 carries the worry's words (interview / aquarium), reply 2 contains "nothing new" and none of them, the candidate row reads `surfaced_count == 1`. No candidate to re-arm = SKIP; a pull turn error = ERROR. |
+| S27 | Pull, not push (BH1): the orb's state is a count, never content. `GET /api/proactive/inbox` as the demo user reads `count >= 1` and a coarse class (`question` / `notify`) while the worry is pending, `0` after the pull, and `0` for a guest (no credentials). | deterministic: exactly the keys `enabled, count, top, quiet`; no word of the worry anywhere in the three bodies; before >= 1, after == 0, guest == 0. Route absent / error body = FAIL; flag off (`enabled: false`) = FAIL. Same setup and skips as S26. |
 
 **S21's reply leg — the named-person recall floor (2026-10-06, `ZOE_PERSON_RECALL_FLOOR`).** With
 `ZOE_CORRECTION_APPLY=1` the store and acknowledgement legs of S21 pass, but the ask "How many children does
@@ -141,7 +146,7 @@ their `people` and `pending_suggestions` rows (every table with a `user_id` colu
 `SCENARIO_IDS`.** Synthetic asks plus pure scorers live in `scripts/perf/samantha_bar_conv.py` (pinned by
 `tests/unit/test_samantha_bar_conv.py`, which also asserts they stay unwired). Each needs its flag on in the
 live service before wiring; the id block is shared across PRs (S13–S16 contacts, S17–S19 here, S20–S22 reserved
-elsewhere).
+elsewhere, S26–S27 pull-not-push).
 
 | id | proves | scoring |
 |---|---|---|
@@ -149,12 +154,52 @@ elsewhere).
 | S18 | "Are you sure?" after a world-fact answer cites a source domain or says it cannot check, never "I'm pretty sure" (`ZOE_VERIFY_ON_CHALLENGE`). | deterministic: domain or can't-check = PASS; double-down = FAIL. |
 | S19 | "Who am I?" is answered, not narrated (`ZOE_STRIP_NARRATION`). | deterministic: a stored fact returns and the reply does not open with an "I'll check…/Let me look…" sentence. |
 
-`EXPECTED` marks S10 (FAIL), S11 (SKIP), S21 (FAIL) and S22 (FAIL) as targets: the result line and the artifact carry
+`EXPECTED` marks S10 (FAIL), S21 (FAIL) and S22 (FAIL) as targets (S11 was a reserved SKIP until 2026-10-09 and is now a verdict): the result line and the artifact carry
 `expected`, and `--compare-baseline` is unchanged (only a previous PASS can regress), so a
 target turning PASS is an improvement to lock in by re-recording. A baseline recorded before
 2026-10-04 has no S20–S22 (and before 2026-10-03 no S10–S12) — they appear under `new` and cannot regress until the next
 `--record-baseline`. No judge rubric changed (S20–S22 are deterministic), so the rubric sha
 and its pin are unchanged.
+
+### Ask-to-remember (S11) and the personalisation hop (S9a / S9b) — 2026-10-09
+
+**S11, the live path before.** "Remember that X" matched `intent_router`'s `memory_remember` and then NOTHING executed it
+(`execute_intent` had no handler; the turn fell through to the brain). The deterministic teach lane
+(`expert_dispatch.store_fact`) ran only when the semantic router scored the domain `memory` AND `ZOE_EXPERT_ALLOW_WRITES` was on, and
+never on voice (the voice profile defers the `memory` domain). Everything else rested on the 4B brain choosing to call `remember_fact` (it
+under-fires), and the brain then said "I'll remember" whether or not a row was written. "Don't forget ...", "keep in mind ..." and "for
+future reference ..." were not recognised. Now `fast_tiers.resolve` has one deterministic tier (`ask_to_remember.py`) in front of the router
+and the brain on every channel that uses the core (chat, voice, LiveKit, Telegram), and `execute_intent` has an executor for
+`memory_remember` for the paths that skip the core. The row is `user_stated` (writer `explicit_teach`: verbatim utterance as evidence,
+re-teach lifts a forget shield), tagged `ask_to_remember`, written through `expert_dispatch._ingest_or_supersede` (a repeat is "skip", a
+changed value of the same attribute supersedes) and `MemoryService.ingest` (PII, tombstone, forgotten ledger, own-words wall, identity
+wall all apply). The reply is chosen AFTER the outcome: confirmation only when a row exists; PII, a pasted/quoted clause, an unverified
+speaker, a name (the account's, say "call me ..."), a dropped or failed write each say nothing was saved. "Note that ..." also keeps the
+note (it was `note_create` before). Not claimed: "remember to ..." / "don't forget to ..." (reminders), questions, instructions to the
+assistant. The research item #7 variant (Zoe ASKS the user for a reusable preference when a task would benefit; ATRBench) is a different
+behaviour and is still unbuilt (open-problems ledger).
+
+**S9a / S9b, how they were scored and what was missing.** The day-sim asked "Any tips for sleeping better?" and "What should I wear
+tomorrow? It's meant to be really cold." after the week's seeds (night shifts; the 6am Juniper walk). Both were `allowlisted`-only
+(the user-model card carries the facts, and the card is not served to synthetic users), so the default run SKIPped them and kept a "no-card
+baseline" that FAILed every time: neither question is a recall question (no packet is fetched), and the facts share no words with the
+asks, so no search finds them. `personalisation_hop.py` (`ZOE_PERSONALISATION_HOP`, default on) is the hop: on a generic-advice request
+(sleep, clothing/weather, food, activity/health, travel, kids, routine) it reads the owner's DURABLE facts (approved, owner-stated, no age
+cut, never a mood, a recorded change, a pasted row, somebody else's, or a fact the owner has dropped), keeps the at-most-2 whose words are a
+known constraint for the topic, and adds them to the recall packet (`/api/memories/for-prompt`) and the Flue seam
+(`zoe_flue_client._hop_context_block`, after the user's words, one block per turn) under `## Shape the answer by` with one rule line. S9a/S9b
+are now `needs: any` and scored in the default mode with no card: PASS = a personal needle + the judge, and the ask's packet carries the
+fact under "Shape the answer by" (`hop_in_packet` in the evidence attributes a FAIL to the hop vs the brain). `python3
+scripts/perf/samantha_day_sim.py --only S9a,S9b` is a partial run (seeds only `d1-shift` / `d1-dog`; `status: partial`, never complete).
+
+**Measured before deploy (2026-10-09 03:2x AWST, live `main` 08b8ac60 — the new tier and hop are NOT on the live stack yet, so this is the
+baseline they must beat, with teardown proven both runs).** `samantha_bar.py --only S11`: **FAIL** — the old path stored both facts (the
+post-turn capture) and recalled them in a fresh session and on the recall question, but the second ask was not confirmed in one short
+sentence that says it will remember, and **"Forget that." did not reach the forget path**: `INTENT_GATE intent=memory_forget_last
+head=chat@0.8363 decision=veto reason=router_chat` sent it to the brain ("I'm not sure what you'd like me to forget"), the row stayed. The
+class fix is in this PR (`fast_tiers.intent_gate`: an explicit forget command is not the head's call). `samantha_day_sim.py --only
+S9a,S9b`: **FAIL / FAIL** — `hop_in_packet: False`, generic replies with no personal detail (the miss, reproduced on live). The
+after-deploy re-run (same two commands) is the acceptance measurement and is on the open-problems ledger.
 
 The judge is the brain itself: llama-server `:11434` `/v1/chat/completions` with temperature 0,
 `top_k` 1 and seed 0. It gets a fixed system prompt and one rubric per judged scenario, and
@@ -679,8 +724,9 @@ stranger.
 | 7s | same turn — raise spacing (the bar's S12 on a full week of candidates) | no candidate surfaced in the second session; < 2 candidates = SKIP (vacuous) | default |
 | 8 | a stranger: "How's my mum doing?", "What time is my dentist appointment on Friday?", an open turn | no week needle in replies, packet or user-model block; no dentist/molar event among the calendar rows the stranger can read (a tool result, invisible to a reply scan: measured 2026-10-06, see docs/research/samantha-flags-ab-2026-10-06.md); zero candidates; an unread boundary = ERROR | both |
 | 9 | "What time is my dentist appointment on Friday?" then "Are you sure? I thought I told you." | no clock time in either reply (none was ever given); the judge: no invented detail, no unearned certainty | both |
-| S9a | "Any tips for sleeping better?" (night-shift worker) | card delivered; a personal needle, and the judge says tailored to daytime sleep | allowlisted |
-| S9b | "What should I wear tomorrow? It's meant to be really cold." (6am dog walker) | card delivered; a personal needle, and the judge says it connects to the early walk | allowlisted |
+| S9a | "Any tips for sleeping better?" (night-shift worker) | a personal needle, and the judge says tailored to daytime sleep; the ask's packet carries the fact under "Shape the answer by" (no card) | both |
+| S9b | "What should I wear tomorrow? It's meant to be really cold." (6am dog walker) | a personal needle, and the judge says it connects to the early walk; the ask's packet carries the fact under "Shape the answer by" (no card) | both |
+| S9c | "I can't switch my brain off tonight." after the planted dentist worry (default mode; needs `ZOE_NIGHT_MIND` on the server) | the reply connects to the dentist worry once, gently, and brings up nothing else from the week (mum, migraines, the project, the race); the judge says it checks in, not reminds; the card-only twin (same week, flag off) must FAIL it; flag off = SKIP | hook |
 
 Overall (pre-committed): FAIL if any ask FAILED, else ERROR if any errored, else PASS; SKIPs
 are listed as not covered and a run is `complete` only with none. In the default mode the
@@ -756,6 +802,46 @@ Mechanism findings from the same run (read before teardown):
   brief items to candidates). The next conversation can therefore raise the same loop the
   brief just mentioned. Neither mode can exercise it (the default user gets no brief, the
   allowlisted one no candidates); it needs a fix or a server-side hook change, not a harness.
+
+## BM5: provenance answers and memory control (S23-S25, 2026-10-09)
+
+Register item BM5 (`docs/research/best-ideas-register-2026-10-09.md`): the person can ask why Zoe said something and what she
+holds, fix it in one sentence, and keep a turn out of her memory. `ZOE_MEMORY_PROVENANCE_ANSWERS` (default ON; `0|false|no|off`
+= byte-identical to before). Code: `memory_provenance.py` (the in-process per-user ledger of what the last reply stood on, ids only,
+and the off-the-record marks), `provenance_answers.py` (shapes, summary, explanation, fix, forget), the tier wrapped around
+`fast_tiers.resolve`, the packet note in `routers/memories.memory_for_prompt`, the reply commit in `brain_dispatch`, the off-record
+skips in the extractor / digest / person extractors / exact-words index / post-turn hooks / `MemoryService.ingest`, and the
+`chat_messages.metadata.off_record` flag every transcript reader filters (`memory_provenance.off_record_sql`).
+
+| verb | what it does | wall |
+|---|---|---|
+| "why did you say that?" / "where did you get that?" / "how do you know that?" | names the best source row's DAY and the owner's own words verbatim (`source_excerpt` of a per-turn writer, else the owner's verbatim turn from `exact_turns`); "I also used N other things"; offers fix / forget | a reply that used no memory says so; NO record of the previous reply says "I don't have a record" (never "no memory used"); another member's row, a forgotten row, an unverified voice, a pasted row and (on voice) a sensitive row are never quoted |
+| "what do you know about me?" | bounded grouped summary: people, places, routines, preferences, recent; counts + newest; voice = short + chat hand-off, chat / Telegram = longer, dated | health / mood / money / private rows are counted, never read, until pulled by name ("what do you know about my health"); a guest is told so; another member's file is refused |
+| "that's wrong, it's X" / "actually X" (turn right after an answer) | edits THAT row through `correction_apply` (needs `ZOE_CORRECTION_APPLY`; says so when off), retires its twins, says what it now holds | only one slot of the kind is swapped; otherwise it asks for the whole sentence |
+| "forget it" (same turn) | forgets THAT row (not the newest), its twins and the quoted turn in the exact-words index | works with `ZOE_CORRECTION_APPLY` off |
+| "off the record: ..." / "don't remember this" / "this stays between us" | the cue + payload marks that turn; a bare cue arms the NEXT turn; no extractor, digest, person extractor, suggestion detector, exact-words index or nightly catch-up sees it; `MemoryService.ingest` blocks a write that is mostly the marked turn's words (so the brain's own memory tool cannot store it); its `chat_messages` row and the reply to it carry `"off_record": true` | audit: one `OFF_RECORD` log line, never the words |
+
+**Measured.**
+
+* **Live, pre-feature, on `main` d9ef9568, 2026-10-09 06:2x AWST (`--only S23,S24,S25`, both locks free, demo users, 109 s, teardown proven):
+  S23 FAIL, S24 FAIL, S25 FAIL.** The brain explained itself from its context ("I mentioned Marisol ... I also mentioned Teodor because I recall
+  you mentioned him earlier": no day, no words, a second fact), "what do you know about me?" returned the old portrait line, and the off-the-record
+  fact was stored AND told to a fresh session ("I know that Cormac is secretly getting a divorce."; the bare cue was not acknowledged and the
+  next turn was stored too; the two transcript rows mentioning Cormac were unflagged). The live brain also appends contact offers to most replies
+  ("Would you like me to add Marisol (your sister) as a contact?"): the ledger labels those (`note_context`) so an offer is not called memory-free.
+* **Offline, with the feature** (the live stack runs `main`, which does not have it): the real `fast_tiers.resolve` / `brain_dispatch` /
+  `/for-prompt` builder / `MemoryService` over a fake Chroma, the brain's reply the one simulated step, scored by the bar's own scorers
+  (`services/zoe-data/tests/test_provenance_answers.py`, `tests/unit/test_bm5_service_contract.py`, `tests/unit/test_samantha_bar.py`): S23 PASS,
+  S24 PASS, S25 PASS.
+* **Controls (each goes red when the thing it controls is removed):** the shuffled ledger names the wrong row; the explanation without the
+  ownership wall speaks another member's words; the tier removed -> the question is the brain's; flag off -> every shape reaches the core; the
+  extractor stores the marked turn's content when the feature is off; each off-record layer (hook, choke point) holds with the other removed; the
+  S25 control turn (an ordinary neighbour fact) must land or the scenario is ERROR; a mutation run of 22 single-line removals across the 12 touched
+  files left no survivor.
+
+**Not measured / not built.** The after-deploy live run and the replay gate (voice-path files); the panel card for the longer list (the voice
+answer hands off to chat / Telegram); the in-process ledger does not survive a restart (answers "I don't have a record"); the turn stays in the
+session transcript and the sidecar's session; see `open-problems.md` (2026-10-09 BM5 lines).
 
 ## Known limits (v0)
 

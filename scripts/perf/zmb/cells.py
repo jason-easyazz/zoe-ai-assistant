@@ -17,11 +17,18 @@ Event forms (a dict in ``cell.events``):
     {"do": "needles"}                                          teach the seeded recall corpus (``needles.corpus``)
     {"do": "filler", "turns": 100}                             N seeded household-chatter turns (``needles.chatter``)
     {"do": "hard_delete"}                                      the audited hard delete of the user (capability ``disk``)
+    {"do": "retire", "text": "...", "speaker": "owner_typed",  one candidate state change through quote-backed retirement
+     "brain": {"pick_text": "..."}, "mode": "enforce"}          (capability ``quote_retire``; S10x): the REAL prefilter, candidates
+                                                               and wall, the brain's CHOICE scripted (``Arm.quote_retire``)
+    {"do": "seed_pool"}                                        the S10x pool: 30 old facts + 30 other-person copies + 40 generic rows
     {"do": "exact_needles"}                                    (j) teach the 20 sentences the owner SAID, each on its day (``life.exact_turns``)
     {"do": "hop_facts", "which": "a"|"b"}                      (l) teach the first / the second fact of the 20 two-fact questions (``life.hop_corpus``)
     {"do": "life"}                                             (k) thirty days of a household's turns, each on its day (``life.life``)
     {"do": "life_pass", "propose": ["true", "fabricated", ...]} (k) the nightly model's SCRIPTED proposals (the truth, and each kind of mistake), to an arm whose model the lab scripts; an own-model arm gets none
     {"do": "protocol_facts"}                                   (m) teach the facts the protocol prompts ask about (``life.protocol_corpus``)
+    {"do": "night_pass", "propose": [...]}                     (k) the night mind's pass, own-model arms only (the model the lab scripts is a SKIP); ``propose`` = the mistakes the fake brain makes
+    {"do": "dense_life", "per_day": 40}                        (k) thirty days with ``per_day`` routine commands a day around the life's turns (two threads planted late in the day)
+    {"do": "variant_life", "name": "drift|flat|restraint|resolution"}   (k) a small synthetic month for one night-mind cell
 
 Probe forms (a dict in ``cell.probes``; every probe must pass):
 
@@ -34,6 +41,12 @@ Probe forms (a dict in ``cell.probes``; every probe must pass):
     {"kind": "edges",   "assertions": [...]}                   the people graph (``scorers.score_edges``; ``edges``)
     {"kind": "hit_at_k", "k": 5, "min_rate": 0.9, "queries": "direct"|"paraphrase"}   the corpus's needles retrieved
     {"kind": "answer",  "query": "...", "needles": [], "canaries": []}   the scripted reader (capability ``reader``)
+    {"kind": "as_of",   "contains": [..]}                      the retired row is returned by ``as_of`` a moment BEFORE it was retired
+                                                               (the midpoint of its validity interval) and is not recalled now
+    {"kind": "prefilter", "min_changes": n, "min_held_out": n, "max_mentions": n}   the quote-retire cue gate over the S10x sentences
+                                                               (the arm's gate; no store read); a gate that fires on a mention is red
+    {"kind": "s10x", "check": "copies_not_offered"|"right_rows", ...}   the S10x pool run over the arm (capability ``quote_retire``;
+                                                               ``right_rows`` also needs ``embedder``: the retrieval is the live one)
     {"kind": "exact", "k": 5, "min_rate": 0.9}                 (j) every exact needle's sentence is in ``recall_exact`` word for word (``exact_words``)
     {"kind": "exact_when", "k": 5, "min_rate": 0.9}            (j) ... and the arm says which day it was said (``exact_words``)
     {"kind": "hops", "k": 8, "min_rate": 0.7}                  (l) both facts of every two-fact question are in ``recall_linked`` (``multi_hop``)
@@ -41,6 +54,8 @@ Probe forms (a dict in ``cell.probes``; every probe must pass):
     {"kind": "threads", "min_recall": 0.7} / {"kind": "useful"}        (k) thread recall / the "what's been going on" answers (``observations``,
                                                                the arm's OWN model: a scripted-model arm SKIPs)
     {"kind": "protocol", "metric": "fire_when_needed", "protocol": "zoe"}   (m) the protocol's trigger + the arm's packet + the scripted reader (``protocol``)
+    {"kind": "compression"} / {"kind": "late_threads"} / {"kind": "citations"} / {"kind": "change_quiet", "variant": "drift|flat"} / {"kind": "restraint"} /
+    {"kind": "resolution"} / {"kind": "weights"}              (k) K6-K12, the night mind's cells (own-model arms only)
 
 ``params.play_group``: cells that share a group and a seed share ONE play of their events (one expensive ingest, several read-only probes).
 
@@ -65,11 +80,12 @@ RETAINED = ("approved", "pending", "disputed")
 _TURN_KEYS = {"text", "speaker", "day_offset", "writer", "proposes", "op", "attr", "assistant_text",
               "memory_type"}
 _CAPS = {"advance_clock": "clock", "ingest_as": "identities", "idle_pass": "idle_pass",
-         "conflict_pass": "conflict_pass", "edge": "edges", "hard_delete": "disk", "life_pass": "idle_pass"}
+         "conflict_pass": "conflict_pass", "edge": "edges", "hard_delete": "disk", "life_pass": "idle_pass", "retire": "quote_retire", "night_pass": "idle_pass"}
 #: the capability axes' probes (j exact words, k reflection, l multi-hop, m protocol): the capability an arm must DECLARE for the probe
+NIGHT_PROBES = ("compression", "late_threads", "citations", "change_quiet", "restraint", "resolution", "weights")
 _PROBE_CAPS = {"exact": "exact_words", "exact_when": "exact_words", "hops": "multi_hop", "observations": "observations",
-               "threads": "observations", "useful": "observations", "protocol": "protocol"}
-_PROBE_KINDS = ("store", "facts", "entities", "recall", "answer", "edges", "hit_at_k", "disk") + tuple(_PROBE_CAPS)
+               "threads": "observations", "useful": "observations", "protocol": "protocol", **{k: "observations" for k in NIGHT_PROBES}}
+_PROBE_KINDS = ("store", "facts", "entities", "recall", "answer", "edges", "hit_at_k", "disk", "as_of", "prefilter", "s10x") + tuple(_PROBE_CAPS)
 
 
 @dataclass
@@ -108,11 +124,21 @@ def required_capabilities(cell: Cell) -> "set[str]":
             need.add("edges")
         if p.get("kind") == "disk":
             need.add("disk")
+        if p.get("kind") in ("s10x", "prefilter"):
+            need.add("quote_retire")
+            if p.get("check") == "right_rows":
+                need.add("embedder")
         if p.get("as"):
             need.add("identities")
         if p.get("kind") in _PROBE_CAPS:
             need.add(_PROBE_CAPS[p["kind"]])
     return need
+
+
+def z0_only(cell: Cell) -> bool:
+    """A cell that measures Zoe's OWN quote-backed retirement (``memory_retire`` over the store: capability ``quote_retire``): only the Z0 arms
+    can run it. The memory-engine bake-off's H arms never see it (their cell lists leave it out), so it cannot move an arm-vs-Z0 comparison."""
+    return "quote_retire" in required_capabilities(cell)
 
 
 def _retained_texts(rows: "list[dict]") -> "list[str]":
@@ -148,6 +174,16 @@ def _play(cell: Cell, arm: Arm, world: "World | None" = None) -> "list[dict[str,
                                                                                    str(ev.get("salt", "")))])
         elif do == "hard_delete":
             arm.hard_delete()
+        elif do == "retire":
+            speaker = str(ev.get("speaker", "owner_typed"))
+            if speaker not in arm.RETIRE_SPEAKERS:
+                raise ValueError(f"unknown retire speaker {speaker!r} (known: {', '.join(arm.RETIRE_SPEAKERS)})")
+            lane, verified = arm.RETIRE_SPEAKERS[speaker]
+            arm.quote_retire(ev["text"], lane=lane, speaker_verified=verified, brain=ev.get("brain"),
+                             mode=str(ev.get("mode", "enforce")))
+        elif do == "seed_pool":
+            from . import s10x_data
+            arm.ingest([Turn(t, "owner_taught") for t in s10x_data.pool()])
         elif do == "exact_needles":
             arm.ingest([Turn(t["text"], "owner_typed", day_offset=t["day_offset"]) for t in lifemod.exact_turns(seed)])
         elif do == "hop_facts":
@@ -162,6 +198,20 @@ def _play(cell: Cell, arm: Arm, world: "World | None" = None) -> "list[dict[str,
             arm.ingest([Turn(t["text"], "owner_taught" if t["speaker"] == "taught" else "owner_typed", day_offset=30 - t["day"]) for t in lf.turns])
         elif do == "life_pass":
             passes.append(_life_pass(arm, seed, list(ev.get("propose") or ())))
+        elif do == "night_pass":
+            if getattr(arm, "nightly_model", "scripted") != "own":
+                raise NotImplementedError(f"arm {arm.name}: the nightly model is scripted in this lab, so there is no night pass to run (use Z0n)")
+            passes.append(arm.reflect_pass(propose=list(ev.get("propose") or ()), seed=seed) if getattr(arm, "takes_lies", False) else arm.reflect_pass())
+        elif do == "dense_life":
+            items, _late = lifemod.dense_layout(seed, int(ev.get("per_day", 40)))
+            for it in items:
+                if it.kind == "life":
+                    arm.ingest([Turn(it.text, "owner_typed", day_offset=30 - it.day)])
+                else:
+                    arm.add_night_turns([it.text], 30 - it.day)
+        elif do == "variant_life":
+            for t in lifemod.variant_life(str(ev["name"]), seed).turns:
+                arm.ingest([Turn(t["text"], "owner_typed", day_offset=30 - t["day"])])
         elif do == "protocol_facts":
             sentences, _prompts = lifemod.protocol_corpus(seed)
             arm.ingest([Turn(s, "owner_taught") for s in sentences])
@@ -183,7 +233,8 @@ def _life_pass(arm: Arm, seed: str, kinds: "list[str]") -> "dict[str, Any]":
     if bad:
         raise ValueError(f"unknown life_pass kind(s) {', '.join(bad)} (known: {', '.join(_LIFE_KINDS)})")
     if getattr(arm, "nightly_model", "scripted") == "own":
-        return arm.reflect_pass()
+        # an arm whose model is the LAB's fake brain (Z0n) is handed the mistakes a model makes, to show the checks around it hold; a real model gets nothing
+        return arm.reflect_pass(propose=kinds, seed=seed) if getattr(arm, "takes_lies", False) else arm.reflect_pass()
     lf = lifemod.life(seed)
     proposes: "list[str]" = []
     for k in kinds:
@@ -240,9 +291,45 @@ def _reflection(p: "dict[str, Any]", arm: Arm, seed: str) -> scorers.Score:
                                   "thread recall and usefulness are measured only on an arm that runs its own model")
     if kind == "threads":
         return cap.score_threads(first.get("items") or [], gold, min_recall=float(p.get("min_recall", 0.7)))
+    if kind in NIGHT_PROBES:
+        return _night(p, arm, seed, first)
     lf = lifemod.life(seed)
     answers = [arm.observations(q).get("items") or [] for q, _ids in lf.questions]
     return cap.score_useful(answers, [ids for _q, ids in lf.questions], gold, min_rate=float(p.get("min_rate", 0.7)))
+
+
+def _night(p: "dict[str, Any]", arm: Arm, seed: str, first: "dict[str, Any]") -> scorers.Score:
+    """(k) K6-K12, the night mind's cells: what the pass COMPRESSED, found in a dense day, POINTED at, noticed, held back, resolved and labelled."""
+    kind = p["kind"]
+    lf = lifemod.life(seed)
+    gold = lifemod.gold_for_scoring(lf)
+    items = first.get("items") or []
+    if kind == "compression":
+        return cap.score_compression(items, gold, n_turns=sum(1 for t in lf.turns if t["speaker"] == "typed"), max_per_thread=int(p.get("max_per_thread", 3)),
+                                     max_share=float(p.get("max_share", 0.6)))
+    if kind == "late_threads":
+        _items, late = lifemod.dense_layout(seed, int(p.get("per_day", 40)))
+        return cap.score_late_threads(items, gold, late, min_recall=float(p.get("min_recall", 0.7)))
+    if kind == "citations":
+        return cap.score_citations(items, arm.turn_text, min_observations=int(p.get("min_observations", 3)))
+    if kind == "change_quiet":
+        flat = str(p.get("variant")) == "flat"
+        return cap.score_change_quiet(arm.threads(), arm.changes(), lifemod.variant_life(str(p["variant"]), seed).gold, flat=flat,
+                                      max_false=float(p.get("max_false", 0.05)))
+    if kind == "restraint":
+        g = lifemod.variant_life("restraint", seed).gold
+        asked = [(key, any(key in str(i.get("text", "")).lower() for i in (arm.observations(q).get("items") or []))) for q, key in g["asks"]]
+        return cap.score_restraint(arm.morning_plan(int(p.get("days", 14))), arm.threads(), g, asked)
+    if kind == "resolution":
+        return cap.score_resolution(arm.threads(), lifemod.variant_life("resolution", seed).gold)
+    gold_labels = lifemod.labelled_moments()
+    return cap.score_weights(arm.moment_labels([g["text"] for g in gold_labels]), gold_labels, min_spearman=float(p.get("min_spearman", 0.5)),
+                             min_accuracy=float(p.get("min_accuracy", 0.85)))
+
+
+def uses_night(cell: Cell) -> bool:
+    """Does this cell need an arm with its own nightly model (Z0n) to be proven? Any ``night_*`` control, or a night-mind probe."""
+    return any(c.startswith("night") for c in cell.controls) or any(p.get("kind") in NIGHT_PROBES for p in cell.probes)
 
 
 def _protocol(p: "dict[str, Any]", arm: Arm, seed: str) -> scorers.Score:
@@ -282,6 +369,77 @@ def _hit_at_k(p: "dict[str, Any]", arm: Arm, seed: str) -> scorers.Score:
     return scorers.score_hits(hits, len(corpus), k=k, min_rate=float(p.get("min_rate", 0.9)), label=which)
 
 
+def _as_of_probe(p: "dict[str, Any]", arm: Arm) -> scorers.Score:
+    """The two timelines of a quote-backed retirement: the retired row was believed from ``valid_from`` to ``invalid_at``, so a read
+    AS OF the middle of that interval still returns it, and a read now does not."""
+    import datetime as dt
+    rows = [r for r in arm.stats()["rows"] if r.get("status") == "superseded"
+            and all(scorers.contains_phrase(r.get("text", ""), c) for c in p.get("contains") or [])]
+    if not rows:
+        return scorers.Score(False, "write", {"as_of": "no retired row"})
+    r = rows[0]
+    try:
+        start, end = float(r.get("valid_from")), float(r.get("invalid_at"))
+    except (TypeError, ValueError):
+        return scorers.Score(False, "write", {"as_of": "no validity interval"})
+    mid = dt.datetime.fromtimestamp((start + end) / 2, dt.timezone.utc).isoformat()
+    query = " ".join(p.get("contains") or ["x"])
+    then = [h["id"] for h in arm.as_of(query, mid)]
+    now = [h["id"] for h in arm.recall(query, 10)]
+    ok = r["id"] in then and r["id"] not in now
+    return scorers.Score(ok, "" if ok else "read", {"as_of": {"returned_then": r["id"] in then, "recalled_now": r["id"] in now}})
+
+
+def _prefilter_probe(p: "dict[str, Any]", arm: Arm) -> scorers.Score:
+    """The quote-retire cue gate over the S10x sentences (the arm's own gate: no store is read). ``min_changes`` of the 30 plain changes must open the
+    door; of the 15 held-out changes ``min_held_out``; and no more than ``max_mentions`` of the 10 held-out mentions (a gate that
+    opens for "I saw a cello today" is no gate). Evidence: counts only."""
+    from . import s10x_data
+    fires = arm.cue_gate
+    changes = sum(fires(say) for _old, say, _fact in s10x_data.PAIRS)
+    held = sum(fires(t) for t in s10x_data.HELD_OUT_CHANGES)
+    mentions = sum(fires(t) for t in s10x_data.HELD_OUT_MENTIONS)
+    ok = (changes >= int(p.get("min_changes", 28)) and held >= int(p.get("min_held_out", 12))
+          and mentions <= int(p.get("max_mentions", 0)))
+    return scorers.Score(ok, "" if ok else "read", {"prefilter": {
+        "changes": f"{changes}/{len(s10x_data.PAIRS)}", "held_out_changes": f"{held}/{len(s10x_data.HELD_OUT_CHANGES)}",
+        "held_out_mentions_fired": f"{mentions}/{len(s10x_data.HELD_OUT_MENTIONS)}"}})
+
+
+def _s10x_probe(p: "dict[str, Any]", arm: Arm) -> scorers.Score:
+    """The S10x pool (``seed_pool``) run over the arm, one change at a time. ``copies_not_offered``: with a HOSTILE judge (always the
+    first row offered) no other-person copy is ever offered or retired. ``right_rows``: an honest judge names the owner's old row
+    when it was offered; the rate of changes that retired exactly the right row, with the sentence attached, must reach ``min_rate``
+    (the record's bar: 24 of 30; the retrieval is the live one, so this runs on Z0e)."""
+    from . import s10x_data
+    check = p.get("check")
+    olds = [old for old, _say, _fact in s10x_data.PAIRS]
+    copies = set(s10x_data.other_person_copies())
+    by_text = {r["text"]: r for r in arm.stats()["rows"]}
+    copy_ids = {by_text[t]["id"] for t in copies if t in by_text}
+    if check == "copies_not_offered":
+        offered_copy = retired_copy = 0
+        for _old, say, _fact in s10x_data.PAIRS:
+            out = arm.quote_retire(say, brain={"top1": True})
+            offered_copy += bool(copy_ids & set(out["offered"]))
+            retired_copy += out["chosen"] in copy_ids and out["action"] == "retired"
+        ok = offered_copy == 0 and retired_copy == 0
+        return scorers.Score(ok, "" if ok else "write", {"s10x": {"copies_offered": f"{offered_copy}/{len(olds)}",
+                                                                   "copies_retired": f"{retired_copy}/{len(olds)}"}})
+    if check == "right_rows":
+        right = 0
+        for old, say, _fact in s10x_data.PAIRS:
+            arm.quote_retire(say, brain={"pick_text": old})
+        for old, say, _fact in s10x_data.PAIRS:
+            r = by_text.get(old)
+            now = next((x for x in arm.stats()["rows"] if r and x["id"] == r["id"]), None)
+            right += bool(now and now["status"] == "superseded" and now["retire_quote"] == say)
+        wrong = sum(1 for x in arm.stats()["rows"] if x["status"] == "superseded" and x["text"] not in set(olds))
+        return scorers.score_hits(right, len(olds), k=3, min_rate=float(p.get("min_rate", 0.8)), label="right_rows") \
+            if not wrong else scorers.Score(False, "write", {"s10x": {"right": right, "wrong_rows_retired": wrong}})
+    raise ValueError(f"unknown s10x check {check!r}")
+
+
 def _probe(p: "dict[str, Any]", arm: Arm, seed: str = "zmb-v1") -> scorers.Score:
     kind = p.get("kind")
     if kind not in _PROBE_KINDS:
@@ -297,7 +455,7 @@ def _probe(p: "dict[str, Any]", arm: Arm, seed: str = "zmb-v1") -> scorers.Score
         return _exact(p, arm, seed)
     if kind == "hops":
         return _hops(p, arm, seed)
-    if kind in ("observations", "threads", "useful"):
+    if kind in ("observations", "threads", "useful") or kind in NIGHT_PROBES:
         return _reflection(p, arm, seed)
     if kind == "protocol":
         return _protocol(p, arm, seed)
@@ -310,6 +468,12 @@ def _probe(p: "dict[str, Any]", arm: Arm, seed: str = "zmb-v1") -> scorers.Score
                                       min_precision=float(p.get("min_precision", 1.0)),
                                       min_recall=float(p.get("min_recall", 0.75)),
                                       ignore=p.get("ignore") or ())
+    if kind == "as_of":
+        return _as_of_probe(p, arm)
+    if kind == "prefilter":
+        return _prefilter_probe(p, arm)
+    if kind == "s10x":
+        return _s10x_probe(p, arm)
     if kind == "disk":   # capability ``disk``: the bytes Chroma leaves behind (counts only, never text)
         return scorers.score_disk(arm.disk_residue(list(p["tokens"])))
     if kind == "recall":

@@ -30,7 +30,8 @@ ROW_KEYS = ("id", "text", "status", "authority_class", "origin", "contradicts_id
 #: ``user_turn_id`` - which turn) and the validity interval (epoch seconds; ``invalid_at`` is set when a newer fact
 #: replaced this one, never by deleting it) plus the supersede links. An arm that does not export one shows "" - and
 #: a provenance / history cell then FAILS, which is the honest reading of "the store cannot say".
-OPTIONAL_ROW_KEYS = ("source_excerpt", "user_turn_id", "valid_from", "invalid_at", "supersedes_id", "superseded_by_id")
+OPTIONAL_ROW_KEYS = ("source_excerpt", "user_turn_id", "valid_from", "invalid_at", "supersedes_id", "superseded_by_id",
+                     "retire_quote", "retired_by", "quote_elsewhere")
 
 #: speakers a Turn may carry (docs: the ZMB design section 3.0)
 SPEAKERS = ("owner_typed", "owner_taught", "owner_voice_verified", "panel_unverified", "third_party",
@@ -162,6 +163,18 @@ class Arm(ABC):
         "origin"}`` (names, never ids): the people-graph export the A8 cells read."""
         raise NotImplementedError(f"{self.name} has no people graph")
 
+    def quote_retire(self, text: str, *, lane: str = "chat", speaker_verified: "bool | None" = None,
+                     brain: "dict[str, Any] | None" = None, mode: str = "enforce") -> "dict[str, Any]":  # pragma: no cover
+        """Optional capability ``quote_retire``: one candidate state change through the arm's quote-backed retirement
+        (``services/zoe-data/memory_retire.py``): the deterministic half (prefilter, the owner's own words, candidates), the
+        SCRIPTED brain's choice (``brain``: ``{"pick_text": row text}`` / ``{"pick": n}`` / ``{"top1": true}`` /
+        ``{"row_containing": text}``), then the wall. Returns ``{"action", "reason", "offered": [ids], "chosen": id}``."""
+        raise NotImplementedError(f"{self.name} has no quote-backed retirement")
+
+    def cue_gate(self, text: str) -> bool:  # pragma: no cover
+        """Optional capability ``quote_retire``: does the arm's quote-retire prefilter open the door to the judge for this sentence?"""
+        raise NotImplementedError(f"{self.name} has no quote-backed retirement")
+
     def advance_clock(self, seconds: float) -> None:  # pragma: no cover - optional capability
         raise NotImplementedError(f"{self.name} has no controllable clock")
 
@@ -181,6 +194,31 @@ class Arm(ABC):
         where ``model`` says whether the arm's own model produced them ("scripted": the lab scripted the nightly model, so what the store KEEPS is
         measured and what the model would have SAID is not)."""
         raise NotImplementedError(f"{self.name} has no observation layer")
+
+    # ── the night mind's surface (K6-K12): an arm with ``nightly_model == "own"`` that runs a reflection pass exposes these; the rest SKIP ────────────────────
+    def add_night_turns(self, texts: "list[str]", day_offset: int) -> None:  # pragma: no cover
+        """Owner turns that reach ONLY the nightly pass (routine commands that no extractor mines): the dense-day cell (K7)."""
+        raise NotImplementedError(f"{self.name} has no night pass")
+
+    def threads(self) -> "list[dict[str, Any]]":  # pragma: no cover
+        """The pass's threads (``title``, ``status``, ``anchors``, ``raise_policy``, ``leave_reason``): K9 / K10 / K11."""
+        raise NotImplementedError(f"{self.name} has no night threads")
+
+    def changes(self) -> "list[dict[str, Any]]":  # pragma: no cover
+        """What changed in the last pass: ``[{"type": new|advanced|resolved|quiet, "thread", "ids"}]`` (K9)."""
+        raise NotImplementedError(f"{self.name} has no night changes")
+
+    def morning_plan(self, days: int = 14) -> "list[dict[str, Any]]":  # pragma: no cover
+        """``days`` simulated mornings against the stored threads, every raise ignored: ``[{"day", "raised": [thread ids]}]`` (K10)."""
+        raise NotImplementedError(f"{self.name} has no morning plan")
+
+    def turn_text(self, turn_id: str) -> "str | None":  # pragma: no cover
+        """The text of one of this member's owner turns by id, or None (K8's pointer check)."""
+        raise NotImplementedError(f"{self.name} cannot look a turn up by id")
+
+    def moment_labels(self, texts: "list[str]") -> "list[dict[str, Any]]":  # pragma: no cover
+        """Stage 2 alone over labelled turns: the ``{"quote", "kind", "feeling", "weight"}`` the model gave each turn it picked (K12)."""
+        raise NotImplementedError(f"{self.name} has no moment labeller")
 
     def recall_linked(self, query: str, k: int = 8) -> "list[dict[str, Any]]":  # pragma: no cover
         """Optional capability ``multi_hop``: the arm's ASSOCIATIVE packet for a question that needs two facts said weeks apart (Hindsight's link graph,

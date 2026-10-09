@@ -135,6 +135,8 @@ class Backend(Protocol):
 
     async def rows_matching(self, user_id: str, needle: str) -> list[tuple[str, str]]: ...
 
+    async def get(self, user_id: str, turn_ids: Iterable[str]) -> list[tuple[str, str, float]]: ...
+
     async def delete(self, user_id: str, turn_ids: Iterable[str]) -> int: ...
 
     async def delete_user(self, user_id: str) -> int: ...
@@ -164,6 +166,14 @@ class MemoryBackend:
     async def rows_matching(self, user_id, needle):
         n = (needle or "").lower()
         return [(r["turn_id"], r["text"]) for (u, _t), r in self.rows.items() if u == user_id and n in r["text"].lower()]
+
+    async def get(self, user_id, turn_ids):
+        out = []
+        for t in list(turn_ids):
+            r = self.rows.get((user_id, t))
+            if r is not None:
+                out.append((t, r["text"], r["said_at"]))
+        return out
 
     async def delete(self, user_id, turn_ids):
         n = 0
@@ -216,6 +226,16 @@ class SqlBackend:
             cur = await db.execute("SELECT turn_id, text FROM exact_turns WHERE user_id = ? AND LOWER(text) LIKE ?",
                                    (user_id, f"%{(needle or '').lower()}%"))
             return [(str(r[0]), str(r[1])) for r in await cur.fetchall()]
+
+    async def get(self, user_id, turn_ids):
+        ids = list(turn_ids)
+        if not ids:
+            return []
+        marks = ", ".join("?" for _ in ids)
+        async with self._ctx() as db:
+            cur = await db.execute(f"SELECT turn_id, text, said_at FROM exact_turns WHERE user_id = ? AND turn_id IN ({marks})",
+                                   (user_id, *ids))
+            return [(str(r[0]), str(r[1]), float(r[2])) for r in await cur.fetchall()]
 
     async def delete(self, user_id, turn_ids):
         ids = list(turn_ids)
@@ -303,6 +323,9 @@ async def index_turn(user_id: str, text: str, *, said_at: Optional[float] = None
     """Index one owner turn. True when a row was written. Never raises."""
     try:
         if not enabled() or not (user_id or "").strip() or not (text or "").strip():
+            return False
+        import memory_provenance
+        if memory_provenance.is_off_record(user_id, text):   # BM5: off the record is never indexed
             return False
         from memory_service import is_guest_memory_user, scrub_pii
         if is_guest_memory_user(user_id) or speaker_verified is False:
@@ -492,6 +515,77 @@ async def erase_entity(user_id: str, name: str) -> int:
     return int(await backend.delete(user_id, ids) or 0) if ids else 0
 
 
+async def erase_turn(user_id: str, turn_id: str) -> int:
+    """Delete ONE indexed turn by its id (the precise form of ``erase_text``: a displayed quote can be shortened). Store failures
+    are RAISED. 0 = no such turn."""
+    if not (user_id or "").strip() or not (turn_id or "").strip():
+        return 0
+    return int(await get_backend().delete(user_id, [turn_id]) or 0)
+
+
+async def erase_text(user_id: str, text: str) -> int:
+    """Delete this user's indexed turns whose words ARE ``text`` (case/space-blind) or contain it - "forget it" after "why did you
+    say that?" removes the owner's turn that was just quoted back, not only the fact. Like ``erase_entity`` a store failure is
+    RAISED (a forget that could not erase the words must not be confirmed). 0 = nothing matched."""
+    key = _squash(text or "").lower().strip(" .!?\"'")
+    if not (user_id or "").strip() or len(key) < 6:
+        return 0
+    backend = get_backend()
+    needle = max(re.findall(r"[a-z0-9']+", key), key=len, default="")
+    if not needle:
+        return 0
+    ids = [tid for tid, t in await backend.rows_matching(user_id, needle) if key in _squash(t or "").lower()]
+    return int(await backend.delete(user_id, ids) or 0) if ids else 0
+
+
+async def _transcript_candidates(user_id: str, needle: str) -> list[tuple]:
+    """The owner's saved user turns (``chat_messages``) that hold ``needle``: ``(id, content, metadata)``. Postgres only; tests replace
+    this seam."""
+    from db_pool import get_db_ctx  # type: ignore[import]
+    from user_filters import message_owner_expr
+    from memory_provenance import off_record_sql
+    sql = ("SELECT cm.id, cm.content, cm.metadata FROM chat_messages cm JOIN chat_sessions cs ON cm.session_id = cs.id "
+           "WHERE " + message_owner_expr() + " = ? AND cm.role = 'user' AND " + off_record_sql("cm") + " "
+           "AND LOWER(cm.content) LIKE ? LIMIT 200")
+    async with get_db_ctx() as db:
+        return [tuple(r) for r in await (await db.execute(sql, (user_id, f"%{needle}%"))).fetchall()]
+
+
+async def _set_transcript_metadata(row_id: str, metadata: str) -> None:
+    from db_pool import get_db_ctx  # type: ignore[import]
+    async with get_db_ctx() as db:
+        await db.execute("UPDATE chat_messages SET metadata = ? WHERE id = ?", (metadata, row_id))
+        await db.commit()
+
+
+async def forget_transcript(user_id: str, text: str) -> int:
+    """Flag the owner's saved turns that contain ``text`` as ``off_record`` so the nightly readers (this module's catch-up, the
+    digest, idle consolidation) never rebuild a forgotten turn from the transcript: deleting the index row alone lets the catch-up
+    re-index the surviving turn overnight. The history itself stays. Like ``erase_text`` a store failure is RAISED (a forget that
+    could not hold must not be confirmed). Only with the SQL index (the lab and tests have no ``chat_messages``); 0 = nothing matched."""
+    key = _squash(text or "").lower().strip(" .!?\"'")
+    if not (user_id or "").strip() or len(key) < 6 or not isinstance(get_backend(), SqlBackend):
+        return 0
+    needle = max(re.findall(r"[a-z0-9']+", key), key=len, default="")
+    if not needle:
+        return 0
+    import json
+    from memory_provenance import OFF_RECORD_JSON_MARK
+    flagged = 0
+    for row_id, content, metadata in await _transcript_candidates(user_id, needle):
+        if key not in _squash(str(content or "")).lower() or OFF_RECORD_JSON_MARK in str(metadata or ""):
+            continue
+        try:
+            meta = json.loads(metadata) if isinstance(metadata, (str, bytes)) and metadata else {}
+        except ValueError:
+            meta = {}
+        meta = dict(meta) if isinstance(meta, dict) else {}
+        meta["off_record"] = True
+        await _set_transcript_metadata(str(row_id), json.dumps(meta))
+        flagged += 1
+    return flagged
+
+
 async def delete_user(user_id: str) -> int:
     """Remove every indexed turn of a user (the audited right-to-be-forgotten path). Returns the rows removed (0 when there were
     none). UNLIKE every other function here this does NOT swallow a store failure: a right-to-be-forgotten that could not erase the
@@ -537,9 +631,10 @@ async def _backfill_page(user_id: str, hours: int, cursor: Optional[tuple[str, s
     (``chat_messages.created_at`` is TEXT there); tests replace this seam."""
     from db_pool import get_db_ctx  # type: ignore[import]
     from user_filters import message_owner_expr
+    from memory_provenance import off_record_sql
     sql = ("SELECT cm.id, cm.content, EXTRACT(EPOCH FROM cm.created_at::timestamptz), cm.metadata, cm.created_at "
            "FROM chat_messages cm JOIN chat_sessions cs ON cm.session_id = cs.id "
-           "WHERE " + message_owner_expr() + " = ? AND cm.role = 'user' "
+           "WHERE " + message_owner_expr() + " = ? AND cm.role = 'user' AND " + off_record_sql("cm") + " "
            "AND cm.created_at::timestamptz >= (now()::timestamptz - make_interval(hours => ?::int))")
     params: list[Any] = [user_id, int(hours)]
     if cursor is not None:

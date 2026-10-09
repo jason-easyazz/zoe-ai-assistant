@@ -281,6 +281,15 @@ async def _deterministic_person_proposals(text: str, user_id: str) -> list[dict]
 async def detect_and_store(user_message: str, *, user_id: str, session_id: str) -> int:
     from pending_suggestions import store_suggestions
 
+    # BM5: an off-the-record turn is never mined for suggestions.
+    try:
+        import memory_provenance as _mp
+
+        if _mp.is_off_record(user_id, user_message):
+            return 0
+    except Exception:  # noqa: BLE001
+        pass
+
     # Age surfaced contact offers by ONE user turn. This hook runs exactly once
     # per real user chat/voice turn, which makes it the sanctioned aging tick —
     # packet builds no longer age offers (QA review F5a: per-fold aging killed

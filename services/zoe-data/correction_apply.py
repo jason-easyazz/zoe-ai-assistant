@@ -48,7 +48,7 @@ def enabled() -> bool:
 
 @dataclass
 class CorrectionResult:
-    kind: str                 # "date" | "pet"
+    kind: str                 # "date" | "pet" | "row"
     reply: str
     changed: list[str] = field(default_factory=list)  # the corrected texts
 
@@ -486,6 +486,53 @@ async def apply_pet_correction(
              "I've updated their record and the family list.")
     logger.info("CORRECTION_APPLIED kind=pet user=%s changed=%d", user_id, changed)
     return CorrectionResult("pet", reply, [pet_text])
+
+
+# ── one named row (BM5: "why did you say that?" -> "that's wrong, it's X") ────
+
+async def apply_row_correction(
+    user_id: str, row_id: str, new_text: str, *, utterance: str = "", session_id: Optional[str] = None, svc=None,
+) -> Optional[CorrectionResult]:
+    """Edit ONE stored row - the one ``provenance_answers`` just named to the owner - to ``new_text`` (the owner's own correction,
+    already decided by ``provenance_answers.fix_text``). The same path as the date and pet corrections: ``MemoryService.review(edit)``
+    supersedes (nothing is deleted), under the user-class writer ``conversation_correction`` with the correcting utterance as
+    evidence. None (the caller says so) when the correction path is off, the row is gone / not approved / not this user's, the text
+    does not change, or the edit is refused. Never raises."""
+    if not enabled() or not user_id or user_id in ("guest", "voice-daemon", "") or not (new_text or "").strip():
+        return None
+    try:
+        try:
+            import user_prefs
+
+            if await user_prefs.is_memory_opted_out(user_id):
+                return None
+        except Exception:  # noqa: BLE001
+            pass
+        if svc is None:
+            from memory_service import get_memory_service
+
+            svc = get_memory_service()
+        cur = await svc.get(row_id)
+        if cur is None:
+            return None
+        meta = cur.metadata or {}
+        owner = str(meta.get("user_id") or meta.get("wing") or "").strip().lower()
+        if owner != user_id.strip().lower() or str(meta.get("status") or "approved").lower() != "approved":
+            return None
+        new = " ".join(new_text.split())
+        if new == " ".join((cur.text or "").split()):
+            return None
+        ref = await svc.review(
+            row_id, decision="edit", edits=new, actor=SOURCE, note="row correction (owner named the row)",
+            source_excerpt=" ".join((utterance or "").split()), session_id=session_id,
+        )
+        if ref is None:
+            return None
+        logger.info("CORRECTION_APPLIED kind=row user=%s", user_id)
+        return CorrectionResult("row", f"Fixed - I now have: \"{new}\". The old note is gone.", [new])
+    except Exception as exc:  # noqa: BLE001 — a correction never breaks the turn
+        logger.warning("correction_apply row correction failed user=%s: %s", user_id, type(exc).__name__)
+        return None
 
 
 # ── entry point ──────────────────────────────────────────────────────────────

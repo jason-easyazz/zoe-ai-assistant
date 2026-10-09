@@ -92,10 +92,21 @@ def control_pass(cells: "list[Cell]", world, off: "frozenset[str]", log=_log) ->
     # SKIP in the measurement, not "no proof either way" for the whole instrument
     todo = [c for c in cells if c.controls and set(c.controls) <= off and c.expected == "PASS"
             and c.tier == "store" and cellmod.required_capabilities(c) <= set(arm.capabilities)]
+    # the night mind's cells (an own-model reflection: K1's citation control, K2 / K3 and K6-K12) are proven on Z0n, Z0 + the night pass with the lab's
+    # fake brain: on plain Z0 the nightly model is scripted and they SKIP. Every other cell is proven on plain Z0, as before.
+    night_todo = [c for c in todo if cellmod.uses_night(c)]
+    todo = [c for c in todo if not cellmod.uses_night(c)]
     try:
         rows = run_cells(todo, world, arm, log) if todo else []
     finally:
         arm.close()
+    if night_todo:
+        narm = Z0Arm(off=off, night=True, name="Z0n-off")
+        try:
+            rows += run_cells(night_todo, world, narm, log)
+        finally:
+            narm.close()
+    todo = todo + night_todo
     green = sorted(r["id"] for r in rows if r["verdict"] == "PASS")
     not_run = sorted(r["id"] for r in rows if r["verdict"] in ("SKIP", "ERROR"))
     red = sum(1 for r in rows if r["verdict"] == "FAIL")
@@ -148,6 +159,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="store = brain-free cells (the lab); full = also the brain-tier cells, which the lab "
                          "cannot run: they are declared SKIPs and the run is `partial`")
     ap.add_argument("--arm", default="Z0", help=f"the memory system to measure: {', '.join(ARMS)}")
+    ap.add_argument("--model-url", default=None, metavar="http://127.0.0.1:11500/v1",
+                    help="Z0n only: run the night mind against this llama-server (the clone brain, or the 12B in its night window) instead of the lab's fake brain. "
+                         "Nothing is planted: the K cells then score what the real model does. Loopback only")
+    ap.add_argument("--ctx-tokens", type=int, default=8192, help="Z0n with --model-url: the server's context size (the pass's chunk budget derives from it)")
+    ap.add_argument("--model-name", default="", help="Z0n with --model-url: the model name sent in the request")
     ap.add_argument("--seed", default="baseline",
                     help="baseline (the fixed corpus seed), fresh (a held-out world of the same shapes; never a "
                          "baseline), or any string")
@@ -179,6 +195,14 @@ def _refused(args, reason: str, *, rev, extra: "dict | None" = None) -> int:
     return 2
 
 
+def _night_arm(args) -> Any:
+    """Z0n pointed at a real server. Loopback only (the bench never talks to the network)."""
+    from .arms.mpa_model import loopback
+    from .arms.z0 import Z0Arm
+    url = loopback(args.model_url)
+    return Z0Arm(name="Z0n", night=True, night_url=url[:-3] if url.endswith("/v1") else url, night_model=args.model_name, night_ctx=args.ctx_tokens)
+
+
 def main(argv: "list[str] | None" = None) -> int:
     ap = build_parser()
     args = ap.parse_args(argv)
@@ -187,6 +211,8 @@ def main(argv: "list[str] | None" = None) -> int:
     if args.compare_baseline and args.record_baseline:
         ap.error("--compare-baseline and --record-baseline are mutually exclusive: a regressed compare run "
                  "must never overwrite the bar (record alone, deliberately)")
+    if args.model_url and args.arm != "Z0n":
+        ap.error("--model-url applies to --arm Z0n only")
     if args.arm == "Z0-off":  # the negative-control arm IS the control pass
         args.control = args.control or "off"
     off: "frozenset[str] | None" = None
@@ -258,7 +284,7 @@ def main(argv: "list[str] | None" = None) -> int:
                        f"{', '.join((cp['green'] + cp['not_run'])[:5])}). Nothing was measured.")
         else:
             # 2. the measurement ---------------------------------------------------------------------------
-            arm = make_arm(args.arm)
+            arm = make_arm(args.arm) if not (args.arm == "Z0n" and args.model_url) else _night_arm(args)
             try:
                 rows = run_cells(chosen, world, arm)
             finally:
