@@ -173,7 +173,8 @@ class DelayedForget:
 
 def run_generic(kind: str, mk, seed: str, box_s: float, smoke: int, guard) -> dict:
     from zmb.bakeoff_measure import interleave, pick_smoke
-    store = [c for c in spec.load_cells() if c.tier == "store"]
+    from zmb import cells as cellmod
+    store = [c for c in spec.load_cells() if c.tier == "store" and not cellmod.z0_only(c)]          # not Zoe's own quote-retirement cells (S10x): Z0 only
     world = make_world(seed)
     arm = mk()
     ordered = pick_smoke(store, smoke) if smoke else interleave(store)

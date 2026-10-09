@@ -450,7 +450,7 @@ def test_the_zoe_layer_fits_the_g3_budget():
 def test_the_whole_store_tier_runs_clean_on_h1_and_h0_is_red_on_the_hard_axes():
     from zmb import artifact
     from zmb.runner import run_cells
-    store = [c for c in CELLS.values() if c.tier == "store"]
+    store = [c for c in CELLS.values() if c.tier == "store" and not cellmod.z0_only(c)]      # S10x (Zoe's own quote-retirement) is Z0-only
     arm, _f = mk("H1")
     rows = run_cells(store, WORLD, arm)
     arm.close()
@@ -573,7 +573,7 @@ def test_the_capabilities_follow_the_layer_and_the_scratch_postgres_handle():
 
 
 def test_cells_needing_a_capability_the_arm_lacks_skip_with_the_reason():
-    store = [c for c in CELLS.values() if c.tier == "store"]
+    store = [c for c in CELLS.values() if c.tier == "store" and not cellmod.z0_only(c)]      # S10x (Zoe's own quote-retirement) is Z0-only
     for variant, lacking in (("H0", ("conflict_pass", "edges", "disk")), ("H1", ("disk",)), ("H2", ("disk",))):
         arm, _f = mk(variant)
         for cap in lacking:
@@ -587,6 +587,19 @@ def test_cells_needing_a_capability_the_arm_lacks_skip_with_the_reason():
     h0, _f, _pg = pgmk("H0")                                                      # H0 with a Postgres handle: the disk cells RUN (and are red, below)
     assert all(run(h0, c.id).verdict != "SKIP" for c in store if "disk" in cellmod.required_capabilities(c))
     h0.close()
+
+
+def test_the_s10x_quote_retirement_cells_are_zoes_own_and_skip_on_every_hindsight_arm_with_the_reason():
+    """S10x measures ``memory_retire`` over Zoe's own store: a Hindsight arm has no such layer, so each cell is a declared SKIP (never a pass) and
+    the bake-off's H cell lists leave it out (it cannot move an arm-vs-Z0 comparison)."""
+    s10x = [c for c in CELLS.values() if c.tier == "store" and cellmod.z0_only(c)]
+    assert len(s10x) >= 14 and all(c.axis == "retirement" for c in s10x)
+    for variant in ("H0", "H1", "H2"):
+        arm, _f = mk(variant)
+        for c in s10x:
+            o = run(arm, c.id)
+            assert o.verdict == "SKIP" and "quote_retire" in o.reason, (variant, c.id, o)
+        arm.close()
 
 
 def test_called_directly_the_arm_says_why_it_cannot():
@@ -837,7 +850,7 @@ KNOWN_H_GAPS = ["J1.exact_sentence_after_100_filler", "J2.when_did_i_say_it", "L
 
 def test_the_whole_store_tier_runs_on_h1_with_a_scratch_postgres_and_nothing_skips():
     from zmb.runner import run_cells
-    store = [c for c in CELLS.values() if c.tier == "store"]
+    store = [c for c in CELLS.values() if c.tier == "store" and not cellmod.z0_only(c)]      # S10x (Zoe's own quote-retirement) is Z0-only
     arm, _f, _pg = pgmk("H1")
     rows = run_cells(store, WORLD, arm)
     arm.close()

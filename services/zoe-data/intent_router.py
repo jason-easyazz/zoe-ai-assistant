@@ -3720,7 +3720,9 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             _md = getattr(r, "metadata", {}) or {}
             if _md.get("user_id") != user_id and _md.get("wing") != user_id:
                 continue
-            if name_re.search(getattr(r, "text", "") or ""):
+            # ... or CITES the entity: a row retired by the owner's own sentence ("I gave up the cello") carries that
+            # sentence (memory_retire), and a forgotten name must leave no byte of it either
+            if name_re.search(getattr(r, "text", "") or "") or name_re.search(str(_md.get("retire_quote") or "")):
                 matches.append(r)
         # "Forgotten means forever" (owner, 2026-10-06): an archived row still holds the text and the name
         # (the document, ``review_note`` = "forget_entity:<name>", the audit trail's before/after). Erase
@@ -3750,7 +3752,8 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
                             _md = getattr(r, "metadata", {}) or {}
                             if (getattr(r, "id", "") and r.id not in seen_ids
                                     and (_md.get("user_id") == user_id or _md.get("wing") == user_id)
-                                    and name_re.search(getattr(r, "text", "") or "")):
+                                    and (name_re.search(getattr(r, "text", "") or "")
+                                         or name_re.search(str(_md.get("retire_quote") or "")))):
                                 erase_ids.append(r.id)
                                 seen_ids.add(r.id)
                         if len(page) < 1000:
@@ -3811,6 +3814,17 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         _cascade = await _forget_cascade_note(user_id, name)
         return (f"Okay — I've forgotten {forgotten} {things} about {name}.{suffix}" + _cascade
                 + ("" if alias_confirmed else await _forget_alias_note(user_id, name, svc)))
+
+    # "memory_retire" — the Flue brain's quote-backed retirement tool (memory_retire.py): a change of state the owner
+    # just SAID ("I gave up the cello") retires the one saved note it ends. Two calls: no slots lists the offered notes,
+    # {pick: N} chooses (0 = none). Every wall is in memory_retire.decide; this only routes. ZOE_QUOTE_RETIRE.
+    if intent.name == "memory_retire":
+        try:
+            import memory_retire
+            return await memory_retire.handle(user_id, dict(intent.slots or {}))
+        except Exception as exc:  # noqa: BLE001 - the tool must never fail a turn
+            logger.warning("memory_retire failed: %s", type(exc).__name__)
+            return "Noted."
 
     # "remember that <fact>" — an EXPLICIT, model-callable memory write. This is
     # the fulfillment for the Flue sidecar's remember_fact + remember_emotional_moment

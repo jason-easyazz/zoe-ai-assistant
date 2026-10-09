@@ -252,8 +252,14 @@ async function runWrite(
   dryRunItem: string,
   successFallback: string,
   signal?: AbortSignal,
+  // `isRead = true` marks a dispatch that CHANGES NOTHING but still must not run on a replay turn (it may stage per-turn state
+  // server-side). It keeps the REPLAY gate below and drops only the two gates that exist to stop a WRITE: ZOE_BRAIN_ALLOW_WRITES
+  // (a read has nothing to disable) and the untrusted-turn tier (a read of the owner's own notes cannot be steered into a change).
+  // The one caller is memory_retire step 1. It exists so that dispatch stays INSIDE this chokepoint rather than becoming a bare
+  // `dispatchIntent` call site that test_replay_write_isolation.py would need classified as a read.
+  isRead = false,
 ): Promise<string> {
-  if (!allowWrites()) {
+  if (!isRead && !allowWrites()) {
     return `WRITE DISABLED — ${dryRunItem} was NOT saved (this is a lab build; set ` +
       `ZOE_BRAIN_ALLOW_WRITES=true to enable writes). Tell the user you can't do that yet — ` +
       `do NOT claim it was done.`;
@@ -261,7 +267,7 @@ async function runWrite(
   // W15 PER-SOURCE TOOL TIER — untrusted web content was returned into this turn,
   // so nothing may change state until the turn ends (src/untrusted-content.ts).
   // Ahead of replay isolation: a tainted turn must refuse, not fake a success.
-  if (isTurnUntrusted(signal)) return untrustedWriteRefusal(dryRunItem);
+  if (!isRead && isTurnUntrusted(signal)) return untrustedWriteRefusal(dryRunItem);
   // REPLAY ISOLATION — this turn came from the replay gate, so report the write as
   // done and commit nothing. Checked AFTER the ALLOW_WRITES gate on purpose: a lab
   // build with writes off keeps its loud "WRITE DISABLED" honesty, and this branch
@@ -1047,6 +1053,62 @@ const rememberEmotionalMoment = defineTool({
   },
 });
 
+// ─── Quote-backed retirement (ZOE_QUOTE_RETIRE; services/zoe-data/memory_retire.py) ──────────
+
+/**
+ * memory_retire — the CHAT lane's judge for a change of state ("I gave up the cello" after "I play the cello", Samantha bar S10).
+ *
+ * The pilot behind it (docs/research/mempalace-deep-dive-2026-10-06.md section 4.4): finding the saved note a sentence ends is solved
+ * (the right one is in the top 3 on 29-30 of 30 changes); deciding that THIS sentence ends a note, and WHICH one, is a language
+ * judgement — retrieval's top-1 is merely the mentioned note on 34 of 40 non-changes. So the brain makes that one call, in two steps
+ * that carry no text from the model:
+ *
+ *   1. no arguments  -> zoe-data answers with the (up to three) saved notes the owner's sentence might end;
+ *   2. pick=<1..3>   -> the ONE it ends, or pick=0 for none.
+ *
+ * The model supplies a NUMBER and nothing else: the sentence is the turn zoe-data itself noted (zoe_flue_client), the notes are
+ * the ones step 1 showed, and every wall (the verified owner, the owner's own words not pasted text or a third person's, the
+ * owner's own row, a chosen row among the three shown, the forgotten ledger) is enforced server-side, whatever this tool sends.
+ * Identity is bound in trusted code like every other tool. The zoe-data intent is `memory_retire` (_DISPATCHABLE_INTENTS).
+ *
+ * Step 1 is a READ (it shows notes the brain could already recall; nothing changes), so it is not behind the write gate - but it
+ * is REPLAY-GATED (runWrite read mode: a replay turn never dispatches it); step 2 is
+ * a WRITE (ZOE_BRAIN_ALLOW_WRITES, replay isolation, the untrusted-turn tier) exactly like remember_fact. On a SPOKEN turn the
+ * server refuses both steps (the voice lane's judge is the per-turn digest, off the turn) and the reply is a bare "Noted.".
+ * ZOE_QUOTE_RETIRE=shadow (the default) logs the decision and applies nothing; the reply then never claims a change.
+ */
+const memoryRetire = defineTool({
+  name: 'memory_retire',
+  description:
+    'When the user says something they used to do, have or own has CHANGED or ENDED ("I gave up the cello", "I sold the Corolla", ' +
+    '"the goldfish died", "I switched to tea", "we moved"), call this FIRST with no arguments: it shows the saved notes that ' +
+    'sentence might end. Then call it again with pick=<the number of the ONE note their sentence ends>, or pick=0 when it ends ' +
+    'none of them (they only mentioned it, it is a plan or a question, or it is about someone else\'s life). Never for a plan, a ' +
+    'question or small talk, and never tell the user about this step.',
+  input: v.object({
+    pick: v.optional(
+      v.pipe(
+        v.number(),
+        v.integer(),
+        v.minValue(0),
+        v.maxValue(3),
+        v.description('The number (1-3) of the one saved note their sentence ends, or 0 for none.'),
+      ),
+    ),
+  }),
+  run: async ({ data, signal }) => {
+    const pick = typeof data?.pick === 'number' && Number.isInteger(data.pick) ? data.pick : undefined;
+    if (pick === undefined) {
+      // step 1: show the notes. Nothing changes (a read: not behind ZOE_BRAIN_ALLOW_WRITES or the untrusted tier), but it is
+      // REPLAY-GATED: it goes through runWrite's chokepoint (read mode), so a replay turn never reaches zoe-data and hears 'Noted.'
+      // (an OK-scoring line) - the same as step 2. Deliberately NOT a bare dispatchIntent call: that would put `memory_retire` in
+      // test_replay_write_isolation.py's bare-read allowlist, which is the owner's call, not a tool's.
+      return runWrite('memory_retire', {}, 'memory', 'that change', 'Noted.', signal, true);
+    }
+    return runWrite('memory_retire', { pick }, 'memory', 'that change', 'Noted.', signal);
+  },
+});
+
 // ─── Progressive disclosure activator ────────────────────────────────────────
 
 /**
@@ -1222,6 +1284,8 @@ export const zoeTools = [
   rememberFact,
   // Emotional-thread capture signal (handoff: zoe-memory-emotional-thread; write gated)
   rememberEmotionalMoment,
+  // Quote-backed retirement: the chat lane's judge for a change of state (ZOE_QUOTE_RETIRE, shadow by default)
+  memoryRetire,
   // Progressive disclosure — always-on activator for the grouped tools above
   activateAbilities,
 ];

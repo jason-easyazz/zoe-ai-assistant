@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-548 flags; 546 not documented in `.env.example`.
+549 flags; 547 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -418,6 +418,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_PUBLIC_URL` | `''` | no | NO | `services/zoe-data/auth_handoff.py` |
 | `ZOE_QUIET_END_HOUR` | `'7'` | no | NO | `services/zoe-data/proactive/engine.py` |
 | `ZOE_QUIET_START_HOUR` | `'22'` | no | NO | `services/zoe-data/proactive/engine.py` |
+| `ZOE_QUOTE_RETIRE` | `'shadow'` | yes | NO | `services/zoe-data/memory_retire.py` |
 | `ZOE_READINESS_CACHE_TTL_S` | `3.0` | yes | NO | `services/zoe-data/main.py` |
 | `ZOE_READINESS_TIMEOUT_S` | `4.0` | yes | NO | `services/zoe-data/main.py` |
 | `ZOE_RECALL_EVIDENCE` | `False` | yes | NO | `services/zoe-data/recall_evidence.py` |

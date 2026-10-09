@@ -13,6 +13,7 @@ Scheduled by routers/system.py at 3am daily.
 Manual trigger: POST /api/memories/digest?user_id=jason
 """
 import asyncio
+import functools
 import json
 import logging
 import os
@@ -581,6 +582,39 @@ async def latest_user_turn(user_id: str, *, within_minutes: int = 10, db=None) -
         return ""
 
 
+async def _quote_retire_pass(result: dict, user_id: str, user_message: str, source: str, speaker_verified: "bool | None") -> dict:
+    """The per-turn digest's second half for a SPOKEN turn: the quote-backed retirement judge (``memory_retire.distill_turn``).
+
+    A voice turn never lets the brain retire a saved note in the turn (the speaker may not be the owner, and a spoken sentence is
+    the speech-to-text's guess): the change of state it carries ("I gave up the cello") is judged HERE, after the reply was spoken,
+    once the server's own speaker gate has confirmed the owner. ``ZOE_QUOTE_RETIRE`` = shadow (default: log the decision, change
+    nothing) | enforce | off. The chat lane's judge is the brain's ``memory_retire`` tool, so any other ``source`` is left alone.
+    Never raises; ``result`` is returned (with ``quote_retire`` = the decision's action when one was made)."""
+    if source == "voice_turn_digest":
+        try:
+            import memory_retire
+
+            decision = await memory_retire.distill_turn(user_id, user_message, speaker_verified=speaker_verified)
+            if decision.action not in ("off", "nothing_to_offer"):
+                result["quote_retire"] = decision.action
+        except Exception as exc:  # noqa: BLE001 - the digest result is already in hand
+            logger.debug("run_turn_digest: quote-retire pass failed (%s)", type(exc).__name__)
+    return result
+
+
+def _then_quote_retire(fn):
+    """Run ``fn`` (the per-turn digest, unchanged), then ``_quote_retire_pass``. ``functools.wraps`` keeps ``run_turn_digest``'s own source,
+    signature and name (``inspect.getsource`` follows ``__wrapped__``)."""
+    @functools.wraps(fn)
+    async def wrapper(user_id, user_message, assistant_response="", *, session_id=None, source="turn_digest",
+                      speaker_verified=None):
+        result = await fn(user_id, user_message, assistant_response, session_id=session_id, source=source,
+                          speaker_verified=speaker_verified)
+        return await _quote_retire_pass(result, user_id, user_message, source, speaker_verified)
+    return wrapper
+
+
+@_then_quote_retire
 async def run_turn_digest(
     user_id: str,
     user_message: str,
