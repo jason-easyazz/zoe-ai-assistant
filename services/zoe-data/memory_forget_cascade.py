@@ -102,6 +102,12 @@ async def cascade_forget(user_id: str, name: str, *, db=None) -> CascadeResult:
     except Exception as exc:  # noqa: BLE001
         logger.warning("memory_forget_cascade: no database (%s) - derived stores not cleared",
                        type(exc).__name__)
+    try:  # a mute whose topic names the forgotten entity is the name too (restraint.py)
+        import restraint
+
+        await restraint.erase_entity(user_id, name)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("memory_forget_cascade: restraint mutes not cleared (%s)", type(exc).__name__)
     logger.info("memory_forget_cascade: user=%s portrait=%d card=%d loops=%d candidates=%d people=%d edges=%d",
                 user_id, res.portrait, res.card, res.loops, res.candidates, res.people, res.edges)
     return res

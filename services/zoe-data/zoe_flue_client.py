@@ -1772,12 +1772,23 @@ async def run_flue_brain_streaming(
     The proactivity selector's ``[RAISE …]`` (ZOE_PROACTIVE_SELECTOR, default OFF)
     follows the same prepare/settle contract; the brief wins a turn they share."""
     import brief_first_turn
+    import restraint
     from proactive import selector as proactive_selector
 
     # The owner's short answer to the one clarifying question Zoe asked ("Which Marisol?" -> "the sister"):
     # the brain gets the original request with the full name in it (ask_when_ambiguous, ZOE_ASK_WHEN_AMBIGUOUS).
     # In-memory dict lookup, no I/O; the pending question is consumed by the next turn whatever it says.
+    _spoken = message   # the member's own words, for the mute check (the clarification rewrite below is Zoe's)
     message = _resolve_clarification(message, user_id, session_id)
+    # A spoken mute ("don't mention that again", "leave it"; ZOE_RESTRAINT): recorded here, before the
+    # brain, so the very next brief / raise / packet honours it. In enforce the acknowledgement is
+    # spoken by code (the verify-on-challenge pattern: no model call, instant, never improvised);
+    # in shadow it is recorded and the brain replies as usual.
+    ack = "" if kwargs.get("replay_isolation") else await restraint.handle_turn(_spoken, user_id, session_id)
+    if ack:
+        _record_outcome(kwargs.get("outcome_sink"), FLUE_OUTCOME_SEAM_REPLY, "restraint_mute")
+        yield ack
+        return
     brief = await brief_first_turn.prepare(message, user_id, session_id)
     raised = await proactive_selector.prepare(
         message, user_id, session_id, brief_active=brief is not None)
@@ -1898,6 +1909,11 @@ async def _run_flue_brain_streaming_turn(
     from exact_words import note_turn as note_exact_turn
 
     note_exact_turn(uid, message)
+    # ZOE_RESTRAINT: the owner's words + the speaker gate's verdict for this turn, so a recall_memory TOOL
+    # call (which carries only the model's query) is filtered against what the owner actually asked.
+    import restraint
+
+    restraint.note_turn(uid, message)
     # Back a claim up when challenged (ZOE_VERIFY_ON_CHALLENGE, default OFF; no
     # DB read, no search, no change to the bytes when off): "are you sure" after
     # a world-fact answer runs ONE bounded web search. A hit rides as a block

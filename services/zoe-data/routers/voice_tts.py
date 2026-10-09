@@ -3079,6 +3079,11 @@ async def voice_command(
         if _speaker_verified is not None:
             logger.info("voice speaker verdict panel=%s verified=%s",
                         str((payload or {}).get("panel_id") or "")[:40], _speaker_verified)
+    # ZOE_RESTRAINT: a voice the gate did NOT confirm (False) may be a guest in the room; the brief, the raise and
+    # the recall packet withhold sensitive classes for this turn whatever it asks (restraint.decide, "guest").
+    from restraint import bind_verdict as _restraint_bind_verdict
+
+    _restraint_bind_verdict(_speaker_verified)
     # Forwarded by /voice/turn so end-to-end total can be recorded from the
     # true start of the request (audio upload). Falls back to command start.
     _t_turn_start = (payload or {}).get("_t_turn_start")

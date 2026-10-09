@@ -19,6 +19,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+import restraint
 from conversation_opener import _normalize, is_conversation_opener
 from time_utils import zoe_timezone
 from user_filters import is_synthetic_user
@@ -402,6 +403,10 @@ async def _prepare(message: str, uid: str, now: datetime, sid: str = "") -> DayB
         ctx = without_refs(ctx, await pulled_refs(uid, local_now))
     except Exception as exc:  # noqa: BLE001 - the brief must never break on the pull ledger
         logger.debug("brief-first-turn: pulled refs unreadable (non-fatal): %r", exc)
+    # Restraint (ZOE_RESTRAINT): a sensitive or muted thread is removed from THIS turn's context
+    # (a copy; the cached one is untouched), so a bare "good morning" brief carries the day and not
+    # the member's health, money or grief. "What's up?" gets everything.
+    ctx = await restraint.filter_brief_ctx(ctx, uid, message)
     items, critical = day_items(ctx, local_now)
     if not items:
         return None  # nothing on: no filler, no claim — a later turn may have something

@@ -41,6 +41,7 @@ from models import MemoryProposalCreate, MemoryReviewBody
 import own_words
 import memory_authority
 import recall_evidence
+import restraint
 
 logger = logging.getLogger(__name__)
 
@@ -952,6 +953,13 @@ async def memory_for_prompt(
     # mode: that block is S4-tuned and budgeted around its closing ask.
     evidence = not continuity and recall_evidence.enabled()
     quotes = evidence and recall_evidence.wants_quotes(message, user_id)
+    # Restraint (ZOE_RESTRAINT, default shadow): rows in a sensitive class, and rows the member muted,
+    # are REMOVED from the packet unless this turn pulls them (their topic, an open question, a mood
+    # statement for feelings). Withheld, never instructed: the model is not told they exist. Shadow
+    # keeps every row and logs what enforce would have removed.
+    if restraint.mode() != "off":
+        mood = continuity or emo_turn or _is_continuity_turn(message, user_id)
+        facts, hits, recent = await restraint.apply_to_packet(user_id, message, facts, hits, recent, mood=mood)
     result = _build_memory_prompt_packet(
         facts, hits, max_facts=limit, boost_emotional=emo_turn, recent=recent,
         evidence=evidence, quotes=quotes,
@@ -1009,6 +1017,7 @@ async def memory_for_prompt(
         focus = _continuity_focus(recent or [], result.get("refs") or [])
         if focus:
             result["continuity_focus"] = focus
+            restraint.note_focus(user_id, focus.get("text"))  # a following "leave it" has a referent
 
     # Increment 2b: fold the relational half (Postgres people/relationships/dates
     # + portrait) into the packet, behind ZOE_MEMORY_COMPOSE_ENABLED (default OFF)

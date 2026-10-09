@@ -4244,6 +4244,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_RESTRAINT": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/perf/samantha_person.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_RIG_BIND": {
         "defaults": [
           "-"

@@ -1977,6 +1977,13 @@ class MemoryService:
                 await night_mind.delete_user(user_id)
             except Exception as exc:
                 raise MemoryServiceError(f"delete_user failed: night-mind erasure failed ({type(exc).__name__})") from exc
+            # The member's mutes and thread classes (restraint.py): topic stems and class labels, no words, but a
+            # right-to-be-forgotten leaves nothing of the person. Best-effort: a store without migration 0040 has none.
+            try:
+                import restraint
+                await restraint.erase_user(user_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("memory_service: restraint rows not erased for a deleted user (%s)", type(exc).__name__)
             needles: list[str] = []
             try:
                 ids = await self._run_sync(self._list_ids_for_user, user_id)
@@ -3344,6 +3351,12 @@ class MemoryService:
             imp = score_importance(text)
             if imp > 0.0:
                 md["importance"] = imp
+        # Sensitivity class (restraint.py, ZOE_RESTRAINT): decided here, in code, from the row's own
+        # structured signals and stored beside the row. A reader trusts it only while its version and
+        # text hash match (invalidate, never delete). No-op with the flag off.
+        import restraint
+
+        restraint.stamp(md, text)
         return md
 
     def _remember_seen_key(self, user_id: str, idem_key: str) -> None:
