@@ -10,7 +10,6 @@ Entity ID strategy:
 Every write also recalculates health_score and increments notification_count.
 """
 
-import asyncio
 import logging
 import os
 import re
@@ -272,24 +271,29 @@ def _parse_birthday(raw: str) -> tuple[Optional[int], Optional[int], Optional[in
 
 # ── DB UUID resolution ────────────────────────────────────────────────────────
 
+async def _resolve_person(name: str, user_id: str, db):
+    """The full ``people_graph.Resolution`` of ``name`` for this user: ``unique`` | ``ambiguous`` (with the candidates, in
+    the shape the ask-when-ambiguous tier reads) | ``none``. Exact name first (case / accents folded), then a whole token,
+    then a prefix; ``%`` and ``_`` are ordinary characters (``people_graph``)."""
+    import people_graph as _pg
+
+    return await _pg.resolve_person(db, user_id, name)
+
+
 async def _resolve_person_uuid(name: str, user_id: str, db) -> Optional[str]:
-    """Return DB UUID if a person with this name exists for user_id, else None."""
+    """Return the DB UUID of the ONE person this name resolves to for user_id, else None.
+
+    None means "nobody" AND "more than one": a name two people answer to (two Toms; "Ann" -> Ann Reyes and Ann Park) is
+    never resolved to whichever row came first, so a write is never attached to a guess. A caller that must tell the two
+    apart (it would otherwise mint a third person, or wants to ask) uses ``_resolve_person``."""
     try:
-        try:
-            cursor = await db.execute(
-                "SELECT id FROM people WHERE user_id=$1 AND deleted=0 AND lower(name) LIKE lower($2)",
-                user_id, f"%{name}%",
-            )
-        except Exception:
-            cursor = await db.execute(
-                "SELECT id FROM people WHERE user_id=? AND deleted=0 AND lower(name) LIKE lower(?)",
-                (user_id, f"%{name}%"),
-            )
-        row = await cursor.fetchone()
-        return row[0] if row else None
+        res = await _resolve_person(name, user_id, db)
     except Exception as exc:
         logger.debug("_resolve_person_uuid failed for %r: %s", name, exc)
         return None
+    if res.ambiguous:
+        logger.info("PERSON_AMBIGUOUS user=%s tier=%s candidates=%d - not guessed", user_id, res.tier, len(res.matches))
+    return res.person_id
 
 
 async def _create_partial_person(name: str, user_id: str, db) -> Optional[str]:
@@ -767,96 +771,26 @@ async def _write_bucket(
 
 
 async def _current_edge_for_pair(db, user_id: str, pid_a: str, pid_b: str):
-    """Return (id, rel_type) of the CURRENT edge for the pair, or None.
+    """Return (id, rel_type) of the CURRENT edge for the pair (``valid_to IS NULL``), or None. Read-only."""
+    import people_graph as _pg
 
-    Current = ``valid_to IS NULL``. Handles both DB param styles: tries the
-    asyncpg ($1) form first and falls back to the SQLite (?) form. Read-only.
-    """
-    sql_pg = (
-        "SELECT id, rel_type FROM person_relationships "
-        "WHERE user_id=$1 AND person_a_id=$2 AND person_b_id=$3 AND valid_to IS NULL"
-    )
-    sql_sqlite = (
-        "SELECT id, rel_type FROM person_relationships "
-        "WHERE user_id=? AND person_a_id=? AND person_b_id=? AND valid_to IS NULL"
-    )
-    try:
-        cur = await db.execute(sql_pg, user_id, pid_a, pid_b)
-    except Exception:
-        cur = await db.execute(sql_sqlite, (user_id, pid_a, pid_b))
-    try:
-        row = await cur.fetchone()
-    finally:
-        # aiosqlite cursors expose close(); asyncpg's execute returns rows
-        # directly and may not — guard so neither path raises.
-        close = getattr(cur, "close", None)
-        if close is not None:
-            try:
-                res = close()
-                if asyncio.iscoroutine(res):
-                    await res
-            except Exception:
-                pass
-    if not row:
-        return None
-    # Row may be a tuple, sqlite Row, or asyncpg Record — all index by position.
-    return (row[0], row[1])
+    return await _pg.current_edge(db, user_id, pid_a, pid_b)
 
 
-async def _supersede_edge(db, user_id: str, old_id: str, new_id: str, now: str) -> None:
-    """Close a current edge: set valid_to + superseded_by + updated_at.
-
-    Runs BEFORE the replacement insert so no current edge remains (keeps the
-    partial unique index satisfiable). Handles both DB param styles.
-    """
-    try:
-        await db.execute(
-            "UPDATE person_relationships "
-            "SET valid_to=$1, superseded_by=$2, updated_at=$3 "
-            "WHERE id=$4 AND user_id=$5",
-            now, new_id, now, old_id, user_id,
-        )
-    except Exception:
-        await db.execute(
-            "UPDATE person_relationships "
-            "SET valid_to=?, superseded_by=?, updated_at=? "
-            "WHERE id=? AND user_id=?",
-            (now, new_id, now, old_id, user_id),
-        )
-
-
-async def _reopen_edge(db, user_id: str, edge_id: str, now: str) -> None:
-    """Re-open a superseded edge (compensating action): clear valid_to +
-    superseded_by so the pair keeps a current edge when the replacement insert
-    fails. PostgreSQL auto-commits the supersede UPDATE, so without this a failed
-    insert would leave the pair with NO current edge + a dangling superseded_by.
-    Handles both DB param styles.
-    """
-    try:
-        await db.execute(
-            "UPDATE person_relationships "
-            "SET valid_to=NULL, superseded_by=NULL, updated_at=$1 "
-            "WHERE id=$2 AND user_id=$3",
-            now, edge_id, user_id,
-        )
-    except Exception:
-        await db.execute(
-            "UPDATE person_relationships "
-            "SET valid_to=NULL, superseded_by=NULL, updated_at=? "
-            "WHERE id=? AND user_id=?",
-            (now, edge_id, user_id),
-        )
-
-
-def _edge_authority_for(source: str, text: str) -> str:
-    """The authority label an edge written from ``text`` by ``source`` deserves: the person's
-    own words by a user-class lane (``conversation`` / ``voice`` regex over the user turn) are
-    ``user_stated``; any other source (a digest, a batch pass, an unknown lane) is ``inferred``
-    and cannot close an edge the user stated."""
+def _edge_authority_and_rank(source: str, text: str) -> tuple:
+    """``(authority, rank)`` an edge written from ``text`` by ``source`` deserves. ``authority``: the person's own words
+    by a user-class lane (``conversation`` / ``voice`` regex over the user turn) are ``user_stated``; any other source (a
+    digest, a batch pass, an unknown lane) is ``inferred`` and cannot close an edge the user stated. ``rank``: the
+    ``memory_authority.RANK`` of the writer, stored on the edge as ``speaker_rank``."""
     import memory_authority as _auth
 
     res = _auth.resolve_write(source, text, anchor_text=text)
-    return _auth.authority_of(res.cls) if res.rank >= _auth.USER_RANK else _auth.INFERRED
+    return (_auth.authority_of(res.cls) if res.rank >= _auth.USER_RANK else _auth.INFERRED), int(res.rank)
+
+
+def _edge_authority_for(source: str, text: str) -> str:
+    """The authority label an edge written from ``text`` by ``source`` deserves (see ``_edge_authority_and_rank``)."""
+    return _edge_authority_and_rank(source, text)[0]
 
 
 async def _edge_authority(db, user_id: str, edge_id: str) -> str:
@@ -873,24 +807,6 @@ async def _edge_authority(db, user_id: str, edge_id: str) -> str:
         except Exception:  # noqa: BLE001 - wrong param style / no such column
             continue
     return ""
-
-
-async def _stamp_edge(db, user_id: str, edge_id: str, authority: str, origin: str) -> None:
-    """Best-effort provenance on a freshly inserted edge (a no-op before migration 0037)."""
-    for sql, args in (
-        ("UPDATE person_relationships SET authority=$1, origin=$2 WHERE id=$3 AND user_id=$4",
-         (authority, origin, edge_id, user_id)),
-        ("UPDATE person_relationships SET authority=?, origin=? WHERE id=? AND user_id=?",
-         (authority, origin, edge_id, user_id)),
-    ):
-        try:
-            if "$1" in sql:
-                await db.execute(sql, *args)
-            else:
-                await db.execute(sql, args)
-            return
-        except Exception:  # noqa: BLE001
-            continue
 
 
 async def _edge_may_change(db, user_id: str, edge_id: str, authority: str, origin: str,
@@ -985,46 +901,66 @@ async def apply_edge_dispute(
     if not (pid_a and pid_b) or pid_a == pid_b:
         return None
 
+    import people_graph as _pg
+
     current = await _current_edge_for_pair(db, user_id, pid_a, pid_b)
     if current is not None and current[1] == new_rel_type:
         return str(current[0])  # already applied
     lbl_a, lbl_b = _relationship_labels(new_rel_type)
-    rel_id = str(uuid.uuid4())
-    now = datetime.utcnow().isoformat() + "Z"
-    old_id = str(current[0]) if current is not None else None
-    if old_id is not None:
-        await _supersede_edge(db, user_id, old_id, rel_id, now)
-        await db.commit()
+    spec = _pg.EdgeSpec(new_rel_type, lbl_a, lbl_b, rel_group, authority=authority, origin=origin,
+                        evidence=_pg.Evidence(speaker_rank=_pg.rank_for_authority(authority)))
+    try:
+        change = await _pg.replace_current_edge(
+            db, user_id, pid_a, pid_b, spec, expect_old_id=str(current[0]) if current is not None else None)
+    except Exception as exc:  # noqa: BLE001 - the transaction rolled back: the pair keeps its current edge
+        logger.warning("person_extractor: apply_edge_dispute failed for user=%s: %s", user_id, exc)
+        return None
+    if change.status in ("inserted", "superseded", "unchanged"):
+        return change.edge_id
+    return None
+
+
+async def _mint_stub(db, user_id: str, name: str, ctx: str) -> Optional[str]:
+    """A bare ``is_partial`` people row for a name nobody has; its id, or None when the insert failed."""
+    pid = str(uuid.uuid4())
     try:
         try:
             await db.execute(
-                "INSERT INTO person_relationships "
-                "(id, user_id, person_a_id, person_b_id, rel_type, rel_a_to_b, rel_b_to_a, rel_group, "
-                "valid_from, valid_to, superseded_by, created_at, updated_at) "
-                "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,NULL,$10,$11)",
-                rel_id, user_id, pid_a, pid_b, new_rel_type, lbl_a, lbl_b, rel_group, now, now, now,
+                "INSERT INTO people (id, user_id, name, circle, context, visibility, is_partial) "
+                "VALUES ($1,$2,$3,'circle',$4,'family',1)",
+                pid, user_id, name, ctx,
             )
         except Exception:
             await db.execute(
-                "INSERT INTO person_relationships "
-                "(id, user_id, person_a_id, person_b_id, rel_type, rel_a_to_b, rel_b_to_a, rel_group, "
-                "valid_from, valid_to, superseded_by, created_at, updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,NULL,NULL,?,?)",
-                (rel_id, user_id, pid_a, pid_b, new_rel_type, lbl_a, lbl_b, rel_group, now, now, now),
+                "INSERT INTO people (id, user_id, name, circle, context, visibility, is_partial) "
+                "VALUES (?,?,?,'circle',?,'family',1)",
+                (pid, user_id, name, ctx),
             )
         await db.commit()
-    except Exception as exc:  # noqa: BLE001 - never leave the pair without a current edge
-        logger.warning("person_extractor: apply_edge_dispute insert failed for user=%s: %s", user_id, exc)
-        if old_id is not None:
-            try:
-                await _reopen_edge(db, user_id, old_id, now)
-                await db.commit()
-            except Exception as exc2:  # noqa: BLE001
-                logger.warning("person_extractor: apply_edge_dispute re-open failed: %s", exc2)
+        return pid
+    except Exception as exc:
+        logger.warning("person_extractor: stub insert for %r user=%s failed: %s", name, user_id, exc)
         return None
-    await _stamp_edge(db, user_id, rel_id, authority, origin)
-    await db.commit()
-    return rel_id
+
+
+async def _hold_edge_belief(user_id: str, name_a: str, name_b: str, rel_type: str, *, origin: str, authority: str,
+                            basis: str, contradicts: str = "", extra: Optional[dict] = None) -> None:
+    """Keep a relationship the person stated that the graph did not apply, as a PENDING candidate (never recalled,
+    never dropped): the new belief is recorded for the person to confirm, and approving it applies the edge change
+    (``MemoryService.review`` -> ``apply_edge_dispute``) when it disputes an edge. ``basis``: why it was held
+    (``temporal_flag_off`` | ``ambiguous_name``). Best effort and silent on failure - the candidate is the record, the
+    graph's rules are the wall."""
+    try:
+        import memory_authority as _auth
+        from memory_service import get_memory_service
+
+        await get_memory_service().record_candidate(
+            f"{name_a} is {name_b}'s {rel_type.replace('_', ' ')}.", user_id=user_id, writer=origin,
+            contradicts=contradicts, kind="relationship", memory_type="person", status="pending", basis=basis,
+            cls=_auth.USER_STATED if authority == _auth.USER_STATED else None, extra=extra or {},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("person_extractor: held relationship not recorded (%s)", type(exc).__name__)
 
 
 async def _write_relationship(
@@ -1037,6 +973,7 @@ async def _write_relationship(
     *,
     authority: str = "user_stated",
     origin: str = "person_extractor",
+    evidence=None,
 ) -> None:
     """Upsert a relationship edge, creating partial stubs for unknown people.
 
@@ -1044,146 +981,69 @@ async def _write_relationship(
     turn, so its edges are ``user_stated`` (the default). The edge is stamped with its
     writer, and an ``inferred`` writer can never CLOSE an edge the user stated (or one
     that is unstamped - a legacy edge is the user's until shown otherwise): it leaves a
-    pending candidate instead and logs ``AUTHORITY_BLOCKED``."""
-    from routers.people import RELATIONSHIP_TYPES, _WORK_GROUPS
+    pending candidate instead and logs ``AUTHORITY_BLOCKED``.
 
-    # Resolve labels
-    lbl_a, lbl_b = rel_type.replace("_", " ").title(), rel_type.replace("_", " ").title()
-    for group, entries in RELATIONSHIP_TYPES.items():
-        for key, la, lb in entries:
-            if key == rel_type:
-                lbl_a, lbl_b = la, lb
-                break
+    The people graph's invariants (``people_graph``, ADR-relationship-memory): a name two people answer to is never
+    guessed - the belief is held as a pending candidate; closing the old edge and opening the new one is one
+    transaction under the pair's advisory lock; with the temporal flag OFF a changed relationship is no longer dropped
+    silently - it is kept as a pending candidate; ``evidence`` (``people_graph.Evidence``: turn id, quote span, speaker
+    rank) is stored on the edge."""
+    import people_graph as _pg
+    from routers.people import _WORK_GROUPS
 
+    lbl_a, lbl_b = _relationship_labels(rel_type)
     inferred_ctx = "work" if rel_group in _WORK_GROUPS else "personal"
-    now = datetime.utcnow().isoformat() + "Z"
+    ev = evidence if evidence is not None else _pg.Evidence()
+    if ev.speaker_rank is None:
+        ev = _pg.Evidence(ev.turn_id, ev.quote_span, _pg.rank_for_authority(authority))
 
-    # Resolve or create person_a
-    pid_a = await _resolve_person_uuid(name_a, user_id, db)
-    if not pid_a:
-        pid_a = str(uuid.uuid4())
-        try:
-            try:
-                await db.execute(
-                    "INSERT INTO people (id, user_id, name, circle, context, visibility, is_partial) "
-                    "VALUES ($1,$2,$3,'circle',$4,'family',1)",
-                    pid_a, user_id, name_a, inferred_ctx,
-                )
-            except Exception:
-                await db.execute(
-                    "INSERT INTO people (id, user_id, name, circle, context, visibility, is_partial) "
-                    "VALUES (?,?,?,'circle',?,'family',1)",
-                    (pid_a, user_id, name_a, inferred_ctx),
-                )
-            await db.commit()
-        except Exception as exc:
-            logger.warning(
-                "person_extractor: _write_relationship stub insert for name_a=%r "
-                "user=%s failed — edge %r NOT stored: %s",
-                name_a, user_id, rel_type, exc)
+    resolved = [await _resolve_person(n, user_id, db) for n in (name_a, name_b)]
+    for res, name in zip(resolved, (name_a, name_b)):
+        if res.ambiguous:        # before any stub is minted: a held belief must not leave a half-made person behind
+            logger.info("PERSON_AMBIGUOUS user=%s tier=%s candidates=%d - edge %r held, not guessed",
+                        user_id, res.tier, len(res.matches), rel_type)
+            await _hold_edge_belief(user_id, name_a, name_b, rel_type, origin=origin, authority=authority,
+                                    basis="ambiguous_name", extra={"edge_rel_group": rel_group, "ambiguous_name": name})
             return
-
-    # Resolve or create person_b
-    pid_b = await _resolve_person_uuid(name_b, user_id, db)
-    if not pid_b:
-        pid_b = str(uuid.uuid4())
-        try:
-            try:
-                await db.execute(
-                    "INSERT INTO people (id, user_id, name, circle, context, visibility, is_partial) "
-                    "VALUES ($1,$2,$3,'circle',$4,'family',1)",
-                    pid_b, user_id, name_b, inferred_ctx,
-                )
-            except Exception:
-                await db.execute(
-                    "INSERT INTO people (id, user_id, name, circle, context, visibility, is_partial) "
-                    "VALUES (?,?,?,'circle',?,'family',1)",
-                    (pid_b, user_id, name_b, inferred_ctx),
-                )
-            await db.commit()
-        except Exception as exc:
-            logger.warning(
-                "person_extractor: _write_relationship stub insert for name_b=%r "
-                "user=%s failed — edge %r NOT stored: %s",
-                name_b, user_id, rel_type, exc)
+    pids = []
+    for res, name in zip(resolved, (name_a, name_b)):
+        pid = res.person_id or await _mint_stub(db, user_id, name, inferred_ctx)
+        if not pid:
+            logger.warning("person_extractor: _write_relationship could not resolve %r for user=%s - edge %r NOT stored",
+                           name, user_id, rel_type)
             return
-
+        pids.append(pid)
+    pid_a, pid_b = pids
     if pid_a == pid_b:
         return
 
-    rel_id = str(uuid.uuid4())
-    superseded_old_id: Optional[str] = None
+    spec = _pg.EdgeSpec(rel_type, lbl_a, lbl_b, rel_group, authority=authority, origin=origin, evidence=ev)
     try:
-        # ── Temporal supersession (flag ON only) ─────────────────────────
-        # When the flag is ON and a *current* edge already exists for this pair
-        # with a DIFFERENT rel_type, close it (valid_to + superseded_by) BEFORE
-        # inserting so no current edge remains and the new one lands cleanly on
-        # the partial (current-only) unique index. Same rel_type → leave it
-        # (dedup). When the flag is OFF this whole block is skipped and the
-        # insert-or-ignore below reproduces the pre-temporal behaviour exactly.
-        if temporal_relationships_enabled():
-            existing = await _current_edge_for_pair(db, user_id, pid_a, pid_b)
-            if existing is not None:
-                existing_id, existing_type = existing
-                if existing_type == rel_type:
-                    # Unchanged relationship — nothing to supersede or insert.
-                    return
-                if not await _edge_may_change(db, user_id, existing_id, authority, origin,
-                                              name_a, name_b, rel_type, pid_a=pid_a, pid_b=pid_b,
-                                              rel_group=rel_group, old_rel_type=existing_type):
-                    return
-                # rel_type changed → close the old edge, then fall through to
-                # insert the new current edge.
-                await _supersede_edge(db, user_id, existing_id, rel_id, now)
-                await db.commit()
-                superseded_old_id = existing_id
-
-        # ── Insert the new current edge (valid_from=now, valid_to=NULL) ──
-        # ON CONFLICT / INSERT OR IGNORE now target the PARTIAL current-edge
-        # index (person_relationships_pair_active, WHERE valid_to IS NULL).
-        try:
-            await db.execute(
-                "INSERT INTO person_relationships "
-                "(id, user_id, person_a_id, person_b_id, rel_type, rel_a_to_b, rel_b_to_a, rel_group, "
-                "valid_from, valid_to, superseded_by, created_at, updated_at) "
-                "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,NULL,$10,$11) "
-                "ON CONFLICT (user_id, person_a_id, person_b_id) WHERE valid_to IS NULL DO NOTHING",
-                rel_id, user_id, pid_a, pid_b, rel_type, lbl_a, lbl_b, rel_group, now, now, now,
-            )
-        except Exception:
-            try:
-                # SQLite: INSERT OR IGNORE already honours the partial unique
-                # index (a conflict only fires against a current row).
-                await db.execute(
-                    "INSERT OR IGNORE INTO person_relationships "
-                    "(id, user_id, person_a_id, person_b_id, rel_type, rel_a_to_b, rel_b_to_a, rel_group, "
-                    "valid_from, valid_to, superseded_by, created_at, updated_at) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,NULL,NULL,?,?)",
-                    (rel_id, user_id, pid_a, pid_b, rel_type, lbl_a, lbl_b, rel_group, now, now, now),
-                )
-            except Exception as exc2:
-                # Insert failed. If we just superseded a prior edge, RE-OPEN it so
-                # the pair keeps a current edge (no dangling superseded_by).
-                if superseded_old_id is not None:
-                    try:
-                        await _reopen_edge(db, user_id, superseded_old_id, now)
-                        await db.commit()
-                        logger.warning(
-                            "_write_relationship: insert failed after supersede; "
-                            "re-opened prior edge %s: %s", superseded_old_id, exc2)
-                    except Exception as exc3:
-                        logger.warning(
-                            "_write_relationship: insert AND re-open failed; pair "
-                            "may lack a current edge until re-mentioned: %s / %s",
-                            exc2, exc3)
-                else:
-                    logger.warning(
-                        "person_extractor: _write_relationship insert failed for "
-                        "user=%s %r -[%s]- %r — edge NOT stored: %s",
-                        user_id, name_a, rel_type, name_b, exc2)
+        existing = await _current_edge_for_pair(db, user_id, pid_a, pid_b)
+        expect: object = None
+        if existing is not None:
+            existing_id, existing_type = existing
+            if existing_type == rel_type:
+                return  # unchanged relationship - nothing to supersede or insert
+            if not temporal_relationships_enabled():
+                # The person said the relationship CHANGED and supersession is off: the current edge stays, and the
+                # new belief is kept for them to confirm instead of vanishing.
+                await _hold_edge_belief(
+                    user_id, name_a, name_b, rel_type, origin=origin, authority=authority, basis="temporal_flag_off",
+                    contradicts="edge:" + str(existing_id),
+                    extra={"edge_id": str(existing_id), "edge_person_a_id": pid_a, "edge_person_b_id": pid_b,
+                           "edge_old_rel": existing_type, "edge_new_rel": rel_type, "edge_rel_group": rel_group})
                 return
-        await db.commit()
-        await _stamp_edge(db, user_id, rel_id, authority, origin)
+            if not await _edge_may_change(db, user_id, existing_id, authority, origin, name_a, name_b, rel_type,
+                                          pid_a=pid_a, pid_b=pid_b, rel_group=rel_group, old_rel_type=existing_type):
+                return
+            expect = str(existing_id)
+        change = await _pg.replace_current_edge(db, user_id, pid_a, pid_b, spec, expect_old_id=expect)
+        if change.status == "stale":
+            logger.info("person_extractor: edge %r for user=%s changed under the writer - not applied", rel_type, user_id)
+            return
+        if change.status not in ("inserted", "superseded"):
+            return
         # Update context for both people
         for pid in (pid_a, pid_b):
             try:
@@ -1438,8 +1298,12 @@ async def process_text(
             if rel_info and _looks_like_person_name(name_a) and _looks_like_person_name(name_b):
                 rel_type, rel_group = rel_info
                 try:
+                    import people_graph as _pg
+
+                    edge_authority, edge_rank = _edge_authority_and_rank(source, text)
                     await _write_relationship(user_id, name_a, name_b, rel_type, rel_group, _db,
-                                              authority=_edge_authority_for(source, text), origin=source)
+                                              authority=edge_authority, origin=source,
+                                              evidence=_pg.evidence_for(user_id, text, m.group(0), rank=edge_rank))
                     written += 1
                 except Exception as exc:
                     logger.debug("person_extractor: relationship write failed: %s", exc)

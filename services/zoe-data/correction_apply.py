@@ -378,9 +378,43 @@ async def _current_edges(db, user_id: str, person_id: str) -> list[tuple[str, st
     return [(r[0], r[1], r[2]) for r in rows]
 
 
-async def _make_pet(db, user_id: str, person_id: str, current_rel: str, kind: str) -> int:
+async def _retype_edge_as_pet(db, user_id: str, edge_id: str, a: str, b: str, person_id: str, owner: str, *,
+                              evidence=None) -> bool:
+    """One wrong parent / sibling / ... edge becomes the ``pet`` edge (pet = person_a, owner = person_b) - by CLOSING it
+    (``close_reason='corrected_pet'``) and opening the pet edge, in ONE transaction under the pair's advisory lock
+    (``people_graph``: invalidate, never rewrite in place). When the (pet, owner) pair already has a current edge that is
+    not this one, the wrong edge is just closed (``corrected_pet_duplicate``) - it never collides on the unique index.
+    False when nothing changed (the edge was already gone) or the change could not be made whole (rolled back)."""
+    import uuid
+
+    import people_graph as pg
+
+    cols = await pg.edge_columns(db)
+    now = pg.now_iso()
+    new_id = str(uuid.uuid4())
+    spec = pg.EdgeSpec("pet", "Pet owner", "Pet", "pet", authority="user_stated", origin=SOURCE, evidence=evidence)
+    try:
+        async with pg.edge_transaction(db, user_id, a, b):
+            clash = await pg.current_edge(db, user_id, person_id, owner)
+            if clash is not None and clash[0] != edge_id:
+                return await pg.close_edge(db, user_id, edge_id, reason="corrected_pet_duplicate", now=now,
+                                           superseded_by=str(clash[0]), cols=cols)
+            if not await pg.close_edge(db, user_id, edge_id, reason="corrected_pet", now=now, superseded_by=new_id,
+                                       cols=cols):
+                return False
+            if not await pg.insert_edge(db, user_id=user_id, edge_id=new_id, person_a_id=person_id, person_b_id=owner,
+                                        spec=spec, now=now, cols=cols, ignore_conflict=False):
+                raise pg.EdgeWriteError("the pet edge did not land")
+            return True
+    except Exception as exc:  # noqa: BLE001 - rolled back: the edge is exactly as it was
+        logger.warning("correction_apply: pet edge change not applied (%s)", type(exc).__name__)
+        return False
+
+
+async def _make_pet(db, user_id: str, person_id: str, current_rel: str, kind: str, evidence=None) -> int:
     """Relationship -> ``pet <kind>``; parent/sibling/... edges -> the ``pet`` edge type
-    (pet = person_a, owner = person_b; labels as ``RELATIONSHIP_TYPES['pet']``).
+    (pet = person_a, owner = person_b; labels as ``RELATIONSHIP_TYPES['pet']``). The old edges are closed, not
+    rewritten (see ``_retype_edge_as_pet``).
     Returns how many things changed (0 when the record already says pet)."""
     changed = 0
     rel = "pet" if kind == "pet" else f"pet {kind}"
@@ -394,26 +428,23 @@ async def _make_pet(db, user_id: str, person_id: str, current_rel: str, kind: st
         changed += 1
     for edge_id, a, b in await _current_edges(db, user_id, person_id):
         owner = b if a == person_id else a
-        ok = await _exec(
-            db,
-            "UPDATE person_relationships SET rel_type='pet', rel_a_to_b='Pet owner', "
-            "rel_b_to_a='Pet', rel_group='pet', person_a_id=$1, person_b_id=$2, updated_at=$3 "
-            "WHERE id=$4 AND user_id=$5",
-            "UPDATE person_relationships SET rel_type='pet', rel_a_to_b='Pet owner', "
-            "rel_b_to_a='Pet', rel_group='pet', person_a_id=?, person_b_id=?, updated_at=? "
-            "WHERE id=? AND user_id=?",
-            (person_id, owner, now, edge_id, user_id),
-        )
-        if not ok:  # the pair already has a current pet edge: retire the wrong one instead
-            ok = await _exec(
-                db,
-                "UPDATE person_relationships SET valid_to=$1, updated_at=$1 WHERE id=$2 AND user_id=$3",
-                "UPDATE person_relationships SET valid_to=?, updated_at=? WHERE id=? AND user_id=?",
-                (now, edge_id, user_id),
-            )
-        changed += 1 if ok else 0
+        if await _retype_edge_as_pet(db, user_id, edge_id, a, b, person_id, owner, evidence=evidence):
+            changed += 1
     await _commit(db)
     return changed
+
+
+def _pet_evidence(user_id: str, text: str):
+    """The pet edge's evidence pointer: this turn, the statement inside it, the correcting writer's rank."""
+    import people_graph as pg
+
+    try:
+        import memory_authority as auth
+
+        rank = int(auth.resolve_write(SOURCE, text, anchor_text=text).rank)
+    except Exception:  # noqa: BLE001
+        rank = pg.rank_for_authority("user_stated")
+    return pg.evidence_for(user_id, text, " ".join((text or "").split()), rank=rank)
 
 
 async def apply_pet_correction(
@@ -447,8 +478,9 @@ async def apply_pet_correction(
                 else f"{full} is a pet, not a child.")
     changed = 0
     excerpt = " ".join((text or "").split())
+    evidence = _pet_evidence(user_id, text)
     for p in people:
-        changed += await _make_pet(db, user_id, p["id"], p["rel"], kind)
+        changed += await _make_pet(db, user_id, p["id"], p["rel"], kind, evidence)
     for r in child_rows:
         new = _rewrite_child_row(r.text, name, pet_text)
         if not new or new == r.text:

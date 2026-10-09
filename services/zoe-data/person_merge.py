@@ -141,12 +141,15 @@ async def merge_person(db, user_id: str, source_id: str, target_id: str, *,
          important_dates): ``UPDATE ... SET person_id=target WHERE person_id=source``.
       3. Re-point ``people.introduced_by_person_id`` (self-FK) source→target.
       4. Re-point ``person_relationships`` (both endpoints), resolving the two conflicts
-         a re-point can create under the partial current-edge unique index:
-           * **self-edge** — after re-point ``person_a_id == person_b_id`` → delete it.
+         a re-point can create under the partial current-edge unique index (invalidate,
+         never delete: an edge is CLOSED with a ``close_reason``, its row stays):
+           * **self-edge** — after re-point ``person_a_id == person_b_id`` → close it
+             (``merged_self_edge``) and leave it where it is.
            * **duplicate current edge** — target already has a *current* edge for the
-             pair the source edge would collapse onto → drop the source-derived current
-             edge first so ``person_relationships_pair_active`` is never violated. Only
-             CURRENT (``valid_to IS NULL``) edges collide; historical rows are untouched.
+             pair the source edge would collapse onto → close the source-derived current
+             edge first (``merged_duplicate``, ``superseded_by`` = the survivor) so
+             ``person_relationships_pair_active`` is never violated. Only CURRENT
+             (``valid_to IS NULL``) edges collide; historical rows are untouched.
       5. Merge ``people`` row fields — target wins; fill target's NULL/empty
          ``how_we_met`` / ``first_met_date`` / ``notes`` / ``relationship`` from source;
          the survivor is partial only if BOTH were partial.
@@ -262,9 +265,13 @@ async def _repoint_relationships(
     so no failed UPDATE is ever attempted. Historical (``valid_to`` set) rows are never a
     conflict and are simply re-pointed.
     """
+    import people_graph as pg
+
     dropped_self = 0
     deduped = 0
     repointed = 0
+    now = pg.now_iso()
+    cols = await pg.edge_columns(db)
 
     # Every edge (current OR historical) with source on either endpoint, owner-scoped.
     rows = await _fetchall(
@@ -291,14 +298,11 @@ async def _repoint_relationships(
         new_b = target_id if edge["person_b_id"] == source_id else edge["person_b_id"]
         is_current = edge["valid_to"] is None
 
-        # (a) Self-edge: a person cannot relate to themselves — drop it.
+        # (a) Self-edge: a person cannot relate to themselves. The edge is CLOSED (invalidate, never delete) and
+        # NOT re-pointed - it stays a record that the two were once related; a closed one is simply left alone.
         if new_a == new_b:
-            await _exec(
-                db,
-                "DELETE FROM person_relationships WHERE id=$1 AND user_id=$2",
-                "DELETE FROM person_relationships WHERE id=? AND user_id=?",
-                (edge_id, user_id),
-            )
+            if is_current:
+                await pg.close_edge(db, user_id, edge_id, reason="merged_self_edge", now=now, cols=cols)
             dropped_self += 1
             continue
 
@@ -313,14 +317,10 @@ async def _repoint_relationships(
                 (user_id, new_a, new_b, edge_id),
             )
             if collision is not None:
-                # Target already has a current edge for this pair — keep it, drop the
-                # source-derived duplicate BEFORE any UPDATE (index never violated).
-                await _exec(
-                    db,
-                    "DELETE FROM person_relationships WHERE id=$1 AND user_id=$2",
-                    "DELETE FROM person_relationships WHERE id=? AND user_id=?",
-                    (edge_id, user_id),
-                )
+                # Target already has a current edge for this pair — keep it, CLOSE the source-derived duplicate
+                # (invalidate, never delete) BEFORE any UPDATE so the index is never violated.
+                await pg.close_edge(db, user_id, edge_id, reason="merged_duplicate", now=now,
+                                    superseded_by=str(collision[0]), cols=cols)
                 deduped += 1
                 continue
 

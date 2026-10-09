@@ -334,25 +334,13 @@ _D = chr(36)  # the asyncpg placeholder sigil
 
 
 async def _name_clash(db, user_id: str, name: str) -> bool:
-    """True when name would resolve (substring LIKE) to a DIFFERENT existing person
-    ("Mika" -> "Mikaela"): linking an edge would attach the child to the wrong row."""
+    """True when name would resolve to a DIFFERENT existing person: by prefix only ("Mika" -> "Mikaela") or to
+    more than one ("Tom" with two Toms) - linking an edge would attach the child to the wrong row. An exact name or a
+    whole token of one ("Mika" -> "Mika Reyes") is not a clash."""
     import person_extractor as pe
 
-    pid = await pe._resolve_person_uuid(name, user_id, db)
-    if not pid:
-        return False
-    for sql, args, dollar in (
-        (f"SELECT name FROM people WHERE id={_D}1 AND user_id={_D}2", (pid, user_id), True),
-        ("SELECT name FROM people WHERE id=? AND user_id=?", (pid, user_id), False),
-    ):
-        try:
-            cur = await (db.execute(sql, *args) if dollar else db.execute(sql, args))
-            row = await cur.fetchone()
-        except Exception:  # noqa: BLE001 - other placeholder style
-            continue
-        found = str(row[0] or "").strip().lower() if row else ""
-        return bool(found) and name.lower() not in [found, *found.split()]
-    return False
+    res = await pe._resolve_person(name, user_id, db)
+    return res.ambiguous or (res.person_id is not None and res.tier == "prefix")
 
 
 async def _kept_pet(db, user_id: str, rel: NamedRelation, name: str) -> bool:
@@ -419,7 +407,10 @@ async def _mint_owned_people(db, user_id: str, rel: NamedRelation) -> int:
     made = 0
     for name in rel.names:
         try:
-            existing = await pe._resolve_person_uuid(name, user_id, db)
+            res = await pe._resolve_person(name, user_id, db)
+            if res.ambiguous:
+                continue  # two people answer to this name: a listed name is never a licence to mint a third
+            existing = res.person_id
             if existing:
                 if await _name_clash(db, user_id, name):
                     continue
@@ -460,6 +451,16 @@ async def _set_role_if_blank(db, user_id: str, person_id: str, role: str) -> Non
             continue
 
 
+def _evidence(pe, user_id: str, source: str, excerpt: str, name: str):
+    """The edge's evidence pointer: this turn, where the listed name sits in it, the writer's rank. Never raises."""
+    try:
+        import people_graph as pg
+
+        return pg.evidence_for(user_id, excerpt, name, rank=pe._edge_authority_and_rank(source, excerpt)[1])
+    except Exception:  # noqa: BLE001 - a missing pointer is a NULL column, never a lost edge
+        return None
+
+
 async def _apply_one(rel: NamedRelation, *, user_id: str, source: str, session_id, db,
                      excerpt: str) -> int:
     import person_extractor as pe
@@ -490,7 +491,7 @@ async def _apply_one(rel: NamedRelation, *, user_id: str, source: str, session_i
             if await _name_clash(db, user_id, name) or await _kept_pet(db, user_id, rel, name):
                 logger.debug("named_relations: edge for a listed name withheld (clash/pet)")
                 continue
-            await pe._write_relationship(user_id, *edge, db)
+            await pe._write_relationship(user_id, *edge, db, evidence=_evidence(pe, user_id, source, excerpt, name))
             wrote = 1
         except Exception as exc:  # noqa: BLE001 - one bad name never costs the others
             logger.debug("named_relations: edge write failed (%s)", type(exc).__name__)
