@@ -450,7 +450,7 @@ def test_the_zoe_layer_fits_the_g3_budget():
 def test_the_whole_store_tier_runs_clean_on_h1_and_h0_is_red_on_the_hard_axes():
     from zmb import artifact
     from zmb.runner import run_cells
-    store = [c for c in CELLS.values() if c.tier == "store"]
+    store = [c for c in CELLS.values() if c.tier == "store" and not cellmod.z0_only(c)]      # S10x (Zoe's own quote-retirement) is Z0-only
     arm, _f = mk("H1")
     rows = run_cells(store, WORLD, arm)
     arm.close()
@@ -477,7 +477,9 @@ def test_the_whole_store_tier_runs_clean_on_h1_and_h0_is_red_on_the_hard_axes():
     bad = artifact.hard_violations(rows0, CELLS)
     assert len(bad) >= 60 and any(b.startswith("A1.") for b in bad)                       # what Hindsight does natively, on the same spec
     skipped0 = sorted(r["id"] for r in rows0 if r["verdict"] == "SKIP")                   # no Zoe layer: no people graph, no conflict pass (and no pg here)
-    assert skipped0 == sorted(c.id for c in store if cellmod.required_capabilities(c) & {"edges", "conflict_pass", "disk"})
+    # ... and the night mind's cells that need its threads / day plan / labeller (K7, K9 x2, K10, K11, K12): Hindsight's observations carry no thread structure to read
+    night_only = {c.id for c in store if any(p["kind"] in ("late_threads", "change_quiet", "restraint", "resolution", "weights") for p in c.probes)}
+    assert skipped0 == sorted({c.id for c in store if cellmod.required_capabilities(c) & {"edges", "conflict_pass", "disk"}} | night_only)
 
 
 def test_the_artifact_of_an_h_arm_run_carries_no_household_text():
@@ -573,7 +575,7 @@ def test_the_capabilities_follow_the_layer_and_the_scratch_postgres_handle():
 
 
 def test_cells_needing_a_capability_the_arm_lacks_skip_with_the_reason():
-    store = [c for c in CELLS.values() if c.tier == "store"]
+    store = [c for c in CELLS.values() if c.tier == "store" and not cellmod.z0_only(c)]      # S10x (Zoe's own quote-retirement) is Z0-only
     for variant, lacking in (("H0", ("conflict_pass", "edges", "disk")), ("H1", ("disk",)), ("H2", ("disk",))):
         arm, _f = mk(variant)
         for cap in lacking:
@@ -587,6 +589,19 @@ def test_cells_needing_a_capability_the_arm_lacks_skip_with_the_reason():
     h0, _f, _pg = pgmk("H0")                                                      # H0 with a Postgres handle: the disk cells RUN (and are red, below)
     assert all(run(h0, c.id).verdict != "SKIP" for c in store if "disk" in cellmod.required_capabilities(c))
     h0.close()
+
+
+def test_the_s10x_quote_retirement_cells_are_zoes_own_and_skip_on_every_hindsight_arm_with_the_reason():
+    """S10x measures ``memory_retire`` over Zoe's own store: a Hindsight arm has no such layer, so each cell is a declared SKIP (never a pass) and
+    the bake-off's H cell lists leave it out (it cannot move an arm-vs-Z0 comparison)."""
+    s10x = [c for c in CELLS.values() if c.tier == "store" and cellmod.z0_only(c)]
+    assert len(s10x) >= 14 and all(c.axis == "retirement" for c in s10x)
+    for variant in ("H0", "H1", "H2"):
+        arm, _f = mk(variant)
+        for c in s10x:
+            o = run(arm, c.id)
+            assert o.verdict == "SKIP" and "quote_retire" in o.reason, (variant, c.id, o)
+        arm.close()
 
 
 def test_called_directly_the_arm_says_why_it_cannot():
@@ -837,7 +852,7 @@ KNOWN_H_GAPS = ["J1.exact_sentence_after_100_filler", "J2.when_did_i_say_it", "L
 
 def test_the_whole_store_tier_runs_on_h1_with_a_scratch_postgres_and_nothing_skips():
     from zmb.runner import run_cells
-    store = [c for c in CELLS.values() if c.tier == "store"]
+    store = [c for c in CELLS.values() if c.tier == "store" and not cellmod.z0_only(c)]      # S10x (Zoe's own quote-retirement) is Z0-only
     arm, _f, _pg = pgmk("H1")
     rows = run_cells(store, WORLD, arm)
     arm.close()

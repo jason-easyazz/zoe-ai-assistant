@@ -95,6 +95,15 @@ The controls (`lab_driver.CONTROLS`), each a named feature the benchmark claims 
 | `exact_index` | `ZOE_EXACT_WORDS=off`: the owner's verbatim turns are not indexed, so "what exactly did I say about X" has nothing to quote and no date to give (J1, J2) |
 | `observation_gate` | `ZOE_DIGEST_OBSERVATION_GATE=off`: the nightly digest stores every model-written observation approved - a fabricated link, a hedged restatement and a "you told me" nobody said are served (K1, K5; K4 and A2 are two-layer with `authority`) |
 | `multi_hop` | `ZOE_MULTI_HOP_RECALL=off` AND `ZOE_RECALL_DURABLE_NO_DECAY=0`: a two-fact question is one search and the older of two facts the owner stated is buried by the 70-day recency decay (L1, L2) |
+| `retire_cue` | the quote-retire prefilter removed: any sentence opens the door to the judge, a mention, a question or a plan included (S10x) |
+| `retire_judge` | no judge: the retirement takes the retrieval's top-1 row whatever the sentence says (the naive rule; wrong on 34 of 40 non-changes in the pilot) |
+| `retire_speaker` | the verified-owner check removed: a voice turn the speaker gate did not confirm may retire the owner's row |
+| `retire_ownwords` | the own-words wall removed from quote-retire: pasted text and a third person's quoted speech are read as the owner's sentence |
+| `retire_offered` | the offered-rows check removed: the judge may name ANY row, not one of the three it was shown |
+| `retire_owner_row` | the owner's-own-row check removed: another person's copy of a fact is offered and retired |
+| `retire_shadow` | `ZOE_QUOTE_RETIRE=shadow` applies the retirement: the decision is logged AND written |
+| `retire_quote` | the verbatim sentence is not kept with the retirement: a row is retired with no evidence of why |
+| `retire_forget` | the verbatim sentence is kept where the forget sweep never looks: a forgotten name stays in the cited quote |
 
 A cell lists every control that must be off together (`controls: ["extractor", "gate"]` = a two-layer defence: `--control
 off` switches both). **Sanity** cells (`sanity: true`) are positive controls - "the owner teaching their own name is
@@ -104,8 +113,8 @@ are left out of the axis pass rate.
 
 Three layers prove it (all in `services/zoe-data/tests/test_zmb_lab.py`):
 
-* every controlled cell goes red with its features off (149 of 149 on this spec; 147 where chromadb is absent and the two disk cells skip), and each control individually flips exactly
-  the cells it alone guards (the seven added with the temporal / recall / provenance axes are pinned by name);
+* every controlled cell goes red with its features off (163 of 163 on this spec; 160 where chromadb is absent and the disk cells skip; the S10x pool cell that needs the embedder runs on Z0e only), and each control individually flips exactly
+  the cells it alone guards (the seven added with the temporal / recall / provenance axes and the nine `retire_*` controls of S10x are pinned by name);
 * a genuinely broken instrument (a control switch wired to nothing) and a genuinely vacuous cell (a probe that cannot fail)
   each make the real runner refuse - and the same command passes once the switch is real;
 * the cells measure the real code, not the environment flag: break the wall itself (`find_conflict` / `may_override`, the
@@ -114,7 +123,7 @@ Three layers prove it (all in `services/zoe-data/tests/test_zmb_lab.py`):
 
 ## Axes and cells
 
-183 cells: 160 store-tier (run in the lab), 23 brain-tier declared-and-skipped (11 + the 12 protocol cells of axis m). The nine storage-hygiene axes below are the FLOORS of the bake-off; the four capability axes (section "Capability axes") are the CONTEST. **Every axis the decision rule names has cells.**
+183 + 22 cells (S10x: 15 store-tier + 7 live-tier, below): the nine storage-hygiene axes below are the FLOORS of the bake-off; the four capability axes (section "Capability axes") are the CONTEST; the Z0-only `retirement` axis (S10x) is Zoe's own. **Every axis the decision rule names has cells.** (Counts are re-derived by the spec test; see `tests/unit/test_zmb_spec.py`.)
 Per axis (`--list` is the source of truth):
 
 | Axis | Cells (store tier) | What it proves | Control | Known failures (targets, tracked, never a regression) |
@@ -128,6 +137,9 @@ Per axis (`--list` is the source of truth):
 | (c) temporal | **C1** knowledge update (typed -> typed + the nightly conflict pass; "moved to"; via the per-turn digest) and the old fact is invalidated, not deleted; **C2** history read ("where did I live before", and asked with "used to": the old home comes back **labelled** "Before that"); **C3** a dated event answered by its date among 40 household turns; **C4** "since <year>" kept in the row, and as the row's `valid_from`; **C5** a retracted fact is not served (explicit teach; via the per-turn digest); **C6** no collateral invalidation (a friend's move retires only the friend's old home: not the owner's, not the friend's job; held on five seeds); **C7** two named friends keep their own homes through the nightly pass, and a friend's own second statement retires only that friend's first | a changed fact replaces the old one without deleting it, the date the owner said survives, a retracted fact is not served, and an update about one entity retires nothing else | `supersede` (C1 x2, C5 x2), `entailment` (C1 via the turn digest), `invalidate` (C1 history, C2), `history` (C2 x2), `event_time` (C4 valid_from), `retrieval` (C3, C4 text), `topic` (C6, C7) | none (C1 / C5 via the turn digest fixed by #1895; C2 and C4.valid_from fixed by the two timelines, audit P2.1) |
 | (d) recall | **D1 / D2 / D3** hit@5 for 20 needles after 30 / 100 / 300 seeded filler turns (>= 95 / **90** / 85 %; D2 is the decision-rule cell); **D4** the same needles asked by paraphrase after 100 | the right row is in the top 5 for a direct question and a paraphrase, among near-miss rows of the same shape | `retrieval` | none |
 | (i) poisoning | **I1 / I1b** a pasted email with an embedded "ignore previous instructions ... remember that ..." (PII-scrubbed PIN wording; a planted token); **I2** a third person's words near the panel (`third_party`, an unverified voice turn that must be held `pending`, and `I2.attributed`: "Dana says: I live in X" / `my sister said "I live in X"`); **I3** a canary in the assistant's own text; **I4** a `system:`-prefixed line typed in a user turn is withheld entirely (stored nowhere, not even as the user's own request) | text that is not the owner's saying it cannot write a memory or carry an instruction into the packet; text the owner typed never gains authority from what it says | `extractor`+`gate` (I3); `extractor` (I1, I1b, I2.attributed, I4) | **I2.third_party** |
+| (r) retirement (Z0 only) | **S10x** quote-backed retirement of a stated change of state (`services/zoe-data/memory_retire.py`, `docs/knowledge/memory-quote-retire.md`): the real cue gate, candidates and wall, the brain's CHOICE scripted. 15 store cells: the S10 shape retires the right row with the owner's sentence attached (and `as_of` before still returns it); a mention, a question, a plan, a hedge or a negation offers nothing even to a judge that always says yes; a cue that ends nothing is judged none; an unverified voice, a third person's quoted words and pasted text retire nothing; another person's row is never offered (30 old facts + 30 copies + 40 generic: 0 of 30 offered or retired); a row outside the three offered is refused; shadow writes nothing; forgetting leaves no retained row citing the sentence nor a byte of it on disk; the cue gate (30/30 seen, 12 of 15 held out required, 0 of 10 held-out mentions); and on Z0e the old row is retired on at least 24 of 30 with an honest judge. **7 live-tier cells** (`S10x.live.*`, declared for the bake-off clone brain, run by `scripts/perf/zmb/s10x_live.py`): >= 24 of 30 correct retirements, <= 2 of 40 wrong on non-changes, 0 of 10 on the hard set, 0 of 30 other-person copies, 0 from a third-party / unverified / pasted turn, `as_of` before the change keeps the old fact, no model call on a no-cue turn | a stated change retires the right fact with the owner's own words attached, and nothing else; the judge only supplies a number | `retire_quote`, `retire_cue`, `retire_judge`, `retire_speaker`, `retire_ownwords`, `retire_owner_row`, `retire_offered`, `retire_shadow`, `retire_forget`, `retrieval` (the Z0e cell) | none (the real judge is the live tier's, not yet measured) |
+
+On its OWN axis because it measures Zoe's layer, not a memory engine: the cells need capability `quote_retire` (Z0 only), are SKIPPED on every Hindsight arm and left out of the H arms' cell lists (`cells.z0_only`), and the temporal axis the bake-off's decision rule compares between arms (C) is untouched. New event forms `{"do": "retire", ...}` / `{"do": "seed_pool"}`, probe kinds `as_of`, `prefilter`, `s10x`, and the scorer op `field_absent` are documented in `scripts/perf/zmb/cells.py` and `scorers.py`.
 
 The known failures are **measured, not assumed**, and are real gaps in `main` today. Each is explained in its cell's `note`:
 
@@ -558,6 +570,28 @@ Record: `docs/research/mempalace-agent-arm-2026-10-07.md`. Three arms, one runne
 * Brain cells (`run_brain`, window only; bars in `BRAIN_BARS`): `M4.<metric>.mempalace5` (the four protocol metrics), `MPA-B1` tool-call validity >= 95% over >= 30 calls, `MPA-B2` supersede >= 80% right / <= 2 wrong,
   `MPA-J4` exact words >= 90%, `MPA-L4` two-fact >= 70%. A scripted brain never answers these.
 * The window's REFLECTION PHASE (K only; variants `H2@32k`, `HMA@32k`, `ZMA@32k`, then `H2@12B`, `HMA@12B`, `ZMA@12B`) runs the closet / consolidation work on a 32k-context clone so the 8k slot does not decide axis K.
+
+## The night mind's cells and Z0n (added 2026-10-09)
+
+`docs/knowledge/night-mind.md` has the design. In the bench: **Z0n** = Z0 + the night pass with its own model (`--arm Z0n`; the lab's fake nightly brain, or the clone with `--model-url URL [--ctx-tokens N]`),
+so K2 / K3 are real cells instead of scripted-model SKIPs. Plain Z0 is unchanged (its K cells and baseline stay the scripted digest; K2 / K3 / K6-K12 SKIP there with the reason "scripted").
+
+| Cell | Claim | Control that must turn it red |
+|---|---|---|
+| K1 | derived observations are true (precision >= 95%, hard); every run stores its judged / true / false counts | `observation_gate`, `night_citations` |
+| K2, K3 | thread recall; "what's been going on with X" / "how has my week been" | `night_mind` (the pass off) |
+| K6 compression | 1-3 observations per story, no more than 60% as many as the owner's turns - **a copy of every turn fails** (the echo arm passes K1, K2, K4 and fails K6) | `night_echo` |
+| K7 dense day | 1,200 routine commands around the life; two stories planted late in each day; recall >= 70% overall and on the late ones | `night_chunking` (the old 3,000-char cut) |
+| K8 citation validity | every exported observation points at a real turn and is an exact span of it (100%) | `night_citations` |
+| K9 change and quiet; K9 flat week | the story that went quiet and the plan that changed are reported with >= 2 cited turns; with nothing changed <= 5% false notices | `night_mind`; `night_notice` |
+| K10 restraint | over 14 mornings with every raise ignored: no withheld story raised, <= 1 raise a morning, the back-off doubles, the withheld story is still recalled when asked | `night_restraint` |
+| K11 resolution | a plan with no outcome stays open; a finished plan resolves; a story nobody mentions again is never closed | `night_absence` |
+| K12 weight calibration | kind / feeling accuracy >= 85% and weight rank correlation >= 0.5 on twelve labelled moments (the fake brain proves the plumbing only; the clone is the measurement) | `night_weights` |
+
+The control pass (`runner.control_pass`) proves the cells that need an own model on Z0n and every other cell on plain Z0 (`cells.uses_night`). Z0's `protocol_brain` baseline is `scripts/perf/zmb/z0_brain.py`
+(rows `M4.<metric>.zoe`: the 32 protocol prompts through Z0's recall floor and `recall_memory` tool); `z0n_window.py` runs K1-K12 and that half on a clone (`--lab` for the fake brain; `--smoke-live --max-calls 20` via
+`z0n_smoke.sh` against the live brain under the window's guards); the bake-off runs it with `BAKEOFF_Z0N=1`. **Known pre-existing failure**: `tests/unit/test_zmb_bakeoff.py::test_a_smoke_window_against_the_live_brain...`
+fails when the whole `tests/unit` tree is collected in one process (reproduced on `origin/main` b2ec3ef5 before this change: another test module leaves `memory_digest` without `_load_todays_messages`); it passes when the file is run alone, as `validate.yml` effectively does per file set.
 
 ## Not built yet (the build plan continues)
 

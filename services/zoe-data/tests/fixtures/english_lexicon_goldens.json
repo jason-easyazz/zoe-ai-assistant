@@ -1,0 +1,355 @@
+{
+ "ma": {
+  "_ANAPHORA": [
+   "he",
+   "her",
+   "here",
+   "him",
+   "it",
+   "its",
+   "same",
+   "she",
+   "so",
+   "such",
+   "that",
+   "them",
+   "there",
+   "these",
+   "they",
+   "this",
+   "those"
+  ],
+  "_ARTICLES": [
+   "a",
+   "an",
+   "at",
+   "in",
+   "of",
+   "on",
+   "the",
+   "to"
+  ],
+  "_CONTRAST_RE": [
+   "(?:(?:,|;|\\s*[-\\u2013\\u2014]+)\\s*(?:and\\s+|but\\s+)?|\\s+(?:and|but)\\s+)not\\s+(?P<neg>[^,;.!?]{1,40}?)\\s*(?=[,;.!?]|$)",
+   34
+  ],
+  "_ENDED_BASE": "\\b(?:did|do|does|will|would|can|could)(?:\\s+not|n['\\u2019]t)\\s+(?:drop|quit|stop|cancel|give\\s+up|leave)\\b",
+  "_ENDED_BASE_RE": [
+   "\\b(?:did|do|does|will|would|can|could)(?:\\s+not|n['\\u2019]t)\\s+(?:drop|quit|stop|cancel|give\\s+up|leave)\\b",
+   34
+  ],
+  "_ENDED_RE": [
+   "\\b(?:stopped|dropped|quit|cancell?ed|gave up|given up|ended|left|no longer)\\b|\\bany ?more\\b|\\b(?:did|do|does|will|would|can|could)(?:\\s+not|n['\\u2019]t)\\s+(?:drop|quit|stop|cancel|give\\s+up|leave)\\b",
+   34
+  ],
+  "_ENDED_VERB_RE": [
+   "\\b(?:stopped|dropped|quit|cancell?ed|gave up|given up|ended|left)\\b|\\b(?:did|do|does|will|would|can|could)(?:\\s+not|n['\\u2019]t)\\s+(?:drop|quit|stop|cancel|give\\s+up|leave)\\b",
+   34
+  ],
+  "_FACT_RELATION_RE": [
+   "^\\s*(?:the\\s+)?(?:user['’]s|my)\\s+(?:[a-z]+\\s+){0,2}?(?P<rel>(?:wife|husband|partner|girlfriend|boyfriend|fianc\\w*|spouse|son|daughter|kids?|child|children|brother|sister|mum|mom|mother|dad|father|grandma|grandmother|grandpa|grandfather|aunt|uncle|cousin|niece|nephew|friend|mate|boss|colleague|coworker|neighbou?r|parents?|sibling|in-laws?|family|baby|girls|boys|ex))\\b",
+   34
+  ],
+  "_FIRST_PERSON": [
+   "i",
+   "i'd",
+   "i'll",
+   "i'm",
+   "i've",
+   "id",
+   "ill",
+   "im",
+   "ive",
+   "me",
+   "mine",
+   "my",
+   "myself",
+   "our",
+   "ours",
+   "us",
+   "we",
+   "we're",
+   "we've",
+   "were",
+   "weve"
+  ],
+  "_HEDGE_RE": [
+   "\\b(?:i|we)\\s+(?:think|guess|suppose|reckon|believe|figure|assume|wonder)\\b|\\b(?:probably|possibly|apparently|supposedly|presumably|sort\\ of|kind\\ of|came\\ up|comes\\ up|coming\\ up|heard|rumour|rumor|someone|somebody|they\\ say|people\\ say|he\\ says|she\\ says|said|told\\ me|tells\\ me|according\\ to)s?\\b",
+   34
+  ],
+  "_HEDGE_VERBS": [
+   "think",
+   "guess",
+   "suppose",
+   "reckon",
+   "believe",
+   "figure",
+   "assume",
+   "wonder"
+  ],
+  "_HEDGE_WORDS": [
+   "probably",
+   "possibly",
+   "apparently",
+   "supposedly",
+   "presumably",
+   "sort of",
+   "kind of",
+   "came up",
+   "comes up",
+   "coming up",
+   "heard",
+   "rumour",
+   "rumor",
+   "someone",
+   "somebody",
+   "they say",
+   "people say",
+   "he says",
+   "she says",
+   "said",
+   "told me",
+   "tells me",
+   "according to"
+  ],
+  "_HYPOTHETICAL_RE": [
+   "\\b(?:wish|if|maybe|perhaps|might|hope|hoping|someday|supposedly|apparently|imagine|pretend|would|could)\\b",
+   34
+  ],
+  "_LEAD_INTERJECTION_RE": [
+   "^\\s*(?:(?:no|nope|nah|yes|yeah|yep|actually|well|oh|sorry|um|uh|hi|hey)[,.!\\s]+)+",
+   34
+  ],
+  "_LEAD_IN_LABEL_RE": [
+   "^\\s*(?:(?:good|bad|great|big|sad|exciting|quick)\\s+news|(?:quick\\s+)?update|change\\s+of\\s+plans?|correction|fyi|heads[\\s-]?up|by\\s+the\\s+way|btw|also|oh\\s+and)\\s*:\\s+(?=.*\\b(?:I|we|my|our)\\b)",
+   34
+  ],
+  "_MY_RELATION_RE": [
+   "\\b(?:my|our)\\s+(?:[a-z]+\\s+){0,2}?((?:wife|husband|partner|girlfriend|boyfriend|fianc\\w*|spouse|son|daughter|kids?|child|children|brother|sister|mum|mom|mother|dad|father|grandma|grandmother|grandpa|grandfather|aunt|uncle|cousin|niece|nephew|friend|mate|boss|colleague|coworker|neighbou?r|parents?|sibling|in-laws?|family|baby|girls|boys|ex))s?(?:['’]s)?\\b",
+   34
+  ],
+  "_NEG_RE": [
+   "\\b(?:not|never|no|none|nobody|nothing|neither|nor)\\b|n['’]t\\b|\\bany ?more\\b",
+   34
+  ],
+  "_NOT_A_CONTRAST": [
+   "always",
+   "any",
+   "anymore",
+   "bad",
+   "been",
+   "even",
+   "going",
+   "good",
+   "great",
+   "happy",
+   "if",
+   "just",
+   "much",
+   "now",
+   "often",
+   "ok",
+   "okay",
+   "quite",
+   "really",
+   "right",
+   "so",
+   "sure",
+   "that",
+   "this",
+   "too",
+   "true",
+   "very",
+   "well",
+   "when",
+   "yet"
+  ],
+  "_PLAIN_FIRST_PERSON": [
+   "i",
+   "id",
+   "ill",
+   "im",
+   "ive",
+   "me",
+   "mine",
+   "my",
+   "myself",
+   "our",
+   "ours",
+   "us",
+   "we",
+   "weve"
+  ],
+  "_PROMPT_THIRD_PARTY_RE": [
+   "\\b(?:my|your|our|his|her|their|[a-z]+['’]s)\\s+(?:[a-z]+\\s+){0,2}?(?:wife|husband|partner|girlfriend|boyfriend|fianc\\w*|spouse|son|daughter|kids?|child|children|brother|sister|mum|mom|mother|dad|father|grandma|grandmother|grandpa|grandfather|aunt|uncle|cousin|niece|nephew|friend|mate|boss|colleague|coworker|neighbou?r|parents?|sibling|in-laws?|family|baby|girls|boys|ex)s?\\b",
+   34
+  ],
+  "_QUESTION_START_RE": [
+   "^\\s*(?:do|does|did|am|are|is|can|could|will|would|should)\\s+(?:i|we|you|my)\\b",
+   34
+  ],
+  "_RELATION": "(?:wife|husband|partner|girlfriend|boyfriend|fianc\\w*|spouse|son|daughter|kids?|child|children|brother|sister|mum|mom|mother|dad|father|grandma|grandmother|grandpa|grandfather|aunt|uncle|cousin|niece|nephew|friend|mate|boss|colleague|coworker|neighbou?r|parents?|sibling|in-laws?|family|baby|girls|boys|ex)",
+  "_TEMPORAL": [
+   "afternoon",
+   "anymore",
+   "atm",
+   "currently",
+   "days",
+   "evening",
+   "ever",
+   "lately",
+   "longer",
+   "mean",
+   "meantime",
+   "moment",
+   "moment's",
+   "month",
+   "months",
+   "morning",
+   "night",
+   "now",
+   "present",
+   "recently",
+   "then",
+   "time",
+   "times",
+   "today",
+   "tomorrow",
+   "tonight",
+   "week",
+   "weekend",
+   "weeks",
+   "while",
+   "year",
+   "years",
+   "yesterday"
+  ],
+  "_USED_TO_RE": [
+   "\\bused to\\b|\\bformerly\\b|\\bpreviously\\b|\\bwas living\\b",
+   34
+  ]
+ },
+ "pr": {
+  "PET_WORDS": [
+   "dog",
+   "puppy",
+   "pup",
+   "cat",
+   "kitten",
+   "bird",
+   "parrot",
+   "budgie",
+   "rabbit",
+   "bunny",
+   "hamster",
+   "guinea pig",
+   "fish",
+   "horse",
+   "pony",
+   "turtle",
+   "tortoise",
+   "snake",
+   "lizard",
+   "ferret",
+   "pet"
+  ],
+  "_CLAIM_RES": [
+   [
+    "\\b(?P<n>[A-Z][a-z]{1,30}(?:\\s[A-Z][a-z]{1,20})?)\\s+(?:is|was|are|were)\\s+(?:(?:the|a|an|his|her|their|my|our|user's|[A-Z][a-z]{1,30}(?:\\s[A-Z][a-z]{1,20})?'s)\\s+)*(?:\\w+\\s+)?(?P<r>wife|husband|partner|girlfriend|boyfriend|fianc[eé]e?|spouse|son|daughter|kid|children|child|girl|boy|baby|friend|mate|buddy|bestie|brother|sister|mum|mom|mother|dad|father|grandma|grandmother|grandpa|grandfather|aunt|uncle|niece|nephew|cousin|parent|sibling|grandparent|colleague|coworker|boss|neighbou?r)s?\\b",
+    32
+   ],
+   [
+    "^\\s*(?P<n>[A-Z][a-z]{1,30}(?:\\s[A-Z][a-z]{1,20})?)\\s*:\\s*(?:\\w+\\s+){0,2}(?P<r>wife|husband|partner|girlfriend|boyfriend|fianc[eé]e?|spouse|son|daughter|kid|children|child|girl|boy|baby|friend|mate|buddy|bestie|brother|sister|mum|mom|mother|dad|father|grandma|grandmother|grandpa|grandfather|aunt|uncle|niece|nephew|cousin|parent|sibling|grandparent|colleague|coworker|boss|neighbou?r)s?\\b",
+    32
+   ],
+   [
+    "\\b(?P<n>[A-Z][a-z]{1,30}(?:\\s[A-Z][a-z]{1,20})?)\\s*\\(\\s*(?:\\w+\\s+)?(?P<r>wife|husband|partner|girlfriend|boyfriend|fianc[eé]e?|spouse|son|daughter|kid|children|child|girl|boy|baby|friend|mate|buddy|bestie|brother|sister|mum|mom|mother|dad|father|grandma|grandmother|grandpa|grandfather|aunt|uncle|niece|nephew|cousin|parent|sibling|grandparent|colleague|coworker|boss|neighbou?r)s?\\s*\\)",
+    32
+   ],
+   [
+    "\\b(?:[A-Z][a-z]{1,30}(?:\\s[A-Z][a-z]{1,20})?|my|his|her|their|our)(?:'s)?\\s+(?:\\w+\\s+)?(?P<r>wife|husband|partner|girlfriend|boyfriend|fianc[eé]e?|spouse|son|daughter|kid|children|child|girl|boy|baby|friend|mate|buddy|bestie|brother|sister|mum|mom|mother|dad|father|grandma|grandmother|grandpa|grandfather|aunt|uncle|niece|nephew|cousin|parent|sibling|grandparent|colleague|coworker|boss|neighbou?r)s?\\s+(?:is|was|are|were)\\s+(?:named\\s+|called\\s+)?(?P<n>[A-Z][a-z]{1,30}(?:\\s[A-Z][a-z]{1,20})?)\\b",
+    32
+   ],
+   [
+    "\\b(?P<n>[A-Z][a-z]{1,30}(?:\\s[A-Z][a-z]{1,20})?),?\\s+(?:who\\s+is\\s+)?(?:my|his|her|their|our)\\s+(?:\\w+\\s+)?(?P<r>wife|husband|partner|girlfriend|boyfriend|fianc[eé]e?|spouse|son|daughter|kid|children|child|girl|boy|baby|friend|mate|buddy|bestie|brother|sister|mum|mom|mother|dad|father|grandma|grandmother|grandpa|grandfather|aunt|uncle|niece|nephew|cousin|parent|sibling|grandparent|colleague|coworker|boss|neighbou?r)s?\\b",
+    32
+   ]
+  ],
+  "_PET_ALT": "guinea\\ pig|tortoise|hamster|kitten|parrot|budgie|rabbit|turtle|lizard|ferret|puppy|bunny|horse|snake|bird|fish|pony|dog|pup|cat|pet",
+  "_ROLE_ALT": "wife|husband|partner|girlfriend|boyfriend|fianc[eé]e?|spouse|son|daughter|kid|children|child|girl|boy|baby|friend|mate|buddy|bestie|brother|sister|mum|mom|mother|dad|father|grandma|grandmother|grandpa|grandfather|aunt|uncle|niece|nephew|cousin|parent|sibling|grandparent|colleague|coworker|boss|neighbou?r",
+  "_ROLE_RE": [
+   "\\b(wife|husband|partner|girlfriend|boyfriend|fianc[eé]e?|spouse|son|daughter|kid|children|child|girl|boy|baby|friend|mate|buddy|bestie|brother|sister|mum|mom|mother|dad|father|grandma|grandmother|grandpa|grandfather|aunt|uncle|niece|nephew|cousin|parent|sibling|grandparent|colleague|coworker|boss|neighbou?r)s?\\b",
+   34
+  ]
+ },
+ "rg": {
+  "GUESS_ROLES": [
+   "wife",
+   "husband",
+   "spouse",
+   "partner",
+   "girlfriend",
+   "boyfriend",
+   "fiancée",
+   "fiancé",
+   "fiancee",
+   "fiance",
+   "mother",
+   "mum",
+   "mom",
+   "mummy",
+   "mommy",
+   "father",
+   "dad",
+   "daddy",
+   "son",
+   "daughter",
+   "sister",
+   "brother",
+   "sibling",
+   "aunt",
+   "auntie",
+   "aunty",
+   "uncle",
+   "niece",
+   "nephew",
+   "cousin",
+   "grandmother",
+   "grandma",
+   "granny",
+   "nan",
+   "nana",
+   "grandfather",
+   "grandpa",
+   "grandad",
+   "parent",
+   "grandparent",
+   "child",
+   "kid",
+   "stepmother",
+   "stepfather",
+   "stepson",
+   "stepdaughter",
+   "mother-in-law",
+   "father-in-law",
+   "sister-in-law",
+   "brother-in-law"
+  ],
+  "_ADV": "(?:probably|likely|possibly|perhaps|maybe|presumably|apparently|surely|certainly|definitely|actually|really|just|also|still)",
+  "_DET": "(?:your|his|her|their|my|our|the|a|an|(?-i:[A-Z][\\w-]{1,30}\\s[A-Z][\\w-]{1,30})['’]s|[A-Z][\\w'’-]{1,30}['’]s)",
+  "_HYPO_ANY": [
+   "\\b(?:if|whether|wonder|wondering|suppose|supposing|hypothetically|might\\s+be|could\\s+be)\\b",
+   34
+  ],
+  "_HYPO_LEAD": [
+   "^\\W*(?:is|are|was|were|am|do|does|did|can|could|would|should|will|may|might|who|whom|whose|what|which|whether|if|maybe|perhaps|possibly|probably|i\\s+(?:wonder|think|guess|suppose|believe|doubt|bet)|not\\s+sure|no\\s+idea|i'?m\\s+not\\s+sure)\\b",
+   34
+  ],
+  "_NEGATED": [
+   "\\b(?:not|never|no\\s+longer|isn'?t|wasn'?t|aren'?t|weren'?t|ain'?t|nobody|neither|nor)\\b|n['’]t\\b",
+   34
+  ],
+  "_ROLE": "brother\\-in\\-law|mother\\-in\\-law|father\\-in\\-law|sister\\-in\\-law|stepdaughter|grandmother|grandfather|grandparent|girlfriend|stepmother|stepfather|boyfriend|daughter|husband|partner|fiancée|fiancee|brother|sibling|grandma|grandpa|grandad|stepson|spouse|fiancé|fiance|mother|father|sister|auntie|nephew|cousin|granny|parent|mummy|mommy|daddy|aunty|uncle|niece|child|wife|aunt|nana|mum|mom|dad|son|nan|kid",
+  "_VERB": "(?:(?:might|may|could|must|should|would|can)(?:\\s+(?:well|(?:probably|likely|possibly|perhaps|maybe|presumably|apparently|surely|certainly|definitely|actually|really|just|also|still)))?\\s+be|(?:seems?|seemed|appears?|appeared|sounds?|sounded|looks?|looked)(?:\\s+(?:probably|likely|possibly|perhaps|maybe|presumably|apparently|surely|certainly|definitely|actually|really|just|also|still))?\\s+(?:to\\s+be|like)|(?:is|was|are|were)(?:\\s+(?:probably|likely|possibly|perhaps|maybe|presumably|apparently|surely|certainly|definitely|actually|really|just|also|still))*)"
+ }
+}

@@ -41,6 +41,7 @@ from models import MemoryProposalCreate, MemoryReviewBody
 import own_words
 import memory_authority
 import recall_evidence
+import restraint
 
 logger = logging.getLogger(__name__)
 
@@ -952,6 +953,13 @@ async def memory_for_prompt(
     # mode: that block is S4-tuned and budgeted around its closing ask.
     evidence = not continuity and recall_evidence.enabled()
     quotes = evidence and recall_evidence.wants_quotes(message, user_id)
+    # Restraint (ZOE_RESTRAINT, default shadow): rows in a sensitive class, and rows the member muted,
+    # are REMOVED from the packet unless this turn pulls them (their topic, an open question, a mood
+    # statement for feelings). Withheld, never instructed: the model is not told they exist. Shadow
+    # keeps every row and logs what enforce would have removed.
+    if restraint.mode() != "off":
+        mood = continuity or emo_turn or _is_continuity_turn(message, user_id)
+        facts, hits, recent = await restraint.apply_to_packet(user_id, message, facts, hits, recent, mood=mood)
     result = _build_memory_prompt_packet(
         facts, hits, max_facts=limit, boost_emotional=emo_turn, recent=recent,
         evidence=evidence, quotes=quotes,
@@ -966,21 +974,79 @@ async def memory_for_prompt(
     # turns beside the facts, each with the day it was said. One indexed read, only on that question shape (the message
     # itself, or - on the recall_memory tool path - the user's question of this turn); every other turn is unchanged.
     # Never in continuity mode (that block is budgeted around its closing ask).
+    xw_hits: list = []
     if not continuity and message.strip():
         try:
             import exact_words
 
             xw_question = exact_words.question_for(user_id, message)
-            xw_block = await exact_words.packet_block(user_id, xw_question) if xw_question else ""
+            xw_hits = await exact_words.lookup(user_id, xw_question) if xw_question else []
+            xw_block = exact_words.render_block(xw_hits)
         except Exception:  # noqa: BLE001 - an extra read: the packet is complete without it
-            xw_block = ""
+            xw_block, xw_hits = "", []
         if xw_block:
             result["packet"] = (result["packet"] + "\n" + xw_block) if result.get("packet") else xw_block
             result["exact_words"] = sum(1 for ln in xw_block.split("\n") if ln.startswith("- "))
+    # What the night mind noticed (ZOE_NIGHT_MIND=enforce, default OFF = no read, no I/O): at most three dated quotes of the owner's own words, only when the
+    # message names a story or is an open check-in. Relevance mode only (the continuity block is budgeted around its closing ask). Fail-open.
+    nm_served: list = []     # (turn_id, said_at, quote) of the night notes shown - recorded for "why did you say that?"
+    if not continuity and message.strip():
+        try:
+            import night_mind
+
+            nm_block = await night_mind.prompt_block(user_id, message, served=nm_served)
+            if nm_block and restraint.mode() != "off":
+                # appended after the restraint filter above: the same guest wall and mutes apply to each quote line
+                _lines = nm_block.split("\n")
+                _idx = [n for n, ln in enumerate(_lines) if ln.startswith("- ")]
+                _ok = await restraint.filter_extra(user_id, message, [_lines[n] for n in _idx], pull=True)
+                _drop = {n for n, k in zip(_idx, _ok) if not k}
+                if _drop:
+                    _lines = [ln for n, ln in enumerate(_lines) if n not in _drop]
+                    nm_block = "\n".join(_lines) if any(ln.startswith("- ") for ln in _lines) else ""
+        except Exception:  # noqa: BLE001 - an extra block: the packet is complete without it
+            nm_block = ""
+        if nm_block:
+            result["packet"] = (result["packet"] + "\n" + nm_block) if result.get("packet") else nm_block
+            result["night_notes"] = sum(1 for ln in nm_block.split("\n") if ln.startswith("- "))
+    # The personalisation hop (ZOE_PERSONALISATION_HOP, default ON): a GENERIC-ADVICE request ("any tips for sleeping
+    # better?", "what should I wear tomorrow?") gets the (<= 2) durable facts that change the answer - a night shift,
+    # a 6am dog walk, a diet, a child's age - under "Shape the answer by", with one rule line. Those facts share no
+    # words with the question, so neither the ranked read (70-day decay) nor a semantic search surfaces them. Only an
+    # advice-shaped message reads anything; every other turn is byte-for-byte what it was. Never in continuity mode.
+    hop_rows: list = []
+    if not continuity and message.strip():
+        try:
+            import personalisation_hop
+
+            hop = await personalisation_hop.build(user_id, message)
+            hop_block = hop.section()
+            hop_rows = [(f.id, f.text) for f in hop.facts] if hop_block else []
+        except Exception:  # noqa: BLE001 - an extra read: the packet is complete without it
+            hop_block = ""
+        if hop_block:
+            result["packet"] = (result["packet"] + "\n" + hop_block) if result.get("packet") else hop_block
+            result["hop"] = len(hop.facts)
+    # BM5 (ZOE_MEMORY_PROVENANCE_ANSWERS): note which rows and which of the owner's own turns this packet hands the brain, so
+    # "why did you say that?" can name the source of the reply that follows. In memory only, reduced to ids when the reply ends.
+    try:
+        import memory_provenance
+
+        if memory_provenance.enabled():
+            text_by_id = {r.id: r.text for r in (list(facts) + list(hits) + list(recent or []))}
+            memory_provenance.note_served(
+                user_id,
+                [(e["id"], text_by_id[e["id"]]) for e in (result.get("refs") or []) if e.get("id") in text_by_id] + hop_rows,
+                [(h.turn_id, h.said_at, h.text) for h in xw_hits]
+                + [(t, s, q) for t, s, q in nm_served if t and q.replace("[", "(") in (result.get("packet") or "")],
+            )
+    except Exception:  # noqa: BLE001 - bookkeeping must never fail a packet
+        pass
     if continuity:
         focus = _continuity_focus(recent or [], result.get("refs") or [])
         if focus:
             result["continuity_focus"] = focus
+            restraint.note_focus(user_id, focus.get("text"))  # a following "leave it" has a referent
 
     # Increment 2b: fold the relational half (Postgres people/relationships/dates
     # + portrait) into the packet, behind ZOE_MEMORY_COMPOSE_ENABLED (default OFF)

@@ -257,6 +257,7 @@ async def _fetch_transcript_rows(conn, session_id: str, since: Optional[Any]) ->
         FROM chat_messages
         WHERE session_id = $1
           AND ($2::timestamptz IS NULL OR created_at::timestamptz > $2)
+          AND COALESCE(metadata, '') NOT LIKE '%"off_record": true%'
         ORDER BY created_at::timestamptz
         """,
         session_id, since,

@@ -34,7 +34,9 @@ from datetime import datetime, timedelta, timezone
 
 # Shared with the day brief: naive DB timestamps are UTC; stored text is flattened,
 # bracket-free (cannot forge a delimiter) and capped.
+import restraint
 from brief_first_turn import _as_utc, _clean, trigger_key
+from proactive import lines  # delivery-ledger lines (BH2): raised / withheld, with the reason
 
 logger = logging.getLogger(__name__)
 
@@ -233,6 +235,11 @@ async def _gather(db, user_id: str, now: datetime) -> tuple[list, list, list]:
     return loops, moments, events
 
 
+async def _people_names(db, user_id: str) -> list[str]:
+    """The member's contacts' names (see ``restraint.people_names``)."""
+    return await restraint.people_names(db, user_id)
+
+
 async def select_for_user(user_id: str, *, now: datetime | None = None) -> dict | None:
     """Rank and persist one member's candidates. None when the flag is off (no
     I/O). Surfaced state (cooldown, count, session) survives the upsert; rows no
@@ -246,6 +253,10 @@ async def select_for_user(user_id: str, *, now: datetime | None = None) -> dict 
     async with get_compat_db() as db:
         scored = score_all(*await _gather(db, user_id, now), now)
         kept = rank(scored)
+        if restraint.mode() != "off":
+            # The thread classes are decided here, in code, and stored (invalidate, never delete).
+            await restraint.store_thread_classes(
+                db, user_id, [(c.source_ref, c.text, c.kind) for c in kept], await _people_names(db, user_id), now)
         for c in kept:
             await db.execute(
                 """INSERT INTO proactive_candidates (id, user_id, kind, source_ref, text, hint,
@@ -406,7 +417,7 @@ async def _load(user_id: str) -> list[tuple]:
     async with get_compat_db() as db:
         async with db.execute(
             "SELECT id, kind, text, hint, salience, on_open, cue_words, expires_at, "
-            "cooldown_until, surfaced_count, last_surfaced_session, last_surfaced_at "
+            "cooldown_until, surfaced_count, last_surfaced_session, last_surfaced_at, source_ref "
             "FROM proactive_candidates WHERE user_id = ?", (user_id,),
         ) as cur:
             return [tuple(r) for r in await cur.fetchall()]
@@ -415,6 +426,58 @@ async def _load(user_id: str) -> list[tuple]:
 def _log(uid: str, kind: str, shape: str, injected: bool, settled: bool, reason: str = "") -> None:
     logger.info("PROACTIVE_RAISE user=%s kind=%s shape=%s injected=%d settled=%d%s", uid, kind,
                 shape, int(injected), int(settled), f" reason={reason}" if reason else "")
+
+
+async def _held_line(r: tuple, uid: str, sid: str, shape: str, reason: str, *,
+                     shadow: bool = False) -> None:
+    """Delivery-ledger line (BH2, ``ZOE_DELIVERY_LEDGER``): this turn's candidate was held and
+    why. Never raises; no-op with the ledger off."""
+    await lines.log_held(candidate_id=str(r[0]), user_id=uid, reason=reason, shape=shape,
+                         session_id=sid, shadow=shadow, now=_now())
+
+
+async def _class_hold(rows: list[tuple], r: tuple, uid: str, now_dt: datetime) -> str:
+    """``class_off`` / ``class_backoff`` when the member's own "not now" taps say this item CLASS
+    should wait (``lines.class_hold``); ``""`` otherwise. Never raises."""
+    if not lines.lines_enabled():
+        return ""
+    try:
+        from db_compat import get_compat_db
+
+        last = max((str(x[11]) for x in rows if x[1] == r[1] and x[11]), default=None)
+        async with get_compat_db() as db:
+            return await lines.class_hold(db, uid, str(r[1]), last, now_dt, raise_gap_s())
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("proactive-selector: class hold unreadable (non-fatal): %r", exc)
+        return ""
+
+
+async def _stored_classes(uid: str) -> dict:
+    """The member's stored thread classes (``restraint_classes``); {} when unreadable (the class is
+    then recomputed from the text)."""
+    from db_compat import get_compat_db
+
+    try:
+        async with get_compat_db() as db:
+            return await restraint.load_thread_classes(db, uid)
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _restraint_allows(uid: str, r: tuple, shape: str, turn, mutes, stored: dict) -> bool:
+    """May this candidate row ride this turn? ``restraint.decide`` over its class and the mutes; in
+    shadow it logs a would-withhold and says yes. An ``event`` is the member's own schedule, not a
+    thread: only the guest rule (a voice the speaker gate did not confirm) withholds it."""
+    ref = str(r[12]) if len(r) > 12 and r[12] else ""
+    text, kind = str(r[2] or ""), str(r[1])
+    classes = restraint.thread_classes(ref, text, kind, stored)
+    surface = "raise_greeting" if shape == "greeting" else "raise_cue"
+    if kind == "event":
+        dec = restraint.decide(text, classes, turn if turn.verdict is False else restraint.make_turn("what's up"),
+                               (), surface=surface, source_ref=ref)
+    else:
+        dec = restraint.decide(text, classes, turn, mutes, surface=surface, source_ref=ref)
+    return restraint.gate(uid, dec, surface)
 
 
 async def _prepare(message: str, uid: str, sid: str, brief_active: bool) -> Raise | None:
@@ -434,18 +497,45 @@ async def _prepare(message: str, uid: str, sid: str, brief_active: bool) -> Rais
         return None  # already raised in this conversation (durable across restarts)
     now_dt = _now()
     now, words = _iso(now_dt), _words(message)
+    # Restraint (ZOE_RESTRAINT, restraint.py): what this turn may not carry is removed here, BEFORE the
+    # pick, so a withheld candidate never blocks the next one and nothing is ever put in a prompt
+    # with an instruction not to say it.
+    rturn = restraint.make_turn(message, verdict=restraint.current_verdict()) if restraint.mode() != "off" else None
+    rctx: dict = {}   # mutes + stored classes, read once and only when a candidate actually matches this turn
     for r in sorted(rows, key=lambda r: float(r[4] or 0), reverse=True):
         if str(r[7]) <= now or (r[8] and str(r[8]) > now) or int(r[9] or 0) >= MAX_SURFACED:
             continue
         if (shape == "greeting" and int(r[5] or 0)) or (shape == "cue" and words & set(str(r[6]).split())):
+            if rturn is not None:
+                if not rctx:
+                    rctx["mutes"], rctx["stored"] = await restraint.list_mutes(uid), await _stored_classes(uid)
+                if not _restraint_allows(uid, r, shape, rturn, rctx["mutes"], rctx["stored"]):
+                    continue
             if brief_active:  # the [Today] brief owns this turn; the candidate waits
                 _log(uid, r[1], shape, False, False, "brief")
+                await _held_line(r, uid, sid, shape, "brief")
                 return None
+            # The person's own "not now" taps tune RAISING per item class (ZOE_DELIVERY_LEDGER
+            # = on); in shadow the hold is only logged. Awaited BEFORE the spacing check: the
+            # check-to-hold stretch below must stay await-free.
+            chold = await _class_hold(rows, r, uid, now_dt)
+            if chold:
+                _log(uid, r[1], shape, False, False, chold + ("" if lines.backoff_active() else "-shadow"))
+                await _held_line(r, uid, sid, shape, chold, shadow=not lines.backoff_active())
+                if lines.backoff_active():
+                    continue  # this CLASS waits; another class's candidate stays eligible
+            # The ledger's back-off (SAL7): read BEFORE the synchronous block below, which must have
+            # no await between its check and the hold.
+            backoff = ""
+            if rturn is not None:
+                backoff = await restraint.backoff_why(uid, str(r[1]), rows, now_dt,
+                                                      base_gap_s=raise_gap_s() or 7200)
             # Per member, not per conversation. No await from this check to the hold
             # below, so two overlapping turns cannot both pass it.
-            why = "held" if _held(("u", uid)) else _spacing(rows, now_dt)
+            why = "held" if _held(("u", uid)) else (_spacing(rows, now_dt) or backoff)
             if why:
                 _log(uid, r[1], shape, False, False, why)
+                await _held_line(r, uid, sid, shape, why)
                 return None
             token = uuid.uuid4().hex
             _holds[("s", sid)] = _holds[("u", uid)] = (token, time.monotonic())
@@ -508,6 +598,10 @@ async def _settle(raised: Raise, produced: bool) -> bool:
                     db, candidate_id=raised.candidate_id, user_id=raised.user_id,
                     session_id=raised.session_id, shape=raised.shape, now=now,
                     trigger=raised.trigger)
+                await lines.log_for_candidate(
+                    db, line="raised", candidate_id=raised.candidate_id, user_id=raised.user_id,
+                    reason="open_turn" if raised.shape == "greeting" else "cue",
+                    shape=raised.shape, session_id=raised.session_id, now=now)
             settled = True
     except Exception as exc:  # noqa: BLE001
         logger.warning("proactive-selector: settle failed user=%s: %r", raised.user_id, exc)
@@ -560,6 +654,9 @@ async def mark_brief_surfaced(user_id: str, session_id: str,
                         shape="brief", delivered_by="brief", session_id=session_id,
                         cue_words=" ".join(sorted(loop_anchors(text))), now=now,
                         trigger=trigger)
+                await lines.record(db, user_id=user_id, line="raised", kind=kind,
+                                   source_ref=ref, reason="brief", shape="brief",
+                                   session_id=session_id, now=now)
     except Exception as exc:  # noqa: BLE001
         logger.warning("proactive-selector: brief mark failed user=%s: %r", user_id, exc)
         return 0

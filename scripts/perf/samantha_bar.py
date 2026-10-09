@@ -15,7 +15,9 @@ Scenarios (docs/knowledge/samantha-bar.md has what each one proves):
   S3 decline when nothing was said        S7 keep the richer fact over a short dup
   S4 the emotional thread, gently         S8 recall after 30+ turns of filler
   S10 one-word change ("gave up the cello") — expected FAIL today: a TARGET, not a regression
-  S11 ask-to-remember — expected SKIP: the behaviour is not built
+  S11 ask-to-remember — "Remember that ..." / "Keep in mind ..." is stored verbatim and confirmed in one
+      sentence, is idempotent, answers "do you remember what I asked you to remember?", and "Forget that" retracts
+      it (ZOE_ASK_TO_REMEMBER, default on; flag off = FAIL)
   S12 raise spacing — two open conversations minutes apart must not both open with a raise
   S13-S16 contacts conversation (2026-10-04): list-all, "my brother X" -> relationship, one
           record per person, one enumerated offer question + one yes (S15/S16 need the
@@ -25,6 +27,12 @@ Scenarios (docs/knowledge/samantha-bar.md has what each one proves):
       expected FAIL until ZOE_CORRECTION_APPLY is on (a TARGET, not a regression)
   S22 roles are stated, never guessed from first names — a pasted list with no roles must not
       come back with a wife / "the girls"; expected FAIL until ZOE_ROSTER_NEUTRAL_ASK is on
+  S23 "why did you say that?" - the previous reply's source: the day and the owner's own words, verbatim; a reply that used
+      no memory says so (BM5, ZOE_MEMORY_PROVENANCE_ANSWERS)
+  S24 "what do you know about me?" - a bounded grouped summary; private classes counted not read, pulled by name; a user
+      with nothing stored gets nothing of anyone else's (BM5)
+  S25 off the record - a marked turn leaves no row, no exact-words copy, no indexable transcript copy; a normal turn beside it
+      does (the negative control inside the scenario) (BM5)
   (S9, the personalisation hop, needs the user-model card, which a fresh synthetic bar user
   can never be served: it lives in scripts/perf/samantha_day_sim.py.)
 
@@ -133,7 +141,7 @@ AUTH_OWNED_TABLES = frozenset({
 })
 SCENARIO_IDS = ("S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S10", "S11", "S12",
                 "S13", "S14", "S15", "S16",
-                "S20", "S21", "S22")
+                "S20", "S21", "S22", "S23", "S24", "S25", "S26", "S27")
 VERDICTS = ("PASS", "FAIL", "SKIP", "ERROR")
 
 
@@ -163,6 +171,7 @@ ASK_LONG_DAD = "What did my dad do for work before he retired?"
 # in a fresh session — the first should raise the day-1 worry, the second must not.
 ASK_OPEN_1 = "Hi Zoe, how are things?"
 ASK_OPEN_2 = "Hey Zoe, what's new?"
+ASK_PULL = "What's up?"   # S26: a pull (proactive/pull.py), not a greeting - "what's new" stays one
 S5_NEEDLES = ("interview", "aquarium")
 # S10: a one-word change of state. "gave up" is a supersede cue, but the tombstone
 # ("User gave up the cello") shares one topic word with the old row, so
@@ -172,8 +181,16 @@ SAY_CELLO_STOP = "I gave up the cello."
 ASK_CELLO = "Do I still play the cello?"
 S10_STOP_CUES = ("gave up", "given up", "stopped", "quit", "no longer", "not anymore",
                  "don't play", "do not play", "not playing", "no more")
-S11_WHY = ("not built: zoe-data has no ask-to-remember behaviour (nothing asks the user for a "
-           "reusable preference when a task would benefit); reserved so the gap stays visible")
+# S11 (2026-10-09): the owner's EXPLICIT memory ask (ask_to_remember.py). Synthetic facts only.
+SAY_REMEMBER = "Remember that my favourite tea is lapsang souchong."
+SAY_KEEP_IN_MIND = "Keep in mind that I can't stand coriander."
+ASK_TEA = "What's my favourite tea?"
+ASK_REMEMBERED = "Do you remember what I asked you to remember?"
+SAY_FORGET_THAT = "Forget that."
+S11_NEEDLES = ("lapsang", "coriander")
+S11_NARRATION = ("let me", "one moment", "hold on", "i'll check", "i will check", "checking", "saving that",
+                 "let me save", "give me a second", "bear with me")
+S11_MAX_WORDS = 16   # "one short sentence": the deterministic confirmations are 4-5 words
 
 # S13-S16 (2026-10-04): the contacts conversation classes. Synthetic people only.
 # The regex lane, the Flue people tool and the voice handler all end in the same
@@ -211,6 +228,31 @@ ASK_ROSTER = "Who is Anika Reyes?"
 S22_NAMES = ("callum", "anika", "tobias", "ines")
 S22_ROLES = ("wife", "husband", "daughter", "daughters", "son", "sons", "girl", "girls", "boy", "boys",
              "mother", "father", "mum", "dad", "girlfriend", "boyfriend")
+
+# S23-S25 (BM5, 2026-10-09): provenance answers and memory control. Synthetic people only.
+ASK_WHY = "Why did you say that?"
+ASK_NOMEM = "What is the capital of Australia?"
+S23_OWN_WORDS = "my sister marisol is flying in from lisbon on thursday"       # SAY_SISTER, verbatim, normalised
+S23_OTHER_FACTS = ("teodor", "lighthouse", "dunedin", "hobart", "aquarium", "interview")
+S23_NO_MEMORY_MARKERS = ("didn't use anything i'd remembered", "nothing in that answer came from them")
+SAY_PRIVATE = "I get migraines most weeks, my doctor says it's stress."
+S24_PRIVATE_NEEDLE = "migraine"
+ASK_KNOW_ME = "What do you know about me?"
+ASK_KNOW_HEALTH = "What do you know about my health?"
+SAY_OTR_CONTROL = "My neighbour Odalys keeps bees on her roof."
+SAY_OTR_PAYLOAD = "Off the record: my brother-in-law Cormac is secretly getting a divorce."
+ASK_OTR_PACKET = "What exactly did I say about Cormac and his divorce, my brother-in-law?"
+ASK_OTR_FRESH = "What do you know about my brother-in-law Cormac?"
+SAY_OTR_BARE = "Off the record."
+SAY_OTR_NEXT = "My cousin Lysander lost his job at the shipyard last week."
+ASK_OTR_NEXT_PACKET = "What exactly did I say about Lysander and the shipyard?"
+S25_CONTROL_NEEDLE = ("odalys",)
+S25_SECRET_NEEDLES = ("cormac", "divorce")
+S25_SECRET_IN_REPLY = ("divorce",)       # the question names Cormac, so the NAME in a reply proves nothing; the secret does
+S25_NEXT_NEEDLES = ("lysander", "shipyard")
+# The transcript rows that carry the marked turn: matched on words ONLY that turn says (the fresh-session question names Cormac
+# too, and is an ordinary turn that must NOT be flagged).
+S25_TRANSCRIPT_NEEDLE = "secretly getting a divorce"
 
 # Needles belonging to user A. None may ever reach user B (S6).
 A_NEEDLES = ("marisol", "lisbon", "dunedin", "hobart", "aquarium", "teodor", "lighthouse")
@@ -285,9 +327,14 @@ SCENARIOS: tuple[dict[str, Any], ...] = (
                "the reply says they stopped — the known supersede miss, a target not a regression",
      "turns": [("A", "d1-cello", SAY_CELLO), ("A", "d2-cello", SAY_CELLO_STOP)],
      "asks": [("A", ASK_CELLO)]},
-    {"id": "S11", "title": "ask-to-remember (not built)", "judged": False, "expected": "SKIP",
-     "proves": "Zoe asks for a reusable preference when a task would benefit — " + S11_WHY,
-     "turns": [], "asks": []},
+    {"id": "S11", "title": "ask-to-remember", "judged": False,
+     "proves": "'Remember that my favourite tea is lapsang souchong' and 'Keep in mind that I can't stand "
+               "coriander' are each stored verbatim and confirmed in ONE short sentence that is never "
+               "'I'll remember' without a row; a repeat adds no row; a fresh session recalls the tea; "
+               "'Do you remember what I asked you to remember?' gives both back; 'Forget that' retracts "
+               "the newest (coriander) and leaves the tea (ZOE_ASK_TO_REMEMBER; flag off = FAIL)",
+     "turns": [("A", "s11-say", SAY_REMEMBER), ("A", "s11-keep", SAY_KEEP_IN_MIND), ("A", "s11-repeat", SAY_REMEMBER)],
+     "asks": [("A", ASK_TEA), ("A", ASK_REMEMBERED), ("A", SAY_FORGET_THAT)]},
     {"id": "S12", "title": "raise spacing", "judged": False,
      "proves": "of S5's two open turns minutes apart, the second carries no raise of ANY candidate "
                "(the regression check for #1801's per-member raise gap, ZOE_PROACTIVE_RAISE_GAP_S)",
@@ -324,6 +371,32 @@ SCENARIOS: tuple[dict[str, Any], ...] = (
                "first names, in the reply or the store, and one question asks who's who — a TARGET "
                "until ZOE_ROSTER_NEUTRAL_ASK is on (people_roles.py)",
      "turns": [("A", "s22-roster", SAY_ROSTER)], "asks": [("A", ASK_ROSTER)]},
+    {"id": "S23", "title": "why did you say that?", "judged": False,
+     "proves": "right after a reply that used memory, 'Why did you say that?' names the day and the owner's own words "
+               "(verbatim, never a paraphrase, never another fact), offers the fix; right after a reply that used no "
+               "memory it says so plainly (BM5, ZOE_MEMORY_PROVENANCE_ANSWERS)",
+     "turns": [("A", "d1-sister", SAY_SISTER)],
+     "asks": [("A", ASK_SISTER), ("A", ASK_WHY), ("A", ASK_NOMEM), ("A", ASK_WHY)]},
+    {"id": "S24", "title": "what do you know about me?", "judged": False,
+     "proves": "a bounded grouped summary of the owner's own rows; a private fact is counted, never read, until it is "
+               "pulled by name; a user with nothing stored is told so and gets nothing of anyone else's (BM5)",
+     "turns": [("A", "d1-sister", SAY_SISTER), ("A", "s24-private", SAY_PRIVATE)],
+     "asks": [("A", ASK_KNOW_ME), ("A", ASK_KNOW_HEALTH), ("B", ASK_KNOW_ME)]},
+    {"id": "S25", "title": "off the record", "judged": False,
+     "proves": "'Off the record: ...' (and a bare 'Off the record.' then the next turn) leaves NO memory row, NO exact-words "
+               "copy and a transcript row flagged non-indexable; an ordinary turn beside it does land (the control) (BM5)",
+     "turns": [("A", "s25-control", SAY_OTR_CONTROL), ("A", "s25-secret", SAY_OTR_PAYLOAD),
+               ("A", "s25-bare", SAY_OTR_BARE), ("A", "s25-next", SAY_OTR_NEXT)],
+     "asks": [("A", ASK_OTR_FRESH)]},
+    {"id": "S26", "title": "pull, not push: 'what's up?' delivers what is pending, once", "judged": False,
+     "proves": "with the worry pending again (S5's raise re-armed), 'What's up?' delivers it ONCE, "
+               "marks it delivered, and a second 'What's up?' says nothing new "
+               "(ZOE_PULL_NOT_PUSH, proactive/pull.py; FAIL with the flag off)",
+     "turns": [], "asks": [("A", ASK_PULL), ("A", ASK_PULL)]},
+    {"id": "S27", "title": "pull, not push: the orb state is a count, never content", "judged": False,
+     "proves": "GET /api/proactive/inbox reads count >= 1 and a coarse class (no words of the worry) "
+               "while it is pending, 0 once pulled, and 0 for a guest",
+     "turns": [], "asks": []},
 )
 EXPECTED ={s["id"]: s["expected"] for s in SCENARIOS if s.get("expected")}
 
@@ -336,14 +409,17 @@ AXIS_OF = {"S1": "recall", "S7": "recall", "S8": "recall",
            "S2": "temporal", "S10": "temporal",
            "S3": "abstention",
            "S4": "emotional", "S5": "emotional", "S12": "emotional",
-           "S6": "authority",
+           "S26": "emotional", "S27": "emotional",
+           "S6": "authority", "S11": "authority",
            "S13": "extraction", "S14": "extraction", "S15": "extraction", "S16": "extraction",
-           "S20": "extraction", "S21": "extraction", "S22": "extraction"}
+           "S20": "extraction", "S21": "extraction", "S22": "extraction",
+           "S23": "recall", "S24": "recall", "S25": "forgetting"}
 # A scenario that only ASKS about facts another scenario SEEDS: selecting it still runs those
 # seed turns (the asks and verdicts of the unselected scenario are NOT run or reported).
-SEED_DEPS = {"S5": ("S4",), "S12": ("S5",), "S6": ("S1", "S7"), "S8": ("S1", "S7")}
+SEED_DEPS = {"S5": ("S4",), "S12": ("S5",), "S26": ("S5",), "S27": ("S5",),
+             "S6": ("S1", "S7"), "S8": ("S1", "S7"), "S23": ("S1",), "S24": ("S1", "S7")}
 # Scenarios whose setup needs the day-1 -> day-2 backdate.
-MULTI_DAY = frozenset({"S2", "S4", "S5", "S7", "S10", "S12"})
+MULTI_DAY = frozenset({"S2", "S4", "S5", "S7", "S10", "S12", "S26", "S27"})
 
 
 def parse_selection(only: str | None, axis: str | None) -> frozenset[str] | None:
@@ -699,6 +775,59 @@ def score_s10(reply: str, packet: str | None) -> tuple[str, dict]:
     return "PASS", ev
 
 
+def short_confirmation(reply: str) -> dict:
+    """One short sentence that confirms and does not narrate (the shape ask-to-remember promises)."""
+    words = len((reply or "").split())
+    sentences = len([x for x in re.split(r"(?<=[.!?])\s+", (reply or "").strip()) if x])
+    low = normalize(reply)
+    return {"words": words, "sentences": sentences,
+            "confirms": contains_any(low, ("remember", "got it", "noted", "already got")),
+            "narrates": contains_any(low, S11_NARRATION),
+            "short": 0 < words <= S11_MAX_WORDS and sentences <= 1}
+
+
+def score_s11(t: dict) -> tuple[str, dict]:
+    """The whole ask-to-remember contract from the turns' replies and the recall packets:
+
+    ``t`` keys - say_tea / say_keep (replies), packet_after_say / packet_after_keep / packet_final (recall
+    packets, None = the read failed), count_once / count_repeat (rows in the packet after the ask / after the
+    repeat), repeat_reply, tea_reply (a FRESH session's answer), recall_reply, forget_reply.
+    ERROR when a packet could not be read (a store that was not inspected is never certified)."""
+    for k in ("packet_after_say", "packet_after_keep", "packet_final"):
+        if t.get(k) is None:
+            return "ERROR", {"method": "deterministic", "why": f"recall packet read failed ({k})"}
+    conf_tea, conf_keep = short_confirmation(t["say_tea"]), short_confirmation(t["say_keep"])
+    why = []
+    for name, c in (("tea", conf_tea), ("coriander", conf_keep)):
+        if not (c["confirms"] and c["short"]) or c["narrates"]:
+            why.append(f"the {name} ask is not confirmed in one short sentence ({c})")
+    if "lapsang" not in normalize(t["packet_after_say"]):
+        why.append("'I'll remember' with no row: the tea is not in the recall packet")
+    if "coriander" not in normalize(t["packet_after_keep"]):
+        why.append("'I'll remember' with no row: the coriander is not in the recall packet")
+    n1, n2 = t.get("count_once"), t.get("count_repeat")
+    if n1 is None or n2 is None:
+        why.append("the row count could not be read, so idempotency is unproven")
+    elif n2 != n1:
+        why.append(f"a repeat of the same ask added rows ({n1} -> {n2})")
+    if not short_confirmation(t["repeat_reply"])["confirms"]:
+        why.append("the repeat was not acknowledged")
+    if "lapsang" not in normalize(t["tea_reply"]):
+        why.append("a fresh session does not recall the tea")
+    if len(found_needles(t["recall_reply"], S11_NEEDLES)) < len(S11_NEEDLES):
+        why.append("'do you remember what I asked you to remember?' did not give both back")
+    final = normalize(t["packet_final"])
+    if "coriander" in final:
+        why.append("'Forget that' left the coriander in the recall packet")
+    if "lapsang" not in final:
+        why.append("'Forget that' also removed the tea (it must retract only the newest)")
+    if not contains_any(t["forget_reply"], ("forgot", "forgotten")):
+        why.append("'Forget that' did not say it forgot")
+    ev = {"method": "deterministic", "confirm_tea": conf_tea, "confirm_keep": conf_keep,
+          "rows_after_ask": n1, "rows_after_repeat": n2}
+    return ("FAIL", {**ev, "why": "; ".join(why)}) if why else ("PASS", ev)
+
+
 def score_s12(rows: list[dict], s1: str, s2: str) -> tuple[str, dict]:
     """rows: proactive_candidates ({surfaced, session}) after S5's two open turns.
     PASS iff no candidate was surfaced in the second session; SKIP when nothing was
@@ -715,6 +844,81 @@ def score_s12(rows: list[dict], s1: str, s2: str) -> tuple[str, dict]:
     if s1 not in sessions:
         return "SKIP", {**ev, "why": "nothing was raised on the first open turn — spacing not exercised"}
     return "PASS", ev
+
+
+NOTHING_NEW = "nothing new"
+INBOX_KEYS = {"enabled", "count", "top", "quiet"}
+INBOX_CLASSES = ("question", "notify")
+
+
+def score_s26(reply1: str, reply2: str, rows: list[dict]) -> tuple[str, dict]:
+    """rows: proactive_candidates for demo A AFTER both asks ({carries, surfaced}). The pull
+    delivered the worry once (it is voiced, the candidate is marked surfaced exactly once) and the
+    second ask says nothing new and does not repeat it."""
+    carrying = [r for r in rows if r.get("carries")]
+    ev: dict[str, Any] = {"method": "deterministic", "carrying": len(carrying),
+                          "delivered_first": contains_any(reply1, S5_NEEDLES),
+                          "repeated_second": contains_any(reply2, S5_NEEDLES),
+                          "nothing_new_second": NOTHING_NEW in normalize(reply2),
+                          "surfaced": max((int(r.get("surfaced") or 0) for r in carrying), default=0)}
+    if not carrying:
+        return "FAIL", {**ev, "why": "no candidate carrying the worry to pull"}
+    if not ev["delivered_first"]:
+        return "FAIL", {**ev, "why": "'What's up?' did not deliver the pending worry"}
+    if ev["repeated_second"]:
+        return "FAIL", {**ev, "why": "the second ask delivered the worry again"}
+    if not ev["nothing_new_second"]:
+        return "FAIL", {**ev, "why": "the second ask did not say there is nothing new"}
+    if ev["surfaced"] != 1:
+        return "FAIL", {**ev, "why": f"surfaced_count={ev['surfaced']}, expected exactly 1"}
+    return "PASS", {**ev, "why": "delivered once, cleared, nothing new on the second ask"}
+
+
+def score_s27(before: dict | None, after: dict | None, guest: dict | None) -> tuple[str, dict]:
+    """The orb's state (``GET /api/proactive/inbox``) for demo A while the worry is pending
+    (``before``), after the pull (``after``), and for a guest. A count and a coarse class only:
+    no word of the worry may appear anywhere in any of the three bodies."""
+    ev: dict[str, Any] = {"method": "deterministic", "before": before, "after": after, "guest": guest}
+    if before is None or after is None or guest is None:
+        return "FAIL", {**ev, "why": "the inbox state route is not there (or answered an error)"}
+    blob = json.dumps([before, after, guest], sort_keys=True)
+    ev["content_free"] = not contains_any(blob, S5_NEEDLES + ("anxious", "worry", "job"))
+    if not before.get("enabled"):
+        return "FAIL", {**ev, "why": "the orb state is disabled (ZOE_PULL_NOT_PUSH or the selector is off)"}
+    if int(before.get("count") or 0) < 1:
+        return "FAIL", {**ev, "why": "a pending worry is not counted"}
+    if before.get("top") not in INBOX_CLASSES:
+        return "FAIL", {**ev, "why": "the top class is not a coarse class"}
+    if any(set(b) != INBOX_KEYS for b in (before, after, guest)):
+        return "FAIL", {**ev, "why": "the state carries fields beyond count / class / quiet"}
+    if not ev["content_free"]:
+        return "FAIL", {**ev, "why": "the state names what is pending"}
+    if int(after.get("count") or 0) != 0:
+        return "FAIL", {**ev, "why": "the state does not clear once pulled"}
+    if int(guest.get("count") or 0) != 0:
+        return "FAIL", {**ev, "why": "a guest's panel reads a non-zero count"}
+    return "PASS", {**ev, "why": "count and class only; cleared by the pull; a guest reads 0"}
+
+
+def run_pull(live: "Live", a: str) -> tuple[tuple[str, dict], tuple[str, dict]]:
+    """S26 + S27 on demo A, after S5/S12 have used the selector's raise: re-arm the worry's
+    candidate (a harness-only DB step on the demo id), read the orb state, ask 'What's up?' twice,
+    read the state again. Returns ((v26, ev26), (v27, ev27))."""
+    armed = live.rearm(a)
+    if not armed.get("armed"):
+        why = {"why": "no candidate carrying the day-1 worry to re-arm", "rearm": armed}
+        return ("SKIP", why), ("SKIP", why)
+    before, guest = live.inbox(a), live.inbox(None)
+    t1 = live.chat(a, "s26-pull-1", ASK_PULL)
+    t2 = live.chat(a, "s26-pull-2", ASK_PULL)
+    after = live.inbox(a)
+    rows = live.raise_state(a)
+    if t1["error"] or t2["error"]:
+        err = {"why": "a pull turn failed", "asks": [live.evidence(t1), live.evidence(t2)]}
+        return ("ERROR", err), score_s27(before, after, guest)
+    v26, ev26 = score_s26(t1["reply"], t2["reply"], rows)
+    ev26["asks"] = [live.evidence(t1), live.evidence(t2)]
+    return (v26, ev26), score_s27(before, after, guest)
 
 
 def score_s13(reply: str) -> tuple[str, dict]:
@@ -831,6 +1035,101 @@ def score_s22(roster_reply: str, ask_reply: str, packet: str | None) -> tuple[st
         why.append("a role was assigned to a name the user never gave one")
     if not ev["asks_a_question"]:
         why.append("the list was not answered with a who's-who question")
+    return ("FAIL", {**ev, "why": "; ".join(why)}) if why else ("PASS", ev)
+
+
+_DAY_PHRASE_RE = re.compile(
+    r"\b(?:earlier today|yesterday|on (?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|"
+    r"on \d{1,2} (?:january|february|march|april|may|june|july|august|september|october|november|december)(?: \d{4})?)"
+    r" you told me\b")      # the day must be the day they TOLD it: "flying in on Thursday" in a brain's answer is not one
+
+
+def score_s23(ask: str, why: str, nomem: str, nomem_why: str) -> tuple[str, dict]:
+    """BM5. Leg 1: after a reply that used memory, the explanation quotes the owner's OWN words (SAY_SISTER, verbatim - the
+    normalised words, not the stored paraphrase), names a day, offers the fix, is spoken-length and names no OTHER stored fact.
+    Leg 2: after a reply that used no memory it says so and names no personal fact. A canned brain answer to "why did you say
+    that?" (flag off) carries none of the verbatim words, so this fails without the feature."""
+    w, nw = normalize(why), normalize(nomem_why)
+    ev = {"method": "deterministic",
+          "quotes_own_words": S23_OWN_WORDS in w,
+          "names_a_day": bool(_DAY_PHRASE_RE.search(w)),
+          "offers_the_fix": "forget" in w and ("wrong" in w or "right answer" in w),
+          "short": len(why.split()) <= 70,
+          "names_other_facts": found_needles(why, S23_OTHER_FACTS),
+          "no_memory_says_so": any(m in nw for m in S23_NO_MEMORY_MARKERS),
+          "no_memory_names_a_fact": found_needles(nomem_why, A_NEEDLES),
+          "ask_used_memory": contains_any(ask, ("marisol", "lisbon"))}
+    if not ev["ask_used_memory"]:      # nothing to explain: a setup problem, not a verdict on the feature
+        return "ERROR", {**ev, "why": "the recall reply did not use the stored fact, so there was nothing to explain"}
+    why_fail = []
+    if not ev["quotes_own_words"]:
+        why_fail.append("the explanation does not quote the owner's own words verbatim")
+    if not ev["names_a_day"]:
+        why_fail.append("the explanation names no day")
+    if not ev["offers_the_fix"]:
+        why_fail.append("the explanation does not offer to fix or forget")
+    if not ev["short"] or ev["names_other_facts"]:
+        why_fail.append("the explanation is not one short answer about the one source")
+    if not ev["no_memory_says_so"] or ev["no_memory_names_a_fact"]:
+        why_fail.append("a reply that used no memory was not said to have used none")
+    return ("FAIL", {**ev, "why": "; ".join(why_fail)}) if why_fail else ("PASS", ev)
+
+
+def score_s24(summary: str, pulled: str, other: str) -> tuple[str, dict]:
+    """BM5. The owner's summary lists what they told Zoe (the sister), is bounded, COUNTS the private fact without reading it, and
+    the same private fact comes back only when pulled by name; another user with nothing stored gets nothing of A's."""
+    s_n, p_n, o_n = normalize(summary), normalize(pulled), normalize(other)
+    ev = {"method": "deterministic",
+          "grouped_summary": s_n.startswith("here's what i've got on you") or s_n.startswith("here's the short version"),
+          "names_the_sister": "marisol" in s_n,
+          "bounded": len(summary) <= 2600 and summary.count("\n") <= 32,
+          "private_read_unasked": S24_PRIVATE_NEEDLE in s_n,
+          "private_counted": "private" in s_n,
+          "private_read_when_pulled": S24_PRIVATE_NEEDLE in p_n,
+          "other_user_sees": found_needles(other, A_NEEDLES + (S24_PRIVATE_NEEDLE,)),
+          "other_user_told_nothing_known": "don't know much about you yet" in o_n}
+    why = []
+    if not ev["grouped_summary"] or not ev["names_the_sister"]:
+        why.append("the summary is not the grouped list of what the owner told Zoe")
+    if not ev["bounded"]:
+        why.append("the summary is not bounded")
+    if ev["private_read_unasked"] or not ev["private_counted"]:
+        why.append("the private fact was read unasked (or not counted)")
+    if not ev["private_read_when_pulled"]:
+        why.append("pulling the private class by name did not return it")
+    if ev["other_user_sees"] or not ev["other_user_told_nothing_known"]:
+        why.append("another user was shown something of the owner's (or was not told there is nothing stored)")
+    return ("FAIL", {**ev, "why": "; ".join(why)}) if why else ("PASS", ev)
+
+
+def score_s25(control_packet: str | None, secret_packet: str | None, next_packet: str | None, bare_ack: str,
+              fresh_reply: str, transcript: dict | None) -> tuple[str, dict]:
+    """BM5. Control: the ordinary neighbour turn LANDED (so absence means something). The marked turn left nothing in the packet
+    (memory rows AND the exact-words block, which the packet question asks for); the bare cue was acknowledged and the NEXT turn
+    left nothing; a fresh session is not told the secret; the transcript row of the marked turn is flagged non-indexable."""
+    if control_packet is None or secret_packet is None or next_packet is None:
+        return "ERROR", {"method": "deterministic", "why": "recall packet read failed"}
+    t = transcript or {}
+    ev = {"method": "deterministic",
+          "control_landed": len(found_needles(control_packet, S25_CONTROL_NEEDLE)) == len(S25_CONTROL_NEEDLE),
+          "secret_in_packet": found_needles(secret_packet, S25_SECRET_NEEDLES),
+          "next_turn_in_packet": found_needles(next_packet, S25_NEXT_NEEDLES),
+          "bare_cue_acknowledged": "off the record" in normalize(bare_ack) and "won't keep" in normalize(bare_ack),
+          "fresh_session_knows_the_secret": found_needles(fresh_reply, S25_SECRET_IN_REPLY),
+          "transcript_rows": t.get("rows"), "transcript_flagged": t.get("flagged")}
+    why = []
+    if not ev["control_landed"]:
+        return "ERROR", {**ev, "why": "the control turn never landed, so the absence below proves nothing"}
+    if ev["secret_in_packet"]:
+        why.append("the off-the-record turn reached the memory store or the exact-words index")
+    if not ev["bare_cue_acknowledged"] or ev["next_turn_in_packet"]:
+        why.append("a bare 'off the record' did not keep the NEXT turn out of memory")
+    if ev["fresh_session_knows_the_secret"]:
+        why.append("a fresh session was told the secret")
+    if t.get("rows") is None:
+        return "ERROR", {**ev, "why": "the transcript read failed (no chat_messages check)"}
+    if not t.get("rows") or t.get("flagged") != t.get("rows"):
+        why.append("the transcript row of the marked turn is not flagged non-indexable")
     return ("FAIL", {**ev, "why": "; ".join(why)}) if why else ("PASS", ev)
 
 
@@ -1047,7 +1346,7 @@ def plan_text(samples: int, selected: "frozenset[str] | None" = None) -> str:
              f"  judged scenarios ask {samples}x, majority vote; judge rubric sha {JUDGE_PROMPT_SHA256[:12]}",
              "  order: day 1 (S1 seed+ask, S2/S4/S7 seeds) -> backdate day-1 sessions 26h ->",
              "         day 2 (S2 move+ask, S7 short dup+ask, S10 'gave up'+ask, S4 ask, S3 ask) -> S5 selector"
-         " hook + 2 open turns (S12 scores their spacing) -> S20/S21/S22 (dates, corrections, roles) -> S6 -> S8 -> contacts S13-S16; S11 is a reserved SKIP"]
+         " hook + 2 open turns (S12 scores their spacing) -> S11 (ask-to-remember) -> S20/S21/S22 (dates, corrections, roles) -> S23/S24/S25 (why did you say that, what do you know about me, off the record) -> S6 -> S8 -> contacts S13-S16"]
     need = seed_closure(selected) if selected is not None else None
     if selected is not None and selected != frozenset(SCENARIO_IDS):
         lines.append(f"  PARTIAL RUN (--only/--axis): {', '.join(s for s in SCENARIO_IDS if s in selected)}"
@@ -1312,6 +1611,25 @@ class Live:
                     "missing": missing}
         return self.db(_f)
 
+    def transcript_off_record(self, user: str, needle: str) -> dict | None:
+        """The user's saved TRANSCRIPT rows (chat_messages, role user) that mention ``needle``, and how many carry the
+        ``off_record`` flag (BM5). Exact session ids of this run only. None when the read failed."""
+        assert_demo_user(user)
+        sids = [x for x in self.sessions.get(user, []) if x.startswith("bar-")]
+        if not sids:
+            return {"rows": 0, "flagged": 0}
+
+        async def _f(conn):
+            rows = await conn.fetch(
+                "SELECT metadata FROM chat_messages WHERE session_id = ANY($1::text[]) AND role = 'user' "
+                "AND content ILIKE $2", sids, f"%{needle}%")
+            flagged = sum(1 for r in rows if '"off_record": true' in (r["metadata"] or ""))
+            return {"rows": len(rows), "flagged": flagged}
+        try:
+            return self.db(_f)
+        except Exception:  # noqa: BLE001 - reported as ERROR by the scorer, never a pass
+            return None
+
     def run_selector(self, user: str) -> dict | None:
         """The S5 hook: POST /api/proactive/selector/run-synthetic (internal token;
         the server refuses any id that is not harness-minted). None = no route."""
@@ -1330,6 +1648,29 @@ class Live:
                      "surfaced": r["surfaced_count"], "session": r["last_surfaced_session"]}
                     for r in rows]
         return self.db(_f)
+
+    def rearm(self, user: str) -> dict:
+        """Make the demo user's candidates pending again after S5's raise (cooldown, count and
+        session cleared) so S26 has something to pull. Harness-only, demo id only."""
+        assert_demo_user(user)
+
+        async def _f(conn):
+            n = await conn.execute(
+                "UPDATE proactive_candidates SET cooldown_until = NULL, surfaced_count = 0, "
+                "last_surfaced_session = NULL, last_surfaced_at = NULL WHERE user_id = $1", user)
+            rows = await conn.fetch("SELECT text FROM proactive_candidates WHERE user_id = $1", user)
+            return {"rows": int(str(n).split()[-1] or 0),
+                    "armed": sum(1 for r in rows if contains_any(r["text"] or "", S5_NEEDLES))}
+        return self.db(_f)
+
+    def inbox(self, user: str | None) -> dict | None:
+        """GET /api/proactive/inbox as demo ``user`` (internal token + acting-user header), or as
+        a guest (no credentials) when None. None = the route answered an error."""
+        if user is not None:
+            assert_demo_user(user)
+        headers = {"X-Internal-Token": self.token, "X-Zoe-User-Id": user} if user else {}
+        code, body = self._req("GET", f"{DATA_BASE}/api/proactive/inbox", headers, None, timeout=30)
+        return body if code == 200 and isinstance(body, dict) else None
 
     def proactive_hooks(self, user: str) -> list[dict]:
         assert_demo_user(user)
@@ -1695,7 +2036,46 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
         else:
             v, ev = score_s10(t["reply"], pkt)
             put("S10", v, ask={**live.evidence(t), **ev})
-    put("S11", "SKIP", why=S11_WHY)
+    # S11: the owner's explicit memory ask. Same-session, no backdate: the ask is a synchronous write; the
+    # post-turn capture (which derives a near-identical row from the same turn) is OBSERVED before each read.
+    if ask("S11"):
+        log("S11: remember / keep in mind / repeat / fresh-session recall / recall question / forget that")
+        t = {}
+        cap = live.capture_status(a)
+        r1 = say(a, "s11-say", SAY_REMEMBER)
+        w1 = live.wait_captured(a, cap)
+        t["say_tea"] = r1["reply"]
+        t["packet_after_say"] = live.packet(a, ASK_TEA)
+        cap = live.capture_status(a)
+        r2 = say(a, "s11-keep", SAY_KEEP_IN_MIND)
+        w2 = live.wait_captured(a, cap)
+        t["say_keep"] = r2["reply"]
+        t["packet_after_keep"] = live.packet(a, "coriander")
+        t["count_once"] = live.packet_count(a)
+        cap = live.capture_status(a)
+        r3 = say(a, "s11-repeat", SAY_REMEMBER)
+        w3 = live.wait_captured(a, cap)
+        t["repeat_reply"] = r3["reply"]
+        t["count_repeat"] = live.packet_count(a)
+        r4 = say(a, "s11-fresh-ask", ASK_TEA)          # a different session: the row, not the context, answers
+        r5 = say(a, "s11-recall-q", ASK_REMEMBERED)
+        t["tea_reply"], t["recall_reply"] = r4["reply"], r5["reply"]
+        r6 = say(a, "s11-forget", SAY_FORGET_THAT)
+        t["forget_reply"] = r6["reply"]
+        t["packet_final"] = live.packet(a, ASK_TEA + " coriander")
+        errs = [x for x in (r1, r2, r3, r4, r5, r6) if x["error"]]
+        waits = {"after_say": w1, "after_keep": w2, "after_repeat": w3}
+        unseen = [k for k, w in waits.items() if not (w or {}).get("landed")]
+        if errs:
+            put("S11", "ERROR", why="a turn failed: " + "; ".join(e["error"] for e in errs), waits=waits)
+        elif unseen:
+            # the capture's copy is what "forget that" must also retract: unobserved, the verdict is unproven
+            put("S11", "ERROR", why="capture not observed after: " + ", ".join(unseen), waits=waits)
+        else:
+            v, ev = score_s11(t)
+            if live.keep:   # --keep-replies: the replies themselves (debug only; they are synthetic)
+                ev["replies"] = {k: x for k, x in t.items() if k.endswith("_reply")}
+            put("S11", v, waits=waits, **ev)
 
     if ask("S4") and setup_ok("S4", ("d1-worry",), ("S4", "backdate")):
         v, ev = _ask_judged(live, a, "d2-edge", ASK_WORRY, samples, score_s4, "S4")
@@ -1711,6 +2091,7 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
     if seed("S5"):
         if setup_ok("S5", ("d1-worry",), ("S4", "backdate")):  # no open loop seeded = nothing to carry
             v12, ev12 = "SKIP", {"why": "ZOE_PROACTIVE_SELECTOR off or the hook unavailable"}
+            pulled = (("SKIP", dict(ev12)), ("SKIP", dict(ev12)))
             try:
                 hook = live.run_selector(a)
                 if not (hook or {}).get("enabled"):
@@ -1723,18 +2104,28 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
                     if t1["error"] or t2["error"]:
                         v, ev = "ERROR", {"why": "an open turn failed", "asks": asks}
                         v12, ev12 = "ERROR", {"why": "an S5 open turn failed"}
+                        pulled = (("ERROR", {"why": "an S5 open turn failed"}),) * 2
                     else:
                         rows = live.raise_state(a)
                         v, ev = score_s5_raise(hook, t1["reply"], t2["reply"], rows)
                         ev["asks"] = asks
                         v12, ev12 = score_s12(rows, t1["session"], t2["session"])
+                        # S26/S27 ride on the same worry (candidate re-armed, pulled, cleared); they do
+                        # not need the brain to have VOICED S5's raise, only the candidate to exist.
+                        if need & {"S26", "S27"}:
+                            pulled = run_pull(live, a)
             except Exception as exc:  # noqa: BLE001
                 v, ev = "ERROR", {"why": f"hook/read failed: {type(exc).__name__}"}
                 v12, ev12 = "ERROR", {"why": f"hook/read failed: {type(exc).__name__}"}
+                pulled = (("ERROR", dict(ev)), ("ERROR", dict(ev)))
             put("S5", v, **ev)
             put("S12", v12, **ev12)
+            put("S26", pulled[0][0], **pulled[0][1])
+            put("S27", pulled[1][0], **pulled[1][1])
         else:
             put("S12", "ERROR", why="S5's setup was not exercised, so its open turns never ran")
+            put("S26", "ERROR", why="S5's setup was not exercised, so there is no worry to pull")
+            put("S27", "ERROR", why="S5's setup was not exercised, so there is no worry to pull")
 
     # S20/S21/S22: the three conversation-quality classes (2026-10-04) ------------
     if seed("S20"):
@@ -1773,6 +2164,51 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
         else:
             v, ev = score_s22(t1["reply"], t2["reply"], pkt)
             put("S22", v, landed=land["S22"], ask={**live.evidence(t2), **ev})
+
+    # S23/S24/S25 (BM5, 2026-10-09): provenance answers and memory control. Same-day, no backdate: the explanation, the summary and
+    # the off-the-record verb are deterministic tiers over what was said minutes ago.
+    if seed("S24"):
+        say(a, "s24-private", SAY_PRIVATE)
+        land["S24"] = live.wait_landed(a, "migraines my doctor says stress", (S24_PRIVATE_NEEDLE,))
+    if ask("S23") and setup_ok("S23", ("d1-sister",), ("S1",)):
+        turns = [live.chat(a, "s23", ASK_SISTER), live.chat(a, "s23", ASK_WHY),
+                 live.chat(a, "s23-nomem", ASK_NOMEM), live.chat(a, "s23-nomem", ASK_WHY)]
+        if any(t["error"] for t in turns):
+            put("S23", "ERROR", landed=land["S1"], asks=[live.evidence(t) for t in turns])
+        else:
+            v, ev = score_s23(*(t["reply"] for t in turns))
+            put("S23", v, landed=land["S1"], asks=[live.evidence(t) for t in turns], **ev)
+    if ask("S24") and setup_ok("S24", ("d1-sister", "s24-private"), ("S1", "S24")):
+        turns = [live.chat(a, "s24-ask", ASK_KNOW_ME), live.chat(a, "s24-ask", ASK_KNOW_HEALTH), live.chat(b, "s24-b", ASK_KNOW_ME)]
+        if any(t["error"] for t in turns):
+            put("S24", "ERROR", landed=land["S24"], asks=[live.evidence(t) for t in turns])
+        else:
+            v, ev = score_s24(*(t["reply"] for t in turns))
+            put("S24", v, landed=land["S24"], asks=[live.evidence(t) for t in turns], **ev)
+    if ask("S25"):
+        # the control first: an ordinary turn must land, or the absence of the marked one proves nothing
+        say(a, "s25-control", SAY_OTR_CONTROL)
+        land["S25_control"] = live.wait_landed(a, "my neighbour Odalys keeps bees on her roof", S25_CONTROL_NEEDLE)
+        before = live.capture_status(a)
+        say(a, "s25-secret", SAY_OTR_PAYLOAD)
+        land["S25_secret"] = live.wait_captured(a, before)       # the post-turn capture RAN (and found nothing to keep)
+        say(a, "s25-bare", SAY_OTR_BARE)
+        before = live.capture_status(a)
+        say(a, "s25-next", SAY_OTR_NEXT)
+        land["S25_next"] = live.wait_captured(a, before)
+        if setup_ok("S25", ("s25-control", "s25-secret", "s25-bare", "s25-next"),
+                    ("S25_control", "S25_secret", "S25_next")):
+            fresh = live.chat(a, "s25-fresh", ASK_OTR_FRESH)
+            pk_control = live.packet(a, "my neighbour Odalys bees on her roof")
+            pk_secret = live.packet(a, ASK_OTR_PACKET)
+            pk_next = live.packet(a, ASK_OTR_NEXT_PACKET)
+            transcript = live.transcript_off_record(a, S25_TRANSCRIPT_NEEDLE)
+            if fresh["error"]:
+                put("S25", "ERROR", ask=live.evidence(fresh))
+            else:
+                v, ev = score_s25(pk_control, pk_secret, pk_next, seeds["s25-bare"]["reply"], fresh["reply"], transcript)
+                put("S25", v, landed={k: land[k] for k in ("S25_control", "S25_secret", "S25_next")},
+                    ask={**live.evidence(fresh), **ev})
 
     # S6: isolation ----------------------------------------------------------
     if ask("S6"):

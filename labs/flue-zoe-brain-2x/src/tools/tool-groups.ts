@@ -143,7 +143,7 @@ export const TOOL_GROUPS = {
   people: ['people'],
   media: ['media'],
   home: ['home'],
-  memory: ['remember_fact', 'remember_emotional_moment'],
+  memory: ['remember_fact', 'remember_emotional_moment', 'memory_retire'],
 } as const satisfies Record<string, readonly string[]>;
 
 export type AbilityGroup = keyof typeof TOOL_GROUPS;
@@ -229,8 +229,11 @@ const GROUP_TRIGGERS: Record<AbilityGroup, RegExp> = {
   // layer — same rationale as weather's washing/laundry widening). The model still
   // decides SPARSELY whether to actually call it; a false positive only discloses
   // one extra schema. Recall stays the always-on core recall_memory.
+  // ... PLUS a plain statement that something CHANGED or ENDED ("I gave up the cello", "I sold the Corolla", "the goldfish died", "I switched
+  // to tea", "we moved"), so memory_retire (the chat lane's judge for a change of state, ZOE_QUOTE_RETIRE) is pre-disclosed on it. The cues are
+  // the ending / replacing verbs only: a false positive costs one extra schema, and the server's own prefilter and walls decide what is retired.
   memory:
-    /\bremember (?:that|this|i|my|to keep)\b|\bdon'?t forget\b|\bkeep in mind\b|\bmake a mental note\b|\b(?:stressed|anxious|worried|scared|afraid|terrified|heartbroken|grieving|devastated|overwhelmed|depressed|miserable|ecstatic|overjoyed|thrilled|proud|delighted)\b|\b(?:passed away|in hospital|has cancer|diagnosed|so happy|really happy|over the moon|breaking up|broke up|lost my|miss(?:ing)? (?:him|her|them|my)|got (?:the|our) keys|bought (?:a|our|my) (?:new )?(?:house|home)|got engaged|getting married|had (?:a|our) baby)\b/i,
+    /\bremember (?:that|this|i|my|to keep)\b|\b(?:gave|given)\s+(?:\w+\s+){0,2}?(?:up|away)\b|\b(?:stopped|quit|sold|cancel(?:l)?ed|dropped out|stepped down|got rid of|passed away|died|no longer|any ?more|switched to|moved (?:to|from|away))\b|\bdon'?t forget\b|\bkeep in mind\b|\bmake a mental note\b|\b(?:stressed|anxious|worried|scared|afraid|terrified|heartbroken|grieving|devastated|overwhelmed|depressed|miserable|ecstatic|overjoyed|thrilled|proud|delighted)\b|\b(?:passed away|in hospital|has cancer|diagnosed|so happy|really happy|over the moon|breaking up|broke up|lost my|miss(?:ing)? (?:him|her|them|my)|got (?:the|our) keys|bought (?:a|our|my) (?:new )?(?:house|home)|got engaged|getting married|had (?:a|our) baby)\b/i,
 };
 
 /** Reverse map: tool name → its group. */
