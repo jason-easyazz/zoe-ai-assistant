@@ -527,3 +527,24 @@ def test_the_ledger_stays_out_of_the_voice_path_files(rel):
     src = (SVC / rel).read_text()
     assert "proactive.ledger" not in src and "proactive import ledger" not in src
     assert "ZOE_PROACTIVE_LEDGER" not in src
+
+
+# ── prerequisite (e): the sweep says what it did, so a ledger that never closes is visible ───────────────────────────────
+async def test_a_sweep_with_open_rows_logs_counts_and_one_with_none_logs_nothing(env, caplog):
+    """58 rows were written over four days with not one PROACTIVE_LEDGER_OUTCOME line: written-but-never-closed looked exactly
+    like nothing-to-close. restraint.py back-off reads the closed ``ignored`` rows, so the sweep now says what it did."""
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="proactive.ledger"):
+        assert await _sweep_at(env, 1) == 0
+    assert "PROACTIVE_LEDGER_SWEEP" not in caplog.text                 # nothing open: silent (it runs every 5 minutes)
+    await _raise_and_settle(env)
+    with caplog.at_level(logging.INFO, logger="proactive.ledger"):
+        assert await _sweep_at(env, 30) == 0                           # nothing persisted: the row stays open
+    assert "PROACTIVE_LEDGER_SWEEP open=1 closed=0 deferred=1" in caplog.text
+    caplog.clear()
+    _persist_reply(env, "Good, thanks! How are you?")
+    with caplog.at_level(logging.INFO, logger="proactive.ledger"):
+        assert await _sweep_at(env, 31) == 1
+    assert "PROACTIVE_LEDGER_SWEEP open=1 closed=1 deferred=0" in caplog.text
+    assert "interview" not in caplog.text                              # counts only

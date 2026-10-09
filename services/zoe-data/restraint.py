@@ -53,12 +53,14 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Optional
 
+import restraint_lex as _lex
+
 logger = logging.getLogger(__name__)
 
 ENV = "ZOE_RESTRAINT"
-VERSION = 1  # the classifier version: bump it and every stored class is invalid (read as unstored)
+VERSION = 2  # the classifier version: bump it and every stored class is invalid (read as unstored)
 CLASSES = ("health", "money", "family_conflict", "grief", "other_member", "affect")
-SURFACES = ("packet", "brief", "raise_greeting", "raise_cue")
+SURFACES = ("packet", "brief", "raise_greeting", "raise_cue", "card")
 
 _OFF = frozenset({"0", "false", "no", "off", "disabled"})
 _ENFORCE = frozenset({"enforce", "1", "true", "yes", "on"})
@@ -76,13 +78,9 @@ def mode() -> str:
 
 
 # ── text helpers (pure) ─────────────────────────────────────────────────────
-def _norm(text: Any) -> str:
-    """Lowercase words only: apostrophes inside a word vanish (``don't`` -> ``dont``, ``Dana's`` ->
-    ``danas``), every other mark is a space."""
-    t = str(text or "").lower().replace("’", "'")
-    t = re.sub(r"(?<=\w)'(?=\w)", "", t)
-    t = re.sub(r"[^a-z0-9\s]", " ", t)
-    return re.sub(r"\s+", " ", t).strip()
+# Every WORD this module decides by (the class lists, the stop words, the pull phrases, the mute grammar, the spoken
+# acknowledgements) lives in ``lexicons_data/<lang>.json`` under "restraint" and is compiled by ``restraint_lex``.
+_norm = _lex.norm
 
 
 def _stem(token: str) -> str:
@@ -96,45 +94,29 @@ def _stem(token: str) -> str:
     return token
 
 
-# Words that name no topic: time words, feeling words, fillers. A shared one proves nothing.
-_STOP = frozenset({
-    "user", "users", "about", "with", "that", "this", "have", "has", "will", "from", "into", "when",
-    "what", "been", "being", "they", "their", "them", "there", "then", "than", "your", "just", "like",
-    "some", "said", "tell", "told", "know", "does", "doing", "done", "going", "want", "need", "make",
-    "made", "take", "took", "thing", "things", "stuff", "lately", "recently", "really", "very", "much",
-    "more", "most", "also", "still", "again", "anymore", "please", "thanks", "could", "would", "should",
-    "where", "which", "while", "after", "before", "over", "okay", "yeah", "remember", "mention",
-    "bring", "talk", "tonight", "today", "tomorrow", "yesterday", "morning", "afternoon", "evening",
-    "night", "week", "weekend", "month", "year", "next", "last", "later", "soon",
-    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "january",
-    "february", "march", "april", "june", "july", "august", "september", "october", "november",
-    "december", "feel", "feels", "feeling", "felt", "worried", "worry", "worrying", "anxious",
-    "nervous", "stressed", "honestly", "pretty", "keep", "kept", "give", "gave", "come", "came",
-    "back", "good", "well", "here", "something", "anything", "everything", "nothing", "think",
-    "thought", "right", "hows", "whats", "zoe", "hello", "hiya", "ask", "asked",
-})
+def _topic_token(t: str, p: "_lex.Pack") -> str:
+    """Kin words are 3-6 letters and are exactly what "how's my mum doing?" is about: the language's lexicon canonicalises
+    them (mum = mom = mother)."""
+    return p.kin_canon.get(t) or _stem(t)
 
 
-# Kin words are 3-6 letters and are exactly what "how's my mum doing?" is about: they count as topics, and the
-# regional spellings are one topic (mum = mom = mother).
-_KIN_CANON = {
-    "mum": "mother", "mom": "mother", "mam": "mother", "mummy": "mother", "mother": "mother",
-    "dad": "father", "daddy": "father", "father": "father", "wife": "wife", "husband": "husband",
-    "son": "son", "daughter": "daughter", "brother": "brother", "sister": "sister", "nan": "grandmother",
-    "nana": "grandmother", "nanna": "grandmother", "grandma": "grandmother", "grandmother": "grandmother",
-    "grandpa": "grandfather", "grandfather": "grandfather", "aunt": "aunt", "auntie": "aunt", "uncle": "uncle",
-    "cousin": "cousin", "partner": "partner", "kids": "children", "children": "children"}
-
-
-def _topic_token(t: str) -> str:
-    return _KIN_CANON.get(t) or _stem(t)
+def _tokens(text: Any, p: "_lex.Pack") -> list[str]:
+    """Topic tokens of ``text``: words, or (a CJK language writes no spaces) the character bigrams of each run."""
+    words = _norm(text).split()
+    if not p.cjk:
+        return words
+    # a CJK language writes no spaces: the character bigrams of each run, minus any that holds a stop character
+    # (a particle: "の", "的") - the same job the stop list does for a spaced language
+    return [b for run in words for b in (run[i:i + 2] for i in range(max(len(run) - 1, 1)))
+            if b not in p.stop and not any(ch in p.stop for ch in b)]
 
 
 def stems(text: Any) -> frozenset[str]:
-    """Content stems of ``text`` (>= 4 letters or a kin word, no stop word). The overlap test of a topic pull
-    and of a mute."""
-    return frozenset(_topic_token(t) for t in _norm(text).split()
-                     if (len(t) >= 4 or t in _KIN_CANON) and t not in _STOP)
+    """Content stems of ``text`` (>= 4 letters or a kin word, no stop word; a CJK bigram counts). The overlap test of a topic
+    pull and of a mute."""
+    p = _lex.pack_for(text)
+    return frozenset(_topic_token(t, p) for t in _tokens(text, p)
+                     if (len(t) >= (2 if p.cjk else 4) or t in p.kin_canon) and t not in p.stop)
 
 
 def text_hash(text: Any) -> str:
@@ -153,52 +135,9 @@ def _ts(value: Any) -> str:
 
 
 # ── 1. the sensitivity class (pure) ─────────────────────────────────────────
-_HEALTH = re.compile(
-    r"\b(?:migraines?|headaches?|injur\w*|illness|ill|sick|flu|fever|cough\w*|infection|symptoms?|"
-    r"diagnos\w*|medic\w*|prescription|insomnia|anxiety|depress\w*|asthma|allerg\w*|surgery|surgeon|"
-    r"operation|(?:in|into|to|at the) hospital|hospital (?:appointment|visit|stay|bed)|admitted|"
-    r"clinic|doctor|gp|dentist|dental|orthodont\w*|molar|tooth|teeth|"
-    r"physio\w*|therap\w*|cancer|chemo\w*|tumou?r|blood pressure|diabet\w*|pregnan\w*|miscarriage|"
-    r"biopsy|pain|painful|ache|aching|hip replacement|knee|back pain|stitches|fractur\w*|rehab\w*|"
-    r"health|sore throat|nausea|dizz\w*|panic attacks?|blood tests?|cyst|lump|ultrasound|x-?ray|mri|"
-    r"antibiotics?|vaccin\w*|psychiatr\w*|psycholog\w*|counsell\w*|eating disorder|seizure|stroke|"
-    r"heart attack|swollen|swelling|bleeding)\b")
-_MONEY = re.compile(
-    r"\b(?:money|loans?|debts?|owe[sd]?|mortgage|overdraft|overdrawn|credit card|repayments?|salary|"
-    r"wages?|pay ?rise|payrise|paycheck|payslip|bills|the bill|the rent|rent is|rent due|afford\w*|"
-    r"broke|bankrupt\w*|savings|budget|invoices?|tax|taxes|redundan\w*|laid off|got fired|"
-    r"unemploy\w*|lost (?:my|his|her|their) job)\b")
-_GRIEF = re.compile(
-    r"\b(?:died|passed away|passed on|death|funeral|burial|buried|cremat\w*|bereave\w*|grie(?:f|ve|ving|ved)|"
-    r"mourn\w*|late (?:husband|wife|mother|father|mum|dad)|condolences|memorial|stillborn|ashes|widow\w*|"
-    r"orphan\w*|anniversary of (?:\w+'s )?death|"
-    r"lost (?:my|his|her|their) (?:mum|mom|mother|dad|father|husband|wife|partner|son|daughter|brother|"
-    r"sister|grand\w+|friend|dog|cat|baby))\b")
-_KIN = (r"(?:mum|mom|mother|mam|mummy|dad|father|daddy|wife|husband|partner|spouse|son|daughter|"
-        r"brother|sister|sibling|kids?|children|grand(?:ma|pa|mother|father|son|daughter|parents?|kids?|"
-        r"children)|nan|nana|nanna|aunt|auntie|uncle|cousin|in-?laws?|stepmum|stepdad|girlfriend|"
-        r"boyfriend|fianc\w+|flatmate|housemate|roommate|parents?|family|ex)")
-_CONFLICT = (r"(?:fights?|fought|fighting|argu\w+|row(?:ed|ing)?|quarrel\w*|fell out|falling out|fallen out|"
-             r"not speaking|stopped speaking|won'?t speak|(?:haven'?t|hasn'?t|hadn'?t) spoken|yell\w*|shout\w*|"
-             r"scream\w*|blew up|blow-?up|storm\w* out|furious (?:with|at)|angry (?:with|at)|mad at|cross with|"
-             r"upset with|resent\w*|estrang\w*|interfer\w*|cut (?:me|him|her|them) off)")
-_FAMILY_CONFLICT = re.compile(
-    rf"\b{_CONFLICT}\b.{{0,40}}\b{_KIN}\b|\b{_KIN}\b.{{0,40}}\b{_CONFLICT}\b|"
-    r"\b(?:divorce\w*|separat(?:ed|ion)|custody|broke up|breaking up|affair|cheat(?:ed|ing))\b")
-_OTHER_KIN = re.compile(rf"\b(?:my|his|her|their|our|your|user'?s)\s+{_KIN}\b")
-_KIN_POSS = re.compile(rf"\b{_KIN}'s\b")
-_NAME_POSS = re.compile(r"\b([A-Z][a-z]{2,})['’]s\b")
-# Capitalised possessives that are not people: contractions and dates.
-_NOT_A_NAME = frozenset({
-    "that", "there", "here", "what", "who", "where", "when", "how", "why", "let", "it", "he", "she",
-    "one", "everyone", "someone", "something", "nothing", "everything", "today", "tomorrow", "yesterday",
-    "tonight", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "january",
-    "february", "march", "april", "june", "july", "august", "september", "october", "november",
-    "december", "user", "users", "zoe", "which", "whose"})
-_AFFECT = re.compile(
-    r"\b(?:anxious|nervous|worried|stressed|scared|afraid|terrified|overwhelmed|lonely|depressed|"
-    r"heartbroken|gutted|dreading|panick\w*|upset|miserable|on edge|devastated|ashamed|embarrassed|"
-    r"hopeless|numb)\b|\b(?:feel(?:ing|s)?|felt|been|am|i'm)\s+(?:\w+\s+){0,2}(?:low(?!\s+on\b)|down(?!\s+(?:for|to|with|here|there|at|in|on|by)\b)|flat)\b")
+# The word lists are data: ``lexicons_data/<lang>.json`` "restraint" (health, money, grief, conflict, kin, feelings ...),
+# compiled per language by ``restraint_lex.pack``. The language is the text's own; a language with no entry adds nothing
+# and the structured signals below still decide.
 _AFFECT_WORD = re.compile(r"[a-z][a-z ]{0,23}")
 
 
@@ -223,14 +162,16 @@ def classify_full(text: Any, *, memory_type: Any = "", affect: Any = "", entity_
     tell a structured decision from a word-list one. Pure, no I/O, order follows ``CLASSES``."""
     raw = str(text or "")
     low = raw.lower().replace("\u2019", "'")
+    pk = _lex.pack_for(raw)
     found: dict[str, str] = {}
 
     for tag in str(tags or "").lower().split(","):
         cls = _TAG_CLASSES.get(tag.strip())
         if cls:
             found[cls] = "tag"
-    for cls, rx in (("health", _HEALTH), ("money", _MONEY), ("grief", _GRIEF), ("family_conflict", _FAMILY_CONFLICT)):
-        if cls not in found and rx.search(low):
+    for cls, rx in (("health", pk.health), ("money", pk.money), ("grief", pk.grief),
+                    ("family_conflict", pk.family_conflict)):
+        if cls not in found and rx is not None and rx.search(low):
             found[cls] = "lexicon"
 
     # the structured signals: they do not depend on the language the row is written in
@@ -238,11 +179,11 @@ def classify_full(text: Any, *, memory_type: Any = "", affect: Any = "", entity_
     etype = str(entity_type or "").strip().lower()
     if mtype == "person" or etype == "person":
         found["other_member"] = "entity"
-    elif _OTHER_KIN.search(low) or _KIN_POSS.search(low):
+    elif (pk.other_kin is not None and pk.other_kin.search(low)) or (pk.kin_poss is not None and pk.kin_poss.search(low)):
         found["other_member"] = "lexicon"
     else:
-        for m in _NAME_POSS.finditer(raw):
-            if m.group(1).lower() not in _NOT_A_NAME:
+        for m in (pk.name_poss.finditer(raw) if pk.name_poss is not None else ()):
+            if m.group(1).lower() not in pk.not_a_name:
                 found["other_member"] = "lexicon"
                 break
         else:
@@ -257,7 +198,7 @@ def classify_full(text: Any, *, memory_type: Any = "", affect: Any = "", entity_
         found["affect"] = "affect"
     elif kind == "emotional":
         found["affect"] = "kind"
-    elif _AFFECT.search(low):
+    elif pk.affect is not None and pk.affect.search(low):
         found["affect"] = "lexicon"
 
     classes = tuple(c for c in CLASSES if c in found)
@@ -301,26 +242,20 @@ def row_classes(meta: Optional[dict], text: Any) -> tuple[str, ...]:
 
 
 # ── the turn: who is speaking and what the owner just asked (pure) ───────────
-_LEADS = frozenset({"hi", "hello", "hey", "hiya", "yo", "ok", "okay", "well", "so", "oh", "good", "morning",
-                    "afternoon", "evening", "gday", "howdy", "zoe", "there", "g", "day"})
-_PULL_PHRASES = frozenset({
-    "whats up", "sup", "hows it going", "how is it going", "hows things", "how are things", "whats new",
-    "whats happening", "whats going on", "anything i need to know", "is there anything i need to know",
-    "is there anything i should know", "anything i should know", "catch me up", "fill me in",
-    "anything on my mind", "what do you know about me", "what do you remember about me",
-    "what have you got for me", "what have you got on me"})
-_PULL_TAIL = frozenset({"zoe", "then", "today", "please", "mate", "now", "buddy"})
-
-
 def is_pull(message: Any) -> bool:
     """True for an open question to Zoe about what is pending: "what's up?", "how's it going?",
-    "anything I need to know?", "what do you know about me?". A bare greeting is NOT a pull. Pure."""
-    words = _norm(message).split()
-    while words and words[0] in _LEADS:
-        words.pop(0)
-    while words and words[-1] in _PULL_TAIL:
-        words.pop()
-    return " ".join(words) in _PULL_PHRASES
+    "anything I need to know?", "what do you know about me?". A bare greeting is NOT a pull. Pure.
+    The phrases are the lexicon's (``pull_phrases``); the text's own language is tried first, then every other language
+    that has them (a short "como estas?" carries too few function words to detect)."""
+    for p in _lex.packs_for(message):
+        words = _norm(message).split()
+        while words and words[0] in p.pull_leads:
+            words.pop(0)
+        while words and words[-1] in p.pull_tail:
+            words.pop()
+        if (" ".join(words) if not p.cjk else "".join(words)) in p.pull_phrases:
+            return True
+    return False
 
 
 # The verdict of the speaker gate for THIS turn: True = a confirmed member, False = the gate ran and
@@ -543,6 +478,48 @@ async def filter_extra(user_id: str, message: Any, texts: list, *, pull: bool = 
         return [True] * len(texts)
 
 
+# ── 2c. withhold from the always-present user-model card ──────────────────────
+#: Classes a CARD line never carries in enforce: the card is in front of the model on every turn, so there is no pull that
+#: could release it (money, grief and family trouble wait to be asked about). The Health line keeps only what the model must
+#: know to be safe (the lexicon's ``health_safety``: allergy, asthma, diabetes, medication, pregnancy, access needs); the rest
+#: of it (migraines, a knee, insomnia, a surgery) waits for the recall packet, which the owner's own question pulls.
+CARD_WITHHELD = ("money", "grief", "family_conflict")
+
+
+def card_withheld(category: str, text: Any) -> tuple[str, ...]:
+    """The classes that keep one card item (``category``, ``text``) off the card; ``()`` = it stays. Pure."""
+    held = [c for c in CARD_WITHHELD if c in classify(text)]
+    if category == "health":
+        safety = _lex.pack_for(text).safety
+        if safety is None or not safety.search(str(text or "").lower()):
+            held.append("health")
+    return tuple(held)
+
+
+def filter_card_items(user_id: str, items: list) -> list:
+    """The card's ``[category, text, memory_id]`` items minus the ones it may not carry. ``off`` and ``shadow`` return them
+    unchanged (shadow logs what enforce would remove: counts and class names, never text). Never raises."""
+    m = mode()
+    if m == "off" or not items:
+        return items
+    try:
+        drop = {str(it[2]): card_withheld(str(it[0]), it[1]) for it in items}
+        drop = {k: v for k, v in drop.items() if v}
+        if not drop:
+            return items
+        classes: dict[str, int] = {}
+        for cls in drop.values():
+            for c in cls:
+                classes[c] = classes.get(c, 0) + 1
+        _note(user_id, "card", len(drop), {"sensitive": len(drop)}, classes, m == "enforce")
+        if m != "enforce":
+            return items
+        return [it for it in items if str(it[2]) not in drop]
+    except Exception as exc:  # noqa: BLE001 - restraint must never break a turn
+        logger.warning("restraint: card filter failed (no restraint this turn): %r", exc)
+        return items
+
+
 # ── 2b. withhold from the [Today] brief ──────────────────────────────────────
 async def filter_brief_ctx(ctx: dict, user_id: str, message: Any) -> dict:
     """The brief's gathered context minus the threads this turn may not carry. Returns a COPY (the
@@ -626,90 +603,78 @@ class Utterance:
     pattern: str = ""            # the pattern id (provenance), never the words
 
 
-_FILLER_LEAD = re.compile(
-    r"^(?:(?:ok|okay|hey|hi|hello|zoe|please|pls|just|actually|and|but|also|listen|look|so|yeah|yes|"
-    r"no\b(?!\s+more\b)|well|um|uh|thanks|thank you)\b\s*)+")
-_MODAL_LEAD = re.compile(
-    r"^(?:(?:can|could|would|will) you(?: please)?|you (?:can|could|may|should|need to|have to|must)|"
-    r"(?:i would|id) (?:like|prefer) you to|(?:i would|id) (?:like|prefer) it if you|"
-    r"(?:i would|id) rather you|(?:i want|i need) you to|please)\s+")
-_VERB = (r"(?:mention(?:ing)?|rais(?:e|ing)|talk(?:ing)?\s+about|ask(?:ing)?(?:\s+me)?\s+about|ask(?:ing)?\s+me|"
-         r"check(?:ing)?\s+in\s+(?:on|about)|go(?:ing)?\s+on\s+about|remind(?:ing)?\s+me\s+(?:of|about)|"
-         r"say(?:ing)?\s+(?:anything\s+)?about|nag(?:ging)?\s+me\s+about|bug(?:ging)?\s+me\s+about|"
-         r"worry(?:ing)?\s+me\s+about)")
-_BRING = r"bring(?:ing)?\s+(?:(?P<mid>(?:\S+\s+){0,4}?)up\b)"
-_MUTE_NEG = re.compile(
-    rf"^(?:dont|do not|never|stop|quit|no more|enough|lay off|cut out|not)\s+(?:(?:keep|ever|going to|to|you)\s+)*"
-    rf"(?:{_BRING}|(?P<verb>{_VERB}))\s*(?P<rest>.*)$")
-_MUTE_WANT = re.compile(
-    r"^i (?:really )?(?:dont|do not) (?:want|wanna|need) (?:you )?to (?:"
-    r"(?:talk|hear|think|speak)\s+(?:about|of)|be (?:asked|reminded|told)(?:\s+(?:about|of))?|"
-    r"mention|raise|discuss|bring up|(?:ask|remind)\s+me(?:\s+(?:about|of))?)\s*(?P<rest>.*)$")
-_MUTE_ENOUGH = re.compile(r"^(?:thats |that is )?enough (?:about|of|with|on)\s+(?P<rest>.*)$")
-_MUTE_LEAVE = re.compile(r"^(?:leave|drop)\s+(?P<rest>(?:\S+\s+){0,3}?\S+?)\s+alone$")
-_MUTE_LEAVE_BARE = re.compile(r"^(?:leave|drop)\s+(?:it|that|this)$")
-_MUTE_LETS = re.compile(r"^lets not (?:talk|go on|speak|go into|go) (?:about|into)\s+(?P<rest>.*)$")
-_REL = re.compile(
-    rf"^(?:you can|you may|you could|feel free to|go ahead and|its (?:ok|okay|fine|alright|all right)(?: for you)? to|"
-    rf"im (?:ok|okay|fine) with you|youre (?:allowed|free) to)\s+(?:now\s+)?"
-    rf"(?:{_BRING}|(?P<verb>mention|talk about|ask(?: me)? about|raise|discuss))\s*(?P<rest>.*)$")
-_OBJ_DROP = frozenset({
-    "again", "anymore", "any", "more", "ever", "at", "all", "please", "thanks", "thank", "you", "now", "then",
-    "me", "to", "about", "of", "the", "a", "an", "my", "our", "his", "her", "their", "your", "longer", "for",
-    "up", "with", "on", "in", "if", "like", "it", "that", "this", "those", "these", "them", "there", "thing",
-    "things", "stuff", "one", "so", "ok", "okay", "is", "are", "was", "be", "and", "or", "but", "just",
-    "thats", "dont", "do", "not", "no", "i"})
 _MAX_UTTERANCE_CHARS = 200
-_PERSON_OBJ = frozenset({"me", "us", "him", "her", "them", "you", "myself", "yourself"})
 
 
-def _object(rest: str) -> tuple[tuple[str, ...], bool]:
-    content = [t for t in rest.split() if t not in _OBJ_DROP and len(t) >= 3]
-    st = tuple(sorted({_topic_token(t) for t in content if t not in _STOP}))[:6]
+def _object(rest: str, p: "_lex.Pack") -> tuple[tuple[str, ...], bool]:
+    content = [t for t in _tokens(rest, p) if t not in p.obj_drop and len(t) >= (2 if p.cjk else 3)]
+    st = tuple(sorted({_topic_token(t, p) for t in content if t not in p.stop}))[:6]
     return st, not st
+
+
+def _sub(p: "_lex.Pack", name: str, s: str) -> str:
+    rx = p.mute.get(name)
+    return rx.sub("", s) if rx is not None else s
 
 
 def parse_utterance(message: Any) -> Optional[Utterance]:
     """A spoken mute ("don't mention that again", "stop bringing up the dentist", "I don't want to talk
     about it anymore", "that's enough about the interview", "leave it") or release ("you can mention
-    the dentist again"), or None. Pure; the words are read here and never stored."""
+    the dentist again"), or None. Pure; the words are read here and never stored. The grammar is the
+    lexicon's (``mute_patterns``): the text's own language first, then every other one that has it."""
     raw = str(message or "")
     if not raw.strip() or len(raw) > _MAX_UTTERANCE_CHARS:
         return None
+    for p in _lex.packs_for(raw):
+        u = _parse_with(p, raw)
+        if u is not None:
+            return u
+    return None
+
+
+def _parse_with(p: "_lex.Pack", raw: str) -> Optional[Utterance]:
+    if not p.mute:
+        return None
     s = _norm(raw)
     # a release is read BEFORE the modal lead is stripped: "you can mention it again" starts with one
-    m = _REL.match(_FILLER_LEAD.sub("", s).strip())
+    rel = p.mute.get("release")
+    m = rel.match(_sub(p, "filler_lead", s).strip()) if rel is not None else None
     if m:
-        rest = ((m.groupdict().get("mid") or "") + " " + (m.group("rest") or "")).strip()
-        st, deictic = _object(rest)
+        rest = ((m.groupdict().get("mid") or "") + " " + (m.groupdict().get("rest") or "")).strip()
+        st, deictic = _object(rest, p)
         return Utterance("release", st, deictic, False, "release")
     for _ in range(3):  # fillers and modal leads can alternate ("ok please could you not ...")
-        s2 = _MODAL_LEAD.sub("", _FILLER_LEAD.sub("", s)).strip()
+        s2 = _sub(p, "modal_lead", _sub(p, "filler_lead", s)).strip()
         if s2 == s:
             break
         s = s2
     if not s:
         return None
-    for pid, rx in (("neg", _MUTE_NEG), ("want", _MUTE_WANT), ("enough", _MUTE_ENOUGH), ("lets", _MUTE_LETS)):
-        m = rx.match(s)
+    for pid in ("neg", "want", "enough", "lets"):
+        rx = p.mute.get(pid)
+        m = rx.match(s) if rx is not None else None
         if m:
             rest = ((m.groupdict().get("mid") or "") + " " + (m.groupdict().get("rest") or "")).strip()
-            st, deictic = _object(rest)
+            st, deictic = _object(rest, p)
             return Utterance("mute", st, deictic, False, pid)
-    m = _MUTE_LEAVE.match(s)
-    if m and not set(m.group("rest").split()) <= _PERSON_OBJ:  # "leave me alone" is not a topic
-        st, deictic = _object(m.group("rest"))
+    rx = p.mute.get("leave")
+    m = rx.match(s) if rx is not None else None
+    if m and not set(_tokens(m.group("rest"), p)) <= p.person_obj:  # "leave me alone" is not a topic
+        st, deictic = _object(m.group("rest"), p)
         return Utterance("mute", st, deictic, deictic, "leave")
-    if _MUTE_LEAVE_BARE.match(s):
+    rx = p.mute.get("leave_bare")
+    if rx is not None and rx.match(s):
         return Utterance("mute", (), True, True, "leave_bare")
     return None
 
 
 # ── 3c. the mute store (migration 0042) ──────────────────────────────────────
-ACK_MUTE = "Okay, I won't bring that up again."
-ACK_RELEASE = "Okay, I can mention that again."
-ACK_RELEASE_NONE = "I wasn't holding anything back, so that's fine."
-ACK_ASK = "Which one should I leave alone? Tell me what it's about."
+# The spoken acknowledgements are the lexicon's, in the language the owner spoke (English when that language has none).
+# These are the English ones (the replay harness and the tests compare against them).
+ACK_MUTE = _lex.pack("en").ack["ack_mute"]
+ACK_RELEASE = _lex.pack("en").ack["ack_release"]
+ACK_RELEASE_NONE = _lex.pack("en").ack["ack_release_none"]
+ACK_ASK = _lex.pack("en").ack["ack_ask"]
 
 _MUTE_CACHE_S = 20.0
 _mute_cache: dict[str, tuple[float, list[Mute]]] = {}
@@ -778,7 +743,8 @@ async def _referent(db, uid: str, sid: str, now: datetime) -> Optional[tuple[str
             async with db.execute(sql, params) as cur:
                 row = await cur.fetchone()
             if row:
-                st = sorted({_topic_token(w) for w in str(row[2] or "").split()} | set(stems(row[1])))[:6]
+                pk = _lex.pack_for(row[1])
+                st = sorted({_topic_token(w, pk) for w in str(row[2] or "").split()} | set(stems(row[1])))[:6]
                 return str(row[0]), tuple(st)
     except Exception as exc:  # noqa: BLE001
         logger.debug("restraint: referent read failed: %r", exc)
@@ -817,13 +783,13 @@ async def handle_turn(message: Any, user_id: str, session_id: str = "") -> str:
             if u.kind == "release":
                 n = await _release(db, uid, u, key, now)
                 logger.info("RESTRAINT_MUTE user=%s action=release n=%d mode=%s", uid, n, m)
-                return (ACK_RELEASE if n else ACK_RELEASE_NONE) if m == "enforce" else ""
+                return (_lex.ack("ack_release", message) if n else _lex.ack("ack_release_none", message)) if m == "enforce" else ""
             thread_ref, topic = "", u.stems
             if u.deictic:
                 ref = await _referent(db, uid, sid, now)
                 if ref is None:
                     logger.info("RESTRAINT_MUTE user=%s action=unresolved mode=%s", uid, m)
-                    return ACK_ASK if (m == "enforce" and not u.needs_referent) else ""
+                    return _lex.ack("ack_ask", message) if (m == "enforce" and not u.needs_referent) else ""
                 thread_ref, topic = ref
             if not topic and not thread_ref:
                 return ""
@@ -831,7 +797,7 @@ async def handle_turn(message: Any, user_id: str, session_id: str = "") -> str:
         _mute_cache.pop(uid, None)
         logger.info("RESTRAINT_MUTE user=%s action=mute scope=%s new=%d mode=%s", uid,
                     "thread" if thread_ref else "topic", int(created), m)
-        return ACK_MUTE if m == "enforce" else ""
+        return _lex.ack("ack_mute", message) if m == "enforce" else ""
     except Exception as exc:  # noqa: BLE001 — a mute that cannot be recorded must not break the turn
         logger.warning("restraint: mute handling failed (turn continues): %r", exc)
         return ""

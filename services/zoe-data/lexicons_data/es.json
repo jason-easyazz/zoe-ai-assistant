@@ -309,5 +309,43 @@
   "entonces",
   "aunque",
   "mientras"
- ]
+ ],
+ "restraint": {
+  "_note": "Restraint lexicon: author-written, NOT native-reviewed (reviewed:false on this file). A PRE-FILTER that can only WITHHOLD; the structured signals (type, entity, tags, captured affect) decide without it. Labelled sentences: tests/test_restraint_lexicon.py.",
+  "health": ["migra[ñn]as?", "dolor(?:es)?", "herid\\w*", "lesi[oó]n(?:es)?", "enferm\\w*", "gripe", "fiebre", "tos", "infecci[oó]n", "s[ií]ntomas?", "diagn[oó]stic\\w*", "medicaci[oó]n", "medicamentos?", "receta m[eé]dica", "insomnio", "ansiedad", "depresi[oó]n", "asma", "alerg\\w*", "cirug[ií]a", "cirujano", "operaci[oó]n", "hospital", "ingresad[oa]", "cl[ií]nica", "m[eé]dic[oa]", "doctor(?:a)?", "dentista", "dental", "muela", "dientes?", "fisioterap\\w*", "terapia", "c[aá]ncer", "quimio\\w*", "tumor", "presi[oó]n arterial", "diabet\\w*", "embaraz\\w*", "aborto", "biopsia", "an[aá]lisis de sangre", "fractura", "rehabilitaci[oó]n", "n[aá]useas", "mareos?", "ataques? de p[aá]nico", "vacuna\\w*", "psic[oó]log\\w*", "psiquiatr\\w*", "convulsi\\w*", "infarto", "derrame", "sangrado", "salud"],
+  "money": ["dinero", "pr[ée]stamos?", "deudas?", "debo", "hipoteca", "descubierto", "tarjeta de cr[ée]dito", "salario", "sueldo", "n[oó]mina", "aumento de sueldo", "facturas?", "alquiler", "no puedo permitirme", "arruinad[oa]", "bancarrota", "ahorros", "presupuesto", "impuestos?", "despid\\w*", "desempleo", "perd[ií] (?:mi|el) trabajo"],
+  "grief": ["muri[oó]", "falleci[oó]", "fallecimiento", "muerte", "funeral", "entierro", "enterr\\w*", "cremaci[oó]n", "luto", "duelo", "p[eé]same", "difunt[oa]", "cenizas", "viud[oa]", "hu[eé]rfan\\w*", "perd[ií] a (?:mi )?\\w+"],
+  "conflict": ["pele\\w*", "discut\\w*", "ri[ñn]\\w*", "grit\\w*", "enfad\\w*", "no (?:me )?habl\\w*", "no se habl\\w*", "distanci\\w*"],
+  "kin": ["madre", "padre", "mam[aá]", "pap[aá]", "esposa", "esposo", "marido", "mujer", "pareja", "hijos?", "hijas?", "hermanos?", "hermanas?", "abuel[oa]s?", "t[ií][oa]", "primo", "prima", "suegr[oa]", "cu[ñn]ad[oa]", "novi[oa]", "padres", "familia"],
+  "family_other": ["divorci\\w*", "separaci[oó]n", "custodia", "infidelidad", "me enga[ñn][oó]"],
+  "possessive": ["mi", "mis", "su", "sus", "nuestr[oa]s?", "tu", "tus"],
+  "kin_possessive_suffix": [],
+  "not_a_name": [],
+  "affect": ["ansios\\w*", "nervios\\w*", "preocupad\\w*", "estresad\\w*", "asustad\\w*", "aterrad\\w*", "abrumad\\w*", "deprimid\\w*", "destrozad\\w*", "hundid\\w*", "triste\\w*", "angustiad\\w*", "desesperad\\w*", "soledad"],
+  "feel_lead": ["me siento", "me sent[ií]", "me he sentido", "estoy", "ando"],
+  "feel_low": ["mal", "bajo", "baj[oa]", "decaíd\\w*", "fatal", "vac[ií][oa]"],
+  "health_safety": ["alerg\\w*", "anafil\\w*", "epi-?pen", "asma", "diabet\\w*", "epilep\\w*", "convulsi\\w*", "medicaci[oó]n", "medicamentos?", "embaraz\\w*", "marcapasos", "sord[oa]", "silla de ruedas", "discapacid\\w*"],
+  "stop": ["usuario", "sobre", "hoy", "mañana", "manana", "ayer", "tarde", "noche", "semana", "mes", "año", "ano", "lunes", "martes", "miércoles", "miercoles", "jueves", "viernes", "sábado", "sabado", "domingo", "cosa", "cosas", "algo", "nada", "bien", "hola", "gracias", "favor", "vale", "bueno"],
+  "kin_canon": {"madre": "madre", "mamá": "madre", "mama": "madre", "mami": "madre", "padre": "padre", "papá": "padre", "papa": "padre", "esposa": "esposa", "esposo": "esposo", "marido": "esposo", "hijo": "hijo", "hija": "hija", "hermano": "hermano", "hermana": "hermana", "abuela": "abuela", "abuelo": "abuelo", "tía": "tía", "tío": "tío", "primo": "primo", "prima": "prima", "pareja": "pareja", "hijos": "hijos"},
+  "pull_leads": ["hola", "hey", "buenas", "buenos", "días", "dias", "tardes", "noches", "vale", "bueno", "oye", "zoe"],
+  "pull_tail": ["zoe", "entonces", "hoy", "porfa", "por", "favor", "ahora"],
+  "pull_phrases": ["algo que deba saber", "cómo va todo", "cómo van las cosas", "hay algo que deba saber", "ponme al día", "qué hay", "qué hay de nuevo", "qué pasa", "qué recuerdas de mí", "qué sabes de mí", "qué tal"],
+  "obj_drop": ["otra", "vez", "nunca", "jamás", "jamas", "más", "mas", "ya", "eso", "esto", "ello", "el", "la", "los", "las", "de", "del", "sobre", "por", "con", "en", "a", "mi", "mis", "su", "sus", "tema", "favor", "porfa", "me", "te", "se", "lo", "que", "y", "o", "pero", "nuevo", "volver", "seguir"],
+  "person_obj": ["me", "te", "nos", "conmigo", "contigo"],
+  "mute_patterns": {
+   "filler_lead": "^(?:(?:vale|bueno|oye|hola|zoe|por favor|porfa|pues|entonces|y|pero|mira|gracias|ok|okay)\\b\\s*)+",
+   "modal_lead": "^(?:(?:(?:puedes|podr[ií]as)(?: por favor)?|quiero que|me gustar[ií]a que|prefiero que|necesito que|por favor)\\s+)",
+   "neg": "^(?:no|nunca|deja de|dejes de|para de|pares de|basta de)\\s+(?:(?:vuelvas a|sigas|me)\\s+)*(?P<verb>mencion\\w*|hablar? (?:de|sobre)|hables (?:de|sobre)|sacar(?: el tema)?(?: de)?|saques(?: el tema)?(?: de)?|preguntar(?:me)? (?:por|sobre)|preguntes(?:me)? (?:por|sobre)|record\\w+(?: de| sobre)?)\\s*(?P<rest>.*)$",
+   "want": "^no quiero (?:que )?(?:hablar|mencion\\w*|seguir hablando|me (?:preguntes|recuerdes))\\s*(?:de|sobre|por|acerca de)?\\s*(?P<rest>.*)$",
+   "enough": "^(?:ya )?basta (?:de|con|sobre)\\s+(?P<rest>.*)$",
+   "leave": "^(?:deja|olvida)\\s+(?P<rest>(?:\\S+\\s+){0,3}?\\S+?)\\s+(?:en paz|tranquil[oa])$",
+   "leave_bare": "^(?:d[eé]jalo|d[eé]jalo estar|olv[ií]dalo)$",
+   "lets": "^no hablemos (?:de|sobre)\\s+(?P<rest>.*)$",
+   "release": "^(?:ya )?(?:puedes|podr[aá]s)\\s+(?:volver a\\s+)?(?P<verb>mencion\\w*|hablar|hablarme|sacar)\\s*(?:de|sobre)?\\s*(?P<rest>.*)$"
+  },
+  "ack_mute": "Vale, no volveré a sacar ese tema.",
+  "ack_release": "Vale, puedo volver a mencionarlo.",
+  "ack_release_none": "No estaba callando nada, así que no hay problema.",
+  "ack_ask": "¿De qué tema debo dejar de hablar? Dímelo."
+ }
 }

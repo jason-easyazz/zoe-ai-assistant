@@ -301,3 +301,15 @@ was written to find, and the open turns of S5 and the day-sim are pulls.
 
 The fixtures' sentences were written by the same hand as the classifier's word list; the held-out check is in
 [restraint.md](restraint.md) ("Limits", 20 of 32 before widening, 29 of 32 after).
+
+
+## Enforce-ready prerequisites and the live enforce-vs-shadow numbers (2026-10-09)
+
+* **P8.c's remark lexicon** now holds the probes the first baseline slipped past (7 of its 10 replies to "...", "mm", "hmm" were
+  "It seems like you might have trailed off. Is there something on your mind?" and the standing offer to chat): `SILENCE_REMARKS` gained
+  "trailed off", "thoughtful", "on your mind", "you're just saying", "want to chat", "here if you", "take a moment", "are you okay" and
+  "you might have". The 10/10 PASS of the baseline table above was the lexicon's gap, not the brain's: in the live shadow arm of the
+  enforce-vs-shadow rig, P8.c is **2/10** (the guard's own list, `clean_goodbye._PROBE_RX`, takes it to 10/10 in enforce).
+* **Rig:** `scripts/perf/person_half_enforce_ab.py` (see [person-half-enforce-pack-2026-10-09.md](person-half-enforce-pack-2026-10-09.md)):
+  in-process, the live brain, the floor under test per run, scored by this bench's own scorers and bars. It is NOT a replacement for the live
+  `samantha_person.py --only P5a,P7,P8,P2,P12` after the owner's flip; it is the evidence that the flip is worth making.
