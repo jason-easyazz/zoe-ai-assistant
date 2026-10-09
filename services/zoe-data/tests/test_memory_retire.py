@@ -592,7 +592,8 @@ def test_the_intent_router_routes_memory_retire_and_the_dispatch_allowlist_has_i
     from routers import system
     assert "memory_retire" in system._DISPATCHABLE_INTENTS
     seed(lab, CELLO, OAT)
-    monkeypatch.setattr(memory_service, "get_memory_service", lambda: lab.service)
+    # (the `lab` fixture already points memory_service.get_memory_service at lab.service and UNDOES it on close; a second
+    #  monkeypatch.setattr of the same name here restored the lab lambda AFTER that - leaving it in place for every later module)
     mr.note_turn(U, SAID)
     listing = run(intent_router.execute_intent(intent_router.Intent("memory_retire", {}), U))
     assert "1) " in listing
@@ -648,8 +649,8 @@ def test_the_audit_row_names_the_retirement_and_never_the_sentence(lab):
 def test_forgetting_an_entity_the_cited_sentence_names_leaves_no_retained_row(lab, monkeypatch):
     """The retired row's own text never names the cello; the sentence cited on it does. Forgetting 'cello' must take the row."""
     import intent_router
-    import memory_service
-    monkeypatch.setattr(memory_service, "get_memory_service", lambda: lab.service)
+    # (the `lab` fixture already points memory_service.get_memory_service at lab.service and UNDOES it on close; a second
+    #  monkeypatch.setattr of the same name here restored the lab lambda AFTER that - leaving it in place for every later module)
     seed(lab, "User plays in a community orchestra on Tuesday evenings.", OAT)
     orchestra = next(i for i, (d, _m) in lab.col.rows.items() if "community orchestra" in d)
     assert attempt(lab, SAID, brain={"row_id": orchestra})[0].action == "retired"
