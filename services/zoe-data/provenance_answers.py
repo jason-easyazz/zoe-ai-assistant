@@ -443,6 +443,7 @@ class Item:
     sensitive: str = ""
     inferred: bool = False
     classes: frozenset = frozenset()
+    mtype: str = ""             # the row's memory_type (a derived person-projection row is "person")
 
 
 @dataclass
@@ -503,7 +504,8 @@ async def gather(user_id: str, *, svc: Any = None) -> Known:
             inferred = True
         classes = sensitive_classes(text, meta)
         primary = next((c for c in _CLASS_ORDER if c in classes), "")
-        it = Item(ref.id, text, _row_epoch(meta), group_of(text, meta), primary, inferred, classes)
+        it = Item(ref.id, text, _row_epoch(meta), group_of(text, meta), primary, inferred, classes,
+                  str(meta.get("memory_type") or "").lower())
         known.total += 1
         if it.sensitive:
             known.private.setdefault(it.sensitive, []).append(it)
@@ -514,6 +516,142 @@ async def gather(user_id: str, *, svc: Any = None) -> Known:
         lst.sort(key=lambda i: i.epoch or 0.0, reverse=True)
     known.people = await load_people(user_id)
     return known
+
+
+# ── people: one entry per person (pure) ──────────────────────────────────────
+
+SUMMARY_MAX_CHARS = 2600   # the bar's bound on the chat list (scripts/perf/samantha_bar.py score_s24)
+SUMMARY_MAX_LINES = 32
+PEOPLE_MAX = 12            # persons named in the chat list (the rest are counted)
+PERSON_FACTS_MAX = 3       # facts kept per person
+_REL_WORDS = (r"sister|brother|mother|father|mum|mom|dad|wife|husband|partner|girlfriend|boyfriend|son|daughter|grand\w+|aunt|"
+              r"uncle|cousin|niece|nephew|friend|colleague|boss|neighbou?r|flatmate|roommate|fianc\w+|\w+-in-law")
+# "User's dad is named Teodor" / "User's dad Teodor builds ..." / "User's sister is flying in ..." (no name)
+_NL_PERSON_RE = re.compile(
+    r"^(?i:user['’]s)\s+(?P<rel>(?i:" + _REL_WORDS + r"))\b(?:\s+(?i:is|was)\s+(?i:named|called))?\s*"
+    r"(?P<name>[A-Z][\w'’-]+(?:\s+[A-Z][\w'’-]+)?)?\s*(?P<rest>.*)$", re.DOTALL)
+_NL_IS_NAME_RE = re.compile(r"^(?i:is|was)\s+(?P<name>[A-Z][\w'’-]+(?:\s+[A-Z][\w'’-]+)?)\s*$")
+# the people-table / role-triple projection of the same facts: "teodor: dad of user", "teodor: build[s] model ships ..."
+_DERIVED_RE = re.compile(r"^(?P<name>[^:\s][^:]{0,40}?):\s+(?P<rest>\S.*)$", re.DOTALL)
+_ROLE_OF_USER_RE = re.compile(r"^(?P<rel>[\w -]{2,30}?)\s+of\s+(?:the\s+)?user\.?$", re.IGNORECASE)
+_STEM_RE = re.compile(r"(?:ing|es|s)$")
+
+
+def _norm_fact(text: str) -> frozenset:
+    """Content tokens of a person fact, stemmed crudely, so "builds model ships in his shed" == "build[s] model ships in his
+    shed". Pure."""
+    t = re.sub(r"\[(\w*)\]", r"\1", (text or "").lower())
+    toks = [_STEM_RE.sub("", w) for w in re.findall(r"[a-z0-9']+", t)]
+    return frozenset(w for w in toks if len(w) > 2 and w not in {"his", "her", "the", "and", "who", "has", "have", "that", "user"})
+
+
+def _same_fact(a: frozenset, b: frozenset) -> bool:
+    if not a or not b:
+        return a == b
+    return len(a & b) / min(len(a), len(b)) >= 0.75
+
+
+@dataclass
+class PersonEntry:
+    key: str
+    name: str = ""
+    rel: str = ""
+    epoch: Optional[float] = None
+    facts: list = field(default_factory=list)       # [(text, tokens)], natural-language first, newest first
+    derived: list = field(default_factory=list)     # the same facts as the projection rows wrote them
+
+    def label(self) -> str:
+        return _person_label(self.name, self.rel) if self.name else (self.rel or "someone")
+
+
+def _bump(e: PersonEntry, epoch: Optional[float]) -> None:
+    if epoch and (e.epoch is None or epoch > e.epoch):
+        e.epoch = epoch
+
+
+def _fact_clause(rest: str) -> str:
+    """The claim after "User's dad Teodor" as a clause that reads after the name ("is a retired lighthouse keeper")."""
+    r = re.sub(r"\s+", " ", (rest or "").strip()).rstrip(" .")
+    r = re.sub(r"\[(\w*)\]", r"\1", r)
+    return r
+
+
+def people_entries(items: list, table: Optional[list] = None) -> list:
+    """The people group as ONE entry per person: every row about them merged (the owner's natural-language rows first, then the
+    derived ``name: ...`` projection rows, which are the same facts and never an item of their own), near-duplicates dropped,
+    newest person first. ``items`` are public people-group Items (newest first); ``table`` is the people table. Pure."""
+    entries: dict = {}
+    order: list = []
+
+    def entry(key: str) -> PersonEntry:
+        if key not in entries:
+            entries[key] = PersonEntry(key)
+            order.append(key)
+        return entries[key]
+
+    pending = []
+    for it in items:
+        txt = re.sub(r"\s+", " ", (it.text or "").strip())
+        m = _NL_PERSON_RE.match(txt)
+        if not m:
+            pending.append((it, txt))
+            continue
+        name, rel, rest = (m.group("name") or "").strip(), m.group("rel").lower(), m.group("rest").strip()
+        if not name:
+            nm = _NL_IS_NAME_RE.match(rest)               # "User's dad is Teodor"
+            if nm:
+                name, rest = nm.group("name"), ""
+        e = entry(name.lower() if name else "rel:" + rel)
+        e.name, e.rel = e.name or name, e.rel or rel
+        _bump(e, it.epoch)
+        clause = _fact_clause(rest)
+        if clause:
+            e.facts.append((clause, _norm_fact(clause)))
+    derived_rows = []
+    for it, txt in pending:
+        d = _DERIVED_RE.match(txt)
+        if d and (it.mtype in ("person", "relationship") or d.group("name").strip().lower() in entries):
+            derived_rows.append((d.group("name").strip(), d.group("rest").strip(), it.epoch))
+        else:                                              # an unrecognised shape: its own entry, never merged away
+            e = entry("text:" + txt.lower())
+            e.facts.append((trim(second_person(txt), 140), _norm_fact(txt)))
+            _bump(e, it.epoch)
+    for name, rest, epoch in derived_rows:
+        e = entries.get(name.lower())
+        if e is None:                                     # "friend: ..." style heads and names with no natural-language row
+            e = entry(name.lower())
+            e.name = " ".join(w[:1].upper() + w[1:] for w in name.split())
+        _bump(e, epoch)
+        role = _ROLE_OF_USER_RE.match(rest)
+        if role:
+            e.rel = e.rel or role.group("rel").strip().lower()
+            continue
+        e.derived.append((_fact_clause(rest), _norm_fact(rest)))
+    for name, rel, epoch in (table or []):                # the people table: a person with no row of their own still counts
+        e = entries.get(name.lower()) or entry(name.lower())
+        e.name = e.name or name
+        if rel and rel.lower() not in ("contact", "other", "unknown"):
+            e.rel = e.rel or rel.lower()
+        _bump(e, epoch)
+    # "User's sister is flying in" (no name) belongs to the one named sister, if there is exactly one
+    for key in [k for k in order if k.startswith("rel:")]:
+        named = [e for e in entries.values() if e.name and e.rel == entries[key].rel]
+        if len(named) == 1:
+            tgt, src = named[0], entries.pop(key)
+            order.remove(key)
+            tgt.facts.extend(src.facts)
+            _bump(tgt, src.epoch)
+    out = []
+    for key in order:
+        e = entries[key]
+        kept: list = []
+        for text, toks in e.facts + e.derived:           # natural-language first: the projection only fills gaps
+            if not any(_same_fact(toks, k[1]) for k in kept):
+                kept.append((text, toks))
+        e.facts = kept
+        out.append(e)
+    out.sort(key=lambda e: e.epoch or 0.0, reverse=True)
+    return out
 
 
 def _by_group(known: Known) -> dict:
@@ -531,16 +669,18 @@ def render_summary(known: Known, *, voice: bool, more: bool = False, now: Option
     """The grouped summary. Voice: counts + one newest item per group, bounded, with a hand-off to chat. Chat / Telegram: the longer
     list with dates. Private classes are counted, never read. Pure (``now`` injectable)."""
     groups = _by_group(known)
-    n_people = len(known.people) or len(groups["people"])
+    persons = people_entries(groups["people"], known.people)
+    n_people = len(persons)
     private_n = sum(len(v) for v in known.private.values())
     if not known.items and not known.people and not private_n:
         return NOTHING_KNOWN_REPLY
     cutoff = (time.time() if now is None else now) - RECENT_WINDOW_S
-    recent = [i for i in known.items if i.epoch and i.epoch >= cutoff]
+    # People are already one entry each above: a recent row about a person is not listed a second time under "Recently".
+    recent = [i for i in known.items if i.epoch and i.epoch >= cutoff and (voice or i.group != "people")]
     if voice:
         parts = []
         if n_people:
-            newest = _person_label(known.people[0][0], known.people[0][1]) if known.people else trim(second_person(groups["people"][0].text))
+            newest = persons[0].label()
             parts.append(f"{_plural(n_people, 'person', 'people')}, newest {newest}")
         for key, one, many in (("places", "place", "places"), ("routines", "routine", "routines"),
                                ("preferences", "preference", "preferences")):
@@ -554,35 +694,50 @@ def render_summary(known: Known, *, voice: bool, more: bool = False, now: Option
         if private_n:
             out += " " + PRIVATE_NOTE_VOICE
         return out + " " + HANDOFF_VOICE
-    cap = 8 if more else 5
-    lines = ["Here's what I've got on you, newest first."]
-    if n_people:
-        names = [_person_label(n, r) for n, r, _e in known.people[:cap]] or [trim(second_person(i.text)) for i in groups["people"][:cap]]
-        lines.append(f"**People** ({n_people}): " + ", ".join(names) + (" ..." if n_people > len(names) else ""))
-    for key, title in (("places", "Places"), ("routines", "Routines"), ("preferences", "Preferences"), ("other", "Other")):
-        items = groups[key]
-        if not items:
-            continue
-        lines.append(f"**{title}** ({len(items)}):")
-        for it in items[:cap]:
-            when = f" ({short_day(it.epoch, now)})" if it.epoch else ""
-            lines.append(f"- {trim(second_person(it.text), 140)}{when}")
-        if len(items) > cap:
-            lines.append(f"- ... and {len(items) - cap} more")
-    if recent:
-        lines.append("**Recently** (last week):")
-        for it in recent[:3]:
-            lines.append(f"- {trim(second_person(it.text), 140)} ({short_day(it.epoch, now)})")
-    inferred = sum(1 for i in known.items if i.inferred)
-    if inferred:
-        lines.append(f"{_plural(inferred, 'of these')} I worked out from our chats rather than hearing you say it.")
-    if private_n:
-        kinds = ", ".join(sorted(known.private))
-        lines.append(f"I've also kept {_plural(private_n, 'private thing')} ({kinds}). I only share those if you ask directly, "
-                     "for example \"what do you know about my health\".")
-    lines.append("Ask \"why did you say that?\" right after any answer to see where it came from, say \"forget\" and what to drop, "
-                 "or say \"off the record\" before something you don't want kept.")
-    return "\n".join(lines)
+
+    def build(cap: int, pmax: int, fmax: int) -> str:
+        lines = ["Here's what I've got on you, newest first."]
+        if n_people:
+            lines.append(f"**People** ({n_people}):")
+            for pe in persons[:pmax]:
+                facts = "; ".join(trim(t, 90) for t, _k in pe.facts[:fmax])
+                more_facts = f" (+{len(pe.facts) - fmax} more)" if len(pe.facts) > fmax else ""
+                head = pe.label() if (pe.name or pe.rel) else ""
+                lines.append("- " + (f"{head}: {facts}" if head and facts else head or facts) + more_facts)
+            if n_people > pmax:
+                lines.append(f"- ... and {n_people - pmax} more people")
+        for key, title in (("places", "Places"), ("routines", "Routines"), ("preferences", "Preferences"), ("other", "Other")):
+            items = groups[key]
+            if not items:
+                continue
+            lines.append(f"**{title}** ({len(items)}):")
+            for it in items[:cap]:
+                when = f" ({short_day(it.epoch, now)})" if it.epoch else ""
+                lines.append(f"- {trim(second_person(it.text), 140)}{when}")
+            if len(items) > cap:
+                lines.append(f"- ... and {len(items) - cap} more")
+        if recent:
+            lines.append("**Recently** (last week):")
+            for it in recent[:3]:
+                lines.append(f"- {trim(second_person(it.text), 140)} ({short_day(it.epoch, now)})")
+        inferred = sum(1 for i in known.items if i.inferred)
+        if inferred:
+            lines.append(f"{_plural(inferred, 'of these')} I worked out from our chats rather than hearing you say it.")
+        if private_n:
+            kinds = ", ".join(sorted(known.private))
+            lines.append(f"I've also kept {_plural(private_n, 'private thing')} ({kinds}). I only share those if you ask directly, "
+                         "for example \"what do you know about my health\".")
+        lines.append("Ask \"why did you say that?\" right after any answer to see where it came from, say \"forget\" and what to drop, "
+                     "or say \"off the record\" before something you don't want kept.")
+        return "\n".join(lines)
+
+    # Bounded however much is stored: shrink the other lists first, never the people named, until it fits (chars and lines).
+    out = ""
+    for cap, pmax, fmax in ((8 if more else 5, PEOPLE_MAX, PERSON_FACTS_MAX), (4, PEOPLE_MAX, 2), (2, PEOPLE_MAX, 2), (1, PEOPLE_MAX, 1)):
+        out = build(cap, pmax, fmax)
+        if len(out) <= SUMMARY_MAX_CHARS and out.count("\n") <= SUMMARY_MAX_LINES:
+            break
+    return out
 
 
 def render_topic(known: Known, topic: str, *, voice: bool, now: Optional[float] = None) -> str:
