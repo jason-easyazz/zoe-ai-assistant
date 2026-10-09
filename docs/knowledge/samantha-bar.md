@@ -1,7 +1,7 @@
 ---
 type: Reference
 title: Samantha bar harness (samantha_bar.py v0)
-description: The Samantha-quality regression gate. Eighteen scripted multi-day memory and companion scenarios (S1–S8, S10–S16, S20–S22) run against throwaway demo users through the live API, plus the week-in-the-life day simulation (samantha_day_sim.py) that proves the whole knows-you chain for one user. Covers how to run them, what each scenario and ask proves, the scoring and judge, the baseline and teardown contracts, what a simulation can and cannot fake, and known limits.
+description: The Samantha-quality regression gate. Twenty scripted multi-day memory and companion scenarios (S1–S8, S10–S16, S20–S22, S26–S27) run against throwaway demo users through the live API, plus the week-in-the-life day simulation (samantha_day_sim.py) that proves the whole knows-you chain for one user. Covers how to run them, what each scenario and ask proves, the scoring and judge, the baseline and teardown contracts, what a simulation can and cannot fake, and known limits.
 tags: [memory, samantha, eval, regression-gate, harness, zoe-data]
 timestamp: 2026-10-03T14:00:00Z
 ---
@@ -14,7 +14,7 @@ Tests: `tests/unit/test_samantha_bar.py` (ci_safe, pure).
 It is the memory and companion counterpart of the voice replay gate. Each run creates two
 fresh users, `demo_bar_<8 hex>` A and B, and talks to the live zoe-data API as them
 (`POST /api/chat/?stream=false` with `X-Internal-Token` + `X-Zoe-User-Id`). It scores
-eighteen scenarios (S1–S8, S10–S16, S20–S22; S9 lives in the [day simulation](#week-in-the-life-day-simulation-samantha_day_simpy))
+twenty scenarios (S1–S8, S10–S16, S20–S22, S26–S27; S9 lives in the [day simulation](#week-in-the-life-day-simulation-samantha_day_simpy))
 and compares them against a baseline. A scenario is red only when it
 passed before and does not pass now.
 
@@ -108,6 +108,8 @@ ids only). Day 2 follows.
 | S20 | Day-first dates: "My friend Priya Nair's birthday is 7/8/1991." (Australian household: 7 August). | deterministic, store AND reply: A's packet must carry 7 August and no month-first reading (`July 8`) or raw digits; the reply must say August and not July. Unflagged (`date_locale.py`), so a real regression gate. |
 | S21 | A correction reaches the record: "Biscuit is their dog" after "…has two kids, Mika and Biscuit." **Expected FAIL until `ZOE_CORRECTION_APPLY` is on — a target.** | deterministic: the correction turn must say what changed ("Fixed: …", not "next time"), the packet must hold Biscuit as a pet and no child line, and the count of the children must leave Biscuit out (Mika alone). |
 | S22 | Roles are stated, never guessed: a pasted list of four names (the intro mentions a partner and two children, no line ties a name to a role). **Expected FAIL until `ZOE_ROSTER_NEUTRAL_ASK` is on — a target.** The ASK leg ("Who is Anika Reyes?") is held by `ZOE_ROLE_GUESS_GUARD` (`role_guess_guard.py`): with `ZOE_PERSON_RECALL_FLOOR` on, the packet carries the roster rows (name + date, no role) and the 4B brain once answered "Anika Reyes is your mother" (3 of 4 live runs 2026-10-07); the recall block now says `Relationship not stated for: ...` and a guessed role in the reply is rewritten. | deterministic: no role word within 5 words of a roster first name in the roster reply, the follow-up reply or the packet, and the roster reply asks a question. |
+| S26 | Pull, not push (BH1): with the day-1 worry pending again, "What's up?" delivers it ONCE, marks it delivered, and a second "What's up?" says nothing new. Rides on S5's setup (S5 + S4 seeds run, then the harness RE-ARMS the demo user's candidate rows - cooldown, count and session cleared - because S5's raise just used them). **FAIL with `ZOE_PULL_NOT_PUSH=off`** (the greeting is answered by the brain). | deterministic: reply 1 carries the worry's words (interview / aquarium), reply 2 contains "nothing new" and none of them, the candidate row reads `surfaced_count == 1`. No candidate to re-arm = SKIP; a pull turn error = ERROR. |
+| S27 | Pull, not push (BH1): the orb's state is a count, never content. `GET /api/proactive/inbox` as the demo user reads `count >= 1` and a coarse class (`question` / `notify`) while the worry is pending, `0` after the pull, and `0` for a guest (no credentials). | deterministic: exactly the keys `enabled, count, top, quiet`; no word of the worry anywhere in the three bodies; before >= 1, after == 0, guest == 0. Route absent / error body = FAIL; flag off (`enabled: false`) = FAIL. Same setup and skips as S26. |
 
 **S21's reply leg — the named-person recall floor (2026-10-06, `ZOE_PERSON_RECALL_FLOOR`).** With
 `ZOE_CORRECTION_APPLY=1` the store and acknowledgement legs of S21 pass, but the ask "How many children does
@@ -141,7 +143,7 @@ their `people` and `pending_suggestions` rows (every table with a `user_id` colu
 `SCENARIO_IDS`.** Synthetic asks plus pure scorers live in `scripts/perf/samantha_bar_conv.py` (pinned by
 `tests/unit/test_samantha_bar_conv.py`, which also asserts they stay unwired). Each needs its flag on in the
 live service before wiring; the id block is shared across PRs (S13–S16 contacts, S17–S19 here, S20–S22 reserved
-elsewhere).
+elsewhere, S26–S27 pull-not-push).
 
 | id | proves | scoring |
 |---|---|---|

@@ -382,6 +382,42 @@ async def _conversation_quality_tier(text: str, user_id: str, session_id: str):
     return None
 
 
+async def _pull_tier(text: str, user_id: str, session_id: str, channel: Optional[str],
+                     extra_ctx: Optional[dict]):
+    """Pull, not push (``ZOE_PULL_NOT_PUSH``, default on): "what's up?" / "anything for me?"
+    delivers what the selector is holding, once, and "not now" / "that was welcome" right after a
+    raise or a pull is the person's one-tap signal. Deterministic, whole-utterance phrases only
+    (``proactive.pull``); acts only for a real member with something to deliver or a recent
+    delivery to tap about, and returns None otherwise - so the router and the brain answer every
+    other turn exactly as before. Zoe never speaks first here: the person asked."""
+    try:
+        import proactive.pull as _pl
+
+        if not _pl.pull_enabled():
+            return None
+        kind = _pl.classify(text)
+        if kind is None:
+            return None
+        import expert_dispatch as _xd
+
+        lane = (channel or "chat").strip().lower() or "chat"
+        if kind.startswith("tap:"):
+            reply = await _pl.tap(user_id, text, channel=lane)
+            if not reply:
+                return None
+            return _xd.DispatchResult(domain="proactive", reply=reply,
+                                      intent=f"pull_{kind[4:]}", tier="pull")
+        res = await _pl.pull(user_id, session_id, channel=lane,
+                             speaker_verified=(extra_ctx or {}).get("speaker_verified"))
+        if res is None:
+            return None
+        return _xd.DispatchResult(domain="proactive", reply=res.reply, intent="pull",
+                                  ui=res.ui, tier="pull", meta={"delivered": res.delivered})
+    except Exception as exc:  # never let the tier break a turn
+        logger.warning("fast_tiers pull tier failed (non-fatal): %s", exc)
+        return None
+
+
 async def _identity_tier(text: str, user_id: str):
     """Own-identity question → one sentence built from the ACCOUNT, before recall.
 
@@ -465,6 +501,11 @@ async def resolve(
         cq = await _conversation_quality_tier(text, user_id, session_id)
         if cq is not None:
             return cq
+
+        # Pull, not push: "what's up?" delivers what is pending, once (deterministic).
+        pt = await _pull_tier(text, user_id, session_id, channel, extra_ctx)
+        if pt is not None:
+            return pt
 
         # Identity facts come from the account, never from memory.
         if prof.get("identity_tier"):

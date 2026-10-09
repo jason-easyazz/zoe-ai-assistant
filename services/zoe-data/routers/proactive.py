@@ -8,6 +8,8 @@ Endpoints:
   POST   /api/proactive/pending/{id}    — claim a pending notification → session
   POST   /api/proactive/trigger-morning — manually trigger morning brief (admin/self)
   POST   /api/proactive/selector/run-synthetic/{id} — Samantha-bar S5 hook (internal token)
+  GET    /api/proactive/inbox           — pull-not-push: {enabled, count, top, quiet} for the orb
+  POST   /api/proactive/welcome         — pull-not-push: one-tap welcome / neutral / not_now
 """
 from __future__ import annotations
 
@@ -18,9 +20,9 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from auth import get_current_user
+from auth import get_current_user, resolve_acting_user
 from database import get_db
-from guest_policy import require_feature_access
+from guest_policy import is_guest_user, require_feature_access
 from proactive.session_utils import claim_pending
 from proactive.triggers.reminders import schedule_reminder, cancel_reminder
 
@@ -260,3 +262,36 @@ async def _run_night_mind_synthetic(user_id: str) -> dict:
         return {"enabled": True, **{k: res[k] for k in keep if k in res}}
     except Exception as exc:  # noqa: BLE001
         return {"enabled": True, "status": "error", "error": type(exc).__name__}
+
+
+# ── Pull, not push (register BH1 / BH2) ──────────────────────────────────────
+@router.get("/inbox")
+async def pending_inbox(user: dict = Depends(resolve_acting_user)):
+    """What the panel's orb may show about the caller's pending queue: a COUNT and the coarse class
+    of the top item (``question`` | ``notify``), never an item's words. A guest (the kiosk before a
+    member signs in) and a member with nothing pending both read ``count: 0``; the flag off
+    reads ``enabled: false``. Read-only: nothing is delivered or marked."""
+    from proactive.pull import pending_state
+
+    return await pending_state(str(user.get("user_id") or ""))
+
+
+class WelcomeBody(BaseModel):
+    signal: str                   # welcome | neutral | not_now
+    line_id: str | None = None    # a specific delivery; default = the member's most recent
+
+
+@router.post("/welcome")
+async def welcome_tap(body: WelcomeBody, user: dict = Depends(resolve_acting_user)):
+    """The one-tap "was that welcome?" about the member's latest raise or pull. Tunes RAISING for
+    that item class only (``ZOE_DELIVERY_LEDGER=on``), never tone; logged either way."""
+    from proactive import lines
+    from proactive.pull import pull_enabled
+
+    if body.signal not in lines.SIGNALS:
+        raise HTTPException(status_code=422, detail="signal must be welcome, neutral or not_now")
+    uid = str(user.get("user_id") or "")
+    if is_guest_user(user) or not uid or not pull_enabled():
+        return {"ok": False, "covered": 0}
+    covered = await lines.record_tap(uid, body.signal, target_id=body.line_id or "", channel="tap")
+    return {"ok": covered > 0, "covered": covered, "mode": lines.delivery_ledger_mode()}

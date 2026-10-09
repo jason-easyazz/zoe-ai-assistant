@@ -236,6 +236,27 @@ def day_items(ctx: dict, local_now: datetime) -> tuple[list[str], list[str]]:
     return items, critical
 
 
+def without_refs(ctx: dict, refs: set[str]) -> dict:
+    """``ctx`` minus the open loops and the emotional moment whose selector key (``mentioned``'s
+    ``open_loops:<id>`` / ``memory:<id>``) is in ``refs`` - what the person already PULLED today
+    ("what's up?") is not briefed again. Pure; returns ``ctx`` itself when nothing matches."""
+    if not refs or not ctx:
+        return ctx
+    loops = ctx.get("open_loops") or []
+    kept_loops = [lp for lp in loops if f"open_loops:{lp.get('id')}" not in refs]
+    moments, ids = ctx.get("emotional_moments") or [], ctx.get("emotional_moment_ids") or []
+    pairs = [(m, i) for m, i in zip(moments, ids) if f"memory:{i}" not in refs]
+    if len(kept_loops) == len(loops) and len(pairs) == min(len(moments), len(ids)):
+        return ctx
+    out = dict(ctx)
+    if loops:
+        out["open_loops"] = kept_loops
+    if moments and ids:
+        out["emotional_moments"] = [m for m, _ in pairs]
+        out["emotional_moment_ids"] = [i for _, i in pairs]
+    return out
+
+
 def mentioned(ctx: dict, lines: list[str]) -> list[tuple[str, str, str]]:
     """``(kind, source_ref, text)`` of the loops and the moment whose line IS in the
     rendered brief — bounded to what was said, keyed like the selector's candidates
@@ -374,6 +395,13 @@ async def _prepare(message: str, uid: str, now: datetime, sid: str = "") -> DayB
     else:
         ctx = await _gather(uid, local_date) or {}
         _ctx_cache[uid] = (local_date, time.monotonic(), ctx)
+    # What the person pulled today ("what's up?", proactive/pull.py) is not briefed again.
+    try:
+        from proactive.pull import pulled_refs
+
+        ctx = without_refs(ctx, await pulled_refs(uid, local_now))
+    except Exception as exc:  # noqa: BLE001 - the brief must never break on the pull ledger
+        logger.debug("brief-first-turn: pulled refs unreadable (non-fatal): %r", exc)
     items, critical = day_items(ctx, local_now)
     if not items:
         return None  # nothing on: no filler, no claim — a later turn may have something

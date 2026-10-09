@@ -130,6 +130,7 @@ DEFAULT_QUIET_POLL_PATHS: tuple[str, ...] = (
     "/api/ha/entities",
     "/api/music/now-playing",
     "/api/panels/*/config",
+    "/api/proactive/inbox",
 )
 DEFAULT_QUIET_POLL_SLOW_MS = 1000
 
