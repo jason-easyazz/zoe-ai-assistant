@@ -63,7 +63,7 @@ jobs:
             aiosqlite asyncpg psycopg2-binary alembic \
             fastapi "httpx>=0.27.0,<0.28" "apscheduler==3.10.4" "tzlocal>=2,<3" "sqlalchemy>=2.0,<3.0" \
             pydantic pywebpush py-vapid cryptography \
-            "ag-ui-protocol==1.0.0" "websockets==16.1.1" python-jose passlib \
+            "ag-ui-protocol==1.0.0" "websockets==16.1.1" "pyjwt==2.15.0" passlib \
             python-multipart "uvicorn[standard]==0.53.0" "prometheus-client==0.26.0" "python-json-logger>=4.1.0" \
             pyyaml
 

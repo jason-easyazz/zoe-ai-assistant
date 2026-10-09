@@ -74,7 +74,6 @@ aiohttp==3.14.3
 # automatically. Nothing sets HTTP_PROXY/ALL_PROXY on this box today, but if that
 # ever changes, the local Music-Assistant and LiveKit sockets must pass proxy=None.
 websockets==16.1.1
-python-jose[cryptography]==3.5.0
 PyJWT==2.15.0
 # passlib was declared here for years with NO consumer (`grep -rn passlib services
 # tools scripts tests` finds only this file; password hashing lives in zoe-auth,
