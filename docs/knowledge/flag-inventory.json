@@ -1574,6 +1574,58 @@
         ],
         "typed_env": false
       },
+      "ZOE_FIRST_SOUND_CLAUSE": {
+        "defaults": [
+          "-",
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/narration_filter.py",
+          "services/zoe-data/voice_first_sound.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_FIRST_SOUND_CLAUSE_MIN_CHARS": {
+        "defaults": [
+          "24"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_first_sound.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_FIRST_SOUND_CLAUSE_MIN_WORDS": {
+        "defaults": [
+          "4"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_first_sound.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_FIRST_SOUND_NARRATION_EARLY": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/narration_filter.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_FIRST_SOUND_TOOL_ACK": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_first_sound.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_FLUE_ABORT_ON_CANCEL": {
         "defaults": [
           "-"
@@ -3554,6 +3606,7 @@
         "in_env_example": false,
         "readers": [
           "scripts/perf/hop_placement_ab.py",
+          "scripts/perf/measure_first_sound.py",
           "scripts/perf/measure_speed.py",
           "scripts/perf/measure_tts.py",
           "scripts/perf/measure_voice.py",
