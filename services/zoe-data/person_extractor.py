@@ -13,6 +13,7 @@ Every write also recalculates health_score and increments notification_count.
 import logging
 import os
 import re
+import unicodedata
 import uuid
 from datetime import datetime
 from typing import Optional
@@ -943,6 +944,19 @@ async def _mint_stub(db, user_id: str, name: str, ctx: str) -> Optional[str]:
         return None
 
 
+def _name_key(name: str) -> tuple:
+    return tuple(re.findall(r"\w+", unicodedata.normalize("NFKD", str(name or "")).casefold()))
+
+
+def _names_overlap(a: str, b: str) -> bool:
+    """One name's words all sit inside the other's ("Sarah" / "Sarah Smith"): the same person is a live possibility."""
+    ka, kb = _name_key(a), _name_key(b)
+    if not ka or not kb:
+        return False
+    short, long_ = (ka, kb) if len(ka) <= len(kb) else (kb, ka)
+    return set(short) <= set(long_)
+
+
 async def _hold_edge_belief(user_id: str, name_a: str, name_b: str, rel_type: str, *, origin: str, authority: str,
                             basis: str, contradicts: str = "", extra: Optional[dict] = None) -> None:
     """Keep a relationship the person stated that the graph did not apply, as a PENDING candidate (never recalled,
@@ -1021,9 +1035,28 @@ async def _write_relationship(
             await _hold_edge_belief(user_id, name_a, name_b, rel_type, origin=origin, authority=authority,
                                     basis="ambiguous_name", extra={"edge_rel_group": rel_group, "ambiguous_name": name})
             return
+    # Neither name is a person yet and one name stands inside the other ("Sarah Smith is Sarah's sister"): they may be ONE
+    # person or two, and minting both would make "Sarah" a second contact for the same Sarah (or link the wrong pair).
+    # Ask, don't guess: nothing is minted, the belief is held as a pending candidate.
+    if any(r.status == "none" for r in resolved) and _names_overlap(name_a, name_b):
+        if _name_key(name_a) != _name_key(name_b):          # "Sam is Sam's ..." is just a self-edge: dropped below
+            logger.info("PERSON_SAME_NAME_PAIR user=%s - edge %r held, one person or two is not guessed", user_id, rel_type)
+            await _hold_edge_belief(user_id, name_a, name_b, rel_type, origin=origin, authority=authority,
+                                    basis="same_name_pair", extra={"edge_rel_group": rel_group})
+        return
+    # Create in order and RE-RESOLVE the second name after the first create: a contact minted for the first name is
+    # visible to the second lookup, so two lookups made before any write can never mint two rows for one person.
+    pid_a = resolved[0].person_id or await _mint_stub(db, user_id, name_a, inferred_ctx)
+    res_b = resolved[1] if resolved[0].person_id else await _resolve_person(name_b, user_id, db)
+    if res_b.ambiguous:
+        logger.info("PERSON_AMBIGUOUS user=%s tier=%s candidates=%d - edge %r held, not guessed",
+                    user_id, res_b.tier, len(res_b.matches), rel_type)
+        await _hold_edge_belief(user_id, name_a, name_b, rel_type, origin=origin, authority=authority,
+                                basis="ambiguous_name", extra={"edge_rel_group": rel_group, "ambiguous_name": name_b})
+        return
+    pid_b = res_b.person_id or (await _mint_stub(db, user_id, name_b, inferred_ctx) if pid_a else None)
     pids = []
-    for res, name in zip(resolved, (name_a, name_b)):
-        pid = res.person_id or await _mint_stub(db, user_id, name, inferred_ctx)
+    for pid, name in ((pid_a, name_a), (pid_b, name_b)):
         if not pid:
             logger.warning("person_extractor: _write_relationship could not resolve %r for user=%s - edge %r NOT stored",
                            name, user_id, rel_type)
@@ -1173,7 +1206,19 @@ async def apply_person_fact(
             pattern_type = "bucket"
 
         fact_text = value if name.lower() in value.lower() else f"{name}: {value}"
-        person_uuid = await _resolve_person_uuid(name, user_id, _db)
+        try:
+            res = await _resolve_person(name, user_id, _db)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("apply_person_fact: resolve failed for %r: %s", name, exc)
+            res = None
+        if res is not None and res.ambiguous:
+            # two people answer to this name: held as a pending candidate, never stored as an approved slug-keyed fact
+            logger.info("PERSON_AMBIGUOUS user=%s tier=%s candidates=%d - %s for %r held, not guessed",
+                        user_id, res.tier, len(res.matches), pattern_type, name)
+            await _hold_fact_belief(user_id, name, fact_text, origin=origin or source, basis="ambiguous_name",
+                                    extra={"ambiguous_name": name, "fact_type": pattern_type})
+            return False
+        person_uuid = res.person_id if res is not None else None
         entity_id = person_uuid
 
         mem_id = await _ingest_to_mempalace(
@@ -1385,28 +1430,32 @@ async def process_text(
                 continue
             person_uuid = uuid_cache.get(name)
 
+            # A name two people answer to is never guessed: NOTHING about it is stored as an approved fact or a
+            # structured row (no slug-keyed ingest either) - the belief is held as a PENDING candidate for the user to
+            # settle ("which Tom?"). Every pattern, flag on or off: inference never becomes a settled fact.
+            res = res_cache.get(name)
+            if res is not None and res.ambiguous:
+                logger.info("PERSON_AMBIGUOUS user=%s tier=%s candidates=%d - %s for %r held, not guessed",
+                            user_id, res.tier, len(res.matches), pattern_type, name)
+                await _hold_fact_belief(user_id, name, fact_text, origin=source, basis="ambiguous_name",
+                                        extra={"ambiguous_name": name, "fact_type": pattern_type})
+                continue
+
             # Birthday capture (Phase 3, flag-gated dark): a birthday mentioned for
-            # someone who isn't yet a contact has nowhere to land — the structured
+            # someone who isn't yet a contact has nowhere to land - the structured
             # write below needs a row. When enabled, mint a stub so the date sticks.
             # Byte-for-byte no-op while ZOE_PERSON_BIRTHDAY_CAPTURE_ENABLED is OFF.
-            # Mint ONLY for a name nobody answers to (status "none"): a name two people answer to is never guessed
-            # and never gets a third person - the birthday is held as a pending candidate for the user to settle.
+            # Mint ONLY for a name nobody answers to (status "none").
             if (
                 person_uuid is None
                 and pattern_type == "birthday"
                 and birthday_capture_enabled()
                 and _looks_like_person_name(name)
+                and res is not None and res.status == "none"
             ):
-                res = res_cache.get(name)
-                if res is not None and res.ambiguous:
-                    logger.info("PERSON_AMBIGUOUS user=%s tier=%s candidates=%d - birthday for %r held, not guessed",
-                                user_id, res.tier, len(res.matches), name)
-                    await _hold_fact_belief(user_id, name, fact_text, origin=source, basis="ambiguous_name",
-                                            extra={"ambiguous_name": name, "fact_type": pattern_type})
-                elif res is not None and res.status == "none":
-                    person_uuid = await _create_partial_person(name, user_id, _db)
-                    if person_uuid:
-                        uuid_cache[name] = person_uuid
+                person_uuid = await _create_partial_person(name, user_id, _db)
+                if person_uuid:
+                    uuid_cache[name] = person_uuid
 
             entity_id = person_uuid or None  # None → person_extractor will use slug in ingest
 

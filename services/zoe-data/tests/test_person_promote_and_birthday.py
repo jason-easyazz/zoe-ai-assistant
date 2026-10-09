@@ -202,28 +202,67 @@ async def _stub_ingest(*_args, **_kwargs):
     return None
 
 
+async def _two_toms(db):
+    for pid, nm in (("p-tom-a", "Tom Reyes"), ("p-tom-b", "Tom Park")):
+        await db.execute("INSERT INTO people (id, user_id, name, circle, visibility, is_partial) "
+                         "VALUES (?,?,?,'circle','family',0)", (pid, USER, nm))
+    await db.commit()
+
+
 @pytest.mark.asyncio
-async def test_birthday_for_an_ambiguous_name_mints_no_third_person(monkeypatch):
-    """Greptile P1 (#1961): two contacts answer to "Tom" -> the birthday is held as a pending candidate, never attached
-    to a guess and never to a THIRD Tom minted as a stub. A name nobody answers to still gets its stub (test above)."""
-    monkeypatch.setenv("ZOE_PERSON_BIRTHDAY_CAPTURE_ENABLED", "1")
-    monkeypatch.setattr(pe, "_ingest_to_mempalace", _stub_ingest)
-    held = []
+@pytest.mark.parametrize("flag", ["1", None])
+@pytest.mark.parametrize("text", ["Tom's birthday is 15 March", "Tom loves jazz music"])
+async def test_ambiguous_name_is_held_pending_and_never_stored_as_an_approved_fact(monkeypatch, flag, text):
+    """Greptile P1 (#1961, twice): two contacts answer to "Tom" -> the belief is held as a PENDING candidate and
+    NOTHING else is written: no third Tom, no date, no activity row, and the normal ingest (which would store the fact
+    as `approved` under a slug) is never called. Same with the birthday flag off and for every pattern."""
+    if flag:
+        monkeypatch.setenv("ZOE_PERSON_BIRTHDAY_CAPTURE_ENABLED", flag)
+    else:
+        monkeypatch.delenv("ZOE_PERSON_BIRTHDAY_CAPTURE_ENABLED", raising=False)
+    ingested, held = [], []
+
+    async def _ingest(*a, **kw):
+        ingested.append(a)
+        return "mem-approved"
 
     async def _hold(user_id, name, fact_text, **kw):
         held.append((user_id, name, kw.get("basis")))
 
+    monkeypatch.setattr(pe, "_ingest_to_mempalace", _ingest)
     monkeypatch.setattr(pe, "_hold_fact_belief", _hold)
     db = await _open_extractor_db()
     try:
-        for pid, nm in (("p-tom-a", "Tom Reyes"), ("p-tom-b", "Tom Park")):
-            await db.execute("INSERT INTO people (id, user_id, name, circle, visibility, is_partial) "
-                             "VALUES (?,?,?,'circle','family',0)", (pid, USER, nm))
-        await db.commit()
-        await pe.process_text("Tom's birthday is 15 March", user_id=USER, db=db)
+        await _two_toms(db)
+        written = await pe.process_text(text, user_id=USER, db=db)
         people, dates = await _counts(db)
-        assert people == 2                      # no third Tom
-        assert dates == []                      # the date was not attached to a guess
-        assert held == [(USER, "Tom", "ambiguous_name")]   # kept as a pending candidate instead
+        async with db.execute("SELECT COUNT(*) FROM person_activities") as c:
+            activities = (await c.fetchone())[0]
+        assert (people, dates, activities, written) == (2, [], 0, 0)    # no third Tom, no date, nothing counted
+        assert ingested == []                                            # no approved fact
+        assert held == [(USER, "Tom", "ambiguous_name")]                 # only the pending candidate
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_apply_person_fact_for_an_ambiguous_name_holds_and_stores_nothing(monkeypatch):
+    ingested, held = [], []
+
+    async def _ingest(*a, **kw):
+        ingested.append(a)
+        return "mem-approved"
+
+    async def _hold(user_id, name, fact_text, **kw):
+        held.append(name)
+
+    monkeypatch.setattr(pe, "_ingest_to_mempalace", _ingest)
+    monkeypatch.setattr(pe, "_hold_fact_belief", _hold)
+    db = await _open_extractor_db()
+    try:
+        await _two_toms(db)
+        assert await pe.apply_person_fact("Tom", "birthday", "15 March", user_id=USER, source="test", db=db) is False
+        assert ingested == [] and held == ["Tom"]
+        assert (await _counts(db)) == (2, [])
     finally:
         await db.close()

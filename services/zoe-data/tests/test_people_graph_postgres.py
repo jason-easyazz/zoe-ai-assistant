@@ -111,6 +111,44 @@ async def test_two_concurrent_writers_end_with_one_current_edge_and_a_whole_chai
     assert len(rows) == 3 and all(r["superseded_by"] in ids for r in rows if r["valid_to"])     # no dangling pointer
 
 
+async def test_a_type_change_carries_the_notes_a_concurrent_edit_saved_and_a_late_notes_edit_conflicts(conn, monkeypatch):
+    """The REST handler's two writers on one pair: a type change (notes carried under the lock) and a notes edit (under the
+    same lock, conditional on the edge still being current). Whatever order they take, the newer notes are never lost and
+    a notes edit that lost the race matches NOTHING (the handler turns that into a 409)."""
+    a, b = await _people(conn, "Ann Reyes", "Bo Reyes")
+    await pg.replace_current_edge(_compat(conn), conn.uid, a, b, pg.EdgeSpec("friend", "friend", "friend", "friend", notes="old"))
+    (first,) = await _current(conn, a, b)
+    real = pg.current_edge
+
+    async def slow_read(*args, **kw):
+        got = await real(*args, **kw)
+        await asyncio.sleep(0.3)               # widen the window: the type change holds the lock while the notes edit waits
+        return got
+
+    monkeypatch.setattr(pg, "current_edge", slow_read)
+    other = await asyncpg.connect(URL)
+
+    async def notes_edit():
+        db = _compat(other)
+        async with pg.edge_transaction(db, conn.uid, a, b):
+            cur = await db.execute("UPDATE person_relationships SET notes = ? WHERE id = ? AND user_id = ? AND valid_to IS NULL",
+                                   "newer", first["id"], conn.uid)
+            return (getattr(cur, "rowcount", 1) or 0) > 0
+
+    try:
+        change, landed = await asyncio.gather(
+            pg.replace_current_edge(_compat(conn), conn.uid, a, b,
+                                    pg.EdgeSpec("spouse", "spouse", "spouse", "family", notes=pg.CARRY), expect_old_id=first["id"]),
+            notes_edit())
+    finally:
+        await other.close()
+    assert change.status == "superseded"
+    (cur_row,) = await conn.fetch("SELECT notes FROM person_relationships WHERE user_id=$1 AND valid_to IS NULL", conn.uid)
+    # either order is fine; a LOST EDIT is not: the notes edit landed first -> the replacement carries "newer"; the type
+    # change landed first -> the notes edit matched nothing (a conflict), and the replacement carries what it replaced
+    assert cur_row["notes"] == ("newer" if landed else "old")
+
+
 async def test_the_timestamptz_columns_follow_both_text_forms(conn):
     a, b = await _people(conn, "Ann Reyes", "Bo Reyes")
     for eid, vf, vt in (("e1", "2020-01-01T10:00:00.123456Z", "2021-02-03 04:05:06.5+00"), ("e2", "2022-01-01T00:00:00Z", "not a date")):

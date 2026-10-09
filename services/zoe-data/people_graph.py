@@ -16,6 +16,7 @@
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import logging
 import re
@@ -347,9 +348,12 @@ async def edge_transaction(db, user_id: str, person_a: str, person_b: str):
         yield
 
 
+CARRY = object()   # EdgeSpec.notes: "keep the notes of the edge this one replaces" - read INSIDE the pair lock
+
+
 @dataclass(frozen=True)
 class EdgeSpec:
-    """What the new current edge says."""
+    """What the new current edge says. ``notes=CARRY`` copies the replaced edge's notes as they are under the lock."""
 
     rel_type: str
     rel_a_to_b: str
@@ -425,7 +429,7 @@ async def insert_edge(db, *, user_id: str, edge_id: str, person_a_id: str, perso
     row = {"id": edge_id, "user_id": user_id, "person_a_id": person_a_id, "person_b_id": person_b_id,
            "rel_type": spec.rel_type, "rel_a_to_b": spec.rel_a_to_b, "rel_b_to_a": spec.rel_b_to_a,
            "rel_group": spec.rel_group, "valid_from": now, "created_at": now, "updated_at": now}
-    if spec.notes is not None:
+    if spec.notes is not None and spec.notes is not CARRY:
         row["notes"] = spec.notes
     for col, v in (("authority", spec.authority), ("origin", spec.origin), ("turn_id", ev.turn_id),
                    ("quote_span", ev.quote_span), ("speaker_rank", ev.speaker_rank)):
@@ -458,6 +462,8 @@ async def replace_current_edge(db, user_id: str, person_a: str, person_b: str, s
             landed = await insert_edge(db, user_id=user_id, edge_id=new_id, person_a_id=person_a, person_b_id=person_b,
                                        spec=spec, now=now, cols=cols)
             return EdgeChange("inserted" if landed else "exists", edge_id=new_id if landed else None)
+        if spec.notes is CARRY:       # the notes as they are NOW, under the lock: a concurrent notes edit is not lost
+            spec = dataclasses.replace(spec, notes=await edge_notes(db, user_id, cur[0]))
         if not await close_edge(db, user_id, cur[0], reason=close_reason, now=now, superseded_by=new_id, cols=cols):
             raise EdgeWriteError("the current edge could not be closed")
         if not await insert_edge(db, user_id=user_id, edge_id=new_id, person_a_id=person_a, person_b_id=person_b,

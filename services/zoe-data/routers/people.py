@@ -1108,7 +1108,9 @@ async def update_relationship(
     out_id = rel_id
     if lookup is not None and new_type != edge["rel_type"]:
         group, lbl_a, lbl_b = lookup
-        notes = body["notes"] if "notes" in body else edge["notes"]
+        # no notes in the request -> carry the replaced edge's notes AS THEY ARE UNDER THE PAIR LOCK (a notes edit that
+        # landed after the read above must not be overwritten by a stale copy)
+        notes = body["notes"] if "notes" in body else pg.CARRY
         spec = pg.EdgeSpec(new_type, lbl_a, lbl_b, group, notes=notes, authority="user_confirmed", origin="rest_people",
                            evidence=pg.Evidence(speaker_rank=pg.rank_for_authority("user_confirmed")))
         try:
@@ -1123,11 +1125,16 @@ async def update_relationship(
             raise HTTPException(status_code=409, detail="Relationship changed; reload and try again")
         out_id = change.edge_id
     elif "notes" in body:
-        await db.execute(
-            "UPDATE person_relationships SET notes = ?, updated_at = ? WHERE id = ? AND user_id = ? AND valid_to IS NULL",
-            (body["notes"], pg.now_iso(), rel_id, user_id),
-        )
-        await db.commit()
+        # under the same pair lock as a type change, and conditional on the edge STILL being current: if a type change
+        # replaced it first, this matches nothing and says so (409) instead of reporting a lost edit as saved
+        async with pg.edge_transaction(db, user_id, edge["person_a_id"], edge["person_b_id"]):
+            cur = await db.execute(
+                "UPDATE person_relationships SET notes = ?, updated_at = ? WHERE id = ? AND user_id = ? AND valid_to IS NULL",
+                (body["notes"], pg.now_iso(), rel_id, user_id),
+            )
+            landed = (getattr(cur, "rowcount", 1) or 0) > 0
+        if not landed:
+            raise HTTPException(status_code=409, detail="Relationship changed; reload and try again")
     await broadcaster.broadcast("people", "people:updated", {"id": person_id}, user_id=user_id)
     return {"ok": True, "updated": True, "rel_id": out_id}
 

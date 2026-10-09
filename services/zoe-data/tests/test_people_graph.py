@@ -184,6 +184,52 @@ async def _one_current(db):
     return cur[0]
 
 
+async def _held_into(monkeypatch):
+    held = []
+
+    class Svc:
+        async def record_candidate(self, text, **kw):
+            held.append((text, kw["basis"]))
+
+    import memory_service
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: Svc())
+    return held
+
+
+async def test_one_name_inside_the_other_with_neither_known_is_asked_not_minted_twice(db, monkeypatch):
+    """Greptile P2 (#1961): "Sarah Smith is Sarah's sister" with neither known resolved both names BEFORE creating either
+    and minted two contacts for what may be one person. Decision: same words on both sides + nobody known -> ask (a
+    pending candidate), mint nothing, write no edge."""
+    held = await _held_into(monkeypatch)
+    await pe._write_relationship(U, "Sarah Smith", "Sarah", "sibling", "family", db)
+    assert await _rows(db, "SELECT * FROM people") == [] and await _rows(db) == []
+    assert held == [("Sarah Smith is Sarah's sibling.", "same_name_pair")]
+
+
+async def test_a_pair_that_does_not_overlap_still_mints_both_and_links(db, monkeypatch):
+    await _held_into(monkeypatch)
+    await pe._write_relationship(U, "Sarah Smith", "Tom Jones", "sibling", "family", db)
+    assert len(await _rows(db, "SELECT * FROM people")) == 2 and len(await _rows(db)) == 1
+
+
+async def test_the_second_name_is_re_resolved_after_the_first_is_created(db, monkeypatch):
+    """Even when the overlap guard does not fire, the second lookup happens AFTER the first create: a stub minted for the
+    first name that the second name now answers to (with another contact too -> two answers) is held, not linked."""
+    held = await _held_into(monkeypatch)
+    await _person(db, "t2", "Zed Quinn")
+    real_mint = pe._mint_stub
+
+    async def mint_then_clash(db_, user_id, name, ctx):
+        pid = await real_mint(db_, user_id, name, ctx)
+        await _person(db, "clash", "Ann Lee")           # a second "Ann" appears while the first stub is made
+        return pid
+
+    monkeypatch.setattr(pe, "_mint_stub", mint_then_clash)
+    await _person(db, "ann1", "Ann Park")
+    await pe._write_relationship(U, "Bob Marsh", "Ann", "friend", "friend", db)
+    assert await _rows(db) == [] and held and held[0][1] == "ambiguous_name"
+
+
 async def test_supersede_closes_old_and_opens_new_in_one_step(db):
     await _edge(db, "old", "a", "b", "friend")
     ch = await pg.replace_current_edge(db, U, "a", "b", _spec(origin="conversation", authority="user_stated"), close_reason="superseded")
@@ -273,6 +319,46 @@ async def test_rest_put_notes_only_is_an_annotation_in_place(db, rest):
     await _edge(db, "e1", "a", "b", "friend")
     assert (await rest.people.update_relationship("a", "e1", {"notes": "x"}, rest.user, db))["rel_id"] == "e1"
     assert len(await _rows(db)) == 1 and (await _one_current(db))["notes"] == "x"
+
+
+def _after_the_read(monkeypatch, rest, action):
+    """Run ``action(db)`` right after the REST handler's pre-lock read of the edge - the window a concurrent request lands in."""
+    real = rest.people._current_edge_of_person
+
+    async def read_then_race(db_, user_id, person_id, rel_id):
+        edge = await real(db_, user_id, person_id, rel_id)
+        await action(db_)
+        return edge
+
+    monkeypatch.setattr(rest.people, "_current_edge_of_person", read_then_race)
+
+
+async def test_rest_type_change_keeps_a_notes_edit_that_landed_after_its_read(db, rest, monkeypatch):
+    """Greptile P2 (#1961): the type change copied the notes it read BEFORE the pair lock, so a concurrent notes edit was
+    overwritten by the stale copy. The notes are now carried from the edge as it is under the lock."""
+    await _edge(db, "e1", "a", "b", "friend", notes="old notes")
+
+    async def notes_edit(db_):
+        await db_.execute("UPDATE person_relationships SET notes='newer notes' WHERE id='e1'")
+        await db_.commit()
+
+    _after_the_read(monkeypatch, rest, notes_edit)
+    await rest.people.update_relationship("a", "e1", {"rel_type": "spouse"}, rest.user, db)
+    assert (await _one_current(db))["notes"] == "newer notes"
+
+
+async def test_rest_notes_edit_on_an_edge_replaced_meanwhile_is_a_conflict_not_a_lost_save(db, rest, monkeypatch):
+    await _edge(db, "e1", "a", "b", "friend", notes="old notes")
+
+    async def type_change(db_):
+        await pg.replace_current_edge(db_, U, "a", "b", pg.EdgeSpec("spouse", "Spouse", "Spouse", "love", notes="old notes"),
+                                      expect_old_id="e1", close_reason="user_edited")
+
+    _after_the_read(monkeypatch, rest, type_change)
+    with pytest.raises(rest.people.HTTPException) as exc:
+        await rest.people.update_relationship("a", "e1", {"notes": "my edit"}, rest.user, db)
+    assert exc.value.status_code == 409                                  # not {"updated": True} for a write that matched nothing
+    assert (await _one_current(db))["notes"] == "old notes"
 
 
 async def test_rest_delete_closes_with_a_reason_and_keeps_the_row(db, rest):

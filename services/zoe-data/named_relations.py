@@ -476,7 +476,16 @@ async def _apply_one(rel: NamedRelation, *, user_id: str, source: str, session_i
     # The fact (names kept) first: it is the record every recall path can read. A refusal by
     # the authority wall (memory_authority, when present) also withholds the graph rows.
     blocked = getattr(pe, "AUTHORITY_BLOCKED", object())
-    owner_id = await pe._resolve_person_uuid(rel.owner, user_id, db)
+    owner_res = await pe._resolve_person(rel.owner, user_id, db)
+    if owner_res.ambiguous:
+        # two people answer to the owner's name: the list is held as a pending candidate - not an approved slug-keyed
+        # fact, not an edge to a guess (the settled version lands once the user says which one)
+        logger.info("PERSON_AMBIGUOUS user=%s tier=%s candidates=%d - named relations held, not guessed",
+                    user_id, owner_res.tier, len(owner_res.matches))
+        await pe._hold_fact_belief(user_id, rel.owner, fact, origin=source, basis="ambiguous_name",
+                                   extra={"ambiguous_name": rel.owner, "fact_type": "named_relations"})
+        return 0
+    owner_id = owner_res.person_id
     mem_id = await pe._ingest_to_mempalace(
         fact, user_id, rel.owner, owner_id, memory_type="person", source=source,
         session_id=session_id, source_excerpt=excerpt,
