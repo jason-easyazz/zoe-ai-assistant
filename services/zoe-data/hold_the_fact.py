@@ -50,7 +50,7 @@ from typed_env import env_str
 logger = logging.getLogger(__name__)
 
 ENV = "ZOE_HOLD_THE_FACT"
-HISTORY_ROWS = 16            # newest first; the claim is found however many filler turns precede the pushback
+HISTORY_ROWS = 400           # newest first (200 exchanges); the claim is found however many filler turns precede the pushback - a 16-row read lost it after 8 exchanges
 MAX_WORDS = 16               # a pushback is a short sentence; a paragraph that mentions Thursday is not one
 _GUEST_IDS = ("", "guest", "anonymous", "voice-guest", "voice-daemon")
 

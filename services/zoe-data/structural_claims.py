@@ -600,6 +600,12 @@ def value_match(a: str, b: str) -> bool:
     return bool(a) and bool(b) and (value_in(a, b) or value_in(b, a))
 
 
+#: kin roles that name ONE person each. "my sister" / "my son" / "my friend" do not: two sisters share the subject ``rel:sister``, so a claim
+#: about one of them is not about the other and may not retire her row by key.
+_ONE_PERSON_KIN = frozenset({"mother", "father", "wife", "husband", "spouse", "partner", "girlfriend", "boyfriend", "fiance", "stepmother",
+                             "stepfather", "mother_in_law", "father_in_law", "boss"})
+
+
 def retires(new: Claim, old: Claim) -> str:
     """The reason a NEW owner-asserted claim retires an OLDER stored claim by KEY, or "". Key = (subject, predicate,
     value): a negate / ended claim retires the older affirm of the same value (an empty value retires the slot); an
@@ -608,11 +614,12 @@ def retires(new: Claim, old: Claim) -> str:
         return ""
     if new.subj != old.subj or new.pred == "other" or new.pred != old.pred:
         return ""
+    shared_role = new.subj.startswith("rel:") and new.subj.split(":", 1)[1] not in _ONE_PERSON_KIN
     if new.pol in ("negate", "ended"):
-        if not new.obj or value_match(new.obj, old.obj):
+        if (not new.obj and not shared_role) or value_match(new.obj, old.obj):
             return "retract:" + new.pred
         return ""
-    if new.pol == "affirm" and new.pred in SLOT_PREDICATES and new.tense == "current":
+    if new.pol == "affirm" and new.pred in SLOT_PREDICATES and new.tense == "current" and not shared_role:
         if new.obj and old.obj and not value_match(new.obj, old.obj):
             return "slot:" + new.pred
     return ""

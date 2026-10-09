@@ -994,6 +994,15 @@ async def memory_for_prompt(
             import night_mind
 
             nm_block = await night_mind.prompt_block(user_id, message)
+            if nm_block and restraint.mode() != "off":
+                # appended after the restraint filter above: the same guest wall and mutes apply to each quote line
+                _lines = nm_block.split("\n")
+                _idx = [n for n, ln in enumerate(_lines) if ln.startswith("- ")]
+                _ok = await restraint.filter_extra(user_id, message, [_lines[n] for n in _idx], pull=True)
+                _drop = {n for n, k in zip(_idx, _ok) if not k}
+                if _drop:
+                    _lines = [ln for n, ln in enumerate(_lines) if n not in _drop]
+                    nm_block = "\n".join(_lines) if any(ln.startswith("- ") for ln in _lines) else ""
         except Exception:  # noqa: BLE001 - an extra block: the packet is complete without it
             nm_block = ""
         if nm_block:

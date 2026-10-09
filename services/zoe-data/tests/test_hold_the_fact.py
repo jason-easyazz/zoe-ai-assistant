@@ -13,6 +13,7 @@ pushback never costs a history read. Synthetic names and dates only (ci_safe: fa
 from __future__ import annotations
 
 import asyncio
+import sys
 import types
 
 import pytest
@@ -248,6 +249,41 @@ def test_the_hold_does_not_depend_on_how_long_the_conversation_is(world, monkeyp
         _after_question(world)
         replies.append(_run(htf.handle(PUSH, UID, SID)))
     assert len(set(replies)) == 1 and replies[0].startswith("I've got your dentist appointment down as Friday")
+
+
+def test_the_real_history_read_reaches_past_sixteen_saved_rows(monkeypatch):
+    """The production read, not a stub: a LIMIT-honouring fake of the chat table. Sixteen rows lost the claim after eight exchanges."""
+    import memory_service
+
+    rows_old_first = [("user", Q), ("assistant", A)] + [r for i in range(30) for r in (("user", f"set a timer for {i} minutes"), ("assistant", "Timer set."))]
+    seen = {}
+
+    class _Cur:
+        def __init__(self, rows):
+            self._rows = rows
+
+        async def fetchall(self):
+            return self._rows
+
+    class _Db:
+        async def execute(self, sql, params):
+            seen["limit"] = params[-1]
+            return _Cur(list(reversed(rows_old_first))[: params[-1]])
+
+    class _Ctx:
+        async def __aenter__(self):
+            return _Db()
+
+        async def __aexit__(self, *a):
+            return False
+
+    fake = types.ModuleType("database")
+    fake.get_db_ctx = lambda: _Ctx()
+    monkeypatch.setitem(sys.modules, "database", fake)
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: FakeSvc([_ref("r1", ROW_TEXT)]))
+    monkeypatch.setenv(htf.ENV, "enforce")
+    assert len(_run(htf._history(SID))) > 16 and seen["limit"] > 16
+    assert "Friday" in _run(htf.handle(PUSH, UID, SID))
 
 
 def test_a_claim_several_exchanges_back_is_found(world, monkeypatch):

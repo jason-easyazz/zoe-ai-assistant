@@ -623,6 +623,27 @@ def test_forget_it_takes_the_twin_rows_one_utterance_left_and_the_quoted_turn_in
     assert run(xw.get_backend().count(UID)) == 1                                           # the quoted turn went; the other stayed
 
 
+def test_a_neighbour_saved_within_five_minutes_is_not_a_twin_unless_it_lies_wholly_inside_the_fact():
+    class _R:
+        def __init__(self, id, text, **meta):
+            self.id, self.text, self.metadata = id, text, {"user_id": UID, "added_ts": 1000.0, **meta}
+
+    class _L:
+        def __init__(self, *rows):
+            self._rows = list(rows)
+
+        async def list_by_status(self, **_kw):
+            return self._rows
+    ref = _R("a", "User's son Rowan is allergic to peanuts")
+    neighbour = _R("n", "User's daughter Wren is allergic to peanuts")                         # same predicate, other child, same five minutes
+    paraphrase = _R("t", "Rowan is allergic to peanuts")                                         # wholly inside: the same fact worded again
+    other_turn = _R("o", "User's son Rowan is allergic to peanuts", user_turn_id="t2")
+    same_turn = _R("s", "User's son is allergic to peanuts, Rowan", user_turn_id="t1")
+    ref.metadata["user_turn_id"] = "t1"
+    got = asyncio.run(pa.twins_of(UID, ref, svc=_L(neighbour, paraphrase, other_turn, same_turn)))
+    assert {r.id for r in got} == {"t", "s"}
+
+
 def test_forget_it_is_only_the_turn_right_after_the_answer(svc):
     explained_state(svc)
     say("what time is it", channel="chat")     # (expert dispatch is off: no reply, but the turn is numbered)

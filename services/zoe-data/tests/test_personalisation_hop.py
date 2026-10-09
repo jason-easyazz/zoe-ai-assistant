@@ -166,6 +166,26 @@ def test_the_hop_finds_the_facts_for_the_day_sim_asks(svc):
     assert [f.text for f in build(svc, COLD_ASK).facts] == [WALK]
 
 
+ALLERGY = "I'm allergic to peanuts, so nothing with nuts please."
+
+
+def test_a_sensitive_fact_is_not_put_in_front_of_the_brain_for_an_unconfirmed_voice(svc, monkeypatch):
+    import restraint
+
+    put(svc, ALLERGY)
+    monkeypatch.setenv("ZOE_RESTRAINT", "enforce")
+    assert [f.text for f in build(svc, COOK_ASK).facts] == [ALLERGY]                 # no verdict (typed / gate off): the owner's own advice request pulls it
+    restraint.bind_verdict(True)
+    try:
+        assert [f.text for f in build(svc, COOK_ASK).facts] == [ALLERGY]             # a confirmed member: delivered
+        restraint.bind_verdict(False)
+        assert build(svc, COOK_ASK).facts == ()                                      # the gate did NOT confirm the speaker: withheld
+        monkeypatch.setenv("ZOE_RESTRAINT", "shadow")
+        assert [f.text for f in build(svc, COOK_ASK).facts] == [ALLERGY]             # control: shadow only logs
+    finally:
+        restraint.bind_verdict(None)
+
+
 def test_durable_facts_do_not_decay_a_year_old_fact_is_still_shown(svc):
     put(svc, NIGHT)
     (rid, (doc, meta)), = svc._col.rows.items()

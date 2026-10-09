@@ -821,3 +821,77 @@ def test_the_model_may_link_moments_into_a_thread_but_not_glue_strangers_togethe
     groups = nm.apply_threads(glued, ms, [], counts)
     sets = sorted(sorted(m.mid for m in g.moments) for g in groups)
     assert sets == [["q1"], ["q2", "q4"], ["q3", "q5"]] and counts["groups_split"] == 1                    # Dagny's two, the knee's two; the dentist alone
+
+
+# ── review round 1 (PR #1943): secrets, atomic commit, erase races, "forget it" reaching the notes ────────────────────
+
+def test_a_labelled_secret_is_never_kept_as_a_quote():
+    from memory_service import scrub_pii
+
+    secret = "my wifi password is Quokka-7731 and I keep forgetting it"
+    redacted, why = scrub_pii(secret)
+    assert why is None and redacted != secret                          # the scrubber REDACTS a labelled secret, with no rejection reason ...
+    assert nm._unstorable(secret) is True                              # ... so the quote gate must reject on the changed text, not only on a reason
+    assert nm._unstorable("I felt really proud of the way the rehearsal went on Sunday") is False
+
+
+def test_the_night_is_written_in_one_transaction_or_not_at_all(lab, monkeypatch):
+    real = lab.put_thread
+    calls = {"n": 0}
+
+    async def dies(row):
+        calls["n"] += 1
+        raise RuntimeError("db went away between the observations and the threads")
+    monkeypatch.setattr(lab, "put_thread", dies)
+    monkeypatch.setenv(nm.ENV, "enforce")
+    try:
+        night(life_transcript())
+    except Exception:  # noqa: BLE001 - the pass may surface the failure or fold it into its result; either way nothing is half-written
+        pass
+    assert calls["n"] >= 1 and not (lab.obs_rows or lab.thread_rows or lab.run_rows)
+    monkeypatch.setattr(lab, "put_thread", real)
+    night(life_transcript())
+    assert lab.obs_rows and lab.thread_rows and lab.run_rows           # control: the same night commits whole when the store holds
+
+
+def test_a_forget_that_finished_while_the_model_ran_is_not_written_back(lab, monkeypatch):
+    import memory_forgotten
+
+    sub = LF.threads[0].identity[0].lower()
+
+    async def keep(user_id, items, *, text_of=str):
+        rows = list(items)
+        kept = [r for r in rows if sub not in (text_of(r) or "").lower()]
+        return kept, len(rows) - len(kept)
+    monkeypatch.setattr(memory_forgotten, "keep_unforgotten", keep)
+    monkeypatch.setenv(nm.ENV, "enforce")
+    night(life_transcript())
+    assert lab.obs_rows and not any(sub in o["quote"].lower() for o in lab.obs_rows.values())
+    assert not any(sub in (t["title"] or "").lower() for t in lab.thread_rows.values())
+    monkeypatch.undo()
+    lab.obs_rows.clear(), lab.thread_rows.clear(), lab.run_rows.clear()
+    monkeypatch.setenv(nm.ENV, "enforce")
+    night(life_transcript())
+    assert any(sub in o["quote"].lower() for o in lab.obs_rows.values())            # control: without the ledger the same words are written
+
+
+def test_a_user_erased_while_the_model_ran_gets_nothing_written_back(lab, monkeypatch):
+    class Erased(Recorder):
+        def __call__(self, messages, max_tokens):
+            nm._DELETED_AT[UID] = __import__("time").monotonic()
+            return super().__call__(messages, max_tokens)
+    monkeypatch.setenv(nm.ENV, "enforce")
+    res, _ = night(rec=Erased())
+    assert res.get("skipped_reason") == "erased_during_run" and not (lab.obs_rows or lab.thread_rows or lab.run_rows)
+
+
+def test_forget_it_reaches_the_observations_saved_from_the_same_turn_and_the_same_words(lab, monkeypatch):
+    serve(monkeypatch)
+    rows = run(lab.observations(UID))
+    assert len(rows) >= 3
+    first, second = rows[0], rows[1]
+    assert run(nm.erase_words(UID, first["turn_id"], "")) >= 1                      # by the turn it came from
+    assert first["id"] not in {o["id"] for o in lab.obs_rows.values()}
+    assert run(nm.erase_words(UID, "", second["quote"], "")) >= 1                    # or by the words the answer quoted
+    assert second["id"] not in {o["id"] for o in lab.obs_rows.values()}
+    assert lab.obs_rows                                                              # other notes stay

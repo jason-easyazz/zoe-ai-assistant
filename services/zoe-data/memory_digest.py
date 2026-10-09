@@ -667,6 +667,11 @@ def _salvage_items(raw: str) -> list:
     return out
 
 
+def _flat_words(text: str) -> str:
+    """Lower-case words only, single-spaced: the comparison form for "is this quote in that turn"."""
+    return " ".join(re.findall(r"[^\W_]+", str(text or "").lower()))
+
+
 def _read_claims(facts: list) -> list:
     """The parsed claim row of each extracted item (None where absent / malformed / the flag is off)."""
     import structural_claims as sc
@@ -722,7 +727,11 @@ async def _structural_post(svc, user_id: str, user_message: str, stored: list, c
         from memory_supersede import retire_by_claims
 
         mine = [(ref, c) for ref, c, _fact in stored if c is not None]
-        denials = [(None, c) for i, c in enumerate(claims) if i in consumed and c is not None]
+        # a denial has no row of its own, so nothing else checks it against the owner's turn: its quote must BE in that turn (a model-invented
+        # "not a doctor" beside a valid "I am a nurse" would otherwise retire the old doctor row on the nurse row's authority)
+        said = _flat_words(user_message)
+        denials = [(None, c) for i, c in enumerate(claims)
+                   if i in consumed and c is not None and _flat_words(c.quote) and f" {_flat_words(c.quote)} " in f" {said} "]
         sup = await retire_by_claims(svc, user_id, mine + denials)
         if sup.get("retired"):
             result["superseded"] = result.get("superseded", 0) + sup["retired"]
@@ -1628,6 +1637,7 @@ async def load_day_messages(user_id: str, start_iso: str, end_iso: str, db=None)
             JOIN chat_sessions cs ON cm.session_id = cs.id
             WHERE """ + owner_expr + """ = ?
               AND cm.role = 'user'
+              AND """ + _off_record_sql("cm") + """
               AND cm.created_at::timestamptz >= ?::timestamptz
               AND cm.created_at::timestamptz < ?::timestamptz
             ORDER BY cm.created_at ASC

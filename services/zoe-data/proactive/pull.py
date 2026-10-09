@@ -190,9 +190,45 @@ async def pending_items(db, uid: str, now: datetime | None = None) -> list[Item]
                           str(r[6] or ""), int(r[9] or 0)))
     items.sort(key=lambda i: (-i.salience, i.kind, i.id))
     sens = await lines.sensitivity_of(db, [i.id for i in items])
+    # The shipped schema has no ``proactive_candidates.sensitivity`` column: the restraint tier keeps a candidate's class in
+    # ``restraint_classes`` (keyed by source_ref), and recomputes it from the text when none is stored - the selector's own read
+    # (``restraint.thread_classes``). Without this every item carried an empty label and a pull spoke health / money items to a
+    # voice the speaker gate had not confirmed.
+    derived = _restraint_labels(items, await _stored_restraint_classes(db, uid))
     for i in items:
-        i.sensitivity = sens.get(i.id, "")
+        i.sensitivity = sens.get(i.id, "") or derived.get(i.id, "")
     return items
+
+
+async def _stored_restraint_classes(db, uid: str) -> dict:
+    """The member's stored thread classes (``restraint_classes``); {} when restraint is off or the table is unreadable."""
+    try:
+        import restraint
+
+        if restraint.mode() == "off":
+            return {}
+        return await restraint.load_thread_classes(db, uid)
+    except Exception as exc:  # noqa: BLE001 - the classes are then recomputed from the text
+        logger.debug("pull: restraint classes unreadable (non-fatal): %r", exc)
+        return {}
+
+
+def _restraint_labels(items: list, stored: dict) -> dict[str, str]:
+    """``{item id: "health,money"}`` for the items whose restraint class is sensitive; items with no class are absent."""
+    try:
+        import restraint
+
+        if restraint.mode() == "off":
+            return {}
+        out: dict[str, str] = {}
+        for i in items:
+            cls = restraint.thread_classes(i.source_ref, i.text, i.kind, stored)
+            if cls:
+                out[i.id] = ",".join(cls)
+        return out
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("pull: restraint classes failed (non-fatal): %r", exc)
+        return {}
 
 
 def _quiet(now: datetime) -> bool:

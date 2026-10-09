@@ -24,6 +24,27 @@ import memory_authority as ma
 import memory_digest
 import structural_claims as sc
 import structural_verifier as sv
+
+
+def test_a_denial_the_owner_never_said_retires_nothing(monkeypatch):
+    """A consumed denial has no row of its own: its quote must be in the owner's turn before it may retire anything."""
+    import memory_supersede
+
+    seen = []
+
+    async def spy(svc, user_id, entries):
+        seen.append(list(entries))
+        return {"retired": 0, "would": 0}
+    monkeypatch.setattr(memory_supersede, "retire_by_claims", spy)
+    said = "I am a nurse at the clinic now"
+    real = sc.Claim("user", "occupation", "doctor", "negate", "asserted", "current", "I am a nurse", "en")
+    invented = sc.Claim("user", "occupation", "doctor", "negate", "asserted", "current", "I am not a doctor", "en")
+    asyncio.run(memory_digest._structural_post(object(), "u1", said, [], [real, invented], {0, 1}, {}))
+    (entries,) = seen
+    assert [c.quote for _r, c in entries] == ["I am a nurse"]
+    seen.clear()
+    asyncio.run(memory_digest._structural_post(object(), "u1", "I am not a doctor, I am a nurse", [], [invented], {0}, {}))
+    assert [c.quote for _r, c in seen[0]] == ["I am not a doctor"]                       # control: said aloud, it counts
 from test_memory_implicit_supersede import UID, _by_text, _svc
 
 pytestmark = pytest.mark.ci_safe

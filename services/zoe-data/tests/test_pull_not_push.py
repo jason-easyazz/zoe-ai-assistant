@@ -448,12 +448,34 @@ async def test_pulled_refs_off_with_the_flag_or_the_ledger(env, monkeypatch):
 
 
 # ── the restraint tier, by name, when it exists ───────────────────────────────────────────
-async def test_without_the_restraint_column_everything_degrades_to_plain(env):
-    _cand(env, sal=0.9)
+async def test_without_the_restraint_column_a_plain_item_is_spoken(env):
+    _cand(env, text="User has a vet visit on Monday", sal=0.9, cues="vet")
     lines._reset_state()
     assert await lines._has_sensitivity_column() is False
     res = await pull.pull(MEMBER, "s1", channel="voice", speaker_verified=False, now=NOW)
-    assert res.delivered == 1                                  # no tag, nothing to hold
+    assert res.delivered == 1                                  # no class, nothing to hold
+
+
+async def test_without_the_column_the_restraint_class_still_holds_a_sensitive_item_from_an_unverified_voice(env, monkeypatch):
+    # the shipped schema has no proactive_candidates.sensitivity: the class is restraint's (computed from the text, or stored in restraint_classes)
+    monkeypatch.setenv("ZOE_RESTRAINT", "enforce")
+    _cand(env, text="User has a clinic appointment for the blood test results", sal=0.9, cues="clinic")
+    _cand(env, text="User has a vet visit on Monday", sal=0.5, cues="vet")
+    lines._reset_state()
+    assert await lines._has_sensitivity_column() is False
+    spoken = await pull.pull(MEMBER, "s1", channel="voice", speaker_verified=False, now=NOW)
+    assert spoken.delivered == 1 and "vet" in spoken.reply and "clinic" not in spoken.reply and "something private" in spoken.reply
+    assert (await pull.pending_state(MEMBER, NOW))["count"] == 1            # the clinic item is still pending for chat
+    chat = await pull.pull(MEMBER, "s2", channel="chat", now=NOW)
+    assert chat.delivered == 1 and "clinic" in chat.reply
+
+
+async def test_the_restraint_off_switch_is_honoured_by_the_pull(env, monkeypatch):
+    monkeypatch.setenv("ZOE_RESTRAINT", "off")
+    _cand(env, text="User has a clinic appointment for the blood test results", sal=0.9, cues="clinic")
+    lines._reset_state()
+    res = await pull.pull(MEMBER, "s1", channel="voice", speaker_verified=False, now=NOW)
+    assert res.delivered == 1
 
 
 async def test_a_sensitive_item_is_not_spoken_to_an_unverified_voice_but_chat_has_it(env):
@@ -662,7 +684,7 @@ async def test_a_tap_with_nothing_recent_is_not_ours(env):
 
 
 async def test_the_spoken_not_now_binds_to_the_pull_just_made(env):
-    _cand(env, sal=0.9)
+    _cand(env, text="User wants to book the car service", sal=0.9, cues="car service")       # a plain thread: a sensitive one is not SPOKEN to an unconfirmed voice
     await pull.pull(MEMBER, "s1", channel="voice", now=NOW)
     reply = await pull.tap(MEMBER, "Not now, Zoe", channel="voice", now=NOW + timedelta(seconds=20))
     assert reply == "Okay, noted."                                            # shadow: it only logs
