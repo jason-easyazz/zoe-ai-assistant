@@ -1731,6 +1731,45 @@ class MemoryService:
             )
         return rows
 
+    async def load_durable_for_hop(self, user_id: str) -> list[MemoryRef]:
+        """The OWNER's durable facts, newest first, for the personalisation hop (``personalisation_hop``): approved rows
+        the owner stated (``memory_authority`` class ``user_stated`` or above), never a mood or a recorded change, never
+        a pasted row, and only rows this user owns (a family-visible row another member wrote is not theirs). NO age
+        cut and no rank cut: ``load_for_prompt`` ranks by a 70-day decay, which is exactly what buries "I work night
+        shifts" under last week's chatter. Read-only, no access ticks. Raises nothing the caller must handle: a
+        failed read is ``[]``."""
+        if is_guest_memory_user(user_id):
+            return []
+        self._require(user_id, "user_id is required")
+        try:
+            return await self._run_sync(self._durable_rows_sync, user_id)
+        except Exception as exc:
+            logger.warning("memory_service: load_durable_for_hop failed user=%s: %s", user_id, exc)
+            return []
+
+    def _durable_rows_sync(self, user_id: str) -> list[MemoryRef]:
+        now = datetime.datetime.now(datetime.timezone.utc)
+        uid = str(user_id).strip().lower()
+        out: list[MemoryRef] = []
+        for ref in self._visible_rows(user_id, now):
+            md = ref.metadata or {}
+            if str(md.get("status") or "approved").strip().lower() != "approved":
+                continue
+            if str(md.get("user_id") or md.get("wing") or "").strip().lower() != uid:
+                continue
+            if str(md.get("memory_type") or "").lower() in _DECAYING_TYPES:
+                continue
+            if _own_words.is_pasted_row(md) or _own_words.instruction_shaped(ref.text or ""):
+                continue
+            try:
+                if _auth.row_rank(md, ref.text) < _auth.USER_RANK:
+                    continue
+            except Exception:  # noqa: BLE001 - an unclassifiable row is not provably the owner's
+                continue
+            out.append(ref)
+        out.sort(key=lambda r: float((r.metadata or {}).get("added_ts") or 0.0), reverse=True)
+        return out
+
     async def load_recent_for_prompt(
         self, user_id: str, *, window_s: float, limit: int, emotional_first: bool = False
     ) -> list[MemoryRef]:
@@ -3136,6 +3175,10 @@ class MemoryService:
                     {"rows_removed": len(owned)}, None, "")
             except Exception as exc:
                 raise MemoryServiceError(f"erase_rows failed: {exc}") from exc
+            # The erased rows' idempotency keys must not outlive them: left in the fast-path cache, an explicit
+            # re-teach of the same words would be dropped as a duplicate of a row that no longer exists.
+            for key in self._seen_keys_by_user.pop(user_id, None) or ():
+                self._seen_keys.discard(key)
             report = await self._physical_erase(needles)
             self.last_erase_report = report
             _invalidate_agent_user_facts_cache(user_id)

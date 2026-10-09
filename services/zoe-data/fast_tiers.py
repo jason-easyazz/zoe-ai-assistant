@@ -239,6 +239,18 @@ def intent_gate_decision(intent_name: str, verdict: Optional[dict]) -> tuple[str
     return "veto", "router_disagrees"
 
 
+# "Forget that." is a whole-utterance retraction COMMAND. The router head sees only its bare words, which name no
+# domain: live 2026-10-09 it said chat@0.84, the gate vetoed `memory_forget_last`, and the brain answered "I'm not
+# sure what you'd like me to forget" with the row still stored - so a fact the owner asked Zoe to remember could not
+# be retracted. The intent regex is anchored to the whole utterance; when it STARTS with the forget verb the command
+# is explicit and the head has nothing to add. ("delete that" stays gated: it names no memory and is also what a
+# person says about a list item or an event.)
+import re as _re
+
+_EXPLICIT_FORGET_RE = _re.compile(r"^\s*(?:please\s+)?(?:forget\s+|never\s+mind\s+what\s+i\b|scrap\s+what\s+i\b)",
+                                  _re.IGNORECASE)
+
+
 def intent_gate(intent_name: str, text: str, *, lane: str) -> bool:
     """True = the keyword intent may execute. Runs the head (numpy, no sidecar)
     only for an intent that has a router class; logs
@@ -246,6 +258,9 @@ def intent_gate(intent_name: str, text: str, *, lane: str) -> bool:
     NEVER raises (a gate failure allows, i.e. today's behaviour)."""
     try:
         if not intent_gate_enabled() or intent_name not in _INTENT_ROUTER_DOMAINS:
+            return True
+        if intent_name == "memory_forget_last" and _EXPLICIT_FORGET_RE.match(text or ""):
+            logger.info("INTENT_GATE lane=%s intent=%s decision=allow reason=explicit_forget_command", lane, intent_name)
             return True
         import semantic_router as _sr
 
@@ -390,6 +405,29 @@ async def _identity_tier(text: str, user_id: str):
         return None
 
 
+async def _ask_to_remember_tier(text: str, user_id: str, session_id: str, speaker_verified: Optional[bool]):
+    """The owner's explicit "remember that ..." (Samantha bar S11, ``ZOE_ASK_TO_REMEMBER``, default ON): stored
+    verbatim as a ``user_stated`` row and confirmed in ONE sentence that is only said once the row is written
+    (``ask_to_remember``). Runs on every channel that uses this core - chat, voice, LiveKit, Telegram - because the
+    4B brain under-fires its ``remember_fact`` tool and then says "I'll remember" either way. Acts only on an
+    unmistakable ask (one anchored regex first, so any other turn costs nothing) and returns None otherwise, so the
+    brain answers every other turn exactly as before. NEVER raises."""
+    try:
+        import ask_to_remember as _atr
+
+        reply = await _atr.handle(text, user_id, session_id, speaker_verified=speaker_verified)
+        if not reply:
+            return None
+        import expert_dispatch as _xd
+
+        return _xd.DispatchResult(
+            domain="memory", reply=reply, intent="ask_to_remember", tier="ask_to_remember",
+        )
+    except Exception as exc:  # never let the tier break a turn
+        logger.warning("fast_tiers ask-to-remember tier failed (non-fatal): %s", exc)
+        return None
+
+
 async def resolve(
     text: str,
     user_id: str,
@@ -433,6 +471,14 @@ async def resolve(
             idt = await _identity_tier(text, user_id)
             if idt is not None:
                 return idt
+
+        # The owner's explicit "remember that ..." - a deterministic write with its own honest reply,
+        # before the router and the brain (ZOE_ASK_TO_REMEMBER). Not gated by allow_writes: it needs no
+        # slot-extraction LLM call (the reason chat defers writes), and a registered account only.
+        atr = await _ask_to_remember_tier(
+            text, user_id, session_id, (extra_ctx or {}).get("speaker_verified"))
+        if atr is not None:
+            return atr
 
         # Tier-0 — deterministic regex read shortcut (opt-in per channel).
         # `tier0_defer_intents` (from the channel profile) names read intents this

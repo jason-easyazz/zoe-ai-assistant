@@ -989,6 +989,22 @@ async def memory_for_prompt(
         if nm_block:
             result["packet"] = (result["packet"] + "\n" + nm_block) if result.get("packet") else nm_block
             result["night_notes"] = sum(1 for ln in nm_block.split("\n") if ln.startswith("- "))
+    # The personalisation hop (ZOE_PERSONALISATION_HOP, default ON): a GENERIC-ADVICE request ("any tips for sleeping
+    # better?", "what should I wear tomorrow?") gets the (<= 2) durable facts that change the answer - a night shift,
+    # a 6am dog walk, a diet, a child's age - under "Shape the answer by", with one rule line. Those facts share no
+    # words with the question, so neither the ranked read (70-day decay) nor a semantic search surfaces them. Only an
+    # advice-shaped message reads anything; every other turn is byte-for-byte what it was. Never in continuity mode.
+    if not continuity and message.strip():
+        try:
+            import personalisation_hop
+
+            hop = await personalisation_hop.build(user_id, message)
+            hop_block = hop.section()
+        except Exception:  # noqa: BLE001 - an extra read: the packet is complete without it
+            hop_block = ""
+        if hop_block:
+            result["packet"] = (result["packet"] + "\n" + hop_block) if result.get("packet") else hop_block
+            result["hop"] = len(hop.facts)
     if continuity:
         focus = _continuity_focus(recent or [], result.get("refs") or [])
         if focus:

@@ -3597,13 +3597,25 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         preview = (ref.text or "").strip()
         if len(preview) > 80:
             preview = preview[:77] + "…"
+        # "remember that X" leaves the owner's verbatim row AND a near-identical row the post-turn capture derived
+        # from the same turn: "forget that" retracts both, or the fact would come straight back (ask_to_remember)
+        _also = []
+        try:
+            import ask_to_remember as _atr_f
+
+            for _sib in await _atr_f.siblings_of(svc, user_id, ref):
+                if await svc.review(_sib.id, decision="reject", actor=user_id, note="forget_last") is not None:
+                    _also.append(_sib)
+        except Exception as exc:  # noqa: BLE001 - the primary retraction already happened
+            logger.info("memory_forget_last: sibling retraction skipped (%s)", type(exc).__name__)
         # "forget that" is a forget like any other: the rejected row still holds the text. Erase it for real
         # (see memory_forget_entity below); the reject already hid it, so a failed erase changes nothing visible.
         if hasattr(svc, "erase_rows"):
             try:
                 from memory_service import physical_erase_enabled
                 if physical_erase_enabled():
-                    await svc.erase_rows(user_id, [ref.id], actor=user_id, reason="forgotten by request (last)")
+                    await svc.erase_rows(user_id, [ref.id] + [r.id for r in _also], actor=user_id,
+                                         reason="forgotten by request (last)")
             except Exception as exc:  # noqa: BLE001
                 logger.warning("memory_forget_last: physical erase failed (%s) - row stays rejected",
                                type(exc).__name__)
@@ -3835,6 +3847,22 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         except Exception as exc:  # noqa: BLE001 - the tool must never fail a turn
             logger.warning("memory_retire failed: %s", type(exc).__name__)
             return "Noted."
+
+    # "remember that <fact>" typed to Zoe by the owner (detect_intent -> memory_remember). fast_tiers.resolve
+    # normally answers it first (ask_to_remember); this is the same handler for the paths that reach the intent
+    # lane without it (experts disabled, a caller that skips the core). None = not an unmistakable ask / flag
+    # off, so the turn goes to the brain exactly as it did before there was an executor.
+    if intent.name == "memory_remember":
+        try:
+            import ask_to_remember as _atr
+        except Exception:  # noqa: BLE001
+            return None
+        slots = intent.slots or {}
+        if slots.get("fact"):   # the pi classifier's already-extracted fact
+            if not _atr.enabled():
+                return None
+            return await _atr.remember(str(slots["fact"]), user_id, utterance=str(slots.get("raw") or ""))
+        return await _atr.handle(str(slots.get("raw") or ""), user_id)
 
     # "remember that <fact>" — an EXPLICIT, model-callable memory write. This is
     # the fulfillment for the Flue sidecar's remember_fact + remember_emotional_moment
