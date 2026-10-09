@@ -148,7 +148,7 @@ def test_the_edge_writer_calls_the_authority_rule():
 
     src = inspect.getsource(person_extractor._write_relationship)
     assert "_edge_may_change(" in src                         # the supersede branch asks first
-    assert 'authority=_edge_authority_for(source, text), origin=source' in inspect.getsource(person_extractor.process_text)
+    assert 'edge_authority, edge_rank = _edge_authority_and_rank(source, text)' in inspect.getsource(person_extractor.process_text)
     assert "may_override(" in inspect.getsource(person_extractor._edge_may_change)
 
 

@@ -882,23 +882,38 @@ def _rel_lookup(rel_type: str) -> tuple[str, str, str] | None:
 @router.get("/{person_id}/relationships")
 async def list_relationships(
     person_id: str,
+    as_of: Optional[str] = Query(
+        None, description="ISO-8601 instant: the relationships that were true then (default: now)."),
+    include: Optional[str] = Query(
+        None, description="'history' returns closed edges too, newest first, each with valid_from / valid_to / close_reason."),
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    """List all relationship edges for a person, both sides resolved."""
+    """List a person's relationship edges, both sides resolved.
+
+    Default: the CURRENT edges only - a closed (superseded, removed, merged) edge is history and is not returned beside
+    the one that replaced it. ``as_of=<instant>`` returns what was true at that instant; ``include=history`` returns
+    every edge. Each item says whether it is ``current`` and carries its window (``valid_from`` / ``valid_to``) and
+    ``close_reason``.
+    """
+    import people_graph as pg
+
     await require_feature_access(db, user, feature="people", action="read")
     user_id = user["user_id"]
     await _get_person_or_404(db, person_id, user_id)
 
-    cursor = await db.execute(
-        "SELECT * FROM person_relationships WHERE user_id = ? AND (person_a_id = ? OR person_b_id = ?)",
-        (user_id, person_id, person_id),
-    )
-    rows = await cursor.fetchall()
+    at = None
+    if as_of:
+        at = pg.parse_ts(as_of)
+        if at is None:
+            raise HTTPException(status_code=400, detail="as_of must be an ISO-8601 date or time")
+    if include not in (None, "", "history"):
+        raise HTTPException(status_code=400, detail="include must be 'history'")
+    history = include == "history"
+    rows = await pg.edges_for_person(db, user_id, person_id, as_of=at, history=history)
 
     grouped: dict[str, list] = {"love": [], "family": [], "friend": [], "work": []}
-    for row in rows:
-        d = dict(row)
+    for d in rows:
         is_a = d["person_a_id"] == person_id
         other_id = d["person_b_id"] if is_a else d["person_a_id"]
         label = d["rel_a_to_b"] if is_a else d["rel_b_to_a"]
@@ -926,9 +941,18 @@ async def list_relationships(
             "circle": od.get("circle"),
             "context": od.get("context"),
             "notes": d.get("notes"),
+            "current": d["current"],
+            "valid_from": d.get("valid_from") or d.get("created_at"),
+            "valid_to": d.get("valid_to"),
+            "close_reason": d.get("close_reason"),
         })
 
-    return {"relationships": grouped}
+    out: dict = {"relationships": grouped}
+    if at is not None:
+        out["as_of"] = pg.now_iso(at)
+    if history:
+        out["include"] = "history"
+    return out
 
 
 @router.post("/{person_id}/relationships")
@@ -1000,16 +1024,18 @@ async def add_relationship(
     if other_id == person_id:
         raise HTTPException(status_code=400, detail="Cannot link a person to themselves")
 
+    import people_graph as pg
+
     rel_id = str(uuid.uuid4())
-    now = datetime.utcnow().isoformat() + "Z"
     try:
-        await db.execute(
-            """INSERT INTO person_relationships
-               (id, user_id, person_a_id, person_b_id, rel_type, rel_a_to_b, rel_b_to_a, rel_group, notes, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (rel_id, user_id, person_id, other_id, rel_type, lbl_a, lbl_b, group,
-             body.get("notes"), now, now),
-        )
+        # The account acting on its own graph is user_confirmed (rank 5); a REST edit has no chat turn to point at.
+        landed = await pg.insert_edge(
+            db, user_id=user_id, edge_id=rel_id, person_a_id=person_id, person_b_id=other_id,
+            spec=pg.EdgeSpec(rel_type, lbl_a, lbl_b, group, notes=body.get("notes"), authority="user_confirmed",
+                             origin="rest_people", evidence=pg.Evidence(speaker_rank=pg.rank_for_authority("user_confirmed"))),
+            ignore_conflict=False)
+        if not landed:
+            raise HTTPException(status_code=409, detail="Relationship already exists")
         await db.commit()
     except HTTPException:
         raise
@@ -1032,6 +1058,20 @@ async def add_relationship(
     return {"ok": True, "rel_id": rel_id, "other_person_id": other_id}
 
 
+async def _current_edge_of_person(db, user_id: str, person_id: str, rel_id: str) -> Optional[dict]:
+    """The CURRENT edge ``rel_id`` if it is this user's and touches ``person_id``, else None."""
+    async with db.execute(
+        "SELECT id, person_a_id, person_b_id, rel_type, rel_group, notes FROM person_relationships "
+        "WHERE id = ? AND user_id = ? AND valid_to IS NULL AND (person_a_id = ? OR person_b_id = ?)",
+        (rel_id, user_id, person_id, person_id),
+    ) as cur:
+        row = await cur.fetchone()
+    if not row:
+        return None
+    return {"id": row[0], "person_a_id": row[1], "person_b_id": row[2], "rel_type": row[3], "rel_group": row[4],
+            "notes": row[5]}
+
+
 @router.put("/{person_id}/relationships/{rel_id}")
 async def update_relationship(
     person_id: str,
@@ -1040,34 +1080,63 @@ async def update_relationship(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    """Update relationship notes or type."""
+    """Update relationship notes or type.
+
+    A changed ``rel_type`` is a changed BELIEF: the old edge is closed (``close_reason='user_edited'``, history kept)
+    and a new current edge is opened in one transaction; the response carries the new ``rel_id``. Notes are an annotation
+    on the edge and are edited in place.
+    """
+    import people_graph as pg
+
     await require_feature_access(db, user, feature="people", action="update")
     user_id = user["user_id"]
     await _get_person_or_404(db, person_id, user_id)
 
-    updates = []
-    params = []
-    if "notes" in body:
-        updates.append("notes = ?"); params.append(body["notes"])
+    new_type = body.get("rel_type")
+    lookup = None
     if "rel_type" in body:
-        lookup = _rel_lookup(body["rel_type"])
+        lookup = _rel_lookup(new_type)
         if not lookup:
-            raise HTTPException(status_code=400, detail=f"Unknown rel_type: {body['rel_type']!r}")
-        group, lbl_a, lbl_b = lookup
-        updates.extend(["rel_type = ?", "rel_a_to_b = ?", "rel_b_to_a = ?", "rel_group = ?"])
-        params.extend([body["rel_type"], lbl_a, lbl_b, group])
-
-    if not updates:
+            raise HTTPException(status_code=400, detail=f"Unknown rel_type: {new_type!r}")
+    if "notes" not in body and "rel_type" not in body:
         return {"ok": True, "updated": False}
 
-    updates.append("updated_at = NOW()")
-    params.extend([rel_id, user_id])
-    await db.execute(
-        f"UPDATE person_relationships SET {', '.join(updates)} WHERE id = ? AND user_id = ?",
-        params,
-    )
-    await db.commit()
-    return {"ok": True, "updated": True}
+    edge = await _current_edge_of_person(db, user_id, person_id, rel_id)
+    if edge is None:
+        raise HTTPException(status_code=404, detail="Relationship not found")
+
+    out_id = rel_id
+    if lookup is not None and new_type != edge["rel_type"]:
+        group, lbl_a, lbl_b = lookup
+        # no notes in the request -> carry the replaced edge's notes AS THEY ARE UNDER THE PAIR LOCK (a notes edit that
+        # landed after the read above must not be overwritten by a stale copy)
+        notes = body["notes"] if "notes" in body else pg.CARRY
+        spec = pg.EdgeSpec(new_type, lbl_a, lbl_b, group, notes=notes, authority="user_confirmed", origin="rest_people",
+                           evidence=pg.Evidence(speaker_rank=pg.rank_for_authority("user_confirmed")))
+        try:
+            change = await pg.replace_current_edge(
+                db, user_id, edge["person_a_id"], edge["person_b_id"], spec,
+                expect_old_id=rel_id, close_reason="user_edited")
+        except Exception:
+            import logging as _lg
+            _lg.getLogger(__name__).exception("failed to update relationship %s", rel_id)
+            raise HTTPException(status_code=500, detail="Failed to update relationship")
+        if change.status != "superseded":
+            raise HTTPException(status_code=409, detail="Relationship changed; reload and try again")
+        out_id = change.edge_id
+    elif "notes" in body:
+        # under the same pair lock as a type change, and conditional on the edge STILL being current: if a type change
+        # replaced it first, this matches nothing and says so (409) instead of reporting a lost edit as saved
+        async with pg.edge_transaction(db, user_id, edge["person_a_id"], edge["person_b_id"]):
+            cur = await db.execute(
+                "UPDATE person_relationships SET notes = ?, updated_at = ? WHERE id = ? AND user_id = ? AND valid_to IS NULL",
+                (body["notes"], pg.now_iso(), rel_id, user_id),
+            )
+            landed = (getattr(cur, "rowcount", 1) or 0) > 0
+        if not landed:
+            raise HTTPException(status_code=409, detail="Relationship changed; reload and try again")
+    await broadcaster.broadcast("people", "people:updated", {"id": person_id}, user_id=user_id)
+    return {"ok": True, "updated": True, "rel_id": out_id}
 
 
 @router.delete("/{person_id}/relationships/{rel_id}")
@@ -1077,15 +1146,18 @@ async def delete_relationship(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    """Remove a relationship edge."""
+    """Remove a relationship edge. Invalidate, never delete: the edge is CLOSED (``close_reason='user_removed'``) so it
+    stops being current and stays in the history (``?include=history``)."""
+    import people_graph as pg
+
     await require_feature_access(db, user, feature="people", action="update")
     user_id = user["user_id"]
     await _get_person_or_404(db, person_id, user_id)
-    await db.execute(
-        "DELETE FROM person_relationships WHERE id = ? AND user_id = ?",
-        (rel_id, user_id),
-    )
-    await db.commit()
+    edge = await _current_edge_of_person(db, user_id, person_id, rel_id)
+    if edge is not None:
+        async with pg.edge_transaction(db, user_id, edge["person_a_id"], edge["person_b_id"]):
+            await pg.close_edge(db, user_id, rel_id, reason="user_removed")
+        await broadcaster.broadcast("people", "people:updated", {"id": person_id}, user_id=user_id)
     return {"ok": True}
 
 
