@@ -895,6 +895,16 @@ def test_setup_problems_names_each_failed_seed_and_unlanded_fact():
                      "S2_new never landed in the recall packet"]
 
 
+BM5_WHY = {
+    "s23": 'I said that because earlier today you told me, "Just so you know, my sister Marisol is flying in from Lisbon on '
+           'Thursday". If that\'s wrong, tell me the right answer, or say forget it.',
+    "s23-nomem": "I didn't use anything I'd remembered about you for that - it was just my answer to what you said.",
+}
+BM5_SUMMARY = ("Here's what I've got on you, newest first.\n**People** (1): Marisol (sister)\n"
+               "I've also kept 1 private thing (health). I only share those if you ask directly.")
+BM5_PULLED = "Here's what I've kept about your health:\n- you get migraines most weeks (3 Oct)"
+
+
 class _ScriptedLive(sb.Live):
     """Drives run_scenarios with no network: every turn answers with the needles
     the scenario wants, so the ONLY way a scenario errors is a setup problem."""
@@ -928,7 +938,15 @@ class _ScriptedLive(sb.Live):
             return {"reply": "", "error": "HTTP 503", "ms": 1, "session": tag}
         if tag.startswith("s11-"):
             return {"reply": self._s11(tag), "error": None, "ms": 1, "session": tag}
+        if message == sb.ASK_WHY:
+            return {"reply": BM5_WHY.get(tag, "ok"), "error": None, "ms": 1, "session": tag}
         reply = {"d1-ask-sister": "Your sister Marisol is flying in from Lisbon.",
+                 "s23": "Your sister Marisol is flying in on Thursday from Lisbon.",
+                 "s23-nomem": "The capital of Australia is Canberra.",
+                 "s24-ask": BM5_SUMMARY if message == sb.ASK_KNOW_ME else BM5_PULLED,
+                 "s24-b": "I don't know much about you yet. Tell me something and say \"remember that\" and I'll keep it.",
+                 "s25-bare": "Okay, off the record - I won't keep your next message.",
+                 "s25-fresh": "I don't have anything about a brother-in-law called Cormac.",
                  "d2-ask-dad": "Your dad Teodor is a retired lighthouse keeper.",
                  "b-ask": "I have no idea who is visiting.",
                  "long-ask-sister": "Marisol.", "long-ask-dad": "He kept a lighthouse.",
@@ -977,11 +995,18 @@ class _ScriptedLive(sb.Live):
         landed = not (set(needles) & self.unlanded)
         return {"landed": landed, "waited_s": 0}
 
+    def transcript_off_record(self, user, needle):
+        return {"rows": 1, "flagged": 1}
+
     def packet(self, user, message):
         if user == B:
             return ""
         if "tea" in message or "coriander" in message:
             return "\n".join(f"- {r}" for r in self.s11_rows)
+        if "Odalys" in message:
+            return "- User's neighbour Odalys keeps bees on her roof"
+        if "Cormac" in message or "Lysander" in message:
+            return "- User's dad Teodor is a retired lighthouse keeper"
         if "Priya" in message:
             return "- Priya Nair's birthday is 7 August 1991"
         if "Biscuit" in message:
@@ -1357,7 +1382,7 @@ def test_parse_selection_full_run_is_none_and_filters_are_validated():
     assert sb.parse_selection(None, "temporal,e") == frozenset({"S2", "S10", "S3"})
     assert sb.parse_selection("S21,S1", "b") == frozenset({"S21"})              # intersection
     for only, axis in (("S99", None), ("S1,SX", None), ("", None), (None, "zz"), (None, ""),
-                       (None, "f"), (None, "h"),                # axes with no bar scenario
+                       (None, "i"), (None, "h"),                # axes with no bar scenario (f has one: S25)
                        ("S1", "b")):                            # empty intersection
         with pytest.raises(ValueError):
             sb.parse_selection(only, axis)
@@ -1710,3 +1735,70 @@ def test_the_pull_scenarios_never_touch_a_non_demo_user():
         live.rearm("real-user")
     with pytest.raises(Exception):
         live.inbox("real-user")
+
+
+# ── S23-S25 (BM5, 2026-10-09): provenance answers and memory control ───────────────────────
+
+def test_bm5_scenarios_run_pass_on_a_healthy_service_and_are_regression_gates(monkeypatch):
+    live, res = _drive(monkeypatch)
+    for sid in ("S23", "S24", "S25"):
+        assert res[sid]["verdict"] == "PASS", res[sid]
+        assert "expected" not in res[sid]                    # not a flag-dark target: a real regression gate
+    # S23's explain asks ride the SAME session as the recall reply they explain; the no-memory leg has its own
+    assert live.chats.count("s23") == 2 and live.chats.count("s23-nomem") == 2
+    assert {"s24-ask", "s24-b", "s24-private", "s25-control", "s25-secret", "s25-bare", "s25-next", "s25-fresh"} <= set(live.chats)
+    assert sb.AXIS_OF["S23"] == "recall" and sb.AXIS_OF["S25"] == "forgetting"
+    assert sb.SEED_DEPS["S23"] == ("S1",) and sb.SEED_DEPS["S24"] == ("S1", "S7")
+
+
+def test_s23_and_s24_ride_on_the_seeds_they_read_and_only_those(monkeypatch):
+    live, res = _drive(monkeypatch, selected=frozenset({"S23"}))
+    assert set(res) == {"S23"} and res["S23"]["verdict"] == "PASS"
+    assert "d1-sister" in live.chats and "d1-dad" not in live.chats and "s24-private" not in live.chats
+    live, res = _drive(monkeypatch, selected=frozenset({"S24"}))
+    assert set(res) == {"S24"} and res["S24"]["verdict"] == "PASS"
+    assert {"d1-sister", "d1-dad", "s24-private"} <= set(live.chats) and "s23" not in live.chats
+    live, res = _drive(monkeypatch, selected=frozenset({"S25"}))
+    assert set(res) == {"S25"} and res["S25"]["verdict"] == "PASS" and "d1-sister" not in live.chats
+
+
+def test_a_failed_seed_makes_s23_an_error_and_the_ask_is_not_sent(monkeypatch):
+    live, res = _drive(monkeypatch, selected=frozenset({"S23"}), seed_errors={"d1-sister"})
+    assert res["S23"]["verdict"] == "ERROR" and "s23" not in live.chats
+    live, res = _drive(monkeypatch, selected=frozenset({"S24"}), seed_errors={"s24-private"})
+    assert res["S24"]["verdict"] == "ERROR" and "s24-ask" not in live.chats
+
+
+def test_s25_is_an_error_when_the_control_never_landed_or_the_transcript_cannot_be_read(monkeypatch):
+    live, res = _drive(monkeypatch, selected=frozenset({"S25"}), unlanded={"odalys"})
+    assert res["S25"]["verdict"] == "ERROR" and "s25-fresh" not in live.chats          # absence proves nothing
+    monkeypatch.setattr(_ScriptedLive, "transcript_off_record", lambda self, user, needle: None)
+    live, res = _drive(monkeypatch, selected=frozenset({"S25"}))
+    assert res["S25"]["verdict"] == "ERROR"
+
+
+def test_a_pre_feature_service_fails_all_three_in_the_harness(monkeypatch):
+    """The pre-feature shape (the live run against main, 2026-10-09): the brain explains from its own context, the old portrait
+    line answers 'what do you know about me', and the off-the-record fact is stored and told to a fresh session."""
+    monkeypatch.setattr(_ScriptedLive, "transcript_off_record", lambda self, user, needle: {"rows": 1, "flagged": 0})
+    monkeypatch.setitem(BM5_WHY, "s23", "I mentioned Marisol was flying in because you asked who was flying in on Thursday.")
+    monkeypatch.setitem(BM5_WHY, "s23-nomem", "I was just offering to save some names since you mentioned them earlier.")
+    monkeypatch.setattr(sys.modules[__name__], "BM5_SUMMARY", "I don't have a deep portrait of you yet.")
+    monkeypatch.setattr(sys.modules[__name__], "BM5_PULLED", "I don't have any information stored about your health.")
+    orig = _ScriptedLive.packet
+    monkeypatch.setattr(_ScriptedLive, "packet", lambda self, user, message: (
+        "- User's brother-in-law Cormac is secretly getting a divorce\n- User's cousin Lysander lost his job at the shipyard"
+        if "Cormac" in message or "Lysander" in message else orig(self, user, message)))
+    live, res = _drive(monkeypatch, selected=frozenset({"S23", "S24", "S25"}))
+    assert {s: res[s]["verdict"] for s in ("S23", "S24", "S25")} == {"S23": "FAIL", "S24": "FAIL", "S25": "FAIL"}
+
+
+def test_the_bm5_scorers_never_pass_on_empty_or_canned_text():
+    assert sb.score_s23("", "", "", "")[0] == "ERROR"                    # the recall reply never used the fact: nothing to explain
+    assert sb.score_s24("", "", "")[0] == "FAIL"
+    assert sb.score_s25("", "", "", "", "", {"rows": 1, "flagged": 1})[0] == "ERROR"      # the control never landed
+
+
+def test_plan_text_lists_the_bm5_scenarios():
+    text = sb.plan_text(1)
+    assert all(f"{sid} " in text for sid in ("S23", "S24", "S25"))

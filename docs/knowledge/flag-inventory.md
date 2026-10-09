@@ -297,6 +297,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_MEMORY_LOOP_LOG_PATH` | `'~/.zoe/zoe-data-memory-loops.log'` | no | NO | `services/zoe-data/routers/system.py` |
 | `ZOE_MEMORY_LOOP_ZERO_EFFECT_RUNS` | `-` | no | NO | `services/zoe-data/memory_metrics.py` |
 | `ZOE_MEMORY_PHYSICAL_ERASE` | `'1'` | no | NO | `services/zoe-data/memory_service.py` |
+| `ZOE_MEMORY_PROVENANCE_ANSWERS` | `True` | yes | NO | `services/zoe-data/memory_provenance.py` |
 | `ZOE_MEMORY_REJECT_LEDGER` | `-` | no | NO | `services/zoe-data/memory_reject_ledger.py` |
 | `ZOE_MEMORY_STARTUP_STRICT` | `'false'` | no | NO | `services/zoe-data/main.py` |
 | `ZOE_MERGE_QUEUE_ENABLED` | `''` | no | NO | `services/zoe-data/greploop_guard.py` |

@@ -1975,6 +1975,16 @@ async def _run_flue_brain_streaming_turn(
     # order is fixed: identity → recall → offer → the user's words. "" when the flag is
     # off or the id is not a registered account → the bytes are exactly what they were.
     identity_block = await _identity_context_block(uid)
+    # BM5 (ZOE_MEMORY_PROVENANCE_ANSWERS): label the stored-context blocks this turn carries that do not come through /for-prompt,
+    # so "why did you say that?" does not call a reply that offered to add a contact memory-free. Labels only; the message is
+    # not touched (the sidecar prefix and the prompt cache are unaffected).
+    try:
+        import memory_provenance as _mp_ctx
+
+        _mp_ctx.note_context(uid, *[k for k, b in (("offer", offer_block), ("raise", raise_block),
+                                                   ("brief", str(kwargs.get("day_brief_block") or ""))) if b])
+    except Exception:  # noqa: BLE001
+        pass
     _blocks = "\n".join(b for b in (identity_block, recall_block, offer_block) if b)
     # Sanitise BEFORE assembling: a user-typed " zoe-replay:" line must never reach
     # the start of the outbound message and forge the trusted marker. Only reachable

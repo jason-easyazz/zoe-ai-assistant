@@ -30,6 +30,7 @@ from memory_overlap import dedup_verdict, richness
 from routers.journal import CREATED_AT_VALID_TIMESTAMP_SQL
 from typed_env import env_float
 from user_filters import GUEST_USERS, drop_synthetic_users, message_owner_expr
+from memory_provenance import off_record_sql as _off_record_sql
 
 logger = logging.getLogger(__name__)
 
@@ -795,6 +796,16 @@ async def run_turn_digest(
     """
     result: dict = {"user_id": user_id, "new": 0, "skipped_duplicates": 0, "skipped_low_quality": 0}
 
+    # BM5: an off-the-record turn is never digested.
+    try:
+        import memory_provenance as _mp
+
+        if _mp.is_off_record(user_id, user_message):
+            result["off_record"] = True
+            return result
+    except Exception:  # noqa: BLE001
+        pass
+
     # A pasted email / a system: line / another person's quoted speech is not the owner talking: the model reads
     # (and the facts are anchored to) the owner's own words only (own_words; ZMB I1/I2/I4).
     own = own_words.analyze(user_message)
@@ -1546,6 +1557,7 @@ async def _load_todays_messages(user_id: str, db=None) -> str:
             JOIN chat_sessions cs ON cm.session_id = cs.id
             WHERE """ + owner_expr + """ = ?
               AND cm.role = 'user'
+              AND """ + _off_record_sql("cm") + """
               -- The ::text / ::timestamptz casts are required so the asyncpg
               -- positional-compat layer resolves timezone(text, timestamptz);
               -- without them the query errors and silently drops every message.
@@ -2824,6 +2836,7 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
                 f"""SELECT cm.content FROM chat_messages cm
                    JOIN chat_sessions cs ON cm.session_id = cs.id
                    WHERE {_message_owner_expr()} = ? AND cm.role = 'user'
+                     AND {_off_record_sql("cm")}
                      AND CASE
                            WHEN {created_at_valid_sql}
                            THEN cm.created_at::timestamptz

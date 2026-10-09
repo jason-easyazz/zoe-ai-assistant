@@ -642,3 +642,62 @@ try:  # pragma: no cover - import-time alias
     from expert_dispatch import DispatchResult as TurnOutcome  # noqa: F401
 except Exception:  # pragma: no cover
     TurnOutcome = None  # type: ignore
+
+
+# ── BM5: provenance answers + memory control (ZOE_MEMORY_PROVENANCE_ANSWERS, default ON) ─────────────────────────────
+#
+# "why did you say that?", "what do you know about me?", "that's wrong, it's X" / "forget it" right after an answer, and the
+# off-the-record verb are ONE deterministic tier in front of everything above (provenance_answers). It is applied as a wrapper
+# AROUND ``resolve`` - defined last, so every caller (chat, voice, LiveKit, Telegram) gets it through the unchanged name and the
+# tiers' own bodies stay untouched - and the wrapper also records, for every OTHER tier's reply, that a deterministic tier (not
+# the memory packet) answered, so "why did you say that?" can say so instead of explaining the wrong reply.
+import functools as _functools
+
+_resolve_core = resolve
+
+
+async def _provenance_tier(text: str, user_id: str, session_id: str, kwargs: dict):
+    """The provenance / memory-control tier, or None. Numbers the turn and claims an off-the-record turn FIRST (every turn, so the
+    ledger stays aligned), then answers a recognised shape. NEVER raises."""
+    try:
+        import memory_provenance as _mp
+
+        if not _mp.enabled():
+            return None
+        uid = (user_id or "").strip()
+        if not uid:
+            return None
+        _mp.note_user_turn(uid, text, session_id)
+        _mp.claim_turn(uid, text)
+        import provenance_answers as _pa
+
+        reply = await _pa.handle(
+            text, uid, session_id, channel=kwargs.get("channel"),
+            speaker_verified=(kwargs.get("extra_ctx") or {}).get("speaker_verified"),
+        )
+        if not reply:
+            return None
+        _mp.note_direct_reply(uid, "provenance", session_id)
+        import expert_dispatch as _xd
+
+        return _xd.DispatchResult(domain="memory", reply=reply, intent="provenance_answer", tier="provenance")
+    except Exception as exc:  # never let the tier break a turn
+        logger.warning("fast_tiers provenance tier failed (non-fatal): %s", exc)
+        return None
+
+
+@_functools.wraps(_resolve_core)
+async def resolve(text: str, user_id: str, session_id: str, **kwargs):  # noqa: F811 - the documented wrapper
+    answered = await _provenance_tier(text, user_id, session_id, kwargs)
+    if answered is not None:
+        return answered
+    res = await _resolve_core(text, user_id, session_id, **kwargs)
+    if res is not None and getattr(res, "reply", ""):
+        try:
+            import memory_provenance as _mp
+
+            _mp.note_direct_reply(user_id, getattr(res, "tier", "") or "direct", session_id,
+                                  domain=getattr(res, "domain", "") or "")
+        except Exception:  # noqa: BLE001
+            pass
+    return res

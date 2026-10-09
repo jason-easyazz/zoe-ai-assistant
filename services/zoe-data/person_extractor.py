@@ -1352,6 +1352,14 @@ async def process_text(
     """
     if not text or not user_id or user_id in ("guest", "voice-daemon", ""):
         return 0
+    # BM5: an off-the-record turn is never mined.
+    try:
+        import memory_provenance as _mp
+
+        if _mp.is_off_record(user_id, text):
+            return 0
+    except Exception:  # noqa: BLE001
+        pass
     # "his birthday is 7/8/1991" -> "7 August 1991" BEFORE any pattern or stored fact sees
     # it (household day-first order, date_locale.py): the raw numeric form was stored as is
     # and a month-first model later rewrote it as July 8.

@@ -606,7 +606,8 @@ async def test_a_voice_save_of_a_rejected_speaker_carries_the_verdict_to_the_row
     await voice_tts._schedule_voice_chat_save("s1", "I told Dana the gate is blue", "ok", USER)
     for t in tasks:
         await t
-    assert calls == [("user", {"speaker_verified": False}), ("assistant", {}), ("user", {}), ("assistant", {})]
+    assert calls == [("user", {"count_turn": False, "speaker_verified": False}), ("assistant", {}),
+                     ("user", {"count_turn": False}), ("assistant", {})]
 
 
 # ── the audited delete fails closed ──────────────────────────────────────────

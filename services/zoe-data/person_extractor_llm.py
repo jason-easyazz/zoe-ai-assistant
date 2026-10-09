@@ -208,6 +208,14 @@ async def process_text_llm(
     text = (text or "").strip()
     if not text or user_id in ("guest", "") or len(text.split()) < 4:
         return 0
+    # BM5: an off-the-record turn is never mined.
+    try:
+        import memory_provenance as _mp
+
+        if _mp.is_off_record(user_id, text):
+            return 0
+    except Exception:  # noqa: BLE001
+        pass
     # Numeric dates become words (household day-first order) before the model reads
     # them: the 4B model's default is month-first ("7/8/1991" -> "July 8").
     from date_locale import normalize_numeric_dates
