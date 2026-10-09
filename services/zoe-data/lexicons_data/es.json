@@ -383,5 +383,29 @@
   "ack_release_none": "No estaba callando nada, así que no hay problema.",
   "ack_ask": "¿De qué tema debo dejar de hablar? Dímelo."
  },
- "recall_gate": {"caps_entity":true,"stop":["el","la","los","las","un","una","unos","unas","y","o","pero","de","del","al","a","en","con","por","para","como","es","son","era","fue","ser","estar","estoy","esta","están","que","lo","le","les","se","su","sus","mi","mis","tu","tus","yo","me","nos","nuestro","nuestra","no","sí","si","más","muy","también","sobre","entre","desde","hasta","cuando","donde","quien","cual","usuario"],"plan_cues":["mañana","hoy","esta noche","esta tarde","esta mañana","luego","más tarde","pronto","este fin de semana","esta semana","la próxima semana","el próximo mes"],"routine_cues":["cada","todos","todas","diario","diaria","siempre","normalmente","semanal","todos los días","entre semana"],"dayparts":["mañana","tarde","noche","madrugada","amanecer","atardecer","mediodía","medianoche"],"am_words":["a. m.","a.m.","am"],"pm_words":["p. m.","p.m.","pm"],"clock_suffix":[],"months":["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"],"weekdays":["lunes","martes","miércoles","jueves","viernes","sábado","domingo"],"stop_chars":[]}
+ "recall_gate": {"caps_entity":true,"stop":["el","la","los","las","un","una","unos","unas","y","o","pero","de","del","al","a","en","con","por","para","como","es","son","era","fue","ser","estar","estoy","esta","están","que","lo","le","les","se","su","sus","mi","mis","tu","tus","yo","me","nos","nuestro","nuestra","no","sí","si","más","muy","también","sobre","entre","desde","hasta","cuando","donde","quien","cual","usuario"],"plan_cues":["mañana","hoy","esta noche","esta tarde","esta mañana","luego","más tarde","pronto","este fin de semana","esta semana","la próxima semana","el próximo mes"],"routine_cues":["cada","todos","todas","diario","diaria","siempre","normalmente","semanal","todos los días","entre semana"],"dayparts":["mañana","tarde","noche","madrugada","amanecer","atardecer","mediodía","medianoche"],"am_words":["a. m.","a.m.","am"],"pm_words":["p. m.","p.m.","pm"],"clock_suffix":[],"months":["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"],"weekdays":["lunes","martes","miércoles","jueves","viernes","sábado","domingo"],"stop_chars":[]},
+ "off_record": {
+  "_note": "Off-the-record cues for memory_provenance.parse_off_record (English is built into that module). Regex fragments, matched case-insensitively on the turn AS SAID (accents spelled out). Same shape as English: the cue OPENS the turn (after a filler / lead-in) or CLOSES it after a comma. Every phrase the self-model advertises is pinned by tests/test_self_model.py::test_every_advertised_off_record_phrase_is_a_working_cue. Author-written, not native-reviewed.",
+  "filler": "(?:(?:vale|oye|bueno|pues|ahora|mira|escucha|zoe|y|ok|okay|hola|por favor|venga)[,.\\s]+)*",
+  "lead_in": "(?:(?:esto|eso)\\s+(?:es|va)|vamos\\s+a\\s+hablar|hablemos|quiero\\s+hablar|mant[eé]n\\s+esto|guarda\\s+esto|deja\\s+esto|podemos\\s+hablar|puedo\\s+hablar)",
+  "polite": "(?:por\\s+favor|vale|ok|okay)",
+  "cues": {
+   "off_the_record": [
+    "extraoficial(?:mente)?",
+    "off\\s+the\\s+record",
+    "no\\s+oficial"
+   ],
+   "between_us": [
+    "que\\s+quede\\s+entre\\s+nosotros",
+    "(?:esto|eso)\\s+(?:queda|se\\s+queda)\\s+entre\\s+nosotros",
+    "(?:solo\\s+)?entre\\s+(?:nosotros|t[uú]\\s+y\\s+yo)",
+    "(?:esto|eso)\\s+es\\s+(?:confidencial|privado|secreto)",
+    "es\\s+confidencial",
+    "confidencial"
+   ],
+   "dont_remember": [
+    "no\\s+(?:lo\\s+)?(?:recuerdes|guardes|almacenes|registres|grabes|memorices)\\s+(?:esto|eso|lo\\s+que\\s+(?:te\\s+)?(?:digo|voy\\s+a\\s+decir|cuento))"
+   ]
+  }
+ }
 }

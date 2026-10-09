@@ -21,26 +21,27 @@
   "who_are_you": ["quien eres", "que eres", "hablame de ti", "presentate"],
   "used_to_answer": ["que (?:usaste|has usado) para (?:responder|contestar|decir eso)", "que usaste para eso", "como (?:lo )?(?:supiste|averiguaste|contestaste)", "que (?:miraste|revisaste|consultaste)", "que herramienta (?:usaste|has usado)", "de donde salio esa respuesta"]
  },
+ "object_end": ["para", "en", "por", "cuando", "si", "porque", "hasta", "mientras", "antes de", "despues de", "a las", "a la", "al", "a mi", "a mis", "manana", "esta noche", "hoy"],
  "unsupported": {
   "purchase": {"where": "start", "cues": ["pedir", "comprar", "encargar", "reservar", "suscribir"], "name": "pedir ni comprar cosas", "no": "No puedo pedir ni comprar nada por ti.", "instead": "Eso si, puedo anotarlo en tu lista de la compra."},
   "message_others": {"where": "start", "cues": ["mandar (?:un )?(?:correo|email|mensaje|sms|whatsapp)", "enviar (?:un )?(?:correo|email|mensaje|sms|whatsapp)", "escribir (?:un )?(?:correo|email|mensaje)"], "name": "enviar correos ni mensajes a otras personas", "no": "No puedo enviar correos ni mensajes.", "instead": "Eso si, puedo ponerte un recordatorio para que lo hagas."},
   "phone": {"where": "start", "cues": ["llamar(?! me\\b)", "telefonear", "marcar", "hacer (?:una )?llamada"], "name": "hacer llamadas", "no": "No puedo hacer ni contestar llamadas.", "instead": "Eso si, puedo ponerte un recordatorio para llamar."},
   "money": {"where": "start", "cues": ["pagar", "transferir (?:el )?dinero", "enviar (?:el )?dinero", "pagar (?:una|la|mis) facturas?"], "name": "mover dinero ni pagar nada", "no": "No puedo mover dinero ni pagar nada.", "instead": "Eso si, puedo ponerte un recordatorio para la fecha de pago."},
-  "devices": {"where": "any", "cues": ["termostato", "calefaccion", "aire acondicionado", "tele", "television", "horno", "nevera", "frigorifico", "cerradura", "garaje", "persianas", "cortinas", "ventilador"], "name": "controlar nada de la casa salvo las luces", "no": "Solo puedo controlar las luces de la casa, nada mas por ahora.", "instead": "Las luces si puedo."},
-  "travel": {"where": "any", "cues": ["vuelos?", "hoteles?", "hotel", "uber", "taxi", "billetes?", "entradas?"], "name": "reservar viajes ni entradas", "no": "No puedo reservar vuelos, hoteles, viajes ni entradas.", "instead": "Eso si, puedo apuntar el viaje en tu calendario."}
+  "devices": {"where": "any", "verbs": ["(?:encender|apagar|abrir|cerrar|subir|bajar|poner|ajustar|cambiar|activar|desactivar|regular|programar|bloquear|desbloquear|controlar|arrancar|parar|prender)"], "cues": ["termostato", "calefaccion", "aire acondicionado", "tele", "television", "horno", "nevera", "frigorifico", "cerradura", "garaje", "persianas", "cortinas", "ventilador"], "name": "controlar nada de la casa salvo las luces", "no": "Solo puedo controlar las luces de la casa, nada mas por ahora.", "instead": "Las luces si puedo."},
+  "travel": {"where": "any", "verbs": ["buscar(?:me|nos)?", "conseguir(?:me|nos)?", "encontrar(?:me|nos)?", "consultar", "llamar (?:a|para pedir)", "organizar", "gestionar", "arreglar", "sacar(?:me|nos)?", "mirar"], "cues": ["vuelos?", "hoteles?", "hotel", "uber", "taxi", "billetes?", "entradas?"], "name": "reservar viajes ni entradas", "no": "No puedo reservar vuelos, hoteles, viajes ni entradas.", "instead": "Eso si, puedo apuntar el viaje en tu calendario."}
  },
  "groups": {
   "weather": {"label": "el tiempo", "do": "decirte el tiempo", "ask": "que tiempo hace hoy?", "words": ["tiempo", "clima", "pronostico", "lluvia", "temperatura", "paraguas"]},
-  "lists": {"label": "tus listas", "do": "llevar tus listas de la compra y de tareas", "ask": "anade leche a mi lista de la compra", "words": ["lista", "listas", "compra", "tareas", "tarea"]},
-  "timers": {"label": "temporizadores", "do": "poner temporizadores", "ask": "pon un temporizador de diez minutos", "words": ["temporizador", "temporizadores", "cuenta atras"]},
-  "reminders": {"label": "recordatorios", "do": "ponerte recordatorios", "ask": "recuerdame llamar al fontanero a las cinco", "words": ["recuerdame", "recordatorio", "recordatorios"]},
-  "calendar": {"label": "tu calendario", "do": "mirar y anadir eventos del calendario", "ask": "que tengo manana en el calendario?", "words": ["calendario", "agenda", "cita", "citas", "reunion", "evento", "eventos"]},
-  "notes": {"label": "notas", "do": "guardar y buscar notas", "ask": "apunta que la llave de repuesto esta en el cobertizo", "words": ["nota", "notas", "apunta"]},
+  "lists": {"actions": ["anadir", "agregar", "meter", "poner(?= .+ (?:a|en) (?:mi |la |nuestra |tu )?(?:\\w+ )?(?:lista|listas|compra))"], "label": "tus listas", "do": "llevar tus listas de la compra y de tareas", "ask": "anade leche a mi lista de la compra", "words": ["lista", "listas", "compra", "tareas", "tarea"]},
+  "timers": {"actions": ["poner (?:un |una )?(?:temporizador|cuenta atras)", "programar (?:un |una )?temporizador"], "label": "temporizadores", "do": "poner temporizadores", "ask": "pon un temporizador de diez minutos", "words": ["temporizador", "temporizadores", "cuenta atras"]},
+  "reminders": {"actions": ["recordar(?:me)?", "poner (?:un |una )?(?:recordatorio|alarma)", "programar (?:un |una )?(?:recordatorio|alarma)"], "label": "recordatorios", "do": "ponerte recordatorios", "ask": "recuerdame llamar al fontanero a las cinco", "words": ["recuerdame", "recordatorio", "recordatorios"]},
+  "calendar": {"actions": ["agendar", "programar (?:una )?(?:cita|reunion|evento)", "anadir (?:una |un )?(?:cita|reunion|evento)"], "label": "tu calendario", "do": "mirar y anadir eventos del calendario", "ask": "que tengo manana en el calendario?", "words": ["calendario", "agenda", "cita", "citas", "reunion", "evento", "eventos"]},
+  "notes": {"actions": ["anotar", "apuntar", "tomar (?:una )?nota", "guardar (?:una )?nota"], "label": "notas", "do": "guardar y buscar notas", "ask": "apunta que la llave de repuesto esta en el cobertizo", "words": ["nota", "notas", "apunta"]},
   "journal": {"label": "tu diario", "do": "llevar un diario contigo", "ask": "anade una entrada al diario", "words": ["diario"]},
   "people": {"label": "tus contactos", "do": "recordar a la gente de tu vida", "ask": "quien es Marisol?", "words": ["contacto", "contactos", "persona", "personas"]},
-  "media": {"label": "la musica", "do": "poner musica y controlar el volumen", "ask": "pon algo de jazz", "words": ["musica", "cancion", "canciones", "pon", "pausa", "volumen", "spotify", "playlist"]},
+  "media": {"actions": ["poner (?:algo de )?(?:musica|una cancion)", "reproducir", "pausar", "reanudar"], "label": "la musica", "do": "poner musica y controlar el volumen", "ask": "pon algo de jazz", "words": ["musica", "cancion", "canciones", "pon", "pausa", "volumen", "spotify", "playlist"]},
   "home": {"label": "las luces", "do": "encender, apagar y regular las luces", "ask": "apaga las luces de la cocina", "words": ["luz", "luces", "lampara", "atenua", "enciende", "apaga"]},
-  "memory": {"label": "tu memoria", "do": "recordar lo que me cuentas", "ask": "recuerda que mi te favorito es la menta", "words": ["recuerda", "memoria", "olvida"]}
+  "memory": {"actions": ["recordar que", "olvidar"], "label": "tu memoria", "do": "recordar lo que me cuentas", "ask": "recuerda que mi te favorito es la menta", "words": ["recuerda", "memoria", "olvida"]}
  },
  "surfaces": {
   "panel": "la pantalla tactil",
@@ -59,6 +60,7 @@
   "music_discovery": "crear listas semanales de musica nueva",
   "telegram_media": "entender notas de voz y fotos en Telegram"
  },
+ "off_record_phrases": ["que quede entre nosotros", "es confidencial"],
  "memory": {
   "kept": "Guardo los datos y momentos que me cuentas, con el dia en que los dijiste.",
   "remember_ask": "Di \"recuerda que\" y lo guardo palabra por palabra.",
@@ -89,9 +91,9 @@
   "tools": ["Tengo {tool_count} herramientas en {group_count} grupos: {groups}.", "{hedge}", "Aun sin activar: {dark}.", "Si me pides algo que no esta en esa lista, te dire que no puedo."],
   "cannot": ["No puedo {no_list}.", "Aun sin activar: {dark}.", "Si no estoy segura, te lo digo en vez de adivinar."],
   "can_you_no": ["{no}", "{instead}", "Quieres que lo haga?"],
-  "listening": ["Solo escucho \"{wake}\" en el panel, y eso ocurre en el propio dispositivo.", "Hasta que lo dices, nada de lo que dices se graba ni se envia a ninguna parte.", "Despues, lo que dices llega a esta caja para pasarlo a texto, nunca a la nube.", "{audio_clause}", "{ambient_clause}", "En la sesion de voz web escucho mientras la tengas abierta."],
+  "listening": ["Solo escucho \"{wake}\" en el panel, y eso ocurre en el propio dispositivo.", "Hasta que lo dices, nada de lo que dices se graba ni se envia a ninguna parte.", "Despues, lo que dices llega a esta caja para pasarlo a texto, nunca a la nube.", "{audio_clause}", "En la sesion de voz web escucho mientras la tengas abierta."],
+  "listening_ambient": ["Escucho \"{wake}\" en el panel, y ademas la captura de fondo del panel esta activada.", "Eso significa que el panel tambien recoge voz en la habitacion sin que digas la palabra de activacion: llega a esta caja, se pasa a texto y guardo ese texto como memoria de fondo. No guardo el audio.", "Nada de eso va a la nube.", "{audio_clause}", "En la sesion de voz web escucho mientras la tengas abierta."],
   "audio_clause": "Se guardan en esta caja clips cortos de lo que dices tras la palabra de activacion para poder probar el sistema de voz.",
-  "ambient_clause": "La captura de fondo en el panel esta activada.",
   "how_remember": ["{memory_rules}"],
   "know_me_yes": ["Si - eres {name}, y lo se por tu cuenta.", "{voice_clause}", "{face_clause}"],
   "voice_clause": "Tambien conozco tu voz.",

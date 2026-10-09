@@ -21,26 +21,27 @@
   "who_are_you": ["who are you", "what are you", "tell me about yourself", "introduce yourself"],
   "used_to_answer": ["what did you (?:just )?use to (?:answer|work that out|say that|figure that out|find that|answer that|answer me)", "what did you (?:just )?use for that", "what did you just use", "how did you (?:just )?(?:answer|work that out|figure that out|get that|come up with that)", "what did you (?:look at|check|look up)", "(?:which|what) tool did you (?:just )?use", "did you use (?:a|any) tool", "what sources did you use", "where did that answer come from"]
  },
+ "object_end": ["to", "into", "onto", "for", "from", "in", "on", "at", "by", "so", "because", "when", "if", "while", "before", "after", "tomorrow", "tonight", "today"],
  "unsupported": {
   "purchase": {"where": "start", "cues": ["order", "buy", "purchase", "shop for", "reserve", "subscribe to", "book"], "name": "order or buy things", "no": "I can't order or buy anything for you.", "instead": "I can add it to your shopping list, though."},
   "message_others": {"where": "start", "cues": ["email", "e-mail", "text", "sms", "whatsapp", "send (?:an? )?(?:email|e-mail|text|sms|message)", "message"], "name": "send emails or texts to other people", "no": "I can't send emails or texts.", "instead": "I can set a reminder for you to do it, though."},
   "phone": {"where": "start", "cues": ["call(?! me\\b)", "phone", "ring", "dial", "make (?:a )?(?:phone |video )?call"], "name": "make phone calls", "no": "I can't make or answer phone calls.", "instead": "I can set a reminder for you to make the call, though."},
   "money": {"where": "start", "cues": ["pay(?! attention)", "transfer (?:the )?money", "send (?:the )?money", "pay (?:a|the|my) bills?"], "name": "handle money or payments", "no": "I can't move money or pay anything.", "instead": "I can set a reminder for the due date, though."},
-  "devices": {"where": "any", "cues": ["thermostat", "heating", "air ?con(?:ditioning)?", "tv", "television", "oven", "fridge", "lock", "unlock", "garage", "blinds", "curtains", "fan", "heater"], "name": "control anything in the house except the lights", "no": "I can only control the lights in the house, nothing else yet.", "instead": "I can do the lights, though."},
-  "travel": {"where": "any", "cues": ["flights?", "hotels?", "uber", "taxi", "cab", "train tickets?", "plane tickets?", "tickets?"], "name": "book travel or tickets", "no": "I can't book flights, hotels, rides or tickets.", "instead": "I can put the trip in your calendar, though."}
+  "devices": {"where": "any", "verbs": ["(?:turn|switch)(?: (?:on|off|up|down))?", "set", "open", "close", "lock", "unlock", "adjust", "change", "raise", "lower", "dim", "start", "stop", "run", "put", "make", "heat", "cool", "warm", "control", "operate"], "cues": ["thermostat", "heating", "air ?con(?:ditioning)?", "tv", "television", "oven", "fridge", "lock", "unlock", "garage", "blinds", "curtains", "fan", "heater"], "name": "control anything in the house except the lights", "no": "I can only control the lights in the house, nothing else yet.", "instead": "I can do the lights, though."},
+  "travel": {"where": "any", "verbs": ["find", "get", "grab", "check", "look up", "search(?: for)?", "arrange", "organi[sz]e", "sort(?: out)?", "call", "hail", "line up"], "cues": ["flights?", "hotels?", "uber", "taxi", "cab", "train tickets?", "plane tickets?", "tickets?"], "name": "book travel or tickets", "no": "I can't book flights, hotels, rides or tickets.", "instead": "I can put the trip in your calendar, though."}
  },
  "groups": {
   "weather": {"label": "the weather", "do": "tell you the weather", "ask": "what's the weather like today?", "words": ["weather", "forecast", "rain", "temperature", "umbrella"]},
-  "lists": {"label": "your lists", "do": "keep your shopping and to-do lists", "ask": "add milk to my shopping list", "words": ["list", "lists", "shopping", "groceries", "todo", "to-do", "task", "tasks"]},
-  "timers": {"label": "timers", "do": "set timers", "ask": "set a timer for ten minutes", "words": ["timer", "timers", "countdown"]},
-  "reminders": {"label": "reminders", "do": "set reminders", "ask": "remind me to call the plumber at five", "words": ["remind", "reminder", "reminders"]},
-  "calendar": {"label": "your calendar", "do": "check and add calendar events", "ask": "what's on my calendar tomorrow?", "words": ["calendar", "schedule", "appointment", "appointments", "meeting", "event", "events"]},
-  "notes": {"label": "notes", "do": "save and find notes", "ask": "make a note that the spare key is in the shed", "words": ["note", "notes", "jot"]},
+  "lists": {"actions": ["add", "put(?= .+ (?:on|in|to|onto|into) (?:my |the |our |your )?(?:\\w+ )?(?:list|lists|groceries))"], "label": "your lists", "do": "keep your shopping and to-do lists", "ask": "add milk to my shopping list", "words": ["list", "lists", "shopping", "groceries", "todo", "to-do", "task", "tasks"]},
+  "timers": {"actions": ["set (?:a |an )?(?:timer|countdown)", "start (?:a |an )?(?:timer|countdown)"], "label": "timers", "do": "set timers", "ask": "set a timer for ten minutes", "words": ["timer", "timers", "countdown"]},
+  "reminders": {"actions": ["remind", "set (?:a |an |me a )?(?:reminder|alarm)"], "label": "reminders", "do": "set reminders", "ask": "remind me to call the plumber at five", "words": ["remind", "reminder", "reminders"]},
+  "calendar": {"actions": ["schedule", "(?:put|add|create) (?:an? |the )?(?:event|appointment|meeting)"], "label": "your calendar", "do": "check and add calendar events", "ask": "what's on my calendar tomorrow?", "words": ["calendar", "schedule", "appointment", "appointments", "meeting", "event", "events"]},
+  "notes": {"actions": ["(?:make|take|save|jot|write) (?:down )?(?:a |an )?note", "jot"], "label": "notes", "do": "save and find notes", "ask": "make a note that the spare key is in the shed", "words": ["note", "notes", "jot"]},
   "journal": {"label": "your journal", "do": "keep a journal with you", "ask": "add a journal entry", "words": ["journal", "diary"]},
   "people": {"label": "your contacts", "do": "keep track of the people in your life", "ask": "who is Marisol?", "words": ["contact", "contacts", "person", "people"]},
-  "media": {"label": "music", "do": "play music and control the volume", "ask": "play some jazz", "words": ["music", "song", "songs", "play", "pause", "volume", "spotify", "playlist"]},
+  "media": {"actions": ["play", "pause", "resume", "skip"], "label": "music", "do": "play music and control the volume", "ask": "play some jazz", "words": ["music", "song", "songs", "play", "pause", "volume", "spotify", "playlist"]},
   "home": {"label": "the lights", "do": "turn the lights on, off, up or down", "ask": "turn off the kitchen lights", "words": ["light", "lights", "lamp", "dim", "brighten"]},
-  "memory": {"label": "your memory", "do": "remember what you tell me", "ask": "remember that my favourite tea is peppermint", "words": ["remember", "memory", "forget"]}
+  "memory": {"actions": ["remember", "forget"], "label": "your memory", "do": "remember what you tell me", "ask": "remember that my favourite tea is peppermint", "words": ["remember", "memory", "forget"]}
  },
  "surfaces": {
   "panel": "the touch panel",
@@ -59,6 +60,7 @@
   "music_discovery": "build weekly music discovery playlists",
   "telegram_media": "understand voice notes and photos on Telegram"
  },
+ "off_record_phrases": ["off the record"],
  "memory": {
   "kept": "I keep the facts and moments you tell me, with the day you said them.",
   "remember_ask": "Say \"remember that\" and I'll keep it word for word.",
@@ -89,9 +91,9 @@
   "tools": ["I have {tool_count} tools in {group_count} groups: {groups}.", "{hedge}", "Not switched on yet: {dark}.", "If you ask for something that isn't on that list, I'll tell you I can't do it."],
   "cannot": ["I can't {no_list}.", "Not switched on yet: {dark}.", "If I'm not sure, I'll tell you rather than guess."],
   "can_you_no": ["No - {no}", "{instead}", "Want me to?"],
-  "listening": ["I only listen for \"{wake}\" on the panel, and that part happens on the device itself.", "Until you say it, nothing you say is recorded or sent anywhere.", "After it, what you say goes to this box to be turned into text, never to the cloud.", "{audio_clause}", "{ambient_clause}", "In the web voice session I listen for as long as you keep it open."],
+  "listening": ["I only listen for \"{wake}\" on the panel, and that part happens on the device itself.", "Until you say it, nothing you say is recorded or sent anywhere.", "After it, what you say goes to this box to be turned into text, never to the cloud.", "{audio_clause}", "In the web voice session I listen for as long as you keep it open."],
+  "listening_ambient": ["I listen for \"{wake}\" on the panel, and background capture at the panel is switched on as well.", "That means the panel also picks up speech in the room without the wake word: it is sent to this box and turned into text, and I keep that text as background memory. I don't keep the audio.", "None of it goes to the cloud.", "{audio_clause}", "In the web voice session I listen for as long as you keep it open."],
   "audio_clause": "Short clips of what you say after the wake word are being kept on this box so the voice system can be tested.",
-  "ambient_clause": "Background capture at the panel is switched on.",
   "how_remember": ["{memory_rules}"],
   "know_me_yes": ["Yes - you're {name}, and I know that from your account.", "{voice_clause}", "{face_clause}"],
   "voice_clause": "I know your voice too.",

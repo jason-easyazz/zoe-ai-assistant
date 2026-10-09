@@ -66,7 +66,12 @@ not select. The flag is registered in `docs/knowledge/flag-inventory.md` (regene
    come in the same order and a new row appends (prefix-cache friendly); a row in last turn's selection wins a near-tie at the budget edge.
 8. **State** is in memory, keyed `(user, session)`, bounded (128 sessions, 6 h), never crosses users. The Flue seam calls
    `note_turn(user, session, message)` once per turn (the turn counter advances once per distinct message; a `recall_memory` tool query in
-   the same turn is judged with the owner's own words).
+   the same turn is judged with the owner's own words). The noted turn is ALSO per `(user, session)` - never one "current turn" per user:
+   a web turn that starts while the same user's voice turn waits on a tool cannot steer the voice turn's recall or its sticky / cooldown
+   counters. The in-process packet and hop calls find their session from the task that noted the turn (`current_session()`, a
+   `ContextVar`) or an explicit `session_id` (`/api/memories/for-prompt?session_id=`, `personalisation_hop.build(session_id=)`); a call that
+   carries only the user while SEVERAL of their turns are live (the sidecar's `recall_memory` HTTP tool today) gets no gate decision
+   (`skipped=ambiguous_session`, the floor stands) rather than a guess.
 9. **Abstain** (enforce): nothing triggered and no filler eligible = an empty packet (`Config.abstain=False` keeps the floor's instead).
 10. **Fail-open**: any error, a guest, an off-record turn, continuity mode (the S4 block is budgeted around its closing ask) = the floor stands.
 

@@ -9,6 +9,7 @@
  "dark_flags": [{"key": "web_lookup", "flag": "ZOE_WEB_SEARCH_TOOL", "default": "off"}, {"key": "spoken_brief", "flag": "ZOE_PROACTIVE_SPOKEN", "default": "off"}, {"key": "fix_note", "flag": "ZOE_CORRECTION_APPLY", "default": "off"}, {"key": "retire_fact", "flag": "ZOE_QUOTE_RETIRE", "default": "shadow"}, {"key": "verify", "flag": "ZOE_VERIFY_ON_CHALLENGE", "default": "off"}, {"key": "persona", "flag": "ZOE_PERSONA_LAYER", "default": "off"}, {"key": "face_id", "flag": "ZOE_FACE_ID_ENABLED", "default": "off"}, {"key": "music_discovery", "flag": "ZOE_MUSIC_DISCOVERY", "default": "off"}, {"key": "telegram_media", "flag": "ZOE_TELEGRAM_MEDIA", "default": "off"}],
  "memory_rules": [{"key": "kept"}, {"key": "remember_ask", "flag": "ZOE_ASK_TO_REMEMBER", "default": "on"}, {"key": "never_kept"}, {"key": "off_record", "flag": "ZOE_MEMORY_PROVENANCE_ANSWERS", "default": "on"}, {"key": "forgotten"}, {"key": "provenance", "flag": "ZOE_MEMORY_PROVENANCE_ANSWERS", "default": "on"}, {"key": "local_store"}],
  "egress": [{"key": "web_lookup", "flag": "ZOE_WEB_SEARCH_TOOL", "default": "off"}, {"key": "telegram"}],
+ "ambient": {"flag": "AMBIENT_CAPTURE_ENABLED", "default": "off"},
  "unsupported": [{"id": "purchase", "alt": "lists"}, {"id": "message_others", "alt": "reminders"}, {"id": "phone", "alt": "reminders"}, {"id": "money", "alt": "reminders"}, {"id": "devices", "alt": "home"}, {"id": "travel", "alt": "calendar"}],
  "drop_order": ["runs_on", "memory", "surfaces", "who", "now"],
  "max_block_chars": 2400,

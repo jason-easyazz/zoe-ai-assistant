@@ -41,6 +41,7 @@ State is in memory (a restart is a new session), keyed by (user, session), bound
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import hashlib
 import json
 import logging
@@ -422,7 +423,9 @@ class Session:
 
 
 _SESSIONS: "OrderedDict[tuple, Session]" = OrderedDict()
-_CUR: dict = {}          # uid -> (session key, message hash, owner words, noted at, noted by the seam?)
+_CUR: dict = {}          # (uid, session id) -> (session key, message hash, owner words, noted at, noted by the seam?) - ONE per
+#                          conversation: a user's web turn and voice turn never share an entry
+_SESSION_CTX: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar("recall_gate_session", default=None)
 _COUNTS: dict = {}
 _PENDING: set = set()
 
@@ -430,6 +433,7 @@ _PENDING: set = set()
 def _reset_state() -> None:
     _SESSIONS.clear()
     _CUR.clear()
+    _SESSION_CTX.set(None)
     _COUNTS.clear()
     _PENDING.clear()
     _LEX.clear()
@@ -461,11 +465,14 @@ def _advance(uid: str, sid: str, message: str, now: float, *, noted: bool) -> Se
             _SESSIONS.pop(key, None)
     sess = _session(key, now)
     h = _text_hash(message)
-    cur = _CUR.get(uid)
-    same = cur is not None and cur[0] == key and cur[1] == h and now - cur[3] <= _TURN_FRESH_S
+    cur = _CUR.get(key)
+    same = cur is not None and cur[1] == h and now - cur[3] <= _TURN_FRESH_S
     if not same:
         sess.turn += 1
-    _CUR[uid] = (key, h, message, now, noted)
+    _CUR[key] = (key, h, message, now, noted)
+    if len(_CUR) > 4 * _MAX_SESSIONS:
+        for k in [k for k, v in _CUR.items() if now - v[3] > _SESSION_TTL_S]:
+            _CUR.pop(k, None)
     return sess
 
 
@@ -477,20 +484,45 @@ def note_turn(user_id: str, session_id: Optional[str], message: Any, *, now: Opt
         uid = (user_id or "").strip()
         if not uid or mode() == "off":
             return
-        _advance(uid, (session_id or "").strip(), str(message or "")[:512], time.monotonic() if now is None else now, noted=True)
+        sid = (session_id or "").strip()
+        _advance(uid, sid, str(message or "")[:512], time.monotonic() if now is None else now, noted=True)
+        _SESSION_CTX.set(sid)      # task-local: the in-process recall / hop calls of THIS turn find their own session
     except Exception:  # noqa: BLE001
         return
 
 
-def _turn_context(uid: str, message: str, now: float) -> tuple:
-    """``(session, turn, owner_words, extra)``: a fresh turn noted by the seam wins; with none, ``message`` IS the turn (a caller
-    that never notes - each new message is a new turn). ``extra`` is the caller's own text when it differs from the owner's words
-    (a tool query): an additional trigger source, same turn."""
-    cur = _CUR.get(uid)
-    if cur is not None and cur[4] and now - cur[3] <= _TURN_FRESH_S and cur[0] in _SESSIONS:
+def current_session() -> Optional[str]:
+    """The session id the turn running in THIS task noted (``""`` = a turn noted with no session id), or None when this task noted
+    none. Task-local (a ``ContextVar``), never one value per user: two conversations of one user do not see each other."""
+    return _SESSION_CTX.get()
+
+
+def _fresh_noted(key: tuple, now: float) -> bool:
+    cur = _CUR.get(key)
+    return cur is not None and bool(cur[4]) and now - cur[3] <= _TURN_FRESH_S and cur[0] in _SESSIONS
+
+
+def _turn_context(uid: str, sid: Optional[str], message: str, now: float) -> Optional[tuple]:
+    """``(session, turn, owner_words, extra)`` for the conversation ``(uid, sid)`` - or None when the conversation cannot be told.
+
+    * ``sid`` given (the in-process caller knows its session: ``current_session()`` or an explicit argument): THAT conversation's
+      fresh noted turn wins; with none, ``message`` IS the turn (a caller that never notes - each new message is a new turn).
+    * ``sid`` None (the sidecar's ``recall_memory`` HTTP call carries only the user): the user's one fresh noted turn is the turn; with
+      none, ``message`` is; with SEVERAL concurrent conversations it is ambiguous and the answer is None - the caller skips and the
+      floor stands, rather than steering one conversation by another's words and counters.
+
+    ``extra`` is the caller's own text when it differs from the owner's words (a tool query): an additional trigger source, same turn."""
+    if sid is None:
+        live = [k for k in _CUR if k[0] == uid and _fresh_noted(k, now)]
+        if len(live) > 1:
+            return None
+        sid = live[0][1] if live else ""
+    key = (uid, sid)
+    if _fresh_noted(key, now):
+        cur = _CUR[key]
         sess = _session(cur[0], now)
         return sess, sess.turn, cur[2], (message if _text_hash(message) != cur[1] else "")
-    sess = _advance(uid, "", message[:512], now, noted=False)
+    sess = _advance(uid, sid, message[:512], now, noted=False)
     return sess, sess.turn, message, ""
 
 
@@ -718,15 +750,20 @@ def _forget_old(sess: Session, turn: int) -> None:
 
 
 async def evaluate_packet(svc: Any, user_id: str, message: str, *, facts: list, hits: list, recent: Optional[list],
-                          presented: list, mood: bool, now: Optional[float] = None, cfg: Optional[Config] = None) -> Decision:
-    """The gate's decision for the recall packet. Never raises (an error is a ``skipped`` decision: the floor stands)."""
+                          presented: list, mood: bool, now: Optional[float] = None, cfg: Optional[Config] = None,
+                          session_id: Optional[str] = None) -> Decision:
+    """The gate's decision for the recall packet of the conversation ``(user_id, session_id)`` (None: see ``_turn_context``). Never
+    raises (an error is a ``skipped`` decision: the floor stands)."""
     try:
         t = time.monotonic() if now is None else now
         if _is_guest(user_id):
             return _skip("packet", "guest")
         if not (message or "").strip():
             return _skip("packet", "empty")
-        sess, turn, owner, extra = _turn_context(user_id, message, t)
+        ctx = _turn_context(user_id, session_id, message, t)
+        if ctx is None:
+            return _skip("packet", "ambiguous_session")
+        sess, turn, owner, extra = ctx
         if _off_record(user_id, owner):
             return _skip("packet", "off_record", turn)
         key = ("packet", turn, _text_hash(extra))
@@ -777,7 +814,7 @@ async def drain() -> None:
         await asyncio.gather(*list(_PENDING), return_exceptions=True)
 
 
-async def _shadow_packet(svc: Any, user_id: str, message: str, kw: dict) -> None:
+async def _shadow_packet(svc: Any, user_id: str, message: str, kw: dict) -> None:   # kw carries session_id
     try:
         _log(user_id, await evaluate_packet(svc, user_id, message, **kw), "shadow")
     except Exception as exc:  # noqa: BLE001
@@ -785,16 +822,19 @@ async def _shadow_packet(svc: Any, user_id: str, message: str, kw: dict) -> None
 
 
 async def packet_surface(svc: Any, user_id: str, message: str, result: dict, *, facts: list, hits: list, recent: Optional[list],
-                         mood: bool, rebuild: Callable) -> dict:
+                         mood: bool, rebuild: Callable, session_id: Optional[str] = None) -> dict:
     """``routers.memories.memory_for_prompt`` calls this right after the floor built ``result``. ``off``: ``result`` untouched. ``shadow``:
     ``result`` is returned untouched at once and the decision is evaluated and logged in the background. ``enforce``: the decision is
-    awaited and ``rebuild(rows)`` (the packet builder over the gate's rows, in the gate's order) replaces ``result``. Never raises."""
+    awaited and ``rebuild(rows)`` (the packet builder over the gate's rows, in the gate's order) replaces ``result``. ``session_id`` binds the
+    decision to ONE conversation of the user (default: the session this task's turn noted). Never raises."""
     try:
         m = mode()
         if m == "off":
             return result
         presented = [str(e.get("id")) for e in (result.get("refs") or []) if e.get("id")]
-        kw = dict(facts=list(facts), hits=list(hits), recent=list(recent) if recent else None, presented=presented, mood=mood)
+        sid = session_id if isinstance(session_id, str) else current_session()      # resolved HERE: a spawned shadow task keeps it
+        kw = dict(facts=list(facts), hits=list(hits), recent=list(recent) if recent else None, presented=presented, mood=mood,
+                  session_id=sid)
         if m == "shadow":
             _spawn(_shadow_packet(svc, user_id, message, kw))
             return result
@@ -810,7 +850,7 @@ async def packet_surface(svc: Any, user_id: str, message: str, result: dict, *, 
 
 
 async def evaluate_hop(user_id: str, message: str, rows: list, hop_ids: list, hop_topics: dict, *,
-                       now: Optional[float] = None, cfg: Optional[Config] = None) -> Decision:
+                       now: Optional[float] = None, cfg: Optional[Config] = None, session_id: Optional[str] = None) -> Decision:
     """The gate's decision for the personalisation hop: ``rows`` are the owner's durable rows (``load_durable_for_hop``), ``hop_ids`` the
     ids the hop's own English topic match selected (a signal here - the legacy floor - not the only one)."""
     try:
@@ -819,7 +859,10 @@ async def evaluate_hop(user_id: str, message: str, rows: list, hop_ids: list, ho
             return _skip("hop", "guest")
         if not (message or "").strip():
             return _skip("hop", "empty")
-        sess, turn, owner, extra = _turn_context(user_id, message, t)
+        ctx = _turn_context(user_id, session_id, message, t)
+        if ctx is None:
+            return _skip("hop", "ambiguous_session")
+        sess, turn, owner, extra = ctx
         if _off_record(user_id, owner):
             return _skip("hop", "off_record", turn)
         key = ("hop", turn, _text_hash(extra))
@@ -844,14 +887,14 @@ async def evaluate_hop(user_id: str, message: str, rows: list, hop_ids: list, ho
         return _skip("hop", "error")
 
 
-async def _shadow_hop(user_id: str, message: str, rows: list, hop_ids: list, topics: dict) -> None:
+async def _shadow_hop(user_id: str, message: str, rows: list, hop_ids: list, topics: dict, session_id: Optional[str]) -> None:
     try:
-        _log(user_id, await evaluate_hop(user_id, message, rows, hop_ids, topics), "shadow")
+        _log(user_id, await evaluate_hop(user_id, message, rows, hop_ids, topics, session_id=session_id), "shadow")
     except Exception as exc:  # noqa: BLE001
         logger.debug("recall_gate: shadow hop failed (%s)", type(exc).__name__)
 
 
-async def hop_surface(user_id: str, message: str, rows: list, hop: Any) -> Any:
+async def hop_surface(user_id: str, message: str, rows: list, hop: Any, session_id: Optional[str] = None) -> Any:
     """``personalisation_hop.build`` calls this with the hop it selected. ``off``/``shadow``: that same ``hop``. ``enforce``: a hop
     built from the gate's selection. Never raises."""
     try:
@@ -860,10 +903,11 @@ async def hop_surface(user_id: str, message: str, rows: list, hop: Any) -> Any:
             return hop
         hop_ids = [f.id for f in hop.facts]
         topics = {f.id: f.topic for f in hop.facts}
+        sid = session_id if isinstance(session_id, str) else current_session()
         if m == "shadow":
-            _spawn(_shadow_hop(user_id, message, list(rows), hop_ids, topics))
+            _spawn(_shadow_hop(user_id, message, list(rows), hop_ids, topics, sid))
             return hop
-        dec = await evaluate_hop(user_id, message, rows, hop_ids, topics)
+        dec = await evaluate_hop(user_id, message, rows, hop_ids, topics, session_id=sid)
         _log(user_id, dec, "enforce")
         if dec.skipped or (not dec.selected and not HOP.abstain):
             return hop

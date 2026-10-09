@@ -58,6 +58,52 @@ def test_every_brain_turn_is_write_isolated():
     assert "replay_isolation=True" in (PERF / "person_half_enforce_ab.py").read_text()
 
 
+def test_a_fake_brain_call_pins_the_wire_for_the_call_only_and_leaves_the_environment_as_it_found_it(monkeypatch):
+    """Greptile #1965: ``FakeBrain._call`` wrote ZOE_FLUE_WIRE=1 / ZOE_FLUE_STREAM_ENABLED=0 into os.environ and never restored them, so
+    every later test of the process ran on the retired wire in non-streaming mode."""
+    import os
+
+    ab.zoe_path()
+    import zoe_flue_client as zc
+
+    monkeypatch.delenv("ZOE_FLUE_WIRE", raising=False)
+    monkeypatch.setenv("ZOE_FLUE_STREAM_ENABLED", "1")                       # a value that must come back, not be popped
+    seen: dict = {}
+
+    def script(wire, text, sid):
+        seen.update(wire=os.environ.get("ZOE_FLUE_WIRE"), stream=os.environ.get("ZOE_FLUE_STREAM_ENABLED"))
+        return "ok"
+
+    before = dict(os.environ)
+    brain = ab.FakeBrain(zc, sb.new_demo_user(), script)
+    asyncio.run(brain._call("add bread to the shopping list", "s1"))
+    assert seen == {"wire": "1", "stream": "0"}                              # the pins DID apply while the call ran ...
+    assert dict(os.environ) == before                                        # ... and not a byte of the environment outlives it
+
+
+def test_the_live_entry_point_and_the_replay_script_leave_the_environment_alone(monkeypatch):
+    import os
+
+    monkeypatch.setenv("ZOE_PERF", "1")
+    monkeypatch.setattr(ab, "preflight", lambda: (-1, ""))
+    monkeypatch.setattr(ab.sb, "env_file_value", lambda _dir, key: "from-the-service-env" if key == "ZOE_BRAIN_TOKEN" else "")
+    monkeypatch.delenv("ZOE_BRAIN_TOKEN", raising=False)
+    monkeypatch.setenv("POSTGRES_URL", "postgresql://example/none")
+    before = dict(os.environ)
+    assert ab.live(types.SimpleNamespace(floors="hold", n=1, brain_budget_s=1.0)) == 2
+    assert dict(os.environ) == before and "ZOE_BRAIN_TOKEN" not in os.environ        # the key loaded for the run did not stay
+    spec = importlib.util.spec_from_file_location("recall_gate_replay", PERF / "recall_gate_replay.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert dict(os.environ) == before                                          # importing the script pins nothing
+    with mod.pinned_env():
+        assert os.environ["ZOE_RESTRAINT"] == "enforce" and os.environ["ZOE_RECALL_EVIDENCE"] == "1"
+        with mod.scoped_env(ZOE_RECALL_GATE="enforce"):
+            assert os.environ["ZOE_RECALL_GATE"] == "enforce"
+        assert "ZOE_RECALL_GATE" not in os.environ
+    assert dict(os.environ) == before
+
+
 def test_the_rig_refuses_without_the_lock_in_the_window_or_on_a_starved_box(monkeypatch):
     monkeypatch.delenv("ZOE_PERF", raising=False)
     assert ab.preflight()[0] == 0                                           # a skip notice, nothing run

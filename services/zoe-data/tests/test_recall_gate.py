@@ -713,3 +713,76 @@ async def test_a_row_written_through_the_service_carries_its_triggers(monkeypatc
     monkeypatch.setenv(rg.ENV, "off")
     off_row = await s.ingest(SISTER, user_id=UID, source="voice_fact", status="approved")
     assert "gate_t" not in off_row.metadata
+
+
+# ── one conversation never steers another (Greptile #1965) ─────────────────────────────────────
+
+async def _gate_in(svc, session_id, message, *, now):
+    return await rg.evaluate_packet(svc, UID, message, facts=[], hits=[], recent=None, presented=[], mood=False, now=now,
+                                    session_id=session_id)
+
+
+async def test_two_interleaved_conversations_of_one_user_keep_their_own_words_turns_and_counters():
+    """A web turn starts while the same user's voice turn is waiting on a tool: the voice tool's recall must be judged by the VOICE
+    turn's words and counted in the VOICE session - before the fix one ``_CUR[uid]`` entry held whichever turn noted last."""
+    svc = Svc([ref("walk0001", WALK), ref("sist0001", SISTER)])
+    rg.note_turn(UID, "voice-1", "tell me about Juniper", now=T0)
+    rg.note_turn(UID, "web-1", "tell me about Marisol", now=T0 + 1)          # the interleaving turn
+    dv = await _gate_in(svc, "voice-1", "what did she say", now=T0 + 2)      # the voice turn's tool call: a neutral query
+    assert "walk0001" in dv.ids and "sist0001" not in dv.ids, dv.ids
+    dw = await _gate_in(svc, "web-1", "what did she say", now=T0 + 3)
+    assert "sist0001" in dw.ids and "walk0001" not in dw.ids, dw.ids
+    voice, web = rg._SESSIONS[(UID, "voice-1")], rg._SESSIONS[(UID, "web-1")]
+    assert (voice.turn, web.turn) == (1, 1)
+    assert set(voice.rows) == {"walk0001"} and set(web.rows) == {"sist0001"}       # sticky / cooldown state is per conversation
+    assert not (set(voice.sel_by_turn.get(1, {}).get("packet", ())) & set(web.sel_by_turn.get(1, {}).get("packet", ())))
+
+
+async def test_a_call_that_cannot_say_which_conversation_is_not_guessed():
+    """The sidecar's HTTP recall tool carries only the user. One live turn: that is the turn. Several: no gate decision - the floor stands."""
+    svc = Svc([ref("walk0001", WALK), ref("sist0001", SISTER)])
+    rg.note_turn(UID, "voice-1", "tell me about Juniper", now=T0)
+    d1 = await _gate_in(svc, None, "what did she say", now=T0 + 1)
+    assert "walk0001" in d1.ids and not d1.skipped
+    rg.note_turn(UID, "web-1", "tell me about Marisol", now=T0 + 2)
+    d2 = await _gate_in(svc, None, "what did she say", now=T0 + 3)
+    assert d2.skipped == "ambiguous_session" and not d2.selected
+    h = await rg.evaluate_hop(UID, "what should I wear", [ref("walk0001", WALK)], [], {}, now=T0 + 3)
+    assert h.skipped == "ambiguous_session"
+
+
+async def test_the_in_process_packet_and_hop_find_their_own_session_per_task(monkeypatch, caplog):
+    """The seam notes the turn in its own task; the packet (``memory_for_prompt``) and the hop are called later in that task with no
+    session argument. Two tasks of one user interleave: each recall is judged by its OWN turn, in shadow (the evidence line) and enforce."""
+    import asyncio
+
+    rows = [ref("walk0001", WALK), ref("sist0001", SISTER)] + FILLER
+    svc = Svc(rows, hits=[], pool=rows)
+    monkeypatch.setattr(memories, "_svc", lambda: svc)
+    for mode_ in ("shadow", "enforce"):
+        monkeypatch.setenv(rg.ENV, mode_)
+        rg._reset_state()
+        caplog.clear()
+        voice_noted, web_noted = asyncio.Event(), asyncio.Event()
+        out: dict = {}
+
+        async def voice():
+            rg.note_turn(UID, "voice-1", "Do you remember how Juniper is doing")
+            voice_noted.set()
+            await web_noted.wait()                                         # the web turn starts while the voice tool "runs"
+            out["voice"] = await memories.memory_for_prompt(user_id=UID, message="what do you remember", limit=12, _=None)
+            await rg.drain()
+
+        async def web():
+            await voice_noted.wait()
+            rg.note_turn(UID, "web-1", "what is the capital of France")
+            web_noted.set()
+            await asyncio.sleep(0)
+
+        await asyncio.gather(voice(), web())
+        if mode_ == "enforce":
+            assert "Juniper" in out["voice"]["packet"], out["voice"]["packet"]
+        voice_lines = [ln for ln in caplog.lines if "surface=packet" in ln]
+        assert len(voice_lines) == 1 and "turn=1" in voice_lines[0]
+        assert rg._SESSIONS[(UID, "web-1")].turn == 1 and not rg._SESSIONS[(UID, "web-1")].rows        # the web conversation was not touched
+        assert "walk0001" in rg._SESSIONS[(UID, "voice-1")].rows or mode_ == "shadow"

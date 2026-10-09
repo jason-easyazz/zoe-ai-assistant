@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -38,14 +39,41 @@ ROOT = HERE.parents[1]
 SVC = ROOT / "services" / "zoe-data"
 
 _TMP = tempfile.mkdtemp(prefix="zoe-gate-replay-")
-os.environ["MEMPALACE_DATA_DIR"] = os.path.join(_TMP, "mempalace")
-os.environ["ZOE_VOICE_STT_LOG"] = os.path.join(_TMP, "voice_stt.jsonl")
-os.environ["ZOE_MEMORY_REJECT_LEDGER"] = os.path.join(_TMP, "reject-ledger.json")
-os.environ["ZOE_STRUCTURAL_VERIFIER"] = "off"
-os.environ["ZOE_RECALL_EVIDENCE"] = "1"          # the live floor serves dated bullets (beat-the-bar section 0)
-os.environ["ZOE_RESTRAINT"] = "enforce"          # the enforce world: sensitive rows wait for a pull, in the floor and so in the gate
-for _k in ("ZOE_EMOTIONAL_RECALL_ENABLED", "ZOE_MEMORY_COMPOSE_ENABLED", "ZOE_PERSON_SUGGEST_ENABLED"):
-    os.environ.pop(_k, None)
+_UNSET = ("ZOE_EMOTIONAL_RECALL_ENABLED", "ZOE_MEMORY_COMPOSE_ENABLED", "ZOE_PERSON_SUGGEST_ENABLED")
+
+
+@contextlib.contextmanager
+def scoped_env(**kv):
+    """Environment changes live only inside the ``with`` (restored, or removed if absent before, in a ``finally``); None removes."""
+    old = {k: os.environ.get(k) for k in kv}
+    try:
+        for k, v in kv.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        yield
+    finally:
+        for k, v in old.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def pinned_env():
+    """The replay's world, applied for the duration of ``main()`` only (importing this module changes nothing)."""
+    return scoped_env(
+        MEMPALACE_DATA_DIR=os.path.join(_TMP, "mempalace"),
+        ZOE_VOICE_STT_LOG=os.path.join(_TMP, "voice_stt.jsonl"),
+        ZOE_MEMORY_REJECT_LEDGER=os.path.join(_TMP, "reject-ledger.json"),
+        ZOE_STRUCTURAL_VERIFIER="off",
+        ZOE_RECALL_EVIDENCE="1",          # the live floor serves dated bullets (beat-the-bar section 0)
+        ZOE_RESTRAINT="enforce",          # the enforce world: sensitive rows wait for a pull, in the floor and so in the gate
+        ZOE_RECALL_GATE=None,
+        **{k: None for k in _UNSET})
+
+
 sys.path[:0] = [str(SVC), str(HERE)]
 
 DEMO = re.compile(r"^demo_bar_[0-9a-f]{8}$")
@@ -180,7 +208,11 @@ async def play(case, svc, enforce: bool, cap: _Capture):
     import recall_gate as rg
     import routers.memories as memories
 
-    os.environ["ZOE_RECALL_GATE"] = "enforce" if enforce else "shadow"
+    with scoped_env(ZOE_RECALL_GATE="enforce" if enforce else "shadow"):
+        return await _play(case, svc, cap, hop, rg, memories)
+
+
+async def _play(case, svc, cap, hop, rg, memories):
     rg._reset_state()
     memories._svc = lambda: svc
     out = []
@@ -279,16 +311,17 @@ def main(argv=None) -> int:
     ap.add_argument("--abstain", type=int, default=None, choices=(0, 1), help="override Config.abstain (1: an empty selection is an empty packet)")
     args = ap.parse_args(argv)
     only = {x.strip() for x in args.only.split(",") if x.strip()}
-    if args.filler is not None or args.abstain is not None:
-        import dataclasses
-
-        import recall_gate
-
-        kw = {k: v for k, v in (("filler_max", args.filler), ("abstain", None if args.abstain is None else bool(args.abstain))) if v is not None}
-        recall_gate.PACKET = dataclasses.replace(recall_gate.PACKET, **kw)
-        recall_gate.HOP = dataclasses.replace(recall_gate.HOP, **{k: v for k, v in kw.items() if k == "abstain"})
     try:
-        results = asyncio.run(replay(only))
+        with pinned_env():          # the replay's world exists only for this block - importing the module changes nothing
+            if args.filler is not None or args.abstain is not None:
+                import dataclasses
+
+                import recall_gate
+
+                kw = {k: v for k, v in (("filler_max", args.filler), ("abstain", None if args.abstain is None else bool(args.abstain))) if v is not None}
+                recall_gate.PACKET = dataclasses.replace(recall_gate.PACKET, **kw)
+                recall_gate.HOP = dataclasses.replace(recall_gate.HOP, **{k: v for k, v in kw.items() if k == "abstain"})
+            results = asyncio.run(replay(only))
     except Exception as exc:  # noqa: BLE001
         print(f"replay failed: {exc!r}", file=sys.stderr)
         return 2

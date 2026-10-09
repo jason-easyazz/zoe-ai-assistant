@@ -858,6 +858,13 @@ async def memory_for_prompt(
         description="Run the semantic search whatever the message looks like (the "
         "named-person floor, for a person with no contact row to focus)",
     ),
+    session_id: Optional[str] = Query(
+        None,
+        max_length=128,
+        description="The conversation this packet is for (the relevance gate's sticky / cooldown / delay "
+        "counters are per (user, session)). Absent: the user's one live turn, or - when several of their "
+        "conversations are live at once - no gate decision (the floor's packet stands)",
+    ),
     _: None = Depends(require_internal_token),
 ):
     """Compact, cited memory packet for injection into an agent's system prompt.
@@ -976,6 +983,8 @@ async def memory_for_prompt(
             mood=bool(emo_turn or _is_continuity_turn(message, user_id)),
             rebuild=lambda rows: _build_memory_prompt_packet(
                 rows, [], max_facts=limit, evidence=evidence, quotes=quotes),
+            # (called in-process the default is the Query() descriptor, not a str: the gate then uses this task's own session)
+            session_id=session_id if isinstance(session_id, str) else None,
         )
     if evidence:
         ev = result.pop("evidence", None) or {}

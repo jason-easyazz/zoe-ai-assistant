@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import audioop
+import contextlib
 import datetime as dt
 import fcntl
 import io
@@ -210,66 +211,101 @@ async def run_turn(shape: str, prep: dict, user: str, cond: str, session: str) -
     if res is not None:   # answered with no brain: the loop synthesizes the reply's first sentence
         ok = await vt._synthesize_kokoro_sidecar((vt._split_sentences(res.reply) or [res.reply])[0])
         rec.update(path=f"tier:{res.tier or 'tier1.5'}:{res.domain}",
-                   first_audio_s=round(time.monotonic() - t_post, 3) if ok else None)
+                   first_audio_s=round(time.monotonic() - t_post, 3) if ok else None, no_audio=not ok)
         return rec
 
     kw, _packet = await vt._voice_brain_kwargs(session, user, transcript, rr)
     _TIMERS.clear()
     t_kw = time.monotonic()
     stream = brain_streaming(transcript, session, user_id=user, voice_mode=True, replay_isolation=True, **kw)
+    rec.update(await time_first_sound(stream, rr, vt, fs, t_post=t_post, t_kw=t_kw))
+    await wait_slot_idle()
+    rec["wall"].append(time.time())
+    return rec
+
+
+async def close_stream(stream) -> None:
+    """Close the brain stream deterministically: breaking out of ``async for`` does not run the generator's cleanup at once, and a
+    ``Prefetched`` wrapper has a first pull in flight. Best effort - the probe never fails on a close."""
+    aclose = getattr(stream, "aclose", None)
+    if aclose is None:
+        return
+    try:
+        await aclose()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def time_first_sound(stream, rr, vt, fs, *, t_post: float, t_kw: float) -> dict:
+    """The brain-path half of one turn: drive ``stream`` by the live loop's own rules (voice_tts._generate_voice_stream) and stamp when
+    SOUND started. A stamp is taken ONLY when synthesis returned audio (a failed Kokoro call is not a fast reply); each failed synthesis
+    is named in ``synth_failed`` and a turn that never made a sound has ``first_audio_s`` None and ``no_audio`` True. The stream is
+    closed in a ``finally`` (plain and prefetched) once the first audio is timed, so the next sample never inherits this one's work."""
     t_filler = t_ack = t_first = t_tool = t_unit = None
     audio_started = filler_done = False
+    failed: list = []
     buf, tools, unit = "", [], ""
+    kokoro_s = None
     ack = fs.dispatch_ack(rr)
-    if ack:   # ZOE_FIRST_SOUND_TOOL_ACK: spoken while the brain request is already in flight
-        stream, filler_done = fs.prefetch(stream), True
-        audio_started = bool(await vt._synthesize_kokoro_sidecar(ack))
-        t_ack = time.monotonic()
-    async for delta in stream:   # the stream loop's own rules, in order (voice_tts._generate_voice_stream)
-        if not delta:
-            continue
-        now = time.monotonic()
-        if delta.startswith(vt._VOICE_TOOL_SENTINEL_PREFIXES):
-            name = vt._voice_tool_name_from_sentinel(delta)
-            t_tool = t_tool or (now if delta.startswith("__TOOL__:") else None)
-            if name and name not in tools:
-                tools.append(name)
-            if name and not filler_done and not audio_started and not buf and vt._voice_tool_filler_enabled():
-                filler_done = True
-                audio_started = bool(await vt._synthesize_kokoro_sidecar(vt._voice_tool_filler(name)))
-                t_filler = time.monotonic()
-            continue
-        t_first, buf, unit = t_first or now, buf + delta, ""
-        if vt._fast_first_audio_enabled() and not audio_started:   # once sound has started the loop only cuts sentences
-            unit, buf = vt._extract_first_unit(buf)
-            unit = unit or ""
-        if not unit:
-            ready, buf = vt._extract_complete_sentences(buf)
-            unit = ready[0] if ready else ""
+    try:
+        if ack:   # ZOE_FIRST_SOUND_TOOL_ACK: spoken while the brain request is already in flight
+            stream, filler_done = fs.prefetch(stream), True
+            if await vt._synthesize_kokoro_sidecar(ack):
+                audio_started, t_ack = True, time.monotonic()
+            else:
+                failed.append("ack")
+        async for delta in stream:   # the stream loop's own rules, in order
+            if not delta:
+                continue
+            now = time.monotonic()
+            if delta.startswith(vt._VOICE_TOOL_SENTINEL_PREFIXES):
+                name = vt._voice_tool_name_from_sentinel(delta)
+                t_tool = t_tool or (now if delta.startswith("__TOOL__:") else None)
+                if name and name not in tools:
+                    tools.append(name)
+                if name and not filler_done and not audio_started and not buf and vt._voice_tool_filler_enabled():
+                    filler_done = True
+                    if await vt._synthesize_kokoro_sidecar(vt._voice_tool_filler(name)):
+                        audio_started, t_filler = True, time.monotonic()
+                    else:
+                        failed.append("filler")
+                continue
+            t_first, buf, unit = t_first or now, buf + delta, ""
+            if vt._fast_first_audio_enabled() and not audio_started:   # once sound has started the loop only cuts sentences
+                unit, buf = vt._extract_first_unit(buf)
+                unit = unit or ""
+            if not unit:
+                ready, buf = vt._extract_complete_sentences(buf)
+                unit = ready[0] if ready else ""
+            if unit:
+                t_unit = time.monotonic()
+                break
+        if not unit and buf.strip():
+            unit, t_unit = buf.strip(), time.monotonic()
+        t_audio = None
         if unit:
-            t_unit = time.monotonic()
-            break
-    if not unit and buf.strip():
-        unit, t_unit = buf.strip(), time.monotonic()
-    t_audio = None
-    if unit:
-        t0 = time.monotonic()
-        await vt._synthesize_kokoro_sidecar(unit)   # the brain keeps decoding meanwhile, as in the live loop
-        t_audio = time.monotonic()
-        rec["kokoro_s"] = round(t_audio - t0, 3)
+            t0 = time.monotonic()
+            if await vt._synthesize_kokoro_sidecar(unit):   # the brain keeps decoding meanwhile, as in the live loop
+                t_audio = time.monotonic()
+                kokoro_s = round(t_audio - t0, 3)
+            else:
+                failed.append("first_unit")
+    finally:
+        await close_stream(stream)
     payload_at = _TIMERS.get("@payload")
     rel = lambda t: round(t - t_post, 3) if t else None   # noqa: E731
-    rec.update(path="brain:tool" if tools else "brain", tools=tools, first_unit_chars=len(unit),
+    out = dict(path="brain:tool" if tools else "brain", tools=tools, first_unit_chars=len(unit),
                packet_build_s=round(payload_at - t_kw, 3) if payload_at else None,
                post_to_first_delta_s=round(t_first - payload_at, 3) if t_first and payload_at else None,
                tool_sentinel_s=round(t_tool - t_kw, 3) if t_tool else None,
                unit_ready_s=round(t_unit - t_kw, 3) if t_unit else None,
-               first_sound_s=rel(t_audio), filler_sound_s=rel(t_filler), ack_sound_s=rel(t_ack))
-    rec["first_audio_s"] = min([x for x in (rec["first_sound_s"], rec["filler_sound_s"], rec["ack_sound_s"]) if x],
+               first_sound_s=rel(t_audio), filler_sound_s=rel(t_filler), ack_sound_s=rel(t_ack), synth_failed=failed)
+    if kokoro_s is not None:
+        out["kokoro_s"] = kokoro_s
+    out["first_audio_s"] = min([x for x in (out["first_sound_s"], out["filler_sound_s"], out["ack_sound_s"]) if x is not None],
                                default=None)
-    await wait_slot_idle()
-    rec["wall"].append(time.time())
-    return rec
+    out["no_audio"] = out["first_audio_s"] is None
+    return out
 
 
 def summarize(rows: list) -> dict:
@@ -277,10 +313,13 @@ def summarize(rows: list) -> dict:
     for cond in sorted({r.get("cond") for r in rows if r.get("cond")}):
         for shape in SHAPES:
             rs = [r for r in rows if r.get("cond") == cond and r.get("shape") == shape and not r.get("error")]
-            brain = [r for r in rs if str(r.get("path", "")).startswith("brain")]
+            all_brain = [r for r in rs if str(r.get("path", "")).startswith("brain")]
+            # a turn that never made a sound (Kokoro returned nothing) is REPORTED, never averaged in as a fast reply
+            brain = [r for r in all_brain if not r.get("no_audio") and r.get("first_audio_s") is not None]
             first = _median([r.get("first_audio_s") for r in brain])
             out[f"{cond}/{shape}"] = {
-                "turns": len(rs), "brain_turns": len(brain), "tool_turns": sum(1 for r in brain if r.get("tools")),
+                "turns": len(rs), "brain_turns": len(brain), "no_audio_turns": len(all_brain) - len(brain),
+                "synth_failed": sum(len(r.get("synth_failed") or ()) for r in all_brain), "tool_turns": sum(1 for r in brain if r.get("tools")),
                 "ack_fired": sum(1 for r in brain if r.get("ack_sound_s")),
                 "median_s": {k: _median([r.get(k) for r in brain]) for k in STAGES},
                 "clip_s": _median([r.get("clip_s") for r in rs]), "first_unit_chars": _median([r.get("first_unit_chars") for r in brain]),
@@ -413,6 +452,16 @@ async def amain(args) -> int:
     return 0
 
 
+@contextlib.contextmanager
+def _environment_restored():
+    snap = dict(os.environ)
+    try:
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(snap)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--limit", type=int, default=0, help="stop after N planned prompts")
@@ -447,7 +496,8 @@ def main() -> int:
     if refusals:
         return 2
     os.nice(5)
-    return asyncio.run(amain(args))
+    with _environment_restored():          # amain loads the service .env and pins flags: none of it outlives the run
+        return asyncio.run(amain(args))
 
 
 if __name__ == "__main__":

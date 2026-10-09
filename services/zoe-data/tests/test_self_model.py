@@ -187,6 +187,32 @@ def test_can_you_is_answered_only_for_the_closed_unsupported_list():
         assert sm.classify_can_you(q.x, q.lang) == ("unsupported", uid), text
 
 
+def test_the_requested_action_decides_not_a_word_inside_its_object():
+    """Greptile #1965: "add a fan to my shopping list" and "remind me to book a flight" were refused because ``fan`` / ``flight``
+    were matched anywhere. A supported ACTION wins; a closed-list item counts only as the object of one of its own verbs."""
+    for text in ("Can you add a fan to my shopping list?", "Can you remind me to book a flight tomorrow?", "can you put a fan on my list",
+                 "can you set a timer for the oven", "could you schedule a hotel call for Friday", "can you note that the taxi is booked",
+                 "can you turn on the lights in the garage", "can you play a song about a train ticket",
+                 "¿Puedes añadir un ventilador a mi lista de la compra?", "puedes recordarme reservar un vuelo mañana"):
+        q = sm.classify(text)
+        assert q is not None and q.kind == "can_you", text
+        assert sm.classify_can_you(q.x, q.lang)[0] == "supported", (text, sm.classify_can_you(q.x, q.lang))
+        assert run(sm.answer(q, UID, live=UP)) is None, text
+    for text, uid in (("can you turn off the fan", "devices"), ("could you please switch the heater on", "devices"), ("can you lock the front door", "devices"),
+                      ("can you open the garage", "devices"), ("can you find me a flight to Perth", "travel"), ("can you get me a taxi", "travel"),
+                      ("puedes apagar el ventilador", "devices"), ("puedes buscarme un vuelo a Lima", "travel")):
+        q = sm.classify(text)
+        assert sm.classify_can_you(q.x, q.lang) == ("unsupported", uid), text
+        assert run(sm.answer(q, UID, live=UP)), text
+
+
+def test_a_refusal_never_beats_a_supported_action_through_the_tier(monkeypatch):
+    monkeypatch.setenv("ZOE_SELF_MODEL", "enforce")
+    assert run(sm.tier("can you turn off the fan", UID)) is not None          # control: the tier does refuse a real one
+    for text in ("Can you add a fan to my shopping list?", "Can you remind me to book a flight tomorrow?"):
+        assert run(sm.tier(text, UID)) is None
+
+
 def test_a_language_without_an_enabled_file_contributes_nothing():
     assert sm.classify("何ができますか") is None and sm.classify("あなたは何ができますか") is None
     assert sm.lex("ja") == {} and sm.lex("") == {}
@@ -249,8 +275,72 @@ def test_listening_answer_is_the_truthful_wake_word_answer(monkeypatch):
     sm.reset()
     assert "Short clips" in ask("are you always listening?")
     sm.reset()
-    amb = sm.Live(now=UP.now, ambient_recent=7)
-    assert "Background capture at the panel is switched on" in ask("are you always listening?", live=amb)
+
+
+def test_listening_answer_follows_the_real_capture_config(monkeypatch):
+    """Greptile #1965: with background capture on, "nothing you say is recorded or sent anywhere before the wake word" is FALSE and
+    appending a clause does not undo it. The listening answer is a function of the capture config, in both languages."""
+    promise = {"en": "nothing you say is recorded or sent anywhere", "es": "nada de lo que dices se graba"}
+    off = {"en": ask("are you always listening?"), "es": ask("¿Estás siempre escuchando?")}
+    for lang, out in off.items():
+        assert promise[lang] in out, (lang, out)
+    on_by_rows = sm.Live(now=UP.now, ambient_recent=7)
+    for lang, text in (("en", "are you always listening?"), ("es", "¿Estás siempre escuchando?")):
+        out = ask(text, live=on_by_rows)
+        assert promise[lang] not in out, (lang, out)
+        assert ("without the wake word" in out) if lang == "en" else ("sin que digas la palabra de activacion" in out), out
+        assert "Until you say it" not in out and "Hasta que lo dices" not in out, out
+    monkeypatch.setenv("AMBIENT_CAPTURE_ENABLED", "true")          # zoe-data's own env says so, no rows yet
+    sm.reset()
+    for lang, text in (("en", "are you always listening?"), ("es", "¿Estás siempre escuchando?")):
+        out = ask(text)
+        assert promise[lang] not in out, (lang, out)
+        assert "keep that text" in out or "guardo ese texto" in out, out
+    monkeypatch.setenv("AMBIENT_CAPTURE_ENABLED", "false")
+    sm.reset()
+    assert promise["en"] in ask("are you always listening?")
+
+
+def _self_model_files():
+    return sorted((Path(sm.__file__).with_name("lexicons_data")).glob("self_model_??.json"))
+
+
+def test_every_advertised_off_record_phrase_is_a_working_cue(monkeypatch):
+    """Greptile #1965: the Spanish answer told people to say "que quede entre nosotros" while ``parse_off_record`` knew only English
+    cues, so a user who followed the instruction was still remembered. The phrases each language file advertises are data
+    (``off_record_phrases``); every one must (a) appear in that language's memory answer, (b) be parsed as a bare cue that arms the
+    next turn, (c) mark a same-turn disclosure and (d) close a turn after a comma - in EVERY self-model language file."""
+    import memory_provenance as mp
+
+    files = _self_model_files()
+    assert {f.stem[-2:] for f in files} >= {"en", "es"}
+    monkeypatch.setenv("ZOE_MEMORY_PROVENANCE_ANSWERS", "1")
+    for f in files:
+        d = json.loads(f.read_text(encoding="utf-8"))
+        phrases = d.get("off_record_phrases") or []
+        assert phrases, f"{f.name}: no off_record_phrases - the answer advertises a cue the parser must know"
+        said = (d["memory"]["off_record"] + " " + d["memory"]["never_kept"]).casefold()
+        quoted = re.findall(r'"([^"]+)"', d["memory"]["off_record"])
+        assert quoted and all(q in phrases for q in quoted), (f.name, quoted, phrases)
+        for ph in phrases:
+            assert ph.casefold() in said, (f.name, ph)
+            bare = mp.parse_off_record(ph)
+            assert bare is not None and bare.payload == "", (f.name, ph, bare)
+            lead = mp.parse_off_record(f"{ph}: my sister is pregnant and I have not told anyone")
+            assert lead is not None and lead.payload.startswith("my sister"), (f.name, ph, lead)
+            tail = mp.parse_off_record(f"My sister is pregnant and I have not told anyone, {ph}")
+            assert tail is not None and tail.payload.startswith("My sister"), (f.name, ph, tail)
+            uid = f"demo_otr_{f.stem[-2:]}_{abs(hash(ph)) % 10000}"
+            assert mp.claim_turn(uid, ph) is False                       # the bare cue arms the next turn ...
+            assert mp.claim_turn(uid, "something private I said next") is True   # ... and the next turn is off the record
+            mp.reset(uid)
+
+
+def test_a_question_about_the_cue_is_not_a_cue_in_spanish_either():
+    import memory_provenance as mp
+
+    for t in ("¿qué significa extraoficial?", "¿es confidencial este documento?", "quiero un informe confidencial para mañana por favor"):
+        assert mp.parse_off_record(t) is None, t
 
 
 def test_memory_answer_states_only_rules_whose_code_is_on(monkeypatch):

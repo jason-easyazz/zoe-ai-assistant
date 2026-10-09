@@ -226,11 +226,59 @@ def _unsupported_res(lang: str) -> tuple:
     return tuple(out)
 
 
+@lru_cache(maxsize=None)
+def _action_res(lang: str) -> tuple:
+    """((group, regex), ...): the leading ACTIONS a tool group does ("add", "remind me", "set a timer"), from the language file."""
+    out = []
+    for group, spec in (lex(lang).get("groups") or {}).items():
+        for frag in spec.get("actions") or ():
+            out.append((group, re.compile(rf"^(?:(?:{'|'.join(lex(lang).get('fillers') or ('',))})\s+)?(?:{frag})(?!\w)")))
+    return tuple(out)
+
+
+@lru_cache(maxsize=None)
+def _verb_res(lang: str, uid: str) -> tuple:
+    verbs = (lex(lang).get("unsupported", {}).get(uid) or {}).get("verbs") or ()
+    fill = "|".join(lex(lang).get("fillers") or ("",))
+    return tuple(re.compile(rf"^(?:(?:{fill})\s+)?(?:{v})(?!\w)\s*") for v in verbs)
+
+
+@lru_cache(maxsize=None)
+def _object_end_re(lang: str):
+    ends = lex(lang).get("object_end") or ()
+    return re.compile(rf"(?<!\w)(?:{'|'.join(ends)})(?!\w)") if ends else None
+
+
+def _object_span(x: str, lang: str, uid: str) -> Optional[str]:
+    """For a closed-list item that only counts as the OBJECT of a particular action (a fan you are asked to switch off, a flight
+    you are asked to find): the span after that action's verb, up to the first preposition (verb included). None when the request's action is
+    not one of the item's verbs - so a fan or a flight that is only part of an ADD / REMIND / SET-A-TIMER request is not it."""
+    for rx in _verb_res(lang, uid):
+        m = rx.match(x)
+        if m:
+            rest = x[m.end():]
+            cut = _object_end_re(lang)
+            end = cut.search(rest) if cut else None
+            return x[:m.end()] + (rest[:end.start()] if end else rest)     # the verb counts too: "lock" is both
+    return None
+
+
 def classify_can_you(x: str, lang: str) -> tuple:
     """``("unsupported", id)`` for a thing on the closed list, ``("supported", group)`` for one a tool group does,
-    ``("unknown", "")`` otherwise. Only the first is ever answered here."""
+    ``("unknown", "")`` otherwise. Only the first is ever answered here. The REQUESTED ACTION decides, never a word inside its
+    object: a request that opens with an action a tool group does ("add", "remind me", "set a timer") is supported whatever it
+    mentions ("add a fan to my shopping list", "remind me to book a flight"); a closed-list item with ``verbs`` is refused only
+    as the object of one of those verbs ("turn off the fan", "find me a flight"); the rest are the verb-initial cues."""
+    for group, rx in _action_res(lang):
+        if rx.match(x):
+            return "supported", group
     for uid, rx in _unsupported_res(lang):
-        if rx.search(x):
+        spec = lex(lang)["unsupported"][uid]
+        if spec.get("verbs"):
+            span = _object_span(x, lang, uid)
+            if span is not None and rx.search(span):
+                return "unsupported", uid
+        elif rx.search(x):
             return "unsupported", uid
     words = set(re.findall(r"\w+", x))
     for group, spec in (lex(lang).get("groups") or {}).items():
@@ -287,6 +335,8 @@ class Facts:
     web_on: bool
     face_on: bool
     audio_saved: bool
+    ambient_on: bool        # the panel's background capture, when zoe-data's own environment says so (the Pi daemon's env is invisible)
+    ambient_on: bool        # the panel's background capture, when zoe-data's own environment says so (the Pi daemon's env is invisible)
 
 
 @lru_cache(maxsize=1)
@@ -304,12 +354,13 @@ def facts() -> Facts:
         days = 0
     return Facts(registry=registry(), dark=dark, memory_rules=rules, egress=egress, forget_days=days,
                  web_on=flag_state("ZOE_WEB_SEARCH_TOOL") == "on", face_on=flag_state("ZOE_FACE_ID_ENABLED") == "on",
-                 audio_saved=flag_state("ZOE_VOICE_SAVE_AUDIO") == "on")
+                 audio_saved=flag_state("ZOE_VOICE_SAVE_AUDIO") == "on",
+                 ambient_on=flag_state(nf["ambient"]["flag"], nf["ambient"].get("default", "off")) == "on")
 
 
 def reset() -> None:
     """Drop every cache (tests; a config reload)."""
-    for fn in (registry, lex, neutral, facts, _cues, _unsupported_res, _inventory):
+    for fn in (registry, lex, neutral, facts, _cues, _unsupported_res, _inventory, _action_res, _verb_res, _object_end_re):
         getattr(fn, "cache_clear", lambda: None)()          # (a test may have swapped one for a plain function)
     _probe_cache.clear()
     _count_cache.clear()
@@ -415,6 +466,13 @@ class Live:
     voices: Optional[int] = None
     faces: Optional[int] = None
     ambient_recent: Optional[int] = None
+
+
+def ambient_capture_on(live: "Live") -> bool:
+    """Is the panel's background capture running? zoe-data cannot see the Pi daemon's environment, so it is on when zoe-data's own
+    ``AMBIENT_CAPTURE_ENABLED`` says so OR ambient rows landed this week. The wake-word-only listening answer is true only when
+    neither holds; otherwise the answer that says the room is captured without the wake word is served (both languages)."""
+    return facts().ambient_on or (live.ambient_recent or 0) > 0
 
 
 async def live_state(*, counts: bool = True) -> Live:
@@ -608,8 +666,7 @@ async def answer(q: Question, user_id: str = "", *, channel: Optional[str] = Non
         if q.kind == "listening":
             f = facts()
             slots["audio_clause"] = a["audio_clause"] if f.audio_saved else ""
-            slots["ambient_clause"] = a["ambient_clause"] if (live.ambient_recent or 0) > 0 else ""
-            return fill(a["listening"], slots) or None
+            return fill(a["listening_ambient" if ambient_capture_on(live) else "listening"], slots) or None
         if q.kind == "see_me":
             return fill(a["see_me"], {"face_state": lx["state"]["on" if facts().face_on else "off"]}) or None
         if q.kind == "know_me":

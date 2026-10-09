@@ -170,9 +170,16 @@ class Brain:
 # ── the rig: the real composition with the DB-bound neighbours faked ──────────────────────────────────────────────────────
 @contextlib.contextmanager
 def env(**kv):
+    """Scope environment changes to the ``with`` block: every key is put back (or removed if it was absent) in a ``finally``.
+    A value of None REMOVES the key for the block. Nothing the rig does may outlive its call (Greptile #1965: the fake brain's wire
+    pins leaked into every later test of the process)."""
     old = {k: os.environ.get(k) for k in kv}
-    os.environ.update({k: v for k, v in kv.items() if v is not None})
     try:
+        for k, v in kv.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
         yield
     finally:
         for k, v in old.items():
@@ -180,6 +187,17 @@ def env(**kv):
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+
+
+@contextlib.contextmanager
+def whole_environment():
+    """Snapshot ``os.environ`` and put it back exactly on exit (a CLI entry point that loads keys from the service .env)."""
+    snap = dict(os.environ)
+    try:
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(snap)
 
 
 class Rig:
@@ -553,6 +571,11 @@ async def drive(rig: Rig, floors: list[str], n: int, nonce: str, log) -> tuple[d
 
 
 def live(args) -> int:
+    with whole_environment():          # the keys loaded from the service .env below never outlive the run
+        return _live(args)
+
+
+def _live(args) -> int:
     code, msg = preflight()
     if code != -1:
         print(msg)
@@ -609,7 +632,6 @@ class FakeBrain(Brain):
         import httpx
 
         brain, zc = self, self.zc
-        os.environ["ZOE_FLUE_WIRE"], os.environ["ZOE_FLUE_STREAM_ENABLED"] = "1", "0"
         reply_box: dict = {}
 
         class _R:
@@ -639,9 +661,10 @@ class FakeBrain(Brain):
         httpx.AsyncClient = _C
         try:
             parts = []
-            async for d in zc._run_flue_brain_streaming_turn(text, sid, self.user, replay_isolation=True):
-                if isinstance(d, str) and not d.startswith("__"):
-                    parts.append(d)
+            with env(ZOE_FLUE_WIRE="1", ZOE_FLUE_STREAM_ENABLED="0"):      # the retired wire, non-streaming: for THIS call only
+                async for d in zc._run_flue_brain_streaming_turn(text, sid, self.user, replay_isolation=True):
+                    if isinstance(d, str) and not d.startswith("__"):
+                        parts.append(d)
             return "".join(parts).strip()
         finally:
             httpx.AsyncClient = real

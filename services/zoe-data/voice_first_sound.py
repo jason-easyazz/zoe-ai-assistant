@@ -113,6 +113,24 @@ class Prefetched:
             return await first
         return await self._it.__anext__()
 
+    async def aclose(self) -> None:
+        """Awaitable close for a caller that can suspend: cancel a pending first pull, wait for it to unwind, then ``aclose`` the stream
+        (so nothing is left running behind a returned call). Best effort - never raises; idempotent with ``close_nowait``."""
+        if self._closed:
+            return
+        self._closed = True
+        first, self._first = self._first, None
+        if first is not None:
+            if not first.done():
+                first.cancel()
+            await asyncio.gather(first, return_exceptions=True)
+        aclose = getattr(self._it, "aclose", None)
+        if aclose is not None:
+            try:
+                await aclose()
+            except Exception:  # noqa: BLE001 - closing is best effort
+                pass
+
     def close_nowait(self) -> None:
         if self._closed:
             return
