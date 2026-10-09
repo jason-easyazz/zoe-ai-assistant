@@ -393,6 +393,14 @@ def test_resolve_answers_the_ask_before_the_router_and_the_brain(svc, monkeypatc
     assert res.reply in atr._CONFIRM and [r.text for r in rows(svc)] == ["my favourite tea is lapsang souchong"]
 
 
+def test_an_explicit_dry_run_reads_but_never_saves(svc):
+    """The replay harness passes allow_writes=False on the REAL member's memory: the chat profile's default of False is not that."""
+    assert run(fast_tiers.resolve(TEA, UID, "s1", channel="voice", allow_writes=False)) is None
+    assert rows(svc) == []
+    res = run(fast_tiers.resolve(TEA, UID, "s1", channel="chat"))                      # control: no override, the ask is saved
+    assert res is not None and [r.text for r in rows(svc)] == ["my favourite tea is lapsang souchong"]
+
+
 @pytest.mark.parametrize("channel", ["chat", "voice", "livekit", "telegram"])
 def test_every_channel_that_uses_the_core_gets_it(svc, monkeypatch, channel):
     import semantic_router

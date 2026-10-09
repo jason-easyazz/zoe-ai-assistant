@@ -644,6 +644,21 @@ def test_a_neighbour_saved_within_five_minutes_is_not_a_twin_unless_it_lies_whol
     assert {r.id for r in got} == {"t", "s"}
 
 
+def test_forget_it_from_another_conversation_does_not_take_the_row_named_in_this_one(svc):
+    explained_state(svc)                                              # the answer named the sister row in session s1
+    assert say("forget it", session="voice-panel-7") is None           # the same member, another session: not this tier's turn
+    assert ROW_SISTER in approved(svc)
+    assert say("forget it", session="s1").startswith("Done - I forgot")  # control: the conversation that named it can
+
+
+def test_a_dry_run_never_forgets(svc):
+    import fast_tiers
+
+    explained_state(svc)
+    res = run(fast_tiers.resolve("forget it", UID, "s1", channel="voice", allow_writes=False))
+    assert res is None and ROW_SISTER in approved(svc)
+
+
 def test_forget_it_is_only_the_turn_right_after_the_answer(svc):
     explained_state(svc)
     say("what time is it", channel="chat")     # (expert dispatch is off: no reply, but the turn is numbered)

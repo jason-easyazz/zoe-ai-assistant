@@ -197,7 +197,29 @@ async def pending_items(db, uid: str, now: datetime | None = None) -> list[Item]
     derived = _restraint_labels(items, await _stored_restraint_classes(db, uid))
     for i in items:
         i.sensitivity = sens.get(i.id, "") or derived.get(i.id, "")
-    return items
+    return await _without_muted(uid, items)
+
+
+async def _without_muted(uid: str, items: list) -> list:
+    """The items minus the topics the member muted ("don't mention the dentist again"): a general "what's up?" is not asking about a muted
+    topic, so the pull, the orb count and the brief all agree (``ZOE_RESTRAINT=enforce`` removes; shadow logs; off keeps). Never raises."""
+    try:
+        import restraint
+
+        if restraint.mode() == "off" or not items:
+            return items
+        mutes = await restraint.list_mutes(uid)
+        if not mutes:
+            return items
+        kept = []
+        for i in items:
+            dec = restraint.Decision(False, "muted") if restraint.muted(i.text, i.source_ref, mutes) else restraint.Decision(True)
+            if restraint.gate(uid, dec, "raise_cue"):
+                kept.append(i)
+        return kept
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("pull: mutes unreadable (non-fatal): %r", exc)
+        return items
 
 
 async def _stored_restraint_classes(db, uid: str) -> dict:
@@ -387,10 +409,10 @@ async def _brief_will_fire(uid: str, now: datetime) -> bool:
 
 async def pull(uid: str, session_id: str, *, channel: str = "chat",
                speaker_verified: bool | None = None,
-               now: datetime | None = None) -> PullResult | None:
+               now: datetime | None = None, commit: bool = True) -> PullResult | None:
     """Deliver everything pending once. ``None`` = not ours (flag off, selector off, a guest,
     a brief about to speak, or an error): the caller falls through to the router and the
-    brain exactly as before. Never raises."""
+    brain exactly as before. ``commit=False`` (a dry replay) composes the same reply and marks / records NOTHING. Never raises."""
     from proactive.selector import COOLDOWN, selector_enabled
 
     if not pull_enabled() or not selector_enabled() or not _member(uid):
@@ -415,6 +437,9 @@ async def pull(uid: str, session_id: str, *, channel: str = "chat",
             delivered: list[Item] = []
             stamp, cool = _iso(now), _iso(now + COOLDOWN)
             for i in take:
+                if not commit:
+                    delivered.append(i)
+                    continue
                 # Compare-and-set on the count we read: two overlapping asks deliver once.
                 cur = await db.execute(
                     "UPDATE proactive_candidates SET surfaced_count = surfaced_count + 1, "
@@ -423,7 +448,7 @@ async def pull(uid: str, session_id: str, *, channel: str = "chat",
                     (cool, session_id, stamp, i.id, i.surfaced))
                 if (getattr(cur, "rowcount", 1) or 0) > 0:
                     delivered.append(i)
-            for i in delivered:
+            for i in (delivered if commit else ()):
                 await ledger.record(
                     db, user_id=uid, candidate_id=i.id, kind=i.kind, source_ref=i.source_ref,
                     shape="pull", delivered_by="pull", session_id=session_id, cue_words=i.cues,
@@ -432,7 +457,7 @@ async def pull(uid: str, session_id: str, *, channel: str = "chat",
                     db, user_id=uid, line="pulled", kind=i.kind, source_ref=i.source_ref,
                     reason="asked", score=i.salience, shape="pull", channel=channel,
                     session_id=session_id, sensitivity=i.sensitivity, now=now)
-            for i in held:
+            for i in (held if commit else ()):
                 await lines.record(
                     db, user_id=uid, line="withheld", kind=i.kind, source_ref=i.source_ref,
                     reason="sensitivity_unverified", score=i.salience, shape="pull",

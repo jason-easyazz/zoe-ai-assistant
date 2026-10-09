@@ -141,6 +141,7 @@ class Explained:
     quote: str = ""
     awaiting_fix: bool = False    # Zoe asked "what's the right answer?" - the next turn is the answer
     turn_id: str = ""             # the answer quoted one of the owner's verbatim turns (exact_words) and named no row
+    session_id: str = ""          # the conversation that named it: a "forget it" in another session means something else
 
 
 @dataclass
@@ -401,13 +402,14 @@ def mark_explained(user_id: str, row_id: str, *, text: str = "", quote: str = ""
         st = _state(user_id)
         if st is not None and (row_id or turn_id):
             st.explained = Explained(seq=st.seq, row_id=row_id, ts=_now(now), text=text, quote=quote,
-                                     awaiting_fix=awaiting_fix, turn_id=turn_id)
+                                     awaiting_fix=awaiting_fix, turn_id=turn_id, session_id=st.last_note_session)
     except Exception:  # noqa: BLE001
         return
 
 
-def explained(user_id: str, *, now: Optional[float] = None) -> Optional[Explained]:
-    """The row the previous answer named, while this is the turn right after it (and within ``EXPLAINED_TTL_S``)."""
+def explained(user_id: str, *, now: Optional[float] = None, session_id: str = "") -> Optional[Explained]:
+    """The row the previous answer named, while this is the turn right after it (and within ``EXPLAINED_TTL_S``) and - when both sides
+    know their conversation - in the SAME session: another chat or voice session's "forget it" is not about this row."""
     try:
         if not enabled():
             return None
@@ -415,6 +417,9 @@ def explained(user_id: str, *, now: Optional[float] = None) -> Optional[Explaine
         if st is None or st.explained is None:
             return None
         if st.explained.seq != st.seq - 1 or _now(now) - st.explained.ts > EXPLAINED_TTL_S:
+            return None
+        sid = (session_id or "").strip()
+        if sid and st.explained.session_id and sid != st.explained.session_id:
             return None
         return st.explained
     except Exception:  # noqa: BLE001

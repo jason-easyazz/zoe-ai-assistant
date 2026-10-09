@@ -1122,7 +1122,8 @@ async def _own_names(user_id: str) -> frozenset:
 # ── the entry point ───────────────────────────────────────────────────────────
 
 async def handle(text: str, user_id: str, session_id: str = "", *, channel: Optional[str] = None,
-                 speaker_verified: Optional[bool] = None, svc: Any = None, now: Optional[float] = None) -> Optional[str]:
+                 speaker_verified: Optional[bool] = None, svc: Any = None, now: Optional[float] = None,
+                 allow_writes: bool = True) -> Optional[str]:
     """The reply for a provenance / memory-control shape in ``text``, or None (flag off, not one of these shapes, or a turn that
     belongs to the brain - including an off-the-record turn WITH a payload, which is marked here and answered by the brain). NEVER
     raises (``CancelledError`` still propagates, so a cancelled speculative turn writes nothing)."""
@@ -1148,7 +1149,7 @@ async def handle(text: str, user_id: str, session_id: str = "", *, channel: Opti
 
         # (3) / forget-it: only on the turn right after an answer named a row
         if not guest:
-            exp = mp.explained(uid, now=now)
+            exp = mp.explained(uid, now=now, session_id=session_id) if allow_writes else None   # forget it / fix it write: a dry replay never reaches them
             if exp is not None:
                 if exp.awaiting_fix:
                     # "what's the right answer?" - this whole turn is the answer

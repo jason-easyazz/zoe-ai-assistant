@@ -470,6 +470,33 @@ async def test_without_the_column_the_restraint_class_still_holds_a_sensitive_it
     assert chat.delivered == 1 and "clinic" in chat.reply
 
 
+async def test_a_muted_topic_is_not_read_back_by_a_general_whats_up(env, monkeypatch):
+    import restraint
+
+    async def mutes(_uid):
+        return [restraint.Mute(id="m1", stems=frozenset({"dentist"}))]
+    monkeypatch.setattr(restraint, "list_mutes", mutes)
+    _cand(env, text="User has a dentist appointment on Friday", sal=0.9, cues="dentist")
+    _cand(env, text="User wants to book the car service", sal=0.5, cues="car service")
+    monkeypatch.setenv("ZOE_RESTRAINT", "shadow")
+    shadow = await pull.pull(MEMBER, "s0", channel="chat", commit=False, now=NOW)
+    assert shadow.delivered == 2                                                       # control: shadow only logs the would-withhold
+    monkeypatch.setenv("ZOE_RESTRAINT", "enforce")
+    assert (await pull.pending_state(MEMBER, NOW))["count"] == 1                       # the orb agrees with the pull
+    res = await pull.pull(MEMBER, "s1", channel="chat", now=NOW)
+    assert res.delivered == 1 and "dentist" not in res.reply.lower() and "car service" in res.reply.lower()
+
+
+async def test_a_dry_pull_composes_the_reply_and_marks_nothing(env):
+    cid = _cand(env, text="User wants to book the car service", sal=0.9, cues="car service")
+    dry = await pull.pull(MEMBER, "s1", channel="chat", commit=False, now=NOW)
+    assert dry.delivered == 1 and "car service" in dry.reply.lower()
+    assert env["db"].rows("SELECT surfaced_count FROM proactive_candidates WHERE id = ?", (cid,)) == [(0,)]
+    assert _lines(env) == [] and env["db"].rows("SELECT COUNT(*) FROM proactive_deliveries") == [(0,)]
+    live = await pull.pull(MEMBER, "s2", channel="chat", now=NOW)
+    assert live.delivered == 1 and env["db"].rows("SELECT surfaced_count FROM proactive_candidates WHERE id = ?", (cid,)) == [(1,)]
+
+
 async def test_the_restraint_off_switch_is_honoured_by_the_pull(env, monkeypatch):
     monkeypatch.setenv("ZOE_RESTRAINT", "off")
     _cand(env, text="User has a clinic appointment for the blood test results", sal=0.9, cues="clinic")

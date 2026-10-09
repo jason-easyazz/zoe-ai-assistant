@@ -1562,16 +1562,25 @@ def block_text(rows: "Sequence[dict]") -> str:
     return body + ("\n" + _MOOD_ASK if any(o.get("mood") for o in rows) else "")
 
 
-async def prompt_block(user_id: str, message: str, *, now: "Optional[_dt.datetime]" = None) -> str:
+async def prompt_block(user_id: str, message: str, *, now: "Optional[_dt.datetime]" = None, served: "Optional[list]" = None) -> str:
     """The recall packet's "What I've noticed" block for this message (<= 3 lines), or ``""``. Flag off = ``""`` with no I/O. Never raises, time-boxed.
-    ``leave`` threads appear ONLY when the message names them."""
+    ``leave`` threads appear ONLY when the message names them. ``served``, when given, receives ``(turn_id, said_at, quote)`` of each line shown, so
+    the reply's provenance can name the owner's turn it stood on."""
     if not enabled() or not (user_id or "").strip() or not (message or "").strip():
         return ""
     try:
         now = now or _dt.datetime.now(_dt.timezone.utc)
         threads, obs = await asyncio.wait_for(snapshot(user_id, use_cache=True), timeout=0.6)
         today = now.astimezone(_local_tz()).date()
-        return block_text(lookup(threads, obs, message, today))
+        rows = lookup(threads, obs, message, today)
+        if served is not None:
+            for o in rows[:SHOW_LINES]:
+                try:
+                    said = float(o.get("said_at") or 0.0)
+                except (TypeError, ValueError):
+                    said = 0.0
+                served.append((str(o.get("turn_id") or ""), said, str(o.get("quote") or "")))
+        return block_text(rows)
     except Exception as exc:  # noqa: BLE001 - an extra block: the packet is complete without it
         logger.debug("night_mind: prompt block skipped (%s)", type(exc).__name__)
         return ""

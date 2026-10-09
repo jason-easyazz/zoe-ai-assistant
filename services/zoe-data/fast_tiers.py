@@ -341,7 +341,7 @@ async def _tier0(text: str, user_id: str, defer_intents: frozenset[str] = frozen
         return None
 
 
-async def _person_half_tier(text: str, user_id: str, session_id: str, speaker_verified: Optional[bool] = None):
+async def _person_half_tier(text: str, user_id: str, session_id: str, speaker_verified: Optional[bool] = None, *, dry: bool = False):
     """Two deterministic tiers for the person half (Samantha person bench P5a/P7/P12), ahead of the router, the
     keyword intents and the brain, so a held fact never reaches a model that could cave and an ambiguous target
     is asked about BEFORE any tool call or write. Each is ``shadow`` by default (logs what it would do, changes
@@ -356,7 +356,7 @@ async def _person_half_tier(text: str, user_id: str, session_id: str, speaker_ve
         import hold_the_fact as _htf
 
         if _htf.mode() != "off":
-            reply = await _htf.handle(text, user_id, session_id, speaker_verified=speaker_verified)
+            reply = await _htf.handle(text, user_id, session_id, speaker_verified=speaker_verified, allow_writes=not dry)
             if reply:
                 import expert_dispatch as _xd
 
@@ -420,7 +420,7 @@ async def _conversation_quality_tier(text: str, user_id: str, session_id: str):
 
 
 async def _pull_tier(text: str, user_id: str, session_id: str, channel: Optional[str],
-                     extra_ctx: Optional[dict]):
+                     extra_ctx: Optional[dict], *, dry: bool = False):
     """Pull, not push (``ZOE_PULL_NOT_PUSH``, default on): "what's up?" / "anything for me?"
     delivers what the selector is holding, once, and "not now" / "that was welcome" right after a
     raise or a pull is the person's one-tap signal. Deterministic, whole-utterance phrases only
@@ -439,13 +439,15 @@ async def _pull_tier(text: str, user_id: str, session_id: str, channel: Optional
 
         lane = (channel or "chat").strip().lower() or "chat"
         if kind.startswith("tap:"):
+            if dry:      # a tap only records a signal: a dry replay has none to record
+                return None
             reply = await _pl.tap(user_id, text, channel=lane)
             if not reply:
                 return None
             return _xd.DispatchResult(domain="proactive", reply=reply,
                                       intent=f"pull_{kind[4:]}", tier="pull")
         res = await _pl.pull(user_id, session_id, channel=lane,
-                             speaker_verified=(extra_ctx or {}).get("speaker_verified"))
+                             speaker_verified=(extra_ctx or {}).get("speaker_verified"), commit=not dry)
         if res is None:
             return None
         return _xd.DispatchResult(domain="proactive", reply=res.reply, intent="pull",
@@ -478,7 +480,7 @@ async def _identity_tier(text: str, user_id: str):
         return None
 
 
-async def _ask_to_remember_tier(text: str, user_id: str, session_id: str, speaker_verified: Optional[bool]):
+async def _ask_to_remember_tier(text: str, user_id: str, session_id: str, speaker_verified: Optional[bool], *, dry: bool = False):
     """The owner's explicit "remember that ..." (Samantha bar S11, ``ZOE_ASK_TO_REMEMBER``, default ON): stored
     verbatim as a ``user_stated`` row and confirmed in ONE sentence that is only said once the row is written
     (``ask_to_remember``). Runs on every channel that uses this core - chat, voice, LiveKit, Telegram - because the
@@ -488,7 +490,7 @@ async def _ask_to_remember_tier(text: str, user_id: str, session_id: str, speake
     try:
         import ask_to_remember as _atr
 
-        reply = await _atr.handle(text, user_id, session_id, speaker_verified=speaker_verified)
+        reply = await _atr.handle(text, user_id, session_id, speaker_verified=speaker_verified, allow_writes=not dry)
         if not reply:
             return None
         import expert_dispatch as _xd
@@ -525,6 +527,9 @@ async def resolve(
     `allow_writes=False` keeps the read/recall fast path but defers WRITE intents.
     """
     prof = profile_for(channel)
+    # An EXPLICIT allow_writes=False (the replay harness) is not the chat profile's default of False: every tier that would write
+    # (remember / forget, edit a held fact, mark a pull delivered) honours it; the chat default does not stop those, only slot-filled intents.
+    dry = allow_writes is False
     if allow_writes is None:
         allow_writes = bool(prof.get("allow_writes", True))
     if run_tier0 is None:
@@ -540,13 +545,13 @@ async def resolve(
             return cq
 
         # Pull, not push: "what's up?" delivers what is pending, once (deterministic).
-        pt = await _pull_tier(text, user_id, session_id, channel, extra_ctx)
+        pt = await _pull_tier(text, user_id, session_id, channel, extra_ctx, dry=dry)
         if pt is not None:
             return pt
 
         # The person half: hold an owner-stated fact against a bare "No, I'm sure it's X";
         # ask ONE question when a request names a person two contacts share.
-        ph = await _person_half_tier(text, user_id, session_id, (extra_ctx or {}).get("speaker_verified"))
+        ph = await _person_half_tier(text, user_id, session_id, (extra_ctx or {}).get("speaker_verified"), dry=dry)
         if ph is not None:
             return ph
 
@@ -557,10 +562,11 @@ async def resolve(
                 return idt
 
         # The owner's explicit "remember that ..." - a deterministic write with its own honest reply,
-        # before the router and the brain (ZOE_ASK_TO_REMEMBER). Not gated by allow_writes: it needs no
-        # slot-extraction LLM call (the reason chat defers writes), and a registered account only.
+        # before the router and the brain (ZOE_ASK_TO_REMEMBER). Not gated by the chat profile's allow_writes default (it needs no
+        # slot-extraction LLM call, the reason chat defers writes; a registered account only) - but an EXPLICIT allow_writes=False
+        # (the replay harness runs on the real member's memory) turns its writes off.
         atr = await _ask_to_remember_tier(
-            text, user_id, session_id, (extra_ctx or {}).get("speaker_verified"))
+            text, user_id, session_id, (extra_ctx or {}).get("speaker_verified"), dry=dry)
         if atr is not None:
             return atr
 
@@ -674,6 +680,7 @@ async def _provenance_tier(text: str, user_id: str, session_id: str, kwargs: dic
         reply = await _pa.handle(
             text, uid, session_id, channel=kwargs.get("channel"),
             speaker_verified=(kwargs.get("extra_ctx") or {}).get("speaker_verified"),
+            allow_writes=kwargs.get("allow_writes") is not False,
         )
         if not reply:
             return None
