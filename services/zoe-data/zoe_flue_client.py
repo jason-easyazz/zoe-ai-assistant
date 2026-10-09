@@ -1724,6 +1724,35 @@ async def _run_turn_aggregated_wire2(
     yield _FALLBACK_TEXT
 
 
+def _owed_questions(user_id: str) -> list:
+    """The questions the reply of THIS turn is meant to voice: the pending contact offer the seam injected
+    (``contacts_conversation.record_asked``, S16). Never raises."""
+    try:
+        import contacts_conversation as _cc
+
+        asked = _cc.get_asked((user_id or "").strip())
+        return [asked["question"]] if asked and asked.get("question") else []
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _resolve_clarification(message: str, user_id: str, session_id: str) -> str:
+    """``ask_when_ambiguous.resolve_followup`` that can never fail the turn: the original request with the
+    chosen full name when ``message`` answers Zoe's one clarifying question, else ``message`` unchanged."""
+    try:
+        import ask_when_ambiguous
+
+        if ask_when_ambiguous.mode() == "off" or not ask_when_ambiguous.has_pending((user_id or "").strip(), session_id):
+            return message
+        rewritten = ask_when_ambiguous.resolve_followup(message, (user_id or "").strip(), session_id)
+        if rewritten:
+            logger.info("ASK_WHEN_AMBIGUOUS followup=resolved")
+            return rewritten
+    except Exception as exc:  # noqa: BLE001 - a clarification is optional; the turn is not
+        logger.debug("ask_when_ambiguous followup failed (non-fatal): %s", type(exc).__name__)
+    return message
+
+
 async def run_flue_brain_streaming(
     message: str,
     session_id: str,
@@ -1745,6 +1774,10 @@ async def run_flue_brain_streaming(
     import brief_first_turn
     from proactive import selector as proactive_selector
 
+    # The owner's short answer to the one clarifying question Zoe asked ("Which Marisol?" -> "the sister"):
+    # the brain gets the original request with the full name in it (ask_when_ambiguous, ZOE_ASK_WHEN_AMBIGUOUS).
+    # In-memory dict lookup, no I/O; the pending question is consumed by the next turn whatever it says.
+    message = _resolve_clarification(message, user_id, session_id)
     brief = await brief_first_turn.prepare(message, user_id, session_id)
     raised = await proactive_selector.prepare(
         message, user_id, session_id, brief_active=brief is not None)
@@ -1766,6 +1799,13 @@ async def run_flue_brain_streaming(
         import narration_filter
 
         turn = narration_filter.filter_stream(turn)
+    # A clean goodbye, a plain "are you there?", a silence never remarked on (clean_goodbye, ZOE_CLEAN_GOODBYE):
+    # holds the reply ONLY on such a turn (a few anchored regexes on the user's words); every other turn streams
+    # byte-identical. Outermost, so it cleans the text the owner would actually hear.
+    import clean_goodbye
+
+    turn = clean_goodbye.filter_stream(turn, message, passthrough=(_FALLBACK_TEXT,),
+                                       owed=lambda: _owed_questions(user_id))
     debug = await _continuity_debug_uid((user_id or "").strip())
     reply: list[str] = []
     emitted = False  # real reply text went out (never a sentinel or the fallback)

@@ -973,6 +973,16 @@ async def _persist_memory_candidates_impl(user_id: str, session_id: str, user_me
     False when any pass raised — logged here, counted by the wrapper."""
     if user_id == "guest":
         return True
+    # A reply the HOLD tier wrote (hold_the_fact: "I've got your dentist appointment down as Friday, and
+    # that's what you told me...") means the owner's contradicting claim was NOT accepted this turn: mining
+    # it would store the very value Zoe just declined to adopt, behind the reply's back. The confirmed
+    # update is made by the tier itself, through MemoryService.review, not by an extractor.
+    try:
+        from hold_the_fact import is_own_reply as _htf_own_reply
+        if _htf_own_reply(assistant_response):
+            return True
+    except Exception:
+        pass  # never let the guard break extraction itself
     # A memory COMMAND ("forget everything about Delia", "forget that") is an
     # instruction, not a fact — mining it minted junk rows ("Gift idea for
     # everything about: Delia", live repro 2026-07-13) that resurrected the

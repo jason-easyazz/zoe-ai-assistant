@@ -341,6 +341,43 @@ async def _tier0(text: str, user_id: str, defer_intents: frozenset[str] = frozen
         return None
 
 
+async def _person_half_tier(text: str, user_id: str, session_id: str, speaker_verified: Optional[bool] = None):
+    """Two deterministic tiers for the person half (Samantha person bench P5a/P7/P12), ahead of the router, the
+    keyword intents and the brain, so a held fact never reaches a model that could cave and an ambiguous target
+    is asked about BEFORE any tool call or write. Each is ``shadow`` by default (logs what it would do, changes
+    nothing) and returns None unless it is ``enforce`` AND the turn is unmistakably its own:
+
+    * ``ZOE_HOLD_THE_FACT`` (``hold_the_fact``) - "No, I'm sure it's Thursday." against a fact the OWNER stated:
+      keep it, disagree once, offer to change it; the second explicit confirmation edits the row.
+    * ``ZOE_ASK_WHEN_AMBIGUOUS`` (``ask_when_ambiguous``) - "Tell me about Marisol." with two Marisols: ONE question
+      that names the choice; a clear turn is never asked.
+    NEVER raises."""
+    try:
+        import hold_the_fact as _htf
+
+        if _htf.mode() != "off":
+            reply = await _htf.handle(text, user_id, session_id, speaker_verified=speaker_verified)
+            if reply:
+                import expert_dispatch as _xd
+
+                return _xd.DispatchResult(
+                    domain="memory", reply=reply, intent="hold_the_fact", tier="hold_the_fact",
+                )
+        import ask_when_ambiguous as _awa
+
+        if _awa.mode() != "off":
+            reply = await _awa.handle(text, user_id, session_id)
+            if reply:
+                import expert_dispatch as _xd
+
+                return _xd.DispatchResult(
+                    domain="people", reply=reply, intent="ask_when_ambiguous", tier="ask_when_ambiguous",
+                )
+    except Exception as exc:  # never let the tier break a turn
+        logger.warning("fast_tiers person-half tier failed (non-fatal): %s", exc)
+    return None
+
+
 async def _conversation_quality_tier(text: str, user_id: str, session_id: str):
     """Two flag-dark deterministic tiers that run BEFORE everything else (a correction or
     a pasted roster must never be answered by a generic apology / a guessed role):
@@ -506,6 +543,12 @@ async def resolve(
         pt = await _pull_tier(text, user_id, session_id, channel, extra_ctx)
         if pt is not None:
             return pt
+
+        # The person half: hold an owner-stated fact against a bare "No, I'm sure it's X";
+        # ask ONE question when a request names a person two contacts share.
+        ph = await _person_half_tier(text, user_id, session_id, (extra_ctx or {}).get("speaker_verified"))
+        if ph is not None:
+            return ph
 
         # Identity facts come from the account, never from memory.
         if prof.get("identity_tier"):
