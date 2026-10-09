@@ -424,6 +424,39 @@ async def test_merged_duplicate_history_is_reachable_from_the_survivor(rest):
         await d.close()
 
 
+async def test_merged_pair_edge_is_in_the_survivors_history_but_never_current(rest):
+    """Greptile P2 (#1961 round 3): the source<->target edge is closed and kept on the soft-deleted source; the survivor's
+    history / as_of read found it but list_relationships skipped it because the other person is deleted."""
+    import person_merge
+    from test_person_merge import _seed_edge, _seed_person
+
+    d = await _merge_db()
+    try:
+        for col in ("circle TEXT",):                                   # the REST read joins these
+            await d.execute(f"ALTER TABLE people ADD COLUMN {col}")
+        for p, n in (("src", "Tom Old"), ("tgt", "Tom"), ("carol", "Carol"), ("gone", "Forgotten")):
+            await _seed_person(d, p, name=n)
+        await _seed_edge(d, "pair", "src", "tgt", rel_type="cousin")
+        await _seed_edge(d, "other", "src", "carol", rel_type="friend")
+        await _seed_edge(d, "dead", "tgt", "gone", rel_type="friend")
+        await d.execute("UPDATE people SET deleted=1 WHERE id='gone'")
+        await d.execute("UPDATE person_relationships SET valid_to='2024-01-01T00:00:00Z', close_reason='forgotten' WHERE id='dead'")
+        await d.commit()
+        await person_merge.merge_person(d, "jason", "src", "tgt")
+        rest.user = {**rest.user, "user_id": "jason"}
+        get = lambda **kw: rest.people.list_relationships("tgt", kw.get("as_of"), kw.get("include"), rest.user, d)   # noqa: E731
+        flat = lambda out: {r["rel_id"]: r for g in out["relationships"].values() for r in g}                       # noqa: E731
+        hist = flat(await get(include="history"))
+        assert set(hist) == {"pair", "other"}                                          # the closed pair edge is visible; the forgotten one is not
+        assert hist["pair"]["close_reason"] == "merged_self_edge" and hist["pair"]["current"] is False
+        assert hist["pair"]["merged_identity"] is True and hist["other"].get("merged_identity") is None
+        assert set(flat(await get())) == {"other"}                                     # current reads unchanged
+        # as_of an instant before the merge: the pair edge was in force; the forgotten contact's edge stays hidden
+        assert set(flat(await get(as_of="2023-06-01T00:00:00Z"))) == {"pair", "other"}
+    finally:
+        await d.close()
+
+
 async def test_flag_off_keeps_the_new_belief_as_a_pending_candidate(db, monkeypatch):
     monkeypatch.delenv("ZOE_TEMPORAL_RELATIONSHIPS_ENABLED", raising=False)
     await _person(db, "pa", "Alice")
@@ -506,6 +539,37 @@ async def test_a_chat_turn_writes_turn_quote_and_rank_on_the_edge(db):
     assert "Sarah" not in e["quote_span"]                                          # a pointer, never the words
 
 
+async def test_evidence_points_into_the_turn_as_spoken_when_reported_speech_is_stripped(db):
+    """Greptile P2 (#1961 round 3): own_words removes reported speech before mining, and the pointer was computed against
+    the shortened text - a relationship AFTER the removed words got shifted offsets and the hash of the wrong string."""
+    import own_words
+
+    text = 'Bob said: "my cat is evil and my dog is worse". Yesterday we talked. Sarah is Tom\'s sister, I think.'
+    assert own_words.analyze(text).text != text and len(own_words.analyze(text).text) < len(text)   # the premise
+    await pe.process_text(text, user_id=U, source="conversation", db=db)
+    (e,) = await _rows(db)
+    start, end, digest = e["quote_span"].split(":")
+    assert text[int(start):int(end)] == "Sarah is Tom's sister"                    # offsets into the turn as spoken
+    assert digest == pg.quote_span(text, "Sarah is Tom's sister").split(":")[2]
+    assert e["turn_id"] == pg.content_turn_id(U, text)
+
+
+async def test_named_relation_evidence_points_into_the_turn_as_spoken_when_reported_speech_is_stripped(svc):
+    from test_named_relations import SAID, USER, _open_db as open_named_db
+
+    turn = 'Bob said: "my cat is evil and my dog is worse". ' + SAID
+    ndb = await open_named_db()
+    for col in ("close_reason TEXT", "authority TEXT", "origin TEXT", "turn_id TEXT", "quote_span TEXT", "speaker_rank INTEGER"):
+        await ndb.execute(f"ALTER TABLE person_relationships ADD COLUMN {col}")
+    await pe.process_text(turn, user_id=USER, source="conversation", db=ndb)
+    async with ndb.execute("SELECT p.name, quote_span, turn_id FROM person_relationships r JOIN people p ON p.id = r.person_a_id") as cur:
+        edges = [tuple(r) for r in await cur.fetchall()]
+    assert edges
+    for name, span, turn_id in edges:
+        start, end, _ = span.split(":")
+        assert turn[int(start):int(end)] == name and turn_id == pg.content_turn_id(USER, turn)
+
+
 async def test_named_relations_edges_carry_evidence(svc):
     from test_named_relations import SAID, USER, _open_db as open_named_db
 
@@ -555,6 +619,26 @@ async def test_legacy_edges_have_null_evidence(db):
 
 # ── the migration ────────────────────────────────────────────────────────────
 
+def _single_head_chain_contains(revs, rev):
+    """True when the revision graph has exactly one head and that head's down-revision chain contains `rev`."""
+    heads = set(revs) - {d for d in revs.values() if d}
+    if len(heads) != 1:
+        return False
+    node, seen = next(iter(heads)), []
+    while node and node not in seen:
+        seen.append(node)
+        node = revs.get(node)
+    return rev in seen
+
+
+def test_head_check_tolerates_a_later_migration_but_not_a_fork():
+    chain = {"0041": None, "0042": "0041", "0043": "0042"}
+    assert _single_head_chain_contains(chain, "0043")
+    assert _single_head_chain_contains({**chain, "0044": "0043"}, "0043")            # a valid 0044 must not fail
+    assert not _single_head_chain_contains({**chain, "0044": "0042"}, "0043")        # a fork: two heads
+    assert not _single_head_chain_contains({"0041": None, "0042": "0041", "0044": "0042"}, "0043")  # 0043 off the chain
+
+
 def test_migration_0043_is_the_single_head_and_schema_only():
     revs = {}
     for f in (SVC / "alembic" / "versions").glob("*.py"):
@@ -562,7 +646,7 @@ def test_migration_0043_is_the_single_head_and_schema_only():
                 if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name) and isinstance(n.value, ast.Constant)}
         if "revision" in vals:
             revs[vals["revision"]] = vals.get("down_revision")
-    assert set(revs) - {d for d in revs.values() if d} == {"0043"} and revs["0043"] == "0042"
+    assert _single_head_chain_contains(revs, "0043") and revs["0043"] == "0042"
     src = (SVC / "alembic" / "versions" / "0043_people_graph_invariants.py").read_text().split("def downgrade")[0]
     assert not re.search(r"\bUPDATE\s+\w+\s+SET\b|\bDELETE\s+FROM\b", src.split('"""', 2)[2])   # no data change
 

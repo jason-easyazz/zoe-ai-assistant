@@ -1308,6 +1308,7 @@ async def process_text(
     # Only the owner's own words are mined: the people in a pasted email, or in another person's quoted speech,
     # are not the owner's contacts or the owner's facts (own_words; ZMB I1/I2).
     import own_words
+    original_turn = text           # evidence pointers are into the turn as spoken, not the own-words excerpt mined below
     own = own_words.analyze(text)
     if own.changed:
         own_words.count_drops("person_extractor", own)
@@ -1383,7 +1384,7 @@ async def process_text(
                     edge_authority, edge_rank = _edge_authority_and_rank(source, text)
                     await _write_relationship(user_id, name_a, name_b, rel_type, rel_group, _db,
                                               authority=edge_authority, origin=source,
-                                              evidence=_pg.evidence_for(user_id, text, m.group(0), rank=edge_rank))
+                                              evidence=_pg.evidence_for(user_id, original_turn, m.group(0), rank=edge_rank))
                     written += 1
                 except Exception as exc:
                     logger.debug("person_extractor: relationship write failed: %s", exc)
@@ -1399,7 +1400,7 @@ async def process_text(
         from named_relations import apply_named_relations
 
         written += await apply_named_relations(
-            text, user_id=user_id, source=source, session_id=session_id, db=_db)
+            text, user_id=user_id, source=source, session_id=session_id, db=_db, turn_text=original_turn)
 
         if not tasks:
             return written
