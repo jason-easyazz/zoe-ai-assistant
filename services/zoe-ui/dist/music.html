@@ -1585,5 +1585,22 @@
         watchForMA();
     })();
     </script>
+    <script>
+        // Nav helpers the nav bar's inline handlers call — every other desktop page defines
+        // them inline; music.html never did, so the mobile menu, More and Sign out were dead
+        // (found by the click-handler check in test_desktop_wave3.js, 2026-10-09).
+        function navigateToPage(page) { if (typeof closeMoreOverlay === 'function') closeMoreOverlay(); window.location.href = page; }
+        function toggleMobileMenu() {
+            if (window.innerWidth > 768) { window.location.href = 'chat.html'; return; }
+            const menu = document.getElementById('mobileNavMenu');
+            const overlay = document.getElementById('mobileNavOverlay');
+            if (menu && overlay) { menu.classList.toggle('open'); overlay.classList.toggle('open'); }
+        }
+        function handleLogout() {
+            if (window.innerWidth <= 768) toggleMobileMenu();
+            if (window.zoeAuth && typeof window.zoeAuth.logout === 'function') { window.zoeAuth.logout(); return; }
+            localStorage.removeItem('zoe_session'); window.location.href = 'index.html';
+        }
+    </script>
 </body>
 </html>
