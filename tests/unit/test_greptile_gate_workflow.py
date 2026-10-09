@@ -97,6 +97,13 @@ HARNESS = textwrap.dedent(
       rest: {
         pulls: {
           list: async () => [pr],
+          // OPTS.files: the PR's changed files. The default is ONE load-bearing file so
+          // the existing settled-hands-off cases keep their meaning; the eligibility
+          // tests pass routine / big / requested shapes explicitly.
+          listFiles: async () => {
+            if (OPTS.filesFetchFails) throw new Error('files unavailable');
+            return OPTS.files || [{ filename: 'services/zoe-data/main.py', additions: 3, deletions: 1 }];
+          },
           // OPTS.headMovesLate: the head moves once the conditions have been read.
           // Keyed on conditionReads, NOT on the number of pulls.get calls — a
           // get-count trigger fires in BOTH orderings and so cannot tell whether
@@ -239,6 +246,42 @@ def test_settled_pr_hands_off(tmp_path):
 
 
 # --- the two remaining hold conditions --------------------------------------
+def test_routine_pr_is_not_handed_off(tmp_path):
+    """Greptile is billed per review: a settled PR of routine files (docs, UI, tests)
+    is NOT labelled or summoned (operator decision 2026-10-09)."""
+    r = _run(tmp_path, _script(), files=[
+        {"filename": "docs/knowledge/x.md", "additions": 20, "deletions": 2},
+        {"filename": "services/zoe-ui/dist/chat.html", "additions": 30, "deletions": 5},
+        {"filename": "tests/unit/test_x.py", "additions": 40, "deletions": 0},
+    ])
+    assert r["addLabels"] == 0
+    assert not any("@greptileai review" in c for c in r["comments"])
+    assert any("settled but routine" in line for line in r["log"])
+
+
+def test_load_bearing_path_is_handed_off(tmp_path):
+    r = _run(tmp_path, _script(), files=[{"filename": "services/zoe-data/routers/voice_tts.py", "additions": 2, "deletions": 2}])
+    assert r["addLabels"] == 1
+
+
+def test_big_routine_pr_is_handed_off(tmp_path):
+    r = _run(tmp_path, _script(), files=[{"filename": "services/zoe-ui/dist/chat.html", "additions": 350, "deletions": 60}])
+    assert r["addLabels"] == 1
+
+
+def test_request_label_hands_off_a_routine_pr(tmp_path):
+    r = _run(tmp_path, _script(), labels=[{"name": "greptile-request"}],
+             files=[{"filename": "docs/knowledge/x.md", "additions": 5, "deletions": 1}])
+    assert r["addLabels"] == 1
+
+
+def test_unreadable_files_hold(tmp_path):
+    """Never summon blind: if the file list cannot be read, hold rather than bill."""
+    r = _run(tmp_path, _script(), filesFetchFails=True)
+    assert r["addLabels"] == 0
+    assert not any("@greptileai review" in c for c in r["comments"])
+
+
 def test_behind_branch_holds(tmp_path):
     """`strict` would force an update anyway; handing off behind wastes the review."""
     r = _run(tmp_path, _script(), behindBy=3)

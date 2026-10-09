@@ -250,7 +250,15 @@ auth, migrations, anything flag-gated — and skip it for routine changes.
 
 `.github/workflows/greptile-gate.yml` is now a **cost controller, not a gate**: Greptile
 is dashboard-filtered to PRs carrying the `greptile` label, and the workflow applies that
-label only once a PR is settled (up to date, no unresolved threads), then summons once.
+label only once a PR is settled (up to date, no unresolved threads) **and eligible**, then
+summons once. **Eligible = load-bearing or big** (operator decision 2026-10-09, "only use
+Greptile for the big things, it costs per run"; before that every settled PR was handed off,
+12 of the last 12): a changed file under a load-bearing path (voice path, `auth.py`, `main.py`,
+`db_pool.py`, zoe-auth, alembic, workflows, nginx, compose, systemd units, panel auth / UI
+actions), or a diff at pr-hygiene's warn ceiling (≥10 files or ≥400 lines), or the explicit
+**`greptile-request`** label. A routine PR (docs, UI, tests, config) is never handed off
+unless you ask with that label. An unreadable file list holds — the gate never summons blind.
+Pinned by `tests/unit/test_greptile_gate_workflow.py`.
 That ordering is still load-bearing — Greptile dedups by PR diff, so a review on an early
 head followed by a `strict` branch update means it correctly refuses to re-review and the
 spend bought nothing. The workflow holds `checks: read`, never `checks: write`; it cannot
@@ -276,8 +284,9 @@ resolved like any other.
 5. **Batch the fixes.** Collect every finding, fix once, push once. Fix-push-fix-push
    multiplies reviews AND multiplies the chance a fix introduces a new bug — exactly what
    happened on #1560.
-6. **Mark ready.** The deterministic gate must be green and every thread resolved. Add the
-   `greptile` label for high-risk work if you want the advisory pass.
+6. **Mark ready.** The deterministic gate must be green and every thread resolved. Load-bearing
+   or big PRs get the advisory Greptile pass automatically; for a routine PR you want
+   reviewed, add the `greptile-request` label (the `greptile` label itself is the gate's).
 
 ### THE GUARANTEE — every merge is up-to-date AND deterministically verified at that commit
 
