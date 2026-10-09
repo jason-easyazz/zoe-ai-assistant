@@ -1,0 +1,18 @@
+# zoe-night-window.timer - TEMPLATE. 02:50 local, after the 02:00 training / 02:30 backup / 02:40 memory-export timers, so the export keeps its
+# "copy BEFORE the digest mutates the store" guarantee, and early enough that the window (hard cap 65 min) is over by 03:55: zoe-data must be back
+# before its Sunday 04:00 consolidation loop and the 04:10-04:52 voice gate (Serena restart 04:15, nightly voice gate 04:30).
+#
+# Persistent=false ON PURPOSE: a missed run (box off at 02:50) must NOT fire at the next boot in the middle of the day and put Zoe to sleep. The script also
+# refuses to START outside 01:30-03:40 unless a human passes --anytime.
+[Unit]
+Description=Zoe night window timer (02:50)
+
+[Timer]
+OnCalendar=*-*-* 02:50:00
+RandomizedDelaySec=120
+AccuracySec=1min
+Persistent=false
+Unit=zoe-night-window.service
+
+[Install]
+WantedBy=timers.target

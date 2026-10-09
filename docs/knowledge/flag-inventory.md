@@ -132,7 +132,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_DIGEST_CHUNKED` | `-`, `True` | yes | NO | `services/zoe-data/digest_pack.py` |
 | `ZOE_DIGEST_CHUNK_TOKENS` | `0` | no | NO | `services/zoe-data/digest_pack.py` |
 | `ZOE_DIGEST_DECODE_TOK_S` | `60.0` | no | NO | `services/zoe-data/digest_pack.py` |
-| `ZOE_DIGEST_LLM_TIMEOUT_SCALE` | `1.0` | yes | NO | `services/zoe-data/memory_digest.py` |
+| `ZOE_DIGEST_LLM_TIMEOUT_SCALE` | `'1'`, `1.0` | yes | NO | `scripts/night/jobs/night_digest.py`<br>`services/zoe-data/memory_digest.py` |
 | `ZOE_DIGEST_MAX_CHUNKS` | `5` | no | NO | `services/zoe-data/digest_pack.py` |
 | `ZOE_DIGEST_MAX_FACTS` | `40` | no | NO | `services/zoe-data/digest_pack.py` |
 | `ZOE_DISCOVERY_DEFAULT_MOOD` | `''` | no | NO | `scripts/maintenance/music_discovery_batch.py` |
