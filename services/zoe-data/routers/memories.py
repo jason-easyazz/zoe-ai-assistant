@@ -858,6 +858,13 @@ async def memory_for_prompt(
         description="Run the semantic search whatever the message looks like (the "
         "named-person floor, for a person with no contact row to focus)",
     ),
+    session_id: Optional[str] = Query(
+        None,
+        max_length=128,
+        description="The conversation this packet is for (the relevance gate's sticky / cooldown / delay "
+        "counters are per (user, session)). Absent: the user's one live turn, or - when several of their "
+        "conversations are live at once - no gate decision (the floor's packet stands)",
+    ),
     _: None = Depends(require_internal_token),
 ):
     """Compact, cited memory packet for injection into an agent's system prompt.
@@ -964,6 +971,21 @@ async def memory_for_prompt(
         facts, hits, max_facts=limit, boost_emotional=emo_turn, recent=recent,
         evidence=evidence, quotes=quotes,
     )
+    # The relevance gate (ZOE_RECALL_GATE off|shadow|enforce, default shadow; recall_gate.py, blueprint 2.8 / BM4): which durable rows
+    # enter the packet and in what order, from entity triggers + similarity + sticky / cooldown / delay + a token budget. Shadow returns
+    # ``result`` untouched (the decision runs in the background and writes one RECALL_GATE line); enforce swaps in the gate's selection.
+    # Relevance mode only (the continuity block is budgeted around its closing ask). Never raises: the floor stands.
+    if not continuity and message.strip():
+        import recall_gate
+
+        result = await recall_gate.packet_surface(
+            svc, user_id, message, result, facts=facts, hits=hits, recent=recent,
+            mood=bool(emo_turn or _is_continuity_turn(message, user_id)),
+            rebuild=lambda rows: _build_memory_prompt_packet(
+                rows, [], max_facts=limit, evidence=evidence, quotes=quotes),
+            # (called in-process the default is the Query() descriptor, not a str: the gate then uses this task's own session)
+            session_id=session_id if isinstance(session_id, str) else None,
+        )
     if evidence:
         ev = result.pop("evidence", None) or {}
         logger.info("RECALL_EVIDENCE user=%s quotes=%d bullets=%d dated=%d quoted=%d chars=%d",

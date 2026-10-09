@@ -69,7 +69,7 @@ async def test_the_ledger_holds_no_text_in_process(ledger_env):
     await mf.add(USER, "Dana Whitfield", actor=USER)
     await mf.add(USER, "the quiet topic about the harbour")
     rows = list(ledger_env.rows.values())
-    assert len(rows) == 2
+    assert len([r for r in rows if r["scope"] != mf.SCOPE_NEAR]) == 2          # the near probes are hashes too, never the entries
     blob = " ".join(str(v) for r in rows for v in r.values()).lower()
     for needle in ("dana", "whitfield", "harbour", "quiet", "topic"):
         assert needle not in blob
@@ -84,7 +84,7 @@ async def test_the_ledger_table_holds_no_text_on_real_sql(monkeypatch):
         mf.set_backend(mf.PostgresBackend())
         assert await mf.add(USER, "Dana Whitfield", actor=USER) is True
         assert await mf.add(USER, "Dana Whitfield", actor=USER) is True        # a repeat is an upsert
-        rows = await table_dump(db, "memory_forgotten")
+        rows = [r for r in await table_dump(db, "memory_forgotten") if r[2] != "near"]
         assert len(rows) == 1
         user_id, key_hash, scope, actor, forgotten_at, shield_until = rows[0]
         assert (user_id, scope, actor) == (USER, "entity", USER)
@@ -125,7 +125,7 @@ async def test_default_shield_is_permanent_and_env_bounds_it(monkeypatch, ledger
     """Owner decision 2026-10-06: forgotten means forever. The default row never expires; a
     positive ZOE_FORGOTTEN_SHIELD_DAYS is the explicit, bounded loosening."""
     await mf.add(USER, "Dana")
-    (row,) = ledger_env.rows.values()
+    (row,) = [r for r in ledger_env.rows.values() if r["scope"] == "entity"]
     assert row["shield_until"] == mf.PERMANENT_UNTIL
     assert mf.DEFAULT_SHIELD_DAYS == 0 and mf.shield_days() == 0
     far = (mf.datetime.now(mf.timezone.utc) + mf.timedelta(days=36500)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -145,7 +145,7 @@ async def test_release_drops_only_the_named_entity(ledger_env):
     assert await mf.release(USER, "remember that Dana lives in Lisbon") == 1
     assert not await mf.matches(USER, "Dana rang")
     assert await mf.matches(USER, "Tove rang")
-    assert len(ledger_env.rows) == 1
+    assert len([r for r in ledger_env.rows.values() if r["scope"] != "near"]) == 1
     assert await mf.release(USER, "nothing forgotten in here") == 0
 
 

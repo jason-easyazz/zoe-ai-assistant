@@ -203,6 +203,70 @@ def strip_leading_narration(text: str) -> str:
     return rest if dropped else (text or "")
 
 
+# ── Early release (ZOE_FIRST_SOUND_NARRATION_EARLY, default OFF) ─────────────────
+# The stripper buffers the first sentence (up to _PROBE_LIMIT chars) to judge it, which holds EVERY reply's
+# first words until that sentence closes: measured 2026-10-09 on the live path, the first delta reached the
+# stream loop ~0.9 s (median) after the sidecar sent it. A sentence can only be an announcement if it STARTS
+# like one, so once the buffered prefix cannot grow into a match of _NARRATION_RE it is released at once:
+# same text, same order, same strips (tests/test_first_sound_narration_early.py proves it), earlier.
+_FILLERS = frozenset({"ok", "okay", "sure", "alright", "right", "well", "so", "yes", "yeah", "of", "course",
+                      "certainly", "absolutely"})
+_GERUNDS = frozenset({"checking", "looking", "searching", "digging", "pulling", "having", "taking"})
+_ADV = frozenset({"quickly", "just", "first", "now", "also", "try"})
+_VERBS = frozenset({"check", "have", "take", "look", "pull", "bring", "search", "dig", "go", "see", "find",
+                    "recall", "fetch", "grab"})
+# Word sequences that open an announcement; a "+" lead is then followed by adverbs and a lookup verb.
+_LEADS = ((("i'll",), True), (("i", "will"), True), (("i", "shall"), True), (("let", "me"), True),
+          (("let's",), True), (("i'm", "going"), False), (("i", "am", "going"), False), (("allow", "me"), False),
+          (("give", "me"), False), (("hold", "on"), False), (("bear", "with"), False), (("one", "moment"), False),
+          (("one", "second"), False), (("one", "sec"), False), (("one", "tick"), False), (("just", "a"), False))
+_STARTERS = tuple(_FILLERS | _GERUNDS | {"hmm", "um"} | {w for lead, _ in _LEADS for w in lead[:1]})
+
+
+def early_release_enabled() -> bool:
+    """ZOE_FIRST_SOUND_NARRATION_EARLY; unset, it follows ZOE_FIRST_SOUND_CLAUSE. Default OFF: the text is identical
+    either way, but the voice loop's long-opening rules (clause break at 60+ characters, 90-character soft cap) then see
+    a first sentence they never could before it closed, which changes the audio on those turns."""
+    raw = os.environ.get("ZOE_FIRST_SOUND_NARRATION_EARLY")
+    if raw is None or not raw.strip():
+        raw = os.environ.get("ZOE_FIRST_SOUND_CLAUSE") or "0"
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def may_become_narration(buf: str) -> bool:
+    """False only when NO continuation of ``buf`` can make :data:`_NARRATION_RE` match it; True (keep
+    holding) whenever it still could. Conservative: any number of leading fillers is allowed (the regex
+    allows one) and an unfinished last word is viable if it starts any word the pattern could want."""
+    rest = buf[re.match(r"\W*", buf).end():]
+    if not rest:
+        return True
+    if not re.match(r"[A-Za-z]", rest):
+        return False   # a digit or other character: the pattern needs a letter here
+    words = [w.lower().replace("\u2019", "'") for w in re.findall(r"[A-Za-z'\u2019]+", rest)]
+    growing = bool(re.search(r"[A-Za-z'\u2019]$", buf))   # the last word may still be growing
+    n, i = len(words), 0
+
+    def starts(k: int, options) -> bool:   # words[k] is the unfinished last word and could become an option
+        return k == n - 1 and growing and any(o.startswith(words[k]) for o in options)
+
+    while i < n and not starts(i, _STARTERS) and (words[i] in _FILLERS or re.match(r"(hm+|um+)$", words[i])):
+        i += 1   # skip filler words
+    if i >= n or starts(i, _STARTERS) or words[i] in _GERUNDS:
+        return True
+    tail = words[i:]
+    for lead, verb_follows in _LEADS:
+        if not all(lead[k] == w or (k == len(tail) - 1 and growing and lead[k].startswith(w))
+                   for k, w in enumerate(tail[:len(lead)])):
+            continue
+        if len(tail) <= len(lead) or not verb_follows:
+            return True   # still inside the lead, or a lead that needs no verb after it
+        j = i + len(lead)   # after the lead: adverbs, then a lookup verb
+        while j < n and not starts(j, _ADV | _VERBS) and words[j] in _ADV:
+            j += 1
+        return j >= n or starts(j, _ADV | _VERBS) or words[j] in _VERBS
+    return False
+
+
 class NarrationStripper:
     """Incremental form of :func:`strip_leading_narration` for a delta stream.
 
@@ -266,6 +330,11 @@ class NarrationStripper:
             self._dropped += len(self._held)
             self._held = []
             self._buf = self._buf.lstrip()
+        if (not self._held and self._buf.strip() and early_release_enabled()
+                and not may_become_narration(self._buf)):
+            # cannot be an announcement: release now (same bytes the buffered form would emit later)
+            out, self._buf, self._passing = self._buf, "", True
+            return out
         return self._resolve(final=False)
 
     def finish(self) -> str:

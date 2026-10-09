@@ -535,7 +535,14 @@ async def mark_resolved(suggestion_id: str, user_id: str) -> bool:
             )
         for r in rows:
             if r["action_type"] == "forget_alias":
-                # "No, leave it": counted by reason only (never the spelling), and the question row is scrubbed
+                # "No, leave it": the spelling is a different name from here on (it passes the forget ledger's near guard); counted by
+                # reason only (never the spelling), and the question row is scrubbed
+                try:
+                    import memory_forgotten
+
+                    await memory_forgotten.add_distinct(user_id, str(json.loads(r["pre_filled_slots"] or "{}").get("alias") or ""))
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("pending_suggestions: could not record a distinct spelling (%s)", type(exc).__name__)
                 await _scrub_forget_alias(suggestion_id)
                 from memory_reject_ledger import record_reject
 

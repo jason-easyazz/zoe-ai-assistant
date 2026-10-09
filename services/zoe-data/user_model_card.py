@@ -378,6 +378,21 @@ async def load_card_block(user_id: str, *, build_missing: bool = True) -> dict[s
     card, text, version = json.loads(row[0] or "{}"), row[1] or "", row[2] or ""
     ids = [it[2] for it in card.get("items") or []]
     live = await _live_ids(user_id, ids)
+    # Restraint (ZOE_RESTRAINT=enforce, restraint.py): the card is in front of the model on EVERY turn, so what restraint
+    # withholds elsewhere until a pull (money, grief, family trouble, a health line that is not safety information) is taken
+    # off it here. Applied at serve time, over the stored items, so flipping the flag needs no rebuild and the served bytes
+    # stay deterministic per (items, flag). off / shadow return the items unchanged.
+    withheld: set[str] = set()
+    try:
+        import restraint  # type: ignore[import]
+
+        items = card.get("items") or []
+        kept = {str(it[2]) for it in restraint.filter_card_items(user_id, items)}
+        withheld = {str(it[2]) for it in items} - kept
+    except Exception as exc:  # noqa: BLE001 - restraint must never break a turn
+        logger.debug("user-model card: restraint filter skipped user=%s: %s", user_id, exc)
+    if withheld:
+        live = (set(ids) if live is None else set(live)) - withheld
     if live is None or len(live) == len(set(ids)):
         return {"version": version, "text": text}
     text = render_card(card, live)

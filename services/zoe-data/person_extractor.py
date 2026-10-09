@@ -1105,6 +1105,21 @@ async def _post_write_hooks(
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
+async def _names_forgotten(user_id: str, text: str, source: str) -> bool:
+    """Does ``text`` name an entity this user forgot (the durable ledger, near spellings too)? A person row, an edge or a fact must
+    not be re-created from an inferred mention of a forgotten name - the 300 s tombstone is long gone by the nightly pass. The
+    person's own explicit teach is never routed here (``contacts_conversation`` / the review UI). Fail-open: a ledger blip loses nothing."""
+    try:
+        import memory_forgotten
+
+        if await memory_forgotten.matches(user_id, text, near=True):
+            logger.info("person_extractor: skipped - names a forgotten entity (ledger) (user=%s source=%s)", user_id, source)
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    return False
+
+
 async def apply_person_fact(
     name: str,
     fact_type: str,
@@ -1123,6 +1138,8 @@ async def apply_person_fact(
     name = (name or "").strip()
     value = (value or "").strip()
     if not name or not value:
+        return False
+    if await _names_forgotten(user_id, name, origin or source):
         return False
 
     _db, should_close = await _ensure_db(db)
@@ -1220,6 +1237,8 @@ async def process_text(
             return 0
     except Exception:  # noqa: BLE001
         pass
+    if await _names_forgotten(user_id, text, source):
+        return 0
     # "his birthday is 7/8/1991" -> "7 August 1991" BEFORE any pattern or stored fact sees
     # it (household day-first order, date_locale.py): the raw numeric form was stored as is
     # and a month-first model later rewrote it as July 8.

@@ -23,6 +23,7 @@ from auth import get_current_user
 from database import get_db
 from stt_wake_strip import _strip_wake_word
 from typed_env import env_bool, env_float, env_int, env_list, env_str
+import voice_first_sound as _first_sound
 import voice_speculation as _speculation
 from voice_speaker_id import _compute_resemblyzer_embedding, _cosine_similarity
 # Waterfall engine mechanics live in tts_waterfall; they are re-exported here so
@@ -1116,6 +1117,7 @@ def _extract_first_unit(buffer: str) -> tuple[Optional[str], str]:
     Every boundary requires a FOLLOWING SPACE, so a comma/period/colon inside a partial
     token or a number ("8:05", "12.4", "22,") can never trigger a split — the trailing
     unpunctuated remainder is emitted by the stream loop's end-of-turn flush.
+    ZOE_FIRST_SOUND_CLAUSE (default OFF) adds a clause-boundary first unit; with it off this is unchanged.
     Returns (unit|None, remainder)."""
     stripped = buffer.lstrip()
     if len(stripped) < _FIRST_UNIT_MIN_CHARS:
@@ -1124,6 +1126,11 @@ def _extract_first_unit(buffer: str) -> tuple[Optional[str], str]:
     m = re.search(r"(.{%d,}?[.!?])\s" % _FIRST_UNIT_MIN_CHARS, buffer)
     if m:
         return m.group(1).strip(), buffer[m.end():]
+    # ZOE_FIRST_SOUND_CLAUSE (default OFF): cut at the first clause boundary instead of waiting (voice_first_sound.py).
+    if _first_sound.clause_enabled():
+        clause, rest = _first_sound.extract_first_clause(buffer)
+        if clause:
+            return clause, rest
     # 2. Long opening with no sentence end yet → clause-break to keep first-audio
     #    snappy. The boundary itself must be at least _FIRST_UNIT_CLAUSE_MIN chars in
     #    (not just the buffer), so a short sentence with an early comma is never split
@@ -4376,6 +4383,7 @@ async def voice_command(
                 _v_packet: Optional[_VoicePacket] = None
                 _t_brain_dispatch: Optional[float] = None
                 _filler_emitted = False  # at most one tool-turn filler per turn
+                _prefetched = None  # the brain stream when a tool ack started it early (ZOE_FIRST_SOUND_TOOL_ACK)
                 # The processing-ack path yields audio bytes directly (without going
                 # through _emit_sentence), so _t_first_audio stays None even though
                 # the user already heard audio — track it separately.
@@ -4498,10 +4506,25 @@ async def voice_command(
                     ) = await _voice_brain_kwargs(session_id, effective_user, text, _router_decision)
                     _observe_pre_brain_stages(t_chat_start - _t_cmd_start)
                     _t_brain_dispatch = time.monotonic()
-                    async for delta in brain_streaming(
+                    _brain_stream = brain_streaming(
                         text, session_id, user_id=effective_user,
                         voice_mode=True, **_v_brain_kwargs,
-                    ):
+                    )
+                    # ZOE_FIRST_SOUND_TOOL_ACK (default OFF): a tool-class brain turn says ONE short cached line NOW,
+                    # with the brain request already in flight (prefetched), not when the tool-start sentinel arrives.
+                    _ack_line = _first_sound.dispatch_ack(
+                        _router_decision,
+                        audio_started=_t_first_audio is not None,
+                        filler_emitted=_filler_emitted,
+                        processing_ack_sent=_processing_ack_audio_sent,
+                    )
+                    if _ack_line:
+                        _brain_stream = _prefetched = _first_sound.prefetch(_brain_stream)
+                        _filler_emitted = True
+                        async for out_chunk in _emit_sentence(_ack_line, record=False):
+                            yield out_chunk
+                        logger.info("FIRST_SOUND tool_ack domain=%s line=%r", _router_decision.get("routed"), _ack_line)
+                    async for delta in _brain_stream:
                         if not delta:
                             continue
                         # Brain "what I'm doing" sentinels ride alongside the spoken
@@ -4603,6 +4626,8 @@ async def voice_command(
                     async for out_line in _emit_line({"error": "voice command stream failure"}):
                         yield out_line
                 finally:
+                    if _prefetched is not None:
+                        _prefetched.close_nowait()  # no-op once the stream ran to its end
                     if _v_packet is not None and _t_brain_dispatch is not None:
                         _log_voice_timing(
                             turn=_turn_key, session_id=session_id, path="stream",

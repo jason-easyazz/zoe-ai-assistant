@@ -303,6 +303,27 @@ Every row says WHEN IT WAS TRUE as well as WHEN ZOE LEARNED IT. No flag: the sta
 * Proof: ZMB cells C2.history_read, C2.history_is_labelled, C4.valid_from_is_event_time (controls `invalidate`, `history`, `event_time`),
   `test_memory_temporal.py`, `test_memory_implicit_supersede.py` (the `used to` table).
 
+## Forgetting: forgotten means forever (`memory_forgotten.py`, `forget_match.py`, `forget_redact.py`)
+
+Owner rule, 2026-10-06. The forget shield is PERMANENT by default (the ledger's `shield_until` is the far-future sentinel
+`9999-12-31T23:59:59Z`; `ZOE_FORGOTTEN_SHIELD_DAYS` > 0 is an explicit, bounded loosening) and only a verified re-teach releases it
+(`release`, called after the store succeeded). The ledger holds salted hashes only - `user_id`, `HMAC(user_salt, key)`, scope, actor,
+timestamps - never a name; `ZOE_FORGET_LEDGER_SALT` is the secret (no agent prints it; unset, the ledger is off and the 300 s tombstone is
+all there is). A forget now has five walls, each with a break-the-fix test in `test_forget_to_the_box.py`:
+
+| wall | what | where |
+|---|---|---|
+| 1 exact | the name's rows are archived then physically erased, the tombstone (300 s fast path) and the ledger entry are written, the cascade clears derived stores | `memory_forget_entity` (`intent_router`) |
+| 2 near spellings | the ledger also stores hashed edit-distance probes of the name (`scope=near`): <= 2 edits for 7+ codepoints, 1 for 5-6, none for 4 or fewer; a split spelling ("Mari sol") one edit tighter; accents folded; counted per codepoint so it works on any script (a script written without spaces matches windows of the run; 1 edit from 3 codepoints - an unmeasured policy). The probes are exact Levenshtein, not an approximation: a shared key IS an alignment of cost <= k. The write guards (`MemoryService.ingest`, the transcript loaders, the person extractor) pass `near=True`: a near spelling is HELD OUT, never erased, and the owner is asked "did you also mean ...?" (`memory_forget_alias.queue_spellings`); yes forgets that spelling the same permanent way, no records it as `distinct` and it passes. Reads that hide recalled rows stay exact. `ZOE_FORGET_NEAR=0` turns the probes off. Names over 20 codepoints keep the exact entry only | `forget_match.py`, `memory_forgotten.py` |
+| 3 transcript | the owner's `chat_messages` rows (user AND assistant turns) and session titles have the name's span replaced by `[forgotten]` IN PLACE (id, role, timestamps kept) at forget time, and the nightly digest first sweeps recent rows by the LEDGER alone (no name needed: the reply saved after the forget turn, a later mention); the per-turn marks other modules hold in process are dropped. A redaction that fails is not a confirmed forget. Log: `FORGET_REDACT user= rows= spans=`, counts only. `ZOE_FORGET_REDACT=0` is the kill switch | `forget_redact.py`, `memory_digest._redact_forgotten_transcript` |
+| 4 backups | the nightly export applies the ledger before writing (`export_memory_store._apply_forget_ledger`; the unit loads the service environment; if the ledger cannot load, the export is still written and says `forget_ledger: skipped`), and `scripts/maintenance/redact_backups.py` redacts existing exports (and, with the brain stopped, the Flue conversation store) on demand. Record counts and ids never change and the file is verified before it replaces the old one (`verify_export` is the backup-verify check). Tarballs are not rewritten | `scripts/maintenance/` |
+| 5 resurrection | every automatic writer consults the ledger: `ingest` (the one durable-write choke point), the transcript loaders (digest, idle consolidation, open loops, exact-words catch-up, night mind) and the person extractor (`process_text`, `apply_person_fact`) | see each |
+
+Known limits (open-problems ledger): the Flue sidecar keeps its own durable copy of every brain turn (an append-only event stream with
+fold checkpoints); it can only be redacted offline, with the sidecar stopped (`redact_backups.py --flue-db`); recorded audio
+(`~/.zoe-voice-samples`) cannot be redacted; Postgres dumps and the nightly palace tarballs age out by rotation; near probes exist only for
+forgets made after this change (an old entry is a hash of a name nobody holds, so its spellings cannot be derived: say the forget again).
+
 ## Existing rows (backfill)
 
 The live code derives a class for unstamped rows (`legacy_class_basis`), so nothing needs migrating for

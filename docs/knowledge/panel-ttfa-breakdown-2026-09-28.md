@@ -8,6 +8,8 @@ timestamp: 2026-09-28T19:05:00+08:00
 
 # Panel time-to-first-audio breakdown (2026-09-28)
 
+**Update 2026-10-09:** re-measured live after #1760/#1761, with three further flag-dark levers (ranked fix #5 is one of them): [first-sound-latency-2026-10-09.md](first-sound-latency-2026-10-09.md).
+
 This is a measurement and a plan. Nothing here is implemented. The voice path it describes
 is in [voice-pipeline.md](voice-pipeline.md), and the topology is in
 [runtime-topology.md](runtime-topology.md).

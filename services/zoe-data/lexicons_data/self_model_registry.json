@@ -1,0 +1,125 @@
+{
+ "activator": "activate_abilities",
+ "core": [
+  "get_time",
+  "recall_memory",
+  "activate_abilities"
+ ],
+ "groups": [
+  [
+   "weather",
+   [
+    "get_weather"
+   ]
+  ],
+  [
+   "lists",
+   [
+    "shopping_list_add",
+    "add_to_list",
+    "list_remove",
+    "show_list"
+   ]
+  ],
+  [
+   "timers",
+   [
+    "set_timer"
+   ]
+  ],
+  [
+   "reminders",
+   [
+    "list_reminders",
+    "add_reminder"
+   ]
+  ],
+  [
+   "calendar",
+   [
+    "show_calendar",
+    "add_calendar_event"
+   ]
+  ],
+  [
+   "notes",
+   [
+    "create_note",
+    "note_search"
+   ]
+  ],
+  [
+   "journal",
+   [
+    "journal"
+   ]
+  ],
+  [
+   "people",
+   [
+    "people"
+   ]
+  ],
+  [
+   "media",
+   [
+    "media"
+   ]
+  ],
+  [
+   "home",
+   [
+    "home"
+   ]
+  ],
+  [
+   "memory",
+   [
+    "remember_fact",
+    "remember_emotional_moment",
+    "memory_retire"
+   ]
+  ]
+ ],
+ "purposes": {
+  "calendar": "show or add events",
+  "home": "turn on/off, dim, or brighten the lights",
+  "journal": "diary entries, journaling prompts, streak",
+  "lists": "add to, remove from, or show shopping/task lists",
+  "media": "play/control music, set music or speaking volume",
+  "memory": "store a fact the user asks you to remember, or a durable emotional moment",
+  "notes": "save or search notes",
+  "people": "save or look up people/contacts",
+  "reminders": "list or create reminders",
+  "timers": "countdown timers",
+  "weather": "current weather / forecast"
+ },
+ "tools": [
+  "get_time",
+  "recall_memory",
+  "shopping_list_add",
+  "get_weather",
+  "list_reminders",
+  "show_calendar",
+  "show_list",
+  "set_timer",
+  "add_reminder",
+  "add_calendar_event",
+  "create_note",
+  "add_to_list",
+  "list_remove",
+  "note_search",
+  "journal",
+  "people",
+  "media",
+  "home",
+  "remember_fact",
+  "remember_emotional_moment",
+  "memory_retire",
+  "activate_abilities",
+  "web_search"
+ ],
+ "ungrouped": [
+  "web_search"
+ ]
+}

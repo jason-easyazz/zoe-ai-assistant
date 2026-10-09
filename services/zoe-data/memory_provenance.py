@@ -44,6 +44,7 @@ import re
 import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Iterable, Optional, Sequence
 
 logger = logging.getLogger(__name__)
@@ -496,30 +497,78 @@ def _cue_label(raw: str) -> str:
     return "dont_remember"
 
 
-def parse_off_record(text: str) -> Optional[OffRecord]:
-    """The off-the-record cue in ``text`` or None. Pure. The cue must OPEN the turn (after a filler like "ok" / "zoe") or CLOSE it
-    after a comma: "what does off the record mean?" and "is this off the record?" are questions about the phrase, not cues;
-    "can we go off the record?" is one (a bare cue)."""
-    t = (text or "").strip()
-    if not t:
-        return None
+def _match_otr(t: str, lead_re, tail_re, label) -> Optional[OffRecord]:
+    """One language's lead/tail patterns over the (stripped, non-empty) turn ``t``: the shared shape of the parser."""
     if len(t) > _OTR_MAX_CHARS:
         # A long message is still off the record when it OPENS or CLOSES with the cue (chat accepts any length; skipping it here
         # would store the very thing the owner asked us not to). Only the head / tail is matched, so the lazy tail pattern stays
         # bounded; the whole message is the payload.
-        m = _OTR_LEAD_RE.match(t[:_OTR_EDGE_CHARS])
+        m = lead_re.match(t[:_OTR_EDGE_CHARS])
         if m and m.group("cue"):
-            return OffRecord(_cue_label(m.group("cue")), t)
-        m = _OTR_TAIL_RE.match(t[-_OTR_EDGE_CHARS:])
-        return OffRecord(_cue_label(m.group("cue")), t) if m else None
-    m = _OTR_LEAD_RE.match(t)
+            return OffRecord(label(m.group("cue")), t)
+        m = tail_re.match(t[-_OTR_EDGE_CHARS:])
+        return OffRecord(label(m.group("cue")), t) if m else None
+    m = lead_re.match(t)
     if m:
         rest = (m.group("rest") or "").strip(" \t\r\n,:;.-–—")
-        return OffRecord(_cue_label(m.group("cue")), rest)
-    m = _OTR_TAIL_RE.match(t)
+        return OffRecord(label(m.group("cue")), rest)
+    m = tail_re.match(t)
     if m:
         payload = m.group("payload").strip()
-        return OffRecord(_cue_label(m.group("cue")), payload)
+        return OffRecord(label(m.group("cue")), payload)
+    return None
+
+
+@lru_cache(maxsize=None)
+def _otr_data_langs() -> tuple:
+    """((lang, lead_re, tail_re, label_fn), ...) for every language whose ``lexicons_data/<lang>.json`` has an ``off_record`` section
+    (English is built in above). The cues are DATA: a phrase the self-model advertises in a language must be a cue here."""
+    out = []
+    try:
+        import lexicons
+    except Exception:  # noqa: BLE001
+        return ()
+    for lang in lexicons.LANGS:
+        sec = lexicons.load(lang).get("off_record") if lang != "en" else None
+        cues = (sec or {}).get("cues") or {}
+        if not cues:
+            continue
+        try:
+            frags = [f for fs in cues.values() for f in fs]
+            labelled = [(lab, re.compile(rf"(?:{'|'.join(fs)})", re.IGNORECASE | re.DOTALL)) for lab, fs in cues.items() if fs]
+            cue = rf"(?P<cue>{'|'.join(frags)})"
+            filler, lead_in, polite = sec.get("filler") or "", sec.get("lead_in") or "", sec.get("polite") or ""
+            lead = re.compile(rf"^\s*{filler}(?:{lead_in}\s+)?{cue}" + (rf"(?:\s+{polite})?" if polite else "")
+                              + rf"\s*[?!]*(?P<rest>(?:{_SEP}.*)?)$", re.IGNORECASE | re.DOTALL)
+            tail = re.compile(rf"^(?P<payload>.{{6,}}?)[,.;:\-–—]\s*(?:y\s+)?(?:{polite}\s+)?{cue}\W*$" if polite else
+                              rf"^(?P<payload>.{{6,}}?)[,.;:\-–—]\s*{cue}\W*$", re.IGNORECASE | re.DOTALL)
+
+            def label(raw: str, _l=tuple(labelled)) -> str:
+                for lab, rx in _l:
+                    if rx.fullmatch(raw.strip()):
+                        return lab
+                return "between_us"
+            out.append((lang, lead, tail, label))
+        except re.error as exc:
+            logger.warning("memory_provenance: off_record cues for %s do not compile (%s)", lang, exc)
+    return tuple(out)
+
+
+def parse_off_record(text: str) -> Optional[OffRecord]:
+    """The off-the-record cue in ``text`` or None. Pure. The cue must OPEN the turn (after a filler like "ok" / "zoe") or CLOSE it
+    after a comma: "what does off the record mean?" and "is this off the record?" are questions about the phrase, not cues;
+    "can we go off the record?" is one (a bare cue). English is built in; every other language's cues are data
+    (``lexicons_data/<lang>.json`` "off_record") and are tried after it."""
+    t = (text or "").strip()
+    if not t:
+        return None
+    hit = _match_otr(t, _OTR_LEAD_RE, _OTR_TAIL_RE, _cue_label)
+    if hit is not None:
+        return hit
+    for _lang, lead, tail, label in _otr_data_langs():
+        hit = _match_otr(t, lead, tail, label)
+        if hit is not None:
+            return hit
     return None
 
 

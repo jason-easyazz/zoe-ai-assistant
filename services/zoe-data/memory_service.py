@@ -1570,8 +1570,8 @@ class MemoryService:
                 pass  # the guard must never break ingestion
             try:
                 evidence = anchor_text if anchor_text is not None else source_excerpt
-                if await _forgotten.matches(user_id, scrubbed) or (
-                        evidence and await _forgotten.matches(user_id, evidence)):
+                if await _forgotten.matches(user_id, scrubbed, near=True) or (
+                        evidence and await _forgotten.matches(user_id, evidence, near=True)):
                     self._bump("forgotten_drop", source)
                     logger.info(
                         "memory_service: ingest dropped — names a forgotten entity (ledger) "
@@ -3382,6 +3382,11 @@ class MemoryService:
         import restraint
 
         restraint.stamp(md, text)
+        # Recall-gate triggers (recall_gate.py, ZOE_RECALL_GATE): names, distinctive keys, clock times and a routine flag derived from
+        # the row's own text at write time, stored beside the row; a reader trusts them only while version and hash match. No-op when off.
+        import recall_gate
+
+        recall_gate.stamp(md, text)
         return md
 
     def _remember_seen_key(self, user_id: str, idem_key: str) -> None:

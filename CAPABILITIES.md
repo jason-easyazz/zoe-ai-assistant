@@ -153,7 +153,7 @@
 - **Memory**: MemPalace (ChromaDB semantic) + user portrait + open loops engine
 - **Calendar / Reminders / Lists / Notes / People**: PostgreSQL, user-scoped, MCP-accessible
 - **Home Automation**: Home Assistant bridge (HA control, sensors, scenes)
-- **Voice**: Wyoming/Whisper transcription + TTS
+- **Voice**: Moonshine speech-to-text + Kokoro text-to-speech (both on this box)
 - **Push**: WebSocket /ws/push + proactive engine (morning brief, open loop follow-ups)
 - **Panel**: show_map, show_chart, show_image, open_touch_page, panel_browser_screenshot
 - **Self-improvement**: intent-miss review → Hermes/Multica proposal workflow (`self_improve` intent)
