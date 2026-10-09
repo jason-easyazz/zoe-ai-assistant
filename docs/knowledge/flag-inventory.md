@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-564 flags; 562 not documented in `.env.example`.
+565 flags; 563 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -433,6 +433,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_READINESS_CACHE_TTL_S` | `3.0` | yes | NO | `services/zoe-data/main.py` |
 | `ZOE_READINESS_TIMEOUT_S` | `4.0` | yes | NO | `services/zoe-data/main.py` |
 | `ZOE_RECALL_EVIDENCE` | `False` | yes | NO | `services/zoe-data/recall_evidence.py` |
+| `ZOE_RECALL_GATE` | `'shadow'` | yes | NO | `services/zoe-data/recall_gate.py` |
 | `ZOE_RECALL_PRESENT_STATE_SHAPES` | `-` | no | NO | `services/zoe-data/zoe_flue_client.py` |
 | `ZOE_RELATIONSHIP_GRAPH_ENABLED` | `''` | no | NO | `services/zoe-data/relationship_graph.py` |
 | `ZOE_REMINDER_DEFAULT_TIME` | `''` | no | NO | `services/zoe-data/proactive/triggers/reminder_scan.py` |

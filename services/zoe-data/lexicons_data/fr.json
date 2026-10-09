@@ -334,5 +334,6 @@
   "donc",
   "alors"
  ],
- "pronoun_required": true
+ "pronoun_required": true,
+ "recall_gate": {"caps_entity":true,"stop":["le","la","les","un","une","des","du","de","d","l","et","ou","mais","à","au","aux","en","dans","sur","avec","pour","par","comme","est","sont","était","être","suis","ai","a","ont","que","qui","je","me","moi","mon","ma","mes","nous","notre","ne","pas","plus","très","aussi","se","son","sa","ses","ce","cet","cette","ces","il","elle","ils","elles","on","y","utilisateur"],"plan_cues":["demain","ce soir","aujourd'hui","plus tard","bientôt","ce matin","cet après-midi","ce week-end","cette semaine","la semaine prochaine","le mois prochain"],"routine_cues":["chaque","tous","toutes","quotidien","toujours","habituellement","hebdomadaire","tous les jours","en semaine"],"dayparts":["matin","soir","après-midi","nuit","aube","midi","minuit","crépuscule"],"am_words":[],"pm_words":[],"clock_suffix":["h"],"months":["janvier","février","mars","avril","mai","juin","juillet","août","septembre","octobre","novembre","décembre"],"weekdays":["lundi","mardi","mercredi","jeudi","vendredi","samedi","dimanche"],"stop_chars":[]}
 }

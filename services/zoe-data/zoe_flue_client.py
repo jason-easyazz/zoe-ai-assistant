@@ -1924,6 +1924,11 @@ async def _run_flue_brain_streaming_turn(
     import restraint
 
     restraint.note_turn(uid, message)
+    # The relevance gate's turn counter + the owner's own words (ZOE_RECALL_GATE; a no-op when off, never raises): sticky / cooldown /
+    # delay count turns of THIS session, and a recall_memory tool call later in the turn is judged against what the owner said.
+    import recall_gate
+
+    recall_gate.note_turn(uid, session_id, message)
     # Back a claim up when challenged (ZOE_VERIFY_ON_CHALLENGE, default OFF; no
     # DB read, no search, no change to the bytes when off): "are you sure" after
     # a world-fact answer runs ONE bounded web search. A hit rides as a block

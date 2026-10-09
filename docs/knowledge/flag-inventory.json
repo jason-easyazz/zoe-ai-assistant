@@ -4246,6 +4246,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_RECALL_GATE": {
+        "defaults": [
+          "'shadow'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/recall_gate.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_RECALL_PRESENT_STATE_SHAPES": {
         "defaults": [
           "-"
