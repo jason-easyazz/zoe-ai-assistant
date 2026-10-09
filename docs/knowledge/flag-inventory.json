@@ -512,6 +512,7 @@
         ],
         "in_env_example": false,
         "readers": [
+          "scripts/perf/hop_placement_ab.py",
           "scripts/perf/measure_tts_cadence.py",
           "scripts/perf/user_model_ab.py",
           "services/zoe-data/zoe_flue_client.py"
@@ -3480,6 +3481,7 @@
         ],
         "in_env_example": false,
         "readers": [
+          "scripts/perf/hop_placement_ab.py",
           "scripts/perf/measure_speed.py",
           "scripts/perf/measure_tts.py",
           "scripts/perf/measure_voice.py",
@@ -3494,6 +3496,16 @@
       "ZOE_PERSONALISATION_HOP": {
         "defaults": [
           "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/personalisation_hop.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_PERSONALISATION_HOP_PLACEMENT": {
+        "defaults": [
+          "'block'"
         ],
         "in_env_example": false,
         "readers": [

@@ -551,3 +551,32 @@ def test_run_only_seeds_just_the_selected_facts(monkeypatch):
     out = ds.run_only(_HopLive(), "demo_bar_0a1b2c3d", frozenset({"S9a"}), 1, lambda m: None)
     assert seeded == ["d1-shift"] and [a["id"] for a in out["asks"]] == ["S9a"]
     assert out["asks"][0]["verdict"] == "PASS"
+
+
+# ── S9b "FAIL with hop_in_packet true" was the weather expert, not the 4B: the ask says which (2026-10-09) ───────────────────────
+
+def test_count_seam_hops_excludes_the_harness_packet_read_and_other_users():
+    lines = ["2026-10-09T14:23:35+0800 INFO personalisation_hop: PERSONALISATION_HOP user=demo_bar_0a1b2c3d topics=clothing rows=10 facts=1",
+             "2026-10-09T14:23:36+0800 INFO personalisation_hop: PERSONALISATION_HOP user=demo_bar_0a1b2c3d topics=clothing rows=10 facts=1",
+             "2026-10-09T14:23:37+0800 INFO personalisation_hop: PERSONALISATION_HOP user=demo_bar_ffffffff topics=sleep rows=3 facts=1",
+             "2026-10-09T14:23:38+0800 INFO other: nothing"]
+    assert ds.count_seam_hops(lines, "demo_bar_0a1b2c3d") == 1
+    assert ds.count_seam_hops(lines[:1], "demo_bar_0a1b2c3d") == 0          # only the packet read: the brain never built a hop
+    assert ds.count_seam_hops([], "demo_bar_0a1b2c3d") == 0
+
+
+def test_a_hop_fail_with_the_fact_in_the_packet_but_no_brain_turn_is_attributed_to_the_routing(monkeypatch):
+    user = "demo_bar_0a1b2c3d"
+    packet_read_only = [f"x PERSONALISATION_HOP user={user} topics=clothing rows=10 facts=1"]
+    monkeypatch.setattr(ds.uma, "log_offset", lambda: 0)
+    monkeypatch.setattr(ds.uma, "read_app_log", lambda off: packet_read_only)
+    live = _HopLive(hop=True)
+    live.chat = lambda u, tag, message: {"reply": "Yes, I'd take a jacket, it's around 19 degrees and wet in Geraldton.",
+                                         "error": None, "ms": 1, "session": tag}
+    v, ev = ds.run_hop_ask(live, user, "S9b", 1, [], *SEEDED, "default")
+    assert v == "FAIL" and ev["hop_in_packet"] is True and ev["seam_hops"] == 0
+    assert "domain expert" in ev["why"]
+    # negative control: the brain DID see the hop and still answered generically -> the old reading (the 4B) stands, no routing blame
+    monkeypatch.setattr(ds.uma, "read_app_log", lambda off: packet_read_only * 2)
+    v, ev = ds.run_hop_ask(live, user, "S9b", 1, [], *SEEDED, "default")
+    assert v == "FAIL" and ev["seam_hops"] == 1 and "why" not in ev
