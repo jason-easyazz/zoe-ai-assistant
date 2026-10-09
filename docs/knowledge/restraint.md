@@ -42,7 +42,7 @@ Six classes: `health`, `money`, `family_conflict`, `grief`, `other_member` (a ro
 | `memory_type == person` or `entity_type == person` | `other_member` |
 | `memory_type == emotional_moment`, a captured `affect`, a candidate `kind == emotional` | `affect` |
 | a row `tags` entry (`health`, `medical`, `dental`, `finance`, `grief`, `conflict`, ...) | `health` / `money` / `grief` / `family_conflict` |
-| the English word list (`restraint._HEALTH`, `_MONEY`, `_GRIEF`, `_FAMILY_CONFLICT`, kin and possessive-name patterns, a first-person feeling list) | the fallback for everything above |
+| the per-language word lists (`lexicons_data/<lang>.json` "restraint": health, money, grief, conflict, kin and possessive patterns, a first-person feeling list), compiled by `restraint_lex.py` for the language the text is written in | the fallback for everything above |
 | the member's contact names (`people`), passed by the nightly pass | `other_member` for a thread that names one |
 
 `classify_full` returns the signals beside the classes (`health:lexicon`, `affect:type`, ...), so an audit can tell a
@@ -76,9 +76,22 @@ the model typed, so `note_turn` (in `zoe_flue_client`, beside `recall_evidence.n
 the speaker gate's verdict; the previous turn within five minutes keeps its topic alive ("are you sure?" continues the
 dentist). Kin words (mum / mom / mother ...) count as topics although they are short.
 
-Not filtered, by design: calendar events (the day, not a thread), an `event` raise (only the guest rule holds it), the
-relational "People and important dates" block and the exact-words block (both are only built when the owner asks), and the
-always-present user-model **card** (see limits).
+Not filtered, by design: calendar events (the day, not a thread), an `event` raise (only the guest rule holds it) and the
+relational "People and important dates" block (only built when the owner asks). The exact-words block is filtered at its source
+(`exact_words.lookup` -> `restraint.filter_extra`: the guest wall and the mutes; the owner asking "what exactly did I say about ..." is
+the pull). The always-present user-model **card** is filtered at serve time (next section).
+
+## 2c. The user-model card (`surface=card`)
+
+The card (`user_model_card.py`) is in front of the model on every turn, so no pull could ever release a line of it. In enforce,
+`load_card_block` takes off it, over the stored items and at serve time (flipping the flag needs no rebuild; the served bytes are
+deterministic per items and flag, so the prefix cache is stable), (a) every item the classifier calls `money`, `grief` or
+`family_conflict`, and (b) every line of the **Health** category that is not safety information. Safety information is the
+lexicon's `health_safety` list (allergy, anaphylaxis, EpiPen, asthma, diabetes, epilepsy, medication, pregnancy, access needs: deaf,
+wheelchair, disability): cooking and advice need those on every turn. A migraine, a knee, a surgery, insomnia, ADHD wait for the
+recall packet, which the owner's own question pulls. `off` and `shadow` serve the stored text byte for byte (shadow logs
+`RESTRAINT ... surface=card withheld=N`). Not covered: a guest voice (`verdict False`) still hears the card the member would; the card
+is not rebuilt per voice.
 
 ## 3. The spoken mute
 
@@ -98,8 +111,9 @@ always-present user-model **card** (see limits).
   `released_at`, `released_turn_key`; the row stays.
 * honoured everywhere: the raise and the brief never carry a muted thread (even on a pull or a cue); the packet withholds
   it from a mood turn or a task turn but still answers the owner's own question about it (a mute is about volunteering).
-* enforce speaks `Okay, I won't bring that up again.` / `Okay, I can mention that again.` from code (the
-  verify-on-challenge pattern: no model call). Shadow records and lets the brain reply. The replay harness
+* enforce speaks `Okay, I won't bring that up again.` / `Okay, I can mention that again.` from code, in the language the owner
+  spoke (the lexicon's `ack_*`; English when that language has none), the verify-on-challenge pattern: no model call. Shadow records and
+  lets the brain reply. **Both brain lanes** record and speak it: `run_flue_brain_streaming` and, since this PR, `run_zoe_core_streaming`. The replay harness
   (`replay_isolation`) never writes a mute; a guest has no standing to set one.
 * erased with the member (`MemoryService.delete_user`) and with a forget of the entity the topic names
   (`memory_forget_cascade`).
@@ -146,36 +160,70 @@ Before this work the live baseline (2026-10-09, unchanged stack) had P4.a / P4.b
 EXPECTED FAIL targets ([samantha-person.md](samantha-person.md)). They are ordinary gating halves now. The pre-registration
 sha changed with them (`4099844a...`), with this table as the baseline.
 
-**Not measured live.** The live brain was inside a 12B trial window (the harness lock was held) when this was built, so
-the live P2 / S5 / day-sim runs and the replay gate were NOT run. What was done instead: every bar and day-sim ask, paired
-with the sentence it was written to find, is checked offline to still DELIVER its row under enforce
-(`tests/unit/test_samantha_person_checkout.py`), S5's and the day-sim's open turns are checked to be pulls, and the
-selector tests replay the 1r / 7r / 7s shapes (one raise, minutes apart no second, the next thread not the same one).
+**Live, in-process (2026-10-09, after the enforce-ready PR).** The live 4B ran through `scripts/perf/person_half_enforce_ab.py` with
+`ZOE_RESTRAINT=enforce` in one arm and `shadow` in the other (no live flag touched, write-isolated, no database; the packet is the real
+`memory_for_prompt` -> `restraint.apply_to_packet` output forced onto each task turn, the worst case): P2.a 20/20 in both arms, P2.b 17/20 -> 20/20,
+P2.c 20/20 in both, 40 of 40 prompts differ. **Still not measured live:** P9, S5 and the day-sim (they need the live database: seeds, candidates, the brief)
+and the voice replay gate. The offline stand-ins stay: `tests/unit/test_samantha_person_checkout.py` (every bar and day-sim ask still gets the row it was written to
+find; S5's and the day-sim's open turns are pulls) and the selector tests that replay the 1r / 7r / 7s shapes. The full flip block and the
+verdict (DO NOT FLIP until the 90 % word-recall bar or a time-boxed live trial is decided) are in
+[person-half-enforce-pack-2026-10-09.md](person-half-enforce-pack-2026-10-09.md).
+
+## Languages
+
+Every word restraint decides by is data: `lexicons_data/<lang>.json` under `"restraint"` (health, money, grief, conflict, kin and
+possessive patterns, feelings, the stop words, the "what's up?" phrases, the spoken-mute grammar as whole regexes, the spoken
+acknowledgements), compiled per language by `restraint_lex.py`. No English word list is left in `restraint.py` and a test pins it.
+
+* **The language is the text's own** (`lexicons.detect`: kana -> ja, Han -> zh, else the Latin lexicon whose function words match most,
+  else en). A language with no `restraint` entry classes nothing by words (the structured signals still decide) and is **never guessed
+  from English**. Closed phrase lists (a pull, a mute) are tried in the text's language first and then in every other language that has
+  them, because a four-word utterance carries too few function words to detect; the open class lists never cross languages (`pain` is
+  health in English and bread in French).
+* **English is the pre-move list plus a widening.** `tests/fixtures/restraint_pre_move_en.json` holds the pre-move sources: every
+  pre-move fragment is still there in order, the mute grammar and the word sets are byte-identical, and the one fragment that was
+  narrowed (`broke`, which also matched "broke her arm") is named in the test. Adding a word is a data change that a held-out set measures.
+* **es, fr, de, zh, ja are author-written, `reviewed: false`.** Labelled sentences for every class, a pull, a mute, a release and the
+  acknowledgement are in `tests/test_restraint_lexicon.py`; taking a language's entry away turns its test red. A native reader's review
+  is owed before anyone relies on them for a household that speaks them (a CJK topic is the character bigrams minus particles).
+* **Measured (2026-10-09, classifier = words only, no structured signal).** Three sets written before their first run, English:
+
+| set | sensitive, class-exact on its first run | any class | plain false positives |
+|---|---|---|---|
+| 1 (60 sentences) | 35 / 60 | 43 / 60 | 0 / 31 |
+| 2 (60), after widening from set 1's misses | 40 / 60 | 46 / 60 | 0 / 32 |
+| **3 (54), after the vocabulary was final: the blind number** | **34 / 54 (63 %)** | **41 / 54 (76 %)** | **0 / 25** |
+
+  Sets 1 and 2 are training data once their misses were read (59 / 60 and 56 / 60 now) and are regression floors in the test. The
+  ledger's bar was ">= 90 % class-exact on a fresh set with 0 plain false positives": **0 plain false positives holds (0 of 88); the
+  90 % does not, and a hand-widened word list will not reach it** (a paraphrase it never saw is missed: "I still can't believe she's
+  gone", "twisted their ankle", "a colonoscopy"). What a miss costs: the row is not withheld, which is exactly shadow's behaviour; what
+  restraint can never do through this list is over-withhold ordinary life. The rest is carried by the structured signals (type, entity,
+  tags, captured affect), the night mind's stage-2 `kind = health` enum and the contact names; a `other_member` row about a bare first
+  name still needs `entity_type = person` or a contact name (ingest has neither for a free-text row).
 
 ## Limits, stated
 
-* **The word list is English and a paraphrase it never saw is missed.** Held out set of 32 sensitive and 21 plain
-  sentences written before the vocabulary was widened: class-exact recall 20 / 32 (any class 22 / 32), 0 plain false
-  positives; after widening general vocabulary 29 / 32 on the same sentences (no longer held out), 0 false positives.
-  `tests/test_restraint.py` pins it. Structured signals (type, entity, tags, captured affect) carry the cases the list
-  cannot; the stage-2 `kind = health` enum of the night mind plugs into the same union.
+* **The word list is a fallback, not a classifier.** See "Languages": 63 % class-exact on an unseen English set, 0 false positives.
 * **`other_member` needs a signal.** A row about "Teodor" with no `entity_type=person`, no kin or possessive and no
   contact name in the list is not classed; the nightly pass passes the member's contact names for threads, ingest does not
   have them for rows.
-* **The user-model card is not filtered.** It is the always-present block of current facts, it carries allergies and
-  medication on purpose (cooking suggestions need them), is built per night and prefix-cache stable. Filtering it
-  per turn would change its bytes and its health line is safety information; it is listed in
-  [open-problems.md](open-problems.md).
-* **The mute is captured on the Flue lane** (the live brain). The dormant core lane honours existing mutes (the filters live
-  in shared code) but does not record a new one.
-* **Back-off needs `ZOE_PROACTIVE_LEDGER`.** Its rows are the evidence.
+* **The user-model card is filtered at serve time in enforce** (section 2c); a guest voice at a member panel still hears the member's card.
+* **The mute is captured on both brain lanes** (Flue and the dormant core lane).
+* **Back-off needs `ZOE_PROACTIVE_LEDGER` outcome rows.** The flag is ON on the live service, the sweep (`proactive/engine.py` step 4)
+  is wired, and the live log shows 58 `PROACTIVE_LEDGER` rows written since 2026-10-06 and **not one `PROACTIVE_LEDGER_OUTCOME`**.
+  That is unexplained from code alone (the sweep closes an open row to `unknown` after 24 h whatever the evidence), so the sweep now
+  logs `PROACTIVE_LEDGER_SWEEP open=N closed=M deferred=K` whenever it has anything to judge; read it after the next restart. Until
+  `ignored` rows exist back-off is inert in enforce (shadow-equivalent), and nothing else depends on it.
 * **Speaker verdict only reaches voice turns** that carry the gate's block; typed chat has none (`None`).
+* **The turn mark is per member, not per turn** (two overlapping sessions of one member share it): ledgered.
 
 ## Operator steps (nothing here is done by the PR)
 
 1. Merge; `alembic upgrade head` (0042) runs with the deploy; restart zoe-data. `ZOE_RESTRAINT` unset = shadow.
 2. Watch `grep RESTRAINT ~/.zoe-logs/*` for a week: `withheld=` counts per surface and class are what enforce would remove.
-3. Voice path: this PR touches `zoe_flue_client.py`, `routers/memories.py` and one line of `routers/voice_tts.py`; the replay
+3. Voice path: that PR touched `zoe_flue_client.py`, `routers/memories.py` and one line of `routers/voice_tts.py` (the enforce-ready PR adds
+   `zoe_core_client.py`, `exact_words.py`, `user_model_card.py`); the replay
    gate (`voice_regression_probe.py` under `flock /tmp/zoe-voice-harness.lock`) must pass against a checkout of the merged commit.
 4. Before the flip: run the bar (S1-S22 with S5), the day-sim, and `samantha_person.py` (P2, P3, P4, P9) once with the service
    in `enforce`, and compare with the shadow baseline. Flip with `ZOE_RESTRAINT=enforce` in the service `.env`.

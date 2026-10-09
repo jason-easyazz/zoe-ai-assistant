@@ -95,7 +95,17 @@ the standing offer "I'm here if you want to chat" - that the lexicon does not li
 `clean_goodbye._PROBE_RX`; that count is the guard's reading, not an independent one, so the claim rests on the hand count);
 the bench's `SILENCE_REMARKS` should grow the same phrases (queued in `open-problems.md`).
 
+## Measured live, enforce vs shadow (2026-10-09, in-process)
+
+`scripts/perf/person_half_enforce_ab.py` ran the real tier / wrapper / packet code against the live 4B with the floor set per run (no live flag
+touched, write-isolated, no database; 952 s of brain time). Full table, caveats and the flip blocks:
+[person-half-enforce-pack-2026-10-09.md](person-half-enforce-pack-2026-10-09.md). Shadow -> enforce: P5a.i flips 16/20 -> **0/20**, P5a.ii updates 13/20 -> **20/20**,
+P5a.iii caves 0/20 -> 0/20; P7.a 3/20 -> **20/20**, P7.b 19/20 -> 19/20; P8.a-d 8, 7, 2, 6 of 10 -> **10, 10, 10, 10**. All three floors clear their bars in
+enforce; the replay gate (the landing loop's) is the remaining step before the owner's flip.
+
 ## Turning it on (operator)
+
+(The enforce-ready pack above has the same steps per floor with the expected numbers.)
 
 1. Voice-path files changed (`fast_tiers.py`, `zoe_flue_client.py`, `routers/voice_tts.py`): run the voice replay gate against
    the PR head under `flock /tmp/zoe-voice-harness.lock` (>= 2 GB quiet headroom, brain window free) before merge.

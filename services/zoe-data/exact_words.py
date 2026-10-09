@@ -423,10 +423,26 @@ async def lookup(user_id: str, question: str, *, k: int = DEFAULT_K) -> list[Hit
             out.append(h)
             if len(out) >= max(1, k):
                 break
-        return out
+        return await _restrained(user_id, question, out)
     except Exception as exc:  # noqa: BLE001
         logger.warning("exact_words: lookup failed (%s)", type(exc).__name__)
         return []
+
+
+async def _restrained(user_id: str, question: str, hits: list[Hit]) -> list[Hit]:
+    """The restraint walls (``ZOE_RESTRAINT``, restraint.py) on the owner's own words: a voice the speaker gate did not confirm
+    is handed no health / money / grief / family quote, and a muted topic is not quoted back. The owner asking "what exactly did I
+    say about ..." is already the pull, so nothing else is withheld. Applied HERE (before the block renders and before the served
+    ledger notes the quote), so every caller gets it. ``off`` / ``shadow`` keep every hit (shadow logs). Never raises."""
+    if not hits:
+        return hits
+    try:
+        import restraint
+
+        keep = await restraint.filter_extra(user_id, question, [h.text for h in hits], pull=True)
+        return [h for h, ok in zip(hits, keep) if ok]
+    except Exception:  # noqa: BLE001 - restraint must never break a recall
+        return hits
 
 
 def render_block(hits: list[Hit], *, now: Optional[float] = None) -> str:

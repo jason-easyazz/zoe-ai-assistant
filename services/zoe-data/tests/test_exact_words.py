@@ -674,3 +674,30 @@ def test_the_forget_handler_does_not_confirm_when_the_verbatim_rows_could_not_be
     reply = run(intent_router.execute_intent(intent_router.Intent("memory_forget_entity", {"name": "Dana"}), USER))
     assert "forgotten" in reply and "can't say it's forgotten" in reply
     assert "I've forgotten" not in reply and "I don't have anything saved" not in reply
+
+
+# ── restraint (ZOE_RESTRAINT): the owner's quote is not handed to a voice the gate did not confirm ───────────
+def test_a_rejected_voice_is_not_handed_a_health_quote_and_the_owner_is(monkeypatch):
+    """Open-problems 2026-10-09 (#1943 review): ``lookup`` checked forgotten content and ownership but not the SPEAKER, so with
+    ZOE_RESTRAINT=enforce a rejected voice asking what the owner said about health could be read the verbatim quote."""
+    import restraint
+
+    say("I have the dentist on Friday for a cracked molar and I'm nervous about it.")
+    say("The Kestrel migration goes live on Thursday, remember that.")
+    q = "what exactly did I say about the dentist"
+    monkeypatch.setenv("ZOE_RESTRAINT", "enforce")
+    restraint._reset_state()
+    restraint.bind_verdict(None)                                  # the owner (or a typed turn): the pull rule applies
+    assert [h.text for h in ask(q)] and "dentist" in ask(q)[0].text
+    restraint.bind_verdict(False)                                 # the speaker gate ran and did NOT confirm a member
+    try:
+        assert ask(q) == []                                       # nothing sensitive is read out to that voice
+        assert ask("what exactly did I say about the Kestrel migration")        # a plain quote still is
+        monkeypatch.setenv("ZOE_RESTRAINT", "shadow")
+        assert ask(q)                                             # shadow changes nothing
+        monkeypatch.setenv("ZOE_RESTRAINT", "enforce")
+        monkeypatch.setattr(restraint, "filter_extra", None)      # break-the-fix: no filter wired -> a failure is "no restraint"
+        assert ask(q)                                             # ... and the quote leaks, proving the test above bites
+    finally:
+        restraint.bind_verdict(None)
+        restraint._reset_state()
