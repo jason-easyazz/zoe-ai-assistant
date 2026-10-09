@@ -350,6 +350,7 @@
           "scripts/perf/recall_evidence_probe.py",
           "scripts/perf/samantha_bar.py",
           "scripts/perf/samantha_day_sim.py",
+          "scripts/perf/samantha_person.py",
           "scripts/perf/user_model_ab.py"
         ],
         "typed_env": false
@@ -1178,10 +1179,12 @@
       },
       "ZOE_DIGEST_LLM_TIMEOUT_SCALE": {
         "defaults": [
+          "'1'",
           "1.0"
         ],
         "in_env_example": false,
         "readers": [
+          "scripts/night/jobs/night_digest.py",
           "services/zoe-data/memory_digest.py"
         ],
         "typed_env": true
@@ -3423,6 +3426,7 @@
           "scripts/perf/recall_evidence_probe.py",
           "scripts/perf/samantha_bar.py",
           "scripts/perf/samantha_day_sim.py",
+          "scripts/perf/samantha_person.py",
           "scripts/perf/user_model_ab.py"
         ],
         "typed_env": false

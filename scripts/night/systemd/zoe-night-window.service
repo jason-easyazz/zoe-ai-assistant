@@ -1,0 +1,32 @@
+# zoe-night-window.service - TEMPLATE for the 12B night window. Nothing installs this automatically:
+# the operator runs scripts/night/install_night_window.sh (docs/knowledge/night-window.md).
+#
+# What it does: for about an hour a night Zoe SLEEPS (zoe-data, the router, Kokoro and the 4B brain are stopped), the 12B runs the night's jobs at a bigger
+# context (the nightly digest, zoe-nightly-dreaming, the night-mind pass), and everything is woken again, brain first, each one's /health polled.
+# Unavailable while it runs: voice, the panel's replies, the app, the Flue sidecar's brain (so Telegram replies), anything that calls zoe-data.
+#
+# Ordering: after the other nightly timer jobs (training 02:00, backup 02:30, memory export 02:40) so it never contends with them (the script also refuses
+# while any of them runs). NOT After=/Requires= zoe-data.service or llama-server.service: this unit STOPS them and starts them again.
+#
+# Type=oneshot with a long TimeoutStartSec: the default user-manager start timeout (90 s) would kill the window in the middle of the night.
+# ExecStopPost runs the restore on EVERY way out (success, failure, timeout, kill): the last safety net behind the script's own restore-on-every-exit path.
+# A refusal (exit 2: lock held, panel busy, RAM does not fit) and a restore failure (exit 4) show up as a failed unit on purpose.
+[Unit]
+Description=Zoe night window (the 12B dreams; Zoe sleeps for about an hour)
+After=zoe-training.service zoe-backup.service zoe-memory-export.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/assistant
+# the same environment zoe-dreaming.service gives the nightly passes (the unit's own EnvironmentFile; never printed by the tool)
+EnvironmentFile=%h/assistant/services/zoe-data/.env
+Environment=ZOE_DATA_DB=%h/assistant/services/zoe-data/data/zoe.db
+Environment=MEMPALACE_DATA_DIR=%h/.mempalace
+Environment=MALLOC_ARENA_MAX=2
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=%h/assistant/scripts/night/night_window.sh
+ExecStopPost=%h/assistant/scripts/night/night_window.sh --restore-only
+TimeoutStartSec=6000
+TimeoutStopSec=900
+StandardOutput=append:%h/.zoe-logs/night-window.log
+StandardError=append:%h/.zoe-logs/night-window.log
