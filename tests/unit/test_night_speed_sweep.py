@@ -427,7 +427,7 @@ def test_the_dry_run_lists_the_whole_grid_and_changes_nothing(tmp_path):
     assert host.starts == [] and not cfg.sweep_state_path.exists() and not cfg.marker.exists() and not cfg.report_dir.exists()
 
 
-# ── the measured winner is the window's default (sweep of 2026-10-09: 4-38 = 6.89 tok/s decode, 182 tok/s prefill; the parked flags gave 5.46 / 141) ──
+# ── the sweep's measured winner (4-38 = 6.89 tok/s decode, 182 tok/s prefill; the parked flags gave 5.46 / 141) is the window's default EXCEPT -ngl: 34, because 38 was refused twice the same evening ──
 
 def _flags(argv):
     return {a: (argv[i + 1] if i + 1 < len(argv) and not argv[i + 1].startswith("--") else "") for i, a in enumerate(argv) if a.startswith("--")}
@@ -436,7 +436,7 @@ def _flags(argv):
 def test_nightcfg_defaults_are_the_sweeps_winner_and_the_command_carries_them_explicitly():
     import os
     cfg = nw.NightCfg()
-    assert (cfg.ngl, cfg.ctx_choice, cfg.kv_choice, cfg.batch, cfg.ubatch, cfg.mlock, cfg.fit_off) == (38, 8192, "q8_0", 512, 128, True, True)
+    assert (cfg.ngl, cfg.ctx_choice, cfg.kv_choice, cfg.batch, cfg.ubatch, cfg.mlock, cfg.fit_off) == (34, 8192, "q8_0", 512, 128, True, True)
     assert cfg.binary == nw.WINNER_BINARY and cfg.binary.endswith("llama.cpp-b11194/build-jetson/bin/llama-server")
     assert cfg.unified is os.path.exists("/etc/nv_tegra_release")             # on by default wherever there is a Jetson (the one box this runs on)
     # the lever choice with plenty of RAM lands on the winner's context and cache type, not the biggest set
@@ -447,7 +447,7 @@ def test_nightcfg_defaults_are_the_sweeps_winner_and_the_command_carries_them_ex
     assert drifted != PARKED
     spec = nw.llm_spec(drifted, nw.NightCfg(unified=True), pick["levers"])
     f = _flags(spec["argv"])
-    assert spec["argv"][0] == nw.WINNER_BINARY and f["--n-gpu-layers"] == "38" and f["--ctx-size"] == "8192" and f["--cache-type-k"] == "q8_0" == f["--cache-type-v"]
+    assert spec["argv"][0] == nw.WINNER_BINARY and f["--n-gpu-layers"] == "34" and f["--ctx-size"] == "8192" and f["--cache-type-k"] == "q8_0" == f["--cache-type-v"]
     assert f["--batch-size"] == "512" and f["--ubatch-size"] == "128" and f["--fit"] == "off" and f["--load-mode"] == "mmap+mlock" and "--mlock" not in f
     assert spec["env"]["GGML_CUDA_ENABLE_UNIFIED_MEMORY"] == "1"
 
@@ -455,7 +455,7 @@ def test_nightcfg_defaults_are_the_sweeps_winner_and_the_command_carries_them_ex
 def test_the_trial_and_the_plain_window_parse_to_the_winner_and_every_value_is_overridable():
     for argv in ([], ["--trial"], ["--speed-sweep"]):
         cfg = nw.configure(nw.build_parser().parse_args(argv))
-        assert (cfg.ngl, cfg.ctx_choice, cfg.kv_choice, cfg.batch, cfg.ubatch, cfg.mlock, cfg.fit_off, cfg.binary) == (38, 8192, "q8_0", 512, 128, True, True, nw.WINNER_BINARY), argv
+        assert (cfg.ngl, cfg.ctx_choice, cfg.kv_choice, cfg.batch, cfg.ubatch, cfg.mlock, cfg.fit_off, cfg.binary) == (34, 8192, "q8_0", 512, 128, True, True, nw.WINNER_BINARY), argv
     over = nw.configure(nw.build_parser().parse_args(["--trial", "--ngl", "30", "--ctx", "16384", "--kv", "q4_0", "--batch-size", "2048", "--ubatch-size", "512", "--no-mlock",
                                                      "--fit-default", "--binary", "/x/llama-server"]))
     assert (over.ngl, over.ctx_choice, over.kv_choice, over.batch, over.ubatch, over.mlock, over.fit_off, over.binary) == (30, 16384, "q4_0", 2048, 512, False, False, "/x/llama-server")

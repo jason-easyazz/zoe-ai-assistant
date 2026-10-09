@@ -26,6 +26,11 @@ Flags
   --dry-run            run every call and check, write NOTHING (mode shadow). Without it: mode enforce. (--mode shadow|enforce overrides.)
   --transcript-file F  synthetic runs without Postgres: a JSON list of {"id","text","at"} (turns of ONE member, given by --user).
   --cells              do not touch any member: score the reflection cells K1-K12 (the lab, scratch stores) against --model-url and print the counts.
+  --cell-budget S      with --cells: the seconds this whole process may take (the window passes what its cap leaves, minus a grace). Before each cell the CLI asks
+                       ``zmb.cells_budget.fits_next`` (time spent + the cell's expected time x1.25, from the measured --decode-tok-s / --prefill-tok-s); a cell that would
+                       overrun is NOT started: it and every later one is reported ``SKIP`` with its reason in ``cells.reasons`` and listed in ``cells.skipped_budget``, and the
+                       JSON is printed with the verdicts so far (a kill by the caller's watchdog prints nothing). Each finished cell also logs one stderr line,
+                       ``NIGHT_CELL id=K1 verdict=PASS wall_s=..``, so a killed run still leaves its verdicts in the log. 0 / absent = no budget.
 Output
   ONE JSON object on stdout, ONE compact line (``--pretty`` indents it; the window parses either), logs go to stderr:
     {"status": "ok"|"nothing_to_do"|"llm_unreachable"|"error", "mode", "dry_run", "model_url", "model", "ctx_tokens", "chunk_budget", "max_calls", "date",
@@ -51,6 +56,8 @@ import pathlib
 import sys
 import time
 
+_STARTED = time.monotonic()          # the --cell-budget clock starts with the process: imports and the lab world are part of what the window's cap pays for
+
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "services" / "zoe-data"))
 
@@ -74,6 +81,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--mode", choices=("shadow", "enforce"), default="")
     ap.add_argument("--transcript-file", default="")
     ap.add_argument("--cells", action="store_true")
+    ap.add_argument("--cell-budget", type=float, default=0.0, help="--cells: total seconds for this process; a cell that would overrun is skipped, not killed mid-way (0 = none)")
     ap.add_argument("--seed", default="zmb-v1", help="--cells: the corpus seed")
     ap.add_argument("--pretty", action="store_true", help="indent the stdout JSON for reading by eye (default: ONE compact line, which is what the 12B window parses)")
     return ap
@@ -183,7 +191,9 @@ def written_tally(members: "list[dict]") -> "tuple[int, int]":
 def run_cells(args, url: str, cfg) -> dict:
     """Score the reflection cells K1-K12 (the lab: scratch stores, synthetic household) against the model at ``url``. Touches no member."""
     sys.path.insert(0, str(REPO / "scripts" / "perf"))
-    from zmb import cells as cellmod, spec, world
+    import logging
+
+    from zmb import cells as cellmod, cells_budget, spec, world
     from zmb.arms.z0 import Z0Arm
 
     base = url[:-3] if url.rstrip("/").endswith("/v1") else url
@@ -193,11 +203,20 @@ def run_cells(args, url: str, cfg) -> dict:
     out: dict = {}
     reasons: dict = {}
     k1: dict = {}
+    skipped: "list[str]" = []
     try:
         for c in (c for c in spec.load_cells() if c.axis == "reflection"):
-            o = cellmod.run_cell(c.rendered(w), w, arm)
             key = c.id.split(".")[0] + ("f" if c.id.endswith("flat_week") else "")
+            if skipped or not cells_budget.fits_next(time.monotonic() - _STARTED, args.cell_budget, key, cfg.decode_tok_s, cfg.prefill_tok_s):
+                skipped.append(key)                              # once one cell is out, every later one is (a prefix of the order, as the window planned it)
+                out[key] = "SKIP"
+                reasons[key] = f"cell_budget: {time.monotonic() - _STARTED:.0f} s of {args.cell_budget:.0f} s spent, this cell needs ~{cells_budget.cell_expected_s(key, cfg.decode_tok_s, cfg.prefill_tok_s):.0f} s"
+                logging.getLogger(__name__).info("NIGHT_CELL id=%s verdict=SKIP wall_s=0 reason=cell_budget", key)
+                continue
+            t_cell = time.monotonic()
+            o = cellmod.run_cell(c.rendered(w), w, arm)
             out[key] = o.verdict
+            logging.getLogger(__name__).info("NIGHT_CELL id=%s verdict=%s wall_s=%.1f", key, o.verdict, time.monotonic() - t_cell)
             if o.verdict in ("ERROR", "SKIP") and o.reason:
                 reasons[key] = o.reason                           # an ERROR names WHY (e.g. ``... status=llm_timeout budget_s=148.0``), never a bare verdict
             if c.id.startswith("K1."):
@@ -208,7 +227,8 @@ def run_cells(args, url: str, cfg) -> dict:
         arm.close()
     verdicts = list(out.values())
     out.update({"pass": verdicts.count("PASS"), "fail": verdicts.count("FAIL"), "skip": verdicts.count("SKIP"), "error": verdicts.count("ERROR"), "k1": k1,
-                "reasons": reasons, "model_totals": totals_seen})
+                "reasons": reasons, "model_totals": totals_seen, "skipped_budget": skipped,
+                "wall_s": round(time.monotonic() - _STARTED, 1)})
     return out
 
 
