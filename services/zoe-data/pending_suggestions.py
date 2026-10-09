@@ -10,6 +10,7 @@ import uuid
 from datetime import date, datetime, timezone
 
 from db_pool import get_db_ctx, get_pool
+from people_utils import name_covered_by_contacts
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,16 @@ def consume_offer_shown_mark(user_id: str) -> bool:
 def is_junk_contact_name(name: str) -> bool:
     """True when `name` must never be proposed/saved as a contact."""
     return (name or "").strip().lower() in _JUNK_CONTACT_NAMES
+
+
+async def _live_contact_names(db, user_id: str) -> list:
+    """The names of this user's live contacts (bounded). [] on any failure: no list is "nobody is covered"."""
+    try:
+        rows = await db.fetch("SELECT name FROM people WHERE user_id = $1 AND deleted = 0 LIMIT 500", user_id)
+        return [str(r["name"]) for r in rows if r["name"]]
+    except Exception as exc:  # noqa: BLE001 - a missed check is a redundant offer, never a lost turn
+        logger.debug("pending_suggestions: contact names read failed (%s)", type(exc).__name__)
+        return []
 
 
 def person_suggestions_enabled() -> bool:
@@ -95,6 +106,10 @@ async def store_suggestions(
                 if s.get("action_type") == "person_create":
                     _pname = (slots.get("name") or "").strip()
                     if is_junk_contact_name(_pname):
+                        continue
+                    # A bare name the user already has a contact for ("Marisol" with a Marisol Okafor and a Marisol
+                    # Vance on the list) is not a new person, whichever emitter produced it (person bench P7.b).
+                    if name_covered_by_contacts(_pname, await _live_contact_names(db, user_id)):
                         continue
                     existing = await db.fetch(
                         """SELECT pre_filled_slots FROM pending_suggestions
@@ -284,7 +299,17 @@ async def surface_pending_contacts_for_prompt(user_id: str, *, limit: int = 3) -
                 user_id,
                 limit,
             )
+            contact_names = await _live_contact_names(db, user_id) if rows else []
             for row in rows:
+                try:
+                    _offered = json.loads(row["pre_filled_slots"] or "{}").get("name") or ""
+                except (json.JSONDecodeError, AttributeError):
+                    _offered = ""
+                if _offered and name_covered_by_contacts(str(_offered), contact_names):
+                    # The person is a contact by now (or a bare name the owner already has): the offer is stale. Close
+                    # it instead of asking "add Marisol as a contact?" on the owner's next unrelated turn.
+                    await db.execute("UPDATE pending_suggestions SET resolved = 1 WHERE id = $1", row["id"])
+                    continue
                 turns = int(row["turns_elapsed"] or 0)
                 if turns == 0:
                     # First surfacing: mark it so (a) the per-turn ager starts

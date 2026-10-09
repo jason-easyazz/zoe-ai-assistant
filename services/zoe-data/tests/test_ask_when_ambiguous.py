@@ -43,7 +43,11 @@ def _fresh(monkeypatch):
     async def people(_uid):
         return list(PEOPLE)
 
+    async def fingerprint(_uid):
+        return (str(len(PEOPLE)), "", str(sum(len(c.name) for c in PEOPLE)))
+
     monkeypatch.setattr(awa, "_load_people", people)
+    monkeypatch.setattr(awa, "_people_fingerprint", fingerprint)
     yield
     awa.forget_roster()
     awa._PENDING.clear()
@@ -231,3 +235,78 @@ def test_the_flag_reader_goes_through_typed_env(monkeypatch):
     assert "os.environ" not in inspect.getsource(awa)
     monkeypatch.setenv(awa.ENV, " Enforce ")
     assert awa.mode() == "enforce"
+
+
+# -- the stale roster (live person bench, 2026-10-10: P7.a 10/20) ------------------------------------------------------
+# The bench seeds the household through the chat ("Save a contact for my colleague Marisol Okafor", then "...my sister
+# Marisol Vance"). Those seeding turns are requests; the roster read between them saw ONE Marisol, cached "nobody is
+# ambiguous" for 60 s, and the first 12 ambiguous asks went to the brain. The 8 after the cache expired were asked.
+
+def _live_world(monkeypatch, people):
+    """A contacts table that CHANGES under the module: ``people`` is the list the fakes read on every call."""
+    reads = {"load": 0, "fp": 0}
+
+    async def load(_uid):
+        reads["load"] += 1
+        return list(people)
+
+    async def fingerprint(_uid):
+        reads["fp"] += 1
+        return (str(len(people)), "", str(sum(len(c.name) for c in people)))
+
+    monkeypatch.setattr(awa, "_load_people", load)
+    monkeypatch.setattr(awa, "_people_fingerprint", fingerprint)
+    return reads
+
+
+def test_a_contact_added_a_moment_ago_is_not_missed_by_the_cache(monkeypatch):
+    people = [C("1", "Marisol Okafor", "colleague"), C("3", "Percival Dunmore", "brother")]
+    _live_world(monkeypatch, people)
+    assert _ask("Save a contact for my sister Marisol Vance.", monkeypatch) == ""      # the seeding turn reads the roster
+    assert _ask("Tell me about Marisol.", monkeypatch) == ""                            # one Marisol: nobody is ambiguous
+    people.append(C("2", "Marisol Vance", "sister"))                                    # the second Marisol lands
+    q = _ask("What's Marisol's birthday?", monkeypatch)                                 # well inside the 60 s TTL
+    assert q == "Which Marisol do you mean: Marisol Okafor, your colleague, or Marisol Vance, your sister?"
+
+
+def test_a_contact_removed_a_moment_ago_is_not_asked_about(monkeypatch):
+    people = list(PEOPLE)
+    _live_world(monkeypatch, people)
+    assert _ask("Tell me about Marisol.", monkeypatch) != ""
+    awa._PENDING.clear()
+    people[:] = [c for c in people if c.name != "Marisol Vance"]
+    assert _ask("Where does Marisol live?", monkeypatch) == ""
+
+
+def test_an_unchanged_roster_is_read_once_however_many_turns(monkeypatch):
+    reads = _live_world(monkeypatch, list(PEOPLE))
+    for t in ("What's the weather?", "What time is it?", "Is it raining?"):
+        assert _ask(t, monkeypatch) == ""
+    assert reads["load"] == 1 and reads["fp"] == 3          # one fingerprint per request turn, one roster read
+
+
+def test_a_failed_roster_read_is_not_cached(monkeypatch):
+    state = {"fail": True}
+
+    async def load(_uid):
+        if state["fail"]:
+            raise RuntimeError("db down")
+        return list(PEOPLE)
+
+    monkeypatch.setattr(awa, "_load_people", load)
+    assert _ask("Tell me about Marisol.", monkeypatch) == ""            # unreadable: nobody is ambiguous, this turn only
+    state["fail"] = False
+    assert _ask("Tell me about Marisol.", monkeypatch) != ""            # the next turn reads again (it was cached as {} for 60 s)
+
+
+def test_a_failed_fingerprint_serves_a_fresh_cache_not_a_wrong_answer(monkeypatch):
+    reads = _live_world(monkeypatch, list(PEOPLE))
+    assert _ask("Tell me about Marisol.", monkeypatch) != ""
+    awa._PENDING.clear()
+
+    async def boom(_uid):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(awa, "_people_fingerprint", boom)
+    assert _ask("Tell me about Marisol.", monkeypatch) != ""            # the cache is still inside its TTL
+    assert reads["load"] == 1
