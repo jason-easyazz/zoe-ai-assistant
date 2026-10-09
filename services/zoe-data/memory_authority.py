@@ -51,6 +51,13 @@ paraphrase the turn does not entail (a different value, a hypothetical, a relati
 lacks) stays ``user_stated_derived`` rank 3 / ``model_from_turn`` and is held back exactly as before. The nightly
 (whole-day transcript) writers are NOT promoted: a transcript has no single turn to quote.
 
+Structural floors (``ZOE_STRUCTURAL_CLAIMS`` off | shadow (default) | enforce; ``structural_claims``, docs/knowledge/structural-floors.md): the
+lexical decision above reads English prose. The per-turn extractor now also emits a CLAIM ROW per fact (subject, predicate, value, polarity,
+modality, tense, the owner's verbatim quote); ``resolve_write(..., claim=)`` carries the structural verdict beside the lexical one
+(``Resolved.structural_label``; logged once per write by ``note_structural``, stamped on the row by ``provenance``). ``shadow`` keeps
+the lexical decision; ``enforce`` lets the claim row decide wherever a valid one exists (a fact without one keeps the lexical decision). The
+English word lists the lexical rules use live in ``lexicons_data/en.json`` (``lexicons.py``) - the same regexes, built from data.
+
 An unverified speaker's self-fact (``user_unverified``) is never the owner's fact: ``MemoryService.ingest``
 stores it ``pending`` (a candidate the owner confirms), not ``approved`` (``is_self_assertion``).
 
@@ -68,10 +75,17 @@ import logging
 import os
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional
 
+import lexicons as _lexicons
+
 logger = logging.getLogger(__name__)
+
+#: the English word lists the lexical floors read, moved out of this file into ``lexicons_data/en.json`` (the structural-floors
+#: PR): data, not logic. Every regex below is built from them byte for byte (tests/test_lexicon_english_identity.py).
+_EN = _lexicons.load("en")
+_alt = _lexicons.alt
 
 ENV = "ZOE_MEMORY_AUTHORITY"
 
@@ -113,6 +127,8 @@ def authority_of(cls: str) -> str:
 PROVENANCE_KEYS = frozenset({
     "authority", "authority_class", "authority_basis", "origin", "turn_ref", "model",
     "contradicts_id", "authority_blocked", "duplicate_of",
+    # the structural-floors claim row is the NEW writer's: an edit never inherits the superseded row's
+    "claim", "claim_lexical", "claim_structural", "claim_applied",
 })
 
 
@@ -278,6 +294,15 @@ class Resolved:
     #: a per-turn model writer whose anchor turn ENTAILS the fact (``VERBATIM_BASIS``): the class stays the honest
     #: ``user_stated_derived``, the power and standing are ``user_stated``'s
     promoted: bool = False
+    #: the structural-floors comparison (``structural_claims``), carried so the ONE write boundary can log it once and
+    #: store it on the row. ``lexical_label`` / ``structural_label`` are promote | anchor | hold | no_claim; none of
+    #: these fields take part in equality (a Resolved is its class, basis and promotion)
+    lexical_label: str = field(default="", compare=False)
+    structural_label: str = field(default="", compare=False)
+    structural_lang: str = field(default="", compare=False)
+    structural_reasons: tuple = field(default=(), compare=False)
+    structural_ambiguous: tuple = field(default=(), compare=False)
+    structural_applied: bool = field(default=False, compare=False)
 
     @property
     def authority(self) -> str:
@@ -299,10 +324,17 @@ class Resolved:
 def resolve_write(writer: str, text: str, *, anchor_text: Optional[str] = None,
                   claimed: Optional[str] = None, user_id: str = "",
                   prompt_text: Optional[str] = None,
-                  speaker_verified: Optional[bool] = None) -> Resolved:
+                  speaker_verified: Optional[bool] = None,
+                  claim: Any = None, claim_siblings: Any = ()) -> Resolved:
     """The class a NEW row gets, from who is writing it and what the user's own turn says.
     ``claimed`` can only DOWNGRADE (``inferred``), or confirm (``user_confirmed``) for a
-    user-class writer — a model writer cannot claim authority; only the anchor gives it."""
+    user-class writer — a model writer cannot claim authority; only the anchor gives it.
+
+    ``claim`` is the extractor's structured CLAIM ROW for this fact (``structural_claims.Claim`` or its dict):
+    with ``ZOE_STRUCTURAL_CLAIMS=shadow`` the structural decision is computed and carried beside the lexical one
+    (``Resolved.structural_label``) while the lexical one stays authoritative; with ``enforce`` and a valid claim
+    row the structural decision IS the answer (a per-turn model writer only; the nightly transcript writers have no
+    single turn to quote). No claim row: exactly the lexical decision, in every mode."""
     w = (writer or "").strip()
     base = writer_class(w, user_id=user_id)
     if claimed == INFERRED:
@@ -320,23 +352,97 @@ def resolve_write(writer: str, text: str, *, anchor_text: Optional[str] = None,
         return Resolved(base, "deterministic_user_turn" if w in DETERMINISTIC_USER_WRITERS
                         else "explicit_source")
     if w in MODEL_FROM_TURN_WRITERS or w in TRANSCRIPT_WRITERS:
-        if (anchor_text or prompt_text) and supports(text, anchor_text or "", prompt_text):
-            if speaker_verified is False and w in VOICE_LANE_WRITERS:
-                return Resolved(USER_UNVERIFIED, "speaker_not_verified")
-            if (w in SPAN_WRITERS and anchor_text and is_self_assertion(text)
-                    and entailing_span(text, anchor_text) is not None):
-                # the owner's own words, one verbatim sentence, ENTAIL the fact: their change of mind
-                # (C1 / C5) is the user speaking, not a model's guess at them
-                return Resolved(USER_STATED_DERIVED, VERBATIM_BASIS, promoted=True)
-            return Resolved(USER_STATED_DERIVED, "anchored_user_turn")
-        if w in TRANSCRIPT_WRITERS and anchor_text and observation_gate_mode() != "off":
-            # a nightly paraphrase that joins two things the owner put in ONE sentence ("X accepted the offer from Y" from
-            # "X got the offer from Y!"): the owner's words carry it, the wording is the model's (``costated_span``)
-            got = costated_span(text, anchor_text)
-            if got:
-                return Resolved(USER_STATED_DERIVED, COSTATED_BASIS)
-        return Resolved(base, "unanchored" if anchor_text else "no_user_evidence")
+        lexical = _resolve_model_lexical(w, base, text, anchor_text, prompt_text, speaker_verified)
+        if w in MODEL_FROM_TURN_WRITERS:
+            return _arbitrate(lexical, w, base, text, anchor_text, speaker_verified, claim, claim_siblings)
+        return lexical
     return Resolved(MODEL_FROM_TRANSCRIPT, "automatic_writer")
+
+
+def _resolve_model_lexical(w: str, base: str, text: str, anchor_text: Optional[str], prompt_text: Optional[str],
+                           speaker_verified: Optional[bool]) -> Resolved:
+    """The LEXICAL decision for a model writer (the original rule, unchanged): does the user's own turn support the
+    fact (``supports``), and does one verbatim sentence of it plainly entail it (``entailing_span``)?"""
+    if (anchor_text or prompt_text) and supports(text, anchor_text or "", prompt_text):
+        if speaker_verified is False and w in VOICE_LANE_WRITERS:
+            return Resolved(USER_UNVERIFIED, "speaker_not_verified")
+        if (w in SPAN_WRITERS and anchor_text and is_self_assertion(text)
+                and entailing_span(text, anchor_text) is not None):
+            # the owner's own words, one verbatim sentence, ENTAIL the fact: their change of mind
+            # (C1 / C5) is the user speaking, not a model's guess at them
+            return Resolved(USER_STATED_DERIVED, VERBATIM_BASIS, promoted=True)
+        return Resolved(USER_STATED_DERIVED, "anchored_user_turn")
+    if w in TRANSCRIPT_WRITERS and anchor_text and observation_gate_mode() != "off":
+        # a nightly paraphrase that joins two things the owner put in ONE sentence ("X accepted the offer from Y" from
+        # "X got the offer from Y!"): the owner's words carry it, the wording is the model's (``costated_span``)
+        got = costated_span(text, anchor_text)
+        if got:
+            return Resolved(USER_STATED_DERIVED, COSTATED_BASIS)
+    return Resolved(base, "unanchored" if anchor_text else "no_user_evidence")
+
+
+def _label_of(r: Resolved) -> str:
+    return "promote" if r.promoted else "anchor" if r.cls in (USER_STATED_DERIVED, USER_UNVERIFIED) else "hold"
+
+
+def _arbitrate(lexical: Resolved, w: str, base: str, text: str, anchor_text: Optional[str],
+               speaker_verified: Optional[bool], claim: Any, siblings: Any) -> Resolved:
+    """Structural floors (``structural_claims``): ``off`` -> the lexical decision untouched; ``shadow`` -> the lexical
+    decision with the structural one attached; ``enforce`` + a valid claim row -> the structural decision. Never raises."""
+    try:
+        import structural_claims as sc
+
+        m = sc.mode()
+        if m == sc.OFF:
+            return lexical
+        lab = _label_of(lexical)
+        parsed = claim if isinstance(claim, sc.Claim) else (sc.parse_claim(claim)[0] if claim else None)
+        if parsed is None:
+            return _dc_replace(lexical, lexical_label=lab, structural_label="no_claim")
+        sibs = tuple(c if isinstance(c, sc.Claim) else sc.parse_claim(c)[0] for c in (siblings or ()))
+        d = sc.decide(text, parsed, anchor_text or "", siblings=[c for c in sibs if c is not None],
+                      speaker_verified=speaker_verified)
+        structural = _structural_resolved(d, w, base, anchor_text, speaker_verified)
+        label = d.label
+        if m == sc.ENFORCE:
+            return _dc_replace(structural, lexical_label=lab, structural_label=label, structural_lang=d.lang,
+                               structural_reasons=d.reasons, structural_ambiguous=d.ambiguous, structural_applied=True)
+        return _dc_replace(lexical, lexical_label=lab, structural_label=label, structural_lang=d.lang,
+                           structural_reasons=d.reasons, structural_ambiguous=d.ambiguous)
+    except Exception as exc:  # noqa: BLE001 - the structural half must never cost a write its lexical decision
+        logger.warning("structural floor failed (%s) - lexical decision kept", type(exc).__name__)
+        return lexical
+
+
+def _structural_resolved(d: Any, w: str, base: str, anchor_text: Optional[str],
+                         speaker_verified: Optional[bool]) -> Resolved:
+    if not d.anchored:
+        return Resolved(base, "unanchored" if anchor_text else "no_user_evidence")
+    if speaker_verified is False and w in VOICE_LANE_WRITERS:
+        return Resolved(USER_UNVERIFIED, "speaker_not_verified")
+    if d.promoted and w in SPAN_WRITERS and anchor_text:
+        return Resolved(USER_STATED_DERIVED, VERBATIM_BASIS, promoted=True)
+    return Resolved(USER_STATED_DERIVED, "anchored_user_turn")
+
+
+def _dc_replace(r: Resolved, **kw: Any) -> Resolved:
+    import dataclasses
+
+    return dataclasses.replace(r, **kw)
+
+
+def note_structural(res: Resolved, *, lane: str, user_id: str = "") -> None:
+    """ONE log line (labels only) and counter for a write's structural comparison - called once per write at the write
+    boundary (``MemoryService.ingest`` / ``review``), never from the pure resolver. A no-op without a comparison."""
+    if not res.structural_label:
+        return
+    try:
+        import structural_claims as sc
+
+        sc.record("support", lane, res.structural_lang, res.lexical_label, res.structural_label,
+                  reasons=res.structural_reasons, ambiguous=res.structural_ambiguous, applied=res.structural_applied)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def row_power(meta: Mapping[str, Any], text: str = "") -> int:
@@ -369,6 +475,12 @@ def provenance(writer: str, res: Resolved, *, turn_ref: Optional[str] = None,
     m = model or model_for(writer)
     if m:
         out["model"] = str(m)[:96]
+    if res.structural_label:
+        # the comparison that was made at this write (structural_claims; labels only): what the lexical floor said, what the
+        # claim row said, and whether the claim row decided (enforce)
+        out["claim_lexical"] = res.lexical_label
+        out["claim_structural"] = res.structural_label
+        out["claim_applied"] = bool(res.structural_applied)
     return out
 
 
@@ -455,9 +567,7 @@ def is_protected(meta: Mapping[str, Any], text: str = "") -> bool:
 
 # ── anchoring: does the USER'S OWN turn support this fact? ────────────────────
 
-_FIRST_PERSON = frozenset({"i", "im", "i'm", "ive", "i've", "id", "i'd", "ill", "i'll", "my",
-                           "me", "mine", "myself", "we", "were", "we're", "our", "ours", "us",
-                           "weve", "we've"})
+_FIRST_PERSON = frozenset(_EN["first_person"])
 _USER_SUBJECT_RE = re.compile(r"^\s*(?:the\s+)?(?:user|speaker|i|my)\b", re.IGNORECASE)
 
 # Words that carry no claim (articles, copulas, the frame of a negation / change cue).
@@ -619,31 +729,26 @@ def _fact_parts(fact: str) -> tuple[bool, set[str], set[str], set[str]]:
     return about_user, value, cues, other
 
 
-_RELATION = (r"(?:wife|husband|partner|girlfriend|boyfriend|fianc\w*|spouse|son|daughter|kids?|child|"
-             r"children|brother|sister|mum|mom|mother|dad|father|grandma|grandmother|grandpa|"
-             r"grandfather|aunt|uncle|cousin|niece|nephew|friend|mate|boss|colleague|coworker|"
-             r"neighbou?r|parents?|sibling|in-laws?|family|baby|girls|boys|ex)")
+_RELATION = "(?:" + _alt(_EN["kin_pattern"]) + ")"
 #: "my sister", "my wife's", "our best friend": a possessive of ANOTHER PERSON
 _MY_RELATION_RE = re.compile(rf"\b(?:my|our)\s+(?:[a-z]+\s+){{0,2}}?({_RELATION})s?(?:['’]s)?\b", re.IGNORECASE)
-_NEG_RE = re.compile(r"\b(?:not|never|no|none|nobody|nothing|neither|nor)\b|n['’]t\b|\bany ?more\b",
-                     re.IGNORECASE)
-_USED_TO_RE = re.compile(r"\bused to\b|\bformerly\b|\bpreviously\b|\bwas living\b", re.IGNORECASE)
+_NEG_RE = re.compile(
+    r"\b(?:" + _alt(_EN["negation_words"]) + r")\b|" + _alt(x + r"\b" for x in _EN["negation_suffix"]) + "|"
+    + _alt(r"\b" + x + r"\b" for x in _EN["negation_phrases"]), re.IGNORECASE)
+_USED_TO_RE = re.compile(_alt(r"\b" + x + r"\b" for x in _EN["past_markers"]), re.IGNORECASE)
 #: a stated END of a state ("no longer" / "any more" are also negations above)
 #: the BASE form after a negated auxiliary is the same end-state verb: the digest words a denial "User did not
 #: drop X", the owner says "I haven't dropped X" (review of #1913)
-_ENDED_BASE = r"\b(?:did|do|does|will|would|can|could)(?:\s+not|n['\u2019]t)\s+(?:drop|quit|stop|cancel|give\s+up|leave)\b"
+_ENDED_BASE = (r"\b(?:" + _alt(_EN["ended_aux"]) + r")(?:\s+not|n['\u2019]t)\s+(?:" + _alt(_EN["ended_base_verbs"]) + r")\b")
 _ENDED_BASE_RE = re.compile(_ENDED_BASE, re.IGNORECASE)
-_ENDED_RE = re.compile(r"\b(?:stopped|dropped|quit|cancell?ed|gave up|given up|ended|left|no longer)\b|\bany ?more\b|"
-                       + _ENDED_BASE, re.IGNORECASE)
-_HYPOTHETICAL_RE = re.compile(
-    r"\b(?:wish|if|maybe|perhaps|might|hope|hoping|someday|supposedly|apparently|imagine|pretend|"
-    r"would|could)\b", re.IGNORECASE)
-_QUESTION_START_RE = re.compile(r"^\s*(?:do|does|did|am|are|is|can|could|will|would|should)\s+"
-                                r"(?:i|we|you|my)\b", re.IGNORECASE)
+_ENDED_RE = re.compile(r"\b(?:" + _alt(_EN["ended_verbs"] + _EN["ended_phrases"]) + r")\b|"
+                       + _alt(r"\b" + x + r"\b" for x in _EN["negation_phrases"]) + "|" + _ENDED_BASE, re.IGNORECASE)
+_HYPOTHETICAL_RE = re.compile(r"\b(?:" + _alt(_EN["hypothetical"]) + r")\b", re.IGNORECASE)
+_QUESTION_START_RE = re.compile(r"^\s*(?:" + _alt(_EN["question_aux"]) + r")\s+"
+                                r"(?:" + _alt(_EN["question_subjects"]) + r")\b", re.IGNORECASE)
 
 
-_LEAD_INTERJECTION_RE = re.compile(r"^\s*(?:(?:no|nope|nah|yes|yeah|yep|actually|well|oh|sorry|um|uh|hi|hey)[,.!\s]+)+",
-                                   re.IGNORECASE)
+_LEAD_INTERJECTION_RE = re.compile(r"^\s*(?:(?:" + _alt(_EN["interjections"]) + r")[,.!\s]+)+", re.IGNORECASE)
 
 
 # "my mum lives in Bendigo, NOT BALLARAT" - a CONTRAST names the value being corrected away; it is
@@ -657,23 +762,19 @@ _LEAD_INTERJECTION_RE = re.compile(r"^\s*(?:(?:no|nope|nah|yes|yeah|yep|actually
 # "Bendigo - not Ballarat", "Bendigo-not Ballarat"; ``_words`` splits an attached "-not" off its value).
 # A bare "but not" / "and not" is a delimiter too: speech-to-text carries no commas ("lives in Bendigo but
 # not Ballarat", "a nurse and not a doctor").
-_CONTRAST_RE = re.compile(r"(?:(?:,|;|\s*[-\u2013\u2014]+)\s*(?:and\s+|but\s+)?|\s+(?:and|but)\s+)"
-                          r"not\s+(?P<neg>[^,;.!?]{1,40}?)\s*(?=[,;.!?]|$)", re.IGNORECASE)
-_NOT_A_CONTRAST = frozenset({"sure", "really", "yet", "quite", "very", "just", "too", "even", "much", "anymore",
-                             "any", "always", "often", "now", "going", "been", "true", "right", "well", "good",
-                             "great", "bad", "happy", "ok", "okay", "if", "when", "that", "this", "so"})
+_CONTRAST_RE = re.compile(
+    r"(?:(?:,|;|\s*[-\u2013\u2014]+)\s*(?:" + _alt(x + r"\s+" for x in _EN["contrast_connectors"]) + r")?|\s+(?:"
+    + _alt(_EN["contrast_connectors"]) + r")\s+)" + _alt(_EN["contrast_negator"]) + r"\s+(?P<neg>[^,;.!?]{1,40}?)\s*(?=[,;.!?]|$)",
+    re.IGNORECASE)
+_NOT_A_CONTRAST = frozenset(_EN["contrast_exempt"])
 
 
-_ARTICLES = frozenset({"a", "an", "the", "in", "at", "on", "to", "of"})
+_ARTICLES = frozenset(_EN["articles"])
 #: a TIME qualifier is not a corrected-away value: "but not at the moment" denies the fact for now
-_TEMPORAL = frozenset({"moment", "now", "today", "tonight", "currently", "present", "lately", "recently", "days",
-                       "week", "weeks", "month", "months", "year", "years", "weekend", "yesterday", "tomorrow",
-                       "ever", "then", "atm", "time", "times", "longer", "anymore", "morning", "afternoon",
-                       "evening", "night", "while", "meantime", "mean", "moment's"})
+_TEMPORAL = frozenset(_EN["temporal"])
 #: a clause that points BACK at the fact ("not there", "not in it", "not that place") stems to nothing
 #: the fact says, but it is a denial OF the fact - never a corrected-away value (review of #1913).
-_ANAPHORA = frozenset({"there", "here", "it", "its", "that", "this", "those", "these", "them", "they", "him",
-                       "her", "she", "he", "so", "same", "such"})
+_ANAPHORA = frozenset(_EN["anaphora"])
 
 
 def _without_contrast(win: str, fact: str) -> str:
@@ -695,8 +796,7 @@ def _without_contrast(win: str, fact: str) -> str:
     return _CONTRAST_RE.sub(keep_or_drop, win)
 
 
-_ENDED_VERB_RE = re.compile(r"\b(?:stopped|dropped|quit|cancell?ed|gave up|given up|ended|left)\b|" + _ENDED_BASE,
-                            re.IGNORECASE)
+_ENDED_VERB_RE = re.compile(r"\b(?:" + _alt(_EN["ended_verbs"]) + r")\b|" + _ENDED_BASE, re.IGNORECASE)
 
 
 _CLAUSE_BREAK_RE = re.compile(r"[,;.!?]|\b(?:so|but|and|because|then|though|although|while)\b", re.IGNORECASE)
@@ -836,23 +936,20 @@ def _verbatim(windows, user_text: str) -> Optional[str]:
 #: a hedge, a report or a reported speaker is not a PLAIN statement ("a ferry company came up, I think", "Dana
 #: said she lives in Perth", "apparently I moved"). supports() tolerates these (it only decides whether a fact
 #: is the DERIVED one of the user); the power to overrule what they said before does not.
-_PLAIN_FIRST_PERSON = frozenset("i im ive id ill my me mine myself we weve our ours us".split())
-_HEDGE_VERBS = ("think", "guess", "suppose", "reckon", "believe", "figure", "assume", "wonder")
-_HEDGE_WORDS = (
-    "probably", "possibly", "apparently", "supposedly", "presumably", "sort of", "kind of", "came up",
-    "comes up", "coming up", "heard", "rumour", "rumor", "someone", "somebody", "they say", "people say",
-    "he says", "she says", "said", "told me", "tells me", "according to")
+_PLAIN_FIRST_PERSON = frozenset(_EN["first_person_plain"])
+_HEDGE_VERBS = tuple(_EN["hedge_verbs"])
+_HEDGE_WORDS = tuple(_EN["hedge_words"])
 _PIPE = chr(124)
 _HEDGE_RE = re.compile(
-    r"\b(?:i" + _PIPE + r"we)\s+(?:" + _PIPE.join(_HEDGE_VERBS) + r")\b" + _PIPE
+    r"\b(?:" + _PIPE.join(_EN["hedge_subjects"]) + r")\s+(?:" + _PIPE.join(_HEDGE_VERBS) + r")\b" + _PIPE
     + r"\b(?:" + _PIPE.join(re.escape(w) for w in _HEDGE_WORDS) + r")s?\b", re.IGNORECASE)
 
 
 #: A CLOSED list of discourse labels. Anything else before a colon ("Dana's birthday: I organized a party on May 5.")
 #: is a TOPIC - it says who the sentence is about - and is never stripped (review of #1916).
 _LEAD_IN_LABEL_RE = re.compile(
-    r"^\s*(?:(?:good|bad|great|big|sad|exciting|quick)\s+news|(?:quick\s+)?update|change\s+of\s+plans?|correction|fyi|"
-    r"heads[\s-]?up|by\s+the\s+way|btw|also|oh\s+and)\s*:\s+(?=.*\b(?:I|we|my|our)\b)", re.IGNORECASE)
+    r"^\s*(?:" + _alt(_EN["lead_in_labels"]) + r")\s*:\s+(?=.*\b(?:" + _alt(_EN["lead_in_first_person"]) + r")\b)",
+    re.IGNORECASE)
 
 
 def _plainly_first_person(win: str, fact: str) -> bool:

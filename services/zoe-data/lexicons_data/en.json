@@ -1,0 +1,772 @@
+{
+ "lang": "en",
+ "name": "English",
+ "reviewed": true,
+ "enabled": true,
+ "_note": "Moved out of memory_authority / role_guess_guard / people_roles (the structural-floors PR). Data, not logic: each list feeds the regex the module used to hard-code, byte for byte (tests/test_lexicon_english_identity.py). A lexicon is a PRE-FILTER (does the turn carry a hedge / negation / end-state marker at all?), never an authority.",
+ "negation_words": [
+  "not",
+  "never",
+  "no",
+  "none",
+  "nobody",
+  "nothing",
+  "neither",
+  "nor"
+ ],
+ "negation_suffix": [
+  "n['’]t"
+ ],
+ "negation_phrases": [
+  "any ?more"
+ ],
+ "ended_verbs": [
+  "stopped",
+  "dropped",
+  "quit",
+  "cancell?ed",
+  "gave up",
+  "given up",
+  "ended",
+  "left"
+ ],
+ "ended_phrases": [
+  "no longer"
+ ],
+ "ended_aux": [
+  "did",
+  "do",
+  "does",
+  "will",
+  "would",
+  "can",
+  "could"
+ ],
+ "ended_base_verbs": [
+  "drop",
+  "quit",
+  "stop",
+  "cancel",
+  "give\\s+up",
+  "leave"
+ ],
+ "past_markers": [
+  "used to",
+  "formerly",
+  "previously",
+  "was living"
+ ],
+ "hypothetical": [
+  "wish",
+  "if",
+  "maybe",
+  "perhaps",
+  "might",
+  "hope",
+  "hoping",
+  "someday",
+  "supposedly",
+  "apparently",
+  "imagine",
+  "pretend",
+  "would",
+  "could"
+ ],
+ "question_aux": [
+  "do",
+  "does",
+  "did",
+  "am",
+  "are",
+  "is",
+  "can",
+  "could",
+  "will",
+  "would",
+  "should"
+ ],
+ "question_subjects": [
+  "i",
+  "we",
+  "you",
+  "my"
+ ],
+ "question_marks": [
+  "?"
+ ],
+ "interjections": [
+  "no",
+  "nope",
+  "nah",
+  "yes",
+  "yeah",
+  "yep",
+  "actually",
+  "well",
+  "oh",
+  "sorry",
+  "um",
+  "uh",
+  "hi",
+  "hey"
+ ],
+ "hedge_subjects": [
+  "i",
+  "we"
+ ],
+ "hedge_verbs": [
+  "think",
+  "guess",
+  "suppose",
+  "reckon",
+  "believe",
+  "figure",
+  "assume",
+  "wonder"
+ ],
+ "hedge_words": [
+  "probably",
+  "possibly",
+  "apparently",
+  "supposedly",
+  "presumably",
+  "sort of",
+  "kind of",
+  "came up",
+  "comes up",
+  "coming up",
+  "heard",
+  "rumour",
+  "rumor",
+  "someone",
+  "somebody",
+  "they say",
+  "people say",
+  "he says",
+  "she says",
+  "said",
+  "told me",
+  "tells me",
+  "according to"
+ ],
+ "lead_in_labels": [
+  "(?:good|bad|great|big|sad|exciting|quick)\\s+news",
+  "(?:quick\\s+)?update",
+  "change\\s+of\\s+plans?",
+  "correction",
+  "fyi",
+  "heads[\\s-]?up",
+  "by\\s+the\\s+way",
+  "btw",
+  "also",
+  "oh\\s+and"
+ ],
+ "lead_in_first_person": [
+  "I",
+  "we",
+  "my",
+  "our"
+ ],
+ "contrast_negator": [
+  "not"
+ ],
+ "contrast_connectors": [
+  "and",
+  "but"
+ ],
+ "contrast_exempt": [
+  "always",
+  "any",
+  "anymore",
+  "bad",
+  "been",
+  "even",
+  "going",
+  "good",
+  "great",
+  "happy",
+  "if",
+  "just",
+  "much",
+  "now",
+  "often",
+  "ok",
+  "okay",
+  "quite",
+  "really",
+  "right",
+  "so",
+  "sure",
+  "that",
+  "this",
+  "too",
+  "true",
+  "very",
+  "well",
+  "when",
+  "yet"
+ ],
+ "temporal": [
+  "afternoon",
+  "anymore",
+  "atm",
+  "currently",
+  "days",
+  "evening",
+  "ever",
+  "lately",
+  "longer",
+  "mean",
+  "meantime",
+  "moment",
+  "moment's",
+  "month",
+  "months",
+  "morning",
+  "night",
+  "now",
+  "present",
+  "recently",
+  "then",
+  "time",
+  "times",
+  "today",
+  "tomorrow",
+  "tonight",
+  "week",
+  "weekend",
+  "weeks",
+  "while",
+  "year",
+  "years",
+  "yesterday"
+ ],
+ "anaphora": [
+  "he",
+  "her",
+  "here",
+  "him",
+  "it",
+  "its",
+  "same",
+  "she",
+  "so",
+  "such",
+  "that",
+  "them",
+  "there",
+  "these",
+  "they",
+  "this",
+  "those"
+ ],
+ "articles": [
+  "a",
+  "an",
+  "at",
+  "in",
+  "of",
+  "on",
+  "the",
+  "to"
+ ],
+ "first_person": [
+  "i",
+  "i'd",
+  "i'll",
+  "i'm",
+  "i've",
+  "id",
+  "ill",
+  "im",
+  "ive",
+  "me",
+  "mine",
+  "my",
+  "myself",
+  "our",
+  "ours",
+  "us",
+  "we",
+  "we're",
+  "we've",
+  "were",
+  "weve"
+ ],
+ "first_person_plain": [
+  "i",
+  "id",
+  "ill",
+  "im",
+  "ive",
+  "me",
+  "mine",
+  "my",
+  "myself",
+  "our",
+  "ours",
+  "us",
+  "we",
+  "weve"
+ ],
+ "you_possessive": [
+  "your",
+  "yours",
+  "you"
+ ],
+ "third_possessive": [
+  "his",
+  "her",
+  "their"
+ ],
+ "copula": [
+  "is",
+  "was",
+  "are",
+  "were"
+ ],
+ "of_markers": [
+  "of",
+  "to"
+ ],
+ "reply_adverbs": [
+  "probably",
+  "likely",
+  "possibly",
+  "perhaps",
+  "maybe",
+  "presumably",
+  "apparently",
+  "surely",
+  "certainly",
+  "definitely",
+  "actually",
+  "really",
+  "just",
+  "also",
+  "still"
+ ],
+ "kin_pattern": [
+  "wife",
+  "husband",
+  "partner",
+  "girlfriend",
+  "boyfriend",
+  "fianc\\w*",
+  "spouse",
+  "son",
+  "daughter",
+  "kids?",
+  "child",
+  "children",
+  "brother",
+  "sister",
+  "mum",
+  "mom",
+  "mother",
+  "dad",
+  "father",
+  "grandma",
+  "grandmother",
+  "grandpa",
+  "grandfather",
+  "aunt",
+  "uncle",
+  "cousin",
+  "niece",
+  "nephew",
+  "friend",
+  "mate",
+  "boss",
+  "colleague",
+  "coworker",
+  "neighbou?r",
+  "parents?",
+  "sibling",
+  "in-laws?",
+  "family",
+  "baby",
+  "girls",
+  "boys",
+  "ex"
+ ],
+ "role_alt": [
+  "wife",
+  "husband",
+  "partner",
+  "girlfriend",
+  "boyfriend",
+  "fianc[eé]e?",
+  "spouse",
+  "son",
+  "daughter",
+  "kid",
+  "children",
+  "child",
+  "girl",
+  "boy",
+  "baby",
+  "friend",
+  "mate",
+  "buddy",
+  "bestie",
+  "brother",
+  "sister",
+  "mum",
+  "mom",
+  "mother",
+  "dad",
+  "father",
+  "grandma",
+  "grandmother",
+  "grandpa",
+  "grandfather",
+  "aunt",
+  "uncle",
+  "niece",
+  "nephew",
+  "cousin",
+  "parent",
+  "sibling",
+  "grandparent",
+  "colleague",
+  "coworker",
+  "boss",
+  "neighbou?r"
+ ],
+ "pet_words": [
+  "dog",
+  "puppy",
+  "pup",
+  "cat",
+  "kitten",
+  "bird",
+  "parrot",
+  "budgie",
+  "rabbit",
+  "bunny",
+  "hamster",
+  "guinea pig",
+  "fish",
+  "horse",
+  "pony",
+  "turtle",
+  "tortoise",
+  "snake",
+  "lizard",
+  "ferret",
+  "pet"
+ ],
+ "guess_roles": [
+  "wife",
+  "husband",
+  "spouse",
+  "partner",
+  "girlfriend",
+  "boyfriend",
+  "fiancée",
+  "fiancé",
+  "fiancee",
+  "fiance",
+  "mother",
+  "mum",
+  "mom",
+  "mummy",
+  "mommy",
+  "father",
+  "dad",
+  "daddy",
+  "son",
+  "daughter",
+  "sister",
+  "brother",
+  "sibling",
+  "aunt",
+  "auntie",
+  "aunty",
+  "uncle",
+  "niece",
+  "nephew",
+  "cousin",
+  "grandmother",
+  "grandma",
+  "granny",
+  "nan",
+  "nana",
+  "grandfather",
+  "grandpa",
+  "grandad",
+  "parent",
+  "grandparent",
+  "child",
+  "kid",
+  "stepmother",
+  "stepfather",
+  "stepson",
+  "stepdaughter",
+  "mother-in-law",
+  "father-in-law",
+  "sister-in-law",
+  "brother-in-law"
+ ],
+ "kin_codes": {
+  "mother": [
+   "mother",
+   "mum",
+   "mom",
+   "mummy",
+   "mommy",
+   "mama",
+   "mam"
+  ],
+  "father": [
+   "father",
+   "dad",
+   "daddy",
+   "papa"
+  ],
+  "parent": [
+   "parent",
+   "parents"
+  ],
+  "wife": [
+   "wife"
+  ],
+  "husband": [
+   "husband"
+  ],
+  "spouse": [
+   "spouse"
+  ],
+  "partner": [
+   "partner"
+  ],
+  "girlfriend": [
+   "girlfriend"
+  ],
+  "boyfriend": [
+   "boyfriend"
+  ],
+  "fiance": [
+   "fiancée",
+   "fiancé",
+   "fiancee",
+   "fiance"
+  ],
+  "son": [
+   "son"
+  ],
+  "daughter": [
+   "daughter"
+  ],
+  "child": [
+   "child",
+   "kid",
+   "children",
+   "kids"
+  ],
+  "sister": [
+   "sister"
+  ],
+  "brother": [
+   "brother"
+  ],
+  "sibling": [
+   "sibling"
+  ],
+  "aunt": [
+   "aunt",
+   "auntie",
+   "aunty"
+  ],
+  "uncle": [
+   "uncle"
+  ],
+  "niece": [
+   "niece"
+  ],
+  "nephew": [
+   "nephew"
+  ],
+  "cousin": [
+   "cousin"
+  ],
+  "grandmother": [
+   "grandmother",
+   "grandma",
+   "granny",
+   "nan",
+   "nana"
+  ],
+  "grandfather": [
+   "grandfather",
+   "grandpa",
+   "grandad"
+  ],
+  "grandparent": [
+   "grandparent"
+  ],
+  "stepmother": [
+   "stepmother"
+  ],
+  "stepfather": [
+   "stepfather"
+  ],
+  "stepson": [
+   "stepson"
+  ],
+  "stepdaughter": [
+   "stepdaughter"
+  ],
+  "mother_in_law": [
+   "mother-in-law"
+  ],
+  "father_in_law": [
+   "father-in-law"
+  ],
+  "sister_in_law": [
+   "sister-in-law"
+  ],
+  "brother_in_law": [
+   "brother-in-law"
+  ],
+  "friend": [
+   "friend",
+   "mate",
+   "buddy",
+   "bestie"
+  ],
+  "colleague": [
+   "colleague",
+   "coworker"
+  ],
+  "boss": [
+   "boss"
+  ],
+  "neighbour": [
+   "neighbour",
+   "neighbor"
+  ]
+ },
+ "loose_codes": [
+  "friend",
+  "colleague",
+  "boss",
+  "neighbour"
+ ],
+ "detect_words": [
+  "and",
+  "are",
+  "did",
+  "does",
+  "for",
+  "had",
+  "has",
+  "have",
+  "he",
+  "her",
+  "his",
+  "in",
+  "is",
+  "it",
+  "live",
+  "lives",
+  "longer",
+  "my",
+  "no",
+  "not",
+  "of",
+  "play",
+  "plays",
+  "she",
+  "that",
+  "the",
+  "their",
+  "they",
+  "this",
+  "to",
+  "was",
+  "will",
+  "with",
+  "you",
+  "your"
+ ],
+ "role_hypo_lead": [
+  "is",
+  "are",
+  "was",
+  "were",
+  "am",
+  "do",
+  "does",
+  "did",
+  "can",
+  "could",
+  "would",
+  "should",
+  "will",
+  "may",
+  "might",
+  "who",
+  "whom",
+  "whose",
+  "what",
+  "which",
+  "whether",
+  "if",
+  "maybe",
+  "perhaps",
+  "possibly",
+  "probably",
+  "i\\s+(?:wonder|think|guess|suppose|believe|doubt|bet)",
+  "not\\s+sure",
+  "no\\s+idea",
+  "i'?m\\s+not\\s+sure"
+ ],
+ "role_hypo_any": [
+  "if",
+  "whether",
+  "wonder",
+  "wondering",
+  "suppose",
+  "supposing",
+  "hypothetically",
+  "might\\s+be",
+  "could\\s+be"
+ ],
+ "role_negated": [
+  "not",
+  "never",
+  "no\\s+longer",
+  "isn'?t",
+  "wasn'?t",
+  "aren'?t",
+  "weren'?t",
+  "ain'?t",
+  "nobody",
+  "neither",
+  "nor"
+ ],
+ "role_negated_suffix": [
+  "n['’]t"
+ ],
+ "cjk": false,
+ "negation_scope": "after",
+ "user_markers": [
+  "user",
+  "users",
+  "speaker"
+ ],
+ "question_words": [],
+ "clause_words": [
+  "so",
+  "but",
+  "and",
+  "because",
+  "then",
+  "though",
+  "although",
+  "while"
+ ],
+ "pronoun_required": true
+}

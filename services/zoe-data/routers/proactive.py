@@ -8,6 +8,8 @@ Endpoints:
   POST   /api/proactive/pending/{id}    — claim a pending notification → session
   POST   /api/proactive/trigger-morning — manually trigger morning brief (admin/self)
   POST   /api/proactive/selector/run-synthetic/{id} — Samantha-bar S5 hook (internal token)
+  GET    /api/proactive/inbox           — pull-not-push: {enabled, count, top, quiet} for the orb
+  POST   /api/proactive/welcome         — pull-not-push: one-tap welcome / neutral / not_now
 """
 from __future__ import annotations
 
@@ -18,9 +20,9 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from auth import get_current_user
+from auth import get_current_user, resolve_acting_user
 from database import get_db
-from guest_policy import require_feature_access
+from guest_policy import is_guest_user, require_feature_access
 from proactive.session_utils import claim_pending
 from proactive.triggers.reminders import schedule_reminder, cancel_reminder
 
@@ -208,7 +210,7 @@ async def dismiss_pending_suggestion(
 
 
 @router.post("/selector/run-synthetic/{target_user}")
-async def run_selector_synthetic(target_user: str, request: Request):
+async def run_selector_synthetic(target_user: str, request: Request, night_mind: int = 0):
     """Run the nightly selector steps (open-loop extraction, then ranking) NOW for
     ONE harness-minted id — the hook Samantha bar S5 waits on. The nightly pass
     never sees such ids (dreaming drops synthetic users). Guards are the
@@ -236,4 +238,60 @@ async def run_selector_synthetic(target_user: str, request: Request):
         return {"enabled": False}
     loops = await _extract_open_loops(target_user)
     selected = await select_for_user(target_user) or {}
-    return {"enabled": True, "open_loops": loops.get("status"), **selected}
+    out = {"enabled": True, "open_loops": loops.get("status"), **selected}
+    if night_mind:
+        out["night_mind"] = await _run_night_mind_synthetic(target_user)
+    return out
+
+
+async def _run_night_mind_synthetic(user_id: str) -> dict:
+    """The day-sim's ``night_mind`` intent (``?night_mind=1``): the REAL night pass over this harness id's own-words turns (the digest's loader, so the same
+    own-words / forgotten-turn filters), standing in for the 03:00 digest the day-sim does not run. Counts only; ``{"enabled": false}`` with ``ZOE_NIGHT_MIND`` off
+    (no work); never raises (a failure is its own status). Reached only through the guards above: a harness-minted, unregistered id."""
+    try:
+        import night_mind
+        if night_mind.mode() == "off":
+            return {"enabled": False}
+        from memory_digest import _load_todays_messages
+        from memory_service import get_memory_service
+
+        transcript = await _load_todays_messages(user_id)
+        res = await night_mind.run_for_user(user_id, transcript, get_memory_service())
+        keep = ("status", "mode", "turns_in", "turns_dropped_routine", "chunks", "calls", "moments_verified", "moments_held", "observations_written",
+                "observations_pending", "threads_created", "threads_updated", "calls_invalid", "skipped_reason", "error")
+        return {"enabled": True, **{k: res[k] for k in keep if k in res}}
+    except Exception as exc:  # noqa: BLE001
+        return {"enabled": True, "status": "error", "error": type(exc).__name__}
+
+
+# ── Pull, not push (register BH1 / BH2) ──────────────────────────────────────
+@router.get("/inbox")
+async def pending_inbox(user: dict = Depends(resolve_acting_user)):
+    """What the panel's orb may show about the caller's pending queue: a COUNT and the coarse class
+    of the top item (``question`` | ``notify``), never an item's words. A guest (the kiosk before a
+    member signs in) and a member with nothing pending both read ``count: 0``; the flag off
+    reads ``enabled: false``. Read-only: nothing is delivered or marked."""
+    from proactive.pull import pending_state
+
+    return await pending_state(str(user.get("user_id") or ""))
+
+
+class WelcomeBody(BaseModel):
+    signal: str                   # welcome | neutral | not_now
+    line_id: str | None = None    # a specific delivery; default = the member's most recent
+
+
+@router.post("/welcome")
+async def welcome_tap(body: WelcomeBody, user: dict = Depends(resolve_acting_user)):
+    """The one-tap "was that welcome?" about the member's latest raise or pull. Tunes RAISING for
+    that item class only (``ZOE_DELIVERY_LEDGER=on``), never tone; logged either way."""
+    from proactive import lines
+    from proactive.pull import pull_enabled
+
+    if body.signal not in lines.SIGNALS:
+        raise HTTPException(status_code=422, detail="signal must be welcome, neutral or not_now")
+    uid = str(user.get("user_id") or "")
+    if is_guest_user(user) or not uid or not pull_enabled():
+        return {"ok": False, "covered": 0}
+    covered = await lines.record_tap(uid, body.signal, target_id=body.line_id or "", channel="tap")
+    return {"ok": covered > 0, "covered": covered, "mode": lines.delivery_ledger_mode()}

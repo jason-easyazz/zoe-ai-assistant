@@ -44,7 +44,8 @@ PHASE_MIN = {"lab": 2.4, "latency": {"H1": 1.0, "H2": 2.5, "H0": 5.1, "HM": 0.0,
              "validity": {"verbatim": 6.0, "concise": 10.0},
              #: Z0e (real Chroma + MiniLM) on the D cells x 3 seeds, measured 2026-10-06 first contact: 4 cells x ~6.5 s x 3 seeds = 1.3 min
              #: ... plus the two long-range cells (L1 9 s, L2 17 s per seed measured 2026-10-07): 2.7 min
-             "z0e": 2.7,
+             #: ... plus the S10x pool cell (30 retirements over 100 rows, ~10.7 s measured) x 3 seeds = 0.5 min
+             "z0e": 3.2,
              #: the HM cells on the real tiers (real library + real Hindsight, ``--controls real-tier``): 217 s measured at first contact (2026-10-06), with headroom
              "hm_cells": 5.0}
 #: seconds per cell that RAN, seed 1: H1 112 cells in 414 s, H2 55 in 662 s, H0 18 in 362 s
@@ -160,6 +161,8 @@ SLOT_RETAINS, SLOT_TURNS_PER_CHUNK = 12, 10
 FORGET_WAIT_S = 360.0
 PROBE_USERS = {v: "demo_bar_" + hashlib.sha1(f"zmb-probe-{v}".encode()).hexdigest()[:8] for v in ("H0", "H1", "H2", "MPA", "HMA", "ZMA")}      # the driver arms run theirs inside their driver
 HM_DRIVER = Path(__file__).resolve().parent / "hm_window.py"
+Z0N_DRIVER = Path(__file__).resolve().parent / "z0n_window.py"          # Z0n's K1-K12 and Z0's protocol_brain half, on the clone (BAKEOFF_Z0N=1)
+Z0N_MIN = 35.0                                                            # minutes the phase needs (about 30 clone calls for K, 45 for the brain half, at ~20 s a call)
 MPA_DRIVER = Path(__file__).resolve().parent / "mpa_window.py"          # one driver for MPA and (``--arm HMA``) HMA, and for the reflection variants (``--reflect-only``)
 
 _PLACES = ("Hobart", "Lisbon", "Perth", "Bergen", "Ghent", "Cork", "Dunedin", "Tauranga")
@@ -372,6 +375,7 @@ class Ctx:
         self.measure: "dict[str, dict]" = {v: {} for v in ("H0", "H1", "H2", "HM", "MPA", "HMA", "ZMA")}
         self.reflect: "Optional[dict]" = None                  # the reflection phase's record (variants, never contest entrants); None = not attempted
         self.z0e: "dict[str, dict]" = {}
+        self.z0n: "dict[str, dict]" = {}                    # Z0 + the night mind on the clone: {seed: {"axes", "cells", "k1", "night", "brain"}} (BAKEOFF_Z0N=1)
         self.forget: "dict[str, ForgetProbe]" = {}
         self.notes: "list[str]" = []
         self.aborted = ""
@@ -432,13 +436,17 @@ def phase_z0(ctx: Ctx, seeds: tuple, store: list, by_id: dict) -> None:
         phase_z0e(ctx, seed, world, seed_store, by_id, inst)
 
 
+#: the one S10x cell whose number depends on the retrieval (the candidate stage: the old row in the top 3), so it runs on Z0e too
+Z0E_RETIREMENT_CELL = "S10x.pool_right_rows_retired"
+
+
 def phase_z0e(ctx: Ctx, seed: str, world: Any, store: list, by_id: dict, inst: dict) -> None:
-    """Z0e = Z0 over a REAL Chroma collection with the service's MiniLM embedder (as live), on the recall (D) cells: the lab's own Z0 ranks by bag-of-words, so
+    """Z0e = Z0 over a REAL Chroma collection with the service's MiniLM embedder (as live), on the recall (D) cells and the S10x candidate-stage cell: the lab's own Z0 ranks by bag-of-words, so
     the D axis compares an embedding arm with a real embedder, not with a word counter. Skipped (with the reason in the notes) where chromadb or the cached
     model is missing: the D baseline then falls back to Z0 and the report says so."""
     from . import artifact, runner
     from .arms import make_arm
-    cells = [c for c in store if c.id.startswith(("D", "L"))]          # recall (D) and long-range recall (L): both are retrieval, both need the real embedder
+    cells = [c for c in store if c.id.startswith(("D", "L")) or c.id == Z0E_RETIREMENT_CELL]          # recall (D), long-range recall (L): both are retrieval, both need the real embedder; plus the S10x candidate-stage cell
     arm = make_arm("Z0e")
     try:
         rows = runner.run_cells(cells, world, arm)
@@ -450,6 +458,48 @@ def phase_z0e(ctx: Ctx, seed: str, world: Any, store: list, by_id: dict, inst: d
         return
     ctx.z0e[seed] = {"axes": artifact.axis_stats(rows, by_id, inst["ok"]), "cells": _strip(rows)}
     ctx.log(f"Z0e seed {seed}: {sum(1 for r in rows if r['verdict'] == 'PASS')}/{ran} recall + long-range cells pass over real Chroma + MiniLM")
+
+
+def real_z0n_runner(ctx: Ctx, seed: str, box_s: float) -> dict:
+    """``z0n_window.py`` against the clone, run with THIS interpreter (Z0 needs zoe-data's modules): K1-K12 on Z0n with the real night pass, and Z0's protocol brain half."""
+    cfg = ctx.cfg
+    out = cfg.bakeoff_dir / f"z0n-{ctx.win.run_id}.json"
+    argv = [sys.executable, str(Z0N_DRIVER), "--clone-url", f"http://127.0.0.1:{cfg.llm_port}", "--ctx", str(getattr(cfg, "live_ctx", 8192)), "--seed", seed, "--out", str(out)]
+    r = ctx.host.run(argv, timeout=box_s + 180.0, env=driver_env(cfg))
+    text = ctx.host.read(str(out))
+    if not text:
+        return {"error": f"z0n_window.py produced no result (rc={r.rc}): {r.out.strip()[-300:]}"}
+    return json.loads(text)
+
+
+def phase_z0n(ctx: Ctx, seed: str, store: list, by_id: dict) -> None:
+    """The Z0n phase (flag-dark): rows into ``ctx.z0n`` (the K cells with the REAL nightly model, K1's judged / true / false counts kept) and Z0's ``M4.*.zoe`` rows into the
+    baseline seed run, where ``aggregate_axes`` turns them into Z0's ``protocol_brain`` axis. Skipped, with the reason in the notes, when the time or the clone is not there."""
+    from . import artifact
+    if not ctx.cfg.z0n:
+        return
+    left = ctx.win.time_left_s() - TAIL_MIN * 60.0
+    if left < Z0N_MIN * 60.0:
+        ctx.notes.append(f"the Z0n phase (K1-K12 with the real night pass; Z0's protocol_brain) was skipped: {left / 60.0:.1f} min left behind the tail, it needs {Z0N_MIN:g}")
+        return
+    ctx.label("z0n")
+    t0 = ctx.host.mono()
+    res = (getattr(ctx.win, "z0n_runner", None) or real_z0n_runner)(ctx, seed, min(left, Z0N_MIN * 60.0 * 2))
+    ctx.win.guard()
+    if res.get("error") or not (res.get("k_cells") or res.get("protocol_brain")):
+        ctx.notes.append("the Z0n phase did not produce a result: " + str(res.get("error") or "no cells"))
+        return
+    rows = res.get("k_cells") or []
+    inst = (ctx.z0.get(seed) or {}).get("instrument") or {"ok": False}
+    if rows:
+        ctx.z0n[seed] = {"axes": artifact.axis_stats(rows, by_id, inst.get("ok", False)), "cells": _strip(rows), "k1": res.get("k1") or {}, "night": res.get("night") or {},
+                         "calls": res.get("calls"), "model": res.get("model")}
+    pb = res.get("protocol_brain") or {}
+    if pb.get("cells") and seed in ctx.z0:
+        ctx.z0[seed]["cells"] = list(ctx.z0[seed].get("cells") or []) + [{k: v for k, v in c.items() if k != "evidence"} for c in pb["cells"]]
+        ctx.z0[seed]["brain"] = pb.get("brain") or {}
+    ctx.log(f"Z0n: K {(res.get('k_summary') or {}).get('pass')}/{(res.get('k_summary') or {}).get('graded')} graded pass with the real night pass; "
+            f"protocol_brain {(pb.get('summary') or {}).get('pass')}/{(pb.get('summary') or {}).get('graded')}; {res.get('calls')} model calls; {ctx.host.mono() - t0:.0f}s")
 
 
 def sweep_stale_banks(ctx: Ctx) -> int:
@@ -1219,10 +1269,10 @@ def plan_budget(cfg: Any, store: "Optional[list]" = None, runnable: "Optional[in
     can run are those whose required capabilities it declares (the rest SKIP with the reason and cost nothing). When the arms ask for more than the cap holds
     (``Budget.slack_min() < 0``) the lower arms' boxes sit on ``BOX_FLOOR_MIN`` and the dry run says so: the plan never hides a deficit."""
     arms = tuple(a for a in ARM_ORDER if a in cfg.arms)
+    from . import cells as cellmod
     if store is None:
         from . import spec
-        store = [c for c in spec.load_cells() if c.tier == "store"]
-    from . import cells as cellmod
+        store = [c for c in spec.load_cells() if c.tier == "store" and not cellmod.z0_only(c)]
     from .arms.hindsight import HindsightArm
     layered = set(HindsightArm.capabilities)
     ordinary = [c for c in store if c.axis not in CAP_AXES]       # the base box is sized from the cells run 1 measured; the capability cells are budgeted apart
@@ -1260,7 +1310,7 @@ def plan_table(cfg: Any, seeds: tuple, budget: "Optional[Budget]" = None) -> "li
     b = budget or plan_budget(cfg)
     rows = [("Z0 + Z0-off in the lab on 3 seeds, forgetting probes start (t+0), adapter negative controls", PHASE_MIN["lab"],
              "control, negative control; the real t+6 min check runs later between cells"),
-            ("Z0e (real Chroma + MiniLM) on the 4 recall (D) + 3 long-range (L) cells x 3 seeds", PHASE_MIN["z0e"], "the D and L axes' baseline: real retrieval on both engines")]
+            ("Z0e (real Chroma + MiniLM) on the 4 recall (D) + 3 long-range (L) cells + the S10x candidate-stage cell x 3 seeds", PHASE_MIN["z0e"], "the D and L axes' baseline: real retrieval on both engines")]
     concise_done = False
     for a in b.arms:
         if a == "HM":
@@ -1341,8 +1391,8 @@ def together_sentence(cfg: Any, names: "list[str]", store: list, with_b: Budget)
 def dry_plan(win: Any) -> dict:
     cfg = win.cfg
     seeds = seeds_for(win.run_id)
-    from . import spec as specmod
-    store = [c for c in specmod.load_cells() if c.tier == "store"]
+    from . import spec as specmod, cells as cellmod
+    store = [c for c in specmod.load_cells() if c.tier == "store" and not cellmod.z0_only(c)]
     b = plan_budget(cfg, store)
     win.log("PLAN (the measurement phases, in execution order; est. minutes from run 1's measured rates; H1 first and complete):")
     total = 0.0
@@ -1627,8 +1677,10 @@ def write_report(ctx: Ctx, win: Any, seeds: tuple, store: list, by_id: dict) -> 
         "the capability axes (J exact words, K reflection, L long-range recall, M protocol) ran on seed 1 only and each arm ran the ones it is the evidence for "
         "(H1 / HM: J, L, M; H2 / H0: K): the other arms' cells are `planner cut` or capability SKIPs, never passes; H2's and H0's latency / slot phases and the concise "
         "validity phase ran only if time remained (their G0 / G1 items are NA otherwise)",
-        "the lab half of M (the protocol) is a scripted stand-in for each protocol's text and never decides; its brain half is declared and did not run, so M is `no data`; "
-        "K on Z0 scripts the nightly model (K2 / K3 SKIP, K1 / K4 / K5 measure what Z0's store keeps of a night's proposals)",
+        "the lab half of M (the protocol) is a scripted stand-in for each protocol's text and never decides; its brain half (`protocol_brain`) is Z0's own only when the Z0n phase ran "
+        "(`BAKEOFF_Z0N=1`: Z0's recall floor + `recall_memory` on the clone, rows `M4.*.zoe`), else M is `no data`; "
+        "K on Z0 scripts the nightly model (K2 / K3 SKIP, K1 / K4 / K5 measure what Z0's store keeps of a night's proposals); with the Z0n phase K1-K12 are also measured with the REAL night pass "
+        "(Z0n, reported beside Z0, never the baseline)" + (" - Z0n ran on seed 1: " + "; ".join(f"{k}: {v}" for k, v in sorted(((ctx.z0n.get(seeds[0]) or {}).get('k1') or {}).items())) if ctx.z0n else ""),
         "the capability cells' thresholds were written before any Hindsight arm ran them; Z0e's long-range numbers were seen afterwards",
         "all arms share one Hindsight server and one egress log: the per-arm egress split is by wall-clock phase, the gate reads the whole window"]
     if "HM" in cfg.arms:
@@ -1669,7 +1721,7 @@ def write_report(ctx: Ctx, win: Any, seeds: tuple, store: list, by_id: dict) -> 
     payload = {"run_id": win.run_id, "meta": meta, "decision": {k: v for k, v in decision.items() if k != "compare"}, "compare": decision["compare"],
                "arms": {v: {k: val for k, val in a.items()} for v, a in arms.items()}, "z0": {s: {k: r[k] for k in ("axes", "hard_violations", "instrument")} for s, r in ctx.z0.items()},
                "z0_off": {s: {k: r[k] for k in ("axes", "hard_violations")} for s, r in ctx.z0_off.items()}, "z0e": {s: r["axes"] for s, r in ctx.z0e.items()},
-               "seed_runs": ctx.seed_runs, "reflect": ctx.reflect,
+               "seed_runs": ctx.seed_runs, "reflect": ctx.reflect, "z0n": ctx.z0n,
                "measure": ctx.measure, "notes": notes, "docs_path": str(md_path), "instruments": instr, "scratch_postgres": pg}
     artifact.write_json(cfg.bakeoff_dir / f"run-{win.run_id}.json", payload)
     win.log(f"VERDICT: {decision['verdict']} - {decision['text']}")
@@ -1681,9 +1733,11 @@ def measure(win: Any) -> dict:
     from . import spec
     make_factories(win)
     cfg, host, log = win.cfg, win.host, win.log
+    from . import cells as cellmod
     everything = spec.load_cells()
     by_id = {c.id: c for c in everything}
-    store = [c for c in everything if c.tier == "store"]
+    z0_store = [c for c in everything if c.tier == "store"]                   # the lab phase: Z0 / Z0-off run every store cell
+    store = [c for c in z0_store if not cellmod.z0_only(c)]                  # the H arms: not Zoe's own quote-retirement cells (S10x)
     seeds = seeds_for(win.run_id)
     sampler = Sampler(win)
     sampler.start()
@@ -1709,7 +1763,8 @@ def measure(win: Any) -> dict:
     try:
         ctx.label("lab")
         sweep_stale_banks(ctx)
-        phase_z0(ctx, seeds, store, by_id)
+        phase_z0(ctx, seeds, z0_store, by_id)
+        phase_z0n(ctx, seeds[0], store, by_id)                              # flag-dark (BAKEOFF_Z0N=1): the real night pass's K cells and Z0's protocol_brain baseline
         for v in (a for a in cfg.arms if a not in DRIVER_ARMS):          # HM's / MPA's / HMA's forgetting is their own cells (F1 / F2), run in their drivers
             ctx.forget[v] = ForgetProbe(ctx, v)
             ctx.label(f"{v}:forget")

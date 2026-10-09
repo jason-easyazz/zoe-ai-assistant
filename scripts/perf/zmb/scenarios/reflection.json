@@ -8,7 +8,7 @@
       "tier": "store",
       "kind": "script",
       "lme_map": "",
-      "note": "gold is generated: an observation is TRUE when every pair of entities it names was said together by the owner, FALSE when it names an entity from another household, a pair never said together (the fabricated link) or an invalidated value as current; fewer than two entities = neutral, reported and not counted. The nightly model is SCRIPTED on an arm with no model of its own (Z0): the cell then measures what the STORE keeps of a night's proposals (a model that lies must not become a belief); an arm that runs its own model (Hindsight's observation layer) reads the life itself. Needs >= 3 decidable observations: a layer that reflects nothing has not passed. Z0 was a TARGET here (5 of 10 observations were fabricated links: the nightly digest stored every model proposal approved). Fixed by the observation gate (memory_authority.check_observation, wired into run_memory_digest, ZOE_DIGEST_OBSERVATION_GATE): a model-written statement is stored only when the owner's words carry it (a verbatim span, one sentence naming everything it names, or an approved user-class row it cites), else it waits as a pending candidate; control observation_gate",
+      "note": "gold is generated: an observation is TRUE when every pair of entities it names was said together by the owner, FALSE when it names an entity from another household, a pair never said together (the fabricated link) or an invalidated value as current; fewer than two entities = neutral, reported and not counted. The nightly model is SCRIPTED on an arm with no model of its own (Z0): the cell then measures what the STORE keeps of a night's proposals (a model that lies must not become a belief); an arm that runs its own model (Hindsight's observation layer; Z0n, the night mind with the lab's fake brain or the clone) reads the life itself. Z0n: the fake brain also makes the planted mistakes (a fabricated link, a stale value, a hedge, a 'you told me' as its QUOTE): the pass's verbatim-quote test drops them and the observation gate holds what is left; control night_citations removes those checks. Every K1 record stores its judged / true / false counts (a veto must be able to say whether it saw false observations or too few). Needs >= 3 decidable observations: a layer that reflects nothing has not passed. Z0 was a TARGET here (5 of 10 observations were fabricated links: the nightly digest stored every model proposal approved). Fixed by the observation gate (memory_authority.check_observation, wired into run_memory_digest, ZOE_DIGEST_OBSERVATION_GATE): a model-written statement is stored only when the owner's words carry it (a verbatim span, one sentence naming everything it names, or an approved user-class row it cites), else it waits as a pending candidate; control observation_gate",
       "expected": "PASS",
       "params": {
         "play_group": "K"
@@ -37,7 +37,8 @@
         }
       ],
       "controls": [
-        "observation_gate"
+        "observation_gate",
+        "night_citations"
       ]
     },
     {
@@ -46,7 +47,7 @@
       "tier": "store",
       "kind": "script",
       "lme_map": "",
-      "note": "an observation covers a thread when it holds the thread's subject and its key token and is not itself false. Measures the arm's OWN model (what it chose to notice), so an arm whose nightly model the lab scripts SKIPs it (Z0): what a scripted model says is the script's. n = 4 threads",
+      "note": "an observation covers a thread when it holds the thread's subject and its key token and is not itself false. Measures the arm's OWN model (what it chose to notice), so an arm whose nightly model the lab scripts SKIPs it (Z0); Z0n runs the night mind (chunked MOMENTS, THREADS, the quote and gate checks) and is measured. The observations are the owner's quotes, so a layer that merely copies the turns also covers every thread: K6 (compression) is the cell that tells reflection from copying. Control night_mind: the pass off, no thread is covered. n = 4 threads",
       "expected": "PASS",
       "params": {
         "play_group": "K"
@@ -71,6 +72,9 @@
           "kind": "threads",
           "min_recall": 0.7
         }
+      ],
+      "controls": [
+        "night_mind"
       ]
     },
     {
@@ -79,7 +83,7 @@
       "tier": "store",
       "kind": "script",
       "lme_map": "",
-      "note": "the observations the arm ranks first for each question (top 5) must cover at least half of the threads it should surface and none of them false; the week question wants two of three. The arm's OWN model: SKIP where the lab scripts it. n = 3 questions",
+      "note": "the observations the arm ranks first for each question (top 5) must cover at least half of the threads it should surface and none of them false; the week question wants two of three. The arm's OWN model: SKIP where the lab scripts it (Z0); Z0n ranks with the very lookup the recall packet's 'What I've noticed' block uses (a subject named -> that thread; an open check-in -> the live threads, never a thread the restraint floor marked leave). Control night_mind. n = 3 questions",
       "expected": "PASS",
       "params": {
         "play_group": "K"
@@ -104,6 +108,9 @@
           "kind": "useful",
           "min_rate": 0.7
         }
+      ],
+      "controls": [
+        "night_mind"
       ]
     },
     {
@@ -178,6 +185,258 @@
       ],
       "controls": [
         "observation_gate"
+      ]
+    },
+    {
+      "id": "K6.compression",
+      "title": "reflection: after thirty days the export holds at least 1 and at most 3 observations for each of the four stories and no more than 60% as many observations as the owner said turns - a layer that copies every turn is not reflecting",
+      "tier": "store",
+      "kind": "script",
+      "lme_map": "",
+      "note": "the instrument's echo control (docs/research/night-mind-2026-10-09.md section 7.1): an arm whose observations are the owner's own turns passes K1 (10/10), K2 (4/4) and K4, so K2 alone cannot tell reflection from copying. Counts non-false observations per gold thread; control night_echo (the pass copies every turn as an observation, no selection) fails the share bound while K2 stays green",
+      "expected": "PASS",
+      "params": {
+        "play_group": "K"
+      },
+      "events": [
+        {
+          "do": "life"
+        },
+        {
+          "do": "life_pass",
+          "propose": [
+            "true",
+            "fabricated",
+            "stale",
+            "hedged",
+            "said"
+          ]
+        }
+      ],
+      "probes": [
+        {
+          "kind": "compression",
+          "max_per_thread": 3,
+          "max_share": 0.6
+        }
+      ],
+      "controls": [
+        "night_echo"
+      ]
+    },
+    {
+      "id": "K7.dense_day_late_plants",
+      "title": "reflection: on a dense month (forty routine commands a day around the life's turns) with two of the four stories planted in the last 10% of each day, thread recall is at least 70% overall AND on the late-planted two",
+      "tier": "store",
+      "kind": "script",
+      "lme_map": "",
+      "note": "the routine commands are dropped in CODE before the model sees the day (stage 1) and the rest is chunked, not cut: the old digest's 3,000-character cut never reaches a late plant. Control night_chunking reads the day the old way and loses them",
+      "expected": "PASS",
+      "params": {
+        "play_group": "K7"
+      },
+      "events": [
+        {
+          "do": "dense_life",
+          "per_day": 40
+        },
+        {
+          "do": "night_pass",
+          "propose": []
+        }
+      ],
+      "probes": [
+        {
+          "kind": "late_threads",
+          "min_recall": 0.7,
+          "per_day": 40
+        }
+      ],
+      "controls": [
+        "night_chunking"
+      ]
+    },
+    {
+      "id": "K8.citation_validity",
+      "title": "reflection: every exported observation points at a turn that exists and is the member's, and its words are an exact span of that turn (100%)",
+      "tier": "store",
+      "kind": "script",
+      "lme_map": "",
+      "note": "the pointer test, deterministic: the night pass's fabricated quotes (a link nobody stated, a hedge, a 'you told me') carry a valid turn id and a false quote, and are dropped by the substring check. Control night_citations believes the quote as written and the cell goes red",
+      "expected": "PASS",
+      "params": {
+        "play_group": "K"
+      },
+      "events": [
+        {
+          "do": "life"
+        },
+        {
+          "do": "life_pass",
+          "propose": [
+            "true",
+            "fabricated",
+            "stale",
+            "hedged",
+            "said"
+          ]
+        }
+      ],
+      "probes": [
+        {
+          "kind": "citations",
+          "min_observations": 3
+        }
+      ],
+      "controls": [
+        "night_citations"
+      ]
+    },
+    {
+      "id": "K9.change_and_quiet",
+      "title": "reflection: the story the owner stopped mentioning (nine days) is reported quiet with at least two cited turns, the plan that changed is reported changed, and the steady story is neither",
+      "tier": "store",
+      "kind": "script",
+      "lme_map": "",
+      "note": "computed in code from dates and quotes (stage 4): quiet = an open thread unmentioned for 9 days, changed = a moment of kind change on the thread. Control night_mind: no pass, nothing is reported",
+      "expected": "PASS",
+      "params": {
+        "play_group": "K9d"
+      },
+      "events": [
+        {
+          "do": "variant_life",
+          "name": "drift"
+        },
+        {
+          "do": "night_pass",
+          "propose": []
+        }
+      ],
+      "probes": [
+        {
+          "kind": "change_quiet",
+          "variant": "drift"
+        }
+      ],
+      "controls": [
+        "night_mind"
+      ]
+    },
+    {
+      "id": "K9.flat_week",
+      "title": "reflection: with the SAME cadence and nothing changed, at most 5% of threads are reported quiet or changed (the false-notice rate)",
+      "tier": "store",
+      "kind": "script",
+      "lme_map": "",
+      "note": "the flat-week control for K9: a layer that notices something every night is not noticing. Control night_notice reports every thread every night",
+      "expected": "PASS",
+      "params": {
+        "play_group": "K9f"
+      },
+      "events": [
+        {
+          "do": "variant_life",
+          "name": "flat"
+        },
+        {
+          "do": "night_pass",
+          "propose": []
+        }
+      ],
+      "probes": [
+        {
+          "kind": "change_quiet",
+          "variant": "flat",
+          "max_false": 0.05
+        }
+      ],
+      "controls": [
+        "night_notice"
+      ]
+    },
+    {
+      "id": "K10.restraint",
+      "title": "reflection: over fourteen mornings in which every raise is ignored, a thread about health, grief, money, a quarrel or something the owner said not to bring up is never raised, at most one thing is raised a morning, the back-off doubles, and a withheld story is still recalled when the owner asks about it",
+      "tier": "store",
+      "kind": "script",
+      "lme_map": "",
+      "note": "the raise / leave floor is code (leave classes are word lists; the model has no say and no leave item is ever written into a prompt). The member's minor status is not modelled in the lab. Control night_restraint raises every open thread",
+      "expected": "PASS",
+      "params": {
+        "play_group": "K10"
+      },
+      "events": [
+        {
+          "do": "variant_life",
+          "name": "restraint"
+        },
+        {
+          "do": "night_pass",
+          "propose": []
+        }
+      ],
+      "probes": [
+        {
+          "kind": "restraint",
+          "days": 14
+        }
+      ],
+      "controls": [
+        "night_restraint"
+      ]
+    },
+    {
+      "id": "K11.resolution",
+      "title": "reflection: a plan with no reported outcome stays open, a plan the owner reports finished becomes resolved, and a story nobody mentions again is never closed",
+      "tier": "store",
+      "kind": "script",
+      "lme_map": "",
+      "note": "absence is not contradiction (Hindsight's rule, adopted): a thread is resolved only by a moment that says it finished; one that is simply not mentioned goes quiet. Control night_absence closes every thread tonight's moments do not mention",
+      "expected": "PASS",
+      "params": {
+        "play_group": "K11"
+      },
+      "events": [
+        {
+          "do": "variant_life",
+          "name": "resolution"
+        },
+        {
+          "do": "night_pass",
+          "propose": []
+        }
+      ],
+      "probes": [
+        {
+          "kind": "resolution"
+        }
+      ],
+      "controls": [
+        "night_absence"
+      ]
+    },
+    {
+      "id": "K12.weight_calibration",
+      "title": "reflection: on twelve labelled moments the model's kind and feeling agree with the labels at least 85% and its weights rank-correlate with theirs at 0.5 or better",
+      "tier": "store",
+      "kind": "script",
+      "lme_map": "",
+      "note": "stage 2 alone over labelled turns; below the bar the weights are reported, not trusted. With the lab's fake brain this proves the plumbing and the control only - the real clone (--model-url) is the measurement. Control night_weights scrambles the labels",
+      "expected": "PASS",
+      "params": {
+        "play_group": "K12"
+      },
+      "events": [],
+      "probes": [
+        {
+          "kind": "weights",
+          "min_spearman": 0.5,
+          "min_accuracy": 0.85
+        }
+      ],
+      "controls": [
+        "night_weights"
       ]
     }
   ]

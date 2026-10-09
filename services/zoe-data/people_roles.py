@@ -23,11 +23,11 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-PET_WORDS = (
-    "dog", "puppy", "pup", "cat", "kitten", "bird", "parrot", "budgie", "rabbit", "bunny",
-    "hamster", "guinea pig", "fish", "horse", "pony", "turtle", "tortoise", "snake",
-    "lizard", "ferret", "pet",
-)
+import lexicons as _lexicons
+
+_EN = _lexicons.load("en")      # the words live in lexicons_data/en.json (data, not logic)
+
+PET_WORDS = tuple(_EN["pet_words"])
 _PET_ALT = "|".join(sorted((re.escape(w) for w in PET_WORDS), key=len, reverse=True))
 
 PROMPT_RULES = (
@@ -39,14 +39,7 @@ PROMPT_RULES = (
 )
 
 _NAME = r"[A-Z][a-z]{1,30}(?:\s[A-Z][a-z]{1,20})?"
-_ROLE_ALT = (
-    r"wife|husband|partner|girlfriend|boyfriend|fianc[eé]e?|spouse"
-    r"|son|daughter|kid|children|child|girl|boy|baby"
-    r"|friend|mate|buddy|bestie"
-    r"|brother|sister|mum|mom|mother|dad|father|grandma|grandmother|grandpa"
-    r"|grandfather|aunt|uncle|niece|nephew|cousin|parent|sibling|grandparent"
-    r"|colleague|coworker|boss|neighbou?r"
-)
+_ROLE_ALT = _lexicons.alt(_EN["role_alt"])
 _ROLE_RE = re.compile(rf"\b({_ROLE_ALT})s?\b", re.IGNORECASE)
 
 # NAME is the holder of the role in the fact: "Casey is the wife", "Casey is Tom's

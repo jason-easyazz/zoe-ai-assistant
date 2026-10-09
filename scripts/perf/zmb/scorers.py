@@ -158,7 +158,7 @@ def score_canaries(texts: Iterable[str], canaries: Sequence[str], *, stage: str 
 # ── store assertions over the arm's row export ───────────────────────────────
 
 ASSERT_OPS = ("present", "absent", "count_eq", "count_at_least", "all_have", "field_set", "fraction_have",
-              "epoch_year")
+              "epoch_year", "field_absent")
 
 
 def _rows_matching(rows: Sequence[dict], contains: Sequence[str], statuses: "Sequence[str] | None") -> list[dict]:
@@ -185,6 +185,9 @@ def score_store(rows: Sequence[dict], assertions: Sequence[dict], *, stage: str 
                          there is at least one row): the provenance rate, e.g. >= 95% of user-turn rows carry an excerpt
     * ``epoch_year``     every such row's ``row[field]`` is an epoch-seconds time whose UTC year is ``equals``
                          (and there is at least one): "valid_from is the year the user said, not the capture year"
+    * ``field_absent``   no such row's ``row[field]`` (every key of ``fields``, default just ``field``) names any phrase of
+                         ``field_contains``: a cited quote does not survive a forget (vacuously true with no row: pair it
+                         with a ``present`` assertion on a row that must survive)
     Any assertion may also carry ``origins`` (only rows whose ``origin`` is in the list count).
 
     Unknown ops raise: a typo in a spec must be a loud error, not a silent PASS. Evidence is which
@@ -215,6 +218,9 @@ def score_store(rows: Sequence[dict], assertions: Sequence[dict], *, stage: str 
               "fraction_have": bool(hit) and frac >= float(a.get("min", 0.95)),
               "epoch_year": bool(hit) and op == "epoch_year" and all(
                   _epoch_year(r.get(a.get("field", ""))) == _as_int(a.get("equals")) for r in hit),
+              "field_absent": op == "field_absent" and not any(
+                  contains_phrase(r.get(f, "") or "", c) for r in hit
+                  for f in (a.get("fields") or [a.get("field", "")]) for c in (a.get("field_contains") or [])),
               }[op]
         if not ok:
             failed.append(i)

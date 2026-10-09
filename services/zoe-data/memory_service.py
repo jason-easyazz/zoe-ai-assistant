@@ -1162,6 +1162,30 @@ def _invalidate_agent_user_facts_cache(user_id: str) -> None:
         logger.debug("memory_service: user facts cache invalidation skipped: %s", exc)
 
 
+def _stamp_claim(md: dict[str, Any], claim: Any) -> None:
+    """Store the extractor's claim row on the row being written (``metadata["claim"]``, JSON): polarity, modality and
+    tense decided ONCE, with the owner's verbatim quote. Nothing when there is no valid claim or the flag is off."""
+    if not claim:
+        return
+    try:
+        import structural_claims as sc
+
+        if not sc.active():
+            return
+        parsed = claim if isinstance(claim, sc.Claim) else sc.parse_claim(claim)[0]
+        if parsed is None:
+            return
+        # the quote and the value are slices of the owner's turn: they pass the SAME PII scrub the evidence excerpt does, and a claim
+        # that would carry anything the scrub touches is not stored at all (the fact beside it was scrubbed separately)
+        for field_ in (parsed.quote, parsed.obj):
+            scrubbed, reject = scrub_pii(field_)
+            if reject or scrubbed != field_:
+                return
+        md["claim"] = parsed.to_json()
+    except Exception:  # noqa: BLE001 - a stamp never costs a write
+        pass
+
+
 def _promote_event_metadata(md: dict[str, Any], extra: dict[str, Any]) -> None:
     for key in ("event_id", "evidence_refs", "relationships", "supersedes", "retention_policy"):
         value = extra.get(key)
@@ -1408,8 +1432,16 @@ class MemoryService:
         speaker_verified: Optional[bool] = None,
         captured_at: Optional[str] = None,
         hold: Optional[str] = None,
+        claim: Any = None,
+        claim_siblings: Any = (),
     ) -> Optional[MemoryRef]:
         """Store a fact. Returns None when silently dropped.
+
+        ``claim`` is the extractor's structured CLAIM ROW for this fact (``structural_claims``; a dict or ``Claim``): stored
+        on the row as ``metadata["claim"]`` (polarity / modality / tense decided once, with the owner's verbatim quote),
+        consulted by ``memory_authority.resolve_write`` per ``ZOE_STRUCTURAL_CLAIMS`` (shadow logs it beside the lexical
+        decision; enforce lets it decide). ``claim_siblings`` are the other claims of the same owner sentence (a
+        contrast's "not Y"). Without a claim the write is exactly what it was.
 
         ``hold`` (a short reason label) is the CALLER's verdict that the user's own words do not carry this fact (the nightly
         digest's observation gate, ``memory_authority.check_observation``): an ``approved`` write is stored ``pending`` - a
@@ -1450,6 +1482,19 @@ class MemoryService:
         if source in MEMORY_OPT_OUT_SOURCES and (opt_out or await _user_opted_out(user_id)):
             self._bump("opt_out", source)
             return None
+
+        # Off the record (BM5, ZOE_MEMORY_PROVENANCE_ANSWERS): what the owner asked Zoe not to keep is not stored by ANY writer - the
+        # per-turn extractors skip a marked turn, and this is the content test for everything else (the brain's own memory tool,
+        # called during the marked turn, included). A row about something else is untouched. Audit: the counter, never the words.
+        try:
+            import memory_provenance as _mp
+
+            if _mp.blocks_write(user_id, text, source_excerpt or ""):
+                self._bump("off_record", source)
+                logger.info("OFF_RECORD user=%s blocked=ingest source=%s", user_id, source)
+                return None
+        except Exception:  # noqa: BLE001 - the wall must never break a write that is not off the record
+            pass
 
         # Identity is an ACCOUNT fact, never a recalled one: an automatic writer (regex,
         # digest, consolidation, person extractor…) must not store "the user's name is X"
@@ -1565,8 +1610,9 @@ class MemoryService:
                 writer, scrubbed,
                 anchor_text=anchor_text if anchor_text is not None else source_excerpt,
                 claimed=authority, user_id=user_id, prompt_text=prompt_text,
-                speaker_verified=speaker_verified,
+                speaker_verified=speaker_verified, claim=claim, claim_siblings=claim_siblings,
             )
+            _auth.note_structural(resolved, lane=writer, user_id=user_id)
             clash = None
             if resolved.power < _auth.RANK[_auth.OPERATOR] and status == "approved" and _auth.active():
                 clash = await self._protected_conflict(user_id, scrubbed, resolved.power)
@@ -1621,6 +1667,7 @@ class MemoryService:
                 captured_at=captured_at,
             )
             metadata.update(_auth.provenance(writer, resolved, turn_ref=turn_ref or ev_turn_id))
+            _stamp_claim(metadata, claim)
             if clash is not None:
                 metadata["contradicts_id"] = clash[0].id
                 metadata["authority_blocked"] = True
@@ -1696,6 +1743,45 @@ class MemoryService:
                 name="memory_tick_access_prompt",
             )
         return rows
+
+    async def load_durable_for_hop(self, user_id: str) -> list[MemoryRef]:
+        """The OWNER's durable facts, newest first, for the personalisation hop (``personalisation_hop``): approved rows
+        the owner stated (``memory_authority`` class ``user_stated`` or above), never a mood or a recorded change, never
+        a pasted row, and only rows this user owns (a family-visible row another member wrote is not theirs). NO age
+        cut and no rank cut: ``load_for_prompt`` ranks by a 70-day decay, which is exactly what buries "I work night
+        shifts" under last week's chatter. Read-only, no access ticks. Raises nothing the caller must handle: a
+        failed read is ``[]``."""
+        if is_guest_memory_user(user_id):
+            return []
+        self._require(user_id, "user_id is required")
+        try:
+            return await self._run_sync(self._durable_rows_sync, user_id)
+        except Exception as exc:
+            logger.warning("memory_service: load_durable_for_hop failed user=%s: %s", user_id, exc)
+            return []
+
+    def _durable_rows_sync(self, user_id: str) -> list[MemoryRef]:
+        now = datetime.datetime.now(datetime.timezone.utc)
+        uid = str(user_id).strip().lower()
+        out: list[MemoryRef] = []
+        for ref in self._visible_rows(user_id, now):
+            md = ref.metadata or {}
+            if str(md.get("status") or "approved").strip().lower() != "approved":
+                continue
+            if str(md.get("user_id") or md.get("wing") or "").strip().lower() != uid:
+                continue
+            if str(md.get("memory_type") or "").lower() in _DECAYING_TYPES:
+                continue
+            if _own_words.is_pasted_row(md) or _own_words.instruction_shaped(ref.text or ""):
+                continue
+            try:
+                if _auth.row_rank(md, ref.text) < _auth.USER_RANK:
+                    continue
+            except Exception:  # noqa: BLE001 - an unclassifiable row is not provably the owner's
+                continue
+            out.append(ref)
+        out.sort(key=lambda r: float((r.metadata or {}).get("added_ts") or 0.0), reverse=True)
+        return out
 
     async def load_recent_for_prompt(
         self, user_id: str, *, window_s: float, limit: int, emotional_first: bool = False
@@ -1898,6 +1984,19 @@ class MemoryService:
                 await exact_words.delete_user(user_id)
             except Exception as exc:
                 raise MemoryServiceError(f"delete_user failed: exact-turn erasure failed ({type(exc).__name__})") from exc
+            # ... and the night mind's observations (quotes of the same words), threads and run counts - same rule, fail closed
+            try:
+                import night_mind
+                await night_mind.delete_user(user_id)
+            except Exception as exc:
+                raise MemoryServiceError(f"delete_user failed: night-mind erasure failed ({type(exc).__name__})") from exc
+            # The member's mutes and thread classes (restraint.py): topic stems and class labels, no words, but a
+            # right-to-be-forgotten leaves nothing of the person. Best-effort: a store without migration 0040 has none.
+            try:
+                import restraint
+                await restraint.erase_user(user_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("memory_service: restraint rows not erased for a deleted user (%s)", type(exc).__name__)
             needles: list[str] = []
             try:
                 ids = await self._run_sync(self._list_ids_for_user, user_id)
@@ -1933,6 +2032,11 @@ class MemoryService:
                 for key in stale_keys:
                     self._seen_keys.discard(key)
             _invalidate_agent_user_facts_cache(user_id)
+            try:   # BM5: the in-process "what my last reply stood on" ledger and off-the-record marks go with the user
+                import memory_provenance
+                memory_provenance.reset(user_id)
+            except Exception:  # noqa: BLE001
+                pass
             return len(ids)
 
     async def list_by_status(
@@ -2077,8 +2181,12 @@ class MemoryService:
         origin: Optional[str] = None,
         prompt_text: Optional[str] = None,
         speaker_verified: Optional[bool] = None,
+        claim: Any = None,
+        claim_siblings: Any = (),
     ) -> Optional[MemoryRef]:
         """Approve / reject / edit a pending memory.
+
+        ``claim`` / ``claim_siblings`` (``edit`` only): the claim row of the NEW fact, exactly as ``ingest`` takes it.
 
         Authority (``memory_authority``): an ``edit`` writes a NEW row stamped with the
         NEW writer's provenance - ``source`` / ``origin`` = this ``actor``, ``session_id`` =
@@ -2183,7 +2291,7 @@ class MemoryService:
             current, decision=decision, actor=origin or actor, user_id=user_id, edits=edits,
             anchor_text=anchor_text if anchor_text is not None else source_excerpt,
             authority=authority, session_id=session_id, prompt_text=prompt_text,
-            speaker_verified=speaker_verified,
+            speaker_verified=speaker_verified, claim=claim, claim_siblings=claim_siblings,
         ):
             self._bump("authority_block", actor)
             return None
@@ -2270,8 +2378,9 @@ class MemoryService:
                 writer, scrubbed,
                 anchor_text=anchor_text if anchor_text is not None else source_excerpt,
                 claimed=authority, user_id=user_id, prompt_text=prompt_text,
-                speaker_verified=speaker_verified,
+                speaker_verified=speaker_verified, claim=claim, claim_siblings=claim_siblings,
             )
+            _auth.note_structural(edit_res, lane=writer, user_id=user_id)
             edit_source = writer if _auth.is_known_writer(writer) else "review_ui"
             carried_excerpt = (
                 None if edit_res.rank < _auth.USER_RANK
@@ -2341,6 +2450,7 @@ class MemoryService:
                     continue
                 new_meta[key] = value
             new_meta.update(_auth.provenance(writer, edit_res, turn_ref=turn_ref))
+            _stamp_claim(new_meta, claim)
             new_id = _memory_id(user_id, scrubbed, new_meta)
             new_meta["supersedes_id"] = mem_id
             new_meta["reviewed_by"] = actor
@@ -2450,6 +2560,62 @@ class MemoryService:
         if not new_m.get("supersedes_id"):
             new_m["supersedes_id"] = old_id
         col.update(ids=[old_id, new_id], metadatas=[old_m, new_m])
+        return True
+
+    async def retire_with_quote(
+        self, user_id: str, old_id: str, *, quote: str, turn_ref: str, lane: str, cue: str = "",
+        actor: str = "quote_retire",
+    ) -> bool:
+        """Retire ``old_id`` because the OWNER said, in their own words, that it is no longer true (``memory_retire``).
+
+        There is no successor row: the sentence IS the evidence. Under the per-user lock it re-reads the row and acts only
+        when the row belongs to ``user_id``, is still ``approved``, is a person-fact (not a tombstone), is not a row only an
+        operator may change, and ``quote`` is a non-empty sentence that survives the PII scrub. The row then goes to
+        ``status=superseded`` with ``invalid_at`` = now and ``expired_at`` (the two timelines: ``search(as_of=)`` before now still
+        returns it; the text is never touched, nothing is deleted) and carries the verbatim sentence (``retire_quote``), the
+        turn (``retire_turn_ref``), the lane and the cue that opened the door. ``col.update`` without documents keeps the
+        embedding. The audit row names the retirement and never the sentence. Never raises; True only when a row changed."""
+        quote = (scrub_source_excerpt(quote, limit=300) or "").strip()
+        if not user_id or not old_id or not quote or lane not in ("chat", "voice"):
+            return False
+        lock = self._user_locks.setdefault(user_id, asyncio.Lock())
+        try:
+            async with lock:
+                done = await self._run_sync(self._retire_with_quote_sync, user_id, old_id, quote, turn_ref, lane, cue)
+        except Exception as exc:
+            logger.warning("memory_service: retire_with_quote failed id=%s: %s", old_id, type(exc).__name__)
+            return False
+        if done:
+            await self._append_audit(
+                mem_id=old_id, user_id=user_id, actor=actor, action="supersede",
+                before={"status": "approved"}, after={"status": "superseded", "retired_by": "quote_retire"},
+                reason=f"quote-backed retirement ({lane})",
+            )
+            _invalidate_agent_user_facts_cache(user_id)
+        return bool(done)
+
+    def _retire_with_quote_sync(self, user_id: str, old_id: str, quote: str, turn_ref: str, lane: str, cue: str) -> bool:
+        from memory_supersede import _is_target          # lazy: memory_supersede imports the card, which reads this module
+
+        col = self._collection()
+        got = col.get(ids=[old_id], include=["metadatas", "documents"])
+        ids_ = got.get("ids") or []
+        if old_id not in ids_:
+            return False
+        meta = dict((got.get("metadatas") or [{}])[0] or {})
+        doc = (got.get("documents") or [""])[0] or ""
+        if str(meta.get("user_id") or meta.get("wing") or "") != user_id:
+            return False
+        if not _is_target(meta):                         # approved, a person-fact, not a tombstone
+            return False
+        if _auth.active() and not _auth.may_override(_auth.USER_RANK, _auth.row_class(meta, doc)):
+            return False                                 # the owner's words outrank everything but an operator's cleanup
+        now = datetime.datetime.now(datetime.timezone.utc).timestamp()
+        meta.update(status="superseded", retired_by="quote_retire", retire_quote=quote,
+                    retire_turn_ref=str(turn_ref or "")[:64], retire_lane=lane, retire_cue=str(cue or "")[:40],
+                    retire_at=now)
+        meta.update(_temporal.retire_fields(meta, None, now=now))
+        col.update(ids=[old_id], metadatas=[meta])
         return True
 
     async def restore_superseded(
@@ -2680,6 +2846,8 @@ class MemoryService:
         session_id: Optional[str],
         prompt_text: Optional[str] = None,
         speaker_verified: Optional[bool] = None,
+        claim: Any = None,
+        claim_siblings: Any = (),
     ) -> bool:
         """True when ``actor`` (a writer below the user classes) may not apply ``decision`` to
         ``current`` because ``current`` outranks it. Logs ``AUTHORITY_BLOCKED`` (labels
@@ -2703,7 +2871,7 @@ class MemoryService:
                 res = _auth.resolve_write(
                     actor, (edits or current.text).strip(), anchor_text=anchor_text,
                     claimed=authority, user_id=user_id, prompt_text=prompt_text,
-                    speaker_verified=speaker_verified)
+                    speaker_verified=speaker_verified, claim=claim, claim_siblings=claim_siblings)
             else:  # archive / reject: the actor's own standing, no text to anchor
                 res = _auth.Resolved(_auth.writer_class(actor, user_id=user_id), "action")
             if _auth.may_override(res.power, _auth.row_class(meta, current.text)):
@@ -3032,6 +3200,10 @@ class MemoryService:
                     {"rows_removed": len(owned)}, None, "")
             except Exception as exc:
                 raise MemoryServiceError(f"erase_rows failed: {exc}") from exc
+            # The erased rows' idempotency keys must not outlive them: left in the fast-path cache, an explicit
+            # re-teach of the same words would be dropped as a duplicate of a row that no longer exists.
+            for key in self._seen_keys_by_user.pop(user_id, None) or ():
+                self._seen_keys.discard(key)
             report = await self._physical_erase(needles)
             self.last_erase_report = report
             _invalidate_agent_user_facts_cache(user_id)
@@ -3197,6 +3369,12 @@ class MemoryService:
             imp = score_importance(text)
             if imp > 0.0:
                 md["importance"] = imp
+        # Sensitivity class (restraint.py, ZOE_RESTRAINT): decided here, in code, from the row's own
+        # structured signals and stored beside the row. A reader trusts it only while its version and
+        # text hash match (invalidate, never delete). No-op with the flag off.
+        import restraint
+
+        restraint.stamp(md, text)
         return md
 
     def _remember_seen_key(self, user_id: str, idem_key: str) -> None:

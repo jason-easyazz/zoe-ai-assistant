@@ -32,6 +32,7 @@ import pytest
 import memory_service
 from memory_service import (
     MemoryService,
+    MemoryServiceError,
     _BoundedKeySet,
     _MAX_QUERY_HASHES,
     _SEEN_KEYS_MAX,
@@ -489,3 +490,32 @@ async def test_edit_takes_new_evidence_and_scrubs_it(svc):
         source_excerpt="no, march 25 - pin: 4455",
     )
     assert edited.metadata["source_excerpt"] == "no, march 25 - pin: [REDACTED]"
+
+
+# ── delete_user erases the night mind too (#1930) — in-process store in the unit lane, real failures still fail closed ──
+
+async def test_delete_user_erases_the_night_minds_rows_and_leaves_other_users(svc):
+    import night_store
+
+    be = night_store.get_backend()                      # the unit lane's in-process store (tests/unit/conftest.py)
+    assert isinstance(be, night_store.MemoryBackend)
+    for uid in ("u1", "u2"):
+        await be.put_observation(night_store.obs_row(id=f"o-{uid}", user_id=uid, thread_id="t", turn_id=f"turn-{uid}",
+                                                     quote="my words", said_at="2026-10-01T10:00:00Z", state="approved"))
+    await svc.delete_user("u1", actor="admin")
+    assert await be.observations("u1") == []
+    assert len(await be.observations("u2")) == 1
+
+
+async def test_delete_user_still_fails_closed_when_the_night_erase_really_fails(svc, monkeypatch):
+    """The in-process store only supplies a working backend where the lane has no pool; it must never turn a REAL erase
+    failure into a silent success (the 'db_pool not initialised' RuntimeError of the bare SQL backend included)."""
+    import night_store
+
+    class Broken(night_store.MemoryBackend):
+        async def delete_user(self, user_id):
+            raise RuntimeError("db_pool not initialised — call init_pool() first")
+
+    monkeypatch.setattr(night_store, "_backend", Broken())
+    with pytest.raises(MemoryServiceError, match="night-mind erasure failed"):
+        await svc.delete_user("u1", actor="admin")

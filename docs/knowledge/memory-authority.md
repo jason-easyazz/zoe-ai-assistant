@@ -337,3 +337,7 @@ rank 0. **Not run against the live palace.**
   never resurface, the validity backfill plan, and the ZMB controls (`event_time`, `history`, `invalidate`) turning their cells red.
 * `test_identity_facts.py` - the digest-replay control now removes BOTH walls; removing only #1866's
   leaves the genuine row standing (defence in depth).
+
+## Structural floors (2026-10-09)
+
+The lexical anchoring / promotion rule above reads English prose; `ZOE_STRUCTURAL_CLAIMS` (off | shadow default | enforce) adds the extractor's claim row beside it. See [structural-floors.md](structural-floors.md): the claim row, what authorises versus what only vetoes, retirement by claim key, id-triple roles, the shadow logs and the enforce checklist.

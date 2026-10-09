@@ -874,6 +874,7 @@ async def _load_recent_user_messages(
     # the fact would be written in the wrong user's store. Reuses the digest's
     # canonical owner expression (no literal '?' — the compat layer counts them).
     from memory_digest import _message_owner_expr  # type: ignore[import]
+    from memory_provenance import off_record_sql as _off_record_sql
 
     owner_expr = _message_owner_expr()
     cur = (current_message or "").strip()
@@ -883,7 +884,7 @@ async def _load_recent_user_messages(
                 "SELECT cm.content FROM chat_messages cm "
                 "JOIN chat_sessions cs ON cm.session_id = cs.id "
                 "WHERE cm.session_id = ? AND cm.role = 'user' "
-                f"AND {owner_expr} = ? "
+                f"AND {owner_expr} = ? AND {_off_record_sql('cm')} "
                 "ORDER BY cm.created_at::timestamptz DESC LIMIT ?",
                 (session_id, user_id, limit),
             )
@@ -941,6 +942,14 @@ async def extract_and_ingest(
     """
     from memory_service import get_memory_service
 
+    # BM5: an off-the-record turn is never extracted, whichever lane calls this (chat, voice, the legacy agent, the teach lane).
+    try:
+        import memory_provenance as _mp
+
+        if _mp.is_off_record(user_id, user_message):
+            return 0
+    except Exception:  # noqa: BLE001
+        pass
     if prev_user_message is None:
         cur = (user_message or "").strip()
         prev_user_message = recall_prev_user_turn(user_id, session_id)

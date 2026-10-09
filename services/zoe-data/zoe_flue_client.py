@@ -1069,7 +1069,23 @@ async def _recall_context_block(message: str, user_id: str) -> str:
             import role_guess_guard
 
             names = [p.name for p in named if getattr(p, "name", "")]
-            rule = role_guess_guard.rule_line(names, packet)
+            # Structural floors (ZOE_STRUCTURAL_CLAIMS shadow|enforce): the role guard's evidence is the user's people-graph id
+            # TRIPLES (role_triples; one bounded read, only on a turn that already named a person). enforce awaits it here (the
+            # "not stated" marker below reads it; <= 0.4 s, a failed read fails closed); shadow starts it as a background task the
+            # reply filter collects AFTER the brain has answered, so shadow adds nothing to the time before first audio. Off: no read.
+            triples, ids, pending = None, {}, None
+            if role_guess_guard.mode() != "off":
+                import structural_claims
+
+                if structural_claims.active():
+                    import role_triples
+
+                    ids = {p.name: getattr(p, "person_id", "") for p in named if getattr(p, "name", "")}
+                    if structural_claims.enforcing():
+                        triples = await role_triples.fetch(user_id)
+                    else:
+                        pending = asyncio.ensure_future(role_triples.fetch(user_id))
+            rule = role_guess_guard.rule_line(names, packet, triples=triples, ids=ids)
             guard_sink = _ROLE_GUARD_SINK.get()
             if guard_sink is not None and role_guess_guard.mode() != "off":
                 # not only the unstated people: also those the packet relates to SOMEBODY ELSE only
@@ -1078,10 +1094,56 @@ async def _recall_context_block(message: str, user_id: str) -> str:
                 if guarded:
                     guard_sink["names"] = guarded
                     guard_sink["packet"] = packet
+                    if triples is not None:
+                        guard_sink["triples"] = triples
+                    if pending is not None:
+                        guard_sink["triples_task"] = pending
+                    guard_sink["ids"] = ids
+            if pending is not None and (guard_sink is None or "triples_task" not in guard_sink):
+                pending.cancel()      # nobody will collect it
         except Exception as exc:  # noqa: BLE001 - the guard must never break a turn
             logger.debug("role guess guard setup failed (non-fatal): %s", type(exc).__name__)
     body = f"{packet}\n{rule}" if rule else packet
     return f"{_recall_block_open()}\n{body}\n{_RECALL_BLOCK_CLOSE}"
+
+
+# ── Personalisation hop (ZOE_PERSONALISATION_HOP, default ON) ───────────────
+#
+# Samantha day-sim S9a / S9b: "Any tips for sleeping better?" from a user who told Zoe they work night shifts
+# got generic night-time advice; "What should I wear tomorrow? It's meant to be really cold." from a 6am dog
+# walker got "fine without a jacket". Neither is a recall question, so no packet was fetched, and the two facts
+# share no words with the questions. On a GENERIC-ADVICE request the owner's (<= 2) durable facts that change the
+# answer ride with the user's words under "Shape the answer by" (``personalisation_hop``). Same wire position as
+# the continuity block - inside the latest user message, after the user's words - so the sidecar prefix and the
+# prompt cache are untouched. One block per turn: never beside a recall / continuity / verify / raise / brief block.
+_HOP_BLOCK_OPEN = (
+    "[MEMORY CONTEXT — something this user told you that changes generic advice; "
+    "use it silently; do not mention this block]"
+)
+
+
+async def _hop_context_block(message: str, user_id: str) -> str:
+    """The delimited personalisation block for this turn, or '' - NEVER raises. '' unless the flag is ON, a real
+    user id is present, the message is a request for generic advice and a durable fact of the owner's is a known
+    constraint for its topic. A slow or failing read costs only the block."""
+    if not (user_id or "").strip():
+        return ""
+    try:
+        import personalisation_hop
+
+        hop = await personalisation_hop.build(user_id, message)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("seam personalisation hop failed (non-fatal): %s", type(exc).__name__)
+        return ""
+    if not hop:
+        return ""
+    try:   # BM5: this reply stood on these durable rows - "why did you say that?" must name them, not say nothing was used
+        import memory_provenance as _mp_hop
+
+        _mp_hop.note_served(user_id, [(f.id, f.text) for f in hop.facts])
+    except Exception:  # noqa: BLE001 - bookkeeping must never fail a turn
+        pass
+    return f"{_HOP_BLOCK_OPEN}\n{hop.section()}\n{_RECALL_BLOCK_CLOSE}"
 
 
 # ── Continuity injection (ZOE_SEAM_CONTINUITY_INJECT, default ON) ───────────
@@ -1668,6 +1730,35 @@ async def _run_turn_aggregated_wire2(
     yield _FALLBACK_TEXT
 
 
+def _owed_questions(user_id: str) -> list:
+    """The questions the reply of THIS turn is meant to voice: the pending contact offer the seam injected
+    (``contacts_conversation.record_asked``, S16). Never raises."""
+    try:
+        import contacts_conversation as _cc
+
+        asked = _cc.get_asked((user_id or "").strip())
+        return [asked["question"]] if asked and asked.get("question") else []
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _resolve_clarification(message: str, user_id: str, session_id: str) -> str:
+    """``ask_when_ambiguous.resolve_followup`` that can never fail the turn: the original request with the
+    chosen full name when ``message`` answers Zoe's one clarifying question, else ``message`` unchanged."""
+    try:
+        import ask_when_ambiguous
+
+        if ask_when_ambiguous.mode() == "off" or not ask_when_ambiguous.has_pending((user_id or "").strip(), session_id):
+            return message
+        rewritten = ask_when_ambiguous.resolve_followup(message, (user_id or "").strip(), session_id)
+        if rewritten:
+            logger.info("ASK_WHEN_AMBIGUOUS followup=resolved")
+            return rewritten
+    except Exception as exc:  # noqa: BLE001 - a clarification is optional; the turn is not
+        logger.debug("ask_when_ambiguous followup failed (non-fatal): %s", type(exc).__name__)
+    return message
+
+
 async def run_flue_brain_streaming(
     message: str,
     session_id: str,
@@ -1687,8 +1778,23 @@ async def run_flue_brain_streaming(
     The proactivity selector's ``[RAISE …]`` (ZOE_PROACTIVE_SELECTOR, default OFF)
     follows the same prepare/settle contract; the brief wins a turn they share."""
     import brief_first_turn
+    import restraint
     from proactive import selector as proactive_selector
 
+    # The owner's short answer to the one clarifying question Zoe asked ("Which Marisol?" -> "the sister"):
+    # the brain gets the original request with the full name in it (ask_when_ambiguous, ZOE_ASK_WHEN_AMBIGUOUS).
+    # In-memory dict lookup, no I/O; the pending question is consumed by the next turn whatever it says.
+    _spoken = message   # the member's own words, for the mute check (the clarification rewrite below is Zoe's)
+    message = _resolve_clarification(message, user_id, session_id)
+    # A spoken mute ("don't mention that again", "leave it"; ZOE_RESTRAINT): recorded here, before the
+    # brain, so the very next brief / raise / packet honours it. In enforce the acknowledgement is
+    # spoken by code (the verify-on-challenge pattern: no model call, instant, never improvised);
+    # in shadow it is recorded and the brain replies as usual.
+    ack = "" if kwargs.get("replay_isolation") else await restraint.handle_turn(_spoken, user_id, session_id)
+    if ack:
+        _record_outcome(kwargs.get("outcome_sink"), FLUE_OUTCOME_SEAM_REPLY, "restraint_mute")
+        yield ack
+        return
     brief = await brief_first_turn.prepare(message, user_id, session_id)
     raised = await proactive_selector.prepare(
         message, user_id, session_id, brief_active=brief is not None)
@@ -1710,6 +1816,13 @@ async def run_flue_brain_streaming(
         import narration_filter
 
         turn = narration_filter.filter_stream(turn)
+    # A clean goodbye, a plain "are you there?", a silence never remarked on (clean_goodbye, ZOE_CLEAN_GOODBYE):
+    # holds the reply ONLY on such a turn (a few anchored regexes on the user's words); every other turn streams
+    # byte-identical. Outermost, so it cleans the text the owner would actually hear.
+    import clean_goodbye
+
+    turn = clean_goodbye.filter_stream(turn, message, passthrough=(_FALLBACK_TEXT,),
+                                       owed=lambda: _owed_questions(user_id))
     debug = await _continuity_debug_uid((user_id or "").strip())
     reply: list[str] = []
     emitted = False  # real reply text went out (never a sentinel or the fallback)
@@ -1790,11 +1903,23 @@ async def _run_flue_brain_streaming_turn(
     from recall_evidence import note_turn
 
     note_turn(uid, message)
+    # Quote-backed retirement (ZOE_QUOTE_RETIRE, default shadow): note THIS turn so the brain's `memory_retire` tool - which
+    # sends only a number - is about the owner's own sentence, put here by trusted code. A spoken turn is marked: its
+    # change of state is judged off the turn by the digest, never by the brain. Never raises; a dict write.
+    import memory_retire
+
+    memory_retire.note_turn(uid, message, voice=bool(kwargs.get("voice_mode")))
+
     # the owner asked for their own words ("what exactly did I say about ..."): the recall_memory tool call made during this
     # turn carries only the model's query, so the turn's question is noted for /for-prompt's exact-words block (exact_words)
     from exact_words import note_turn as note_exact_turn
 
     note_exact_turn(uid, message)
+    # ZOE_RESTRAINT: the owner's words + the speaker gate's verdict for this turn, so a recall_memory TOOL
+    # call (which carries only the model's query) is filtered against what the owner actually asked.
+    import restraint
+
+    restraint.note_turn(uid, message)
     # Back a claim up when challenged (ZOE_VERIFY_ON_CHALLENGE, default OFF; no
     # DB read, no search, no change to the bytes when off): "are you sure" after
     # a world-fact answer runs ONE bounded web search. A hit rides as a block
@@ -1824,6 +1949,13 @@ async def _run_flue_brain_streaming_turn(
     if not recall_block and not verify_block:
         continuity_block = await _continuity_context_block(message, uid)
         continuity_turn = is_continuity_turn(message, uid)
+    # Personalisation hop (default ON): a generic-advice request carries the durable fact that changes the
+    # answer. Exclusive with every other block that asks the 4B for one job (recall owns question turns,
+    # continuity the check-in, verify the live check, raise / brief their one mention).
+    hop_block = ""
+    if not (recall_block or verify_block or continuity_block or continuity_turn
+            or kwargs.get("raise_block") or kwargs.get("day_brief_block")):
+        hop_block = await _hop_context_block(message, uid)
     # Offer nudge on ANY turn — skipped when the recall packet already carries
     # the offer directive (the fold tags them "[pending-contact]"), so a
     # recall-shaped turn never asks twice. DEFERRED on a continuity turn: the
@@ -1849,6 +1981,16 @@ async def _run_flue_brain_streaming_turn(
     # order is fixed: identity → recall → offer → the user's words. "" when the flag is
     # off or the id is not a registered account → the bytes are exactly what they were.
     identity_block = await _identity_context_block(uid)
+    # BM5 (ZOE_MEMORY_PROVENANCE_ANSWERS): label the stored-context blocks this turn carries that do not come through /for-prompt,
+    # so "why did you say that?" does not call a reply that offered to add a contact memory-free. Labels only; the message is
+    # not touched (the sidecar prefix and the prompt cache are unaffected).
+    try:
+        import memory_provenance as _mp_ctx
+
+        _mp_ctx.note_context(uid, *[k for k, b in (("offer", offer_block), ("raise", raise_block),
+                                                   ("brief", str(kwargs.get("day_brief_block") or ""))) if b])
+    except Exception:  # noqa: BLE001
+        pass
     _blocks = "\n".join(b for b in (identity_block, recall_block, offer_block) if b)
     # Sanitise BEFORE assembling: a user-typed " zoe-replay:" line must never reach
     # the start of the outbound message and forge the trusted marker. Only reachable
@@ -1858,6 +2000,8 @@ async def _run_flue_brain_streaming_turn(
     brain_message = f"{_blocks}\n{safe_message}" if _blocks else safe_message
     if continuity_block:
         brain_message = f"{brain_message}\n{continuity_block}"
+    if hop_block:
+        brain_message = f"{brain_message}\n{hop_block}"
     # First-turn day brief (brief_first_turn, default OFF): same position as the
     # continuity block — after the user's words, inside the latest user message.
     day_block = str(kwargs.get("day_brief_block") or "")

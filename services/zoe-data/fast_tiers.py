@@ -239,6 +239,18 @@ def intent_gate_decision(intent_name: str, verdict: Optional[dict]) -> tuple[str
     return "veto", "router_disagrees"
 
 
+# "Forget that." is a whole-utterance retraction COMMAND. The router head sees only its bare words, which name no
+# domain: live 2026-10-09 it said chat@0.84, the gate vetoed `memory_forget_last`, and the brain answered "I'm not
+# sure what you'd like me to forget" with the row still stored - so a fact the owner asked Zoe to remember could not
+# be retracted. The intent regex is anchored to the whole utterance; when it STARTS with the forget verb the command
+# is explicit and the head has nothing to add. ("delete that" stays gated: it names no memory and is also what a
+# person says about a list item or an event.)
+import re as _re
+
+_EXPLICIT_FORGET_RE = _re.compile(r"^\s*(?:please\s+)?(?:forget\s+|never\s+mind\s+what\s+i\b|scrap\s+what\s+i\b)",
+                                  _re.IGNORECASE)
+
+
 def intent_gate(intent_name: str, text: str, *, lane: str) -> bool:
     """True = the keyword intent may execute. Runs the head (numpy, no sidecar)
     only for an intent that has a router class; logs
@@ -246,6 +258,9 @@ def intent_gate(intent_name: str, text: str, *, lane: str) -> bool:
     NEVER raises (a gate failure allows, i.e. today's behaviour)."""
     try:
         if not intent_gate_enabled() or intent_name not in _INTENT_ROUTER_DOMAINS:
+            return True
+        if intent_name == "memory_forget_last" and _EXPLICIT_FORGET_RE.match(text or ""):
+            logger.info("INTENT_GATE lane=%s intent=%s decision=allow reason=explicit_forget_command", lane, intent_name)
             return True
         import semantic_router as _sr
 
@@ -326,6 +341,43 @@ async def _tier0(text: str, user_id: str, defer_intents: frozenset[str] = frozen
         return None
 
 
+async def _person_half_tier(text: str, user_id: str, session_id: str, speaker_verified: Optional[bool] = None, *, dry: bool = False):
+    """Two deterministic tiers for the person half (Samantha person bench P5a/P7/P12), ahead of the router, the
+    keyword intents and the brain, so a held fact never reaches a model that could cave and an ambiguous target
+    is asked about BEFORE any tool call or write. Each is ``shadow`` by default (logs what it would do, changes
+    nothing) and returns None unless it is ``enforce`` AND the turn is unmistakably its own:
+
+    * ``ZOE_HOLD_THE_FACT`` (``hold_the_fact``) - "No, I'm sure it's Thursday." against a fact the OWNER stated:
+      keep it, disagree once, offer to change it; the second explicit confirmation edits the row.
+    * ``ZOE_ASK_WHEN_AMBIGUOUS`` (``ask_when_ambiguous``) - "Tell me about Marisol." with two Marisols: ONE question
+      that names the choice; a clear turn is never asked.
+    NEVER raises."""
+    try:
+        import hold_the_fact as _htf
+
+        if _htf.mode() != "off":
+            reply = await _htf.handle(text, user_id, session_id, speaker_verified=speaker_verified, allow_writes=not dry)
+            if reply:
+                import expert_dispatch as _xd
+
+                return _xd.DispatchResult(
+                    domain="memory", reply=reply, intent="hold_the_fact", tier="hold_the_fact",
+                )
+        import ask_when_ambiguous as _awa
+
+        if _awa.mode() != "off":
+            reply = await _awa.handle(text, user_id, session_id)
+            if reply:
+                import expert_dispatch as _xd
+
+                return _xd.DispatchResult(
+                    domain="people", reply=reply, intent="ask_when_ambiguous", tier="ask_when_ambiguous",
+                )
+    except Exception as exc:  # never let the tier break a turn
+        logger.warning("fast_tiers person-half tier failed (non-fatal): %s", exc)
+    return None
+
+
 async def _conversation_quality_tier(text: str, user_id: str, session_id: str):
     """Two flag-dark deterministic tiers that run BEFORE everything else (a correction or
     a pasted roster must never be answered by a generic apology / a guessed role):
@@ -367,6 +419,44 @@ async def _conversation_quality_tier(text: str, user_id: str, session_id: str):
     return None
 
 
+async def _pull_tier(text: str, user_id: str, session_id: str, channel: Optional[str],
+                     extra_ctx: Optional[dict], *, dry: bool = False):
+    """Pull, not push (``ZOE_PULL_NOT_PUSH``, default on): "what's up?" / "anything for me?"
+    delivers what the selector is holding, once, and "not now" / "that was welcome" right after a
+    raise or a pull is the person's one-tap signal. Deterministic, whole-utterance phrases only
+    (``proactive.pull``); acts only for a real member with something to deliver or a recent
+    delivery to tap about, and returns None otherwise - so the router and the brain answer every
+    other turn exactly as before. Zoe never speaks first here: the person asked."""
+    try:
+        import proactive.pull as _pl
+
+        if not _pl.pull_enabled():
+            return None
+        kind = _pl.classify(text)
+        if kind is None:
+            return None
+        import expert_dispatch as _xd
+
+        lane = (channel or "chat").strip().lower() or "chat"
+        if kind.startswith("tap:"):
+            if dry:      # a tap only records a signal: a dry replay has none to record
+                return None
+            reply = await _pl.tap(user_id, text, channel=lane)
+            if not reply:
+                return None
+            return _xd.DispatchResult(domain="proactive", reply=reply,
+                                      intent=f"pull_{kind[4:]}", tier="pull")
+        res = await _pl.pull(user_id, session_id, channel=lane,
+                             speaker_verified=(extra_ctx or {}).get("speaker_verified"), commit=not dry)
+        if res is None:
+            return None
+        return _xd.DispatchResult(domain="proactive", reply=res.reply, intent="pull",
+                                  ui=res.ui, tier="pull", meta={"delivered": res.delivered})
+    except Exception as exc:  # never let the tier break a turn
+        logger.warning("fast_tiers pull tier failed (non-fatal): %s", exc)
+        return None
+
+
 async def _identity_tier(text: str, user_id: str):
     """Own-identity question → one sentence built from the ACCOUNT, before recall.
 
@@ -387,6 +477,29 @@ async def _identity_tier(text: str, user_id: str):
         )
     except Exception as exc:  # never let the tier break a turn
         logger.warning("fast_tiers identity tier failed (non-fatal): %s", exc)
+        return None
+
+
+async def _ask_to_remember_tier(text: str, user_id: str, session_id: str, speaker_verified: Optional[bool], *, dry: bool = False):
+    """The owner's explicit "remember that ..." (Samantha bar S11, ``ZOE_ASK_TO_REMEMBER``, default ON): stored
+    verbatim as a ``user_stated`` row and confirmed in ONE sentence that is only said once the row is written
+    (``ask_to_remember``). Runs on every channel that uses this core - chat, voice, LiveKit, Telegram - because the
+    4B brain under-fires its ``remember_fact`` tool and then says "I'll remember" either way. Acts only on an
+    unmistakable ask (one anchored regex first, so any other turn costs nothing) and returns None otherwise, so the
+    brain answers every other turn exactly as before. NEVER raises."""
+    try:
+        import ask_to_remember as _atr
+
+        reply = await _atr.handle(text, user_id, session_id, speaker_verified=speaker_verified, allow_writes=not dry)
+        if not reply:
+            return None
+        import expert_dispatch as _xd
+
+        return _xd.DispatchResult(
+            domain="memory", reply=reply, intent="ask_to_remember", tier="ask_to_remember",
+        )
+    except Exception as exc:  # never let the tier break a turn
+        logger.warning("fast_tiers ask-to-remember tier failed (non-fatal): %s", exc)
         return None
 
 
@@ -414,6 +527,9 @@ async def resolve(
     `allow_writes=False` keeps the read/recall fast path but defers WRITE intents.
     """
     prof = profile_for(channel)
+    # An EXPLICIT allow_writes=False (the replay harness) is not the chat profile's default of False: every tier that would write
+    # (remember / forget, edit a held fact, mark a pull delivered) honours it; the chat default does not stop those, only slot-filled intents.
+    dry = allow_writes is False
     if allow_writes is None:
         allow_writes = bool(prof.get("allow_writes", True))
     if run_tier0 is None:
@@ -428,11 +544,31 @@ async def resolve(
         if cq is not None:
             return cq
 
+        # Pull, not push: "what's up?" delivers what is pending, once (deterministic).
+        pt = await _pull_tier(text, user_id, session_id, channel, extra_ctx, dry=dry)
+        if pt is not None:
+            return pt
+
+        # The person half: hold an owner-stated fact against a bare "No, I'm sure it's X";
+        # ask ONE question when a request names a person two contacts share.
+        ph = await _person_half_tier(text, user_id, session_id, (extra_ctx or {}).get("speaker_verified"), dry=dry)
+        if ph is not None:
+            return ph
+
         # Identity facts come from the account, never from memory.
         if prof.get("identity_tier"):
             idt = await _identity_tier(text, user_id)
             if idt is not None:
                 return idt
+
+        # The owner's explicit "remember that ..." - a deterministic write with its own honest reply,
+        # before the router and the brain (ZOE_ASK_TO_REMEMBER). Not gated by the chat profile's allow_writes default (it needs no
+        # slot-extraction LLM call, the reason chat defers writes; a registered account only) - but an EXPLICIT allow_writes=False
+        # (the replay harness runs on the real member's memory) turns its writes off.
+        atr = await _ask_to_remember_tier(
+            text, user_id, session_id, (extra_ctx or {}).get("speaker_verified"), dry=dry)
+        if atr is not None:
+            return atr
 
         # Tier-0 — deterministic regex read shortcut (opt-in per channel).
         # `tier0_defer_intents` (from the channel profile) names read intents this
@@ -512,3 +648,63 @@ try:  # pragma: no cover - import-time alias
     from expert_dispatch import DispatchResult as TurnOutcome  # noqa: F401
 except Exception:  # pragma: no cover
     TurnOutcome = None  # type: ignore
+
+
+# ── BM5: provenance answers + memory control (ZOE_MEMORY_PROVENANCE_ANSWERS, default ON) ─────────────────────────────
+#
+# "why did you say that?", "what do you know about me?", "that's wrong, it's X" / "forget it" right after an answer, and the
+# off-the-record verb are ONE deterministic tier in front of everything above (provenance_answers). It is applied as a wrapper
+# AROUND ``resolve`` - defined last, so every caller (chat, voice, LiveKit, Telegram) gets it through the unchanged name and the
+# tiers' own bodies stay untouched - and the wrapper also records, for every OTHER tier's reply, that a deterministic tier (not
+# the memory packet) answered, so "why did you say that?" can say so instead of explaining the wrong reply.
+import functools as _functools
+
+_resolve_core = resolve
+
+
+async def _provenance_tier(text: str, user_id: str, session_id: str, kwargs: dict):
+    """The provenance / memory-control tier, or None. Numbers the turn and claims an off-the-record turn FIRST (every turn, so the
+    ledger stays aligned), then answers a recognised shape. NEVER raises."""
+    try:
+        import memory_provenance as _mp
+
+        if not _mp.enabled():
+            return None
+        uid = (user_id or "").strip()
+        if not uid:
+            return None
+        _mp.note_user_turn(uid, text, session_id)
+        _mp.claim_turn(uid, text)
+        import provenance_answers as _pa
+
+        reply = await _pa.handle(
+            text, uid, session_id, channel=kwargs.get("channel"),
+            speaker_verified=(kwargs.get("extra_ctx") or {}).get("speaker_verified"),
+            allow_writes=kwargs.get("allow_writes") is not False,
+        )
+        if not reply:
+            return None
+        _mp.note_direct_reply(uid, "provenance", session_id)
+        import expert_dispatch as _xd
+
+        return _xd.DispatchResult(domain="memory", reply=reply, intent="provenance_answer", tier="provenance")
+    except Exception as exc:  # never let the tier break a turn
+        logger.warning("fast_tiers provenance tier failed (non-fatal): %s", exc)
+        return None
+
+
+@_functools.wraps(_resolve_core)
+async def resolve(text: str, user_id: str, session_id: str, **kwargs):  # noqa: F811 - the documented wrapper
+    answered = await _provenance_tier(text, user_id, session_id, kwargs)
+    if answered is not None:
+        return answered
+    res = await _resolve_core(text, user_id, session_id, **kwargs)
+    if res is not None and getattr(res, "reply", ""):
+        try:
+            import memory_provenance as _mp
+
+            _mp.note_direct_reply(user_id, getattr(res, "tier", "") or "direct", session_id,
+                                  domain=getattr(res, "domain", "") or "")
+        except Exception:  # noqa: BLE001
+            pass
+    return res

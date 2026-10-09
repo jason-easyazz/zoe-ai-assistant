@@ -1,0 +1,5255 @@
+{
+ "meta": {
+  "created": "2026-10-09",
+  "note": "Author-written ORACLE claim rows: the claim row an honest, careful extractor emits for the owner's sentence (subject, predicate, value, polarity, modality, tense, quote). They measure the structural floor's logic given a correct reading, NOT the extractor's accuracy (that is measured live in shadow: STRUCTURAL_FLOOR log lines). Where a sentence holds two statements (X, not Y) the second is a sibling claim. quote null = the whole sentence. Names synthetic.",
+  "overrides": {
+   "sup-071": {
+    "expect": "promote",
+    "why": "label artefact: the lexical promotion rule demands the owner LEAD the sentence; 'Perth is where I live' is the owner plainly stating where they live (cf. sup-121 'Perth is home for me', labelled True)"
+   }
+  },
+  "role_note": "Author-written: the id triples the evidence lines of each role row mean in the people graph (a synthetic person stands in for 'the user's friend'), and the claim the reply makes once READ (the unsolved half of the role decision, E4 in the research note). The English rows are also run through the real reply reader."
+ },
+ "support": {
+  "sup-000": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    },
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Ballarat",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "not Ballarat",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-001": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    },
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Ballarat",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "not Ballarat",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-002": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "birthday",
+     "obj": "7 August",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    },
+    {
+     "subj": "user",
+     "pred": "birthday",
+     "obj": "8 July",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "not 8 July",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-003": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "occupation",
+     "obj": "nurse",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    },
+    {
+     "subj": "user",
+     "pred": "occupation",
+     "obj": "doctor",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "not a doctor",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-004": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    },
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Ballarat",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "not Ballarat",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-005": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "birthday",
+     "obj": "7 August",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    },
+    {
+     "subj": "user",
+     "pred": "birthday",
+     "obj": "8 July",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "not 8 July",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-006": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "occupation",
+     "obj": "nurse",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    },
+    {
+     "subj": "user",
+     "pred": "occupation",
+     "obj": "doctor",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "not a doctor",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-007": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Perth",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-008": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Perth",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-009": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Perth",
+     "pol": "affirm",
+     "mod": "hedged",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-010": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-011": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-012": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-013": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-014": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    },
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Ballarat",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "not Ballarat",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-015": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    },
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Ballarat",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "not Ballarat",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-016": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    },
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Ballarat",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "not Ballarat",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-017": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    },
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Ballarat",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "not Ballarat",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-018": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    },
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Ballarat",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "not Ballarat",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-019": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    },
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Ballarat",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "not Ballarat",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-020": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    },
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Ballarat",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "not Ballarat",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-021": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Perth",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-022": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Perth",
+     "pol": "affirm",
+     "mod": "hedged",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-023": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-024": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-025": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-026": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    },
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Ballarat",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "not Ballarat",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-027": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    },
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Ballarat",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "not Ballarat",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-028": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "occupation",
+     "obj": "nurse",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    },
+    {
+     "subj": "user",
+     "pred": "occupation",
+     "obj": "doctor",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "not a doctor",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-029": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    },
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Ballarat",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "not Ballarat",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-030": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "occupation",
+     "obj": "nurse",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    },
+    {
+     "subj": "user",
+     "pred": "occupation",
+     "obj": "doctor",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "not a doctor",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-031": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-032": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Perth",
+     "pol": "affirm",
+     "mod": "hedged",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-033": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "Harbourtown half-marathon",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": "I've dropped the Harbourtown half-marathon",
+     "lang": "en"
+    },
+    {
+     "subj": "user",
+     "pred": "plan",
+     "obj": "Lakeside 12k",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "I'm doing the Lakeside 12k in August instead",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-034": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "Harbourtown half-marathon",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": "I've dropped the Harbourtown half-marathon",
+     "lang": "en"
+    },
+    {
+     "subj": "user",
+     "pred": "plan",
+     "obj": "Lakeside 12k",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "I'm doing the Lakeside 12k in August instead",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-035": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "squash",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-036": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "squash",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-037": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "membership",
+     "obj": "squash membership",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-038": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "membership",
+     "obj": "gym membership",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-039": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "membership",
+     "obj": "gym membership",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-040": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "squash",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-041": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "Harbourtown half-marathon",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-042": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "Harbourtown half-marathon",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-043": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "squash",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-044": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Perth",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-045": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "Harbourtown half-marathon",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-046": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "membership",
+     "obj": "gym membership",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-047": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "squash",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-048": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "Harbourtown half-marathon",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-049": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "Harbourtown half-marathon",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-050": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "Harbourtown half-marathon",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-051": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "Harbourtown half-marathon",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-052": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "membership",
+     "obj": "gym membership",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-053": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "squash",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-054": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Perth",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-055": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "Harbourtown half-marathon",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-056": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "Harbourtown half-marathon",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-057": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "Harbourtown marathon",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-058": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "Harbourtown marathon",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-059": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "Harbourtown marathon",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-060": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "plan",
+     "obj": "continue treatment",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-061": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "plan",
+     "obj": "keep the booking",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-062": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "plan",
+     "obj": "increase in price",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-063": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "plan",
+     "obj": "continue treatment",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-064": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "plan",
+     "obj": "stop treatment",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-065": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "plan",
+     "obj": "cancel the booking",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-066": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "plan",
+     "obj": "drop in price",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-067": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "health",
+     "obj": "migraines",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-068": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "plan",
+     "obj": "Lakeside 12k",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-069": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "health",
+     "obj": "migraines",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-070": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "plan",
+     "obj": "Lakeside 12k",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-071": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Perth",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-072": {
+   "claims": [
+    {
+     "subj": "person:Dana",
+     "pred": "birthday",
+     "obj": "May 5",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-073": {
+   "claims": [
+    {
+     "subj": "rel:sister",
+     "pred": "birthday",
+     "obj": "May 5",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-074": {
+   "claims": [
+    {
+     "subj": "person:Ingrid",
+     "pred": "other",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-075": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "name",
+     "obj": "Mika Vale",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "my name is Mika Vale",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-076": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "name",
+     "obj": "Mika Vale",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-077": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Perth",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-078": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Perth",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "I live in Perth these days",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-079": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "pet_name",
+     "obj": "Teddy",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "my dog Teddy",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-080": {
+   "claims": [
+    {
+     "subj": "rel:brother",
+     "pred": "name",
+     "obj": "Tomas",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "My brother Tomas",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-081": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "birthday",
+     "obj": "15 March 1980",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "my birthday is 15 March 1980",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-082": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "allergy",
+     "obj": "penicillin",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-083": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "tennis",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-084": {
+   "claims": [
+    {
+     "subj": "person:Casey",
+     "pred": "birthday",
+     "obj": "4th of May",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-085": {
+   "claims": [
+    {
+     "subj": "person:Mika Vale",
+     "pred": "other",
+     "obj": "coming over",
+     "pol": "affirm",
+     "mod": "hedged",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-086": {
+   "claims": [
+    {
+     "subj": "person:Mika Vale",
+     "pred": "name",
+     "obj": "Mika Vale",
+     "pol": "affirm",
+     "mod": "reported",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-087": {
+   "claims": [
+    {
+     "subj": "person:Casey",
+     "pred": "residence",
+     "obj": "Perth",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-088": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "other",
+     "obj": "Perth",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-089": {
+   "claims": [
+    {
+     "subj": "person:Teddy",
+     "pred": "other",
+     "obj": "coming over",
+     "pol": "affirm",
+     "mod": "hedged",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-090": {
+   "claims": [
+    {
+     "subj": "person:Casey",
+     "pred": "allergy",
+     "obj": "penicillin",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-091": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "birthday",
+     "obj": "March",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-092": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-093": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Hobart",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-094": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Hobart",
+     "pol": "affirm",
+     "mod": "hypothetical",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-095": {
+   "claims": [
+    {
+     "subj": "rel:sister",
+     "pred": "residence",
+     "obj": "Hobart",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-096": {
+   "claims": [
+    {
+     "subj": "person:Dana",
+     "pred": "residence",
+     "obj": "Hobart",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-097": {
+   "claims": [
+    {
+     "subj": "person:Dana",
+     "pred": "residence",
+     "obj": "Hobart",
+     "pol": "affirm",
+     "mod": "reported",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-098": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Hobart",
+     "pol": "affirm",
+     "mod": "hedged",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-099": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Hobart",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-100": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "other",
+     "obj": "Hobart",
+     "pol": "affirm",
+     "mod": "hypothetical",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-101": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Hobart",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-102": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Hobart",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-103": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "other",
+     "obj": "Harbour Dental",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-104": {
+   "claims": [
+    {
+     "subj": "rel:sister",
+     "pred": "other",
+     "obj": "Harbour Dental",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-105": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "other",
+     "obj": "Harbour Dental",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-106": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "other",
+     "obj": "Harbour Dental",
+     "pol": "ended",
+     "mod": "hypothetical",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-107": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "other",
+     "obj": "Harbour Dental",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-108": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    },
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Ballarat",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "rather than Ballarat",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-109": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    },
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Ballarat",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "not Ballarat like before",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-110": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "it's Bendigo where my mum lives",
+     "lang": "en"
+    },
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Ballarat",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "Ballarat was wrong",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-111": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    },
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Ballarat",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "not Ballarat",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-112": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    },
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Ballarat",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "not Ballarat",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-113": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-114": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "my mum does not live in Bendigo",
+     "lang": "en"
+    },
+    {
+     "subj": "rel:aunt",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "that was my aunt",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-115": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "reported",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-116": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "hypothetical",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-117": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "future",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-118": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-119": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-120": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "Mum's place is in Bendigo",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-121": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Perth",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-122": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Perth",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-123": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Perth",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-124": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Perth",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "I'm living in Perth",
+     "lang": "en"
+    },
+    {
+     "subj": "user",
+     "pred": "plan",
+     "obj": "moving",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "I'm not moving",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-125": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Perth",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-126": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Perth",
+     "pol": "affirm",
+     "mod": "question",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-127": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "smoking",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-128": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "smoking",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-129": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "smoking",
+     "pol": "ended",
+     "mod": "hypothetical",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-130": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "cigarettes",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "no more cigarettes",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-131": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "smoking",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-132": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "squash",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-133": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "squash",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "I'm done with squash",
+     "lang": "en"
+    },
+    {
+     "subj": "user",
+     "pred": "health",
+     "obj": "bad knee",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "bad knee",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-134": {
+   "claims": [
+    {
+     "subj": "rel:brother",
+     "pred": "activity",
+     "obj": "squash",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-135": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "squash",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-136": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "occupation",
+     "obj": "nurse",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "I'm a nurse",
+     "lang": "en"
+    },
+    {
+     "subj": "user",
+     "pred": "occupation",
+     "obj": "doctor",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "not a doctor",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-137": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "occupation",
+     "obj": "nurse",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "I'm a nurse",
+     "lang": "en"
+    },
+    {
+     "subj": "user",
+     "pred": "occupation",
+     "obj": "doctor",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "not a doctor",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-138": {
+   "claims": [
+    {
+     "subj": "rel:wife",
+     "pred": "occupation",
+     "obj": "nurse",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-139": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "occupation",
+     "obj": "nurse",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": "I trained as a nurse",
+     "lang": "en"
+    },
+    {
+     "subj": "user",
+     "pred": "occupation",
+     "obj": "nurse",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "I'm not one now",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-140": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "birthday",
+     "obj": "7 August",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    },
+    {
+     "subj": "user",
+     "pred": "birthday",
+     "obj": "8 July",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "not 8 July",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-141": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "birthday",
+     "obj": "seventh of August",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-142": {
+   "claims": [
+    {
+     "subj": "person:Dana",
+     "pred": "birthday",
+     "obj": "7 August",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-143": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "Harbourtown marathon",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "I'm still running the Harbourtown marathon",
+     "lang": "en"
+    },
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "pulled out",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "I never pulled out",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-144": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "Harbourtown marathon",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-145": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "plan",
+     "obj": "coming off the treatment",
+     "pol": "ended",
+     "mod": "hypothetical",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-146": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "plan",
+     "obj": "carry on with treatment",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-147": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "allergy",
+     "obj": "penicillin",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "I'm not allergic to penicillin",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-148": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "allergy",
+     "obj": "penicillin",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-149": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "pet_name",
+     "obj": "Teddy",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "Teddy, my dog",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-150": {
+   "claims": [
+    {
+     "subj": "rel:neighbour",
+     "pred": "pet_name",
+     "obj": "Teddy",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "he's my neighbour's dog",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-151": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-152": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "es"
+    }
+   ]
+  },
+  "sup-153": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "fr"
+    }
+   ]
+  },
+  "sup-154": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "de"
+    }
+   ]
+  },
+  "sup-155": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "本迪戈",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "zh"
+    }
+   ]
+  },
+  "sup-156": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "ベンディゴ",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "ja"
+    }
+   ]
+  },
+  "sup-157": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    },
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Ballarat",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "not Ballarat",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-158": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "es"
+    },
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Ballarat",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "no en Ballarat",
+     "lang": "es"
+    }
+   ]
+  },
+  "sup-159": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "fr"
+    },
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Ballarat",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "pas à Ballarat",
+     "lang": "fr"
+    }
+   ]
+  },
+  "sup-160": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "de"
+    },
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Ballarat",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "nicht in Ballarat",
+     "lang": "de"
+    }
+   ]
+  },
+  "sup-161": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "本迪戈",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "zh"
+    },
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "巴拉瑞特",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "不是巴拉瑞特",
+     "lang": "zh"
+    }
+   ]
+  },
+  "sup-162": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "ベンディゴ",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "ja"
+    },
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "バララット",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "バララットではなく",
+     "lang": "ja"
+    }
+   ]
+  },
+  "sup-163": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    },
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Ballarat",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "not Ballarat",
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-164": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "es"
+    },
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Ballarat",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "no en Ballarat",
+     "lang": "es"
+    }
+   ]
+  },
+  "sup-165": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "fr"
+    },
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Ballarat",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "pas à Ballarat",
+     "lang": "fr"
+    }
+   ]
+  },
+  "sup-166": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "de"
+    },
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Ballarat",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "nicht in Ballarat",
+     "lang": "de"
+    }
+   ]
+  },
+  "sup-167": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "本迪戈",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "zh"
+    },
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "巴拉瑞特",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "不是巴拉瑞特",
+     "lang": "zh"
+    }
+   ]
+  },
+  "sup-168": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "ベンディゴ",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "ja"
+    },
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "バララット",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": "バララットではなく",
+     "lang": "ja"
+    }
+   ]
+  },
+  "sup-169": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Perth",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-170": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Perth",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "es"
+    }
+   ]
+  },
+  "sup-171": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Perth",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "fr"
+    }
+   ]
+  },
+  "sup-172": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Perth",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "de"
+    }
+   ]
+  },
+  "sup-173": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "珀斯",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "zh"
+    }
+   ]
+  },
+  "sup-174": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "パース",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "ja"
+    }
+   ]
+  },
+  "sup-175": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-176": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "es"
+    }
+   ]
+  },
+  "sup-177": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "fr"
+    }
+   ]
+  },
+  "sup-178": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "de"
+    }
+   ]
+  },
+  "sup-179": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "本迪戈",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "zh"
+    }
+   ]
+  },
+  "sup-180": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "ベンディゴ",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "ja"
+    }
+   ]
+  },
+  "sup-181": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-182": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "es"
+    }
+   ]
+  },
+  "sup-183": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "fr"
+    }
+   ]
+  },
+  "sup-184": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "Bendigo",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "de"
+    }
+   ]
+  },
+  "sup-185": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "本迪戈",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "zh"
+    }
+   ]
+  },
+  "sup-186": {
+   "claims": [
+    {
+     "subj": "rel:mother",
+     "pred": "residence",
+     "obj": "ベンディゴ",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "ja"
+    }
+   ]
+  },
+  "sup-187": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "squash",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-188": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "squash",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "es"
+    }
+   ]
+  },
+  "sup-189": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "squash",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "fr"
+    }
+   ]
+  },
+  "sup-190": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "Squash",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "de"
+    }
+   ]
+  },
+  "sup-191": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "壁球",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "zh"
+    }
+   ]
+  },
+  "sup-192": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "スカッシュ",
+     "pol": "ended",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "ja"
+    }
+   ]
+  },
+  "sup-193": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "Harbourtown half-marathon",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-194": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "Harbourtown",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "es"
+    }
+   ]
+  },
+  "sup-195": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "Harbourtown",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "fr"
+    }
+   ]
+  },
+  "sup-196": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "Harbourtown",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "de"
+    }
+   ]
+  },
+  "sup-197": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "港镇半程马拉松",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "zh"
+    }
+   ]
+  },
+  "sup-198": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "ハーバータウン",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "ja"
+    }
+   ]
+  },
+  "sup-199": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "squash",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-200": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "squash",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "es"
+    }
+   ]
+  },
+  "sup-201": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "squash",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "fr"
+    }
+   ]
+  },
+  "sup-202": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "Squash",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "de"
+    }
+   ]
+  },
+  "sup-203": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "壁球",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "zh"
+    }
+   ]
+  },
+  "sup-204": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "activity",
+     "obj": "スカッシュ",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "ja"
+    }
+   ]
+  },
+  "sup-205": {
+   "claims": [
+    {
+     "subj": "person:Dana",
+     "pred": "residence",
+     "obj": "Hobart",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-206": {
+   "claims": [
+    {
+     "subj": "person:Dana",
+     "pred": "residence",
+     "obj": "Hobart",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "es"
+    }
+   ]
+  },
+  "sup-207": {
+   "claims": [
+    {
+     "subj": "person:Dana",
+     "pred": "residence",
+     "obj": "Hobart",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "fr"
+    }
+   ]
+  },
+  "sup-208": {
+   "claims": [
+    {
+     "subj": "person:Dana",
+     "pred": "residence",
+     "obj": "Hobart",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "de"
+    }
+   ]
+  },
+  "sup-209": {
+   "claims": [
+    {
+     "subj": "person:Dana",
+     "pred": "residence",
+     "obj": "霍巴特",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "zh"
+    }
+   ]
+  },
+  "sup-210": {
+   "claims": [
+    {
+     "subj": "person:Dana",
+     "pred": "residence",
+     "obj": "ホバート",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "ja"
+    }
+   ]
+  },
+  "sup-211": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Hobart",
+     "pol": "affirm",
+     "mod": "hypothetical",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-212": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Hobart",
+     "pol": "affirm",
+     "mod": "hypothetical",
+     "tense": "current",
+     "quote": null,
+     "lang": "es"
+    }
+   ]
+  },
+  "sup-213": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Hobart",
+     "pol": "affirm",
+     "mod": "hypothetical",
+     "tense": "current",
+     "quote": null,
+     "lang": "fr"
+    }
+   ]
+  },
+  "sup-214": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Hobart",
+     "pol": "affirm",
+     "mod": "hypothetical",
+     "tense": "current",
+     "quote": null,
+     "lang": "de"
+    }
+   ]
+  },
+  "sup-215": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "霍巴特",
+     "pol": "affirm",
+     "mod": "hypothetical",
+     "tense": "current",
+     "quote": null,
+     "lang": "zh"
+    }
+   ]
+  },
+  "sup-216": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "ホバート",
+     "pol": "affirm",
+     "mod": "hypothetical",
+     "tense": "current",
+     "quote": null,
+     "lang": "ja"
+    }
+   ]
+  },
+  "sup-217": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Hobart",
+     "pol": "affirm",
+     "mod": "hedged",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-218": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Hobart",
+     "pol": "affirm",
+     "mod": "hedged",
+     "tense": "current",
+     "quote": null,
+     "lang": "es"
+    }
+   ]
+  },
+  "sup-219": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Hobart",
+     "pol": "affirm",
+     "mod": "hedged",
+     "tense": "current",
+     "quote": null,
+     "lang": "fr"
+    }
+   ]
+  },
+  "sup-220": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Hobart",
+     "pol": "affirm",
+     "mod": "hedged",
+     "tense": "current",
+     "quote": null,
+     "lang": "de"
+    }
+   ]
+  },
+  "sup-221": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "霍巴特",
+     "pol": "affirm",
+     "mod": "hedged",
+     "tense": "current",
+     "quote": null,
+     "lang": "zh"
+    }
+   ]
+  },
+  "sup-222": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "ホバート",
+     "pol": "affirm",
+     "mod": "hedged",
+     "tense": "current",
+     "quote": null,
+     "lang": "ja"
+    }
+   ]
+  },
+  "sup-223": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Hobart",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-224": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Hobart",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "es"
+    }
+   ]
+  },
+  "sup-225": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Hobart",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "fr"
+    }
+   ]
+  },
+  "sup-226": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Hobart",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "de"
+    }
+   ]
+  },
+  "sup-227": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "霍巴特",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "zh"
+    }
+   ]
+  },
+  "sup-228": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "ホバート",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "ja"
+    }
+   ]
+  },
+  "sup-229": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Hobart",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-230": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Hobart",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "es"
+    }
+   ]
+  },
+  "sup-231": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Hobart",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "fr"
+    }
+   ]
+  },
+  "sup-232": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Hobart",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "de"
+    }
+   ]
+  },
+  "sup-233": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "霍巴特",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "zh"
+    }
+   ]
+  },
+  "sup-234": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "ホバート",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "past",
+     "quote": null,
+     "lang": "ja"
+    }
+   ]
+  },
+  "sup-235": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Perth",
+     "pol": "affirm",
+     "mod": "question",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-236": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Perth",
+     "pol": "affirm",
+     "mod": "question",
+     "tense": "current",
+     "quote": null,
+     "lang": "es"
+    }
+   ]
+  },
+  "sup-237": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Perth",
+     "pol": "affirm",
+     "mod": "question",
+     "tense": "current",
+     "quote": null,
+     "lang": "fr"
+    }
+   ]
+  },
+  "sup-238": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "Perth",
+     "pol": "affirm",
+     "mod": "question",
+     "tense": "current",
+     "quote": null,
+     "lang": "de"
+    }
+   ]
+  },
+  "sup-239": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "珀斯",
+     "pol": "affirm",
+     "mod": "question",
+     "tense": "current",
+     "quote": null,
+     "lang": "zh"
+    }
+   ]
+  },
+  "sup-240": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "residence",
+     "obj": "パース",
+     "pol": "affirm",
+     "mod": "question",
+     "tense": "current",
+     "quote": null,
+     "lang": "ja"
+    }
+   ]
+  },
+  "sup-241": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "allergy",
+     "obj": "penicillin",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-242": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "allergy",
+     "obj": "penicilina",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "es"
+    }
+   ]
+  },
+  "sup-243": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "allergy",
+     "obj": "pénicilline",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "fr"
+    }
+   ]
+  },
+  "sup-244": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "allergy",
+     "obj": "Penicillin",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "de"
+    }
+   ]
+  },
+  "sup-245": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "allergy",
+     "obj": "青霉素",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "zh"
+    }
+   ]
+  },
+  "sup-246": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "allergy",
+     "obj": "ペニシリン",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "ja"
+    }
+   ]
+  },
+  "sup-247": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "allergy",
+     "obj": "penicillin",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-248": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "allergy",
+     "obj": "penicilina",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "es"
+    }
+   ]
+  },
+  "sup-249": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "allergy",
+     "obj": "pénicilline",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "fr"
+    }
+   ]
+  },
+  "sup-250": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "allergy",
+     "obj": "Penicillin",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "de"
+    }
+   ]
+  },
+  "sup-251": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "allergy",
+     "obj": "青霉素",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "zh"
+    }
+   ]
+  },
+  "sup-252": {
+   "claims": [
+    {
+     "subj": "user",
+     "pred": "allergy",
+     "obj": "ペニシリン",
+     "pol": "negate",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "ja"
+    }
+   ]
+  },
+  "sup-253": {
+   "claims": [
+    {
+     "subj": "rel:sister",
+     "pred": "residence",
+     "obj": "Perth",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "en"
+    }
+   ]
+  },
+  "sup-254": {
+   "claims": [
+    {
+     "subj": "rel:sister",
+     "pred": "residence",
+     "obj": "Perth",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "es"
+    }
+   ]
+  },
+  "sup-255": {
+   "claims": [
+    {
+     "subj": "rel:sister",
+     "pred": "residence",
+     "obj": "Perth",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "fr"
+    }
+   ]
+  },
+  "sup-256": {
+   "claims": [
+    {
+     "subj": "rel:sister",
+     "pred": "residence",
+     "obj": "Perth",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "de"
+    }
+   ]
+  },
+  "sup-257": {
+   "claims": [
+    {
+     "subj": "rel:sister",
+     "pred": "residence",
+     "obj": "珀斯",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "zh"
+    }
+   ]
+  },
+  "sup-258": {
+   "claims": [
+    {
+     "subj": "rel:sister",
+     "pred": "residence",
+     "obj": "パース",
+     "pol": "affirm",
+     "mod": "asserted",
+     "tense": "current",
+     "quote": null,
+     "lang": "ja"
+    }
+   ]
+  }
+ },
+ "role": {
+  "rol-259": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-260": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "wife",
+    "owner": "user"
+   }
+  },
+  "rol-261": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-262": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "sister",
+    "owner": "user"
+   }
+  },
+  "rol-263": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-264": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "wife",
+    "owner": "user"
+   }
+  },
+  "rol-265": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-266": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-267": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "wife",
+    "owner": "user"
+   }
+  },
+  "rol-268": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-269": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "wife",
+    "owner": {
+     "name": "Callum Reyes"
+    }
+   }
+  },
+  "rol-270": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": null
+  },
+  "rol-271": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": null
+  },
+  "rol-272": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": null
+  },
+  "rol-273": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": null
+  },
+  "rol-274": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [
+    [
+     "p-anika-reyes",
+     "mother",
+     "user"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-275": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [
+    [
+     "p-anika-reyes",
+     "mother",
+     "user"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-276": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [
+    [
+     "p-anika-reyes",
+     "mother",
+     "user"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-277": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-278": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [
+    [
+     "p-anika-reyes",
+     "wife",
+     "p-callum-reyes"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "wife",
+    "owner": "user"
+   }
+  },
+  "rol-279": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [
+    [
+     "p-anika-reyes",
+     "wife",
+     "p-callum-reyes"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "wife",
+    "owner": "user"
+   }
+  },
+  "rol-280": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [
+    [
+     "p-anika-reyes",
+     "wife",
+     "p-callum-reyes"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "wife",
+    "owner": {
+     "name": "Callum Reyes"
+    }
+   }
+  },
+  "rol-281": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [
+    [
+     "p-anika-reyes",
+     "wife",
+     "p-callum-reyes"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "wife",
+    "owner": {
+     "rel": [
+      "brother"
+     ]
+    }
+   }
+  },
+  "rol-282": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [
+    [
+     "p-anika-reyes",
+     "sister",
+     "user"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-283": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [
+    [
+     "p-anika-reyes",
+     "sister",
+     "user"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "sister",
+    "owner": "user"
+   }
+  },
+  "rol-284": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes",
+    "p-anika-patel": "Anika Patel"
+   },
+   "triples": [
+    [
+     "p-anika-patel",
+     "mother",
+     "user"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-285": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-286": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-287": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-288": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-289": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes",
+    "p-priya-nair": "Priya Nair"
+   },
+   "triples": [
+    [
+     "p-priya-nair",
+     "friend",
+     "user"
+    ],
+    [
+     "p-anika-reyes",
+     "wife",
+     "p-priya-nair"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "wife",
+    "owner": {
+     "rel": [
+      "friend"
+     ]
+    }
+   }
+  },
+  "rol-290": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes",
+    "p-priya-nair": "Priya Nair"
+   },
+   "triples": [
+    [
+     "p-priya-nair",
+     "friend",
+     "user"
+    ],
+    [
+     "p-anika-reyes",
+     "wife",
+     "p-priya-nair"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "wife",
+    "owner": "user"
+   }
+  },
+  "rol-291": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes",
+    "p-priya-nair": "Priya Nair"
+   },
+   "triples": [
+    [
+     "p-priya-nair",
+     "friend",
+     "user"
+    ],
+    [
+     "p-anika-reyes",
+     "wife",
+     "p-priya-nair"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "wife",
+    "owner": {
+     "rel": [
+      "brother"
+     ]
+    }
+   }
+  },
+  "rol-292": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes",
+    "p-ingrid-vale": "Ingrid Vale"
+   },
+   "triples": [
+    [
+     "p-ingrid-vale",
+     "mother",
+     "user"
+    ],
+    [
+     "p-anika-reyes",
+     "friend",
+     "p-ingrid-vale"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "friend",
+    "owner": {
+     "rel": [
+      "mother"
+     ]
+    }
+   }
+  },
+  "rol-293": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "aunt",
+    "owner": "user"
+   }
+  },
+  "rol-294": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "daughter",
+    "owner": "user"
+   }
+  },
+  "rol-295": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "partner",
+    "owner": "user"
+   }
+  },
+  "rol-296": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "family",
+    "owner": {
+     "name": "a member of the user"
+    }
+   }
+  },
+  "rol-297": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "sister",
+    "owner": {
+     "rel": [
+      "mum"
+     ]
+    }
+   }
+  },
+  "rol-298": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": {
+     "name": "Callum Reyes"
+    }
+   }
+  },
+  "rol-299": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [
+    [
+     "p-anika-reyes",
+     "mother",
+     "user"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-300": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [
+    [
+     "p-anika-reyes",
+     "mother",
+     "user"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-301": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-302": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "colleague",
+    "owner": "user"
+   }
+  },
+  "rol-303": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "sister",
+    "owner": "user",
+    "negated": true
+   }
+  },
+  "rol-304": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": null
+  },
+  "rol-305": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother-in-law",
+    "owner": "user"
+   }
+  },
+  "rol-306": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [
+    [
+     "p-anika-reyes",
+     "mother_in_law",
+     "user"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother-in-law",
+    "owner": "user"
+   }
+  },
+  "rol-307": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-308": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-309": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [
+    [
+     "p-anika-reyes",
+     "mother",
+     "user"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-310": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [
+    [
+     "p-anika-reyes",
+     "wife",
+     "p-callum-reyes"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "wife",
+    "owner": "user"
+   }
+  },
+  "rol-311": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [
+    [
+     "p-anika-reyes",
+     "wife",
+     "p-callum-reyes"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "wife",
+    "owner": {
+     "name": "Callum Reyes"
+    }
+   }
+  },
+  "rol-312": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": null
+  },
+  "rol-313": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-314": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-315": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [
+    [
+     "p-anika-reyes",
+     "mother",
+     "user"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-316": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [
+    [
+     "p-anika-reyes",
+     "wife",
+     "p-callum-reyes"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "wife",
+    "owner": "user"
+   }
+  },
+  "rol-317": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [
+    [
+     "p-anika-reyes",
+     "wife",
+     "p-callum-reyes"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "wife",
+    "owner": {
+     "name": "Callum Reyes"
+    }
+   }
+  },
+  "rol-318": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": null
+  },
+  "rol-319": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-320": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-321": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [
+    [
+     "p-anika-reyes",
+     "mother",
+     "user"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-322": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [
+    [
+     "p-anika-reyes",
+     "wife",
+     "p-callum-reyes"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "wife",
+    "owner": "user"
+   }
+  },
+  "rol-323": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [
+    [
+     "p-anika-reyes",
+     "wife",
+     "p-callum-reyes"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "wife",
+    "owner": {
+     "name": "Callum Reyes"
+    }
+   }
+  },
+  "rol-324": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": null
+  },
+  "rol-325": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-326": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-327": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [
+    [
+     "p-anika-reyes",
+     "mother",
+     "user"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-328": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [
+    [
+     "p-anika-reyes",
+     "wife",
+     "p-callum-reyes"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "wife",
+    "owner": "user"
+   }
+  },
+  "rol-329": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [
+    [
+     "p-anika-reyes",
+     "wife",
+     "p-callum-reyes"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "wife",
+    "owner": {
+     "name": "Callum Reyes"
+    }
+   }
+  },
+  "rol-330": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": null
+  },
+  "rol-331": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-332": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-333": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [
+    [
+     "p-anika-reyes",
+     "mother",
+     "user"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "mother",
+    "owner": "user"
+   }
+  },
+  "rol-334": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [
+    [
+     "p-anika-reyes",
+     "wife",
+     "p-callum-reyes"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "wife",
+    "owner": "user"
+   }
+  },
+  "rol-335": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [
+    [
+     "p-anika-reyes",
+     "wife",
+     "p-callum-reyes"
+    ]
+   ],
+   "claim": {
+    "person": "Anika Reyes",
+    "kin": "wife",
+    "owner": {
+     "name": "Callum Reyes"
+    }
+   }
+  },
+  "rol-336": {
+   "people": {
+    "p-anika-reyes": "Anika Reyes",
+    "p-callum-reyes": "Callum Reyes"
+   },
+   "triples": [],
+   "claim": null
+  }
+ }
+}

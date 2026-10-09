@@ -1,0 +1,297 @@
+{
+ "lang": "zh",
+ "name": "Chinese",
+ "reviewed": false,
+ "enabled": true,
+ "_note": "Author-written, NOT native-reviewed (research note E6). Pre-filter data only: a marker here may veto a promotion or flag a claim for the off-path verifier; it never authorises one.",
+ "cjk": true,
+ "negation_scope": "both",
+ "negation_suffix": [],
+ "negation_phrases": [],
+ "ended_aux": [],
+ "ended_base_verbs": [],
+ "hedge_subjects": [],
+ "question_aux": [],
+ "question_subjects": [],
+ "question_words": [
+  "吗",
+  "嗎",
+  "什么",
+  "谁",
+  "是不是",
+  "呢"
+ ],
+ "question_marks": [
+  "?",
+  "？"
+ ],
+ "loose_codes": [
+  "friend",
+  "colleague",
+  "boss",
+  "neighbour"
+ ],
+ "negation_words": [
+  "不是",
+  "不",
+  "没有",
+  "沒有",
+  "没",
+  "沒",
+  "别",
+  "未",
+  "并非",
+  "並非"
+ ],
+ "ended_verbs": [
+  "停止",
+  "放弃",
+  "放棄",
+  "戒了",
+  "戒掉",
+  "退出",
+  "取消",
+  "离开",
+  "離開",
+  "辞掉",
+  "辭掉"
+ ],
+ "ended_phrases": [
+  "不再",
+  "不[^，。,.！？!?]{1,8}了"
+ ],
+ "past_markers": [
+  "以前",
+  "曾经",
+  "曾經",
+  "过去",
+  "過去",
+  "从前",
+  "從前",
+  "以往"
+ ],
+ "hypothetical": [
+  "可能",
+  "也许",
+  "也許",
+  "或许",
+  "或許",
+  "如果",
+  "假如",
+  "希望",
+  "要是",
+  "大概",
+  "说不定"
+ ],
+ "hedge_verbs": [
+  "我想是",
+  "我觉得",
+  "我覺得",
+  "我认为",
+  "我認為",
+  "我猜",
+  "据说",
+  "據說"
+ ],
+ "hedge_words": [
+  "听说",
+  "聽說",
+  "好像",
+  "似乎"
+ ],
+ "contrast_connectors": [
+  "但是",
+  "但",
+  "而是",
+  "而",
+  "却",
+  "卻"
+ ],
+ "contrast_exempt": [
+  "确定",
+  "確定",
+  "很",
+  "真的",
+  "太",
+  "一定"
+ ],
+ "temporal": [
+  "现在",
+  "現在",
+  "目前",
+  "今天",
+  "这周",
+  "這週",
+  "本周",
+  "这个月",
+  "今年",
+  "暂时",
+  "暫時",
+  "最近",
+  "此刻"
+ ],
+ "anaphora": [
+  "那里",
+  "那裡",
+  "那儿",
+  "那兒",
+  "这里",
+  "這裡",
+  "这儿",
+  "其中"
+ ],
+ "user_markers": [
+  "用户",
+  "用戶",
+  "使用者"
+ ],
+ "first_person": [
+  "我",
+  "我的",
+  "我们",
+  "我們"
+ ],
+ "you_possessive": [
+  "你的",
+  "您的"
+ ],
+ "copula": [
+  "是"
+ ],
+ "of_markers": [
+  "的"
+ ],
+ "kin_codes": {
+  "mother": [
+   "妈妈",
+   "媽媽",
+   "母亲",
+   "母親",
+   "妈",
+   "媽"
+  ],
+  "father": [
+   "爸爸",
+   "父亲",
+   "父親",
+   "爸"
+  ],
+  "parent": [
+   "父母"
+  ],
+  "wife": [
+   "妻子",
+   "老婆",
+   "太太",
+   "夫人"
+  ],
+  "husband": [
+   "丈夫",
+   "老公",
+   "先生"
+  ],
+  "spouse": [
+   "配偶"
+  ],
+  "partner": [
+   "伴侣",
+   "伴侶"
+  ],
+  "girlfriend": [
+   "女朋友"
+  ],
+  "boyfriend": [
+   "男朋友"
+  ],
+  "fiance": [
+   "未婚妻",
+   "未婚夫"
+  ],
+  "son": [
+   "儿子",
+   "兒子"
+  ],
+  "daughter": [
+   "女儿",
+   "女兒"
+  ],
+  "child": [
+   "孩子",
+   "小孩"
+  ],
+  "sister": [
+   "姐姐",
+   "妹妹",
+   "姐妹"
+  ],
+  "brother": [
+   "哥哥",
+   "弟弟"
+  ],
+  "sibling": [
+   "兄弟姐妹"
+  ],
+  "aunt": [
+   "阿姨",
+   "姑姑",
+   "姨妈",
+   "婶婶"
+  ],
+  "uncle": [
+   "叔叔",
+   "舅舅",
+   "伯伯"
+  ],
+  "niece": [
+   "侄女",
+   "外甥女"
+  ],
+  "nephew": [
+   "侄子",
+   "外甥"
+  ],
+  "cousin": [
+   "表姐",
+   "表妹",
+   "表哥",
+   "表弟",
+   "堂姐",
+   "堂妹",
+   "堂哥",
+   "堂弟"
+  ],
+  "grandmother": [
+   "奶奶",
+   "外婆",
+   "祖母"
+  ],
+  "grandfather": [
+   "爷爷",
+   "外公",
+   "祖父"
+  ],
+  "mother_in_law": [
+   "岳母",
+   "婆婆"
+  ],
+  "father_in_law": [
+   "岳父",
+   "公公"
+  ],
+  "friend": [
+   "朋友"
+  ],
+  "colleague": [
+   "同事"
+  ],
+  "boss": [
+   "老板",
+   "老闆"
+  ],
+  "neighbour": [
+   "邻居",
+   "鄰居"
+  ]
+ },
+ "clause_words": []
+}

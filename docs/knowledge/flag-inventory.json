@@ -224,6 +224,26 @@
         ],
         "typed_env": false
       },
+      "ZOE_ASK_TO_REMEMBER": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/ask_to_remember.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_ASK_WHEN_AMBIGUOUS": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/ask_when_ambiguous.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_ASSISTANT_ROOT": {
         "defaults": [
           "-",
@@ -464,12 +484,14 @@
       "ZOE_BRAIN_SLOT_TOKENS": {
         "defaults": [
           "'8192'",
-          "8192"
+          "8192",
+          "dynamic"
         ],
         "in_env_example": false,
         "readers": [
           "services/zoe-data/digest_pack.py",
           "services/zoe-data/memory_digest.py",
+          "services/zoe-data/night_mind.py",
           "services/zoe-data/zoe_agent.py"
         ],
         "typed_env": true
@@ -748,6 +770,16 @@
           "services/zoe-data/greploop_guard.py"
         ],
         "typed_env": false
+      },
+      "ZOE_CLEAN_GOODBYE": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/clean_goodbye.py"
+        ],
+        "typed_env": true
       },
       "ZOE_COMPOSE_MAX_TOKENS": {
         "defaults": [
@@ -1063,6 +1095,16 @@
           "services/zoe-data/intent_router.py"
         ],
         "typed_env": false
+      },
+      "ZOE_DELIVERY_LEDGER": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/proactive/lines.py"
+        ],
+        "typed_env": true
       },
       "ZOE_DEVICE_TOKEN": {
         "defaults": [
@@ -1687,6 +1729,16 @@
           "services/zoe-data/zoe_agent.py"
         ],
         "typed_env": false
+      },
+      "ZOE_HOLD_THE_FACT": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/hold_the_fact.py"
+        ],
+        "typed_env": true
       },
       "ZOE_HOME_SETUP_SECRET": {
         "defaults": [
@@ -2864,6 +2916,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_MEMORY_PROVENANCE_ANSWERS": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_provenance.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_MEMORY_REJECT_LEDGER": {
         "defaults": [
           "-"
@@ -3256,6 +3318,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_NIGHT_MIND": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/perf/zmb/arms/z0.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_NVM_NODE_BIN": {
         "defaults": [
           "-"
@@ -3419,6 +3491,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_PERSONALISATION_HOP": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/personalisation_hop.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_PERSONA_DRIFT": {
         "defaults": [
           "False"
@@ -3438,6 +3520,16 @@
           "services/zoe-data/persona_layer.py"
         ],
         "typed_env": true
+      },
+      "ZOE_PERSON_BENCH_DIR": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/perf/person_half_replay.py"
+        ],
+        "typed_env": false
       },
       "ZOE_PERSON_BIRTHDAY_CAPTURE_ENABLED": {
         "defaults": [
@@ -4072,6 +4164,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_PULL_NOT_PUSH": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/proactive/pull.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_QUIET_END_HOUR": {
         "defaults": [
           "'7'"
@@ -4091,6 +4193,16 @@
           "services/zoe-data/proactive/engine.py"
         ],
         "typed_env": false
+      },
+      "ZOE_QUOTE_RETIRE": {
+        "defaults": [
+          "'shadow'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_retire.py"
+        ],
+        "typed_env": true
       },
       "ZOE_READINESS_CACHE_TTL_S": {
         "defaults": [
@@ -4179,6 +4291,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/repo_paths.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_RESTRAINT": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/perf/samantha_person.py"
         ],
         "typed_env": false
       },
@@ -4773,6 +4895,26 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/narration_filter.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_STRUCTURAL_CLAIMS": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/structural_claims.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_STRUCTURAL_VERIFIER": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/structural_verifier.py"
         ],
         "typed_env": false
       },

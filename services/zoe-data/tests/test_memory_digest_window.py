@@ -137,3 +137,24 @@ def test_lookback_env_cannot_silently_break_the_digest(monkeypatch, raw, expecte
     hours = md._digest_lookback_hours()
     assert hours >= md._DIGEST_LOOKBACK_MIN
     assert (hours == md._DIGEST_LOOKBACK_DEFAULT) is expected_is_default
+
+
+def test_the_dated_rerun_loader_leaves_off_the_record_turns_out():
+    """``zoe-night-mind.py --date`` reads through ``load_day_messages``: it must drop what the owner asked Zoe not to remember, like the nightly loader."""
+    import asyncio
+
+    import memory_digest as md
+    import memory_provenance
+
+    seen = []
+
+    class _Cur:
+        async def fetchall(self):
+            return []
+
+    class _Db:
+        async def execute(self, sql, params):
+            seen.append(sql)
+            return _Cur()
+    asyncio.run(md.load_day_messages("u1", "2026-10-08T00:00:00+00:00", "2026-10-09T00:00:00+00:00", db=_Db()))
+    assert seen and memory_provenance.off_record_sql("cm") in seen[0]

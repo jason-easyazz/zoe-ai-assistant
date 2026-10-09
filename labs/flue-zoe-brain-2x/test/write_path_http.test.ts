@@ -274,6 +274,14 @@ const WRITE_TOOL_CASES: Array<{
     // backend result (covered by the omit-slots test below via an empty result).
     successPattern: /Got it — I'll remember that\./,
   },
+  // ─── Quote-backed retirement (ZOE_QUOTE_RETIRE): step 2, the ONE write. The model sends a NUMBER and nothing else ──
+  {
+    name: 'memory_retire',
+    input: { pick: 2 },
+    expectedPayload: { user_id: ACTING_USER, intent: 'memory_retire', slots: { pick: 2 } },
+    dryRunPattern: /WRITE DISABLED.*that change.*NOT/i,
+    successPattern: /no longer true/,
+  },
 ];
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
@@ -317,6 +325,11 @@ function dispatchResult(intent: string, slots: Record<string, unknown>): string 
   // ─── Wave 2 confirmation strings (mirror intent_router fulfillment) ─────────
   if (intent === 'memory_store') {
     return "Got it — I'll remember that.";
+  }
+  if (intent === 'memory_retire') {
+    return slots.pick === undefined
+      ? '1) User plays the cello. 2) User likes oat milk. -- Call memory_retire again with pick=<that number>, or pick=0 if none.'
+      : 'Done: that note is now marked as no longer true, and I kept their own sentence as the reason.';
   }
   if (intent === 'music_play') {
     return `Now playing: ${slots.query}.`;
@@ -505,6 +518,49 @@ test('remember_emotional_moment omits valence/intensity slots when absent or mal
           },
         },
       ]);
+    });
+  } finally {
+    await fake.close();
+  }
+});
+
+test('memory_retire step 1 (no pick) is a READ: it dispatches with empty slots even when writes are off, and lists the notes', async () => {
+  for (const allowWrites of [undefined, 'false', 'true']) {
+    const fake = await startFakeZoeData();
+    try {
+      await withTools(fake.baseUrl, allowWrites, async (tools) => {
+        const out = String(await byName(tools, 'memory_retire').run({ data: {} }));
+        assert.match(out, /1\) User plays the cello\./);
+        assert.doesNotMatch(out, /WRITE DISABLED/);
+        assert.deepEqual(fake.requests, [
+          { method: 'POST', path: '/api/system/intent-dispatch', body: { user_id: ACTING_USER, intent: 'memory_retire', slots: {} } },
+        ]);
+      });
+    } finally {
+      await fake.close();
+    }
+  }
+});
+
+test('memory_retire carries NOTHING but the number: no sentence, no row id, no user id from the model', async () => {
+  const fake = await startFakeZoeData();
+  try {
+    await withTools(fake.baseUrl, 'true', async (tools) => {
+      const tool = byName(tools, 'memory_retire');
+      // the schema is {pick} only; whatever else a model packs into the call never reaches the wire
+      await tool.run({ data: { pick: 3, quote: 'I gave up the cello', row_id: 'abc', user_id: 'someone-else', text: 'x' } as never });
+      await tool.run({ data: { pick: 0 } });
+      assert.deepEqual(
+        fake.requests.map((r) => r.body),
+        [
+          { user_id: ACTING_USER, intent: 'memory_retire', slots: { pick: 3 } },
+          { user_id: ACTING_USER, intent: 'memory_retire', slots: { pick: 0 } },
+        ],
+      );
+      // a pick that is not an integer is treated as step 1 (a listing), never forwarded
+      fake.requests.length = 0;
+      await tool.run({ data: { pick: 1.5 } as never });
+      assert.deepEqual(fake.requests.map((r) => r.body), [{ user_id: ACTING_USER, intent: 'memory_retire', slots: {} }]);
     });
   } finally {
     await fake.close();
