@@ -356,6 +356,19 @@ def test_the_cli_can_score_the_k_cells_against_a_server(tmp_path):
         srv.close()
 
 
+def test_the_cli_only_flag_runs_just_the_cells_asked_for_and_still_prints_one_json_line(tmp_path):
+    """``--only K9,K10`` (re-running the cells a fix touches without paying for the other eleven): the others are neither run nor reported."""
+    srv = FakeNightServer(FakeNightBrain())
+    try:
+        r = _run_py(["scripts/maintenance/zoe-night-mind.py", "--model-url", srv.url, "--ctx-tokens", "8192", "--cells", "--only", "K9,k9f,K12"])
+        assert r.returncode == 0, r.stderr[-800:]
+        assert len(r.stdout.strip().splitlines()) == 1
+        c = json.loads(r.stdout)["cells"]
+        assert {k for k in c if k.startswith("K")} == {"K9", "K9f", "K12"} and c["pass"] + c["fail"] + c["skip"] + c["error"] == 3
+    finally:
+        srv.close()
+
+
 # ── the window phase (flag-dark): Z0n's cells and Z0's protocol_brain rows reach the report's structures ──────────
 
 def _phase_ctx(on=True, left_s=10_000.0, result=None):
@@ -390,3 +403,36 @@ def test_the_z0n_phase_skips_with_a_reason_when_there_is_no_time_or_no_result():
     measure, ctx = _phase_ctx(on=True, result={"error": "boom"})
     measure.phase_z0n(ctx, "zmb-v1", [], CELLS)
     assert ctx.z0n == {} and any("did not produce a result: boom" in n for n in ctx.notes)
+
+
+# ── K12: the labelling call must be ABLE to reach the bar (2026-10-09: both Gemma models failed it; the cap made 9 of 12 unreachable) ──────────────────────────
+
+def test_k12_bar_is_unreachable_with_eight_moments_of_twelve():
+    """Evidence: 4B matched 7 of 12 (0.583), 12B failed the same cell; the production cap is 8 moments a call, and the bar asks for 75 % matched = 9 of 12."""
+    gold = life.labelled_moments()
+    perfect = lambda n: [{"quote": g["text"], "kind": g["kind"], "feeling": g["feeling"], "weight": g["weight"]} for g in gold[:n]]  # noqa: E731
+    assert cap.score_weights(perfect(8), gold).ok is False                    # 8 / 12 = 0.667 < 0.75 whatever the model does
+    assert cap.score_weights(perfect(9), gold).ok is True
+
+
+def test_k12_labelling_call_asks_for_as_many_moments_as_there_are_lines(monkeypatch):
+    """The cell measures the calibration of the labels (K6 measures selectivity): the call must allow one moment per labelled line, with an output limit that fits them."""
+    import asyncio
+    import re as _re
+    nm = importlib.import_module("night_mind")
+    seen = {}
+
+    async def fake_complete(messages, max_tokens, cfg, usage, *, schema=None):
+        user = messages[-1]["content"]
+        rows = _re.findall(r"^\[(m\d+)\] [^:]*: (.*)$", user, _re.M)
+        seen.update(max_tokens=max_tokens, asked=int(_re.search(r"at most (\d+)\.", user).group(1)), lines=len(rows))
+        return json.dumps({"moments": [{"ids": [a], "quote": t, "kind": "other", "who": [], "feeling": "none", "weight": 2, "later": "na"} for a, t in rows]}, separators=(",", ":"))
+    monkeypatch.setattr(nm, "_complete", fake_complete)
+    arm = Z0Arm(name="Z0n", night=True, night_url="http://127.0.0.1:1", night_ctx=8192)
+    try:
+        gold = life.labelled_moments()
+        labels = arm.moment_labels([g["text"] for g in gold])
+    finally:
+        arm.close()
+    assert seen["lines"] == len(gold) == 12 and seen["asked"] == 12 and seen["max_tokens"] == nm.moment_max_tokens(12) > nm.MOMENT_MAX_TOKENS
+    assert len(labels) == 12 and cap.score_weights(labels, gold).evidence["weights"]["matched"] == 12
