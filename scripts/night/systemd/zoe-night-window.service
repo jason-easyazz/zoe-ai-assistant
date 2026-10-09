@@ -1,5 +1,5 @@
-# zoe-night-window.service - TEMPLATE for the 12B night window. Nothing installs this automatically:
-# the operator runs scripts/night/install_night_window.sh (docs/knowledge/night-window.md).
+# zoe-night-window.service - the 12B night window, READY TO INSTALL. Nothing installs this automatically:
+# the operator runs scripts/night/install_night_window.sh (docs/knowledge/night-window.md section 14 is the install + first-night checklist).
 #
 # What it does: for about an hour a night Zoe SLEEPS (zoe-data, the router, Kokoro and the 4B brain are stopped), the 12B runs the night's jobs at a bigger
 # context (the nightly digest, zoe-nightly-dreaming, the night-mind pass), and everything is woken again, brain first, each one's /health polled.
@@ -24,8 +24,19 @@ Environment=ZOE_DATA_DB=%h/assistant/services/zoe-data/data/zoe.db
 Environment=MEMPALACE_DATA_DIR=%h/.mempalace
 Environment=MALLOC_ARENA_MAX=2
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=%h/assistant/scripts/night/night_window.sh
+# The REAL night, every lever written out (these equal the code's defaults; a test pins the two together, so a changed default cannot silently change the night):
+#   --jobs digest,dreaming,night_mind   the window's own order (docs/knowledge/night-window.md section 5); dreaming runs here, the installer disables zoe-dreaming.timer
+#   --ngl 34 --ctx 8192 --kv q8_0       the layer count that LOADS on a fragmented Tegra (38 was refused twice on 2026-10-09), the context the jobs' 3-8k prompts need, the KV that fits
+#   --end-by 03:55                      zoe-data and the voice stack are back before the Sunday 04:00 consolidation loop and the 04:10 voice-gate blackout; the household wakes after
+# The hard cap (65 min), the batch sizes (512 / 128), UMA and mlock are the code's measured defaults.
+ExecStart=%h/assistant/scripts/night/night_window.sh --jobs digest,dreaming,night_mind --ngl 34 --ctx 8192 --kv q8_0 --end-by 03:55
+# Restore on EVERY way out first (success, failure, timeout, kill), then ONE journal line about the night (`journalctl --user -t zoe-night-window`; priority err when the unit failed).
 ExecStopPost=%h/assistant/scripts/night/night_window.sh --restore-only
+ExecStopPost=-/bin/sh -c 'p=info; [ "$$SERVICE_RESULT" = success ] || p=err; %h/assistant/scripts/night/night_window.sh --summary | /usr/bin/systemd-cat -t zoe-night-window -p $$p'
+# The voice stack's memory rule (scripts/setup/systemd/llama-server.service: MemorySwapMax=0, "a swapped brain is a broken brain"): nothing here may ever be swapped. The 12B itself is a transient unit the script starts
+# with MemorySwapMax=0 and LimitMEMLOCK=infinity; this covers the job processes (the digest, dreaming and night-mind runners). No MemoryMax: a hard ceiling plus no swap would
+# turn a RAM spike into a kill of a job that the script's own 1,200 MiB MemAvailable floor handles more gracefully.
+MemorySwapMax=0
 TimeoutStartSec=6000
 TimeoutStopSec=900
 StandardOutput=append:%h/.zoe-logs/night-window.log
