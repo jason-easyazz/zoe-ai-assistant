@@ -963,6 +963,22 @@ async def _hold_edge_belief(user_id: str, name_a: str, name_b: str, rel_type: st
         logger.debug("person_extractor: held relationship not recorded (%s)", type(exc).__name__)
 
 
+async def _hold_fact_belief(user_id: str, name: str, fact_text: str, *, origin: str, basis: str,
+                            extra: Optional[dict] = None) -> None:
+    """A person fact that could not be attached to ONE person (the name is ambiguous), kept as a PENDING candidate:
+    never recalled, never dropped. Best effort, silent on failure."""
+    try:
+        import memory_authority as _auth
+        from memory_service import get_memory_service
+
+        await get_memory_service().record_candidate(
+            fact_text[:300], user_id=user_id, writer=origin, kind="fact", memory_type="person", status="pending",
+            basis=basis, cls=_auth.USER_STATED, extra=extra or {},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("person_extractor: held fact not recorded (%s)", type(exc).__name__)
+
+
 async def _write_relationship(
     user_id: str,
     name_a: str,
@@ -1347,8 +1363,14 @@ async def process_text(
         # Deduplicate names to avoid redundant DB lookups
         names = list({t[0] for t in tasks})
         uuid_cache: dict[str, Optional[str]] = {}
+        res_cache: dict[str, object] = {}   # the full Resolution: the birthday path must tell "nobody" from "two Toms"
         for name in names:
-            uuid_cache[name] = await _resolve_person_uuid(name, user_id, _db)
+            try:
+                res_cache[name] = await _resolve_person(name, user_id, _db)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("process_text: resolve failed for %r: %s", name, exc)
+                res_cache[name] = None
+            uuid_cache[name] = res_cache[name].person_id if res_cache[name] is not None else None
 
         # Process each task
         for name, fact_text, pattern_type in tasks:
@@ -1367,15 +1389,24 @@ async def process_text(
             # someone who isn't yet a contact has nowhere to land — the structured
             # write below needs a row. When enabled, mint a stub so the date sticks.
             # Byte-for-byte no-op while ZOE_PERSON_BIRTHDAY_CAPTURE_ENABLED is OFF.
+            # Mint ONLY for a name nobody answers to (status "none"): a name two people answer to is never guessed
+            # and never gets a third person - the birthday is held as a pending candidate for the user to settle.
             if (
                 person_uuid is None
                 and pattern_type == "birthday"
                 and birthday_capture_enabled()
                 and _looks_like_person_name(name)
             ):
-                person_uuid = await _create_partial_person(name, user_id, _db)
-                if person_uuid:
-                    uuid_cache[name] = person_uuid
+                res = res_cache.get(name)
+                if res is not None and res.ambiguous:
+                    logger.info("PERSON_AMBIGUOUS user=%s tier=%s candidates=%d - birthday for %r held, not guessed",
+                                user_id, res.tier, len(res.matches), name)
+                    await _hold_fact_belief(user_id, name, fact_text, origin=source, basis="ambiguous_name",
+                                            extra={"ambiguous_name": name, "fact_type": pattern_type})
+                elif res is not None and res.status == "none":
+                    person_uuid = await _create_partial_person(name, user_id, _db)
+                    if person_uuid:
+                        uuid_cache[name] = person_uuid
 
             entity_id = person_uuid or None  # None → person_extractor will use slug in ingest
 

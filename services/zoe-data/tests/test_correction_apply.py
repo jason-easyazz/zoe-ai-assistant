@@ -265,6 +265,23 @@ async def test_pet_statement_sets_relationship_edge_and_facts():
     assert "User likes tea" in live
 
 
+async def test_pet_correction_carries_the_old_edges_notes_to_the_replacement():
+    """Greptile P2 (#1961): the correction used to retype in place (notes kept); closing + reopening must not drop them."""
+    db = await _family_db()
+    await db.execute("ALTER TABLE person_relationships ADD COLUMN notes TEXT")
+    await db.execute("UPDATE person_relationships SET notes='adopted from the shelter in May' WHERE id='e1'")
+    await db.commit()
+    res = await ca.apply_pet_correction("Biscuit is their dog", USER, svc=FakeSvc([]), db=db)
+    assert res is not None and res.kind == "pet"
+    try:
+        cur = await db.execute("SELECT notes FROM person_relationships WHERE valid_to IS NULL AND rel_type='pet'")
+        assert (await cur.fetchone())[0] == "adopted from the shelter in May"
+        cur = await db.execute("SELECT notes FROM person_relationships WHERE id='e1'")
+        assert (await cur.fetchone())[0] == "adopted from the shelter in May"   # the closed edge keeps its own history
+    finally:
+        await db.close()
+
+
 async def test_pet_correction_closes_a_wrong_edge_that_would_duplicate_the_pet_edge():
     db = await _family_db()
     await db.execute("UPDATE person_relationships SET valid_to='2026-01-01T00:00:00Z' WHERE id='e1'")  # no wrong pair edge left...

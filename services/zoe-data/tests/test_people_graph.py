@@ -315,6 +315,29 @@ async def test_merge_closes_the_self_edge_and_the_duplicate_edge(rest):
         await d.close()
 
 
+async def test_merged_duplicate_history_is_reachable_from_the_survivor(rest):
+    """Greptile P2 (#1961): the closed duplicate stayed on the soft-deleted source, so the survivor's include=history /
+    as_of reads (edges touching the survivor) never returned the history the merge claims to retain."""
+    import person_merge
+    from test_person_merge import _seed_edge, _seed_person
+
+    d = await _merge_db()
+    try:
+        for p in ("src", "tgt", "carol"):
+            await _seed_person(d, p)
+        await _seed_edge(d, "dup", "src", "carol", rel_type="friend")
+        await _seed_edge(d, "keep", "tgt", "carol", rel_type="cousin")
+        await person_merge.merge_person(d, "jason", "src", "tgt")
+        hist = await pg.edges_for_person(d, "jason", "tgt", history=True)
+        by_id = {e["id"]: e for e in hist}
+        assert set(by_id) == {"dup", "keep"}                                           # the closed duplicate is the survivor's
+        assert by_id["dup"]["current"] is False and by_id["dup"]["close_reason"] == "merged_duplicate"
+        assert [e["id"] for e in await pg.edges_for_person(d, "jason", "tgt")] == ["keep"]   # current reads unchanged
+        assert [e["id"] for e in await pg.edges_for_person(d, "jason", "src", history=True)] == []
+    finally:
+        await d.close()
+
+
 async def test_flag_off_keeps_the_new_belief_as_a_pending_candidate(db, monkeypatch):
     monkeypatch.delenv("ZOE_TEMPORAL_RELATIONSHIPS_ENABLED", raising=False)
     await _person(db, "pa", "Alice")
@@ -407,6 +430,34 @@ async def test_named_relations_edges_carry_evidence(svc):
     async with ndb.execute("SELECT turn_id, quote_span, speaker_rank FROM person_relationships") as cur:
         edges = [tuple(r) for r in await cur.fetchall()]
     assert len(edges) == 2 and all(t == pg.content_turn_id(USER, SAID) and q and r == 4 for t, q, r in edges)
+
+
+async def test_quote_span_points_into_the_original_turn_whatever_the_whitespace(svc):
+    """Greptile P2 (#1961): the span is computed against what the user TYPED. A newline / double space before the
+    listed name must not shift the offsets or the hash (named relations), and a whitespace-squashed quote (the pet
+    path) must still be found in the original turn, not come back as no span."""
+    from test_named_relations import SAID, USER, _open_db as open_named_db
+
+    turn = SAID.replace(" ", "  ", 3).replace(", ", ",\n", 1)          # a turn with double spaces and a newline
+    assert turn != SAID and "\n" in turn
+    ndb = await open_named_db()
+    for col in ("close_reason TEXT", "authority TEXT", "origin TEXT", "turn_id TEXT", "quote_span TEXT", "speaker_rank INTEGER"):
+        await ndb.execute(f"ALTER TABLE person_relationships ADD COLUMN {col}")
+    await pe.process_text(turn, user_id=USER, source="conversation", db=ndb)
+    async with ndb.execute("SELECT person_a_id, p.name, quote_span FROM person_relationships r "
+                           "JOIN people p ON p.id = r.person_a_id") as cur:
+        edges = [tuple(r) for r in await cur.fetchall()]
+    assert edges
+    for _pid, name, span in edges:
+        start, end, digest = span.split(":")
+        assert turn[int(start):int(end)] == name                       # offsets into the ORIGINAL turn
+        assert digest == pg.quote_span(turn, name).split(":")[2]
+    # the same helper serves the pet path: a squashed copy of text with newlines / double spaces is located in the turn
+    pet_turn = "Okay,\n  Biscuit  is   their dog."
+    squashed = " ".join(pet_turn.split())
+    start, end, _ = pg.quote_span(pet_turn, squashed).split(":")
+    assert pet_turn[int(start):int(end)] == pet_turn
+    assert pg.quote_span(pet_turn, "not in the turn") is None
 
 
 async def test_legacy_edges_have_null_evidence(db):

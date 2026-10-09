@@ -1,6 +1,7 @@
 """The people graph's invariants on REAL PostgreSQL (advisory locks, transactions, the 0043 trigger and indexes - none of
 which SQLite can show). Opt-in: set ``ZOE_TEST_PG_URL`` to a SCRATCH database migrated to head (never the live one; CI's
-service container is picked up via ``POSTGRES_URL`` when ``CI`` is set). Synthetic user, removed in teardown."""
+service container is picked up via ``POSTGRES_URL`` when ``CI`` is set). CI runs this file in its own validate.yml step
+(it is not ``ci_safe``: the slim marker lane has no database), with ``ZOE_REQUIRE_PG_TESTS=1`` so it cannot skip there. Synthetic user, removed in teardown."""
 from __future__ import annotations
 
 import asyncio
@@ -12,8 +13,15 @@ import pytest
 import people_graph as pg
 
 URL = os.environ.get("ZOE_TEST_PG_URL") or (os.environ.get("POSTGRES_URL") if os.environ.get("CI") else None)
+# CI's database lane (validate.yml "People graph invariants on CI PostgreSQL") sets ZOE_REQUIRE_PG_TESTS: there a missing
+# database or driver is a FAILURE, never a silent skip. Everywhere else (a laptop, the slim lane) it skips cleanly.
+REQUIRED = bool(os.environ.get("ZOE_REQUIRE_PG_TESTS"))
+if REQUIRED:
+    assert URL, "ZOE_REQUIRE_PG_TESTS is set but no scratch PostgreSQL URL (ZOE_TEST_PG_URL) was supplied"
+    import asyncpg
+else:
+    asyncpg = pytest.importorskip("asyncpg")
 pytestmark = pytest.mark.skipif(not URL, reason="no scratch PostgreSQL (ZOE_TEST_PG_URL)")
-asyncpg = pytest.importorskip("asyncpg")
 
 
 class _Conn:

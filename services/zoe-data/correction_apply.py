@@ -392,9 +392,12 @@ async def _retype_edge_as_pet(db, user_id: str, edge_id: str, a: str, b: str, pe
     cols = await pg.edge_columns(db)
     now = pg.now_iso()
     new_id = str(uuid.uuid4())
-    spec = pg.EdgeSpec("pet", "Pet owner", "Pet", "pet", authority="user_stated", origin=SOURCE, evidence=evidence)
     try:
         async with pg.edge_transaction(db, user_id, a, b):
+            # the replacement keeps what was written on the edge it replaces (notes were kept when this changed the type
+            # in place; closing + reopening must not make them vanish from the current relationship)
+            spec = pg.EdgeSpec("pet", "Pet owner", "Pet", "pet", notes=await pg.edge_notes(db, user_id, edge_id),
+                               authority="user_stated", origin=SOURCE, evidence=evidence)
             clash = await pg.current_edge(db, user_id, person_id, owner)
             if clash is not None and clash[0] != edge_id:
                 return await pg.close_edge(db, user_id, edge_id, reason="corrected_pet_duplicate", now=now,

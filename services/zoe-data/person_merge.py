@@ -321,6 +321,17 @@ async def _repoint_relationships(
                 # (invalidate, never delete) BEFORE any UPDATE so the index is never violated.
                 await pg.close_edge(db, user_id, edge_id, reason="merged_duplicate", now=now,
                                     superseded_by=str(collision[0]), cols=cols)
+                # The closed row is HISTORY of the survivor now: left on the soft-deleted source it would be unreachable
+                # (include=history / as_of read the survivor's edges). A closed row is outside the partial unique
+                # index, so re-pointing it cannot collide.
+                await _exec(
+                    db,
+                    "UPDATE person_relationships SET person_a_id=$1, person_b_id=$2 "
+                    "WHERE id=$3 AND user_id=$4",
+                    "UPDATE person_relationships SET person_a_id=?, person_b_id=? "
+                    "WHERE id=? AND user_id=?",
+                    (new_a, new_b, edge_id, user_id),
+                )
                 deduped += 1
                 continue
 

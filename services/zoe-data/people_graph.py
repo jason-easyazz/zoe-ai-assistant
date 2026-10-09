@@ -251,15 +251,25 @@ def content_turn_id(user_id: str, text: str) -> Optional[str]:
 
 
 def quote_span(turn_text: str, quote: str) -> Optional[str]:
-    """``start:end:hash12`` of ``quote`` inside ``turn_text`` - a pointer, not the words (forgetting the turn leaves no
-    verbatim text in the graph). ``None`` when the quote is not in the turn."""
+    """``start:end:hash12`` of ``quote`` inside the ORIGINAL ``turn_text`` - a pointer, not the words (forgetting the turn
+    leaves no verbatim text in the graph). The quote may be a whitespace-squashed copy of the text (an excerpt, a name);
+    it is matched against the turn with any run of whitespace standing for a single space, so newlines and double spaces
+    in the turn never shift the offsets or the hash. ``None`` when the quote is not in the turn."""
     turn, q = str(turn_text or ""), str(quote or "").strip()
-    start = turn.find(q) if q else -1
-    if start < 0 and q:
-        start = turn.lower().find(q.lower())
+    start, end = -1, -1
+    if q:
+        start = turn.find(q)
+        end = start + len(q)
+        if start < 0:
+            start = turn.lower().find(q.lower())
+            end = start + len(q)
+        if start < 0:
+            m = re.search(r"\s+".join(re.escape(tok) for tok in q.split()), turn, re.IGNORECASE)
+            if m:
+                start, end = m.start(), m.end()
     if start < 0:
         return None
-    return f"{start}:{start + len(q)}:{hashlib.sha1(turn[start:start + len(q)].encode('utf-8')).hexdigest()[:12]}"
+    return f"{start}:{end}:{hashlib.sha1(turn[start:end].encode('utf-8')).hexdigest()[:12]}"
 
 
 @dataclass(frozen=True)
@@ -374,6 +384,17 @@ async def current_edge(db, user_id: str, person_a: str, person_b: str) -> Option
                           "WHERE user_id = ? AND person_a_id = ? AND person_b_id = ? AND valid_to IS NULL ORDER BY id",
                       (user_id, person_a, person_b))
     return (rows[0][0], rows[0][1]) if rows else None
+
+
+async def edge_notes(db, user_id: str, edge_id: str) -> Optional[str]:
+    """The ``notes`` of one edge (open or closed), so a replacement edge can carry them; ``None`` when there are none or
+    the database has no such column (a bare test schema). Read it OUTSIDE a failure-sensitive step only if the column is
+    known to exist - on every real schema it does."""
+    try:
+        rows = await _all(db, "SELECT notes FROM person_relationships WHERE id = ? AND user_id = ?", (edge_id, user_id))
+    except Exception:  # noqa: BLE001
+        return None
+    return rows[0][0] if rows and rows[0][0] not in (None, "") else None
 
 
 async def close_edge(db, user_id: str, edge_id: str, *, reason: str, now: Optional[str] = None,

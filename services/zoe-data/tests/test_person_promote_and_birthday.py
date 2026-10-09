@@ -200,3 +200,30 @@ async def test_birthday_capture_off_is_noop(monkeypatch):
 async def _stub_ingest(*_args, **_kwargs):
     """Keep the test hermetic — no MemPalace/model dependency for a ci_safe run."""
     return None
+
+
+@pytest.mark.asyncio
+async def test_birthday_for_an_ambiguous_name_mints_no_third_person(monkeypatch):
+    """Greptile P1 (#1961): two contacts answer to "Tom" -> the birthday is held as a pending candidate, never attached
+    to a guess and never to a THIRD Tom minted as a stub. A name nobody answers to still gets its stub (test above)."""
+    monkeypatch.setenv("ZOE_PERSON_BIRTHDAY_CAPTURE_ENABLED", "1")
+    monkeypatch.setattr(pe, "_ingest_to_mempalace", _stub_ingest)
+    held = []
+
+    async def _hold(user_id, name, fact_text, **kw):
+        held.append((user_id, name, kw.get("basis")))
+
+    monkeypatch.setattr(pe, "_hold_fact_belief", _hold)
+    db = await _open_extractor_db()
+    try:
+        for pid, nm in (("p-tom-a", "Tom Reyes"), ("p-tom-b", "Tom Park")):
+            await db.execute("INSERT INTO people (id, user_id, name, circle, visibility, is_partial) "
+                             "VALUES (?,?,?,'circle','family',0)", (pid, USER, nm))
+        await db.commit()
+        await pe.process_text("Tom's birthday is 15 March", user_id=USER, db=db)
+        people, dates = await _counts(db)
+        assert people == 2                      # no third Tom
+        assert dates == []                      # the date was not attached to a guess
+        assert held == [(USER, "Tom", "ambiguous_name")]   # kept as a pending candidate instead
+    finally:
+        await db.close()

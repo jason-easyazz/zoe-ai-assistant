@@ -451,18 +451,19 @@ async def _set_role_if_blank(db, user_id: str, person_id: str, role: str) -> Non
             continue
 
 
-def _evidence(pe, user_id: str, source: str, excerpt: str, name: str):
-    """The edge's evidence pointer: this turn, where the listed name sits in it, the writer's rank. Never raises."""
+def _evidence(pe, user_id: str, source: str, turn_text: str, name: str):
+    """The edge's evidence pointer: this turn, where the listed name sits in it, the writer's rank. ``turn_text`` is the
+    ORIGINAL turn (never the whitespace-squashed excerpt: offsets and the hash are of what the user typed). Never raises."""
     try:
         import people_graph as pg
 
-        return pg.evidence_for(user_id, excerpt, name, rank=pe._edge_authority_and_rank(source, excerpt)[1])
+        return pg.evidence_for(user_id, turn_text, name, rank=pe._edge_authority_and_rank(source, turn_text)[1])
     except Exception:  # noqa: BLE001 - a missing pointer is a NULL column, never a lost edge
         return None
 
 
 async def _apply_one(rel: NamedRelation, *, user_id: str, source: str, session_id, db,
-                     excerpt: str) -> int:
+                     excerpt: str, turn_text: Optional[str] = None) -> int:
     import person_extractor as pe
 
     fact = rel.fact()
@@ -491,7 +492,7 @@ async def _apply_one(rel: NamedRelation, *, user_id: str, source: str, session_i
             if await _name_clash(db, user_id, name) or await _kept_pet(db, user_id, rel, name):
                 logger.debug("named_relations: edge for a listed name withheld (clash/pet)")
                 continue
-            await pe._write_relationship(user_id, *edge, db, evidence=_evidence(pe, user_id, source, excerpt, name))
+            await pe._write_relationship(user_id, *edge, db, evidence=_evidence(pe, user_id, source, turn_text if turn_text is not None else excerpt, name))
             wrote = 1
         except Exception as exc:  # noqa: BLE001 - one bad name never costs the others
             logger.debug("named_relations: edge write failed (%s)", type(exc).__name__)
@@ -523,7 +524,7 @@ async def apply_named_relations(text: str, *, user_id: str, source: str = "conve
     for rel in rels:
         try:
             landed += await _apply_one(rel, user_id=user_id, source=source,
-                                       session_id=session_id, db=db, excerpt=excerpt)
+                                       session_id=session_id, db=db, excerpt=excerpt, turn_text=text)
         except Exception as exc:  # noqa: BLE001
             logger.warning("named_relations: write failed for user=%s (%s)", user_id, type(exc).__name__)
     return landed
