@@ -77,6 +77,11 @@ html.dark-mode .sessions-panel {
     color: rgba(255, 255, 255, 0.93) !important;
 }
 
+/* The session list's title and meta carry their own light-mode colours (#333 / #666) in
+   chat.html, so on the dark card above they were dark-on-dark — unreadable (2026-10-09). */
+html.dark-mode .session-item .session-title { color: rgba(255, 255, 255, 0.93) !important; }
+html.dark-mode .session-item .session-meta { color: rgba(255, 255, 255, 0.62) !important; }
+
 html.dark-mode .message-group.user .message-bubble {
     background: rgba(123, 97, 255, 0.25) !important;
     border-color: rgba(123, 97, 255, 0.30) !important;

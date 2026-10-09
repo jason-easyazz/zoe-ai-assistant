@@ -1998,7 +1998,6 @@
                 <button id="coreWidgetsTab" class="library-tab active" onclick="switchLibraryTab('core')" style="padding: 8px 16px; border: none; background: none; cursor: pointer; border-bottom: 2px solid #7B61FF; font-weight: 500;">Core Widgets</button>
                 <button id="yourListsTab" class="library-tab" onclick="switchLibraryTab('your-lists')" style="padding: 8px 16px; border: none; background: none; cursor: pointer; border-bottom: 2px solid transparent; font-weight: 500;">Your Lists</button>
                 <button id="marketplaceTab" class="library-tab" onclick="switchLibraryTab('marketplace')" style="padding: 8px 16px; border: none; background: none; cursor: pointer; border-bottom: 2px solid transparent; font-weight: 500;">Marketplace</button>
-                <button id="aiGenerateTab" class="library-tab" onclick="switchLibraryTab('ai')" style="padding: 8px 16px; border: none; background: none; cursor: pointer; border-bottom: 2px solid transparent; font-weight: 500;">✨ AI Generate</button>
             </div>
             
             <!-- Core Widgets Grid -->
@@ -2016,15 +2015,7 @@
                 <!-- Marketplace widgets will be populated here -->
             </div>
             
-            <!-- AI Generate Panel -->
-            <div id="aiGeneratePanel" style="display: none;">
-                <div style="margin-bottom: 16px;">
-                    <h3 style="font-size: 16px; margin-bottom: 8px;">Describe Your Widget</h3>
-                    <textarea id="aiWidgetDescription" placeholder="Example: Create a widget showing my daily step count as a circular progress gauge..." style="width: 100%; min-height: 100px; padding: 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; font-family: inherit; resize: vertical;"></textarea>
-                </div>
-                <button onclick="generateWidgetWithAI()" style="width: 100%; padding: 12px; background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer;">✨ Generate Widget</button>
-                <div id="aiGenerationStatus" style="margin-top: 16px; padding: 12px; border-radius: 8px; display: none;"></div>
-            </div>
+            <!-- (the 'AI Generate' widget tab was removed 2026-10-09: its handler never existed) -->
         </div>
     </div>
 
@@ -2253,7 +2244,6 @@
             document.getElementById('coreWidgetsGrid').style.display = 'none';
             document.getElementById('yourListsGrid').style.display = 'none';
             document.getElementById('marketplaceGrid').style.display = 'none';
-            document.getElementById('aiGeneratePanel').style.display = 'none';
             
             // Show selected tab
             if (tab === 'core') {
@@ -2269,10 +2259,6 @@
                 document.getElementById('marketplaceTab').classList.add('active');
                 document.getElementById('marketplaceTab').style.borderBottomColor = '#7B61FF';
                 document.getElementById('marketplaceGrid').style.display = 'grid';
-            } else if (tab === 'ai') {
-                document.getElementById('aiGenerateTab').classList.add('active');
-                document.getElementById('aiGenerateTab').style.borderBottomColor = '#7B61FF';
-                document.getElementById('aiGeneratePanel').style.display = 'block';
             }
         }
         

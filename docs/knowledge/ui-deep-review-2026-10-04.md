@@ -227,3 +227,10 @@ A static audit of every `/api/...` literal in the desktop UI against the live Op
 - **Fixed:** zoe-auth's embedded quick-auth "offline cache" synced from itself (`/api/admin/sync-data`, admin permission) with no credential — a logged 401 every five minutes forever (1,071 in the week to 10-08) and a cache that never filled. Off by default now (`ZOE_TOUCH_PANEL_OFFLINE_CACHE=1` to opt in).
 - **Checked, not bugs:** every HTML/JS/CSS asset is served `no-cache, must-revalidate` with an ETag, so returning browsers cannot be stuck on stale scripts after a deploy; the service worker's precached pages have not changed since `SW_VERSION` 4.84.1 (a change to a precached page still needs a bump — the pre-existing class risk stands).
 
+## 13. Click-time errors, dark-mode contrast, a visual pass — 2026-10-09
+
+A static check for inline `on*` handlers naming functions no page defines (crawls only catch load-time errors) found the dashboard and lists "AI Generate" widget tab calling a function that never existed, and `music.html`'s mobile menu, More overlay and Sign out calling helpers every other page defines inline — all three were dead when tapped. Screenshots of the main desktop pages in both themes found chat's session titles unreadable in dark mode (page-local `#333` on the shared dark card). Fixed, with the handler check and an inline-script parse check made permanent in the desktop harness; `SW_VERSION` 4.86.0 for the precached pages. Tablet widths (768/1024) overflow-free.
+
+- **Left for the design wave:** in dark mode the dashboard's widget cards keep their light surface (readable, but half-themed); `people.html` greets every fresh browser with an onboarding modal until "don't ask again" is ticked.
+- **Not a bug:** the red "basic mode" banner on chat reflects the brain being down for the bake-off.
+
