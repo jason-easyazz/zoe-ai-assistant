@@ -9,6 +9,7 @@ Every call carries a ``user_id`` and no read crosses users. Nothing here decides
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 from typing import Any, Iterable, Optional, Protocol
@@ -58,6 +59,9 @@ class Backend(Protocol):
 
     async def runs(self, user_id: str, limit: int = 20) -> "list[dict]": ...
 
+    # the whole night in ONE transaction: every observation, every thread row, then the run row - all or nothing
+    async def commit_plan(self, observations: "list[dict]", threads: "list[dict]", run: "dict") -> None: ...
+
     async def erase_matching(self, user_id: str, pattern: "re.Pattern[str]") -> int: ...
 
     async def delete_user(self, user_id: str) -> int: ...
@@ -95,6 +99,18 @@ class MemoryBackend:
 
     async def put_run(self, row):
         self.run_rows[row["id"]] = dict(run_row(**row))
+
+    async def commit_plan(self, observations, threads, run):
+        obs_before, thr_before, run_before = dict(self.obs_rows), dict(self.thread_rows), dict(self.run_rows)
+        try:
+            for o in observations:
+                await self.put_observation(o)
+            for t in threads:
+                await self.put_thread(t)
+            await self.put_run(run)
+        except BaseException:
+            self.obs_rows, self.thread_rows, self.run_rows = obs_before, thr_before, run_before
+            raise
 
     async def runs(self, user_id, limit=20):
         rows = [dict(r) for r in self.run_rows.values() if r["user_id"] == user_id]
@@ -174,6 +190,20 @@ class SqlBackend:
         row = run_row(**row)
         async with self._ctx() as db:
             await db.execute(_upsert_sql("night_runs", RUN_COLS), tuple(row[c] for c in RUN_COLS))
+            await db.commit()
+
+    async def commit_plan(self, observations, threads, run):
+        obs = [obs_row(**o) for o in observations]
+        thr = [thread_row(**t) for t in threads]
+        rn = run_row(**run)
+        async with self._ctx() as db:
+            tx = getattr(db, "transaction", None)
+            async with (tx() if callable(tx) else contextlib.nullcontext()):
+                for row in obs:
+                    await db.execute(_upsert_sql("night_observations", OBS_COLS), tuple(row[c] for c in OBS_COLS))
+                for row in thr:
+                    await db.execute(_upsert_sql("night_threads", THREAD_COLS), tuple(row[c] for c in THREAD_COLS))
+                await db.execute(_upsert_sql("night_runs", RUN_COLS), tuple(rn[c] for c in RUN_COLS))
             await db.commit()
 
     async def runs(self, user_id, limit=20):

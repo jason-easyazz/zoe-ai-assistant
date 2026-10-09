@@ -226,6 +226,14 @@ def test_pick_claim_for_fact_prefers_the_claim_carrying_the_facts_value():
 
 # -- retirement by key -----------------------------------------------------------------------------------
 
+def test_two_sisters_do_not_share_a_retirement_key_but_a_mother_does():
+    old = C(subj="rel:sister", obj="Ballarat")
+    assert sc.retires(C(subj="rel:sister", obj="Bendigo"), old) == ""                              # "my sister" is not ONE person: her sister's row is not hers to replace
+    assert sc.retires(C(subj="rel:sister", pol="ended", obj="", quote="doesn't live anywhere now"), old) == ""   # nor is an empty retraction a whole-slot wipe
+    assert sc.retires(C(subj="rel:sister", obj="Ballarat", pol="negate", quote="not Ballarat"), old) == "retract:residence"   # a retraction naming the VALUE still lands
+    assert sc.retires(C(subj="rel:mother", obj="Bendigo"), C(subj="rel:mother", obj="Ballarat")) == "slot:residence"        # control: one mother, one slot
+
+
 def test_retirement_by_key():
     old = C(subj="rel:mother", obj="Ballarat")
     assert sc.retires(C(subj="rel:mother", obj="Ballarat", pol="negate", quote="not Ballarat"), old) == "retract:residence"

@@ -50,7 +50,7 @@ from typed_env import env_str
 logger = logging.getLogger(__name__)
 
 ENV = "ZOE_HOLD_THE_FACT"
-HISTORY_ROWS = 16            # newest first; the claim is found however many filler turns precede the pushback
+HISTORY_ROWS = 400           # newest first (200 exchanges); the claim is found however many filler turns precede the pushback - a 16-row read lost it after 8 exchanges
 MAX_WORDS = 16               # a pushback is a short sentence; a paragraph that mentions Thursday is not one
 _GUEST_IDS = ("", "guest", "anonymous", "voice-guest", "voice-daemon")
 
@@ -626,14 +626,15 @@ async def _confirm(ex: list, message: str, user_id: str, session_id: str, apply:
     return None
 
 
-async def handle(message: str, user_id: str, session_id: str, *, speaker_verified: Optional[bool] = None) -> str:
+async def handle(message: str, user_id: str, session_id: str, *, speaker_verified: Optional[bool] = None,
+                 allow_writes: bool = True) -> str:
     """The reply for the fast tier, or '' (the turn goes on to the brain untouched). ``shadow`` logs what it
     would do and returns ''; ``off`` reads nothing. NEVER raises."""
     m = mode()
     if m == "off":
         return ""
     try:
-        p = await plan(message, user_id, session_id, speaker_verified=speaker_verified, apply=(m == "enforce"))
+        p = await plan(message, user_id, session_id, speaker_verified=speaker_verified, apply=(m == "enforce" and allow_writes))
         if p is None:
             return ""
         logger.info("HOLD_THE_FACT mode=%s decision=%s reason=%s", m, p.action, p.reason)

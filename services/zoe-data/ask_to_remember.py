@@ -408,7 +408,7 @@ async def recall_reply(user_id: str, *, svc: Any = None) -> str:
 # ── the entry point ──────────────────────────────────────────────────────────────────────────
 
 async def handle(text: str, user_id: str, session_id: str = "", *, speaker_verified: Optional[bool] = None,
-                 svc: Any = None) -> Optional[str]:
+                 svc: Any = None, allow_writes: bool = True) -> Optional[str]:
     """The reply for an explicit memory ask in ``text``, or None (flag off, a guest, not an ask). NEVER raises
     (``SpeculativeTurnCancelled`` is a ``CancelledError``, so a cancelled prefix still propagates and writes nothing)."""
     try:
@@ -423,6 +423,8 @@ async def handle(text: str, user_id: str, session_id: str = "", *, speaker_verif
                 logger.info("ASK_TO_REMEMBER user=%s outcome=unverified_recall", user_id)
                 return UNVERIFIED_RECALL
             return await recall_reply(user_id, svc=svc)
+        if not allow_writes:      # a dry replay (explicit allow_writes=False) reads, it never saves / replaces / retracts
+            return None
         return await remember(p.clause, user_id, utterance=p.utterance, session_id=session_id,
                               speaker_verified=speaker_verified, cue=p.cue, svc=svc)
     except Exception as exc:  # noqa: BLE001 - a turn is never broken by this tier

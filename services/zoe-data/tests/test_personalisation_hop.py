@@ -166,6 +166,42 @@ def test_the_hop_finds_the_facts_for_the_day_sim_asks(svc):
     assert [f.text for f in build(svc, COLD_ASK).facts] == [WALK]
 
 
+def test_the_rows_the_hop_served_are_recorded_for_why_did_you_say_that(svc):
+    """The hop puts a durable fact in front of the brain without the recall tool: provenance must know, on the Flue path and on the packet path."""
+    import memory_provenance as mp
+    from routers import memories
+
+    put(svc, NIGHT)
+    mp.reset() if hasattr(mp, "reset") else mp._STATES.clear()
+    mp.begin_turn(UID)
+    asyncio.run(zc._hop_context_block(SLEEP_ASK, UID))
+    assert [t for _ts, rows, _xw in mp._STATES[UID].served for _i, t in rows] == [NIGHT]
+    mp._STATES.clear()
+    mp.begin_turn(UID)
+    asyncio.run(memories.memory_for_prompt(user_id=UID, message=SLEEP_ASK, limit=12, _=None))
+    assert NIGHT in [t for _ts, rows, _xw in mp._STATES[UID].served for _i, t in rows]
+
+
+ALLERGY = "I'm allergic to peanuts, so nothing with nuts please."
+
+
+def test_a_sensitive_fact_is_not_put_in_front_of_the_brain_for_an_unconfirmed_voice(svc, monkeypatch):
+    import restraint
+
+    put(svc, ALLERGY)
+    monkeypatch.setenv("ZOE_RESTRAINT", "enforce")
+    assert [f.text for f in build(svc, COOK_ASK).facts] == [ALLERGY]                 # no verdict (typed / gate off): the owner's own advice request pulls it
+    restraint.bind_verdict(True)
+    try:
+        assert [f.text for f in build(svc, COOK_ASK).facts] == [ALLERGY]             # a confirmed member: delivered
+        restraint.bind_verdict(False)
+        assert build(svc, COOK_ASK).facts == ()                                      # the gate did NOT confirm the speaker: withheld
+        monkeypatch.setenv("ZOE_RESTRAINT", "shadow")
+        assert [f.text for f in build(svc, COOK_ASK).facts] == [ALLERGY]             # control: shadow only logs
+    finally:
+        restraint.bind_verdict(None)
+
+
 def test_durable_facts_do_not_decay_a_year_old_fact_is_still_shown(svc):
     put(svc, NIGHT)
     (rid, (doc, meta)), = svc._col.rows.items()

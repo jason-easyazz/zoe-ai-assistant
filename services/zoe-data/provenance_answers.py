@@ -940,14 +940,23 @@ async def twins_of(user_id: str, ref: Any, *, svc: Any = None) -> list:
             if r.id == ref.id or not _owns(r.metadata or {}, user_id):
                 continue
             m = r.metadata or {}
-            same_turn = (turn and str(m.get("user_turn_id") or "") == turn) or (
-                excerpt and str(m.get("source_excerpt") or "").strip().lower() == excerpt)
+            r_turn = str(m.get("user_turn_id") or "")
+            r_ex = str(m.get("source_excerpt") or "").strip().lower()
+            if turn and r_turn and r_turn != turn:
+                continue                                     # two different saved turns: a different fact, however alike the words
+            if excerpt and r_ex and excerpt not in r_ex and r_ex not in excerpt:
+                continue
+            same_turn = bool(turn and r_turn == turn) or bool(excerpt and r_ex and (excerpt in r_ex or r_ex in excerpt))
             r_ep = _row_epoch(m)
             near = ep is not None and r_ep is not None and abs(r_ep - ep) <= _TWIN_WINDOW_S
             if not (same_turn or near):
                 continue
             rw = mp.content_words(r.text or "")
-            if words and rw and len(words & rw) / min(len(words), len(rw)) >= _TWIN_OVERLAP:
+            # the same turn: most of the content words agree. Only the clock in common (no turn evidence): one row's words must lie
+            # WHOLLY inside the other's - "my son Rowan is allergic to peanuts" and "my daughter Wren is allergic to peanuts" share
+            # the predicate, not the fact (ask_to_remember.siblings_of's rule)
+            need = _TWIN_OVERLAP if same_turn else 1.0
+            if words and rw and len(words & rw) / min(len(words), len(rw)) >= need:
                 out.append(r)
         return out
     except Exception as exc:  # noqa: BLE001
@@ -968,6 +977,10 @@ async def _erase_words(user_id: str, exp: "mp.Explained", *extra: str) -> int:
     for words in {w for w in (exp.quote, exp.text, *extra) if w}:
         n += await exact_words.erase_text(user_id, words)
         n += await exact_words.forget_transcript(user_id, words)
+    # what the night mind kept of those words (its observations live in their own tables): same rule - raise, never confirm a forget that held
+    import night_mind
+
+    n += await night_mind.erase_words(user_id, exp.turn_id, exp.quote, exp.text, *extra)
     return n
 
 
@@ -1109,7 +1122,8 @@ async def _own_names(user_id: str) -> frozenset:
 # ── the entry point ───────────────────────────────────────────────────────────
 
 async def handle(text: str, user_id: str, session_id: str = "", *, channel: Optional[str] = None,
-                 speaker_verified: Optional[bool] = None, svc: Any = None, now: Optional[float] = None) -> Optional[str]:
+                 speaker_verified: Optional[bool] = None, svc: Any = None, now: Optional[float] = None,
+                 allow_writes: bool = True) -> Optional[str]:
     """The reply for a provenance / memory-control shape in ``text``, or None (flag off, not one of these shapes, or a turn that
     belongs to the brain - including an off-the-record turn WITH a payload, which is marked here and answered by the brain). NEVER
     raises (``CancelledError`` still propagates, so a cancelled speculative turn writes nothing)."""
@@ -1135,7 +1149,7 @@ async def handle(text: str, user_id: str, session_id: str = "", *, channel: Opti
 
         # (3) / forget-it: only on the turn right after an answer named a row
         if not guest:
-            exp = mp.explained(uid, now=now)
+            exp = mp.explained(uid, now=now, session_id=session_id) if allow_writes else None   # forget it / fix it write: a dry replay never reaches them
             if exp is not None:
                 if exp.awaiting_fix:
                     # "what's the right answer?" - this whole turn is the answer

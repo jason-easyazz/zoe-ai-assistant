@@ -667,6 +667,11 @@ def _salvage_items(raw: str) -> list:
     return out
 
 
+def _flat_words(text: str) -> str:
+    """Lower-case words only, single-spaced: the comparison form for "is this quote in that turn"."""
+    return " ".join(re.findall(r"[^\W_]+", str(text or "").lower()))
+
+
 def _read_claims(facts: list) -> list:
     """The parsed claim row of each extracted item (None where absent / malformed / the flag is off)."""
     import structural_claims as sc
@@ -722,7 +727,11 @@ async def _structural_post(svc, user_id: str, user_message: str, stored: list, c
         from memory_supersede import retire_by_claims
 
         mine = [(ref, c) for ref, c, _fact in stored if c is not None]
-        denials = [(None, c) for i, c in enumerate(claims) if i in consumed and c is not None]
+        # a denial has no row of its own, so nothing else checks it against the owner's turn: its quote must BE in that turn (a model-invented
+        # "not a doctor" beside a valid "I am a nurse" would otherwise retire the old doctor row on the nurse row's authority)
+        said = _flat_words(user_message)
+        denials = [(None, c) for i, c in enumerate(claims)
+                   if i in consumed and c is not None and _flat_words(c.quote) and f" {_flat_words(c.quote)} " in f" {said} "]
         sup = await retire_by_claims(svc, user_id, mine + denials)
         if sup.get("retired"):
             result["superseded"] = result.get("superseded", 0) + sup["retired"]
@@ -745,19 +754,32 @@ async def _structural_post(svc, user_id: str, user_message: str, stored: list, c
         logger.warning("structural post-turn step failed for %s: %s", user_id, type(exc).__name__)
 
 
-async def _quote_retire_pass(result: dict, user_id: str, user_message: str, source: str, speaker_verified: "bool | None") -> dict:
-    """The per-turn digest's second half for a SPOKEN turn: the quote-backed retirement judge (``memory_retire.distill_turn``).
+#: the digest's ``source`` -> the lane the retirement judge speaks for. A source not listed here is left alone.
+_QUOTE_RETIRE_LANES = {"turn_digest": "chat", "voice_turn_digest": "voice"}
 
-    A voice turn never lets the brain retire a saved note in the turn (the speaker may not be the owner, and a spoken sentence is
-    the speech-to-text's guess): the change of state it carries ("I gave up the cello") is judged HERE, after the reply was spoken,
-    once the server's own speaker gate has confirmed the owner. ``ZOE_QUOTE_RETIRE`` = shadow (default: log the decision, change
-    nothing) | enforce | off. The chat lane's judge is the brain's ``memory_retire`` tool, so any other ``source`` is left alone.
-    Never raises; ``result`` is returned (with ``quote_retire`` = the decision's action when one was made)."""
-    if source == "voice_turn_digest":
+
+async def _quote_retire_pass(result: dict, user_id: str, user_message: str, source: str, speaker_verified: "bool | None") -> dict:
+    """The per-turn digest's second half: the quote-backed retirement judge (``memory_retire.distill_turn``), on BOTH lanes.
+
+    The change of state a turn carries ("I gave up the cello") is judged HERE, after the reply was given, never in the turn. A voice
+    turn is judged once the server's own speaker gate has confirmed the owner. A chat turn is judged for any named account: the
+    brain's ``memory_retire`` tool is only an optional extra, because the 4B brain does not call a tool on a statement that asks it
+    nothing (S10, 2026-10-09: the tool was disclosed and never called, so nothing ran, not even in shadow). ``ZOE_QUOTE_RETIRE`` =
+    shadow (default: log the decision, change nothing) | enforce | off. Never raises; ``result`` is returned (with ``quote_retire`` =
+    the decision's action when one was made). An off-the-record turn and a turn the digest skipped for a third-person pronoun
+    subject ("she sold the Corolla") are not judged: they are not the owner stating a change of their own. A memory opt-out stops it too."""
+    lane = _QUOTE_RETIRE_LANES.get(source)
+    if lane and not result.get("off_record") and result.get("skipped_reason") != "pronoun_subject_no_context":
         try:
             import memory_retire
+            import user_prefs
 
-            decision = await memory_retire.distill_turn(user_id, user_message, speaker_verified=speaker_verified)
+            try:                                    # an automatic memory write: the owner's opt-out stops it too
+                if await user_prefs.is_memory_opted_out(user_id):
+                    return result
+            except Exception:  # noqa: BLE001 - an unreadable pref must not stop the walls from judging
+                pass
+            decision = await memory_retire.distill_turn(user_id, user_message, speaker_verified=speaker_verified, lane=lane)
             if decision.action not in ("off", "nothing_to_offer"):
                 result["quote_retire"] = decision.action
         except Exception as exc:  # noqa: BLE001 - the digest result is already in hand
@@ -1628,6 +1650,7 @@ async def load_day_messages(user_id: str, start_iso: str, end_iso: str, db=None)
             JOIN chat_sessions cs ON cm.session_id = cs.id
             WHERE """ + owner_expr + """ = ?
               AND cm.role = 'user'
+              AND """ + _off_record_sql("cm") + """
               AND cm.created_at::timestamptz >= ?::timestamptz
               AND cm.created_at::timestamptz < ?::timestamptz
             ORDER BY cm.created_at ASC

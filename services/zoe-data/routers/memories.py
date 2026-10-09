@@ -989,11 +989,21 @@ async def memory_for_prompt(
             result["exact_words"] = sum(1 for ln in xw_block.split("\n") if ln.startswith("- "))
     # What the night mind noticed (ZOE_NIGHT_MIND=enforce, default OFF = no read, no I/O): at most three dated quotes of the owner's own words, only when the
     # message names a story or is an open check-in. Relevance mode only (the continuity block is budgeted around its closing ask). Fail-open.
+    nm_served: list = []     # (turn_id, said_at, quote) of the night notes shown - recorded for "why did you say that?"
     if not continuity and message.strip():
         try:
             import night_mind
 
-            nm_block = await night_mind.prompt_block(user_id, message)
+            nm_block = await night_mind.prompt_block(user_id, message, served=nm_served)
+            if nm_block and restraint.mode() != "off":
+                # appended after the restraint filter above: the same guest wall and mutes apply to each quote line
+                _lines = nm_block.split("\n")
+                _idx = [n for n, ln in enumerate(_lines) if ln.startswith("- ")]
+                _ok = await restraint.filter_extra(user_id, message, [_lines[n] for n in _idx], pull=True)
+                _drop = {n for n, k in zip(_idx, _ok) if not k}
+                if _drop:
+                    _lines = [ln for n, ln in enumerate(_lines) if n not in _drop]
+                    nm_block = "\n".join(_lines) if any(ln.startswith("- ") for ln in _lines) else ""
         except Exception:  # noqa: BLE001 - an extra block: the packet is complete without it
             nm_block = ""
         if nm_block:
@@ -1004,12 +1014,14 @@ async def memory_for_prompt(
     # a 6am dog walk, a diet, a child's age - under "Shape the answer by", with one rule line. Those facts share no
     # words with the question, so neither the ranked read (70-day decay) nor a semantic search surfaces them. Only an
     # advice-shaped message reads anything; every other turn is byte-for-byte what it was. Never in continuity mode.
+    hop_rows: list = []
     if not continuity and message.strip():
         try:
             import personalisation_hop
 
             hop = await personalisation_hop.build(user_id, message)
             hop_block = hop.section()
+            hop_rows = [(f.id, f.text) for f in hop.facts] if hop_block else []
         except Exception:  # noqa: BLE001 - an extra read: the packet is complete without it
             hop_block = ""
         if hop_block:
@@ -1024,8 +1036,9 @@ async def memory_for_prompt(
             text_by_id = {r.id: r.text for r in (list(facts) + list(hits) + list(recent or []))}
             memory_provenance.note_served(
                 user_id,
-                [(e["id"], text_by_id[e["id"]]) for e in (result.get("refs") or []) if e.get("id") in text_by_id],
-                [(h.turn_id, h.said_at, h.text) for h in xw_hits],
+                [(e["id"], text_by_id[e["id"]]) for e in (result.get("refs") or []) if e.get("id") in text_by_id] + hop_rows,
+                [(h.turn_id, h.said_at, h.text) for h in xw_hits]
+                + [(t, s, q) for t, s, q in nm_served if t and q.replace("[", "(") in (result.get("packet") or "")],
             )
     except Exception:  # noqa: BLE001 - bookkeeping must never fail a packet
         pass

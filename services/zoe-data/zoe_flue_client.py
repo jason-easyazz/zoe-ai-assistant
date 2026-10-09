@@ -1137,6 +1137,12 @@ async def _hop_context_block(message: str, user_id: str) -> str:
         return ""
     if not hop:
         return ""
+    try:   # BM5: this reply stood on these durable rows - "why did you say that?" must name them, not say nothing was used
+        import memory_provenance as _mp_hop
+
+        _mp_hop.note_served(user_id, [(f.id, f.text) for f in hop.facts])
+    except Exception:  # noqa: BLE001 - bookkeeping must never fail a turn
+        pass
     return f"{_HOP_BLOCK_OPEN}\n{hop.section()}\n{_RECALL_BLOCK_CLOSE}"
 
 

@@ -244,6 +244,22 @@ def select(message: str, rows: list) -> Hop:
 
 # ── the read ─────────────────────────────────────────────────────────────────────────────────
 
+async def _restrained(user_id: str, message: str, hop: Hop) -> Hop:
+    """The hop's facts minus the ones restraint would withhold (``ZOE_RESTRAINT=enforce``): a sensitive fact is not put in front of the
+    brain for a voice the speaker gate did not confirm, and a muted topic stays muted. The advice request itself is the pull (the
+    owner's own diet / allergy is the point), so only those two walls apply. Never raises."""
+    try:
+        import restraint
+
+        if restraint.mode() == "off":
+            return hop
+        keep = await restraint.filter_extra(user_id, message, [f.text for f in hop.facts], pull=True)
+        return Hop(hop.topics, tuple(f for f, k in zip(hop.facts, keep) if k))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("personalisation_hop: restraint skipped (%s)", type(exc).__name__)
+        return hop
+
+
 async def build(user_id: str, message: str, *, svc: Any = None) -> Hop:
     """The hop for this turn: flag on, a real owner, an advice request, one bounded read of the owner's durable rows.
     An empty ``Hop`` otherwise. NEVER raises; a slow or failing store is simply no hop."""
@@ -260,6 +276,8 @@ async def build(user_id: str, message: str, *, svc: Any = None) -> Hop:
         svc = svc or get_memory_service()
         rows = await asyncio.wait_for(svc.load_durable_for_hop(user_id), timeout=TIMEOUT_S)
         hop = select(message, rows)
+        if hop.facts:
+            hop = await _restrained(user_id, message, hop)
         logger.info("PERSONALISATION_HOP user=%s topics=%s rows=%d facts=%d", user_id, ",".join(topics), len(rows),
                     len(hop.facts))
         return hop

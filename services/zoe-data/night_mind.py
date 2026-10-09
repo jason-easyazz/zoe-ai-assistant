@@ -694,7 +694,8 @@ def _unstorable(span: str) -> bool:
     try:
         from memory_service import scrub_pii
 
-        if scrub_pii(span)[1]:
+        redacted, why = scrub_pii(span)
+        if why or redacted != span:        # a labelled password / passcode / API key comes back REDACTED with no reason: it is still a secret - never kept
             return True
     except Exception:  # noqa: BLE001 - the PII scrubber is the memory service's: if it cannot be loaded the quote is not kept (fail closed)
         return True
@@ -1185,6 +1186,7 @@ COUNT_KEYS = ("turns_in", "turns_dropped_routine", "turns_skipped_cap", "chunks"
 
 async def _run(user_id: str, transcript: Any, svc: Any, m: str, now: "_dt.datetime", cfg: Config, ledger_rows: Any, night_date: str,
                res: "dict[str, Any]") -> "dict[str, Any]":
+    started = time.monotonic()
     counts: "dict[str, int]" = {k: 0 for k in COUNT_KEYS}
     res.update(status="ran", **counts, written=0, capped=False, partial=False, changes=[], ctx_tokens=cfg.ctx_tokens, chunk_budget=cfg.chunk_budget,
                max_calls=cfg.max_calls)
@@ -1291,21 +1293,39 @@ async def _run(user_id: str, transcript: Any, svc: Any, m: str, now: "_dt.dateti
         res["written"] = 0
         _log(res)
         return res
-    # ── commit: the whole night, at the end ───────────────────────────────────────────────────────────────────────
-    for o in plan["new_obs"]:
-        await backend.put_observation(o)
-    for o in plan["changed_obs"]:
-        await backend.put_observation(o)
-    for t in plan["threads"]:
-        await backend.put_thread(t)
-    await backend.put_run(night_store.run_row(
+    # ── commit: the whole night, at the end - ONE transaction, under the user's erase lock, after a last look at the forget ledger ──
+    run = night_store.run_row(
         id="nr-" + hashlib.sha1(f"{user_id}|{night_date}|{time.time()}".encode()).hexdigest()[:16], user_id=user_id, night_date=night_date,
         model_id=cfg.model[:64], prompt_sha=prompt_sha(), schema_sha=schema_sha(), watermark_msg_id=turns[-1].id if turns else "",
-        status="partial" if res["partial"] else "ok", wall_s=0.0, counts={k: res[k] for k in COUNT_KEYS}, created_at=time.time()))
-    res["written"] = len(plan["new_obs"]) + len(plan["changed_obs"])
+        status="partial" if res["partial"] else "ok", wall_s=0.0, counts={k: res[k] for k in COUNT_KEYS}, created_at=time.time())
+    async with _user_lock(user_id):
+        if _DELETED_AT.get(user_id, -1.0) >= started:            # the member was erased while the model calls ran: nothing of this pass comes back
+            res["written"] = 0
+            return _finish(res, counts, status="skipped", skipped_reason="erased_during_run")
+        try:
+            new_obs, changed_obs, thread_rows = await _unforgotten_plan(user_id, plan, threads)
+        except Exception as exc:  # noqa: BLE001 - a forget that cannot be checked is a forget that cannot be trusted: write nothing, the next pass retries
+            logger.warning("night_mind: forget check failed for %s (%s) - nothing written", user_id, type(exc).__name__)
+            res["written"] = 0
+            return _finish(res, counts, status="skipped", skipped_reason="forget_check_failed")
+        await backend.commit_plan(new_obs + changed_obs, thread_rows, run)
+    res["written"] = len(new_obs) + len(changed_obs)
     invalidate(user_id)
     _log(res)
     return res
+
+
+async def _unforgotten_plan(user_id: str, plan: "dict[str, Any]", prior_threads: "list[dict]") -> "tuple[list[dict], list[dict], list[dict]]":
+    """The plan's rows minus anything that now names an entity the owner asked Zoe to forget (the durable ledger, read AFTER the model calls: an
+    erasure that completed while they ran must not be written back). A new thread left with no observation is dropped. RAISES if the ledger cannot be read."""
+    import memory_forgotten
+
+    new_obs, _ = await memory_forgotten.keep_unforgotten(user_id, plan["new_obs"], text_of=lambda o: o["quote"])
+    changed_obs, _ = await memory_forgotten.keep_unforgotten(user_id, plan["changed_obs"], text_of=lambda o: o["quote"])
+    threads, _ = await memory_forgotten.keep_unforgotten(user_id, plan["threads"], text_of=lambda t: t["title"])
+    existing = {t["id"] for t in prior_threads}
+    alive = {o["thread_id"] for o in new_obs + changed_obs}
+    return new_obs, changed_obs, [t for t in threads if t["id"] in existing or t["id"] in alive]
 
 
 def _finish(res: "dict[str, Any]", counts: "dict[str, int]", **kw: Any) -> "dict[str, Any]":
@@ -1452,6 +1472,20 @@ _MOOD_RE = re.compile(
 
 _CACHE: "dict[str, tuple[float, list, list]]" = {}
 
+#: per-user write lock: the night pass's commit and the erasures (``erase_entity`` / ``erase_words`` / ``delete_user``) never interleave in this process
+_LOCKS: "dict[str, asyncio.Lock]" = {}
+#: when ``delete_user`` last ran per user (monotonic): a pass that started before it must not write the user's rows back
+_DELETED_AT: "dict[str, float]" = {}
+
+
+def _user_lock(user_id: str) -> "asyncio.Lock":
+    lock = _LOCKS.get(user_id)
+    if lock is None:
+        if len(_LOCKS) > 512:
+            _LOCKS.clear()
+        lock = _LOCKS[user_id] = asyncio.Lock()
+    return lock
+
 
 def invalidate(user_id: Optional[str] = None) -> None:
     if user_id is None:
@@ -1568,16 +1602,25 @@ def block_text(rows: "Sequence[dict]") -> str:
     return body + ("\n" + _MOOD_ASK if any(o.get("mood") for o in rows) else "")
 
 
-async def prompt_block(user_id: str, message: str, *, now: "Optional[_dt.datetime]" = None) -> str:
+async def prompt_block(user_id: str, message: str, *, now: "Optional[_dt.datetime]" = None, served: "Optional[list]" = None) -> str:
     """The recall packet's "What I've noticed" block for this message (<= 3 lines), or ``""``. Flag off = ``""`` with no I/O. Never raises, time-boxed.
-    ``leave`` threads appear ONLY when the message names them."""
+    ``leave`` threads appear ONLY when the message names them. ``served``, when given, receives ``(turn_id, said_at, quote)`` of each line shown, so
+    the reply's provenance can name the owner's turn it stood on."""
     if not enabled() or not (user_id or "").strip() or not (message or "").strip():
         return ""
     try:
         now = now or _dt.datetime.now(_dt.timezone.utc)
         threads, obs = await asyncio.wait_for(snapshot(user_id, use_cache=True), timeout=0.6)
         today = now.astimezone(_local_tz()).date()
-        return block_text(lookup(threads, obs, message, today))
+        rows = lookup(threads, obs, message, today)
+        if served is not None:
+            for o in rows[:SHOW_LINES]:
+                try:
+                    said = float(o.get("said_at") or 0.0)
+                except (TypeError, ValueError):
+                    said = 0.0
+                served.append((str(o.get("turn_id") or ""), said, str(o.get("quote") or "")))
+        return block_text(rows)
     except Exception as exc:  # noqa: BLE001 - an extra block: the packet is complete without it
         logger.debug("night_mind: prompt block skipped (%s)", type(exc).__name__)
         return ""
@@ -1640,7 +1683,8 @@ async def erase_entity(user_id: str, name: str) -> int:
     from memory_forgotten import name_pattern
 
     try:
-        n = int(await night_store.get_backend().erase_matching(user_id, name_pattern(name)) or 0)
+        async with _user_lock(user_id):
+            n = int(await night_store.get_backend().erase_matching(user_id, name_pattern(name)) or 0)
     except Exception as exc:  # noqa: BLE001
         if _no_table(exc):
             return 0
@@ -1649,12 +1693,45 @@ async def erase_entity(user_id: str, name: str) -> int:
     return n
 
 
+def _flat(text: Any) -> str:
+    return re.sub(r"\s+", " ", str(text or "")).strip().lower()
+
+
+async def erase_words(user_id: str, turn_id: str, *texts: str) -> int:
+    """Delete this user's observations (and the threads left empty) that keep the words of ONE forgotten turn: those saved from that turn id, and
+    those whose quote sits inside - or contains - any of ``texts`` (the displayed quote, the row text). "Forget it" after an explained answer must
+    reach what the night pass saved from the same words, which ``erase_entity`` (name-based) does not. A store failure is RAISED."""
+    if not (user_id or "").strip():
+        return 0
+    wanted = [t for t in (_flat(x) for x in texts) if len(t.split()) >= 2]
+    tid = str(turn_id or "").strip()
+    if not wanted and not tid:
+        return 0
+    async with _user_lock(user_id):
+        try:
+            backend = night_store.get_backend()
+            hit = [o["quote"] for o in await backend.observations(user_id)
+                   if (tid and str(o["turn_id"]) == tid) or any(_flat(o["quote"]) in w or w in _flat(o["quote"]) for w in wanted)]
+            hit = [q for q in hit if (q or "").strip()]
+            if not hit:
+                return 0
+            n = int(await backend.erase_matching(user_id, re.compile("|".join(re.escape(q) for q in sorted(set(hit), key=len, reverse=True)))) or 0)
+        except Exception as exc:  # noqa: BLE001
+            if _no_table(exc):
+                return 0
+            raise
+    invalidate(user_id)
+    return n
+
+
 async def delete_user(user_id: str) -> int:
     """Remove every night-mind row of a user (the audited right-to-be-forgotten path). Raises on a store failure."""
     if not (user_id or "").strip():
         return 0
+    _DELETED_AT[user_id] = time.monotonic()
     try:
-        n = int(await night_store.get_backend().delete_user(user_id) or 0)
+        async with _user_lock(user_id):
+            n = int(await night_store.get_backend().delete_user(user_id) or 0)
     except Exception as exc:  # noqa: BLE001
         if _no_table(exc):
             return 0

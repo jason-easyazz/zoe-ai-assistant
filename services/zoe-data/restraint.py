@@ -521,6 +521,28 @@ async def apply_to_packet(user_id: str, message: Any, facts: list, hits: list,
         return facts, hits, recent
 
 
+async def filter_extra(user_id: str, message: Any, texts: list, *, pull: bool = True) -> list[bool]:
+    """Per text: may it ride this turn? For the blocks appended to the packet AFTER ``apply_to_packet`` (the personalisation hop's
+    durable facts, the night mind's quotes), which that filter never sees. ``pull`` = the lookup that chose the text was already the
+    owner pulling it (an advice request, a named story), so the only walls are the guest wall (a voice the speaker gate did not
+    confirm hears no sensitive text) and the member's mutes. ``off`` and ``shadow`` keep everything (shadow logs). Never raises."""
+    keep = [True] * len(texts)
+    m = mode()
+    if m == "off" or not texts:
+        return keep
+    try:
+        turn = turn_for(user_id, message)
+        if pull and not turn.pull_all:
+            turn = replace(turn, pull_all=True)
+        mutes = await list_mutes(user_id)
+        for n, text in enumerate(texts):
+            keep[n] = gate(user_id, decide(text, classify(text), turn, mutes, surface="packet"), "packet")
+        return keep
+    except Exception as exc:  # noqa: BLE001 - restraint must never break a turn
+        logger.warning("restraint: extra-block filter failed (no restraint this turn): %r", exc)
+        return [True] * len(texts)
+
+
 # ── 2b. withhold from the [Today] brief ──────────────────────────────────────
 async def filter_brief_ctx(ctx: dict, user_id: str, message: Any) -> dict:
     """The brief's gathered context minus the threads this turn may not carry. Returns a COPY (the
