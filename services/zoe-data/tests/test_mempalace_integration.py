@@ -335,12 +335,23 @@ async def test_upsert_updates_added_at():
 
 
 @pytest.mark.asyncio
-async def test_automatic_writer_cannot_assert_the_users_name():
+async def test_automatic_writer_cannot_assert_the_users_name(caplog):
     """Pin the policy that made the two upsert tests above change facts (#1866): an
-    automatic source never stores a user-name assertion - nothing reaches the store."""
-    await _mempalace_add("User's name is Jason", user_id="jason")
+    automatic source never stores a user-name assertion - nothing reaches the store.
+    The write path itself must be healthy (a broken writer would also leave the store
+    empty): the identity block must be the stated reason, and a non-identity fact from
+    the same writer must still land."""
+    import logging
+    with caplog.at_level(logging.INFO):
+        await _mempalace_add("User's name is Jason", user_id="jason")
+    assert any("IDENTITY_FACT_BLOCKED" in rec.getMessage() and "kind=name" in rec.getMessage()
+               for rec in caplog.records), "the name assertion must be refused by the identity wall, not lost"
     assert [r for r in _GLOBAL_COLLECTION._store.values()
             if r["metadata"].get("wing") == "jason"] == []
+    # positive control: the same writer can store an ordinary fact
+    await _mempalace_add("User's favourite colour is green", user_id="jason")
+    assert len([r for r in _GLOBAL_COLLECTION._store.values()
+                if r["metadata"].get("wing") == "jason"]) == 1
 
 
 # ---------------------------------------------------------------------------
