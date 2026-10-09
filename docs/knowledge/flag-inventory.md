@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-564 flags; 562 not documented in `.env.example`.
+569 flags; 567 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -165,6 +165,11 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_EXPRESSIVE_TTS` | `False` | yes | NO | `services/zoe-data/voice_delivery.py` |
 | `ZOE_FACE_ID_ENABLED` | `'false'` | no | NO | `services/zoe-data/routers/face_id.py` |
 | `ZOE_FACE_ID_THRESHOLD` | `'0.45'` | no | NO | `services/zoe-data/routers/face_id.py` |
+| `ZOE_FIRST_SOUND_CLAUSE` | `-`, `False` | yes | NO | `services/zoe-data/narration_filter.py`<br>`services/zoe-data/voice_first_sound.py` |
+| `ZOE_FIRST_SOUND_CLAUSE_MIN_CHARS` | `24` | yes | NO | `services/zoe-data/voice_first_sound.py` |
+| `ZOE_FIRST_SOUND_CLAUSE_MIN_WORDS` | `4` | yes | NO | `services/zoe-data/voice_first_sound.py` |
+| `ZOE_FIRST_SOUND_NARRATION_EARLY` | `-` | no | NO | `services/zoe-data/narration_filter.py` |
+| `ZOE_FIRST_SOUND_TOOL_ACK` | `False` | yes | NO | `services/zoe-data/voice_first_sound.py` |
 | `ZOE_FLUE_ABORT_ON_CANCEL` | `-` | no | NO | `services/zoe-data/zoe_flue_client.py` |
 | `ZOE_FLUE_BRAIN_TIMEOUT_S` | `dynamic` | no | NO | `services/zoe-data/zoe_flue_client.py` |
 | `ZOE_FLUE_BRAIN_URL` | `-` | no | NO | `services/zoe-data/zoe_flue_client.py` |
@@ -357,7 +362,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_PANEL_ALLOWED_HOSTS` | `''` | no | NO | `services/zoe-data/agent_safety.py` |
 | `ZOE_PANEL_ID` | `'post-merge-probe'`, `'zoe-touch-pi'` | no | NO | `scripts/maintenance/zoe_latency_probe.py`<br>`services/zoe-data/zoe_agent.py` |
 | `ZOE_PANEL_SESSION_TRUST_WINDOW_S` | `'900'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
-| `ZOE_PERF` | `-` | no | NO | `scripts/perf/hop_placement_ab.py`<br>`scripts/perf/measure_speed.py`<br>`scripts/perf/measure_tts.py`<br>`scripts/perf/measure_voice.py`<br>`scripts/perf/recall_evidence_probe.py`<br>`scripts/perf/samantha_bar.py`<br>`scripts/perf/samantha_day_sim.py`<br>`scripts/perf/samantha_person.py`<br>`scripts/perf/user_model_ab.py` |
+| `ZOE_PERF` | `-` | no | NO | `scripts/perf/hop_placement_ab.py`<br>`scripts/perf/measure_first_sound.py`<br>`scripts/perf/measure_speed.py`<br>`scripts/perf/measure_tts.py`<br>`scripts/perf/measure_voice.py`<br>`scripts/perf/recall_evidence_probe.py`<br>`scripts/perf/samantha_bar.py`<br>`scripts/perf/samantha_day_sim.py`<br>`scripts/perf/samantha_person.py`<br>`scripts/perf/user_model_ab.py` |
 | `ZOE_PERSONALISATION_HOP` | `True` | yes | NO | `services/zoe-data/personalisation_hop.py` |
 | `ZOE_PERSONALISATION_HOP_PLACEMENT` | `'block'` | yes | NO | `services/zoe-data/personalisation_hop.py` |
 | `ZOE_PERSONA_DRIFT` | `False` | yes | NO | `services/zoe-data/persona_drift.py` |
