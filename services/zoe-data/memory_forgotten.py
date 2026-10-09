@@ -28,6 +28,12 @@ speaker) and by the digest / idle-consolidation / open-loops transcript loaders 
 forgotten entity are skipped, not re-mined). An explicit re-teach releases the entry
 (``release``) AFTER the store succeeds.
 
+NEAR SPELLINGS. ``add`` also stores hashed edit-distance probes of the name (``forget_match``: <= 2 edits for 7+ codepoints, 1 for
+5-6, none for shorter; a split spelling one less; accents folded; any script), scope ``near``, plus a presence marker. The write
+guards (``MemoryService.ingest``, the transcript loaders) pass ``near=True``: a text that names a near spelling is HELD OUT (not
+stored, not mined) and the owner is asked "did you also mean ...?" (``memory_forget_alias``); nothing already stored is ever
+erased on a near match. An answered "no" records the spelling as ``distinct`` and it passes. Reads (hiding recalled rows) stay exact.
+
 A lookup failure is fail-open on the last-known-good set (a DB blip must never lose a fact); a forget
 whose DB write fails still shields this process through the in-process overlay.
 """
@@ -44,6 +50,8 @@ import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Optional, Protocol
 
+import forget_match as fm
+
 logger = logging.getLogger(__name__)
 
 SALT_ENV = "ZOE_FORGET_LEDGER_SALT"
@@ -59,6 +67,12 @@ SCOPE_ENTITY = "entity"
 #: A spelling the owner CONFIRMED is the same forgotten name (``memory_forget_alias``): forgotten through the same path,
 #: labelled so the audit can tell "I forgot Dana" from "I also meant Dayna".
 SCOPE_ALIAS = "alias"
+SCOPE_NEAR = "near"          # a hashed edit-distance probe of a forgotten name (never a name)
+SCOPE_DISTINCT = "distinct"  # a spelling the owner said is someone else: passes the near guard
+NEAR_ENV = "ZOE_FORGET_NEAR"
+#: Longest joined name (codepoints) that gets near probes (<= 211 rows); longer names are matched exactly only.
+MAX_NEAR_LEN = 20
+_NEAR_FLAG = "nearflag"      # hashed marker row: this user has near probes (so users without them pay nothing)
 #: A cached "forgotten set" is trusted this long; any write through this module invalidates it.
 _CACHE_TTL_S = 30.0
 #: After a failed read, do not hammer the DB per ingest: reuse the last-known-good set this long.
@@ -131,6 +145,11 @@ def _user_salt(user_id: str) -> bytes:
     return hmac.new(_master(), b"zoe.forgotten.v1|salt|" + user_id.encode("utf-8"), hashlib.sha256).digest()
 
 
+def near_enabled() -> bool:
+    """Near-spelling probes on (default) unless ``ZOE_FORGET_NEAR`` is 0 / off."""
+    return (os.environ.get("ZOE_FORGET_NEAR") or "").strip().lower() not in ("0", "off", "false", "no", "disabled")
+
+
 def normalise_key(name: str) -> str:
     """The canonical entity key: NFKC, case-folded words joined by one space (at most ``MAX_KEY_TOKENS``)."""
     text = unicodedata.normalize("NFKC", str(name or "")).casefold()
@@ -143,7 +162,10 @@ def name_pattern(name: str) -> "re.Pattern[str]":
     words = _WORD_RE.findall(unicodedata.normalize("NFKC", str(name or "")).strip())
     if not words:
         return re.compile(r"\b" + re.escape(str(name or "").strip()) + r"\b", re.IGNORECASE)
-    return re.compile(r"\b" + r"[\W_]+".join(re.escape(w) for w in words) + r"\b", re.IGNORECASE)
+    # a name in a script written without spaces has no word boundary inside a run of text: no \b on that side
+    head = "" if fm.is_unspaced(words[0][0]) else r"\b"
+    tail = "" if fm.is_unspaced(words[-1][-1]) else r"\b"
+    return re.compile(head + r"[\W_]+".join(re.escape(w) for w in words) + tail, re.IGNORECASE)
 
 
 class _Hasher:
@@ -166,26 +188,6 @@ def key_hash(user_id: str, name: str) -> str:
     return _Hasher(user_id).hash(key)
 
 
-def candidate_hashes(user_id: str, text: str, *, wanted: Optional[frozenset[str]] = None) -> set[str]:
-    """The hash of every 1..MAX_KEY_TOKENS-word run of ``text`` (whole words, case-blind). With
-    ``wanted`` set, only the hashes that are in it are returned (the match)."""
-    if not user_id or not text or not configured():
-        return set()
-    words = _WORD_RE.findall(unicodedata.normalize("NFKC", str(text)).casefold())
-    if not words:
-        return set()
-    hasher = _Hasher(user_id)
-    out: set[str] = set()
-    for i in range(len(words)):
-        for n in range(1, MAX_KEY_TOKENS + 1):
-            if i + n > len(words):
-                break
-            digest = hasher.hash(" ".join(words[i:i + n]))
-            if wanted is None or digest in wanted:
-                out.add(digest)
-    return out
-
-
 # ── storage ──────────────────────────────────────────────────────────────────
 
 class Backend(Protocol):
@@ -195,6 +197,8 @@ class Backend(Protocol):
     async def active_hashes(self, user_id: str, now_iso: str) -> set[str]: ...
 
     async def delete(self, user_id: str, key_hashes: Iterable[str]) -> int: ...
+
+    async def users(self) -> list[str]: ...        # every user with an active entry (maintenance: redacting old copies)
 
 
 class MemoryBackend:
@@ -211,6 +215,9 @@ class MemoryBackend:
 
     async def active_hashes(self, user_id, now_iso):
         return {h for (u, h), r in self.rows.items() if u == user_id and r["shield_until"] > now_iso}
+
+    async def users(self):
+        return sorted({u for (u, _h), r in self.rows.items() if r["shield_until"] > _iso(_now())})
 
     async def delete(self, user_id, key_hashes):
         n = 0
@@ -247,6 +254,11 @@ class PostgresBackend:
                 "SELECT key_hash FROM memory_forgotten WHERE user_id = ? AND shield_until > ?",
                 (user_id, now_iso))
             return {str(r[0]) for r in await cur.fetchall()}
+
+    async def users(self):
+        async with self._ctx() as db:
+            cur = await db.execute("SELECT DISTINCT user_id FROM memory_forgotten WHERE shield_until > ?", (_iso(_now()),))
+            return sorted(str(r[0]) for r in await cur.fetchall())
 
     async def delete(self, user_id, key_hashes):
         hashes = list(key_hashes)
@@ -363,55 +375,153 @@ async def add(user_id: str, name: str, *, actor: str = "", scope: str = SCOPE_EN
                        user_id, type(exc).__name__)
         return False
     _invalidate(user_id)
+    await _add_near(user_id, name, start=start, until=until, actor=actor or user_id)
     logger.info("memory_forgotten: recorded a forgotten entity for user=%s scope=%s (hash only)", user_id, scope)
     return True
 
 
-async def matches(user_id: str, text: str) -> bool:
-    """Does ``text`` mention an entity this user has forgotten (a whole word / phrase, case-blind)?"""
+async def _put(user_id: str, digest: str, *, scope: str, actor: str, start: datetime, until: str) -> None:
+    _overlay.setdefault(user_id, {})[digest] = until
+    await get_backend().upsert(user_id, digest, scope=scope, actor=actor, forgotten_at=_iso(start), shield_until=until)
+
+
+def near_hashes(user_id: str, name: str) -> list[str]:
+    """The hashed edit-distance probes of ``name`` (see ``forget_match``) - none when the name is too short to allow an edit."""
+    joined = fm.joined_key(name)
+    if len(joined) > MAX_NEAR_LEN:      # the probe count grows with the square of the length: a longer name keeps its exact entry only
+        return []
+    k = fm.max_edits(joined)
+    h = _Hasher(user_id).hash
+    return [h(f"near{k}|{key}") for key in fm.probe_keys(joined, k)] if joined else []
+
+
+async def _add_near(user_id: str, name: str, *, start: datetime, until: str, actor: str) -> None:
+    """Store the near probes of ``name`` (best effort: the exact entry above is the forget; these widen what it catches)."""
+    if not near_enabled() or not fm.joined_key(name):
+        return
+    try:
+        for digest in near_hashes(user_id, name) + [_Hasher(user_id).hash(_NEAR_FLAG)]:
+            await _put(user_id, digest, scope=SCOPE_NEAR, actor=actor, start=start, until=until)
+        _invalidate(user_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memory_forgotten: could not persist the near probes for user=%s (%s)", user_id, type(exc).__name__)
+
+
+async def add_distinct(user_id: str, spelling: str) -> bool:
+    """The owner said ``spelling`` is NOT a forgotten name (they declined "did you also mean ...?"): it passes the near guard
+    from now on. Stores the hash of the spelling, permanently."""
+    key = fm.joined_key(spelling)
+    if not user_id or not key or not configured():
+        return False
+    try:
+        await _put(user_id, _Hasher(user_id).hash("distinct|" + key), scope=SCOPE_DISTINCT, actor=user_id,
+                   start=_now(), until=PERMANENT_UNTIL)
+        _invalidate(user_id)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memory_forgotten: could not persist a distinct spelling for user=%s (%s)", user_id, type(exc).__name__)
+        return False
+
+
+def spans_in(user_id: str, text: str, wanted: "frozenset[str]", *, near: bool) -> "tuple[list[tuple[int, int]], list[tuple[int, int]]]":
+    """``(exact spans, near-only spans)`` of ``text`` against the user's forgotten set. Near spans are only computed when asked,
+    when the user has near probes, and they exclude a spelling the owner declared ``distinct`` and anything an exact span covers."""
+    h = _Hasher(user_id).hash
+    exact = fm.merge(fm.exact_spans(text, h, wanted, max_tokens=MAX_KEY_TOKENS))
+    if not (near and near_enabled() and h(_NEAR_FLAG) in wanted):
+        return exact, []
+    out = []
+    for s, e in fm.merge(fm.near_spans(text, h, wanted)):
+        if any(s < xe and xs < e for xs, xe in exact):
+            continue
+        if h("distinct|" + fm.joined_key(text[s:e])) in wanted:
+            continue
+        out.append((s, e))
+    return exact, out
+
+
+async def spans(user_id: str, text: str, *, near: bool = True) -> "list[tuple[int, int]]":
+    """Every span of ``text`` that names a forgotten entity (exact, and with ``near`` the near spellings), merged. What a
+    redaction replaces; consults the ledger only (no name is needed)."""
+    if not user_id or not text or not configured():
+        return []
+    wanted = await active_hashes(user_id)
+    if not wanted:
+        return []
+    exact, nr = spans_in(user_id, text, wanted, near=near)
+    return fm.merge(exact + nr)
+
+
+async def matches(user_id: str, text: str, *, near: bool = False) -> bool:
+    """Does ``text`` mention an entity this user has forgotten (a whole word / phrase, case-blind)? With ``near`` (the write
+    guards) a near spelling of one counts too - and the owner is asked about it (``memory_forget_alias``)."""
     if not user_id or not text or not configured():
         return False
     wanted = await active_hashes(user_id)
     if not wanted:
         return False
-    return bool(candidate_hashes(user_id, text, wanted=wanted))
+    exact, nr = spans_in(user_id, text, wanted, near=near)
+    if nr:
+        await _ask_about(user_id, text, nr)
+    return bool(exact or nr)
+
+
+async def _ask_about(user_id: str, text: str, nr: "list[tuple[int, int]]") -> None:
+    """Queue "did you also mean ...?" for the near spellings that held a write out (best effort, never raises, never a name)."""
+    try:
+        import memory_forget_alias
+        await memory_forget_alias.queue_spellings(user_id, [text[s:e] for s, e in nr])
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("memory_forgotten: could not queue the near-spelling question (%s)", type(exc).__name__)
 
 
 async def keep_unforgotten(user_id: str, items: Iterable[Any], *,
-                           text_of: Any = str) -> tuple[list[Any], int]:
-    """``items`` without the ones whose text (``text_of(item)``) names a forgotten entity, and how many were
-    dropped. Used by the transcript loaders (nightly digest, idle consolidation, open loops): a turn that names
-    a forgotten entity is skipped, not re-mined."""
+                           text_of: Any = str, near: bool = True) -> tuple[list[Any], int]:
+    """``items`` without the ones whose text (``text_of(item)``) names a forgotten entity - or a near spelling of one - and how many
+    were dropped. Used by the transcript loaders (nightly digest, idle consolidation, open loops): a turn that names a forgotten
+    entity is skipped, not re-mined."""
     rows = list(items)
     if not rows or not configured() or not user_id:
         return rows, 0
     wanted = await active_hashes(user_id)
     if not wanted:
         return rows, 0
-    kept = [r for r in rows if not candidate_hashes(user_id, text_of(r) or "", wanted=wanted)]
+    kept = []
+    for r in rows:
+        text = text_of(r) or ""
+        exact, nr = spans_in(user_id, text, wanted, near=near)
+        if nr:
+            await _ask_about(user_id, text, nr)
+        if not (exact or nr):
+            kept.append(r)
     return kept, len(rows) - len(kept)
 
 
 async def release(user_id: str, text: str) -> int:
-    """An explicit re-teach by the person: drop every active entry whose entity ``text`` names. Returns how many
-    were released. Called AFTER the store succeeded (a failed re-teach must keep the shield)."""
+    """An explicit re-teach by the person: drop every active entry whose entity ``text`` names (and that entity's near probes).
+    Returns how many entities were released. Called AFTER the store succeeded (a failed re-teach must keep the shield)."""
     if not user_id or not text or not configured():
         return 0
     wanted = await active_hashes(user_id)
-    hit = candidate_hashes(user_id, text, wanted=wanted) if wanted else set()
+    h = _Hasher(user_id).hash
+    exact = fm.merge(fm.exact_spans(text, h, wanted, max_tokens=MAX_KEY_TOKENS)) if wanted else []
+    hit = {h(normalise_key(text[s:e])) for s, e in exact} & set(wanted)
     if not hit:
         return 0
+    drop = set(hit)
+    for s, e in exact:
+        drop.update(x for x in near_hashes(user_id, text[s:e]) if x in wanted)
     ov = _overlay.get(user_id)
     if ov:
-        for h in hit:
-            ov.pop(h, None)
+        for d in drop:
+            ov.pop(d, None)
     _invalidate(user_id)
     try:
-        await get_backend().delete(user_id, hit)
+        await get_backend().delete(user_id, drop)
     except Exception as exc:  # noqa: BLE001
         # keep the entry shielded rather than half-released: re-add it to the overlay
-        for h in hit:
-            _overlay.setdefault(user_id, {})[h] = _iso(_now() + timedelta(days=shield_days()))
+        for d in drop:
+            _overlay.setdefault(user_id, {})[d] = _iso(_now() + timedelta(days=shield_days()))
         logger.warning("memory_forgotten: release failed for user=%s (%s) - the entry stays", user_id,
                        type(exc).__name__)
         return 0

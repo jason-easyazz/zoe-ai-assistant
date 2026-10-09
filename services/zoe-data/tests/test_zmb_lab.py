@@ -25,6 +25,7 @@ import live_store_guard
 import memory_authority as ma
 import memory_extractor
 import memory_service
+import memory_forgotten
 import memory_tombstones
 
 pytestmark = pytest.mark.ci_safe
@@ -86,8 +87,8 @@ def test_every_controlled_cell_goes_red_with_its_features_off(full_control_pass)
     # ``disk`` declared skip; the 14th controlled one, S10x.pool_right_rows_retired, needs the embedder and runs on Z0e only);
     # +10 for the night mind: K2 + K3 (night_mind), K6 (night_echo), K7 (night_chunking), K8 (night_citations), K9 x2 (night_mind, night_notice),
     # K10 (night_restraint), K11 (night_absence), K12 (night_weights) - proven on Z0n, the arm with the night pass
-    # (147 + 12 + 10 = 169, 149 + 13 + 10 = 172)
-    assert len(runnable) in (169, 172) and cp["checked"] == cp["red"] == len(runnable)
+    # +1 for F3 (the durable forget ledger is a graded cell with the control forget_ledger) (147 + 12 + 10 + 1 = 170, 149 + 13 + 10 + 1 = 173)
+    assert len(runnable) in (170, 173) and cp["checked"] == cp["red"] == len(runnable)
     assert {r["id"] for r in cp["rows"]} == runnable
     assert all(r["verdict"] == "FAIL" and r["stage"] in ("write", "read", "answer") for r in cp["rows"])
 
@@ -98,7 +99,7 @@ def test_each_control_is_named_by_a_cell_and_flips_the_cells_it_alone_guards(con
     assert naming, f"control {control!r} guards no cell: it would be an un-instrumented switch"
     alone = [c for c in naming if set(c.controls) <= {control}]
     if not alone:   # a two-layer defence (the quality gate + the extractor): off ALONE flips nothing, both do
-        assert control == "gate"
+        assert control in ("gate", "tombstone")      # tombstone + durable ledger: the late-writer cells (F2) need BOTH off
         return
     cp = runner.control_pass(CELLS, world.make_world(), frozenset({control}))
     if cp["checked"] == 0:
@@ -214,7 +215,11 @@ def test_breaking_the_identity_wall_itself_turns_the_identity_cells_red(monkeypa
 def test_breaking_the_tombstone_itself_turns_the_forget_cells_red(monkeypatch, arm):
     assert _run("F2.late_writer.digest", arm).verdict == "PASS"
     monkeypatch.setattr(memory_tombstones, "matching_tombstone", lambda *a, **k: None)
-    assert _run("F2.late_writer.digest", arm).verdict == "FAIL"
+    assert _run("F2.late_writer.digest", arm).verdict == "PASS"        # the durable ledger is the second wall: one layer gone is not a resurrection
+    async def never(*_a, **_k):
+        return False
+    monkeypatch.setattr(memory_forgotten, "matches", never)
+    assert _run("F2.late_writer.digest", arm).verdict == "FAIL"        # both gone: the name returns
 
 
 def test_breaking_the_real_extractor_turns_the_extraction_cells_red(monkeypatch, arm):
@@ -252,8 +257,7 @@ def test_z0_measures_as_documented(full_measure):
     # mis-attribution, L1 / L2 no second hop and a recency decay on a durable fact) were MEASURED red on Z0 on 2026-10-07 and are FIXED: graded
     # cells with controls (exact_index, observation_gate, multi_hop). What is left is the two older targets.
     assert TARGETS == sorted([
-        "F3.after_tombstone_ttl",
-        "I2.third_party_fragment.third_party"])
+        "I2.third_party_fragment.third_party"])        # F3 (the durable forget ledger, #1883) is a graded cell with a control since the Z0 arm supplies a lab secret
     assert len([c for c in CELLS if c.id.startswith("A1.")]) == 56
     assert all(isinstance(r["duration_s"], float) and r["brain_turns"] == 0 for r in full_measure)
 
@@ -273,7 +277,7 @@ def test_the_axis_table_for_z0_is_claimable_with_wilson_intervals(full_measure, 
     assert (axes["poisoning"]["n"], axes["poisoning"]["pass"]) == (7, 6)
     # only the bare third-party fragment is left: it needs a speaker verdict, not a text rule
     assert axes["poisoning"]["targets_failing"] == ["I2.third_party_fragment.third_party"]
-    assert axes["forgetting"]["targets_failing"] == ["F3.after_tombstone_ttl"]
+    assert axes["forgetting"]["targets_failing"] == []
     assert axes["extraction"]["targets_failing"] == []   # B9 fixed in #1882
     # the capability axes: Z0's measured state (J / L / K in ITEMS, the unit the winner clause pools). The three gaps the first run of these
     # axes found are FIXED (2026-10-07): J 0 / 40 -> 40 / 40 (exact-words index), L 6 / 40 -> 39 / 40 (no decay on a durable fact + the second hop),
@@ -480,7 +484,17 @@ def test_the_clock_capability_is_what_expires_the_tombstone(arm):
                 proposes=(f"User's friend {s['friend']} rang.",))
     assert arm.ingest([late]).refused == 1                          # inside the TTL: refused
     arm.advance_clock(360)
-    assert arm.ingest([late]).written == 1                          # past it: resurrected (target F3)
+    assert arm.ingest([late]).refused == 1                          # past it the durable ledger (F3) still refuses it...
+    import memory_forgotten
+    real = memory_forgotten.matches
+
+    async def never(*_a, **_k):
+        return False
+    memory_forgotten.matches = never
+    try:
+        assert arm.ingest([late]).written == 1                      # ...and without it the expired tombstone lets the name back
+    finally:
+        memory_forgotten.matches = real
 
 
 def test_the_scripted_reader_declines_unless_one_row_covers_the_question():

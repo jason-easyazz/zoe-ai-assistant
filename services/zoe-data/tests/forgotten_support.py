@@ -67,6 +67,9 @@ CREATE TABLE IF NOT EXISTS user_portraits (user_id TEXT PRIMARY KEY, portrait_te
 CREATE TABLE user_model_cards (user_id TEXT PRIMARY KEY, card_json TEXT NOT NULL, card_text TEXT NOT NULL);
 CREATE TABLE open_loops (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, loop_text TEXT NOT NULL,
     context TEXT, follow_up_hint TEXT, resolved BOOLEAN DEFAULT FALSE, resolved_at TIMESTAMP);
+CREATE TABLE IF NOT EXISTS chat_sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT NOT NULL DEFAULT 'New Chat');
+CREATE TABLE IF NOT EXISTS chat_messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL,
+    metadata TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE proactive_candidates (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'loop',
     text TEXT NOT NULL, hint TEXT NOT NULL DEFAULT '', cue_words TEXT NOT NULL DEFAULT '');
 """

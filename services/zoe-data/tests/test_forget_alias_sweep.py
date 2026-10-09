@@ -254,7 +254,7 @@ async def test_a_confirmed_alias_is_gone_from_the_store_the_ledger_the_contact_a
     assert await mf.matches(USER, "Marysol") and await mf.matches(USER, "the Marysol thing")
     assert await world.db.execute_fetchall("SELECT 1 FROM people WHERE id='p-marysol' AND deleted=1")
     ledger = list(ledger_env.rows.values())
-    assert {r["scope"] for r in ledger} == {"entity", "alias"}                                                # the alias is labelled
+    assert {r["scope"] for r in ledger} - {"near"} == {"entity", "alias"}                                                # the alias is labelled
     assert "marysol" not in json.dumps(ledger).lower() and "marisol" not in json.dumps(ledger).lower()      # hashes only
     kept, dropped = await mf.keep_unforgotten(USER, ["Marysol rang about the lift on Friday", "the dentist is on Elm Street"])
     assert dropped == 1 and kept == ["the dentist is on Elm Street"]
@@ -268,15 +268,22 @@ async def test_a_confirmed_alias_is_gone_from_the_store_the_ledger_the_contact_a
 
 
 @pytest.mark.asyncio
-async def test_an_unconfirmed_alias_stays_and_the_digest_still_reads_it(world, monkeypatch):
+async def test_an_unconfirmed_alias_stays_stored_but_the_digest_holds_its_turns_until_the_owner_answers(world, monkeypatch, tmp_path):
+    monkeypatch.setenv("ZOE_MEMORY_REJECT_LEDGER", str(tmp_path / "reject.json"))      # its own counters: the next test counts declines
+    memory_reject_ledger.reset_for_tests()
     await _seed(world)
     await _forget()
-    assert _naming(world.svc, "Marysol")
+    assert _naming(world.svc, "Marysol")                                   # nothing stored is erased unasked
     assert await world.db.execute_fetchall("SELECT 1 FROM people WHERE id='p-marysol' AND deleted=0")
-    assert not await mf.matches(USER, "Marysol")
-    kept, dropped = await mf.keep_unforgotten(USER, ["Marysol rang about the lift on Friday"])
-    assert dropped == 0 and kept
-    assert len(await _questions(world.db)) == 3                            # still waiting
+    assert not await mf.matches(USER, "Marysol")                           # reads stay exact: the row is still shown
+    turn = "Marysol rang about the lift on Friday"
+    kept, dropped = await mf.keep_unforgotten(USER, [turn])                # the loaders hold the near spelling out of re-mining...
+    assert dropped == 1 and not kept
+    assert len(await _questions(world.db)) == 3                            # ...and the question is already waiting (not asked twice)
+    q = next(q for q in await _questions(world.db) if json.loads(q["pre_filled_slots"])["alias"] == "Marysol")
+    assert await ps.mark_resolved(q["id"], USER)                           # "no, that's someone else"
+    kept, dropped = await mf.keep_unforgotten(USER, [turn])
+    assert dropped == 0 and kept == [turn]
 
 
 @pytest.mark.asyncio
