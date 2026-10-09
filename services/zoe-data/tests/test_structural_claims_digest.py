@@ -3,9 +3,10 @@
 What is pinned, mode by mode (``ZOE_STRUCTURAL_CLAIMS``):
 
 * ``off``     the extractor prompt and token budget are the legacy ones, no claim is stored, nothing is logged;
-* ``shadow``  (the default) the prompt asks for the claim row, the claim is stored on the row, the LEXICAL decision still decides, and the
-              structural decision is logged and stored beside it (``claim_lexical`` / ``claim_structural``): the two false promotions of the
-              research ("My mum is moving to Bendigo next month") are visible as ``lexical=promote structural=anchor``;
+* ``shadow``  (the default) the extraction is the LEGACY call, byte for byte (same prompt, same token budget, same stored rows as ``off``);
+              the claim row is read afterwards by a SEPARATE bounded call (``structural_reader``) over the facts that were stored, the LEXICAL
+              decision still decides, and the structural decision is only logged beside it: the two false promotions of the research
+              ("My mum is moving to Bendigo next month") are visible as ``lexical=promote structural=anchor``;
 * ``enforce`` the claim row decides: the false promotion is held, a Spanish sentence the lexical floor never reads is promoted, the contrast's
               "not Y" half retires Y's row BY KEY (never stored as a fact), an invented quote anchors nothing.
 
@@ -23,6 +24,7 @@ import pytest
 import memory_authority as ma
 import memory_digest
 import structural_claims as sc
+import structural_reader as sr
 import structural_verifier as sv
 
 
@@ -101,9 +103,16 @@ def _llm(monkeypatch, handler):
 
 
 def _facts_handler(facts):
+    """The stubbed model. The extraction call answers like the real prompt would: with the claim rows only when the prompt asked for them
+    (``max_tokens`` 640 = the enforce prompt), else the plain legacy items. The post-turn reader answers with the claim row of each fact."""
     def handler(payload):
         if payload.get("grammar"):
             return "no"
+        if payload["messages"][0]["content"] == sr.SYSTEM:
+            return json.dumps([{"i": i, **f["claim"]} for i, f in enumerate(facts, 1) if isinstance(f.get("claim"), dict)],
+                              ensure_ascii=False)
+        if payload["max_tokens"] == 256:
+            return json.dumps([{k: v for k, v in f.items() if k != "claim"} for f in facts], ensure_ascii=False)
         return json.dumps(facts, ensure_ascii=False)
     return handler
 
@@ -115,6 +124,7 @@ def _run(monkeypatch, facts, turn, *, mode=None, verifier="off", seed=None):
         monkeypatch.setenv(sc.ENV, mode)
     monkeypatch.setenv(sv.ENV, verifier)
     sv.reset()
+    sr.reset()
     svc, col = _svc(monkeypatch)
     calls = _llm(monkeypatch, _facts_handler(facts))
 
@@ -140,7 +150,7 @@ def test_off_asks_for_nothing_stores_no_claim_and_logs_nothing(monkeypatch, capl
     facts = [{"type": "profile", "fact": MOVING_FACT, "claim": claim(quote=MOVING.rstrip("."), tense="future")}]
     with caplog.at_level(logging.INFO):
         svc, col, res, calls = _run(monkeypatch, facts, MOVING, mode="off")
-    assert len(calls) == 1 and calls[0]["max_tokens"] == 256
+    assert len(calls) == 1 and calls[0]["max_tokens"] == 256          # one call, the legacy one: the reader is not asked either
     assert "claim" not in calls[0]["messages"][1]["content"].lower().replace("claim row", "")  # the legacy prompt
     assert '"quote"' not in calls[0]["messages"][1]["content"]
     _, row = _by_text(col, MOVING_FACT)
@@ -151,32 +161,104 @@ def test_off_asks_for_nothing_stores_no_claim_and_logs_nothing(monkeypatch, capl
 
 # ── shadow (the default) ─────────────────────────────────────────────────────────────────────────────
 
-def test_shadow_is_the_default_asks_for_the_claim_row_and_keeps_the_lexical_decision(monkeypatch, caplog):
+def test_shadow_is_the_default_extracts_exactly_as_off_then_reads_the_claim_row_in_a_separate_call(monkeypatch, caplog):
     facts = [{"type": "profile", "fact": MOVING_FACT, "claim": claim(quote=MOVING.rstrip("."), tense="future")}]
     with caplog.at_level(logging.INFO):
         svc, col, res, calls = _run(monkeypatch, facts, MOVING, mode=None)
-    prompt = calls[0]["messages"][1]["content"]
-    assert calls[0]["max_tokens"] == 640 and '"pol"' in prompt and '"quote"' in prompt and "TWO items" in prompt
+    extract, read = calls[0], calls[1]
+    # call 1: the LEGACY extraction, byte for byte (the 2026-10-09 regression: the claim-row prompt changed which facts the 4B returned)
+    assert extract["max_tokens"] == 256 and extract["messages"][1]["content"].startswith(memory_digest._TURN_EXTRACTION_PROMPT[:200])
+    assert '"pol"' not in extract["messages"][1]["content"] and '"quote"' not in extract["messages"][1]["content"]
+    assert "STRUCTURAL_EXTRACT" not in caplog.text
+    # call 2: the separate post-turn reader, over the fact that was STORED
+    assert read["messages"][0]["content"] == sr.SYSTEM and read["max_tokens"] == sr.MAX_TOKENS and MOVING_FACT in read["messages"][1]["content"]
     _, row = _by_text(col, MOVING_FACT)
     assert row["authority_basis"] == ma.VERBATIM_BASIS and row["authority_class"] == ma.USER_STATED_DERIVED  # lexical still decides
-    assert (row["claim_lexical"], row["claim_structural"], row["claim_applied"]) == ("promote", "anchor", False)
-    stored = json.loads(row["claim"])
-    assert stored["tense"] == "future" and stored["pol"] == "affirm" and stored["quote"] == MOVING.rstrip(".")
-    assert "STRUCTURAL_FLOOR floor=support lane=turn_digest mode=shadow lang=en lexical=promote structural=anchor agree=0 applied=0" in caplog.text
-    assert "STRUCTURAL_EXTRACT" in caplog.text
+    assert not [k for k in row if k.startswith("claim")]              # the row is exactly the row `off` writes
+    assert "STRUCTURAL_FLOOR floor=support lane=turn_digest_post mode=shadow lang=en lexical=promote structural=anchor agree=0 applied=0" in caplog.text
+    assert "STRUCTURAL_READ lane=turn_digest facts=1 with_claim=1" in caplog.text
     assert MOVING_FACT not in "".join(r.getMessage() for r in caplog.records if r.getMessage().startswith("STRUCTURAL_FLOOR"))  # labels only
 
 
-def test_shadow_and_off_store_the_same_row_class_for_a_plain_statement(monkeypatch):
-    turn = "I live in Perth."
-    facts = [{"type": "profile", "fact": "User lives in Perth",
-              "claim": claim(subj="user", obj="Perth", quote="I live in Perth")}]
-    outs = {}
-    for mode in ("off", "shadow"):
-        _, col, _, _ = _run(monkeypatch, facts, turn, mode=mode)
-        _, row = _by_text(col, "User lives in Perth")
-        outs[mode] = (row["authority_class"], row["authority_basis"], row["status"])
-    assert outs["off"] == outs["shadow"] == (ma.USER_STATED_DERIVED, ma.VERBATIM_BASIS, "approved")
+def test_shadow_reader_off_switch_and_no_stored_fact_mean_no_second_call(monkeypatch):
+    facts = [{"type": "profile", "fact": MOVING_FACT, "claim": claim(quote=MOVING.rstrip("."), tense="future")}]
+    monkeypatch.setenv(sr.ENV, "off")
+    _, _, _, calls = _run(monkeypatch, facts, MOVING, mode=None)
+    assert len(calls) == 1 and calls[0]["max_tokens"] == 256
+    monkeypatch.delenv(sr.ENV, raising=False)
+    _, col, _, calls = _run(monkeypatch, [], MOVING, mode=None)       # the extractor found nothing: nothing was stored, nothing to read
+    assert len(calls) == 1 and not col.rows
+    _, _, _, calls = _run(monkeypatch, facts, MOVING, mode="off")
+    assert len(calls) == 1
+
+
+def test_a_failed_reader_costs_the_digest_nothing(monkeypatch):
+    facts = [{"type": "profile", "fact": "User lives in Perth", "claim": claim(subj="user", obj="Perth", quote="I live in Perth")}]
+    base = _facts_handler(facts)
+
+    def handler(payload):
+        if payload["messages"][0]["content"] == sr.SYSTEM:
+            raise RuntimeError("brain busy")
+        return base(payload)
+    monkeypatch.delenv(sc.ENV, raising=False)
+    sr.reset()
+    svc, col = _svc(monkeypatch)
+    _llm(monkeypatch, handler)
+    res = asyncio.run(memory_digest.run_turn_digest(UID, "I live in Perth.", session_id="s-1"))
+    assert res["new"] == 1 and _by_text(col, "User lives in Perth")[1]["status"] == "approved"
+    assert sr.STATS["error"] == 1
+
+
+#: the seed set: the turns the 2026-10-09 acceptance regressed on (synthetic names), each with the legacy extractor's items
+SEED_TURNS = [
+    ("I live in Perth.", [{"type": "profile", "fact": "User lives in Perth",
+                           "claim": claim(subj="user", obj="Perth", quote="I live in Perth")}]),
+    ("Big news - I've moved. I live in Hobart now.", [{"type": "profile", "fact": "User has moved and now lives in Hobart",
+                                                       "claim": claim(subj="user", obj="Hobart", quote="I live in Hobart now")}]),
+    ("My friend Dana Whitfield has two kids, Mika and Biscuit.",
+     [{"type": "relationship", "fact": "User's friend is named Dana Whitfield",
+       "claim": claim(subj="person:Dana Whitfield", pred="name", obj="Dana Whitfield", quote="My friend Dana Whitfield")}]),
+    ("Biscuit is their dog", [{"type": "pet", "fact": "User's dog is named Biscuit",
+                               "claim": claim(subj="user", pred="pet_name", obj="Biscuit", quote="Biscuit is their dog")}]),
+    (MOVING, [{"type": "profile", "fact": MOVING_FACT, "claim": claim(quote=MOVING.rstrip("."), tense="future")}]),
+]
+
+
+def _stored_rows(col):
+    """Every stored row, minus the ids/timestamps that differ run to run: text + the whole metadata."""
+    volatile = {"added_at", "added_ts", "created_at", "updated_at", "valid_from", "ts", "last_accessed", "id", "idem_key", "idempotency_key"}
+    return sorted((d, tuple(sorted((k, repr(v)) for k, v in m.items() if k not in volatile))) for d, m in col.rows.values())
+
+
+def test_shadow_and_off_store_byte_identical_rows_and_send_the_identical_extraction_prompt(monkeypatch):
+    """THE class fix: `shadow` may add a measurement, never change what the extractor is asked or what gets stored.
+    Over the seed set, the extraction payload and every stored row (text, type, class, basis, status, every metadata key) are equal."""
+    for turn, facts in SEED_TURNS:
+        outs = {}
+        for mode in ("off", "shadow"):
+            _, col, _, calls = _run(monkeypatch, facts, turn, mode=mode)
+            outs[mode] = (calls[0], _stored_rows(col), len(calls))
+        assert outs["off"][0] == outs["shadow"][0], turn                 # the extraction payload: model, messages, max_tokens, temperature
+        assert outs["off"][1] == outs["shadow"][1] and outs["off"][1], turn
+        assert outs["off"][2] == 1 and outs["shadow"][2] == 2            # the only difference: shadow's second, separate, reader call
+
+
+def test_the_extraction_prompt_and_budget_do_not_depend_on_shadow_but_enforce_changes_them(monkeypatch):
+    import hashlib
+
+    for mode, want_tokens in (("off", 256), ("shadow", 256), ("enforce", 640)):
+        monkeypatch.setenv(sc.ENV, mode)
+        prompt, tokens = memory_digest._turn_prompt()
+        assert tokens == want_tokens
+        digest = hashlib.sha256(prompt.encode()).hexdigest()
+        if mode == "enforce":
+            assert digest[:16] == "cd0909aa4c6f61c3"                  # the enforce prompt is exactly the one #1943 shipped
+            assert '"quote"' in prompt and "TWO items" in prompt
+        else:
+            assert digest == hashlib.sha256(memory_digest._TURN_EXTRACTION_PROMPT.encode()).hexdigest()
+            assert '"quote"' not in prompt and "TWO items" not in prompt
+    monkeypatch.delenv(sc.ENV, raising=False)                             # the default is shadow = the legacy prompt
+    assert memory_digest._turn_prompt() == (memory_digest._TURN_EXTRACTION_PROMPT, 256)
 
 
 def test_a_malformed_claim_is_just_no_claim(monkeypatch):
@@ -203,13 +285,15 @@ def test_enforce_holds_the_false_promotion_the_lexical_floor_makes(monkeypatch, 
     assert _by_text(col2, MOVING_FACT)[1]["authority_basis"] == ma.VERBATIM_BASIS
 
 
-def test_enforce_promotes_a_spanish_sentence_the_lexical_floor_never_reads(monkeypatch):
+def test_enforce_promotes_a_spanish_sentence_the_lexical_floor_never_reads(monkeypatch, caplog):
     turn = "Mi madre vive en Bendigo."
     fact = "La madre del usuario vive en Bendigo"
     facts = [{"type": "profile", "fact": fact, "claim": claim(quote="Mi madre vive en Bendigo", lang="es")}]
-    _, col, _, _ = _run(monkeypatch, facts, turn, mode="shadow")
-    assert _by_text(col, fact)[1]["authority_class"] == ma.MODEL_FROM_TURN                 # shadow: lexical = blind to Spanish
-    assert _by_text(col, fact)[1]["claim_structural"] == "promote"
+    with caplog.at_level(logging.INFO):
+        _, col, _, _ = _run(monkeypatch, facts, turn, mode="shadow")
+    row = _by_text(col, fact)[1]
+    assert row["authority_class"] == ma.MODEL_FROM_TURN and not [k for k in row if k.startswith("claim")]   # shadow: lexical = blind to Spanish
+    assert "lane=turn_digest_post mode=shadow lang=es lexical=hold structural=promote" in caplog.text          # ...and the reader's row says promote
     _, col, _, _ = _run(monkeypatch, facts, turn, mode="enforce")
     row = _by_text(col, fact)[1]
     assert row["authority_class"] == ma.USER_STATED_DERIVED and row["authority_basis"] == ma.VERBATIM_BASIS
@@ -246,10 +330,11 @@ def test_enforce_a_contrast_is_two_claims_the_denial_retires_the_old_row_by_key_
     assert "claim" in old_row and "superseded_by_id" in old_row                                   # the old claim row stays with the old row
     assert new_row["status"] == "approved" and new_row["authority_basis"] == ma.VERBATIM_BASIS
     assert "STRUCTURAL_RETIRE mode=enforce" in caplog.text and res["superseded"] == 1
-    # shadow: the same turn logs what WOULD be retired and retires nothing; the denial is still not stored
+    # shadow: the extraction is the legacy call (it returns the NEW fact only: the contrast rule is not in its prompt); the reader's row
+    # for it logs what WOULD be retired and retires nothing
     caplog.clear()
     with caplog.at_level(logging.INFO):
-        _, col2, res2, _ = _run(monkeypatch, facts, turn, mode="shadow", seed=seed)
+        _, col2, res2, _ = _run(monkeypatch, facts[:1], turn, mode="shadow", seed=seed)
     assert _by_text(col2, old)[1]["status"] == "approved" and "would_retire=1" in caplog.text
     assert "La madre del usuario no vive en Ballarat" not in [d for d, _ in col2.rows.values()]
     # off: no claim rows, no retirement, and the (unclaimed) denial item is judged as the extractor wrote it
@@ -305,23 +390,36 @@ def test_a_claim_whose_quote_carries_pii_is_not_stored(monkeypatch):
     turn = "My password is hunter2 and I live in Perth."
     facts = [{"type": "profile", "fact": "User lives in Perth",
               "claim": claim(subj="user", obj="Perth", quote="My password is hunter2 and I live in Perth")}]
-    _, col, _, _ = _run(monkeypatch, facts, turn, mode="shadow")
+    _, col, _, _ = _run(monkeypatch, facts, turn, mode="enforce")      # the claim row is STORED only where it is asked inline
     _, row = _by_text(col, "User lives in Perth")
     assert "claim" not in row and "hunter2" not in json.dumps(row)
     facts[0]["claim"] = claim(subj="user", obj="Perth", quote="I live in Perth")
-    _, col, _, _ = _run(monkeypatch, facts, turn, mode="shadow")
+    _, col, _, _ = _run(monkeypatch, facts, turn, mode="enforce")
     assert json.loads(_by_text(col, "User lives in Perth")[1]["claim"])["quote"] == "I live in Perth"
 
 
-def test_a_reply_cut_off_by_max_tokens_keeps_every_complete_item_in_claim_mode_only(monkeypatch):
-    """The claim rows lengthen the reply. Cut mid-item, the complete items still land; the legacy prompt keeps its all-or-nothing parse."""
+def test_a_reply_cut_off_by_max_tokens_keeps_every_complete_item_in_enforce_mode_only(monkeypatch):
+    """The claim rows lengthen the reply (enforce only: shadow and off ask for the legacy short one). Cut mid-item, the complete items still land; the legacy prompt keeps its all-or-nothing parse."""
     whole = json.dumps([{"type": "profile", "fact": "User lives in Perth", "claim": claim(subj="user", obj="Perth", quote="I live in Perth")},
                         {"type": "profile", "fact": "User likes tea", "claim": claim(subj="user", obj="tea", pred="preference", quote="I like tea")}])
     cut = whole[: whole.index('{"type": "profile", "fact": "User likes tea"')] + '{"type": "profile", "fact": "User lik'
-    for mode, want in (("shadow", ["User lives in Perth"]), ("off", [])):
+    for mode, want in (("enforce", ["User lives in Perth"]), ("shadow", []), ("off", [])):
         monkeypatch.setenv(sc.ENV, mode)
         monkeypatch.setenv(sv.ENV, "off")
         svc, col = _svc(monkeypatch)
         _llm(monkeypatch, lambda payload: cut)
         asyncio.run(memory_digest.run_turn_digest(UID, "I live in Perth. I like tea.", session_id="s-1"))
         assert sorted(d for d, _ in col.rows.values()) == want, mode
+
+
+def test_a_place_fragment_the_extractor_returns_is_refused_but_the_full_clause_is_kept(monkeypatch):
+    """Bar S24 (2026-10-09): a place fact must be a full clause. The model returning the bare fragment stores nothing; the same turn
+    with a full clause stores it. (The three fragments are the acceptance run's.)"""
+    for turn, fragment in (("Which city do I live in these days?", "User lives in these days"),
+                           ("Big news - I've moved. I live in Hobart now.", "User lives in now"),
+                           ("I live in Dunedin, by the way.", "User is from the")):
+        _, col, res, _ = _run(monkeypatch, [{"type": "profile", "fact": fragment}], turn, mode="off")
+        assert not col.rows, (turn, fragment)
+    _, col, _, _ = _run(monkeypatch, [{"type": "profile", "fact": "User has moved and now lives in Hobart"}],
+                        "Big news - I've moved. I live in Hobart now.", mode="off")
+    assert [d for d, _ in col.rows.values()] == ["User has moved and now lives in Hobart"]
