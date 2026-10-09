@@ -4908,6 +4908,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_STRUCTURAL_READER": {
+        "defaults": [
+          "'shadow'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/structural_reader.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_STRUCTURAL_VERIFIER": {
         "defaults": [
           "-"

@@ -385,6 +385,15 @@ def _label_of(r: Resolved) -> str:
     return "promote" if r.promoted else "anchor" if r.cls in (USER_STATED_DERIVED, USER_UNVERIFIED) else "hold"
 
 
+def label_of_meta(meta: Mapping[str, Any]) -> str:
+    """The LEXICAL label (promote | anchor | hold) a STORED row's class stands for - what ``_label_of`` said when it was written,
+    re-derived from the row's own stamps (the post-turn claim reader compares a claim row to it after the write)."""
+    cls = str((meta or {}).get("authority_class") or "")
+    if cls == USER_STATED_DERIVED and str((meta or {}).get("authority_basis") or "") == VERBATIM_BASIS:
+        return "promote"
+    return "anchor" if cls in (USER_STATED_DERIVED, USER_UNVERIFIED) else "hold"
+
+
 def _arbitrate(lexical: Resolved, w: str, base: str, text: str, anchor_text: Optional[str],
                speaker_verified: Optional[bool], claim: Any, siblings: Any) -> Resolved:
     """Structural floors (``structural_claims``): ``off`` -> the lexical decision untouched; ``shadow`` -> the lexical
@@ -398,6 +407,10 @@ def _arbitrate(lexical: Resolved, w: str, base: str, text: str, anchor_text: Opt
         lab = _label_of(lexical)
         parsed = claim if isinstance(claim, sc.Claim) else (sc.parse_claim(claim)[0] if claim else None)
         if parsed is None:
+            if m == sc.SHADOW:
+                # shadow must leave a write exactly as ``off`` would write it: a row with no claim row carries no comparison labels
+                # (the post-turn reader, ``structural_reader``, supplies the claim row and its comparison after the write)
+                return lexical
             return _dc_replace(lexical, lexical_label=lab, structural_label="no_claim")
         sibs = tuple(c if isinstance(c, sc.Claim) else sc.parse_claim(c)[0] for c in (siblings or ()))
         d = sc.decide(text, parsed, anchor_text or "", siblings=[c for c in sibs if c is not None],

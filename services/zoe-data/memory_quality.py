@@ -247,6 +247,54 @@ def is_pasted_content(text: str) -> bool:
     return own.pasted or bool(own.speech)
 
 
+# ── place facts are FULL CLAUSES, never a trailing fragment ──────────────────────────────────────────────────
+#
+# The deterministic extractor's "I live in (.{2,80})" took everything after "live in" to the end of the sentence: "I live in Dunedin,
+# by the way." stored "User lives in Dunedin, by the way", "I've moved. I live in Hobart now." stored "User lives in Hobart now", and the
+# QUESTION "Which city do I live in these days?" stored "User lives in these days" (bar S24, 2026-10-09: the summary read them back
+# as the owner's places). The discourse tail ("now", "by the way", "these days") is not part of the place, and a value that is only
+# such words / determiners names no place at all - it is a fragment, and a fragment is never a fact.
+_PLACE_TAIL_RE = re.compile(
+    r"(?:[\s,;:\u2013\u2014-]+(?:and\s+|but\s+|though\s+)?"
+    r"(?:now|nowadays|these\s+days|(?:right\s+|for\s+)now|at\s+the\s+moment|at\s+present|currently|lately|recently|still|"
+    r"by\s+the\s+way|btw|anyway|anyways|actually|though|too|as\s+well|just\s+so\s+you\s+know|if\s+you\s+(?:must\s+)?know|"
+    r"for\s+the\s+time\s+being|at\s+the\s+minute))+[\s.!?]*$",
+    re.IGNORECASE,
+)
+_PLACE_FILLER = frozenset(
+    "the a an this that these those here there now today tonight days day nowadays lately currently recently moment minute present "
+    "time being then again still also too well way anyway anyways actually right for at by as of in it um uh like btw though just so "
+    "you know if must".split())
+_PLACE_FACT_RE = re.compile(
+    r"^\s*user\s+(?:now\s+|currently\s+)?"
+    r"(?:lives\s+in|resides\s+in|works\s+at/for|works\s+(?:at|for)|is\s+from|moved\s+to|has\s+moved\s+to)\s+(?P<v>.+?)[\s.!]*$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def clean_place_value(value: str) -> str:
+    """The place a "live in / work at / am from" value names, with the discourse tail dropped ("Hobart now" -> "Hobart",
+    "Dunedin, by the way" -> "Dunedin"); ``""`` when nothing is left that names a place ("these days", "now", "the"): a fragment.
+    Pure."""
+    v = re.sub(r"\s+", " ", (value or "").strip(" \t\n\r.,;:!?"))
+    v = re.split(r"[.!?](?:\s|$)", v, maxsplit=1)[0].strip(" \t\n\r.,;:!?")      # one sentence: a place never runs on into the next
+    for _ in range(4):
+        trimmed = _PLACE_TAIL_RE.sub("", v).strip(" \t\n\r.,;:!?")
+        if trimmed == v:
+            break
+        v = trimmed
+    words = re.findall(r"[^\W_]+", v.lower())
+    if not words or all(w in _PLACE_FILLER for w in words):
+        return ""
+    return v
+
+
+def place_fragment(text: str) -> bool:
+    """Is ``text`` a place fact ("User lives in ...", "User works at ...", "User is from ...") whose value names no place?"""
+    m = _PLACE_FACT_RE.match(text or "")
+    return bool(m) and not clean_place_value(m.group("v"))
+
+
 def is_storable_fact(text: str) -> tuple[bool, str]:
     """Return ``(storable, reason)`` for a conversational memory candidate.
 
@@ -302,6 +350,10 @@ def is_storable_fact(text: str) -> tuple[bool, str]:
             # the shapes a speech-to-text transcript has instead of a "?": "tell me who ...",
             # "remember who ...", "hey zoe do you remember ..."
             return False, "recall_question"
+
+    # A place fact whose value is only a discourse tail ("User lives in these days") is a fragment of a sentence, not a fact.
+    if place_fragment(raw):
+        return False, "place_fragment"
 
     # LLM meta-rambling — never a personal fact.
     if _META_OPENER_RE.match(raw):
