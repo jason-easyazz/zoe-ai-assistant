@@ -304,8 +304,8 @@ def _check_resolvable(url: str, timeout: float = 5.0) -> None:
                            "--base-url / ZOE_REPLAY_BASE_URL (runbook §20)")
 
 
-async def _transcribe_via_stream(wav_path: str, batch_impl) -> tuple[str, int]:
-    """(transcript, post_speech_ms) through voice_stt_stream exactly as the panel would use it (paced 320 ms PCM16
+async def _transcribe_via_stream(wav_path: str, batch_impl) -> tuple[str, int, str]:
+    """(transcript, post_speech_ms, outcome) through voice_stt_stream exactly as the panel would use it (paced 320 ms PCM16
     batches, finish at end of clip, wake-word strip, empty/failed -> the batch STT). Only for the A/B arm
     ZOE_REPLAY_STT_UNDER_SPEECH=1; needs the in-process Moonshine (a second copy, like any inprocess replay)."""
     import wave as _wave
@@ -317,7 +317,7 @@ async def _transcribe_via_stream(wav_path: str, batch_impl) -> tuple[str, int]:
     n = ss.wav_sample_count(raw)
     if n is None:  # off-rate / non-mono clip: the daemon never streams these
         t0 = time.monotonic()
-        return await batch_impl(wav_path), int((time.monotonic() - t0) * 1000)
+        return await batch_impl(wav_path), int((time.monotonic() - t0) * 1000), "not_16k_mono"
     with _wave.open(wav_path, "rb") as w:
         pcm = w.readframes(w.getnframes())
 
@@ -343,8 +343,8 @@ async def _transcribe_via_stream(wav_path: str, batch_impl) -> tuple[str, int]:
     text = vt._strip_wake_word(list(lines)) if lines else ""
     post_ms = int((time.monotonic() - t_end) * 1000)
     if not text:  # production fallback: batch STT re-checks the clip
-        return await batch_impl(wav_path), int((time.monotonic() - t_end) * 1000)
-    return text, post_ms
+        return await batch_impl(wav_path), int((time.monotonic() - t_end) * 1000), f"fallback:{_reason}"
+    return text, post_ms, "hit"
 
 
 def _transcribe_remote(wav_path: str, base_url: str, token: str) -> str:
@@ -460,7 +460,7 @@ async def _run(args) -> int:
             elif os.environ.get("ZOE_REPLAY_STT_UNDER_SPEECH") == "1":
                 # A/B arm for prefill-under-speech: the clip goes through the SHIPPED streaming session, paced like
                 # the daemon's upload, with the production fallback to batch STT. stt_ms = the post-speech part only.
-                transcript, rec["stt_ms_post"] = await _transcribe_via_stream(f, _transcribe_audio_impl)
+                transcript, rec["stt_ms_post"], rec["stt_stream"] = await _transcribe_via_stream(f, _transcribe_audio_impl)
                 transcript = (transcript or "").strip()
             else:
                 transcript = (await _transcribe_audio_impl(f) or "").strip()

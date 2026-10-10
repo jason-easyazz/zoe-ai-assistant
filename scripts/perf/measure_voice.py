@@ -46,6 +46,8 @@ import argparse
 import json
 import os
 import statistics
+import hashlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -193,6 +195,9 @@ def _run_and_report(cmd: list[str], service_dir: str, replay_json: str, args) ->
         e2e_rows.append({
             "file": r.get("file"), "verdict": r.get("verdict"),
             "stt_ms": stt, "resolve_ms": resolve, "brain_ms": brain, "e2e_ms": e2e,
+            # A/B diagnostics, never the text: which STT path served the clip, and a hash to compare arms.
+            "stt_stream": r.get("stt_stream"),
+            "heard_hash": hashlib.sha1(" ".join(re.sub(r"[^\w\s']", " ", (r.get("transcript") or "").lower()).split()).encode()).hexdigest()[:8],
         })
 
     agg = {
