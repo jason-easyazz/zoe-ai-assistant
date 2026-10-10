@@ -288,6 +288,27 @@ def set_llm(fn: "Optional[Callable[[list, int], Any]]") -> "Optional[Callable[[l
     return prev
 
 
+#: the lab's TRACE seam: ``fn(record: dict)``. Set only by ``zoe-night-mind.py --cells --trace FILE`` (a scratch household of invented names, never a member): every model call's
+#: prompt and reply, and each pass's final threads + changes, so a failed cell can be read instead of guessed at. None (the default) = nothing is recorded.
+_TRACE: "Optional[Callable[[dict], None]]" = None
+
+
+def set_trace(fn: "Optional[Callable[[dict], None]]") -> "Optional[Callable[[dict], None]]":
+    """Install (or clear, with None) the trace seam; returns the previous one."""
+    global _TRACE
+    prev, _TRACE = _TRACE, fn
+    return prev
+
+
+def _trace(record: "dict[str, Any]") -> None:
+    if _TRACE is None:
+        return
+    try:
+        _TRACE(record)
+    except Exception:  # noqa: BLE001 - a broken trace sink never changes a night
+        logger.warning("night_mind: trace sink failed", exc_info=True)
+
+
 async def probe_model(cfg: Config) -> "tuple[bool, str]":
     """Is the server up? ``(ok, why)``. Nothing is generated. The lab seam is always up."""
     if _LLM is not None:
@@ -1307,10 +1328,13 @@ async def _run(user_id: str, transcript: Any, svc: Any, m: str, now: "_dt.dateti
         counts["calls"] += 1
         counts["prompt_tokens_est_max"] = max(counts["prompt_tokens_est_max"], sum(est_tokens(x["content"]) for x in messages))
         try:
-            return await _complete(messages, max_tokens, cfg, usage, schema=schema)
+            reply = await _complete(messages, max_tokens, cfg, usage, schema=schema)
         except ModelUnreachable as exc:
             exc.counts = {**counts, **usage}
+            _trace({"kind": "call", "n": counts["calls"], "messages": messages, "max_tokens": max_tokens, "error": type(exc).__name__})
             raise
+        _trace({"kind": "call", "n": counts["calls"], "messages": messages, "max_tokens": max_tokens, "reply": reply})
+        return reply
 
     # ── stage 2: MOMENTS (one call per chunk) ─────────────────────────────────────────────────────────────────────
     moments: "list[Moment]" = []
@@ -1393,6 +1417,12 @@ async def _run(user_id: str, transcript: Any, svc: Any, m: str, now: "_dt.dateti
     ledger = list(ledger_rows) if ledger_rows is not None else await _ledger_rows(user_id, now)
     plan = _build_plan(user_id, groups, threads, old_obs, today, now, ledger, night_date, counts, [mo for mo in moments if mo.state == "held"], known_ids)
     res["changes"] = plan["changes"]
+    if _TRACE is not None:
+        _trace({"kind": "plan", "night_date": night_date, "today": today.isoformat(),
+                "groups": [{"thread": g.thread_id, "title": g.title, "model_status": g.model_status, "reason": g.reason,
+                            "moments": [{"mid": x.mid, "turn": x.turn.id, "day": x.day, "kind": x.kind, "state": x.state, "quote": x.quote} for x in g.moments]} for g in groups],
+                "threads": [{k: t.get(k) for k in ("id", "title", "status", "first_day", "last_day", "mentions_n", "weight_max", "anchors", "topic", "policy", "leave_reason")} for t in plan["threads"]],
+                "mention_days": plan["mention_days"], "changes": plan["changes"]})
     mood = mood_line(plan["all_obs"], today) if allowed else ""
     res["mood"] = bool(mood)
     counts["observations_written"] = sum(1 for o in plan["new_obs"] if o["state"] != "held")
@@ -1566,7 +1596,7 @@ def _build_plan(user_id: str, groups: "list[Group]", threads: "list[dict]", old_
         quotes.setdefault(o["thread_id"], []).append(o["quote"])
     tl = list(by_id.values())
     decide_raise(tl, quotes, today, ledger)
-    return {"threads": tl, "new_obs": new_obs, "changed_obs": list(changed.values()), "changes": changes, "all_obs": all_obs}
+    return {"threads": tl, "new_obs": new_obs, "changed_obs": list(changed.values()), "changes": changes, "all_obs": all_obs, "mention_days": by_thread_days}
 
 
 # ═══ readers ══════════════════════════════════════════════════════════════════════════════════════════════════════════════

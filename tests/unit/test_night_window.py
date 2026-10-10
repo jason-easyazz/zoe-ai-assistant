@@ -908,7 +908,7 @@ def test_the_cli_go_no_go_before_a_cell_is_time_spent_plus_the_cells_expected_ti
     assert cb.fits_next(10 ** 6, 0, "K7", D12, P12) and cb.fits_next(10 ** 6, None, "K7", D12, P12)        # no budget given = the old behaviour
 
 
-def _cells_host(tmp_path, *, kill=False, verdicts=None, argv=("--cells-only",), start=None, **kw):
+def _cells_host(tmp_path, *, kill=False, verdicts=None, argv=("--cells-only",), start=None, log_lines=None, **kw):
     """A cells-only window on the fake host. The night-mind CLI stand-in writes the one-JSON-object log (or, ``kill``, only per-cell progress lines and returns rc 124 at the watchdog)."""
     script = tmp_path / "zoe-night-mind.py"
     script.write_text("# stand-in")
@@ -923,7 +923,7 @@ def _cells_host(tmp_path, *, kill=False, verdicts=None, argv=("--cells-only",), 
             host.cmds.append((list(argv_), True))
             log_path.parent.mkdir(parents=True, exist_ok=True)
             n = {v: sum(1 for x in verdicts.values() if x == v) for v in ("PASS", "FAIL", "SKIP", "ERROR")}
-            progress = "".join(f"NIGHT_CELL id={k} verdict={v} wall_s=12.0\n" for k, v in verdicts.items())
+            progress = log_lines if log_lines is not None else "".join(f"NIGHT_CELL id={k} verdict={v} wall_s=12.0\n" for k, v in verdicts.items())
             if kill:
                 log_path.write_text(progress + "NIGHT_MIND user=- status=running\n")
                 host.t += timeout
@@ -1681,3 +1681,55 @@ def test_repeated_runs_run_exactly_the_cells_the_plan_budgeted(tmp_path):
     argv = next(c for c in calls if "argv" in c)["argv"]
     sel = w.rec["cells_plan"]["12B"]["selected"]
     assert argv[argv.index("--only") + 1] == ",".join(sel) and len(sel) < 13
+
+
+# ── an interrupted --cells-runs 3 window keeps each cell's MAJORITY (Greptile round 2 on #1982) ───────────────────────────────────────
+
+INTERRUPTED_3_RUNS = (
+    "NIGHT_CELL id=K1 verdict=PASS wall_s=10.0 run=0\nNIGHT_CELL id=K2 verdict=FAIL wall_s=10.0 run=0\nNIGHT_CELL id=K3 verdict=PASS wall_s=10.0 run=0\n"
+    "NIGHT_CELL id=K1 verdict=FAIL wall_s=10.0 run=1\nNIGHT_CELL id=K2 verdict=FAIL wall_s=10.0 run=1\nNIGHT_CELL id=K3 verdict=FAIL wall_s=10.0 run=1\n"
+    "NIGHT_CELL id=K1 verdict=PASS wall_s=10.0 run=2\n")           # killed in run 2, after K1
+
+
+def test_rebuild_cell_votes_takes_the_majority_over_every_run_and_calls_an_undecided_cell_incomplete():
+    verdicts, votes = nw.rebuild_cell_votes(INTERRUPTED_3_RUNS, 3)
+    assert votes["K1"] == ["PASS", "FAIL", "PASS"] and verdicts["K1"] == "PASS"                 # the old last-line-wins read FAIL-then-PASS as whatever came last
+    assert votes["K2"] == ["FAIL", "FAIL", "MISSING"] and verdicts["K2"] == "FAIL"             # decided against: one more run cannot make 2 of 3
+    assert votes["K3"] == ["PASS", "FAIL", "MISSING"] and verdicts["K3"] == "INCOMPLETE"       # the missing run decides it: neither PASS nor FAIL may be claimed
+    # a log from before the run tag: the cell's n-th line is run n
+    v2, vt2 = nw.rebuild_cell_votes("NIGHT_CELL id=K1 verdict=FAIL wall_s=1.0\nNIGHT_CELL id=K1 verdict=PASS wall_s=1.0\nNIGHT_CELL id=K1 verdict=PASS wall_s=1.0\n", 3)
+    assert vt2["K1"] == ["FAIL", "PASS", "PASS"] and v2["K1"] == "PASS"
+    # SKIP is not a vote; a single run reads as it always did
+    assert nw.rebuild_cell_votes("NIGHT_CELL id=K9 verdict=SKIP wall_s=0 run=0 reason=cell_budget\n", 1)[0] == {"K9": "SKIP"}
+    assert nw.rebuild_cell_votes("NIGHT_CELL id=K7 verdict=ERROR wall_s=3.0 run=0\n", 1)[0] == {"K7": "ERROR"}
+
+
+def test_a_killed_three_run_window_reports_the_majority_and_marks_the_undecided_cells_incomplete(tmp_path):
+    w, host, cfg, calls = _cells_host(tmp_path, kill=True, argv=("--cells-only", "--cap-min", "50", "--cells-runs", "3", "--cells-pick", "K1,K2,K3"), log_lines=INTERRUPTED_3_RUNS)
+    assert w.run() == nw.EXIT_ABORTED
+    nmc = w.rec["trial"]["12B"]["night_mind_cells"]
+    assert nmc["K1"] == "PASS" and nmc["K2"] == "FAIL" and nmc["K3"] == "INCOMPLETE" and nmc["partial"] and nmc["incomplete"] == 1
+    assert nmc["pass"] == 1 and nmc["fail"] == 1 and nmc["votes"]["K3"] == ["PASS", "FAIL", "MISSING"]
+
+
+# ── --cells-corpus / --cells-trace reach the CLI ──────────────────────────────────────────────────────────────────────────────────────
+
+def test_cells_corpus_and_trace_are_passed_to_the_cli(tmp_path):
+    w, host, cfg, calls = _cells_host(tmp_path, argv=("--cells-only", "--cells-pick", "K9f", "--cells-corpus", "zmb-nightheldout-20261010", "--cells-trace", "on"))
+    assert w.run() == nw.EXIT_OK, w.outcome
+    argv = next(c for c in calls if "argv" in c)["argv"]
+    assert argv[argv.index("--seed") + 1] == "zmb-nightheldout-20261010"
+    trace = argv[argv.index("--trace") + 1]
+    assert trace.endswith("-cells-trace.jsonl") and "/logs/" in trace and w.rec["cells_trace"] == trace
+    (tmp_path / "plain").mkdir()
+    w1, _h, _cf, calls1 = _cells_host(tmp_path / "plain")
+    assert w1.run() == nw.EXIT_OK
+    argv1 = next(c for c in calls1 if "argv" in c)["argv"]
+    assert "--seed" not in argv1 and "--trace" not in argv1                                       # off by default: nothing is recorded unless asked
+
+
+def test_cells_corpus_and_trace_are_refused_outside_cells_only(tmp_path):
+    ap = nw.build_parser()
+    for flag in (["--cells-trace", "on"], ["--cells-corpus", "zmb-x"]):
+        with pytest.raises(nw.Refused):
+            nw.configure(ap.parse_args(["--trial", *flag]))

@@ -205,7 +205,30 @@ def append_trend(path: Path, payload: "dict[str, Any]") -> None:
 
 
 def household_strings_in(payload: Any, strings: "Iterable[str]") -> "list[str]":
-    """Which of the world's strings appear in the serialised artifact (must be none: it is shareable)."""
+    """Which of the world's strings appear in the serialised artifact (must be none: it is shareable).
+
+    A household string made only of digits (the synthetic world's birth year, a house number) is looked for in the artifact's TEXT alone - every string value and key - not in its
+    numbers: a run-dependent count or duration (``{"duration_ms": 1968}``) is not the household, while the same digits inside a sentence (``"born in 1968"``) still are."""
     blob = json.dumps(payload, sort_keys=True, default=str).lower()
-    return sorted({s for s in strings if s and re.search(
-        r"(?<![a-z0-9])" + re.escape(s.lower()) + r"(?![a-z0-9])", blob)})
+    text = " \n ".join(_text_leaves(payload)).lower()
+
+    def hit(s: str, hay: str) -> bool:
+        return bool(re.search(r"(?<![a-z0-9])" + re.escape(s.lower()) + r"(?![a-z0-9])", hay))
+    return sorted({s for s in strings if s and hit(s, text if s.isdigit() else blob)})
+
+
+def _text_leaves(node: Any) -> "list[str]":
+    """Every string value and every key of a JSON-like payload (numbers and booleans are not text)."""
+    if isinstance(node, str):
+        return [node]
+    if isinstance(node, dict):
+        out: "list[str]" = []
+        for k, v in node.items():
+            out.append(str(k))
+            out.extend(_text_leaves(v))
+        return out
+    if isinstance(node, (list, tuple, set, frozenset)):
+        return [x for v in node for x in _text_leaves(v)]
+    if node is None or isinstance(node, (bool, int, float)):
+        return []
+    return [str(node)]                                      # anything json.dumps would have stringified (default=str)

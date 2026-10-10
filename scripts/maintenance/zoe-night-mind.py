@@ -31,12 +31,15 @@ Flags
                        of a model that samples (the same cell scored PASS and FAIL on the same 4B within an hour); a verdict is PASS only if a strict majority of the runs that
                        produced one passed (a tie is FAIL; an ERROR is a vote against). Each run pins ``--cell-temperature`` and a seed (``--cell-seed`` + the run index): llama.cpp takes both
                        per request, so a run is reproducible and the member pass keeps its production temperature. ``cells.votes`` = {K9: [PASS, FAIL, PASS]}, ``cells.runs`` = the per-run objects.
-  --cell-temperature T / --cell-seed N   with --cells: the sampling of the cells' calls (default 0.1 = the production temperature; seed 1000 + the run index).
+  --seed SEED          with --cells: the lab corpus seed (default zmb-v1; a held-out corpus is any other string, e.g. zmb-nightheldout-20261010).
+  --trace FILE         with --cells ONLY (refused otherwise: it records prompts and replies): JSONL, one record per model call (``kind=call``: messages, reply), per pass (``kind=plan``: groups, threads,
+                       mention days, changes) and per cell (``kind=cell_end``: verdict, probes, final threads + changes); every record carries ``run`` and ``cell``.
+  --cell-temperature T / --cell-seed N  with --cells: the sampling of the cells' calls (default 0.1 = the production temperature; seed 1000 + the run index).
   --cell-budget S      with --cells: the seconds this whole process may take (the window passes what its cap leaves, minus a grace). Before each cell the CLI asks
                        ``zmb.cells_budget.fits_next`` (time spent + the cell's expected time x1.25, from the measured --decode-tok-s / --prefill-tok-s); a cell that would
                        overrun is NOT started: it and every later one is reported ``SKIP`` with its reason in ``cells.reasons`` and listed in ``cells.skipped_budget``, and the
                        JSON is printed with the verdicts so far (a kill by the caller's watchdog prints nothing). Each finished cell also logs one stderr line,
-                       ``NIGHT_CELL id=K1 verdict=PASS wall_s=..``, so a killed run still leaves its verdicts in the log. 0 / absent = no budget.
+                       ``NIGHT_CELL id=K1 verdict=PASS wall_s=.. run=0`` (``run`` = the run index), so a killed run still leaves its verdicts in the log and the window can rebuild each cell's majority. 0 / absent = no budget.
 Output
   ONE JSON object on stdout, ONE compact line (``--pretty`` indents it; the window parses either), logs go to stderr:
     {"status": "ok"|"nothing_to_do"|"llm_unreachable"|"error", "mode", "dry_run", "model_url", "model", "ctx_tokens", "chunk_budget", "max_calls", "date",
@@ -94,6 +97,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--cell-seed", type=int, default=1000, help="--cells: seed of run 0 (run i uses seed + i): llama.cpp takes a seed per request, so a run reproduces")
     ap.add_argument("--cell-budget", type=float, default=0.0, help="--cells: total seconds for this process; a cell that would overrun is skipped, not killed mid-way (0 = none)")
     ap.add_argument("--seed", default="zmb-v1", help="--cells: the corpus seed")
+    ap.add_argument("--trace", default="", help="--cells only (the lab's invented household, never a member): write every model call's prompt and reply, each pass's threads + changes and each cell's final "
+                    "threads/changes to FILE as JSONL (truncated at start)")
     ap.add_argument("--pretty", action="store_true", help="indent the stdout JSON for reading by eye (default: ONE compact line, which is what the 12B window parses)")
     return ap
 
@@ -220,6 +225,17 @@ def run_cells_once(args, url: str, cfg, run_idx: int = 0) -> dict:
     skipped: "list[str]" = []
     cell_calls: dict = {}
     only = {x.strip().upper() for x in str(getattr(args, "only", "") or "").split(",") if x.strip()}      # "K9,K10" -> {"K9", "K10"}; "K9F" is the flat week
+    import night_mind as _nm
+
+    trace_path = str(getattr(args, "trace", "") or "")
+    ctx: dict = {"cell": None}
+    trace_f = open(trace_path, "a", encoding="utf-8") if trace_path else None      # lab corpus only: ``amain`` refuses --trace without --cells
+
+    def emit(rec: dict) -> None:
+        if trace_f is not None:
+            trace_f.write(json.dumps({"run": run_idx, "cell": ctx["cell"], "t": round(time.monotonic() - _STARTED, 1), **rec}, default=str, sort_keys=True) + "\n")
+            trace_f.flush()
+    prev_trace = _nm.set_trace(emit if trace_f is not None else None)
     try:
         for c in (c for c in spec.load_cells() if c.axis == "reflection"):
             key = c.id.split(".")[0] + ("f" if c.id.endswith("flat_week") else "")
@@ -229,14 +245,21 @@ def run_cells_once(args, url: str, cfg, run_idx: int = 0) -> dict:
                 skipped.append(key)                              # once one cell is out, every later one is (a prefix of the order, as the window planned it)
                 out[key] = "SKIP"
                 reasons[key] = f"cell_budget: {time.monotonic() - _STARTED:.0f} s of {args.cell_budget:.0f} s spent, this cell needs ~{cells_budget.cell_expected_s(key, cfg.decode_tok_s, cfg.prefill_tok_s):.0f} s"
-                logging.getLogger(__name__).info("NIGHT_CELL id=%s verdict=SKIP wall_s=0 reason=cell_budget", key)
+                logging.getLogger(__name__).info("NIGHT_CELL id=%s verdict=SKIP wall_s=0 run=%d reason=cell_budget", key, run_idx)
                 continue
             t_cell = time.monotonic()
             before = dict(arm.night_totals)
+            ctx["cell"] = key
             o = cellmod.run_cell(c.rendered(w), w, arm)
+            if trace_f is not None:
+                try:
+                    emit({"kind": "cell_end", "verdict": o.verdict, "reason": o.reason, "probes": o.evidence.get("probes") or [],
+                          "threads": [{k: t.get(k) for k in ("id", "title", "status", "first_day", "last_day", "mentions_n", "anchors")} for t in arm.threads()], "changes": arm.changes()})
+                except Exception as exc:  # noqa: BLE001 - the trace never decides a verdict
+                    emit({"kind": "cell_end", "verdict": o.verdict, "trace_error": type(exc).__name__})
             cell_calls[key] = {n: int(arm.night_totals.get(n, 0) - before.get(n, 0)) for n in ("moments_calls", "threads_calls")}      # measured, not guessed: cells_budget.CELL_CALLS is checked against it
             out[key] = o.verdict
-            logging.getLogger(__name__).info("NIGHT_CELL id=%s verdict=%s wall_s=%.1f", key, o.verdict, time.monotonic() - t_cell)
+            logging.getLogger(__name__).info("NIGHT_CELL id=%s verdict=%s wall_s=%.1f run=%d", key, o.verdict, time.monotonic() - t_cell, run_idx)
             if o.verdict in ("FAIL", "ERROR"):
                 evidence[key] = o.evidence.get("probes") or []        # the numbers a failed cell scored (counts and the lab's invented names, never household text): diagnosing a FAIL no longer needs a re-run by hand
             if o.verdict in ("ERROR", "SKIP") and o.reason:
@@ -245,6 +268,9 @@ def run_cells_once(args, url: str, cfg, run_idx: int = 0) -> dict:
                 ev = ((o.evidence.get("probes") or [{}])[0]).get("observations_judged") or {}
                 k1 = {"judged": ev.get("decidable", ev.get("n")), "true": ev.get("true"), "false": ev.get("false"), "observations": ev.get("observations")}
     finally:
+        _nm.set_trace(prev_trace)
+        if trace_f is not None:
+            trace_f.close()
         totals_seen = dict(arm.night_totals)
         arm.close()
     verdicts = list(out.values())
@@ -304,6 +330,10 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
     args = build_parser().parse_args(argv)
     if not args.cells and not (args.user or args.all_members):
         raise SystemExit("one of --user ID, --all-members or --cells is required")
+    if args.trace and not args.cells:
+        raise SystemExit("--trace records prompts and replies: it is for --cells (the lab's invented household) only, never a member's night")
+    if args.trace:
+        pathlib.Path(args.trace).write_text("", encoding="utf-8")      # one file per invocation: the runs append to it
     if args.cells or args.transcript_file:
         # the lab pins every per-user store (the palace, the reject ledger, the STT log) to a scratch directory BEFORE any service module is imported, so a
         # synthetic run (--cells, or a --transcript-file of demo turns) can never read or write the household's real stores
