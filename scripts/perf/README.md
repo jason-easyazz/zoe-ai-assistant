@@ -14,6 +14,7 @@ silently regress either.
 | `measure_speed.py` | Brain **TTFT** + **gen tok/s** (median over N runs), prompt-size configurable | LLM in isolation via `POST /v1/chat/completions` (`stream:true`) |
 | `measure_voice.py` | Whole voice path: **stt / resolve / brain / e2e** latency **and said-vs-did correctness** | wraps `services/zoe-data/tests/replay_samples.py` over the saved utterance corpus |
 | `measure_tts.py` | Kokoro **TTS time-to-first-audio** — synth latency of the first speakable clause (the chunk the live stream emits first), with sidecar cache hit/miss | times the live Kokoro sidecar (`:10201`) over HTTP, on the first unit from `voice_tts._extract_first_unit`; replies sourced from the replay corpus or a `--replies-file` |
+| `kokoro_first_chunk_probe.py` | Kokoro per-stage profile + lever A/B + windowed-decoder equivalence (loads its OWN Kokoro: refuses unless `ZOE_PERF=1` and the live sidecar is stopped inside the lock) | private `KPipeline`; see `docs/knowledge/kokoro-streaming-first-chunk-2026-10-10.md` |
 
 ## Running
 
