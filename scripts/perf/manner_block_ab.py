@@ -27,8 +27,20 @@ PROTOCOL (fixed BEFORE any live number, so the scorer cannot be overfitted):
 SAFETY. ``demo_bar_<hex>`` ids only; every brain turn is sent with ``replay_isolation=True`` (the sidecar's tools become no-ops); the
 sidecar's data URL is a stub (nothing live is read); the shared harness lock must be HELD by the caller
 (``flock /tmp/zoe-voice-harness.lock``); refuses while the brain window lock is held, the night window is open, a landing runs, RAM is
-low, the brain is down, or zoe-data has been up for < 180 s; a run is DISCARDED if zoe-data restarts mid-run; a cumulative brain-time
-ledger (default 1500 s across invocations); no environment value is printed; no .env file is read.
+low, the brain is down, or zoe-data has been up for < 180 s; a cumulative brain-time ledger (default 1500 s across invocations); no
+environment value is printed; no .env file is read.
+
+INTEGRITY OF THE SAVED ROWS (Greptile #1978; every rule below has a red-on-revert test in tests/unit/test_manner_block_ab.py):
+  * every row carries its invocation id (``inv``) and a FINGERPRINT = sha256(harness version, arm, the EXACT block text, the split
+    digest). A resume refuses to mix rows of a different fingerprint into the same run id; ``report`` refuses them (DO NOT KEEP); rows
+    from before fingerprints existed ("legacy") are refused everywhere. Edit the text or the split => a new run id.
+  * zoe-data's start stamp is checked before AND after each ask. A restart appends a TOMBSTONE for the invocation; ``load_rows`` drops
+    every row of a tombstoned invocation, so a resume re-asks them and the report never counts them.
+  * a verdict needs the whole plan: every planned ask a row in both arms (held-out and regression), every primary and regression half
+    with data in both arms. A missing comparison is never skipped - it is DO NOT KEEP (``decide``).
+  * the account lookup the shipped block makes (adults only, by allowlist) cannot run in this rig (no database, an unregistered
+    ``demo_bar_<hex>`` user), so ``Runner`` overrides ``manner_block.eligible`` for THAT ONE throw-away user only; every other id still
+    goes through the real check. The production code carries no id-shaped exemption.
 
 Usage:
     python3 scripts/perf/manner_block_ab.py --selftest                                    # OFFLINE: protocol, scorers, decide() controls
@@ -72,6 +84,9 @@ LEDGER = CACHE / "brain_time.json"
 SIDECAR_PORT = 3589
 TOTAL_BUDGET_S = 1500.0
 MIN_ZOE_DATA_UPTIME_S = 180
+#: part of every row's fingerprint: bump it when the harness's asks, scorers or arms change meaning, so old rows can never be mixed in
+HARNESS_VERSION = "manner-ab-2"
+DEFAULT_CELLS = ("P6", "flaw", "good", "P9")
 
 # ── what is measured ──────────────────────────────────────────────────────────────────────────────────────────────────────
 PRIMARY = ("P6.a", "P5b.b", "P5b.u", "P9.a")                      # the four manner halves the register names
@@ -392,6 +407,7 @@ class MannerBrain(pab.Brain):
 
 class Runner:
     def __init__(self, zc, world, user: str, budget_s: float):
+        sb.assert_demo_user(user)                              # the eligibility override below is only ever for a throw-away demo_bar_<hex> id
         self.zc, self.world, self.user = zc, world, user
         self.brain = MannerBrain(zc, user, budget_s)
         self.rig = pab.Rig(self.brain, world, user)
@@ -403,6 +419,17 @@ class Runner:
         self.raised = None
         self.rig._set(_sel, "prepare", self._prepare)
         self.rig._set(_sel, "settle", self._settle)
+        self._real_eligible = manner_block.eligible
+        self.rig._set(manner_block, "eligible", self._eligible)   # restored by ``close``
+
+    async def _eligible(self, user_id: str, db=None) -> bool:
+        """The shipped eligibility check reads the account tables (adults only, by allowlist); this rig has no database and its user is
+        an unregistered throw-away, so every on-arm would get NO block and ``check_wire`` would stop the run (Greptile #1977 / #1978).
+        Scoped override: THIS rig's own user only (and never a guest id); any other id goes through the real check, which fails closed."""
+        uid = (user_id or "").strip()
+        if uid == self.user and not self.mb.is_guest(uid):
+            return True
+        return await self._real_eligible(user_id, db=db)
 
     async def _prepare(self, *_a, **_k):
         return self.raised
@@ -534,9 +561,18 @@ def compare(half: str, on: tuple[int, int], none: tuple[int, int]) -> dict:
             "separates_better": sep_better, "separates_worse": sep_worse, "watch": bool(watch) and not sep_worse}
 
 
-def decide(primary: dict[str, dict], regress: dict[str, dict]) -> tuple[str, list[str]]:
-    """KEEP / DO NOT KEEP and why. See the module docstring."""
-    why: list[str] = []
+def _no_data(c: dict | None) -> bool:
+    return not c or c.get("status") == "NO_DATA"
+
+
+def decide(primary: dict[str, dict], regress: dict[str, dict], problems: tuple[str, ...] | list[str] = ()) -> tuple[str, list[str]]:
+    """KEEP / DO NOT KEEP and why. See the module docstring. A KEEP needs EVERY primary half and EVERY regression half compared (data in
+    both arms): a missing comparison is never skipped, it is a reason not to keep (Greptile #1978). ``problems`` are the integrity
+    findings of the caller (an incomplete plan, refused rows); any one of them is a reason too."""
+    why: list[str] = list(problems)
+    gaps = [f"primary {h}" for h in PRIMARY if _no_data(primary.get(h))] + [f"regression {h}" for h in REGRESSION if _no_data(regress.get(h))]
+    if gaps:
+        why.append(f"{len(gaps)} required comparison(s) have no data in both arms: " + ", ".join(gaps))
     ups = [h for h, c in primary.items() if c.get("separates_better")]
     # P9.a is 10/10 in BOTH arms in this rig (the brain voices a raise it is HANDED; the live 4/10 is the selector's gate, not the manner):
     # a cell at its ceiling cannot separate, so the rule is read as 2 of the cells that can.
@@ -557,10 +593,66 @@ def results_path(run_id: str) -> Path:
 
 
 def load_rows(run_id: str) -> list[dict]:
+    """The rows of ``run_id`` that still COUNT: every row of an invocation that a tombstone later discarded (zoe-data restarted
+    under it) is dropped, and so are the tombstone lines themselves."""
     p = results_path(run_id)
     if not p.exists():
         return []
-    return [json.loads(ln) for ln in p.read_text().splitlines() if ln.strip()]
+    lines = [json.loads(ln) for ln in p.read_text().splitlines() if ln.strip()]
+    dead = {ln["tombstone"] for ln in lines if "tombstone" in ln}
+    return [ln for ln in lines if "tombstone" not in ln and ln.get("inv") not in dead]
+
+
+def write_tombstone(out, inv: str, why: str) -> None:
+    """Discard every row written by invocation ``inv`` (append-only: the rows stay on disk, ``load_rows`` stops counting them)."""
+    out.write(json.dumps({"tombstone": inv, "why": why, "at": round(time.time())}) + "\n")
+    out.flush()
+
+
+def arm_text(arm: str) -> str:
+    """The exact block text an arm sends ("" for ``none``)."""
+    return "" if arm == "none" else variant_text(arm.split(":", 1)[1])
+
+
+def fingerprint(arm: str, digest: str, text: str | None = None) -> str:
+    """sha256(harness version, arm, the exact block text, the split digest): what a row was measured WITH."""
+    text = arm_text(arm) if text is None else text
+    return hashlib.sha256(json.dumps([HARNESS_VERSION, arm, text, digest]).encode()).hexdigest()
+
+
+def row_problems(rows: list[dict], fps: dict[str, str]) -> list[str]:
+    """Rows of the arms in ``fps`` that cannot be mixed with a run under these fingerprints: legacy rows (no fingerprint at all) and
+    rows saved under a different text / split / harness version."""
+    legacy = sum(1 for r in rows if r.get("arm") in fps and "fp" not in r)
+    changed = sum(1 for r in rows if r.get("arm") in fps and "fp" in r and r["fp"] != fps[r["arm"]])
+    out = []
+    if legacy:
+        out.append(f"{legacy} legacy row(s) carry no fingerprint (saved before the text/split could be checked): use a new run id")
+    if changed:
+        out.append(f"{changed} row(s) were saved under a different block text, split or harness version than this run: use a new run id")
+    return out
+
+
+def plan_keys(plan: list) -> list[tuple[str, int]]:
+    return [((item[2] if isinstance(item, tuple) else item.id), s) for item, s in plan]
+
+
+def build_plan(phase: str, world, scale: float, cells=DEFAULT_CELLS) -> list:
+    """The asks of one phase, as ``(ask-or-bar-tuple, sample)`` - the SAME list the driver runs and the report demands rows for."""
+    if phase in ("dev", "heldout"):
+        pool = manner_pool(world)[phase]
+        samples = PRIMARY_SAMPLES[phase]
+        return [(ask, s) for key in ("P6", "flaw", "good", "P9") if key in cells for ask in pool[key] for s in range(samples[key])]
+    if phase == "regress":
+        return [(a, 0) for a in regression_asks(world, scale)] + [(("bar",) + b, 0) for b in bar_asks(scale)]
+    if phase == "canary":
+        return [(sp.Ask("canary-0", "P6", "feeling", [sp.Turn("I had a rubbish day.")], ("P6.a",), {"gold": ""}, world.seed), 0)]
+    raise ValueError(phase)
+
+
+def missing_asks(rows: list[dict], arm: str, phase: str, plan: list) -> list[str]:
+    have = {(r["ask"], r["sample"]) for r in rows if r["arm"] == arm and r["phase"] == phase}
+    return [f"{aid}#{s}" for aid, s in plan_keys(plan) if (aid, s) not in have]
 
 
 def tally(rows: list[dict], arm: str, phase: str, halves: tuple[str, ...]) -> dict[str, tuple[int, int]]:
@@ -575,9 +667,25 @@ def tally(rows: list[dict], arm: str, phase: str, halves: tuple[str, ...]) -> di
     return {h: (v[0], v[1]) for h, v in out.items()}
 
 
-def report(run_id: str, variant: str) -> tuple[str, str]:
-    rows = load_rows(run_id)
+def report(run_id: str, variant: str, scale: float = 1.0, world=None) -> tuple[str, str]:
+    """The tables and the verdict from the rows on disk. ``scale`` must be the one the regression phase ran with. Rows saved under a
+    different text / split / harness (or before fingerprints existed) are REFUSED: the verdict is DO NOT KEEP and nothing is tallied."""
+    world = world or sp.World(sp.BASE_SEED)
     arm = f"on:{variant}"
+    digest = split_digest(world)
+    fps = {"none": fingerprint("none", digest), arm: fingerprint(arm, digest)}
+    rows = load_rows(run_id)
+    refused = row_problems(rows, fps)
+    if refused:
+        final = "\nVERDICT (rows refused): DO NOT KEEP" + "".join("\n  - " + w for w in refused)
+        return final, final
+    problems: list[str] = []
+    for phase in ("heldout", "regress"):                       # the two phases a verdict is made of: every planned ask, both arms
+        plan = build_plan(phase, world, scale)
+        for a in ("none", arm):
+            miss = missing_asks(rows, a, phase, plan)
+            if miss:
+                problems.append(f"{phase} arm {a}: {len(miss)} of {len(plan)} planned asks have no row (first: {miss[0]})")
     lines, verdicts = [], {}
     for phase in ("dev", "heldout"):
         n_rows = sum(1 for r in rows if r["phase"] == phase and r["arm"] == arm)
@@ -590,8 +698,8 @@ def report(run_id: str, variant: str) -> tuple[str, str]:
         lines.append(f"{'half':7} {'what':58} {'none':>7} {'on':>7}  {'wilson none':13} {'wilson on':13} {'diff [95% CI]':22} verdict")
         for h in halves:
             c = cmp[h]
-            if c["status"] if "status" in c else False:
-                lines.append(f"{h:7} no data")
+            if c.get("status") == "NO_DATA":
+                lines.append(f"{h:7} NO DATA in one arm")
                 continue
             tag = "UP" if c["separates_better"] else ("DOWN" if c["separates_worse"] else ("watch" if c["watch"] else "-"))
             lines.append(f"{h:7} {sp.HALF[h].label[:58]:58} {c['none'][0]:>3}/{c['none'][1]:<3} {c['on'][0]:>3}/{c['on'][1]:<3}  "
@@ -604,38 +712,47 @@ def report(run_id: str, variant: str) -> tuple[str, str]:
         lines.append(f"{'half':7} {'none':>7} {'on':>7}  {'diff [95% CI]':24} verdict")
         for h in REGRESSION:
             c = compare(h, on[h], none[h])
+            rg[h] = c                                          # a NO_DATA comparison is KEPT: decide() refuses a verdict without it
             if c.get("status") == "NO_DATA":
+                lines.append(f"{h:7} NO DATA in one arm")
                 continue
-            rg[h] = c
             tag = "REGRESSION" if c["separates_worse"] else ("better" if c["separates_better"] else ("WATCH" if c["watch"] else "-"))
             lines.append(f"{h:7} {c['none'][0]:>3}/{c['none'][1]:<3} {c['on'][0]:>3}/{c['on'][1]:<3}  {c['diff']:+.2f} {str(c['diff_ci']):18} {tag}"
                          + ("  (violations: lower is better)" if c["violation_half"] else ""))
-    final = ""
-    if "heldout" in verdicts:
-        v, why = decide({h: verdicts["heldout"][h] for h in PRIMARY}, rg)
-        final = f"\nVERDICT (held-out manner halves + regression): {v}" + ("".join("\n  - " + w for w in why))
-        if "regress" not in {r["phase"] for r in rows if r["arm"] == arm}:
-            final += "\n  (regression cells not run yet: the verdict is provisional)"
+    v, why = decide(verdicts.get("heldout", {}), rg, problems)
+    final = f"\nVERDICT (held-out manner halves + regression): {v}" + ("".join("\n  - " + w for w in why))
     return "\n".join(lines) + final, final
 
 
 # ── the live drivers ──────────────────────────────────────────────────────────────────────────────────────────────────────
-async def run_phase(runner: Runner, phase: str, arms: list[str], run_id: str, scale: float, log, cells=("P6", "flaw", "good", "P9")) -> None:
+class RestartedMidRun(RuntimeError):
+    pass
+
+
+async def run_phase(runner: Runner, phase: str, arms: list[str], run_id: str, scale: float, log, cells=DEFAULT_CELLS) -> None:
     CACHE.mkdir(parents=True, exist_ok=True)
-    done = {(r["arm"], r["phase"], r["ask"], r["sample"]) for r in load_rows(run_id)}
+    plan = build_plan(phase, runner.world, scale, cells)
+    digest = split_digest(runner.world)
+    fps = {a: fingerprint(a, digest) for a in arms}
+    prior = load_rows(run_id)
+    refused = row_problems(prior, fps)
+    if refused:                                                 # never mix rows measured with another text / split / harness
+        raise RuntimeError("refusing to resume " + run_id + ": " + "; ".join(refused))
+    done = {(r["arm"], r["phase"], r["ask"], r["sample"]) for r in prior}
     nonce = str(int(time.time()))
+    inv = secrets.token_hex(6)                                  # this invocation: a restart tombstones exactly its rows
     stamp0 = zoe_data_stamp()
-    out = results_path(run_id).open("a")
-    if phase in ("dev", "heldout"):
-        pool = manner_pool(runner.world)[phase]
-        samples = PRIMARY_SAMPLES[phase]
-        plan = [(ask, s) for key in ("P6", "flaw", "good", "P9") if key in cells for ask in pool[key] for s in range(samples[key])]
-    elif phase == "regress":
-        plan = [(a, 0) for a in regression_asks(runner.world, scale)] + [(("bar",) + b, 0) for b in bar_asks(scale)]
-    elif phase == "canary":
-        plan = [(sp.Ask("canary-0", "P6", "feeling", [sp.Turn("I had a rubbish day.")], ("P6.a",), {"gold": ""}, runner.world.seed), 0)]
-    else:
-        raise ValueError(phase)
+
+    def check_stamp(out) -> None:
+        if zoe_data_stamp() != stamp0:
+            write_tombstone(out, inv, "zoe-data restarted mid-run")
+            raise RestartedMidRun(f"zoe-data restarted mid-run: invocation {inv}'s rows are discarded (tombstoned); re-run the same command to redo them")
+
+    with results_path(run_id).open("a") as out:
+        await _run_plan(runner, phase, arms, plan, done, fps, inv, nonce, check_stamp, out, log)
+
+
+async def _run_plan(runner, phase, arms, plan, done, fps, inv, nonce, check_stamp, out, log) -> None:
     for arm in arms:
         n_done = 0
         for item, s in plan:
@@ -643,8 +760,7 @@ async def run_phase(runner: Runner, phase: str, arms: list[str], run_id: str, sc
             aid = item[2] if is_bar else item.id
             if (arm, phase, aid, s) in done:
                 continue
-            if zoe_data_stamp() != stamp0:
-                raise RuntimeError("zoe-data restarted mid-run: this run is DISCARDED (rows already written for it are marked stale by the caller)")
+            check_stamp(out)                                    # before the ask ...
             try:
                 if is_bar:
                     _tag, sid, aid, texts, packet = item
@@ -656,14 +772,17 @@ async def run_phase(runner: Runner, phase: str, arms: list[str], run_id: str, sc
                     scored = score_ask(item, replies) if replies else {}
             except pab.BudgetExceeded as exc:
                 log(f"  stopped: {exc}")
-                out.close()
                 return
-            out.write(json.dumps({"arm": arm, "phase": phase, "ask": aid, "sample": s, "replies": [r[:600] for r in replies], "scored": scored}) + "\n")
+            except Exception:
+                check_stamp(out)                                # an ask that died because zoe-data restarted discards the invocation
+                raise
+            check_stamp(out)                                    # ... and after it: a restart during the LAST turn is caught too
+            out.write(json.dumps({"arm": arm, "phase": phase, "ask": aid, "sample": s, "inv": inv, "fp": fps[arm],
+                                  "replies": [r[:600] for r in replies], "scored": scored}) + "\n")
             out.flush()
             n_done += 1
             if n_done % 10 == 0:
                 log(f"  {arm} {phase}: {n_done}/{len(plan)} (brain {runner.brain.spent_s:.0f}s)")
-    out.close()
 
 
 def live(args) -> int:
@@ -673,7 +792,7 @@ def live(args) -> int:
 
 def _live(args) -> int:
     if args.phase == "report":
-        text, _ = report(args.run_id, args.variant)
+        text, _ = report(args.run_id, args.variant, args.scale)
         print(text)
         return 0
     code, msg = live_preflight()
@@ -753,9 +872,14 @@ def selftest() -> int:
     check("control: identical arms never KEEP", decide(flat, {})[0] == "DO NOT KEEP")
     up = {"P6.a": compare("P6.a", (19, 20), (11, 20)), "P5b.b": compare("P5b.b", (18, 20), (7, 20)), "P5b.u": compare("P5b.u", (10, 20), (10, 20)),
           "P9.a": compare("P9.a", (10, 20), (10, 20))}
-    check("control: two clear upward separations, no regression => KEEP", decide(up, {"P7.a": compare("P7.a", (18, 20), (18, 20))})[0] == "KEEP")
+    full = {h: compare(h, (18, 20), (18, 20)) for h in REGRESSION}
+    check("control: two clear upward separations, every regression half compared and level => KEEP", decide(up, full)[0] == "KEEP")
     check("control: ... but a regression cell that separates DOWN => DO NOT KEEP",
-          decide(up, {"P7.a": compare("P7.a", (3, 20), (18, 20))})[0] == "DO NOT KEEP")
+          decide(up, dict(full, **{"P7.a": compare("P7.a", (3, 20), (18, 20))}))[0] == "DO NOT KEEP")
+    check("control: ... and a regression half with no data (or missing) is never skipped => DO NOT KEEP",
+          decide(up, {h: c for h, c in full.items() if h != "P7.a"})[0] == "DO NOT KEEP"
+          and decide(up, dict(full, **{"P7.a": compare("P7.a", (0, 0), (18, 20))}))[0] == "DO NOT KEEP")
+    check("control: ... and a missing primary half => DO NOT KEEP", decide({h: c for h, c in up.items() if h != "P9.a"}, full)[0] == "DO NOT KEEP")
     check("control: a VIOLATION half that goes UP is a regression (P5a.i flips)", compare("P5a.i", (18, 30), (3, 30))["separates_worse"])
     check("control: a violation half that goes DOWN is better", compare("P5a.i", (1, 30), (12, 30))["separates_better"])
     down = dict(up, **{"P9.a": compare("P9.a", (1, 20), (15, 20))})
