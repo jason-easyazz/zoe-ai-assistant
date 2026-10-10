@@ -773,10 +773,12 @@ async def resolve(text: str, user_id: str, session_id: str, **kwargs):  # noqa: 
         answered = await _distress_tier(text, user_id, kwargs)
         if answered is not None:
             return answered
-        answered = await _provenance_tier(text, user_id, session_id, kwargs)
+        # Feedback FIRST (after distress): a verdict is recorded even when a later stage answers it ("that's wrong, it's Thursday" after
+        # an explained answer is the provenance fix's, and still leaves its `correction` row). The wrong verdicts only write and go on.
+        answered = await _feedback_tier(text, user_id, session_id, kwargs)
         if answered is not None:
             return answered
-        answered = await _feedback_tier(text, user_id, session_id, kwargs)
+        answered = await _provenance_tier(text, user_id, session_id, kwargs)
         if answered is not None:
             return answered
         # self_model (ZOE_SELF_MODEL, default shadow = a log line and nothing else): "what can you do?", "can you order groceries?",

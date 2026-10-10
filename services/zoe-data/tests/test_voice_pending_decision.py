@@ -26,6 +26,9 @@ def test_no(text):
 @pytest.mark.parametrize("text", [
     "Are you sure?", "are you sure", "really?", "what did you say", "why", "who is that", "how many contacts do I have",
     "what's the weather", "play some music", "ok so what time is it?", "is that correct?", "",
+    # review round 1: a QUESTION is never a yes, and neither is a sentence that merely contains a yes-word
+    "sure?", "sounds good?", "yes?", "okay?", "is that right?", "right?", "sure is cold", "okay so it is raining", "yes it is cold today",
+    "sounds good to me but I am busy",
 ])
 def test_not_an_answer(text):
     assert _pending_decision(text) is None

@@ -633,6 +633,32 @@ def _word_re(value: str):
     return re.compile(r"(?<![A-Za-z0-9'’])" + re.escape(value) + r"(?![A-Za-z0-9'’])", re.IGNORECASE)
 
 
+def _is_note_about(rel: str, old: str, note: str) -> bool:
+    """True when ``note`` states ``old`` AS the owner's ``rel`` - the relation is the SUBJECT of the note ("my sister is Marisa",
+    "User's sister Marisa", "sister: Marisa"), not a modifier or another person's relative. "My sister's friend is Marisa" (a possessive
+    chain), "Dana's sister is Marisa" (a third person's sister) and "Marisa is a coworker" (no relation) are all someone else.
+    Prefers the stored claim row (subject / predicate / object, ``structural_claims``) when the note carries one; else reads the
+    note's own opening, anchored at its start. Pure."""
+    if not rel or not old:
+        return False
+    try:
+        import structural_claims as sc
+
+        claim = sc.claim_from_metadata(getattr(note, "metadata", None)) if not isinstance(note, str) else None
+    except Exception:  # noqa: BLE001
+        claim = None
+    body = note if isinstance(note, str) else (getattr(note, "text", "") or "")
+    if claim is not None and getattr(claim, "obj", ""):
+        pred = str(getattr(claim, "pred", "") or "").lower()
+        if rel in pred.replace("_", " ") and _word_re(old).search(str(claim.obj)):
+            return True
+    rel_p = re.escape(rel)
+    pattern = (rf"^\W*(?:(?:remember\s+that|note\s+that)\s+)?(?:(?:my|our|the\s+user['’]s|user['’]s)\s+)?{rel_p}(?!['’]s\b)"
+               rf"\s*(?::|-|,)?\s*(?:(?:is|was|are)\s+)?(?:(?:called|named)\s+)?")
+    m = re.match(pattern, body, re.IGNORECASE)
+    return bool(m) and bool(re.match(rf"{re.escape(old)}(?![A-Za-z0-9'’])", body[m.end():], re.IGNORECASE))
+
+
 def _read_back(rel: str, new: str, old: str, text: str) -> str:
     """One spoken sentence that says what is now held: "Got it, your sister is Marisol." (a plain restatement of the new fact)."""
     if rel:
@@ -643,9 +669,13 @@ def _read_back(rel: str, new: str, old: str, text: str) -> str:
     return f"Got it, {flipped[:1].lower() + flipped[1:]}." if flipped else f"Got it, {new}, not {old}."
 
 
-async def _rename_contact(user_id: str, rel: str, old: str, new: str) -> bool:
-    """Rename the ONE contact called ``old`` (and, when the owner named a relation, related that way) to ``new``. False when there
-    is none or more than one (a person is never renamed on a guess). Best-effort."""
+async def _rename_contact(user_id: str, rel: str, old: str, new: str) -> str:
+    """Rename the ONE contact called ``old`` (and, when the owner named a relation, related that way) to ``new``.
+
+    Returns ``"renamed"``, ``"none"`` (no such contact, or more than one - a person is never renamed on a guess) or ``"failed"``
+    (the contact update or its memory mirror did not hold: the note and the contact now disagree). A failure is logged at WARNING
+    with the account and the contact's id, never a name."""
+    pid = ""
     try:
         from datetime import datetime
 
@@ -658,21 +688,26 @@ async def _rename_contact(user_id: str, rel: str, old: str, new: str) -> bool:
             if rel:
                 rows = [r for r in rows if rel in str(r["relationship"] or "").lower()]
             if len(rows) != 1:
-                return False
+                return "none"
             pid = str(rows[0]["id"])
             await db.execute("UPDATE people SET name = ?, updated_at = ? WHERE id = ? AND user_id = ?",
                              (new, datetime.utcnow().isoformat() + "Z", pid, user_id))
             await db.commit()
-        try:
-            import contacts_conversation as _cc
-
-            await _cc.refresh_person_mirror(user_id, pid, new, str(rows[0]["relationship"] or "") or None)
-        except Exception:  # noqa: BLE001
-            pass
-        return True
     except Exception as exc:  # noqa: BLE001
-        logger.debug("correction_apply: contact rename skipped (%s)", type(exc).__name__)
-        return False
+        logger.warning("correction_apply: contact rename FAILED user=%s person=%s (%s): the note changed, the contact did not",
+                       user_id, pid or "-", type(exc).__name__)
+        return "failed"
+    try:
+        import contacts_conversation as _cc
+
+        ok = await _cc.refresh_person_mirror(user_id, pid, new, str(rows[0]["relationship"] or "") or None)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("correction_apply: contact mirror refresh FAILED user=%s person=%s (%s)", user_id, pid, type(exc).__name__)
+        return "failed"
+    if ok is False:
+        logger.warning("correction_apply: contact mirror refresh FAILED user=%s person=%s", user_id, pid)
+        return "failed"
+    return "renamed"
 
 
 async def maybe_swap(text: str, user_id: str, session_id: str, *, svc=None) -> Optional[CorrectionResult]:
@@ -700,17 +735,28 @@ async def maybe_swap(text: str, user_id: str, session_id: str, *, svc=None) -> O
             svc = get_memory_service()
         uid = user_id.strip().lower()
         old_re = _word_re(old)
-        rel_re = re.compile(r"\b" + re.escape(rel) + r"\b", re.IGNORECASE) if rel else None
         hits = []
         for r in await svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT):
             meta = r.metadata or {}
             if str(meta.get("user_id") or meta.get("wing") or "").strip().lower() != uid:
                 continue
             body = r.text or ""
-            if old_re.search(body) and (rel_re is None or rel_re.search(body)):
-                hits.append(r)
+            if not old_re.search(body):
+                continue
+            # with a relation said, only a note that states the old value AS that relation (the relation is the note's subject) is the
+            # fact being corrected: "my sister's friend is Marisa" and "Dana's sister is Marisa" are other people
+            if rel and not _is_note_about(rel, old, r):
+                continue
+            hits.append(r)
         if not hits or len(hits) > (SWAP_MAX_ROWS if rel else 1):
             return None
+        if len(hits) > 1:
+            # several rows: only the twin rows ONE utterance left behind (same saved turn / excerpt) are one fact; anything else is a guess
+            from provenance_answers import twins_of
+
+            twin_ids = {t.id for t in await twins_of(user_id, hits[0], svc=svc)} | {hits[0].id}
+            if any(h.id not in twin_ids for h in hits):
+                return None
         new_val = _title(new, old)
         from provenance_answers import _speculation_barrier
 
@@ -723,9 +769,12 @@ async def maybe_swap(text: str, user_id: str, session_id: str, *, svc=None) -> O
                 changed.extend(res.changed)
         if not changed:
             return None
-        await _rename_contact(user_id, rel, old, new_val)
-        logger.info("CORRECTION_APPLIED kind=swap user=%s rows=%d", user_id, len(changed))
-        return CorrectionResult("swap", _read_back(rel, new_val, old, text), changed)
+        renamed = await _rename_contact(user_id, rel, old, new_val)
+        logger.info("CORRECTION_APPLIED kind=swap user=%s rows=%d contact=%s", user_id, len(changed), renamed)
+        reply = _read_back(rel, new_val, old, text)
+        if renamed == "failed":      # never claim a fix that did not fully hold
+            reply += " I fixed my note, but I couldn't update your contact."
+        return CorrectionResult("swap", reply, changed)
     except Exception as exc:  # noqa: BLE001 — a correction never breaks the turn
         logger.warning("correction_apply swap failed user=%s: %s", user_id, type(exc).__name__)
         return None

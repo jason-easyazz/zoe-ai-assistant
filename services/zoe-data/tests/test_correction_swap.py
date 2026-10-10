@@ -39,8 +39,9 @@ class FakeSvc:
         return self.rows[row_id]
 
 
-def row(rid, text, user=USER, status="approved"):
-    return SimpleNamespace(id=rid, text=text, metadata={"user_id": user, "status": status})
+def row(rid, text, user=USER, status="approved", turn="t1"):
+    """``turn``: the saved turn the note came from (twin rows of one utterance share it)."""
+    return SimpleNamespace(id=rid, text=text, metadata={"user_id": user, "status": status, "user_turn_id": turn})
 
 
 @pytest.fixture(autouse=True)
@@ -169,3 +170,87 @@ async def test_flag_off_is_inert(_on, monkeypatch):
     monkeypatch.setenv("ZOE_CORRECTION_APPLY", "0")
     svc = FakeSvc([row("r1", "my sister is called Marisa")])
     assert await ca.maybe_swap("That's wrong, my sister is Marisol not Marisa.", USER, "s", svc=svc) is None
+
+
+# ── review round 1: the relation must be the SUBJECT of the note ────────────────────────────────────────────────────────────────────
+@pytest.mark.parametrize("note,expect", [
+    ("my sister is called Marisa", True),
+    ("My sister is Marisa", True),
+    ("User's sister Marisa", True),
+    ("the user's sister is named Marisa", True),
+    ("sister: Marisa", True),
+    ("Remember that my sister is called Marisa", True),
+    ("My sister's friend is Marisa", False),               # possessive chain: the friend is Marisa, not the sister
+    ("Dana's sister is Marisa", False),                    # somebody else's sister
+    ("User's wife's sister is Marisa", False),             # a chain through another relative
+    ("Marisa is a coworker", False),                       # no relation at all
+    ("my sister works with Marisa", False),                # Marisa is not the sister
+])
+def test_the_relation_is_the_subject_of_the_note(note, expect):
+    assert ca._is_note_about("sister", "Marisa", note) is expect
+
+
+async def test_a_possessive_chain_note_is_never_rewritten(_on):
+    svc = FakeSvc([row("r1", "My sister is Marisa"), row("r2", "My sister's friend is Marisa")])
+    res = await ca.maybe_swap("My sister is Marisol not Marisa", USER, "s", svc=svc)
+    assert res is not None
+    assert svc.rows["r1"].text == "My sister is Marisol" and svc.rows["r2"].text == "My sister's friend is Marisa"
+
+
+async def test_a_third_persons_sister_is_never_rewritten(_on):
+    svc = FakeSvc([row("r1", "Dana's sister is Marisa")])
+    assert await ca.maybe_swap("My sister is Marisol not Marisa", USER, "s", svc=svc) is None
+    assert svc.edits == []
+
+
+async def test_several_rows_must_be_twins_of_one_utterance(_on):
+    def twin(rid, text, turn):
+        return row(rid, text, turn=turn)
+
+    same = FakeSvc([twin("r1", "my sister is called Marisa", "t1"), twin("r2", "User's sister Marisa", "t1")])
+    assert await ca.maybe_swap("My sister is Marisol not Marisa", USER, "s", svc=same) is not None
+    assert sorted(e[0] for e in same.edits) == ["r1", "r2"]
+    apart = FakeSvc([twin("r1", "my sister is called Marisa", "t1"), twin("r2", "User's sister Marisa", "t2")])
+    assert await ca.maybe_swap("My sister is Marisol not Marisa", USER, "s", svc=apart) is None   # two different saved turns: a guess
+    assert apart.edits == []
+
+
+# ── review round 1: a contact that did not follow the note is said, and logged ────────────────────────────────────────────────────
+async def test_a_failed_contact_rename_is_not_claimed_and_is_logged(_on, monkeypatch, caplog):
+    import logging
+
+    caplog.set_level(logging.WARNING)
+
+    @contextlib.asynccontextmanager
+    async def boom(*_a, **_k):
+        raise RuntimeError("store down")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr("db_pool.get_db_ctx", boom)
+    svc = FakeSvc([row("r1", "my sister is called Marisa")])
+    res = await ca.maybe_swap("That's wrong, my sister is Marisol not Marisa.", USER, "s", svc=svc)
+    assert res is not None and res.reply.startswith("Got it, your sister is Marisol.")
+    assert "couldn't update your contact" in res.reply
+    warned = [r for r in caplog.records if r.levelno >= logging.WARNING and "contact rename FAILED" in r.getMessage()]
+    assert warned and all("Marisa" not in r.getMessage() and "Marisol" not in r.getMessage() for r in warned)
+
+
+async def test_a_failed_mirror_refresh_is_not_claimed_and_is_logged(_on, monkeypatch, caplog):
+    import logging
+
+    caplog.set_level(logging.WARNING)
+
+    async def mirror_down(*_a, **_k):
+        return False
+
+    monkeypatch.setattr("contacts_conversation.refresh_person_mirror", mirror_down)
+    svc = FakeSvc([row("r1", "my sister is called Marisa")])
+    res = await ca.maybe_swap("That's wrong, my sister is Marisol not Marisa.", USER, "s", svc=svc)
+    assert "couldn't update your contact" in res.reply
+    assert any("mirror refresh FAILED" in r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING)
+
+
+async def test_a_clean_rename_reads_back_without_a_caveat(_on):
+    svc = FakeSvc([row("r1", "my sister is called Marisa")])
+    res = await ca.maybe_swap("That's wrong, my sister is Marisol not Marisa.", USER, "s", svc=svc)
+    assert res.reply == "Got it, your sister is Marisol."

@@ -246,6 +246,7 @@ class Rig:
         self.searches: list = []
         self.exact_turns: list = []
         self.serve_on_brain = False
+        self.events: list = []
         self._last_tier: Optional[Any] = None
 
     # ── install ──────────────────────────────────────────────────────────────
@@ -377,8 +378,17 @@ class Rig:
                 db.add_message(session_id, "assistant", reply, user_id)
 
         monkeypatch.setattr(vt, "_schedule_voice_chat_save", voice_save)
-        vt._PENDING_CONFIRMATIONS.clear()
-        vt._VOICE_SESSIONS.clear()
+        # fresh module-level dicts, restored on undo (clearing the originals would leak the clear and every entry added)
+        monkeypatch.setattr(vt, "_PENDING_CONFIRMATIONS", {})
+        monkeypatch.setattr(vt, "_VOICE_SESSIONS", {})
+
+        # what the panel hears about: every push event the lane emits, in order
+        from push import broadcaster as _broadcaster
+
+        async def record_broadcast(channel, event, payload=None, *a, **k):
+            rig.events.append(event)
+
+        monkeypatch.setattr(_broadcaster, "broadcast", record_broadcast)
         return self
 
     @staticmethod

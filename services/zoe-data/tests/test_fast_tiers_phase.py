@@ -55,8 +55,7 @@ def _router(domain="weather"):
 
 async def test_full_run_is_conversation_then_domain(calls):
     await fast_tiers.resolve("what is the weather", "demo_user", "s", channel="chat", router_decision=_router("chat"))
-    print(calls)
-    assert calls == ["distress", "provenance", "feedback", "self_model", "correction", "pull", "person_half", "identity", "remember",
+    assert calls == ["distress", "feedback", "provenance", "self_model", "correction", "pull", "person_half", "identity", "remember",
                      "tier0"]
 
 
@@ -65,7 +64,7 @@ async def test_conversation_phase_stops_before_the_domain_tiers(calls):
                                    phase="conversation")
     assert res is None
     assert "tier0" not in calls
-    assert calls[:4] == ["distress", "provenance", "feedback", "self_model"] and "remember" in calls
+    assert calls[:4] == ["distress", "feedback", "provenance", "self_model"] and "remember" in calls
 
 
 async def test_domain_phase_does_not_repeat_the_conversation_tiers(calls):

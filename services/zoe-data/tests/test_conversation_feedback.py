@@ -18,6 +18,7 @@ SESSION = "demo-feedback-session"
 
 @pytest.fixture
 def db(monkeypatch):
+    cf._RECENT.clear()
     d = FakeDB()
     d.add_message(SESSION, "user", "Who won the 1987 Australian Open?", USER)
     aid = d.add_message(SESSION, "assistant", "Stefan Edberg won it.", USER)
@@ -114,3 +115,13 @@ def test_the_thumbs_endpoint_and_the_tier_share_one_writer():
     chat_src = (pathlib.Path(__file__).resolve().parents[1] / "routers" / "chat.py").read_text()
     assert "INSERT INTO chat_feedback" not in chat_src
     assert "record_feedback" in chat_src
+
+
+async def test_one_verdict_on_one_reply_is_one_row_however_many_stages_call_it(db):
+    """The voice lane calls handle() at the top of the turn and again in the conversation phase."""
+    await cf.handle("That was wrong.", USER, SESSION)
+    await cf.handle("That was wrong.", USER, SESSION)
+    assert len(db.feedback) == 1
+    assert await cf.handle("Good answer.", USER, SESSION) == cf.UP_REPLY      # a different verdict is a different row
+    assert await cf.handle("Good answer.", USER, SESSION) == cf.UP_REPLY      # ... and a repeat still gets its reply
+    assert [f["params"][3] for f in db.feedback] == ["thumbs_down", "thumbs_up"]

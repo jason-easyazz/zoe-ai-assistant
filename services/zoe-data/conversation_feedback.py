@@ -39,6 +39,10 @@ UP_REPLY = "Glad that helped."
 _GUEST = frozenset({"", "guest", "anonymous", "voice-guest", "voice-daemon"})
 _MAX_WORDS = 14
 _DB_BUDGET_S = 2.5
+_DEDUPE_S = 60.0
+#: (user, interaction, kind, value) -> monotonic time written. The voice lane calls ``handle`` at the top of the turn (before a waiting
+#: write can consume "that was wrong" as a cancel) AND in the conversation phase; one verdict on one reply is one row.
+_RECENT: dict = {}
 
 
 def enabled() -> bool:
@@ -152,11 +156,19 @@ async def handle(text: str, user_id: str, session_id: str = "", *, speaker_verif
             return None
         if not allow_writes:
             return UP_REPLY if kind == THUMBS_UP else None
-        from provenance_answers import _speculation_barrier
+        import time
 
-        await _speculation_barrier()
-        await asyncio.wait_for(record_feedback(user_id, interaction, kind, value or None), _DB_BUDGET_S)
-        logger.info("CONVERSATION_FEEDBACK user=%s kind=%s", user_id, kind)
+        key = (user_id, interaction, kind, value)
+        now = time.monotonic()
+        for k in [k for k, t in _RECENT.items() if now - t > _DEDUPE_S]:
+            _RECENT.pop(k, None)
+        if key not in _RECENT:
+            from provenance_answers import _speculation_barrier
+
+            await _speculation_barrier()
+            await asyncio.wait_for(record_feedback(user_id, interaction, kind, value or None), _DB_BUDGET_S)
+            _RECENT[key] = now
+            logger.info("CONVERSATION_FEEDBACK user=%s kind=%s", user_id, kind)
         return UP_REPLY if kind == THUMBS_UP else None
     except Exception as exc:  # noqa: BLE001 - a turn is never broken by this tier
         logger.warning("conversation_feedback failed (non-fatal): %s", type(exc).__name__)

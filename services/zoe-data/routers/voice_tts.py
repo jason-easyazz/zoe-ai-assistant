@@ -2115,16 +2115,16 @@ def _pending_decision(text: str) -> Optional[str]:
     ``"yes"`` (do it), ``"no"`` (cancel, say so), ``"drop"`` (the person moved on or corrected it: forget the waiting write and
     treat these words as a new request) or None (not an answer at all: the write keeps waiting and these words are a new request).
 
-    The old test was "any keyword appears anywhere in the sentence", so "are you sure?" and "no, that's not correct" both CONFIRMED the
-    write. A yes is a short yes; a question, a sentence about something else, or a negated "correct" is never one."""
-    t = re.sub(r"\s+", " ", (text or "").strip().lower()).strip(" .!?,;:")
-    if not t:
+    A yes is a COMPLETE affirmative reply: every word is part of a yes ("yes please add him", "sure, go ahead"), and it is a
+    statement. A question ("sure?", "sounds good?", "yes?", "are you sure?", "is that right?") is never a yes, and neither is an
+    unrelated sentence that happens to contain a yes-word ("sure is cold"). The old test was "any keyword anywhere", so a
+    question or a negated "correct" CONFIRMED the write."""
+    raw = (text or "").strip()
+    t = re.sub(r"\s+", " ", raw.lower()).strip(" .!,;:")
+    if not t or "?" in raw:
         return None
     words = re.findall(r"[a-z0-9'’]+", t)
-    asked = (text or "").strip().endswith("?")
-    if len(words) > 2 and asked:
-        return None
-    if _QUESTIONING_RE.search(t):
+    if not words or _QUESTIONING_RE.search(t):
         return None
     cancel = _contains_decision_keyword(t, _CANCEL_KEYWORDS) or bool(_NOT_RIGHT_RE.search(t))
     confirm = _contains_decision_keyword(t, _CONFIRM_KEYWORDS)
@@ -2132,12 +2132,29 @@ def _pending_decision(text: str) -> Optional[str]:
     if cancel or (confirm and negated):
         return "no" if len(words) <= 4 else "drop"
     if confirm:
-        if len(words) <= 4 and not _YES_BUT_RE.search(t):
-            return "yes"
-        if len(words) <= 8 and words[0] in _YES_OPENERS and not _YES_BUT_RE.search(t):
-            return "yes"
-        return "drop" if _YES_BUT_RE.search(t) and words[0] in _YES_OPENERS else None
+        if _YES_BUT_RE.search(t):
+            return "drop" if words[0] in _YES_OPENERS else None
+        return "yes" if _is_plain_yes(t) else None
     return None
+
+
+_YES_PHRASES = ("go ahead", "do it", "sounds good", "that's right", "thats right", "of course", "please do", "thank you")
+_YES_VOCAB = frozenset({
+    "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "alright", "please", "confirm", "correct", "absolutely", "definitely",
+    "certainly", "then", "and", "add", "save", "him", "her", "them", "it", "that", "thanks", "go_ahead", "do_it", "sounds_good",
+    "thats_right", "of_course", "please_do", "thank_you", "right", "do", "go",
+})
+
+
+def _is_plain_yes(t: str) -> bool:
+    """True when EVERY word of ``t`` belongs to an affirmative reply and at least one is a real yes (``right`` / ``add`` alone are not)."""
+    folded = t.replace("’", "'")
+    for ph in _YES_PHRASES:
+        folded = folded.replace(ph, ph.replace("'", "").replace(" ", "_"))
+    toks = re.findall(r"[a-z0-9_]+", folded)
+    core = {"yes", "yeah", "yep", "yup", "sure", "ok", "okay", "alright", "confirm", "correct", "absolutely", "definitely",
+            "certainly", "go_ahead", "do_it", "sounds_good", "thats_right", "of_course", "please_do"}
+    return bool(toks) and all(w in _YES_VOCAB for w in toks) and any(w in core for w in toks)
 
 
 def _cap_voice_list_show_reply(text: str, *, max_items: int = 5) -> str:
@@ -3362,6 +3379,15 @@ async def voice_command(
                 effective_user, session_id, exc,
             )
 
+    # A verdict on the last answer ("that was wrong") is recorded BEFORE a waiting write or an open form can consume the words as a
+    # cancel; the conversation tiers below call the same function and it writes one row per verdict per reply.
+    try:
+        import conversation_feedback as _cf_top
+
+        await _cf_top.handle(text, effective_user, session_id, speaker_verified=_speaker_verified)
+    except Exception as _cf_exc:
+        logger.debug("voice/command feedback record failed (non-fatal): %s", _cf_exc)
+
     # ── Active action-form panel: route voice to field-filling ─────────────
     # When the touch panel has an action form open (calendar_event or shopping_list),
     # incoming voice utterances are interpreted as field updates rather than new
@@ -3625,7 +3651,7 @@ async def voice_command(
     except Exception:
         pass
 
-    async def _answer_from_tier(_xresult) -> dict:
+    async def _answer_from_tier(_xresult, intent: Optional[str] = None) -> dict:
         """Speak, save and return a deterministic tier's reply (the shared core's `DispatchResult`)."""
         reply_text = _xresult.reply
         _ui = (_xresult.ui or {}).get("kind")
@@ -3655,7 +3681,7 @@ async def voice_command(
         return {
             "ok": True, "panel_id": panel_id, "reply": reply_text,
             "audio_base64": _xaudio_b64, "content_type": _xct,
-            "intent": f"expert:{_xresult.domain}:{_xresult.intent}",
+            "intent": intent or f"expert:{_xresult.domain}:{_xresult.intent}",
         }
 
     # ── The conversation tiers, FIRST - in chat's order ───────────────────────
@@ -4146,18 +4172,11 @@ async def voice_command(
                     from intent_router import execute_intent as _exec_people
                     _people_reply = ((await _exec_people(_quick_intent, _scope_identity_user)) or "").strip()
                     if _people_reply and not _people_reply.lower().startswith(("i don't have", "i'm not sure who")):
-                        reply_text = _people_reply
-                        _people_audio = await synthesize({"text": reply_text}, caller=caller)
-                        await _schedule_voice_chat_save(session_id, text, reply_text, effective_user, speaker_verified=_speaker_verified)
-                        _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id, speaker_verified=_speaker_verified))
-                        return {
-                            "ok": True,
-                            "panel_id": panel_id,
-                            "reply": reply_text,
-                            "audio_base64": base64.b64encode(_people_audio.body).decode("ascii"),
-                            "content_type": _people_audio.media_type,
-                            "intent": "people_search",
-                        }
+                        # the shared reply path: speaks, pushes voice:responding + voice:done, saves, runs the memory passes
+                        from types import SimpleNamespace as _NS
+
+                        return await _answer_from_tier(
+                            _NS(reply=_people_reply, ui=None, domain="people", intent="search"), intent="people_search")
             except Exception as _people_exc:
                 logger.warning("voice/command people_search failed: %s", _people_exc)
         if _quick_intent and _quick_intent.name in _CONFIRM_INTENTS:

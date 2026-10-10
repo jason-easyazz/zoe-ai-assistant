@@ -74,7 +74,8 @@ async def test_instrument_goes_red_if_the_voice_lane_skips_the_conversation_tier
     monkeypatch.setattr(fast_tiers, "resolve", skip_conversation)
     results = await lpc.run_cells(MonkeyPatch, only={"feedback_down", "feedback_up", "correction"})
     voice_red = {r.cid for r in results if not r.voice_ok}
-    assert {"feedback_down", "feedback_up", "correction"} <= voice_red
+    # feedback_down survives on voice: the verdict is also recorded at the top of the turn (before a waiting write can swallow it)
+    assert {"feedback_up", "correction"} <= voice_red
     assert all(r.chat_ok for r in results), [(r.cid, r.chat_detail) for r in results]
 
 
@@ -82,3 +83,74 @@ def test_the_table_renders():
     results = [lpc.CellResult("a", "t", True, True, "", ""), lpc.CellResult("b", "t", None, False, "", "", voice_only=True)]
     out = lpc.render(results)
     assert "parity 1/2" in out and "n/a" in out
+
+
+# ── review round 1 ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
+from lane_parity_rig import MiniPatch, Rig  # noqa: E402
+from routers import voice_tts as _vt  # noqa: E402
+
+
+def _kinds(rig):
+    return [(f["params"][3], f["params"][4]) for f in rig.db.feedback]
+
+
+@pytest.mark.parametrize("lane", ["chat", "voice"])
+async def test_a_verdict_is_recorded_even_when_an_explained_answer_takes_the_fix(lane):
+    """"that's wrong, it's Marisol" right after "why did you say that?" is the provenance fix's to answer - and still leaves its
+    `correction` row (the feedback write is a side effect that runs before the early return)."""
+    mp = MiniPatch()
+    try:
+        rig = Rig(user=f"demo_lane_fb_explained_{lane}").install(mp)
+        say = rig.chat if lane == "chat" else rig.voice
+        await say("Remember that my sister is called Marisa.")
+        rig.brain_reply, rig.serve_on_brain = "Your sister is called Marisa.", True
+        await say("What is my sister called?")
+        rig.serve_on_brain = False
+        await say("Why did you say that?")
+        out = await say("That's wrong, it's Marisol")
+        assert out.stage.startswith("tier:provenance"), out.stage          # the fix's own reply is kept
+        assert _kinds(rig) == [("correction", "Marisol")]
+    finally:
+        mp.undo()
+
+
+async def test_a_waiting_spoken_write_does_not_swallow_the_verdict():
+    mp = MiniPatch()
+    try:
+        rig = Rig(user="demo_lane_fb_pending").install(mp)
+        rig.db.add_message(rig.voice_session, "assistant", "Stefan Edberg won it.", rig.user)
+        first = await rig.voice("Add my brother Percival.")
+        assert first.pending_confirmation
+        out = await rig.voice("That was wrong.")
+        assert "cancel" in out.reply.lower()                                # the existing reply stands
+        assert _kinds(rig) == [("thumbs_down", None)]                      # exactly one row: the top-of-turn call and the tier dedupe
+        assert rig.db.people == []
+    finally:
+        mp.undo()
+
+
+async def test_contacts_answer_sends_the_panel_events():
+    mp = MiniPatch()
+    try:
+        rig = Rig(user="demo_lane_people_events").install(mp)
+        await rig.voice("Add my brother Percival.")
+        await rig.voice("Yes.")
+        rig.events.clear()
+        out = await rig.voice("List my contacts.")
+        assert out.stage == "voice:people_search" and "percival" in out.reply.lower()
+        panel = [e for e in rig.events if e in ("voice:responding", "voice:done")]
+        assert panel[-2:] == ["voice:responding", "voice:done"] and panel.count("voice:done") == 1
+    finally:
+        mp.undo()
+
+
+async def test_the_rig_leaves_the_module_voice_state_as_it_found_it():
+    _vt._PENDING_CONFIRMATIONS["sentinel-panel"] = {"intent_name": "x"}
+    _vt._VOICE_SESSIONS["sentinel-panel"] = {"bound_user_id": "x"}
+    pending, sessions = dict(_vt._PENDING_CONFIRMATIONS), dict(_vt._VOICE_SESSIONS)
+    try:
+        await lpc.run_cells(MonkeyPatch, only={"contact_add", "pending_not_a_yes"})
+        assert _vt._PENDING_CONFIRMATIONS == pending and _vt._VOICE_SESSIONS == sessions
+    finally:
+        _vt._PENDING_CONFIRMATIONS.pop("sentinel-panel", None)
+        _vt._VOICE_SESSIONS.pop("sentinel-panel", None)
