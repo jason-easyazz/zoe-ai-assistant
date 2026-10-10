@@ -378,12 +378,16 @@ async def _person_half_tier(text: str, user_id: str, session_id: str, speaker_ve
     return None
 
 
-async def _conversation_quality_tier(text: str, user_id: str, session_id: str):
+async def _conversation_quality_tier(text: str, user_id: str, session_id: str,
+                                     speaker_verified: Optional[bool] = None, *, dry: bool = False):
     """Two flag-dark deterministic tiers that run BEFORE everything else (a correction or
     a pasted roster must never be answered by a generic apology / a guessed role):
 
     * ``ZOE_CORRECTION_APPLY`` — "you've got the date wrong" / "Biscuit is their dog" reach the
       STORED record and the reply says what changed (``correction_apply``).
+    * ``ZOE_CORRECTION_APPLY`` also covers "that's wrong, my sister is Marisol not Marisa" (``correction_apply.maybe_swap``): the
+      one stored note that holds the wrong name is rewritten and read back ("Got it, your sister is Marisol."). It needs a
+      verified speaker and a live (not dry) turn, and acts only when exactly one note carries the wrong value.
     * ``ZOE_ROSTER_NEUTRAL_ASK`` — a pasted `Name - detail` list whose roles are not stated is
       restated neutrally with ONE question, never assigned wife/girls from first names
       (``people_roles.roster_reply``).
@@ -395,6 +399,8 @@ async def _conversation_quality_tier(text: str, user_id: str, session_id: str):
 
         if _ca.enabled():
             res = await _ca.maybe_apply(text, user_id, session_id)
+            if res is None and not dry and speaker_verified is not False:
+                res = await _ca.maybe_swap(text, user_id, session_id)
             if res is not None:
                 import expert_dispatch as _xd
 
@@ -513,8 +519,14 @@ async def resolve(
     extra_ctx: Optional[dict] = None,
     allow_writes: Optional[bool] = None,
     run_tier0: Optional[bool] = None,
+    phase: Optional[str] = None,
 ):
     """Run the deterministic tiers (Tier-0 → Tier-1 → Tier-1.5) for `text`.
+
+    `phase` splits the run in two for a caller whose own stages sit between them (the voice lane's confirmation gate, Skybridge cards
+    and keyword intents): ``"conversation"`` runs only the tiers about WHAT THE PERSON JUST SAID (correction, pull, the person half,
+    identity, "remember that") and returns; ``"domain"`` runs only what is left (Tier-0, the router, the domain experts). ``None`` is
+    both, in the documented order - what chat does.
 
     Returns a `DispatchResult` (`.reply`, `.domain`, `.intent`, `.ui`, `.tier`) or
     `None` when nothing confident matches (caller should fall to its brain lane).
@@ -540,35 +552,39 @@ async def resolve(
         if not _xd.is_enabled():
             return None
 
-        cq = await _conversation_quality_tier(text, user_id, session_id)
-        if cq is not None:
-            return cq
+        if phase != "domain":
+            cq = await _conversation_quality_tier(
+                text, user_id, session_id, (extra_ctx or {}).get("speaker_verified"), dry=dry)
+            if cq is not None:
+                return cq
 
-        # Pull, not push: "what's up?" delivers what is pending, once (deterministic).
-        pt = await _pull_tier(text, user_id, session_id, channel, extra_ctx, dry=dry)
-        if pt is not None:
-            return pt
+            # Pull, not push: "what's up?" delivers what is pending, once (deterministic).
+            pt = await _pull_tier(text, user_id, session_id, channel, extra_ctx, dry=dry)
+            if pt is not None:
+                return pt
 
-        # The person half: hold an owner-stated fact against a bare "No, I'm sure it's X";
-        # ask ONE question when a request names a person two contacts share.
-        ph = await _person_half_tier(text, user_id, session_id, (extra_ctx or {}).get("speaker_verified"), dry=dry)
-        if ph is not None:
-            return ph
+            # The person half: hold an owner-stated fact against a bare "No, I'm sure it's X";
+            # ask ONE question when a request names a person two contacts share.
+            ph = await _person_half_tier(text, user_id, session_id, (extra_ctx or {}).get("speaker_verified"), dry=dry)
+            if ph is not None:
+                return ph
 
-        # Identity facts come from the account, never from memory.
-        if prof.get("identity_tier"):
-            idt = await _identity_tier(text, user_id)
-            if idt is not None:
-                return idt
+            # Identity facts come from the account, never from memory.
+            if prof.get("identity_tier"):
+                idt = await _identity_tier(text, user_id)
+                if idt is not None:
+                    return idt
 
-        # The owner's explicit "remember that ..." - a deterministic write with its own honest reply,
-        # before the router and the brain (ZOE_ASK_TO_REMEMBER). Not gated by the chat profile's allow_writes default (it needs no
-        # slot-extraction LLM call, the reason chat defers writes; a registered account only) - but an EXPLICIT allow_writes=False
-        # (the replay harness runs on the real member's memory) turns its writes off.
-        atr = await _ask_to_remember_tier(
-            text, user_id, session_id, (extra_ctx or {}).get("speaker_verified"), dry=dry)
-        if atr is not None:
-            return atr
+            # The owner's explicit "remember that ..." - a deterministic write with its own honest reply,
+            # before the router and the brain (ZOE_ASK_TO_REMEMBER). Not gated by the chat profile's allow_writes default (it needs no
+            # slot-extraction LLM call, the reason chat defers writes; a registered account only) - but an EXPLICIT allow_writes=False
+            # (the replay harness runs on the real member's memory) turns its writes off.
+            atr = await _ask_to_remember_tier(
+                text, user_id, session_id, (extra_ctx or {}).get("speaker_verified"), dry=dry)
+            if atr is not None:
+                return atr
+            if phase == "conversation":
+                return None
 
         # Tier-0 — deterministic regex read shortcut (opt-in per channel).
         # `tier0_defer_intents` (from the channel profile) names read intents this
@@ -729,25 +745,51 @@ async def _distress_tier(text: str, user_id: str, kwargs: dict):
     return None
 
 
+async def _feedback_tier(text: str, user_id: str, session_id: str, kwargs: dict):
+    """"that was wrong" / "good answer" leave the thumb the chat buttons leave (``conversation_feedback``). A wrong verdict writes its
+    row and returns None (the turn goes on to whatever answers it); a kind verdict answers in four words. NEVER raises."""
+    try:
+        import conversation_feedback as _cf
+
+        reply = await _cf.handle(
+            text, user_id, session_id, speaker_verified=(kwargs.get("extra_ctx") or {}).get("speaker_verified"),
+            allow_writes=kwargs.get("allow_writes") is not False,
+        )
+        if not reply:
+            return None
+        import expert_dispatch as _xd
+
+        return _xd.DispatchResult(domain="feedback", reply=reply, intent="conversation_feedback", tier="feedback")
+    except Exception as exc:  # never let the tier break a turn
+        logger.warning("fast_tiers feedback tier failed (non-fatal): %s", exc)
+        return None
+
+
 @_functools.wraps(_resolve_core)
 async def resolve(text: str, user_id: str, session_id: str, **kwargs):  # noqa: F811 - the documented wrapper
-    answered = await _distress_tier(text, user_id, kwargs)
-    if answered is not None:
-        return answered
-    answered = await _provenance_tier(text, user_id, session_id, kwargs)
-    if answered is not None:
-        return answered
-    # self_model (ZOE_SELF_MODEL, default shadow = a log line and nothing else): "what can you do?", "can you order groceries?",
-    # "are you always listening?" are answered from the model GENERATED from the real registries, never from the 4B's imagination.
-    try:
-        import self_model as _sm
+    # `phase="domain"` is the second half of a split run (the caller ran `phase="conversation"` already): the wrapper tiers
+    # (distress, provenance, feedback, self-model) are part of the conversation half, so they must not run - or count the turn - twice.
+    if kwargs.get("phase") != "domain":
+        answered = await _distress_tier(text, user_id, kwargs)
+        if answered is not None:
+            return answered
+        answered = await _provenance_tier(text, user_id, session_id, kwargs)
+        if answered is not None:
+            return answered
+        answered = await _feedback_tier(text, user_id, session_id, kwargs)
+        if answered is not None:
+            return answered
+        # self_model (ZOE_SELF_MODEL, default shadow = a log line and nothing else): "what can you do?", "can you order groceries?",
+        # "are you always listening?" are answered from the model GENERATED from the real registries, never from the 4B's imagination.
+        try:
+            import self_model as _sm
 
-        answered = await _sm.tier(text, user_id, session_id, channel=kwargs.get("channel"),
-                                  speaker_verified=(kwargs.get("extra_ctx") or {}).get("speaker_verified"))
-    except Exception:  # noqa: BLE001 - the tier never breaks a turn
-        answered = None
-    if answered is not None:
-        return answered
+            answered = await _sm.tier(text, user_id, session_id, channel=kwargs.get("channel"),
+                                      speaker_verified=(kwargs.get("extra_ctx") or {}).get("speaker_verified"))
+        except Exception:  # noqa: BLE001 - the tier never breaks a turn
+            answered = None
+        if answered is not None:
+            return answered
     res = await _resolve_core(text, user_id, session_id, **kwargs)
     if res is not None and getattr(res, "reply", ""):
         try:
