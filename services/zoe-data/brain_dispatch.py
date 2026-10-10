@@ -829,32 +829,39 @@ def _provenance_begin(user_id: str) -> tuple:
         return (0, 0.0)
 
 
-def _provenance_commit(user_id: str, reply: str, message: str, session_id: str, token: tuple) -> None:
+def _provenance_commit(user_id: str, reply: str, message: str, session_id: str, token: tuple, tools: tuple = ()) -> None:
+    """The reply ended: record what it stood on (``memory_provenance``, persisted by ``reply_ledger``) and the timed promises it made
+    (``commitments``). Both are background bookkeeping - neither waits, neither can change the reply."""
     try:
         if not (reply or "").strip() or not (user_id or "").strip():
-            return
-        import memory_provenance as _mp
-
-        if not _mp.enabled():
             return
         try:
             from zoe_flue_client import _FALLBACK_TEXT
 
             if reply.strip() == _FALLBACK_TEXT.strip():
-                return      # the brain did not answer: there is no reply to explain
+                return      # the brain did not answer: there is no reply to explain, and nothing was promised
         except Exception:  # noqa: BLE001
             pass
-        _mp.commit_brain_reply(user_id, reply, message, session_id, token=token)
+        import memory_provenance as _mp
+
+        rec = _mp.commit_brain_reply(user_id, reply, message, session_id, token=token, tools=tools) if _mp.enabled() else None
+        try:
+            import commitments as _cm
+
+            _cm.schedule_record(user_id, session_id, rec.reply_id if rec is not None else "", reply, message, tools)
+        except Exception:  # noqa: BLE001
+            pass
     except Exception:  # noqa: BLE001
         return
 
 
 def _provenance_tracked_stream(inner: AsyncIterator[str], message: str, session_id: str, user_id: str) -> AsyncIterator[str]:
-    """``inner`` unchanged when the feature is off or there is no user; else a pass-through that commits the reply on the way out."""
+    """``inner`` unchanged when both bookkeepers are off or there is no user; else a pass-through that commits the reply on the way out."""
     try:
+        import commitments as _cm
         import memory_provenance as _mp
 
-        if not (user_id or "").strip() or not _mp.enabled():
+        if not (user_id or "").strip() or not (_mp.enabled() or _cm.mode() != "off"):
             return inner
     except Exception:  # noqa: BLE001
         return inner
@@ -864,16 +871,25 @@ def _provenance_tracked_stream(inner: AsyncIterator[str], message: str, session_
 async def _tracked_stream(inner: AsyncIterator[str], message: str, session_id: str, user_id: str) -> AsyncIterator[str]:
     token = _provenance_begin(user_id)
     parts: list[str] = []
+    sentinels: list[str] = []
     try:
         async for delta in inner:
             if not delta.startswith(("__TOOL__:", "__THINKING__:")):
                 parts.append(delta)
+            elif delta.startswith("__TOOL__:") and len(sentinels) < 64:
+                sentinels.append(delta)
             yield delta
     finally:
         aclose = getattr(inner, "aclose", None)
         if aclose is not None:
             await aclose()
-        _provenance_commit(user_id, "".join(parts), message, session_id, token)
+        try:
+            import reply_ledger as _rl
+
+            tools = _rl.tool_names(sentinels)
+        except Exception:  # noqa: BLE001
+            tools = ()
+        _provenance_commit(user_id, "".join(parts), message, session_id, token, tools)
 
 
 def brain_streaming(message: str, session_id: str, user_id: str = "", **kwargs: Any) -> AsyncIterator[str]:

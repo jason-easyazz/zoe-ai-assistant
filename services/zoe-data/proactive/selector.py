@@ -270,8 +270,9 @@ async def select_for_user(user_id: str, *, now: datetime | None = None) -> dict 
                  1, c.cues, _iso(c.expires_at), stamp, stamp),
             )
         await db.execute(
+            # a 'commitment' candidate (commitments.py) is not the nightly pass's to expire: it lives until its own expiry
             "UPDATE proactive_candidates SET expires_at = ? WHERE user_id = ? AND updated_at < ? "
-            "AND expires_at > ?", (stamp, user_id, stamp, stamp),
+            "AND expires_at > ? AND kind <> 'commitment'", (stamp, user_id, stamp, stamp),
         )
         await db.execute(
             "DELETE FROM proactive_candidates WHERE user_id = ? AND expires_at <= ? "
@@ -418,7 +419,9 @@ async def _load(user_id: str) -> list[tuple]:
         async with db.execute(
             "SELECT id, kind, text, hint, salience, on_open, cue_words, expires_at, "
             "cooldown_until, surfaced_count, last_surfaced_session, last_surfaced_at, source_ref "
-            "FROM proactive_candidates WHERE user_id = ?", (user_id,),
+            # a 'commitment' candidate is delivered by the PULL only (commitments.py): it is Zoe's own sentence, not a thread
+            # for the brain to raise in its own words
+            "FROM proactive_candidates WHERE user_id = ? AND kind <> 'commitment'", (user_id,),
         ) as cur:
             return [tuple(r) for r in await cur.fetchall()]
 
