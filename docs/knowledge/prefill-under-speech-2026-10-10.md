@@ -87,9 +87,9 @@ Replay gate for the shipped code (flag OFF): see the PR body (`voice_regression_
 |---|---|
 | session + registry (bounded: 2 sessions, 30 s of audio, 30 s idle TTL) | `services/zoe-data/voice_stt_stream.py` |
 | `POST /api/voice/stt_stream/chunk` (409 when off), `/turn_stream` takes the finished text | `services/zoe-data/routers/voice_tts.py` (`_take_stt_stream_text`, `_transcribe_audio(pre_text=)`) |
-| daemon uploader (320 ms batches, sender thread, 409 latch; flag `ZOE_STT_STREAM_UPLOAD`) | stacked follow-up PR (`scripts/setup/zoe_voice_daemon.py`, `_SttStreamUploader`, `_attach_stt_stream`), split off to keep each PR under the size limit; until it lands the server lane is exercised only by the replay A/B arm |
+| daemon uploader (320 ms batches, sender thread, 409 latch; flag `ZOE_STT_STREAM_UPLOAD`) | `scripts/setup/zoe_voice_daemon.py` (`_SttStreamUploader`, `_attach_stt_stream`), stacked on the server PR to keep each under the size limit |
 | instruments | `scripts/perf/measure_stt_under_speech.py`, `measure_brain_prefix_warm.py`, `replay_samples.py` arm, `measure_voice.py` (`stt_stream`, `heard_hash` per row) |
-| tests (`ci_safe`) | `services/zoe-data/tests/test_voice_stt_stream.py` (daemon tests ride with the daemon PR) |
+| tests (`ci_safe`) | `services/zoe-data/tests/test_voice_stt_stream.py`, `tests/unit/test_voice_daemon_stt_stream.py` |
 
 Safety contract: the WAV is still POSTed with the turn, and the stream text is used only when its sample count equals the WAV's and it is non-empty. A gap in `seq`, a mismatch, an unknown or reused id, a timeout (`ZOE_STT_STREAM_FINISH_TIMEOUT_MS`, 2.5 s), an engine error or empty text all fall back to the unchanged batch STT, so a broken upload costs only the saving. Speculative (B1.1) turns never take a stream. The shared Moonshine inference lock is held per `add_audio` pass (up to about 0.5 s), so a concurrent Telegram transcription can wait that long. Pinned by tests with break-the-fix: removing the sample-count check turns `test_take_falls_back_on_every_failure_shape` red.
 
