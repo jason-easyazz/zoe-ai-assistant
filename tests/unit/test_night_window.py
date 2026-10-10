@@ -836,7 +836,7 @@ def test_the_cells_object_is_read_from_the_compact_one_line_stdout_too(tmp_path)
 def _trial_cells(tmp_path, *, pretty):
     script = tmp_path / "zoe-night-mind.py"
     script.write_text("# stand-in")
-    w, host, cfg = make(tmp_path, argv=["--trial"], start=at(3, 5), cfg_kw={"night_mind_script": script})
+    w, host, cfg = make(tmp_path, argv=["--trial", "--cap-min", "50"], start=at(3, 5), cfg_kw={"night_mind_script": script})      # the re-priced cells need more than the 4B@32k phase had left of 40 min
     real = host.run_watched
     cells_argv: list = []
 
@@ -874,10 +874,10 @@ def test_the_cells_budget_is_the_measured_speed_through_the_member_pass_formula(
     # one MOMENTS call (700 prompt tokens, cap 640) at today's 12B: 700/158.7 + 0.6 x 640/6.24 = 65.9 s; the worst case is night_mind.timeout_for itself
     assert cb.call_expected_s(700, 640, D12, P12) == pytest.approx(700 / P12 + 0.6 * 640 / D12)
     assert cb.cell_worst_s("K12", D12, P12) == pytest.approx(nm.timeout_for(700, 640, D12, P12))
-    assert cb.cell_expected_s("K1", D12, P12) == pytest.approx(2 * cb.call_expected_s(700, 640, D12, P12) + cb.call_expected_s(600, 450, D12, P12))
+    assert cb.cell_expected_s("K1", D12, P12) == pytest.approx(3 * cb.call_expected_s(700, 640, D12, P12) + cb.call_expected_s(600, 450, D12, P12))      # 3 MOMENTS chunks + 1 THREADS: measured on the 4B
     assert all(cb.cell_expected_s(k, D12, P12) == 0 for k in ("K2", "K3", "K4", "K5", "K6"))           # they read the pass K1 played: no calls of their own
     total = sum(cb.cell_expected_s(k, D12, P12) for k in cb.CELL_ORDER)
-    assert 1040 < total < 1070                                                                          # the 13 cell runs (K1-K12, K9 twice) need ~1,055 s at 6.24 tok/s
+    assert 1430 < total < 1470                                                                          # the 13 cell runs (K1-K12, K9 twice) need ~1,450 s at 6.24 tok/s (was 1,055 on the guessed K9 / K10 prices)
     fast = sum(cb.cell_expected_s(k, 2 * D12, P12) for k in cb.CELL_ORDER)                             # twice the decode speed: about half the decode time
     assert fast < 0.6 * total
     assert sum(cb.cell_worst_s(k, D12, P12) for k in cb.CELL_ORDER) > total                           # the ceiling is above the expectation
@@ -886,15 +886,16 @@ def test_the_cells_budget_is_the_measured_speed_through_the_member_pass_formula(
 
 def test_the_plan_fits_all_cells_with_room_and_a_prefix_when_the_cap_leaves_less():
     from zmb import cells_budget as cb
-    full = cb.plan(D12, P12, 1640.0)
-    assert full["fits_all"] and full["selected"] == list(cb.CELL_ORDER) and full["expected_s"] == pytest.approx(1055, abs=15)
-    assert full["cell_budget_s"] <= 1640 - cb.GRACE_S and full["watchdog_s"] <= 1640                     # never past what the cap leaves
+    assert not cb.plan(D12, P12, 1640.0)["fits_all"]                                                     # the re-priced set (K9 / K9f / K10 make 3 calls, not 2) no longer fits the old 40-minute cap
+    full = cb.plan(D12, P12, 2400.0)
+    assert full["fits_all"] and full["selected"] == list(cb.CELL_ORDER) and full["expected_s"] == pytest.approx(1450, abs=15)
+    assert full["cell_budget_s"] <= 2400 - cb.GRACE_S and full["watchdog_s"] <= 2400                     # never past what the cap leaves
     assert full["watchdog_s"] > 420                                                                      # the fixed 420 s that killed the 2026-10-09 run is gone
     part = cb.plan(D12, P12, 700.0)
     assert 0 < len(part["selected"]) < len(cb.CELL_ORDER) and part["dropped"] == list(cb.CELL_ORDER[len(part["selected"]):]) and not part["fits_all"]
     assert part["selected"][:6] == ["K1", "K2", "K3", "K4", "K5", "K6"] and part["needed_s"] <= 700 - cb.GRACE_S and part["watchdog_s"] <= 700
     assert cb.plan(D12, P12, 200.0)["selected"] == [] and cb.plan(D12, P12, 200.0)["watchdog_s"] == 0       # nothing fits: no run, no watchdog
-    assert len(cb.plan(D12 / 2, P12, 1640.0)["selected"]) < len(full["selected"])                          # a slower model fits fewer
+    assert len(cb.plan(D12 / 2, P12, 2400.0)["selected"]) < len(full["selected"])                          # a slower model fits fewer
     huge = cb.plan(D12, P12, 50000.0)
     assert huge["cell_budget_s"] == pytest.approx(cb.STARTUP_S + huge["worst_s"], abs=1) and huge["watchdog_s"] == pytest.approx(huge["cell_budget_s"] + cb.GRACE_S, abs=1)
 
@@ -991,6 +992,26 @@ def test_no_cell_fitting_the_cap_is_an_error_row_not_a_silent_empty_run(tmp_path
     assert rc == nw.EXIT_ABORTED and not [c for c in calls if "argv" in c]                              # the CLI was never started with a budget of zero
     assert "no night-mind cell fits" in w.outcome
     assert wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]
+
+
+def test_cells_runs_and_pick_reach_the_cli_and_the_budget_is_priced_per_run(tmp_path):
+    """``--cells-runs N`` is the CLI's ``--runs N`` (a verdict is the MAJORITY of N samples) and ``--cells-pick`` its ``--only``; the plan is N times the one-run price, so the watchdog
+    covers all N runs; the votes the CLI reports reach the record (and so the report)."""
+    from zmb import cells_budget as cb
+    d, p = 4.2, 120.5
+    one, three = cb.plan(d, p, 50000.0, keys=["K9", "K9f", "K10"]), cb.plan(d, p, 50000.0, keys=["K9", "K9f", "K10"], runs=3)
+    assert three["expected_s"] == pytest.approx(3 * one["expected_s"], abs=0.2) and three["worst_s"] == pytest.approx(3 * one["worst_s"], abs=0.2) and three["runs"] == 3 and one["runs"] == 1
+    w, host, cfg, calls = _cells_host(tmp_path, argv=("--cells-only", "--cap-min", "50", "--cells-runs", "3", "--cells-pick", "K9,K9f,K10"), verdicts={"K9": "PASS", "K9f": "PASS", "K10": "FAIL"})
+    assert w.run() == nw.EXIT_OK, w.outcome
+    argv = next(c for c in calls if "argv" in c)["argv"]
+    sel = w.rec["cells_plan"]["12B"]["selected"]
+    assert argv[argv.index("--runs") + 1] == "3" and argv[argv.index("--only") + 1] == ",".join(sel) and sel[:1] == ["K9"] and set(sel) <= {"K9", "K9f", "K10"}
+    assert w.rec["cells_plan"]["12B"]["runs"] == 3
+    (tmp_path / "plain").mkdir()
+    w1, _h, _cf, calls1 = _cells_host(tmp_path / "plain")
+    assert w1.run() == nw.EXIT_OK
+    argv1 = next(c for c in calls1 if "argv" in c)["argv"]
+    assert argv1[argv1.index("--runs") + 1] == "1" and "--only" not in argv1                       # the default is today's behaviour: one run of everything that fits
 
 
 def test_a_watchdog_kill_keeps_the_verdicts_the_cli_logged_cell_by_cell(tmp_path):
@@ -1603,3 +1624,13 @@ def test_a_real_run_logs_the_summary_line_and_a_dry_run_does_not(tmp_path):
     w.log = logged.append
     assert w.run() == nw.EXIT_OK
     assert sum(1 for m in logged if str(m).startswith("NIGHT_WINDOW_SUMMARY ")) == 1
+
+
+def test_the_cells_price_table_covers_the_call_counts_measured_on_the_live_4b():
+    """``CELL_CALLS`` was a guess (K9 / K9f / K10 at one MOMENTS call); the CLI now prints every run's real count per cell (``cells.cell_calls``). These are the largest of 6 runs of the
+    live 4B on 2026-10-10 (3 runs twice, two prompt versions); a price below them under-plans the window and its watchdog kills the run (the 2026-10-09 failure)."""
+    from zmb import cells_budget as cb
+    measured = {"K1": (3, 1), "K7": (3, 1), "K8": (3, 1), "K9": (2, 1), "K9f": (2, 1), "K10": (2, 1), "K11": (1, 1), "K12": (1, 0), "K2": (0, 0), "K3": (0, 0), "K4": (0, 0), "K5": (0, 0), "K6": (0, 0)}
+    for k, (m, t) in measured.items():
+        assert cb.CELL_CALLS[k][0] >= m and cb.CELL_CALLS[k][1] >= t, k
+    assert set(cb.CELL_ORDER) == set(cb.CELL_CALLS) == set(measured)

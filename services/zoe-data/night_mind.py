@@ -100,6 +100,7 @@ MORNING_DAYS = 3
 STALE_CARD_HOURS = 36
 DEFAULT_DECODE_TOK_S = 8.0          # the run-2 measurement on this brain; the 12B is slower (the CLI measures and overrides)
 PREFILL_TOK_S = 650.0               # the live 4B's prompt rate; the 12B prefills at ~136 tok/s (2026-10-09 window): the window MEASURES it and passes it (--prefill-tok-s / PREFILL_ENV)
+PRODUCTION_TEMPERATURE = 0.1         # the member pass's sampling temperature (it was a literal in _complete); the cells measurement pins its own per run (Config.temperature / Config.seed)
 TIMEOUT_MARGIN_S = 20.0             # queueing / tokenisation / template slack on top of prefill + decode
 TIMEOUT_FLOOR_S = 30.0              # no call is ever given less than this, however fast the rates claim the model is
 _CACHE_TTL_S = 90.0
@@ -168,6 +169,10 @@ class Config:
     decode_tok_s: float = DEFAULT_DECODE_TOK_S
     prefill_tok_s: float = PREFILL_TOK_S
     schema: bool = False
+    #: sampling. The member pass runs at ``PRODUCTION_TEMPERATURE`` with no seed (the server picks one). The MEASUREMENT (``zoe-night-mind.py --cells --runs N``) pins both
+    #: per run (llama.cpp takes ``temperature`` and ``seed`` per request) so a verdict can be reproduced and a run-to-run difference is the model's, not luck.
+    temperature: float = PRODUCTION_TEMPERATURE
+    seed: "Optional[int]" = None
 
     def timeout_for(self, prompt_tokens: int, max_tokens: int) -> float:
         """THE per-call HTTP budget for this run: ``timeout_for`` at this config's two rates. Every model call in the layer (the member pass, the bench's cells,
@@ -186,7 +191,8 @@ def default_chunk_tokens(ctx_tokens: int) -> int:
 
 
 def config_from_env(*, url: str = "", model: str = "", ctx_tokens: Optional[int] = None, max_calls: Optional[int] = None,
-                    chunk_tokens: Optional[int] = None, decode_tok_s: Optional[float] = None, prefill_tok_s: Optional[float] = None) -> Config:
+                    chunk_tokens: Optional[int] = None, decode_tok_s: Optional[float] = None, prefill_tok_s: Optional[float] = None,
+                    temperature: Optional[float] = None, seed: Optional[int] = None) -> Config:
     ctx = int(ctx_tokens or _int_env(CTX_ENV, 0, 0, 262144) or _int_env("ZOE_BRAIN_SLOT_TOKENS", BASE_CTX, 2048, 262144))
     chunk = int(chunk_tokens or _int_env(CHUNK_ENV, 0, 0, 20000) or default_chunk_tokens(ctx))
     return Config(
@@ -195,7 +201,9 @@ def config_from_env(*, url: str = "", model: str = "", ctx_tokens: Optional[int]
         model=model or os.environ.get(MODEL_ENV) or os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
         decode_tok_s=float(decode_tok_s or _float_env(DECODE_ENV, DEFAULT_DECODE_TOK_S, 0.5, 200.0)),
         prefill_tok_s=max(5.0, float(prefill_tok_s or _float_env(PREFILL_ENV, PREFILL_TOK_S, 5.0, 20000.0))),
-        schema=(os.environ.get(SCHEMA_ENV) or "").strip().lower() in ("1", "true", "yes", "on"))
+        schema=(os.environ.get(SCHEMA_ENV) or "").strip().lower() in ("1", "true", "yes", "on"),
+        temperature=PRODUCTION_TEMPERATURE if temperature is None else max(0.0, min(2.0, float(temperature))),
+        seed=None if seed is None else int(seed))
 
 
 #: the lab / CLI seam for the run's Config (the digest hook calls ``run_for_user`` with no config; the bench points it at the clone or sets a small chunk budget)
@@ -297,7 +305,9 @@ async def _complete(messages: list, max_tokens: int, cfg: Config, usage: "dict[s
         return text
     import httpx
 
-    payload: "dict[str, Any]" = {"model": cfg.model, "messages": messages, "max_tokens": max_tokens, "temperature": 0.1, "stream": False}
+    payload: "dict[str, Any]" = {"model": cfg.model, "messages": messages, "max_tokens": max_tokens, "temperature": cfg.temperature, "stream": False}
+    if cfg.seed is not None:
+        payload["seed"] = int(cfg.seed)
     if schema is not None and cfg.schema:
         payload["response_format"] = {"type": "json_schema", "json_schema": {"name": "night_mind", "strict": True, "schema": schema}}
     prompt_est = sum(est_tokens(m["content"]) for m in messages)
@@ -333,13 +343,13 @@ You read one person's own words from today. Each line is [id] day: words.
 
 {lines}
 
-Pick EVERY line that matters for knowing this person - something in progress (a project, a habit, a practice, a person they keep doing something with), a plan or date, a feeling, a change from how things were, something about someone they know, a health matter - up to {cap}; one moment per line. Skip commands (lights, timers, music, weather, sums) and small talk. Do not explain, conclude or guess a reason.
+Every line above is something this person chose to say. Make a moment of EVERY line except a command (lights, timers, music, weather, sums) or small talk: what they are doing, learning or practising, a plan or date, a feeling or worry, a change, something about someone they know, a health matter. At most {cap}; if more lines qualify, keep the {cap} that matter most to knowing this person. List them in line order, one moment per line. Do not explain, conclude or guess a reason.
 Return JSON, one object per moment (two shown): {{"moments":[{{"ids":["m3"],"quote":"...","kind":"progress","who":["Dagny"],"feeling":"none","weight":2,"later":"open"}},{{"ids":["m5"],"quote":"...","kind":"feeling","who":[],"feeling":"worried","weight":2,"later":"na"}}]}}, at most {cap}.
 ids: the line ids it comes from (1-3). quote: copied EXACTLY, letter for letter, from ONE of those lines (3-25 words).
-kind: progress|plan|feeling|change|person|health|other. who: names the person mentions in it ([] if only themselves).
-feeling: none|worried|sad|angry|stressed|happy|excited|proud|relieved|other. weight: 1 minor, 2 notable, 3 major.
+kind = the main thing the line is about: health (a body, an illness, a doctor) | feeling (how they feel: worry, pride, joy) | plan (dated, or still to happen) | change (something moved, ended, was called off or replaced) | progress (something going on or achieved: a project, a habit, a practice, a job, an offer, a result) | person (only a plain fact about someone they know) | other. who: names the person mentions in it ([] if only themselves).
+feeling: none|worried|sad|angry|stressed|happy|excited|proud|relieved|other. weight: 1 a passing remark or a plain fact, 2 something they care about or keep coming back to, 3 big news, a major event or a serious worry.
 later: open (still to happen or unresolved) | done | na.
-If nothing matters, return {{"moments":[]}}.
+If every line is a command or small talk, return {{"moments":[]}}.
 Write the JSON on ONE line: no code fence, no indentation, no line breaks (the reply has a hard length limit and a cut-off reply loses the newest lines)."""
 
 THREADS_SYSTEM = "You tidy one person's night notes. You only choose and group by id; you never write new sentences. Return ONLY valid JSON."
@@ -726,8 +736,9 @@ def parse_moments(raw: str, chunk: "Sequence[Turn]", chunk_no: int, counts: "dic
         m = verify_moment(item, chunk, alias, chunk_no, counts)
         if m is not None:
             out.append(m)
-        if len(out) >= cap:
-            break
+    # ``cap`` is what the prompt ASKS for. A model that writes more (the 4B wrote 12 for "at most 8", 2026-10-10) has already paid for them, and every one is verified above: cutting the
+    # reply at 8 threw away the LATER lines it had picked (a child's cello lessons) and left them to a second ask that did not pick them again. Up to twice the ask is kept;
+    # ``MAX_MOMENTS_TO_THREADS`` still bounds what the THREADS call sees.
     return out
 
 
@@ -965,18 +976,33 @@ def apply_threads(raw: str, moments: "list[Moment]", threads: "list[dict]", coun
     return groups
 
 
+def _matter_words(quote: str, names: "Iterable[str]" = ()) -> "set[str]":
+    """The words that say WHAT a line is about: its words without the stop words, the generic ones and the names in it (a name is who, not what)."""
+    nm_ = {n.lower() for n in names} | {n.lower() for n in names_in(quote)}
+    return {w for w in _words(quote) if w not in _ANCHOR_STOP and w not in nm_}
+
+
 def finishes(current: "Sequence[Moment]", model_status: str, old_rows: "Sequence[dict]" = ()) -> bool:
     """Does this thread END tonight? A moment must say a thing finished (``later: done``) AND a second reading must agree: either the THREADS call calls the thread ``resolved``, or the thread
-    holds a dated PLAN (kind ``plan``, still open) said before the finish - 'the quiz night is on the 20th' ... 'the quiz night went really well'. A habit's single occasion ('Jorunn and I ran
-    5k today', later=done) is a finished EVENT, not a finished story: with neither reading it stays open (measured, K9: every run and garden line carried ``done`` and both threads were closed)."""
-    done = [x for x in current if x.later == "done"]
+    holds a dated PLAN (kind ``plan``, still open) said before the finish AND the finishing line is about that plan's matter (it shares a word with it that is not a name) - 'the quiz night is on the
+    20th' ... 'the quiz night went really well'. Not every ``done`` is a finish:
+    * a habit's single occasion ('Jorunn and I ran 5k today', later=done) is a finished EVENT, not a finished story (measured, K9: every run and garden line carried ``done`` and both threads were closed);
+    * a ``change`` moment ('the trip is off, we are going elsewhere') is the plan CHANGING, not finishing (measured, 4B, 2026-10-10: it carried ``done`` and the plan it replaced was closed instead of
+      being 'changed' - K9);
+    * a line about something else in the same story ('Sorrel practised the cello for an hour today', done) does not finish the concert plan that shares only the child's name (measured, K10: the
+      benign thread was closed on its second mention and could never be raised)."""
+    done = [x for x in current if x.later == "done" and x.kind != "change"]
     if not done:
         return False
     if model_status == "resolved":
         return True
     at = max(x.turn.at for x in done)
-    return (any(x.kind == "plan" and x.later == "open" and x.turn.at < at for x in current)
-            or any(o.get("kind") == "plan" and o.get("later") == "open" and float(o.get("said_at") or 0) < at.timestamp() for o in old_rows))
+    finish_words = set().union(*[_matter_words(x.quote, x.who) for x in done])
+    plans = [x for x in current if x.kind == "plan" and x.later == "open" and x.turn.at < at]
+    if any(_matter_words(x.quote, x.who) & finish_words for x in plans):
+        return True
+    return any(o.get("kind") == "plan" and o.get("later") == "open" and float(o.get("said_at") or 0) < at.timestamp()
+               and _matter_words(str(o.get("quote") or ""), str(o.get("who") or "").split(",")) & finish_words for o in old_rows)
 
 
 def merge_status(a: str, b: str) -> str:

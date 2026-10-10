@@ -23,9 +23,11 @@ REPO = Path(__file__).resolve().parents[3]
 
 #: the order ``zoe-night-mind.py --cells`` runs the reflection cells in (``spec.load_cells()``): K9.change_and_quiet = K9, K9.flat_week = K9f
 CELL_ORDER = ("K1", "K2", "K3", "K4", "K5", "K6", "K7", "K8", "K9", "K9f", "K10", "K11", "K12")
-#: (MOMENTS calls, THREADS calls) per cell, counted against the lab household. A cell not in the table is priced as one MOMENTS + one THREADS call.
-CELL_CALLS = {"K1": (2, 1), "K2": (0, 0), "K3": (0, 0), "K4": (0, 0), "K5": (0, 0), "K6": (0, 0), "K7": (2, 1), "K8": (2, 1),
-              "K9": (1, 1), "K9f": (1, 1), "K10": (1, 1), "K11": (1, 1), "K12": (1, 0)}
+#: (MOMENTS calls, THREADS calls) per cell, MEASURED: the largest count over 6 runs of the live 4B (``zoe-night-mind.py --cells --runs 3`` twice, 2026-10-10; the CLI prints
+#: every run's own in ``cells.cell_calls``). The lab household is 24 turns in 400-token chunks (3 MOMENTS calls for K1 / K7 / K8); K9 / K9f / K10 add the tail ask for the lines a
+#: reply never reached (the 2026-10-09 table said 1 + 1 for them: a third too cheap). A cell not in the table is priced as one MOMENTS + one THREADS call.
+CELL_CALLS = {"K1": (3, 1), "K2": (0, 0), "K3": (0, 0), "K4": (0, 0), "K5": (0, 0), "K6": (0, 0), "K7": (3, 1), "K8": (3, 1),
+              "K9": (2, 1), "K9f": (2, 1), "K10": (2, 1), "K11": (1, 1), "K12": (1, 0)}
 #: prompt tokens of the two call kinds (the largest the lab household produced: 577 and 461) and their output caps (``night_mind.MOMENT_MAX_TOKENS`` / ``THREAD_MAX_TOKENS``)
 MOMENTS_PROMPT_TOK, THREADS_PROMPT_TOK = 700, 600
 MOMENTS_MAX_TOK, THREADS_MAX_TOK = 640, 450
@@ -67,17 +69,19 @@ def cell_worst_s(key: str, decode_tok_s: float, prefill_tok_s: float) -> float:
     return sum(n * _timeout_for(p, m, decode_tok_s, prefill_tok_s) for n, (p, m) in zip(CELL_CALLS.get(key, (1, 1)), _kinds()))
 
 
-def plan(decode_tok_s: float, prefill_tok_s: float, room_s: float, keys: "Sequence[str]" = CELL_ORDER) -> dict:
+def plan(decode_tok_s: float, prefill_tok_s: float, room_s: float, keys: "Sequence[str]" = CELL_ORDER, runs: int = 1) -> dict:
     """The cells that fit in ``room_s`` seconds (what the cap leaves after the restore reserve), and the two clocks for the CLI run.
 
-    ``selected`` = the longest PREFIX of ``keys`` (K2-K6 cannot run without K1's pass) whose ``STARTUP_S + SLACK x expected`` fits ``room_s - GRACE_S``.
+    ``runs`` = how many times the CLI runs the whole set (``--runs``): every cell costs ``runs`` times its expected / worst seconds.
+    ``selected`` = the longest PREFIX of ``keys`` (K2-K6 cannot run without K1's pass) whose ``STARTUP_S + SLACK x runs x expected`` fits ``room_s - GRACE_S``.
     ``cell_budget_s`` = what the CLI gets (``--cell-budget``): that room, but never more than the worst case of the selected cells.
     ``watchdog_s`` = the window's kill: the CLI's budget plus ``GRACE_S``, never past ``room_s``."""
     usable = max(0.0, room_s - GRACE_S)
+    runs = max(1, int(runs))
     selected: "list[str]" = []
     expected = worst = 0.0
     for k in keys:
-        e, w = cell_expected_s(k, decode_tok_s, prefill_tok_s), cell_worst_s(k, decode_tok_s, prefill_tok_s)
+        e, w = runs * cell_expected_s(k, decode_tok_s, prefill_tok_s), runs * cell_worst_s(k, decode_tok_s, prefill_tok_s)
         if STARTUP_S + SLACK * (expected + e) > usable:
             break
         selected.append(k)
@@ -86,7 +90,7 @@ def plan(decode_tok_s: float, prefill_tok_s: float, room_s: float, keys: "Sequen
     return {"selected": selected, "dropped": [k for k in keys if k not in selected], "expected_s": round(expected, 1), "worst_s": round(worst, 1),
             "needed_s": round(STARTUP_S + SLACK * expected, 1), "room_s": round(room_s, 1), "cell_budget_s": round(cell_budget, 1),
             "watchdog_s": round(min(room_s, cell_budget + GRACE_S), 1) if selected else 0.0, "fits_all": not [k for k in keys if k not in selected],
-            "decode_tok_s": decode_tok_s, "prefill_tok_s": prefill_tok_s}
+            "decode_tok_s": decode_tok_s, "prefill_tok_s": prefill_tok_s, "runs": runs}
 
 
 def fits_next(elapsed_s: float, budget_s: Optional[float], key: str, decode_tok_s: float, prefill_tok_s: float) -> bool:
@@ -100,4 +104,4 @@ def describe(p: dict) -> str:
     """One log line for a plan (the window logs it before it starts the CLI)."""
     return (f"night-mind cells budget: decode {p['decode_tok_s']:.2f} / prefill {p['prefill_tok_s']:.1f} tok/s -> expected {p['expected_s']:.0f} s "
             f"(x{SLACK} + {STARTUP_S:.0f} s startup = {p['needed_s']:.0f} s), worst case {p['worst_s']:.0f} s; room {p['room_s']:.0f} s -> CLI budget {p['cell_budget_s']:.0f} s, "
-            f"watchdog {p['watchdog_s']:.0f} s; cells {','.join(p['selected']) or 'NONE'}" + ("" if p["fits_all"] else f"; DROPPED (cannot fit): {','.join(p['dropped'])}"))
+            f"watchdog {p['watchdog_s']:.0f} s; cells {','.join(p['selected']) or 'NONE'}" + (f" x{p['runs']} runs" if p.get("runs", 1) > 1 else "") + ("" if p["fits_all"] else f"; DROPPED (cannot fit): {','.join(p['dropped'])}"))

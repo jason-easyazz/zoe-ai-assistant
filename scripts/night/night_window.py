@@ -316,6 +316,10 @@ class NightCfg(bk.Cfg):
     skip_4b: bool = False
     #: ``--cells-only`` (implies the trial's load / restore): the 12B is loaded, probed, and ONLY the night mind's own cells run on it. No ZMA-arm pass (a memory arm the bake-off rejected), no embeddings shim, no 4B phase.
     cells_only: bool = False
+    #: ``--cells-only``: how many times the CLI runs the cells (``zoe-night-mind.py --runs``; the verdict of a cell is the MAJORITY over them) and, optionally, which cells (``--only``).
+    #: 1 / "" = the window's historical behaviour (one run of everything that fits).
+    cells_runs: int = 1
+    cells_pick: str = ""
     busy_units: tuple = ("zoe-training.service", "zoe-backup.service", "zoe-backup-verify.service", "zoe-memory-export.service", "zoe-dreaming.service")
     busy_wait_max_min: float = 20.0
     busy_poll_s: float = 30.0
@@ -1346,13 +1350,16 @@ class NightWindow(bk.Window):
             d0, p0 = cb.default_rates()
             decode, prefill = decode or d0, prefill or p0
         room = self.cells_room_s(label)
-        plan = cb.plan(decode, prefill, room)
+        picked = [k.strip() for k in (cfg.cells_pick or "").replace(" ", "").split(",") if k.strip()]
+        keys = [k for k in cb.CELL_ORDER if k.upper() in {x.upper() for x in picked}] if picked else list(cb.CELL_ORDER)
+        plan = cb.plan(decode, prefill, room, keys=keys, runs=cfg.cells_runs)
         self.event(cb.describe(plan))
         self.rec.setdefault("cells_plan", {})[label] = plan
         if not plan["selected"]:
             return {"error": f"no night-mind cell fits the {room:.0f} s the cap leaves ({plan['needed_s']:.0f} s for the first; run --cells-only, or a bigger --cap-min)", "plan": plan}
         argv = [cfg.py, str(cfg.night_mind_script), "--model-url", f"http://127.0.0.1:{cfg.port}/v1", "--ctx-tokens", str(ctx), "--cells", "--model-name", label,
-                "--decode-tok-s", f"{decode:.2f}", "--prefill-tok-s", f"{prefill:.1f}", "--cell-budget", f"{plan['cell_budget_s']:.0f}"]
+                "--decode-tok-s", f"{decode:.2f}", "--prefill-tok-s", f"{prefill:.1f}", "--cell-budget", f"{plan['cell_budget_s']:.0f}",
+                "--runs", str(cfg.cells_runs)] + (["--only", ",".join(plan["selected"])] if picked else [])
         res = self.host.run_watched(argv, plan["watchdog_s"], {**os.environ, "ZOE_HARNESS": "1"}, lambda: self.guard(), log, cfg.metrics_poll_s)
         text = self.host.read(str(log))
         for d in reversed(list(_json_objects(text))):          # the whole object, compact or indented: the CLI's stdout is not guaranteed one line
@@ -1361,6 +1368,9 @@ class NightWindow(bk.Window):
                 out: "dict[str, Any]" = {k: v for k, v in c.items() if isinstance(v, (str, int))}
                 out.update({"reasons": c.get("reasons") if isinstance(c.get("reasons"), dict) else {}, "skipped_budget": c.get("skipped_budget") or [],
                             "model_totals": c.get("model_totals") if isinstance(c.get("model_totals"), dict) else {}, "plan": plan, "rc": res.rc})
+                for extra in ("votes", "evidence", "cell_calls", "runs"):                 # --runs N: the per-run votes, what each failed vote scored, the measured call counts (the report and the JSON keep them)
+                    if c.get(extra):
+                        out[extra] = c[extra]
                 if out["skipped_budget"]:
                     out["note"] = f"{len(out['skipped_budget'])} cell(s) not started: they would have overrun the {plan['cell_budget_s']:.0f} s budget ({','.join(out['skipped_budget'])})"
                 return out
@@ -1908,8 +1918,9 @@ class NightWindow(bk.Window):
         if nm12 or nm4:
             keys = [k for k in cb.CELL_ORDER if k in nm12 or k in nm4] + sorted((set(k for k in list(nm12) + list(nm4) if cell_key(k))) - set(cb.CELL_ORDER))
             why = lambda nm, k: (nm.get("reasons") or {}).get(k, "")  # noqa: E731
+            vote = lambda nm, k: (f"{nm.get(k, '-')} ({'/'.join(str(x)[0] for x in (nm.get('votes') or {}).get(k, []))})" if (nm.get("votes") or {}).get(k) and len(nm["votes"][k]) > 1 else nm.get(k, "-"))  # noqa: E731
             L += ["### Night-mind cells (K1-K12)", "", "| cell | 12B | 4B@32k | why (ERROR / SKIP) |", "|---|---|---|---|"]
-            L += [f"| {k} | {nm12.get(k, '-')} | {nm4.get(k, '-')} | {(why(nm12, k) or why(nm4, k))[:200]} |" for k in keys]
+            L += [f"| {k} | {vote(nm12, k)} | {vote(nm4, k)} | {(why(nm12, k) or why(nm4, k))[:200]} |" for k in keys]
             for lab, nm in (("12B", nm12), ("4B@32k", nm4)):
                 if not nm:
                     continue
@@ -2054,6 +2065,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--trial", action="store_true", help="load the 12B only; score K1-K5 on it and on the 4B at 32k; restore (manual, any hour)")
     ap.add_argument("--cells-only", action="store_true", help="a trial that scores ONLY the night mind's own cells (K1-K12) on the 12B: load, speed probe, `zoe-night-mind.py --cells` with a budget "
                     "derived from the measured speed and the time the cap leaves, restore. No ZMA-arm pass, no 4B phase. Manual, any hour, cap 40 min (docs/knowledge/night-window.md)")
+    ap.add_argument("--cells-runs", type=int, default=1, help="with --cells-only: run the night-mind cells N times (zoe-night-mind.py --runs) and report the MAJORITY verdict + per-run votes; the budget plan is N times longer "
+                    "(give --cap-min accordingly). Default 1 = one run")
+    ap.add_argument("--cells-pick", default="", help="with --cells-only: only these cells, comma separated (K9,K9f,K10); default all that fit")
     ap.add_argument("--speed-sweep", action="store_true", help="measure the 12B across the config grid (build, load mode, offload, quant, KV, batch, threads): one 12B per config, a fixed speed probe each, "
                     "one restore at the end; manual, any hour, hard cap 45 min (docs/knowledge/night-window.md '12B speed sweep')")
     ap.add_argument("--sweep-stages", default="all", help="stages of the grid to run: all | 0-4 | 5,6,7 (0 control, 1 offload, 2 q4km, 3 quant, 4 ngl, 5 kv, 6 batch, 7 threads, 8 draft); later stages start from the best row an earlier run saved")
@@ -2090,6 +2104,8 @@ def build_parser() -> argparse.ArgumentParser:
 def configure(args: argparse.Namespace, cfg: "Optional[NightCfg]" = None) -> NightCfg:
     cfg = cfg or NightCfg()
     cfg.cells_only = bool(args.cells_only)
+    cfg.cells_runs = max(1, int(args.cells_runs or 1))
+    cfg.cells_pick = str(args.cells_pick or "")
     cfg.trial = bool(args.trial) or cfg.cells_only          # --cells-only IS a trial (same load, probe, restore, any hour, no jobs); it only drops the phases around the cells
     cfg.sweep = bool(args.speed_sweep)
     if cfg.sweep and cfg.trial:

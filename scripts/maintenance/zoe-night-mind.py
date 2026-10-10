@@ -27,6 +27,11 @@ Flags
   --transcript-file F  synthetic runs without Postgres: a JSON list of {"id","text","at"} (turns of ONE member, given by --user).
   --cells              do not touch any member: score the reflection cells K1-K12 (the lab, scratch stores) against --model-url and print the counts.
   --only K9,K10        with --cells: run just these cells (K9f = the flat week); the others are neither run nor reported. The output is still the one JSON line.
+  --runs N             with --cells: run the whole set N times (default 3) and report the MAJORITY verdict of every cell plus its per-run votes. One run of a cell is one sample
+                       of a model that samples (the same cell scored PASS and FAIL on the same 4B within an hour); a verdict is PASS only if a strict majority of the runs that
+                       produced one passed (a tie is FAIL; an ERROR is a vote against). Each run pins ``--cell-temperature`` and a seed (``--cell-seed`` + the run index): llama.cpp takes both
+                       per request, so a run is reproducible and the member pass keeps its production temperature. ``cells.votes`` = {K9: [PASS, FAIL, PASS]}, ``cells.runs`` = the per-run objects.
+  --cell-temperature T / --cell-seed N   with --cells: the sampling of the cells' calls (default 0.1 = the production temperature; seed 1000 + the run index).
   --cell-budget S      with --cells: the seconds this whole process may take (the window passes what its cap leaves, minus a grace). Before each cell the CLI asks
                        ``zmb.cells_budget.fits_next`` (time spent + the cell's expected time x1.25, from the measured --decode-tok-s / --prefill-tok-s); a cell that would
                        overrun is NOT started: it and every later one is reported ``SKIP`` with its reason in ``cells.reasons`` and listed in ``cells.skipped_budget``, and the
@@ -53,6 +58,7 @@ import argparse
 import asyncio
 import datetime as dt
 import json
+import os
 import pathlib
 import sys
 import time
@@ -83,6 +89,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--mode", choices=("shadow", "enforce"), default="")
     ap.add_argument("--transcript-file", default="")
     ap.add_argument("--cells", action="store_true")
+    ap.add_argument("--runs", type=int, default=3, help="--cells: run the set N times and report the majority verdict + the per-run votes (default 3)")
+    ap.add_argument("--cell-temperature", type=float, default=None, help="--cells: sampling temperature of the cells' calls (default: the production temperature, 0.1)")
+    ap.add_argument("--cell-seed", type=int, default=1000, help="--cells: seed of run 0 (run i uses seed + i): llama.cpp takes a seed per request, so a run reproduces")
     ap.add_argument("--cell-budget", type=float, default=0.0, help="--cells: total seconds for this process; a cell that would overrun is skipped, not killed mid-way (0 = none)")
     ap.add_argument("--seed", default="zmb-v1", help="--cells: the corpus seed")
     ap.add_argument("--pretty", action="store_true", help="indent the stdout JSON for reading by eye (default: ONE compact line, which is what the 12B window parses)")
@@ -190,8 +199,9 @@ def written_tally(members: "list[dict]") -> "tuple[int, int]":
     return done, len(members)
 
 
-def run_cells(args, url: str, cfg) -> dict:
-    """Score the reflection cells K1-K12 (the lab: scratch stores, synthetic household) against the model at ``url``. Touches no member."""
+def run_cells_once(args, url: str, cfg, run_idx: int = 0) -> dict:
+    """ONE run of the reflection cells K1-K12 (the lab: scratch stores, synthetic household) against the model at ``url``. Touches no member.
+    The run's calls carry ``cfg.temperature`` and the seed ``--cell-seed + run_idx``."""
     sys.path.insert(0, str(REPO / "scripts" / "perf"))
     import logging
 
@@ -200,13 +210,15 @@ def run_cells(args, url: str, cfg) -> dict:
 
     base = url[:-3] if url.rstrip("/").endswith("/v1") else url
     arm = Z0Arm(name="Z0n", night=True, night_url=base.rstrip("/"), night_model=args.model_name, night_ctx=args.ctx_tokens,
-                night_decode_tok_s=cfg.decode_tok_s, night_prefill_tok_s=cfg.prefill_tok_s)
+                night_decode_tok_s=cfg.decode_tok_s, night_prefill_tok_s=cfg.prefill_tok_s,
+                night_temperature=cfg.temperature, night_seed=int(getattr(args, "cell_seed", 1000)) + int(run_idx))
     w = world.make_world(args.seed)
     out: dict = {}
     reasons: dict = {}
     k1: dict = {}
     evidence: dict = {}
     skipped: "list[str]" = []
+    cell_calls: dict = {}
     only = {x.strip().upper() for x in str(getattr(args, "only", "") or "").split(",") if x.strip()}      # "K9,K10" -> {"K9", "K10"}; "K9F" is the flat week
     try:
         for c in (c for c in spec.load_cells() if c.axis == "reflection"):
@@ -220,7 +232,9 @@ def run_cells(args, url: str, cfg) -> dict:
                 logging.getLogger(__name__).info("NIGHT_CELL id=%s verdict=SKIP wall_s=0 reason=cell_budget", key)
                 continue
             t_cell = time.monotonic()
+            before = dict(arm.night_totals)
             o = cellmod.run_cell(c.rendered(w), w, arm)
+            cell_calls[key] = {n: int(arm.night_totals.get(n, 0) - before.get(n, 0)) for n in ("moments_calls", "threads_calls")}      # measured, not guessed: cells_budget.CELL_CALLS is checked against it
             out[key] = o.verdict
             logging.getLogger(__name__).info("NIGHT_CELL id=%s verdict=%s wall_s=%.1f", key, o.verdict, time.monotonic() - t_cell)
             if o.verdict in ("FAIL", "ERROR"):
@@ -235,7 +249,53 @@ def run_cells(args, url: str, cfg) -> dict:
         arm.close()
     verdicts = list(out.values())
     out.update({"pass": verdicts.count("PASS"), "fail": verdicts.count("FAIL"), "skip": verdicts.count("SKIP"), "error": verdicts.count("ERROR"), "k1": k1,
-                "reasons": reasons, "evidence": evidence, "model_totals": totals_seen, "skipped_budget": skipped,
+                "reasons": reasons, "evidence": evidence, "model_totals": totals_seen, "skipped_budget": skipped, "cell_calls": cell_calls,
+                "wall_s": round(time.monotonic() - _STARTED, 1)})
+    return out
+
+
+def majority(votes: "list[str]") -> str:
+    """The verdict of one cell over its runs. SKIP votes (a cell the budget did not start) are not votes. PASS needs a STRICT majority of the voting runs - a tie is FAIL,
+    and an ERROR counts against - so the bar is never lower than a single run's; all SKIP -> SKIP; only ERROR/SKIP and no FAIL -> ERROR."""
+    cast = [v for v in votes if v != "SKIP"]
+    if not cast:
+        return "SKIP"
+    if cast.count("PASS") * 2 > len(cast):
+        return "PASS"
+    return "ERROR" if cast.count("FAIL") == 0 else "FAIL"
+
+
+def run_cells(args, url: str, cfg) -> dict:
+    """``--cells``: ``--runs`` runs of K1-K12, aggregated to the MAJORITY verdict of each cell with its per-run votes (``votes``) and every run's own object (``runs``).
+    One run (``--runs 1``) reports exactly what ``run_cells_once`` does. The ``--cell-budget`` clock is the whole process's, so a later run only starts the cells that still fit."""
+    n = max(1, int(getattr(args, "runs", 1) or 1))
+    runs = []
+    for i in range(n):
+        t_run = time.monotonic()
+        runs.append(run_cells_once(args, url, cfg, i))
+        runs[-1]["run_wall_s"] = round(time.monotonic() - t_run, 1)
+    if n == 1:
+        r = runs[0]
+        r.update({"runs_n": 1, "votes": {k: [v] for k, v in r.items() if isinstance(v, str) and k.startswith("K")}, "cell_calls": [r.get("cell_calls") or {}], "temperature": cfg.temperature, "seed_base": int(args.cell_seed)})
+        return r
+    keys = [k for k in runs[0] if k.startswith("K") and isinstance(runs[0][k], str)]
+    votes = {k: [r.get(k, "SKIP") for r in runs] for k in keys}
+    out: dict = {k: majority(v) for k, v in votes.items()}
+    verdicts = list(out.values())
+    mt: dict = {}
+    for r in runs:
+        for k, v in (r.get("model_totals") or {}).items():
+            mt[k] = mt.get(k, 0) + v
+    reasons: dict = {}
+    for r in runs:                       # the first reason a cell gave (the window reads this by cell key); every run's own are in ``runs[i].reasons``
+        for k, v in (r.get("reasons") or {}).items():
+            reasons.setdefault(k, v)
+    evidence = {f"run{i}.{k}": v for i, r in enumerate(runs) for k, v in (r.get("evidence") or {}).items()}      # what each FAILED vote scored: a majority PASS still shows its failing minority
+    out.update({"pass": verdicts.count("PASS"), "fail": verdicts.count("FAIL"), "skip": verdicts.count("SKIP"), "error": verdicts.count("ERROR"),
+                "k1": runs[0].get("k1") or {}, "reasons": reasons, "evidence": evidence, "model_totals": mt,
+                "skipped_budget": [k for k in keys if any(k in (r.get("skipped_budget") or []) for r in runs)], "runs_n": n, "votes": votes,
+                "temperature": cfg.temperature, "seed_base": int(args.cell_seed), "cell_calls": [r.get("cell_calls") or {} for r in runs],
+                "runs": [{k: v for k, v in r.items() if k.startswith("K") and isinstance(v, str)} | {"wall_s": r.get("run_wall_s"), "reasons": r.get("reasons") or {}, "cell_calls": r.get("cell_calls") or {}} for r in runs],
                 "wall_s": round(time.monotonic() - _STARTED, 1)})
     return out
 
@@ -260,8 +320,13 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
     url = _loopback(args.model_url or "", args.allow_remote) if args.model_url else ""
     cfg = nm.config_from_env(url=url, model=args.model_name, ctx_tokens=args.ctx_tokens, max_calls=args.max_calls or None,
                              chunk_tokens=args.chunk_tokens or None, decode_tok_s=args.decode_tok_s or None,
-                             prefill_tok_s=args.prefill_tok_s or None)
+                             prefill_tok_s=args.prefill_tok_s or None,
+                             temperature=args.cell_temperature if args.cells else None)      # the member pass keeps the production temperature; only the measurement pins its own
     mode = args.mode or ("shadow" if args.dry_run else "enforce")
+    if not args.cells and os.environ.get("ZOE_NIGHT_MIND", "").strip().lower() not in ("shadow", "enforce"):
+        # THIS process's own env (never the live service's): the day loader (``memory_digest._turn_limit``) reads 600 turns only while the night mind's flag is on, so a CLI that left it
+        # unset read the legacy 200 OLDEST turns of a busy day and never saw its end. The CLI runs the pass, so for this process the flag is its mode.
+        os.environ["ZOE_NIGHT_MIND"] = mode
     summary: dict = {"status": "ok", "mode": mode, "dry_run": mode == "shadow", "model_url": cfg.url, "model": cfg.model, "ctx_tokens": cfg.ctx_tokens,
                      "chunk_budget": cfg.chunk_budget, "max_calls": cfg.max_calls, "date": args.date or None, "members": [], "totals": {}}
     ok, why = await nm.probe_model(cfg)

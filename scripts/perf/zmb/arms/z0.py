@@ -99,7 +99,8 @@ class Z0Arm(Arm):
 
     def __init__(self, off: "frozenset[str] | set[str]" = frozenset(), name: str | None = None, embed: bool = False, *,
                  night: bool = False, night_url: str = "", night_model: str = "", night_ctx: int = 8192, night_chunk_tokens: int = 0,
-                 night_max_calls: int = 7, night_decode_tok_s: float = 0.0, night_prefill_tok_s: float = 0.0):
+                 night_max_calls: int = 7, night_decode_tok_s: float = 0.0, night_prefill_tok_s: float = 0.0,
+                 night_temperature: "float | None" = None, night_seed: "int | None" = None):
         from .. import lab_driver
         self.embed = embed
         #: Z0n: Z0 + the night mind (``night_mind.py``) as the nightly reflection, with its OWN model (the lab's fake brain, or the clone at ``night_url``):
@@ -111,6 +112,8 @@ class Z0Arm(Arm):
         #: the server's MEASURED rates (the window probes and passes them): they size every call's HTTP budget through ``night_mind.Config.timeout_for``, in the
         #: pass AND in K12's labelling. 0 = the env / the module defaults (the live 4B's).
         self.night_decode_tok_s, self.night_prefill_tok_s = float(night_decode_tok_s or 0.0), float(night_prefill_tok_s or 0.0)
+        #: sampling of the clone's calls (None = the production temperature / the server's own seed): ``zoe-night-mind.py --cells`` pins both per run so a verdict reproduces
+        self.night_temperature, self.night_seed = night_temperature, night_seed
         #: lifetime counters of every model call the arm made (NOT cleared by ``reset``: a cells run resets per cell), so ``--cells`` reports what the model did
         self.night_totals: "dict[str, int]" = {}
         self.nightly_model = "own" if self.night else "scripted"
@@ -638,7 +641,8 @@ class Z0Arm(Arm):
         build a config that forgets them)."""
         nm = importlib.import_module("night_mind")
         return nm.config_from_env(url=self.night_url or "http://127.0.0.1:1", model=self.night_model, ctx_tokens=self.night_ctx,
-                                  decode_tok_s=self.night_decode_tok_s or None, prefill_tok_s=self.night_prefill_tok_s or None, **kw)
+                                  decode_tok_s=self.night_decode_tok_s or None, prefill_tok_s=self.night_prefill_tok_s or None,
+                                  temperature=self.night_temperature, seed=self.night_seed, **kw)
 
     def _tally(self, counters: "dict[str, Any]") -> None:
         for k in ("calls", "moments_calls", "threads_calls", "calls_invalid", "prompt_tokens", "completion_tokens", "observations_written", "moments_verified"):
