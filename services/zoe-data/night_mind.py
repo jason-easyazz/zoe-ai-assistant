@@ -80,6 +80,25 @@ def change_backed(quote: str) -> bool:
         return True
     return any(kind in ("verb", "phrase") for _a, _b, kind in _lex.ended_spans(text, lang))
 
+
+def _source_sentence(turn_text: str, quote: str) -> str:
+    """The sentence of the owner's turn that holds ``quote`` (the quote widened to its sentence edges; "" when it is not found). Pure."""
+    t, q = str(turn_text or ""), str(quote or "").strip()
+    i = t.lower().find(q.lower()) if q else -1
+    if i < 0:
+        return ""
+    a = max((t.rfind(c, 0, i) for c in ".!?\n"), default=-1) + 1
+    ends = [e for e in (t.find(c, i + len(q)) for c in ".!?\n") if e >= 0]
+    return t[a:(min(ends) + 1) if ends else len(t)]
+
+
+def moment_change_backed(m: "Moment") -> bool:
+    """``change_backed`` for a moment: the cited quote, or else the sentence of the owner's turn it sits in (a short quote can leave out the very words that
+    say the value changed: "now" / "moved" in the rest of the sentence). A change stated in ANOTHER sentence of the turn does not count. Pure."""
+    if change_backed(m.quote):
+        return True
+    return m.turn is not None and change_backed(_source_sentence(m.turn.text, m.quote))
+
 ENV = "ZOE_NIGHT_MIND"
 URL_ENV = "ZOE_NIGHT_MIND_URL"
 MODEL_ENV = "ZOE_NIGHT_MIND_MODEL"
@@ -837,7 +856,7 @@ async def mark_replaced(svc: Any, user_id: str, moments: "Sequence[Moment]") -> 
         return 0
     n = 0
     for m in moments:
-        if m.state != "current" or (m.kind == "change" and change_backed(m.quote)):
+        if m.state != "current" or (m.kind == "change" and moment_change_backed(m)):
             continue
         hit = None
         for form in _stale_forms(m.quote):
@@ -1522,7 +1541,7 @@ def _build_plan(user_id: str, groups: "list[Group]", threads: "list[dict]", old_
                 t["last_feeling"] = feel[-1].feeling
         cur = [x for x in live if x.state == "current"]
         done = finishes(cur, g.model_status, [o for o in old_obs if o["thread_id"] == t["id"]])
-        changed_kind = any(x.kind == "change" and change_backed(x.quote) for x in cur)   # the model's label alone never changes a thread
+        changed_kind = any(x.kind == "change" and moment_change_backed(x) for x in cur)   # the model's label alone never changes a thread
         new_status = t["status"] if before_status else "open"
         if done:
             new_status = "resolved"
@@ -1549,7 +1568,7 @@ def _build_plan(user_id: str, groups: "list[Group]", threads: "list[dict]", old_
             new_obs.append(row)
         # a CHANGE moment (or a resolution) on the thread retires the thread's EARLIER current observations: history, with a validity end, never deleted
         # (a ``done`` line retires the earlier ones only when it FINISHED the thread - ``finishes()`` above - not when it is an unrelated line that carries ``later: done``)
-        cut = max((x.turn.at for x in live if (x.kind == "change" and change_backed(x.quote)) or (done and x.later == "done" and x.kind != "change")), default=None)
+        cut = max((x.turn.at for x in live if (x.kind == "change" and moment_change_backed(x)) or (done and x.later == "done" and x.kind != "change")), default=None)
         if cut is not None:
             keep_ids = {_oid(user_id, x.turn.id, x.quote) for x in live if x.turn.at >= cut}
             for o in old_obs:
