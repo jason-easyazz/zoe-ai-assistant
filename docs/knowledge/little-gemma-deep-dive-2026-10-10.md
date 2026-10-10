@@ -42,7 +42,7 @@ The question was whether Zoe is the fastest and smartest AI running on a Jetson.
 | 0 | the engine itself | see above | head-to-head on this box, Zoe's prompts, temp 0.7 and greedy | pending |
 | 1 | prefill under speech | E4B TTFT after last word 2.04 -> 0.16 s | measure what is movable under speech; cache-warm / B1.1 / streaming Moonshine | pending |
 | 2 | model as its own clause splitter | first audio 1.21 -> 0.82 s | voice-mode prompt flag, A/B against `ZOE_FIRST_SOUND_CLAUSE`, plus a quality check | pending |
-| 3 | streaming vocoder | first PCM ~0.10 s (piper) | Kokoro first-chunk levers; Kokoro stays (rock) | pending |
+| 3 | streaming vocoder | first PCM ~0.10 s (piper) | Kokoro first-chunk levers; Kokoro stays (rock) | **REJECT** ([record](kokoro-streaming-first-chunk-2026-10-10.md), #1971): a windowed decoder gets first PCM constant-time (~200 ms idle, ~300 ms loaded) but the audio differs by 9.5-17 dB log-spectral distance, because Kokoro's AdaIN normalises over the whole utterance and piper's HiFi-GAN has no such layer. fp16, cudnn.benchmark and skipping empty_cache gain nothing. The real lever is a shorter first unit (~170 ms fixed + ~12 ms/word; 50-70% slower under brain decode), which `ZOE_FIRST_SOUND_CLAUSE` already covers |
 | 4 | MTP draft-head vocabulary trim | E4B +7.6%, byte-identical | patched llama.cpp copy with a Zoe-domain d2t subset | pending |
 
 Each experiment writes its own record in this bundle and links it from this table.
