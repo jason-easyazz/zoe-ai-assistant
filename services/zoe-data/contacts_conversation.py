@@ -19,9 +19,12 @@ Two behaviour groups, split by risk:
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 from typing import Any, Iterable, Optional
+
+logger = logging.getLogger(__name__)
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
@@ -784,7 +787,8 @@ async def linked_memory_ids(user_id: str, person_ids: list[str], timeout: float 
 async def refresh_person_mirror(user_id: str, person_id: str, name: str,
                                 relationship: Optional[str]) -> None:
     """After a rename: archive the stale 'Person in contacts: <old name>' mirror
-    rows and write the new one. Best-effort - the contact row is already correct."""
+    rows and write the new one. Best-effort - the contact row is already correct.
+    True when the mirror is refreshed, False when it was not (logged at WARNING, no name)."""
     try:
         from memory_service import get_memory_service
 
@@ -798,8 +802,10 @@ async def refresh_person_mirror(user_id: str, person_id: str, name: str,
             None, user_id,
             {"id": person_id, "name": name, "relationship": relationship, "notes": None},
             "updated")
-    except Exception:  # noqa: BLE001
-        pass
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("refresh_person_mirror failed user=%s person=%s (%s)", user_id, person_id, type(exc).__name__)
+        return False
 
 
 def escape_like(value: str) -> str:
