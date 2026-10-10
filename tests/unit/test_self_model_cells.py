@@ -210,3 +210,13 @@ def test_the_enforce_path_through_the_real_tier_passes_all_four_cells(monkeypatc
     assert verdicts == {"S28": "PASS", "S29": "PASS", "S30": "PASS", "S31": "PASS"}
     monkeypatch.setenv("ZOE_SELF_MODEL", "shadow")                        # control: shadow leaves every ask to the brain
     assert all(asyncio.run(sm.tier(q, uid, sid)) is None for q in (cells.ASK_CAPS, cells.ASK_ORDER, cells.ASK_LISTEN, cells.ASK_USED))
+
+
+def test_a_denial_of_room_capture_is_not_a_claim_of_it():
+    """Greptile #1965 round 3: with capture ON, 'Background capture is disabled, so the panel does not pick up speech' must FAIL S30."""
+    amb = {**cells._model(), "ambient": True}
+    denial = ('I listen for "%s" on the panel. Background capture is disabled, so the panel does not pick up speech in the room. '
+              'Audio stays on this box, never the cloud.' % amb["wake"])
+    assert cells.room_claimed(denial) is False
+    assert cells.score_s30(denial, amb)[0] == "FAIL"
+    assert cells.room_claimed(cells._render(cells.ASK_LISTEN, ambient_recent=1)) is True

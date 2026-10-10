@@ -63,7 +63,7 @@ jobs:
             aiosqlite asyncpg psycopg2-binary alembic \
             fastapi "httpx>=0.27.0,<0.28" "apscheduler==3.10.4" "tzlocal>=2,<3" "sqlalchemy>=2.0,<3.0" \
             pydantic pywebpush py-vapid cryptography \
-            "ag-ui-protocol==1.0.0" "websockets==16.1.1" python-jose passlib \
+            "ag-ui-protocol==1.0.0" "websockets==16.1.1" "pyjwt==2.15.0" passlib \
             python-multipart "uvicorn[standard]==0.53.0" "prometheus-client==0.26.0" "python-json-logger>=4.1.0" \
             pyyaml
 
@@ -245,6 +245,22 @@ jobs:
             --override-ini="asyncio_mode=auto"
         env:
           POSTGRES_URL: postgresql://zoe:${{ env.CI_DB_PASSWORD }}@localhost:5432/zoe
+
+      # The people graph's invariants (advisory locks, transactional supersede + rollback, the 0043 timestamp trigger
+      # and indexes) only exist on REAL PostgreSQL. The file is deliberately NOT ci_safe (the slim lane has no
+      # database), so the marker lane above never selects it: this step runs it by path against the service container
+      # the Alembic step just migrated to head. ZOE_REQUIRE_PG_TESTS turns a missing database / driver into a FAILURE
+      # here instead of a silent skip. It still skips cleanly everywhere else (no URL -> skipped).
+      - name: People graph invariants on CI PostgreSQL
+        run: |
+          pip install --quiet asyncpg
+          PYTHONPATH="${{ github.workspace }}/services/zoe-data" pytest \
+            services/zoe-data/tests/test_people_graph_postgres.py \
+            -x -q -rs \
+            --override-ini="asyncio_mode=auto"
+        env:
+          ZOE_TEST_PG_URL: postgresql://zoe:${{ env.CI_DB_PASSWORD }}@localhost:5432/zoe
+          ZOE_REQUIRE_PG_TESTS: "1"
 
   # Are the dependency manifests still SATISFIABLE, and do their load-bearing
   # ceilings still hold?

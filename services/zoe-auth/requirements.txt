@@ -16,15 +16,14 @@ python-multipart==0.0.32
 # 4.3.0 is the newest release without that behaviour change.
 bcrypt==4.3.0
 argon2-cffi==25.1.0
-# PyJWT is pinned here but NOT imported by this service: every JWT in zoe-auth
-# goes through python-jose (oidc/tokens.py, oidc/keys.py — verified by grep,
-# 2026-10-04). The pin exists so the image carries a clean release; it tracks
-# zoe-data's PyJWT pin (one PyJWT version repo-wide). 2.15.0 closes Dependabot
-# #64-#76 (GHSA-ffc3-869f-jxw9 et al.; 2.14.0 left GHSA-42vr-xj54-vc7v open).
-# See docs/knowledge/dependency-alerts-2026-10-04.md.
+# PyJWT carries every JWT in this service (oidc/tokens.py, oidc/keys.py: RS256
+# issue + verify, JWKS). It REPLACED python-jose 2026-10-09: python-jose <= 3.5.0
+# has no patched release (CRITICAL GHSA-3qf3-8w2g-rqmx / CVE-2026-85394, HS256
+# algorithm-confusion via a DER-encoded public key). Every decode passes an
+# explicit algorithms=["RS256"]. One PyJWT version repo-wide (tracks zoe-data);
+# 2.15.0 closes Dependabot #64-#76. See docs/knowledge/dependency-alerts-2026-10-04.md.
 pyjwt==2.15.0
 aiohttp==3.14.3
-python-jose[cryptography]==3.5.0
 passlib[bcrypt]==1.7.4
 cryptography>=42.0.0
 typing-extensions==4.16.0

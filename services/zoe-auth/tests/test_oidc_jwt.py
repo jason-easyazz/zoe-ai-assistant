@@ -4,7 +4,8 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from jose import jwk, jwt
+import jwt
+from jwt.algorithms import RSAAlgorithm
 
 from oidc import router as oidc_router
 from oidc import tokens
@@ -16,7 +17,8 @@ CLIENT_SECRET = "Ss0" + "oidcclient"
 
 def _jwks_for(key: dict) -> dict:
     public_key = serialization.load_pem_public_key(key["public_key_pem"].encode())
-    key_dict = jwk.construct(public_key, algorithm="RS256").to_dict()
+    key_dict = RSAAlgorithm.to_jwk(public_key, as_dict=True)
+    key_dict.pop("key_ops", None)
     key_dict["kid"] = key["kid"]
     key_dict["use"] = "sig"
     key_dict["alg"] = "RS256"

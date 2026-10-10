@@ -334,25 +334,13 @@ _D = chr(36)  # the asyncpg placeholder sigil
 
 
 async def _name_clash(db, user_id: str, name: str) -> bool:
-    """True when name would resolve (substring LIKE) to a DIFFERENT existing person
-    ("Mika" -> "Mikaela"): linking an edge would attach the child to the wrong row."""
+    """True when name would resolve to a DIFFERENT existing person: by prefix only ("Mika" -> "Mikaela") or to
+    more than one ("Tom" with two Toms) - linking an edge would attach the child to the wrong row. An exact name or a
+    whole token of one ("Mika" -> "Mika Reyes") is not a clash."""
     import person_extractor as pe
 
-    pid = await pe._resolve_person_uuid(name, user_id, db)
-    if not pid:
-        return False
-    for sql, args, dollar in (
-        (f"SELECT name FROM people WHERE id={_D}1 AND user_id={_D}2", (pid, user_id), True),
-        ("SELECT name FROM people WHERE id=? AND user_id=?", (pid, user_id), False),
-    ):
-        try:
-            cur = await (db.execute(sql, *args) if dollar else db.execute(sql, args))
-            row = await cur.fetchone()
-        except Exception:  # noqa: BLE001 - other placeholder style
-            continue
-        found = str(row[0] or "").strip().lower() if row else ""
-        return bool(found) and name.lower() not in [found, *found.split()]
-    return False
+    res = await pe._resolve_person(name, user_id, db)
+    return res.ambiguous or (res.person_id is not None and res.tier == "prefix")
 
 
 async def _kept_pet(db, user_id: str, rel: NamedRelation, name: str) -> bool:
@@ -419,7 +407,10 @@ async def _mint_owned_people(db, user_id: str, rel: NamedRelation) -> int:
     made = 0
     for name in rel.names:
         try:
-            existing = await pe._resolve_person_uuid(name, user_id, db)
+            res = await pe._resolve_person(name, user_id, db)
+            if res.ambiguous:
+                continue  # two people answer to this name: a listed name is never a licence to mint a third
+            existing = res.person_id
             if existing:
                 if await _name_clash(db, user_id, name):
                     continue
@@ -460,8 +451,19 @@ async def _set_role_if_blank(db, user_id: str, person_id: str, role: str) -> Non
             continue
 
 
+def _evidence(pe, user_id: str, source: str, turn_text: str, name: str):
+    """The edge's evidence pointer: this turn, where the listed name sits in it, the writer's rank. ``turn_text`` is the
+    ORIGINAL turn (never the whitespace-squashed excerpt: offsets and the hash are of what the user typed). Never raises."""
+    try:
+        import people_graph as pg
+
+        return pg.evidence_for(user_id, turn_text, name, rank=pe._edge_authority_and_rank(source, turn_text)[1])
+    except Exception:  # noqa: BLE001 - a missing pointer is a NULL column, never a lost edge
+        return None
+
+
 async def _apply_one(rel: NamedRelation, *, user_id: str, source: str, session_id, db,
-                     excerpt: str) -> int:
+                     excerpt: str, turn_text: Optional[str] = None) -> int:
     import person_extractor as pe
 
     fact = rel.fact()
@@ -474,7 +476,16 @@ async def _apply_one(rel: NamedRelation, *, user_id: str, source: str, session_i
     # The fact (names kept) first: it is the record every recall path can read. A refusal by
     # the authority wall (memory_authority, when present) also withholds the graph rows.
     blocked = getattr(pe, "AUTHORITY_BLOCKED", object())
-    owner_id = await pe._resolve_person_uuid(rel.owner, user_id, db)
+    owner_res = await pe._resolve_person(rel.owner, user_id, db)
+    if owner_res.ambiguous:
+        # two people answer to the owner's name: the list is held as a pending candidate - not an approved slug-keyed
+        # fact, not an edge to a guess (the settled version lands once the user says which one)
+        logger.info("PERSON_AMBIGUOUS user=%s tier=%s candidates=%d - named relations held, not guessed",
+                    user_id, owner_res.tier, len(owner_res.matches))
+        await pe._hold_fact_belief(user_id, rel.owner, fact, origin=source, basis="ambiguous_name",
+                                   extra={"ambiguous_name": rel.owner, "fact_type": "named_relations"})
+        return 0
+    owner_id = owner_res.person_id
     mem_id = await pe._ingest_to_mempalace(
         fact, user_id, rel.owner, owner_id, memory_type="person", source=source,
         session_id=session_id, source_excerpt=excerpt,
@@ -490,7 +501,7 @@ async def _apply_one(rel: NamedRelation, *, user_id: str, source: str, session_i
             if await _name_clash(db, user_id, name) or await _kept_pet(db, user_id, rel, name):
                 logger.debug("named_relations: edge for a listed name withheld (clash/pet)")
                 continue
-            await pe._write_relationship(user_id, *edge, db)
+            await pe._write_relationship(user_id, *edge, db, evidence=_evidence(pe, user_id, source, turn_text if turn_text is not None else excerpt, name))
             wrote = 1
         except Exception as exc:  # noqa: BLE001 - one bad name never costs the others
             logger.debug("named_relations: edge write failed (%s)", type(exc).__name__)
@@ -508,8 +519,10 @@ async def _apply_one(rel: NamedRelation, *, user_id: str, source: str, session_i
 
 
 async def apply_named_relations(text: str, *, user_id: str, source: str = "conversation",
-                                session_id=None, db=None) -> int:
-    """Store every named list in text; returns how many lists landed. Never raises."""
+                                session_id=None, db=None, turn_text: Optional[str] = None) -> int:
+    """Store every named list in text; returns how many lists landed. Never raises. ``turn_text`` is the turn as spoken
+    when ``text`` is only the owner's own words (reported speech / pasted content removed): evidence pointers locate the
+    names in the turn, not in the shortened excerpt. Default: ``text`` is the turn."""
     try:
         rels = extract_named_relations(text)
     except Exception as exc:  # noqa: BLE001
@@ -522,7 +535,8 @@ async def apply_named_relations(text: str, *, user_id: str, source: str = "conve
     for rel in rels:
         try:
             landed += await _apply_one(rel, user_id=user_id, source=source,
-                                       session_id=session_id, db=db, excerpt=excerpt)
+                                       session_id=session_id, db=db, excerpt=excerpt,
+                                       turn_text=turn_text if turn_text is not None else text)
         except Exception as exc:  # noqa: BLE001
             logger.warning("named_relations: write failed for user=%s (%s)", user_id, type(exc).__name__)
     return landed

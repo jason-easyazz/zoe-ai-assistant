@@ -81,7 +81,11 @@ async def _people_db():
         """CREATE TABLE person_relationships (id TEXT PRIMARY KEY, user_id TEXT NOT NULL,
            person_a_id TEXT NOT NULL, person_b_id TEXT NOT NULL, rel_type TEXT NOT NULL,
            rel_a_to_b TEXT NOT NULL, rel_b_to_a TEXT NOT NULL, rel_group TEXT NOT NULL,
-           updated_at TEXT, valid_to TEXT)""")
+           updated_at TEXT, valid_to TEXT, created_at TEXT, valid_from TEXT, superseded_by TEXT, authority TEXT,
+           origin TEXT, close_reason TEXT, turn_id TEXT, quote_span TEXT, speaker_rank INTEGER)""")
+    await db.execute(
+        "CREATE UNIQUE INDEX person_relationships_pair_active ON person_relationships(user_id, person_a_id, person_b_id) "
+        "WHERE valid_to IS NULL")
     await db.execute(
         """CREATE TABLE person_important_dates (id TEXT PRIMARY KEY, person_id TEXT, user_id TEXT,
            label TEXT, date_type TEXT, month INTEGER, day INTEGER, year INTEGER, mem_id TEXT)""")
@@ -215,9 +219,9 @@ async def _family_db():
         await db.execute(
             "INSERT INTO people (id, user_id, name, relationship, deleted) VALUES (?,?,?,?,0)",
             (pid, USER, name, rel))
-    await db.execute("INSERT INTO person_relationships VALUES ('e1',?,?,?,?,?,?,?,NULL,NULL)",
+    await db.execute("INSERT INTO person_relationships (id, user_id, person_a_id, person_b_id, rel_type, rel_a_to_b, rel_b_to_a, rel_group) VALUES ('e1',?,?,?,?,?,?,?)",
                      (USER, "pet", "o", "parent", "Parent", "Child", "family"))
-    await db.execute("INSERT INTO person_relationships VALUES ('e2',?,?,?,?,?,?,?,NULL,NULL)",
+    await db.execute("INSERT INTO person_relationships (id, user_id, person_a_id, person_b_id, rel_type, rel_a_to_b, rel_b_to_a, rel_group) VALUES ('e2',?,?,?,?,?,?,?)",
                      (USER, "c1", "o", "parent", "Parent", "Child", "family"))
     await db.commit()
     return db
@@ -238,9 +242,18 @@ async def test_pet_statement_sets_relationship_edge_and_facts():
     assert (await cur.fetchone())[0] == "pet dog"
     cur = await db.execute("SELECT relationship FROM people WHERE id='c1'")
     assert (await cur.fetchone())[0] == "friend's child"  # others untouched
-    # the parent edge became the pet edge (pet = person_a); the real child's edge is untouched
-    cur = await db.execute("SELECT person_a_id, person_b_id, rel_type, rel_group FROM person_relationships WHERE id='e1'")
-    assert tuple(await cur.fetchone()) == ("pet", "o", "pet", "pet")
+    # the parent edge is CLOSED (never rewritten in place) and the pet edge is the new current one (pet = person_a);
+    # the real child's edge is untouched
+    cur = await db.execute("SELECT person_a_id, person_b_id, rel_type, close_reason, valid_to, superseded_by "
+                           "FROM person_relationships WHERE id='e1'")
+    a, b, rel_type, reason, valid_to, sup = tuple(await cur.fetchone())
+    assert (a, b, rel_type, reason) == ("pet", "o", "parent", "corrected_pet") and valid_to and sup
+    cur = await db.execute("SELECT id, person_a_id, person_b_id, rel_type, rel_group, authority, origin, turn_id, "
+                           "quote_span, speaker_rank FROM person_relationships WHERE valid_to IS NULL AND rel_type='pet'")
+    pet_edge = tuple(await cur.fetchone())
+    assert pet_edge[0] == sup and pet_edge[1:5] == ("pet", "o", "pet", "pet")
+    assert pet_edge[5:7] == ("user_stated", ca.SOURCE)
+    assert pet_edge[7].startswith("ut-") and pet_edge[8].startswith("0:") and pet_edge[9] >= 4   # the evidence pointer
     cur = await db.execute("SELECT rel_type FROM person_relationships WHERE id='e2'")
     assert (await cur.fetchone())[0] == "parent"
     # stored facts: the enumeration loses only the pet; the child-of row becomes the pet fact
@@ -250,6 +263,38 @@ async def test_pet_statement_sets_relationship_edge_and_facts():
     assert "Jordan Smith has three children: Casey, Riley, Pat." in live, live
     assert "Biscuit Smith is a pet dog, not a child." in live
     assert "User likes tea" in live
+
+
+async def test_pet_correction_carries_the_old_edges_notes_to_the_replacement():
+    """Greptile P2 (#1961): the correction used to retype in place (notes kept); closing + reopening must not drop them."""
+    db = await _family_db()
+    await db.execute("ALTER TABLE person_relationships ADD COLUMN notes TEXT")
+    await db.execute("UPDATE person_relationships SET notes='adopted from the shelter in May' WHERE id='e1'")
+    await db.commit()
+    res = await ca.apply_pet_correction("Biscuit is their dog", USER, svc=FakeSvc([]), db=db)
+    assert res is not None and res.kind == "pet"
+    try:
+        cur = await db.execute("SELECT notes FROM person_relationships WHERE valid_to IS NULL AND rel_type='pet'")
+        assert (await cur.fetchone())[0] == "adopted from the shelter in May"
+        cur = await db.execute("SELECT notes FROM person_relationships WHERE id='e1'")
+        assert (await cur.fetchone())[0] == "adopted from the shelter in May"   # the closed edge keeps its own history
+    finally:
+        await db.close()
+
+
+async def test_pet_correction_closes_a_wrong_edge_that_would_duplicate_the_pet_edge():
+    db = await _family_db()
+    await db.execute("UPDATE person_relationships SET valid_to='2026-01-01T00:00:00Z' WHERE id='e1'")  # no wrong pair edge left...
+    await db.execute("INSERT INTO person_relationships (id, user_id, person_a_id, person_b_id, rel_type, rel_a_to_b, rel_b_to_a, "
+                     "rel_group) VALUES ('ep', ?, 'pet', 'o', 'pet', 'Pet owner', 'Pet', 'pet')", (USER,))
+    await db.execute("INSERT INTO person_relationships (id, user_id, person_a_id, person_b_id, rel_type, rel_a_to_b, rel_b_to_a, "
+                     "rel_group) VALUES ('wrong', ?, 'o', 'pet', 'parent', 'Parent', 'Child', 'family')", (USER,))  # ...the reverse one
+    await db.commit()
+    assert await ca.apply_pet_correction("Biscuit is their dog", USER, svc=FakeSvc(["Biscuit Smith is a child."]), db=db) is not None
+    cur = await db.execute("SELECT valid_to IS NOT NULL, close_reason, superseded_by FROM person_relationships WHERE id='wrong'")
+    assert tuple(await cur.fetchone()) == (1, "corrected_pet_duplicate", "ep")               # closed, not deleted, not duplicated
+    cur = await db.execute("SELECT COUNT(*) FROM person_relationships WHERE rel_type='pet' AND valid_to IS NULL")
+    assert (await cur.fetchone())[0] == 1
 
 
 async def test_pet_statement_without_stored_evidence_claims_nothing():

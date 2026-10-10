@@ -1023,7 +1023,9 @@ def test_the_revision_chain_has_one_head():
         if "revision" in vals:
             revs[vals["revision"]] = vals.get("down_revision")
     heads = set(revs) - {d for d in revs.values() if d}
-    assert heads == {"0042"} and revs["0042"] == "0041" and revs["0041"] == "0040" and revs["0040"] == "0039"
+    # ONE head (whatever the newest revision is), and the restraint chain 0039 -> 0040 -> 0041 -> 0042 intact: a later
+    # migration (0043 people graph) must not redden this test.
+    assert len(heads) == 1 and revs["0042"] == "0041" and revs["0041"] == "0040" and revs["0040"] == "0039"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
