@@ -519,8 +519,10 @@ async def _apply_one(rel: NamedRelation, *, user_id: str, source: str, session_i
 
 
 async def apply_named_relations(text: str, *, user_id: str, source: str = "conversation",
-                                session_id=None, db=None) -> int:
-    """Store every named list in text; returns how many lists landed. Never raises."""
+                                session_id=None, db=None, turn_text: Optional[str] = None) -> int:
+    """Store every named list in text; returns how many lists landed. Never raises. ``turn_text`` is the turn as spoken
+    when ``text`` is only the owner's own words (reported speech / pasted content removed): evidence pointers locate the
+    names in the turn, not in the shortened excerpt. Default: ``text`` is the turn."""
     try:
         rels = extract_named_relations(text)
     except Exception as exc:  # noqa: BLE001
@@ -533,7 +535,8 @@ async def apply_named_relations(text: str, *, user_id: str, source: str = "conve
     for rel in rels:
         try:
             landed += await _apply_one(rel, user_id=user_id, source=source,
-                                       session_id=session_id, db=db, excerpt=excerpt, turn_text=text)
+                                       session_id=session_id, db=db, excerpt=excerpt,
+                                       turn_text=turn_text if turn_text is not None else text)
         except Exception as exc:  # noqa: BLE001
             logger.warning("named_relations: write failed for user=%s (%s)", user_id, type(exc).__name__)
     return landed

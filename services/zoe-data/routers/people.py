@@ -919,12 +919,15 @@ async def list_relationships(
         label = d["rel_a_to_b"] if is_a else d["rel_b_to_a"]
 
         # Resolve name
+        # A merged-away identity stays soft-deleted (never current again), but the survivor's HISTORY / as_of read still
+        # shows the closed edge the merge kept between the two (``merged_self_edge``); any other deleted contact stays hidden.
+        merged_identity = d.get("close_reason") == "merged_self_edge"
         async with db.execute(
-            "SELECT name, is_partial, circle, context FROM people WHERE id = ? AND deleted = 0",
-            (other_id,),
+            "SELECT name, is_partial, circle, context, deleted FROM people WHERE id = ? AND user_id = ?",
+            (other_id, user_id),
         ) as cur:
             other_row = await cur.fetchone()
-        if not other_row:
+        if not other_row or (dict(other_row).get("deleted") and not merged_identity):
             continue
         od = dict(other_row)
         group = d.get("rel_group", "friend")
@@ -945,6 +948,7 @@ async def list_relationships(
             "valid_from": d.get("valid_from") or d.get("created_at"),
             "valid_to": d.get("valid_to"),
             "close_reason": d.get("close_reason"),
+            **({"merged_identity": True} if od.get("deleted") else {}),
         })
 
     out: dict = {"relationships": grouped}
