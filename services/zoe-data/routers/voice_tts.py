@@ -2094,10 +2094,67 @@ def _contains_decision_keyword(text: str, keywords: frozenset[str]) -> bool:
     if not normalized:
         return False
     for kw in keywords:
-        phrase = re.sub(r"\s+", r"\\s+", re.escape(kw.strip().lower()))
+        # escape the WORDS, then join with \s+: re.escape("go ahead") is "go\ ahead", which the old sub turned into a pattern that
+        # could never match, so "go ahead" / "do it" / "that's right" / "never mind" were not keywords at all
+        phrase = r"\s+".join(re.escape(w) for w in kw.strip().lower().split())
         if re.search(rf"(?<![a-z0-9]){phrase}(?![a-z0-9])", normalized):
             return True
     return False
+
+
+_NEGATION_RE = re.compile(r"\b(?:not|never|isn'?t|wasn'?t|aren'?t|can'?t|won'?t|don'?t|doesn'?t)\b|n't\b", re.IGNORECASE)
+_QUESTIONING_RE = re.compile(
+    r"\b(?:are|were|r)\s+you\s+(?:sure|certain|serious)\b|\b(?:really|why|what|who|how|where|when|which)\b", re.IGNORECASE)
+_NOT_RIGHT_RE = re.compile(r"\bnot\s+(?:right|correct|true|what)\b|\b(?:wrong|incorrect)\b", re.IGNORECASE)
+_YES_OPENERS = frozenset({"yes", "yeah", "yep", "yup", "sure", "ok", "okay", "confirm", "correct", "proceed", "please", "go", "do"})
+_YES_BUT_RE = re.compile(r"\b(?:but|instead|except|actually|wait|hang on|rather|change|make it)\b", re.IGNORECASE)
+
+
+def _pending_decision(text: str) -> Optional[str]:
+    """What a WAITING spoken write (the read-back "Add Percival, your brother, to your contacts?") makes of the next words:
+    ``"yes"`` (do it), ``"no"`` (cancel, say so), ``"drop"`` (the person moved on or corrected it: forget the waiting write and
+    treat these words as a new request) or None (not an answer at all: the write keeps waiting and these words are a new request).
+
+    A yes is a COMPLETE affirmative reply: every word is part of a yes ("yes please add him", "sure, go ahead"), and it is a
+    statement. A question ("sure?", "sounds good?", "yes?", "are you sure?", "is that right?") is never a yes, and neither is an
+    unrelated sentence that happens to contain a yes-word ("sure is cold"). The old test was "any keyword anywhere", so a
+    question or a negated "correct" CONFIRMED the write."""
+    raw = (text or "").strip()
+    t = re.sub(r"\s+", " ", raw.lower()).strip(" .!,;:")
+    if not t or "?" in raw:
+        return None
+    words = re.findall(r"[a-z0-9'’]+", t)
+    if not words or _QUESTIONING_RE.search(t):
+        return None
+    cancel = _contains_decision_keyword(t, _CANCEL_KEYWORDS) or bool(_NOT_RIGHT_RE.search(t))
+    confirm = _contains_decision_keyword(t, _CONFIRM_KEYWORDS)
+    negated = bool(_NEGATION_RE.search(t))
+    if cancel or (confirm and negated):
+        return "no" if len(words) <= 4 else "drop"
+    if confirm:
+        if _YES_BUT_RE.search(t):
+            return "drop" if words[0] in _YES_OPENERS else None
+        return "yes" if _is_plain_yes(t) else None
+    return None
+
+
+_YES_PHRASES = ("go ahead", "do it", "sounds good", "that's right", "thats right", "of course", "please do", "thank you")
+_YES_VOCAB = frozenset({
+    "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "alright", "please", "confirm", "correct", "absolutely", "definitely",
+    "certainly", "then", "and", "add", "save", "him", "her", "them", "it", "that", "thanks", "go_ahead", "do_it", "sounds_good",
+    "thats_right", "of_course", "please_do", "thank_you", "right", "do", "go",
+})
+
+
+def _is_plain_yes(t: str) -> bool:
+    """True when EVERY word of ``t`` belongs to an affirmative reply and at least one is a real yes (``right`` / ``add`` alone are not)."""
+    folded = t.replace("’", "'")
+    for ph in _YES_PHRASES:
+        folded = folded.replace(ph, ph.replace("'", "").replace(" ", "_"))
+    toks = re.findall(r"[a-z0-9_]+", folded)
+    core = {"yes", "yeah", "yep", "yup", "sure", "ok", "okay", "alright", "confirm", "correct", "absolutely", "definitely",
+            "certainly", "go_ahead", "do_it", "sounds_good", "thats_right", "of_course", "please_do"}
+    return bool(toks) and all(w in _YES_VOCAB for w in toks) and any(w in core for w in toks)
 
 
 def _cap_voice_list_show_reply(text: str, *, max_items: int = 5) -> str:
@@ -3322,6 +3379,15 @@ async def voice_command(
                 effective_user, session_id, exc,
             )
 
+    # A verdict on the last answer ("that was wrong") is recorded BEFORE a waiting write or an open form can consume the words as a
+    # cancel; the conversation tiers below call the same function and it writes one row per verdict per reply.
+    try:
+        import conversation_feedback as _cf_top
+
+        await _cf_top.handle(text, effective_user, session_id, speaker_verified=_speaker_verified)
+    except Exception as _cf_exc:
+        logger.debug("voice/command feedback record failed (non-fatal): %s", _cf_exc)
+
     # ── Active action-form panel: route voice to field-filling ─────────────
     # When the touch panel has an action form open (calendar_event or shopping_list),
     # incoming voice utterances are interpreted as field updates rather than new
@@ -3513,7 +3579,11 @@ async def voice_command(
             pending = None
         else:
             lc = text.lower().strip().rstrip(".!?")
-            if _contains_decision_keyword(lc, _CONFIRM_KEYWORDS):
+            _decision = _pending_decision(text)
+            if _decision == "drop":
+                # corrected or moved on ("no, that's not correct, it's Percy"): the waiting write is off, these words are a new request
+                del _PENDING_CONFIRMATIONS[panel_id]
+            if _decision == "yes":
                 # User confirmed — execute the intent now.
                 del _PENDING_CONFIRMATIONS[panel_id]
                 from intent_router import execute_intent, Intent
@@ -3548,7 +3618,7 @@ async def voice_command(
                 _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id, speaker_verified=_speaker_verified))
                 return {"ok": True, "panel_id": panel_id, "reply": reply_text,
                         "audio_base64": audio_b64_conf, "content_type": ct_conf}
-            elif _contains_decision_keyword(lc, _CANCEL_KEYWORDS):
+            elif _decision == "no":
                 del _PENDING_CONFIRMATIONS[panel_id]
                 reply_text = "Okay, cancelled."
                 try:
@@ -3580,6 +3650,60 @@ async def voice_command(
         await _bc.broadcast("all", "voice:thinking", {"panel_id": panel_id})
     except Exception:
         pass
+
+    async def _answer_from_tier(_xresult, intent: Optional[str] = None) -> dict:
+        """Speak, save and return a deterministic tier's reply (the shared core's `DispatchResult`)."""
+        reply_text = _xresult.reply
+        _ui = (_xresult.ui or {}).get("kind")
+        try:
+            if _ui == "weather":
+                await _broadcast_weather_ui(panel_id, reply_text, turn_key=_turn_key)
+            elif _ui == "calendar":
+                await _broadcast_calendar_ui(panel_id, reply_text, turn_key=_turn_key)
+            elif _ui == "reminder":
+                await _broadcast_reminder_ui(panel_id=panel_id, summary=reply_text, turn_key=_turn_key)
+        except Exception:
+            pass
+        _xaudio_b64: Optional[str] = None
+        _xct = "audio/wav"
+        if not stream:
+            _xaudio = await synthesize({"text": reply_text}, caller=caller)
+            _xaudio_b64 = base64.b64encode(_xaudio.body).decode("ascii")
+            _xct = _xaudio.media_type
+        try:
+            from push import broadcaster as _bc_xd
+            await _bc_xd.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": reply_text[:200]})
+            await _bc_xd.broadcast("all", "voice:done", {"panel_id": panel_id})
+        except Exception:
+            pass
+        await _schedule_voice_chat_save(session_id, text, reply_text, effective_user, speaker_verified=_speaker_verified)
+        _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id, speaker_verified=_speaker_verified))
+        return {
+            "ok": True, "panel_id": panel_id, "reply": reply_text,
+            "audio_base64": _xaudio_b64, "content_type": _xct,
+            "intent": intent or f"expert:{_xresult.domain}:{_xresult.intent}",
+        }
+
+    # ── The conversation tiers, FIRST - in chat's order ───────────────────────
+    # Chat runs `fast_tiers.resolve` before any intent of its own. This lane used to run its confirmation gate, Skybridge cards,
+    # keyword intents and public intents first, so "that was wrong" was filed as an engineering ticket instead of rating the answer,
+    # and everything the conversation tiers learned since (feedback, the correction of a stored note) had to be re-ported here by
+    # hand. Now the same tiers answer on both lanes: `phase="conversation"` is the half about WHAT THE PERSON JUST SAID; the domain
+    # half (Tier-0, router, experts) still runs where it always did, below this lane's cards and intents.
+    try:
+        import fast_tiers as _fp_conv
+
+        _conv_result = await _fp_conv.resolve(
+            text, effective_user, session_id,
+            channel="voice",
+            router_decision=_router_decision,
+            extra_ctx={"db": db, "panel_id": panel_id, "speaker_verified": _speaker_verified},
+            phase="conversation",
+        )
+        if _conv_result is not None and getattr(_conv_result, "reply", ""):
+            return await _answer_from_tier(_conv_result)
+    except Exception as _conv_exc:
+        logger.warning("voice/command conversation tiers failed (non-fatal): %s", _conv_exc)
 
     _voice_processing_ack_sent = False
     if not stream:
@@ -4035,6 +4159,26 @@ async def voice_command(
                     }
                 except Exception as _rem_exc:
                     logger.warning("voice/command quick reminder_create failed: %s", _rem_exc)
+        if _quick_intent and _quick_intent.name == "people_search" and _scope_identity_user:
+            # Contacts READS ("list my contacts", "who is Percival", "how many contacts do I have") are answered from the contacts by
+            # the SAME executor chat uses, not guessed by the 4B: the lookup is a deterministic read of the speaker's own rows. Only
+            # for an identified speaker (the rows are personal), only through the head's veto (S1: "who is flying in on Thursday" is
+            # not a contacts lookup), and only when it FOUND something or the list is the answer: "I don't have anyone called ..."
+            # is not said here, because the brain also holds what was said about that person in conversation.
+            try:
+                import fast_tiers as _ft_people
+
+                if _ft_people.keyword_intent_allowed("people_search", text, lane="voice"):
+                    from intent_router import execute_intent as _exec_people
+                    _people_reply = ((await _exec_people(_quick_intent, _scope_identity_user)) or "").strip()
+                    if _people_reply and not _people_reply.lower().startswith(("i don't have", "i'm not sure who")):
+                        # the shared reply path: speaks, pushes voice:responding + voice:done, saves, runs the memory passes
+                        from types import SimpleNamespace as _NS
+
+                        return await _answer_from_tier(
+                            _NS(reply=_people_reply, ui=None, domain="people", intent="search"), intent="people_search")
+            except Exception as _people_exc:
+                logger.warning("voice/command people_search failed: %s", _people_exc)
         if _quick_intent and _quick_intent.name in _CONFIRM_INTENTS:
             slots = _quick_intent.slots or {}
             # Build a human-readable confirmation phrase.
@@ -4227,43 +4371,17 @@ async def voice_command(
         # NOTE: extra_ctx["db"] is inert — fast_tiers.dispatch never reads it and the
         # downstream execute_intent/store_fact open their own connections (audited
         # 2026-07-09). Left as-is (harmless dead-pass); do NOT rely on it for queries.
+        # phase="domain": the conversation tiers (distress, provenance, feedback, correction, remember, ...) already ran at the top
+        # of the turn (`_voice_conversation_tiers`), in chat's order, before this lane's own cards and keyword intents.
         _xresult = await _fp.resolve(
             text, effective_user, session_id,
             channel="voice",
             router_decision=_router_decision,
             extra_ctx={"db": db, "panel_id": panel_id, "speaker_verified": _speaker_verified},
+            phase="domain",
         )
         if _xresult is not None:
-            reply_text = _xresult.reply
-            _ui = (_xresult.ui or {}).get("kind")
-            try:
-                if _ui == "weather":
-                    await _broadcast_weather_ui(panel_id, reply_text, turn_key=_turn_key)
-                elif _ui == "calendar":
-                    await _broadcast_calendar_ui(panel_id, reply_text, turn_key=_turn_key)
-                elif _ui == "reminder":
-                    await _broadcast_reminder_ui(panel_id=panel_id, summary=reply_text, turn_key=_turn_key)
-            except Exception:
-                pass
-            _xaudio_b64: Optional[str] = None
-            _xct = "audio/wav"
-            if not stream:
-                _xaudio = await synthesize({"text": reply_text}, caller=caller)
-                _xaudio_b64 = base64.b64encode(_xaudio.body).decode("ascii")
-                _xct = _xaudio.media_type
-            try:
-                from push import broadcaster as _bc_xd
-                await _bc_xd.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": reply_text[:200]})
-                await _bc_xd.broadcast("all", "voice:done", {"panel_id": panel_id})
-            except Exception:
-                pass
-            await _schedule_voice_chat_save(session_id, text, reply_text, effective_user, speaker_verified=_speaker_verified)
-            _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id, speaker_verified=_speaker_verified))
-            return {
-                "ok": True, "panel_id": panel_id, "reply": reply_text,
-                "audio_base64": _xaudio_b64, "content_type": _xct,
-                "intent": f"expert:{_xresult.domain}:{_xresult.intent}",
-            }
+            return await _answer_from_tier(_xresult)
     except Exception as _xd_exc:
         logger.warning("voice/command expert dispatch failed (non-fatal): %s", _xd_exc)
 

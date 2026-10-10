@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-580 flags; 578 not documented in `.env.example`.
+581 flags; 579 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -103,6 +103,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_CONTACT_OFFER_BATCH` | `''` | no | NO | `services/zoe-data/contacts_conversation.py` |
 | `ZOE_CONTEXT_TOKEN_BUDGET` | `5500` | yes | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_CONVERSATION_ENDER_ACKS` | `dynamic` | no | NO | `services/zoe-data/conversation_opener.py` |
+| `ZOE_CONVERSATION_FEEDBACK` | `True` | yes | NO | `services/zoe-data/conversation_feedback.py` |
 | `ZOE_CORE_DATA_URL` | `-` | no | NO | `services/zoe-data/zoe_core_client.py` |
 | `ZOE_CORE_IDLE_TIMEOUT_S` | `'20'` | no | NO | `services/zoe-data/zoe_core_client.py` |
 | `ZOE_CORE_MAX_CONCURRENCY` | `'2'` | no | NO | `services/zoe-data/zoe_core_client.py` |
