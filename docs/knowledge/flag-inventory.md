@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-581 flags; 579 not documented in `.env.example`.
+583 flags; 581 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -323,7 +323,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_MERGE_QUEUE_LABEL` | `'auto-merge'` | no | NO | `services/zoe-data/greploop_guard.py` |
 | `ZOE_MERGE_QUEUE_MAX_CANDIDATES` | `'50'` | no | NO | `services/zoe-data/greploop_guard.py` |
 | `ZOE_MIRROR_INTENTS_TO_OPENCLAW` | `'false'` | no | NO | `services/zoe-data/routers/chat.py` |
-| `ZOE_MOONSHINE_ARCH` | `'MEDIUM_STREAMING'`, `'v2'` | yes | NO | `scripts/perf/measure_moonshine_vad_threshold.py`<br>`services/zoe-data/routers/voice_tts.py` |
+| `ZOE_MOONSHINE_ARCH` | `'MEDIUM_STREAMING'`, `'v2'` | yes | NO | `scripts/perf/measure_moonshine_vad_threshold.py`<br>`scripts/perf/measure_stt_under_speech.py`<br>`services/zoe-data/routers/voice_tts.py` |
 | `ZOE_MOONSHINE_KEYTERMS` | `-` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_MULTICA` | `'false'` | no | NO | `services/zoe-data/main.py` |
 | `ZOE_MULTICA_AUTOPILOT_CREATE_ISSUES` | `-` | no | NO | `services/zoe-data/multica_autopilot_sync.py` |
@@ -520,6 +520,8 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_STRUCTURAL_VERIFIER` | `-` | no | NO | `services/zoe-data/structural_verifier.py` |
 | `ZOE_STT_BACKEND` | `'moonshine'` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_STT_PREWARM_ON_WAKE` | `True` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
+| `ZOE_STT_STREAM_FINISH_TIMEOUT_MS` | `2500` | yes | NO | `services/zoe-data/voice_stt_stream.py` |
+| `ZOE_STT_STREAM_UNDER_SPEECH` | `False` | yes | NO | `services/zoe-data/voice_stt_stream.py` |
 | `ZOE_STT_STREAM_UPLOAD` | `'false'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_SUBPROCESS_QUEUE_WAIT_S` | `30.0` | yes | NO | `services/zoe-data/async_subprocess.py` |
 | `ZOE_SYNTHETIC_USER_ALLOWLIST` | `''` | no | NO | `services/zoe-data/user_filters.py` |
