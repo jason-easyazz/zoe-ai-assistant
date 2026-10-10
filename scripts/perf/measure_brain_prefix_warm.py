@@ -1,22 +1,11 @@
 #!/usr/bin/env python3
-"""Brain prefix-warm probe: what would a cache-warm request at speculative turn start save on llama-server?
+"""Brain prefix-warm probe: would a cache_prompt warm request at speculative turn start save time on llama-server?
 
-Idea (Little Gemma sec 4.2, applied to Zoe): while the user is still talking, send the stable prompt prefix (system +
-tools + history) as a ``cache_prompt`` request with ``n_predict=1`` so the real request is a prefix hit. This probe
-measures the ONLY case where that can pay: the llama-server slot holds some OTHER prompt when the turn starts (aux call,
-Telegram, night job). Zoe's real prompts are prefix-hit on ~all voice turns (median 1 new token), so the question is
-the size of the swap-in penalty, and whether a warm request erases it.
-
-Arms (each rep uses FRESH random prefixes so nothing is cached from an earlier rep; order rotated across reps):
-  hit    prime A; then A + user words                          (what a healthy voice turn sees)
-  swap   prime A; prime B (slot now holds B); then A + words   (slot taken by another prompt; today's cost)
-  warm   prime A; prime B; warm A (n_predict=1); wait --speech-s; then A + words   (the idea)
-  warm_late  same as warm but the real request arrives while the warm one is still running (--speech-s 0): the
-             contention case (parallel 1 queues the real turn behind the warm one) - the downside of the idea.
-Server-side ``timings`` (prompt_n / cache_n / prompt_ms) are read from the response; client TTFT is wall time of an
-n_predict=1 request. Prefix content is random common words: no household text, nothing logged but timings.
-
-    flock -w 1800 /tmp/zoe-voice-harness.lock python3 scripts/perf/measure_brain_prefix_warm.py --reps 10 --json out.json
+Arms (fresh random prefixes per rep, order rotated, server-side ``timings`` read back, no household text):
+  hit  prime A; A + words.   swap  prime A, prime B (slot now B); A + words.   warm  swap, then warm A, wait, A + words.
+  warm_late  the real request arrives while the warm one is still running (parallel 1 queues it: the downside).
+Result and verdict: docs/knowledge/prefill-under-speech-2026-10-10.md.
+    flock -w 1800 /tmp/zoe-voice-harness.lock python3 scripts/perf/measure_brain_prefix_warm.py --reps 8 --json out.json
 """
 from __future__ import annotations
 

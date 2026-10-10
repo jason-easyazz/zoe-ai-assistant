@@ -1,17 +1,10 @@
-"""STT under speech: the Moonshine half of "prefill under speech" (flag-dark).
+"""STT under speech: the Moonshine half of "prefill under speech" (flag-dark ``ZOE_STT_STREAM_UNDER_SPEECH``).
 
-Little Gemma (sec 4.2) hides prefill behind the user's dictation. For Zoe the brain prefill is already ~free
-(prefix cache: median 1 new token), so the movable post-speech cost is the batch STT of the whole clip. This module
-lets the panel daemon upload mic audio WHILE the user is speaking: a session feeds a Moonshine stream chunk by chunk
-on its own worker thread, and at the end of the turn ``/turn_stream`` takes the already-finished transcript instead of
-transcribing the clip. Evidence + numbers: docs/knowledge/prefill-under-speech-2026-10-10.md.
-
-Safety contract (the transcript must never be worse than today's):
-  * flag ``ZOE_STT_STREAM_UNDER_SPEECH`` (default OFF) gates everything; off -> the chunk endpoint answers 409 and the
-    turn path never looks at a stream id;
-  * the WAV is still POSTed with the turn; a stream result is used ONLY when its sample count equals the WAV's and the
-    text is non-empty - every other case (gap, mismatch, timeout, empty, engine error) falls back to the batch STT;
-  * sessions are bounded (count, audio length, idle TTL) so a lost daemon cannot pin memory or a worker thread.
+The panel daemon uploads mic audio WHILE the user speaks; a session feeds a Moonshine stream on its own worker thread and
+``/turn_stream`` takes the finished transcript instead of transcribing the clip afterwards. Numbers, enable/rollback:
+docs/knowledge/prefill-under-speech-2026-10-10.md. Safety: the WAV is still POSTed and a stream result is used ONLY when
+its sample count equals the WAV's and the text is non-empty (gap, mismatch, timeout, empty, engine error -> batch STT);
+sessions are bounded (count, audio length, idle TTL).
 """
 from __future__ import annotations
 

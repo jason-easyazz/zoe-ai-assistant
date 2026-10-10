@@ -1,14 +1,7 @@
-"""STT under speech (ZOE_STT_STREAM_UNDER_SPEECH, default OFF) - server half.
-
-Contract (docs/knowledge/prefill-under-speech-2026-10-10.md):
-  (a) flag OFF: the chunk endpoint answers 409 and /turn_stream never looks at a stream id;
-  (b) a stream transcript is used ONLY when its sample count equals the WAV's and the text is non-empty;
-  (c) every other case (gap, mismatch, unknown id, timeout, engine error, empty) -> None -> batch STT;
-  (d) sessions are single-use and bounded;
-  (e) negative control: with the sample-count check removed, the mismatch checker goes RED.
-
-Fakes only: no Moonshine, no network, no DB.
-"""
+"""STT under speech (ZOE_STT_STREAM_UNDER_SPEECH, default OFF), server half: flag off = 409 and no stream id is read; a
+stream transcript is used ONLY when its sample count equals the WAV's and is non-empty; every other shape falls back to
+batch STT; sessions are single-use and bounded; a negative control shows the sample-count check is what protects it.
+Fakes only (no Moonshine, network or DB)."""
 from __future__ import annotations
 
 import asyncio

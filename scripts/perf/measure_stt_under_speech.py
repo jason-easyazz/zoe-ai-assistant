@@ -1,23 +1,14 @@
 #!/usr/bin/env python3
 """STT-under-speech probe: how much Moonshine work can hide behind the user's own speech?
 
-Little Gemma (arXiv, sec 4.2) hides prefill behind dictation. For Zoe the numbers say brain prefill is ~free
-(prefix cache: median 1 new token) and the movable post-speech cost is the batch STT of the whole clip
-(0.56-0.88 s). This probe measures the one lever that could move it: feeding the SAME in-process Moonshine
-(MEDIUM_STREAMING, same options as the service) with audio chunks WHILE the clip "is being recorded", and timing what
-is left after the last chunk. Three arms, every clip in every arm, order rotated:
-
-  batch   transcribe_without_streaming(whole clip)          -> what the service does today (post-speech cost)
-  sess    the SHIPPED voice_stt_stream.SttStreamSession fed PCM16 batches of 320 ms paced to wall-clock (what the
-          daemon uploads) -> post-speech cost = time from the end of the clip to the finished transcript
-  burst   the same stream fed with no pacing                -> NEGATIVE CONTROL: nothing is hidden, so the "after
-                                                               last chunk" cost must come back to batch scale
-
-PRIVACY: real household audio. Nothing printed or written is transcript text; only hashes, word counts, timings.
-One model is loaded (~300 MB); refuses below --min-mem-mb MemAvailable. Run under the shared harness lock:
-
+Same in-process MEDIUM_STREAMING model as the service, real corpus clips, every clip in every arm, order rotated:
+  batch  transcribe_without_streaming(whole clip) - today's post-speech cost
+  sess   the SHIPPED voice_stt_stream.SttStreamSession fed 320 ms PCM16 batches paced to wall clock (what the daemon
+         uploads); cost = end of clip to finished transcript
+  burst  the same session fed all at once at the end - NEGATIVE CONTROL (nothing hidden)
+A repeated batch call gives the engine's own noise floor. PRIVACY: only hashes, word counts and timings are printed.
     flock -w 1800 /tmp/zoe-voice-harness.lock nice -n 5 ~/.zoe/venvs/zoe-data-py312/bin/python \\
-        scripts/perf/measure_stt_under_speech.py --n 14 --json out.json
+        scripts/perf/measure_stt_under_speech.py --n 16 --json out.json
 """
 from __future__ import annotations
 
