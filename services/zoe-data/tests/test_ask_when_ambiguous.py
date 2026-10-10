@@ -310,3 +310,44 @@ def test_a_failed_fingerprint_serves_a_fresh_cache_not_a_wrong_answer(monkeypatc
     monkeypatch.setattr(awa, "_people_fingerprint", boom)
     assert _ask("Tell me about Marisol.", monkeypatch) != ""            # the cache is still inside its TTL
     assert reads["load"] == 1
+
+
+# -- the real queries (SQL text), over an in-memory SQLite that speaks the same dialect for these two statements ------------
+# A fingerprint query that raised would be swallowed (the cache would then be served for its TTL) and the stale-roster bug
+# would be back with every test above still green - so the statements themselves run here.
+
+def test_the_fingerprint_and_roster_queries_run_and_see_a_new_contact(monkeypatch):
+    import contextlib
+    import sys
+    import types
+
+    import aiosqlite
+
+    async def scenario():
+        db = await aiosqlite.connect(":memory:")
+        await db.execute("CREATE TABLE people (id TEXT, user_id TEXT, name TEXT, relationship TEXT, deleted INTEGER DEFAULT 0, "
+                         "updated_at TEXT NOT NULL DEFAULT '2026-10-10T00:00:00')")
+        await db.execute("INSERT INTO people (id, user_id, name, relationship) VALUES ('1', ?, 'Marisol Okafor', 'colleague')", (UID,))
+        await db.commit()
+
+        @contextlib.asynccontextmanager
+        async def ctx():
+            yield db
+
+        fake = types.ModuleType("db_pool")
+        fake.get_db_ctx = ctx
+        monkeypatch.setitem(sys.modules, "db_pool", fake)
+        monkeypatch.undo()                       # keep the fixture's stubs off: the REAL _load_people / _people_fingerprint run
+        monkeypatch.setitem(sys.modules, "db_pool", fake)
+        monkeypatch.setenv(awa.ENV, "enforce")
+        awa.forget_roster()
+        first = await awa._people_fingerprint(UID)
+        assert await awa.handle("Tell me about Marisol.", UID, "a") == ""        # one Marisol
+        await db.execute("INSERT INTO people (id, user_id, name, relationship) VALUES ('2', ?, 'Marisol Vance', 'sister')", (UID,))
+        await db.commit()
+        assert await awa._people_fingerprint(UID) != first
+        q = await awa.handle("What's Marisol's birthday?", UID, "b")
+        await db.close()
+        return q
+
+    assert _run(scenario()) == "Which Marisol do you mean: Marisol Okafor, your colleague, or Marisol Vance, your sister?"
