@@ -941,6 +941,34 @@ def thread_match(group: "Sequence[Moment]", thread: dict) -> bool:
     return len(shared) >= 2 or bool(shared & _TOPIC_VOCAB)
 
 
+def thread_identity(title: str, quotes: "Sequence[str]") -> dict:
+    """What identifies a thread in raw text, by code and with no language cue: its title's named people / places, any name its quotes repeat (in two or more), and
+    the distinctive words its title and quotes share. ``{"anchors": "@name word ..."}`` for ``thread_match``. Pure."""
+    names = set(names_in(title or ""))
+    seen: "dict[str, int]" = {}
+    for q in quotes:
+        for n in set(names_in(q)):
+            seen[n] = seen.get(n, 0) + 1
+    names |= {n for n, c in seen.items() if c >= 2}
+    words = set(_words(title or "")) & set().union(*[set(_words(q)) for q in quotes]) if quotes else set()
+    return {"anchors": " ".join(sorted({"@" + n for n in names - _NOT_NAMES} | (words - _ANCHOR_STOP)))}
+
+
+def spoken_since(title: str, quotes: "Sequence[str]", raw_turns: "Sequence[Turn]", last_day: str, today: "_dt.date") -> bool:
+    """Did the owner talk about this thread in a raw turn AFTER the thread's last kept mention? Quiet is a fact about the owner's words, not about the moments the model
+    happened to keep: a model that drops the latest of a thread's mentions must not make a thread that is still being talked about look abandoned (K9f). The same
+    name / shared-word test that continues a thread (``thread_match``) is applied to each later turn. Pure."""
+    last = _date(last_day)
+    ident = thread_identity(title, quotes)
+    if last is None or not ident["anchors"]:
+        return False
+    for tu in raw_turns:
+        d = _date(local_day(tu.at))
+        if d is not None and last < d <= today and thread_match([Moment(turn=tu, quote=tu.text)], ident):
+            return True
+    return False
+
+
 def _render_new(moments: "Sequence[Moment]") -> str:
     return "\n".join(f"{m.mid} [{fmt_day(m.day)}] {m.kind} {m.feeling}: \"{m.quote[:140]}\"" for m in moments)
 
@@ -1317,7 +1345,7 @@ async def run_for_user(user_id: str, transcript: Any, svc: Any = None, *, now: "
 
 COUNT_KEYS = ("turns_in", "turns_dropped_routine", "turns_skipped_cap", "chunks", "calls", "moments_calls", "threads_calls", "calls_invalid", "calls_salvaged", "tail_calls", "tail_lost",
               "moments_proposed", "moments_dropped_id", "moments_dropped_quote", "moments_verified", "moments_held", "moments_history", "ops_applied",
-              "ops_dropped", "groups_split", "observations_written", "observations_pending", "threads_created", "threads_updated", "threads_resolved", "threads_quiet",
+              "ops_dropped", "groups_split", "observations_written", "observations_pending", "threads_created", "threads_updated", "threads_resolved", "threads_quiet", "quiet_vetoed",
               "prompt_tokens", "completion_tokens", "prompt_tokens_est_max")
 
 
@@ -1434,7 +1462,7 @@ async def _run(user_id: str, transcript: Any, svc: Any, m: str, now: "_dt.dateti
 
     # ── stage 4: DECIDE (code) ────────────────────────────────────────────────────────────────────────────────────
     ledger = list(ledger_rows) if ledger_rows is not None else await _ledger_rows(user_id, now)
-    plan = _build_plan(user_id, groups, threads, old_obs, today, now, ledger, night_date, counts, [mo for mo in moments if mo.state == "held"], known_ids)
+    plan = _build_plan(user_id, groups, threads, old_obs, today, now, ledger, night_date, counts, [mo for mo in moments if mo.state == "held"], known_ids, turns)
     res["changes"] = plan["changes"]
     if _TRACE is not None:
         _trace({"kind": "plan", "night_date": night_date, "today": today.isoformat(),
@@ -1502,8 +1530,8 @@ def _log(res: "dict[str, Any]") -> None:
 
 
 def _build_plan(user_id: str, groups: "list[Group]", threads: "list[dict]", old_obs: "list[dict]", today: "_dt.date", now: "_dt.datetime",
-                ledger: "Sequence[dict]", night_date: str, counts: "dict[str, int]", held: "Sequence[Moment]" = (), known_ids: "frozenset[str] | set[str]" = frozenset()
-                ) -> "dict[str, Any]":
+                ledger: "Sequence[dict]", night_date: str, counts: "dict[str, int]", held: "Sequence[Moment]" = (), known_ids: "frozenset[str] | set[str]" = frozenset(),
+                raw_turns: "Sequence[Turn]" = ()) -> "dict[str, Any]":
     """Stage 4 as a pure plan: the thread rows and observation rows the night would write (nothing is written here)."""
     by_id = {t["id"]: dict(t) for t in threads}
     new_obs: "list[dict]" = []
@@ -1603,6 +1631,9 @@ def _build_plan(user_id: str, groups: "list[Group]", threads: "list[dict]", old_
             continue
         last = _date(t["last_day"])
         if last is not None and (today - last).days >= quiet_threshold(by_thread_days.get(t["id"], [])):
+            if raw_turns and spoken_since(t["title"], [o["quote"] for o in all_obs if o["thread_id"] == t["id"] and o["state"] != "held"], raw_turns, t["last_day"], today):
+                counts["quiet_vetoed"] += 1         # the owner's own later turn names it: the model dropped that mention, the thread is not abandoned
+                continue
             t["status"] = "quiet"
             counts["threads_quiet"] += 1
             changes.append({"type": "quiet", "thread": t["id"], "ids": by_thread_ids.get(t["id"], [])[-2:]})
