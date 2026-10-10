@@ -2788,6 +2788,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_MANNER_BLOCK": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/manner_block.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_MAX_BROWSER_TABS": {
         "defaults": [
           "5"

@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-581 flags; 579 not documented in `.env.example`.
+582 flags; 580 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -289,6 +289,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_LOG_QUIET_POLL_SLOW_MS` | `dynamic` | no | NO | `services/zoe-data/middleware/logging.py` |
 | `ZOE_LOG_REPEAT_WINDOW_S` | `-` | no | NO | `services/zoe-data/log_throttle.py` |
 | `ZOE_LOOP_LIFECYCLE` | `False` | yes | NO | `services/zoe-data/open_loop_lifecycle.py` |
+| `ZOE_MANNER_BLOCK` | `'off'` | yes | NO | `services/zoe-data/manner_block.py` |
 | `ZOE_MAX_BROWSER_TABS` | `5` | yes | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_MA_CONTAINER` | `'zoe-music-assistant'` | no | NO | `scripts/maintenance/ma_idle_reap.py`<br>`services/zoe-data/ma_ondemand.py` |
 | `ZOE_MA_IDLE_MIN` | `dynamic` | no | NO | `scripts/maintenance/ma_idle_reap.py` |
