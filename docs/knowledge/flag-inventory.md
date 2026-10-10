@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-583 flags; 581 not documented in `.env.example`.
+582 flags; 580 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -522,7 +522,6 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_STT_PREWARM_ON_WAKE` | `True` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_STT_STREAM_FINISH_TIMEOUT_MS` | `2500` | yes | NO | `services/zoe-data/voice_stt_stream.py` |
 | `ZOE_STT_STREAM_UNDER_SPEECH` | `False` | yes | NO | `services/zoe-data/voice_stt_stream.py` |
-| `ZOE_STT_STREAM_UPLOAD` | `'false'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_SUBPROCESS_QUEUE_WAIT_S` | `30.0` | yes | NO | `services/zoe-data/async_subprocess.py` |
 | `ZOE_SYNTHETIC_USER_ALLOWLIST` | `''` | no | NO | `services/zoe-data/user_filters.py` |
 | `ZOE_TASK_TIMEOUT_S` | `-`, `dynamic` | yes | NO | `services/zoe-data/background_runner.py` |
