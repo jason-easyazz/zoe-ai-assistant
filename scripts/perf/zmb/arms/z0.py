@@ -650,9 +650,9 @@ class Z0Arm(Arm):
             if isinstance(v, (int, float)) and not isinstance(v, bool):
                 self.night_totals[k] = self.night_totals.get(k, 0) + int(v)
 
-    def _night_snapshot(self):
+    def _night_snapshot(self, all_threads: bool = False):
         nm = importlib.import_module("night_mind")
-        return self._run(nm.snapshot(self._user))
+        return self._run(nm.snapshot(self._user, all_threads=all_threads))
 
     def _need_night(self) -> None:
         if not self.night:
@@ -732,7 +732,7 @@ class Z0Arm(Arm):
         a query: ``night_mind.lookup`` - the very ranking the recall packet's block uses - at most five. ``model: own`` (the pass's model, not a script)."""
         nm = importlib.import_module("night_mind")
         with self._ctl():                                        # the control scope: the bench's copying fault lifts the serving filters too
-            threads, obs = self._night_snapshot()
+            threads, obs = self._night_snapshot(all_threads=bool(query))      # a message that names a thread is answered from every thread; the card (no query) holds the stories only
             return self._night_export(nm, threads, obs, query)
 
     def _night_export(self, nm: Any, threads: "list[dict]", obs: "list[dict]", query: str) -> "dict[str, Any]":

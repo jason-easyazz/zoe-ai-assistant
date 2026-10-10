@@ -85,6 +85,10 @@ DEFAULT_MAX_CALLS = 7
 BASE_CTX = 8192
 BASE_CHUNK_TOKENS = 2400            # the OWNER's words per MOMENTS call at the 8k slot; instructions + output ride on top and stay inside it
 MAX_MOMENTS_PER_CHUNK = 8
+#: a MOMENTS call READS at most this many lines (1.5 x what it is asked to return). Measured on the 4B (2026-10-10): shown 19 lines and asked for 8 it picked the first eight that sounded
+#: personal and skipped a child's concert plan, 3 of 3 seeds; a call that holds about as many lines as it may return has nothing to choose between. The token budget still bounds a call
+#: of long lines.
+MAX_LINES_PER_CHUNK = 12
 MAX_MOMENTS_TO_THREADS = 24
 MAX_HELD_ROWS = 6
 MAX_OPEN_THREADS_LISTED = 8
@@ -549,14 +553,14 @@ def _line(alias: str, t: Turn) -> str:
     return f"[{alias}] {fmt_day(local_day(t.at))}: {t.text[:TURN_CHARS]}"
 
 
-def chunk_turns(turns: "Sequence[Turn]", budget: int) -> "list[list[Turn]]":
+def chunk_turns(turns: "Sequence[Turn]", budget: int, max_lines: int = 0) -> "list[list[Turn]]":
     """Consecutive turns cut into chunks whose lines fit ``budget`` tokens each (a single over-long turn is truncated to ``TURN_CHARS``, so it fits)."""
     chunks: "list[list[Turn]]" = []
     cur: "list[Turn]" = []
     used = 0
     for t in turns:
         cost = est_tokens(_line("m999", t)) + 1
-        if cur and used + cost > budget:
+        if cur and (used + cost > budget or len(cur) >= (max_lines or MAX_LINES_PER_CHUNK)):
             chunks.append(cur)
             cur, used = [], 0
         cur.append(t)
@@ -590,7 +594,7 @@ def pack(turns: "Sequence[Turn]", cfg: Config) -> "tuple[list[list[Turn]], dict[
         chosen, used = set(), 0
         for i in scored:
             cost = est_tokens(_line("m999", kept[i])) + 1
-            if used + cost > cap_tokens:
+            if used + cost > cap_tokens or len(chosen) >= room * MAX_LINES_PER_CHUNK:
                 continue
             chosen.add(i)
             used += cost
@@ -1595,12 +1599,20 @@ async def _shielded(user_id: str, text: str) -> bool:
         return False
 
 
-async def snapshot(user_id: str, *, use_cache: bool = False) -> "tuple[list[dict], list[dict]]":
-    """The member's threads and CURRENT observations (a forgotten name re-checked on every read)."""
+def _only_significant(threads: "Sequence[dict]", obs: "Sequence[dict]") -> "tuple[list[dict], list[dict]]":
+    """What the UNPROMPTED readers (the card, the check-in, the morning item) may serve: threads that are stories (``significant``), and their observations."""
+    keep_t = [t for t in threads if significant(t) or fault("echo")]
+    ids = {t["id"] for t in keep_t}
+    return keep_t, [o for o in obs if o["thread_id"] in ids]
+
+
+async def snapshot(user_id: str, *, use_cache: bool = False, all_threads: bool = False) -> "tuple[list[dict], list[dict]]":
+    """The member's threads and CURRENT observations (a forgotten name re-checked on every read). By default only threads that are stories (``significant``: two days, or heavy, or changed /
+    resolved); ``all_threads=True`` also returns a lone NOTABLE remark (weight 2+; a weight-1 fact stays in the store), for the reader that answers a message which NAMES it ('how is my knee' after one line about the knee: the member asked)."""
     now = time.monotonic()
     hit = _CACHE.get(user_id)
     if use_cache and hit and now - hit[0] < _CACHE_TTL_S:
-        return list(hit[1]), list(hit[2])
+        return (list(hit[1]), list(hit[2])) if all_threads else _only_significant(hit[1], hit[2])
     backend = night_store.get_backend()
     threads = await backend.threads(user_id)
     obs = await backend.observations(user_id, states=("current",))
@@ -1609,10 +1621,10 @@ async def snapshot(user_id: str, *, use_cache: bool = False) -> "tuple[list[dict
         if not await _shielded(user_id, o["quote"]):
             keep.append(o)
     alive = {o["thread_id"] for o in keep}
-    threads = [t for t in threads if t["id"] in alive and (significant(t) or fault("echo"))]
+    threads = [t for t in threads if t["id"] in alive and (significant(t) or int(t.get("weight_max") or 1) >= 2 or fault("echo"))]      # a minor lone fact (weight 1) stays in the store, never served
     keep = [o for o in keep if o["thread_id"] in {t["id"] for t in threads}]
     _CACHE[user_id] = (now, threads, keep)
-    return list(threads), list(keep)
+    return (list(threads), list(keep)) if all_threads else _only_significant(threads, keep)
 
 
 def _stale_card(threads: "Sequence[dict]", today: "_dt.date") -> bool:
@@ -1646,13 +1658,13 @@ def lookup(threads: "Sequence[dict]", obs: "Sequence[dict]", message: str, today
         pick = [t for _s, t in named]
     elif _MOOD_RE.search(message or ""):
         # a worry spoken aloud, not a question: the member's most recent unresolved story that weighed on them (never a leave thread) - one, to be asked about gently
-        weighed = [t for t in threads if t["status"] in ("open", "changed") and t.get("last_feeling") in NEGATIVE and not t["leave_reason"]
+        weighed = [t for t in threads if (significant(t) or fault("echo")) and t["status"] in ("open", "changed") and t.get("last_feeling") in NEGATIVE and not t["leave_reason"]
                    and (today - (_date(t["last_day"]) or today)).days <= MORNING_DAYS + 4]
         weighed.sort(key=lambda t: (t["last_day"], salience(t, today)), reverse=True)
         pick = weighed[:1]
         mood = True
     elif _CHECKIN_RE.search(message or ""):
-        live = [t for t in threads if (t["status"] != "resolved" or (today - (_date(t["last_day"]) or today)).days <= RESOLVED_SHOW_DAYS)
+        live = [t for t in threads if (significant(t) or fault("echo")) and (t["status"] != "resolved" or (today - (_date(t["last_day"]) or today)).days <= RESOLVED_SHOW_DAYS)
                 and (include_leave_on_open or not t["leave_reason"])]
         live.sort(key=lambda t: (t["last_day"], salience(t, today)), reverse=True)
         pick = live
@@ -1690,7 +1702,7 @@ async def prompt_block(user_id: str, message: str, *, now: "Optional[_dt.datetim
         return ""
     try:
         now = now or _dt.datetime.now(_dt.timezone.utc)
-        threads, obs = await asyncio.wait_for(snapshot(user_id, use_cache=True), timeout=0.6)
+        threads, obs = await asyncio.wait_for(snapshot(user_id, use_cache=True, all_threads=True), timeout=0.6)
         today = now.astimezone(_local_tz()).date()
         rows = lookup(threads, obs, message, today)
         if served is not None:

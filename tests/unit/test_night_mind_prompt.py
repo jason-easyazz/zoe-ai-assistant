@@ -76,3 +76,15 @@ def test_the_prompt_carries_no_detector_that_only_works_in_english():
     src = Path(nm.__file__).read_text()
     block = src[src.index("def parse_moments"):src.index("def unreached_tail")]
     assert "re.compile" not in block and "lower().split" not in block
+
+
+def test_a_call_reads_no_more_lines_than_one_and_a_half_times_what_it_is_asked_to_return():
+    """Evidence (4B, K1, seeds 1000-1002): 19 short lines in one call, 8 asked for -> it picked the first eight that sounded personal and skipped the concert plan every time (K3 / K6 2 of 3).
+    A call that holds about as many lines as it may return has nothing to choose between."""
+    ts = _turns(30)
+    chunks = nm.chunk_turns(ts, 10_000)
+    assert [len(c) for c in chunks] == [12, 12, 6] and nm.MAX_LINES_PER_CHUNK == 12
+    assert [t for c in chunks for t in c] == ts                                          # nothing lost, order kept
+    cfg = nm.Config(ctx_tokens=8192, chunk_tokens=10_000, max_calls=3, url="http://127.0.0.1:1")
+    packed, stats = nm.pack(ts, cfg)
+    assert len(packed) <= 2 and sum(len(c) for c in packed) <= 24 and stats["turns_skipped_cap"] >= 6      # a full day keeps the best lines of the room it has (2 chunks), not more

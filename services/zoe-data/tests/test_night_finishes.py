@@ -129,3 +129,18 @@ def test_end_to_end_the_concert_thread_stays_open_and_is_raisable_K10(lab):
 def test_end_to_end_the_quiz_thread_is_resolved_K11(lab):
     t = _night(lab, [PLAN_QUIZ, QUIZ_DONE], "open")["the story"]
     assert t["status"] == "resolved"
+
+
+# ── a member who NAMES a story is answered from it even when it is one line (K10 "how is my knee", 4B 2026-10-10) ─────────────────────────────────────────────
+
+def test_a_lone_remark_is_served_when_the_message_names_it_but_not_in_a_check_in(lab, monkeypatch):
+    """Evidence (K10, 4B, 2 runs of 3): the model picked ONE knee line ('I saw Dr Okafor about my knee and the physio starts soon.'); a thread with one mention on one day is not a 'story', so the
+    snapshot dropped it and 'how is my knee' came back empty (recallable_when_asked False). Unprompted readers (card, check-in, morning) still need a story; a question that names it does not."""
+    monkeypatch.setenv(nm.ENV, "enforce")
+    knee = mom("I saw Dr Okafor about my knee and the physio starts soon.", 5, "health", "open", ["Okafor"])      # weight 2 (the helper labels every moment 2)
+    _night(lab, [knee, mom("Gustav helped me plant the garden beds.", 6), mom("The garden beds are doing well, thanks to Gustav.", 3)], "open")
+    named = asyncio.run(nm.prompt_block(UID, "how is my knee", now=NOW))
+    assert "physio starts soon" in named
+    assert "physio" not in asyncio.run(nm.prompt_block(UID, "how has my week been", now=NOW))                  # the check-in still serves stories only
+    threads, _obs = asyncio.run(nm.snapshot(UID))
+    assert not any("knee" in str(t["anchors"]) for t in threads)                                              # and so does the default snapshot (card / morning)
