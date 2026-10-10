@@ -1634,3 +1634,27 @@ def test_the_cells_price_table_covers_the_call_counts_measured_on_the_live_4b():
     for k, (m, t) in measured.items():
         assert cb.CELL_CALLS[k][0] >= m and cb.CELL_CALLS[k][1] >= t, k
     assert set(cb.CELL_ORDER) == set(cb.CELL_CALLS) == set(measured)
+
+
+def test_waiting_for_a_quiet_box_does_not_spend_the_windows_cap_or_the_cells_budget(tmp_path):
+    """2026-10-10 09:40: the preflight waited 20 min for the voice harness; the 50-minute cap's clock had started at process start, so the cells got 932 s and K9f-K12 were skipped for budget.
+    The clock now starts when the window is cleared to stop the stack; the pre-stop wait has its own timeout."""
+    from zmb import cells_budget as cb
+    w, host, cfg, calls = _cells_host(tmp_path, argv=("--cells-only", "--cap-min", "50", "--cells-seed", "77"), start=at(12, 0))
+    cfg.busy_wait_max_min = 30.0
+    host.busy.add("zoe-backup.service")
+    real_sleep = host.sleep
+    waited = {"s": 0.0}
+
+    def sleep(sec):
+        waited["s"] += sec
+        if waited["s"] >= 20 * 60:
+            host.busy.clear()                                    # the box goes quiet after 20 minutes
+        real_sleep(sec)
+    host.sleep = sleep
+    assert w.run() == nw.EXIT_OK, w.outcome
+    assert waited["s"] >= 20 * 60 and w.rec["waited_before_open_min"] >= 19.9
+    plan = w.rec["cells_plan"]["12B"]
+    assert plan["room_s"] > (50 - cfg.reserve_min) * 60 - 400                     # the 20 waited minutes are not in the room (it was 992 s of 50 min in the real window)
+    argv = next(c for c in calls if "argv" in c)["argv"]
+    assert argv[argv.index("--cell-seed") + 1] == "77"

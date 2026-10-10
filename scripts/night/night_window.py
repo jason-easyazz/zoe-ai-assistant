@@ -320,6 +320,7 @@ class NightCfg(bk.Cfg):
     #: 1 / "" = the window's historical behaviour (one run of everything that fits).
     cells_runs: int = 1
     cells_pick: str = ""
+    cells_seed: int = 1000                  # ``--cell-seed`` of the CLI: run i of a window uses seed + i, so separate windows can take separate samples
     busy_units: tuple = ("zoe-training.service", "zoe-backup.service", "zoe-backup-verify.service", "zoe-memory-export.service", "zoe-dreaming.service")
     busy_wait_max_min: float = 20.0
     busy_poll_s: float = 30.0
@@ -941,6 +942,12 @@ class NightWindow(bk.Window):
         self.pre_stop_gate(m)
         if not self.dry:
             self.take_lock()
+            # THE WINDOW'S CLOCK STARTS HERE, when it is cleared to stop the stack. Waiting for a quiet box (a running timer job, the voice harness, a recent voice turn) has its own
+            # timeouts (``busy_wait_max_min`` / ``quiet_wait_max_min``) and costs Zoe nothing: nothing is stopped yet. Before this line it counted against the cap: the 2026-10-10 09:40 window
+            # waited 20 min for the harness lock, the cells then had 932 s of a 50-minute cap, and four cells were skipped for budget.
+            waited_min = self.elapsed_min()
+            self.t0, self.t0_epoch = self.host.mono(), self.host.now()
+            self.rec["waited_before_open_min"] = round(waited_min, 1)
             self.cap_min = self.compute_cap()
             for recheck in (self.blackout_conflict(), self.busy_now(), self.busy_reason()):
                 if recheck:
@@ -1359,7 +1366,7 @@ class NightWindow(bk.Window):
             return {"error": f"no night-mind cell fits the {room:.0f} s the cap leaves ({plan['needed_s']:.0f} s for the first; run --cells-only, or a bigger --cap-min)", "plan": plan}
         argv = [cfg.py, str(cfg.night_mind_script), "--model-url", f"http://127.0.0.1:{cfg.port}/v1", "--ctx-tokens", str(ctx), "--cells", "--model-name", label,
                 "--decode-tok-s", f"{decode:.2f}", "--prefill-tok-s", f"{prefill:.1f}", "--cell-budget", f"{plan['cell_budget_s']:.0f}",
-                "--runs", str(cfg.cells_runs)] + (["--only", ",".join(plan["selected"])] if picked else [])
+                "--runs", str(cfg.cells_runs), "--cell-seed", str(cfg.cells_seed)] + (["--only", ",".join(plan["selected"])] if picked else [])
         res = self.host.run_watched(argv, plan["watchdog_s"], {**os.environ, "ZOE_HARNESS": "1"}, lambda: self.guard(), log, cfg.metrics_poll_s)
         text = self.host.read(str(log))
         for d in reversed(list(_json_objects(text))):          # the whole object, compact or indented: the CLI's stdout is not guaranteed one line
@@ -2067,6 +2074,7 @@ def build_parser() -> argparse.ArgumentParser:
                     "derived from the measured speed and the time the cap leaves, restore. No ZMA-arm pass, no 4B phase. Manual, any hour, cap 40 min (docs/knowledge/night-window.md)")
     ap.add_argument("--cells-runs", type=int, default=1, help="with --cells-only: run the night-mind cells N times (zoe-night-mind.py --runs) and report the MAJORITY verdict + per-run votes; the budget plan is N times longer "
                     "(give --cap-min accordingly). Default 1 = one run")
+    ap.add_argument("--cells-seed", type=int, default=1000, help="with --cells-only: seed of the first run (run i uses seed + i); use a different one per window so the samples differ")
     ap.add_argument("--cells-pick", default="", help="with --cells-only: only these cells, comma separated (K9,K9f,K10); default all that fit")
     ap.add_argument("--speed-sweep", action="store_true", help="measure the 12B across the config grid (build, load mode, offload, quant, KV, batch, threads): one 12B per config, a fixed speed probe each, "
                     "one restore at the end; manual, any hour, hard cap 45 min (docs/knowledge/night-window.md '12B speed sweep')")
@@ -2106,6 +2114,7 @@ def configure(args: argparse.Namespace, cfg: "Optional[NightCfg]" = None) -> Nig
     cfg.cells_only = bool(args.cells_only)
     cfg.cells_runs = max(1, int(args.cells_runs or 1))
     cfg.cells_pick = str(args.cells_pick or "")
+    cfg.cells_seed = int(args.cells_seed)
     cfg.trial = bool(args.trial) or cfg.cells_only          # --cells-only IS a trial (same load, probe, restore, any hour, no jobs); it only drops the phases around the cells
     cfg.sweep = bool(args.speed_sweep)
     if cfg.sweep and cfg.trial:
