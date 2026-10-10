@@ -209,6 +209,94 @@ ZOE_SPECULATIVE_TAIL_MS = _int_env("ZOE_SPECULATIVE_TAIL_MS", 320)
 _speculation_disabled = threading.Event()
 _speculation_warned: set = set()
 
+# ── Under-speech STT upload (flag-dark, default OFF) ─────────────────────
+# With ZOE_STT_STREAM_UPLOAD on, record_command uploads the mic audio to
+# /api/voice/stt_stream/chunk WHILE the user speaks (0.32 s batches, a sender
+# thread, never blocks the mic read) so the server's Moonshine has already
+# transcribed it when the turn is POSTed (docs/knowledge/prefill-under-speech-2026-10-10.md).
+# The WAV is still sent with the turn and the server falls back to batch STT on
+# any gap or mismatch, so a failed upload costs only the saving. A 409 (server
+# flag off) latches the uploader off for the process. Off: nothing below runs.
+ZOE_STT_STREAM_UPLOAD = os.environ.get("ZOE_STT_STREAM_UPLOAD", "false").lower() in ("1", "true", "yes", "on")
+_stt_stream_disabled = threading.Event()
+_STT_STREAM_BATCH_S = 0.32
+_pending_stt_stream: dict = {}
+
+
+def _stt_stream_available() -> bool:
+    return ZOE_STT_STREAM_UPLOAD and not _stt_stream_disabled.is_set()
+
+
+class _SttStreamUploader:
+    """Daemon half of the under-speech STT lane: ``push`` mic chunks, ``close`` -> (stream_id, samples) or None."""
+
+    def __init__(self, post=None):
+        self.stream_id = uuid.uuid4().hex
+        self._post = post if post is not None else _api_post
+        self._buf = bytearray()
+        self._seq = 0
+        self.samples = 0
+        self.ok = True
+        self._q = _queue_module.Queue()
+        self._thread = threading.Thread(target=self._run, daemon=True, name="stt-stream-upload")
+        self._thread.start()
+
+    def push(self, data: bytes) -> None:
+        self._buf += data
+        self.samples += len(data) // 2
+        if len(self._buf) >= int(2 * SAMPLE_RATE * _STT_STREAM_BATCH_S):
+            self._flush()
+
+    def _flush(self) -> None:
+        if self._buf:
+            self._q.put(bytes(self._buf))
+            self._buf = bytearray()
+
+    def _run(self) -> None:
+        while True:
+            item = self._q.get()
+            if item is None:
+                return
+            if not self.ok:
+                continue
+            try:
+                resp = self._post("/api/voice/stt_stream/chunk", {
+                    "stream_id": self.stream_id, "seq": self._seq,
+                    "pcm_base64": base64.b64encode(item).decode()}, timeout=5, retries=0)
+                self._seq += 1
+                if not (isinstance(resp, dict) and resp.get("ok") is True):
+                    self.ok = False
+                    if isinstance(resp, dict) and resp.get("error") == "HTTP 409":
+                        _stt_stream_disabled.set()
+                        log.warning("stt stream: server flag is off - uploader latched off for this process")
+            except Exception as exc:
+                self.ok = False
+                log.debug("stt stream upload failed (%s) - turn will use batch STT", exc)
+
+    def close(self, wait_s: float = 2.0):
+        self._flush()
+        self._q.put(None)
+        self._thread.join(wait_s)
+        if self._thread.is_alive() or not self.ok or self.samples <= 0:
+            return None
+        return self.stream_id, self.samples
+
+
+def _attach_stt_stream(payload: dict, wav: bytes, speculation) -> None:
+    """Name the finished upload on the turn payload iff it provably covers THIS wav (single-use, never speculative)."""
+    info = dict(_pending_stt_stream)
+    if speculation is not None or not info:
+        return
+    _pending_stt_stream.clear()
+    try:
+        with wave.open(io.BytesIO(wav), "rb") as w:
+            frames = w.getnframes()
+    except Exception:
+        return
+    if frames == info.get("samples"):
+        payload["stt_stream_id"] = info["stream_id"]
+        payload["stt_stream_samples"] = frames
+
 
 def _speculation_available() -> bool:
     return ZOE_SPECULATIVE_TURN and VOICE_STREAM_ENABLED and not _speculation_disabled.is_set()
@@ -1838,12 +1926,19 @@ def record_command(pa: pyaudio.PyAudio, stream=None, speculation: "_SpeculativeT
                 log.warning("Mic open failed (%s), retrying in %.2fs [%d/5]...", exc, wait_s, attempt)
                 time.sleep(wait_s)
     frames = list(_PREROLL)  # prepend pre-roll so the start of speech is kept
+    uploader = _SttStreamUploader() if _stt_stream_available() else None
+    _pending_stt_stream.clear()
+    if uploader is not None:
+        for _f in frames:
+            uploader.push(_f)
     endpointer = _Endpointer()
     stop_reason = "max_duration"
     max_chunks = int(RECORD_SECONDS * SAMPLE_RATE / CHUNK_SIZE)
     for _ in range(max_chunks):
         data = stream.read(CHUNK_SIZE, exception_on_overflow=False)
         frames.append(data)
+        if uploader is not None:
+            uploader.push(data)
         if endpointer.push(data, len(frames)):
             stop_reason = "silence"
             break
@@ -1860,8 +1955,13 @@ def record_command(pa: pyaudio.PyAudio, stream=None, speculation: "_SpeculativeT
         duration_s, len(frames), stop_reason, endpointer.mode, endpointer.tail_rule or "-",
         SILENCE_TIMEOUT_S,
     )
+    if uploader is not None:
+        _closed = uploader.close()
+        if _closed is not None:
+            _pending_stt_stream.update(stream_id=_closed[0], samples=_closed[1])
     if len(frames) < int(0.3 * SAMPLE_RATE / CHUNK_SIZE):
         log.info("Command too short, ignoring.")
+        _pending_stt_stream.clear()
         return None
     return _frames_to_wav(pa, frames)
 
@@ -2707,6 +2807,7 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
     if speculation is not None:
         payload["speculative"] = True
         payload["turn_id"] = speculation.turn_id
+    _attach_stt_stream(payload, wav, speculation)
     if conversation:
         # Tell the server we're inside an open conversation so ender phrases
         # ("that's all", "goodbye") are honoured; outside one they never fire.
