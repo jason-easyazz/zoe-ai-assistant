@@ -23,11 +23,11 @@ REPO = Path(__file__).resolve().parents[3]
 
 #: the order ``zoe-night-mind.py --cells`` runs the reflection cells in (``spec.load_cells()``): K9.change_and_quiet = K9, K9.flat_week = K9f
 CELL_ORDER = ("K1", "K2", "K3", "K4", "K5", "K6", "K7", "K8", "K9", "K9f", "K10", "K11", "K12")
-#: (MOMENTS calls, THREADS calls) per cell, MEASURED: the largest count over 6 runs of the live 4B (``zoe-night-mind.py --cells --runs 3`` twice, 2026-10-10; the CLI prints
+#: (MOMENTS calls, THREADS calls) per cell, MEASURED: the largest count over 12 runs of the live 4B (``zoe-night-mind.py --cells --runs 3`` four times, 2026-10-10, the last with the 12-line call; the CLI prints
 #: every run's own in ``cells.cell_calls``). The lab household is 24 turns in 400-token chunks (3 MOMENTS calls for K1 / K7 / K8); K9 / K9f / K10 add the tail ask for the lines a
 #: reply never reached (the 2026-10-09 table said 1 + 1 for them: a third too cheap). A cell not in the table is priced as one MOMENTS + one THREADS call.
-CELL_CALLS = {"K1": (3, 1), "K2": (0, 0), "K3": (0, 0), "K4": (0, 0), "K5": (0, 0), "K6": (0, 0), "K7": (3, 1), "K8": (3, 1),
-              "K9": (2, 1), "K9f": (2, 1), "K10": (2, 1), "K11": (1, 1), "K12": (1, 0)}
+CELL_CALLS = {"K1": (3, 1), "K2": (0, 0), "K3": (0, 0), "K4": (0, 0), "K5": (0, 0), "K6": (0, 0), "K7": (4, 1), "K8": (3, 1),
+              "K9": (2, 1), "K9f": (2, 1), "K10": (3, 1), "K11": (1, 1), "K12": (1, 0)}
 #: prompt tokens of the two call kinds (the largest the lab household produced: 577 and 461) and their output caps (``night_mind.MOMENT_MAX_TOKENS`` / ``THREAD_MAX_TOKENS``)
 MOMENTS_PROMPT_TOK, THREADS_PROMPT_TOK = 700, 600
 MOMENTS_MAX_TOK, THREADS_MAX_TOK = 640, 450
