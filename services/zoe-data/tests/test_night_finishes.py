@@ -144,3 +144,28 @@ def test_a_lone_remark_is_served_when_the_message_names_it_but_not_in_a_check_in
     assert "physio" not in asyncio.run(nm.prompt_block(UID, "how has my week been", now=NOW))                  # the check-in still serves stories only
     threads, _obs = asyncio.run(nm.snapshot(UID))
     assert not any("knee" in str(t["anchors"]) for t in threads)                                              # and so does the default snapshot (card / morning)
+
+
+# ── review findings on #1982 ────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+def test_a_named_place_is_what_a_trip_is_about_so_a_completed_trip_is_finished():
+    """Greptile P2: 'We fly to Cornwall on the 3rd' ... 'Cornwall was lovely' (done) shares only the place; only PEOPLE are stripped from the matter, not places or organisations."""
+    plan = mom("We fly to Cornwall on the 3rd for Dune's birthday.", 15, "plan", "open", ["Dune"])
+    done = mom("Cornwall was lovely, we had the best time.", 2, "progress", "done")
+    assert nm.finishes([plan, done], "open") is True
+    other = mom("Dune practised the cello for an hour today.", 2, "progress", "done", ["Dune"])
+    assert nm.finishes([plan, other], "open") is False                  # the person shared by both is who, not what
+
+
+def test_an_unrelated_done_line_does_not_retire_the_plan_into_history(lab):
+    """Greptile P1: ``finishes()`` kept the concert thread open, but ``_build_plan`` still moved the concert plan to history because the practice line carried ``later: done``.
+    Read the SAVED observations, not the quotes the test supplied."""
+    _night(lab, [PLAN_CONCERT, CELLO], "open")
+    rows = {o["quote"]: o["state"] for o in asyncio.run(lab.observations(UID))}
+    assert rows[PLAN_CONCERT.quote] == "current" and rows[CELLO.quote] == "current"
+
+
+def test_a_real_finish_still_retires_the_earlier_plan_into_history(lab):
+    _night(lab, [PLAN_QUIZ, QUIZ_DONE], "open")
+    rows = {o["quote"]: o["state"] for o in asyncio.run(lab.observations(UID))}
+    assert rows[PLAN_QUIZ.quote] == "history" and rows[QUIZ_DONE.quote] == "current"

@@ -1011,7 +1011,8 @@ def test_cells_runs_and_pick_reach_the_cli_and_the_budget_is_priced_per_run(tmp_
     w1, _h, _cf, calls1 = _cells_host(tmp_path / "plain")
     assert w1.run() == nw.EXIT_OK
     argv1 = next(c for c in calls1 if "argv" in c)["argv"]
-    assert argv1[argv1.index("--runs") + 1] == "1" and "--only" not in argv1                       # the default is today's behaviour: one run of everything that fits
+    p1 = w1.rec["cells_plan"]["12B"]
+    assert argv1[argv1.index("--runs") + 1] == "1" and (("--only" in argv1) == (not p1["fits_all"]))      # one run of everything that fits; the set is named only when the plan dropped cells
 
 
 def test_a_watchdog_kill_keeps_the_verdicts_the_cli_logged_cell_by_cell(tmp_path):
@@ -1658,3 +1659,25 @@ def test_waiting_for_a_quiet_box_does_not_spend_the_windows_cap_or_the_cells_bud
     assert plan["room_s"] > (50 - cfg.reserve_min) * 60 - 400                     # the 20 waited minutes are not in the room (it was 992 s of 50 min in the real window)
     argv = next(c for c in calls if "argv" in c)["argv"]
     assert argv[argv.index("--cell-seed") + 1] == "77"
+
+
+def test_cells_picked_without_k1_pay_for_the_pass_k1_would_have_played():
+    """Greptile P1: a lone K2 priced at zero calls got a 45 s budget, but it plays the shared pass itself (K1's calls). Charged once per run, only when K1 is not in the set."""
+    from zmb import cells_budget as cb
+    d, p = 4.7, 153.4
+    lone = cb.plan(d, p, 50000.0, keys=["K2"])
+    assert lone["expected_s"] == pytest.approx(cb.cell_expected_s("K1", d, p), abs=0.2) and lone["worst_s"] == pytest.approx(cb.cell_worst_s("K1", d, p), abs=0.2)
+    two = cb.plan(d, p, 50000.0, keys=["K2", "K3"], runs=2)
+    assert two["expected_s"] == pytest.approx(2 * cb.cell_expected_s("K1", d, p), abs=0.2)           # once per run, not once per cell
+    with_k1 = cb.plan(d, p, 50000.0, keys=["K1", "K2"])
+    assert with_k1["expected_s"] == pytest.approx(cb.cell_expected_s("K1", d, p), abs=0.2)             # K1 is in: nothing extra
+    assert lone["watchdog_s"] > 150
+
+
+def test_repeated_runs_run_exactly_the_cells_the_plan_budgeted(tmp_path):
+    """Greptile P1: with --cells-runs 3 and no pick the plan budgets runs of the SELECTED set, but the CLI was not told which: it spent the shared budget on dropped cells."""
+    w, host, cfg, calls = _cells_host(tmp_path, argv=("--cells-only", "--cap-min", "40", "--cells-runs", "3"))
+    assert w.run() == nw.EXIT_OK, w.outcome
+    argv = next(c for c in calls if "argv" in c)["argv"]
+    sel = w.rec["cells_plan"]["12B"]["selected"]
+    assert argv[argv.index("--only") + 1] == ",".join(sel) and len(sel) < 13

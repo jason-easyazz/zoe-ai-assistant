@@ -1366,7 +1366,7 @@ class NightWindow(bk.Window):
             return {"error": f"no night-mind cell fits the {room:.0f} s the cap leaves ({plan['needed_s']:.0f} s for the first; run --cells-only, or a bigger --cap-min)", "plan": plan}
         argv = [cfg.py, str(cfg.night_mind_script), "--model-url", f"http://127.0.0.1:{cfg.port}/v1", "--ctx-tokens", str(ctx), "--cells", "--model-name", label,
                 "--decode-tok-s", f"{decode:.2f}", "--prefill-tok-s", f"{prefill:.1f}", "--cell-budget", f"{plan['cell_budget_s']:.0f}",
-                "--runs", str(cfg.cells_runs), "--cell-seed", str(cfg.cells_seed)] + (["--only", ",".join(plan["selected"])] if picked else [])
+                "--runs", str(cfg.cells_runs), "--cell-seed", str(cfg.cells_seed)] + (["--only", ",".join(plan["selected"])] if (picked or cfg.cells_runs > 1 or not plan["fits_all"]) else [])      # repeated runs budgeted for the selected set must run exactly that set
         res = self.host.run_watched(argv, plan["watchdog_s"], {**os.environ, "ZOE_HARNESS": "1"}, lambda: self.guard(), log, cfg.metrics_poll_s)
         text = self.host.read(str(log))
         for d in reversed(list(_json_objects(text))):          # the whole object, compact or indented: the CLI's stdout is not guaranteed one line

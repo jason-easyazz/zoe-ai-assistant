@@ -980,10 +980,16 @@ def apply_threads(raw: str, moments: "list[Moment]", threads: "list[dict]", coun
     return groups
 
 
-def _matter_words(quote: str, names: "Iterable[str]" = ()) -> "set[str]":
-    """The words that say WHAT a line is about: its words without the stop words, the generic ones and the names in it (a name is who, not what)."""
-    nm_ = {n.lower() for n in names} | {n.lower() for n in names_in(quote)}
-    return {w for w in _words(quote) if w not in _ANCHOR_STOP and w not in nm_}
+def _people_words(whos: "Iterable[Iterable[str]]") -> "set[str]":
+    """The lower-cased words of the people the model named (``who``) across a thread's moments: who the story is about, never what it is about."""
+    return {w.lower() for who in whos for name in who for w in re.findall(r"[A-Za-z]{3,}", str(name))}
+
+
+def _matter_words(quote: str, people: "Iterable[str]" = ()) -> "set[str]":
+    """The words that say WHAT a line is about: its words without the stop words, the generic ones and the PEOPLE in the thread (a person is who, not what). A named place or organisation
+    stays: 'We fly to Cornwall on the 3rd' ... 'Cornwall was lovely' is one trip."""
+    gone = {w.lower() for w in people}
+    return {w for w in _words(quote) if w not in _ANCHOR_STOP and w not in gone}
 
 
 def finishes(current: "Sequence[Moment]", model_status: str, old_rows: "Sequence[dict]" = ()) -> bool:
@@ -1001,12 +1007,13 @@ def finishes(current: "Sequence[Moment]", model_status: str, old_rows: "Sequence
     if model_status == "resolved":
         return True
     at = max(x.turn.at for x in done)
-    finish_words = set().union(*[_matter_words(x.quote, x.who) for x in done])
+    people = _people_words([x.who for x in current] + [str(o.get("who") or "").split(",") for o in old_rows])
+    finish_words = set().union(*[_matter_words(x.quote, people) for x in done])
     plans = [x for x in current if x.kind == "plan" and x.later == "open" and x.turn.at < at]
-    if any(_matter_words(x.quote, x.who) & finish_words for x in plans):
+    if any(_matter_words(x.quote, people) & finish_words for x in plans):
         return True
     return any(o.get("kind") == "plan" and o.get("later") == "open" and float(o.get("said_at") or 0) < at.timestamp()
-               and _matter_words(str(o.get("quote") or ""), str(o.get("who") or "").split(",")) & finish_words for o in old_rows)
+               and _matter_words(str(o.get("quote") or ""), people) & finish_words for o in old_rows)
 
 
 def merge_status(a: str, b: str) -> str:
@@ -1492,7 +1499,8 @@ def _build_plan(user_id: str, groups: "list[Group]", threads: "list[dict]", old_
                 authority_class="user_stated_derived" if state != "held" else "pending", run_id=night_date)
             new_obs.append(row)
         # a CHANGE moment (or a resolution) on the thread retires the thread's EARLIER current observations: history, with a validity end, never deleted
-        cut = max((x.turn.at for x in live if x.kind == "change" or x.later == "done"), default=None)
+        # (a ``done`` line retires the earlier ones only when it FINISHED the thread - ``finishes()`` above - not when it is an unrelated line that carries ``later: done``)
+        cut = max((x.turn.at for x in live if x.kind == "change" or (done and x.later == "done" and x.kind != "change")), default=None)
         if cut is not None:
             keep_ids = {_oid(user_id, x.turn.id, x.quote) for x in live if x.turn.at >= cut}
             for o in old_obs:

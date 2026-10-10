@@ -23,6 +23,8 @@ REPO = Path(__file__).resolve().parents[3]
 
 #: the order ``zoe-night-mind.py --cells`` runs the reflection cells in (``spec.load_cells()``): K9.change_and_quiet = K9, K9.flat_week = K9f
 CELL_ORDER = ("K1", "K2", "K3", "K4", "K5", "K6", "K7", "K8", "K9", "K9f", "K10", "K11", "K12")
+#: the cells that make no calls of their own because they read the pass K1 plays (``play_group``)
+GROUP_CELLS = ("K2", "K3", "K4", "K5", "K6")
 #: (MOMENTS calls, THREADS calls) per cell, MEASURED: the largest count over 12 runs of the live 4B (``zoe-night-mind.py --cells --runs 3`` four times, 2026-10-10, the last with the 12-line call; the CLI prints
 #: every run's own in ``cells.cell_calls``). The lab household is 24 turns in 400-token chunks (3 MOMENTS calls for K1 / K7 / K8); K9 / K9f / K10 add the tail ask for the lines a
 #: reply never reached (the 2026-10-09 table said 1 + 1 for them: a third too cheap). A cell not in the table is priced as one MOMENTS + one THREADS call.
@@ -80,8 +82,11 @@ def plan(decode_tok_s: float, prefill_tok_s: float, room_s: float, keys: "Sequen
     runs = max(1, int(runs))
     selected: "list[str]" = []
     expected = worst = 0.0
+    paid = "K1" in keys                      # K2-K6 read the pass K1 plays: picked WITHOUT K1, the first of them plays it (its setup is K1's calls), once per run
     for k in keys:
         e, w = runs * cell_expected_s(k, decode_tok_s, prefill_tok_s), runs * cell_worst_s(k, decode_tok_s, prefill_tok_s)
+        if not paid and k in GROUP_CELLS:
+            e, w, paid = e + runs * cell_expected_s("K1", decode_tok_s, prefill_tok_s), w + runs * cell_worst_s("K1", decode_tok_s, prefill_tok_s), True
         if STARTUP_S + SLACK * (expected + e) > usable:
             break
         selected.append(k)
