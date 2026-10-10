@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 MODES = ("off", "shadow", "on")
 SIGNALS = ("welcome", "neutral", "not_now")
 # The panel / the state endpoint may name this much of an item's shape - never its content.
-_KLASS = {"event": "notify", "open_loop": "question", "emotional": "question"}
+_KLASS = {"event": "notify", "open_loop": "question", "emotional": "question", "commitment": "question"}
 BACKOFF_WINDOW = timedelta(days=7)
 CLASS_OFF_AT = 2           # two "not now" taps inside the window switch the class off
 TAP_WINDOW = timedelta(minutes=10)  # a tap is about the raise / pull this recent

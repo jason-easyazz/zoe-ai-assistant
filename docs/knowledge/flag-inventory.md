@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-581 flags; 579 not documented in `.env.example`.
+583 flags; 581 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -93,6 +93,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_CHEAP_PR_AGENT_MODEL` | `'cheap-pr-agent'`, `'deepseek/deepseek-chat-v3.1'` | no | NO | `scripts/maintenance/zoe_cheap_pr_agent.py`<br>`services/zoe-data/greploop_guard.py` |
 | `ZOE_CHEAP_PR_AGENT_URL` | `-` | no | NO | `services/zoe-data/greploop_guard.py` |
 | `ZOE_CLEAN_GOODBYE` | `-` | yes | NO | `services/zoe-data/clean_goodbye.py` |
+| `ZOE_COMMITMENTS` | `'shadow'` | yes | NO | `services/zoe-data/commitments.py` |
 | `ZOE_COMPOSE_MAX_TOKENS` | `'700'` | no | NO | `services/zoe-data/ui_compose.py` |
 | `ZOE_COMPOSE_STREAM_BUDGET_S` | `'6'` | no | NO | `services/zoe-data/routers/chat.py` |
 | `ZOE_COMPOSE_TIMEOUT_S` | `'14'` | no | NO | `services/zoe-data/ui_compose.py` |
@@ -421,6 +422,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_PROACTIVE_SLOW_LOOP_S` | `'300'` | no | NO | `services/zoe-data/proactive/engine.py` |
 | `ZOE_PROACTIVE_SPOKEN` | `''` | no | NO | `services/zoe-data/proactive/engine.py` |
 | `ZOE_PROACTIVE_SPOKEN_TRIGGERS` | `'morning_checkin'` | no | NO | `services/zoe-data/proactive/engine.py` |
+| `ZOE_PROVENANCE_PERSIST` | `True` | yes | NO | `services/zoe-data/reply_ledger.py` |
 | `ZOE_PROVISION_CODE_TTL_S` | `'300'` | no | NO | `services/zoe-data/routers/panel_provision.py` |
 | `ZOE_PROVISION_PICKUP_GRACE_S` | `'120'` | no | NO | `services/zoe-data/routers/panel_provision.py` |
 | `ZOE_PR_GUARD_ACTIVE_GREPTILE_STALE_SECONDS` | `dynamic` | no | NO | `services/zoe-data/greploop_guard.py` |

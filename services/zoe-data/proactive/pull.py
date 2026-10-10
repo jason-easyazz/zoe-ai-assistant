@@ -315,7 +315,10 @@ def second_person(text: str) -> str:
 def sentence(item: Item) -> str:
     """One item in Zoe's voice. An event is told; a loop or a moment is asked after. The hint is
     used only when it already reads as a question (the selector's default hint is an INSTRUCTION
-    to the brain, never speakable)."""
+    to the brain, never speakable). A ``commitment`` is already Zoe's own first-person sentence (``commitments.py`` wrote it in
+    the member's language: "I said I'd remind you about X and didn't - want me to now?"): spoken as stored."""
+    if item.kind == "commitment":
+        return item.text.strip()
     if item.kind == "event":
         m = _EVENT_RE.match(item.text.strip())
         if m:

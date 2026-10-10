@@ -440,6 +440,15 @@ async def _slow_loop() -> None:
                 await ledger_sweep()
             except Exception as exc:
                 log.warning("delivery-ledger sweep failed: %s", exc)
+
+            # Step 5: Zoe's own promises (commitments.py, ZOE_COMMITMENTS = off | shadow | enforce, default shadow). Checks the
+            # timed promises that are now due: kept, fulfilled through the reminder path, or queued to be owned up to in the pull.
+            # Shadow logs and acts on nothing. Never speaks; never raises.
+            try:
+                from commitments import sweep as commitments_sweep
+                await commitments_sweep()
+            except Exception as exc:
+                log.warning("commitments sweep failed: %s", exc)
         except Exception as exc:
             # Covers connection-acquisition failures (e.g. transient pool
             # exhaustion / DB restart) that would otherwise escape this loop

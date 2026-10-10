@@ -407,5 +407,54 @@
     "no\\s+(?:lo\\s+)?(?:recuerdes|guardes|almacenes|registres|grabes|memorices)\\s+(?:esto|eso|lo\\s+que\\s+(?:te\\s+)?(?:digo|voy\\s+a\\s+decir|cuento))"
    ]
   }
+ },
+ "commitments": {
+  "_note": "Author-written, not native-reviewed (reviewed=false, like the rest of this file). Zoe's own timed promises in Spanish; see en.json 'commitments' for the shape.",
+  "reviewed": false,
+  "sentence_split": "(?<=[.!?])\\s+|\\n+",
+  "clause_split": "[,;:\\u2014\\u2013]|\\s-\\s",
+  "promise": {
+   "remind": [
+    "\\bte\\s+(?:lo\\s+)?recordar[e\u00e9]\\b",
+    "\\bvoy\\s+a\\s+recordarte\\b",
+    "\\bte\\s+(?:lo\\s+)?voy\\s+a\\s+recordar\\b",
+    "\\bte\\s+avisar[e\u00e9]\\b",
+    "\\bvoy\\s+a\\s+avisarte\\b"
+   ],
+   "check_back": [
+    "\\bvolver[e\u00e9]\\s+a\\s+(?:preguntarte|hablar(?:te|\\s+contigo)|escribirte)\\b",
+    "\\bte\\s+preguntar[e\u00e9]\\s+(?:de\\s+nuevo|otra\\s+vez|c[o\u00f3]mo)\\b",
+    "\\bvoy\\s+a\\s+(?:volver\\s+a\\s+preguntarte|preguntarte\\s+(?:de\\s+nuevo|otra\\s+vez))\\b",
+    "\\bte\\s+escribir[e\u00e9]\\s+(?:m[a\u00e1]s\\s+tarde|ma[n\u00f1]ana)\\b"
+   ]
+  },
+  "guards": ["\\bsi\\s+(?:quieres|me|t[u\u00fa])\\b", "\\bav[i\u00ed]same\\b", "\\bdime\\b", "\\bpuedo\\b", "\\bpuedes\\b", "\\bquieres\\s+que\\b", "\\bcuando\\s+(?:me|t[u\u00fa])\\b"],
+  "negators": ["\\bno\\b", "\\bnunca\\b", "\\bjam[a\u00e1]s\\b"],
+  "time": {
+   "relative": "\\ben\\s+(?P<n>\\d+|un|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|quince|veinte|treinta|media)\\s*(?P<unit>minutos?|mins?|horas?|d[i\u00ed]as?)\\b",
+   "numbers": {"un": 1, "una": 1, "dos": 2, "tres": 3, "cuatro": 4, "cinco": 5, "seis": 6, "siete": 7, "ocho": 8, "nueve": 9, "diez": 10,
+               "quince": 15, "veinte": 20, "treinta": 30, "media": 0.5},
+   "units": {"minuto": 60, "min": 60, "hora": 3600, "dia": 86400, "d\u00eda": 86400},
+   "clock": "\\ba\\s+las?\\s+(?P<h>\\d{1,2})(?::(?P<m>\\d{2}))?(?:\\s*h(?:oras)?)?(?![\\w:])",
+   "ap": {},
+   "named_preps": ["a"],
+   "named": {"mediod\u00eda": [12, 0], "medianoche": [0, 0]},
+   "days": {"hoy": 0, "ma\u00f1ana": 1},
+   "weekdays": {"lunes": 0, "martes": 1, "mi\u00e9rcoles": 2, "miercoles": 2, "jueves": 3, "viernes": 4, "s\u00e1bado": 5, "sabado": 5, "domingo": 6},
+   "parts": {"esta ma\u00f1ana": [9, 0, 0], "esta tarde": [16, 0, 0], "esta noche": [20, 0, 0],
+             "por la ma\u00f1ana": [9, 0], "por la tarde": [16, 0], "por la noche": [20, 0]},
+   "part_pm": ["esta tarde", "esta noche", "por la tarde", "por la noche"],
+   "default": [9, 0]
+  },
+  "about": {
+   "connectors": ["sobre", "acerca\\s+de"],
+   "stop": ["eso", "esto", "ello", "ti", "m\u00ed"],
+   "trim": ["el", "la", "en", "a", "por", "y", "o", "de"],
+   "max_chars": 80
+  },
+  "say": {
+   "ownup_remind": "Te dije que te recordar\u00eda {about}y no lo hice - \u00bfquieres que lo haga ahora?",
+   "checkback": "Te dije que volver\u00eda a preguntarte {about}- \u00bfc\u00f3mo va todo?"
+  }
  }
 }

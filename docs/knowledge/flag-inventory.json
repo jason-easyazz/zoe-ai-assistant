@@ -783,6 +783,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_COMMITMENTS": {
+        "defaults": [
+          "'shadow'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/commitments.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_COMPOSE_MAX_TOKENS": {
         "defaults": [
           "'700'"
@@ -4132,6 +4142,16 @@
           "services/zoe-data/proactive/engine.py"
         ],
         "typed_env": false
+      },
+      "ZOE_PROVENANCE_PERSIST": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/reply_ledger.py"
+        ],
+        "typed_env": true
       },
       "ZOE_PROVISION_CODE_TTL_S": {
         "defaults": [

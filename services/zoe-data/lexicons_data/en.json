@@ -848,5 +848,53 @@
   "ack_ask": "Which one should I leave alone? Tell me what it's about.",
   "conflict_standalone": ["(?:had|have|having|got into|get into|in) an? (?:\\w+ ){0,2}(?:row|fight|argument|falling out|blow-?up|quarrel|shouting match)"]
  },
- "recall_gate": {"caps_entity":true,"stop":["a","an","the","and","or","but","of","to","in","on","at","for","with","from","by","as","is","are","was","were","be","been","am","it","its","this","that","these","those","i","me","my","we","our","you","your","he","she","they","them","his","her","their","there","here","do","does","did","have","has","had","not","no","so","if","then","than","too","very","just","also","about","into","over","up","out","what","which","who","whom","how","when","where","why","can","could","will","would","should","may","might","must","shall","user","users","s","t","don","every","each","always","along"],"plan_cues":["tomorrow","tonight","today","later","soon","this morning","this afternoon","this evening","this weekend","this week","next week","next month","the weekend"],"routine_cues":["every","each","daily","always","usually","weekdays","weekly","nightly","routine","on weekends","most days"],"dayparts":["morning","mornings","afternoon","evening","night","nights","dawn","dusk","sunrise","sunset","midnight","noon"],"am_words":["am","a.m."],"pm_words":["pm","p.m."],"clock_suffix":[],"months":["january","february","march","april","may","june","july","august","september","october","november","december"],"weekdays":["monday","tuesday","wednesday","thursday","friday","saturday","sunday"],"stop_chars":[]}
+ "recall_gate": {"caps_entity":true,"stop":["a","an","the","and","or","but","of","to","in","on","at","for","with","from","by","as","is","are","was","were","be","been","am","it","its","this","that","these","those","i","me","my","we","our","you","your","he","she","they","them","his","her","their","there","here","do","does","did","have","has","had","not","no","so","if","then","than","too","very","just","also","about","into","over","up","out","what","which","who","whom","how","when","where","why","can","could","will","would","should","may","might","must","shall","user","users","s","t","don","every","each","always","along"],"plan_cues":["tomorrow","tonight","today","later","soon","this morning","this afternoon","this evening","this weekend","this week","next week","next month","the weekend"],"routine_cues":["every","each","daily","always","usually","weekdays","weekly","nightly","routine","on weekends","most days"],"dayparts":["morning","mornings","afternoon","evening","night","nights","dawn","dusk","sunrise","sunset","midnight","noon"],"am_words":["am","a.m."],"pm_words":["pm","p.m."],"clock_suffix":[],"months":["january","february","march","april","may","june","july","august","september","october","november","december"],"weekdays":["monday","tuesday","wednesday","thursday","friday","saturday","sunday"],"stop_chars":[]},
+ "commitments": {
+  "_note": "The words of ZOE'S OWN timed promises (commitments.py, ZOE_COMMITMENTS): the first-person future cues she uses ('I'll remind you', 'I'll check back'), the guards that make a sentence an offer or a condition instead, the clock/day/part-of-day words that give a promise its due time, and the sentences she says when she owns one up. Regex fragments, matched case-insensitively. Only ZOE's reply is ever read with these - never the user's words.",
+  "reviewed": true,
+  "sentence_split": "(?<![ap]\\.m\\.)(?<=[.!?])\\s+|\\n+",
+  "clause_split": "[,;:\\u2014\\u2013]|\\s-\\s",
+  "promise": {
+   "remind": [
+    "\\bI(?:'ll|\u2019ll| will|'m going to|\u2019m going to| am going to)\\s+(?:also |just |definitely |gladly |happily )?(?:be sure to |make sure to |make sure I )?(?:remind|nudge|ping|prompt)\\s+you\\b",
+    "\\bI(?:'ll|\u2019ll| will)\\s+(?:set|put|add|create)\\s+(?:you\\s+)?(?:a|that|the|this)\\s+reminder\\b",
+    "\\bI(?:'ll|\u2019ll| will)\\s+send\\s+you\\s+a\\s+reminder\\b"
+   ],
+   "check_back": [
+    "\\bI(?:'ll|\u2019ll| will|'m going to|\u2019m going to| am going to)\\s+(?:also |just |definitely |gladly )?(?:check\\s+(?:back|in|on\\s+you|with\\s+you)|follow\\s+up|circle\\s+back|touch\\s+base|come\\s+back\\s+to\\s+(?:you|this|that|it)|ask\\s+(?:you\\s+)?(?:again|how))\\b"
+   ]
+  },
+  "guards": [
+   "\\bif\\s+(?:you|i)\\b", "\\bwhen\\s+you\\b", "\\bonce\\s+you\\b", "\\bunless\\b", "\\blet\\s+me\\s+know\\b", "\\btell\\s+me\\b",
+   "\\bwant\\s+me\\s+to\\b", "\\bwould\\s+you\\s+(?:like|want)\\b", "\\bshall\\s+I\\b", "\\bshould\\s+I\\b", "\\bI\\s+(?:can|could|might|may)\\b",
+   "\\bhappy\\s+to\\b", "\\bsay\\s+the\\s+word\\b", "\\bjust\\s+say\\b", "\\bgive\\s+me\\s+the\\s+(?:nod|word)\\b"
+  ],
+  "negators": ["\\bnot\\b", "n['\u2019]t\\b", "\\bnever\\b", "\\bno\\s+longer\\b"],
+  "time": {
+   "relative": "\\bin\\s+(?P<n>\\d+|an?|one|two|three|four|five|six|seven|eight|nine|ten|twelve|fifteen|twenty|thirty|half\\s+an?|a\\s+couple\\s+of)\\s*(?P<unit>minutes?|mins?|hours?|hrs?|days?)\\b",
+   "numbers": {"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+               "twelve": 12, "fifteen": 15, "twenty": 20, "thirty": 30, "half a": 0.5, "half an": 0.5, "a couple of": 2},
+   "units": {"minute": 60, "min": 60, "hour": 3600, "hr": 3600, "day": 86400},
+   "clock": "\\b(?:at|around|by)\\s+(?P<h>\\d{1,2})(?:[:.](?P<m>\\d{2}))?\\s*(?P<ap>[ap]\\.?m\\.?)?(?:\\s*o['\u2019]clock)?(?![\\w:])",
+   "ap": {"a": "am", "p": "pm"},
+   "named_preps": ["at", "by", "around"],
+   "named": {"noon": [12, 0], "midnight": [0, 0]},
+   "days": {"today": 0, "tomorrow": 1},
+   "weekdays": {"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3, "friday": 4, "saturday": 5, "sunday": 6},
+   "parts": {"this morning": [9, 0, 0], "this afternoon": [15, 0, 0], "this evening": [18, 0, 0], "tonight": [20, 0, 0],
+             "first thing": [8, 0], "morning": [9, 0], "afternoon": [15, 0], "evening": [18, 0], "night": [20, 0]},
+   "part_pm": ["this afternoon", "this evening", "tonight", "afternoon", "evening", "night"],
+   "default": [9, 0]
+  },
+  "about": {
+   "connectors": ["about", "regarding", "to", "of"],
+   "stop": ["it", "that", "this", "them", "you", "me", "then", "there", "later", "again", "now"],
+   "trim": ["on", "at", "by", "in", "around", "this", "next", "for", "and", "or", "then"],
+   "max_chars": 80
+  },
+  "say": {
+   "ownup_remind": "I said I'd remind you {about}and didn't - want me to now?",
+   "checkback": "I said I'd check back with you {about}- how's it going?"
+  }
+ }
 }

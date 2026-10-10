@@ -14,7 +14,9 @@ bounded and spoken-length:
    DAY and the OWNER'S OWN WORDS, verbatim (the row's ``source_excerpt`` for a writer whose excerpt is by contract the owner's
    turn; else the owner's own verbatim turn from the ``exact_words`` index; never a model's paraphrase, never another member's
    words, never a guest's, never an unverified voice's). A reply that used no memory says so plainly. No record of the previous
-   reply (a lane that records nothing, a restart, a stale turn) says it cannot tell - it is never "no memory used".
+   reply (a lane that records nothing, a stale turn, another conversation's reply) says it cannot tell - it is never "no memory
+   used". A RESTART no longer empties the ledger: ``reply_ledger`` (migration 0044) persists one id-only row per reply, per
+   conversation, and answers the conversation's first turn after the process starts.
 2. **"what do you know about me?" / "what have you got on me?"** - a bounded, grouped summary of the owner's own rows: people,
    places, routines, preferences, recent threads; counts and the newest items. Voice: counts + one newest item per group and a
    hand-off to chat for the full list. Chat / Telegram: the longer list with dates. **Private classes (health, feelings, money,
@@ -950,10 +952,30 @@ def direct_explanation(tier: str, domain: str = "") -> str:
     return UNKNOWN_REPLY
 
 
-async def explain(user_id: str, *, channel: Optional[str] = None, svc: Any = None, now: Optional[float] = None) -> str:
-    """"why did you say that?": the previous reply's source, in the owner's words. NEVER raises."""
+async def _persisted_reply(user_id: str, session_id: str, now: Optional[float]):
+    """The previous reply of THIS conversation from the persisted ledger (``reply_ledger``), only in the restart case: the in-process
+    ledger has nothing for it AND this is the conversation's first turn since the process started. None otherwise. Never raises."""
+    try:
+        if not (session_id or "").strip() or not mp.first_turn_in_session(user_id, session_id):
+            return None
+        import reply_ledger
+
+        return await reply_ledger.read_latest(user_id, session_id, now=now)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("provenance_answers: persisted ledger unreadable (%s)", type(exc).__name__)
+        return None
+
+
+async def explain(user_id: str, *, channel: Optional[str] = None, svc: Any = None, now: Optional[float] = None,
+                  session_id: str = "") -> str:
+    """"why did you say that?": the previous reply's source, in the owner's words. NEVER raises.
+
+    ``session_id`` is the conversation being asked in: the in-process record must be of that conversation, and after a restart the
+    persisted ledger answers - for that conversation only."""
     voice = (channel or "") in VOICE_CHANNELS
-    rec = mp.previous_reply(user_id, now=now)
+    rec = mp.previous_reply(user_id, now=now, session_id=session_id)
+    if rec is None:
+        rec = await _persisted_reply(user_id, session_id, now)
     if rec is None:
         return UNKNOWN_REPLY
     if rec.kind == "direct":
@@ -1342,7 +1364,7 @@ async def handle(text: str, user_id: str, session_id: str = "", *, channel: Opti
         if speaker_verified is False:
             return UNVERIFIED_SPEAKER_REPLY
         if ask.kind == "explain":
-            return await explain(uid, channel=channel, svc=svc, now=now)
+            return await explain(uid, channel=channel, svc=svc, now=now, session_id=session_id)
         try:
             known = await gather(uid, svc=svc)
         except Exception as exc:  # noqa: BLE001
