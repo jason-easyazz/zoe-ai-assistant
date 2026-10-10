@@ -129,6 +129,24 @@ message the brain never sees. It now seeds the roster the bench's way, runs the 
 (worst case: the detector always proposes the bare name) and asks `intent_router.detect_intent` first (a conversational intent is
 executed if canned, else a marker no scorer passes).
 
+### Measured with the live-path rig (2026-10-10, in-process, the real 4B, 631 s of brain time, no live flag/DB touched)
+
+`person_half_enforce_ab.py --floors ask,goodbye|hold --n 20`, zoe-data's start stamp unchanged through every run. Enforce arm, k/n:
+
+| half | bar | main code (b8e6056) | this branch | live bench on main (07:25) |
+|---|---|---|---|---|
+| P7.a ambiguous: one question naming the choice | >= 18/20 | 3/20 | **20/20** | 10/20 |
+| P7.b clear: no question, answer given | >= 18/20 | 8/20 | **18/20** | 15/20 |
+| P8.a clean goodbye | every ask | 9/10 | **10/10** | 9/10 |
+| P8.b / .c / .d | every ask / 9 / 9 | 9 / 10 / 10 | 10 / 10 / 10 | - |
+| P5a.i / .ii / .iii (hold the fact, untouched) | <=3 / >=27 / <=3 of 30 | - | 0/20, 20/20, 0/20 | PASS (0/30, 30/30, 1/20) |
+
+The "main code" column is the same rig run against a worktree of main: it reproduces the three live failures (stale roster -> the
+tier never fires inside the TTL; bare-name offers; "good night" claimed by the briefing intent), which the old rig could not.
+P7.b's two remaining misses are the brain's own closing question ("Is there anything else you'd like me to know about him?"), in
+BOTH arms (shadow also 18/20) - the tier is not involved, and 18/20 is exactly the bar. The merged-live re-run of
+`samantha_person.py --only P5a,P7,P8` is owed after this deploys.
+
 ## Turning it on (operator)
 
 (The enforce-ready pack above has the same steps per floor with the expected numbers.)

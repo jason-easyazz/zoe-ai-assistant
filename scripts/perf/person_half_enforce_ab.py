@@ -334,7 +334,8 @@ class Rig:
             ppl = rig.people()
             return (str(len(ppl)), "", str(sum(len(c.name) for c in ppl)))
 
-        self._set(awa, "_people_fingerprint", people_fingerprint)
+        if hasattr(awa, "_people_fingerprint"):             # absent in a tree from before the fix: the rig then measures that tree as it was
+            self._set(awa, "_people_fingerprint", people_fingerprint)
 
         async def fetch_packet(user_id, message, focus=None):
             return await rig.packet(message)
