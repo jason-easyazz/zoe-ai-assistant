@@ -20,10 +20,13 @@ turn). Flag off, a minor, a guest, a failed lookup, a 1.x sidecar => NO line => 
 
 ADULTS ONLY. The block must never reach a child before the deterministic distress hand-off ships (blueprint question 7, emotional
 safety note section 7). It is withheld from: a guest / anonymous / voice-daemon id (an unconfirmed voice may be a child), a member
-whose ``member_modes`` row says ``minor`` or ``kid``, a member whose ``auth_users.role`` is a child role, and - failing closed -
-any member whose lookup fails or takes longer than ``LOOKUP_BUDGET_S``. Synthetic bench ids (``demo_*`` / ``test_*``) carry no age
-and get the block so the bench can measure it. A real member with NO ``member_modes`` row and an adult role is treated as an
-adult: the owner sets the minor rows BEFORE flipping the flag (``docs/knowledge/samantha-person.md``).
+whose ``member_modes`` row says ``minor`` or ``kid``, and - failing closed - anyone who is not POSITIVELY an adult: the block
+needs an ``auth_users`` row whose role is in ``ADULT_ROLES``. A missing account, an unknown role, a child role, or a lookup that
+fails or takes longer than ``LOOKUP_BUDGET_S`` all mean no block. The id string is NEVER consulted: a child's account may be
+named ``demo_user`` or ``test-jason`` and must not be waved through by its shape (no synthetic-id exemption). The A/B harness
+measures the block through an explicit eligibility override for its own throw-away user, not through the id. A member with NO
+``member_modes`` row and an adult role is treated as an adult: the owner sets the minor rows BEFORE flipping the flag
+(``docs/knowledge/samantha-person.md``).
 
 Nothing here stores anything. Stdlib only apart from the lazy DB import.
 """
@@ -46,8 +49,11 @@ MAX_BLOCK_CHARS = MAX_BLOCK_TOKENS * 4
 #: the wire-level ceiling the sidecar mirrors (``MANNER_MAX_CHARS`` in manner.ts): above the block so a longer language fits
 WIRE_MAX_CHARS = 800
 
-#: ``auth_users.role`` values that mean "a child" (zoe-auth passes roles through verbatim; ``tests/test_ws_roles.py`` lists them)
+#: ``auth_users.role`` values that mean "a child" (zoe-auth passes roles through verbatim; ``tests/test_ws_roles.py`` lists them).
+#: Kept for the docs and tests; eligibility is the ALLOWLIST below, so a role in neither set is also refused.
 CHILD_ROLES = frozenset({"child", "kid", "minor", "teenager", "teen"})
+#: the only ``auth_users.role`` values that may carry the block (an allowlist: an unknown or custom role fails closed)
+ADULT_ROLES = frozenset({"user", "admin", "member", "family_member", "family-admin", "housemate"})
 MINOR_MODES = frozenset({"kid"})
 #: a cold lookup is two primary-key reads; the first token never waits longer than this for them
 LOOKUP_BUDGET_S = 0.5
@@ -101,34 +107,27 @@ def is_guest(user_id: str) -> bool:
     return (user_id or "").strip() in GUEST_USERS
 
 
-def is_synthetic(user_id: str) -> bool:
-    from user_filters import is_synthetic_user
-
-    return is_synthetic_user((user_id or "").strip()) and not is_guest(user_id)
-
-
-async def _is_minor(user_id: str, db=None) -> bool:
-    """True when the member is flagged a minor (``member_modes``) or holds a child role (``auth_users``). Raises on a failed lookup -
-    the caller fails CLOSED."""
+async def _account_is_adult(user_id: str, db=None) -> bool:
+    """True ONLY for a member who is positively an adult: no minor / kid ``member_modes`` row (checked FIRST), AND an
+    ``auth_users`` row whose role is in ``ADULT_ROLES``. A missing account, an unknown or child role is False. Raises on a failed
+    lookup - the caller fails CLOSED. The id string is never read."""
     import persona_layer
 
     member = await persona_layer.load_member_mode(user_id, db=db)
     if member.minor or member.mode in MINOR_MODES:
-        return True
+        return False
     async with persona_layer._db(db) as conn:
         row = await (await conn.execute("SELECT role FROM auth_users WHERE user_id = ?", (user_id,))).fetchone()
-    return bool(row) and str(row[0] or "").strip().lower() in CHILD_ROLES
+    return bool(row) and str(row[0] or "").strip().lower() in ADULT_ROLES
 
 
 async def eligible(user_id: str, db=None) -> bool:
-    """May this member's turn carry the block? Adults only; guests and every lookup failure say no."""
+    """May this member's turn carry the block? Adults only; guests, unknown accounts and every lookup failure say no."""
     uid = (user_id or "").strip()
     if not uid or is_guest(uid):
         return False
-    if is_synthetic(uid):
-        return True
     try:
-        return not await asyncio.wait_for(_is_minor(uid, db=db), timeout=LOOKUP_BUDGET_S)
+        return bool(await asyncio.wait_for(_account_is_adult(uid, db=db), timeout=LOOKUP_BUDGET_S))
     except Exception:  # noqa: BLE001 - includes the timeout: not knowing a member is an adult means no block
         logger.warning("MANNER_BLOCK lookup failed for %s; no block", uid, exc_info=True)
         return False

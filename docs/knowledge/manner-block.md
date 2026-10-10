@@ -1,3 +1,11 @@
+---
+type: Reference
+title: The manner block (ZOE_MANNER_BLOCK) - a counted paragraph of how Zoe is with an adult
+description: A flag-dark, at-most-160-token block of countable behaviours that rides the Flue brain's system prompt for adult members only; how it is built, who is eligible, how it is A/B-measured before the flag may flip.
+tags: [samantha, person-likeness, manner-block, flue, zoe-data, flag-dark, ab-test]
+timestamp: 2026-10-10T00:00:00Z
+---
+
 # The manner block (`ZOE_MANNER_BLOCK=off|on`, default off)
 
 **Status 2026-10-10: built, flag-dark, NOT yet shown to help.** The live verdict is queued behind the night-brain testing window (owner
@@ -29,10 +37,12 @@ minor, a guest, a failed lookup or a 1.x sidecar sends no line: the wire bytes a
 `services/zoe-data/zoe_flue_client.py`. The voice gate (replay) therefore runs, and `deploy.yml` restarts the sidecar on merge. No
 `routers/voice_tts.py`, `fast_tiers.py`, `ask_when_ambiguous.py`, `clean_goodbye.py` or night-mind file is touched.
 
-**Adults only.** Withheld from guest / anonymous / voice ids, a `member_modes` row with `minor` or mode `kid`, an `auth_users.role` of
-`child` / `kid` / `minor` / `teenager` / `teen`, and (fail closed) any lookup that errors or takes > 0.5 s. A real member with NO
-`member_modes` row and an adult role is treated as an adult, so **set the minor rows before flipping the flag**. Synthetic bench ids
-(`demo_*`, `test_*`) get the block so the bench can measure it.
+**Adults only, by allowlist.** Withheld from guest / anonymous / voice ids and a `member_modes` row with `minor` or mode `kid` (checked
+first). Everyone else needs an `auth_users` row whose role is in `ADULT_ROLES` (`user`, `admin`, `member`, `family_member`,
+`family-admin`, `housemate`); a missing account, a child or unknown role, and (fail closed) any lookup that errors or takes > 0.5 s get
+no block. **The id string is never consulted** - there is no synthetic-id exemption, so a child account named `demo_user` or
+`test-jason` is withheld. A member with NO `member_modes` row and an adult role is treated as an adult, so **set the minor rows before
+flipping the flag**. The A/B harness measures the block by overriding eligibility explicitly for its own throw-away user.
 
 ## The A/B (protocol fixed before any live number)
 

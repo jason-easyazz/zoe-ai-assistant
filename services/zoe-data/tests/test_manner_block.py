@@ -4,8 +4,9 @@ What is pinned (synthetic names only, ci_safe):
   * flag off (the default) = the wire message is byte-identical to a build without the feature, for every shape; the positive
     control flips the flag and exactly ONE line appears (without it the identity asserts could pass for a seam that never fires);
   * the block bytes are STABLE (sha256 golden per language) and inside the 160-token budget;
-  * ADULTS ONLY: a member flagged minor / kid in ``member_modes``, a child ``auth_users.role``, a guest id, and any lookup that
-    fails or times out all get NO line (fail closed); a synthetic bench id gets the block;
+  * ADULTS ONLY: a member flagged minor / kid in ``member_modes``, a child or unknown ``auth_users.role``, a missing account, a
+    guest id, and any lookup that fails or times out all get NO line (fail closed). The id string is never consulted: there is
+    NO synthetic-id exemption (a child may be named ``demo_user``);
   * the block text per language comes from ``lexicons_data/<lang>.json``; a language with no entry falls back to English;
   * wire 1 never gets the line; a typed ``zoe-manner:`` first line is stripped (cannot be forged);
   * the REAL sidecar ``applyPolicies`` consumes what this client sends: off = the base prompt exactly, on = base + the block,
@@ -59,10 +60,10 @@ def _clean(monkeypatch):
 @pytest.fixture
 def adult(monkeypatch):
     """Every real member is an adult unless a test says otherwise (the lookup itself is tested against a real sqlite below)."""
-    async def not_minor(_uid, db=None):
-        return False
+    async def is_adult(_uid, db=None):
+        return True
 
-    monkeypatch.setattr(mb, "_is_minor", not_minor)
+    monkeypatch.setattr(mb, "_account_is_adult", is_adult)
 
 
 @pytest.fixture
@@ -228,7 +229,10 @@ def mdb(tmp_path, monkeypatch):
     con.execute("CREATE TABLE auth_users (user_id TEXT PRIMARY KEY, username TEXT, role TEXT NOT NULL)")
     con.executemany("INSERT INTO auth_users VALUES (?,?,?)", [
         ("ada_uid", "ada", "user"), ("mia_uid", "mia", "child"), ("teo_uid", "teo", "Teenager"), ("kid_uid", "kid", "user"),
-        ("flag_uid", "flag", "user"), ("helper_uid", "helper", "user")])
+        ("flag_uid", "flag", "user"), ("helper_uid", "helper", "user"),
+        ("demo_user", "demo_user", "child"), ("test-jason", "test-jason", "kid"), ("demo_kid_mode", "k", "user"),
+        ("demo_adult_1", "demo_adult_1", "user"), ("odd_uid", "odd", "visitor"), ("fam_uid", "fam", "family-admin")])
+    con.execute("INSERT INTO member_modes VALUES ('demo_kid_mode', 'kid', 1, 'o', 't')")  # demo-shaped id, minor row
     con.execute("INSERT INTO member_modes VALUES ('kid_uid', 'kid', 1, 'o', 't')")
     con.execute("INSERT INTO member_modes VALUES ('flag_uid', 'helper', 1, 'o', 't')")  # a minor in helper mode
     con.execute("INSERT INTO member_modes VALUES ('helper_uid', 'helper', 0, 'o', 't')")  # an ADULT who chose helper mode
@@ -253,13 +257,19 @@ def mdb(tmp_path, monkeypatch):
 @pytest.mark.parametrize("uid,want", [
     ("ada_uid", True),        # an adult with no member_modes row
     ("helper_uid", True),     # an adult in helper mode
-    ("nobody_uid", True),     # no rows anywhere: the owner sets minor rows before the flip (module docstring)
+    ("fam_uid", True),        # family-admin is on the allowlist
+    ("nobody_uid", False),    # no account row: not positively an adult, fail closed
+    ("odd_uid", False),       # an unknown role is not on the allowlist
+    ("demo_user", False),     # a CHILD account named demo_user: the id shape is never an exemption
+    ("test-jason", False),    # a child account named test-jason
+    ("demo_kid_mode", False), # demo-shaped id whose member_modes row says kid (minor check is first)
+    ("demo_bar_ab12cd34", False), ("test_x_1", False),   # demo-shaped ids with no rows at all: no block
+    ("demo_adult_1", True),   # an ADULT with a demo-shaped id still gets the block (by role, not by id)
     ("kid_uid", False),       # member_modes: kid + minor
     ("flag_uid", False),      # member_modes: minor in helper mode
     ("mia_uid", False),       # auth_users.role = child
     ("teo_uid", False),       # auth_users.role = Teenager (case-insensitive)
     ("guest", False), ("anonymous", False), ("voice-guest", False), ("voice-daemon", False), ("", False), ("  ", False),
-    ("demo_bar_ab12cd34", True), ("test_x_1", True),   # synthetic bench ids carry no age and are measured
 ])
 def test_who_gets_the_block(mdb, monkeypatch, uid, want):
     monkeypatch.setenv("ZOE_MANNER_BLOCK", "on")
@@ -287,9 +297,9 @@ def test_a_slow_lookup_fails_closed(monkeypatch):
 
     async def slow(_uid, db=None):
         await asyncio.sleep(1)
-        return False
+        return True
 
-    monkeypatch.setattr(mb, "_is_minor", slow)
+    monkeypatch.setattr(mb, "_account_is_adult", slow)
     assert asyncio.run(mb.block_for("ada_uid", "Hello there")) == ""
 
 
