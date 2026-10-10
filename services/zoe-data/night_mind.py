@@ -56,10 +56,29 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Iterable, Optional, Sequence
 
 import distress_handoff
+import lexicons as _lex
 import memory_authority as _ma
 import night_store
 
 logger = logging.getLogger(__name__)
+
+
+def change_backed(quote: str) -> bool:
+    """Does the owner's own line SAY something changed? A moment the model labels ``kind=change`` only changes a thread's status, retires the
+    thread's earlier observations, or skips the stale-belief check when this is true: model points, code decides (K9f: a flat week's "Booked the
+    train to X" labelled a change was reported as a changed thread). True when the line carries one of the language's ``change_cues`` or an
+    end-state marker (``ended_verbs`` / ``ended_phrases``, not a negated one). A language with no ``change_cues`` keeps the model's label
+    (fail-open to the old behaviour, so adding a language never silently mutes its changes). Pure."""
+    text = str(quote or "")
+    if not text.strip():
+        return False
+    lang = _lex.detect(text) or "en"
+    if not _lex.words(lang, "change_cues"):
+        return True
+    rx = _lex.word_re(lang, "change_cues")
+    if rx is not None and rx.search(_lex._nfkc(text)):
+        return True
+    return any(kind in ("verb", "phrase") for _a, _b, kind in _lex.ended_spans(text, lang))
 
 ENV = "ZOE_NIGHT_MIND"
 URL_ENV = "ZOE_NIGHT_MIND_URL"
@@ -797,7 +816,7 @@ async def mark_replaced(svc: Any, user_id: str, moments: "Sequence[Moment]") -> 
         return 0
     n = 0
     for m in moments:
-        if m.state != "current" or m.kind == "change":
+        if m.state != "current" or (m.kind == "change" and change_backed(m.quote)):
             continue
         hit = None
         for form in _stale_forms(m.quote):
@@ -1473,7 +1492,7 @@ def _build_plan(user_id: str, groups: "list[Group]", threads: "list[dict]", old_
                 t["last_feeling"] = feel[-1].feeling
         cur = [x for x in live if x.state == "current"]
         done = finishes(cur, g.model_status, [o for o in old_obs if o["thread_id"] == t["id"]])
-        changed_kind = any(x.kind == "change" for x in cur)
+        changed_kind = any(x.kind == "change" and change_backed(x.quote) for x in cur)   # the model's label alone never changes a thread
         new_status = t["status"] if before_status else "open"
         if done:
             new_status = "resolved"
@@ -1500,7 +1519,7 @@ def _build_plan(user_id: str, groups: "list[Group]", threads: "list[dict]", old_
             new_obs.append(row)
         # a CHANGE moment (or a resolution) on the thread retires the thread's EARLIER current observations: history, with a validity end, never deleted
         # (a ``done`` line retires the earlier ones only when it FINISHED the thread - ``finishes()`` above - not when it is an unrelated line that carries ``later: done``)
-        cut = max((x.turn.at for x in live if x.kind == "change" or (done and x.later == "done" and x.kind != "change")), default=None)
+        cut = max((x.turn.at for x in live if (x.kind == "change" and change_backed(x.quote)) or (done and x.later == "done" and x.kind != "change")), default=None)
         if cut is not None:
             keep_ids = {_oid(user_id, x.turn.id, x.quote) for x in live if x.turn.at >= cut}
             for o in old_obs:

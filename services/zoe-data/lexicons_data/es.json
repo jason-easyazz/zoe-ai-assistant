@@ -407,5 +407,6 @@
     "no\\s+(?:lo\\s+)?(?:recuerdes|guardes|almacenes|registres|grabes|memorices)\\s+(?:esto|eso|lo\\s+que\\s+(?:te\\s+)?(?:digo|voy\\s+a\\s+decir|cuento))"
    ]
   }
- }
+ },
+ "change_cues": ["en\\s+(?:su\\s+)?lugar", "en\\s+vez\\s+de", "se\\s+(?:cancel[oó]|suspendi[oó]|aplaz[oó]|pospuso)", "cancelad[oa]s?", "suspendid[oa]s?", "aplazad[oa]s?", "pospuest[oa]s?", "cambi(?:[oó]|amos|aron|ado|ada)", "se\\s+mud[oó]", "nos\\s+mudamos", "mudad[oa]", "ya\\s+no", "al\\s+final\\s+no", "se\\s+adelant[oó]", "se\\s+atras[oó]"]
 }
