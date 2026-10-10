@@ -304,6 +304,49 @@ def _check_resolvable(url: str, timeout: float = 5.0) -> None:
                            "--base-url / ZOE_REPLAY_BASE_URL (runbook §20)")
 
 
+async def _transcribe_via_stream(wav_path: str, batch_impl) -> tuple[str, int]:
+    """(transcript, post_speech_ms) through voice_stt_stream exactly as the panel would use it (paced 320 ms PCM16
+    batches, finish at end of clip, wake-word strip, empty/failed -> the batch STT). Only for the A/B arm
+    ZOE_REPLAY_STT_UNDER_SPEECH=1; needs the in-process Moonshine (a second copy, like any inprocess replay)."""
+    import wave as _wave
+    import routers.voice_tts as vt
+    import voice_stt_stream as ss
+
+    with open(wav_path, "rb") as fh:
+        raw = fh.read()
+    n = ss.wav_sample_count(raw)
+    if n is None:  # off-rate / non-mono clip: the daemon never streams these
+        t0 = time.monotonic()
+        return await batch_impl(wav_path), int((time.monotonic() - t0) * 1000)
+    with _wave.open(wav_path, "rb") as w:
+        pcm = w.readframes(w.getnframes())
+
+    def _make():
+        st = vt._ensure_moonshine().create_stream()
+        st.start()
+        return st
+
+    sess = await asyncio.to_thread(ss.get_or_open, "ab" * 8, 0, _make, vt._moonshine_infer_lock)
+    if sess is None:
+        ss.take("ab" * 8)
+        sess = await asyncio.to_thread(ss.get_or_open, "ab" * 8, 0, _make, vt._moonshine_infer_lock)
+    step = int(16000 * 0.32) * 2
+    t0 = time.monotonic()
+    for seq, i in enumerate(range(0, len(pcm), step)):
+        seg = pcm[i:i + step]
+        due = t0 + (i + len(seg)) / 2 / 16000
+        await asyncio.sleep(max(0.0, due - time.monotonic()))
+        sess.feed(seq, seg)
+    t_end = time.monotonic()
+    ss.take("ab" * 8)
+    lines, _reason = await asyncio.to_thread(sess.finish, n, 30.0)
+    text = vt._strip_wake_word(list(lines)) if lines else ""
+    post_ms = int((time.monotonic() - t_end) * 1000)
+    if not text:  # production fallback: batch STT re-checks the clip
+        return await batch_impl(wav_path), int((time.monotonic() - t_end) * 1000)
+    return text, post_ms
+
+
 def _transcribe_remote(wav_path: str, base_url: str, token: str) -> str:
     """STT via the LIVE zoe-data /api/voice/transcribe (its Moonshine is already warm).
 
@@ -414,12 +457,17 @@ async def _run(args) -> int:
             if args.stt == "remote":
                 transcript = (await asyncio.to_thread(
                     _transcribe_remote, f, args.base_url, _remote_token) or "").strip()
+            elif os.environ.get("ZOE_REPLAY_STT_UNDER_SPEECH") == "1":
+                # A/B arm for prefill-under-speech: the clip goes through the SHIPPED streaming session, paced like
+                # the daemon's upload, with the production fallback to batch STT. stt_ms = the post-speech part only.
+                transcript, rec["stt_ms_post"] = await _transcribe_via_stream(f, _transcribe_audio_impl)
+                transcript = (transcript or "").strip()
             else:
                 transcript = (await _transcribe_audio_impl(f) or "").strip()
         except Exception as exc:
             transcript = ""
             rec["stt_error"] = str(exc)
-        rec["stt_ms"] = int((time.monotonic() - t) * 1000)
+        rec["stt_ms"] = rec.pop("stt_ms_post", None) if "stt_ms_post" in rec else int((time.monotonic() - t) * 1000)
         rec["transcript"] = transcript
 
         rr = sr.route(transcript) if transcript else {"domain": "chat", "score": 0.0, "scores": {}}
