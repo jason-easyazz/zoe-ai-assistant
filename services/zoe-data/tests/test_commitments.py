@@ -38,12 +38,15 @@ from alembic.operations import Operations
 import commitments as cm
 import db_compat
 import memory_provenance as mp
+import user_erase_gate as erase_gate
 from db_pool import _Cursor, _ExecResult
 from proactive import lines, pull
 from proactive import selector as sel
+from zoneinfo import ZoneInfo
 
 SVC = Path(__file__).resolve().parents[1]
 UTC = timezone.utc
+UTC_ZONE = ZoneInfo("UTC")
 NOW = datetime(2026, 10, 10, 6, 0, tzinfo=UTC)         # Sat 14:00 Perth; the household clock is UTC in these tests
 MEMBER, OTHER = "member-a", "member-b"
 PROMISE_5 = "Sure, I'll remind you at 5 about the dentist."
@@ -92,6 +95,12 @@ def env(monkeypatch, tmp_path):
         "priority TEXT, due_date TEXT, due_time TEXT, recurring_pattern TEXT, is_active INTEGER DEFAULT 1, acknowledged INTEGER DEFAULT 0, "
         "snoozed_until TEXT, visibility TEXT, deleted INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT)")
     db.conn.execute("CREATE TABLE proactive_pending (id TEXT, trigger_type TEXT, item_id TEXT)")
+    db.conn.execute("CREATE TABLE notifications (id TEXT PRIMARY KEY, user_id TEXT, type TEXT, title TEXT, message TEXT, data TEXT, "
+                    "delivered INTEGER DEFAULT 0, created_at TEXT)")
+    db.conn.create_function("NOW", 0, lambda: NOW.strftime("%Y-%m-%d %H:%M:%S+00"))      # reminder_service's notification row
+    db.conn.commit()
+    import proactive.triggers.reminder_scan as reminder_scan
+    monkeypatch.setattr(reminder_scan, "_ZOE_TZ", UTC_ZONE)         # read from the environment at first import: pin it to this clock
 
     @contextlib.asynccontextmanager
     async def fake_db():
@@ -118,8 +127,9 @@ def env(monkeypatch, tmp_path):
     import proactive.triggers.reminders as trig
     monkeypatch.setattr(trig, "schedule_reminder", fake_schedule)
     mp.reset()
-    cm._pending.clear()
-    cm._last_purge = 0.0
+    erase_gate.reset()
+    monkeypatch.setattr(cm, "_pending", set())          # module globals through monkeypatch: restored after the test, never leaked
+    monkeypatch.setattr(cm, "_last_purge", 0.0)
     yield state
     sel._reset_state()
     lines._reset_state()
@@ -576,7 +586,7 @@ def test_closed_rows_are_purged_after_the_retention_and_open_ones_never(env, mon
     reminder(env)
     assert sweep(DUE_5 + timedelta(minutes=2)) == {"kept": 1}
     promise(env, "I'll remind you on Friday at 9am about the bins.", session="s2", reply_id="r2")      # still open, due in 6 days
-    cm._last_purge = 0.0
+    monkeypatch.setattr(cm, "_last_purge", 0.0)
     sweep(DUE_5 + timedelta(hours=2))
     assert [(r["about"], r["status"]) for r in rows(env)] == [("about the bins", "open")]
 
@@ -643,3 +653,201 @@ def test_a_brain_fallback_reply_promises_nothing(env):
     from zoe_flue_client import _FALLBACK_TEXT
     brain_dispatch._provenance_commit(MEMBER, _FALLBACK_TEXT, "hi", "s1", (0, 0.0), ())
     assert rows(env) == []
+
+
+# ── review round 1 (Greptile on #1981): each test fails when its fix is reverted ─────────────────
+
+def _first_connection_waits(monkeypatch):
+    """``get_compat_db`` whose FIRST caller waits on a gate before it is handed a connection (a pool under load); every later caller
+    passes at once. Returns the gate."""
+    real = db_compat.get_compat_db
+    state = {"calls": 0, "gate": None}
+
+    @contextlib.asynccontextmanager
+    async def slow():
+        state["calls"] += 1
+        if state["calls"] == 1:
+            await state["gate"].wait()
+        async with real() as db:
+            yield db
+    monkeypatch.setattr(db_compat, "get_compat_db", slow)
+    return state
+
+
+def test_forgetting_a_member_also_drops_their_queued_commitment_sentences(env, monkeypatch):
+    monkeypatch.setenv(cm.ENV, "enforce")
+    promise(env, "I'll check back tomorrow about the dentist.")
+    promise(env, "I'll check back tomorrow about the dentist.", user=OTHER, session="s2", reply_id="r2")
+    assert len(rows(env, "SELECT * FROM proactive_candidates")) == 2
+    assert run(cm.forget_user(MEMBER)) == 1
+    assert [r["user_id"] for r in rows(env, "SELECT user_id FROM proactive_candidates")] == [OTHER]      # the control: not everyone's
+    assert [r["user_id"] for r in rows(env)] == [OTHER]
+    after_due = datetime(2026, 10, 11, 10, 0, tzinfo=UTC)
+    assert run(pull.pull(MEMBER, "s9", channel="chat", now=after_due)).reply == pull.EMPTY_REPLY
+    assert "dentist" in run(pull.pull(OTHER, "s9", channel="chat", now=after_due)).reply
+
+
+def test_a_recording_waiting_for_a_connection_does_not_land_after_the_member_was_erased(env, monkeypatch):
+    monkeypatch.setenv(cm.ENV, "enforce")
+    state = _first_connection_waits(monkeypatch)
+
+    async def go():
+        state["gate"] = asyncio.Event()
+        mp.note_user_turn(MEMBER, "remind me later", "s1")
+        mp.claim_turn(MEMBER, "remind me later")
+        assert cm.schedule_record(MEMBER, "s1", "r1", "I'll check back tomorrow about the dentist.", "remind me later", (), now=NOW)
+        await asyncio.sleep(0)                       # the recording is now waiting for its connection
+        erase = asyncio.ensure_future(cm.forget_user(MEMBER))
+        await asyncio.sleep(0.01)
+        assert not erase.done()                      # the erase queues behind the write in flight
+        state["gate"].set()
+        await asyncio.gather(erase, cm.flush())
+    run(go())
+    assert rows(env) == [] and rows(env, "SELECT * FROM proactive_candidates") == []
+
+
+def test_a_recording_scheduled_before_an_erase_is_dropped_when_it_finally_runs(env):
+    promises = ex(PROMISE_5)
+    run(cm.forget_user(MEMBER))
+    assert run(cm.record(MEMBER, "s1", "r1", promises, (), now=NOW, scheduled_at=0)) == 0      # scheduled in the world before the erase
+    assert rows(env) == []
+    assert run(cm.record(MEMBER, "s1", "r2", promises, (), now=NOW)) == 1                      # a reply AFTER the erase is a new conversation
+
+
+def test_a_sweep_step_in_flight_when_the_member_is_erased_leaves_nothing_behind(env, monkeypatch):
+    """The sweep claimed a promise and is arming its sentence; the erase cannot interleave: it waits for the step, then removes the lot
+    (reverted: the erase runs in the middle and the candidate is inserted after it)."""
+    monkeypatch.setenv(cm.ENV, "enforce")
+    promise(env)
+    real_arm = cm._arm_candidate
+    erase_tasks = []
+
+    async def arm_while_erased(db, *a, **k):
+        erase_tasks.append(asyncio.ensure_future(cm.forget_user(MEMBER)))
+        await asyncio.sleep(0.02)                    # the erase gets every chance to run now
+        return await real_arm(db, *a, **k)
+    monkeypatch.setattr(cm, "_arm_candidate", arm_while_erased)
+
+    async def go():
+        got = await cm.sweep(now=DUE_5 + timedelta(hours=3))
+        await asyncio.gather(*erase_tasks)
+        return got
+    assert run(go()) == {"owned": 1}
+    assert rows(env) == [] and rows(env, "SELECT * FROM proactive_candidates") == []
+
+
+def test_a_promise_whose_subject_was_forgotten_is_never_stored_or_acted_on(env, monkeypatch):
+    import memory_tombstones
+    monkeypatch.setenv(cm.ENV, "enforce")
+    memory_tombstones.clear_all()
+    promise(env, "I'll remind you at 5 to call Marisol.")
+    promise(env, "I'll remind you at 9pm about the bins.", session="s2", reply_id="r2")
+    memory_tombstones.add(MEMBER, "Marisol")                     # forgotten AFTER the promise was recorded
+    try:
+        assert sweep(DUE_5 + timedelta(minutes=3)) == {"forgotten": 1}
+        assert [r["about"] for r in rows(env)] == ["about the bins"] and env["scheduled"] == []
+        assert rows(env, "SELECT * FROM reminders") == [] and rows(env, "SELECT * FROM proactive_candidates") == []
+        assert promise(env, "I'll remind you at 7pm to call Marisol.", session="s3", reply_id="r3") is True       # scheduled ...
+        assert [r["about"] for r in rows(env)] == ["about the bins"]                                                 # ... but not stored
+    finally:
+        memory_tombstones.clear_all()
+
+
+def test_a_reminder_about_something_else_does_not_keep_the_promise(env, monkeypatch):
+    monkeypatch.setenv(cm.ENV, "enforce")
+    promise(env)                                                   # the dentist, at 5
+    reminder(env, title="Take the bins out")                       # same member, same time, another subject
+    assert sweep(DUE_5 + timedelta(minutes=2)) == {"fulfilled": 1}
+    (made,) = rows(env, "SELECT title FROM reminders WHERE title = 'The dentist'")
+    assert made["title"] == "The dentist"
+
+
+@pytest.mark.parametrize("title", ["Dentist", "The dentist appointment", "Dentists - bring forms", "dentist's"])
+def test_a_reminder_about_the_same_subject_keeps_the_promise(env, monkeypatch, title):
+    monkeypatch.setenv(cm.ENV, "enforce")
+    promise(env)
+    reminder(env, title=title)
+    assert sweep(DUE_5 + timedelta(minutes=2)) == {"kept": 1}
+
+
+def test_function_words_do_not_make_two_subjects_the_same(env, monkeypatch):
+    monkeypatch.setenv(cm.ENV, "enforce")
+    promise(env, "I'll remind you at 5 to take the bins out.")
+    reminder(env, title="Call the dentist")                        # shares "the" only
+    assert sweep(DUE_5 + timedelta(minutes=2)) == {"fulfilled": 1}
+
+
+def test_a_promise_with_no_subject_is_kept_by_a_reminder_at_the_time(env, monkeypatch):
+    monkeypatch.setenv(cm.ENV, "enforce")
+    promise(env, "I'll remind you at 5.")
+    reminder(env, title="Anything")
+    assert sweep(DUE_5 + timedelta(minutes=2)) == {"kept": 1}
+
+
+def test_a_swept_row_that_is_still_waiting_cannot_starve_a_later_promise(env, monkeypatch):
+    """SWEEP_BATCH waiting check-backs (open until asked) used to be the same earliest rows on every pass, so a later reminder promise
+    was never checked. Never-checked rows now go first, then the least recently checked."""
+    monkeypatch.setenv(cm.ENV, "enforce")
+    monkeypatch.setattr(cm, "SWEEP_BATCH", 3)
+    for i in range(4):
+        promise(env, "I'll check back in 20 minutes about the dentist.", session=f"w{i}", reply_id=f"w{i}")
+    promise(env, PROMISE_5, session="late", reply_id="late")        # due 17:00, long after the check-backs' 06:20
+    at = DUE_5 + timedelta(minutes=30)                             # past the fulfil grace: she owns it up
+    sweep(at)                                                      # the first three waiting rows take the whole batch
+    sweep(at + timedelta(minutes=6))                               # the never-checked ones (the 4th waiting row, the reminder) go first
+    assert rows(env, "SELECT status FROM commitments WHERE reply_id = 'late'")[0]["status"] == "owned"
+
+
+def test_write_failures_are_logged_at_warning(env, caplog):
+    caplog.set_level(logging.DEBUG)
+    env["db"].conn.execute("DROP TABLE commitments")
+    promise(env)
+    sweep(DUE_5 + timedelta(hours=1))
+    run(cm.forget_user(MEMBER))
+    warned = [r for r in caplog.records if r.levelno >= logging.WARNING and r.name == "commitments"]
+    assert len(warned) >= 3, [r.getMessage() for r in caplog.records]
+    assert all("dentist" not in r.getMessage().lower() for r in warned)
+
+
+def test_the_kill_switch_stops_sentences_that_are_already_queued(env, monkeypatch):
+    monkeypatch.setenv(cm.ENV, "enforce")
+    promise(env)
+    stale = DUE_5 + timedelta(hours=3)
+    assert sweep(stale) == {"owned": 1}
+    env["now"] = stale + timedelta(minutes=1)
+    assert run(pull.pending_state(MEMBER, env["now"]))["count"] == 1                    # the control: enforcing, it is pending
+    for off in ("shadow", "off"):
+        monkeypatch.setenv(cm.ENV, off)
+        assert run(pull.pending_state(MEMBER, env["now"]))["count"] == 0, off
+        res = run(pull.pull(MEMBER, "s9", channel="chat", now=env["now"]))
+        assert res.reply == pull.EMPTY_REPLY and res.delivered == 0, off
+    monkeypatch.setenv(cm.ENV, "enforce")
+    assert run(pull.pull(MEMBER, "s9", channel="chat", now=env["now"])).delivered == 1   # nothing was consumed while it was off
+
+
+def test_the_late_reminder_goes_through_the_reminder_service(env, monkeypatch):
+    import reminder_service
+    calls = []
+    real = reminder_service.create_reminder_record
+
+    async def spy(payload, **kw):
+        calls.append((payload.title, kw["user"]["user_id"], kw["now_utc"]))
+        return await real(payload, **kw)
+    monkeypatch.setattr(reminder_service, "create_reminder_record", spy)
+    monkeypatch.setenv(cm.ENV, "enforce")
+    promise(env)
+    late = DUE_5 + timedelta(minutes=3)
+    assert sweep(late) == {"fulfilled": 1}
+    assert calls == [("The dentist", MEMBER, late)]
+    (n,) = rows(env, "SELECT type, user_id, message FROM notifications")                # the service's own creation notification
+    assert (n["type"], n["user_id"], n["message"]) == ("reminder_created", MEMBER, "Reminder added: The dentist")
+
+
+def test_a_role_that_may_not_create_reminders_gets_none_and_the_promise_is_owned_up(env, monkeypatch):
+    env["db"].conn.execute("CREATE TABLE users (id TEXT, role TEXT, name TEXT)")
+    env["db"].conn.execute("INSERT INTO users VALUES (?, 'guest', 'x')", (MEMBER,))
+    env["db"].conn.commit()
+    monkeypatch.setenv(cm.ENV, "enforce")
+    promise(env)
+    assert sweep(DUE_5 + timedelta(minutes=3)) == {"owned": 1}
+    assert rows(env, "SELECT * FROM reminders") == [] and env["scheduled"] == []

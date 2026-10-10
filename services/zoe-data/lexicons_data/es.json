@@ -450,6 +450,7 @@
    "connectors": ["sobre", "acerca\\s+de"],
    "stop": ["eso", "esto", "ello", "ti", "m\u00ed"],
    "trim": ["el", "la", "en", "a", "por", "y", "o", "de"],
+   "match_ignore": ["el", "la", "los", "las", "un", "una", "unos", "unas", "de", "del", "al", "en", "por", "para", "con", "mi", "tu", "su", "mis", "tus", "sus", "que", "lo", "les", "sobre", "mañana", "hoy", "luego", "recordar", "recordatorio"],
    "max_chars": 80
   },
   "say": {

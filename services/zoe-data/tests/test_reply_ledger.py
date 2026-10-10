@@ -25,6 +25,7 @@ import asyncio
 import contextlib
 import importlib.util
 import json
+import logging
 import sqlite3
 from pathlib import Path
 
@@ -36,6 +37,7 @@ import db_compat
 import memory_provenance as mp
 import provenance_answers as pa
 import reply_ledger as rl
+import user_erase_gate as erase_gate
 from db_pool import _Cursor, _ExecResult
 # the fixtures and helpers of the BM5 suite (autouse clock/flag reset, the fake memory store, the seed helpers)
 from test_provenance_answers import (  # noqa: F401
@@ -89,10 +91,10 @@ def ledger_db(monkeypatch, tmp_path):
     monkeypatch.setattr(db_compat, "get_compat_db", fake_db)
     monkeypatch.delenv(rl.ENV, raising=False)
     monkeypatch.setenv("ZOE_COMMITMENTS", "off")           # this file is about the ledger; the promise tracker has its own
-    rl._pending.clear()
-    rl._last_purge = 0.0
+    erase_gate.reset()
+    monkeypatch.setattr(rl, "_pending", set())          # module globals through monkeypatch: restored after the test, never leaked
+    monkeypatch.setattr(rl, "_last_purge", 0.0)
     yield db
-    rl._pending.clear()
 
 
 async def _turn(user, message, reply, *, session="s1", svc_rows=(), tools=("recall_memory",)):
@@ -379,3 +381,95 @@ def test_the_migration_is_the_next_one_and_single_headed():
         revs[re.search(r'^revision = "(\w+)"', text, re.M).group(1)] = re.search(r'^down_revision = "?(\w+)"?', text, re.M).group(1)
     heads = set(revs) - set(revs.values())
     assert heads == {max(revs)} and revs["0044"] == "0043"
+
+
+# ── review round 1 (Greptile on #1981): each test fails when its fix is reverted ─────────────────
+
+def _rec(rid, ts=NOW, session="s1"):
+    return mp.ReplyRecord(seq=1, ts=ts, kind="direct", tier="tier0", domain="time", session_id=session, reply_id=rid)
+
+
+def test_a_skipped_off_record_reply_is_not_followed_by_the_reply_before_it_after_a_restart(svc, ledger_db):
+    """A clock reply is persisted; the NEXT reply is off the record and skipped; zoe-data restarts. 'Why did you say that?' must not be
+    answered with the clock reply (it is not the reply being asked about): it is 'I can't tell'."""
+    async def clock():
+        mp.note_user_turn(UID, "what time is it", "s1")
+        mp.note_direct_reply(UID, "tier0", "s1", domain="time")
+        await rl.flush()
+    asyncio.run(clock())
+    assert len(ledger_db.rows("SELECT * FROM reply_sources")) == 1
+    asyncio.run(_turn(UID, "Off the record: my sister Marisol is flying in from Lisbon on Thursday", REPLY_SISTER, session="s1"))
+    assert ledger_db.rows("SELECT * FROM reply_sources") == []                      # the skipped reply left nothing, and took the stale row
+    restart()
+    assert ask_why(svc) == pa.UNKNOWN_REPLY
+
+
+def test_a_skipped_reply_only_drops_its_own_conversations_rows(svc, ledger_db):
+    async def go():
+        for sid in ("s1", "s2"):
+            mp.note_user_turn(UID, "what time is it", sid)
+            mp.note_direct_reply(UID, "tier0", sid, domain="time")
+        await rl.flush()
+    asyncio.run(go())
+    asyncio.run(_turn(UID, "Off the record: my sister Marisol is flying in", REPLY_SISTER, session="s1"))
+    assert [r["session_id"] for r in ledger_db.rows("SELECT session_id FROM reply_sources")] == ["s2"]
+
+
+def test_the_reply_time_is_stored_as_double_precision_not_real(monkeypatch):
+    """PostgreSQL REAL is 4 bytes: an epoch near 1.8e9 rounds to a multiple of 128 s, so replies a minute apart tie in ORDER BY ts DESC.
+    (SQLite stores any numeric type name as an 8-byte float, so only the DDL text can show it here.)"""
+    import re
+    import alembic.op as alembic_op
+    statements: list = []
+    monkeypatch.setattr(alembic_op, "execute", lambda sql: statements.append(str(sql)))
+    spec = importlib.util.spec_from_file_location("mig_0044_ddl", SVC / "alembic/versions/0044_reply_sources_commitments.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod.upgrade()
+    (ddl,) = [s for s in statements if "CREATE TABLE IF NOT EXISTS reply_sources" in s]
+    col = re.search(r"^\s*ts\s+([A-Za-z]+(?: [A-Za-z]+)?)\s", ddl, re.M).group(1)
+    assert col.upper() == "DOUBLE PRECISION", col
+    assert not re.search(r"\bREAL\b", " ".join(statements), re.I)
+
+
+def test_a_reply_write_scheduled_before_an_erase_does_not_land_after_it(ledger_db):
+    asyncio.run(rl.forget_user(UID))
+    assert asyncio.run(rl.write(UID, _rec("r000000000000001"), 0)) is False                 # scheduled in the world before the erase
+    assert ledger_db.rows("SELECT * FROM reply_sources") == []
+    assert asyncio.run(rl.write(UID, _rec("r000000000000002"))) is True                    # a reply after the erase is a new conversation
+
+
+def test_a_reply_write_waiting_for_a_connection_does_not_land_after_the_erase_finished(ledger_db, monkeypatch):
+    real = db_compat.get_compat_db
+    state = {"calls": 0, "gate": None}
+
+    @contextlib.asynccontextmanager
+    async def slow():
+        state["calls"] += 1
+        if state["calls"] == 1:                     # the write's own connection request waits (a pool under load)
+            await state["gate"].wait()
+        async with real() as db:
+            yield db
+    monkeypatch.setattr(db_compat, "get_compat_db", slow)
+
+    async def go():
+        state["gate"] = asyncio.Event()
+        assert rl.schedule(UID, _rec("r000000000000003"))
+        await asyncio.sleep(0)
+        erase = asyncio.ensure_future(rl.forget_user(UID))
+        await asyncio.sleep(0.01)
+        assert not erase.done()                     # the erase queues behind the write in flight
+        state["gate"].set()
+        await asyncio.gather(erase, rl.flush())
+    asyncio.run(go())
+    assert ledger_db.rows("SELECT * FROM reply_sources") == []
+
+
+def test_failed_writes_and_failed_erasures_are_logged_at_warning(svc, caplog):
+    """No ``ledger_db``: ``get_compat_db`` has no pool, so every database call fails."""
+    caplog.set_level(logging.DEBUG)
+    assert asyncio.run(rl.write(UID, _rec("r000000000000004"))) is False
+    assert asyncio.run(rl.forget_user(UID)) == 0
+    assert asyncio.run(rl.forget_conversation(UID, "s1")) == 0
+    warned = [r for r in caplog.records if r.levelno >= logging.WARNING and r.name == "reply_ledger"]
+    assert len(warned) == 3, [r.getMessage() for r in caplog.records]

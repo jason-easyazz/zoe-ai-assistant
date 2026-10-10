@@ -18,7 +18,9 @@ in-process ledger only, and no commitment is recorded.
     after 14 days and the forget cascade removes one naming a forgotten entity.
 
 Timestamps are TEXT UTC (``%Y-%m-%dT%H:%M:%SZ``) like ``proactive_candidates``; ``reply_sources.ts`` is the epoch the
-in-process ledger uses. ``IF NOT EXISTS`` runs unchanged on PostgreSQL and SQLite, so reruns are safe (0025/0030/0033/0036
+in-process ledger uses, held as DOUBLE PRECISION: a PostgreSQL ``REAL`` is 4 bytes, so an epoch near 1.8e9 would be rounded to a
+multiple of 128 seconds - replies a minute apart would tie in ``ORDER BY ts DESC`` and a stored time could round past the
+60-second future check (SQLite stores any numeric type name as an 8-byte float, so only PostgreSQL would have shown it). ``IF NOT EXISTS`` runs unchanged on PostgreSQL and SQLite, so reruns are safe (0025/0030/0033/0036
 convention). No FK to ``users`` (the bar's per-table ``user_id`` teardown sweeps the rows by exact demo id). The downgrade
 drops both tables.
 """
@@ -37,7 +39,7 @@ def upgrade() -> None:
                user_id TEXT NOT NULL,
                session_id TEXT NOT NULL,
                reply_id TEXT NOT NULL,
-               ts REAL NOT NULL,
+               ts DOUBLE PRECISION NOT NULL,
                kind TEXT NOT NULL,
                tier TEXT NOT NULL DEFAULT '',
                domain TEXT NOT NULL DEFAULT '',

@@ -148,10 +148,16 @@ def rig(env: dict):
     import db_compat
     import commitments
     import memory_provenance as mp
+    import proactive.triggers.reminder_scan as reminder_scan
+    import proactive.triggers.reminders as reminder_scheduler
     import reply_ledger
+    import user_erase_gate
+    import zoneinfo
 
     saved_env = {k: os.environ.get(k) for k in _ENV_KEYS}
+    saved_tz = reminder_scan._ZOE_TZ       # read from the environment when the module is first imported: pin it to the rig's clock
     saved_db = db_compat.get_compat_db
+    saved_scheduler = reminder_scheduler.schedule_reminder     # the real one binds ``_get_compat_db`` at import: stub the whole boundary
     with tempfile.TemporaryDirectory(prefix="promise_cells_") as tmp:
         path = str(Path(tmp) / "bar.db")
         _migrate(path, "0033_proactive_candidates.py", "0036_proactive_deliveries.py", "0041_proactive_ledger_lines.py",
@@ -161,25 +167,44 @@ def rig(env: dict):
             "CREATE TABLE reminders (id TEXT PRIMARY KEY, user_id TEXT, title TEXT, description TEXT, reminder_type TEXT, category TEXT, "
             "priority TEXT, due_date TEXT, due_time TEXT, recurring_pattern TEXT, is_active INTEGER DEFAULT 1, acknowledged INTEGER DEFAULT 0, "
             "snoozed_until TEXT, visibility TEXT, deleted INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT)")
+        db.conn.execute(      # the table reminder_service's creation notification writes to (NOW() is registered below)
+            "CREATE TABLE notifications (id TEXT PRIMARY KEY, user_id TEXT, type TEXT, title TEXT, message TEXT, data TEXT, "
+            "delivered INTEGER DEFAULT 0, created_at TEXT)")
+        db.conn.create_function("NOW", 0, lambda: NOW.strftime("%Y-%m-%d %H:%M:%S+00"))
         db.conn.commit()
 
         @contextlib.asynccontextmanager
         async def fake_db():
             yield db
 
+        async def fake_schedule(user_id, message, send_at, item_id=""):
+            """The reminder scheduler's boundary, stubbed: the real one binds ``get_compat_db`` when its module is imported and would
+            write outside this rig (or keep this rig's database after it exits)."""
+            db.scheduled.append((user_id, message, item_id))
+            return "stub"
+        db.scheduled = []
+
         for k in _ENV_KEYS:
             os.environ.pop(k, None)
         os.environ.update({"ZOE_TIMEZONE": "UTC", "ZOE_PROACTIVE_SELECTOR": "1", "ZOE_RESTRAINT": "off", "ZOE_EXPERT_ENABLED": "0", **env})
         db_compat.get_compat_db = fake_db
+        reminder_scheduler.schedule_reminder = fake_schedule
+        reminder_scan._ZOE_TZ = zoneinfo.ZoneInfo("UTC")
         mp.reset()
-        reply_ledger._pending.clear()
-        reply_ledger._last_purge = 0.0
-        commitments._pending.clear()
-        commitments._last_purge = 0.0
+        user_erase_gate.reset()
+        saved_globals = {(m, n): getattr(m, n) for m, n in ((reply_ledger, "_pending"), (reply_ledger, "_last_purge"),
+                                                            (commitments, "_pending"), (commitments, "_last_purge"))}
+        reply_ledger._pending, reply_ledger._last_purge = set(), 0.0
+        commitments._pending, commitments._last_purge = set(), 0.0
         try:
             yield db
         finally:
             db_compat.get_compat_db = saved_db
+            reminder_scheduler.schedule_reminder = saved_scheduler
+            reminder_scan._ZOE_TZ = saved_tz
+            for (mod, name), value in saved_globals.items():
+                setattr(mod, name, value)
+            user_erase_gate.reset()
             mp.reset()
             for k, v in saved_env.items():
                 if v is None:

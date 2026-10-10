@@ -29,7 +29,11 @@ What (all deterministic; no model call anywhere on this path).
 
 Statuses: open -> kept | fulfilled | owned (-> surfaced | void) | missed (shadow: a breach she would have acted on) | void.
 Rows are history; the sweep never deletes one. Closed rows are purged after ``RETENTION_S``; the forget cascade drops a row that
-names a forgotten entity (``forget_naming``).
+names a forgotten entity (``erase_entity``) and ``MemoryService.delete_user`` drops a member's rows AND their queued sentences
+(``forget_user``). Forgetting wins every race with a background writer (``user_erase_gate``): a recording or a sweep step waiting on a
+database connection when the erase ran is dropped or removed, and a promise whose subject names a forgotten entity is never stored,
+fulfilled or owned up to. Only ``enforce`` ever delivers a queued sentence: ``proactive.pull.pending_items`` hides every
+``commitment`` candidate in ``shadow`` / ``off`` (the kill switch reaches what is already queued).
 
 VOICE-PATH: the record hook runs in ``brain_dispatch``'s stream ``finally`` (every brain turn, voice included) as a background task;
 it adds no await to the reply. Everything fails soft.
@@ -47,6 +51,7 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Any, Optional, Sequence
 
+import user_erase_gate as erase_gate
 from typed_env import env_str
 
 logger = logging.getLogger(__name__)
@@ -118,6 +123,7 @@ class _Lex:
     connectors: "re.Pattern[str]"
     about_stop: frozenset
     about_trim: frozenset
+    about_ignore: frozenset            # function words that never identify a subject when comparing it with a reminder
     about_max: int
     say: dict
 
@@ -160,6 +166,7 @@ def _lex(lang: str) -> Optional[_Lex]:
             part_pm=frozenset(p.lower() for p in t.get("part_pm") or []), default=tuple(t.get("default") or _DEFAULT_REMINDER_HM),
             connectors=_rx(rf"(?<!\w)(?P<conn>{'|'.join(connectors)})\s+(?P<rest>[^,.;!?\n]+)") if connectors else _rx(r"(?!)"),
             about_stop=frozenset(w.lower() for w in a.get("stop") or []), about_trim=frozenset(w.lower() for w in a.get("trim") or []),
+            about_ignore=frozenset(w.lower() for w in a.get("match_ignore") or []),
             about_max=int(a.get("max_chars") or 80), say=dict(sec.get("say") or {}))
     except Exception as exc:  # noqa: BLE001 - a lexicon that does not compile contributes nothing
         logger.warning("commitments: lexicon %s unusable (%s)", lang, type(exc).__name__)
@@ -422,7 +429,8 @@ def schedule_record(user_id: str, session_id: str, reply_id: str, reply: str, me
         if not promises:
             return False
         loop = asyncio.get_running_loop()
-        task = loop.create_task(record(user_id, session_id, reply_id or uuid.uuid4().hex[:16], promises, tools, now=now))
+        task = loop.create_task(record(user_id, session_id, reply_id or uuid.uuid4().hex[:16], promises, tools, now=now,
+                                       scheduled_at=erase_gate.generation(user_id)))
         _pending.add(task)
         task.add_done_callback(_pending.discard)
         return True
@@ -444,13 +452,30 @@ def _say(lang: str, key: str, about: str) -> str:
     return tpl.replace("{about}", f"{about} " if about else "").strip()
 
 
+async def _names_forgotten(user_id: str, about: str) -> bool:
+    """Does a promise's subject name an entity the member has forgotten (the in-flight tombstone, then the durable ledger)? A promise
+    about a forgotten person is never stored, fulfilled or owned up to. False when nothing can be asked (fail-open: the cascade's own
+    erase is the backstop)."""
+    if not (about or "").strip():
+        return False
+    try:
+        import memory_forgotten
+        import memory_tombstones
+
+        return bool(memory_tombstones.matching_tombstone(user_id, about) or await memory_forgotten.matches(user_id, about))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 async def record(user_id: str, session_id: str, reply_id: str, promises: Sequence[Promise], tools: Sequence[str] = (), *,
-                 now: Optional[datetime] = None) -> int:
+                 now: Optional[datetime] = None, scheduled_at: Optional[int] = None) -> int:
     """Insert one row per promise (idempotent on (user, session, reply, kind, due)); in ``enforce`` also arm a check-back's candidate.
-    Returns the rows inserted. Never raises."""
+    Returns the rows inserted. A recording scheduled before the member was erased (``scheduled_at`` = the erase generation then; none =
+    now) is dropped, and a promise naming a forgotten entity is not stored. Never raises."""
     md = mode()
     if md == "off":
         return 0
+    gen = erase_gate.generation(user_id) if scheduled_at is None else scheduled_at
     made = 0
     try:
         from db_compat import get_compat_db
@@ -459,23 +484,30 @@ async def record(user_id: str, session_id: str, reply_id: str, promises: Sequenc
         stamp = _iso(when)
         tool_json = json.dumps([str(t)[:60] for t in tools][:12])
         has_tool = int(any(t in REMINDER_TOOLS for t in tools))
-        async with get_compat_db() as db:
-            for p in promises:
-                cid = uuid.uuid4().hex
-                cur = await db.execute(
-                    "INSERT INTO commitments (id, user_id, session_id, reply_id, kind, due_at, about, lang, tools, status, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?) ON CONFLICT (user_id, session_id, reply_id, kind, due_at) DO NOTHING",
-                    (cid, user_id, session_id or "", reply_id, p.kind, _iso(p.due), p.about, p.lang, tool_json, stamp))
-                if (getattr(cur, "rowcount", 1) or 0) < 1:
-                    continue
-                made += 1
-                logger.info("COMMITMENT mode=%s event=recorded kind=%s lang=%s due_in_s=%d tool=%d about=%d", md, p.kind, p.lang,
-                            int((p.due - when).total_seconds()), has_tool, int(bool(p.about)))
-                if md == "enforce" and p.kind == "check_back":
-                    await _arm_candidate(db, user_id, cid, "checkback", p, due_hold=True, now=when)
-            await db.commit()
+        async with erase_gate.writing(user_id, gen) as live:        # held from before the connection is asked for, through the commit
+            if not live:
+                logger.info("COMMITMENT mode=%s event=dropped reason=erased_since_scheduled", md)
+                return 0
+            async with get_compat_db() as db:
+                for p in promises:
+                    if await _names_forgotten(user_id, p.about):
+                        logger.info("COMMITMENT mode=%s event=dropped reason=forgotten_subject", md)
+                        continue
+                    cid = uuid.uuid4().hex
+                    cur = await db.execute(
+                        "INSERT INTO commitments (id, user_id, session_id, reply_id, kind, due_at, about, lang, tools, status, created_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?) ON CONFLICT (user_id, session_id, reply_id, kind, due_at) DO NOTHING",
+                        (cid, user_id, session_id or "", reply_id, p.kind, _iso(p.due), p.about, p.lang, tool_json, stamp))
+                    if (getattr(cur, "rowcount", 1) or 0) < 1:
+                        continue
+                    made += 1
+                    logger.info("COMMITMENT mode=%s event=recorded kind=%s lang=%s due_in_s=%d tool=%d about=%d", md, p.kind, p.lang,
+                                int((p.due - when).total_seconds()), has_tool, int(bool(p.about)))
+                    if md == "enforce" and p.kind == "check_back":
+                        await _arm_candidate(db, user_id, cid, "checkback", p, due_hold=True, now=when)
+                await db.commit()
     except Exception as exc:  # noqa: BLE001 - a missing table (0044 not applied) or a DB blip costs only the record
-        logger.debug("commitments: record failed (%s)", type(exc).__name__)
+        logger.warning("commitments: record failed (%s) - the promise is not tracked", type(exc).__name__)
     return made
 
 
@@ -524,44 +556,90 @@ def _reminder_due(row: Any, tz, fallback_date) -> Optional[datetime]:
     return datetime(d.year, d.month, d.day, hm.hour, hm.minute, tzinfo=tz)
 
 
-async def reminder_covers(db, user_id: str, created: datetime, due: datetime) -> Optional[str]:
+def _subject_words(about: str, lx: Optional[_Lex]) -> list:
+    """The content words of a promise's subject ("about the dentist" -> ["dentist"]): the connector and the lexicon's stop words are
+    dropped, words under 3 characters too. [] when the promise named no subject."""
+    if not about or lx is None:
+        return []
+    body = lx.connectors.sub(lambda m: m.group("rest"), about, count=1)
+    return [w for w in re.findall(r"\w+", body.lower())
+            if len(w) >= 3 and w not in lx.about_stop and w not in lx.about_ignore]
+
+
+def _same_word(a: str, b: str) -> bool:
+    """Equal, or one is the other plus a short ending ("dentist" / "dentists" / "dentist's"). Whole words only otherwise."""
+    if a == b:
+        return True
+    short, long_ = (a, b) if len(a) <= len(b) else (b, a)
+    return len(short) >= 4 and long_.startswith(short) and len(long_) - len(short) <= 2
+
+
+def _names_subject(words: list, *texts: Any) -> bool:
+    have = [w for t in texts for w in re.findall(r"\w+", str(t or "").lower())]
+    return any(_same_word(w, h) for w in words for h in have)       # a subject word is >= 3 chars and not a function word
+
+
+async def reminder_covers(db, user_id: str, created: datetime, due: datetime, about: str = "", lang: str = "en") -> Optional[str]:
     """The id of a reminder of ``user_id`` made for this promise - created within ``CREATED_BEFORE_S`` before the promise was recorded
-    (or after it) and due within ``DUE_TOLERANCE_S`` of ``due`` - or None. A reminder the member deleted since counts (their choice,
-    not a broken promise); acknowledged and fired ones count. Reads the member's recent reminders only."""
+    (or after it), due within ``DUE_TOLERANCE_S`` of ``due`` AND, when the promise named a subject (``about``), about that subject (its
+    title or description shares a content word with it) - or None. The member's bins reminder at 5 does not keep Zoe's promise to
+    remind them about the dentist at 5. A promise with no subject has nothing to compare: member + time decide. A reminder the member
+    deleted since counts (their choice, not a broken promise); acknowledged and fired ones count. Reads the member's recent reminders
+    only."""
     from time_utils import zoe_timezone
 
     tz = zoe_timezone()
+    words = _subject_words(about, _lex(lang))
     cur = await db.execute(
-        "SELECT id, due_date, due_time, created_at FROM reminders WHERE user_id = ? ORDER BY created_at DESC LIMIT 60", (user_id,))
+        "SELECT id, title, description, due_date, due_time, created_at FROM reminders WHERE user_id = ? "
+        "ORDER BY created_at DESC LIMIT 60", (user_id,))
     for r in await cur.fetchall():
         made = _parse_created(r["created_at"])
         if made is None or made < created - timedelta(seconds=CREATED_BEFORE_S):
             continue
         rd = _reminder_due(r, tz, due.astimezone(tz).date())
-        if rd is not None and abs((rd - due).total_seconds()) <= DUE_TOLERANCE_S:
-            return str(r["id"])
+        if rd is None or abs((rd - due).total_seconds()) > DUE_TOLERANCE_S:
+            continue
+        if words and not _names_subject(words, r["title"], r["description"]):
+            continue
+        return str(r["id"])
     return None
 
 
 async def _make_reminder(db, user_id: str, title: str, now: datetime) -> str:
-    """Make the reminder through the same table and scheduler a tool-made one uses (``reminder_service.create_reminder_record``'s row;
-    ``proactive.triggers.reminders.schedule_reminder``): due a minute from now, so it fires on the next tick. '' on failure."""
+    """Make the reminder through the one writer every reminder goes through - ``reminder_service.create_reminder_record`` (the role check,
+    the row, the "Reminder Created" notification, the broadcast) - then the scheduler a tool-made one uses
+    (``proactive.triggers.reminders.schedule_reminder``): due a minute from now, so it fires on the next tick. The member's role is read
+    from ``users`` (a tracked member with no row is a plain ``user``); a role that may not create reminders gets none and the promise
+    is owned up to instead. '' on any failure."""
+    from models import ReminderCreate
+    from reminder_service import create_reminder_record
     from time_utils import zoe_timezone
 
     local = (now + timedelta(minutes=1)).astimezone(zoe_timezone())
-    rid = str(uuid.uuid4())
-    await db.execute(
-        "INSERT INTO reminders (id, user_id, title, description, reminder_type, category, priority, due_date, due_time, "
-        "recurring_pattern, is_active, acknowledged, snoozed_until, visibility, deleted) "
-        "VALUES (?, ?, ?, '', 'one-time', 'general', 'normal', ?, ?, NULL, 1, 0, NULL, 'personal', 0)",
-        (rid, user_id, title, local.strftime("%Y-%m-%d"), local.strftime("%H:%M")))
-    await db.commit()
+    try:
+        cur = await db.execute("SELECT role FROM users WHERE id = ?", (user_id,))
+        row = await cur.fetchone()
+        role = (row["role"] if row else None) or "user"
+    except Exception:  # noqa: BLE001 - no users table in this store: the plain-member default
+        role = "user"
+    user = {"user_id": user_id, "role": role}
+    try:
+        made = await create_reminder_record(
+            ReminderCreate(title=title, due_date=local.strftime("%Y-%m-%d"), due_time=local.strftime("%H:%M")), user=user, db=db,
+            now_utc=now)
+        rid = str(made.get("id") or "")
+    except Exception as exc:  # noqa: BLE001 - HTTPException (role / date) or a DB failure: she owns it up instead
+        logger.warning("commitments: late reminder not created (%s)", type(exc).__name__)
+        return ""
+    if not rid:
+        return ""
     try:
         from proactive.triggers.reminders import schedule_reminder
 
         await schedule_reminder(user_id=user_id, message=title, send_at=now + timedelta(seconds=45), item_id=rid)
     except Exception as exc:  # noqa: BLE001 - the scan loop picks the row up if the direct schedule failed
-        logger.debug("commitments: direct schedule failed (%s)", type(exc).__name__)
+        logger.warning("commitments: direct schedule failed (%s) - the reminder scan will fire it", type(exc).__name__)
     return rid
 
 
@@ -602,52 +680,83 @@ async def sweep(*, now: Optional[datetime] = None) -> dict:
 
         now = now or datetime.now(timezone.utc)
         stamp, claim_before = _iso(now), _iso(now - timedelta(seconds=CLAIM_S))
+        seen = erase_gate.snapshot()          # an erase after this point stales every row fetched below for that member
         async with get_compat_db() as db:
+            # Never-checked rows first, then the LEAST recently checked: a row still waiting (a check-back nobody has asked about, an
+            # owned-up promise not yet pulled) is re-claimed on every pass, so ordering by due time alone would let SWEEP_BATCH of
+            # them starve every later promise. Rows claimed inside CLAIM_S are not fetched at all - they would only spend batch slots.
             cur = await db.execute(
                 "SELECT id, user_id, kind, due_at, about, lang, status, created_at FROM commitments "
-                "WHERE status IN ('open', 'owned') AND due_at <= ? ORDER BY due_at LIMIT ?", (stamp, SWEEP_BATCH))
+                "WHERE status IN ('open', 'owned') AND due_at <= ? AND (checked_at IS NULL OR checked_at < ?) "
+                "ORDER BY CASE WHEN checked_at IS NULL THEN 0 ELSE 1 END, checked_at, due_at LIMIT ?",
+                (stamp, claim_before, SWEEP_BATCH))
             rows = list(await cur.fetchall())
-            for r in rows:
-                cid, uid, kind, status = str(r["id"]), str(r["user_id"]), str(r["kind"]), str(r["status"])
-                due = _parse_iso(r["due_at"]) or now
-                created = _parse_iso(r["created_at"]) or due
-                late = (now - due).total_seconds()
-                claimed = await db.execute(
-                    "UPDATE commitments SET checked_at = ? WHERE id = ? AND status = ? AND (checked_at IS NULL OR checked_at < ?)",
-                    (stamp, cid, status, claim_before))
-                if (getattr(claimed, "rowcount", 1) or 0) < 1:
+        for r in rows:
+            uid = str(r["user_id"])
+            # The member's erase gate is taken BEFORE a connection (never while holding one): an erase that ran since the fetch drops
+            # this row's step (it will not recreate a candidate the cascade removed); one still running waits for the step to land.
+            async with erase_gate.writing(uid, seen.get(uid, 0)) as live:
+                if not live:
                     continue
-                verdict = ""
-                try:
-                    if not mp.is_tracked(uid):
-                        await _close(db, cid, "void", "untracked", now)
-                        verdict = "void"
-                    elif status == "owned":
-                        verdict = await _check_owned(db, uid, cid, now)
-                    elif kind == "remind":
-                        verdict = await _check_remind(db, md, r, uid, cid, due, created, late, now)
-                    else:
-                        verdict = await _check_back(db, md, r, uid, cid, due, late, now)
-                except Exception as exc:  # noqa: BLE001 - one bad row never stops the sweep; its claim lapses and it is retried
-                    logger.debug("commitments: check failed (%s)", type(exc).__name__)
-                    continue
-                await db.commit()
-                if verdict:
-                    counts[verdict] = counts.get(verdict, 0) + 1
-                    _log_check(md, kind, verdict, late)
-            t = time.time()
-            if t - _last_purge >= 3600:
-                _last_purge = t
+                async with get_compat_db() as db:
+                    verdict = await _sweep_row(db, md, mp, r, stamp, claim_before, now)
+            if verdict:
+                kind = str(r["kind"])
+                counts[verdict] = counts.get(verdict, 0) + 1
+                _log_check(md, kind, verdict, (now - (_parse_iso(r["due_at"]) or now)).total_seconds())
+        t = time.time()
+        if t - _last_purge >= 3600:
+            _last_purge = t
+            async with get_compat_db() as db:
                 await db.execute("DELETE FROM commitments WHERE status NOT IN ('open', 'owned') AND created_at < ?",
                                  (_iso(now - timedelta(seconds=RETENTION_S)),))
                 await db.commit()
     except Exception as exc:  # noqa: BLE001
-        logger.debug("commitments: sweep failed (%s)", type(exc).__name__)
+        logger.warning("commitments: sweep failed (%s) - promises are not being checked", type(exc).__name__)
     return counts
 
 
+async def _sweep_row(db, md: str, mp, r, stamp: str, claim_before: str, now: datetime) -> str:
+    """Claim one due promise and run its check. The verdict ('' = nothing to count: lost the claim, still waiting, or failed and will be
+    retried). Never raises: a bad row never stops the sweep."""
+    cid, uid, kind, status = str(r["id"]), str(r["user_id"]), str(r["kind"]), str(r["status"])
+    due = _parse_iso(r["due_at"]) or now
+    created = _parse_iso(r["created_at"]) or due
+    late = (now - due).total_seconds()
+    try:
+        claimed = await db.execute(
+            "UPDATE commitments SET checked_at = ? WHERE id = ? AND status = ? AND (checked_at IS NULL OR checked_at < ?)",
+            (stamp, cid, status, claim_before))
+        if (getattr(claimed, "rowcount", 1) or 0) < 1:
+            return ""
+        if not mp.is_tracked(uid):
+            await _close(db, cid, "void", "untracked", now)
+            verdict = "void"
+        elif await _names_forgotten(uid, str(r["about"] or "")):      # the subject was forgotten since the promise: never act on it
+            await _drop(db, uid, cid)
+            verdict = "forgotten"
+        elif status == "owned":
+            verdict = await _check_owned(db, uid, cid, now)
+        elif kind == "remind":
+            verdict = await _check_remind(db, md, r, uid, cid, due, created, late, now)
+        else:
+            verdict = await _check_back(db, md, r, uid, cid, due, late, now)
+        await db.commit()
+        return verdict
+    except Exception as exc:  # noqa: BLE001 - its claim lapses (CLAIM_S) and it is retried
+        logger.warning("commitments: check failed (%s) - the promise will be retried", type(exc).__name__)
+        return ""
+
+
+async def _drop(db, user_id: str, cid: str) -> None:
+    """Delete one promise and its queued sentence (the erase path)."""
+    await db.execute("DELETE FROM proactive_candidates WHERE user_id = ? AND kind = 'commitment' AND source_ref = ?",
+                     (user_id, f"commitments:{cid}"))
+    await db.execute("DELETE FROM commitments WHERE id = ?", (cid,))
+
+
 async def _check_remind(db, md, r, uid, cid, due, created, late, now) -> str:
-    rid = await reminder_covers(db, uid, created, due)
+    rid = await reminder_covers(db, uid, created, due, str(r["about"] or ""), str(r["lang"] or "en"))
     if rid:
         await _close(db, cid, "kept", "reminder_exists", now, reminder_id=rid)
         return "kept"
@@ -705,33 +814,43 @@ async def _check_owned(db, uid, cid, now) -> str:
 # ── the forget cascade ──────────────────────────────────────────────────────────────────────────────────
 
 async def forget_user(user_id: str) -> int:
-    """Drop every commitment of a member (the right-to-be-forgotten path, ``MemoryService.delete_user``). Count; 0 on failure."""
+    """Drop every commitment of a member AND the sentences already queued from them (the right-to-be-forgotten path,
+    ``MemoryService.delete_user``): an armed check-back or owning-up still names the person's subject and the next pull would speak it.
+    Takes the member's erase gate: a recording or sweep step in flight lands first and is removed with the rest, and one scheduled
+    before this ran is dropped. Count of promises removed; 0 on failure (logged at WARNING: a failed erase must be visible)."""
     try:
         from db_compat import get_compat_db
 
-        async with get_compat_db() as db:
-            cur = await db.execute("DELETE FROM commitments WHERE user_id = ?", (user_id,))
-            await db.commit()
-            return int(getattr(cur, "rowcount", 0) or 0)
-    except Exception:  # noqa: BLE001
+        async with erase_gate.erasing(user_id):
+            async with get_compat_db() as db:
+                cur = await db.execute("DELETE FROM commitments WHERE user_id = ?", (user_id,))
+                n = int(getattr(cur, "rowcount", 0) or 0)
+                await db.execute("DELETE FROM proactive_candidates WHERE user_id = ? AND kind = 'commitment'", (user_id,))
+                await db.commit()
+                return n
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("commitments: promises and queued sentences NOT erased for a forgotten user (%s)", type(exc).__name__)
         return 0
 
 
 async def erase_entity(user_id: str, rx: "re.Pattern[str]") -> int:
-    """Delete the member's commitments whose subject names the forgotten entity (``rx``, the cascade's whole-word name pattern). The
-    matching candidates in the pull queue are the cascade's own ``proactive_candidates`` step. Returns the count; 0 on any failure."""
+    """Delete the member's commitments whose subject names the forgotten entity (``rx``, the cascade's whole-word name pattern) and the
+    sentence each one queued. Takes the member's erase gate (without staling their other writes): a recording in flight waits, and
+    its subject is checked against the forgotten ledger when it lands. Returns the count; 0 on any failure (logged at WARNING)."""
     try:
         from db_compat import get_compat_db
 
         n = 0
-        async with get_compat_db() as db:
-            cur = await db.execute("SELECT id, about FROM commitments WHERE user_id = ?", (user_id,))
-            for r in await cur.fetchall():
-                if r["about"] and rx.search(str(r["about"])):
-                    await db.execute("DELETE FROM commitments WHERE id = ?", (str(r["id"]),))
-                    n += 1
-            if n:
-                await db.commit()
+        async with erase_gate.erasing(user_id, bump=False):
+            async with get_compat_db() as db:
+                cur = await db.execute("SELECT id, about FROM commitments WHERE user_id = ?", (user_id,))
+                for r in await cur.fetchall():
+                    if r["about"] and rx.search(str(r["about"])):
+                        await _drop(db, user_id, str(r["id"]))
+                        n += 1
+                if n:
+                    await db.commit()
         return n
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("commitments: promises naming a forgotten entity NOT erased (%s)", type(exc).__name__)
         return 0

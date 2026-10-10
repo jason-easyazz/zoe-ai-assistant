@@ -166,6 +166,17 @@ def _member(uid: str) -> bool:
     return bool(uid) and uid not in GUEST_USERS and _eligible(uid)
 
 
+def _commitments_enforced() -> bool:
+    """Only ``ZOE_COMMITMENTS=enforce`` may deliver Zoe's queued promise sentences (apologies, check-backs). A read per call; an
+    unreadable mode is not enforcing."""
+    try:
+        import commitments
+
+        return commitments.mode() == "enforce"
+    except Exception:  # noqa: BLE001
+        return False
+
+
 async def pending_items(db, uid: str, now: datetime | None = None) -> list[Item]:
     """The selector's candidates it would still raise, highest salience first: not expired, out
     of cooldown, raised fewer than ``MAX_SURFACED`` times. A read - nothing is generated."""
@@ -179,9 +190,12 @@ async def pending_items(db, uid: str, now: datetime | None = None) -> list[Item]
     ) as cur:
         rows = [tuple(r) for r in await cur.fetchall()]
     items: list[Item] = []
+    commitments_live = _commitments_enforced()
     for r in rows:
         if str(r[7]) <= stamp or (r[8] and str(r[8]) > stamp) or int(r[9] or 0) >= MAX_SURFACED:
             continue
+        if str(r[1]) == "commitment" and not commitments_live:
+            continue        # the kill switch (ZOE_COMMITMENTS off | shadow) reaches sentences already queued: nothing is delivered or counted
         try:
             sal = float(r[5] or 0)
         except (TypeError, ValueError):

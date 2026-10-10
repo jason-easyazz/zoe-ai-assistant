@@ -890,6 +890,7 @@
    "connectors": ["about", "regarding", "to", "of"],
    "stop": ["it", "that", "this", "them", "you", "me", "then", "there", "later", "again", "now"],
    "trim": ["on", "at", "by", "in", "around", "this", "next", "for", "and", "or", "then"],
+   "match_ignore": ["a", "an", "the", "my", "your", "our", "his", "her", "their", "its", "some", "any", "and", "for", "with", "from", "into", "out", "off", "up", "that", "this", "these", "those", "them", "you", "about", "regarding", "tomorrow", "today", "tonight", "later", "soon", "again", "remind", "reminder", "check", "back", "ping", "nudge"],
    "max_chars": 80
   },
   "say": {

@@ -172,14 +172,16 @@ async def _create_notification(db, *, user_id: str, notif_type: str, title: str,
     )
 
 
-async def create_reminder_record(payload: ReminderCreate, *, user: Mapping[str, object], db) -> dict:
-    """Create a reminder with the same policy, notification, and broadcast behavior as the API route."""
+async def create_reminder_record(payload: ReminderCreate, *, user: Mapping[str, object], db,
+                                 now_utc: datetime | None = None) -> dict:
+    """Create a reminder with the same policy, notification, and broadcast behavior as the API route. ``now_utc`` (a background caller
+    that runs on an injected clock, e.g. ``commitments``) is the instant "today" is resolved against; none = the wall clock."""
     await require_feature_access(db, user, feature="reminders", action="create")
     user_id = str(user["user_id"])
     reminder_id = str(uuid.uuid4())
-    due_date = normalize_due_date(payload.due_date)
+    due_date = normalize_due_date(payload.due_date, now_utc=now_utc)
     due_time = normalize_due_time(payload.due_time)
-    recurring_pattern, due_date = normalize_recurrence_fields(payload.recurring_pattern, due_date, due_time)
+    recurring_pattern, due_date = normalize_recurrence_fields(payload.recurring_pattern, due_date, due_time, now_utc=now_utc)
     reminder_type = payload.reminder_type
     if recurring_pattern and reminder_type == "one-time":
         reminder_type = "recurring"

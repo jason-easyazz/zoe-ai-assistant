@@ -12,7 +12,9 @@ What. One small row per reply in ``reply_sources`` (migration 0044), keyed by (u
   * Per CONVERSATION. The read is by (user, session): a voice session never explains a chat reply and a chat never explains the
     voice. A turn with no session id writes nothing and reads nothing - no key, no claim.
   * Off the record and distress turns are never written (the existing primitives: ``memory_provenance.is_off_record`` /
-    ``reply_is_off_record``, which fold in ``distress_handoff``), and a guest / unregistered id keeps no state at all.
+    ``reply_is_off_record``, which fold in ``distress_handoff``), and a guest / unregistered id keeps no state at all. A skipped reply
+    is also the conversation's NEWEST reply, so the conversation's earlier persisted rows are dropped with it: after a restart the
+    ledger must say "I can't tell", never explain the reply BEFORE the skipped one (``forget_conversation``).
   * Short retention (``RETENTION_S`` = 3 days), purged on write at most every ``PURGE_EVERY_S``.
 
 The write is fire-and-forget (a task on the running loop): a reply never waits for it and a failed write costs only the persisted
@@ -34,6 +36,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional, Sequence
 
 import memory_provenance as mp
+import user_erase_gate as erase_gate
 from typed_env import env_bool
 
 logger = logging.getLogger(__name__)
@@ -120,44 +123,88 @@ def _from_row(row: Any) -> Optional["mp.ReplyRecord"]:
         return None
 
 
-async def write(user_id: str, rec: "mp.ReplyRecord") -> bool:
-    """Insert one reply row (idempotent on the key). False on any failure. Never raises."""
+async def write(user_id: str, rec: "mp.ReplyRecord", scheduled_at: Optional[int] = None) -> bool:
+    """Insert one reply row (idempotent on the key). False on any failure, and when the user was erased after the write was scheduled
+    (``scheduled_at`` = the erase generation then; none = now). Never raises."""
     global _last_purge
+    gen = erase_gate.generation(user_id) if scheduled_at is None else scheduled_at
     try:
-        from db_compat import get_compat_db
+        async with erase_gate.writing(user_id, gen) as live:
+            if not live:        # the right-to-be-forgotten path ran since this reply: it must not come back
+                logger.info("REPLY_LEDGER dropped reason=erased_since_scheduled")
+                return False
+            from db_compat import get_compat_db
 
-        async with get_compat_db() as db:
-            await db.execute(
-                "INSERT INTO reply_sources (user_id, session_id, reply_id, ts, kind, tier, domain, served, sources, extra, tools, "
-                "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (user_id, session_id, reply_id) DO NOTHING",
-                _to_row(user_id, rec))
-            now = float(rec.ts)      # the ledger's own clock (injectable), so a purge can never take the row it just wrote
-            if now - _last_purge >= PURGE_EVERY_S:
-                _last_purge = now
-                await db.execute("DELETE FROM reply_sources WHERE created_at < ?", (_iso(now - RETENTION_S),))
-            await db.commit()
+            async with get_compat_db() as db:
+                await db.execute(
+                    "INSERT INTO reply_sources (user_id, session_id, reply_id, ts, kind, tier, domain, served, sources, extra, tools, "
+                    "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (user_id, session_id, reply_id) DO NOTHING",
+                    _to_row(user_id, rec))
+                now = float(rec.ts)      # the ledger's own clock (injectable), so a purge can never take the row it just wrote
+                if now - _last_purge >= PURGE_EVERY_S:
+                    _last_purge = now
+                    await db.execute("DELETE FROM reply_sources WHERE created_at < ?", (_iso(now - RETENTION_S),))
+                await db.commit()
         return True
     except Exception as exc:  # noqa: BLE001 - the reply is already out; a failed write costs only the persisted record
-        logger.debug("reply_ledger: write failed (%s)", type(exc).__name__)
+        logger.warning("reply_ledger: write failed (%s) - the reply is not in the persisted ledger", type(exc).__name__)
         return False
+
+
+async def forget_conversation(user_id: str, session_id: str, scheduled_at: Optional[int] = None) -> int:
+    """Drop a conversation's persisted rows. Called when its newest reply is NOT persisted (off the record / distress): the older
+    row would otherwise be served as "the previous reply" after a restart. Returns the row count; 0 on failure. Never raises."""
+    sid = (session_id or "").strip()
+    if not sid:
+        return 0
+    gen = erase_gate.generation(user_id) if scheduled_at is None else scheduled_at
+    try:
+        async with erase_gate.writing(user_id, gen) as live:
+            if not live:
+                return 0
+            from db_compat import get_compat_db
+
+            async with get_compat_db() as db:
+                cur = await db.execute("DELETE FROM reply_sources WHERE user_id = ? AND session_id = ?", (user_id, sid))
+                await db.commit()
+                return int(getattr(cur, "rowcount", 0) or 0)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("reply_ledger: conversation rows not dropped (%s)", type(exc).__name__)
+        return 0
+
+
+#: skip reasons that mean "a reply WAS made and is not persisted": the conversation's persisted newest reply is now stale
+_SUPERSEDING = ("off_record", "distress", "wall_error")
+
+
+def _spawn(coro) -> bool:
+    task = asyncio.get_running_loop().create_task(coro)
+    _pending.add(task)
+    task.add_done_callback(_pending.discard)
+    return True
 
 
 def schedule(user_id: str, rec: "mp.ReplyRecord", message: str = "") -> bool:
     """Persist ``rec`` in the background if it may be persisted. True when a write was scheduled. Never raises, never blocks."""
+    coro = None
     try:
         reason = skip_reason(user_id, rec.session_id, message)
         if reason:
             if reason in ("off_record", "distress"):
                 logger.info("REPLY_LEDGER skipped reason=%s", reason)
+            if reason in _SUPERSEDING:
+                coro = forget_conversation(user_id, rec.session_id, erase_gate.generation(user_id))
+                _spawn(coro)
             return False
-        loop = asyncio.get_running_loop()
-        task = loop.create_task(write(user_id, rec))
-        _pending.add(task)
-        task.add_done_callback(_pending.discard)
-        return True
+        coro = write(user_id, rec, erase_gate.generation(user_id))
+        return _spawn(coro)
     except RuntimeError:        # no running loop (a sync caller / a test): nothing to schedule on
+        if coro is not None:
+            coro.close()
         return False
     except Exception:  # noqa: BLE001
+        if coro is not None:
+            coro.close()
         return False
 
 
@@ -194,13 +241,16 @@ async def read_latest(user_id: str, session_id: str, *, now: Optional[float] = N
 
 
 async def forget_user(user_id: str) -> int:
-    """Drop a user's persisted replies (the right-to-be-forgotten path). Returns the row count removed; 0 on failure."""
+    """Drop a user's persisted replies (the right-to-be-forgotten path). Returns the row count removed; 0 on failure. Takes the user's
+    erase gate: a write already in flight lands first and is removed with the rest; a write scheduled before this ran is dropped."""
     try:
         from db_compat import get_compat_db
 
-        async with get_compat_db() as db:
-            cur = await db.execute("DELETE FROM reply_sources WHERE user_id = ?", (user_id,))
-            await db.commit()
-            return int(getattr(cur, "rowcount", 0) or 0)
-    except Exception:  # noqa: BLE001
+        async with erase_gate.erasing(user_id):
+            async with get_compat_db() as db:
+                cur = await db.execute("DELETE FROM reply_sources WHERE user_id = ?", (user_id,))
+                await db.commit()
+                return int(getattr(cur, "rowcount", 0) or 0)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("reply_ledger: persisted replies NOT erased for a forgotten user (%s)", type(exc).__name__)
         return 0

@@ -53,6 +53,29 @@ def test_s33_goes_red_if_the_users_own_words_were_recorded():
     assert pc.score_s33({**good, "user_rows": 1})[0] == "FAIL" and res["S33"][0] == "PASS"
 
 
+def test_the_rig_stubs_the_reminder_scheduler_and_restores_every_global_it_touched():
+    """The real scheduler module binds ``get_compat_db`` when it is imported: left unstubbed, a warm import writes outside the rig and a
+    cold one keeps the rig's database after it exits. The rig stubs the boundary and puts back everything it replaced."""
+    import asyncio
+
+    import commitments
+    import db_compat
+    import proactive.triggers.reminder_scan as scan
+    import proactive.triggers.reminders as sched
+    import reply_ledger
+
+    touched = [(sched, "schedule_reminder"), (scan, "_ZOE_TZ"), (db_compat, "get_compat_db"), (commitments, "_pending"),
+               (commitments, "_last_purge"), (reply_ledger, "_pending"), (reply_ledger, "_last_purge")]
+    before = [getattr(m, n) for m, n in touched]
+    real_scheduler = sched.schedule_reminder
+    with pc.rig({"ZOE_COMMITMENTS": "enforce"}) as db:
+        assert sched.schedule_reminder is not real_scheduler
+        ev = asyncio.run(pc._flow_s33())
+        assert ev["reminders_made"] == 1
+        assert [(u, m) for u, m, _ in db.scheduled] == [(pc.USER, "The school pickup")]      # went to the stub, not the real scheduler
+    assert all(getattr(m, n) is old for (m, n), old in zip(touched, before))
+
+
 def test_the_bar_declares_the_cells_and_runs_them_without_the_live_service():
     assert {"S32", "S33"} <= set(sb.SCENARIO_IDS)
     assert {s["id"] for s in sb.SCENARIOS} == set(sb.SCENARIO_IDS)
