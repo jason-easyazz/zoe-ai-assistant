@@ -256,3 +256,10 @@ def test_a_physical_danger_is_not_swallowed_by_the_self_harm_cooldown(bell, monk
     assert execute.await_count == 3
     run(dh._notify("kid_1", sad, True))                                               # self-harm keeps its 6 h window
     assert execute.await_count == 3
+
+
+def test_cooldown_keys_cannot_collide_across_member_ids(bell):
+    execute, _bc = bell
+    run(dh._notify("alice", dh.detect("someone is breaking into the house"), True))
+    run(dh._notify("alice:danger", dh.detect("I want to die"), True))                # a different member whose id looks like the old key
+    assert execute.await_count == 2
