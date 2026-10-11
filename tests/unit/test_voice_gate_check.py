@@ -148,6 +148,78 @@ def test_non_voice_change_needs_no_gate():
         ["services/zoe-ui/index.html", "docs/x.md"], vgc.VOICE_PATH_PATTERNS) == []
 
 
+@pytest.mark.parametrize("path", [
+    # Open problem 2026-10-11 'Voice gate scope': these matched the substring globs by
+    # NAME. #1986's docs-only Kokoro note counted as a voice-runtime change and the
+    # deploy gate refused the deploys after it.
+    "docs/knowledge/kokoro-onnx-migration.md",
+    "docs/knowledge/kokoro-streaming-first-chunk-2026-10-10.md",
+    "docs/knowledge/moonshine-0-1-5-upgrade.md",
+    "docs/research/silero-vad-notes.md",
+    "docs/kokoro/deep/nested/notes.md",
+])
+def test_docs_are_never_voice_scope_even_when_a_substring_glob_matches_the_name(path):
+    import fnmatch
+    pats = vgc.voice_path_patterns()
+    assert any(fnmatch.fnmatch(path, p) for p in pats), "precondition: the glob alone WOULD match"
+    assert vgc.touched_voice_files([path], pats) == []
+    needs, hits, _ = vgc.scope_verdict([path], pats)
+    assert needs is False and hits == []
+
+
+@pytest.mark.parametrize("path", [
+    "services/zoe-data/routers/voice_tts.py",          # a literal entry
+    "scripts/setup/kokoro_sidecar.py",                 # the *kokoro* glob, code
+    "scripts/setup/build_kokoro_venv.sh",
+    "services/zoe-core/kokoro/anything.json",
+    "services/zoe-data/voice_vad.py",
+    "scripts/perf/moonshine_probe.py",
+])
+def test_voice_code_is_still_voice_scope_beside_a_docs_note(path):
+    pats = vgc.voice_path_patterns()
+    note = "docs/knowledge/kokoro-onnx-migration.md"
+    assert vgc.touched_voice_files([note, path], pats) == [path]
+    needs, hits, _ = vgc.scope_verdict([note, path], pats)
+    assert needs is True and hits == [path]
+
+
+def test_the_docs_exclusion_holds_under_a_path_override_too(monkeypatch):
+    monkeypatch.setenv("ZOE_VOICE_GATE_PATHS", "*kokoro*:*moonshine*")
+    pats = vgc.voice_path_patterns()
+    assert vgc.touched_voice_files(["docs/knowledge/kokoro-onnx-migration.md"], pats) == []
+    assert vgc.touched_voice_files(["scripts/setup/kokoro_sidecar.py"], pats) == ["scripts/setup/kokoro_sidecar.py"]
+
+
+def test_deploy_entry_point_gives_the_same_answer_for_a_docs_only_kokoro_range(tmp_path):
+    """Through main() exactly as deploy.yml calls it (`--diff prev..target`, no artifact on
+    disk): a range whose only change is a docs/ Kokoro note is a no-op pass, and the same
+    range with a Kokoro CODE file is refused (no artifact -> blocked)."""
+    import os
+    import subprocess as sp
+    repo = tmp_path / "r"
+    repo.mkdir()
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
+
+    def git(*a):
+        return sp.run(["git", "-C", str(repo), *a], check=True, capture_output=True, text=True, env=env).stdout.strip()
+
+    def commit(rel):
+        f = repo / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(rel + "\n")
+        git("add", "-A")
+        git("commit", "-qm", rel)
+        return git("rev-parse", "HEAD")
+
+    sp.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    prev = commit("README.md")
+    docs = commit("docs/knowledge/kokoro-onnx-migration.md")
+    code = commit("scripts/setup/kokoro_sidecar.py")
+    none = str(tmp_path / "none.json")
+    assert vgc.main(["--repo", str(repo), "--diff", f"{prev}..{docs}", "--artifact", none]) == 0
+    assert vgc.main(["--repo", str(repo), "--diff", f"{prev}..{code}", "--artifact", none]) == 1
+
+
 def test_parse_iso_z_roundtrips_utc():
     assert vgc.parse_iso_z("2026-07-15T12:00:00Z") == NOW
     assert vgc.parse_iso_z(None) is None

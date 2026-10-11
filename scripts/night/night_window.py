@@ -646,6 +646,9 @@ def rebuild_cell_votes(text: str, runs: int) -> "tuple[dict[str, str], dict[str,
 SPEED_LINES = 60
 #: the dry run's stand-in for the 12B's speed: the last real probe (run 20261009-182701, ngl 34); the real run measures its own
 PLAN_DECODE_TPS, PLAN_PREFILL_TPS, PLAN_LOAD_S = 6.24, 158.7, 90.0
+#: seconds the cap must still have (``time_left_s``, which is already net of the restore reserve and bounded by ``--end-by``) for the ONE retry of a failed 12B start to be
+#: worth making: stop the failed server and compact (~2 min), load and probe again (``PLAN_LOAD_S``), and still leave the jobs' own minimum (``exec_job`` skips a job under 120 s).
+LOAD_RETRY_MIN_LEFT_S = PLAN_LOAD_S + 120.0 + 120.0
 
 
 def speed_prompt() -> str:
@@ -790,6 +793,8 @@ class NightWindow(bk.Window):
         self.report_paths: "list[Path]" = []
         self.marker_owner_alive = False
         self.fallback_allowed = True                   # False after a refusal for the HOUR: a manual run in daylight must not start the night's jobs
+        self.last_load_why = ""                        # the diagnosis of the most recent failed 12B start
+        self.night_lost = ""                           # non-empty = the 12B never loaded on this night (after the one retry): the morning ALARM says why
 
     # ── bookkeeping ──
     def event(self, msg: str) -> None:
@@ -1261,7 +1266,40 @@ class NightWindow(bk.Window):
         self.rec["load_diagnosis"] = {"lines": keep[-5:], "ram": state}
         return ("cuda_alloc" if any("cudaMalloc" in ln for ln in keep) else "died") + ": " + (keep[-1] if keep else "no error line in its journal")
 
-    def load_12b(self, pick: "dict[str, Any]") -> None:
+    def load_12b_with_retry(self, pick: "dict[str, Any]") -> None:
+        """The night's 12B start: ONE more attempt when the first dies on a load failure (cudaMalloc / NvMap), inside the cap and the end-by deadline. The up-to-6 compactions in
+        ``sleep_units`` run before the first start only; a fragmentation that is still there at the start (2026-10-11: MemFree 5.9 GB at the failure) ended the window and the night ran
+        nothing. Retry = stop the failed server, compact (sudo when available), start again, provided ``time_left_s`` still covers the load and the jobs' minimum
+        (``LOAD_RETRY_MIN_LEFT_S``). A night with no successful load is recorded once (``record_load`` counts it as ONE failed window, not two) and leaves ``night_lost`` for the morning ALARM."""
+        try:
+            self.load_12b(pick, last_attempt=False)
+            return
+        except LoadFailed as first:
+            left = self.time_left_s()
+            if left < LOAD_RETRY_MIN_LEFT_S:
+                self.record_load(False, self.last_load_why)
+                self.night_lost = str(first)
+                self.event(f"12B start failed and there is no room for a second attempt ({left:.0f}s left before the restore reserve, a retry needs {LOAD_RETRY_MIN_LEFT_S:.0f}s)")
+                raise
+            self.event(f"12B start failed ({self.last_load_why[:160]}): one more attempt inside the cap ({left:.0f}s left) - stopping it, compacting, starting again")
+        self.unload_llm()
+        compacted = self.compact_memory("retry after a failed 12B start")
+        self.host.sleep(3.0)
+        self.rec["load_retry"] = {"first_failure": self.last_load_why[:300], "compacted": compacted, "left_s": round(left)}
+        try:
+            self.load_12b(pick, health_timeout_s=max(120.0, min(480.0, self.time_left_s() - 120.0)))
+        except LoadFailed as second:
+            self.night_lost = str(second)                      # load_12b recorded the failure (last attempt)
+            self.event(f"NIGHT LOST: the 12B did not load on either attempt ({self.last_load_why[:200]})")
+            raise
+        except BaseException:
+            self.record_load(False, self.last_load_why)
+            raise
+        self.rec["load_retry"]["loaded"] = True
+        self.event("12B loaded on the second attempt")
+
+    def load_12b(self, pick: "dict[str, Any]", *, last_attempt: bool = True, health_timeout_s: float = 480.0) -> None:
+        """Start the 12B and wait for /health. ``last_attempt`` False = a failure is raised but NOT recorded in ``load_failures.json`` (the caller retries and records the night once)."""
         cfg = self.cfg
         spec = llm_spec(self.parked_text, cfg, pick["levers"])
         self.event("12B command (generated from the parked unit's ExecStart, which is read and never edited): " + shlex.join(spec["argv"]))
@@ -1272,9 +1310,11 @@ class NightWindow(bk.Window):
         self.rec["arith"]["load_started_s"] = self.host.mono()
         self.start_transient("llm", spec)
         url = f"http://127.0.0.1:{cfg.port}/health"
-        if not self.poll_health(url, _status_ok, 480.0, unit=NIGHT_UNITS["llm"]):
+        if not self.poll_health(url, _status_ok, health_timeout_s, unit=NIGHT_UNITS["llm"]):
             why = self.diagnose_load_failure()
-            self.record_load(False, why)
+            self.last_load_why = why
+            if last_attempt:
+                self.record_load(False, why)
             raise LoadFailed(f"the 12B did not load ({why}); see `journalctl --user -u {NIGHT_UNITS['llm']}` and docs/knowledge/night-window.md 'when the 12B will not load'")
         self.record_load(True)
         self.floor_armed = True
@@ -1765,6 +1805,25 @@ class NightWindow(bk.Window):
             except OSError as exc:
                 self.log(f"could not write the ALARM file: {exc}")
 
+    def night_lost_alarm(self) -> None:
+        """A night in which the 12B never loaded (after the one retry) leaves the same morning ALARM file a failed restore does, so it cannot pass as a quiet night. Zoe herself is back
+        (the restore ran); what is lost is the night's work on the 12B. Appended to an existing ALARM (a failed restore) rather than replacing it. Never raises."""
+        if not self.night_lost or self.dry:
+            return
+        lines = ["*** NIGHT LOST: the 12B did not load ***", f"run {self.run_id} ({self.started_iso}): {self.night_lost[:300]}",
+                 "Nothing ran on the 12B tonight (the 4B fallbacks in the report may have covered the digest / dreaming).",
+                 f"Why and what to try: docs/knowledge/night-window.md 'when the 12B will not load'; the run log ~/.zoe/night-window/run-*.log; if RAM is fragmented: {bk.operator_compact_command(self.cfg.drop_caches)}",
+                 "This file is removed by the next window or by --restore-only that finishes cleanly."]
+        self.log("NIGHT LOST: " + self.night_lost[:300])
+        try:
+            self.cfg.report_dir.mkdir(parents=True, exist_ok=True)
+            path = self.cfg.report_dir / "ALARM"
+            prior = path.read_text() + "\n" if path.exists() else ""
+            path.write_text(prior + "\n".join(lines) + "\n")
+            self.rec["night_lost"] = self.night_lost[:300]
+        except OSError as exc:
+            self.log(f"could not write the ALARM file: {exc}")
+
     def restore(self) -> bool:
         """Put everything back. Idempotent; wakes ONLY what this window stopped, and only the units that were active before; never raises. Order: brain, Kokoro, router, zoe-data."""
         cfg = self.cfg
@@ -1875,7 +1934,7 @@ class NightWindow(bk.Window):
                 if self.cfg.trial:
                     self.run_trial(pick)
                 else:
-                    self.load_12b(pick)
+                    self.load_12b_with_retry(pick)
                     self.guard()
                     self.run_jobs()
             self.outcome = "ok"
@@ -1902,6 +1961,7 @@ class NightWindow(bk.Window):
                     self.restore_ok = True                          # nothing was stopped, the lock is ours and the box is idle: the fallbacks below may run
             if not restored:
                 rc = EXIT_RESTORE_FAILED
+            self.night_lost_alarm()                         # AFTER the restore: a clean restore deletes a stale ALARM, and this one must survive until the morning
             try:
                 self.after_restore()
             except Exception as exc:  # noqa: BLE001

@@ -18,6 +18,49 @@ jobs:
       cancel-in-progress: false
 
     steps:
+      # NIGHT-WINDOW GATE (self-hosted only — same Jetson as the nightly 12B window).
+      # While scripts/night/night_window.py has a window OPEN it writes
+      # ~/.zoe/night-window/WINDOW_OPEN and has deliberately STOPPED zoe-data, the 4B
+      # brain, Kokoro and the router so the 12B (and the night jobs beside it) can
+      # fit in RAM. A deploy that runs inside that window either false-fails the
+      # Health check (zoe-data is down on purpose; nothing is wrong) or — worse —
+      # restarts zoe-data next to the loaded 12B and eats the RAM the window was
+      # arranged around (open problem 2026-10-11, deploy run 38101787795 / #1983).
+      # So: before anything is pulled, reset or restarted, wait while the marker
+      # exists. The window's cap is ~65 min and its end-by is 03:55, so the bound is
+      # 75 min (150 x 30 s). If the window is STILL open after that, fail loudly
+      # instead of restarting beside it: nothing has been touched yet, so a re-run
+      # once the window is over is always safe. (A marker also outlives a window
+      # whose restore failed — that is an ALARM the operator must clear with
+      # `night_window.sh --restore-only`; the deploy refusing meanwhile is correct.)
+      # Placed BEFORE the memory-headroom gate: an open window is why memory looks
+      # short, and that gate's 9-minute budget would only mask the real reason.
+      - name: Wait out an open night window (do not deploy beside the 12B)
+        timeout-minutes: 80
+        run: |
+          MARKER="$HOME/.zoe/night-window/WINDOW_OPEN"
+          POLL_S=30
+          MAX_MIN=75
+          MAX_POLLS=$(( MAX_MIN * 60 / POLL_S ))
+          if [ ! -e "${MARKER}" ]; then
+            echo "No night window open (${MARKER} absent): deploying."
+            exit 0
+          fi
+          for attempt in $(seq 1 "${MAX_POLLS}"); do
+            if [ ! -e "${MARKER}" ]; then
+              echo "Night window closed after ~$(( (attempt - 1) * POLL_S ))s: deploying."
+              exit 0
+            fi
+            echo "Night window is OPEN (${MARKER}: $(head -c 300 "${MARKER}" 2>/dev/null)); zoe-data / the 4B / Kokoro / the router are stopped on purpose and a deploy now would restart zoe-data beside the loaded 12B. Waiting ${POLL_S}s (${attempt}/${MAX_POLLS})."
+            sleep "${POLL_S}"
+          done
+          if [ ! -e "${MARKER}" ]; then
+            echo "Night window closed: deploying."
+            exit 0
+          fi
+          echo "::error::night window still open after ${MAX_MIN} min: nothing deployed. ${MARKER} still exists, so the 12B window (cap ~65 min, end-by 03:55) has not finished or its restore failed (check ~/.zoe/night-reports/ALARM and run scripts/night/night_window.sh --restore-only). Nothing was pulled or restarted; re-run this deploy once the window is over."
+          exit 1
+
       # MEMORY-HEADROOM GATE (self-hosted only — same Jetson as the live
       # llama-server brain). This is a COARSE "is the box in genuine crisis"
       # floor for the LIGHT deploy path (git reset + pip --user + alembic +

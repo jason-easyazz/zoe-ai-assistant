@@ -99,7 +99,7 @@ class FakeHost(nw.NightHost):
     """Answers every command the window issues. State: which units are active, which are healthy, whether the 12B / the clone is up, the memory arithmetic."""
 
     def __init__(self, tmp: Path, *, start=None, base=1200.0, freed=1.0, sudo=True, active=None, unhealthy=(), job_rc=None, job_s=600.0, fail_run=(), models=None, busy=(),
-                 panel_busy=False, llm_cost=7500.0, free_gap=0.0, gap_heal=0.0, llm_dies=False, boot_id="boot-1", nvmap_mib=12000.0, trial_no_output=False, probe_hang_drop=0.0):
+                 panel_busy=False, llm_cost=7500.0, free_gap=0.0, gap_heal=0.0, llm_dies=False, boot_id="boot-1", nvmap_mib=12000.0, trial_no_output=False, probe_hang_drop=0.0, llm_dies_first=0):
         self.t = start if start is not None else at(2, 50)
         self.cmds: "list[tuple[list[str], bool]]" = []
         self.tmp = tmp
@@ -123,6 +123,7 @@ class FakeHost(nw.NightHost):
         self.log = lambda _m: None
         self.dry = False
         self.llm_dies, self.boot_id, self.nvmap_mib = llm_dies, boot_id, nvmap_mib
+        self.llm_dies_first, self.llm_starts = llm_dies_first, 0     # the first N starts of the 12B die loading (cudaMalloc / NvMap); later ones load
         self.trial_no_output, self.probe_hang_drop = trial_no_output, probe_hang_drop
         self.free_gap, self.gap_heal = free_gap, gap_heal          # MemFree = MemAvailable - gap (page cache that is 'available' but not FREE); each compaction heals gap_heal of it
 
@@ -212,7 +213,8 @@ class FakeHost(nw.NightHost):
             return bk.Result(0, "")
         if prog == "systemd-run":
             if "--unit=zoe-night-12b" in line:
-                self.llm_up = not self.llm_dies
+                self.llm_starts += 1
+                self.llm_up = not (self.llm_dies or self.llm_starts <= self.llm_dies_first)
             if "--unit=zoe-night-4b32k" in line:
                 self.clone_up = True
             if "--unit=zoe-night-embed" in line:
@@ -770,12 +772,74 @@ def test_the_marker_lists_each_unit_before_it_is_stopped(tmp_path):
 def test_a_12b_that_dies_loading_is_diagnosed_restored_and_the_jobs_fall_back_to_the_4b(tmp_path):
     w, host, cfg = make(tmp_path, llm_dies=True)
     assert w.run() == nw.EXIT_ABORTED and "did not load" in w.outcome and "cuda_alloc" in w.outcome
-    assert wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA] and not (cfg.report_dir / "ALARM").exists()
+    assert wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA] and "NIGHT LOST" in (cfg.report_dir / "ALARM").read_text()     # the restore was clean; the night was not
     diag = w.rec["load_diagnosis"]
     assert any("cudaMalloc failed" in ln for ln in diag["lines"]) and "free blocks of 2 MB" in diag["ram"] and "prompt text" not in json.dumps(w.rec)
     ran = [(j["name"], j["env"]["GEMMA_SERVER_URL"][-9:]) for j in host.jobs_run]
     assert ("zoe-nightly-dreaming.py", ":11434/v1") in ran                                  # the night's dreaming still happens, on the 4B, after the wake
     assert json.loads(w.failures_path.read_text())["count"] == 1
+
+
+def twelve_b_starts(host):
+    return [i for i, c in enumerate(host.joined()) if c.startswith("systemd-run") and "--unit=zoe-night-12b" in c]
+
+
+def ran_on_the_12b(host):
+    return [j["name"] for j in host.jobs_run if j["env"].get("GEMMA_SERVER_URL", "").endswith(":11500/v1")]
+
+
+def test_a_failed_12b_start_gets_one_compact_and_restart_inside_the_cap_and_the_night_runs(tmp_path):
+    """Open problem 2026-10-11 'Night window load': a cudaMalloc / NvMap OOM at the start ended the window and the night ran nothing. The first start dies, the failed server is
+    stopped, memory is compacted, the second start loads, the jobs run on the 12B and the night counts as a LOADED window (the failure count is not bumped by the first attempt)."""
+    w, host, cfg = make(tmp_path, llm_dies_first=1)
+    assert w.run() == nw.EXIT_OK, w.outcome
+    first, second = twelve_b_starts(host)
+    stop = host.idx("--user stop zoe-night-12b", first)
+    assert first < stop < host.idx("compact_memory", stop) < second                        # stop the failed server, THEN compact, THEN start again
+    assert len(twelve_b_starts(host)) == 2 and host.count("compact_memory") >= 1
+    assert "zoe-nightly-dreaming.py" in ran_on_the_12b(host)                               # the jobs ran on the 12B
+    assert json.loads(w.failures_path.read_text())["count"] == 0                           # record_load(True): the night loaded
+    assert w.rec["load_retry"]["loaded"] and "cuda_alloc" in w.rec["load_retry"]["first_failure"]
+    assert not (cfg.report_dir / "ALARM").exists() and not w.night_lost
+    assert wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]
+
+
+def test_two_failed_12b_starts_restore_run_no_12b_job_write_the_alarm_and_log_night_lost(tmp_path):
+    logged = []
+    w, host, cfg = make(tmp_path, llm_dies_first=2)
+    w.log = logged.append
+    assert w.run() == nw.EXIT_ABORTED and "did not load" in w.outcome
+    assert len(twelve_b_starts(host)) == 2                                                  # one retry, never a third start
+    assert wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA] and not cfg.marker.exists()
+    assert ran_on_the_12b(host) == []                                                       # nothing ran on the 12B (the 4B fallbacks after the wake are the old behaviour)
+    alarm = (cfg.report_dir / "ALARM").read_text()
+    assert "NIGHT LOST" in alarm and "run t1" in alarm and "cuda_alloc" in alarm and "night-window.md" in alarm
+    assert any(m.startswith("NIGHT LOST:") for m in logged) and w.rec["night_lost"]
+    assert json.loads(w.failures_path.read_text())["count"] == 1                            # ONE failed window, not one per attempt
+    assert host.idx("--user stop zoe-night-12b") < host.idx(f"--user start {nw.BRAIN}")
+
+
+def test_a_12b_that_loads_first_time_runs_no_extra_compaction_and_no_second_start(tmp_path):
+    w, host, cfg = make(tmp_path)
+    assert w.run() == nw.EXIT_OK, w.outcome
+    (start,) = twelve_b_starts(host)
+    assert not any("compact_memory" in c for c in host.joined()[start:host.idx("--user stop zoe-night-12b", start)])      # none between the start and the end-of-night unload
+    assert "load_retry" not in w.rec and not w.night_lost and not (cfg.report_dir / "ALARM").exists()
+
+
+def test_no_second_attempt_when_the_cap_has_no_room_for_it_but_the_night_is_still_reported_lost(tmp_path):
+    w, host, cfg = make(tmp_path, argv=["--cap-min", "15"], llm_dies_first=1)                # 15 min cap - 12 min restore reserve = 3 min: under the retry's 5.5 min
+    assert w.run() == nw.EXIT_ABORTED and "did not load" in w.outcome
+    assert len(twelve_b_starts(host)) == 1 and any("no room for a second attempt" in e["msg"] for e in w.rec["events"])
+    assert "NIGHT LOST" in (cfg.report_dir / "ALARM").read_text() and json.loads(w.failures_path.read_text())["count"] == 1
+    assert wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]
+
+
+def test_the_night_lost_alarm_is_appended_to_a_failed_restores_alarm_not_replacing_it(tmp_path):
+    w, host, cfg = make(tmp_path, llm_dies=True, unhealthy=(nw.KOKORO,))
+    assert w.run() == nw.EXIT_RESTORE_FAILED
+    alarm = (cfg.report_dir / "ALARM").read_text()
+    assert "RESTORE FAILED" in alarm and nw.KOKORO in alarm and "NIGHT LOST" in alarm
 
 
 def test_after_two_failed_loads_on_a_boot_a_timer_run_refuses_before_stopping_anything_until_retry_or_reboot(tmp_path):
