@@ -38,6 +38,11 @@ INTEGRITY OF THE SAVED ROWS (Greptile #1978; every rule below has a red-on-rever
     every row of a tombstoned invocation, so a resume re-asks them and the report never counts them.
   * a verdict needs the whole plan: every planned ask a row in both arms (held-out and regression), every primary and regression half
     with data in both arms. A missing comparison is never skipped - it is DO NOT KEEP (``decide``).
+  * every planned ask must also END with its required deterministic scores (the judged ``.j`` halves are deliberately unused): an ask
+    that never reached its precondition (P5a: the first answer named no weekday, so ``{}`` / ``None`` is saved) is INCOMPLETE, never
+    tallied around - a KEEP on the rest would compare a smaller set than planned.
+  * every row of a verdict phase carries the plan digest and scale it ran with. Both arms must come from ONE plan: a resume under
+    another scale/ask list is refused, the report refuses a mixed file (nothing tallied) and rebuilds the plan from the SAVED scale.
   * the account lookup the shipped block makes (adults only, by allowlist) cannot run in this rig (no database, an unregistered
     ``demo_bar_<hex>`` user), so ``Runner`` overrides ``manner_block.eligible`` for THAT ONE throw-away user only; every other id still
     goes through the real check. The production code carries no id-shaped exemption.
@@ -627,7 +632,7 @@ def fingerprint(arm: str, digest: str, text: str | None = None) -> str:
 def row_problems(rows: list[dict], fps: dict[str, str]) -> list[str]:
     """Rows of the arms in ``fps`` that cannot be mixed with a run under these fingerprints: legacy rows (no fingerprint at all) and
     rows saved under a different text / split / harness version."""
-    legacy = sum(1 for r in rows if r.get("arm") in fps and "fp" not in r)
+    legacy = sum(1 for r in rows if r.get("arm") in fps and ("fp" not in r or "plan" not in r))
     changed = sum(1 for r in rows if r.get("arm") in fps and "fp" in r and r["fp"] != fps[r["arm"]])
     keys = [(r["arm"], r["phase"], r["ask"], r["sample"]) for r in rows if r.get("arm") in fps]
     dupes = len(keys) - len(set(keys))
@@ -643,6 +648,51 @@ def row_problems(rows: list[dict], fps: dict[str, str]) -> list[str]:
 
 def plan_keys(plan: list) -> list[tuple[str, int]]:
     return [((item[2] if isinstance(item, tuple) else item.id), s) for item, s in plan]
+
+
+def plan_digest(plan: list) -> str:
+    """What was PLANNED: sha256 of the ordered (ask, sample) keys. Saved with every row of a verdict phase (Greptile #1978)."""
+    return hashlib.sha256(json.dumps(plan_keys(plan)).encode()).hexdigest()
+
+
+VERDICT_PHASES = ("heldout", "regress")
+
+
+def plan_problems(rows: list[dict], phase: str, digest: str | None = None) -> list[str]:
+    """Rows of one verdict ``phase`` must all come from ONE plan (one ask list, one scale) across BOTH arms: ``tally`` counts every saved
+    row, so a baseline asked a different question set than the variant would make the comparison meaningless. ``digest`` (a resume)
+    is the plan about to run."""
+    here = [r for r in rows if r["phase"] == phase]
+    plans = {r["plan"] for r in here if "plan" in r} | ({digest} if digest and here else set())
+    out = []
+    if len(plans) > 1:
+        arms =sorted({r["arm"] for r in here})
+        out.append(f"{phase}: the saved rows come from {len(plans)} different plans / scales (arms {', '.join(arms)}); the arms must answer the same "
+                   f"questions: use a new run id")
+    return out
+
+
+def required_scores(item) -> tuple[str, ...]:
+    """The deterministic scores a planned ask must END with (the judged '.j' halves are deliberately not run). A bar ask owns its one id."""
+    if isinstance(item, tuple):
+        return (item[1],)
+    return tuple(h for h in item.scores if not h.endswith(".j"))
+
+
+def unscored_asks(rows: list[dict], arm: str, phase: str, plan: list) -> list[str]:
+    """Planned asks whose saved row lacks a required deterministic score (an ask that never reached its precondition saves ``{}`` or
+    ``None``): ``tally`` would drop them, so a verdict on the rest compares a smaller set than planned."""
+    by_key = {(r["ask"], r["sample"]): r for r in rows if r["arm"] == arm and r["phase"] == phase}
+    out = []
+    for item, s in plan:
+        aid = item[2] if isinstance(item, tuple) else item.id
+        r = by_key.get((aid, s))
+        if r is None:
+            continue                                            # missing rows are missing_asks()' finding
+        sc = r.get("scored") or {}
+        if any(h not in sc or sc[h][0] is None for h in required_scores(item)):
+            out.append(f"{aid}#{s}")
+    return out
 
 
 def build_plan(phase: str, world, scale: float, cells=DEFAULT_CELLS) -> list:
@@ -687,17 +737,27 @@ def report(run_id: str, variant: str, scale: float = 1.0, world=None) -> tuple[s
     if refused:
         final = "\nVERDICT (rows refused): DO NOT KEEP" + "".join("\n  - " + w for w in refused)
         return final, final
+    pair = [r for r in rows if r["arm"] in ("none", arm)]
+    mixed = [w for phase in VERDICT_PHASES for w in plan_problems(pair, phase)]
+    if mixed:                                                   # the arms answered different questions: nothing is tallied
+        final = "\nVERDICT (rows refused): DO NOT KEEP" + "".join("\n  - " + w for w in mixed)
+        return final, final
     problems: list[str] = []
-    for phase in ("heldout", "regress"):                       # the two phases a verdict is made of: every planned ask, both arms
-        plan = build_plan(phase, world, scale)
+    for phase in VERDICT_PHASES:                               # the two phases a verdict is made of: every planned ask, both arms
+        saved = {r["scale"] for r in pair if r["phase"] == phase and "scale" in r}
+        plan = build_plan(phase, world, saved.pop() if len(saved) == 1 else scale)    # the SAVED plan, not whatever --scale says now
+        saved_digest = {r["plan"] for r in pair if r["phase"] == phase}
+        if saved_digest and saved_digest != {plan_digest(plan)}:
+            problems.append(f"{phase}: the saved plan is not the full planned ask list (a --cells subset, or a changed ask set)")
         for a in ("none", arm):
             miss = missing_asks(rows, a, phase, plan)
             if miss:
                 problems.append(f"{phase} arm {a}: {len(miss)} of {len(plan)} planned asks have no row (first: {miss[0]})")
-    unresolved = [r for r in rows if r["phase"] == "regress" and r["arm"] in ("none", arm) and r["ask"].startswith("bar-")
-                  and any(v[0] is None for v in r["scored"].values())]
-    if unresolved:                                              # a bar reply no scorer could settle must not silently leave the tally
-        problems.append(f"{len(unresolved)} bar reply(ies) were not scored (tally would drop them; first: {unresolved[0]['ask']} in {unresolved[0]['arm']})")
+            # An ask that never reached its precondition saves {} / None: tally() drops it, so a KEEP would rest on a smaller comparison.
+            bad = unscored_asks(rows, a, phase, plan)
+            if bad:
+                problems.append(f"INCOMPLETE: {phase} arm {a}: {len(bad)} planned ask(s) were not scored on every required deterministic "
+                                f"half (first: {bad[0]}); use a new run id")
     lines, verdicts = [], {}
     for phase in ("dev", "heldout"):
         n_rows = sum(1 for r in rows if r["phase"] == phase and r["arm"] == arm)
@@ -752,6 +812,12 @@ async def run_phase(runner: Runner, phase: str, arms: list[str], run_id: str, sc
     refused = row_problems(prior, fps)
     if refused:                                                 # never mix rows measured with another text / split / harness
         raise RuntimeError("refusing to resume " + run_id + ": " + "; ".join(refused))
+    pdig = plan_digest(plan)
+    if phase in VERDICT_PHASES:                                 # every arm of a verdict phase answers the SAME asks at the SAME scale
+        mixed = plan_problems(prior, phase, pdig)
+        if mixed:
+            raise RuntimeError("refusing to resume " + run_id + ": " + "; ".join(mixed))
+    meta = {"plan": pdig, "scale": scale}                       # saved with every row: the report uses it, and refuses a mismatch
     done = {(r["arm"], r["phase"], r["ask"], r["sample"]) for r in prior}
     nonce = str(int(time.time()))
     inv = secrets.token_hex(6)                                  # this invocation: a restart tombstones exactly its rows
@@ -763,10 +829,10 @@ async def run_phase(runner: Runner, phase: str, arms: list[str], run_id: str, sc
             raise RestartedMidRun(f"zoe-data restarted mid-run: invocation {inv}'s rows are discarded (tombstoned); re-run the same command to redo them")
 
     with results_path(run_id).open("a") as out:
-        await _run_plan(runner, phase, arms, plan, done, fps, inv, nonce, check_stamp, out, log)
+        await _run_plan(runner, phase, arms, plan, done, fps, inv, nonce, check_stamp, out, log, meta)
 
 
-async def _run_plan(runner, phase, arms, plan, done, fps, inv, nonce, check_stamp, out, log) -> None:
+async def _run_plan(runner, phase, arms, plan, done, fps, inv, nonce, check_stamp, out, log, meta) -> None:
     for arm in arms:
         n_done = 0
         for item, s in plan:
@@ -791,7 +857,7 @@ async def _run_plan(runner, phase, arms, plan, done, fps, inv, nonce, check_stam
                 check_stamp(out)                                # an ask that died because zoe-data restarted discards the invocation
                 raise
             check_stamp(out)                                    # ... and after it: a restart during the LAST turn is caught too
-            out.write(json.dumps({"arm": arm, "phase": phase, "ask": aid, "sample": s, "inv": inv, "fp": fps[arm],
+            out.write(json.dumps({"arm": arm, "phase": phase, "ask": aid, "sample": s, "inv": inv, "fp": fps[arm], **meta,
                                   "replies": [r[:600] for r in replies], "scored": scored}) + "\n")
             out.flush()
             done.add((arm, phase, aid, s))                      # a saved row is never asked (or saved) twice in one invocation

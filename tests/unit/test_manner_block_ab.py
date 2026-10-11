@@ -333,6 +333,73 @@ def test_a_repeated_arm_is_refused_and_nothing_runs_twice():
     assert "duplicate" in mab.report("dup2", "V0")[1] and "DO NOT KEEP" in mab.report("dup2", "V0")[1]
 
 
+# ── 3c. unscored asks cannot be approved; both arms must answer the same plan (Greptile #1978) ───────────────────────────────────
+def _rewrite_rows(run_id, edit):
+    p = mab.results_path(run_id)
+    out = []
+    for ln in p.read_text().splitlines():
+        r = json.loads(ln)
+        edit(r)
+        out.append(json.dumps(r))
+    p.write_text("\n".join(out) + "\n")
+
+
+def test_asks_that_never_reached_their_precondition_are_never_a_keep():
+    """P5a hold/update asks save scored={} (the first answer named no weekday, so the ask returns no replies); neutral asks save None."""
+    for run_id, ask_prefix, scored in (("pre-hold", "p5a-i-", {}), ("pre-neu", "p5a-iii-", {"P5a.iii": [None, {}]}),
+                                       ("pre-upd", "p5a-ii-", {})):
+        full_run(run_id)
+        hit = []
+
+        def edit(r, ask_prefix=ask_prefix, scored=scored, hit=hit):
+            if not hit and r["phase"] == "regress" and r["arm"] == "on:V0" and r["ask"].startswith(ask_prefix):
+                r["scored"] = scored
+                hit.append(r["ask"])
+
+        _rewrite_rows(run_id, edit)
+        assert hit, ask_prefix
+        _text, final = mab.report(run_id, "V0")
+        assert "DO NOT KEEP" in final and "INCOMPLETE" in final and hit[0] in final, final
+
+
+def test_the_judged_halves_are_deliberately_unused_and_never_required():
+    full_run("nojudge")
+    _rewrite_rows("nojudge", lambda r: r.__setitem__("scored", {h: v for h, v in r["scored"].items() if not h.endswith(".j")}))
+    _text, final = mab.report("nojudge", "V0")
+    assert "KEEP" in final and "DO NOT KEEP" not in final, final                              # positive control
+
+
+def test_arms_answering_different_regression_plans_are_refused():
+    """none at scale 1.0 and V0 at scale 0.2 under one run id: the baseline would include questions the variant never answered."""
+    full_run("mix")
+    runner = FakeRunner()
+    with pytest.raises(RuntimeError, match="different plans"):
+        asyncio.run(mab.run_phase(runner, "regress", ["on:V0"], "mix", 0.2, lambda *_: None))
+    assert runner.asked == []
+    # ...and a file assembled by hand (the resume guard bypassed) is refused by the report, nothing tallied.
+    for arm, scale, rid in (("none", 1.0, "m-a"), ("on:V0", 0.2, "m-b")):
+        asyncio.run(mab.run_phase(FakeRunner(), "regress", [arm], rid, scale, lambda *_: None))
+    mab.results_path("m-c").write_text(mab.results_path("m-a").read_text() + mab.results_path("m-b").read_text())
+    _text, final = mab.report("m-c", "V0")
+    assert "DO NOT KEEP" in final and "different plans" in final, final
+
+
+def test_the_report_uses_the_saved_plan_not_the_scale_it_is_given():
+    for phase, scale in (("heldout", 1.0), ("regress", 0.6)):
+        asyncio.run(mab.run_phase(FakeRunner(), phase, ARMS, "sc", scale, lambda *_: None))
+    world = mab.sp.World(mab.sp.BASE_SEED)
+    assert len(mab.build_plan("regress", world, 0.6)) != len(mab.build_plan("regress", world, 1.0))
+    _text, final = mab.report("sc", "V0")                                                     # default scale 1.0: the saved 0.6 wins
+    assert "no row" not in final and "KEEP" in final and "DO NOT KEEP" not in final, final
+
+
+def test_rows_without_a_saved_plan_are_legacy():
+    full_run("noplan")
+    _rewrite_rows("noplan", lambda r: r.pop("plan"))
+    _text, final = mab.report("noplan", "V0")
+    assert "DO NOT KEEP" in final and "legacy" in final, final
+
+
 # ── 4. the on arm is eligible for the rig's own user only (#1977 thread; the shipped check needs the account tables) ─────────────
 def _rig(monkeypatch):
     mab.zoe_path()
