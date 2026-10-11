@@ -37,6 +37,7 @@ ENV, ENV_GENTLE = "ZOE_DISTRESS_HANDOFF", "ZOE_DISTRESS_GENTLE"
 LINES_FILE = Path(__file__).with_name("distress_data") / "crisis_lines.json"
 MAX_CHARS = 2000
 NOTIFY_COOLDOWN_S = 6 * 3600.0
+DANGER_COOLDOWN_S = 10 * 60.0     # a physical emergency is its own urgent event: the short window only de-duplicates one incident
 _RANK = {"none": 0, "gentle": 1, "handoff": 2}
 _GUESTS = frozenset({"", "guest", "anonymous", "voice-guest", "voice-daemon"})
 _NOTIFIED: dict = {}
@@ -239,15 +240,16 @@ async def _is_minor(user_id: str) -> bool:
 
 
 async def _notify(user_id: str, v: Verdict, minor: bool) -> None:
-    """Tell the household contact ONCE (6 h per member), plainly, with no words from the turn: a notification row + the bell broadcast."""
+    """Tell the household contact ONCE (6 h per member; a danger-class event has its own 10 min window), plainly, with no words from the turn: a notification row + the bell broadcast."""
     cfg = config()
     try:
         if (not cfg.contact_user or cfg.notify == "off" or (cfg.notify == "minors" and not minor)
                 or user_id in _GUESTS or user_id == cfg.contact_user or v.tier != "handoff"):
             return
-        if time.monotonic() - _NOTIFIED.get(user_id, -1e9) < NOTIFY_COOLDOWN_S:
+        key, window = (f"{user_id}:danger", DANGER_COOLDOWN_S) if v.cls == "danger" else (user_id, NOTIFY_COOLDOWN_S)
+        if time.monotonic() - _NOTIFIED.get(key, -1e9) < window:
             return
-        _NOTIFIED[user_id] = time.monotonic()
+        _NOTIFIED[key] = time.monotonic()
         r = lexicons.load(v.lang or "en")["distress"]["replies"]
         who = r["notify_unknown_who"]
         try:
@@ -269,7 +271,7 @@ async def _notify(user_id: str, v: Verdict, minor: bool) -> None:
                                                                       "message": message, "delivered": False}, user_id=cfg.contact_user)
         logger.info("DISTRESS_NOTIFIED member=%s", user_id)
     except Exception as exc:  # noqa: BLE001
-        _NOTIFIED.pop(user_id, None)
+        _NOTIFIED.pop(f"{user_id}:danger" if v.cls == "danger" else user_id, None)
         logger.warning("distress notify failed (%s)", type(exc).__name__)
 
 
