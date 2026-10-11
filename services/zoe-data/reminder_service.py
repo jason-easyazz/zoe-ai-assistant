@@ -176,9 +176,9 @@ async def _create_notification(db, *, user_id: str, notif_type: str, title: str,
 
 
 async def create_reminder_record(payload: ReminderCreate, *, user: Mapping[str, object], db,
-                                 now_utc: datetime | None = None) -> dict:
+                                 now_utc: datetime | None = None, schedule: bool = True) -> dict:
     """Create a reminder with the same policy, notification, and broadcast behavior as the API route. ``now_utc`` (a background caller
-    that runs on an injected clock, e.g. ``commitments``) is the instant "today" is resolved against; none = the wall clock."""
+    that runs on an injected clock, e.g. ``commitments``) is the instant "today" is resolved against; none = the wall clock. ``schedule=False`` is for a caller that registers its OWN job for the row (commitments, +45 s): one scheduling path per reminder, never two."""
     await require_feature_access(db, user, feature="reminders", action="create")
     user_id = str(user["user_id"])
     reminder_id = str(uuid.uuid4())
@@ -229,7 +229,7 @@ async def create_reminder_record(payload: ReminderCreate, *, user: Mapping[str, 
     # idempotent entry the scan uses (skips when an unfired job exists), so nothing double-books.
     # The FIRE is still deferred out of quiet hours by fire_notification. Best-effort: the row is
     # already committed and the scan retries, so a scheduler failure must not fail the create.
-    if reminder.get("id"):
+    if schedule and reminder.get("id"):
         try:
             from proactive.triggers.reminder_scan import schedule_due_reminder
             await schedule_due_reminder(db, reminder, now_utc=now_utc)
