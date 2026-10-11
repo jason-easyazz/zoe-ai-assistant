@@ -5350,7 +5350,6 @@
           "services/zoe-data/proactive/triggers/emotional_followup.py",
           "services/zoe-data/proactive/triggers/evening_windown.py",
           "services/zoe-data/proactive/triggers/evolution_weekly_digest.py",
-          "services/zoe-data/proactive/triggers/morning_checkin.py",
           "services/zoe-data/proactive/triggers/people_birthday.py",
           "services/zoe-data/proactive/triggers/people_health.py",
           "services/zoe-data/proactive/triggers/reminder_scan.py",
