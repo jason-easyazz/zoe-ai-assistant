@@ -377,7 +377,7 @@ def test_prediction_and_timeout_scale():
 # ── the 12B command is generated from the parked unit, never hand-written ────
 
 def test_the_12b_command_is_the_parked_execstart_with_only_the_listed_changes(tmp_path):
-    cfg = nw.NightCfg(binary=None, ngl=None, fit_off=False)                    # the PARKED shape (b9733, -ngl 99, no --fit): the measured defaults are tested below
+    cfg = nw.NightCfg(binary=None, ngl=None, fit_off=False, mlock=True)        # the PARKED shape (b9733, -ngl 99, no --fit): the measured defaults are tested below
     spec = nw.llm_spec(PARKED, cfg, nw.Levers("qat", 32768, "q8_0"))
     a = spec["argv"]
     assert a[0] == "/home/zoe/llama.cpp/build-jetson-new/bin/llama-server"                          # the parked binary, verbatim
@@ -394,7 +394,7 @@ def test_the_12b_command_is_the_parked_execstart_with_only_the_listed_changes(tm
 
 
 def test_another_build_gets_its_renamed_flags_and_the_parked_text_is_never_written(tmp_path):
-    cfg = nw.NightCfg(binary="/home/zoe/llama.cpp-b11194/build-jetson/bin/llama-server")
+    cfg = nw.NightCfg(binary="/home/zoe/llama.cpp-b11194/build-jetson/bin/llama-server", mlock=True)
     a = nw.llm_spec(PARKED, cfg, nw.Levers("qat", 32768, "q8_0"))["argv"]
     assert a[0].endswith("b11194/build-jetson/bin/llama-server") and "--mlock" not in a and "--chat-template-kwargs" not in a
     assert a[a.index("--load-mode") + 1] == "mmap+mlock" and a[a.index("--reasoning") + 1] == "off"
@@ -795,7 +795,7 @@ def test_unified_memory_is_an_env_lever_on_the_12b_only_default_on_for_a_jetson(
 
 
 def test_ngl_nomlock_and_fit_are_levers_that_change_only_their_flag():
-    base = nw.llm_spec(PARKED, nw.NightCfg(binary=None, ngl=None), nw.Levers("qat", 32768, "q8_0"))["argv"]
+    base = nw.llm_spec(PARKED, nw.NightCfg(binary=None, ngl=None, mlock=True), nw.Levers("qat", 32768, "q8_0"))["argv"]
     ngl = nw.llm_spec(PARKED, nw.NightCfg(binary=None, ngl=28), nw.Levers("qat", 32768, "q8_0"))["argv"]
     assert ngl[ngl.index("--n-gpu-layers") + 1] == "28" and base[base.index("--n-gpu-layers") + 1] == "99"
     assert "--mlock" not in nw.llm_spec(PARKED, nw.NightCfg(binary=None, mlock=False), nw.Levers("qat", 32768, "q8_0"))["argv"] and "--mlock" in base
@@ -805,6 +805,19 @@ def test_ngl_nomlock_and_fit_are_levers_that_change_only_their_flag():
     cfg = nw.configure(args, nw.NightCfg())
     assert (cfg.ngl, cfg.mlock, cfg.fit_off, cfg.retry_load) == (30, False, True, True)
     assert nw.configure(nw.build_parser().parse_args(["--fit-default"]), nw.NightCfg()).fit_off is False
+
+
+def test_the_12b_runs_without_mlock_by_default_and_mlock_is_opt_in(monkeypatch):
+    """2026-10-11: mmap+mlock + ngl 34 OOMed 3 of 5 loads (even right after drop_caches); without the lock it loaded first try and decoded faster (6.96 / 201 tok/s)."""
+    monkeypatch.delenv("NIGHT_MLOCK", raising=False)
+    assert nw.NightCfg().mlock is False
+    plain = nw.configure(nw.build_parser().parse_args([]), nw.NightCfg())
+    assert plain.mlock is False
+    a = nw.llm_spec(PARKED, plain, nw.Levers("qat", 8192, "q8_0"))["argv"]
+    assert "--mlock" not in a and "--load-mode" not in a                       # the default window command carries no lock flag at all
+    opted = nw.configure(nw.build_parser().parse_args(["--mlock"]), nw.NightCfg())
+    assert opted.mlock is True and "--load-mode" in nw.llm_spec(PARKED, opted, nw.Levers("qat", 8192, "q8_0"))["argv"]
+    assert nw.configure(nw.build_parser().parse_args(["--mlock", "--no-mlock"]), nw.NightCfg()).mlock is False      # --no-mlock still wins
 
 
 def test_the_night_mind_entry_point_is_used_as_soon_as_it_exists_with_the_served_context_and_speed(tmp_path):

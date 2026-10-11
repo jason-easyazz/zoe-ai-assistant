@@ -289,8 +289,10 @@ class NightCfg(bk.Cfg):
     #: ``--fit off`` is the DEFAULT now: with full offload (``-ngl 99``) it died on cudaMalloc of the 6.6 GB buffer (2026-10-09 01:57), but at the measured ``-ngl 38`` the winner ran with it (every loading b11194 config of the
     #: sweep did; 26-row table). ``--fit-default`` / ``NIGHT_FIT_OFF=0`` omits the flag (llama.cpp's own default).
     fit_off: bool = os.environ.get("NIGHT_FIT_OFF", "1") != "0"
-    #: the parked unit passes ``--mlock``: the model file is mapped, locked in RAM AND copied into the CUDA buffer, so loading needs about twice the file size at once. ``--no-mlock`` drops it.
-    mlock: bool = os.environ.get("NIGHT_NO_MLOCK") != "1"
+    #: the parked unit passes ``--mlock``: the model file is mapped, locked in RAM AND copied into the CUDA buffer, so loading needs about twice the file size at once. The window now runs the 12B
+    #: WITHOUT it by default (2026-10-11: mmap+mlock + ngl 34 hit cudaMalloc OOM on 3 of 5 loads, even straight after drop_caches + compaction; without the lock it loaded first try and decoded
+    #: faster, 6.96 / 201 tok/s). ``--mlock`` / ``NIGHT_MLOCK=1`` opt in again; ``--no-mlock`` stays accepted.
+    mlock: bool = os.environ.get("NIGHT_MLOCK") == "1"
     #: ``--n-gpu-layers``: 34 of 48. The sweep's speed winner was 38 (6.89 tok/s against 6.13 at 34), but on 2026-10-09 ngl 38 was REFUSED twice (cudaMalloc of 159 MiB / load_model
     #: failed with 12.9 GB of MemFree and only 6.0-7.1 GB in free blocks of 2 MB and up after six compactions) and ngl 34 loaded the first time (MemAvailable 4,190 MiB after the
     #: load): a night that does not start measures nothing, so the default is the layer count that loads, at an 11 % speed cost. 38 stays selectable (``--ngl 38``). 42 and up die
@@ -2147,7 +2149,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--binary", default=None, help="llama-server binary other than the default b11194 build (flags are translated for any build but the parked unit's b9733)")
     ap.add_argument("--fit-off", action="store_true", help="add --fit off to the 12B command (the default since the 2026-10-09 sweep; see NightCfg.fit_off)")
     ap.add_argument("--fit-default", action="store_true", help="do NOT add --fit off: leave llama.cpp's own fit at its default")
-    ap.add_argument("--no-mlock", action="store_true", help="drop --mlock from the 12B command (the locked mmap of the file plus the CUDA copy is about 2x the file at load)")
+    ap.add_argument("--no-mlock", action="store_true", help="no mlock on the 12B (the DEFAULT since 2026-10-11: the locked mmap of the file plus the CUDA copy is about 2x the file at load, and it OOMed 3 of 5 loads); wins over --mlock")
+    ap.add_argument("--mlock", action="store_true", help="opt IN to the mlock'd mmap for the 12B (the parked unit's old setting; also NIGHT_MLOCK=1)")
     ap.add_argument("--ngl", type=int, default=None, help="--n-gpu-layers for the 12B (default 34 of 48: it loaded first time where 38, the sweep's faster winner at +11 %% decode, was refused twice on 2026-10-09; 38 stays selectable; NIGHT_NGL); fewer layers = a smaller single CUDA allocation, the rest stays in RAM")
     ap.add_argument("--batch-size", type=int, default=None, help="--batch-size for the 12B (default 512; NIGHT_BATCH)")
     ap.add_argument("--ubatch-size", type=int, default=None, help="--ubatch-size for the 12B (default 128; NIGHT_UBATCH)")
@@ -2205,7 +2208,7 @@ def configure(args: argparse.Namespace, cfg: "Optional[NightCfg]" = None) -> Nig
     cfg.fallback_4b = not args.no_fallback and not cfg.exploratory
     cfg.binary = args.binary or cfg.binary
     cfg.fit_off = (cfg.fit_off or args.fit_off) and not args.fit_default
-    cfg.mlock = cfg.mlock and not args.no_mlock
+    cfg.mlock = (cfg.mlock or args.mlock) and not args.no_mlock
     cfg.ngl = args.ngl if args.ngl is not None else cfg.ngl
     cfg.batch = args.batch_size if args.batch_size is not None else cfg.batch
     cfg.ubatch = args.ubatch_size if args.ubatch_size is not None else cfg.ubatch
