@@ -2103,6 +2103,31 @@ def _contains_decision_keyword(text: str, keywords: frozenset[str]) -> bool:
     return False
 
 
+_FORM_CANCEL_PHRASES = ("cancel", "dismiss", "close", "never mind", "nevermind", "forget it", "stop")
+_FORM_CANCEL_FILLER = frozenset({
+    "it", "that", "this", "the", "form", "panel", "window", "please", "just", "ok", "okay", "oh", "hey", "zoe", "now",
+    "thanks", "thank", "you", "and", "all", "of",
+})
+
+
+def _is_form_cancel_command(lc_text: str) -> bool:
+    """True only when the whole utterance is a cancel command ("stop", "cancel it", "close the form").
+
+    A bare substring match swallowed distress ("I can't stop the bleeding", "the fire is close to the house") as a
+    form cancel before the emergency tiers ran, so every word beyond a cancel phrase must be filler.
+    """
+    words = re.findall(r"[a-z0-9']+", lc_text.lower())
+    if not words or len(words) > 5:
+        return False
+    rest = " ".join(words)
+    found = False
+    for phrase in _FORM_CANCEL_PHRASES:
+        if re.search(rf"\b{phrase}\b", rest):
+            found = True
+            rest = re.sub(rf"\b{phrase}\b", " ", rest)
+    return found and all(w in _FORM_CANCEL_FILLER for w in rest.split())
+
+
 _NEGATION_RE = re.compile(r"\b(?:not|never|isn'?t|wasn'?t|aren'?t|can'?t|won'?t|don'?t|doesn'?t)\b|n't\b", re.IGNORECASE)
 _QUESTIONING_RE = re.compile(
     r"\b(?:are|were|r)\s+you\s+(?:sure|certain|serious)\b|\b(?:really|why|what|who|how|where|when|which)\b", re.IGNORECASE)
@@ -3406,8 +3431,7 @@ async def voice_command(
         if _active_form:
             _form_panel_type = _active_form.get("panel_type", "")
             _lc_voice = text.lower().strip().rstrip(".!?")
-            _cancel_words = {"cancel", "dismiss", "close", "never mind", "nevermind", "forget it", "stop"}
-            if any(w in _lc_voice for w in _cancel_words):
+            if _is_form_cancel_command(_lc_voice):
                 # User said cancel — dismiss the panel
                 clear_active_form(panel_id)
                 try:
