@@ -3636,6 +3636,7 @@
         "in_env_example": false,
         "readers": [
           "scripts/perf/hop_placement_ab.py",
+          "scripts/perf/kokoro_first_chunk_probe.py",
           "scripts/perf/measure_first_sound.py",
           "scripts/perf/measure_speed.py",
           "scripts/perf/measure_tts.py",

@@ -149,3 +149,30 @@ def test_importing_the_probe_changes_no_environment_and_main_restores_it(monkeyp
         os.environ["ZOE_FIRST_SOUND_CLAUSE"] = "1"
         os.environ.pop("PATH", None)
     assert dict(os.environ) == before
+
+
+class FiniteBrain(Brain):
+    async def stream(self):
+        try:
+            for d in self.deltas:
+                yield d
+        finally:
+            self.closed = True
+
+
+def test_drain_is_off_by_default_and_records_reply_length_when_on():
+    plain = drive(FiniteBrain(DELTAS), make_vt(lambda t: True), make_fs(None))
+    assert "reply_words" not in plain and "reply" not in plain
+    assert plain["first_unit_words"] == len(DELTAS[0].split()) + len(DELTAS[1].split())
+    try:
+        mfs.DRAIN.update(on=True, text=False)
+        counted = drive(FiniteBrain(DELTAS), make_vt(lambda t: True), make_fs(None))
+        mfs.DRAIN["text"] = True
+        texted = drive(FiniteBrain(DELTAS), make_vt(lambda t: True), make_fs(None))
+    finally:
+        mfs.DRAIN.update(on=False, text=False)
+    assert counted["reply_words"] == len("".join(DELTAS).split()) and counted["closed_at_return"] is True
+    assert "reply" not in counted                           # text is opt-in: it can quote household memory
+    assert texted["reply"] == "".join(DELTAS).strip() and texted["first_unit"].startswith("The answer is")
+    row = dict(counted, cond="a", shape="chat", clip_s=1.0)
+    assert mfs.summarize([row])["a/chat"]["reply_words"] == counted["reply_words"]
