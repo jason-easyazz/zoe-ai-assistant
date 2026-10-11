@@ -60,6 +60,8 @@ EXIT_JOBS_FAILED = 5          # the box is back and healthy, but a night job did
 
 HOME = os.environ.get("HOME", "/home/zoe")
 MIB = 1024 * 1024
+#: the cold-start page-cache drop loop (see ``cold_start_guard``); the tracked llama-server drop-in wires the same script as ExecStartPre
+COLD_START_HELPER = REPO / "scripts" / "maintenance" / "brain_cold_start.sh"
 
 # ── the units, in the order they sleep and wake ──────────────────────────────
 
@@ -1717,6 +1719,19 @@ class NightWindow(bk.Window):
         except Exception as exc:  # noqa: BLE001 - restore never raises
             self.event(f"RESTORE ALARM: compaction before the brain start errored ({type(exc).__name__}: {exc})")
 
+    def cold_start_guard(self) -> None:
+        """Before the 4B starts: the page-cache drop loop that keeps a cold start off NvMap error 12 (``scripts/maintenance/brain_cold_start.sh``). When the installed unit already
+        wires it as ``ExecStartPre`` (the tracked drop-in ``llama-server.service.d/50-cold-start.conf``) systemd runs it on this very start, so this does nothing (no double work); on a
+        host without the drop-in it runs the same helper here, which returns at once and leaves its bounded loop running while ``systemctl start`` loads the model. Never raises."""
+        try:
+            if "brain_cold_start" in self.host.run(["systemctl", "--user", "cat", BRAIN], mutating=False).out:
+                self.log("RESTORE: the brain unit runs the cold-start helper itself (ExecStartPre)")
+                return
+            r = self.host.run(["bash", str(COLD_START_HELPER)], timeout=60)
+            self.log(f"RESTORE: the brain unit has no cold-start drop-in; ran {COLD_START_HELPER.name} here (rc {r.rc}): {r.out.strip()[:200]}")
+        except Exception as exc:  # noqa: BLE001 - restore never raises; the start proceeds as it did before this helper existed
+            self.log(f"RESTORE: cold-start helper errored ({type(exc).__name__}: {exc}); starting the brain without it")
+
     def bring_back(self, unit: str) -> "dict[str, Any]":
         """Start ``unit`` and require its OWN health answer. One retry (a restart, with a fresh compaction for the brain); then the failure is reported, not hidden."""
         spec = HEALTH[unit]
@@ -1727,6 +1742,8 @@ class NightWindow(bk.Window):
                 self.event(f"RESTORE: {unit} not healthy after {spec.wait_s:.0f}s - retrying with a restart")
                 if unit == BRAIN:
                     self.compact_before_brain()
+            if unit == BRAIN:
+                self.cold_start_guard()
             self.host.run(["systemctl", "--user", verb, unit], timeout=spec.wait_s + 60)
             if self.poll_health(spec.url, spec.ok, spec.wait_s, unit=unit, guard=False):
                 info["ok"] = True
