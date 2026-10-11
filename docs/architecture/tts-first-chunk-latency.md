@@ -28,6 +28,9 @@ related:
 > backend, and there is no `ZOE_KOKORO_BACKEND` switch or `onnx` code default any more.
 > The CPU-vs-CUDA first-chunk tradeoff below is kept as a historical measurement; the
 > live path runs PyTorch on CUDA (falling back to CPU only if CUDA cannot load).
+> A 2026-09-27 re-measurement of a different thing — ONNX Runtime on *CUDA* (B5.1, code kept
+> on branch `feat/b5-1-kokoro-onnx`, not merged) — found it not a win; see
+> `docs/knowledge/kokoro-onnx-migration.md`.
 
 ## What was unmeasured
 
