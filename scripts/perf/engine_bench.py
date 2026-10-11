@@ -401,7 +401,14 @@ def brain_health() -> bool:
     except Exception: return False
 
 
+def _raise_interrupt(*_):
+    raise KeyboardInterrupt()
+
+
 def cmd_window(a) -> None:
+    # Stops the live brain: an explicit operator opt-in only (same gate as the other ZOE_PERF probes).
+    if os.environ.get("ZOE_PERF") != "1":
+        sys.exit("refusing: the window stops the live llama-server; set ZOE_PERF=1 to opt in (and hold the harness lock)")
     out = Path(a.out); wl = json.loads((out / "workload.json").read_text())
     log = lambda m: print(time.strftime("%H:%M:%S"), m, flush=True)
     t_start = time.time(); log("WINDOW START: stopping llama-server (brain)")
@@ -409,7 +416,7 @@ def cmd_window(a) -> None:
     subprocess.run(["systemd-run", "--user", "--quiet", "--unit=zoe-bench-brain-restart", f"--on-active={int(a.budget_min * 60 + 300)}s",
                     "systemctl", "--user", "start", "llama-server"], check=False)
     for s in (signal.SIGTERM, signal.SIGHUP):
-        signal.signal(s, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
+        signal.signal(s, _raise_interrupt)
     try:
         subprocess.run(["systemctl", "--user", "stop", "llama-server"], check=True, timeout=120)
         time.sleep(4)
