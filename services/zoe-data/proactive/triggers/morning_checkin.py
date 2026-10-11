@@ -242,10 +242,13 @@ class MorningCheckInTrigger(ProactiveTrigger):
 
         today = now.date().isoformat()
 
-        # Check already fired today for each active user
+        # Already briefed TODAY (the household's local day, not the DB's UTC date: the 07:30-08:30
+        # window straddles UTC midnight in Perth, so a UTC date fired a second brief at 08:00).
+        # Claimed rows count too: a brief the member already tapped is still a brief sent.
         async with db.execute(
-            "SELECT user_id FROM proactive_pending WHERE trigger_type=? AND created_at::date = CURRENT_DATE AND claimed=0",
-            ("morning_checkin",),
+            "SELECT user_id FROM proactive_pending WHERE trigger_type=? "
+            "AND (created_at::timestamptz AT TIME ZONE ?)::date = ?::date",
+            ("morning_checkin", now.tzinfo.key, today),
         ) as cur:
             already_fired = {row[0] async for row in cur}
 

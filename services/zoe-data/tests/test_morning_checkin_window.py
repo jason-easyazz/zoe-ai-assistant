@@ -67,3 +67,28 @@ async def test_timezone_is_read_per_call_not_at_import(monkeypatch):
     assert await _passes_window(monkeypatch, instant) is False
     monkeypatch.setenv("ZOE_TIMEZONE", "Australia/Sydney")
     assert await _passes_window(monkeypatch, instant) is True
+
+
+class _Capture:
+    def __init__(self):
+        self.calls = []
+
+    def execute(self, sql, params=()):
+        self.calls.append((sql, tuple(params)))
+        raise _Reached
+
+
+@pytest.mark.asyncio
+async def test_once_per_day_dedup_keys_on_the_local_date_not_utc(monkeypatch):
+    """08:05 Perth is already the NEXT UTC date; a UTC `CURRENT_DATE` dedup forgot the 07:35 brief
+    and fired a second one (cross-review of this PR, B1)."""
+    monkeypatch.delenv("ZOE_TIMEZONE", raising=False)
+    _freeze(monkeypatch, _perth(8, 5))
+    db = _Capture()
+    with pytest.raises(_Reached):
+        await mc.MorningCheckInTrigger().check(db)
+    sql, params = db.calls[0]
+    assert "CURRENT_DATE" not in sql and "AT TIME ZONE" in sql
+    assert "claimed" not in sql                       # a claimed brief was still sent today
+    assert params == ("morning_checkin", "Australia/Perth", "2026-10-12")
+

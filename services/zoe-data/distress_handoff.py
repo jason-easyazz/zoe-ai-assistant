@@ -246,7 +246,7 @@ async def _notify(user_id: str, v: Verdict, minor: bool) -> None:
         if (not cfg.contact_user or cfg.notify == "off" or (cfg.notify == "minors" and not minor)
                 or user_id in _GUESTS or user_id == cfg.contact_user or v.tier != "handoff"):
             return
-        key, window = (f"{user_id}:danger", DANGER_COOLDOWN_S) if v.cls == "danger" else (user_id, NOTIFY_COOLDOWN_S)
+        key, window = ((user_id, "danger"), DANGER_COOLDOWN_S) if v.cls == "danger" else (user_id, NOTIFY_COOLDOWN_S)
         if time.monotonic() - _NOTIFIED.get(key, -1e9) < window:
             return
         _NOTIFIED[key] = time.monotonic()
@@ -271,7 +271,7 @@ async def _notify(user_id: str, v: Verdict, minor: bool) -> None:
                                                                       "message": message, "delivered": False}, user_id=cfg.contact_user)
         logger.info("DISTRESS_NOTIFIED member=%s", user_id)
     except Exception as exc:  # noqa: BLE001
-        _NOTIFIED.pop(f"{user_id}:danger" if v.cls == "danger" else user_id, None)
+        _NOTIFIED.pop((user_id, "danger") if v.cls == "danger" else user_id, None)
         logger.warning("distress notify failed (%s)", type(exc).__name__)
 
 
