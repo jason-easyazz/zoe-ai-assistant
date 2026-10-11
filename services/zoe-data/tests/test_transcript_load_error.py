@@ -152,3 +152,58 @@ def test_the_digest_row_carries_load_failed_and_counts_as_a_processing_error(mon
     assert row.get("error") == "load_failed:TypeError" and row.get("skipped_reason") is None
     counts = memory_metrics._classify_rows([row])
     assert counts["processing_errors"] == 1 and counts["extractor_errors"] == 0 and counts["skipped"] == 0
+
+
+# ── the pool cannot hand out a connection (``get_db_ctx().__aenter__`` raises BEFORE any loader's own try) ────────────────────────
+
+class _NoConnection:
+    async def __aenter__(self):
+        raise ConnectionError("pool exhausted")
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+def _pool_down(monkeypatch, *, init_fails=False):
+    import db_pool
+
+    async def init_pool():
+        if init_fails:
+            raise OSError("no postgres")
+
+    async def close_pool():
+        return None
+    monkeypatch.setattr(db_pool, "init_pool", init_pool)
+    monkeypatch.setattr(db_pool, "close_pool", close_pool)
+    monkeypatch.setattr(db_pool, "get_db_ctx", lambda: _NoConnection())
+    import memory_service
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: None)
+
+    async def probe(_cfg):
+        return True, ""
+    monkeypatch.setattr(nm, "probe_model", probe)
+
+
+def test_a_member_whose_connection_cannot_be_acquired_is_load_error_and_the_summary_prints(monkeypatch, capsys):
+    cli = _cli()
+    _pool_down(monkeypatch)
+    code = cli.main(["--user", "u1", "--model-url", "http://127.0.0.1:1/v1"])
+    out = capsys.readouterr().out
+    import json
+    summary = json.loads(out.strip().splitlines()[-1])
+    assert code == 1 and summary["status"] == "load_error"
+    assert [m["status"] for m in summary["members"]] == ["load_error"] and summary["members"][0]["error"] == "ConnectionError"
+    assert summary["totals"]["load_errors"] == 1
+
+
+def test_a_pool_that_cannot_list_or_open_reports_setup_error_with_a_summary(monkeypatch, capsys):
+    import json
+    cli = _cli()
+    _pool_down(monkeypatch)
+    code = cli.main(["--all-members", "--model-url", "http://127.0.0.1:1/v1"])        # listing the members needs a connection
+    summary = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert code == 1 and summary["status"] == "load_error" and summary["setup_error"] == "ConnectionError" and summary["members"] == []
+    _pool_down(monkeypatch, init_fails=True)
+    code = cli.main(["--all-members", "--model-url", "http://127.0.0.1:1/v1"])
+    summary = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert code == 1 and summary["setup_error"] == "OSError"

@@ -50,7 +50,7 @@ Output
                 "completion_tokens_per_wall_s", "members_written"},
      "members_written": N, "members_total": M,      (members whose pass committed rows / members the run reached: partial completion is visible here)
      "cells": {"K1": "PASS", ..., "pass", "fail", "skip", "error", "k1": {"judged", "true", "false"}, "evidence": {"K9": [<what the failed cell scored>]}}      (only with --cells)}
-Exit codes: 0 ok / nothing to do, 1 error or load_error (a member's transcript could not be READ: that member's status is ``load_error``, counted in ``totals.load_errors``, never ``quiet_day``), 2 the model is unreachable. The "nothing was written" guarantee is PER MEMBER: each member's night is computed in memory
+Exit codes: 0 ok / nothing to do, 1 error or load_error (a member's transcript could not be READ: that member's status is ``load_error``, counted in ``totals.load_errors``, never ``quiet_day``; a pool that cannot open or list the members gives status ``load_error`` with ``setup_error`` = the exception class, no members), 2 the model is unreachable. The "nothing was written" guarantee is PER MEMBER: each member's night is computed in memory
 and committed at the end of that member, and the server is probed first. With --all-members an earlier member's committed night stays when a later member
 fails or the server drops, so exit 2 / 1 can follow earlier writes: read ``members_written`` / ``members_total`` in the JSON (and stderr's exit-2 line) for how far it got.
 Never prints environment, tokens or the text of what the owner said (counts and ids only).
@@ -142,11 +142,16 @@ def _loader(args, db_ctx):
             return _transcript_from_file(args.transcript_file)
         import memory_digest as md
 
-        async with db_ctx[0]() as db:
-            if args.date:
-                start, end = _day_bounds(args.date)
-                return await md.load_day_messages(uid, start, end, db=db)
-            return await md._load_todays_messages(uid, db)
+        try:
+            async with db_ctx[0]() as db:
+                if args.date:
+                    start, end = _day_bounds(args.date)
+                    return await md.load_day_messages(uid, start, end, db=db)
+                return await md._load_todays_messages(uid, db)
+        except md.TranscriptLoadError:
+            raise
+        except Exception as exc:      # the pool could not hand out a connection (exhausted / down): raised by ``__aenter__``, OUTSIDE the loaders' own try
+            raise md.TranscriptLoadError(exc) from exc
     return load
 
 
@@ -172,7 +177,10 @@ async def run_members(args, cfg, mode: str) -> dict:
         if not args.transcript_file:
             from db_pool import close_pool, get_db_ctx, init_pool
 
-            await init_pool()
+            try:
+                await init_pool()
+            except Exception as exc:  # noqa: BLE001 - no pool: no member can be read; report it, do not die without the summary
+                return {"members": [], "setup_error": type(exc).__name__}
             db_ctx = (get_db_ctx, close_pool)
         from memory_service import get_memory_service
 
@@ -186,8 +194,11 @@ async def run_members(args, cfg, mode: str) -> dict:
             import memory_digest as md
             from user_filters import drop_synthetic_users
 
-            async with db_ctx[0]() as db:
-                users = await md._list_user_ids(md._message_owner_users_sql(today_only=False), db=db)
+            try:
+                async with db_ctx[0]() as db:
+                    users = await md._list_user_ids(md._message_owner_users_sql(today_only=False), db=db)
+            except Exception as exc:  # noqa: BLE001 - cannot list the members: nothing was read, and that is not "nothing to do"
+                return {"members": [], "setup_error": type(exc).__name__}
             if not args.allow_synthetic:
                 users = drop_synthetic_users(users, pass_name="night_mind", log=None)
         for uid in users:
@@ -391,6 +402,8 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
         summary["totals"] = {**totals([mt]), "members": 0, "wall_s": round(time.monotonic() - t0, 2)}      # the counters of every call the cells made, aggregated
         return 0, summary
     res = await run_members(args, cfg, mode)
+    if res.get("setup_error"):
+        summary["setup_error"] = res["setup_error"]
     summary["members"] = res["members"]
     summary["totals"] = totals(res["members"])
     summary["members_written"], summary["members_total"] = written_tally(res["members"])
@@ -402,7 +415,7 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
     if "error" in statuses:
         summary["status"] = "error"
         return 1, summary
-    if "load_error" in statuses:
+    if "load_error" in statuses or summary.get("setup_error"):
         summary["status"] = "load_error"
         return 1, summary
     if not res["members"]:
@@ -420,8 +433,8 @@ def main(argv: "list[str] | None" = None) -> int:
         print(f"exit 2: the model went away after {summary['members_written']} of {summary.get('members_total')} members had committed their night "
               f"(those rows stay; the guarantee is per member)", file=sys.stderr)
     tot = summary.get("totals") or {}
-    if tot.get("load_errors"):                    # the window copies NIGHT_JOB lines from the job log into its report: a failed read must be visible there, not read as a quiet night
-        print(f"NIGHT_JOB night_mind load_error members={tot['load_errors']}/{tot.get('members')} (a transcript read failed: NOT a quiet day; exit {code})", file=sys.stderr)
+    if tot.get("load_errors") or summary.get("setup_error"):                    # the window copies NIGHT_JOB lines from the job log into its report: a failed read must be visible there, not read as a quiet night
+        print(f"NIGHT_JOB night_mind load_error members={tot.get('load_errors', 0)}/{tot.get('members')} setup_error={summary.get('setup_error') or '-'} (a transcript read failed: NOT a quiet day; exit {code})", file=sys.stderr)
     print(json.dumps(summary, indent=2 if pretty else None, sort_keys=True, separators=None if pretty else (",", ":")))
     return code
 
