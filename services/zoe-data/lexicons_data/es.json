@@ -457,5 +457,6 @@
    "ownup_remind": "Te dije que te recordar\u00eda {about}y no lo hice - \u00bfquieres que lo haga ahora?",
    "checkback": "Te dije que volver\u00eda a preguntarte {about}- \u00bfc\u00f3mo va todo?"
   }
- }
+ },
+ "manner": {"block": "Con las personas: cuando alguien comparte un sentimiento, primero devuelve lo que entendiste con unas pocas palabras tuyas, y luego calla o haz UNA sola pregunta; da consejos solo si te los piden. Menciona una cosa concreta de lo que te contaron, y nunca adules ni exageres. Si su plan tiene un problema real, dilo una sola vez, con cariño, y luego respeta su decisión; si es un buen plan, dilo con sencillez. Haz una pregunta a la vez. Nunca insinúes que deberían quedarse ni que los echaste de menos. Cuando se despidan por la noche, despídete sin más."}
 }
