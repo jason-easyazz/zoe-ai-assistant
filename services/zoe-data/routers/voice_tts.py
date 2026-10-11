@@ -5636,6 +5636,11 @@ async def _take_stt_stream_text(payload: dict, raw: bytes, suffix: str) -> str |
     sid = (payload or {}).get("stt_stream_id")
     if not sid or not _stt_stream.stream_under_speech_enabled():
         return None
+    # A speculative (B1.1) turn never takes a stream, whatever the client sends: take() is single-use, so a
+    # speculative turn would consume the stream and leave the committed turn on batch STT. Server-enforced.
+    if (payload or {}).get("speculative"):
+        logger.info("STT_STREAM outcome=fallback reason=speculative finish_ms=0")
+        return None
     t0 = time.monotonic()
     reason, text = "ok", None
     try:

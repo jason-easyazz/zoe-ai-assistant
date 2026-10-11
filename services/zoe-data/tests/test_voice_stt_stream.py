@@ -179,7 +179,46 @@ def test_negative_control_sample_check_is_what_protects_the_transcript(monkeypat
     assert got.lower() == "what is on my calendar"  # RED proof: the unbroken check (previous test) returns None for this shape
 
 
+def test_speculative_turn_never_takes_a_stream():
+    """B1.1 safety contract, server-enforced: a speculative turn must not consume the single-use stream."""
+    sess, _ = open_session("9" * 16)
+    sess.feed(0, pcm(2000))
+    payload = {"stt_stream_id": "9" * 16, "stt_stream_samples": 2000, "speculative": True, "turn_id": "t1"}
+    assert _take(payload, wav(2000)) is None
+    assert "9" * 16 in ss._sessions  # untouched: the committed turn can still take it
+    payload.pop("speculative")
+    assert _take(payload, wav(2000)).lower() == "what is on my calendar"
+
+
+def test_finish_timeout_falls_back(monkeypatch):
+    release = threading.Event()
+
+    class HungStream(FakeStream):
+        def stop(self):
+            release.wait(5)
+            return super().stop()
+
+    monkeypatch.setenv("ZOE_STT_STREAM_FINISH_TIMEOUT_MS", "50")
+    sess, _ = open_session("b" * 16, HungStream())
+    sess.feed(0, pcm(2000))
+    try:
+        assert _take({"stt_stream_id": "b" * 16, "stt_stream_samples": 2000}, wav(2000)) is None
+        assert sess.broken == "timeout"
+    finally:
+        release.set()
+
+
+def test_idle_session_is_reaped(monkeypatch):
+    sess, _ = open_session("c" * 16)
+    sess.touched -= ss.IDLE_TTL_S + 1  # idle past the TTL
+    ss.get_or_open("0" * 16, 0, lambda: FakeStream(), threading.Lock())  # any open reaps first
+    assert "c" * 16 not in ss._sessions and "0" * 16 in ss._sessions
+
+
 # -- router wiring (TestClient; fakes only) ------------------------------------------------------------------------
+
+ABSENT = "<no pre_text kwarg>"
+
 
 def _turn_app(monkeypatch, seen):
     from fastapi import FastAPI
@@ -188,7 +227,7 @@ def _turn_app(monkeypatch, seen):
     monkeypatch.setenv("ZOE_VOICE_GREETING_ENABLED", "0")
 
     async def _fake_stt(_path, capture=True, **kw):
-        seen.append(kw.get("pre_text"))
+        seen.append(kw.get("pre_text", ABSENT))
         return kw.get("pre_text") or "batch transcript"
 
     async def _brain(payload, caller=None, stream=True, db=None):
@@ -224,8 +263,8 @@ def test_turn_stream_uses_stream_text_only_when_flag_on_and_samples_match(monkey
         assert seen == ["What is on my calendar"]  # the stream text reached the shared STT wrapper
         seen.clear()
         _post_turn(client, 3000, {})  # no stream id: byte-identical call, no kwarg at all
-        assert seen == [None]
+        assert seen == [ABSENT]
         sess, _ = open_session("8" * 16)
         sess.feed(0, pcm(3000))
         _post_turn(client, 3001, {"stt_stream_id": "8" * 16, "stt_stream_samples": 3000})  # clip != stream
-        assert seen[-1] is None
+        assert seen[-1] == ABSENT
