@@ -289,8 +289,10 @@ class NightCfg(bk.Cfg):
     #: ``--fit off`` is the DEFAULT now: with full offload (``-ngl 99``) it died on cudaMalloc of the 6.6 GB buffer (2026-10-09 01:57), but at the measured ``-ngl 38`` the winner ran with it (every loading b11194 config of the
     #: sweep did; 26-row table). ``--fit-default`` / ``NIGHT_FIT_OFF=0`` omits the flag (llama.cpp's own default).
     fit_off: bool = os.environ.get("NIGHT_FIT_OFF", "1") != "0"
-    #: the parked unit passes ``--mlock``: the model file is mapped, locked in RAM AND copied into the CUDA buffer, so loading needs about twice the file size at once. ``--no-mlock`` drops it.
-    mlock: bool = os.environ.get("NIGHT_NO_MLOCK") != "1"
+    #: the parked unit passes ``--mlock``: the model file is mapped, locked in RAM AND copied into the CUDA buffer, so loading needs about twice the file size at once. The window now runs the 12B
+    #: WITHOUT it by default (2026-10-11: mmap+mlock + ngl 34 hit cudaMalloc OOM on 3 of 5 loads, even straight after drop_caches + compaction; without the lock it loaded first try and decoded
+    #: faster, 6.96 / 201 tok/s). ``--mlock`` / ``NIGHT_MLOCK=1`` opt in again; ``--no-mlock`` stays accepted.
+    mlock: bool = os.environ.get("NIGHT_MLOCK") == "1"
     #: ``--n-gpu-layers``: 34 of 48. The sweep's speed winner was 38 (6.89 tok/s against 6.13 at 34), but on 2026-10-09 ngl 38 was REFUSED twice (cudaMalloc of 159 MiB / load_model
     #: failed with 12.9 GB of MemFree and only 6.0-7.1 GB in free blocks of 2 MB and up after six compactions) and ngl 34 loaded the first time (MemAvailable 4,190 MiB after the
     #: load): a night that does not start measures nothing, so the default is the layer count that loads, at an 11 % speed cost. 38 stays selectable (``--ngl 38``). 42 and up die
@@ -316,6 +318,15 @@ class NightCfg(bk.Cfg):
     skip_4b: bool = False
     #: ``--cells-only`` (implies the trial's load / restore): the 12B is loaded, probed, and ONLY the night mind's own cells run on it. No ZMA-arm pass (a memory arm the bake-off rejected), no embeddings shim, no 4B phase.
     cells_only: bool = False
+    #: ``--cells-only``: how many times the CLI runs the cells (``zoe-night-mind.py --runs``; the verdict of a cell is the MAJORITY over them) and, optionally, which cells (``--only``).
+    #: 1 / "" = the window's historical behaviour (one run of everything that fits).
+    cells_runs: int = 1
+    cells_pick: str = ""
+    cells_seed: int = 1000                  # ``--cell-seed`` of the CLI: run i of a window uses seed + i, so separate windows can take separate samples
+    #: ``--cells-only``: the lab corpus the cells run on (the CLI's ``--seed``; "" = its default ``zmb-v1``): a held-out corpus is any other string
+    cells_corpus: str = ""
+    #: ``--cells-only``: record every model call's prompt + reply and each cell's final threads / changes (the CLI's ``--trace``) under ``logs/<run_id>-cells-trace.jsonl``. The lab's invented household only.
+    cells_trace: bool = False
     busy_units: tuple = ("zoe-training.service", "zoe-backup.service", "zoe-backup-verify.service", "zoe-memory-export.service", "zoe-dreaming.service")
     busy_wait_max_min: float = 20.0
     busy_poll_s: float = 30.0
@@ -594,6 +605,42 @@ def reflect_summary(res: dict) -> dict:
 def cell_key(k: str) -> bool:
     """A key of the night-mind CLI's ``cells`` object that is a cell verdict (K1 ... K12, K9f), not a counter."""
     return bool(re.fullmatch(r"K\d+f?", str(k)))
+
+
+_NIGHT_CELL_LINE = re.compile(r"NIGHT_CELL id=(K\d+f?) verdict=(\w+)(?: wall_s=\S+)?(?: run=(\d+))?")
+
+
+def rebuild_cell_votes(text: str, runs: int) -> "tuple[dict[str, str], dict[str, list[str]]]":
+    """The cells' verdicts from the CLI's per-cell log lines alone (the run was killed or crashed before its JSON): ``(verdicts, votes)``.
+
+    A line carries its run index (``run=N``); an older log without it counts the cell's n-th line as run n. The verdict is the MAJORITY over the ``runs`` the window asked for, by the CLI's rule
+    (a strict majority passes, a tie fails, an ERROR is a vote against, a SKIP is not a vote), and a cell whose missing runs could still change the answer is ``INCOMPLETE`` - never the verdict
+    of the runs that happened to finish. ``votes[k]`` lists the run slots in order, ``MISSING`` where the log has none."""
+    runs = max(1, int(runs or 1))
+    slots: "dict[str, dict[int, str]]" = {}
+    seen: "dict[str, int]" = {}
+    for m in _NIGHT_CELL_LINE.finditer(text):
+        k, v, r = m.group(1), m.group(2), m.group(3)
+        idx = int(r) if r is not None else seen.get(k, 0)
+        seen[k] = seen.get(k, 0) + 1
+        slots.setdefault(k, {})[idx] = v
+    verdicts: "dict[str, str]" = {}
+    votes: "dict[str, list[str]]" = {}
+    for k, got in slots.items():
+        votes[k] = [got.get(i, "MISSING") for i in range(max(runs, max(got) + 1))]
+        cast = [v for v in votes[k] if v not in ("SKIP", "MISSING")]
+        missing = votes[k].count("MISSING")
+        passes = cast.count("PASS")
+        total = len(votes[k]) - votes[k].count("SKIP")                  # the votes this cell would have if every missing run came in
+        if not cast and not missing:
+            verdicts[k] = "SKIP"
+        elif passes * 2 > total:
+            verdicts[k] = "PASS"                                         # decided: the missing runs cannot take the majority away
+        elif (passes + missing) * 2 <= total:
+            verdicts[k] = "ERROR" if cast.count("FAIL") == 0 and cast else "FAIL"      # decided against: even if every missing run passed it would not be a strict majority
+        else:
+            verdicts[k] = "INCOMPLETE"
+    return verdicts, votes
 
 
 SPEED_LINES = 60
@@ -937,6 +984,12 @@ class NightWindow(bk.Window):
         self.pre_stop_gate(m)
         if not self.dry:
             self.take_lock()
+            # THE WINDOW'S CLOCK STARTS HERE, when it is cleared to stop the stack. Waiting for a quiet box (a running timer job, the voice harness, a recent voice turn) has its own
+            # timeouts (``busy_wait_max_min`` / ``quiet_wait_max_min``) and costs Zoe nothing: nothing is stopped yet. Before this line it counted against the cap: the 2026-10-10 09:40 window
+            # waited 20 min for the harness lock, the cells then had 932 s of a 50-minute cap, and four cells were skipped for budget.
+            waited_min = self.elapsed_min()
+            self.t0, self.t0_epoch = self.host.mono(), self.host.now()
+            self.rec["waited_before_open_min"] = round(waited_min, 1)
             self.cap_min = self.compute_cap()
             for recheck in (self.blackout_conflict(), self.busy_now(), self.busy_reason()):
                 if recheck:
@@ -1346,13 +1399,23 @@ class NightWindow(bk.Window):
             d0, p0 = cb.default_rates()
             decode, prefill = decode or d0, prefill or p0
         room = self.cells_room_s(label)
-        plan = cb.plan(decode, prefill, room)
+        picked = [k.strip() for k in (cfg.cells_pick or "").replace(" ", "").split(",") if k.strip()]
+        keys = [k for k in cb.CELL_ORDER if k.upper() in {x.upper() for x in picked}] if picked else list(cb.CELL_ORDER)
+        plan = cb.plan(decode, prefill, room, keys=keys, runs=cfg.cells_runs)
         self.event(cb.describe(plan))
         self.rec.setdefault("cells_plan", {})[label] = plan
         if not plan["selected"]:
             return {"error": f"no night-mind cell fits the {room:.0f} s the cap leaves ({plan['needed_s']:.0f} s for the first; run --cells-only, or a bigger --cap-min)", "plan": plan}
         argv = [cfg.py, str(cfg.night_mind_script), "--model-url", f"http://127.0.0.1:{cfg.port}/v1", "--ctx-tokens", str(ctx), "--cells", "--model-name", label,
-                "--decode-tok-s", f"{decode:.2f}", "--prefill-tok-s", f"{prefill:.1f}", "--cell-budget", f"{plan['cell_budget_s']:.0f}"]
+                "--decode-tok-s", f"{decode:.2f}", "--prefill-tok-s", f"{prefill:.1f}", "--cell-budget", f"{plan['cell_budget_s']:.0f}",
+                "--runs", str(cfg.cells_runs), "--cell-seed", str(cfg.cells_seed)] + (["--only", ",".join(plan["selected"])] if (picked or cfg.cells_runs > 1 or not plan["fits_all"]) else [])      # repeated runs budgeted for the selected set must run exactly that set
+        if cfg.cells_corpus:
+            argv += ["--seed", cfg.cells_corpus]
+        if cfg.cells_trace:
+            trace = cfg.night_dir / "logs" / f"{self.run_id}-cells-trace.jsonl"
+            argv += ["--trace", str(trace)]
+            self.rec["cells_trace"] = str(trace)
+            self.event(f"night-mind cells {label}: tracing every call to {trace}")
         res = self.host.run_watched(argv, plan["watchdog_s"], {**os.environ, "ZOE_HARNESS": "1"}, lambda: self.guard(), log, cfg.metrics_poll_s)
         text = self.host.read(str(log))
         for d in reversed(list(_json_objects(text))):          # the whole object, compact or indented: the CLI's stdout is not guaranteed one line
@@ -1361,15 +1424,20 @@ class NightWindow(bk.Window):
                 out: "dict[str, Any]" = {k: v for k, v in c.items() if isinstance(v, (str, int))}
                 out.update({"reasons": c.get("reasons") if isinstance(c.get("reasons"), dict) else {}, "skipped_budget": c.get("skipped_budget") or [],
                             "model_totals": c.get("model_totals") if isinstance(c.get("model_totals"), dict) else {}, "plan": plan, "rc": res.rc})
+                for extra in ("votes", "evidence", "cell_calls", "runs"):                 # --runs N: the per-run votes, what each failed vote scored, the measured call counts (the report and the JSON keep them)
+                    if c.get(extra):
+                        out[extra] = c[extra]
                 if out["skipped_budget"]:
                     out["note"] = f"{len(out['skipped_budget'])} cell(s) not started: they would have overrun the {plan['cell_budget_s']:.0f} s budget ({','.join(out['skipped_budget'])})"
                 return out
         # no JSON (the watchdog killed it, or it crashed): the per-cell lines it logged as it went still hold every verdict it reached
-        got = {m.group(1): m.group(2) for m in re.finditer(r"NIGHT_CELL id=(K\d+f?) verdict=(\w+)", text)}
+        got, got_votes = rebuild_cell_votes(text, cfg.cells_runs)      # every run's own lines, not the last run's: a killed 3-run window keeps each cell's MAJORITY (or says INCOMPLETE)
         why = f"no cells object in the output (rc {res.rc}{', killed by the ' + format(plan['watchdog_s'], '.0f') + ' s watchdog' if res.rc == 124 else ''})"
         if got:
+            n_inc = list(got.values()).count("INCOMPLETE")
             return {**got, "pass": list(got.values()).count("PASS"), "fail": list(got.values()).count("FAIL"), "skip": list(got.values()).count("SKIP"),
-                    "error": list(got.values()).count("ERROR"), "plan": plan, "rc": res.rc, "partial": True, "why": f"{why}; {len(got)} verdict(s) recovered from the per-cell log lines"}
+                    "error": list(got.values()).count("ERROR"), "incomplete": n_inc, "votes": got_votes, "plan": plan, "rc": res.rc, "partial": True,
+                    "why": f"{why}; {len(got)} verdict(s) recovered from the per-cell log lines" + (f", {n_inc} INCOMPLETE (a run they needed never finished)" if n_inc else "")}
         return {"error": why, "plan": plan, "rc": res.rc}
 
     def trial_timeout_12b(self) -> float:
@@ -1908,8 +1976,9 @@ class NightWindow(bk.Window):
         if nm12 or nm4:
             keys = [k for k in cb.CELL_ORDER if k in nm12 or k in nm4] + sorted((set(k for k in list(nm12) + list(nm4) if cell_key(k))) - set(cb.CELL_ORDER))
             why = lambda nm, k: (nm.get("reasons") or {}).get(k, "")  # noqa: E731
+            vote = lambda nm, k: (f"{nm.get(k, '-')} ({'/'.join(str(x)[0] for x in (nm.get('votes') or {}).get(k, []))})" if (nm.get("votes") or {}).get(k) and len(nm["votes"][k]) > 1 else nm.get(k, "-"))  # noqa: E731
             L += ["### Night-mind cells (K1-K12)", "", "| cell | 12B | 4B@32k | why (ERROR / SKIP) |", "|---|---|---|---|"]
-            L += [f"| {k} | {nm12.get(k, '-')} | {nm4.get(k, '-')} | {(why(nm12, k) or why(nm4, k))[:200]} |" for k in keys]
+            L += [f"| {k} | {vote(nm12, k)} | {vote(nm4, k)} | {(why(nm12, k) or why(nm4, k))[:200]} |" for k in keys]
             for lab, nm in (("12B", nm12), ("4B@32k", nm4)):
                 if not nm:
                     continue
@@ -2054,6 +2123,13 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--trial", action="store_true", help="load the 12B only; score K1-K5 on it and on the 4B at 32k; restore (manual, any hour)")
     ap.add_argument("--cells-only", action="store_true", help="a trial that scores ONLY the night mind's own cells (K1-K12) on the 12B: load, speed probe, `zoe-night-mind.py --cells` with a budget "
                     "derived from the measured speed and the time the cap leaves, restore. No ZMA-arm pass, no 4B phase. Manual, any hour, cap 40 min (docs/knowledge/night-window.md)")
+    ap.add_argument("--cells-runs", type=int, default=1, help="with --cells-only: run the night-mind cells N times (zoe-night-mind.py --runs) and report the MAJORITY verdict + per-run votes; the budget plan is N times longer "
+                    "(give --cap-min accordingly). Default 1 = one run")
+    ap.add_argument("--cells-seed", type=int, default=1000, help="with --cells-only: seed of the first run (run i uses seed + i); use a different one per window so the samples differ")
+    ap.add_argument("--cells-corpus", default="", help="with --cells-only: the lab corpus seed the cells run on (zoe-night-mind.py --seed; default zmb-v1): any other string is a held-out household, e.g. zmb-nightheldout-20261010")
+    ap.add_argument("--cells-trace", nargs="?", const="on", default="off", choices=("on", "off"),
+                    help="with --cells-only: write every model call's prompt + reply and each cell's final threads / changes to logs/<run>-cells-trace.jsonl (the CLI's --trace; the lab's invented household only)")
+    ap.add_argument("--cells-pick", default="", help="with --cells-only: only these cells, comma separated (K9,K9f,K10); default all that fit")
     ap.add_argument("--speed-sweep", action="store_true", help="measure the 12B across the config grid (build, load mode, offload, quant, KV, batch, threads): one 12B per config, a fixed speed probe each, "
                     "one restore at the end; manual, any hour, hard cap 45 min (docs/knowledge/night-window.md '12B speed sweep')")
     ap.add_argument("--sweep-stages", default="all", help="stages of the grid to run: all | 0-4 | 5,6,7 (0 control, 1 offload, 2 q4km, 3 quant, 4 ngl, 5 kv, 6 batch, 7 threads, 8 draft); later stages start from the best row an earlier run saved")
@@ -2073,7 +2149,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--binary", default=None, help="llama-server binary other than the default b11194 build (flags are translated for any build but the parked unit's b9733)")
     ap.add_argument("--fit-off", action="store_true", help="add --fit off to the 12B command (the default since the 2026-10-09 sweep; see NightCfg.fit_off)")
     ap.add_argument("--fit-default", action="store_true", help="do NOT add --fit off: leave llama.cpp's own fit at its default")
-    ap.add_argument("--no-mlock", action="store_true", help="drop --mlock from the 12B command (the locked mmap of the file plus the CUDA copy is about 2x the file at load)")
+    ap.add_argument("--no-mlock", action="store_true", help="no mlock on the 12B (the DEFAULT since 2026-10-11: the locked mmap of the file plus the CUDA copy is about 2x the file at load, and it OOMed 3 of 5 loads); wins over --mlock")
+    ap.add_argument("--mlock", action="store_true", help="opt IN to the mlock'd mmap for the 12B (the parked unit's old setting; also NIGHT_MLOCK=1)")
     ap.add_argument("--ngl", type=int, default=None, help="--n-gpu-layers for the 12B (default 34 of 48: it loaded first time where 38, the sweep's faster winner at +11 %% decode, was refused twice on 2026-10-09; 38 stays selectable; NIGHT_NGL); fewer layers = a smaller single CUDA allocation, the rest stays in RAM")
     ap.add_argument("--batch-size", type=int, default=None, help="--batch-size for the 12B (default 512; NIGHT_BATCH)")
     ap.add_argument("--ubatch-size", type=int, default=None, help="--ubatch-size for the 12B (default 128; NIGHT_UBATCH)")
@@ -2090,6 +2167,13 @@ def build_parser() -> argparse.ArgumentParser:
 def configure(args: argparse.Namespace, cfg: "Optional[NightCfg]" = None) -> NightCfg:
     cfg = cfg or NightCfg()
     cfg.cells_only = bool(args.cells_only)
+    cfg.cells_runs = max(1, int(args.cells_runs or 1))
+    cfg.cells_pick = str(args.cells_pick or "")
+    cfg.cells_seed = int(args.cells_seed)
+    cfg.cells_corpus = str(args.cells_corpus or "")
+    cfg.cells_trace = args.cells_trace == "on"
+    if (cfg.cells_corpus or cfg.cells_trace) and not cfg.cells_only:
+        raise Refused("--cells-corpus and --cells-trace belong to --cells-only (the night mind's own cells on the lab's household)")
     cfg.trial = bool(args.trial) or cfg.cells_only          # --cells-only IS a trial (same load, probe, restore, any hour, no jobs); it only drops the phases around the cells
     cfg.sweep = bool(args.speed_sweep)
     if cfg.sweep and cfg.trial:
@@ -2124,7 +2208,7 @@ def configure(args: argparse.Namespace, cfg: "Optional[NightCfg]" = None) -> Nig
     cfg.fallback_4b = not args.no_fallback and not cfg.exploratory
     cfg.binary = args.binary or cfg.binary
     cfg.fit_off = (cfg.fit_off or args.fit_off) and not args.fit_default
-    cfg.mlock = cfg.mlock and not args.no_mlock
+    cfg.mlock = (cfg.mlock or args.mlock) and not args.no_mlock
     cfg.ngl = args.ngl if args.ngl is not None else cfg.ngl
     cfg.batch = args.batch_size if args.batch_size is not None else cfg.batch
     cfg.ubatch = args.ubatch_size if args.ubatch_size is not None else cfg.ubatch

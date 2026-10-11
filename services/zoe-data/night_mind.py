@@ -56,10 +56,48 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Iterable, Optional, Sequence
 
 import distress_handoff
+import lexicons as _lex
 import memory_authority as _ma
 import night_store
 
 logger = logging.getLogger(__name__)
+
+
+def change_backed(quote: str) -> bool:
+    """Does the owner's own line SAY something changed? A moment the model labels ``kind=change`` only changes a thread's status, retires the
+    thread's earlier observations, or skips the stale-belief check when this is true: model points, code decides (K9f: a flat week's "Booked the
+    train to X" labelled a change was reported as a changed thread). True when the line carries one of the language's ``change_cues`` or an
+    end-state marker (``ended_verbs`` / ``ended_phrases``, not a negated one). A language with no ``change_cues`` keeps the model's label
+    (fail-open to the old behaviour, so adding a language never silently mutes its changes). Pure."""
+    text = str(quote or "")
+    if not text.strip():
+        return False
+    lang = _lex.detect(text) or "en"
+    if not _lex.words(lang, "change_cues"):
+        return True
+    rx = _lex.word_re(lang, "change_cues")
+    if rx is not None and rx.search(_lex._nfkc(text)):
+        return True
+    return any(kind in ("verb", "phrase") for _a, _b, kind in _lex.ended_spans(text, lang))
+
+
+def _source_sentence(turn_text: str, quote: str) -> str:
+    """The sentence of the owner's turn that holds ``quote`` (the quote widened to its sentence edges; "" when it is not found). Pure."""
+    t, q = str(turn_text or ""), str(quote or "").strip()
+    i = t.lower().find(q.lower()) if q else -1
+    if i < 0:
+        return ""
+    a = max((t.rfind(c, 0, i) for c in ".!?\n"), default=-1) + 1
+    ends = [e for e in (t.find(c, i + len(q)) for c in ".!?\n") if e >= 0]
+    return t[a:(min(ends) + 1) if ends else len(t)]
+
+
+def moment_change_backed(m: "Moment") -> bool:
+    """``change_backed`` for a moment: the cited quote, or else the sentence of the owner's turn it sits in (a short quote can leave out the very words that
+    say the value changed: "now" / "moved" in the rest of the sentence). A change stated in ANOTHER sentence of the turn does not count. Pure."""
+    if change_backed(m.quote):
+        return True
+    return m.turn is not None and change_backed(_source_sentence(m.turn.text, m.quote))
 
 ENV = "ZOE_NIGHT_MIND"
 URL_ENV = "ZOE_NIGHT_MIND_URL"
@@ -85,6 +123,10 @@ DEFAULT_MAX_CALLS = 7
 BASE_CTX = 8192
 BASE_CHUNK_TOKENS = 2400            # the OWNER's words per MOMENTS call at the 8k slot; instructions + output ride on top and stay inside it
 MAX_MOMENTS_PER_CHUNK = 8
+#: a MOMENTS call READS at most this many lines (1.5 x what it is asked to return). Measured on the 4B (2026-10-10): shown 19 lines and asked for 8 it picked the first eight that sounded
+#: personal and skipped a child's concert plan, 3 of 3 seeds; a call that holds about as many lines as it may return has nothing to choose between. The token budget still bounds a call
+#: of long lines.
+MAX_LINES_PER_CHUNK = 12
 MAX_MOMENTS_TO_THREADS = 24
 MAX_HELD_ROWS = 6
 MAX_OPEN_THREADS_LISTED = 8
@@ -100,6 +142,7 @@ MORNING_DAYS = 3
 STALE_CARD_HOURS = 36
 DEFAULT_DECODE_TOK_S = 8.0          # the run-2 measurement on this brain; the 12B is slower (the CLI measures and overrides)
 PREFILL_TOK_S = 650.0               # the live 4B's prompt rate; the 12B prefills at ~136 tok/s (2026-10-09 window): the window MEASURES it and passes it (--prefill-tok-s / PREFILL_ENV)
+PRODUCTION_TEMPERATURE = 0.1         # the member pass's sampling temperature (it was a literal in _complete); the cells measurement pins its own per run (Config.temperature / Config.seed)
 TIMEOUT_MARGIN_S = 20.0             # queueing / tokenisation / template slack on top of prefill + decode
 TIMEOUT_FLOOR_S = 30.0              # no call is ever given less than this, however fast the rates claim the model is
 _CACHE_TTL_S = 90.0
@@ -168,6 +211,10 @@ class Config:
     decode_tok_s: float = DEFAULT_DECODE_TOK_S
     prefill_tok_s: float = PREFILL_TOK_S
     schema: bool = False
+    #: sampling. The member pass runs at ``PRODUCTION_TEMPERATURE`` with no seed (the server picks one). The MEASUREMENT (``zoe-night-mind.py --cells --runs N``) pins both
+    #: per run (llama.cpp takes ``temperature`` and ``seed`` per request) so a verdict can be reproduced and a run-to-run difference is the model's, not luck.
+    temperature: float = PRODUCTION_TEMPERATURE
+    seed: "Optional[int]" = None
 
     def timeout_for(self, prompt_tokens: int, max_tokens: int) -> float:
         """THE per-call HTTP budget for this run: ``timeout_for`` at this config's two rates. Every model call in the layer (the member pass, the bench's cells,
@@ -186,7 +233,8 @@ def default_chunk_tokens(ctx_tokens: int) -> int:
 
 
 def config_from_env(*, url: str = "", model: str = "", ctx_tokens: Optional[int] = None, max_calls: Optional[int] = None,
-                    chunk_tokens: Optional[int] = None, decode_tok_s: Optional[float] = None, prefill_tok_s: Optional[float] = None) -> Config:
+                    chunk_tokens: Optional[int] = None, decode_tok_s: Optional[float] = None, prefill_tok_s: Optional[float] = None,
+                    temperature: Optional[float] = None, seed: Optional[int] = None) -> Config:
     ctx = int(ctx_tokens or _int_env(CTX_ENV, 0, 0, 262144) or _int_env("ZOE_BRAIN_SLOT_TOKENS", BASE_CTX, 2048, 262144))
     chunk = int(chunk_tokens or _int_env(CHUNK_ENV, 0, 0, 20000) or default_chunk_tokens(ctx))
     return Config(
@@ -195,7 +243,9 @@ def config_from_env(*, url: str = "", model: str = "", ctx_tokens: Optional[int]
         model=model or os.environ.get(MODEL_ENV) or os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
         decode_tok_s=float(decode_tok_s or _float_env(DECODE_ENV, DEFAULT_DECODE_TOK_S, 0.5, 200.0)),
         prefill_tok_s=max(5.0, float(prefill_tok_s or _float_env(PREFILL_ENV, PREFILL_TOK_S, 5.0, 20000.0))),
-        schema=(os.environ.get(SCHEMA_ENV) or "").strip().lower() in ("1", "true", "yes", "on"))
+        schema=(os.environ.get(SCHEMA_ENV) or "").strip().lower() in ("1", "true", "yes", "on"),
+        temperature=PRODUCTION_TEMPERATURE if temperature is None else max(0.0, min(2.0, float(temperature))),
+        seed=None if seed is None else int(seed))
 
 
 #: the lab / CLI seam for the run's Config (the digest hook calls ``run_for_user`` with no config; the bench points it at the clone or sets a small chunk budget)
@@ -257,6 +307,27 @@ def set_llm(fn: "Optional[Callable[[list, int], Any]]") -> "Optional[Callable[[l
     return prev
 
 
+#: the lab's TRACE seam: ``fn(record: dict)``. Set only by ``zoe-night-mind.py --cells --trace FILE`` (a scratch household of invented names, never a member): every model call's
+#: prompt and reply, and each pass's final threads + changes, so a failed cell can be read instead of guessed at. None (the default) = nothing is recorded.
+_TRACE: "Optional[Callable[[dict], None]]" = None
+
+
+def set_trace(fn: "Optional[Callable[[dict], None]]") -> "Optional[Callable[[dict], None]]":
+    """Install (or clear, with None) the trace seam; returns the previous one."""
+    global _TRACE
+    prev, _TRACE = _TRACE, fn
+    return prev
+
+
+def _trace(record: "dict[str, Any]") -> None:
+    if _TRACE is None:
+        return
+    try:
+        _TRACE(record)
+    except Exception:  # noqa: BLE001 - a broken trace sink never changes a night
+        logger.warning("night_mind: trace sink failed", exc_info=True)
+
+
 async def probe_model(cfg: Config) -> "tuple[bool, str]":
     """Is the server up? ``(ok, why)``. Nothing is generated. The lab seam is always up."""
     if _LLM is not None:
@@ -297,7 +368,9 @@ async def _complete(messages: list, max_tokens: int, cfg: Config, usage: "dict[s
         return text
     import httpx
 
-    payload: "dict[str, Any]" = {"model": cfg.model, "messages": messages, "max_tokens": max_tokens, "temperature": 0.1, "stream": False}
+    payload: "dict[str, Any]" = {"model": cfg.model, "messages": messages, "max_tokens": max_tokens, "temperature": cfg.temperature, "stream": False}
+    if cfg.seed is not None:
+        payload["seed"] = int(cfg.seed)
     if schema is not None and cfg.schema:
         payload["response_format"] = {"type": "json_schema", "json_schema": {"name": "night_mind", "strict": True, "schema": schema}}
     prompt_est = sum(est_tokens(m["content"]) for m in messages)
@@ -333,13 +406,13 @@ You read one person's own words from today. Each line is [id] day: words.
 
 {lines}
 
-Pick EVERY line that matters for knowing this person - something in progress (a project, a habit, a practice, a person they keep doing something with), a plan or date, a feeling, a change from how things were, something about someone they know, a health matter - up to {cap}; one moment per line. Skip commands (lights, timers, music, weather, sums) and small talk. Do not explain, conclude or guess a reason.
+Every line above is something this person chose to say. Make a moment of EVERY line except a command (lights, timers, music, weather, sums) or small talk: what they are doing, learning or practising, a plan or date, a feeling or worry, a change, something about someone they know, a health matter. At most {cap}; if more lines qualify, keep the {cap} that matter most to knowing this person: cover every different person or matter once (its newest line) before taking a second line about the same one. List them in line order, one moment per line. Do not explain, conclude or guess a reason.
 Return JSON, one object per moment (two shown): {{"moments":[{{"ids":["m3"],"quote":"...","kind":"progress","who":["Dagny"],"feeling":"none","weight":2,"later":"open"}},{{"ids":["m5"],"quote":"...","kind":"feeling","who":[],"feeling":"worried","weight":2,"later":"na"}}]}}, at most {cap}.
 ids: the line ids it comes from (1-3). quote: copied EXACTLY, letter for letter, from ONE of those lines (3-25 words).
-kind: progress|plan|feeling|change|person|health|other. who: names the person mentions in it ([] if only themselves).
-feeling: none|worried|sad|angry|stressed|happy|excited|proud|relieved|other. weight: 1 minor, 2 notable, 3 major.
+kind = the main thing the line is about: health (a body, an illness, a doctor) | feeling (how they feel: worry, pride, joy) | plan (dated, or still to happen) | change (something moved, ended, was called off or replaced) | progress (something going on or achieved: a project, a habit, a practice, a job, an offer, a result) | person (only a plain fact about someone they know) | other. who: names the person mentions in it ([] if only themselves).
+feeling: none|worried|sad|angry|stressed|happy|excited|proud|relieved|other. weight: 1 a passing remark or a plain fact, 2 something they care about or keep coming back to, 3 big news, a major event or a serious worry.
 later: open (still to happen or unresolved) | done | na.
-If nothing matters, return {{"moments":[]}}.
+If every line is a command or small talk, return {{"moments":[]}}.
 Write the JSON on ONE line: no code fence, no indentation, no line breaks (the reply has a hard length limit and a cut-off reply loses the newest lines)."""
 
 THREADS_SYSTEM = "You tidy one person's night notes. You only choose and group by id; you never write new sentences. Return ONLY valid JSON."
@@ -539,14 +612,14 @@ def _line(alias: str, t: Turn) -> str:
     return f"[{alias}] {fmt_day(local_day(t.at))}: {t.text[:TURN_CHARS]}"
 
 
-def chunk_turns(turns: "Sequence[Turn]", budget: int) -> "list[list[Turn]]":
+def chunk_turns(turns: "Sequence[Turn]", budget: int, max_lines: int = 0) -> "list[list[Turn]]":
     """Consecutive turns cut into chunks whose lines fit ``budget`` tokens each (a single over-long turn is truncated to ``TURN_CHARS``, so it fits)."""
     chunks: "list[list[Turn]]" = []
     cur: "list[Turn]" = []
     used = 0
     for t in turns:
         cost = est_tokens(_line("m999", t)) + 1
-        if cur and used + cost > budget:
+        if cur and (used + cost > budget or len(cur) >= (max_lines or MAX_LINES_PER_CHUNK)):
             chunks.append(cur)
             cur, used = [], 0
         cur.append(t)
@@ -580,7 +653,7 @@ def pack(turns: "Sequence[Turn]", cfg: Config) -> "tuple[list[list[Turn]], dict[
         chosen, used = set(), 0
         for i in scored:
             cost = est_tokens(_line("m999", kept[i])) + 1
-            if used + cost > cap_tokens:
+            if used + cost > cap_tokens or len(chosen) >= room * MAX_LINES_PER_CHUNK:
                 continue
             chosen.add(i)
             used += cost
@@ -726,8 +799,9 @@ def parse_moments(raw: str, chunk: "Sequence[Turn]", chunk_no: int, counts: "dic
         m = verify_moment(item, chunk, alias, chunk_no, counts)
         if m is not None:
             out.append(m)
-        if len(out) >= cap:
-            break
+    # ``cap`` is what the prompt ASKS for. A model that writes more (the 4B wrote 12 for "at most 8", 2026-10-10) has already paid for them, and every one is verified above: cutting the
+    # reply at 8 threw away the LATER lines it had picked (a child's cello lessons) and left them to a second ask that did not pick them again. Up to twice the ask is kept;
+    # ``MAX_MOMENTS_TO_THREADS`` still bounds what the THREADS call sees.
     return out
 
 
@@ -782,7 +856,7 @@ async def mark_replaced(svc: Any, user_id: str, moments: "Sequence[Moment]") -> 
         return 0
     n = 0
     for m in moments:
-        if m.state != "current" or m.kind == "change":
+        if m.state != "current" or (m.kind == "change" and moment_change_backed(m)):
             continue
         hit = None
         for form in _stale_forms(m.quote):
@@ -865,6 +939,34 @@ def thread_match(group: "Sequence[Moment]", thread: dict) -> bool:
     words = set().union(*[set(_words(m.quote)) for m in group]) - _ANCHOR_STOP
     shared = words & {a for a in anchors if not a.startswith("@")} - _ANCHOR_STOP
     return len(shared) >= 2 or bool(shared & _TOPIC_VOCAB)
+
+
+def thread_identity(title: str, quotes: "Sequence[str]") -> dict:
+    """What identifies a thread in raw text, by code and with no language cue: its title's named people / places, any name its quotes repeat (in two or more), and
+    the distinctive words its title and quotes share. ``{"anchors": "@name word ..."}`` for ``thread_match``. Pure."""
+    names = set(names_in(title or ""))
+    seen: "dict[str, int]" = {}
+    for q in quotes:
+        for n in set(names_in(q)):
+            seen[n] = seen.get(n, 0) + 1
+    names |= {n for n, c in seen.items() if c >= 2}
+    words = set(_words(title or "")) & set().union(*[set(_words(q)) for q in quotes]) if quotes else set()
+    return {"anchors": " ".join(sorted({"@" + n for n in names - _NOT_NAMES} | (words - _ANCHOR_STOP)))}
+
+
+def spoken_since(title: str, quotes: "Sequence[str]", raw_turns: "Sequence[Turn]", last_day: str, today: "_dt.date") -> bool:
+    """Did the owner talk about this thread in a raw turn AFTER the thread's last kept mention? Quiet is a fact about the owner's words, not about the moments the model
+    happened to keep: a model that drops the latest of a thread's mentions must not make a thread that is still being talked about look abandoned (K9f). The same
+    name / shared-word test that continues a thread (``thread_match``) is applied to each later turn. Pure."""
+    last = _date(last_day)
+    ident = thread_identity(title, quotes)
+    if last is None or not ident["anchors"]:
+        return False
+    for tu in raw_turns:
+        d = _date(local_day(tu.at))
+        if d is not None and last < d <= today and thread_match([Moment(turn=tu, quote=tu.text)], ident):
+            return True
+    return False
 
 
 def _render_new(moments: "Sequence[Moment]") -> str:
@@ -965,18 +1067,40 @@ def apply_threads(raw: str, moments: "list[Moment]", threads: "list[dict]", coun
     return groups
 
 
+def _people_words(whos: "Iterable[Iterable[str]]") -> "set[str]":
+    """The lower-cased words of the people the model named (``who``) across a thread's moments: who the story is about, never what it is about."""
+    return {w.lower() for who in whos for name in who for w in re.findall(r"[A-Za-z]{3,}", str(name))}
+
+
+def _matter_words(quote: str, people: "Iterable[str]" = ()) -> "set[str]":
+    """The words that say WHAT a line is about: its words without the stop words, the generic ones and the PEOPLE in the thread (a person is who, not what). A named place or organisation
+    stays: 'We fly to Cornwall on the 3rd' ... 'Cornwall was lovely' is one trip."""
+    gone = {w.lower() for w in people}
+    return {w for w in _words(quote) if w not in _ANCHOR_STOP and w not in gone}
+
+
 def finishes(current: "Sequence[Moment]", model_status: str, old_rows: "Sequence[dict]" = ()) -> bool:
     """Does this thread END tonight? A moment must say a thing finished (``later: done``) AND a second reading must agree: either the THREADS call calls the thread ``resolved``, or the thread
-    holds a dated PLAN (kind ``plan``, still open) said before the finish - 'the quiz night is on the 20th' ... 'the quiz night went really well'. A habit's single occasion ('Jorunn and I ran
-    5k today', later=done) is a finished EVENT, not a finished story: with neither reading it stays open (measured, K9: every run and garden line carried ``done`` and both threads were closed)."""
-    done = [x for x in current if x.later == "done"]
+    holds a dated PLAN (kind ``plan``, still open) said before the finish AND the finishing line is about that plan's matter (it shares a word with it that is not a name) - 'the quiz night is on the
+    20th' ... 'the quiz night went really well'. Not every ``done`` is a finish:
+    * a habit's single occasion ('Jorunn and I ran 5k today', later=done) is a finished EVENT, not a finished story (measured, K9: every run and garden line carried ``done`` and both threads were closed);
+    * a ``change`` moment ('the trip is off, we are going elsewhere') is the plan CHANGING, not finishing (measured, 4B, 2026-10-10: it carried ``done`` and the plan it replaced was closed instead of
+      being 'changed' - K9);
+    * a line about something else in the same story ('Sorrel practised the cello for an hour today', done) does not finish the concert plan that shares only the child's name (measured, K10: the
+      benign thread was closed on its second mention and could never be raised)."""
+    done = [x for x in current if x.later == "done" and x.kind != "change"]
     if not done:
         return False
     if model_status == "resolved":
         return True
     at = max(x.turn.at for x in done)
-    return (any(x.kind == "plan" and x.later == "open" and x.turn.at < at for x in current)
-            or any(o.get("kind") == "plan" and o.get("later") == "open" and float(o.get("said_at") or 0) < at.timestamp() for o in old_rows))
+    people = _people_words([x.who for x in current] + [str(o.get("who") or "").split(",") for o in old_rows])
+    finish_words = set().union(*[_matter_words(x.quote, people) for x in done])
+    plans = [x for x in current if x.kind == "plan" and x.later == "open" and x.turn.at < at]
+    if any(_matter_words(x.quote, people) & finish_words for x in plans):
+        return True
+    return any(o.get("kind") == "plan" and o.get("later") == "open" and float(o.get("said_at") or 0) < at.timestamp()
+               and _matter_words(str(o.get("quote") or ""), people) & finish_words for o in old_rows)
 
 
 def merge_status(a: str, b: str) -> str:
@@ -1221,7 +1345,7 @@ async def run_for_user(user_id: str, transcript: Any, svc: Any = None, *, now: "
 
 COUNT_KEYS = ("turns_in", "turns_dropped_routine", "turns_skipped_cap", "chunks", "calls", "moments_calls", "threads_calls", "calls_invalid", "calls_salvaged", "tail_calls", "tail_lost",
               "moments_proposed", "moments_dropped_id", "moments_dropped_quote", "moments_verified", "moments_held", "moments_history", "ops_applied",
-              "ops_dropped", "groups_split", "observations_written", "observations_pending", "threads_created", "threads_updated", "threads_resolved", "threads_quiet",
+              "ops_dropped", "groups_split", "observations_written", "observations_pending", "threads_created", "threads_updated", "threads_resolved", "threads_quiet", "quiet_vetoed",
               "prompt_tokens", "completion_tokens", "prompt_tokens_est_max")
 
 
@@ -1251,10 +1375,13 @@ async def _run(user_id: str, transcript: Any, svc: Any, m: str, now: "_dt.dateti
         counts["calls"] += 1
         counts["prompt_tokens_est_max"] = max(counts["prompt_tokens_est_max"], sum(est_tokens(x["content"]) for x in messages))
         try:
-            return await _complete(messages, max_tokens, cfg, usage, schema=schema)
+            reply = await _complete(messages, max_tokens, cfg, usage, schema=schema)
         except ModelUnreachable as exc:
             exc.counts = {**counts, **usage}
+            _trace({"kind": "call", "n": counts["calls"], "messages": messages, "max_tokens": max_tokens, "error": type(exc).__name__})
             raise
+        _trace({"kind": "call", "n": counts["calls"], "messages": messages, "max_tokens": max_tokens, "reply": reply})
+        return reply
 
     # ── stage 2: MOMENTS (one call per chunk) ─────────────────────────────────────────────────────────────────────
     moments: "list[Moment]" = []
@@ -1335,8 +1462,14 @@ async def _run(user_id: str, transcript: Any, svc: Any, m: str, now: "_dt.dateti
 
     # ── stage 4: DECIDE (code) ────────────────────────────────────────────────────────────────────────────────────
     ledger = list(ledger_rows) if ledger_rows is not None else await _ledger_rows(user_id, now)
-    plan = _build_plan(user_id, groups, threads, old_obs, today, now, ledger, night_date, counts, [mo for mo in moments if mo.state == "held"], known_ids)
+    plan = _build_plan(user_id, groups, threads, old_obs, today, now, ledger, night_date, counts, [mo for mo in moments if mo.state == "held"], known_ids, turns)
     res["changes"] = plan["changes"]
+    if _TRACE is not None:
+        _trace({"kind": "plan", "night_date": night_date, "today": today.isoformat(),
+                "groups": [{"thread": g.thread_id, "title": g.title, "model_status": g.model_status, "reason": g.reason,
+                            "moments": [{"mid": x.mid, "turn": x.turn.id, "day": x.day, "kind": x.kind, "state": x.state, "quote": x.quote} for x in g.moments]} for g in groups],
+                "threads": [{k: t.get(k) for k in ("id", "title", "status", "first_day", "last_day", "mentions_n", "weight_max", "anchors", "topic", "policy", "leave_reason")} for t in plan["threads"]],
+                "mention_days": plan["mention_days"], "changes": plan["changes"]})
     mood = mood_line(plan["all_obs"], today) if allowed else ""
     res["mood"] = bool(mood)
     counts["observations_written"] = sum(1 for o in plan["new_obs"] if o["state"] != "held")
@@ -1397,8 +1530,8 @@ def _log(res: "dict[str, Any]") -> None:
 
 
 def _build_plan(user_id: str, groups: "list[Group]", threads: "list[dict]", old_obs: "list[dict]", today: "_dt.date", now: "_dt.datetime",
-                ledger: "Sequence[dict]", night_date: str, counts: "dict[str, int]", held: "Sequence[Moment]" = (), known_ids: "frozenset[str] | set[str]" = frozenset()
-                ) -> "dict[str, Any]":
+                ledger: "Sequence[dict]", night_date: str, counts: "dict[str, int]", held: "Sequence[Moment]" = (), known_ids: "frozenset[str] | set[str]" = frozenset(),
+                raw_turns: "Sequence[Turn]" = ()) -> "dict[str, Any]":
     """Stage 4 as a pure plan: the thread rows and observation rows the night would write (nothing is written here)."""
     by_id = {t["id"]: dict(t) for t in threads}
     new_obs: "list[dict]" = []
@@ -1436,7 +1569,7 @@ def _build_plan(user_id: str, groups: "list[Group]", threads: "list[dict]", old_
                 t["last_feeling"] = feel[-1].feeling
         cur = [x for x in live if x.state == "current"]
         done = finishes(cur, g.model_status, [o for o in old_obs if o["thread_id"] == t["id"]])
-        changed_kind = any(x.kind == "change" for x in cur)
+        changed_kind = any(x.kind == "change" and moment_change_backed(x) for x in cur)   # the model's label alone never changes a thread
         new_status = t["status"] if before_status else "open"
         if done:
             new_status = "resolved"
@@ -1462,7 +1595,8 @@ def _build_plan(user_id: str, groups: "list[Group]", threads: "list[dict]", old_
                 authority_class="user_stated_derived" if state != "held" else "pending", run_id=night_date)
             new_obs.append(row)
         # a CHANGE moment (or a resolution) on the thread retires the thread's EARLIER current observations: history, with a validity end, never deleted
-        cut = max((x.turn.at for x in live if x.kind == "change" or x.later == "done"), default=None)
+        # (a ``done`` line retires the earlier ones only when it FINISHED the thread - ``finishes()`` above - not when it is an unrelated line that carries ``later: done``)
+        cut = max((x.turn.at for x in live if (x.kind == "change" and moment_change_backed(x)) or (done and x.later == "done" and x.kind != "change")), default=None)
         if cut is not None:
             keep_ids = {_oid(user_id, x.turn.id, x.quote) for x in live if x.turn.at >= cut}
             for o in old_obs:
@@ -1497,6 +1631,9 @@ def _build_plan(user_id: str, groups: "list[Group]", threads: "list[dict]", old_
             continue
         last = _date(t["last_day"])
         if last is not None and (today - last).days >= quiet_threshold(by_thread_days.get(t["id"], [])):
+            if raw_turns and spoken_since(t["title"], [o["quote"] for o in all_obs if o["thread_id"] == t["id"] and o["state"] != "held"], raw_turns, t["last_day"], today):
+                counts["quiet_vetoed"] += 1         # the owner's own later turn names it: the model dropped that mention, the thread is not abandoned
+                continue
             t["status"] = "quiet"
             counts["threads_quiet"] += 1
             changes.append({"type": "quiet", "thread": t["id"], "ids": by_thread_ids.get(t["id"], [])[-2:]})
@@ -1509,7 +1646,7 @@ def _build_plan(user_id: str, groups: "list[Group]", threads: "list[dict]", old_
         quotes.setdefault(o["thread_id"], []).append(o["quote"])
     tl = list(by_id.values())
     decide_raise(tl, quotes, today, ledger)
-    return {"threads": tl, "new_obs": new_obs, "changed_obs": list(changed.values()), "changes": changes, "all_obs": all_obs}
+    return {"threads": tl, "new_obs": new_obs, "changed_obs": list(changed.values()), "changes": changes, "all_obs": all_obs, "mention_days": by_thread_days}
 
 
 # ═══ readers ══════════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -1569,12 +1706,20 @@ async def _shielded(user_id: str, text: str) -> bool:
         return False
 
 
-async def snapshot(user_id: str, *, use_cache: bool = False) -> "tuple[list[dict], list[dict]]":
-    """The member's threads and CURRENT observations (a forgotten name re-checked on every read)."""
+def _only_significant(threads: "Sequence[dict]", obs: "Sequence[dict]") -> "tuple[list[dict], list[dict]]":
+    """What the UNPROMPTED readers (the card, the check-in, the morning item) may serve: threads that are stories (``significant``), and their observations."""
+    keep_t = [t for t in threads if significant(t) or fault("echo")]
+    ids = {t["id"] for t in keep_t}
+    return keep_t, [o for o in obs if o["thread_id"] in ids]
+
+
+async def snapshot(user_id: str, *, use_cache: bool = False, all_threads: bool = False) -> "tuple[list[dict], list[dict]]":
+    """The member's threads and CURRENT observations (a forgotten name re-checked on every read). By default only threads that are stories (``significant``: two days, or heavy, or changed /
+    resolved); ``all_threads=True`` also returns a lone NOTABLE remark (weight 2+; a weight-1 fact stays in the store), for the reader that answers a message which NAMES it ('how is my knee' after one line about the knee: the member asked)."""
     now = time.monotonic()
     hit = _CACHE.get(user_id)
     if use_cache and hit and now - hit[0] < _CACHE_TTL_S:
-        return list(hit[1]), list(hit[2])
+        return (list(hit[1]), list(hit[2])) if all_threads else _only_significant(hit[1], hit[2])
     backend = night_store.get_backend()
     threads = await backend.threads(user_id)
     obs = await backend.observations(user_id, states=("current",))
@@ -1583,10 +1728,10 @@ async def snapshot(user_id: str, *, use_cache: bool = False) -> "tuple[list[dict
         if not await _shielded(user_id, o["quote"]):
             keep.append(o)
     alive = {o["thread_id"] for o in keep}
-    threads = [t for t in threads if t["id"] in alive and (significant(t) or fault("echo"))]
+    threads = [t for t in threads if t["id"] in alive and (significant(t) or int(t.get("weight_max") or 1) >= 2 or fault("echo"))]      # a minor lone fact (weight 1) stays in the store, never served
     keep = [o for o in keep if o["thread_id"] in {t["id"] for t in threads}]
     _CACHE[user_id] = (now, threads, keep)
-    return list(threads), list(keep)
+    return (list(threads), list(keep)) if all_threads else _only_significant(threads, keep)
 
 
 def _stale_card(threads: "Sequence[dict]", today: "_dt.date") -> bool:
@@ -1620,13 +1765,13 @@ def lookup(threads: "Sequence[dict]", obs: "Sequence[dict]", message: str, today
         pick = [t for _s, t in named]
     elif _MOOD_RE.search(message or ""):
         # a worry spoken aloud, not a question: the member's most recent unresolved story that weighed on them (never a leave thread) - one, to be asked about gently
-        weighed = [t for t in threads if t["status"] in ("open", "changed") and t.get("last_feeling") in NEGATIVE and not t["leave_reason"]
+        weighed = [t for t in threads if (significant(t) or fault("echo")) and t["status"] in ("open", "changed") and t.get("last_feeling") in NEGATIVE and not t["leave_reason"]
                    and (today - (_date(t["last_day"]) or today)).days <= MORNING_DAYS + 4]
         weighed.sort(key=lambda t: (t["last_day"], salience(t, today)), reverse=True)
         pick = weighed[:1]
         mood = True
     elif _CHECKIN_RE.search(message or ""):
-        live = [t for t in threads if (t["status"] != "resolved" or (today - (_date(t["last_day"]) or today)).days <= RESOLVED_SHOW_DAYS)
+        live = [t for t in threads if (significant(t) or fault("echo")) and (t["status"] != "resolved" or (today - (_date(t["last_day"]) or today)).days <= RESOLVED_SHOW_DAYS)
                 and (include_leave_on_open or not t["leave_reason"])]
         live.sort(key=lambda t: (t["last_day"], salience(t, today)), reverse=True)
         pick = live
@@ -1664,7 +1809,7 @@ async def prompt_block(user_id: str, message: str, *, now: "Optional[_dt.datetim
         return ""
     try:
         now = now or _dt.datetime.now(_dt.timezone.utc)
-        threads, obs = await asyncio.wait_for(snapshot(user_id, use_cache=True), timeout=0.6)
+        threads, obs = await asyncio.wait_for(snapshot(user_id, use_cache=True, all_threads=True), timeout=0.6)
         today = now.astimezone(_local_tz()).date()
         rows = lookup(threads, obs, message, today)
         if served is not None:

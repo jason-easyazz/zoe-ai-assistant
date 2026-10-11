@@ -216,6 +216,7 @@ def test_cells_mode_aggregates_the_model_counters_and_names_the_reason_for_an_er
 
 
 def test_cells_mode_logs_one_progress_line_per_cell_so_a_killed_run_keeps_its_verdicts():
+    cli_majority = _cli_module().majority
     srv = FakeNightServer(FakeNightBrain())
     try:
         r = _run_py(["scripts/maintenance/zoe-night-mind.py", "--model-url", srv.url, "--ctx-tokens", "8192", "--cells", "--decode-tok-s", "50", "--prefill-tok-s", "900"])
@@ -223,8 +224,10 @@ def test_cells_mode_logs_one_progress_line_per_cell_so_a_killed_run_keeps_its_ve
         import re
         lines = re.findall(r"^NIGHT_CELL id=(K\d+f?) verdict=(\w+) wall_s=", r.stderr, re.M)
         cells = json.loads(r.stdout)["cells"]
-        assert [k for k, _v in lines] == ["K1", "K2", "K3", "K4", "K5", "K6", "K7", "K8", "K9", "K9f", "K10", "K11", "K12"]
-        assert all(cells[k] == v for k, v in lines) and cells["skipped_budget"] == []
+        order = ["K1", "K2", "K3", "K4", "K5", "K6", "K7", "K8", "K9", "K9f", "K10", "K11", "K12"]
+        assert [k for k, _v in lines] == order * 3 and cells["runs_n"] == 3                  # --runs defaults to 3: every run logs its own line per cell
+        assert all(cells["votes"][k] == [v for kk, v in lines if kk == k] for k in order) and cells["skipped_budget"] == []
+        assert all(cells[k] == cli_majority(cells["votes"][k]) for k in order)
     finally:
         srv.close()
 

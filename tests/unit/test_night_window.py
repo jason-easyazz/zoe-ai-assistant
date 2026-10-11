@@ -377,7 +377,7 @@ def test_prediction_and_timeout_scale():
 # ── the 12B command is generated from the parked unit, never hand-written ────
 
 def test_the_12b_command_is_the_parked_execstart_with_only_the_listed_changes(tmp_path):
-    cfg = nw.NightCfg(binary=None, ngl=None, fit_off=False)                    # the PARKED shape (b9733, -ngl 99, no --fit): the measured defaults are tested below
+    cfg = nw.NightCfg(binary=None, ngl=None, fit_off=False, mlock=True)        # the PARKED shape (b9733, -ngl 99, no --fit): the measured defaults are tested below
     spec = nw.llm_spec(PARKED, cfg, nw.Levers("qat", 32768, "q8_0"))
     a = spec["argv"]
     assert a[0] == "/home/zoe/llama.cpp/build-jetson-new/bin/llama-server"                          # the parked binary, verbatim
@@ -394,7 +394,7 @@ def test_the_12b_command_is_the_parked_execstart_with_only_the_listed_changes(tm
 
 
 def test_another_build_gets_its_renamed_flags_and_the_parked_text_is_never_written(tmp_path):
-    cfg = nw.NightCfg(binary="/home/zoe/llama.cpp-b11194/build-jetson/bin/llama-server")
+    cfg = nw.NightCfg(binary="/home/zoe/llama.cpp-b11194/build-jetson/bin/llama-server", mlock=True)
     a = nw.llm_spec(PARKED, cfg, nw.Levers("qat", 32768, "q8_0"))["argv"]
     assert a[0].endswith("b11194/build-jetson/bin/llama-server") and "--mlock" not in a and "--chat-template-kwargs" not in a
     assert a[a.index("--load-mode") + 1] == "mmap+mlock" and a[a.index("--reasoning") + 1] == "off"
@@ -795,7 +795,7 @@ def test_unified_memory_is_an_env_lever_on_the_12b_only_default_on_for_a_jetson(
 
 
 def test_ngl_nomlock_and_fit_are_levers_that_change_only_their_flag():
-    base = nw.llm_spec(PARKED, nw.NightCfg(binary=None, ngl=None), nw.Levers("qat", 32768, "q8_0"))["argv"]
+    base = nw.llm_spec(PARKED, nw.NightCfg(binary=None, ngl=None, mlock=True), nw.Levers("qat", 32768, "q8_0"))["argv"]
     ngl = nw.llm_spec(PARKED, nw.NightCfg(binary=None, ngl=28), nw.Levers("qat", 32768, "q8_0"))["argv"]
     assert ngl[ngl.index("--n-gpu-layers") + 1] == "28" and base[base.index("--n-gpu-layers") + 1] == "99"
     assert "--mlock" not in nw.llm_spec(PARKED, nw.NightCfg(binary=None, mlock=False), nw.Levers("qat", 32768, "q8_0"))["argv"] and "--mlock" in base
@@ -805,6 +805,19 @@ def test_ngl_nomlock_and_fit_are_levers_that_change_only_their_flag():
     cfg = nw.configure(args, nw.NightCfg())
     assert (cfg.ngl, cfg.mlock, cfg.fit_off, cfg.retry_load) == (30, False, True, True)
     assert nw.configure(nw.build_parser().parse_args(["--fit-default"]), nw.NightCfg()).fit_off is False
+
+
+def test_the_12b_runs_without_mlock_by_default_and_mlock_is_opt_in(monkeypatch):
+    """2026-10-11: mmap+mlock + ngl 34 OOMed 3 of 5 loads (even right after drop_caches); without the lock it loaded first try and decoded faster (6.96 / 201 tok/s)."""
+    monkeypatch.delenv("NIGHT_MLOCK", raising=False)
+    assert nw.NightCfg().mlock is False
+    plain = nw.configure(nw.build_parser().parse_args([]), nw.NightCfg())
+    assert plain.mlock is False
+    a = nw.llm_spec(PARKED, plain, nw.Levers("qat", 8192, "q8_0"))["argv"]
+    assert "--mlock" not in a and "--load-mode" not in a                       # the default window command carries no lock flag at all
+    opted = nw.configure(nw.build_parser().parse_args(["--mlock"]), nw.NightCfg())
+    assert opted.mlock is True and "--load-mode" in nw.llm_spec(PARKED, opted, nw.Levers("qat", 8192, "q8_0"))["argv"]
+    assert nw.configure(nw.build_parser().parse_args(["--mlock", "--no-mlock"]), nw.NightCfg()).mlock is False      # --no-mlock still wins
 
 
 def test_the_night_mind_entry_point_is_used_as_soon_as_it_exists_with_the_served_context_and_speed(tmp_path):
@@ -836,7 +849,7 @@ def test_the_cells_object_is_read_from_the_compact_one_line_stdout_too(tmp_path)
 def _trial_cells(tmp_path, *, pretty):
     script = tmp_path / "zoe-night-mind.py"
     script.write_text("# stand-in")
-    w, host, cfg = make(tmp_path, argv=["--trial"], start=at(3, 5), cfg_kw={"night_mind_script": script})
+    w, host, cfg = make(tmp_path, argv=["--trial", "--cap-min", "50"], start=at(3, 5), cfg_kw={"night_mind_script": script})      # the re-priced cells need more than the 4B@32k phase had left of 40 min
     real = host.run_watched
     cells_argv: list = []
 
@@ -874,10 +887,10 @@ def test_the_cells_budget_is_the_measured_speed_through_the_member_pass_formula(
     # one MOMENTS call (700 prompt tokens, cap 640) at today's 12B: 700/158.7 + 0.6 x 640/6.24 = 65.9 s; the worst case is night_mind.timeout_for itself
     assert cb.call_expected_s(700, 640, D12, P12) == pytest.approx(700 / P12 + 0.6 * 640 / D12)
     assert cb.cell_worst_s("K12", D12, P12) == pytest.approx(nm.timeout_for(700, 640, D12, P12))
-    assert cb.cell_expected_s("K1", D12, P12) == pytest.approx(2 * cb.call_expected_s(700, 640, D12, P12) + cb.call_expected_s(600, 450, D12, P12))
+    assert cb.cell_expected_s("K1", D12, P12) == pytest.approx(3 * cb.call_expected_s(700, 640, D12, P12) + cb.call_expected_s(600, 450, D12, P12))      # 3 MOMENTS chunks + 1 THREADS: measured on the 4B
     assert all(cb.cell_expected_s(k, D12, P12) == 0 for k in ("K2", "K3", "K4", "K5", "K6"))           # they read the pass K1 played: no calls of their own
     total = sum(cb.cell_expected_s(k, D12, P12) for k in cb.CELL_ORDER)
-    assert 1040 < total < 1070                                                                          # the 13 cell runs (K1-K12, K9 twice) need ~1,055 s at 6.24 tok/s
+    assert 1500 < total < 1700                                                                          # the 13 cell runs (K1-K12, K9 twice) need ~1,450 s at 6.24 tok/s (was 1,055 on the guessed K9 / K10 prices)
     fast = sum(cb.cell_expected_s(k, 2 * D12, P12) for k in cb.CELL_ORDER)                             # twice the decode speed: about half the decode time
     assert fast < 0.6 * total
     assert sum(cb.cell_worst_s(k, D12, P12) for k in cb.CELL_ORDER) > total                           # the ceiling is above the expectation
@@ -886,15 +899,16 @@ def test_the_cells_budget_is_the_measured_speed_through_the_member_pass_formula(
 
 def test_the_plan_fits_all_cells_with_room_and_a_prefix_when_the_cap_leaves_less():
     from zmb import cells_budget as cb
-    full = cb.plan(D12, P12, 1640.0)
-    assert full["fits_all"] and full["selected"] == list(cb.CELL_ORDER) and full["expected_s"] == pytest.approx(1055, abs=15)
-    assert full["cell_budget_s"] <= 1640 - cb.GRACE_S and full["watchdog_s"] <= 1640                     # never past what the cap leaves
+    assert not cb.plan(D12, P12, 1640.0)["fits_all"]                                                     # the re-priced set (K7 5 calls, K10 4) no longer fits the old 40-minute cap
+    full = cb.plan(D12, P12, 2400.0)
+    assert full["fits_all"] and full["selected"] == list(cb.CELL_ORDER) and full["expected_s"] == pytest.approx(1582, abs=15)
+    assert full["cell_budget_s"] <= 2400 - cb.GRACE_S and full["watchdog_s"] <= 2400                     # never past what the cap leaves
     assert full["watchdog_s"] > 420                                                                      # the fixed 420 s that killed the 2026-10-09 run is gone
     part = cb.plan(D12, P12, 700.0)
     assert 0 < len(part["selected"]) < len(cb.CELL_ORDER) and part["dropped"] == list(cb.CELL_ORDER[len(part["selected"]):]) and not part["fits_all"]
     assert part["selected"][:6] == ["K1", "K2", "K3", "K4", "K5", "K6"] and part["needed_s"] <= 700 - cb.GRACE_S and part["watchdog_s"] <= 700
     assert cb.plan(D12, P12, 200.0)["selected"] == [] and cb.plan(D12, P12, 200.0)["watchdog_s"] == 0       # nothing fits: no run, no watchdog
-    assert len(cb.plan(D12 / 2, P12, 1640.0)["selected"]) < len(full["selected"])                          # a slower model fits fewer
+    assert len(cb.plan(D12 / 2, P12, 2400.0)["selected"]) < len(full["selected"])                          # a slower model fits fewer
     huge = cb.plan(D12, P12, 50000.0)
     assert huge["cell_budget_s"] == pytest.approx(cb.STARTUP_S + huge["worst_s"], abs=1) and huge["watchdog_s"] == pytest.approx(huge["cell_budget_s"] + cb.GRACE_S, abs=1)
 
@@ -907,7 +921,7 @@ def test_the_cli_go_no_go_before_a_cell_is_time_spent_plus_the_cells_expected_ti
     assert cb.fits_next(10 ** 6, 0, "K7", D12, P12) and cb.fits_next(10 ** 6, None, "K7", D12, P12)        # no budget given = the old behaviour
 
 
-def _cells_host(tmp_path, *, kill=False, verdicts=None, argv=("--cells-only",), start=None, **kw):
+def _cells_host(tmp_path, *, kill=False, verdicts=None, argv=("--cells-only",), start=None, log_lines=None, **kw):
     """A cells-only window on the fake host. The night-mind CLI stand-in writes the one-JSON-object log (or, ``kill``, only per-cell progress lines and returns rc 124 at the watchdog)."""
     script = tmp_path / "zoe-night-mind.py"
     script.write_text("# stand-in")
@@ -922,7 +936,7 @@ def _cells_host(tmp_path, *, kill=False, verdicts=None, argv=("--cells-only",), 
             host.cmds.append((list(argv_), True))
             log_path.parent.mkdir(parents=True, exist_ok=True)
             n = {v: sum(1 for x in verdicts.values() if x == v) for v in ("PASS", "FAIL", "SKIP", "ERROR")}
-            progress = "".join(f"NIGHT_CELL id={k} verdict={v} wall_s=12.0\n" for k, v in verdicts.items())
+            progress = log_lines if log_lines is not None else "".join(f"NIGHT_CELL id={k} verdict={v} wall_s=12.0\n" for k, v in verdicts.items())
             if kill:
                 log_path.write_text(progress + "NIGHT_MIND user=- status=running\n")
                 host.t += timeout
@@ -991,6 +1005,27 @@ def test_no_cell_fitting_the_cap_is_an_error_row_not_a_silent_empty_run(tmp_path
     assert rc == nw.EXIT_ABORTED and not [c for c in calls if "argv" in c]                              # the CLI was never started with a budget of zero
     assert "no night-mind cell fits" in w.outcome
     assert wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]
+
+
+def test_cells_runs_and_pick_reach_the_cli_and_the_budget_is_priced_per_run(tmp_path):
+    """``--cells-runs N`` is the CLI's ``--runs N`` (a verdict is the MAJORITY of N samples) and ``--cells-pick`` its ``--only``; the plan is N times the one-run price, so the watchdog
+    covers all N runs; the votes the CLI reports reach the record (and so the report)."""
+    from zmb import cells_budget as cb
+    d, p = 4.2, 120.5
+    one, three = cb.plan(d, p, 50000.0, keys=["K9", "K9f", "K10"]), cb.plan(d, p, 50000.0, keys=["K9", "K9f", "K10"], runs=3)
+    assert three["expected_s"] == pytest.approx(3 * one["expected_s"], abs=0.2) and three["worst_s"] == pytest.approx(3 * one["worst_s"], abs=0.2) and three["runs"] == 3 and one["runs"] == 1
+    w, host, cfg, calls = _cells_host(tmp_path, argv=("--cells-only", "--cap-min", "50", "--cells-runs", "3", "--cells-pick", "K9,K9f,K10"), verdicts={"K9": "PASS", "K9f": "PASS", "K10": "FAIL"})
+    assert w.run() == nw.EXIT_OK, w.outcome
+    argv = next(c for c in calls if "argv" in c)["argv"]
+    sel = w.rec["cells_plan"]["12B"]["selected"]
+    assert argv[argv.index("--runs") + 1] == "3" and argv[argv.index("--only") + 1] == ",".join(sel) and sel[:1] == ["K9"] and set(sel) <= {"K9", "K9f", "K10"}
+    assert w.rec["cells_plan"]["12B"]["runs"] == 3
+    (tmp_path / "plain").mkdir()
+    w1, _h, _cf, calls1 = _cells_host(tmp_path / "plain")
+    assert w1.run() == nw.EXIT_OK
+    argv1 = next(c for c in calls1 if "argv" in c)["argv"]
+    p1 = w1.rec["cells_plan"]["12B"]
+    assert argv1[argv1.index("--runs") + 1] == "1" and (("--only" in argv1) == (not p1["fits_all"]))      # one run of everything that fits; the set is named only when the plan dropped cells
 
 
 def test_a_watchdog_kill_keeps_the_verdicts_the_cli_logged_cell_by_cell(tmp_path):
@@ -1603,3 +1638,111 @@ def test_a_real_run_logs_the_summary_line_and_a_dry_run_does_not(tmp_path):
     w.log = logged.append
     assert w.run() == nw.EXIT_OK
     assert sum(1 for m in logged if str(m).startswith("NIGHT_WINDOW_SUMMARY ")) == 1
+
+
+def test_the_cells_price_table_covers_the_call_counts_measured_on_the_live_4b():
+    """``CELL_CALLS`` was a guess (K9 / K9f / K10 at one MOMENTS call); the CLI now prints every run's real count per cell (``cells.cell_calls``). These are the largest of 6 runs of the
+    live 4B on 2026-10-10 (3 runs twice, two prompt versions); a price below them under-plans the window and its watchdog kills the run (the 2026-10-09 failure)."""
+    from zmb import cells_budget as cb
+    measured = {"K1": (3, 1), "K7": (4, 1), "K8": (3, 1), "K9": (2, 1), "K9f": (2, 1), "K10": (3, 1), "K11": (1, 1), "K12": (1, 0), "K2": (0, 0), "K3": (0, 0), "K4": (0, 0), "K5": (0, 0), "K6": (0, 0)}
+    for k, (m, t) in measured.items():
+        assert cb.CELL_CALLS[k][0] >= m and cb.CELL_CALLS[k][1] >= t, k
+    assert set(cb.CELL_ORDER) == set(cb.CELL_CALLS) == set(measured)
+
+
+def test_waiting_for_a_quiet_box_does_not_spend_the_windows_cap_or_the_cells_budget(tmp_path):
+    """2026-10-10 09:40: the preflight waited 20 min for the voice harness; the 50-minute cap's clock had started at process start, so the cells got 932 s and K9f-K12 were skipped for budget.
+    The clock now starts when the window is cleared to stop the stack; the pre-stop wait has its own timeout."""
+    from zmb import cells_budget as cb
+    w, host, cfg, calls = _cells_host(tmp_path, argv=("--cells-only", "--cap-min", "50", "--cells-seed", "77"), start=at(12, 0))
+    cfg.busy_wait_max_min = 30.0
+    host.busy.add("zoe-backup.service")
+    real_sleep = host.sleep
+    waited = {"s": 0.0}
+
+    def sleep(sec):
+        waited["s"] += sec
+        if waited["s"] >= 20 * 60:
+            host.busy.clear()                                    # the box goes quiet after 20 minutes
+        real_sleep(sec)
+    host.sleep = sleep
+    assert w.run() == nw.EXIT_OK, w.outcome
+    assert waited["s"] >= 20 * 60 and w.rec["waited_before_open_min"] >= 19.9
+    plan = w.rec["cells_plan"]["12B"]
+    assert plan["room_s"] > (50 - cfg.reserve_min) * 60 - 400                     # the 20 waited minutes are not in the room (it was 992 s of 50 min in the real window)
+    argv = next(c for c in calls if "argv" in c)["argv"]
+    assert argv[argv.index("--cell-seed") + 1] == "77"
+
+
+def test_cells_picked_without_k1_pay_for_the_pass_k1_would_have_played():
+    """Greptile P1: a lone K2 priced at zero calls got a 45 s budget, but it plays the shared pass itself (K1's calls). Charged once per run, only when K1 is not in the set."""
+    from zmb import cells_budget as cb
+    d, p = 4.7, 153.4
+    lone = cb.plan(d, p, 50000.0, keys=["K2"])
+    assert lone["expected_s"] == pytest.approx(cb.cell_expected_s("K1", d, p), abs=0.2) and lone["worst_s"] == pytest.approx(cb.cell_worst_s("K1", d, p), abs=0.2)
+    two = cb.plan(d, p, 50000.0, keys=["K2", "K3"], runs=2)
+    assert two["expected_s"] == pytest.approx(2 * cb.cell_expected_s("K1", d, p), abs=0.2)           # once per run, not once per cell
+    with_k1 = cb.plan(d, p, 50000.0, keys=["K1", "K2"])
+    assert with_k1["expected_s"] == pytest.approx(cb.cell_expected_s("K1", d, p), abs=0.2)             # K1 is in: nothing extra
+    assert lone["watchdog_s"] > 150
+
+
+def test_repeated_runs_run_exactly_the_cells_the_plan_budgeted(tmp_path):
+    """Greptile P1: with --cells-runs 3 and no pick the plan budgets runs of the SELECTED set, but the CLI was not told which: it spent the shared budget on dropped cells."""
+    w, host, cfg, calls = _cells_host(tmp_path, argv=("--cells-only", "--cap-min", "40", "--cells-runs", "3"))
+    assert w.run() == nw.EXIT_OK, w.outcome
+    argv = next(c for c in calls if "argv" in c)["argv"]
+    sel = w.rec["cells_plan"]["12B"]["selected"]
+    assert argv[argv.index("--only") + 1] == ",".join(sel) and len(sel) < 13
+
+
+# ── an interrupted --cells-runs 3 window keeps each cell's MAJORITY (Greptile round 2 on #1982) ───────────────────────────────────────
+
+INTERRUPTED_3_RUNS = (
+    "NIGHT_CELL id=K1 verdict=PASS wall_s=10.0 run=0\nNIGHT_CELL id=K2 verdict=FAIL wall_s=10.0 run=0\nNIGHT_CELL id=K3 verdict=PASS wall_s=10.0 run=0\n"
+    "NIGHT_CELL id=K1 verdict=FAIL wall_s=10.0 run=1\nNIGHT_CELL id=K2 verdict=FAIL wall_s=10.0 run=1\nNIGHT_CELL id=K3 verdict=FAIL wall_s=10.0 run=1\n"
+    "NIGHT_CELL id=K1 verdict=PASS wall_s=10.0 run=2\n")           # killed in run 2, after K1
+
+
+def test_rebuild_cell_votes_takes_the_majority_over_every_run_and_calls_an_undecided_cell_incomplete():
+    verdicts, votes = nw.rebuild_cell_votes(INTERRUPTED_3_RUNS, 3)
+    assert votes["K1"] == ["PASS", "FAIL", "PASS"] and verdicts["K1"] == "PASS"                 # the old last-line-wins read FAIL-then-PASS as whatever came last
+    assert votes["K2"] == ["FAIL", "FAIL", "MISSING"] and verdicts["K2"] == "FAIL"             # decided against: one more run cannot make 2 of 3
+    assert votes["K3"] == ["PASS", "FAIL", "MISSING"] and verdicts["K3"] == "INCOMPLETE"       # the missing run decides it: neither PASS nor FAIL may be claimed
+    # a log from before the run tag: the cell's n-th line is run n
+    v2, vt2 = nw.rebuild_cell_votes("NIGHT_CELL id=K1 verdict=FAIL wall_s=1.0\nNIGHT_CELL id=K1 verdict=PASS wall_s=1.0\nNIGHT_CELL id=K1 verdict=PASS wall_s=1.0\n", 3)
+    assert vt2["K1"] == ["FAIL", "PASS", "PASS"] and v2["K1"] == "PASS"
+    # SKIP is not a vote; a single run reads as it always did
+    assert nw.rebuild_cell_votes("NIGHT_CELL id=K9 verdict=SKIP wall_s=0 run=0 reason=cell_budget\n", 1)[0] == {"K9": "SKIP"}
+    assert nw.rebuild_cell_votes("NIGHT_CELL id=K7 verdict=ERROR wall_s=3.0 run=0\n", 1)[0] == {"K7": "ERROR"}
+
+
+def test_a_killed_three_run_window_reports_the_majority_and_marks_the_undecided_cells_incomplete(tmp_path):
+    w, host, cfg, calls = _cells_host(tmp_path, kill=True, argv=("--cells-only", "--cap-min", "50", "--cells-runs", "3", "--cells-pick", "K1,K2,K3"), log_lines=INTERRUPTED_3_RUNS)
+    assert w.run() == nw.EXIT_ABORTED
+    nmc = w.rec["trial"]["12B"]["night_mind_cells"]
+    assert nmc["K1"] == "PASS" and nmc["K2"] == "FAIL" and nmc["K3"] == "INCOMPLETE" and nmc["partial"] and nmc["incomplete"] == 1
+    assert nmc["pass"] == 1 and nmc["fail"] == 1 and nmc["votes"]["K3"] == ["PASS", "FAIL", "MISSING"]
+
+
+# ── --cells-corpus / --cells-trace reach the CLI ──────────────────────────────────────────────────────────────────────────────────────
+
+def test_cells_corpus_and_trace_are_passed_to_the_cli(tmp_path):
+    w, host, cfg, calls = _cells_host(tmp_path, argv=("--cells-only", "--cells-pick", "K9f", "--cells-corpus", "zmb-nightheldout-20261010", "--cells-trace", "on"))
+    assert w.run() == nw.EXIT_OK, w.outcome
+    argv = next(c for c in calls if "argv" in c)["argv"]
+    assert argv[argv.index("--seed") + 1] == "zmb-nightheldout-20261010"
+    trace = argv[argv.index("--trace") + 1]
+    assert trace.endswith("-cells-trace.jsonl") and "/logs/" in trace and w.rec["cells_trace"] == trace
+    (tmp_path / "plain").mkdir()
+    w1, _h, _cf, calls1 = _cells_host(tmp_path / "plain")
+    assert w1.run() == nw.EXIT_OK
+    argv1 = next(c for c in calls1 if "argv" in c)["argv"]
+    assert "--seed" not in argv1 and "--trace" not in argv1                                       # off by default: nothing is recorded unless asked
+
+
+def test_cells_corpus_and_trace_are_refused_outside_cells_only(tmp_path):
+    ap = nw.build_parser()
+    for flag in (["--cells-trace", "on"], ["--cells-corpus", "zmb-x"]):
+        with pytest.raises(nw.Refused):
+            nw.configure(ap.parse_args(["--trial", *flag]))
