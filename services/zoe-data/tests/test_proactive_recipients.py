@@ -17,6 +17,7 @@ import proactive.recipients as rcp
 import proactive.triggers.evening_windown as ew
 import proactive.triggers.evolution_weekly_digest as ed
 import proactive.triggers.morning_checkin as mc
+from time_utils import zoe_timezone
 
 GUESTS = ("guest", "anonymous", "voice-guest", "voice-daemon", "")
 
@@ -173,7 +174,7 @@ class _FixedNow(datetime):
 
 
 def _pin_clock(monkeypatch, module, hour, minute):
-    _FixedNow.fixed = datetime(2026, 9, 28, hour, minute, tzinfo=module._ZOE_TZ)
+    _FixedNow.fixed = datetime(2026, 9, 28, hour, minute, tzinfo=zoe_timezone())
     monkeypatch.setattr(module, "datetime", _FixedNow)
 
 

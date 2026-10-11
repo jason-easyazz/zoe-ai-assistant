@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import uuid
 from datetime import date, datetime
@@ -13,6 +14,8 @@ from fastapi import HTTPException
 from guest_policy import require_feature_access
 from models import ReminderCreate
 from push import broadcaster
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_due_date(raw: object, *, now_utc: datetime | None = None) -> str | None:
@@ -220,5 +223,17 @@ async def create_reminder_record(payload: ReminderCreate, *, user: Mapping[str, 
     cursor = await db.execute("SELECT * FROM reminders WHERE id = ?", [reminder_id])
     row = await cursor.fetchone()
     reminder = row_to_dict(row) or {}
+    # Schedule NOW rather than waiting for the slow-loop scan: that loop does nothing in quiet
+    # hours (22:00-07:00) and at 07:00 treats an explicit time earlier that night as past-due, so
+    # "remind me at 22:30" said at 22:15 was never scheduled. schedule_due_reminder is the same
+    # idempotent entry the scan uses (skips when an unfired job exists), so nothing double-books.
+    # The FIRE is still deferred out of quiet hours by fire_notification. Best-effort: the row is
+    # already committed and the scan retries, so a scheduler failure must not fail the create.
+    if reminder.get("id"):
+        try:
+            from proactive.triggers.reminder_scan import schedule_due_reminder
+            await schedule_due_reminder(db, reminder, now_utc=now_utc)
+        except Exception:
+            logger.exception("reminder %s created but not scheduled yet (slow loop will retry)", reminder_id)
     await broadcaster.broadcast("reminders", "reminder_created", reminder, user_id=user_id)
     return reminder

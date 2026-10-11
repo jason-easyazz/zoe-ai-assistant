@@ -4,18 +4,17 @@ Phase 3.4: enriched with open loops, emotional moments, calendar preview,
 and portrait-informed personal note so every morning brief feels personal.
 """
 import logging
-import os
-import zoneinfo
 from datetime import datetime, timedelta, timezone
 
 from proactive.recipients import proactive_recipients
+from time_utils import zoe_timezone
 from proactive.triggers.base import ProactiveTrigger, TriggerResult
 
 log = logging.getLogger(__name__)
 
-_ZOE_TZ = zoneinfo.ZoneInfo(os.environ.get("ZOE_TIMEZONE", "Australia/Perth"))
 _FIRE_HOUR = 7
 _FIRE_MINUTE = 30
+_WINDOW_MINUTES = 60   # fires 07:30-08:30 local; once per day (the already_fired check below)
 
 
 def _due_iso(value) -> str | None:
@@ -235,9 +234,10 @@ class MorningCheckInTrigger(ProactiveTrigger):
     trigger_type = "morning_checkin"
 
     async def check(self, db) -> list[TriggerResult]:
-        now = datetime.now(_ZOE_TZ)
-        # Only fire between 7:30 and 8:30am
-        if not (_FIRE_HOUR <= now.hour < _FIRE_HOUR + 1 and now.minute >= _FIRE_MINUTE):
+        now = datetime.now(zoe_timezone())   # per call: ZOE_TIMEZONE is not frozen at import
+        # Only fire between 7:30 and 8:30am local
+        since_fire = now.hour * 60 + now.minute - (_FIRE_HOUR * 60 + _FIRE_MINUTE)
+        if not (0 <= since_fire < _WINDOW_MINUTES):
             return []
 
         today = now.date().isoformat()

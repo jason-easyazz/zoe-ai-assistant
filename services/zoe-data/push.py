@@ -16,8 +16,9 @@ class PushBroadcaster:
 
     User-scoped broadcasts: pass user_id= to broadcast() so that messages are
     only delivered to connections owned by that user, preventing cross-user
-    data leakage.  Panel connections are exempt from user scoping (they use
-    connect_panel and broadcast_to_panel instead).
+    data leakage.  Panel and anonymous connections have no user mapping and so
+    NEVER receive user-scoped broadcasts; panel-targeted delivery uses
+    broadcast_to_panel (or an unscoped broadcast).
     """
 
     def __init__(self):
@@ -80,7 +81,7 @@ class PushBroadcaster:
 
         Pass ``user_id`` to restrict delivery to connections owned by that
         user.  Connections without an associated user (panels, anonymous) are
-        always included so that global events still reach them.
+        excluded from scoped sends; unscoped broadcasts still reach them.
 
         Returns the number of subscribers that received the message
         successfully.  Returns 0 if the channel has no connections or all
@@ -98,10 +99,13 @@ class PushBroadcaster:
 
         dead = set()
         delivered = 0
-        for ws in list(self._connections[channel]):
-            # Skip if this connection belongs to a different user.
-            ws_user = self._ws_users.get(ws)
-            if user_id is not None and ws_user is not None and ws_user != user_id:
+        # Snapshot (socket, owner) together: a send is a suspension point, and a socket
+        # disconnected mid-fan-out must keep the owner it had when the fan-out began.
+        for ws, ws_user in [(w, self._ws_users.get(w)) for w in list(self._connections[channel])]:
+            # A user-scoped message goes ONLY to that user's own sockets. Unmapped
+            # sockets (panels/kiosks on "all", anonymous) are skipped too: they are
+            # shared screens and must not see one member's private events.
+            if user_id is not None and ws_user != user_id:
                 continue
             try:
                 await ws.send_json(message)
