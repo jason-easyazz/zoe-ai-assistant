@@ -25,14 +25,14 @@ Every planned brain stop hits this: the nightly 12B window (`scripts/night/night
 
 | Piece | What it is |
 |---|---|
-| `scripts/maintenance/brain_cold_start.sh` | Drops the page cache once (synchronously), then detaches a bounded loop that keeps dropping every 0.3 s until `http://127.0.0.1:11434/health` answers or **180 s** pass. Exits 0 on every path. |
+| `scripts/maintenance/brain_cold_start.sh` | Drops the page cache once (synchronously), then starts a bounded loop (own transient unit, below) that keeps dropping every 0.3 s until `http://127.0.0.1:11434/health` answers or **180 s** pass. Exits 0 on every path. |
 | `scripts/setup/systemd/llama-server.service.d/50-cold-start.conf` | The tracked **drop-in**: `ExecStartPre=-/bin/bash %h/assistant/scripts/maintenance/brain_cold_start.sh` (after an `ExecStartPre=` reset) and `RestartSec=10`. The unit's `ExecStart` is not touched. |
 | `scripts/setup/systemd/llama-server.service` | **Deliberately unchanged.** The template is voice-path scope (`voice_gate_check.py` `VOICE_PATH_PATTERNS`), so editing it would make this a replay-gated landing for a change that alters no brain flag. `RestartSec=10` in the drop-in equals the template's, so `unit_drift_check.py` reports no `differs`/`missing` for the installed unit; the extra `ExecStartPre` shows only as a `live_only` note (`--strict`). Folding the line into the template is a later, voice-gated step once the drop-in has proved itself live. |
-| `scripts/night/night_window.py` `cold_start_guard()` | The wake path starts the brain with `systemctl start`. If the installed unit already runs the helper as `ExecStartPre`, the window does **nothing extra** (no double work). On a host without the drop-in it runs the same helper itself just before `systemctl start`. The window's own compaction (`drop_caches 3` + `compact_memory`, for fragmentation) is separate and unchanged. |
+| `scripts/night/night_window.py` `cold_start_guard()` | The wake path starts the brain with `systemctl start`. If the LOADED unit already runs the helper as `ExecStartPre` (read with `systemctl --user show -p ExecStartPre`, not `cat`: `cat` also prints comments and drop-ins not yet daemon-reloaded), the window does **nothing extra** (no double work). On a host without the drop-in it runs the same helper itself just before `systemctl start`. The window's own compaction (`drop_caches 3` + `compact_memory`, for fragmentation) is separate and unchanged. |
 
 ### Why an ExecStartPre and not a wrapper ExecStart
 
-`ExecStartPre` must exit before the server starts, so it cannot *be* the loop. It spawns the loop detached (`setsid`, own session) and returns. The alternatives were worse: a wrapper `ExecStart` would change the unit's main process (signal handling, `MainPID`, the `ExecStartPost` probe, `unit_drift_check.py`'s flag parsing, the night window's clone generator that reads the unit's `ExecStart`), and an `ExecStartPost` loop starts too late (the server is already allocating). The helper is therefore a **side process in the unit's cgroup** that stops itself; `systemctl stop` kills it with the unit (`KillMode=control-group`).
+`ExecStartPre` must exit before the server starts, so it cannot *be* the loop. It spawns the loop detached (`setsid`, own session) and returns. The alternatives were worse: a wrapper `ExecStart` would change the unit's main process (signal handling, `MainPID`, the `ExecStartPost` probe, `unit_drift_check.py`'s flag parsing, the night window's clone generator that reads the unit's `ExecStart`), and an `ExecStartPost` loop starts too late (the server is already allocating). The loop therefore runs as **its own transient user unit** (`systemd-run --user --no-block --collect --unit=brain-cold-start-loop-...`, `RuntimeMaxSec` = bound + 31 s as a systemd-enforced backstop): systemd documents that "all processes forked off by processes invoked via `ExecStartPre=` will be killed before the next service process is run" (`systemd.service(5)`), and `setsid` changes the session, not the cgroup, so a plain background child would die before `ExecStart` (a review found this; the first version was wrong). The loop stops itself on health or the bound; it is not tied to `systemctl stop llama-server`. Without `systemd-run` (or if it fails) the helper falls back to a `setsid` child, which is correct for callers that are not a unit's Pre step (the night window's fallback, a manual run).
 
 ### Why `RestartSec=10`
 
@@ -42,10 +42,10 @@ The detached loop keeps dropping the cache **across** the restart gap (it runs u
 
 - **Never blocks the start**: the Pre step returns after one drop; the loop's stdout/stderr go to a log file, so a caller that captures output (the night window) is not held until the loop ends.
 - **Never fails the unit**: the `-` prefix plus `exit 0` on every path. No passwordless `sudo -n` = one log line (`SKIPPED ...`, with the manual command) and the start proceeds exactly as before. A broken sudo mid-loop ends the loop after 5 consecutive failures.
-- **Bounded**: a wall-clock bound (`BRAIN_COLD_START_MAX_S`, default 180, equal to the unit's `TimeoutStartSec`), not an iteration count; and it stops the moment `/health` answers.
-- **One loop at a time**: a retry's Pre step supersedes the previous loop (pidfile take-over, verified against `/proc/<pid>/cmdline` so a recycled pid is never killed).
+- **Bounded**: a time bound (`BRAIN_COLD_START_MAX_S`, default 180, equal to the unit's `TimeoutStartSec`), not an iteration count, measured on `/proc/uptime` (a monotonic clock: an NTP step backward cannot stretch it); every wait is capped to the time remaining, so even a huge `_INTERVAL_S` cannot outlive it; the transient unit adds `RuntimeMaxSec`; and the loop stops the moment `/health` answers.
+- **One loop at a time**: a retry's Pre step supersedes the previous loop (pidfile take-over, verified against `/proc/<pid>/cmdline` so a recycled pid is never killed). Supersede + launch + "the new loop has recorded its pid" happen under one `flock` (`launch.lock`), so overlapping starts cannot leave two loops; a start that cannot get the lock within `BRAIN_COLD_START_LOCK_WAIT_S` (5) logs and does nothing, because the holder is arming the loop.
 - **Privilege**: only `sudo -n sh -c 'echo 1 > /proc/sys/vm/drop_caches'`. Level 1 drops clean page cache only; nothing is lost, files are re-read from disk.
-- **Knobs** (environment, none is a `ZOE_*` flag): `BRAIN_COLD_START_DISABLE=1`, `_HEALTH_URL`, `_MAX_S`, `_INTERVAL_S`, `_STATE_DIR` (default `$XDG_RUNTIME_DIR/brain-cold-start`: `loop.pid`, `loop.log`).
+- **Knobs** (environment, none is a `ZOE_*` flag): `BRAIN_COLD_START_DISABLE=1`, `_HEALTH_URL`, `_MAX_S`, `_INTERVAL_S`, `_LOCK_WAIT_S`, `_NO_SYSTEMD_RUN=1` (force the setsid child), `_STATE_DIR` (default `$XDG_RUNTIME_DIR/brain-cold-start`: `loop.pid`, `launch.lock`, `loop.log`).
 
 ## Operator: install (does not restart anything)
 
@@ -84,10 +84,11 @@ flock /tmp/zoe-brain-window.lock bash -c '
 
 If the start fails anyway the brain stays down; the unit retries every 10 s by itself (each retry re-arms the loop), and the manual recovery is the 2026-10-10 one: `while true; do sudo sh -c 'echo 1 > /proc/sys/vm/drop_caches'; sleep 0.3; done` in a second shell until `systemctl --user is-active llama-server` says `active` (then stop the loop).
 
-While it loads, in a second shell, the loop must be alive (this is the check that systemd leaves the Pre step's detached child running):
+While it loads, in a second shell, the loop must be alive, in its own unit (not in `llama-server.service`'s cgroup; this is the check that it survived the Pre step):
 
 ```bash
 pgrep -af "brain_cold_start.sh --loop"
+systemctl --user list-units 'brain-cold-start-loop-*' --no-legend
 ```
 
 After it:
@@ -98,7 +99,7 @@ journalctl --user -u llama-server --since "-5min" | grep -c "error 12"   # 0
 journalctl --user -t brain-cold-start --since "-5min"
 ```
 
-The last command should show, in order: `page cache dropped before the start`, `loop detached`, `loop started: dropping the page cache every 0.3s ...`, and `stopped: brain healthy after N ms (K drops)`. A line `SKIPPED: passwordless sudo is not available` means the precondition failed. If you see `loop started` but never a `stopped:` line and `pgrep` finds nothing, systemd reaped the Pre step's child: record that in `open-problems.md` and switch the detach to a transient `systemd-run --user` unit (follow-up; the single synchronous drop is all that ran).
+The last command should show, in order: `page cache dropped before the start`, `loop started as its own transient unit`, `loop started: dropping the page cache every 0.3s ...`, and `stopped: brain healthy after N ms (K drops)`. A line `SKIPPED: passwordless sudo is not available` means the precondition failed; `systemd-run failed; falling back to a setsid child` means the loop is a child of the Pre step and WILL be killed before the server starts (only the single synchronous drop then applies): record it in `open-problems.md` with the `systemd-run` error (`systemd-run --user --collect --no-block --unit=x-probe /bin/true` from a shell shows it). If you see `loop started` but never a `stopped:` line and neither `pgrep` nor `list-units` finds the loop, something killed it: record that too.
 
 Then tick the two `open-problems.md` entries (2026-10-10 "Brain restart" and "Brain") fixed and remove them, citing the verification output. A comparison *without* the drop-in is not recommended on a live brain: the 2026-10-10 incident is that control, and it cost 14.5 minutes.
 

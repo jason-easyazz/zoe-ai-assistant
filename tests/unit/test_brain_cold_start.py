@@ -47,6 +47,25 @@ exit 0
 """
 
 
+# A stand-in for `systemd-run --user --no-block ...`: records its arguments and runs the command as a separate, detached process (as a transient unit would, in its
+# own cgroup, with only the --setenv environment added). The REAL systemd-run must never run from a test: it would start a unit on the live user manager.
+FAKE_SYSTEMD_RUN = """#!/bin/bash
+echo "$*" >> "$FAKE_SYSTEMD_RUN_LOG"
+[ "${FAKE_SYSTEMD_RUN_FAIL:-0}" = "1" ] && exit 1
+envs=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --setenv=*) envs+=("${1#--setenv=}"); shift ;;
+    -p) shift 2 ;;
+    -*) shift ;;
+    *) break ;;
+  esac
+done
+setsid env "${envs[@]}" "$@" </dev/null >/dev/null 2>&1 &
+exit 0
+"""
+
+
 class Health:
     """A loopback /health: 503 (llama-server's answer while the model loads) until ``ok`` is set, then 200."""
 
@@ -83,11 +102,16 @@ class Rig:
         sudo = self.bin / "sudo"
         sudo.write_text(FAKE_SUDO)
         sudo.chmod(sudo.stat().st_mode | stat.S_IXUSR)
+        srun = self.bin / "systemd-run"
+        srun.write_text(FAKE_SYSTEMD_RUN)
+        srun.chmod(srun.stat().st_mode | stat.S_IXUSR)
+        self.srun_log = tmp / "systemd-run.log"
+        self.srun_log.write_text("")
         self.sudo_log = tmp / "sudo.log"
         self.sudo_log.write_text("")
         self.state = tmp / "state"
         self.state.mkdir()
-        self.env = {**os.environ, "PATH": f"{self.bin}:{os.environ['PATH']}", "FAKE_SUDO_LOG": str(self.sudo_log), "HOME": str(tmp),
+        self.env = {**os.environ, "PATH": f"{self.bin}:{os.environ['PATH']}", "FAKE_SUDO_LOG": str(self.sudo_log), "FAKE_SYSTEMD_RUN_LOG": str(self.srun_log), "HOME": str(tmp),
                     "BRAIN_COLD_START_STATE_DIR": str(self.state), "BRAIN_COLD_START_HEALTH_URL": health.url,
                     "BRAIN_COLD_START_MAX_S": "30", "BRAIN_COLD_START_INTERVAL_S": "0.05"}
         for k in ("BRAIN_COLD_START_DISABLE", "XDG_RUNTIME_DIR"):
@@ -111,12 +135,24 @@ class Rig:
         except (OSError, ValueError, IndexError):
             return None
 
-    def kill_loop(self):
-        pid = self.pid()
-        if pid:
+    def loops(self) -> list[int]:
+        """Every live loop process that belongs to THIS rig (its state dir is in the process environment), whoever started it."""
+        out = []
+        for d in Path("/proc").iterdir():
+            if not d.name.isdigit():
+                continue
             try:
-                os.killpg(pid, signal.SIGKILL)
+                cmd = (d / "cmdline").read_bytes().split(b"\0")
+                env = (d / "environ").read_bytes()
             except OSError:
+                continue
+            if b"--loop" in cmd and any(c.endswith(b"brain_cold_start.sh") for c in cmd) and f"BRAIN_COLD_START_STATE_DIR={self.state}".encode() in env and alive(int(d.name)):
+                out.append(int(d.name))
+        return out
+
+    def kill_loop(self):
+        for pid in {*self.loops(), self.pid() or 0}:
+            if pid:
                 try:
                     os.kill(pid, signal.SIGKILL)
                 except OSError:
@@ -162,7 +198,7 @@ def test_the_helper_returns_at_once_after_one_synchronous_drop_and_leaves_a_deta
     p = rig.run()
     assert p.returncode == 0 and time.monotonic() - t0 < 5
     assert rig.drops() >= 1                                    # the drop BEFORE the server starts happened before we returned
-    assert "page cache dropped before the start" in p.stdout and "loop detached" in p.stdout
+    assert "page cache dropped before the start" in p.stdout and "transient unit" in p.stdout
     assert wait_for(lambda: alive(rig.pid()))                  # the loop outlives the Pre step that spawned it
     assert wait_for(lambda: rig.drops() >= 4)                  # ... and keeps dropping
 
@@ -232,6 +268,89 @@ def test_a_caller_that_captures_output_is_not_held_until_the_loop_ends(rig):
     p = rig.run(timeout=10)
     assert p.returncode == 0 and time.monotonic() - t0 < 5
     assert alive(rig.pid()) or wait_for(lambda: alive(rig.pid()))
+
+
+# ── the loop lives OUTSIDE the Pre step's cgroup (review: systemd kills everything an ExecStartPre= forked) ──
+
+@needs_tools
+def test_the_loop_is_started_as_its_own_transient_unit_not_as_a_child_of_the_pre_step(rig):
+    """systemd.service(5): "All processes forked off by processes invoked via ExecStartPre= will be killed before the next service process is run"; setsid does not leave the
+    cgroup. So the loop must be handed to systemd-run (a transient unit, its own cgroup) with a systemd-enforced RuntimeMaxSec beside the script's bound."""
+    p = rig.run()
+    assert p.returncode == 0 and "transient unit" in p.stdout
+    call = rig.srun_log.read_text().strip().splitlines()
+    assert len(call) == 1
+    line = call[0]
+    for want in ("--user", "--no-block", "--collect", "--unit=brain-cold-start-loop-", "RuntimeMaxSec=61",           # the rig's 30 s bound + 31 s slack f"--setenv=BRAIN_COLD_START_STATE_DIR={rig.state}",
+                 f"--setenv=BRAIN_COLD_START_HEALTH_URL={rig.health.url}", f"/bin/bash {HELPER} --loop"):
+        assert want in line, (want, line)
+    assert wait_for(lambda: alive(rig.pid()))                  # and the loop the fake unit ran is the one dropping the cache
+    assert wait_for(lambda: rig.drops() >= 4)
+    assert rig.pid() in rig.loops()
+
+
+@needs_tools
+def test_if_systemd_run_fails_the_loop_falls_back_to_a_setsid_child(rig):
+    p = rig.run(FAKE_SYSTEMD_RUN_FAIL="1")
+    assert p.returncode == 0 and "falling back" in p.stdout and "setsid" in p.stdout
+    assert wait_for(lambda: alive(rig.pid())) and wait_for(lambda: rig.drops() >= 4)
+
+
+@needs_tools
+def test_the_setsid_path_can_be_forced_and_never_calls_systemd_run(rig):
+    p = rig.run(BRAIN_COLD_START_NO_SYSTEMD_RUN="1")
+    assert p.returncode == 0 and "setsid" in p.stdout and rig.srun_log.read_text() == ""
+    assert wait_for(lambda: alive(rig.pid()))
+
+
+# ── the bound is a real bound (review: a huge interval or a backward clock must not outlive it) ──
+
+@needs_tools
+def test_a_huge_interval_cannot_outlive_the_bound(rig):
+    t0 = time.monotonic()
+    rig.run(BRAIN_COLD_START_MAX_S="1", BRAIN_COLD_START_INTERVAL_S="3600")
+    assert wait_for(lambda: rig.pid() is not None)
+    pid = rig.pid()
+    assert wait_for(lambda: "bound reached" in rig.loop_log(), timeout=8)
+    assert wait_for(lambda: not alive(pid))
+    assert time.monotonic() - t0 < 8                           # not 3600 s: every wait is capped to the time that remains
+
+
+@needs_tools
+def test_a_calendar_clock_that_runs_backward_cannot_stretch_the_bound(rig):
+    """The deadline is measured on /proc/uptime, not `date`: a `date` that goes backward (an NTP step) would make elapsed negative forever."""
+    fake_date = rig.bin / "date"
+    fake_date.write_text('#!/bin/bash\nn=$(cat "$0.n" 2>/dev/null || echo 9000000000000000000)\necho $((n - 1000000000)) > "$0.n"\necho $n\n')
+    fake_date.chmod(fake_date.stat().st_mode | stat.S_IXUSR)
+    rig.run(BRAIN_COLD_START_MAX_S="1")
+    assert wait_for(lambda: rig.pid() is not None)
+    pid = rig.pid()
+    assert wait_for(lambda: "bound reached" in rig.loop_log(), timeout=8)
+    assert wait_for(lambda: not alive(pid))
+
+
+# ── overlapping starts (review: supersede + launch must be one locked step) ──
+
+@needs_tools
+def test_a_start_that_cannot_get_the_launch_lock_does_nothing_and_exits_zero(rig):
+    import fcntl
+    lock = rig.state / "launch.lock"
+    with open(lock, "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)                         # another start is mid-launch
+        t0 = time.monotonic()
+        p = rig.run(BRAIN_COLD_START_LOCK_WAIT_S="0.3")
+        assert p.returncode == 0 and "launch lock" in p.stdout and time.monotonic() - t0 < 5
+        assert rig.pid() is None and rig.loops() == [] and rig.srun_log.read_text() == ""
+    p = rig.run()                                              # lock released: the next start arms a loop normally
+    assert p.returncode == 0 and wait_for(lambda: alive(rig.pid()))
+
+
+@needs_tools
+def test_overlapping_starts_leave_exactly_one_loop(rig):
+    procs = [subprocess.Popen(["bash", str(HELPER)], env=rig.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) for _ in range(6)]
+    assert all(p.wait(timeout=20) == 0 for p in procs)
+    assert wait_for(lambda: len(rig.loops()) == 1, timeout=8), rig.loops()
+    assert rig.pid() in rig.loops()                            # and the pidfile names the survivor, so the NEXT start can supersede it
 
 
 # ── degradation: never fails the unit ────────────────────────────────────────

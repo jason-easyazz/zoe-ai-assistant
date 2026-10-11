@@ -1724,8 +1724,11 @@ class NightWindow(bk.Window):
         wires it as ``ExecStartPre`` (the tracked drop-in ``llama-server.service.d/50-cold-start.conf``) systemd runs it on this very start, so this does nothing (no double work); on a
         host without the drop-in it runs the same helper here, which returns at once and leaves its bounded loop running while ``systemctl start`` loads the model. Never raises."""
         try:
-            if "brain_cold_start" in self.host.run(["systemctl", "--user", "cat", BRAIN], mutating=False).out:
-                self.log("RESTORE: the brain unit runs the cold-start helper itself (ExecStartPre)")
+            # What the NEXT start will run is the LOADED ExecStartPre (`show`), not the files on disk (`cat` also prints comments, a drop-in copied but not yet
+            # daemon-reloaded, and an ExecStartPre= that a later drop-in then resets).
+            shown = self.host.run(["systemctl", "--user", "show", "-p", "ExecStartPre", BRAIN], mutating=False)
+            if shown.rc == 0 and re.search(r"argv\[\]=[^;]*brain_cold_start\.sh", shown.out):
+                self.log("RESTORE: the brain unit runs the cold-start helper itself (loaded ExecStartPre)")
                 return
             r = self.host.run(["bash", str(COLD_START_HELPER)], timeout=60)
             self.log(f"RESTORE: the brain unit has no cold-start drop-in; ran {COLD_START_HELPER.name} here (rc {r.rc}): {r.out.strip()[:200]}")

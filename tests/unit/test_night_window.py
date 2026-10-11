@@ -766,13 +766,40 @@ def test_the_wake_leaves_the_cold_start_to_the_unit_when_the_drop_in_is_installe
     real = host.run
 
     def with_drop_in(argv, timeout=60.0, mutating=True, env=None):
-        if argv[:3] == ["systemctl", "--user", "cat"] and argv[-1] == nw.BRAIN:
-            return bk.Result(0, LIVE_UNIT + "ExecStartPre=-/bin/bash %h/assistant/scripts/maintenance/brain_cold_start.sh\n")
+        if argv[:5] == ["systemctl", "--user", "show", "-p", "ExecStartPre"] and argv[-1] == nw.BRAIN:
+            return bk.Result(0, LOADED_PRE)
         return real(argv, timeout, mutating, env)
     host.run = with_drop_in
     assert w.run() == nw.EXIT_OK
     assert not any("brain_cold_start.sh" in c for c in host.joined() if c.startswith("bash "))
     assert wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]
+
+
+LOADED_PRE = ("ExecStartPre={ path=/bin/bash ; argv[]=/bin/bash /home/zoe/assistant/scripts/maintenance/brain_cold_start.sh ; ignore_errors=yes ; "
+              "start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }\n")
+
+
+@pytest.mark.parametrize("cat_out,show", [
+    (LIVE_UNIT + "# ExecStartPre=-/bin/bash %h/assistant/scripts/maintenance/brain_cold_start.sh\n", bk.Result(0, "ExecStartPre=\n")),                   # only a COMMENT mentions it
+    (LIVE_UNIT + "ExecStartPre=-/bin/bash %h/assistant/scripts/maintenance/brain_cold_start.sh\n", bk.Result(0, "ExecStartPre=\n")),                    # on disk but not loaded (no daemon-reload), or reset by a later drop-in
+    (LIVE_UNIT + "ExecStartPre=-/bin/bash %h/assistant/scripts/maintenance/brain_cold_start.sh\n", bk.Result(1, "Failed to connect to bus")),         # the loaded state cannot be read
+], ids=["comment-only", "on-disk-not-loaded", "show-fails"])
+def test_the_wake_trusts_the_loaded_unit_not_the_files_on_disk(tmp_path, cat_out, show):
+    """Review: `systemctl cat` prints comments and drop-ins that are not loaded yet; only `show -p ExecStartPre` says what the next start will run. In all three cases
+    the unit will NOT run the helper, so the window must (negative control for the 'drop-in installed' test above, which answers `show` with the loaded line)."""
+    w, host, _ = make(tmp_path)
+    real = host.run
+
+    def answer(argv, timeout=60.0, mutating=True, env=None):
+        if argv[:5] == ["systemctl", "--user", "show", "-p", "ExecStartPre"]:
+            return show
+        if argv[:3] == ["systemctl", "--user", "cat"] and argv[-1] == nw.BRAIN:
+            return bk.Result(0, cat_out)
+        return real(argv, timeout, mutating, env)
+    host.run = answer
+    assert w.run() == nw.EXIT_OK
+    assert f"bash {nw.COLD_START_HELPER}" in host.joined()
+    assert host.idx("brain_cold_start.sh") < host.idx(f"--user start {nw.BRAIN}")
 
 
 def test_a_cold_start_helper_that_errors_never_stops_the_brain_from_being_started(tmp_path):
