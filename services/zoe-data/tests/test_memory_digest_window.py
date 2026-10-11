@@ -158,3 +158,73 @@ def test_the_dated_rerun_loader_leaves_off_the_record_turns_out():
             return _Cur()
     asyncio.run(md.load_day_messages("u1", "2026-10-08T00:00:00+00:00", "2026-10-09T00:00:00+00:00", db=_Db()))
     assert seen and memory_provenance.off_record_sql("cm") in seen[0]
+
+
+# ── the dated loader (night mind --date): the bind types and the AWST day edges ─────────────────────────────────────────────────
+
+import datetime as _dt  # noqa: E402
+import importlib.util  # noqa: E402
+import pathlib  # noqa: E402
+
+
+def _night_mind_cli():
+    repo = pathlib.Path(__file__).resolve().parents[3]
+    spec = importlib.util.spec_from_file_location("zoe_night_mind_cli_window", repo / "scripts" / "maintenance" / "zoe-night-mind.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class _TypedBindDb:
+    """Like asyncpg: a ``timestamptz`` parameter binds from a datetime ONLY (a str raises, as it did live on 2026-10-12)."""
+
+    def __init__(self, rows=()):
+        self.params = None
+        self.rows = rows
+
+    async def execute(self, sql, params):
+        for p in params[1:]:
+            if not isinstance(p, _dt.datetime):
+                raise TypeError(f"invalid input for query argument: {p!r} (expected a datetime.date or datetime.datetime instance, got 'str')")
+        self.params = params
+        rows = self.rows
+
+        class _Cur:
+            async def fetchall(self_inner):
+                return rows
+        return _Cur()
+
+
+def test_the_dated_loader_binds_datetimes_not_strings():
+    """NEGATIVE CONTROL: with the strings passed straight through, ``_TypedBindDb`` raises, the loader swallows it and returns '' (a quiet day with 0 turns, for every member)."""
+    import asyncio
+
+    db = _TypedBindDb()
+    asyncio.run(md.load_day_messages("u1", "2026-10-10T00:00:00+08:00", "2026-10-11T00:00:00+08:00", db=db))
+    assert db.params is not None, "the dated loader never reached the query: the bind raised and was swallowed"
+    assert all(isinstance(p, _dt.datetime) and p.tzinfo is not None for p in db.params[1:])
+    assert db.params[1].astimezone(_dt.timezone.utc) == _dt.datetime(2026, 10, 9, 16, 0, tzinfo=_dt.timezone.utc)
+    assert db.params[2].astimezone(_dt.timezone.utc) == _dt.datetime(2026, 10, 10, 16, 0, tzinfo=_dt.timezone.utc)
+
+
+def test_as_instant_accepts_z_naive_and_datetime():
+    assert md._as_instant("2026-10-10T16:00:00Z") == _dt.datetime(2026, 10, 10, 16, 0, tzinfo=_dt.timezone.utc)
+    naive = md._as_instant("2026-10-10T00:00:00")                       # naive = Zoe-local (AWST, +08:00)
+    assert naive.astimezone(_dt.timezone.utc) == _dt.datetime(2026, 10, 9, 16, 0, tzinfo=_dt.timezone.utc)
+    aware = _dt.datetime(2026, 10, 10, 1, 2, tzinfo=_dt.timezone.utc)
+    assert md._as_instant(aware) is aware
+
+
+def test_the_dated_window_is_the_awst_day_not_the_utc_day(monkeypatch):
+    """A turn at 23:30 AWST on the 10th (15:30Z) is in 2026-10-10; one at 00:30 AWST on the 11th (16:30Z, still the 10th in UTC) is NOT. Both UTC-date and AWST-date readings differ."""
+    monkeypatch.delenv("ZOE_TIMEZONE", raising=False)
+    cli = _night_mind_cli()
+    start, end = cli._day_bounds("2026-10-10")
+    lo, hi = md._as_instant(start), md._as_instant(end)
+    late = _dt.datetime(2026, 10, 10, 15, 30, tzinfo=_dt.timezone.utc)      # 23:30 AWST on the 10th
+    early_next = _dt.datetime(2026, 10, 10, 16, 30, tzinfo=_dt.timezone.utc)  # 00:30 AWST on the 11th
+    early_this = _dt.datetime(2026, 10, 9, 16, 30, tzinfo=_dt.timezone.utc)   # 00:30 AWST on the 10th (the 9th in UTC)
+    assert lo <= late < hi
+    assert not (lo <= early_next < hi)
+    assert lo <= early_this < hi
+    assert hi - lo == _dt.timedelta(days=1)

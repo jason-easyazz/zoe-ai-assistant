@@ -1686,6 +1686,17 @@ async def _transcript_from_rows(user_id: str, rows) -> "Transcript":
     return Transcript("\n".join(lines), turns, times)
 
 
+def _as_instant(value):
+    """An ISO instant (or a datetime) as an aware ``datetime`` for a ``timestamptz`` bind; a naive value is Zoe-local time, as everywhere else in the night jobs."""
+    import datetime as _dtm
+
+    d = value if isinstance(value, _dtm.datetime) else _dtm.datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+    if d.tzinfo is None:
+        from time_utils import zoe_timezone
+        d = d.replace(tzinfo=zoe_timezone())
+    return d
+
+
 async def load_day_messages(user_id: str, start_iso: str, end_iso: str, db=None) -> str:
     """The owner's own-words turns between two instants (ISO, timezone-aware): the standalone night-mind run's ``--date`` loader. Same filters as the
     nightly loader (``_message_owner_expr`` ownership, own words, forgotten turns skipped); the turn cap is the night mind's."""
@@ -1702,8 +1713,10 @@ async def load_day_messages(user_id: str, start_iso: str, end_iso: str, db=None)
             ORDER BY cm.created_at ASC
             LIMIT """ + str(_turn_limit()) + """
             """
-    params = (user_id, start_iso, end_iso)
     try:
+        # asyncpg binds a ``timestamptz`` parameter only from a datetime: the ISO strings the CLI passes made EVERY ``--date`` read raise
+        # (swallowed below, so the member read as a quiet day with 0 turns) until they were coerced here.
+        params = (user_id, _as_instant(start_iso), _as_instant(end_iso))
         from db_pool import get_db_ctx  # type: ignore[import]
         if db is not None:
             rows = await (await db.execute(sql, params)).fetchall()
