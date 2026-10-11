@@ -217,8 +217,10 @@ async def test_self_edge_dropped():
 
         result = await person_merge.merge_person(db, "jason", "src", "tgt")
 
-        edges = await _rows(db, "SELECT id FROM person_relationships")
-        assert edges == []  # a person can't relate to themselves → dropped
+        # a person can't relate to themselves → the edge is CLOSED, not deleted (invalidate, never delete)
+        edges = await _rows(db, "SELECT id, valid_to FROM person_relationships")
+        assert [e["id"] for e in edges] == ["e1"] and edges[0]["valid_to"]
+        assert await _rows(db, "SELECT id FROM person_relationships WHERE valid_to IS NULL") == []
         assert result["dropped_self_edges"] == 1
         assert result["repointed"]["person_relationships"] == 0
     finally:

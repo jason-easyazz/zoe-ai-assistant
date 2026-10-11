@@ -771,6 +771,17 @@ def _contact_relation_first_match(t: str, raw_text: str):
     return m
 
 
+def _is_pure_farewell(text: str) -> bool:
+    """Is the whole utterance a goodbye? (``clean_goodbye.is_farewell`` - the same read the reply guard uses, so a turn
+    the guard would clean is never answered by a keyword intent that bypasses it.) False on any failure."""
+    try:
+        import clean_goodbye
+
+        return clean_goodbye.is_farewell(text or "")
+    except Exception:  # noqa: BLE001 - a missing guard module must not break intent detection
+        return False
+
+
 def detect_intent(
     text: str,
     log_miss: bool = True,
@@ -864,14 +875,19 @@ def detect_intent(
         "morning", "morning zoe", "hey morning",
     }:
         return Intent("good_morning", {})
-    if re.match(r"^good\s+evening(?:\s+zoe)?\.?$|^good\s+night(?:\s+zoe)?\.?$", t) or t in {
-        "evening", "evening zoe",
-    }:
+    # A goodbye ("good night Zoe") is NOT an evening-briefing trigger: that composed a three-sentence check-in outside
+    # the brain, past the clean-goodbye guard (live person bench, 2026-10-10: P8.a 9/10, "Good evening! Hope your day was
+    # wonderful. Sweet dreams, and see you tomorrow!"). It falls through to the brain lane, where
+    # clean_goodbye (ZOE_CLEAN_GOODBYE) holds it to a short sign-off.
+    _farewell = _is_pure_farewell(text)
+    if not _farewell and (re.match(r"^good\s+evening(?:\s+zoe)?\.?$", t) or t in {"evening", "evening zoe"}):
         return Intent("good_evening", {})
 
     # === GENERAL GREETING (ZOE-42, ZOE-15) — hello/hi/hey/good afternoon/etc. ===
     # good_morning/good_evening already handled above (they trigger the daily briefing).
-    if _GREETING_RE.match(t):
+    # (and never for a goodbye: "good night" matched here too, and its canned "Good evening! Still up - what do you
+    # need?" is a greeting and a question - the opposite of a clean goodbye)
+    if not _farewell and _GREETING_RE.match(t):
         tod = None
         if "afternoon" in t:
             tod = "afternoon"

@@ -49,8 +49,11 @@ word that belongs to exactly one - "my sister Marisol", "Marisol from work"), ge
 Marisol do you mean: Marisol Okafor, your colleague, or Marisol Vance, your sister?` - before the router or any tool/write.
 The next short answer ("the sister", "Okafor", "the first one") is rewritten, for the brain, into the original request with
 the full name (`Tell me about Marisol Vance.`). One question per request: an answer that settles nothing is dropped, an
-unanswered question is not repeated, the pending state is in memory with a 120 s life. A turn that names nobody costs a set
-lookup (60 s per-user cache of the repeating first names). Which **light** and which list item have their own resolvers
+unanswered question is not repeated, the pending state is in memory with a 120 s life. The roster is cached per user but the
+cache is valid only while a one-row fingerprint of the contacts (count, newest `updated_at`, total name length) is unchanged
+(60 s at most): a request turn costs one aggregate query, and a contact written a moment ago is never missed (live 2026-10-10:
+a 60 s TTL alone kept "one Marisol, nobody ambiguous" through the seeding turns - 12 of 20 asks unasked, the next 8 asked).
+A failed read is never cached. Which **light** and which list item have their own resolvers
 already (`smart_home_service` "Which one?", the lists); the registry here is people only.
 
 ## A clean goodbye (P8)
@@ -65,6 +68,13 @@ Sleep well."); a presence check gets "Yes, I'm here."; a reply that probes or re
 mind", "you seem quiet") becomes "Okay." - a reply that does anything else passes, because "ok" may be a yes. A reply that
 voices a question Zoe **owes** (the pending contact offer, `contacts_conversation.get_asked`; bar S16 asks it on exactly
 "Thanks Zoe, that's all for now.") is left alone.
+
+The guard sits on the **brain's** reply, so a goodbye must reach the brain: `intent_router.detect_intent` no longer claims a
+whole-utterance farewell (`clean_goodbye.is_farewell`) as the evening-briefing or greeting intent. Until 2026-10-10 "good night
+(Zoe)" was `good_evening` (a composed check-in: "Good evening! Hope your day was wonderful. Sweet dreams, and see you tomorrow!"
+- three sentences, no brain turn, no guard; live P8.a 9/10) and, failing that, `greeting` ("Good evening! Still up - what do you
+need?"). "good evening" and "good afternoon" are still greetings. The presence check ("Are you there?" -> `status_check`) and a bare
+"ok" (`acknowledgement`) are still answered by the router with a canned one-liner, which is already clean.
 
 ## Measured (offline, 2026-10-09) - the live run is owed
 
@@ -102,6 +112,40 @@ touched, write-isolated, no database; 952 s of brain time). Full table, caveats 
 [person-half-enforce-pack-2026-10-09.md](person-half-enforce-pack-2026-10-09.md). Shadow -> enforce: P5a.i flips 16/20 -> **0/20**, P5a.ii updates 13/20 -> **20/20**,
 P5a.iii caves 0/20 -> 0/20; P7.a 3/20 -> **20/20**, P7.b 19/20 -> 19/20; P8.a-d 8, 7, 2, 6 of 10 -> **10, 10, 10, 10**. All three floors clear their bars in
 enforce; the replay gate (the landing loop's) is the remaining step before the owner's flip.
+
+## Live vs in-process (2026-10-10) - why the rig over-promised, and the fix
+
+Flipped to enforce, the live bench scored P7.a 10/20, P7.b 15/20, P8.a 9/10 where the rig had 20/20, 19/20, 10/10. Three differences
+between the rig's path and the chat path, each now closed in the rig (`--selftest`: a negative control per difference) and in the code:
+
+| live miss | cause | fix |
+|---|---|---|
+| P7.a: first 12 of 20 unasked, the next 8 asked at the second a cache expired | the roster was cached "nobody is ambiguous" by the seeding turns (one Marisol existed), for 60 s | the roster cache is keyed on a fingerprint of the contacts; a failed read is not cached |
+| P7.b: 5 of 20 ended "Would you like me to add Marisol as a contact?" | the latent-intent detector proposed the BARE name "Marisol"; `_already_a_contact` matched full names only; the seam voiced the pending offer on the next turn | `people_utils.name_covered_by_contacts` (full name, or a bare first/last word of any contact) at the emitter, at `store_suggestions` and at surfacing (a stale offer is closed) |
+| P8.a: 1 of 10 (3 sentences) | "good night Zoe" was answered by the `good_evening` keyword intent, outside the brain lane: no brain turn, so no reply guard | a whole-utterance farewell is never claimed by the evening / greeting intents |
+
+The rig had (1) pre-loaded the roster, (2) stubbed the pending-offer block empty and (3) fed the guard a canned BRAIN reply for a
+message the brain never sees. It now seeds the roster the bench's way, runs the real `_already_a_contact` over the synthetic contacts
+(worst case: the detector always proposes the bare name) and asks `intent_router.detect_intent` first (a conversational intent is
+executed if canned, else a marker no scorer passes).
+
+### Measured with the live-path rig (2026-10-10, in-process, the real 4B, 631 s of brain time, no live flag/DB touched)
+
+`person_half_enforce_ab.py --floors ask,goodbye|hold --n 20`, zoe-data's start stamp unchanged through every run. Enforce arm, k/n:
+
+| half | bar | main code (b8e6056) | this branch | live bench on main (07:25) |
+|---|---|---|---|---|
+| P7.a ambiguous: one question naming the choice | >= 18/20 | 3/20 | **20/20** | 10/20 |
+| P7.b clear: no question, answer given | >= 18/20 | 8/20 | **18/20** | 15/20 |
+| P8.a clean goodbye | every ask | 9/10 | **10/10** | 9/10 |
+| P8.b / .c / .d | every ask / 9 / 9 | 9 / 10 / 10 | 10 / 10 / 10 | - |
+| P5a.i / .ii / .iii (hold the fact, untouched) | <=3 / >=27 / <=3 of 30 | - | 0/20, 20/20, 0/20 | PASS (0/30, 30/30, 1/20) |
+
+The "main code" column is the same rig run against a worktree of main: it reproduces the three live failures (stale roster -> the
+tier never fires inside the TTL; bare-name offers; "good night" claimed by the briefing intent), which the old rig could not.
+P7.b's two remaining misses are the brain's own closing question ("Is there anything else you'd like me to know about him?"), in
+BOTH arms (shadow also 18/20) - the tier is not involved, and 18/20 is exactly the bar. The merged-live re-run of
+`samantha_person.py --only P5a,P7,P8` is owed after this deploys.
 
 ## Turning it on (operator)
 

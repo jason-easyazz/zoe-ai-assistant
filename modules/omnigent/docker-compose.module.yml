@@ -47,6 +47,16 @@ services:
     # credential volumes below, created by a one-time login (see README → Auth).
     environment:
       - NODE_NO_WARNINGS=1
+      # No in-container self-update of the harness CLIs. They are root-owned global npm
+      # installs pinned in the Dockerfile and this container runs as uid 1000, so Claude
+      # Code's auto-updater could only ever fail ("no write permission"); updates come from
+      # bumping the pin + rebuilding the image. These repeat the Dockerfile ENV so an env
+      # override and a rebuilt image agree (the Dockerfile also bakes the same keys into
+      # /etc/claude-code/managed-settings.json). DISABLE_UPDATES additionally blocks
+      # `claude update`. PI_SKIP_VERSION_CHECK only silences pi's pi.dev version poll.
+      - DISABLE_AUTOUPDATER=1
+      - DISABLE_UPDATES=1
+      - PI_SKIP_VERSION_CHECK=1
       # Omnigent launches agents with --dangerously-skip-permissions (autonomous, no prompts).
       # The container IS the isolation boundary. (User-approved 2026-06-17.) Claude Code
       # blocks that flag under ROOT specifically, and IS_SANDBOX=1 was the documented escape

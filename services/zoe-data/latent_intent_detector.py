@@ -97,6 +97,10 @@ async def _complete(prompt: str) -> str | None:
 async def _already_a_contact(name: str, user_id: str) -> bool:
     """Best-effort: don't propose someone who is already a contact.
 
+    The full name, OR a bare first/last name one of the user's contacts carries ("Marisol" when "Marisol Okafor" /
+    "Marisol Vance" are on the list): a bare name the owner already has is not a new person
+    (``people_utils.name_covered_by_contacts``; person bench P7.b, a needless "add Marisol as a contact?").
+
     Fails open (returns False) if the DB is unavailable — the executor dedups
     again on accept, so a missed check only means a redundant offer, never a
     duplicate row.
@@ -105,14 +109,13 @@ async def _already_a_contact(name: str, user_id: str) -> bool:
         return False
     try:
         from db_pool import get_db_ctx
+        from people_utils import name_covered_by_contacts
         async with get_db_ctx() as db:
-            row = await db.fetchrow(
-                "SELECT 1 FROM people WHERE user_id=$1 AND lower(name)=lower($2)"
-                " AND deleted=0 LIMIT 1",
+            rows = await db.fetch(
+                "SELECT name FROM people WHERE user_id=$1 AND deleted=0 LIMIT 500",
                 user_id,
-                name,
             )
-            return row is not None
+            return name_covered_by_contacts(name, [r["name"] for r in rows])
     except Exception:
         return False
 

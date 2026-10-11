@@ -8,6 +8,7 @@ import asyncio
 import base64
 import io
 import threading
+import time
 import types
 import wave
 
@@ -56,12 +57,12 @@ def wav(n_samples: int, rate: int = 16000) -> bytes:
 
 @pytest.fixture(autouse=True)
 def _clean(monkeypatch):
-    ss._sessions.clear()
+    ss._sessions.clear(); ss._live.clear()
     monkeypatch.setenv("ZOE_STT_STREAM_UNDER_SPEECH", "1")
     yield
     for s in list(ss._sessions.values()):
         s.abort()
-    ss._sessions.clear()
+    ss._sessions.clear(); ss._live.clear()
 
 
 def open_session(sid="a" * 16, stream=None):
@@ -179,7 +180,70 @@ def test_negative_control_sample_check_is_what_protects_the_transcript(monkeypat
     assert got.lower() == "what is on my calendar"  # RED proof: the unbroken check (previous test) returns None for this shape
 
 
+def test_speculative_turn_never_takes_a_stream():
+    """B1.1 safety contract, server-enforced: a speculative turn must not consume the single-use stream."""
+    sess, _ = open_session("9" * 16)
+    sess.feed(0, pcm(2000))
+    payload = {"stt_stream_id": "9" * 16, "stt_stream_samples": 2000, "speculative": True, "turn_id": "t1"}
+    assert _take(payload, wav(2000)) is None
+    assert "9" * 16 in ss._sessions  # untouched: the committed turn can still take it
+    payload.pop("speculative")
+    assert _take(payload, wav(2000)).lower() == "what is on my calendar"
+
+
+def test_finish_timeout_falls_back(monkeypatch):
+    release = threading.Event()
+
+    class HungStream(FakeStream):
+        def stop(self):
+            release.wait(5)
+            return super().stop()
+
+    monkeypatch.setenv("ZOE_STT_STREAM_FINISH_TIMEOUT_MS", "50")
+    sess, _ = open_session("b" * 16, HungStream())
+    sess.feed(0, pcm(2000))
+    try:
+        assert _take({"stt_stream_id": "b" * 16, "stt_stream_samples": 2000}, wav(2000)) is None
+        assert sess.broken == "timeout"
+    finally:
+        release.set()
+
+
+def test_idle_session_is_reaped(monkeypatch):
+    sess, _ = open_session("c" * 16)
+    sess.touched -= ss.IDLE_TTL_S + 1  # idle past the TTL
+    ss.get_or_open("0" * 16, 0, lambda: FakeStream(), threading.Lock())  # any open reaps first
+    assert "c" * 16 not in ss._sessions and "0" * 16 in ss._sessions
+
+
+def test_taken_sessions_count_until_their_worker_closes(monkeypatch):
+    """A turn take()s a session but its worker may still run (slow / timed-out stop()): it must keep its slot."""
+    release = threading.Event()
+
+    class HungStream(FakeStream):
+        def stop(self):
+            release.wait(5)
+            return super().stop()
+
+    monkeypatch.setenv("ZOE_STT_STREAM_FINISH_TIMEOUT_MS", "50")
+    try:
+        for sid in ("d1" * 8, "d2" * 8):
+            sess, _ = open_session(sid, HungStream())
+            sess.feed(0, pcm(2000))
+            assert _take({"stt_stream_id": sid, "stt_stream_samples": 2000}, wav(2000)) is None  # timed out
+        assert not ss._sessions  # both consumed by their turns...
+        assert ss.get_or_open("d3" * 8, 0, lambda: FakeStream(), threading.Lock()) is None  # ...but still counted
+    finally:
+        release.set()
+    for s in list(ss._live):
+        s._done.wait(5)
+    assert ss.get_or_open("d4" * 8, 0, lambda: FakeStream(), threading.Lock()) is not None  # slots freed on close
+
+
 # -- router wiring (TestClient; fakes only) ------------------------------------------------------------------------
+
+ABSENT = "<no pre_text kwarg>"
+
 
 def _turn_app(monkeypatch, seen):
     from fastapi import FastAPI
@@ -188,7 +252,7 @@ def _turn_app(monkeypatch, seen):
     monkeypatch.setenv("ZOE_VOICE_GREETING_ENABLED", "0")
 
     async def _fake_stt(_path, capture=True, **kw):
-        seen.append(kw.get("pre_text"))
+        seen.append(kw.get("pre_text", ABSENT))
         return kw.get("pre_text") or "batch transcript"
 
     async def _brain(payload, caller=None, stream=True, db=None):
@@ -224,8 +288,139 @@ def test_turn_stream_uses_stream_text_only_when_flag_on_and_samples_match(monkey
         assert seen == ["What is on my calendar"]  # the stream text reached the shared STT wrapper
         seen.clear()
         _post_turn(client, 3000, {})  # no stream id: byte-identical call, no kwarg at all
-        assert seen == [None]
+        assert seen == [ABSENT]
         sess, _ = open_session("8" * 16)
         sess.feed(0, pcm(3000))
         _post_turn(client, 3001, {"stt_stream_id": "8" * 16, "stt_stream_samples": 3000})  # clip != stream
-        assert seen[-1] is None
+        assert seen[-1] == ABSENT
+
+
+# -- Greptile round 1 (#1972) ---------------------------------------------------------------------------------------
+
+def test_take_does_not_block_on_a_stream_being_created():
+    """P1: stream creation happens outside the registry lock, so take() on the event loop never waits on a model load."""
+    started, release = threading.Event(), threading.Event()
+
+    def slow_make():
+        started.set()
+        release.wait(5)
+        return FakeStream()
+
+    opener = threading.Thread(target=ss.get_or_open, args=("a1" * 8, 0, slow_make, threading.Lock()))
+    opener.start()
+    try:
+        assert started.wait(2)
+        done = []
+        t = threading.Thread(target=lambda: done.append(ss.take("b2" * 8)))
+        t.start()
+        t.join(1.0)
+        assert not t.is_alive(), "take() blocked behind stream creation"
+        assert done == [None]
+        # the bound still counts the reserved slot
+        assert ss.get_or_open("c3" * 8, 0, lambda: FakeStream(), threading.Lock()) is not None
+        assert ss.get_or_open("d4" * 8, 0, lambda: FakeStream(), threading.Lock()) is None
+    finally:
+        release.set()
+        opener.join(3)
+    assert "a1" * 8 in ss._sessions and not ss._pending
+
+
+def test_failed_stream_creation_releases_the_reservation():
+    def boom():
+        raise RuntimeError("model load failed")
+
+    with pytest.raises(RuntimeError):
+        ss.get_or_open("e5" * 8, 0, boom, threading.Lock())
+    assert not ss._pending and "e5" * 8 not in ss._sessions
+
+
+def test_batch_fallback_is_bounded_behind_a_stalled_stream(monkeypatch):
+    """P1: a stream that timed out in stop() still holds the shared infer lock; the batch path (real _run_moonshine
+    locking) must give up in bounded time instead of waiting for it."""
+    release = threading.Event()
+    lock = threading.Lock()
+
+    class HungStream(FakeStream):
+        def stop(self):
+            release.wait(10)
+            return super().stop()
+
+    monkeypatch.setenv("ZOE_STT_STREAM_FINISH_TIMEOUT_MS", "50")
+    monkeypatch.setattr(ss, "STALL_LOCK_WAIT_S", 0.3)
+    sess = ss.get_or_open("f6" * 8, 0, lambda: HungStream(), lock)
+    sess.feed(0, pcm(2000))
+    monkeypatch.setattr(vt, "_moonshine_infer_lock", lock)
+    monkeypatch.setattr(vt, "_ensure_moonshine", lambda: types.SimpleNamespace(
+        transcribe_without_streaming=lambda a, sr: types.SimpleNamespace(lines=[types.SimpleNamespace(text="hi")])))
+    import sys
+    fake_utils = types.ModuleType("moonshine_voice.utils")
+    fake_utils.load_wav_file = lambda p: ([0.0] * 1600, 16000)
+    monkeypatch.setitem(sys.modules, "moonshine_voice", types.ModuleType("moonshine_voice"))
+    monkeypatch.setitem(sys.modules, "moonshine_voice.utils", fake_utils)
+    try:
+        assert _take({"stt_stream_id": "f6" * 8, "stt_stream_samples": 2000}, wav(2000)) is None
+        assert sess in ss._stalled
+        t0 = time.monotonic()
+        with pytest.raises(TimeoutError):
+            asyncio.run(vt._run_moonshine("/nonexistent.wav"))
+        assert time.monotonic() - t0 < 3
+        release.set()
+        sess._done.wait(3)
+        assert asyncio.run(vt._run_moonshine("/nonexistent.wav")) == "Hi"  # recovered once the stall cleared
+    finally:
+        release.set()
+
+
+def test_infer_guard_is_a_plain_lock_without_a_stall():
+    lock = threading.Lock()
+    with ss.infer_guard(lock):
+        assert lock.locked()
+    assert not lock.locked()
+
+
+def test_abandoned_session_self_cleans(monkeypatch):
+    """P2: a session nobody feeds or finishes ends its own worker after the idle TTL and deregisters."""
+    monkeypatch.setattr(ss, "IDLE_TTL_S", 0.2)
+    stream = FakeStream()
+    sess = ss.get_or_open("a7" * 8, 0, lambda: stream, threading.Lock())
+    assert sess._done.wait(3), "worker still blocked on an abandoned session"
+    assert sess.broken == "idle" and stream.closed
+    assert "a7" * 8 not in ss._sessions
+
+
+def test_empty_chunks_are_rejected_and_do_not_refresh_idle(monkeypatch):
+    sess, _ = open_session("a8" * 8)
+    sess.touched -= 10
+    before = sess.touched
+    assert sess.feed(0, b"") is False
+    assert sess.next_seq == 0 and sess.touched == before and not sess.broken
+    assert sess.feed(0, pcm(100)) is True  # seq 0 is still the next expected
+    # endpoint: 400 on empty
+    with pytest.raises(HTTPException) as ei:
+        asyncio.run(vt.voice_stt_stream_chunk(
+            {"stream_id": "a9" * 8, "seq": 0, "pcm_base64": ""}, caller={}))
+    assert ei.value.status_code == 400
+
+
+def test_queue_length_is_bounded(monkeypatch):
+    gate = threading.Event()
+
+    class Slow(FakeStream):
+        def add_audio(self, audio, sr):
+            gate.wait(5)
+
+    monkeypatch.setattr(ss, "MAX_QUEUE", 3)
+    sess, _ = open_session("b9" * 8, Slow())
+    try:
+        results = [sess.feed(i, pcm(10)) for i in range(8)]
+        assert results[:2] == [True, True] and False in results
+        assert sess.broken == "bad_chunk"
+    finally:
+        gate.set()
+
+
+def test_replay_arm_uses_the_production_finish_timeout():
+    import inspect
+    import tests.replay_samples as rs
+    src = inspect.getsource(rs)
+    assert "ss.finish_timeout_s()" in src and "sess.finish, n, 30.0" not in src

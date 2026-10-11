@@ -24,8 +24,9 @@ target is asked about BEFORE any tool call or write:
 
 Which light / which list item / which event are asked by their own resolvers already
 (``smart_home_service`` "Which one?", the lists "Which one should I edit?"); this module is the people half and
-the registry is open (``_RESOLVERS``). It reads this user's ``people`` rows only, through a 60 s per-user cache
-of the first names that repeat, so a turn that names nobody costs a set lookup and no query.
+the registry is open (``_RESOLVERS``). It reads this user's ``people`` rows only, through a per-user cache of the
+first names that repeat, valid while a one-row fingerprint of the contacts is unchanged (60 s at most): a request
+turn costs one aggregate query, and a contact written a moment ago is never missed.
 
 ``ZOE_ASK_WHEN_AMBIGUOUS`` = ``shadow`` (default: detect and log ``ASK_WHEN_AMBIGUOUS mode=shadow``, ask nothing)
 | ``enforce`` | ``off`` (reads nothing). Counts and labels are logged, never names. Never raises.
@@ -133,11 +134,11 @@ def _norm_words(text: str) -> list:
 
 # -- the roster ---------------------------------------------------------------------------------
 
-_ROSTER: dict = {}      # user_id -> (loaded_at, {first_name: [Candidate, ...]}) - only first names that REPEAT
+_ROSTER: dict = {}      # user_id -> (loaded_at, fingerprint, {first_name: [Candidate, ...]}) - only first names that REPEAT
 
 
 async def _load_people(user_id: str) -> list:
-    """This user's live ``people`` rows as ``Candidate``s, bounded. [] on any failure."""
+    """This user's live ``people`` rows as ``Candidate``s, bounded. Raises on a read failure (the caller decides)."""
     from db_pool import get_db_ctx
 
     async with get_db_ctx() as db:
@@ -147,6 +148,21 @@ async def _load_people(user_id: str) -> list:
         ) as cur:
             rows = await cur.fetchall()
     return [Candidate(str(r[0]), str(r[1]).strip(), str(r[2] or "").strip()) for r in rows if r[1] and str(r[1]).strip()]
+
+
+async def _people_fingerprint(user_id: str):
+    """A cheap fingerprint of this user's live ``people`` rows (count, newest ``updated_at``, total name length): the
+    cached roster is valid only while it is unchanged. Raises on a read failure (the caller serves the cache)."""
+    from db_pool import get_db_ctx
+
+    async with get_db_ctx() as db:
+        async with db.execute(
+            "SELECT COUNT(*), COALESCE(MAX(updated_at), ''), COALESCE(SUM(LENGTH(name)), 0) "
+            "FROM people WHERE user_id = ? AND deleted = 0",
+            (user_id,),
+        ) as cur:
+            row = await cur.fetchone()
+    return tuple(str(v) for v in row) if row else ("0", "", "0")
 
 
 def repeated_first_names(people: list) -> dict:
@@ -159,19 +175,32 @@ def repeated_first_names(people: list) -> dict:
 
 
 async def roster(user_id: str) -> dict:
-    """The repeating first names for ``user_id`` (60 s cache). {} when none, or on a read failure."""
+    """The repeating first names for ``user_id``. {} when none, or when the roster could not be read.
+
+    The cache is keyed on the contacts themselves, not only on the clock: a 60 s TTL alone let a roster read in the
+    middle of "Save a contact for my colleague Marisol Okafor" / "...my sister Marisol Vance" - one Marisol, so
+    nobody ambiguous - answer "no ambiguity" for the next minute while the second Marisol was already on the list
+    (live person bench, 2026-10-10: the first 12 of 20 ambiguous asks went unasked, then 8 in a row were asked at the
+    second the cache expired). A write to the contacts changes the fingerprint, so the very next request turn
+    re-reads. A failed read is never cached: the next turn tries again."""
     now = time.monotonic()
     hit = _ROSTER.get(user_id)
-    if hit and now - hit[0] < ROSTER_TTL_S:
-        return hit[1]
+    try:
+        fp = await _people_fingerprint(user_id)
+    except Exception as exc:  # noqa: BLE001 - no fingerprint: serve a still-fresh cache, else read for real
+        logger.debug("ask_when_ambiguous: fingerprint read failed (%s)", type(exc).__name__)
+        fp = None
+    if hit and now - hit[0] < ROSTER_TTL_S and (fp is None or fp == hit[1]):
+        return hit[2]
     try:
         rep = repeated_first_names(await _load_people(user_id))
     except Exception as exc:  # noqa: BLE001 - no roster is "nobody is ambiguous", never a failed turn
         logger.debug("ask_when_ambiguous: roster read failed (%s)", type(exc).__name__)
-        rep = {}
+        _ROSTER.pop(user_id, None)
+        return {}
     if len(_ROSTER) > 256:
         _ROSTER.clear()
-    _ROSTER[user_id] = (now, rep)
+    _ROSTER[user_id] = (now, fp, rep)
     return rep
 
 

@@ -76,10 +76,15 @@ class TestProcessText:
     """Integration-style tests that mock DB and MemPalace."""
 
     def _make_db_mock(self, person_id=None):
-        """Create a mock DB that returns person_id on SELECT."""
+        """Create a mock DB whose people roster holds "Sarah" (id ``person_id``) and an unrelated "Tom".
+
+        Name resolution (``people_graph.resolve_person``) reads the user's whole roster with ``fetchall`` and matches in
+        Python (exact -> token -> prefix); it no longer asks the database for one ``LIKE`` row via ``fetchone``. With
+        ``person_id=None`` the roster is empty: nobody is known."""
         db = MagicMock()
         cursor = AsyncMock()
         cursor.fetchone = AsyncMock(return_value=[person_id] if person_id else None)
+        cursor.fetchall = AsyncMock(return_value=[(person_id, "Sarah"), ("tom-uuid-5678", "Tom")] if person_id else [])
         db.execute = AsyncMock(return_value=cursor)
         db.commit = AsyncMock()
         return db

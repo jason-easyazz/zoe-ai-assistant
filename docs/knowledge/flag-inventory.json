@@ -883,6 +883,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_CONVERSATION_FEEDBACK": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/conversation_feedback.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_CORE_DATA_URL": {
         "defaults": [
           "-"
@@ -3626,7 +3636,9 @@
         ],
         "in_env_example": false,
         "readers": [
+          "scripts/perf/engine_bench.py",
           "scripts/perf/hop_placement_ab.py",
+          "scripts/perf/kokoro_first_chunk_probe.py",
           "scripts/perf/measure_first_sound.py",
           "scripts/perf/measure_speed.py",
           "scripts/perf/measure_tts.py",

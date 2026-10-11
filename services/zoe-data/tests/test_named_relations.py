@@ -431,3 +431,27 @@ def test_roles_are_still_never_guessed_for_a_pasted_roster():
 def test_both_person_llm_prompts_forbid_reducing_a_list_to_a_count():
     for prompt in (pel._EXTRACTION_PROMPT, pel._EXTRACTION_PROMPT_CONF):
         assert "NEVER drop names" in prompt and "never reduce it to a count" in prompt
+
+
+async def test_a_list_for_an_ambiguous_owner_is_held_never_an_approved_fact(svc, monkeypatch):
+    """Two contacts answer to "Dana": the list is held as a pending candidate - no approved slug-keyed fact, no new
+    people, no edges to a guess (the same hold-then-fall-through class as the birthday path)."""
+    import person_extractor as pe
+
+    held = []
+
+    async def _hold(user_id, name, fact_text, **kw):
+        held.append((name, kw.get("basis")))
+
+    monkeypatch.setattr(pe, "_hold_fact_belief", _hold)
+    db = await _open_db()
+    for pid, nm in (("d1", "Dana Whitfield"), ("d2", "Dana Cole")):
+        await db.execute("INSERT INTO people (id, user_id, name, circle, visibility) VALUES (?,?,?,'circle','family')",
+                         (pid, USER, nm))
+    await db.commit()
+    assert await nr.apply_named_relations("Dana has two kids, Mika and Biscuit", user_id=USER, db=db) == 0
+    assert svc.approved() == [] and held == [("Dana", "ambiguous_name")]
+    async with db.execute("SELECT COUNT(*) FROM people") as c:
+        assert (await c.fetchone())[0] == 2
+    async with db.execute("SELECT COUNT(*) FROM person_relationships") as c:
+        assert (await c.fetchone())[0] == 0

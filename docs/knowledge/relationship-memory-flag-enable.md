@@ -270,3 +270,26 @@ the user** — it just accumulates orphan rows. Treat backfill as **blocked on t
 ### Rollback
 Unset the flag(s) → restart. Reversible; created contacts (from accepted suggestions) persist as
 normal editable people rows — delete via the contacts UI if unwanted.
+
+## Operator block - people-graph invariants (migration 0043, 2026-10-09)
+
+The deploy runs `0043` (schema only: `close_reason`, `turn_id`, `quote_span`, `speaker_rank`, three `timestamptz` copies kept by a
+trigger, four indexes). Code written for it runs unchanged before it (`people_graph.edge_columns` reads the catalog). Rows written
+before the migration need ONE backfill - idempotent, no flag, no restart. Run as the operator in the database container
+(`alembic current` must print `0043`):
+
+```sql
+-- REST-created edges never got valid_from (readers fall back to created_at); make it explicit. The UPDATE fires the 0043 trigger,
+-- which parses valid_from / valid_to / created_at (ISO-Z or NOW()::text) into valid_from_ts / valid_to_ts / recorded_ts.
+UPDATE person_relationships SET valid_from = COALESCE(NULLIF(valid_from, ''), created_at);
+-- verify: all three counts are 0 (a non-zero unparsed_end is a valid_to text the trigger could not read - inspect those rows)
+SELECT count(*) FILTER (WHERE valid_from IS NULL) AS no_start, count(*) FILTER (WHERE recorded_ts IS NULL) AS no_ts,
+       count(*) FILTER (WHERE valid_to IS NOT NULL AND valid_to_ts IS NULL) AS unparsed_end FROM person_relationships;
+```
+
+Rollback: none needed (the columns are additive and nullable; a `0043` downgrade drops them and loses only the new data). Hooks the
+owners of other files should add (this change did not touch them): `routers/voice_tts.py::_handle_introduce_intent` still resolves
+with `LIKE '%name%'` - use `people_graph.resolve_person_id`; `memory_forget_cascade.py` closes edges with a bare `valid_to` UPDATE -
+use `people_graph.close_edge(..., reason="forgotten")`. Postgres tests: `ZOE_TEST_PG_URL=<scratch db migrated to head> pytest
+services/zoe-data/tests/test_people_graph_postgres.py` (never point it at the live database).
+

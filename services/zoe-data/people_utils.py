@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import unicodedata
 
 
 def row_to_person(row) -> dict:
@@ -43,3 +44,34 @@ def row_to_person(row) -> dict:
         "created_at": d.get("created_at"),
         "updated_at": d.get("updated_at"),
     }
+
+
+def _fold_name(name: str) -> str:
+    """Case- and accent-folded, whitespace-collapsed name. Pure."""
+    t = unicodedata.normalize("NFKD", name or "").encode("ascii", "ignore").decode().lower()
+    return " ".join(t.split())
+
+
+def name_covered_by_contacts(name: str, existing_names) -> bool:
+    """Is ``name`` somebody the user ALREADY has a contact for? Pure, language-independent.
+
+    The full name matches (case/accent-folded), or - for a bare single word like "Marisol" - the word is the first
+    or last word of any live contact's name. "Marisol" with "Marisol Okafor" and "Marisol Vance" on the list is not a
+    new person to offer to add; it is a name the owner already has (twice), and offering "Would you like me to add
+    Marisol as a contact?" on an unrelated turn is what the person bench's P7.b scored as a needless question.
+    A multi-word name that differs from every contact ("Marisol Quinn") is still new."""
+    want = _fold_name(name)
+    if not want:
+        return False
+    bare = " " not in want
+    for existing in existing_names or ():
+        have = _fold_name(str(existing or ""))
+        if not have:
+            continue
+        if have == want:
+            return True
+        if bare:
+            words = have.split()
+            if want == words[0] or want == words[-1]:
+                return True
+    return False

@@ -15,6 +15,9 @@ correction is never claimed without evidence.
   day-first (``date_locale``), and rewrite every stored fact that still holds the raw
   digits or the month-first rendering a model made of them — ``MemoryService.review(edit)``
   supersedes, nothing is deleted — then the structured ``person_important_dates`` row.
+* **Name / value swap** ("that's wrong, my sister is Marisol not Marisa"): the stored note that holds the wrong value is rewritten
+  with the right one, the contact carrying the wrong name is renamed, and the reply reads the new fact back
+  ("Got it, your sister is Marisol."). Evidence only - see ``maybe_swap``.
 * **Pet correction** ("Biscuit is their dog"): the person's relationship becomes ``pet <kind>``,
   their parent/sibling edges become the new ``pet`` edge type, stored facts that call them a
   child are rewritten, and one explicit "is a pet dog, not a child" fact is stored so a
@@ -48,7 +51,7 @@ def enabled() -> bool:
 
 @dataclass
 class CorrectionResult:
-    kind: str                 # "date" | "pet" | "row"
+    kind: str                 # "date" | "pet" | "row" | "swap"
     reply: str
     changed: list[str] = field(default_factory=list)  # the corrected texts
 
@@ -378,9 +381,46 @@ async def _current_edges(db, user_id: str, person_id: str) -> list[tuple[str, st
     return [(r[0], r[1], r[2]) for r in rows]
 
 
-async def _make_pet(db, user_id: str, person_id: str, current_rel: str, kind: str) -> int:
+async def _retype_edge_as_pet(db, user_id: str, edge_id: str, a: str, b: str, person_id: str, owner: str, *,
+                              evidence=None) -> bool:
+    """One wrong parent / sibling / ... edge becomes the ``pet`` edge (pet = person_a, owner = person_b) - by CLOSING it
+    (``close_reason='corrected_pet'``) and opening the pet edge, in ONE transaction under the pair's advisory lock
+    (``people_graph``: invalidate, never rewrite in place). When the (pet, owner) pair already has a current edge that is
+    not this one, the wrong edge is just closed (``corrected_pet_duplicate``) - it never collides on the unique index.
+    False when nothing changed (the edge was already gone) or the change could not be made whole (rolled back)."""
+    import uuid
+
+    import people_graph as pg
+
+    cols = await pg.edge_columns(db)
+    now = pg.now_iso()
+    new_id = str(uuid.uuid4())
+    try:
+        async with pg.edge_transaction(db, user_id, a, b):
+            # the replacement keeps what was written on the edge it replaces (notes were kept when this changed the type
+            # in place; closing + reopening must not make them vanish from the current relationship)
+            spec = pg.EdgeSpec("pet", "Pet owner", "Pet", "pet", notes=await pg.edge_notes(db, user_id, edge_id),
+                               authority="user_stated", origin=SOURCE, evidence=evidence)
+            clash = await pg.current_edge(db, user_id, person_id, owner)
+            if clash is not None and clash[0] != edge_id:
+                return await pg.close_edge(db, user_id, edge_id, reason="corrected_pet_duplicate", now=now,
+                                           superseded_by=str(clash[0]), cols=cols)
+            if not await pg.close_edge(db, user_id, edge_id, reason="corrected_pet", now=now, superseded_by=new_id,
+                                       cols=cols):
+                return False
+            if not await pg.insert_edge(db, user_id=user_id, edge_id=new_id, person_a_id=person_id, person_b_id=owner,
+                                        spec=spec, now=now, cols=cols, ignore_conflict=False):
+                raise pg.EdgeWriteError("the pet edge did not land")
+            return True
+    except Exception as exc:  # noqa: BLE001 - rolled back: the edge is exactly as it was
+        logger.warning("correction_apply: pet edge change not applied (%s)", type(exc).__name__)
+        return False
+
+
+async def _make_pet(db, user_id: str, person_id: str, current_rel: str, kind: str, evidence=None) -> int:
     """Relationship -> ``pet <kind>``; parent/sibling/... edges -> the ``pet`` edge type
-    (pet = person_a, owner = person_b; labels as ``RELATIONSHIP_TYPES['pet']``).
+    (pet = person_a, owner = person_b; labels as ``RELATIONSHIP_TYPES['pet']``). The old edges are closed, not
+    rewritten (see ``_retype_edge_as_pet``).
     Returns how many things changed (0 when the record already says pet)."""
     changed = 0
     rel = "pet" if kind == "pet" else f"pet {kind}"
@@ -394,26 +434,23 @@ async def _make_pet(db, user_id: str, person_id: str, current_rel: str, kind: st
         changed += 1
     for edge_id, a, b in await _current_edges(db, user_id, person_id):
         owner = b if a == person_id else a
-        ok = await _exec(
-            db,
-            "UPDATE person_relationships SET rel_type='pet', rel_a_to_b='Pet owner', "
-            "rel_b_to_a='Pet', rel_group='pet', person_a_id=$1, person_b_id=$2, updated_at=$3 "
-            "WHERE id=$4 AND user_id=$5",
-            "UPDATE person_relationships SET rel_type='pet', rel_a_to_b='Pet owner', "
-            "rel_b_to_a='Pet', rel_group='pet', person_a_id=?, person_b_id=?, updated_at=? "
-            "WHERE id=? AND user_id=?",
-            (person_id, owner, now, edge_id, user_id),
-        )
-        if not ok:  # the pair already has a current pet edge: retire the wrong one instead
-            ok = await _exec(
-                db,
-                "UPDATE person_relationships SET valid_to=$1, updated_at=$1 WHERE id=$2 AND user_id=$3",
-                "UPDATE person_relationships SET valid_to=?, updated_at=? WHERE id=? AND user_id=?",
-                (now, edge_id, user_id),
-            )
-        changed += 1 if ok else 0
+        if await _retype_edge_as_pet(db, user_id, edge_id, a, b, person_id, owner, evidence=evidence):
+            changed += 1
     await _commit(db)
     return changed
+
+
+def _pet_evidence(user_id: str, text: str):
+    """The pet edge's evidence pointer: this turn, the statement inside it, the correcting writer's rank."""
+    import people_graph as pg
+
+    try:
+        import memory_authority as auth
+
+        rank = int(auth.resolve_write(SOURCE, text, anchor_text=text).rank)
+    except Exception:  # noqa: BLE001
+        rank = pg.rank_for_authority("user_stated")
+    return pg.evidence_for(user_id, text, " ".join((text or "").split()), rank=rank)
 
 
 async def apply_pet_correction(
@@ -447,8 +484,9 @@ async def apply_pet_correction(
                 else f"{full} is a pet, not a child.")
     changed = 0
     excerpt = " ".join((text or "").split())
+    evidence = _pet_evidence(user_id, text)
     for p in people:
-        changed += await _make_pet(db, user_id, p["id"], p["rel"], kind)
+        changed += await _make_pet(db, user_id, p["id"], p["rel"], kind, evidence)
     for r in child_rows:
         new = _rewrite_child_row(r.text, name, pet_text)
         if not new or new == r.text:
@@ -532,6 +570,213 @@ async def apply_row_correction(
         return CorrectionResult("row", f"Fixed - I now have: \"{new}\". The old note is gone.", [new])
     except Exception as exc:  # noqa: BLE001 — a correction never breaks the turn
         logger.warning("correction_apply row correction failed user=%s: %s", user_id, type(exc).__name__)
+        return None
+
+
+# ── name / value swap ("my sister is Marisol, not Marisa") ──────────────────
+
+_REL = (r"(?:sister|brother|mum|mom|mother|dad|father|wife|husband|partner|son|daughter|boyfriend|girlfriend|fianc[ée]e?|"
+        r"nan|nana|grandma|grandmother|grandpa|grandfather|aunt|auntie|uncle|cousin|niece|nephew|friend|boss|"
+        r"doctor|dentist|teacher|neighbou?r|dog|cat)")
+_VAL = r"[A-Za-z][A-Za-z'’\-]{1,24}(?:\s+[A-Za-z][A-Za-z'’\-]{1,24})?"
+_SWAP_LEAD = (r"^\W*(?P<lead>(?:(?:that(?:['’]s| is| was)\s+(?:wrong|incorrect|not\s+(?:right|correct))|you(?:['’]ve| have)\s+(?:got|got that)\s+"
+              r"(?:it|that)\s+wrong|no|nope|actually|sorry|wait|oh|hang\s+on|zoe|hey|um+)[,.;:!\-\s]+)*)")
+_SWAP_RES = (
+    # "my sister is (called) Marisol, not Marisa"
+    re.compile(_SWAP_LEAD + rf"(?:my|our|his|her|their)\s+(?P<r>{_REL})(?:['’]s\s+name)?\s+(?:is|was)\s+(?:called\s+|named\s+|actually\s+)?"
+               rf"(?P<n>{_VAL})[,;]?\s+(?:and\s+)?(?:and\s+)?not\s+(?P<o>{_VAL})\W*$", re.IGNORECASE),
+    # "my sister is not Marisa, she's Marisol" / "... it's Marisol"
+    re.compile(_SWAP_LEAD + rf"(?:my|our|his|her|their)\s+(?P<r>{_REL})(?:['’]s\s+name)?\s+(?:is|was)\s+not\s+(?P<o>{_VAL})[,;]?\s+"
+               rf"(?:(?:she|he|they|it)(?:['’]s|\s+is)|it(?:['’]s|\s+is)|but)\s+(?P<n>{_VAL})\W*$", re.IGNORECASE),
+    # "it's Marisol, not Marisa" / "No, Marisol, not Marisa"
+    re.compile(_SWAP_LEAD + rf"(?:it(?:['’]s|\s+is|\s+was)\s+)?(?P<n>{_VAL})[,;]?\s+not\s+(?P<o>{_VAL})\W*$", re.IGNORECASE),
+    # "not Marisa, Marisol"
+    re.compile(_SWAP_LEAD + rf"not\s+(?P<o>{_VAL})[,;]?\s+(?:it(?:['’]s|\s+is)\s+)?(?P<n>{_VAL})\W*$", re.IGNORECASE),
+)
+_SWAP_STOP = frozenset({"wrong", "right", "correct", "incorrect", "that", "this", "it", "so", "just", "yet", "very", "really",
+                        "the", "a", "an", "my", "your", "our", "his", "her", "their"})
+SWAP_MAX_WORDS = 18
+SWAP_MAX_ROWS = 3        # the twin rows one utterance leaves behind; more than that is not one fact
+
+
+def swap_statement(text: str) -> Optional[tuple[str, str, str]]:
+    """``(relation, new, old)`` for "that's wrong, my sister is Marisol not Marisa" (relation may be ""), else None. Pure.
+
+    Both values must look like names (letters, one or two words) and differ; "it's not the dog, it's the cat" is not a swap."""
+    t = " ".join((text or "").split())
+    if not t or len(t.split()) > SWAP_MAX_WORDS:
+        return None
+    for i, rx in enumerate(_SWAP_RES):
+        m = rx.match(t)
+        if not m:
+            continue
+        # the two bare shapes ("Marisol, not Marisa") are a correction only when the person says so ("no," / "that's wrong,") or
+        # opens with "it's": "tea not coffee" alone is an answer, not a correction
+        if i >= 2 and not (m.group("lead") or "").strip() and not re.match(r"^\W*it(?:['’]s|\s+is|\s+was)\b", t, re.IGNORECASE):
+            continue
+        new, old = m.group("n").strip(" ,.;"), m.group("o").strip(" ,.;")
+        rel = (m.groupdict().get("r") or "").strip().lower()
+        if not new or not old or new.lower() == old.lower():
+            continue
+        if any(w.lower() in _SWAP_STOP for w in (new + " " + old).split()):
+            continue
+        return rel, new, old
+    return None
+
+
+def _title(value: str, like: str) -> str:
+    """``value`` capitalised the way the old value was written (STT often lowercases a name)."""
+    return " ".join(w[:1].upper() + w[1:] for w in value.split()) if like[:1].isupper() or value.islower() else value
+
+
+def _word_re(value: str):
+    return re.compile(r"(?<![A-Za-z0-9'’])" + re.escape(value) + r"(?![A-Za-z0-9'’])", re.IGNORECASE)
+
+
+def _is_note_about(rel: str, old: str, note: str) -> bool:
+    """True when ``note`` states ``old`` AS the owner's ``rel`` - the relation is the SUBJECT of the note ("my sister is Marisa",
+    "User's sister Marisa", "sister: Marisa"), not a modifier or another person's relative. "My sister's friend is Marisa" (a possessive
+    chain), "Dana's sister is Marisa" (a third person's sister) and "Marisa is a coworker" (no relation) are all someone else.
+    Prefers the stored claim row (subject / predicate / object, ``structural_claims``) when the note carries one; else reads the
+    note's own opening, anchored at its start. Pure."""
+    if not rel or not old:
+        return False
+    try:
+        import structural_claims as sc
+
+        claim = sc.claim_from_metadata(getattr(note, "metadata", None)) if not isinstance(note, str) else None
+    except Exception:  # noqa: BLE001
+        claim = None
+    body = note if isinstance(note, str) else (getattr(note, "text", "") or "")
+    if claim is not None and getattr(claim, "obj", ""):
+        pred = str(getattr(claim, "pred", "") or "").lower()
+        if rel in pred.replace("_", " ") and _word_re(old).search(str(claim.obj)):
+            return True
+    rel_p = re.escape(rel)
+    pattern = (rf"^\W*(?:(?:remember\s+that|note\s+that)\s+)?(?:(?:my|our|the\s+user['’]s|user['’]s)\s+)?{rel_p}(?!['’]s\b)"
+               rf"\s*(?::|-|,)?\s*(?:(?:is|was|are)\s+)?(?:(?:called|named)\s+)?")
+    m = re.match(pattern, body, re.IGNORECASE)
+    return bool(m) and bool(re.match(rf"{re.escape(old)}(?![A-Za-z0-9'’])", body[m.end():], re.IGNORECASE))
+
+
+def _read_back(rel: str, new: str, old: str, text: str) -> str:
+    """One spoken sentence that says what is now held: "Got it, your sister is Marisol." (a plain restatement of the new fact)."""
+    if rel:
+        return f"Got it, your {rel} is {new}."
+    flipped = re.sub(r"\b(?:my|our)\b", "your", text.strip().rstrip(".!"), flags=re.IGNORECASE)
+    flipped = re.sub(r"\bi am\b", "you are", flipped, flags=re.IGNORECASE)
+    flipped = re.sub(r"\bi['’]m\b", "you're", flipped, flags=re.IGNORECASE)
+    return f"Got it, {flipped[:1].lower() + flipped[1:]}." if flipped else f"Got it, {new}, not {old}."
+
+
+async def _rename_contact(user_id: str, rel: str, old: str, new: str) -> str:
+    """Rename the ONE contact called ``old`` (and, when the owner named a relation, related that way) to ``new``.
+
+    Returns ``"renamed"``, ``"none"`` (no such contact, or more than one - a person is never renamed on a guess) or ``"failed"``
+    (the contact update or its memory mirror did not hold: the note and the contact now disagree). A failure is logged at WARNING
+    with the account and the contact's id, never a name."""
+    pid = ""
+    try:
+        from datetime import datetime
+
+        from db_pool import get_db_ctx
+
+        async with get_db_ctx() as db:
+            cur = await db.execute(
+                "SELECT id, relationship FROM people WHERE user_id = ? AND deleted = 0 AND lower(name) = lower(?)", (user_id, old))
+            rows = [r for r in await cur.fetchall()]
+            if rel:
+                rows = [r for r in rows if rel in str(r["relationship"] or "").lower()]
+            if len(rows) != 1:
+                return "none"
+            pid = str(rows[0]["id"])
+            await db.execute("UPDATE people SET name = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+                             (new, datetime.utcnow().isoformat() + "Z", pid, user_id))
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("correction_apply: contact rename FAILED user=%s person=%s (%s): the note changed, the contact did not",
+                       user_id, pid or "-", type(exc).__name__)
+        return "failed"
+    try:
+        import contacts_conversation as _cc
+
+        ok = await _cc.refresh_person_mirror(user_id, pid, new, str(rows[0]["relationship"] or "") or None)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("correction_apply: contact mirror refresh FAILED user=%s person=%s (%s)", user_id, pid, type(exc).__name__)
+        return "failed"
+    if ok is False:
+        logger.warning("correction_apply: contact mirror refresh FAILED user=%s person=%s", user_id, pid)
+        return "failed"
+    return "renamed"
+
+
+async def maybe_swap(text: str, user_id: str, session_id: str, *, svc=None) -> Optional[CorrectionResult]:
+    """"that's wrong, my sister is Marisol not Marisa": rewrite the stored note(s) holding the wrong value, then read the new fact
+    back. Evidence only: it acts when the OWNER'S approved notes hold the old value as a whole word (with the relation word too,
+    when one was said) in at most ``SWAP_MAX_ROWS`` rows - with the relation unsaid, in exactly one - and returns None otherwise, so
+    the brain answers as before and a correction is never claimed without a stored fact to change. Never raises."""
+    if not enabled() or not user_id or user_id in ("guest", "voice-daemon", ""):
+        return None
+    sw = swap_statement(text)
+    if sw is None:
+        return None
+    rel, new, old = sw
+    try:
+        try:
+            import user_prefs
+
+            if await user_prefs.is_memory_opted_out(user_id):
+                return None
+        except Exception:  # noqa: BLE001
+            pass
+        if svc is None:
+            from memory_service import get_memory_service
+
+            svc = get_memory_service()
+        uid = user_id.strip().lower()
+        old_re = _word_re(old)
+        hits = []
+        for r in await svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT):
+            meta = r.metadata or {}
+            if str(meta.get("user_id") or meta.get("wing") or "").strip().lower() != uid:
+                continue
+            body = r.text or ""
+            if not old_re.search(body):
+                continue
+            # with a relation said, only a note that states the old value AS that relation (the relation is the note's subject) is the
+            # fact being corrected: "my sister's friend is Marisa" and "Dana's sister is Marisa" are other people
+            if rel and not _is_note_about(rel, old, r):
+                continue
+            hits.append(r)
+        if not hits or len(hits) > (SWAP_MAX_ROWS if rel else 1):
+            return None
+        if len(hits) > 1:
+            # several rows: only the twin rows ONE utterance left behind (same saved turn / excerpt) are one fact; anything else is a guess
+            from provenance_answers import twins_of
+
+            twin_ids = {t.id for t in await twins_of(user_id, hits[0], svc=svc)} | {hits[0].id}
+            if any(h.id not in twin_ids for h in hits):
+                return None
+        new_val = _title(new, old)
+        from provenance_answers import _speculation_barrier
+
+        await _speculation_barrier()
+        changed: list[str] = []
+        for r in hits:
+            res = await apply_row_correction(user_id, r.id, old_re.sub(new_val, r.text, count=1), utterance=text,
+                                             session_id=session_id, svc=svc)
+            if res is not None:
+                changed.extend(res.changed)
+        if not changed:
+            return None
+        renamed = await _rename_contact(user_id, rel, old, new_val)
+        logger.info("CORRECTION_APPLIED kind=swap user=%s rows=%d contact=%s", user_id, len(changed), renamed)
+        reply = _read_back(rel, new_val, old, text)
+        if renamed == "failed":      # never claim a fix that did not fully hold
+            reply += " I fixed my note, but I couldn't update your contact."
+        return CorrectionResult("swap", reply, changed)
+    except Exception as exc:  # noqa: BLE001 — a correction never breaks the turn
+        logger.warning("correction_apply swap failed user=%s: %s", user_id, type(exc).__name__)
         return None
 
 

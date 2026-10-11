@@ -23,8 +23,21 @@ floor FIRED (``fired``), so an enforce arm that did nothing is visible (the inst
 STUBBED (the DB-bound neighbours, exactly the set ``hop_placement_ab`` stubs, plus): the account / persona / pending-offer /
 continuity / verify blocks (empty), ``brief_first_turn.prepare`` and ``proactive.selector.prepare`` (none), the hold tier's
 history read and owner-row search and its edit (faked from the ask with the real ``memory_authority`` stamps, as
-``person_half_replay.py`` does), the ambiguity tier's roster query (3 synthetic contacts), the memory service behind
-``memory_for_prompt`` (synthetic rows). NOT exercised: the live DB reads and writes (the Jetson-lane tests drive those).
+``person_half_replay.py`` does), the ambiguity tier's roster + fingerprint queries (3 synthetic contacts), the memory service
+behind ``memory_for_prompt`` (synthetic rows). NOT exercised: the live DB reads and writes (the Jetson-lane tests drive those).
+
+SAME PATH AS LIVE (2026-10-10: the live bench scored P7.a 10/20, P7.b 15/20, P8.a 9/10 where this rig had scored 20/20, 19/20,
+10/10 - three differences between the rig's path and the chat path, each now closed and each with a negative control in
+``--selftest``):
+  * the roster is NOT pre-loaded. A P7 ask starts the way the bench's does: a contact-saving turn reads the roster while only ONE
+    Marisol exists, THEN the second lands, THEN the owner asks. A roster cache that remembers "nobody is ambiguous" fails here.
+  * a turn a KEYWORD INTENT claims (``intent_router.detect_intent``: "good night" -> the evening-briefing composer) is answered
+    outside the brain lane, past every reply guard. The rig now asks the router first, as ``routers/chat.py`` does: a canned
+    intent (status_check / acknowledgement) is executed for real, any other is a ``[keyword intent ...]`` marker that no scorer
+    passes. Feeding the guard a canned BRAIN reply for a message the brain never sees was the over-promise.
+  * the pending contact offer ("Would you like me to add Marisol as a contact?") is not stubbed away on P7: the real
+    ``latent_intent_detector._already_a_contact`` runs over the synthetic contacts, and where it says the bare name is NOT a contact the
+    offer is appended to the brain's reply as the seam would voice it (worst case: the detector always proposes the bare name).
 
 SAFETY. ``demo_bar_<hex>`` ids only; every brain turn is sent with ``replay_isolation=True`` (the replay gate's per-request marker:
 the sidecar's tools become no-ops, so nothing is written to the live memory, calendar, lists or people); no memory write of this script's own; the shared harness lock must be HELD by the caller
@@ -133,6 +146,7 @@ class Brain:
         self.calls = 0
         self.stop_reason = ""
         self.last_wire = ""
+        self.ram_guard = True                       # the live brain is not to be starved; a scripted brain needs no guard
 
     async def _call(self, text: str, sid: str) -> str:
         zc = self.zc
@@ -156,7 +170,7 @@ class Brain:
         if self.spent_s >= self.budget_s:
             self.stop_reason = f"brain budget {self.budget_s:.0f}s spent"
             raise BudgetExceeded(self.stop_reason)
-        if mem_available_kb() < MIN_AVAILABLE_KB:
+        if self.ram_guard and mem_available_kb() < MIN_AVAILABLE_KB:
             self.stop_reason = "RAM guard: MemAvailable below the floor"
             raise BudgetExceeded(self.stop_reason)
         t0 = time.monotonic()
@@ -219,6 +233,7 @@ class Rig:
         self.packet_rows: list = []                # what the recall packet for a turn is built from
         self.packet_forced = False                 # the restraint cell: the packet rides every turn
         self.owed: list[str] = []
+        self.people_state: list | None = None      # the contacts RIGHT NOW (None: the full synthetic household)
         self.replay_raw: str | None = None
         self._undo: list = []
         self._install()
@@ -246,6 +261,11 @@ class Rig:
                 self.ref("sis00001", f"User's sister is Marisol {w.marisol_a}.", "person", entity_type="person")]
 
     def people(self) -> list:
+        if self.people_state is not None:
+            return list(self.people_state)
+        return self.full_people()
+
+    def full_people(self) -> list:
         w = self.world
         return [self.awa.Candidate("1", f"Marisol {w.marisol_a}", "sister"), self.awa.Candidate("2", f"Marisol {w.marisol_b}", "colleague"),
                 self.awa.Candidate("3", f"{w.solo_first} {w.solo_last}", "brother")]
@@ -310,6 +330,13 @@ class Rig:
 
         self._set(awa, "_load_people", load_people)
 
+        async def people_fingerprint(_uid):
+            ppl = rig.people()
+            return (str(len(ppl)), "", str(sum(len(c.name) for c in ppl)))
+
+        if hasattr(awa, "_people_fingerprint"):             # absent in a tree from before the fix: the rig then measures that tree as it was
+            self._set(awa, "_people_fingerprint", people_fingerprint)
+
         async def fetch_packet(user_id, message, focus=None):
             return await rig.packet(message)
 
@@ -325,7 +352,7 @@ class Rig:
         self._set(zc, "_named_person_floor", named_floor)
 
         # NO DATABASE, by construction: every pooled-connection factory raises, and the rig refuses to start with a DSN in its
-        # environment. Each DB-bound neighbour that survives the stubs above (the mute list, the exact-words index, the
+        # environment (``offer_suffix`` swaps in a one-table fake for the single contact-name read, and puts the raising factory back). Each DB-bound neighbour that survives the stubs above (the mute list, the exact-words index, the
         # relational block) is fail-open by design and reads "nothing" here - the live database is never opened.
         class _NoDb(RuntimeError):
             pass
@@ -382,6 +409,69 @@ class Rig:
             self.raw_cache[key] = await self.brain.raw(text, sid)
         return self.raw_cache[key]
 
+    #: the CONVERSATIONAL keyword intents - the ones that can answer a goodbye, a greeting, a presence check or a silence without
+    #: the brain. status_check / acknowledgement are canned and DB-free: executed for real. The rest compose a reply behind an LLM /
+    #: a database the rig does not run: a marker, which no scorer passes. Every other intent (people_search, extend_capability, ...)
+    #: is left to the brain lane here - ``routers/chat.py`` runs those through ``execute_intent`` and falls to the brain when they
+    #: return nothing; the rig cannot tell which, and "tell me about <name>" is one that does (extend_capability delegates).
+    CANNED_INTENTS = ("status_check", "acknowledgement")
+    CONVERSATIONAL_INTENTS = CANNED_INTENTS + ("good_evening", "good_morning", "greeting", "daily_briefing")
+
+    async def keyword_intent_reply(self, text: str, user_id: str) -> tuple[str, str] | None:
+        """(reply, intent name) when a conversational KEYWORD INTENT claims ``text`` - the turn never reaches the brain lane, so no
+        reply guard sees it - else None. ``routers/chat.py`` asks ``detect_intent`` before the brain; the live ``intent_gate`` can
+        only VETO a claim, and it never vetoes these (no router class / router agrees), so skipping it changes nothing here."""
+        from intent_router import detect_intent, execute_intent
+
+        intent = detect_intent(text, log_miss=False)
+        if intent is None or intent.name not in self.CONVERSATIONAL_INTENTS:
+            return None
+        if intent.name in self.CANNED_INTENTS:
+            try:
+                reply = (await execute_intent(intent, user_id) or "").strip()
+            except Exception:  # noqa: BLE001
+                reply = ""
+            if reply:
+                return reply, intent.name
+        # three sentences and no farewell word: unclean on every P8 half, whatever the intent would really have said
+        return f"[keyword intent {intent.name} answers this turn.] It runs outside the brain lane. No reply guard sees it.", intent.name
+
+    async def offer_suffix(self, text: str) -> str:
+        """What the seam would add to the brain's reply from a pending contact offer: for each bare name in ``text``, the offer
+        exists only if the REAL ``_already_a_contact`` says that name is not a contact (worst case: the detector always proposes
+        the bare name the owner used)."""
+        import db_pool
+        import latent_intent_detector as lid
+
+        rig = self
+
+        class Db:
+            """The one statement ``_already_a_contact`` runs, served from the synthetic household; anything else raises."""
+
+            async def fetch(self, sql, *params):
+                if "FROM people" in sql and "SELECT name" in sql:
+                    return [{"name": c.name} for c in rig.people()]
+                raise RuntimeError("the enforce-vs-shadow rig has no database")
+
+        class Ctx:
+            async def __aenter__(self):
+                return Db()
+
+            async def __aexit__(self, *_e):
+                return False
+
+        low = (text or "").lower().replace("'s", "")
+        out = []
+        real = db_pool.get_db_ctx
+        db_pool.get_db_ctx = lambda: Ctx()
+        try:
+            for name in ("Marisol", self.world.solo_first):
+                if name.lower() in low.split() and not await lid._already_a_contact(name, self.user):
+                    out.append(f"Would you like me to add {name} as a contact?")
+        finally:
+            db_pool.get_db_ctx = real
+        return " ".join(out)
+
     async def turn(self, arm: str, floor: str, text: str, sid: str, key: tuple) -> tuple[str, dict]:
         """(the reply the owner hears, {'fired': by whom}) for one turn under ``arm``. The flag of ``floor`` is ``arm``; the other
         floors stay ``shadow``. ``sid`` is the brain's (shared) session; the arm's own conversation lives under ``sid-arm``."""
@@ -392,9 +482,12 @@ class Rig:
         info: dict = {"fired": ""}
         with env(**flags, ZOE_SEAM_RECALL_INJECT="true"):
             tier = await self.ft._person_half_tier(text, self.user, asid)
+            claimed = None if tier is not None else await self.keyword_intent_reply(text, self.user)
             if tier is not None:
                 reply = tier.reply
                 info["fired"] = tier.tier
+            elif claimed is not None:
+                reply, info["bypass"] = claimed
             else:
                 raw = await self.raw(key, text, sid)
                 real_turn = zc._run_flue_brain_streaming_turn
@@ -409,6 +502,11 @@ class Rig:
                     zc._run_flue_brain_streaming_turn = real_turn
                 if reply != raw:
                     info["fired"] = "clean_goodbye" if floor == "goodbye" else "reply_changed"
+                if floor == "ask":
+                    offer = await self.offer_suffix(text)
+                    if offer:
+                        reply = f"{reply} {offer}".strip()
+                        info["offer"] = offer
         self.hist.setdefault(asid, []).extend([("user", text), ("assistant", reply)])
         return reply, info
 
@@ -439,6 +537,16 @@ async def run_ask(rig: Rig, floor: str, ask, nonce: str) -> dict[str, dict]:
     rig.packet_rows = rig.contact_rows() if ask.cell == "P7" else (rig.world_rows() if ask.cell == "P5a" else [])
     rig.owed = []
     rig.awa.forget_roster()
+    rig.people_state = None
+    if ask.cell == "P7":
+        # The bench's own sequence: the household is SEEDED through the chat. The first contact-saving turn reads the roster while
+        # one Marisol exists (nobody ambiguous - and a cache that keeps that answer is the live P7.a failure); then the second
+        # lands; then the owner asks, seconds later, inside the roster cache's TTL.
+        full = rig.full_people()
+        rig.people_state = [c for c in full if not (c.name.startswith("Marisol") and c is full[1])]
+        with env(**{**{v: "shadow" for v in FLOOR_ENV.values()}, FLOOR_ENV["ask"]: "enforce"}):
+            await rig.awa.handle(f"Save a contact for my sister {full[0].name}.", rig.user, f"{sid}-seed")
+        rig.people_state = None
     # Turn 0 (not scored, one brain call shared by both arms): the owner's own statement rides the SAME sidecar session. The live
     # bench seeds the dentist / the contacts through memory AND the calendar / the people table; under replay isolation the
     # sidecar's writes are no-ops and its reads see an empty demo account, so without this the brain answers "I don't see a
@@ -705,13 +813,16 @@ def selftest() -> int:
             return "Goodnight! Before you go, did you finish the report?"
         return "Sure." + (" Good luck with the dentist, by the way." if "dentist" in wire.lower() else "")
 
-    async def run(flag_env: dict | None = None, floors=("hold", "ask", "goodbye", "restraint"), n=5):
+    async def run(flag_env: dict | None = None, floors=("hold", "ask", "goodbye", "restraint"), n=5, tweak=None):
         user = sb.new_demo_user()
         brain = FakeBrain(zc, user, script)
+        brain.ram_guard = False                     # the selftest is offline: a busy box must not turn it flaky
         rig = Rig(brain, world, user)
         old = dict(FLOOR_ENV)
         if flag_env:
             FLOOR_ENV.update(flag_env)
+        if tweak:
+            tweak(rig)
         try:
             return await drive(rig, list(floors), n, "selftest", lambda *_: None)
         finally:
@@ -731,7 +842,8 @@ def selftest() -> int:
     check("ask: a clear name is answered, not asked about, in both arms", t["ask"]["enforce"]["P7.b"]["k"] == t["ask"]["enforce"]["P7.b"]["n"] > 0)
     check("goodbye: shadow keeps the hook, enforce cleans it", t["goodbye"]["shadow"]["P8.a"]["k"] == 0 and
           t["goodbye"]["enforce"]["P8.a"]["k"] == t["goodbye"]["enforce"]["P8.a"]["n"] > 0)
-    check("goodbye: the probe on a silent turn is scored (and removed by enforce)", t["goodbye"]["shadow"]["P8.c"]["k"] == 0 and
+    check("goodbye: the probe on a silent turn is scored (and removed by enforce)",
+          t["goodbye"]["shadow"]["P8.c"]["k"] < t["goodbye"]["shadow"]["P8.c"]["n"] and       # "ok" is the router's canned ack, not the brain's
           t["goodbye"]["enforce"]["P8.c"]["k"] == t["goodbye"]["enforce"]["P8.c"]["n"] > 0)
     check("restraint: shadow's packet carries the dentist row, enforce's does not (the wire is what differs)",
           t["restraint"]["shadow"]["P2.a"]["k"] == 0 and t["restraint"]["enforce"]["P2.a"]["k"] == t["restraint"]["enforce"]["P2.a"]["n"] > 0)
@@ -745,6 +857,45 @@ def selftest() -> int:
           not any(fired0[f] for f in fired0))
     check("negative control: ... and the floors that needed the guard are then NOT ready",
           all(judge(f, neutered[f])[0] == "DO NOT FLIP" for f in ("hold", "ask", "goodbye", "restraint")))
+    # -- the three live-vs-rig differences (2026-10-10), each with its negative control: break the product, the table must go red ----
+    def full(tab, floor, half):
+        r = tab[floor]["enforce"][half]
+        return r["k"], r["n"]
+
+    check("same path: the roster is seeded the bench's way and the clear/ambiguous halves still meet their bars",
+          full(t, "ask", "P7.a")[0] == full(t, "ask", "P7.a")[1] > 0 and full(t, "ask", "P7.b")[0] == full(t, "ask", "P7.b")[1] > 0)
+    check("same path: a goodbye the keyword router leaves to the brain is cleaned (P8.a all)",
+          full(t, "goodbye", "P8.a")[0] == full(t, "goodbye", "P8.a")[1] > 0)
+
+    def stale_cache(rig):                 # the pre-fix roster: valid for 60 s whatever happened to the contacts
+        async def same(_uid):
+            return ("same",)
+        rig._set(rig.awa, "_people_fingerprint", same)
+
+    stale, _f, _e = asyncio.run(run(floors=("ask",), tweak=stale_cache))
+    check("negative control: a roster cached through a contact write makes P7.a go red (the rig sees the live failure)",
+          full(stale, "ask", "P7.a")[0] == 0 and judge("ask", stale["ask"])[0] == "DO NOT FLIP")
+
+    def old_router(rig):                  # the pre-fix router: "good night" is the evening-briefing / greeting intent
+        import intent_router
+        rig._set(intent_router, "_is_pure_farewell", lambda _t: False)
+
+    claimed, _f, _e = asyncio.run(run(floors=("goodbye",), n=10, tweak=old_router))
+    check("negative control: a goodbye claimed by a keyword intent makes P8.a go red (the rig sees the live failure)",
+          full(claimed, "goodbye", "P8.a")[0] < full(claimed, "goodbye", "P8.a")[1] and judge("goodbye", claimed["goodbye"])[0] == "DO NOT FLIP")
+
+    def exact_match(rig):                 # the pre-fix emitter: a contact only when the FULL name matches
+        import latent_intent_detector as lid
+        import db_pool
+
+        async def exact(name, user_id):
+            return any(c.name.lower() == name.lower() for c in rig.people())
+
+        rig._set(lid, "_already_a_contact", exact)
+
+    offered, _f, _e = asyncio.run(run(floors=("ask",), tweak=exact_match))
+    check("negative control: an offer to add a bare name the owner already has makes P7.b go red (the rig sees the live failure)",
+          full(offered, "ask", "P7.b")[0] < full(offered, "ask", "P7.b")[1])
     return 0 if ok else 2
 
 

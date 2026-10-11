@@ -339,7 +339,7 @@ async def _transcribe_via_stream(wav_path: str, batch_impl) -> tuple[str, int, s
         sess.feed(seq, seg)
     t_end = time.monotonic()
     ss.take("ab" * 8)
-    lines, _reason = await asyncio.to_thread(sess.finish, n, 30.0)
+    lines, _reason = await asyncio.to_thread(sess.finish, n, ss.finish_timeout_s())
     text = vt._strip_wake_word(list(lines)) if lines else ""
     post_ms = int((time.monotonic() - t_end) * 1000)
     if not text:  # production fallback: batch STT re-checks the clip

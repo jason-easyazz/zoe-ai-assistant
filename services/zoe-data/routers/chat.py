@@ -3360,13 +3360,10 @@ async def submit_feedback(interaction_id: str, request: Request, feedback_type: 
     except Exception:
         pass
     corrected = body.get("corrected_response")
-    async for db in get_db():
-        await db.execute(
-            """INSERT INTO chat_feedback (id, interaction_id, user_id, feedback_type, corrected_response)
-               VALUES (?, ?, ?, ?, ?)""",
-            (uuid.uuid4().hex[:12], interaction_id, user_id, feedback_type, corrected),
-        )
-        await db.commit()
+    # ONE writer of chat_feedback, shared with the spoken/typed "that was wrong" / "good answer" tier (conversation_feedback).
+    from conversation_feedback import record_feedback
+
+    await record_feedback(user_id, interaction_id, feedback_type, corrected)
     logger.info(f"Feedback {feedback_type} from {user_id} on {interaction_id}")
     messages = {
         "thumbs_up": "Thanks — glad that helped.",

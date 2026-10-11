@@ -6,6 +6,10 @@ Accepted. Supersedes the "graph backend TBD" placeholder left by
 [`ADR-graphiti-bakeoff.md`](ADR-graphiti-bakeoff.md) (Graphiti not adopted) and
 records the design that is **already live**, plus the roadmap to Samantha-grade.
 
+**Hardened 2026-10-09** (people-graph invariants, migration `0043`, `services/zoe-data/people_graph.py`): name resolution,
+atomic edge change, invalidate-never-delete, the temporal read and evidence pointers are now enforced in ONE module and
+pinned by tests (see "Invariants" below). Gaps still open are listed there.
+
 ## Context
 
 Relationships — who relates to whom, how, and how that changes over time — are the
@@ -109,6 +113,35 @@ of *writes* remains open. Turning the flags on in prod is an operator procedure 
 [`docs/knowledge/relationship-memory-flag-enable.md`](../knowledge/relationship-memory-flag-enable.md):
 migrate `0015` first, flip the three flags incrementally behind the `~/.zoe-voice-samples` replay
 gate, verify on a demo user, and roll back with the flags (a `0015` downgrade is intentionally lossy).
+
+## Invariants (enforced in code, `people_graph.py`; tests `test_people_graph*.py`, each with a break-the-fix control)
+
+1. **Resolution.** A name resolves exact (case / accents / punctuation folded, any script) -> whole token -> prefix; the
+   first tier with a hit decides and two or more hits in it are `ambiguous`, returned with the candidates (id, name,
+   relationship - the shape `ask_when_ambiguous` reads; ordered: people with a current edge, newest evidence, name, id).
+   No `LIKE` is built from the user's words. A write attaches only to a `unique` result; an ambiguous name is held as a
+   pending candidate, never guessed, never a third stub. Prefix hits report `tier="prefix"` so a caller can be stricter
+   (`named_relations._name_clash` is). `routers/voice_tts._handle_introduce_intent` still uses `LIKE '%name%'` (not
+   changed here: hook = `people_graph.resolve_person_id`). The 2026-10-09 `provenance_answers.people_entries` keys on
+   `name.lower()`; the resolver folds more, so it is the stricter side.
+2. **Atomic change.** Close-old + insert-new is one transaction under a per-(user, pair) advisory lock
+   (`replace_current_edge`); the decision is re-read under the lock; an insert that does not land rolls the close back.
+3. **Invalidate, never delete.** Every edge writer closes (`valid_to` + `close_reason`) instead of deleting or rewriting:
+   REST PUT (`user_edited`) / DELETE (`user_removed`), person merge (`merged_self_edge`, `merged_duplicate`), the pet
+   correction (`corrected_pet`, `corrected_pet_duplicate`), supersede (`superseded`). With `ZOE_TEMPORAL_RELATIONSHIPS_ENABLED`
+   off a changed relationship is kept as a `pending` candidate (`contradicts=edge:<id>`; approving applies it). No runtime
+   module contains `DELETE FROM person_relationships` (a test scans). Hard delete belongs only to the forget path.
+4. **Temporal read.** `GET /api/people/{id}/relationships` returns current edges; `?as_of=<ISO>` what was true then;
+   `?include=history` everything, each with `current` / `valid_from` / `valid_to` / `close_reason`. Writers use one
+   timestamp text form (`now_iso`); readers parse both (`parse_ts`); `valid_*_ts` / `recorded_ts` are `timestamptz`
+   copies kept by a trigger (0043).
+5. **Evidence.** Each edge write stores `turn_id` (the content id memory rows use), `quote_span` (`start:end:hash`, a
+   pointer - no words) and `speaker_rank` (`memory_authority.RANK`); the regex extractor, named relations, the pet
+   correction and the REST paths fill them. NULL on older rows.
+
+Still open (ledger): event time vs capture time (`valid_from` is when Zoe learned it; no "since 2015" parsing), the
+`(A,B)`/`(B,A)` direction duplicate, a DB exclusion constraint over history, `memory_forget_cascade` setting
+`close_reason='forgotten'`, and the operator backfill in `docs/knowledge/people-graph-invariants.md`.
 
 ## Acceptance criteria (for future increments)
 
