@@ -39,6 +39,8 @@ How a spoken turn flows through Zoe, and how we measure it without regressing. T
    `routers/voice_tts.py`: **Kokoro → Edge TTS → espeak-ng** (each falls back to the next).
    PyTorch/CUDA is the sidecar's sole backend; it falls back to CPU on its own only if CUDA
    cannot load, reporting `degraded=true` on `/health`. zoe-data holds no in-process TTS model.
+   An ONNX Runtime CUDA backend was built and measured NOT a win (2026-09-27; code kept on
+   branch `feat/b5-1-kokoro-onnx`, not merged) — see [kokoro-onnx-migration.md](kokoro-onnx-migration.md).
 
 Per-stage timings are exported to Prometheus as `zoe_voice_stage_seconds`
 (`services/zoe-data/voice_metrics.py`), scraped at `:8000/metrics`.
