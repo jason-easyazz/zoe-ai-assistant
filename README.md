@@ -20,6 +20,20 @@ a record in `docs/` and, where it can be, by a benchmark in `scripts/perf/`.
 > (see [HARDWARE_COMPATIBILITY.md](HARDWARE_COMPATIBILITY.md)). Read the whole
 > Install section before starting.
 
+## Screenshots
+
+The touch panel at its native 1280x720, shown with an invented demo household
+(Alex, Sam and Juniper the dog). Details in [docs/images/panel](docs/images/panel/README.md).
+
+![Home: clock, weather, your day, now playing](docs/images/panel/home.png)
+
+| | |
+|---|---|
+| ![Hearing a spoken request](docs/images/panel/voice.png) | ![Shopping and weekend-jobs lists](docs/images/panel/lists.png) |
+| ![Week calendar](docs/images/panel/calendar.png) | ![Music: now playing and queue](docs/images/panel/music.png) |
+
+A real memory-view capture from a demo account is to follow.
+
 > **How to read the status words in this README.** *On* = enabled by default in
 > the code. *Shadow* = the code runs and logs what it would do but changes
 > nothing; it ships that way until the owner flips it. *Off* = ships disabled.
