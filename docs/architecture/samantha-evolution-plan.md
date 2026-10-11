@@ -1050,7 +1050,7 @@ because Theodore reacts; Zoe currently discards the reactions.
 - [ ] **W15.1** untrusted-content fencing + per-source tool tiers + injection fixtures — NOT STARTED (blocks W9.1)
 - [ ] **W16.1** weekly Samantha scoreboard (OKF trend + panel card) — NOT STARTED
 - [ ] **W1.5** conversational repair (confidence/heuristic → clarify) — NOT STARTED
-- [ ] **W2.5** follow-through commitment tracker — NOT STARTED
+- [~] **W2.5** follow-through commitment tracker — **BUILT, SHADOW** (`ZOE_COMMITMENTS=off|shadow|enforce`, default shadow; `services/zoe-data/commitments.py`, migration 0044, bar cell S33; Zoe's own timed promises are recorded, checked at the due time, made late through the reminder path or owned up to once in the pull queue; `enforce` is the owner's flip after a week of `COMMITMENT` shadow lines)
 - [ ] **W5.3** onboarding interview at enrollment — NOT STARTED
 - [ ] **W5.4** per-user personas + kid mode — **PHASE 0 LANDED, FLAG-DARK** (`ZOE_PERSONA_LAYER`, default OFF: household persona record + per-member `member_mode` field default `companion`, validated, admin-only edit routes, legacy-lane prompt only — NOT the live Flue brain; no voice/panel/phone editor; kid mode is a rule set, nothing assigns it; SSOT `docs/knowledge/persona-layer.md`). Remaining: sidecar consumer, editing UI, kid assignment + tool narrowing (needs W5)
 - [x] **emotional-safety policy** (`docs/governance/emotional-safety-note.md`) — WRITTEN (normative; persona boundaries, no self-editing identity, kids/guests, affective consent+retention, crisis language, drift bar). Still gates W4 writes + W10; its crisis path is a requirement NOT YET BUILT

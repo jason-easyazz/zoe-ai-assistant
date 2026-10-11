@@ -1043,6 +1043,7 @@ def test_every_reader_that_rebuilds_memory_from_the_transcript_leaves_the_flagge
 def test_brain_dispatch_commits_the_reply_and_hands_the_stream_back_untouched_when_off(monkeypatch, svc):
     import brain_dispatch
     monkeypatch.setenv(mp.ENV, "0")
+    monkeypatch.setenv("ZOE_COMMITMENTS", "off")        # the promise tracker (default shadow) is the other thing that wraps the stream
 
     async def stream():
         yield "hello"

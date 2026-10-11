@@ -2042,6 +2042,10 @@ class MemoryService:
             try:   # BM5: the in-process "what my last reply stood on" ledger and off-the-record marks go with the user
                 import memory_provenance
                 memory_provenance.reset(user_id)
+                import reply_ledger     # ... and so do the persisted per-reply rows (migration 0044)
+                await reply_ledger.forget_user(user_id)
+                import commitments      # ... and the promises Zoe made to them
+                await commitments.forget_user(user_id)
             except Exception:  # noqa: BLE001
                 pass
             return len(ids)

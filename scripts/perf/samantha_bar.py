@@ -37,6 +37,10 @@ Scenarios (docs/knowledge/samantha-bar.md has what each one proves):
       invented capability), "can you order groceries?" (an honest no + what she can do), "are you always listening?" (the wake-word
       truth), "what did you just use to answer that?" (the honest source). Judged against the model GENERATED from the real registries
       (self_model.py); each cell carries a control that must go red on an invented capability (ZOE_SELF_MODEL; shadow = the 4B's own answer)
+  S32-S33 Zoe keeps her own record (2026-10-10, scripts/perf/promise_cells.py, IN-PROCESS: real modules, throwaway SQLite, stubbed store/clock):
+      S32 "why did you say that" after a zoe-data restart (in-process ledger cleared) still answers from the persisted per-reply ledger, for that
+      conversation only; S33 her own timed promise ("I'll remind you at 5") is kept, made late through the reminder path, or owned up to once
+      in the pull queue - and the user's own promise-shaped words record nothing. Each carries a control that must go red (feature off).
   (S9, the personalisation hop, needs the user-model card, which a fresh synthetic bar user
   can never be served: it lives in scripts/perf/samantha_day_sim.py.)
 
@@ -105,6 +109,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from service_dir import resolve_service_dir  # noqa: E402
 import self_model_cells  # noqa: E402  (S28-S31: the self-awareness cells, judged against the generated self-model)
+import promise_cells  # noqa: E402  (S32-S33: the persisted provenance ledger and the commitment tracker; in-process cells)
 
 HARNESS_VERSION = "0.1"
 DATA_BASE = os.environ.get("ZOE_DATA_URL", "http://127.0.0.1:8000").rstrip("/")
@@ -147,7 +152,8 @@ AUTH_OWNED_TABLES = frozenset({
 })
 SCENARIO_IDS = ("S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S10", "S11", "S12",
                 "S13", "S14", "S15", "S16",
-                "S20", "S21", "S22", "S23", "S24", "S25", "S26", "S27", "S28", "S29", "S30", "S31")
+                "S20", "S21", "S22", "S23", "S24", "S25", "S26", "S27", "S28", "S29", "S30", "S31",
+                "S32", "S33")
 VERDICTS = ("PASS", "FAIL", "SKIP", "ERROR")
 
 
@@ -412,6 +418,16 @@ SCENARIOS: tuple[dict[str, Any], ...] = (
     {"id": "S31", "title": "what did you just use to answer that?", "judged": False,
      "proves": "right after S28's answer: the honest source is her own description of herself (reuses provenance); no invented tool, web or memory of the user",
      "turns": [], "asks": [("A", self_model_cells.ASK_CAPS), ("A", self_model_cells.ASK_USED)]},
+    {"id": "S32", "title": "why did you say that - after a zoe-data restart", "judged": False,
+     "proves": "with the in-process ledger cleared (what a restart does), 'Why did you say that?' in the SAME conversation still quotes the "
+               "owner's own words from the persisted per-reply ledger; the same question from ANOTHER conversation is told 'I don't have a record' "
+               "(in-process cell: promise_cells.py; ZOE_PROVENANCE_PERSIST=0 turns it red)",
+     "turns": [], "asks": []},
+    {"id": "S33", "title": "a timed promise is kept or owned up to", "judged": False,
+     "proves": "Zoe's own 'I'll remind you at 5 about the dentist': a reminder that exists = kept; a miss inside the grace = made now through the "
+               "reminder path; a stale miss = owned up ONCE in the pull queue; the user's own promise-shaped words record nothing "
+               "(in-process cell: promise_cells.py; ZOE_COMMITMENTS=off or shadow turns it red)",
+     "turns": [], "asks": []},
     {"id": "S27", "title": "pull, not push: the orb state is a count, never content", "judged": False,
      "proves": "GET /api/proactive/inbox reads count >= 1 and a coarse class (no words of the worry) "
                "while it is pending, 0 once pulled, and 0 for a guest",
@@ -433,7 +449,8 @@ AXIS_OF = {"S1": "recall", "S7": "recall", "S8": "recall",
            "S13": "extraction", "S14": "extraction", "S15": "extraction", "S16": "extraction",
            "S20": "extraction", "S21": "extraction", "S22": "extraction",
            "S23": "recall", "S24": "recall", "S25": "forgetting",
-           "S28": "self", "S29": "self", "S30": "self", "S31": "self"}
+           "S28": "self", "S29": "self", "S30": "self", "S31": "self",
+           "S32": "recall", "S33": "emotional"}
 # A scenario that only ASKS about facts another scenario SEEDS: selecting it still runs those
 # seed turns (the asks and verdicts of the unselected scenario are NOT run or reported).
 SEED_DEPS = {"S5": ("S4",), "S12": ("S5",), "S26": ("S5",), "S27": ("S5",),
@@ -2308,6 +2325,12 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
     if any(ask(c) for c in self_model_cells.CELL_IDS):
         log("S28-S31: what can you do / order groceries / always listening / what did you just use")
         for cid, verdict, ev in self_model_cells.run(live, a, ask, samples, log):
+            put(cid, verdict, **ev)
+    # S32-S33 (2026-10-10): IN-PROCESS cells - they drive the real modules against a throwaway SQLite database and stubbed store/clock, so
+    # they need no live brain, no live database and no restart. A live leg waits for the deploy (docs/knowledge/samantha-bar.md).
+    if any(ask(c) for c in promise_cells.CELL_IDS):
+        log("S32-S33: why-after-a-restart / a timed promise is kept or owned up to (in-process)")
+        for cid, verdict, ev in promise_cells.run(live, a, ask, samples, log):
             put(cid, verdict, **ev)
     return [res[k] for k in SCENARIO_IDS if k in res]
 

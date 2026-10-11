@@ -149,6 +149,8 @@ class ReplyRecord:
     served: int = 0                # how many rows the packet held (used or not)
     session_id: str = ""
     extra: tuple = ()              # other stored-context blocks the reply was built with: "offer", "raise", "brief"
+    reply_id: str = ""             # the persisted ledger's key with (user, session) - ``reply_ledger``
+    tools: tuple = ()              # the NAMES of the tools the turn called (never arguments or results)
 
 
 @dataclass
@@ -189,8 +191,10 @@ class _State:
     cur_marked_seq: int = -1        # the turn (seq) that is off the record, whatever text variant a later hook sees
     cur_marked_ts: float = 0.0
     distress_until: float = 0.0     # a distress hand-off turn was sighted: the reply saved before this is flagged too
+    session_turns: "OrderedDict[str, int]" = field(default_factory=OrderedDict)   # user turns counted per conversation since boot
 
 
+_MAX_SESSIONS = 16
 _STATES: "OrderedDict[str, _State]" = OrderedDict()
 
 
@@ -216,6 +220,28 @@ def _state(user_id: str, *, create: bool = True) -> Optional[_State]:
     else:
         _STATES.move_to_end(uid)
     return st
+
+
+def is_tracked(user_id: str) -> bool:
+    """Does this id keep per-user state at all? (False for a guest / unregistered sentinel.) Creates nothing."""
+    uid = _uid(user_id)
+    return bool(uid) and uid.lower() not in UNTRACKED_USERS and not uid.lower().startswith("guest-")
+
+
+def first_turn_in_session(user_id: str, session_id: str) -> bool:
+    """Is the turn being answered the FIRST this process has counted in conversation ``session_id``? The restart signature: after a
+    zoe-data restart the in-process ledger is empty and the owner's "why did you say that?" is the first turn the new process sees
+    of that conversation, so the PERSISTED ledger (``reply_ledger``) may answer it. False once the process has counted an earlier turn
+    of the conversation (then an empty ledger means a lane that recorded nothing, which is "I can't tell"), and for an empty session
+    id (no key, no claim)."""
+    try:
+        sid = (session_id or "").strip()
+        if not enabled() or not sid:
+            return False
+        st = _state(user_id, create=False)
+        return st is None or st.session_turns.get(sid, 0) <= 1
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def reset(user_id: Optional[str] = None) -> None:
@@ -250,6 +276,11 @@ def note_user_turn(user_id: str, text: str, session_id: str = "", *, now: Option
             return st.seq
         st.seq += 1
         st.last_note_h, st.last_note_norm, st.last_note_session, st.last_note_ts = h, norm, sid, t
+        if sid:
+            st.session_turns[sid] = st.session_turns.get(sid, 0) + 1
+            st.session_turns.move_to_end(sid)
+            while len(st.session_turns) > _MAX_SESSIONS:
+                st.session_turns.popitem(last=False)
         return st.seq
     except Exception as exc:  # noqa: BLE001
         logger.debug("memory_provenance.note_user_turn failed (%s)", type(exc).__name__)
@@ -357,10 +388,22 @@ def rank_sources(served: Iterable, reply: str, message: str = "") -> tuple:
     return tuple(s[4] for s in scored), total
 
 
+def _persist(user_id: str, rec: ReplyRecord, message: str = "") -> None:
+    """Hand the record to the persisted ledger (``reply_ledger``): a background write that skips off-record / distress turns and a
+    reply with no session id. Never raises, never waits."""
+    try:
+        import reply_ledger
+
+        reply_ledger.schedule(user_id, rec, message)
+    except Exception:  # noqa: BLE001
+        return
+
+
 def commit_brain_reply(user_id: str, reply: str, message: str = "", session_id: str = "", *,
-                       token: tuple = (0, 0.0), now: Optional[float] = None) -> Optional[ReplyRecord]:
-    """A brain reply ended: record what it stood on. ``token`` is ``begin_turn``'s. Returns the record (None when the feature
-    is off, there is no reply, or no user). Never raises."""
+                       token: tuple = (0, 0.0), now: Optional[float] = None,
+                       tools: Sequence[str] = ()) -> Optional[ReplyRecord]:
+    """A brain reply ended: record what it stood on. ``token`` is ``begin_turn``'s; ``tools`` the names of the tools the turn
+    called. Returns the record (None when the feature is off, there is no reply, or no user). Never raises."""
     try:
         if not enabled() or not (reply or "").strip():
             return None
@@ -371,10 +414,11 @@ def commit_brain_reply(user_id: str, reply: str, message: str = "", session_id: 
         window = [s for s in st.served if s[0] >= begin_ts - 0.001]
         sources, total = rank_sources(window, reply, message)
         rec = ReplyRecord(seq=seq, ts=_now(now), kind="brain", sources=sources, served=total, session_id=session_id or "",
-                          extra=tuple(sorted(st.extras)))
+                          extra=tuple(sorted(st.extras)), reply_id=_new_reply_id(), tools=tuple(str(t)[:60] for t in tools)[:12])
         st.last = rec
         st.served = []
         st.extras = set()
+        _persist(user_id, rec, message)
         logger.info("PROVENANCE_REPLY user=%s seq=%d kind=brain served=%d used=%d", _uid(user_id), seq, total, len(sources))
         return rec
     except Exception as exc:  # noqa: BLE001
@@ -392,15 +436,24 @@ def note_direct_reply(user_id: str, tier: str, session_id: str = "", *, domain: 
         if st is None:
             return None
         rec = ReplyRecord(seq=st.seq, ts=_now(now), kind="direct", tier=(tier or "")[:40], domain=(domain or "")[:40],
-                          session_id=session_id or "")
+                          session_id=session_id or "", reply_id=_new_reply_id())
         st.last = rec
+        _persist(user_id, rec)
         return rec
     except Exception:  # noqa: BLE001
         return None
 
 
-def previous_reply(user_id: str, *, now: Optional[float] = None) -> Optional[ReplyRecord]:
-    """The record of the reply to the turn BEFORE the current one, or None. None means "I cannot tell", never "no memory"."""
+def _new_reply_id() -> str:
+    import uuid
+
+    return uuid.uuid4().hex[:16]
+
+
+def previous_reply(user_id: str, *, now: Optional[float] = None, session_id: str = "") -> Optional[ReplyRecord]:
+    """The record of the reply to the turn BEFORE the current one, or None. None means "I cannot tell", never "no memory".
+    With ``session_id`` the record must be of THAT conversation when both sides know theirs: a voice session is never told what a
+    chat reply stood on (and the reverse)."""
     try:
         if not enabled():
             return None
@@ -408,6 +461,9 @@ def previous_reply(user_id: str, *, now: Optional[float] = None) -> Optional[Rep
         if st is None or st.last is None:
             return None
         if st.last.seq != st.seq - 1 or _now(now) - st.last.ts > REPLY_TTL_S:
+            return None
+        sid = (session_id or "").strip()
+        if sid and st.last.session_id and sid != st.last.session_id:
             return None
         return st.last
     except Exception:  # noqa: BLE001

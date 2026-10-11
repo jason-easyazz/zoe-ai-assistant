@@ -108,6 +108,12 @@ async def cascade_forget(user_id: str, name: str, *, db=None) -> CascadeResult:
         await restraint.erase_entity(user_id, name)
     except Exception as exc:  # noqa: BLE001
         logger.debug("memory_forget_cascade: restraint mutes not cleared (%s)", type(exc).__name__)
+    try:  # a promise whose subject names the forgotten entity goes too (commitments.py)
+        import commitments
+
+        await commitments.erase_entity(user_id, rx)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("memory_forget_cascade: commitments not cleared (%s)", type(exc).__name__)
     logger.info("memory_forget_cascade: user=%s portrait=%d card=%d loops=%d candidates=%d people=%d edges=%d",
                 user_id, res.portrait, res.card, res.loops, res.candidates, res.people, res.edges)
     return res

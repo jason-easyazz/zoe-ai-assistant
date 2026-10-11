@@ -397,6 +397,10 @@ async def _slow_loop() -> None:
         await asyncio.sleep(SLOW_LOOP_INTERVAL)
         try:
             if _is_in_quiet_hours():
+                # Silent bookkeeping still runs: a promise due at 23:00 is checked at 23:00, not apologised for at 07:00. Nothing here
+                # speaks - the sweep writes rows and queues pull candidates; a late reminder it makes is fired through
+                # fire_notification, which defers inside the quiet window.
+                await _commitments_step()
                 continue
 
             # Step 1: short-lived conn — run every trigger.check(), then release
@@ -440,12 +444,26 @@ async def _slow_loop() -> None:
                 await ledger_sweep()
             except Exception as exc:
                 log.warning("delivery-ledger sweep failed: %s", exc)
+
+            # Step 5: Zoe's own promises (commitments.py, ZOE_COMMITMENTS = off | shadow | enforce, default shadow). Checks the
+            # timed promises that are now due: kept, fulfilled through the reminder path, or queued to be owned up to in the pull.
+            # Shadow logs and acts on nothing. Never speaks; never raises.
+            await _commitments_step()
         except Exception as exc:
             # Covers connection-acquisition failures (e.g. transient pool
             # exhaustion / DB restart) that would otherwise escape this loop
             # and permanently kill the Tier-2 background task.
             log.error("_slow_loop iteration failed: %s", exc)
             await asyncio.sleep(min(SLOW_LOOP_INTERVAL, 30))
+
+
+async def _commitments_step() -> None:
+    """The commitment tracker's due-check (commitments.py). Runs every slow tick, quiet hours included. Never raises."""
+    try:
+        from commitments import sweep as commitments_sweep
+        await commitments_sweep()
+    except Exception as exc:
+        log.warning("commitments sweep failed: %s", exc)
 
 
 async def _cleanup_expired_pending() -> None:

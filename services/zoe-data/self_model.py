@@ -635,7 +635,7 @@ def _is_guest(user_id: Optional[str]) -> bool:
 
 
 async def answer(q: Question, user_id: str = "", *, channel: Optional[str] = None, speaker_verified: Optional[bool] = None,
-                 live: Optional[Live] = None) -> Optional[str]:
+                 live: Optional[Live] = None, session_id: str = "") -> Optional[str]:
     """The reply for self-question ``q``, built from the generated model; None when this module must not answer (the turn goes
     on). NEVER raises (CancelledError still propagates)."""
     try:
@@ -681,12 +681,12 @@ async def answer(q: Question, user_id: str = "", *, channel: Optional[str] = Non
         if q.kind == "used_to_answer":
             import memory_provenance as mp
 
-            rec = mp.previous_reply(user_id)
+            rec = mp.previous_reply(user_id, session_id=session_id)
             if rec is not None and rec.kind == "direct" and rec.tier == TIER:
                 return fill(a["used_self_model"], {})
             import provenance_answers
 
-            return await provenance_answers.explain(user_id, channel=channel)
+            return await provenance_answers.explain(user_id, channel=channel, session_id=session_id)
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001 - a turn is never broken by this tier
@@ -717,7 +717,7 @@ async def tier(text: str, user_id: str, session_id: str = "", *, channel: Option
             logger.info("SELF_MODEL mode=shadow kind=%s lang=%s verdict=%s would_answer=1 block_chars=%d",
                         q.kind, q.lang, verdict, len(build_block(q.lang)))
             return None
-        reply = await answer(q, user_id, channel=channel, speaker_verified=speaker_verified)
+        reply = await answer(q, user_id, channel=channel, speaker_verified=speaker_verified, session_id=session_id)
         if not reply:
             logger.info("SELF_MODEL mode=enforce kind=%s lang=%s verdict=%s answered=0", q.kind, q.lang, verdict)
             return None

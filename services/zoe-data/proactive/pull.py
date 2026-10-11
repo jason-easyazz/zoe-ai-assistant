@@ -166,6 +166,17 @@ def _member(uid: str) -> bool:
     return bool(uid) and uid not in GUEST_USERS and _eligible(uid)
 
 
+def _commitments_enforced() -> bool:
+    """Only ``ZOE_COMMITMENTS=enforce`` may deliver Zoe's queued promise sentences (apologies, check-backs). A read per call; an
+    unreadable mode is not enforcing."""
+    try:
+        import commitments
+
+        return commitments.mode() == "enforce"
+    except Exception:  # noqa: BLE001
+        return False
+
+
 async def pending_items(db, uid: str, now: datetime | None = None) -> list[Item]:
     """The selector's candidates it would still raise, highest salience first: not expired, out
     of cooldown, raised fewer than ``MAX_SURFACED`` times. A read - nothing is generated."""
@@ -179,9 +190,12 @@ async def pending_items(db, uid: str, now: datetime | None = None) -> list[Item]
     ) as cur:
         rows = [tuple(r) for r in await cur.fetchall()]
     items: list[Item] = []
+    commitments_live = _commitments_enforced()
     for r in rows:
         if str(r[7]) <= stamp or (r[8] and str(r[8]) > stamp) or int(r[9] or 0) >= MAX_SURFACED:
             continue
+        if str(r[1]) == "commitment" and not commitments_live:
+            continue        # the kill switch (ZOE_COMMITMENTS off | shadow) reaches sentences already queued: nothing is delivered or counted
         try:
             sal = float(r[5] or 0)
         except (TypeError, ValueError):
@@ -315,7 +329,10 @@ def second_person(text: str) -> str:
 def sentence(item: Item) -> str:
     """One item in Zoe's voice. An event is told; a loop or a moment is asked after. The hint is
     used only when it already reads as a question (the selector's default hint is an INSTRUCTION
-    to the brain, never speakable)."""
+    to the brain, never speakable). A ``commitment`` is already Zoe's own first-person sentence (``commitments.py`` wrote it in
+    the member's language: "I said I'd remind you about X and didn't - want me to now?"): spoken as stored."""
+    if item.kind == "commitment":
+        return item.text.strip()
     if item.kind == "event":
         m = _EVENT_RE.match(item.text.strip())
         if m:
