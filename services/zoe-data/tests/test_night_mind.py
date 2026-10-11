@@ -155,6 +155,23 @@ def test_a_dense_day_is_chunked_not_cut_and_every_chunk_fits_its_budget():
         assert sum(nm.est_tokens(nm._line("m99", t)) + 1 for t in c) <= cfg.chunk_budget
 
 
+
+def test_the_cap_follows_the_real_chunk_boundaries_and_counts_every_dropped_turn():
+    """Greptile on #1982: 12 short turns then 3 long ones fit the selection's token and line totals for 2 chunks, but the 12-line chunk boundary makes
+    3 chunks; cutting to the first 2 silently lost the newest turn (and ``turns_skipped_cap`` said 0). Every turn is now either in a chunk or counted."""
+    short = [nm.Turn(f"s{i}", f"Walked the dog round the block number {i}.", NOW - dt.timedelta(hours=40 - i)) for i in range(12)]
+    long_ = [nm.Turn(f"l{i}", ("The renovation is dragging on, the builder says the kitchen tiles arrive late and we argued about the budget again " * 6).strip(),
+                     NOW - dt.timedelta(hours=10 - i)) for i in range(3)]
+    turns = short + long_
+    cfg = nm.Config(ctx_tokens=8192, chunk_tokens=400, max_calls=3)
+    assert len(nm.chunk_turns(turns, cfg.chunk_budget)) > max(1, cfg.max_calls - 1)            # the day really is over the cap
+    chunks, stats = nm.pack(turns, cfg)
+    seen = [t for c in chunks for t in c]
+    assert len(chunks) <= cfg.max_calls - 1
+    assert len(seen) + stats["turns_skipped_cap"] == len(turns)                                   # nothing is lost uncounted
+    assert seen[-1].id == "l2"                                                                    # the newest selected turn reaches the model
+
+
 def test_the_old_cut_loses_the_late_turns_which_is_what_chunking_fixes(lab):
     items, late = lifemod.dense_layout(SEED, 40)
     tr = transcript([(it.text, 30 - it.day) for it in items])

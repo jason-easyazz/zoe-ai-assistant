@@ -214,8 +214,9 @@ def test_the_output_limit_follows_the_cap_and_never_drops_below_the_eight_moment
     assert nm.moment_max_tokens(1) == nm.MOMENT_MAX_TOKENS
 
 
-def test_parse_moments_honours_a_larger_cap_and_defaults_to_eight():
-    turns = [nm.Turn(f"t{i}", f"Jorunn ran {i} laps around the park today", NOW) for i in range(1, 13)]
+def test_parse_moments_keeps_what_a_reply_wrote_up_to_twice_the_ask():
+    """2026-10-10: the ask is 8 (the prompt says "at most 8"); a reply of 12 verified moments used to be cut at 8, throwing away the later lines the model had picked. Now the bound is twice the ask."""
+    turns = [nm.Turn(f"t{i}", f"Jorunn ran {i} laps around the park today", NOW) for i in range(1, 21)]
     raw = json.dumps({"moments": [moment(f"m{i}", t.text) for i, t in enumerate(turns, 1)]})
     counts = {k: 0 for k in nm.COUNT_KEYS}
-    assert len(nm.parse_moments(raw, turns, 0, counts)) == 8 and len(nm.parse_moments(raw, turns, 0, counts, 12)) == 12
+    assert len(nm.parse_moments(raw, turns[:12], 0, counts)) == 12 and len(nm.parse_moments(raw, turns, 0, counts)) == 16 and len(nm.parse_moments(raw, turns, 0, counts, 12)) == 20
