@@ -18,7 +18,9 @@ import http.server
 import os
 import shutil
 import signal
+import socket
 import stat
+import sys
 import subprocess
 import threading
 import time
@@ -181,8 +183,28 @@ def wait_for(pred, timeout=8.0, step=0.03) -> bool:
     return pred()
 
 
+def loopback_skip_reason(ci: str | None, bind=None) -> str | None:
+    """tests/AGENTS.md: a test that fails only because the sandbox has no loopback skips WITH the reason, probed at test time, and NEVER under ``CI`` (GitHub sets it on every
+    runner, the self-hosted Jetson included), where a dead loopback must fail closed. Same shape as ``loopback_required`` in test_serena_bridge_proxy.py. Returns the skip reason,
+    or None to run (always None under CI, without probing)."""
+    if ci:
+        return None
+    try:
+        if bind is not None:
+            bind()
+        else:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                probe.bind(("127.0.0.1", 0))
+    except OSError as exc:
+        return f"loopback unavailable ({exc}) - no-network sandbox; bring `lo` up (tests/AGENTS.md recipe) to run these real-socket tests"
+    return None
+
+
 @pytest.fixture
 def rig(tmp_path):
+    reason = loopback_skip_reason(os.environ.get("CI"))
+    if reason:
+        pytest.skip(reason)
     h = Health()
     r = Rig(tmp_path, h)
     yield r
@@ -410,6 +432,36 @@ def test_the_loop_only_ever_runs_the_single_drop_caches_command(rig):
     rig.kill_loop()
     lines = [ln for ln in rig.sudo_log.read_text().splitlines() if ln.strip()]
     assert set(lines) <= {"-n true", "-n sh -c echo 1 > /proc/sys/vm/drop_caches"}
+
+
+# ── no loopback in the sandbox: skip with a reason locally, fail closed under CI (tests/AGENTS.md) ──
+
+def _denied():
+    raise PermissionError(1, "Operation not permitted")
+
+
+def test_a_sandbox_without_loopback_skips_with_the_reason_but_never_under_ci():
+    reason = loopback_skip_reason(None, bind=_denied)
+    assert reason and "loopback unavailable" in reason and "Operation not permitted" in reason
+    assert loopback_skip_reason("1", bind=_denied) is None            # CI: no probe, no skip -> the fixture goes on and the real failure shows
+    assert loopback_skip_reason(None, bind=lambda: None) is None      # a working loopback runs the tests
+
+
+@pytest.mark.skipif(not shutil.which("unshare"), reason="needs unshare")
+def test_in_a_real_no_network_namespace_the_rig_tests_skip_locally_and_fail_under_ci():
+    """The end-to-end control: `unshare -rn` WITHOUT `ip link set lo up` (the recipe in tests/AGENTS.md, minus the last step) makes the loopback bind fail for real."""
+    probe = subprocess.run(["unshare", "-rn", "--map-root-user", sys.executable, "-c", "import socket; s=socket.socket(); s.bind(('127.0.0.1',0))"], capture_output=True, text=True)
+    if probe.returncode == 0:
+        pytest.skip("this sandbox cannot create a no-loopback network namespace")
+    target = f"{__file__}::test_the_helper_returns_at_once_after_one_synchronous_drop_and_leaves_a_detached_loop"
+    base = [k for k in os.environ if k != "CI"]
+    env = {k: os.environ[k] for k in base}
+    cmd = ["unshare", "-rn", "--map-root-user", sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", target]
+    local = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=120, cwd=REPO)
+    assert "1 skipped" in local.stdout and local.returncode == 0, local.stdout[-800:]
+    assert "loopback unavailable" in subprocess.run(cmd + ["-rs"], env=env, capture_output=True, text=True, timeout=120, cwd=REPO).stdout
+    ci = subprocess.run(cmd, env={**env, "CI": "true"}, capture_output=True, text=True, timeout=120, cwd=REPO)
+    assert ci.returncode != 0 and "1 skipped" not in ci.stdout, ci.stdout[-800:]       # under CI the same dead loopback is a FAILURE
 
 
 # ── the unit wiring ──────────────────────────────────────────────────────────
