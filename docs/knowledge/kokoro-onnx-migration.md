@@ -117,17 +117,74 @@ These commands only work from a checkout of `feat/b5-1-kokoro-onnx` (the scripts
 `main`):
 
 ```bash
-scripts/setup/install_kokoro_onnx.sh                      # venv + models; no service touched
-# candidate on a parallel port with a scratch phrase cache (never ~/.zoe/kokoro_cache):
-(cd scripts/setup && env -u PYTHONPATH ZOE_KOKORO_BACKEND=onnx KOKORO_SIDECAR_PORT=10202 \
-   ZOE_KOKORO_CACHE_DIR=/tmp/kokoro-onnx-cache ~/.venvs/kokoro-onnx/bin/python kokoro_sidecar.py) &
+scripts/setup/install_kokoro_onnx.sh                      # venv + models; no CUDA, no service touched
+
+# Everything that starts or uses the second CUDA process runs inside ONE lock: memory gate,
+# capped candidate, both captures, measure_tts, watchdog, cleanup. Nothing is left running
+# between steps, and nothing CUDA-related happens outside the lock.
+REPLIES=/path/to/20-synthetic-lines.txt                   # synthetic text only
+export REPLIES
+flock /tmp/zoe-voice-harness.lock bash <<'EOF'
+set -u
 P=scripts/perf/kokoro_ab_compare.py
-flock /tmp/zoe-voice-harness.lock python3 $P --capture http://127.0.0.1:10201 --tag pytorch
-flock /tmp/zoe-voice-harness.lock python3 $P --capture http://127.0.0.1:10202 --tag onnx
-python3 $P --compare pytorch onnx --json ~/.cache/zoe/kokoro-ab/compare.json
+UNIT=kokoro-onnx-cand
+avail_mib() { awk '/^MemAvailable:/ {print int($2 / 1024)}' /proc/meminfo; }
+
+# Gate 1: headroom. Refuse (start nothing) at or below 2 GB MemAvailable.
+[ "$(avail_mib)" -gt 2048 ] || { echo "refusing: MemAvailable $(avail_mib) MiB <= 2048"; exit 1; }
+
+# Gate 2: the live sidecar is up >= 90 s with its pipeline loaded, so two CUDA inits never overlap.
+curl -fsS http://127.0.0.1:10201/health | grep -Eq '"pipeline_loaded": *true' \
+  || { echo "refusing: live kokoro-tts not healthy"; exit 1; }
+started=$(systemctl --user show kokoro-tts -p ActiveEnterTimestampMonotonic --value)
+up_s=$(awk -v s="$started" '{print int($1 - s / 1000000)}' /proc/uptime)
+[ "$up_s" -ge 90 ] || { echo "refusing: live kokoro-tts up only ${up_s}s"; exit 1; }
+
+# Cleanup on ANY exit (success, failure, Ctrl-C, watchdog kill): no orphan CUDA process.
+WD=""
+cleanup() {
+  [ -n "$WD" ] && kill "$WD" 2>/dev/null
+  systemctl --user kill --signal=SIGKILL "$UNIT.scope" 2>/dev/null
+  systemctl --user stop "$UNIT.scope" 2>/dev/null
+}
+trap cleanup EXIT INT TERM
+
+# Candidate: capped scope (hard memory ceiling, no swap), parallel port, scratch phrase cache
+# (never ~/.zoe/kokoro_cache).
+ROOT=$PWD
+systemd-run --user --scope --unit="$UNIT" -p MemoryMax=2500M -p MemorySwapMax=0 \
+  bash -c 'cd "$1/scripts/setup" && exec env -u PYTHONPATH ZOE_KOKORO_BACKEND=onnx \
+    KOKORO_SIDECAR_PORT=10202 ZOE_KOKORO_CACHE_DIR=/tmp/kokoro-onnx-cache \
+    ~/.venvs/kokoro-onnx/bin/python kokoro_sidecar.py' _ "$ROOT" &
+
+# Watchdog: SIGKILL the candidate if MemAvailable drops below 600 MiB, or after 15 minutes total.
+(
+  deadline=$((SECONDS + 900))
+  while sleep 1; do
+    if [ "$(avail_mib)" -lt 600 ] || [ "$SECONDS" -ge "$deadline" ]; then
+      echo "watchdog: killing candidate" >&2
+      systemctl --user kill --signal=SIGKILL "$UNIT.scope"
+      exit 0
+    fi
+  done
+) &
+WD=$!
+
+# Wait for the candidate (bounded), then measure while it is the only second CUDA process.
+for _ in $(seq 1 120); do
+  curl -fsS http://127.0.0.1:10202/health 2>/dev/null | grep -Eq '"pipeline_loaded": *true' && break
+  sleep 2
+done
+curl -fsS http://127.0.0.1:10202/health >/dev/null || { echo "candidate never became healthy"; exit 1; }
+
+python3 $P --capture http://127.0.0.1:10201 --tag pytorch
+python3 $P --capture http://127.0.0.1:10202 --tag onnx
 ZOE_PERF=1 ZOE_KOKORO_SIDECAR_URL=http://127.0.0.1:10202 \
-  python3 scripts/perf/measure_tts.py --replies-file <20 synthetic lines>
-sudo cat /sys/kernel/debug/nvmap/iovmm/clients              # per-process GPU memory (read-only)
+  python3 scripts/perf/measure_tts.py --replies-file "$REPLIES"
+sudo -n cat /sys/kernel/debug/nvmap/iovmm/clients || true   # per-process GPU memory (read-only)
+EOF
+# Pure file work, no CUDA: safe outside the lock, after the candidate is gone.
+python3 scripts/perf/kokoro_ab_compare.py --compare pytorch onnx --json ~/.cache/zoe/kokoro-ab/compare.json
 ```
 
 `measure_tts.py` posts to `/synthesize`, so against the live sidecar it leaves its synthetic
