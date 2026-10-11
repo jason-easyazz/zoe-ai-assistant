@@ -9,6 +9,7 @@ a wrong id order must make the equality assertion fail.
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -79,3 +80,20 @@ def test_refuses_out_of_range_and_non_assistant(tmp_path):
     ns = type("A", (), {"draft_gguf": str(src), "ids": str(ids_file), "out": str(tmp_path / "o.gguf")})
     with pytest.raises(SystemExit):
         mod.cmd_build(ns)
+
+
+def test_refuses_to_write_over_its_own_input(tmp_path):
+    mod = _load()
+    src, ids_file = tmp_path / "draft.gguf", tmp_path / "ids.txt"
+    _write_draft(src)
+    before = src.read_bytes()
+    ids_file.write_text("1\n2\n3\n")
+    sym, hard = tmp_path / "sym.gguf", tmp_path / "hard.gguf"
+    sym.symlink_to(src)
+    os.link(src, hard)
+    for out in (src, sym, hard):
+        ns = type("A", (), {"draft_gguf": str(src), "ids": str(ids_file), "out": str(out)})
+        with pytest.raises(SystemExit) as e:
+            mod.cmd_build(ns)
+        assert "same file" in str(e.value)
+    assert src.read_bytes() == before                        # input untouched

@@ -23,26 +23,43 @@ if [ "$avail_kb" -lt 3300000 ]; then
   echo "ABORT (brain NOT stopped): MemAvailable ${avail_kb} kB < 3.3 GB; retry when other benches/Kokoro loads are done" | tee -a "$OUT/window.log"
   exit 3
 fi
+RC=0        # exit status of the whole window: the bench's own status, or non-zero if the brain could not be restored
+RESTORED=0
 restore() {
+  [ "$RESTORED" = 1 ] && return
+  RESTORED=1
+  trap '' INT TERM HUP
   echo "RESTORE start $(date -Is)" | tee -a "$OUT/window.log"
   pkill -f "llama-server .*--port 11435" 2>/dev/null
   sleep 2
   # A cold start can fail with NvMap error 12 / cudaMalloc OOM while the page cache is full (three times on
   # 2026-10-10): drop the cache (passwordless sudo if present, else skipped) and retry up to 4 starts.
+  healthy=0
   for attempt in 1 2 3 4; do
     sudo -n sh -c 'sync; echo 1 > /proc/sys/vm/drop_caches' 2>/dev/null || true
     systemctl --user reset-failed llama-server 2>/dev/null
     systemctl --user start llama-server
     for i in $(seq 1 60); do
-      if curl -sf -m 3 http://127.0.0.1:11434/health >/dev/null; then echo "BRAIN_HEALTHY $(date -Is) start ${attempt} after ${i} polls" | tee -a "$OUT/window.log"; break 2; fi
+      if curl -sf -m 3 http://127.0.0.1:11434/health >/dev/null; then echo "BRAIN_HEALTHY $(date -Is) start ${attempt} after ${i} polls" | tee -a "$OUT/window.log"; healthy=1; break 2; fi
       sleep 2
     done
     echo "BRAIN_START_RETRY ${attempt} $(date -Is)" | tee -a "$OUT/window.log"
   done
-  systemctl --user stop zoe-mtp-trim-brain-restart.timer 2>/dev/null
+  if [ "$healthy" = 1 ]; then
+    # cancel the dead-man switch ONLY once the brain is verifiably back
+    systemctl --user stop zoe-mtp-trim-brain-restart.timer 2>/dev/null
+  else
+    # leave the timer ARMED (it keeps trying to start the brain) and make the failure impossible to miss
+    echo "!!! WINDOW FAILED $(date -Is): BRAIN NOT HEALTHY after 4 start attempts; dead-man timer zoe-mtp-trim-brain-restart LEFT ARMED !!!" | tee -a "$OUT/window.log" >&2
+    RC=1
+  fi
   echo "zoe-data /health: $(curl -s -o /dev/null -w '%{http_code}' -m 5 http://127.0.0.1:8000/health)" | tee -a "$OUT/window.log"
+  exit "$RC"
 }
-trap restore EXIT INT TERM HUP
+trap restore EXIT
+trap 'RC=130; exit' INT
+trap 'RC=143; exit' TERM
+trap 'RC=129; exit' HUP
 # Dead-man switch: restart the brain even if this shell is SIGKILLed (the bench is capped at 1000 s).
 systemd-run --user --quiet --unit=zoe-mtp-trim-brain-restart --on-active=1300s systemctl --user start llama-server || true
 echo "MemAvailable before: $avail_kb kB" | tee -a "$OUT/window.log"
@@ -58,4 +75,5 @@ timeout 1000 python3 "$HERE/mtp_vocab_trim_ab.py" --slim --out "$OUT/bench.json"
   --arm "stockA2=$STOCK/llama-server|$STOCK|$FULL" \
   --arm "NCprefix16k=$PATCHED_BIN|$PATCHED_LIBS|$D2T_PREFIX" \
   2>&1 | tee -a "$OUT/bench.log"
-echo "BENCH_END $(date -Is)" | tee -a "$OUT/window.log"
+RC=${PIPESTATUS[0]}   # the bench's status (timeout=124), not tee's
+echo "BENCH_END $(date -Is) rc=${RC}" | tee -a "$OUT/window.log"

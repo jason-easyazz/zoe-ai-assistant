@@ -320,8 +320,16 @@ async def time_first_sound(stream, rr, vt, fs, *, t_post: float, t_kw: float) ->
                 failed.append("first_unit")
         if DRAIN["on"]:
             async for delta in stream:
-                if delta and not delta.startswith(vt._VOICE_TOOL_SENTINEL_PREFIXES):
-                    seen += delta
+                if not delta:
+                    continue
+                if delta.startswith(vt._VOICE_TOOL_SENTINEL_PREFIXES):
+                    # tool markers after the first speakable unit still count (path / tool_sentinel_s); no sound timestamp moves
+                    name = vt._voice_tool_name_from_sentinel(delta)
+                    t_tool = t_tool or (time.monotonic() if delta.startswith("__TOOL__:") else None)
+                    if name and name not in tools:
+                        tools.append(name)
+                    continue
+                seen += delta
     finally:
         await close_stream(stream)
     payload_at = _TIMERS.get("@payload")

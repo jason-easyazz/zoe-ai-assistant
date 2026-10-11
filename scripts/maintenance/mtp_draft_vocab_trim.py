@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import collections
 import json
+import os
 import sys
 import urllib.request
 from pathlib import Path
@@ -99,6 +100,11 @@ def cmd_coverage(a: argparse.Namespace) -> None:
 
 def cmd_build(a: argparse.Namespace) -> None:
     ids = np.array(sorted({int(x) for x in Path(a.ids).read_text().split()}), dtype=np.int64)
+    # Refuse BEFORE the writer truncates --out: the reader memory-maps the input, so writing over it (same path,
+    # symlink, or hard link) would destroy the source mid-read.
+    if os.path.realpath(a.out) == os.path.realpath(a.draft_gguf) or (
+            os.path.exists(a.out) and os.path.samefile(a.out, a.draft_gguf)):
+        sys.exit("--out is the same file as --draft-gguf; refusing to overwrite the input")
     r = gguf.GGUFReader(a.draft_gguf, "r")
     arch = r.fields["general.architecture"].contents()
     if arch != "gemma4-assistant":

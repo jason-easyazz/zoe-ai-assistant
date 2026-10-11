@@ -382,6 +382,7 @@ def run_arm(name: str, out: Path, wl: dict, a) -> dict:
                 eng.begin(wl["system"])
                 for ti, u in enumerate(c["turns"]):
                     if guard.tripped or eng.proc.poll() is not None: raise RuntimeError("engine died / OOM guard tripped")
+                    if WINDOW_EXPIRED.is_set(): raise RuntimeError("window hard deadline reached (dead-man timer is about to fire)")
                     r = eng.turn(u); r.update(arm=name, pass_=p, conv=c["id"], cls=c["cls"], turn=ti + 1, user_tokens=c["turn_tokens"][ti])
                     rows.append(r)
                 eng.end_conv()
@@ -394,6 +395,26 @@ def run_arm(name: str, out: Path, wl: dict, a) -> dict:
             "mem": mem, "gpu_hz_start": gpu0, "gpu_hz_end": gpu1, "tripped": guard.tripped}
     (adir / "rows.json").write_text(json.dumps(rows)); (adir / "meta.json").write_text(json.dumps(meta, indent=1))
     return meta
+
+
+WINDOW_EXPIRED = threading.Event()
+DEADMAN_MARGIN_S = 300      # the dead-man timer fires budget+this after the window starts
+HARD_DEADLINE_MARGIN_S = 120   # we stop the bench child this long before the timer, so it never overlaps the live brain's start
+
+
+def _kill_bench_children() -> None:
+    subprocess.run(["pkill", "-f", "^[^ ]*run-cuda-i8 -m"], check=False)
+    subprocess.run(["pkill", "-f", f"^[^ ]*llama-server .*--port {BENCH_PORT}"], check=False)
+
+
+def _hard_deadline_watch(seconds: float) -> threading.Timer:
+    """Fires INSIDE a running arm (or its model load): flag the window expired and kill the bench engines, so the dead-man
+    restart can never start the live brain while a bench model still holds GPU memory."""
+    def fire():
+        WINDOW_EXPIRED.set()
+        _kill_bench_children()
+    t = threading.Timer(max(seconds, 0), fire); t.daemon = True; t.start()
+    return t
 
 
 def brain_health() -> bool:
@@ -413,10 +434,11 @@ def cmd_window(a) -> None:
     log = lambda m: print(time.strftime("%H:%M:%S"), m, flush=True)
     t_start = time.time(); log("WINDOW START: stopping llama-server (brain)")
     # dead-man switch: restart the brain even if this process is SIGKILLed
-    subprocess.run(["systemd-run", "--user", "--quiet", "--unit=zoe-bench-brain-restart", f"--on-active={int(a.budget_min * 60 + 300)}s",
+    subprocess.run(["systemd-run", "--user", "--quiet", "--unit=zoe-bench-brain-restart", f"--on-active={int(a.budget_min * 60 + DEADMAN_MARGIN_S)}s",
                     "systemctl", "--user", "start", "llama-server"], check=False)
     for s in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(s, _raise_interrupt)
+    watch = _hard_deadline_watch(a.budget_min * 60 + DEADMAN_MARGIN_S - HARD_DEADLINE_MARGIN_S)
     try:
         subprocess.run(["systemctl", "--user", "stop", "llama-server"], check=True, timeout=120)
         time.sleep(4)
@@ -424,7 +446,7 @@ def cmd_window(a) -> None:
             raise RuntimeError("brain still/again running; refusing to load a second E4B")
         log(f"brain stopped; MemAvailable={meminfo() // 1024} MB")
         for arm in a.arms.split(","):
-            if (time.time() - t_start) / 60 > a.budget_min - a.arm_min:
+            if WINDOW_EXPIRED.is_set() or (time.time() - t_start) / 60 > a.budget_min - a.arm_min:
                 log(f"SKIP {arm}: window budget exhausted"); continue
             if meminfo() < a.min_free_kb: log(f"SKIP {arm}: MemAvailable {meminfo() // 1024} MB too low"); continue
             log(f"ARM {arm} ...")
@@ -435,19 +457,25 @@ def cmd_window(a) -> None:
                 subprocess.run(["pkill", "-f", "^[^ ]*run-cuda-i8 -m"], check=False)
                 subprocess.run(["pkill", "-f", f"^[^ ]*llama-server .*--port {BENCH_PORT}"], check=False); time.sleep(3)
     finally:
+        watch.cancel()
         log("restoring brain")
-        subprocess.run(["pkill", "-f", "^[^ ]*run-cuda-i8 -m"], check=False)
-        subprocess.run(["pkill", "-f", f"^[^ ]*llama-server .*--port {BENCH_PORT}"], check=False)
+        _kill_bench_children()
         time.sleep(3)
         dl = DropLoop(); dl.start()
+        healthy = False
         for attempt in range(4):                      # NvMap can refuse the first tries; keep dropping the cache
             subprocess.run(["systemctl", "--user", "start", "llama-server"], check=False, timeout=400)
-            if brain_health(): break
+            if brain_health(): healthy = True; break
             log(f"brain not healthy after start attempt {attempt + 1}; retrying")
             subprocess.run(["systemctl", "--user", "stop", "llama-server"], check=False, timeout=60)
         dl.ev.set()
-        subprocess.run(["systemctl", "--user", "stop", "zoe-bench-brain-restart.timer"], check=False, capture_output=True)
-        log(f"WINDOW END: brain /health ok={brain_health()}; downtime {(time.time() - t_start) / 60:.1f} min")
+        if healthy:   # cancel the dead-man switch ONLY once the brain is verifiably back
+            subprocess.run(["systemctl", "--user", "stop", "zoe-bench-brain-restart.timer"], check=False, capture_output=True)
+            log(f"WINDOW END: brain /health ok=True; downtime {(time.time() - t_start) / 60:.1f} min")
+        else:         # leave the timer ARMED: it keeps retrying the start; make the failure impossible to miss
+            log("!!! WINDOW FAILED: BRAIN IS NOT HEALTHY after 4 restart attempts; dead-man timer zoe-bench-brain-restart LEFT ARMED !!!")
+            print("!!! BRAIN DOWN - restore llama-server by hand (systemctl --user start llama-server) !!!", file=sys.stderr, flush=True)
+            sys.exit(1)
 
 
 # ---------------------------------------------------------------- summarize -------------------------

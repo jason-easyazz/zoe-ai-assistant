@@ -19,12 +19,27 @@ import urllib.request
 if os.environ.get("ZOE_PERF") != "1":
     print("ZOE_PERF!=1 - skipping (this probe loads a second Kokoro).")
     sys.exit(0)
-try:  # a live sidecar holds ~2.3 GB; a second load can OOM the running brain
-    urllib.request.urlopen("http://127.0.0.1:10201/health", timeout=2)
-    print("kokoro sidecar is UP on :10201 - refusing to load a second Kokoro. Stop it inside the lock first.")
+import subprocess
+
+
+def _sidecar_state() -> str:
+    """'up' if :10201/health answers, else the `systemctl --user is-active kokoro-tts` word ('unknown' if it cannot be read)."""
+    try:
+        urllib.request.urlopen(os.environ.get("KOKORO_PROBE_HEALTH_URL", "http://127.0.0.1:10201/health"), timeout=2)
+        return "up"
+    except Exception:
+        pass   # an unreachable /health is NOT proof the service is stopped (loading, wedged, or just slow)
+    try:
+        r = subprocess.run(["systemctl", "--user", "is-active", "kokoro-tts"], capture_output=True, text=True, timeout=10)
+        return r.stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
+_state = _sidecar_state()
+if _state != "inactive":   # a live (or loading) sidecar holds ~2.3 GB; a second load can OOM the running brain
+    print(f"kokoro sidecar state is {_state!r} (need 'inactive') - refusing to load a second Kokoro. Stop it inside the lock first.")
     sys.exit(2)
-except Exception:
-    pass
 import os, sys, json, time, random, statistics as st, threading, urllib.request, wave, struct
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "backend:cudaMallocAsync")
 import torch
@@ -52,12 +67,17 @@ LL = "http://127.0.0.1:11434"
 stop = threading.Event()
 
 
+LOAD = {"ok": 0, "fail": 0}
+
+
 def load():
     while not stop.is_set():
         try:
             r = urllib.request.Request(LL + "/completion", json.dumps({"prompt": "Write a long story about a lighthouse keeper.", "n_predict": 200, "temperature": 0.7, "cache_prompt": True}).encode(), {"Content-Type": "application/json"})
             urllib.request.urlopen(r, timeout=60).read()
+            LOAD["ok"] += 1
         except Exception:
+            LOAD["fail"] += 1
             time.sleep(1)
 
 
@@ -357,8 +377,16 @@ for k, text in TEXTS.items():
     wavwrite(f"{WAVDIR}/{k}w_neg_C0.wav", win0)
 
 # ---------------------------------------------------------------- 3. under concurrent llama decode
-th = threading.Thread(target=load, daemon=True); th.start(); time.sleep(3)
+th = threading.Thread(target=load, daemon=True); th.start()
+_t0 = time.time()
+while LOAD["ok"] < 1 and time.time() - _t0 < 120:   # the "decode" label is only true once the brain is really decoding
+    time.sleep(0.5)
+if LOAD["ok"] < 1:
+    stop.set()
+    emit(exp="aborted", reason="load worker never completed a brain request", **LOAD)
+    sys.exit(3)
 stage_profile("decode")
 lever_ab("decode")
 stop.set(); th.join(timeout=70)
+emit(exp="load_worker", load_degraded=LOAD["fail"] > 0, **LOAD)   # fail>0: some "decode" samples may have had no concurrent load
 emit(exp="done")
