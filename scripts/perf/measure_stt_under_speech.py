@@ -85,7 +85,8 @@ def run_session(model, audio, paced: bool) -> dict:
         return st
 
     step = int(16000 * BATCH_S)
-    sess = ss.SttStreamSession("a" * 16, make, threading.Lock())
+    lock = threading.Lock()  # ONE lock for the stream worker and the batch retry, like _moonshine_infer_lock live
+    sess = ss.SttStreamSession("a" * 16, make, lock)
     t0 = time.monotonic()
     seq = 0
     for i in range(0, len(audio), step):
@@ -105,7 +106,11 @@ def run_session(model, audio, paced: bool) -> dict:
     text = " ".join(ln for ln in (lines or []) if ln).strip()
     fallback = not text
     if fallback:
-        _, text = run_batch(model, audio)
+        try:  # production's retry: waits behind a still-running worker via infer_guard (bounded when stalled)
+            with ss.infer_guard(lock):
+                _, text = run_batch(model, audio)
+        except TimeoutError:
+            text, reason = "", reason + "+batch_stalled"
     done = time.monotonic()
     return {"after_last_s": done - last_arrival, "reason": reason, "text": text, "fallback": fallback}
 
