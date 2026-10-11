@@ -753,6 +753,35 @@ def test_a_promise_whose_subject_was_forgotten_is_never_stored_or_acted_on(env, 
         memory_tombstones.clear_all()
 
 
+def test_the_forgotten_name_check_never_runs_while_a_connection_is_borrowed(env, monkeypatch):
+    """The durable ledger borrows its own connection from the same pool: asked while a write connection is held, concurrent writers
+    could fill the pool and wait on each other. Break it (ask inside the ``async with``) and this goes red."""
+    import memory_forgotten
+    monkeypatch.setenv(cm.ENV, "enforce")
+    open_now = {"n": 0, "asked_while_open": 0, "asked": 0}
+    real = db_compat.get_compat_db
+
+    @contextlib.asynccontextmanager
+    async def counted():
+        open_now["n"] += 1
+        try:
+            async with real() as db:
+                yield db
+        finally:
+            open_now["n"] -= 1
+
+    async def matches(user_id, text, *, near=False):
+        open_now["asked"] += 1
+        open_now["asked_while_open"] += int(open_now["n"] > 0)
+        return False
+
+    monkeypatch.setattr(db_compat, "get_compat_db", counted)
+    monkeypatch.setattr(memory_forgotten, "matches", matches)
+    promise(env, "I'll remind you at 5 to call Marisol.")
+    assert sweep(DUE_5 + timedelta(minutes=3))
+    assert open_now["asked"] >= 2 and open_now["asked_while_open"] == 0
+
+
 def test_a_reminder_about_something_else_does_not_keep_the_promise(env, monkeypatch):
     monkeypatch.setenv(cm.ENV, "enforce")
     promise(env)                                                   # the dentist, at 5

@@ -147,7 +147,9 @@ def rig(env: dict):
     """A throwaway database (the real migrations), ``db_compat`` pointed at it, the environment set, everything restored after."""
     import db_compat
     import commitments
+    import memory_forgotten
     import memory_provenance as mp
+    import memory_tombstones
     import proactive.triggers.reminder_scan as reminder_scan
     import proactive.triggers.reminders as reminder_scheduler
     import reply_ledger
@@ -192,6 +194,8 @@ def rig(env: dict):
         reminder_scan._ZOE_TZ = zoneinfo.ZoneInfo("UTC")
         mp.reset()
         user_erase_gate.reset()
+        memory_forgotten.set_backend(memory_forgotten.MemoryBackend())     # the forgotten-name check must not reach a real pool or a prior run's names
+        memory_tombstones.clear_all()
         saved_globals = {(m, n): getattr(m, n) for m, n in ((reply_ledger, "_pending"), (reply_ledger, "_last_purge"),
                                                             (commitments, "_pending"), (commitments, "_last_purge"))}
         reply_ledger._pending, reply_ledger._last_purge = set(), 0.0
@@ -206,6 +210,8 @@ def rig(env: dict):
                 setattr(mod, name, value)
             user_erase_gate.reset()
             mp.reset()
+            memory_forgotten.set_backend(None)      # restores the Postgres default and drops the cache / overlay / backoff state
+            memory_tombstones.clear_all()
             for k, v in saved_env.items():
                 if v is None:
                     os.environ.pop(k, None)

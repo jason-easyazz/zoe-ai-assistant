@@ -488,11 +488,16 @@ async def record(user_id: str, session_id: str, reply_id: str, promises: Sequenc
             if not live:
                 logger.info("COMMITMENT mode=%s event=dropped reason=erased_since_scheduled", md)
                 return 0
+            keep = []
+            for p in promises:      # asked BEFORE a connection is borrowed: the forgotten-name check may borrow its own from the same pool
+                if await _names_forgotten(user_id, p.about):
+                    logger.info("COMMITMENT mode=%s event=dropped reason=forgotten_subject", md)
+                    continue
+                keep.append(p)
+            if not keep:
+                return 0
             async with get_compat_db() as db:
-                for p in promises:
-                    if await _names_forgotten(user_id, p.about):
-                        logger.info("COMMITMENT mode=%s event=dropped reason=forgotten_subject", md)
-                        continue
+                for p in keep:
                     cid = uuid.uuid4().hex
                     cur = await db.execute(
                         "INSERT INTO commitments (id, user_id, session_id, reply_id, kind, due_at, about, lang, tools, status, created_at) "
@@ -698,8 +703,9 @@ async def sweep(*, now: Optional[datetime] = None) -> dict:
             async with erase_gate.writing(uid, seen.get(uid, 0)) as live:
                 if not live:
                     continue
+                forgotten = await _names_forgotten(uid, str(r["about"] or ""))     # asked BEFORE a connection is borrowed (it may borrow its own)
                 async with get_compat_db() as db:
-                    verdict = await _sweep_row(db, md, mp, r, stamp, claim_before, now)
+                    verdict = await _sweep_row(db, md, mp, r, stamp, claim_before, now, forgotten)
             if verdict:
                 kind = str(r["kind"])
                 counts[verdict] = counts.get(verdict, 0) + 1
@@ -716,9 +722,10 @@ async def sweep(*, now: Optional[datetime] = None) -> dict:
     return counts
 
 
-async def _sweep_row(db, md: str, mp, r, stamp: str, claim_before: str, now: datetime) -> str:
-    """Claim one due promise and run its check. The verdict ('' = nothing to count: lost the claim, still waiting, or failed and will be
-    retried). Never raises: a bad row never stops the sweep."""
+async def _sweep_row(db, md: str, mp, r, stamp: str, claim_before: str, now: datetime, forgotten: bool = False) -> str:
+    """Claim one due promise and run its check. ``forgotten`` = its subject names a forgotten entity (asked by the caller before the
+    connection was borrowed). The verdict ('' = nothing to count: lost the claim, still waiting, or failed and will be retried).
+    Never raises: a bad row never stops the sweep."""
     cid, uid, kind, status = str(r["id"]), str(r["user_id"]), str(r["kind"]), str(r["status"])
     due = _parse_iso(r["due_at"]) or now
     created = _parse_iso(r["created_at"]) or due
@@ -732,7 +739,7 @@ async def _sweep_row(db, md: str, mp, r, stamp: str, claim_before: str, now: dat
         if not mp.is_tracked(uid):
             await _close(db, cid, "void", "untracked", now)
             verdict = "void"
-        elif await _names_forgotten(uid, str(r["about"] or "")):      # the subject was forgotten since the promise: never act on it
+        elif forgotten:      # the subject was forgotten since the promise: never act on it
             await _drop(db, uid, cid)
             verdict = "forgotten"
         elif status == "owned":
