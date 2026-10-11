@@ -8,6 +8,7 @@ sessions are bounded (count, audio length, idle TTL).
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import queue
 import re
@@ -24,6 +25,9 @@ _ID_RE = re.compile(r"^[0-9a-f]{8,64}$")
 MAX_SESSIONS = 2
 MAX_SAMPLES = 30 * SAMPLE_RATE  # the daemon's record cap is 12 s; 30 s is a hard ceiling, not a target
 IDLE_TTL_S = 30.0
+MAX_QUEUE = 512  # queued, not-yet-fed chunks; the daemon sends ~0.32 s chunks, so this is minutes of backlog
+OPEN_WAIT_S = 10.0  # a concurrent chunk for an id whose stream is still being created waits this long
+STALL_LOCK_WAIT_S = 5.0  # batch STT's wait behind a stalled stream's worker before giving up
 
 
 def stream_under_speech_enabled() -> bool:
@@ -63,7 +67,14 @@ class SttStreamSession:
 
         try:
             while True:
-                item = self._q.get()
+                try:
+                    item = self._q.get(timeout=IDLE_TTL_S)
+                except queue.Empty:
+                    if time.monotonic() - self.touched < IDLE_TTL_S:
+                        continue
+                    self.broken = "idle"  # abandoned: no feed/finish within the TTL -> release the model stream
+                    _deregister(self)
+                    return
                 if item is None:  # finish
                     with self._lock:
                         res = self._stream.stop()
@@ -78,6 +89,7 @@ class SttStreamSession:
             self.broken = f"engine:{exc.__class__.__name__}"
             logger.warning("STT_STREAM worker failed (%s) - turn will use batch STT", exc)
         finally:
+            _stalled.discard(self)
             self._close_stream()
             self._done.set()
 
@@ -93,10 +105,13 @@ class SttStreamSession:
     # -- API --------------------------------------------------------------------------------------------------
     def feed(self, seq: int, pcm: bytes) -> bool:
         """Queue one PCM16-LE chunk. Out-of-order / oversize / odd-length input breaks the session (batch fallback)."""
+        if not pcm:  # an empty chunk carries no audio: it must not advance seq, refresh idle or bypass the bounds
+            return False
         self.touched = time.monotonic()
         if self.broken or self._done.is_set():
             return False
-        if seq != self.next_seq or len(pcm) % 2 or self.samples_fed + len(pcm) // 2 > MAX_SAMPLES:
+        if (seq != self.next_seq or len(pcm) % 2 or self.samples_fed + len(pcm) // 2 > MAX_SAMPLES
+                or self._q.qsize() >= MAX_QUEUE):
             self.broken = "bad_chunk"
             self._q.put(False)
             return False
@@ -115,6 +130,7 @@ class SttStreamSession:
         self._q.put(None)
         if not self._done.wait(timeout_s):
             self.broken = "timeout"
+            _stalled.add(self)  # the worker may still hold the shared infer lock inside stop(); batch STT must not wait forever
             return None, "timeout"
         if self.broken or self._lines is None:
             return None, self.broken or "no_result"
@@ -126,7 +142,15 @@ class SttStreamSession:
 
 
 _sessions: dict[str, SttStreamSession] = {}
+_pending: dict[str, threading.Event] = {}  # ids whose stream is being created OUTSIDE the registry lock
+_stalled: set = set()  # sessions that timed out in finish() and whose worker is still running
 _registry_lock = threading.Lock()
+
+
+def _deregister(sess: SttStreamSession) -> None:
+    with _registry_lock:
+        if _sessions.get(sess.stream_id) is sess:
+            _sessions.pop(sess.stream_id, None)
 
 
 def _reap_locked(now: float) -> None:
@@ -138,18 +162,55 @@ def _reap_locked(now: float) -> None:
 
 def get_or_open(stream_id: str, seq: int, make_stream: Callable[[], object],
                 infer_lock: threading.Lock) -> Optional[SttStreamSession]:
-    """Existing session, or a new one iff ``seq == 0`` and the bound allows. None -> refuse (daemon latches off)."""
+    """Existing session, or a new one iff ``seq == 0`` and the bound allows. None -> refuse (daemon latches off).
+
+    The (slow) model stream is created OUTSIDE ``_registry_lock``: the slot is reserved under the lock, the stream built
+    without it, then published (or the reservation dropped on failure) - so ``take()`` never waits on a model load.
+    """
     now = time.monotonic()
     with _registry_lock:
         _reap_locked(now)
         sess = _sessions.get(stream_id)
         if sess is not None:
             return sess
-        if seq != 0 or len(_sessions) >= MAX_SESSIONS:
-            return None
+        ev = _pending.get(stream_id)
+        owner = ev is None
+        if owner:
+            if seq != 0 or len(_sessions) + len(_pending) >= MAX_SESSIONS:
+                return None
+            ev = _pending[stream_id] = threading.Event()
+    if not owner:  # another chunk of this id is mid-creation: wait for it (outside the lock), bounded
+        ev.wait(OPEN_WAIT_S)
+        with _registry_lock:
+            return _sessions.get(stream_id)
+    sess = None
+    try:
         sess = SttStreamSession(stream_id, make_stream, infer_lock)
-        _sessions[stream_id] = sess
         return sess
+    finally:
+        with _registry_lock:
+            _pending.pop(stream_id, None)
+            if sess is not None:
+                _sessions[stream_id] = sess
+        ev.set()
+
+
+@contextlib.contextmanager
+def infer_guard(lock: threading.Lock):
+    """Batch STT's acquire of the shared Moonshine lock. Identical to ``with lock`` unless a stream timed out in
+    finish() and its worker is still inside stop() holding the lock: then the wait is bounded (``TimeoutError``)."""
+    stall_seen = None
+    while not lock.acquire(timeout=0.25):
+        if _stalled:
+            stall_seen = stall_seen or time.monotonic()
+            if time.monotonic() - stall_seen >= STALL_LOCK_WAIT_S:
+                raise TimeoutError("moonshine infer lock held by a stalled STT stream")
+        else:
+            stall_seen = None
+    try:
+        yield
+    finally:
+        lock.release()
 
 
 def take(stream_id: str) -> Optional[SttStreamSession]:

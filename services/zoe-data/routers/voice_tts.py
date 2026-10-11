@@ -2701,7 +2701,7 @@ async def _run_moonshine(wav_path: str) -> str:
             # empty_transcript handling re-prompts).
             logger.warning("Moonshine: unusable sample rate %r for %s — skipping clip", sr, wav_path)
             return ""
-        with _moonshine_infer_lock:
+        with _stt_stream.infer_guard(_moonshine_infer_lock):
             out = tr.transcribe_without_streaming(audio, sr)
         # Moonshine segments speech into lines and emits the wake phrase ("Hey Zoe.")
         # as its own leading line. Strip the wake word from those lines so the
@@ -5687,6 +5687,8 @@ async def voice_stt_stream_chunk(payload: dict, caller: dict = Depends(_require_
         pcm = base64.b64decode(str((payload or {}).get("pcm_base64") or ""), validate=True)
     except Exception as exc:
         raise HTTPException(status_code=400, detail="invalid chunk") from exc
+    if not pcm:
+        raise HTTPException(status_code=400, detail="empty chunk")
 
     def _make():
         tr = _ensure_moonshine()

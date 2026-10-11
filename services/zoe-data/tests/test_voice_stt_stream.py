@@ -8,6 +8,7 @@ import asyncio
 import base64
 import io
 import threading
+import time
 import types
 import wave
 
@@ -268,3 +269,134 @@ def test_turn_stream_uses_stream_text_only_when_flag_on_and_samples_match(monkey
         sess.feed(0, pcm(3000))
         _post_turn(client, 3001, {"stt_stream_id": "8" * 16, "stt_stream_samples": 3000})  # clip != stream
         assert seen[-1] == ABSENT
+
+
+# -- Greptile round 1 (#1972) ---------------------------------------------------------------------------------------
+
+def test_take_does_not_block_on_a_stream_being_created():
+    """P1: stream creation happens outside the registry lock, so take() on the event loop never waits on a model load."""
+    started, release = threading.Event(), threading.Event()
+
+    def slow_make():
+        started.set()
+        release.wait(5)
+        return FakeStream()
+
+    opener = threading.Thread(target=ss.get_or_open, args=("a1" * 8, 0, slow_make, threading.Lock()))
+    opener.start()
+    try:
+        assert started.wait(2)
+        done = []
+        t = threading.Thread(target=lambda: done.append(ss.take("b2" * 8)))
+        t.start()
+        t.join(1.0)
+        assert not t.is_alive(), "take() blocked behind stream creation"
+        assert done == [None]
+        # the bound still counts the reserved slot
+        assert ss.get_or_open("c3" * 8, 0, lambda: FakeStream(), threading.Lock()) is not None
+        assert ss.get_or_open("d4" * 8, 0, lambda: FakeStream(), threading.Lock()) is None
+    finally:
+        release.set()
+        opener.join(3)
+    assert "a1" * 8 in ss._sessions and not ss._pending
+
+
+def test_failed_stream_creation_releases_the_reservation():
+    def boom():
+        raise RuntimeError("model load failed")
+
+    with pytest.raises(RuntimeError):
+        ss.get_or_open("e5" * 8, 0, boom, threading.Lock())
+    assert not ss._pending and "e5" * 8 not in ss._sessions
+
+
+def test_batch_fallback_is_bounded_behind_a_stalled_stream(monkeypatch):
+    """P1: a stream that timed out in stop() still holds the shared infer lock; the batch path (real _run_moonshine
+    locking) must give up in bounded time instead of waiting for it."""
+    release = threading.Event()
+    lock = threading.Lock()
+
+    class HungStream(FakeStream):
+        def stop(self):
+            release.wait(10)
+            return super().stop()
+
+    monkeypatch.setenv("ZOE_STT_STREAM_FINISH_TIMEOUT_MS", "50")
+    monkeypatch.setattr(ss, "STALL_LOCK_WAIT_S", 0.3)
+    sess = ss.get_or_open("f6" * 8, 0, lambda: HungStream(), lock)
+    sess.feed(0, pcm(2000))
+    monkeypatch.setattr(vt, "_moonshine_infer_lock", lock)
+    monkeypatch.setattr(vt, "_ensure_moonshine", lambda: types.SimpleNamespace(
+        transcribe_without_streaming=lambda a, sr: types.SimpleNamespace(lines=[types.SimpleNamespace(text="hi")])))
+    import sys
+    fake_utils = types.ModuleType("moonshine_voice.utils")
+    fake_utils.load_wav_file = lambda p: ([0.0] * 1600, 16000)
+    monkeypatch.setitem(sys.modules, "moonshine_voice", types.ModuleType("moonshine_voice"))
+    monkeypatch.setitem(sys.modules, "moonshine_voice.utils", fake_utils)
+    try:
+        assert _take({"stt_stream_id": "f6" * 8, "stt_stream_samples": 2000}, wav(2000)) is None
+        assert sess in ss._stalled
+        t0 = time.monotonic()
+        with pytest.raises(TimeoutError):
+            asyncio.run(vt._run_moonshine("/nonexistent.wav"))
+        assert time.monotonic() - t0 < 3
+        release.set()
+        sess._done.wait(3)
+        assert asyncio.run(vt._run_moonshine("/nonexistent.wav")) == "Hi"  # recovered once the stall cleared
+    finally:
+        release.set()
+
+
+def test_infer_guard_is_a_plain_lock_without_a_stall():
+    lock = threading.Lock()
+    with ss.infer_guard(lock):
+        assert lock.locked()
+    assert not lock.locked()
+
+
+def test_abandoned_session_self_cleans(monkeypatch):
+    """P2: a session nobody feeds or finishes ends its own worker after the idle TTL and deregisters."""
+    monkeypatch.setattr(ss, "IDLE_TTL_S", 0.2)
+    stream = FakeStream()
+    sess = ss.get_or_open("a7" * 8, 0, lambda: stream, threading.Lock())
+    assert sess._done.wait(3), "worker still blocked on an abandoned session"
+    assert sess.broken == "idle" and stream.closed
+    assert "a7" * 8 not in ss._sessions
+
+
+def test_empty_chunks_are_rejected_and_do_not_refresh_idle(monkeypatch):
+    sess, _ = open_session("a8" * 8)
+    sess.touched -= 10
+    before = sess.touched
+    assert sess.feed(0, b"") is False
+    assert sess.next_seq == 0 and sess.touched == before and not sess.broken
+    assert sess.feed(0, pcm(100)) is True  # seq 0 is still the next expected
+    # endpoint: 400 on empty
+    with pytest.raises(HTTPException) as ei:
+        asyncio.run(vt.voice_stt_stream_chunk(
+            {"stream_id": "a9" * 8, "seq": 0, "pcm_base64": ""}, caller={}))
+    assert ei.value.status_code == 400
+
+
+def test_queue_length_is_bounded(monkeypatch):
+    gate = threading.Event()
+
+    class Slow(FakeStream):
+        def add_audio(self, audio, sr):
+            gate.wait(5)
+
+    monkeypatch.setattr(ss, "MAX_QUEUE", 3)
+    sess, _ = open_session("b9" * 8, Slow())
+    try:
+        results = [sess.feed(i, pcm(10)) for i in range(8)]
+        assert results[:2] == [True, True] and False in results
+        assert sess.broken == "bad_chunk"
+    finally:
+        gate.set()
+
+
+def test_replay_arm_uses_the_production_finish_timeout():
+    import inspect
+    import tests.replay_samples as rs
+    src = inspect.getsource(rs)
+    assert "ss.finish_timeout_s()" in src and "sess.finish, n, 30.0" not in src
