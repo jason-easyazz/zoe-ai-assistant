@@ -2136,7 +2136,7 @@ _FORM_CONFIRM_PHRASES = (
 )
 _FORM_CONFIRM_FILLER = frozenset({
     "it", "that", "this", "the", "form", "event", "list", "please", "just", "oh", "hey", "zoe", "now", "thanks",
-    "thank", "you", "and", "all", "right",
+    "thank", "you", "and", "all", "right", "can", "could", "would", "will",
 })
 
 
@@ -2149,6 +2149,8 @@ def _is_form_confirm_command(lc_text: str) -> bool:
     lc_text = lc_text.lower().replace("\u2019", "'").replace("\u2018", "'")  # the STT's curly apostrophes
     words = re.findall(r"[a-z0-9']+", lc_text)
     if not words or len(words) > 5 or _NEGATION_RE.search(lc_text):
+        return False
+    if _QUESTIONING_RE.search(lc_text) or re.search(r"\b(?:you|u)\s+sure\b", lc_text):  # "you sure", "are you sure", "really"
         return False
     rest = " ".join(words)
     found = False
@@ -3484,7 +3486,7 @@ async def voice_command(
                     "content_type": _cancel_audio.media_type,
                 }
             # Confirm words: submit the active form without requiring a tap on the button.
-            _is_form_confirm = _is_form_confirm_command(_lc_voice)
+            _is_form_confirm = "?" not in text and _is_form_confirm_command(_lc_voice)  # "sure?" is a question
             if _is_form_confirm:
                 _form_data = _active_form.get("slots") or {}
                 _confirm_reply = "Event saved." if _form_panel_type == "calendar_event" else "List saved."

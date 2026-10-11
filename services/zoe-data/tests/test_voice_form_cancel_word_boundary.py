@@ -123,3 +123,39 @@ async def test_a_genuine_cancel_still_closes_the_form(monkeypatch):
         assert get_active_form(PANEL_ID) is None
     finally:
         clear_active_form(PANEL_ID)
+
+
+@pytest.mark.parametrize("text", [
+    "can you save it", "could you confirm", "would you submit", "will you save that", "sure", "sure go ahead",
+    "yes thank you",
+])
+def test_polite_and_plain_confirms(text):
+    assert _is_form_confirm_command(text) is True
+
+
+@pytest.mark.parametrize("text", ["you sure", "u sure", "are you sure", "really", "are you sure about that"])
+def test_a_question_is_not_a_confirm(text):
+    assert _is_form_confirm_command(text) is False
+
+
+@pytest.mark.asyncio
+async def test_a_spoken_question_mark_blocks_a_confirm_at_the_endpoint(monkeypatch):
+    """The call site strips a trailing '?', so 'sure?' must be refused before the word-level helper sees it."""
+    _chat_calls, spawned = _wire_voice_command_fakes(monkeypatch, panel_user="casey")
+
+    async def resolve(text, *a, **kw):
+        return None
+
+    monkeypatch.setitem(sys.modules, "fast_tiers", types.SimpleNamespace(resolve=resolve))
+    set_active_form(PANEL_ID, "calendar_event", {"title": "Dentist"})
+    try:
+        resp = await v.voice_command(
+            {"text": "sure?", "panel_id": PANEL_ID, "session_id": SESSION_ID},
+            caller=_CALLER, stream=False, db=object(),
+        )
+        assert resp["reply"] != "Event saved."
+        assert get_active_form(PANEL_ID) is not None
+    finally:
+        clear_active_form(PANEL_ID)
+        if spawned:
+            await asyncio.gather(*spawned)
