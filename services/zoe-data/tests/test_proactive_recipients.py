@@ -174,7 +174,7 @@ class _FixedNow(datetime):
 
 
 def _pin_clock(monkeypatch, module, hour, minute):
-    _FixedNow.fixed = datetime(2026, 9, 28, hour, minute, tzinfo=zoe_timezone())
+    monkeypatch.setattr(_FixedNow, "fixed", datetime(2026, 9, 28, hour, minute, tzinfo=zoe_timezone()), raising=False)
     monkeypatch.setattr(module, "datetime", _FixedNow)
 
 
@@ -218,7 +218,7 @@ async def test_evolution_digest_goes_to_admins_only(monkeypatch):
 
     monkeypatch.setattr(db_pool, "get_db_ctx", fake_ctx)
     _pin_clock(monkeypatch, ed, 18, 5)
-    _FixedNow.fixed = datetime(2026, 10, 2, 18, 5, tzinfo=ed._ZOE_TZ)  # a Friday
+    monkeypatch.setattr(_FixedNow, "fixed", datetime(2026, 10, 2, 18, 5, tzinfo=ed._ZOE_TZ), raising=False)  # a Friday
     db = HouseholdDB(bindings=KIOSK, messages=[_msg("member-b"), _msg("member-c")],
                      roles={"member-a": "user", "member-b": "family-admin"})
     results = await ed.EvolutionWeeklyDigestTrigger().check(db)
