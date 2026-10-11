@@ -91,6 +91,8 @@ class SttStreamSession:
         finally:
             _stalled.discard(self)
             self._close_stream()
+            with _registry_lock:
+                _live.discard(self)  # only now does the session stop counting against MAX_SESSIONS
             self._done.set()
 
     def _close_stream(self) -> None:
@@ -144,6 +146,9 @@ class SttStreamSession:
 _sessions: dict[str, SttStreamSession] = {}
 _pending: dict[str, threading.Event] = {}  # ids whose stream is being created OUTSIDE the registry lock
 _stalled: set = set()  # sessions that timed out in finish() and whose worker is still running
+# Every session whose worker thread has not exited, registered or already taken by a turn: a consumed (or reaped)
+# session keeps its Moonshine stream and thread until the worker closes, so the bound counts it until then.
+_live: set = set()
 _registry_lock = threading.Lock()
 
 
@@ -176,7 +181,7 @@ def get_or_open(stream_id: str, seq: int, make_stream: Callable[[], object],
         ev = _pending.get(stream_id)
         owner = ev is None
         if owner:
-            if seq != 0 or len(_sessions) + len(_pending) >= MAX_SESSIONS:
+            if seq != 0 or len(_live | set(_sessions.values())) + len(_pending) >= MAX_SESSIONS:
                 return None
             ev = _pending[stream_id] = threading.Event()
     if not owner:  # another chunk of this id is mid-creation: wait for it (outside the lock), bounded
@@ -192,6 +197,8 @@ def get_or_open(stream_id: str, seq: int, make_stream: Callable[[], object],
             _pending.pop(stream_id, None)
             if sess is not None:
                 _sessions[stream_id] = sess
+                if not sess._done.is_set():
+                    _live.add(sess)
         ev.set()
 
 

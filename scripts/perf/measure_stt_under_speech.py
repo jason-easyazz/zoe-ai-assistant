@@ -99,9 +99,15 @@ def run_session(model, audio, paced: bool) -> dict:
         sess.feed(seq, pcm)
         seq += 1
     last_arrival = (t0 + len(audio) / 16000) if paced else t0  # burst: ALL work is post-speech
-    lines, reason = sess.finish(len(audio), 30.0)
+    # The PRODUCTION deadline and fallback: a stream that misses finish_timeout_s() or yields no text is replaced by
+    # batch STT in the live turn, so the measured time and text include that retry (what a user would actually get).
+    lines, reason = sess.finish(len(audio), ss.finish_timeout_s())
+    text = " ".join(ln for ln in (lines or []) if ln).strip()
+    fallback = not text
+    if fallback:
+        _, text = run_batch(model, audio)
     done = time.monotonic()
-    return {"after_last_s": done - last_arrival, "reason": reason, "text": " ".join(lines or [])}
+    return {"after_last_s": done - last_arrival, "reason": reason, "text": text, "fallback": fallback}
 
 
 def pick_clips(n: int, scan: int):
@@ -177,6 +183,7 @@ def main() -> int:
                 r = run_session(model, a, paced=(arm == "sess"))
                 row[f"{arm}_after_last_s"] = round(r["after_last_s"], 3)
                 row[f"{arm}_reason"] = r["reason"]
+                row[f"{arm}_fallback"] = r["fallback"]
                 row[f"{arm}_hash"] = thash(r["text"])
                 row[f"{arm}_words"] = len(norm(r["text"]).split())
                 texts[arm] = r["text"]

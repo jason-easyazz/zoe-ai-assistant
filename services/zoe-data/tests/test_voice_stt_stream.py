@@ -57,12 +57,12 @@ def wav(n_samples: int, rate: int = 16000) -> bytes:
 
 @pytest.fixture(autouse=True)
 def _clean(monkeypatch):
-    ss._sessions.clear()
+    ss._sessions.clear(); ss._live.clear()
     monkeypatch.setenv("ZOE_STT_STREAM_UNDER_SPEECH", "1")
     yield
     for s in list(ss._sessions.values()):
         s.abort()
-    ss._sessions.clear()
+    ss._sessions.clear(); ss._live.clear()
 
 
 def open_session(sid="a" * 16, stream=None):
@@ -214,6 +214,30 @@ def test_idle_session_is_reaped(monkeypatch):
     sess.touched -= ss.IDLE_TTL_S + 1  # idle past the TTL
     ss.get_or_open("0" * 16, 0, lambda: FakeStream(), threading.Lock())  # any open reaps first
     assert "c" * 16 not in ss._sessions and "0" * 16 in ss._sessions
+
+
+def test_taken_sessions_count_until_their_worker_closes(monkeypatch):
+    """A turn take()s a session but its worker may still run (slow / timed-out stop()): it must keep its slot."""
+    release = threading.Event()
+
+    class HungStream(FakeStream):
+        def stop(self):
+            release.wait(5)
+            return super().stop()
+
+    monkeypatch.setenv("ZOE_STT_STREAM_FINISH_TIMEOUT_MS", "50")
+    try:
+        for sid in ("d1" * 8, "d2" * 8):
+            sess, _ = open_session(sid, HungStream())
+            sess.feed(0, pcm(2000))
+            assert _take({"stt_stream_id": sid, "stt_stream_samples": 2000}, wav(2000)) is None  # timed out
+        assert not ss._sessions  # both consumed by their turns...
+        assert ss.get_or_open("d3" * 8, 0, lambda: FakeStream(), threading.Lock()) is None  # ...but still counted
+    finally:
+        release.set()
+    for s in list(ss._live):
+        s._done.wait(5)
+    assert ss.get_or_open("d4" * 8, 0, lambda: FakeStream(), threading.Lock()) is not None  # slots freed on close
 
 
 # -- router wiring (TestClient; fakes only) ------------------------------------------------------------------------
