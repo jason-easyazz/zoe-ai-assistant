@@ -8,7 +8,7 @@ mirroring the `agent-zero` module pattern.
 
 | Component        | arm64 status | Notes |
 |------------------|--------------|-------|
-| `claude` CLI     | ✅ works      | `@anthropic-ai/claude-code@2.1.220` (**pinned** — see below; min `2.1.161`) |
+| `claude` CLI     | ✅ works      | `@anthropic-ai/claude-code@2.1.287` (**pinned**, auto-updater **disabled** — see below; min `2.1.161`) |
 | `codex` CLI      | ✅ works      | `@openai/codex@0.146.0` (**pinned**; min `0.137.0`) |
 | `pi` CLI         | ✅ works      | `@earendil-works/pi-coding-agent@0.87.1` **exact**, `--ignore-scripts` (min `0.79.0`; identical value required in `services/zoe-core/package.json`) |
 | `cursor-agent`   | ✅ works      | mounted from the host install (`~/.local/share/cursor-agent`). **omnigent 0.7.0 enforces a minimum** (`_CURSOR_MIN_VERSION`, currently `2026.06.02`) — an older binary reports `version-too-low`, not `false`. Provision it reproducibly with [`scripts/setup/install_cursor_agent.sh`](../../scripts/setup/install_cursor_agent.sh) (pinned; `--check` verifies a host without changing it). |
@@ -80,6 +80,17 @@ diff/changelog for the version range, (b) verify end-to-end (an actual agent/bra
 dispatch, not just `<cli> --version` starts), and (c) record what was checked next
 to the pin. `npm view <pkg> version` alone is NOT sufficient — a green `--version`
 proves nothing about API shape changes or RPC event surfaces the client depends on.
+
+**No in-container self-update.** The CLIs are root-owned global npm installs and the
+container runs as uid 1000, so Claude Code's auto-updater could never write its own
+install (it failed on every start). It is switched off (`DISABLE_AUTOUPDATER=1` and
+`DISABLE_UPDATES=1`, in the Dockerfile `ENV`, in the compose `environment:`, and in the
+image's `/etc/claude-code/managed-settings.json`); `pi` gets `PI_SKIP_VERSION_CHECK=1`.
+The only update path is: bump the pin in the Dockerfile, rebuild the image, recreate the
+container — operator commands in
+[docs/knowledge/omnigent-container-config.md](../../docs/knowledge/omnigent-container-config.md)
+("Updating a harness CLI"). `npm view @anthropic-ai/claude-code dist-tags` shows `stable`
+(about a week behind, skips regressions) and `latest`; this pin follows `stable`.
 
 **The zoe-core manifest is a DECLARATION, not an installer.** `services/zoe-core` has no
 committed lockfile and no `node_modules`, and `zoe_core_client.py` launches the bare

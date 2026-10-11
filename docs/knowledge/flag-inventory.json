@@ -3159,6 +3159,7 @@
         "in_env_example": false,
         "readers": [
           "scripts/perf/measure_moonshine_vad_threshold.py",
+          "scripts/perf/measure_stt_under_speech.py",
           "services/zoe-data/routers/voice_tts.py"
         ],
         "typed_env": true
@@ -3645,7 +3646,9 @@
         ],
         "in_env_example": false,
         "readers": [
+          "scripts/perf/engine_bench.py",
           "scripts/perf/hop_placement_ab.py",
+          "scripts/perf/kokoro_first_chunk_probe.py",
           "scripts/perf/measure_first_sound.py",
           "scripts/perf/measure_speed.py",
           "scripts/perf/measure_tts.py",
@@ -5146,6 +5149,36 @@
           "services/zoe-data/routers/voice_tts.py"
         ],
         "typed_env": true
+      },
+      "ZOE_STT_STREAM_FINISH_TIMEOUT_MS": {
+        "defaults": [
+          "2500"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_stt_stream.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_STT_STREAM_UNDER_SPEECH": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_stt_stream.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_STT_STREAM_UPLOAD": {
+        "defaults": [
+          "'false'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/zoe_voice_daemon.py"
+        ],
+        "typed_env": false
       },
       "ZOE_SUBPROCESS_QUEUE_WAIT_S": {
         "defaults": [

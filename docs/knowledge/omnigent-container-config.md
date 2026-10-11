@@ -1,7 +1,7 @@
 ---
 type: knowledge
 title: Omnigent container config — where each file comes from, login renewal, polly-lane auth policy
-description: How zoe-omnigent's configuration reaches the container (image, compose bind, entrypoint seed, or a persisted volume nothing tracks), the B0.11 Codex MCP seed that keeps Serena on the shared server across recreates, the Claude/Codex login-renewal steps (Claude refresh token runs to 2026-10-11), and the policy note to move the polly lane off claude-sdk subscription OAuth.
+description: How zoe-omnigent's configuration reaches the container (image, compose bind, entrypoint seed, or a persisted volume nothing tracks), the B0.11 Codex MCP seed that keeps Serena on the shared server across recreates, why the in-container CLI auto-updaters are disabled and how to update a CLI (bump the pin, rebuild, recreate), the Claude/Codex login-renewal steps (Claude refresh token runs to 2026-10-11), and the policy note to move the polly lane off claude-sdk subscription OAuth.
 ---
 
 # Omnigent container config
@@ -22,6 +22,8 @@ by the tool that owns it) the patch is gone and nothing alarms.
 | `/root/.omnigent/config.yaml` | `omnigent-data` volume; the entrypoint seeds the `openrouter` provider once (create-only) | yes | seed only |
 | `/root/.codex/config.toml` (Codex MCP + Codex state) | `omnigent-codex` volume; **since B0.11 the entrypoint rewrites the managed `[mcp_servers.*]` tables from the baked template on every boot** | yes | managed tables only |
 | `/root/.claude/.credentials.json`, `/root/.codex/auth.json` | `omnigent-claude` / `omnigent-codex` volumes, written by the one-time logins | yes | never (bearer tokens) |
+| `/root/.claude.json` (Claude Code first-run/trust state; NOT the token) | container writable layer — in no volume | **no** (reset by a recreate) | no |
+| `/usr/local/lib/node_modules/{@anthropic-ai/claude-code,@openai/codex,...}`, `/etc/claude-code/managed-settings.json` | image (`Dockerfile`), root-owned and read-only to uid 1000 | rebuilt with the image | yes |
 | everything under `environment:` | `docker-compose.module.yml` (+ the repo `.env` for the interpolated values) | applied on recreate | yes |
 
 Evidence for the B0.11 case (read-only `docker inspect` / `docker exec`, 2026-09-26):
@@ -63,6 +65,81 @@ serena table was the stdio spawn (`command = ".../serena"`, `--transport stdio`)
 
   `already current` on the first boot is the expected proof: the seed found the hand-patch and
   left it, and from now on a reset volume converges to the same state on its own.
+
+## Updating a harness CLI — the in-container auto-updater is disabled
+
+**Symptom (2026-10-11):** Claude Code in `zoe-omnigent` reported that auto-update failed
+(no write permission). **Cause:** `modules/omnigent/Dockerfile` installs
+`@anthropic-ai/claude-code` globally as **root** into `/usr/local/lib/node_modules`, but the
+container runs as uid 1000 (`user: "1000:1000"` in the compose file), so the updater can
+never write its own install. Even if it could, a self-update would move the CLI off the
+reviewed pin and be lost on the next recreate, so the right fix is to turn it off, not to
+make the directory writable.
+
+**What is set** (the three agree; none is a secret):
+
+| Where | Setting | Effect |
+|---|---|---|
+| `Dockerfile` `ENV` + compose `environment:` | `DISABLE_AUTOUPDATER=1` | stops Claude Code's background update check (Claude Code docs, *Advanced setup → Disable auto-updates*) |
+| same | `DISABLE_UPDATES=1` | additionally blocks `claude update` / `claude install`, i.e. every update path (same page) |
+| `Dockerfile` → `/etc/claude-code/managed-settings.json` (`{"env": {...}}`) | the same two keys | the documented Linux managed-settings location. Belt-and-braces: omnigent's runner builds each worker's environment from an allowlist (see `OMNIGENT_RUNNER_ENV_PASSTHROUGH` in the compose file), so a container env var is not guaranteed to reach the `claude` process the runner spawns; the settings file does not depend on that |
+| same as the first row | `PI_SKIP_VERSION_CHECK=1` | pi never self-updates in the background (`pi update` is an explicit command); this only disables its pi.dev latest-version request (pi `docs/environment-variables.md`, verified in 0.87.1) |
+
+**Codex:** also notify-only; its switch is the `config.toml` key
+`check_for_update_on_startup = false` ("set to false only when updates are centrally managed",
+Codex config reference). That file is the `omnigent-codex` volume's entrypoint-managed
+`config.toml`, not an env var, so it is **not** changed here; it cannot self-update a
+root-owned install either. Revisit only if its startup notice becomes a nuisance.
+
+**Verify after the rebuild** (read-only): `docker exec zoe-omnigent claude doctor` should list
+`Auto-updates: disabled (set by env: DISABLE_AUTOUPDATER)` (or the managed-settings source) in
+place of the old no-write-permission notice.
+
+**To update a CLI** the only path is: (1) pick the version (`npm view @anthropic-ai/claude-code
+dist-tags` — the pin follows `stable`; keep it at or above the omnigent minimum in
+`onboarding/harness_install.py`, claude >= 2.1.161); (2) change the pin in
+`modules/omnigent/Dockerfile` **and** the mention in `modules/omnigent/README.md`
+(`grep -rn 'claude-code@' .`; pi is pinned in three places, see
+`tests/unit/test_harness_pin_agreement.py`); (3) rebuild the image and recreate the container;
+(4) prove it with a real dispatch, per the pin-bump procedure in `modules/omnigent/README.md`.
+
+**Review before the first bump past 2.1.220** (from the 2026-09-25 state review): headless runs
+prompt, then deny after 2 minutes, on substitution-`rm`; `"type":"sdk"` MCP entries are skipped
+(ours are `url`/stdio); AGENTS.md is read natively when no CLAUDE.md exists (Zoe's import shim
+still wins). The 2.1.220 -> 2.1.287 bump is **not yet exercised against a live polly dispatch**;
+the real-dispatch check under *After merge* is that proof.
+
+### After merge (operator)
+
+Rebuild the `zoe-omnigent` image and recreate the container. Check RAM first (the build
+alongside the 6 GB `llama-server` can OOM the live brain) and drop caches per
+`modules/AGENTS.md`. `-p` pins the existing compose project so the recreate replaces
+`zoe-omnigent` instead of colliding with its `container_name`:
+
+```bash
+git -C /home/zoe/assistant fetch origin && git -C /home/zoe/assistant merge --ff-only origin/main   # no stash
+REPO=$(git -C /home/zoe/assistant rev-parse --show-toplevel)
+PROJECT=$(docker inspect zoe-omnigent --format '{{index .Config.Labels "com.docker.compose.project"}}')
+COMPOSE="docker compose -p $PROJECT --env-file $REPO/.env -f $REPO/modules/omnigent/docker-compose.module.yml"
+$COMPOSE build omnigent                 # re-resolves claude-code@2.1.287 (the pin changed, so the layer rebuilds)
+$COMPOSE up -d omnigent                 # recreates the container from the new image + compose env
+docker exec zoe-omnigent claude --version                 # 2.1.287 (Claude Code)
+docker exec zoe-omnigent claude doctor                    # Auto-updates: disabled
+docker exec zoe-omnigent claude -p "reply with the single word ok"   # login survived + a turn completes
+```
+
+Then confirm `claude_code` is available for the host in the Omnigent UI / `GET /v1/hosts`, and
+run one real polly `claude_code` dispatch before relying on the new version.
+
+**The login is kept — by a volume.** Compose mounts the named volume `omnigent-claude` at
+`/root/.claude`, and the OAuth tokens live in `/root/.claude/.credentials.json` (see the table
+above). A rebuild + recreate replaces the container and image, not named volumes, so the
+Claude login (and Codex's `omnigent-codex`, Cursor's `omnigent-cursor`) are untouched; no
+re-login is expected. **One caveat:** Claude Code also keeps a small state file at
+`/root/.claude.json` (a sibling of the directory, per its docs), which is **not** in any
+volume and is reset by a recreate. It holds first-run/onboarding state and per-project trust,
+not the token; if the `claude -p` check above unexpectedly prompts or reports a logged-out
+state, that is the file to suspect, and the fix is the renewal below.
 
 ## Login renewal (operator)
 
