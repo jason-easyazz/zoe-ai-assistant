@@ -15,6 +15,7 @@ Capabilities:
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import itertools
 import uuid
@@ -236,6 +237,7 @@ class _SttStreamUploader:
         self._buf = bytearray()
         self._seq = 0
         self.samples = 0
+        self._sha = hashlib.sha256()  # over every byte pushed: binds the stream to THIS recording's exact audio
         self.ok = True
         self._q = _queue_module.Queue()
         self._thread = threading.Thread(target=self._run, daemon=True, name="stt-stream-upload")
@@ -243,6 +245,7 @@ class _SttStreamUploader:
 
     def push(self, data: bytes) -> None:
         self._buf += data
+        self._sha.update(data)
         self.samples += len(data) // 2
         if len(self._buf) >= int(2 * SAMPLE_RATE * _STT_STREAM_BATCH_S):
             self._flush()
@@ -281,6 +284,9 @@ class _SttStreamUploader:
             return None
         return self.stream_id, self.samples
 
+    def digest(self) -> str:
+        return self._sha.hexdigest()
+
 
 def _attach_stt_stream(payload: dict, wav: bytes, speculation) -> None:
     """Name the finished upload on the turn payload iff it provably covers THIS wav (single-use, never speculative)."""
@@ -291,9 +297,12 @@ def _attach_stt_stream(payload: dict, wav: bytes, speculation) -> None:
     try:
         with wave.open(io.BytesIO(wav), "rb") as w:
             frames = w.getnframes()
+            pcm = w.readframes(frames)
     except Exception:
         return
-    if frames == info.get("samples"):
+    # Same length is not enough: a stale upload (e.g. left over after a committed speculative turn) could match a
+    # later clip's length. The stream is named only for the exact audio it carried.
+    if frames == info.get("samples") and hashlib.sha256(pcm).hexdigest() == info.get("digest"):
         payload["stt_stream_id"] = info["stream_id"]
         payload["stt_stream_samples"] = frames
 
@@ -1958,7 +1967,7 @@ def record_command(pa: pyaudio.PyAudio, stream=None, speculation: "_SpeculativeT
     if uploader is not None:
         _closed = uploader.close()
         if _closed is not None:
-            _pending_stt_stream.update(stream_id=_closed[0], samples=_closed[1])
+            _pending_stt_stream.update(stream_id=_closed[0], samples=_closed[1], digest=uploader.digest())
     if len(frames) < int(0.3 * SAMPLE_RATE / CHUNK_SIZE):
         log.info("Command too short, ignoring.")
         _pending_stt_stream.clear()

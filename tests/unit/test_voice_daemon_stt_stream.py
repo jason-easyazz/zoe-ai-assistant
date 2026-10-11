@@ -58,6 +58,11 @@ def daemon():
     return d
 
 
+def _digest(n: int) -> str:
+    import hashlib
+    return hashlib.sha256(b"\x02\x00" * n).hexdigest()
+
+
 def _wav(n: int) -> bytes:
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
@@ -111,11 +116,11 @@ def test_409_latches_the_uploader_off(daemon, monkeypatch):
 
 
 def test_attach_requires_matching_samples_and_is_single_use(daemon):
-    daemon._pending_stt_stream.update(stream_id="ab" * 8, samples=500)
+    daemon._pending_stt_stream.update(stream_id="ab" * 8, samples=500, digest=_digest(500))
     bad: dict = {}
     daemon._attach_stt_stream(bad, _wav(501), None)
     assert bad == {} and not daemon._pending_stt_stream  # consumed even on mismatch: never reused for another clip
-    daemon._pending_stt_stream.update(stream_id="ab" * 8, samples=500)
+    daemon._pending_stt_stream.update(stream_id="ab" * 8, samples=500, digest=_digest(500))
     good: dict = {}
     daemon._attach_stt_stream(good, _wav(500), None)
     assert good == {"stt_stream_id": "ab" * 8, "stt_stream_samples": 500}
@@ -125,7 +130,7 @@ def test_attach_requires_matching_samples_and_is_single_use(daemon):
 
 
 def test_speculative_turn_never_takes_the_stream(daemon):
-    daemon._pending_stt_stream.update(stream_id="cd" * 8, samples=500)
+    daemon._pending_stt_stream.update(stream_id="cd" * 8, samples=500, digest=_digest(500))
     payload: dict = {}
     daemon._attach_stt_stream(payload, _wav(500), object())
     assert payload == {} and daemon._pending_stt_stream  # left for the real (non-speculative) turn
@@ -150,3 +155,22 @@ def test_close_is_bounded_when_the_upload_hangs(daemon):
         assert time.monotonic() - t0 < 1.0
     finally:
         release.set()
+
+
+def test_a_stale_upload_never_attaches_to_a_different_clip_of_the_same_length(daemon):
+    """Codex P2: an upload left pending (e.g. after a committed speculative turn) must not name a LATER clip, even
+    when the lengths match - the server would serve the previous utterance's transcript."""
+    import hashlib
+    other = hashlib.sha256(b"\x07\x00" * 500).hexdigest()  # the earlier utterance: same length, different audio
+    daemon._pending_stt_stream.update(stream_id="ef" * 8, samples=500, digest=other)
+    payload: dict = {}
+    daemon._attach_stt_stream(payload, _wav(500), None)
+    assert payload == {} and not daemon._pending_stt_stream  # not attached, and consumed
+
+
+def test_uploader_digest_matches_the_wav_it_produced(daemon):
+    up = daemon._SttStreamUploader(post=lambda path, body, **kw: {"ok": True})
+    up.push(b"\x02\x00" * 300)
+    up.push(b"\x02\x00" * 200)
+    assert up.close() is not None
+    assert up.digest() == _digest(500)
