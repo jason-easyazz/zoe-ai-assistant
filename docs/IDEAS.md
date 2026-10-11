@@ -33,6 +33,9 @@ Detail/AI notes go under each entry. Move the status as it progresses.
 
 ## 💡 Ideas
 
+### Care mode / per-user presets — 💡 pinned
+- **Core:** Care mode / per-user presets: medications, curated memory, help & emergency, orientation, voice tuning, family digest, video calling — research 2026-10-12 → [docs/research/care-mode-feature-research-2026-10-12.md](research/care-mode-feature-research-2026-10-12.md).
+
 ### A richer "Pinterest-style" ideas surface inside Zoe — 💡 pinned
 - **Core:** this file is v1. The real idea is a **visual board in Zoe** to save links/videos/ideas, browse for inspiration, and let agents read/append it. Originally planned a Zoe section for exactly this.
 - **Next:** research whether an existing open-source project already does this well (visual idea/link board, local, agent-accessible) before building. Source: Jason, 2026-06-23.
