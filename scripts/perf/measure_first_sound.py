@@ -78,11 +78,33 @@ SHAPES = {
              "What is the difference between a crocodile and an alligator?",
              "Help me think of a nice way to say thank you to a neighbour.",
              "Is it better to run in the morning or the evening?", "How do bees make honey?"],
+    # QUALITY shapes (opt in with --shapes; the latency default stays memory/tool/chat). "fact" has ground truth in FACT_EXPECT
+    # (a style prompt that buys a fast opening with a wrong answer is the Little Gemma paper's "confidently wrong" failure);
+    # "care" has none: read the replies for warmth.
+    "fact": ["What is the capital city of Australia?", "How many legs does a spider have?",
+             "What is the boiling point of water in degrees Celsius at sea level?", "Which planet is closest to the sun?",
+             "How many days are there in a leap year?", "What gas do plants take in from the air?",
+             "Who wrote the play Romeo and Juliet?", "What is twelve times eleven?",
+             "How many minutes are in three hours?", "What is the largest ocean on Earth?"],
+    "care": ["I had a really rough day at work and I just need to vent.", "I am nervous about my appointment tomorrow.",
+             "My dog is not well and I am worried about her.", "I just got some good news and I am so happy!",
+             "I feel a bit lonely tonight.", "I forgot my mum's birthday and I feel terrible."],
 }
+DEFAULT_SHAPES = ("memory", "tool", "chat")
+FACT_EXPECT = {"What is the capital city of Australia?": r"canberra", "How many legs does a spider have?": r"\beight\b|\b8\b",
+               "What is the boiling point of water in degrees Celsius at sea level?": r"\b100\b|one hundred",
+               "Which planet is closest to the sun?": r"mercury", "How many days are there in a leap year?": r"\b366\b|three hundred (and )?sixty.six",
+               "What gas do plants take in from the air?": r"carbon dioxide|co2",
+               "Who wrote the play Romeo and Juliet?": r"shakespeare", "What is twelve times eleven?": r"\b132\b|one hundred (and )?thirty.two",
+               "How many minutes are in three hours?": r"\b180\b|one hundred (and )?eighty", "What is the largest ocean on Earth?": r"pacific"}
 STAGES = ("stt_s", "route_s", "tiers_s", "packet_build_s", "post_to_first_delta_s", "tool_sentinel_s", "unit_ready_s",
           "kokoro_s", "first_sound_s", "filler_sound_s", "ack_sound_s", "first_audio_s")
 _LLAMA_RE = re.compile(r"(prompt eval time|eval time) =\s+([\d.]+) ms /\s+(\d+) (?:tokens|runs)")
 _TIMERS: dict = {}
+# --drain: after the first sound is timed, keep reading the stream to its end so the REPLY LENGTH can be compared across
+# arms (a style prompt must not buy a fast opening with a curt answer). --keep-text also stores the first unit and the reply
+# in the rows: those can quote household memory, so write --json outside the repo and never commit it.
+DRAIN = {"on": False, "text": False}
 
 
 def _median(xs):
@@ -219,6 +241,11 @@ async def run_turn(shape: str, prep: dict, user: str, cond: str, session: str) -
     t_kw = time.monotonic()
     stream = brain_streaming(transcript, session, user_id=user, voice_mode=True, replay_isolation=True, **kw)
     rec.update(await time_first_sound(stream, rr, vt, fs, t_post=t_post, t_kw=t_kw))
+    reply = rec.pop("_reply", "")
+    if shape == "fact" and DRAIN["on"]:   # ground truth: the reply must contain the expected answer
+        norm = re.sub(r"[^a-z ]", "", transcript.lower())
+        key = next((rx for q, rx in FACT_EXPECT.items() if re.sub(r"[^a-z ]", "", q.lower()) == norm), None)
+        rec["fact_ok"] = bool(re.search(key, reply, re.I)) if key else None
     await wait_slot_idle()
     rec["wall"].append(time.time())
     return rec
@@ -245,6 +272,7 @@ async def time_first_sound(stream, rr, vt, fs, *, t_post: float, t_kw: float) ->
     audio_started = filler_done = False
     failed: list = []
     buf, tools, unit = "", [], ""
+    seen = ""   # every text delta, for --drain
     kokoro_s = None
     ack = fs.dispatch_ack(rr)
     try:
@@ -270,7 +298,7 @@ async def time_first_sound(stream, rr, vt, fs, *, t_post: float, t_kw: float) ->
                     else:
                         failed.append("filler")
                 continue
-            t_first, buf, unit = t_first or now, buf + delta, ""
+            t_first, buf, unit, seen = t_first or now, buf + delta, "", seen + delta
             if vt._fast_first_audio_enabled() and not audio_started:   # once sound has started the loop only cuts sentences
                 unit, buf = vt._extract_first_unit(buf)
                 unit = unit or ""
@@ -290,6 +318,10 @@ async def time_first_sound(stream, rr, vt, fs, *, t_post: float, t_kw: float) ->
                 kokoro_s = round(t_audio - t0, 3)
             else:
                 failed.append("first_unit")
+        if DRAIN["on"]:
+            async for delta in stream:
+                if delta and not delta.startswith(vt._VOICE_TOOL_SENTINEL_PREFIXES):
+                    seen += delta
     finally:
         await close_stream(stream)
     payload_at = _TIMERS.get("@payload")
@@ -305,6 +337,12 @@ async def time_first_sound(stream, rr, vt, fs, *, t_post: float, t_kw: float) ->
     out["first_audio_s"] = min([x for x in (out["first_sound_s"], out["filler_sound_s"], out["ack_sound_s"]) if x is not None],
                                default=None)
     out["no_audio"] = out["first_audio_s"] is None
+    out["first_unit_words"] = len(unit.split())
+    if DRAIN["on"]:
+        out["_reply"] = seen
+        out["reply_chars"], out["reply_words"] = len(seen.strip()), len(seen.split())
+        if DRAIN["text"]:
+            out["first_unit"], out["reply"] = unit, seen.strip()
     return out
 
 
@@ -323,6 +361,9 @@ def summarize(rows: list) -> dict:
                 "ack_fired": sum(1 for r in brain if r.get("ack_sound_s")),
                 "median_s": {k: _median([r.get(k) for r in brain]) for k in STAGES},
                 "clip_s": _median([r.get("clip_s") for r in rs]), "first_unit_chars": _median([r.get("first_unit_chars") for r in brain]),
+                "first_unit_words": _median([r.get("first_unit_words") for r in brain]),
+                "reply_words": _median([r.get("reply_words") for r in brain]),
+                "fact_ok": [sum(1 for r in brain if r.get("fact_ok") is True), sum(1 for r in brain if r.get("fact_ok") is not None)],
                 "e2e_est_s": round(first + TAIL_S + CARRIED_DELIVER_S + CARRIED_SINK_S, 3) if first else None}
     return out
 
@@ -392,15 +433,17 @@ async def amain(args) -> int:
             os.environ.pop(k, None)
         os.environ.update(flags)
 
-    plan = [(s, SHAPES[s][i]) for i in range(max(map(len, SHAPES.values())))
-            for s in SHAPES if i < len(SHAPES[s])]   # round-robin over shapes: a time-budget cut hits all evenly
+    shapes = [x for x in args.shapes.split(",") if x in SHAPES]
+    plan = [(s, SHAPES[s][i]) for i in range(max(len(SHAPES[x]) for x in shapes))
+            for s in shapes if i < len(SHAPES[s])]   # round-robin over shapes: a time-budget cut hits all evenly
+    plan = plan[args.offset:]
     plan = plan[: args.limit] if args.limit else plan
     print(f"first-sound probe: {len(plan)} prompts x {list(conds)}, sessions=replay-ttfa-<cond>-{stamp}-<n>", flush=True)
     rows, t_start = [], time.monotonic()
     try:
         apply({})
         await run_turn("chat", await prepare("Hello there, how are you today?"), args.user, "warm", f"replay-ttfa-warm-{stamp}")
-        for n, (shape, prompt) in enumerate(plan, 1):
+        for n, (shape, prompt) in enumerate(plan, 1 + args.offset):   # n keeps counting across chunks: the rotation continues
             waited = 0.0
             if gate_refusals(0):   # a landing / window started (memory is checked at the start only: this process is part
                 fcntl.flock(args.lock_fh, fcntl.LOCK_UN)   # of what it measures): hand the lock back, never race it
@@ -427,6 +470,7 @@ async def amain(args) -> int:
                     rec = await run_turn(shape, prep, args.user, cond, f"replay-ttfa-{cond}-{stamp}-{n}")
                 except Exception as exc:  # noqa: BLE001
                     rec = {"shape": shape, "cond": cond, "error": f"{type(exc).__name__}: {exc}"}
+                rec["n"] = n   # the prompt's place in the plan: the key that pairs the conditions
                 rows.append(rec)
                 print(f"[{n:3}/{len(plan)}] {shape:6} {cond:11} {str(rec.get('path', rec.get('error'))):26} "
                       f"stt={rec.get('stt_s')} first_audio={rec.get('first_audio_s')}", flush=True)
@@ -465,13 +509,18 @@ def _environment_restored():
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--limit", type=int, default=0, help="stop after N planned prompts")
+    ap.add_argument("--offset", type=int, default=0, help="skip the first N planned prompts (run a long plan in chunks under the 1100 s budget)")
+    ap.add_argument("--shapes", default=",".join(DEFAULT_SHAPES), help="comma list from memory,tool,chat,fact,care")
     ap.add_argument("--user", default="jason", help="user id for memory READS")
     ap.add_argument("--conditions", default=DEFAULT_CONDITIONS, help="'name:KEY=V,KEY=V;name2:...'; each prompt runs under all")
     ap.add_argument("--json")
+    ap.add_argument("--drain", action="store_true", help="read each reply to its end (after timing) and record reply_chars/words")
+    ap.add_argument("--keep-text", action="store_true", help="with --drain: also store first unit + reply text in --json (private: never commit)")
     ap.add_argument("--min-mem-mb", type=int, default=1500)
     ap.add_argument("--wait", action="store_true", help="queue (up to 50 min) for the gates and the lock instead of refusing")
     ap.add_argument("--ear-check", metavar="DIR", help="write A/B Kokoro pairs for ZOE_FIRST_SOUND_CLAUSE to DIR and exit")
     args = ap.parse_args()
+    DRAIN["on"], DRAIN["text"] = args.drain or args.keep_text, args.keep_text
     if os.environ.get("ZOE_PERF") != "1":
         print("ZOE_PERF != 1 - skipping the live first-sound probe (set ZOE_PERF=1 to run).")
         return 0
