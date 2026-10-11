@@ -225,7 +225,9 @@ _pending_stt_stream: dict = {}
 
 
 def _stt_stream_available() -> bool:
-    return ZOE_STT_STREAM_UPLOAD and not _stt_stream_disabled.is_set()
+    # Only the streaming turn (/turn_stream) consumes a stream id: with ZOE_VOICE_STREAM=0 the blocking /turn never
+    # would, so uploading there is pure cost (and an abandoned server session until its TTL).
+    return ZOE_STT_STREAM_UPLOAD and VOICE_STREAM_ENABLED and not _stt_stream_disabled.is_set()
 
 
 class _SttStreamUploader:
@@ -280,7 +282,12 @@ class _SttStreamUploader:
         self._flush()
         self._q.put(None)
         self._thread.join(wait_s)
-        if self._thread.is_alive() or not self.ok or self.samples <= 0:
+        if self._thread.is_alive():
+            # Deadline passed: the turn is going to batch STT. Cancel, so the worker discards every queued batch
+            # (it skips work once ``ok`` is False) instead of finishing an abandoned upload against the server.
+            self.ok = False
+            return None
+        if not self.ok or self.samples <= 0:
             return None
         return self.stream_id, self.samples
 

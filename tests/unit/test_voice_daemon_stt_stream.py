@@ -174,3 +174,34 @@ def test_uploader_digest_matches_the_wav_it_produced(daemon):
     up.push(b"\x02\x00" * 200)
     assert up.close() is not None
     assert up.digest() == _digest(500)
+
+
+def test_close_deadline_cancels_the_remaining_upload(daemon):
+    """Codex P2: once close() gives up, the queued batches of the abandoned turn are discarded, not uploaded."""
+    import threading
+
+    release = threading.Event()
+    sent = []
+
+    def slow_post(path, body, **kw):
+        sent.append(body["seq"])
+        release.wait(5)
+        return {"ok": True}
+
+    up = daemon._SttStreamUploader(post=slow_post)
+    batch = int(2 * daemon.SAMPLE_RATE * daemon._STT_STREAM_BATCH_S)
+    for _ in range(4):
+        up.push(b"\x01\x00" * (batch // 2))  # four full batches queued behind the stuck first POST
+    assert up.close(wait_s=0.2) is None
+    release.set()
+    up._thread.join(2)
+    assert not up._thread.is_alive() and sent == [0]  # only the in-flight batch was ever sent
+
+
+def test_uploads_only_when_turns_use_the_streaming_endpoint(daemon, monkeypatch):
+    """Codex P2: the blocking /turn never consumes a stream id, so ZOE_VOICE_STREAM=0 must not upload."""
+    monkeypatch.setattr(daemon, "ZOE_STT_STREAM_UPLOAD", True)
+    monkeypatch.setattr(daemon, "VOICE_STREAM_ENABLED", True)
+    assert daemon._stt_stream_available()
+    monkeypatch.setattr(daemon, "VOICE_STREAM_ENABLED", False)
+    assert not daemon._stt_stream_available()
