@@ -689,9 +689,16 @@ def pack(turns: "Sequence[Turn]", cfg: Config) -> "tuple[list[list[Turn]], dict[
                 continue
             chosen.add(i)
             used += cost
-        stats["turns_skipped_cap"] = len(kept) - len(chosen)
+        n_kept = len(kept)
         kept = [t for i, t in enumerate(kept) if i in chosen]
-        chunks = chunk_turns(kept, cfg.chunk_budget)[:room]
+        chunks = chunk_turns(kept, cfg.chunk_budget)
+        while len(chunks) > room:
+            # the token / line totals fit, but the real chunk boundaries (a chunk closes at MAX_LINES_PER_CHUNK or at the budget) made one chunk too many:
+            # drop the lowest-scored chosen turn (the oldest of equals) and re-chunk, rather than cutting the last chunk and losing the NEWEST turns unseen
+            worst = min(range(len(kept)), key=lambda i: (pre_score(kept[i].text), i))
+            kept = kept[:worst] + kept[worst + 1:]
+            chunks = chunk_turns(kept, cfg.chunk_budget)
+        stats["turns_skipped_cap"] = n_kept - len(kept)            # every turn that does not reach the model is counted
     return chunks, stats
 
 
