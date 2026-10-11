@@ -769,6 +769,7 @@ class NightWindow(bk.Window):
         self.cfg: NightCfg = cfg
         self.mode = mode
         self.cap_min = cfg.cap_min
+        self.end_by_epoch: "Optional[float]" = None     # the absolute --end-by deadline, set once per preflight (``end_by_deadline``)
         self.floor_armed = False
         self.stopped: "list[str]" = []                 # units this window stopped and has not brought back yet (stop order)
         self.stop_set: "tuple[str, ...]" = ()
@@ -829,12 +830,21 @@ class NightWindow(bk.Window):
                                                "stopped": list(self.stopped), "transients": sorted(NIGHT_UNITS.values())}))
 
     # ── time ──
+    def end_by_deadline(self) -> float:
+        """The ABSOLUTE ``--end-by`` deadline (epoch seconds), fixed by the first call of a preflight and then never recomputed. A recomputed "next 03:00" slides a MISSED deadline
+        a whole day forward (a run that waited from 02:20 to 03:05 for a quiet box would get a fresh cap against tomorrow's 03:00 and stop Zoe after the requested restore time)."""
+        if self.end_by_epoch is None:
+            now_e = self.host.now()
+            now = dt.datetime.fromtimestamp(now_e)
+            to_end = self.cfg.end_by - (now.hour * 60 + now.minute + now.second / 60.0)
+            if to_end <= 0:
+                to_end += 1440.0
+            self.end_by_epoch = now_e + to_end * 60.0
+        return self.end_by_epoch
+
     def compute_cap(self) -> float:
-        now = dt.datetime.fromtimestamp(self.host.now())
-        to_end = self.cfg.end_by - (now.hour * 60 + now.minute + now.second / 60.0)
-        if to_end <= 0:
-            to_end += 1440.0
-        return min(self.cfg.cap_min, to_end)
+        """The cap in minutes: ``--cap-min``, bounded by the time left before the fixed absolute deadline (negative once that deadline has passed)."""
+        return min(self.cfg.cap_min, (self.end_by_deadline() - self.host.now()) / 60.0)
 
     def blackout_conflict(self) -> str:
         """The voice-gate window this run (now .. now + cap) would overlap. Trial runs (and a zoe-data kept up) also avoid 03:00, when zoe-data's digest loop fires."""
@@ -933,7 +943,8 @@ class NightWindow(bk.Window):
         if cfg.night_only and not (cfg.night_hours[0] <= nm <= cfg.night_hours[1]):
             self.fallback_allowed = False
             self.refuse(f"it is {now:%H:%M}: a night window starts between 01:30 and 03:40 (a manual run at another hour needs --anytime: Zoe would go silent while the household is awake)")
-        self.cap_min = self.compute_cap()
+        self.end_by_epoch = None
+        self.cap_min = self.compute_cap()                                       # fixes the absolute deadline for this run
         need_min = min(30.0 if cfg.exploratory else 35.0, cfg.cap_min)         # an operator's own smaller --cap-min is not the end-by squeeze this check is about
         if self.cap_min < need_min:
             self.refuse(f"only {self.cap_min:.0f} min remain before {cfg.end_by // 60:02d}:{cfg.end_by % 60:02d} (zoe-data must be back before the 04:00 Sunday loop and the 04:10 voice gate); a window needs {need_min:.0f}")
@@ -981,6 +992,11 @@ class NightWindow(bk.Window):
                         f"Run, then start again: {bk.operator_compact_command(cfg.drop_caches)}")
         waiting = self.wait_until_idle()
         waiting = self.wait_until_quiet() or waiting
+        left = self.compute_cap()            # against the SAME absolute deadline as above: the waits may have eaten the room the window needs (or the deadline itself)
+        if left < need_min:
+            end_txt = dt.datetime.fromtimestamp(self.end_by_deadline()).strftime("%H:%M")
+            self.refuse(f"after waiting for a quiet box it is {dt.datetime.fromtimestamp(host.now()):%H:%M} and {max(0.0, left):.0f} min remain before the {end_txt} end-by deadline "
+                        f"(zoe-data must be back by then); a window needs {need_min:.0f}. Nothing was stopped.")
         self.pre_stop_gate(m)
         if not self.dry:
             self.take_lock()
@@ -990,7 +1006,9 @@ class NightWindow(bk.Window):
             waited_min = self.elapsed_min()
             self.t0, self.t0_epoch = self.host.mono(), self.host.now()
             self.rec["waited_before_open_min"] = round(waited_min, 1)
-            self.cap_min = self.compute_cap()
+            self.cap_min = self.compute_cap()             # the cap LENGTH restarts here, but never past the original absolute deadline
+            if self.cap_min < need_min:
+                raise Refused(f"not clear after taking the lock: only {max(0.0, self.cap_min):.0f} min remain before the end-by deadline; a window needs {need_min:.0f}")
             for recheck in (self.blackout_conflict(), self.busy_now(), self.busy_reason()):
                 if recheck:
                     raise Refused(f"not clear after taking the lock: {recheck}")

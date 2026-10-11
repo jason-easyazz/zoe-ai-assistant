@@ -439,6 +439,46 @@ def test_a_late_start_is_refused_when_too_little_time_remains_before_the_end(tmp
     assert w2.compute_cap() == 65.0 and make(tmp_path, start=at(3, 0))[0].compute_cap() == 55.0
 
 
+def _waits_then_clears(host, after_min):
+    """The box is busy (a timer job) until ``after_min`` minutes have been waited out, then goes quiet."""
+    real_sleep, waited = host.sleep, {"s": 0.0}
+
+    def sleep(sec):
+        waited["s"] += sec
+        if waited["s"] >= after_min * 60:
+            host.busy.clear()
+        real_sleep(sec)
+    host.sleep = sleep
+
+
+def test_a_wait_that_runs_past_end_by_refuses_before_anything_stops_instead_of_getting_a_fresh_cap(tmp_path):
+    """Greptile on #1982 (P1): --anytime --end-by 03:00 --cap-min 35 from 02:20, a quiet box only at 03:05: the clock restart recomputed "next 03:00" (tomorrow's) and gave a fresh
+    35-minute cap, stopping Zoe after the requested restore time. The deadline is absolute now: the window is refused, with nothing stopped."""
+    w, host, cfg = make(tmp_path, argv=["--anytime", "--end-by", "03:00", "--cap-min", "35"], start=at(2, 20), busy=("zoe-backup.service",))
+    cfg.busy_wait_max_min = 60.0
+    _waits_then_clears(host, 45)
+    assert w.run() == nw.EXIT_REFUSED and "03:00 end-by deadline" in w.outcome and "Nothing was stopped" in w.outcome
+    assert stopped_nothing(host) and host.t >= at(3, 5) and not cfg.marker.exists()
+
+
+def test_a_short_wait_that_still_leaves_room_gets_a_cap_that_ends_at_or_before_the_original_deadline(tmp_path):
+    """Waiting is free (the cap length restarts when cleared to stop) but the END never moves: 02:00, end-by 03:00, cap 60, a 10-minute wait -> a 50-minute cap, not a fresh 60."""
+    w, host, cfg = make(tmp_path, argv=["--anytime", "--end-by", "03:00", "--cap-min", "60"], start=at(2, 0), busy=("zoe-backup.service",))
+    cfg.busy_wait_max_min = 60.0
+    _waits_then_clears(host, 10)
+    w.preflight()
+    assert 49.0 <= w.cap_min <= 50.0 and w.rec["waited_before_open_min"] >= 10.0
+    assert w.t0_epoch + w.cap_min * 60.0 <= at(3, 0) + 1e-6                      # the window's last second is the original deadline, or earlier
+    assert w.end_by_epoch == at(3, 0)
+
+
+def test_the_cap_with_no_wait_is_unchanged_and_the_deadline_is_the_next_end_by_across_midnight(tmp_path):
+    w, _, _ = make(tmp_path, start=at(2, 50))
+    assert w.compute_cap() == 65.0 and w.end_by_deadline() == at(3, 55)
+    late, _, _ = make(tmp_path, argv=["--anytime", "--end-by", "03:00"], start=at(23, 30))
+    assert late.end_by_deadline() == at(3, 0, day=10) and late.compute_cap() == 65.0      # tomorrow's 03:00 is right when it has not passed yet
+
+
 def test_the_end_cannot_be_configured_into_the_voice_gate():
     with pytest.raises(bk.Refused, match="voice gate"):
         nw.configure(nw.build_parser().parse_args(["--end-by", "04:20"]))

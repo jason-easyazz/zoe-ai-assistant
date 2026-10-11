@@ -702,7 +702,14 @@ class Z0Arm(Arm):
                     cap = max(nm.MAX_MOMENTS_PER_CHUNK, len(chunk))
                     prompt = nm.MOMENTS_USER.format(lines="\n".join(nm._line(f"m{i}", t) for i, t in enumerate(chunk, 1)), cap=cap)
                     calls += 1
-                    raw = self._run(nm._complete([{"role": "system", "content": nm.MOMENTS_SYSTEM}, {"role": "user", "content": prompt}], nm.moment_max_tokens(cap), cfg, usage))
+                    messages = [{"role": "system", "content": nm.MOMENTS_SYSTEM}, {"role": "user", "content": prompt}]
+                    max_tokens = nm.moment_max_tokens(cap)
+                    try:
+                        raw = self._run(nm._complete(messages, max_tokens, cfg, usage))
+                    except nm.ModelUnreachable as exc:        # the same ``kind=call`` record ``night_mind._run`` writes (``--trace`` must see K12's prompt and reply too)
+                        nm._trace({"kind": "call", "n": calls, "messages": messages, "max_tokens": max_tokens, "error": type(exc).__name__})
+                        raise
+                    nm._trace({"kind": "call", "n": calls, "messages": messages, "max_tokens": max_tokens, "reply": raw})
                     for m in nm.parse_moments(raw, chunk, n, counts, cap) or []:
                         out.append({"quote": m.quote, "kind": m.kind, "feeling": m.feeling, "weight": m.weight})
         finally:

@@ -1678,7 +1678,12 @@ def _build_plan(user_id: str, groups: "list[Group]", threads: "list[dict]", old_
         days = list(by_thread_days.get(t["id"], []))
         if raw_turns and last is not None:
             # the owner's own raw turns decide WHEN the thread was last spoken of, whatever moments the model kept: a dropped later mention moves the last day (and the cadence) forward
-            extra = spoken_days(t["title"], [o["quote"] for o in all_obs if o["thread_id"] == t["id"] and o["state"] != "held"], raw_turns, today)
+            # a raw turn tonight's observations already assign to ANOTHER thread is that thread's story ("Emeric has a dentist appointment" in a health thread is not
+            # a run): it never refreshes this one. A turn the model kept NOWHERE still counts (K9f: a dropped mention must not make a live thread look abandoned).
+            mine = {o["turn_id"] for o in all_obs if o["thread_id"] == t["id"]}
+            elsewhere = {o["turn_id"] for o in all_obs if o["thread_id"] and o["thread_id"] != t["id"]} - mine
+            extra = spoken_days(t["title"], [o["quote"] for o in all_obs if o["thread_id"] == t["id"] and o["state"] != "held"],
+                                [tu for tu in raw_turns if tu.id not in elsewhere], today)
             if extra and _date(extra[-1]) > last:
                 days = sorted(set(days) | set(extra))
                 last = _date(extra[-1])

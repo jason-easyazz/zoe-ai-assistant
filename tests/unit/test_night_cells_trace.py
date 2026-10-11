@@ -88,3 +88,26 @@ def test_the_trace_seam_is_off_by_default_and_a_broken_sink_never_changes_a_nigh
     finally:
         nm.set_trace(prev)
     assert nm._TRACE is None
+
+
+def test_k12_labelling_call_writes_a_call_record_and_a_dead_sink_changes_no_label(monkeypatch):
+    """Greptile on #1982 (P2): ``Z0Arm.moment_labels`` calls ``_complete`` directly, bypassing the ``kind=call`` record ``_run`` writes, so ``--trace`` had no K12 prompt or reply."""
+    from zmb.arms.z0 import Z0Arm  # noqa: E402
+
+    async def fake_complete(messages, max_tokens, cfg, usage, *, schema=None):
+        return json.dumps({"moments": [{"ids": ["m1"], "quote": "I am so proud of finishing the course.", "kind": "other", "who": [], "feeling": "joy",
+                                        "weight": 3, "later": "na"}]}, separators=(",", ":"))
+    monkeypatch.setattr(nm, "_complete", fake_complete)
+    recs = []
+    prev = nm.set_trace(lambda rec: recs.append(rec))
+    arm = Z0Arm(name="Z0n", night=True, night_url="http://127.0.0.1:1", night_ctx=8192)
+    try:
+        labels = arm.moment_labels(["I am so proud of finishing the course."])
+        calls = [r for r in recs if r["kind"] == "call"]
+        assert len(calls) == 1 and "reply" in calls[0] and calls[0]["messages"][-1]["role"] == "user" and "TASK: MOMENTS" in calls[0]["messages"][-1]["content"]
+        assert calls[0]["max_tokens"] > 0 and "proud of finishing" in calls[0]["reply"]
+        nm.set_trace(lambda rec: 1 / 0)                                                                # a dead sink never changes a verdict
+        assert arm.moment_labels(["I am so proud of finishing the course."]) == labels and labels
+    finally:
+        arm.close()
+        nm.set_trace(prev)

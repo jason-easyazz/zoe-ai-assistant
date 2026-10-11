@@ -104,6 +104,37 @@ def test_negative_control_without_the_raw_turns_the_flat_month_reads_quiet(monke
     assert [t["status"] for t in plan2["threads"]] == ["quiet"]                                  # the trip case of the earlier test, same control
 
 
+DENTIST = _turn(14, 9, "Emeric has a dentist appointment tomorrow.")                        # 2026-10-09: names Emeric, but it is ANOTHER story
+
+
+def _run_and_dentist_plan(raw_turns, dentist_kept=True):
+    """The running thread (kept 09-13 / 09-20) plus, when ``dentist_kept``, a second thread whose moment cites the raw 10-09 dentist turn."""
+    mos = [nm.Moment(mid=f"q{i}", turn=tu, quote=tu.text, kind="plan", who=["Emeric"], state="current") for i, tu in enumerate((RUN_A, RUN_B), 1)]
+    groups = [nm.Group(moments=mos, thread_id="", title="Running with Emeric", model_status="open")]
+    if dentist_kept:
+        dm = nm.Moment(mid="q9", turn=DENTIST, quote=DENTIST.text, kind="plan", who=["Emeric"], state="current")
+        groups.append(nm.Group(moments=[dm], thread_id="", title="Emeric's dentist appointment", model_status="open"))
+    counts = dict.fromkeys(nm.COUNT_KEYS, 0)
+    plan = nm._build_plan("u1", groups, [], [], TODAY, NOW, [], "2026-10-11", counts, [], frozenset(), raw_turns)
+    return plan, counts
+
+
+def test_a_raw_turn_the_model_put_in_another_thread_does_not_refresh_this_one():
+    """Greptile on #1982 (P1): ``spoken_days`` matched a person-only turn, so the dentist sentence refreshed the old running story and saved 10-09 as its last day."""
+    plan, counts = _run_and_dentist_plan([RUN_A, RUN_B, DENTIST])
+    running = next(t for t in plan["threads"] if t["title"] == "Running with Emeric")
+    assert running["last_day"] == "2026-09-20" and running["status"] == "quiet" and counts["quiet_moved"] == 0
+    dentist = next(t for t in plan["threads"] if t["title"] != "Running with Emeric")
+    assert dentist["last_day"] == "2026-10-09" and dentist["status"] == "open"                 # its own story is untouched
+
+
+def test_a_turn_the_model_captured_in_no_thread_still_counts():
+    """The residual (K9f safety trade-off, open-problems.md): a dropped mention must not make a live thread look abandoned, even if it is only the person's name."""
+    plan, counts = _run_and_dentist_plan([RUN_A, RUN_B, DENTIST], dentist_kept=False)
+    running = next(t for t in plan["threads"] if t["title"] == "Running with Emeric")
+    assert running["status"] == "open" and running["last_day"] == "2026-10-09" and counts["quiet_moved"] == 1
+
+
 def _two_nights():
     """Night 1 (2026-10-11): the model kept RUN_A/RUN_B, the raw turns hold RUN_D. Night 2 (2026-10-13): night 1's rows fed back, no new groups, RUN_D has left the loader's window."""
     plan1, _c1 = _run_plan([RUN_A, RUN_B, RUN_C, RUN_D])
