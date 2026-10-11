@@ -25,6 +25,7 @@ from stt_wake_strip import _strip_wake_word
 from typed_env import env_bool, env_float, env_int, env_list, env_str
 import voice_first_sound as _first_sound
 import voice_speculation as _speculation
+import voice_stt_stream as _stt_stream
 from voice_speaker_id import _compute_resemblyzer_embedding, _cosine_similarity
 # Waterfall engine mechanics live in tts_waterfall; they are re-exported here so
 # existing importers (main.py health detail, tests that monkeypatch this module,
@@ -2757,8 +2758,14 @@ async def _maybe_capture_stt(wav_path: str, primary: str) -> None:
     logger.info("STT_CAPTURE file=%s moonshine=%r", dst, (primary or "")[:90])
 
 
-async def _transcribe_audio(wav_path: str, capture: bool = True) -> str:
-    text = await _transcribe_audio_impl(wav_path)
+async def _transcribe_audio(wav_path: str, capture: bool = True, pre_text: str | None = None) -> str:
+    # ``pre_text``: a transcript the under-speech STT stream already finished for THIS clip (voice_stt_stream; the caller
+    # verified the sample counts match). Capture below still runs, so the corpus keeps growing exactly as before.
+    if pre_text:
+        _stt_backend_var.set("moonshine-stream:" + env_str("ZOE_MOONSHINE_ARCH", "v2"))
+        text = pre_text
+    else:
+        text = await _transcribe_audio_impl(wav_path)
     # capture=False for instrument callers (replay- panel ids): the replay gate
     # POSTs EXISTING corpus WAVs through here, and recapturing them fed the
     # corpus duplicates of its own newest samples — 62 byte-identical copies in
@@ -5222,13 +5229,17 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     # ── STT (Moonshine, same waterfall as /turn) ──
     t_stt_start = time.monotonic()
     duration_s: float | None = None
+    # ZOE_STT_STREAM_UNDER_SPEECH (default OFF): the daemon fed this turn's audio to a Moonshine stream while the user
+    # spoke; take its finished transcript if (and only if) it provably covers this exact clip. Else batch STT below.
+    _pre_text = await _take_stt_stream_text(payload, raw, suffix)
     try:
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(raw)
             wav_path = tmp.name
         duration_s = _wav_duration_seconds(wav_path) if suffix == ".wav" else None
         try:
-            transcript = await _transcribe_audio(wav_path)
+            # kwarg only when a stream result exists: the flag-off call is byte-identical to before
+            transcript = await _transcribe_audio(wav_path, **({"pre_text": _pre_text} if _pre_text else {}))
         finally:
             try:
                 os.unlink(wav_path)
@@ -5618,6 +5629,71 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     return StreamingResponse(
         _gated(_wrapped()), media_type="application/x-zoe-audio-stream", headers={"Cache-Control": "no-cache"}
     )
+
+
+async def _take_stt_stream_text(payload: dict, raw: bytes, suffix: str) -> str | None:
+    """Finished under-speech transcript for this turn's clip, or None (-> batch STT). Never raises."""
+    sid = (payload or {}).get("stt_stream_id")
+    if not sid or not _stt_stream.stream_under_speech_enabled():
+        return None
+    t0 = time.monotonic()
+    reason, text = "ok", None
+    try:
+        sess = _stt_stream.take(sid) if _stt_stream.valid_stream_id(sid) else None
+        n_wav = _stt_stream.wav_sample_count(raw) if suffix == ".wav" else None
+        try:
+            expected = int((payload or {}).get("stt_stream_samples"))
+        except (TypeError, ValueError):
+            expected = -1
+        if sess is None:
+            reason = "no_session"
+        elif n_wav is None or n_wav != expected:
+            sess.abort()
+            reason = "wav_mismatch"
+        else:
+            lines, reason = await asyncio.get_running_loop().run_in_executor(
+                None, sess.finish, expected, _stt_stream.finish_timeout_s())
+            if lines is not None:
+                text = _strip_wake_word(list(lines)) or None
+                if text is None:
+                    reason = "empty"
+    except Exception as exc:
+        reason = f"error:{exc.__class__.__name__}"
+        text = None
+    logger.info("STT_STREAM outcome=%s reason=%s finish_ms=%d", "hit" if text else "fallback", reason,
+                int((time.monotonic() - t0) * 1000))
+    return text
+
+
+@router.post("/stt_stream/chunk")
+async def voice_stt_stream_chunk(payload: dict, caller: dict = Depends(_require_voice_auth)):
+    """Under-speech STT upload (flag ``ZOE_STT_STREAM_UNDER_SPEECH``, default OFF; 409 when off so a daemon latches).
+
+    ``{"stream_id": <hex>, "seq": <int from 0>, "pcm_base64": <PCM16-LE 16 kHz mono>}``. The audio is queued for a
+    worker thread (this handler never waits on the model). The turn that follows names the stream on /turn_stream.
+    """
+    if not _stt_stream.stream_under_speech_enabled():
+        raise HTTPException(status_code=409, detail="stt stream upload is disabled")
+    sid = (payload or {}).get("stream_id")
+    if not _stt_stream.valid_stream_id(sid):
+        raise HTTPException(status_code=400, detail="invalid stream_id")
+    try:
+        seq = int((payload or {}).get("seq"))
+        pcm = base64.b64decode(str((payload or {}).get("pcm_base64") or ""), validate=True)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="invalid chunk") from exc
+
+    def _make():
+        tr = _ensure_moonshine()
+        st = tr.create_stream()
+        st.start()
+        return st
+
+    sess = await asyncio.get_running_loop().run_in_executor(
+        None, _stt_stream.get_or_open, sid, seq, _make, _moonshine_infer_lock)
+    if sess is None:
+        raise HTTPException(status_code=429, detail="stt stream refused (unknown stream or too many sessions)")
+    return {"ok": sess.feed(seq, pcm), "samples": sess.samples_fed}
 
 
 @router.post("/turn_stream/speculation")

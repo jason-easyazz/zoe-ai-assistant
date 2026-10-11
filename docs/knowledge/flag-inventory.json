@@ -3149,6 +3149,7 @@
         "in_env_example": false,
         "readers": [
           "scripts/perf/measure_moonshine_vad_threshold.py",
+          "scripts/perf/measure_stt_under_speech.py",
           "services/zoe-data/routers/voice_tts.py"
         ],
         "typed_env": true
@@ -5134,6 +5135,26 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_STT_STREAM_FINISH_TIMEOUT_MS": {
+        "defaults": [
+          "2500"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_stt_stream.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_STT_STREAM_UNDER_SPEECH": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_stt_stream.py"
         ],
         "typed_env": true
       },
