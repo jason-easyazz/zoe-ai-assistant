@@ -2106,7 +2106,7 @@ def _contains_decision_keyword(text: str, keywords: frozenset[str]) -> bool:
 _FORM_CANCEL_PHRASES = ("cancel", "dismiss", "close", "never mind", "nevermind", "forget it", "stop")
 _FORM_CANCEL_FILLER = frozenset({
     "it", "that", "this", "the", "form", "panel", "window", "please", "just", "ok", "okay", "oh", "hey", "zoe", "now",
-    "thanks", "thank", "you", "and", "all", "of",
+    "thanks", "thank", "you", "and", "all", "of", "can", "could", "would", "will",
 })
 
 
@@ -2116,7 +2116,8 @@ def _is_form_cancel_command(lc_text: str) -> bool:
     A bare substring match swallowed distress ("I can't stop the bleeding", "the fire is close to the house") as a
     form cancel before the emergency tiers ran, so every word beyond a cancel phrase must be filler.
     """
-    words = re.findall(r"[a-z0-9']+", lc_text.lower())
+    lc_text = lc_text.lower().replace("\u2019", "'").replace("\u2018", "'")  # the STT's curly apostrophes
+    words = re.findall(r"[a-z0-9']+", lc_text)
     if not words or len(words) > 5:
         return False
     rest = " ".join(words)
@@ -2130,7 +2131,8 @@ def _is_form_cancel_command(lc_text: str) -> bool:
 
 _FORM_CONFIRM_PHRASES = (
     "that's correct", "thats correct", "looks good", "looks right", "sounds good", "go ahead", "yes please",
-    "yes do it", "save it", "confirm", "save", "yes", "submit", "done", "accept", "ok", "okay", "perfect", "correct",
+    "yes do it", "save it", "of course", "all right", "confirm", "save", "yes", "yeah", "yep", "yup", "sure", "alright",
+    "absolutely", "definitely", "certainly", "submit", "done", "accept", "ok", "okay", "perfect", "correct",
 )
 _FORM_CONFIRM_FILLER = frozenset({
     "it", "that", "this", "the", "form", "event", "list", "please", "just", "oh", "hey", "zoe", "now", "thanks",
@@ -2144,7 +2146,8 @@ def _is_form_confirm_command(lc_text: str) -> bool:
     Prefix/suffix/substring matching let "I'm not okay", "yes I'm bleeding" and "save the dog" submit the open form
     before the distress tiers ran, so every word beyond a confirm phrase must be filler and negation never confirms.
     """
-    words = re.findall(r"[a-z0-9']+", lc_text.lower())
+    lc_text = lc_text.lower().replace("\u2019", "'").replace("\u2018", "'")  # the STT's curly apostrophes
+    words = re.findall(r"[a-z0-9']+", lc_text)
     if not words or len(words) > 5 or _NEGATION_RE.search(lc_text):
         return False
     rest = " ".join(words)
