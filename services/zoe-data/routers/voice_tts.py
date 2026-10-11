@@ -2128,6 +2128,34 @@ def _is_form_cancel_command(lc_text: str) -> bool:
     return found and all(w in _FORM_CANCEL_FILLER for w in rest.split())
 
 
+_FORM_CONFIRM_PHRASES = (
+    "that's correct", "thats correct", "looks good", "looks right", "sounds good", "go ahead", "yes please",
+    "yes do it", "save it", "confirm", "save", "yes", "submit", "done", "accept", "ok", "okay", "perfect", "correct",
+)
+_FORM_CONFIRM_FILLER = frozenset({
+    "it", "that", "this", "the", "form", "event", "list", "please", "just", "oh", "hey", "zoe", "now", "thanks",
+    "thank", "you", "and", "all", "right",
+})
+
+
+def _is_form_confirm_command(lc_text: str) -> bool:
+    """True only when the whole utterance is a confirm command ("yes", "ok save it", "that's correct").
+
+    Prefix/suffix/substring matching let "I'm not okay", "yes I'm bleeding" and "save the dog" submit the open form
+    before the distress tiers ran, so every word beyond a confirm phrase must be filler and negation never confirms.
+    """
+    words = re.findall(r"[a-z0-9']+", lc_text.lower())
+    if not words or len(words) > 5 or _NEGATION_RE.search(lc_text):
+        return False
+    rest = " ".join(words)
+    found = False
+    for phrase in _FORM_CONFIRM_PHRASES:
+        if re.search(rf"\b{phrase}\b", rest):
+            found = True
+            rest = re.sub(rf"\b{phrase}\b", " ", rest)
+    return found and all(w in _FORM_CONFIRM_FILLER for w in rest.split())
+
+
 _NEGATION_RE = re.compile(r"\b(?:not|never|isn'?t|wasn'?t|aren'?t|can'?t|won'?t|don'?t|doesn'?t)\b|n't\b", re.IGNORECASE)
 _QUESTIONING_RE = re.compile(
     r"\b(?:are|were|r)\s+you\s+(?:sure|certain|serious)\b|\b(?:really|why|what|who|how|where|when|which)\b", re.IGNORECASE)
@@ -3453,20 +3481,7 @@ async def voice_command(
                     "content_type": _cancel_audio.media_type,
                 }
             # Confirm words: submit the active form without requiring a tap on the button.
-            _FORM_CONFIRM_EXACT = {
-                "confirm", "save", "yes", "submit", "done", "accept",
-                "ok", "okay", "perfect", "correct",
-            }
-            _FORM_CONFIRM_PHRASES = {
-                "that's correct", "thats correct", "looks good", "looks right",
-                "sounds good", "go ahead", "yes please", "yes do it", "save it",
-            }
-            _is_form_confirm = (
-                _lc_voice in _FORM_CONFIRM_EXACT
-                or any(phrase in _lc_voice for phrase in _FORM_CONFIRM_PHRASES)
-                or any(_lc_voice.startswith(w + " ") or _lc_voice.endswith(" " + w)
-                       for w in _FORM_CONFIRM_EXACT)
-            )
+            _is_form_confirm = _is_form_confirm_command(_lc_voice)
             if _is_form_confirm:
                 _form_data = _active_form.get("slots") or {}
                 _confirm_reply = "Event saved." if _form_panel_type == "calendar_event" else "List saved."
