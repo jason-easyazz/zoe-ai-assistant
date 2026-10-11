@@ -188,6 +188,7 @@ class FakeNightServer:
         self.requests = 0
         self.up = True
         self.last_body: "dict[str, Any]" = {}
+        self.bodies: "list[dict[str, Any]]" = []         # every chat-completion request body, in order (the sampling a test asserts: temperature, seed)
         #: seconds to hold each chat completion before answering (a slow model: the 12B decodes at ~3.6 tok/s); a callable gets the request body and returns seconds
         self.delay_s: Any = 0.0
         outer = self
@@ -215,6 +216,7 @@ class FakeNightServer:
                 body = json.loads(self.rfile.read(n) or b"{}")
                 outer.requests += 1
                 outer.last_body = body
+                outer.bodies.append(body)
                 if not outer.up:
                     return self._send(503, {"error": "down"})
                 text = outer.brain(body.get("messages") or [], int(body.get("max_tokens") or 0))
