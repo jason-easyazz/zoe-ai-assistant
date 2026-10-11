@@ -129,3 +129,24 @@ def test_speculative_turn_never_takes_the_stream(daemon):
     payload: dict = {}
     daemon._attach_stt_stream(payload, _wav(500), object())
     assert payload == {} and daemon._pending_stt_stream  # left for the real (non-speculative) turn
+
+
+def test_close_is_bounded_when_the_upload_hangs(daemon):
+    """A stuck chunk POST must not hold up the turn: close() gives up at its deadline and attaches nothing."""
+    import threading
+    import time
+
+    release = threading.Event()
+
+    def slow_post(path, body, **kw):
+        release.wait(5)
+        return {"ok": True}
+
+    up = daemon._SttStreamUploader(post=slow_post)
+    try:
+        up.push(b"\x01\x00" * 800)
+        t0 = time.monotonic()
+        assert up.close(wait_s=0.2) is None  # still uploading at the deadline -> batch STT, no stream id
+        assert time.monotonic() - t0 < 1.0
+    finally:
+        release.set()
