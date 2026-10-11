@@ -124,30 +124,34 @@ scripts/setup/install_kokoro_onnx.sh                      # venv + models; no CU
 # between steps, and nothing CUDA-related happens outside the lock.
 REPLIES=/path/to/20-synthetic-lines.txt                   # synthetic text only
 export REPLIES
-flock /tmp/zoe-voice-harness.lock bash <<'EOF'
-set -u
+# The `&&` on the next line is deliberate: --compare runs ONLY if the whole locked block exited 0
+# (both captures and measure_tts finished). Any failure inside stops the block (set -e).
+flock /tmp/zoe-voice-harness.lock bash <<'EOF' && python3 scripts/perf/kokoro_ab_compare.py --compare pytorch onnx --json ~/.cache/zoe/kokoro-ab/compare.json
+set -euo pipefail
 P=scripts/perf/kokoro_ab_compare.py
 UNIT=kokoro-onnx-cand
 avail_mib() { awk '/^MemAvailable:/ {print int($2 / 1024)}' /proc/meminfo; }
+loaded() { curl -fsS "$1/health" 2>/dev/null | grep -E '"pipeline_loaded": *true' >/dev/null; }
 
 # Gate 1: headroom. Refuse (start nothing) at or below 2 GB MemAvailable.
 [ "$(avail_mib)" -gt 2048 ] || { echo "refusing: MemAvailable $(avail_mib) MiB <= 2048"; exit 1; }
 
 # Gate 2: the live sidecar is up >= 90 s with its pipeline loaded, so two CUDA inits never overlap.
-curl -fsS http://127.0.0.1:10201/health | grep -Eq '"pipeline_loaded": *true' \
-  || { echo "refusing: live kokoro-tts not healthy"; exit 1; }
+loaded http://127.0.0.1:10201 || { echo "refusing: live kokoro-tts not healthy"; exit 1; }
 started=$(systemctl --user show kokoro-tts -p ActiveEnterTimestampMonotonic --value)
 up_s=$(awk -v s="$started" '{print int($1 - s / 1000000)}' /proc/uptime)
 [ "$up_s" -ge 90 ] || { echo "refusing: live kokoro-tts up only ${up_s}s"; exit 1; }
 
 # Cleanup on ANY exit (success, failure, Ctrl-C, watchdog kill): no orphan CUDA process.
+# Best-effort by design: `|| true` is only here, and a failed cleanup never masks the real status.
 WD=""
 cleanup() {
-  [ -n "$WD" ] && kill "$WD" 2>/dev/null
-  systemctl --user kill --signal=SIGKILL "$UNIT.scope" 2>/dev/null
-  systemctl --user stop "$UNIT.scope" 2>/dev/null
+  if [ -n "$WD" ]; then kill "$WD" 2>/dev/null || true; fi
+  systemctl --user kill --signal=SIGKILL "$UNIT.scope" 2>/dev/null || true
+  systemctl --user stop "$UNIT.scope" 2>/dev/null || true
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 1' INT TERM      # a signal (including the watchdog's) is a FAILURE, then cleanup runs
 
 # Candidate: capped scope (hard memory ceiling, no swap), parallel port, scratch phrase cache
 # (never ~/.zoe/kokoro_cache).
@@ -157,13 +161,16 @@ systemd-run --user --scope --unit="$UNIT" -p MemoryMax=2500M -p MemorySwapMax=0 
     KOKORO_SIDECAR_PORT=10202 ZOE_KOKORO_CACHE_DIR=/tmp/kokoro-onnx-cache \
     ~/.venvs/kokoro-onnx/bin/python kokoro_sidecar.py' _ "$ROOT" &
 
-# Watchdog: SIGKILL the candidate if MemAvailable drops below 600 MiB, or after 15 minutes total.
+# Watchdog: if MemAvailable drops below 600 MiB, or after 15 minutes total, SIGKILL the candidate
+# AND fail the run: SIGTERM to the main shell ($$ is the main shell's pid even in this subshell)
+# hits the `exit 1` trap above, so the block exits non-zero and --compare never runs.
 (
   deadline=$((SECONDS + 900))
   while sleep 1; do
     if [ "$(avail_mib)" -lt 600 ] || [ "$SECONDS" -ge "$deadline" ]; then
-      echo "watchdog: killing candidate" >&2
-      systemctl --user kill --signal=SIGKILL "$UNIT.scope"
+      echo "watchdog: killing candidate and failing the run" >&2
+      systemctl --user kill --signal=SIGKILL "$UNIT.scope" || true
+      kill -TERM "$$"
       exit 0
     fi
   done
@@ -171,20 +178,23 @@ systemd-run --user --scope --unit="$UNIT" -p MemoryMax=2500M -p MemorySwapMax=0 
 WD=$!
 
 # Wait for the candidate (bounded), then measure while it is the only second CUDA process.
+ready=0
 for _ in $(seq 1 120); do
-  curl -fsS http://127.0.0.1:10202/health 2>/dev/null | grep -Eq '"pipeline_loaded": *true' && break
+  if loaded http://127.0.0.1:10202; then ready=1; break; fi
   sleep 2
 done
-curl -fsS http://127.0.0.1:10202/health >/dev/null || { echo "candidate never became healthy"; exit 1; }
+[ "$ready" -eq 1 ] || { echo "candidate never loaded its pipeline"; exit 1; }
 
+# From here any failing command ends the block (set -e): a failed capture or measure_tts is a
+# failed run, not a partial one.
 python3 $P --capture http://127.0.0.1:10201 --tag pytorch
 python3 $P --capture http://127.0.0.1:10202 --tag onnx
 ZOE_PERF=1 ZOE_KOKORO_SIDECAR_URL=http://127.0.0.1:10202 \
   python3 scripts/perf/measure_tts.py --replies-file "$REPLIES"
-sudo -n cat /sys/kernel/debug/nvmap/iovmm/clients || true   # per-process GPU memory (read-only)
+# Per-process GPU memory (read-only). Only when passwordless sudo exists; if it does and the
+# read fails, the run fails.
+if sudo -n true 2>/dev/null; then sudo -n cat /sys/kernel/debug/nvmap/iovmm/clients; fi
 EOF
-# Pure file work, no CUDA: safe outside the lock, after the candidate is gone.
-python3 scripts/perf/kokoro_ab_compare.py --compare pytorch onnx --json ~/.cache/zoe/kokoro-ab/compare.json
 ```
 
 `measure_tts.py` posts to `/synthesize`, so against the live sidecar it leaves its synthetic
