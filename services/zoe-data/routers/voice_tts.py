@@ -2107,6 +2107,7 @@ _FORM_CANCEL_PHRASES = ("cancel", "dismiss", "close", "never mind", "nevermind",
 _FORM_CANCEL_FILLER = frozenset({
     "it", "that", "this", "the", "form", "panel", "window", "please", "just", "ok", "okay", "oh", "hey", "zoe", "now",
     "thanks", "thank", "you", "and", "all", "of", "can", "could", "would", "will",
+    "event", "list", "shopping", "reminder", "entry", "note", "item", "items",
 })
 
 
@@ -2137,6 +2138,7 @@ _FORM_CONFIRM_PHRASES = (
 _FORM_CONFIRM_FILLER = frozenset({
     "it", "that", "this", "the", "form", "event", "list", "please", "just", "oh", "hey", "zoe", "now", "thanks",
     "thank", "you", "and", "all", "right", "can", "could", "would", "will",
+    "shopping", "reminder", "entry", "note", "item", "items",
 })
 
 

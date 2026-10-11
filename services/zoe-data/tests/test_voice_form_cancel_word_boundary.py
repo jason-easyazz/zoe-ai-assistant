@@ -159,3 +159,20 @@ async def test_a_spoken_question_mark_blocks_a_confirm_at_the_endpoint(monkeypat
         clear_active_form(PANEL_ID)
         if spawned:
             await asyncio.gather(*spawned)
+
+
+@pytest.mark.parametrize("text", [
+    "cancel the event", "cancel the list", "close the reminder", "never mind the shopping list",
+])
+def test_cancel_names_the_form_type(text):
+    assert _is_form_cancel_command(text) is True
+
+
+@pytest.mark.parametrize("text", ["cancel my dentist appointment", "stop the car"])
+def test_cancel_with_other_content_is_not_a_form_cancel(text):
+    assert _is_form_cancel_command(text) is False
+
+
+@pytest.mark.parametrize("text", ["save the event", "save the list", "confirm the reminder"])
+def test_confirm_names_the_form_type(text):
+    assert _is_form_confirm_command(text) is True
