@@ -476,6 +476,12 @@ def test_write_json_trend_and_household_string_check(tmp_path):
     assert len(lines) == 2 and lines[0]["axes"] == {"authority": [3, 4]} and lines[0]["commit"] == "c"
     assert artifact.household_strings_in({"x": "Mika went to the Kit"}, ["Mika", "Dev", "Kit"]) == ["Kit", "Mika"]
     assert artifact.household_strings_in({"x": "developer skipped"}, ["Dev", "Kip"]) == []   # whole words only
+    # a digits-only household string (the synthetic birth year) is looked for in TEXT, never in a run-dependent number
+    assert artifact.household_strings_in({"duration_ms": 1968}, ["1968"]) == []
+    assert artifact.household_strings_in({"counts": [1968, 3.5], "ok": True}, ["1968"]) == []
+    assert artifact.household_strings_in({"note": "born in 1968"}, ["1968"]) == ["1968"]
+    assert artifact.household_strings_in({"1968": 3}, ["1968"]) == ["1968"]                  # a key is text
+    assert artifact.household_strings_in({"duration_ms": 1968, "note": "Mika"}, ["1968", "Mika"]) == ["Mika"]
 
 
 # ── arms: the interface and the stubs ─────────────────────────────────────────
