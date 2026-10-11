@@ -1,5 +1,7 @@
 # Zoe AI Assistant
 
+[![Validate](https://github.com/jason-easyazz/zoe-ai-assistant/actions/workflows/validate.yml/badge.svg?branch=main)](https://github.com/jason-easyazz/zoe-ai-assistant/actions/workflows/validate.yml)
+
 Privacy-first, self-hosted AI companion for the home. Zoe is a voice-and-touch
 assistant that runs on your own hardware: a local LLM, local speech, a memory
 that is measured rather than assumed, and a smart-home and life-hub layer on top.
@@ -25,6 +27,23 @@ a record in `docs/` and, where it can be, by a benchmark in `scripts/perf/`.
 > here; the generated [flag inventory](docs/knowledge/flag-inventory.md) lists
 > every `ZOE_*` flag and its default. A feature is only described as "measured"
 > when a record in `docs/` holds the numbers.
+
+## By the numbers
+
+Each figure is dated and links to the record that holds it. Records are point-in-time;
+the dated record wins over this table.
+
+| Area | Figure | As of | Source |
+|------|--------|-------|--------|
+| Memory bake-off | Zoe's own memory kept (`KEEP_Z0`): no Hindsight/MemPalace arm passed the pre-registered floors. Hard violations: MemPalace agent arm 50, Hindsight + MemPalace 58, Zoe + MemPalace tier 9. Zoe authority 237/237 | 2026-10-08 | [decision record](docs/research/memory-bakeoff-decision-2026-10-08.md) |
+| Forgetting | Bench axis 18/21 in that run; 21/21 offline once the forgotten ledger was supplied to the lab arm | 2026-10-09 | [zoe-memory-bench.md](docs/knowledge/zoe-memory-bench.md) |
+| Person bench, floors in `enforce` (in-process, live 4B) | ask-when-ambiguous 20/20, clean goodbye 10/10, hold-the-fact 0/20 flips (live bench: 0/30). A merged-live re-run is still owed | 2026-10-10 | [person-half-guards.md](docs/knowledge/person-half-guards.md), [enforce pack](docs/knowledge/person-half-enforce-pack-2026-10-09.md) |
+| Voice/chat lane parity | 5/12 cells passing on the voice lane before, 12/12 after | 2026-10-10 | [voice-lane-parity.md](docs/knowledge/voice-lane-parity.md) |
+| First sound after you stop speaking (memory / tool / chat turns) | median 3.3 / 2.8 / 3.4 s today; 2.0 / 2.3 / 2.5 s with three levers that are off by default | 2026-10-09 | [first-sound-latency](docs/knowledge/first-sound-latency-2026-10-09.md) |
+| Night mind | 13 cells: 7/13 on the 4B, 9/13 on the 12B in the first trial, before later fixes; re-measurement in progress (PR #1982) | 2026-10-09 | [night-window.md](docs/knowledge/night-window.md) |
+| Languages | 6 lexicon files: en, es, fr, de, ja, zh (only English natively reviewed) | 2026-10-11 | [lexicons_data](services/zoe-data/lexicons_data) |
+| Engineering | 1846 merged pull requests | 2026-10-11 | `gh pr list --state merged` |
+| Hardware | Jetson Orin NX 16 GB, unified memory; Gemma 4 E4B-QAT + MTP on one 8192-token slot | 2026-10-11 | [runtime-topology.md](docs/knowledge/runtime-topology.md), [CANONICAL.md](docs/CANONICAL.md) |
 
 ## Architecture
 
@@ -169,9 +188,8 @@ The first four are specified in
 [restraint.md](docs/knowledge/restraint.md); the measured enforce-versus-shadow
 numbers and the operator steps to flip them are in
 [person-half-enforce-pack-2026-10-09.md](docs/knowledge/person-half-enforce-pack-2026-10-09.md).
-As of 2026-10-10 the reference deployment runs hold-the-fact and the self-model
-in `enforce` ([voice-lane-parity.md](docs/knowledge/voice-lane-parity.md));
-see the flag inventory for the rest.
+Flipping a floor to `enforce` is the operator's decision; the flag inventory
+lists every default.
 
 - **Voice and chat lane parity.** The spoken lane runs the same conversation
   tiers as typed chat (corrections, contact lookups, spoken feedback, and the
@@ -235,8 +253,7 @@ The instruments are not all green and say so: the bar and person bench carry
 known targets (scenarios expected to fail until a flag is flipped), and the gap
 register lists what is still missing, ranked by evidence
 ([docs/research/samantha-gap-register-2026-10-09.md](docs/research/samantha-gap-register-2026-10-09.md)).
-For example, its 2026-10-09 snapshot of the last full bar run was 18 PASS,
-3 FAIL, 2 SKIP of 23 scenarios. Every instrument must first turn red when the
+Every instrument must first turn red when the
 thing it checks is broken; skip or timeout is never counted as a pass. Found
 problems are fixed or written to
 [docs/knowledge/open-problems.md](docs/knowledge/open-problems.md).
