@@ -1,8 +1,9 @@
 """K9f class fix: a thread is QUIET only if the owner's raw turns went quiet, not when the model dropped a mention.
 
 A 12B window flagged one thread of a FLAT month as a false notice: the model kept only an early moment of the trip thread, so the code-computed quiet saw
-"one mention, 25 days ago" and fired, although the owner talked about the trip again later. ``spoken_since`` asks the owner's raw turns (the same
-name / shared-word test that continues a thread, no language cue) before a thread is called quiet.
+"one mention, 25 days ago" and fired, although the owner talked about the trip again later. K9 (held-out, 12B) is the mirror case: the model dropped the
+LAST mention of a thread that really did go quiet, and a veto on any later raw turn kept it open. ``spoken_days`` lets the owner's raw turns (the same
+name / shared-word test that continues a thread, no language cue) set the thread's last day and cadence; the normal quiet test then runs on that.
 """
 from __future__ import annotations
 
@@ -34,9 +35,9 @@ OTHER_PEOPLE = _turn(4, 6, "Dagny and I walked along the river this morning.")
 TITLE = "Vesper's birthday trip to Oldmere"
 
 
-def _plan(raw_turns):
-    mo = nm.Moment(mid="q1", turn=EARLY, quote=EARLY.text, kind="plan", who=["Vesper"], state="current")      # the model kept ONLY the early mention
-    g = nm.Group(moments=[mo], thread_id="", title=TITLE, model_status="open")
+def _plan(raw_turns, kept=(EARLY,), title=TITLE, who="Vesper"):
+    mos = [nm.Moment(mid=f"q{i}", turn=tu, quote=tu.text, kind="plan", who=[who], state="current") for i, tu in enumerate(kept, 1)]      # what the model kept
+    g = nm.Group(moments=mos, thread_id="", title=title, model_status="open")
     counts = dict.fromkeys(nm.COUNT_KEYS, 0)
     plan = nm._build_plan("u1", [g], [], [], TODAY, NOW, [], "2026-10-11", counts, [], frozenset(), raw_turns)
     return plan, counts
@@ -45,7 +46,7 @@ def _plan(raw_turns):
 def test_a_later_raw_turn_that_names_the_thread_vetoes_quiet():
     plan, counts = _plan([EARLY, LATER, UNRELATED])
     assert [t["status"] for t in plan["threads"]] == ["open"]
-    assert not [c for c in plan["changes"] if c["type"] == "quiet"] and counts["quiet_vetoed"] == 1 and counts["threads_quiet"] == 0
+    assert not [c for c in plan["changes"] if c["type"] == "quiet"] and counts["quiet_moved"] == 1 and counts["threads_quiet"] == 0
 
 
 def test_without_a_later_mention_the_thread_is_still_quiet():
@@ -71,8 +72,33 @@ def test_the_guard_needs_no_english_cue():
     assert nm.spoken_since("Viaje a Oldmere con Vesper", [early.text], [later], early.at.date().isoformat(), TODAY)
 
 
-def test_the_veto_is_what_keeps_the_thread_open(monkeypatch):
-    """Negative control: with the guard switched off the same plan reads quiet - so the first test is red without the fix."""
-    monkeypatch.setattr(nm, "spoken_since", lambda *a, **k: False)
-    plan, _counts = _plan([EARLY, LATER])
+RUN_A = _turn(10, -17, "I went for a run with Emeric this morning.")                          # 2026-09-13
+RUN_B = _turn(11, -10, "Running with Emeric again, we are building up to the fun run.")      # 2026-09-20
+RUN_C = _turn(12, -3, "Emeric and I ran 5k today.")                                            # 2026-09-27: the 12B dropped this moment
+RUN_D = _turn(13, 9, "Another run with Emeric before work.")                                   # 2026-10-09: a recent mention (flat month)
+
+
+def _run_plan(raw_turns):
+    return _plan(raw_turns, kept=(RUN_A, RUN_B), title="Running with Emeric", who="Emeric")      # the model kept only 09-13 and 09-20
+
+
+def test_drift_the_last_raw_mention_sets_the_clock_and_the_thread_still_goes_quiet():
+    """K9 (held-out, 12B): the raw 09-27 turn moves the last day to 09-27; 14 days of silence against a 14-day threshold is quiet. A veto on ANY later turn missed this."""
+    plan, counts = _run_plan([RUN_A, RUN_B, RUN_C, UNRELATED])
+    assert [t["status"] for t in plan["threads"]] == ["quiet"] and counts["threads_quiet"] == 1 and counts["quiet_moved"] == 1
+    assert [c["type"] for c in plan["changes"] if c["type"] == "quiet"] == ["quiet"]
+
+
+def test_flat_a_recent_raw_mention_keeps_the_thread_open():
+    """K9f: the model dropped the latest runs, a raw 10-09 turn names Emeric: not quiet."""
+    plan, counts = _run_plan([RUN_A, RUN_B, RUN_C, RUN_D])
+    assert [t["status"] for t in plan["threads"]] == ["open"] and counts["threads_quiet"] == 0 and counts["quiet_moved"] == 1
+
+
+def test_negative_control_without_the_raw_turns_the_flat_month_reads_quiet(monkeypatch):
+    """Without the raw-turn clock the same flat plan is quiet (last kept 09-20, 21 days): the K9f false notice, so the test above is red without the fix."""
+    monkeypatch.setattr(nm, "spoken_days", lambda *a, **k: [])
+    plan, _counts = _run_plan([RUN_A, RUN_B, RUN_C, RUN_D])
     assert [t["status"] for t in plan["threads"]] == ["quiet"]
+    plan2, _c2 = _plan([EARLY, LATER])
+    assert [t["status"] for t in plan2["threads"]] == ["quiet"]                                  # the trip case of the earlier test, same control

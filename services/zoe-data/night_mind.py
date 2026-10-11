@@ -954,19 +954,25 @@ def thread_identity(title: str, quotes: "Sequence[str]") -> dict:
     return {"anchors": " ".join(sorted({"@" + n for n in names - _NOT_NAMES} | (words - _ANCHOR_STOP)))}
 
 
-def spoken_since(title: str, quotes: "Sequence[str]", raw_turns: "Sequence[Turn]", last_day: str, today: "_dt.date") -> bool:
-    """Did the owner talk about this thread in a raw turn AFTER the thread's last kept mention? Quiet is a fact about the owner's words, not about the moments the model
-    happened to keep: a model that drops the latest of a thread's mentions must not make a thread that is still being talked about look abandoned (K9f). The same
-    name / shared-word test that continues a thread (``thread_match``) is applied to each later turn. Pure."""
-    last = _date(last_day)
+def spoken_days(title: str, quotes: "Sequence[str]", raw_turns: "Sequence[Turn]", today: "_dt.date") -> "list[str]":
+    """The days (ISO, sorted) on which the owner's raw turns talk about this thread, by the same name / shared-word test that continues a thread (``thread_match``). Quiet is
+    a fact about the owner's words, not about the moments the model happened to keep: a model that drops the latest mentions of a thread must neither make a thread that is
+    still being talked about look abandoned (K9f) nor hide the real last day of one that did go quiet (K9). Pure."""
     ident = thread_identity(title, quotes)
-    if last is None or not ident["anchors"]:
-        return False
+    if not ident["anchors"]:
+        return []
+    days = set()
     for tu in raw_turns:
         d = _date(local_day(tu.at))
-        if d is not None and last < d <= today and thread_match([Moment(turn=tu, quote=tu.text)], ident):
-            return True
-    return False
+        if d is not None and d <= today and thread_match([Moment(turn=tu, quote=tu.text)], ident):
+            days.add(d.isoformat())
+    return sorted(days)
+
+
+def spoken_since(title: str, quotes: "Sequence[str]", raw_turns: "Sequence[Turn]", last_day: str, today: "_dt.date") -> bool:
+    """Did the owner talk about this thread in a raw turn AFTER the given last day? Pure."""
+    last = _date(last_day)
+    return last is not None and any((_date(d) or last) > last for d in spoken_days(title, quotes, raw_turns, today))
 
 
 def _render_new(moments: "Sequence[Moment]") -> str:
@@ -1345,7 +1351,7 @@ async def run_for_user(user_id: str, transcript: Any, svc: Any = None, *, now: "
 
 COUNT_KEYS = ("turns_in", "turns_dropped_routine", "turns_skipped_cap", "chunks", "calls", "moments_calls", "threads_calls", "calls_invalid", "calls_salvaged", "tail_calls", "tail_lost",
               "moments_proposed", "moments_dropped_id", "moments_dropped_quote", "moments_verified", "moments_held", "moments_history", "ops_applied",
-              "ops_dropped", "groups_split", "observations_written", "observations_pending", "threads_created", "threads_updated", "threads_resolved", "threads_quiet", "quiet_vetoed",
+              "ops_dropped", "groups_split", "observations_written", "observations_pending", "threads_created", "threads_updated", "threads_resolved", "threads_quiet", "quiet_moved",
               "prompt_tokens", "completion_tokens", "prompt_tokens_est_max")
 
 
@@ -1630,10 +1636,15 @@ def _build_plan(user_id: str, groups: "list[Group]", threads: "list[dict]", old_
                 t["status"], t["closed_run"] = "resolved", night_date
             continue
         last = _date(t["last_day"])
-        if last is not None and (today - last).days >= quiet_threshold(by_thread_days.get(t["id"], [])):
-            if raw_turns and spoken_since(t["title"], [o["quote"] for o in all_obs if o["thread_id"] == t["id"] and o["state"] != "held"], raw_turns, t["last_day"], today):
-                counts["quiet_vetoed"] += 1         # the owner's own later turn names it: the model dropped that mention, the thread is not abandoned
-                continue
+        days = list(by_thread_days.get(t["id"], []))
+        if raw_turns and last is not None:
+            # the owner's own raw turns decide WHEN the thread was last spoken of, whatever moments the model kept: a dropped later mention moves the last day (and the cadence) forward
+            extra = spoken_days(t["title"], [o["quote"] for o in all_obs if o["thread_id"] == t["id"] and o["state"] != "held"], raw_turns, today)
+            if extra and _date(extra[-1]) > last:
+                days = sorted(set(days) | set(extra))
+                last = _date(extra[-1])
+                counts["quiet_moved"] += 1
+        if last is not None and (today - last).days >= quiet_threshold(days):
             t["status"] = "quiet"
             counts["threads_quiet"] += 1
             changes.append({"type": "quiet", "thread": t["id"], "ids": by_thread_ids.get(t["id"], [])[-2:]})
