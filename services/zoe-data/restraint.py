@@ -53,12 +53,13 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Optional
 
+import restraint_head as _head
 import restraint_lex as _lex
 
 logger = logging.getLogger(__name__)
 
 ENV = "ZOE_RESTRAINT"
-VERSION = 2  # the classifier version: bump it and every stored class is invalid (read as unstored)
+VERSION = 3  # the classifier version: bump it and every stored class is invalid (read as unstored). 3 = the semantic head joined the union
 CLASSES = ("health", "money", "family_conflict", "grief", "other_member", "affect")
 SURFACES = ("packet", "brief", "raise_greeting", "raise_cue", "card")
 
@@ -156,10 +157,16 @@ _TAG_CLASSES = {
 
 
 def classify_full(text: Any, *, memory_type: Any = "", affect: Any = "", entity_type: Any = "",
-                  kind: str = "", names: Iterable[str] = (), tags: Any = "") -> tuple[tuple[str, ...], tuple[str, ...]]:
+                  kind: str = "", names: Iterable[str] = (), tags: Any = "",
+                  head: Any = "cache") -> tuple[tuple[str, ...], tuple[str, ...]]:
     """``(classes, signals)`` for one row or thread. ``signals`` names what decided each class
-    (``entity``, ``type``, ``tag``, ``affect``, ``kind``, ``lexicon``, ``name``) so a test or an audit can
-    tell a structured decision from a word-list one. Pure, no I/O, order follows ``CLASSES``."""
+    (``entity``, ``type``, ``tag``, ``affect``, ``kind``, ``lexicon``, ``name``, ``head``) so a test or an audit can
+    tell a structured decision from a word-list one. Order follows ``CLASSES``.
+
+    ``head`` is the semantic half (``restraint_head``: six logistic units on the embedding the router already loaded),
+    UNIONED with everything else, so it can only add a class: ``False`` = off (the word list and structured signals alone),
+    ``"cache"`` (default; the hot-path mode) = use the head's answer only if this exact text was embedded before, never embed,
+    ``True`` = embed it now (the write path and the nightly pass). With no head file or no loaded embedder it adds nothing."""
     raw = str(text or "")
     low = raw.lower().replace("\u2019", "'")
     pk = _lex.pack_for(raw)
@@ -201,6 +208,10 @@ def classify_full(text: Any, *, memory_type: Any = "", affect: Any = "", entity_
     elif pk.affect is not None and pk.affect.search(low):
         found["affect"] = "lexicon"
 
+    if head:
+        for cls in _head.classes(raw, embed=head is True):
+            found.setdefault(cls, "head")
+
     classes = tuple(c for c in CLASSES if c in found)
     return classes, tuple(f"{c}:{found[c]}" for c in classes)
 
@@ -221,7 +232,7 @@ def stamp(md: dict, text: Any) -> None:
         if mode() == "off":
             return
         classes = classify(text, memory_type=md.get("memory_type"), affect=md.get("candidate_affect"),
-                           entity_type=md.get("entity_type"), tags=md.get("tags"))
+                           entity_type=md.get("entity_type"), tags=md.get("tags"), head=True)
         md["sensitivity"] = ",".join(classes)
         md["sensitivity_v"] = VERSION
         md["sensitivity_h"] = text_hash(text)
@@ -946,7 +957,7 @@ async def store_thread_classes(db, user_id: str, items: Iterable[tuple[str, str,
             cur_ = valid.get(ref)
             # classified BEFORE the skip: the contact names are an input too, so a thread stored before
             # a contact was added is re-derived (same text, new class) rather than kept stale
-            classes, signals = classify_full(text, kind=kind, names=names)
+            classes, signals = classify_full(text, kind=kind, names=names, head=True)
             if cur_ and cur_[0] == VERSION and cur_[1] == h and _parse_csv(cur_[2]) == classes:
                 continue
             # invalidate + insert are ONE transaction: a failed insert must not leave the thread with
