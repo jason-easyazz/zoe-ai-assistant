@@ -794,6 +794,7 @@ class NightWindow(bk.Window):
         self.marker_owner_alive = False
         self.fallback_allowed = True                   # False after a refusal for the HOUR: a manual run in daylight must not start the night's jobs
         self.last_load_why = ""                        # the diagnosis of the most recent failed 12B start
+        self.load_ok = False                           # the 12B became healthy at least once on this run
         self.night_lost = ""                           # non-empty = the 12B never loaded on this night (after the one retry): the morning ALARM says why
 
     # ── bookkeeping ──
@@ -1267,6 +1268,16 @@ class NightWindow(bk.Window):
         return ("cuda_alloc" if any("cudaMalloc" in ln for ln in keep) else "died") + ": " + (keep[-1] if keep else "no error line in its journal")
 
     def load_12b_with_retry(self, pick: "dict[str, Any]") -> None:
+        """``_load_12b_one_retry`` plus the lost-night bookkeeping: ANY exit before a load succeeded (a ``LoadFailed``, but also a refused ``systemd-run`` on either attempt, or the cap
+        ending the wait) sets ``night_lost`` so the morning ALARM is written; keyed on ``load_ok``, not on which exception, so no failure shape can slip past it."""
+        try:
+            self._load_12b_one_retry(pick)
+        except BaseException as exc:  # noqa: BLE001 - re-raised; only the bookkeeping happens here
+            if not self.load_ok and not self.night_lost:
+                self.night_lost = str(exc) if isinstance(exc, Aborted) else f"{type(exc).__name__}: {exc}"
+            raise
+
+    def _load_12b_one_retry(self, pick: "dict[str, Any]") -> None:
         """The night's 12B start: ONE more attempt when the first dies on a load failure (cudaMalloc / NvMap), inside the cap and the end-by deadline. The up-to-6 compactions in
         ``sleep_units`` run before the first start only; a fragmentation that is still there at the start (2026-10-11: MemFree 5.9 GB at the failure) ended the window and the night ran
         nothing. Retry = stop the failed server, compact (sudo when available), start again, provided ``time_left_s`` still covers the load and the jobs' minimum
@@ -1278,7 +1289,6 @@ class NightWindow(bk.Window):
             left = self.time_left_s()
             if left < LOAD_RETRY_MIN_LEFT_S:
                 self.record_load(False, self.last_load_why)
-                self.night_lost = str(first)
                 self.event(f"12B start failed and there is no room for a second attempt ({left:.0f}s left before the restore reserve, a retry needs {LOAD_RETRY_MIN_LEFT_S:.0f}s)")
                 raise
             self.event(f"12B start failed ({self.last_load_why[:160]}): one more attempt inside the cap ({left:.0f}s left) - stopping it, compacting, starting again")
@@ -1288,8 +1298,7 @@ class NightWindow(bk.Window):
         self.rec["load_retry"] = {"first_failure": self.last_load_why[:300], "compacted": compacted, "left_s": round(left)}
         try:
             self.load_12b(pick, health_timeout_s=max(120.0, min(480.0, self.time_left_s() - 120.0)))
-        except LoadFailed as second:
-            self.night_lost = str(second)                      # load_12b recorded the failure (last attempt)
+        except LoadFailed:                                     # load_12b recorded the failure (last attempt)
             self.event(f"NIGHT LOST: the 12B did not load on either attempt ({self.last_load_why[:200]})")
             raise
         except BaseException:
@@ -1317,6 +1326,7 @@ class NightWindow(bk.Window):
                 self.record_load(False, why)
             raise LoadFailed(f"the 12B did not load ({why}); see `journalctl --user -u {NIGHT_UNITS['llm']}` and docs/knowledge/night-window.md 'when the 12B will not load'")
         self.record_load(True)
+        self.load_ok = True
         self.floor_armed = True
         m = self.mem()
         self.rec["arith"]["load_s"] = round(self.host.mono() - self.rec["arith"].pop("load_started_s", self.host.mono()), 1)

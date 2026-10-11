@@ -113,7 +113,10 @@ with the mandatory gate never running — a gate that can silently not-run is no
 - **A deploy waits out an open night window.** The first step of `deploy.yml` ("Wait out an open night window")
   polls every 30 s while `~/.zoe/night-window/WINDOW_OPEN` exists (the 12B window has stopped zoe-data, the 4B,
   Kokoro and the router), up to 75 min, and FAILS LOUDLY after that rather than restart zoe-data beside the loaded
-  12B. Re-run the deploy once the window has ended. Pinned by `tests/unit/test_deploy_night_window_wait.py`.
+  12B. Re-run the deploy once the window has ended. The "Restart zoe-data" step repeats the same bounded wait
+  immediately before `systemctl --user restart`, so a window that opens mid-deploy is not restarted beside either
+  (it deliberately does NOT take `/tmp/zoe-brain-window.lock`, which benches and landings hold for hours; the
+  remaining race is the instant between that check and the restart). Pinned by `tests/unit/test_deploy_night_window_wait.py`.
 - **Not every gated file is equally evidenced, and the LiveKit lane is the weak one.** The replay
   corpus is replayed over `POST /api/voice/transcribe` (the HTTP lane) and **never traverses**
   `livekit_aiortc.py` / `routers/voice_livekit.py` / `services/livekit/config.yaml`. For a diff

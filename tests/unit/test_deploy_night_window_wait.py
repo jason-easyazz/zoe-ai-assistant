@@ -129,3 +129,46 @@ def test_a_window_that_closes_on_the_last_poll_still_deploys(world):
     r = _run(world, CLOSE_AFTER="150")
     assert r.returncode == 0, r.stdout + r.stderr
     assert len(_sleeps(world)) == 150 and "nothing deployed" not in r.stdout
+
+
+# --- the re-check right before the zoe-data restart (review on #1992) --------------------
+# The first step only sees the marker when the job STARTS. A window that opens during the
+# memory gate / pip / alembic / docker steps would otherwise be restarted beside.
+def _run_restart(world, tmp_path: Path, **env_extra) -> tuple[subprocess.CompletedProcess, bool]:
+    script = next(s for s in _steps() if s.get("name") == "Restart zoe-data (user service)")["run"]
+    live = tmp_path / "live"
+    live.mkdir(exist_ok=True)
+    log = tmp_path / "systemctl.log"
+    log.write_text("")
+    shim = world["bin"] / "systemctl"
+    shim.write_text(f'#!/bin/sh\necho "$@" >> {log}\n[ "$2" = show ] && echo 0\nexit 0\n')
+    shim.chmod(0o755)
+    base = {k: v for k, v in os.environ.items() if k not in ("CLOSE_AFTER", "DEPLOY_BASE_SHA")}
+    env = {**base, "HOME": str(world["home"]), "PATH": f"{world['bin']}:{os.environ['PATH']}", "ZOE_CHECKOUT": str(live), **env_extra}
+    world["log"].write_text("")
+    r = subprocess.run(["bash", "-e", "-c", script], capture_output=True, text=True, env=env)
+    return r, "restart zoe-data.service" in log.read_text()
+
+
+def test_restart_proceeds_when_no_window_is_open(world, tmp_path):
+    r, restarted = _run_restart(world, tmp_path)
+    assert r.returncode == 0 and restarted and _sleeps(world) == [], r.stdout + r.stderr
+
+
+def test_a_window_that_opened_mid_deploy_holds_the_restart_until_it_closes(world, tmp_path):
+    world["marker"].write_text('{"run_id": "opened-mid-deploy"}')
+    r, restarted = _run_restart(world, tmp_path, CLOSE_AFTER="2")
+    assert r.returncode == 0 and restarted, r.stdout + r.stderr
+    assert _sleeps(world) == ["30", "30"] and "Night window opened during this deploy" in r.stdout
+
+
+def test_a_window_that_stays_open_never_gets_a_restart_beside_the_12b(world, tmp_path):
+    world["marker"].write_text("{}")
+    r, restarted = _run_restart(world, tmp_path)
+    assert r.returncode == 1 and not restarted
+    assert len(_sleeps(world)) == 150 and "zoe-data was NOT restarted" in r.stdout
+
+
+def test_the_recheck_sits_immediately_before_the_restart_command():
+    run = next(s for s in _steps() if s.get("name") == "Restart zoe-data (user service)")["run"]
+    assert run.index("WINDOW_OPEN") < run.index("systemctl --user restart zoe-data.service")

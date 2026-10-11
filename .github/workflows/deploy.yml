@@ -470,6 +470,25 @@ jobs:
           else
             echo "DEPLOY_BASE_SHA unknown or not an object in this checkout — restarting zoe-data (fail closed)."
           fi
+          # NIGHT-WINDOW RE-CHECK, immediately before the restart (review on #1992: the first
+          # step only sees the state when the job STARTS, and a window can open during the
+          # memory gate / pip / alembic / docker steps that follow it). A window that is open
+          # now has zoe-data stopped on purpose beside a loaded 12B; restarting it here is
+          # the exact failure the first step exists to prevent. Same bound as that step.
+          # This narrows the race from "minutes" to the instant between this check and the
+          # restart; it does NOT take the brain-window lock, which benches, landings and the
+          # samantha bar hold for hours (a deploy blocked on it would stall behind them, and a
+          # lock held here would make a timer-started window REFUSE instead of waiting).
+          NIGHT_MARKER="$HOME/.zoe/night-window/WINDOW_OPEN"
+          for attempt in $(seq 1 150); do
+            [ -e "${NIGHT_MARKER}" ] || break
+            echo "Night window opened during this deploy (${NIGHT_MARKER}); NOT restarting zoe-data beside the 12B. Waiting 30s (${attempt}/150)."
+            sleep 30
+          done
+          if [ -e "${NIGHT_MARKER}" ]; then
+            echo "::error::night window still open after 75 min: zoe-data was NOT restarted (the new code is pulled but not running). ${NIGHT_MARKER} still exists; check ~/.zoe/night-reports/ALARM and run scripts/night/night_window.sh --restore-only if the window is over, then re-run this deploy."
+            exit 1
+          fi
           systemctl --user restart zoe-data.service
           # Record which interpreter actually came up (B0.7: venv 3.12 vs system
           # 3.10) — what RUNS, read from the process, not the unit. Informational.

@@ -99,7 +99,7 @@ class FakeHost(nw.NightHost):
     """Answers every command the window issues. State: which units are active, which are healthy, whether the 12B / the clone is up, the memory arithmetic."""
 
     def __init__(self, tmp: Path, *, start=None, base=1200.0, freed=1.0, sudo=True, active=None, unhealthy=(), job_rc=None, job_s=600.0, fail_run=(), models=None, busy=(),
-                 panel_busy=False, llm_cost=7500.0, free_gap=0.0, gap_heal=0.0, llm_dies=False, boot_id="boot-1", nvmap_mib=12000.0, trial_no_output=False, probe_hang_drop=0.0, llm_dies_first=0):
+                 panel_busy=False, llm_cost=7500.0, free_gap=0.0, gap_heal=0.0, llm_dies=False, boot_id="boot-1", nvmap_mib=12000.0, trial_no_output=False, probe_hang_drop=0.0, llm_dies_first=0, start_refused_from=0):
         self.t = start if start is not None else at(2, 50)
         self.cmds: "list[tuple[list[str], bool]]" = []
         self.tmp = tmp
@@ -124,6 +124,7 @@ class FakeHost(nw.NightHost):
         self.dry = False
         self.llm_dies, self.boot_id, self.nvmap_mib = llm_dies, boot_id, nvmap_mib
         self.llm_dies_first, self.llm_starts = llm_dies_first, 0     # the first N starts of the 12B die loading (cudaMalloc / NvMap); later ones load
+        self.start_refused_from = start_refused_from                 # N >= 1: the Nth and later `systemd-run` of the 12B are refused outright (rc 1), not a load failure
         self.trial_no_output, self.probe_hang_drop = trial_no_output, probe_hang_drop
         self.free_gap, self.gap_heal = free_gap, gap_heal          # MemFree = MemAvailable - gap (page cache that is 'available' but not FREE); each compaction heals gap_heal of it
 
@@ -214,6 +215,8 @@ class FakeHost(nw.NightHost):
         if prog == "systemd-run":
             if "--unit=zoe-night-12b" in line:
                 self.llm_starts += 1
+                if self.start_refused_from and self.llm_starts >= self.start_refused_from:
+                    return bk.Result(1, "injected: systemd-run refused")
                 self.llm_up = not (self.llm_dies or self.llm_starts <= self.llm_dies_first)
             if "--unit=zoe-night-4b32k" in line:
                 self.clone_up = True
@@ -833,6 +836,26 @@ def test_no_second_attempt_when_the_cap_has_no_room_for_it_but_the_night_is_stil
     assert len(twelve_b_starts(host)) == 1 and any("no room for a second attempt" in e["msg"] for e in w.rec["events"])
     assert "NIGHT LOST" in (cfg.report_dir / "ALARM").read_text() and json.loads(w.failures_path.read_text())["count"] == 1
     assert wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]
+
+
+@pytest.mark.parametrize("kw", [
+    {"llm_dies_first": 1, "start_refused_from": 2},      # attempt 1 dies loading, the retry's systemd-run is refused (an Aborted, not a LoadFailed)
+    {"start_refused_from": 1},                           # attempt 1's own systemd-run is refused: no retry, still no 12B all night
+])
+def test_a_night_with_no_load_leaves_the_alarm_whatever_shape_the_failure_takes(tmp_path, kw):
+    """Review (Codex P2, Greptile P1) on #1992: only a final LoadFailed set night_lost, so a refused start left no morning ALARM (and the clean restore had deleted any older one)."""
+    w, host, cfg = make(tmp_path, **kw)
+    assert w.run() == nw.EXIT_ABORTED and "could not start" in w.outcome
+    assert ran_on_the_12b(host) == []
+    alarm = (cfg.report_dir / "ALARM").read_text()
+    assert "NIGHT LOST" in alarm and "could not start" in alarm and "run t1" in alarm
+    assert wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]
+
+
+def test_a_lost_alarm_is_not_raised_when_the_12b_loaded_and_a_job_then_failed(tmp_path):
+    w, host, cfg = make(tmp_path, job_rc={"*": 1})
+    w.run()
+    assert w.load_ok and not w.night_lost and not (cfg.report_dir / "ALARM").exists()
 
 
 def test_the_night_lost_alarm_is_appended_to_a_failed_restores_alarm_not_replacing_it(tmp_path):
