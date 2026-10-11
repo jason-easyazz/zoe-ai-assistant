@@ -255,7 +255,11 @@ async def _run_night_mind_synthetic(user_id: str) -> dict:
         from memory_digest import _load_todays_messages
         from memory_service import get_memory_service
 
-        transcript = await _load_todays_messages(user_id)
+        from memory_digest import TranscriptLoadError
+        try:
+            transcript = await _load_todays_messages(user_id)
+        except TranscriptLoadError as exc:      # a failed read is its own status, never a quiet day
+            return {"enabled": True, **night_mind.load_failed(user_id, exc)}
         res = await night_mind.run_for_user(user_id, transcript, get_memory_service())
         keep = ("status", "mode", "turns_in", "turns_dropped_routine", "chunks", "calls", "moments_verified", "moments_held", "observations_written",
                 "observations_pending", "threads_created", "threads_updated", "calls_invalid", "skipped_reason", "error")
