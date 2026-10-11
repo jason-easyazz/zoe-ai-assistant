@@ -17,10 +17,10 @@ export function zoeTimeZone(): string {
 }
 
 /** "It's 7:05 am on Monday, 12 October 2026." in the household timezone. */
-export function describeNow(now: Date = new Date()): string {
+export function describeNow(now: Date = new Date(), locale?: string): string {
   const timeZone = zoeTimeZone();
-  const time = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', timeZone });
-  const date = now.toLocaleDateString(undefined, {
+  const time = now.toLocaleTimeString(locale ? [locale] : [], { hour: 'numeric', minute: '2-digit', timeZone });
+  const date = now.toLocaleDateString(locale, {
     weekday: 'long',
     year: 'numeric',
     month: 'long',

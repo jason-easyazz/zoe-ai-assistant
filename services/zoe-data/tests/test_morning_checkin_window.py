@@ -89,6 +89,7 @@ async def test_once_per_day_dedup_keys_on_the_local_date_not_utc(monkeypatch):
         await mc.MorningCheckInTrigger().check(db)
     sql, params = db.calls[0]
     assert "CURRENT_DATE" not in sql and "AT TIME ZONE" in sql
+    assert "?::" not in sql      # asyncpg rejects a str for a ?::date bind (verified on real PG: DataError); compare as text
     assert "claimed" not in sql                       # a claimed brief was still sent today
     assert params == ("morning_checkin", "Australia/Perth", "2026-10-12")
 

@@ -11,6 +11,7 @@ import { test } from 'node:test';
 
 const { describeNow, zoeTimeZone } = await import('../src/local-time.ts');
 
+// Locale pinned to en-US in every call: the default (host locale, as get_time always used) must not make the tests host-dependent.
 // 2026-10-11T22:30:00Z = Mon 12 Oct 06:30 in Perth (UTC+8), Mon 12 Oct 09:30 in Sydney (AEDT +11),
 // but still Sun 11 Oct 22:30 in UTC.
 const INSTANT = new Date('2026-10-11T22:30:00Z');
@@ -18,7 +19,7 @@ const INSTANT = new Date('2026-10-11T22:30:00Z');
 test('defaults to Australia/Perth regardless of the host zone', () => {
   delete process.env.ZOE_TIMEZONE;
   assert.equal(zoeTimeZone(), 'Australia/Perth');
-  const out = describeNow(INSTANT);
+  const out = describeNow(INSTANT, 'en-US');
   assert.match(out, /Monday/);
   assert.match(out, /12/);
   assert.match(out, /6:30/);
@@ -26,9 +27,9 @@ test('defaults to Australia/Perth regardless of the host zone', () => {
 
 test('ZOE_TIMEZONE is honoured, read per call', () => {
   process.env.ZOE_TIMEZONE = 'Australia/Sydney';
-  assert.match(describeNow(INSTANT), /9:30/);
+  assert.match(describeNow(INSTANT, 'en-US'), /9:30/);
   process.env.ZOE_TIMEZONE = 'UTC';
-  const utc = describeNow(INSTANT);
+  const utc = describeNow(INSTANT, 'en-US');
   assert.match(utc, /Sunday/);
   assert.match(utc, /10:30/);
   delete process.env.ZOE_TIMEZONE;
@@ -37,7 +38,7 @@ test('ZOE_TIMEZONE is honoured, read per call', () => {
 test('an unknown zone falls back to the default instead of throwing', () => {
   process.env.ZOE_TIMEZONE = 'Not/AZone';
   assert.equal(zoeTimeZone(), 'Australia/Perth');
-  assert.match(describeNow(INSTANT), /6:30/);
+  assert.match(describeNow(INSTANT, 'en-US'), /6:30/);
   delete process.env.ZOE_TIMEZONE;
 });
 

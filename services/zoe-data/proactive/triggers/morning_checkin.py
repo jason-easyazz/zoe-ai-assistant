@@ -247,7 +247,7 @@ class MorningCheckInTrigger(ProactiveTrigger):
         # Claimed rows count too: a brief the member already tapped is still a brief sent.
         async with db.execute(
             "SELECT user_id FROM proactive_pending WHERE trigger_type=? "
-            "AND (created_at::timestamptz AT TIME ZONE ?)::date = ?::date",
+            "AND (created_at::timestamptz AT TIME ZONE ?)::date::text = ?",
             ("morning_checkin", now.tzinfo.key, today),
         ) as cur:
             already_fired = {row[0] async for row in cur}
