@@ -11,6 +11,20 @@ required for the core experience.
 > (see [HARDWARE_COMPATIBILITY.md](HARDWARE_COMPATIBILITY.md)). Read the whole
 > Install section before starting.
 
+## Screenshots
+
+The touch panel at its native 1280x720, shown with an invented demo household
+(Alex, Sam and Juniper the dog). Details in [docs/images/panel](docs/images/panel/README.md).
+
+![Home: clock, weather, your day, now playing](docs/images/panel/home.png)
+
+| | |
+|---|---|
+| ![Hearing a spoken request](docs/images/panel/voice.png) | ![Shopping and weekend-jobs lists](docs/images/panel/lists.png) |
+| ![Week calendar](docs/images/panel/calendar.png) | ![Music: now playing and queue](docs/images/panel/music.png) |
+
+A real memory-view capture from a demo account is to follow.
+
 ## Architecture
 
 Zoe is a split stack — Docker for the stateful/edge services, host-native
