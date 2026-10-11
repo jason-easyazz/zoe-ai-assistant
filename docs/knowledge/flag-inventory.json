@@ -883,6 +883,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_CONVERSATION_FEEDBACK": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/conversation_feedback.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_CORE_DATA_URL": {
         "defaults": [
           "-"

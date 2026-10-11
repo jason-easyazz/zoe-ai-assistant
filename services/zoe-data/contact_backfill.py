@@ -450,7 +450,7 @@ async def backfill_contacts(
             people[key] = (existing[0], rel)
 
     # 2) Open the DB early — needed for the portrait read AND the dedup below.
-    from person_extractor import _ensure_db, _resolve_person_uuid
+    from person_extractor import _ensure_db, _resolve_person
 
     _db, opened = await _ensure_db(db)
     if _db is None:
@@ -507,8 +507,8 @@ async def backfill_contacts(
         # 3) Dedup against the user's existing non-deleted contacts.
         suggestions: list[dict] = []
         for name, rel in people.values():
-            existing_uuid = await _resolve_person_uuid(name, user_id, _db)
-            if existing_uuid:
+            resolved = await _resolve_person(name, user_id, _db)
+            if resolved.status != "none":  # a contact (or two Anns: not a new one) already answers to it
                 summary["skipped_existing"] += 1
                 continue
             slots = {"name": name}

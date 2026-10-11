@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Auto-generated inventory of every ZOE_* environment flag read in the codebase — defaults, readers, typed_env adoption, and .env.example coverage.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-10-10T00:00:00Z
+timestamp: 2026-10-11T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-10-10T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-10-10. The table body is deterministic (sorted, no
+Last generated: 2026-10-11. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Default `dynamic` = not statically extractable; `(required)` = bare
@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-582 flags; 580 not documented in `.env.example`.
+583 flags; 581 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -103,6 +103,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_CONTACT_OFFER_BATCH` | `''` | no | NO | `services/zoe-data/contacts_conversation.py` |
 | `ZOE_CONTEXT_TOKEN_BUDGET` | `5500` | yes | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_CONVERSATION_ENDER_ACKS` | `dynamic` | no | NO | `services/zoe-data/conversation_opener.py` |
+| `ZOE_CONVERSATION_FEEDBACK` | `True` | yes | NO | `services/zoe-data/conversation_feedback.py` |
 | `ZOE_CORE_DATA_URL` | `-` | no | NO | `services/zoe-data/zoe_core_client.py` |
 | `ZOE_CORE_IDLE_TIMEOUT_S` | `'20'` | no | NO | `services/zoe-data/zoe_core_client.py` |
 | `ZOE_CORE_MAX_CONCURRENCY` | `'2'` | no | NO | `services/zoe-data/zoe_core_client.py` |
