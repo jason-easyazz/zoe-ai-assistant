@@ -256,7 +256,10 @@ def run_cells_once(args, url: str, cfg, run_idx: int = 0) -> dict:
                     emit({"kind": "cell_end", "verdict": o.verdict, "reason": o.reason, "probes": o.evidence.get("probes") or [],
                           "threads": [{k: t.get(k) for k in ("id", "title", "status", "first_day", "last_day", "mentions_n", "anchors")} for t in arm.threads()], "changes": arm.changes()})
                 except Exception as exc:  # noqa: BLE001 - the trace never decides a verdict
-                    emit({"kind": "cell_end", "verdict": o.verdict, "trace_error": type(exc).__name__})
+                    try:
+                        emit({"kind": "cell_end", "verdict": o.verdict, "trace_error": type(exc).__name__})
+                    except Exception:  # noqa: BLE001 - a sink that stopped accepting writes must not lose the finished cell's vote
+                        logging.getLogger(__name__).debug("trace sink failed on the cell_end fallback; the verdict is kept", exc_info=True)
             cell_calls[key] = {n: int(arm.night_totals.get(n, 0) - before.get(n, 0)) for n in ("moments_calls", "threads_calls")}      # measured, not guessed: cells_budget.CELL_CALLS is checked against it
             out[key] = o.verdict
             logging.getLogger(__name__).info("NIGHT_CELL id=%s verdict=%s wall_s=%.1f run=%d", key, o.verdict, time.monotonic() - t_cell, run_idx)
@@ -270,7 +273,10 @@ def run_cells_once(args, url: str, cfg, run_idx: int = 0) -> dict:
     finally:
         _nm.set_trace(prev_trace)
         if trace_f is not None:
-            trace_f.close()
+            try:
+                trace_f.close()
+            except Exception:  # noqa: BLE001 - closing the trace (its last flush) must never lose the run's verdicts
+                logging.getLogger(__name__).debug("trace file close failed; the verdicts are kept", exc_info=True)
         totals_seen = dict(arm.night_totals)
         arm.close()
     verdicts = list(out.values())

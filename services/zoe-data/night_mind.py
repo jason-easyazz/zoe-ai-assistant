@@ -63,7 +63,7 @@ import night_store
 logger = logging.getLogger(__name__)
 
 
-def change_backed(quote: str) -> bool:
+def change_backed(quote: str, lang: "str | None" = None) -> bool:
     """Does the owner's own line SAY something changed? A moment the model labels ``kind=change`` only changes a thread's status, retires the
     thread's earlier observations, or skips the stale-belief check when this is true: model points, code decides (K9f: a flat week's "Booked the
     train to X" labelled a change was reported as a changed thread). True when the line carries one of the language's ``change_cues`` or an
@@ -72,7 +72,7 @@ def change_backed(quote: str) -> bool:
     text = str(quote or "")
     if not text.strip():
         return False
-    lang = _lex.detect(text) or "en"
+    lang = lang or _lex.detect(text) or "en"     # a clause is too short to detect reliably: the caller passes the language of the whole sentence
     if not _lex.words(lang, "change_cues"):
         return True
     rx = _lex.word_re(lang, "change_cues")
@@ -92,12 +92,44 @@ def _source_sentence(turn_text: str, quote: str) -> str:
     return t[a:(min(ends) + 1) if ends else len(t)]
 
 
+_CLAUSE_BREAK_CHARS = ",;:—–"
+
+
+def _quote_clauses(sentence: str, quote: str, lang: str) -> str:
+    """The clause(s) of ``sentence`` that the cited ``quote`` overlaps, joined ("" when the quote is not in it). A clause ends at , ; : or a dash and at a
+    ``clause_joiners`` word of the language's lexicon (a language with none splits on punctuation only). Pure."""
+    q = str(quote or "").strip()
+    i = sentence.lower().find(q.lower()) if q else -1
+    if i < 0:
+        return ""
+    j = i + len(q)
+    cuts: "list[tuple[int, int]]" = [(k, k + 1) for k, ch in enumerate(sentence) if ch in _CLAUSE_BREAK_CHARS]
+    rx = _lex.word_re(lang, "clause_joiners")
+    if rx is not None:
+        cuts += [(m.start(), m.end()) for m in rx.finditer(sentence)]
+    parts, pos = [], 0
+    for a, b in sorted(cuts):
+        if a >= pos:
+            parts.append((pos, a))
+        pos = max(pos, b)
+    parts.append((pos, len(sentence)))
+    return " ".join(sentence[a:b] for a, b in parts if a < j and b > i)
+
+
 def moment_change_backed(m: "Moment") -> bool:
-    """``change_backed`` for a moment: the cited quote, or else the sentence of the owner's turn it sits in (a short quote can leave out the very words that
-    say the value changed: "now" / "moved" in the rest of the sentence). A change stated in ANOTHER sentence of the turn does not count. Pure."""
+    """``change_backed`` for a moment: the cited quote, or else the CLAUSE(S) of the owner's sentence the quote sits in (a short quote can leave out the very
+    words that say the value changed: "now" / "moved" in the rest of its clause). A change stated in ANOTHER clause or sentence does not count - a cue about a
+    different subject in the same sentence ("... for Rowan while Brynja now lives in Pellham") is not borrowed. Pure."""
     if change_backed(m.quote):
         return True
-    return m.turn is not None and change_backed(_source_sentence(m.turn.text, m.quote))
+    if m.turn is None:
+        return False
+    sentence = _source_sentence(m.turn.text, m.quote)
+    if not sentence:
+        return False
+    lang = _lex.detect(sentence) or "en"
+    clauses = _quote_clauses(sentence, m.quote, lang)
+    return bool(clauses) and change_backed(clauses, lang)
 
 ENV = "ZOE_NIGHT_MIND"
 URL_ENV = "ZOE_NIGHT_MIND_URL"
@@ -1643,6 +1675,7 @@ def _build_plan(user_id: str, groups: "list[Group]", threads: "list[dict]", old_
             if extra and _date(extra[-1]) > last:
                 days = sorted(set(days) | set(extra))
                 last = _date(extra[-1])
+                t["last_day"] = extra[-1]               # PERSIST it: once that raw turn leaves the nightly loader's rolling window, the next night must still find the later day on the row
                 counts["quiet_moved"] += 1
         if last is not None and (today - last).days >= quiet_threshold(days):
             t["status"] = "quiet"

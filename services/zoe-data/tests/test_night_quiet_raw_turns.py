@@ -102,3 +102,31 @@ def test_negative_control_without_the_raw_turns_the_flat_month_reads_quiet(monke
     assert [t["status"] for t in plan["threads"]] == ["quiet"]
     plan2, _c2 = _plan([EARLY, LATER])
     assert [t["status"] for t in plan2["threads"]] == ["quiet"]                                  # the trip case of the earlier test, same control
+
+
+def _two_nights():
+    """Night 1 (2026-10-11): the model kept RUN_A/RUN_B, the raw turns hold RUN_D. Night 2 (2026-10-13): night 1's rows fed back, no new groups, RUN_D has left the loader's window."""
+    plan1, _c1 = _run_plan([RUN_A, RUN_B, RUN_C, RUN_D])
+    row = next(iter(plan1["threads"]))
+    today2, now2 = dt.date(2026, 10, 13), dt.datetime(2026, 10, 13, 3, 0, tzinfo=UTC)
+    counts2 = dict.fromkeys(nm.COUNT_KEYS, 0)
+    plan2 = nm._build_plan("u1", [], [dict(row)], list(plan1["all_obs"]), today2, now2, [], "2026-10-13", counts2, [], frozenset(), [RUN_A, RUN_B, RUN_C])
+    return plan1, plan2, counts2
+
+
+def test_the_later_raw_mention_is_kept_on_the_thread_row_for_the_next_night():
+    """Greptile round 4 on #1982: the raw turn moved the last day only for the night's quiet test; once it left the loader's rolling window the next night read the thread quiet."""
+    plan1, plan2, counts2 = _two_nights()
+    assert [t["status"] for t in plan1["threads"]] == ["open"] and plan1["threads"][0]["last_day"] == "2026-10-09"
+    assert [t["status"] for t in plan2["threads"]] == ["open"] and plan2["threads"][0]["last_day"] == "2026-10-09"      # 4 days against the threshold
+    assert counts2["threads_quiet"] == 0
+
+
+def test_the_control_a_row_that_kept_only_the_models_last_day_reads_quiet_on_night_two():
+    """The row as it was before the fix (last day = the last KEPT moment, 09-20) with RUN_D gone from the raw turns: quiet. This is what the test above guards against."""
+    plan1, _c1 = _run_plan([RUN_A, RUN_B, RUN_C, RUN_D])
+    row = dict(plan1["threads"][0], last_day="2026-09-20")
+    counts2 = dict.fromkeys(nm.COUNT_KEYS, 0)
+    plan2 = nm._build_plan("u1", [], [row], list(plan1["all_obs"]), dt.date(2026, 10, 13), dt.datetime(2026, 10, 13, 3, 0, tzinfo=UTC), [], "2026-10-13", counts2, [],
+                           frozenset(), [RUN_A, RUN_B, RUN_C])
+    assert [t["status"] for t in plan2["threads"]] == ["quiet"]

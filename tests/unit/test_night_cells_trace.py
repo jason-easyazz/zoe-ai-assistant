@@ -52,6 +52,24 @@ def test_trace_records_every_call_every_plan_and_the_cells_final_threads(tmp_pat
     assert [e["verdict"] for e in ends] == cells["votes"]["K9f"]                                      # the trace agrees with the votes the run printed
 
 
+@pytest.mark.skipif(not os.path.exists("/dev/full"), reason="needs /dev/full (a file whose every write fails)")
+def test_a_trace_file_that_stops_accepting_writes_never_loses_a_cells_verdict(tmp_path):
+    """Greptile round 4 on #1982: ``emit`` raising inside the cell_end block, then again in its fallback (and ``close()`` flushing into the same dead sink), used to escape
+    before the NIGHT_CELL line - a finished cell's vote lost. ``/dev/full`` fails every write with ENOSPC, so this exercises all three sites in a real run."""
+    ref, dead = tmp_path / "ref.jsonl", "/dev/full"
+    votes = []
+    for trace in (str(ref), dead):
+        srv = FakeNightServer(FakeNightBrain())
+        try:
+            r = _run_py(["scripts/maintenance/zoe-night-mind.py", "--model-url", srv.url, "--ctx-tokens", "8192", "--cells", "--only", "K9f", "--runs", "1",
+                         "--decode-tok-s", "50", "--prefill-tok-s", "900", "--trace", trace])
+            assert r.returncode == 0, (trace, r.stderr[-800:])
+            votes.append(json.loads(r.stdout)["cells"]["votes"]["K9f"])
+        finally:
+            srv.close()
+    assert votes[1] == votes[0] and votes[1][0] in ("PASS", "FAIL")                                  # the dead sink recorded the same verdict as a healthy one
+
+
 def test_trace_is_refused_outside_cells_and_nothing_is_written(tmp_path):
     out = tmp_path / "t.jsonl"
     r = _run_py(["scripts/maintenance/zoe-night-mind.py", "--user", "someone", "--dry-run", "--trace", str(out)])

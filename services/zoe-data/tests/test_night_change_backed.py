@@ -70,3 +70,28 @@ def test_a_short_quote_is_checked_against_its_own_sentence_but_not_the_rest_of_t
     assert nm.moment_change_backed(_moment("Booked the train to Saltreach. The concert is off.", "Booked the train to Saltreach")) is False   # a cue in ANOTHER sentence
     assert nm.moment_change_backed(_moment("Booked the train to Saltreach for Rowan's birthday.", "Booked the train to Saltreach")) is False  # K9f: still no change
     assert nm.moment_change_backed(_moment("anything", "not in the turn")) is False
+
+
+CLAUSE_CASES = [
+    # Greptile round 4 on #1982: a cue from ANOTHER subject in the same sentence is not borrowed
+    ("Booked the train to Saltreach for Rowan while Brynja now lives in Pellham.", "Booked the train to Saltreach for Rowan", False),
+    ("Hello! Brynja has moved to Pellham, which is great.", "Brynja", True),
+    ("Brynja now lives in Pellham.", "Brynja", True),
+    ("The Saltreach trip is off and we are going to Oldmere instead.", "we are going to Oldmere", True),
+    ("Booked the train to Saltreach for Rowan; Brynja now lives in Pellham.", "Booked the train to Saltreach for Rowan", False),   # punctuation splits too
+    ("Reservé el tren a Madrid para Rowan mientras Brynja ahora vive en Pellham.", "Reservé el tren a Madrid para Rowan", False),
+    ("Mi hermana Brynja ahora vive en Pellham.", "Mi hermana Brynja", True),
+]
+
+
+@pytest.mark.parametrize("text,quote,expected", CLAUSE_CASES)
+def test_a_cue_backs_a_moment_only_from_the_clause_its_quote_sits_in(text, quote, expected):
+    assert nm.moment_change_backed(_moment(text, quote)) is expected
+
+
+def test_a_language_without_clause_joiners_splits_on_punctuation_only(monkeypatch):
+    real = nm._lex.word_re
+    monkeypatch.setattr(nm._lex, "word_re", lambda lang, key, **kw: None if key == "clause_joiners" else real(lang, key, **kw))
+    text = "Booked the train to Saltreach for Rowan while Brynja now lives in Pellham."
+    assert nm.moment_change_backed(_moment(text, "Booked the train to Saltreach for Rowan")) is True       # no joiner data: the whole unpunctuated sentence is one clause
+    assert nm.moment_change_backed(_moment("Booked the train to Saltreach for Rowan, Brynja now lives in Pellham.", "Booked the train to Saltreach for Rowan")) is False
