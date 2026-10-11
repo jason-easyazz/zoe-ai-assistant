@@ -429,8 +429,12 @@ def schedule_record(user_id: str, session_id: str, reply_id: str, reply: str, me
         if not promises:
             return False
         loop = asyncio.get_running_loop()
-        task = loop.create_task(record(user_id, session_id, reply_id or uuid.uuid4().hex[:16], promises, tools, now=now,
-                                       scheduled_at=erase_gate.generation(user_id)))
+        coro = record(user_id, session_id, reply_id or uuid.uuid4().hex[:16], promises, tools, now=now,
+                      scheduled_at=erase_gate.generation(user_id))
+        # A speculative voice turn (verdict pending) must not save a promise for a reply the member never hears: the recording waits for
+        # the verdict and is dropped on cancel. No gate bound (every non-speculative turn): ``coro`` unchanged.
+        import voice_speculation
+        task = loop.create_task(voice_speculation.defer_until_commit(coro, "commitment"))
         _pending.add(task)
         task.add_done_callback(_pending.discard)
         return True

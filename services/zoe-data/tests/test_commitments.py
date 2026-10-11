@@ -28,6 +28,7 @@ import importlib.util
 import json
 import logging
 import sqlite3
+import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -780,6 +781,90 @@ def test_the_forgotten_name_check_never_runs_while_a_connection_is_borrowed(env,
     promise(env, "I'll remind you at 5 to call Marisol.")
     assert sweep(DUE_5 + timedelta(minutes=3))
     assert open_now["asked"] >= 2 and open_now["asked_while_open"] == 0
+
+
+@pytest.mark.parametrize("verdict,stored", [("commit", 1), ("cancel", 0)])
+def test_a_speculative_turn_saves_its_promise_only_when_it_commits(env, monkeypatch, verdict, stored):
+    """A speculative voice turn whose verdict is a cancel is never heard: its promise must not be saved (enforce would later make a
+    reminder or check-back the member never heard). Negative control: the 'commit' arm - the same flow with a commit saves it - and
+    removing the ``defer_until_commit`` wrap turns the cancel arm red."""
+    import voice_speculation as vs
+    monkeypatch.setenv(cm.ENV, "enforce")
+
+    async def go():
+        gate = vs.open_gate(f"commit-{verdict}")
+        token = vs.bind(gate)
+        try:
+            mp.note_user_turn(MEMBER, "remind me later", "s1")
+            mp.claim_turn(MEMBER, "remind me later")
+            assert cm.schedule_record(MEMBER, "s1", "r1", PROMISE_5, "remind me later", now=NOW) is True
+        finally:
+            vs.unbind(token)
+        await asyncio.sleep(0.05)
+        before = rows(env)                      # verdict still pending: nothing is saved yet
+        gate.resolve(verdict)
+        await cm.flush()
+        await asyncio.sleep(0.05)
+        vs.close_gate(gate)
+        return before
+
+    assert run(go()) == []
+    assert len(rows(env)) == stored
+
+
+@pytest.mark.parametrize("quiet", [True, False])
+def test_the_slow_loop_checks_promises_in_quiet_hours_and_speaks_nothing(monkeypatch, quiet):
+    """A promise due at 23:00 is checked at 23:00. Inside the quiet window the loop runs the bookkeeping sweep and NOTHING else: no
+    trigger check (no database borrowed for triggers), no notification fired. Control: outside the window the same loop runs the
+    triggers too (quiet=False), so the quiet arm is not passing because the loop does nothing."""
+    import proactive.engine as engine
+    calls = {"sweep": 0, "fired": 0, "triggers": 0}
+
+    async def fake_sweep(*, now=None):
+        calls["sweep"] += 1
+        return {}
+
+    async def fake_fire(**kw):
+        calls["fired"] += 1
+
+    class _Trigger:
+        trigger_type = "t"
+
+        async def check(self, db):
+            calls["triggers"] += 1
+            return [types.SimpleNamespace(user_id=MEMBER, message="hi", trigger_type="t", item_id="", context={})]
+
+    @contextlib.asynccontextmanager
+    async def fake_db():
+        yield object()
+
+    ticks = {"n": 0}
+
+    async def one_tick(_s):
+        ticks["n"] += 1
+        if ticks["n"] > 1:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(cm, "sweep", fake_sweep)
+    monkeypatch.setattr(engine, "_is_in_quiet_hours", lambda now=None: quiet)
+    monkeypatch.setattr(engine, "fire_notification", fake_fire)
+    monkeypatch.setattr(engine, "_get_compat_db", fake_db)
+    monkeypatch.setattr(engine, "_slow_triggers", [_Trigger()])
+    monkeypatch.setattr(engine.asyncio, "sleep", one_tick)
+
+    with pytest.raises(asyncio.CancelledError):
+        run(engine._slow_loop())
+    assert calls["sweep"] == 1
+    if quiet:
+        assert calls["triggers"] == 0 and calls["fired"] == 0
+    else:
+        assert calls["triggers"] == 1 and calls["fired"] == 1
+
+
+def test_a_reply_with_no_speculative_turn_is_recorded_as_before(env, monkeypatch):
+    monkeypatch.setenv(cm.ENV, "enforce")
+    assert promise(env) is True
+    assert len(rows(env)) == 1
 
 
 def test_a_reminder_about_something_else_does_not_keep_the_promise(env, monkeypatch):
