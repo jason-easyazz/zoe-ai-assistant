@@ -1,0 +1,56 @@
+--- a/src/models/gemma4-assistant.cpp
++++ b/src/models/gemma4-assistant.cpp
+@@ -18,7 +18,7 @@
+     ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH_SWA,   hparams.n_embd_head_v_swa);
+ }
+ 
+-void llama_model_gemma4_assistant::load_arch_tensors(llama_model_loader &) {
++void llama_model_gemma4_assistant::load_arch_tensors(llama_model_loader & ml) {
+     LLAMA_LOAD_LOCALS;
+ 
+     if (n_embd_head_k != n_embd_head_v) {
+@@ -31,8 +31,19 @@
+         throw std::runtime_error("Gemma 4 assistant requires embedding_length_out to carry the target hidden size");
+     }
+ 
+-    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, 0);
+-    output   = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, TENSOR_DUPLICATED);
++    // Optional reduced draft vocabulary (same convention as EAGLE3 / DFlash): a `d2t` tensor maps
++    // each row of the (sliced) tied token_embd / LM head to a target token id. The head is only the
++    // draft's LM head - the input embedding always comes from the target - so any subset of rows is
++    // valid. Verification uses the full target vocab; a token outside the subset is a rejected draft.
++    int64_t n_draft_vocab = n_vocab;
++    if (const ggml_tensor * d2t_meta = ml.get_tensor_meta("d2t")) {
++        n_draft_vocab = d2t_meta->ne[0];
++        d2t = create_tensor(tn(LLM_TENSOR_D2T), { n_draft_vocab }, 0);
++        LLAMA_LOG_INFO("%s: Gemma 4 assistant using d2t mapping (draft_vocab_size = %lld)\n", __func__, (long long) n_draft_vocab);
++    }
++
++    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_draft_vocab }, 0);
++    output   = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_draft_vocab }, TENSOR_DUPLICATED);
+ 
+     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), { n_embd }, 0);
+ 
+@@ -188,6 +199,22 @@
+     cb(cur, "result_norm", -1);
+ 
+     ggml_tensor * logits = build_lora_mm(model.output, cur);
++
++    // reduced draft vocab: scatter the draft logits to the target vocabulary via d2t
++    if (model.d2t) {
++        const int64_t n_draft_vocab = logits->ne[0];
++        const int64_t n_outputs     = logits->ne[1];
++        const int64_t n_vocab       = (int64_t) model.vocab.n_tokens();
++
++        GGML_ASSERT(model.d2t->type == GGML_TYPE_I64);
++        GGML_ASSERT(model.d2t->ne[0] == n_draft_vocab);
++
++        ggml_tensor * full = ggml_fill(ctx0, ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, n_vocab, n_outputs), -INFINITY);
++        logits = ggml_set_rows(ctx0, full,
++                ggml_reshape_3d(ctx0, logits,    1,             n_draft_vocab, n_outputs),
++                ggml_reshape_3d(ctx0, model.d2t, n_draft_vocab, 1,             1));
++        logits = ggml_reshape_2d(ctx0, logits, n_vocab, n_outputs);
++    }
+     cb(logits, "result_output", -1);
+     res->t_logits = logits;
+ 
