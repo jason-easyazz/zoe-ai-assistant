@@ -516,6 +516,41 @@ def _wrap_message_with_persona(message: str, block: str) -> str:
     return f"{_PERSONA_ENVELOPE_PREFIX}{json.dumps(block, ensure_ascii=True)}\n{message}"
 
 
+# Machine-readable MANNER-BLOCK envelope (ZOE_MANNER_BLOCK, manner_block.py). MUST match the sidecar parser
+# (labs/flue-zoe-brain-2x src/manner.ts MANNER_ENVELOPE_PREFIX / _RE). zoe-data owns the text (lexicons_data/<lang>.json) and the
+# adults-only decision; the sidecar appends the block to THAT turn's system prompt and strips the line, so the model never sees it.
+#
+# WIRE ORDER: between the persona line and the identity line:
+#   " zoe-spec:<id>\n zoe-replay:1\n zoe-persona:<JSON string>\n zoe-manner:<JSON string>\n zoe-uid:<id>\n<blocks>\n<message>"
+# Flag off, a minor, a guest, a failed lookup or wire 1 = NO line = the bytes are exactly what they were.
+_MANNER_ENVELOPE_PREFIX = " zoe-manner:"
+_MANNER_ENVELOPE_RE = re.compile(r"^ zoe-manner:[^\n]*\n")
+
+
+async def _manner_context_block(user_id: str, message: str) -> str:
+    """The manner block for THIS member's turn, or "" (= no line). Never raises. A 1.x sidecar does not parse the line (it would
+    reach the model as text), so wire 1 never gets one."""
+    try:
+        if _wire_version() < _WIRE_2:
+            return ""
+        import manner_block
+
+        block = await manner_block.block_for(user_id, message)
+        if block:
+            logger.info("MANNER_BLOCK user=%s chars=%d", (user_id or "").strip(), len(block))
+        return block
+    except Exception:  # noqa: BLE001 - a manner is optional; the turn is not
+        logger.warning("MANNER_BLOCK failed; no block", exc_info=True)
+        return ""
+
+
+def _wrap_message_with_manner(message: str, block: str) -> str:
+    """Prefix ``message`` with the manner envelope, or return it unchanged (no block)."""
+    if not block:
+        return message
+    return f"{_MANNER_ENVELOPE_PREFIX}{json.dumps(block, ensure_ascii=True)}\n{message}"
+
+
 # Machine-readable REPLAY-ISOLATION envelope. MUST match the sidecar's parser
 # (labs/flue-zoe-brain-2x src/replay-mode.ts REPLAY_ENVELOPE_PREFIX / _RE).
 #
@@ -603,6 +638,8 @@ def _strip_replay_envelope(message: str) -> str:
         message = _SPECULATIVE_ENVELOPE_RE.sub("", message)
         # ...and so is the persona block: only the seam may set it.
         message = _PERSONA_ENVELOPE_RE.sub("", message)
+        # ...and so is the manner block.
+        message = _MANNER_ENVELOPE_RE.sub("", message)
     return message
 
 
@@ -2049,6 +2086,8 @@ async def _run_flue_brain_streaming_turn(
         if hedge_block:
             brain_message = f"{brain_message}\n{hedge_block}"
     outbound_message = _wrap_message_with_identity(brain_message, uid)
+    # Manner block (ZOE_MANNER_BLOCK, default OFF; adults only): rides between the persona line and the identity line. "" = unchanged bytes.
+    outbound_message = _wrap_message_with_manner(outbound_message, await _manner_context_block(uid, message))
     # Household persona + this member's mode (ZOE_PERSONA_LAYER, default OFF): rides between the
     # replay line and the identity line. "" (the default) = unchanged bytes.
     outbound_message = _wrap_message_with_persona(outbound_message, await _persona_context_block(uid))
