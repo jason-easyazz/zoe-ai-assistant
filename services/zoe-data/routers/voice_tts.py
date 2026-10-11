@@ -2103,12 +2103,27 @@ def _contains_decision_keyword(text: str, keywords: frozenset[str]) -> bool:
     return False
 
 
+# DESIGN: with a form open, an utterance cancels/confirms it only when it is ENTIRELY a command phrase plus filler (<= 8 words).
+# Anything unrecognised deliberately falls through to the normal conversation tiers - the safe direction (the form stays open and
+# Zoe still hears the person, e.g. distress), so this vocabulary is intentionally conservative. Phrases are removed longest-first.
+_FORM_MAX_WORDS = 8
 _FORM_CANCEL_PHRASES = ("cancel", "dismiss", "close", "never mind", "nevermind", "forget it", "stop")
 _FORM_CANCEL_FILLER = frozenset({
     "it", "that", "this", "the", "form", "panel", "window", "please", "just", "ok", "okay", "oh", "hey", "zoe", "now",
     "thanks", "thank", "you", "and", "all", "of", "can", "could", "would", "will",
-    "event", "list", "shopping", "reminder", "entry", "note", "item", "items",
+    "event", "list", "shopping", "reminder", "entry", "note", "item", "items", "calendar", "right", "away",
 })
+
+
+def _strip_command_phrases(words: list[str], phrases: tuple[str, ...], filler: frozenset[str]) -> bool:
+    """True when `words` is at least one of `phrases` (whole words, longest first) and nothing but `filler` besides."""
+    rest = " ".join(words)
+    found = False
+    for phrase in sorted(phrases, key=lambda ph: (-len(ph.split()), -len(ph))):
+        if re.search(rf"\b{phrase}\b", rest):
+            found = True
+            rest = re.sub(rf"\b{phrase}\b", " ", rest)
+    return found and all(w in filler for w in rest.split())
 
 
 def _is_form_cancel_command(lc_text: str) -> bool:
@@ -2119,26 +2134,20 @@ def _is_form_cancel_command(lc_text: str) -> bool:
     """
     lc_text = lc_text.lower().replace("\u2019", "'").replace("\u2018", "'")  # the STT's curly apostrophes
     words = re.findall(r"[a-z0-9']+", lc_text)
-    if not words or len(words) > 5:
+    if not words or len(words) > _FORM_MAX_WORDS:
         return False
-    rest = " ".join(words)
-    found = False
-    for phrase in _FORM_CANCEL_PHRASES:
-        if re.search(rf"\b{phrase}\b", rest):
-            found = True
-            rest = re.sub(rf"\b{phrase}\b", " ", rest)
-    return found and all(w in _FORM_CANCEL_FILLER for w in rest.split())
+    return _strip_command_phrases(words, _FORM_CANCEL_PHRASES, _FORM_CANCEL_FILLER)
 
 
 _FORM_CONFIRM_PHRASES = (
     "that's correct", "thats correct", "looks good", "looks right", "sounds good", "go ahead", "yes please",
-    "yes do it", "save it", "of course", "all right", "confirm", "save", "yes", "yeah", "yep", "yup", "sure", "alright",
+    "yes do it", "save it", "do it", "of course", "all right", "confirm", "save", "yes", "yeah", "yep", "yup", "sure", "alright",
     "absolutely", "definitely", "certainly", "submit", "done", "accept", "ok", "okay", "perfect", "correct",
 )
 _FORM_CONFIRM_FILLER = frozenset({
     "it", "that", "this", "the", "form", "event", "list", "please", "just", "oh", "hey", "zoe", "now", "thanks",
     "thank", "you", "and", "all", "right", "can", "could", "would", "will",
-    "shopping", "reminder", "entry", "note", "item", "items",
+    "shopping", "reminder", "entry", "note", "item", "items", "calendar", "appointment", "away",
 })
 
 
@@ -2150,17 +2159,11 @@ def _is_form_confirm_command(lc_text: str) -> bool:
     """
     lc_text = lc_text.lower().replace("\u2019", "'").replace("\u2018", "'")  # the STT's curly apostrophes
     words = re.findall(r"[a-z0-9']+", lc_text)
-    if not words or len(words) > 5 or _NEGATION_RE.search(lc_text):
+    if not words or len(words) > _FORM_MAX_WORDS or _NEGATION_RE.search(lc_text):
         return False
     if _QUESTIONING_RE.search(lc_text) or re.search(r"\b(?:you|u)\s+sure\b", lc_text):  # "you sure", "are you sure", "really"
         return False
-    rest = " ".join(words)
-    found = False
-    for phrase in _FORM_CONFIRM_PHRASES:
-        if re.search(rf"\b{phrase}\b", rest):
-            found = True
-            rest = re.sub(rf"\b{phrase}\b", " ", rest)
-    return found and all(w in _FORM_CONFIRM_FILLER for w in rest.split())
+    return _strip_command_phrases(words, _FORM_CONFIRM_PHRASES, _FORM_CONFIRM_FILLER)
 
 
 _NEGATION_RE = re.compile(r"\b(?:not|never|isn'?t|wasn'?t|aren'?t|can'?t|won'?t|don'?t|doesn'?t)\b|n't\b", re.IGNORECASE)

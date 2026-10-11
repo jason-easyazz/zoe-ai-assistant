@@ -176,3 +176,33 @@ def test_cancel_with_other_content_is_not_a_form_cancel(text):
 @pytest.mark.parametrize("text", ["save the event", "save the list", "confirm the reminder"])
 def test_confirm_names_the_form_type(text):
     assert _is_form_confirm_command(text) is True
+
+
+@pytest.mark.parametrize("text", [
+    "could you please cancel the form", "cancel the calendar event", "stop right now",
+])
+def test_longer_cancel_commands(text):
+    assert _is_form_cancel_command(text) is True
+
+
+@pytest.mark.parametrize("text", [
+    "save the shopping list right now", "yes please do it", "yes do it", "okay go ahead and save it", "do it",
+    "save the calendar event", "save the appointment",
+])
+def test_longer_confirm_commands(text):
+    assert _is_form_confirm_command(text) is True
+
+
+@pytest.mark.parametrize("text", [
+    "I can't stop the bleeding", "can you stop the bleeding", "the fire is close to the house", "stop the car",
+    "cancel my dentist appointment", "please could you stop the man from bleeding right now",
+])
+def test_looser_cap_still_refuses_distress_as_cancel(text):
+    assert _is_form_cancel_command(text) is False
+
+
+@pytest.mark.parametrize("text", [
+    "yes I'm bleeding", "I'm not okay", "yes please do it my husband is bleeding", "save my dentist appointment",
+])
+def test_looser_cap_still_refuses_distress_as_confirm(text):
+    assert _is_form_confirm_command(text) is False
