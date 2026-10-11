@@ -795,6 +795,7 @@ class NightWindow(bk.Window):
         self.fallback_allowed = True                   # False after a refusal for the HOUR: a manual run in daylight must not start the night's jobs
         self.last_load_why = ""                        # the diagnosis of the most recent failed 12B start
         self.load_ok = False                           # the 12B became healthy at least once on this run
+        self.load_recorded = False                     # ``record_load`` has written this run's result to load_failures.json
         self.night_lost = ""                           # non-empty = the 12B never loaded on this night (after the one retry): the morning ALARM says why
 
     # ── bookkeeping ──
@@ -1246,6 +1247,7 @@ class NightWindow(bk.Window):
     def record_load(self, ok: bool, why: str = "") -> None:
         if self.dry:
             return
+        self.load_recorded = True                      # this run is in load_failures.json exactly once (``load_12b_with_retry`` records only if nothing did)
         try:
             self.cfg.night_dir.mkdir(parents=True, exist_ok=True)
             n = 0 if ok else self.load_failures() + 1
@@ -1275,6 +1277,9 @@ class NightWindow(bk.Window):
         except BaseException as exc:  # noqa: BLE001 - re-raised; only the bookkeeping happens here
             if not self.load_ok and not self.night_lost:
                 self.night_lost = str(exc) if isinstance(exc, Aborted) else f"{type(exc).__name__}: {exc}"
+            if not self.load_ok and not self.load_recorded:
+                # a window that never started the 12B (a refused systemd-run, the cap ending the wait) is still a failed window for the breaker in preflight
+                self.record_load(False, self.last_load_why or self.night_lost)
             raise
 
     def _load_12b_one_retry(self, pick: "dict[str, Any]") -> None:
@@ -1300,9 +1305,6 @@ class NightWindow(bk.Window):
             self.load_12b(pick, health_timeout_s=max(120.0, min(480.0, self.time_left_s() - 120.0)))
         except LoadFailed:                                     # load_12b recorded the failure (last attempt)
             self.event(f"NIGHT LOST: the 12B did not load on either attempt ({self.last_load_why[:200]})")
-            raise
-        except BaseException:
-            self.record_load(False, self.last_load_why)
             raise
         self.rec["load_retry"]["loaded"] = True
         self.event("12B loaded on the second attempt")

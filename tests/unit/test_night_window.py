@@ -850,6 +850,16 @@ def test_a_night_with_no_load_leaves_the_alarm_whatever_shape_the_failure_takes(
     alarm = (cfg.report_dir / "ALARM").read_text()
     assert "NIGHT LOST" in alarm and "could not start" in alarm and "run t1" in alarm
     assert wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]
+    assert json.loads(w.failures_path.read_text())["count"] == 1                           # a failed window for the breaker, recorded exactly once
+
+
+def test_nights_that_never_start_the_12b_trip_the_load_failure_breaker(tmp_path):
+    """Review (Codex P2, round 3) on #1992: a refused first systemd-run raised before any record_load, so repeated nights that never started the 12B left the breaker untouched."""
+    for _ in (1, 2):
+        w, host, cfg = make(tmp_path, start_refused_from=1)
+        assert w.run() == nw.EXIT_ABORTED
+    w3, host3, _ = make(tmp_path)
+    assert w3.run() == nw.EXIT_REFUSED and "failed to load on the last 2 windows" in w3.outcome and stopped_nothing(host3)
 
 
 def test_a_lost_alarm_is_not_raised_when_the_12b_loaded_and_a_job_then_failed(tmp_path):
