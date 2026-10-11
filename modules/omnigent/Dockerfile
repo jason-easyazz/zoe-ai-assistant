@@ -35,13 +35,43 @@ RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 # the bump deliberate. omnigent 0.7.0 also enforces per-harness MINIMUMS
 # (`onboarding/harness_install.py`: claude >= 2.1.161, codex >= 0.137.0, pi >= 0.79.0)
 # and reports a too-old binary as `version-too-low` in GET /v1/hosts — not as `false`.
-RUN npm install -g @anthropic-ai/claude-code@2.1.220 && claude --version
+RUN npm install -g @anthropic-ai/claude-code@2.1.287 && claude --version
+# NO IN-CONTAINER SELF-UPDATE. The global install above is done as ROOT into
+# /usr/local/lib/node_modules, but the container RUNS as uid 1000 (`user:` in
+# docker-compose.module.yml), so Claude Code's background auto-updater can never write
+# there: it failed on every start ("no write permission"). Even if it could, a self-update
+# would silently move the CLI off the reviewed pin above, and vanish on the next recreate.
+# The pin is the ONLY update path: bump the number, rebuild the image, recreate the
+# container (docs/knowledge/omnigent-container-config.md -> "Updating a harness CLI").
+#   DISABLE_AUTOUPDATER=1  stops the background check (documented in Claude Code's
+#                          "Disable auto-updates": https://code.claude.com/docs/en/setup).
+#   DISABLE_UPDATES=1      also blocks `claude update` / `claude install`, i.e. every path.
+# Set TWICE on purpose: as image ENV, and in /etc/claude-code/managed-settings.json (the
+# documented Linux managed-settings location, highest precedence). omnigent's runner builds
+# the worker's environment from an allowlist (see OMNIGENT_RUNNER_ENV_PASSTHROUGH in the
+# compose file), so a container env var is not guaranteed to reach the `claude` process the
+# runner spawns; the settings file does not depend on that. `claude doctor` should then
+# report `Auto-updates: disabled (set by env: DISABLE_AUTOUPDATER)`.
+ENV DISABLE_AUTOUPDATER=1 \
+    DISABLE_UPDATES=1
+RUN mkdir -p /etc/claude-code \
+    && printf '{\n  "env": {\n    "DISABLE_AUTOUPDATER": "1",\n    "DISABLE_UPDATES": "1"\n  }\n}\n' \
+         > /etc/claude-code/managed-settings.json \
+    && python3 -c "import json; json.load(open('/etc/claude-code/managed-settings.json'))"
 RUN npm install -g @openai/codex@0.146.0 && codex --version
 # Pi — polly's 3rd worker (review/explore specialist; the only worker that can run gateway
 # models). Same upstream agent as zoe-core's brain (@earendil-works/pi-coding-agent), pinned to
 # match core's 0.87.1 exactly, but a SEPARATE vanilla install (no Zoe extensions/Gemma/soul). The
 # zoe-data pi_runtime_probe installs it with --ignore-scripts; mirror that here.
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.87.1 && pi --version
+# pi never updates itself in the background (`pi update` is an explicit command; it only
+# polls pi.dev for a newer version to print a notice). PI_SKIP_VERSION_CHECK disables that
+# request (pi docs/environment-variables.md: "Disable the pi.dev latest-version request"),
+# so a pinned worker does not nag about, or phone home for, versions the image won't take.
+# Codex likewise only NOTIFIES on startup; its switch is a config.toml key
+# (`check_for_update_on_startup = false`), not an env var, so it is left alone — see
+# docs/knowledge/omnigent-container-config.md.
+ENV PI_SKIP_VERSION_CHECK=1
 
 # ── GitHub CLI ───────────────────────────────────────────────────────────────
 # The workers (claude_code / codex / pi) each open their OWN PR, so they need `gh`
