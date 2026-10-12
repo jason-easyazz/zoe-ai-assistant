@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-588 flags; 586 not documented in `.env.example`.
+594 flags; 592 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -158,6 +158,12 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_EMOTIONAL_RECALL_ENABLED` | `''` | no | NO | `services/zoe-data/routers/memories.py` |
 | `ZOE_ENABLE_OPENCLAW_EXECUTION` | `'false'` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_ENGINEERING_MODE` | `-` | no | NO | `services/zoe-data/executors/kanban_adapter.py` |
+| `ZOE_ENROLL_DECLINE_DAYS` | `dynamic` | yes | NO | `services/zoe-data/enrollment_state.py` |
+| `ZOE_ENROLL_MODE_ENABLED` | `'true'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
+| `ZOE_ENROLL_OFFER` | `'off'` | yes | NO | `services/zoe-data/enrollment_state.py` |
+| `ZOE_ENROLL_OFFER_KIDS` | `False` | yes | NO | `services/zoe-data/enrollment_state.py` |
+| `ZOE_ENROLL_OFFER_PIN_DELAY_S` | `20` | yes | NO | `services/zoe-data/voice_enrollment.py` |
+| `ZOE_ENROLL_RECORD_MAX_S` | `'8.0'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_ENV_FILE` | `''`, `'/home/zoe/assistant/services/zoe-data/.env'` | no | NO | `scripts/maintenance/retire_hermes_openclaw_board.py`<br>`scripts/maintenance/verify_executor_queue_backend.py`<br>`services/zoe-data/multica_board_runner.py` |
 | `ZOE_ESPEAK_PITCH` | `dynamic` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_ESPEAK_SPEED` | `dynamic` | no | NO | `services/zoe-data/routers/voice_tts.py` |

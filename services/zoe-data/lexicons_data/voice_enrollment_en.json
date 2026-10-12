@@ -1,0 +1,95 @@
+{
+ "lang": "en",
+ "name": "English",
+ "reviewed": true,
+ "enabled": true,
+ "_note": "Per-language strings for voice_enrollment.py (Zoe-driven voice enrolment). Cues are regexes over the NORMALISED utterance (casefolded, accents stripped, ?!.,;: dropped, leading 'hey zoe' / trailing 'please' removed) and must match the WHOLE utterance. A cue only ROUTES a turn; the words Zoe says are the 'say' and 'script' entries. 'script' is sent to the panel daemon verbatim, so the daemon holds no words of its own (its English defaults exist only for a command that arrives without a script). Every offer states what is kept (a voice signature, not recordings) and that it can be deleted. {name} and {n} are filled by the code.",
+ "max_chars": 100,
+ "lead": ["(?:hey|hi|hello|ok|okay|so|um|uh|well|and|but|right|oh)[,.\\s]+", "zoe[,.\\s]+"],
+ "trail": ["[,\\s]+(?:please|zoe|now|right now|then|again|for me|today|exactly)"],
+ "cues": {
+  "learn": [
+   "(?:can you |could you |i want you to |i'd like you to |i want to |i would like to |i'd like to )?(?:learn|teach|train) (?:my voice|me my voice|to (?:know|recognis?z?e) my voice)",
+   "(?:can you |could you |i want to |i'd like to |let's |lets )?(?:set up|setup|enrol+|enroll|register|start) (?:my )?(?:voice|voice recognition|voice id|voice identification|speaker recognition)(?: setup)?",
+   "(?:can you |could you |i want you to |i'd like you to )?(?:recognis?z?e|remember|know) my voice",
+   "(?:let's|lets|i want to|i'd like to) (?:do|finish|try) (?:the )?voice (?:setup|enrolment|enrollment)",
+   "(?:yes )?(?:learn|enrol+|enroll) me"
+  ],
+  "forget": [
+   "(?:please )?(?:forget|delete|remove|erase|wipe|clear|drop) (?:my )?(?:voice|voice ?print|voice profile|voice signature|voice data|voice recognition|voice id)(?: (?:profile|signature|data|from (?:the )?(?:panel|screen)))?",
+   "(?:stop|don't|do not|no longer) (?:recognis?z?e|recognis?z?ing|know|knowing|use|using) my voice",
+   "(?:i want you to |i'd like you to |can you |could you )(?:forget|delete|remove|erase) my voice(?: profile| signature| data)?",
+   "turn off (?:my )?voice recognition",
+   "delete my voice(?: ?print)? data"
+  ],
+  "know_voice": [
+   "do you (?:know|recognis?z?e|have) my voice",
+   "can you (?:recognis?z?e|tell) my voice",
+   "can you tell (?:it's|it is|that it's) me by my voice",
+   "(?:have|did) i (?:set up|setup|enrol+ed|enrolled|registered) (?:my )?voice(?: recognition| id)?",
+   "is my voice (?:set up|enrol+ed|enrolled|registered|saved)",
+   "do you have a voice (?:profile|signature|print|print) (?:for me|of mine)",
+   "(?:what's|what is) my voice (?:setup|status|recognition status)",
+   "(?:have|has) (?:i|my voice) (?:been )?(?:set up|enrol+ed|enrolled)"
+  ],
+  "closer": [
+   "(?:ok(?:ay)? |great |perfect |lovely |awesome |brilliant |cool |nice |wonderful |all right |alright )?(?:thanks|thank you|thanks a lot|thanks so much|thank you so much|cheers|ta)(?: (?:very much|a lot|so much|zoe|mate))?",
+   "(?:ok(?:ay)? |great |perfect |cool |nice |lovely )?that'?s (?:all|everything|it|great|perfect)(?: for now| thanks| thank you)?",
+   "that'?s (?:all|everything) i (?:needed|wanted)",
+   "(?:all good|all sorted|sorted|that's sorted|that did it|that works|that'll do|that will do)(?: thanks| thank you)?",
+   "(?:great|perfect|lovely|awesome|brilliant|wonderful),? (?:thanks|thank you|cheers)"
+  ],
+  "yes": [
+   "(?:yes|yeah|yep|yup|sure|ok|okay|alright|absolutely|definitely|certainly|please)(?: please| do| go ahead| thanks| thank you)?",
+   "(?:go ahead|please do|do it|let'?s do it|sounds good|why not|i'?d like that|i would like that|that would be (?:good|great|nice)|that sounds (?:good|great))"
+  ],
+  "no": [
+   "(?:no|nope|nah|no thanks|no thank you|not really|not now|not today|not right now|not yet|not|maybe later|later|another time|some other time|i'?d rather not|i would rather not|i don'?t want to|no i don'?t|no don'?t|don'?t)",
+   "(?:no|nope|nah),? (?:thanks|thank you|not now|not today|i'?m good|i'?m fine)"
+  ]
+ },
+ "phrases": [
+  "Hey Zoe, what's the weather looking like today?",
+  "Add milk, bread, and coffee to my shopping list.",
+  "Remind me to call my mum tomorrow afternoon."
+ ],
+ "say": {
+  "offer_pin": "I can learn your voice, so you won't need your PIN next time. I'd keep a voice signature, not recordings, and you can delete it whenever you like. It takes about a minute. Want to?",
+  "offer_close": "By the way, I don't know your voice yet. If I learned it, you wouldn't need your PIN. I'd keep a voice signature, not recordings, and you can delete it whenever you like. It takes about a minute. Want to?",
+  "offer_know": "I'd keep a voice signature, not recordings, and you can delete it whenever you like. It takes about a minute.",
+  "start": "Okay, let's do it. Stay by the panel.",
+  "start_fail": "I couldn't reach the panel speaker just now, so I haven't started. Try asking me again in a minute.",
+  "declined": "No problem. I won't ask again for a while. If you change your mind, just say learn my voice.",
+  "already": "I already know your voice. If it isn't working well, say forget my voice and we'll start again.",
+  "know_yes": "Yes, I know your voice. I have {n} samples of it.",
+  "know_no": "I don't know your voice yet. Want me to learn it?",
+  "know_no_declined": "I don't know your voice yet. You said no earlier, so I haven't asked again. If you'd like to, just say learn my voice.",
+  "know_no_minor": "I don't know your voice yet. A grown-up can set that up for you.",
+  "know_guest": "I don't know who you are yet, so I can't tell. Sign in with your PIN and ask me again.",
+  "know_unknown": "I can't check that right now. Ask me again in a moment.",
+  "learn_guest": "I can only learn the voice of someone I know. Sign in with your PIN, then ask me again.",
+  "learn_minor": "Voice setup is only switched on for grown-ups at the moment.",
+  "learn_no_panel": "I can only learn your voice from the panel speaker. Ask me there.",
+  "learn_unverified": "I couldn't tell who was speaking, so I haven't started. Say it again once I know it's you.",
+  "forget_done": "Done. I've deleted your voice signature, and I've told the panel to drop its copy.",
+  "forget_none": "I don't have your voice, so there's nothing to delete.",
+  "forget_guest": "I don't know who you are, so there's no voice of yours for me to delete. Sign in with your PIN and ask me again.",
+  "forget_unverified": "I couldn't tell who was speaking, so I haven't deleted anything. Say it again once I know it's you.",
+  "forget_fail": "I couldn't delete that just now, and nothing has changed. Try again in a moment."
+ },
+ "script": {
+  "intro": "Hi {name}. I'll ask you to say three short phrases. I keep a voice signature, never the recordings. Say stop at any time.",
+  "prompt": "Phrase {n}. After the beep, say: {phrase}",
+  "retry_short": "I only caught a little of that. Let's try the same phrase again.",
+  "retry_quiet": "That was a bit quiet. A little louder, please.",
+  "retry_noise": "That one was too noisy or too loud. Let's try once more.",
+  "got": "Got it.",
+  "done": "That's it, {name}. I'll know your voice from now on.",
+  "partial": "I only saved part of it, but I can already use it. If I get you wrong, say forget my voice and we'll start again.",
+  "cancelled": "Okay, I've stopped. I haven't kept anything.",
+  "timeout": "That's taking a while, so I'll stop here. I haven't kept anything. Ask me any time and we'll try again.",
+  "failed": "I couldn't get a clear recording. I haven't kept anything. We can try again in a quiet moment, just ask.",
+  "store_failed": "I couldn't save it just now. I haven't kept anything.",
+  "cancel_words": ["stop", "cancel", "never mind", "nevermind", "forget it", "not now", "quit", "enough"]
+ }
+}

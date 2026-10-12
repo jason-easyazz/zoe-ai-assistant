@@ -6158,6 +6158,16 @@ async def _voice_claim_consented(user_id: str) -> bool:
         return False
 
 
+def _speaker_engine_unavailable_detail() -> str:
+    """The 503 body when no voice embedding could be computed: WHY (the exception type and message ``voice_speaker_id`` recorded and
+    logged at WARNING), and where the fix is. It used to say "resemblyzer not available" for a broken linker path and a missing
+    package alike."""
+    import voice_speaker_id
+
+    why = voice_speaker_id.last_failure() or "the speaker engine is not installed"
+    return f"Voice signature engine unavailable: {why}. See docs/knowledge/python-312-venv-migration.md (LD_LIBRARY_PATH)."
+
+
 @router.post("/enroll")
 async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth)):
     """Enroll a speaker voice profile using a WAV audio sample.
@@ -6212,7 +6222,7 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
             pass
 
     if embedding_bytes is None:
-        raise HTTPException(status_code=503, detail="resemblyzer not available; install resemblyzer")
+        raise HTTPException(status_code=503, detail=_speaker_engine_unavailable_detail())
 
     profile_id = str(_uuid.uuid4())
     try:
@@ -6316,7 +6326,7 @@ async def voice_identify(payload: dict, caller: dict = Depends(_require_voice_au
                 pass
 
         if query_emb is None:
-            raise HTTPException(status_code=503, detail="resemblyzer not available")
+            raise HTTPException(status_code=503, detail=_speaker_engine_unavailable_detail())
 
     try:
         async with _get_compat_db() as db:
@@ -6471,6 +6481,14 @@ async def voice_profile_delete(profile_id: str, caller: dict = Depends(_require_
             )
             await db.execute("DELETE FROM speaker_profiles WHERE id=?", (profile_id,))
             await db.commit()
+        # Forgetting reaches the box: tell every panel to drop its copy now instead of waiting up to an hour for the next sync.
+        # Best effort and flag-independent (a deletion must always propagate); a failure here never undoes the delete.
+        try:
+            import voice_enrollment
+
+            await voice_enrollment.push_forget_to_panels(str(row[0]))
+        except Exception as _push_exc:  # noqa: BLE001
+            logger.warning("voice profile delete: panel purge not queued: %s", type(_push_exc).__name__)
         return {"ok": True, "deleted": profile_id}
     except HTTPException:
         raise

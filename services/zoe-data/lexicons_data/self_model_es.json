@@ -97,6 +97,7 @@
   "how_remember": ["{memory_rules}"],
   "know_me_yes": ["Si - eres {name}, y lo se por tu cuenta.", "{voice_clause}", "{face_clause}"],
   "voice_clause": "Tambien conozco tu voz.",
+  "voice_missing_clause": "Todavia no conozco tu voz. Di aprende mi voz si quieres que lo haga.",
   "face_clause": "Y conozco tu cara.",
   "know_me_guest": ["No se quien eres - no has iniciado sesion, asi que te trato como invitado y no guardo nada."],
   "know_me_unverified": ["No pude saber quien hablaba, asi que no he dicho nada - repitelo cuando sepa que eres tu."],
