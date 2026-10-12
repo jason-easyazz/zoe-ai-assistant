@@ -220,7 +220,13 @@ round). The repo's answer to that is a small head on the embedding it already co
   (none exists yet); the head covers rows written, and threads classified, after this lands.
 * **Trained on the dev split only; thresholds from a rule fixed before the run:** per class, the lowest threshold at which the head ALONE fires on <= 1 % of
   out-of-fold plain rows (5-fold over dev). `C` by mean out-of-fold average precision. Nothing is tuned on the held-out split.
-* **English only.** bge-small-en is an English embedding: another language's text keeps its lexicon (the head is not claimed for them).
+* **English only, enforced.** bge-small-en is an English embedding: the head runs only on text whose detected language (`lexicons.detect`, as the
+  rest of restraint) is English; another language's text keeps its lexicon, and its stamp is head-complete (there is nothing for the head to add).
+* **A v3 stamp means the head ran.** `stamp` (and the nightly thread pass) write `VERSION` only when the head actually classified the text (or never applies);
+  a row created before the router's model is loaded is stamped `LEXICON_VERSION` (2), which `row_classes` ignores, so a later `stamp` of the same row
+  applies the head. The nightly pass never downgrades a head-complete thread row to the word list.
+* **Model identity is checked.** The head borrows `semantic_router.embed` only when the router's `_MODEL_NAME` equals the `embedder` recorded in
+  `restraint_head.json` (`ZOE_ROUTER_MODEL` can point the router at another model of the same width); a mismatch or an unnamed model is "no head", one log line.
 
 **Splits** (`scripts/perf/restraint_eval.py`, fixture `tests/fixtures/restraint_labelled.json`, invented names, no household text). *Dev* (1,102
 class labels, 420 plain) = the three legacy English sets whose misses were read when the vocabulary was widened + 1,186 sentences written to the policy
