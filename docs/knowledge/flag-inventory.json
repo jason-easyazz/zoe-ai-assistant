@@ -481,6 +481,36 @@
         ],
         "typed_env": true
       },
+      "ZOE_BRAIN_SLOT_GUARD": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/brain_slot_guard.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_BRAIN_SLOT_MAX_DEFER_S": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/brain_slot_guard.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_BRAIN_SLOT_QUIET_S": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/brain_slot_guard.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_BRAIN_SLOT_TOKENS": {
         "defaults": [
           "'8192'",
