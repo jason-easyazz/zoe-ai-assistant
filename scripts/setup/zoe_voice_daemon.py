@@ -137,6 +137,37 @@ CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "1280"))
 # (stop=max_duration) and were answered from a truncated transcript. STT costs
 # ~0.25s per second of clip, so only turns that are genuinely long pay for it.
 RECORD_SECONDS = _count_env("RECORD_SECONDS_MAX", 12, minimum=1)
+# ── Long speech is ONE turn: soft cap, hard cap, snap to a pause ─────────────
+# RECORD_SECONDS_MAX (12 s) is now the SOFT cap: past it a recording stays open only while
+# the speaker is demonstrably still talking (Silero speech in at least
+# RECORD_STILL_SPEAKING_RATIO of the last 2 s), up to the HARD cap. Live 2026-10-12: four
+# follow-up recordings hit the old 12.32 s cap mid-sentence; Zoe answered the first half
+# and the leftover second half became a separate garbage turn. At the hard cap the
+# recording runs on up to RECORD_SNAP_S more, to the first non-speech chunk, so the cut
+# lands in a pause and not inside a word. A recording that STILL ends on the hard cap with
+# the speaker mid-speech is not sent: the daemon listens ZOE_CONTINUE_WINDOW_S for the
+# continuation and sends one merged clip (_gather_capped_continuation).
+# Conversation windows ("let's talk") get the higher CONV hard cap. Rollback to the old
+# behaviour: RECORD_SECONDS_HARD_MAX=12 CONV_RECORD_SECONDS_HARD_MAX=12 RECORD_SNAP_S=0
+# ZOE_CONTINUE_WINDOW_S=0.
+RECORD_SECONDS_HARD = max(RECORD_SECONDS, _count_env("RECORD_SECONDS_HARD_MAX", 30, minimum=1))
+CONV_RECORD_SECONDS_HARD = max(RECORD_SECONDS_HARD, _count_env("CONV_RECORD_SECONDS_HARD_MAX", 60, minimum=1))
+RECORD_SNAP_S = max(0.0, _float_env("RECORD_SNAP_S", 3.0))
+RECORD_STILL_SPEAKING_RATIO = _prob_env("RECORD_STILL_SPEAKING_RATIO", 0.5, allow_zero=False)
+# ── Trailing-conjunction guard: wait once for the rest of an unfinished clause ──
+# The daemon has no transcript at endpoint time (STT runs on the Jetson; a per-turn STT
+# just to peek would slow every fast turn), so it asks the SERVER: every non-speculative
+# streamed turn carries can_continue, and when the transcript ends on a continuation word
+# ("...we could walk to the market and", docs/knowledge/voice-pipeline.md) the server answers with an
+# `incomplete` done frame INSTEAD of running the brain. The daemon then listens this many
+# seconds for the speaker to resume and re-sends ONE merged clip (continued=true, never
+# held again) — or the original clip if nobody resumes. Only turns ending on such a word
+# pay (the wait plus one more STT pass); every other turn is byte-identical. 0 = never
+# asks (rollback). The server also has a kill switch: ZOE_VOICE_CONTINUATION_HOLD=off.
+ZOE_CONTINUE_WINDOW_S = max(0.0, _float_env("ZOE_CONTINUE_WINDOW_S", 2.0))
+# A monologue keeps merging while the speaker keeps going, but never without end.
+_CAP_MERGE_MAX = 3
+_CONTINUE_GAP_S = 0.2  # silence inserted between the two halves of a merged clip
 SILENCE_TIMEOUT_S = float(os.environ.get("SILENCE_TIMEOUT_S", "1.5"))
 RECORD_SILENCE_AMPLITUDE = int(os.environ.get("RECORD_SILENCE_AMPLITUDE", "300"))
 # ── VAD endpointing: close the turn on Silero speech-absence, not amplitude ──
@@ -902,6 +933,26 @@ class _Endpointer:
         self._fall = 0            # ambiguous decay chunks leading the current quiet run
         self._hesitating = False  # the current quiet run went deep, then ambiguous again
         self.tail_rule = ""       # which rule closed the recording (logged)
+        # Last _STILL_WINDOW chunks, 1 = speech / 0 = quiet: lets the recorders tell a
+        # speaker still mid-flow from room noise when a recording reaches its soft cap.
+        self._recent: list = []
+
+    _STILL_WINDOW = 25  # chunks (~2 s at the default 80 ms)
+
+    def _note(self, speech: bool) -> None:
+        self._recent.append(1 if speech else 0)
+        if len(self._recent) > self._STILL_WINDOW:
+            del self._recent[0]
+
+    def still_speaking(self, ratio: float) -> bool:
+        """Speech has been heard AND at least ``ratio`` of the last ~2 s was speech."""
+        if not self._spoke or not self._recent:
+            return False
+        return sum(self._recent) / float(len(self._recent)) >= ratio
+
+    def mid_speech(self) -> bool:
+        """The latest chunk was speech: a stop now would land inside a word or phrase."""
+        return self._spoke and self._quiet == 0
 
     def speculative_ready(self, n_frames: int) -> bool:
         """True exactly ONCE per recording: the first end-of-turn verdict
@@ -932,8 +983,10 @@ class _Endpointer:
                 self._speech_chunks += 1
                 self._fall = 0
                 self._hesitating = False
+                self._note(True)
                 return False
             self._quiet += 1
+            self._note(False)
             # Borderline chunks (deep prob <= prob < speech threshold) count as
             # quiet but RESET the deep counter: an ambiguous pause must never
             # take the fast exit, only unambiguous silence may. The same goes for
@@ -977,8 +1030,11 @@ class _Endpointer:
         amplitude = np.abs(np.frombuffer(data, dtype=np.int16)).mean()
         if amplitude >= RECORD_SILENCE_AMPLITUDE:
             self._quiet = 0
+            self._spoke = True
+            self._note(True)
             return False
         self._quiet += 1
+        self._note(False)
         return self._quiet >= self._amp_max_silent and n_frames > self._min_frames
 
 
@@ -1501,7 +1557,7 @@ class _BargeMonitor:
         if t is not None:
             # A seed capture (BARGE_SEED_NEXT_TURN) records to the normal
             # endpoint, exactly where the follow-up listener would block.
-            t.join(timeout=RECORD_SECONDS + 2.0 if self._capturing else 1.5)
+            t.join(timeout=RECORD_SECONDS_HARD + RECORD_SNAP_S + 2.0 if self._capturing else 1.5)
         self._thread = None
 
     def take_seed(self) -> "bytes | None":
@@ -1513,9 +1569,9 @@ class _BargeMonitor:
         the normal endpoint; the next turn runs on it, no beep (LiveKit-lane shape)."""
         self._capturing = True
         endpointer = _Endpointer(spoke=True)
-        max_chunks = int(RECORD_SECONDS * SAMPLE_RATE / CHUNK_SIZE)
+        caps = _record_caps()
         stop_reason = "max_duration"
-        while len(frames) < max_chunks and not _shutdown.is_set():
+        while len(frames) < caps[1] + caps[2] and not _shutdown.is_set():
             try:
                 data = stream.read(CHUNK_SIZE, exception_on_overflow=False)
             except Exception:
@@ -1525,6 +1581,9 @@ class _BargeMonitor:
             if endpointer.push(data, len(frames)):
                 stop_reason = "silence"
                 break
+            if _record_cap_stop(len(frames), caps, endpointer):
+                break
+        _note_capture_end(stop_reason, len(frames), caps, endpointer)
         self.seed = _frames_to_wav(self._pa, frames)
         log.info("Barge-in seed: %.2fs from onset (stop=%s) — next turn runs on it, no beep",
                  len(frames) * _CHUNK_S, stop_reason)
@@ -1899,6 +1958,146 @@ def _frames_to_wav(pa: pyaudio.PyAudio, frames: list[bytes]) -> bytes:
     return buf.getvalue()
 
 
+# ── Long speech is one turn (see RECORD_SECONDS_HARD above) ──────────────────
+# True when the most recent recording ended on its HARD cap with the speaker still
+# mid-speech (set by every recorder at its end; _follow_up_listen clears it on entry).
+_last_record_capped = False
+# True when Zoe's previous streamed reply ended in a question — sent with a follow-up
+# window's turn so the server never mistakes the user's ANSWER for side speech.
+_prev_reply_asked = False
+
+
+def _record_caps(hard_s: "float | None" = None) -> "tuple[int, int, int]":
+    """The (soft, hard, snap) caps of one recording, in chunks."""
+    hard = RECORD_SECONDS_HARD if hard_s is None else max(RECORD_SECONDS, hard_s)
+    per_s = SAMPLE_RATE / float(CHUNK_SIZE)
+    return int(RECORD_SECONDS * per_s), int(hard * per_s), int(RECORD_SNAP_S * per_s)
+
+
+def _record_cap_stop(n_chunks: int, caps: "tuple[int, int, int]", endpointer: "_Endpointer") -> bool:
+    """Whether a recording the endpointer has NOT closed must stop at the cap.
+
+    Before the soft cap never. Between soft and hard only when the speaker has stopped
+    flowing (room noise / a stuck mic must not stretch to the hard cap). From the hard cap
+    to hard+snap only at the first chunk that is not speech, so the cut lands in a pause.
+    At hard+snap always.
+    """
+    soft, hard, snap = caps
+    if n_chunks < soft:
+        return False
+    if n_chunks < hard:
+        return not endpointer.still_speaking(RECORD_STILL_SPEAKING_RATIO)
+    if n_chunks < hard + snap:
+        return not endpointer.mid_speech()
+    return True
+
+
+def _note_capture_end(stop_reason: str, n_chunks: int, caps: "tuple[int, int, int]",
+                      endpointer: "_Endpointer") -> None:
+    """Record whether this recording ended on the hard cap mid-speech, and log an overrun."""
+    global _last_record_capped
+    _last_record_capped = (stop_reason == "max_duration" and n_chunks >= caps[1]
+                           and endpointer.mid_speech())
+    if n_chunks > caps[0]:
+        log.info("Recording ran past the %ds soft cap to %.1fs (stop=%s%s) - speaker still talking",
+                 RECORD_SECONDS, n_chunks * _CHUNK_S, stop_reason,
+                 ", mid-speech at the hard cap" if _last_record_capped else "")
+
+
+def _merge_wavs(first: bytes, second: bytes, gap_s: float = _CONTINUE_GAP_S) -> bytes:
+    """One WAV of ``first`` + a short silence + ``second``. A format mismatch (it cannot
+    happen with this daemon's own recordings) returns ``first`` unchanged."""
+    try:
+        with wave.open(io.BytesIO(first), "rb") as a, wave.open(io.BytesIO(second), "rb") as b:
+            params = a.getparams()
+            if params[:3] != b.getparams()[:3]:
+                log.warning("continuation merge skipped: WAV formats differ")
+                return first
+            pcm_a = a.readframes(a.getnframes())
+            pcm_b = b.readframes(b.getnframes())
+    except (wave.Error, EOFError):
+        log.warning("continuation merge skipped: unreadable WAV")
+        return first
+    gap = b"\x00" * (int(gap_s * params.framerate) * params.sampwidth * params.nchannels)
+    out = io.BytesIO()
+    with wave.open(out, "wb") as w:
+        w.setnchannels(params.nchannels)
+        w.setsampwidth(params.sampwidth)
+        w.setframerate(params.framerate)
+        w.writeframes(pcm_a + gap + pcm_b)
+    return out.getvalue()
+
+
+def _reply_is_question(reply: str) -> bool:
+    return (reply or "").rstrip(" \t\r\n\"'”’)").endswith(("?", "？"))
+
+
+def _gather_capped_continuation(pa: "pyaudio.PyAudio", wav: bytes) -> bytes:
+    """The recording hit its HARD cap with the speaker mid-speech: do not send half a
+    thought. Listen ZOE_CONTINUE_WINDOW_S for the rest and merge it, so the brain gets ONE
+    turn (at most _CAP_MERGE_MAX merges - a monologue is bounded, not endless)."""
+    merges = 0
+    while _last_record_capped and merges < _CAP_MERGE_MAX and ZOE_CONTINUE_WINDOW_S > 0:
+        log.info("Recording ended on the hard cap mid-speech - listening %.1fs for the rest "
+                 "(merge %d/%d)", ZOE_CONTINUE_WINDOW_S, merges + 1, _CAP_MERGE_MAX)
+        _recording_active.set()
+        extra = _follow_up_listen(pa, window_s=ZOE_CONTINUE_WINDOW_S)
+        if extra is None:
+            break
+        wav = _merge_wavs(wav, extra)
+        merges += 1
+    return wav
+
+
+def _turn_with_monitor(pa: "pyaudio.PyAudio", wav: bytes, turn_fn, *, window: str = "",
+                       **kw) -> "tuple[bool, bytes | None]":
+    """Run one turn under a barge monitor -> (played_audio, barge_seed).
+
+    On the streaming turn this also (1) merges a hard-cap continuation first, and (2) honours
+    the server's ``incomplete`` frame: the transcript ended on a continuation word, so the
+    brain did not run; listen ZOE_CONTINUE_WINDOW_S for the speaker to resume and send ONE
+    merged clip (or the original, if nobody does) marked ``continued`` so it is never held
+    twice. The monitor is stopped before that listen - the Jabra cannot hold two input
+    streams. ``window`` is "followup" / "conversation" for a no-wake-word window, "" else.
+    """
+    streaming = turn_fn is _do_single_turn_stream
+    hold_ok = streaming and ZOE_CONTINUE_WINDOW_S > 0
+    if streaming:
+        wav = _gather_capped_continuation(pa, wav)
+        if window:
+            kw["window"] = window
+    held = False
+    while True:
+        _monitor = _BargeMonitor(pa)
+        _monitor.start()
+        try:
+            call_kw = dict(kw)
+            if hold_ok and not held:
+                call_kw["can_continue"] = True
+            if held:
+                call_kw["continued"] = True
+            played = turn_fn(pa, wav, **call_kw)
+        finally:
+            _monitor.stop()
+        seed = _monitor.take_seed()
+        if held or not (hold_ok and _last_turn_flags.get("incomplete")):
+            return played, seed
+        held = True
+        # The held half was already speaker-scored; the merged retry reuses that claim
+        # (re-scoring would append a second shadow row for one spoken turn).
+        if "voice_claim" not in kw and "voice_claim" in _last_turn_flags:
+            kw["voice_claim"] = _last_turn_flags["voice_claim"]
+        log.info("Turn held: transcript ends mid-clause - listening %.1fs for the rest",
+                 ZOE_CONTINUE_WINDOW_S)
+        _recording_active.set()
+        extra = _follow_up_listen(pa, window_s=ZOE_CONTINUE_WINDOW_S)
+        if extra is not None:
+            wav = _merge_wavs(wav, extra)
+            log.info("Continuation merged: one turn of %.1fs", (len(wav) - 44) / (2.0 * SAMPLE_RATE))
+        else:
+            log.info("No continuation - sending the held clip as is")
+
+
 def record_command(pa: pyaudio.PyAudio, stream=None, speculation: "_SpeculativeTurn | None" = None) -> bytes | None:
     """Record audio until silence or max duration.
 
@@ -1917,7 +2116,8 @@ def record_command(pa: pyaudio.PyAudio, stream=None, speculation: "_SpeculativeT
     ``stream=None`` keeps the open-my-own-stream behaviour used by the follow-up
     windows, which run after the wake stream is closed for the turn.
     """
-    log.info("Recording command (max %ds)...", RECORD_SECONDS)
+    log.info("Recording command (max %ds, up to %ds while still speaking)...",
+             RECORD_SECONDS, RECORD_SECONDS_HARD)
     owns_stream = stream is None
     if owns_stream:
         kw: dict = dict(
@@ -1949,10 +2149,12 @@ def record_command(pa: pyaudio.PyAudio, stream=None, speculation: "_SpeculativeT
             uploader.push(_f)
     endpointer = _Endpointer()
     stop_reason = "max_duration"
-    max_chunks = int(RECORD_SECONDS * SAMPLE_RATE / CHUNK_SIZE)
-    for _ in range(max_chunks):
+    caps = _record_caps()
+    n_read = 0
+    for _ in range(caps[1] + caps[2]):
         data = stream.read(CHUNK_SIZE, exception_on_overflow=False)
         frames.append(data)
+        n_read += 1
         if uploader is not None:
             uploader.push(data)
         if endpointer.push(data, len(frames)):
@@ -1960,6 +2162,9 @@ def record_command(pa: pyaudio.PyAudio, stream=None, speculation: "_SpeculativeT
             break
         if speculation is not None and endpointer.speculative_ready(len(frames)):
             speculation.fire(_frames_to_wav(pa, frames))
+        if _record_cap_stop(n_read, caps, endpointer):
+            break
+    _note_capture_end(stop_reason, n_read, caps, endpointer)
     if owns_stream:
         stream.stop_stream()
         stream.close()
@@ -2790,7 +2995,9 @@ class _SpeculativeTurn:
 
 def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = True,
                            conversation: bool = False, voice_claim: object = _CLAIM_UNSET,
-                           speculation: "_SpeculativeTurn | None" = None) -> bool:
+                           speculation: "_SpeculativeTurn | None" = None,
+                           window: str = "", can_continue: bool = False,
+                           continued: bool = False) -> bool:
     """Streaming turn: POST audio to /api/voice/turn_stream and play each TTS
     sentence chunk as it arrives (no buffer phrase — first audio ~1.3s). Falls
     back to the blocking _do_single_turn on any error.
@@ -2799,8 +3006,16 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
     normal-turn re-run after a cancelled speculation) — re-scoring would append
     a second shadow row for one spoken turn. ``speculation`` marks the request
     speculative (server holds audio until the verdict) and receives the outcome.
+
+    ``window`` ("followup" / "conversation"; "" for a wake turn) and
+    ``prev_reply_question`` tell the server which kind of no-wake-word window this
+    was (ZOE_FOLLOWUP_ADDRESSED, default off server-side). ``can_continue`` says this
+    daemon honours an ``incomplete`` done frame (the transcript ended mid-clause, no
+    brain ran: ``_last_turn_flags["incomplete"]``); ``continued`` marks the merged
+    retry so it is never held twice. A ``skipped`` frame (side speech, no brain)
+    returns False. All three are additive payload keys an old server ignores.
     """
-    global _tts_process
+    global _tts_process, _prev_reply_asked
     import time as _time
 
     audio_b64_wav = base64.b64encode(wav).decode()
@@ -2819,10 +3034,20 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
     if speculation is not None:
         speculation.voice_claim = voice_claim
     _last_turn_flags.clear()
+    if voice_claim is not _CLAIM_UNSET:
+        _last_turn_flags["voice_claim"] = voice_claim  # a held turn's retry reuses it
     payload: dict = {"audio_base64": audio_b64_wav, "panel_id": PANEL_ID}
     if speculation is not None:
         payload["speculative"] = True
         payload["turn_id"] = speculation.turn_id
+    elif window in ("followup", "conversation"):
+        payload["window"] = window
+        if _prev_reply_asked:
+            payload["prev_reply_question"] = True
+    if can_continue and speculation is None:
+        payload["can_continue"] = True
+    if continued:
+        payload["continued"] = True
     _attach_stt_stream(payload, wav, speculation)
     if conversation:
         # Tell the server we're inside an open conversation so ender phrases
@@ -2917,6 +3142,11 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
                 for _k in ("conversation_mode", "conversation_end"):
                     if obj.get(_k):
                         _last_turn_flags[_k] = True
+                if obj.get("incomplete"):
+                    _last_turn_flags["incomplete"] = True
+                if obj.get("skipped"):
+                    _last_turn_flags["skipped"] = str(obj.get("skipped"))
+                    _last_turn_flags["skipped_reason"] = str(obj.get("reason") or "")
                 break
             if "transcript" in obj and "chunk" not in obj:
                 transcript = obj.get("transcript", "") or transcript
@@ -2981,6 +3211,21 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
         # second shadow row + journal line for this one spoken turn.
         return _do_single_turn(pa, wav, prompt_on_empty=prompt_on_empty,
                                voice_claim=voice_claim)
+
+    # The server answered WITHOUT running the brain (pre-brain utterance gate):
+    #  * incomplete - the transcript ends mid-clause; _turn_with_monitor listens a
+    #    short window and sends one merged clip. Nothing was played or written.
+    #  * skipped - a follow-up window caught speech not meant for Zoe. Silence, no chime;
+    #    returning False closes the 5 s follow-up loop (back to wake mode), while an open
+    #    conversation keeps going.
+    if _last_turn_flags.get("incomplete"):
+        log.info("turn_stream: held by the server (transcript ends mid-clause) - not played")
+        return False
+    if _last_turn_flags.get("skipped"):
+        log.info("turn_stream: not addressed to Zoe (%s) - no reply, no chime",
+                 _last_turn_flags.get("skipped_reason") or "unspecified")
+        return False
+    _prev_reply_asked = bool(played_any) and _reply_is_question(reply)
 
     # Drain playback (respecting barge-in) once the stream ends.
     if aplay is not None:
@@ -3154,14 +3399,18 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
         return False
 
 
-def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None) -> bytes | None:
+def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None,
+                      hard_cap_s: float | None = None) -> bytes | None:
     """Listen for speech without wake word for `window_s` (default
     FOLLOW_UP_LISTEN_S) seconds.
 
     Uses Silero VAD on a fresh mic stream. If speech is detected, continues
     recording on the SAME stream (no gap where words get lost) and returns
     the WAV bytes. Returns None if silence throughout the window.
+    ``hard_cap_s`` raises the recording's hard cap (conversation windows).
     """
+    global _last_record_capped
+    _last_record_capped = False
     model, _ = _get_silero_vad()
     if model is None:
         return None
@@ -3219,19 +3468,25 @@ def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None) -> byt
         # Continue recording on the same stream — no mic close/reopen gap. Seed with
         # the lookback ring so the recording includes the pre-VAD onset (and the
         # trigger chunk, which is the last entry in the ring).
-        log.info("Recording follow-up command (max %ds)...", RECORD_SECONDS)
+        caps = _record_caps(hard_cap_s)
+        log.info("Recording follow-up command (max %ds, up to %.0fs while still speaking)...",
+                 RECORD_SECONDS, caps[1] * _CHUNK_S)
         frames = list(lookback)
         # The trigger chunk was already-detected speech — seed the endpointer so
         # the fast VAD tail applies from the first pause.
         endpointer = _Endpointer(spoke=True)
         stop_reason = "max_duration"
-        max_chunks = int(RECORD_SECONDS * SAMPLE_RATE / CHUNK_SIZE)
-        for _ in range(max_chunks):
+        n_read = 0
+        for _ in range(caps[1] + caps[2]):
             data = stream.read(CHUNK_SIZE, exception_on_overflow=False)
             frames.append(data)
+            n_read += 1
             if endpointer.push(data, len(frames)):
                 stop_reason = "silence"
                 break
+            if _record_cap_stop(n_read, caps, endpointer):
+                break
+        _note_capture_end(stop_reason, n_read, caps, endpointer)
         stream.stop_stream()
         stream.close()
         duration_s = len(frames) * CHUNK_SIZE / float(SAMPLE_RATE)
@@ -3264,7 +3519,8 @@ def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None) -> byt
 
 
 def _follow_up_source(pa: pyaudio.PyAudio, seed: "bytes | None", *, beep: bool = True,
-                      window_s: float | None = None) -> "bytes | None":
+                      window_s: float | None = None,
+                      hard_cap_s: float | None = None) -> "bytes | None":
     """The next follow-up recording: a committed barge-in's seed (the words the
     user said over Zoe — no beep, no fresh listen), else beep + listen."""
     if seed is not None:
@@ -3275,7 +3531,9 @@ def _follow_up_source(pa: pyaudio.PyAudio, seed: "bytes | None", *, beep: bool =
     if beep:
         play_follow_up_beep()
     _recording_active.set()
-    return _follow_up_listen(pa, window_s=window_s)
+    if hard_cap_s is None:
+        return _follow_up_listen(pa, window_s=window_s)
+    return _follow_up_listen(pa, window_s=window_s, hard_cap_s=hard_cap_s)
 
 
 def voice_command(pa: pyaudio.PyAudio, oww, wake_stream=None) -> None:
@@ -3311,20 +3569,22 @@ def voice_command(pa: pyaudio.PyAudio, oww, wake_stream=None) -> None:
         # nothing else can hear the room while Zoe thinks/speaks. Run a
         # dedicated mic stream for the duration of the turn (record streams are
         # closed by now; follow-up windows open AFTER we stop it).
-        _monitor = _BargeMonitor(pa)
-        _monitor.start()
-        try:
-            if _spec is not None and _spec.fired:
+        if _spec is not None and _spec.fired:
+            _monitor = _BargeMonitor(pa)
+            _monitor.start()
+            try:
                 played_audio = _spec.finish(wav)
                 if _spec.cancelled:
                     # Speculation dropped: run the FULL recording as a normal
                     # turn, handing over the claim the speculative pass scored.
                     played_audio = _turn_fn(pa, wav, voice_claim=_spec.voice_claim)
-            else:
-                played_audio = _turn_fn(pa, wav)
-        finally:
-            _monitor.stop()
-        seed_wav = _monitor.take_seed()
+            finally:
+                _monitor.stop()
+            seed_wav = _monitor.take_seed()
+        else:
+            # Under a barge monitor, with the long-speech / trailing-conjunction
+            # guards (_turn_with_monitor): one spoken thought is one turn.
+            played_audio, seed_wav = _turn_with_monitor(pa, wav, _turn_fn)
 
         # ── Conversation mode ("hey zoe, let's talk") ──
         # The server's opener fast-path marks the done frame with
@@ -3341,7 +3601,11 @@ def voice_command(pa: pyaudio.PyAudio, oww, wake_stream=None) -> None:
                    and conv_turns < CONV_MAX_TURNS
                    and silent_windows < CONV_SILENT_WINDOWS):
                 conv_beep = CONV_BEEP == "every" or (CONV_BEEP == "first" and not conv_beeped)
-                conv_wav = _follow_up_source(pa, seed_wav, beep=conv_beep, window_s=CONV_WINDOW_S)
+                # A barge-in seed is deliberate speech TO Zoe: no window hint, so the
+                # server never judges it as side speech.
+                conv_window = "" if seed_wav is not None else "conversation"
+                conv_wav = _follow_up_source(pa, seed_wav, beep=conv_beep, window_s=CONV_WINDOW_S,
+                                             hard_cap_s=CONV_RECORD_SECONDS_HARD)
                 conv_beeped = conv_beeped or (conv_beep and seed_wav is None)
                 seed_wav = None
                 if conv_wav is None:
@@ -3350,13 +3614,8 @@ def voice_command(pa: pyaudio.PyAudio, oww, wake_stream=None) -> None:
                              silent_windows, CONV_SILENT_WINDOWS)
                     continue
                 silent_windows = 0
-                _monitor = _BargeMonitor(pa)
-                _monitor.start()
-                try:
-                    _turn_fn(pa, conv_wav, prompt_on_empty=False, conversation=True)
-                finally:
-                    _monitor.stop()
-                seed_wav = _monitor.take_seed()
+                _, seed_wav = _turn_with_monitor(pa, conv_wav, _turn_fn, window=conv_window,
+                                                 prompt_on_empty=False, conversation=True)
                 conv_turns += 1
                 if _last_turn_flags.get("conversation_end"):
                     log.info("Conversation CLOSED by ender after %d turns", conv_turns)
@@ -3373,6 +3632,7 @@ def voice_command(pa: pyaudio.PyAudio, oww, wake_stream=None) -> None:
         while played_audio and FOLLOW_UP_LISTEN_S > 0 and follow_ups_done < FOLLOW_UP_MAX_TURNS:
             # Re-arm the UI orb to "listening" right before follow-up capture opens.
             log.info("Follow-up listening (turn %d/%d, %.1fs window)...", follow_ups_done + 1, FOLLOW_UP_MAX_TURNS, FOLLOW_UP_LISTEN_S)
+            follow_window = "" if seed_wav is not None else "followup"  # a barge seed is for Zoe
             follow_wav = _follow_up_source(pa, seed_wav)
             seed_wav = None
             if follow_wav is None:
@@ -3380,13 +3640,8 @@ def voice_command(pa: pyaudio.PyAudio, oww, wake_stream=None) -> None:
                 break
             # Follow-up misses should fall back silently to wake mode, not speak a
             # robotic retry prompt after a successful prior answer.
-            _monitor = _BargeMonitor(pa)
-            _monitor.start()
-            try:
-                played_audio = _turn_fn(pa, follow_wav, prompt_on_empty=False)
-            finally:
-                _monitor.stop()
-            seed_wav = _monitor.take_seed()
+            played_audio, seed_wav = _turn_with_monitor(pa, follow_wav, _turn_fn,
+                                                        window=follow_window, prompt_on_empty=False)
             follow_ups_done += 1
 
         if POST_PLAY_TAIL_S > 0:

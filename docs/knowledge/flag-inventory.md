@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-588 flags; 586 not documented in `.env.example`.
+591 flags; 589 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -103,6 +103,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_CONTACT_BACKFILL_ENABLED` | `''` | no | NO | `services/zoe-data/contact_backfill.py` |
 | `ZOE_CONTACT_OFFER_BATCH` | `''` | no | NO | `services/zoe-data/contacts_conversation.py` |
 | `ZOE_CONTEXT_TOKEN_BUDGET` | `5500` | yes | NO | `services/zoe-data/zoe_agent.py` |
+| `ZOE_CONTINUE_WINDOW_S` | `2.0` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_CONVERSATION_ENDER_ACKS` | `dynamic` | no | NO | `services/zoe-data/conversation_opener.py` |
 | `ZOE_CONVERSATION_FEEDBACK` | `True` | yes | NO | `services/zoe-data/conversation_feedback.py` |
 | `ZOE_CORE_DATA_URL` | `-` | no | NO | `services/zoe-data/zoe_core_client.py` |
@@ -183,6 +184,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_FLUE_BRAIN_URL` | `-` | no | NO | `services/zoe-data/zoe_flue_client.py` |
 | `ZOE_FLUE_STREAM_ENABLED` | `-` | no | NO | `services/zoe-data/zoe_flue_client.py` |
 | `ZOE_FLUE_WIRE` | `-` | no | NO | `services/zoe-data/zoe_flue_client.py` |
+| `ZOE_FOLLOWUP_ADDRESSED` | `'off'` | no | NO | `services/zoe-data/voice_utterance_shape.py` |
 | `ZOE_FORGET_ALIAS_SWEEP` | `-` | no | NO | `services/zoe-data/memory_forget_alias.py` |
 | `ZOE_FORGET_LEDGER_SALT` | `-` | no | NO | `services/zoe-data/memory_forgotten.py` |
 | `ZOE_FORGET_NEAR` | `-` | no | NO | `services/zoe-data/memory_forgotten.py` |
@@ -569,6 +571,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_VOICE_BARGE_IN` | `'0'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_VOICE_BASELINE` | `dynamic` | no | NO | `scripts/maintenance/voice_gate_check.py`<br>`scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_CHAT_TIMEOUT_S` | `'20'` | no | NO | `services/zoe-data/routers/voice_tts.py`<br>`services/zoe-data/zoe_agent.py` |
+| `ZOE_VOICE_CONTINUATION_HOLD` | `'on'` | no | NO | `services/zoe-data/voice_utterance_shape.py` |
 | `ZOE_VOICE_FAST_FIRST_AUDIO` | `True` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_FILLER_AFTER_S` | `'1.6'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_FILLER_ENABLED` | `False` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
