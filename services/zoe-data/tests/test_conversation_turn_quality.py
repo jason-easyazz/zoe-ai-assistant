@@ -712,7 +712,7 @@ def _arrival(session="s1", text="what time is it", *, saved, settled=True):
     return row
 
 
-async def _run_save(monkeypatch, *, saved_on_arrival, settle_timeout=None):
+async def _run_save(monkeypatch, *, saved_on_arrival, settle_timeout=None, user_text="what time is it"):
     import routers.voice_tts as vt
 
     rows, scheduled = [], []
@@ -730,7 +730,7 @@ async def _run_save(monkeypatch, *, saved_on_arrival, settle_timeout=None):
         _save_chat_message=fake_save, _ensure_user_and_chat_session=fake_ensure))
     monkeypatch.setattr(vt, "_spawn_bg", scheduled.append)
     vt._USER_TURN_SAVED.set(saved_on_arrival)
-    await vt._schedule_voice_chat_save("s1", "what time is it", "It's noon.", "demo_user")
+    await vt._schedule_voice_chat_save("s1", user_text, "It's noon.", "demo_user")
     for task in scheduled:
         await task
     return rows
@@ -770,6 +770,31 @@ async def test_a_user_turn_not_saved_on_arrival_is_still_saved_with_the_reply(mo
     assert await _run_save(monkeypatch, saved_on_arrival=None) == BOTH
     assert await _run_save(monkeypatch, saved_on_arrival=_arrival(text="something else", saved=True)) == BOTH
     assert await _run_save(monkeypatch, saved_on_arrival=_arrival(session="other-session", saved=True)) == BOTH
+
+
+async def test_the_streaming_finalizer_matches_its_arrival_by_session_and_still_saves_both_turns(monkeypatch):
+    """Codex #2001 P1 (thread PRRT_kwDOPZpkks6rpMQj): the streaming finalizer calls the save with an intentionally EMPTY ``user_text``
+    (the user turn was saved pre-stream), so the arrival row never matched - the save neither waited for the arrival attempt nor
+    retried a failed user insert, leaving an assistant-only exchange on the primary streaming brain path."""
+    # the arrival insert failed: the finalizer must write the user turn (the arrival's text) AND the reply, once each
+    assert await _run_save(monkeypatch, saved_on_arrival=_arrival(saved=False), user_text="") == BOTH
+    # the arrival insert landed: only the reply - no duplicate user row
+    assert await _run_save(monkeypatch, saved_on_arrival=_arrival(saved=True), user_text="") == [("assistant", "It's noon.")]
+    # a slow arrival insert is waited for, then deferred to
+    row = _arrival(saved=False, settled=False)
+
+    async def land_later():
+        await asyncio.sleep(0.05)
+        row.saved = True
+        row.settled.set()
+
+    task = asyncio.ensure_future(land_later())
+    assert await _run_save(monkeypatch, saved_on_arrival=row, settle_timeout=5.0, user_text="") == [("assistant", "It's noon.")]
+    await task
+    # no arrival, or one for another session: nothing to recover - the reply alone (an empty user_text is intentional)
+    assert await _run_save(monkeypatch, saved_on_arrival=None, user_text="") == [("assistant", "It's noon.")]
+    assert await _run_save(monkeypatch, saved_on_arrival=_arrival(session="other-session", saved=False), user_text="") == [
+        ("assistant", "It's noon.")]
 
 
 def test_voice_command_marks_the_arrival_row_only_from_a_confirmed_insert_and_resets_per_turn():

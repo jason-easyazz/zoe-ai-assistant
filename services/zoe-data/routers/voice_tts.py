@@ -3096,8 +3096,11 @@ async def _schedule_voice_chat_save(
     if not session_id or user_id in _GUEST_SENTINEL_USERS:
         return
     arrival = _USER_TURN_SAVED.get()
-    if arrival is None or (arrival.session_id, arrival.text) != (session_id, user_text):
+    # An EMPTY user_text is intentional (the streaming finalizer: the user turn was saved pre-stream), so it names the turn by
+    # session alone; a non-empty one must also match the arrival's text.
+    if arrival is None or arrival.session_id != session_id or (user_text and arrival.text != user_text):
         arrival = None
+    user_text = user_text or (arrival.text if arrival is not None else "")   # the row to recover when the arrival insert failed
     try:
         # lazy — avoids circular import (routers.chat lazily imports us back)
         from routers.chat import _ensure_user_and_chat_session, _save_chat_message as _svc
@@ -4885,7 +4888,7 @@ async def voice_command(
                     # lane never reaches voice_command's tail save, and a
                     # client disconnect (GeneratorExit) or mid-stream error
                     # must not drop sentences that were already spoken. Empty
-                    # user_text: the user turn is saved pre-stream.
+                    # user_text: the user turn is saved pre-stream (the save matches its arrival row by session and retries a failed insert).
                     heard_reply = " ".join(
                         part.strip() for part in full_reply_parts if part.strip()
                     ).strip()
