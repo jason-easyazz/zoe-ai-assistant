@@ -161,7 +161,8 @@ def main() -> int:
                 print()
     if args.json:
         print(json.dumps(summary, indent=2, default=str))
-    print(f"head: {restraint_head.describe()}")
+    # human-readable status: stderr under --json so stdout stays one parseable JSON document
+    print(f"head: {restraint_head.describe()}", file=sys.stderr if args.json else sys.stdout)
     return 0
 
 

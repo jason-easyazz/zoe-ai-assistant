@@ -213,11 +213,15 @@ round). The repo's answer to that is a small head on the embedding it already co
   It can only ADD a class, so a wrong head costs a withheld row (shadow's behaviour), never a leak.
 * **It never loads a model.** The vector comes from `semantic_router.embed` only when that module is imported AND its model is in memory;
   otherwise the head is inert and the classifier is the word list alone, byte for byte as before. Extra RAM: the 9 KB matrix. No new dependency.
-* **Hot paths read a cache, never embed.** `head="cache"` (the default; `row_classes` of an unstamped row) answers only from an in-process LRU of
-  texts embedded earlier (+6 microseconds per call, measured); `head=True` embeds once (~7-19 ms on this box) and is used only by `stamp` (a NEW row, at
-  write time) and the nightly thread pass. `VERSION` is 3, so v2 labels are re-derived on read (lexicon only until restamped); threads are reclassified
-  by the next nightly pass with the head. **Consequence, stated:** an old row that was never stamped with v3 gets the word list at read time until a restamp
-  (none exists yet); the head covers rows written, and threads classified, after this lands.
+* **Nothing on a turn or the event loop embeds.** `head="cache"` (the default; `row_classes` of an unstamped row) answers only from an in-process LRU of
+  texts embedded earlier (+2.7 microseconds a call, measured). `head=True` embeds (~7-19 ms on this box) and is called ONLY off the loop: `stamp` (a NEW row, at
+  write time) is cache-only and `restraint_head.defer`s the text to one daemon worker thread that fills the cache; the nightly thread pass warms its texts through
+  `asyncio.to_thread` before classifying. Measured 2026-10-12, before this: an inline embed in `stamp` stalled the event loop 11 ms median / 32 ms worst on every
+  memory write (a turn's "remember" tool call included). **Behaviour change, stated:** a write-time label may LACK the head's classes until the worker has filled
+  the cache; such a stamp carries `LEXICON_VERSION`, which readers ignore, so they recompute and see the head from the cache once it is there, and a later re-stamp is
+  head-complete. The cache is per process: after a restart a row regains the head when it is re-stamped or re-warmed (the restamp pass in the ledger).
+  `VERSION` is 3, so v2 labels are re-derived on read (lexicon only until restamped); threads are reclassified by the next nightly pass with the head. **Consequence,
+  stated:** an old row that was never stamped with v3 gets the word list at read time until a restamp (none exists yet).
 * **Trained on the dev split only; thresholds from a rule fixed before the run:** per class, the lowest threshold at which the head ALONE fires on <= 1 % of
   out-of-fold plain rows (5-fold over dev). `C` by mean out-of-fold average precision. Nothing is tuned on the held-out split.
 * **English only, enforced.** bge-small-en is an English embedding: the head runs only on text whose detected language (`lexicons.detect`, as the

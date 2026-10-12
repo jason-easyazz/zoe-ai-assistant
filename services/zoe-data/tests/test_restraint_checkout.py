@@ -46,7 +46,11 @@ def _enforce(monkeypatch):
 
 
 def test_a_new_row_carries_its_class_in_its_metadata():
+    import restraint_head
     md = _meta("I've got the dentist on Friday for a cracked molar")
+    assert md["sensitivity"] == "health" and md["sensitivity_v"] == restraint.LEXICON_VERSION   # head queued, not run inline
+    restraint_head.drain()
+    md = _meta("I've got the dentist on Friday for a cracked molar")                           # re-stamped with the cache filled
     assert md["sensitivity"] == "health" and md["sensitivity_v"] == restraint.VERSION
     assert md["sensitivity_h"] == restraint.text_hash("I've got the dentist on Friday for a cracked molar")
     assert _meta("parcel pickup on Friday")["sensitivity"] == ""

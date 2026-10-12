@@ -17,6 +17,13 @@ Five parts, one module (the pure core imports nothing heavy; I/O imports are laz
    for threads in ``restraint_classes`` (migration 0042). INVALIDATE, NEVER DELETE: a stored class
    is trusted only while its classifier version and text hash still match; otherwise it is ignored
    (and, for threads, marked ``invalid_at`` and superseded by a new row), never overwritten.
+   **The semantic head never embeds on a turn or on the event loop** (``restraint_head``): ``stamp`` is
+   cache-only and hands the text to one daemon worker thread that fills the head's cache; the nightly
+   thread pass warms it through ``asyncio.to_thread``. Behaviour change, stated: a row stamped at write
+   time may LACK the head's classes until the worker has filled the cache (it is stamped
+   ``LEXICON_VERSION``, which readers ignore, so they recompute and pick the head up from the cache
+   once it is there); the cache is per process, so after a restart a row regains the head only when
+   it is re-stamped or re-warmed.
 2. **Withhold** (``apply_to_packet`` / ``filter_brief_ctx`` / ``decide``): in enforce, a row or
    thread in a sensitive class is removed from the recall packet, the ``[Today]`` brief and the
    ``[RAISE]`` pick unless the turn PULLS it: the owner's words share a topic with it, name its
@@ -41,6 +48,7 @@ guest rule, which is pure code with no I/O to fail.
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import contextvars
 import hashlib
@@ -187,7 +195,8 @@ def classify_full(text: Any, *, memory_type: Any = "", affect: Any = "", entity_
     ``head`` is the semantic half (``restraint_head``: six logistic units on the embedding the router already loaded),
     UNIONED with everything else, so it can only add a class: ``False`` = off (the word list and structured signals alone),
     ``"cache"`` (default; the hot-path mode) = use the head's answer only if this exact text was embedded before, never embed,
-    ``True`` = embed it now (the write path and the nightly pass). With no head file or no loaded embedder it adds nothing."""
+    ``True`` = embed it now, ON THE CALLING THREAD (a worker thread or ``asyncio.to_thread`` only, plus the offline eval harness; a
+    turn or the event loop must never pass it). With no head file or no loaded embedder it adds nothing."""
     raw = str(text or "")
     low = raw.lower().replace("\u2019", "'")
     pk = _lex.pack_for(raw)
@@ -252,11 +261,15 @@ def stamp(md: dict, text: Any) -> None:
     try:
         if mode() == "off":
             return
+        # head="cache": a stamp runs on the event loop inside a memory write (a turn's "remember" tool call), so it never embeds.
         classes = classify(text, memory_type=md.get("memory_type"), affect=md.get("candidate_affect"),
-                           entity_type=md.get("entity_type"), tags=md.get("tags"), head=True)
+                           entity_type=md.get("entity_type"), tags=md.get("tags"), head="cache")
         md["sensitivity"] = ",".join(classes)
         # v3 only when the head actually ran (or never applies); otherwise the lexicon version, which a reader ignores
-        md["sensitivity_v"] = VERSION if head_settled(text) else LEXICON_VERSION
+        settled = head_settled(text)
+        md["sensitivity_v"] = VERSION if settled else LEXICON_VERSION
+        if not settled:
+            _head.defer(text)       # off-loop: the worker fills the cache, so readers (and a later re-stamp) see the head's answer
         md["sensitivity_h"] = text_hash(text)
     except Exception as exc:  # noqa: BLE001
         logger.debug("restraint: stamp skipped: %r", exc)
@@ -974,12 +987,16 @@ async def store_thread_classes(db, user_id: str, items: Iterable[tuple[str, str,
     try:
         valid = await load_thread_classes(db, user_id)
         names = list(names)
+        items = list(items)
+        # the head's embedding is the slow part (~7-19 ms a text): do ALL of it on a worker thread first, so the loop below only
+        # reads the cache (head="cache") and the event loop is never blocked by the nightly pass
+        await asyncio.to_thread(_head.warm, [t for _r, t, _k in items if _head_applies(_lex.pack_for(str(t or "")))])
         for ref, text, kind in items:
             h = text_hash(text)
             cur_ = valid.get(ref)
             # classified BEFORE the skip: the contact names are an input too, so a thread stored before
             # a contact was added is re-derived (same text, new class) rather than kept stale
-            classes, signals = classify_full(text, kind=kind, names=names, head=True)
+            classes, signals = classify_full(text, kind=kind, names=names, head="cache")
             settled = head_settled(text)
             if cur_ and cur_[0] == VERSION and cur_[1] == h and (_parse_csv(cur_[2]) == classes or not settled):
                 continue      # (head not run this pass: keep the head-complete row rather than downgrade it to the word list)

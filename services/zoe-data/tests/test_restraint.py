@@ -280,8 +280,12 @@ def test_signals_name_the_decider_so_an_audit_can_tell_structure_from_a_word_lis
 
 
 def test_stamp_writes_the_class_and_row_classes_trusts_it_only_while_it_still_matches():
+    import restraint_head
     md = {"memory_type": "fact", "tags": ""}
     restraint.stamp(md, DENTIST)
+    assert md["sensitivity_v"] == restraint.LEXICON_VERSION      # the head has not run yet: it is queued for the worker, never embedded here
+    restraint_head.drain()
+    restraint.stamp(md, DENTIST)                                  # ... once the cache is filled, a re-stamp is head-complete
     assert md["sensitivity"] == "health,affect" and md["sensitivity_v"] == restraint.VERSION
     assert restraint.row_classes(md, DENTIST) == ("health", "affect")
     # the stored label is TRUSTED while version and hash match (proved by planting a label no text implies)

@@ -15,8 +15,14 @@ Rules this module keeps:
 * **It never loads a model.** The embedding comes from ``semantic_router`` only when that module is already imported AND its
   model is already in memory (the live zoe-data process loads it at the first routed turn). Otherwise the head is inert and
   the classifier is the word list alone, byte for byte as before. Extra RAM in the service: the 10 KB matrix.
-* **Hot paths read a cache, never embed.** ``classes(text, embed=False)`` answers only from the in-process cache; the write
-  path (``restraint.stamp``) and the nightly thread pass call it with ``embed=True`` (one ~7 ms embedding off the voice path).
+* **Nothing on a turn embeds.** ``classes(text, embed=False)`` answers only from the in-process cache. The one place that
+  embeds is ``lookup(embed=True)``, and it runs only OFF the event loop: ``defer`` hands a text to ONE small daemon worker
+  thread (the write path, ``restraint.stamp``), and ``warm`` is called through ``asyncio.to_thread`` (the nightly thread pass).
+  Measured before this was so (2026-10-12): an inline embed in ``stamp`` stalled the event loop 11 ms median, 32 ms worst, on
+  every memory write. **Behaviour change, stated:** a row stamped at write time may LACK the head's classes until the worker has
+  filled the cache (a row stamped before that carries ``LEXICON_VERSION``, which readers ignore, so they recompute and see the
+  head's answer once it is cached); the cache is per process, so after a restart the head returns for a row only when it is
+  re-stamped or re-warmed (the restamp pass in the open-problems ledger).
 * **English-trained.** The embedding model is bge-small-en: another language's text falls back on its lexicon (the head is
   not claimed for them, and the held-out measure is English only).
 * Fail-safe: any error (missing file, wrong shape, no embedder) returns ``()``.
@@ -28,6 +34,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import queue
 import sys
 import threading
 from collections import OrderedDict
@@ -44,6 +51,10 @@ META_PATH = HEAD_PATH.with_suffix(".json")
 CACHE_MAX = 4096
 
 _LOCK = threading.Lock()
+_CACHE_LOCK = threading.Lock()                     # the worker thread fills the cache while turns read it
+DEFER_MAX = 256                                    # texts waiting for the worker; beyond it a text is dropped (it is re-derivable)
+_QUEUE: "queue.Queue[str]" = queue.Queue(maxsize=DEFER_MAX)
+_WORKER: Optional[threading.Thread] = None
 _STATE: dict[str, Any] = {}                       # "head": (classes, W, b, thr, meta) | None (tried and absent)
 _CACHE: "OrderedDict[str, tuple[str, ...]]" = OrderedDict()
 _MISMATCH_LOGGED = False                           # the model-identity warning is logged once per process
@@ -77,15 +88,23 @@ def reset() -> None:
     _MISMATCH_LOGGED = False
     with _LOCK:
         _STATE.clear()
-        _CACHE.clear()
         _EMBEDDER = None
+    with _CACHE_LOCK:
+        _CACHE.clear()
+    while True:                                    # a text still queued from before must not be embedded into the next test
+        try:
+            _QUEUE.get_nowait()
+            _QUEUE.task_done()
+        except queue.Empty:
+            break
 
 
 def set_embedder(fn: Optional[Callable[[str], Any]]) -> None:
     """Inject ``text -> unit vector`` (tests, the eval harness). ``None`` returns to the live ``semantic_router`` lookup."""
     global _EMBEDDER
     _EMBEDDER = fn
-    _CACHE.clear()
+    with _CACHE_LOCK:
+        _CACHE.clear()
 
 
 def _live_embedder() -> Optional[Callable[[str], Any]]:
@@ -153,10 +172,11 @@ def lookup(text: Any, *, embed: bool = False) -> Optional[tuple[str, ...]]:
     if not raw or _load() is None:
         return None
     key = _key(raw)
-    hit = _CACHE.get(key)
-    if hit is not None:
-        _CACHE.move_to_end(key)
-        return hit
+    with _CACHE_LOCK:
+        hit = _CACHE.get(key)
+        if hit is not None:
+            _CACHE.move_to_end(key)
+            return hit
     if not embed:
         return None
     try:
@@ -167,12 +187,70 @@ def lookup(text: Any, *, embed: bool = False) -> Optional[tuple[str, ...]]:
     except Exception as exc:  # noqa: BLE001
         logger.debug("restraint head: embed skipped: %r", exc)
         return None
-    _CACHE[key] = out
-    while len(_CACHE) > CACHE_MAX:
-        _CACHE.popitem(last=False)
+    with _CACHE_LOCK:
+        _CACHE[key] = out
+        while len(_CACHE) > CACHE_MAX:
+            _CACHE.popitem(last=False)
     return out
 
 
 def classes(text: Any, *, embed: bool = False) -> tuple[str, ...]:
     """``lookup`` with "did not run" folded into "found nothing" (the union only ever adds)."""
     return lookup(text, embed=embed) or ()
+
+
+def warm(texts: Any) -> int:
+    """Embed every not-yet-cached text, SYNCHRONOUSLY, and return how many were classified by the head. For a worker thread or
+    ``asyncio.to_thread`` only (the nightly thread pass): never call it on the event loop. Never raises."""
+    n = 0
+    for t in texts or ():
+        if lookup(t, embed=True) is not None:
+            n += 1
+    return n
+
+
+def _run_worker() -> None:
+    while True:
+        text = _QUEUE.get()
+        try:
+            lookup(text, embed=True)
+        except Exception as exc:  # noqa: BLE001 - the worker outlives any one text
+            logger.debug("restraint head worker: %r", exc)
+        finally:
+            _QUEUE.task_done()
+
+
+def defer(text: Any) -> bool:
+    """Queue ``text`` for the background worker, which embeds it off the event loop and fills the cache; True when queued.
+    Constant time and non-blocking (a full queue drops the text, which a later stamp or the nightly pass re-derives). Starts the
+    one daemon worker on first use. Never raises and never embeds on the calling thread - this is what ``stamp`` calls."""
+    global _WORKER
+    try:
+        raw = str(text or "").strip()
+        if not raw or _load() is None:
+            return False
+        with _CACHE_LOCK:
+            if _key(raw) in _CACHE:
+                return False
+        with _LOCK:
+            if _WORKER is None or not _WORKER.is_alive():
+                _WORKER = threading.Thread(target=_run_worker, name="restraint-head", daemon=True)
+                _WORKER.start()
+        _QUEUE.put_nowait(raw)
+        return True
+    except queue.Full:
+        return False
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("restraint head: defer skipped: %r", exc)
+        return False
+
+
+def drain(timeout: float = 5.0) -> bool:
+    """Wait until the worker has finished everything queued (tests). True when idle."""
+    done = threading.Event()
+
+    def _wait() -> None:
+        _QUEUE.join()
+        done.set()
+    threading.Thread(target=_wait, daemon=True).start()
+    return done.wait(timeout)

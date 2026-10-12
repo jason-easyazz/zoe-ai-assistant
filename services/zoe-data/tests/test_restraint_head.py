@@ -157,17 +157,21 @@ def test_row_classes_of_an_unstamped_row_never_embeds():
     assert fn.calls == []
 
 
-def test_stamp_embeds_and_records_the_head_class_in_the_row_metadata(monkeypatch):
+def test_stamp_records_the_head_class_once_the_worker_has_filled_the_cache(monkeypatch):
     monkeypatch.setenv(restraint.ENV, "shadow")
     text = "Quinn keeps waking at three with a racing heart"
     restraint_head.set_embedder(_embedder_for({text: _direction("health")}))
     md: dict = {}
     restraint.stamp(md, text)
+    assert "health" not in md["sensitivity"].split(",") and md["sensitivity_v"] == restraint.LEXICON_VERSION   # not yet: queued
+    assert restraint_head.drain()
+    restraint.stamp(md, text)                                                  # the cache is filled: the re-stamp carries the head
     assert "health" in md["sensitivity"].split(",") and md["sensitivity_v"] == restraint.VERSION
     # break-the-fix twin: no embedder -> the stamp is the word list's (here: nothing for this sentence)
     restraint_head.set_embedder(None)
     md2: dict = {}
     restraint.stamp(md2, text)
+    restraint_head.drain()
     assert "health" not in md2["sensitivity"].split(",")
 
 
@@ -279,8 +283,10 @@ def test_a_row_created_before_the_model_loads_is_not_stamped_head_complete(monke
     assert md["sensitivity_v"] == restraint.LEXICON_VERSION != restraint.VERSION
     # a reader does not trust it: row_classes recomputes (cache-only head, nothing cached -> word list)
     assert restraint.row_classes(md, ROW) == restraint.classify(ROW, head=False)
-    # the model loads; a later restamp of the same row applies the head and is head-complete
+    # the model loads; a later restamp of the same row queues the head, and the one after it is head-complete
     _router(monkeypatch)
+    restraint.stamp(md, ROW)
+    assert restraint_head.drain()
     restraint.stamp(md, ROW)
     assert md["sensitivity_v"] == restraint.VERSION and "health" in md["sensitivity"].split(",")
     assert "health" in restraint.row_classes(md, ROW)                         # ... and now it IS trusted
@@ -290,6 +296,8 @@ def test_a_stamp_where_the_head_ran_and_found_nothing_is_head_complete(monkeypat
     monkeypatch.setenv(restraint.ENV, "shadow")
     _router(monkeypatch, vec=np.zeros(384, dtype=np.float32))
     md: dict = {}
+    restraint.stamp(md, PLAIN)
+    assert restraint_head.drain()
     restraint.stamp(md, PLAIN)
     assert md["sensitivity"] == "" and md["sensitivity_v"] == restraint.VERSION
 
@@ -343,3 +351,102 @@ def test_a_router_that_does_not_name_its_model_is_not_trusted(monkeypatch):
         embed = staticmethod(lambda text: _direction("health"))
     monkeypatch.setitem(sys.modules, "semantic_router", _Anon)
     assert restraint_head._live_embedder() is None
+
+
+# ── the head never embeds on a turn or on the event loop (2026-10-12: stamp stalled the loop 11 ms median, 32 ms worst) ──────
+def _thread_recording_embedder(vec):
+    import threading
+    seen: list = []
+
+    def fn(_text):
+        seen.append(threading.get_ident())
+        return vec
+    fn.seen = seen
+    return fn
+
+
+def test_stamp_never_embeds_on_the_calling_thread_but_the_worker_does(monkeypatch):
+    """RED if ``stamp`` embeds inline again: the embedder would then run on the test's own thread."""
+    import threading
+    monkeypatch.setenv(restraint.ENV, "shadow")
+    fn = _thread_recording_embedder(_direction("health"))
+    restraint_head.set_embedder(fn)
+    md: dict = {}
+    restraint.stamp(md, ROW)
+    assert threading.get_ident() not in fn.seen                                # nothing embedded inline
+    assert restraint_head.drain()
+    assert len(fn.seen) == 1 and fn.seen[0] != threading.get_ident()           # the worker did it, once, off this thread
+    assert "health" in restraint.classify(ROW)                                 # and a reader now sees the head from the cache
+
+
+def test_stamp_costs_a_queue_put_not_an_embedding(monkeypatch):
+    import time
+    monkeypatch.setenv(restraint.ENV, "shadow")
+
+    def slow(_text):
+        time.sleep(0.2)
+        return np.zeros(384, dtype=np.float32)
+    restraint_head.set_embedder(slow)
+    t = time.perf_counter()
+    restraint.stamp({}, ROW)
+    assert time.perf_counter() - t < 0.1                                       # a 200 ms embedder is not waited for
+    restraint_head.reset()
+
+
+def test_the_defer_queue_is_bounded_and_never_blocks(monkeypatch):
+    import threading
+    gate = threading.Event()
+    restraint_head.set_embedder(lambda _t: gate.wait(5) and np.zeros(384, dtype=np.float32))
+    queued = [restraint_head.defer(f"text number {i}") for i in range(restraint_head.DEFER_MAX + 50)]
+    assert not all(queued) and any(queued)                                     # past the bound a text is dropped, not waited on
+    gate.set()
+    assert restraint_head.drain(10)
+
+
+@pytest.mark.asyncio
+async def test_the_nightly_thread_pass_embeds_off_the_event_loop(monkeypatch):
+    """RED if ``store_thread_classes`` embeds on the loop: the embedder would run on the loop's own thread."""
+    import threading
+    loop_thread = threading.get_ident()
+    fn = _thread_recording_embedder(_direction("health"))
+    restraint_head.set_embedder(fn)
+    monkeypatch.setenv(restraint.ENV, "shadow")
+
+    class _Cur:
+        def __init__(self, rows=()):
+            self._rows = rows
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def fetchall(self):
+            return list(self._rows)
+
+        async def _self(self):
+            return self
+
+        def __await__(self):
+            return self._self().__await__()
+
+    class _Db:
+        def execute(self, *_a, **_k):
+            return _Cur()
+
+    n = await restraint.store_thread_classes(_Db(), "member-a", [("open_loops:1", ROW, "open_loop")])
+    assert n == 1
+    assert fn.seen and loop_thread not in fn.seen                              # embedded, and never on the event loop's thread
+
+
+def test_eval_json_mode_writes_only_json_to_stdout(monkeypatch, capsys):
+    """Codex (#1996): ``--json`` must leave stdout one parseable document; the human status line goes to stderr."""
+    spec = importlib.util.spec_from_file_location("restraint_eval_json", REPO / "scripts" / "perf" / "restraint_eval.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    monkeypatch.setattr("sys.argv", ["restraint_eval.py", "--no-head", "--json"])
+    assert mod.main() == 0
+    out = capsys.readouterr()
+    assert "lexicon only / dev" in json.loads(out.out)
+    assert out.err.startswith("head:")
