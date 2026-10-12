@@ -1599,6 +1599,15 @@ class Transcript(str):
         return obj
 
 
+class TranscriptLoadError(RuntimeError):
+    """The day's chat could not be READ (query / bind / pool failure). Distinct from an empty transcript: ``""`` means "no turns", this means "unknown".
+    ``kind`` is the cause's class name (the only detail callers report); a swallowed read failure once showed as ``quiet_day`` for every member."""
+
+    def __init__(self, cause: BaseException):
+        self.kind = type(cause).__name__
+        super().__init__(f"load_failed:{self.kind}")
+
+
 _LEGACY_TURN_LIMIT = 200
 _LEGACY_LOOP_TURN_LIMIT = 50
 _CHUNKED_TURN_LIMIT = 600
@@ -1616,7 +1625,7 @@ def _turn_limit() -> int:
 
 
 async def _load_todays_messages(user_id: str, db=None) -> str:
-    """Load today's user-turn messages using per-message metadata ownership."""
+    """Load today's user-turn messages using per-message metadata ownership. ``""`` = no turns; a failed READ raises ``TranscriptLoadError`` (never ``""``)."""
     await _redact_forgotten_transcript(user_id, db)
     owner_expr = _message_owner_expr()
     sql = """
@@ -1656,7 +1665,7 @@ async def _load_todays_messages(user_id: str, db=None) -> str:
         return await _transcript_from_rows(user_id, rows)
     except Exception as exc:
         logger.warning("memory_digest: could not load messages for %s: %s", user_id, exc)
-        return ""
+        raise TranscriptLoadError(exc) from exc
 
 
 async def _transcript_from_rows(user_id: str, rows) -> "Transcript":
@@ -1686,9 +1695,20 @@ async def _transcript_from_rows(user_id: str, rows) -> "Transcript":
     return Transcript("\n".join(lines), turns, times)
 
 
+def _as_instant(value):
+    """An ISO instant (or a datetime) as an aware ``datetime`` for a ``timestamptz`` bind; a naive value is Zoe-local time, as everywhere else in the night jobs."""
+    import datetime as _dtm
+
+    d = value if isinstance(value, _dtm.datetime) else _dtm.datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+    if d.tzinfo is None:
+        from time_utils import zoe_timezone
+        d = d.replace(tzinfo=zoe_timezone())
+    return d
+
+
 async def load_day_messages(user_id: str, start_iso: str, end_iso: str, db=None) -> str:
     """The owner's own-words turns between two instants (ISO, timezone-aware): the standalone night-mind run's ``--date`` loader. Same filters as the
-    nightly loader (``_message_owner_expr`` ownership, own words, forgotten turns skipped); the turn cap is the night mind's."""
+    nightly loader (``_message_owner_expr`` ownership, own words, forgotten turns skipped); the turn cap is the night mind's. ``""`` = no turns; a failed READ raises ``TranscriptLoadError``."""
     owner_expr = _message_owner_expr()
     sql = """
             SELECT cm.content, cm.id, cm.created_at
@@ -1702,8 +1722,10 @@ async def load_day_messages(user_id: str, start_iso: str, end_iso: str, db=None)
             ORDER BY cm.created_at ASC
             LIMIT """ + str(_turn_limit()) + """
             """
-    params = (user_id, start_iso, end_iso)
     try:
+        # asyncpg binds a ``timestamptz`` parameter only from a datetime: the ISO strings the CLI passes made EVERY ``--date`` read raise
+        # (swallowed below, so the member read as a quiet day with 0 turns) until they were coerced here.
+        params = (user_id, _as_instant(start_iso), _as_instant(end_iso))
         from db_pool import get_db_ctx  # type: ignore[import]
         if db is not None:
             rows = await (await db.execute(sql, params)).fetchall()
@@ -1713,7 +1735,7 @@ async def load_day_messages(user_id: str, start_iso: str, end_iso: str, db=None)
         return await _transcript_from_rows(user_id, rows) if rows else ""
     except Exception as exc:
         logger.warning("memory_digest: could not load the day's messages for %s: %s", user_id, exc)
-        return ""
+        raise TranscriptLoadError(exc) from exc
 
 
 async def _redact_forgotten_transcript(user_id: str, db=None) -> None:
