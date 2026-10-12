@@ -97,6 +97,7 @@
   "how_remember": ["{memory_rules}"],
   "know_me_yes": ["Yes - you're {name}, and I know that from your account.", "{voice_clause}", "{face_clause}"],
   "voice_clause": "I know your voice too.",
+ "voice_missing_clause": "I don't know your voice yet. Say learn my voice if you'd like me to.",
   "face_clause": "And I know your face.",
   "know_me_guest": ["I don't know who you are - you're not signed in, so I treat you as a guest and keep nothing."],
   "know_me_unverified": ["I couldn't tell who was speaking, so I haven't said anything - say it again once I know it's you."],

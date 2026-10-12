@@ -37,12 +37,15 @@ import argparse
 import base64
 import importlib.util
 import json
+import math
 import os
+import struct
 import subprocess
 import sys
 import tempfile
 import time
 import urllib.request
+import wave
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ZOE_URL = os.environ.get("ZOE_URL", "https://zoe.local")
@@ -90,12 +93,25 @@ def _api(path: str, payload: dict, timeout: int = 60, raw: bool = False):
     return body if raw else json.loads(body)
 
 
+# The server's TTS can be briefly unavailable (the Kokoro sidecar restarting answers 503 for ~25 s). The robot voice the owner heard on
+# 2026-10-12 was the espeak-ng fallback below firing on the FIRST attempt, not a different synthesiser: the flow uses the same
+# /api/voice/synthesize waterfall as every normal reply. So wait for Kokoro (bounded) before settling for espeak-ng.
+SYNTH_ATTEMPTS = 6
+SYNTH_RETRY_S = (2, 3, 4, 5, 6)
+
+
 def say(text: str) -> None:
-    """Speak through the panel: server TTS (Zoe's real voice) -> aplay;
-    espeak-ng fallback so guidance never goes silent."""
+    """Speak through the panel: server TTS (Zoe's real voice) -> aplay. A failed synthesis is RETRIED for a bounded wait (the
+    Kokoro sidecar restarts in ~25 s); only when that is exhausted does espeak-ng speak, so guidance never goes silent."""
     print(f"[zoe says] {text}", flush=True)
-    try:
-        audio = _api("/api/voice/synthesize", {"text": text}, raw=True)
+    for attempt in range(SYNTH_ATTEMPTS):
+        try:
+            audio = _api("/api/voice/synthesize", {"text": text}, raw=True)
+        except Exception as exc:  # noqa: BLE001 - 503 while the TTS sidecar restarts, a transport blip
+            print(f"[zoe says] TTS attempt {attempt + 1}/{SYNTH_ATTEMPTS} failed: {type(exc).__name__}", file=sys.stderr, flush=True)
+            if attempt < SYNTH_ATTEMPTS - 1:
+                time.sleep(SYNTH_RETRY_S[min(attempt, len(SYNTH_RETRY_S) - 1)])
+            continue
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             f.write(audio)
             path = f.name
@@ -107,8 +123,48 @@ def say(text: str) -> None:
                 os.unlink(path)
             except OSError:
                 pass
-    except Exception:
-        subprocess.run(["espeak-ng", "-s", "150", text], check=False, timeout=20)
+        return
+    print("[zoe says] server TTS unavailable - falling back to espeak-ng (robot voice)", file=sys.stderr, flush=True)
+    subprocess.run(["espeak-ng", "-s", "150", text], check=False, timeout=20)
+
+
+def _chime_wav_path() -> str:
+    """The listen chime: ``chime.wav`` beside this script when one is deployed, else a two-tone chirp written to a temp file.
+    The Pi has never had a ``chime.wav``, so the old ``if os.path.exists(chime)`` played NOTHING while the prompts said "after the
+    beep". Same two tones as the daemon's wake beep."""
+    shipped = os.path.join(HERE, "chime.wav")
+    if os.path.exists(shipped):
+        return shipped
+    rate, amp = 16000, 0.35
+    frames = bytearray()
+    for freq, ms in ((880, 120), (0, 28), (1170, 110)):
+        n = max(1, int(rate * ms / 1000))
+        for i in range(n):
+            t = i / max(1, n - 1)
+            env = min(1.0, t * 18.0) * min(1.0, (1.0 - t) * 22.0)
+            sample = 0 if freq == 0 else int(32767 * amp * env * math.sin(2 * math.pi * freq * i / rate))
+            frames += struct.pack("<hh", sample, sample)  # stereo duplicate: USB speakerphones reject mono playback
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        path = f.name
+    with wave.open(path, "wb") as wf:
+        wf.setnchannels(2)
+        wf.setsampwidth(2)
+        wf.setframerate(rate)
+        wf.writeframes(bytes(frames))
+    return path
+
+
+def play_chime() -> None:
+    """The beep before each recording."""
+    path = _chime_wav_path()
+    try:
+        subprocess.run(["aplay", "-q", path], check=False, timeout=5)
+    finally:
+        if os.path.basename(path) != "chime.wav":
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
 
 def _load_face_module():
@@ -243,9 +299,7 @@ def enroll_voice(user: str, name: str, daemon_service: str = "zoe-voice") -> int
         for i, phrase in enumerate(VOICE_PHRASES, 1):
             say(f"Phrase {i}. After the beep, please say: {phrase}")
             time.sleep(0.4)
-            chime = os.path.join(HERE, "chime.wav")
-            if os.path.exists(chime):
-                subprocess.run(["aplay", "-q", chime], check=False, timeout=5)
+            play_chime()
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                 wav_path = f.name
             try:

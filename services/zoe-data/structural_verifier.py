@@ -104,10 +104,14 @@ async def judge(fact: str, said: str, *, url: Optional[str] = None, model: Optio
                                                               fact=(fact or "")[:200].replace('"', "'"))}],
         "max_tokens": 2, "temperature": 0, "stream": False, "grammar": GRAMMAR, "cache_prompt": True,
     }
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(f"{url}/v1/chat/completions", json=payload)
-        resp.raise_for_status()
-        text = str(resp.json()["choices"][0]["message"]["content"] or "").strip().lower()
+    import brain_slot_guard
+
+    # Post-turn pass on the brain's ONE slot: waits out a hot conversation (brain_slot_guard) so it cannot evict it.
+    async with brain_slot_guard.background_slot("structural_verifier"):
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(f"{url}/v1/chat/completions", json=payload)
+            resp.raise_for_status()
+            text = str(resp.json()["choices"][0]["message"]["content"] or "").strip().lower()
     return text if text in ("yes", "no") else None
 
 
