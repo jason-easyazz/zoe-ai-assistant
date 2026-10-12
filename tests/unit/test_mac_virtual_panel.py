@@ -613,7 +613,8 @@ def test_script_has_no_pi_paths_and_the_deploy_ship_set_is_unchanged():
     text = _SCRIPT.read_text()
     assert "/home/pi" not in text and "zoe-pi" not in text
     deploy = (_SETUP / "deploy-pi-voice.sh").read_text()
-    assert "SHIPPED_FILES=(zoe_voice_daemon.py zoe_voice_announce.py pi-requirements.txt)" in deploy
+    assert ("SHIPPED_FILES=(zoe_voice_daemon.py zoe_voice_announce.py zoe_voice_enroll_mode.py zoe_enroll_flow.py "
+            "pi-requirements.txt)") in deploy
     assert "mac_backend" not in deploy and "mac_panel" not in deploy  # the Pi ships nothing new
 
 
