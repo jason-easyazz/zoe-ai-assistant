@@ -1202,7 +1202,37 @@ Earlier, **2026-09-29 04:10 AWST** (the evening chain landed; **the panel is on*
 - B8.2 ⬜ SkillSpector 2.12 with the LLM stage on the local llama-server.
 - B8.3 ⬜ Standing watchers (B2.4) as the first Zoe-authored background agents.
 
-### B9 — Omi wearable: a roaming, consented microphone (W6 delivery vehicle) — 🔨 plan merged (#1683)
+### B9 — Omi wearable: a roaming, consented microphone (W6 delivery vehicle) — 🔨 plan merged (#1683); **owner decision 2026-10-12: sync in range first**
+**2026-10-12 — record on the pendant, sync when in range of Zoe (owner-chosen; supersedes the live-stream bridge as the FIRST build).**
+The pendant pairs with the panel Pi, not the Omi phone app (rejected with evidence: the store app sends transcripts to Omi even
+with a custom STT; offline audio goes only to Omi's servers; the custom-server option is compiled out of release builds —
+`kReleaseMode` gates it; the "data protection" key is the server-side `ENCRYPTION_SECRET`). On stock firmware "recording" = the
+pendant is powered on; when it is in range the Pi drains the SD ring, Zoe transcribes with Moonshine and files the recordings as
+his (reviewable, deletable). Design, custody rule, operator runbook and the verified/unverified hardware facts:
+[`omi-integration-plan.md`](omi-integration-plan.md) sections 0 and 4.
+- B9.1b ✅ **Ring protocol confirmed from Omi's MIT source** (2026-10-12): storage service `30295780-…`, `…81` write+notify, `…82`
+  read+notify; `0x10/0x11/0x12/0x13/0x03`; 444-byte records (4 B BE timestamp + 440 B packed payload); firmware ≥ 3.0.20; the
+  custody contract. (The earlier "storage UUID UNVERIFIED" is closed.) Hardware-only facts remain UNVERIFIED (plan 0.3).
+- B9.2b 🔨 **Sync-in-range, flag-dark, phase 1** (this PR): `services/omi-sync/` on the Pi (own process/unit, `OMI_SYNC_ENABLED`,
+  firmware gate, durable spool, custody-gated ADVANCE, idempotent resume) + zoe-data `omi_recordings.py`
+  (`ZOE_OMI_SYNC_ENABLED`, `ZOE_OMI_OWNER_USER_ID`, migration 0045, device-token upload, owner-only list/get/patch/delete,
+  Moonshine transcription off the night window/voice turns/RAM floor, retention + forget) + the "I've synced N" notice.
+  Gate: ci_safe suites in plan 4.8 (custody, resume, firmware gate, auth/idempotency, transcription, delete/forget); **no
+  voice-path file changes, so the replay gate does not front it**. Open: operator steps (unpair the app — NO pairing to the Pi is
+  needed, the read-only `python -m omi_sync check`, flip the flags) and the first supervised drain.
+  **Real-device facts (2026-10-12 bring-up):** the owner's pendant is `Omi CV 1` hw 5.0 on **firmware 3.0.18 — below the ring
+  protocol's 3.0.20**; it speaks the older multi-file SD protocol (`LIST_FILES`/`READ_FILE`), whose firmware **deletes each file
+  itself on delivery** (the app cannot gate it; custody = the Pi's spool), so that path is implemented but **opt-in**
+  (`OMI_SYNC_LEGACY_FILES`) and the preferred fix is the official OTA to 3.0.21 (steps + risks in plan 4.10; nothing flashed). BlueZ's
+  420 ms supervision timeout kills the link at the panel's range (adverts −88..−96 dBm): the connection recipe is `hcitool lecc`
+  first (implemented). The codec characteristic reads `0x0f`, which no source revision defines (CV1 = 21): unresolved, so an unknown
+  id is refused unless `OMI_SYNC_ASSUME_CODEC` and undecodable audio is held. The device clock is months stale, so recording
+  times are `estimated` unless the (flag-gated, default-off) clock write is turned on.
+- B9.8 ⬜ **Phase 2: press-to-record firmware** (button toggles the ring writes; haptic/LED; custody-capable build). Needs the
+  hardware facts from the device check first. Restores the consent posture the stock ring lacks (plan 0.4).
+- Live-stream / ambient (B9.2–B9.5 below) is now the LATER path; B9.0(a) "storage-off firmware mandatory" applies to it, not to
+  the sync-in-range path (which needs the ring on).
+
 Plan: [`omi-integration-plan.md`](omi-integration-plan.md) (two review rounds: every phase
 replay-gated, no transcript text in shadow mode, a real multi-speaker detector, storage-off
 firmware mandatory, scoped rows incl. the existing panel writer, "same eligible speaker" rule;
