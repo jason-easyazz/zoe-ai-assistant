@@ -46,6 +46,14 @@ MEMORY_OPT_OUT_SOURCES = frozenset({
     "consolidation",    # idle consolidation
     "synthesis",        # memory_digest higher-order insights
     "music_digest",     # listening-journal digest
+    # Voice lane (routers/voice_tts.py) + the remaining automatic writers. These were
+    # missing, so an opted-out member speaking to a panel was still mined
+    # (tests/test_memory_opt_out_writer_coverage.py enumerates every writer source).
+    "voice_regex",          # memory_extractor over a spoken turn
+    "voice_turn_digest",    # memory_digest.run_turn_digest over a spoken turn
+    "voice",                # person_extractor / person_extractor_llm over a spoken turn
+    "chat_regex_fallback",  # zoe_agent's fallback regex writer
+    "idle_consolidation",   # memory_idle_consolidation
 })
 
 _UNSET = object()

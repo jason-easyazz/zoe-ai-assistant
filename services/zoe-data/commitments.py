@@ -636,7 +636,7 @@ async def _make_reminder(db, user_id: str, title: str, now: datetime) -> str:
     try:
         made = await create_reminder_record(
             ReminderCreate(title=title, due_date=local.strftime("%Y-%m-%d"), due_time=local.strftime("%H:%M")), user=user, db=db,
-            now_utc=now)
+            now_utc=now, schedule=False)       # this function owns the (+45 s) schedule below: exactly one job per reminder
         rid = str(made.get("id") or "")
     except Exception as exc:  # noqa: BLE001 - HTTPException (role / date) or a DB failure: she owns it up instead
         logger.warning("commitments: late reminder not created (%s)", type(exc).__name__)

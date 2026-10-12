@@ -130,13 +130,13 @@ async def trigger_morning_brief(user: dict = Depends(get_current_user), db=Depen
     username = user.get("username", "")
 
     # Use the same local-timezone resolution as the scheduled path
-    # (proactive/triggers/morning_checkin.py's _ZOE_TZ) so `today` matches the
+    # (time_utils.zoe_timezone, as proactive/triggers/morning_checkin.py) so `today` matches the
     # user's actual local date, not UTC. During the Perth morning (00:00-08:00
     # local == still "yesterday" in UTC) the UTC-based date previously queried
     # yesterday's calendar/context while the displayed day string (already
     # tz-correct below) showed today — a self-contradictory brief.
-    from proactive.triggers.morning_checkin import _ZOE_TZ
-    now_local = datetime.now(_ZOE_TZ)
+    from time_utils import zoe_timezone
+    now_local = datetime.now(zoe_timezone())
     today = now_local.date().isoformat()
     day_str = now_local.strftime("%A, %B %d")
 
