@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-590 flags; 588 not documented in `.env.example`.
+596 flags; 594 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -361,6 +361,12 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_MUSIC_SETUP_TTL_S` | `'900'` | no | NO | `services/zoe-data/music_setup.py` |
 | `ZOE_NIGHT_MIND` | `''`, `-` | no | NO | `scripts/maintenance/zoe-night-mind.py`<br>`scripts/perf/zmb/arms/z0.py` |
 | `ZOE_NVM_NODE_BIN` | `-` | no | NO | `services/zoe-data/pi_intent_classifier.py` |
+| `ZOE_OMI_AUDIO_DIR` | `''` | yes | NO | `services/zoe-data/omi_recordings.py` |
+| `ZOE_OMI_AUDIO_RETENTION_DAYS` | `dynamic` | yes | NO | `services/zoe-data/omi_recordings.py` |
+| `ZOE_OMI_KEEP_AUDIO` | `False` | yes | NO | `services/zoe-data/omi_recordings.py` |
+| `ZOE_OMI_MIN_MEM_MB` | `1500` | yes | NO | `services/zoe-data/omi_recordings.py` |
+| `ZOE_OMI_OWNER_USER_ID` | `''` | yes | NO | `services/zoe-data/omi_recordings.py` |
+| `ZOE_OMI_SYNC_ENABLED` | `False` | yes | NO | `services/zoe-data/omi_recordings.py` |
 | `ZOE_OMNIGENT_AGENT_ID` | `'057995d1517418e6839f51d340785dd6'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
 | `ZOE_OMNIGENT_CLOSE_POLL_S` | `'60'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
 | `ZOE_OMNIGENT_CLOSE_TIMEOUT_S` | `'2400'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
