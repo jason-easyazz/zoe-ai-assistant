@@ -12,7 +12,9 @@
 #
 # WHAT IT SHIPS (exactly): zoe_voice_daemon.py, zoe_voice_announce.py (the
 # daemon imports it; a partial deploy silently disables announce polling),
-# pi-requirements.txt. It NEVER ships scripts/setup/zoe-voice.service as-is:
+# zoe_voice_enroll_mode.py (the daemon imports it; without it Zoe-driven voice
+# enrolment commands are refused and logged), zoe_enroll_flow.py (the hand-run
+# guided flow, kept in step), pi-requirements.txt. It NEVER ships scripts/setup/zoe-voice.service as-is:
 # that file is the JETSON template (/home/zoe paths, WantedBy=multi-user.target)
 # and installing it over the live unit killed the panel daemon with
 # status=203/EXEC (incident 2026-10-04 23:12).
@@ -49,7 +51,7 @@ REMOTE_UNIT_DIR='$HOME/.config/systemd/user'
 REMOTE_UNIT="${REMOTE_UNIT_DIR}/zoe-voice.service"
 # The daemon's only local import is `zoe_voice_announce` (scripts/setup); ship
 # exactly the daemon + what it imports + the pip manifest.
-SHIPPED_FILES=(zoe_voice_daemon.py zoe_voice_announce.py pi-requirements.txt)
+SHIPPED_FILES=(zoe_voice_daemon.py zoe_voice_announce.py zoe_voice_enroll_mode.py zoe_enroll_flow.py pi-requirements.txt)
 
 INSTALL_UNIT=0
 FORCE_UNIT=0
