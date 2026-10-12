@@ -243,12 +243,15 @@ export function applyPolicies(context: Context, userModelSuffix = ''): Context {
   // windowing, so the history budget is charged for it. '' → unchanged.
   // The persona swap and the manner block happen BEFORE windowing too, so the history budget is charged for them.
   // The manner block goes ahead of the user-model card: the bytes up to the card are the same for every member.
-  const windowed = windowContextToBudget(withUserModelBlock(withMannerBlock(withPersonaBlock(sent, persona), manner), userModelSuffix));
-  const safe = stripCodingBuiltins(windowed);
+  const prepared = withUserModelBlock(withMannerBlock(withPersonaBlock(sent, persona), manner), userModelSuffix);
+  const safe = stripCodingBuiltins(prepared);
   const disclosed = progressiveToolsEnabled()
     ? discloseTools(safe, clean.messages)
     : safe;
-  return applyCap(disclosed);
+  // Windowing runs on the tool block the model will actually be offered: budgeting against ALL registered schemas (the
+  // pre-2026-10-12 order) charged ~650 tokens the wire never carries and so started dropping history that fitted.
+  // Disclosure reads `clean.messages` (above), never the windowed list, so the tool block is unchanged by this order.
+  return applyCap(windowContextToBudget(disclosed));
 }
 
 /** Estimated tokens (chars/4, as windowing) per section of one model call's prompt. */

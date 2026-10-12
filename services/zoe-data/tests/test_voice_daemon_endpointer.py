@@ -57,6 +57,7 @@ _RECORDERS = (
     r"\ndef record_command\(",            # wake → command
     r"\ndef _follow_up_listen\(",         # follow-up window
     r"\n    def _capture_seed\(",         # barge-in phase 1: seed the next turn
+    r"\ndef _enroll_record_once\(",       # Zoe-driven voice enrolment mode: one phrase per recording
 )
 
 

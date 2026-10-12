@@ -105,7 +105,9 @@ def sha256_hex(data: bytes) -> str:
 
 def _default_download(url: str, max_bytes: int) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": "zoe-panel-bluetooth"})
-    with urllib.request.urlopen(req, timeout=120) as resp:      # follows GitHub's redirect to its asset CDN; the digest is the guard
+    # urlopen follows GitHub's redirect to objects.githubusercontent.com. That redirect target is guarded by the pinned size + SHA-256
+    # (checked by the caller before any byte is used), NOT by ALLOWED_HOSTS, which only constrains the pinned URL itself.
+    with urllib.request.urlopen(req, timeout=120) as resp:
         data = resp.read(max_bytes + 1)
     if len(data) > max_bytes:
         raise ReleaseError("download larger than the pinned size allows")
