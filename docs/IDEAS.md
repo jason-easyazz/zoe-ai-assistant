@@ -33,6 +33,13 @@ Detail/AI notes go under each entry. Move the status as it progresses.
 
 ## 💡 Ideas
 
+### Zoe as an action agent, at the level of Wajo's "Fo" — 🔬 exploring
+- **Core:** Zoe owns everyday tasks end to end — emails as herself, books online, phones businesses, pays with single-use capped cards, escalates to the owner when stuck, learns from corrections. Source: [wajo.ai](https://wajo.ai); owner, 2026-10-12: "be great to get zoe to this level."
+- **Record + plan:** [`docs/research/zoe-action-agent-2026-10.md`](research/zoe-action-agent-2026-10.md); tracked in [PLANS.md](PLANS.md). The piece to borrow first is Fo's benchmark shape (a simulated world graded world-state first), not its feature list.
+
+### Voice for Bluetooth devices — "connect my pendant" / "is my pendant connected" — 💡 pinned
+Settings > Bluetooth devices ([bluetooth-settings.md](knowledge/bluetooth-settings.md)) is built flag-dark without a voice path (a new intent is a replay-gated change). The seam is `bluetooth_broker.enqueue` — an intent would queue `connect`/`status` for the right panel. Also: a push channel for update progress instead of polling, and a USB Bluetooth adapter on the panel (the built-in radio hears the pendant at about -91 dBm even beside it).
+
 ### A richer "Pinterest-style" ideas surface inside Zoe — 💡 pinned
 - **Core:** this file is v1. The real idea is a **visual board in Zoe** to save links/videos/ideas, browse for inspiration, and let agents read/append it. Originally planned a Zoe section for exactly this.
 - **Next:** research whether an existing open-source project already does this well (visual idea/link board, local, agent-accessible) before building. Source: Jason, 2026-06-23.
@@ -104,3 +111,4 @@ Detail/AI notes go under each entry. Move the status as it progresses.
 - 💡 **Presence fusion** (P8): PanaCast person-detect ≤1 fps on the Pi + Bermuda BLE IRK for *who*; mmWave later.
 - 💡 **Failure-fed evolution proposals** (P9): W7's first inputs = replay misses + Samantha-bar FAILs + `chat_feedback` (Letta skill learning: +36.8 % with failures).
 - 💡 **Learned should-I-speak head** (P10): numpy head on bge-small trained on `proactive_responses` once ~200 rows exist (evidence: arXiv 2605.30152).
+- 💡 **Location per household / member / panel**: settings-UI home for country + timezone (today `ZOE_HOUSEHOLD_COUNTRY` / `ZOE_TIMEZONE` env only), overridable per member and per panel, feeding crisis lines, time and weather (see open-problems 2026-10-12).

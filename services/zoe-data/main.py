@@ -2279,6 +2279,11 @@ _persona_router.register(app)
 from routers import omi_recordings as _omi_router  # noqa: E402
 _omi_router.register(app)
 
+# Settings > Bluetooth devices (flag-dark): the household admin's scan/connect/disconnect/forget/update controls and the per-panel
+# agent's poll/report lane. Mounted ONLY when ZOE_BLUETOOTH_SETTINGS is on — flag off = 404. Never touches the voice path.
+from routers import bluetooth as _bluetooth_router  # noqa: E402
+_bluetooth_router.register(app)
+
 
 @app.get("/.well-known/agent.json", include_in_schema=False)
 async def a2a_well_known():
