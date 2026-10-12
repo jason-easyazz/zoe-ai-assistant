@@ -1394,6 +1394,14 @@ COUNT_KEYS = ("turns_in", "turns_dropped_routine", "turns_skipped_cap", "chunks"
               "prompt_tokens", "completion_tokens", "prompt_tokens_est_max")
 
 
+def load_failed(user_id: str, exc: BaseException, *, force_mode: "Optional[str]" = None) -> "dict[str, Any]":
+    """A member whose transcript could not be READ (``memory_digest.TranscriptLoadError``): ``status: load_error`` with the cause's class, every counter 0, nothing written.
+    It is NOT a quiet day (``skipped`` / ``quiet_day`` means the read worked and found too little), and callers count it apart so the night's exit code and report show it."""
+    kind = getattr(exc, "kind", "") or type(exc).__name__
+    logger.warning("NIGHT_MIND user=%s status=load_error kind=%s (nothing written)", user_id, kind)
+    return {"status": "load_error", "mode": force_mode or mode(), "user_id": user_id, "error": kind, "written": 0, "wall_s": 0.0, **{k: 0 for k in COUNT_KEYS}}
+
+
 async def _run(user_id: str, transcript: Any, svc: Any, m: str, now: "_dt.datetime", cfg: Config, ledger_rows: Any, night_date: str,
                res: "dict[str, Any]") -> "dict[str, Any]":
     started = time.monotonic()

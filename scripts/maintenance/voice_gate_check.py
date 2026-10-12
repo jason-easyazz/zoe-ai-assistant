@@ -490,6 +490,24 @@ VOICE_PATH_PATTERNS = (
     "services/zoe-data/voice_turn.py",
     "*silero*",
 )
+# Paths that are NEVER voice scope, whatever the globs above say. `*kokoro*`,
+# `*moonshine*` and `*silero*` are substring globs and fnmatch's `*` crosses `/`, so
+# they also match DOCUMENTATION about those components. Incident 2026-10-11: a docs-only
+# note (docs/knowledge/kokoro-onnx-migration.md) classified as a voice-RUNTIME change
+# and the deploy gate REFUSED the deploys after it, until a voice-probed landing carried
+# the range. A markdown note cannot change what the voice path RUNS.
+#
+# Deliberately `docs/` and not every `*.md`: markdown can be RUNTIME on this path (the
+# persona services/zoe-core/SOUL.md is read by zoe_core_client.py on every brain turn,
+# and the Flue brain embeds a copy). None of those lives under docs/, and no code reads
+# a docs/ file at runtime (checked 2026-10-12: the `docs/...` strings in services/zoe-data
+# are evidence_refs labels, not loads). Mirrored in .github/workflows/greptile-gate.yml
+# (VOICE_PATH_EXCLUDE) and drift-pinned by tests/unit/test_greptile_gate_workflow.py.
+# Like every edit to this file it is in force for the deploy that FOLLOWS the one that
+# carries it (the deploy gate runs the currently deployed copy).
+VOICE_PATH_EXCLUDES = (
+    "docs/*",
+)
 # The VAD stage's floor — the same bar as voice_regression_probe.VAD_MIN_PASS_FRAC
 # and test_voice_barge_in.py's real-model test. The checker RE-DERIVES the
 # verdict from the recorded counts against THIS floor rather than trusting the
@@ -507,9 +525,15 @@ def voice_path_patterns() -> tuple[str, ...]:
 
 
 def touched_voice_files(changed: list[str], patterns: tuple[str, ...]) -> list[str]:
-    """Subset of `changed` that matches any voice-path glob."""
+    """Subset of `changed` that matches any voice-path glob and is not excluded
+    (`VOICE_PATH_EXCLUDES`: documentation is never voice scope, even when a
+    substring glob such as `*kokoro*` matches its name). The exclusion applies
+    to every caller — the deploy gate, the PR scope job — and to a
+    ZOE_VOICE_GATE_PATHS override too."""
     hits = []
     for f in changed:
+        if any(fnmatch.fnmatch(f, ex) for ex in VOICE_PATH_EXCLUDES):
+            continue
         if any(fnmatch.fnmatch(f, pat) for pat in patterns):
             hits.append(f)
     return hits

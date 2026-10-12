@@ -294,6 +294,21 @@ def test_voice_path_mirror_matches_the_canonical_definition():
     script = _script()
     missing = [p for p in mod.VOICE_PATH_PATTERNS if glob_to_js(p) not in script]
     assert not missing, f"voice-path patterns missing from greptile-gate.yml VOICE_PATH: {missing}"
+    # ...and so is the EXCLUSION (documentation is never voice scope): same regex, and
+    # applied to the load-bearing check, so a docs-only Kokoro note does not buy a review.
+    missing_ex = [p for p in mod.VOICE_PATH_EXCLUDES if glob_to_js(p) not in script]
+    assert mod.VOICE_PATH_EXCLUDES and not missing_ex, f"voice-path excludes missing from greptile-gate.yml: {missing_ex}"
+    assert "!VOICE_PATH_EXCLUDE.some(re => re.test(f.filename))" in script
+
+
+def test_a_docs_only_kokoro_note_is_not_load_bearing_but_kokoro_code_is(tmp_path):
+    """Open problem 2026-10-11 'Voice gate scope': `*kokoro*` matched docs/knowledge/kokoro-onnx-migration.md."""
+    r = _run(tmp_path, _script(), files=[{"filename": "docs/knowledge/kokoro-onnx-migration.md", "additions": 5, "deletions": 1}])
+    assert r["addLabels"] == 0
+    assert any("settled but routine" in line for line in r["log"])
+    (tmp_path / "code").mkdir()
+    r2 = _run(tmp_path / "code", _script(), files=[{"filename": "scripts/setup/kokoro_sidecar.py", "additions": 5, "deletions": 1}])
+    assert r2["addLabels"] == 1
 
 
 def test_voice_runtime_file_is_handed_off(tmp_path):

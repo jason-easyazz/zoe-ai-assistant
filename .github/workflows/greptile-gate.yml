@@ -324,6 +324,12 @@ jobs:
                 /^services\/zoe-data\/voice_turn\.py$/,
                 /^.*silero.*$/
               ];
+              // Documentation is never voice scope: the `*kokoro*` / `*moonshine*` / `*silero*`
+              // globs match docs/ notes by name. MIRRORED from voice_gate_check.py
+              // VOICE_PATH_EXCLUDES (drift-pinned); applied to the whole load-bearing list below.
+              const VOICE_PATH_EXCLUDE = [
+                /^docs\/.*$/
+              ];
               const LOAD_BEARING = [
                 ...VOICE_PATH,
                 /^services\/zoe-data\/(auth|main|db_pool)\.py$/, /^services\/zoe-data\/routers\/(panel_auth|ui_actions)\.py$/,
@@ -339,7 +345,7 @@ jobs:
                 github.paginate(github.rest.pulls.listFiles, { ...base, pull_number: pr.number, per_page: 100 }));
               if (!files) { core.info(`PR #${pr.number}: could not read files — holding (never summon blind)`); continue; }
               const requested = (prFull.labels || []).some(l => l.name === REQUEST_LABEL);
-              const loadBearing = files.filter(f => LOAD_BEARING.some(re => re.test(f.filename))).map(f => f.filename);
+              const loadBearing = files.filter(f => !VOICE_PATH_EXCLUDE.some(re => re.test(f.filename)) && LOAD_BEARING.some(re => re.test(f.filename))).map(f => f.filename);
               const counted = files.filter(f => !GENERATED.some(re => re.test(f.filename)));
               const nLines = counted.reduce((n, f) => n + (f.additions || 0) + (f.deletions || 0), 0);
               const big = counted.length >= BIG.files || nLines >= BIG.lines;
