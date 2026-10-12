@@ -45,7 +45,7 @@ Rollback: `ZOE_DISTRESS_HANDOFF=off` (restart); the lexicon section can be delet
 | `ZOE_HOUSEHOLD_COUNTRY=AU` (ISO code; falls back to `ZOE_LOCATION_COUNTRY`) | picks the numbers from `distress_data/crisis_lines.json`. **Unset = no number is guessed**: Zoe says "your local crisis line / emergency number" and logs a warning. Verify the numbers; or `ZOE_DISTRESS_LINES_FILE=/path.json` (same shape) overrides. |
 | `ZOE_DISTRESS_CONTACT_NAME=<name>` | the human Zoe names ("Please talk to <name> now"). Unset = "someone you trust" / "a grown-up you trust". |
 | `ZOE_DISTRESS_CONTACT_USER=<account id>` | the adult who is notified (a `notifications` row + the bell). Unset = nobody is notified. |
-| `ZOE_DISTRESS_NOTIFY=all` (default) \| `minors` \| `off` | owner decision: **`all`** tells the contact about any member (the brief); **`minors`** keeps an adult's disclosure private. Never the contact about themself, never a guest. Once per member per 6 h (in-process: a restart inside the window can repeat it once). |
+| `ZOE_DISTRESS_NOTIFY=all` (default) \| `minors` \| `off` | owner decision: **`all`** tells the contact about any member (the brief); **`minors`** keeps an adult's disclosure private. Never the contact about themself, never a guest. Once per member per 6 h (in-process: a restart inside the window can repeat it once); a `danger`-class event (physical emergency) has its own 10 min window per member, so it is never swallowed by an earlier self-harm notice. |
 | Mark each child as a minor (persona `member_modes.minor`) | the only child record; unflagged, a child gets the adult wording and, under `minors`, no notification. |
 
 ## Measured (208 synthetic phrases, English + Spanish, `tests/fixtures/distress_labelled.json`)

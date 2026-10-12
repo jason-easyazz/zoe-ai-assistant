@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import uuid
 from datetime import date, datetime
@@ -13,6 +14,8 @@ from fastapi import HTTPException
 from guest_policy import require_feature_access
 from models import ReminderCreate
 from push import broadcaster
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_due_date(raw: object, *, now_utc: datetime | None = None) -> str | None:
@@ -173,9 +176,9 @@ async def _create_notification(db, *, user_id: str, notif_type: str, title: str,
 
 
 async def create_reminder_record(payload: ReminderCreate, *, user: Mapping[str, object], db,
-                                 now_utc: datetime | None = None) -> dict:
+                                 now_utc: datetime | None = None, schedule: bool = True) -> dict:
     """Create a reminder with the same policy, notification, and broadcast behavior as the API route. ``now_utc`` (a background caller
-    that runs on an injected clock, e.g. ``commitments``) is the instant "today" is resolved against; none = the wall clock."""
+    that runs on an injected clock, e.g. ``commitments``) is the instant "today" is resolved against; none = the wall clock. ``schedule=False`` is for a caller that registers its OWN job for the row (commitments, +45 s): one scheduling path per reminder, never two."""
     await require_feature_access(db, user, feature="reminders", action="create")
     user_id = str(user["user_id"])
     reminder_id = str(uuid.uuid4())
@@ -220,5 +223,17 @@ async def create_reminder_record(payload: ReminderCreate, *, user: Mapping[str, 
     cursor = await db.execute("SELECT * FROM reminders WHERE id = ?", [reminder_id])
     row = await cursor.fetchone()
     reminder = row_to_dict(row) or {}
+    # Schedule NOW rather than waiting for the slow-loop scan: that loop does nothing in quiet
+    # hours (22:00-07:00) and at 07:00 treats an explicit time earlier that night as past-due, so
+    # "remind me at 22:30" said at 22:15 was never scheduled. schedule_due_reminder is the same
+    # idempotent entry the scan uses (skips when an unfired job exists), so nothing double-books.
+    # The FIRE is still deferred out of quiet hours by fire_notification. Best-effort: the row is
+    # already committed and the scan retries, so a scheduler failure must not fail the create.
+    if schedule and reminder.get("id"):
+        try:
+            from proactive.triggers.reminder_scan import schedule_due_reminder
+            await schedule_due_reminder(db, reminder, now_utc=now_utc)
+        except Exception:
+            logger.exception("reminder %s created but not scheduled yet (slow loop will retry)", reminder_id)
     await broadcaster.broadcast("reminders", "reminder_created", reminder, user_id=user_id)
     return reminder

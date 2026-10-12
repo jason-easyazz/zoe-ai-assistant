@@ -208,6 +208,9 @@ async def process_text_llm(
     text = (text or "").strip()
     if not text or user_id in ("guest", "") or len(text.split()) < 4:
         return 0
+    from person_extractor import _opted_out
+    if await _opted_out(user_id, source, "person_extractor_llm"):
+        return 0          # opted out of automatic capture: no model call, no people rows
     # BM5: an off-the-record turn is never mined.
     try:
         import memory_provenance as _mp

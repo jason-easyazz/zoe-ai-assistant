@@ -139,6 +139,8 @@ Measured at 03:06 (one fixed 1,630-token probe): **12B prefill 125.4 tok/s, deco
 
 ### When the 12B will not load: the next experiments, in order
 
+**A failed start now gets ONE retry inside the cap (2026-10-12).** The up-to-6 compactions in `sleep_units` run only before the first start; a cudaMalloc / NvMap OOM at the start used to end the window with nothing run. `load_12b_with_retry` (real nights only; a `--trial` / `--cells-only` run keeps the single attempt) now stops the failed server, runs `compact_memory` again (sudo when available) and starts once more, provided `time_left_s()` (net of the 12 min restore reserve and bounded by `--end-by`) is at least `LOAD_RETRY_MIN_LEFT_S` (330 s: the load plus the jobs' 120 s minimum); the second health wait is shortened to what the cap leaves. The two attempts count as ONE failed window in `load_failures.json`. If no load succeeds on the night (a second dead load, a refused `systemd-run` on either attempt, no room to retry, the cap ending the wait), the window restores as before, logs `NIGHT LOST: <reason>` and, after the restore, writes `~/.zoe/night-reports/ALARM` with a `*** NIGHT LOST ***` block naming the run and the reason (appended to a failed-restore alarm if there is one). The 4B fallbacks for the digest and dreaming still run after the wake. Tests: `test_night_window.py` (`test_a_failed_12b_start_gets_one_compact...`, `test_two_failed_12b_starts_restore...`, `test_a_12b_that_loads_first_time_runs_no_extra_compaction...`, `test_no_second_attempt_when_the_cap_has_no_room...`).
+
 Each is one `--trial` (about a minute of silence when it fails, 25 minutes when it works), run by the owner or an agent the owner has authorised for a brain stop:
 
 1. **Partial offload** (WORKS with unified memory, section 8 above): `scripts/night/night_window.sh --trial --ngl 24` (roughly half the weights on the GPU, the rest in ordinary RAM, so the single CUDA buffer falls to about half of 6.6 GB, near the 4B's 3.2 GB buffer that loads; the layer count was not read, so raise `--ngl` in steps of 4 until it fails). Decode will be slower; the window's job timeouts scale from the measured speed.
@@ -149,7 +151,7 @@ Each is one `--trial` (about a minute of silence when it fails, 25 minutes when 
 
 ## 9. Reading the night report
 
-`~/.zoe/night-reports/<date>.md` (and `.json` with every event; `<date>-trial.md` for a trial; a second run the same day gets `-HHMM`), mode 0600 in a 0700 directory. One page: the outcome line (`ok`, `refused: ...`, `aborted: ...`) with the exit code (0 ok, 2 refused, 3 aborted, 4 restore failed, 5 a job did not finish anywhere), the levers and the measured MemAvailable / MemFree before and after the load, the speed probe, the jobs table (section 5), the wake table (healthy, attempts, seconds down), notes (which fallback ran and why), and the last 30 timeline events. `~/.zoe/night-reports/ALARM` exists only while a restore is incomplete. The bare log of each run is `~/.zoe/night-window/run-<stamp>.log`.
+`~/.zoe/night-reports/<date>.md` (and `.json` with every event; `<date>-trial.md` for a trial; a second run the same day gets `-HHMM`), mode 0600 in a 0700 directory. One page: the outcome line (`ok`, `refused: ...`, `aborted: ...`) with the exit code (0 ok, 2 refused, 3 aborted, 4 restore failed, 5 a job did not finish anywhere), the levers and the measured MemAvailable / MemFree before and after the load, the speed probe, the jobs table (section 5), the wake table (healthy, attempts, seconds down), notes (which fallback ran and why), and the last 30 timeline events. `~/.zoe/night-reports/ALARM` exists only while a restore is incomplete or after a night in which the 12B never loaded. The bare log of each run is `~/.zoe/night-window/run-<stamp>.log`.
 
 ## 10. What is unverified
 
@@ -358,7 +360,7 @@ At 02:50 the box is quieter than at 20:54 (the real run MEASURES MemAvailable af
 | `journalctl --user -t zoe-night-window -n 5` | ONE line: `NIGHT_WINDOW_SUMMARY run=.. outcome=.. exit=.. min=elapsed/cap levers=.. decode_tps=.. jobs=digest:ok@12B,dreaming:ok@12B,night_mind:ok@12B restore=..` (priority err when the unit failed) |
 | `~/.zoe-logs/night-window.log` | the run log, with the same summary line at the end |
 | Zoe herself | digest facts and open loops arrive through the readers that exist today (recall, the brief, `ZOE_BRIEF_ON_FIRST_TURN`); **night-mind rows are not visible while the flag is off** |
-| `~/.zoe/night-reports/ALARM` | exists only if a unit did not come back healthy: it names the units and the exact commands |
+| `~/.zoe/night-reports/ALARM` | exists only if a unit did not come back healthy (it names the units and the exact commands) or the 12B never loaded that night (`*** NIGHT LOST ***`, with the reason) |
 | the tables (counts only; an operator step) | `SELECT night_date, status, counts FROM night_runs ORDER BY created_at DESC LIMIT 10;` |
 
 ### Rollback

@@ -80,8 +80,9 @@ async def test_broadcast_scoped_only_reaches_owner(bc):
 
 
 @pytest.mark.asyncio
-async def test_broadcast_scoped_includes_anon_connections(bc):
-    """Connections with no user (panels/anonymous) always receive scoped broadcasts."""
+async def test_broadcast_scoped_excludes_unmapped_connections(bc):
+    """A user-scoped broadcast reaches ONLY the owner: unmapped (anonymous) sockets
+    must not receive it (privacy: a member's data must not leak to shared screens)."""
     ws_owner = _make_ws()
     ws_anon = _make_ws()
     ws_other = _make_ws()
@@ -90,10 +91,30 @@ async def test_broadcast_scoped_includes_anon_connections(bc):
     await _connect(bc, ws_other, channel="ch", user_id="u2")
 
     delivered = await bc.broadcast("ch", "evt", {}, user_id="u1")
-    assert delivered == 2  # owner + anon
+    assert delivered == 1
     ws_owner.send_json.assert_awaited_once()
-    ws_anon.send_json.assert_awaited_once()
+    ws_anon.send_json.assert_not_called()
     ws_other.send_json.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_user_scoped_broadcast_on_all_skips_shared_panel_sockets(bc):
+    """distress_handoff / notifications broadcast on "all" with user_id=<member>;
+    a kiosk panel socket (connect_panel, no user mapping) is on "all" and must
+    NOT receive it, while the target user's own socket does."""
+    ws_panel = _make_ws()
+    ws_user = _make_ws()
+    await _connect_panel(bc, ws_panel, panel_id="kiosk")
+    await _connect(bc, ws_user, channel="all", user_id="contact")
+
+    delivered = await bc.broadcast("all", "notification_created", {"message": "x"}, user_id="contact")
+
+    assert delivered == 1
+    ws_user.send_json.assert_awaited_once()
+    ws_panel.send_json.assert_not_called()
+    # Unscoped broadcasts (household-wide events) still reach the panel.
+    await bc.broadcast("all", "ui_action", {})
+    ws_panel.send_json.assert_awaited_once()
 
 
 @pytest.mark.asyncio
