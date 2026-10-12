@@ -644,6 +644,40 @@ def test_the_run_synthetic_night_mind_intent_runs_the_pass_and_reports_counts_on
     assert not any(isinstance(v, str) and any(t["text"] in v for t in LF.turns) for v in out.values())
 
 
+def test_the_run_synthetic_night_mind_intent_reports_a_failed_read_as_load_error_and_never_runs_the_pass(lab, monkeypatch):
+    """A transcript that could not be READ is ``load_error`` (flag on), not a quiet day: the pass is never called, nothing is written, the model is never asked."""
+    import routers.proactive as rp
+    import memory_digest
+    import memory_service
+
+    async def unreadable(*_a, **_k):
+        raise memory_digest.TranscriptLoadError(ConnectionError("pool gone"))
+    called = []
+
+    async def spy(*a, **k):
+        called.append(a)
+        return {"status": "ran"}
+    brain = Recorder()
+    real_run_for_user = nm.run_for_user
+    monkeypatch.setattr(memory_digest, "_load_todays_messages", unreadable)
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: None)
+    monkeypatch.setattr(nm, "run_for_user", spy)
+    nm.set_llm(brain)
+    monkeypatch.setenv(nm.ENV, "enforce")
+    out = run(rp._run_night_mind_synthetic(UID))
+    assert out["enabled"] is True and out["status"] == "load_error" and out["error"] == "ConnectionError"
+    assert out.get("skipped_reason") is None and out["turns_in"] == 0 and out["written"] == 0
+    assert called == [] and brain.prompts == []                                                           # the pass never ran, the model was never asked
+    assert run(lab.threads(UID)) == [] and not run(nm.snapshot(UID))[1]                                  # zero writes: no thread, no observation
+    # the empty read is still the quiet day it always was
+    async def empty(*_a, **_k):
+        return ""
+    monkeypatch.setattr(memory_digest, "_load_todays_messages", empty)
+    monkeypatch.setattr(nm, "run_for_user", real_run_for_user)                                           # the real pass reports the empty day
+    quiet = run(rp._run_night_mind_synthetic(UID))
+    assert quiet["status"] == "skipped" and quiet["skipped_reason"] == "quiet_day"
+
+
 def test_the_real_for_prompt_route_carries_the_block_only_when_the_flag_is_on_and_the_message_is_about_a_story(lab, monkeypatch):
     """VOICE-PATH file (routers/memories.py): off is byte-identical, on adds <= 3 lines after the packet, a continuity (mood) turn is untouched."""
     from fastapi import FastAPI

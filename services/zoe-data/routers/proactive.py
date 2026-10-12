@@ -130,13 +130,13 @@ async def trigger_morning_brief(user: dict = Depends(get_current_user), db=Depen
     username = user.get("username", "")
 
     # Use the same local-timezone resolution as the scheduled path
-    # (proactive/triggers/morning_checkin.py's _ZOE_TZ) so `today` matches the
+    # (time_utils.zoe_timezone, as proactive/triggers/morning_checkin.py) so `today` matches the
     # user's actual local date, not UTC. During the Perth morning (00:00-08:00
     # local == still "yesterday" in UTC) the UTC-based date previously queried
     # yesterday's calendar/context while the displayed day string (already
     # tz-correct below) showed today — a self-contradictory brief.
-    from proactive.triggers.morning_checkin import _ZOE_TZ
-    now_local = datetime.now(_ZOE_TZ)
+    from time_utils import zoe_timezone
+    now_local = datetime.now(zoe_timezone())
     today = now_local.date().isoformat()
     day_str = now_local.strftime("%A, %B %d")
 
@@ -255,7 +255,11 @@ async def _run_night_mind_synthetic(user_id: str) -> dict:
         from memory_digest import _load_todays_messages
         from memory_service import get_memory_service
 
-        transcript = await _load_todays_messages(user_id)
+        from memory_digest import TranscriptLoadError
+        try:
+            transcript = await _load_todays_messages(user_id)
+        except TranscriptLoadError as exc:      # a failed read is its own status, never a quiet day
+            return {"enabled": True, **night_mind.load_failed(user_id, exc)}
         res = await night_mind.run_for_user(user_id, transcript, get_memory_service())
         keep = ("status", "mode", "turns_in", "turns_dropped_routine", "chunks", "calls", "moments_verified", "moments_held", "observations_written",
                 "observations_pending", "threads_created", "threads_updated", "calls_invalid", "skipped_reason", "error")

@@ -2103,6 +2103,69 @@ def _contains_decision_keyword(text: str, keywords: frozenset[str]) -> bool:
     return False
 
 
+# DESIGN: with a form open, an utterance cancels/confirms it only when it is ENTIRELY a command phrase plus filler (<= 8 words).
+# Anything unrecognised deliberately falls through to the normal conversation tiers - the safe direction (the form stays open and
+# Zoe still hears the person, e.g. distress), so this vocabulary is intentionally conservative. Phrases are removed longest-first.
+_FORM_MAX_WORDS = 8
+_FORM_CANCEL_PHRASES = ("cancel", "dismiss", "close", "never mind", "nevermind", "forget it", "stop")
+_FORM_CANCEL_FILLER = frozenset({
+    "it", "that", "this", "the", "form", "panel", "window", "please", "just", "ok", "okay", "oh", "hey", "zoe", "now",
+    "thanks", "thank", "you", "and", "all", "of", "can", "could", "would", "will",
+    "event", "list", "shopping", "reminder", "entry", "note", "item", "items", "calendar", "right", "away",
+})
+
+
+def _strip_command_phrases(words: list[str], phrases: tuple[str, ...], filler: frozenset[str]) -> bool:
+    """True when `words` is at least one of `phrases` (whole words, longest first) and nothing but `filler` besides."""
+    rest = " ".join(words)
+    found = False
+    for phrase in sorted(phrases, key=lambda ph: (-len(ph.split()), -len(ph))):
+        if re.search(rf"\b{phrase}\b", rest):
+            found = True
+            rest = re.sub(rf"\b{phrase}\b", " ", rest)
+    return found and all(w in filler for w in rest.split())
+
+
+def _is_form_cancel_command(lc_text: str) -> bool:
+    """True only when the whole utterance is a cancel command ("stop", "cancel it", "close the form").
+
+    A bare substring match swallowed distress ("I can't stop the bleeding", "the fire is close to the house") as a
+    form cancel before the emergency tiers ran, so every word beyond a cancel phrase must be filler.
+    """
+    lc_text = lc_text.lower().replace("\u2019", "'").replace("\u2018", "'")  # the STT's curly apostrophes
+    words = re.findall(r"[a-z0-9']+", lc_text)
+    if not words or len(words) > _FORM_MAX_WORDS:
+        return False
+    return _strip_command_phrases(words, _FORM_CANCEL_PHRASES, _FORM_CANCEL_FILLER)
+
+
+_FORM_CONFIRM_PHRASES = (
+    "that's correct", "thats correct", "looks good", "looks right", "sounds good", "go ahead", "yes please",
+    "yes do it", "save it", "do it", "of course", "all right", "confirm", "save", "yes", "yeah", "yep", "yup", "sure", "alright",
+    "absolutely", "definitely", "certainly", "submit", "done", "accept", "ok", "okay", "perfect", "correct",
+)
+_FORM_CONFIRM_FILLER = frozenset({
+    "it", "that", "this", "the", "form", "event", "list", "please", "just", "oh", "hey", "zoe", "now", "thanks",
+    "thank", "you", "and", "all", "right", "can", "could", "would", "will",
+    "shopping", "reminder", "entry", "note", "item", "items", "calendar", "appointment", "away",
+})
+
+
+def _is_form_confirm_command(lc_text: str) -> bool:
+    """True only when the whole utterance is a confirm command ("yes", "ok save it", "that's correct").
+
+    Prefix/suffix/substring matching let "I'm not okay", "yes I'm bleeding" and "save the dog" submit the open form
+    before the distress tiers ran, so every word beyond a confirm phrase must be filler and negation never confirms.
+    """
+    lc_text = lc_text.lower().replace("\u2019", "'").replace("\u2018", "'")  # the STT's curly apostrophes
+    words = re.findall(r"[a-z0-9']+", lc_text)
+    if not words or len(words) > _FORM_MAX_WORDS or _NEGATION_RE.search(lc_text):
+        return False
+    if _QUESTIONING_RE.search(lc_text) or re.search(r"\b(?:you|u)\s+sure\b", lc_text):  # "you sure", "are you sure", "really"
+        return False
+    return _strip_command_phrases(words, _FORM_CONFIRM_PHRASES, _FORM_CONFIRM_FILLER)
+
+
 _NEGATION_RE = re.compile(r"\b(?:not|never|isn'?t|wasn'?t|aren'?t|can'?t|won'?t|don'?t|doesn'?t)\b|n't\b", re.IGNORECASE)
 _QUESTIONING_RE = re.compile(
     r"\b(?:are|were|r)\s+you\s+(?:sure|certain|serious)\b|\b(?:really|why|what|who|how|where|when|which)\b", re.IGNORECASE)
@@ -3406,8 +3469,7 @@ async def voice_command(
         if _active_form:
             _form_panel_type = _active_form.get("panel_type", "")
             _lc_voice = text.lower().strip().rstrip(".!?")
-            _cancel_words = {"cancel", "dismiss", "close", "never mind", "nevermind", "forget it", "stop"}
-            if any(w in _lc_voice for w in _cancel_words):
+            if _is_form_cancel_command(_lc_voice):
                 # User said cancel — dismiss the panel
                 clear_active_form(panel_id)
                 try:
@@ -3429,20 +3491,7 @@ async def voice_command(
                     "content_type": _cancel_audio.media_type,
                 }
             # Confirm words: submit the active form without requiring a tap on the button.
-            _FORM_CONFIRM_EXACT = {
-                "confirm", "save", "yes", "submit", "done", "accept",
-                "ok", "okay", "perfect", "correct",
-            }
-            _FORM_CONFIRM_PHRASES = {
-                "that's correct", "thats correct", "looks good", "looks right",
-                "sounds good", "go ahead", "yes please", "yes do it", "save it",
-            }
-            _is_form_confirm = (
-                _lc_voice in _FORM_CONFIRM_EXACT
-                or any(phrase in _lc_voice for phrase in _FORM_CONFIRM_PHRASES)
-                or any(_lc_voice.startswith(w + " ") or _lc_voice.endswith(" " + w)
-                       for w in _FORM_CONFIRM_EXACT)
-            )
+            _is_form_confirm = "?" not in text and _is_form_confirm_command(_lc_voice)  # "sure?" is a question
             if _is_form_confirm:
                 _form_data = _active_form.get("slots") or {}
                 _confirm_reply = "Event saved." if _form_panel_type == "calendar_event" else "List saved."

@@ -42,7 +42,7 @@ Flags
                        ``NIGHT_CELL id=K1 verdict=PASS wall_s=.. run=0`` (``run`` = the run index), so a killed run still leaves its verdicts in the log and the window can rebuild each cell's majority. 0 / absent = no budget.
 Output
   ONE JSON object on stdout, ONE compact line (``--pretty`` indents it; the window parses either), logs go to stderr:
-    {"status": "ok"|"nothing_to_do"|"llm_unreachable"|"error", "mode", "dry_run", "model_url", "model", "ctx_tokens", "chunk_budget", "max_calls", "date",
+    {"status": "ok"|"nothing_to_do"|"llm_unreachable"|"error"|"load_error", "mode", "dry_run", "model_url", "model", "ctx_tokens", "chunk_budget", "max_calls", "date",
      "members": [{"user_id", "status", "turns_in", "turns_dropped_routine", "turns_skipped_cap", "chunks", "calls", "calls_invalid", "moments_proposed",
                   "moments_verified", "moments_held", "observations_written", "observations_pending", "threads_created", "threads_updated",
                   "prompt_tokens", "completion_tokens", "wall_s", "written", "skipped_reason"?, "error"?}],
@@ -50,7 +50,7 @@ Output
                 "completion_tokens_per_wall_s", "members_written"},
      "members_written": N, "members_total": M,      (members whose pass committed rows / members the run reached: partial completion is visible here)
      "cells": {"K1": "PASS", ..., "pass", "fail", "skip", "error", "k1": {"judged", "true", "false"}, "evidence": {"K9": [<what the failed cell scored>]}}      (only with --cells)}
-Exit codes: 0 ok / nothing to do, 1 error, 2 the model is unreachable. The "nothing was written" guarantee is PER MEMBER: each member's night is computed in memory
+Exit codes: 0 ok / nothing to do, 1 error or load_error (a member's transcript could not be READ: that member's status is ``load_error``, counted in ``totals.load_errors``, never ``quiet_day``; a pool that cannot open or list the members gives status ``load_error`` with ``setup_error`` = the exception class, no members), 2 the model is unreachable. The "nothing was written" guarantee is PER MEMBER: each member's night is computed in memory
 and committed at the end of that member, and the server is probed first. With --all-members an earlier member's committed night stays when a later member
 fails or the server drops, so exit 2 / 1 can follow earlier writes: read ``members_written`` / ``members_total`` in the JSON (and stderr's exit-2 line) for how far it got.
 Never prints environment, tokens or the text of what the owner said (counts and ids only).
@@ -135,6 +135,37 @@ def _day_bounds(day: str) -> "tuple[str, str]":
     return start.isoformat(), (start + dt.timedelta(days=1)).isoformat()
 
 
+def _loader(args, db_ctx):
+    """The member's transcript reader: ``async (uid) -> Transcript | ""``. ``""`` is a read that found no turns; a failed read RAISES ``memory_digest.TranscriptLoadError``."""
+    async def load(uid: str):
+        if args.transcript_file:
+            return _transcript_from_file(args.transcript_file)
+        import memory_digest as md
+
+        try:
+            async with db_ctx[0]() as db:
+                if args.date:
+                    start, end = _day_bounds(args.date)
+                    return await md.load_day_messages(uid, start, end, db=db)
+                return await md._load_todays_messages(uid, db)
+        except md.TranscriptLoadError:
+            raise
+        except Exception as exc:      # the pool could not hand out a connection (exhausted / down): raised by ``__aenter__``, OUTSIDE the loaders' own try
+            raise md.TranscriptLoadError(exc) from exc
+    return load
+
+
+async def reflect_member(uid: str, load, nm, svc, cfg, mode: str, night_date: str) -> dict:
+    """ONE member: read the transcript, run the pass. A read that FAILED is ``status: load_error`` (``nm.load_failed``), never the ``quiet_day`` an empty transcript gives."""
+    import memory_digest as md
+
+    try:
+        transcript = await load(uid)
+    except md.TranscriptLoadError as exc:
+        return nm.load_failed(uid, exc, force_mode=mode)
+    return await nm.run_for_user(uid, transcript, svc, force_mode=mode, cfg=cfg, night_date=night_date)
+
+
 async def run_members(args, cfg, mode: str) -> dict:
     """The member loop. Returns the summary dict (without ``status``)."""
     import night_mind as nm
@@ -146,7 +177,10 @@ async def run_members(args, cfg, mode: str) -> dict:
         if not args.transcript_file:
             from db_pool import close_pool, get_db_ctx, init_pool
 
-            await init_pool()
+            try:
+                await init_pool()
+            except Exception as exc:  # noqa: BLE001 - no pool: no member can be read; report it, do not die without the summary
+                return {"members": [], "setup_error": type(exc).__name__}
             db_ctx = (get_db_ctx, close_pool)
         from memory_service import get_memory_service
 
@@ -160,24 +194,15 @@ async def run_members(args, cfg, mode: str) -> dict:
             import memory_digest as md
             from user_filters import drop_synthetic_users
 
-            async with db_ctx[0]() as db:
-                users = await md._list_user_ids(md._message_owner_users_sql(today_only=False), db=db)
+            try:
+                async with db_ctx[0]() as db:
+                    users = await md._list_user_ids(md._message_owner_users_sql(today_only=False), db=db)
+            except Exception as exc:  # noqa: BLE001 - cannot list the members: nothing was read, and that is not "nothing to do"
+                return {"members": [], "setup_error": type(exc).__name__}
             if not args.allow_synthetic:
                 users = drop_synthetic_users(users, pass_name="night_mind", log=None)
         for uid in users:
-            if args.transcript_file:
-                transcript = _transcript_from_file(args.transcript_file)
-            else:
-                import memory_digest as md
-
-                async with db_ctx[0]() as db:
-                    if args.date:
-                        start, end = _day_bounds(args.date)
-                        transcript = await md.load_day_messages(uid, start, end, db=db)
-                    else:
-                        transcript = await md._load_todays_messages(uid, db)
-            night_date = args.date or ""
-            res = await nm.run_for_user(uid, transcript, svc, force_mode=mode, cfg=cfg, night_date=night_date)
+            res = await reflect_member(uid, _loader(args, db_ctx), nm, svc, cfg, mode, args.date or "")
             members.append({k: v for k, v in res.items() if isinstance(v, (int, float, str, bool)) and k != "mood"})
             if res.get("status") == "llm_unreachable":
                 break
@@ -194,6 +219,7 @@ def totals(members: "list[dict]") -> dict:
         if k != "wall_s":
             t[k] = int(t[k])
     t["members"] = len(members)
+    t["load_errors"] = sum(1 for m in members if m.get("status") == "load_error")      # members whose transcript could not be READ (not quiet days)
     t["completion_tokens_per_wall_s"] = round(t["completion_tokens"] / t["wall_s"], 2) if t["wall_s"] else None
     return t
 
@@ -376,6 +402,8 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
         summary["totals"] = {**totals([mt]), "members": 0, "wall_s": round(time.monotonic() - t0, 2)}      # the counters of every call the cells made, aggregated
         return 0, summary
     res = await run_members(args, cfg, mode)
+    if res.get("setup_error"):
+        summary["setup_error"] = res["setup_error"]
     summary["members"] = res["members"]
     summary["totals"] = totals(res["members"])
     summary["members_written"], summary["members_total"] = written_tally(res["members"])
@@ -386,6 +414,9 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
         return 2, summary
     if "error" in statuses:
         summary["status"] = "error"
+        return 1, summary
+    if "load_error" in statuses or summary.get("setup_error"):
+        summary["status"] = "load_error"
         return 1, summary
     if not res["members"]:
         summary["status"] = "nothing_to_do"
@@ -401,6 +432,9 @@ def main(argv: "list[str] | None" = None) -> int:
     if code == 2 and summary.get("members_written"):
         print(f"exit 2: the model went away after {summary['members_written']} of {summary.get('members_total')} members had committed their night "
               f"(those rows stay; the guarantee is per member)", file=sys.stderr)
+    tot = summary.get("totals") or {}
+    if tot.get("load_errors") or summary.get("setup_error"):                    # the window copies NIGHT_JOB lines from the job log into its report: a failed read must be visible there, not read as a quiet night
+        print(f"NIGHT_JOB night_mind load_error members={tot.get('load_errors', 0)}/{tot.get('members')} setup_error={summary.get('setup_error') or '-'} (a transcript read failed: NOT a quiet day; exit {code})", file=sys.stderr)
     print(json.dumps(summary, indent=2 if pretty else None, sort_keys=True, separators=None if pretty else (",", ":")))
     return code
 

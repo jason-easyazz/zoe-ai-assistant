@@ -77,8 +77,10 @@ def world(tmp_path: Path):
 def _restart(world, base_sha: str | None, run: str | None = None) -> tuple[bool, str]:
     """Run the Restart step from the DECOY cwd (as the runner does). -> (restarted, out)."""
     script = run if run is not None else _step("Restart zoe-data (user service)")["run"]
+    # HOME is the throwaway tree, never the box's: the step re-checks ~/.zoe/night-window/WINDOW_OPEN
+    # before restarting, and a real open window on the host running this test must not leak in.
     env = {**os.environ, "PATH": f"{world['bin']}:{os.environ['PATH']}",
-           "ZOE_CHECKOUT": str(world["live"])}
+           "ZOE_CHECKOUT": str(world["live"]), "HOME": str(world["bin"].parent / "home")}
     env.pop("DEPLOY_BASE_SHA", None)
     if base_sha is not None:
         env["DEPLOY_BASE_SHA"] = base_sha
