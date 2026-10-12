@@ -2211,10 +2211,12 @@ app.include_router(voice_tts_router)
 from routers.voice_settings import router as voice_settings_router  # noqa: E402
 from routers.face_id import router as face_id_router  # noqa: E402
 from routers.voice_speaker_adapt import router as voice_speaker_adapt_router  # noqa: E402
+from routers.enrollment import router as enrollment_router  # noqa: E402
 
 app.include_router(voice_settings_router)
 app.include_router(face_id_router)
 app.include_router(voice_speaker_adapt_router)
+app.include_router(enrollment_router)
 app.include_router(user_profile_router)
 app.include_router(dashboard_router)
 app.include_router(board_router)

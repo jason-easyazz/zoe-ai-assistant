@@ -1,4 +1,4 @@
-"""0046 - guarded speaker-profile adaptation state on ``speaker_profiles``.
+"""0047 - guarded speaker-profile adaptation state on ``speaker_profiles``.
 
 Six NULLABLE columns, nothing else, so a deploy that has not run this migration yet is unaffected: with
 ``ZOE_SPEAKER_ADAPT`` off (the default) no code path reads or writes them.
@@ -21,8 +21,8 @@ Conventions match 0023: dialect-aware, rerun-safe.
 
 from alembic import op
 
-revision = "0046"
-down_revision = "0045"
+revision = "0047"
+down_revision = "0046"
 branch_labels = None
 depends_on = None
 

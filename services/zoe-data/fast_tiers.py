@@ -781,6 +781,19 @@ async def resolve(text: str, user_id: str, session_id: str, **kwargs):  # noqa: 
         answered = await _provenance_tier(text, user_id, session_id, kwargs)
         if answered is not None:
             return answered
+        # voice_enrollment (ZOE_ENROLL_OFFER, default OFF = returns before any work): the spoken yes/no to Zoe's offer to learn a voice, "learn
+        # my voice" / "forget my voice" / "do you know my voice?", and the close-of-conversation moment that may queue the offer.
+        try:
+            import voice_enrollment as _ve
+
+            _ctx = kwargs.get("extra_ctx") or {}
+            answered = await _ve.tier(text, user_id, session_id, channel=kwargs.get("channel"),
+                                      speaker_verified=_ctx.get("speaker_verified"), panel_id=_ctx.get("panel_id"),
+                                      allow_writes=kwargs.get("allow_writes") is not False)
+        except Exception:  # noqa: BLE001 - the tier never breaks a turn
+            answered = None
+        if answered is not None:
+            return answered
         # self_model (ZOE_SELF_MODEL, default shadow = a log line and nothing else): "what can you do?", "can you order groceries?",
         # "are you always listening?" are answered from the model GENERATED from the real registries, never from the 4B's imagination.
         try:

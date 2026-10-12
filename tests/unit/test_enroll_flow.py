@@ -29,6 +29,7 @@ _MODULE_PATH = Path(__file__).resolve().parents[2] / "scripts" / "setup" / "zoe_
 spec = importlib.util.spec_from_file_location("zoe_enroll_flow_under_test", _MODULE_PATH)
 flow = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(flow)
+_REAL_SAY = flow.say  # the `quiet` fixture replaces flow.say; the voice-quality tests below need the real one
 
 
 @pytest.fixture
@@ -140,3 +141,72 @@ def test_daemon_restarts_even_if_the_stop_itself_raises(quiet, monkeypatch):
     with pytest.raises(OSError):
         flow.enroll_voice("jason", "Jason")
     assert seen == ["stop", "start"]
+
+
+# ── the owner's 2026-10-12 run: a robot voice, and no beep ───────────────────
+
+def _spoken(monkeypatch, api):
+    """Run the REAL say() with a scripted _api; return the commands it ran."""
+    cmds = []
+    monkeypatch.setattr(flow, "say", _REAL_SAY)
+    monkeypatch.setattr(flow, "_api", api)
+    monkeypatch.setattr(flow.time, "sleep", lambda s: None)
+    monkeypatch.setattr(flow.subprocess, "run", lambda cmd, **kw: cmds.append(cmd) or None)
+    return cmds
+
+
+def test_say_waits_out_a_restarting_tts_instead_of_speaking_in_a_robot_voice(monkeypatch):
+    """The Kokoro sidecar was restarting (the server answered /synthesize 503): the flow used to fall to espeak-ng on the FIRST
+    failure. It must retry, and speak the server's (Kokoro) audio once that returns."""
+    attempts = []
+
+    def api(path, payload, timeout=60, raw=False):
+        attempts.append(path)
+        if len(attempts) < 3:
+            raise RuntimeError("HTTP Error 503")
+        return b"RIFF....WAVEfmt "
+
+    cmds = _spoken(monkeypatch, api)
+    flow.say("Hi")
+    assert len(attempts) == 3
+    assert [c[0] for c in cmds] == ["aplay"], "espeak-ng spoke although the server's voice came back"
+
+
+def test_say_falls_back_to_espeak_only_after_the_retries_are_spent(monkeypatch):
+    attempts = []
+
+    def api(*a, **k):
+        attempts.append(1)
+        raise RuntimeError("HTTP Error 503")
+
+    cmds = _spoken(monkeypatch, api)
+    flow.say("Hi")
+    assert len(attempts) == flow.SYNTH_ATTEMPTS
+    assert [c[0] for c in cmds] == ["espeak-ng"]
+
+
+def test_a_beep_plays_before_every_recording_even_with_no_chime_file_deployed(quiet, monkeypatch, tmp_path):
+    """The prompts say "after the beep". The Pi has never had a chime.wav, and the flow only played one `if os.path.exists(...)`."""
+    import wave
+
+    monkeypatch.setattr(flow, "HERE", str(tmp_path))  # no chime.wav here, as on the Pi
+    order, played = [], []
+
+    def run(cmd, **kw):
+        if cmd[:2] == ["aplay", "-q"]:
+            with wave.open(cmd[2], "rb") as wf:  # the file must exist AND be a real WAV at the moment aplay would open it
+                played.append((wf.getnchannels(), wf.getnframes()))
+            order.append("beep")
+        elif cmd[:2] == ["systemctl", "--user"]:
+            quiet["systemctl"].append(cmd[2])
+
+        class _P:
+            returncode = 0
+        return _P()
+
+    monkeypatch.setattr(flow.subprocess, "run", run)
+    monkeypatch.setattr(flow, "_record_wav", lambda s, p: order.append("record") or Path(p).write_bytes(b"x" * 40000) or True)
+    monkeypatch.setattr(flow, "_api", lambda *a, **k: {"ok": True})
+    assert flow.enroll_voice("jason", "Jason") == 0
+    assert order == ["beep", "record"] * len(flow.VOICE_PHRASES)
+    assert all(ch == 2 and frames > 1000 for ch, frames in played)
