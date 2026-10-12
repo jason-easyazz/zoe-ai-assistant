@@ -3546,6 +3546,66 @@
         ],
         "typed_env": false
       },
+      "ZOE_OMI_AUDIO_DIR": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_recordings.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_AUDIO_RETENTION_DAYS": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_recordings.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_KEEP_AUDIO": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_recordings.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_MIN_MEM_MB": {
+        "defaults": [
+          "1500"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_recordings.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_OWNER_USER_ID": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_recordings.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_SYNC_ENABLED": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_recordings.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_OMNIGENT_AGENT_ID": {
         "defaults": [
           "'057995d1517418e6839f51d340785dd6'"

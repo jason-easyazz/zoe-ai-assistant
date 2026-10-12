@@ -17,6 +17,7 @@ Secrets are never inlined — they are read from `.env` files.
 | `functiongemma-router.service` | 11436 | Two-stage router stage-2 decoder (FunctionGemma-270M r2, CPU) — **platform-specific paths**; optional |
 | `flue-zoe-brain-2x.service` | 3579 | Flue **2.x** Zoe-brain sidecar in `labs/flue-zoe-brain-2x/` — **the LIVE brain lane** (`ZOE_BRAIN_BACKEND=flue`), cut over 2026-08-09; the 1.x `:3578` sidecar was retired 2026-08-10. Optional/operator opt-in; ships inert. Runbook: `labs/flue-zoe-brain-2x/README.md` |
 | `flue-executor.service`    | —     | Multica queue consumer (executor migration Phase 2) — **optional, operator opt-in; ships inert (not enabled, dispatch defaults dry) — see below** |
+| `omi-sync.service`         | —     | Omi pendant ring sync (`services/omi-sync/`) — **PANEL-PI-ONLY, optional, operator opt-in; ships inert** (flag-dark `OMI_SYNC_ENABLED`; exits 0 when off). Copy it to the Pi, never enable it on the Jetson. Runbook: `docs/architecture/omi-integration-plan.md` section 4.7 |
 | `serena-mcp.service`       | 9121  | Shared Serena MCP code-intelligence server (dev tooling, one per HOST — see below) |
 | `zoe-claude-bridge.service` | —    | Claude Code remote bridge as a managed unit (`Slice=zoe-agents.slice` + the session lease) — **inert, no `[Install]`, stage-gated**; see `docs/knowledge/engineering-off-box.md` |
 | `zoe-agents-sampler.{service,timer}` | — | 5-minute JSONL sample of the engineering cgroups (`~/.zoe-logs/agents-sampler.jsonl`) — operator opt-in; install first |

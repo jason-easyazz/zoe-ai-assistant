@@ -1,0 +1,9 @@
+# omi-sync (Pi side) - installed by the operator into a venv on the panel Pi, NEVER into zoe-data's venv.
+#
+#   python3 -m venv ~/.zoe-omi-sync/venv && ~/.zoe-omi-sync/venv/bin/pip install -r requirements.txt
+#   sudo apt install libopus0          # opuslib is a ctypes wrapper over the system libopus
+#
+# bleak 0.22.3: BlueZ backend, pure-Python wheel - the same pin as the lab receiver and the official Omi SDK.
+# opuslib 3.0.1: the last release (py3-none-any); loads libopus via ctypes.util.find_library("opus").
+bleak==0.22.3
+opuslib==3.0.1
