@@ -8,6 +8,8 @@ description: Step 1 of the speaker-gate rebuild (Q15) — the candidate embedder
 
 # Speaker gate rebuild — step 1 results on the Pi (2026-10-05)
 
+> **Correction (2026-10-12):** the CAM++ candidate below is the 3D-Speaker export, which on a labelled public set fails to separate speakers (EER about 32 %), so its results are not evidence about CAM++ in general. See [speaker-model-bakeoff-2026-10.md](./speaker-model-bakeoff-2026-10.md) §0 and §4.
+
 Run 2026-10-04 21:30–22:00 AWST on `zoe-pi`. Plan and targets: [speaker-gate-rebuild-2026-10-04.md](speaker-gate-rebuild-2026-10-04.md)
 (§5.3), owner decisions Q15. Code: `scripts/voice/speaker_shadow_embed.py`,
 `scripts/voice/speaker_shadow_eval.py`, pinned by `tests/unit/test_speaker_shadow_scripts.py`.
