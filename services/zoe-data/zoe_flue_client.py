@@ -89,6 +89,7 @@ and never changes what is yielded or retried.
 from __future__ import annotations
 
 import asyncio
+import brain_slot_guard
 import contextvars
 import errno
 import json
@@ -1942,6 +1943,9 @@ async def run_flue_brain_streaming(
     debug = await _continuity_debug_uid((user_id or "").strip())
     reply: list[str] = []
     emitted = False  # real reply text went out (never a sentinel or the fallback)
+    # The brain's ONE llama slot now holds this conversation: post-turn 4B callers wait for it to go quiet instead of
+    # evicting it (brain_slot_guard; ZOE_BRAIN_SLOT_GUARD). Nothing awaits between this call and the try.
+    brain_slot_guard.turn_started()
     try:
         async for delta in turn:
             if not delta.startswith(("__TOOL__:", "__THINKING__:")):
@@ -1953,7 +1957,10 @@ async def run_flue_brain_streaming(
     finally:
         # Close the inner turn deterministically when the consumer stops early
         # (barge-in / cancellation) — exactly as if it had been iterated directly.
-        await turn.aclose()
+        try:
+            await turn.aclose()
+        finally:
+            brain_slot_guard.turn_finished()
         # Settled HERE, not after the loop: a consumer that disconnects or barges
         # in after the first text exits through this finally (GeneratorExit or a
         # CancelledError), and the brief it heard must still take the claim.

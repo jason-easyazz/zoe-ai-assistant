@@ -22,6 +22,7 @@ import time
 import uuid
 from typing import Any, Callable
 
+import brain_slot_guard
 import digest_pack
 import httpx
 import memory_authority
@@ -935,10 +936,12 @@ async def run_turn_digest(
 
         try:
             _t_llm = time.monotonic()
-            async with httpx.AsyncClient(timeout=_llm_timeout(20.0 if _max_tokens == 256 else _CLAIM_TIMEOUT_S)) as client:
-                resp = await client.post(f"{_GEMMA_URL}/v1/chat/completions", json=payload)
-                resp.raise_for_status()
-                raw = resp.json()["choices"][0]["message"]["content"].strip()
+            # Post-turn pass on the brain's ONE slot: waits out a hot conversation (brain_slot_guard) so it cannot evict it.
+            async with brain_slot_guard.background_slot("turn_digest"):
+                async with httpx.AsyncClient(timeout=_llm_timeout(20.0 if _max_tokens == 256 else _CLAIM_TIMEOUT_S)) as client:
+                    resp = await client.post(f"{_GEMMA_URL}/v1/chat/completions", json=payload)
+                    resp.raise_for_status()
+                    raw = resp.json()["choices"][0]["message"]["content"].strip()
             if _max_tokens != 256:
                 # the claim row costs output tokens on the brain's one slot: log the call so the delta is measurable
                 logger.info("STRUCTURAL_EXTRACT lane=%s ms=%d max_tokens=%d", source, int((time.monotonic() - _t_llm) * 1000), _max_tokens)

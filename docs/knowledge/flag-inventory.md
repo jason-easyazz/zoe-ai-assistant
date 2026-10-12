@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-594 flags; 592 not documented in `.env.example`.
+606 flags; 604 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -58,12 +58,18 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_BASE_URL` | `'http://localhost:8000'`, `'http://zoe.local'`, `'https://192.168.1.218'` | no | NO | `services/zoe-auth/oidc/startup.py`<br>`services/zoe-data/routers/panel_provision.py`<br>`services/zoe-data/routers/system.py` |
 | `ZOE_BENCHMARK_OUTPUT` | `dynamic` | no | NO | `scripts/utilities/gemma4_trial_benchmark.py` |
 | `ZOE_BENCH_REPEATS` | `'3'` | no | NO | `services/zoe-core/bench/pi_brain_latency.py` |
+| `ZOE_BLE_RADIO_LOCK` | `-` | no | NO | `services/omi-sync/omi_sync/radio_lock.py` |
+| `ZOE_BLUETOOTH_AUDIT_PATH` | `''` | yes | NO | `services/zoe-data/bluetooth_broker.py` |
+| `ZOE_BLUETOOTH_SETTINGS` | `False` | yes | NO | `services/zoe-data/bluetooth_broker.py` |
 | `ZOE_BOARD_POLL_S` | `'60'` | no | NO | `services/zoe-data/multica_board_runner.py` |
 | `ZOE_BOARD_REVIEW_AUTOPILOT_ENABLED` | `'false'` | no | NO | `services/zoe-data/multica_autopilot_sync.py` |
 | `ZOE_BRAIN_BACKEND` | `'core'` | no | NO | `services/zoe-data/brain_dispatch.py` |
 | `ZOE_BRAIN_FAILOVER` | `'0'` | no | NO | `services/zoe-data/brain_dispatch.py` |
 | `ZOE_BRAIN_FAILOVER_COOLDOWN_S` | `'45'` | no | NO | `services/zoe-data/brain_dispatch.py` |
 | `ZOE_BRAIN_PREWARM_ON_WAKE` | `'1'`, `True` | yes | NO | `services/zoe-data/routers/voice_livekit.py`<br>`services/zoe-data/routers/voice_tts.py` |
+| `ZOE_BRAIN_SLOT_GUARD` | `-` | no | NO | `services/zoe-data/brain_slot_guard.py` |
+| `ZOE_BRAIN_SLOT_MAX_DEFER_S` | `''` | no | NO | `services/zoe-data/brain_slot_guard.py` |
+| `ZOE_BRAIN_SLOT_QUIET_S` | `''` | no | NO | `services/zoe-data/brain_slot_guard.py` |
 | `ZOE_BRAIN_SLOT_TOKENS` | `'8192'`, `8192`, `dynamic` | yes | NO | `services/zoe-data/digest_pack.py`<br>`services/zoe-data/memory_digest.py`<br>`services/zoe-data/night_mind.py`<br>`services/zoe-data/zoe_agent.py` |
 | `ZOE_BRAIN_STARTUP_WAIT_S` | `30.0` | yes | NO | `services/zoe-data/main.py` |
 | `ZOE_BRAIN_TOKEN` | `-` | no | NO | `scripts/perf/hop_placement_ab.py`<br>`scripts/perf/measure_tts_cadence.py`<br>`scripts/perf/person_half_enforce_ab.py`<br>`scripts/perf/user_model_ab.py`<br>`services/zoe-data/zoe_flue_client.py` |
@@ -158,6 +164,12 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_EMOTIONAL_RECALL_ENABLED` | `''` | no | NO | `services/zoe-data/routers/memories.py` |
 | `ZOE_ENABLE_OPENCLAW_EXECUTION` | `'false'` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_ENGINEERING_MODE` | `-` | no | NO | `services/zoe-data/executors/kanban_adapter.py` |
+| `ZOE_ENROLL_DECLINE_DAYS` | `dynamic` | yes | NO | `services/zoe-data/enrollment_state.py` |
+| `ZOE_ENROLL_MODE_ENABLED` | `'true'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
+| `ZOE_ENROLL_OFFER` | `'off'` | yes | NO | `services/zoe-data/enrollment_state.py` |
+| `ZOE_ENROLL_OFFER_KIDS` | `False` | yes | NO | `services/zoe-data/enrollment_state.py` |
+| `ZOE_ENROLL_OFFER_PIN_DELAY_S` | `20` | yes | NO | `services/zoe-data/voice_enrollment.py` |
+| `ZOE_ENROLL_RECORD_MAX_S` | `'8.0'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_ENV_FILE` | `''`, `'/home/zoe/assistant/services/zoe-data/.env'` | no | NO | `scripts/maintenance/retire_hermes_openclaw_board.py`<br>`scripts/maintenance/verify_executor_queue_backend.py`<br>`services/zoe-data/multica_board_runner.py` |
 | `ZOE_ESPEAK_PITCH` | `dynamic` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_ESPEAK_SPEED` | `dynamic` | no | NO | `services/zoe-data/routers/voice_tts.py` |

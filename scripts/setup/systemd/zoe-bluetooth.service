@@ -1,0 +1,46 @@
+# Zoe panel Bluetooth agent - runs ON EACH PANEL PI (zoe-pi), as a USER unit, operator opt-in.
+#
+#   Settings > Bluetooth devices: scan, connect, disconnect, forget, and per-device drivers (Omi: battery, firmware, safe update).
+#   It PULLS commands from zoe-data (outbound HTTPS with the panel's device token) and opens NO listening socket.
+#   Design + runbook: docs/knowledge/bluetooth-settings.md; code: services/panel-bluetooth/.
+#
+# A separate process on purpose: a BlueZ fault here cannot touch zoe-voice (the voice daemon), and it has no audio code at all.
+#
+# Inert until ALL of these hold (it is never auto-enabled):
+#   1. ~/.zoe-bluetooth/.env.bluetooth has PANEL_BT_ENABLED=1, ZOE_URL, DEVICE_TOKEN (the same panel device token the voice daemon
+#      uses). Firmware updates additionally need PANEL_BT_OTA_ENABLED=1 (default OFF) - leave it off until an operator has run one
+#      supervised update;
+#   2. zoe-data has ZOE_BLUETOOTH_SETTINGS=1 (default OFF; off = this agent's polls get 404 and it backs off);
+#   3. the user may run `sudo -n hcitool lecc|ledc|cmd` (the long-supervision-timeout link recipe, same as omi-sync);
+#   4. the venv exists and the code is synced - scripts/setup/deploy-pi-bluetooth.sh does both.
+#
+#   cp scripts/setup/systemd/zoe-bluetooth.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now zoe-bluetooth.service
+#
+# Flag off (PANEL_BT_ENABLED unset/0): the process logs once and exits 0; Restart=on-failure does NOT restart a clean exit.
+# Rollback: systemctl --user disable --now zoe-bluetooth.service  (nothing else depends on it; omi-sync only ever yields to it).
+
+[Unit]
+Description=Zoe panel Bluetooth agent (Settings > Bluetooth devices)
+After=network-online.target bluetooth.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-%h/.zoe-bluetooth/.env.bluetooth
+WorkingDirectory=%h/.zoe-bluetooth/app
+Environment=PYTHONPATH=%h/.zoe-bluetooth/app
+ExecStart=%h/.zoe-bluetooth/venv/bin/python3 -m panel_bt run
+Restart=on-failure
+RestartSec=20
+# Small and low-priority: it must never compete with the voice daemon on a Pi 5.
+Nice=10
+MemoryHigh=200M
+MemoryMax=300M
+MemorySwapMax=0
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=zoe-bluetooth
+
+[Install]
+WantedBy=default.target
