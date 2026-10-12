@@ -25,6 +25,7 @@ from typing import AsyncIterator, Optional, Sequence
 from . import legacy_protocol as lp
 from . import ring_protocol as rp
 from .engine import LinkDropped
+from .radio_lock import RadioLock
 
 log = logging.getLogger("omi_sync.ble")
 
@@ -215,7 +216,16 @@ async def connect(address: str, *, lecc: bool = True, lecc_prefix: Sequence[str]
     discovery 24/24 times. One attempt in six still stalls for a minute: hence retry with backoff, dropping the half-open link
     between tries. ``lecc=False`` is the plain bleak connect (fine on a bench, hopeless at range).
     """
-    from bleak import BleakClient  # type: ignore[import-not-found]
+    # One radio: while the Settings > Bluetooth agent holds the shared lock (a scan, an open link, a FIRMWARE UPDATE) we do not
+    # connect. This is what stops a sync from taking the pendant's single connection in the gap after a firmware reset.
+    radio = RadioLock()
+    if not radio.try_acquire():
+        raise ConnectError(f"radio busy ({radio.current_holder() or 'another Bluetooth task'})")
+    try:
+        from bleak import BleakClient  # type: ignore[import-not-found]
+    except BaseException:
+        radio.release()
+        raise
     q: "asyncio.Queue[Optional[bytes]]" = asyncio.Queue()
     loop = asyncio.get_running_loop()
 
@@ -260,6 +270,7 @@ async def connect(address: str, *, lecc: bool = True, lecc_prefix: Sequence[str]
             if attempt < attempts:
                 await asyncio.sleep(backoff_s * attempt)
     if client is None:
+        radio.release()
         raise ConnectError(f"could not connect after {attempts} attempts: {type(last).__name__ if last else 'n/a'}") from last
     try:
         yield BleLink(client, q)
@@ -270,3 +281,4 @@ async def connect(address: str, *, lecc: bool = True, lecc_prefix: Sequence[str]
         with contextlib.suppress(Exception):
             await client.disconnect()
         await _drop_link(lecc_prefix, handle)
+        radio.release()                  # only after the link is really down: the next holder may connect at once
