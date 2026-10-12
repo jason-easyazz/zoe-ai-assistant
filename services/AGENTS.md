@@ -11,6 +11,7 @@ Production runtime services for the Zoe assistant: the web/chat API, static UI, 
 - `zoe-auth/` — authentication service.
 - `homeassistant-mcp-bridge/` — MCP protocol bridge to Home Assistant. (The n8n bridge was retired in March 2026 along with n8n itself — OpenClaw cron/skills/exec covers automation. The n8n SSO endpoints under `zoe-auth/` stay until that wiring is also removed.)
 - `livekit/` — realtime audio/video infrastructure config.
+- `omi-sync/` — the PANEL-PI-side Omi pendant ring sync (flag-dark `OMI_SYNC_ENABLED`; own process and unit, never inside the voice daemon): drains the pendant's SD ring when it is in Bluetooth range, uploads recordings to zoe-data's `/api/omi/recordings` (zoe-data side: `zoe-data/omi_recordings.py`, flag `ZOE_OMI_SYNC_ENABLED`), and frees the ring only after zoe-data confirms the save. Runs on the Pi, not the Jetson.
 - `zoe-core/` — Zoe's reasoning/orchestration core: the Pi agent (Gemma 4) that binds the other services together and calls abilities. This is the center of Zoe, not a monolith — it orchestrates and delegates; it does not absorb the other services' code. NOTE: a *different*, older `zoe-core` (the retired Docker monolith, replaced by `zoe-data`) was removed from the working tree and remains in git history only — that legacy tree must never be revived or extended. This service is the new Pi core, not that retired monolith.
 
 ## Local Contracts
@@ -60,6 +61,7 @@ Production runtime services for the Zoe assistant: the web/chat API, static UI, 
 - [zoe-ui/AGENTS.md](zoe-ui/AGENTS.md) — frontend docroot, SW_VERSION contract, nginx.conf
 - [zoe-auth/AGENTS.md](zoe-auth/AGENTS.md) — authentication, OIDC/SSO, touch-panel pairing
 - [homeassistant-mcp-bridge/AGENTS.md](homeassistant-mcp-bridge/AGENTS.md) — Home Assistant MCP bridge
+- [omi-sync/AGENTS.md](omi-sync/AGENTS.md) — Omi pendant ring sync on the panel Pi: custody rule, ring protocol, spool, flag-dark
 
 `livekit/` is a single config file (`config.yaml`), owned by this doc. One local rule:
 **it must never contain a `keys:` block or any other credential.** The API pair lives in the

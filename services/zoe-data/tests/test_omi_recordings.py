@@ -1,0 +1,578 @@
+"""The Zoe side of "record on the pendant, sync when in range": ``omi_recordings.py`` + ``routers/omi_recordings.py`` (migration 0045,
+flag ``ZOE_OMI_SYNC_ENABLED`` default OFF).
+
+Groups (the flag/gate tests carry their own on/off control arm; source mutations worth re-running by Edit: skip the sha256
+check in ``store_recording``; drop the tombstone branch; drop the night-window term in ``may_transcribe_now``; drop
+``_require_owner``; catch ``RuntimeError`` instead of ``GateClosed`` in ``_transcribe_one`` - that last one was a real bug
+the retry test caught while writing this file):
+
+  flag + auth      off = routes ABSENT; a device token (never a session) uploads; no owner configured = refused; owner-only views
+  custody answer   the 200 body is what lets the Pi free the pendant: it echoes the digest of the bytes STORED; a truncated body,
+                   a bad WAV or a changed body under a known key is never confirmed
+  idempotency      the same key twice = one row, one file; a deleted recording's key is acknowledged (tombstone), not resurrected
+  transcription    Moonshine chunk by chunk, silence skipped, audio deleted after (unless kept), never in the night window / during a
+                   voice turn / under the RAM floor, retried then failed, and the gate closing mid-job puts it back
+  retention        a kept WAV still expires; delete removes audio + transcript + times
+  forgetting       forget-user wipes it; forget-name redacts the transcript and drops the audio; a transcript landing later is
+                   redacted against the ledger; an erase mid-upload wins
+  kept out         NOTHING else reads the table: no fact extraction, recall or digest (a static guard over the module tree)
+
+Synthetic data only. The DB edge is a real SQLite file built by migration 0045 behind ``db_compat``; Moonshine is a fake at
+``omi_recordings._transcribe_file``; no model, no network, no hardware.
+"""
+from __future__ import annotations
+
+import pytest
+
+pytestmark = pytest.mark.ci_safe
+
+import asyncio
+import contextlib
+import hashlib
+import importlib.util
+import io
+import json
+import re
+import sqlite3
+import struct
+import sys
+import wave
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import sqlalchemy as sa
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+import auth
+import db_compat
+import omi_recordings as omi
+import user_erase_gate as erase_gate
+from db_pool import _Cursor, _ExecResult
+from routers import omi_recordings as omi_router
+
+SVC = Path(__file__).resolve().parents[1]
+REPO = SVC.parents[1]
+OWNER, OTHER = "owner-a", "member-b"
+DEVICE = "dev0123456789abc"
+TOKEN = {"X-Device-Token": "tok"}
+UTC = timezone.utc
+
+
+class _Sqlite:
+    def __init__(self, path):
+        self.conn = sqlite3.connect(path, check_same_thread=False)      # TestClient runs the app in its own thread
+        self.conn.row_factory = sqlite3.Row
+
+    def execute(self, sql, params=()):
+        async def _run():
+            await asyncio.sleep(0)
+            cur = self.conn.execute(sql, tuple(params))
+            rows = cur.fetchall()
+            self.conn.commit()
+            return _Cursor(rows, rowcount=cur.rowcount)
+        return _ExecResult(_run())
+
+    async def commit(self):
+        self.conn.commit()
+
+    def rows(self, sql, params=()):
+        return self.conn.execute(sql, params).fetchall()
+
+
+def _migrate(engine, fname="0045_omi_recordings.py", down=False):
+    spec = importlib.util.spec_from_file_location("mig_omi", SVC / "alembic/versions" / fname)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    with engine.begin() as conn, Operations.context(MigrationContext.configure(conn)):
+        (mod.downgrade if down else mod.upgrade)()
+
+
+def make_wav(seconds: float, amp: int = 6000, hz: int = 220) -> bytes:
+    import math
+    n = int(16000 * seconds)
+    pcm = b"".join(struct.pack("<h", int(amp * math.sin(2 * math.pi * hz * i / 16000))) for i in range(n))
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(pcm)
+    return buf.getvalue()
+
+
+def headers(wav: bytes, *, key="r1.0-39", started="2026-10-10T01:00:00Z", duration=3.0, quality="device", gap=0, device=DEVICE, sha=None):
+    return {**TOKEN, "Content-Type": "audio/wav", "X-Omi-Device": device, "X-Omi-Key": key, "X-Omi-Started-At": started,
+            "X-Omi-Duration-S": str(duration), "X-Omi-Time-Quality": quality, "X-Omi-Gap-Before": str(gap),
+            "X-Omi-Sha256": sha if sha is not None else hashlib.sha256(wav).hexdigest()}
+
+
+@pytest.fixture
+def env(monkeypatch, tmp_path):
+    path = str(tmp_path / "zoe.db")
+    engine = sa.create_engine(f"sqlite:///{path}")
+    _migrate(engine)
+    db = _Sqlite(path)
+    db.conn.execute("CREATE TABLE notifications (id TEXT PRIMARY KEY, user_id TEXT, type TEXT, title TEXT, message TEXT, data TEXT, "
+                    "delivered INTEGER DEFAULT 0, created_at TEXT)")
+    db.conn.create_function("NOW", 0, lambda: "2026-10-10 06:00:00+00")
+    db.conn.commit()
+
+    @contextlib.asynccontextmanager
+    async def fake_db():
+        yield db
+
+    monkeypatch.setattr(db_compat, "get_compat_db", fake_db)
+    monkeypatch.setenv("ZOE_OMI_SYNC_ENABLED", "1")
+    monkeypatch.setenv("ZOE_OMI_OWNER_USER_ID", OWNER)
+    monkeypatch.setenv("ZOE_OMI_AUDIO_DIR", str(tmp_path / "audio"))
+    monkeypatch.setenv("ZOE_OMI_MIN_MEM_MB", "0")
+    monkeypatch.setenv("NIGHT_DIR", str(tmp_path / "night"))          # never read the live ~/.zoe/night-window marker
+    monkeypatch.setenv("ZOE_TIMEZONE", "Australia/Perth")
+    monkeypatch.delenv("ZOE_OMI_KEEP_AUDIO", raising=False)
+    monkeypatch.delenv("ZOE_OMI_AUDIO_RETENTION_DAYS", raising=False)
+    monkeypatch.setattr(omi, "voice_busy", lambda now_mono=None: False)
+    erase_gate.reset()
+
+    calls: list[str] = []
+    texts = {"n": 0}
+
+    async def fake_stt(path):
+        calls.append(path)
+        texts["n"] += 1
+        return f"words{texts['n']}"
+
+    monkeypatch.setattr(omi, "_transcribe_file", fake_stt)
+
+    import routers.panel_auth as pa
+    monkeypatch.setattr(pa, "lookup_device_token", lambda raw: {"panel_id": "p1"} if raw == "tok" else None)
+
+    app = FastAPI()
+    assert omi_router.register(app) is True
+    app.dependency_overrides[auth.require_signed_in] = lambda: {"user_id": OWNER, "role": "member"}
+    client = TestClient(app)
+    yield type("Env", (), {"db": db, "client": client, "app": app, "stt": calls, "tmp": tmp_path, "engine": engine})
+    erase_gate.reset()
+
+
+def upload(env, wav=None, **kw):
+    wav = wav if wav is not None else make_wav(3.0)
+    return env.client.post("/api/omi/recordings", content=wav, headers=headers(wav, **kw))
+
+
+def rows(env, sql="SELECT * FROM omi_recordings ORDER BY created_at"):
+    return env.db.rows(sql)
+
+
+def run(coro):
+    return asyncio.run(coro)
+
+
+# --- flag + auth ------------------------------------------------------------------------------------------------
+def test_flag_off_routes_are_absent(monkeypatch):
+    monkeypatch.delenv("ZOE_OMI_SYNC_ENABLED", raising=False)
+    app = FastAPI()
+    assert omi_router.register(app) is False
+    c = TestClient(app)
+    assert c.post("/api/omi/recordings", content=b"x", headers=TOKEN).status_code == 404
+    assert c.get("/api/omi/recordings").status_code == 404
+
+
+def test_upload_needs_a_device_token_and_a_session_is_not_enough(env):
+    wav = make_wav(1.0)
+    no_tok = {k: v for k, v in headers(wav).items() if k != "X-Device-Token"}
+    assert env.client.post("/api/omi/recordings", content=wav, headers=no_tok).status_code == 401
+    bad = {**headers(wav), "X-Device-Token": "wrong"}
+    assert env.client.post("/api/omi/recordings", content=wav, headers=bad).status_code == 401
+    assert rows(env) == []        # (the dependency override that signs the OWNER in did not let a tokenless upload through)
+
+
+def test_no_owner_configured_means_no_upload(env, monkeypatch):
+    monkeypatch.delenv("ZOE_OMI_OWNER_USER_ID")
+    r = upload(env)
+    assert r.status_code == 503 and r.json()["error"] == "owner not configured"
+    assert rows(env) == []
+
+
+def test_recordings_are_owner_only_even_for_an_admin(env):
+    rid = upload(env).json()["id"]
+    env.app.dependency_overrides[auth.require_signed_in] = lambda: {"user_id": OTHER, "role": "admin"}
+    assert env.client.get("/api/omi/recordings").status_code == 403
+    assert env.client.get(f"/api/omi/recordings/{rid}").status_code == 403
+    assert env.client.delete(f"/api/omi/recordings/{rid}").status_code == 403
+    assert env.client.patch(f"/api/omi/recordings/{rid}", json={"reviewed": True}).status_code == 403
+    assert len(rows(env)) == 1 and rows(env)[0]["status"] != "deleted"
+
+
+# --- the custody answer + provenance ------------------------------------------------------------------------------------
+def test_a_stored_recording_is_confirmed_with_the_digest_of_the_stored_bytes(env):
+    wav = make_wav(3.0)
+    r = upload(env, wav, started="2026-10-10T01:00:05Z", duration=3.0, quality="corrected", gap=4)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True and body["duplicate"] is False and body["sha256"] == hashlib.sha256(wav).hexdigest()
+    (row,) = rows(env)
+    assert row["user_id"] == OWNER and row["source"] == "omi" and row["provenance"] == "recording"
+    assert row["started_at"] == "2026-10-10T01:00:05Z" and row["ended_at"] == "2026-10-10T01:00:08Z"     # the PENDANT's time, not created_at
+    assert row["time_quality"] == "corrected" and row["gap_before"] == 4
+    assert row["speaker_state"] == "unverified" and row["reviewed"] == 0 and row["status"] == "pending"
+    assert Path(row["audio_path"]).read_bytes() == wav and (Path(row["audio_path"]).stat().st_mode & 0o777) == 0o600
+    exp = datetime.strptime(row["audio_expires_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    assert timedelta(days=6, hours=23) < exp - datetime.now(UTC) < timedelta(days=7, hours=1)           # 7-day audio retention
+
+
+def test_the_pi_side_classifier_accepts_exactly_this_response(env):
+    """Both halves of the contract in one test: omi_sync.uploader.classify(<this server's real answer>) is CONFIRMED."""
+    sys.path.insert(0, str(REPO / "services" / "omi-sync"))
+    try:
+        from omi_sync.uploader import Outcome, classify
+    finally:
+        sys.path.pop(0)
+    wav = make_wav(2.0)
+    r = upload(env, wav)
+    assert classify(r.status_code, r.content, hashlib.sha256(wav).hexdigest()).outcome is Outcome.CONFIRMED
+    assert classify(r.status_code, r.content, "0" * 64).outcome is Outcome.UNAVAILABLE      # a different digest is never a confirmation
+    dup = upload(env, wav)
+    assert classify(dup.status_code, dup.content, hashlib.sha256(wav).hexdigest()).outcome is Outcome.CONFIRMED
+
+
+@pytest.mark.parametrize("mutate,status", [
+    (lambda w, h: (w[:-1000], h), 422),                                              # truncated in flight: sha256 no longer matches
+    (lambda w, h: (w, {**h, "X-Omi-Sha256": "0" * 64}), 422),
+    (lambda w, h: (b"RIFFnotawav" + b"\x00" * 200, None), 422),                      # digest right, not a WAV
+    (lambda w, h: (w, {**h, "X-Omi-Started-At": "yesterday"}), 422),
+    (lambda w, h: (w, {**h, "X-Omi-Started-At": "2099-01-01T00:00:00Z"}), 422),
+    (lambda w, h: (w, {**h, "X-Omi-Key": "../../etc/passwd"}), 400),
+    (lambda w, h: (w, {**h, "X-Omi-Device": "x"}), 400),
+    (lambda w, h: (w, {**h, "X-Omi-Time-Quality": "perfect"}), 400),
+    (lambda w, h: (w, {**h, "X-Omi-Duration-S": "abc"}), 400),
+])
+def test_a_bad_upload_is_refused_and_nothing_is_stored(env, mutate, status):
+    wav = make_wav(3.0)
+    body, hdr = mutate(wav, headers(wav))
+    hdr = hdr if hdr is not None else headers(body)
+    r = env.client.post("/api/omi/recordings", content=body, headers=hdr)
+    assert r.status_code == status and r.json()["ok"] is False
+    assert rows(env) == [] and not list((env.tmp / "audio").glob("*.wav"))
+
+
+def test_a_wav_that_is_not_16k_mono_is_refused(env):
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(44100)
+        w.writeframes(b"\x01\x00" * 44100)
+    wav = buf.getvalue()
+    assert upload(env, wav).status_code == 422
+
+
+# --- idempotency + tombstone -----------------------------------------------------------------------------------------------
+def test_the_same_key_twice_is_one_recording_and_one_file(env):
+    wav = make_wav(3.0)
+    first, second = upload(env, wav).json(), upload(env, wav).json()
+    assert second["duplicate"] is True and second["id"] == first["id"]
+    assert len(rows(env)) == 1 and len(list((env.tmp / "audio").glob("*.wav"))) == 1
+
+
+def test_changed_bytes_under_a_known_key_are_a_conflict_not_an_overwrite(env):
+    a, b = make_wav(3.0), make_wav(3.0, hz=330)
+    assert upload(env, a).status_code == 200
+    r = upload(env, b)
+    assert r.status_code == 409
+    (row,) = rows(env)
+    assert Path(row["audio_path"]).read_bytes() == a
+
+
+def test_a_deleted_recording_is_acknowledged_and_never_resurrected(env):
+    wav = make_wav(3.0)
+    rid = upload(env, wav).json()["id"]
+    assert env.client.delete(f"/api/omi/recordings/{rid}").status_code == 200
+    (row,) = rows(env)
+    assert row["status"] == "deleted" and row["transcript"] == "" and row["audio_path"] == "" and row["started_at"] == ""
+    assert not list((env.tmp / "audio").glob("*.wav"))
+    assert env.client.get(f"/api/omi/recordings/{rid}").status_code == 404
+    assert env.client.get("/api/omi/recordings").json()["recordings"] == []
+    again = upload(env, wav)                                       # the Pi never saw the confirmation and retries
+    assert again.json() == {"ok": True, "deleted": True, "key": "r1.0-39"}
+    assert not list((env.tmp / "audio").glob("*.wav")) and len(rows(env)) == 1
+
+
+def test_an_erase_during_an_upload_wins(env):
+    wav = make_wav(2.0)
+    stale = erase_gate.generation(OWNER)
+    run(omi.forget_user(OWNER))                                    # bumps the generation
+    with pytest.raises(omi.StoreError) as ei:
+        run(omi.store_recording(OWNER, device_id=DEVICE, key="r1.0-9", sha256=hashlib.sha256(wav).hexdigest(),
+                                started_at="2026-10-10T01:00:00Z", duration_s=2.0, time_quality="device", gap_before=0, wav=wav,
+                                scheduled_at=stale))
+    assert ei.value.status == 409 and rows(env) == []
+
+
+# --- list / get / patch -------------------------------------------------------------------------------------------------------
+def test_list_get_and_patch(env):
+    upload(env, make_wav(2.0), key="r1.0-9", started="2026-10-10T01:00:00Z")
+    upload(env, make_wav(2.0, hz=300), key="r1.10-19", started="2026-10-10T02:00:00Z")
+    lst = env.client.get("/api/omi/recordings").json()["recordings"]
+    assert [x["recording_key"] for x in lst] == ["r1.10-19", "r1.0-9"]            # newest recording first
+    assert all("transcript" not in x for x in lst)
+    rid = lst[0]["id"]
+    run(omi.transcribe_pending(limit=2, pause_s=0))
+    got = env.client.get(f"/api/omi/recordings/{rid}").json()
+    assert got["status"] == "done" and got["transcript"].startswith("words") and got["reviewed"] is False
+    patched = env.client.patch(f"/api/omi/recordings/{rid}", json={"reviewed": True}).json()
+    assert patched["reviewed"] is True
+
+
+# --- transcription ---------------------------------------------------------------------------------------------------------------
+def test_transcription_files_the_transcript_and_deletes_the_audio(env):
+    wav = make_wav(45.0)
+    rid = upload(env, wav, duration=45.0).json()["id"]
+    path = rows(env)[0]["audio_path"]
+    assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 1
+    (row,) = rows(env)
+    assert row["status"] == "done" and row["transcript"] == "words1 words2 words3"      # 45 s -> three ~20 s chunks, in order
+    assert len(env.stt) == 3
+    assert row["audio_path"] == "" and not Path(path).exists()                           # deleted right after transcription
+    assert row["speaker_state"] == "unverified" and row["reviewed"] == 0                 # still unreviewed, still unverified
+    assert env.client.get(f"/api/omi/recordings/{rid}").json()["has_audio"] is False
+
+
+def test_keep_audio_keeps_the_wav_until_its_retention_expires(env, monkeypatch):
+    monkeypatch.setenv("ZOE_OMI_KEEP_AUDIO", "1")
+    upload(env, make_wav(3.0))
+    path = rows(env)[0]["audio_path"]
+    run(omi.transcribe_pending(limit=1, pause_s=0))
+    assert rows(env)[0]["status"] == "done" and Path(path).exists()
+    assert run(omi.purge_expired_audio(now=datetime.now(UTC) + timedelta(days=6))) == 0 and Path(path).exists()
+    assert run(omi.purge_expired_audio(now=datetime.now(UTC) + timedelta(days=8))) == 1
+    assert not Path(path).exists() and rows(env)[0]["audio_path"] == "" and rows(env)[0]["transcript"].startswith("words")   # text outlives the audio
+
+
+def test_patching_keep_audio_off_drops_an_already_transcribed_wav(env, monkeypatch):
+    monkeypatch.setenv("ZOE_OMI_KEEP_AUDIO", "1")
+    rid = upload(env, make_wav(3.0)).json()["id"]
+    path = rows(env)[0]["audio_path"]
+    run(omi.transcribe_pending(limit=1, pause_s=0))
+    assert Path(path).exists()
+    assert env.client.patch(f"/api/omi/recordings/{rid}", json={"keep_audio": False}).json()["has_audio"] is False
+    assert not Path(path).exists()
+
+
+def test_silence_is_not_sent_to_moonshine(env):
+    upload(env, make_wav(30.0, amp=20))                                   # room noise: peak 20 << the 300 floor
+    run(omi.transcribe_pending(limit=1, pause_s=0))
+    (row,) = rows(env)
+    assert row["status"] == "done" and row["transcript"] == "" and env.stt == []
+
+
+def test_the_night_window_blocks_transcription(env, monkeypatch):
+    upload(env, make_wav(3.0))
+    monkeypatch.setattr(omi, "night_window", lambda now=None: True)
+    assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 0
+    assert env.stt == [] and rows(env)[0]["status"] == "pending"
+    monkeypatch.setattr(omi, "night_window", lambda now=None: False)      # control: the same row transcribes once the window is shut
+    assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 1 and len(env.stt) == 1
+
+
+def test_night_window_clock_and_marker(env, tmp_path):
+    perth = lambda h, m: datetime(2026, 10, 10, h, m, tzinfo=timezone(timedelta(hours=8)))          # noqa: E731
+    assert [omi.night_window(perth(*hm)) for hm in ((2, 29), (2, 30), (3, 0), (4, 29), (4, 30), (12, 0))] == [False, True, True, True, False, False]
+    marker = tmp_path / "night"
+    marker.mkdir(exist_ok=True)
+    (marker / "WINDOW_OPEN").write_text("units")
+    assert omi.night_window(perth(12, 0)) is True                         # the 12B window marker counts even at noon
+
+
+def test_a_live_voice_turn_defers_transcription(env, monkeypatch):
+    upload(env, make_wav(3.0))
+    monkeypatch.setattr(omi, "voice_busy", lambda now_mono=None: True)
+    assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 0 and env.stt == []
+
+
+def test_the_ram_floor_defers_transcription(env, monkeypatch):
+    upload(env, make_wav(3.0))
+    monkeypatch.setenv("ZOE_OMI_MIN_MEM_MB", "1500")
+    monkeypatch.setattr(omi, "mem_available_mb", lambda: 900.0)
+    assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 0 and env.stt == []
+
+
+def test_the_flag_off_transcribes_nothing(env, monkeypatch):
+    upload(env, make_wav(3.0))
+    monkeypatch.delenv("ZOE_OMI_SYNC_ENABLED")
+    assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 0 and env.stt == []
+
+
+def test_the_gate_closing_mid_job_puts_the_recording_back_untouched(env, monkeypatch):
+    upload(env, make_wav(45.0), duration=45.0)
+    state = {"n": 0}
+    real = omi.may_transcribe_now
+
+    def gate(now=None):
+        state["n"] += 1
+        return (True, "") if state["n"] <= 3 else (False, "night window")        # open for the pre-check + 2 chunks, then closes
+
+    monkeypatch.setattr(omi, "may_transcribe_now", gate)
+    assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 0
+    (row,) = rows(env)
+    assert row["status"] == "pending" and row["transcript"] == "" and row["attempts"] == 0 and Path(row["audio_path"]).exists()
+    monkeypatch.setattr(omi, "may_transcribe_now", real)
+    assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 1
+
+
+def test_a_failing_stt_is_retried_then_marked_failed_and_the_audio_kept(env, monkeypatch):
+    upload(env, make_wav(3.0))
+
+    async def boom(path):
+        raise RuntimeError("moonshine exploded")
+
+    monkeypatch.setattr(omi, "_transcribe_file", boom)
+    for expected in ("pending", "pending", "failed"):
+        run(omi.transcribe_pending(limit=1, pause_s=0))
+        assert rows(env)[0]["status"] == expected
+    assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 0              # no fourth attempt
+    assert Path(rows(env)[0]["audio_path"]).exists()                         # nothing lost: the audio waits for its retention expiry
+
+
+def test_a_recording_deleted_while_it_is_being_transcribed_stays_deleted(env, monkeypatch):
+    rid = upload(env, make_wav(3.0)).json()["id"]
+
+    async def slow_then_delete(path):
+        run_delete = await omi.delete_recording(OWNER, rid)
+        assert run_delete
+        return "late words"
+
+    monkeypatch.setattr(omi, "_transcribe_file", slow_then_delete)
+    run(omi.transcribe_pending(limit=1, pause_s=0))
+    (row,) = rows(env)
+    assert row["status"] == "deleted" and row["transcript"] == ""
+
+
+# --- chunking (pure) ----------------------------------------------------------------------------------------------------------------
+def test_chunks_cover_the_audio_contiguously_and_cut_at_the_quietest_point():
+    import math
+    n = 16000 * 50
+    pcm = bytearray()
+    for i in range(n):
+        in_gap = 18.40 <= i / 16000 < 18.60                                  # a 200 ms pause inside the last 3 s of chunk 1
+        pcm += struct.pack("<h", 0 if in_gap else int(8000 * math.sin(i / 7.0)))
+    chunks = omi.chunk_pcm(bytes(pcm))
+    assert chunks[0][0] == 0 and chunks[-1][1] == len(pcm)
+    assert all(a[1] == b[0] for a, b in zip(chunks, chunks[1:])) and all(b > a for a, b in chunks)
+    assert 18.40 <= chunks[0][1] / 2 / 16000 <= 18.60                        # the cut landed in the pause, not mid-word at 20.0 s
+    assert omi.chunk_pcm(b"") == []
+
+
+# --- forgetting ----------------------------------------------------------------------------------------------------------------------------
+def test_forget_user_wipes_audio_transcript_and_times(env):
+    upload(env, make_wav(3.0), key="r1.0-9")
+    upload(env, make_wav(3.0, hz=300), key="r1.10-19")
+    run(omi.transcribe_pending(limit=1, pause_s=0))
+    assert run(omi.forget_user(OWNER)) == 2
+    for r in rows(env):
+        assert (r["status"], r["transcript"], r["audio_path"], r["started_at"]) == ("deleted", "", "", "")
+    assert not list((env.tmp / "audio").glob("*.wav"))
+
+
+def test_forgetting_a_name_redacts_the_transcript_and_drops_the_audio(env, monkeypatch):
+    monkeypatch.setenv("ZOE_OMI_KEEP_AUDIO", "1")
+    upload(env, make_wav(3.0))
+
+    async def says_a_name(path):
+        return "I saw Dana at the shop and Dana said hello"
+
+    monkeypatch.setattr(omi, "_transcribe_file", says_a_name)
+    run(omi.transcribe_pending(limit=1, pause_s=0))
+    path = rows(env)[0]["audio_path"]
+    assert Path(path).exists()
+    assert run(omi.erase_entity(OWNER, re.compile(r"\bDana\b"))) == 1
+    (row,) = rows(env)
+    assert row["transcript"] == "I saw [forgotten] at the shop and [forgotten] said hello"
+    assert row["audio_path"] == "" and not Path(path).exists() and row["keep_audio"] == 0
+
+
+def test_a_transcript_that_lands_after_a_forget_is_redacted_against_the_ledger(env, monkeypatch):
+    upload(env, make_wav(3.0))
+
+    async def says_a_name(path):
+        return "Dana called"
+
+    import memory_forgotten as mf
+
+    async def fake_spans(user_id, text, *, near=True):
+        i = text.find("Dana")
+        return [(i, i + 4)] if i >= 0 and user_id == OWNER else []
+
+    monkeypatch.setattr(omi, "_transcribe_file", says_a_name)
+    monkeypatch.setattr(mf, "spans", fake_spans)
+    run(omi.transcribe_pending(limit=1, pause_s=0))
+    assert rows(env)[0]["transcript"] == "[forgotten] called"
+
+
+def test_the_cascade_and_the_delete_user_path_call_this_module():
+    """The forget entry points reach us (a string guard: the two hooks must exist, and are the only callers)."""
+    assert "omi_recordings.erase_entity(user_id, rx)" in (SVC / "memory_forget_cascade.py").read_text()
+    assert "omi_recordings.forget_user(user_id)" in (SVC / "memory_service.py").read_text()
+
+
+# --- kept out of everything else -----------------------------------------------------------------------------------------------------------------
+def test_nothing_else_reads_pendant_transcripts():
+    """A pendant transcript is unreviewed and unverified: no fact extraction, recall, digest or prompt may read the table.
+    Static guard: the only modules naming it are the module itself, its router, main (mount + loop) and the two forget hooks."""
+    allowed = {"omi_recordings.py", "routers/omi_recordings.py", "main.py", "memory_service.py", "memory_forget_cascade.py"}
+    hits = set()
+    for p in SVC.rglob("*.py"):
+        rel = str(p.relative_to(SVC))
+        if rel.startswith(("tests/", "alembic/", ".venv")):
+            continue
+        txt = p.read_text(errors="replace")
+        if "omi_recordings" in txt or "FROM omi_recordings" in txt:
+            hits.add(rel)
+    assert hits <= allowed, f"unexpected readers of the pendant transcripts: {sorted(hits - allowed)}"
+
+
+# --- the notice + the migration ---------------------------------------------------------------------------------------------------------------------------
+def test_the_sync_notice_is_one_short_bell_row(env, monkeypatch):
+    sent = []
+
+    @contextlib.asynccontextmanager
+    async def fake_ctx():
+        yield env.db
+
+    class _B:
+        async def broadcast(self, channel, event, data, user_id=None):
+            sent.append((channel, event, data, user_id))
+
+    import db_pool
+    import push
+    monkeypatch.setattr(db_pool, "get_db_ctx", fake_ctx)
+    monkeypatch.setattr(push, "broadcaster", _B())
+    assert run(omi.notify_synced(OWNER, 3)) is True
+    (n,) = env.db.rows("SELECT * FROM notifications")
+    assert (n["user_id"], n["type"], n["message"]) == (OWNER, "omi_sync", "I've synced 3 recordings from your pendant.")
+    assert sent and sent[0][3] == OWNER and sent[0][1] == "notification_created"
+    assert omi.notice_text(1)[1] == "I've synced 1 recording from your pendant."
+    assert run(omi.notify_synced(OWNER, 0)) is False
+
+
+def test_the_notice_route_rate_limits_and_needs_the_device_token(env, monkeypatch):
+    got = []
+
+    async def fake_notify(uid, count):
+        got.append((uid, count))
+        return True
+
+    monkeypatch.setattr(omi, "notify_synced", fake_notify)
+    monkeypatch.setattr(omi_router, "_last_notice", 0.0)
+    assert env.client.post("/api/omi/sync-notice", json={"count": 2}).status_code == 401
+    assert env.client.post("/api/omi/sync-notice", json={"count": 2}, headers=TOKEN).json() == {"ok": True, "sent": True}
+    assert env.client.post("/api/omi/sync-notice", json={"count": 2}, headers=TOKEN).json() == {"ok": True, "sent": False}
+    assert got == [(OWNER, 2)]
+
+
+def test_migration_is_reversible_and_rerunnable(env):
+    _migrate(env.engine)                                      # IF NOT EXISTS: a rerun is safe
+    _migrate(env.engine, down=True)
+    assert env.db.rows("SELECT name FROM sqlite_master WHERE name = 'omi_recordings'") == []

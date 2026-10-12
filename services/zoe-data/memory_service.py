@@ -2046,6 +2046,8 @@ class MemoryService:
                 await reply_ledger.forget_user(user_id)
                 import commitments      # ... and the promises Zoe made to them
                 await commitments.forget_user(user_id)
+                import omi_recordings   # ... and their pendant recordings (migration 0045): audio, transcript and times
+                await omi_recordings.forget_user(user_id)
             except Exception:  # noqa: BLE001
                 pass
             return len(ids)

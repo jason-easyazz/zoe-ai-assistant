@@ -1,0 +1,147 @@
+"""Upload a recording to Zoe and decide what the answer means for custody.
+
+The ONLY thing that may free audio is ``Outcome.CONFIRMED``: HTTP 200 whose JSON says
+``ok`` and echoes the SHA-256 of the exact bytes we sent (or says the recording was
+deleted by its owner - a tombstone hit, which is also "Zoe has dealt with it"). Every
+other answer keeps the audio: ``REJECTED`` is a permanent per-recording refusal (kept,
+logged loudly, never retried in a loop), ``UNAVAILABLE`` is everything transient or
+config-shaped (Zoe down, the feature flag off => 404, bad token, owner unset).
+
+Stdlib ``urllib`` on purpose: the Pi service has two dependencies (bleak, opuslib) and
+does not need a third for one POST.
+"""
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import logging
+import ssl
+import urllib.error
+import urllib.request
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Optional, Protocol
+
+log = logging.getLogger("omi_sync.uploader")
+
+#: statuses that mean "this recording, as sent, will never be accepted" (not "try later")
+_PERMANENT = {400, 409, 413, 415, 422}
+
+
+class Outcome(str, Enum):
+    CONFIRMED = "confirmed"
+    REJECTED = "rejected"
+    UNAVAILABLE = "unavailable"
+
+
+@dataclass(frozen=True)
+class UploadMeta:
+    device_id: str          # a stable HASH of the pendant address - the MAC never leaves the Pi
+    key: str                # Segment.key
+    started_at: float       # epoch seconds, host timeline
+    duration_s: float
+    time_quality: str
+    gap_before: int
+    sha256: str
+
+
+@dataclass(frozen=True)
+class UploadResult:
+    outcome: Outcome
+    detail: str = ""
+
+
+class Uploader(Protocol):
+    async def upload(self, meta: UploadMeta, wav: bytes) -> UploadResult: ...
+    async def notify_synced(self, count: int) -> None: ...
+
+
+def device_hash(address: str) -> str:
+    """A stable, non-reversible id for the pendant (16 hex chars). The address itself stays on the Pi."""
+    return hashlib.sha256(("omi-sync:" + address.strip().lower()).encode()).hexdigest()[:16]
+
+
+def sha256_hex(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def classify(status: int, body: bytes, sent_sha: str) -> UploadResult:
+    """Pure: map an HTTP answer to a custody outcome. The echo check is what makes 'confirmed' mean 'stored THESE bytes'."""
+    if status == 200:
+        try:
+            doc = json.loads(body.decode("utf-8", "replace") or "{}")
+        except ValueError:
+            return UploadResult(Outcome.UNAVAILABLE, "200 with a non-JSON body")
+        if not isinstance(doc, dict) or doc.get("ok") is not True:
+            return UploadResult(Outcome.UNAVAILABLE, "200 without ok:true")
+        if doc.get("deleted") is True:
+            return UploadResult(Outcome.CONFIRMED, "owner had deleted this recording")
+        if doc.get("sha256") != sent_sha:
+            return UploadResult(Outcome.UNAVAILABLE, "200 but the echoed sha256 does not match what was sent")
+        return UploadResult(Outcome.CONFIRMED, "duplicate" if doc.get("duplicate") else "stored")
+    if status in _PERMANENT:
+        return UploadResult(Outcome.REJECTED, f"HTTP {status}")
+    return UploadResult(Outcome.UNAVAILABLE, f"HTTP {status}")
+
+
+def iso_utc(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class HttpUploader:
+    def __init__(self, base_url: str, device_token: str, *, verify_ssl: bool = True, timeout_s: float = 120.0) -> None:
+        self.base = base_url.rstrip("/")
+        self.token = device_token
+        self.timeout = timeout_s
+        self._ctx: Optional[ssl.SSLContext] = None
+        if not verify_ssl:
+            self._ctx = ssl.create_default_context()
+            self._ctx.check_hostname = False
+            self._ctx.verify_mode = ssl.CERT_NONE
+
+    def _post(self, path: str, data: bytes, headers: dict[str, str]) -> tuple[int, bytes]:
+        req = urllib.request.Request(self.base + path, data=data, method="POST", headers={"X-Device-Token": self.token, **headers})
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout, context=self._ctx) as resp:
+                return resp.status, resp.read()
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.read()
+
+    async def upload(self, meta: UploadMeta, wav: bytes) -> UploadResult:
+        headers = {
+            "Content-Type": "audio/wav",
+            "X-Omi-Device": meta.device_id,
+            "X-Omi-Key": meta.key,
+            "X-Omi-Started-At": iso_utc(meta.started_at),
+            "X-Omi-Duration-S": f"{meta.duration_s:.3f}",
+            "X-Omi-Time-Quality": meta.time_quality,
+            "X-Omi-Gap-Before": str(meta.gap_before),
+            "X-Omi-Sha256": meta.sha256,
+        }
+        try:
+            status, body = await asyncio.to_thread(self._post, "/api/omi/recordings", wav, headers)
+        except Exception as exc:  # noqa: BLE001 - connection refused / timeout / DNS: Zoe is simply not there
+            return UploadResult(Outcome.UNAVAILABLE, type(exc).__name__)
+        res = classify(status, body, meta.sha256)
+        if res.outcome is not Outcome.CONFIRMED:
+            log.warning("upload of %s not confirmed: %s (%s)", meta.key, res.outcome.value, res.detail)
+        return res
+
+    async def notify_synced(self, count: int) -> None:
+        """Best-effort 'I synced N recordings' notice trigger. Never raises; losing it loses nothing."""
+        try:
+            await asyncio.to_thread(self._post, "/api/omi/sync-notice", json.dumps({"count": int(count)}).encode(),
+                                    {"Content-Type": "application/json"})
+        except Exception as exc:  # noqa: BLE001
+            log.info("sync notice not sent: %s", type(exc).__name__)
+
+    async def reachable(self) -> bool:
+        def _get() -> bool:
+            try:
+                with urllib.request.urlopen(self.base + "/health", timeout=10, context=self._ctx) as r:
+                    return 200 <= r.status < 300
+            except Exception:  # noqa: BLE001
+                return False
+        return await asyncio.to_thread(_get)
