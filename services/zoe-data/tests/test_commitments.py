@@ -98,6 +98,7 @@ def env(monkeypatch, tmp_path):
     db.conn.execute("CREATE TABLE proactive_pending (id TEXT, trigger_type TEXT, item_id TEXT)")
     db.conn.execute("CREATE TABLE notifications (id TEXT PRIMARY KEY, user_id TEXT, type TEXT, title TEXT, message TEXT, data TEXT, "
                     "delivered INTEGER DEFAULT 0, created_at TEXT)")
+    db.conn.execute("CREATE TABLE IF NOT EXISTS proactive_scheduled (id TEXT, item_id TEXT, fired INTEGER DEFAULT 0, send_at TEXT)")   # schedule_due_reminder's idempotency read
     db.conn.create_function("NOW", 0, lambda: NOW.strftime("%Y-%m-%d %H:%M:%S+00"))      # reminder_service's notification row
     db.conn.commit()
     import proactive.triggers.reminder_scan as reminder_scan
@@ -955,6 +956,15 @@ def test_the_late_reminder_goes_through_the_reminder_service(env, monkeypatch):
     assert calls == [("The dentist", MEMBER, late)]
     (n,) = rows(env, "SELECT type, user_id, message FROM notifications")                # the service's own creation notification
     assert (n["type"], n["user_id"], n["message"]) == ("reminder_created", MEMBER, "Reminder added: The dentist")
+
+
+def test_the_late_reminder_is_scheduled_exactly_once(env, monkeypatch):
+    """create_reminder_record schedules on create; commitments registers its own +45 s job. Both ran => two jobs => the reminder
+    was delivered twice (Codex thread on the schedule-on-create PR)."""
+    monkeypatch.setenv(cm.ENV, "enforce")
+    promise(env)
+    assert sweep(DUE_5 + timedelta(minutes=3)) == {"fulfilled": 1}
+    assert len(env["scheduled"]) == 1, env["scheduled"]
 
 
 def test_a_role_that_may_not_create_reminders_gets_none_and_the_promise_is_owned_up(env, monkeypatch):

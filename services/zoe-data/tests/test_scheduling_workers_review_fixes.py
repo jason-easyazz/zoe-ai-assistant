@@ -7,7 +7,7 @@
       BEFORE making any outbound webpush() call, and must run webpush() off the
       event loop (via an executor) rather than blocking it directly.
   F5: routers/proactive.trigger_morning_brief must compute `today` from the
-      user's local timezone (matching morning_checkin.py's _ZOE_TZ), not UTC.
+      user's local timezone (matching morning_checkin.py's zoe_timezone()), not UTC.
   F6: engine.fire_notification's quiet-hours path must not mark the scheduled
       row fired=1 until the reschedule has actually succeeded.
 """
@@ -286,4 +286,4 @@ def test_trigger_morning_brief_uses_local_tz_not_utc():
         "trigger-morning must not derive `today` from UTC — during the actual "
         "Perth morning (00:00-08:00 local) that queries yesterday's calendar"
     )
-    assert "_ZOE_TZ" in src, "must reuse morning_checkin.py's local-tz resolution"
+    assert "zoe_timezone()" in src, "must use the shared per-call local-tz resolution"

@@ -1169,6 +1169,22 @@ async def _names_forgotten(user_id: str, text: str, source: str) -> bool:
     return False
 
 
+async def _opted_out(user_id: str, source: str, origin: str | None = None) -> bool:
+    """True when ``user_id`` opted out of automatic memory capture AND this writer is automatic (``user_prefs.MEMORY_OPT_OUT_SOURCES``).
+    The people / relationship / birthday / activity / gift rows are written here BEFORE any MemoryService ingest (whose chokepoint
+    honours the opt-out), so the entry points check it themselves. ``journal`` / ``notes`` are not automatic sources (a recorded
+    exemption, open-problems.md). Fail-open on a lookup failure, like the chokepoint: a preference read must never lose a fact."""
+    try:
+        import user_prefs
+
+        if source not in user_prefs.MEMORY_OPT_OUT_SOURCES and (origin or "") not in user_prefs.MEMORY_OPT_OUT_SOURCES:
+            return False
+        return bool(await user_prefs.is_memory_opted_out(user_id))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("person_extractor: opt-out lookup failed (%s) - treating as opted in", exc)
+        return False
+
+
 async def apply_person_fact(
     name: str,
     fact_type: str,
@@ -1187,6 +1203,8 @@ async def apply_person_fact(
     name = (name or "").strip()
     value = (value or "").strip()
     if not name or not value:
+        return False
+    if await _opted_out(user_id, source, origin):
         return False
     if await _names_forgotten(user_id, name, origin or source):
         return False
@@ -1298,6 +1316,8 @@ async def process_text(
             return 0
     except Exception:  # noqa: BLE001
         pass
+    if await _opted_out(user_id, source):
+        return 0
     if await _names_forgotten(user_id, text, source):
         return 0
     # "his birthday is 7/8/1991" -> "7 August 1991" BEFORE any pattern or stored fact sees
