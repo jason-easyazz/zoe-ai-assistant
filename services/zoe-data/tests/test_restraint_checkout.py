@@ -26,6 +26,18 @@ def _meta(text, **kw):
 
 
 @pytest.fixture(autouse=True)
+def _router_model_loaded():
+    """Model the live service: the router's embedder is loaded, so the semantic head RUNS (a zero vector = it found nothing) and a
+    stamp is head-complete (v3). Without it a stamp is the lexicon version on purpose (test_restraint_head.py)."""
+    import numpy as np
+    import restraint_head
+    restraint_head.reset()
+    restraint_head.set_embedder(lambda _t: np.zeros(384, dtype=np.float32))
+    yield
+    restraint_head.reset()
+
+
+@pytest.fixture(autouse=True)
 def _enforce(monkeypatch):
     monkeypatch.setenv("ZOE_RESTRAINT", "enforce")
     restraint._reset_state()

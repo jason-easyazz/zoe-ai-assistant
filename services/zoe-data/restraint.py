@@ -156,6 +156,27 @@ _TAG_CLASSES = {
 }
 
 
+#: The version a label carries when the semantic head was applicable but did NOT run (the router's model was not loaded yet, no
+#: head file): the lexicon's version, which ``row_classes`` ignores, so a later read or ``stamp`` applies the head.
+LEXICON_VERSION = VERSION - 1
+
+
+def _head_applies(pk: "_lex.Pack") -> bool:
+    """The head is an ENGLISH embedding classifier: text whose detected language is anything else stays lexicon-only (the
+    module's promise), as every other restraint word list does."""
+    return pk.lang == "en"
+
+
+def head_settled(text: Any) -> bool:
+    """True when the semantic head has nothing left to add for ``text``: it already ran on it, or the text is not English (it never
+    will). Call AFTER a ``head=True`` classification: it reads the cache that classification filled. A label written while this is
+    False is stamped ``LEXICON_VERSION``, not ``VERSION``, so it is never trusted as head-complete."""
+    raw = str(text or "")
+    if not _head_applies(_lex.pack_for(raw)):
+        return True
+    return _head.lookup(raw, embed=False) is not None
+
+
 def classify_full(text: Any, *, memory_type: Any = "", affect: Any = "", entity_type: Any = "",
                   kind: str = "", names: Iterable[str] = (), tags: Any = "",
                   head: Any = "cache") -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -208,7 +229,7 @@ def classify_full(text: Any, *, memory_type: Any = "", affect: Any = "", entity_
     elif pk.affect is not None and pk.affect.search(low):
         found["affect"] = "lexicon"
 
-    if head:
+    if head and _head_applies(pk):
         for cls in _head.classes(raw, embed=head is True):
             found.setdefault(cls, "head")
 
@@ -234,7 +255,8 @@ def stamp(md: dict, text: Any) -> None:
         classes = classify(text, memory_type=md.get("memory_type"), affect=md.get("candidate_affect"),
                            entity_type=md.get("entity_type"), tags=md.get("tags"), head=True)
         md["sensitivity"] = ",".join(classes)
-        md["sensitivity_v"] = VERSION
+        # v3 only when the head actually ran (or never applies); otherwise the lexicon version, which a reader ignores
+        md["sensitivity_v"] = VERSION if head_settled(text) else LEXICON_VERSION
         md["sensitivity_h"] = text_hash(text)
     except Exception as exc:  # noqa: BLE001
         logger.debug("restraint: stamp skipped: %r", exc)
@@ -958,8 +980,10 @@ async def store_thread_classes(db, user_id: str, items: Iterable[tuple[str, str,
             # classified BEFORE the skip: the contact names are an input too, so a thread stored before
             # a contact was added is re-derived (same text, new class) rather than kept stale
             classes, signals = classify_full(text, kind=kind, names=names, head=True)
-            if cur_ and cur_[0] == VERSION and cur_[1] == h and _parse_csv(cur_[2]) == classes:
-                continue
+            settled = head_settled(text)
+            if cur_ and cur_[0] == VERSION and cur_[1] == h and (_parse_csv(cur_[2]) == classes or not settled):
+                continue      # (head not run this pass: keep the head-complete row rather than downgrade it to the word list)
+            ver = VERSION if settled else LEXICON_VERSION
             # invalidate + insert are ONE transaction: a failed insert must not leave the thread with
             # no valid saved class (db-safety: multi-step writes are transactional)
             async with _txn(db):
@@ -973,7 +997,7 @@ async def store_thread_classes(db, user_id: str, items: Iterable[tuple[str, str,
                        ON CONFLICT (user_id, subject_ref, version, text_hash)
                        DO UPDATE SET invalid_at = NULL, classes = excluded.classes,
                            signals = excluded.signals, derived_at = excluded.derived_at""",
-                    (uuid.uuid4().hex, user_id, ref, ",".join(classes), ",".join(signals), VERSION, h, stamp_))
+                    (uuid.uuid4().hex, user_id, ref, ",".join(classes), ",".join(signals), ver, h, stamp_))
             written += 1
     except Exception as exc:  # noqa: BLE001
         logger.warning("restraint: thread class store failed user=%s: %r", user_id, exc)

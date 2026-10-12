@@ -37,6 +37,18 @@ INTERVIEW = "User is anxious about a job interview at the aquarium on Friday"
 PARCEL = "parcel pickup at the depot on Friday"
 
 
+@pytest.fixture(autouse=True)
+def _router_model_loaded():
+    """Model the live service: the router's embedder is loaded, so the semantic head RUNS (a zero vector = it found nothing) and a
+    stamp is head-complete (v3). Without it a stamp is the lexicon version on purpose (test_restraint_head.py)."""
+    import numpy as np
+    import restraint_head
+    restraint_head.reset()
+    restraint_head.set_embedder(lambda _t: np.zeros(384, dtype=np.float32))
+    yield
+    restraint_head.reset()
+
+
 # ── the real migrations over SQLite ─────────────────────────────────────────
 def _mig(name: str):
     spec = importlib.util.spec_from_file_location(f"mig_{name}", SVC / f"alembic/versions/{name}.py")

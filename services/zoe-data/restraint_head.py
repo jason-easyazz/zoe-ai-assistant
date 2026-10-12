@@ -46,6 +46,7 @@ CACHE_MAX = 4096
 _LOCK = threading.Lock()
 _STATE: dict[str, Any] = {}                       # "head": (classes, W, b, thr, meta) | None (tried and absent)
 _CACHE: "OrderedDict[str, tuple[str, ...]]" = OrderedDict()
+_MISMATCH_LOGGED = False                           # the model-identity warning is logged once per process
 _EMBEDDER: Optional[Callable[[str], Any]] = None  # tests and the eval harness inject one; production reads semantic_router
 
 
@@ -72,7 +73,8 @@ def _load() -> Optional[tuple]:
 
 def reset() -> None:
     """Forget the loaded head, the cache and any injected embedder (tests)."""
-    global _EMBEDDER
+    global _EMBEDDER, _MISMATCH_LOGGED
+    _MISMATCH_LOGGED = False
     with _LOCK:
         _STATE.clear()
         _CACHE.clear()
@@ -92,6 +94,18 @@ def _live_embedder() -> Optional[Callable[[str], Any]]:
         return _EMBEDDER
     sr = sys.modules.get("semantic_router")
     if sr is None or getattr(sr, "_MODEL", None) is None:
+        return None
+    # The weights were fitted on ONE embedding space. ``ZOE_ROUTER_MODEL`` can point the router at another model of the same
+    # width, and a matrix product against the wrong space is confident nonsense, so the router's model name must equal the
+    # one the head records; a mismatch (or an unnamed model) is "no head", with one log line.
+    head = _load()
+    want = str(head[4].get("embedder") or "") if head else ""
+    have = str(getattr(sr, "_MODEL_NAME", "") or "")
+    if not want or have != want:
+        global _MISMATCH_LOGGED
+        if not _MISMATCH_LOGGED:
+            _MISMATCH_LOGGED = True
+            logger.warning("restraint head disabled: semantic_router model %r is not the head's embedder %r", have, want)
         return None
     return getattr(sr, "embed", None)
 
@@ -130,28 +144,35 @@ def decide_from_vector(vec: Any) -> tuple[str, ...]:
     return tuple(c for c, pi, ti in zip(classes, p, thr) if pi >= ti)
 
 
-def classes(text: Any, *, embed: bool = False) -> tuple[str, ...]:
-    """The head's classes for ``text`` (order of the head's own class list; ``restraint`` re-orders). ``embed=False`` answers
-    from the cache only (the hot-path mode); ``embed=True`` may embed once and remember. Never raises."""
+def lookup(text: Any, *, embed: bool = False) -> Optional[tuple[str, ...]]:
+    """The head's classes for ``text`` (order of the head's own class list; ``restraint`` re-orders), or ``None`` when the head
+    did NOT run (no head file, no usable embedder, an embedder error, nothing cached): ``()`` means it ran and found nothing.
+    The difference matters to a caller that stamps a version. ``embed=False`` answers from the cache only (the hot-path mode);
+    ``embed=True`` may embed once and remember. Never raises."""
     raw = str(text or "").strip()
     if not raw or _load() is None:
-        return ()
+        return None
     key = _key(raw)
     hit = _CACHE.get(key)
     if hit is not None:
         _CACHE.move_to_end(key)
         return hit
     if not embed:
-        return ()
+        return None
     try:
         fn = _live_embedder()
         if fn is None:
-            return ()
+            return None
         out = decide_from_vector(fn(raw))
     except Exception as exc:  # noqa: BLE001
         logger.debug("restraint head: embed skipped: %r", exc)
-        return ()
+        return None
     _CACHE[key] = out
     while len(_CACHE) > CACHE_MAX:
         _CACHE.popitem(last=False)
     return out
+
+
+def classes(text: Any, *, embed: bool = False) -> tuple[str, ...]:
+    """``lookup`` with "did not run" folded into "found nothing" (the union only ever adds)."""
+    return lookup(text, embed=embed) or ()

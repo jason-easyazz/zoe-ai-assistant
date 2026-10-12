@@ -179,6 +179,7 @@ def test_the_head_never_loads_a_model_it_only_borrows_the_routers(monkeypatch):
 
     class _Loaded:                                      # the router with its model in memory
         _MODEL = object()
+        _MODEL_NAME = "BAAI/bge-small-en-v1.5"
         embed = staticmethod(lambda text: _direction("health"))
     monkeypatch.setitem(sys.modules, "semantic_router", _Loaded)
     assert restraint_head.classes("Quinn keeps waking at three with a racing heart", embed=True).count("health") == 1
@@ -249,3 +250,96 @@ def test_held_out_class_exact_with_the_real_embedding_is_measured_not_assumed():
 
 HELD_OUT_FLOOR = 0.90      # measured 263..268 / 294 = 91.2 % on the held-out split: docs/knowledge/restraint.md "Measurement (semantic head)"
 CLASS_FLOOR = 0.78         # the weakest held-out classes: other_member 80.7 %, health 84.6 %
+
+
+# ── review round 1 (#1996): stamp honesty, English only, model identity ─────────────────────────────────────────────────
+ROW = "Quinn keeps waking at three with a racing heart"
+SPANISH = "Mi madre está muy enferma y el médico dice que necesita una operación"
+
+
+def _router(monkeypatch, name="BAAI/bge-small-en-v1.5", vec=None):
+    """A ``semantic_router`` with its model in memory (the live service after the first routed turn)."""
+    import sys
+
+    class _R:
+        _MODEL = object()
+        _MODEL_NAME = name
+        embed = staticmethod(lambda text: _direction("health") if vec is None else vec)
+    monkeypatch.setitem(sys.modules, "semantic_router", _R)
+    return _R
+
+
+def test_a_row_created_before_the_model_loads_is_not_stamped_head_complete(monkeypatch):
+    """P1: a v3 stamp says "the head has seen this row"; row_classes trusts it forever, so it may only be written when the head ran."""
+    import sys
+    monkeypatch.setenv(restraint.ENV, "shadow")
+    monkeypatch.delitem(sys.modules, "semantic_router", raising=False)        # the router has not loaded its model yet
+    md: dict = {}
+    restraint.stamp(md, ROW)
+    assert md["sensitivity_v"] == restraint.LEXICON_VERSION != restraint.VERSION
+    # a reader does not trust it: row_classes recomputes (cache-only head, nothing cached -> word list)
+    assert restraint.row_classes(md, ROW) == restraint.classify(ROW, head=False)
+    # the model loads; a later restamp of the same row applies the head and is head-complete
+    _router(monkeypatch)
+    restraint.stamp(md, ROW)
+    assert md["sensitivity_v"] == restraint.VERSION and "health" in md["sensitivity"].split(",")
+    assert "health" in restraint.row_classes(md, ROW)                         # ... and now it IS trusted
+
+
+def test_a_stamp_where_the_head_ran_and_found_nothing_is_head_complete(monkeypatch):
+    monkeypatch.setenv(restraint.ENV, "shadow")
+    _router(monkeypatch, vec=np.zeros(384, dtype=np.float32))
+    md: dict = {}
+    restraint.stamp(md, PLAIN)
+    assert md["sensitivity"] == "" and md["sensitivity_v"] == restraint.VERSION
+
+
+def test_head_settled_is_false_until_the_head_ran_and_true_for_a_language_it_never_serves(monkeypatch):
+    import sys
+    monkeypatch.delitem(sys.modules, "semantic_router", raising=False)
+    restraint.classify(ROW, head=True)
+    assert not restraint.head_settled(ROW)
+    _router(monkeypatch)
+    restraint.classify(ROW, head=True)
+    assert restraint.head_settled(ROW)
+    assert restraint.head_settled(SPANISH)                                    # nothing left for the head to do on Spanish
+
+
+def test_the_english_head_is_not_applied_to_spanish_text(monkeypatch):
+    import lexicons
+    assert lexicons.detect(SPANISH) == "es"
+    fn = _embedder_for({SPANISH: _direction("grief")})
+    restraint_head.set_embedder(fn)
+    assert restraint.classify_full(SPANISH, head=True) == restraint.classify_full(SPANISH, head=False)
+    assert fn.calls == []                                                     # not even embedded
+    # the stamp for a Spanish row is head-complete: there is nothing for the head to add, so it is not re-stamped forever
+    monkeypatch.setenv(restraint.ENV, "shadow")
+    md: dict = {}
+    restraint.stamp(md, SPANISH)
+    assert md["sensitivity_v"] == restraint.VERSION
+
+
+def test_a_router_running_a_different_embedding_model_disables_the_head_with_one_log_line(monkeypatch, caplog):
+    import logging
+    _router(monkeypatch, name="some/other-384-model")
+    with caplog.at_level(logging.WARNING, logger="restraint_head"):
+        assert restraint_head._live_embedder() is None
+        assert restraint_head.lookup(ROW, embed=True) is None
+        assert restraint.classify(ROW, head=True) == restraint.classify(ROW, head=False)
+        assert restraint_head._live_embedder() is None
+    lines = [r for r in caplog.records if "restraint head disabled" in r.getMessage()]
+    assert len(lines) == 1                                                    # one line, not one per row
+    # the matching name works (twin)
+    restraint_head.reset()
+    _router(monkeypatch)
+    assert restraint_head.lookup(ROW, embed=True) is not None
+
+
+def test_a_router_that_does_not_name_its_model_is_not_trusted(monkeypatch):
+    import sys
+
+    class _Anon:
+        _MODEL = object()
+        embed = staticmethod(lambda text: _direction("health"))
+    monkeypatch.setitem(sys.modules, "semantic_router", _Anon)
+    assert restraint_head._live_embedder() is None
