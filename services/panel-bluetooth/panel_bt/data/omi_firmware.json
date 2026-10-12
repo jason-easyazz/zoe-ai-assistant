@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "vendor": "Based Hardware (Omi)",
+  "source": "https://github.com/BasedHardware/omi/releases/tag/Omi_CV1_v3.0.21",
+  "model": "Omi CV 1",
+  "version": "3.0.21",
+  "url": "https://github.com/BasedHardware/omi/releases/download/Omi_CV1_v3.0.21/Omi_CV1_OTA_v3.0.21.zip",
+  "sha256": "9fb93885e4d31b0836ed1d1047c9fde32b8fb477f94cd9d222246254492d3674",
+  "size": 424966,
+  "minimum_firmware_required": "3.0.6",
+  "changelog": "fix audio sync issue",
+  "images": [
+    {"index": 0, "file": "omi.signed.bin", "size": 248644, "board": "omi", "core": "app"},
+    {"index": 1, "file": "ipc_radio.bin", "size": 175092, "board": "omi/nrf5340/cpunet", "core": "net"}
+  ]
+}

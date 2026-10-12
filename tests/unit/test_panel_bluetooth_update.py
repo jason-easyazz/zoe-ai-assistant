@@ -52,6 +52,20 @@ def test_the_shipped_pin_is_the_official_github_release_with_a_sha256():
     assert DEFAULT_PIN.is_file()
 
 
+def test_the_pin_is_not_gitignored_and_the_deploy_ships_it():
+    """The blanket ``*.json`` rule once hid this file (it existed only on disk and CI failed). It must stay trackable, and the deploy
+    script must ship the whole ``panel_bt`` tree (so the pin reaches the Pi)."""
+    import shutil
+    import subprocess
+    root = Path(__file__).resolve().parents[2]
+    pin = "services/panel-bluetooth/panel_bt/data/omi_firmware.json"
+    if shutil.which("git") and (root / ".git").exists():
+        r = subprocess.run(["git", "check-ignore", "-q", "--no-index", pin], cwd=root)
+        assert r.returncode == 1, "omi_firmware.json is gitignored - add/keep the negation in .gitignore"
+    deploy = (root / "scripts" / "setup" / "deploy-pi-bluetooth.sh").read_text()
+    assert "tar --exclude='__pycache__' -c panel_bt requirements.txt" in deploy and "find panel_bt -type f" in deploy
+
+
 @pytest.mark.parametrize("change", [
     {"url": "http://github.com/BasedHardware/omi/x.zip"}, {"url": "https://api.omi.me/firmware.zip"},
     {"url": "https://evil.example/github.com/x.zip"}, {"sha256": "abc"}, {"sha256": "Z" * 64}, {"version": "latest"},
