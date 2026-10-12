@@ -99,6 +99,10 @@ class AnnouncePoller:
                         to the server (``POST /api/voice/announcements/{id}/played``).
                         The claim alone is not proof it was heard. Failures
                         are logged and never escape.
+      command(ann)   -> bool        — optional: act on a claimed item that carries a
+                        `command` (a panel command, not speech: voice enrolment, a
+                        voice-profile purge). Same defer-while-busy / TTL rules as
+                        speech; True = handled.
       poll_interval_s               — idle cadence between polls.
       defer_wait_s                  — re-check cadence while deferring.
       backoff_max_s                 — cap for the failure backoff (each
@@ -118,9 +122,11 @@ class AnnouncePoller:
         monotonic: Callable[[], float] = time.monotonic,
         logger=None,
         ack: Optional[Callable[[dict], None]] = None,
+        command: Optional[Callable[[dict], bool]] = None,
     ):
         self._fetch = fetch
         self._ack = ack
+        self._command = command
         self._speak = speak
         self._is_busy = is_busy
         self.poll_interval_s = max(0.5, float(poll_interval_s))
@@ -160,7 +166,12 @@ class AnnouncePoller:
                            ann.get("id", "?"))
                 return "expired"
             if action == "speak":
-                ok = bool(self._speak(ann))
+                if "command" in ann:
+                    # A panel COMMAND riding the lane (voice enrolment / purge), not speech: it is acted on, never read aloud. A
+                    # daemon wired without a command handler spends the row without doing anything (the server's TTL is 3 min).
+                    ok = bool(self._command(ann)) if self._command is not None else False
+                else:
+                    ok = bool(self._speak(ann))
                 if ok and self._ack is not None:
                     try:
                         self._ack(ann)

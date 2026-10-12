@@ -440,11 +440,16 @@ async def ask_judge(quote: str, rows: list, *, timeout_s: float = 20.0, base_url
                      {"role": "user", "content": judge_prompt(quote, rows)}],
         "max_tokens": 24, "temperature": 0.0, "stream": False,
     }
+    import brain_slot_guard
+    from contextlib import nullcontext
+
     try:
-        async with httpx.AsyncClient(timeout=timeout_s) as client:
-            resp = await client.post(f"{(base_url or _GEMMA_URL).rstrip('/')}/v1/chat/completions", json=payload)
-            resp.raise_for_status()
-            raw = resp.json()["choices"][0]["message"]["content"]
+        # The live brain's ONE slot: wait out a hot conversation (brain_slot_guard). A clone brain (base_url) has its own slot.
+        async with (nullcontext() if base_url else brain_slot_guard.background_slot("quote_retire_judge")):
+            async with httpx.AsyncClient(timeout=timeout_s) as client:
+                resp = await client.post(f"{(base_url or _GEMMA_URL).rstrip('/')}/v1/chat/completions", json=payload)
+                resp.raise_for_status()
+                raw = resp.json()["choices"][0]["message"]["content"]
     except Exception as exc:  # noqa: BLE001
         logger.debug("quote_retire: judge call failed (%s)", type(exc).__name__)
         return None

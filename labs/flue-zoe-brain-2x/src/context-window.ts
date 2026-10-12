@@ -205,6 +205,9 @@ export function estimateContextTokens(context: Context): number {
  */
 const ANCHOR_QUANTUM_FRACTION = 0.25;
 
+/** Earlier turns (before the in-flight one) the quantised head may never drop while the budget can still be met. */
+export const MIN_KEEP_TURNS = 3;
+
 /** Start index of every turn block: a block begins at each `user` message. */
 function turnBlockStarts(messages: Message[]): number[] {
   const starts: number[] = [];
@@ -269,8 +272,6 @@ export function windowHeadIndex(context: Context): number | null {
   let basisTokens = fixedTokens;
   for (let i = 0; i <= lastUserIndex; i++) basisTokens += messageTokens[i];
 
-  const quantum = Math.max(1, Math.floor(budget * ANCHOR_QUANTUM_FRACTION));
-
   // `cumulative[k]` = tokens dropped by starting the window at block k.
   const cumulative: number[] = [];
   let dropped = 0;
@@ -279,6 +280,8 @@ export function windowHeadIndex(context: Context): number | null {
     const end = k + 1 < blockStarts.length ? blockStarts[k + 1] : messages.length;
     for (let i = blockStarts[k]; i < end; i++) dropped += messageTokens[i];
   }
+
+  const quantum = Math.max(1, Math.floor(budget * ANCHOR_QUANTUM_FRACTION));
 
   // (2) Quantised head: the first block whose cumulative drop meets the target.
   // A non-positive required drop means the basis fits — head stays at block 0.
@@ -293,6 +296,22 @@ export function windowHeadIndex(context: Context): number | null {
         break;
       }
     }
+    // RECENCY FLOOR (measured 2026-10-12, `history=0` on 8 live voice turns). A quantum sized on the budget alone (1664
+    // tokens at the default window) is larger than a short voice conversation's whole history (1.2-2k tokens at ~65 per
+    // turn), so "the first block whose cumulative drop meets the target" falls off the end of the list and lands on the
+    // NEWEST block: all history gone for a few tokens of overshoot, and a slot-filling follow-up ("add a doctor's
+    // appointment Friday" -> "Doctor's appointment.") loses its context. So quantising may never push the head past the
+    // point where the last MIN_KEEP_TURNS earlier turns are still in the window, unless merely fitting the budget needs
+    // it (the safety valve below still decides that). The head then creeps for at most MIN_KEEP_TURNS turns and holds.
+    let minimalHead = blockStarts.length - 1;
+    for (let k = 0; k < blockStarts.length; k++) {
+      if (cumulative[k] >= requiredDrop) {
+        minimalHead = k;
+        break;
+      }
+    }
+    const keepHead = Math.max(0, blockStarts.length - 1 - MIN_KEEP_TURNS);
+    head = Math.min(head, Math.max(minimalHead, keepHead));
   }
 
   // SAFETY VALVE: re-check against the REAL total (in-flight tail included) and
