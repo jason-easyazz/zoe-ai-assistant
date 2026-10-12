@@ -1,0 +1,87 @@
+{
+ "lang": "es",
+ "name": "Espanol",
+ "reviewed": false,
+ "enabled": true,
+ "_note": "Spanish strings for voice_enrollment.py. WRITTEN BY THE AUTHOR, NOT YET READ BY A NATIVE SPEAKER (reviewed:false, same caveat as self_model_es.json). Cues are accent-free (the utterance is accent-stripped before matching). Structure and keys are identical to voice_enrollment_en.json; tests/test_voice_enrollment.py checks the key sets match.",
+ "max_chars": 100,
+ "lead": ["(?:oye|hola|vale|bueno|pues|y|pero|ah)[,.\\s]+", "zoe[,.\\s]+"],
+ "trail": ["[,\\s]+(?:por favor|zoe|ahora|ya|otra vez|para mi|hoy)"],
+ "cues": {
+  "learn": [
+   "(?:puedes |podrias |quiero que |me gustaria que )?(?:aprende|aprendas|aprender|reconozcas|reconocer|conozcas|conocer|memorices|memorizar) (?:mi voz|a reconocer mi voz)",
+   "(?:quiero |puedes |podemos |vamos a )?(?:configurar|registrar|activar|empezar|hacer) (?:mi )?(?:voz|el reconocimiento de voz|el reconocimiento de mi voz)",
+   "(?:vamos a |quiero )(?:hacer|terminar|probar) (?:la )?configuracion de (?:mi )?voz"
+  ],
+  "forget": [
+   "(?:olvida|borra|elimina|quita|suprime) (?:mi )?(?:voz|huella de voz|perfil de voz|firma de voz|datos de voz|reconocimiento de voz)",
+   "(?:quiero que |puedes |podrias )(?:olvides|borres|elimines|olvidar|borrar|eliminar) mi voz",
+   "(?:deja de |no )(?:reconocer|conocer|reconozcas|uses|usar) mi voz",
+   "desactiva (?:el )?reconocimiento de (?:mi )?voz"
+  ],
+  "know_voice": [
+   "(?:conoces|reconoces|tienes) mi voz",
+   "(?:puedes )?reconocer mi voz",
+   "(?:ya )?(?:configure|registre) (?:mi )?voz",
+   "esta (?:configurada|registrada|guardada) mi voz",
+   "tienes (?:un )?perfil de voz (?:mio|de mi)"
+  ],
+  "closer": [
+   "(?:vale |genial |perfecto |estupendo |bien )?(?:gracias|muchas gracias|mil gracias)(?: zoe)?",
+   "(?:eso es todo|es todo|nada mas|ya esta|ya esta todo)(?: gracias)?",
+   "(?:genial|perfecto|estupendo),? gracias"
+  ],
+  "yes": [
+   "(?:si|claro|vale|ok|okay|por supuesto|desde luego|adelante|dale|venga|me parece bien)(?: por favor| gracias)?",
+   "(?:hazlo|me gustaria|suena bien|buena idea)"
+  ],
+  "no": [
+   "(?:no|nop|ahora no|hoy no|todavia no|mejor no|luego|mas tarde|en otro momento|no quiero|no gracias|prefiero que no)",
+   "no,? (?:gracias|ahora no|hoy no)"
+  ]
+ },
+ "phrases": [
+  "Oye Zoe, que tiempo hace hoy?",
+  "Anade leche, pan y cafe a mi lista de la compra.",
+  "Recuerdame llamar a mi madre manana por la tarde."
+ ],
+ "say": {
+  "offer_pin": "Puedo aprender tu voz, asi no necesitaras tu PIN la proxima vez. Guardaria una firma de tu voz, no grabaciones, y puedes borrarla cuando quieras. Lleva un minuto. Quieres?",
+  "offer_close": "Por cierto, todavia no conozco tu voz. Si la aprendiera, no necesitarias tu PIN. Guardaria una firma de tu voz, no grabaciones, y puedes borrarla cuando quieras. Lleva un minuto. Quieres?",
+  "offer_know": "Guardaria una firma de tu voz, no grabaciones, y puedes borrarla cuando quieras. Lleva un minuto.",
+  "start": "Vale, vamos alla. Quedate junto al panel.",
+  "start_fail": "No he podido conectar con el altavoz del panel, asi que no he empezado. Pidemelo otra vez en un minuto.",
+  "declined": "Sin problema. No volvere a preguntarte en un tiempo. Si cambias de idea, di aprende mi voz.",
+  "already": "Ya conozco tu voz. Si no funciona bien, di olvida mi voz y empezamos de nuevo.",
+  "know_yes": "Si, conozco tu voz. Tengo {n} muestras.",
+  "know_no": "Todavia no conozco tu voz. Quieres que la aprenda?",
+  "know_no_declined": "Todavia no conozco tu voz. Dijiste que no, asi que no he vuelto a preguntar. Si quieres, di aprende mi voz.",
+  "know_no_minor": "Todavia no conozco tu voz. Un adulto puede configurarlo por ti.",
+  "know_guest": "Todavia no se quien eres, asi que no puedo saberlo. Identificate con tu PIN y pregunta de nuevo.",
+  "know_unknown": "Ahora mismo no puedo comprobarlo. Preguntame de nuevo en un momento.",
+  "learn_guest": "Solo puedo aprender la voz de alguien a quien conozco. Identificate con tu PIN y pideme de nuevo.",
+  "learn_minor": "La configuracion de voz solo esta activada para adultos por ahora.",
+  "learn_no_panel": "Solo puedo aprender tu voz desde el altavoz del panel. Pidemelo alli.",
+  "learn_unverified": "No he podido saber quien hablaba, asi que no he empezado. Dilo de nuevo cuando sepa que eres tu.",
+  "forget_done": "Hecho. He borrado tu firma de voz y he avisado al panel para que borre su copia.",
+  "forget_none": "No tengo tu voz, asi que no hay nada que borrar.",
+  "forget_guest": "No se quien eres, asi que no hay ninguna voz tuya que borrar. Identificate con tu PIN y pideme de nuevo.",
+  "forget_unverified": "No he podido saber quien hablaba, asi que no he borrado nada. Dilo de nuevo cuando sepa que eres tu.",
+  "forget_fail": "No he podido borrarla ahora y nada ha cambiado. Prueba de nuevo en un momento."
+ },
+ "script": {
+  "intro": "Hola {name}. Te pedire que digas tres frases cortas. Guardo una firma de tu voz, nunca las grabaciones. Di para en cualquier momento.",
+  "prompt": "Frase {n}. Despues del pitido, di: {phrase}",
+  "retry_short": "Solo he oido un poco. Repitamos la misma frase.",
+  "retry_quiet": "Se oyo un poco bajo. Un poco mas alto, por favor.",
+  "retry_noise": "Hubo demasiado ruido o sonaba demasiado fuerte. Probemos otra vez.",
+  "got": "Entendido.",
+  "done": "Listo, {name}. Reconocere tu voz a partir de ahora.",
+  "partial": "Solo he guardado una parte, pero ya puedo usarla. Si me equivoco contigo, di olvida mi voz y empezamos de nuevo.",
+  "cancelled": "Vale, he parado. No he guardado nada.",
+  "timeout": "Esto esta tardando, asi que paro aqui. No he guardado nada. Pideme cuando quieras y lo intentamos de nuevo.",
+  "failed": "No he conseguido una grabacion clara. No he guardado nada. Podemos intentarlo en un momento tranquilo, solo pidemelo.",
+  "store_failed": "No he podido guardarlo ahora. No he guardado nada.",
+  "cancel_words": ["para", "parar", "cancela", "cancelar", "olvidalo", "ahora no", "basta", "ya esta"]
+ }
+}

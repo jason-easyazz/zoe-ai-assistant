@@ -821,6 +821,16 @@ async def submit_pin(payload: dict, request: Request = None, db=Depends(get_db))
             detail=f"Incorrect PIN. {max(0, _PIN_MAX_ATTEMPTS - attempts_info.get('count', 0))} attempt(s) remaining.",
         )
 
+    # A correct PIN is the natural moment for Zoe to offer to learn this member's voice ("so you won't need your PIN next time"). Flag-dark
+    # (ZOE_ENROLL_OFFER, off = returns at once), fire-and-forget (waits ZOE_ENROLL_OFFER_PIN_DELAY_S so the resumed command's reply goes
+    # first), and it never raises into the PIN response.
+    try:
+        import voice_enrollment
+
+        voice_enrollment.schedule_offer_after_pin(resolved_user_id or "", str(row["panel_id"] or ""))
+    except Exception:  # noqa: BLE001
+        pass
+
     # Pass 3 B6 resume hook: if this challenge was for a pending voice turn, replay it.
     try:
         action_ctx = json.loads(row["action_context"] or "{}") if row["action_context"] else {}

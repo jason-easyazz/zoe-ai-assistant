@@ -3783,15 +3783,251 @@ def _announce_poll_thread():
         return
     poller = _announce_logic.AnnouncePoller(
         fetch=_fetch_announcements,
-        speak=_speak_announcement,
+        speak=_speak_announcement_then_listen,
         is_busy=_daemon_busy,
         poll_interval_s=ANNOUNCE_POLL_S,
         logger=log,
         ack=_ack_announcement,
+        **_enroll_poller_kwargs(_announce_logic),
     )
     log.info("Announce poll thread started (interval=%.1fs)", ANNOUNCE_POLL_S)
     poller.run(_shutdown.wait)
     log.info("Announce poll thread stopped.")
+
+
+# ══ Enrollment mode (Zoe-driven voice enrolment) ═════════════════════════════════════════════════════════════════════════════
+# Everything the daemon does for "Zoe, learn my voice" lives in THIS section, so it merges cleanly beside the turn-quality and
+# long-speech-capture changes. The server queues a `voice_enroll` COMMAND on the announcement lane (voice_announce.enqueue_command);
+# the poller hands it to `_handle_server_command`, which only RECORDS the request; the MAIN LOOP then runs it (`_run_enrollment_mode`) the
+# way it runs an orb tap - it closes the shared wake stream, does its work, reopens the stream - so the daemon keeps ownership of the
+# mic and never stops itself (the old `zoe_enroll_flow.py voice` stopped the whole service over ssh). The state machine is
+# `zoe_voice_enroll_mode.py` (pure, tested); this section only supplies the real mic, the real voice, and the real server calls.
+# A `voice_profile_forget` command drops one member's voice signature from the cache and disk copy NOW (forgetting reaches the box).
+try:
+    import zoe_voice_enroll_mode as _enroll_mode
+except ImportError:
+    _enroll_mode = None  # partial deploy: enrolment commands are refused loudly, never a crash
+
+ENROLL_MODE_ENABLED = os.environ.get("ZOE_ENROLL_MODE_ENABLED", "true").lower() in ("1", "true", "yes")
+ENROLL_RECORD_MAX_S = float(os.environ.get("ZOE_ENROLL_RECORD_MAX_S", "8.0"))
+ENROLL_TTS_ATTEMPTS = 4
+_enroll_lock = threading.Lock()
+_enroll_request: "dict | None" = None
+_enroll_running = threading.Event()
+_enroll_cancel = threading.Event()
+
+
+def _enroll_poller_kwargs(logic) -> dict:
+    """`command=` for the announce poller when the deployed `zoe_voice_announce.py` supports it (a stale copy would TypeError and
+    kill announce polling - so inspect, and say so loudly instead)."""
+    import inspect
+
+    try:
+        if "command" in inspect.signature(logic.AnnouncePoller.__init__).parameters:
+            return {"command": _handle_server_command}
+    except (TypeError, ValueError):
+        pass
+    log.warning("zoe_voice_announce.py is older than the daemon: server panel commands (voice enrolment, profile purge) are DISABLED "
+                "until both files are deployed together")
+    return {}
+
+
+def _speak_announcement_then_listen(ann: dict) -> bool:
+    """`_speak_announcement`, then - for an OFFER ("Want to?") - open a listening window with no wake word, the way an orb tap does:
+    "yes" is not something anyone says after "Hey Zoe"."""
+    played = _speak_announcement(ann)
+    if played and ann.get("follow_up"):
+        _orb_activate_event.set()
+    return played
+
+
+def _handle_server_command(ann: dict) -> bool:
+    """Act on one claimed panel command. True = handled (the row is acknowledged). Never raises."""
+    cmd = ann.get("command") or {}
+    kind = str(cmd.get("kind") or ann.get("trigger_type") or "")
+    try:
+        if kind == "voice_enroll":
+            return _queue_enrollment(cmd)
+        if kind == "voice_profile_forget":
+            return _purge_speaker_profile(str(cmd.get("user_id") or ""))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("panel command %s failed: %s: %s", kind or "?", type(exc).__name__, exc)
+        return False
+    log.warning("panel command ignored (unknown kind %r)", kind)
+    return False
+
+
+def _queue_enrollment(cmd: dict) -> bool:
+    global _enroll_request
+    if _enroll_mode is None or not ENROLL_MODE_ENABLED:
+        log.warning("voice enrolment requested but not available (module %s, enabled=%s) - deploy zoe_voice_enroll_mode.py next to the daemon",
+                    "missing" if _enroll_mode is None else "present", ENROLL_MODE_ENABLED)
+        return False
+    if not str(cmd.get("user_id") or "").strip():
+        log.warning("voice enrolment command without a user_id - ignored")
+        return False
+    with _enroll_lock:
+        if _enroll_request is not None or _enroll_running.is_set():
+            log.info("voice enrolment already queued or running - ignoring the duplicate")
+            return False
+        _enroll_request = dict(cmd)
+    log.info("voice enrolment queued (language=%s)", cmd.get("lang", "?"))
+    return True
+
+
+def _enroll_request_pending() -> bool:
+    return _enroll_request is not None
+
+
+def _persist_profile_cache() -> None:
+    try:
+        os.makedirs(os.path.dirname(_PROFILE_CACHE_PATH), mode=0o700, exist_ok=True)
+        with _profile_cache_lock:
+            profiles = list(_profile_cache["profiles"])
+        fd = os.open(_PROFILE_CACHE_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump({"profiles": profiles}, f)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("speaker profile cache persist failed: %s", exc)
+
+
+def _purge_speaker_profile(user_id: str) -> bool:
+    """Drop `user_id`'s voice signature from the in-memory cache AND the 0600 disk copy, then re-sync. The server already deleted the row;
+    waiting for the hourly sync would keep recognising a voice the member asked Zoe to forget."""
+    uid = user_id.strip()
+    if not uid:
+        return False
+    with _profile_cache_lock:
+        before = len(_profile_cache["profiles"])
+        _profile_cache["profiles"] = [p for p in _profile_cache["profiles"] if str(p.get("user_id") or "") != uid]
+        removed = before - len(_profile_cache["profiles"])
+    _persist_profile_cache()
+    log.info("voice profile purge: removed %d cached profile(s)", removed)
+    try:
+        _sync_speaker_profiles(force=True)      # the authoritative list (a failed sync keeps what we just trimmed)
+    except Exception as exc:  # noqa: BLE001
+        log.debug("post-purge sync failed: %s", exc)
+    return True
+
+
+def _enroll_stop_reason() -> str:
+    """Why the running enrolment should stop: "shutdown" (the daemon is going down - NOT the person declining) wins over
+    "tapped_stop" (the person tapped stop); "" while neither is set."""
+    if _shutdown.is_set():
+        return "shutdown"
+    return "tapped_stop" if _enroll_cancel.is_set() else ""
+
+
+def _enroll_say(text: str) -> bool:
+    """Speak `text` in Zoe's normal voice (the `/api/voice/speak` waterfall every reply uses) and block until it has played. While the
+    TTS sidecar is restarting the server answers 503 or falls to the robot fallback: retry a few seconds for the real voice before
+    settling, and never use a local espeak of our own."""
+    audio, ctype = None, "audio/wav"
+    for attempt in range(ENROLL_TTS_ATTEMPTS):
+        resp = _api_post("/api/voice/speak", {"text": text[:1200], "panel_id": PANEL_ID}, timeout=30)
+        if resp.get("audio_base64"):
+            audio, ctype = resp["audio_base64"], resp.get("content_type", "audio/wav")
+            if resp.get("provider") != "espeak-ng":
+                break
+        if attempt + 1 < ENROLL_TTS_ATTEMPTS:
+            time.sleep(2.0 * (attempt + 1))
+    if not audio:
+        log.warning("enrolment: Zoe's voice is unavailable (no audio from /api/voice/speak)")
+        return False
+    return play_audio_b64(audio, ctype)
+
+
+def _enroll_beep() -> None:
+    """The listen beep before each recording. `play_wake_beep` honours WAKE_BEEP_ENABLED=false; the prompts promise a beep, so fall back
+    to the follow-up tone rather than recording in silence."""
+    if WAKE_BEEP_ENABLED:
+        play_wake_beep()
+    else:
+        play_follow_up_beep()
+
+
+def _enroll_record_once(pa) -> "bytes | None":
+    """Beep, then record ONE utterance from a mic stream opened just for it (the wake stream is closed for the run); stop at the VAD
+    endpoint or after ENROLL_RECORD_MAX_S. WAV bytes, or None when the mic gave nothing."""
+    _enroll_beep()
+    time.sleep(0.15)  # let the beep's tail die before the mic opens
+    kw: dict = dict(format=pyaudio.paInt16, channels=1, rate=SAMPLE_RATE, input=True, frames_per_buffer=CHUNK_SIZE)
+    if _INPUT_DEVICE_INDEX is not None:
+        kw["input_device_index"] = _INPUT_DEVICE_INDEX
+    stream = None
+    for attempt in range(1, 6):
+        try:
+            stream = pa.open(**kw)
+            break
+        except OSError as exc:
+            if attempt == 5:
+                log.error("enrolment: could not open the mic: %s", exc)
+                return None
+            time.sleep(0.15 * attempt)
+    frames: list = []
+    try:
+        endpointer = _Endpointer()
+        for _ in range(int(ENROLL_RECORD_MAX_S * SAMPLE_RATE / CHUNK_SIZE)):
+            if _enroll_cancel.is_set() or _shutdown.is_set():
+                break
+            data = stream.read(CHUNK_SIZE, exception_on_overflow=False)
+            frames.append(data)
+            if endpointer.push(data, len(frames)):
+                break
+    finally:
+        try:
+            stream.stop_stream()
+            stream.close()
+        except Exception:  # noqa: BLE001
+            pass
+    if len(frames) < int(0.3 * SAMPLE_RATE / CHUNK_SIZE):
+        return None
+    return _frames_to_wav(pa, frames)
+
+
+def _run_enrollment_mode(pa) -> None:
+    """Run the queued enrolment to its end. The caller (the main loop) has closed the wake stream and reopens it afterwards."""
+    global _enroll_request, _ignore_wake_until
+    with _enroll_lock:
+        cmd, _enroll_request = _enroll_request, None
+    if not cmd or _enroll_mode is None:
+        return
+    uid = str(cmd.get("user_id") or "").strip()
+    name = str(cmd.get("name") or "").strip()
+    max_total = float(cmd.get("max_total_s") or 90.0)
+
+    def upload(wav: bytes) -> bool:
+        resp = _api_post("/api/voice/enroll", {
+            "audio_base64": base64.b64encode(wav).decode(), "user_id": uid, "display_name": name or uid,
+            "panel_id": PANEL_ID, "consent": True,   # the person is performing the enrolment
+        }, timeout=120)
+        return bool(resp.get("ok"))
+
+    def report(outcome: str, samples: int, reason: str = "") -> None:
+        # `reason` tells the server whether the PERSON stopped it (said_stop / tapped_stop: a "no") or the daemon was shutting down.
+        _api_post("/api/enrollment/result", {"status": outcome, "user_id": uid, "samples": samples, "reason": reason},
+                  timeout=10, retries=1)
+
+    log.info("Enrollment mode START (max %.0fs)", max_total)
+    _enroll_running.set()
+    _enroll_cancel.clear()
+    _recording_active.set()  # pause ambient capture, as during a turn
+    _ignore_wake_until = time.monotonic() + max_total + 60.0
+    result = None
+    try:
+        result = _enroll_mode.EnrollmentRun(
+            cmd.get("script"), say=_enroll_say, record=lambda: _enroll_record_once(pa), upload=upload, name=name,
+            transcribe=stt_on_jetson, report=report,
+            cancelled=_enroll_stop_reason, max_total_s=max_total, log=log.info,
+        ).run()
+    finally:
+        _recording_active.clear()
+        _enroll_running.clear()
+        _ignore_wake_until = time.monotonic() + POST_PLAY_COOLDOWN_S
+    log.info("Enrollment mode END outcome=%s samples=%d reason=%s", result.outcome, result.samples, result.reason)
+    if result.samples:
+        threading.Thread(target=_sync_speaker_profiles, kwargs={"force": True}, daemon=True, name="enroll-profile-sync").start()
+# ══ end Enrollment mode ══════════════════════════════════════════════════════════════════════════════════════════════════════
 
 
 _daemon_started_at = time.time()
@@ -3860,6 +4096,20 @@ class _HealthHandler(http.server.BaseHTTPRequestHandler):
                 return
             _orb_activate_event.set()
             body = json.dumps({"ok": True, "triggered": "wake"}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif self.path == "/enroll/cancel":
+            # A tap on the panel's "stop" while enrolment mode is running (same trust as /activate: the panel's own LAN).
+            if not _activate_request_allowed(self.headers.get("Host"), self.headers.get("Origin")):
+                self.send_response(403)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            _enroll_cancel.set()
+            body = json.dumps({"ok": True, "running": _enroll_running.is_set()}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -4058,6 +4308,18 @@ def main():
     wake_first_hit_at = 0.0
     try:
         while not _shutdown.is_set():
+            # ── Enrollment mode: a queued server command ("learn my voice") runs HERE, with the wake stream closed ──
+            if _enroll_request_pending():
+                stream.stop_stream()
+                stream.close()
+                try:
+                    _run_enrollment_mode(pa)
+                except Exception as exc:
+                    log.error("Enrollment mode error: %s", exc)
+                finally:
+                    time.sleep(0.3)
+                    stream = pa.open(**stream_kw)
+                continue
             # ── Check for orb-tap activation ────────────────────────────
             if _orb_activate_event.is_set():
                 _orb_activate_event.clear()
