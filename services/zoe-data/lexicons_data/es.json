@@ -662,5 +662,14 @@
    "late": "Horario: el {1} es a la hora del {0} o después, así que lo perdería.",
    "double": "Horario: hay dos cosas a la misma hora (\"{0}\" y \"{1}\")."
   }
+ },
+ "memory_challenge": {
+  "_note": "El usuario pone a prueba la memoria de Zoe ('¿no te acuerdas?', 'ya lo sabes', 'ya hablamos de eso'). Fragmentos de regex, sin distinguir mayúsculas.",
+  "patterns": [
+   "\\b(?:no\\s+)?te\\s+(?:acuerdas|recuerdas)\\b",
+   "\\bya\\s+lo\\s+sabes\\b",
+   "\\bya\\s+(?:hablamos|conversamos|te\\s+(?:lo\\s+)?(?:dije|cont[eé]|mencion[eé]))\\b",
+   "\\bte\\s+(?:lo\\s+)?(?:dije|cont[eé]|mencion[eé])\\s+(?:antes|ya|hoy)\\b"
+  ]
  }
 }

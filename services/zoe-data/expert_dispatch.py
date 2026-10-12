@@ -500,11 +500,16 @@ async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
                 # ONE operation judged on the NEW row's own provenance (its class decides),
                 # not a separate archive attributed to a bare model label (which the wall
                 # refuses, leaving both rows approved).
-                await svc.supersede_by(user_id, old_id, new_id, actor=source,
-                                       note="superseded by newer conversational fact")
+                retired = await svc.supersede_by(user_id, old_id, new_id, actor=source,
+                                                 note="superseded by newer conversational fact") is not False
             else:
-                await svc.review(old_id, decision="archive", actor=source,
-                                 note="superseded by newer conversational fact")
+                retired = await svc.review(old_id, decision="archive", actor=source,
+                                           note="superseded by newer conversational fact") is not None
+            if not retired:
+                # the wall refused (the new row has no standing over the old one) or the old row already moved:
+                # BOTH rows stay approved and the log must not claim a supersede that did not happen
+                logger.info("MEMORY_SUPERSEDE_REFUSED source=%s old=%s", source, old_id)
+                return "stored"
             from memory_metrics import memory_supersede_count
             memory_supersede_count.labels(source=source).inc()
             logger.info("MEMORY_SUPERSEDE source=%s old=%s new=%r",

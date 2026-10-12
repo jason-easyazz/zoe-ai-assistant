@@ -782,6 +782,45 @@ _ROLE_HYPONYMS: dict[str, frozenset[str]] = {
 }
 
 
+# A bare kinship word ("seeing dad in the hospital", "mum's coming up") is how a person names their OWN
+# parent, grandparent... aloud: it is the address form, not "a dad". Each group is (the role words a fact may
+# use for it, the bare words a speaker uses). Only these - "wife", "friend", "boss" are never a bare name, so
+# "Emily is the wife" still earns no anchor (the 2026-07-12 incident the validator exists for).
+_BARE_KIN: tuple[tuple[frozenset[str], frozenset[str]], ...] = (
+    (frozenset({"dad", "father"}), frozenset({"dad", "daddy", "papa"})),
+    (frozenset({"mum", "mom", "mother"}), frozenset({"mum", "mummy", "mom", "mommy", "mama"})),
+    (frozenset({"grandma", "grandmother"}), frozenset({"grandma", "gran", "granny", "nan", "nana", "nanna", "gramma"})),
+    (frozenset({"grandpa", "grandfather"}), frozenset({"grandpa", "grandad", "granddad", "gramps"})),
+)
+#: a word before a bare kin word that gives it ANOTHER possessor or makes it a common noun ("his dad", "Tom's dad", "the dad")
+_NOT_OWN_KIN_BEFORE = frozenset({
+    "his", "her", "hers", "their", "theirs", "your", "yours", "its", "whose", "the", "a", "an", "that", "this",
+    "those", "these", "any", "no", "some", "every", "each", "another", "other", "and",
+})
+
+
+def _bare_kin_stated(role: str, src: str) -> bool:
+    """True when ``src`` (lower-cased) names the speaker's own kin of ``role`` by the bare address word ("seeing dad").
+    A possessor other than the speaker ("her dad", "Tom's dad") or a determiner ("the dad") does not count."""
+    bare: set[str] = set()
+    variants = _role_variants(role)
+    for roles, words in _BARE_KIN:
+        if roles & variants:
+            bare |= words
+    if not bare:
+        return False
+    alt = "|".join(sorted(map(re.escape, bare), key=len, reverse=True))
+    for m in re.finditer(rf"(?<![\w'’-])({alt})(?![\w-])", src):
+        before = src[:m.start()].rstrip()
+        prev = re.search(r"([\w'’-]+)$", before)
+        if prev:
+            word = prev.group(1)
+            if word in _NOT_OWN_KIN_BEFORE or word.endswith(("'s", "’s")):
+                continue
+        return True
+    return False
+
+
 def _role_variants(role: str) -> frozenset[str]:
     """The role plus its everyday synonyms (mum/mother, kid/child, ...) and —
     for generic roles — its specific hyponyms (parent ← mum/dad)."""
@@ -791,6 +830,70 @@ def _role_variants(role: str) -> frozenset[str]:
             out |= group
     out |= _ROLE_HYPONYMS.get(role, frozenset())
     return frozenset(out)
+
+
+# ---------------------------------------------------------------------------
+# A fact with no subject: "His health has gone up and down." / "He has been in and out of ICU."
+# ---------------------------------------------------------------------------
+# The per-turn extractor reads ONE message; when the owner continues about a person named a turn earlier ("...seeing my dad in the
+# hospital" / "His health went up and down") it copies the pronoun into the fact, and the stored row is about nobody: recall can
+# never place it, and "He" reads as whoever the next prompt is about (live 2026-10-12, two health rows). The antecedent is resolved
+# from the owner's OWN recent words - "my <relation>", exactly one compatible relation, newest turn first - or the fact is held.
+_SUBJECT_PRONOUN_RE = re.compile(
+    r"^\s*(?:(?:and|but|also|so)\s+)?(?P<pron>he|she|his|her|they|their|him|hers)\b(?P<rest>.*)$",
+    re.IGNORECASE | re.DOTALL)
+_PRONOUN_POSSESSIVE = frozenset({"his", "her", "their"})
+_PRONOUN_SUBJECT = frozenset({"he", "she"})
+_MALE_KIN = frozenset({"dad", "father", "brother", "husband", "son", "grandpa", "grandfather", "uncle", "boyfriend", "nephew"})
+_FEMALE_KIN = frozenset({"mum", "mom", "mother", "sister", "wife", "daughter", "grandma", "grandmother", "aunt", "girlfriend", "niece"})
+_NEUTRAL_KIN = frozenset({"friend", "partner", "colleague", "coworker", "boss", "neighbour", "neighbor", "cousin", "parent", "sibling",
+                          "fiance", "fiancee", "fiancé", "fiancée", "mate"})
+_MY_KIN_RE = re.compile(
+    r"\bmy\s+(?:(?:[a-z]+)\s+)?(?P<rel>" + "|".join(sorted(_MALE_KIN | _FEMALE_KIN | _NEUTRAL_KIN, key=len, reverse=True)) + r")\b",
+    re.IGNORECASE)
+
+
+def subjectless_pronoun_fact(fact_text: str) -> bool:
+    """True when a stored fact OPENS on a third-person pronoun ("His health went up and down", "He has been in and out of ICU"):
+    its subject is whoever the sentence it was copied from was about. Pure."""
+    return bool(_SUBJECT_PRONOUN_RE.match(fact_text or ""))
+
+
+def resolve_subjectless_fact(fact_text: str, recent_user_texts: list) -> Optional[str]:
+    """The fact with its pronoun replaced by "User's <relation>", or None (hold it) when the owner's own recent words do not settle
+    who it is about. ``recent_user_texts`` are the owner's messages NEWEST FIRST, the current one first. The relation is whatever
+    ``my <relation>`` the newest message naming a compatible one says ("his"/"he" -> not a mother; "her"/"she" -> not a father);
+    two different compatible relations in that message is ambiguity, and ambiguity is held, never guessed. "they" never
+    resolve. Pure."""
+    m = _SUBJECT_PRONOUN_RE.match(fact_text or "")
+    if not m:
+        return fact_text
+    pron = m.group("pron").lower()
+    if pron in ("he", "his", "him"):
+        allowed = _MALE_KIN | _NEUTRAL_KIN
+    elif pron in ("she", "hers"):
+        allowed = _FEMALE_KIN | _NEUTRAL_KIN
+    elif pron == "her":
+        allowed = _FEMALE_KIN | _NEUTRAL_KIN
+    else:
+        return None
+    rest = m.group("rest").strip()
+    if not rest or pron in ("him", "hers"):
+        return None
+    for text in recent_user_texts or ():
+        rels = []
+        for rm in _MY_KIN_RE.finditer((text or "").replace("’", "'")):
+            rel = rm.group("rel").lower()
+            if rel in allowed and rel not in rels:
+                rels.append(rel)
+        if len(rels) == 1:
+            owner = f"User's {rels[0]}"
+            if pron in _PRONOUN_POSSESSIVE:
+                return f"{owner}'s {rest}"
+            return f"{owner} {rest}"
+        if len(rels) > 1:
+            return None
+    return None
 
 
 def user_relationship_claim_unsupported(fact_text: str, source_text: str) -> bool:
@@ -833,6 +936,10 @@ def user_relationship_claim_unsupported(fact_text: str, source_text: str) -> boo
             ):
                 supported = True
                 break
+        # "...straight from seeing dad in the hospital": the speaker named their own parent by the address word
+        # (live 2026-10-12: a user-stated fact about a parent's health was dropped as "the extractor guessed the anchor")
+        if not supported and _bare_kin_stated(role, src):
+            supported = True
         if not supported:
             return True  # at least one user-anchored role the source never stated
     return False

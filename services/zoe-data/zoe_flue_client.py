@@ -729,9 +729,14 @@ def _recall_question_shape(message: str) -> str:
     if _PERSONAL_QUESTION_RE.search(msg):
         return "personal"
     from memory_gate import (  # stdlib-only
-        is_event_question, is_event_time_question, is_evidence_question,
+        is_event_question, is_event_time_question, is_evidence_question, is_memory_challenge,
         present_state_question_kind,
     )
+
+    if is_memory_challenge(msg):
+        # "Don't you remember?" / "we've already talked about it" (live 2026-10-12): no my/I question shape, yet the whole turn is
+        # "look at what you have". Per-language data (memory_gate.is_memory_challenge); the block carries the grounding rule.
+        return "challenge"
 
     if _present_state_shapes_enabled():
         # "Am I still doing the half-marathon?", "How's my mum?" (day-sim 6/6n) and
@@ -1056,6 +1061,34 @@ async def _named_person_floor(message: str, user_id: str) -> list:
         return []
 
 
+# A memory challenge ("don't you remember?") is answered from what is STORED, never from what would sound right: the 4B first denied the
+# conversation, then described one that no row or turn holds ("you mentioning that you've been going to work ..."). The rule travels
+# INSIDE the block, and the block is sent even when nothing matched, so the denial stands on a looked-at record and the invention has
+# no room.
+_CHALLENGE_RULE = (
+    "The user is asking whether you remember something. Answer ONLY from the notes above. If a note covers it, say what it holds. "
+    "If none does, say plainly that you don't have that noted and ask them to tell you again. Never describe something they said, "
+    "or a past conversation, that these notes do not contain."
+)
+_CHALLENGE_EMPTY = "(Nothing stored matches what the user is asking about.)"
+
+
+async def _challenge_context_block(message: str, user_id: str) -> str:
+    """The recall block for a memory CHALLENGE turn - NEVER raises. The packet is the continuity-mode one (the last few days pinned
+    ahead of relevance: "we talked about it today" is about today's rows), capped like any recall block, and the grounding rule is
+    appended whether or not the packet holds anything."""
+    packet = ""
+    try:
+        res = await _fetch_continuity_packet(user_id, message)
+        packet = _truncate_packet(str((res or {}).get("packet") or "").strip())
+    except Exception as exc:  # noqa: BLE001 - the recall floor must never break a turn
+        logger.warning("seam memory-challenge recall failed, continuing with the rule only: %s", type(exc).__name__)
+    packet = packet.replace(_RECALL_BLOCK_CLOSE, "[​" + _RECALL_BLOCK_CLOSE[1:])
+    bullets = sum(1 for ln in packet.splitlines() if ln.lstrip().startswith(("-", "•", "*")))
+    logger.info("SEAM_RECALL user=%s shape=challenge bullets=%d chars=%d", user_id, bullets, len(packet))
+    return f"{_recall_block_open()}\n{packet or _CHALLENGE_EMPTY}\n{_CHALLENGE_RULE}\n{_RECALL_BLOCK_CLOSE}"
+
+
 async def _recall_context_block(message: str, user_id: str) -> str:
     """The delimited memory block for this turn, or '' — NEVER raises.
 
@@ -1082,6 +1115,8 @@ async def _recall_context_block(message: str, user_id: str) -> str:
             shape = "named_person"
     if not shape:
         return ""
+    if shape == "challenge":
+        return await _challenge_context_block(message, user_id)
     try:
         packet = await (_fetch_for_prompt_packet(user_id, message, focus=named) if named
                         else _fetch_for_prompt_packet(user_id, message))

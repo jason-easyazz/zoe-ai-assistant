@@ -992,6 +992,7 @@ async def run_turn_digest(
         changed_refs: list = []
         fresh_candidates: list = []
         existing_rows = None  # approved rows, read once, only for a cue turn
+        recent_texts = None   # the owner's recent messages (newest first, this one first), read once, only for a subjectless fact
 
         # The claim rows the extractor attached (ZOE_STRUCTURAL_CLAIMS shadow|enforce): parsed once, validated against the
         # closed vocabularies; a fact whose claim is missing or malformed is simply judged by the lexical floor, as before.
@@ -1006,6 +1007,31 @@ async def run_turn_digest(
             if not fact or len(fact) < 8:
                 continue
             claim_kw = _claim_kwargs(item_claims, idx)
+            # A fact that opens on "He" / "His" is about nobody: the extractor copied the pronoun from a message whose antecedent was
+            # said a turn earlier. Settle it from the owner's own recent words ("my <relation>", exactly one) or hold it - never store
+            # a subjectless row (live 2026-10-12: "His health has gone up and down.", "He has been in and out of ICU.").
+            validate_text = user_message
+            try:
+                from memory_quality import resolve_subjectless_fact, subjectless_pronoun_fact
+                if subjectless_pronoun_fact(fact):
+                    if recent_texts is None:
+                        recent_texts = [user_message]
+                        if session_id:
+                            try:
+                                from memory_extractor import _load_recent_user_messages
+                                recent_texts += await _load_recent_user_messages(user_id, session_id, user_message, limit=4)
+                            except Exception:  # noqa: BLE001 - no history is "unresolved", not a failed digest
+                                pass
+                    resolved = resolve_subjectless_fact(fact, recent_texts)
+                    if resolved is None:
+                        result["skipped_low_quality"] += 1
+                        _count_drop("turn_digest", "subjectless_pronoun")
+                        logger.info("run_turn_digest: held a subjectless pronoun fact (antecedent not settled): %r", fact[:50])
+                        continue
+                    logger.info("run_turn_digest: resolved a pronoun subject from the owner's recent words")
+                    fact, validate_text = resolved, "\n".join(recent_texts)
+            except Exception:  # noqa: BLE001 - the guard must never take the digest down
+                pass
             fact_type = item.get("type", "fact")
             fact_tags = ["turn_digest", "auto_extract"]
             fact_changes = False
@@ -1052,7 +1078,7 @@ async def run_turn_digest(
             # user-anchored relationship the turn supports ("my <role>").
             try:
                 from memory_quality import user_relationship_claim_unsupported
-                if user_relationship_claim_unsupported(fact, user_message):
+                if user_relationship_claim_unsupported(fact, validate_text):
                     result["skipped_low_quality"] += 1
                     _count_drop("turn_digest", "user_anchor_unsupported")
                     logger.info("run_turn_digest: dropped unsupported user-anchored relationship: %r", fact[:70])

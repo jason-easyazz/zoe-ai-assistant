@@ -55,7 +55,7 @@ class NamedPerson:
 
     name: str
     person_id: str = ""
-    source: str = "people"  # "people" | "memory"
+    source: str = "people"  # "people" | "memory" | "unknown" (an identity question - "Who's Owen?" - about a name nothing on file knows)
 
 
 def focus_ids(people) -> list[str]:
@@ -116,6 +116,13 @@ async def _resolve(message: str, uid: str, exclude: Optional[Callable[[str], boo
                 found.append(NamedPerson(name, "", "memory"))
         except Exception as exc:  # noqa: BLE001
             logger.debug("person floor: entity read failed (%s)", type(exc).__name__)
+    if not found:
+        # "Who's Owen?" with no Owen on file: still a question about the record. The name has no row to focus on, but the
+        # for-prompt search runs, so a denial of knowing them stands on a looked-at record, not on a skipped one.
+        for q in questions:
+            for name in _gate.person_identity_names(q):
+                if all(name != f.name for f in found):
+                    found.append(NamedPerson(name, "", "unknown"))
     return found[: _gate.PERSON_FLOOR_MAX_NAMED]
 
 
@@ -144,6 +151,6 @@ async def resolve_named_people(
     if not found:
         return []
     forced = mode == "enforce"
-    logger.info("RECALL_FLOOR reason=named_person lane=%s mode=%s user=%s people=%d linked=%d forced=%d",
-                lane, mode, uid, len(found), len(focus_ids(found)), int(forced))
+    logger.info("RECALL_FLOOR reason=named_person lane=%s mode=%s user=%s people=%d linked=%d unknown=%d forced=%d",
+                lane, mode, uid, len(found), len(focus_ids(found)), sum(1 for p in found if p.source == "unknown"), int(forced))
     return found if forced else []
