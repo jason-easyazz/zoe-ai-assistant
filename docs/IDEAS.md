@@ -104,3 +104,4 @@ Detail/AI notes go under each entry. Move the status as it progresses.
 - 💡 **Presence fusion** (P8): PanaCast person-detect ≤1 fps on the Pi + Bermuda BLE IRK for *who*; mmWave later.
 - 💡 **Failure-fed evolution proposals** (P9): W7's first inputs = replay misses + Samantha-bar FAILs + `chat_feedback` (Letta skill learning: +36.8 % with failures).
 - 💡 **Learned should-I-speak head** (P10): numpy head on bge-small trained on `proactive_responses` once ~200 rows exist (evidence: arXiv 2605.30152).
+- 💡 **Location per household / member / panel**: settings-UI home for country + timezone (today `ZOE_HOUSEHOLD_COUNTRY` / `ZOE_TIMEZONE` env only), overridable per member and per panel, feeding crisis lines, time and weather (see open-problems 2026-10-12).
