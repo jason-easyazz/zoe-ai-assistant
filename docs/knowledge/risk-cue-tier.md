@@ -95,9 +95,10 @@ not re-trigger the note: the model is told "once", the code makes it true).
 
 `services/zoe-data/tests/test_risk_cues.py`: the data is sound (every pattern compiles, every note fits its slots, every category in en and es,
 worst-case block inside the budget); **every one of 43 cue sentences fires in its language, and the same sentence with that cue deleted from the
-data does not fire it** (red when removed); 33 non-fires (question, past story, hypothetical, negated plan, no time anchor, goodbye, plans with no
-risk, a backup mentioned, times on different days, ample flight lead); the timing arithmetic (a 75-minute lead fires, 150 does not, a train needs
-15 not 120); who gets it (a real sqlite: minor, child roles, unknown role, missing account, guests, synthetic ids, failed and slow lookups);
+data does not fire it** (red when removed); 42 non-fires (question, past story, hypothetical, negated plan, no time anchor, goodbye, plans with no
+risk, a backup mentioned, times on different days, ample flight lead, shorthand clock times such as "leave at 1 for my 11pm flight"); the timing
+arithmetic (a 75-minute lead fires, 150 does not, a train needs 15 not 120; a time without am/pm is read BOTH ways and fires only when every
+reasonable reading is too tight or late; one am/pm and one bare time is never a double booking); who gets it (a real sqlite: minor, child roles, unknown role, missing account, guests, synthetic ids, failed and slow lookups);
 restraint (goodbye, mute, unconfirmed voice, enforce-muted topic); one block per turn; once per conversation; shadow logs no text and injects
 nothing; the flag-off wire is byte-identical for every shape; sha256 goldens of the rendered en and es blocks.
 `tests/unit/test_risk_cue_ab.py`: the harness leaves `manner_block_ab` untouched, the wire audit, the verdict end to end on synthetic rows.
@@ -121,7 +122,8 @@ good-plan messages written before the first run of either A/B).
 * **KEEP** needs all of: P5b.b separates UPWARD on held-out (Wilson lower bound of `cue` above the upper bound of `none`); P5b.u does not separate
   DOWN and does not drop 2+ asks; P5b.a does not separate DOWN; no regression half separates DOWN (violation counts: up); every comparison has data
   in both arms; and the **delivery gates**: the block reached >= 75 % of the held-out flaw asks, <= 20 % of the held-out good plans, and no ask in
-  the `none` arm.
+  the `none` arm. The wire audit must also be COMPLETE: exactly one record per planned held-out ask, flaw and good, in BOTH arms - a missing
+  or short audit (an empty `none` arm would make "no block rode in none" vacuously true) is INCOMPLETE and never KEEP.
 * **Held-out discipline.** The cue data was written from the categories before any held-out number existed, and `--selftest` never runs the
   detector over the held-out half (it checks the DEV half only: the three bench flaws fire, the five bench good plans do not). How much of the
   held-out set the detector catches is read for the first time in the live held-out phase (`delivery (heldout): ... detector fired X`). A cue edited

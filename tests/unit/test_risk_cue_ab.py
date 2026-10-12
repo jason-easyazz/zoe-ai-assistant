@@ -155,6 +155,39 @@ def test_a_complete_run_with_a_lift_and_clean_delivery_is_keep(run):
     assert "VERDICT (held-out P5b halves + delivery + regression): KEEP" in _verdict(run), rca.report(run)[0]
 
 
+def _rewrite_fires(run_id, keep):
+    p = rca.fires_path(run_id)
+    lines = [ln for ln in p.read_text().splitlines() if ln.strip() and keep(json.loads(ln))]
+    p.write_text("\n".join(lines) + "\n")
+
+
+def test_an_audit_with_no_none_arm_records_is_incomplete_not_a_pass(run):
+    """P1 (#1997 review): with every none-arm record missing, 'no block rode in none' was vacuously true and the run could KEEP."""
+    _write(run)
+    assert "regression): KEEP" in _verdict(run)                                                  # positive control: the full audit keeps
+    _rewrite_fires(run, lambda f: f["arm"] != "none")
+    final = _verdict(run)
+    assert "DO NOT KEEP" in final and "INCOMPLETE" in final and "none/flaw" in final and "none/good" in final
+
+
+def test_a_truncated_audit_is_incomplete(run):
+    _write(run)
+    seen = {"n": 0}
+
+    def drop_last_good_in_none(f):
+        if f["arm"] == "none" and "-good" in f["ask"]:
+            seen["n"] += 1
+            return seen["n"] < 20                       # keep all but the last none/good record
+        return True
+
+    _rewrite_fires(run, drop_last_good_in_none)
+    final = _verdict(run)
+    assert "DO NOT KEEP" in final and "INCOMPLETE" in final and "none/good: audit has 19 of 20" in final
+    _write(run)
+    _rewrite_fires(run, lambda f: not (f["arm"] == rca.ARM and "-flaw" in f["ask"] and f["sample"] == 7))      # short on the cue arm too
+    assert "INCOMPLETE" in _verdict(run)
+
+
 def test_no_lift_is_do_not_keep(run):
     _write(run, lift=False)
     final = _verdict(run)

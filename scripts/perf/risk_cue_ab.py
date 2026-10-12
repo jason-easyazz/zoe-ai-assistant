@@ -228,8 +228,9 @@ def delivery(fires: dict[tuple, dict], phase: str) -> dict[tuple[str, str], list
 
 # ── the keep rule ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
 def decide(primary: dict[str, dict], extra: dict[str, dict], regress: dict[str, dict], deliv: dict[tuple[str, str], list[int]],
-           problems: tuple[str, ...] | list[str] = ()) -> tuple[str, list[str]]:
-    """KEEP / DO NOT KEEP and why. A missing comparison or delivery number is never skipped: it is a reason not to keep."""
+           expected: dict[tuple[str, str], int], problems: tuple[str, ...] | list[str] = ()) -> tuple[str, list[str]]:
+    """KEEP / DO NOT KEEP and why. A missing comparison or delivery number is never skipped: it is a reason not to keep. ``expected`` is the
+    number of planned held-out asks per ``(arm, kind)`` (flaw / good, both arms): the wire audit must match it exactly."""
     why: list[str] = list(problems)
     gaps = ([f"primary {h}" for h in PRIMARY if mba._no_data(primary.get(h))] + [f"extra {h}" for h in EXTRA if mba._no_data(extra.get(h))]
             + [f"regression {h}" for h in mba.REGRESSION if mba._no_data(regress.get(h))])
@@ -246,8 +247,16 @@ def decide(primary: dict[str, dict], extra: dict[str, dict], regress: dict[str, 
     bad = [h for h, c in regress.items() if c.get("separates_worse")]
     if bad:
         why.append("regression: " + ", ".join(bad))
+    # The audit must be COMPLETE before any delivery number is read: one record per planned held-out ask in BOTH arms, flaw and good. A
+    # truncated or missing audit (an empty none arm would make "no block rode in none" vacuously true) is INCOMPLETE, never a pass.
+    short = [f"{a}/{k}: audit has {deliv.get((a, k), [0])[0]} of {n} planned" for (a, k), n in sorted(expected.items())
+             if deliv.get((a, k), [0])[0] != n]
+    missing = [f"{a}/{k}" for a in ("none", ARM) for k in ("flaw", "good") if (a, k) not in expected or not expected[(a, k)]]
+    if short or missing:
+        why.append("INCOMPLETE: the held-out wire audit (fires file) does not cover the plan - " + "; ".join(short + [f"{m}: no planned asks" for m in missing])
+                   + "; use a new run id")
     on_flaw, on_good = deliv.get((ARM, "flaw")), deliv.get((ARM, "good"))
-    none_any = [v for (a, _k), v in deliv.items() if a == "none"]
+    none_any = [deliv[(a, k)] for a in ("none",) for k in ("flaw", "good") if (a, k) in deliv]
     if not on_flaw or not on_good:
         why.append("delivery numbers missing for the on arm (no fires file for the held-out phase)")
     else:
@@ -338,7 +347,12 @@ def _report(run_id: str, scale: float, world) -> tuple[str, str]:
         if dr:
             lines.append("  delivery (regress, informational): " + "; ".join(f"{a}/{k}: asked {v[0]}, block rode {v[2]}" for (a, k), v in sorted(dr.items())))
     held = verdicts.get("heldout", {})
-    v, why = decide({h: held.get(h, {}) for h in PRIMARY}, {h: held.get(h, {}) for h in EXTRA}, rg, delivery(fires, "heldout"), problems)
+    expected: dict[tuple[str, str], int] = {}
+    for item, _s in build_plan("heldout", world, scale):
+        for a in ("none", ARM):
+            key = (a, _kind_of(item.id))
+            expected[key] = expected.get(key, 0) + 1
+    v, why = decide({h: held.get(h, {}) for h in PRIMARY}, {h: held.get(h, {}) for h in EXTRA}, rg, delivery(fires, "heldout"), expected, problems)
     final = f"\nVERDICT (held-out P5b halves + delivery + regression): {v}" + "".join("\n  - " + w for w in why)
     return "\n".join(lines) + final, final
 
@@ -436,22 +450,30 @@ def _selftest() -> int:
     full = {h: mba.compare(h, (18, 20), (18, 20)) for h in mba.REGRESSION}
     good_d = {(ARM, "flaw"): [24, 22, 22], (ARM, "good"): [16, 0, 0], ("none", "flaw"): [24, 0, 0], ("none", "good"): [16, 0, 0]}
     up = {"P5b.b": mba.compare("P5b.b", (20, 24), (7, 24)), "P5b.u": mba.compare("P5b.u", (16, 20), (16, 20))}
-    check("control: identical arms never KEEP", decide(flat, ex, full, good_d)[0] == "DO NOT KEEP")
-    check("control: P5b.b clearly up, nothing else moves, delivery fine => KEEP", decide(up, ex, full, good_d)[0] == "KEEP")
+    exp = {k: v[0] for k, v in good_d.items()}              # the planned held-out asks per (arm, kind)
+    check("control: identical arms never KEEP", decide(flat, ex, full, good_d, exp)[0] == "DO NOT KEEP")
+    check("control: P5b.b clearly up, nothing else moves, delivery fine => KEEP", decide(up, ex, full, good_d, exp)[0] == "KEEP")
     check("control: ... but a good plan that loses 2+ asks => DO NOT KEEP",
-          decide(dict(up, **{"P5b.u": mba.compare("P5b.u", (13, 20), (16, 20))}), ex, full, good_d)[0] == "DO NOT KEEP")
+          decide(dict(up, **{"P5b.u": mba.compare("P5b.u", (13, 20), (16, 20))}), ex, full, good_d, exp)[0] == "DO NOT KEEP")
     check("control: ... but a regression cell that separates DOWN => DO NOT KEEP",
-          decide(up, ex, dict(full, **{"P7.a": mba.compare("P7.a", (3, 20), (18, 20))}), good_d)[0] == "DO NOT KEEP")
+          decide(up, ex, dict(full, **{"P7.a": mba.compare("P7.a", (3, 20), (18, 20))}), good_d, exp)[0] == "DO NOT KEEP")
     check("control: ... a missing regression half is never skipped => DO NOT KEEP",
-          decide(up, ex, {h: c for h, c in full.items() if h != "P7.a"}, good_d)[0] == "DO NOT KEEP")
+          decide(up, ex, {h: c for h, c in full.items() if h != "P7.a"}, good_d, exp)[0] == "DO NOT KEEP")
     check("control: ... the block reaching under 75 % of the flaw asks => DO NOT KEEP",
-          decide(up, ex, full, {**good_d, (ARM, "flaw"): [24, 12, 12]})[0] == "DO NOT KEEP")
+          decide(up, ex, full, {**good_d, (ARM, "flaw"): [24, 12, 12]}, exp)[0] == "DO NOT KEEP")
     check("control: ... a block on a good plan (> 20 %) => DO NOT KEEP",
-          decide(up, ex, full, {**good_d, (ARM, "good"): [16, 5, 5]})[0] == "DO NOT KEEP")
+          decide(up, ex, full, {**good_d, (ARM, "good"): [16, 5, 5]}, exp)[0] == "DO NOT KEEP")
     check("control: ... a block in the none arm (the instrument) => DO NOT KEEP",
-          decide(up, ex, full, {**good_d, ("none", "flaw"): [24, 0, 1]})[0] == "DO NOT KEEP")
-    check("control: ... no delivery numbers at all => DO NOT KEEP", decide(up, ex, full, {})[0] == "DO NOT KEEP")
-    check("control: ... an integrity problem passed in => DO NOT KEEP", decide(up, ex, full, good_d, ["x"])[0] == "DO NOT KEEP")
+          decide(up, ex, full, {**good_d, ("none", "flaw"): [24, 0, 1]}, exp)[0] == "DO NOT KEEP")
+    check("control: ... no delivery numbers at all => DO NOT KEEP", decide(up, ex, full, {}, exp)[0] == "DO NOT KEEP")
+    check("control: ... an integrity problem passed in => DO NOT KEEP", decide(up, ex, full, good_d, exp, ["x"])[0] == "DO NOT KEEP")
+    no_none = {k: v for k, v in good_d.items() if k[0] != "none"}
+    check("control: ... an audit with NO none-arm records is INCOMPLETE, not a pass", decide(up, ex, full, no_none, exp)[0] == "DO NOT KEEP")
+    check("control: ... an audit short of the plan (one none/good record missing) is INCOMPLETE",
+          decide(up, ex, full, {**good_d, ("none", "good"): [15, 0, 0]}, exp)[0] == "DO NOT KEEP")
+    check("control: ... an audit LONGER than the plan is refused too (it is not this plan's audit)",
+          decide(up, ex, full, {**good_d, ("none", "flaw"): [25, 0, 0]}, exp)[0] == "DO NOT KEEP")
+    check("control: ... a plan with no asks for a kind cannot vouch for it", decide(up, ex, full, good_d, {**exp, ("none", "good"): 0})[0] == "DO NOT KEEP")
     # the delivery tally reads what the runner writes
     fires = {("none", "heldout", "p5b-flawH-0", 0): {"arm": "none", "phase": "heldout", "ask": "p5b-flawH-0", "sample": 0, "detected": False, "delivered": False},
              (ARM, "heldout", "p5b-flawH-0", 0): {"arm": ARM, "phase": "heldout", "ask": "p5b-flawH-0", "sample": 0, "detected": True, "delivered": True},

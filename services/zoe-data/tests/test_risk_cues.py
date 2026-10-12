@@ -253,6 +253,11 @@ def test_the_timing_arithmetic_is_not_just_a_pattern():
     assert [c.id for c in rc.detect("Tomorrow I'll leave at 6:30 for my 9am flight.")] == []     # 150 min >= the 120-minute lead
     assert [c.id for c in rc.detect("Tomorrow I'll leave at 9:30 for my 9am flight.")] == ["timing_late"]
     assert rc.detect("Tomorrow I'll leave at 8:30 for my 9am train.") == []                      # a train needs 15 minutes, not 120
+    # a time without am/pm is read both ways; it fires only when EVERY reasonable reading is too tight or late
+    assert [c.id for c in rc.detect("Tonight I'll leave at 7pm for the flight at 8.")] == ["timing_tight"]       # event ambiguous: 8pm is 60 min
+    assert [c.id for c in rc.detect("Tomorrow I'll leave at 8 for the flight at 9.")] == ["timing_tight"]        # neither has am/pm: same half
+    assert [c.id for c in rc.detect("Tomorrow I'll leave at 9 for the 9am flight.")] == ["timing_late"]
+    assert [c.id for c in rc.detect("Tomorrow I'll leave at 7:45 for my 9am flight.")] == ["timing_tight"]       # the 7:45pm reading is another day
     note = rc.detect("Tomorrow I'll leave at 7:45 for my 9am flight.")[0].note
     assert "flight (9am)" in note and "leave (7:45)" in note and "75" in note       # names the specific elements
 
@@ -287,6 +292,16 @@ NO_FIRE = [
     ("es", "¿Debería conducir esta noche si estoy agotado?"),
     ("es", "Ayer conduje agotado y no pasó nada."),
     ("es", "No voy a conducir esta noche, estoy agotado."),
+    # shorthand clock times with one am/pm missing: never a missed flight (#1997 review: the 12-hour wrap invented one)
+    ("en", "Tomorrow I'll leave at 1 for my 11pm flight."),
+    ("en", "Tonight I'll leave at 6 for my 11pm flight."),
+    ("en", "Tomorrow I'll leave at 11 for my 11pm flight."),
+    ("en", "Tomorrow I'll leave at 2 for my 10pm train."),
+    ("en", "Tomorrow I'll arrive at 5 for my 11pm flight."),
+    ("en", "Tomorrow I'm seeing the dentist at 3pm and the gym at 3."),                         # one with am/pm, one without: not a clash
+    ("es", "Mañana saldré a la 1 para mi vuelo de las 11:00."),
+    ("es", "Mañana salgo a las 6 para mi vuelo de las 11:00."),
+    ("es", "Mañana voy a ir al dentista a las 3:00 y al gimnasio a las 15:00."),                 # 3:00 vs 15:00 is not read as the same hour
     ("es", "Buenas noches Zoe"),
     ("es", "Voy a pintar la valla el sábado."),
     ("es", "Mañana voy a cocinar una lasaña para todos."),

@@ -319,11 +319,28 @@ def _clocks(text: str, t: _Timing) -> list[_Clock]:
     return out
 
 
-def _gap_minutes(event: _Clock, depart: _Clock) -> int:
-    """Event time minus departure time. Both times unambiguous: the plain same-day difference; otherwise the signed difference mod 12 h."""
-    if event.explicit and depart.explicit:
-        return event.minutes - depart.minutes
-    return ((event.minutes - depart.minutes + 360) % 720) - 360
+#: a reading that puts the departure more than this many minutes AFTER the event is another day / not what was meant, and is ignored
+LATE_SLACK_MIN = 240
+
+
+def _readings(clock: _Clock) -> list[int]:
+    """The minutes-of-day a clock can mean: one when am/pm (or a 24-hour hour) was given, both the morning and the evening one when not."""
+    return [clock.minutes] if clock.explicit else [clock.minutes % 720, clock.minutes % 720 + 720]
+
+
+def _gaps(event: _Clock, depart: _Clock) -> list[int]:
+    """Every reasonable ``event - departure`` gap, in minutes, over the readings of the two times. A time without am/pm is read BOTH ways (never
+    reduced modulo 12 h, which invented a missed flight out of "leave at 1 for my 11pm flight"); when neither has am/pm only the same-half
+    pairs are read ("leave at 8 for the 9 flight"). A gap that puts the departure more than ``LATE_SLACK_MIN`` after the event is not a reading
+    anyone meant and is dropped."""
+    out: list[int] = []
+    for i, e in enumerate(_readings(event)):
+        for j, d in enumerate(_readings(depart)):
+            if not event.explicit and not depart.explicit and i != j:
+                continue
+            if e - d >= -LATE_SLACK_MIN:
+                out.append(e - d)
+    return out
 
 
 def _near(text: str, clock: _Clock, kws: list, reach: int = 40):
@@ -381,8 +398,10 @@ def _timing_cues(text: str, pack: _Pack) -> list[Cue]:
             (events if kw[2] == "event" else departs).append((c, kw))
     for ce, ke in events:
         for cd, kd in departs:
-            gap = _gap_minutes(ce, cd)
-            if -240 <= gap < ke[3]:
+            gaps = _gaps(ce, cd)
+            # fire only when EVERY reasonable reading is too tight or late: one comfortable reading means the user may well have meant it
+            if gaps and all(g < ke[3] for g in gaps):
+                gap = max(gaps)
                 ev_phrase = f"{_slot(ke[4])} ({ce.text})"
                 dep_phrase = f"{_slot(kd[4])} ({cd.text})"
                 template = t.late if gap <= 0 else t.tight
@@ -395,7 +414,9 @@ def _timing_cues(text: str, pack: _Pack) -> list[Cue]:
     if t.double:
         for i, a in enumerate(clocks):
             for b in clocks[i + 1:]:
-                same = a.minutes == b.minutes if (a.explicit and b.explicit) else (a.minutes - b.minutes) % 720 == 0
+                # a clash needs both times to say the same thing: both with am/pm (equal), or both without (equal hour and minute). One with and one
+                # without is ambiguous ("at 3pm" vs "at 3" may be 3am), so it is not called a clash.
+                same = a.explicit == b.explicit and (a.minutes == b.minutes if a.explicit else a.minutes % 720 == b.minutes % 720)
                 if not same or b.start - a.end < 6:
                     continue
                 between = text[a.end:b.start]
