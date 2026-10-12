@@ -16,8 +16,12 @@ Inputs
 
 Embeddings are computed with ``voice_speaker_id`` (resemblyzer, **CPU only** - the module pins it). The encoder pulls
 torch (~400 MB), so the script REFUSES to load it unless ``MemAvailable`` clears ``--min-avail-mb`` (default 1500) and
-holds ``/tmp/zoe-voice-harness.lock`` (the voice harness lock) for the whole run. Embeddings can be cached with
-``--cache`` (an .npz OUTSIDE the repo: real embeddings are biometric data and are never committed).
+holds ``/tmp/zoe-voice-harness.lock`` (the voice harness lock) for the whole run. The floor applies before ANY encoder
+load: a cold cache, a partial miss (a new ``--impostors`` arm, one replaced clip) and a stale cache all count.
+Embeddings can be cached with ``--cache`` (an .npz OUTSIDE the repo: real embeddings are biometric data and are never
+committed). The cache is BOUND to its inputs - per tag, a manifest of every file's (name, size, mtime_ns) plus the
+encoder weights' hash; any mismatch is a miss - is written atomically and owner-only (0600), and a cache that is
+group/world-readable or foreign-owned is refused, not read.
 
 Sections
 --------
@@ -201,8 +205,44 @@ def _mem_available_mb() -> float:
     return 0.0
 
 
+class HeadroomError(RuntimeError):
+    """The encoder (torch) would be loaded with less than the MemAvailable floor free."""
+
+
+class CacheError(RuntimeError):
+    """The embedding cache is not safe to read (group/world-readable or foreign-owned)."""
+
+
+#: MemAvailable floor (MB) enforced before ANY encoder load; ``main`` sets it from ``--min-avail-mb``.
+MIN_AVAIL_MB = 1500.0
+_ENCODER_ID: Optional[str] = None
+
+
+def encoder_id() -> str:
+    """Identity of the embedding model the cache was computed with: the resemblyzer weights file (size + sha256).
+    Found WITHOUT importing resemblyzer/torch. A different encoder or weights is a different embedding space, so any
+    change is a cache miss."""
+    global _ENCODER_ID
+    if _ENCODER_ID is None:
+        import hashlib
+        import importlib.util
+        ident = "resemblyzer-VoiceEncoder-cpu:unknown-weights"
+        try:
+            spec = importlib.util.find_spec("resemblyzer")
+            w = Path(spec.origin).parent / "pretrained.pt"
+            ident = f"resemblyzer-VoiceEncoder-cpu:{w.stat().st_size}:{hashlib.sha256(w.read_bytes()).hexdigest()}"
+        except Exception:
+            pass
+        _ENCODER_ID = ident
+    return _ENCODER_ID
+
+
 def embed_dir(paths: Sequence[Path], *, limit: Optional[int] = None) -> list:
-    """[(path, mtime, embedding, speech_seconds)] for each wav. CPU only."""
+    """[(path, mtime, embedding, speech_seconds)] for each wav. CPU only. Enforces the memory floor FIRST - this is
+    the only place the encoder is loaded, so no path (cold cache, partial miss, stale cache) can skip it."""
+    avail = _mem_available_mb()
+    if avail < MIN_AVAIL_MB:
+        raise HeadroomError(f"MemAvailable {avail:.0f} MB < {MIN_AVAIL_MB:.0f} MB")
     import voice_speaker_id as vsi  # lazy: pulls resemblyzer/torch
     enc = vsi._get_voice_encoder()
     from resemblyzer import preprocess_wav  # type: ignore
@@ -218,20 +258,87 @@ def embed_dir(paths: Sequence[Path], *, limit: Optional[int] = None) -> list:
     return out
 
 
+def manifest(paths: Sequence[Path]) -> str:
+    """The cache's binding to its INPUTS: ``[name, size, mtime_ns]`` per file plus the encoder id. Count alone is not
+    a binding - replacing or editing clips without changing how many there are must be a miss."""
+    rows = []
+    for p in paths:
+        st = p.stat()
+        rows.append([p.name, st.st_size, st.st_mtime_ns])
+    return json.dumps({"encoder": encoder_id(), "files": rows}, separators=(",", ":"))
+
+
+def _read_cache(cache: Optional[Path]) -> dict:
+    """The cache's arrays, or {} when there is no cache. REFUSES (CacheError) a cache that is readable by group or
+    world, or owned by someone else: it holds biometric embeddings."""
+    if not cache or not cache.exists():
+        return {}
+    st = cache.stat()
+    if st.st_mode & 0o077 or st.st_uid != os.geteuid():
+        raise CacheError(f"{cache} is mode {st.st_mode & 0o777:o} / uid {st.st_uid}: refusing to read a biometric "
+                         f"embedding cache that is not private. chmod 600 it (or delete it) and re-run.")
+    try:
+        with np.load(cache, allow_pickle=False) as z:
+            return {k: z[k] for k in z.files}
+    except Exception:
+        return {}      # unreadable / old-format cache: a miss, rewritten below
+
+
+def _cached_rows(data: dict, tag: str, paths: Sequence[Path], limit: Optional[int]) -> Optional[list]:
+    """The cached rows for ``tag`` iff the cache covers EXACTLY these input files (name, size, mtime) with this
+    encoder; otherwise None (a miss, for any reason)."""
+    want = list(paths)[:limit]
+    try:
+        if f"{tag}_manifest" not in data or str(data[f"{tag}_manifest"]) != manifest(want):
+            return None
+        emb, mt, sp = data[f"{tag}_emb"], data[f"{tag}_mtime"], data[f"{tag}_speech"]
+        if not (len(emb) == len(mt) == len(sp)) or len(emb) > len(want):
+            return None
+        return list(zip(mt.tolist(), emb, sp.tolist()))
+    except (OSError, KeyError, ValueError):
+        return None
+
+
+def _write_cache(cache: Path, data: dict) -> None:
+    """Atomic, owner-only write: a 0600 temp file (created exclusively, so the umask can only tighten it), fsync,
+    rename over the cache, then an explicit chmod. Embeddings are never visible at a laxer mode, even briefly."""
+    tmp = cache.with_name(f"{cache.name}.tmp{os.getpid()}")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            np.savez(f, **data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, cache)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    os.chmod(cache, 0o600)
+
+
 def _load_or_embed(tag: str, paths: Sequence[Path], cache: Optional[Path], limit: Optional[int]):
-    if cache and cache.exists():
-        z = np.load(cache, allow_pickle=False)
-        if f"{tag}_emb" in z.files and int(z[f"{tag}_n"]) == len(paths[:limit]):
-            return list(zip(z[f"{tag}_mtime"].tolist(), z[f"{tag}_emb"], z[f"{tag}_speech"].tolist()))
+    data = _read_cache(cache)
+    hit = _cached_rows(data, tag, paths, limit)
+    if hit is not None:
+        return hit
     rows = embed_dir(paths, limit=limit)
     if cache:
-        data = dict(np.load(cache, allow_pickle=False)) if cache.exists() else {}
+        want = list(paths)[:limit]
         data[f"{tag}_emb"] = np.stack([r[2] for r in rows]) if rows else np.zeros((0, 256), np.float32)
         data[f"{tag}_mtime"] = np.array([r[1] for r in rows])
         data[f"{tag}_speech"] = np.array([r[3] for r in rows])
-        data[f"{tag}_n"] = np.array(len(paths[:limit]))
-        np.savez(cache, **data)
+        data[f"{tag}_manifest"] = np.array(manifest(want))
+        _write_cache(cache, data)
     return [(r[1], r[2], r[3]) for r in rows]
+
+
+def needs_encoder(specs: Sequence[tuple], cache: Optional[Path]) -> bool:
+    """True iff ANY (tag, files, limit) spec is not fully covered by the cache - i.e. the encoder must load."""
+    data = _read_cache(cache)
+    return any(_cached_rows(data, tag, files, limit) is None for tag, files, limit in specs)
 
 
 def main() -> int:
@@ -252,28 +359,39 @@ def main() -> int:
         return 2
     lock = open(LOCK_PATH, "w")
     fcntl.flock(lock, fcntl.LOCK_EX)   # serialise with every other voice harness (two encoder loads OOM the box)
-    need_model = not (cache and cache.exists())
-    if need_model and _mem_available_mb() < args.min_avail_mb:
-        print(f"MemAvailable {_mem_available_mb():.0f} MB < {args.min_avail_mb:.0f} MB: refusing to load the "
-              f"encoder (torch) next to the live voice stack. Re-run when the box is quiet, or use --cache.",
-              file=sys.stderr)
-        return 3
+    global MIN_AVAIL_MB
+    MIN_AVAIL_MB = args.min_avail_mb
 
     corpus = sorted(Path(args.corpus).expanduser().glob("*.wav"), key=lambda p: p.stat().st_mtime)
-    owner = _load_or_embed("owner", corpus, cache, args.limit)
-    if len(owner) <= args.enroll_n + 10:
-        print("not enough owner clips", file=sys.stderr)
-        return 2
-    anchor = enroll_anchor([e for _, e, _ in owner[: args.enroll_n]])
-    rest = owner[args.enroll_n:]
-    g_embs = [e for _, e, _ in rest]
-    g_times = [datetime.fromtimestamp(m, tz=timezone.utc) for m, _, _ in rest]
-    g_speech = [s for _, _, s in rest]
+    imp_files = [sorted(Path(d).expanduser().glob("*.wav")) for d in args.impostors]
+    specs = [("owner", corpus, args.limit)] + [(f"imp{i}", f, None) for i, f in enumerate(imp_files)]
+    try:
+        # Per-tag, per-file coverage decides whether the encoder loads - a partial miss (a new --impostors arm, a
+        # replaced clip, a different encoder) needs the model exactly like a cold cache does.
+        if needs_encoder(specs, cache):
+            avail = _mem_available_mb()
+            if avail < args.min_avail_mb:
+                raise HeadroomError(f"MemAvailable {avail:.0f} MB < {args.min_avail_mb:.0f} MB")
+        owner = _load_or_embed("owner", corpus, cache, args.limit)
+        if len(owner) <= args.enroll_n + 10:
+            print("not enough owner clips", file=sys.stderr)
+            return 2
+        anchor = enroll_anchor([e for _, e, _ in owner[: args.enroll_n]])
+        rest = owner[args.enroll_n:]
+        g_embs = [e for _, e, _ in rest]
+        g_times = [datetime.fromtimestamp(m, tz=timezone.utc) for m, _, _ in rest]
+        g_speech = [s for _, _, s in rest]
 
-    imps: list = []
-    for i, d in enumerate(args.impostors):
-        files = sorted(Path(d).expanduser().glob("*.wav"))
-        imps += [e for _, e, _ in _load_or_embed(f"imp{i}", files, cache, None)]
+        imps: list = []
+        for i, files in enumerate(imp_files):
+            imps += [e for _, e, _ in _load_or_embed(f"imp{i}", files, cache, None)]
+    except HeadroomError as exc:
+        print(f"{exc}: refusing to load the encoder (torch) next to the live voice stack. Re-run when the box is "
+              f"quiet, or use --cache.", file=sys.stderr)
+        return 3
+    except CacheError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
     rep = summarise(g_embs, g_times, g_speech, imps, anchor, sa.AdaptConfig.from_env(), train_frac=args.train_frac)
     rep["enroll_clips"] = args.enroll_n

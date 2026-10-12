@@ -102,3 +102,181 @@ def test_mem_guard_blocks_the_encoder_load(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr("sys.argv", ["x", "--corpus", str(tmp_path), "--cache", str(tmp_path / "nope.npz")])
     assert measure.main() == 3
     assert "MemAvailable" in capsys.readouterr().err
+
+
+# ── the embedding cache: bound to its inputs, memory-floored on any miss, owner-only ─────────────────────────────
+# (review threads on #2002: PRRT_kwDOPZpkks6rcSRy, PRRT_kwDOPZpkks6rcSR4, PRRT_kwDOPZpkks6rcSSB)
+
+import os
+import stat
+
+
+def _wavs(d: Path, n: int, size: int = 100) -> list:
+    d.mkdir(parents=True, exist_ok=True)
+    out = []
+    for i in range(n):
+        p = d / f"c{i:03d}.wav"
+        p.write_bytes(bytes([i % 251]) * size)
+        os.utime(p, (1_700_000_000 + i, 1_700_000_000 + i))
+        out.append(p)
+    return out
+
+
+@pytest.fixture
+def fake_embed(monkeypatch):
+    """Replace the encoder: deterministic unit embeddings per file name, and a call counter."""
+    calls = []
+
+    def fake(paths, *, limit=None):
+        calls.append(len(list(paths)[:limit]))
+        rows = []
+        for p in list(paths)[:limit]:
+            rng = np.random.default_rng(sum(p.name.encode()))
+            rows.append((p, p.stat().st_mtime, _unit(rng.standard_normal(DIM)), 4.0))
+        return rows
+
+    monkeypatch.setattr(measure, "embed_dir", fake)
+    monkeypatch.setattr(measure, "_ENCODER_ID", "enc-A")
+    return calls
+
+
+def test_cache_hits_only_when_every_input_file_is_unchanged(tmp_path, fake_embed):
+    files, cache = _wavs(tmp_path / "c", 12), tmp_path / "emb.npz"
+    measure._load_or_embed("owner", files, cache, None)
+    assert fake_embed == [12]
+    measure._load_or_embed("owner", files, cache, None)
+    assert fake_embed == [12]                                   # hit: no second encode
+    # same count, one clip replaced by a different-sized file -> miss
+    files[3].write_bytes(b"\x07" * 101)
+    os.utime(files[3], (1_700_000_003, 1_700_000_003))
+    measure._load_or_embed("owner", files, cache, None)
+    assert fake_embed == [12, 12]
+    # same size, only mtime moved -> miss
+    os.utime(files[5], (1_800_000_000, 1_800_000_000))
+    measure._load_or_embed("owner", files, cache, None)
+    assert fake_embed == [12, 12, 12]
+    # same everything but one file renamed -> miss
+    files[7] = files[7].rename(files[7].with_name("zz.wav"))
+    measure._load_or_embed("owner", files, cache, None)
+    assert fake_embed == [12, 12, 12, 12]
+    # a different encoder (weights) is a different embedding space -> miss
+    measure._load_or_embed("owner", files, cache, None)
+    assert fake_embed == [12, 12, 12, 12]
+    measure._ENCODER_ID = "enc-B"
+    measure._load_or_embed("owner", files, cache, None)
+    assert fake_embed == [12, 12, 12, 12, 12]
+    # a different --limit is a different input set -> miss
+    measure._load_or_embed("owner", files, cache, 5)
+    assert fake_embed[-1] == 5
+
+
+def test_a_count_only_cache_from_the_old_format_is_a_miss(tmp_path, fake_embed):
+    files, cache = _wavs(tmp_path / "c", 12), tmp_path / "emb.npz"
+    np.savez(cache, owner_emb=np.zeros((12, DIM), np.float32), owner_mtime=np.zeros(12),
+             owner_speech=np.zeros(12), owner_n=np.array(12))
+    os.chmod(cache, 0o600)
+    measure._load_or_embed("owner", files, cache, None)
+    assert fake_embed == [12]
+
+
+def test_needs_encoder_is_decided_per_tag_and_per_file(tmp_path, fake_embed):
+    owner, imp0 = _wavs(tmp_path / "o", 12), _wavs(tmp_path / "i0", 4)
+    cache = tmp_path / "emb.npz"
+    specs = [("owner", owner, None), ("imp0", imp0, None)]
+    assert measure.needs_encoder(specs, cache) is True            # no cache at all
+    measure._load_or_embed("owner", owner, cache, None)
+    assert measure.needs_encoder(specs, cache) is True            # PARTIAL: owner cached, imp0 not
+    measure._load_or_embed("imp0", imp0, cache, None)
+    assert measure.needs_encoder(specs, cache) is False           # fully covered
+    imp0[1].write_bytes(b"changed")
+    assert measure.needs_encoder(specs, cache) is True            # one edited clip is enough
+
+
+def _run_main(monkeypatch, tmp_path, corpus, imps, cache, avail):
+    monkeypatch.setattr(measure, "_mem_available_mb", lambda: avail)
+    monkeypatch.setattr(measure, "LOCK_PATH", str(tmp_path / "lock"))
+    argv = ["x", "--corpus", str(corpus), "--cache", str(cache)]
+    for d in imps:
+        argv += ["--impostors", str(d)]
+    monkeypatch.setattr("sys.argv", argv)
+    return measure.main()
+
+
+def test_memory_floor_applies_to_a_partial_cache_miss(monkeypatch, tmp_path, fake_embed, capsys):
+    owner = _wavs(tmp_path / "o", 30)
+    imp0, imp1 = _wavs(tmp_path / "i0", 4), _wavs(tmp_path / "i1", 4)
+    cache = tmp_path / "emb.npz"
+    monkeypatch.setattr(measure, "_mem_available_mb", lambda: 9999.0)
+    measure._load_or_embed("owner", owner, cache, None)
+    measure._load_or_embed("imp0", imp0, cache, None)
+    fake_embed.clear()
+    # the cache exists and covers owner + imp0, but a NEW impostor arm (imp1) is requested on a starved box
+    rc = _run_main(monkeypatch, tmp_path, tmp_path / "o", [tmp_path / "i0", tmp_path / "i1"], cache, avail=100.0)
+    assert rc == 3 and fake_embed == []
+    assert "MemAvailable" in capsys.readouterr().err
+    # a fully covered cache needs no encoder, so a starved box is fine
+    measure._load_or_embed("imp1", imp1, cache, None)
+    assert _run_main(monkeypatch, tmp_path, tmp_path / "o", [tmp_path / "i0", tmp_path / "i1"], cache,
+                     avail=100.0) == 0
+    assert fake_embed == [4]
+
+
+def test_embed_dir_itself_enforces_the_floor_before_importing_the_encoder(monkeypatch, tmp_path):
+    monkeypatch.setattr(measure, "_mem_available_mb", lambda: 100.0)
+    monkeypatch.setattr(measure, "MIN_AVAIL_MB", 1500.0)
+    with pytest.raises(measure.HeadroomError):
+        measure.embed_dir(_wavs(tmp_path / "c", 2))               # would import resemblyzer/torch if it got past
+
+
+def test_cache_is_written_owner_only_even_under_a_permissive_umask(tmp_path, fake_embed):
+    files, cache = _wavs(tmp_path / "c", 12), tmp_path / "emb.npz"
+    old = os.umask(0)
+    try:
+        measure._load_or_embed("owner", files, cache, None)
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE(cache.stat().st_mode) == 0o600
+    assert [p.name for p in tmp_path.iterdir() if ".tmp" in p.name] == []     # atomic: no temp left behind
+
+
+def test_rewriting_an_existing_cache_leaves_it_owner_only(tmp_path, fake_embed):
+    files, cache = _wavs(tmp_path / "c", 12), tmp_path / "emb.npz"
+    measure._load_or_embed("owner", files, cache, None)
+    os.chmod(cache, 0o600)
+    files[0].write_bytes(b"x")                                  # force a rewrite
+    old = os.umask(0)
+    try:
+        measure._load_or_embed("owner", files, cache, None)
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE(cache.stat().st_mode) == 0o600
+
+
+@pytest.mark.parametrize("mode", [0o640, 0o604, 0o644, 0o660, 0o666, 0o700 | 0o010])
+def test_a_group_or_world_readable_cache_is_refused(tmp_path, fake_embed, capsys, monkeypatch, mode):
+    owner = _wavs(tmp_path / "o", 30)
+    cache = tmp_path / "emb.npz"
+    measure._load_or_embed("owner", owner, cache, None)
+    os.chmod(cache, mode)
+    with pytest.raises(measure.CacheError):
+        measure._read_cache(cache)
+    fake_embed.clear()
+    assert _run_main(monkeypatch, tmp_path, tmp_path / "o", [], cache, avail=9999.0) == 2
+    assert "not private" in capsys.readouterr().err
+    assert fake_embed == []                                     # refused BEFORE anything was embedded or rewritten
+
+
+def test_a_failed_write_leaves_the_old_cache_intact_and_no_temp(tmp_path, fake_embed, monkeypatch):
+    files, cache = _wavs(tmp_path / "c", 12), tmp_path / "emb.npz"
+    measure._load_or_embed("owner", files, cache, None)
+    before = cache.read_bytes()
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(measure.np, "savez", boom)
+    files[0].write_bytes(b"x")
+    with pytest.raises(OSError):
+        measure._load_or_embed("owner", files, cache, None)
+    assert cache.read_bytes() == before
+    assert [p.name for p in tmp_path.iterdir() if ".tmp" in p.name] == []
