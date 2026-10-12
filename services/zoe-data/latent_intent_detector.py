@@ -9,6 +9,7 @@ import re
 
 import httpx
 
+import brain_slot_guard
 from gemma_endpoint import gemma_base
 
 logger = logging.getLogger(__name__)
@@ -85,10 +86,12 @@ async def _complete(prompt: str) -> str | None:
         "stream": False,
     }
     try:
-        async with httpx.AsyncClient(timeout=25.0) as client:
-            resp = await client.post(f"{gemma_base()}/v1/chat/completions", json=payload)
-            resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"].strip()
+        # Post-turn pass on the brain's ONE slot: waits out a hot conversation (brain_slot_guard) so it cannot evict it.
+        async with brain_slot_guard.background_slot("latent_intent_detector"):
+            async with httpx.AsyncClient(timeout=25.0) as client:
+                resp = await client.post(f"{gemma_base()}/v1/chat/completions", json=payload)
+                resp.raise_for_status()
+                return resp.json()["choices"][0]["message"]["content"].strip()
     except Exception as exc:
         logger.debug("latent_intent_detector: LLM failed: %s", exc)
         return None
