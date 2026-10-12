@@ -2200,6 +2200,7 @@ def _identify_speaker_from_wav(wav_bytes: bytes) -> tuple[str, float] | None:
         try:
             wav = preprocess_wav(wav_path)
             embedding = encoder.embed_utterance(wav)
+            speech_s = float(len(wav)) / 16000.0   # VAD-trimmed speech at resemblyzer's 16 kHz (adaptation offer)
         finally:
             try:
                 _os.unlink(wav_path)
@@ -2210,6 +2211,7 @@ def _identify_speaker_from_wav(wav_bytes: bytes) -> tuple[str, float] | None:
         local = _match_speaker_local(embedding)
         if local is not None:
             _claim_ctx.source = "local"
+            _adapt_offer(local[0], local[1], embedding, speech_s)   # flag-dark; never raises, never blocks
             return local
 
         emb_bytes = embedding.astype(_np.float32).tobytes()
@@ -2257,6 +2259,65 @@ def _identify_speaker_from_wav(wav_bytes: bytes) -> tuple[str, float] | None:
             _claim_ctx.source = "error"
         log.warning("Speaker ID failed: %s", exc)
         return None
+
+
+# ── Speaker-profile adaptation offer (flag-dark; policy lives on the server) ─────────────────────────────────
+# The daemon already holds each turn's embedding. When SPEAKER_ADAPT_SEND is on, a turn that looks high-certainty
+# (cheap pre-filter below - the server re-checks EVERYTHING and is the authority) is offered to
+# POST /api/voice/adapt as {voice_user_id, voice_score, embedding_base64, speech_s, corroboration}. The embedding
+# is a 256-float vector; AUDIO NEVER LEAVES THE PANEL. The server decides (ZOE_SPEAKER_ADAPT=off|shadow|on) and the
+# normal profile sync carries an adapted profile back. Off by default: with SPEAKER_ADAPT_SEND unset nothing is sent.
+SPEAKER_ADAPT_SEND = os.environ.get("SPEAKER_ADAPT_SEND", "").strip().lower() in ("1", "true", "yes", "on")
+SPEAKER_ADAPT_MIN_SCORE = float(os.environ.get("SPEAKER_ADAPT_MIN_SCORE", "0.85") or 0.85)
+SPEAKER_ADAPT_MIN_SPEECH_S = float(os.environ.get("SPEAKER_ADAPT_MIN_SPEECH_S", "2.0") or 2.0)
+SPEAKER_ADAPT_MIN_GAP_S = float(os.environ.get("SPEAKER_ADAPT_MIN_GAP_S", "60") or 60)
+_adapt_last_sent = 0.0
+_adapt_lock = threading.Lock()
+
+
+def _adapt_should_offer(score: float, speech_s: float, now: float, last_sent: float) -> bool:
+    """Cheap local pre-filter so the panel does not POST an embedding for every turn."""
+    return (
+        math.isfinite(score) and score >= SPEAKER_ADAPT_MIN_SCORE
+        and math.isfinite(speech_s) and speech_s >= SPEAKER_ADAPT_MIN_SPEECH_S
+        and (now - last_sent) >= SPEAKER_ADAPT_MIN_GAP_S
+    )
+
+
+def _adapt_post(user_id: str, score: float, emb_b64: str, speech_s: float) -> None:
+    try:
+        resp = _api_post(
+            "/api/voice/adapt",
+            {"voice_user_id": user_id, "voice_score": round(float(score), 4), "embedding_base64": emb_b64,
+             "speech_s": round(float(speech_s), 2), "corroboration": {}},
+            timeout=5, retries=0,
+        )
+        reason = resp.get("reason") if isinstance(resp, dict) else None
+        if isinstance(resp, dict) and (resp.get("applied") or resp.get("would_apply")):
+            log.info("Speaker adaptation: %s (mode=%s)", reason, resp.get("mode"))
+        else:
+            log.debug("Speaker adaptation offer not applied: %s", reason or resp)
+    except Exception as exc:   # an offer must never cost a turn
+        log.debug("Speaker adaptation offer failed: %s", exc)
+
+
+def _adapt_offer(user_id: str, score: float, embedding, speech_s: float) -> None:
+    """Offer one locally-matched turn for adaptation. Off-thread, fire-and-forget, never raises."""
+    global _adapt_last_sent
+    if not SPEAKER_ADAPT_SEND:
+        return
+    try:
+        now = time.time()
+        with _adapt_lock:
+            if not _adapt_should_offer(float(score), float(speech_s), now, _adapt_last_sent):
+                return
+            _adapt_last_sent = now
+        import base64 as _b64, numpy as _np
+        emb_b64 = _b64.b64encode(_np.asarray(embedding, dtype=_np.float32).tobytes()).decode()
+        threading.Thread(target=_adapt_post, args=(user_id, score, emb_b64, speech_s),
+                         daemon=True, name="speaker-adapt").start()
+    except Exception as exc:
+        log.debug("Speaker adaptation offer skipped: %s", exc)
 
 
 # Distinguishes "caller did not score this turn" from a scored no-match (None).

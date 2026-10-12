@@ -26,6 +26,7 @@ from typed_env import env_bool, env_float, env_int, env_list, env_str
 import voice_first_sound as _first_sound
 import voice_speculation as _speculation
 import voice_stt_stream as _stt_stream
+import speaker_adaptation
 from voice_speaker_id import _compute_resemblyzer_embedding, _cosine_similarity
 # Waterfall engine mechanics live in tts_waterfall; they are re-exported here so
 # existing importers (main.py health detail, tests that monkeypatch this module,
@@ -6331,6 +6332,8 @@ async def voice_identify(payload: dict, caller: dict = Depends(_require_voice_au
     if not profiles:
         return {"ok": True, "identified": False, "reason": "no_profiles"}
 
+    profiles = await speaker_adaptation.serve_adapted_profiles(profiles, user_idx=1, blob_idx=3)
+
     best_id = None
     best_user_id = None
     best_name = None
@@ -6387,6 +6390,8 @@ async def voice_profiles_sync(caller: dict = Depends(_require_voice_auth)):
     except Exception as exc:
         logger.error("voice/profiles/sync DB error: %s", exc)
         raise HTTPException(status_code=500, detail="DB error") from exc
+
+    rows = await speaker_adaptation.serve_adapted_profiles(rows, user_idx=0, blob_idx=2)  # ZOE_SPEAKER_ADAPT=on only
 
     return {
         "ok": True,
