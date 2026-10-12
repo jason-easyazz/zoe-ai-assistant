@@ -17,6 +17,9 @@ a link to the detail + where it's up to. Mark ✅ when done so nothing lingers h
 
 ## 🔨 Active
 
+### Settings > Bluetooth devices (built flag-dark 2026-10-12; owner ask: "scan, connect, disconnect and update ... in case we want to connect other devices")
+- Record: [`docs/knowledge/bluetooth-settings.md`](knowledge/bluetooth-settings.md). **Built:** the panel Bluetooth agent (`services/panel-bluetooth`, pull-based, per-device drivers: generic + Omi), the zoe-data broker/routes (`ZOE_BLUETOOTH_SETTINGS`, admin-only, audited), one shared UI component on desktop + touch Settings, the shared one-radio lock with omi-sync, the pinned-release Omi firmware update behind seven gates. **Next (operator):** deploy the agent to the panel (`scripts/setup/deploy-pi-bluetooth.sh`, DRY_RUN first), flip the flags, then ONE supervised firmware update with the pendant on its charger next to the panel (or a USB adapter) — that closes the UNVERIFIED `upload/mark/reset/post` path. **Later:** voice ("connect my pendant") through the same broker, a push channel for progress.
+
 ### ⛔ READ FIRST — return-from-absence review (2026-09-25)
 - **What:** [`docs/knowledge/state-of-zoe-review-2026-09-25.md`](knowledge/state-of-zoe-review-2026-09-25.md) — the full audit after the 2026-08-10 → 2026-09-25 gap, security must-dos, dependency currency, ecosystem changes, the comparable-projects borrow list, and a ~90-item known-problems register with 16 doc contradictions.
 - **Fixed the same day (verified live):** Telegram bot (Node Happy-Eyeballs timeout), the Chroma HNSW recall corruption (rebuilt 22:26, `/health` recall `ok`), zoe-data restarted lean, router swap guard applied, Node 22.23.3, zoe-auth image rebuilt, security pip set, and the **voice replay gate passed 13/13** for the first time in 41 runs. The panel is off on purpose (Jason). Do NOT repeat the rebuild unless `/health` reports `memory_capture` degraded.
