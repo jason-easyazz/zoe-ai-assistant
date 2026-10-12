@@ -80,6 +80,12 @@ def _load() -> Optional[tuple]:
             if (meta.get("format") != FORMAT or W.shape != (n, int(meta["dim"]))
                     or b.shape != (n,) or thr.shape != (n,)):
                 raise ValueError("restraint head: shape/format mismatch")
+            # same-shaped but poisoned: NaN compares false against every threshold, so a NaN/Inf weight or bias would load,
+            # score nothing, and be cached as a confident "no class". Thresholds are probabilities, so [0, 1].
+            if not (np.isfinite(W).all() and np.isfinite(b).all() and np.isfinite(thr).all()):
+                raise ValueError("restraint head: non-finite weights, bias or threshold")
+            if not ((thr >= 0.0).all() and (thr <= 1.0).all()):
+                raise ValueError("restraint head: threshold outside [0, 1]")
             head = (classes, W, b, thr, meta)
         except Exception as exc:  # noqa: BLE001 - an absent or damaged head is "no head", never a broken classifier
             logger.info("restraint head unavailable: %r", exc)
@@ -151,21 +157,31 @@ def _key(text: str) -> str:
     return hashlib.sha1(text.encode("utf-8")).hexdigest()
 
 
-def decide_from_vector(vec: Any) -> tuple[str, ...]:
-    """The classes whose sigmoid clears its tuned threshold. Pure numpy; ``()`` when no head is shipped."""
+def _decide(vec: Any) -> Optional[tuple[str, ...]]:
+    """The classes whose sigmoid clears its tuned threshold, or ``None`` when the head COULD NOT score this vector: no head, a
+    wrong-width or non-finite vector, or a non-finite score. ``None`` is "did not run" (never cached, never stamps a row
+    head-complete); ``()`` is only ever "ran and found nothing". NaN compares false against every threshold, so without this
+    a poisoned score would read as a confident empty answer."""
     head = _load()
     if head is None:
-        return ()
+        return None
     classes, W, b, thr, _meta = head
     v = np.asarray(vec, dtype=np.float32).reshape(-1)
-    if v.shape[0] != W.shape[1]:
-        return ()
+    if v.shape[0] != W.shape[1] or not np.isfinite(v).all():
+        return None
     n = float(np.linalg.norm(v))
     if n > 0:
         v = v / n
     z = W @ v + b
+    if not np.isfinite(z).all():
+        return None
     p = 1.0 / (1.0 + np.exp(-np.clip(z, -30, 30)))
     return tuple(c for c, pi, ti in zip(classes, p, thr) if pi >= ti)
+
+
+def decide_from_vector(vec: Any) -> tuple[str, ...]:
+    """``_decide`` with "could not score" folded into "nothing fires". Pure numpy; ``()`` when no head is shipped."""
+    return _decide(vec) or ()
 
 
 def lookup(text: Any, *, embed: bool = False) -> Optional[tuple[str, ...]]:
@@ -188,9 +204,11 @@ def lookup(text: Any, *, embed: bool = False) -> Optional[tuple[str, ...]]:
         fn = _live_embedder()
         if fn is None:
             return None
-        out = decide_from_vector(fn(raw))
+        out = _decide(fn(raw))
     except Exception as exc:  # noqa: BLE001
         logger.debug("restraint head: embed skipped: %r", exc)
+        return None
+    if out is None:                                # could not score: unavailable for this call, and not remembered
         return None
     with _CACHE_LOCK:
         _CACHE[key] = out

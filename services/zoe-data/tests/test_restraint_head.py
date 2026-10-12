@@ -165,6 +165,69 @@ def test_b_and_thr_both_wrong_in_the_same_way_is_the_case_the_chain_let_through(
     assert restraint.classify_full(text, head=True) == restraint.classify_full(text, head=False)
 
 
+def _arr(shape, index, value):
+    a = np.zeros(shape, dtype=np.float32)
+    a.flat[index] = value
+    return a
+
+
+@pytest.mark.parametrize("label,kwargs", [
+    ("nan W", lambda n: {"W": _arr((n, 384), 5, np.nan)}),
+    ("inf W", lambda n: {"W": _arr((n, 384), 5, np.inf)}),
+    ("inf b", lambda n: {"b": _arr((n,), 2, np.inf)}),
+    ("-inf b", lambda n: {"b": _arr((n,), 0, -np.inf)}),
+    ("nan b", lambda n: {"b": _arr((n,), 1, np.nan)}),
+    ("nan thr", lambda n: {"thr": np.where(np.arange(n) == 3, np.nan, 0.5).astype(np.float32)}),
+    ("thr > 1", lambda n: {"thr": np.where(np.arange(n) == 0, 1.5, 0.5).astype(np.float32)}),
+    ("thr < 0", lambda n: {"thr": np.where(np.arange(n) == 4, -0.1, 0.5).astype(np.float32)}),
+    ("inf thr", lambda n: {"thr": np.where(np.arange(n) == 2, np.inf, 0.5).astype(np.float32)}),
+])
+def test_non_finite_or_out_of_range_parameters_refuse_the_head(tmp_path, monkeypatch, label, kwargs):
+    """Codex P2 (#1996): a same-shaped head with NaN/Inf weights or biases, or thresholds outside [0, 1], used to load; every
+    NaN probability then compares false, ``lookup`` cached an empty result as a real classification and the row was stamped
+    head-complete, so under enforce a sensitive paraphrase could pass as non-sensitive instead of falling back safely."""
+    _write_head(tmp_path, monkeypatch, **kwargs(len(CLASSES)))
+    assert restraint_head._load() is None, label
+    assert not restraint_head.available()
+    restraint_head.set_embedder(_embedder_for({"I am so sad": np.ones(384, dtype=np.float32)}))
+    assert restraint_head.lookup("I am so sad", embed=True) is None      # "did not run", not "found nothing"
+
+
+def test_a_threshold_exactly_zero_or_one_is_still_allowed(tmp_path, monkeypatch):
+    """The range is closed [0, 1]: the boundary values are not refused (control for the rejections above)."""
+    n = len(CLASSES)
+    _write_head(tmp_path, monkeypatch, thr=np.array([0.0, 1.0] + [0.5] * (n - 2), dtype=np.float32))
+    assert restraint_head.available()
+
+
+@pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
+def test_a_non_finite_score_at_runtime_is_never_cached_as_an_empty_classification(bad):
+    """Even past the loader, a non-finite score must read as 'head unavailable for this call' (None, nothing cached),
+    never as a cached ``()`` that stamps the row head-complete."""
+    text = "something the embedder returned garbage for"
+    v = np.zeros(384, dtype=np.float32)
+    v[0] = bad
+    restraint_head.set_embedder(_embedder_for({text: v}))
+    assert restraint_head.lookup(text, embed=True) is None
+    assert restraint_head.lookup(text, embed=False) is None             # nothing was cached
+    assert restraint_head.decide_from_vector(v) == ()                   # the public helper stays fail-safe
+    # a healthy vector for the same text afterwards is classified (the failure was not remembered)
+    restraint_head.set_embedder(_embedder_for({text: _direction("grief")}))
+    assert "grief" in (restraint_head.lookup(text, embed=True) or ())
+
+
+def test_a_non_finite_score_from_weights_poisoned_after_load_is_not_cached(monkeypatch):
+    """Belt and braces: weights corrupted AFTER load (the loader's own check bypassed) still cannot cache an empty result."""
+    classes, W, b, thr, meta = restraint_head._load()
+    W2 = W.copy()
+    W2[0, 0] = np.nan
+    monkeypatch.setitem(restraint_head._STATE, "head", (classes, W2, b, thr, meta))
+    text = "a sensitive paraphrase"
+    restraint_head.set_embedder(_embedder_for({text: np.ones(384, dtype=np.float32)}))
+    assert restraint_head.lookup(text, embed=True) is None
+    assert restraint_head.lookup(text, embed=False) is None
+
+
 # ── the head's own math ─────────────────────────────────────────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("cls", CLASSES)
 def test_a_vector_along_a_class_weight_fires_that_class(cls):
