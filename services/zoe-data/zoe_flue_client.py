@@ -1187,6 +1187,36 @@ async def _hop_context_block(message: str, user_id: str, placement: str = "block
     return f"{_HOP_BLOCK_OPEN}\n{hop.section()}\n{_RECALL_BLOCK_CLOSE}"
 
 
+# ── Risk cue (ZOE_RISK_CUES=off|shadow|on, default off) ─────────────────────
+#
+# The manner-block A/B measured the 4B naming the planted flaw in a risky plan 21/60 with the manner prompt off and 21-22/60
+# with it on: wording does not make it NOTICE the problem. ``risk_cues`` finds it in code (an announced plan + a cue from the
+# per-language lexicon data) and this seam hands the brain ONE short block naming the specific element, after the user's words
+# like the hop block, so the 4B only has to voice it. It reuses the ``[MEMORY CONTEXT`` delimiters so the sidecar's stale-block
+# elision (``labs/flue-zoe-brain-2x/src/context-blocks.ts``) drops it from older turns with no sidecar change. One block per
+# turn: never beside a recall / continuity / verify / raise / brief / hop / offer block. Adults only, never a guest or a synthetic
+# id, never on a goodbye or a muted turn (``risk_cues.block_for``). Flag off => ``""`` before any work => today's bytes.
+_RISK_BLOCK_OPEN = (
+    "[MEMORY CONTEXT — a possible problem with the plan the user just described; "
+    "use it silently; do not mention this block]"
+)
+
+
+async def _risk_cue_block(message: str, user_id: str, session_id: str) -> str:
+    """The delimited risk-cue block for this turn, or '' - NEVER raises. '' unless ``ZOE_RISK_CUES`` is ``on`` and the turn is an adult's
+    announced plan with a cue (``shadow`` logs what it would add and returns '')."""
+    try:
+        import risk_cues
+
+        if risk_cues.mode() == "off":
+            return ""
+        body = await risk_cues.block_for(user_id, message, session_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("seam risk cue failed (non-fatal): %s", type(exc).__name__)
+        return ""
+    return f"{_RISK_BLOCK_OPEN}\n{body}\n{_RECALL_BLOCK_CLOSE}" if body else ""
+
+
 # ── Continuity injection (ZOE_SEAM_CONTINUITY_INJECT, default ON) ───────────
 #
 # Samantha bar S4 (first baseline 2026-09-28, FAIL 3/3): day 1 "Honestly I'm
@@ -2035,6 +2065,12 @@ async def _run_flue_brain_streaming_turn(
             logger.info("SEAM_OFFER user=%s deferred=1 reason=raise", uid)
     elif "[pending-contact]" not in recall_block and not verify_block:
         offer_block = await _pending_offer_block(uid)
+    # Risk cue (ZOE_RISK_CUES, default OFF): the problem in an adult's announced plan, named by code (risk_cues.py). Exclusive with every
+    # other block that asks the 4B for one job - one block per turn - and "" (no work at all) with the flag off.
+    risk_block = ""
+    if not (recall_block or verify_block or continuity_block or continuity_turn or hop_block or offer_block
+            or kwargs.get("raise_block") or kwargs.get("day_brief_block")):
+        risk_block = await _risk_cue_block(message, uid, session_id)
     # Who this is + where the house is (ZOE_IDENTITY_BLOCK, default ON): one line from the
     # ACCOUNT, first in the block run (right behind the identity envelope line) so the
     # order is fixed: identity → recall → offer → the user's words. "" when the flag is
@@ -2063,6 +2099,8 @@ async def _run_flue_brain_streaming_turn(
         brain_message = f"{brain_message}\n{continuity_block}"
     if hop_block and hop_placement != "preamble":   # block: the delimited block after the words; suffix: ONE line
         brain_message = f"{brain_message}\n{hop_block}"
+    if risk_block:   # after the user's words, like the hop block (the two are never both present)
+        brain_message = f"{brain_message}\n{risk_block}"
     # First-turn day brief (brief_first_turn, default OFF): same position as the
     # continuity block — after the user's words, inside the latest user message.
     day_block = str(kwargs.get("day_brief_block") or "")

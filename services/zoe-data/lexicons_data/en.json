@@ -902,5 +902,244 @@
  "change_cues": ["instead", "(?:is|are|was|were|'s|'re)\\s+off", "called\\s+off", "call(?:ed|ing)?\\s+it\\s+off", "postponed?", "postponing", "rescheduled?", "rescheduling", "moved", "moving\\s+(?:it|to|house)", "switched", "switching", "changed", "changing", "pushed\\s+back", "put\\s+back", "brought\\s+forward", "not\\s+(?:going|happening)\\s+any\\s*more", "no\\s+longer", "cancell?ed", "cancell?ing", "fell\\s+through", "falling\\s+through", "scrapped", "dropped", "now\\s+(?:live|lives|living|work|works|working|stay|stays|staying|based|going|doing|goes|has|have|is|are)", "swapped", "swapping", "replaced", "any\\s*more"],
  "_note_clause_joiners": "night_mind.moment_change_backed: words that start a new clause inside one sentence (punctuation , ; : and dashes also split). A change cue backs a moment only from the clause(s) its quote overlaps, so another subject's 'now lives' in the same sentence is not borrowed.",
  "clause_joiners": ["while", "whilst", "whereas", "but", "although", "though", "and", "meanwhile", "yet", "however"],
- "manner": {"block": "With people: when someone shares a feeling, first say back what you heard in a few words of your own, then stop or ask ONE question; give advice only if they ask. Name one specific thing about what they told you, and never flatter or gush. If their plan has a real problem, say so once, kindly, then respect their choice; if it is a good plan, say so plainly. Ask one question at a time. Never hint they should stay or that you missed them. When they say goodnight, say a plain goodnight."}
+ "manner": {"block": "With people: when someone shares a feeling, first say back what you heard in a few words of your own, then stop or ask ONE question; give advice only if they ask. Name one specific thing about what they told you, and never flatter or gush. If their plan has a real problem, say so once, kindly, then respect their choice; if it is a good plan, say so plainly. Ask one question at a time. Never hint they should stay or that you missed them. When they say goodnight, say a plain goodnight."},
+ "risk_cues": {
+  "_note": "The risk-cue tier (risk_cues.py, ZOE_RISK_CUES): CODE finds the problem in a plan the user just announced and hands the brain ONE short note naming it, so the 4B only has to voice the flaw, not find it. Regex fragments, matched case-insensitively against the user's own words after apostrophes are normalised to '. plan.* decide whether the turn is an announced plan at all. cues[]: every pattern in 'all' must match and no pattern in 'absent' may; {0} {1} in 'note' are filled with the words each 'all' pattern matched. timing.* is the clock arithmetic (two things at one time; too little lead before a flight). Categories: safety_health, money_contract, irreversible, prerequisite, timing. Written from the categories of everyday life, not from any bench sentence. Only the user's words are ever read with these, never Zoe's reply.",
+  "reviewed": true,
+  "enabled": true,
+  "heading": "## Before you answer, check",
+  "rule": "Mention the concern once, briefly and kindly, then help with the plan. Do not lecture, refuse or repeat it.",
+  "plan": {
+   "intent": [
+    "\\b(?:i|we)(?:'ll|\\s+will|\\s+shall)\\b",
+    "\\b(?:i'm|i\\s+am|we're|we\\s+are)\\s+(?:\\w+\\s+){0,2}?(?:going\\s+to|gonna|about\\s+to|planning\\s+(?:to|on)|intending\\s+to|thinking\\s+(?:of|about)|aiming\\s+to|set\\s+to)\\b",
+    "\\b(?:i|we)(?:'ve)?\\s+(?:plan|planned|intend|intended|decided|have\\s+decided|resolved)\\s+to\\b",
+    "\\b(?:i|we)(?:'ve\\s+got|\\s+have\\s+got|\\s+have|\\s+need|\\s+must)\\s+to\\b",
+    "\\b(?:i'm|i\\s+am|we're|we\\s+are)\\s+\\w+ing\\b[^.!?]{0,30}\\b(?:now|right\\s+now|tonight|today|tomorrow|this\\s+(?:morning|afternoon|evening|weekend)|on\\s+(?:mon|tues|wednes|thurs|fri|satur|sun)day|next\\s+\\w+)\\b",
+    "\\b(?:sending|posting|submitting|signing|paying|booking|deleting|quitting|resigning|doing|telling)\\s+(?:it\\s+)?(?:now|right\\s+now|today|tonight)\\b",
+    "\\b(?:tomorrow|tonight|this\\s+(?:morning|afternoon|evening|weekend)|on\\s+(?:mon|tues|wednes|thurs|fri|satur|sun)day|next\\s+\\w+)\\b\\s*,?\\s*(?:i|we)\\b"
+   ],
+   "when": [
+    "\\b(?:tonight|today|tomorrow|now|right\\s+now|later|this\\s+(?:morning|afternoon|evening|weekend)|next\\s+(?:week|month|year|\\w+day)|on\\s+(?:mon|tues|wednes|thurs|fri|satur|sun)day|in\\s+(?:a|an|\\d+)\\s+(?:minutes?|hours?|days?))\\b"
+   ],
+   "past": [
+    "\\b(?:yesterday|last\\s+(?:night|week|month|year|time)|ago|used\\s+to|already)\\b",
+    "\\b(?:i|we)\\s+(?:was|were|did|had|felt|went|drove|took|got|woke|slept|ate|drank|wrote|said|told|saw|made|bought|sold|lost|paid)\\b"
+   ],
+   "veto": [
+    "^\\s*(?:so\\s+|and\\s+|but\\s+|well\\s+|ok(?:ay)?\\s+|hey\\s+|zoe\\s*,?\\s+)*(?:should|shall|can|could|would|will|do|does|did|is|are|am|was|were|what|how|why|where|which|who|any|have|has|may|might)\\b",
+    "\\bwhat\\s+if\\b|\\bsuppose\\b|\\bimagine\\b|\\bhypothetically\\b|\\bif\\s+(?:i|we)\\b",
+    "\\b(?:not|never)\\s+(?:going|gonna|planning|about|intend\\w*)\\b|\\bwon't\\b|\\bwill\\s+not\\b|\\bn't\\s+(?:going|gonna|planning)\\b|\\bdecided\\s+(?:not|against)\\b|\\bno\\s+longer\\b",
+    "\\b(?:was|were)\\s+(?:going|planning|about|gonna)\\b|\\bused\\s+to\\b|\\bwould\\s+have\\b|\\bwish\\s+i\\b"
+   ]
+  },
+  "cues": [
+   {
+    "id": "hazard_impaired",
+    "category": "safety_health",
+    "all": [
+     "\\b(?:driv(?:e|ing)|ride|riding|cycl(?:e|ing)|swim(?:ming)?|climb(?:ing)?|oper(?:ate|ating)|chainsaw|power\\s+tools?|ladder|mow(?:ing)?|deadlift\\w*|heavy\\s+(?:lift\\w*|weights?)|hik(?:e|ing)|sail(?:ing)?|surf(?:ing)?|div(?:e|ing))\\b",
+     "\\b(?:awake|up)\\s+since\\s+[\\w:]+|\\b(?:no|barely\\s+any|not\\s+much)\\s+sleep\\b|\\b(?:haven't|hasn't)\\s+(?:slept|eaten)\\b|\\bslept\\s+(?:only\\s+|just\\s+)?(?:an?\\s+hour|\\w+\\s+hours?|badly|poorly)\\b|\\b(?:so|very|really|dead|completely|totally|bit|pretty)\\s+(?:tired|sleepy|drowsy|exhausted)\\b|\\b(?:exhausted|drowsy|sleep[- ]deprived|jet[- ]?lagged|hung\\s?over|dizzy|drunk|tipsy|buzzed|stoned|feverish|sick)\\b|\\b(?:had|have\\s+had)\\s+(?:a\\s+few|some|\\d+|two|three|four|five|several)\\s+(?:drinks?|beers?|glasses|wines?|shots?|ciders?)\\b|\\b(?:been\\s+drinking|a\\s+few\\s+drinks)\\b|\\b(?:on|taking)\\s+(?:strong\\s+)?(?:painkillers|sedatives|sleeping\\s+(?:pills|tablets)|codeine|opioids?)\\b|\\b(?:fever|flu|migraine|concussion)\\b"
+    ],
+    "note": "Safety: the plan says \"{0}\" and they also said \"{1}\" - that combination is risky."
+   },
+   {
+    "id": "injury_exertion",
+    "category": "safety_health",
+    "all": [
+     "\\b(?:knee|ankle|back|shoulder|hamstring|calf|wrist|hip|neck|leg|foot|elbow)s?\\s+(?:\\w+\\s+){0,3}?(?:sore|tight|stiff|swollen|painful|hurts?|hurting|achy|aching|injured|sprained|strained|playing\\s+up)\\b|\\b(?:sore|tight|injured|sprained|strained|pulled|torn|swollen|bad)\\s+(?:\\w+\\s+)?(?:knee|ankle|back|shoulder|hamstring|calf|wrist|hip|neck|leg|foot|elbow)\\b|\\b(?:injur(?:y|ed)|sprain|strain|pulled\\s+(?:a\\s+)?muscle|tendon\\w*|concussion|stitches|fracture\\w*|broken\\s+(?:bone|rib|toe|finger|wrist|arm|leg))\\b",
+     "\\b(?:deadlift\\w*|squats?|heavy\\s+(?:lift\\w*|weights?)|marathon|sprint\\w*|\\d+(?:\\.\\d+)?\\s?(?:km|k|miles?|mi)|run(?:ning)?|jog(?:ging)?|race|hik(?:e|ing)|climb(?:ing)?|football|rugby|basketball|tackl\\w+|lift(?:ing)?|workout|gym|move\\s+(?:the\\s+)?(?:fridge|sofa|couch|piano|wardrobe|furniture)|play(?:ing)?\\s+(?:football|soccer|rugby|basketball|netball|hockey|tennis|squash))\\b"
+    ],
+    "note": "Safety: they mentioned \"{0}\" and also plan \"{1}\" - it may be too much for it."
+   },
+   {
+    "id": "skip_protection",
+    "category": "safety_health",
+    "all": [
+     "\\b(?:skip(?:ping)?|skipped|without|forgo(?:ing)?|not\\s+(?:wearing|using|bothering\\s+with))\\s+(?:the\\s+|a\\s+|my\\s+)?(?:warm[- ]?up|stretch(?:ing)?|helmet|seat\\s?belt|life\\s?jacket|harness|safety\\s+(?:gear|check|glasses)|goggles|ear\\s?protection|sun\\s?screen)\\b"
+    ],
+    "note": "Safety: they plan on \"{0}\", which is the usual protection against getting hurt."
+   },
+   {
+    "id": "stop_medication",
+    "category": "safety_health",
+    "all": [
+     "\\b(?:stop(?:ping)?|quit(?:ting)?|skip(?:ping)?|coming?\\s+off|going\\s+off|cut(?:ting)?\\s+(?:out|down\\s+on)|not\\s+(?:taking|going\\s+to\\s+take))\\s+(?:taking\\s+)?(?:my\\s+|the\\s+|all\\s+my\\s+)?(?:\\w+\\s+){0,2}?(?:meds|medication|medicine|antidepressants?|insulin|pills|tablets|inhaler|antibiotics)\\b"
+    ],
+    "note": "Health: they plan on \"{0}\" - a change like that is safest checked with their doctor or pharmacist first."
+   },
+   {
+    "id": "thin_meal_junk",
+    "category": "safety_health",
+    "all": [
+     "\\b(?:lunch|dinner|breakfast|supper|meals?)\\b[^.!?]{0,40}?\\b(?:energy\\s+drinks?|crisps|chocolate|candy|sweets|lollies|soda|cola|biscuits|cookies|donuts?|doughnuts?)\\b"
+    ],
+    "absent": [
+     "\\b(?:sandwich\\w*|salad|soup|chicken|beef|pork|fish|eggs?|beans|lentils?|tofu|rice|pasta|stew|curry|roast|steak|burgers?|pizza|veg\\w*|fruit|yogh?urt|oats|porridge|meat|sausages?|wraps?|burritos?|stir[- ]fry|noodles|casserole|omelette|pancakes|waffles|toast|cereal|bagels?|muesli|granola|smoothies?)\\b"
+    ],
+    "note": "Health: that meal (\"{0}\") is mostly sugar or caffeine; it will not keep them going for long."
+   },
+   {
+    "id": "thin_meal_staple",
+    "category": "safety_health",
+    "all": [
+     "\\b(?:lunch|dinner|breakfast|supper|meal)\\b[^.!?]{0,30}?\\b(?:just|only|plain|nothing\\s+but)\\s+(?:some\\s+|a\\s+(?:bowl|plate)\\s+of\\s+)?(?:white\\s+)?(?:rice|pasta|bread|toast|noodles|potatoes?|crackers?|cereal)\\b"
+    ],
+    "absent": [
+     "\\b(?:eggs?|chicken|beef|pork|fish|tuna|salmon|tofu|beans|lentils?|chickpeas|cheese|meat|bacon|sausages?|ham|yogh?urt|protein)\\b"
+    ],
+    "note": "Health: that meal (\"{0}\") has no protein or anything filling in it."
+   },
+   {
+    "id": "no_food",
+    "category": "safety_health",
+    "all": [
+     "\\bnot\\s+(?:eating|going\\s+to\\s+eat)\\s+(?:anything|a\\s+thing)\\b|\\bfast(?:ing)?\\s+for\\s+(?:\\d+|two|three|four|five|a\\s+few)\\s+days?\\b|\\bno\\s+(?:food|water)\\s+(?:for|all|until)\\b"
+    ],
+    "note": "Health: \"{0}\" for that long is hard on the body."
+   },
+   {
+    "id": "all_in_money",
+    "category": "money_contract",
+    "all": [
+     "\\b(?:put(?:ting)?|bet(?:ting)?|stak(?:e|ing)|invest(?:ing)?|spend(?:ing)?|pour(?:ing)?|sink(?:ing)?|gambl(?:e|ing)|wager(?:ing)?|lend(?:ing)?|lose|losing|hand(?:ing)?\\s+over|transfer(?:ring)?|lock(?:ing)?\\s+(?:up|in))\\b",
+     "\\b(?:all|whole|entire|everything|every\\s+(?:cent|penny|dollar))\\b[^.!?]{0,25}?\\b(?:savings?|money|refund|pay(?:check|cheque)?|wages?|salary|bonus|inheritance|pension|super|funds?|cash|deposit|winnings)\\b|\\b(?:life\\s+savings|nest\\s+egg|rainy[- ]day\\s+fund)\\b"
+    ],
+    "note": "Money: the plan says \"{0}\" with \"{1}\" - everything in one place, nothing kept back."
+   },
+   {
+    "id": "sure_thing",
+    "category": "money_contract",
+    "all": [
+     "\\b(?:bet|betting|invest\\w*|stake|stocks?|shares?|crypto\\w*|coins?|horse|casino|poker|lottery|scheme|trading|forex|tip)\\b",
+     "\\b(?:sure\\s+thing|guaranteed\\s+(?:win|return|profit|money)|can't\\s+(?:lose|go\\s+wrong|fail)|risk[- ]free|double\\s+(?:my|our)\\s+money|get[- ]rich|certain\\s+to\\s+win|bound\\s+to\\s+win|insider\\s+tip)\\b"
+    ],
+    "note": "Money: \"{1}\" is never a guarantee in a bet or investment (\"{0}\")."
+   },
+   {
+    "id": "quit_no_income",
+    "category": "money_contract",
+    "all": [
+     "\\b(?:quit(?:ting)?|resign(?:ing)?|leav(?:e|ing)\\s+my\\s+job|hand(?:ing)?\\s+in\\s+my\\s+notice|giv(?:e|ing)\\s+up\\s+my\\s+job|walk(?:ing)?\\s+out\\s+of\\s+my\\s+job)\\b",
+     "\\b(?:no|zero|without)\\s+(?:any\\s+)?(?:savings?|income|money|other\\s+job|backup\\s+plan|safety\\s+net|runway|another\\s+job)\\b|\\bnothing\\s+(?:saved|lined\\s+up)\\b|\\b(?:don't|haven't)\\s+(?:have|got)\\s+(?:any\\s+)?(?:savings?|money|another\\s+job|a\\s+backup)\\b|\\bno\\s+(?:job|work)\\s+lined\\s+up\\b"
+    ],
+    "note": "Money: they plan \"{0}\" while \"{1}\" - how the bills get paid is still unanswered."
+   },
+   {
+    "id": "sign_unread",
+    "category": "money_contract",
+    "all": [
+     "\\b(?:sign(?:ing)?|agree(?:ing)?\\s+to|accept(?:ing)?|click(?:ing)?\\s+accept)\\b",
+     "\\bwithout\\s+(?:even\\s+)?(?:reading|checking|looking\\s+(?:at|over)|reviewing)\\b|\\bbefore\\s+(?:reading|checking)\\b|\\bno\\s+need\\s+to\\s+read\\b|\\bwon't\\s+bother\\s+reading\\b|\\bdon't\\s+need\\s+to\\s+read\\b"
+    ],
+    "note": "Contract: they plan \"{0}\" \"{1}\" - an unread contract is hard to undo."
+   },
+   {
+    "id": "pay_stranger",
+    "category": "money_contract",
+    "all": [
+     "\\b(?:pay(?:ing)?|send(?:ing)?|transfer(?:ring)?|wir(?:e|ing)|deposit(?:ing)?)\\b[^.!?]{0,40}?\\b(?:upfront|up\\s+front|in\\s+advance|in\\s+full|deposit|gift\\s+cards?|crypto\\w*|western\\s+union|cash)\\b",
+     "\\b(?:stranger|someone\\s+(?:i|we)\\s+(?:met|found|haven't\\s+met)|never\\s+met|haven't\\s+met|online|marketplace|gumtree|craigslist|facebook|instagram|whatsapp|texted\\s+me|messaged\\s+me|rang\\s+me|called\\s+me|a\\s+guy|a\\s+man\\s+(?:who|from))\\b"
+    ],
+    "note": "Money: paying \"{0}\" to someone met through \"{1}\" is the usual shape of a scam."
+   },
+   {
+    "id": "scam_details",
+    "category": "money_contract",
+    "all": [
+     "\\b(?:send(?:ing)?|give|giving|read(?:ing)?\\s+out|tell(?:ing)?|share|sharing|text(?:ing)?|email(?:ing)?)\\b[^.!?]{0,30}?\\b(?:password|passcode|pin|card\\s+number|cvv|bank\\s+details|login|verification\\s+code|one[- ]time\\s+code|security\\s+code)\\b",
+     "\\b(?:someone|caller|stranger|they\\s+(?:rang|called|texted|emailed|messaged)|rang\\s+me|called\\s+me|texted\\s+me|emailed\\s+me|link|support|website|bank\\s+(?:called|rang|texted)|tax\\s+office|courier)\\b"
+    ],
+    "note": "Money: handing over \"{0}\" after contact from \"{1}\" is how scams work; a real bank never asks."
+   },
+   {
+    "id": "delete_all_no_backup",
+    "category": "irreversible",
+    "all": [
+     "\\b(?:delet(?:e|ing)|wip(?:e|ing)|eras(?:e|ing)|overwrit(?:e|ing)|purg(?:e|ing)|clear(?:ing)?|throw(?:ing)?\\s+(?:away|out)|shred(?:ding)?|burn(?:ing)?)\\b[^.!?]{0,25}?\\b(?:all|every(?:thing)?|whole|entire)\\b[^.!?]{0,20}?\\b(?:photos?|files?|documents?|emails?|drive|disk|phone|laptop|computer|account|notes|data|messages|texts|pictures|videos|history|saves?|database|folders?|repo\\w*|server|projects?|recordings?|footage)\\b"
+    ],
+    "absent": [
+     "\\bback(?:ed)?[- ]?(?:up|ups)\\b|\\bbackups?\\b|\\bcop(?:y|ies)\\b|\\bcloud\\b|\\bexport(?:ed)?\\b|\\bsaved\\s+(?:elsewhere|somewhere|to)\\b|\\bsynced\\b"
+    ],
+    "note": "Irreversible: \"{0}\" cannot be undone, and no backup was mentioned."
+   },
+   {
+    "id": "wipe_device_no_backup",
+    "category": "irreversible",
+    "all": [
+     "\\b(?:factory[- ]reset|wip(?:e|ing)|reformat(?:ting)?|format(?:ting)?|re-?image|reset(?:ting)?)\\b[^.!?]{0,25}?\\b(?:phone|laptop|computer|pc|mac|drive|disk|server|machine|tablet|device|router|nas)\\b|\\bfactory[- ]reset(?:ting)?\\b"
+    ],
+    "absent": [
+     "\\bback(?:ed)?[- ]?(?:up|ups)\\b|\\bbackups?\\b|\\bcop(?:y|ies)\\b|\\bcloud\\b|\\bexport(?:ed)?\\b|\\bsaved\\s+(?:elsewhere|somewhere|to)\\b|\\bsynced\\b"
+    ],
+    "note": "Irreversible: \"{0}\" erases everything on it, and no backup was mentioned."
+   },
+   {
+    "id": "harsh_message",
+    "category": "irreversible",
+    "all": [
+     "\\b(?:sen[dt](?:ing)?|text(?:ing|ed)?|email(?:ing|ed)?|e-mail(?:ing)?|post(?:ing)?|tweet\\w*|messag(?:e|ing)|dm|repl(?:y|ying)|tell(?:ing)?|whatsapp\\w*|writ(?:e|ing)|wrote)\\b",
+     "\\b(?:useless|stupid|idiot\\w*|pathetic|worthless|incompeten\\w+|moron\\w*|disgrace\\w*|loser|dumb|lazy|selfish|liar|hate\\s+you|sick\\s+of\\s+you|waste\\s+of\\s+(?:space|time|my)|wasted\\s+my|fed\\s+up\\s+with\\s+you|shut\\s+up)\\b",
+     "\\b(?:you|your|you're|he|she|his|her|him|them|they|their|boss|manager|landlord|neighbou?r|colleague|team|mum|dad|wife|husband|partner|friend|sister|brother|ex)\\b"
+    ],
+    "note": "Irreversible: the message has \"{1}\" in it, and a message cannot be taken back once sent."
+   },
+   {
+    "id": "rash_while_angry",
+    "category": "irreversible",
+    "all": [
+     "\\b(?:angry|furious|livid|fed\\s+up|had\\s+enough|sick\\s+of|done\\s+with|so\\s+mad|fuming|can't\\s+stand|enough\\s+is\\s+enough|snapped)\\b",
+     "\\b(?:quit(?:ting)?|resign(?:ing)?|walk(?:ing)?\\s+out|storm(?:ing)?|hand(?:ing)?\\s+in\\s+my\\s+notice|send(?:ing)?\\s+(?:a\\s+)?(?:furious|angry|nasty|scathing)|email(?:ing)?\\s+everyone|tell(?:ing)?\\s+(?:the\\s+whole|everyone|everybody)|burn(?:ing)?\\s+(?:the|every)\\s+bridges?|block(?:ing)?\\s+(?:him|her|them|everyone)|cancel(?:l?ing)?\\s+(?:everything|the\\s+wedding|the\\s+lease)|break(?:ing)?\\s+up|dump(?:ing)?)\\b"
+    ],
+    "absent": [
+     "\\b(?:quit(?:ting)?|giv(?:e|ing)\\s+up)\\s+(?:smoking|vaping|drinking|alcohol|sugar|caffeine|coffee|junk|biting)\\b"
+    ],
+    "note": "Irreversible: \"{1}\" is hard to take back, and they said \"{0}\" - sleeping on it would cost nothing."
+   },
+   {
+    "id": "lacks_item",
+    "category": "prerequisite",
+    "all": [
+     "\\b(?:(?:i\\s+)?(?:haven't|don't\\s+have|do\\s+not\\s+have|didn't\\s+(?:get|bring|book|buy)|forgot(?:ten)?|lost|out\\s+of)|no|without)\\s+(?:got\\s+)?(?:a\\s+|an\\s+|any\\s+|my\\s+|the\\s+|valid\\s+|current\\s+)*(?:passport|visa|tickets?|licen[cs]e|permit|booking|reservation|insurance|charger|keys?|fuel|petrol|gas|cash|helmet|life\\s?jacket|harness|permission|deposit|ladder|map|torch|headlamp|water|spare\\s+tyre|jump\\s+leads?)\\b"
+    ],
+    "note": "Missing piece: they said \"{0}\" and the plan may depend on it."
+   },
+   {
+    "id": "unbooked",
+    "category": "prerequisite",
+    "all": [
+     "\\b(?:haven't|have\\s+not|hasn't|not\\s+yet)\\s+(?:yet\\s+)?(?:booked|bought|reserved|checked\\s+(?:the\\s+)?(?:times?|timetable|forecast|weather|opening\\s+hours|availability|prices?|road|roads|tides?)|confirmed|charged|packed|tested|asked|applied|renewed|registered)\\b"
+    ],
+    "note": "Missing piece: they said they \"{0}\" - something the plan needs is still undone."
+   },
+   {
+    "id": "untold",
+    "category": "prerequisite",
+    "all": [
+     "\\b(?:quit(?:ting)?|resign(?:ing)?|mov(?:e|ing)\\s+(?:out|away|abroad|overseas|to)|sell(?:ing)?|leav(?:e|ing)|drop(?:ping)?\\s+out|cancel(?:l?ing)?|propos(?:e|ing)|elop(?:e|ing)|marry|marrying|divorc(?:e|ing)|break(?:ing)?\\s+up|emigrat(?:e|ing)|buy(?:ing)?\\s+(?:a\\s+)?(?:house|car|flat|boat|motorbike|business)|tattoo|adopt(?:ing)?|move\\s+in)\\b",
+     "\\b(?:haven't|have\\s+not|hasn't|didn't|did\\s+not|without)\\s+(?:yet\\s+)?(?:told|telling|asked|asking|checked\\s+with|speaking\\s+to|spoken\\s+to|mentioned|mentioning|warned|warning|consulted)\\s*(?:anyone|anybody|him|her|them|my\\s+\\w+|the\\s+\\w+)?"
+    ],
+    "note": "Missing piece: they plan \"{0}\" but \"{1}\" - the people it affects do not know yet."
+   }
+  ],
+  "timing": {
+   "clock": "(?<![\\d$£€.])(?:(?P<h1>\\d{1,2}):(?P<m1>\\d{2})\\s*(?P<ap1>[ap]\\.?m\\.?)?|(?P<h2>\\d{1,2})\\s*(?P<ap2>[ap]\\.?m\\.?)|\\bat\\s+(?P<h3>\\d{1,2})(?:\\s*(?P<ap3>[ap]\\.?m\\.?))?(?!\\d|[:.]\\d))(?![\\d])",
+   "events": [
+    {"rx": "\\bflights?\\b", "lead": 120},
+    {"rx": "\\btrain\\b", "lead": 15},
+    {"rx": "\\b(?:bus|coach)\\b", "lead": 10},
+    {"rx": "\\bferry\\b", "lead": 30},
+    {"rx": "\\bexam\\b", "lead": 15},
+    {"rx": "\\binterview\\b", "lead": 10}
+   ],
+   "depart": [
+    "\\b(?:leav(?:e|ing)|set(?:ting)?\\s+off|head(?:ing)?\\s+(?:out|off)|depart\\w*|check(?:ing)?[- ]?out|arriv(?:e|ing)|get(?:ting)?\\s+there|be\\s+there|get(?:ting)?\\s+to\\s+the\\s+(?:airport|station|stop|terminal))\\b"
+   ],
+   "day_words": "\\b(?:tomorrow|tonight|today|next\\s+\\w+|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\\b",
+   "connectors": "\\b(?:and|then|also|plus|but|while|after)\\b|[,;.&]",
+   "tight": "Timing: the {0} against the {1} leaves only {2} minutes, which is too tight.",
+   "late": "Timing: the {1} is at or after the {0}, so they would miss it.",
+   "double": "Timing: two things are set for the same time (\"{0}\" and \"{1}\")."
+  }
+ }
 }

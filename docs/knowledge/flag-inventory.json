@@ -4588,6 +4588,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_RISK_CUES": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/risk_cues.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_ROLE_GUESS_GUARD": {
         "defaults": [
           "-"
