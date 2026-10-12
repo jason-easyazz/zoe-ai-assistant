@@ -109,6 +109,7 @@ function boot(opts = {}) {
   const fetch = async (url, o = {}) => {
     const sid = (o.headers || {})['X-Session-ID'];
     server.calls.push({ url, sid, method: o.method || 'GET' });
+    if (server.gate && sid === server.gate.sid && url.startsWith('/api/ui/')) await server.gate.p;   // hold this request in flight
     if (url.startsWith('/api/auth/guest')) {
       if (!server.mintOk) return res(500, {});
       server.mints++;
@@ -431,6 +432,48 @@ let n = 0; const ok = (m) => { n++; console.log('  ok  ' + m); };
     b.start();
     assert(b.state.guestReclaimUntil > b.clock.now(), 'the reloaded page re-opens the window from the stamp');
     ok('G4: recoverPanelSession stamps the handover; a reloaded page adopts it');
+  }
+
+  // ── H. a LATE 401 for an old session must not delete a NEWER member session (PR #1999 review) ──
+  {
+    const t = boot({ alive: ['mem2'] });                    // 'mem1' is dead server-side; 'mem2' is the fresh PIN sign-in
+    let release; t.server.gate = { sid: 'mem1', p: new Promise((r) => { release = r; }) };
+    t.start();
+    const inflight = t.fns.pollActions();                   // goes out with X-Session-ID: mem1 and is held
+    await flush();
+    const mem2 = { session_id: 'mem2', user_id: 'u1', username: 'member', role: 'user', expires_at: ISO(t.clock.now() + 3600000) };
+    t.store.set('zoe_session', JSON.stringify(mem2));       // a fresh PIN sign-in lands while the old poll is in flight
+    t.state.sessionId = 'mem2';
+    release(); await inflight; await flush();               // ...and the old poll comes back 401
+    assert.strictEqual(t.stored().session_id, 'mem2', 'the newer member session must survive a late 401 for mem1');
+    assert.strictEqual(t.server.mints, 0, 'no guest was minted over the fresh sign-in');
+    assert.strictEqual(t.state.sessionId, 'mem2');
+    assert.strictEqual(t.state.panelServicesStopped, false);
+    assert.strictEqual(t.state.guestReclaimUntil, 0, 'no member->guest handover was opened');
+    assert(!t.store.get('zoe_member_handover_at'), 'and no handover stamp was persisted');
+    const starts = t.swMessages.filter((m) => m.type === 'START_PANEL_POLL');
+    assert.strictEqual(starts[starts.length - 1].sessionId, 'mem2', 'services are (re)started under the newer session');
+    ok('H1: a late 401 for an old session id leaves the newer member session in place, no guest mint, no handover');
+  }
+  {
+    // the service worker names the refused session; a stale notice is ignored, a current one recovers
+    const t = boot({ alive: ['mem2'] });
+    t.start();
+    const mem2 = { session_id: 'mem2', user_id: 'u1', username: 'member', role: 'user', expires_at: ISO(t.clock.now() + 3600000) };
+    t.store.set('zoe_session', JSON.stringify(mem2));
+    await t.fns.recoverPanelSession('service worker poll refused: HTTP 401', { force: true, refusedSessionId: 'mem1' });
+    assert.strictEqual(t.stored().session_id, 'mem2', 'a stale SW notice (mem1) does not drop mem2');
+    assert.strictEqual(t.server.mints, 0);
+    await t.fns.recoverPanelSession('service worker poll refused: HTTP 401', { force: true, refusedSessionId: 'mem2' });
+    assert.strictEqual(t.stored().role, 'guest', 'a notice naming the CURRENT session still recovers');
+    ok('H2: recoverPanelSession(refusedSessionId) only drops the session that was actually refused');
+  }
+  {
+    // a 401 for a request that carried NO session (guest) must not downgrade a newer member session either
+    const t = boot({ alive: ['mem2'], session: Object.assign({}, MEMBER, { session_id: 'mem2', expires_at: ISO(Date.parse('2026-10-12T10:00:00Z')) }) });
+    await t.fns.recoverPanelSession('late guest 401', { force: true, refusedSessionId: null });
+    assert.strictEqual(t.stored().session_id, 'mem2', 'a refused guest request (no session id) does not touch a member session');
+    ok('H3: a refused request that carried no session id never deletes a member session');
   }
 
   // ── E. a persistent 401 is not a mint loop ──

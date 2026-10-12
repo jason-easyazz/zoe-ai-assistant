@@ -43,7 +43,7 @@ def test_sw_panel_poll_rides_out_the_guest_reclaim_window():
     assert harness.is_file(), f"harness missing: {harness}"
     proc = subprocess.run([_node(), str(harness)], capture_output=True, text=True, timeout=120)
     assert proc.returncode == 0, f"sw panel poll harness failed:\n{proc.stdout}\n{proc.stderr}"
-    assert "4 checks passed" in proc.stdout
+    assert "6 checks passed" in proc.stdout
 
 
 def test_voice_form_replies_are_gated_on_panel_liveness():

@@ -641,7 +641,9 @@ async def open_action_form(
     if panel_id and panel_type:
         try:
             from panel_form_state import set_active_form
-            set_active_form(panel_id, panel_type, data)
+            from panel_form_state import adopt_owner
+            set_active_form(panel_id, panel_type, data)   # keeps a voice-bound owner for the same live form
+            adopt_owner(panel_id, user.get("user_id"))    # else the caller the panel is acting as
         except Exception as exc:
             logger.debug("panel/form/open state update failed (non-fatal): %s", exc)
 
@@ -706,10 +708,11 @@ async def confirm_action_form(
     if not panel_type:
         raise HTTPException(status_code=400, detail="panel_type is required")
 
-    # The form was presented for a named member over an unauthenticated push socket; if the
-    # panel has since fallen back to a guest session (PIN session expired), the Done arrives
-    # as guest. Writing it would save the member's entry under "guest" while the panel toasts
-    # "saved" — refuse, keep the form open, and let the member sign in (PR #1999 review).
+    # The form was presented over an unauthenticated push socket; if the panel has since fallen
+    # back to a guest session (PIN session expired), the Done arrives as guest. A guest may save
+    # only a guest-owned form: a member's form, or one whose owner state is gone (TTL / restart),
+    # would otherwise be written under "guest" while the panel toasts "saved" — refuse, keep the
+    # form open, and let the member sign in (PR #1999 review).
     from panel_form_state import confirm_is_misattributed
     if confirm_is_misattributed(panel_id, user_id):
         logger.warning("form/confirm refused: panel=%s type=%s guest session for a member's form", panel_id, panel_type)

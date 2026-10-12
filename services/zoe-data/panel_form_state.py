@@ -64,22 +64,37 @@ def get_active_form(panel_id: str) -> Optional[dict]:
     return entry
 
 
-def confirm_is_misattributed(panel_id: Optional[str], confirmer_user_id: Optional[str]) -> bool:
-    """Would saving this Done under ``confirmer_user_id`` put a member's entry under ``guest``?
+def adopt_owner(panel_id: Optional[str], user_id: Optional[str]) -> bool:
+    """Bind ``user_id`` as the owner of a live form that has none yet (never overwrites one).
 
-    True when the live form was presented for a named (non-guest) member but the Done arrives
-    from the guest session (the panel fell back to guest after its PIN session expired, so it
-    sends no ``X-Session-ID``). The caller refuses rather than write under the wrong identity.
-    False with no bound owner (a form the panel opened itself, an expired form) or whenever the
-    confirmer is a real member: this is a guest-vs-member guard, not a voice-vs-PIN identity check.
+    Forms the panel opens itself (chat-driven ``panel_show_action_form``) reach
+    ``/panel/form/open`` with no voice-bound owner; the authenticated caller there IS who the
+    panel is acting as, so a guest-opened form becomes the guest's to save and a member-opened
+    one stays the member's after a guest downgrade. Returns True when it bound an owner.
     """
-    if not panel_id:
+    entry = get_active_form(panel_id) if panel_id else None
+    uid = str(user_id or "").strip()
+    if entry is None or entry.get("owner_user_id") or not uid:
         return False
-    entry = get_active_form(panel_id)
-    owner = str((entry or {}).get("owner_user_id") or "").strip()
-    if not owner or owner.lower() == "guest":
+    entry["owner_user_id"] = uid
+    return True
+
+
+def confirm_is_misattributed(panel_id: Optional[str], confirmer_user_id: Optional[str]) -> bool:
+    """Must a Done from ``confirmer_user_id`` be REFUSED rather than saved as ``guest``?
+
+    Fails CLOSED for a guest: a guest may save only a form whose bound owner is ``guest``. A
+    member's form (the panel fell back to guest after the PIN session expired), a form with no
+    bound owner, and no form at all (past ``_FORM_TTL_S``, a zoe-data restart, another panel, no
+    panel id; the browser overlay has no matching expiry) are all refused, since the write would
+    otherwise land under ``guest`` while the panel says it saved. A signed-in member is
+    authenticated and is never refused here, even for a form this process no longer knows.
+    """
+    if str(confirmer_user_id or "").strip().lower() not in {"", "guest"}:
         return False
-    return str(confirmer_user_id or "").strip().lower() in {"", "guest"}
+    entry = get_active_form(panel_id) if panel_id else None
+    owner = str((entry or {}).get("owner_user_id") or "").strip().lower()
+    return owner != "guest"
 
 
 def clear_active_form(panel_id: str) -> None:

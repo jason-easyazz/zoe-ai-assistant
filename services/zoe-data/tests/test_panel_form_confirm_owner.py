@@ -82,13 +82,43 @@ def test_confirm_is_misattributed_matrix():
     assert f(PANEL, None) is True
     assert f(PANEL, "member-1") is False
     assert f(PANEL, "member-2") is False, "guest-vs-member guard only: a signed-in member is not second-guessed"
-    assert f("other-panel", "guest") is False
     panel_form_state.set_active_form(PANEL, "shopping_list", {}, owner_user_id="guest")
-    assert f(PANEL, "guest") is False
+    assert f(PANEL, "guest") is False, "a guest-owned form is the guest's to save"
+
+
+def test_a_guest_confirm_with_no_recognised_form_fails_closed():
+    """Past the TTL, after a zoe-data restart, for another panel, with no panel id, or for a form
+    that never had an owner bound: a guest Done is refused, never written as guest."""
+    f = panel_form_state.confirm_is_misattributed
+    assert f(PANEL, "guest") is True, "no entry at all (restart / never opened)"
+    assert f(None, "guest") is True
     panel_form_state.set_active_form(PANEL, "shopping_list", {})
-    assert f(PANEL, "guest") is False, "a form with no bound owner (opened on the panel itself) is unchanged"
-    panel_form_state.clear_active_form(PANEL)
-    assert f(PANEL, "guest") is False
+    assert f(PANEL, "guest") is True, "an entry with no bound owner is not recognised"
+    panel_form_state.set_active_form(PANEL, "shopping_list", {}, owner_user_id="member-1")
+    assert f("other-panel", "guest") is True
+    # a signed-in member is authenticated: an unrecognised form is still theirs to save
+    assert f(PANEL, "member-1") is False and f("other-panel", "member-1") is False and f(None, "member-1") is False
+
+
+def test_a_member_form_past_its_ttl_is_refused_for_a_guest(monkeypatch):
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(panel_form_state.time, "monotonic", lambda: clock["t"])
+    panel_form_state.set_active_form(PANEL, "shopping_list", {}, owner_user_id="member-1")
+    clock["t"] += panel_form_state._FORM_TTL_S - 1
+    assert panel_form_state.confirm_is_misattributed(PANEL, "guest") is True
+    clock["t"] += 2   # expired: the entry is evicted on read, and the owner state is gone with it
+    assert panel_form_state.get_active_form(PANEL) is None
+    assert panel_form_state.confirm_is_misattributed(PANEL, "guest") is True, "expiry must not fail OPEN"
+
+
+def test_adopt_owner_binds_only_an_unowned_live_form():
+    panel_form_state.set_active_form(PANEL, "shopping_list", {})
+    assert panel_form_state.adopt_owner(PANEL, "guest") is True
+    assert panel_form_state.get_active_form(PANEL)["owner_user_id"] == "guest"
+    panel_form_state.set_active_form(PANEL, "shopping_list", {}, owner_user_id="member-1")
+    assert panel_form_state.adopt_owner(PANEL, "guest") is False, "never overwrites a bound owner"
+    assert panel_form_state.get_active_form(PANEL)["owner_user_id"] == "member-1"
+    assert panel_form_state.adopt_owner("none-open", "guest") is False
 
 
 @pytest.mark.asyncio
@@ -116,6 +146,39 @@ async def test_a_guest_form_a_guest_confirms(writes):
     panel_form_state.set_active_form(PANEL, "shopping_list", {}, owner_user_id="guest")
     out = await ui_actions.confirm_action_form(_Req(_body("shopping_list")), user=GUEST, db=None)
     assert out["status"] == "ok" and writes[0][0] == "guest"
+
+
+@pytest.mark.asyncio
+async def test_a_guest_done_with_no_recognised_form_is_refused_and_writes_nothing(writes):
+    """No entry (expired / restart): a guest Done must not be saved as guest."""
+    with pytest.raises(ui_actions.HTTPException) as exc:
+        await ui_actions.confirm_action_form(_Req(_body("shopping_list")), user=GUEST, db=None)
+    assert exc.value.status_code == 403 and writes == []
+
+
+@pytest.mark.asyncio
+async def test_a_member_done_with_no_recognised_form_still_saves(writes):
+    out = await ui_actions.confirm_action_form(_Req(_body("shopping_list")), user=MEMBER, db=None)
+    assert out["status"] == "ok" and writes[0][0] == "member-1"
+
+
+@pytest.mark.asyncio
+async def test_a_form_the_panel_opened_as_guest_is_the_guests_to_save(writes):
+    """/panel/form/open binds the caller as the owner of an unowned form (chat-driven forms)."""
+    await ui_actions.open_action_form(_Req({"panel_id": PANEL, "panel_type": "shopping_list", "data": {}}), user=GUEST, db=None)
+    assert panel_form_state.get_active_form(PANEL)["owner_user_id"] == "guest"
+    out = await ui_actions.confirm_action_form(_Req(_body("shopping_list")), user=GUEST, db=None)
+    assert out["status"] == "ok" and writes[0][0] == "guest"
+
+
+@pytest.mark.asyncio
+async def test_the_panels_open_as_guest_does_not_steal_a_members_voice_form(writes):
+    panel_form_state.set_active_form(PANEL, "shopping_list", {}, owner_user_id="member-1")
+    await ui_actions.open_action_form(_Req({"panel_id": PANEL, "panel_type": "shopping_list", "data": {}}), user=GUEST, db=None)
+    assert panel_form_state.get_active_form(PANEL)["owner_user_id"] == "member-1"
+    with pytest.raises(ui_actions.HTTPException):
+        await ui_actions.confirm_action_form(_Req(_body("shopping_list")), user=GUEST, db=None)
+    assert writes == []
 
 
 def test_voice_path_binds_the_effective_user_to_both_forms():

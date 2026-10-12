@@ -45,6 +45,8 @@ function boot() {
   const fakeFetch = async (url, o = {}) => {
     const sid = (o.headers || {})['X-Session-ID'] || null;
     t.calls.push({ url, sid });
+    if (t.gate && sid === t.gate.sid) await t.gate.p;   // hold THIS request in flight
+    if (t.mode === 'mem1-dead') return sid === 'mem1' ? res(401, {}) : res(200, { actions: [] });
     if (t.mode === 'ok') return res(200, { actions: [] });
     if (t.mode === '401') return res(401, {});
     if (t.mode === 'forbid') return res(403, {});
@@ -114,6 +116,30 @@ let n = 0; const ok = (m) => { n++; console.log('  ok  ' + m); };
     await t.start('zoe-touch-pi', 'mem1');
     assert(!t.alive() && t.panelId() === null, 'S3: a 403 on a member-session poll stops at once');
     ok('S3: a 403 on a member session still stops the SW poll immediately');
+  }
+  // S5: a LATE 401 for an old session must not wipe a newer one issued by a fresh PIN sign-in.
+  {
+    const t = boot();
+    t.mode = 'mem1-dead';
+    let release; t.gate = { sid: 'mem1', p: new Promise((r) => { release = r; }) };
+    await t.start('zoe-touch-pi', 'mem1');                 // the poll with mem1 is now in flight
+    await t.start('zoe-touch-pi', 'mem2');                 // the page signed in again and re-sent START_PANEL_POLL
+    assert.strictEqual(vm.runInContext('_panelSessionId', t.ctx), 'mem2');
+    release(); await flush();                              // the old request comes back 401
+    assert.strictEqual(vm.runInContext('_panelSessionId', t.ctx), 'mem2', 'S5: a late 401 for mem1 must not drop the newer mem2');
+    assert(!t.posted.some((m) => m.type === 'SW_PANEL_AUTH_EXPIRED'), 'S5: and must not tell the page its session died');
+    assert(t.alive());
+    ok('S5: a late 401 for an old session leaves the newer session in place and the page un-notified');
+  }
+  // S6: a 401 for the CURRENT session still drops it and tells the page WHICH session was refused.
+  {
+    const t = boot();
+    t.mode = '401';
+    await t.start('zoe-touch-pi', 'mem1');
+    const msg = t.posted.find((m) => m.type === 'SW_PANEL_AUTH_EXPIRED');
+    assert(msg && msg.sessionId === 'mem1', 'S6: the notice carries the refused session id');
+    assert.strictEqual(vm.runInContext('_panelSessionId', t.ctx), null);
+    ok('S6: a 401 for the current session still drops it and names the refused session id');
   }
   console.log(`  ${n} checks passed`);
 })().catch((e) => { console.error('FAIL', e.message); process.exit(1); });

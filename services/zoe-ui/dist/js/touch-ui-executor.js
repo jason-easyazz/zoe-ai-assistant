@@ -357,7 +357,11 @@
         if (session && session.session_id) {
             headers['X-Session-ID'] = session.session_id;
         }
-        return fetch(path, Object.assign({}, options || {}, { headers }));
+        const res = await fetch(path, Object.assign({}, options || {}, { headers }));
+        // Remember WHICH session this request carried: a late 401 must only retire that session,
+        // never a newer one that a fresh sign-in stored while the request was in flight.
+        try { res.zoeSentSessionId = (session && session.session_id) || null; } catch (_) { /* immutable response */ }
+        return res;
     }
 
     function buildContext() {
@@ -531,6 +535,16 @@
         state.recovering = true;
         try {
             const stored = getSession();
+            const refused = opts && opts.refusedSessionId;
+            if (refused !== undefined && stored && stored.session_id && !isExpiredSession(stored)
+                && stored.session_id !== refused && !(refused === null && isGuestSession(stored))) {
+                // The refused request carried an OLDER session (or none): a newer one was stored
+                // since. Keep it, point every service at it, and do not open a handover.
+                state.sessionId = stored.session_id;
+                console.info(`[executor] late 401 (${reason}) for a replaced session; keeping the newer one`);
+                startPanelServices(`late 401 for a replaced session (${reason})`);
+                return true;
+            }
             // Anything but a live guest session is what the server just refused (or is about to).
             if (stored && (!isGuestSession(stored) || isExpiredSession(stored))) dropStoredSession();
             // A member -> guest handover: the panel row is still the member's until it goes stale.
@@ -592,7 +606,7 @@
     function handlePanelAuthFailure(res, what) {
         if (!panelAuthFailed(res)) return false;
         const reason = `${what} refused: HTTP ${res.status}`;
-        if (res.status === 401) recoverPanelSession(reason).catch(() => {});
+        if (res.status === 401) recoverPanelSession(reason, { refusedSessionId: res.zoeSentSessionId }).catch(() => {});
         else if (Date.now() < state.guestReclaimUntil && dataApiSessionId() === null) {
             // Our own member -> guest downgrade: the 403 is the server's expected "panel still
             // owned by the member" until their row is stale. Keep every service running; the
@@ -1730,7 +1744,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             // polling as a guest; the page owns the session, so it re-mints and re-sends
             // START_PANEL_POLL (a 401 never stops a panel service).
             if (msg && msg.type === 'SW_PANEL_AUTH_EXPIRED') {
-                recoverPanelSession('service worker poll refused: HTTP 401').catch(() => {});
+                recoverPanelSession('service worker poll refused: HTTP 401', { refusedSessionId: msg.sessionId }).catch(() => {});
             }
             // SW requests a hard reload
             if (msg && msg.type === 'SW_RELOAD') {
@@ -2454,7 +2468,7 @@ body.light-mode .zaf-btn-cancel { background: rgba(0,0,0,0.07); color: rgba(26,2
                 // api() is a bare fetch: a refusal (403 = a guest Done for a member's form after the
                 // PIN session expired; 401 = dead session) must NOT toast "saved" and close the form.
                 if (!confirmRes || !confirmRes.ok) {
-                    if (confirmRes && confirmRes.status === 401) recoverPanelSession('form confirm refused: HTTP 401').catch(() => {});
+                    if (confirmRes && confirmRes.status === 401) recoverPanelSession('form confirm refused: HTTP 401', { refusedSessionId: confirmRes.zoeSentSessionId }).catch(() => {});
                     throw new Error('form confirm refused: HTTP ' + (confirmRes ? confirmRes.status : 'none'));
                 }
                 showToast(panelType === 'shopping_list' ? 'List saved' : 'Event saved');
