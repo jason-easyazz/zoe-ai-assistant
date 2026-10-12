@@ -47,6 +47,9 @@ os.environ["ZOE_MEMORY_REJECT_LEDGER"] = os.path.join(ZOE_TEST_STORE_DIR, "memor
 # The structural floors' off-path verifier is the one caller of the LIVE brain's endpoint in the memory path; a test that exercises it
 # turns it on with a stubbed client (test_structural_verifier.py, test_structural_claims_digest.py). No other test may reach it.
 os.environ["ZOE_STRUCTURAL_VERIFIER"] = "off"
+# The post-turn 4B callers wait out a hot conversation (brain_slot_guard). A test that drives a brain turn and then a
+# background pass in one process would sleep for the quiet window: off for the suite, on in test_brain_slot_guard.py.
+os.environ["ZOE_BRAIN_SLOT_GUARD"] = "off"
 
 
 import pytest  # noqa: E402

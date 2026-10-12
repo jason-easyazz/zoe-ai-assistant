@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Auto-generated inventory of every ZOE_* environment flag read in the codebase — defaults, readers, typed_env adoption, and .env.example coverage.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-10-11T00:00:00Z
+timestamp: 2026-10-12T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-10-11T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-10-11. The table body is deterministic (sorted, no
+Last generated: 2026-10-12. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Default `dynamic` = not statically extractable; `(required)` = bare
@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-587 flags; 585 not documented in `.env.example`.
+603 flags; 601 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -64,6 +64,9 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_BRAIN_FAILOVER` | `'0'` | no | NO | `services/zoe-data/brain_dispatch.py` |
 | `ZOE_BRAIN_FAILOVER_COOLDOWN_S` | `'45'` | no | NO | `services/zoe-data/brain_dispatch.py` |
 | `ZOE_BRAIN_PREWARM_ON_WAKE` | `'1'`, `True` | yes | NO | `services/zoe-data/routers/voice_livekit.py`<br>`services/zoe-data/routers/voice_tts.py` |
+| `ZOE_BRAIN_SLOT_GUARD` | `-` | no | NO | `services/zoe-data/brain_slot_guard.py` |
+| `ZOE_BRAIN_SLOT_MAX_DEFER_S` | `''` | no | NO | `services/zoe-data/brain_slot_guard.py` |
+| `ZOE_BRAIN_SLOT_QUIET_S` | `''` | no | NO | `services/zoe-data/brain_slot_guard.py` |
 | `ZOE_BRAIN_SLOT_TOKENS` | `'8192'`, `8192`, `dynamic` | yes | NO | `services/zoe-data/digest_pack.py`<br>`services/zoe-data/memory_digest.py`<br>`services/zoe-data/night_mind.py`<br>`services/zoe-data/zoe_agent.py` |
 | `ZOE_BRAIN_STARTUP_WAIT_S` | `30.0` | yes | NO | `services/zoe-data/main.py` |
 | `ZOE_BRAIN_TOKEN` | `-` | no | NO | `scripts/perf/hop_placement_ab.py`<br>`scripts/perf/measure_tts_cadence.py`<br>`scripts/perf/person_half_enforce_ab.py`<br>`scripts/perf/user_model_ab.py`<br>`services/zoe-data/zoe_flue_client.py` |
@@ -158,6 +161,12 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_EMOTIONAL_RECALL_ENABLED` | `''` | no | NO | `services/zoe-data/routers/memories.py` |
 | `ZOE_ENABLE_OPENCLAW_EXECUTION` | `'false'` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_ENGINEERING_MODE` | `-` | no | NO | `services/zoe-data/executors/kanban_adapter.py` |
+| `ZOE_ENROLL_DECLINE_DAYS` | `dynamic` | yes | NO | `services/zoe-data/enrollment_state.py` |
+| `ZOE_ENROLL_MODE_ENABLED` | `'true'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
+| `ZOE_ENROLL_OFFER` | `'off'` | yes | NO | `services/zoe-data/enrollment_state.py` |
+| `ZOE_ENROLL_OFFER_KIDS` | `False` | yes | NO | `services/zoe-data/enrollment_state.py` |
+| `ZOE_ENROLL_OFFER_PIN_DELAY_S` | `20` | yes | NO | `services/zoe-data/voice_enrollment.py` |
+| `ZOE_ENROLL_RECORD_MAX_S` | `'8.0'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_ENV_FILE` | `''`, `'/home/zoe/assistant/services/zoe-data/.env'` | no | NO | `scripts/maintenance/retire_hermes_openclaw_board.py`<br>`scripts/maintenance/verify_executor_queue_backend.py`<br>`services/zoe-data/multica_board_runner.py` |
 | `ZOE_ESPEAK_PITCH` | `dynamic` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_ESPEAK_SPEED` | `dynamic` | no | NO | `services/zoe-data/routers/voice_tts.py` |
@@ -361,6 +370,12 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_MUSIC_SETUP_TTL_S` | `'900'` | no | NO | `services/zoe-data/music_setup.py` |
 | `ZOE_NIGHT_MIND` | `''`, `-` | no | NO | `scripts/maintenance/zoe-night-mind.py`<br>`scripts/perf/zmb/arms/z0.py` |
 | `ZOE_NVM_NODE_BIN` | `-` | no | NO | `services/zoe-data/pi_intent_classifier.py` |
+| `ZOE_OMI_AUDIO_DIR` | `''` | yes | NO | `services/zoe-data/omi_recordings.py` |
+| `ZOE_OMI_AUDIO_RETENTION_DAYS` | `dynamic` | yes | NO | `services/zoe-data/omi_recordings.py` |
+| `ZOE_OMI_KEEP_AUDIO` | `False` | yes | NO | `services/zoe-data/omi_recordings.py` |
+| `ZOE_OMI_MIN_MEM_MB` | `1500` | yes | NO | `services/zoe-data/omi_recordings.py` |
+| `ZOE_OMI_OWNER_USER_ID` | `''` | yes | NO | `services/zoe-data/omi_recordings.py` |
+| `ZOE_OMI_SYNC_ENABLED` | `False` | yes | NO | `services/zoe-data/omi_recordings.py` |
 | `ZOE_OMNIGENT_AGENT_ID` | `'057995d1517418e6839f51d340785dd6'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
 | `ZOE_OMNIGENT_CLOSE_POLL_S` | `'60'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
 | `ZOE_OMNIGENT_CLOSE_TIMEOUT_S` | `'2400'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
@@ -466,6 +481,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_RIG_NOVNC_PORT` | `'6080'` | no | NO | `services/zoe-data/ytmusic_signin.py` |
 | `ZOE_RIG_USER_AGENT` | `-` | no | NO | `services/zoe-data/ytmusic_signin.py` |
 | `ZOE_RIG_VNC_PORT` | `'5900'` | no | NO | `services/zoe-data/ytmusic_signin.py` |
+| `ZOE_RISK_CUES` | `'off'` | yes | NO | `services/zoe-data/risk_cues.py` |
 | `ZOE_ROLE_GUESS_GUARD` | `-` | no | NO | `services/zoe-data/role_guess_guard.py` |
 | `ZOE_ROSTER_NEUTRAL_ASK` | `False` | yes | NO | `services/zoe-data/fast_tiers.py` |
 | `ZOE_ROUTER_ARCHIVE_KEEP` | `'3'` | no | NO | `scripts/maintenance/router_selftrain.py` |

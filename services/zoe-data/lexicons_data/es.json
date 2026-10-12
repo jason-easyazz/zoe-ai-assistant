@@ -460,5 +460,207 @@
  },
  "change_cues": ["en\\s+(?:su\\s+)?lugar", "en\\s+vez\\s+de", "se\\s+(?:cancel[oó]|suspendi[oó]|aplaz[oó]|pospuso)", "cancelad[oa]s?", "suspendid[oa]s?", "aplazad[oa]s?", "pospuest[oa]s?", "cambi(?:[oó]|amos|aron|ado|ada)", "se\\s+mud[oó]", "nos\\s+mudamos", "mudad[oa]", "ya\\s+no", "al\\s+final\\s+no", "se\\s+adelant[oó]", "se\\s+atras[oó]", "ahora\\s+(?:vive|viven|trabaja|trabajan|est[aá]n?|vamos|voy|va|van|tiene|tienen)", "cambiad[oa]s?"],
  "clause_joiners": ["mientras\\s+que", "mientras", "pero", "aunque", "sino", "y", "e", "sin\\s+embargo"],
- "manner": {"block": "Con las personas: cuando alguien comparte un sentimiento, primero devuelve lo que entendiste con unas pocas palabras tuyas, y luego calla o haz UNA sola pregunta; da consejos solo si te los piden. Menciona una cosa concreta de lo que te contaron, y nunca adules ni exageres. Si su plan tiene un problema real, dilo una sola vez, con cariño, y luego respeta su decisión; si es un buen plan, dilo con sencillez. Haz una pregunta a la vez. Nunca insinúes que deberían quedarse ni que los echaste de menos. Cuando se despidan por la noche, despídete sin más."}
+ "manner": {"block": "Con las personas: cuando alguien comparte un sentimiento, primero devuelve lo que entendiste con unas pocas palabras tuyas, y luego calla o haz UNA sola pregunta; da consejos solo si te los piden. Menciona una cosa concreta de lo que te contaron, y nunca adules ni exageres. Si su plan tiene un problema real, dilo una sola vez, con cariño, y luego respeta su decisión; si es un buen plan, dilo con sencillez. Haz una pregunta a la vez. Nunca insinúes que deberían quedarse ni que los echaste de menos. Cuando se despidan por la noche, despídete sin más."},
+ "risk_cues": {
+  "_note": "Author-written, NOT native-reviewed (reviewed=false, like the rest of this file). The risk-cue tier in Spanish; see en.json 'risk_cues' for the shape and the meaning of every key. Apostrophes are normalised to ' before matching; accents are matched with [aá]-style classes. Only the user's words are ever read with these.",
+  "reviewed": false,
+  "enabled": true,
+  "heading": "## Antes de responder, revisa",
+  "rule": "Menciona la preocupación una sola vez, con brevedad y cariño, y luego ayuda con el plan. No sermonees, no te niegues y no la repitas.",
+  "plan": {
+   "intent": [
+    "\\b(?:voy|vamos)\\s+a\\b",
+    "\\b(?:pienso|pensamos|planeo|planeamos|pretendo|pretendemos|he\\s+decidido|hemos\\s+decidido|decid[ií]|tengo\\s+pensado)\\b",
+    "\\b(?:tengo|tenemos)\\s+que\\b",
+    "\\b(?:estoy|estamos)\\s+(?:a\\s+punto\\s+de|por)\\b",
+    "\\b\\w{3,}(?:ar|er|ir)[eé]\\b|\\b(?:har|ir|sald?r|pondr|tendr|vendr|podr|sabr|querr|dir)[eé]\\b",
+    "\\b(?:lo|la|se\\s+lo)\\s+(?:env[ií]o|mando|publico|firmo|pago|borro)\\s+(?:ya|ahora|ahora\\s+mismo)\\b",
+    "\\b(?:ma[nñ]ana|esta\\s+noche|esta\\s+tarde|el\\s+(?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo))\\s*,?\\s*(?:yo\\s+)?(?:voy|salgo|empiezo|hago|dejo|firmo|conduzco|manejo|renuncio|vendo|me\\s+voy)\\b"
+   ],
+   "when": [
+    "\\b(?:hoy|ma[nñ]ana|esta\\s+(?:noche|tarde|ma[nñ]ana)|ahora|ahora\\s+mismo|luego|este\\s+(?:fin\\s+de\\s+semana|finde)|la\\s+semana\\s+que\\s+viene|el\\s+(?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)|en\\s+(?:un|una|\\d+)\\s+(?:minutos?|horas?|d[ií]as?))\\b"
+   ],
+   "past": [
+    "\\b(?:ayer|anoche|anteayer|la\\s+semana\\s+pasada|el\\s+mes\\s+pasado|el\\s+a[nñ]o\\s+pasado|hace\\s+\\w+|sol[ií]a)\\b",
+    "\\b(?:fui|hice|estuve|ten[ií]a|dije|escrib[ií]|compr[eé]|vend[ií]|conduje|dorm[ií]|beb[ií]|com[ií])\\b"
+   ],
+   "veto": [
+    "^\\s*(?:y\\s+|pero\\s+|bueno\\s+|oye\\s+|zoe\\s*,?\\s+)*(?:¿|deber[ií]a|debo|puedo|podr[ií]a|puedes|qu[eé]|c[oó]mo|por\\s+qu[eé]|d[oó]nde|cu[aá]l|qui[eé]n)",
+    "\\bqu[eé]\\s+pasar[ií]a\\s+si\\b|\\bsupon(?:g|ga)\\b|\\bimagina\\b|\\bsi\\s+(?:yo\\s+)?(?:me|lo|fuera|fuese|pudiera)\\b",
+    "\\bno\\s+(?:voy|vamos|pienso|pretendo|planeo)\\b|\\bnunca\\s+(?:voy|ir[eé])\\b|\\bya\\s+no\\b|\\bdecid[ií]\\s+no\\b|\\bno\\s+(?:har[eé]|ir[eé])\\b",
+    "\\b(?:iba|ibas|ib[aá]mos)\\s+a\\b|\\bsol[ií]a\\b"
+   ]
+  },
+  "cues": [
+   {
+    "id": "hazard_impaired",
+    "category": "safety_health",
+    "all": [
+     "\\b(?:conducir|conduzco|conduciendo|manejar|manejo|manejando|nadar|nado|escalar|escalo|trepar|operar|motosierra|escalera|levantar\\s+pesas|pesas|peso\\s+muerto|bucear|esquiar)\\b",
+     "\\b(?:despiert[oa]|levantad[oa])\\s+desde\\s+(?:las?\\s+)?\\w+|\\bno\\s+he\\s+dormido\\b|\\bsin\\s+dormir\\b|\\bdorm[ií]\\s+(?:solo\\s+|apenas\\s+)?(?:una\\s+hora|\\w+\\s+horas?|mal|poco)\\b|\\b(?:muy|bastante|s[uú]per|tan)\\s+(?:cansad[oa]|somnolient[oa]|agotad[oa])\\b|\\b(?:agotad[oa]|cansad[oa]|borrach[oa]|maread[oa]|resacos[oa])\\b|\\bcon\\s+fiebre\\b|\\b(?:he\\s+bebido|me\\s+he\\s+tomado|me\\s+tom[eé]|beb[ií])\\s+(?:unas?\\s+)?(?:cuantas?|varias?|dos|tres|cuatro|algunas?)\\s+(?:copas?|cervezas?|vinos?|tragos?)\\b|\\bunas\\s+copas\\b"
+    ],
+    "note": "Seguridad: el plan dice \"{0}\" y también dijo \"{1}\"; esa combinación es arriesgada."
+   },
+   {
+    "id": "injury_exertion",
+    "category": "safety_health",
+    "all": [
+     "\\b(?:rodilla|tobillo|espalda|hombro|isquio\\w*|gemelo|mu[nñ]eca|cadera|cuello|pierna|pie|codo)\\b[^.!?]{0,25}?\\b(?:dolor\\w*|duele|adolorid[oa]|inflamad[oa]|lesionad[oa]|torcid[oa]|tens[ao]|cargad[oa]|contracturad[oa]|fastidiad[oa])\\b|\\b(?:me\\s+duele|me\\s+duelen|me\\s+molesta|tengo\\s+(?:dolor|molestias)\\s+(?:en|de))\\s+(?:la\\s+|el\\s+|mi\\s+|las\\s+|los\\s+)?(?:rodilla|tobillo|espalda|hombro|isquio\\w*|gemelo|mu[nñ]eca|cadera|cuello|pierna|pie|codo)\\b|\\b(?:dolor\\s+de|lesi[oó]n|esguince|tend[ií]nitis|fractura|contractura)\\b",
+     "\\b(?:peso\\s+muerto|sentadillas?|pesas|marat[oó]n|correr|trotar|carrera|escalar|senderismo|\\d+\\s?(?:km|kil[oó]metros)|f[uú]tbol|rugby|baloncesto|entrenar|gimnasio|mover\\s+(?:el\\s+|la\\s+)?(?:nevera|sof[aá]|piano|armario|muebles))\\b"
+    ],
+    "note": "Seguridad: mencionó \"{0}\" y aun así planea \"{1}\"; puede ser demasiado para eso."
+   },
+   {
+    "id": "skip_protection",
+    "category": "safety_health",
+    "all": [
+     "\\b(?:sin|saltarme|saltar|omitir)\\s+(?:el\\s+|la\\s+|mi\\s+|los\\s+|las\\s+)?(?:calentamiento|estiramientos?|casco|cintur[oó]n|chaleco\\s+salvavidas|arn[eé]s|gafas|protecci[oó]n|protector\\s+solar)\\b"
+    ],
+    "note": "Seguridad: planea \"{0}\", que es la protección habitual para no lesionarse."
+   },
+   {
+    "id": "stop_medication",
+    "category": "safety_health",
+    "all": [
+     "\\b(?:dejar(?:\\s+de\\s+tomar)?|dejo\\s+de\\s+tomar|voy\\s+a\\s+dejar|saltarme|no\\s+(?:voy\\s+a\\s+)?tomar)\\s+(?:mi\\s+|mis\\s+|la\\s+|las\\s+|el\\s+)?(?:medicaci[oó]n|medicinas?|medicamentos?|pastillas?|antidepresivos?|insulina|inhalador|antibi[oó]ticos?)\\b"
+    ],
+    "note": "Salud: planea \"{0}\"; un cambio así es más seguro consultarlo antes con su médico o farmacéutico."
+   },
+   {
+    "id": "thin_meal_junk",
+    "category": "safety_health",
+    "all": [
+     "\\b(?:almuerzo|comida|cena|desayuno)\\b[^.!?]{0,40}?\\b(?:bebidas?\\s+energ[eé]ticas?|papas\\s+fritas|patatas\\s+fritas|chocolate|caramelos|dulces|refresco|galletas|donuts?)\\b"
+    ],
+    "absent": [
+     "\\b(?:ensalada|sopa|pollo|carne|pescado|huevos?|frijoles|lentejas|arroz|pasta|guiso|bocadillo|s[aá]ndwich|fruta|verduras?|yogur|avena|tortilla|pizza|hamburguesa|tostadas?|cereal(?:es)?)\\b"
+    ],
+    "note": "Salud: esa comida (\"{0}\") es sobre todo azúcar o cafeína y no le durará."
+   },
+   {
+    "id": "thin_meal_staple",
+    "category": "safety_health",
+    "all": [
+     "\\b(?:almuerzo|comida|cena|desayuno)\\b[^.!?]{0,30}?\\b(?:solo|solamente|nada\\s+m[aá]s\\s+que|simplemente)\\s+(?:un\\s+poco\\s+de\\s+|un\\s+plato\\s+de\\s+)?(?:arroz|pasta|pan|tostadas?|fideos|papas|patatas|ensalada|galletas|cereal(?:es)?)\\b|\\b(?:almuerzo|comida|cena|desayuno)\\b[^.!?]{0,30}?\\b(?:arroz|pasta)\\s+(?:blanco|blanca|solo|sola)\\b"
+    ],
+    "absent": [
+     "\\b(?:huevos?|pollo|carne|pescado|at[uú]n|salm[oó]n|tofu|frijoles|lentejas|garbanzos|queso|jam[oó]n|yogur|prote[ií]na)\\b"
+    ],
+    "note": "Salud: esa comida (\"{0}\") no tiene proteína ni nada que llene."
+   },
+   {
+    "id": "all_in_money",
+    "category": "money_contract",
+    "all": [
+     "\\b(?:poner|pongo|apostar|apuesto|invertir|invierto|gastar|gasto|meter|meto|prestar|presto|jugarme|me\\s+juego|arriesgar|arriesgo)\\b",
+     "\\b(?:todos?|toda|todas|entero|entera|completo|completa)\\b[^.!?]{0,25}?\\b(?:ahorros|dinero|reembolso|sueldo|salario|herencia|pensi[oó]n|fondos|efectivo|indemnizaci[oó]n)\\b|\\b(?:ahorros|dinero|sueldo)\\s+(?:entero|completo|de\\s+toda\\s+la\\s+vida)\\b"
+    ],
+    "note": "Dinero: el plan dice \"{0}\" con \"{1}\"; todo en un solo sitio, sin reservar nada."
+   },
+   {
+    "id": "sure_thing",
+    "category": "money_contract",
+    "all": [
+     "\\b(?:apuesta|apostar|apuesto|invertir|invierto|inversi[oó]n|acciones|cripto\\w*|caballo|casino|p[oó]quer|loter[ií]a|trading|forex)\\b",
+     "\\b(?:cosa\\s+segura|seguro\\s+que\\s+gano|ganancia\\s+garantizada|garantizado|no\\s+puede\\s+(?:fallar|salir\\s+mal)|sin\\s+riesgo|duplicar\\s+mi\\s+dinero|hacerme\\s+rico)\\b"
+    ],
+    "note": "Dinero: \"{1}\" nunca es una garantía en una apuesta o inversión (\"{0}\")."
+   },
+   {
+    "id": "quit_no_income",
+    "category": "money_contract",
+    "all": [
+     "\\b(?:renunciar|renuncio|dejar\\s+(?:mi\\s+|el\\s+)?(?:trabajo|empleo)|dejo\\s+(?:mi\\s+|el\\s+)?(?:trabajo|empleo)|presentar\\s+mi\\s+renuncia|me\\s+despido)\\b",
+     "\\bsin\\s+(?:ahorros|ingresos|dinero|otro\\s+trabajo|plan\\s+b|colch[oó]n)\\b|\\bno\\s+(?:tengo|tenemos)\\s+(?:ahorros|ingresos|dinero|otro\\s+trabajo|ning[uú]n\\s+ahorro|plan\\s+b)\\b|\\bsin\\s+nada\\s+ahorrado\\b"
+    ],
+    "note": "Dinero: planea \"{0}\" y \"{1}\"; cómo se pagarán las facturas sigue sin respuesta."
+   },
+   {
+    "id": "sign_unread",
+    "category": "money_contract",
+    "all": [
+     "\\b(?:firmar|firmo|aceptar|acepto)\\b",
+     "\\bsin\\s+(?:siquiera\\s+)?(?:leer(?:lo|la)?|revisar(?:lo|la)?|mirar(?:lo|la)?)\\b|\\bantes\\s+de\\s+leer\\b|\\bno\\s+(?:hace\\s+falta|necesito)\\s+leer\\b"
+    ],
+    "note": "Contrato: planea \"{0}\" \"{1}\"; un contrato sin leer es difícil de deshacer."
+   },
+   {
+    "id": "delete_all_no_backup",
+    "category": "irreversible",
+    "all": [
+     "\\b(?:borrar|borro|eliminar|elimino|formatear|formateo|vaciar|vac[ií]o|tirar|tiro)\\b[^.!?]{0,25}?\\b(?:todo|todos|toda|todas)\\b[^.!?]{0,20}?\\b(?:fotos?|archivos?|documentos?|correos?|disco|tel[eé]fono|m[oó]vil|port[aá]til|ordenador|computadora|cuenta|notas|datos|mensajes|im[aá]genes|v[ií]deos|historial|partidas|base\\s+de\\s+datos|carpetas?|servidor|proyectos?|grabaciones)\\b|\\b(?:borrar|borro|formatear|formateo|restablecer|restablezco|resetear|reseteo)\\b[^.!?]{0,25}?\\b(?:tel[eé]fono|m[oó]vil|port[aá]til|ordenador|computadora|disco|servidor|tableta)\\b"
+    ],
+    "absent": [
+     "\\bcopias?\\s+de\\s+seguridad\\b|\\bbackups?\\b|\\bcopia\\b|\\bnube\\b|\\bexportad[oa]\\b|\\bguardad[oa]\\s+(?:en|aparte)\\b"
+    ],
+    "note": "Irreversible: \"{0}\" no se puede deshacer y no mencionó ninguna copia de seguridad."
+   },
+   {
+    "id": "harsh_message",
+    "category": "irreversible",
+    "all": [
+     "\\b(?:enviar|envi[oó]|enviando|mandar|mando|mandando|escribir|escribo|escribiendo|escrib[ií]|publicar|publico|decirle|digo|contestar|contesto|mensaje|correo|whatsapp)\\b",
+     "\\b(?:in[uú]til|est[uú]pid[oa]|idiota|pat[eé]tic[oa]|incompetente|imb[eé]cil|desastre|vago|vaga|ego[ií]sta|mentiros[oa]|fracasad[oa]|c[aá]llate|te\\s+odio|harto\\s+de\\s+ti|harta\\s+de\\s+ti|me\\s+has\\s+hecho\\s+perder)\\b",
+     "\\b(?:t[uú]|tu|tus|te|ti|[eé]l|ella|ellos|su|sus|jefe|jefa|compa[nñ]ero|vecino|casero|equipo|mam[aá]|pap[aá]|esposo|esposa|pareja|amig[oa]|hermano|hermana)\\b"
+    ],
+    "note": "Irreversible: el mensaje lleva \"{1}\" y un mensaje no se puede retirar una vez enviado."
+   },
+   {
+    "id": "rash_while_angry",
+    "category": "irreversible",
+    "all": [
+     "\\b(?:enfadad[oa]|furios[oa]|cabread[oa]|enojad[oa]|harto|harta|no\\s+aguanto|he\\s+tenido\\s+suficiente|indignad[oa])\\b",
+     "\\b(?:renunci(?:ar|o)|dejar\\s+el\\s+trabajo|irme\\s+de|mandar\\s+(?:un\\s+)?(?:correo|mensaje|email)\\s+(?:furioso|enfadado|a\\s+todos)|decirle\\s+(?:a\\s+todos|todo)|cortar\\s+con|romper\\s+con|bloquear)\\b"
+    ],
+    "absent": [
+     "\\b(?:dejar\\s+(?:de\\s+)?(?:fumar|beber|el\\s+az[uú]car|el\\s+caf[eé])|dejo\\s+de\\s+fumar)\\b"
+    ],
+    "note": "Irreversible: \"{1}\" es difícil de retirar y dijo \"{0}\"; dormirlo una noche no cuesta nada."
+   },
+   {
+    "id": "lacks_item",
+    "category": "prerequisite",
+    "all": [
+     "\\b(?:no\\s+tengo|no\\s+me\\s+queda|sin|he\\s+perdido|perd[ií]|se\\s+me\\s+olvid[oó]|no\\s+traje|no\\s+compr[eé]|no\\s+reserv[eé])\\s+(?:un\\s+|una\\s+|el\\s+|la\\s+|mi\\s+|ning[uú]n\\s+|ninguna\\s+|mis\\s+)*(?:pasaporte|visado|visa|billetes?|boletos?|entradas?|carn[eé]|licencia|permiso|reserva|seguro|cargador|llaves?|gasolina|combustible|efectivo|casco|chaleco\\s+salvavidas|arn[eé]s|escalera|mapa|linterna|agua)\\b"
+    ],
+    "note": "Falta algo: dijo \"{0}\" y el plan puede depender de eso."
+   },
+   {
+    "id": "unbooked",
+    "category": "prerequisite",
+    "all": [
+     "\\bno\\s+(?:he|hemos)\\s+(?:reservado|comprado|confirmado|cargado|preparado|comprobado|consultado|pedido|renovado|registrado)\\b|\\btodav[ií]a\\s+no\\s+(?:he\\s+)?(?:reservado|comprado|confirmado|cargado|preparado|comprobado|avisado)\\b"
+    ],
+    "note": "Falta algo: dijo \"{0}\"; algo que el plan necesita sigue sin hacerse."
+   },
+   {
+    "id": "untold",
+    "category": "prerequisite",
+    "all": [
+     "\\b(?:renunciar|renuncio|dejar\\s+el\\s+trabajo|mudarme|mudarnos|vender|vendo|vendiendo|cancelar|cancelo|me\\s+caso|casarme|divorciarme|romper|emigrar|comprar(?:me)?\\s+(?:una\\s+)?(?:casa|coche|piso|barco|moto|negocio)|tatuaje)\\b",
+     "\\bno\\s+(?:se\\s+lo\\s+|le\\s+|lo\\s+)?(?:he|hemos)\\s+(?:dicho|avisado|preguntado|consultado|hablado)\\s+(?:nada\\s+)?(?:a\\s+)?(?:nadie|\\w+)?|\\bsin\\s+(?:decir(?:le)?|avisar(?:le)?|preguntar(?:le)?)\\s*(?:nada\\s+)?(?:a\\s+)?(?:nadie)?"
+    ],
+    "note": "Falta algo: planea \"{0}\" pero \"{1}\"; las personas afectadas aún no lo saben."
+   }
+  ],
+  "timing": {
+   "clock": "(?<![\\d$£€.])(?:(?P<h1>\\d{1,2}):(?P<m1>\\d{2})|\\ba\\s+las?\\s+(?P<h3>\\d{1,2})(?::(?P<m3>\\d{2}))?(?!\\d|[:.]\\d))(?![\\d])",
+   "events": [
+    {"rx": "\\bvuelo\\b", "lead": 120},
+    {"rx": "\\btren\\b", "lead": 15},
+    {"rx": "\\b(?:autob[uú]s|bus)\\b", "lead": 10},
+    {"rx": "\\b(?:ferry|barco)\\b", "lead": 30},
+    {"rx": "\\bexamen\\b", "lead": 15},
+    {"rx": "\\bentrevista\\b", "lead": 10}
+   ],
+   "depart": [
+    "\\b(?:salgo|salir|saldr[eé]|salida|me\\s+voy|llego|llegar|llegar[eé]|check[- ]?out|dejar\\s+el\\s+hotel)\\b"
+   ],
+   "day_words": "\\b(?:ma[nñ]ana|hoy|esta\\s+noche|el\\s+(?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo))\\b",
+   "connectors": "\\b(?:y|luego|tambi[eé]n|pero|mientras|despu[eé]s)\\b|[,;.&]",
+   "tight": "Horario: el {0} frente al {1} deja solo {2} minutos, muy justo.",
+   "late": "Horario: el {1} es a la hora del {0} o después, así que lo perdería.",
+   "double": "Horario: hay dos cosas a la misma hora (\"{0}\" y \"{1}\")."
+  }
+ }
 }

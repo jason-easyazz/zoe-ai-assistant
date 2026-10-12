@@ -1220,6 +1220,15 @@ async def lifespan(app: FastAPI):
     except Exception as _voice_warmup_exc:
         logger.warning("Voice STT worker warmup scheduling failed (non-fatal): %s", _voice_warmup_exc)
 
+    # Omi pendant recordings: the background transcriber (flag-dark ZOE_OMI_SYNC_ENABLED; a no-op when off). It defers to the
+    # night window, a voice turn in flight and the RAM floor on its own, so starting it can never contend with the voice path.
+    try:
+        import omi_recordings as _omi_rec
+        if _omi_rec.enabled():
+            asyncio.create_task(_omi_rec.run_loop(), name="omi_transcription")
+    except Exception as _omi_exc:
+        logger.warning("omi transcription loop not started (non-fatal): %s", _omi_exc)
+
     # Runtime health probe — run once immediately, then refresh every 5 min
     await _probe_runtimes()
     _runtime_health_task = asyncio.create_task(_runtime_health_refresh_loop(), name="runtime_health_refresh")
@@ -2201,9 +2210,11 @@ app.include_router(openclaw_router)
 app.include_router(voice_tts_router)
 from routers.voice_settings import router as voice_settings_router  # noqa: E402
 from routers.face_id import router as face_id_router  # noqa: E402
+from routers.enrollment import router as enrollment_router  # noqa: E402
 
 app.include_router(voice_settings_router)
 app.include_router(face_id_router)
+app.include_router(enrollment_router)
 app.include_router(user_profile_router)
 app.include_router(dashboard_router)
 app.include_router(board_router)
@@ -2260,6 +2271,11 @@ _telegram_media.register(app)
 # ONLY when ZOE_PERSONA_LAYER is on — flag off = 404. See docs/governance/emotional-safety-note.md.
 from routers import persona as _persona_router  # noqa: E402
 _persona_router.register(app)
+
+# Omi pendant recordings (flag-dark): the Pi sync service's upload endpoint + the owner's list/get/patch/delete. Mounted ONLY
+# when ZOE_OMI_SYNC_ENABLED is on — flag off = 404. Calls the existing Moonshine helper; the voice path is untouched.
+from routers import omi_recordings as _omi_router  # noqa: E402
+_omi_router.register(app)
 
 
 @app.get("/.well-known/agent.json", include_in_schema=False)

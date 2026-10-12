@@ -481,6 +481,36 @@
         ],
         "typed_env": true
       },
+      "ZOE_BRAIN_SLOT_GUARD": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/brain_slot_guard.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_BRAIN_SLOT_MAX_DEFER_S": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/brain_slot_guard.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_BRAIN_SLOT_QUIET_S": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/brain_slot_guard.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_BRAIN_SLOT_TOKENS": {
         "defaults": [
           "'8192'",
@@ -1438,6 +1468,66 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/executors/kanban_adapter.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ENROLL_DECLINE_DAYS": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/enrollment_state.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_ENROLL_MODE_ENABLED": {
+        "defaults": [
+          "'true'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/zoe_voice_daemon.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ENROLL_OFFER": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/enrollment_state.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_ENROLL_OFFER_KIDS": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/enrollment_state.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_ENROLL_OFFER_PIN_DELAY_S": {
+        "defaults": [
+          "20"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_enrollment.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_ENROLL_RECORD_MAX_S": {
+        "defaults": [
+          "'8.0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/zoe_voice_daemon.py"
         ],
         "typed_env": false
       },
@@ -3516,6 +3606,66 @@
         ],
         "typed_env": false
       },
+      "ZOE_OMI_AUDIO_DIR": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_recordings.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_AUDIO_RETENTION_DAYS": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_recordings.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_KEEP_AUDIO": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_recordings.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_MIN_MEM_MB": {
+        "defaults": [
+          "1500"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_recordings.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_OWNER_USER_ID": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_recordings.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_SYNC_ENABLED": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_recordings.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_OMNIGENT_AGENT_ID": {
         "defaults": [
           "'057995d1517418e6839f51d340785dd6'"
@@ -4587,6 +4737,16 @@
           "services/zoe-data/ytmusic_signin.py"
         ],
         "typed_env": false
+      },
+      "ZOE_RISK_CUES": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/risk_cues.py"
+        ],
+        "typed_env": true
       },
       "ZOE_ROLE_GUESS_GUARD": {
         "defaults": [

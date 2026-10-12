@@ -58,7 +58,25 @@ _DEFAULT_TTL_S = 120
 # brief because owner presence was seen on ONE panel — another panel's speaker
 # must never play it. arrival.py queues it only for a panel that holds a live
 # device token, so the ids match by construction.
-PANEL_SCOPED_TRIGGERS: tuple[str, ...] = ("morning_checkin_arrival",)
+PANEL_SCOPED_TRIGGERS: tuple[str, ...] = ("morning_checkin_arrival", "voice_profile_forget", "voice_enroll")
+
+# ── Panel COMMANDS riding the same lane (Zoe-driven voice enrolment) ──────────────────────────────────────────────────────
+# A row whose trigger is one of these is not speech: its ``message`` is a JSON object the daemon ACTS on, and the claim returns it
+# as ``command`` with an EMPTY ``text`` - so a daemon that predates commands finds nothing to say (``_speak_announcement`` refuses
+# empty text) and ignores the row, instead of reading JSON aloud. The words the daemon speaks while it acts (the enrolment prompts)
+# are inside the command, written server-side in the member's language: the daemon holds none.
+#   voice_enroll          start the in-daemon enrolment mode for ``user_id`` (a person at the panel said yes / asked for it).
+#                         PANEL-SCOPED above: only the daemon of the panel the member spoke at may claim it - another panel's daemon
+#                         would speak the member's name and enrol whoever stands there next
+#   voice_profile_forget  drop ``user_id``'s voice signature from the daemon's cache and disk NOW, then re-sync (one row per
+#                         panel, PANEL-SCOPED above: every speaker must hear it, and only that panel may claim its own row)
+COMMAND_TRIGGERS: tuple[str, ...] = ("voice_enroll", "voice_profile_forget")
+# A spoken row after which the daemon opens a listening window with no wake word: an OFFER asks a question, and "Hey Zoe, yes" is
+# not a natural way to answer one. Old daemons ignore the flag (the answer then needs the wake word; the pending offer waits 2 min).
+LISTEN_AFTER_TRIGGERS: tuple[str, ...] = ("voice_enroll_offer",)
+# A command nobody is there to receive is stale in seconds; the forget command is the exception (see ``enqueue_command``).
+COMMAND_TTL_S = 180
+FORGET_TTL_S = 24 * 3600
 
 # Hard cap per claim; the engine enqueues one row per spoken notification, so
 # anything larger than a handful means a backlog that should expire, not play.
@@ -131,6 +149,55 @@ async def enqueue_announcement(
     if commit:
         await db.commit()
     return ann_id
+
+
+async def enqueue_command(
+    db,
+    *,
+    user_id: str,
+    command: dict,
+    trigger_type: str,
+    panel_id: str | None = None,
+    ttl_s: int | None = None,
+    commit: bool = True,
+) -> str:
+    """Insert one pending panel COMMAND (see ``COMMAND_TRIGGERS``); returns its id. Raises on bad input or DB failure.
+
+    The command is stored as JSON in ``message`` (the column is TEXT NOT NULL) and comes back from the claim as ``command``."""
+    import json
+
+    if trigger_type not in COMMAND_TRIGGERS:
+        raise ValueError(f"not a command trigger: {trigger_type!r}")
+    body = json.dumps({"kind": trigger_type, "user_id": user_id, **(command or {})}, ensure_ascii=False, separators=(",", ":"))
+    ttl = ttl_s if ttl_s else (FORGET_TTL_S if trigger_type == "voice_profile_forget" else COMMAND_TTL_S)
+    return await enqueue_announcement(
+        db, user_id=user_id, message=body, panel_id=panel_id, trigger_type=trigger_type, ttl_s=ttl, commit=commit,
+    )
+
+
+def _claimed_item(row, now: datetime) -> dict:
+    """One claimed row as the daemon receives it: speech (``text``), or a command (``command``, empty ``text``)."""
+    import json
+
+    trigger = row["trigger_type"] or ""
+    item = {
+        "id": row["id"],
+        "text": row["message"],
+        "trigger_type": trigger,
+        "expires_in_s": round(_expires_in_s(row["expires_at"], now), 1),
+    }
+    if trigger in COMMAND_TRIGGERS:
+        item["text"] = ""
+        try:
+            parsed = json.loads(row["message"])
+        except (TypeError, ValueError):
+            parsed = None
+        # A command that does not parse is dropped to an item with no text and no command: the daemon speaks nothing and
+        # does nothing, and the row is spent (it was claimed) rather than retried forever.
+        item["command"] = parsed if isinstance(parsed, dict) else {}
+    elif trigger in LISTEN_AFTER_TRIGGERS:
+        item["follow_up"] = True
+    return item
 
 
 def _expires_in_s(expires_at: str, now: datetime) -> float:
@@ -211,14 +278,7 @@ async def claim_announcements(db, *, panel_id: str, limit: int = _CLAIM_LIMIT) -
         ) as cur:
             if getattr(cur, "rowcount", 0) != 1:
                 continue  # another poller won this row
-        claimed.append(
-            {
-                "id": row["id"],
-                "text": row["message"],
-                "trigger_type": row["trigger_type"] or "",
-                "expires_in_s": round(_expires_in_s(row["expires_at"], now), 1),
-            }
-        )
+        claimed.append(_claimed_item(row, now))
     await db.commit()
     if claimed:
         log.info(

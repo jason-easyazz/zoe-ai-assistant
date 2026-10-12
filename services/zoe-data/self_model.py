@@ -676,7 +676,14 @@ async def answer(q: Question, user_id: str = "", *, channel: Optional[str] = Non
             if not name:
                 return fill(a["know_me_guest"], {})
             has_voice, has_face = await _enrolment(user_id)
-            return fill(a["know_me_yes"], {"name": name, "voice_clause": a["voice_clause"] if has_voice else "",
+            voice_clause = a["voice_clause"] if has_voice else ""
+            if has_voice is False and a.get("voice_missing_clause"):
+                # Honest about the gap, and only where the answer to it exists: the enrolment offer (ZOE_ENROLL_OFFER) must be on.
+                import enrollment_state
+
+                if enrollment_state.mode() == "on":
+                    voice_clause = a["voice_missing_clause"]
+            return fill(a["know_me_yes"], {"name": name, "voice_clause": voice_clause,
                                            "face_clause": a["face_clause"] if has_face else ""}) or None
         if q.kind == "used_to_answer":
             import memory_provenance as mp
