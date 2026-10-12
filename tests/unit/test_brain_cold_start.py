@@ -449,10 +449,35 @@ def test_a_sandbox_without_loopback_skips_with_the_reason_but_never_under_ci():
 
 @pytest.mark.skipif(not shutil.which("unshare"), reason="needs unshare")
 def test_in_a_real_no_network_namespace_the_rig_tests_skip_locally_and_fail_under_ci():
+    _no_loopback_scenario()
+
+
+def test_a_runner_that_cannot_create_a_network_namespace_skips_the_scenario_even_under_ci(tmp_path, monkeypatch):
+    """Negative control for the end-to-end test: when `unshare` exists but the sandbox forbids namespaces (a property of the runner, not of the code) the scenario must SKIP
+    in every environment, CI included, instead of misreading the failed probe as a denied socket and failing its own assertions."""
+    fake = tmp_path / "unshare"
+    fake.write_text("#!/bin/sh\necho 'unshare: unshare failed: Operation not permitted' >&2\nexit 1\n")
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+    for ci in (None, "true"):
+        if ci:
+            monkeypatch.setenv("CI", ci)
+        else:
+            monkeypatch.delenv("CI", raising=False)
+        with pytest.raises(pytest.skip.Exception, match="cannot create a network namespace"):
+            _no_loopback_scenario()
+
+
+def _no_loopback_scenario():
     """The end-to-end control: `unshare -rn` WITHOUT `ip link set lo up` (the recipe in tests/AGENTS.md, minus the last step) makes the loopback bind fail for real."""
+    # 1. Can this runner create a network namespace AT ALL? That is a property of the runner, not of the code, so it skips everywhere (CI included).
+    ns = subprocess.run(["unshare", "-rn", "--map-root-user", "true"], capture_output=True, text=True)
+    if ns.returncode != 0:
+        pytest.skip(f"cannot create a network namespace here ({(ns.stderr or '').strip()[:120]})")
+    # 2. Inside it, is loopback really down? (A fresh namespace has `lo` down; if the bind still works the scenario cannot be staged.)
     probe = subprocess.run(["unshare", "-rn", "--map-root-user", sys.executable, "-c", "import socket; s=socket.socket(); s.bind(('127.0.0.1',0))"], capture_output=True, text=True)
     if probe.returncode == 0:
-        pytest.skip("this sandbox cannot create a no-loopback network namespace")
+        pytest.skip("a fresh network namespace here still has a working loopback: the no-loopback scenario cannot be staged")
     target = f"{__file__}::test_the_helper_returns_at_once_after_one_synchronous_drop_and_leaves_a_detached_loop"
     base = [k for k in os.environ if k != "CI"]
     env = {k: os.environ[k] for k in base}
