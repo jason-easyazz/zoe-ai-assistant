@@ -1030,6 +1030,18 @@
                 </div>
             </div>
 
+            <!-- Bluetooth devices (flag-dark ZOE_BLUETOOTH_SETTINGS; admin only; shared component js/bluetooth-settings.js).
+                 Hidden until the admin check passes AND the server confirms the feature is on (404 = off = stays hidden). -->
+            <div class="settings-section" id="bluetoothSection" style="display: none;">
+                <div class="section-header" onclick="toggleSection('bluetooth')">
+                    <div class="section-title">🔵 Bluetooth devices</div>
+                    <div class="section-subtitle">Scan for, connect, disconnect and update devices near a panel</div>
+                </div>
+                <div class="section-content" id="bluetooth">
+                    <div id="btRoot"></div>
+                </div>
+            </div>
+
             <!-- General Settings -->
             <div class="settings-section">
                 <div class="section-header" onclick="toggleSection('general')">
@@ -6196,6 +6208,46 @@
         });
     </script>
     <script src="/js/websocket-sync.js?v=skybridge-auth-ready-1"></script>
+
+    <!-- TOUCH: Bluetooth devices section (flag-dark ZOE_BLUETOOTH_SETTINGS). Shared component, finger targets >= 48 px.
+         Stays hidden unless the user is the admin (or this is the kiosk) AND the server says the feature is on (404 = off). -->
+    <script src="/js/bluetooth-settings.js?v=1"></script>
+    <script>
+    (function () {
+        var sec = document.getElementById('bluetoothSection');
+        var started = false;
+        function sessionId() {
+            try { var s = window.zoeAuth && window.zoeAuth.getCurrentSession && window.zoeAuth.getCurrentSession(); return (s && s.session_id) || ''; } catch (e) { return ''; }
+        }
+        function btFetch(method, url, body) {
+            return fetch(url, { method: method, headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId() },
+                body: body === undefined ? undefined : JSON.stringify(body) }).then(function (r) {
+                if (r.ok) return r.json();
+                return r.json().catch(function () { return {}; }).then(function (j) {
+                    var m = j && (j.detail || j.message);
+                    var e = new Error(typeof m === 'string' ? m : 'Request failed');
+                    e.status = r.status;
+                    throw e;
+                });
+            });
+        }
+        function start() {
+            if (started || !sec || !window.ZoeBluetooth || typeof window.zoeResolveIsAdmin !== 'function') return;
+            window.zoeResolveIsAdmin().then(function (isAdmin) {
+                if (!isAdmin || started) return;
+                started = true;
+                ZoeBluetooth.mount(document.getElementById('btRoot'), {
+                    surface: 'touch', fetchJson: btFetch, storage: window.localStorage,
+                    onReady: function () { sec.style.display = 'block'; },
+                    onUnavailable: function () { sec.style.display = 'none'; }
+                });
+            }).catch(function () {});
+        }
+        if (document.readyState === 'complete' || document.readyState === 'interactive') start();
+        else document.addEventListener('DOMContentLoaded', start);
+        setTimeout(start, 1800);      // the admin resolver is installed by an earlier script; retry once auth has settled
+    })();
+    </script>
 
     <!-- TOUCH: gesture navigation (edge swipe) -->
     <script src="/touch/js/gestures.js?v=skybridge-auth-ready-1"></script>

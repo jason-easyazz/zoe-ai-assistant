@@ -137,10 +137,14 @@ async def _call(said: str, facts: Sequence[str]) -> str:
         "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": build_prompt(said, facts)}],
         "max_tokens": MAX_TOKENS, "temperature": 0.1, "stream": False, "cache_prompt": True,
     }
-    async with httpx.AsyncClient(timeout=TIMEOUT_S) as client:
-        resp = await client.post(f"{_GEMMA_URL}/v1/chat/completions", json=payload)
-        resp.raise_for_status()
-        return str(resp.json()["choices"][0]["message"]["content"] or "").strip()
+    import brain_slot_guard
+
+    # Post-turn pass on the brain's ONE slot: waits out a hot conversation (brain_slot_guard) so it cannot evict it.
+    async with brain_slot_guard.background_slot("structural_reader"):
+        async with httpx.AsyncClient(timeout=TIMEOUT_S) as client:
+            resp = await client.post(f"{_GEMMA_URL}/v1/chat/completions", json=payload)
+            resp.raise_for_status()
+            return str(resp.json()["choices"][0]["message"]["content"] or "").strip()
 
 
 async def read_claims(said: str, facts: Sequence[str], *, lane: str = "turn_digest") -> list:

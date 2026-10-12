@@ -1,0 +1,11 @@
+# panel-bluetooth (Pi side) - installed by the operator into its OWN venv on each panel Pi, never into zoe-data's venv and never
+# into omi-sync's (omi-sync stays on bleak 0.22.3; smpclient needs bleak >= 3).
+#
+#   python3 -m venv ~/.zoe-bluetooth/venv && ~/.zoe-bluetooth/venv/bin/pip install -r requirements.txt
+#   (scripts/setup/deploy-pi-bluetooth.sh does this)
+#
+# bleak 3.0.2: the version the 2026-10-12 bring-up and the supervised DFU attempt ran on the panel Pi (BlueZ 5.66).
+# smpclient 7.3.0: MCUmgr SMP client used ONLY by the Omi firmware update (lazy import; scans/connects work without it). It pulls
+#   smp, cbor2, pydantic, intelhex, crcmod. Pinned: its BLE transport is subclassed in panel_bt/smp_session.py.
+bleak==3.0.2
+smpclient==7.3.0
