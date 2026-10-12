@@ -207,7 +207,8 @@ def test_the_dated_loader_binds_datetimes_not_strings():
     assert db.params[2].astimezone(_dt.timezone.utc) == _dt.datetime(2026, 10, 10, 16, 0, tzinfo=_dt.timezone.utc)
 
 
-def test_as_instant_accepts_z_naive_and_datetime():
+def test_as_instant_accepts_z_naive_and_datetime(monkeypatch):
+    monkeypatch.setenv("ZOE_TIMEZONE", "Australia/Perth")                # the naive form is Zoe-local: pin it, the box's own setting must not decide this test
     assert md._as_instant("2026-10-10T16:00:00Z") == _dt.datetime(2026, 10, 10, 16, 0, tzinfo=_dt.timezone.utc)
     naive = md._as_instant("2026-10-10T00:00:00")                       # naive = Zoe-local (AWST, +08:00)
     assert naive.astimezone(_dt.timezone.utc) == _dt.datetime(2026, 10, 9, 16, 0, tzinfo=_dt.timezone.utc)
@@ -217,7 +218,7 @@ def test_as_instant_accepts_z_naive_and_datetime():
 
 def test_the_dated_window_is_the_awst_day_not_the_utc_day(monkeypatch):
     """A turn at 23:30 AWST on the 10th (15:30Z) is in 2026-10-10; one at 00:30 AWST on the 11th (16:30Z, still the 10th in UTC) is NOT. Both UTC-date and AWST-date readings differ."""
-    monkeypatch.delenv("ZOE_TIMEZONE", raising=False)
+    monkeypatch.setenv("ZOE_TIMEZONE", "Australia/Perth")
     cli = _night_mind_cli()
     start, end = cli._day_bounds("2026-10-10")
     lo, hi = md._as_instant(start), md._as_instant(end)

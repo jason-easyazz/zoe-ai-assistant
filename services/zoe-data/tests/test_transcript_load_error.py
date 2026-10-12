@@ -54,6 +54,7 @@ class _Db:
 @pytest.fixture(autouse=True)
 def _night_mind_on(monkeypatch):
     monkeypatch.setenv("ZOE_NIGHT_MIND", "shadow")
+    monkeypatch.setenv("ZOE_TIMEZONE", "Australia/Perth")      # nothing here depends on the box's zone; pinned so it cannot start to
 
 
 # ── the loaders ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
