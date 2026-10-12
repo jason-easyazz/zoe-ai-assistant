@@ -33,6 +33,9 @@ Detail/AI notes go under each entry. Move the status as it progresses.
 
 ## 💡 Ideas
 
+### Voice for Bluetooth devices — "connect my pendant" / "is my pendant connected" — 💡 pinned
+Settings > Bluetooth devices ([bluetooth-settings.md](knowledge/bluetooth-settings.md)) is built flag-dark without a voice path (a new intent is a replay-gated change). The seam is `bluetooth_broker.enqueue` — an intent would queue `connect`/`status` for the right panel. Also: a push channel for update progress instead of polling, and a USB Bluetooth adapter on the panel (the built-in radio hears the pendant at about -91 dBm even beside it).
+
 ### A richer "Pinterest-style" ideas surface inside Zoe — 💡 pinned
 - **Core:** this file is v1. The real idea is a **visual board in Zoe** to save links/videos/ideas, browse for inspiration, and let agents read/append it. Originally planned a Zoe section for exactly this.
 - **Next:** research whether an existing open-source project already does this well (visual idea/link board, local, agent-accessible) before building. Source: Jason, 2026-06-23.

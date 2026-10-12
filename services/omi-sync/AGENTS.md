@@ -15,6 +15,7 @@ It runs as its OWN process and unit (`scripts/setup/systemd/omi-sync.service`, o
 - `omi_sync/engine.py` — one drain session and THE CUSTODY RULE (`Drain`, `advance_target`, `ring_label`).
 - `omi_sync/uploader.py` — HTTP upload + the mapping of Zoe's answer to a custody outcome (`classify`).
 - `omi_sync/ble_link.py` — the only module that needs a pendant (bleak 0.22.3). Everything else is tested on fixture bytes. Connection recipe (verified on the real pendant 2026-10-12): `sudo -n hcitool lecc --random <addr>` first (32 s supervision timeout; BlueZ's 420 ms default dies at this range), then bleak on the connected device; no scan, no pairing, no agent; retry with backoff.
+- `omi_sync/radio_lock.py` — the panel Pi's one-radio advisory `flock` (`ZOE_BLE_RADIO_LOCK`, default `~/.zoe-ble-radio.lock`), a deliberate copy of `services/panel-bluetooth/panel_bt/radio_lock.py` (same path, same semantics; two venvs, no import). `ble_link.connect` takes it first and raises `ConnectError("radio busy ...")` if the Settings > Bluetooth agent holds it (a scan, an open link, a FIRMWARE UPDATE) — so a sync can never take the pendant's single connection in the gap after a firmware reset. Pinned by `tests/unit/test_omi_sync_radio_lock.py`.
 - `omi_sync/check.py`, `omi_sync/cli.py`, `omi_sync/config.py` — the read-only device check, the entry points (`run | check | status`), env config.
 - `THIRD_PARTY_NOTICES.md` — the MIT notice for the Omi source the protocol is ported from. Keep it with any substantial new port.
 - The Zoe side lives in `services/zoe-data/omi_recordings.py` + `routers/omi_recordings.py` (migration 0045).
@@ -33,7 +34,7 @@ It runs as its OWN process and unit (`scripts/setup/systemd/omi-sync.service`, o
 ## Forbidden
 
 - Never send `CMD_RING_CLEAR` (`0x13`) or the legacy `DELETE_FILE` (`0x12`), and never add an encoder for either. Never ADVANCE on anything but confirmed state.
-- Never pair, bond, unpair or register a BlueZ agent from code (a test pins it): the real pendant connects and reads fine with no bond, and it holds ONE bond which the phone app would otherwise keep. Never touch the MCUmgr SMP service (`8d53dc1d-…`): a firmware update is an owner-run operation (plan 4.10), never this service.
+- Never pair, bond, unpair or register a BlueZ agent from code (a test pins it): the real pendant connects and reads fine with no bond, and it holds ONE bond which the phone app would otherwise keep. Never touch the MCUmgr SMP service (`8d53dc1d-…`): a firmware update is an owner-run operation (plan 4.10) done through Settings > Bluetooth devices (`services/panel-bluetooth`, which holds the radio lock for the whole update), never this service.
 - Never upload to any host except the configured `ZOE_URL`; never log audio, transcripts, the device token or the pendant address.
 - Never import from `labs/` or `services/zoe-data`; never run inside the voice daemon, the Orin or a Docker image.
 - Never delete a spool record or a staged WAV except via a CONFIRMED upload (or the confirmed-range prune).

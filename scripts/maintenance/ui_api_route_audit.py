@@ -24,6 +24,8 @@ ALLOWLIST = {
     "/api/calendar/week": "dashboard week-planner widget expects a finance week payload nobody serves (not instantiated by default)",
     "/api/chat/confirm": "voice.html AG-UI approval decision has no decide route (approvals are read-only)",
     "/api/tiles": "memories.html tile layout save; /api/collections is a stub router",
+    "/api/bluetooth/config": "Settings > Bluetooth devices: routes exist only while ZOE_BLUETOOTH_SETTINGS is on (flag-dark); the UI hides itself on 404",
+    "/api/bluetooth/panels": "Settings > Bluetooth devices: routes exist only while ZOE_BLUETOOTH_SETTINGS is on (flag-dark); the UI hides itself on 404",
 }
 
 ap = argparse.ArgumentParser()
