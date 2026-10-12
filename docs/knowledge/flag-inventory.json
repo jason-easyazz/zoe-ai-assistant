@@ -3642,6 +3642,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_PANEL_LIVE_ACK_MAX_S": {
+        "defaults": [
+          "'600'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_PANEL_SESSION_TRUST_WINDOW_S": {
         "defaults": [
           "'900'"
@@ -5013,6 +5023,16 @@
       "ZOE_SKYBRIDGE_TIMEZONE": {
         "defaults": [
           "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/skybridge_service.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_SKYBRIDGE_UNSURE_FLOOR_WRITE": {
+        "defaults": [
+          "0.45"
         ],
         "in_env_example": false,
         "readers": [

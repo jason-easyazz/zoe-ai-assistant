@@ -1354,6 +1354,8 @@ def detect_intent(
         m = re.match(pattern, t)
         if m:
             item, lst = _sanitize_list_item(m.group(1)), m.group(2).strip()
+            if not _list_item_ok(item):
+                continue            # a sentence, not an item: never stored, never claimed
             list_type = _normalize_list(lst)
             return Intent("list_add", {"item": item, "list_type": list_type})
 
@@ -1372,7 +1374,9 @@ def detect_intent(
     )
     if m:
         item = _sanitize_list_item(m.group(1))
-        if item and item.lower() not in {"go", "me", "take me", "us", "take us"}:
+        # _list_item_ok: this pattern is loose on purpose (a garbled lead-in), so it must also refuse a whole SENTENCE -
+        # "I don't know where you got that from … add things to the shopping list" was stored as one item (live 2026-10-12).
+        if item and item.lower() not in {"go", "me", "take me", "us", "take us"} and _list_item_ok(item):
             lst = m.group(2).strip()
             return Intent(
                 "list_add",
@@ -1395,6 +1399,8 @@ def detect_intent(
             m = re.match(pattern, t)
             if m:
                 item = _sanitize_list_item(m.group(1))
+                if not _list_item_ok(item):
+                    continue
                 list_type = _infer_list(item)
                 return Intent("list_add", {"item": item, "list_type": list_type})
 
@@ -1404,7 +1410,8 @@ def detect_intent(
     )
     if m:
         item = _sanitize_list_item(m.group(1))
-        return Intent("list_add", {"item": item, "list_type": "shopping"})
+        if _list_item_ok(item):
+            return Intent("list_add", {"item": item, "list_type": "shopping"})
 
     # --- LIST SHOW ---
     for pattern in [
@@ -2305,6 +2312,22 @@ async def detect_and_extract_intent(
                     router_latency_ms=detect_latency_ms,
                 )
                 return intent
+        if intent.name == "calendar_create":
+            # Day + time + title are read deterministically when the words carry them ("add a doctor's appointment on
+            # Friday at twelve o'clock"): the NLU filler returned no tool_call twice on exactly that sentence (6.8 s of the
+            # owner's time, then the brain asked for a title the words already gave - live 2026-10-12).
+            simple_cal = _extract_simple_calendar_slots(intent.slots["raw"])
+            if simple_cal:
+                intent.slots = simple_cal
+                _schedule_pi_shadow(
+                    intent,
+                    route_class="deterministic",
+                    zoe_latency_ms=(time.perf_counter() - started) * 1000,
+                    baseline_kind="router",
+                    baseline_comparable=True,
+                    router_latency_ms=detect_latency_ms,
+                )
+                return intent
         try:
             from nlu_extractor import extract_slots_for_intent  # lazy — avoids circular at load
             structured = await extract_slots_for_intent(intent.name, intent.slots["raw"])
@@ -2349,6 +2372,27 @@ async def detect_and_extract_intent(
         router_latency_ms=detect_latency_ms,
     )
     return intent
+
+
+def _extract_simple_calendar_slots(text: str) -> Optional[dict]:
+    """{"title", "time", "date"?} for a calendar add whose words carry a title and a time ("add a doctor's appointment on
+    Friday at twelve o'clock"), via the same parsers the Skybridge fast path uses; None when they do not (the NLU filler
+    gets those). A day the words do not name is left out: the executor defaults it to today and says so in the read-back."""
+    try:
+        import skybridge_service as _sky
+
+        parsed = _sky._calendar_create_from_text(str(text or ""), None)
+        if not parsed:
+            return None
+        title, hhmm = parsed
+        slots: dict = {"title": title, "time": hhmm}
+        rng = _sky._calendar_date_from_text(f" {str(text).lower()} ", _sky._today())
+        if rng:
+            slots["date"] = rng[1].isoformat()
+        return slots
+    except Exception as exc:  # noqa: BLE001 - the NLU path still follows
+        logger.debug("simple calendar slots unavailable: %s", exc)
+        return None
 
 
 def _normalize_list(raw: str) -> str:
@@ -2430,7 +2474,19 @@ def _sanitize_list_item(raw: str) -> str:
     item = re.sub(r"^(add|put|get|buy)\s+", "", item, flags=re.IGNORECASE)
     item = re.sub(r"\s+(to|on)\s+(?:the\s+|my\s+)?(?:shopping|grocery|groceries)\s+list$", "", item, flags=re.IGNORECASE)
     item = re.sub(r"[.,;:!?]+$", "", item)
-    return item.strip()
+    # A stutter ("noodles? Noodles"), filler words ("um milk") and edge punctuation, collapsed by the ONE cleaner the
+    # Skybridge parser uses too (list_service.clean_item_text).
+    from list_service import clean_item_text
+
+    return clean_item_text(item.strip())
+
+
+def _list_item_ok(item: str) -> bool:
+    """False when ``item`` is a SENTENCE or a vague noun rather than something to put on a list - so the detector declines the
+    turn (it falls through to the brain) instead of storing "i don't know where you got that from" as an item."""
+    from list_service import is_plausible_item
+
+    return is_plausible_item(item)
 
 
 async def _run_mcporter(cmd: str) -> Optional[str]:
@@ -2920,6 +2976,9 @@ async def _execute_note_create_direct(intent: Intent, user_id: str) -> Optional[
                 )
             except Exception as mem_exc:  # noqa: BLE001 — memory mirror is advisory
                 logger.debug("note_create memory mirror skipped: %s", mem_exc)
+        import write_receipts
+
+        write_receipts.record(user_id, "note", note_id, "note_create_direct")
         await _notify_ui_channel(
             "notes", "note_created", {"id": note_id, "title": title, "category": category},
         )
@@ -4603,11 +4662,27 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         if raw is None:
             return None
 
+        # The mcporter subprocess writes in ITS process, where write_receipts cannot see it: receipt the write here (the
+        # subprocess exited 0) so a reply that says it happened is not blocked by the write-claim guard.
+        _mcp_kind = _MCPORTER_WRITE_KINDS.get(intent.name)
+        if _mcp_kind:
+            import write_receipts
+
+            write_receipts.record(user_id, _mcp_kind, "", f"mcporter:{intent.name}")
         return _format_response(intent, raw)
 
     except Exception as e:
         logger.error(f"Intent execution error: {e}")
         return None
+
+
+# Write intents whose mcporter fallback (the direct executor returned None) still lands a row, and the receipt kind each earns.
+_MCPORTER_WRITE_KINDS = {
+    "list_add": "list",
+    "calendar_create": "calendar",
+    "reminder_create": "reminder",
+    "note_create": "note",
+}
 
 
 async def _execute_daily_briefing(user_id: str) -> Optional[str]:

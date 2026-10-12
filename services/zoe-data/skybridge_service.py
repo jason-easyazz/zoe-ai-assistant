@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import write_receipts
 from calendar_utils import row_to_event
 from card_contract import CardContractError, validate_component
 from card_service import card_service
@@ -105,6 +106,7 @@ class _TimerStore:
             "expires_at": now + int(seconds),
         }
         self._by_owner.setdefault(owner, []).append(timer)
+        write_receipts.record(owner, "timer", timer["timer_id"], "timer_store")
         return timer
 
     def list(self, owner: str) -> list[dict[str, Any]]:
@@ -400,6 +402,7 @@ LIST_TYPE_ALIASES = {
     "todo": "tasks",
     "todos": "tasks",
     "to do": "tasks",
+    "to dos": "tasks",
 }
 PEOPLE_CONTEXTS = ("personal", "work")
 PEOPLE_CIRCLES = ("inner", "circle", "public")
@@ -482,6 +485,10 @@ def _row_to_prefs(row):
     return row_to_prefs(row)
 
 
+_WEEKDAYS = {"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3, "friday": 4, "saturday": 5, "sunday": 6}
+_WEEKDAY_RE = re.compile(r"\b(?:(?:next|this|coming|on)\s+)?(?P<day>" + "|".join(_WEEKDAYS) + r")\b")
+
+
 def _calendar_date_from_text(text: str, today: date) -> tuple[str, date, date] | None:
     if "tomorrow" in text:
         target = today + timedelta(days=1)
@@ -522,6 +529,15 @@ def _calendar_date_from_text(text: str, today: date) -> tuple[str, date, date] |
         except ValueError:
             return None
         return target.isoformat(), target, target
+
+    # After the EXPLICIT dates above, which win ("Saturday 3 October" is that day, not next Saturday).
+    weekday = _WEEKDAY_RE.search(text)
+    if weekday:
+        # A bare weekday is the NEXT one (never today) - the same rule as intent_router._parse_date.
+        target = today + timedelta(days=((_WEEKDAYS[weekday.group("day")] - today.weekday()) % 7) or 7)
+        return weekday.group("day"), target, target
+    if re.search(r"\b(?:today|tonight)\b", text):
+        return "today", today, today
 
     return None
 
@@ -715,16 +731,58 @@ def _clean_action_text(value: str) -> str:
     return re.sub(r"^(?:my|the|a|an)\s+", "", text, flags=re.IGNORECASE).strip()
 
 
+# Words that may stand BEFORE a command verb ("Hey Zoe, can you add …", "and add …", "I want you to put …"). A verb that
+# follows anything else is NOT a command: "I was asking you to set meetings and add things to the shopping list" is a
+# complaint, not an add (live 2026-10-12, it stored the whole sentence as an item).
+_COMMAND_LEAD_WORDS = frozenset({
+    "hey", "hi", "hello", "okay", "ok", "so", "and", "um", "uh", "uhh", "umm", "er", "erm", "well", "yeah", "yes", "please",
+    "zoe", "can", "could", "would", "will", "you", "we", "i", "i'd", "id", "like", "want", "need", "to", "just", "go", "ahead",
+    "also", "now", "then", "let's", "lets", "let", "us", "me", "oh", "right", "alright", "great", "thanks", "cool", "maybe",
+    "actually", "wanna", "gonna", "going", "you'd", "it", "would", "ask", "for", "the", "a", "my", "jason", "jay",
+    "hmm", "mm", "ah", "eh", "kindly", "sorry", "i'll", "ill", "i'm", "im", "gotta", "also",
+})
+# A write verb that, led like a command, means the turn is a WRITE - so a loose read fallback may not claim it as "show".
+_WRITE_VERB_RE = r"(?:add|put|create|set\s*up|remind|append|stick)"   # not schedule/book: also nouns ("my schedule")
+
+
+def _command_shaped(message: str, verbs: str) -> re.Match | None:
+    """The match of ``verbs`` (a regex alternation) when it opens a COMMAND - only lead-in words before it - else None."""
+    m = re.search(rf"\b(?:{verbs})\b", message or "", re.IGNORECASE)
+    if not m:
+        return None
+    prefix = re.findall(r"[a-z']+", (message[:m.start()] or "").lower())
+    if len(prefix) > 8 or any(w not in _COMMAND_LEAD_WORDS for w in prefix):
+        return None
+    return m
+
+
+_LIST_NAME_RE = (
+    r"(?P<list>shopping list|grocery list|groceries|work list|personal list|bucket list|task list|to[- ]?do list|todo list"
+    r"|to[- ]?dos|todos|tasks|list)"
+)
+
+
 def _list_add_from_text(message: str) -> tuple[str, str] | None:
+    """"add X to (the|my) <list>" / "put X on (the|my) <list>" - X cleaned (stutter, fillers, punctuation) and only ever a
+    plausible ITEM: a sentence is not an item (see ``list_service.is_plausible_item``)."""
+    head = _command_shaped(message, "add|put")
+    if head is None:
+        return None
+    verb = head.group(0).lower()
+    glue = r"to|into" if verb == "add" else r"on|onto|in|into|to"
     match = re.search(
-        r"\badd\s+(?P<item>.+?)\s+to\s+(?:the\s+|my\s+)?(?P<list>shopping list|grocery list|groceries|work list|personal list|list|task list|todo list|tasks|todos)\b",
-        message,
+        rf"\b{verb}\s+(?P<item>.+?)\s+(?:{glue})\s+(?:the\s+|my\s+|our\s+)?{_LIST_NAME_RE}\b",
+        message[head.start():],
         re.IGNORECASE,
     )
     if not match:
         return None
-    item = _clean_action_text(match.group("item"))
-    list_phrase = f" {match.group('list').lower()} "
+    from list_service import clean_item_text, is_plausible_item
+
+    item = clean_item_text(_clean_action_text(match.group("item")))
+    if not is_plausible_item(item):
+        return None
+    list_phrase = f" {re.sub(r'[- ]+', ' ', match.group('list').lower())} "
     list_type = _list_type_from_text(list_phrase) or ("shopping" if "grocery" in list_phrase else "")
     return item, list_type or "shopping"
 
@@ -898,17 +956,97 @@ def _calendar_edit_from_text(message: str, context: dict[str, Any] | None) -> st
     return target or None
 
 
+_HOUR_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+               "ten": 10, "eleven": 11, "twelve": 12}
+_HOUR_WORD_RE = "|".join(_HOUR_WORDS)
+# A time as people SAY it: "3pm", "9:30", "twelve o'clock", "nine thirty am", "noon". A bare number (no am/pm/o'clock) is
+# only accepted by _parse_spoken_time when it is unambiguous (12 or 24-hour).
+_TIME_ATOM = (
+    r"(?:\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?|o'?\s?clock)?"
+    rf"|(?:{_HOUR_WORD_RE})(?:\s+(?:thirty|fifteen|forty[- ]?five))?\s*(?:o'?\s?clock|a\.?m\.?|p\.?m\.?)"
+    r"|noon|midday)"
+)
+_EVENT_NOUNS = r"(?:meeting|appointment|event|call|catch[- ]?up|lunch|dinner|session|interview|class|lesson|check[- ]?up|booking)"
+_DAY_PHRASE_RE = re.compile(
+    r"\s*\b(?:(?:on|for)\s+)?(?:(?:next|this|coming)\s+)?(?:" + "|".join(_WEEKDAYS) + r"|today|tonight|tomorrow)\b",
+    re.IGNORECASE,
+)
+_CREATE_VERBS = r"add|schedule|book|put|set\s*up|create|make"
+
+
+def _parse_spoken_time(raw: str) -> str:
+    """HH:MM for a spoken/numeric time, or "" when it is ambiguous ("at 9" with no am/pm). "three o'clock" with no meridiem
+    is read the way appointments go: 1-6 -> afternoon, 7-11 -> morning, 12 -> noon."""
+    s = re.sub(r"\s+", " ", (raw or "").strip().lower().replace(".", ""))
+    if s in ("noon", "midday"):
+        return "12:00"
+    minute_words = {"thirty": 30, "fifteen": 15, "forty five": 45, "fortyfive": 45}
+    m = re.match(rf"^(?P<h>{_HOUR_WORD_RE})(?: (?P<mw>thirty|fifteen|forty[- ]?five))? ?(?P<suffix>o'? ?clock|am|pm)$", s)
+    if m:
+        hour, minute, suffix = _HOUR_WORDS[m.group("h")], minute_words.get((m.group("mw") or "").replace("-", " "), 0), m.group("suffix")
+    else:
+        m = re.match(r"^(?P<h>\d{1,2})(?::(?P<m>\d{2}))? ?(?P<suffix>am|pm|o'? ?clock)?$", s)
+        if not m:
+            return ""
+        hour, minute, suffix = int(m.group("h")), int(m.group("m") or 0), m.group("suffix") or ""
+        if not suffix and 1 <= hour <= 11 and m.group("m") is None:
+            return ""                          # "at 9": am or pm? ask, never guess (same rule as _parse_time)
+    if hour > 23 or minute > 59:
+        return ""
+    if suffix == "pm" and hour < 12:
+        hour += 12
+    elif suffix == "am" and hour == 12:
+        hour = 0
+    elif suffix and suffix.startswith("o") and 1 <= hour <= 6:
+        hour += 12
+    return f"{hour:02d}:{minute:02d}"
+
+
+def _event_title(raw: str, tail: str = "") -> str:
+    """The event's title from the words around it: the day phrase and the "to my calendar" destination dropped, the article
+    stripped, and a noun-derived default ("a doctor's appointment") given a capital - "Doctor's appointment"."""
+    title = _clean_action_text(raw)
+    title = _DAY_PHRASE_RE.sub("", title)
+    title = re.sub(r"\s+(?:to|on|in|into)\s+(?:my\s+|the\s+)?(?:calendar|schedule|diary|agenda)\s*$", "", title, flags=re.IGNORECASE)
+    tail = re.sub(r"^[\s.,;:!?]+|[\s.,;:!?]+$", "", tail or "")
+    if re.match(r"(?:for|with|at|to|on|about|in)\b", tail, re.IGNORECASE):
+        tail = tail[:1].lower() + tail[1:]          # "… 9 a.m. For work." -> "… for work" (the capital was STT's sentence break)
+    if tail:
+        title = f"{title} {tail}"
+    title = re.sub(r"\s+(?:on|at|for|the|a|an|my)\s*$", "", re.sub(r"\s+", " ", title).strip(), flags=re.IGNORECASE)
+    title = _clean_action_text(title)
+    if title and re.search(rf"\b{_EVENT_NOUNS}\b", title, re.IGNORECASE) and title[0].islower():
+        title = title[0].upper() + title[1:]
+    return title
+
+
 def _calendar_create_from_text(message: str, context: dict[str, Any] | None) -> tuple[str, str] | None:
-    match = re.search(r"\badd\s+(?P<title>.+?)\s+(?:at|for)\s+(?P<time>\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?)\b", message, re.IGNORECASE)
+    """"add/schedule/book X (on <day>) at <time>" and "what about a meeting <day> at <time>" -> (title, HH:MM). The day is
+    resolved by the caller from the same text. A time that cannot be read, or no event cue at all, claims nothing."""
+    text = re.sub(r"\s+", " ", message or "").strip()
+    cue = re.search(r"\b(calendar|schedule|event|appointment|meeting)\b", text, re.IGNORECASE)
+    if _context_domain(context) != "calendar" and not cue:
+        return None
+    head = _command_shaped(text, _CREATE_VERBS)
+    tail = ""
+    if head is not None:
+        match = re.search(
+            rf"\b(?:{_CREATE_VERBS})\s+(?P<title>.+?)\s+(?:at|for)\s+(?P<time>{_TIME_ATOM})\b",
+            text[head.start():], re.IGNORECASE,
+        )
+    else:
+        # "What about a meeting tomorrow at 9 a.m. for work" - a suggestion shaped like a request, with an event noun.
+        match = re.match(
+            rf"^(?:\W*(?:uh|um|okay|ok|so|and|well)\b\W*)*(?:what|how) about\s+(?:uh\s+|um\s+)?(?:at\s+)?"
+            rf"(?P<title>.+?\b{_EVENT_NOUNS}\b.*?)\s+(?:at|for)\s+(?P<time>{_TIME_ATOM})\b(?P<tail>.*)$",
+            text, re.IGNORECASE,
+        )
+        if match:
+            tail = match.group("tail") or ""
     if not match:
         return None
-    if _context_domain(context) != "calendar" and not re.search(r"\b(calendar|schedule|event|appointment|meeting)\b", message, re.IGNORECASE):
-        return None
-    title = _clean_action_text(match.group("title"))
-    # "add standup to my calendar at 9am" → title is "standup", not "standup to my
-    # calendar" — strip the destination tail the lazy match leaves behind.
-    title = re.sub(r"\s+(?:to|on|in|into)\s+(?:my\s+|the\s+)?calendar\s*$", "", title, flags=re.IGNORECASE).strip()
-    target_time = _parse_time(match.group("time"))
+    title = _event_title(match.group("title"), tail)
+    target_time = _parse_spoken_time(match.group("time"))
     return (title, target_time) if title and target_time else None
 
 
@@ -1296,11 +1434,14 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
     if any(term in text for term in (" weather", " forecast", " temperature", " rain", " windy", " wind ")):
         action = "forecast" if any(term in text for term in ("forecast", "tomorrow", "week", "next few days")) else "current"
         return SkybridgeIntent(domain="weather", action=action)
-    if any(term in text for term in (" list", " lists", " shopping", " groceries", " grocery", " tasks", " todos")):
+    # A command-shaped WRITE ("add fix the gate to my to-do list") that no parser above claimed is never answered with a
+    # list SHOW (live 2026-10-12: "Lists has 2 items." and nothing added): it falls through to the brain instead.
+    write_led = _command_shaped(raw_message, _WRITE_VERB_RE) is not None
+    if not write_led and any(term in text for term in (" list", " lists", " shopping", " groceries", " grocery", " tasks", " todos")):
         list_type = _list_type_from_text(text)
         action = "overview" if re.search(r"\blists\b", text) else "show"
         return SkybridgeIntent(domain="lists", action=action, list_type=list_type)
-    if any(
+    if not write_led and any(
         term in text
         for term in (
             " calendar",
@@ -1442,6 +1583,39 @@ def _looks_like_list_name(message: str) -> bool:
     return not _NAMING_REFUSAL_RE.match((message or "").strip())
 
 
+_READ_ACTIONS = frozenset({"show", "overview", "forecast", "current"})
+_WRITE_ACTIONS = frozenset({"add_item", "remove_item", "complete_item", "edit_item", "create_list", "create_event",
+                            "update_time", "edit_event", "delete_event", "remember_fact", "create"})
+# Domains holding the household's personal data: the only ones the unsure floor applies to (music / smart-home / timers
+# keep the garbled-STT recovery - their worst case is a wrong song, not a wrong record).
+_UNSURE_FLOOR_DOMAINS = frozenset({"calendar", "lists", "people"})
+
+
+def _write_like_utterance(message: str, intent: SkybridgeIntent) -> bool:
+    """True when the turn is a WRITE or reads like a garbled one: a write action, a write verb in the words, or a calendar
+    turn carrying an "at <time>" clause ("Keynes pollutants in my calendar are at 12 o'clock" is a mis-heard "put an
+    appointment in my calendar at 12 o'clock", whatever the keyword fallback made of it)."""
+    if intent.action in _WRITE_ACTIONS:
+        return True
+    text = message or ""
+    if re.search(rf"\b(?:{_WRITE_VERB_RE}|schedule|book)\b", text, re.IGNORECASE) and intent.action not in _READ_ACTIONS:
+        return True
+    return intent.domain == "calendar" and re.search(rf"\bat\s+{_TIME_ATOM}", text, re.IGNORECASE) is not None
+
+
+def _unsure_floor(intent: SkybridgeIntent, message: str = "") -> float | None:
+    """The router confidence an UNSURE (below the 0.5 chat gate) verdict must still reach for a WRITE-like turn on a personal-
+    data domain to proceed, or None when no floor applies (a plain read keeps the garbled-STT recovery: "shammy my lists").
+    ``ZOE_SKYBRIDGE_UNSURE_FLOOR_WRITE``, default 0.45; 0 turns the floor off."""
+    if intent.domain not in _UNSURE_FLOOR_DOMAINS or not _write_like_utterance(message, intent):
+        return None
+    try:
+        value = float(os.environ.get("ZOE_SKYBRIDGE_UNSURE_FLOOR_WRITE", 0.45))
+    except ValueError:
+        value = 0.45
+    return value if value > 0 else None
+
+
 def skybridge_router_gate(
     message: str,
     intent: SkybridgeIntent,
@@ -1459,6 +1633,14 @@ def skybridge_router_gate(
     """
     if not router_veto_enabled():
         return "allow", "flag_off", "-", None
+    if (
+        intent.domain in ("lists", "calendar")
+        and intent.action in _READ_ACTIONS
+        and _command_shaped(message, _WRITE_VERB_RE) is not None
+    ):
+        # The WORDS say "add/put/create …" and the parse says "show": the parse is the one that is wrong (live 2026-10-12:
+        # "Can you add fix zoe to my to-do list" -> "Lists has 2 items." and nothing added). Whatever the router thinks.
+        return "veto", "verb_contradiction", "-", None
     decision = (router_decision or {}).get("two_stage") if isinstance(router_decision, dict) else None
     if not isinstance(decision, dict):
         return "allow", "router_unavailable", "-", None
@@ -1499,6 +1681,11 @@ def skybridge_router_gate(
         # Stage 1 fell under its confidence gate on a non-chat domain: the router
         # is UNSURE, not saying "chat". Typically garbled STT ("shammy my lists")
         # where the keyword fallback is the useful recovery — no opinion, no veto.
+        # EXCEPT personal-data domains below a confidence FLOOR: "Keynes pollutants in my calendar are at 12 o'clock"
+        # (router 0.39) is not a calendar request, and a write on that little evidence is worse than asking.
+        floor = _unsure_floor(intent, message)
+        if floor is not None and (conf is None or conf < floor):
+            return "veto", "router_unsure_low_conf", router_domain, conf
         return "allow", "router_unsure", router_domain, conf
     return "veto", ("router_chat" if router_domain == "chat" else "router_disagrees"), router_domain, conf
 
@@ -2221,14 +2408,40 @@ async def _resolve_calendar_create(intent: SkybridgeIntent, user_id: str, db: An
         "family",
     )
     await _maybe_commit(db)
+    write_receipts.record(user_id, "calendar", event_id, "skybridge:create_event")
     refreshed = await _resolve_calendar(SkybridgeIntent("calendar", "show", start.isoformat(), start, start), user_id, db)
     refreshed["intent"] = {"domain": "calendar", "action": "create_event", "event_id": event_id}
+    # The read-back names the DAY and the TIME it was booked for, so a mis-heard day is caught by the listener at once.
+    when = _spoken_when(start)
     refreshed["spoken_summary"] = (
-        f"Added {intent.title} to your calendar." if intent.all_day
-        else f"Added {intent.title} at {intent.target_time}."
+        f"Added {intent.title} to your calendar {when}." if intent.all_day
+        else f"Added {intent.title} {when} at {_spoken_clock(intent.target_time)}."
     )
     refreshed["actions"] = [{"type": "created", "domain": "calendar", "id": event_id}]
     return refreshed
+
+
+def _spoken_when(day: date) -> str:
+    """"today" / "tomorrow" / "on Friday" (within a week) / "on Friday 16 October" for a booked day."""
+    today = _today()
+    if day == today:
+        return "today"
+    if day == today + timedelta(days=1):
+        return "tomorrow"
+    if 0 < (day - today).days < 7:
+        return f"on {day.strftime('%A')}"
+    return f"on {day.strftime('%A')} {day.day} {day.strftime('%B')}"
+
+
+def _spoken_clock(hhmm: str) -> str:
+    """"12:00" -> "12 PM", "09:30" -> "9:30 AM" (how it is said, not how it is stored)."""
+    try:
+        hour, minute = int(hhmm[:2]), int(hhmm[3:5])
+    except (ValueError, TypeError):
+        return hhmm or ""
+    suffix = "PM" if hour >= 12 else "AM"
+    hour12 = hour % 12 or 12
+    return f"{hour12}{f':{minute:02d}' if minute else ''} {suffix}"
 
 
 def _score_event_for_target(event: dict[str, Any], target: str) -> int:
@@ -2928,6 +3141,8 @@ async def _resolve_list_add_item(intent: SkybridgeIntent, user_id: str, db: Any,
             None,
         )
         await _maybe_commit(db)
+    # The item is on the list now (inserted, or already there from a replayed add): the receipt the write-claim guard reads.
+    write_receipts.record(user_id, "list", item_id, "skybridge:add_item")
     refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type), user_id, db)
     card_content = refreshed.get("cards", [{}])[0].get("content", {}) if refreshed.get("cards") else {}
     items = card_content.get("items")

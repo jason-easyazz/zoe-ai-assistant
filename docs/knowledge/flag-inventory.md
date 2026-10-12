@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-588 flags; 586 not documented in `.env.example`.
+590 flags; 588 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -373,6 +373,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_PANEL_AGENT_PORT` | `'8765'` | no | NO | `services/zoe-data/auth_handoff.py`<br>`services/zoe-data/routers/system.py` |
 | `ZOE_PANEL_ALLOWED_HOSTS` | `''` | no | NO | `services/zoe-data/agent_safety.py` |
 | `ZOE_PANEL_ID` | `'post-merge-probe'`, `'zoe-touch-pi'` | no | NO | `scripts/maintenance/zoe_latency_probe.py`<br>`services/zoe-data/zoe_agent.py` |
+| `ZOE_PANEL_LIVE_ACK_MAX_S` | `'600'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_PANEL_SESSION_TRUST_WINDOW_S` | `'900'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_PERF` | `-` | no | NO | `scripts/perf/engine_bench.py`<br>`scripts/perf/hop_placement_ab.py`<br>`scripts/perf/kokoro_first_chunk_probe.py`<br>`scripts/perf/measure_first_sound.py`<br>`scripts/perf/measure_speed.py`<br>`scripts/perf/measure_tts.py`<br>`scripts/perf/measure_voice.py`<br>`scripts/perf/person_half_enforce_ab.py`<br>`scripts/perf/recall_evidence_probe.py`<br>`scripts/perf/samantha_bar.py`<br>`scripts/perf/samantha_day_sim.py`<br>`scripts/perf/samantha_person.py`<br>`scripts/perf/tool_use_bench.py`<br>`scripts/perf/user_model_ab.py` |
 | `ZOE_PERSONALISATION_HOP` | `True` | yes | NO | `services/zoe-data/personalisation_hop.py` |
@@ -509,6 +510,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_SKYBRIDGE_ONLY` | `False` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_SKYBRIDGE_ROUTER_VETO` | `'1'` | no | NO | `services/zoe-data/skybridge_service.py` |
 | `ZOE_SKYBRIDGE_TIMEZONE` | `-` | no | NO | `services/zoe-data/skybridge_service.py` |
+| `ZOE_SKYBRIDGE_UNSURE_FLOOR_WRITE` | `0.45` | no | NO | `services/zoe-data/skybridge_service.py` |
 | `ZOE_SMART_TURN_ENABLED` | `'0'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_SMART_TURN_MAX_CHECKS` | `'2'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_SMART_TURN_THREADS` | `'1'` | no | NO | `services/zoe-data/voice_turn.py` |

@@ -1636,6 +1636,21 @@ def _parse_voice_form_field(text: str, panel_type: str) -> dict:
     return result
 
 
+def _panel_is_live(panel_id: Optional[str]) -> bool:
+    """Can this panel be told to show something right now (``push.PushBroadcaster.panel_live``)? A reply must not send the
+    user to "check the panel" when it is not - the result is said aloud instead. Fail-closed: any error means not live."""
+    try:
+        from push import broadcaster as _bc_live
+
+        return bool(_bc_live.panel_live(panel_id, max_ack_age_s=_PANEL_LIVE_ACK_MAX_S))
+    except Exception:
+        return False
+
+
+# How fresh the last panel ack must be (when acks are tracked at all) for the panel to count as live.
+_PANEL_LIVE_ACK_MAX_S = float(os.environ.get("ZOE_PANEL_LIVE_ACK_MAX_S", "600") or 600)
+
+
 async def _broadcast_action_form_panel(
     panel_id: str,
     panel_type: str,
@@ -4060,11 +4075,44 @@ async def voice_command(
             except Exception:
                 pass
             if _allow_quick_list:
+                # The head is the authority over every keyword claim (INTENT_GATE): this legacy panel path had no gate, so
+                # a turn the router sent to memory/chat was still claimed here and its whole sentence stored (live
+                # 2026-10-12, after SKYBRIDGE_GATE had already vetoed it).
+                try:
+                    import fast_tiers as _ft_list_gate
+
+                    if not _ft_list_gate.keyword_intent_allowed("list_add", text, lane="voice"):
+                        _allow_quick_list = False
+                except Exception:
+                    pass
+            if _allow_quick_list and not str((_quick_intent.slots or {}).get("item", "")).strip() and not _panel_is_live(panel_id):
+                # Nothing to add and no live panel to show the list on: the brain asks what to add, in words.
+                _allow_quick_list = False
+            if _allow_quick_list:
                 try:
                     slots = _quick_intent.slots or {}
                     _item_text = str(slots.get("item", "")).strip()
                     _list_type = str(slots.get("list_type", "shopping"))
                     _list_title = "Shopping List" if _list_type == "shopping" else f"{_list_type.title()} List"
+
+                    if _item_text and not _panel_is_live(panel_id):
+                        # Nobody can tap Done on a panel that is not rendering: do the add NOW and say what really
+                        # happened ("Added …", or that it did not work) - never "check the panel".
+                        from intent_router import execute_intent as _exec_list_direct
+
+                        reply_text = (await _exec_list_direct(_quick_intent, effective_user)) or (
+                            "I couldn't add that just now. Want me to try again?")
+                        _list_audio = await synthesize({"text": reply_text}, caller=caller)
+                        await _schedule_voice_chat_save(session_id, text, reply_text, effective_user, speaker_verified=_speaker_verified)
+                        _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id, speaker_verified=_speaker_verified))
+                        return {
+                            "ok": True,
+                            "panel_id": panel_id,
+                            "reply": reply_text,
+                            "audio_base64": base64.b64encode(_list_audio.body).decode("ascii"),
+                            "content_type": _list_audio.media_type,
+                            "intent": "list_add",
+                        }
 
                     # Pre-load existing non-completed items so the panel shows the full list.
                     _existing_list_items: list = []
@@ -4110,10 +4158,11 @@ async def voice_command(
                         # Flag so confirm endpoint knows which item is the new addition.
                         "new_item": _item_text,
                     }
+                    # NOT "I've added …": nothing is saved until Done is tapped, so the sentence must not say it was.
                     reply_text = (
-                        f"I've added {_item_text} to your list." if _item_text
+                        f"Tap Done on the panel to save {_item_text} to your list." if _item_text
                         else "Here's your shopping list."
-                    ) + " Check the panel and tap Done when you're finished."
+                    )
                     await _broadcast_action_form_panel(
                         panel_id=panel_id,
                         panel_type="shopping_list",
@@ -4149,9 +4198,40 @@ async def voice_command(
                 pass
             if _allow_quick_calendar:
                 try:
+                    import fast_tiers as _ft_cal_gate
+
+                    if not _ft_cal_gate.keyword_intent_allowed("calendar_create", text, lane="voice"):
+                        _allow_quick_calendar = False
+                except Exception:
+                    pass
+            if _allow_quick_calendar and not _panel_is_live(panel_id):
+                _cal_slots = _quick_intent.slots or {}
+                if not ((_cal_slots.get("title") or _cal_slots.get("event")) and _cal_slots.get("time")):
+                    # A Confirm button nobody can see cannot collect the missing title/time: the brain asks, in words.
+                    _allow_quick_calendar = False
+            if _allow_quick_calendar:
+                try:
                     import datetime as _dt
                     from intent_router import _parse_date, _parse_time
                     slots = _quick_intent.slots or {}
+                    if (slots.get("title") or slots.get("event")) and slots.get("time") and not _panel_is_live(panel_id):
+                        # Title and time are known and the panel cannot show a Confirm button: book it now and read back
+                        # what was booked (the executor names the day and the time), or say it did not work.
+                        from intent_router import execute_intent as _exec_cal_direct
+
+                        reply_text = (await _exec_cal_direct(_quick_intent, effective_user)) or (
+                            "I couldn't add that to your calendar just now. Want me to try again?")
+                        _cal_audio = await synthesize({"text": reply_text}, caller=caller)
+                        await _schedule_voice_chat_save(session_id, text, reply_text, effective_user, speaker_verified=_speaker_verified)
+                        _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id, speaker_verified=_speaker_verified))
+                        return {
+                            "ok": True,
+                            "panel_id": panel_id,
+                            "reply": reply_text,
+                            "audio_base64": base64.b64encode(_cal_audio.body).decode("ascii"),
+                            "content_type": _cal_audio.media_type,
+                            "intent": "calendar_create",
+                        }
                     _date_raw = slots.get("date", "")
                     _time_raw = slots.get("time", "")
                     _parsed_date = (_parse_date(_date_raw) if _date_raw else None) or _dt.date.today().isoformat()

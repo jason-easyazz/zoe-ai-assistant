@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from typing import Dict, Set
 from fastapi import WebSocket
 import logging
@@ -27,6 +28,8 @@ class PushBroadcaster:
         self._ws_panels: Dict[WebSocket, str] = {}
         # Map WebSocket → user_id for scoped delivery (None = panel/anonymous).
         self._ws_users: Dict[WebSocket, str | None] = {}
+        # panel_id -> time.monotonic() of the last proof the panel rendered something (note_panel_ack).
+        self._panel_acks: Dict[str, float] = {}
         self._sequence = 0
 
     async def connect(self, websocket: WebSocket, channel: str = "all", user_id: str | None = None):
@@ -117,6 +120,27 @@ class PushBroadcaster:
             self.disconnect(ws, channel)
 
         return delivered
+
+    def note_panel_ack(self, panel_id: str) -> None:
+        """A panel acknowledged something we pushed (or otherwise proved it is rendering). The hook the panel-liveness work
+        feeds; ``panel_live`` reads it."""
+        if panel_id:
+            self._panel_acks[str(panel_id)] = time.monotonic()
+
+    def panel_live(self, panel_id: str | None, *, max_ack_age_s: float | None = None) -> bool:
+        """True when this panel can be TOLD something and be expected to show it: a socket is subscribed on its own channel
+        and - only when acks are tracked for it AND ``max_ack_age_s`` is given - the last ack is that fresh. Reply text must
+        never say "check the panel" for a panel that is not live (live 2026-10-12: "the panel's not changing"): say the result
+        aloud instead."""
+        if not panel_id:
+            return False
+        if not self._connections.get(f"panel_{panel_id}"):
+            return False
+        if max_ack_age_s is not None:
+            last = self._panel_acks.get(str(panel_id))
+            if last is not None and time.monotonic() - last > max_ack_age_s:
+                return False
+        return True
 
     async def broadcast_to_panel(self, panel_id: str, event_type: str, data: dict) -> int:
         """Send an event to the named panel's dedicated channel.
