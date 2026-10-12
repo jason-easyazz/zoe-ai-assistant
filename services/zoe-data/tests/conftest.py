@@ -50,6 +50,11 @@ os.environ["ZOE_STRUCTURAL_VERIFIER"] = "off"
 # The post-turn 4B callers wait out a hot conversation (brain_slot_guard). A test that drives a brain turn and then a
 # background pass in one process would sleep for the quiet window: off for the suite, on in test_brain_slot_guard.py.
 os.environ["ZOE_BRAIN_SLOT_GUARD"] = "off"
+# The app log. A test that enters the FastAPI lifespan (a TestClient context) runs ``configure_logging``, which attaches a handler
+# to the ROOT logger writing to ``$ZOE_LOG_DIR`` (default ``~/.zoe-logs/zoe-data.app.log``) - the live server's own log. Measured
+# 2026-10-13: three CI-runner pytest runs (118 lines each) and one agent worktree run put 355 synthetic-user ``memory_forget_cascade:
+# no database`` / ``NOT erased`` warnings into it, indistinguishable from a real half-done forget. Read at call time, so this pin holds.
+os.environ["ZOE_LOG_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "logs")
 
 
 import pytest  # noqa: E402
@@ -67,3 +72,17 @@ def _exact_words_in_process_index():
     yield
     exact_words.set_backend(None)
     night_store.set_backend(None)
+
+
+@pytest.fixture(autouse=True)
+def _db_pool_never_initialised(monkeypatch):
+    """``db_pool.pool_ever_initialised()`` is process-global and sticky (a pool that existed and was lost is a FAULT to the forget
+    cascade, a process that never had one is not). A test that really calls ``init_pool`` (or a lifespan with a faked asyncpg) must not
+    leave it True for the next forget test: every test starts as a process with no database; one that wants the other state sets it."""
+    try:
+        import db_pool
+    except Exception:  # noqa: BLE001 - a slim lane without asyncpg has no pool to speak of
+        yield
+        return
+    monkeypatch.setattr(db_pool, "_ever_initialised", False, raising=False)
+    yield

@@ -520,7 +520,7 @@ def test_a_transcript_that_lands_after_a_forget_is_redacted_against_the_ledger(e
 
 def test_the_cascade_and_the_delete_user_path_call_this_module():
     """The forget entry points reach us (a string guard: the two hooks must exist, and are the only callers)."""
-    assert "omi_recordings.erase_entity(user_id, rx)" in (SVC / "memory_forget_cascade.py").read_text()
+    assert "omi_recordings.erase_entity(user_id, rx, strict=True)" in (SVC / "memory_forget_cascade.py").read_text()
     assert "omi_recordings.forget_user(user_id)" in (SVC / "memory_service.py").read_text()
 
 
