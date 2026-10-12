@@ -103,6 +103,20 @@ with the mandatory gate never running — a gate that can silently not-run is no
     **inside** that window, not before merge.
 - **Blocking happens before the reset**, so the live tree stays at `prev` — nothing is migrated or
   restarted, and a retry re-evaluates the *same* change instead of fast-forwarding past it.
+- **Documentation is never voice scope.** The `*kokoro*` / `*moonshine*` / `*silero*` globs match by
+  substring and fnmatch's `*` crosses `/`, so they also matched `docs/knowledge/kokoro-onnx-migration.md`
+  (2026-10-11: a docs-only note counted as a voice-runtime change and the deploys after it were refused).
+  `VOICE_PATH_EXCLUDES = ("docs/*",)` in `voice_gate_check.py` now drops anything under `docs/` before the
+  globs run (every caller, override included); `greptile-gate.yml` mirrors it (`VOICE_PATH_EXCLUDE`), drift-pinned.
+  It is `docs/` and not every `*.md` on purpose: the persona `services/zoe-core/SOUL.md` is read at runtime.
+  Like any change to this file it takes effect for the deploy AFTER the one that carries it.
+- **A deploy waits out an open night window.** The first step of `deploy.yml` ("Wait out an open night window")
+  polls every 30 s while `~/.zoe/night-window/WINDOW_OPEN` exists (the 12B window has stopped zoe-data, the 4B,
+  Kokoro and the router), up to 75 min, and FAILS LOUDLY after that rather than restart zoe-data beside the loaded
+  12B. Re-run the deploy once the window has ended. The "Restart zoe-data" step repeats the same bounded wait
+  immediately before `systemctl --user restart`, so a window that opens mid-deploy is not restarted beside either
+  (it deliberately does NOT take `/tmp/zoe-brain-window.lock`, which benches and landings hold for hours; the
+  remaining race is the instant between that check and the restart). Pinned by `tests/unit/test_deploy_night_window_wait.py`.
 - **Not every gated file is equally evidenced, and the LiveKit lane is the weak one.** The replay
   corpus is replayed over `POST /api/voice/transcribe` (the HTTP lane) and **never traverses**
   `livekit_aiortc.py` / `routers/voice_livekit.py` / `services/livekit/config.yaml`. For a diff
