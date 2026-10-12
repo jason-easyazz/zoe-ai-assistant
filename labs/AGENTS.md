@@ -380,7 +380,11 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   negative control on the gap detector and a real opuslib round trip that SKIPS
   with a reason when libopus is absent. Scaffold + fixtures only until the pendant
   is run: no live result is claimed. Never wired into the Pi daemon, `zoe-data`,
-  or CI (that is B9.2, flag-dark).
+  or CI. The PRODUCT path for the pendant (owner decision 2026-10-12: record on
+  the pendant, sync the SD ring when in range — NOT the live-stream bridge this
+  lab measures) lives in `services/omi-sync/` + `zoe-data/omi_recordings.py`,
+  not here; this lab stays the hand-run hardware measurement tool (live-stream
+  packet loss, WER) and the source of the codec facts.
 - `two-stage-router-eval/` — honest end-to-end eval of the SetFit-top-3 →
   stock-FunctionGemma two-stage router on the full 81-case corpus (replaces
   the oracle-shortlist 16-case 93.8% claim): real pipeline scores 35.8%
