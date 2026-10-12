@@ -28,7 +28,7 @@ importScripts('/workbox/workbox-sw.js');
 //  first use, and precaching ~2 MB of libraries would re-download the lot on
 //  every future SW_VERSION bump.)
 // PRECACHE_DIGEST=509deca48af4e776  (sha256 of the precached files; refresh with tools/audit/sw_precache_digest.py --write and BUMP SW_VERSION)
-const SW_VERSION = '4.86.1'; // 4.86.1: panel poll survives a 401 (polls as guest + asks the page to re-mint) instead of stopping for good — the wall panel no longer goes deaf when a PIN session expires (2026-10-12). 4.86.0: dashboard/lists (precached) drop the dead AI-generate tab; dark-mode-shared.css (precached) makes chat session titles readable (2026-10-09). 4.85.0: index.html (precached) opens the sign-in overlay itself after a gate redirect (2026-10-09). 4.84.1: chat.html persists its chat session id before the first send (no throwaway id per message). 4.84.0: chat/dashboard/calendar/lists/offline (precached): desktop→touch links severed, dead tier removed, offline probes /health, trailing-slash 307s gone (UI deep review wave 5, 2026-10-04)
+const SW_VERSION = '4.86.1'; // 4.86.1: panel poll survives a 401 (polls as guest + asks the page to re-mint) instead of stopping for good — the wall panel no longer goes deaf when a PIN session expires, and the guest poll rides out the 300 s member->guest reclaim 403s instead of stopping (2026-10-12/13). 4.86.0: dashboard/lists (precached) drop the dead AI-generate tab; dark-mode-shared.css (precached) makes chat session titles readable (2026-10-09). 4.85.0: index.html (precached) opens the sign-in overlay itself after a gate redirect (2026-10-09). 4.84.1: chat.html persists its chat session id before the first send (no throwaway id per message). 4.84.0: chat/dashboard/calendar/lists/offline (precached): desktop→touch links severed, dead tier removed, offline probes /health, trailing-slash 307s gone (UI deep review wave 5, 2026-10-04)
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
@@ -597,6 +597,10 @@ let _panelPollTimer = null;
 let _panelId = null;
 let _panelSessionId = null;
 let _panelAuthNoticeAt = 0;   // last SW_PANEL_AUTH_EXPIRED sent to the pages (rate limit)
+let _panelGuestRefusedSince = 0;   // first 403 of an unbroken run, while polling as a guest
+// Mirrors PANEL_GUEST_RECLAIM_GRACE_MS in js/touch-ui-executor.js: _authorize_panel refuses a
+// guest for 300 s after the former owner's row was last refreshed (+30 s margin).
+const PANEL_GUEST_RECLAIM_GRACE_MS = 330000;
 
 async function _panelFetch(path) {
     const headers = { 'Content-Type': 'application/json' };
@@ -627,6 +631,7 @@ async function _panelPoll() {
     if (!_panelId) return;
     try {
         const data = await _panelFetch(`/api/ui/actions/pending?panel_id=${encodeURIComponent(_panelId)}&limit=5`);
+        _panelGuestRefusedSince = 0;
         const actions = Array.isArray(data.actions) ? data.actions : [];
         for (const action of actions) {
             if (!action || !action.id) continue;
@@ -702,6 +707,16 @@ async function _panelPoll() {
             return;
         }
         if (err && err.status === 403) {
+            // A GUEST poll (we just dropped a dead member session) is refused with a 403 while
+            // the former owner's panel row is still fresh — expected for ~300 s, and nothing
+            // restarts a stopped SW poll when reclaim then succeeds. Ride it out for the same
+            // bounded window the page does; a member-session 403, or a guest still refused
+            // after the window, is a genuine "not allowed" and stops.
+            if (!_panelSessionId) {
+                const now = Date.now();
+                if (!_panelGuestRefusedSince) _panelGuestRefusedSince = now;
+                if (now - _panelGuestRefusedSince < PANEL_GUEST_RECLAIM_GRACE_MS) return;
+            }
             _stopPanelPoll();
             console.warn(`🎛️ SW panel executor stopped after auth failure: HTTP ${err.status}`);
             return;
@@ -713,6 +728,7 @@ async function _panelPoll() {
 function _startPanelPoll(panelId, sessionId) {
     _panelId = panelId;
     _panelSessionId = sessionId || null;
+    _panelGuestRefusedSince = 0;
     if (_panelPollTimer) clearInterval(_panelPollTimer);
     // 5s fallback poll — WS push now handles the fast path for instant delivery
     _panelPollTimer = setInterval(_panelPoll, 5000);
@@ -724,6 +740,7 @@ function _stopPanelPoll() {
     if (_panelPollTimer) { clearInterval(_panelPollTimer); _panelPollTimer = null; }
     _panelId = null;
     _panelSessionId = null;
+    _panelGuestRefusedSince = 0;
     console.log('🎛️ SW panel executor stopped');
 }
 

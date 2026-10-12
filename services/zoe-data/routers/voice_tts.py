@@ -4646,17 +4646,22 @@ async def voice_command(
                 # it for every other exit — a barge-in or client disconnect (GeneratorExit /
                 # CancelledError), a timeout, an error — which used to leave the panel on
                 # "thinking" until the next turn (2026-10-12).
+                # Two flags, each set only AFTER its await completes: a CancelledError (not an
+                # Exception, so the swallows below do not catch it) landing inside either
+                # broadcast leaves it unset, and the `finally` below re-runs the missing step.
+                # Setting one up front made a cancelled card send look "finished" and left the
+                # panel on "thinking" (PR #1999 review).
+                _card_sent = False
                 _screen_finished = False
 
                 async def _finish_panel_screen(reply: str) -> None:
                     """The answer card (FULL text — the estate scrolls, and a card REPLACES the
                     accumulated per-sentence text, so a slice here cut every long reply short),
-                    then voice:done. Idempotent."""
-                    nonlocal _screen_finished
+                    then voice:done. Idempotent per step; cancellation-safe (see above)."""
+                    nonlocal _card_sent, _screen_finished
                     if _screen_finished:
                         return
-                    _screen_finished = True
-                    if reply:
+                    if reply and not _card_sent:
                         try:
                             await _bc_stream.broadcast("all", "ui_action", {
                                 "action": {
@@ -4671,10 +4676,12 @@ async def voice_command(
                             })
                         except Exception:
                             pass
+                    _card_sent = True
                     try:
                         await _bc_stream.broadcast("all", "voice:done", {"panel_id": panel_id})
                     except Exception:
                         pass
+                    _screen_finished = True
 
                 async def _pace_delivery() -> None:
                     # Hold the just-synthesized audio until at least the cadence

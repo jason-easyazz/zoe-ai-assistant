@@ -162,3 +162,48 @@ async def test_done_is_sent_once_on_the_happy_path(monkeypatch):
     await _settle()
     assert bc.names().count("voice:done") == 1, "the finally must not double-send after a normal finish"
     assert len([p for p in bc.of("ui_action") if p["action"]["action_type"] == "show_card"]) == 1
+
+
+class _CancelOnce(_Broadcaster):
+    """The first broadcast of ``event`` is cancelled mid-await (a client disconnect landing while
+    the final card / voice:done is being sent); later ones go through."""
+
+    def __init__(self, event):
+        super().__init__()
+        self._event = event
+        self._armed = True
+
+    async def broadcast(self, channel, event, payload):
+        if event == self._event and self._armed:
+            self._armed = False
+            raise asyncio.CancelledError()
+        await super().broadcast(channel, event, payload)
+
+
+async def _drain_until_cancelled(resp):
+    try:
+        async for _ in resp.body_iterator:
+            pass
+    except asyncio.CancelledError:
+        return True
+    return False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("event", ["ui_action", "voice:done"])
+async def test_done_is_still_sent_when_cancelled_during_the_final_broadcast(monkeypatch, event):
+    """PR #1999 review: the idempotency flag was set BEFORE the awaits, so a CancelledError inside
+    the card / voice:done send (not an Exception - it skips the swallow) left the flag True, the
+    outer finally skipped its shielded cleanup, and the panel stayed on 'thinking'."""
+    async def agent(*_a, **_k):
+        yield "A short answer."
+
+    bc = _wire(monkeypatch, agent)
+    cancel = _CancelOnce(event)
+    monkeypatch.setitem(sys.modules, "push", types.SimpleNamespace(broadcaster=cancel))
+    resp = await _turn()
+    assert await _drain_until_cancelled(resp), "precondition: the cancellation reached the stream"
+    await _settle()
+    assert cancel.names().count("voice:done") == 1, "the cleanup must still end the thinking state"
+    cards = [p for p in cancel.of("ui_action") if p["action"]["action_type"] == "show_card"]
+    assert len(cards) == 1 and cards[0]["action"]["payload"]["data"]["text"] == "A short answer."

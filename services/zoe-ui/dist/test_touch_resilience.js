@@ -159,7 +159,7 @@ let n = 0; const ok = (m) => { n++; console.log('  ok  ' + m); };
       assert(/async function syncState\(\) \{\s*if \(state\.panelServicesStopped\) return;/.test(execSrc), 'a stopped sync never posts again');
       assert(/function stopPanelServices\(reason\) \{[\s\S]{0,1400}if \(isKioskContext\(\)\) \{[\s\S]{0,200}return;\s*\}[\s\S]{0,900}state\.pushWs\.close\(\)[\s\S]{0,300}window\.zoePushWs\.disconnect\(\)/.test(execSrc), 'stopPanelServices returns BEFORE closing the push socket on a kiosk; off-kiosk it still closes the fallback socket and the shared channel');
       assert(/if \(state\.unloading \|\| state\.pushRetry \|\| state\.pushStopped\) return;/.test(execSrc), 'the fallback push backoff never reschedules after a deliberate (off-kiosk) stop, and does reconnect on a kiosk');
-      assert(/err\.status === 401\) \{\s*_panelSessionId = null;[\s\S]{0,900}SW_PANEL_AUTH_EXPIRED[\s\S]{0,500}return;\s*\}\s*if \(err && err\.status === 403\) \{\s*_stopPanelPoll\(\);/.test(swSrc), 'sw.js: a 401 drops the session and keeps polling (never _stopPanelPoll); only a 403 stops');
+      assert(/err\.status === 401\) \{\s*_panelSessionId = null;[\s\S]{0,900}SW_PANEL_AUTH_EXPIRED[\s\S]{0,500}return;\s*\}\s*if \(err && err\.status === 403\) \{[\s\S]{0,900}_stopPanelPoll\(\);/.test(swSrc), 'sw.js: a 401 drops the session and keeps polling (never _stopPanelPoll); only a 403 stops (behaviour: test_sw_panel_poll.js)');
       ok('executor: a 403 stops poll+sync (+SW poll, +push off-kiosk); a 401 recovers the session and stops nothing');
       // 2026-10-05: a member's laptop with a STALE session was bounced to the retired
       // /touch/index.html by the estate's own 401 path. Off-kiosk auth failures raise the

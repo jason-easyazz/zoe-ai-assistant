@@ -37,6 +37,15 @@ def test_touch_panel_session_recovery_harness():
     assert "A1: a 401 on poll keeps socket" in proc.stdout and "D1: watchdog restarts" in proc.stdout
 
 
+def test_sw_panel_poll_rides_out_the_guest_reclaim_window():
+    """The SW poll survives the member->guest handover's expected 403s (bounded), and stops on a real one."""
+    harness = ROOT / "zoe-ui" / "dist" / "test_sw_panel_poll.js"
+    assert harness.is_file(), f"harness missing: {harness}"
+    proc = subprocess.run([_node(), str(harness)], capture_output=True, text=True, timeout=120)
+    assert proc.returncode == 0, f"sw panel poll harness failed:\n{proc.stdout}\n{proc.stderr}"
+    assert "4 checks passed" in proc.stdout
+
+
 def test_voice_form_replies_are_gated_on_panel_liveness():
     """The voice path only says 'check the panel / tap Done / tap Confirm' through the gated helpers."""
     src = (ROOT / "zoe-data" / "routers" / "voice_tts.py").read_text()
