@@ -419,6 +419,36 @@
         ],
         "typed_env": false
       },
+      "ZOE_BLE_RADIO_LOCK": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/omi-sync/omi_sync/radio_lock.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_BLUETOOTH_AUDIT_PATH": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/bluetooth_broker.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_BLUETOOTH_SETTINGS": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/bluetooth_broker.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_BOARD_POLL_S": {
         "defaults": [
           "'60'"
