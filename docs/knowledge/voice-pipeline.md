@@ -1381,7 +1381,8 @@ conversation windows (no wake word) accepted the owner talking to someone else a
 `RECORD_SECONDS_MAX` (12) is now the **soft** cap. Between it and the hard cap
 (`RECORD_SECONDS_HARD_MAX`=30; `CONV_RECORD_SECONDS_HARD_MAX`=60 in an open conversation) a
 recording stays open only while the speaker is still flowing: Silero speech in at least
-`RECORD_STILL_SPEAKING_RATIO` (0.5) of the last ~2 s, so a TV or a stuck mic still stops at 12 s.
+`RECORD_STILL_SPEAKING_RATIO` (0.5) of the last ~2 s, so a TV or a stuck mic still stops at 12 s (never while the current chunk is speech: a
+speaker who paused and resumed just before 12 s runs on to the next quiet chunk).
 At the hard cap it runs on, up to `RECORD_SNAP_S` (3), to the first non-speech chunk, so the cut
 falls in a pause, never inside a word. All three recorders (wake command, follow-up/conversation
 window, barge-in seed) share one rule, `_record_cap_stop`. A recording that still ends on the hard
@@ -1404,7 +1405,8 @@ stops the barge monitor (the Jabra holds one input stream), listens `ZOE_CONTINU
 and re-sends one merged clip marked `continued` (never held twice), or the original clip if nobody
 resumes. Conservative on purpose: fewer than 3 words, a `?`/`!` ending, "so" and "though" never
 hold; "that"/"which"/"que"/"si"... only hold in a 6+ word utterance that does not open like a
-question ("what was that" is complete). **Cost:** only a turn ending on such a word pays — the
+question ("what was that" is complete); "cause" holds only as a conjunction (not after
+the/a/my/root/... or a pronoun/modal, unless written `'cause`). **Cost:** only a turn ending on such a word pays — the
 wait, plus a second STT pass on the retry. Every other turn is byte-identical. **Known limit:** the
 mic is closed for the STT round trip (~0.5 s), so a word spoken in that gap is lost; the listen
 opens right after, and a pause after "and" is normally longer. The seamless fix is the under-speech

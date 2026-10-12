@@ -68,6 +68,29 @@ def test_complete_or_ambiguous_is_not_held(text):
     assert us.ends_incomplete(text) is False, text
 
 
+@pytest.mark.parametrize("text", [
+    "Tell me the cause",                      # noun after a determiner
+    "I don't know the cause",
+    "Please find out what the root cause",
+    "They want to know the real cause.",
+    "That is not something they cause",      # verb
+    "Nobody knows what might cause",
+])
+def test_cause_as_a_noun_or_verb_is_not_held(text):
+    assert us.ends_incomplete(text) is False, text
+
+
+@pytest.mark.parametrize("text", [
+    "I will leave early cause",              # conjunction, bare
+    "I will leave early 'cause",             # clipped conjunction
+    "I will leave early ’cause,",            # curly apostrophe + trailing comma
+    "We should stay home because",           # the full word is unaffected
+    "Tell me the cause and",                 # a different continuer after the noun still holds
+])
+def test_cause_as_a_conjunction_is_still_held(text):
+    assert us.ends_incomplete(text) is True, text
+
+
 def test_ending_punctuation_does_not_hide_a_continuation_word():
     assert us.ends_incomplete("We could have pasta or...") is True
     assert us.ends_incomplete("We could have pasta, or,") is True

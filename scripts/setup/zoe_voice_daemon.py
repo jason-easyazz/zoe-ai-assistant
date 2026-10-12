@@ -1978,7 +1978,9 @@ def _record_cap_stop(n_chunks: int, caps: "tuple[int, int, int]", endpointer: "_
     """Whether a recording the endpointer has NOT closed must stop at the cap.
 
     Before the soft cap never. Between soft and hard only when the speaker has stopped
-    flowing (room noise / a stuck mic must not stretch to the hard cap). From the hard cap
+    flowing (room noise / a stuck mic must not stretch to the hard cap) AND the current
+    chunk is not speech: a speaker who paused and resumed just before the cap has a low
+    2 s speech ratio but is mid-word, and stopping there cuts the word. From the hard cap
     to hard+snap only at the first chunk that is not speech, so the cut lands in a pause.
     At hard+snap always.
     """
@@ -1986,7 +1988,7 @@ def _record_cap_stop(n_chunks: int, caps: "tuple[int, int, int]", endpointer: "_
     if n_chunks < soft:
         return False
     if n_chunks < hard:
-        return not endpointer.still_speaking(RECORD_STILL_SPEAKING_RATIO)
+        return not (endpointer.still_speaking(RECORD_STILL_SPEAKING_RATIO) or endpointer.mid_speech())
     if n_chunks < hard + snap:
         return not endpointer.mid_speech()
     return True

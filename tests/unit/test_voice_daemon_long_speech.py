@@ -194,6 +194,7 @@ def test_cap_rule_table(daemon):
     assert stop(149, False, False) is False                  # before the soft cap: never
     assert stop(150, True, True) is False                    # soft cap, still flowing: keep going
     assert stop(150, False, False) is True                   # soft cap, speaker stopped flowing: stop
+    assert stop(150, False, True) is False                   # ...but never inside a resumed word
     assert stop(374, True, True) is False
     assert stop(375, True, True) is False                    # hard cap mid-word: snap onward
     assert stop(375, True, False) is True                    # hard cap, first non-speech chunk: stop here
@@ -249,6 +250,17 @@ def test_room_noise_still_stops_at_the_soft_cap(daemon, monkeypatch):
     probs = ([SPEECH] + [DEEP] * 3) * 200
     wav, reads = _record(daemon, monkeypatch, probs)
     assert reads == 150 and _secs(wav) == pytest.approx(12.0)
+    assert daemon._last_record_capped is False
+
+
+def test_soft_cap_never_cuts_a_resumed_word(daemon, monkeypatch):
+    # A pause, then speech resumes exactly at the soft cap: the 2 s speech ratio is low
+    # (~25 %) but the CURRENT chunk is speech, so the recording runs on to the next quiet
+    # chunk instead of cutting the word.
+    probs = [SPEECH] * 2 + ([DEEP] * 3 + [SPEECH]) * 40 + [DEEP] * 40
+    assert probs[149] == SPEECH and probs[150] == DEEP
+    wav, reads = _record(daemon, monkeypatch, probs)
+    assert reads == 151                                   # not 150: ended on the first non-speech chunk
     assert daemon._last_record_capped is False
 
 

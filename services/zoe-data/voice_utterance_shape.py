@@ -74,6 +74,11 @@ class _Lang:
     lead_ins: frozenset
     # Capitalised words that follow a comma but are NOT a person addressed.
     not_names: frozenset
+    # Strong continuers that are ALSO a noun/verb ("cause"): they hold only when the word
+    # before them is not a noun cue, or when written with the clipped-conjunction apostrophe.
+    ambiguous_continuers: frozenset = frozenset()
+    # Words that, right before an ambiguous continuer, make it a noun ("the cause", "root cause").
+    noun_cues: frozenset = frozenset()
 
 
 def _fs(*words: str) -> frozenset:
@@ -122,6 +127,14 @@ _LANGS: Mapping[str, _Lang] = {
             "april", "may", "june", "july", "august", "september", "october", "november",
             "december", "english", "spanish", "again", "tonight", "tomorrow", "today",
             "now", "then", "later", "first", "next", "last", "finally",
+        ),
+        ambiguous_continuers=_fs("cause"),
+        noun_cues=_fs(
+            "the", "a", "an", "that", "this", "these", "those", "my", "your", "his", "her",
+            "its", "our", "their", "no", "any", "every", "root", "main", "real", "likely",
+            "probable", "possible", "only", "one", "common", "exact", "actual", "true",
+            "underlying", "possible", "to", "will", "would", "can", "could", "might", "may",
+            "should", "not", "does", "did", "it", "they", "we", "you", "i", "which",
         ),
     ),
     "es": _Lang(
@@ -212,6 +225,10 @@ def ends_incomplete(text: str, languages: tuple[str, ...] | None = None) -> bool
     langs = _langs(languages)
     last = words[-1]
     if last in _union("strong_continuers", langs):
+        if last in _union("ambiguous_continuers", langs):
+            clipped = re.search(r"['’]" + re.escape(last) + r"\W*$", s, re.IGNORECASE) is not None
+            if not clipped and words[-2] in _union("noun_cues", langs):
+                return False
         return True
     if last in _union("weak_continuers", langs) and len(words) >= _MIN_WEAK_HOLD_WORDS:
         first = _first_content_word(words, _union("lead_ins", langs))
