@@ -3040,6 +3040,7 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
                 _co_ack = None
             if _co_ack:
                 import base64 as _b64co
+                _ws_last_reply = str(_co_ack.get("phrase") or "")
                 await websocket.send_json({"type": "state", "state": "responding"})
                 await websocket.send_json(
                     {"type": "transcript", "role": "zoe", "text": _co_ack["phrase"]}
@@ -3072,6 +3073,8 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
                 await websocket.send_json({"type": "cards", "result": skybridge_result})
                 await websocket.send_json({"type": "skybridge_context", "context": skybridge_context})
                 spoken_summary = str(skybridge_result.get("spoken_summary") or "").strip()
+                # a handled card turn IS Zoe's latest reply: a "sounds good" after it must not accept an older offer
+                _ws_last_reply = spoken_summary
                 if spoken_summary:
                     await websocket.send_json({"type": "transcript", "role": "assistant", "text": spoken_summary})
                 await websocket.send_json({"type": "state", "state": "ambient"})
@@ -3128,6 +3131,7 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
             # ── Streaming LLM + per-sentence TTS ────────────────────────────────
             # Track LLM output and TTS output separately so fallback only re-runs
             # what actually failed (avoids double-transcript if LLM works but TTS is down).
+            _ws_last_reply = ""   # an aborted / failed brain turn leaves no stale offer behind
             _stream_llm_reply = ""   # filled once LLM streaming completes
             _stream_tts_ok = False   # True if at least one audio chunk was sent
             try:

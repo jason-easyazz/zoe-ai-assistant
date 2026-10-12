@@ -48,6 +48,7 @@ class SkybridgeIntent:
     duration_seconds: int = 0
     completed: bool | None = None
     entity_id: str = ""  # exact HA entity a smart_home TILE tap targets (never fuzzy)
+    entity_ids: tuple[str, ...] = ()  # exact HA entities a smart_home FOLLOW-UP ("turn it back on") targets: what the last command controlled
     radio_mode: bool = False  # music/play: "play <x> radio" → MA endless station
 
 
@@ -1795,12 +1796,15 @@ _SMART_HOME_TARGET_KEY = "smart_home_target"
 
 
 def _remember_smart_home_target(intent: "SkybridgeIntent", out: dict[str, Any]) -> None:
-    """Record the on/off command this result carried in ``out["skybridge_context"]`` (only a handled on/off turn: a status read or a
-    brightness change is not something "it ... back on" can mean)."""
+    """Record the on/off command this result carried in ``out["skybridge_context"]`` (only a handled on/off turn that CONTROLLED
+    something: a status read, a "which one?" question or a brightness change is not something "it ... back on" can mean). The
+    target is what the resolver actually SELECTED (``out["controlled_entities"]`` - the room-disambiguated light, the fuzzy match),
+    never the words of the command: a follow-up must switch the very device that was switched."""
     ctx = out.get("skybridge_context")
-    if out.get("handled") and isinstance(ctx, dict) and intent.action in ("turn_on", "turn_off"):
+    entities = [str(e) for e in out.get("controlled_entities") or [] if e]
+    if out.get("handled") and isinstance(ctx, dict) and intent.action in ("turn_on", "turn_off") and entities:
         ctx[_SMART_HOME_TARGET_KEY] = {
-            "action": intent.action, "query": intent.query, "entity_id": intent.entity_id, "ts": time.time(),
+            "action": intent.action, "query": intent.query, "entity_ids": entities, "ts": time.time(),
         }
 
 
@@ -1818,8 +1822,11 @@ def _smart_home_followup_intent(raw_message: str, context: dict[str, Any] | None
         return None
     action = ("turn_on" if verdict == "on" else "turn_off" if verdict == "off"
               else "turn_off" if mem["action"] == "turn_on" else "turn_on")
+    ids = tuple(str(e) for e in mem.get("entity_ids") or [] if e)
+    if not ids:
+        return None
     return SkybridgeIntent(domain="smart_home", action=action, query=str(mem.get("query") or ""),
-                           entity_id=str(mem.get("entity_id") or ""))
+                           entity_id=ids[0] if len(ids) == 1 else "", entity_ids=ids)
 
 
 # Smart-home device anchors: a word clearly about a controllable household

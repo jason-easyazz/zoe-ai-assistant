@@ -3049,12 +3049,26 @@ async def _handle_introduce_intent(
     return person_id
 
 
-#: ``(session_id, text)`` of the user turn ``voice_command`` already persisted when it ARRIVED, for the turn running in this task.
-#: ``_schedule_voice_chat_save`` reads it so the exchange's user row is written ONCE (live 2026-10-12: every fast-tier turn
-#: carried two identical user rows, which polluted exact-words recall, the digest and the history). A ContextVar because the
-#: exits that save are plain calls inside the same task; ``voice_command`` resets it at the start of every turn.
-_USER_TURN_SAVED: "contextvars.ContextVar[Optional[tuple[str, str]]]" = contextvars.ContextVar(
+class _ArrivalRow:
+    """The user row ``voice_command`` is writing the moment a turn ARRIVES. ``saved`` is True only once the insert is CONFIRMED
+    (``_save_chat_message`` returns False on a swallowed failure); ``settled`` is set when the attempt is over either way, so
+    the reply's later save can wait for the outcome and write the row itself when the first attempt failed."""
+
+    __slots__ = ("session_id", "text", "saved", "settled")
+
+    def __init__(self, session_id: str, text: str) -> None:
+        self.session_id, self.text, self.saved = session_id, text, False
+        self.settled = asyncio.Event()
+
+
+#: the arrival row of the turn running in this task. ``_schedule_voice_chat_save`` reads it so the exchange's user row is written
+#: ONCE (live 2026-10-12: every fast-tier turn carried two identical user rows, which polluted exact-words recall, the digest
+#: and the history) - and writes it itself when the arrival insert did not land. A ContextVar because the exits that save are
+#: plain calls inside the same task; ``voice_command`` resets it at the start of every turn.
+_USER_TURN_SAVED: "contextvars.ContextVar[Optional[_ArrivalRow]]" = contextvars.ContextVar(
     "voice_user_turn_saved", default=None)
+#: how long the reply's save waits for the arrival insert to settle before it writes the user row itself (never lose a row).
+_ARRIVAL_SETTLE_TIMEOUT_S = 10.0
 
 
 async def _schedule_voice_chat_save(
@@ -3073,8 +3087,9 @@ async def _schedule_voice_chat_save(
     """
     if not session_id or user_id in _GUEST_SENTINEL_USERS:
         return
-    if user_text and _USER_TURN_SAVED.get() == (session_id, user_text):
-        user_text = ""
+    arrival = _USER_TURN_SAVED.get()
+    if arrival is None or (arrival.session_id, arrival.text) != (session_id, user_text):
+        arrival = None
     try:
         # lazy — avoids circular import (routers.chat lazily imports us back)
         from routers.chat import _ensure_user_and_chat_session, _save_chat_message as _svc
@@ -3085,8 +3100,17 @@ async def _schedule_voice_chat_save(
             # here or every insert dies on the session FK (the silent zero-
             # voice-rows outage behind W0).
             await _ensure_user_and_chat_session(session_id, user_id)
-            if user_text:
-                # count_turn=False: voice_command already saved (and numbered) this user turn when it arrived
+            write_user = bool(user_text)
+            if arrival is not None:
+                # the arrival insert is the user row's first attempt: wait for its OUTCOME (bounded), and only a confirmed
+                # insert makes this one redundant - a swallowed failure must not leave the turn with no user row at all
+                try:
+                    await asyncio.wait_for(arrival.settled.wait(), _ARRIVAL_SETTLE_TIMEOUT_S)
+                except asyncio.TimeoutError:
+                    pass
+                write_user = not arrival.saved
+            if write_user:
+                # count_turn=False: voice_command already numbered this user turn when it arrived
                 await _svc(session_id, "user", user_text, user_id=user_id, count_turn=False,
                            **({"speaker_verified": False} if speaker_verified is False else {}))
             if reply:
@@ -3459,15 +3483,23 @@ async def voice_command(
                 _save_chat_message as _svc_user_turn,
             )
 
+            _arrival = _ArrivalRow(session_id, text)
+
             async def _persist_user_turn() -> None:
-                # Same FK guard as _schedule_voice_chat_save: voice session ids
-                # never pass through POST /sessions/, so mint the parent row.
-                await _ensure_sess_user_turn(session_id, effective_user)
-                await _svc_user_turn(session_id, "user", text, user_id=effective_user,
-                                     **({"speaker_verified": False} if _speaker_verified is False else {}))
+                try:
+                    # Same FK guard as _schedule_voice_chat_save: voice session ids
+                    # never pass through POST /sessions/, so mint the parent row.
+                    await _ensure_sess_user_turn(session_id, effective_user)
+                    # `_save_chat_message` swallows a DB failure and returns False: only a CONFIRMED insert marks the row saved,
+                    # so the reply's later save writes the user row itself when this one did not land
+                    _arrival.saved = bool(await _svc_user_turn(
+                        session_id, "user", text, user_id=effective_user,
+                        **({"speaker_verified": False} if _speaker_verified is False else {})))
+                finally:
+                    _arrival.settled.set()
 
             _spawn_bg(_persist_user_turn())
-            _USER_TURN_SAVED.set((session_id, text))   # _schedule_voice_chat_save must not write this row again
+            _USER_TURN_SAVED.set(_arrival)   # _schedule_voice_chat_save defers to it once its insert is confirmed
         except Exception as exc:
             logger.warning(
                 "voice user-turn save scheduling failed for user %s (session %s): %s",

@@ -192,6 +192,36 @@ async def test_a_fast_tier_voice_turn_writes_the_user_row_once(utterance):
         mp.undo()
 
 
+async def test_a_failed_arrival_insert_still_leaves_exactly_one_user_row():
+    """Codex #2001 P1, end to end: ``_save_chat_message`` swallows a DB failure (returns False). The FIRST user insert of the turn
+    fails; the reply's save must then write the row - one user row, not zero (and not two)."""
+    import asyncio
+    from routers import chat as chat_mod
+
+    real_save = _vt._schedule_voice_chat_save
+    mp = MiniPatch()
+    try:
+        rig = Rig(user="demo_lane_failed_arrival").install(mp)
+        mp.setattr(_vt, "_schedule_voice_chat_save", real_save)
+        recording = chat_mod._save_chat_message
+        failed = []
+
+        async def flaky(session_id, role, content, *a, **k):
+            if role == "user" and not failed:
+                failed.append(content)
+                return False                                      # the swallowed failure: nothing was written
+            return await recording(session_id, role, content, *a, **k)
+
+        mp.setattr(chat_mod, "_save_chat_message", flaky)
+        await rig.voice("What time is it?")
+        await asyncio.gather(*list(_vt._BG_TASKS), return_exceptions=True)
+        users = [m for m in rig.db.messages if m["role"] == "user" and m["content"] == "What time is it?"]
+        assert failed == ["What time is it?"]                     # the first insert really was attempted and lost
+        assert len(users) == 1, [(m["role"], m["content"][:30]) for m in rig.db.messages]
+    finally:
+        mp.undo()
+
+
 async def test_the_rig_leaves_the_module_voice_state_as_it_found_it():
     _vt._PENDING_CONFIRMATIONS["sentinel-panel"] = {"intent_name": "x"}
     _vt._VOICE_SESSIONS["sentinel-panel"] = {"bound_user_id": "x"}

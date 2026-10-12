@@ -563,7 +563,8 @@ def test_the_lexicons_non_followups_are_left_alone(lang):
 
 def _memory(action="turn_off", query="light", age_s=5.0):
     return {"intent": {"domain": "smart_home", "action": action}, "cards": [],
-            sky._SMART_HOME_TARGET_KEY: {"action": action, "query": query, "entity_id": "", "ts": time.time() - age_s}}
+            sky._SMART_HOME_TARGET_KEY: {"action": action, "query": query, "entity_ids": ["light.demo_one"],
+                                         "ts": time.time() - age_s}}
 
 
 @pytest.mark.parametrize("text,action", [
@@ -573,6 +574,14 @@ def _memory(action="turn_off", query="light", age_s=5.0):
 def test_after_turn_off_a_pronoun_command_resolves_to_the_same_device(text, action):
     got = sky.classify_skybridge_intent(text, _memory("turn_off"))
     assert got is not None and (got.domain, got.action, got.query) == ("smart_home", action, "light"), got
+    assert got.entity_id == "light.demo_one"          # the device that was switched, by id - not a re-match of the words
+
+
+def test_a_memory_without_a_resolved_entity_is_no_target():
+    ctx = _memory("turn_off")
+    ctx[sky._SMART_HOME_TARGET_KEY]["entity_ids"] = []
+    got = sky.classify_skybridge_intent("turn it back on", ctx)
+    assert got is None or got.domain != "smart_home"
 
 
 def test_after_turn_on_the_reverse_and_the_repeat_both_work():
@@ -602,7 +611,8 @@ async def test_the_light_command_leaves_its_target_and_the_followup_reuses_it(mo
 
     async def fake_resolve(intent, room_eids=None):
         seen.append((intent.action, intent.query))
-        return {"handled": True, "intent": {"domain": "smart_home", "action": intent.action}, "spoken_summary": "Done.", "cards": []}
+        return {"handled": True, "intent": {"domain": "smart_home", "action": intent.action}, "spoken_summary": "Done.", "cards": [],
+                "controlled_entities": ["light.demo_one"]}
 
     monkeypatch.setattr(smart_home_service, "resolve_smart_home", fake_resolve)
     first = await sky.resolve_skybridge_request("Turn the light off.", "guest")
@@ -618,6 +628,67 @@ async def test_the_light_command_leaves_its_target_and_the_followup_reuses_it(mo
     assert third["handled"] and seen[2][0] == "turn_off"                          # the memory refreshed on the follow-up
 
 
+def _wire_home(monkeypatch, room):
+    """Two lights and the REAL ``resolve_smart_home``; only the hub calls are faked. ``room`` is the speaker's room entity set."""
+    import smart_home_service as shs
+
+    devices = [shs._device_from_light({"entity_id": "light.bedroom_lamp", "state": "on", "attributes": {"friendly_name": "Bedroom Lamp"}}),
+               shs._device_from_light({"entity_id": "light.kitchen_lamp", "state": "on", "attributes": {"friendly_name": "Kitchen Lamp"}})]
+    switched = []
+
+    async def list_devices():
+        return [dict(d) for d in devices]
+
+    async def list_scenes():
+        return []
+
+    async def set_device(entity_id, on, *, brightness_pct=None):
+        switched.append((entity_id, on))
+        return True
+
+    async def room_eids(_ctx, _db):
+        return set(room["eids"])
+
+    monkeypatch.setattr(shs, "list_devices", list_devices)
+    monkeypatch.setattr(shs, "list_scenes", list_scenes)
+    monkeypatch.setattr(shs, "set_device", set_device)
+    monkeypatch.setattr(sky, "_room_eids_for_context", room_eids)
+    return switched
+
+
+async def test_the_followup_switches_the_device_the_resolver_selected_not_a_re_match_of_the_words(monkeypatch):
+    """Codex #2001: the first version stored the ORIGINAL intent (an empty entity id). "turn the light off" said in the bedroom is
+    room-disambiguated to the bedroom lamp; "turn it back on" from a moment later must switch THAT lamp - with no room context
+    it would otherwise be a "which one?" question over both lights."""
+    room = {"eids": {"light.bedroom_lamp"}}
+    switched = _wire_home(monkeypatch, room)
+    first = await sky.resolve_skybridge_request("turn the light off", "guest")
+    assert first["handled"] and switched == [("light.bedroom_lamp", False)]
+    assert first["controlled_entities"] == ["light.bedroom_lamp"]
+    assert first["skybridge_context"][sky._SMART_HOME_TARGET_KEY]["entity_ids"] == ["light.bedroom_lamp"]
+    room["eids"] = set()                                             # the room context is gone (or another panel): words alone are ambiguous
+    asked = await sky.resolve_skybridge_request("turn the light on", "guest")
+    assert "Which one?" in asked["spoken_summary"] and switched == [("light.bedroom_lamp", False)]
+    second = await sky.resolve_skybridge_request("turn it back on", "guest", context=first["skybridge_context"])
+    assert second["handled"] and switched[-1] == ("light.bedroom_lamp", True), switched
+
+
+async def test_a_command_that_switched_nothing_leaves_no_target(monkeypatch):
+    room = {"eids": set()}
+    switched = _wire_home(monkeypatch, room)
+    ambiguous = await sky.resolve_skybridge_request("turn the light off", "guest")      # two lights, no room: a question, nothing switched
+    assert "Which one?" in ambiguous["spoken_summary"] and switched == []
+    assert sky._SMART_HOME_TARGET_KEY not in ambiguous["skybridge_context"]
+
+
+async def test_a_plural_sweep_is_remembered_whole(monkeypatch):
+    switched = _wire_home(monkeypatch, {"eids": set()})
+    first = await sky.resolve_skybridge_request("turn the lights off", "guest")
+    assert sorted(first["controlled_entities"]) == ["light.bedroom_lamp", "light.kitchen_lamp"]
+    await sky.resolve_skybridge_request("switch them back on", "guest", context=first["skybridge_context"])
+    assert sorted(e for e, on in switched if on) == ["light.bedroom_lamp", "light.kitchen_lamp"]
+
+
 def test_the_keyword_lane_resolves_it_too_inside_the_window():
     ctx = ConversationContext()
     ctx.activate("smart_home", {"action": "turn_off", "entity": "light", "room": "kitchen"}, "turn off the kitchen lights")
@@ -631,10 +702,22 @@ def test_the_keyword_lane_resolves_it_too_inside_the_window():
 
 
 # ── 6. the user turn is written once ─────────────────────────────────────────────────────────────────────────────────────────
-async def _run_save(monkeypatch, *, saved_on_arrival):
+def _arrival(session="s1", text="what time is it", *, saved, settled=True):
+    import routers.voice_tts as vt
+
+    row = vt._ArrivalRow(session, text)
+    row.saved = saved
+    if settled:
+        row.settled.set()
+    return row
+
+
+async def _run_save(monkeypatch, *, saved_on_arrival, settle_timeout=None):
     import routers.voice_tts as vt
 
     rows, scheduled = [], []
+    if settle_timeout is not None:
+        monkeypatch.setattr(vt, "_ARRIVAL_SETTLE_TIMEOUT_S", settle_timeout)
 
     async def fake_save(session_id, role, content, user_id=None, **_kw):
         rows.append((role, content))
@@ -653,22 +736,60 @@ async def _run_save(monkeypatch, *, saved_on_arrival):
     return rows
 
 
-async def test_a_user_turn_saved_on_arrival_is_not_saved_again(monkeypatch):
-    assert await _run_save(monkeypatch, saved_on_arrival=("s1", "what time is it")) == [("assistant", "It's noon.")]
+BOTH = [("user", "what time is it"), ("assistant", "It's noon.")]
+
+
+async def test_a_user_turn_whose_arrival_insert_is_confirmed_is_not_saved_again(monkeypatch):
+    assert await _run_save(monkeypatch, saved_on_arrival=_arrival(saved=True)) == [("assistant", "It's noon.")]
+
+
+async def test_a_failed_arrival_insert_is_retried_by_the_replys_save(monkeypatch):
+    """Codex #2001 P1: ``_save_chat_message`` swallows a DB failure and returns False. Marking the row saved when the insert was
+    merely SCHEDULED left a turn whose first insert failed with no user row at all."""
+    assert await _run_save(monkeypatch, saved_on_arrival=_arrival(saved=False)) == BOTH
+
+
+async def test_an_arrival_insert_that_never_settles_does_not_lose_the_row(monkeypatch):
+    assert await _run_save(monkeypatch, saved_on_arrival=_arrival(saved=False, settled=False), settle_timeout=0.05) == BOTH
+
+
+async def test_the_replys_save_waits_for_a_slow_arrival_insert_and_then_defers_to_it(monkeypatch):
+    row = _arrival(saved=False, settled=False)
+
+    async def land_later():
+        await asyncio.sleep(0.05)
+        row.saved = True
+        row.settled.set()
+
+    task = asyncio.ensure_future(land_later())
+    assert await _run_save(monkeypatch, saved_on_arrival=row, settle_timeout=5.0) == [("assistant", "It's noon.")]
+    await task
 
 
 async def test_a_user_turn_not_saved_on_arrival_is_still_saved_with_the_reply(monkeypatch):
-    assert await _run_save(monkeypatch, saved_on_arrival=None) == [("user", "what time is it"), ("assistant", "It's noon.")]
-    assert await _run_save(monkeypatch, saved_on_arrival=("s1", "something else")) == [
-        ("user", "what time is it"), ("assistant", "It's noon.")]
-    assert await _run_save(monkeypatch, saved_on_arrival=("other-session", "what time is it")) == [
-        ("user", "what time is it"), ("assistant", "It's noon.")]
+    assert await _run_save(monkeypatch, saved_on_arrival=None) == BOTH
+    assert await _run_save(monkeypatch, saved_on_arrival=_arrival(text="something else", saved=True)) == BOTH
+    assert await _run_save(monkeypatch, saved_on_arrival=_arrival(session="other-session", saved=True)) == BOTH
 
 
-def test_voice_command_marks_the_row_it_saved_on_arrival_and_resets_per_turn():
+def test_voice_command_marks_the_arrival_row_only_from_a_confirmed_insert_and_resets_per_turn():
     import inspect
     import routers.voice_tts as vt
 
     src = inspect.getsource(vt.voice_command)
-    assert "_USER_TURN_SAVED.set(None)" in src and "_USER_TURN_SAVED.set((session_id, text))" in src
-    assert src.index("_USER_TURN_SAVED.set(None)") < src.index("_USER_TURN_SAVED.set((session_id, text))")
+    assert "_USER_TURN_SAVED.set(None)" in src and "_USER_TURN_SAVED.set(_arrival)" in src
+    assert src.index("_USER_TURN_SAVED.set(None)") < src.index("_USER_TURN_SAVED.set(_arrival)")
+    assert "_arrival.saved = bool(await _svc_user_turn(" in src and "_arrival.settled.set()" in src
+
+
+# ── 5b. the voice WebSocket's "last reply" follows EVERY spoken reply ────────────────────────────────────────────────────────
+def test_the_voice_websocket_updates_its_last_reply_on_every_reply_path():
+    """Codex #2001 P2 (the behaviour test is tests/test_voice_ws_last_reply.py, which needs the full app): the handled-Skybridge reply
+    and the conversation-opener ack both ``continue``d without touching it, so "sounds good" after a card turn accepted a stale offer."""
+    import pathlib
+
+    src = (pathlib.Path(intent_router.__file__).parent / "main.py").read_text(encoding="utf-8")
+    body = src[src.index("async def websocket_voice"):]
+    assert body.count("_ws_last_reply = ") >= 6                  # init, opener, skybridge, brain reset, instant reply, brain reply
+    skybridge = body[body.index("if skybridge_result.get(\"handled\")"):body.index("skybridge_context = {}")]
+    assert "_ws_last_reply = spoken_summary" in skybridge and skybridge.index("_ws_last_reply") < skybridge.index("continue")
