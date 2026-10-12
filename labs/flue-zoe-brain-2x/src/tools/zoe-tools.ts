@@ -91,6 +91,7 @@ import * as v from 'valibot';
 // can resolve it too; tsconfig has allowImportingTsExtensions and the flue build
 // bundles .ts specifiers fine.
 import { currentUserId } from '../request-identity.ts';
+import { describeNow } from '../local-time.ts';
 import { isReplayTurn } from '../replay-mode.ts';
 import { currentSpeculativeTurnId } from '../speculative-turn.ts';
 import {
@@ -299,7 +300,8 @@ async function runWrite(
  * get_time — current local time and date.
  *
  * Mirrors prod's abilities/info.ts (time/date answer locally, no network). The
- * Flue server runs on the same host as the brain, so the host clock is correct.
+ * Flue server runs on the same host as the brain, so the host CLOCK is correct, but its
+ * locale/zone is not the household's: describeNow() formats in ZOE_TIMEZONE (src/local-time.ts).
  */
 const getTime = defineTool({
   name: 'get_time',
@@ -308,15 +310,7 @@ const getTime = defineTool({
     "what today's date or day is, or anything that needs the current wall clock.",
   // No input: the time is not user-parameterised.
   run: async () => {
-    const now = new Date();
-    const time = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-    const date = now.toLocaleDateString(undefined, {
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-    });
-    return `It's ${time} on ${date}.`;
+    return describeNow();
   },
 });
 

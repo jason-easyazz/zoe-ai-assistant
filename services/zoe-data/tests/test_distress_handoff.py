@@ -239,3 +239,27 @@ def test_who_is_notified(bell, monkeypatch, who, minor, notify, text, n):
     monkeypatch.delenv("ZOE_DISTRESS_CONTACT_USER")                                  # no contact configured: nobody is told
     run(dh._notify(who + "_x", dh.detect(text), minor))
     assert bell[0].await_count == n
+
+
+def test_a_physical_danger_is_not_swallowed_by_the_self_harm_cooldown(bell, monkeypatch):
+    execute, _bc = bell
+    sad, danger = dh.detect("I want to die"), dh.detect("someone is breaking into the house")
+    assert danger.cls == "danger"
+    run(dh._notify("kid_1", sad, True))
+    run(dh._notify("kid_1", danger, True))                                            # a different, urgent event: told within the 6 h
+    assert execute.await_count == 2
+    run(dh._notify("kid_1", danger, True))                                            # the same incident repeated at once: still one notice
+    assert execute.await_count == 2
+    t0 = dh.time.monotonic()
+    monkeypatch.setattr(dh.time, "monotonic", lambda: t0 + dh.DANGER_COOLDOWN_S + 1)  # a second danger event after the SHORT window: told again
+    run(dh._notify("kid_1", danger, True))
+    assert execute.await_count == 3
+    run(dh._notify("kid_1", sad, True))                                               # self-harm keeps its 6 h window
+    assert execute.await_count == 3
+
+
+def test_cooldown_keys_cannot_collide_across_member_ids(bell):
+    execute, _bc = bell
+    run(dh._notify("alice", dh.detect("someone is breaking into the house"), True))
+    run(dh._notify("alice:danger", dh.detect("I want to die"), True))                # a different member whose id looks like the old key
+    assert execute.await_count == 2
