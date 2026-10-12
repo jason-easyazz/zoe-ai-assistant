@@ -365,8 +365,7 @@ CHALLENGES = [
 @pytest.mark.parametrize("q", CHALLENGES)
 def test_a_memory_challenge_is_recognised(q):
     assert mg.is_memory_challenge(q) is True
-    # "Do you remember what I said?" is also a personal recall question: either way the recall floor claims it
-    assert zc._recall_question_shape(q) in ("challenge", "personal")
+    assert zc._recall_question_shape(q) == "challenge"
 
 
 @pytest.mark.parametrize("q", [
@@ -515,3 +514,55 @@ def test_the_turn_digest_holds_a_pronoun_fact_it_cannot_place_and_counts_it(monk
     assert _run_digest(monkeypatch, tmp_path, "He has been in and out of ICU.", TURN_B, []) == []
     assert led.summary(24)["reasons"] == {"guard_subjectless_pronoun": 1}
     led.reset_for_tests()
+
+
+# ── review round (Codex on #2005) ───────────────────────────────────────────────────────────
+
+def test_a_phrase_both_a_challenge_and_a_personal_question_gets_the_challenge_packet():
+    q = "Do you remember what I said about what's my locker code?"       # matches _PERSONAL_QUESTION_RE AND a challenge pattern
+    assert zc._PERSONAL_QUESTION_RE.search(q) and mg.is_memory_challenge(q)
+    assert zc._recall_question_shape(q) == "challenge"
+    # control: a personal question that is not a challenge keeps its shape
+    assert zc._recall_question_shape("what's my locker code") == "personal"
+
+
+async def test_the_overlap_reaches_the_grounding_rule(seam):
+    block = await zc._recall_context_block("Do you remember what I said about what's my locker code?", "demo-owner")
+    assert zc._CHALLENGE_RULE in block
+
+
+@pytest.mark.parametrize("text,want", [
+    ("User met Dana and their kids", "you met Dana and their kids"),
+    ("User visited his sister and their dog", "you visited his sister and their dog"),
+    ("User's sister lost their keys", "your sister lost their keys"),
+    ("User moved to Hobart with their partner", "you moved to Hobart with their partner"),
+    ("User enjoys their own space", "you enjoy your own space"),
+    ("The user enjoys being back in their house.", "you enjoy being back in your house"),
+])
+def test_their_changes_only_when_it_is_the_users(text, want):
+    assert pa.second_person(text) == want
+
+
+@pytest.mark.parametrize("text,want", [
+    ("User usually walks the dog", "you usually walk the dog"),
+    ("User often goes to Perth", "you often go to Perth"),
+    ("User never eats meat", "you never eat meat"),
+    ("User also likes tea", "you also like tea"),
+    ("User always tries to run", "you always try to run"),
+    ("User only has one key", "you only have one key"),
+    ("User just drove back", "you just drove back"),
+])
+def test_the_verb_after_a_subject_adverb_is_conjugated(text, want):
+    assert pa.second_person(text) == want
+
+
+def test_notes_withheld_as_unconfirmed_are_not_nothing(svc):
+    put(svc, "User keeps a boat at the marina", source="turn_digest", anchor_text="unrelated words about the weather")
+    known = _known(svc)
+    assert known.unconfirmed == 1 and not known.items
+    for voice in (True, False):
+        out = pa.render_summary(known, voice=voice, now=NOW)
+        assert out == pa.UNCONFIRMED_ONLY_REPLY and "boat" not in out
+        assert "know much about you yet" not in out and "go through them" in out
+    # control: with nothing at all the old empty reply stands
+    assert pa.render_summary(pa.Known(), voice=True, now=NOW) == pa.NOTHING_KNOWN_REPLY

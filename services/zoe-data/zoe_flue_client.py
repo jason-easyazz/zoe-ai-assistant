@@ -726,17 +726,18 @@ def _recall_question_shape(message: str) -> str:
     ``_recall_floor_shape`` — the ONE predicate the floor, the continuity
     exclusivity check and the offer ager share."""
     msg = message or ""
-    if _PERSONAL_QUESTION_RE.search(msg):
-        return "personal"
     from memory_gate import (  # stdlib-only
         is_event_question, is_event_time_question, is_evidence_question, is_memory_challenge,
         present_state_question_kind,
     )
 
     if is_memory_challenge(msg):
-        # "Don't you remember?" / "we've already talked about it" (live 2026-10-12): no my/I question shape, yet the whole turn is
-        # "look at what you have". Per-language data (memory_gate.is_memory_challenge); the block carries the grounding rule.
+        # "Don't you remember?" / "we've already talked about it" / "Do you remember what I said?" (live 2026-10-12): the whole turn is
+        # "look at what you have". Per-language data (memory_gate.is_memory_challenge); the block carries the grounding rule. Checked
+        # BEFORE the generic personal shape so a phrase both match still gets the grounding rule and the empty-result marker.
         return "challenge"
+    if _PERSONAL_QUESTION_RE.search(msg):
+        return "personal"
 
     if _present_state_shapes_enabled():
         # "Am I still doing the half-marathon?", "How's my mum?" (day-sim 6/6n) and

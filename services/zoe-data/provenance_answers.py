@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+from functools import lru_cache
 import logging
 import re
 import time
@@ -94,6 +95,8 @@ GUEST_REPLY = ("I don't keep anything about guests, so there's nothing for me to
 GUEST_ABOUT_OTHER_REPLY = "I don't share what I know about the people here with guests."
 OTHER_MEMBER_REPLY = "I keep what I know about each person to that person, so I can't share that."
 UNVERIFIED_SPEAKER_REPLY = ("I couldn't tell who was speaking, so I haven't shared anything - say it again once I know it's you.")
+UNCONFIRMED_ONLY_REPLY = ("I have a few notes about you, but I couldn't tie any of them to something you actually said, so I haven't "
+                          "listed them. Want to go through them? Tell me what's right and I'll keep it.")
 NOTHING_KNOWN_REPLY = ("I don't know much about you yet. Tell me something and say \"remember that\" and I'll keep it.")
 STORE_DOWN_REPLY = "I couldn't reach my memory just now, so I can't say - try again in a moment."
 FIX_TAIL = "If that's wrong, tell me the right answer, or say forget it."
@@ -398,7 +401,26 @@ def group_of(text: str, meta: Optional[dict] = None) -> str:
 
 
 _USER_POSS_RE = re.compile(r"\b(?:the\s+)?user['’]s\b", re.IGNORECASE)
-_THIRD_SUBJECT_RE = re.compile(r"^(?:the\s+)?(?:user|speaker)\s+(?P<verb>[A-Za-z']+)\b(?P<rest>.*)$", re.IGNORECASE | re.DOTALL)
+def _subject_adverbs() -> list:
+    """The adverbs that may sit between "User" and its verb ("User always walks"), per-language lexicon data (``subject_adverbs``)."""
+    try:
+        import lexicons
+
+        return list(lexicons.words("en", "subject_adverbs"))
+    except Exception:  # noqa: BLE001 - the rewrite degrades to "no adverbs", never to an error
+        return []
+
+
+@lru_cache(maxsize=1)
+def _third_subject_re() -> "re.Pattern":
+    advs = "|".join(sorted(map(re.escape, _subject_adverbs()), key=len, reverse=True))
+    adv = rf"(?P<adv>(?:(?:{advs})\s+)*)" if advs else r"(?P<adv>)"
+    return re.compile(rf"^(?:the\s+)?(?:user|speaker)\s+{adv}(?P<verb>[A-Za-z']+)\b(?P<rest>.*)$", re.IGNORECASE | re.DOTALL)
+
+
+#: another person already named earlier in the clause: a capitalised word, a relation word, or a possessive ("Dana", "his sister", "Tom's")
+_OTHER_PERSON_RE = re.compile(r"(?:\b[A-Z][a-z]+|\b(?:sister|brother|mother|father|mum|mom|dad|wife|husband|partner|son|daughter|friend|"
+                              r"boss|neighbou?r|colleague|cousin|aunt|uncle|kids?|children)\b|['’]s\b)")
 _IRREGULAR_VERB = {"is": "are", "has": "have", "was": "were", "does": "do", "doesn't": "don't", "isn't": "aren't", "hasn't": "haven't",
                    "goes": "go", "wasn't": "weren't"}
 #: the third-person "-s" of a present-tense verb, taken off ("enjoys" -> "enjoy", "tries" -> "try", "watches" -> "watch"); a past
@@ -427,14 +449,20 @@ def second_person(text: str) -> str:
     t = re.sub(r"\s+", " ", (text or "").strip())
     rewritten = bool(_USER_POSS_RE.search(t))
     t = _USER_POSS_RE.sub("your", t)
-    m = _THIRD_SUBJECT_RE.match(t)
+    m = _third_subject_re().match(t)
     rewritten = rewritten or bool(m)
     if m:
-        t = f"you {_second_person_verb(m.group('verb'))}{m.group('rest')}"
-        # the pronouns that follow a user subject are the user's ("enjoys being back in their house"); a row about somebody
-        # else ("Dana and their kids") keeps its own
-        t = re.sub(r"\btheir\b", "your", t, flags=re.IGNORECASE)
-        t = re.sub(r"\bthemselves\b", "yourself", t, flags=re.IGNORECASE)
+        t = f"you {m.group('adv')}{_second_person_verb(m.group('verb'))}{m.group('rest')}"
+
+        def _own(mm: "re.Match") -> str:
+            # "their" is the user's only when NO other person is named before it ("enjoys being back in their house"): in
+            # "met Dana and their kids" or "visited his sister and their dog" it is somebody else's, and memory never changes
+            # whose thing it is - when unsure, the word is left as it was
+            if _OTHER_PERSON_RE.search(t[len("you "):mm.start()]):
+                return mm.group(0)
+            return "yourself" if mm.group(0).lower() == "themselves" else "your"
+
+        t = re.sub(r"\b(?:their|themselves)\b", _own, t, flags=re.IGNORECASE)
     t = t.rstrip(" .")
     # a sentence the rewrite did not touch may open on a NAME ("Marisol is flying in"): its capital is kept
     if not rewritten:
@@ -749,7 +777,8 @@ def render_summary(known: Known, *, voice: bool, more: bool = False, now: Option
     n_people = len(people_known)
     private_n = sum(len(v) for v in known.private.values())
     if not known.items and not known.people and not private_n:
-        return NOTHING_KNOWN_REPLY
+        # notes withheld as unconfirmed are not "nothing": say what is true (live review 2026-10-12, Codex on #2005)
+        return UNCONFIRMED_ONLY_REPLY if known.unconfirmed else NOTHING_KNOWN_REPLY
     cutoff = (time.time() if now is None else now) - RECENT_WINDOW_S
     # People are already one entry each above: a recent row about a person is not listed a second time under "Recently".
     recent = [i for i in known.items if i.epoch and i.epoch >= cutoff and (voice or i.group != "people")]
