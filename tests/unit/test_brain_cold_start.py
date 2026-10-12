@@ -113,11 +113,12 @@ class Rig:
         self.sudo_log.write_text("")
         self.state = tmp / "state"
         self.state.mkdir()
-        self.env = {**os.environ, "PATH": f"{self.bin}:{os.environ['PATH']}", "FAKE_SUDO_LOG": str(self.sudo_log), "FAKE_SYSTEMD_RUN_LOG": str(self.srun_log), "HOME": str(tmp),
+        # hermetic: nothing the caller exported (BRAIN_COLD_START_DISABLE / _NO_SYSTEMD_RUN / any other BRAIN_COLD_START_*, XDG_RUNTIME_DIR) may leak into the helper;
+        # a test that wants one passes it explicitly through rig.run(...)
+        inherited = {k: v for k, v in os.environ.items() if not k.startswith("BRAIN_COLD_START_") and k != "XDG_RUNTIME_DIR"}
+        self.env = {**inherited, "PATH": f"{self.bin}:{os.environ['PATH']}", "FAKE_SUDO_LOG": str(self.sudo_log), "FAKE_SYSTEMD_RUN_LOG": str(self.srun_log), "HOME": str(tmp),
                     "BRAIN_COLD_START_STATE_DIR": str(self.state), "BRAIN_COLD_START_HEALTH_URL": health.url,
                     "BRAIN_COLD_START_MAX_S": "30", "BRAIN_COLD_START_INTERVAL_S": "0.05"}
-        for k in ("BRAIN_COLD_START_DISABLE", "XDG_RUNTIME_DIR"):
-            self.env.pop(k, None)
 
     def run(self, *args, timeout=15, **env) -> subprocess.CompletedProcess:
         e = {**self.env, **{k: str(v) for k, v in env.items()}}
