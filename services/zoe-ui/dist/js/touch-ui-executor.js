@@ -54,6 +54,7 @@
         pushStopped: false,
         recovering: false,
         lastRecoverAt: 0,
+        guestReclaimUntil: 0,
         pushDownSince: 0,
         healedPush: false,
         lastHealAt: 0,
@@ -94,6 +95,12 @@
     const PANEL_HEAL_MIN_MS = 30000;            // rate limit between heals
     const PANEL_RELOAD_MIN_MS = 10 * 60 * 1000; // last resort page reload, at most every 10 min
     const PANEL_RELOAD_KEY = 'zoe_panel_watchdog_reload_at';
+    // After a member session is dropped for a guest, routers/ui_actions._authorize_panel
+    // refuses the guest (403 "Panel is owned by another user") until the member's
+    // ui_panel_sessions row is 300 s stale (_PANEL_RECLAIM_STALE_AFTER_S). That window is the
+    // server's anti-hijack rule and stays; the client must simply keep retrying through it
+    // instead of treating the expected 403 as "stop serving" (which is the deafness again).
+    const PANEL_GUEST_RECLAIM_GRACE_MS = 330000;   // 300 s staleness + 30 s margin
     const AUTO_HOME_TIMEOUT_S = Number(window.ZOE_AUTO_HOME_TIMEOUT_S || 20);
     const HOME_PATH = '/touch/home.html';
 
@@ -503,6 +510,8 @@
             const stored = getSession();
             // Anything but a live guest session is what the server just refused (or is about to).
             if (stored && (!isGuestSession(stored) || isExpiredSession(stored))) dropStoredSession();
+            // A member -> guest handover: the panel row is still the member's until it goes stale.
+            if (stored && !isGuestSession(stored)) state.guestReclaimUntil = Date.now() + PANEL_GUEST_RECLAIM_GRACE_MS;
             let session = getSession();
             if (!session || !session.session_id || isExpiredSession(session)) {
                 const minted = await mintGuestSession();
@@ -558,7 +567,12 @@
         if (!panelAuthFailed(res)) return false;
         const reason = `${what} refused: HTTP ${res.status}`;
         if (res.status === 401) recoverPanelSession(reason).catch(() => {});
-        else stopPanelServices(reason);
+        else if (Date.now() < state.guestReclaimUntil && dataApiSessionId() === null) {
+            // Our own member -> guest downgrade: the 403 is the server's expected "panel still
+            // owned by the member" until their row is stale. Keep every service running; the
+            // poll/sync timers ARE the backoff, and the first accepted call ends the window.
+            console.info(`[executor] ${reason}: waiting out the panel reclaim window (guest after member)`);
+        } else stopPanelServices(reason);
         return true;
     }
 
@@ -586,7 +600,8 @@
         if (state.unloading || state.viewer || !isKioskContext()) return;
         const now = Date.now();
         if (sessionNeedsDowngrade(getSession(), now, SESSION_DOWNGRADE_MARGIN_MS)) {
-            dropStoredSession();
+            // recoverPanelSession drops the member session itself (and opens the guest-reclaim
+            // grace window because it sees the member session; dropping it here first would hide that).
             recoverPanelSession('member session about to expire', { force: true }).catch(() => {});
         }
         const refusedSameIdentity = state.panelServicesStopped

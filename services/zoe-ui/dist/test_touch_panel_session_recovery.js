@@ -117,6 +117,12 @@ function boot(opts = {}) {
     }
     if (url.startsWith('/api/ui/')) {
       if (server.forbid(sid)) return res(403, {});
+      // routers/ui_actions._authorize_panel: a GUEST (no header) is refused while the panel row is
+      // still owned by a member whose last_seen_at is fresher than 300 s.
+      if (server.ownerRow) {
+        if (sid === server.ownerRow.sid) server.ownerRow.lastSeen = clock.now();
+        else if (!sid && clock.now() - server.ownerRow.lastSeen < 300000) return res(403, {});
+      }
       if (server.refuseAll || (sid && !server.alive.has(sid))) return res(401, {});
       return res(200, { actions: server.queue.splice(0) });
     }
@@ -136,7 +142,7 @@ function boot(opts = {}) {
   const state = {
     panelId: 'zoe-touch-pi', sessionId: opts.session === null ? null : (opts.session || MEMBER).session_id,
     processing: false, pollTimer: null, syncTimer: null, panelServicesStopped: false, stopReason: '', stoppedSessionId: null,
-    pushStopped: false, recovering: false, lastRecoverAt: 0, pushDownSince: 0, healedPush: false, lastHealAt: 0, watchdogTimer: null,
+    pushStopped: false, recovering: false, lastRecoverAt: 0, guestReclaimUntil: 0, pushDownSince: 0, healedPush: false, lastHealAt: 0, watchdogTimer: null,
     seenActions: new Set(), pushWs: null, pushPing: null, pushRetry: null, pushAttempts: 0, unloading: false, viewer: false,
   };
   const window = {
@@ -151,7 +157,7 @@ function boot(opts = {}) {
     PUSH_PING_MS: constValue('PUSH_PING_MS'), PUSH_RETRY_MAX_MS: constValue('PUSH_RETRY_MAX_MS'),
     PANEL_RECOVER_MIN_MS: constValue('PANEL_RECOVER_MIN_MS'), SESSION_DOWNGRADE_MARGIN_MS: constValue('SESSION_DOWNGRADE_MARGIN_MS'),
     PANEL_WATCHDOG_MS: constValue('PANEL_WATCHDOG_MS'), PANEL_DEAF_AFTER_MS: constValue('PANEL_DEAF_AFTER_MS'),
-    PANEL_HEAL_MIN_MS: constValue('PANEL_HEAL_MIN_MS'), PANEL_RELOAD_MIN_MS: constValue('PANEL_RELOAD_MIN_MS'), PANEL_RELOAD_KEY: 'zoe_panel_watchdog_reload_at',
+    PANEL_GUEST_RECLAIM_GRACE_MS: constValue('PANEL_GUEST_RECLAIM_GRACE_MS'), PANEL_HEAL_MIN_MS: constValue('PANEL_HEAL_MIN_MS'), PANEL_RELOAD_MIN_MS: constValue('PANEL_RELOAD_MIN_MS'), PANEL_RELOAD_KEY: 'zoe_panel_watchdog_reload_at',
     buildContext: () => ({}), executeAction: async (a) => { executed.push(a.id); return { status: 'success' }; }, ackAction: async () => {},
     panelMatches: () => true, panelMatchesAuthTarget: () => true, setOrbMode() {}, showAmbientStatus: undefined, _attemptVoiceNavigation() {},
     VoiceOverlay: { onListeningStarted() {}, onTranscript() {}, onThinking() {}, onResponding: (t) => responding.push(t), onDone() {} },
@@ -333,6 +339,41 @@ let n = 0; const ok = (m) => { n++; console.log('  ok  ' + m); };
     assert.strictEqual(t.state.panelServicesStopped, false);
     assert(t.state.pollTimer && t.state.syncTimer);
     ok('D4: services stopped for any reason other than a same-identity 403 are restarted by the watchdog');
+  }
+
+  // ── F. member -> guest downgrade vs _authorize_panel's 300 s owner-staleness window ──
+  {
+    const exp = Date.parse('2026-10-12T10:00:00Z');
+    const t = boot({ alive: ['mem1'], session: Object.assign({}, MEMBER, { expires_at: ISO(exp) }) });
+    t.server.ownerRow = { sid: 'mem1', lastSeen: t.clock.now() };   // the member's panel row
+    t.start();
+    await t.clock.advance(59 * 60000 + 30000);                       // 09:59:30 -> watchdog downgrades
+    assert.strictEqual(t.stored().role, 'guest', 'precondition: downgraded to guest');
+    const downgradedAt = t.clock.now();
+    await t.clock.advance(20000);                                    // the guest's bind/sync/poll are refused (403)
+    const refused = t.server.calls.filter((c) => c.url.startsWith('/api/ui/') && !c.sid && c.at === undefined).length;
+    assert(refused > 0, 'the guest calls did reach the server');
+    assert.strictEqual(t.state.panelServicesStopped, false, 'the expected 403 must NOT stop the services (that is the deafness again)');
+    assert(t.state.pollTimer && t.state.syncTimer, 'poll and sync keep ticking');
+    assert.strictEqual(t.sockets[0].closed, false, 'push socket stays up');
+    assert(!t.swMessages.some((m) => m.type === 'STOP_PANEL_POLL'), 'SW poll not stopped');
+    await t.clock.advance(300000 - 20000 + 5000);                    // the owner row goes stale (300 s since the member's last call)
+    t.server.queue.push({ id: 'after-reclaim', action_type: 'show_card' });
+    await t.clock.advance(4000);
+    assert.deepStrictEqual(t.executed, ['after-reclaim'], 'delivery resumes by itself once the server lets the guest reclaim the panel');
+    assert.strictEqual(t.state.panelServicesStopped, false);
+    ok('F1: a member->guest downgrade rides out the 300 s panel-reclaim 403s without stopping anything, then delivers');
+    void downgradedAt;
+  }
+  {
+    // a genuine 403 for a guest long after any handover still stops (the grace is bounded)
+    const t = boot({ alive: [], session: null });
+    t.server.forbid = () => true;
+    t.state.guestReclaimUntil = t.clock.now() - 1;
+    t.start();
+    await t.clock.advance(2000);
+    assert.strictEqual(t.state.panelServicesStopped, true, 'outside the grace window a 403 still stops poll+sync');
+    ok('F2: the reclaim grace is bounded — a 403 outside it stops as before');
   }
 
   // ── E. a persistent 401 is not a mint loop ──

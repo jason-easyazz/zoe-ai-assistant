@@ -40,8 +40,10 @@ def test_touch_panel_session_recovery_harness():
 def test_voice_form_replies_are_gated_on_panel_liveness():
     """The voice path only says 'check the panel / tap Done / tap Confirm' through the gated helpers."""
     src = (ROOT / "zoe-data" / "routers" / "voice_tts.py").read_text()
-    assert "_list_add_reply_text(_item_text, _prefill_items, _panel_can_see(panel_id))" in src
-    assert "_panel_can_see(panel_id)," in src and "_calendar_form_reply_text(" in src
+    assert "_form_live = _panel_can_see(panel_id)" in src
+    assert "_list_add_reply_text(_item_text, _prefill_items, _form_live)" in src and "_calendar_form_reply_text(" in src
+    # a dead panel queues NO form (a stale Done must not add what the reply said was not added)
+    assert src.count("if _form_live:") == 2
     # the literal tails live ONLY inside the helpers
     assert src.count("Check the panel and tap Done") == 1
     assert src.count("check the details and tap Confirm") == 1

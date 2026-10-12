@@ -82,17 +82,23 @@ def _panel_can_see(panel_id) -> bool:
 
 def _list_add_reply_text(item_text: str, items: list, panel_live: bool) -> str:
     """Spoken reply for the list_add panel-form flow. Only points at the panel when it can
-    be seen; otherwise the result is said aloud (the whole list, bounded)."""
-    lead = f"I've added {item_text} to your list." if item_text else "Here's your shopping list."
+    be seen. Otherwise NOTHING is claimed as written: this flow only queues a form and the
+    insert happens when someone taps Done, so with a dead panel the item is NOT on the list.
+    The honest line says so; a plain "show my list" is a read and is just said aloud."""
     if panel_live:
+        lead = f"I've added {item_text} to your list." if item_text else "Here's your shopping list."
         return lead + " Check the panel and tap Done when you're finished."
-    shown = [str(i) for i in (items or []) if str(i).strip()][:8]
-    if not shown or (item_text and shown == [item_text]):
-        return lead
-    more = "" if len(items) <= 8 else f", and {len(items) - 8} more"
-    if len(shown) == 1:
-        return f"{lead} Your list is: {shown[0]}."
-    return f"{lead} Your list is: {', '.join(shown[:-1])} and {shown[-1]}{more}."
+    existing = [str(i) for i in (items or []) if str(i).strip() and str(i).strip() != item_text]
+    shown = existing[:8]
+    more = "" if len(existing) <= 8 else f", and {len(existing) - 8} more"
+    if len(shown) > 1:
+        spoken = f"{', '.join(shown[:-1])} and {shown[-1]}{more}"
+    else:
+        spoken = shown[0] if shown else ""
+    if item_text:
+        lead = f"I can't show the panel right now, so I haven't added {item_text} to your list yet. Ask me again in a moment."
+        return lead + (f" What's on it now: {spoken}." if spoken else "")
+    return f"Here's your shopping list: {spoken}." if spoken else "Your shopping list is empty."
 
 
 def _calendar_form_reply_text(title: str, date: str, time_: str, panel_live: bool) -> str:
@@ -4164,14 +4170,18 @@ async def voice_command(
                         # Flag so confirm endpoint knows which item is the new addition.
                         "new_item": _item_text,
                     }
-                    reply_text = _list_add_reply_text(_item_text, _prefill_items, _panel_can_see(panel_id))
-                    await _broadcast_action_form_panel(
-                        panel_id=panel_id,
-                        panel_type="shopping_list",
-                        data=_list_form_data,
-                        title=_list_title,
-                        turn_key=_turn_key,
-                    )
+                    _form_live = _panel_can_see(panel_id)
+                    reply_text = _list_add_reply_text(_item_text, _prefill_items, _form_live)
+                    # Dead panel: queue NO form. The reply says nothing was added, and a form
+                    # that surfaced later would let a stale Done add it after the person asked again.
+                    if _form_live:
+                        await _broadcast_action_form_panel(
+                            panel_id=panel_id,
+                            panel_type="shopping_list",
+                            data=_list_form_data,
+                            title=_list_title,
+                            turn_key=_turn_key,
+                        )
                     _list_audio = await synthesize({"text": reply_text}, caller=caller)
                     await _schedule_voice_chat_save(session_id, text, reply_text, effective_user, speaker_verified=_speaker_verified)
                     _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id, speaker_verified=_speaker_verified))
@@ -4216,17 +4226,19 @@ async def voice_command(
                         "location": slots.get("location") or "",
                         "notes": slots.get("notes") or "",
                     }
+                    _form_live = _panel_can_see(panel_id)
                     reply_text = _calendar_form_reply_text(
                         str(_cal_form_data["title"] or ""), str(_parsed_date), str(_parsed_time or ""),
-                        _panel_can_see(panel_id),
+                        _form_live,
                     )
-                    await _broadcast_action_form_panel(
-                        panel_id=panel_id,
-                        panel_type="calendar_event",
-                        data=_cal_form_data,
-                        title="New Calendar Event",
-                        turn_key=_turn_key,
-                    )
+                    if _form_live:   # dead panel: no form queued (the reply says nothing was saved)
+                        await _broadcast_action_form_panel(
+                            panel_id=panel_id,
+                            panel_type="calendar_event",
+                            data=_cal_form_data,
+                            title="New Calendar Event",
+                            turn_key=_turn_key,
+                        )
                     _cal_audio = await synthesize({"text": reply_text}, caller=caller)
                     await _schedule_voice_chat_save(session_id, text, reply_text, effective_user, speaker_verified=_speaker_verified)
                     _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id, speaker_verified=_speaker_verified))

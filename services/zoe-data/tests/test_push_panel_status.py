@@ -195,11 +195,16 @@ def test_form_replies_only_point_at_the_panel_when_it_is_live():
 
     live = vt._list_add_reply_text("milk", ["milk", "eggs"], True)
     assert "Check the panel and tap Done" in live and live.startswith("I've added milk to your list.")
+    # Dead panel: the flow only QUEUES a form (the insert happens on Done), so it must NOT claim a write.
     dead = vt._list_add_reply_text("milk", ["milk", "eggs", "bread"], False)
-    assert "panel" not in dead.lower() and "tap" not in dead.lower(), dead
-    assert "milk" in dead and "eggs" in dead and "bread" in dead, "the result is said aloud instead"
-    assert vt._list_add_reply_text("milk", ["milk"], False) == "I've added milk to your list."
-    assert "a and b" in vt._list_add_reply_text("", ["a", "b"], False)
+    assert "added" in dead and "haven't added milk" in dead, dead
+    assert "I've added" not in dead, "no false write claim"
+    assert "tap" not in dead.lower() and "check the panel" not in dead.lower(), dead
+    assert "eggs and bread" in dead, "what IS on the list is said aloud"
+    only = vt._list_add_reply_text("milk", ["milk"], False)
+    assert "haven't added milk" in only and "I've added" not in only
+    assert vt._list_add_reply_text("", ["a", "b"], False) == "Here's your shopping list: a and b."
+    assert vt._list_add_reply_text("", [], False) == "Your shopping list is empty."
 
     cal_live = vt._calendar_form_reply_text("Dentist", "2026-10-14", "09:30", True)
     assert "tap Confirm" in cal_live
