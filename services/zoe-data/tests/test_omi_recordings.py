@@ -134,6 +134,13 @@ def env(monkeypatch, tmp_path):
     monkeypatch.delenv("ZOE_OMI_KEEP_AUDIO", raising=False)
     monkeypatch.delenv("ZOE_OMI_AUDIO_RETENTION_DAYS", raising=False)
     monkeypatch.setattr(omi, "voice_busy", lambda now_mono=None: False)
+    # The night-window gate reads the WALL CLOCK when called without ``now`` (``transcribe_pending`` does), and the household-local
+    # 02:30-04:30 window is 18:30-20:30 UTC - so a run landing there (CI is UTC and runs at any hour) silently deferred every
+    # transcription and ~11 tests failed with ``'pending' == 'done'``. Pin the default to midday household time; an explicit ``now``
+    # still goes through the real function (test_night_window_clock_and_marker), so the gate itself stays covered.
+    real_night_window = omi.night_window
+    midday = datetime(2026, 10, 10, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    monkeypatch.setattr(omi, "night_window", lambda now=None: real_night_window(now or midday))
     erase_gate.reset()
 
     calls: list[str] = []
