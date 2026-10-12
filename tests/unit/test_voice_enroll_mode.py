@@ -77,7 +77,7 @@ class Rig:
     """Fake voice, mic, upload and clock; records the order of everything."""
 
     def __init__(self, captures=None, *, voice_ok=True, uploads=None, transcripts=None, tick=1.0, cancelled=None, max_total_s=90.0, **kw):
-        self.events, self.said, self.uploaded, self.reports = [], [], [], []
+        self.events, self.said, self.uploaded, self.reports, self.whys = [], [], [], [], []
         self.captures = list(captures if captures is not None else [GOOD] * 3)
         self.upload_results = list(uploads if uploads is not None else [True] * 3)
         self.transcripts = list(transcripts or [])
@@ -85,7 +85,7 @@ class Rig:
         self.cancel_flag = cancelled or (lambda: False)
         self.run_obj = em.EnrollmentRun(
             {**SCRIPT, "phrases": ["alpha one", "bravo two", "charlie three"]}, say=self.say, record=self.record, upload=self.upload,
-            name="Ann", transcribe=self.transcribe, report=lambda o, n: self.reports.append((o, n)), cancelled=self.cancel_flag,
+            name="Ann", transcribe=self.transcribe, report=lambda o, n, why="": self.reports.append((o, n)) or self.whys.append(why), cancelled=self.cancel_flag,
             clock=lambda: self.now, max_total_s=max_total_s, **kw)
 
     def say(self, text):
@@ -224,6 +224,53 @@ def test_an_external_stop_ends_it_before_the_next_prompt():
     rig.run_obj._record = record_then_stop
     res = rig.run()
     assert res.outcome == em.CANCELLED and rig.uploaded == []
+
+
+def test_the_report_says_WHY_so_a_person_stopping_is_told_apart_from_a_daemon_shutdown():
+    spoken_stop = Rig(transcripts=["stop"])
+    spoken_stop.run()
+    assert spoken_stop.whys == ["said_stop"]
+
+    tapped = Rig(cancelled=lambda: "tapped_stop")
+    res = tapped.run()
+    assert (res.outcome, res.reason) == (em.CANCELLED, "tapped_stop") and tapped.whys == ["tapped_stop"]
+    assert tapped.said[-1] == "Okay, I've stopped. I haven't kept anything."
+
+    going_down = Rig(cancelled=lambda: "shutdown")
+    res = going_down.run()
+    assert (res.outcome, res.reason) == (em.CANCELLED, "shutdown") and going_down.whys == ["shutdown"]
+    assert going_down.uploaded == []
+    assert not any("stopped" in s for s in going_down.said)           # nobody is being addressed during a restart: silent
+
+    unspecified = Rig(cancelled=lambda: True)
+    assert unspecified.run().reason == "stopped"                      # a bare True is never mistaken for the person declining
+
+
+def test_the_daemon_tells_a_shutdown_from_a_tap(daemon):
+    daemon._shutdown.clear()
+    daemon._enroll_cancel.clear()
+    assert daemon._enroll_stop_reason() == ""
+    daemon._enroll_cancel.set()
+    assert daemon._enroll_stop_reason() == "tapped_stop"
+    daemon._shutdown.set()
+    try:
+        assert daemon._enroll_stop_reason() == "shutdown"            # a restart that also finds the tap flag set is still a shutdown
+    finally:
+        daemon._shutdown.clear()
+        daemon._enroll_cancel.clear()
+
+
+def test_the_daemon_posts_the_reason_with_the_result(daemon, monkeypatch):
+    posts = []
+    monkeypatch.setattr(daemon, "_enroll_say", lambda t: True)
+    monkeypatch.setattr(daemon, "_enroll_record_once", lambda pa: GOOD)
+    monkeypatch.setattr(daemon, "stt_on_jetson", lambda w: "stop")
+    monkeypatch.setattr(daemon, "_sync_speaker_profiles", lambda force=False: None)
+    monkeypatch.setattr(daemon, "_api_post", lambda path, data, timeout=60, retries=None: posts.append((path, data)) or {"ok": True})
+    assert daemon._handle_server_command(_cmd())
+    daemon._run_enrollment_mode(object())
+    assert ("/api/enrollment/result", {"status": "cancelled", "user_id": "ann", "samples": 0, "reason": "said_stop"}) in posts
+    assert not [p for p, _ in posts if p == "/api/voice/enroll"]
 
 
 def test_it_is_bounded_by_the_time_budget_and_stores_nothing():
@@ -391,7 +438,7 @@ def test_the_whole_run_uploads_with_consent_reports_and_hands_the_mic_back(daemo
     daemon._run_enrollment_mode(object())
     enrols = [d for p, d in posts if p == "/api/voice/enroll"]
     assert len(enrols) == 3 and all(d["consent"] is True and d["user_id"] == "ann" and d["panel_id"] == daemon.PANEL_ID for d in enrols)
-    assert ("/api/enrollment/result", {"status": "done", "user_id": "ann", "samples": 3}) in posts
+    assert ("/api/enrollment/result", {"status": "done", "user_id": "ann", "samples": 3, "reason": "ok"}) in posts
     assert not daemon._recording_active.is_set() and not daemon._enroll_running.is_set() and daemon._enroll_request is None
 
 

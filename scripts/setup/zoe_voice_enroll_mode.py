@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 DONE, PARTIAL, CANCELLED, FAILED, TIMEOUT = "done", "partial", "cancelled", "failed", "timeout"
+SHUTDOWN = "shutdown"      # the daemon is stopping / restarting: NOT the person declining
 
 #: the same three phrases ``zoe_enroll_flow.py`` always used (kept in step by tests/unit/test_voice_enroll_mode.py)
 DEFAULT_PHRASES = (
@@ -161,14 +162,15 @@ class EnrollmentRun:
     ``record() -> bytes|None``  beep, then capture ONE utterance as a WAV; None = nothing usable came from the mic
     ``transcribe(wav) -> str``  optional: what was said (used only to hear a cancel word); may raise
     ``upload(wav) -> bool``     send one capture to the server for the signature; False = refused / failed
-    ``report(outcome, n)``      tell the server how the run ended (never raises into the run)
-    ``cancelled() -> bool``     an external stop (a tap, a shutdown)
+    ``report(outcome, n, why)`` tell the server how the run ended (never raises into the run); ``why`` separates the PERSON
+                                saying stop / tapping stop (``said_stop`` / ``tapped_stop``) from a daemon ``shutdown``
+    ``cancelled() -> str|bool`` an external stop: a reason string (``tapped_stop`` | ``shutdown``) or just True
     ``clock() -> float``        monotonic seconds
     """
 
     def __init__(self, script: Optional[dict], *, say: Callable[[str], bool], record: Callable[[], Optional[bytes]],
                  upload: Callable[[bytes], bool], name: str = "", transcribe: Optional[Callable[[bytes], str]] = None,
-                 report: Optional[Callable[[str, int], None]] = None, cancelled: Callable[[], bool] = lambda: False,
+                 report: Optional[Callable[[str, int, str], None]] = None, cancelled: Callable[[], object] = lambda: False,
                  assess: Callable[[bytes], tuple] = assess_wav, clock: Callable[[], float] = time.monotonic,
                  max_total_s: float = 90.0, attempts_per_phrase: int = 3, log: Optional[Callable[[str], None]] = None):
         self.script = merge_script(script)
@@ -199,11 +201,21 @@ class EnrollmentRun:
     def _expired(self) -> bool:
         return self._clock() >= self._deadline
 
-    def _stop_requested(self) -> bool:
+    def _stop_requested(self) -> str:
+        """"" when nothing asked to stop, else WHY: ``cancelled()`` may return a reason string (``tapped_stop`` | ``shutdown``) or just
+        True (``stopped``, unspecified)."""
         try:
-            return bool(self._cancelled())
+            value = self._cancelled()
         except Exception:  # noqa: BLE001
-            return False
+            return ""
+        if not value:
+            return ""
+        return value if isinstance(value, str) else "stopped"
+
+    def _stopped(self, reason: str) -> Result:
+        """The run ends because something asked it to. A daemon SHUTDOWN is silent (nobody is being addressed) and is not the person
+        cancelling; the server only treats ``said_stop`` / ``tapped_stop`` as a "no"."""
+        return self._finish(CANCELLED, 0, reason, "" if reason == SHUTDOWN else "cancelled")
 
     def _heard_cancel(self, wav: bytes) -> bool:
         if self._transcribe is None:
@@ -232,7 +244,7 @@ class EnrollmentRun:
             self._wavs.clear()          # recordings never outlive the run
             if self._report is not None:
                 try:
-                    self._report(result.outcome, result.samples)
+                    self._report(result.outcome, result.samples, result.reason)
                 except Exception:  # noqa: BLE001
                     pass
         return result
@@ -245,16 +257,16 @@ class EnrollmentRun:
             captured = None
             for attempt in range(self.attempts):
                 if self._stop_requested():
-                    return self._finish(CANCELLED, 0, "stopped", "cancelled")
+                    return self._stopped(self._stop_requested())
                 if self._expired():
                     return self._finish(TIMEOUT, 0, "timeout", "timeout")
                 if not self._speak("prompt", n=index, phrase=phrase):
                     return Result(FAILED, 0, "no_voice")
                 if self._stop_requested():
-                    return self._finish(CANCELLED, 0, "stopped", "cancelled")
+                    return self._stopped(self._stop_requested())
                 wav = self._record()
                 if self._stop_requested():
-                    return self._finish(CANCELLED, 0, "stopped", "cancelled")
+                    return self._stopped(self._stop_requested())
                 if wav is None:
                     ok, why = False, "short"
                 else:

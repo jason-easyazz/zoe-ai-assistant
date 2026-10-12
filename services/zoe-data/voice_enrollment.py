@@ -206,12 +206,21 @@ def script_for(lang: str, name: str) -> dict:
 
 
 async def start_enrollment(user_id: str, panel_id: str, lang: str) -> bool:
-    """Queue the enrol-yourself command for the panel's daemon. True when queued. Never raises."""
+    """Queue the enrol-yourself command for THE panel the member spoke at. True when queued. Never raises.
+
+    The row is panel-scoped (``voice_announce.PANEL_SCOPED_TRIGGERS``): only the daemon whose device token IS this panel can claim it, so
+    no other panel speaks the member's name and enrols whoever stands there next. That needs a panel that holds a live device token; a
+    typed channel, a browser id or a revoked panel gets no command (the caller says it could not start)."""
     try:
         from db_compat import get_compat_db
 
+        if not (panel_id or "").strip():
+            return False
         name = await _display_name(user_id)
         async with get_compat_db() as db:
+            if panel_id not in await _device_panels(db):
+                logger.info("voice_enrollment: no enrol command - %r holds no live device token", "panel")
+                return False
             await voice_announce.enqueue_command(
                 db, user_id=user_id, panel_id=panel_id or None, trigger_type="voice_enroll",
                 command={"name": name, "lang": lang, "max_total_s": ENROLL_MAX_S, "script": script_for(lang, name)},
@@ -315,8 +324,12 @@ async def maybe_offer(user_id: str, moment: str, panel_id: str = "", lang: str =
                     db, user_id=uid, panel_id=panel_id, message=text, trigger_type="voice_enroll_offer", ttl_s=OFFER_TTL_S)
         except Exception as exc:  # noqa: BLE001
             logger.warning("voice_enrollment: offer not queued: %s", type(exc).__name__)
+            # Nothing was offered, so the slot taken above must not stand: it would block tomorrow's offer, count as an ignored offer
+            # (three of those are a 60-day "no"), and mark a question pending that was never asked.
+            await es.release_offer(uid, state, now=now)
             return "not_queued"
-        arm(uid, lx.get("lang", lang), panel_id)
+        # NOT armed here: the answer is only meaningful once the offer was HEARD. The daemon's played-ACK
+        # (``POST /api/voice/announcements/{id}/played``) calls ``on_announcement_played``, which arms the yes/no.
         logger.info("ENROLL_OFFER mode=on moment=%s audience=%s outcome=offered", moment, audience)
         return "offered"
     except asyncio.CancelledError:
@@ -324,6 +337,36 @@ async def maybe_offer(user_id: str, moment: str, panel_id: str = "", lang: str =
     except Exception as exc:  # noqa: BLE001 - an offer is optional; the turn / the PIN is not
         logger.warning("voice_enrollment: offer failed (non-fatal): %s", type(exc).__name__)
         return "error"
+
+
+def _offer_lang(message: str) -> str:
+    """The language whose offer sentence this was (the played row holds the text, not the language); English when none matches."""
+    for code in languages():
+        say = lex(code).get("say") or {}
+        if message in (say.get("offer_pin"), say.get("offer_close")):
+            return code
+    return "en"
+
+
+async def on_announcement_played(announcement_id: str) -> bool:
+    """The daemon reports an announcement PLAYED. When it was an enrolment OFFER, the member has now heard "Want to?": arm the yes/no
+    (two minutes). Before this, an unrelated "yes" cannot be taken as consent to an offer nobody heard. True when armed. Never raises."""
+    try:
+        if es.mode() != "on":
+            return False
+        from db_compat import get_compat_db
+
+        async with get_compat_db() as db:
+            async with db.execute("SELECT user_id, panel_id, trigger_type, message FROM voice_announcements WHERE id = ?",
+                                  (announcement_id,)) as cur:
+                row = await cur.fetchone()
+        if row is None or (row[2] or "") != "voice_enroll_offer":
+            return False
+        arm(str(row[0]), _offer_lang(str(row[3] or "")), str(row[1] or ""))
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("voice_enrollment: played hook failed (non-fatal): %s", type(exc).__name__)
+        return False
 
 
 def _spawn(coro) -> None:

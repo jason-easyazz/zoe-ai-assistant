@@ -1,4 +1,4 @@
-"""0045 - enrollment_offers: the per-member biometric SETUP state Zoe keeps about offering voice enrolment.
+"""0046 - enrollment_offers: the per-member biometric SETUP state Zoe keeps about offering voice enrolment.
 
 Whether a member's voice (or face) IS enrolled is not stored here - it is read from ``speaker_profiles`` / ``face_profiles``, the
 tables that actually hold the enrolment, so the two can never disagree. This table holds the one thing those tables cannot say:
@@ -15,13 +15,13 @@ One row per (member, modality), ``modality`` = ``voice`` | ``face``:
 
 TEXT UTC timestamps (``%Y-%m-%dT%H:%M:%SZ``) like the proactive tables. No FK to ``users`` (the demo-user teardown sweeps rows by
 exact id); the row holds no biometric and no words from the member. ``IF NOT EXISTS`` runs unchanged on PostgreSQL and SQLite, so
-reruns are safe. The downgrade drops the table.
+reruns are safe. The downgrade drops the table. (Numbered 0046: 0045 is ``omi_recordings``, which merged first.)
 """
 
 from alembic import op
 
-revision = "0045"
-down_revision = "0044"
+revision = "0046"
+down_revision = "0045"
 branch_labels = None
 depends_on = None
 

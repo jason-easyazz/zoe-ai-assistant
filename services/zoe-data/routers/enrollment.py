@@ -9,8 +9,10 @@ Same scoping rules as the other biometric routes (``biometric_scope``): a device
 signed-in member sees only their own row; an admin sees the household, explicitly. The state itself is ``enrollment_state.get_state``
 (enrolment is READ from ``speaker_profiles`` / ``face_profiles``, never copied). Counts and timestamps only - never an embedding.
 
-``POST /result`` changes exactly one thing: a run that ENDED BY THE PERSON SAYING STOP (``cancelled``) starts the same quiet period as a
-"no", so Zoe does not offer again tomorrow. Every other outcome (done / partial / failed / timeout) is logged and changes nothing.
+``POST /result`` changes exactly one thing: a run that ENDED BY THE PERSON SAYING OR TAPPING STOP (``status=cancelled`` AND
+``reason`` = ``said_stop`` | ``tapped_stop``) starts the same quiet period as a "no", so Zoe does not offer again tomorrow. Every other
+outcome - done / partial / failed / timeout, and a ``cancelled`` run caused by a daemon ``shutdown`` (or an older daemon that sends no
+reason) - is logged and changes nothing.
 """
 from __future__ import annotations
 
@@ -27,6 +29,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/enrollment", tags=["enrollment"])
 
 _RESULTS = frozenset({"done", "partial", "cancelled", "failed", "timeout"})
+#: the ``reason`` values of a ``cancelled`` run that mean the PERSON said / tapped stop (zoe_voice_enroll_mode)
+_PERSON_STOPPED = frozenset({"said_stop", "tapped_stop"})
 
 
 @router.get("/state")
@@ -77,7 +81,10 @@ async def enrollment_result(payload: dict, caller: dict = Depends(_require_voice
         samples = max(0, min(10, int(body.get("samples") or 0)))
     except (TypeError, ValueError):
         samples = 0
-    logger.info("ENROLL_RESULT status=%s samples=%d", status, samples)
-    if status == "cancelled":
+    reason = str(body.get("reason") or "").strip().lower()[:32]
+    logger.info("ENROLL_RESULT status=%s reason=%s samples=%d", status, reason or "-", samples)
+    # ONLY the person stopping it is a "no". A daemon shutdown / restart also ends the run as ``cancelled`` but says ``shutdown``
+    # (or says nothing: an older daemon) - that must not start a 60-day quiet period for someone who never declined.
+    if status == "cancelled" and reason in _PERSON_STOPPED:
         await es.record_answer(uid, False)
     return {"ok": True}

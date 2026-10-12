@@ -13,7 +13,7 @@ aren't going to be running a piece of code". Groups (each has a break-the-fix co
   the read API own state / admin household / device result; a device token owns nothing
   language     English and Spanish files have the same keys; nothing is offered in a language with no file
 
-Synthetic data only (invented members). The DB edge is a real SQLite file built by migration 0045 behind ``db_compat``.
+Synthetic data only (invented members). The DB edge is a real SQLite file built by migration 0046 behind ``db_compat``.
 """
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ import voice_enrollment as ve
 SVC = Path(__file__).resolve().parents[1]
 NOW = datetime(2026, 10, 12, 3, 0, tzinfo=timezone.utc)
 ADULT, KID, MINOR_FLAG, ODD = "ann", "kiddo", "mia", "odd"
-PANEL = "panel-kitchen"
+PANEL = "zoe-touch-pi"          # a panel that holds a live device token in the fixture (as does zoe-touch-hall)
 
 _SCHEMA = [
     """CREATE TABLE speaker_profiles (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, display_name TEXT NOT NULL, embedding_blob BLOB NOT NULL,
@@ -75,7 +75,7 @@ def _migrate(engine, fname):
 def env(monkeypatch, tmp_path):
     path = str(tmp_path / "zoe.db")
     engine = sa.create_engine(f"sqlite:///{path}")
-    _migrate(engine, "0045_enrollment_offers.py")
+    _migrate(engine, "0046_enrollment_offers.py")
     with engine.begin() as conn:
         for ddl in _SCHEMA:
             conn.execute(sa.text(ddl))
@@ -330,7 +330,7 @@ def test_the_offer_is_spoken_through_the_queue_with_the_privacy_statement(env, m
     assert len(rows) == 1 and rows[0][2] == PANEL
     text = rows[0][1]
     assert "PIN" in text and "voice signature, not recordings" in text and "delete it" in text and text.endswith("Want to?")
-    assert ve.pending_for(ADULT)
+    assert not ve.pending_for(ADULT)                                       # queued is not heard: nothing is pending yet
     assert "follow_up" in run(_claim(env))[0]                              # the daemon opens a listening window for the answer
 
 
@@ -418,13 +418,27 @@ def test_the_close_of_a_conversation_offers_but_a_goodbye_or_a_typed_chat_does_n
 
 # ── the spoken yes / no ───────────────────────────────────────────────────────────────────────────────────────────────────
 
-def _offer(monkeypatch):
+def _heard(panel=PANEL):
+    """The daemon claims the queued announcement, plays it and ACKs: the server's played route runs, which is what arms the yes/no."""
+    async def go():
+        async with db_compat.get_compat_db() as db:
+            items = await voice_announce.claim_announcements(db, panel_id=panel)
+            assert await voice_announce.mark_played(db, announcement_id=items[0]["id"], panel_id=panel)
+        return await ve.on_announcement_played(items[0]["id"])
+
+    return run(go())
+
+
+def _offer(env, monkeypatch):
     on(monkeypatch)
     assert run(ve.maybe_offer(ADULT, "pin_stepup", PANEL)) == "offered"
+    assert not ve.pending_for(ADULT)                    # queued is not heard
+    assert _heard() is True
+    assert ve.pending_for(ADULT)
 
 
 def test_yes_starts_the_enrolment_on_the_panel(env, monkeypatch):
-    _offer(monkeypatch)
+    _offer(env, monkeypatch)
     reply = run(say("yes"))
     assert reply == "Okay, let's do it. Stay by the panel."
     cmd = json.loads(queued(env, "voice_enroll")[0][1])
@@ -438,13 +452,13 @@ def test_yes_starts_the_enrolment_on_the_panel(env, monkeypatch):
 
 @pytest.mark.parametrize("text", ["yes please", "yeah sure", "go ahead", "okay", "sounds good"])
 def test_the_usual_yeses_start_it(env, monkeypatch, text):
-    _offer(monkeypatch)
+    _offer(env, monkeypatch)
     assert run(say(text)).startswith("Okay, let's do it")
 
 
 @pytest.mark.parametrize("text", ["no", "no thanks", "not now", "maybe later", "nope", "not today"])
 def test_a_no_is_remembered_and_the_next_offer_waits_sixty_days(env, monkeypatch, text):
-    _offer(monkeypatch)
+    _offer(env, monkeypatch)
     assert run(say(text)).startswith("No problem. I won't ask again for a while.")
     assert queued(env, "voice_enroll") == []
     until = es.parse(sql(env, "SELECT declined_until FROM enrollment_offers WHERE user_id = ?", (ADULT,))[0][0])
@@ -457,14 +471,14 @@ def test_a_no_is_remembered_and_the_next_offer_waits_sixty_days(env, monkeypatch
 
 @pytest.mark.parametrize("text", ["sure?", "what's the weather", "are you sure", "yes, and remind me to call mum", "sure is cold in here"])
 def test_anything_that_is_not_a_clear_answer_is_not_a_yes_and_ends_the_offer(env, monkeypatch, text):
-    _offer(monkeypatch)
+    _offer(env, monkeypatch)
     assert run(say(text)) is None
     assert queued(env, "voice_enroll") == [] and not ve.pending_for(ADULT)
     assert sql(env, "SELECT declined_at FROM enrollment_offers WHERE user_id = ?", (ADULT,))[0][0] is None     # ignoring is not declining
 
 
 def test_an_unanswered_offer_expires(env, monkeypatch):
-    _offer(monkeypatch)
+    _offer(env, monkeypatch)
     clock = [1000.0]
     monkeypatch.setattr(ve.time, "monotonic", lambda: clock[0])
     ve.arm(ADULT, "en", PANEL)
@@ -473,13 +487,13 @@ def test_an_unanswered_offer_expires(env, monkeypatch):
 
 
 def test_a_yes_from_a_voice_that_is_not_the_account_does_nothing(env, monkeypatch):
-    _offer(monkeypatch)
+    _offer(env, monkeypatch)
     assert run(say("yes", verified=False)) is None
     assert queued(env, "voice_enroll") == []
 
 
 def test_spanish_is_understood_from_its_file_alone(env, monkeypatch):
-    _offer(monkeypatch)
+    _offer(env, monkeypatch)
     ve.arm(ADULT, "es", PANEL)
     assert run(say("claro")).startswith("Vale, vamos alla")
     ve.arm(ADULT, "es", PANEL)
@@ -696,13 +710,183 @@ def test_a_device_token_owns_nothing_but_may_report_a_result(client, env):
     assert client.get("/api/enrollment/household").status_code == 403
     assert client.post("/api/enrollment/result", json={"status": "done", "user_id": ADULT, "samples": 3}).json() == {"ok": True}
     assert not run(es.get_state(ADULT)).declined_now(NOW)                       # only "cancelled" changes anything
-    assert client.post("/api/enrollment/result", json={"status": "cancelled", "user_id": ADULT}).status_code == 200
+    assert client.post("/api/enrollment/result", json={"status": "cancelled", "user_id": ADULT, "reason": "said_stop"}).status_code == 200
     assert run(es.get_state(ADULT)).declined_now(NOW)                           # the person said stop: no re-offer tomorrow
     assert client.post("/api/enrollment/result", json={"status": "weird", "user_id": ADULT}).status_code == 400
 
 
 def test_a_session_cannot_post_a_result(client):
     assert client.post("/api/enrollment/result", json={"status": "cancelled", "user_id": ADULT}).status_code == 403
+
+
+# ── review round 1 (Codex): scoping, heard-before-armed, rollback, shutdown is not a no ─────────────────────────────────────
+
+def test_the_enrol_command_is_claimable_only_by_the_panel_it_targeted(env, monkeypatch):
+    on(monkeypatch)
+    assert "voice_enroll" in voice_announce.PANEL_SCOPED_TRIGGERS
+    assert run(ve.start_enrollment(ADULT, "zoe-touch-pi", "en")) is True
+    other = run(_claim_for(env, "zoe-touch-hall"))                               # another panel's daemon polls first
+    assert other == []                                                           # ... and gets nothing: no name spoken, nobody enrolled
+    mine = run(_claim_for(env, "zoe-touch-pi"))
+    assert len(mine) == 1 and mine[0]["command"]["kind"] == "voice_enroll" and mine[0]["command"]["name"] == "Ann"
+
+
+def test_two_members_at_two_panels_each_get_their_own_panel_only(env, monkeypatch):
+    on(monkeypatch)
+    assert run(ve.start_enrollment(ADULT, "zoe-touch-pi", "en"))
+    assert run(ve.start_enrollment("bob", "zoe-touch-hall", "en"))
+    pi, hall = run(_claim_for(env, "zoe-touch-pi")), run(_claim_for(env, "zoe-touch-hall"))
+    assert [i["command"]["user_id"] for i in pi] == [ADULT] and [i["command"]["user_id"] for i in hall] == ["bob"]
+
+
+@pytest.mark.parametrize("panel", ["", "browser-panel-xyz", "zoe-touch-old"])
+def test_no_command_is_queued_for_a_panel_that_holds_no_live_device_token(env, monkeypatch, panel):
+    on(monkeypatch)
+    assert run(ve.start_enrollment(ADULT, panel, "en")) is False
+    assert queued(env, "voice_enroll") == []
+
+
+def test_a_yes_from_a_panel_without_a_device_token_says_it_could_not_start(env, monkeypatch):
+    on(monkeypatch)
+    assert "I couldn't reach the panel speaker" in run(say("learn my voice", panel="browser-panel-xyz"))
+    assert queued(env, "voice_enroll") == []
+
+
+def test_an_unrelated_yes_is_not_consent_to_an_offer_that_was_only_queued(env, monkeypatch):
+    on(monkeypatch)
+    assert run(ve.maybe_offer(ADULT, "pin_stepup", PANEL)) == "offered"           # queued, not yet played
+    assert run(say("yes")) is None                                                # "yes" to something else entirely
+    assert queued(env, "voice_enroll") == []
+    assert sql(env, "SELECT accepted_at FROM enrollment_offers WHERE user_id = ?", (ADULT,))[0][0] is None
+
+
+def test_the_offer_becomes_answerable_only_when_the_daemon_reports_it_played(env, monkeypatch):
+    on(monkeypatch)
+    run(ve.maybe_offer(ADULT, "pin_stepup", PANEL))
+    assert not ve.pending_for(ADULT)
+    assert _heard() is True and ve.pending_for(ADULT)
+    assert run(say("yes")).startswith("Okay, let's do it")
+
+
+def test_the_played_route_arms_the_yes_for_an_offer_but_not_for_other_announcements(env, monkeypatch):
+    import routers.voice_tts as voice_tts
+
+    on(monkeypatch)
+    run(ve.maybe_offer(ADULT, "pin_stepup", PANEL))
+
+    async def play(trigger_filter=None):
+        async with db_compat.get_compat_db() as db:
+            items = await voice_announce.claim_announcements(db, panel_id=PANEL)
+            for item in items:
+                out = await voice_tts.voice_announcement_played(item["id"], {"source": "device", "panel_id": PANEL}, db)
+                assert out["updated"] is True
+            return items
+
+    run(play())
+    assert ve.pending_for(ADULT)                                                 # through the real route, not the helper
+    ve.reset()
+
+    async def brief():
+        async with db_compat.get_compat_db() as db:
+            await voice_announce.enqueue_announcement(db, user_id=ADULT, panel_id=PANEL, message="Good morning", trigger_type="morning_checkin")
+        return await play()
+
+    run(brief())
+    assert not ve.pending_for(ADULT)                                             # a played brief asks no question
+
+
+def test_a_played_ack_for_an_offer_is_ignored_while_the_flag_is_not_on(env, monkeypatch):
+    on(monkeypatch)
+    run(ve.maybe_offer(ADULT, "pin_stepup", PANEL))
+    monkeypatch.setenv("ZOE_ENROLL_OFFER", "shadow")
+    assert _heard() is False and not ve.pending_for(ADULT)
+
+
+def test_the_spanish_offer_arms_the_spanish_answer(env, monkeypatch):
+    on(monkeypatch)
+    run(ve.maybe_offer(ADULT, "pin_stepup", PANEL, lang="es"))
+    assert _heard() is True
+    assert run(say("claro")).startswith("Vale, vamos alla")
+
+
+def test_a_failed_enqueue_gives_the_offer_slot_back(env, monkeypatch):
+    on(monkeypatch)
+
+    async def boom(*a, **k):
+        raise RuntimeError("queue down")
+
+    monkeypatch.setattr(voice_announce, "enqueue_announcement", boom)
+    assert run(ve.maybe_offer(ADULT, "pin_stepup", PANEL)) == "not_queued"
+    st = run(es.get_state(ADULT))
+    assert (st.last_offered_at, st.offer_count, st.pending_since, st.ignored_count) == (None, 0, None, 0)
+    assert not ve.pending_for(ADULT)
+
+
+def test_failures_are_not_counted_as_ignored_offers(env, monkeypatch):
+    """Three failed enqueues must not start the 60-day quiet period, and the next real offer goes out the same day."""
+    on(monkeypatch)
+    real = voice_announce.enqueue_announcement
+    calls = {"n": 0}
+
+    async def flaky(*a, **k):
+        calls["n"] += 1
+        if calls["n"] <= 3:
+            raise RuntimeError("queue down")
+        return await real(*a, **k)
+
+    monkeypatch.setattr(voice_announce, "enqueue_announcement", flaky)
+    for _ in range(3):
+        assert run(ve.maybe_offer(ADULT, "pin_stepup", PANEL)) == "not_queued"
+    st = run(es.get_state(ADULT))
+    assert not st.declined_now(NOW) and st.ignored_count == 0
+    assert run(ve.maybe_offer(ADULT, "pin_stepup", PANEL)) == "offered"           # not blocked by a 24 h gap nor a quiet period
+    assert len(queued(env, "voice_enroll_offer")) == 1
+
+
+def test_a_failed_enqueue_after_an_earlier_unanswered_offer_restores_that_offers_state(env, monkeypatch):
+    on(monkeypatch)
+    assert run(ve.maybe_offer(ADULT, "pin_stepup", PANEL)) == "offered"
+    before = run(es.get_state(ADULT))
+
+    async def boom(*a, **k):
+        raise RuntimeError("queue down")
+
+    monkeypatch.setattr(voice_announce, "enqueue_announcement", boom)
+    env["now"] = NOW + timedelta(hours=30)
+    assert run(ve.maybe_offer(ADULT, "pin_stepup", PANEL)) == "not_queued"
+    after = run(es.get_state(ADULT))
+    assert (after.last_offered_at, after.offer_count, after.pending_since, after.ignored_count) == (
+        before.last_offered_at, before.offer_count, before.pending_since, before.ignored_count)
+
+
+def test_release_never_undoes_a_later_claim(env):
+    st0 = run(es.get_state(ADULT))
+    assert run(es.claim_offer(ADULT, st0, now=NOW))
+    st1 = run(es.get_state(ADULT))
+    assert run(es.claim_offer(ADULT, st1, now=NOW + timedelta(days=2)))           # someone else's later offer
+    assert run(es.release_offer(ADULT, st0, now=NOW)) is False                    # the first claim's rollback must not touch it
+    assert run(es.get_state(ADULT)).offer_count == 2
+
+
+def test_only_the_person_stopping_it_is_a_decline_a_daemon_shutdown_is_not(client, env):
+    client.who["caller"] = {"source": "device", "user_id": "voice-daemon", "panel_id": "zoe-touch-pi"}
+
+    def post(**kw):
+        return client.post("/api/enrollment/result", json={"status": "cancelled", "user_id": ADULT, **kw})
+
+    for kw in ({"reason": "shutdown"}, {"reason": "stopped"}, {}, {"reason": "crashed"}):
+        assert post(**kw).status_code == 200
+        assert not run(es.get_state(ADULT)).declined_now(NOW), kw                  # a restart is not a "no"
+    assert post(reason="tapped_stop").status_code == 200
+    assert run(es.get_state(ADULT)).declined_now(NOW)
+    run(es.record_answer(ADULT, True, now=NOW))                                    # reset
+    assert post(reason="said_stop").status_code == 200 and run(es.get_state(ADULT)).declined_now(NOW)
+
+
+def test_a_non_cancel_status_with_a_stop_reason_is_not_a_decline(client, env):
+    client.who["caller"] = {"source": "device", "user_id": "voice-daemon", "panel_id": "zoe-touch-pi"}
+    client.post("/api/enrollment/result", json={"status": "failed", "user_id": ADULT, "reason": "said_stop"})
+    assert not run(es.get_state(ADULT)).declined_now(NOW)
 
 
 # ── the self-model knows the gap ─────────────────────────────────────────────────────────────────────────────────────────

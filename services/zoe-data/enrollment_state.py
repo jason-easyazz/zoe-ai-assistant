@@ -6,7 +6,7 @@ the daemon (``scripts/setup/zoe_voice_enroll_mode.py``) is the hands.
 
 State (``get_state``). Whether a voice / face IS enrolled is READ from ``speaker_profiles`` / ``face_profiles`` - the tables that hold
 the enrolment - never copied, so the answer cannot disagree with what the panel will actually match. What those tables cannot say -
-what Zoe offered and what the member answered - is ``enrollment_offers`` (migration 0045). A read that fails reports ``None`` ("I do
+what Zoe offered and what the member answered - is ``enrollment_offers`` (migration 0046). A read that fails reports ``None`` ("I do
 not know"), never ``False``: Zoe must not offer to learn a voice she already has because the database blinked.
 
 The offer policy (``decide_offer``, pure). An offer is made only when EVERY rule holds, and the first rule that fails is the reason
@@ -192,7 +192,7 @@ async def get_state(user_id: str, db=None) -> SetupState:
                     offer = {"last_offered_at": row[0], "offer_count": int(row[1] or 0), "pending_since": row[2],
                              "ignored_count": int(row[3] or 0), "accepted_at": row[4], "declined_at": row[5],
                              "declined_until": row[6]}
-            except Exception as exc:  # noqa: BLE001 - pre-0045 database: no offers recorded yet
+            except Exception as exc:  # noqa: BLE001 - pre-0046 database: no offers recorded yet
                 logger.warning("enrollment_state: offers read failed: %s", type(exc).__name__)
     except Exception as exc:  # noqa: BLE001 - no connection at all: everything unknown
         logger.warning("enrollment_state: no connection: %s", type(exc).__name__)
@@ -327,6 +327,28 @@ async def claim_offer(user_id: str, state: SetupState, *, now: Optional[datetime
         return won
     except Exception as exc:  # noqa: BLE001
         logger.warning("enrollment_state: claim_offer failed: %s", type(exc).__name__)
+        return False
+
+
+async def release_offer(user_id: str, before: SetupState, *, now: Optional[datetime] = None, db=None) -> bool:
+    """Undo ``claim_offer`` for an offer that was never made (the announcement could not be queued): put the offer columns back to what
+    ``before`` read, so the failure is not counted as an offer, an ignored offer or a pending question. Optimistic like the claim - it only
+    applies while ``last_offered_at`` is still the stamp this claim wrote - so it can never undo someone else's later claim. Never raises."""
+    now = now or _now()
+    uid = (user_id or "").strip()
+    try:
+        async with _conn(db) as conn:
+            async with conn.execute(
+                "UPDATE enrollment_offers SET last_offered_at = ?, offer_count = ?, pending_since = ?, ignored_count = ?, updated_at = ? "
+                "WHERE user_id = ? AND modality = ? AND last_offered_at = ?",
+                (before.last_offered_at, before.offer_count, before.pending_since, before.ignored_count, fmt(now), uid, MODALITY_VOICE,
+                 fmt(now)),
+            ) as cur:
+                undone = getattr(cur, "rowcount", 0) == 1
+            await conn.commit()
+        return undone
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("enrollment_state: release_offer failed: %s", type(exc).__name__)
         return False
 
 

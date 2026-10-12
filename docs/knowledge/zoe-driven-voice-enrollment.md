@@ -16,12 +16,14 @@ Contract and forbidden list: [services/zoe-data/AGENTS.md](../../services/zoe-da
 
 | Piece | Where | What it does |
 |---|---|---|
-| Knowledge | `enrollment_state.py`, migration `0045` (`enrollment_offers`) | Enrolment is READ from `speaker_profiles` / `face_profiles`; the new table holds only what Zoe offered and what the member answered. A failed read is "unknown", never "not enrolled". |
+| Knowledge | `enrollment_state.py`, migration `0046` (`enrollment_offers`) | Enrolment is READ from `speaker_profiles` / `face_profiles`; the new table holds only what Zoe offered and what the member answered. A failed read is "unknown", never "not enrolled". |
 | Policy | `enrollment_state.decide_offer` (pure) | Offer only to a real, positively-adult member who is not enrolled, not declined (60 days), not offered in 24 h, outside quiet hours. Never guests, synthetic ids, unknown roles; children only with `ZOE_ENROLL_OFFER_KIDS`. |
 | Moments | `routers/panel_auth.py` (after a correct PIN), `voice_enrollment.tier` (a thanks / "that's all" on a voice turn) | A PIN step-up is the best moment ("so you won't need your PIN next time"). A goodbye never carries an offer. |
 | The talk | `voice_enrollment.py` + `lexicons_data/voice_enrollment_<lang>.json` | Spoken yes/no (the repo's confirm machinery + the language file), "learn my voice", "forget my voice", "do you know my voice?". |
 | The hands | `scripts/setup/zoe_voice_enroll_mode.py` + the daemon's "Enrollment mode" section | The daemon enrols the member itself, in-process, without stopping. |
 | Channel | the announcement queue (`voice_announce.enqueue_command`) | A claimed command has empty `text` + a `command` object: an old daemon says nothing, a new one acts. |
+
+Three properties from review (Codex, PR #2003): (1) the `voice_enroll` command is **panel-scoped** and is only queued for a panel that holds a live device token, so another panel's daemon can never claim it; (2) the yes/no is **armed only when the daemon's played-ACK arrives** (`POST /api/voice/announcements/{id}/played` -> `on_announcement_played`), never when the offer is merely queued, so an unrelated "yes" cannot be consent; (3) a failed enqueue **gives the offer slot back** (`release_offer`), so it is not counted as an offer or an ignored offer. And the daemon reports WHY a run was cancelled: only `said_stop` / `tapped_stop` record a decline; a `shutdown` or restart does not.
 
 Flow: a correct PIN (or a thanks) -> policy -> one spoken offer through the announcement queue ("I can learn your voice ... I'd keep a voice signature, not recordings, and you can delete it whenever you like. It takes about a minute. Want to?") -> the daemon speaks it and opens a listening window -> "yes" -> the server queues `voice_enroll` with the member's language script -> the daemon (main loop, wake stream closed) says the intro, then per phrase: prompt, beep, record, judge, retry with guidance -> only when all three are captured it uploads them to `POST /api/voice/enroll` with `consent: true` -> confirms aloud -> reports `POST /api/enrollment/result` -> back to wake-word listening. Bounded at 90 s; "stop" (heard in a capture), a tap (`POST :7777/enroll/cancel`) or a shutdown ends it with nothing stored.
 
@@ -53,7 +55,7 @@ The owner flips `ZOE_ENROLL_OFFER` (shadow first) AFTER the replay gate below.
 
 Nothing here is done by the agent; the daemon deploy is an operator step.
 
-1. **Merge** the PR; the server deploy restarts zoe-data (run migration `0045`: the normal deploy path applies Alembic; check `alembic heads` shows `0045`). With the flag off nothing changes for anyone.
+1. **Merge** the PR; the server deploy restarts zoe-data (run migration `0046`: the normal deploy path applies Alembic; check `alembic heads` shows `0046`). With the flag off nothing changes for anyone.
 2. **Apply the library-path drop-in** (the real fix for the owner's 503 — see the findings below), in the deploy window, mind the voice-gate 2 GB headroom rule:
    ```
    cp scripts/setup/systemd/zoe-data.service.d/70-ld-library-path.conf ~/.config/systemd/user/zoe-data.service.d/

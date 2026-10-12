@@ -3653,6 +3653,14 @@ def _purge_speaker_profile(user_id: str) -> bool:
     return True
 
 
+def _enroll_stop_reason() -> str:
+    """Why the running enrolment should stop: "shutdown" (the daemon is going down - NOT the person declining) wins over
+    "tapped_stop" (the person tapped stop); "" while neither is set."""
+    if _shutdown.is_set():
+        return "shutdown"
+    return "tapped_stop" if _enroll_cancel.is_set() else ""
+
+
 def _enroll_say(text: str) -> bool:
     """Speak `text` in Zoe's normal voice (the `/api/voice/speak` waterfall every reply uses) and block until it has played. While the
     TTS sidecar is restarting the server answers 503 or falls to the robot fallback: retry a few seconds for the real voice before
@@ -3738,8 +3746,10 @@ def _run_enrollment_mode(pa) -> None:
         }, timeout=120)
         return bool(resp.get("ok"))
 
-    def report(outcome: str, samples: int) -> None:
-        _api_post("/api/enrollment/result", {"status": outcome, "user_id": uid, "samples": samples}, timeout=10, retries=1)
+    def report(outcome: str, samples: int, reason: str = "") -> None:
+        # `reason` tells the server whether the PERSON stopped it (said_stop / tapped_stop: a "no") or the daemon was shutting down.
+        _api_post("/api/enrollment/result", {"status": outcome, "user_id": uid, "samples": samples, "reason": reason},
+                  timeout=10, retries=1)
 
     log.info("Enrollment mode START (max %.0fs)", max_total)
     _enroll_running.set()
@@ -3751,7 +3761,7 @@ def _run_enrollment_mode(pa) -> None:
         result = _enroll_mode.EnrollmentRun(
             cmd.get("script"), say=_enroll_say, record=lambda: _enroll_record_once(pa), upload=upload, name=name,
             transcribe=stt_on_jetson, report=report,
-            cancelled=lambda: _enroll_cancel.is_set() or _shutdown.is_set(), max_total_s=max_total, log=log.info,
+            cancelled=_enroll_stop_reason, max_total_s=max_total, log=log.info,
         ).run()
     finally:
         _recording_active.clear()

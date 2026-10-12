@@ -2372,6 +2372,14 @@ async def voice_announcement_played(
     updated = await voice_announce.mark_played(
         db, announcement_id=announcement_id, panel_id=str(caller.get("panel_id") or "")
     )
+    if updated:
+        # An enrolment OFFER that was actually heard is the moment its yes/no becomes meaningful (flag-dark; never raises).
+        try:
+            import voice_enrollment
+
+            await voice_enrollment.on_announcement_played(announcement_id)
+        except Exception:  # noqa: BLE001
+            pass
     return {"ok": True, "updated": updated}
 
 

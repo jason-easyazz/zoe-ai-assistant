@@ -58,14 +58,16 @@ _DEFAULT_TTL_S = 120
 # brief because owner presence was seen on ONE panel — another panel's speaker
 # must never play it. arrival.py queues it only for a panel that holds a live
 # device token, so the ids match by construction.
-PANEL_SCOPED_TRIGGERS: tuple[str, ...] = ("morning_checkin_arrival", "voice_profile_forget")
+PANEL_SCOPED_TRIGGERS: tuple[str, ...] = ("morning_checkin_arrival", "voice_profile_forget", "voice_enroll")
 
 # ── Panel COMMANDS riding the same lane (Zoe-driven voice enrolment) ──────────────────────────────────────────────────────
 # A row whose trigger is one of these is not speech: its ``message`` is a JSON object the daemon ACTS on, and the claim returns it
 # as ``command`` with an EMPTY ``text`` - so a daemon that predates commands finds nothing to say (``_speak_announcement`` refuses
 # empty text) and ignores the row, instead of reading JSON aloud. The words the daemon speaks while it acts (the enrolment prompts)
 # are inside the command, written server-side in the member's language: the daemon holds none.
-#   voice_enroll          start the in-daemon enrolment mode for ``user_id`` (a person at the panel said yes / asked for it)
+#   voice_enroll          start the in-daemon enrolment mode for ``user_id`` (a person at the panel said yes / asked for it).
+#                         PANEL-SCOPED above: only the daemon of the panel the member spoke at may claim it - another panel's daemon
+#                         would speak the member's name and enrol whoever stands there next
 #   voice_profile_forget  drop ``user_id``'s voice signature from the daemon's cache and disk NOW, then re-sync (one row per
 #                         panel, PANEL-SCOPED above: every speaker must hear it, and only that panel may claim its own row)
 COMMAND_TRIGGERS: tuple[str, ...] = ("voice_enroll", "voice_profile_forget")
