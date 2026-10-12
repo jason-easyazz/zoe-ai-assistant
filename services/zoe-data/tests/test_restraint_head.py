@@ -63,17 +63,42 @@ def test_the_shipped_head_is_well_formed_and_small():
     assert restraint_head.HEAD_PATH.stat().st_size < 64 * 1024        # a matrix product, not a model: ~10 KB of RAM
 
 
-def test_the_head_was_trained_on_exactly_the_current_dev_split_and_never_on_held_out():
-    """Stale-artefact guard: change the dev data and the head must be retrained (train_restraint_head.py)."""
-    import hashlib
+def _load_eval():
     spec = importlib.util.spec_from_file_location("restraint_eval", REPO / "scripts" / "perf" / "restraint_eval.py")
     ev = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(ev)
+    return ev
+
+
+def test_the_training_fingerprint_changes_when_only_a_label_changes():
+    """Codex P2 (#1996): a texts-only hash stays put when a row's ``classes`` are corrected, so the stale-artefact test would
+    keep accepting weights trained against the old labels."""
+    ev = _load_eval()
+    dev = ev.load_sets()["dev"]
+    base = ev.fingerprint(dev)
+    i = next(k for k, (w, _t) in enumerate(dev) if w)
+    relabelled = list(dev)
+    relabelled[i] = (("affect",) if dev[i][0] != ("affect",) else ("money",), dev[i][1])      # same text, different label
+    assert [t for _w, t in relabelled] == [t for _w, t in dev]
+    assert ev.fingerprint(relabelled) != base
+    plain_to_sens = list(dev)
+    j = next(k for k, (w, _t) in enumerate(dev) if not w)
+    plain_to_sens[j] = (("health",), dev[j][1])
+    assert ev.fingerprint(plain_to_sens) != base
+    # what must NOT matter: row order and the order of classes inside a row
+    assert ev.fingerprint(list(reversed(dev))) == base
+    assert ev.fingerprint([(("money", "health"), "x")]) == ev.fingerprint([(("health", "money"), "x")])
+
+
+def test_the_head_was_trained_on_exactly_the_current_dev_split_and_never_on_held_out():
+    """Stale-artefact guard: change the dev data - text OR a row's labels - and the head must be retrained
+    (train_restraint_head.py). The fingerprint is over canonical (classes, text) rows, the function the trainer records."""
+    ev = _load_eval()
     sets = ev.load_sets()
     dev_texts = sorted(t for _w, t in sets["dev"])
-    sha = hashlib.sha256("\n".join(dev_texts).encode("utf-8")).hexdigest()
     meta = restraint_head._load()[4]
-    assert meta["train_sha"] == sha and meta["n_train"] == len(dev_texts)
+    assert meta["train_sha_scheme"] == ev.FINGERPRINT_SCHEME
+    assert meta["train_sha"] == ev.fingerprint(sets["dev"]) and meta["n_train"] == len(dev_texts)
     norm = lambda s: re.sub(r"\W+", " ", s.lower()).strip()           # noqa: E731
     held = {norm(t) for _w, t in sets["held_out"]}
     assert not held & {norm(t) for t in dev_texts}, "a held-out sentence is in the dev split"
@@ -95,6 +120,49 @@ def test_the_labelled_fixture_is_clean_and_its_splits_are_disjoint():
     # two trivial plain sentences ("set a timer for ten minutes") were written independently into both splits; the
     # loader drops them from held-out, so the fixture may share at most those (negative control: it is a handful, not a leak)
     assert len(d & h) <= 5
+
+
+# ── a damaged model file is "no head", never a crash ────────────────────────────────────────────────────────────────────
+def _write_head(tmp_path, monkeypatch, *, W=None, b=None, thr=None):
+    n = len(CLASSES)
+    W = np.zeros((n, 384), dtype=np.float32) if W is None else W
+    b = np.zeros(n, dtype=np.float32) if b is None else b
+    thr = np.full(n, 0.5, dtype=np.float32) if thr is None else thr
+    npz, meta = tmp_path / "restraint_head.npz", tmp_path / "restraint_head.json"
+    np.savez(npz, W=W, b=b, thr=thr)
+    meta.write_text(json.dumps({"format": restraint_head.FORMAT, "classes": list(CLASSES), "dim": 384,
+                                "embedder": "BAAI/bge-small-en-v1.5"}), encoding="utf-8")
+    monkeypatch.setattr(restraint_head, "HEAD_PATH", npz)
+    monkeypatch.setattr(restraint_head, "META_PATH", meta)
+    restraint_head.reset()
+
+
+def test_a_well_formed_temp_head_loads(tmp_path, monkeypatch):
+    """Control for the malformed cases below: the same writer, correct shapes, loads."""
+    _write_head(tmp_path, monkeypatch)
+    assert restraint_head.available()
+
+
+@pytest.mark.parametrize("which,shape", [
+    ("b", (1,)), ("thr", (1,)), ("b", (len(CLASSES) + 1,)), ("thr", (len(CLASSES) + 1,)),
+    ("b", (len(CLASSES), 1)), ("thr", (1, len(CLASSES))), ("b", ()), ("thr", ()),
+])
+def test_a_wrongly_shaped_bias_or_threshold_is_refused_independently(tmp_path, monkeypatch, which, shape):
+    """Codex P2 (#1996): a wrong shape on EITHER array must refuse the head, whatever the other one is."""
+    _write_head(tmp_path, monkeypatch, **{which: np.zeros(shape, dtype=np.float32)})
+    assert restraint_head._load() is None and not restraint_head.available()
+    assert restraint_head.decide_from_vector(np.ones(384)) == ()
+    restraint_head.set_embedder(_embedder_for({"I am so sad": np.ones(384, dtype=np.float32)}))
+    assert restraint_head.classes("I am so sad", embed=True) == ()      # falls back to the word list: never raises
+
+
+def test_b_and_thr_both_wrong_in_the_same_way_is_the_case_the_chain_let_through(tmp_path, monkeypatch):
+    """``b.shape != thr.shape != (n,)`` is a chained comparison: it rejects only when BOTH adjacent tests are true, so a head
+    whose ``b`` and ``thr`` were both (1,) loaded and silently scored only the first class (broadcast + zip)."""
+    _write_head(tmp_path, monkeypatch, b=np.zeros(1, dtype=np.float32), thr=np.zeros(1, dtype=np.float32))
+    assert restraint_head._load() is None
+    text = "the dentist is on Friday"
+    assert restraint.classify_full(text, head=True) == restraint.classify_full(text, head=False)
 
 
 # ── the head's own math ─────────────────────────────────────────────────────────────────────────────────────────────────

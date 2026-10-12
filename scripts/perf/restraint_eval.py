@@ -74,6 +74,18 @@ def load_sets() -> dict[str, list[tuple[tuple[str, ...], str]]]:
     return {"dev": dev, "held_out": legacy + blind, "held_out: legacy set 3": legacy, "held_out: blind set": blind}
 
 
+FINGERPRINT_SCHEME = "classes+text/1"
+
+
+def fingerprint(items) -> str:
+    """SHA-256 over the canonical ``(classes, text)`` rows (sorted), so correcting a row's LABEL changes it as well as its
+    text. The trainer records it as ``train_sha``; the stale-artefact test recomputes it. Class order inside a row is
+    irrelevant; row order is irrelevant."""
+    import hashlib
+    lines = sorted(",".join(sorted(want)) + "\t" + text for want, text in items)
+    return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
+
+
 def score(items, classify_fn) -> dict:
     """Per-class recall (the labelled class is among the returned ones), strict set-equality, and plain false positives."""
     per = {c: [0, 0, 0] for c in CLASSES}                  # n, hit, strict

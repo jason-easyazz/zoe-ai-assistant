@@ -4,7 +4,7 @@
 One logistic unit per sensitivity class on the L2-normalised bge-small-en-v1.5 embedding (the model ``semantic_router``
 already loads), trained on the DEV split only (``scripts/perf/restraint_eval.py load_sets()["dev"]``). The held-out split is
 never read here. Output: ``services/zoe-data/models/restraint_head.npz`` (W, b, thr) + ``.json`` (format, classes, dim,
-embedder, n_train, train_sha, the per-class cross-validated numbers that chose the thresholds).
+embedder, n_train, train_sha = ``restraint_eval.fingerprint`` over the (classes, text) rows, the per-class cross-validated numbers that chose the thresholds).
 
 Threshold rule (fixed before the run, from the ledger's "0 plain false positives"): for each class, the LOWEST threshold at
 which the head alone fires on at most ``--fp-budget`` of the out-of-fold PLAIN rows (default 1 %); the cross-validation is
@@ -17,7 +17,6 @@ out-of-fold average precision across the classes.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 from pathlib import Path
@@ -104,9 +103,9 @@ def main() -> int:
     out = restraint_head.HEAD_PATH
     out.parent.mkdir(parents=True, exist_ok=True)
     np.savez(out, W=np.asarray(W, dtype=np.float32), b=np.asarray(b, dtype=np.float32), thr=np.asarray(thr, dtype=np.float32))
-    sha = hashlib.sha256("\n".join(sorted(texts)).encode("utf-8")).hexdigest()
+    sha = restraint_eval.fingerprint(dev)              # canonical (classes, text) rows: a relabel changes it, not just a rewrite
     meta = {"format": restraint_head.FORMAT, "classes": list(CLASSES), "dim": int(X.shape[1]), "embedder": EMBEDDER,
-            "n_train": len(texts), "train_sha": sha, "C": C, "fp_budget": args.fp_budget, "cv": cv}
+            "n_train": len(texts), "train_sha": sha, "train_sha_scheme": restraint_eval.FINGERPRINT_SCHEME, "C": C, "fp_budget": args.fp_budget, "cv": cv}
     restraint_head.META_PATH.write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(f"wrote {out} and {restraint_head.META_PATH}")
     return 0

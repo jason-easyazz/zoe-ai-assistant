@@ -224,6 +224,9 @@ round). The repo's answer to that is a small head on the embedding it already co
   stated:** an old row that was never stamped with v3 gets the word list at read time until a restamp (none exists yet).
 * **Trained on the dev split only; thresholds from a rule fixed before the run:** per class, the lowest threshold at which the head ALONE fires on <= 1 % of
   out-of-fold plain rows (5-fold over dev). `C` by mean out-of-fold average precision. Nothing is tuned on the held-out split.
+* **Stale-artefact guard covers labels and shape.** `train_sha` (scheme `classes+text/1`) is `restraint_eval.fingerprint` over the canonical
+  `(classes, text)` dev rows, so relabelling a row invalidates the head as well as rewriting it; the loader checks `W`, `b` and `thr` shapes
+  each against the class count and refuses a damaged file (word list only, never a crash).
 * **English only, enforced.** bge-small-en is an English embedding: the head runs only on text whose detected language (`lexicons.detect`, as the
   rest of restraint) is English; another language's text keeps its lexicon, and its stamp is head-complete (there is nothing for the head to add).
 * **A v3 stamp means the head ran.** `stamp` (and the nightly thread pass) write `VERSION` only when the head actually classified the text (or never applies);

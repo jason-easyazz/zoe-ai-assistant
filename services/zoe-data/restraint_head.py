@@ -73,7 +73,12 @@ def _load() -> Optional[tuple]:
             data = np.load(HEAD_PATH)
             classes = tuple(meta["classes"])
             W, b, thr = (np.asarray(data[k], dtype=np.float32) for k in ("W", "b", "thr"))
-            if meta.get("format") != FORMAT or W.shape != (len(classes), int(meta["dim"])) or b.shape != thr.shape != (len(classes),):
+            # each array is checked against the class count on its own: a chained ``b.shape != thr.shape != (n,)`` only rejects
+            # when BOTH adjacent comparisons are true, so equal-but-wrong shapes (e.g. both (1,)) slipped through and
+            # broadcasting + zip then evaluated just the first class
+            n = len(classes)
+            if (meta.get("format") != FORMAT or W.shape != (n, int(meta["dim"]))
+                    or b.shape != (n,) or thr.shape != (n,)):
                 raise ValueError("restraint head: shape/format mismatch")
             head = (classes, W, b, thr, meta)
         except Exception as exc:  # noqa: BLE001 - an absent or damaged head is "no head", never a broken classifier

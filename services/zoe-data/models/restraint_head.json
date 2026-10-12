@@ -45,5 +45,6 @@
   "format": "zoe-restraint-head/1",
   "fp_budget": 0.01,
   "n_train": 1422,
-  "train_sha": "166b03f77cd2730aca8456960e1ea72dbaf69737d0cb8db2b6d9e38878b6c8a7"
+  "train_sha": "f8ad7ad980876ff0be9e87e66e2736b5cece8b57f962a98f727b8af2efc9b1aa",
+  "train_sha_scheme": "classes+text/1"
 }
