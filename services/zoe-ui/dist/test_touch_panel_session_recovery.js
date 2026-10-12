@@ -99,6 +99,7 @@ function boot(opts = {}) {
   const store = new Map();
   if (opts.session !== null) store.set('zoe_session', JSON.stringify(opts.session || MEMBER));
   if (kiosk) store.set('zoe_kiosk', '1');
+  if (opts.marker !== undefined) store.set('zoe_member_handover_at', String(opts.marker));
   const localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) };
   const sessionStorage = { getItem: () => null, setItem() {}, removeItem() {} };
 
@@ -157,19 +158,20 @@ function boot(opts = {}) {
     PUSH_PING_MS: constValue('PUSH_PING_MS'), PUSH_RETRY_MAX_MS: constValue('PUSH_RETRY_MAX_MS'),
     PANEL_RECOVER_MIN_MS: constValue('PANEL_RECOVER_MIN_MS'), SESSION_DOWNGRADE_MARGIN_MS: constValue('SESSION_DOWNGRADE_MARGIN_MS'),
     PANEL_WATCHDOG_MS: constValue('PANEL_WATCHDOG_MS'), PANEL_DEAF_AFTER_MS: constValue('PANEL_DEAF_AFTER_MS'),
-    PANEL_GUEST_RECLAIM_GRACE_MS: constValue('PANEL_GUEST_RECLAIM_GRACE_MS'), PANEL_HEAL_MIN_MS: constValue('PANEL_HEAL_MIN_MS'), PANEL_RELOAD_MIN_MS: constValue('PANEL_RELOAD_MIN_MS'), PANEL_RELOAD_KEY: 'zoe_panel_watchdog_reload_at',
+    PANEL_GUEST_RECLAIM_GRACE_MS: constValue('PANEL_GUEST_RECLAIM_GRACE_MS'), PANEL_HEAL_MIN_MS: constValue('PANEL_HEAL_MIN_MS'), PANEL_RELOAD_MIN_MS: constValue('PANEL_RELOAD_MIN_MS'), PANEL_RELOAD_KEY: 'zoe_panel_watchdog_reload_at', PANEL_HANDOVER_KEY: 'zoe_member_handover_at',
     buildContext: () => ({}), executeAction: async (a) => { executed.push(a.id); return { status: 'success' }; }, ackAction: async () => {},
     panelMatches: () => true, panelMatchesAuthTarget: () => true, setOrbMode() {}, showAmbientStatus: undefined, _attemptVoiceNavigation() {},
     VoiceOverlay: { onListeningStarted() {}, onTranscript() {}, onThinking() {}, onResponding: (t) => responding.push(t), onDone() {} },
   };
   const names = Object.keys(env);
   const fnNames = ['isExpiredSession', 'isGuestSession', 'getSession', 'getDataApiSession', 'api', 'isKioskContext', 'dataApiSessionId',
-    'sessionNeedsDowngrade', 'dropStoredSession', 'storeSession', 'mintGuestSession', 'pushIsUp', 'ensurePushSocket', 'startServiceWorkerPanelPoll',
+    'sessionNeedsDowngrade', 'noteMemberHandover', 'adoptMemberHandover', 'dropStoredSession', 'storeSession', 'mintGuestSession', 'pushIsUp', 'ensurePushSocket', 'startServiceWorkerPanelPoll',
     'startPanelServices', 'recoverPanelSession', 'stopServiceWorkerPanelPoll', 'stopPanelServices', 'panelAuthFailed', 'handlePanelAuthFailure',
     'reloadPageRateLimited', 'panelWatchdogTick', 'bindPanel', 'syncState', 'pollActions', 'schedulePushReconnect', 'connectPushWebSocket'];
   const fns = new Function(...names, fnNames.map(extract).join('\n') + '\nreturn { ' + fnNames.join(', ') + ' };')(...names.map((n) => env[n]));
   // what init() does on a kiosk
   function start() {
+    fns.adoptMemberHandover();                           // init() does this before bindPanel
     fns.connectPushWebSocket();
     sockets[0].onopen();
     state.pollTimer = clock.setInterval(fns.pollActions, 2000);
@@ -374,6 +376,61 @@ let n = 0; const ok = (m) => { n++; console.log('  ok  ' + m); };
     await t.clock.advance(2000);
     assert.strictEqual(t.state.panelServicesStopped, true, 'outside the grace window a 403 still stops poll+sync');
     ok('F2: the reclaim grace is bounded — a 403 outside it stops as before');
+  }
+
+  // ── G. the handover survives a page load (PR #1999 review) ──
+  // touch/home.html's boot guard drops an EXPIRED member session before the executor runs and a
+  // guest is minted, so the executor boots as a guest with no memory of the member; the server still
+  // holds the panel row for the member for 300 s and refuses the guest (403).
+  const GUEST_LIVE = { session_id: 'guestA', role: 'guest', user_id: 'guest', expires_at: '2026-10-12T09:30:00Z' };
+  {
+    const t = boot({ alive: ['guestA'], session: GUEST_LIVE, marker: Date.parse('2026-10-12T09:00:00Z') - 5000 });
+    t.server.ownerRow = { sid: 'mem1', lastSeen: t.clock.now() - 5000 };
+    t.start();
+    await t.clock.advance(60000);
+    assert(t.server.calls.some((c) => c.url.startsWith('/api/ui/') && !c.sid), 'the guest calls reached the server');
+    assert.strictEqual(t.state.panelServicesStopped, false, 'a boot as guest right after a member handover must ride out the 403s');
+    assert(t.state.pollTimer && t.state.syncTimer);
+    await t.clock.advance(300000);                                   // the member row goes stale
+    t.server.queue.push({ id: 'after-boot-handover', action_type: 'show_card' });
+    await t.clock.advance(4000);
+    assert.deepStrictEqual(t.executed, ['after-boot-handover'], 'delivery resumes once the server lets the guest reclaim');
+    ok('G1: a guest boot inside a persisted handover window keeps retrying through the reclaim 403s, then delivers');
+  }
+  {
+    const t = boot({ alive: ['guestA'], session: GUEST_LIVE });      // no stamp: the pre-fix behaviour
+    t.server.ownerRow = { sid: 'mem1', lastSeen: t.clock.now() - 5000 };
+    t.start();
+    await t.clock.advance(5000);
+    assert.strictEqual(t.state.panelServicesStopped, true, 'with no handover stamp a genuine 403 still stops');
+    ok('G2: without a handover stamp a guest 403 still stops (the grace is only for a real handover)');
+  }
+  {
+    const base = Date.parse('2026-10-12T09:00:00Z');
+    const stale = boot({ alive: ['guestA'], session: GUEST_LIVE, marker: base - 331000 });
+    stale.start();
+    assert.strictEqual(stale.state.guestReclaimUntil, 0, 'a stamp older than the grace opens no window');
+    const junk = boot({ alive: ['guestA'], session: GUEST_LIVE, marker: 'garbage' });
+    junk.start();
+    assert.strictEqual(junk.state.guestReclaimUntil, 0, 'a garbage stamp opens no window');
+    const future = boot({ alive: ['guestA'], session: GUEST_LIVE, marker: base + 10 * 3600000 });
+    future.start();
+    assert(future.state.guestReclaimUntil <= base + 330000, 'a stamp from the future cannot extend the window past the grace');
+    ok('G3: stale, garbage and future stamps are bounded');
+  }
+  {
+    // recoverPanelSession persists the handover, so a reload inside the window re-opens it
+    const exp = Date.parse('2026-10-12T10:00:00Z');
+    const a = boot({ alive: ['mem1'], session: Object.assign({}, MEMBER, { expires_at: ISO(exp) }) });
+    a.start();
+    await a.clock.advance(59 * 60000 + 30000);
+    assert.strictEqual(a.stored().role, 'guest', 'precondition: downgraded');
+    const stamp = a.store.get('zoe_member_handover_at');
+    assert(stamp && Number(stamp) > 0, 'the downgrade persisted a handover stamp');
+    const b = boot({ alive: ['guestA'], session: GUEST_LIVE, marker: Number(stamp) - (59 * 60000 + 30000) });   // same instant, new page (fresh clock origin)
+    b.start();
+    assert(b.state.guestReclaimUntil > b.clock.now(), 'the reloaded page re-opens the window from the stamp');
+    ok('G4: recoverPanelSession stamps the handover; a reloaded page adopts it');
   }
 
   // ── E. a persistent 401 is not a mint loop ──

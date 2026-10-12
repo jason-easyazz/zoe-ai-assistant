@@ -1701,14 +1701,18 @@ async def _broadcast_action_form_panel(
     data: dict,
     title: str = "",
     turn_key: Optional[str] = None,
+    owner_user_id: Optional[str] = None,
 ) -> None:
     """Broadcast a panel_show_action_form event so the touch overlay opens.
 
     panel_type: "calendar_event" | "shopping_list"
     data: pre-fill data dict (slots already parsed)
+    owner_user_id: the member the form is presented for. Bound server-side so the Done
+    (/api/ui/panel/form/confirm) refuses a guest session instead of saving the member's
+    entry under ``guest`` (the push socket that shows the form is not authenticated).
     """
     from panel_form_state import set_active_form
-    set_active_form(panel_id, panel_type, data)
+    set_active_form(panel_id, panel_type, data, owner_user_id=owner_user_id)
 
     delivery_key = turn_key or str(time.monotonic_ns())
     form_action = {
@@ -4189,6 +4193,7 @@ async def voice_command(
                             data=_list_form_data,
                             title=_list_title,
                             turn_key=_turn_key,
+                            owner_user_id=effective_user,
                         )
                     _list_audio = await synthesize({"text": reply_text}, caller=caller)
                     await _schedule_voice_chat_save(session_id, text, reply_text, effective_user, speaker_verified=_speaker_verified)
@@ -4246,6 +4251,7 @@ async def voice_command(
                             data=_cal_form_data,
                             title="New Calendar Event",
                             turn_key=_turn_key,
+                            owner_user_id=effective_user,
                         )
                     _cal_audio = await synthesize({"text": reply_text}, caller=caller)
                     await _schedule_voice_chat_save(session_id, text, reply_text, effective_user, speaker_verified=_speaker_verified)

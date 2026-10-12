@@ -706,6 +706,15 @@ async def confirm_action_form(
     if not panel_type:
         raise HTTPException(status_code=400, detail="panel_type is required")
 
+    # The form was presented for a named member over an unauthenticated push socket; if the
+    # panel has since fallen back to a guest session (PIN session expired), the Done arrives
+    # as guest. Writing it would save the member's entry under "guest" while the panel toasts
+    # "saved" — refuse, keep the form open, and let the member sign in (PR #1999 review).
+    from panel_form_state import confirm_is_misattributed
+    if confirm_is_misattributed(panel_id, user_id):
+        logger.warning("form/confirm refused: panel=%s type=%s guest session for a member's form", panel_id, panel_type)
+        raise HTTPException(status_code=403, detail="Sign in on the panel to save this")
+
     result_text = ""
     try:
         if panel_type == "calendar_event":

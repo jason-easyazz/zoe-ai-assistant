@@ -101,6 +101,11 @@
     // server's anti-hijack rule and stays; the client must simply keep retrying through it
     // instead of treating the expected 403 as "stop serving" (which is the deafness again).
     const PANEL_GUEST_RECLAIM_GRACE_MS = 330000;   // 300 s staleness + 30 s margin
+    // The handover must outlive a page load: touch/home.html's boot guard REMOVES an expired member
+    // session before this script runs (so recoverPanelSession never sees it), and a reload inside
+    // the window wipes state. Whoever drops a member session stamps this key (ms epoch); init()
+    // re-opens the grace window from it (PR #1999 review).
+    const PANEL_HANDOVER_KEY = 'zoe_member_handover_at';
     const AUTO_HOME_TIMEOUT_S = Number(window.ZOE_AUTO_HOME_TIMEOUT_S || 20);
     const HOME_PATH = '/touch/home.html';
 
@@ -415,6 +420,24 @@
         return nowMs >= exp - marginMs;
     }
 
+    function noteMemberHandover(nowMs) {
+        try { localStorage.setItem(PANEL_HANDOVER_KEY, String(nowMs)); } catch (_) { /* storage blocked */ }
+    }
+
+    // Re-open the guest-reclaim grace window from a persisted handover stamp (see
+    // PANEL_HANDOVER_KEY). Bounded: a stamp older than the grace, or garbage, opens nothing.
+    function adoptMemberHandover() {
+        try {
+            const at = Number(localStorage.getItem(PANEL_HANDOVER_KEY));
+            if (!Number.isFinite(at) || at <= 0) return false;
+            const now = Date.now();
+            const until = Math.min(at, now) + PANEL_GUEST_RECLAIM_GRACE_MS;
+            if (until <= now) return false;
+            if (until > state.guestReclaimUntil) state.guestReclaimUntil = until;
+            return true;
+        } catch (_) { return false; }
+    }
+
     function dropStoredSession() {
         try { localStorage.removeItem('zoe_session'); } catch (_) { /* storage blocked */ }
     }
@@ -511,7 +534,10 @@
             // Anything but a live guest session is what the server just refused (or is about to).
             if (stored && (!isGuestSession(stored) || isExpiredSession(stored))) dropStoredSession();
             // A member -> guest handover: the panel row is still the member's until it goes stale.
-            if (stored && !isGuestSession(stored)) state.guestReclaimUntil = Date.now() + PANEL_GUEST_RECLAIM_GRACE_MS;
+            if (stored && !isGuestSession(stored)) {
+                state.guestReclaimUntil = Date.now() + PANEL_GUEST_RECLAIM_GRACE_MS;
+                noteMemberHandover(Date.now());
+            }
             let session = getSession();
             if (!session || !session.session_id || isExpiredSession(session)) {
                 const minted = await mintGuestSession();
@@ -2415,7 +2441,7 @@ body.light-mode .zaf-btn-cancel { background: rgba(0,0,0,0.07); color: rgba(26,2
                         if (formFields[k]) confirmPayload[k] = formFields[k].value;
                     });
                 }
-                await api('/api/ui/panel/form/confirm', {
+                const confirmRes = await api('/api/ui/panel/form/confirm', {
                     method: 'POST',
                     body: JSON.stringify({
                         panel_type: panelType,
@@ -2425,12 +2451,18 @@ body.light-mode .zaf-btn-cancel { background: rgba(0,0,0,0.07); color: rgba(26,2
                         data: confirmPayload,
                     }),
                 });
+                // api() is a bare fetch: a refusal (403 = a guest Done for a member's form after the
+                // PIN session expired; 401 = dead session) must NOT toast "saved" and close the form.
+                if (!confirmRes || !confirmRes.ok) {
+                    if (confirmRes && confirmRes.status === 401) recoverPanelSession('form confirm refused: HTTP 401').catch(() => {});
+                    throw new Error('form confirm refused: HTTP ' + (confirmRes ? confirmRes.status : 'none'));
+                }
                 showToast(panelType === 'shopping_list' ? 'List saved' : 'Event saved');
                 _closeActionForm();
             } catch (err) {
                 confirmBtn.disabled = false;
                 confirmBtn.textContent = panelType === 'shopping_list' ? 'Done' : 'Confirm';
-                showToast('Could not save — please try again');
+                showToast(/HTTP 403/.test(String(err && err.message)) ? 'Sign in on the panel to save this' : 'Could not save — please try again');
             }
         };
 
@@ -2557,6 +2589,9 @@ body.light-mode .zaf-btn-cancel { background: rgba(0,0,0,0.07); color: rgba(26,2
             // same way js/common.js does for desktop pages.
             stopServiceWorkerPanelPoll();
         } else {
+            // A member session dropped before this script ran (home.html boot guard) or by a
+            // page that has since reloaded: the server still holds the panel for the member.
+            adoptMemberHandover();
             bindPanel().catch(() => {});
             syncState().catch(() => {});
             // Prefer the shared push channel from websocket-sync.js to avoid duplicate

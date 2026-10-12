@@ -21,7 +21,13 @@
     // out with a dead id, 401, and the who+PIN card is raised at boot instead
     // of the ambient home. (A PIN member session carries expires_at too — the
     // 60 min passcode TTL, stored by the sign-in handler; older stored ones may not.)
-    if(ok&&s.expires_at&&Date.parse(s.expires_at)<Date.now()){ok=false;try{localStorage.removeItem('zoe_session');}catch(e2){}}}catch(e){ok=false;}
+    // An expired MEMBER session is stamped (zoe_member_handover_at) before it is dropped: the
+    // server keeps the panel row owned by the member for 300 s, so the guest that replaces it
+    // is refused (403) until then, and the executor (which no longer sees the member session)
+    // reads the stamp to ride that window out instead of stopping poll+sync for good.
+    if(ok&&s.expires_at&&Date.parse(s.expires_at)<Date.now()){ok=false;
+      try{if(String(s.role||'').toLowerCase()!=='guest'&&String(s.user_id||'').toLowerCase()!=='guest')localStorage.setItem('zoe_member_handover_at',String(Date.now()));}catch(e3){}
+      try{localStorage.removeItem('zoe_session');}catch(e2){}}}catch(e){ok=false;}
     // Three kiosk signals: the URL, localStorage (ours), and sessionStorage (what
     // js/auth.js keeps on the legacy touch pages) — a bare return navigation from
     // one of those pages must still boot as a kiosk.
@@ -4761,6 +4767,6 @@
     }).catch(function(){});}catch(e){}
 })();
 </script>
-<script src="/js/touch-ui-executor.js?v=estate-6"></script>
+<script src="/js/touch-ui-executor.js?v=estate-7"></script>
 </body>
 </html>

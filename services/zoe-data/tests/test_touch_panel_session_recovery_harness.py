@@ -56,3 +56,16 @@ def test_voice_form_replies_are_gated_on_panel_liveness():
     # the literal tails live ONLY inside the helpers
     assert src.count("Check the panel and tap Done") == 1
     assert src.count("check the details and tap Confirm") == 1
+
+
+def test_form_done_refusal_is_not_toasted_as_saved_and_boot_guard_stamps_the_handover():
+    """PR #1999 review pins (the behaviour itself is in the node harness + test_panel_form_confirm_owner.py)."""
+    ex = (ROOT / "zoe-ui" / "dist" / "js" / "touch-ui-executor.js").read_text()
+    i = ex.index("const confirmRes = await api('/api/ui/panel/form/confirm'")
+    j = ex.index("showToast(panelType === 'shopping_list' ? 'List saved'", i)
+    assert "!confirmRes.ok" in ex[i:j] and "throw new Error" in ex[i:j], "a refused Done must throw before the 'saved' toast"
+    home = (ROOT / "zoe-ui" / "dist" / "touch" / "home.html").read_text()
+    guard = home[: home.index("<style>")]
+    assert "zoe_member_handover_at" in guard and guard.index("zoe_member_handover_at") < guard.index("removeItem('zoe_session')"), \
+        "the boot guard must stamp the member handover BEFORE it drops the expired session"
+    assert "adoptMemberHandover();" in ex
