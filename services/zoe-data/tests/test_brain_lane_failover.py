@@ -18,6 +18,10 @@ import pytest
 
 pytestmark = pytest.mark.ci_safe
 
+# The write-claim guard (brain_dispatch._claim_guarded) holds the first LEAD_TOKENS = 12 words of a unit before releasing them, so a
+# test that needs a chunk to reach the consumer MID-stream opens with a full 12-word chunk.
+_FIRST_CHUNK = "one two three four five six seven eight nine ten eleven twelve "
+
 
 @pytest.fixture(autouse=True)
 def _clean_breaker():
@@ -1207,8 +1211,12 @@ async def test_lane_log_lands_when_the_consumer_disconnects_after_one_chunk(
     monkeypatch.setenv("ZOE_BRAIN_FAILOVER", "1")
     _boom_core(monkeypatch)
 
+    # The write-claim guard holds a unit's first 12 words (write_claim_guard.LEAD_TOKENS) before releasing them, so the first
+    # chunk is a full 12-word opening: it reaches the consumer while the lane is still mid-stream.
+    first = _FIRST_CHUNK
+
     async def long_stream(msg, sid, uid="", **kw):
-        yield "first "
+        yield first
         yield "second "
         yield "third"
 
@@ -1216,7 +1224,7 @@ async def test_lane_log_lands_when_the_consumer_disconnects_after_one_chunk(
 
     with caplog.at_level(logging.INFO, logger="brain_dispatch"):
         gen = bd.brain_streaming("hi", "sess-cut", "jason")
-        assert await gen.__anext__() == "first "
+        assert await gen.__anext__() == first
         await gen.aclose()  # the consumer walks away mid-stream
 
     lines = _lane_lines(caplog)
@@ -1534,14 +1542,14 @@ async def test_flag_off_streaming_consumer_disconnect_still_logs_once(
     _boom_core(monkeypatch)
 
     async def long_stream(msg, sid, uid="", **kw):
-        yield "first "
+        yield _FIRST_CHUNK
         yield "second "
 
     monkeypatch.setattr(zoe_flue_client, "run_flue_brain_streaming", long_stream)
 
     with caplog.at_level(logging.INFO, logger="brain_dispatch"):
         gen = bd.brain_streaming("hi", "sess-off-cut", "jason")
-        assert await gen.__anext__() == "first "
+        assert await gen.__anext__() == _FIRST_CHUNK
         await gen.aclose()
 
     lines = _lane_lines(caplog)
@@ -1796,14 +1804,14 @@ async def test_probe_that_yielded_then_lost_its_consumer_closes_the_breaker(
     release = asyncio.Event()
 
     async def one_delta_then_park(msg, sid, uid="", **kw):
-        yield "first "
+        yield _FIRST_CHUNK
         await release.wait()  # pragma: no cover - the consumer leaves first
         yield "never"  # pragma: no cover
 
     monkeypatch.setattr(zoe_flue_client, "run_flue_brain_streaming", one_delta_then_park)
 
     gen = bd.brain_streaming("probe", "s2", "jason")
-    assert await gen.__anext__() == "first ", "flue answered — the lane is proven"
+    assert await gen.__anext__() == _FIRST_CHUNK, "flue answered — the lane is proven"
     await gen.aclose()  # the consumer walks away mid-stream
 
     assert bd._circuit_open() is False, (
@@ -1877,7 +1885,7 @@ async def test_a_stale_yielded_probe_must_not_erase_a_newer_open(monkeypatch):
     release = asyncio.Event()
 
     async def one_delta_then_park(msg, sid, uid="", **kw):
-        yield "first "
+        yield _FIRST_CHUNK
         await release.wait()  # pragma: no cover - the consumer leaves first
         yield "never"  # pragma: no cover
 
@@ -1888,7 +1896,7 @@ async def test_a_stale_yielded_probe_must_not_erase_a_newer_open(monkeypatch):
     monkeypatch.setattr(zoe_flue_client, "run_flue_brain", refused)
 
     gen = bd.brain_streaming("slow-ok", "s1", "jason")
-    assert await gen.__anext__() == "first "  # A observed a CLOSED breaker
+    assert await gen.__anext__() == _FIRST_CHUNK  # A observed a CLOSED breaker
     assert bd._circuit_open() is False
 
     assert await bd.brain_oneshot("fails", "s2", "jason") == "core answered"

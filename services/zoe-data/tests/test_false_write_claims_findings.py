@@ -79,6 +79,51 @@ def test_is_plausible_item(item, ok):
     assert list_service.is_plausible_item(item) is ok
 
 
+# ── review (#2004, P1): a possessive item ("my passport") is an item, and a REFUSED explicit command is not re-read as a
+# garbled one (the garbled matcher's optional "a" ate the first letter of "add" -> the stored item "dd my passport") ────────
+
+@pytest.mark.parametrize("item", ["my passport", "your book", "my mum's birthday card", "our spare keys", "my reading glasses"])
+def test_a_possessive_noun_phrase_is_a_plausible_item(item):
+    assert list_service.is_plausible_item(item) is True
+
+
+@pytest.mark.parametrize("item", ["my phone is dead", "your dog doesn't like it", "my kids don't know", "your answer was wrong"])
+def test_a_possessive_sentence_is_still_not_an_item(item):
+    assert list_service.is_plausible_item(item) is False
+
+
+@pytest.mark.parametrize("said,item", [
+    ("add my passport to my shopping list", "my passport"),
+    ("add your book to the shopping list", "your book"),
+    ("put my keys on the shopping list", "my keys"),
+    ("Can you add my mum's birthday card to the shopping list", "my mum's birthday card"),
+])
+def test_a_possessive_item_is_stored_clean_on_both_parsers(said, item):
+    i = intent_router.detect_intent(said, log_miss=False)
+    assert i is not None and i.name == "list_add" and i.slots["item"] == item, i
+    # the Skybridge cleaner may drop a leading "my" from the stored text ("my passport" -> "passport"); the point
+    # here is that it is an ADD, not a refusal
+    s = classify_skybridge_intent(said)
+    assert s is not None and s.action == "add_item" and s.item_text in {item, item.split(" ", 1)[1]}, s
+
+
+@pytest.mark.parametrize("said", [
+    "add I don't know where you got that to the shopping list",
+    "add what to the shopping list",
+    "Can you add what to the shopping list",
+    "please add things to my shopping list",
+])
+def test_a_refused_explicit_add_never_falls_into_the_garbled_matcher(said):
+    """The item is refused ('a sentence / a vague noun'): the detector declines, it does not store 'dd what' or 'can you add what'."""
+    i = intent_router.detect_intent(said, log_miss=False)
+    assert i is None or i.name != "list_add", i
+
+
+def test_a_genuinely_garbled_add_still_recovers():
+    i = intent_router.detect_intent("I'd go to council to my work list", log_miss=False)
+    assert i is not None and i.name == "list_add" and i.slots["item"] == "council", i
+
+
 def test_the_old_panel_reply_that_claimed_an_unconfirmed_add_is_gone():
     """voice_tts's list_add panel path said "I've added X … Check the panel and tap Done" while NOTHING was saved until Done
     was tapped (and nobody could tap it). The reply no longer claims the write, and the path is behind the INTENT_GATE."""

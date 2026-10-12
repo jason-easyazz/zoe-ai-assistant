@@ -49,6 +49,15 @@ CLAIMS_EN = [
     ("Added kettle to the shopping list.", ("list",)),
     ("I've made a note of that.", ("note",)),
     ("I've added it.", ()),
+    # review (#2004, P1): the ordinary passive of a completed write
+    ("The appointment was added to your calendar.", ("calendar",)),
+    ("The dentist appointment on Friday at three o'clock was added.", ("calendar",)),
+    ("The milk has now been added to your shopping list.", ("list",)),
+    ("Milk was successfully added to your shopping list.", ("list",)),
+    ("The reminder was set for five o'clock.", ("reminder",)),
+    ("It was added.", ()),
+    ("Oat milk is added to your shopping list.", ("list",)),
+    ("Sure thing, I've added milk to your shopping list.", ("list",)),
 ]
 
 NOT_CLAIMS_EN = [
@@ -64,6 +73,16 @@ NOT_CLAIMS_EN = [
     "I've turned the lights on.",
     "I've set the lights to blue.",
     "Did I add it to your list?",
+    # review (#2004, P1) - the same passive, said honestly: a read of what is ALREADY there, or a denial
+    "It is scheduled for Friday.",
+    "The meeting is booked for Monday at nine.",
+    "Your physio is scheduled for Friday at ten.",
+    "The restaurant was fully booked.",
+    "The restaurant was booked solid on Friday.",
+    "The appointment wasn't added to your calendar.",
+    "Nothing was added to your shopping list.",
+    "Was the appointment added to your calendar?",
+    "The chicken was set aside to cool.",
 ]
 
 CLAIMS_ES = [
@@ -161,13 +180,15 @@ def test_calendar_and_reminder_receipts_back_each_other():
     assert g.guard_text(CALENDAR_CLAIM, "jason", started) == CALENDAR_CLAIM
 
 
-def test_a_claim_with_no_target_is_backed_by_any_receipt_or_a_non_read_tool():
+def test_a_claim_with_no_target_is_backed_by_a_receipt_and_only_a_receipt():
+    """Review (#2004, P1): a tool NAME is not evidence - the start/args sentinel arrives before the tool finishes, and a tool that
+    then FAILED (or an unrelated non-read tool) must not back "I've added it". Only a receipt does."""
     started = wr.begin()
     assert g.guard_text("I've added it.", "jason", started) == HONEST_EN
-    assert g.guard_text("I've added it.", "jason", started, tools_run=frozenset({"people"})) == "I've added it."
-    assert g.guard_text("I've added it.", "jason", started, tools_run=frozenset({"get_weather"})) == HONEST_EN
+    assert "tools_run" not in g.guard_text.__code__.co_varnames and "tools_run" not in g.supported.__code__.co_varnames
     wr.record("jason", "note", "n-1", "test")
     assert g.guard_text("I've added it.", "jason", started) == "I've added it."
+    assert g.guard_text("I've added it.", "someone-else", started) == HONEST_EN
 
 
 def test_only_the_claiming_sentence_is_replaced_and_only_once():
@@ -311,32 +332,67 @@ async def test_stream_leaves_an_ordinary_reply_byte_identical_and_unheld():
 
 
 @pytest.mark.asyncio
-async def test_stream_does_not_hold_text_that_cannot_become_a_claim():
-    """First-audio protection: a sentence that cannot be a claim is released the moment it is known not to be."""
+async def test_stream_releases_a_unit_the_moment_its_first_lead_words_hold_no_claim_verb():
+    """First-audio protection: a unit that has run LEAD_TOKENS words with no claim verb can never become a claim (a claim verb
+    must sit within those words), so everything from there on is released at once - without waiting for the unit to end."""
+    started = wr.begin()
+    seen: list = []
+    opening = "The weather in Perth this afternoon is twenty four degrees and mostly "
+
+    async def inner():
+        yield opening
+        seen.append("after first delta")
+        yield "sunny with a light breeze from the south west. "
+
+    out = []
+    async for piece in g.guard_stream(inner(), "jason", started):
+        out.append(piece)
+        if piece == opening:
+            assert seen == []                 # released BEFORE the next delta was even requested
+    assert "".join(out) == opening + "sunny with a light breeze from the south west. "
+
+
+@pytest.mark.asyncio
+async def test_stream_holds_a_short_opening_until_it_is_known_not_to_be_a_claim():
+    """The other side of the same bound: with fewer than LEAD_TOKENS words seen, a passive claim ("The appointment was added")
+    could still follow, so nothing is released yet - and once the unit ends the whole reply is one clean sentence."""
     started = wr.begin()
     seen: list = []
 
     async def inner():
         yield "The weather "
-        seen.append("after first delta")
+        seen.append("second delta requested")
         yield "is fine. "
 
     out = []
     async for piece in g.guard_stream(inner(), "jason", started):
         out.append(piece)
-        if piece == "The weather ":
-            assert seen == []                 # released BEFORE the next delta was even requested
+        assert seen, "released before the unit's first lead words were in"
     assert out == ["The weather ", "is fine. "]
 
 
 @pytest.mark.asyncio
-async def test_stream_passes_tool_sentinels_and_counts_a_non_read_tool_for_a_generic_claim():
+@pytest.mark.parametrize("tool", ["add_to_list", "people", "add_calendar_event", "get_weather"])
+async def test_stream_a_tool_that_started_but_wrote_nothing_does_not_back_a_generic_claim(tool):
+    """Review (#2004, P1): phase=start / phase=args name the tool BEFORE it finishes. A tool that failed (no receipt) must not
+    let "I've added it." through; the sentinels themselves still pass untouched."""
     started = wr.begin()
-    sentinel = '__TOOL__:{"phase": "start", "id": "1", "name": "people"}'
+    sentinel = '__TOOL__:{"phase": "start", "id": "1", "name": "%s"}' % tool
     out = await _collect(g.guard_stream(_stream(sentinel, "I've added it."), "jason", started))
-    assert out == [sentinel, "I've added it."]
-    out = await _collect(g.guard_stream(_stream("I've added it."), "jason", started))
-    assert "".join(out) == HONEST_EN
+    assert out[0] == sentinel and "".join(out[1:]) == HONEST_EN
+
+
+@pytest.mark.asyncio
+async def test_stream_a_tool_that_started_and_really_wrote_backs_a_generic_claim():
+    started = wr.begin()
+    sentinel = '__TOOL__:{"phase": "start", "id": "1", "name": "add_to_list"}'
+
+    async def inner():
+        yield sentinel
+        wr.record("jason", "list", "item-1", "tool")
+        yield "I've added it."
+
+    assert await _collect(g.guard_stream(inner(), "jason", started)) == [sentinel, "I've added it."]
 
 
 @pytest.mark.asyncio
@@ -416,6 +472,16 @@ STREAM_CORPUS = [
     "Done! I've scheduled the physio for Friday. I've put oat milk on your shopping list.",
     "He añadido leche a tu lista de compras. ¿Algo más?",
     "No pasa nada. Ya agendé la cita en tu calendario, para que no se te olvide.",
+    # review (#2004, P1): a passive, and a claim that does not open its sentence, cut at every position
+    "The appointment was added to your calendar. Anything else?",
+    "Your dentist booking has been added to the calendar.",
+    "Sure thing, I've added milk to your shopping list.",
+    "The milk and the eggs and the bread were all added to your shopping list. Anything else?",
+    "Okay, so I understand that you would like a meeting tomorrow at nine, so I've added it to your calendar.",
+    "The weather in Perth this afternoon is twenty four degrees and mostly sunny, and I've added the beach to nothing. Enjoy!",
+    "Your physio is scheduled for Friday at ten. The restaurant was fully booked. Nothing was added to your list.",
+    "One two three four five six seven eight nine ten eleven twelve I've added milk to your shopping list.",
+    "I went through everything on your list this morning and it all looks fine, the milk was added to your shopping list.",
 ]
 
 
@@ -449,6 +515,50 @@ def test_stream_equals_the_whole_reply_guard_char_by_char_and_word_by_word(reply
     assert _stream_text(reply, range(1, len(reply)), started=started) == want
     word_cuts = [m.end() for m in re.finditer(r"\S+\s*", reply)][:-1]
     assert _stream_text(reply, word_cuts, started=started) == want
+
+
+def test_a_claim_after_a_long_run_up_is_still_caught_in_its_own_clause():
+    """A claim verb must sit within LEAD_TOKENS words of its UNIT - and a long sentence is cut into units at the first comma after
+    that many words, so a chatty run-up does not hide a claim (the run-up is kept, the claiming clause replaced)."""
+    started = wr.begin()
+    reply = "Okay, so I understand that you would like a meeting tomorrow at nine, so I've added it to your calendar."
+    out = g.guard_text(reply, "jason", started)
+    assert out == f"Okay, so I understand that you would like a meeting tomorrow at nine, {HONEST_EN}"
+    wr.record("jason", "calendar", "evt", "t")
+    assert g.guard_text(reply, "jason", started) == reply
+    # the unit bound: a verb 13+ words into a comma-less run-on is beyond what streaming can hold for (documented limit)
+    assert g.find_claim("One two three four five six seven eight nine ten eleven twelve I've added milk to your list.") is None
+
+
+_FUZZ_PHRASES = [
+    "Sure thing,", "Okay.", "I've added milk to your shopping list.", "The appointment was added to your calendar.",
+    "Your dentist booking has been added to the calendar.", "The weather is fine today in Perth and the sun is out,",
+    "It is scheduled for Friday.", "Nothing was added to your list.", "I couldn't add that.", "Done!", "Anything else?",
+    "I've scheduled the physio for Friday at 9 a.m. tomorrow morning.", "so I've put oat milk on your list", "and then",
+    "The restaurant was fully booked.", "one two three four five six seven eight nine ten eleven twelve thirteen,",
+    "He añadido leche a tu lista de compras.", "Ya agendé la cita en tu calendario,", "You added it earlier.",
+    "Oat milk is added to your shopping list.", "Which items were added to your shopping list yesterday evening for the party?",
+]
+
+
+def test_stream_equals_the_whole_reply_guard_for_random_replies_cut_at_random_places():
+    """Property check over generated replies: however the deltas are cut (1-6 random cuts, plus char-by-char), the stream is
+    byte-identical to the whole-reply guard - with and without a receipt."""
+    import random
+
+    rng = random.Random(20261013)
+    for case in range(120):
+        reply = " ".join(rng.choice(_FUZZ_PHRASES) for _ in range(rng.randint(1, 5)))
+        wr.reset()
+        started = wr.begin()
+        if case % 3 == 0:
+            wr.record("jason", "list", "i", "t")
+            wr.record("jason", "calendar", "c", "t")
+        want = g.guard_text(reply, "jason", started)
+        cut_sets = [sorted(rng.sample(range(1, len(reply)), min(len(reply) - 1, rng.randint(1, 6)))) for _ in range(3)]
+        cut_sets.append(range(1, len(reply)))
+        for cuts in cut_sets:
+            assert _stream_text(reply, cuts, started=started) == want, (reply, list(cuts))
 
 
 def test_a_punctuation_only_delta_keeps_the_sentence_boundary():
@@ -529,3 +639,104 @@ async def test_replay_isolation_is_never_guarded(core_lane):
 async def test_guard_kill_switch_restores_the_old_stream(core_lane, monkeypatch):
     monkeypatch.setenv("ZOE_WRITE_CLAIM_GUARD", "off")
     assert "".join(await _collect(bd.brain_streaming("Work.", "s", "jason"))) == CALENDAR_CLAIM
+
+
+# ── 6. receipts belong to their turn (review, #2004, P2) ─────────────────────────────────────────────────────────────────
+
+def test_a_concurrent_turns_write_does_not_back_this_turns_claim():
+    """A panel turn and a chat turn for the SAME user both begin; the chat turn's calendar write must not vouch for the panel
+    turn's narrated one. Each turn runs in its own task context, as two requests do."""
+    import contextvars
+
+    box = {}
+
+    def panel_turn_begins():
+        box["panel"] = wr.begin()
+
+    def chat_turn_begins_and_writes():
+        box["chat"] = wr.begin()
+        wr.record("jason", "calendar", "evt-chat", "calendar_service")      # made INSIDE the chat turn's context
+
+    contextvars.copy_context().run(panel_turn_begins)
+    contextvars.copy_context().run(chat_turn_begins_and_writes)
+    assert box["panel"].turn != box["chat"].turn
+    assert g.guard_text(CALENDAR_CLAIM, "jason", box["chat"]) == CALENDAR_CLAIM        # its own write backs it
+    assert g.guard_text(CALENDAR_CLAIM, "jason", box["panel"]) == HONEST_EN            # ... and is invisible to the other turn
+    assert wr.has("jason", box["panel"], "calendar") is False and wr.has("jason", box["chat"], "calendar") is True
+
+
+def test_a_write_with_no_turn_context_still_counts_for_every_turn_of_the_user():
+    """The brain's tool calls reach zoe-data as a separate HTTP request - no turn context. Counting such a receipt for the
+    user's turns is the safe direction: it can never block a TRUE claim."""
+    import contextvars
+
+    box = {}
+    contextvars.copy_context().run(lambda: box.update(a=wr.begin()))
+    contextvars.copy_context().run(lambda: box.update(b=wr.begin()))
+    contextvars.Context().run(lambda: wr.record("jason", "calendar", "evt-dispatch", "intent-dispatch"))   # an empty context
+    assert g.guard_text(CALENDAR_CLAIM, "jason", box["a"]) == CALENDAR_CLAIM
+    assert g.guard_text(CALENDAR_CLAIM, "jason", box["b"]) == CALENDAR_CLAIM
+
+
+def test_a_recap_question_may_stand_on_an_earlier_turns_write():
+    import contextvars
+
+    box = {}
+    contextvars.copy_context().run(lambda: (box.update(old=wr.begin()), wr.record("jason", "list", "i-1", "t")))
+    started = contextvars.copy_context().run(wr.begin)
+    recap = "Yes, I added oat milk to your shopping list."
+    assert g.guard_text(recap, "jason", started, user_text="Did you add the oat milk?") == recap
+    assert g.guard_text(recap, "jason", started, user_text="Tell me a joke") == HONEST_EN
+
+
+@pytest.mark.asyncio
+async def test_the_stream_guard_uses_the_turns_own_receipts():
+    import contextvars
+
+    box = {}
+
+    def other_turn():
+        box["other"] = wr.begin()
+        wr.record("jason", "calendar", "evt-x", "t")
+
+    mine = contextvars.copy_context().run(wr.begin)
+    contextvars.copy_context().run(other_turn)
+    out = await _collect(g.guard_stream(_stream(CALENDAR_CLAIM), "jason", mine))
+    assert "".join(out) == HONEST_EN
+    out = await _collect(g.guard_stream(_stream(CALENDAR_CLAIM), "jason", box["other"]))
+    assert "".join(out) == CALENDAR_CLAIM
+
+
+def test_receipts_stay_per_user_across_turns():
+    box = {}
+    import contextvars
+
+    contextvars.copy_context().run(lambda: (box.update(t=wr.begin()), wr.record("someone-else", "calendar", "e", "t")))
+    assert g.guard_text(CALENDAR_CLAIM, "jason", box["t"]) == HONEST_EN
+
+
+@pytest.mark.asyncio
+async def test_text_held_back_is_not_lost_when_the_lane_fails_mid_stream():
+    """The guard holds a unit's first words; if the lane dies after them (failover / transport error), what was generated is
+    still released - judged - before the error propagates, exactly as an unguarded stream would have delivered it."""
+    started = wr.begin()
+
+    async def inner():
+        yield "Your next meeting is "
+        raise RuntimeError("lane died")
+
+    got = []
+    with pytest.raises(RuntimeError):
+        async for piece in g.guard_stream(inner(), "jason", started):
+            got.append(piece)
+    assert "".join(got) == "Your next meeting is "
+
+    async def claiming():
+        yield "I've added milk to your shopping list"
+        raise RuntimeError("lane died")
+
+    got = []
+    with pytest.raises(RuntimeError):
+        async for piece in g.guard_stream(claiming(), "jason", started):
+            got.append(piece)
+    assert "".join(got) == HONEST_EN                      # an unfinished claim is still judged, not leaked

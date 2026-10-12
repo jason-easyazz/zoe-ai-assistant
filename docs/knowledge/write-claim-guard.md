@@ -53,16 +53,33 @@ chat, Telegram, LiveKit). `_claim_guarded` wraps the lane stream (`write_claim_g
   `booked`; `put/set/saved/created/made` only with a target noun), target nouns per kind (list / calendar / reminder / timer /
   note), openers, `other_targets` (contacts, memory, lights, playlist… - not this guard's kinds), and blockers (negation,
   irrealis, future, "want me to"). Questions, offers, refusals and promises are never claims; a 2nd-person subject ("you
-  added") is not; "is scheduled for Friday" describes the calendar and is not (a passive needs `been`).
+  added") is not. A claim verb counts in the active ("I've added") and the completed passive: `been` ("has been added") and
+  `was` / `were` ("The appointment was added to your calendar") - the latter needs a target noun unless the verb is `added`,
+  so "The restaurant was fully booked" claims nothing. "is scheduled for Friday" describes the calendar and is not a claim
+  (it is how an honest read-back of an existing event sounds); only "is added" is (`state_claim` in the lexicon).
 * **Verdict**: a claim naming kinds needs a receipt of every kind since the turn began (calendar and reminder back each
   other; a recap question - "did you add the milk?" - may stand on a write from the last 30 min). A claim naming no target
-  ("I've added it") is backed by any receipt or by any non-read tool having run this turn.
+  ("I've added it") is backed by any receipt - and only a receipt. A tool's NAME is not evidence: the stream's `phase=start` /
+  `phase=args` sentinels arrive before the tool has finished, so a tool that then failed (or an unrelated non-read tool)
+  must not let "I've added it" through (review, #2004).
 * **Action**: the claiming sentence is replaced - once per reply - by the language's honest line ("I didn't manage to add
   that; want me to try again?"), and `WRITE_CLAIM_BLOCKED action=replaced lane= user= lang= kinds= reason=no_receipt` is
   logged (kinds and counts only: the sentence is household text). `shadow` logs `action=shadow` and changes nothing.
-* **Streaming**: a sentence is held only while its words so far could still open a claim (claim-opening words, or a claim
-  verb has arrived); every other sentence is released at once, in its original deltas, so first audio on an ordinary reply is
-  untouched. Tool sentinels pass through and tell the guard which tools ran.
+* **Units and streaming**: a reply is judged in units - a sentence, or (once a sentence has run `LEAD_TOKENS` = 12 words)
+  the part of it up to its next comma / semicolon / colon / dash. A claim verb must sit in the first 12 words of its unit. So
+  the stream can decide from those 12 words alone whether a unit can ever become a claim: it holds a unit until then (or until
+  it ends), and releases everything after at once, in its original deltas. Because the units and the verb bound are functions
+  of the text, never of the cut, the streamed output is byte-identical to `guard_text` of the whole reply at every cut
+  (`tests/test_write_claim_guard.py`: every single cut, char-by-char, word-by-word, and a seeded random property test).
+  The cost: a sentence's first words reach a text-chat listener up to ~12 words later (about 0.35 s at the brain's decode
+  rate); the voice path's first speakable unit is not delayed at all (it waits for a sentence end or ~60 characters anyway -
+  simulated against `voice_tts._extract_first_unit`). Limit: a claim verb 13+ words into a unit with no comma / dash / full
+  stop before it is not seen - in either mode. Tool sentinels pass through untouched.
+* **Turn binding**: `write_receipts.begin()` mints a turn id bound to the calling context (`contextvars`); `record` stamps each
+  receipt with the turn of the context it runs in; a verdict counts only its own turn's receipts and unstamped ones. A panel
+  turn and a chat turn overlapping for one user therefore cannot vouch for each other's in-process write. A brain TOOL write
+  (a separate `/api/system/intent-dispatch` request) is unstamped and counts for every turn of the user - the safe direction;
+  closing it needs the turn id echoed on the dispatch call (ledgered).
 
 ## Parser and gate fixes that came with it
 

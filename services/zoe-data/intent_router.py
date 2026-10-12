@@ -1366,7 +1366,10 @@ def detect_intent(
     # If the utterance ENDS with "to my <known> list", treat it as an add and
     # strip the garbled lead-in. Bare navigation ("go to my work list") leaves
     # no item text, so it still falls through to the LIST SHOW/OPEN patterns.
-    m = re.match(
+    # An utterance that OPENS with an explicit "add|put" was parsed by the patterns above; if they refused its item (a sentence,
+    # a vague noun) it is declined, NOT re-read here: the optional "a" lead-in would eat the first letter of "add" and store
+    # "dd my passport" (review, #2004).
+    m = None if _EXPLICIT_LIST_CMD_RE.match(t) else re.match(
         r"^(?:i'?d|id|and|at|it|hey|a)?\s*(?:go to |goto )?(.+?) "
         r"to (?:the |my )?(shopping|grocery|groceries|todo|to do|to-do|personal|work|bucket|tasks?)"
         r" list[.!?]?$",
@@ -2393,6 +2396,9 @@ def _extract_simple_calendar_slots(text: str) -> Optional[dict]:
     except Exception as exc:  # noqa: BLE001 - the NLU path still follows
         logger.debug("simple calendar slots unavailable: %s", exc)
         return None
+
+
+_EXPLICIT_LIST_CMD_RE = re.compile(r"^(?:(?:can|could) you |please )?(?:add|put)\b")
 
 
 def _normalize_list(raw: str) -> str:

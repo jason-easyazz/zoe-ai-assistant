@@ -48,7 +48,17 @@ _NON_ITEM_LEADS = frozenset({
     "i", "i'm", "im", "i've", "i'd", "i'll", "you", "you're", "we", "we're", "they", "he", "she", "it", "it's", "that",
     "that's", "this", "what", "what's", "why", "how", "who", "when", "where", "which", "is", "are", "was", "were", "am",
     "don't", "dont", "didn't", "doesn't", "isn't", "can't", "cant", "won't", "wouldn't", "couldn't", "if", "because",
-    "but", "actually", "no", "yes", "yeah", "nope", "oh", "my", "your", "there", "here", "let's", "lets",
+    "but", "actually", "no", "yes", "yeah", "nope", "oh", "there", "here", "let's", "lets",
+})
+# A possessive opener ("my passport", "your book", "our spare keys") starts a perfectly good item; it starts a SENTENCE only when a
+# verb-ish word follows ("my phone is dead", "your dog doesn't like it"). Review (#2004): rejecting every "my …" made "add my
+# passport to my shopping list" fall into the garbled matcher and store "dd my passport".
+_POSSESSIVE_LEADS = frozenset({"my", "your", "our"})
+_SENTENCE_WORDS = frozenset({
+    "is", "are", "was", "were", "am", "be", "been", "has", "have", "had", "will", "would", "could", "should", "can", "cannot",
+    "do", "does", "did", "don't", "dont", "doesn't", "didn't", "isn't", "aren't", "wasn't", "weren't", "can't", "cant",
+    "won't", "wouldn't", "couldn't", "shouldn't", "i", "i'm", "i've", "i'll", "i'd", "you", "you're", "you've", "we", "they",
+    "he", "she", "it", "it's", "that's", "because",
 })
 MAX_ITEM_WORDS = 12
 # Nouns that name no item at all ("add things to the list") - never stored.
@@ -97,7 +107,10 @@ def is_plausible_item(item: str) -> bool:
         return False
     if text.lower() in _VAGUE_ITEMS:
         return False
-    return words[0].lower().strip(",;:") not in _NON_ITEM_LEADS
+    lead = words[0].lower().strip(",;:")
+    if lead in _POSSESSIVE_LEADS:
+        return len(words) > 1 and not any(w.lower().strip(",;:") in _SENTENCE_WORDS for w in words[1:])
+    return lead not in _NON_ITEM_LEADS
 
 
 async def create_list_record(
