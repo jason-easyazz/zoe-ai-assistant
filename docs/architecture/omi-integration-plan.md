@@ -1,18 +1,172 @@
 ---
 type: architecture-plan
 date: 2026-09-25
-status: 📝 proposal — research done, nothing built, no flags exist yet
+updated: 2026-10-12
+status: 🔨 owner chose "record on the pendant, sync when in range of Zoe" (2026-10-12) — phase 1 built flag-dark (services/omi-sync + zoe-data omi_recordings); the real pendant runs firmware 3.0.18 (below the ring protocol) so the 3.0.18 file path is opt-in and a firmware update is the recommended route (section 4.10); hardware-only facts still UNVERIFIED (section 0.3a); the live-stream path (sections 4a-6) is now the LATER path, not the first
 owner: W6 (attributed ambient capture) — samantha-evolution-plan.md; program block B9 below
 audience: Jason + every agent picking up the Omi work
 ---
 # Omi wearable → Zoe: integration plan
 
-> **One line.** Treat the Omi pendant as a *roaming microphone for Zoe*, not as a product:
-> pendant → BLE → a small Linux receiver → Opus decode + VAD → the **existing**
-> `/api/voice/ambient` ingest on the Orin (Moonshine) → **owner-only, speaker-ID-gated**
-> `ambient_memory` rows → the existing admission gate + consolidation. Nothing touches
-> Omi's cloud, the phone app is not in the loop, and a stranger's voice leaves no trace.
-> This is the delivery vehicle for **W6** and it inherits every W6 prerequisite.
+> **One line (2026-10-12).** The pendant pairs with **Zoe, not the Omi phone app**. Jason records on
+> the pendant away from home (on stock firmware "recording" = the pendant is powered on); when he
+> comes within Bluetooth range of the panel Pi, a small flag-dark service drains the pendant's SD
+> ring, decodes Opus to 16 kHz, uploads each recording to zoe-data, and frees the ring **only after
+> zoe-data confirms it stored that recording**. Moonshine transcribes it locally; it is filed as
+> **his** recording — reviewable, deletable, kept out of fact extraction until reviewed. Nothing
+> touches Omi's cloud. Section 0 is the decision and its evidence; section 4 is the design and the
+> operator runbook.
+>
+> *The earlier one-liner (live-stream to `/api/voice/ambient`, speaker-gated `ambient_memory`) is
+> sections 4a-6 below — still the later "ambient" path, no longer the first thing built.*
+
+## 0. Owner decision 2026-10-12 — record on the pendant, sync when in range of Zoe
+
+### 0.1 The decision
+
+The pendant **pairs with Zoe (the panel Pi), not the Omi phone app.** Jason records on the pendant
+away from home; when he is within Bluetooth range of the panel Pi, Zoe downloads what the pendant
+stored, transcribes it locally with Moonshine, and files it as **his recordings** (reviewable,
+deletable). Fully private: no audio and no transcript goes to Omi. On stock firmware "recording" is
+simply *the pendant is powered on* (a 3 s hold powers it off); a true press-to-record toggle is a
+later firmware phase (section 4.9).
+
+This **supersedes the live-stream bridge as the first thing built.** The live path (sections 4a-6:
+BLE notify stream → `/api/voice/ambient`, speaker gate, `ambient_memory`) is kept as the later
+"ambient" path and keeps its own gates; nothing in it is deleted by this decision.
+
+### 0.2 Why the phone app is rejected (evidence recorded 2026-10-12)
+
+| Claim | Evidence |
+|---|---|
+| The store app sends transcripts to Omi **even with a custom STT** configured | Observed in the owner's 2026-10-12 investigation of the store build (custom STT is a setting — `app/lib/pages/settings/transcription_settings_page.dart` — but the conversation/transcript still posts to Omi's conversation backend). Recorded here as the owner's finding; not re-derived line-by-line in this PR. |
+| Offline (SD ring) audio goes **only** to Omi's servers | The phone app's ring sync writes each downloaded chunk into its local WAL "so it reaches the cloud" (`app/lib/services/wals/ring_storage_sync.dart`, the flush comment before `inFlightFlush`) and the WAL upload is the `/v1/sync-local-files` route on Omi's backend (`app/lib/backend/http/api_edge_throttle_telemetry.dart`). There is no local-only sink. |
+| The **custom server option is compiled out of release builds** | `app/lib/pages/settings/developer.dart:389` shows the custom-backend field only `if (!kReleaseMode)`, and `app/lib/env/backend_url_override.dart:27` restores a saved override only when `runtimeAllowed = !kReleaseMode`. A store build always talks to `https://api.omi.me/` (`app/lib/env/env.dart`, `productionApiBaseUrl`). Self-hosting would mean building and sideloading our own app. |
+| The "data protection" encryption is **server-side**, not end-to-end | `backend/utils/encryption.py`: the per-user key is `HKDF(ENCRYPTION_SECRET, salt=uid)` — derived from a master secret held in the backend's environment. Omi can read what it "protects". |
+
+Together with the earlier findings (section 3, option B: the self-hosted backend still needs
+Firebase/GCS/Pinecone/OpenAI; one bonded central only) the conclusion stands: **no phone app in
+the path.** Un-pairing it is an operator step (4.7).
+
+### 0.3 Protocol and hardware facts — verified vs still to verify
+
+**Verified from Omi's MIT source on 2026-10-12** (`omi/firmware/omi/src/lib/core/storage.c`,
+`app/lib/services/devices/ring_protocol.dart`, `omi_connection.dart`,
+`app/lib/services/wals/PENDANT_RING_CUSTODY.md`; full list in `services/omi-sync/THIRD_PARTY_NOTICES.md`):
+
+- The storage service/characteristics (the earlier plan marked these UNVERIFIED — now confirmed):
+  service `30295780-4301-eabd-2904-2849adfeae43`; `…81` is **write + notify** (commands in, ACK/INFO/READ data
+  out); `…82` is **read + notify**, returning a 16-byte status (four little-endian u32: used bytes, unread
+  records, free bytes, rtc-valid).
+- Commands (first byte, big-endian integers): `0x10` INFO, `0x11` READ `[start:u64][count:u32?]`, `0x12`
+  ADVANCE `[seq:u64]`, `0x13` CLEAR (**never sent by Zoe**), `0x03` STOP; custody firmware adds `0x14`
+  (live-persist opt-in, unused here) and `0x15` ADVANCE_ID `[ring_id:u64][seq:u64]`.
+- Notifications: `0x01` ACK `[status]` (6 invalid command, 9 storage not ready, 10 seq out of range, 11 ring-id
+  mismatch), `0x02` INFO (31 bytes legacy; 41 with custody tail `[caps][version][ring_id]`), `0x03` DATA
+  (raw bytes, **not aligned to record boundaries**), `0x04` DONE `[status][next_seq:u64]`, `0x05` READ_BEGIN
+  `[start:u64][count:u32]`.
+- A record is **444 bytes = 4-byte big-endian timestamp + 440-byte payload** packed `[size:1][frame:size]…`
+  with zero padding; bit 31 of the timestamp means "seconds since boot, RTC unset". Opus codec id **21** on the
+  CV1 = 320 samples / 20 ms at 16 kHz (the lab receiver's finding, unchanged).
+- Ring commands need firmware **≥ 3.0.20** (DIS `2A26`); the sync service never sends a ring command below it
+  (3.0.18, which is what the owner's pendant runs, gets the separate opt-in legacy path — 0.3a). `main`'s `omi.conf`
+  reports `CONFIG_BT_DIS_FW_REV_STR="3.0.21"`.
+- Time sync: write a `uint32` **little-endian** epoch to `19b10031-…`; read it back from `19b10032-…`.
+- **Stock firmware advances its own ring pointer as the link layer acknowledges data** (`sync_checkpoint_advance` in
+  `storage.c`) — the custody contract's `CAP_APP_ACK_RECLAIM` (firmware never frees on its own; only ADVANCE
+  frees) exists in a firmware PR, not in the source snapshot read. That is why the Pi keeps a durable spool
+  (4.2) rather than trusting the pendant to hold what it has already delivered.
+
+### 0.3a Real-device bring-up, 2026-10-12 (VERIFIED on the owner's pendant, read-only)
+
+From the panel Pi (`zoe-pi`, Pi 5, BlueZ 5.66); nothing was written to any application characteristic. Evidence: the
+bring-up record `~/.zoe/agent-tools/omi_bringup_2026-10-12.md` (btmon traces, full GATT table) and its probe script.
+
+- **The pendant is `Omi CV 1`, hardware `5.0`, FIRMWARE `3.0.18`** — BELOW the 3.0.20 the ring protocol needs. The source
+  tree's `3.0.21` is not what this unit runs. The ring commands therefore do not apply to it (4.2 explains the other path;
+  4.10 the update option). Static random address, advertises service `19b10000-…`.
+- **Pairing is not needed and nothing is bonded** (`Paired: no`). The pendant's SMP Security Request is answered "not
+  supported" by BlueZ and the link carries on; the GATT table has no encrypted permissions. Do not register an agent.
+- **A BlueZ-initiated connection fails at this range** — every one of 24 attempts ended `Connection Timeout 0x08`. Cause: the
+  panel sees the pendant's adverts at **-88 to -96 dBm**, and BlueZ creates the link with a **420 ms supervision timeout**,
+  which expires during the dozens of ATT round-trips of service discovery. **The recipe that worked 4/4:** create the LE link
+  yourself with a long supervision timeout — `sudo hcitool lecc --random <addr>` (32 s timeout, 18.75 ms interval) — then
+  attach bleak to the already-connected device, no scan, no pairing; retry with backoff (1 attempt in 6 stalls for a
+  minute). The pendant then negotiates ATT MTU 498, data length 251, a 15 ms interval and a 4 s timeout on its own. This is
+  implemented in `ble_link.connect` (`OMI_SYNC_LECC`, `OMI_SYNC_LECC_PREFIX`). `hcitool` is deprecated; a better
+  mechanism (BlueZ `main.conf` `[LE] ConnectionSupervisionTimeout` after clearing the per-device params, or an mgmt
+  `conn-param` load) was **not tried** — the command is configurable so it can be swapped. A USB BLE dongle with an
+  external antenna, or a few metres' less distance, would help reliability more than any of it.
+- One connection at a time (`CONFIG_BT_MAX_CONN=1`): **if the phone app is connected, Zoe cannot be.** Unpairing the phone
+  app stays a required operator step.
+- **Services verified present** (UUIDs match the source): storage `30295780-4301-eabd-2904-2849adfeae43` with `…81`
+  (write + notify) and `…82` (read + notify); audio `19b10001` (read, notify) / codec `19b10002` (read); button
+  `23ba7925` (read, notify); time sync `19b10031` (write) / `19b10032` (read); settings `19b10011/12/13`; features
+  `19b10021`; haptic `cab1ab96` (write); MCUmgr **SMP service `8d53dc1d-1db7-4cd3-868b-8a527460aa84`** (OTA — never touched).
+- **Device clock is stale**: `19b10032` read `2026-06-25 05:45 UTC` and ticking in real seconds, i.e. never synced by a
+  phone. Recording timestamps from this unit are therefore months behind unless the clock is set (4.2, "times").
+- Features bitmask `0x1EC` = button, battery, haptic, **offline storage**, LED dimming, mic gain (no speaker, no
+  accelerometer, no USB). Battery 93-94 %.
+- **Audio notifications: 0 packets in 5 s in a quiet room** (twice). Expected from the hardware VAD (`T5838` AAD sleeps the
+  mic after 10 s under the threshold) — not a fault, and not what this design reads anyway (it reads the stored files, not
+  the live stream). Do not treat silence as failure.
+- **Codec characteristic reads `0x0f` (15).** The source says `CODEC_ID 21` (`0x15`) for the CV1 and `20` for the DevKit
+  at every revision I could read (`config.h` has not changed since 2025-10-07, `transport.c` returns that macro) — **id 15
+  is not defined in any revision I could find**, and the app has no mapping for it. Unresolved. The sync service therefore
+  refuses an unknown codec id unless the operator sets `OMI_SYNC_ASSUME_CODEC` (21 expected), derives durations from the
+  decoded audio rather than the id, and **holds** any recording whose frames do not decode (the raw records stay in the
+  spool; nothing is uploaded or lost).
+
+**What firmware 3.0.18 speaks** (read from `storage.c` at the commit that shipped it, `5cee930fbb`, 2026-05-04; the
+app's `storage_sync.dart` / `omi_connection.dart` are the client): the **multi-file SD protocol**, not the ring. Status
+read `[used_bytes][file_count][0][0]` (LE u32); `0x10` LIST_FILES → one notification `[count]([ts u32 BE][size u32 BE])*`;
+`0x11` READ_FILE `[index][offset u32 BE]` → notifications `[ts u32 BE][440 bytes]` then a single byte `100`; `0x12`
+**DELETE_FILE** (the same byte that is ADVANCE on the ring protocol!); `0x03` STOP. **The firmware deletes each file
+itself the moment its last byte is notified** (unless it is the file currently being recorded), with no app
+acknowledgement and no way to defer. So on 3.0.18 the app **cannot** gate the free: "never free before a confirmed save"
+holds only as far as the **Pi's durable spool** (every block fsynced before anything else; the spool outlives the
+pendant's copy). That is why this path is **opt-in** (`OMI_SYNC_LEGACY_FILES=1`, default off), covers exactly 3.0.18 (3.0.19
+changed `storage.c` and was not read), never sends 0x12, and why the preferred fix is the firmware update (4.10).
+Files can be resumed (we pass the offset of the next unspooled block); an interrupted file is not deleted.
+
+**Still UNVERIFIED — to be measured on the device with the owner present (4.7, `python -m omi_sync check`):**
+
+1. That 3.0.18 behaves exactly like the `storage.c` at `5cee930fbb` on the wire — **the whole legacy drain is unproven on
+   hardware** (it is tested only against a fake pendant built from that source). In particular the LIST notification
+   carries every file only if it fits one notification (MTU-3 = 495 bytes → at most 61 files; what the firmware does with more
+   is unknown), and whether each READ notification really is one 440-byte block at MTU 498 (a different size aborts the
+   read and sends STOP rather than misalign).
+2. Whether files recorded while the clock was unset are renamed to real timestamps when the clock is written
+   (`sd_notify_time_synced`'s comment says so) — i.e. whether `OMI_SYNC_SET_DEVICE_TIME=1` repairs the times of audio already on
+   the card, or only of audio recorded afterwards. Until then such recordings carry `time_quality: estimated`.
+3. What codec `0x0f` is (above) and whether the frames in the files decode with libopus as Opus FS320.
+4. Whether the SD files fill up / what the card's real capacity in hours is (the legacy status read reports `free_bytes = 0`
+   — the firmware has a TODO there), and how many files accumulate per day (the 60 s "continue threshold" splits files).
+5. Real drain throughput over the marginal link (~14 MB/h of Opus), and whether the pendant keeps recording to the card
+   while connected.
+6. Battery life with continuous SD writes (the vendor's 10-14 h is a claim).
+7. Whether the DFU in 4.10 works from the Pi at this range (the OTA streams ~425 KB over the same marginal link).
+8. For ring firmware (once updated): everything the earlier list asked — the RTC across power cycles, capacity,
+   `dropped_records`, and whether INFO byte 31 advertises the custody capabilities (expected `0x00` on stock).
+
+### 0.4 Consequences for the consent posture (read this before wearing it near other people)
+
+The older sections made a storage-OFF firmware variant **mandatory** for the no-trace guarantee (section 5,
+B9.0). **This design requires the ring ON**, so that guarantee is **not offered** on stock firmware: the pendant
+records whatever is said near it while powered, and the ring holds it until the Pi drains it. What the
+design does instead:
+
+- It is the **owner's device, worn by the owner**; recordings are attributed to the owner only
+  (`ZOE_OMI_OWNER_USER_ID`), and only the owner can list, read or delete them (admin does not widen it).
+- Every transcript is stored **`speaker_state='unverified'`, `reviewed=0`** (other voices may be in it) and **nothing
+  else reads the table** — no fact extraction, recall, digest or prompt — until a reviewed-promotion step exists
+  (guarded by a static test).
+- **Audio is deleted right after transcription** unless he keeps it; any WAV that remains expires after 7 days
+  (`ZOE_OMI_AUDIO_RETENTION_DAYS`); transcripts live until he deletes them; "forget" (a name or the whole user)
+  redacts/erases them (4.4).
+- The legal question (WA Surveillance Devices Act 1998 s5/s9 for guests; Q5 in section 8) is **still open and is not
+  answered by this design.** Until it is, the honest posture is: wear it alone / with people who know, and prefer
+  the phase-2 press-to-record firmware (4.9) before wearing it in company.
 
 ## 1. Goal
 
@@ -126,7 +280,260 @@ Sub-options inside (A) — the receiver:
 | Raspberry Pi Zero 2 W ("dock" in the room Jason works in) | ~$15 + PSU/case ([spec](https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/): 4×A53, 512 MB, BT 4.2 BLE) | yes | **Second**, only if the panel's placement doesn't cover where the pendant lives. bleak+opuslib+Silero-ONNX fit in <150 MB; no speaker-ID on it (embedding happens on the Orin) |
 | The Orin itself | $0 if its M.2 card has BT (open question §8) | maybe | Avoid: keeps BlueZ + another daemon on the box whose RAM is the program's ceiling; the receiver should be dumb and elsewhere |
 
-## 4. Recommendation (one architecture)
+## 4. Recommendation — record on the pendant, sync when in range (built 2026-10-12, flag-dark)
+
+### 4.1 Shape
+
+```
+ Omi CV1 (records to its SD card while powered; talks to the panel Pi, NOT to a phone; no bond)
+     │   in BLE range of the panel Pi
+     ▼
+ omi-sync  (services/omi-sync, panel Pi, own process + unit, OMI_SYNC_ENABLED)
+     │  hcitool lecc (long supervision timeout) → bleak → DIS 2A26 → firmware ≥ 3.0.20: ring INFO/READ;
+     │  3.0.18 only with OMI_SYNC_LEGACY_FILES=1: LIST_FILES/READ_FILE → spool (SQLite, fsync) → segment → Opus→16 kHz WAV
+     │  POST /api/omi/recordings  (X-Device-Token; X-Omi-Key = ring.firstSeq-lastSeq; X-Omi-Sha256)
+     ▼
+ zoe-data  (omi_recordings.py, ZOE_OMI_SYNC_ENABLED + ZOE_OMI_OWNER_USER_ID)
+     │  verify sha256 → fsync WAV → INSERT omi_recordings (source='omi', provenance='recording', unverified)
+     │  200 {ok, sha256 echo}  ◄── this answer is the ONLY thing that lets the Pi free the pendant
+     ▼
+ Pi: delete the spooled records + staged WAV → (ring firmware only) ADVANCE the ring to the confirmed frontier → "I've synced N" notice
+ zoe-data (background, off the voice path): Moonshine in ~20 s chunks → transcript on the row → WAV deleted (unless kept)
+```
+
+### 4.2 Pi side — `services/omi-sync/` (its own contract: `services/omi-sync/AGENTS.md`)
+
+- **A separate process**, not a thread in `zoe_voice_daemon.py`: a BlueZ fault cannot reach the voice path. Unit template
+  `scripts/setup/systemd/omi-sync.service` (user unit, operator opt-in, `Nice=10`, 300 MB cap, swap 0). Flag
+  `OMI_SYNC_ENABLED` default off: the process logs once and exits 0.
+- **Connection** (`ble_link.connect`): no scan, no pairing, no agent. `sudo -n hcitool lecc --random <addr>` creates the LE
+  link with a 32 s supervision timeout (BlueZ's own 420 ms default kills it at this range — 0.3a), bleak attaches to the
+  already-connected device, up to 2 attempts per cycle in the run loop (5 for `check`) with the half-open link dropped
+  (`hcitool ledc`) between tries; a failed cycle is the normal "not in range" answer. Needs privilege for `hcitool`:
+  a narrow sudoers line (4.7) or `OMI_SYNC_LECC_PREFIX`. `OMI_SYNC_LECC=0` is the plain bleak connect.
+- **Which path** (`engine.Drain.run`, from DIS `2A26`): **≥ 3.0.20 → `ring`** (below); **exactly 3.0.18 → `legacy`, only with
+  `OMI_SYNC_LEGACY_FILES=1`** (the firmware frees files itself — 0.3a); anything else is **refused before a single storage
+  command is sent** (`0x12` means ADVANCE on one protocol and DELETE_FILE on the other, so an unverified version gets
+  GATT reads only). An unknown codec id is refused unless `OMI_SYNC_ASSUME_CODEC` names one.
+- **Ring session**: refuse an unknown record size (≠ 444) → `0x10 INFO` → read from `max(ring read pointer, highest seq already
+  spooled + 1)` → reassemble 444-byte records from the unaligned DATA stream, **committing each batch of 64 to the spool
+  before anything else** → verify READ_BEGIN/DONE agree with what arrived → segment, decode, upload → ADVANCE.
+- **Legacy session** (3.0.18, opt-in): `LIST_FILES` → for each file oldest first, `READ_FILE [index][offset of the next
+  unspooled 440-byte block]` → every notification must be exactly `[ts][440 bytes]` (else STOP and keep what arrived — a
+  misaligned stream is never guessed at) → the block is stored in the spool as a 444-byte record (so segmentation, decoding
+  and upload are shared) under the label `f<hex ts>`, block number = seq → on `100` re-`LIST` (the firmware deleted the finished
+  file, indices shift) and **seal** the label if the file is gone. The file still being recorded is not deleted by the
+  firmware and stays open (its tail is held until quiet); a file is the firmware's own recording unit, so it is split
+  only by length, never by a wall-clock gap between sessions. No ADVANCE exists on this path. No delete is ever sent.
+- **Time**: all records of a legacy file hang off ONE anchor (the file's timestamp corrected by the clock offset, or the sync
+  time minus the file's length when the clock is unusable), and the audio itself supplies the spacing.
+- **Writes to the pendant**: exactly one, flag-gated and OFF by default — `OMI_SYNC_SET_DEVICE_TIME=1` writes the host epoch to
+  `19b10031` **once at the start of a session** when the clock is more than 2 s off (or unreadable), after the offset was
+  measured (so audio already on the card is still corrected by the old offset). Everything else the service writes is the
+  list/read/advance/stop commands above.
+- **Undecodable audio is held**: if more than 20 % of a recording's frames fail to decode (or none do) it is not uploaded; the raw
+  records stay in the spool and `undecodable` shows in the session summary.
+- **Custody rule** (ported from Omi's own `PENDANT_RING_CUSTODY.md`): audio is freed from the pendant only after Zoe
+  confirms it stored that recording. `engine.advance_target` is a pure function of confirmed state: the end of the
+  contiguous run that starts at the pendant's read pointer (so a record never received is never freed), capped at the
+  first record still waiting for Zoe. A dropped link, a refused READ, an inconsistent DONE, Zoe down, a rejected
+  recording: **none advances anything.** `CMD_RING_CLEAR` has no encoder in the code and is asserted absent on the wire.
+- **Stock-firmware caveat (both paths):** stock firmware frees audio on delivery — records as the link layer acknowledges
+  them on the ring, a whole file at its last byte on 3.0.18 — so the spool, not the pendant, is the custody there (0.3a).
+  The one residual exposure is a crash (or a lost SD card) on the Pi between BlueZ receiving a notification and the batch
+  commit (bounded by the 64-record batch) — and, for 3.0.18, the Pi's disk holding the only copy until Zoe confirms. Custody firmware (INFO caps `0x01`, ring_id `0x08`) is
+  supported when advertised: ADVANCE becomes the incarnation-scoped `0x15`, and a ring restart is a new
+  incarnation. Stock firmware has no incarnation id, so a write pointer that falls *below* a seq already held is
+  treated as a new ring (`ring_label`).
+- **Idempotent resume:** records are keyed `(device, ring, seq)`; a re-sent record is ignored, a confirmed range is a
+  tombstone, and a recording key is `ring.firstSeq-lastSeq` — content-determined. A drop mid-drain followed by a
+  resume yields byte-identical recordings to an uninterrupted drain (tested against a control run).
+- **Segmentation** (`recordings.segment`, deterministic): a recording ends at a seq hole, a wall-clock gap > `OMI_SYNC_GAP_S`
+  (90 s) or `OMI_SYNC_MAX_RECORDING_S` (600 s ≈ 19 MB of WAV). The newest recording stays **open** (not uploaded, not
+  freed) until it has been quiet for the gap, or hit the cap; a tail we have not caught up with (a dropped READ) is held
+  however old it is, so a recording is never uploaded truncated and split in two.
+- **Times:** the record's own epoch is trusted only if plausible; the clock offset (device − host) is read at connect and
+  corrected for (`time_quality: device | corrected`); an unset RTC (uptime flag, or a pre-2023 epoch, or a ≥ 12 h offset)
+  falls back to `estimated` (receive time minus the audio still queued behind the record). The quality travels with the
+  recording. **The owner's pendant is 109+ days behind** (0.3a), so until its clock is set (`OMI_SYNC_SET_DEVICE_TIME`,
+  a flag-gated write — 4.2 "Writes to the pendant") everything it already holds will be `estimated`: the right order and
+  length, but only "around the time of the sync".
+- **Local files:** `~/.zoe-omi-sync/spool.sqlite3` (records, mode 0600, WAL + `synchronous=FULL`) and `outbox/` (staged WAVs,
+  deleted on confirmation). The pendant's address never leaves the Pi — uploads carry a one-way hash of it.
+
+### 4.3 Zoe side — `services/zoe-data/omi_recordings.py` + `routers/omi_recordings.py` (migration 0045)
+
+- `POST /api/omi/recordings` — **device-token only** (a session cannot upload). Attributed to `ZOE_OMI_OWNER_USER_ID`
+  (a device token authenticates the device, not a person; unset → 503). Verifies the body's SHA-256, validates a
+  16 kHz mono 16-bit WAV, writes the file (tmp + fsync + rename, 0600), inserts the row, and only then answers
+  `{"ok": true, "sha256": <echo>}`. Idempotent by `(user, device, key)`; the same key with different bytes is a 409,
+  never an overwrite; a key the owner already deleted is acknowledged (tombstone), never resurrected.
+- `GET/PATCH/DELETE /api/omi/recordings[/{id}]` — **owner only** (admin role does not widen it).
+- Each row: `source='omi'`, `provenance='recording'`, the **recording time from the pendant timestamps**
+  (`started_at`/`ended_at`, `time_quality`), `gap_before`, `speaker_state='unverified'`, `reviewed=0`.
+- **Transcription** (background `run_loop`, flag-gated): the existing Moonshine path
+  (`routers.voice_tts._transcribe_audio(…, capture=False)` — no panel push, no corpus), ~20 s chunks cut at the
+  quietest 100 ms, silent chunks skipped (Moonshine hallucinates on silence). **Defers** — leaving the recording
+  pending, never failing it — when the night window is open (the `WINDOW_OPEN` marker or household-local
+  02:30–04:30), within 45 s of a voice turn, or under `ZOE_OMI_MIN_MEM_MB` (1500) of `MemAvailable`; it yields the
+  Moonshine lock between chunks, so a live turn waits at most one chunk. Three attempts, then `failed` (audio kept
+  until its retention expiry). No new model, no new RAM tenant.
+- The voice path is untouched: no `VOICE_PATH_PATTERNS` file changes, so the replay gate does not front this PR.
+
+### 4.4 Retention, review, forgetting
+
+- Audio: deleted right after a successful transcription unless `keep_audio` (PATCH, or `ZOE_OMI_KEEP_AUDIO=1`);
+  anything that remains expires after `ZOE_OMI_AUDIO_RETENTION_DAYS` (default 7). Transcripts: kept until deleted.
+- `DELETE` removes the audio, the transcript and the times; a content-free tombstone remains so a Pi retry is
+  acknowledged. `MemoryService.delete_user` tombstones all of a member's recordings; the forget cascade
+  (`forget Dana`) redacts the name to `[forgotten]` in transcripts and drops that recording's audio (the audio still
+  holds the spoken name); a transcript that lands after a forget is redacted against the ledger first. All of it
+  runs through `user_erase_gate`.
+- **Kept out of fact extraction until reviewed** — nothing reads the table (static test). "Reviewed → promoted" is a later step.
+
+### 4.5 Telling the owner
+
+After a session that confirmed ≥ 1 recording the Pi calls `POST /api/omi/sync-notice {count}`; zoe-data writes one
+`notifications` row (type `omi_sync`) and broadcasts `notification_created` — the existing bell path — "I've synced 3
+recordings from your pendant." Rate-limited to one per minute; best-effort (losing it loses nothing).
+
+### 4.6 Flags and configuration
+
+| Where | Name | Default | Meaning |
+|---|---|---|---|
+| Pi | `OMI_SYNC_ENABLED` | off | the service does nothing, exits 0 |
+| Pi | `OMI_PENDANT_ADDRESS` (`OMI_PENDANT_ADDR_TYPE`) | — (`random`) | the pendant's BLE address (never uploaded); the CV1 uses a static random address |
+| Pi | `ZOE_URL`, `DEVICE_TOKEN`, `VERIFY_SSL` | — | same as the voice daemon |
+| Pi | `OMI_SYNC_LECC`, `OMI_SYNC_LECC_PREFIX` | on, `sudo -n` | create the link with `hcitool lecc` (the recipe that works at range); how to run it privileged |
+| Pi | `OMI_SYNC_LEGACY_FILES` | **off** | opt in to the firmware-3.0.18 file protocol (the pendant frees each file itself on delivery) |
+| Pi | `OMI_SYNC_ASSUME_CODEC` | unset | decode as this codec id when the pendant reports one we do not know (it reports `0x0f`; 21 expected) |
+| Pi | `OMI_SYNC_SET_DEVICE_TIME` | **off** | the one WRITE to the pendant: set its clock once per session when it is >2 s off |
+| Pi | `OMI_SYNC_GAP_S` / `_MAX_RECORDING_S` / `_SCAN_INTERVAL_S` / `_COOLDOWN_S` / `OMI_SYNC_DIR` | 90 / 600 / 30 / 120 / `~/.zoe-omi-sync` | tuning |
+| zoe-data | `ZOE_OMI_SYNC_ENABLED` | off | routes absent (404), no loop |
+| zoe-data | `ZOE_OMI_OWNER_USER_ID` | — | whose pendant; unset = uploads 503 |
+| zoe-data | `ZOE_OMI_AUDIO_DIR`, `_AUDIO_RETENTION_DAYS`, `_KEEP_AUDIO`, `_MIN_MEM_MB` | `~/.zoe/omi-recordings`, 7, off, 1500 | storage + gates |
+
+### 4.7 Operator runbook (the owner present; nothing here is done by the build agent)
+
+1. **Unpair the Omi phone app** (the pendant takes ONE connection at a time; a phone app that auto-connects would hold it).
+   In the app remove/forget the pendant (and, if you want the cloud copy gone, delete the Omi account/data); then in the
+   phone's Bluetooth settings "Forget" the pendant. Nothing is bonded to the Pi: **do not pair** (the 2026-10-12 bring-up
+   read everything with `Paired: no`, and the sync service never pairs). Make sure the pendant is powered on.
+2. **Allow the link-creation command.** The service runs `sudo -n hcitool lecc --random <addr>` and `hcitool ledc <handle>`.
+   Either the Pi user already has passwordless sudo (the bring-up used it), or add a narrow rule, e.g. in
+   `/etc/sudoers.d/omi-sync`: `<pi-user> ALL=(root) NOPASSWD: /usr/bin/hcitool lecc *, /usr/bin/hcitool ledc *`; or grant the
+   capabilities instead (`sudo setcap cap_net_raw,cap_net_admin+eip $(readlink -f $(which hcitool))`, set
+   `OMI_SYNC_LECC_PREFIX=""`) — **the setcap route is untried**. This is an operator change to the Pi, not done by the build.
+3. **Install the service** (from a git worktree, not the live checkout): copy `services/omi-sync/omi_sync/` to
+   `~/.zoe-omi-sync/app/`, `python3 -m venv ~/.zoe-omi-sync/venv`, `~/.zoe-omi-sync/venv/bin/pip install -r
+   services/omi-sync/requirements.txt`, `sudo apt install libopus0`. Create `~/.zoe-omi-sync/.env.omi` (mode 0600):
+   `OMI_PENDANT_ADDRESS=E4:A3:57:6C:8D:0D` (the owner's pendant, from the bring-up — use your own if it differs),
+   `ZOE_URL=…`, `DEVICE_TOKEN=…` (the voice daemon's), `VERIFY_SSL=0` if self-signed — and leave `OMI_SYNC_ENABLED`
+   **unset** for now.
+4. **Read-only device check** — safe on the real pendant (GATT reads plus ONE list query: `LIST_FILES` on the verified 3.0.18,
+   `INFO` on ring firmware; it cannot READ, ADVANCE, DELETE, CLEAR or write the clock; an unverified firmware gets GATT reads
+   only):
+   `cd ~/.zoe-omi-sync/app && set -a && . ~/.zoe-omi-sync/.env.omi && set +a && ~/.zoe-omi-sync/venv/bin/python3 -m omi_sync check`
+   Expect `found: true`, `model "Omi CV 1"`, `firmware "3.0.18"`, `legacy_file_protocol_verified: true`, `drain_path`
+   saying legacy-files is opt-in and BLOCKED on the unknown codec `15`, `storage_status` / `files` (how much is on the card
+   and how many files), `device_clock.offset_s` (about −109 days ⇒ untrusted). Paste that JSON in the PR — it closes
+   items of the UNVERIFIED list in 0.3a. `python3 -m omi_sync status` (no Bluetooth) shows what the config resolved to.
+   **Decision point** — pick ONE: (a) update the firmware first (4.10) and use the ring path; or (b) accept the legacy path:
+   its custody is the Pi's spool only, so add to `.env.omi` `OMI_SYNC_LEGACY_FILES=1`, and `OMI_SYNC_ASSUME_CODEC=21` once you
+   have judged (4.10, "the codec question") that the audio decodes; optionally `OMI_SYNC_SET_DEVICE_TIME=1` (a write to the
+   pendant's clock — fixes timestamps of everything recorded after it).
+5. **Zoe side:** in `services/zoe-data/.env` set `ZOE_OMI_SYNC_ENABLED=1` and `ZOE_OMI_OWNER_USER_ID=<his user id>`;
+   apply migration 0045 (the normal deploy path); restart zoe-data outside the 02:30–04:30 window and poll `/health`.
+   Check the route exists but is gated: `curl -s -o /dev/null -w '%{http_code}' -X POST $ZOE_URL/api/omi/recordings` → `401`
+   (flag off would be `404`).
+6. **Enable and watch the first drain:** set `OMI_SYNC_ENABLED=1` in `.env.omi`, install the unit
+   (`cp scripts/setup/systemd/omi-sync.service ~/.config/systemd/user/ && systemctl --user daemon-reload && systemctl --user
+   enable --now omi-sync`), `journalctl --user -u omi-sync -f`. Expect one `sync:` line per visit
+   (`path=legacy|ring uploaded=N undecodable=0 … advanced_to=…`; `advanced_to` is ring-only). A `refused=` or `undecodable=`
+   is the service declining on purpose — read its `notes`. **First drain with the owner present and the pendant a few metres
+   from the Pi** (marginal link). Then `GET /api/omi/recordings` as him shows the recordings; transcripts follow within a
+   minute or two of the next transcription pass (not in the night window).
+7. **Off / rollback:** `systemctl --user disable --now omi-sync`; unset `ZOE_OMI_SYNC_ENABLED` and restart zoe-data (the
+   routes vanish; rows stay). Do **not** delete `~/.zoe-omi-sync/spool.sqlite3` casually: it can hold audio the pendant
+   has already freed.
+
+### 4.8 Tests (all `ci_safe`, no hardware)
+
+`tests/unit/test_omi_sync_protocol.py` (ring parser on fixture bytes, firmware gate, time resolution, segmentation),
+`tests/unit/test_omi_sync_engine.py` (the custody rule against a faithful fake pendant: no ADVANCE without a confirmed
+upload; advance stops at the first unconfirmed recording; drop-and-resume equals an uninterrupted run, key for key and
+byte for byte; stock firmware that frees records itself loses nothing; lost ADVANCE ack; ring-id and legacy commands;
+never CLEAR; **the 3.0.18 legacy-file path** against a fake pendant built from the firmware source — refused by default,
+unknown codec refused until assumed, never a delete/ADVANCE byte on the wire, the spool is the custody when Zoe is down,
+drop-and-resume at the right block equals a clean run, the file being recorded stays open, a stale pendant clock gives
+`estimated` times, misaligned blocks stop the read, undecodable audio is held; the clock is written only with the flag and only
+at the start), `tests/unit/test_omi_sync_check.py` (the read-only check touches nothing, per firmware; the connection
+recipe's argv; no pairing in the module; flag-dark entry point),
+`services/zoe-data/tests/test_omi_recordings.py` (auth, owner-only, idempotency, tombstone, the digest-echo
+confirmation checked against the Pi's own classifier, transcription gates, retention, forgetting, the static "nothing
+else reads it" guard). Break-the-fix: in-test `test_control_*` monkeypatch controls plus the source mutations listed in
+each file's docstring.
+
+### 4.9 Not built here (phase 2 and later)
+
+- **Phase 2 — press-to-record firmware.** A button toggle that gates the mic and the ring writes (haptic acknowledgement,
+  LED), built from Omi's open firmware (nRF Connect SDK; UF2 / BLE-OTA flashable; the stock UF2 kept to hand). It makes
+  "recording" a deliberate act, restores a real consent posture (section 5), and is the right moment to adopt the
+  custody-capable firmware (`CAP_APP_ACK_RECLAIM`, `ring_id`) so the pendant never frees on its own. Needs the pendant's
+  hardware facts from 0.3 first.
+- **Speaker gate on recordings** (the section-5 machinery applied to a recording instead of a live segment) and a
+  **reviewed → promoted** path into the memory admission gate. Until then the table is read by nothing.
+- **Live-stream / ambient (sections 4a-6)** and push-to-talk (B9.7).
+- A UI for the recordings (today: API only).
+
+### 4.10 Firmware update (NOT done by this PR — an owner decision) and the codec question
+
+**Why update:** the pendant runs 3.0.18; the ring protocol (incremental, resumable, `ADVANCE`-aware, and the base of the
+custody contract) needs ≥ 3.0.20, and the source's `CODEC_ID` is 21 where this unit reports `0x0f`. Latest official:
+**3.0.21** (`Omi_CV1_v3.0.21`, published 2026-08-05, changelog "fix audio sync issue").
+
+**The device offers it:** the MCUmgr **SMP** service `8d53dc1d-1db7-4cd3-868b-8a527460aa84` (characteristic
+`da2e7828-fbce-4e01-ae9e-261174997c48`, write-without-response + notify) is exposed (the firmware config enables it:
+`CONFIG_NCS_SAMPLE_MCUMGR_BT_OTA_DFU=y`). The phone app's update is exactly this: `GET https://api.omi.me/v2/firmware/latest?device_model=…&
+firmware_revision=…&hardware_revision=…&manufacturer_name=…` returns `{"version":"3.0.21","zip_url":"https://github.com/BasedHardware/omi/
+releases/download/Omi_CV1_v3.0.21/Omi_CV1_OTA_v3.0.21.zip","ota_update_steps":["battery","internet"],…}`, the app downloads the
+zip, and uploads its images over SMP (`mcumgr_flutter`). The release assets (GitHub API, 2026-10-12):
+`Omi_CV1_OTA_v3.0.21.zip` 424 966 bytes, `sha256:9fb93885e4d31b0836ed1d1047c9fde32b8fb477f94cd9d222246254492d3674` (plus the
+two `.hex` full images, which are NOT the OTA artefact).
+
+**Steps from the Pi (written down, none executed):**
+1. Fetch the zip from the GitHub release URL directly (not from Omi's backend — that call tells Omi the model, firmware and
+   hardware revision, which this design otherwise never does; to learn the URL without it, read the release page) and
+   **verify the sha256 above**. Unzip: `manifest.json` names the image `.bin`s (an application image and, if present, a network-core
+   image) built and signed with Omi's MCUboot key; the pendant's bootloader verifies the signature, so an unsigned/foreign image
+   is refused at boot and the old one kept.
+2. Pendant at >50 % battery (it is 93 %), on its charger if possible, **within ~2 m of the Pi** (the OTA moves ~425 KB over a link
+   that is marginal at the panel's distance; retries are built into SMP but a stall mid-upload is the likeliest failure),
+   unpaired from the phone app, nothing else connected.
+3. Use an SMP client over BLE: Intercreate's `smpmgr` (Python, bleak-based; the PyPI package exists, its source is not in the
+   opensrc cache) or Zephyr/Nordic `mcumgr` with the BLE transport. **The command lines are not given here on purpose — they
+   were not run and their syntax was not verified;** read each tool's `--help`/docs first. Both need the same long-
+   supervision-timeout link as `ble_link.connect` (create it with `hcitool lecc` first); the SMP characteristic is
+   write-without-response + notify.
+4. `image list` → `image test <hash>` (swap on next boot, **revert if not confirmed**) → `reset` → reconnect → check
+   DIS firmware reads 3.0.21 and `python -m omi_sync check` is healthy → `image confirm`. If it does not come back or the check
+   fails, power-cycle: MCUboot reverts an unconfirmed image.
+**Risks (general MCUboot/OTA behaviour — none of this was exercised on this unit):** an upload that dies midway only touches
+the secondary slot; a power loss during the swap is the one risky instant (hence battery + charger); the nRF5340 has a
+network core, and a mismatch between application and network images is a way to brick it, so use ONLY the official OTA zip;
+the **update changes the storage protocol** (the SD files already on the card follow whatever the new firmware does with
+them — **drain the card with the legacy path first if that audio matters**); the clock and settings may reset; and no
+3.0.18 image is known to be published, so going back is not an option. The app's developer flash page is the alternative, but
+it brings the phone app back into the loop.
+
+**The codec question.** Before `OMI_SYNC_ASSUME_CODEC=21`: the cheapest check is the live stream — wear the pendant, speak,
+and subscribe to `19b10001` for a few seconds with `omi_bringup_2026-10-12_probe.py` (it printed 0 packets in a quiet room; the
+hardware VAD needs sound), then decode the first payloads with libopus: `opus_packet_get_samples_per_frame` tells the true
+frame length (160 = 10 ms, 320 = 20 ms) regardless of the id, and a clean decode of 16 kHz speech confirms Opus. The sync service
+does the same implicitly (durations come from the decoded PCM, a recording that does not decode is held, not uploaded). A
+firmware update to 3.0.21 should make the id read 21.
+
+## 4a. The live-stream architecture (the later path — superseded as the first build by section 4)
 
 ```
  Omi CV1 ──BLE (Opus 16k/32kbps, 20 ms)──► omi-bridge (on the Pi panel; later a Pi Zero 2 W dock)
@@ -296,6 +703,11 @@ Two consequences for the design, neither of which is legal advice:
 
 ## 6. Phases and gates (lab first, flag-dark)
 
+> **2026-10-12:** these phases (P0–P5) are the **live-stream / ambient** path. The first thing built is the
+> sync-in-range path of section 4 (its own phase 1, flag-dark, gates in 4.8; phase 2 = press-to-record firmware,
+> 4.9). P0's lab measurements (packet loss, WER on the live stream) are not a prerequisite for the sync service —
+> the ring is read in bulk, not streamed — but the hardware numbers in 0.3 are.
+
 Every phase is flag-dark until its gate passes; every flag defaults off and lands in the
 flag inventory via the pre-commit hook. **Every phase from P1 on is replay-gated
 (MANDATORY, per `AGENTS.md`)**: P1 edits `zoe_voice_daemon.py` and `/api/voice/ambient`,
@@ -368,6 +780,9 @@ Named so nobody reads a measurement into a guess. Each is closed by the phase li
 
 ## 7. Program block — B9 (registered as B9 in the program tracker, PR #1680)
 
+> **2026-10-12:** the tracker's B9 entry now leads with **B9.1b/B9.2b, the sync-in-range service** (section 4); the
+> block below is the earlier live-stream decomposition and stays as the later path (B9.2-B9.5 as written).
+
 The program tracker `beat-the-bar-2026-program.md` lands in PR #1680; this block is the
 B9 entry for it, kept here verbatim so the plan stays self-contained, and pointed to from
 `docs/PLANS.md` (Ambient voice) so the work is discoverable before the tracker merges.
@@ -433,6 +848,15 @@ Sequencing line for §4 of the program: `B0.1 ─> B9.1 ─> B9.2 ─> (B4.1, B4
 
 ## 8. Open questions for Jason
 
+**Answered 2026-10-12:** Q2 — the phone app is **rejected** and gets un-paired (0.2, runbook 4.7 step 1). The
+design choice that follows from it is made (section 0.1). Still open: Q1 (read the model string — the device
+check prints it), Q3 (range from the panel), Q4/Q5 (consent posture and the legal check — now *more* pressing,
+because the stock ring records in company: 0.4), and the new Q9 below.
+
+9. **Which Pi hosts the sync service, and does the pendant live near it?** The panel Pi's placement decides how
+   often the pendant is "in range" (a 5–10 m BLE radius through walls). If he only comes home to a room the panel
+   does not cover, a Pi Zero 2 W dock in that room is the answer (the same service runs there; ~AU$40).
+
 1. **Which device is it?** Read the BLE model string (`Omi CV 1` expected). If it is a
    DevKit 2 the storage protocol, SoC and speaker answers in §2 change.
 2. **Is the Omi phone app in use now?** The pendant bonds to **one** central. Using Zoe
@@ -460,7 +884,7 @@ Sequencing line for §4 of the program: `B0.1 ─> B9.1 ─> B9.2 ─> (B4.1, B4
 
 | Risk | Why it is real | Mitigation |
 |---|---|---|
-| Stock firmware records to SD regardless of Zoe | `CONFIG_OMI_ENABLE_OFFLINE_STORAGE=y`, continuous ring; clearing on connect only deletes the past | B9.0: `omi-zoe` variant with storage off is **mandatory**; lab-only wear until flashed; never drain a stock ring |
+| Stock firmware records to SD regardless of Zoe | `CONFIG_OMI_ENABLE_OFFLINE_STORAGE=y`, continuous ring; clearing on connect only deletes the past | **Superseded for the sync-in-range path (0.4):** that path *needs* the ring on and drains a stock ring by design — the mitigation is owner-only wear, unverified/unreviewed transcripts nothing reads, audio deleted after transcription, delete/forget, and the phase-2 press-to-record firmware before wearing it in company. For the live-stream path the original B9.0 (storage-off variant mandatory) still stands |
 | Guest words retained | WA SDA s5/s9 | discard-unknown + a real mixed-speaker detector + no-text shadow + stranger test (incl. device ring) as hard gates; legal check before P3 |
 | Shadow mode itself leaks text | today's `/ambient` inserts every transcript under the panel owner | `source=omi` gets its own handler; Moonshine is not called until attribution is on; tested with a zero-call mock |
 | Speaker gate mis-attributes | Omi's own 0.45 raw cutoff proved unreliable | margin rule + one embedder end-to-end + shadow week + two negative controls |
@@ -469,7 +893,7 @@ Sequencing line for §4 of the program: `B0.1 ─> B9.1 ─> B9.2 ─> (B4.1, B4
 | Firehose of ambient audio | always-on mic → Moonshine load on the Orin | AAD sleeps the mic; Silero segmenter; session toggle; per-day cap flag (`ZOE_AMBIENT_OMI_MAX_MIN_PER_DAY`) |
 | Orin RAM | CPU-torch resemblyzer on first use ≈ +0.3–0.5 GB | sherpa-onnx embedder (B4.1) for the gate; measure in P2; B0.1 first |
 | BLE drop/reconnect | SDK never sees disconnects (#13290); one bonded central | own `disconnected_callback` + backoff; un-pair the phone app |
-| Checkpoint-advance-while-transmitting bug on drain | observed on stock CV1 (omi-collector) | P5 only; advance on confirmed bytes; keep pendant still |
+| Checkpoint-advance-while-transmitting on drain | stock firmware frees records as the link acknowledges them (`storage.c` `sync_checkpoint_advance`; also observed by omi-collector) | the **durable spool** (4.2): a record is committed locally before anything else; custody firmware (`CAP_APP_ACK_RECLAIM`) closes the residual window; ADVANCE only on Zoe-confirmed state |
 | Bricking a $129 device | custom firmware | UF2 is drag-drop-recoverable and the CV1 exposes its debug interface; build the *devkit*-free minimal change (one Kconfig line) and keep the stock UF2 to hand |
 | Licence contamination | omi-collector is PolyForm NC | read for protocol, write our own bridge; Omi's own SDK/firmware are MIT |
 | Second identity stack creeps in | Omi's speech profiles / "People" | none of Omi's identity code is used; profiles stay in `speaker_profiles` under the retention policy |

@@ -114,6 +114,12 @@ async def cascade_forget(user_id: str, name: str, *, db=None) -> CascadeResult:
         await commitments.erase_entity(user_id, rx)
     except Exception as exc:  # noqa: BLE001
         logger.debug("memory_forget_cascade: commitments not cleared (%s)", type(exc).__name__)
+    try:  # a pendant transcript naming the forgotten entity has it redacted, and its audio goes (omi_recordings.py)
+        import omi_recordings
+
+        await omi_recordings.erase_entity(user_id, rx)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("memory_forget_cascade: omi recordings not redacted (%s)", type(exc).__name__)
     logger.info("memory_forget_cascade: user=%s portrait=%d card=%d loops=%d candidates=%d people=%d edges=%d",
                 user_id, res.portrait, res.card, res.loops, res.candidates, res.people, res.edges)
     return res
