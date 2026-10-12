@@ -89,6 +89,12 @@ class _Lang:
     blockers: tuple
     recap_cues: tuple
     honest: str
+    clause_starts: frozenset = frozenset()    # words that open a new clause after a comma ("it", "that", …)
+    joiners: tuple = ()                       # clause joiners as token tuples, longest first ("but", "so", "because")
+
+    @property
+    def joiner_firsts(self) -> frozenset:
+        return frozenset(j[0] for j in self.joiners)
 
     @property
     def hold_words(self) -> frozenset:
@@ -124,6 +130,8 @@ def _langs() -> tuple:
             code=code, subjects=words("subjects"), second_person=words("second_person"), openers=words("openers"),
             adverbs=words("adverbs"), verbs=verbs, targets=targets, other_targets=phrases("other_targets"),
             blockers=phrases("blockers"), recap_cues=phrases("recap_cues"), honest=str(lex.get("honest") or "").strip(),
+            clause_starts=words("clause_starts"),
+            joiners=tuple(sorted((tuple(p.split()) for p in phrases("clause_joiners")), key=len, reverse=True)),
         ))
     return tuple(out)
 
@@ -144,32 +152,70 @@ def find_claim(sentence: str) -> Optional[Claim]:
     text = (sentence or "").strip()
     if not text or text.endswith("?"):
         return None
-    toks = tokenize(text)
-    if not toks:
+    if not tokenize(text):
         return None
-    padded = " " + " ".join(toks) + " "
     for lang in _langs():
-        if any(_has_phrase(padded, b) for b in lang.blockers):
-            continue
-        for i, tok in enumerate(toks):
-            spec = lang.verbs.get(tok)
-            if spec is None:
+        # Blockers (negation, irrealis, future) and target nouns are judged in the CLAUSE of the claim verb only: "I've added
+        # milk to your list, but I'm not sure about eggs" and "… as you wanted" still claim the milk (review, #2004).
+        for toks in _clauses(text, lang):
+            padded = " " + " ".join(toks) + " "
+            if any(_has_phrase(padded, b) for b in lang.blockers):
                 continue
-            verb_kind, needs_target = spec
-            pre = toks[max(0, i - 4):i]
-            if any(p in lang.second_person for p in pre):
-                continue            # "you added it" - the user did it
-            active = all(p in lang.hold_words for p in pre)
-            passive = bool(pre) and (pre[-1] == "been" or (len(pre) > 1 and pre[-2] == "been" and pre[-1] in lang.adverbs))
-            if not (active or passive):
-                continue
-            kinds = tuple(kind for kind, phrases_ in lang.targets.items() if any(_has_phrase(padded, p) for p in phrases_))
-            if not kinds:
-                if needs_target or any(_has_phrase(padded, o) for o in lang.other_targets):
+            for i, tok in enumerate(toks):
+                spec = lang.verbs.get(tok)
+                if spec is None:
                     continue
-                kinds = () if verb_kind == "any" else (verb_kind,)
-            return Claim(kinds=kinds, lang=lang.code, honest=lang.honest)
+                verb_kind, needs_target = spec
+                pre = toks[max(0, i - 4):i]
+                if any(p in lang.second_person for p in pre):
+                    continue            # "you added it" - the user did it
+                active = all(p in lang.hold_words for p in pre)
+                passive = bool(pre) and (pre[-1] == "been" or (len(pre) > 1 and pre[-2] == "been" and pre[-1] in lang.adverbs))
+                if not (active or passive):
+                    continue
+                kinds = tuple(kind for kind, phrases_ in lang.targets.items() if any(_has_phrase(padded, p) for p in phrases_))
+                if not kinds:
+                    if needs_target or any(_has_phrase(padded, o) for o in lang.other_targets):
+                        continue
+                    kinds = () if verb_kind == "any" else (verb_kind,)
+                return Claim(kinds=kinds, lang=lang.code, honest=lang.honest)
     return None
+
+
+_BREAK_RE = re.compile(r"[a-z0-9']+|[,;:—–]")
+
+
+def _clauses(text: str, lang: "_Lang") -> list:
+    """The word tokens of ``text`` split into clauses: at ``; : -`` always, at a comma that is followed by a new subject
+    (``clause_starts`` / subjects / second person) or a joiner, and at every joiner word (``clause_joiners`` - "but", "so",
+    "as", "because"… per language DATA; the joiner itself belongs to neither clause). A comma inside a list of items does
+    not split ("I've added milk, eggs and bread to your list")."""
+    items = [t.strip("'") if t[0] == "'" or t[-1] == "'" else t for t in _BREAK_RE.findall(_fold(text))]
+    items = [t for t in items if t]
+    starts = lang.clause_starts | lang.subjects | lang.second_person
+    clauses, cur = [], []
+    i = 0
+    while i < len(items):
+        tok = items[i]
+        if tok in ";:—–":
+            clauses.append(cur)
+            cur = []
+        elif tok == ",":
+            nxt = next((t for t in items[i + 1:] if t not in ",;:—–"), "")
+            if nxt in starts or nxt in lang.joiner_firsts:
+                clauses.append(cur)
+                cur = []
+        else:
+            joiner = next((len(j) for j in lang.joiners if items[i:i + len(j)] == list(j)), 0)
+            if joiner:
+                clauses.append(cur)
+                cur = []
+                i += joiner
+                continue
+            cur.append(tok)
+        i += 1
+    clauses.append(cur)
+    return [c for c in clauses if c]
 
 
 def is_recap_question(user_text: str) -> bool:
@@ -204,7 +250,8 @@ def _log_blocked(claim: Claim, user_id: Optional[str], lane: str, action: str) -
 _ABBREV_TAIL_RE = re.compile(r"(?:\b[a-z]\.[a-z]\.|\b(?:mr|mrs|ms|dr|st|vs|etc|no)\.)$", re.IGNORECASE)
 
 
-_MERIDIEM_TAIL_RE = re.compile(r"\b[ap]\.m\.$", re.IGNORECASE)
+_TAIL_TERMINATOR_RE = re.compile(r"[.!?…]+[\"')\]]*$")
+_MERIDIEM_TAIL_RE =re.compile(r"\b[ap]\.m\.$", re.IGNORECASE)
 _TERMINATOR_RE = re.compile(r"[.!?…]+[\"')\]]*\s|\n")
 
 
@@ -241,7 +288,7 @@ def _could_become_claim(tail: str) -> bool:
     if not toks:
         return True
     partial = None
-    if tail and not tail[-1].isspace() and re.match(r"[A-Za-z0-9'’]", tail[-1]):
+    if tail and (tail[-1].isalnum() or tail[-1] in "'’"):      # any script: "añ" is half of "añadido"
         partial = toks.pop()                 # the last word may be half-arrived ("I'v")
     for lang in _langs():
         hold = lang.hold_words
@@ -265,6 +312,14 @@ def _tool_name(delta: str) -> str:
 
 # ── the guard ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
+def _replacement(sentence: str, claim: Claim) -> str:
+    """The honest line in the claiming sentence's place, keeping the whitespace around it (a sentence cut across deltas can
+    carry the boundary space as its LEADING whitespace)."""
+    lead = sentence[:len(sentence) - len(sentence.lstrip())]
+    trail = sentence[len(sentence.rstrip()):]
+    return lead + claim.honest + trail
+
+
 def guard_text(reply: str, user_id: Optional[str], started: float, *, user_text: str = "", lane: str = "brain",
                tools_run: frozenset = frozenset()) -> str:
     """The reply with every unsupported write claim replaced by the honest line (once). Unchanged when off / no claims."""
@@ -283,7 +338,7 @@ def guard_text(reply: str, user_id: Optional[str], started: float, *, user_text:
                 out.append(sentence)
             elif not replaced and claim.honest:
                 replaced = True
-                out.append(claim.honest + sentence[len(sentence.rstrip()):])
+                out.append(_replacement(sentence, claim))
         return "".join(out) if out else reply
     except Exception as exc:  # noqa: BLE001 - never break a turn over bookkeeping
         logger.warning("write_claim_guard.guard_text failed (reply passed through): %s", exc)
@@ -315,11 +370,10 @@ async def guard_stream(inner: AsyncIterator[str], user_id: Optional[str], starte
         _log_blocked(claim, user_id, lane, "shadow" if m == "shadow" else "replaced")
         if m == "shadow":
             return None
-        trailing = sentence[len(sentence.rstrip()):]
         if replaced or not claim.honest:
-            return trailing
+            return ""                      # a second claim in the same reply is dropped (guard_text does the same)
         replaced = True
-        return claim.honest + trailing
+        return _replacement(sentence, claim)
 
     cleared = 0         # leading characters of ``held`` already judged clean (released once a whole piece is clean)
 
@@ -354,7 +408,13 @@ async def guard_stream(inner: AsyncIterator[str], user_id: Optional[str], starte
                 yield piece
             tail = "".join(held)[cleared:]
             if tail and not _could_become_claim(tail):
-                head += tail
+                # The released part of the CURRENT sentence. A tail that ends in sentence punctuation ("…is fine.") ended
+                # its sentence: the boundary's whitespace simply has not arrived yet, so the NEXT sentence must not be judged
+                # with this one in front of it (review, #2004). An abbreviation ("9 a.m.") is not a sentence end.
+                if _TAIL_TERMINATOR_RE.search(tail) and not _ABBREV_TAIL_RE.search(tail):
+                    head = ""
+                else:
+                    head += tail
                 for piece in held:
                     yield piece
                 held.clear()

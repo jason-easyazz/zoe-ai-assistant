@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 import pytest
 
@@ -357,6 +358,117 @@ async def test_stream_spanish():
     started = wr.begin()
     out = await _collect(g.guard_stream(_stream("He añadido ", "leche a tu lista de compras."), "jason", started))
     assert "".join(out) == "No logré añadir eso; ¿quieres que lo intente otra vez?"
+
+
+# ── 4b. review (#2004): blockers are judged in the claim's own clause ───────────────────────────────────────────────────
+
+CLAUSE_CLAIMS = [
+    "I've added milk to your shopping list, so you won't forget it.",
+    "I've added milk to your shopping list as you wanted.",
+    "I've added milk to your list, but I'm not sure about eggs.",
+    "I've added milk to your list, I'm not sure about eggs though.",
+    "I've added milk to your shopping list; I couldn't find the eggs.",
+    "I've added milk to your shopping list — not that you asked twice.",
+    "Sure, I couldn't add eggs but I've added milk to your shopping list.",
+    "He añadido leche a tu lista de compras, pero no estoy segura de los huevos.",
+    "He añadido leche a tu lista de compras para que no lo olvides.",
+]
+
+
+@pytest.mark.parametrize("sentence", CLAUSE_CLAIMS)
+def test_a_blocker_in_another_clause_does_not_exempt_a_claim(sentence):
+    claim = g.find_claim(sentence)
+    assert claim is not None, sentence
+    assert claim.kinds == ("list",), (sentence, claim)
+    started = wr.begin()
+    assert g.guard_text(sentence, "jason", started) in (HONEST_EN, "No logré añadir eso; ¿quieres que lo intente otra vez?")
+
+
+@pytest.mark.parametrize("sentence", [
+    "I couldn't add that to your list, but I can try again.",
+    "I'd add milk to your list, so just say the word.",
+    "I haven't added milk to your shopping list, because I wasn't sure.",
+    "I'll add it to your list as soon as you say.",
+    "No pude añadir eso a tu lista, pero puedo intentarlo otra vez.",
+])
+def test_a_blocker_inside_the_claim_clause_still_exempts_it(sentence):
+    assert g.find_claim(sentence) is None, sentence
+
+
+def test_a_comma_inside_a_list_of_items_does_not_split_the_claim_clause():
+    claim = g.find_claim("I've added milk, eggs and bread to your shopping list.")
+    assert claim is not None and claim.kinds == ("list",)
+    # the target noun in a LATER clause is not borrowed: this claim names no target of its own
+    claim = g.find_claim("I've added milk, but the shopping list is long.")
+    assert claim is not None and claim.kinds == ()
+
+
+# ── 4c. review (#2004): streaming sees the same sentences however the deltas are cut ──────────────────────────────────
+
+STREAM_CORPUS = [
+    CALENDAR_CLAIM,
+    "The weather is fine. I've added milk to your shopping list.",
+    "The weather is fine.\nI've added milk to your shopping list.",
+    "Fine. I've added milk to your shopping list, so you won't forget it. Anything else?",
+    "Sure thing. I've added a work meeting to your calendar for tomorrow at 9 a.m. Anything else?",
+    "Okay. I couldn't add that. Want me to try again?",
+    "It's 24 degrees in Perth. Enjoy the beach!",
+    "Done! I've scheduled the physio for Friday. I've put oat milk on your shopping list.",
+    "He añadido leche a tu lista de compras. ¿Algo más?",
+    "No pasa nada. Ya agendé la cita en tu calendario, para que no se te olvide.",
+]
+
+
+def _stream_text(reply, cuts, user="jason", started=None):
+    import asyncio
+
+    pieces, prev = [], 0
+    for c in list(cuts) + [len(reply)]:
+        pieces.append(reply[prev:c])
+        prev = c
+    pieces = [p for p in pieces if p]
+
+    async def run():
+        return "".join([d async for d in g.guard_stream(_stream(*pieces), user, started)])
+
+    return asyncio.new_event_loop().run_until_complete(run())
+
+
+@pytest.mark.parametrize("reply", STREAM_CORPUS)
+def test_stream_equals_the_whole_reply_guard_at_every_single_cut(reply):
+    started = wr.begin()
+    want = g.guard_text(reply, "jason", started)
+    for cut in range(1, len(reply)):
+        assert _stream_text(reply, [cut], started=started) == want, (reply, cut, reply[:cut], reply[cut:])
+
+
+@pytest.mark.parametrize("reply", STREAM_CORPUS)
+def test_stream_equals_the_whole_reply_guard_char_by_char_and_word_by_word(reply):
+    started = wr.begin()
+    want = g.guard_text(reply, "jason", started)
+    assert _stream_text(reply, range(1, len(reply)), started=started) == want
+    word_cuts = [m.end() for m in re.finditer(r"\S+\s*", reply)][:-1]
+    assert _stream_text(reply, word_cuts, started=started) == want
+
+
+def test_a_punctuation_only_delta_keeps_the_sentence_boundary():
+    """Review (#2004): 'The weather is fine.' then ' I've added milk…' used to pass the claim through unchanged."""
+    started = wr.begin()
+    out = "".join(_collect_sync(g.guard_stream(_stream("The weather is fine", ".", " I've added milk to your shopping list."),
+                                              "jason", started)))
+    assert out == f"The weather is fine. {HONEST_EN}"
+    out = "".join(_collect_sync(g.guard_stream(_stream("The weather is fine.", " I've added milk to your shopping list."),
+                                              "jason", started)))
+    assert out == f"The weather is fine. {HONEST_EN}"
+
+
+def _collect_sync(agen):
+    import asyncio
+
+    async def run():
+        return [d async for d in agen]
+
+    return asyncio.new_event_loop().run_until_complete(run())
 
 
 # ── 5. wired at the one place every brain turn ends ──────────────────────────────────────────────────────────────────
