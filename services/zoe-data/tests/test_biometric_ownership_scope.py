@@ -160,7 +160,8 @@ async def test_owner_can_delete_their_own_profile(monkeypatch, face_enabled, del
 
     assert out["ok"] is True and out["deleted"] == "pid-1"
     assert len(_deletes(db)) == 1
-    assert db.params[-1] == ("pid-1",)
+    # The delete's own parameters (not "the last statement": a speaker delete now also queues the panel purge afterwards).
+    assert [p for q, p in zip(db.queries, db.params) if q.strip().upper().startswith("DELETE")] == [("pid-1",)]
 
 
 @pytest.mark.parametrize("delete", DELETERS)

@@ -104,7 +104,13 @@ the database. Authorisation is per §5.
 (`services/zoe-ui/dist/settings.html`) lists the signed-in member's voice profiles
 and offers a per-profile Delete button, which calls the endpoint above.
 
-**Panel copies lag by up to one hour.** Each Pi daemon keeps the synced embeddings
+**Deleting a SPEAKER profile now reaches the panels at once** (Zoe-driven voice enrolment,
+[zoe-driven-voice-enrollment.md](zoe-driven-voice-enrollment.md)): both the spoken "forget my voice" and
+the settings delete queue a `voice_profile_forget` command for every panel holding a device token, and the
+daemon removes the profile from memory and its 0600 disk copy immediately. The hourly sync below is the
+fallback for a panel that was offline (the command lives 24 h on the queue). Face profiles still wait.
+
+**Panel copies lag by up to one hour** (without the push above; always for faces). Each Pi daemon keeps the synced embeddings
 in memory and on disk, refreshing from `/profiles/sync` on a TTL of **3600 s**
 (`SPEAKER_ID_SYNC_TTL_S`, `FACE_ID_SYNC_TTL_S`). A deleted profile can therefore
 still be matched on-panel until the next sync. Restarting the panel daemon after a
@@ -158,11 +164,13 @@ Named honestly so nobody reads a capability into this document that does not exi
   live for the household until self-service face deletion exists in the UI — the
   right to delete has to be reachable by the person it belongs to, not just by an
   API client.
-- **The touch panel has no biometric-identity UI**, voice included. Voice deletion
-  is desktop-Settings-only, which conflicts with the standing rule that physical
-  enrolment flows are driven from the panel.
-- **Deletion does not push to panels.** It waits for the ≤1 h sync TTL. An
-  invalidation signal (or a shorter TTL) would close the window.
+- **The touch panel has no biometric-identity SCREEN**, voice included. Voice
+  enrolment and deletion are now available BY VOICE from the panel (Zoe offers, the
+  daemon runs it, "forget my voice" removes it; behind `ZOE_ENROLL_OFFER`, default off),
+  which meets the "physical flows are driven from the panel" rule; there is still no
+  touch UI, and faces have neither.
+- **Face deletion does not push to panels.** It waits for the ≤1 h sync TTL (voice now
+  pushes; see §4).
 - **No revocation-without-deletion for faces.** Speaker profiles can be
   consent-revoked (§3); the face surface offers only delete. Acceptable while every
   face row is consent-mandatory, but worth revisiting if face consent ever becomes

@@ -419,6 +419,36 @@
         ],
         "typed_env": false
       },
+      "ZOE_BLE_RADIO_LOCK": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/omi-sync/omi_sync/radio_lock.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_BLUETOOTH_AUDIT_PATH": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/bluetooth_broker.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_BLUETOOTH_SETTINGS": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/bluetooth_broker.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_BOARD_POLL_S": {
         "defaults": [
           "'60'"
@@ -480,6 +510,36 @@
           "services/zoe-data/routers/voice_tts.py"
         ],
         "typed_env": true
+      },
+      "ZOE_BRAIN_SLOT_GUARD": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/brain_slot_guard.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_BRAIN_SLOT_MAX_DEFER_S": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/brain_slot_guard.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_BRAIN_SLOT_QUIET_S": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/brain_slot_guard.py"
+        ],
+        "typed_env": false
       },
       "ZOE_BRAIN_SLOT_TOKENS": {
         "defaults": [
@@ -1438,6 +1498,66 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/executors/kanban_adapter.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ENROLL_DECLINE_DAYS": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/enrollment_state.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_ENROLL_MODE_ENABLED": {
+        "defaults": [
+          "'true'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/zoe_voice_daemon.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_ENROLL_OFFER": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/enrollment_state.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_ENROLL_OFFER_KIDS": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/enrollment_state.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_ENROLL_OFFER_PIN_DELAY_S": {
+        "defaults": [
+          "20"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_enrollment.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_ENROLL_RECORD_MAX_S": {
+        "defaults": [
+          "'8.0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/zoe_voice_daemon.py"
         ],
         "typed_env": false
       },

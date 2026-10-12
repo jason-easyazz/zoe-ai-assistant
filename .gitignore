@@ -213,6 +213,9 @@ credentials/
 !services/zoe-data/tests/fixtures/*.json
 # The per-language lexicons (words as data, the structural-floors PR): tracked data, no secrets. The blanket *.json rule above would hide them.
 !services/zoe-data/lexicons_data/*.json
+# The panel Bluetooth agent's pinned official Omi firmware release (URL, size, SHA-256): tracked data, no secrets. The agent and the
+# update tests read it; the blanket *.json rule above hid it (it existed only on disk, so CI failed on a file the author could see).
+!services/panel-bluetooth/panel_bt/data/*.json
 !services/zoe-litellm/minimal_config.yaml
 # needle-benchmark lab: committed measurement artifacts (labs/needle-benchmark/README.md)
 !labs/needle-benchmark/zoe_tools.json

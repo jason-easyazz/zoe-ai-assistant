@@ -2210,9 +2210,11 @@ app.include_router(openclaw_router)
 app.include_router(voice_tts_router)
 from routers.voice_settings import router as voice_settings_router  # noqa: E402
 from routers.face_id import router as face_id_router  # noqa: E402
+from routers.enrollment import router as enrollment_router  # noqa: E402
 
 app.include_router(voice_settings_router)
 app.include_router(face_id_router)
+app.include_router(enrollment_router)
 app.include_router(user_profile_router)
 app.include_router(dashboard_router)
 app.include_router(board_router)
@@ -2274,6 +2276,11 @@ _persona_router.register(app)
 # when ZOE_OMI_SYNC_ENABLED is on — flag off = 404. Calls the existing Moonshine helper; the voice path is untouched.
 from routers import omi_recordings as _omi_router  # noqa: E402
 _omi_router.register(app)
+
+# Settings > Bluetooth devices (flag-dark): the household admin's scan/connect/disconnect/forget/update controls and the per-panel
+# agent's poll/report lane. Mounted ONLY when ZOE_BLUETOOTH_SETTINGS is on — flag off = 404. Never touches the voice path.
+from routers import bluetooth as _bluetooth_router  # noqa: E402
+_bluetooth_router.register(app)
 
 
 @app.get("/.well-known/agent.json", include_in_schema=False)
