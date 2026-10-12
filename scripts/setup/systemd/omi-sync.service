@@ -1,0 +1,48 @@
+# Omi pendant ring sync - runs ON THE PANEL PI (zoe-pi), as a USER unit, operator opt-in.
+#
+#   "record on the pendant, sync when in range of Zoe": connects to the pendant (no pairing, no bond), drains its SD
+#   storage, uploads each recording to zoe-data and, on ring firmware, frees the ring only after zoe-data confirms the save.
+#   Design + runbook: docs/architecture/omi-integration-plan.md section 4; code: services/omi-sync/.
+#
+# A separate process on purpose: a BlueZ fault here cannot touch zoe-voice (the voice daemon).
+#
+# Inert until ALL of these hold (it is never auto-enabled):
+#   1. the pendant is unpaired from the Omi phone app (it accepts ONE connection; do NOT pair it to the Pi);
+#   2. ~/.zoe-omi-sync/.env.omi has OMI_SYNC_ENABLED=1, OMI_PENDANT_ADDRESS, ZOE_URL, DEVICE_TOKEN
+#      (the same panel device token the voice daemon uses), and the user may run `sudo -n hcitool lecc|ledc`
+#      (the long-supervision-timeout link recipe; see docs/architecture/omi-integration-plan.md section 4.7 step 2).
+#      The pendant firmware is 3.0.18: also OMI_SYNC_LEGACY_FILES=1 + OMI_SYNC_ASSUME_CODEC=21 (an informed opt-in), or update
+#      it first (plan 4.10);
+#   3. zoe-data has ZOE_OMI_SYNC_ENABLED=1 + ZOE_OMI_OWNER_USER_ID set, and migration 0045 applied;
+#   4. the venv exists:  python3 -m venv ~/.zoe-omi-sync/venv && ~/.zoe-omi-sync/venv/bin/pip install -r services/omi-sync/requirements.txt
+#      (and `sudo apt install libopus0`), with the code copied/synced to ~/.zoe-omi-sync/app/ from a git worktree.
+#
+#   cp scripts/setup/systemd/omi-sync.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now omi-sync.service
+#
+# Flag off (OMI_SYNC_ENABLED unset/0): the process logs once and exits 0; Restart=on-failure does NOT restart a clean exit.
+
+[Unit]
+Description=Omi pendant ring sync (record on the pendant, sync when in range of Zoe)
+After=network-online.target bluetooth.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-%h/.zoe-omi-sync/.env.omi
+WorkingDirectory=%h/.zoe-omi-sync/app
+Environment=PYTHONPATH=%h/.zoe-omi-sync/app
+ExecStart=%h/.zoe-omi-sync/venv/bin/python3 -m omi_sync run
+Restart=on-failure
+RestartSec=20
+# Small and low-priority: it must never compete with the voice daemon on a Pi 5.
+Nice=10
+MemoryHigh=200M
+MemoryMax=300M
+MemorySwapMax=0
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=omi-sync
+
+[Install]
+WantedBy=default.target
