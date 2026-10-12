@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-588 flags; 586 not documented in `.env.example`.
+587 flags; 585 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -572,7 +572,6 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_VOICE_FAST_FIRST_AUDIO` | `True` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_FILLER_AFTER_S` | `'1.6'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_FILLER_ENABLED` | `False` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
-| `ZOE_VOICE_FILLER_PHRASES` | `'Let me check.|One sec.|Hmm, let me look.'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_GATE_MAX_AGE_H` | `'24'` | no | NO | `scripts/maintenance/voice_gate_check.py` |
 | `ZOE_VOICE_GATE_PATHS` | `''` | no | NO | `scripts/maintenance/voice_gate_check.py` |
 | `ZOE_VOICE_GREETING_ENABLED` | `'0'` | no | NO | `services/zoe-data/voice_greeting.py` |

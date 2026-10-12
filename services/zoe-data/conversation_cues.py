@@ -1,0 +1,147 @@
+"""Conversation cues as DATA: small-talk toward Zoe and "Zoe just made an offer", read from ``lexicons_data/<lang>.json``.
+
+Two questions the turn lanes used to answer with English regexes scattered over three modules:
+
+* ``small_talk_remainder`` - is this turn a question about how ZOE is ("how are you", "I want to know how you are") or other
+  chat aimed at her? Such a turn is conversation: not a canned greeting (``intent_router``), not a private request that needs a
+  PIN (``voice_scope``). The lexicon section is ``"wellbeing"`` (``patterns``, ``small_talk``, ``frames``).
+* ``ends_with_offer`` - does Zoe's last reply END in an offer ("how about the history of coffee?")? A short acceptance after one
+  is an answer to the offer, so it must reach the brain with the conversation instead of the canned "Okay."
+  (``intent_router.detect_and_extract_intent``). The lexicon section is ``"offer"`` (``cues``, ``tail_chars``).
+
+No word of any language lives here. A language with no section contributes nothing (never guessed from English); the text's own
+language is tried first, then every other language that has the section (a short "como estas" carries too few function words to
+detect). Stdlib + ``lexicons`` only: importable from the hot voice path. NEVER raises.
+"""
+from __future__ import annotations
+
+import os
+import re
+from functools import lru_cache
+from typing import Optional
+
+import lexicons
+
+_TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
+#: what may be left of a turn once the small-talk phrase and its lead-in are taken out, before it stops being small talk
+#: ("hey zoe, how are you doing today" leaves 'hey zoe today'): a longer remainder is a different request that merely
+#: contains the phrase.
+MAX_REMAINDER_TOKENS = 5
+
+
+def _norm(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").replace("’", "'").strip().lower())
+
+
+@lru_cache(maxsize=None)
+def _compiled(lang: str, section: str, key: str) -> tuple["re.Pattern[str]", ...]:
+    sec = lexicons.load(lang).get(section) or {}
+    out = []
+    for frag in sec.get(key) or []:
+        try:
+            out.append(re.compile(rf"(?<!\w)(?:{frag})(?!\w)", re.IGNORECASE))
+        except re.error:
+            continue  # a fragment that does not compile contributes nothing
+    return tuple(out)
+
+
+def _langs(text: str, section: str) -> list[str]:
+    first = lexicons.detect(text)
+    order = [first] + [c for c in lexicons.LANGS if c != first]
+    return [c for c in order if lexicons.load(c).get(section)]
+
+
+def small_talk_remainder(text: str) -> Optional[str]:
+    """``None`` when ``text`` is not small talk toward Zoe; otherwise what is left of it once the phrase and its lead-in are
+    removed (``""`` for a bare "how are you"). The caller decides whether the remainder carries a personal request: this
+    module owns the words, not the privacy rule."""
+    try:
+        t = _norm(text)
+        if not t:
+            return None
+        for lang in _langs(t, "wellbeing"):
+            phrases = _compiled(lang, "wellbeing", "patterns") + _compiled(lang, "wellbeing", "small_talk")
+            hit = next((m for rx in phrases for m in [rx.search(t)] if m), None)
+            if hit is None:
+                continue
+            rest = t[:hit.start()] + " " + t[hit.end():]
+            for rx in _compiled(lang, "wellbeing", "frames"):
+                rest = rx.sub(" ", rest)
+            tokens = _TOKEN_RE.findall(rest)
+            if len(tokens) > MAX_REMAINDER_TOKENS:
+                return None
+            return " ".join(tokens)
+    except Exception:  # noqa: BLE001 - a cue lookup never breaks a turn
+        return None
+    return None
+
+
+def is_wellbeing_question(text: str) -> bool:
+    """True when ``text`` asks how Zoe is ("how are you", "how's it going", "are you okay"), with at most a greeting or her
+    name around it. A wellbeing question is a conversational turn."""
+    try:
+        t = _norm(text)
+        for lang in _langs(t, "wellbeing"):
+            if any(rx.search(t) for rx in _compiled(lang, "wellbeing", "patterns")):
+                return small_talk_remainder(t) is not None
+    except Exception:  # noqa: BLE001
+        return False
+    return False
+
+
+def smart_home_followup_ttl_s() -> float:
+    """``ZOE_SMART_HOME_FOLLOWUP_TTL_S`` (default 60): how long a controlled device stays "it"."""
+    try:
+        return max(0.0, float(os.environ.get("ZOE_SMART_HOME_FOLLOWUP_TTL_S", "60")))
+    except (TypeError, ValueError):
+        return 60.0
+
+
+def smart_home_followup(text: str) -> Optional[str]:
+    """``"on"`` / ``"off"`` / ``"reverse"`` when ``text`` is a bare pronoun command about the device just controlled ("turn it
+    back on again", "switch them off", "turn it back"), else ``None``. The WHOLE utterance must be lexicon words (verbs,
+    pronouns, on / off / back, ignorable fillers): "turn it up", "put it on my shopping list" and "turn it back on and play jazz"
+    are not follow-ups. The caller supplies the target and the freshness window (it holds what was last controlled)."""
+    try:
+        s = _norm(text)
+        if not s:
+            return None
+        toks = re.findall(r"[^\W_]+", s)
+        for lang in _langs(s, "smart_home_followup"):
+            sec = lexicons.load(lang)["smart_home_followup"]
+            on, off = set(sec.get("on") or []), set(sec.get("off") or [])
+            pron = set(sec.get("pronouns") or []) | set(sec.get("self_contained") or [])
+            back = set(sec.get("back") or [])
+            allowed = set(sec.get("verbs") or []) | pron | on | off | back
+            fillers = set(sec.get("fillers") or [])
+            core = [t for t in toks if t not in fillers]
+            if not core or any(t not in allowed for t in core):
+                continue
+            has_on, has_off = any(t in on for t in core), any(t in off for t in core)
+            has_pron, has_back = any(t in pron for t in core), any(t in back for t in core)
+            if has_on == has_off and (has_on or not (has_pron and has_back)):
+                continue          # both, or neither (and not the bare "turn it back")
+            if not (has_pron or (has_back and (has_on or has_off))):
+                continue
+            return "on" if has_on else "off" if has_off else "reverse"
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def ends_with_offer(reply: str) -> bool:
+    """True when the END of Zoe's reply makes an offer ("how about ...?", "would you like ...?", "want me to ...?")."""
+    try:
+        text = (reply or "").strip()
+        if not text:
+            return False
+        for lang in _langs(text, "offer"):
+            sec = lexicons.load(lang).get("offer") or {}
+            tail = text[-int(sec.get("tail_chars") or 240):]
+            sentences = [s for s in re.split(r"(?<=[.!?])\s+", tail) if s.strip()]
+            window = " ".join(sentences[-2:]).replace("’", "'")
+            if any(rx.search(window) for rx in _compiled(lang, "offer", "cues")):
+                return True
+    except Exception:  # noqa: BLE001
+        return False
+    return False

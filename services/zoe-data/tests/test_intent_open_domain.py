@@ -73,16 +73,15 @@ async def test_ambiguous_time_clarification_executes_as_question(text: str, resp
 
 
 @pytest.mark.parametrize("text", ["hi there how are you", "hey zoe how are you?", "hello how are you today"])
-def test_greeting_wellbeing_phrases_route_to_fast_greeting(text: str):
-    intent = detect_intent(text)
-
-    assert intent is not None
-    assert intent.name == "greeting"
+def test_greeting_wellbeing_phrases_are_conversation_not_the_canned_greeting(text: str):
+    # 2026-10-12: a question about how Zoe is wants a real answer, not "Good morning! What can I help you with today?"
+    # (tests/test_conversation_turn_quality.py pins the whole class across the lexicon's examples).
+    assert detect_intent(text) is None
 
 
 @pytest.mark.asyncio
-async def test_greeting_wellbeing_executes_without_open_domain_agent():
-    intent = detect_intent("hi there how are you")
+async def test_a_bare_greeting_still_executes_without_open_domain_agent():
+    intent = detect_intent("hi there")
 
     response = await execute_intent(intent)
 

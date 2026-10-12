@@ -1141,5 +1141,111 @@
    "late": "Timing: the {1} is at or after the {0}, so they would miss it.",
    "double": "Timing: two things are set for the same time (\"{0}\" and \"{1}\")."
   }
+ },
+ "spacer": {
+  "_note": "voice_spacer.py: the short spoken lines that fill a wait. 'families' are the pools by what the turn is doing (lookup = a read of stored data, recall = remembering, action = doing something, generic = nothing known); 'tool_ack' is the domain-specific pool for the dispatch-time acknowledgement. A line never claims a result. Wide on purpose: the same three lines on every turn read as a tic.",
+  "reviewed": true,
+  "families": {
+   "lookup": ["Let me check.", "Let me look.", "Let me have a look.", "Checking that now.", "Let me see.", "Looking that up."],
+   "recall": ["Let me think.", "Let me think back.", "Hmm, let me remember.", "Let me see what I remember."],
+   "action": ["One sec.", "On it.", "Just a moment.", "Right away.", "Sure, one moment."],
+   "generic": ["One sec.", "One moment.", "Just a moment.", "Hang on a sec.", "Bear with me."]
+  },
+  "tool_ack": {
+   "calendar": ["Let me check your calendar.", "Checking your calendar.", "Let me look at your calendar."],
+   "lists": ["Let me check your lists.", "Checking your lists.", "Let me look at your lists."],
+   "reminders": ["Let me check your reminders.", "Checking your reminders.", "Let me look at your reminders."],
+   "weather": ["Let me check the weather.", "Checking the weather.", "Let me look at the weather."]
+  }
+ },
+ "wellbeing": {
+  "_note": "conversation_cues.py: a question about HOW ZOE IS (or small talk aimed at her) is conversation, never a canned greeting and never a private request. 'patterns' = wellbeing questions; 'small_talk' = other chat aimed at Zoe; 'frames' = the lead-in a person puts in front of it ('I want to know how you are'), removed before the privacy check; 'examples' = rows the tests run through every consumer.",
+  "reviewed": true,
+  "patterns": [
+   "how\\s+(?:are|were)\\s+you(?:\\s+(?:today|doing|going|feeling|holding\\s+up|this\\s+(?:morning|afternoon|evening)))?",
+   "how\\s+you\\s+(?:are|doing|going|feeling|been)(?:\\s+(?:doing|going|feeling|today))?",
+   "how(?:'|’)?s\\s+it\\s+going",
+   "how\\s+is\\s+it\\s+going",
+   "how\\s+have\\s+you\\s+been",
+   "how\\s+do\\s+you\\s+feel",
+   "how\\s+(?:is|was)\\s+your\\s+(?:day|morning|afternoon|evening|night|weekend)(?:\\s+going)?",
+   "how\\s+do\\s+you\\s+do",
+   "are\\s+you\\s+(?:ok|okay|alright|all\\s+right|well|doing\\s+(?:ok|okay|well))"
+  ],
+  "small_talk": [
+   "what(?:'|’)?s\\s+up",
+   "what\\s+are\\s+you\\s+up\\s+to",
+   "tell\\s+me\\s+about\\s+yourself",
+   "who\\s+are\\s+you",
+   "what(?:'|’)?s\\s+your\\s+name",
+   "what\\s+is\\s+your\\s+name",
+   "do\\s+you\\s+(?:like|enjoy|love)\\b",
+   "are\\s+you\\s+(?:a\\s+)?(?:robot|human|real|an?\\s+ai)"
+  ],
+  "frames": [
+   "i\\s+(?:just\\s+)?want\\s+to\\s+(?:know|ask|hear|say)",
+   "i\\s+wanted\\s+to\\s+(?:know|ask|hear|say)",
+   "i(?:'|’)?d\\s+like\\s+to\\s+(?:know|ask|hear)",
+   "can\\s+i\\s+ask",
+   "could\\s+i\\s+ask",
+   "i(?:'|’)?m\\s+(?:just\\s+)?(?:curious|wondering)",
+   "i\\s+was\\s+(?:just\\s+)?wondering",
+   "just\\s+(?:wondering|checking)",
+   "tell\\s+me",
+   "let\\s+me\\s+know"
+  ],
+  "examples": ["how are you", "how are you today", "how are you going", "how's it going", "hi there how are you", "hey zoe how are you?", "hello how are you today", "I want to know how you are", "I just want to know how you are doing", "can I ask how you are", "are you okay", "tell me about yourself", "what are you up to"]
+ },
+ "smart_home_followup": {
+  "_note": "conversation_cues.smart_home_followup: a bare pronoun command about the device just controlled ('turn it back on again' right after 'turn the light off'). The WHOLE utterance must be made of these words: 'verbs' + 'pronouns' + on/off/back, with 'fillers' ignored; a pronoun, or 'back' beside on/off, is required; 'back' with no on/off reverses the last action. 'self_contained' lists on/off words that already carry their object (a language that fuses the pronoun into the verb).",
+  "reviewed": true,
+  "verbs": ["turn", "switch", "put", "flip", "set", "shut", "power"],
+  "pronouns": ["it", "that", "them", "those", "these"],
+  "on": ["on"],
+  "off": ["off"],
+  "back": ["back"],
+  "fillers": ["again", "now", "please", "just", "also", "and", "then", "zoe", "okay", "ok", "so", "hey", "actually"],
+  "self_contained": [],
+  "examples": {
+   "on": ["turn it back on again", "Turn it back on.", "switch that on", "put it back on", "and back on again", "turn them on please"],
+   "off": ["turn it off", "switch them back off", "now turn that off", "back off"],
+   "reverse": ["turn it back"]
+  },
+  "not_followups": ["turn on the kitchen light", "turn it up", "turn it on the list", "put it on my shopping list", "on", "it", "turn it back on and play jazz"]
+ },
+ "offer": {
+  "_note": "conversation_cues.ends_with_offer: Zoe's last reply ENDS in an offer ('how about the history of coffee?'). A short acceptance ('sounds good') after one is an answer to the offer, so it goes to the brain with the conversation instead of the canned 'Okay.'. 'cues' are regexes on the last sentences of the reply; 'tail_chars' bounds how much of the end is read.",
+  "reviewed": true,
+  "tail_chars": 240,
+  "cues": [
+   "how\\s+about\\b",
+   "what\\s+about\\b",
+   "would\\s+you\\s+(?:like|want|prefer)\\b",
+   "do\\s+you\\s+want\\b",
+   "want\\s+me\\s+to\\b",
+   "shall\\s+i\\b",
+   "should\\s+i\\b",
+   "i\\s+could\\s+(?:also\\s+)?(?:tell|show|read|play|look|check|find|help|give|remind|put|add|set|make|do|share|talk)\\b",
+   "i\\s+can\\s+also\\s+(?:tell|show|read|play|look|check|find|help|give|remind|put|add|set|make|do|share|talk)\\b",
+   "if\\s+you(?:'|’)?d\\s+like\\b",
+   "if\\s+you\\s+(?:like|want|want\\s+me\\s+to)\\b",
+   "care\\s+to\\b",
+   "up\\s+for\\b",
+   "interested\\s+in\\b",
+   "want\\s+to\\s+(?:hear|try|see|know|talk)\\b",
+   "(?:shall|should|can|could|may)\\s+we\\b"
+  ],
+  "examples": [
+   "Glad that helped. How about the history of coffee?",
+   "That's a lovely thought. Would you like to hear more?",
+   "I can also read you tomorrow's headlines, if you'd like.",
+   "Do you want me to look into it?",
+   "Want me to put that on your list?"
+  ],
+  "not_offers": [
+   "It's sunny and 22 degrees today.",
+   "Your sister is called Marisa.",
+   "Sure, it's done."
+  ]
  }
 }

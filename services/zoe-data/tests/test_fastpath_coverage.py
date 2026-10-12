@@ -31,7 +31,7 @@ def _name(text: str) -> str | None:
     # greetings
     ("hiya", "greeting"),
     ("g'day", "greeting"),
-    ("how's it going", "greeting"),
+    ("what's up", "greeting"),
     # thanks / acknowledgements
     ("thanks", "acknowledgement"),
     ("thank you so much", "acknowledgement"),

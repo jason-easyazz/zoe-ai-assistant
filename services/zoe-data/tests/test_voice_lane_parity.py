@@ -61,6 +61,31 @@ async def test_instrument_goes_red_with_the_old_confirmation_test(monkeypatch):
     assert results and all(not r.voice_ok for r in results)
 
 
+async def test_instrument_goes_red_if_the_router_gate_treats_a_recall_verdict_as_a_disagreement(monkeypatch):
+    """The 2026-10-12 defect: the router files "what's my name" under memory/recall_memory, the Skybridge gate called that a
+    DISAGREEMENT with its identity card, and the spoken lane went to the brain while typed chat answered from the account."""
+    import skybridge_service as sky
+
+    real = sky._router_agrees
+    monkeypatch.setattr(sky, "_router_agrees", lambda intent, domain, tool=None: real(intent, domain, None))   # the pre-fix gate
+    [r] = await lpc.run_cells(MonkeyPatch, only={"identity_name"})
+    assert r.voice_ok is False and r.chat_ok is True, (r.chat_detail, r.voice_detail)
+
+
+async def test_instrument_goes_red_when_the_offer_check_is_off(monkeypatch):
+    """"sounds good" after Zoe's offer: with the offer check disabled the typed lane answers the canned "Okay." and the offer is
+    never delivered. (The panel's spoken lane never ran the canned reply for it - it goes to the brain either way - so the red
+    side is the typed lane; the voice WebSocket's instant path shares the same check, tests/test_conversation_turn_quality.py.)"""
+    import intent_router
+
+    async def never(intent, user_id, previous=None):
+        return False
+
+    monkeypatch.setattr(intent_router, "ack_answers_offer", never)
+    [r] = await lpc.run_cells(MonkeyPatch, only={"ack_after_offer"})
+    assert r.chat_ok is False and r.voice_ok is True, (r.chat_detail, r.voice_detail)
+
+
 async def test_instrument_goes_red_if_the_voice_lane_skips_the_conversation_tiers(monkeypatch):
     import fast_tiers
 
@@ -140,6 +165,29 @@ async def test_contacts_answer_sends_the_panel_events():
         assert out.stage == "voice:people_search" and "percival" in out.reply.lower()
         panel = [e for e in rig.events if e in ("voice:responding", "voice:done")]
         assert panel[-2:] == ["voice:responding", "voice:done"] and panel.count("voice:done") == 1
+    finally:
+        mp.undo()
+
+
+@pytest.mark.parametrize("utterance", ["What time is it?", "What's the weather?"])
+async def test_a_fast_tier_voice_turn_writes_the_user_row_once(utterance):
+    """Live 2026-10-12: ``voice_command`` saved the user turn on arrival AND ``_schedule_voice_chat_save`` saved it again, so every
+    fast-tier turn left two identical user rows (exact-words recall, the digest and the history all read them). The rig's own
+    save stub records every user_text it is handed, so this test puts the REAL save back."""
+    import asyncio
+
+    real_save = _vt._schedule_voice_chat_save
+    mp = MiniPatch()
+    try:
+        rig = Rig(user="demo_lane_dup_rows").install(mp)
+        mp.setattr(_vt, "_schedule_voice_chat_save", real_save)
+        out = await rig.voice(utterance)
+        await asyncio.gather(*list(_vt._BG_TASKS), return_exceptions=True)
+        users = [m for m in rig.db.messages if m["role"] == "user" and m["content"] == utterance]
+        replies = [m for m in rig.db.messages if m["role"] == "assistant"]
+        assert not out.brain_reached, out.stage                       # a fast-tier exit, not a brain turn
+        assert len(users) == 1, [(m["role"], m["content"][:30]) for m in rig.db.messages]
+        assert len(replies) == 1                                      # ... and the reply is still saved
     finally:
         mp.undo()
 

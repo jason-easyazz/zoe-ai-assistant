@@ -471,13 +471,16 @@ _LETS_TALK_RE = re.compile(
 # === GREETING (ZOE-42, ZOE-15) ===
 # Placed after lets_talk so "let's chat" doesn't become a greeting.
 # good_morning/good_evening are kept as separate intents for the daily-briefing flow.
+#
+# A WELLBEING QUESTION ("how are you", "how are you today", "how's it going", "hi, how are you") is NOT a greeting: it asks
+# Zoe something and wants a real answer, not the canned "Good morning! What can I help you with today?" (live 2026-10-12, voice
+# and Telegram). Those phrases are data - ``lexicons_data/<lang>.json`` "wellbeing", read by ``conversation_cues`` - and the
+# turn falls through to the conversational path. ``tests/test_conversation_turn_quality.py`` pins that no wellbeing example
+# in any lexicon is matched here.
 _GREETING_RE = re.compile(
     r"^(?:hello|hi|hey|howdy|heya|hiya|greetings|yo|g'?day)(?:\s+(?:there|zoe|there\s+zoe))?\s*[!.,]?\s*$"
-    r"|^(?:hello|hi|hey|howdy|heya|hiya|yo)(?:\s+(?:there|zoe|there\s+zoe))?\s+how\s+are\s+you(?:\s+today)?\s*[!.,?]?\s*$"
     r"|^sup(?:\s+zoe)?\s*\??$"
     r"|^what'?s\s+up(?:\s+zoe)?\s*\??\s*$"
-    r"|^how\s+are\s+you(?:\s+today)?(?:\s+zoe)?\s*\??\s*$"
-    r"|^how'?s\s+it\s+going(?:\s+zoe)?\s*\??\s*$"
     r"|^good\s+(?:afternoon|night)(?:\s+zoe)?\s*[!.,]?\s*$",
     re.IGNORECASE,
 )
@@ -2045,6 +2048,23 @@ async def _previous_assistant_message(user_id: str) -> Optional[str]:
         return None
 
 
+async def ack_answers_offer(intent: "Intent", user_id: str, previous: Optional[str] = None) -> bool:
+    """True when ``intent`` is the canned "ok / sounds good" acknowledgement AND Zoe's previous reply ENDED in an offer
+    (``conversation_cues.ends_with_offer``, lexicon data). Only the ``ack`` kind: "thanks" after an offer is a polite no.
+    The cheap checks come first, so every other turn pays nothing; an unknown previous reply never binds (fail closed).
+    ``previous`` is the caller's own copy of Zoe's last reply (a lane that does not persist its turns, like the voice
+    WebSocket); without it the stored transcript is read."""
+    if intent.name != "acknowledgement" or (intent.slots or {}).get("kind") != "ack":
+        return False
+    try:
+        from conversation_cues import ends_with_offer
+
+        return ends_with_offer(previous if previous is not None else (await _previous_assistant_message(user_id) or ""))
+    except Exception as exc:  # noqa: BLE001 - never let the offer check break routing
+        logger.debug("ack_answers_offer: check failed: %s", type(exc).__name__)
+        return False
+
+
 async def _match_pending_offer_reply(text: str, user_id: str) -> Optional["Intent"]:
     """Map a short yes/no turn onto the SURFACED contact offer it answers.
 
@@ -2260,6 +2280,11 @@ async def detect_and_extract_intent(
     started = time.perf_counter()
     intent = detect_intent(text, context=context, user_id=user_id)
     detect_latency_ms = (time.perf_counter() - started) * 1000
+    if intent is not None and await ack_answers_offer(intent, user_id):
+        # "Sounds good" to "...how about the history of coffee?" ACCEPTS the offer: the canned "Okay." would swallow it and the
+        # offer would never be delivered. No intent -> both lanes fall through to the brain, which has the conversation.
+        logger.info("ack_after_offer: acknowledgement %r answers Zoe's last offer -> brain", (text or "")[:40])
+        return None
     if intent is None:
         routed_intent, pi_classified = await _try_pi_governor()
         _schedule_pi_shadow(

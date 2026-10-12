@@ -5677,16 +5677,6 @@
         ],
         "typed_env": true
       },
-      "ZOE_VOICE_FILLER_PHRASES": {
-        "defaults": [
-          "'Let me check.|One sec.|Hmm, let me look.'"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "services/zoe-data/routers/voice_tts.py"
-        ],
-        "typed_env": false
-      },
       "ZOE_VOICE_GATE_MAX_AGE_H": {
         "defaults": [
           "'24'"
