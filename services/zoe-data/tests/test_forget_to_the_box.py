@@ -290,7 +290,10 @@ async def test_w2_the_nightly_sweep_redacts_by_the_ledger_alone(ledger_env, chat
     await forget_redact.sweep_transcripts(USER, hours=since_hours, db=chat_db)
     await chat_db.execute("INSERT INTO chat_messages (id, session_id, role, content, created_at) VALUES "
                           "('m7', 's1', 'assistant', 'and again Marisol', datetime('now'))")
-    await md._load_todays_messages(USER, chat_db)                                             # the digest reads the day: the hook redacts first
+    try:
+        await md._load_todays_messages(USER, chat_db)                                         # the digest reads the day: the hook redacts first
+    except md.TranscriptLoadError:
+        pass                                                                                  # (sqlite cannot run the Postgres owner regex; the hook ran BEFORE the read failed)
     assert (await _chat(chat_db))["m7"][3] == "and again [forgotten]"
 
 
