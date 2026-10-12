@@ -28,7 +28,7 @@ importScripts('/workbox/workbox-sw.js');
 //  first use, and precaching ~2 MB of libraries would re-download the lot on
 //  every future SW_VERSION bump.)
 // PRECACHE_DIGEST=509deca48af4e776  (sha256 of the precached files; refresh with tools/audit/sw_precache_digest.py --write and BUMP SW_VERSION)
-const SW_VERSION = '4.86.0'; // 4.86.0: dashboard/lists (precached) drop the dead AI-generate tab; dark-mode-shared.css (precached) makes chat session titles readable (2026-10-09). 4.85.0: index.html (precached) opens the sign-in overlay itself after a gate redirect (2026-10-09). 4.84.1: chat.html persists its chat session id before the first send (no throwaway id per message). 4.84.0: chat/dashboard/calendar/lists/offline (precached): desktop→touch links severed, dead tier removed, offline probes /health, trailing-slash 307s gone (UI deep review wave 5, 2026-10-04)
+const SW_VERSION = '4.86.1'; // 4.86.1: panel poll survives a 401 (polls as guest + asks the page to re-mint) instead of stopping for good — the wall panel no longer goes deaf when a PIN session expires (2026-10-12). 4.86.0: dashboard/lists (precached) drop the dead AI-generate tab; dark-mode-shared.css (precached) makes chat session titles readable (2026-10-09). 4.85.0: index.html (precached) opens the sign-in overlay itself after a gate redirect (2026-10-09). 4.84.1: chat.html persists its chat session id before the first send (no throwaway id per message). 4.84.0: chat/dashboard/calendar/lists/offline (precached): desktop→touch links severed, dead tier removed, offline probes /health, trailing-slash 307s gone (UI deep review wave 5, 2026-10-04)
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
@@ -596,6 +596,7 @@ self.addEventListener('message', (event) => {
 let _panelPollTimer = null;
 let _panelId = null;
 let _panelSessionId = null;
+let _panelAuthNoticeAt = 0;   // last SW_PANEL_AUTH_EXPIRED sent to the pages (rate limit)
 
 async function _panelFetch(path) {
     const headers = { 'Content-Type': 'application/json' };
@@ -681,7 +682,26 @@ async function _panelPoll() {
             }
         }
     } catch (err) {
-        if (err && (err.status === 401 || err.status === 403)) {
+        // 401 = the session this poll was handed is dead (a PIN member's lives 60 min, the
+        // kiosk runs for days). That is NEVER a reason to stop serving the panel: drop the
+        // dead session, keep polling as a guest, and tell the page (which owns the session)
+        // so it re-mints and re-sends START_PANEL_POLL. Stopping here for good is what left
+        // the wall panel deaf until a manual reload (2026-10-12). Only a 403 — this session
+        // is genuinely not allowed to act on this panel — stops the poll.
+        if (err && err.status === 401) {
+            _panelSessionId = null;
+            const now = Date.now();
+            if (now - _panelAuthNoticeAt > 30000) {
+                _panelAuthNoticeAt = now;
+                try {
+                    const clientList = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+                    clientList.forEach((c) => c.postMessage({ type: 'SW_PANEL_AUTH_EXPIRED' }));
+                } catch (_) {}
+            }
+            console.warn('🎛️ SW panel executor: session expired (HTTP 401); polling as guest until the page re-sends one');
+            return;
+        }
+        if (err && err.status === 403) {
             _stopPanelPoll();
             console.warn(`🎛️ SW panel executor stopped after auth failure: HTTP ${err.status}`);
             return;

@@ -370,6 +370,13 @@ async def ack_ui_action(
         # The SSE client may retry acks for actions that were already cleaned up.
         return {"status": "already_acked", "action_id": action_id}
 
+    # A success ack proves the panel's page is alive and executing (push.panel_live).
+    if status == "success":
+        try:
+            broadcaster.note_panel_ack(existing["panel_id"] or panel_id)
+        except Exception:
+            pass
+
     # Use the real DB id for the update (in case we matched on idempotency_key)
     real_id = existing["id"]
     action_user_id = existing["user_id"]

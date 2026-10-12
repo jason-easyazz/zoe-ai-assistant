@@ -53,6 +53,59 @@ router = APIRouter(prefix="/api/voice", tags=["voice"])
 _BG_TASKS: set = set()
 
 
+def _warn_if_panel_deaf(panel_id) -> None:
+    """One rate-limited WARNING when a voice turn targets a panel with zero push subscribers.
+
+    Every voice:* event and answer card reaches the wall panel ONLY over its /ws/push socket,
+    and ``broadcast``'s delivered count used to be ignored, so a deaf panel looked healthy
+    server-side (2026-10-12). Lives in its own try so it can never skip the broadcast it
+    precedes (tests swap ``push`` for a namespace with no such method)."""
+    try:
+        from push import broadcaster
+        broadcaster.warn_if_panel_deaf(panel_id)
+    except Exception:
+        pass
+
+
+def _panel_can_see(panel_id) -> bool:
+    """Is the target panel able to show a pushed form/card right now? (push.panel_live)
+
+    Gates every "check the panel / tap Done" line: while the wall panel was deaf
+    (2026-10-12) the voice path kept sending the owner to a form that never showed.
+    Fails CLOSED — if liveness cannot be read, say the result aloud."""
+    try:
+        from push import panel_live
+        return bool(panel_live(panel_id))
+    except Exception:
+        return False
+
+
+def _list_add_reply_text(item_text: str, items: list, panel_live: bool) -> str:
+    """Spoken reply for the list_add panel-form flow. Only points at the panel when it can
+    be seen; otherwise the result is said aloud (the whole list, bounded)."""
+    lead = f"I've added {item_text} to your list." if item_text else "Here's your shopping list."
+    if panel_live:
+        return lead + " Check the panel and tap Done when you're finished."
+    shown = [str(i) for i in (items or []) if str(i).strip()][:8]
+    if not shown or (item_text and shown == [item_text]):
+        return lead
+    more = "" if len(items) <= 8 else f", and {len(items) - 8} more"
+    if len(shown) == 1:
+        return f"{lead} Your list is: {shown[0]}."
+    return f"{lead} Your list is: {', '.join(shown[:-1])} and {shown[-1]}{more}."
+
+
+def _calendar_form_reply_text(title: str, date: str, time_: str, panel_live: bool) -> str:
+    """Spoken reply for the calendar_create panel-form flow (same rule as _list_add_reply_text)."""
+    if panel_live:
+        return "Here's your calendar event — check the details and tap Confirm to save."
+    what = f"{title} on {date}" + (f" at {time_}" if time_ else "") if title else f"an event on {date}"
+    return (
+        f"I drafted {what}, but I can't show it on the panel right now, so I haven't saved it. "
+        "Try again in a moment."
+    )
+
+
 def _spawn_bg(coro) -> None:
     """Schedule a background coroutine with a strong reference (see _BG_TASKS).
 
@@ -3696,6 +3749,7 @@ async def voice_command(
     # Show the user's words in the voice overlay before processing.
     try:
         from push import broadcaster as _bc
+        _warn_if_panel_deaf(panel_id)
         await _bc.broadcast("all", "voice:transcript", {"panel_id": panel_id, "text": text})
     except Exception:
         pass
@@ -3728,7 +3782,7 @@ async def voice_command(
             _xct = _xaudio.media_type
         try:
             from push import broadcaster as _bc_xd
-            await _bc_xd.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": reply_text[:200]})
+            await _bc_xd.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": reply_text})
             await _bc_xd.broadcast("all", "voice:done", {"panel_id": panel_id})
         except Exception:
             pass
@@ -3805,7 +3859,7 @@ async def voice_command(
 
                         await _bc_pi_done.broadcast("all", "voice:responding", {
                             "panel_id": panel_id,
-                            "text": reply_text[:200],
+                            "text": reply_text,
                             "pi_hybrid": True,
                         })
                         if str(_pi_hybrid.get("intent") or "") == "weather":
@@ -3944,7 +3998,7 @@ async def voice_command(
                         _sky_t_resolve, _bcast_dt, time.monotonic() - _synth_t0, stream, _skybridge_reply[:50])
             try:
                 from push import broadcaster as _bc_sky
-                await _bc_sky.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": _skybridge_reply[:200]})
+                await _bc_sky.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": _skybridge_reply})
                 await _bc_sky.broadcast("all", "voice:done", {"panel_id": panel_id})
             except Exception:
                 pass
@@ -4110,10 +4164,7 @@ async def voice_command(
                         # Flag so confirm endpoint knows which item is the new addition.
                         "new_item": _item_text,
                     }
-                    reply_text = (
-                        f"I've added {_item_text} to your list." if _item_text
-                        else "Here's your shopping list."
-                    ) + " Check the panel and tap Done when you're finished."
+                    reply_text = _list_add_reply_text(_item_text, _prefill_items, _panel_can_see(panel_id))
                     await _broadcast_action_form_panel(
                         panel_id=panel_id,
                         panel_type="shopping_list",
@@ -4165,7 +4216,10 @@ async def voice_command(
                         "location": slots.get("location") or "",
                         "notes": slots.get("notes") or "",
                     }
-                    reply_text = "Here's your calendar event — check the details and tap Confirm to save."
+                    reply_text = _calendar_form_reply_text(
+                        str(_cal_form_data["title"] or ""), str(_parsed_date), str(_parsed_time or ""),
+                        _panel_can_see(panel_id),
+                    )
                     await _broadcast_action_form_panel(
                         panel_id=panel_id,
                         panel_type="calendar_event",
@@ -4349,7 +4403,7 @@ async def voice_command(
                     pass
                 try:
                     from push import broadcaster as _bc_pub
-                    await _bc_pub.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": _pub_reply[:200]})
+                    await _bc_pub.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": _pub_reply})
                 except Exception:
                     pass
                 _pub_audio_resp = await synthesize({"text": _pub_reply}, caller=caller)
@@ -4567,6 +4621,40 @@ async def voice_command(
                 # next one can be held back to the cadence floor. None until the
                 # first delivery, so first-audio is never paced.
                 _last_emit_ts: Optional[float] = None
+                # The panel's screen must ALWAYS be told the turn ended (voice:done clears the
+                # orb's "thinking"). The happy path sends it inline below; the `finally` sends
+                # it for every other exit — a barge-in or client disconnect (GeneratorExit /
+                # CancelledError), a timeout, an error — which used to leave the panel on
+                # "thinking" until the next turn (2026-10-12).
+                _screen_finished = False
+
+                async def _finish_panel_screen(reply: str) -> None:
+                    """The answer card (FULL text — the estate scrolls, and a card REPLACES the
+                    accumulated per-sentence text, so a slice here cut every long reply short),
+                    then voice:done. Idempotent."""
+                    nonlocal _screen_finished
+                    if _screen_finished:
+                        return
+                    _screen_finished = True
+                    if reply:
+                        try:
+                            await _bc_stream.broadcast("all", "ui_action", {
+                                "action": {
+                                    "id": f"voice_card_{panel_id}",
+                                    "action_type": "show_card",
+                                    "payload": {
+                                        "type": "answer",
+                                        "data": {"text": reply},
+                                        "panel_id": panel_id,
+                                    },
+                                }
+                            })
+                        except Exception:
+                            pass
+                    try:
+                        await _bc_stream.broadcast("all", "voice:done", {"panel_id": panel_id})
+                    except Exception:
+                        pass
 
                 async def _pace_delivery() -> None:
                     # Hold the just-synthesized audio until at least the cadence
@@ -4596,7 +4684,7 @@ async def voice_command(
                             full_reply_parts.append(s)
                         await _bc_stream.broadcast("all", "voice:responding", {
                             "panel_id": panel_id,
-                            "text": s[:200],
+                            "text": s,
                         })
 
                         # Prefer kokoro-sidecar (natural GPU voice); fall back to the
@@ -4765,24 +4853,7 @@ async def voice_command(
                         token_buf = ""
 
                     final_reply = " ".join(part.strip() for part in full_reply_parts if part.strip()).strip()
-                    try:
-                        await _bc_stream.broadcast("all", "ui_action", {
-                            "action": {
-                                "id": f"voice_card_{panel_id}",
-                                "action_type": "show_card",
-                                "payload": {
-                                    "type": "answer",
-                                    "data": {"text": final_reply[:300]},
-                                    "panel_id": panel_id,
-                                },
-                            }
-                        })
-                    except Exception:
-                        pass
-                    try:
-                        await _bc_stream.broadcast("all", "voice:done", {"panel_id": panel_id})
-                    except Exception:
-                        pass
+                    await _finish_panel_screen(final_reply)
                     try:
                         from voice_metrics import voice_stage_seconds, voice_turn_count
                         if _t_turn_start is None:
@@ -4800,6 +4871,17 @@ async def voice_command(
                     async for out_line in _emit_line({"error": "voice command stream failure"}):
                         yield out_line
                 finally:
+                    if not _screen_finished:
+                        # Abnormal exit (barge-in / disconnect / timeout / error). Schedule, never
+                        # await: a GeneratorExit unwind must not suspend, and a cancelled task
+                        # must not lose the voice:done to its own cancellation.
+                        _heard_now = " ".join(p.strip() for p in full_reply_parts if p.strip()).strip()
+                        try:
+                            _done_task = asyncio.ensure_future(_finish_panel_screen(_heard_now))
+                            _BG_TASKS.add(_done_task)
+                            _done_task.add_done_callback(_BG_TASKS.discard)
+                        except Exception as _done_exc:  # no running loop
+                            logger.debug("voice stream: could not schedule voice:done: %s", _done_exc)
                     if _prefetched is not None:
                         _prefetched.close_nowait()  # no-op once the stream ran to its end
                     if _v_packet is not None and _t_brain_dispatch is not None:
@@ -5021,7 +5103,7 @@ async def voice_command(
                 from push import broadcaster as _bc2
                 await _bc2.broadcast("all", "voice:responding", {
                     "panel_id": panel_id,
-                    "text": reply_text[:200],
+                    "text": reply_text,
                 })
                 await _bc2.broadcast("all", "ui_action", {
                     "action": {
@@ -5029,7 +5111,7 @@ async def voice_command(
                         "action_type": "show_card",
                         "payload": {
                             "type": "answer",
-                            "data": {"text": reply_text[:300]},
+                            "data": {"text": reply_text},
                             "panel_id": panel_id,
                         },
                     }
@@ -5197,6 +5279,7 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
     # Broadcast transcript so UI shows what was heard.
     try:
         from push import broadcaster as _bc_t
+        _warn_if_panel_deaf(panel_id)
         await _bc_t.broadcast("all", "voice:transcript", {"panel_id": panel_id, "text": transcript})
     except Exception:
         pass
@@ -5357,6 +5440,7 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     logger.info("voice/turn_stream panel=%s STT=%.2fs transcript=%r", panel_id, t_stt, transcript[:80])
     try:
         from push import broadcaster as _bc_t
+        _warn_if_panel_deaf(panel_id)
         await _bc_t.broadcast("all", "voice:transcript", {"panel_id": panel_id, "text": transcript})
     except Exception:
         pass

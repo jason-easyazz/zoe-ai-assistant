@@ -45,6 +45,19 @@
         pollTimer: null,
         syncTimer: null,
         panelServicesStopped: false,
+        // Why/at-which-identity the services stopped (a genuine 403 only): the watchdog
+        // resumes them when the identity changes, never while the same refused session lingers.
+        stopReason: '',
+        stoppedSessionId: null,
+        // True only when stopPanelServices really closed the push socket (non-kiosk 403).
+        // schedulePushReconnect refuses while this is set; a kiosk never sets it.
+        pushStopped: false,
+        recovering: false,
+        lastRecoverAt: 0,
+        pushDownSince: 0,
+        healedPush: false,
+        lastHealAt: 0,
+        watchdogTimer: null,
         seenActions: new Set(),
         seenAuthChallenges: new Set(),
         pushWs: null,
@@ -68,6 +81,19 @@
     // reached the panel. Same cadence as websocket-sync.js.
     const PUSH_PING_MS = 30000;
     const PUSH_RETRY_MAX_MS = 30000;
+
+    // A panel session dies on the server (a PIN member's passcode session lives
+    // 60 min, a guest's 30) while the kiosk runs for days. A 401 from any panel
+    // service means "this session is dead", never "stop serving the panel":
+    // recoverPanelSession drops it, falls back to a guest session and keeps every
+    // service running. These bound the recovery and the self-heal watchdog.
+    const PANEL_RECOVER_MIN_MS = 5000;          // at most one recovery per 5 s
+    const SESSION_DOWNGRADE_MARGIN_MS = 60000;  // member -> guest this long BEFORE expiry
+    const PANEL_WATCHDOG_MS = 15000;            // watchdog cadence
+    const PANEL_DEAF_AFTER_MS = 60000;          // push socket down this long = deaf: self-heal
+    const PANEL_HEAL_MIN_MS = 30000;            // rate limit between heals
+    const PANEL_RELOAD_MIN_MS = 10 * 60 * 1000; // last resort page reload, at most every 10 min
+    const PANEL_RELOAD_KEY = 'zoe_panel_watchdog_reload_at';
     const AUTO_HOME_TIMEOUT_S = Number(window.ZOE_AUTO_HOME_TIMEOUT_S || 20);
     const HOME_PATH = '/touch/home.html';
 
@@ -354,28 +380,233 @@
         }, AUTO_HOME_TIMEOUT_S * 1000);
     }
 
-    // A 401/403 on ANY panel-scoped call means this session is not allowed to act on
-    // this panel (a member who is not bound to it — routers/ui_actions._authorize_panel —
-    // or a dead session). Stop every panel service at once: pollActions used to stop
-    // itself while syncState kept posting a refused sync every 5 s forever (2026-10-09).
+    // A panel is a KIOSK when the estate said so (window.__kiosk) or any of the three
+    // persisted signals does. A kiosk's push socket is never closed for an auth failure.
+    function isKioskContext() {
+        try {
+            if (window.__kiosk === true) return true;
+            return new URLSearchParams(window.location.search).get('kiosk') === '1'
+                || window.localStorage.getItem('zoe_kiosk') === '1'
+                || window.sessionStorage.getItem('zoe_kiosk') === '1';
+        } catch (_) { return false; }
+    }
+
+    // The session id the DATA API is shown (a guest session is never sent — see
+    // getDataApiSession), or null. This is also what the service worker is handed.
+    function dataApiSessionId() {
+        const s = getDataApiSession();
+        return s && s.session_id ? s.session_id : null;
+    }
+
+    // Pure: is this member session inside the margin before its expiry (or past it)?
+    // A guest never "expires into" anything, and a member session with no expires_at
+    // (stored before PIN login recorded one) is left to the 401 path.
+    function sessionNeedsDowngrade(session, nowMs, marginMs) {
+        if (!session || isGuestSession(session) || !session.expires_at) return false;
+        const exp = Date.parse(session.expires_at);
+        if (Number.isNaN(exp)) return false;
+        return nowMs >= exp - marginMs;
+    }
+
+    function dropStoredSession() {
+        try { localStorage.removeItem('zoe_session'); } catch (_) { /* storage blocked */ }
+    }
+
+    function storeSession(session) {
+        try { localStorage.setItem('zoe_session', JSON.stringify(session)); } catch (_) { /* storage blocked */ }
+    }
+
+    // The same guest mint the estate uses (home.html convEnsureSession); resolves to the
+    // session object or null — never throws.
+    async function mintGuestSession() {
+        try {
+            const res = await fetch('/api/auth/guest', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ device_info: { source: 'estate-executor' } }),
+            });
+            if (!res.ok) return null;
+            const d = await res.json();
+            return d && d.session_id ? d : null;
+        } catch (_) { return null; }
+    }
+
+    // Is the push channel actually open right now (either path)?
+    function pushIsUp() {
+        try {
+            if (state.pushWs && state.pushWs.readyState === 1) return true;
+            const shared = window.zoePushWs;
+            if (shared && shared.ws && shared.ws.readyState === 1) return true;
+        } catch (_) { /* treat as down */ }
+        return false;
+    }
+
+    // Make sure SOME push socket is open or being opened: reset the backoff and connect now.
+    // Idempotent and safe to call on a healthy panel (returns at once when it is up).
+    function ensurePushSocket() {
+        if (state.unloading || state.viewer || pushIsUp()) return;
+        state.pushStopped = false;
+        const shared = window.zoePushWs;
+        if (shared && typeof shared.connect === 'function') {
+            try { shared.stopped = false; shared.reconnectAttempts = 0; shared.connect(); } catch (_) { /* non-fatal */ }
+            return;
+        }
+        if (state.pushRetry) { clearTimeout(state.pushRetry); state.pushRetry = null; }
+        if (state.pushPing) { clearInterval(state.pushPing); state.pushPing = null; }
+        if (state.pushWs) {
+            const old = state.pushWs;
+            state.pushWs = null;   // detach first: the stale socket's late close must not reconnect
+            try { old.onopen = null; old.onmessage = null; old.onclose = null; old.close(); } catch (_) { /* already closed */ }
+        }
+        state.pushAttempts = 0;
+        connectPushWebSocket();
+    }
+
+    // (Re)start the service worker's own panel poll under the CURRENT session.
+    function startServiceWorkerPanelPoll() {
+        try {
+            if (!('serviceWorker' in navigator)) return;
+            navigator.serviceWorker.ready.then((reg) => {
+                const sw = (reg && reg.active) || navigator.serviceWorker.controller;
+                if (!sw) return;
+                sw.postMessage({ type: 'START_PANEL_POLL', panelId: state.panelId, sessionId: dataApiSessionId() });
+            }).catch(() => {});
+        } catch (_) { /* never let this break the panel */ }
+    }
+
+    // (Re)start every panel service. Idempotent: timers are only created when absent.
+    function startPanelServices(reason) {
+        state.panelServicesStopped = false;
+        state.stopReason = '';
+        state.stoppedSessionId = null;
+        if (!state.pollTimer) state.pollTimer = setInterval(pollActions, 2000);
+        if (!state.syncTimer) state.syncTimer = setInterval(syncState, 5000);
+        ensurePushSocket();
+        startServiceWorkerPanelPoll();
+        console.info(`[executor] panel services running: ${reason || 'start'}`);
+    }
+
+    // A 401 from a panel service means THIS SESSION is dead (a PIN member's passcode
+    // session lives 60 min, a guest's 30; the kiosk runs for days) — it never means
+    // "stop serving the panel". Drop the dead session, fall back to a guest session
+    // (the estate's own 60 s keepalive may have minted one already — use it), refresh
+    // the session every service reads, and make sure every service is running on it.
+    // Single-flight and rate-limited so a persistent 401 cannot spawn a mint loop.
+    async function recoverPanelSession(reason, opts) {
+        if (state.unloading || state.viewer || state.recovering) return false;
+        const now = Date.now();
+        if (!(opts && opts.force) && now - state.lastRecoverAt < PANEL_RECOVER_MIN_MS) return false;
+        state.lastRecoverAt = now;
+        state.recovering = true;
+        try {
+            const stored = getSession();
+            // Anything but a live guest session is what the server just refused (or is about to).
+            if (stored && (!isGuestSession(stored) || isExpiredSession(stored))) dropStoredSession();
+            let session = getSession();
+            if (!session || !session.session_id || isExpiredSession(session)) {
+                const minted = await mintGuestSession();
+                const meanwhile = getSession();   // someone else may have minted while we waited
+                if (meanwhile && meanwhile.session_id && !isExpiredSession(meanwhile)) session = meanwhile;
+                else { session = minted; if (minted) storeSession(minted); }
+            }
+            state.sessionId = session && session.session_id ? session.session_id : null;
+            console.warn(`[executor] panel session recovered (${reason}); guest=${!!(session && isGuestSession(session))}`);
+            startPanelServices(`recovered after ${reason}`);
+            bindPanel().catch(() => {});
+            return true;
+        } finally {
+            state.recovering = false;
+        }
+    }
+
+    // A 403 means this session is not allowed to act on this panel (a member who is not
+    // bound to it — routers/ui_actions._authorize_panel). Stop poll + sync + the SW poll
+    // at once (pollActions used to stop itself while syncState kept posting a refused
+    // sync every 5 s forever, 2026-10-09). A KIOSK keeps its push socket: it is not
+    // session-authenticated (the server admits a session-less panel socket through the
+    // allow_guest panel check), and closing it is what left the wall panel deaf. Off a
+    // kiosk the socket is closed too — an unbound member otherwise kept generating
+    // refused handshakes forever.
     function stopPanelServices(reason) {
         if (state.panelServicesStopped) return;
         state.panelServicesStopped = true;
+        state.stopReason = reason;
+        state.stoppedSessionId = dataApiSessionId();
         if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
         if (state.syncTimer) { clearInterval(state.syncTimer); state.syncTimer = null; }
-        // The push channel too, on BOTH paths: the shared ZoeWebSockets socket (its
-        // disconnect() now stays down) and the fallback socket with its own backoff —
-        // an unbound member otherwise kept generating refused handshakes forever.
+        stopServiceWorkerPanelPoll();
+        if (isKioskContext()) {
+            console.warn(`[executor] panel poll+sync stopped (push socket kept): ${reason}`);
+            return;
+        }
+        state.pushStopped = true;
         if (state.pushRetry) { clearTimeout(state.pushRetry); state.pushRetry = null; }
         if (state.pushPing) { clearInterval(state.pushPing); state.pushPing = null; }
         if (state.pushWs) { try { state.pushWs.onclose = null; state.pushWs.close(); } catch (_) { /* already closed */ } state.pushWs = null; }
         try { if (window.zoePushWs && typeof window.zoePushWs.disconnect === 'function') window.zoePushWs.disconnect(); } catch (_) { /* non-fatal */ }
-        stopServiceWorkerPanelPoll();
         console.warn(`[executor] panel services stopped: ${reason}`);
     }
 
     function panelAuthFailed(res) {
         return !!res && (res.status === 401 || res.status === 403);
+    }
+
+    // The ONE route from a refused panel call to its consequence: 401 = recover the
+    // session and keep serving, 403 = stop poll + sync.
+    function handlePanelAuthFailure(res, what) {
+        if (!panelAuthFailed(res)) return false;
+        const reason = `${what} refused: HTTP ${res.status}`;
+        if (res.status === 401) recoverPanelSession(reason).catch(() => {});
+        else stopPanelServices(reason);
+        return true;
+    }
+
+    // Last resort, rate-limited across reloads (the stamp lives in localStorage). Never while
+    // a live conversation holds the mic, and never when the limiter itself cannot be read.
+    function reloadPageRateLimited(nowMs) {
+        try {
+            if (window.__zoeConv && typeof window.__zoeConv.live === 'function' && window.__zoeConv.live()) return false;
+            const last = Number(window.localStorage.getItem(PANEL_RELOAD_KEY) || 0);
+            if (nowMs - last < PANEL_RELOAD_MIN_MS) return false;
+            window.localStorage.setItem(PANEL_RELOAD_KEY, String(nowMs));
+        } catch (_) { return false; }
+        console.warn('[executor] watchdog: push channel stayed down after a restart; reloading the page');
+        try { window.location.reload(); } catch (_) { /* non-fatal */ }
+        return true;
+    }
+
+    // Kiosk watchdog (every PANEL_WATCHDOG_MS). A wall panel nobody is standing at must
+    // heal itself: (1) a member session near its expiry is downgraded to guest BEFORE
+    // the server refuses it; (2) stopped services come back when the refused identity
+    // changed; (3) a push socket that has been down for PANEL_DEAF_AFTER_MS is restarted,
+    // and if that does not bring it back within another PANEL_DEAF_AFTER_MS the page
+    // reloads (at most once per PANEL_RELOAD_MIN_MS).
+    function panelWatchdogTick() {
+        if (state.unloading || state.viewer || !isKioskContext()) return;
+        const now = Date.now();
+        if (sessionNeedsDowngrade(getSession(), now, SESSION_DOWNGRADE_MARGIN_MS)) {
+            dropStoredSession();
+            recoverPanelSession('member session about to expire', { force: true }).catch(() => {});
+        }
+        const refusedSameIdentity = state.panelServicesStopped
+            && /HTTP 403/.test(state.stopReason)
+            && dataApiSessionId() === state.stoppedSessionId;
+        if (state.panelServicesStopped && !refusedSameIdentity && now - state.lastHealAt >= PANEL_HEAL_MIN_MS) {
+            state.lastHealAt = now;
+            startPanelServices('watchdog: services were stopped');
+        }
+        if (pushIsUp()) { state.pushDownSince = 0; state.healedPush = false; return; }
+        if (!state.pushDownSince) { state.pushDownSince = now; return; }
+        if (now - state.pushDownSince < PANEL_DEAF_AFTER_MS) return;
+        state.pushDownSince = now;   // space the next rung a full window away
+        if (!state.healedPush) {
+            state.healedPush = true;
+            state.lastHealAt = now;
+            if (refusedSameIdentity) ensurePushSocket(); else startPanelServices('watchdog: push channel down');
+            return;
+        }
+        reloadPageRateLimited(now);
     }
 
     async function bindPanel() {
@@ -389,7 +620,7 @@
                 ui_context: buildContext(),
             }),
         });
-        if (panelAuthFailed(res)) stopPanelServices(`bind refused: HTTP ${res.status}`);
+        handlePanelAuthFailure(res, 'bind');
     }
 
     async function syncState() {
@@ -405,7 +636,7 @@
                     ui_context: buildContext(),
                 }),
             });
-            if (panelAuthFailed(res)) stopPanelServices(`sync refused: HTTP ${res.status}`);
+            handlePanelAuthFailure(res, 'sync');
         } catch (e) {
             // Non-fatal; periodic sync retries.
         }
@@ -786,8 +1017,10 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
     // of falling back to the generic "Zoe" toast. Uses the existing VoiceOverlay.
     window.ZoeVoiceCard = {
         renderCard: function (cardType, cardData) {
-            // Return the most descriptive available text field as plain string.
-            return (cardData.text || cardData.summary || cardData.title || '').slice(0, 300);
+            // Return the most descriptive available text field as plain string. NEVER
+            // truncated: the Ask surface scrolls, and a card's text REPLACES the running
+            // answer, so a slice here cut every long reply short (it was 300 chars).
+            return String(cardData.text || cardData.summary || cardData.title || '');
         },
         showCard: function (text, _actions) {
             if (!text) return;
@@ -986,7 +1219,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
     // Exponential backoff, capped: a dead server must not be hammered, and a
     // panel must never stay deaf for longer than the cap once it is back.
     function schedulePushReconnect() {
-        if (state.unloading || state.pushRetry || state.panelServicesStopped) return;
+        if (state.unloading || state.pushRetry || state.pushStopped) return;
         state.pushAttempts += 1;
         const delay = Math.min(1000 * Math.pow(2, state.pushAttempts), PUSH_RETRY_MAX_MS);
         state.pushRetry = setTimeout(() => {
@@ -1398,7 +1631,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
         try {
             const res = await api(`/api/ui/actions/pending?panel_id=${encodeURIComponent(state.panelId)}&limit=10`);
             if (!res.ok) {
-                if (panelAuthFailed(res)) stopPanelServices(`poll refused: HTTP ${res.status}`);
+                handlePanelAuthFailure(res, 'poll');
                 return;
             }
             const data = await res.json();
@@ -1433,15 +1666,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
 
     function registerWithServiceWorker() {
         if (!('serviceWorker' in navigator)) return;
-        navigator.serviceWorker.ready.then((reg) => {
-            if (reg.active) {
-                reg.active.postMessage({
-                    type: 'START_PANEL_POLL',
-                    panelId: state.panelId,
-                    sessionId: state.sessionId,
-                });
-            }
-        }).catch(() => {});
+        startServiceWorkerPanelPoll();
 
         // Listen for SW-forwarded actions (non-navigation actions that the SW can't handle)
         navigator.serviceWorker.addEventListener('message', (event) => {
@@ -1459,6 +1684,12 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                 executeAction(action).then((result) => {
                     if (actionId) ackAction(actionId, result);
                 }).catch(() => {});
+            }
+            // The SW's own poll got a 401: the session it was handed is dead. It keeps
+            // polling as a guest; the page owns the session, so it re-mints and re-sends
+            // START_PANEL_POLL (a 401 never stops a panel service).
+            if (msg && msg.type === 'SW_PANEL_AUTH_EXPIRED') {
+                recoverPanelSession('service worker poll refused: HTTP 401').catch(() => {});
             }
             // SW requests a hard reload
             if (msg && msg.type === 'SW_RELOAD') {
@@ -2324,6 +2555,9 @@ body.light-mode .zaf-btn-cancel { background: rgba(0,0,0,0.07); color: rgba(26,2
 
             state.pollTimer = setInterval(pollActions, 2000);
             state.syncTimer = setInterval(syncState, 5000);
+            // A wall panel must heal itself: member-session downgrade, stopped services,
+            // a push socket that stays down (see panelWatchdogTick).
+            if (isKioskContext()) state.watchdogTimer = setInterval(panelWatchdogTick, PANEL_WATCHDOG_MS);
         }
         ['pointerdown', 'touchstart', 'keydown'].forEach((evt) => {
             window.addEventListener(evt, () => resetAutoHomeTimer(`user:${evt}`), { passive: true });
@@ -2334,6 +2568,7 @@ body.light-mode .zaf-btn-cancel { background: rgba(0,0,0,0.07); color: rgba(26,2
             if (state.pushRetry) clearTimeout(state.pushRetry);
             if (state.pollTimer) clearInterval(state.pollTimer);
             if (state.syncTimer) clearInterval(state.syncTimer);
+            if (state.watchdogTimer) clearInterval(state.watchdogTimer);
             clearAutoHomeTimer('beforeunload');
         });
     }

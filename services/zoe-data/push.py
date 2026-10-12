@@ -1,10 +1,19 @@
 import asyncio
 import json
-from typing import Dict, Set
+import time
+from typing import Dict, Optional, Set
 from fastapi import WebSocket
 import logging
 
 logger = logging.getLogger(__name__)
+
+# One deaf-panel WARNING per panel per this many seconds (a voice turn calls the
+# check from several entry points — /turn_stream then /command — and a turn lasts
+# up to ~20 s, so this is "one per turn").
+DEAF_PANEL_WARN_INTERVAL_S = 30.0
+
+# A panel counts as live (see ``panel_live``) if it acked a UI action this recently.
+PANEL_LIVE_WINDOW_S = 60.0
 
 
 class PushBroadcaster:
@@ -28,6 +37,12 @@ class PushBroadcaster:
         # Map WebSocket → user_id for scoped delivery (None = panel/anonymous).
         self._ws_users: Dict[WebSocket, str | None] = {}
         self._sequence = 0
+        # Per-panel liveness book-keeping (epoch seconds) for ``panel_push_status``
+        # and the deaf-panel warning. Bounded by the number of distinct panel ids.
+        self._panel_connected_at: Dict[str, float] = {}
+        self._panel_disconnected_at: Dict[str, float] = {}
+        self._deaf_warned_at: Dict[str, float] = {}
+        self._panel_acked_at: Dict[str, float] = {}
 
     async def connect(self, websocket: WebSocket, channel: str = "all", user_id: str | None = None):
         await websocket.accept()
@@ -50,6 +65,7 @@ class PushBroadcaster:
                 self._connections[ch] = set()
             self._connections[ch].add(websocket)
         self._ws_panels[websocket] = panel_id
+        self._panel_connected_at[panel_id] = time.time()
         await websocket.send_json({
             "type": "connected",
             "channel": panel_channel,
@@ -63,6 +79,7 @@ class PushBroadcaster:
         # Also clean up panel channel if this was a panel connection.
         panel_id = self._ws_panels.pop(websocket, None)
         if panel_id:
+            self._panel_disconnected_at[panel_id] = time.time()
             pc = f"panel_{panel_id}"
             if pc in self._connections:
                 self._connections[pc].discard(websocket)
@@ -134,6 +151,81 @@ class PushBroadcaster:
         await self.broadcast("all", event_type, data)
         return 0
 
+    def panel_subscriber_count(self, panel_id: str) -> int:
+        """Live sockets subscribed to this panel's dedicated channel."""
+        return len(self._connections.get(f"panel_{panel_id}", ()))
+
+    def panel_push_status(self, panel_id: str) -> dict:
+        """Read-only liveness of one panel's push channel (no household data).
+
+        ``last_connect_at`` / ``last_disconnect_at`` are epoch seconds (None if never seen
+        since this process started). ``subscribers`` > 0 means a socket is registered; it
+        cannot prove the browser is still reading it (a half-open socket is only reaped by
+        the idle timeout), but 0 PROVES nothing can receive a ``voice:*`` event.
+        """
+        return {
+            "panel_id": panel_id,
+            "subscribers": self.panel_subscriber_count(panel_id),
+            "last_connect_at": self._panel_connected_at.get(panel_id),
+            "last_disconnect_at": self._panel_disconnected_at.get(panel_id),
+        }
+
+    def note_panel_ack(self, panel_id: Optional[str], *, now: Optional[float] = None) -> None:
+        """Record that this panel just acknowledged a UI action (proof the page is alive)."""
+        pid = str(panel_id or "").strip()
+        if pid:
+            self._panel_acked_at[pid] = time.time() if now is None else now
+
+    def panel_live(self, panel_id: Optional[str], *, within_s: float = PANEL_LIVE_WINDOW_S,
+                   now: Optional[float] = None) -> bool:
+        """Can this panel plausibly SEE something pushed to it right now?
+
+        True when it has a live push subscriber, or acked a UI action within ``within_s``
+        (the page is alive even if its socket is mid-reconnect). Callers gate any
+        "check the panel / tap Done" line on this and otherwise say the result aloud —
+        while the wall panel was deaf (2026-10-12) the voice path kept telling the owner
+        to look at a form that never showed. A blank/unknown id is not live.
+        """
+        pid = str(panel_id or "").strip()
+        if not pid:
+            return False
+        if self.panel_subscriber_count(pid) > 0:
+            return True
+        acked = self._panel_acked_at.get(pid)
+        t = time.time() if now is None else now
+        return acked is not None and 0 <= t - acked <= within_s
+
+    def warn_if_panel_deaf(self, panel_id: Optional[str], *, now: Optional[float] = None) -> bool:
+        """Log ONE WARNING when a voice turn targets a panel with zero push subscribers.
+
+        Every ``voice:*`` event and ``show_card`` reaches the wall panel only over its
+        ``/ws/push`` socket, and ``broadcast``'s delivered count used to be ignored — so a
+        deaf panel (2026-10-12) looked exactly like a healthy one from the server side.
+        Rate-limited per panel (``DEAF_PANEL_WARN_INTERVAL_S``). Returns True when it warned.
+        Never raises: it runs on the voice hot path.
+        """
+        try:
+            pid = str(panel_id or "").strip()
+            if not pid or pid.lower() in {"unknown", "none", "default"}:
+                return False
+            if self.panel_subscriber_count(pid) > 0:
+                return False
+            t = time.monotonic() if now is None else now
+            last = self._deaf_warned_at.get(pid)
+            if last is not None and t - last < DEAF_PANEL_WARN_INTERVAL_S:
+                return False
+            self._deaf_warned_at[pid] = t
+            disconnected = self._panel_disconnected_at.get(pid)
+            ago = f"{int(time.time() - disconnected)}s ago" if disconnected else "never since this process started"
+            logger.warning(
+                "voice turn for panel %s but its push channel has ZERO subscribers (last disconnect %s): "
+                "the panel will not see this turn's text/cards. Check GET /api/panels/%s/push-status",
+                pid, ago, pid,
+            )
+            return True
+        except Exception:
+            return False
+
     async def broadcast_all(self, event_type: str, data: dict):
         """Broadcast to all channels."""
         for channel in list(self._connections.keys()):
@@ -149,3 +241,11 @@ class PushBroadcaster:
 
 
 broadcaster = PushBroadcaster()
+
+
+def panel_live(panel_id: Optional[str]) -> bool:
+    """Module-level convenience for ``broadcaster.panel_live`` (see there). Never raises."""
+    try:
+        return broadcaster.panel_live(panel_id)
+    except Exception:
+        return False
