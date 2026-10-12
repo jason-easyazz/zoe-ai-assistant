@@ -2,7 +2,11 @@
 
 Pure - no BLE, no I/O. Everything that crosses the wire to zoe-data is built here, so the privacy rule is structural:
 a device's BLE ADDRESS never leaves the Pi. zoe-data, the browser and the audit log only ever see ``device_id(address)``
-(12 hex of a salted SHA-256), and the agent maps it back to an address from its own scan cache / known-devices file.
+(16 hex of a salted SHA-256), and the agent maps it back to an address from its own scan cache / known-devices file.
+
+ONE identity per device, on purpose: this is the SAME id ``omi_sync.uploader.device_hash`` sends as ``X-Omi-Device``, so the id
+Settings > Bluetooth shows for a pendant is the id zoe-data's ``omi_devices`` registry maps to the household member who owns it
+(tests/unit/test_omi_device_identity.py pins that the two derivations cannot drift).
 """
 from __future__ import annotations
 
@@ -13,7 +17,9 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 ADDR_RX = re.compile(r"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$")
-DEVICE_ID_RX = re.compile(r"^[0-9a-f]{12}$")
+DEVICE_ID_RX = re.compile(r"^[0-9a-f]{16}$")
+#: the namespace is historic (omi-sync shipped first); it is part of the id, so it cannot be renamed without orphaning recordings
+ID_NAMESPACE = "omi-sync:"
 JOB_ID_RX = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
 
 #: every operation the agent will run. Anything else is refused before it touches the radio.
@@ -37,8 +43,8 @@ E_INTERNAL = "internal"
 
 
 def device_id(address: str) -> str:
-    """A stable, non-reversible 12-hex id for a device. The address itself stays on the Pi."""
-    return hashlib.sha256(("zoe-bt:" + address.strip().lower()).encode()).hexdigest()[:12]
+    """A stable, non-reversible 16-hex id for a device (identical to ``omi_sync.uploader.device_hash``). The address itself stays on the Pi."""
+    return hashlib.sha256((ID_NAMESPACE + address.strip().lower()).encode()).hexdigest()[:16]
 
 
 @dataclass(frozen=True)

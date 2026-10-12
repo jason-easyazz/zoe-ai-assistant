@@ -6,9 +6,11 @@
  * escaping of anything a panel supplies; the firmware update cannot be started without the safety acknowledgement and a ready
  * checklist; the "do not move or unplug for 2 minutes" and "cannot be undone" warnings; no cancel once the install is ordered;
  * finger targets >= 48 px on the touch surface; flag-off renders nothing; both Settings pages carry the section behind their gates;
- * the shared script never routes into /touch/.
+ * the shared script never routes into /touch/; the Omi "Assigned to" control (members, assign / reassign / unassign, hidden when the registry
+ * is off, only a listed household member can be chosen, escaped names, NO recording is ever fetched or rendered, 48 px on touch).
  * Source mutations worth re-running by Edit: drop esc() in renderDevice -> the XSS check goes red; drop `!ack` in canStartUpdate ->
- * the update-gating checks go red; drop the stepIsLocked branch -> the no-cancel-after-install check goes red.
+ * the update-gating checks go red; drop the stepIsLocked branch -> the no-cancel-after-install check goes red; drop the `members.some` guard
+ * in saveOwner -> the "only a listed member" check goes red; drop `o.available` from renderOwner -> the registry-off check goes red.
  */
 'use strict';
 const fs = require('fs');
@@ -21,8 +23,8 @@ let checks = 0;
 function ok(cond, msg) { assert.ok(cond, msg); checks++; }
 function eq(a, b, msg) { assert.deepStrictEqual(a, b, msg); checks++; }
 
-const DEV = '0123456789ab';
-const OTHER = 'ba9876543210';
+const DEV = '0123456789abcdef';
+const OTHER = 'fedcba9876543210';
 
 /* ---------- pure helpers ---------- */
 eq(BT.esc('<img src=x onerror="a()">&\''), '&lt;img src=x onerror=&quot;a()&quot;&gt;&amp;&#39;', 'esc covers < > & " \'');
@@ -150,16 +152,46 @@ ok(/\.zbt\[data-surface=touch\] \.zbt-btn[^{]*\{[^}]*min-height:48px/.test(BT.CS
 ok(/\.zbt\[data-surface=touch\][^{]*\.zbt-panelbtn[^{]*\{[^}]*min-height:48px/.test(BT.CSS) || /\.zbt-panelbtn\{[^}]*min-height:48px/.test(BT.CSS) || /zbt-panelbtn\{min-height:48px/.test(BT.CSS), 'touch panel picker buttons are >= 48 px');
 ok(/\.zbt\[data-surface=touch\] \.zbt-ack input\{width:32px;height:32px\}/.test(BT.CSS), 'the acknowledgement checkbox is large on touch');
 ok(/prefers-reduced-motion/.test(BT.CSS), 'motion is gated');
+ok(/\.zbt\[data-surface=touch\] \.zbt-select\{[^}]*min-height:48px/.test(BT.CSS), 'the "Assigned to" select is >= 48 px on touch');
+
+/* ---------- Omi ownership: the "Assigned to" control ---------- */
+const MEMBERS = [{ user_id: 'ann', name: 'Ann' }, { user_id: 'ben', name: 'Ben <img src=x onerror=a()>' }];
+const omiUi = (devices, over) => Object.assign({ available: true, members: MEMBERS, devices: devices || {}, saving: null, error: '' }, over || {});
+{
+  const dev = omi();
+  ok(BT.renderOwner(dev, baseUi(view([dev]), { omi: omiUi() })).length > 0 && /Assigned to/.test(BT.renderOwner(dev, baseUi(view([dev]), { omi: omiUi() }))), 'an Omi pendant has an Assigned to control');
+  eq(BT.renderOwner(dev, baseUi(view([dev]), { omi: omiUi({}, { available: false }) })), '', 'registry off (404/403): no control at all');
+  eq(BT.renderOwner(dev, baseUi(view([dev]), { omi: undefined })), '', 'not loaded yet: no control');
+  eq(BT.renderOwner(omi({ driver: 'generic' }), baseUi(view([]), { omi: omiUi() })), '', 'only Omi pendants are assignable');
+  let h = BT.renderOwner(dev, baseUi(view([dev]), { omi: omiUi() }));
+  ok(/<select[^>]*data-bt="assign"[^>]*data-dev="0123456789abcdef"/.test(h) && /<option value="" selected>Nobody yet/.test(h), 'unassigned: Nobody yet is selected');
+  ok(/<option value="ann">Ann<\/option>/.test(h) && /Nobody owns this pendant yet/.test(h), 'members are listed; the unassigned note says what happens');
+  ok(!/<img/.test(h) && /Ben &lt;img src=x onerror=a\(\)&gt;/.test(h), 'a member name is escaped');
+  h = BT.renderOwner(dev, baseUi(view([dev]), { omi: omiUi({ [DEV]: { device_id: DEV, user_id: 'ben', active: true } }) }));
+  ok(/<option value="ben" selected>/.test(h) && !/value="" selected/.test(h), 'assigned: that member is selected');
+  ok(/sync to this person only, whoever is signed in/.test(h) && /does not move recordings already saved/.test(h) && /let it finish syncing first/.test(h), 'the reassignment warning says what moves and what does not');
+  h = BT.renderOwner(dev, baseUi(view([dev]), { omi: omiUi({ [DEV]: { device_id: DEV, user_id: 'ghost', active: true } }) }));
+  ok(/<option value="ghost" selected>Unknown member/.test(h), 'an owner who is not in the member list is still shown, not silently replaced');
+  h = BT.renderOwner(dev, baseUi(view([dev]), { omi: omiUi({ [DEV]: { device_id: DEV, user_id: 'ann', active: false } }) }));
+  ok(/value="" selected/.test(h), 'an inactive registration reads as unassigned');
+  h = BT.renderOwner(dev, baseUi(view([dev]), { omi: omiUi({}, { saving: DEV }) }));
+  ok(/<select[^>]*disabled/.test(h) && /Saving\.\.\./.test(h), 'saving: the select is locked');
+  h = BT.renderOwner(dev, baseUi(view([dev]), { omi: omiUi({}, { error: 'Pick a household member.' }) }));
+  ok(/Pick a household member\./.test(h), 'an error is shown');
+  const whole = BT.renderBody(baseUi(view([dev]), { omi: omiUi({ [DEV]: { device_id: DEV, user_id: 'ann', active: true } }) }));
+  ok(/Assigned to/.test(whole) && !/\/api\/omi\/recordings|transcript|recorded for/i.test(whole), 'the device row never shows or links a recording (the admin manages who owns it, not what it heard)');
+}
 
 /* ---------- the controller, against a fake DOM and a fake server ---------- */
 function fakeRoot() {
   const r = { innerHTML: '', handlers: {}, addEventListener(t, f) { (r.handlers[t] = r.handlers[t] || []).push(f); }, removeEventListener(t, f) { r.handlers[t] = (r.handlers[t] || []).filter((x) => x !== f); } };
-  r.click = (action, dev, panel) => {
+  r.click = (action, dev, panel, value) => {
     const b = button(r.innerHTML, action, dev);
-    const m = r.innerHTML.match(new RegExp('<(?:button|input)[^>]*data-bt="' + action + '"[^>]*' + (dev ? 'data-dev="' + dev + '"' : '') + '[^>]*>'));
+    const m = r.innerHTML.match(new RegExp('<(?:button|input|select)[^>]*data-bt="' + action + '"[^>]*' + (dev ? 'data-dev="' + dev + '"' : '') + '[^>]*>'));
     if (!m) throw new Error('no ' + action + ' control rendered');
-    const el = { dataset: { bt: action, dev: dev, panel: panel }, disabled: b.disabled, checked: true };
-    (r.handlers[action === 'ack' ? 'change' : 'click'] || []).forEach((f) => f({ type: action === 'ack' ? 'change' : 'click', target: { closest: () => el } }));
+    const el = { dataset: { bt: action, dev: dev, panel: panel }, disabled: /\sdisabled/.test(m[0]), checked: true, value: value };
+    const type = (action === 'ack' || action === 'assign') ? 'change' : 'click';
+    (r.handlers[type] || []).forEach((f) => f({ type: type, target: { closest: () => el } }));
   };
   return r;
 }
@@ -172,12 +204,24 @@ function fakeServer(script) {
     async fetchJson(method, url, body) {
       log.push({ method, url, body });
       if (script && script.fail && script.fail(method, url)) { const e = new Error('nope'); e.status = script.fail(method, url); throw e; }
+      if (url.indexOf('/api/omi/') === 0) {
+        const o = state.omi;
+        if (!o) { const e = new Error('Not Found'); e.status = 404; throw e; }
+        if (url === '/api/omi/members') return { members: o.members };
+        if (url === '/api/omi/devices') return { devices: Object.keys(o.devices).map((k) => o.devices[k]) };
+        const dm = url.match(/^\/api\/omi\/devices\/([0-9a-f]{16})$/);
+        if (dm && method === 'PUT') {
+          if (o.refuse) { const e = new Error('Pick a household member (guests cannot own a pendant).'); e.status = 400; throw e; }
+          o.devices[dm[1]] = { device_id: dm[1], user_id: body.user_id, active: true }; return o.devices[dm[1]];
+        }
+        if (dm && method === 'DELETE') { o.devices[dm[1]] = { device_id: dm[1], user_id: '', active: false }; return { ok: true }; }
+      }
       if (url === '/api/bluetooth/config') return { enabled: true };
       if (url === '/api/bluetooth/panels') return { panels: [{ panel_id: 'p1', name: 'Kitchen Panel', online: true, location: 'Kitchen' }] };
       if (url === '/api/bluetooth/panels/p1') return state.view;
       let m = url.match(/^\/api\/bluetooth\/panels\/p1\/jobs\/(\w+)$/);
       if (m) return state.jobs[m[1]];
-      m = url.match(/^\/api\/bluetooth\/panels\/p1\/(scan|devices\/([0-9a-f]{12})\/(\w+))$/);
+      m = url.match(/^\/api\/bluetooth\/panels\/p1\/(scan|devices\/([0-9a-f]{16})\/(\w+))$/);
       if (m && method === 'POST') {
         const id = 'job' + (++state.n);
         const job = { job_id: id, panel_id: 'p1', op: m[1] === 'scan' ? 'scan' : m[3], device_id: m[2] || null, state: 'queued', progress: {}, result: null, error: null };
@@ -271,6 +315,44 @@ const flush = () => new Promise((r) => setImmediate(r));
     c.destroy();
     ok((root.handlers.click || []).length === 0, 'destroy removes the listeners');
   }
+  /* Omi ownership through the controller */
+  {
+    const srv = fakeServer(), root = fakeRoot(), t = fakeTimers();
+    srv.state.view = view([omi(), omi({ id: OTHER, name: 'HR Strap', driver: 'generic', supports_update: false })]);
+    srv.state.omi = { members: MEMBERS, devices: {} };
+    const c = BT.mount(root, { surface: 'touch', fetchJson: srv.fetchJson, setTimeout: t.setTimeout, clearTimeout: t.clearTimeout });
+    await flush(); await flush(); await flush();
+    ok(/Assigned to/.test(root.innerHTML) && /<option value="ann">Ann/.test(root.innerHTML), 'mounted: members and the registry were loaded, the control is drawn');
+    ok((root.innerHTML.match(/Assigned to/g) || []).length === 1, 'only the Omi pendant gets the control, not the generic device');
+    root.click('assign', DEV, null, 'ben'); await flush(); await flush(); await flush();
+    const put = srv.log.filter((l) => l.method === 'PUT').pop();
+    eq([put.url, put.body], ['/api/omi/devices/' + DEV, { user_id: 'ben' }], 'choosing a member PUTs exactly that user id');
+    ok(/<option value="ben" selected>/.test(root.innerHTML), 'the new owner is shown after the reload');
+    root.click('assign', DEV, null, 'ann'); await flush(); await flush(); await flush();
+    ok(srv.log.filter((l) => l.method === 'PUT').pop().body.user_id === 'ann' && /<option value="ann" selected>/.test(root.innerHTML), 'reassigning is the same call');
+    root.click('assign', DEV, null, ''); await flush(); await flush(); await flush();
+    ok(srv.log.filter((l) => l.method === 'DELETE').pop().url === '/api/omi/devices/' + DEV && /value="" selected/.test(root.innerHTML), 'Nobody yet unassigns');
+    const n = srv.log.length;
+    root.click('assign', DEV, null, 'someone-not-listed'); await flush(); await flush();
+    ok(srv.log.length === n, 'only a listed household member can be chosen; anything else sends nothing');
+    srv.state.omi.refuse = true;
+    root.click('assign', DEV, null, 'ben'); await flush(); await flush(); await flush();
+    ok(/Pick a household member/.test(root.innerHTML) && !/<option value="ben" selected>/.test(root.innerHTML), 'a refused change shows the server sentence and the old owner stays');
+    ok(!srv.log.some((l) => /\/api\/omi\/recordings/.test(l.url)), 'the Bluetooth settings never fetch a recording');
+    c.destroy();
+  }
+  /* registry off: the whole control is absent and the section still works */
+  {
+    const srv = fakeServer(), root = fakeRoot(), t = fakeTimers();
+    srv.state.view = view([omi()]);
+    BT.mount(root, { fetchJson: srv.fetchJson, setTimeout: t.setTimeout, clearTimeout: t.clearTimeout });
+    await flush(); await flush(); await flush();
+    ok(!/Assigned to/.test(root.innerHTML) && button(root.innerHTML, 'connect', DEV).present, 'registry flag off (404): no Assigned to control, Connect still there');
+    const asks = srv.log.filter((l) => /^\/api\/omi\//.test(l.url)).length;
+    await t.run(3); await flush();
+    ok(srv.log.filter((l) => /^\/api\/omi\//.test(l.url)).length === asks, 'a 404 is remembered: the page does not keep asking');
+  }
+
   /* a failed connect surfaces the panel's reason on the row */
   {
     const srv = fakeServer(), root = fakeRoot(), t = fakeTimers();
