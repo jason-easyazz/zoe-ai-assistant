@@ -3151,6 +3151,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_MIRROR_GUARD": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/mirror_guard.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_MIRROR_INTENTS_TO_OPENCLAW": {
         "defaults": [
           "'false'"
