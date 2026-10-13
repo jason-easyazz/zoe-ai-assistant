@@ -196,14 +196,17 @@ async def test_bound_panel_guest_sentinel_saves_as_bound_user(monkeypatch) -> No
 
 
 @pytest.mark.asyncio
-async def test_lapsed_session_on_bound_panel_attributes_but_does_not_revive(monkeypatch) -> None:
-    """A LAPSED panel session is attributed, but never revived.
+async def test_lapsed_session_on_bound_panel_is_guest_and_not_revived(monkeypatch) -> None:
+    """A LAPSED panel session is neither attributed nor revived.
 
-    recent=None (the login lapsed) + default=jason. The turn is still ATTRIBUTED to
-    the bound user rather than guest — that was #1349's legitimate goal, and it holds
-    because `_panel_default_user` is already the last resort in `effective_user`.
+    recent=None (the login lapsed) + default=jason (the panel's last signed-in user).
+    Until 2026-10-13 the turn was still ATTRIBUTED to jason through `_panel_default_user`
+    as the last resort in `effective_user` — which is the privacy defect: whoever spoke
+    was saved into (and, on the public calendar/list shortcut, read) jason's data. A
+    voice turn's identity now comes only from a fresh source, so this turn is guest
+    (tests/test_voice_identity_freshness.py holds the rule end to end).
 
-    But the lapsed session must NOT be resurrected. Promoting `_panel_default_user`
+    And the lapsed session must NOT be resurrected. Promoting `_panel_default_user`
     into the freshness-gated `_panel_recent_user` (as #1349 did) re-trusted a
     logged-OUT user for `_scope_identity_user` and every `user_scoped` PIN gate, and
     the heartbeat then refreshed the expired session on every turn — including a
@@ -243,10 +246,10 @@ async def test_lapsed_session_on_bound_panel_attributes_but_does_not_revive(monk
         "lapsed panel session was revived — the heartbeat must only refresh a user "
         "whose session is still fresh: %r" % (touched,)
     )
-    # 2. the turn is still attributed to the bound user, not guest (#1349's real goal;
-    #    holds via _panel_default_user's place in the effective_user chain)
-    assert (SESSION_ID, "user", UTTERANCE, BOUND_USER) in chat_calls, (
-        "lapsed-session turn was not persisted under the bound user: %r" % (chat_calls,)
+    # 2. PRIVACY: the turn is NOT attributed to the lapsed member — a guest is not
+    #    persisted at all (no write under jason, no write under a sentinel).
+    assert chat_calls == [], (
+        "lapsed-session turn was persisted under the panel's last signed-in member: %r" % (chat_calls,)
     )
 
 
@@ -405,17 +408,19 @@ async def test_identity_resolves_via_dedicated_conn_under_shared_db_race(monkeyp
     # Resolver succeeds ONLY on the dedicated connection; on the racy shared db it
     # yields None — the NET effect of asyncpg raising under concurrent use and the
     # resolver's own `except: pass` swallowing it (the exact live failure → guest).
-    async def _conn_aware_default(_panel_id, conn):
+    # The FRESH session resolver carries identity (since 2026-10-13 it is the only
+    # panel source a voice turn may use; the last-seen default no longer counts).
+    async def _conn_aware_recent(_panel_id, conn):
         if conn != "DEDICATED_CONN":
             return None
         return BOUND_USER
 
-    async def _conn_aware_recent(_panel_id, conn):
-        return None  # matches live (recent lookup returns None); default carries identity
+    async def _touch_noop(*_a, **_k):
+        return None
 
     monkeypatch.setitem(sys.modules, "db_pool", types.SimpleNamespace(get_db_ctx=_fake_get_db_ctx))
-    monkeypatch.setattr(voice_tts, "_resolve_panel_default_user", _conn_aware_default)
     monkeypatch.setattr(voice_tts, "_resolve_recent_panel_session_user", _conn_aware_recent)
+    monkeypatch.setattr(voice_tts, "_touch_panel_session", _touch_noop)
 
     response = await voice_command(
         {"text": UTTERANCE, "panel_id": PANEL_ID, "session_id": SESSION_ID},

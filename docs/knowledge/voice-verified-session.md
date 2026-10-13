@@ -62,9 +62,11 @@ is a smart-home request, not a lock.
 (calendar, lists, reminders), the member's ordinary writes, memory recall, and the Skybridge identity wall
 (`auth_required` is not raised, so no PIN challenge). In `voice_command` the flag replaces the scope chain for a
 panel device's spoken turn: `_scope_identity_user` = the verified member (session open), or the panel's FRESH PIN
-sign-in, or nobody. A verified claim no longer writes the indefinite `_VOICE_SESSIONS[panel]["bound_user_id"]`
-binding, and an unverified voice never inherits a stale one. A caller that names its speaker itself (a trusted
-`identified_user_id`, the PIN-resumed replay) stays on the legacy chain.
+sign-in, or nobody. A verified claim never writes `_VOICE_SESSIONS[panel]["bound_user_id"]` (flag on or off: that
+slot only mirrors a FRESH PIN session - the voice-identity freshness rule, `routers/AGENTS.md`), and an unverified voice
+never inherits a stale one. The open voice session is the one source this flag adds to that rule; it only ever names
+the member this turn's verified voice claims. A caller that names its speaker itself (a trusted `identified_user_id`,
+the PIN-resumed replay) stays on the freshness chain. Pinned by `tests/test_voice_identity_freshness.py` section 6.
 
 **What it never unlocks.**
 
