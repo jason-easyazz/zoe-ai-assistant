@@ -225,7 +225,14 @@ def find_claim(sentence: str) -> Optional[Claim]:
         # Blockers (negation, irrealis, future) and target nouns are judged in the CLAUSE of the claim verb only: "I've added
         # milk to your list, but I'm not sure about eggs" and "… as you wanted" still claim the milk (review, #2004).
         found: list = []            # the kinds each claiming clause names
-        for offset, toks, temporal_tail in _clauses(text, lang):
+        prev_claimed = False        # did the clause just before this one claim a write?
+        for offset, toks, temporal_tail, head in _clauses(text, lang):
+            if head and prev_claimed:
+                # A temporal tail that FOLLOWS a claim ("… after I've scheduled the physio") reports a second, completed write: its
+                # leading temporal word only orders the two, so it is not a blocker here and the tail's claim needs its own receipt.
+                # After a promise or denial the word stays ("I'll tell you after I've added it" is no claim).
+                toks, offset = toks[head:], offset + head
+            prev_claimed = False
             padded = " " + " ".join(toks) + " "
             if any(_has_phrase(padded, b) for b in lang.blockers):
                 continue
@@ -256,6 +263,7 @@ def find_claim(sentence: str) -> Optional[Claim]:
                         continue        # "The restaurant was booked solid": a past passive with no target noun claims no write
                     kinds = () if verb_kind == "any" else (verb_kind,)
                 found.append(kinds)
+                prev_claimed = True
                 break                   # one claim per clause: its target nouns are already all in ``kinds``
         if found:
             specific = {k for kinds in found for k in kinds}
@@ -296,8 +304,9 @@ _BREAK_RE = re.compile(r"[a-z0-9']+|[,;:—–]")
 
 
 def _clauses(text: str, lang: "_Lang") -> list:
-    """``(offset, tokens, temporal_tail)`` for each clause of ``text`` - ``offset`` is how many words precede the clause in the
-    unit; ``temporal_tail`` is True when a trailing temporal clause ("… after you asked me to") was split off right after it. The
+    """``(offset, tokens, temporal_tail, head)`` for each clause of ``text`` - ``offset`` is how many words precede the clause in
+    the unit; ``temporal_tail`` is True when a trailing temporal clause ("… after you asked me to") was split off right after it;
+    ``head`` is how many leading words of THIS clause are the temporal phrase that split it off (0 for any other clause). The
     word tokens split into clauses: at ``; : -`` always, at a comma that is followed by a new subject
     (``clause_starts`` / subjects / second person) or a joiner, and at every joiner word (``clause_joiners`` - "but", "so",
     "as", "because"… per language DATA; the joiner itself belongs to neither clause). A comma inside a list of items does
@@ -309,14 +318,16 @@ def _clauses(text: str, lang: "_Lang") -> list:
     cur: list = []
     seen = 0            # words consumed so far (joiners included) = the offset of the clause being built
     cur_off = 0
+    cur_head = 0        # words of the clause being built that are the temporal phrase which split it off
     i = 0
 
     def close(temporal_tail: bool = False) -> None:
-        nonlocal cur, cur_off
+        nonlocal cur, cur_off, cur_head
         if cur:
-            clauses.append((cur_off, cur, temporal_tail))
+            clauses.append((cur_off, cur, temporal_tail, cur_head))
         cur = []
         cur_off = seen
+        cur_head = 0
 
     while i < len(items):
         tok = items[i]
@@ -337,6 +348,7 @@ def _clauses(text: str, lang: "_Lang") -> list:
                 # (its own leading "after" blocks only IT), so it never disables the completed claim before it. A LEADING
                 # "When I've added it, I'll tell you" stays one clause and stays blocked.
                 close(temporal_tail=True)
+                cur_head = temporal
             joiner = next((len(j) for j in lang.joiners if items[i:i + len(j)] == list(j)), 0)
             if joiner:
                 close()

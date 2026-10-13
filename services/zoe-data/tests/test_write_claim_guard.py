@@ -676,6 +676,9 @@ STREAM_CORPUS = [
     "I've added milk to your shopping list \u2014 okay? Anything else?",
     "I've added milk to your shopping list - right?",
     "I've added milk to your shopping list: okay?",
+    "I've added milk to your list after I've scheduled the physio. I'll tell you when I've set a reminder.",
+    "I've added milk to your list, once I've scheduled the physio. Anything else?",
+    "I'll tell you after I've scheduled the physio, then I've added milk to your list when I've set a reminder.",
     "Should I add eggs \u2014 okay? I've added milk to your shopping list \u2013 all right?",
 ]
 
@@ -732,7 +735,7 @@ _FUZZ_PHRASES = [
     "I've scheduled the physio for Friday at 9 a.m. tomorrow morning.", "so I've put oat milk on your list", "and then",
     "The restaurant was fully booked.", "one two three four five six seven eight nine ten eleven twelve thirteen,",
     "He añadido leche a tu lista de compras.", "Ya agendé la cita en tu calendario,", "You added it earlier.",
-    "Oat milk is added to your shopping list.", "after you asked me to.", "I'll add it once you confirm.", "Milk is added when you tap Done,",
+    "Oat milk is added to your shopping list.", "after you asked me to.", "after I've scheduled the physio.", "once I've set a reminder,", "I'll add it once you confirm.", "Milk is added when you tap Done,",
     "I've added milk to your shopping list - okay?", "The appointment was added to your calendar \u2014 right?", "Which items were added to your shopping list yesterday evening for the party?",
 ]
 
@@ -1060,3 +1063,53 @@ def test_a_hyphen_inside_a_word_is_not_a_tag_separator():
     # "to-do" is one word; a hyphen with no spaces around it never cuts a question
     assert g.find_claim("Is the paint on your to-do list?") is None
     assert g.find_claim("Is that the to-do list right?") is None
+
+
+# ── 5b. review of the follow-ups: a COMPLETED claim inside the split-off temporal clause is a claim of its own ─────────────
+# "I've added milk to your list after I've scheduled the physio." was spoken verbatim with only a list receipt: the tail clause kept
+# its leading "after", a blocker, and was skipped. The leading temporal word of a tail that follows a CLAIM is now stripped, so
+# the tail's own claim needs its own receipt. A tail after a promise / denial stays blocked ("I'll tell you after I've added it").
+
+TAIL_CLAIMS = [
+    ("I've added milk to your list after I've scheduled the physio.", ("calendar", "list")),
+    ("I've added milk to your list, once I've scheduled the physio.", ("calendar", "list")),
+    ("I've added milk to your list when I've scheduled the physio.", ("calendar", "list")),
+    ("I've added milk to your list before I've set a reminder.", ("list", "reminder")),
+    ("The milk was added to your list after I scheduled the physio.", ("calendar", "list")),
+    ("He añadido leche a tu lista después de que he programado la cita.", ("calendar", "list")),
+]
+
+
+@pytest.mark.parametrize("sentence,kinds", TAIL_CLAIMS)
+def test_a_completed_claim_inside_a_temporal_tail_needs_its_own_receipt(sentence, kinds):
+    claim = g.find_claim(sentence)
+    assert claim is not None and tuple(sorted(claim.kinds)) == kinds, (sentence, claim)
+    started = wr.begin()
+    wr.record("jason", "list", "l1", "t")                 # the FIRST claim's receipt alone must not vouch for the second
+    assert g.guard_text(sentence, "jason", started) in (HONEST_EN, HONEST_ES), sentence
+    for kind in kinds:
+        wr.record("jason", kind, kind + "-2", "t")
+    assert g.guard_text(sentence, "jason", started) == sentence
+
+
+@pytest.mark.parametrize("sentence,kinds", [
+    ("I've added milk to your list once you've scheduled the physio.", ("list",)),     # YOU did the second: not Zoe's write
+    ("I've added milk to your list after you scheduled the physio.", ("list",)),
+    ("I've added milk to your list after I asked.", ("list",)),                        # a tail with no claim verb of its own
+])
+def test_a_temporal_tail_that_claims_nothing_adds_no_kind(sentence, kinds):
+    claim = g.find_claim(sentence)
+    assert claim is not None and tuple(sorted(claim.kinds)) == kinds, (sentence, claim)
+
+
+@pytest.mark.parametrize("sentence", [
+    "I'll tell you after I've scheduled the physio.",
+    "I'll tell you when I've set a reminder.",
+    "I haven't added milk to your list after I've scheduled the physio.",
+    "When I've scheduled the physio, I'll tell you.",
+    "I'll add milk to your list once I've scheduled the physio.",
+    "Milk is added to your list after I've scheduled the physio.",
+    "I couldn't add milk to your list before I've scheduled the physio.",
+])
+def test_a_temporal_tail_after_a_promise_or_denial_is_still_not_a_claim(sentence):
+    assert g.find_claim(sentence) is None, sentence

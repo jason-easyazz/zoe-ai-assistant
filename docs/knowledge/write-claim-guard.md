@@ -72,7 +72,9 @@ chat, Telegram, LiveKit). `_claim_guarded` wraps the lane stream (`write_claim_g
   (it is how an honest read-back of an existing event sounds); only "is added" is (`state_claim` in the lexicon). A TRAILING temporal clause ("… after you asked me to", "… when / once / before …" -
   `clause_temporals`, per-language data) is a clause of its own: its leading "after" blocks only IT, so "I've added milk to your
   shopping list, after you asked me to" is still a claim and needs a receipt. A LEADING one ("When I've added it, I'll say so")
-  still blocks its clause; a temporal word followed by nothing or by another temporal ("once before") splits nothing; and a
+  still blocks its clause; a tail that FOLLOWS a claim and itself reports a completed first-person write ("… after I've scheduled the physio") has its
+  leading temporal word stripped and needs its own receipt (the first claim's receipt does not vouch for it), while a tail after a promise
+  or denial ("I'll tell you after I've added it") stays blocked; a temporal word followed by nothing or by another temporal ("once before") splits nothing; and a
   present-tense passive before one ("Milk is added once you tap Done") stays a description of a pending form, not a claim.
 * **Verdict**: a claim naming kinds needs a receipt of every kind since the turn began (calendar and reminder back each
   other; a recap question - "did you add the milk?" - may stand on a write from the last 30 min). A claim naming no target

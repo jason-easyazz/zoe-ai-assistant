@@ -408,10 +408,21 @@ def test_a_question_or_command_to_someone_else_by_name_is_still_addressed():
     assert us.addressedness("Turn the porch light off, Casey.", "followup").addressed is True
 
 
-def test_an_acknowledgement_that_answers_zoes_own_question_is_addressed():
-    # Zoe just asked something: "Yes, Casey." may be the answer (a name of the thing asked about), so it is kept
-    assert us.addressedness("Yes, Casey.", "followup", prev_reply_question=True).addressed is True
-    assert us.addressedness("Yes, Casey.", "followup", prev_reply_question=False).addressed is False
+@pytest.mark.parametrize("text", ["Yes, Casey.", "Okay, Casey.", "Sure, Morgan.", "No, Casey.", "Yeah, okay, Casey."])
+def test_a_short_answer_to_zoes_own_question_is_addressed(text):
+    # Zoe just asked something: "Yes, Casey." may be the answer (a name of the thing asked about), so it is kept ...
+    assert us.addressedness(text, "followup", prev_reply_question=True).addressed is True, text
+    # ... but only because she asked: the same words with no question pending are side speech to Casey
+    assert us.addressedness(text, "followup", prev_reply_question=False).addressed is False, text
+
+
+@pytest.mark.parametrize("text", [
+    "Thanks for the help, Casey.", "Great job today, Casey.", "Thanks, Casey.", "Perfect, thank you so much, Morgan.",
+    "Nice work, Casey.", "Cheers for that, Casey.", "Yes, thanks for the help, Casey.",
+])
+def test_gratitude_or_praise_to_someone_else_is_not_an_answer_even_after_a_question(text):
+    for window in ("followup", "conversation"):
+        assert us.addressedness(text, window, prev_reply_question=True) == us.Verdict(False, "vocative"), (text, window)
 
 
 def test_the_gate_drops_a_thanks_to_someone_else_when_the_flag_is_on(monkeypatch):

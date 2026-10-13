@@ -87,6 +87,9 @@ class _Lang:
     fronted_object: frozenset = frozenset()
     # Subject-auxiliary inversion words: a fronted-object question has one between the wh-word and the final verb.
     question_auxiliaries: frozenset = frozenset()
+    # The whole of a genuine short ANSWER to a question Zoe just asked ("Yes, Casey."): only these words around the name.
+    # Gratitude and praise ("Thanks", "Great job") are replies to a person, not answers, and are not here.
+    short_answers: frozenset = frozenset()
 
 
 def _fs(*words: str) -> frozenset:
@@ -146,6 +149,7 @@ _LANGS: Mapping[str, _Lang] = {
         ),
         verb_final=_fs("cause", "make", "do", "mean", "say", "need", "want", "use"),
         fronted_object=_fs("what", "which", "who", "whom", "whose"),
+        short_answers=_fs("yes", "yeah", "yep", "yup", "no", "nope", "nah", "okay", "ok", "sure"),
         question_auxiliaries=_fs(
             "do", "does", "did", "can", "could", "will", "would", "should", "shall", "might", "may", "must",
         ),
@@ -169,6 +173,7 @@ _LANGS: Mapping[str, _Lang] = {
             "cambia", "repite", "ayuda", "ayúdame", "ayudame", "cancela", "reproduce",
             "toca", "lee", "dame", "haz", "empieza", "continúa", "continua", "espera",
         ),
+        short_answers=_fs("sí", "si", "no", "vale", "claro", "bueno"),
         acknowledgements=_fs(
             "sí", "si", "no", "vale", "claro", "gracias", "perfecto", "genial", "bueno",
             "bien", "exacto", "correcto", "porfa", "perdón", "perdon",
@@ -268,14 +273,26 @@ class Verdict:
     reason: str
 
 
-def _names_other_person(text: str, langs: list[_Lang]) -> bool:
+def _vocative_names(text: str, langs: list[_Lang]) -> list[str]:
+    """The (lower-cased) names the text addresses: a vocative or a greeting target that is not a weekday / "thanks" / Zoe."""
     not_names = _union("not_names", langs)
+    out = []
     for rx in (_VOCATIVE, _GREETED):
         for m in rx.finditer(text or ""):
             candidate = m.group(1).replace("’", "'").lower()
             if candidate not in not_names and not _ZOE_NAME.fullmatch(candidate):
-                return True
-    return False
+                out.append(candidate)
+    return out
+
+
+def _names_other_person(text: str, langs: list[_Lang]) -> bool:
+    return bool(_vocative_names(text, langs))
+
+
+def _is_short_answer(words: list[str], names: list[str], langs: list[_Lang]) -> bool:
+    """True when, once the addressed name is set aside, nothing is left but 1-3 short-answer words ("Yes, Casey.")."""
+    rest = [w for w in words if w not in names]
+    return 0 < len(rest) <= 3 and all(w in _union("short_answers", langs) for w in rest)
 
 
 def _has_shape(text: str, words: list[str], langs: list[_Lang]) -> str:
@@ -320,9 +337,9 @@ def addressedness(text: str, window: str | None, *, prev_reply_question: bool = 
     vocative = _names_other_person(text, langs)
     if vocative and shape not in ("question", "command"):
         # Only a question or a command shape beats a vocative ("What time is it, Casey?"). An acknowledgement is the shape of a
-        # reply TO Casey ("Thanks for the help, Casey."), so it does not. One exception: Zoe just asked a question, so a short
-        # "Yes, Casey." may be the answer to it.
-        if shape == "acknowledgement" and prev_reply_question:
+        # reply TO Casey ("Thanks for the help, Casey."), so it does not. One exception: Zoe just asked a question, so a bare short
+        # answer ("Yes, Casey.", "Okay, Casey.") may be the answer to it. Gratitude and praise never are.
+        if prev_reply_question and _is_short_answer(words, _vocative_names(text, langs), langs):
             return Verdict(True, "answer")
         return Verdict(False, "vocative")
     if strict and window == "followup":
