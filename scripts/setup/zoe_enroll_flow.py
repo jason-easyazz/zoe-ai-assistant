@@ -282,7 +282,135 @@ def _record_wav(seconds: float, path: str) -> bool:
     return proc.returncode == 0 and os.path.getsize(path) > 32000  # >1s of audio
 
 
+VOICE_PHRASES_EXTRA = [
+    "Turn the living room lights down to half.",
+    "Play some quiet music in the kitchen.",
+]
+
+
+def _speaker_mode() -> str:
+    """``ZOE_SPEAKER_MODEL`` (the daemon's own flag): ``resemblyzer`` (default) | ``dual`` | ``resnet34``."""
+    raw = os.environ.get("ZOE_SPEAKER_MODEL", "").strip().lower()
+    return raw if raw in ("dual", "resnet34") else "resemblyzer"
+
+
+def _load_rn34():
+    """The panel ResNet34 module, loaded from beside this script (None when it is not deployed)."""
+    path = os.path.join(HERE, "zoe_speaker_resnet34.py")
+    if not os.path.isfile(path):
+        return None
+    spec = importlib.util.spec_from_file_location("zoe_speaker_resnet34", path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["zoe_speaker_resnet34"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def enroll_voice_resnet34(user: str, name: str, mode: str, rn, daemon_service: str = "zoe-voice") -> int:
+    """5-clip enrolment for ResNet34 (``resnet34``) or for BOTH models from the same clips (``dual``): the mic is held with the
+    daemon stopped, each clip is embedded HERE, the one that does not sound like the others is re-asked, and ONE 256-float profile
+    is uploaded (``dual`` also uploads the kept WAVs for the Resemblyzer profile). Nothing is stored until every clip is in hand."""
+    import numpy as np
+
+    try:
+        emb = rn.Resnet34Embedder.load()
+    except rn.Unavailable as exc:
+        print(f"ResNet34 embedder unavailable: {exc}", file=sys.stderr)
+        if mode == "resnet34":
+            say("I can't build your voice signature on this panel right now. Nothing was stored.")
+            return 1
+        say("My new voice model isn't ready on this panel, so I'll only do the old one for now.")
+        return _enroll_voice_legacy(user, name, daemon_service)
+    phrases = (VOICE_PHRASES + VOICE_PHRASES_EXTRA)[: rn.ENROLL_CLIPS]
+    say(f"Hi {name}. Let's teach me your voice. I'll ask you to say {len(phrases)} short phrases, in your normal voice. "
+        "I store a voice signature, numbers, not recordings.")
+    wavs: list = [None] * len(phrases)
+    embs: list = [None] * len(phrases)
+
+    def capture(i: int) -> bool:
+        for _ in range(3):
+            say(f"Phrase {i + 1}. After the beep, please say: {phrases[i]}")
+            time.sleep(0.4)
+            play_chime()
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                path = f.name
+            try:
+                if _record_wav(6, path):
+                    with open(path, "rb") as fh:
+                        data = fh.read()
+                    vec = emb.embed_wav(data)[0]
+                    if vec is not None:
+                        wavs[i], embs[i] = data, vec
+                        say("Got it.")
+                        return True
+            finally:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+            say("I didn't catch that clearly. Let's try the same phrase again.")
+        return False
+
+    ok = False
+    try:
+        subprocess.run(["systemctl", "--user", "stop", daemon_service], check=False)
+        time.sleep(2)
+        if not all(capture(i) for i in range(len(phrases))):
+            say("I couldn't get clear recordings. Nothing was stored.")
+            return 1
+        for _round in range(3):
+            built = rn.build_profile(embs)
+            bad = sorted(built.dropped)
+            if built.ok and not bad:
+                break
+            if _round == 2 or not bad:
+                break
+            for i in bad:
+                say("That one sounded different from the others, so let's do it once more.")
+                if not capture(i):
+                    say("I couldn't get clear recordings. Nothing was stored.")
+                    return 1
+        if not built.ok:
+            say("The recordings didn't sound consistent enough. Nothing was stored.")
+            return 1
+        try:
+            out = _api("/api/voice/enroll", dict(
+                embedding_base64=base64.b64encode(np.asarray(built.vector, dtype=np.float32).tobytes()).decode(),
+                model_id=rn.MODEL_ID, sample_count=len(built.kept), user_id=user, display_name=name, consent=True))
+            ok = bool(out.get("ok"))
+        except Exception as exc:  # noqa: BLE001
+            print(f"profile upload failed: {exc}", file=sys.stderr)
+        if mode == "dual":
+            for i in built.kept:
+                try:
+                    out = _api("/api/voice/enroll", dict(audio_base64=base64.b64encode(wavs[i]).decode(), user_id=user,
+                                                         display_name=name, consent=True))
+                    ok = ok and bool(out.get("ok"))
+                except Exception as exc:  # noqa: BLE001
+                    print(f"clip {i + 1} upload failed: {exc}", file=sys.stderr)
+                    ok = False
+    finally:
+        wavs.clear()
+        embs.clear()
+        subprocess.run(["systemctl", "--user", "start", daemon_service], check=False)
+    if ok:
+        say(f"Done, {name} - I'll know your voice from now on.")
+        return 0
+    say("I couldn't save your voice signature. Nothing was stored, or only part of it.")
+    return 1
+
+
 def enroll_voice(user: str, name: str, daemon_service: str = "zoe-voice") -> int:
+    mode = _speaker_mode()
+    if mode != "resemblyzer":
+        rn = _load_rn34()
+        if rn is not None:
+            return enroll_voice_resnet34(user, name, mode, rn, daemon_service)
+        print("ZOE_SPEAKER_MODEL is set but zoe_speaker_resnet34.py is not beside this script - enrolling Resemblyzer only", file=sys.stderr)
+    return _enroll_voice_legacy(user, name, daemon_service)
+
+
+def _enroll_voice_legacy(user: str, name: str, daemon_service: str = "zoe-voice") -> int:
     say(f"Hi {name}. Let's teach me your voice. I'll ask you to say three short "
         "phrases. I store a voice signature — numbers, not recordings.")
     uploaded = 0

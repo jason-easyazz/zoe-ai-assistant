@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-627 flags; 625 not documented in `.env.example`.
+633 flags; 631 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -550,7 +550,13 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_SPEAKER_ADAPT_MIN_SCORE` | `0.85` | yes | NO | `services/zoe-data/speaker_adaptation.py` |
 | `ZOE_SPEAKER_ADAPT_MIN_SPEECH_S` | `2.0` | yes | NO | `services/zoe-data/speaker_adaptation.py` |
 | `ZOE_SPEAKER_ADAPT_PIN_WINDOW_S` | `900.0` | yes | NO | `services/zoe-data/speaker_adaptation.py` |
+| `ZOE_SPEAKER_ADAPT_RESNET34_ANCHOR_FLOOR` | `dynamic` | yes | NO | `services/zoe-data/speaker_models.py` |
+| `ZOE_SPEAKER_ADAPT_RESNET34_MIN_SCORE` | `dynamic` | yes | NO | `services/zoe-data/speaker_models.py` |
 | `ZOE_SPEAKER_ID_THRESHOLD` | `'0.82'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
+| `ZOE_SPEAKER_MODEL` | `''`, `'resemblyzer'` | yes | NO | `scripts/setup/zoe_enroll_flow.py`<br>`scripts/setup/zoe_voice_daemon.py`<br>`services/zoe-data/speaker_models.py` |
+| `ZOE_SPEAKER_RESNET34_THRESHOLD_LONG` | `dynamic` | yes | NO | `services/zoe-data/speaker_models.py` |
+| `ZOE_SPEAKER_RESNET34_THRESHOLD_SHORT` | `dynamic` | yes | NO | `services/zoe-data/speaker_models.py` |
+| `ZOE_SPEAKER_RESNET34_TIER` | `'far1'`, `dynamic` | yes | NO | `scripts/setup/zoe_speaker_resnet34.py`<br>`services/zoe-data/speaker_models.py` |
 | `ZOE_SPECULATIVE_MAX_HOLD_MS` | `5000` | yes | NO | `services/zoe-data/voice_speculation.py` |
 | `ZOE_SPECULATIVE_TAIL_MS` | `320` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_SPECULATIVE_TURN` | `'false'`, `False` | yes | NO | `scripts/setup/zoe_voice_daemon.py`<br>`services/zoe-data/voice_speculation.py` |

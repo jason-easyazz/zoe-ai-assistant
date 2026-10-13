@@ -13,7 +13,10 @@
 # WHAT IT SHIPS (exactly): zoe_voice_daemon.py, zoe_voice_announce.py (the
 # daemon imports it; a partial deploy silently disables announce polling),
 # zoe_voice_enroll_mode.py (the daemon imports it; without it Zoe-driven voice
-# enrolment commands are refused and logged), zoe_enroll_flow.py (the hand-run
+# enrolment commands are refused and logged), zoe_speaker_resnet34.py + its
+# zoe_speaker_resnet34_artifacts.json (the flag-dark WeSpeaker ResNet34 embedder; only
+# imported when ZOE_SPEAKER_MODEL=dual|resnet34 - the INT8 MODEL FILE itself is not
+# shipped here, see docs/knowledge/speaker-resnet34-switch.md), zoe_enroll_flow.py (the hand-run
 # guided flow, kept in step), pi-requirements.txt. It NEVER ships scripts/setup/zoe-voice.service as-is:
 # that file is the JETSON template (/home/zoe paths, WantedBy=multi-user.target)
 # and installing it over the live unit killed the panel daemon with
@@ -51,7 +54,7 @@ REMOTE_UNIT_DIR='$HOME/.config/systemd/user'
 REMOTE_UNIT="${REMOTE_UNIT_DIR}/zoe-voice.service"
 # The daemon's only local import is `zoe_voice_announce` (scripts/setup); ship
 # exactly the daemon + what it imports + the pip manifest.
-SHIPPED_FILES=(zoe_voice_daemon.py zoe_voice_announce.py zoe_voice_enroll_mode.py zoe_enroll_flow.py pi-requirements.txt)
+SHIPPED_FILES=(zoe_voice_daemon.py zoe_voice_announce.py zoe_voice_enroll_mode.py zoe_enroll_flow.py zoe_speaker_resnet34.py zoe_speaker_resnet34_artifacts.json fetch_speaker_models.sh pi-requirements.txt)
 
 INSTALL_UNIT=0
 FORCE_UNIT=0
