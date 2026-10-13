@@ -75,8 +75,10 @@ def enabled() -> bool:
 
 
 def owner_user_id() -> str:
-    """``ZOE_OMI_OWNER_USER_ID`` - whose pendant it is. Unset = uploads are refused (503): a device token authenticates the
-    DEVICE, never the person, so the owner is named by configuration, not by whoever happens to be bound to the panel."""
+    """``ZOE_OMI_OWNER_USER_ID`` - whose pendant it is, while the device registry is OFF (``ZOE_OMI_DEVICE_OWNERS`` unset). Unset = uploads
+    are refused (503): a device token authenticates the DEVICE, never the person, so the owner is named by configuration, not by whoever
+    happens to be bound to the panel. With the registry ON this is only the one-time seed (``omi_devices.ensure_seeded``) - uploads are
+    attributed by ``omi_devices.owner_of(<X-Omi-Device>)`` and nothing else."""
     return env_str("ZOE_OMI_OWNER_USER_ID", "").strip()
 
 
@@ -284,8 +286,13 @@ class StoreError(Exception):
 
 
 async def store_recording(user_id: str, *, device_id: str, key: str, sha256: str, started_at: str, duration_s: float,
-                          time_quality: str, gap_before: int, wav: bytes, scheduled_at: Optional[int] = None) -> dict:
+                          time_quality: str, gap_before: int, wav: bytes, scheduled_at: Optional[int] = None,
+                          registry: bool = False) -> dict:
     """Store one synced recording and return the confirmation the Pi needs. Idempotent by ``(user, device, key)``.
+
+    ``registry`` (the device-owners mode): ``user_id`` came from ``omi_devices.owner_of(device_id)``; it is re-checked INSIDE the member's
+    erase gate, so an erase (which unassigns their pendants) or a reassignment that lands between the lookup and the write wins -
+    the upload is refused 409 ``device_not_registered`` and the Pi keeps the audio.
 
     Returns ``{"ok": True, "id", "key", "sha256", "duplicate": bool}`` or, for a tombstone, ``{"ok": True, "deleted": True}``.
     Raises ``StoreError`` (status, code) for a refusal; the Pi treats 4xx as "never retry this one" and everything else as "try later".
@@ -318,6 +325,10 @@ async def store_recording(user_id: str, *, device_id: str, key: str, sha256: str
     async with erase_gate.writing(user_id, gen) as live:
         if not live:
             raise StoreError(409, "erased while uploading")
+        if registry:
+            import omi_devices
+            if await omi_devices.owner_of(device_id) != user_id:
+                raise StoreError(409, "device_not_registered")
         async with get_compat_db() as db:
             rows = await _fetch(db, "SELECT id, sha256, status FROM omi_recordings WHERE user_id = ? AND device_id = ? AND recording_key = ?",
                                 (user_id, device_id, key))
@@ -425,9 +436,12 @@ async def update_recording(user_id: str, rid: str, *, keep_audio: Optional[bool]
 
 
 async def forget_user(user_id: str) -> int:
-    """Right to be forgotten: every recording of the member is deleted (audio, transcript, times). Takes the member's erase gate."""
+    """Right to be forgotten: every recording of the member is deleted (audio, transcript, times) AND their pendant registrations are
+    unassigned (``omi_devices.forget_user``; the device row stays, unowned, so a restart cannot re-seed it to them). Takes the member's
+    erase gate. Returns the number of recordings deleted."""
     try:
         from db_compat import get_compat_db
+        import omi_devices
         n = 0
         async with erase_gate.erasing(user_id):
             async with get_compat_db() as db:
@@ -435,6 +449,12 @@ async def forget_user(user_id: str) -> int:
                     await _tombstone(db, r, _now())
                     n += 1
                 await db.commit()
+            try:        # AFTER the recordings are committed: a registry that is not migrated yet (0047) must never block erasing audio
+                async with get_compat_db() as db:
+                    await omi_devices.forget_user(db, user_id)
+                    await db.commit()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("omi_devices: pendant registrations NOT unassigned for a forgotten user (%s)", type(exc).__name__)
         return n
     except Exception as exc:  # noqa: BLE001
         logger.warning("omi_recordings: recordings NOT erased for a forgotten user (%s)", type(exc).__name__)

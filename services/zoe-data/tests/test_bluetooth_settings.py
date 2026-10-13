@@ -10,7 +10,7 @@ confirm check; drop ``_sweep``'s queued TTL):
   audit          every connect/disconnect/forget/update request AND outcome is logged; no audit line = no action (fail closed)
   bounds         panel-supplied data is truncated; unreachable panels fail their jobs with a sentence
 
-Synthetic data only: panel ids are made up, device ids are 12-hex hashes, and a BLE address appears nowhere.
+Synthetic data only: panel ids are made up, device ids are 16-hex hashes, and a BLE address appears nowhere.
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ import bluetooth_broker as bt
 from routers import bluetooth as bt_router
 
 PANEL, OTHER = "panel-a1", "panel-b2"
-DEV = "0123456789ab"
+DEV = "0123456789abcdef"
 ADMIN = {"user_id": "u-admin", "role": "admin", "username": "jason"}
 MEMBER = {"user_id": "u-member", "role": "member", "username": "sam"}
 GUEST = {"user_id": "guest", "role": "guest", "username": "guest"}
@@ -165,7 +165,7 @@ def test_scan_flows_from_the_ui_through_the_agent_and_back_into_the_device_list(
     assert mid["state"] == "running" and mid["progress"]["pct"] == 10
     result = {"devices": [{"id": DEV, "name": "Omi", "rssi": -60, "driver": "omi", "label": "Omi pendant", "specific_driver": True,
                            "remembered": False, "connected": False},
-                          {"id": "ba9876543210", "name": "HR Strap", "rssi": -50, "driver": "generic", "label": "Bluetooth device",
+                          {"id": "fedcba9876543210", "name": "HR Strap", "rssi": -50, "driver": "generic", "label": "Bluetooth device",
                            "specific_driver": False, "remembered": False, "connected": False}], "hidden_unnamed": 3, "scanned_s": 10}
     assert report(env, job["job_id"], state="succeeded", result=result).status_code == 200
     view = env.client.get(f"/api/bluetooth/panels/{PANEL}").json()
@@ -364,4 +364,4 @@ def test_the_zoe_side_never_sees_or_stores_a_device_address():
     from pathlib import Path
     for f in (Path(bt.__file__), Path(bt_router.__file__)):
         text = f.read_text()
-        assert not re.search(r"\b[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}\b", text), f.name       # no MAC literal; the opaque 12-hex id is all it handles
+        assert not re.search(r"\b[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}\b", text), f.name       # no MAC literal; the opaque 16-hex id is all it handles

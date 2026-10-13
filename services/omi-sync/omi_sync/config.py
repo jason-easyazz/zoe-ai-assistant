@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,18 @@ def _float(name: str, default: float, env) -> float:
         return default
 
 
+def _addresses(multi: str, single: str) -> tuple:
+    """``OMI_PENDANT_ADDRESSES`` (comma / space / semicolon list) wins; the old single ``OMI_PENDANT_ADDRESS`` is the fallback.
+    Order is kept (it is the visiting order), duplicates are dropped case-insensitively."""
+    seen, out = set(), []
+    for raw in re.split(r"[,;\s]+", multi or single or ""):
+        a = raw.strip()
+        if a and a.lower() not in seen:
+            seen.add(a.lower())
+            out.append(a)
+    return tuple(out)
+
+
 def _opt_int(raw: str) -> Optional[int]:
     try:
         return int(raw.strip()) if raw.strip() else None
@@ -29,7 +42,8 @@ def _opt_int(raw: str) -> Optional[int]:
 @dataclass(frozen=True)
 class Settings:
     enabled: bool
-    address: str                 # the pendant's BLE address (operator-provided; never uploaded)
+    address: str                 # the FIRST pendant's BLE address (operator-provided; never uploaded) - '' if none
+    addresses: tuple             # every pendant this Pi syncs, in visiting order (OMI_PENDANT_ADDRESSES, else OMI_PENDANT_ADDRESS)
     addr_type: str               # 'random' (the CV1 uses a static random address) | 'public'
     zoe_url: str
     device_token: str
@@ -44,6 +58,7 @@ class Settings:
     lecc_prefix: tuple           # how to run it privileged, e.g. ('sudo', '-n')
     scan_interval_s: float
     cooldown_s: float
+    unregistered_retry_s: float  # how long to wait before asking again after Zoe said "this pendant is not assigned to anyone"
 
     @property
     def spool_path(self) -> Path:
@@ -59,7 +74,8 @@ def load(env: dict | None = None) -> Settings:
     get = lambda k, d="": (e.get(k) or d)  # noqa: E731
     return Settings(
         enabled=_truthy(get("OMI_SYNC_ENABLED", "0")),
-        address=get("OMI_PENDANT_ADDRESS").strip(),
+        address=(_addresses(get("OMI_PENDANT_ADDRESSES"), get("OMI_PENDANT_ADDRESS")) or ("",))[0],
+        addresses=_addresses(get("OMI_PENDANT_ADDRESSES"), get("OMI_PENDANT_ADDRESS")),
         addr_type="public" if get("OMI_PENDANT_ADDR_TYPE", "random").strip().lower() == "public" else "random",
         zoe_url=get("ZOE_URL", "https://zoe.local").strip(),
         device_token=get("DEVICE_TOKEN").strip(),
@@ -74,4 +90,5 @@ def load(env: dict | None = None) -> Settings:
         lecc_prefix=tuple(shlex.split(get("OMI_SYNC_LECC_PREFIX", "sudo -n"))),
         scan_interval_s=_float("OMI_SYNC_SCAN_INTERVAL_S", 30.0, e),
         cooldown_s=_float("OMI_SYNC_COOLDOWN_S", 120.0, e),
+        unregistered_retry_s=max(60.0, _float("OMI_SYNC_UNREGISTERED_RETRY_S", 900.0, e)),
     )
