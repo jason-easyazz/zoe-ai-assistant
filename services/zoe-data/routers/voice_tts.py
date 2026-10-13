@@ -1910,9 +1910,23 @@ async def _request_voice_identity_challenge(
     session_id: str,
     caller: dict | None,
     reason: str = "Voice command needs identity. Enter your PIN to continue.",
+    step_up: bool = False,
 ) -> dict:
-    """Hold a voice turn and ask the touch panel to identify the speaker."""
+    """Hold a voice turn and ask the touch panel to identify the speaker.
+
+    With ZOE_VOICE_SESSION on, the panel also gets the privacy-safe ``locked`` card (voice_cards.locked): no member,
+    no rows - "say it again so I know it's you, or unlock with your PIN" (or the step-up line)."""
     import uuid as _uuid_mod
+
+    try:
+        import voice_session as _vs_chal
+
+        if _vs_chal.enabled():
+            import voice_cards as _vc_chal
+
+            await _vc_chal.push(_vc_chal.locked(panel_id, step_up=step_up))
+    except Exception as _lock_card_exc:
+        logger.debug("voice locked card push failed (non-fatal): %s", _lock_card_exc)
 
     _pending_id = _uuid_mod.uuid4().hex
     _PENDING_VOICE_IDENT[panel_id] = {
@@ -3329,6 +3343,11 @@ async def voice_command(
     # The speaker gate's verdict for THIS turn, carried to every memory write it causes
     # (None = the lane reports no verdict = today's behaviour; see _speaker_verdict).
     _speaker_verified: Optional[bool] = None
+    # ZOE_VOICE_SESSION (flag-dark, voice_session.py): "an identified voice is a password". Off = every line it guards
+    # below is skipped and this handler is today's, byte for byte.
+    import voice_session as _voice_session
+
+    _by_claim = False
     if not identified_user_id:
         # Panels that match speaker profiles locally send a claim + score; the
         # threshold decision stays server-side so a panel can never lower it,
@@ -3336,7 +3355,6 @@ async def voice_command(
         # STILL hold consent in the DB — a panel whose profile cache predates a
         # revocation must not keep identifying that user (fail closed).
         _claimed = _accept_panel_voice_claim(payload, caller)
-        _by_claim = False
         if _claimed and await _voice_claim_consented(_claimed, _claim_model(payload)[0]):
             identified_user_id = _claimed
             _by_claim = True
@@ -3432,7 +3450,9 @@ async def voice_command(
     # Pass 3 B3: if daemon supplied an identified_user_id, bind it to the session
     # so the next turn from the same panel doesn't need to re-verify.
     _identified_real_user = _real_user_or_none(identified_user_id)
-    if _identified_real_user:
+    # With ZOE_VOICE_SESSION on, a VOICE claim never writes this indefinite binding: the bounded panel voice session
+    # (TTL, closed by any other voice) is what a verified voice unlocks.
+    if _identified_real_user and not (_by_claim and _voice_session.enabled()):
         _ses = _VOICE_SESSIONS.get(panel_id)
         if _ses:
             # Store the NORMALISED value: the slot must only ever hold a real
@@ -3517,6 +3537,28 @@ async def voice_command(
     _scope_identity_user = (
         _real_user_or_none(identified_user_id) or _bound_user or _recent_real_user
     )
+    # ZOE_VOICE_SESSION: for a panel device's spoken turn the VOICE decides the member scope - an accepted claim that
+    # meets the model gate opens / renews the panel's voice session; any other voice closes it and the turn gets only a
+    # FRESH PIN sign-in (never a stale binding). A caller that named its speaker itself stays on the legacy chain.
+    _vs_decision = None
+    if _voice_session.enabled() and (_by_claim or not identified_user_id):
+        _vs_model_ok, _vs_model_reason = (
+            _voice_session.model_gate(payload) if _by_claim else (False, "no_claim")
+        )
+        _vs_decision = _voice_session.observe_turn(
+            panel_id=panel_id,
+            caller_source=(caller or {}).get("source"),
+            verdict=_speaker_verified,
+            claimed=identified_user_id if _by_claim else None,
+            pin_user=_recent_real_user,
+            model_ok=_vs_model_ok,
+            model_reason=_vs_model_reason,
+            text=text,
+        )
+        if _vs_decision is not None:
+            _scope_identity_user = _vs_decision.scope_user
+            if _vs_decision.events:
+                _spawn_bg(_voice_session.publish(list(_vs_decision.events)))
     _has_scope_identity = bool(_scope_identity_user)
     effective_user = (
         identified_user_id
@@ -3556,6 +3598,58 @@ async def voice_command(
         identified_user_id, _bound_user, _panel_recent_user, _panel_default_user,
         _scope_identity_user, _has_scope_identity,
     )
+
+    if _vs_decision is not None and _vs_decision.lock:
+        # "lock" / "sign me out": the session is already closed (published above); say so and stop - nothing to store.
+        _lock_reply = str(_voice_session.text_for("reply_locked", default="") or "")
+        _lock_b64: Optional[str] = None
+        _lock_ct = "audio/wav"
+        if not stream:
+            try:
+                _lock_audio = await synthesize({"text": _lock_reply}, caller=caller)
+                _lock_b64 = base64.b64encode(_lock_audio.body).decode("ascii")
+                _lock_ct = _lock_audio.media_type
+            except Exception as _lock_exc:
+                logger.warning("voice/command lock reply TTS failed: %s", _lock_exc)
+        try:
+            from push import broadcaster as _bc_lock
+            await _bc_lock.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": _lock_reply})
+            await _bc_lock.broadcast("all", "voice:done", {"panel_id": panel_id})
+        except Exception:
+            pass
+        return {"ok": True, "panel_id": panel_id, "reply": _lock_reply, "audio_base64": _lock_b64,
+                "content_type": _lock_ct, "intent": "voice_session_lock"}
+
+    if _vs_decision is not None and _vs_decision.by_session:
+        # STEP-UP: a member known only by VOICE still needs the PIN for payments, security / admin / settings,
+        # biometrics, forgetting a person and anything for another member (voice_session_policy.json + the lexicon).
+        # A check that cannot run fails CLOSED (asks for the PIN).
+        try:
+            from intent_router import detect_intent as _detect_su
+            from skybridge_service import classify_skybridge_intent as _sky_su
+
+            _su_intent = _detect_su(text, log_miss=False)
+            _su_sky = _sky_su(text, (_VOICE_SESSIONS.get(panel_id) or {}).get("skybridge_context") or None)
+            _su_reason = _voice_session.step_up_reason(
+                text,
+                intent_name=_su_intent.name if _su_intent else None,
+                skybridge=(_su_sky.domain, _su_sky.action) if _su_sky else None,
+                other_member_names=await _voice_session.other_member_names(str(_scope_identity_user or "")),
+            )
+        except Exception as _su_exc:
+            logger.warning("voice/command step-up check failed (asking for the PIN): %s", _su_exc)
+            _su_reason = "check_failed"
+        if _su_reason:
+            _voice_session._audit("step_up", str(_scope_identity_user or ""), panel_id, _su_reason)
+            return await _request_voice_identity_challenge(
+                panel_id=panel_id,
+                text=text,
+                session_id=session_id,
+                caller=caller,
+                reason=str(_voice_session.text_for("step_up_reason", default="") or "")
+                or "Voice command needs identity. Enter your PIN to continue.",
+                step_up=True,
+            )
 
     # Persist user turn to chat_messages immediately so all downstream paths
     # (nightly digest, _load_voice_history, multi-turn context) have the transcript.
@@ -4065,12 +4159,31 @@ async def voice_command(
             )
             _skybridge_reply = str(_skybridge_result.get("spoken_summary") or "Showing that in Skybridge.")
             _bcast_t0 = time.monotonic()
-            await _broadcast_skybridge_ui(
-                panel_id,
-                _skybridge_result,
-                utterance=text,
-                turn_key=_turn_key,
-            )
+            # ZOE_VOICE_SESSION: an AUTHORISED calendar / list read shows its real rows on THIS panel (a private
+            # voice_card on the panel's own channel) and names the events aloud. Delivered = no page-reloading
+            # navigate (it would wipe the card); not delivered (no live socket) = today's Skybridge broadcast.
+            _vs_card_sent = 0
+            if _voice_session.enabled() and _real_user_or_none(_skybridge_user):
+                try:
+                    import voice_cards as _voice_cards
+
+                    _sky_rd = _skybridge_result.get("intent") or {}
+                    _sky_kind = _voice_session.private_read_kind(
+                        skybridge=(_sky_rd.get("domain"), _sky_rd.get("action")))
+                    if _sky_kind:
+                        if _sky_kind == "calendar":
+                            _skybridge_reply = _voice_cards.spoken_calendar(_skybridge_result) or _skybridge_reply
+                        _vs_card_sent = await _voice_cards.push(
+                            _voice_cards.from_skybridge(panel_id, str(_skybridge_user), _skybridge_result))
+                except Exception as _vs_card_exc:
+                    logger.debug("voice/command private card failed (falls back to Skybridge UI): %s", _vs_card_exc)
+            if not _vs_card_sent:
+                await _broadcast_skybridge_ui(
+                    panel_id,
+                    _skybridge_result,
+                    utterance=text,
+                    turn_key=_turn_key,
+                )
             _bcast_dt = time.monotonic() - _bcast_t0
             _synth_t0 = time.monotonic()
             # In stream mode, /turn_stream synthesizes the reply sentence-by-
@@ -4106,6 +4219,25 @@ async def voice_command(
         # Surfaced at warning (was debug): when this fires the turn falls through to
         # the legacy intent path, which is the silent bounce-to-domain-page behavior.
         logger.warning("voice/command skybridge fast path failed (non-fatal): %s", _skybridge_exc)
+
+    # ZOE_VOICE_SESSION: a private READ the Skybridge did not answer (reminders; a calendar / list ask it was vetoed
+    # on) still SHOWS its rows when the turn is authorised for that member - read in the background, so whichever
+    # lane speaks the answer is not delayed.
+    if _voice_session.enabled() and _has_scope_identity:
+        try:
+            from intent_router import detect_intent as _detect_rd
+
+            _rd_intent = _detect_rd(text, log_miss=False)
+            _rd_kind = _voice_session.private_read_kind(intent_name=_rd_intent.name if _rd_intent else None)
+            if _rd_kind:
+                import voice_cards as _voice_cards_rd
+
+                async def _push_read_card(_k: str = _rd_kind, _u: str = str(_scope_identity_user)) -> None:
+                    await _voice_cards_rd.push(await _voice_cards_rd.for_read(panel_id, _u, _k, text))
+
+                _spawn_bg(_push_read_card())
+        except Exception as _rd_exc:
+            logger.debug("voice/command private read card failed (non-fatal): %s", _rd_exc)
 
     # Fallback audio used when any part of the pipeline fails — panel never goes silent.
     _FALLBACK_PHRASE = "Sorry, something went wrong. Please try again."
@@ -6629,6 +6761,12 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
         logger.error("voice/enroll DB error: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to store profile") from exc
 
+    if consent is False:
+        # A revoked consent closes any open panel voice session of this member now, not at its TTL (no-op when
+        # ZOE_VOICE_SESSION is off: nothing is open).
+        import voice_session as _vs_revoke
+
+        await _vs_revoke.revoke_member(user_id, "consent_revoked")
     out = dict(ok=True, profile_id=profile_id, user_id=user_id, display_name=display_name)
     if model_id != speaker_models.LEGACY_MODEL_ID:
         out["model_id"] = model_id      # the legacy response shape is a pinned contract; only a new model adds a field

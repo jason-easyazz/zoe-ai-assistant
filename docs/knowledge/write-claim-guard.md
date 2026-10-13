@@ -3,7 +3,7 @@ type: Reference
 title: The write-claim guard - Zoe never says "I've added it" unless a row landed
 description: Why a spoken "done" is checked against receipts the writers record; where the guard sits (brain_dispatch, every brain turn), how a claim is recognised (per-language lexicon DATA), what counts as a write, the fast-path parser fixes that came with it, and what is still open. Flag ZOE_WRITE_CLAIM_GUARD = enforce | shadow | off, default enforce.
 tags: [trust, voice-path, lists, calendar, skybridge, zoe-data]
-timestamp: 2026-10-12T00:00:00Z
+timestamp: 2026-10-13T00:00:00Z
 ---
 
 # The write-claim guard (`write_claim_guard.py`, `write_receipts.py`)
@@ -63,12 +63,19 @@ chat, Telegram, LiveKit). `_claim_guarded` wraps the lane stream (`write_claim_g
   `modifier_suffixes` entry ("-ly", es "-mente") counts once a first-person subject stands before it
   (`_subject_then_modifiers`: "I've definitely / happily added", "we have now quietly gone ahead and set") - so "Emily added the
   milk" and "I think Mum added eggs" stay someone else's write. Every claim clause of a unit counts (`find_claim`
-  returns the union of their kinds, so one receipt cannot vouch for a second claim); a trailing tag ("…, okay?", "…, right?",
-  es "…, ¿vale?" - `tag_questions`) questions only the tag, while a question that opens with an interrogative word or "¿" stays
+  returns the union of their kinds, so one receipt cannot vouch for a second claim); a trailing tag ("…, okay?", "… - right?",
+  "… — okay?", "…: okay?", es "…, ¿vale?" - `tag_questions`, after a comma, semicolon, colon, em / en dash or a SPACED hyphen; "to-do" is
+  never a separator) questions only the tag (a leading discourse word - `discourse_openers`: okay / so / well / right / hmm - is skipped before asking whether the unit opens with an interrogative, so "Okay, have I added milk — right?" stays a genuine question; a "¿" inside the unit is one too), while a question that opens with an interrogative word or "¿" stays
   exempt; "you" excludes only an ACTIVE claim ("The milk you mentioned has been added" is still a claim); and a claim verb that
   opens a clause is a claim only as a completion ellipsis ("Added the milk.", "Added it.", or with a target noun and no copula),
   never an adjective ("Scheduled maintenance starts at 2 PM", "Added sugar is unhealthy" - `ellipsis_objects`, en only). "is scheduled for Friday" describes the calendar and is not a claim
-  (it is how an honest read-back of an existing event sounds); only "is added" is (`state_claim` in the lexicon).
+  (it is how an honest read-back of an existing event sounds); only "is added" is (`state_claim` in the lexicon). A TRAILING temporal clause ("… after you asked me to", "… when / once / before …" -
+  `clause_temporals`, per-language data) is a clause of its own: its leading "after" blocks only IT, so "I've added milk to your
+  shopping list, after you asked me to" is still a claim and needs a receipt. A LEADING one ("When I've added it, I'll say so")
+  still blocks its clause; a tail that FOLLOWS a claim and itself reports a completed first-person write ("… after I've scheduled the physio") has its
+  leading temporal word stripped and needs its own receipt (the first claim's receipt does not vouch for it), while a tail after a promise
+  or denial ("I'll tell you after I've added it") stays blocked; a temporal word followed by nothing or by another temporal ("once before") splits nothing; a temporal word that starts a CLAUSE (`temporal_clause_starts` data: a subject such as "you" / "I've", es "de que" / "lo") splits, while one that starts a time PHRASE ("after lunch", "before dinner") is neither a split nor a blocker, so "I've put the dentist after lunch in your calendar" keeps its target (the skipped words stay as placeholders so word positions, and with them the 12-word streaming bound, do not move); and a
+  present-tense passive before one ("Milk is added once you tap Done") stays a description of a pending form, not a claim.
 * **Verdict**: a claim naming kinds needs a receipt of every kind since the turn began (calendar and reminder back each
   other; a recap question - "did you add the milk?" - may stand on a write from the last 30 min). A claim naming no target
   ("I've added it") is backed by any receipt - and only a receipt. A tool's NAME is not evidence: the stream's `phase=start` /
@@ -97,6 +104,9 @@ chat, Telegram, LiveKit). `_claim_guarded` wraps the lane stream (`write_claim_g
 
 * `list_service.clean_item_text` / `is_plausible_item` - ONE cleaner (stutter, fillers, edge punctuation) and ONE refusal
   (a sentence, a vague noun, a pronoun/wh-word opener, > 12 words) used by both the Skybridge and the `intent_router` parsers.
+  After a possessive, an auxiliary-looking word (`can`, `will`) is the NOUN of the item at the end of the phrase ("my spare can") or
+  when it opens a known compound (`_NOUN_COMPOUNDS` data: "my tin can OPENER", "my brother's can opener", "our can OF paint", "my
+  last will AND TESTAMENT"); "my phone can ring" / "my phone will not work" stay sentences. A new compound is a new row there.
 * Skybridge `_list_add_from_text`: `add|put … to|on|in (the|my|our) <list>`, list names incl. `to-do`, `to do`, `todo`,
   `bucket`; the verb must open a COMMAND (`_command_shaped`: only lead-in words before it).
 * Skybridge calendar create: `add|schedule|book|put|set up|create|make X (on <day>) at <time>` and "what/how about a

@@ -229,14 +229,28 @@ round). The repo's answer to that is a small head on the embedding it already co
   each against the class count, requires every array finite and every threshold in [0, 1], and refuses a damaged file (word list only,
   never a crash). At runtime a wrong-width or non-finite vector, or a non-finite score, reads as "head did not run" (`lookup` returns `None`,
   nothing cached, the row is not stamped head-complete) - never as a cached empty classification.
-* **English only, enforced.** bge-small-en is an English embedding: the head runs only on text with POSITIVE evidence of English: the
-  detector (`lexicons.detect_scored`) must say `en` AND the text must carry an English-only function word, an English contraction, or a hit on the detector's
-  English word list (`restraint._head_applies`). `detect_scored` answers `("en", 0)` for Polish, Russian, Portuguese and every other language without a word
-  list, so the language code alone is not evidence. Anything else keeps its lexicon, and its stamp is head-complete (there is nothing for the head to add); a short
-  English line with no marker also falls back to the lexicon, which can only mean fewer classes, never a wrong one.
+* **English only, enforced - on POSITIVE English evidence, never on a hit count.** bge-small-en is an English embedding: the head runs only when the
+  detector (`lexicons.detect_scored`) says `en` AND the text carries an English-only function word (`restraint._ENGLISH_MARKERS`) or an English contraction
+  (`n't`, `'ve`, `'ll`, `'re`, `'d`, `I'm`, and `'s` only after a pronoun or wh-word: `it's`, `she's`, `what's`). The detector's own hit count is NOT
+  evidence: `detect_scored` only knows en / es / fr / de, so Polish, Russian, Portuguese, Dutch and Afrikaans read as `("en", 0..2)`, and its English list is
+  `is` / `to` / `in` / `my` / `no` / `me`, which Dutch ("Mijn moeder is ziek", "Het gaat niet goed met mijn vader in het ziekenhuis") and Afrikaans ("Ek is baie
+  bekommerd oor my ma") also use. The 2026-10-13 fix drops that `hits > 0` fallback, drops the markers that are ordinary words elsewhere (`over`, `been`,
+  `also`, `just`, `son`: Dutch / German / Scandinavian / Spanish), and narrows the contraction rule (a bare `[a-z]+'s` is the Dutch / Afrikaans plural `oma's`,
+  `auto's` and German `geht's`). To keep the held-out score the marker set grew by English-only verbs, kin words, weekdays and the extractor's `user` prefix
+  (picked from DEV rows the gate had dropped, never from a held-out miss; no word of the sensitive classes is in it, a test pins that). Pinned by
+  `tests/test_restraint_head.py` (twelve Dutch / Afrikaans / German negatives get no head class and are not even embedded; seven English controls still
+  reach it; a break-the-fix test restores the old fallback and watches the Dutch line leak). **Cost, stated:** an English line with no marker
+  ("Rent overdue - landlord chasing") keeps its word-list classes only (46 of 1,422 dev rows, 3.2 %); that can only mean fewer classes, never a wrong one.
+  Not covered: a language the markers do not exclude by construction (Danish, Swedish, Norwegian and Afrikaans share a few short words such as `her`,
+  `for`, `at`, `man`; none of those is a marker, but no negative set exists for them beyond the Dutch / Afrikaans / German one).
 * **A v3 stamp means the head ran.** `stamp` (and the nightly thread pass) write `VERSION` only when the head actually classified the text (or never applies);
   a row created before the router's model is loaded is stamped `LEXICON_VERSION` (2), which `row_classes` ignores, so a later `stamp` of the same row
-  applies the head. The nightly pass never downgrades a head-complete thread row to the word list.
+  applies the head. The nightly pass never downgrades a head-complete thread row to the word list. **Texts deferred before the model loads are parked, not dropped (2026-10-13):** the worker used to embed, find no model in memory and forget the
+  text, so a row written before the first routed turn kept word-list classes until something re-stamped it. Now `restraint_head._embed_or_park` parks
+  such a text (`PENDING_MAX` = 256, oldest out, counted), and `retry_pending()` re-queues the parked texts once the router's model is in memory: the worker
+  tries every `RETRY_S` (20 s) while anything is parked, and every `defer` tries too. Only the temporary cause is parked: a model-name mismatch, an injected
+  embedder or a missing head file are permanent and are not (retrying cannot fix them). A parked text lives in the process only; after a restart the cache is
+  cold again and a row regains the head when it is re-stamped or re-warmed (the restamp pass in the ledger).
 * **Model identity is checked.** The head borrows `semantic_router.embed` only when the router's `_MODEL_NAME` equals the `embedder` recorded in
   `restraint_head.json` (`ZOE_ROUTER_MODEL` can point the router at another model of the same width); a mismatch or an unnamed model is "no head", one log line.
 
@@ -250,14 +264,20 @@ Class-exact = the labelled class is among the returned classes (the repo's defin
 
 | class | dev: word list | dev: + head | held-out: word list | held-out: + head | of which blind set 3 (legacy) | blind set (new) |
 |---|---|---|---|---|---|---|
-| health | 117/180 | 171/180 (95.0 %) | 30/52 | **44/52 (84.6 %)** | 4/10 -> 9/10 | 26/42 -> 35/42 |
-| money | 129/176 | 172/176 (97.7 %) | 39/49 | **48/49 (98.0 %)** | 10/10 -> 10/10 | 29/39 -> 38/39 |
-| family_conflict | 101/174 | 173/174 (99.4 %) | 22/44 | **41/44 (93.2 %)** | 3/8 -> 8/8 | 19/36 -> 33/36 |
-| grief | 112/174 | 169/174 (97.1 %) | 29/46 | **44/46 (95.7 %)** | 3/10 -> 9/10 | 26/36 -> 35/36 |
-| other_member | 115/221 | 211/221 (95.5 %) | 30/57 | **46/57 (80.7 %)** | 7/8 -> 7/8 | 23/49 -> 39/49 |
-| affect | 109/177 | 177/177 (100 %) | 31/46 | **45/46 (97.8 %)** | 7/8 -> 8/8 | 24/38 -> 37/38 |
-| **all** | 683/1102 (62.0 %) | 1073/1102 (**97.4 %**) | 181/294 (61.6 %) | **268/294 (91.2 %)** | 34/54 (63.0 %) -> **51/54 (94.4 %)** | 147/240 (61.2 %) -> **217/240 (90.4 %)** |
+| health | 117/180 | 169/180 (93.9 %) | 30/52 | **44/52 (84.6 %)** | 4/10 -> 9/10 | 26/42 -> 35/42 |
+| money | 129/176 | 170/176 (96.6 %) | 39/49 | **48/49 (98.0 %)** | 10/10 -> 10/10 | 29/39 -> 38/39 |
+| family_conflict | 101/174 | 172/174 (98.9 %) | 22/44 | **41/44 (93.2 %)** | 3/8 -> 8/8 | 19/36 -> 33/36 |
+| grief | 112/174 | 167/174 (96.0 %) | 29/46 | **44/46 (95.7 %)** | 3/10 -> 9/10 | 26/36 -> 35/36 |
+| other_member | 115/221 | 198/221 (89.6 %) | 30/57 | **45/57 (78.9 %)** | 7/8 -> 7/8 | 23/49 -> 38/49 |
+| affect | 109/177 | 176/177 (99.4 %) | 31/46 | **45/46 (97.8 %)** | 7/8 -> 8/8 | 24/38 -> 37/38 |
+| **all** | 683/1102 (62.0 %) | 1052/1102 (**95.5 %**) | 181/294 (61.6 %) | **267/294 (90.8 %)** | 34/54 (63.0 %) -> **51/54 (94.4 %)** | 147/240 (61.2 %) -> **216/240 (90.0 %)** |
 | plain false positives | 67/420 | 69/420 | 10/144 | 11/144 | 0/24 -> 0/24 | 10/120 -> 11/120 |
+
+**Re-measured 2026-10-13 after the English-evidence fix** (the table above is the current run): held-out **267 / 294 = 90.8 %** (was 268 / 294 = 91.2 %: one blind-set `other_member` sentence
+fell out of head eligibility), dev 1,052 / 1,102 (95.5 %, was 97.4 %: 46 short English dev rows with no English-only marker now keep word-list classes only), plain false positives unchanged
+(11 / 144 held-out, 69 / 420 dev). The ledger's 90 % floor still holds on the combined held-out split and on blind set 3 (94.4 %, 0 / 24 plain); the new blind set is exactly 90.0 %, and
+`other_member` (78.9 %) and `health` (84.6 %) are the classes under 90 %. The held-out split has now been scored three times in total (89.5 %, 91.2 %, 90.8 %); the marker set was
+extended from DEV rows only, no held-out sentence was read.
 
 Honest reading:
 
@@ -277,7 +297,7 @@ Honest reading:
 
 ## Limits, stated
 
-* **The word list is a fallback, not a classifier; the head carries the paraphrases.** See "Languages" (63 % class-exact alone) and "Semantic head" (91.2 % held-out with the head, English only).
+* **The word list is a fallback, not a classifier; the head carries the paraphrases.** See "Languages" (63 % class-exact alone) and "Semantic head" (90.8 % held-out with the head, English only).
 * **`other_member` needs a signal.** A row about "Teodor" with no `entity_type=person`, no kin or possessive and no
   contact name in the list is not classed; the nightly pass passes the member's contact names for threads, ingest does not
   have them for rows.

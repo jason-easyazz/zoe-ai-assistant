@@ -5470,7 +5470,8 @@
         "readers": [
           "scripts/setup/zoe_enroll_flow.py",
           "scripts/setup/zoe_voice_daemon.py",
-          "services/zoe-data/speaker_models.py"
+          "services/zoe-data/speaker_models.py",
+          "services/zoe-data/voice_session.py"
         ],
         "typed_env": true
       },
@@ -6323,6 +6324,36 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_VOICE_SESSION": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_session.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_VOICE_SESSION_ALLOW_RESEMBLYZER": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_session.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_VOICE_SESSION_TTL_S": {
+        "defaults": [
+          "120"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_session.py"
         ],
         "typed_env": true
       },
