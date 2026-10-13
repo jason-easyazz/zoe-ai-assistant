@@ -47,6 +47,7 @@ function boot() {
     t.calls.push({ url, sid });
     if (t.gate && sid === t.gate.sid) await t.gate.p;   // hold THIS request in flight
     if (t.mode === 'mem1-dead') return sid === 'mem1' ? res(401, {}) : res(200, { actions: [] });
+    if (t.mode === 'mem1-forbid') return sid === 'mem1' ? res(403, {}) : res(200, { actions: [] });
     if (t.mode === 'ok') return res(200, { actions: [] });
     if (t.mode === '401') return res(401, {});
     if (t.mode === 'forbid') return res(403, {});
@@ -140,6 +141,34 @@ let n = 0; const ok = (m) => { n++; console.log('  ok  ' + m); };
     assert(msg && msg.sessionId === 'mem1', 'S6: the notice carries the refused session id');
     assert.strictEqual(vm.runInContext('_panelSessionId', t.ctx), null);
     ok('S6: a 401 for the current session still drops it and names the refused session id');
+  }
+  // S7: a STALE guest 403 (sent inside the reclaim window) that lands AFTER a fresh PIN sign-in
+  // re-sent START_PANEL_POLL must not stop the poll the new member session is running.
+  {
+    const t = boot();
+    t.mode = 'reclaim';
+    let release; t.gate = { sid: null, p: new Promise((r) => { release = r; }) };
+    await t.start('zoe-touch-pi', null);                  // guest poll in flight (will be refused 403)
+    await t.start('zoe-touch-pi', 'mem2');                 // the page signed in with a PIN and re-sent START_PANEL_POLL
+    assert.strictEqual(vm.runInContext('_panelSessionId', t.ctx), 'mem2');
+    release(); await flush();                              // the old guest request comes back 403
+    assert(t.alive(), 'S7: a stale guest 403 must not stop the new session\'s SW poll');
+    assert.strictEqual(vm.runInContext('_panelSessionId', t.ctx), 'mem2', 'S7: and must not clear the newer session');
+    const before = t.calls.length;
+    await t.advance(5000); await t.tick();
+    assert(t.calls.length === before + 1 && t.calls[t.calls.length - 1].sid === 'mem2', 'S7: delivery continues under mem2');
+    ok('S7: a stale guest 403 landing after a fresh PIN login leaves the SW poll running');
+  }
+  // S8: same for a stale MEMBER 403 (an older member session replaced by a newer one).
+  {
+    const t = boot();
+    t.mode = 'mem1-forbid';
+    let release; t.gate = { sid: 'mem1', p: new Promise((r) => { release = r; }) };
+    await t.start('zoe-touch-pi', 'mem1');
+    await t.start('zoe-touch-pi', 'mem2');
+    release(); await flush();
+    assert(t.alive() && vm.runInContext('_panelSessionId', t.ctx) === 'mem2', 'S8: a stale member 403 must not stop the newer session\'s poll');
+    ok('S8: a stale 403 for a replaced member session leaves the newer session polling');
   }
   console.log(`  ${n} checks passed`);
 })().catch((e) => { console.error('FAIL', e.message); process.exit(1); });
