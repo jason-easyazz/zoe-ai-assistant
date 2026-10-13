@@ -7,7 +7,7 @@ Three mechanisms speak a spacer on the voice path, each from a different layer:
 * the TOOL FILLER   (``routers/voice_tts.py`` ``_voice_tool_filler``, ``ZOE_VOICE_TOOL_FILLER``): the brain announced a tool call.
 
 Live 2026-10-12 they fired on 12 of 18 brain turns: sometimes two on one turn, the same line three times running, "Hmm, let me look"
-after a person said a parent was in hospital, "Let me check" on a philosophical question, "Let me think" on a stored-name lookup.
+right after a person shared something worrying, "Let me check" on a philosophical question, "Let me think" on a stored-name lookup.
 What this module decides, once, for all three:
 
 * ONE per turn. ``SpacerTurn`` is shared between the layers (the outer stream and ``voice_command`` run as two tasks); a mechanism

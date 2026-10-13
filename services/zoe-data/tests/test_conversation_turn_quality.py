@@ -41,7 +41,7 @@ from voice_spacer import SpacerTurn
 
 PANEL = "panel-quality"
 DISCLOSURES = [
-    "My mum is in hospital and I'm really worried",
+    "My friend has had a really rough week and I'm worried about her",
     "I feel really sad today",
     "my grandmother passed away last week",
 ]
