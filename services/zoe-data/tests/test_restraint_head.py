@@ -383,7 +383,7 @@ def test_held_out_class_exact_with_the_real_embedding_is_measured_not_assumed():
     assert off["hit"] == without["hit"]
 
 
-HELD_OUT_FLOOR = 0.90      # measured 263..268 / 294 = 91.2 % on the held-out split: docs/knowledge/restraint.md "Measurement (semantic head)"
+HELD_OUT_FLOOR = 0.90      # measured 267..268 / 294 = 90.8..91.2 % on the held-out split: docs/knowledge/restraint.md "Measurement (semantic head)"
 CLASS_FLOOR = 0.78         # the weakest held-out classes: other_member 80.7 %, health 84.6 %
 
 
@@ -489,6 +489,164 @@ def test_the_head_still_serves_english_with_positive_evidence():
     restraint_head.set_embedder(_embedder_for({text: _direction("grief")}))
     classes, signals = restraint.classify_full(text, head=True)
     assert "grief" in classes and "grief:head" in signals
+
+
+# #1996 enforce precondition: ``detect_scored`` only knows en/es/fr/de and its English list is is/to/in/my/no/me, so Dutch and
+# Afrikaans read as ("en", 1+) on exactly the words they share with English. A hit count is not evidence of English.
+NOT_ENGLISH = [
+    "Mijn moeder is ziek en ik maak me zorgen",             # Dutch: detector says ("en", 1) on "is"
+    "Ek is baie bekommerd oor my ma",                       # Afrikaans: ("en", 2) on "is", "my"
+    "Het gaat niet goed met mijn vader in het ziekenhuis",  # Dutch ("in")
+    "Mama is in het ziekenhuis, ik ben bang",               # Dutch ("is", "in")
+    "Ek is bang my pa gaan sterf",                          # Afrikaans
+    "Ze maakt zich zorgen over mij",                        # Dutch: "over" means "about", not an English marker
+    "Hij heeft pijn in zijn been",                          # Dutch: "been" is a leg
+    "Mijn oma's verjaardag is morgen",                      # Dutch plural 's, not an English contraction
+    "Mijn nichtje heeft twee auto's gekocht",               # Dutch plural 's
+    "Mir geht's schlecht seit dem Tod meiner Oma",          # German geht's is not an English contraction
+    "Wir haben also kein Geld mehr",                        # German "also" means "so"
+    "Meine Mutter ist krank und ich mache mir Sorgen",      # German
+]
+
+
+@pytest.mark.parametrize("text", NOT_ENGLISH)
+def test_dutch_afrikaans_and_german_never_reach_the_english_head(text, monkeypatch):
+    fn = _embedder_for({text: _direction("grief")})
+    restraint_head.set_embedder(fn)
+    assert not restraint._head_applies(text)
+    assert restraint.classify_full(text, head=True) == restraint.classify_full(text, head=False)
+    assert fn.calls == []                                                     # not even embedded
+    monkeypatch.setenv(restraint.ENV, "shadow")
+    md: dict = {}
+    restraint.stamp(md, text)
+    assert md["sensitivity_v"] == restraint.VERSION                           # head-complete: nothing the head will ever add
+
+
+@pytest.mark.parametrize("text", [
+    "My dad passed away in June",
+    "User's wife died of cancer last year",
+    "She's so ill and we are worried",
+    "It's been a hard week for Quinn",
+    "My husband wants a divorce",
+    "I can't sleep and I'm scared",
+    "They'll be at the funeral on Friday",
+])
+def test_english_with_an_english_only_word_or_contraction_still_reaches_the_head(text):
+    """Negative control for the gate above: dropping the weak fallback must not shut the head off for English."""
+    assert restraint._head_applies(text)
+    restraint_head.set_embedder(_embedder_for({text: _direction("grief")}))
+    classes, _signals = restraint.classify_full(text, head=True)
+    assert "grief" in classes
+
+
+def test_the_old_weak_fallback_is_what_let_dutch_through_break_the_fix(monkeypatch):
+    """With ``hits > 0`` restored as evidence the Dutch line reaches the head again, so the test above is not vacuous."""
+    import lexicons
+    text = "Mijn moeder is ziek en ik maak me zorgen"
+    assert lexicons.detect_scored(text) == ("en", 1)
+    assert not restraint._head_applies(text)
+    real = restraint._head_applies
+    monkeypatch.setattr(restraint, "_head_applies",
+                        lambda t: real(t) or (lexicons.detect_scored(str(t))[0] == "en" and lexicons.detect_scored(str(t))[1] > 0))
+    restraint_head.set_embedder(_embedder_for({text: _direction("grief")}))
+    assert "grief" in restraint.classify(text, head=True)                     # the leak, reproduced
+
+
+# ── the deferred queue survives a router whose model is not loaded yet ────────────────────────────────────────────────
+def _no_router(monkeypatch):
+    import sys
+    monkeypatch.delitem(sys.modules, "semantic_router", raising=False)
+
+
+def _wait_for(cond, timeout=5.0):
+    import time
+    end = time.time() + timeout
+    while time.time() < end:
+        if cond():
+            return True
+        time.sleep(0.02)
+    return cond()
+
+
+def test_a_text_deferred_before_the_model_loads_is_parked_and_classified_once_it_does(monkeypatch):
+    """RED before: the worker's embed found no model, returned None and the text was gone, so the row kept lexicon classes forever."""
+    _no_router(monkeypatch)
+    assert restraint_head.defer(ROW)
+    assert restraint_head.drain()
+    assert restraint_head.pending() == 1
+    assert restraint_head.lookup(ROW) is None and restraint_head.retry_pending() == 0   # model still absent: nothing to retry yet
+    _router(monkeypatch)
+    assert restraint_head.retry_pending() == 1
+    assert restraint_head.drain()
+    assert "health" in (restraint_head.lookup(ROW) or ())
+    assert restraint_head.pending() == 0
+
+
+def test_the_worker_retries_by_itself_without_anyone_calling_retry(monkeypatch):
+    monkeypatch.setattr(restraint_head, "RETRY_S", 0.05)
+    restraint_head.reset()                                                     # wakes a worker still waiting on the old interval
+    _no_router(monkeypatch)
+    assert restraint_head.defer(ROW)
+    assert _wait_for(lambda: restraint_head.pending() == 1)
+    _router(monkeypatch)
+    assert _wait_for(lambda: restraint_head.lookup(ROW) is not None), "the worker never retried the parked text"
+    assert "health" in restraint_head.lookup(ROW)
+    assert restraint_head.pending() == 0
+
+
+def test_a_later_defer_is_also_a_retry_trigger(monkeypatch):
+    _no_router(monkeypatch)
+    restraint_head.defer(ROW)
+    assert restraint_head.drain() and restraint_head.pending() == 1
+    _router(monkeypatch)
+    restraint_head.defer("Wren has a new standing desk")
+    assert _wait_for(lambda: restraint_head.lookup(ROW) is not None)
+    assert restraint_head.drain()
+
+
+def test_a_row_stamped_before_the_model_loads_is_head_complete_after_it_without_a_second_stamp(monkeypatch):
+    monkeypatch.setenv(restraint.ENV, "shadow")
+    _no_router(monkeypatch)
+    md: dict = {}
+    restraint.stamp(md, ROW)
+    assert md["sensitivity_v"] == restraint.LEXICON_VERSION
+    assert restraint_head.drain()
+    _router(monkeypatch)
+    restraint_head.retry_pending()
+    assert restraint_head.drain()
+    assert "health" in restraint.row_classes(md, ROW)                          # the reader sees the head, no restamp needed
+    restraint.stamp(md, ROW)
+    assert md["sensitivity_v"] == restraint.VERSION and "health" in md["sensitivity"].split(",")
+
+
+def test_the_parked_set_is_bounded_and_keeps_the_newest(monkeypatch):
+    monkeypatch.setattr(restraint_head, "PENDING_MAX", 3)
+    _no_router(monkeypatch)
+    for i in range(5):
+        restraint_head.defer(f"parked text {i}")
+    assert restraint_head.drain()
+    assert restraint_head.pending() == 3
+    assert restraint_head._PENDING_DROPPED == 2
+    assert list(restraint_head._PENDING) == ["parked text 2", "parked text 3", "parked text 4"]
+
+
+def test_a_model_name_mismatch_is_not_parked_because_retrying_cannot_fix_it(monkeypatch):
+    _router(monkeypatch, name="some/other-384-model")
+    restraint_head.defer(ROW)
+    assert restraint_head.drain()
+    assert restraint_head.pending() == 0 and restraint_head.lookup(ROW) is None
+
+
+def test_without_the_parking_the_text_is_lost_break_the_fix(monkeypatch):
+    """Negative control: neuter ``_park`` (the old behaviour) and the same sequence leaves the row without the head."""
+    monkeypatch.setattr(restraint_head, "_park", lambda raw: None)
+    _no_router(monkeypatch)
+    restraint_head.defer(ROW)
+    assert restraint_head.drain()
+    _router(monkeypatch)
+    assert restraint_head.retry_pending() == 0
+    assert restraint_head.drain()
+    assert restraint_head.lookup(ROW) is None
 
 
 def test_a_router_running_a_different_embedding_model_disables_the_head_with_one_log_line(monkeypatch, caplog):

@@ -126,17 +126,31 @@ def clean_item_text(raw: str) -> str:
 
 # Auxiliaries that are also common nouns: "my can opener", "our can of paint", "my spare can", "your last will".
 _NOUN_HOMOGRAPHS = frozenset({"can", "will"})
+# Words that, straight AFTER one of those auxiliaries, make it the noun of a compound even mid-phrase: "my tin can OPENER", "my
+# brother's can OPENER", "our old can OF paint", "my last will AND TESTAMENT". Data, not code: a new compound is a new row here.
+# "my phone can ring" / "my phone will not work" / "my phone will and does ring" match none of them and stay sentences.
+_NOUN_COMPOUNDS = {
+    "can": (("opener",), ("openers",), ("of",), ("lid",), ("lids",), ("crusher",), ("tab",), ("label",)),
+    "will": (("and", "testament"), ("testament",)),
+}
+
+
+def _is_noun_compound(word: str, following: list) -> bool:
+    """True when the auxiliary-looking ``word`` is followed by the rest of a known noun compound ("can" + "opener")."""
+    ahead = [w.lower().strip(",;:") for w in following]
+    return any(ahead[:len(tail)] == list(tail) for tail in _NOUN_COMPOUNDS.get(word, ()))
 
 
 def _has_predicate(words: list) -> bool:
     """True when the words after a possessive hold a predicate - the sentence-making auxiliary / pronoun of "my phone IS dead". The
     word straight after the possessive is the head noun and never a predicate ("my CAN opener"); an auxiliary-looking noun that
-    ENDS the phrase is a noun too ("my spare CAN"). Anything else in ``_SENTENCE_WORDS`` makes it a sentence."""
+    ENDS the phrase is a noun too ("my spare CAN"), and so is one that opens a known noun compound mid-phrase ("my tin CAN opener",
+    "my last WILL and testament"). Anything else in ``_SENTENCE_WORDS`` makes it a sentence."""
     for n, w in enumerate(words):
         if n == 0:
             continue
         w = w.lower().strip(",;:")
-        if w in _SENTENCE_WORDS and not (w in _NOUN_HOMOGRAPHS and n == len(words) - 1):
+        if w in _SENTENCE_WORDS and not (w in _NOUN_HOMOGRAPHS and (n == len(words) - 1 or _is_noun_compound(w, words[n + 1:]))):
             return True
     return False
 
