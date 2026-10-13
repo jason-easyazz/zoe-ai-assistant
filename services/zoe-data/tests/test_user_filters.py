@@ -148,3 +148,32 @@ async def test_allowlisted_demo_user_is_processed(monkeypatch):
     monkeypatch.setattr(memory_digest, "run_dreaming_cycle", fake_cycle)
     await memory_digest.run_dreaming_for_all()
     assert seen == [REAL, "demo_tomb"]
+
+
+# --------------------------------------------------------------------------- #
+# Our own probe / harness ids (2026-10-13: zoe-hammer-<epoch> and zoe-tok-<epoch>
+# were walked as REAL users by the night passes)
+# --------------------------------------------------------------------------- #
+PROBE_IDS = ["zoe-hammer-1783610294", "zoe-tok-1783608967", "zoe_hammer_7", "ZOE-TOK-9",
+             "zoe-mempalace-baseline", "zoe-prompt-packet-measure"]
+
+
+@pytest.mark.parametrize("uid", PROBE_IDS)
+def test_our_own_probe_ids_are_synthetic(uid):
+    assert is_synthetic_user(uid) is True
+
+
+@pytest.mark.parametrize("uid", [
+    "zoe-touch-pi", "zoe-touch-hall", "zoe-kid", "zoe", "zoe-hammertime", "zoe-token-owner",
+    "zoe-tok", "zoe-hammer", "zoe-mempalace-baseline-2", "zoe-prompt-packet-measured",
+])
+def test_negative_control_zoe_prefixed_real_ids_stay_people(uid):
+    """``zoe-`` alone must never be a prefix: panel ids and accounts start with it, and a
+    family needs the separator after its keyword."""
+    assert is_synthetic_user(uid) is False
+
+
+def test_the_night_pass_filter_skips_the_probe_ids_and_keeps_the_panel_account():
+    kept = drop_synthetic_users([*PROBE_IDS, "zoe-touch-pi", REAL], pass_name="unit",
+                                log=logging.getLogger("t.probe"))
+    assert kept == ["zoe-touch-pi", REAL]
