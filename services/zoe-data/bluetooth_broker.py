@@ -10,7 +10,7 @@ nothing about a panel's address is needed.
 
 State is in memory on purpose: it is a live control surface (jobs live minutes), not a record. The durable record is the AUDIT LOG.
 
-PRIVACY. A device's BLE address never reaches zoe-data: the agent speaks in ``device_id`` (12 hex of a hash). Everything the agent
+PRIVACY. A device's BLE address never reaches zoe-data: the agent speaks in ``device_id`` (16 hex of a hash). Everything the agent
 sends is bounded and string-truncated (``clean``) before it is stored or shown - a panel is trusted to be a panel, not to be a
 well-formed JSON author.
 
@@ -44,7 +44,7 @@ MAX_JOBS = 60
 MAX_WAIT_S = 25.0
 MAX_PAYLOAD_CHARS = 24_000
 
-DEVICE_ID_RX = re.compile(r"^[0-9a-f]{12}$")
+DEVICE_ID_RX = re.compile(r"^[0-9a-f]{16}$")
 PANEL_ID_RX = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
 #: operations the UI may request, and whether each is audited
 USER_OPS = {"scan": False, "connect": True, "disconnect": True, "forget": True, "info": False, "status": False,

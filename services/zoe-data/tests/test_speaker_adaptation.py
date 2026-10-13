@@ -16,7 +16,7 @@ What is pinned, and the Edit-based negative control for each (delete / loosen th
 * "forget my voice" (the existing profile delete) removes anchor AND adapted profile - they share a row;
 * the sync / identify feeds serve the adapted profile ONLY in mode ``on`` and are otherwise byte-identical.
 
-Real SQL: the schema is the repo's own (migration 0047 applied to a table shaped like 0001 + 0023) on SQLite; no
+Real SQL: the schema is the repo's own (migration 0048 applied to a table shaped like 0001 + 0023) on SQLite; no
 network, no model, no live DB.
 """
 from __future__ import annotations
@@ -243,8 +243,8 @@ class SqliteCompat:
         return r[0] if r else None
 
 
-def _migration_0047():
-    spec = importlib.util.spec_from_file_location("mig_0047", SVC / "alembic/versions/0047_speaker_adaptation.py")
+def _migration_0048():
+    spec = importlib.util.spec_from_file_location("mig_0048", SVC / "alembic/versions/0048_speaker_adaptation.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -268,7 +268,7 @@ def _build_db(path):
             if stmt.strip():
                 conn.exec_driver_sql(stmt)
         with Operations.context(MigrationContext.configure(conn)):
-            _migration_0047().upgrade()
+            _migration_0048().upgrade()
     eng.dispose()
 
 
@@ -326,12 +326,12 @@ def test_migration_is_rerun_safe_and_adds_only_nullable_columns(tmp_path):
     eng = sa.create_engine(f"sqlite:///{path}")
     with eng.begin() as conn:                       # second upgrade over the upgraded table: a no-op
         with Operations.context(MigrationContext.configure(conn)):
-            _migration_0047().upgrade()
+            _migration_0048().upgrade()
         cols = {r[1]: r for r in conn.exec_driver_sql("PRAGMA table_info(speaker_profiles)").fetchall()}
     assert {"adapted_blob", "adapted_from_count", "adapt_count", "adapted_at", "adapt_day",
             "adapt_day_count"} <= set(cols)
     assert all(cols[c][3] == 0 for c in ("adapted_blob", "adapted_from_count"))   # nullable: old rows are unaffected
-    assert _migration_0047().down_revision == "0046"
+    assert _migration_0048().down_revision == "0047"
 
 
 # ── mode: off / shadow / on ──────────────────────────────────────────────

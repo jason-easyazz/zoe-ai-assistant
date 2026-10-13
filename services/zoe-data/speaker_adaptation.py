@@ -420,7 +420,7 @@ async def process_adaptation(db: Any, *, panel_id: str, payload: dict, now: Opti
             (user_id,),
         ) as cur:
             other_rows = await cur.fetchall()
-    except Exception as exc:  # e.g. migration 0047 not applied: fail closed, write nothing
+    except Exception as exc:  # e.g. migration 0048 not applied: fail closed, write nothing
         logger.warning("speaker adapt: storage unavailable (%s)", exc)
         return refuse("storage_unavailable")
     if not row:

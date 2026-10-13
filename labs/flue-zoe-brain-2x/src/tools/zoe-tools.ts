@@ -79,7 +79,8 @@
  *     OTHER bare value (object, number, boolean, array, null) now THROWS at
  *     runtime. EVERY tool below returns a string, so none needed wrapping — but
  *     that is a property to keep, not a coincidence to rely on, so
- *     test/tool_shapes.test.ts asserts it table-driven across all 21 tools.
+ *     test/tool_shapes.test.ts asserts it table-driven across all 22 tools
+ *     (the 21 domain tools plus the `activateAbilities` activator).
  *
  * Read-ish by default. Writes are gated behind ZOE_BRAIN_ALLOW_WRITES
  * (default OFF → dry-run, so a parity run doesn't mutate Jason's real data).
@@ -1162,7 +1163,7 @@ const activateAbilities = defineTool({
  * OWN ZOE_WEB_SEARCH_TOOL=1 — a 404 here means that side is off, and the tool
  * says so. Read-only, no user identity needed (nothing is written as anyone).
  *
- * NOT in `zoeTools` (the 21-tool always-registered set): `optionalZoeTools()`
+ * NOT in `zoeTools` (the 22-tool always-registered set): `optionalZoeTools()`
  * appends it only when the flag is on, so the default brain is unchanged. It
  * is deliberately ungrouped in tool-groups.ts — an ungrouped tool is ALWAYS
  * disclosed, which is what "are you sure?" needs.
@@ -1243,7 +1244,8 @@ const webSearch = defineTool({
 
 /**
  * Flag-gated tools appended to `zoeTools` at agent render (src/agents/zoe.ts).
- * Empty under default env, so the always-registered set stays exactly 21.
+ * Empty under default env, so the always-registered set stays exactly 22
+ * (21 domain tools plus `activateAbilities`); `web_search` makes it 23.
  */
 export function optionalZoeTools() {
   return webSearchToolEnabled() ? [webSearch] : [];

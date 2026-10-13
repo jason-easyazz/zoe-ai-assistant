@@ -34,7 +34,7 @@ Per modality, one row per profile in Postgres (the zoe-data DB):
 | Rows per person | exactly one (re-enrolling averages into it) | up to 8 (pose variety; oldest dropped past the cap) |
 | Metadata | `user_id`, `display_name`, `panel_id`, `sample_count`, `enrolled_at`, `consent_at` | `user_id`, `display_name`, `panel_id`, `model_name`, `dim`, `created_at`, `consent_at`, `active` |
 
-**Guarded adaptation (flag-dark, `ZOE_SPEAKER_ADAPT`, default off; migration 0047).** When
+**Guarded adaptation (flag-dark, `ZOE_SPEAKER_ADAPT`, default off; migration 0048).** When
 turned on, a speaker row additionally carries an *adapted* embedding (`adapted_blob`, the same
 256-dim shape) plus counters (`adapted_from_count`, `adapt_count`, `adapted_at`, `adapt_day`,
 `adapt_day_count`). `embedding_blob` remains the enrolled **anchor** and is never rewritten by
