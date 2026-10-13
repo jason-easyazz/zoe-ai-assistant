@@ -3666,6 +3666,26 @@
         ],
         "typed_env": true
       },
+      "ZOE_OMI_AUDIT_PATH": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_devices.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_OMI_DEVICE_OWNERS": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_devices.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_OMI_KEEP_AUDIO": {
         "defaults": [
           "False"
@@ -3692,6 +3712,7 @@
         ],
         "in_env_example": false,
         "readers": [
+          "services/zoe-data/omi_devices.py",
           "services/zoe-data/omi_recordings.py"
         ],
         "typed_env": true
