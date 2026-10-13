@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-621 flags; 619 not documented in `.env.example`.
+622 flags; 620 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -337,6 +337,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_MERGE_QUEUE_ENABLED` | `''` | no | NO | `services/zoe-data/greploop_guard.py` |
 | `ZOE_MERGE_QUEUE_LABEL` | `'auto-merge'` | no | NO | `services/zoe-data/greploop_guard.py` |
 | `ZOE_MERGE_QUEUE_MAX_CANDIDATES` | `'50'` | no | NO | `services/zoe-data/greploop_guard.py` |
+| `ZOE_MIRROR_GUARD` | `-` | yes | NO | `services/zoe-data/mirror_guard.py` |
 | `ZOE_MIRROR_INTENTS_TO_OPENCLAW` | `'false'` | no | NO | `services/zoe-data/routers/chat.py` |
 | `ZOE_MOONSHINE_ARCH` | `'MEDIUM_STREAMING'`, `'v2'` | yes | NO | `scripts/perf/measure_moonshine_vad_threshold.py`<br>`scripts/perf/measure_stt_under_speech.py`<br>`services/zoe-data/routers/voice_tts.py` |
 | `ZOE_MOONSHINE_KEYTERMS` | `-` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
