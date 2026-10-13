@@ -3,7 +3,7 @@ type: Reference
 title: Settings > Bluetooth devices (ZOE_BLUETOOTH_SETTINGS, flag-dark)
 description: A general Bluetooth section in Settings - pick a panel, scan, connect, disconnect, forget and update - with per-device drivers (generic; Omi pendant with battery, firmware and a gated firmware update). How it is built, why it pulls instead of proxies, the update safety facts from the supervised 2026-10-12 attempt, the operator deploy steps and the rollback.
 tags: [bluetooth, settings, omi, panel, firmware, dfu, flag-dark, ui]
-timestamp: 2026-10-12T23:00:00+08:00
+timestamp: 2026-10-13T12:00:00+08:00
 ---
 
 # Settings > Bluetooth devices
@@ -24,7 +24,7 @@ household (desktop Settings / panel Settings)                zoe-data           
 
 - **Pull, not proxy.** The panel's agent opens **no listening socket**. It long-polls `POST /api/bluetooth/agent/poll` with the panel's device token (the same one the voice daemon and omi-sync use) and posts outcomes to `/agent/report`. Why: zoe-data stores only token *hashes*, so it could not authenticate a call *to* a panel; the existing panel agent on :8765 is unauthenticated, bound to `0.0.0.0` and not in this repo; and "never open to the LAN without auth" is satisfied most simply by not opening anything. The "proxy to a chosen panel" is therefore a per-panel command queue in `bluetooth_broker.py` (in memory - jobs live minutes; the durable record is the audit log).
 - **One component, two surfaces.** `dist/js/bluetooth-settings.js` renders both the desktop Settings section (`settings.html`, admin group, nav item hidden until `GET /api/bluetooth/config` answers 200) and the touch estate Settings section (`touch/settings.html`, hidden until the admin check passes and the server says the feature is on). New file only: no shared `js/` file changed, no desktop-to-touch link. Touch buttons are >= 48 px.
-- **A device's address never leaves the Pi.** The agent speaks in `device_id` = 12 hex of a salted SHA-256. zoe-data, the browser and the audit log only see that id. The address lives in `~/.zoe-bluetooth/known.json` (0600) and the scan cache.
+- **A device's address never leaves the Pi.** The agent speaks in `device_id` = 16 hex of a salted SHA-256 (`sha256("omi-sync:" + address)[:16]` - the namespace is historic and part of the id). It is the SAME id omi-sync sends as `X-Omi-Device` (one identity, pinned by `tests/unit/test_omi_device_identity.py`), so a device in this list can be linked to its recordings' owner. zoe-data, the browser and the audit log only see that id. The address lives in `~/.zoe-bluetooth/known.json` (0600) and the scan cache.
 - **Auth.** Household routes: `require_admin` **and** not a device token (a token resolving to an admin-ish user is refused). Panel routes: a valid device token only; the panel id comes from the token, and a panel can only report on its own jobs. Everything a panel sends is truncated/bounded before it is stored or shown, and the UI escapes it.
 - **Audit.** Every connect, disconnect, forget and firmware-update request **and its outcome** is appended to `ZOE_BLUETOOTH_AUDIT_PATH` (default `~/.zoe/bluetooth-audit.jsonl`, 0600): who (user id, role), panel, device id, job id, outcome, error code. No addresses, tokens or free text. If the request line cannot be written the action is **refused** (fail closed).
 
@@ -44,6 +44,17 @@ Connection recipe (ported from `omi_sync/ble_link.py`, verified on the real pend
 |---|---|---|
 | `generic` | anything | connect / disconnect / forget; Device Information (maker, model, firmware, hardware) and Battery - only the characteristics the device has. Serial number is deliberately not read. |
 | `omi` | service `19b10000-e8f2-537e-4f6c-d104768a1214` (or name `Omi`) | model, firmware, battery, **charging** (`19b10013`), recording-sync status (read-only from omi-sync's spool), update check and **Update firmware** |
+
+## Assigning a pendant to a household member (`ZOE_OMI_DEVICE_OWNERS`, flag-dark)
+
+**Owner requirement (2026-10-13):** "we will need to link a certain omi, to a certain user, but the sync should sync no matter who is logged on, as long as in range of the pi, and of course only sync to the user its registered for".
+
+- **Where:** an Omi device's row in this section has an **Assigned to** control (a select of household members - never guests - plus "Nobody yet"). It appears only when zoe-data has `ZOE_OMI_DEVICE_OWNERS` on (`GET /api/omi/devices` answers 200 for the admin; a 404/403 hides it), on both desktop and the panel, from the same `js/bluetooth-settings.js`. 48 px on touch; no desktop-to-touch link.
+- **What it does:** `PUT /api/omi/devices/{device_id}` (`DELETE` = Nobody yet), human admin only, audited fail-closed (`ZOE_OMI_AUDIT_PATH`, default `~/.zoe/omi-audit.jsonl`: who, device id, from, to - no address, no label text). The registry is zoe-data's `omi_devices` table (migration 0047).
+- **Sync does not care who is signed in.** omi-sync syncs whichever configured pendant is in range, with the panel's device token; zoe-data attributes the upload to the registered owner of that `device_id` and nobody else. A pendant nobody owns gets 409 `device_not_registered`: the Pi keeps the audio (spool; ring not advanced) and asks again every 15 minutes.
+- **Reassigning moves no old recording.** Stored recordings keep their owner. Audio still on the pendant or in the Pi's spool when you change the owner goes to the NEW owner when it syncs - the UI says "let it finish syncing first".
+- **The admin sees ownership, never content.** The control and the registry API show no recordings, counts or transcripts; each member sees only their own recordings (`/api/omi/recordings`).
+- **Several pendants on one Pi:** `OMI_PENDANT_ADDRESSES=addr1,addr2` in the Pi's `.env.omi`; omi-sync visits each in turn under the shared radio lock. Get each pendant's id from this section after a scan (its `device_id` is the one in the row) or from `python -m omi_sync status` (`pendants`).
 
 Adding a device: a new `Driver` subclass (`match`, `info`, optional `update_check` / `run_update`) registered in `DriverRegistry`; no UI change for connect/disconnect/forget/info.
 
@@ -73,6 +84,8 @@ From the supervised 2026-10-12 attempt (`/home/zoe/.zoe/agent-tools/omi_dfu_2026
 |---|---|---|---|
 | `ZOE_BLUETOOTH_SETTINGS` | zoe-data | off | routes mounted (`/api/bluetooth/*`); off = 404 and the UI hides the section |
 | `ZOE_BLUETOOTH_AUDIT_PATH` | zoe-data | `~/.zoe/bluetooth-audit.jsonl` | audit log |
+| `ZOE_OMI_DEVICE_OWNERS` | zoe-data | off | pendant ownership registry on: the "Assigned to" control, `/api/omi/members\|devices`, uploads attributed by pendant; off = the legacy single owner |
+| `ZOE_OMI_AUDIT_PATH` | zoe-data | `~/.zoe/omi-audit.jsonl` | audit log of pendant assignments (fail-closed) |
 | `PANEL_BT_ENABLED` | panel Pi | off | the agent runs at all (off = exits 0) |
 | `PANEL_BT_OTA_ENABLED` | panel Pi | off | firmware updates allowed; leave off until one supervised update |
 | `PANEL_BT_HCI` | panel Pi | BlueZ default | adapter, e.g. `hci1` |
@@ -88,6 +101,15 @@ From the supervised 2026-10-12 attempt (`/home/zoe/.zoe/agent-tools/omi_dfu_2026
 3. On the Pi edit `~/.zoe-bluetooth/.env.bluetooth`: `PANEL_BT_ENABLED=1`, `DEVICE_TOKEN` (the panel's device token), `ZOE_URL`; `systemctl --user enable --now zoe-bluetooth`. The panel appears in Settings > Bluetooth devices within a poll.
 4. Smoke test from the Pi: `python -m panel_bt scan` (prints ids, names, signal, driver - never addresses). Do not scan/connect the pendant while someone else is using it.
 5. Firmware updates: set `PANEL_BT_OTA_ENABLED=1` only for a supervised first update with the pendant ON ITS CHARGER next to the panel (or a USB adapter). After it: `python -m omi_sync check`.
+
+## Operator steps for pendant ownership (nothing here is done by the PR)
+
+1. Merge; sync the Jetson (`git merge --ff-only origin/main`); apply migration 0047 (the normal deploy path); restart zoe-data outside the 02:30-04:30 window and poll `/health`. Nothing changes yet (flag off).
+2. Update the Pi's omi-sync code (`runner.py` etc.; the same copy-from-a-worktree step as the original install) and restart `omi-sync`. Old and new Pi code are both safe against old and new zoe-data (an old Pi treats the new 409 as a kept, retried refusal).
+3. Set `ZOE_OMI_DEVICE_OWNERS=1` in zoe-data's env and restart. If `ZOE_OMI_OWNER_USER_ID` is set and exactly one pendant has uploaded, it is registered to that member automatically (the audit log says `seed`); after that the variable is inert. Otherwise assign pendants in Settings > Bluetooth devices > the pendant's row > Assigned to - until then its uploads are refused and held on the Pi.
+4. For a second pendant: add it to `OMI_PENDANT_ADDRESSES` (comma list; the old `OMI_PENDANT_ADDRESS` still works for one) on the Pi, restart omi-sync, then assign it.
+5. Verify: `GET /api/omi/devices` as the admin lists the pendant with its owner; sign in as the OTHER member - `GET /api/omi/recordings` is theirs only; `journalctl --user -u omi-sync` shows `sync[<id prefix>]` lines per pendant and, for an unowned one, `not_registered=True`.
+6. Rollback: unset `ZOE_OMI_DEVICE_OWNERS` and restart (back to the single configured owner; the registry table and rows stay, unused).
 
 ## Rollback
 

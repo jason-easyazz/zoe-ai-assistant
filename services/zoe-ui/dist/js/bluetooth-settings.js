@@ -9,6 +9,10 @@
  * Split so it can be tested without a browser (dist/test_bluetooth_settings.js): the PURE half (esc, rssiBars, deviceState, errorText,
  * gateRows, render*) has no DOM access; the controller takes its root, fetch and timers by injection.
  * Everything that came from the server (device names, messages) goes through esc(): a panel is trusted to be a panel, not to author HTML.
+ *
+ * Omi pendants carry an "Assigned to" control (GET /api/omi/members + /api/omi/devices, PUT/DELETE /api/omi/devices/{id}): which household
+ * member the pendant's recordings sync to. It appears only when the server has the device registry on (ZOE_OMI_DEVICE_OWNERS; a 404/403
+ * hides it) and it never fetches or shows a recording - an admin chooses WHO owns a pendant, not what it heard.
  * No backward-compat risk to touch consumers: this is a NEW file; it defines one global (ZoeBluetooth) and touches nothing else.
  */
 (function (root, factory) {
@@ -17,7 +21,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var DEVICE_ID = /^[0-9a-f]{12}$/;
+  var DEVICE_ID = /^[0-9a-f]{16}$/;
   var PANEL_ID = /^[A-Za-z0-9._:-]{1,64}$/;
   var POLL_IDLE_MS = 5000;
   var POLL_JOB_MS = 1000;
@@ -183,6 +187,35 @@
     }).join('') + '</ul>';
   }
 
+  /* the "Assigned to" control for an Omi pendant. Pure: ui.omi = { available, members:[{user_id,name}], devices:{id:{user_id,label,active}},
+   * saving: id|null, error: '' }. No recordings, no counts - ownership only. */
+  function renderOwner(dev, ui) {
+    var o = ui.omi;
+    if (!o || !o.available || dev.driver !== 'omi') return '';
+    var reg = (o.devices && o.devices[dev.id]) || null;
+    var cur = reg && reg.active && reg.user_id ? reg.user_id : '';
+    var members = o.members || [];
+    var known = members.some(function (m) { return m.user_id === cur; });
+    var saving = o.saving === dev.id;
+    var h = '<div class="zbt-owner" data-for="' + esc(dev.id) + '"><label class="zbt-ownerlabel" for="zbt-owner-' + esc(dev.id) + '">Assigned to</label>';
+    h += '<select id="zbt-owner-' + esc(dev.id) + '" class="zbt-select" data-bt="assign" data-dev="' + esc(dev.id) + '"' + (saving ? ' disabled' : '') + '>';
+    h += '<option value=""' + (cur ? '' : ' selected') + '>Nobody yet</option>';
+    if (cur && !known) h += '<option value="' + esc(cur) + '" selected>Unknown member</option>';
+    members.forEach(function (m) {
+      h += '<option value="' + esc(m.user_id) + '"' + (m.user_id === cur ? ' selected' : '') + '>' + esc(m.name || m.user_id) + '</option>';
+    });
+    h += '</select>';
+    if (saving) h += '<div class="zbt-note" role="status">Saving...</div>';
+    if (o.error) h += '<div class="zbt-callout zbt-bad">' + esc(o.error) + '</div>';
+    if (!cur) {
+      h += '<div class="zbt-note">Nobody owns this pendant yet. It keeps recording, and the panel holds the audio until you choose someone.</div>';
+    } else {
+      h += '<div class="zbt-note">Its recordings sync to this person only, whoever is signed in. Changing this does not move recordings already saved; ' +
+        'audio still waiting to sync goes to the new person, so let it finish syncing first.</div>';
+    }
+    return h + '</div>';
+  }
+
   function renderDevice(dev, view, ui) {
     var busy = view.busy;
     var st = deviceState(dev, busy);
@@ -192,6 +225,7 @@
       (dev.remembered ? ' - remembered' : '') + '</small></div>';
     h += '<div class="zbt-side">' + (dev.in_range ? bars(rssiBars(dev.rssi)) + (typeof dev.rssi === 'number' ? '<small>' + esc(dev.rssi) + ' dBm</small>' : '') : '<small>not in range</small>') +
       '<span class="zbt-pill zbt-' + esc(st) + '">' + esc(STATE_LABEL[st] || st) + '</span></div></div>';
+    h += renderOwner(dev, ui);
     var fail = ui.failures && ui.failures[dev.id];
     if (fail && !working) h += '<div class="zbt-callout zbt-bad"><b>Failed</b><br>' + esc(errorText(fail)) + '</div>';
     if (st === 'connected' || (st === 'updating')) h += renderInfo(ui.infos && ui.infos[dev.id]);
@@ -250,12 +284,15 @@
     '.zbt-callout{margin:10px 0 0;padding:10px 12px;border-radius:10px;background:rgba(127,127,127,.12);overflow-wrap:anywhere}.zbt-warn{background:rgba(230,160,30,.18)}.zbt-bad{background:rgba(192,57,43,.14)}.zbt-ok{background:rgba(46,158,91,.16)}' +
     '.zbt-note,.zbt-empty,.zbt-scanning{margin:10px 0;opacity:.8;font-size:.92em}.zbt-empty{padding:16px;text-align:center;border:1px dashed var(--border,#c9ced6);border-radius:12px}' +
     '.zbt-gates{list-style:none;margin:10px 0 0;padding:0}.zbt-gates li{padding:4px 0}.zbt-gates .ok .zbt-mark{color:#2e9e5b}.zbt-gates .no .zbt-mark{color:#c0392b}.zbt-gates small.hint{font-weight:500}' +
+    '.zbt-owner{margin:10px 0 0}.zbt-ownerlabel{display:block;font-size:.8em;opacity:.75;margin-bottom:4px}' +
+    '.zbt-select{font:inherit;color:inherit;background:var(--surface,#fff);border:1px solid var(--border,#c9ced6);border-radius:10px;padding:8px 12px;min-height:40px;max-width:100%}' +
     '.zbt-ack{display:flex;gap:10px;align-items:flex-start;margin:12px 0;cursor:pointer}.zbt-ack input{width:24px;height:24px;flex:none;margin-top:2px}' +
     '.zbt-progress{height:14px;border-radius:7px;background:rgba(127,127,127,.2);overflow:hidden;margin:10px 0 6px}.zbt-progress div{height:100%;background:var(--accent,#7b61ff);transition:width .4s}' +
     '.zbt-spin{display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;vertical-align:-2px;animation:zbtspin .8s linear infinite}@keyframes zbtspin{to{transform:rotate(360deg)}}' +
     '@media (prefers-reduced-motion:reduce){.zbt-spin{animation:none}.zbt-progress div{transition:none}}' +
     /* touch: finger targets are 48 px or more, text is larger, rows breathe */
     '.zbt[data-surface=touch] .zbt-btn,.zbt[data-surface=touch] .zbt-panelbtn{min-height:48px;min-width:48px;font-size:16px;padding:10px 18px}' +
+    '.zbt[data-surface=touch] .zbt-select{min-height:48px;font-size:16px;padding:10px 14px}' +
     '.zbt[data-surface=touch] .zbt-ack{min-height:48px;align-items:center;font-size:15px}.zbt[data-surface=touch] .zbt-ack input{width:32px;height:32px}' +
     '.zbt[data-surface=touch] .zbt-row{padding:14px}.zbt[data-surface=touch] .zbt-actions{gap:12px}';
 
@@ -268,7 +305,7 @@
     var clearT = opts.clearTimeout || (typeof clearTimeout !== 'undefined' ? clearTimeout.bind(null) : null);
     var storage = opts.storage || null;
     var ui = { panels: [], panelId: null, view: null, error: '', infos: {}, checks: {}, failures: {}, expanded: null, ack: false,
-      confirmForget: null, updateResult: null };
+      confirmForget: null, updateResult: null, omi: { available: null, members: [], devices: {}, saving: null, error: '', loadedFor: null } };
     var timer = null, dead = false, jobId = null, available = null;
 
     var lastHtml = null;
@@ -306,13 +343,45 @@
       });
     }
 
+    function hasOmi() {
+      return !!(ui.view && (ui.view.devices || []).some(function (d) { return d.driver === 'omi'; }));
+    }
+
+    /* ownership of Omi pendants: loaded once an Omi device is on screen, reloaded after a change. A 404 (registry flag off) or 403 means
+     * "no such control here": available=false and nothing is rendered. Never touches a recording. */
+    function loadOmi(force) {
+      var o = ui.omi;
+      if (o.available === false || (!force && o.loadedFor !== null) || !hasOmi()) return Promise.resolve();
+      o.loadedFor = ui.panelId;
+      return Promise.all([api('GET', '/api/omi/members'), api('GET', '/api/omi/devices')]).then(function (rs) {
+        o.members = (rs[0] && rs[0].members) || [];
+        o.devices = {};
+        ((rs[1] && rs[1].devices) || []).forEach(function (d) { o.devices[d.device_id] = d; });
+        o.available = true;
+      }, function (e) {
+        if (e && (e.status === 404 || e.status === 403 || e.status === 401)) { o.available = false; return; }
+        o.loadedFor = null;             // transient: try again on the next poll
+      });
+    }
+
+    function saveOwner(dev, uid) {
+      var o = ui.omi;
+      if (uid && !o.members.some(function (m) { return m.user_id === uid; })) return Promise.resolve();   // only a listed household member
+      o.saving = dev; o.error = ''; paint();
+      var req = uid ? api('PUT', '/api/omi/devices/' + dev, { user_id: uid }) : api('DELETE', '/api/omi/devices/' + dev);
+      return req.then(function () { o.saving = null; return loadOmi(true); }, function (e) {
+        o.saving = null; o.error = (e && e.message) || 'Could not save that change.';
+        return loadOmi(true);
+      }).then(paint);
+    }
+
     function loadView() {
       if (!ui.panelId) { ui.view = null; return Promise.resolve(); }
       return api('GET', '/api/bluetooth/panels/' + encodeURIComponent(ui.panelId)).then(function (v) {
         ui.view = v;
         var busy = v && v.busy;
         jobId = busy ? busy.job_id : null;
-      });
+      }).then(function () { return loadOmi(false); });
     }
 
     function finishJob(job) {
@@ -375,13 +444,14 @@
       var el = ev.target && ev.target.closest ? ev.target.closest('[data-bt]') : null;
       if (!el || el.disabled) return;
       var act = el.dataset.bt;
-      if ((act === 'ack') !== (ev.type === 'change')) return;          // the checkbox acts on 'change', every button on 'click'
+      if ((act === 'ack' || act === 'assign') !== (ev.type === 'change')) return;          // checkbox + select act on 'change', every button on 'click'
       var dev = el.dataset.dev;
       if (dev && !DEVICE_ID.test(dev)) return;
       var safe = function (p) { return p && p.catch ? p.catch(function () {}) : p; };
       if (act === 'panel') {
         if (!PANEL_ID.test(el.dataset.panel || '')) return;
         ui.panelId = el.dataset.panel; savePanel(ui.panelId); ui.view = null; ui.infos = {}; ui.checks = {}; ui.failures = {}; ui.expanded = null;
+        if (ui.omi.available !== false) ui.omi.loadedFor = null;
         paint(); safe(loadView().then(paint, handleErr)); return;
       }
       if (!ui.panelId) return;
@@ -397,6 +467,7 @@
         safe(enqueue('/devices/' + dev + '/update_check'));
       }
       else if (act === 'ack') { ui.ack = !!(el.checked); paint(); }
+      else if (act === 'assign') safe(saveOwner(dev, String(el.value || '')));
       else if (act === 'start-update') {
         if (!canStartUpdate(ui.checks[dev], ui.ack)) return;
         ui.updateResult = null;
@@ -432,6 +503,6 @@
   }
 
   return { esc: esc, rssiBars: rssiBars, errorText: errorText, deviceState: deviceState, gateRows: gateRows, canStartUpdate: canStartUpdate,
-    renderBody: renderBody, renderDevice: renderDevice, renderUpdate: renderUpdate, renderPanelPicker: renderPanelPicker, renderInfo: renderInfo,
+    renderBody: renderBody, renderDevice: renderDevice, renderOwner: renderOwner, renderUpdate: renderUpdate, renderPanelPicker: renderPanelPicker, renderInfo: renderInfo,
     mount: mount, CSS: CSS };
 });

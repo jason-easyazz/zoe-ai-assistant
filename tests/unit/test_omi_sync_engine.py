@@ -156,10 +156,11 @@ class FakeZoe:
     """The server's side of the contract: idempotent by key, content-addressed confirmation."""
 
     def __init__(self, mode="ok") -> None:
-        self.mode = mode                        # ok | down | reject
+        self.mode = mode                        # ok | down | reject | unregistered
         self.stored: dict[str, tuple[UploadMeta, bytes]] = {}
         self.calls: list[str] = []
         self.notices: list[int] = []
+        self.notice_devices: list[str] = []
         self.fail_keys: set[str] = set()
 
     async def upload(self, meta: UploadMeta, wav: bytes) -> UploadResult:
@@ -168,13 +169,16 @@ class FakeZoe:
             return UploadResult(Outcome.REJECTED, "sha mismatch")
         if self.mode == "down":
             return UploadResult(Outcome.UNAVAILABLE, "down")
+        if self.mode == "unregistered":
+            return UploadResult(Outcome.NOT_REGISTERED, "device_not_registered")
         if self.mode == "reject" or meta.key in self.fail_keys:
             return UploadResult(Outcome.REJECTED, "422")
         self.stored.setdefault(meta.key, (meta, wav))
         return UploadResult(Outcome.CONFIRMED, "stored")
 
-    async def notify_synced(self, count: int) -> None:
+    async def notify_synced(self, count: int, device_id: str = "") -> None:
         self.notices.append(count)
+        self.notice_devices.append(device_id)
 
 
 @pytest.fixture
@@ -260,6 +264,36 @@ def test_zoe_down_means_nothing_is_freed_and_the_next_session_finishes_the_job(s
     res2 = drain(pendant, spool, zoe, tmp_path)
     assert res2.clean and res2.uploaded == 3 and pendant.read_seq == 120
     never_cleared(pendant)
+
+
+def test_a_pendant_nobody_owns_keeps_custody_and_asks_to_be_retried_slowly(spool, tmp_path):
+    """Zoe's 409 device_not_registered: nothing is confirmed so nothing is freed, the spool holds every record, one answer ends the
+    batch (no hammering) and the result is NOT clean (the runner waits OMI_SYNC_UNREGISTERED_RETRY_S). Once an admin assigns the
+    pendant the very next session uploads and frees everything."""
+    pendant, zoe = FakePendant(build_ring(RING), caps=0x09), FakeZoe(mode="unregistered")
+    res = drain(pendant, spool, zoe, tmp_path)
+    assert res.not_registered and not res.clean and res.uploaded == 0 and res.pending == 3
+    assert advances(pendant) == [] and pendant.read_seq == 0
+    assert spool.stats()["spooled_records"] == 120
+    assert len(zoe.calls) == 1 and zoe.notices == []
+    zoe.mode = "ok"
+    res2 = drain(pendant, spool, zoe, tmp_path)
+    assert res2.clean and res2.uploaded == 3 and pendant.read_seq == 120
+    never_cleared(pendant)
+
+
+def test_the_legacy_file_path_also_keeps_the_spool_for_a_pendant_nobody_owns(spool, tmp_path):
+    """3.0.18 firmware deletes each file itself on delivery - the spool is the ONLY custody, so an unowned pendant must not cost audio."""
+    pendant, zoe = FakeLegacyPendant(legacy_files((T1, 40))), FakeZoe(mode="unregistered")
+    res = drain(pendant, spool, zoe, tmp_path, legacy_files=True, assume_codec=21)
+    assert res.not_registered and res.uploaded == 0 and res.pending >= 1
+    assert spool.stats()["spooled_records"] > 0
+
+
+def test_the_sync_notice_names_the_device_so_zoe_can_tell_only_its_owner(spool, tmp_path):
+    pendant, zoe = FakePendant(build_ring(RING), caps=0x09), FakeZoe()
+    drain(pendant, spool, zoe, tmp_path)
+    assert zoe.notice_devices == [DEV]
 
 
 def test_advance_stops_exactly_at_the_first_unconfirmed_recording(spool, tmp_path):

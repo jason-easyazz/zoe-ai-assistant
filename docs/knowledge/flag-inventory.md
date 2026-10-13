@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-608 flags; 606 not documented in `.env.example`.
+621 flags; 619 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -375,9 +375,11 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_NVM_NODE_BIN` | `-` | no | NO | `services/zoe-data/pi_intent_classifier.py` |
 | `ZOE_OMI_AUDIO_DIR` | `''` | yes | NO | `services/zoe-data/omi_recordings.py` |
 | `ZOE_OMI_AUDIO_RETENTION_DAYS` | `dynamic` | yes | NO | `services/zoe-data/omi_recordings.py` |
+| `ZOE_OMI_AUDIT_PATH` | `''` | yes | NO | `services/zoe-data/omi_devices.py` |
+| `ZOE_OMI_DEVICE_OWNERS` | `False` | yes | NO | `services/zoe-data/omi_devices.py` |
 | `ZOE_OMI_KEEP_AUDIO` | `False` | yes | NO | `services/zoe-data/omi_recordings.py` |
 | `ZOE_OMI_MIN_MEM_MB` | `1500` | yes | NO | `services/zoe-data/omi_recordings.py` |
-| `ZOE_OMI_OWNER_USER_ID` | `''` | yes | NO | `services/zoe-data/omi_recordings.py` |
+| `ZOE_OMI_OWNER_USER_ID` | `''` | yes | NO | `services/zoe-data/omi_devices.py`<br>`services/zoe-data/omi_recordings.py` |
 | `ZOE_OMI_SYNC_ENABLED` | `False` | yes | NO | `services/zoe-data/omi_recordings.py` |
 | `ZOE_OMNIGENT_AGENT_ID` | `'057995d1517418e6839f51d340785dd6'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
 | `ZOE_OMNIGENT_CLOSE_POLL_S` | `'60'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
@@ -532,6 +534,17 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_SMART_TURN_MAX_CHECKS` | `'2'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_SMART_TURN_THREADS` | `'1'` | no | NO | `services/zoe-data/voice_turn.py` |
 | `ZOE_SMART_TURN_THRESHOLD` | `'0.5'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
+| `ZOE_SPEAKER_ADAPT` | `'off'` | yes | NO | `services/zoe-data/speaker_adaptation.py` |
+| `ZOE_SPEAKER_ADAPT_ALPHA` | `0.05` | yes | NO | `services/zoe-data/speaker_adaptation.py` |
+| `ZOE_SPEAKER_ADAPT_ANCHOR_FLOOR` | `0.8` | yes | NO | `services/zoe-data/speaker_adaptation.py` |
+| `ZOE_SPEAKER_ADAPT_FACE_MIN` | `0.6` | yes | NO | `services/zoe-data/speaker_adaptation.py` |
+| `ZOE_SPEAKER_ADAPT_MAX_PER_DAY` | `5` | yes | NO | `services/zoe-data/speaker_adaptation.py` |
+| `ZOE_SPEAKER_ADAPT_MIN_ANCHOR_COS` | `0.92` | yes | NO | `services/zoe-data/speaker_adaptation.py` |
+| `ZOE_SPEAKER_ADAPT_MIN_INTERVAL_S` | `600.0` | yes | NO | `services/zoe-data/speaker_adaptation.py` |
+| `ZOE_SPEAKER_ADAPT_MIN_MARGIN` | `0.1` | yes | NO | `services/zoe-data/speaker_adaptation.py` |
+| `ZOE_SPEAKER_ADAPT_MIN_SCORE` | `0.85` | yes | NO | `services/zoe-data/speaker_adaptation.py` |
+| `ZOE_SPEAKER_ADAPT_MIN_SPEECH_S` | `2.0` | yes | NO | `services/zoe-data/speaker_adaptation.py` |
+| `ZOE_SPEAKER_ADAPT_PIN_WINDOW_S` | `900.0` | yes | NO | `services/zoe-data/speaker_adaptation.py` |
 | `ZOE_SPEAKER_ID_THRESHOLD` | `'0.82'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_SPECULATIVE_MAX_HOLD_MS` | `5000` | yes | NO | `services/zoe-data/voice_speculation.py` |
 | `ZOE_SPECULATIVE_TAIL_MS` | `320` | no | NO | `scripts/setup/zoe_voice_daemon.py` |

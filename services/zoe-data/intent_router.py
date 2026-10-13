@@ -3468,23 +3468,32 @@ _REMEMBER_IMPERATIVE_RE = re.compile(
     r"don['’]?t forget|do not forget|save|store)\b", re.IGNORECASE)
 
 
-async def _forget_cascade_note(user_id: str, name: str) -> str:
-    """Run the forget cascade (memory_forget_cascade) and return the sentence that says what it did,
-    or ''. The spoken part is honest: it names only what was actually removed. Never raises."""
+_FORGET_CASCADE_INCOMPLETE = (
+    "I couldn't finish clearing everything I'd worked out from that just now (my summary of you, your contacts or my notes), "
+    "so I can't say it's forgotten yet. Please tell me again in a moment.")
+
+
+async def _forget_cascade_note(user_id: str, name: str) -> tuple[str, bool]:
+    """Run the forget cascade (memory_forget_cascade): ``(sentence saying what it did or '', complete)``. The spoken part is honest:
+    it names only what was actually removed. ``complete`` is False when a derived store could not be cleared (a lost or exhausted
+    pool, a failed query): the caller must then NOT report the forget as done - say it again redoes the whole idempotent forget
+    (forgotten means forever). Never raises."""
     try:
         from memory_forget_cascade import cascade_forget
         c = await cascade_forget(user_id, name)
     except Exception as exc:
-        logger.warning("memory_forget_entity: cascade failed (%s)", type(exc).__name__)
-        return ""
+        logger.error("memory_forget_entity: cascade failed (%s)", type(exc).__name__)
+        return "", False
+    if not c.complete:
+        return "", False
     if c.people and c.summary_cleared:
         return (" I've also removed them from your contacts and your summary"
-                " — say 'keep the contact' to undo.")
+                " — say 'keep the contact' to undo."), True
     if c.people:
-        return " I've also removed them from your contacts — say 'keep the contact' to undo."
+        return " I've also removed them from your contacts — say 'keep the contact' to undo.", True
     if c.summary_cleared:
-        return " I've also cleared them from your summary."
-    return ""
+        return " I've also cleared them from your summary.", True
+    return "", True
 
 
 async def _forget_alias_note(user_id: str, name: str, svc: Any) -> str:
@@ -3845,7 +3854,9 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             # nothing approved, but older versions / candidates may still hold the text; and a contact / summary
             # line / open loop may still name them
             await _erase_named([])
-            _cascade = await _forget_cascade_note(user_id, name)
+            _cascade, _cascade_ok = await _forget_cascade_note(user_id, name)
+            if not _cascade_ok:
+                return _FORGET_CASCADE_INCOMPLETE
             return (f"I don't have anything saved about {name}." + _cascade
                     + ("" if alias_confirmed else await _forget_alias_note(user_id, name, svc)))
         forgotten = 0
@@ -3883,7 +3894,9 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         things = "thing" if forgotten == 1 else "things"
         suffix = "" if forgotten == len(matches) else (
             f" ({len(matches) - forgotten} I couldn't reach just now.)")
-        _cascade = await _forget_cascade_note(user_id, name)
+        _cascade, _cascade_ok = await _forget_cascade_note(user_id, name)
+        if not _cascade_ok:
+            return _FORGET_CASCADE_INCOMPLETE
         return (f"Okay — I've forgotten {forgotten} {things} about {name}.{suffix}" + _cascade
                 + ("" if alias_confirmed else await _forget_alias_note(user_id, name, svc)))
 
