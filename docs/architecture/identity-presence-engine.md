@@ -119,9 +119,23 @@ They interact in exactly two ways:
 
 1. **Continuity.** While presence is intact (the same voice keeps talking, touch keeps happening, nobody new
    has been heard), identity decays slowly. When presence breaks, it decays fast.
-2. **Crowding.** `voices_heard ≥ 2` caps every identity at ZAL2 for **displayed** private content. The
-   member can still hear their own answer, but private cards do not stay on a screen others can see
-   (Nest's attention idea, simplified; [panel-identity-plan](panel-identity-plan.md)) [research §2].
+2. **Others present.** When someone else is observably present, a member's **private content is neither shown
+   nor spoken in the room**, whatever their level. One member's personal scope is never exposed to another
+   person (charter §3).
+   - **Observably present** means any of: another voice heard on this panel in the last 10 minutes (another
+     member, a visitor match or an unknown cluster, i.e. `voices_heard ≥ 2`); a recognised visitor; or a
+     people count above 1 from a counting sensor, once one exists.
+   - **What Zoe does instead:**
+     - She says it is private and sends it to the member's own device (Telegram today; push later): "That's
+       private and someone else is here, so I've sent it to your phone."
+     - With no linked device: "That's private, and someone else is here. Ask me again when you're alone."
+   - **Only if the member's own setting allows it** (`others_present: ask`, default `never`), she asks first:
+     "Someone else is here. Want me to read it out anyway?" She reads it only on a "yes" in the member's own
+     verified voice. Even then no private card is put on the screen.
+   - **Honest limit:** a person who stays silent is invisible to voice-only presence. A member who wants more
+     can choose `private_answers: phone_only`, and a counting sensor (mmWave, camera count) closes the gap
+     later.
+   - This is Nest's attention idea, taken further ([panel-identity-plan](panel-identity-plan.md)) [research §2].
 
 ### 2.2 Evidence events
 
@@ -180,7 +194,7 @@ pure exponential would drop a just-accepted voice below ZAL2 within seconds.
   - two voice matches 10 s apart are mostly the same evidence;
   - a phone over BLE and the same phone on home Wi-Fi are one fact.
 
-  Clipping each group (VOICE at most +10 bits, DEVICE at most +3, KNOW at most +17) is the simple,
+  Clipping each group (VOICE at most +12 bits, DEVICE at most +3, KNOW at most +17) is the simple,
   explainable guard against double counting. A full dependence model (copulas, a GMM per sample) is
   the literature's answer, and it needs data we do not have [research §4]. Within a group, a newer
   event of the same source replaces the older one instead of adding to it.
@@ -189,8 +203,22 @@ pure exponential would drop a just-accepted voice below ZAL2 within seconds.
   - A `different_voice` event (a voice confidently matched to someone else, or an unknown cluster
     taking the turn) is −20 bits for `p`. In practice it closes `p`'s identity at that panel, as the
     voice session already does.
-  - `phone_home = away` for `p` is −5 bits.
-  - An explicit `lock` sets `p` to the prior.
+  - `phone_home = away` for `p` is −5 bits when no leave-lock is on.
+  - **A `lock` is absorbing.** It discards **every** earlier event for `p`, including a fresh PIN: on that
+    panel for a room leave, and on every panel for a phone leaving home. Only evidence that arrives after the
+    lock counts, so `p` falls straight to the prior.
+    - The engine also ends `p`'s PIN panel session, so the identity-freshness chain cannot bring it back.
+      This needs the sign-out hook zoe-data lacks today (`docs/knowledge/open-problems.md`, 2026-10-13
+      "Panel sign-out").
+    - A lock is emitted by the spoken "lock" or "sign me out", and by a **qualifying leave event when the
+      member turned the matching leave-lock on**:
+
+      | Setting | Qualifying leave event |
+      |---|---|
+      | `lock_when_my_phone_leaves` | the phone's home tracker turns to away; or the phone was near this panel and has been absent for two consecutive scan windows (at least 60 s) |
+      | `lock_when_i_leave` | a counting or occupancy sensor reports the member's room empty for at least 60 s; or a presence break after which neither the member's voice nor their phone is observed again within 60 s |
+
+    - Without the setting, the same events are ordinary evidence: −5 bits and faster decay.
 - **Prior.** The prior probability is `1 / (N_members + 1)`: one share per enrolled member plus one for
   "someone else". As log odds that is `log2(p / (1 − p)) = −log2(N_members)`. In a four-member household it
   is −2 bits (P = 0.2). A member who is away by a trusted signal gets an extra −5 bits.
@@ -206,7 +234,7 @@ this design.
 |---|---|---|
 | PIN at this panel | `−log2(guess probability within the allowed attempts)`. A 4-digit PIN with 5 tries is `5/10^4`, so ~11 bits; 6 digits gives ~17.6. This assumes no observation (shoulder-surfing), and the panel is a shared wall screen, so cap KNOW at the PIN's own value | 11 bits (4 digits), 13.3 (5), 17.6 (6); hold = the idle-logout window, then half-life 60 s |
 | Signed-in password session on the member's own device | evidence for **that device's** principal, not for the panel; it never enters a panel score | n/a at the panel |
-| Voice, ResNet34 (acting model) | `log2(TPR(s)/FAR(s))` from a per-score calibration (linear or logistic on the centred cosine, i.e. the BOSARIS/Platt idea [research §4]) fitted on the shadow week; rejection gives `log2(FRR/(1−FAR))` | at the FAR 1 % threshold ≈ log2(0.95/0.01) = 6.6 bits; at the FAR 0.1 % threshold ≈ 9.9; these are worst-case values AT the threshold, and most genuine accepts score well above it, so their calibrated LLR is higher; reject ≈ −4.3; hold = the member's `voice_session_ttl_s` (default 120 s), then half-life 60 s |
+| Voice, ResNet34 (acting model) | `log2(TPR(s)/FAR(s))` from a per-score calibration (linear or logistic on the centred cosine, i.e. the BOSARIS/Platt idea [research §4]) fitted on the shadow week; rejection gives `log2(FRR/(1−FAR))` | two operating points: at the FAR 1 % threshold ≈ log2(0.95/0.01) = 6.6 bits (ZAL1 evidence only); at the derived ZAL2 point (FAR 0.05 % for four members, §3.1) ≈ 10.8 bits; these are worst-case values AT the threshold, and most genuine accepts score well above it, so their calibrated LLR is higher; reject ≈ −4.3; hold = the member's `voice_session_ttl_s` (default 120 s), then half-life 60 s |
 | Voice, Resemblyzer | the same recipe, its own curve; owner FRR at FAR 1 % is ~11 % [record] | allowed only as an explicit owner override (`ZOE_VOICE_SESSION_ALLOW_RESEMBLYZER`), never for children |
 | Face (MobileFaceNet + liveness) | the same recipe, after a face shadow week; no liveness means 0 bits | 0 until calibrated |
 | Phone near (BLE IRK, RSSI band) | the device can be in someone else's pocket, so this is weak by policy | +1.5 bits, cap the DEVICE group at +3; half-life 180 s |
@@ -240,21 +268,60 @@ Rules:
 |---|---|---|---|
 | ZAL0 | Anyone | always | the guest of today |
 | ZAL1 | Recognised | `L(p) ≥ 3.2 bits` (P ≥ 0.90) and no conflicting voice since the last evidence | Google/Amazon "personal results" [research §2] |
-| ZAL2 | Verified | `L(p) ≥ 4.25 bits` (P ≥ 0.95) **and** at least one authenticator-class event (a calibrated voice accept by the acting model, a face accept with liveness, or a PIN) within its hold window, and no `different_voice` since | today's voice session or fresh PIN session |
+| ZAL2 | Verified | `L(p) ≥ 6.63 bits` (P ≥ 0.99) **and** at least one authenticator-class event within its hold window (a voice accept by the acting model **at the ZAL2 operating point derived below**, a face accept with liveness, or a PIN), and no `different_voice` since | today's voice session or fresh PIN session |
 | ZAL3 | Stepped-up | a **KNOW** event (PIN at this panel) within the last 5 min (`ZOE_IDENTITY_STEPUP_WINDOW_S`) plus ZAL2 | today's step-up |
 | ZAL4 | Two-device | ZAL3 plus an approval on the member's **own phone** bound to the exact payload (Telegram Approve or passkey, per the action-agent approvals object) | the closest a home gets to NIST AAL2 [research §1] |
 
-**Why ZAL2 is 4.25 bits and not P ≥ 0.99.** With a four-member prior of −2 bits, a single voice accept at
-the FAR 1 % threshold gives 6.6 − 2 = 4.6 bits (P ≈ 0.96). A 0.99 bar (6.6 bits) would be unreachable by any
-accepted voice, so Balanced could never open private reads by voice. At 4.25 bits:
+**The voice operating point for ZAL2 is derived from the false-ZAL2 target, not picked.**
 
-- one threshold-level voice accept reaches ZAL2 in a household of up to five members;
-- a weak signal alone (DEVICE ≤ 3 bits) never does;
-- in a household of six or more members the prior is −2.6 bits or lower, and the engine uses the FAR 0.1 %
-  operating point (9.9 bits) instead. Settings says so in plain words.
+- **The target, with its conditions.** Fewer than **1 false ZAL2 per 1,000 private-scoped turns**: turns that
+  ask for a member's private reads, writes or memory.
+  - "False" means the engine granted member `p` while someone other than `p` spoke.
+  - Close-relative lookalikes are excluded here; they are handled per pair by R1.
+- **The arithmetic.** An impostor turn is compared with every enrolled member profile it does not belong to.
+  So, per private-scoped turn:
 
-The real gate for ZAL2 is the authenticator-class event. The posterior bar is a sanity floor that contrary
-evidence (a rejected voice, a phone confirmed away) can pull a member below.
+  ```
+  P(false ZAL2) ≈ f_other × N_cmp × FAR_profile
+    f_other = share of private-scoped turns spoken by someone other than the member they would unlock
+    N_cmp   = profiles compared that are not the speaker's: N_profiles − 1 for a member speaking,
+              N_profiles for a visitor or stranger (visitor profiles never confer ZAL2)
+  ```
+
+- **For a four-member household,** pessimistically assume `f_other = 0.5` (half of all private asks come from
+  someone else; real use should be far lower) and `N_cmp = 3`. The target needs
+  `FAR_profile ≤ 1e-3 / (0.5 × 3) ≈ 0.067 %`.
+  - FAR 1 % gives about 15 false grants per 1,000 such turns, so it is out.
+  - The measured FAR 0.1 % point gives about 1.5 per 1,000, which still misses.
+  - The design operating point is therefore **FAR 0.05 % per profile** (about 0.75 per 1,000 under these
+    conditions). The engine recomputes the required FAR from the enrolled profile count, so a larger household
+    gets a stricter point automatically.
+  - The margin rule (the best profile must beat the runner-up) and the `different_voice` closure lower the
+    real rate further. They are not counted here.
+- **What #2018 measured**
+  ([ResNet34 record](../research/speaker-resnet34-optimisation-2026-10.md), relative evidence; owner labels
+  inferred):
+  - At FAR 0.1 % with the recommended config, FRR is **1.85 %** on the owner strict core with 5-clip enrolment,
+    and **16.7 %** on the public far-field set.
+  - The record warns that its FAR 0.1 % rows rest on a few hundred distinct impostor clips, so they are order
+    of magnitude only.
+  - **Nothing was measured at 0.05 %.** Demonstrating it (rule of three, `3/n ≤ 5e-4`) needs at least 6,000
+    impostor trials. These come from the public impostor corpus against each profile plus household
+    cross-member trials, in the lab and the shadow fortnight, **before** ZAL2-by-voice acts.
+- **What it costs the owner's intent, honestly.** An identified voice still unlocks everyday private reads
+  such as the calendar, but the stricter point lowers the true-accept rate.
+  - Expect the owner-core miss rate to rise from about 0.3 % (FAR 1 %) to a few percent.
+  - Far-field asks (across the room, noise) will fail more often, plausibly one in six or worse.
+  - The fallback is cheap: "say it again so I know it's you" (one more accepted turn), or the PIN.
+  - An accept at the looser FAR 1 % point still counts as ZAL1 evidence: Zoe greets the member by name and
+    personalises, but does not open private data.
+- **The bits follow.** At FAR 0.05 % and TPR ≈ 0.9 an accept is worth `log2(0.9 / 0.0005) ≈ 10.8 bits`. With a
+  −2-bit prior that is 8.8 bits, above the restored P ≥ 0.99 bar (6.63 bits), so the ZAL2 posterior no longer
+  needs a household-size special case. The VOICE group cap rises to +12 bits to hold it. A weak signal alone
+  (DEVICE ≤ 3 bits) never reaches ZAL2.
+
+The real gate for ZAL2 is the authenticator-class event at the derived operating point. The posterior bar is
+a sanity floor that contrary evidence (a rejected voice, a phone confirmed away) can pull a member below.
 
 Honest NIST mapping [research §1]:
 
@@ -328,8 +395,10 @@ security_profile {                      # per member; written only by that membe
   session:
     voice_session_ttl_s: 60..900        # how long a recognised voice keeps me signed in (today 120)
     lock_on_other_voice: true           # fixed true; shown, not editable (floor)
-    lock_when_i_leave: bool             # needs an occupancy or phone source
-    lock_when_my_phone_leaves: bool
+    lock_when_i_leave: bool             # needs an occupancy or phone source; a qualifying leave = absorbing lock (2.3)
+    lock_when_my_phone_leaves: bool     # phone away / out of range = absorbing lock, discards even a fresh PIN
+    others_present: never | ask         # default never: private answers are not spoken or shown with others present
+    private_answers: room | phone_only  # phone_only: private answers always go to my own device
   explain: bool                         # may Zoe answer "why do you think I'm me?" (default true)
 }
 
@@ -408,7 +477,8 @@ Custom (shown when Custom is chosen):
 Staying signed in
   After Zoe hears me, stay signed in for   [2 min ▾]
   Sign me out when someone else speaks     always (locked)
-  Sign me out when I leave the room        [on]  (needs a presence source)
+  Sign me out when I leave the room        [on]  (needs a presence source; signs you out even after a PIN)
+  When someone else is in the room         [Send private answers to my phone ▾ | Ask me first]
 
 [Why does Zoe think it's me right now?]   -> the explain() text
 Loosening any of these asks for your PIN.
@@ -725,8 +795,12 @@ starting points only.
 
 **Fused, the numbers that matter:**
 
-- **False ZAL2**: the engine reported ZAL2 or above for `p` while the truth was not `p`. Target 0 in every
-  lab cell, and below 1 in 1,000 turns live.
+- **False ZAL2**: the engine reported ZAL2 or above for `p` while the truth was not `p`.
+  - Target: 0 in every lab cell.
+  - Live: below 1 per 1,000 private-scoped turns, under the conditions stated in §3.1. Report `f_other` and
+    `N_cmp` as measured, not assumed.
+  - Per profile, the voice FAR at the ZAL2 point must be demonstrated (at least 6,000 impostor trials) before
+    ZAL2-by-voice acts.
 - **False ZAL3**: the same at ZAL3. It must be 0, since ZAL3 requires a PIN.
 - **Friction**: PIN prompts per member per day, and turns where a verified member was told "say it again so
   I know it's you". Target: lower than today with Balanced.
@@ -751,6 +825,9 @@ starting points only.
 | Cloned voice (TTS of the owner) | a Kokoro/XTTS-style clone from public clips | the same as replay; record whether ResNet34 accepts it (ASVspoof says it often does [research §8]) | n/a: this measures, it does not gate |
 | Phone in someone else's pocket | the owner's phone near the panel, a guest speaks | DEVICE ≤ +3 bits never reaches ZAL1 alone; the unknown voice closes the session | raise the DEVICE cap to 10 → the cell fails |
 | Stale session | the owner verified, leaves, a guest arrives within the TTL and asks "what's on my calendar" | the guest's voice → `different_voice` → PIN prompt | remove the presence break → the guest reads the calendar → the cell fails |
+| Leave-lock stale session | the member unlocks with the PIN (ZAL3), `lock_when_my_phone_leaves` is on, and the phone tracker turns to away; then a private read is asked within the idle window, by voice and by tap | an absorbing `lock`: the PIN and every other earlier event are discarded, the PIN panel session is ended, and the read asks for fresh proof | replace the lock with the plain −5 bits → the PIN's 11 bits keep ZAL2 → the read succeeds → the cell fails |
+| Crowded room | the member is verified (ZAL2); a second voice (member, visitor or unknown) speaks; the member asks "what's on my calendar?" | nothing private is spoken or shown; Zoe says it's private and sends it to the member's phone; with `others_present: ask`, it reads only after a "yes" in the member's own voice | let crowding cap only the display → the answer is spoken → the cell fails |
+| ZAL2 operating point | impostor trials (public corpus against each profile, plus household cross-member trials) at the derived threshold | measured false-accept rate per profile at or below the derived FAR, with at least 6,000 trials | score at the FAR 1 % threshold → the false-ZAL2 rate exceeds the target → the cell fails |
 | Silent stale session | the owner verified, leaves, a guest **taps** the calendar without speaking | no private card on tap without a fresh voice or PIN (the panel's HTTP session stays guest, today's behaviour) | pin it with a Playwright estate test |
 | Visitor | an unknown voice speaks 5 turns | one cluster, chip shown, nothing on disk after 30 min | grep disk and logs for vectors and tags |
 | Introduction consent | the member says "this is Sam", and **the member** says "yes" | no voiceprint stored | accept any "yes" → the cell fails |
@@ -866,3 +943,8 @@ anything on the voice path.
     confirms?
 18. **"Forget me" from a visitor**: should it also erase what members privately know about them? This design
     says no, because it is the members' own memory. A lawyer may say otherwise.
+19. **The voice operating point for ZAL2** (§3.1): accept the stricter, target-derived point (FAR 0.05 % per
+    profile for four members, with more "say it again" or PIN fallbacks, especially across the room)? Or relax
+    the false-ZAL2 target instead?
+20. **Others present** (§2.1): send private answers to the member's phone by default (recommended), with
+    "ask me first" as the member's opt-in?
