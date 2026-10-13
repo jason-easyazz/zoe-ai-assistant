@@ -373,22 +373,35 @@ def enroll_voice_resnet34(user: str, name: str, mode: str, rn, daemon_service: s
         if not built.ok:
             say("The recordings didn't sound consistent enough. Nothing was stored.")
             return 1
-        try:
-            out = _api("/api/voice/enroll", dict(
-                embedding_base64=base64.b64encode(np.asarray(built.vector, dtype=np.float32).tobytes()).decode(),
-                model_id=rn.MODEL_ID, sample_count=len(built.kept), user_id=user, display_name=name, consent=True))
-            ok = bool(out.get("ok"))
-        except Exception as exc:  # noqa: BLE001
-            print(f"profile upload failed: {exc}", file=sys.stderr)
+
+        def upload_profile() -> bool:
+            try:
+                return bool(_api("/api/voice/enroll", dict(
+                    embedding_base64=base64.b64encode(np.asarray(built.vector, dtype=np.float32).tobytes()).decode(),
+                    model_id=rn.MODEL_ID, sample_count=len(built.kept), user_id=user, display_name=name, consent=True)).get("ok"))
+            except Exception as exc:  # noqa: BLE001
+                print(f"profile upload failed: {exc}", file=sys.stderr)
+                return False
+
+        def upload_wav(i: int) -> bool:
+            try:
+                return bool(_api("/api/voice/enroll", dict(audio_base64=base64.b64encode(wavs[i]).decode(), user_id=user,
+                                                           display_name=name, consent=True)).get("ok"))
+            except Exception as exc:  # noqa: BLE001
+                print(f"clip {i + 1} upload failed: {exc}", file=sys.stderr)
+                return False
+
+        # The ACTING model first: in dual that is Resemblyzer (the WAVs), in resnet34 the profile. If it does not land nothing else is
+        # stored, so the failure line is true; a shadow-model profile alone recognises nobody.
         if mode == "dual":
-            for i in built.kept:
-                try:
-                    out = _api("/api/voice/enroll", dict(audio_base64=base64.b64encode(wavs[i]).decode(), user_id=user,
-                                                         display_name=name, consent=True))
-                    ok = ok and bool(out.get("ok"))
-                except Exception as exc:  # noqa: BLE001
-                    print(f"clip {i + 1} upload failed: {exc}", file=sys.stderr)
-                    ok = False
+            acting = upload_wav(built.kept[0]) or upload_wav(built.kept[0])
+            ok = acting and all(upload_wav(i) for i in built.kept[1:]) and upload_profile()
+        else:
+            acting = upload_profile() or upload_profile()
+            ok = acting
+        if not acting:
+            say("I couldn't save your voice signature just now. Nothing was stored. Let's try again in a moment.")
+            return 1
     finally:
         wavs.clear()
         embs.clear()
@@ -396,7 +409,7 @@ def enroll_voice_resnet34(user: str, name: str, mode: str, rn, daemon_service: s
     if ok:
         say(f"Done, {name} - I'll know your voice from now on.")
         return 0
-    say("I couldn't save your voice signature. Nothing was stored, or only part of it.")
+    say(f"I'll know your voice now, {name}, but part of the new signature didn't save. We can redo it any time.")
     return 1
 
 

@@ -393,24 +393,36 @@ class EnrollmentRun:
         if profile is None:
             return self._finish(TIMEOUT if self._expired() else FAILED, 0, "timeout" if self._expired() else "bad_capture",
                                 "timeout" if self._expired() else "failed")
-        try:
-            profile_ok = bool(self._upload_profile(profile, len(kept)))
-        except Exception as exc:  # noqa: BLE001
-            self._log(f"profile upload failed: {type(exc).__name__}")
-            profile_ok = False
-        legacy_ok = legacy_total = 0
+        # The ACTING model's profile is uploaded FIRST (retried once): it is the one that recognises the member. If it does not land,
+        # nothing else is stored either - so "I haven't kept anything" stays true - and the run is a storage failure, never "partial":
+        # a shadow-model profile alone is something nobody can use yet. ``dual`` acts on Resemblyzer (the kept WAVs); ``resnet34`` on
+        # the panel-built profile.
         if self.legacy_upload:
-            for i in kept:
-                legacy_total += 1
-                try:
-                    if not self._upload(self._wavs[i]):
-                        break
-                except Exception as exc:  # noqa: BLE001
-                    self._log(f"upload failed: {type(exc).__name__}")
-                    break
-                legacy_ok += 1
-        if not profile_ok and legacy_ok == 0:
+            legacy_ok = self._upload_wavs(kept)
+            if legacy_ok == 0:
+                return self._finish(FAILED, 0, "upload_failed", "store_failed")
+            profile_ok = self._try_upload(self._upload_profile, profile, len(kept), label="profile")
+            if profile_ok and legacy_ok == len(kept):
+                return self._finish(DONE, len(kept), "ok", "done")
+            return self._finish(PARTIAL, len(kept), "partial_upload", "partial")   # the acting profile exists; the shadow one is incomplete
+        if not self._try_upload(self._upload_profile, profile, len(kept), label="profile", attempts=2):
             return self._finish(FAILED, 0, "upload_failed", "store_failed")
-        if profile_ok and legacy_ok == legacy_total:
-            return self._finish(DONE, len(kept), "ok", "done")
-        return self._finish(PARTIAL, len(kept), "partial_upload", "partial")
+        return self._finish(DONE, len(kept), "ok", "done")
+
+    def _try_upload(self, fn, *args, label: str = "upload", attempts: int = 1) -> bool:
+        for _ in range(max(1, attempts)):
+            try:
+                if fn(*args):
+                    return True
+            except Exception as exc:  # noqa: BLE001
+                self._log(f"{label} failed: {type(exc).__name__}")
+        return False
+
+    def _upload_wavs(self, kept: list) -> int:
+        """Upload the kept captures for the Resemblyzer profile in order; the first one is retried once. Returns how many landed."""
+        done = 0
+        for n, i in enumerate(kept):
+            if not self._try_upload(self._upload, self._wavs[i], attempts=2 if n == 0 else 1):
+                break
+            done += 1
+        return done

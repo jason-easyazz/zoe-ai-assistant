@@ -636,3 +636,30 @@ def test_enrolment_wiring_default_none_unavailable_and_dual_degrade(daemon, monk
     path, body = posts[0]
     assert path == "/api/voice/enroll" and body["model_id"] == MODEL and body["sample_count"] == 4 and body["consent"] is True
     assert "audio_base64" not in body and len(base64.b64decode(body["embedding_base64"])) == DIM * 4
+
+
+def test_in_dual_a_failed_acting_model_upload_is_a_storage_failure_even_if_resnet34_would_have_stored():
+    """Codex P2 on #2024: in ``dual`` Resemblyzer ACTS. If its WAV upload fails, the member has no profile that recognises them,
+    so Zoe must not say 'I can already use it' - and the ResNet34 profile must not be stored either, so 'I haven't kept
+    anything' stays true."""
+    v = clip_world()
+    names = [b"clip0", b"clip1", b"clip2", b"clip3", b"clip4"]
+    rig = Rig(order(v, names), legacy_upload=True, legacy_ok=False, profile_ok=True)
+    res = rig.run()
+    assert res.outcome == em.FAILED and res.reason == "upload_failed" and res.samples == 0
+    assert rig.profiles == []                                              # the shadow model is never stored without the acting one
+    assert rig.said[-1] == em.DEFAULT_SCRIPT["store_failed"]               # the honest line, not 'partial'
+    assert len(rig.legacy) == 2                                            # the acting upload was retried once before giving up
+    # negative control: the acting upload landing makes the same enrolment a success
+    ok = Rig(order(v, names), legacy_upload=True, legacy_ok=True, profile_ok=True)
+    assert ok.run().outcome == em.DONE and len(ok.profiles) == 1
+
+
+def test_in_resnet34_alone_the_profile_is_the_acting_upload_and_is_retried_once():
+    v = clip_world()
+    names = [b"clip0", b"clip1", b"clip2", b"clip3", b"clip4"]
+    rig = Rig(order(v, names), legacy_upload=False, profile_ok=False)
+    res = rig.run()
+    assert res.outcome == em.FAILED and len(rig.profiles) == 2 and rig.said[-1] == em.DEFAULT_SCRIPT["store_failed"]
+    ok = Rig(order(v, names), legacy_upload=False, profile_ok=True)       # negative control
+    assert ok.run().outcome == em.DONE and len(ok.profiles) == 1
