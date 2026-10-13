@@ -68,7 +68,8 @@ _VAGUE_ITEMS = frozenset({"things", "thing", "stuff", "something", "it", "that",
 
 def clean_item_text(raw: str) -> str:
     """The item a person meant, from the words STT handed over: filler words dropped, a stutter ("noodles? Noodles",
-    "and and") collapsed, edge punctuation stripped. Casing is kept. Never raises; "" when nothing is left."""
+    "and and") collapsed, edge punctuation stripped. Casing is kept. Never raises; "" when nothing is left OR when the words hold
+    two different sentences (a spoken correction is ambiguous, so it is declined, never glued into one item)."""
     text = re.sub(r"\s+", " ", str(raw or "")).strip()
     if not text:
         return ""
@@ -91,7 +92,11 @@ def clean_item_text(raw: str) -> str:
         if seg_clean and key not in seen:
             seen.add(key)
             kept.append(seg_clean)
-    return _EDGE_PUNCT_RE.sub("", ", ".join(kept))
+    if len(kept) > 1:
+        # Two DIFFERENT sentences are not one item: "add milk? Actually no, add eggs" is a correction, and gluing them gave the
+        # item "milk, Actually no, add eggs". Only a repetition collapses (above); anything else is declined as ambiguous.
+        return ""
+    return _EDGE_PUNCT_RE.sub("", "".join(kept))
 
 
 # Auxiliaries that are also common nouns: "my can opener", "our can of paint", "my spare can", "your last will".

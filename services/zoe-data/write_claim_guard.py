@@ -97,6 +97,7 @@ class _Lang:
     passive_state: frozenset = frozenset()    # "is added": a present-tense passive - a claim only for a ``state_claim`` verb
     clause_starts: frozenset = frozenset()    # words that open a new clause after a comma ("it", "that", …)
     joiners: tuple = ()                       # clause joiners as token tuples, longest first ("but", "so", "because")
+    conditionals: frozenset = frozenset()     # "if" / "unless": a TRAILING one opens its own (blocked) clause, it never reaches back
     modifiers: frozenset = frozenset()        # ordinary adverbs that may sit before a claim verb ("definitely", "again")
     modifier_suffixes: tuple = ()             # a word ending in one is an adverb too ("-ly", "-mente"), once a subject stands before it
 
@@ -147,6 +148,7 @@ def _langs() -> tuple:
             passive_done=words("passive_done"), passive_past=words("passive_past"), passive_state=words("passive_state"), clause_starts=words("clause_starts"),
             modifiers=words("modifiers"), modifier_suffixes=tuple(sorted(phrases("modifier_suffixes"), key=len, reverse=True)),
             joiners=tuple(sorted((tuple(p.split()) for p in phrases("clause_joiners")), key=len, reverse=True)),
+            conditionals=words("clause_conditionals"),
         ))
     return tuple(out)
 
@@ -263,6 +265,10 @@ def _clauses(text: str, lang: "_Lang") -> list:
             if nxt in starts or nxt in lang.joiner_firsts:
                 close()
         else:
+            if tok in lang.conditionals and cur:
+                # "I've added milk to your list, if that's okay": the hedge is a clause of its own and blocks only itself. A LEADING
+                # "if" stays in its clause (and blocks it), so "If it's added, great" is still not a claim (review, #2004).
+                close()
             joiner = next((len(j) for j in lang.joiners if items[i:i + len(j)] == list(j)), 0)
             if joiner:
                 close()

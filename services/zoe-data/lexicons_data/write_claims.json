@@ -39,6 +39,7 @@
     "other_targets": ["contact", "contacts", "people", "person", "memory", "memories", "journal", "playlist", "queue", "favourites", "favorites", "favourite", "favorite", "library", "ticket", "backlog", "board", "profile", "household", "family", "device", "lights", "routine", "scene"],
     "blockers": ["not", "never", "nothing", "unable", "if", "unless", "whether", "wasn't", "weren't", "didn't", "couldn't", "haven't", "hasn't", "can't", "cannot", "won't", "wouldn't", "isn't", "aren't", "wasnt", "werent", "didnt", "couldnt", "havent", "hasnt", "cant", "wont", "wouldnt", "isnt", "arent", "wish", "would", "could", "should", "might", "maybe", "perhaps", "when", "once", "before", "until", "after", "want", "wanted", "need", "needed", "try", "tried", "trying", "going", "gonna", "will", "shall", "let"],
     "clause_joiners": ["but", "so", "so that", "and then", "because", "as", "although", "though", "even though", "while", "whereas", "however", "since", "which", "then", "just in case", "in case"],
+    "clause_conditionals": ["if", "unless", "whether"],
     "clause_starts": ["it", "it's", "that", "that's", "this", "they", "there", "he", "she", "i'm", "i'll", "you'll", "let's", "please", "don't", "won't", "no"],
     "recap_cues": ["did you", "have you", "has it", "was it", "is it on", "is it in", "did it", "are they on", "are they in", "you added", "you said you", "did that", "is that on", "did we"],
     "honest": "I didn't manage to add that; want me to try again?"

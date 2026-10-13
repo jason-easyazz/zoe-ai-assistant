@@ -354,3 +354,28 @@ def test_the_voice_helper_fails_closed(monkeypatch):
 
     monkeypatch.setattr("push.broadcaster.panel_live", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("x")))
     assert vt._panel_is_live("panel-a") is False
+
+
+# final-round review (#2004): three bypasses
+
+def test_a_trailing_conditional_does_not_disable_a_completed_claim():
+    from write_claim_guard import find_claim
+
+    assert find_claim("I've added milk to your shopping list, if that's okay.") is not None
+    assert find_claim("I've added milk to your shopping list if you like.") is not None
+    assert find_claim("If it's added, great.") is None
+    assert find_claim("I can add milk to your list if you like.") is None
+
+
+@pytest.mark.parametrize("raw", ["milk? Actually no, add eggs", "bread. And cheese"])
+def test_two_different_sentences_are_not_glued_into_one_item(raw):
+    assert list_service.clean_item_text(raw) == ""
+
+
+def test_a_contextual_list_add_uses_the_same_item_validation():
+    import skybridge_service as sk
+
+    ctx = dict(domain="lists")
+    assert sk._contextual_list_add_from_text("add I really do not know what that was", ctx) is None
+    assert sk._contextual_list_add_from_text("add things", ctx) is None
+    assert sk._contextual_list_add_from_text("add oat milk", ctx) == ("oat milk", "shopping")

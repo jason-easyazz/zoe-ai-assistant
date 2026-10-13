@@ -887,8 +887,12 @@ def _contextual_list_add_from_text(message: str, context: dict[str, Any] | None)
         return None
     if re.search(r"\bto\s+", message, re.IGNORECASE):
         return None
-    item = _clean_action_text(match.group("item"))
-    if not item or item.lower() in {"item", "something", "this", "that"}:
+    # The SAME item validation as _list_add_from_text: a context follow-up must not store a whole sentence or a vague noun
+    # just because a list card is open (review, #2004).
+    from list_service import clean_item_text, is_plausible_item
+
+    item = clean_item_text(_clean_action_text(match.group("item")))
+    if not item or item.lower() in {"item", "something", "this", "that"} or not is_plausible_item(item):
         return None
     _list_id, list_type = _context_list_hint(context)
     return item, list_type or "shopping"
