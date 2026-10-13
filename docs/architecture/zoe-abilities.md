@@ -184,7 +184,7 @@ back on. A spoken interrupt is a separate, later owner decision.
 
 ### 3.2 The pipeline
 
-1. **Change detection** (per protocol, section 5): IMAP IDLE or JMAP push, a provider's delta/history
+1. **Change detection** (per protocol, section 6): IMAP IDLE or JMAP push, a provider's delta/history
    cursor, CalDAV `sync-collection`, a bridge's event stream. Only a cursor and a provider id are kept
    per account; catch-up after a restart or the night window resumes from the cursor exactly once.
 2. **Normalise** to a `watch_items` row: member, account, provider id, thread id, sender, subject or
@@ -213,9 +213,10 @@ RAM is the scarce resource (MemAvailable about 1.5-2.5 GB with the voice stack r
 - **In-process asyncio tasks in zoe-data** for protocols with a small, maintained Python client: IMAP
   IDLE, JMAP, CalDAV polling, Microsoft Graph delta polling. Expected cost is a few MB per account (to be
   measured, section 8); no new process.
-- **One lean sidecar per protocol bridge** only where the maintained component is not Python: Signal
-  (`signal-cli`, a JVM or GraalVM native binary), WhatsApp (`whatsmeow`, Go), the Telegram user lane if
-  TDLib is chosen. Each sidecar is a systemd user unit with `MemoryMax=`, `MemorySwapMax=0` per the voice
+- **Separate processes** only where the maintained component is not Python: for watched chat networks, the
+  Matrix homeserver (Tuwunel) plus one Go process per mautrix bridge (A4), or, if A4's RSS cell fails, a
+  direct sidecar per network (`signal-cli`, whatsmeow); the Telegram user lane only if TDLib is chosen.
+  Each process is a systemd user unit with `MemoryMax=`, `MemorySwapMax=0` per the voice
   stack's protection rules, binds 127.0.0.1 only, and exposes a local event stream to zoe-data.
 - **Organs, where one already exists.** Home Assistant already ships CalDAV, Google Calendar and IMAP
   integrations and Zoe already talks to HA. Where HA's integration fits (calendar reads especially), the
@@ -261,7 +262,7 @@ the Telegram send-to-phone link, the live push back to the panel. Today it regis
 | **A. OAuth device code** (RFC 8628) | the provider's own sign-in page; the person types the short code the panel shows (Microsoft does not support `verification_uri_complete`, so the QR carries only the URL) | providers whose device flow allows the scopes: Microsoft Graph mail and calendar, Outlook IMAP. **Not Google**: its device flow excludes Gmail and Calendar | no redirect URI, no public endpoint; Zoe polls the token endpoint. A short code typed on the phone is fine; nothing is typed on the panel |
 | **B. OAuth code + PKCE via a household redirect** | the provider's sign-in page; the redirect lands on one callback path on the tunnel hostname (`ZOE_PUBLIC_URL`), or a static redirector that bounces the browser back to the LAN (Home Assistant's `my.home-assistant.io` pattern) | providers with no usable device flow for the scope (Google) | needs the household's own OAuth client; the only route exposed is the callback |
 | **C. App password on a phone form** | Zoe's phone page (single-use token in the URL fragment, as `music_setup`) | Fastmail, iCloud, Gmail with 2-Step Verification, generic IMAP | the password is typed on the phone and goes straight into the vault |
-| **D. Linked device: the phone's app scans the panel** | WhatsApp / Signal / Telegram "link a device" camera | Signal (`signal-cli link`), WhatsApp (whatsmeow pairing), Telegram user lane (QR login) | the QR on the panel *is* the provider's pairing code; the cleanest fit to the owner rule |
+| **D. Linked device: the phone's app scans the panel** | WhatsApp / Signal / Telegram "link a device" camera | the mautrix bridges' own QR or pairing codes (Signal, WhatsApp, Google Messages), `signal-cli link` for a direct sidecar, Telegram user lane (QR login) | the QR on the panel *is* the provider's pairing code; the cleanest fit to the owner rule |
 | **E. Bot link** (exists) | `t.me/<bot>?start=<token>` | Zoe's own Telegram bot | `telegram_link.py`; stays as is |
 
 Whichever method, completion writes a `connected_accounts` row and a vault entry, and the panel card
@@ -280,7 +281,7 @@ The consent text is generated from the manifest, so it cannot drift from what th
 
 ## 5. Credentials
 
-**Today** (survey, research record section 5): there is no per-member secret store. Service tokens are
+**Today** (survey, research record section 6): there is no per-member secret store. Service tokens are
 environment variables (`ZOE_TELEGRAM_BOT_TOKEN`, `MUSIC_ASSISTANT_TOKEN`, the HA token); a member's
 Telegram link is a numeric id in user preferences; music provider tokens live inside Music Assistant;
 panel device tokens are stored hashed with scopes, expiry and revocation (`device_tokens` in the initial
@@ -315,24 +316,48 @@ migration). The device-token row is the right shape to copy; nothing today encry
 
 ## 6. Per-service recommendation
 
-Verdicts use the research record's evidence; tags there. **Adopt** = wrap a maintained component;
-**thin** = a small Zoe adapter over a maintained library; **avoid** = do not build.
+Verdicts use the research record's evidence and its connector-layer bake-off (record section 5, which
+ranks every service class with a runner-up). **Adopt** = wrap a maintained component; **thin** = a small
+Zoe adapter over a maintained library; **avoid** = do not build.
 
-| Service | Recommendation | Auth method | Watch mechanism | Phase |
+**Two jobs.** *Talk to Zoe on X* (a member messages Zoe's own bot, number or address) is a **channel**:
+Flue ships verified channel packages for it, and Zoe's brain already runs on Flue. *Zoe watches my own
+account* is a **watcher** with a connected account (this document's abilities). They share identity
+linking, the vault and the egress rules, and they are planned as two tracks (section 9: C and A).
+
+| Talk-to-Zoe channel | Recommendation | Needs | Phase |
+|---|---|---|---|
+| Telegram | **Keep** (live long-poll sidecar); add `callback_query` for approvals (action-agent Phase 2) | exists | exists |
+| WhatsApp | **Adopt `@flue/whatsapp`** (Meta Cloud API): members message Zoe's business number from their own WhatsApp | a dedicated number, a Meta Business account; Meta terms 4.7 (AI-primary providers) is an owner/lawyer decision | C1, after a yes |
+| SMS | **Adopt `@flue/twilio`** (messaging only) | an AU Twilio number (business-use rules) | C1 |
+| Email to Zoe | **Adopt `@flue/resend`** (receiving + official SDK) | a domain with Resend receiving; it is Zoe's own mailbox, so it follows action-agent Phase 3's host decision | C2 |
+| Slack, Discord, Messenger | **Adopt** the Flue packages if the household uses them (Discord = slash commands only; Messenger = a Facebook Page) | the app/page registration | C2 |
+| Teams, Google Chat | **Skip** (work-account products) | - | - |
+
+All C-track channels mount in **one channels sidecar** (the Telegram sidecar generalised), reachable only
+through one Cloudflare-tunnel path per channel (`/channels/<provider>/*`, Access bypass for those paths
+alone, the package verifying the provider signature). Unknown senders are guests until a member links the
+channel (the `telegram_link.py` flow) or the owner approves a pairing code (OpenClaw's and Hermes' default).
+A reply in the same conversation is conversation, not an outbound errand; anything to a third party is.
+
+| Watched service | Recommendation | Auth method | Watch mechanism | Phase |
 |---|---|---|---|---|
-| **Email, IMAP/JMAP providers** (Fastmail, iCloud, generic, Gmail via app password) | **Thin** in-process adapter over a maintained IMAP library (imap-tools or aioimaplib, chosen by a small bake-off) and JMAP for Fastmail | C (app password on the phone) | IMAP IDLE, re-issued under the 29-minute rule; JMAP push where offered | **A1** |
+| **Email, IMAP/JMAP providers** (Fastmail, iCloud, generic, Gmail via app password) | **Thin** in-process adapter over `imap-tools` (Apache-2.0, zero dependencies, IDLE; `aioimaplib` only after a GPL-3.0 decision) and JMAP for Fastmail; borrows Hermes' sender authentication | C (app password on the phone) | IMAP IDLE, re-issued under the 29-minute rule; JMAP push where offered | **A1** |
 | **Email, Outlook.com / Microsoft 365** | **Thin** over Microsoft Graph (delta query polling; change notifications need a public HTTPS endpoint) | A (device code) | Graph delta every few minutes | A1b |
 | **Email, Gmail API** | **Avoid for now.** Gmail read scopes (and IMAP's XOAUTH2 scope) are restricted: verification plus a yearly security assessment, unless the household's own Cloud project relies on Google's personal-use exception in Production (a warning screen, under 100 users); in Testing mode the refresh token dies every 7 days; no device flow. Use IMAP with an app password (C); the API is an owner decision | C (B only if decided) | via IMAP IDLE | A1 (as IMAP) |
-| **Calendars** | **Adopt the HA organ** for Google Calendar and CalDAV reads where HA already has them; **thin** CalDAV `sync-collection` polling otherwise; Graph calendar with the email ability | HA's own flow, or C / A | poll with sync tokens | A2 |
-| **Telegram, talking to Zoe** | **Keep** the existing bot (`labs/flue-zoe-telegram-2x`); add `callback_query` only for approvals (action-agent Phase 2) | E | long-poll (exists) | exists |
+| **Calendars** | **HA** for calendars the household already keeps in HA (shared, household scope); **thin** in-process `caldav` / Google Calendar API (`calendar.readonly`) / Graph for a member's personal calendars, so they stay per member | HA's own flow, or C / A / B | poll with sync tokens | A2 |
 | **Telegram, watching the member's own chats** | **Owner decision.** An ordinary bot cannot see a person's chats. Preferred: a **Telegram Business connection** - the member adds Zoe's existing bot as a chatbot in their own app (needs Premium) and the sidecar adds `business_*` to `allowed_updates`; no new process, sanctioned by Telegram. Fallback: the member's own account through MTProto (Telethon or TDLib), read-only, QR login | E plus in-app opt-in; D for the fallback | Bot long-poll; MTProto updates for the fallback | A3 |
-| **Signal** | **Adopt** `signal-cli` as a linked secondary device in a capped sidecar, first as a second channel to talk to Zoe, then read-only watching | D | JSON-RPC event stream | A4 |
-| **WhatsApp** | **Owner decision on ToS risk.** The Cloud API is for businesses and cannot read a person's own WhatsApp; Meta's Business terms (4.7, last modified 2026-09-23) also bar AI providers whose AI is the primary function. The only way to watch a personal account is an unofficial linked-device client (whatsmeow), which Meta's terms forbid and which risks the member's account | D | linked-device event stream | A5, only after a yes |
-| **SMS** | **Defer**; when wanted, adopt an Android SMS-gateway app on a spare phone (local, no carrier account) before any carrier API | phone pairing | local webhook on the LAN | A6 |
-| **Phone calls** | **Not an ability in this design.** Calls are action-agent Phase 5 (legal checks, carrier eligibility) | - | - | after #2011 Phase 5 |
-| **Discord** | **Avoid** watching a personal account (self-bots break Discord's terms); a bot in a server the member owns is possible but low value | E-like | Gateway | not planned |
-| **Connector platforms** (Composio, Pipedream Connect, Arcade, Nango cloud) | **Avoid** as a runtime: tokens and data transit a third-party cloud. Borrow their ideas (per-user connected accounts, just-in-time authorisation, tool-level scopes) | - | - | ideas only |
-| **Automation hubs** (n8n, Node-RED, Huginn) | **Avoid** as the watcher host: another always-on runtime with its own credential store and RAM, for a job a few asyncio tasks do | - | - | not planned |
+| **Chat networks a member wants watched** (WhatsApp, Signal, SMS/RCS via Google Messages, Messenger) | **Adopt Matrix + mautrix bridgev2** on a small homeserver (Tuwunel first): bridges maintained weekly upstream, one event shape for every network, Zoe reads with `mautrix-python`. `encryption.allow: false` (one box), `split_portals: true` before the first login (per-member rooms), one Matrix account per member, relay off, Zoe's token behind a read-only allow-list proxy. **Gated on a lab RSS measurement** (no upstream publishes bridge RAM). Runner-up: direct sidecars (whatsmeow, `signal-cli`), lighter for one or two networks | D (each bridge's QR or pairing code) | bridge event stream into the homeserver; Zoe `/sync` | A4 |
+| **WhatsApp specifically** | Inside A4, and **only on a written owner yes**: the bridge is an unofficial linked device (Meta forbids it; the bridge docs warn of bans for "suspicious" accounts). The Cloud API cannot read a personal account | D | as A4 | A5 |
+| **SMS** | Watch: **mautrix-gmessages** if A4 is adopted (the phone must stay online); otherwise an Android SMS-gateway app (capcom6, Apache-2.0) on a spare phone, local mode. Talk to Zoe by SMS: the C1 Twilio channel | D / phone pairing | bridge stream / LAN webhook | A6 |
+| **Phone calls** | **Not an ability.** Calls are action-agent Phase 5 (legal checks, carrier eligibility); Flue's Twilio channel is messaging only | - | - | after #2011 Phase 5 |
+| **Discord, Slack** (watch) | **Avoid** watching personal accounts (Discord user tokens are self-bots; Slack browser tokens are visible to admins); talk-to-Zoe channels cover them | - | - | not planned |
+| **Notifications out** | **Adopt Apprise** (BSD-2, library, ~150 services) in zoe-data with `enable_only(...)` to an allowlist of schemes, URLs in the vault, every send behind the approval object | - | - | with action-agent Phase 2 |
+| **Docs and files** | **Adopt rclone** (MIT) read-only, one config per member, short-lived subprocess (no mount) | B / C | on demand | later |
+| **Connector platforms** (Composio, Pipedream Connect, Arcade, Merge, Paragon, Nango cloud, Activepieces) | **Avoid** as a runtime: tokens transit a vendor cloud (Activepieces CE posts Google-class refresh tokens to `secrets.activepieces.com`), per-member isolation is a paid tier, and Activepieces alone wants Postgres + Redis + workers (4 GB documented). Borrow ideas: per-user connected accounts, just-in-time authorisation per tool | - | - | ideas only |
+| **MCP servers and loaders** (Klavis, the official reference set, Smithery, LlamaHub, LangChain) | **Avoid** as processes or dependencies; borrow `mcp-email-server`'s per-account grants and recipient allowlists, and `google_workspace_mcp`'s read-only tiers | - | - | ideas only |
+| **Automation hubs** (n8n, Node-RED, Huginn) | **Avoid** as the watcher host: another always-on runtime with its own credential store and RAM | - | - | not planned |
+| **OpenClaw / Hermes adapters** (MIT) | **Borrow code**: Hermes' email sender authentication (`Authentication-Results` pinned to an `authserv-id`) and bulk-sender filters into A1; OpenClaw's read-only IDLE watcher and SPF/DKIM/DMARC sender gate as the reference design | - | - | A1 |
 
 ## 7. Security
 
@@ -388,18 +413,22 @@ a tool group to the brain, because the tool block is on the voice path.
 ## 9. Phases and flags
 
 Each phase is its own PR group, flag-dark, lab-proven before any operator flip. Effort uses the action-agent
-scale (S about 1-2 PRs, M 3-5).
+scale (S about 1-2 PRs, M 3-5). Two tracks run side by side: **C (channels first, the quick wins)** needs
+no access to anybody's personal account, so it can start at once; **A (watching)** starts with A0.
 
 | Phase | What | Flags (default) | Depends on | Effort |
 |---|---|---|---|---|
+| **C0** | Channels sidecar: generalise the Telegram sidecar to mount Flue channel packages; one tunnel path per channel with an Access bypass for that path only; a `channel_deliveries` dedup table; per-channel member linking (the `telegram_link.py` flow) with guest-by-default and owner-approved pairing codes | `ZOE_CHANNELS` (off) | nothing | M |
+| **C1** | WhatsApp (Cloud API business number) and SMS (Twilio) to talk to Zoe; replies in the same conversation only | `ZOE_CHANNEL_WHATSAPP`, `ZOE_CHANNEL_SMS` (off) | C0; owner decision 12 | S each |
+| C2 | Email to Zoe (Resend), Slack, Discord slash commands, Messenger - whichever the household uses | `ZOE_CHANNEL_<NAME>` (off) | C0; action-agent Phase 3's mailbox decision for email | S each |
 | **A0** | Registry, manifest loader with its refusals, vault, `connected_accounts`, `ability_audit`, the Connected accounts page (desktop + panel), moving the existing Telegram link and Music connect onto it. **No new egress.** | `ZOE_ABILITIES=off\|shadow\|on` (off), `ZOE_CONNECTED_ACCOUNTS_UI` (off) | nothing | M |
 | **A1** | Email read-only for IMAP/JMAP providers, app password on the phone, watcher in-process, tool-less summariser, pull queue and [Today] brief, `inbox` tool group, W15 `email` source | `ZOE_ABILITY_EMAIL=off\|shadow\|pull\|brief` (off) | A0, W15 fence for email (gap G31), action-world Phase 0 | M |
 | A1b | Outlook / Microsoft 365 via Graph with device-code sign-in | same flag, provider-gated | A1 | S |
-| **A2** | Calendars read (HA organ first, CalDAV / Graph second) | `ZOE_ABILITY_CALENDAR_EXT` (off) | A0 | S-M |
+| **A2** | Calendars read (HA for shared household calendars; in-process CalDAV / Google / Graph for personal ones) | `ZOE_ABILITY_CALENDAR_EXT` (off) | A0 | S-M |
 | **A3** | Telegram watching, read-only: Business connection of the existing bot first, MTProto user lane only as a fallback | `ZOE_ABILITY_TELEGRAM_WATCH` (off) | owner decision 3, A1's pipeline | S-M |
-| **A4** | Signal linked device, as a channel then read-only watch | `ZOE_ABILITY_SIGNAL` (off) | owner decision 4 | M |
-| **A5** | WhatsApp linked device | `ZOE_ABILITY_WHATSAPP` (off) | owner decision 5 (ToS risk accepted in writing) | M |
-| A6 | SMS via a local Android gateway | `ZOE_ABILITY_SMS` (off) | owner decision 6 | S |
+| **A4** | Watched chat networks: lab RSS cell for Tuwunel + mautrix (signal first), then the homeserver, the read-only proxy and the Matrix reader; direct sidecars instead if the cell fails | `ZOE_ABILITY_CHAT_WATCH` (off) | owner decision 4, the RSS cell | M-L |
+| **A5** | WhatsApp bridge on the A4 stack | `ZOE_ABILITY_WHATSAPP` (off) | owner decision 5 (ToS risk accepted in writing) | S |
+| A6 | SMS watch (mautrix-gmessages on A4, or a local Android gateway) | `ZOE_ABILITY_SMS` (off) | owner decision 6 | S |
 | later | Drafting replies (T2) and sending (T3) through errands | the action-agent flags (`ZOE_ERRANDS`, `ZOE_APPROVALS`, `ZOE_EMAIL`) | action-agent Phases 1-3 | - |
 
 Operator steps per phase (key file, admin allowlist, the first connect) go in an operator pack in
@@ -416,11 +445,14 @@ Operator steps per phase (key file, admin allowlist, the first connect) go in an
    account over MTProto. Either way it is the most private thing on this list, and Telegram's API terms bar
    using its data to train or develop AI models, which a lawyer should read against "summarise for the
    member" **[LAWYER]**.
-4. **Signal.** Add Signal as a second way to talk to Zoe (and later to watch)? Costs a capped JVM or native
-   sidecar.
-5. **WhatsApp.** Accept the account-ban risk of an unofficial linked-device client for a member who asks,
-   or rule WhatsApp out. There is no official way to watch a personal WhatsApp.
-6. **SMS.** Wanted? If yes, a spare Android phone as a local gateway is the private option.
+4. **Watched chat networks (A4).** Run a small Matrix homeserver (Tuwunel) with the mautrix bridges, the
+   maintained "connectors galore" stack, starting with Signal? Recommended: yes, *after* a lab cell measures
+   its resident memory over 24 h with the voice stack up; if it does not fit, direct sidecars
+   (`signal-cli`, whatsmeow) for one or two networks instead.
+5. **WhatsApp watching.** Accept the account-ban risk of the unofficial linked-device bridge for a member who
+   asks, or rule it out. There is no official way to watch a personal WhatsApp.
+6. **SMS watching.** Wanted? mautrix-gmessages if A4 is adopted (the phone stays paired and online), or a
+   spare Android phone as a local gateway.
 7. **Interrupts.** May a watcher ever interrupt (push / bell / Telegram), and may it ever speak unprompted?
    Recommended: push only, from rules the member wrote, inside quiet hours; never spoken in phase A.
 8. **Retention.** 14 days of metadata, no bodies (recommended), or shorter.
@@ -428,8 +460,18 @@ Operator steps per phase (key file, admin allowlist, the first connect) go in an
 10. **The vault key.** Back it up separately (an encrypted copy off the box) or not at all.
 11. **Email organ.** Home Assistant's IMAP integration already does IDLE ("adopt"), but it is
     household-scoped (one event bus), keeps credentials in HA's own storage and has no OAuth. Recommended:
-    a thin per-member adapter in zoe-data for email, HA for calendars. The alternative is to adopt HA IMAP
-    for the owner's mailbox only.
+    a thin per-member adapter in zoe-data for email, HA for shared calendars. The alternative is to adopt HA
+    IMAP for the owner's mailbox only.
+12. **Talk-to-Zoe channels (C1/C2).** Which apps should members be able to message Zoe on, beyond Telegram?
+    WhatsApp needs a dedicated business number and a Meta Business account, and Meta's terms 4.7 bar
+    AI-primary providers **[LAWYER]**; SMS needs an AU Twilio number (business-use rules); email-to-Zoe needs
+    a domain and is the same mailbox decision as action-agent Phase 3. Recommended start: SMS, then
+    WhatsApp after the terms question.
+13. **Public channel paths.** Accept one Cloudflare-tunnel path per channel, open to the provider (Access
+    bypassed for that path only, signature verified by the channel package)? Without it no Flue channel
+    other than the long-polled Telegram lane can receive messages.
+14. **Notifications out.** Adopt Apprise for sending to services Zoe has no client for, every send behind the
+    approval object? Recommended: yes, with a short scheme allowlist.
 
 ## 11. Risks, and is this too complicated?
 
@@ -446,14 +488,18 @@ Operator steps per phase (key file, admin allowlist, the first connect) go in an
 - **Long-lived credentials.** An app password is full-mailbox access until revoked. The vault, the audit
   and a visible "connected since" date on the Connected accounts page are the mitigation; OAuth with a
   read-only scope is better where the provider allows it on a home box (Microsoft).
-- **RAM.** Two bridge sidecars (Signal JVM, WhatsApp Go) plus a Telegram client could take a few hundred MB
-  together. The budget column and W10 exist so this is measured, not assumed.
+- **RAM.** A Matrix homeserver plus three or four Go bridges (or a JVM `signal-cli` and a Go whatsmeow
+  sidecar) could take a few hundred MB together, and no upstream publishes a figure; one Tuwunel issue
+  reported runaway memory. A4's RSS cell, the budget column and W10 exist so this is measured, not
+  assumed. The C-track channels add routes to one existing Node process.
 - **Notification fatigue** turns a helpful watcher into one the household mutes. Pull-by-default and
   member-written interrupt rules are the defence; W8 measures it.
 - **Is this too complicated?** As a whole, yes, if built at once. The honest minimum is **A0 + A1 for one
   member**: one manifest, one in-process IMAP watcher, a vault table, the Connected accounts page and a
   pull-queue entry. That is a small, testable slice that delivers the owner's first example ("keep an eye
   on my email") and proves the manifest, vault, consent and fence before anything riskier rides on them.
-  Everything after A2 waits for a measured A1 and an owner decision. What this design deliberately does
+  The C track is the other cheap, visible win: C0 + C1 lets members message Zoe on WhatsApp or SMS
+  without anyone's personal account being touched. Everything after A2 waits for a measured A1, A4's RSS
+  cell and an owner decision. What this design deliberately does
   **not** build: a plugin marketplace, user-installable third-party code, a generic MCP gateway, a
   workflow engine, or any outbound action outside the errand spine.

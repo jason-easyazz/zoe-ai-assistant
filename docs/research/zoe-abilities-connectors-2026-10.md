@@ -27,6 +27,17 @@ Nothing here is legal advice; points that need a lawyer are marked **[LAWYER]**.
 
 ## 0. Answer first
 
+- **Zoe can do a lot here, and most of it is adoption, not building** (section 5, the connector bake-off).
+  Two jobs, two answers. **Talk to Zoe on any app:** Flue, which already runs Zoe's brain, ships verified
+  channel packages for WhatsApp (Cloud API), SMS (Twilio), email (Resend), Slack, Discord, Messenger,
+  Teams and Google Chat; each is a route plus an official SDK in one channels sidecar behind the existing
+  Cloudflare tunnel, linked to members the way Telegram already is. **Watch my own accounts:** an
+  in-process IMAP/Graph adapter for email (no maintained service keeps tokens on the box per member), the
+  mautrix bridges on a small Matrix homeserver for WhatsApp, Signal, SMS/RCS and Messenger (maintained
+  weekly upstream; gated on a RAM measurement), a Telegram Business connection of Zoe's existing bot,
+  Home Assistant for shared household calendars, Apprise for notifications out, and rclone for files.
+  OpenClaw and Hermes got their many channels the same way: one adapter per network over a maintained
+  library, MIT-licensed, so their email sender-authentication and IMAP watcher code is borrowable.
 - **The field has converged on one pattern, and Zoe already owns half of it.** Every serious product
   (ChatGPT apps, Claude connectors, Arcade, Composio, Microsoft 365 Copilot) does the same five things:
   a per-user "connect" link the agent can surface when a tool needs an account; OAuth (or a pairing code)
@@ -43,8 +54,9 @@ Nothing here is legal advice; points that need a lawyer are marked **[LAWYER]**.
   streamable HTTP or SSE, no stdio) but "never stores or manages your tokens": the application owns OAuth,
   storage and refresh [verified, docs/guide/mcp and `@flue/runtime` 2.1.1 `mcp-types.ts`]. Its channel
   blueprints (Telegram, WhatsApp, Twilio, Resend, Slack and 14 more) are **webhook-ingress** guides for an
-  agent that has a public URL; Zoe's own Telegram lane long-polls instead, and that is the right call for a
-  home box. So: borrow Flue's rules, not its channel shape.
+  agent that has a public URL. They are the right tool for "talk to Zoe" on those apps, behind one
+  tunnel path each (section 5.1); they do not watch a member's own account, so the watcher side comes from
+  elsewhere.
 - **Do not put the brain in front of third-party MCP servers.** MCP is the right protocol to adopt
   maintained adapters through, but the policy point must be zoe-data, not the 4B model: MCP tool
   annotations are explicitly untrusted hints, registries do "minimal-to-no moderation", and the documented
@@ -104,10 +116,11 @@ docs site.
 per agent and gate at call time, because a changing tool block breaks the prompt cache (and, on llama.cpp,
 the exact-prefix KV reuse that Zoe's `services/AGENTS.md` KV-prefix contract protects). (3) Allowlist MCP
 tools by name and never trust annotations. (4) Treat inbound events as signals with a stable delivery id
-and dedupe in the application. **What not to take:** the webhook-first channel shape. It assumes a public
-endpoint; Zoe's Telegram lane long-polls (`labs/flue-zoe-telegram-2x/src/app.ts:201`) so nothing listens on
-the internet, and a watcher should prefer outbound-only mechanisms (IMAP IDLE, long polls, sync tokens)
-for the same reason.
+and dedupe in the application. (5) **Adopt the channel packages for "talk to Zoe"** (section 5.1): they
+need a public webhook, which one Cloudflare-tunnel path per channel provides, with each package verifying
+the provider's signature. Watchers are different: they read a member's own account, so they should stay
+outbound-only (IMAP IDLE, long polls, sync tokens), as Zoe's Telegram lane already long-polls
+(`labs/flue-zoe-telegram-2x/src/app.ts:201`).
 
 **One compatibility unknown.** The MCP spec's current revision is **2026-07-28**, which removes the
 `initialize` handshake and session ids (stateless requests carrying protocol version and capabilities in
@@ -445,7 +458,172 @@ worth an ability for a household; revisit only if a member runs a server they wa
 | Discord | bot gateway | E-like | sees only invited servers |
 
 
-## 5. What Zoe has today (read-only survey, HEAD b02a04a7b, 2026-10-14)
+## 5. Connector-layer bake-off (owner follow-up, 2026-10-14)
+
+Owner, on the first draft: *"there are projects and agents that have connectors galore out there, and I'm
+sure even Flue has a bunch of them"*, and *"if openclaw and hermes can do it and flue has
+[its ecosystem](https://flueframework.com/docs/ecosystem/) then we should be able to do heaps."* He is
+right. This section is the head-to-head. Desk research only: nothing was installed or run on the Jetson,
+and **every RAM figure is from upstream docs or issues and unmeasured on our box** (most upstreams publish
+none). Pins: Flue 2.1.1 (opensrc cache; npm `latest` is 2.3.0), Activepieces 0.92.3, OpenClaw v2026.10.3,
+Hermes Agent v0.21.7, mautrix bridges v0.2609.0, mautrix-go v0.31.0, Apprise 2.0.1, imap-tools 1.15.1.
+Where `opensrc` hit GitHub's anonymous rate limit, the same tagged files were read through `gh api
+.../contents?ref=<tag>` or the tagged tarball.
+
+### 5.1 What Zoe CAN do: two different jobs, both large
+
+There are two jobs here, and the field has a strong answer for each.
+
+1. **"Talk TO Zoe on X."** A member messages Zoe from an app they already use, and Zoe answers there. This
+   is what Flue's 17 channels, OpenClaw's 20-odd channels and Hermes' gateway platforms are. Zoe's brain
+   already runs on Flue 2.x and her Telegram lane is live, so **every Flue channel below is a near-free
+   adoption**: a verified webhook, an official SDK and Zoe's existing brain call.
+2. **"Zoe WATCHES my own account."** Zoe reads the member's personal inbox, personal WhatsApp or Telegram
+   chats, and tells them what matters. No Flue channel does this: a channel is a *bot or business
+   identity* that people message. Watching a personal account needs an IMAP/Graph client or a
+   linked-device bridge. The bridges exist and are well maintained (5.4).
+
+**Talk to Zoe: what each Flue channel needs** (blueprints and packages read at 2.1.1; every Flue channel
+package is a webhook verifier of roughly 100-400 lines, and the outbound SDK, tools, dedup and identity
+mapping are the application's job by Flue's own contract, `blueprints/README.md` lines 101-112 [verified]):
+
+| Channel (Flue package) | What a member does | What the household needs | Fit and cost |
+|---|---|---|---|
+| **Telegram** | messages Zoe's bot | exists | **Live** (long-poll sidecar, not the webhook package) |
+| **WhatsApp** (`@flue/whatsapp`, Meta Cloud API) | messages Zoe's WhatsApp *business* number from their own WhatsApp | a dedicated number not on consumer WhatsApp, a Meta Business account, an access token | Replies inside the 24-hour window after the member writes are free; templates (proactive) are billed per message [verified, Meta pricing]. **Meta's Business terms 4.7 bar AI providers whose AI is the primary function** [verified] - an owner and lawyer question, not a technical one |
+| **SMS** (`@flue/twilio`, messaging only - the blueprint has no voice [verified]) | texts Zoe's number | a Twilio AU number (US$8.25/month, SMS out 0.0515, in 0.0075 [verified]); Twilio's AU rules say business use only (action-agent record 3.1) | Works with any phone, no app |
+| **Email to Zoe** (`@flue/resend`) | emails Zoe's address | a domain with Resend receiving (MX) and the official `resend` SDK [verified] | Hosted (US) provider; this is the same "Zoe's own mailbox" question as action-agent Phase 3 |
+| **Slack** (`@flue/slack`, Events API) | DMs or mentions Zoe in the household workspace | a Slack app in a workspace the household owns | Free; Slack's Socket Mode (outbound WebSocket) would avoid the public webhook but is not in Flue's blueprint |
+| **Discord** (`@flue/discord`) | uses Zoe's **slash commands** | a Discord application | The blueprint is HTTP *interactions* only and says "Do not add Discord Gateway" [verified]: no plain DMs without a separate gateway client |
+| **Messenger** (`@flue/messenger`) | messages a Facebook Page | a Page and a Meta app (Page access token) | Meta app review before non-admins can message [secondary] |
+| **Teams**, **Google Chat** | messages a bot | an Azure Bot registration; a Google Workspace domain | Work-account products; low household value |
+| GitHub, Linear, Notion, Intercom, Zendesk, Shopify, Stripe, Salesforce | - | - | Business tools; not household channels |
+
+**Constraints that apply to all of them**, and how to meet them:
+
+- **Public webhook ingress.** Every Flue channel is called by its provider. Zoe already runs a Cloudflare
+  tunnel (`zoe-cloudflared`) with Cloudflare Access in front of the household hostnames
+  (`docs/knowledge/mac-virtual-panel.md`). The fit is one public hostname that routes **only**
+  `/channels/<provider>/*` to a channels sidecar, with an Access bypass for those paths alone (the provider
+  cannot pass an Access login; each package verifies the provider's signature over the exact body
+  instead). Nothing else is exposed.
+- **Identity.** A message from an unknown sender is a guest. A member links each channel once, exactly as
+  Telegram linking works today (`telegram_link.py`: a signed single-use token in a deep link or QR, the
+  provider's verified sender id stored on the member). OpenClaw's default for unknown senders is a pairing
+  code the owner approves (`dmPolicy: pairing`) [verified]; Hermes does the same (`gateway/pairing.py`,
+  files `chmod 0600`, codes never logged) [verified]. Zoe should copy that default.
+- **Deduplication** is the application's job (Flue's Telegram package: "does not deduplicate
+  `update_id` values" [verified]): one `channel_deliveries` table keyed by the provider delivery id.
+- **One process, not one per channel.** Generalise the live Telegram sidecar into a channels sidecar that
+  mounts several Flue channel packages; adding a channel is a route and a client, not a new service.
+
+### 5.2 How OpenClaw and Hermes got so many channels
+
+Both did it the same way: **one adapter per network over a maintained client library**, inside their own
+gateway. Neither has a magic connector layer.
+
+- **OpenClaw** (MIT, `openclaw/openclaw` v2026.10.3) [verified]: `extensions/whatsapp` (Baileys 7.0.0-rc14,
+  WhatsApp Web linked device, ~36k lines with tests, 197 files importing `openclaw/plugin-sdk`),
+  `extensions/telegram` (grammY), `extensions/signal` (signal-cli daemon or `signal-cli-rest-api`),
+  `extensions/sms` (Twilio webhook), `extensions/imessage` (macOS / BlueBubbles), `extensions/imap`, plus
+  Discord, Slack, Matrix, Teams, Google Chat and others. Gmail and Calendar are *skills* wrapping CLIs
+  (`skills/gog`, `skills/himalaya`), not channels. The adapters are tightly bound to the plugin SDK. The
+  exception is the **IMAP watcher**: `extensions/imap/src/watcher.ts` (428 lines, opens the mailbox
+  `readOnly: true`, IDLE with poll fallback) and `src/sender-gate.ts` (217 lines, SPF/DKIM/DMARC via
+  `mailauth`), with about six SDK touch-points.
+- **Hermes Agent** (MIT, `NousResearch/hermes-agent` v0.21.7, Python) [verified]: `plugins/platforms/`
+  (telegram on python-telegram-bot, discord on discord.py, slack on slack_bolt Socket Mode, whatsapp via a
+  Baileys Node bridge subprocess, sms on Twilio REST, **email on stdlib `imaplib`/`smtplib`**) and
+  `gateway/platforms/` (`signal.py` on httpx against signal-cli, `whatsapp_cloud.py`, `bluebubbles.py`).
+  The email adapter peeks headers with `BODY.PEEK`, drops bulk senders (`List-Unsubscribe`,
+  `Precedence`, `Auto-Submitted`) and **requires authenticated senders by default** (topmost
+  `Authentication-Results` pinned to an operator `authserv-id`; advisory GHSA-rxqh-5572-8m77). It is a
+  conversational gateway that replies by SMTP, not a read-only watcher.
+
+**What to reuse:** both are MIT, so code can be borrowed with attribution. Hermes' email sender-auth and
+header logic is Python and drops straight into a zoe-data adapter; OpenClaw's IMAP watcher and sender gate
+are the reference design (TypeScript). Their big messaging adapters are not worth lifting: they are
+thousands of lines bound to their gateways, and for the *watch* job the mautrix bridges (5.4) are the
+better-maintained source of the same capability.
+
+### 5.3 The other candidates, head to head
+
+| Candidate | What it really is (pinned source) | Local-first | Per-member isolation | RAM (upstream, unmeasured) | Verdict |
+|---|---|---|---|---|---|
+| **Flue channels** (2.1.1) | Webhook ingress verifiers; no outbound client, no polling, no OAuth, no email/IMAP watcher, no calendar. "Connectors" on the site is an alias of blueprints (`apps/www/src/pages/cli/connectors/[name].md.ts` re-exports the blueprints route). npm `@flue/connectors@0.3.7` exports only a Daytona sandbox adapter [verified] | Yes (verification on the box) | App's job | Part of one Node process | **Adopt for "talk to Zoe"** (5.1) |
+| **Activepieces CE** 0.92.3 | 733 community pieces incl. gmail (polling triggers), imap (polling, 5-minute default), google-calendar, microsoft-outlook, telegram-bot, whatsapp, slack, discord, twilio; no CalDAV, no Signal. Its MCP server (`/mcp`, stateless streamable HTTP) is a *flow builder*; `ap_run_action` runs one piece action with a stored connection [verified] | **No for Google-class OAuth**: the default `CLOUD_OAUTH2` connection posts the auth code, and later the **refresh token**, to `https://secrets.activepieces.com/claim` and `/refresh` (`cloud-oauth2-service.ts`); bring-your-own OAuth app is an Enterprise feature per its docs; piece catalogue syncs from `cloud.activepieces.com` hourly by default [verified] | Connections are project-scoped; RBAC, global connections and project structuring are Enterprise [verified] | Docs: at least 2 vCPU and 4 GB; default compose runs app + 5 workers + Postgres + Redis; a single-container PGlite mode exists but "cannot scale" [verified docs] | **Avoid.** Tokens transit its cloud, isolation is paid, and it is the biggest process we could add |
+| **Klavis** (Apache-2.0) | ~100 MCP servers; Gmail server is Node, takes an access token per request (`x-auth-data`), no refresh, **no read-only mode**, OAuth via Klavis' hosted broker; last push 2026-06-01 [verified] | Partly | Header per request | Node per server | **Avoid**; borrow Strata's progressive-disclosure idea only |
+| **Official MCP servers** | Reference implementations "not production-ready"; no email, calendar or messaging server ever shipped (gdrive and slack were archived 2025-05-28) [verified] | - | - | - | **Avoid** for connectors |
+| **Smithery, mcp-get, awesome lists** | Smithery = hosted runtime (CLI AGPL-3.0; a 2025 build-pipeline token exposure [secondary]); mcp-get deprecated; awesome lists unvetted (thousands of entries) [verified] | No (Smithery) | - | - | **Search index only** |
+| **Best single MCP servers** | `Wh1isper/mcp-email-server` (BSD-3: per-account grants `draft/organize/delete/send/append`, recipient allowlists, keyring with a plaintext-TOML fallback); `google_workspace_mcp` (MIT: `--read-only`, real multi-user OAuth 2.1); `chigwell/telegram-mcp` (session = full account) [verified] | Yes | Mixed | A process each | **Borrow the policy designs**, do not run as processes |
+| **LlamaHub / LangChain loaders** | One-shot loaders; Gmail/Calendar readers use the quickstart `token.json` in the working directory (plaintext) and a local-server login; heavy framework dependencies (`langchain-google-community`: 42 requirements) [verified] | Yes | No | Heavy | **Avoid** |
+| **Apprise** 2.0.1 (BSD-2) | Send-only library, ~150 services incl. Telegram, SMTP, Signal (via signal-cli-rest-api), WhatsApp Cloud, ClickSend, Twilio, ntfy, Matrix; `N_MGR.enable_only(*schemas)` allowlists schemes; URLs carry secrets, redacted in `url(privacy=True)` [verified] | Yes (library) | Per URL | Light deps (requests, PyYAML, markdown...) | **Adopt** for notifications-out, behind approval |
+| **Home Assistant** | IMAP sensor with IDLE (no OAuth), Google Calendar via application credentials and the `my.home-assistant.io` redirect, CalDAV [verified, section 3.3] | Yes | **No** (one household event bus) | Already running | **Keep where HA already owns it** (shared household calendars); not for personal inboxes |
+| **IMAP and API libraries** | `imap-tools` 1.15.1 (Apache-2.0, **zero dependencies**, IDLE via `imap_tools/idle.py` `IdleManager`, blocking so run in a thread); `aioimaplib` 2.0.3 (GPL-3.0); `google-api-python-client` (Apache-2.0, five deps); `caldav` 3.4.0 (python-caldav) [verified] | Yes | Ours (vault per member) | In-process | **Adopt** as the email/calendar watcher base |
+| **rclone** 1.75.2 (MIT) | Drive, OneDrive, Nextcloud/WebDAV; `--read-only` mount and serve; `drive.readonly` scope; config encryption [verified docs] | Yes | One config per member | A Go subprocess per call | **Adopt** for docs/files, as a short-lived subprocess |
+
+### 5.4 Chat networks you watch: Matrix + mautrix bridges
+
+This is the "connectors galore" answer for messaging, and it is a good one.
+
+- **The bridges** (`github.com/mautrix/*`, AGPL-3.0, all on the shared Go **bridgev2** framework in
+  `mautrix/go` v0.31.0, MPL-2.0) [verified at v0.2609.0, 2026-09-16 unless noted]:
+
+  | Bridge | Login | Notes from its own docs | Maturity |
+  |---|---|---|---|
+  | whatsapp (whatsmeow) | QR or phone pairing code | "WhatsApp is known to ban accounts that are too suspicious"; risk comes from emulators, VoIP numbers, messaging strangers; the phone must come online every ~2 weeks | High |
+  | telegram (now Go, gotd) | phone + code, QR, or bot token; own `api_id` | established accounts "perfectly safe" | High |
+  | signal (libsignal via CGO) | linked-device QR | one-time history transfer; docs silent on bans | Medium-high |
+  | gmessages (Google Messages SMS/RCS) | Google cookies + phone confirmation | the phone must stay online | Medium |
+  | meta (Messenger, Instagram) | cookies or password modes | "Meta may decide your account has suspicious activity and block you" | Medium, least stable |
+  | discord (legacy, v0.7.7) | QR, user token or bot | a user token is a self-bot in practice | Medium |
+  | slack (v0.2609.1) | browser tokens or app tokens | admins may see it | Medium |
+  | gvoice (v0.2605.0) | Google login | small repo | Low-medium |
+  | imessage | needs a Mac | not usable on this box | - |
+
+  No bridge or the bridgev2 setup page documents RAM [verified]. The bridge itself is the network client,
+  running on the box.
+- **The homeserver.** For one household on ARM64 the pick is **Tuwunel** (Apache-2.0, v1.9.4 2026-10-10,
+  aarch64 assets, "official successor to conduwuit", funded by the Swiss government, MSC4190 marked done
+  and the mautrix device-key issue #327 closed 2026-05-01) [verified]. Continuwuity (v26.9.1) is second;
+  conduwuit is archived (2026-05-29); Synapse (AGPL-3.0) is the compatibility fallback and the heaviest.
+  **Warning sign to measure:** Tuwunel issue #294, a user with mautrix-discord reported runaway memory on
+  v1.5.0 (closed 2026-02-09) [verified].
+- **Settings that make it fit Zoe** [verified in the bridgev2 example config, design inferences marked]:
+  `encryption.allow: false` (everything is on one box, so end-to-bridge encryption adds Olm device
+  management for no threat; rooms are then plaintext in the homeserver database, which must sit on
+  encrypted disk); **`split_portals: true` before the first login** (otherwise members in the same
+  WhatsApp group share one Matrix room, which breaks per-member isolation; the config calls changing it
+  later "IRREVERSIBLE AND POTENTIALLY DESTRUCTIVE"); one Matrix account per member; relay mode off (the
+  default); backfill off (the default). **There is no read-only mode**: a Matrix user with no bridge login
+  and no relay cannot send (`bridgev2/portal.go` returns `ErrNotLoggedIn`) [verified], and Zoe's reader
+  token should additionally pass through a small allow-list proxy that permits `/sync` and message reads
+  and denies `PUT .../send` [design, unverified].
+- **How Zoe reads it:** `mautrix-python` 0.21.1 (MPL-2.0, async, fits zoe-data) as a client with one
+  read-only token; `matrix-nio` is a revived but lightly maintained alternative [verified].
+- **Not useful here:** Beeper's `bbctl` (Apache-2.0) only works against Beeper's hosted homeserver ("can
+  not be used with any other Matrix homeserver") [verified], so messages leave the box; matterbridge is a
+  relay, last released 2023; Element Server Suite is sized for Kubernetes.
+- **Versus direct libraries** (whatsmeow alone, Telethon, signal-cli - whose README bundles libsignal only
+  for x86_64 Linux, so ARM64 needs our own build [verified]): direct is lighter for one or two networks;
+  the homeserver amortises from about three or four, and every network then arrives in one event shape
+  with maintained reconnect, media and catch-up. The deciding unknown is Tuwunel's resident memory.
+
+### 5.5 Ranked recommendation per service class
+
+| Class | 1st (adopt) | Runner-up | Deciding reason |
+|---|---|---|---|
+| **Talk to Zoe on chat apps** | **Flue channel packages** in one channels sidecar (WhatsApp Cloud number, Twilio SMS, Slack, Discord slash commands, Resend email-to-Zoe), behind a tunnel path with signature verification and the Telegram-style link flow | Hermes / OpenClaw adapters as code to borrow (MIT) | Zoe already runs Flue; each channel is a verified route plus an official SDK, no new runtime |
+| **Watch my email** | **Thin in-process adapter on `imap-tools`** (IDLE, `BODY.PEEK`) + Graph via device code for Microsoft; borrow Hermes' sender-auth (MIT), OpenClaw's read-only IDLE design, `mcp-email-server`'s per-account grants | Home Assistant IMAP for the owner's mailbox only | No maintained service keeps tokens per member in our vault; the maintained component *is* the library. Activepieces sends Google refresh tokens to its cloud; MCP servers each bring their own token store and process |
+| **Calendars** | **HA** for calendars the household already keeps in HA (shared, household-scope); **in-process `caldav` / Google Calendar API (`calendar.readonly`) / Graph** for a member's personal calendars | Activepieces calendar pieces (rejected on the same cloud-OAuth ground) | Isolation: HA is one household bus, so personal calendars stay per member in zoe-data |
+| **Chat networks I watch** (WhatsApp, Signal, SMS/RCS via Google Messages, Messenger) | **Tuwunel + mautrix bridgev2**, encryption off, `split_portals`, read-only proxy, read via mautrix-python - **gated on a lab RSS measurement** | Direct per-network sidecars (whatsmeow, signal-cli) | Maintained weekly upstream, one event shape for every network; direct wins only if the household wants one or two networks or the homeserver's memory fails the gate |
+| **Telegram I watch** | **Business connection of Zoe's existing bot** (no new process; needs Premium) | mautrix-telegram on the homeserver above | Sanctioned by Telegram and costs nothing extra to run |
+| **SMS** | Talk to Zoe: **Flue Twilio channel**. Watch my SMS: **mautrix-gmessages** if the homeserver is adopted | Watch: SMS Gateway for Android (capcom6, Apache-2.0) on a spare phone in local mode | gmessages reuses the chat stack; the gateway phone avoids any Google pairing |
+| **Voice calls** | Not a connector: action-agent Phase 5 (Twilio Media Streams over the tunnel, or LiveKit SIP). Flue's Twilio channel is messaging only | - | Legal and carrier eligibility come first |
+| **Notifications out** | **Apprise** in zoe-data with `enable_only(...)`, URLs in the vault, every send behind the approval object | Zoe's own push, bell and Telegram send (exist) | One maintained library covering ~150 services with light dependencies; no daemon |
+| **Docs and files** | **rclone** read-only, per-member config, short-lived subprocess | Provider APIs directly (Drive API, WebDAV) | One maintained tool with read-only flags and scoped OAuth across Drive, OneDrive and Nextcloud |
+
+## 6. What Zoe has today (read-only survey, HEAD b02a04a7b, 2026-10-14)
 
 Line numbers are from that HEAD and will drift. Defaults quoted are code defaults
 ([flag-inventory.md](../knowledge/flag-inventory.md)), not the live `.env`; nothing live was queried.
@@ -473,7 +651,7 @@ Line numbers are from that HEAD and will drift. Defaults quoted are code default
 (the pull queue a watcher feeds); [self-building-skills-2026-10-04.md](./self-building-skills-2026-10-04.md)
 (skills are markdown, code arrives by PR, the ClawHub numbers); [zoe-action-agent-2026-10.md](./zoe-action-agent-2026-10.md).
 
-## 6. How this shaped the design
+## 7. How this shaped the design
 
 1. **Copy the converged connect pattern and run it through the existing handoff engine.** Five auth
    methods (device code, code + PKCE via a household redirect, app password on a phone form, linked-device
@@ -486,11 +664,13 @@ Line numbers are from that HEAD and will drift. Defaults quoted are code default
 4. **Watchers are deterministic first**: change detection, metadata-only rows, code triage, a tool-less
    summariser for the few items that matter, then the existing pull queue, brief and notification paths.
 5. **A vault with envelope encryption**, keyed outside the database; scoped, expiring, revocable, audited.
-6. **Per service**: email read-only first (app password over IMAP; Microsoft by device code), calendars
-   through HA, then Telegram through a Business connection of the existing bot, Signal, WhatsApp only on a
-   written owner yes, SMS through a local gateway phone, calls after the action-agent legal checks.
+6. **Per service class** (ranked in section 5.5): Flue channels for talking to Zoe; an in-process IMAP/Graph
+   adapter for email; HA for shared calendars and in-process CalDAV/Google/Graph for personal ones; a
+   Telegram Business connection; Matrix (Tuwunel) + mautrix bridges for the chat networks a member wants
+   watched, gated on a RAM measurement and, for WhatsApp, a written owner yes; Apprise for notifications
+   out; rclone for files; calls after the action-agent legal checks.
 
-## 7. Honest limits of this record
+## 8. Honest limits of this record
 
 - Repository numbers and vendor prices move. Composio's pricing sources disagree, the WhatsApp AUD rates and
   Twilio's currency were not retrieved, and Telegram Business's Premium requirement is from vendor pages.
@@ -501,9 +681,12 @@ Line numbers are from that HEAD and will drift. Defaults quoted are code default
 - Google's personal-use exception for restricted scopes in a Production-unverified app is inferred from the
   verification page and the consent-screen limits; Google does not state it for this exact case.
 - Flue 2.1.1's compatibility with the 2026-07-28 MCP revision is unverified (it does not affect the design).
+- The bake-off (section 5) is desk research. No homeserver, bridge, Activepieces or channel was run; no
+  upstream publishes RAM for the mautrix bridges, and Tuwunel's only memory data point is an issue report.
+  Several repos were read via `gh api` at the pinned tag because `opensrc` hit GitHub's anonymous rate limit.
 - The Zoe survey is read-only at HEAD b02a04a7b; live flags were not read.
 
-## 8. Sources
+## 9. Sources
 
 Primary pages and repositories are linked inline where they are used; access date 2026-10-14 unless a
 date is shown. Pinned source on disk: `withastro/flue` tag 2.1.1 via opensrc
