@@ -3447,17 +3447,17 @@ async def voice_command(
     explicit_session = str((payload or {}).get("session_id", "")).strip()
     session_id = explicit_session if explicit_session else _get_or_create_voice_session(panel_id)
 
-    # Pass 3 B3: if daemon supplied an identified_user_id, bind it to the session
-    # so the next turn from the same panel doesn't need to re-verify.
-    _identified_real_user = _real_user_or_none(identified_user_id)
-    # With ZOE_VOICE_SESSION on, a VOICE claim never writes this indefinite binding: the bounded panel voice session
-    # (TTL, closed by any other voice) is what a verified voice unlocks.
-    if _identified_real_user and not (_by_claim and _voice_session.enabled()):
-        _ses = _VOICE_SESSIONS.get(panel_id)
-        if _ses:
-            # Store the NORMALISED value: the slot must only ever hold a real
-            # user id, so every reader can trust it without re-checking.
-            _ses["bound_user_id"] = _identified_real_user
+    # PRIVACY (2026-10-13, default on): a voice turn's member identity never outlives its source. It comes ONLY from
+    #   * THIS turn's identification (`identified_user_id`: an accepted voice claim, the daemon's VID, a PIN replay),
+    #   * a FRESH PIN panel session (`_resolve_recent_panel_session_user`: the panel idle-logout window, the existing
+    #     session-expiry authority - no new TTL), or
+    #   * the caller's own signed-in member session (a non-device caller authenticated as itself), or
+    #   * with ZOE_VOICE_SESSION on, the panel's OPEN, unexpired voice session (`_vs_decision` below) - which only ever
+    #     names the member THIS turn's verified voice claims, and is closed by any other / unverified voice or its TTL.
+    # Anything else is guest. A claim answers for its own turn only, so it never writes the panel binding (it used to,
+    # "so the next turn doesn't re-verify" - and the next voice was ANYONE's), and `bound_user_id` only mirrors the fresh
+    # panel session (below). The panel's LAST signed-in member (`_resolve_panel_default_user`, no freshness check) is no
+    # longer an attribution fallback. Pinned by tests/test_voice_identity_freshness.py.
 
     # Resolve effective user once so all downstream branches (intent fast path,
     # scope checks, Zoe Agent, and Hermes escalation) share the same identity.
@@ -3470,20 +3470,16 @@ async def voice_command(
     # the resolvers' best-effort `except: pass` swallows it → None → effective_user
     # ='guest' → every panel voice turn was silently dropped from memory. A private
     # short-lived connection removes the race (reproduced: solo→jason, concurrent→None).
-    # A sentinel here is treated as NO binding, so a real panel login below can
-    # claim the slot. Without this, "guest" was truthy, out-ranked
-    # `_panel_recent_user` in every `or`-chain, and blocked the refresh at the
-    # `if not _bound_user` guard — the panel login was invisible to voice.
-    _bound_user = _real_user_or_none(
+    # A sentinel in the slot is NO binding (a truthy "guest" once shadowed a real
+    # login, 2026-08-10). The cached value is only compared below, never trusted.
+    _cached_binding = _real_user_or_none(
         (_VOICE_SESSIONS.get(panel_id) or {}).get("bound_user_id")
     )
     _panel_recent_user = None
-    _panel_default_user = None
     try:
         from db_pool import get_db_ctx as _get_db_ctx
         async with _get_db_ctx() as _idconn:
             _panel_recent_user = await _resolve_recent_panel_session_user(panel_id, _idconn)
-            _panel_default_user = await _resolve_panel_default_user(panel_id, _idconn)
     except Exception:
         # Dedicated connection unavailable (e.g. pool momentarily exhausted). Fall back
         # to the request `db`: on the awaited /turn path it is still valid → correct
@@ -3494,10 +3490,8 @@ async def voice_command(
         logger.warning("voice identity: dedicated conn unavailable for panel=%s; trying request db", panel_id)
         try:
             _panel_recent_user = await _resolve_recent_panel_session_user(panel_id, db)
-            _panel_default_user = await _resolve_panel_default_user(panel_id, db)
         except Exception:
             _panel_recent_user = None
-            _panel_default_user = None
     # Keep the panel's login alive while it's actively in use. The session tracks
     # "whoever is logged into the panel" and should lapse only after real inactivity
     # — but ui_panel_sessions is written only on touch/login, so a VOICE-only session
@@ -3515,19 +3509,25 @@ async def voice_command(
     # also self-perpetuating: the heartbeat would refresh that expired session on
     # every turn — including a guest's — so idle logout could never fire and #1348's
     # stale-owner reclaim could never arm. Freshness confers trust (#1348); a stale
-    # owner is reclaimable. Attribution is unaffected: `_panel_default_user` is
-    # already the last resort in `effective_user` below.
+    # owner is reclaimable — and, since 2026-10-13, no longer the turn's attribution either.
     _recent_real_user = _real_user_or_none(_panel_recent_user)
     if _recent_real_user:
         await _touch_panel_session(panel_id, _recent_real_user)
-    # Only a REAL user may claim the binding slot. Stamping a sentinel here is
-    # what poisoned the cache: a turn taken while nobody was signed in wrote
-    # "guest", and that value then outlived the login it was supposed to track.
-    if not _bound_user and _recent_real_user:
-        _ses = _VOICE_SESSIONS.get(panel_id)
-        if _ses is not None:
-            _ses["bound_user_id"] = _recent_real_user
-        _bound_user = _recent_real_user
+    # The binding MIRRORS the fresh session: rewritten from it every turn, cleared once it has lapsed or been signed
+    # out (or another member signed in). It used to be filled once and never cleared, so one PIN made every later
+    # voice on this panel that member until a restart. Only a REAL user is ever stored (a sentinel poisoned it once).
+    _bound_user = _recent_real_user
+    _ses = _VOICE_SESSIONS.get(panel_id)
+    if _ses is not None:
+        if _bound_user:
+            _ses["bound_user_id"] = _bound_user
+        else:
+            _ses.pop("bound_user_id", None)
+    if _cached_binding and _cached_binding != _bound_user:
+        logger.info(
+            "voice identity: panel=%s binding to %s dropped - no fresh panel session backs it (fresh=%s)",
+            panel_id, _cached_binding, _bound_user,
+        )
     # The PIN / sensitive-scope gate reads these two. Every input is normalised
     # so a sentinel can neither (a) shadow the real signed-in user — which made
     # a successful panel login invisible and re-challenged it forever — nor
@@ -3564,12 +3564,11 @@ async def voice_command(
         identified_user_id
         or _bound_user
         or _panel_recent_user
-        or _panel_default_user
         or caller.get("user_id")
         or "guest"
     )
     if effective_user == "voice-daemon":
-        effective_user = _panel_default_user or "guest"
+        effective_user = "guest"   # a device token is the DEVICE, never a member (no fresh source = guest)
     if effective_user in _GUEST_SENTINEL_USERS:
         # P-F6: a guest-sentinel identity (e.g. a client-supplied
         # identified_user_id="voice-guest") must not out-rank a panel that is
@@ -3583,8 +3582,8 @@ async def voice_command(
         # only — the PIN/sensitive-scope gate reads
         # `_scope_identity_user`/`_has_scope_identity`, which now reject a
         # sentinel outright rather than being rescued after the fact.
-        _panel_bound_user = _panel_recent_user or _panel_default_user
-        if _panel_bound_user and _panel_bound_user not in _GUEST_SENTINEL_USERS:
+        _panel_bound_user = _recent_real_user
+        if _panel_bound_user:
             logger.info(
                 "voice/command guest-sentinel identity %r replaced by panel-bound user %s (panel=%s)",
                 effective_user, _panel_bound_user, panel_id,
@@ -3593,9 +3592,9 @@ async def voice_command(
 
     logger.info(
         "voice/command panel=%s session=%s user=%s len=%d "
-        "[identity: identified=%s bound=%s panel_recent=%s panel_default=%s scope_user=%s has_scope=%s]",
+        "[identity: identified=%s bound=%s panel_recent=%s scope_user=%s has_scope=%s]",
         panel_id, session_id, effective_user, len(text),
-        identified_user_id, _bound_user, _panel_recent_user, _panel_default_user,
+        identified_user_id, _bound_user, _panel_recent_user,
         _scope_identity_user, _has_scope_identity,
     )
 
@@ -6234,9 +6233,10 @@ async def _prewarm_brain_for_panel(panel_id: str) -> None:
     first turn doesn't pay the Pi subprocess cold-start. Fully best-effort and
     backgrounded — must never delay or break the wake acknowledgement.
 
-    Resolves the user the same way voice_command will (bound > recent > default);
-    if the user is unknown the worker key would miss the real turn, so we skip
-    rather than spawn a wasted process.
+    Resolves the user the way voice_command will without a claim (the fresh panel
+    session it mirrors in bound_user_id > recent; never the panel's last signed-in
+    member); if the user is unknown the worker key would miss the real turn, so we
+    skip rather than spawn a wasted process.
     """
     try:
         if not _brain_prewarm_on_wake_enabled():
@@ -6249,11 +6249,9 @@ async def _prewarm_brain_for_panel(panel_id: str) -> None:
             try:
                 from db_pool import get_db_ctx
                 async with get_db_ctx() as db:
-                    user_id = (
+                    user_id = _real_user_or_none(
                         await _resolve_recent_panel_session_user(panel_id, db)
-                        or await _resolve_panel_default_user(panel_id, db)
-                        or ""
-                    )
+                    ) or ""
             except Exception:
                 user_id = ""
         if not user_id:
