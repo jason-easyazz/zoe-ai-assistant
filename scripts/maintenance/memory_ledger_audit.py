@@ -54,7 +54,7 @@ DOC_KEY = "chroma:document"
 # Mirrors services/zoe-data/user_filters.SYNTHETIC_USER_RE (scripts cannot import service code).
 SYNTHETIC_RE = re.compile(
     r"^(?:(?:test|probe|demo|ci|e2e|bench)[-_]"
-    r"|zoe[-_](?:hammer|tok)[-_]"
+    r"|zoe[-_](?:hammer|tok)[-_]\d+$"
     r"|zoe-(?:mempalace-baseline|prompt-packet-measure)$)",
     re.IGNORECASE,
 )

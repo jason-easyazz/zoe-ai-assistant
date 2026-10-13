@@ -449,8 +449,7 @@ def test_negative_control_a_warm_router_would_make_the_same_turn_store_different
 
     monkeypatch.setenv(restraint.ENV, "shadow")
     head = restraint_head._load()
-    if head is None:
-        pytest.skip("restraint head artefact not present")
+    assert head is not None, "restraint head artefact missing: the control needs the shipped head"
     text = "I live in Perth."
     first, second = {}, {}
     restraint.stamp(first, text)

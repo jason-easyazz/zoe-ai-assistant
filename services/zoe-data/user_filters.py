@@ -25,7 +25,7 @@ GUEST_USERS: tuple[str, ...] = ("guest", "anonymous", "voice-guest", "voice-daem
 # ids (``zoe-touch-pi``) and real accounts start with it, so each family is named.
 SYNTHETIC_USER_RE = re.compile(
     r"^(?:(?:test|probe|demo|ci|e2e|bench)[-_]"
-    r"|zoe[-_](?:hammer|tok)[-_]"
+    r"|zoe[-_](?:hammer|tok)[-_]\d+$"
     r"|zoe-(?:mempalace-baseline|prompt-packet-measure)$)",
     re.IGNORECASE,
 )

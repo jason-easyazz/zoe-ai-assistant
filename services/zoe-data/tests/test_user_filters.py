@@ -166,6 +166,7 @@ def test_our_own_probe_ids_are_synthetic(uid):
 @pytest.mark.parametrize("uid", [
     "zoe-touch-pi", "zoe-touch-hall", "zoe-kid", "zoe", "zoe-hammertime", "zoe-token-owner",
     "zoe-tok", "zoe-hammer", "zoe-mempalace-baseline-2", "zoe-prompt-packet-measured",
+    "zoe-hammer-jason", "zoe-tok-owner", "zoe_hammer_ann", "zoe-tok-12ab", "zoe-hammer-123-x",
 ])
 def test_negative_control_zoe_prefixed_real_ids_stay_people(uid):
     """``zoe-`` alone must never be a prefix: panel ids and accounts start with it, and a
