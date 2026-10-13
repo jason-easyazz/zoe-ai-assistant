@@ -13,8 +13,12 @@ stored anywhere new):
   * ``people``              - the row is SOFT-deleted (``deleted = 1``, the row and its history are kept),
                               and the person's current relationship edges are CLOSED (``valid_to``)
 
-Every step is best-effort and independent: a missing table or a DB blip in one never blocks the others, and
-the forget itself never fails because of the cascade. Counts only are logged, never the name.
+Every step is independent: a missing table or a DB blip in one never blocks the others. A step that fails is retried
+once, and if it still fails it is RECORDED (``CascadeResult.failed``) and logged at ERROR - never swallowed: the caller
+(``memory_forget_entity``) then does not say "forgotten" (forgotten means forever; a forget that silently leaves derived
+text behind is a P1). The one exception is a process that has NEVER had a database pool (a lab, a bare unit test, a script -
+``db_pool.pool_ever_initialised``): there is no store to clear, so that is not a failure. A process that had a pool and lost it
+(or whose pool is exhausted) is a failure. Counts only are logged, never the name.
 
 UNDO: the people soft-delete and the edge closes are recorded in-process for ``UNDO_WINDOW_S`` so
 "keep the contact" (``restore_contacts``) can put exactly those rows back. It restores the contact, not the
@@ -23,6 +27,7 @@ forgotten memories, and not past a restart (the People panel can re-add the cont
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -33,6 +38,7 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 UNDO_WINDOW_S = 900.0
+RETRY_DELAY_S = 0.25   # one retry of a failed step after this pause (a pool blip); tests set 0
 
 # {user_id: (recorded_at_monotonic, [person ids], closed_at_iso)}
 _last_cascade: dict[str, tuple[float, list[str], str]] = {}
@@ -48,6 +54,12 @@ class CascadeResult:
     edges: int = 0
     person_ids: list[str] = field(default_factory=list)
     closed_at: str = ""
+    failed: list[str] = field(default_factory=list)   # labels of the stores that could NOT be cleared (after a retry)
+
+    @property
+    def complete(self) -> bool:
+        """Every derived store was reached. False = the forget is NOT confirmed."""
+        return not self.failed
 
     @property
     def summary_cleared(self) -> int:
@@ -78,48 +90,81 @@ async def _rows(db, sql: str, params: tuple) -> list:
     return list(await cur.fetchall())
 
 
-async def _step(label: str, fn) -> int:
+def _store_missing(exc: BaseException) -> bool:
+    """True when ``exc`` only says there is nothing of that store to reach, so nothing derived can be left behind: the table does
+    not exist (Postgres ``UndefinedTableError`` / SQLite "no such table"), or this process has never had a database pool at all
+    (a lab, a bare unit test). Anything else - a lost or exhausted pool, a failed query - is a real failure."""
+    if type(exc).__name__ == "UndefinedTableError" or "no such table" in str(exc).lower():
+        return True
+    if not isinstance(exc, RuntimeError):
+        return False
     try:
-        return int(await fn() or 0)
-    except Exception as exc:  # noqa: BLE001 - a derived store failing must not fail the forget
-        logger.warning("memory_forget_cascade: %s step failed (%s)", label, type(exc).__name__)
-        return 0
+        from db_pool import pool_ever_initialised  # type: ignore[import]
+        return not pool_ever_initialised()
+    except Exception:  # noqa: BLE001 - cannot tell: treat as a failure, the safe side
+        return False
+
+
+async def _step(label: str, fn, res: Optional[CascadeResult] = None) -> int:
+    """Run one store's clear; retry once; on a second failure record ``label`` in ``res.failed`` (ERROR) and return 0."""
+    exc: Optional[BaseException] = None
+    for attempt in (1, 2):
+        try:
+            return int(await fn() or 0)
+        except Exception as e:  # noqa: BLE001 - one store failing must not stop the others
+            exc = e
+            if _store_missing(e):
+                logger.info("memory_forget_cascade: %s skipped - nothing to reach (no database in this process, or no such table)", label)
+                return 0
+            if attempt == 1 and RETRY_DELAY_S > 0:
+                await asyncio.sleep(RETRY_DELAY_S)
+    logger.error("memory_forget_cascade: %s NOT cleared (%s)", label, type(exc).__name__)
+    if res is not None:
+        res.failed.append(label)
+    return 0
 
 
 async def cascade_forget(user_id: str, name: str, *, db=None) -> CascadeResult:
-    """Clear everything derived from ``name`` for ``user_id`` and record the contact undo. Never raises."""
+    """Clear everything derived from ``name`` for ``user_id`` and record the contact undo. Never raises; a store it could not
+    clear is in ``CascadeResult.failed`` (the caller must not report the forget as complete then)."""
     res = CascadeResult()
     if not user_id or not (name or "").strip():
         return res
     rx = _name_re(name)
-    try:
+
+    async def database() -> int:
         if db is not None:
             await _run(db, user_id, rx, res)
         else:
             from db_pool import get_db_ctx  # type: ignore[import]
             async with get_db_ctx() as conn:
                 await _run(conn, user_id, rx, res)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("memory_forget_cascade: no database (%s) - derived stores not cleared",
-                       type(exc).__name__)
-    try:  # a mute whose topic names the forgotten entity is the name too (restraint.py)
+        return 0
+
+    # _run records each store's own failure; this label is the connection itself (pool lost / exhausted / never there)
+    await _step("database", database, res)
+    # the stores reached through their own modules: restraint mutes, commitments, pendant transcripts. strict=True so a failure
+    # raises to the cascade (their default is swallow-and-log, which is what hid this).
+    async def restraint_mutes() -> int:
         import restraint
 
-        await restraint.erase_entity(user_id, name)
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("memory_forget_cascade: restraint mutes not cleared (%s)", type(exc).__name__)
-    try:  # a promise whose subject names the forgotten entity goes too (commitments.py)
+        return await restraint.erase_entity(user_id, name, strict=True)
+
+    async def commitments_() -> int:
         import commitments
 
-        await commitments.erase_entity(user_id, rx)
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("memory_forget_cascade: commitments not cleared (%s)", type(exc).__name__)
-    try:  # a pendant transcript naming the forgotten entity has it redacted, and its audio goes (omi_recordings.py)
+        return await commitments.erase_entity(user_id, rx, strict=True)
+
+    async def omi() -> int:
         import omi_recordings
 
-        await omi_recordings.erase_entity(user_id, rx)
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("memory_forget_cascade: omi recordings not redacted (%s)", type(exc).__name__)
+        return await omi_recordings.erase_entity(user_id, rx, strict=True)
+
+    await _step("restraint_mutes", restraint_mutes, res)
+    await _step("commitments", commitments_, res)
+    await _step("omi_recordings", omi, res)
+    if res.failed:
+        logger.error("FORGET_CASCADE_INCOMPLETE user=%s steps=%s - the forget is not confirmed", user_id, ",".join(res.failed))
     logger.info("memory_forget_cascade: user=%s portrait=%d card=%d loops=%d candidates=%d people=%d edges=%d",
                 user_id, res.portrait, res.card, res.loops, res.candidates, res.people, res.edges)
     return res
@@ -197,12 +242,12 @@ async def _run(db, user_id: str, rx: "re.Pattern[str]", res: CascadeResult) -> N
         res.closed_at = closed_at
         return n
 
-    res.portrait = await _step("portrait", portrait)
-    res.card = await _step("card", card)
-    res.loops = await _step("open_loops", loops)
-    res.candidates = await _step("proactive_candidates", candidates)
-    res.people = await _step("people", people)
-    res.edges = await _step("edges", edges)
+    res.portrait = await _step("portrait", portrait, res)
+    res.card = await _step("card", card, res)
+    res.loops = await _step("open_loops", loops, res)
+    res.candidates = await _step("proactive_candidates", candidates, res)
+    res.people = await _step("people", people, res)
+    res.edges = await _step("edges", edges, res)
     if res.person_ids:
         _last_cascade[user_id] = (time.monotonic(), list(res.person_ids),
                                   res.closed_at)
