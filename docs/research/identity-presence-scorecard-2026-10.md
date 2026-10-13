@@ -80,9 +80,9 @@ Method: a research sub-agent (Sonnet) ran the web sweep. I re-fetched the load-b
 
     Do not lean on an anti-spoofing model. Keep voice off the floors.
 11. **Biometric templates are sensitive information under the Australian Privacy Act.** Consent is required
-    and cannot be implied (OAIC) [verified]. The household exemption (s 16) covers an individual's own
-    household affairs [secondary, text unread]. It is unclear for any distribution of Zoe to other households
-    and for visitors. The WA Surveillance Devices Act needs each principal party's consent to record a
+    and cannot be implied (OAIC) [verified]. The household exemption (s 16) speaks of an individual's own
+    household affairs [secondary, text unread]. Whether it covers running Zoe at home, any distribution of Zoe
+    to other households, or visitors is an unresolved question for counsel. The WA Surveillance Devices Act needs each principal party's consent to record a
     private conversation [verified]. **A lawyer is needed before visitor voiceprints or any distribution.**
 12. **Retention precedent exists.** Amazon deletes a Visual ID unrecognised for 18 months [secondary]. Google
     leaves Face Match enrolment images after the model is removed, which is a trap to avoid [verified].
@@ -90,7 +90,9 @@ Method: a research sub-agent (Sonnet) ran the web sweep. I re-fetched the load-b
 ## 1. Standards: NIST SP 800-63B-4, zero trust, continuous evaluation
 
 - [verified] **Status.** SP 800-63-4 is final, dated 31 July 2025, and supersedes 800-63-3, which was
-  "Withdrawn on August 01, 2025". A CSRC note dated 2026-10-06 announces an Implementation Resource Hub.
+  "Withdrawn on August 01, 2025". [verified-re] The same CSRC page carries "Planning Note (10/06/2026): The
+  Implementation Resource Hub for SP 800-63-4 is now available!" and lists the 07/31/25 final in its document
+  history (https://csrc.nist.gov/pubs/sp/800/63/4/final, fetched 2026-10-14).
   https://csrc.nist.gov/pubs/sp/800/63/4/final ;
   https://csrc.nist.gov/News/2025/nist-revises-digitial-identity-guidelines-sp-800-6 (dated 2025-08-01).
 - [verified] **Assurance levels** (https://pages.nist.gov/800-63-4/sp800-63b.html §2, a live document):
@@ -243,9 +245,15 @@ Method: a research sub-agent (Sonnet) ran the web sweep. I re-fetched the load-b
   https://www.corbado.com/blog/proximity-exchange-protocol-pxp.md.
 - [verified] **FIDO Biometrics Requirements v4.0 (final, 2024-05-22)**
   (https://fidoalliance.org/specs/biometric/requirements/Biometrics-Requirements-v4.0-fd-20240522.html):
-  - BioLevel 1 FAR under 1:100; BioLevel 2 FAR under 1:10,000;
-  - FRR under 7 % or 5 %;
-  - IAPAR at most 7 % (Level 2) or 15 % (Level 1).
+  - [verified-re] The requirements-by-level table gives a **lab-tested FAR of 1 % for BioLevel 1 and
+    BioLevel 2** (25 test subjects) and **0.01 % for BioLevel 1+ and BioLevel 2+** (245 subjects). BioLevel 1
+    and 2 also require a documented vendor self-attestation of a FAR of 1:10,000 or better.
+  - What separates Level 1 from Level 2 is presentation-attack resistance, not FAR: "IAPAR of less than or
+    equal to 15 %" meets BioLevel 1 and 1+, and 7 % or less meets BioLevel 2 and 2+.
+  - FRR: under 5:100 for 1+ and 2+ ("upper bound of an 80% confidence interval").
+  - Caveat: the document's prose FAR section groups the levels differently (1 and 1+ "less than 1:100", 2 and
+    2+ "less than 1:10,000"). The table and the subject counts (25 subjects cannot demonstrate 0.01 %) support
+    the reading above. Re-read the spec before quoting a level.
   - [secondary] v5.0 is a release candidate dated 2026-09-01.
 - **Design relevance** [inference]:
   - The phone is the household's natural **possession factor**. A passkey with hybrid transport is the
@@ -360,7 +368,8 @@ Method: a research sub-agent (Sonnet) ran the web sweep. I re-fetched the load-b
   Speed: 31-37 s per hour of audio on an **H100**. The model card for 3.1
   (https://huggingface.co/pyannote/speaker-diarization-3.1) needs an HF token and gated terms, and states no
   CPU real-time factor. [secondary] A CPU RTF of 0.86 is self-reported by a third party
-  (https://pypi.org/project/diarize/). **No Jetson figure exists.** Our box has 0.4-0.6 GB MemAvailable, so it
+  (https://pypi.org/project/diarize/). **No Jetson figure exists.** The box's free memory was a few hundred MB
+  steady in the 2026-10-03 memory-pressure profile (a dated observation), so it
   is not a candidate.
 - [secondary] **NVIDIA Nemotron 3 Diarization** (about 100M parameters, streaming, up to 8 speakers) is already
   on the program tracker as a B4.1 candidate (`docs/architecture/beat-the-bar-2026-program.md` B4.1), off the
@@ -453,8 +462,9 @@ Method: a research sub-agent (Sonnet) ran the web sweep. I re-fetched the load-b
   information "only for the purposes of ... his or her personal, family or household affairs" (search-result
   paraphrase of https://20.austlii.edu.au/au/legis/cth/consol_act/pa1988108/s16.html; re-read before relying
   on it).
-  - **Lawyer:** does it cover an owner running Zoe for their household? It plainly does not cover anyone
-    *supplying* Zoe to other households. It says nothing about visitors' rights under other laws.
+  - **Preliminary, unresolved reading for counsel:** does it cover an owner running Zoe for their household?
+    Does it reach anyone *supplying* Zoe to other households (on its face it speaks of an individual's own
+    affairs)? It says nothing about visitors' rights under other laws.
 - [verified] **Small business exemption**: turnover of A$3 m or less, with exceptions (s 6D), OAIC Ch B.
   [secondary] It is still in force; the Tranche 2 draft reportedly omits its removal (HSF Kramer, unread).
 - [secondary] **Statutory tort for serious invasions of privacy**: Privacy and Other Legislation Amendment
@@ -491,8 +501,11 @@ Method: a research sub-agent (Sonnet) ran the web sweep. I re-fetched the load-b
 - [verified] **GDPR Art 9(1)** prohibits processing "biometric data for the purpose of uniquely identifying a
   natural person", unless an exception applies such as Art 9(2)(a) "explicit consent"
   (https://www.legislation.gov.uk/eur/2016/679/article/9/adopted).
-  - **Art 2(2)(c)** excludes "purely personal or household activity"
-    (https://www.legislation.gov.uk/eur/2016/679/article/2/adopted).
+  - **Art 2(2)(c)** excludes processing "by a natural person in the course of a purely personal or household
+    activity" (https://www.legislation.gov.uk/eur/2016/679/article/2/adopted).
+  - **Preliminary, unresolved reading for counsel:** whether a household running Zoe, and in particular
+    holding a visitor's voiceprint, falls inside that exemption is not settled here. The two sources below
+    point in different directions, and nothing in this record decides it.
   - Recital 18 keeps the Regulation applying to the controllers or processors that provide the means. Recital
     51 makes photographs biometric data only when processed "through a specific technical means"
     (https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:32016R0679).
@@ -504,8 +517,11 @@ Method: a research sub-agent (Sonnet) ran the web sweep. I re-fetched the load-b
   - biometric categorisation for sensitive traits;
   - real-time remote biometric identification "in publicly accessible spaces" for law enforcement.
 
-  A home is not publicly accessible, so these do not apply directly. Inferring emotion or sensitive traits
-  from biometrics is the adjacent area to avoid, which is consistent with the emotional-safety note.
+  **Preliminary, unresolved reading for counsel:** these prohibitions are framed around workplaces, education
+  and publicly accessible spaces, and a private home may fall outside them. That is not established here: Art 5
+  is not the whole Act, and other obligations may attach to a product placed on the EU market. The design
+  avoids the adjacent area anyway (no emotion or sensitive-trait inference from biometrics), consistent with
+  the emotional-safety note.
 - [secondary] **UK ICO Age Appropriate Design Code**: high privacy by default, profiling off by default,
   minimisation. Nothing biometric-specific was found.
 
@@ -518,7 +534,9 @@ Method: a research sub-agent (Sonnet) ran the web sweep. I re-fetched the load-b
   - damages are $1,000 negligent or $5,000 intentional/reckless;
   - SB 2979 (signed 2024-08-02) makes repeated collection one violation per person and allows electronic
     consent (https://www.fisherphillips.com/en/insights/insights/breaking-bipa-news-illinois-curtails-massive-damage-awards-in-biometric-cases).
-  - It is relevant only if Zoe is ever used by Illinois residents.
+  - **Preliminary, unresolved reading for counsel:** BIPA appears aimed at private entities collecting from
+    Illinois residents, so it may matter only if Zoe were ever offered to or used by them. When, and to whom, it
+    applies is not settled here.
 - [secondary] **COPPA Rule amendments** (published 2025-04-22, compliance 2026-04-22): biometric identifiers
   used for recognition (voiceprints, faceprints) are personal information
   (https://www.hunton.com/privacy-and-cybersecurity-law-blog/ftc-publishes-final-coppa-rule-amendments).
@@ -587,8 +605,9 @@ canonicalisation, the introduce intent, the voice-session TTL and the presence w
 **Voice**
 
 - **Panel side.**
-  - `SPEAKER_ID_ENABLED` defaults false; `SPEAKER_ID_SHADOW` defaults on, so a claim is scored and logged to
-    `~/.zoe-voice/speaker_shadow_metrics.jsonl` and never attached
+  - Implemented, **disabled by default**: `SPEAKER_ID_ENABLED` defaults false, and `_speaker_claim_for_turn`
+    returns early, so nothing is scored. When it is enabled with `SPEAKER_ID_SHADOW` on (its default), a claim
+    is scored and logged to `~/.zoe-voice/speaker_shadow_metrics.jsonl` but never attached
     (`scripts/setup/zoe_voice_daemon.py:408-428,2655-2706`).
   - Profiles sync every 3600 s (`:2236`).
 - **Server side.**
@@ -625,7 +644,7 @@ canonicalisation, the introduce intent, the voice-session TTL and the presence w
 - `scripts/setup/zoe_face_id.py`:
   - SCRFD plus MobileFaceNet 512-d;
   - `FACE_ID_ENABLED` false (`:39`);
-  - `FACE_MIN_PX` code default 60 (`:47`); the live panel reportedly uses 36 (ops record);
+  - `FACE_MIN_PX` code default 60 (`:47`), overridable by the panel's environment;
   - the camera is opened per call under a lock (`:369-398`);
   - **`identify_face` (`:401-434`) is called only by `scripts/setup/zoe_enroll_flow.py`**, so no runtime
     producer exists.
@@ -639,7 +658,7 @@ canonicalisation, the introduce intent, the voice-session TTL and the presence w
   `ZOE_PRESENCE_WINDOW_S` 900 (`:28-100`).
 - The kiosk heartbeat sends `is_foreground: true` always (`services/zoe-ui/dist/js/touch-ui-executor.js:674,690`).
 - The 3-minute sleep card is at `touch/home.html:1234-1303`.
-- The sleep gate is room toggles only, with "zero" presence entities in the house (`ZP/routers/panel_config.py:382-416`).
+- The sleep gate reads room toggles only; Zoe does not currently consume any presence or occupancy sensor (`ZP/routers/panel_config.py:382-416`).
 - `panels.last_seen_at` is read but never written (`ZP/routers/panel_auth.py:251,285,327`).
 - The orphaned `touch/js/presence-detection.js` uses a simulated PIR.
 - [src]
@@ -657,7 +676,7 @@ canonicalisation, the introduce intent, the voice-session TTL and the presence w
 - No presence consumer exists. `homeassistant/configuration.yaml` loads `default_config` plus OIDC with
   `automatic_person_creation`.
 - Entities are reachable via `GET /api/ha/entities?domain=` (`ZP/routers/ha_control.py:72-90`).
-- The live `person` entity is `unknown` (presence record §1.6) [src / record].
+- Zoe does not currently consume any HA presence entity (`person`, `device_tracker`, `binary_sensor`) [src].
 
 **People graph**
 

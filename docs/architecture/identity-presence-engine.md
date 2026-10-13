@@ -84,17 +84,17 @@ Full inventory with file:line in the research record §10. The facts that shape 
 | PIN freshness = "member at this panel" | live; `ui_panel_sessions.last_seen_at` within the idle-logout window (default 900 s, `system_preferences.panel_idle_logout_s`, touch offers 15 min-12 h) | `routers/voice_tts.py:2069-2174`; `routers/system.py:2512-2537`; `touch/home.html:3897-3908` |
 | Password sessions | live; STANDARD 480 min, PASSCODE 60 min, GUEST 30 min, remember-me 30 days | `services/zoe-auth/core/sessions.py:57-96` |
 | Roles | zoe-auth: `admin`, `user`, `family_member`, `child`, `guest`; zoe-data capability matrix knows only `admin`/`user`/`guest`, and **`family_member` and `child` canonicalise to the guest matrix** | `services/zoe-auth/models/database.py:18-23`; `services/zoe-data/guest_policy.py:127-132,213-218` |
-| Voice ID, Resemblyzer | live in **shadow** on the Pi (`SPEAKER_ID_SHADOW` on): scored and logged, never attached | `scripts/setup/zoe_voice_daemon.py:408-428,2655-2706` |
+| Voice ID, Resemblyzer | implemented on the Pi, **disabled by default** (`SPEAKER_ID_ENABLED` false); when enabled with `SPEAKER_ID_SHADOW` on (its default), scores are logged but never attached to the turn | `scripts/setup/zoe_voice_daemon.py:408-428,2655-2706` |
 | Server voice claim acceptance | device-token only, threshold `ZOE_SPEAKER_ID_THRESHOLD` (code default 0.82), consent row required, tri-state verdict | `routers/voice_tts.py:6474-6574` |
 | ResNet34 switch (`ZOE_SPEAKER_MODEL`, `model_id`) | **PR #2024 open, not on main**; FAR 1 % thresholds 0.233 / 0.265 (short / long clip) | [branch] `docs/knowledge/speaker-resnet34-switch.md` |
 | Voice-verified session | flag-dark `ZOE_VOICE_SESSION`; per-panel, in-memory, TTL 120 s (10-900); a different voice closes it; step-up tier always needs the PIN | `services/zoe-data/voice_session.py:71-73,99-117,381-470`; `lexicons_data/voice_session_policy.json` |
-| Identity freshness | live (#2026): a member identity comes only from this turn, a fresh PIN session, the caller's own session or an open voice session | `routers/voice_tts.py:3451-3600`; `routers/AGENTS.md` |
-| Face ID | server storage flag-dark (`ZOE_FACE_ID_ENABLED`, threshold 0.45); the Pi module exists, but **only the enrolment flow calls it** (no runtime producer); there are 3 operator profiles; the USB power budget is shared with the speaker | `scripts/setup/zoe_face_id.py:39-47,369-434`; `routers/face_id.py:48-62`; `scripts/setup/zoe_enroll_flow.py:27-31,121-146` |
+| Identity freshness | on main, default on (#2026): a member identity comes only from this turn, a fresh PIN session, the caller's own session or an open voice session | `routers/voice_tts.py:3451-3600`; `routers/AGENTS.md` |
+| Face ID | server storage flag-dark (`ZOE_FACE_ID_ENABLED`, threshold 0.45); the Pi module exists, but **only the enrolment flow calls it** (no runtime producer); the USB power budget is shared with the speaker | `scripts/setup/zoe_face_id.py:39-47,369-434`; `routers/face_id.py:48-62`; `scripts/setup/zoe_enroll_flow.py:27-31,121-146` |
 | Restraint | `ZOE_RESTRAINT` shadow; a sensitive class is withheld when the speaker verdict is False | `services/zoe-data/restraint.py:40-72` |
 | Presence primitive | `panel_presence_tier`: owner / bound_guest / absent (window 900 s); the kiosk heartbeat always sends `is_foreground: true`, so touch is invisible to the server | `proactive/presence.py:28-100`; `dist/js/touch-ui-executor.js:674,690` |
-| Sleep gate | the room's own toggles; **the house has zero presence sensors** (44 HA entities, no `binary_sensor`); unknown means sleep | `routers/panel_config.py:382-416` |
+| Sleep gate | the room's own toggles only; Zoe does not currently consume any presence or occupancy sensor; unknown means sleep | `routers/panel_config.py:382-416` |
 | Phone / BLE presence | none. Omi-sync connects to the pendant about every 2 min (`OMI_SYNC_COOLDOWN_S` 120) but records no "seen"; panel-bluetooth reads RSSI for the settings list only | `services/omi-sync/omi_sync/config.py:91-93`, `runner.py:86-92`; `services/zoe-data/bluetooth_broker.py:260-272` |
-| Home Assistant presence | no consumer; `person` entity `unknown`; reachable through `GET /api/ha/entities?domain=` | `routers/ha_control.py:72-90` |
+| Home Assistant presence | Zoe does not currently consume any HA presence entity (`person`, `device_tracker`, `binary_sensor`); entities are reachable through `GET /api/ha/entities?domain=` | `routers/ha_control.py:72-90` |
 | People graph | `people` (+ `is_partial` stubs, `introduced_by_person_id`, `how_we_met`) + `person_relationships` (temporal, authority, evidence); a `people_introduce` intent creates or finds a person and asks follow-ups | `alembic/versions/0001:87-102`, `0007`; `routers/voice_tts.py:3099-3139,4290-4313`; `person_extractor.py:301-317` |
 | Settings UI | desktop: Password, PIN, Sessions, Speaker Identity (enrol + delete); touch estate: signed-in name, idle-logout, switch user, sign out; **no face UI anywhere, no security preferences anywhere** | `dist/settings.html:579-600,730,808-832`; `dist/touch/home.html:3809-3926` |
 
@@ -152,12 +152,18 @@ the live decision, never a raw biometric score paired with an identity, and neve
 For a panel `k`, a candidate `p`, at time `t`:
 
 ```
-c_e(t)        = llr_e · 0.5 ** ((t − t_e) / h_e(t))           # each event decays toward 0 bits
+age          = t − t_e
+c_e(t)        = llr_e                              if age ≤ hold_e      # full strength while fresh
+              = llr_e · 0.5 ** ((age − hold_e) / h_e(t))   otherwise    # then decays toward 0 bits
 G_g(p, t)     = clip( Σ_{e in group g, subject p} c_e(t),  lo_g, hi_g )
 L(p, t)       = prior(p) + Σ_g G_g(p, t)
 P(p, t)       = 2^L / (1 + 2^L)
 h_e(t)        = half_life_e · (continuity ? 1 : 0.25)          # presence intact: slow; broken: fast
 ```
+
+`hold_e` keeps an event at full strength for the window it is meant to cover: the member's voice-session
+TTL for a voice accept (default 120 s, today's session) and the idle-logout window for a PIN. Without it, a
+pure exponential would drop a just-accepted voice below ZAL2 within seconds.
 
 - **Why log-likelihood ratios.** The likelihood-ratio test is the Neyman-Pearson-optimal way to combine
   scores, and LR-based score fusion is the multimodal-biometrics literature's recommended default
@@ -185,9 +191,9 @@ h_e(t)        = half_life_e · (continuity ? 1 : 0.25)          # presence intac
     voice session already does.
   - `phone_home = away` for `p` is −5 bits.
   - An explicit `lock` sets `p` to the prior.
-- **Prior.** `log2(1 / (N_members + 1))`: one share per enrolled member plus one for "someone else". In a
-  four-person household that is about −2.3 bits. A member who is away by a trusted signal gets an extra
-  −5 bits.
+- **Prior.** The prior probability is `1 / (N_members + 1)`: one share per enrolled member plus one for
+  "someone else". As log odds that is `log2(p / (1 − p)) = −log2(N_members)`. In a four-member household it
+  is −2 bits (P = 0.2). A member who is away by a trusted signal gets an extra −5 bits.
 - **Computed on read.** There is no scheduler and no timer thread. The score is recomputed when a turn,
   card or action asks, from the ring and an injectable clock. This is pure and table-testable.
 
@@ -198,13 +204,13 @@ this design.
 
 | Source | How its bits are derived | Starting values (to be replaced by shadow data) |
 |---|---|---|
-| PIN at this panel | `−log2(guess probability within the allowed attempts)`. A 4-digit PIN with 5 tries is `5/10^4`, so ~11 bits; 6 digits gives ~17.6. This assumes no observation (shoulder-surfing), and the panel is a shared wall screen, so cap KNOW at the PIN's own value | 11 bits (4 digits), 13.3 (5), 17.6 (6); half-life = the idle-logout window |
+| PIN at this panel | `−log2(guess probability within the allowed attempts)`. A 4-digit PIN with 5 tries is `5/10^4`, so ~11 bits; 6 digits gives ~17.6. This assumes no observation (shoulder-surfing), and the panel is a shared wall screen, so cap KNOW at the PIN's own value | 11 bits (4 digits), 13.3 (5), 17.6 (6); hold = the idle-logout window, then half-life 60 s |
 | Signed-in password session on the member's own device | evidence for **that device's** principal, not for the panel; it never enters a panel score | n/a at the panel |
-| Voice, ResNet34 (acting model) | `log2(TPR(s)/FAR(s))` from a per-score calibration (linear or logistic on the centred cosine, i.e. the BOSARIS/Platt idea [research §4]) fitted on the shadow week; rejection gives `log2(FRR/(1−FAR))` | above the FAR 1 % threshold ≈ log2(0.95/0.01) = 6.6 bits; above FAR 0.1 % ≈ 9.9; reject ≈ −4.3; half-life 120 s (today's session TTL) |
+| Voice, ResNet34 (acting model) | `log2(TPR(s)/FAR(s))` from a per-score calibration (linear or logistic on the centred cosine, i.e. the BOSARIS/Platt idea [research §4]) fitted on the shadow week; rejection gives `log2(FRR/(1−FAR))` | at the FAR 1 % threshold ≈ log2(0.95/0.01) = 6.6 bits; at the FAR 0.1 % threshold ≈ 9.9; these are worst-case values AT the threshold, and most genuine accepts score well above it, so their calibrated LLR is higher; reject ≈ −4.3; hold = the member's `voice_session_ttl_s` (default 120 s), then half-life 60 s |
 | Voice, Resemblyzer | the same recipe, its own curve; owner FRR at FAR 1 % is ~11 % [record] | allowed only as an explicit owner override (`ZOE_VOICE_SESSION_ALLOW_RESEMBLYZER`), never for children |
 | Face (MobileFaceNet + liveness) | the same recipe, after a face shadow week; no liveness means 0 bits | 0 until calibrated |
 | Phone near (BLE IRK, RSSI band) | the device can be in someone else's pocket, so this is weak by policy | +1.5 bits, cap the DEVICE group at +3; half-life 180 s |
-| Phone home (HA companion / tracker) | a prior shift, not identity: home is 0 bits, away is −5 | live state, no decay |
+| Phone home (HA companion / tracker) | a prior shift, not identity: home is 0 bits, away is −5 | current tracker state, no decay |
 | Omi seen by the panel | possession of a wearable, about every 2 min | +1 bit; half-life 300 s |
 | Touch / voice activity (anyone) | occupancy, not identity; it **pauses identity decay** (continuity) | 0 bits to identity |
 | Presence break (new voice, people count up, door) | sets `continuity = false` for 10 minutes | n/a |
@@ -233,10 +239,22 @@ Rules:
 | ZAL | Name | Reached when | Roughly |
 |---|---|---|---|
 | ZAL0 | Anyone | always | the guest of today |
-| ZAL1 | Recognised | `P(p) ≥ 0.90` and no conflicting voice since the last evidence | Google/Amazon "personal results" [research §2] |
-| ZAL2 | Verified | `P(p) ≥ 0.99` **and** at least one authenticator-class event (a calibrated voice accept by the acting model, a face accept with liveness, or a PIN) within its half-life, and no `different_voice` since | today's voice session or fresh PIN session |
+| ZAL1 | Recognised | `L(p) ≥ 3.2 bits` (P ≥ 0.90) and no conflicting voice since the last evidence | Google/Amazon "personal results" [research §2] |
+| ZAL2 | Verified | `L(p) ≥ 4.25 bits` (P ≥ 0.95) **and** at least one authenticator-class event (a calibrated voice accept by the acting model, a face accept with liveness, or a PIN) within its hold window, and no `different_voice` since | today's voice session or fresh PIN session |
 | ZAL3 | Stepped-up | a **KNOW** event (PIN at this panel) within the last 5 min (`ZOE_IDENTITY_STEPUP_WINDOW_S`) plus ZAL2 | today's step-up |
 | ZAL4 | Two-device | ZAL3 plus an approval on the member's **own phone** bound to the exact payload (Telegram Approve or passkey, per the action-agent approvals object) | the closest a home gets to NIST AAL2 [research §1] |
+
+**Why ZAL2 is 4.25 bits and not P ≥ 0.99.** With a four-member prior of −2 bits, a single voice accept at
+the FAR 1 % threshold gives 6.6 − 2 = 4.6 bits (P ≈ 0.96). A 0.99 bar (6.6 bits) would be unreachable by any
+accepted voice, so Balanced could never open private reads by voice. At 4.25 bits:
+
+- one threshold-level voice accept reaches ZAL2 in a household of up to five members;
+- a weak signal alone (DEVICE ≤ 3 bits) never does;
+- in a household of six or more members the prior is −2.6 bits or lower, and the engine uses the FAR 0.1 %
+  operating point (9.9 bits) instead. Settings says so in plain words.
+
+The real gate for ZAL2 is the authenticator-class event. The posterior bar is a sanity floor that contrary
+evidence (a rejected voice, a phone confirmed away) can pull a member below.
 
 Honest NIST mapping [research §1]:
 
@@ -261,7 +279,7 @@ Honest NIST mapping [research §1]:
 |---|---|---|---|---|
 | Public household (weather, timers, music, lights, general questions) | T0 public | ZAL0 | ZAL0 | (household setting: what guests may do) |
 | Personalisation (greet by name, "my playlist", tone) | T0 | ZAL1 | ZAL1 for any name use | ZAL1-ZAL3 |
-| Private reads (my calendar, lists, reminders) | T0 private | ZAL2 | **ZAL0 allowed only by the member's own explicit choice, with a warning** | ZAL0-ZAL3 |
+| Private reads (my calendar, lists, reminders) | T0 private | ZAL2 | **ZAL1: always an identified member.** Personal scope is never shown to an unidentified person (charter §3). To let anyone see something, the member moves it to shared scope explicitly ("share my calendar with the household"); the assurance setting never declassifies data | ZAL1-ZAL3 |
 | Memory recall about me | T0 private | ZAL2 | ZAL1 | ZAL1-ZAL3 |
 | My own reversible writes (add to list, reminder, calendar) | T1 | ZAL2 | ZAL1 | ZAL1-ZAL3 |
 | Erasing my own data (delete event, forget a fact about me) | T1 erase | ZAL2 | ZAL2 (whole-account erase: ZAL3) | ZAL2-ZAL3 |
@@ -294,8 +312,9 @@ Two asymmetries that keep it safe and humane:
 
 ### 4.1 Data model
 
-One JSON document per member in `user_preferences` (key `security_profile`), plus one household document in
-`system_preferences` (key `household_security`). There are no new tables for settings.
+One JSON document per member in `user_preferences` (key `security_profile`), plus one site document in
+`system_preferences` (key `site_security`; scope-neutral by charter §5, the UI calls it "Household"). There
+are no new tables for settings.
 
 ```
 security_profile {                      # per member; written only by that member (or an admin for a minor)
@@ -314,7 +333,7 @@ security_profile {                      # per member; written only by that membe
   explain: bool                         # may Zoe answer "why do you think I'm me?" (default true)
 }
 
-household_security {                    # admin only, ZAL3
+site_security {                         # admin only, ZAL3
   floors: { <category>: ZAL }           # can only RAISE the code floors
   guests: { smart_home: bool, music: bool, timers: bool, intercom: bool }
   notice_new_voices: off | chip | greet # default chip
@@ -326,8 +345,10 @@ household_security {                    # admin only, ZAL3
 
 **"No password" members.**
 
-- A member can choose `factors = {}` on the panel and set private reads to ZAL0. Zoe then shows their
-  calendar to whoever is in the room, which is their choice, made with a plain warning.
+- A member can choose `factors = {}` on the panel. Zoe then never shows their **personal** data there,
+  because nothing can identify them. If they want something visible to whoever is in the room, they share it
+  explicitly (it becomes shared scope, like a family calendar today). The assurance setting never
+  declassifies data.
 - The code floors still stand. Money, security, biometrics and forgetting people need ZAL3 or ZAL4, so
   that member must either set a PIN or do those things from their own signed-in phone or desktop.
 - zoe-auth accounts keep a password for their own devices. "No password" means **no panel friction**, not
@@ -375,7 +396,8 @@ What can prove it's you?                                 (each needs its own set
   [ ] My phone nearby              not available yet
 
 Custom (shown when Custom is chosen):
-  My calendar, lists, reminders  [Anyone in the room ▾ | Zoe's fairly sure | Zoe's sure | Always my PIN]
+  My calendar, lists, reminders  [Zoe's fairly sure ▾ | Zoe's sure | Always my PIN]
+                                 (to let anyone see it, share it with the household instead)
   Adding or changing my things   [ ... ]
   What Zoe remembers about me    [ ... ]
   Drafts (emails, messages)      [Zoe's sure | Always my PIN]
@@ -461,11 +483,17 @@ Zoe (to Sam): "Would you like me to remember your voice, so I know it's you next
                I keep a voice signature, never a recording, and you can say 'Zoe, forget me' any time."
 Sam: "Yes."                                         # must come FROM the bound cluster (speaker check);
                                                     # the introducer saying "yes" does not count
+Zoe (to Sam): "And may I remember things you tell me about yourself, like what you like to eat?
+               That's separate, and you can say no."
+Sam: "Sure."                                        # second, separately stamped consent; same speaker check
 Zoe: "Done. Nice to meet you, Sam."
 ```
 
 - **Consent is the visitor's own, spoken, checked as their voice, and stamped** (`consent_at`,
-  `consent_by='self'`). A "no", silence for 20 s, or a "yes" from the wrong voice means no voiceprint. Sam
+  `consent_by='self'`). A "no", silence for 20 s, or a "yes" from the wrong voice means no voiceprint.
+- **Two consents, asked and stamped separately:** the voiceprint (`visitor_voice_profiles.consent_at`) and
+  remembering what Sam says about themself (`person_directory.self_facts_consent_at`). Either can be given
+  without the other, and either can be withdrawn on its own ("Zoe, stop remembering things about me"). Sam
   can still be a person in the household directory and in the introducer's own knowledge (§5.5).
 - **Minors.** If the introduction names a child relationship (son's friend, niece, "she's eight"), if the
   introducer is a minor, or if Sam says they are under 18, Zoe does **not** offer to remember the voice
@@ -496,8 +524,8 @@ Zoe: "Done. Nice to meet you, Sam."
 - When a turn matches a visitor profile, it is attributed `visitor:<directory_id>`. It **runs as guest
   scope**, always: ZAL0 for household data. It gets personalisation only ("Hi Sam").
 - What Sam says about themself ("I'm vegetarian") goes to **Sam's own layer** (`person_self_facts`, §5.5).
-  It is kept only because Sam's consent dialogue covered it ("...and remember what you tell me about
-  yourself?"), with provenance `self` and authority below member-stated. It is never written as a member's
+  It is kept only if Sam gave the second, separate consent (`self_facts_consent_at`); without it nothing Sam
+  says about themself is stored. Provenance `self`, authority below member-stated. It is never written as a member's
   fact, and never used to supersede one.
 - What a member says about Sam goes to **that member's knowledge layer** (their own `people` row and
   memories), private by default (§5.5).
@@ -548,22 +576,30 @@ in that user's storage, or available to the whole system?"*
 
 ```
 person_directory (
-  id uuid PK, display_name text NOT NULL, household_relation text NULL,
+  id uuid PK, scope_id text NOT NULL,          -- the shared scope this entry belongs to (one value today)
+  display_name text NOT NULL, relation_to_scope text NULL,
   status text CHECK (status IN ('provisional','confirmed')),
   created_by text FK users, created_at timestamptz, confirmed_by text NULL, confirmed_at timestamptz NULL,
   member_user_id text NULL FK users ON DELETE SET NULL,     -- set if the person later becomes a member here
+  self_facts_consent_at timestamptz NULL,                    -- the person's own, separate consent for layer 3
   deleted_at timestamptz NULL )
 person_directory_relation_history (directory_id FK CASCADE, relation, set_by, valid_from, invalid_at)
                                                             -- invalidate-never-delete, like the people graph
 people.directory_id  uuid NULL FK person_directory ON DELETE SET NULL      -- layer 2 link
 visitor_voice_profiles (directory_id FK person_directory ON DELETE CASCADE, ...)   -- section 5.2
 person_self_facts (id, directory_id FK CASCADE, text, category, stated_at, consent_at NOT NULL)
-person_knowledge_shares (owner_user_id, people_id | memory_id, scope ('member'|'household'),
+person_knowledge_shares (owner_user_id, people_id | memory_id, share_to ('member'|'shared_scope'),
                          shared_with_user_id NULL, granted_at, revoked_at NULL)
 ```
 
-No sentinel owner such as `user_id = 'household'` is introduced. A guest sentinel is the absence of an
+No sentinel owner such as a fake household `user_id` is introduced. A guest sentinel is the absence of an
 identity, never an owner (`routers/AGENTS.md`). That is why the directory is its own table.
+
+**Scope-neutral by charter.** [ZOE_DESIGN_PRINCIPLES.md](../governance/ZOE_DESIGN_PRINCIPLES.md) §3 and §5 forbid
+baking `home` / `family` / `household` into schema column names, auth or tool signatures, and require a
+scope field from day one. So the directory is keyed by `scope_id` (the instance's shared scope; one value
+today), the relation column is `relation_to_scope`, and the settings key is `site_security`. "Household" is
+the word the UI and this prose use for a home install; a business install would say "site".
 
 **Visibility rules** (each pinned by a table test when built):
 
@@ -612,7 +648,7 @@ identity, never an owner (`routers/AGENTS.md`). That is why the directory is its
   - reading your own knowledge about someone: `memory` (ZAL2 by default);
   - sharing, revoking, introducing: `own_writes`;
   - removing a person from the directory: admin, ZAL3.
-- `household_security.introductions` turns layer 1 creation by voice on or off. `children.*` governs kids
+- `site_security.introductions` turns layer 1 creation by voice on or off. `children.*` governs kids
   (below).
 
 **Edge cases:**
@@ -629,7 +665,7 @@ identity, never an owner (`routers/AGENTS.md`). That is why the directory is its
   colleague".
   - These are layer-2 facts and both are true from each member's side: each lives in its owner's row, with no
     conflict and no overwrite.
-  - Only the directory's `household_relation` is shared. An edit by any adult supersedes the old value with
+  - Only the directory's `relation_to_scope` is shared. An edit by any adult supersedes the old value with
     history (invalidate-never-delete, as `person_relationships` already does with `valid_from` / `invalid_at`
     / authority).
   - If two adults set it differently within a week, Zoe asks instead of picking ("Alex calls Sam family, you
@@ -639,9 +675,13 @@ identity, never an owner (`routers/AGENTS.md`). That is why the directory is its
   existing entry ("I've met Sam before"). The directory is household-visible, so saying so leaks nothing
   private. Two different Sams get two entries, told apart by relation; Zoe asks "the Sam who's Alex's cousin?"
   only when both are plausible.
-- **The person is a member of another household's Zoe.** Each install is one household. There is no
-  cross-install identity, sync or lookup, and none is planned. Sam's voiceprint here is enrolled here, with
-  consent given here, and expires here. Nothing leaves the box (VISION principle 2).
+- **The person is a member of another household's Zoe.** The charter holds cross-site identity sharing
+  deliberately **open** (§7: personal-Zoe vs site-Zoe topology, and whether a shared "you" profile exists
+  across instances). This design neither builds nor forecloses it.
+  - Today Sam's directory entry, voiceprint and consent belong to this instance's scope (`scope_id`) and
+    expire here. Nothing leaves the box by default (VISION principle 2).
+  - Keying everything by `scope_id` and consent per scope is what keeps both topologies possible.
+  - Any future cross-site link would need Sam's own consent at both sites and a charter decision first.
 - **The person later becomes a member here.**
   - `person_directory.member_user_id` is set.
   - The visitor voiceprint is **deleted, not promoted**. A conversation-built voiceprint never becomes a
@@ -654,15 +694,15 @@ identity, never an owner (`routers/AGENTS.md`). That is why the directory is its
 ## 6. Evidence sources roadmap
 
 Jetson cost is the engine only (pure math, a ring of at most 64 small events per panel, well under 1 MB)
-for every row. Jetson MemAvailable is 0.4-0.6 GB steady
-([memory-pressure profile](../knowledge/memory-pressure-profile-2026-10-03.md)), so **no source may add a
-model to the Jetson**.
+for every row. The Jetson's free memory is tight (a few hundred MB steady in the
+[2026-10-03 memory-pressure profile](../knowledge/memory-pressure-profile-2026-10-03.md), a dated observation),
+so **no source may add a model to the Jetson**.
 
 | Source | Status | What it needs | Pi cost | Effort |
 |---|---|---|---|---|
 | PIN at the panel | exists | emit `pin` events from the PIN success path | 0 | S |
 | Fresh panel session / idle window | exists | read as KNOW-group continuity | 0 | S |
-| Voice verdict (per turn) | exists (Resemblyzer shadow; ResNet34 in #2024) | emit `voice` events with calibrated bits; shadow week labels | ResNet34 standalone ~122 MB peak, p50 ~70 ms [branch] | S (after #2024) |
+| Voice verdict (per turn) | implemented, disabled by default (Resemblyzer; shadow logs scores without attaching them when enabled); ResNet34 in #2024 | emit `voice` events with calibrated bits; shadow week labels | ResNet34 standalone ~122 MB peak, p50 ~70 ms [branch] | S (after #2024) |
 | Voice session | exists, flag-dark | becomes a consumer of the engine (ZAL2 = session open) | 0 | M |
 | Different voice / speaker change | partly exists (the session closes on another voice) | emit `different_voice`; unknown cluster tags from the Pi | KB | S |
 | Touch activity | **missing**: the kiosk sends `is_foreground: true` always | add `last_touch_at` to the 5 s `state/sync` | 0 | S |
@@ -728,9 +768,9 @@ anything on the voice path.
 | Phase | Builds | Flags (default) | What changes for the user |
 |---|---|---|---|
 | **0 Groundwork** | `identity_engine.py` (events, fusion, levels, `explain`, injectable clock); `identity_policy.json` (categories and floors, absorbing `voice_session_policy.json`'s step-up list); producers from today's sources (PIN, fresh session, voice verdict, voice session open/close, different voice); kiosk `last_touch_at`; shadow JSONL | `ZOE_IDENTITY_ENGINE=off\|shadow\|on` (off) | **Nothing.** An admin debug view shows bits per group |
-| **1 Settings** | `security_profile` + `household_security` stores; desktop "Sign-in & security", touch presets card, voice phrases; "why do you think I'm me" tier; **only tightening takes effect** (raise-only on top of today) | `ZOE_SECURITY_SETTINGS` (off), `ZOE_IDENTITY_EXPLAIN` (off) | Members can choose Strict ("always ask my PIN for my calendar") and ask why Zoe thinks it's them. Relaxed is shown as "coming soon" |
+| **1 Settings** | `security_profile` + `site_security` stores; desktop "Sign-in & security", touch presets card, voice phrases; "why do you think I'm me" tier; **only tightening takes effect** (raise-only on top of today) | `ZOE_SECURITY_SETTINGS` (off), `ZOE_IDENTITY_EXPLAIN` (off) | Members can choose Strict ("always ask my PIN for my calendar") and ask why Zoe thinks it's them. Relaxed is shown as "coming soon" |
 | **2 Engine acts** | the voice session and PIN freshness become engine consumers; the effective level gates private reads and cards; loosening takes effect; crowding cap; lock on another voice everywhere | `ZOE_IDENTITY_ENGINE=on` | Fewer PIN prompts when Zoe is sure; faster lock when someone else talks; Relaxed works |
-| **3 Notice new voices** | Pi online clusterer; `unknown:<tag>` events; "new voice" chip; "who's here?" tier | Pi `UNKNOWN_VOICE_NOTICE`; `household_security.notice_new_voices` (chip once enabled) | A chip when Zoe hears someone she doesn't know; "who's here?" answers. Requires ResNet34 acting |
+| **3 Notice new voices** | Pi online clusterer; `unknown:<tag>` events; "new voice" chip; "who's here?" tier | Pi `UNKNOWN_VOICE_NOTICE`; `site_security.notice_new_voices` (chip once enabled) | A chip when Zoe hears someone she doesn't know; "who's here?" answers. Requires ResNet34 acting |
 | **4 Introductions** | the three people layers (§5.5): `person_directory` + relation history, `people.directory_id`, `person_self_facts`, `person_knowledge_shares`, private-by-default member knowledge with share/revoke, no-relay tests; `visitor_voice_profiles` migration; visitor sync feed and matcher; consent dialogue with a speaker check; minors rule; expiry sweep; "forget me"; retention policy §8 | `ZOE_VISITOR_VOICES` (off); `ZOE_PEOPLE_LAYERS` (off); `introductions` (off) | "Zoe, this is Sam" works; Sam is greeted by name next time; Sam can say "forget me"; what you tell Zoe about Sam stays yours unless you share it |
 | **5 New presence evidence** | HA companion app reader; BLE IRK owner-near on the Pi; Omi seen; mmWave in `anyone_here`; "lock when I leave" | `ZOE_PRESENCE_SOURCES` (empty) + Pi flags | "Sign me out when I leave"; payments still need the phone; the sleep gate gets smarter |
 | **6 Face** | after B4.3 and the power fix: daemon face-on-wake with liveness, a shadow week, then the FACE group; face UI (enrol and delete) first | `FACE_ID_ENABLED` (Pi), `ZOE_FACE_ID_ENABLED` | Being seen counts as evidence; still never ZAL3 |
@@ -798,8 +838,8 @@ anything on the voice path.
    always; and is "forget a person" right at ZAL3?
 2. **Default preset for adults**: Balanced (voice or PIN opens your private reads) once ResNet34 has passed
    its shadow week? Or Strict until the identity engine's own shadow fortnight?
-3. **May a member lower their private reads to "anyone in the room" (ZAL0)?** With a plain warning, yes in
-   this design.
+3. **Private reads floor.** This design says private reads always need an identified member (ZAL1+), and a
+   member who wants something visible to anyone shares it to shared scope instead. Agree?
 4. **Notice new voices**: off, a chip (recommended default) or a spoken greeting?
 5. **Visitor voiceprints at all?** If yes: is self-consent by voice enough, and is 180 days since last heard
    the right default?
