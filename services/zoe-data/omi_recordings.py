@@ -461,9 +461,10 @@ async def forget_user(user_id: str) -> int:
         return 0
 
 
-async def erase_entity(user_id: str, rx: "re.Pattern[str]") -> int:
+async def erase_entity(user_id: str, rx: "re.Pattern[str]", *, strict: bool = False) -> int:
     """Forget the name ``rx`` matches: it is replaced by ``[forgotten]`` in the member's transcripts. The audio still holds the spoken
-    name, so a recording whose transcript named it loses its WAV too, kept or not."""
+    name, so a recording whose transcript named it loses its WAV too, kept or not. A failure returns 0 (WARNING); with ``strict`` it
+    RAISES so the forget cascade can record it instead of reading as complete."""
     try:
         from db_compat import get_compat_db
         n = 0
@@ -480,6 +481,8 @@ async def erase_entity(user_id: str, rx: "re.Pattern[str]") -> int:
                 await db.commit()
         return n
     except Exception as exc:  # noqa: BLE001
+        if strict:
+            raise
         logger.warning("omi_recordings: transcripts naming a forgotten entity NOT redacted (%s)", type(exc).__name__)
         return 0
 

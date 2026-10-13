@@ -22,6 +22,11 @@ logger = logging.getLogger(__name__)
 
 _pool: asyncpg.Pool | None = None
 _pool_loop: asyncio.AbstractEventLoop | None = None
+# True once ``init_pool`` has built a pool in this process, and it STAYS true after ``close_pool`` / a loop swap. It separates
+# "this process never had a database" (a lab, a bare unit test, a script: nothing of the store's is reachable from here) from
+# "this process had one and lost it" (shutdown race, a stale-loop swap): the second is a fault. A forget that cannot reach its
+# stores must say so when it is the second (``pool_ever_initialised``), never pass for the first.
+_ever_initialised: bool = False
 
 # Bounded acquire: a leaked connection must fail fast with a diagnosable error,
 # not wedge every request forever (live outage 2026-07-12: person_extractor leak
@@ -152,7 +157,7 @@ async def init_pool() -> asyncpg.Pool:
     on the current event loop, return it. If the cached pool belongs to a stale
     loop, discard it and create a replacement on the running loop.
     """
-    global _pool, _pool_loop
+    global _pool, _pool_loop, _ever_initialised
     current_loop = asyncio.get_running_loop()
     if _pool is not None:
         pool_loop = _bound_loop(_pool)
@@ -178,7 +183,14 @@ async def init_pool() -> asyncpg.Pool:
         command_timeout=30,
     )
     _pool_loop = current_loop
+    _ever_initialised = True
     return _pool
+
+
+def pool_ever_initialised() -> bool:
+    """True when this process has built a pool at any point (see ``_ever_initialised``). A process for which this is False has no
+    database by construction; one for which it is True and ``get_pool()`` still raises has LOST it."""
+    return _ever_initialised
 
 
 async def close_pool() -> None:
