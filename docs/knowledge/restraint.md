@@ -202,9 +202,82 @@ acknowledgements), compiled per language by `restraint_lex.py`. No English word 
   tags, captured affect), the night mind's stage-2 `kind = health` enum and the contact names; a `other_member` row about a bare first
   name still needs `entity_type = person` or a contact name (ingest has neither for a free-text row).
 
+## Semantic head (2026-10-12)
+
+The word list alone is 63 % class-exact on the blind English set and no hand-widening closes it (it leaks a new paraphrase every
+round). The repo's answer to that is a small head on the embedding it already computes (`router_heads_numpy` is the precedent), so
+`restraint_head.py` adds **six logistic units on the bge-small-en-v1.5 vector `semantic_router` already holds** (`models/restraint_head.npz` +
+`.json`, 9,992 bytes, trained by `scripts/maintenance/train_restraint_head.py`). The structural rules:
+
+* **Union, add-only.** `classify_full(head=...)` unions the head with the word list and the structured signals (`health:head` in the signals).
+  It can only ADD a class, so a wrong head costs a withheld row (shadow's behaviour), never a leak.
+* **It never loads a model.** The vector comes from `semantic_router.embed` only when that module is imported AND its model is in memory;
+  otherwise the head is inert and the classifier is the word list alone, byte for byte as before. Extra RAM: the 9 KB matrix. No new dependency.
+* **Nothing on a turn or the event loop embeds.** `head="cache"` (the default; `row_classes` of an unstamped row) answers only from an in-process LRU of
+  texts embedded earlier (+2.7 microseconds a call, measured). `head=True` embeds (~7-19 ms on this box) and is called ONLY off the loop: `stamp` (a NEW row, at
+  write time) is cache-only and `restraint_head.defer`s the text to one daemon worker thread that fills the cache; the nightly thread pass warms its texts through
+  `asyncio.to_thread` before classifying. Measured 2026-10-12, before this: an inline embed in `stamp` stalled the event loop 11 ms median / 32 ms worst on every
+  memory write (a turn's "remember" tool call included). **Behaviour change, stated:** a write-time label may LACK the head's classes until the worker has filled
+  the cache; such a stamp carries `LEXICON_VERSION`, which readers ignore, so they recompute and see the head from the cache once it is there, and a later re-stamp is
+  head-complete. The cache is per process: after a restart a row regains the head when it is re-stamped or re-warmed (the restamp pass in the ledger).
+  `VERSION` is 3, so v2 labels are re-derived on read (lexicon only until restamped); threads are reclassified by the next nightly pass with the head. **Consequence,
+  stated:** an old row that was never stamped with v3 gets the word list at read time until a restamp (none exists yet).
+* **Trained on the dev split only; thresholds from a rule fixed before the run:** per class, the lowest threshold at which the head ALONE fires on <= 1 % of
+  out-of-fold plain rows (5-fold over dev). `C` by mean out-of-fold average precision. Nothing is tuned on the held-out split.
+* **Stale-artefact guard covers labels and shape.** `train_sha` (scheme `classes+text/1`) is `restraint_eval.fingerprint` over the canonical
+  `(classes, text)` dev rows, so relabelling a row invalidates the head as well as rewriting it; the loader checks `W`, `b` and `thr` shapes
+  each against the class count, requires every array finite and every threshold in [0, 1], and refuses a damaged file (word list only,
+  never a crash). At runtime a wrong-width or non-finite vector, or a non-finite score, reads as "head did not run" (`lookup` returns `None`,
+  nothing cached, the row is not stamped head-complete) - never as a cached empty classification.
+* **English only, enforced.** bge-small-en is an English embedding: the head runs only on text with POSITIVE evidence of English: the
+  detector (`lexicons.detect_scored`) must say `en` AND the text must carry an English-only function word, an English contraction, or a hit on the detector's
+  English word list (`restraint._head_applies`). `detect_scored` answers `("en", 0)` for Polish, Russian, Portuguese and every other language without a word
+  list, so the language code alone is not evidence. Anything else keeps its lexicon, and its stamp is head-complete (there is nothing for the head to add); a short
+  English line with no marker also falls back to the lexicon, which can only mean fewer classes, never a wrong one.
+* **A v3 stamp means the head ran.** `stamp` (and the nightly thread pass) write `VERSION` only when the head actually classified the text (or never applies);
+  a row created before the router's model is loaded is stamped `LEXICON_VERSION` (2), which `row_classes` ignores, so a later `stamp` of the same row
+  applies the head. The nightly pass never downgrades a head-complete thread row to the word list.
+* **Model identity is checked.** The head borrows `semantic_router.embed` only when the router's `_MODEL_NAME` equals the `embedder` recorded in
+  `restraint_head.json` (`ZOE_ROUTER_MODEL` can point the router at another model of the same width); a mismatch or an unnamed model is "no head", one log line.
+
+**Splits** (`scripts/perf/restraint_eval.py`, fixture `tests/fixtures/restraint_labelled.json`, invented names, no household text). *Dev* (1,102
+class labels, 420 plain) = the three legacy English sets whose misses were read when the vocabulary was widened + 1,186 sentences written to the policy
+text by two independent LLM authors in different styles (clean sentences; dictation transcripts, terse extractor notes, slang, euphemism, titles). *Held-out*
+(294 class labels, 144 plain) = the original blind set 3 (`HELD3_*`, the 63 % number) + a 338-sentence blind set written by a third author that never saw the lexicon,
+the head or the dev data (40 of its plain sentences are hard negatives: song and film titles, fiction, routine bills). Reproduce: `python3 scripts/perf/restraint_eval.py`.
+
+Class-exact = the labelled class is among the returned classes (the repo's definition); `strict` additionally requires the returned set to equal the labelled set.
+
+| class | dev: word list | dev: + head | held-out: word list | held-out: + head | of which blind set 3 (legacy) | blind set (new) |
+|---|---|---|---|---|---|---|
+| health | 117/180 | 171/180 (95.0 %) | 30/52 | **44/52 (84.6 %)** | 4/10 -> 9/10 | 26/42 -> 35/42 |
+| money | 129/176 | 172/176 (97.7 %) | 39/49 | **48/49 (98.0 %)** | 10/10 -> 10/10 | 29/39 -> 38/39 |
+| family_conflict | 101/174 | 173/174 (99.4 %) | 22/44 | **41/44 (93.2 %)** | 3/8 -> 8/8 | 19/36 -> 33/36 |
+| grief | 112/174 | 169/174 (97.1 %) | 29/46 | **44/46 (95.7 %)** | 3/10 -> 9/10 | 26/36 -> 35/36 |
+| other_member | 115/221 | 211/221 (95.5 %) | 30/57 | **46/57 (80.7 %)** | 7/8 -> 7/8 | 23/49 -> 39/49 |
+| affect | 109/177 | 177/177 (100 %) | 31/46 | **45/46 (97.8 %)** | 7/8 -> 8/8 | 24/38 -> 37/38 |
+| **all** | 683/1102 (62.0 %) | 1073/1102 (**97.4 %**) | 181/294 (61.6 %) | **268/294 (91.2 %)** | 34/54 (63.0 %) -> **51/54 (94.4 %)** | 147/240 (61.2 %) -> **217/240 (90.4 %)** |
+| plain false positives | 67/420 | 69/420 | 10/144 | 11/144 | 0/24 -> 0/24 | 10/120 -> 11/120 |
+
+Honest reading:
+
+* **The ledger's bar (>= 90 % class-exact on a fresh set, 0 plain false positives) is met on the original blind set 3 (94.4 %, 0/24 plain) and on the combined
+  held-out split (91.2 %), not on every sub-measure:** the new blind set is 90.4 % with 11/120 plain false positives, and **two classes are under 90 % held-out:
+  `other_member` 80.7 % and `health` 84.6 %** (no per-class floor is written in the policy; 80 % is used here as the working one, and other_member on the
+  new blind set alone is 79.6 %).
+* **The plain false positives are the word list's, not the head's** (the head added 1 of 144 held-out, 2 of 420 dev): the hard negatives ("Funeral Blues is a poem by Auden",
+  "Doctor Who is on tonight", "Pay the gas bill by the 5th") trip a keyword list. On ordinary plain sentences (the legacy plain sets) it is 0. A hard-negative set
+  is a stress test the earlier measurement never ran; what a false positive costs is a withheld row, never a leak.
+* **The held-out split was scored twice.** The first head (dev = 968 rows, before the second dev author) scored 89.5 % held-out (263/294); more dev data of a different
+  style was then added (dev only, the held-out misses were not read) and the second run is the 91.2 % above. That is one adaptive step, disclosed; no threshold,
+  feature or sentence was chosen from a held-out miss. Tried and dropped on dev out-of-fold numbers: capitalisation features (no gain), a small MLP head (no gain over the linear one).
+* **Not measured:** the live packet end to end (P9, S5, the day-sim with the head loaded in the service), and the voice replay gate (this PR adds a file under `services/zoe-data/models/*`,
+  which `voice_gate_check.py` treats as voice path: the deploy gate needs the probe run against a checkout of the merged commit). Shadow behaviour is unchanged: the head changes only what is
+  logged as `withheld=` and what new rows are stamped with.
+
 ## Limits, stated
 
-* **The word list is a fallback, not a classifier.** See "Languages": 63 % class-exact on an unseen English set, 0 false positives.
+* **The word list is a fallback, not a classifier; the head carries the paraphrases.** See "Languages" (63 % class-exact alone) and "Semantic head" (91.2 % held-out with the head, English only).
 * **`other_member` needs a signal.** A row about "Teodor" with no `entity_type=person`, no kin or possessive and no
   contact name in the list is not classed; the nightly pass passes the member's contact names for threads, ingest does not
   have them for rows.

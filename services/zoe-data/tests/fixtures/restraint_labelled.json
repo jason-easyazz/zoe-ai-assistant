@@ -1,0 +1,8360 @@
+{
+"_about": "Invented, synthetic restraint-classifier labels (no household data, invented names). \"dev\" = what the semantic head was trained and tuned on (written to the policy text by one author). \"held_out\" = a blind set written by a separate author who never saw the lexicon or the head; it is never used to tune. See scripts/perf/restraint_eval.py.",
+"dev": [
+{
+"text": "I have a dentist appointment on Thursday morning.",
+"classes": [
+"health"
+]
+},
+{
+"text": "My grandad passed away in March.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "I'm three months behind on rent.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Set a timer for ten minutes.",
+"classes": []
+},
+{
+"text": "Ravi is starting a new job at the council in January.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Me and my sister aren't speaking since the argument at Christmas.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I'm dreading the meeting tomorrow.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "User has been getting migraines most afternoons.",
+"classes": [
+"health"
+]
+},
+{
+"text": "The anniversary of Dad's death is on Sunday.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "I got made redundant last Friday.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Sofia's turning ten and wants a bike.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Dad and I had a huge row last night.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I feel so lonely lately.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "I was diagnosed with type 2 diabetes last spring.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Our dog Biscuit died last night.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "The credit card is maxed out again.",
+"classes": [
+"money"
+]
+},
+{
+"text": "I prefer oat milk in my coffee.",
+"classes": []
+},
+{
+"text": "My neighbour Mr Adeyemi is moving house in the spring.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Ola and I are separating.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I'm ashamed of how I reacted.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Mum - knee op Thurs.",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "Auntie Chidi's funeral is on Friday.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Can't afford the electricity bill this month.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Beatrix is applying to universities this autumn.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Everything is overwhelming right now.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "I'm allergic to penicillin.",
+"classes": [
+"health"
+]
+},
+{
+"text": "I miss my wife every single day since she died.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "I've set up a payment plan with the council for my arrears.",
+"classes": [
+"money"
+]
+},
+{
+"text": "What time does the library open on Saturdays?",
+"classes": []
+},
+{
+"text": "Hassan's flight lands at six on Friday.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "They're fighting over custody of the twins.",
+"classes": [
+"family_conflict",
+"other_member"
+]
+},
+{
+"text": "I'm completely burnt out.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "My blood pressure tablets need refilling next week.",
+"classes": [
+"health"
+]
+},
+{
+"text": "We lost the baby at fourteen weeks.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "My salary dropped when I went part time.",
+"classes": [
+"money"
+]
+},
+{
+"text": "The cold brew is in the fridge.",
+"classes": []
+},
+{
+"text": "Colleague Yuki got promoted to team lead.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "My brother hasn't spoken to Mum in two years.",
+"classes": [
+"family_conflict",
+"other_member"
+]
+},
+{
+"text": "Feeling hopeless about it all.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Booked a mammogram for the 14th.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Need a condolence card for Ines.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Savings are down to next to nothing.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Add eggs and spinach to the shopping list.",
+"classes": []
+},
+{
+"text": "Pablo has been learning the cello for a year.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "We've been sleeping in separate rooms since the fight.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I'm jealous of how easy things are for my friends.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "I haven't slept properly in about three weeks.",
+"classes": [
+"health"
+]
+},
+{
+"text": "I light a candle for Gran on the day she died.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "The tax bill is due and I haven't set the money aside.",
+"classes": [
+"money"
+]
+},
+{
+"text": "The doctor in this novel is the villain.",
+"classes": []
+},
+{
+"text": "Mum is coming to stay next week.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Ingrid walked out on me yesterday.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I can't stop worrying about the interview.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Kofi sprained his ankle at football and is on crutches.",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "The memorial bench for Uncle Lars is going in next month.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Applied for housing benefit.",
+"classes": [
+"money"
+]
+},
+{
+"text": "We're having pasta for dinner tonight.",
+"classes": []
+},
+{
+"text": "Anika is vegetarian these days.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "The divorce papers arrived this morning.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I feel like I'm letting everyone down.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Feeling under the weather today, probably a cold coming on.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Since Mum died the house has been so quiet.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Mortgage rate is going up and we're stretched thin.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Pay the gas bill by the 5th.",
+"classes": []
+},
+{
+"text": "Tendai is thinking about quitting the band.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "My husband and I keep arguing about his parents.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I've got butterflies about Saturday and can't settle.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "The GP wants a fasting blood test from me.",
+"classes": [
+"health"
+]
+},
+{
+"text": "He's no longer with us.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "I owe my brother a few thousand and can't pay him back.",
+"classes": [
+"money"
+]
+},
+{
+"text": "The bins go out on Wednesday evening.",
+"classes": []
+},
+{
+"text": "My friend Olu is engaged!",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Not on speaking terms with my cousin.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I feel invisible at work.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "User takes sertraline every morning.",
+"classes": [
+"health"
+]
+},
+{
+"text": "We scattered Grandma's ashes at the lake.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "User was let go from the warehouse job.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Play Chopin's funeral march, I love that piece.",
+"classes": []
+},
+{
+"text": "Dana's interview is on Wednesday.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "The two boys are at each other's throats again.",
+"classes": [
+"family_conflict",
+"other_member"
+]
+},
+{
+"text": "Feeling guilty for not calling back.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "I got the all-clear from the scan yesterday.",
+"classes": [
+"health"
+]
+},
+{
+"text": "I have to write the eulogy for my father.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "A letter from the bailiffs arrived today.",
+"classes": [
+"money"
+]
+},
+{
+"text": "I like jazz in the mornings.",
+"classes": []
+},
+{
+"text": "Our neighbour's son failed his driving test again.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "There's a lot of tension between my parents at the moment.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I'm so anxious about flying.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Wei Ling is eight weeks pregnant.",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "It will be five years since Dalia died in June.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Payday loan keeps rolling over.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Hospital Road is closed for resurfacing this week.",
+"classes": []
+},
+{
+"text": "Jun is moving into his first flat.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I told my dad to stay away from the house.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I feel kind of empty today.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "My back has been killing me since I lifted that wardrobe.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Our old cat Moss had to be put down today.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Overdraft is at its limit again.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Remind me to water the tomatoes.",
+"classes": []
+},
+{
+"text": "My cousin Freya just had her baby, a girl.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "My stepdaughter won't talk to me.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I'm on edge and snapping at everyone.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Physio for my shoulder starts Monday.",
+"classes": [
+"health"
+]
+},
+{
+"text": "I still reach for the phone to call my brother, then remember he's gone.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Karim lost his job and they might lose the house.",
+"classes": [
+"money",
+"other_member"
+]
+},
+{
+"text": "Add plasters and a first aid kit to the shopping list.",
+"classes": []
+},
+{
+"text": "Dad is retiring in the spring.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Estranged from my father for a decade now.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I've been feeling really low.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "I'm on the waiting list for a hip replacement.",
+"classes": [
+"health"
+]
+},
+{
+"text": "The wake was last weekend; so many people came for Tomas.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Rent overdue - landlord chasing.",
+"classes": [
+"money"
+]
+},
+{
+"text": "The new sofa is being delivered between nine and noon.",
+"classes": []
+},
+{
+"text": "Mateus wants to switch schools.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Things at home have been frosty since the argument.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I'm embarrassed about what I said at dinner.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Therapy with Dr Brandt at four this week.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Neha's father died last week.",
+"classes": [
+"grief",
+"other_member"
+]
+},
+{
+"text": "We're skint until the 28th.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Turn the living room lights to warm white.",
+"classes": []
+},
+{
+"text": "Auntie Joy is selling her flat.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Joao and his wife have split up.",
+"classes": [
+"family_conflict",
+"other_member"
+]
+},
+{
+"text": "Feeling pretty resentful lately.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Dad's cholesterol came back high again.",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "My best friend Ayo died of cancer two winters ago.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Mum's pension barely covers her bills.",
+"classes": [
+"money",
+"other_member"
+]
+},
+{
+"text": "Turn the heat up, it's freezing in the study.",
+"classes": []
+},
+{
+"text": "Ewan's team won the league.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Mei slammed the door and left; I haven't heard from her since.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I'm terrified of failing the exam.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Stomach bug, throwing up since last night.",
+"classes": [
+"health"
+]
+},
+{
+"text": "I attended the burial service on Tuesday.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "I'm robbing Peter to pay Paul with the cards.",
+"classes": [
+"money"
+]
+},
+{
+"text": "My car is due its MOT in October.",
+"classes": []
+},
+{
+"text": "My boss Siobhan is away until Thursday.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "My sister-in-law and I clashed over the holiday plans.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I feel stuck and I don't know what to do.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "I'm coeliac so nothing with gluten please.",
+"classes": [
+"health"
+]
+},
+{
+"text": "My parrot Kiwi died; I buried her in the garden.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "I usually walk the dog around seven.",
+"classes": []
+},
+{
+"text": "Ayesha is bringing her new boyfriend to dinner.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm skipping Easter because my brother will be there.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Such a relief, I've finally stopped feeling so tense, though I'm still a bit scared.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "I had a panic attack on the train this morning.",
+"classes": [
+"health",
+"affect"
+]
+},
+{
+"text": "It's the first Christmas without Grandpa.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Declined for the car finance.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Book a table for four at the Italian place on Friday.",
+"classes": []
+},
+{
+"text": "Pieter's graduation is in July.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Mum and Aunt Rosa had a falling out over the house.",
+"classes": [
+"family_conflict",
+"other_member"
+]
+},
+{
+"text": "I'm proud of myself today but also a bit scared.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Lucia's chemo finishes next Friday.",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "Bronagh had a stillbirth in the spring and we don't talk about it.",
+"classes": [
+"grief",
+"other_member"
+]
+},
+{
+"text": "I earn less than the guy who started after me.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Sam and I need couples counselling, we can't stop bickering.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "The film has a sad ending, so pick something lighter for tonight.",
+"classes": []
+},
+{
+"text": "The dentist's office in the old town is a bakery now.",
+"classes": []
+},
+{
+"text": "I'm learning to play the ukulele.",
+"classes": []
+},
+{
+"text": "What's the capital of Australia?",
+"classes": []
+},
+{
+"text": "The tax-free shopping weekend starts Friday.",
+"classes": []
+},
+{
+"text": "The washing machine finishes in twenty minutes.",
+"classes": []
+},
+{
+"text": "Lend the ladder to the neighbour when he asks.",
+"classes": []
+},
+{
+"text": "Our flight leaves at eight in the morning.",
+"classes": []
+},
+{
+"text": "My first language is Portuguese.",
+"classes": []
+},
+{
+"text": "The courier needs a signature on delivery.",
+"classes": []
+},
+{
+"text": "I want to repaint the hallway green.",
+"classes": []
+},
+{
+"text": "Season two of the show has a divorce lawyer who is hilarious.",
+"classes": []
+},
+{
+"text": "Next team stand-up is at half past nine.",
+"classes": []
+},
+{
+"text": "The loan desk at the library closes at five.",
+"classes": []
+},
+{
+"text": "Play my cooking playlist.",
+"classes": []
+},
+{
+"text": "The yoga class starts at six, bring a mat.",
+"classes": []
+},
+{
+"text": "I take my coffee black.",
+"classes": []
+},
+{
+"text": "What's the exchange rate for euros today?",
+"classes": []
+},
+{
+"text": "Charge my phone, the battery is dead.",
+"classes": []
+},
+{
+"text": "The garden fence needs a new coat of paint.",
+"classes": []
+},
+{
+"text": "That sitcom about a family running a funeral home is really funny.",
+"classes": []
+},
+{
+"text": "I'm reading a mystery novel at the moment.",
+"classes": []
+},
+{
+"text": "How long do I boil an egg for?",
+"classes": []
+},
+{
+"text": "Wake me at six thirty tomorrow.",
+"classes": []
+},
+{
+"text": "The heart emoji button is on the left of the keyboard.",
+"classes": []
+},
+{
+"text": "Switch off the kitchen lights.",
+"classes": []
+},
+{
+"text": "Referred to cardiology for chest tightness when I climb stairs.",
+"classes": [
+"health"
+]
+},
+{
+"text": "We can't make the mortgage payment this month.",
+"classes": [
+"money"
+]
+},
+{
+"text": "It's two years since we buried Dad.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "My parents are barely speaking after the holiday blowup.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Chidera is training for a marathon in the spring.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm so stressed I can't think straight.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Cancer is a zodiac sign, so my horoscope app says I'm in for a lucky week.",
+"classes": []
+},
+{
+"text": "Amina's asthma inhaler needs replacing before school term.",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "Down to my last few quid until payday.",
+"classes": [
+"money"
+]
+},
+{
+"text": "I keep her voicemail just to hear her voice; she's been gone since spring.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "I told my son I'm not coming to the wedding after what his wife said.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "My grandson Leo got a place on the football team.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I feel like a failure.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "I'd like my morning alarm to be gentle.",
+"classes": []
+},
+{
+"text": "Had the stitches out this morning, scar is healing nicely.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Our energy bill doubled and we're panicking.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Went to the cemetery to leave flowers on Nana's grave.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Divorce is final next month.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Hye-jin is moving back in with her parents next month.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "It's been a lonely week; nobody has rung.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "The sick bay in the ship game is on level three.",
+"classes": []
+},
+{
+"text": "I've had a stubborn cough since August and the chest X-ray is Tuesday.",
+"classes": [
+"health"
+]
+},
+{
+"text": "I'm still paying off a loan from my twenties.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Our rabbit Pepper passed away overnight.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Haven't spoken to my brother since the funeral.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Anwar's wedding invitation arrived.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm dreading Christmas this year.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Tell me the weather for the weekend.",
+"classes": []
+},
+{
+"text": "Brain fog has been awful since I caught covid.",
+"classes": [
+"health"
+]
+},
+{
+"text": "My contract wasn't renewed, so the income stops in December.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Lost my twin in a car accident when we were nineteen.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "My in-laws think I'm a terrible mother and say so.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Our daughter Maeve starts nursery in September.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I wake up with a sense of doom.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "I put the money jar on the top shelf.",
+"classes": []
+},
+{
+"text": "Oksana is on bed rest until the baby comes.",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "Nobody has paid me in two months and the boss keeps stalling.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Sending flowers to the memorial service for Mr Okafor.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Her ex is trying to get full custody of Ruben.",
+"classes": [
+"family_conflict",
+"other_member"
+]
+},
+{
+"text": "Nonna Caterina is turning ninety.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm worried sick about the presentation.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "We usually have breakfast at eight.",
+"classes": []
+},
+{
+"text": "User is lactose intolerant.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Money's very tight since the baby.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Mum would have been seventy today.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Amir and Leila shouted at each other all evening.",
+"classes": [
+"family_conflict",
+"other_member"
+]
+},
+{
+"text": "Tariq has been offered a job overseas.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I feel out of my depth at the new job.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Check the bank's opening hours before I walk down there.",
+"classes": []
+},
+{
+"text": "My tinnitus is worse at night.",
+"classes": [
+"health"
+]
+},
+{
+"text": "The tax office wants a lump sum and I have no idea where it will come from.",
+"classes": [
+"money"
+]
+},
+{
+"text": "The service is at noon; we'll wear something bright, as Grandad asked.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "My wife moved into the spare room.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Ingeborg is house-sitting for us next weekend.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Honestly I'm fed up and drained.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Add birthday candles to the list.",
+"classes": []
+},
+{
+"text": "The nurse gave me a steroid injection in my knee.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Fiona was made redundant and is claiming jobseeker's allowance.",
+"classes": [
+"money",
+"other_member"
+]
+},
+{
+"text": "I had a miscarriage last year.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "We had a falling-out over who looks after Gran.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Cousin Blessing opened a hair salon.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I feel guilty about leaving the kids with the sitter again.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "My favourite colour is teal.",
+"classes": []
+},
+{
+"text": "I'm a bit run down, I think I need iron.",
+"classes": [
+"health"
+]
+},
+{
+"text": "We're on a debt management plan.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Uncle Dmitri died peacefully in his sleep.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "My sister and I are never on the same page; every call ends in a row.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Mrs Petrov next door is away for the week and we're feeding her cat.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm so angry I could scream.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "The ward boundaries in the council election are being redrawn.",
+"classes": []
+},
+{
+"text": "Giulia's biopsy results are due Friday.",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "Missed two credit card payments and the interest is piling up.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Everyone says it gets easier, but it's been a year since Rahul died.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "He keeps ignoring my messages since the argument about the inheritance.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Dmitri passed his driving test!",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I've been crying on and off all day.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Can you read me the news headlines?",
+"classes": []
+},
+{
+"text": "I've been diagnosed with sleep apnoea and use a CPAP machine.",
+"classes": [
+"health"
+]
+},
+{
+"text": "I borrowed against my pension.",
+"classes": [
+"money"
+]
+},
+{
+"text": "I can't throw away his coat; he's been gone three winters.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "I cut contact with my mother last year.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Little Tomasz lost his first tooth.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm nervous but excited about tomorrow.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "The Christmas wreath goes on the front door.",
+"classes": []
+},
+{
+"text": "Bloods came back normal, so the doctor thinks it's stress.",
+"classes": [
+"health"
+]
+},
+{
+"text": "The landlord served a notice for unpaid rent.",
+"classes": [
+"money"
+]
+},
+{
+"text": "We're planning a celebration of life for Aunt Marisol.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "My teenage daughter screamed that she hates me and slammed her door.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Marguerite quit teaching to write a novel.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I feel like nobody really listens to me.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "The conference call starts at two.",
+"classes": []
+},
+{
+"text": "Keep an eye on my blood sugar before breakfast.",
+"classes": [
+"health"
+]
+},
+{
+"text": "I can't pay the school fees this term.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Hanako's husband passed on in August.",
+"classes": [
+"grief",
+"other_member"
+]
+},
+{
+"text": "Dad's new partner and I don't get along.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Kwame is coming over at eight to fix the shelf.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I just feel flat; nothing makes me happy.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "I'm planning a hike for next Sunday.",
+"classes": []
+},
+{
+"text": "Booked in for cataract surgery in the new year.",
+"classes": [
+"health"
+]
+},
+{
+"text": "I'm counting pennies until the bonus comes through.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Her death anniversary falls next Tuesday.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "There's bad blood between my aunt and my mum.",
+"classes": [
+"family_conflict",
+"other_member"
+]
+},
+{
+"text": "Prisha wants to learn coding and is asking for a laptop for her birthday.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm mortified about the typo I sent to everyone.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "The documentary about whales has beautiful music.",
+"classes": []
+},
+{
+"text": "My ankle swells up if I'm on my feet all day.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Our shop is losing money and I might have to close it.",
+"classes": [
+"money"
+]
+},
+{
+"text": "The wreath for the funeral is ordered.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "The twins are not talking to each other this week.",
+"classes": [
+"family_conflict",
+"other_member"
+]
+},
+{
+"text": "My daughter's friend Yara is staying over on Saturday.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm so ashamed that I lied.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Lower the volume on the speaker.",
+"classes": []
+},
+{
+"text": "I take my thyroid tablet on an empty stomach, half an hour before food.",
+"classes": [
+"health"
+]
+},
+{
+"text": "My credit score took a hit after the default.",
+"classes": [
+"money"
+]
+},
+{
+"text": "I was widowed young.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "We had the worst fight about money and he left for his mother's.",
+"classes": [
+"money",
+"family_conflict"
+]
+},
+{
+"text": "Niall wants to switch to nights at the bakery.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Feeling really insecure about how I look lately.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "The plumber is coming Tuesday between ten and twelve.",
+"classes": []
+},
+{
+"text": "Baby Omar has colic and screams every evening.",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "Living hand to mouth since the divorce.",
+"classes": [
+"money",
+"family_conflict"
+]
+},
+{
+"text": "Death certificate, probate, all the paperwork after losing Dad.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "My partner and I are on a break.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Rosalind has been learning Spanish and is doing brilliantly.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm full of dread whenever the phone rings.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "The courtroom drama we watched had a fascinating custody case.",
+"classes": []
+},
+{
+"text": "I broke a rib coughing, apparently that happens.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Bartek is behind on his car payments.",
+"classes": [
+"money",
+"other_member"
+]
+},
+{
+"text": "I'm still raw after Kasimir's passing.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "I haven't been invited to my cousin's wedding because of a family feud.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Zeynep is running for the school board.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I've lost all motivation.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "I want to learn how to bake sourdough.",
+"classes": []
+},
+{
+"text": "Rushed to A&E last night with a kidney stone.",
+"classes": [
+"health"
+]
+},
+{
+"text": "I'm on a zero-hours contract so I never know what I'll earn.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Plaque in loving memory of Sister Agnes goes up on Saturday.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Since the argument, Christmas dinner is at two separate houses.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Dad's friend Mustafa is selling his boat.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm so homesick right now.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Bill's Bakery opens at seven.",
+"classes": []
+},
+{
+"text": "Mama Ngozi had a pacemaker fitted.",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "My wage is lower than everybody else's on the team.",
+"classes": [
+"money"
+]
+},
+{
+"text": "I dreamt of Grandma last night and woke up crying; she died last winter.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "My brother-in-law and my husband nearly came to blows.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Colm just adopted a greyhound.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm envious of her holiday photos.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "The recycling bin is by the garage.",
+"classes": []
+},
+{
+"text": "The counsellor says my anxiety disorder is manageable with practice.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Hasn't been a good year, I'm still in arrears on the car loan.",
+"classes": [
+"money"
+]
+},
+{
+"text": "The baby didn't make it.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Anselm's wife has left him.",
+"classes": [
+"family_conflict",
+"other_member"
+]
+},
+{
+"text": "Our cleaner Esperanza is on holiday for two weeks.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm exhausted and close to tears.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "My brother-in-law's van is parked in the drive.",
+"classes": []
+},
+{
+"text": "I'm getting my eyes lasered next week.",
+"classes": [
+"health"
+]
+},
+{
+"text": "We're in a cold war at home; neither of us will apologise.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I feel on top of the world today!",
+"classes": [
+"affect"
+]
+},
+{
+"text": "What's twelve times fifteen?",
+"classes": []
+},
+{
+"text": "Order more coffee beans.",
+"classes": []
+},
+{
+"text": "I like to take the scenic route home.",
+"classes": []
+},
+{
+"text": "Our cat prefers the salmon flavour.",
+"classes": []
+},
+{
+"text": "Set the heating schedule for the weekend.",
+"classes": []
+},
+{
+"text": "The dishwasher needs descaling tablets.",
+"classes": []
+},
+{
+"text": "I'm working from home on Fridays.",
+"classes": []
+},
+{
+"text": "How far away is the moon?",
+"classes": []
+},
+{
+"text": "The train leaves at ten past nine.",
+"classes": []
+},
+{
+"text": "Save this recipe for later.",
+"classes": []
+},
+{
+"text": "My laptop needs a software update.",
+"classes": []
+},
+{
+"text": "I like the window open at night.",
+"classes": []
+},
+{
+"text": "Lunch with the design team is at noon.",
+"classes": []
+},
+{
+"text": "Remind me to renew my library books.",
+"classes": []
+},
+{
+"text": "Where did I leave the spare key?",
+"classes": []
+},
+{
+"text": "I'm growing basil on the windowsill.",
+"classes": []
+},
+{
+"text": "Don't kill the process, just wait for it to finish.",
+"classes": []
+},
+{
+"text": "The pharmacy section of the supermarket stocks sun cream.",
+"classes": []
+},
+{
+"text": "In the book club novel, the inheritance dispute drives the whole plot.",
+"classes": []
+},
+{
+"text": "The old surgical instruments exhibition at the museum opens Saturday.",
+"classes": []
+},
+{
+"text": "The panic button on the alarm panel is red.",
+"classes": []
+},
+{
+"text": "Lonely Planet is the guidebook I want for the trip.",
+"classes": []
+},
+{
+"text": "Rent a car for the long weekend trip.",
+"classes": []
+},
+{
+"text": "The payroll software update at the office finishes tonight.",
+"classes": []
+},
+{
+"text": "Dead leaves need raking from the lawn.",
+"classes": []
+},
+{
+"text": "The cutting board is in the second drawer.",
+"classes": []
+},
+{
+"text": "Dermatology follow-up Tuesday for the mole they removed.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Credit union loan repayment is on the first of the month, and it's heavy.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Today marks a year since Nikhil died.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "My mother and I haven't spoken properly in months.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Lindiwe got a distinction in her exam.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm fearful about what the future holds.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Play something upbeat while I cook.",
+"classes": []
+},
+{
+"text": "The hospital in this soap opera has awful plotlines.",
+"classes": []
+},
+{
+"text": "I've been put on a waiting list for a gastroscopy.",
+"classes": [
+"health"
+]
+},
+{
+"text": "My partner and I can barely cover the childcare costs.",
+"classes": [
+"money"
+]
+},
+{
+"text": "I carry Grandad's watch because he's gone.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Fighting with my husband again about the in-laws visiting.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "My housemate Jakub is moving out in June.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I feel like I'm drowning.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "We're out of milk.",
+"classes": []
+},
+{
+"text": "Zainab has been throwing up since breakfast and has a temperature.",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "I've been skipping the dentist because I can't afford it.",
+"classes": [
+"health",
+"money"
+]
+},
+{
+"text": "Burying my mother next Thursday.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "I moved out after the huge argument with my parents.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Thandi's flight was delayed again.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Every day it feels like a struggle to get out of bed.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "The estate agent's office is next to the bakery.",
+"classes": []
+},
+{
+"text": "My cycle has been all over the place and the doctor suspects PCOS.",
+"classes": [
+"health"
+]
+},
+{
+"text": "The boiler repair wiped out our savings.",
+"classes": [
+"money"
+]
+},
+{
+"text": "I can't bring myself to delete his number.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "My ex-husband wants the kids every weekend and we can't agree.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "My son Elias is learning to ride a bike.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm so nervous my hands are shaking.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Schedule the carpet cleaner for next month.",
+"classes": []
+},
+{
+"text": "The Grim Reaper costume is in the attic for Halloween.",
+"classes": []
+},
+{
+"text": "Struggling with chronic fatigue, been signed off for a month.",
+"classes": [
+"health"
+]
+},
+{
+"text": "I'm on minimum wage and it doesn't stretch.",
+"classes": [
+"money"
+]
+},
+{
+"text": "The funeral director called about the arrangements.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Uncle Tavita and Dad fell out over the farm.",
+"classes": [
+"family_conflict",
+"other_member"
+]
+},
+{
+"text": "Caro is training for her pilot's licence.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm furious at myself.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "I'd like the lamp to fade on at seven.",
+"classes": []
+},
+{
+"text": "I need to take my methotrexate on Sundays.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Applied for the hardship fund at the college.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Our cat of sixteen years died and the house feels wrong.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "My sister-in-law refuses to attend the dinner if I come.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Auntie Parvati is hosting Diwali this year.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Feeling fragile today.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "The sick leave policy form is on the intranet.",
+"classes": []
+},
+{
+"text": "My eyes water all spring, hay fever is brutal.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Lost my freelance client, so next month is empty.",
+"classes": [
+"money"
+]
+},
+{
+"text": "My brother took his own life three years ago.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "She told me she wants a divorce.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "My boss has a new puppy.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm so tired of pretending everything is fine.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Translate good morning into Italian.",
+"classes": []
+},
+{
+"text": "Recovering from knee surgery, no stairs for six weeks.",
+"classes": [
+"health"
+]
+},
+{
+"text": "A foreclosure notice came in the post.",
+"classes": [
+"money"
+]
+},
+{
+"text": "My mate Bongani was killed in an accident.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "My dad and my brother are in a shouting match over politics again.",
+"classes": [
+"family_conflict",
+"other_member"
+]
+},
+{
+"text": "Bao-Ngoc finally got her visa approved.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I feel left out of the group chat.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Doctor Who is on tonight.",
+"classes": []
+},
+{
+"text": "Grandma Lupe's hip is mending after the fall.",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "Ngozi lost her business and is drowning in debt.",
+"classes": [
+"money",
+"other_member"
+]
+},
+{
+"text": "We placed a stone for Leila in the garden.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Mum's sulking because I didn't call on her birthday.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Mikkel wants to rehome his fish tank.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I dread Sundays.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "The meeting room is booked until three.",
+"classes": []
+},
+{
+"text": "Heart palpitations woke me at three again.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Our rent goes up by a fifth in March and there's no way we can manage.",
+"classes": [
+"money"
+]
+},
+{
+"text": "It was Dad's birthday yesterday and he's been gone since the spring.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "The family WhatsApp is a battleground after what Aunt Celia said.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "My granddaughter Sana made the school choir.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm overwhelmed by everything on my plate.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Funeral Blues is a poem by Auden.",
+"classes": []
+},
+{
+"text": "Booked my smear test for Wednesday.",
+"classes": [
+"health"
+]
+},
+{
+"text": "I haven't told Dad that I'm in the red.",
+"classes": [
+"money"
+]
+},
+{
+"text": "I put flowers in the church for my late husband.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "My partner shut the door in my face and slept at a friend's.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Hannu is working nights this week.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm anxious that I'm not good enough.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Charge the electric bike overnight.",
+"classes": []
+},
+{
+"text": "Had to leave work early with a terrible headache and nausea.",
+"classes": [
+"health"
+]
+},
+{
+"text": "The pay cut was announced this morning.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Still can't believe Helga is gone.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "We've decided to separate and tell the children next week.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Odalys won a baking competition.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I've been feeling really sorry for myself.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "What time is sunset today?",
+"classes": []
+},
+{
+"text": "My heart is on the left of the screen in this anatomy quiz game.",
+"classes": []
+},
+{
+"text": "Pavel is in hospital with pneumonia.",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "My take-home is half of what it was before the layoffs.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Our neighbour's wife passed away last night.",
+"classes": [
+"grief",
+"other_member"
+]
+},
+{
+"text": "Haven't talked to my father since he remarried.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Max next door is building a shed.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm disappointed in how things turned out.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "I'm taking the 8.15 bus.",
+"classes": []
+},
+{
+"text": "The specialist thinks I might have lupus.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Eviction warning, thirty days to find the rent.",
+"classes": [
+"money"
+]
+},
+{
+"text": "We lost a child before she turned two.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "He's not welcome at the christening.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Cleo is changing careers to become a chef.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "A bit panicky about the deadline.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "My coffee mug is the blue one.",
+"classes": []
+},
+{
+"text": "The sad clown painting in the gallery is by an unknown artist.",
+"classes": []
+},
+{
+"text": "I grind my teeth at night and need a mouthguard.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Cancelled the gym and streaming to save money.",
+"classes": [
+"money"
+]
+},
+{
+"text": "The hospice called to say it was over; Mama went peacefully.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "My brother borrowed money and now we don't speak.",
+"classes": [
+"money",
+"family_conflict"
+]
+},
+{
+"text": "Dad is flying back from the conference on Sunday evening.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I feel so small in meetings.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "The garden party is on Saturday afternoon.",
+"classes": []
+},
+{
+"text": "Taking painkillers for my shoulder every four hours.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Food bank this week, again.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Visiting the family grave on All Souls.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Hana and her mother have stopped talking altogether.",
+"classes": [
+"family_conflict",
+"other_member"
+]
+},
+{
+"text": "Femi and Tosin are moving in together.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm delighted, honestly, I can't stop smiling.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Put the bread in the freezer.",
+"classes": []
+},
+{
+"text": "The tax return deadline is the end of January.",
+"classes": []
+},
+{
+"text": "Doctor says lose weight for the sake of my liver.",
+"classes": [
+"health"
+]
+},
+{
+"text": "My pension pot is much smaller than I'd hoped.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Gran's last words keep replaying in my head.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "My in-laws are unhappy with our decision to move away.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "The new neighbour Mr Tanaka is a retired pilot.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm uneasy and I can't say why.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "I'm trying out a new pasta recipe tonight.",
+"classes": []
+},
+{
+"text": "Sleeping pills aren't working any more.",
+"classes": [
+"health"
+]
+},
+{
+"text": "We're remortgaging to pay off the credit cards.",
+"classes": [
+"money"
+]
+},
+{
+"text": "The ashes are in the hall cupboard; I don't know where to scatter them.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "The tension at home is awful; my daughter and I keep clashing about curfew.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Eilidh is expecting a visit from her sister.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Disgusted with myself for giving in.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Show me the route to the garden centre.",
+"classes": []
+},
+{
+"text": "The patient in this medical drama is secretly the heir.",
+"classes": []
+},
+{
+"text": "Test for coeliac came back positive, so gluten is out.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Dev got a huge raise and is keeping quiet about it.",
+"classes": [
+"money",
+"other_member"
+]
+},
+{
+"text": "Every Sunday I used to phone Papa, and now he has died.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "I don't trust my mother-in-law around the kids and we rowed again.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Julio wants to try out for the swim team.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm terribly lonely in this new city.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "I prefer window blinds closed in the afternoon.",
+"classes": []
+},
+{
+"text": "Mrs Adebayo had a fall and fractured her wrist.",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "I owe the tax authority for two years of self-assessment.",
+"classes": [
+"money"
+]
+},
+{
+"text": "I miss him so much it hurts; it's been months since he passed.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "We stopped inviting him to Sunday lunch after the scene he made.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "My teacher friend Wanjiru is on maternity leave from March.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm just so, so tired of being strong.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "The parcel should arrive by Thursday.",
+"classes": []
+},
+{
+"text": "I get vertigo when I turn my head too fast.",
+"classes": [
+"health"
+]
+},
+{
+"text": "The bank said no to my overdraft extension.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Our goldfish Bubbles died and the kids are heartbroken.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "I am so angry at my sister for what she told Mum.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Anders got second place in the chess tournament.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Not coping well, to be honest.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Dim the bedroom lights.",
+"classes": []
+},
+{
+"text": "Water bill is due on the 10th.",
+"classes": []
+},
+{
+"text": "They've upped my antidepressants and I feel zombie-ish.",
+"classes": [
+"health"
+]
+},
+{
+"text": "We're living off Mum's help until the new job starts.",
+"classes": [
+"money",
+"other_member"
+]
+},
+{
+"text": "Obituary for Mr Lindqvist is in today's paper.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Things are rough at home, my husband shouts a lot.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Mum has gone on a pottery course.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I feel like a burden.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Order a birthday cake for the office party.",
+"classes": []
+},
+{
+"text": "My bank card expires next year, so remind me to order a new one.",
+"classes": []
+},
+{
+"text": "The self-help section of the bookshop is on the second floor.",
+"classes": []
+},
+{
+"text": "Carmela's son just got engaged.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "The garage door code is on the key hook.",
+"classes": []
+},
+{
+"text": "I'd like to start running in the mornings.",
+"classes": []
+},
+{
+"text": "I need a new exercise ball for the home gym.",
+"classes": []
+},
+{
+"text": "The gym membership renewal email arrived.",
+"classes": []
+},
+{
+"text": "The school run takes twenty minutes.",
+"classes": []
+},
+{
+"text": "The antibiotics chapter in the history of science book is fascinating.",
+"classes": []
+},
+{
+"text": "Remind me to take out the recycling.",
+"classes": []
+},
+{
+"text": "I prefer paperbacks to e-readers.",
+"classes": []
+},
+{
+"text": "The quarterly report is due next Friday at work.",
+"classes": []
+},
+{
+"text": "Tidy up the downloads folder.",
+"classes": []
+},
+{
+"text": "The football kit is in the hall.",
+"classes": []
+},
+{
+"text": "I'd like the heating on from five.",
+"classes": []
+},
+{
+"text": "The pasta jar is empty.",
+"classes": []
+},
+{
+"text": "My favourite pizza topping is mushrooms.",
+"classes": []
+},
+{
+"text": "Take the car in for a service next week.",
+"classes": []
+},
+{
+"text": "Open the curtains at eight.",
+"classes": []
+},
+{
+"text": "The reality show about house hunting is on at six.",
+"classes": []
+},
+{
+"text": "I'm cold, bring me a blanket.",
+"classes": []
+},
+{
+"text": "The unpaid invoice template is in the shared folder.",
+"classes": []
+},
+{
+"text": "Appt with the endocrinologist rescheduled to the 20th.",
+"classes": [
+"health"
+]
+},
+{
+"text": "I'm in a rent dispute I can't afford to fight.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Seven years since we lost Mum and it still hurts.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "My dad and my uncle haven't spoken since the wedding.",
+"classes": [
+"family_conflict",
+"other_member"
+]
+},
+{
+"text": "Rafael is taking a gap year in the autumn.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm sick with nerves.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "What's on my calendar this afternoon?",
+"classes": []
+},
+{
+"text": "The textbook chapter on the Black Death is due Monday.",
+"classes": []
+},
+{
+"text": "I tore my calf muscle running for the bus.",
+"classes": [
+"health"
+]
+},
+{
+"text": "My bank has put a hold on my card because of unpaid debts.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Planting a tree in memory of Dad.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Whenever my mother-in-law visits we end up bickering.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "My colleague Ingrid has been moved to the finance team.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Why does everything feel so heavy?",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Turn the oven to two hundred degrees.",
+"classes": []
+},
+{
+"text": "My daughter Ife has to wear a patch over her eye for a lazy eye.",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "I'm in a lot of debt and I'm ashamed to say so.",
+"classes": [
+"money",
+"affect"
+]
+},
+{
+"text": "Her favourite chair is empty now.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "I'm in a custody battle.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Joon-ho is hoping to buy a flat.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm lonely even when I'm in a room full of people.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "The funeral procession scene in the film was shot beautifully.",
+"classes": []
+},
+{
+"text": "I'm teetotal now on medical advice.",
+"classes": [
+"health"
+]
+},
+{
+"text": "My wage slip came and it's short again.",
+"classes": [
+"money"
+]
+},
+{
+"text": "The pastor will lead the service for Great-uncle Samir.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "My ex took the kids and won't let me see them.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Mum is repainting her kitchen.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm petrified I'll be found out as a fraud.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "I want chicken curry for dinner on Thursday.",
+"classes": []
+},
+{
+"text": "Been getting heartburn every night, thinking of asking for a scope.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Furlough ends in March and they're not taking us back.",
+"classes": [
+"money"
+]
+},
+{
+"text": "I'm in mourning.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "My daughter-in-law and I are at war.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Kalinda started her own podcast.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I feel completely numb today.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Pull up the ivy growing along the fence.",
+"classes": []
+},
+{
+"text": "I've got a UTI and it's miserable.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Mum's care home fees are eating our savings.",
+"classes": [
+"money"
+]
+},
+{
+"text": "My partner died in the winter.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "We've broken up and I'm sleeping on a friend's sofa.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Sven has joined a chess club.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm really anxious about this weekend.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "The cinema opens at noon on weekends.",
+"classes": []
+},
+{
+"text": "Roberto is home after his bypass.",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "We had to take out a second mortgage to fix the roof.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Sending sympathies to Ifeoma on the loss of her mother.",
+"classes": [
+"grief",
+"other_member"
+]
+},
+{
+"text": "He cheated on me, so we're done.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Shirin is hosting the book club next week.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Feeling jealous that she gets all the attention.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "The escape room at the old hospital is closed on Mondays.",
+"classes": []
+},
+{
+"text": "Fasting for the glucose tolerance test tomorrow.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Payday is still ten days away and the fridge is empty.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Today would have been our fortieth wedding anniversary; Henrik died two years ago.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "I walked out on my husband last night.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "My nephew Dario has his first day at school tomorrow.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm worn thin and need a break from everyone.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Keep the porch light on until eleven.",
+"classes": []
+},
+{
+"text": "My psoriasis is flaring since the stress at work.",
+"classes": [
+"health"
+]
+},
+{
+"text": "I'm declaring bankruptcy.",
+"classes": [
+"money"
+]
+},
+{
+"text": "The pet crematorium called about Daisy's ashes.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "The siblings are fighting about who gets the house.",
+"classes": [
+"family_conflict",
+"other_member"
+]
+},
+{
+"text": "Ola is moving in with her boyfriend.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm hopeful but scared to hope.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "File the receipts in the blue folder.",
+"classes": []
+},
+{
+"text": "I get panic attacks in crowds and I'm on a waiting list for CBT.",
+"classes": [
+"health",
+"affect"
+]
+},
+{
+"text": "A bailiff knocked while I was out.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Four years since the stillbirth and we still remember the date.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "My parents' marriage is falling apart.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Darnell has been promoted to manager.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Ashamed to admit I struggle with this.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Add paint rollers to the hardware list.",
+"classes": []
+},
+{
+"text": "The debt collector character in that series is hilarious.",
+"classes": []
+},
+{
+"text": "I need to refill my inhaler.",
+"classes": [
+"health"
+]
+},
+{
+"text": "I lost my job when the company folded.",
+"classes": [
+"money"
+]
+},
+{
+"text": "I attended the celebration of life for my old teacher.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Gran isn't talking to Mum since the funeral.",
+"classes": [
+"family_conflict",
+"other_member"
+]
+},
+{
+"text": "Our babysitter Katya is going to university.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm sad and I don't know why.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "I prefer aisle seats on flights.",
+"classes": []
+},
+{
+"text": "The midwife says my baby is breech.",
+"classes": [
+"health"
+]
+},
+{
+"text": "My redundancy package was less than I'd hoped.",
+"classes": [
+"money"
+]
+},
+{
+"text": "He left us too soon.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "My partner and I keep having the same fight over chores.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Auntie Mei-ling is retiring from the shop.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I hate myself for snapping at the kids.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "I'll bank the cheque on the way to work.",
+"classes": []
+},
+{
+"text": "Rehab is going well, two months clean.",
+"classes": [
+"health"
+]
+},
+{
+"text": "I've got three credit cards at their limit and a store card as well.",
+"classes": [
+"money"
+]
+},
+{
+"text": "My sister Okoro lost her fight with cancer last month.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Family dinner turned into a screaming match.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Ulrich has a new girlfriend.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm restless and I can't switch off.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Mow the lawn on Saturday morning.",
+"classes": []
+},
+{
+"text": "My hearing is going and I'm embarrassed to ask people to repeat themselves.",
+"classes": [
+"health",
+"affect"
+]
+},
+{
+"text": "Our student debt is huge.",
+"classes": [
+"money"
+]
+},
+{
+"text": "We buried the dog under the apple tree.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "I'm the black sheep and they never include me.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Leilani wants to adopt a kitten.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I feel grateful and a bit emotional today.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Cry Me a River is a great jazz song.",
+"classes": []
+},
+{
+"text": "Nasty bout of food poisoning from the takeaway.",
+"classes": [
+"health"
+]
+},
+{
+"text": "We can't afford to travel for the wedding.",
+"classes": [
+"money"
+]
+},
+{
+"text": "We've been clearing out my late mother's flat.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "My son hasn't called since our row.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "My friend Tobias lost his keys again.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm irritated and tense all day.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "How do you say thank you in Swahili?",
+"classes": []
+},
+{
+"text": "The electricity meter is in the cupboard under the stairs.",
+"classes": []
+},
+{
+"text": "Took paracetamol and went to bed with a fever.",
+"classes": [
+"health"
+]
+},
+{
+"text": "I'm struggling with the cost of living at the moment; everything is up.",
+"classes": [
+"money"
+]
+},
+{
+"text": "I visit Tomas's grave every weekend.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "I can't stand my stepfather.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Alejandro will be in town next Thursday.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm apprehensive about the results.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "I'm going to swim laps before work.",
+"classes": []
+},
+{
+"text": "Kasia has a slipped disc and can't lift anything.",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "Zodwa is on benefits after her accident and money is tight.",
+"classes": [
+"money",
+"other_member"
+]
+},
+{
+"text": "Orphaned at twenty.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "My brothers have fallen out over Dad's care.",
+"classes": [
+"family_conflict",
+"other_member"
+]
+},
+{
+"text": "Dad is taking up fishing.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I feel utterly defeated.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Mood lighting for the party please.",
+"classes": []
+},
+{
+"text": "Sinus infection again, third this winter.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Insurance refused to pay out, so we're out of pocket.",
+"classes": [
+"money"
+]
+},
+{
+"text": "She died holding my hand.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "My wife wants a trial separation.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Noor passed her citizenship test.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm worried I'm a bad parent.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Reorder printer paper.",
+"classes": []
+},
+{
+"text": "My cardiologist wants a stress test.",
+"classes": [
+"health"
+]
+},
+{
+"text": "The prepayment meter has run out and I'm out of credit.",
+"classes": [
+"money"
+]
+},
+{
+"text": "I wore black to the funeral and cried all through it.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Aunt Beatriz and I aren't speaking after what she said at the party.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Brigid's first book comes out in November.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I feel trapped.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "My phone's battery health is at eighty percent.",
+"classes": []
+},
+{
+"text": "They found a heart murmur in Ethan's check-up.",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "My partner's income stopped when she left the firm.",
+"classes": [
+"money"
+]
+},
+{
+"text": "I say a prayer for Papa each evening since he left us.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Dad barged into my flat and we had a shouting match.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "My son's teacher Mr Haddad is leaving at Christmas.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm so excited I can barely sit still!",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Heartbreak Hotel is on the playlist.",
+"classes": []
+},
+{
+"text": "The hygienist says I have gum disease.",
+"classes": [
+"health"
+]
+},
+{
+"text": "I dipped into the emergency fund again.",
+"classes": [
+"money"
+]
+},
+{
+"text": "It's the date Jin passed away, so I'm a bit down.",
+"classes": [
+"grief",
+"affect"
+]
+},
+{
+"text": "Have been sleeping on the sofa since the argument with my partner.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Tanvir is training to become an electrician.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm consumed by regret.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "The vet appointment for the dog is at four.",
+"classes": []
+},
+{
+"text": "Can't keep up with the car payments.",
+"classes": [
+"money"
+]
+},
+{
+"text": "The mass card for Mrs Costa is on the mantel.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Khadija is planning a surprise party for her husband.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Dreading going back to work after the break.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "The staff handbook is on the shared drive.",
+"classes": []
+},
+{
+"text": "We have the memorial garden dedication on the 5th.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "The widow's walk on the old house is the top balcony.",
+"classes": []
+},
+{
+"text": "The cat is on a diet; measure out half a cup of kibble.",
+"classes": []
+},
+{
+"text": "My brother is bringing the barbecue tongs.",
+"classes": []
+},
+{
+"text": "Cousin Vinny is a great movie.",
+"classes": []
+},
+{
+"text": "Put my wedding photos on the digital frame.",
+"classes": []
+},
+{
+"text": "The pharmacy closes at six on Sundays.",
+"classes": []
+},
+{
+"text": "Hospital-green paint is on sale at the hardware shop.",
+"classes": []
+},
+{
+"text": "Mortgage amortisation is covered in chapter three of my maths textbook.",
+"classes": []
+},
+{
+"text": "The fire engine toy is in the toy box.",
+"classes": []
+},
+{
+"text": "Turn on the porch speakers for the party.",
+"classes": []
+},
+{
+"text": "The bakery returned the cake stand we lent them.",
+"classes": []
+},
+{
+"text": "Reminder: the passport photo booth takes coins only.",
+"classes": []
+},
+{
+"text": "The old cemetery gate scene is where they filmed the music video.",
+"classes": []
+},
+{
+"text": "Is it going to rain tomorrow?",
+"classes": []
+},
+{
+"text": "My lunch break is from one to two.",
+"classes": []
+},
+{
+"text": "Save my parking spot number.",
+"classes": []
+},
+{
+"text": "The spare bulbs are in the cupboard under the stairs.",
+"classes": []
+},
+{
+"text": "Start the robot vacuum at ten.",
+"classes": []
+},
+{
+"text": "Which bus goes to the stadium?",
+"classes": []
+},
+{
+"text": "I'd like to read before bed tonight.",
+"classes": []
+},
+{
+"text": "Put the oven timer on for twenty-five minutes.",
+"classes": []
+},
+{
+"text": "My hobby is birdwatching.",
+"classes": []
+},
+{
+"text": "Check if the library has the new thriller.",
+"classes": []
+},
+{
+"text": "Stitches in my thumb need a fresh dressing every second day.",
+"classes": [
+"health"
+]
+},
+{
+"text": "I can't cover this month's phone bill, never mind the broadband.",
+"classes": [
+"money"
+]
+},
+{
+"text": "I'm meeting a client at the cafe at three.",
+"classes": []
+},
+{
+"text": "My brother and I got into a screaming match at Dad's birthday and haven't made up.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Play a podcast about space.",
+"classes": []
+},
+{
+"text": "Fold the laundry in the afternoon.",
+"classes": []
+},
+{
+"text": "The guest room needs fresh sheets.",
+"classes": []
+},
+{
+"text": "um so i went to the doctor yesterday and she says its my thyroid",
+"classes": [
+"health"
+]
+},
+{
+"text": "um so i want a vegetable curry tonight with the leftover rice",
+"classes": []
+},
+{
+"text": "the bailiffs came round again",
+"classes": [
+"money"
+]
+},
+{
+"text": "she's not herself since the funeral",
+"classes": [
+"grief",
+"other_member"
+]
+},
+{
+"text": "put on the film Four Weddings and a Funeral tonight",
+"classes": []
+},
+{
+"text": "we're taking some space",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "i feel so overwhelmed at work i could just cry in the car park",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Chidi is moving to Lagos in the spring for a new job",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "User: lower back pain, physio twice weekly",
+"classes": [
+"health"
+]
+},
+{
+"text": "User: prefers oat milk in coffee",
+"classes": []
+},
+{
+"text": "um so we are two months behind on the rent and the landlord is getting funny about it",
+"classes": [
+"money"
+]
+},
+{
+"text": "Dad's anniversary is on the ninth, third year",
+"classes": [
+"grief"
+]
+},
+{
+"text": "I'm dying to see that new film",
+"classes": []
+},
+{
+"text": "me and my brother haven't spoken since christmas",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Dreading the family party on Saturday, honestly sick with nerves",
+"classes": [
+"affect"
+]
+},
+{
+"text": "remind me to take my tablets at eight",
+"classes": [
+"health"
+]
+},
+{
+"text": "User: credit card debt, paying minimums only",
+"classes": [
+"money"
+]
+},
+{
+"text": "can you not play that song, it was Dad's",
+"classes": [
+"grief"
+]
+},
+{
+"text": "play 'Sad Song' by the Foxglove Band",
+"classes": []
+},
+{
+"text": "User: sister, divorce proceedings, avoids topic",
+"classes": [
+"family_conflict",
+"other_member"
+]
+},
+{
+"text": "User: reports feeling lonely most evenings",
+"classes": [
+"affect"
+]
+},
+{
+"text": "my colleague Sakura got promoted to team lead",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "ive not slept properly in like three weeks man",
+"classes": [
+"health"
+]
+},
+{
+"text": "turn off the living room lights please",
+"classes": []
+},
+{
+"text": "they let me go on friday, redundancy pay is basically nothing",
+"classes": [
+"money"
+]
+},
+{
+"text": "our dog Biscuit passed away last night, vet said it was peaceful",
+"classes": [
+"grief"
+]
+},
+{
+"text": "the book I'm reading is called The Lonely Lighthouse",
+"classes": []
+},
+{
+"text": "um my husband walked out on tuesday and took the kids' bikes",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "ive been feeling kinda hopeless lately like nothing changes",
+"classes": [
+"affect"
+]
+},
+{
+"text": "The dentist say I must pull out two tooth next week",
+"classes": [
+"health"
+]
+},
+{
+"text": "Schedule: 7:00 gym, 12:30 lunch with team, 18:00 collect parcels",
+"classes": []
+},
+{
+"text": "I cannot pay the electric this month, they sent a final notice",
+"classes": [
+"money"
+]
+},
+{
+"text": "i keep reaching for the phone to ring nan and then remember",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Doctor Who is on at seven, record it",
+"classes": []
+},
+{
+"text": "my mother-in-law criticises everything i cook, i am done",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I am very embarrassed because I forgot his name again at the meeting",
+"classes": [
+"affect"
+]
+},
+{
+"text": "book me in for the blood test on thursday morning",
+"classes": [
+"health"
+]
+},
+{
+"text": "i like the heating at twenty one degrees",
+"classes": []
+},
+{
+"text": "Don't read out my pay slip when Eli's in the room",
+"classes": [
+"money"
+]
+},
+{
+"text": "User: husband died 2024, anniversary in November, sensitive",
+"classes": [
+"grief"
+]
+},
+{
+"text": "my character in the game is a nurse who heals the party",
+"classes": []
+},
+{
+"text": "mom and dad are fighting again so I'm staying at Jaylen's",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "burnt out, completely, don't want to look at another email",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Tell me when Oskar's flight lands, he's coming for the weekend",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "my inhaler is nearly empty can you add it to the shopping list",
+"classes": [
+"health"
+]
+},
+{
+"text": "What's the weather like for the barbecue on Sunday",
+"classes": []
+},
+{
+"text": "bruh im so broke i had to skip the school trip",
+"classes": [
+"money"
+]
+},
+{
+"text": "the nurse in that series is hilarious, Nurse Fiona",
+"classes": []
+},
+{
+"text": "custody hearing is on the fourteenth, i need to find the papers",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I get anxious every time the phone rings and I don't know why",
+"classes": [
+"affect"
+]
+},
+{
+"text": "I got stitches in my hand from the bread knife, it is healing slow but ok",
+"classes": [
+"health"
+]
+},
+{
+"text": "me and ma love going to the market on saturday morning, tomatoes are cheap",
+"classes": []
+},
+{
+"text": "I owe the tax office a big sum and I am waiting to arrange a payment plan",
+"classes": [
+"money"
+]
+},
+{
+"text": "um so the funeral is saturday at two and i have no black shoes",
+"classes": [
+"grief"
+]
+},
+{
+"text": "we are going to Hargreaves Park on Sunday for a picnic",
+"classes": []
+},
+{
+"text": "We had a massive row and she slammed the door",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I am feeling much alone in this new city, nobody to talk",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Schedule: 9:30 eye clinic, 11:00 pharmacy pickup",
+"classes": [
+"health"
+]
+},
+{
+"text": "the mortgage went up and we're struggling to cover it each month",
+"classes": [
+"money"
+]
+},
+{
+"text": "My grandfather he is dead since spring and I am still missing him very much",
+"classes": [
+"grief"
+]
+},
+{
+"text": "tax-free weekend at the electronics shop, anything I should look for",
+"classes": []
+},
+{
+"text": "don't mention my ex-wife's name in front of the kids",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "so um yeah i guess im just really ashamed of how i spoke to the kids",
+"classes": [
+"affect"
+]
+},
+{
+"text": "lowkey my migraines are back and the screen light makes it worse",
+"classes": [
+"health"
+]
+},
+{
+"text": "buy: eggs, flour, basil, lightbulbs",
+"classes": []
+},
+{
+"text": "Savings down to almost nothing after the car repair",
+"classes": [
+"money"
+]
+},
+{
+"text": "lighting a candle for Gran tonight, she'd have been ninety",
+"classes": [
+"grief"
+]
+},
+{
+"text": "the council tax bill comes out on the first, direct debit already set up",
+"classes": []
+},
+{
+"text": "Mehmet and his father haven't talked in years over the inheritance",
+"classes": [
+"family_conflict",
+"other_member"
+]
+},
+{
+"text": "Im stressed to the max about the exam, my head is going round",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Amara's daughter just started at the swimming club",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I am allergic to shellfish so please never suggest prawns",
+"classes": [
+"health"
+]
+},
+{
+"text": "play some jazz while I cook",
+"classes": []
+},
+{
+"text": "my salary is 'bout the same as last year, they said no raise",
+"classes": [
+"money"
+]
+},
+{
+"text": "mum's ashes are still in the hall cupboard, can't decide where",
+"classes": [
+"grief"
+]
+},
+{
+"text": "electricity bill is due on the 20th, just a reminder",
+"classes": []
+},
+{
+"text": "My husband and I sleeping in different rooms now, we not talking much",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "feeling a bit flat today, can't put my finger on it",
+"classes": [
+"affect"
+]
+},
+{
+"text": "so we did the scan and the baby is the right size and im twelve weeks now and i feel sick every morning",
+"classes": [
+"health"
+]
+},
+{
+"text": "I wake up at six on weekdays and seven at the weekend",
+"classes": []
+},
+{
+"text": "pay day loan took half my wages again",
+"classes": [
+"money"
+]
+},
+{
+"text": "the memorial service is next week, remind me to pick up the flowers",
+"classes": [
+"grief"
+]
+},
+{
+"text": "I'm so dead after that spin class, kidding, it was fun",
+"classes": []
+},
+{
+"text": "bro my parents are splitting up and nobody will tell me anything",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "honestly I'm terrified about the presentation tomorrow",
+"classes": [
+"affect"
+]
+},
+{
+"text": "my GP wants me on the new blood pressure pills",
+"classes": [
+"health"
+]
+},
+{
+"text": "the wifi password for guests is on the fridge",
+"classes": []
+},
+{
+"text": "Can you not read out the bank balance, thanks",
+"classes": [
+"money"
+]
+},
+{
+"text": "Tomás's brother died last month and he hasn't been to work since",
+"classes": [
+"grief",
+"other_member"
+]
+},
+{
+"text": "that joke killed me",
+"classes": []
+},
+{
+"text": "my aunt and my mum aren't speaking so i have to go to the wedding alone",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "i feel like a failure tbh",
+"classes": [
+"affect"
+]
+},
+{
+"text": "my neighbour Mr Delgado is building a shed next to the fence",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I start therapy on Monday, first session with the counsellor",
+"classes": [
+"health"
+]
+},
+{
+"text": "Remind me to water the ferns on Wednesdays",
+"classes": []
+},
+{
+"text": "I lost my job in march and my english is not so good so I find nothing",
+"classes": [
+"money"
+]
+},
+{
+"text": "my best mate passed in the summer and the group chat just went quiet",
+"classes": [
+"grief"
+]
+},
+{
+"text": "In the soap, Rosa and Carlo are splitting up again, such drama",
+"classes": []
+},
+{
+"text": "Daniela's moved back to her parents' after the fight with Rui",
+"classes": [
+"family_conflict",
+"other_member"
+]
+},
+{
+"text": "Remind me that I'm allowed to rest, I'm exhausted from caring about everything",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Kofi's chemo starts next week so I'm driving him on Tuesdays",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "we is going to cinema on friday, maybe the new space one",
+"classes": []
+},
+{
+"text": "put the council tax reminder on the list, we're already behind",
+"classes": [
+"money"
+]
+},
+{
+"text": "Mrs Oyelaran next door lost her husband, I'm taking her a casserole",
+"classes": [
+"grief",
+"other_member"
+]
+},
+{
+"text": "The Hospital Diaries is a great podcast, queue the new episode",
+"classes": []
+},
+{
+"text": "I've asked for a divorce and he's moved into his brother's",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "i'm really on edge since this morning, jumpy at every noise",
+"classes": [
+"affect"
+]
+},
+{
+"text": "my mum had her hip op and shes still on the ward",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "so basically i want to repaint the hallway a pale green and also put up shelves and then maybe get a new rug",
+"classes": []
+},
+{
+"text": "Farid's shop is going under and he can't pay the suppliers",
+"classes": [
+"money",
+"other_member"
+]
+},
+{
+"text": "it's been a year since we buried grandad",
+"classes": [
+"grief"
+]
+},
+{
+"text": "play the song 'Mortgage Blues' by The Dusty Roads",
+"classes": []
+},
+{
+"text": "Add: call the solicitor about the separation agreement",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "i feel scared of being on my own in the house tonight",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Anika has been getting dizzy spells and they're booking her for tests",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "User plays cello, practises evenings",
+"classes": []
+},
+{
+"text": "my sister got laid off and is borrowing from our dad to cover her rent",
+"classes": [
+"money",
+"other_member"
+]
+},
+{
+"text": "my cat Pepper had to be put to sleep this morning",
+"classes": [
+"grief"
+]
+},
+{
+"text": "I'm so sick of this rain, when does it stop",
+"classes": []
+},
+{
+"text": "i dont go to sundays at my in-laws anymore after what her mum said",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "feeling guilty that I didn't call back, it's eating me",
+"classes": [
+"affect"
+]
+},
+{
+"text": "the little one has an ear infection again, antibiotics three times a day",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "dim the kitchen lights to forty percent",
+"classes": []
+},
+{
+"text": "Lucía told me in confidence her wage hasn't been paid in two months",
+"classes": [
+"money",
+"other_member"
+]
+},
+{
+"text": "I had a miscarriage in the spring, we don't talk about it much",
+"classes": [
+"grief"
+]
+},
+{
+"text": "that chilli is to die for, put it on the recipe list",
+"classes": []
+},
+{
+"text": "dont tell my dad where i live, we're not in contact",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "i worry all night about whether I am a good mother",
+"classes": [
+"affect"
+]
+},
+{
+"text": "can you set an alarm for my insulin",
+"classes": [
+"health"
+]
+},
+{
+"text": "yo what time does the bakery open",
+"classes": []
+},
+{
+"text": "the neighbours had a notice on the door, think they're being evicted",
+"classes": [
+"money",
+"other_member"
+]
+},
+{
+"text": "Don't ask Priya about her dad, he died in January",
+"classes": [
+"grief",
+"other_member"
+]
+},
+{
+"text": "Dr Mendez's Pizza on the corner is open late",
+"classes": []
+},
+{
+"text": "Kids are caught in the middle, their mum and I can't even do handovers without shouting",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "jealous of everyone's holidays on insta ngl",
+"classes": [
+"affect"
+]
+},
+{
+"text": "after the operation i couldnt lift anything for six weeks",
+"classes": [
+"health"
+]
+},
+{
+"text": "I usually take the 8:15 bus into town",
+"classes": []
+},
+{
+"text": "We're skipping the holiday this year because the money just isn't there",
+"classes": [
+"money"
+]
+},
+{
+"text": "i dreamt about my sister who passed, woke up crying",
+"classes": [
+"grief"
+]
+},
+{
+"text": "what time does the bank open on Saturday",
+"classes": []
+},
+{
+"text": "my son has stopped answering my calls since the argument about his girlfriend",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Hassan is learning to drive, his test is in June",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Ive got a splitting headache every afternoon this week and paracetamol isnt touching it",
+"classes": [
+"health"
+]
+},
+{
+"text": "so um the car insurance renewal is in march, it's on the calendar",
+"classes": []
+},
+{
+"text": "play my cooking playlist in the kitchen",
+"classes": []
+},
+{
+"text": "Tuesday: parents evening 6pm, swimming 4pm",
+"classes": []
+},
+{
+"text": "the lead character in the show loses her job and goes broke, so good",
+"classes": []
+},
+{
+"text": "I'm dying of laughter at this meme",
+"classes": []
+},
+{
+"text": "we are planning a trip to the mountains in august",
+"classes": []
+},
+{
+"text": "this queue is murder, I've been waiting forever",
+"classes": []
+},
+{
+"text": "Add oat biscuits to the pantry list",
+"classes": []
+},
+{
+"text": "can you read me the recipe for flatbreads",
+"classes": []
+},
+{
+"text": "put the kettle on at half past six",
+"classes": []
+},
+{
+"text": "Pt: User, asthma, uses blue inhaler before runs",
+"classes": [
+"health"
+]
+},
+{
+"text": "User: vegetarian, dislikes coriander",
+"classes": []
+},
+{
+"text": "Notes: rent arrears, 2 months; landlord letter pending",
+"classes": [
+"money"
+]
+},
+{
+"text": "Pet: Mango the rabbit died in august",
+"classes": [
+"grief"
+]
+},
+{
+"text": "play 'Lonely Boy' by Cedar Lane",
+"classes": []
+},
+{
+"text": "Notes: son and daughter-in-law estranged from user since the wedding",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Notes: user expressing persistent loneliness, esp. weekends",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Nikos is thinking of opening a bike repair shop",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Please remind me every evening to take the little white pill for my blood pressure",
+"classes": [
+"health"
+]
+},
+{
+"text": "put on the radio, something upbeat",
+"classes": []
+},
+{
+"text": "i am being chased by a debt collector and i dont open the door",
+"classes": [
+"money"
+]
+},
+{
+"text": "tomorrow is the day we lost Anton, light the candle at six",
+"classes": [
+"grief"
+]
+},
+{
+"text": "The new series about a night nurse, Nurse Delphine, is so good",
+"classes": []
+},
+{
+"text": "my parents' marriage is over, mum threw dad's stuff on the lawn",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "i feel like i am invisible in this house",
+"classes": [
+"affect"
+]
+},
+{
+"text": "i think i might have broken my toe on the sofa leg, it has gone purple",
+"classes": [
+"health"
+]
+},
+{
+"text": "what's on the calendar for tomorrow",
+"classes": []
+},
+{
+"text": "my pay is going down because they cut my hours to twenty a week",
+"classes": [
+"money"
+]
+},
+{
+"text": "since mum went, the house is too quiet",
+"classes": [
+"grief"
+]
+},
+{
+"text": "I'm gonna die if I don't get a coffee",
+"classes": []
+},
+{
+"text": "the in-laws are staying at christmas and it is going to be war",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "my stomach's in knots about Monday, I can't stop thinking about it",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Kasia's new flat has a balcony and she's throwing a housewarming",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Next Wednesday 14:00 dermatology, bring referral letter",
+"classes": [
+"health"
+]
+},
+{
+"text": "Mon: bins out. Wed: library return. Fri: pizza night",
+"classes": []
+},
+{
+"text": "Dont say my salary out loud ok, the kids dont know",
+"classes": [
+"money"
+]
+},
+{
+"text": "Funeral Thursday 11am, wear dark colours, order lilies",
+"classes": [
+"grief"
+]
+},
+{
+"text": "the book club picked 'The Funeral Singer' for November",
+"classes": []
+},
+{
+"text": "We separated in the summer, I still wear the ring out of habit",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "So I'm kind of ashamed, i lied to my boss about being late",
+"classes": [
+"affect"
+]
+},
+{
+"text": "I have the diabetes since I am twelve years, so I check sugar before eating",
+"classes": [
+"health"
+]
+},
+{
+"text": "i wanna paint my room navy and get a bigger desk",
+"classes": []
+},
+{
+"text": "I took a loan from my cousin to cover the car and now I cannot return him",
+"classes": [
+"money"
+]
+},
+{
+"text": "my husband died two years ago come Sunday",
+"classes": [
+"grief"
+]
+},
+{
+"text": "let's meet at the Doctor's Arms pub on Friday",
+"classes": []
+},
+{
+"text": "my brother and I are not on speaking terms, he didn't come to mom's party",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "ugh im so over it all, just numb",
+"classes": [
+"affect"
+]
+},
+{
+"text": "colleague Tariq is on holiday till the 20th so email Ines instead",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "so um the doctors found a lump and theyre doing a biopsy on monday",
+"classes": [
+"health"
+]
+},
+{
+"text": "how many cups are in a litre",
+"classes": []
+},
+{
+"text": "the bank rang again about the overdraft",
+"classes": [
+"money"
+]
+},
+{
+"text": "uncle Vusi passed away at the weekend and i have to arrange the travel for the burial",
+"classes": [
+"grief",
+"other_member"
+]
+},
+{
+"text": "tax-free weekend starts Friday at the outdoor store, need a tent",
+"classes": []
+},
+{
+"text": "Papa and my uncle had big fight, now nobody go to the family dinner",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Is it normal to feel this panicky before a flight? I'm shaking",
+"classes": [
+"affect"
+]
+},
+{
+"text": "the physio says no running for six weeks after my ankle",
+"classes": [
+"health"
+]
+},
+{
+"text": "can u order more dishwasher tablets",
+"classes": []
+},
+{
+"text": "Im broke till payday fr, can't even get the bus",
+"classes": [
+"money"
+]
+},
+{
+"text": "pls skip the birthday message for Dad this year hes gone",
+"classes": [
+"grief"
+]
+},
+{
+"text": "water bill is due on the fifth, standard direct debit",
+"classes": []
+},
+{
+"text": "mediator meeting for the parenting plan Friday 3pm",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I feel I am not good in anything, always behind others",
+"classes": [
+"affect"
+]
+},
+{
+"text": "my back has been proper killing me, been on the ibuprofen all week",
+"classes": [
+"health"
+]
+},
+{
+"text": "I go cycling along the river most Sundays",
+"classes": []
+},
+{
+"text": "we remortgaged and the new payments are killing us",
+"classes": [
+"money"
+]
+},
+{
+"text": "I lost my first baby, stillborn, nobody knows",
+"classes": [
+"grief"
+]
+},
+{
+"text": "my game avatar just died for the tenth time",
+"classes": []
+},
+{
+"text": "he's been sleeping at his mate's since the barney on sunday",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "sooo anxious bout the interview i cant even eat",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Ravi's team won the quiz night, he's chuffed",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "i keep waking at three every night and cant get back to sleep",
+"classes": [
+"health"
+]
+},
+{
+"text": "lock the front door at ten every night",
+"classes": []
+},
+{
+"text": "taxman sent a letter, I filed late and there's a penalty",
+"classes": [
+"money"
+]
+},
+{
+"text": "The anniversary of Gran's death, I'll visit the grave with tulips",
+"classes": [
+"grief"
+]
+},
+{
+"text": "that exam killed me, in a good way, it was easy",
+"classes": []
+},
+{
+"text": "my stepdad and I clash all the time and i'm moving out to avoid him",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "burnt right out. Nothing left to give anyone",
+"classes": [
+"affect"
+]
+},
+{
+"text": "mate i got a cavity and the dentist wants to drill friday",
+"classes": [
+"health"
+]
+},
+{
+"text": "Name of the cat is Pickle, she sleeps on the sofa arm",
+"classes": []
+},
+{
+"text": "Remind me to ring the energy company about the bill I can't cover",
+"classes": [
+"money"
+]
+},
+{
+"text": "i miss my brother so much, since the accident he is not here",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Saint Marguerite Street is where the bakery is",
+"classes": []
+},
+{
+"text": "can you not text my ex, i am blocked from seeing the girls except weekends",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I'm green with envy over her new kitchen",
+"classes": [
+"affect"
+]
+},
+{
+"text": "User: coeliac, avoid gluten",
+"classes": [
+"health"
+]
+},
+{
+"text": "set volume to thirty percent",
+"classes": []
+},
+{
+"text": "the factory closed and I get no more wages after November",
+"classes": [
+"money"
+]
+},
+{
+"text": "my dog of fifteen years had to be put down on friday",
+"classes": [
+"grief"
+]
+},
+{
+"text": "My character in the story game gets divorced halfway through",
+"classes": []
+},
+{
+"text": "My sister cut me out of the group chat after the argument about the will",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "i just feel really low and cant tell anyone",
+"classes": [
+"affect"
+]
+},
+{
+"text": "my friend Elin switched to nights at the bakery",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "don't offer me peanuts, I swell up",
+"classes": [
+"health"
+]
+},
+{
+"text": "tell me a fun fact about octopuses",
+"classes": []
+},
+{
+"text": "We have almost nothing in savings if the boiler goes",
+"classes": [
+"money"
+]
+},
+{
+"text": "i havent touched her side of the wardrobe since she went",
+"classes": [
+"grief"
+]
+},
+{
+"text": "I'm so sick of this song, skip it",
+"classes": []
+},
+{
+"text": "I said some awful things to my wife and she took the baby to her mother's",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "dreading the speech I have to give at the retirement do",
+"classes": [
+"affect"
+]
+},
+{
+"text": "got my vaccination booster tomorrow arvo",
+"classes": [
+"health"
+]
+},
+{
+"text": "the washing machine finished, I think, can you check",
+"classes": []
+},
+{
+"text": "can you not tell guests how much the extension cost us, we are in over our heads",
+"classes": [
+"money"
+]
+},
+{
+"text": "after the wake we all sat up till dawn telling stories about him",
+"classes": [
+"grief"
+]
+},
+{
+"text": "put the film 'Sad Little Robot' on for the kids",
+"classes": []
+},
+{
+"text": "my teen daughter hasn't said a word to me since I read her messages",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I feel so awkward at these parties, everyone knows each other except me",
+"classes": [
+"affect"
+]
+},
+{
+"text": "doctor said my cholesterol is high so no more cheese for me",
+"classes": [
+"health"
+]
+},
+{
+"text": "Shopping list: tomatoes, rice, soap, batteries, oranges",
+"classes": []
+},
+{
+"text": "my payslip came in lower than agreed and nobody at work will explain",
+"classes": [
+"money"
+]
+},
+{
+"text": "Can you take the wedding photo of Ayse and her late husband off the slideshow",
+"classes": [
+"grief",
+"other_member"
+]
+},
+{
+"text": "In the show the dad loses everything and they lose the house, I cried at the finale lol",
+"classes": []
+},
+{
+"text": "she wants a divorce and I'm trying to keep it from the kids",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I'm overwhelmed. Too many things, no hands",
+"classes": [
+"affect"
+]
+},
+{
+"text": "I have started antidepressants two weeks ago and the first days I feel strange",
+"classes": [
+"health"
+]
+},
+{
+"text": "Im learning guitar since two months, I play only three chords",
+"classes": []
+},
+{
+"text": "they repossessed the van last week",
+"classes": [
+"money"
+]
+},
+{
+"text": "Colleague Jun lost his mum last week, I sent a card",
+"classes": [
+"grief",
+"other_member"
+]
+},
+{
+"text": "the soap's villain faked his own death again",
+"classes": []
+},
+{
+"text": "my father in law will not sit at the same table as me",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Please be gentle today, I'm feeling very fragile",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Baba's knee replacement is thursday so I'm taking the day off to sit with him",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "um i want to book a table for four on saturday at the noodle place",
+"classes": []
+},
+{
+"text": "I got a final demand for the gas and I put it in the drawer",
+"classes": [
+"money"
+]
+},
+{
+"text": "this will be our first christmas without her",
+"classes": [
+"grief"
+]
+},
+{
+"text": "I'm hopeless at this, I want to throw the laptop",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Dr. Okonkwo is the villain in the novel I'm reading, what a piece of work",
+"classes": []
+},
+{
+"text": "Aisha and her mum have fallen out, so Aisha is staying with us",
+"classes": [
+"family_conflict",
+"other_member"
+]
+},
+{
+"text": "my husband has been coughing for a month and the GP is sending him for an x-ray",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "User's morning routine: coffee, stretch, news, shower",
+"classes": []
+},
+{
+"text": "Adaeze's husband lost his job and they're behind on the mortgage",
+"classes": [
+"money",
+"other_member"
+]
+},
+{
+"text": "the cemetery visit is on Sunday, bring the folding stool",
+"classes": [
+"grief"
+]
+},
+{
+"text": "How do I make a hospital corner on a bed",
+"classes": []
+},
+{
+"text": "Tom's moved out, his wife changed the locks",
+"classes": [
+"family_conflict",
+"other_member"
+]
+},
+{
+"text": "no one would notice if i didnt show up, honestly",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Ngozi's baby came early and is in the special care unit",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "wake me at 6:45 tomorrow",
+"classes": []
+},
+{
+"text": "my brother keeps asking me for money to cover his debts",
+"classes": [
+"money",
+"other_member"
+]
+},
+{
+"text": "Remember, Dad's memorial bench gets its plaque in the autumn",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Read me the business headlines",
+"classes": []
+},
+{
+"text": "my cousins are fighting over their grandfather's farm, it split the whole family",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I feel so restless and trapped like I'm stuck in a loop",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Dev's hearing test results are back, he needs aids",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "the garden needs mowing before it rains",
+"classes": []
+},
+{
+"text": "Stavros told me the restaurant can't make payroll this month",
+"classes": [
+"money",
+"other_member"
+]
+},
+{
+"text": "my childhood friend died of an overdose and i still dont know how to think about it",
+"classes": [
+"grief"
+]
+},
+{
+"text": "mortgage statement came in the post, same as every year, filing it",
+"classes": []
+},
+{
+"text": "we agreed to a trial separation, I'm in the spare room",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "terrified I'll mess up the surprise party plans",
+"classes": [
+"affect"
+]
+},
+{
+"text": "I'm six months pregnant, due in the new year",
+"classes": [
+"health"
+]
+},
+{
+"text": "can you convert 200 grams to ounces",
+"classes": []
+},
+{
+"text": "my friend Yui is on benefits now after her redundancy",
+"classes": [
+"money",
+"other_member"
+]
+},
+{
+"text": "Lakshmi's grandmother died on Monday, the family is in mourning",
+"classes": [
+"grief",
+"other_member"
+]
+},
+{
+"text": "my phone's battery is dying, plug it in",
+"classes": []
+},
+{
+"text": "tell the school the pickup is now only by me, their dad and I are splitting",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "worry worry worry all day, I can't switch off",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Sunday roast at 2, potatoes first",
+"classes": []
+},
+{
+"text": "Grandma Hye-jin is visiting from the coast in May",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "i usually have porridge with banana for breakfast",
+"classes": []
+},
+{
+"text": "Turn the oven to 180",
+"classes": []
+},
+{
+"text": "Please play the same playlist as yesterday",
+"classes": []
+},
+{
+"text": "Death Valley Dave is a podcast about hiking, subscribe me",
+"classes": []
+},
+{
+"text": "this heat is killing me, open a window",
+"classes": []
+},
+{
+"text": "what's a good name for a goldfish",
+"classes": []
+},
+{
+"text": "we is moving the sofa to the other wall, new look",
+"classes": []
+},
+{
+"text": "um yeah i was at the hospital all night with chest pains and its probably nothing but they want more tests",
+"classes": [
+"health"
+]
+},
+{
+"text": "um turn the fan on in the bedroom",
+"classes": []
+},
+{
+"text": "yeah so basically the car is gone, they took it cos we missed the payments",
+"classes": [
+"money"
+]
+},
+{
+"text": "its been three years since my daughter died, tomorrow I go to the grave",
+"classes": [
+"grief"
+]
+},
+{
+"text": "play the soundtrack from The Lonely Hearts Cafe",
+"classes": []
+},
+{
+"text": "um so me and my wife we had a proper blow up and now she's gone to her sisters",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "i feel so small today, like nobody sees me",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Birgit is training for a half marathon in the autumn",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "can you not schedule anything the morning after my colonoscopy",
+"classes": [
+"health"
+]
+},
+{
+"text": "Saturday: farmers market 9, haircut 11, football 3",
+"classes": []
+},
+{
+"text": "I can't afford the school uniform this term",
+"classes": [
+"money"
+]
+},
+{
+"text": "can't watch that programme, we used to watch it with grandad",
+"classes": [
+"grief"
+]
+},
+{
+"text": "I'm dying to try the new ice cream place",
+"classes": []
+},
+{
+"text": "Dad remarried and my brother won't come to the house, big feud",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I'm exhausted by pretending to be okay",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Pills: 8am white, 8pm pink - ping me",
+"classes": [
+"health"
+]
+},
+{
+"text": "i like my tea strong with a splash of milk",
+"classes": []
+},
+{
+"text": "the landlord put the rent up and we literally cannot pay it",
+"classes": [
+"money"
+]
+},
+{
+"text": "um the vicar rang about the burial plot for my wife",
+"classes": [
+"grief"
+]
+},
+{
+"text": "my favourite character in the series is Dr. Priya Raman, she's the best",
+"classes": []
+},
+{
+"text": "Don't invite my father to the christening, long story, we don't talk",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "uh i just feel kinda empty, no reason",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Zainab's twins start school next week",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I got concussion in the match last Saturday and I am not meant to look at screens",
+"classes": [
+"health"
+]
+},
+{
+"text": "User: drives a blue hatchback, parks on the left",
+"classes": []
+},
+{
+"text": "User: bankrupt 2023, still paying the agreement",
+"classes": [
+"money"
+]
+},
+{
+"text": "My little one's goldfish died and she's been weeping all morning",
+"classes": [
+"grief",
+"other_member"
+]
+},
+{
+"text": "Pay the sewage bill, same date as last quarter",
+"classes": []
+},
+{
+"text": "The kids' lawyer call is Wednesday - custody mediation",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I'm so nervous about meeting her parents my hands are sweating",
+"classes": [
+"affect"
+]
+},
+{
+"text": "my daughter had an asthma attack in the night and we went to emergency",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "play something chill for studying",
+"classes": []
+},
+{
+"text": "got paid late again, third month running, and i'm skint",
+"classes": [
+"money"
+]
+},
+{
+"text": "I went through a stillbirth in the winter",
+"classes": [
+"grief"
+]
+},
+{
+"text": "tax-free shopping day at the mall, going with friends",
+"classes": []
+},
+{
+"text": "my daughter in law hates me i swear, everything i say gets twisted",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "feel like such a burden to everyone around me",
+"classes": [
+"affect"
+]
+},
+{
+"text": "oof my hay fever is rough today, eyes streaming",
+"classes": [
+"health"
+]
+},
+{
+"text": "okay so remind me to ring the plumber about the dripping tap",
+"classes": []
+},
+{
+"text": "ring the loan company about extending, I'm short",
+"classes": [
+"money"
+]
+},
+{
+"text": "Frankie's collar is still on the hook; he died in the spring",
+"classes": [
+"grief"
+]
+},
+{
+"text": "the character in the novel I'm reading loses her father, beautifully written",
+"classes": []
+},
+{
+"text": "He walked out after twenty years, left a note on the table",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Mood log: low, irritable, cried twice",
+"classes": [
+"affect"
+]
+},
+{
+"text": "My neighbour Mr Kowalczyk is away till Friday so I'm feeding his cat",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "this flu has me wiped out ten days now",
+"classes": [
+"health"
+]
+},
+{
+"text": "my fave takeaway is the Thai place on Elm Street",
+"classes": []
+},
+{
+"text": "my overdraft is maxed and I'm hiding it from my wife",
+"classes": [
+"money"
+]
+},
+{
+"text": "sorry-for-your-loss cards, I need to write ten for the funeral guests",
+"classes": [
+"grief"
+]
+},
+{
+"text": "I'll literally die if the bus is late again",
+"classes": []
+},
+{
+"text": "Mama and tia are not speaking again over the house, I'm in the middle",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I regret the way i snapped at the waiter, cringing about it all day",
+"classes": [
+"affect"
+]
+},
+{
+"text": "seeing the oncologist at ten, can you keep the morning clear",
+"classes": [
+"health"
+]
+},
+{
+"text": "How long to boil an egg for runny yolk",
+"classes": []
+},
+{
+"text": "my salary is very little and the rent very big, I count every coin",
+"classes": [
+"money"
+]
+},
+{
+"text": "Pa's chair stays empty at dinner now",
+"classes": [
+"grief"
+]
+},
+{
+"text": "This game boss has like a million hit points, he just won't die",
+"classes": []
+},
+{
+"text": "me and my boyfriend are on a break since the fight",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Honestly just so lonely since I moved here",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Paulo said he's changing careers into teaching",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "i got my cast off today but the wrist is still stiff and sore",
+"classes": [
+"health"
+]
+},
+{
+"text": "Mon-Fri 7:45 school run, 9:00 desk",
+"classes": []
+},
+{
+"text": "need to talk to the money adviser about my debts",
+"classes": [
+"money"
+]
+},
+{
+"text": "Wake is at the community hall, 7pm, bring a dish",
+"classes": [
+"grief"
+]
+},
+{
+"text": "play 'Rent Money Blues' by Willow Creek",
+"classes": []
+},
+{
+"text": "gonna move out cos my parents scream at each other every night",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I get this tight dread every sunday evening",
+"classes": [
+"affect"
+]
+},
+{
+"text": "nan's got dementia now and doesn't always know me",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "add dog food to the shopping list",
+"classes": []
+},
+{
+"text": "they cut off the water because we didn't pay",
+"classes": [
+"money"
+]
+},
+{
+"text": "woke up and for a second forgot he was dead",
+"classes": [
+"grief"
+]
+},
+{
+"text": "We watched a documentary about banks and debt, super interesting",
+"classes": []
+},
+{
+"text": "I'm filing for divorce Monday, haven't told my parents",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I'm just so tired of being strong",
+"classes": [
+"affect"
+]
+},
+{
+"text": "cant eat dairy cos my gut goes mental",
+"classes": [
+"health"
+]
+},
+{
+"text": "ive a meeting at three that i must remember to prepare slides for",
+"classes": []
+},
+{
+"text": "Due: tax inspector reply by the 30th, we owe back tax",
+"classes": [
+"money"
+]
+},
+{
+"text": "I still have my late wife's voicemails and can't delete them",
+"classes": [
+"grief"
+]
+},
+{
+"text": "I'm sick to death of Mondays lol",
+"classes": []
+},
+{
+"text": "my sisters and I are fighting about who pays for the family reunion and we stopped talking",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "feeling super insecure about my voice, I hate hearing myself",
+"classes": [
+"affect"
+]
+},
+{
+"text": "My uncle Rahim has a stall at the weekend market now",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "my sleep apnoea mask needs new filters",
+"classes": [
+"health"
+]
+},
+{
+"text": "yo set the alarm for 5 to catch the sunrise",
+"classes": []
+},
+{
+"text": "she asked what I earn and I just changed the subject",
+"classes": [
+"money"
+]
+},
+{
+"text": "The kids ask where grandma went, and I don't know how to say she died",
+"classes": [
+"grief"
+]
+},
+{
+"text": "gym membership renews on the first of the month, usual price",
+"classes": []
+},
+{
+"text": "he's been staying at his brother's since the shouting match",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I can't stop second guessing everything I said at dinner",
+"classes": [
+"affect"
+]
+},
+{
+"text": "reminder: ENT follow-up 3:15, bring the audiogram",
+"classes": [
+"health"
+]
+},
+{
+"text": "I was thinking of taking up pottery, anywhere nearby",
+"classes": []
+},
+{
+"text": "they made forty of us redundant and I'm one of them",
+"classes": [
+"money"
+]
+},
+{
+"text": "It would've been Danny's birthday on Sunday, twelve years gone now",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Heartbreak Hotel Karaoke night at the pub, put me down for a song",
+"classes": []
+},
+{
+"text": "tell my sister I'm not coming, we're not speaking",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "she got the promotion and I'm eaten up with jealousy",
+"classes": [
+"affect"
+]
+},
+{
+"text": "I was diagnosed with ADHD last month",
+"classes": [
+"health"
+]
+},
+{
+"text": "my phone is on silent, find it",
+"classes": []
+},
+{
+"text": "Pawned grandma's watch to cover the bill",
+"classes": [
+"money"
+]
+},
+{
+"text": "Please don't ask Bao about the car crash, her brother didn't survive",
+"classes": [
+"grief",
+"other_member"
+]
+},
+{
+"text": "the doctor figurine in the board game is missing",
+"classes": []
+},
+{
+"text": "Hana and her husband fighting again, she's thinking of leaving",
+"classes": [
+"family_conflict",
+"other_member"
+]
+},
+{
+"text": "please dont leave me alone with my thoughts tonight",
+"classes": [
+"affect"
+]
+},
+{
+"text": "found out im pregnant, only my husband knows",
+"classes": [
+"health"
+]
+},
+{
+"text": "Close the curtains in the lounge",
+"classes": []
+},
+{
+"text": "The mortgage lender is threatening to repossess the house",
+"classes": [
+"money"
+]
+},
+{
+"text": "my teacher passed away over the holidays, whole class is gutted",
+"classes": [
+"grief"
+]
+},
+{
+"text": "My phone is broken, the screen's cracked",
+"classes": []
+},
+{
+"text": "my teenage son slams the door every time I speak, we are at war",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Im having a spiral, everything seems pointless",
+"classes": [
+"affect"
+]
+},
+{
+"text": "my boss Wanjiru is off with a slipped disc",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "I prefer the window seat when we fly",
+"classes": []
+},
+{
+"text": "Joon is drowning in student loans and has stopped opening the bills",
+"classes": [
+"money",
+"other_member"
+]
+},
+{
+"text": "Going to scatter dad's ashes at the lake on Saturday",
+"classes": [
+"grief"
+]
+},
+{
+"text": "The haunted house book gave me the creeps",
+"classes": []
+},
+{
+"text": "I told her to leave and she took the dog and the kettle",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I'm scared I'll never be good enough",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Lars has to go in for heart surgery, his wife is beside herself",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "tonight's dinner: stir fry with noodles",
+"classes": []
+},
+{
+"text": "Teodor's landlord served him notice, he can't pay the arrears",
+"classes": [
+"money",
+"other_member"
+]
+},
+{
+"text": "Sonia buried her husband last week, the neighbours are bringing food",
+"classes": [
+"grief",
+"other_member"
+]
+},
+{
+"text": "what's the best way to get red wine out of a tablecloth",
+"classes": []
+},
+{
+"text": "Ruben isn't speaking to his dad after the argument about the business",
+"classes": [
+"family_conflict",
+"other_member"
+]
+},
+{
+"text": "gutted and humiliated after the open mic",
+"classes": [
+"affect"
+]
+},
+{
+"text": "I've been on the waiting list for my knee for ages and it's agony on stairs",
+"classes": [
+"health"
+]
+},
+{
+"text": "start the robot vacuum at two",
+"classes": []
+},
+{
+"text": "my dad can't pay his care home fees anymore",
+"classes": [
+"money",
+"other_member"
+]
+},
+{
+"text": "we put our old horse down yesterday",
+"classes": [
+"grief"
+]
+},
+{
+"text": "How you say 'thank you' in Swahili",
+"classes": []
+},
+{
+"text": "My cousin Ifeoma and her mother in law are always at each other's throats",
+"classes": [
+"family_conflict",
+"other_member"
+]
+},
+{
+"text": "i feel so guilty for enjoying a day off",
+"classes": [
+"affect"
+]
+},
+{
+"text": "had my mole checked and they're taking it off tuesday",
+"classes": [
+"health"
+]
+},
+{
+"text": "yeah the plan is to repot the lemon tree and also get new gloves",
+"classes": []
+},
+{
+"text": "Okay so my cousin got fired and asked me for rent money",
+"classes": [
+"money",
+"other_member"
+]
+},
+{
+"text": "I am carrying a miscarriage from last year, today would be the due date",
+"classes": [
+"grief"
+]
+},
+{
+"text": "stop the music",
+"classes": []
+},
+{
+"text": "Dad is cheating again and Mum found out so the house is a war zone",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I'm in a bad headspace, too many people needing things from me",
+"classes": [
+"affect"
+]
+},
+{
+"text": "ive had a sore throat for a fortnight, ring the surgery for me",
+"classes": [
+"health"
+]
+},
+{
+"text": "Friday: movie night, popcorn, blankets",
+"classes": []
+},
+{
+"text": "Thinking of Mum today, three months since she left us",
+"classes": [
+"grief"
+]
+},
+{
+"text": "ive got imposter syndrome bad at the new job",
+"classes": [
+"affect"
+]
+},
+{
+"text": "My sims family just had twins",
+"classes": []
+},
+{
+"text": "that party was dead boring, left early",
+"classes": []
+},
+{
+"text": "Mortimer Hospital Road is closed for roadworks, route me around it",
+"classes": []
+},
+{
+"text": "The TV drama had a funeral scene and the music was gorgeous",
+"classes": []
+},
+{
+"text": "cancel the sad playlist, play happy hits",
+"classes": []
+}
+],
+"held_out": [
+{
+"text": "I've had a pounding headache since Tuesday and the tablets aren't touching it.",
+"classes": [
+"health"
+]
+},
+{
+"text": "The doctor who time-travels is my favourite TV character.",
+"classes": []
+},
+{
+"text": "I'm three months behind on the rent.",
+"classes": [
+"money"
+]
+},
+{
+"text": "I prefer tea over coffee in the afternoon.",
+"classes": []
+},
+{
+"text": "Priya's biopsy results are due Friday.",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "My nan passed away in January.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Football on Saturday at three, I'll record the highlights.",
+"classes": []
+},
+{
+"text": "I'm so anxious about the presentation I can't eat.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Mum and I haven't spoken since Easter.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Put oat milk on the shopping list.",
+"classes": []
+},
+{
+"text": "We usually picnic on the river bank rather than the beach.",
+"classes": []
+},
+{
+"text": "User's blood pressure reading this morning was 150 over 95.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Marcus starts his new job at the council on Monday.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "We got a final demand letter from the energy company.",
+"classes": [
+"money"
+]
+},
+{
+"text": "The bank holiday is on Monday.",
+"classes": []
+},
+{
+"text": "The funeral is on Friday at the crematorium.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Feeling really lonely since the kids moved out.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Wes and his wife are splitting up.",
+"classes": [
+"family_conflict",
+"other_member"
+]
+},
+{
+"text": "The recycling goes out on Tuesday nights.",
+"classes": []
+},
+{
+"text": "The pharmacy opens at nine so I can grab sunscreen there.",
+"classes": []
+},
+{
+"text": "Dad is booked in for a hip replacement in March.",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "My neighbour Edith is moving to Spain.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I was made redundant last Friday.",
+"classes": [
+"money"
+]
+},
+{
+"text": "I feel ashamed about how I snapped at them.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "My favourite colour is forest green.",
+"classes": []
+},
+{
+"text": "We had a huge row over the inheritance.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Today would have been Grandad's birthday, so we lit a candle for him.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "I'm under the weather again, probably the same chest thing.",
+"classes": [
+"health"
+]
+},
+{
+"text": "My sister is bringing the salad.",
+"classes": []
+},
+{
+"text": "Remind me to water the ferns on Sunday.",
+"classes": []
+},
+{
+"text": "Can't cover the car payment this month.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Dana's daughter got into the school choir.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "The family car is due a service on Thursday.",
+"classes": []
+},
+{
+"text": "I'm completely overwhelmed with everything at the moment.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Dental appointment Thursday at ten for the root canal.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Our cat Biscuit died last night.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "My sister and I are not on speaking terms.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "The train to Manchester leaves at 8:15.",
+"classes": []
+},
+{
+"text": "The hospital drama on channel five starts at nine.",
+"classes": []
+},
+{
+"text": "Colleague Hamish is retiring next month.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Dreading the family reunion on Saturday.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "My salary dropped by a fifth since I went down to four days.",
+"classes": [
+"money"
+]
+},
+{
+"text": "I have a nut allergy so please never suggest satay.",
+"classes": [
+"health"
+]
+},
+{
+"text": "It's five years since Mum died.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Divorce papers arrive next week.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I like listening to jazz while cooking.",
+"classes": []
+},
+{
+"text": "The Death Valley road trip photos are on the shared drive.",
+"classes": []
+},
+{
+"text": "Liam's flight lands at six tomorrow.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Excited but terrified about the interview.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "User has next to nothing left in savings.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Dana's physio says the knee needs six more weeks.",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "I lost the baby at twelve weeks.",
+"classes": [
+"health",
+"grief"
+]
+},
+{
+"text": "Custody hearing is on the fourth.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "The living room needs repainting some time this year.",
+"classes": []
+},
+{
+"text": "The coin collecting club meets on alternate Thursdays.",
+"classes": []
+},
+{
+"text": "We're planning a camping trip in the Lake District.",
+"classes": []
+},
+{
+"text": "My friend Odette just got engaged.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm jealous of how easy she makes it look.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "The mortgage went up again and we're stretched to breaking.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Started the new antidepressant two weeks ago, still getting the nausea.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Still can't get used to the empty chair where Dad sat.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "My mother-in-law keeps criticising how I raise the kids.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Team stand-up is at 9:30 every morning.",
+"classes": []
+},
+{
+"text": "Tax-free shopping at the airport is handy for perfume.",
+"classes": []
+},
+{
+"text": "Honestly burnt out, I've got nothing left to give.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Our son Felix has football practice on Wednesdays.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I owe the tax office a bill I can't pay yet.",
+"classes": [
+"money"
+]
+},
+{
+"text": "I can't sleep, I'm up till four most nights.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Memorial service for Uncle Ron is next Sunday.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "He walked out last night and took the car.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Octopuses have three hearts.",
+"classes": []
+},
+{
+"text": "The dental floss lives in the second drawer.",
+"classes": []
+},
+{
+"text": "The oven runs a bit hot so drop it by ten degrees.",
+"classes": []
+},
+{
+"text": "Rowan is learning the cello.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Feeling hopeless about ever finding something better.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Credit card debt is climbing and I'm only making the minimum payments.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Mum's scan came back clear, thank goodness.",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "Sent a sympathy card to the Okafors.",
+"classes": [
+"grief",
+"other_member"
+]
+},
+{
+"text": "The brothers are at each other's throats about the farm.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I'm learning to play chess online.",
+"classes": []
+},
+{
+"text": "We watched a courtroom comedy about rival lawyers last night.",
+"classes": []
+},
+{
+"text": "Order a new vacuum filter.",
+"classes": []
+},
+{
+"text": "Aunt Bea is visiting from Leeds next weekend.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "My stomach is in knots about tomorrow.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "I'm on universal credit now while I look for work.",
+"classes": [
+"money"
+]
+},
+{
+"text": "I've been diagnosed with type 2 diabetes.",
+"classes": [
+"health"
+]
+},
+{
+"text": "The anniversary of Tom's death is coming up and I'm dreading it.",
+"classes": [
+"grief",
+"other_member",
+"affect"
+]
+},
+{
+"text": "Dad and my stepmum had a blazing argument at dinner.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "The wifi password is on the fridge.",
+"classes": []
+},
+{
+"text": "The guitar string needs more tension on the top E.",
+"classes": []
+},
+{
+"text": "Ines got a promotion to team lead.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I feel like a fraud at work.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Let go from the warehouse after the restructure, so money is tight.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Had my bloods drawn this morning, results next week.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Our dog was put to sleep on Monday.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "I've cut contact with my father.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I usually run on the canal path on Saturdays.",
+"classes": []
+},
+{
+"text": "Next week's dinner menu includes lasagne and a green salad.",
+"classes": []
+},
+{
+"text": "The vanilla candle goes on the mantelpiece.",
+"classes": []
+},
+{
+"text": "Theo's birthday party is on the 22nd.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "So fed up with everything lately.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Skipped the electricity top-up, can't afford it till payday.",
+"classes": [
+"money"
+]
+},
+{
+"text": "The GP wants me to get the mole looked at.",
+"classes": [
+"health"
+]
+},
+{
+"text": "My husband died two winters ago.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "She slammed the door and went to her mum's.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "The capital of Australia is Canberra.",
+"classes": []
+},
+{
+"text": "The debate club motion this week is about school uniforms.",
+"classes": []
+},
+{
+"text": "I like the window seat on flights.",
+"classes": []
+},
+{
+"text": "My partner Kasper is flying to Oslo for a conference.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm on edge all the time.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Overdraft is maxed out again.",
+"classes": [
+"money"
+]
+},
+{
+"text": "I'm eleven weeks pregnant and haven't told work yet.",
+"classes": [
+"health"
+]
+},
+{
+"text": "We scattered his ashes at the lake.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Me and my partner are on a break.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "The meeting room on the third floor is booked till noon.",
+"classes": []
+},
+{
+"text": "Set the laptop to sleep after ten minutes of inactivity.",
+"classes": []
+},
+{
+"text": "The girl next door, Mabel, is selling her bike.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Feeling a bit blue today.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Borrowed some cash from my brother to make the rent.",
+"classes": [
+"money"
+]
+},
+{
+"text": "I pulled my back lifting the shopping and can barely stand straight.",
+"classes": [
+"health"
+]
+},
+{
+"text": "I miss my brother, who we buried last spring.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "My parents are separated and I'm stuck in the middle.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Please turn the heating down to nineteen overnight.",
+"classes": []
+},
+{
+"text": "Blood orange sorbet is the best flavour in the shop.",
+"classes": []
+},
+{
+"text": "I'm halfway through a sci-fi trilogy.",
+"classes": []
+},
+{
+"text": "Hector from work is struggling with the new system.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I've felt really flat and numb for weeks.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "We're living hand to mouth till the next pay cheque.",
+"classes": [
+"money"
+]
+},
+{
+"text": "My therapist thinks we should meet weekly for a while.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Wake was held at the pub after the burial.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Sibling feud over who looks after Gran.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "The garden hose is in the shed.",
+"classes": []
+},
+{
+"text": "The heart-shaped cookie cutter is in the baking drawer.",
+"classes": []
+},
+{
+"text": "Noor is moving to a new flat across town.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Proud of myself for finally finishing the course.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "The bank turned down my loan application.",
+"classes": [
+"money"
+]
+},
+{
+"text": "User takes metformin with breakfast.",
+"classes": [
+"health"
+]
+},
+{
+"text": "She lost her mother recently, so go gently.",
+"classes": [
+"grief",
+"other_member"
+]
+},
+{
+"text": "We fell out badly at Christmas and nobody has apologised.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "My laptop battery lasts about six hours.",
+"classes": []
+},
+{
+"text": "The smartwatch strap I like is navy blue.",
+"classes": []
+},
+{
+"text": "I'd like to visit Kyoto in autumn.",
+"classes": []
+},
+{
+"text": "Winston was telling me he's training for a marathon.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm so embarrassed I could crawl under a rock.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "I earn just over minimum wage and it doesn't stretch.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Tomas has been coughing for a fortnight and the doctor is sending him for an X-ray.",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "I visit her grave every Sunday.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "My husband and I keep fighting about his debts.",
+"classes": [
+"money",
+"family_conflict"
+]
+},
+{
+"text": "Buy birthday wrapping paper and tape.",
+"classes": []
+},
+{
+"text": "The pay-as-you-go SIM works fine in the spare phone.",
+"classes": []
+},
+{
+"text": "Callum is between jobs at the moment.",
+"classes": [
+"money",
+"other_member"
+]
+},
+{
+"text": "Frazzled doesn't begin to cover it.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Student loan repayments are crushing me.",
+"classes": [
+"money"
+]
+},
+{
+"text": "I'm off gluten, the coeliac test was positive.",
+"classes": [
+"health"
+]
+},
+{
+"text": "The condolence flowers arrived this morning.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Estranged from my son for three years.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "The deadline for the report is next Friday.",
+"classes": []
+},
+{
+"text": "We watched an old western called The Debt Collector.",
+"classes": []
+},
+{
+"text": "Sasha's graduation ceremony is in July.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I feel guilty for not calling more often.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Can't afford the vet bill for the dog.",
+"classes": [
+"money"
+]
+},
+{
+"text": "My migraines are back with a vengeance.",
+"classes": [
+"health"
+]
+},
+{
+"text": "I'm in mourning and not up to socialising.",
+"classes": [
+"grief",
+"affect"
+]
+},
+{
+"text": "Aunt Marge uninvited half the family from the wedding after the blow-up.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I prefer paperback books to e-readers.",
+"classes": []
+},
+{
+"text": "Mother Goose pantomime tickets go on sale in November.",
+"classes": []
+},
+{
+"text": "The car park by the station fills up by eight.",
+"classes": []
+},
+{
+"text": "Boss Gwen has asked everyone to come in early on Tuesday.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Nervous as anything about the move.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Payday loan interest has doubled what I owe.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Eye test Friday, I think my prescription has changed.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Bereavement leave runs until the 20th.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Frosty atmosphere at home since our big argument.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Bees communicate by dancing.",
+"classes": []
+},
+{
+"text": "The radio's sleep timer is set to thirty minutes.",
+"classes": []
+},
+{
+"text": "Oskar's been really stressed lately and it's showing.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm furious about the way they treated me.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Haven't paid the council tax since spring.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Had a fainting spell on the stairs last night.",
+"classes": [
+"health"
+]
+},
+{
+"text": "My best friend from school passed last month.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "He's sleeping on the sofa after the fight.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I like my toast lightly done.",
+"classes": []
+},
+{
+"text": "The lavender bath bomb is in the cupboard under the sink.",
+"classes": []
+},
+{
+"text": "My daughter Isla wants a pet rabbit.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Feel like I'm drowning and nobody notices.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Bailiffs left a note on the door.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Post-op check on the shoulder is next Wednesday.",
+"classes": [
+"health"
+]
+},
+{
+"text": "The hamster died and the kids cried all evening.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Ex won't let the kids come this weekend.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "The dishwasher takes ninety minutes on eco mode.",
+"classes": []
+},
+{
+"text": "Book a hire car for the coast trip in August.",
+"classes": []
+},
+{
+"text": "I've started sketching with charcoal.",
+"classes": []
+},
+{
+"text": "Yusuf is allergic to shellfish, so cook something else.",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "A sense of dread sits on my chest every Sunday evening.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "I'm skint until the 28th.",
+"classes": [
+"money"
+]
+},
+{
+"text": "I've been feeling rough all week, hot and cold and aching.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Lighting a candle for my late father tonight.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "The twins refuse to talk to their father.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I work from home on Wednesdays.",
+"classes": []
+},
+{
+"text": "The pet shop on the high street sells hamster wheels.",
+"classes": []
+},
+{
+"text": "Friend Beatrix lost her job at the bank.",
+"classes": [
+"money",
+"other_member"
+]
+},
+{
+"text": "I'm so happy today I could burst.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Our household income dropped by half when the contract wasn't renewed.",
+"classes": [
+"money"
+]
+},
+{
+"text": "The specialist wants another look at the lump.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Got the death certificate back from the registry.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Marital problems, so we're seeing a mediator.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Monday is the day I do laundry.",
+"classes": []
+},
+{
+"text": "The band playing on Saturday is called The Late Arrivals.",
+"classes": []
+},
+{
+"text": "Neighbour Mr Pemberton's fence fell down in the storm.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Overjoyed and scared stiff all at once.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Remortgaging next month and the rates are terrifying.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Bit of a dicky tummy today, been to the loo six times.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Granny's been gone ten years today.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Grandma and Mum had words at the christening.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "The lights in the hallway are on a motion sensor.",
+"classes": []
+},
+{
+"text": "The brother-and-sister duo on the radio have lovely harmonies.",
+"classes": []
+},
+{
+"text": "The Eiffel Tower was finished in 1889.",
+"classes": []
+},
+{
+"text": "My son's teacher, Ms Adeyemi, wants a word.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I'm worn to a frazzle and tearful.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Redundancy package was smaller than I hoped, barely three months' pay.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Keira is expecting twins in the spring.",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "Wearing black to the service for my cousin's passing.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "She's left him and moved in with her sister.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I like crime podcasts on long drives.",
+"classes": []
+},
+{
+"text": "My interest in tall ships goes back to a museum visit.",
+"classes": []
+},
+{
+"text": "We're out of washing-up liquid.",
+"classes": []
+},
+{
+"text": "Fenella has taken up pottery.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I feel invisible at these gatherings.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "My tax return is overdue and I'm worried about the penalty.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Chemo round three finished yesterday for Uncle Ravi.",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "Stillbirth at thirty-four weeks, and we don't talk about it.",
+"classes": [
+"health",
+"grief"
+]
+},
+{
+"text": "Dad stormed out and hasn't called.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "The museum is free on the first Sunday of the month.",
+"classes": []
+},
+{
+"text": "The funeral scene in that film was beautifully shot.",
+"classes": []
+},
+{
+"text": "Dmitri is coming over for dinner on Saturday.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Restless and unsettled, can't pin down why.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Pension pot is tiny, I'll never retire.",
+"classes": [
+"money"
+]
+},
+{
+"text": "I was hospitalised briefly after the fall in June.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Eulogy needs finishing for tomorrow.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Legal separation is final next month.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Pick up the dry cleaning on the way home.",
+"classes": []
+},
+{
+"text": "Divorce Court reruns are on at noon, apparently.",
+"classes": []
+},
+{
+"text": "My go-to pizza topping is mushroom and olives.",
+"classes": []
+},
+{
+"text": "My mate Cormac is going through a rough patch.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I've been so down on myself lately.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Had to sell my guitar to cover the gas bill.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Insomnia is wrecking me, I've tried melatonin and nothing works.",
+"classes": [
+"health"
+]
+},
+{
+"text": "It's the first Christmas without Dad.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "My brother-in-law and I came to blows over the will.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "The printer is in the spare room.",
+"classes": []
+},
+{
+"text": "The sick bay is my favourite set on the old space show.",
+"classes": []
+},
+{
+"text": "Zadie's new boyfriend seems nice.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Feel homesick even though I've lived here for years.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Child benefit stopped and nobody told me why.",
+"classes": [
+"money"
+]
+},
+{
+"text": "The hearing aid battery needs replacing every week.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Her ashes are still on the mantelpiece.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Tension between my wife and her sister is ruining every gathering.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I'd like the lounge lamp turned on at dusk.",
+"classes": []
+},
+{
+"text": "The ward sister in that sitcom is hilarious.",
+"classes": []
+},
+{
+"text": "Sunrise is just after six this week.",
+"classes": []
+},
+{
+"text": "Her husband Arvid works night shifts at the depot.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Kind of apprehensive about turning forty.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Rent arrears letter came again.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Counselling session moved to Monday at 4.",
+"classes": [
+"health"
+]
+},
+{
+"text": "He departed this life peacefully in his sleep.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Silent treatment from my daughter all week.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I keep my running shoes by the door.",
+"classes": []
+},
+{
+"text": "The fight scene in the new action film was brilliant.",
+"classes": []
+},
+{
+"text": "Little Bram lost his first tooth.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Resentful that I always do everything.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "We're drowning in bills.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Rashes all down my arms, I think it's eczema flaring.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Kept the funeral order of service in my wallet.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Co-parenting is a nightmare with my ex.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Add a new pair of gardening gloves to the list.",
+"classes": []
+},
+{
+"text": "The library lets you borrow books for three weeks at a time.",
+"classes": []
+},
+{
+"text": "Grandad's memory is going and they're talking about dementia.",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "Anxious thoughts keep looping at night.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Budget is in tatters since my hours were cut.",
+"classes": [
+"money"
+]
+},
+{
+"text": "User carries an EpiPen everywhere.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Sorry for your loss, I said to Harriet at the church.",
+"classes": [
+"grief",
+"other_member"
+]
+},
+{
+"text": "Relations with the in-laws have gone south.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "The new project kickoff is Thursday afternoon.",
+"classes": []
+},
+{
+"text": "The Crab Nebula is a supernova remnant.",
+"classes": []
+},
+{
+"text": "Cousin Rafferty is getting married in Lisbon.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "I feel torn and miserable about the whole thing.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "My hourly rate is thirty-one before tax.",
+"classes": [
+"money"
+]
+},
+{
+"text": "I'm on the waiting list for a knee operation.",
+"classes": [
+"health"
+]
+},
+{
+"text": "We lost Grandma in the autumn.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "Gabe and Leah split up for good.",
+"classes": [
+"family_conflict",
+"other_member"
+]
+},
+{
+"text": "Football season tickets come with a free scarf.",
+"classes": []
+},
+{
+"text": "The memorial bench in the park has a nice view of the pond.",
+"classes": []
+},
+{
+"text": "Sourdough starter needs feeding every morning.",
+"classes": []
+},
+{
+"text": "The thermostat is in the hallway.",
+"classes": []
+},
+{
+"text": "Our lodger Petra pays on the first of the month.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Fed up and a bit tearful, to be honest.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "I'm up to my eyeballs in debt to the card company.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Booster jab booked for the 14th.",
+"classes": [
+"health"
+]
+},
+{
+"text": "Mourning is over, but I still reach for the phone to call him.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "We don't see my cousin anymore after what he said to Nan.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "I want to repaint the shed door blue.",
+"classes": []
+},
+{
+"text": "The mood lighting in the lounge is on a dimmer switch.",
+"classes": []
+},
+{
+"text": "The new colleague Ximena seems to be struggling to settle in.",
+"classes": [
+"other_member"
+]
+},
+{
+"text": "Stage fright is getting to me before Friday's talk.",
+"classes": [
+"affect"
+]
+},
+{
+"text": "Had to dip into the emergency fund for the boiler and now it's empty.",
+"classes": [
+"money"
+]
+},
+{
+"text": "Elodie's mum is in hospital.",
+"classes": [
+"health",
+"other_member"
+]
+},
+{
+"text": "Rift in the family over who gets the house.",
+"classes": [
+"family_conflict"
+]
+},
+{
+"text": "Visited the cemetery with flowers for my late husband's birthday.",
+"classes": [
+"grief"
+]
+},
+{
+"text": "The best coffee in town is at the roastery near the market.",
+"classes": []
+},
+{
+"text": "The tablet charger is in the hallway drawer.",
+"classes": []
+},
+{
+"text": "Jupiter has dozens of moons.",
+"classes": []
+},
+{
+"text": "Tomorrow's workshop on public speaking is at two.",
+"classes": []
+},
+{
+"text": "Wednesday's lunch is a chicken wrap.",
+"classes": []
+},
+{
+"text": "The cutlery drawer sticks a little.",
+"classes": []
+},
+{
+"text": "Turn the porch light on at sunset.",
+"classes": []
+},
+{
+"text": "I like watching baking shows on Sunday evenings.",
+"classes": []
+},
+{
+"text": "Book a table for six at the Italian place for Friday.",
+"classes": []
+},
+{
+"text": "I do the crossword on my lunch break.",
+"classes": []
+},
+{
+"text": "Set an alarm for 6:45 on weekdays.",
+"classes": []
+},
+{
+"text": "The garage door remote needs new batteries.",
+"classes": []
+},
+{
+"text": "The fastest land animal is the cheetah.",
+"classes": []
+},
+{
+"text": "I'm thinking of getting a standing desk.",
+"classes": []
+},
+{
+"text": "The commute takes about forty minutes by bike.",
+"classes": []
+},
+{
+"text": "The new office chairs arrive next week.",
+"classes": []
+},
+{
+"text": "I've been cooking more Indian food lately.",
+"classes": []
+},
+{
+"text": "Reorder printer paper and a box of staples.",
+"classes": []
+},
+{
+"text": "My favourite season is autumn.",
+"classes": []
+},
+{
+"text": "Water boils at a lower temperature at altitude.",
+"classes": []
+},
+{
+"text": "The kitchen tap drips a bit, so ask the plumber to look at it when he visits.",
+"classes": []
+},
+{
+"text": "Please play my morning playlist when I walk in.",
+"classes": []
+},
+{
+"text": "We usually have pancakes on Shrove Tuesday.",
+"classes": []
+},
+{
+"text": "I enjoy photography, mostly landscapes.",
+"classes": []
+},
+{
+"text": "The parcel is due to arrive between noon and four.",
+"classes": []
+},
+{
+"text": "Keep the spare lightbulbs in the hall cupboard.",
+"classes": []
+},
+{
+"text": "I'd rather take the scenic route home.",
+"classes": []
+},
+{
+"text": "The film club is screening a black-and-white classic on Friday.",
+"classes": []
+},
+{
+"text": "Our flight to Lisbon departs from terminal two.",
+"classes": []
+},
+{
+"text": "I want to try the new Thai place on the corner.",
+"classes": []
+}
+]
+}

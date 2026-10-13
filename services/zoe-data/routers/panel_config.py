@@ -630,6 +630,24 @@ async def get_sleep_gate(device_id: str, db=Depends(get_db)) -> dict[str, Any]:
     return resolve_sleep_gate(room_entity_ids, await _entity_index())
 
 
+@router.get("/{device_id}/push-status")
+async def get_push_status(device_id: str) -> dict[str, Any]:
+    """Is this panel's push channel connected RIGHT NOW? (read-only liveness)
+
+    Every ``voice:*`` event and answer card reaches a wall panel only over its
+    ``/ws/push`` socket, and the broadcaster's delivered count used to be ignored — so a
+    deaf panel (2026-10-12: a PIN session expired and the executor closed its own socket)
+    looked exactly like a healthy one from the server. ``subscribers == 0`` PROVES nothing
+    can receive a voice event; ``zoe_ground_truth.sh`` prints this for the wall panel.
+
+    Unauthenticated for the same reason as ``GET /{device_id}/config``: it exposes only a
+    count and two timestamps, no household data, and the ground-truth probe has no session.
+    """
+    from push import broadcaster
+
+    return broadcaster.panel_push_status(device_id)
+
+
 @router.put("/{device_id}/config")
 async def put_panel_config(
     device_id: str,

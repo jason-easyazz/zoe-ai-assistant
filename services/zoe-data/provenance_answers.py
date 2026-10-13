@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+from functools import lru_cache
 import logging
 import re
 import time
@@ -94,6 +95,8 @@ GUEST_REPLY = ("I don't keep anything about guests, so there's nothing for me to
 GUEST_ABOUT_OTHER_REPLY = "I don't share what I know about the people here with guests."
 OTHER_MEMBER_REPLY = "I keep what I know about each person to that person, so I can't share that."
 UNVERIFIED_SPEAKER_REPLY = ("I couldn't tell who was speaking, so I haven't shared anything - say it again once I know it's you.")
+UNCONFIRMED_ONLY_REPLY = ("I have a few notes about you, but I couldn't tie any of them to something you actually said, so I haven't "
+                          "listed them. Want to go through them? Tell me what's right and I'll keep it.")
 NOTHING_KNOWN_REPLY = ("I don't know much about you yet. Tell me something and say \"remember that\" and I'll keep it.")
 STORE_DOWN_REPLY = "I couldn't reach my memory just now, so I can't say - try again in a moment."
 FIX_TAIL = "If that's wrong, tell me the right answer, or say forget it."
@@ -110,8 +113,8 @@ OFF_RECORD_ACKS = {
     "between_us": "Understood, this stays between us - I won't keep your next message.",
     "dont_remember": "Okay, I won't remember your next message.",
 }
-PRIVATE_NOTE_VOICE = "There are also a few private things I only share if you ask me about them directly."
-HANDOFF_VOICE = "For the whole list, ask me in chat or on Telegram."
+PRIVATE_NOTE_VOICE = "Some things are private, so I only share those if you ask."
+HANDOFF_VOICE = "Want me to go on?"
 
 _DIRECT_TEXT = {
     "identity": "That came from your account details, not from something you told me.",
@@ -356,16 +359,26 @@ _RELATION_RE = re.compile(
     r"cousin|niece|nephew|friend|colleague|boss|neighbou?r|flatmate|roommate|fianc\w+|in-law|kids?|children|baby)\b",
     re.IGNORECASE)
 _PLACE_RE = re.compile(
-    r"\b(?:lives?\s+in|living\s+in|moved\s+(?:to|from)|from|born\s+in|grew\s+up\s+in|works?\s+(?:at|in|for)|office|home\s+is|"
-    r"house|apartment|flat|suburb|city|town|school|hometown|address|based\s+in|flying\s+(?:in\s+)?from)\b", re.IGNORECASE)
+    r"\b(?:lives?\s+in|living\s+in|moved\s+(?:to|from)|(?:is|am|are|comes?|came)\s+from|originally\s+from|born\s+in|grew\s+up\s+in|works?\s+(?:at|in|for)|home\s+is|"
+    r"(?:owns?|has|have|had)\s+(?:a|an|the)\s+(?:\w+\s+){0,2}(?:house|apartment|flat|unit|cottage|farm|office|business)|"
+    r"hometown|address|based\s+in|flying\s+(?:in\s+)?from)\b", re.IGNORECASE)
 _ROUTINE_RE = re.compile(
     r"\b(?:every\s+(?:day|morning|evening|night|week|weekend|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|each\s+"
     r"(?:morning|evening|day|week)|daily|weekly|usually|always|routine|on\s+(?:mondays|tuesdays|wednesdays|thursdays|fridays|"
     r"saturdays|sundays|weekdays|weekends)|walks?\s+the\s+dog|night\s+shifts?|shifts?|gym|runs?\s+(?:every|at)|wakes?\s+up|"
     r"gets?\s+up|bedtime|commut\w+)\b", re.IGNORECASE)
 _PREF_RE = re.compile(
-    r"\b(?:likes?|loves?|prefers?|favou?rite|hates?|dislikes?|can't\s+stand|enjoys?|into|fan\s+of|vegetarian|vegan|pescatarian|"
-    r"drinks?|eats?|doesn't\s+(?:like|eat|drink))\b", re.IGNORECASE)
+    r"\b(?:likes?|loves?|prefers?|favou?rite|hates?|dislikes?|can't\s+stand|enjoys?|fan\s+of|vegetarian|vegan|pescatarian|"
+    r"doesn't\s+(?:like|eat|drink))\b", re.IGNORECASE)
+# One happening, plan or passing state - NOT a standing place / routine / preference. "User enjoys being back in their office" is
+# today, not a place; "User plans to eat food and relax" is a plan, not a liking (found in a live review, 2026-10-12: both were filed under a standing
+# group because a bare noun ("office") or verb ("eat", "enjoys") matched). They stay "other" (listed with a date in chat, never
+# spoken as an example of where the owner lives or what they like).
+_EPISODE_RE = re.compile(
+    r"\b(?:plans?\s+to|planning\s+to|is\s+going\s+to|going\s+to|wants?\s+to|would\s+like\s+to|hopes?\s+to|intends?\s+to|"
+    r"about\s+to|is\s+(?:back|home|away|currently|now|feeling|being|having|seeing|visiting|heading|driving|resting|tired)|"
+    r"(?:just|recently)\s+\w+|today|tonight|tomorrow|yesterday|this\s+(?:morning|afternoon|evening|week|weekend)|later|soon|"
+    r"enjoys?\s+being|feels?|feeling|drove|visited|saw|went|came|returned|got\s+back)\b", re.IGNORECASE)
 GROUPS = ("people", "places", "routines", "preferences", "other")
 
 
@@ -376,6 +389,8 @@ def group_of(text: str, meta: Optional[dict] = None) -> str:
     etype = str(meta.get("entity_type") or "").lower()
     if etype in ("person", "person_pending") or mtype in ("person", "relationship") or _RELATION_RE.search(text or ""):
         return "people"
+    if mtype not in ("habit", "preference") and _EPISODE_RE.search(text or ""):
+        return "other"
     if _PLACE_RE.search(text or ""):
         return "places"
     if mtype == "habit" or _ROUTINE_RE.search(text or ""):
@@ -385,25 +400,137 @@ def group_of(text: str, meta: Optional[dict] = None) -> str:
     return "other"
 
 
-_USER_POSS_RE = re.compile(r"\buser['’]s\b", re.IGNORECASE)
+_USER_POSS_RE = re.compile(r"\b(?:the\s+)?user['’]s\b", re.IGNORECASE)
+def _subject_adverbs() -> list:
+    """The adverbs that may sit between "User" and its verb ("User always walks"), per-language lexicon data (``subject_adverbs``)."""
+    try:
+        import lexicons
+
+        return list(lexicons.words("en", "subject_adverbs"))
+    except Exception:  # noqa: BLE001 - the rewrite degrades to "no adverbs", never to an error
+        return []
+
+
+@lru_cache(maxsize=1)
+def _third_subject_re() -> "re.Pattern":
+    advs = "|".join(sorted(map(re.escape, _subject_adverbs()), key=len, reverse=True))
+    adv = rf"(?P<adv>(?:(?:{advs})\s+)*)" if advs else r"(?P<adv>)"
+    return re.compile(rf"^(?:the\s+)?(?:user|speaker)\s+{adv}(?P<verb>[A-Za-z']+)\b(?P<rest>.*)$", re.IGNORECASE | re.DOTALL)
+
+
+#: another person already named earlier in the clause: a capitalised word, a relation word, or a possessive ("Quillan", "his sister", "Pell's")
+_OTHER_PERSON_RE = re.compile(r"(?:\b[A-Z][a-z]+|\b(?:sister|brother|mother|father|mum|mom|dad|wife|husband|partner|son|daughter|friend|"
+                              r"boss|neighbou?r|colleague|cousin|aunt|uncle|kids?|children)\b|['’]s\b)")
+_IRREGULAR_VERB = {"is": "are", "has": "have", "was": "were", "does": "do", "doesn't": "don't", "isn't": "aren't", "hasn't": "haven't",
+                   "goes": "go", "wasn't": "weren't"}
+#: the third-person "-s" of a present-tense verb, taken off ("enjoys" -> "enjoy", "tries" -> "try", "watches" -> "watch"); a past
+#: tense ("drove"), a modal ("will", "can") and a bare verb pass unchanged
+_NOT_THIRD_S = frozenset({"was", "has", "is", "does", "goes", "this", "always", "perhaps", "sometimes", "less", "unless", "plus"})
+
+
+def _second_person_verb(verb: str) -> str:
+    low = verb.lower()
+    if low in _IRREGULAR_VERB:
+        return _IRREGULAR_VERB[low]
+    if low in _NOT_THIRD_S or len(low) < 3 or not low.endswith("s") or low.endswith(("ss", "us")):
+        return verb
+    if low.endswith("ies"):
+        return verb[:-3] + "y"
+    if low.endswith(("ches", "shes", "sses", "xes", "zes")):
+        return verb[:-2]
+    return verb[:-1]
+
+
+#: a verb that takes a clause of its OWN ("User says Quillan likes tea and hates coffee"): whatever follows has another subject
+_CLAUSE_VERBS = frozenset({"say", "think", "know", "believe", "hope", "feel", "mention", "tell", "worry", "wish", "mean", "see", "hear",
+                           "notice", "remember", "forget", "find", "learn", "realise", "realize", "understand", "guess", "suppose",
+                           "assume", "claim", "explain", "report", "add", "note", "decide", "said", "thought", "knew", "told", "felt"})
+#: words that open another clause (and so another subject) before a coordinated verb
+_CLAUSE_OPENER_RE = re.compile(r"\b(?:he|she|they|it|we|i|you|that|who|whom|which|whose|because|since|while|when|where|if|as|after|before|"
+                               r"so|than|until|unless|although|though)\b", re.IGNORECASE)
+_MODAL_INFINITIVE_RE = re.compile(r"\b(?:to|can|could|will|would|should|might|must|may)\s+[a-z]+", re.IGNORECASE)
+_COORD_RE = re.compile(r"(?P<sep>,\s*(?:(?:and|but|or)\s+)?|\s+(?:and|but|or)\s+)(?P<adv>(?:(?:then|[a-z]+ly)\s+)*)(?P<verb>[A-Za-z']+)"
+                       r"(?=(?P<after>\s+[A-Za-z0-9'][\w'-]*)?)")
+#: another SUBJECT of its own earlier in the predicate: a name or a relation word (with an optional possessive) then a verb
+#: ("Quillan likes", "his sister works", "Pell's dog barks")
+_OTHER_PERSON_SUBJECT_RE = re.compile(
+    r"(?:\b[A-Z][a-z]+|\b(?:sister|brother|mother|father|mum|mom|dad|wife|husband|partner|son|daughter|friend|boss|neighbou?r|"
+    r"colleague|cousin|aunt|uncle|kids?|children)s?)(?:['’]s)?\s+(?:[a-z]+s|is|has|was|does|goes|isn't|hasn't)\b")
+
+
+@lru_cache(maxsize=1)
+def _present_verbs() -> frozenset:
+    try:
+        import lexicons
+
+        return frozenset(w.lower() for w in lexicons.words("en", "present_verbs"))
+    except Exception:  # noqa: BLE001 - no lexicon: a coordinated verb is left as it was, never guessed
+        return frozenset()
+
+
+def _coordinated_verb(low: str, after: str) -> Optional[str]:
+    """The second-person form of a third-person verb that follows "and" / "but" / "or" / a comma - or None when it is not clearly one.
+    An irregular verb ("is", "has") is clear; a regular "-s" word is a verb only when its stem is a known verb AND a word follows it
+    that is not "and" / "of" ("likes tea and cats", "likes walks and runs" are noun lists, left as they were). Pure."""
+    if low in _IRREGULAR_VERB:
+        return _IRREGULAR_VERB[low]
+    stem = _second_person_verb(low)
+    if stem == low or stem.lower() not in _present_verbs():
+        return None
+    nxt = after.strip().lower()
+    if not nxt or nxt in ("and", "or", "but", "of"):
+        return None
+    return stem
+
+
+def _conjugate_coordinated(first_verb: str, rest: str) -> str:
+    """"User walks the dog and feeds the cat" / "likes tea but hates coffee": the verbs the "User" subject coordinates after the first
+    one take the second person too ("you walk the dog and feed the cat"), or the spoken list is ungrammatical halfway through.
+    Conservative on purpose - another subject in between (a name, a relation, a pronoun, a "that" clause), an infinitive or a modal,
+    or a first verb that takes a clause of its own, leaves the rest exactly as it was. Pure."""
+    if first_verb.lower() in _CLAUSE_VERBS or _second_person_verb(first_verb).lower() in _CLAUSE_VERBS:
+        return rest
+    out, last = [], 0
+    for m in _COORD_RE.finditer(rest):
+        if m.start() < last:
+            continue
+        lead = rest[:m.start()]
+        if _CLAUSE_OPENER_RE.search(lead) or _MODAL_INFINITIVE_RE.search(lead) or _OTHER_PERSON_SUBJECT_RE.search(lead):
+            break
+        fixed = _coordinated_verb(m.group("verb").lower(), m.group("after") or "")
+        if fixed is None:
+            continue
+        out.append(rest[last:m.start("verb")] + fixed)
+        last = m.end("verb")
+    return "".join(out) + rest[last:] if out else rest
 
 
 def second_person(text: str) -> str:
-    """"User's sister is named Marisol" -> "your sister is named Marisol"; "User lives in Perth" -> "you live in Perth". A light
-    rewrite for the spoken list; text that does not start like a third-person note is returned as it is. Pure."""
+    """"User's sister is named Zephyra" -> "your sister is named Zephyra"; "User lives in Northcliff" -> "you live in Northcliff"; "The user
+    enjoys being back in their office" -> "you enjoy being back in your office". A light rewrite for the spoken list - EVERY "the
+    user" / "user" subject, whatever the verb, and the pronouns that follow ("their" -> "your"), never the third person on the
+    owner's own answer. Text that does not start like a third-person note is returned as it is. Pure."""
     t = re.sub(r"\s+", " ", (text or "").strip())
-    t = re.sub(r"^user['’]s\b", "your", t, flags=re.IGNORECASE)
+    rewritten = bool(_USER_POSS_RE.search(t))
     t = _USER_POSS_RE.sub("your", t)
-    m = re.match(r"^user\s+(is|has|was|had|will|does|doesn't|can|can't|works|lives|likes|loves|hates|prefers|plays|walks|goes|"
-                 r"drinks|eats|owns|studies|wants|needs|uses|speaks|takes|runs)\b(.*)$", t, re.IGNORECASE | re.DOTALL)
+    m = _third_subject_re().match(t)
+    rewritten = rewritten or bool(m)
     if m:
-        verb = m.group(1).lower()
-        verb = {"is": "are", "has": "have", "was": "were", "does": "do", "doesn't": "don't", "works": "work", "lives": "live",
-                "likes": "like", "loves": "love", "hates": "hate", "prefers": "prefer", "plays": "play", "walks": "walk",
-                "goes": "go", "drinks": "drink", "eats": "eat", "owns": "own", "studies": "study", "wants": "want",
-                "needs": "need", "uses": "use", "speaks": "speak", "takes": "take", "runs": "run"}.get(verb, verb)
-        t = f"you {verb}{m.group(2)}"
+        t = f"you {m.group('adv')}{_second_person_verb(m.group('verb'))}{_conjugate_coordinated(m.group('verb'), m.group('rest'))}"
+
+        def _own(mm: "re.Match") -> str:
+            # "their" is the user's only when NO other person is named before it ("enjoys being back in their office"): in
+            # "met Quillan and their friends" or "visited his sister and their dog" it is somebody else's, and memory never changes
+            # whose thing it is - when unsure, the word is left as it was
+            if _OTHER_PERSON_RE.search(t[len("you "):mm.start()]):
+                return mm.group(0)
+            return "yourself" if mm.group(0).lower() == "themselves" else "your"
+
+        t = re.sub(r"\b(?:their|themselves)\b", _own, t, flags=re.IGNORECASE)
     t = t.rstrip(" .")
+    # a sentence the rewrite did not touch may open on a NAME ("Zephyra is flying in"): its capital is kept
+    if not rewritten:
+        return t
     return t[:1].lower() + t[1:] if t[:1].isupper() and not re.match(r"^[A-Z]{2}", t) and not t.startswith("I ") else t
 
 
@@ -455,6 +582,7 @@ class Known:
     private: dict = field(default_factory=dict)     # class -> [Item]
     people: list = field(default_factory=list)      # [(name, relationship, epoch)] newest first (the people table)
     total: int = 0
+    unconfirmed: int = 0    # inferred rows no word of the owner's supports (authority_basis unanchored): counted, never said back
 
 
 async def load_people(user_id: str) -> list:
@@ -503,8 +631,16 @@ async def gather(user_id: str, *, svc: Any = None) -> Known:
             continue
         try:
             inferred = auth.row_rank(meta, text) < auth.USER_RANK
+            # A row the writer could not tie to anything the owner said ("unanchored", class below the
+            # derived-from-the-owner's-words rank) is a guess about them: it is not said back as something they told Zoe
+            # (found in a live review, 2026-10-12: a happening row surfaced in the summary with basis=unanchored).
+            unconfirmed = (str(meta.get("authority_basis") or "") in auth.NO_STANDING_BASES
+                           and auth.row_rank(meta, text) < auth.DERIVED_RANK)
         except Exception:  # noqa: BLE001
-            inferred = True
+            inferred, unconfirmed = True, False
+        if unconfirmed:
+            known.unconfirmed += 1
+            continue
         classes = sensitive_classes(text, meta)
         primary = next((c for c in _CLASS_ORDER if c in classes), "")
         it = Item(ref.id, text, _row_epoch(meta), group_of(text, meta), primary, inferred, classes,
@@ -668,41 +804,75 @@ def _person_label(name: str, rel: str) -> str:
     return f"{name} ({rel.lower()})" if rel and rel.lower() not in ("contact", "other", "unknown") else name
 
 
+def _spoken_person(p: "PersonEntry") -> str:
+    """"Quillan, your sister" / "Quillan" / "your sister" - how a person is said aloud. Never empty for an entry with a name or relation."""
+    if p.name and p.rel and p.rel.lower() not in ("contact", "other", "unknown"):
+        return f"{p.name}, your {p.rel.lower()}"
+    return p.name or (f"your {p.rel.lower()}" if p.rel else "")
+
+
+SPOKEN_EXAMPLE_CHARS = 46
+
+
+def _spoken_example(items: list, n: int = 1) -> list:
+    """Up to ``n`` stored facts of one group as clauses that read after "like": "you live in Eastvale". Second person throughout. The
+    newest facts that are short enough to say come first (a long one is cut at a word, never with a spoken "dot dot dot")."""
+    said = [second_person(i.text) for i in items]
+    short = [s for s in said if len(s) <= SPOKEN_EXAMPLE_CHARS]
+    picks = (short + [s for s in said if s not in short])[:n]
+    return [p if len(p) <= SPOKEN_EXAMPLE_CHARS else trim(p, SPOKEN_EXAMPLE_CHARS).removesuffix("...") for p in picks]
+
+
+def _join_spoken(parts: list) -> str:
+    return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
+
+
 def render_summary(known: Known, *, voice: bool, more: bool = False, now: Optional[float] = None) -> str:
-    """The grouped summary. Voice: counts + one newest item per group, bounded, with a hand-off to chat. Chat / Telegram: the longer
-    list with dates. Private classes are counted, never read. Pure (``now`` injectable)."""
+    """The grouped summary. Voice: about three sentences - how many people and the newest NAMED one, one recent example per standing
+    group (a place, a routine, a preference), second person throughout, and a way to go on. Chat / Telegram: the longer list with
+    dates. Private classes are counted, never read. A row nothing the owner said supports (``Known.unconfirmed``) is not listed.
+    Pure (``now`` injectable)."""
     groups = _by_group(known)
     persons = people_entries(groups["people"], known.people)
-    n_people = len(persons)
+    # A person is an entry with a name or a relation. A people-group row of a shape the parser does not recognise is a FACT (it has
+    # neither): it is not counted as a person and never named as "the newest" ("12 people, newest someone", found in a live review, 2026-10-12).
+    people_known = [e for e in persons if e.name or e.rel]
+    loose = [e for e in persons if not (e.name or e.rel)]
+    n_people = len(people_known)
     private_n = sum(len(v) for v in known.private.values())
     if not known.items and not known.people and not private_n:
-        return NOTHING_KNOWN_REPLY
+        # notes withheld as unconfirmed are not "nothing": say what is true (review round 2026-10-12, Codex on #2005)
+        return UNCONFIRMED_ONLY_REPLY if known.unconfirmed else NOTHING_KNOWN_REPLY
     cutoff = (time.time() if now is None else now) - RECENT_WINDOW_S
     # People are already one entry each above: a recent row about a person is not listed a second time under "Recently".
     recent = [i for i in known.items if i.epoch and i.epoch >= cutoff and (voice or i.group != "people")]
     if voice:
-        parts = []
+        sentences = ["Here's the short version."]
         if n_people:
-            newest = persons[0].label()
-            parts.append(f"{_plural(n_people, 'person', 'people')}, newest {newest}")
-        for key, one, many in (("places", "place", "places"), ("routines", "routine", "routines"),
-                               ("preferences", "preference", "preferences")):
+            named = next((p for p in people_known if p.name), None)
+            newest = f", most recently {_spoken_person(named)}" if named else ""
+            sentences.append(f"I know {_plural(n_people, 'person', 'people')} in your life{newest}.")
+        per = 2 if more else 1
+        kinds: list = []
+        examples: list = []
+        for key in ("places", "routines", "preferences"):
             if groups[key]:
-                parts.append(f"{_plural(len(groups[key]), one, many)}, like {trim(second_person(groups[key][0].text))}")
-        if groups["other"]:
-            parts.append(_plural(len(groups["other"]), "other thing"))
-        out = "Here's the short version. I know " + "; ".join(parts) + "." if parts else "Here's the short version."
-        if recent:
-            out += f" Most recently, {trim(second_person(recent[0].text))}."
+                kinds.append(key)
+                examples.extend(_spoken_example(groups[key], per))
+        # two examples are enough to hear; "everything" gets one per group (the long list is in chat either way)
+        examples = examples[: 6 if more else 2]
+        if kinds:
+            sentences.append(f"I also know about your {_join_spoken(kinds)}, like {_join_spoken(examples)}.")
         if private_n:
-            out += " " + PRIVATE_NOTE_VOICE
-        return out + " " + HANDOFF_VOICE
+            sentences.append(PRIVATE_NOTE_VOICE)
+        sentences.append(HANDOFF_VOICE)
+        return " ".join(sentences)
 
     def build(cap: int, pmax: int, fmax: int) -> str:
         lines = ["Here's what I've got on you, newest first."]
         if n_people:
             lines.append(f"**People** ({n_people}):")
-            for pe in persons[:pmax]:
+            for pe in people_known[:pmax]:
                 facts = "; ".join(trim(t, 90) for t, _k in pe.facts[:fmax])
                 more_facts = f" (+{len(pe.facts) - fmax} more)" if len(pe.facts) > fmax else ""
                 head = pe.label() if (pe.name or pe.rel) else ""
@@ -711,14 +881,17 @@ def render_summary(known: Known, *, voice: bool, more: bool = False, now: Option
                 lines.append(f"- ... and {n_people - pmax} more people")
         for key, title in (("places", "Places"), ("routines", "Routines"), ("preferences", "Preferences"), ("other", "Other")):
             items = groups[key]
-            if not items:
+            # a people-group row of an unrecognised shape is a fact about someone, not a person: it is listed here, with the others
+            extra = [(trim(second_person(t), 140), None) for e in loose for t, _k in e.facts] if key == "other" else []
+            if not items and not extra:
                 continue
-            lines.append(f"**{title}** ({len(items)}):")
-            for it in items[:cap]:
-                when = f" ({short_day(it.epoch, now)})" if it.epoch else ""
-                lines.append(f"- {trim(second_person(it.text), 140)}{when}")
-            if len(items) > cap:
-                lines.append(f"- ... and {len(items) - cap} more")
+            lines.append(f"**{title}** ({len(items) + len(extra)}):")
+            shown = [(trim(second_person(it.text), 140), it.epoch) for it in items] + extra
+            for text, epoch in shown[:cap]:
+                when = f" ({short_day(epoch, now)})" if epoch else ""
+                lines.append(f"- {text}{when}")
+            if len(shown) > cap:
+                lines.append(f"- ... and {len(shown) - cap} more")
         if recent:
             lines.append("**Recently** (last week):")
             for it in recent[:3]:
@@ -726,6 +899,9 @@ def render_summary(known: Known, *, voice: bool, more: bool = False, now: Option
         inferred = sum(1 for i in known.items if i.inferred)
         if inferred:
             lines.append(f"{_plural(inferred, 'of these')} I worked out from our chats rather than hearing you say it.")
+        if known.unconfirmed:
+            lines.append(f"I'm also holding {_plural(known.unconfirmed, 'note')} I picked up but couldn't tie to anything you said, "
+                         "so I haven't listed them.")
         if private_n:
             kinds = ", ".join(sorted(known.private))
             lines.append(f"I've also kept {_plural(private_n, 'private thing')} ({kinds}). I only share those if you ask directly, "

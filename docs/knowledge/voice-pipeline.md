@@ -92,6 +92,17 @@ The panel's on-screen text for a turn is a separate channel from its audio: the 
   on any zoe-data restart. It now pings every 30 s and reconnects with capped backoff. Diagnose a deaf
   panel with `WebSocket idle timeout on channel panel_<id>` in `~/.zoe-logs/zoe-data.stderr.log`: after
   the fix that line should not recur for a live kiosk.
+- **A deaf panel is now visible server-side (2026-10-12).** An expired PIN session used to make the
+  executor close its own socket, so voice text vanished until a reload while the server saw nothing.
+  Fixed client-side (a 401 recovers as guest and never closes the socket; kiosk watchdog) and
+  observable server-side: `push.broadcaster.warn_if_panel_deaf` logs ONE rate-limited WARNING
+  (`... push channel has ZERO subscribers ...`) per voice turn whose panel channel is empty;
+  `GET /api/panels/<id>/push-status` (unauthenticated, count + timestamps) and the WALL PANEL PUSH
+  CHANNEL section of `scripts/maintenance/zoe_ground_truth.sh` show it live. `push.panel_live(id)`
+  (subscriber, or a success ack < 60 s) gates every "check the panel / tap Done / tap Confirm" line in
+  `voice_tts` (`_panel_can_see`); when the panel cannot see, the result is said aloud instead. The
+  stream path always ends the screen's turn (`_finish_panel_screen`: full-text card, then `voice:done`,
+  also on barge-in/disconnect/error) and never slices the answer (it used to cut at 300/200 chars).
 - **The "let's talk" opener/ender is a fast path** that returns before `voice_command`, so it broadcasts
   its own `voice:responding` (the ack) + `voice:done` with the conversation flag
   (`conversation_opener.broadcast_conversation_turn`). Turns *inside* a conversation are ordinary
