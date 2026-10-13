@@ -365,3 +365,56 @@ def test_a_marker_key_can_never_equal_a_tokenised_text():
     assert memory_forgotten._PENDING_PREFIX.endswith(chr(124))
     assert chr(124) not in memory_forgotten.normalise_key("pending portrait")
     assert asyncio.run(memory_forgotten.pending_labels(USER, ["portrait"])) == []
+
+
+@pytest.mark.asyncio
+async def test_a_people_failure_leaves_edges_pending_too_and_the_retry_closes_them(ledger_env):
+    """Codex P1 (#2022): when ``people`` fails, ``res.person_ids`` is empty so ``edges`` 'succeeds' with nothing to do; only ``people`` was marked,
+    the retry ran just ``people`` and the forgotten contact's open relationships stayed open forever. A dependent step is pending with its parent."""
+    db = await open_forgotten_db()
+    try:
+        await _seed_derived(db)
+        await _forget_in_ledger()
+        res = await cascade.cascade_forget(USER, FRIEND, db=_FlakyDb(db, "FROM people"))
+        assert "people" in res.failed and "edges" in res.failed          # edges is not 'done' just because it had no ids to close
+        assert set(await memory_forgotten.pending_labels(USER, cascade.ALL_LABELS)) == set(["people", "edges"])
+        assert await _alive(db, "person_relationships", "id = 'e1' AND valid_to IS NULL") == 1
+        out = await cascade.retry_pending(USER, db=db)
+        assert out is not None and out.complete and out.people == 1 and out.edges == 1
+        assert await _alive(db, "people", "id = 'p-dana' AND deleted = 1") == 1
+        assert await _alive(db, "person_relationships", "id = 'e1' AND valid_to IS NOT NULL") == 1
+        assert await memory_forgotten.pending_labels(USER, cascade.ALL_LABELS) == []
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_a_retry_whose_people_step_fails_again_keeps_edges_pending(ledger_env):
+    db = await open_forgotten_db()
+    try:
+        await _seed_derived(db)
+        await _forget_in_ledger()
+        await cascade.cascade_forget(USER, FRIEND, db=_FlakyDb(db, "FROM people"))
+        again = await cascade.retry_pending(USER, db=_FlakyDb(db, "FROM people"))
+        assert again is not None and "people" in again.failed and "edges" in again.failed
+        assert set(await memory_forgotten.pending_labels(USER, cascade.ALL_LABELS)) == set(["people", "edges"])
+        done = await cascade.retry_pending(USER, db=db)
+        assert done is not None and done.complete
+        assert await _alive(db, "person_relationships", "id = 'e1' AND valid_to IS NOT NULL") == 1
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_only_people_pending_still_runs_edges_the_marker_set_is_not_trusted(ledger_env):
+    """A marker set written by an older build (people alone) must still close the edges: edges always follows a people retry."""
+    db = await open_forgotten_db()
+    try:
+        await _seed_derived(db)
+        await _forget_in_ledger()
+        await memory_forgotten.mark_pending(USER, ["people"])
+        out = await cascade.retry_pending(USER, db=db)
+        assert out is not None and out.complete
+        assert await _alive(db, "person_relationships", "id = 'e1' AND valid_to IS NOT NULL") == 1
+    finally:
+        await db.close()

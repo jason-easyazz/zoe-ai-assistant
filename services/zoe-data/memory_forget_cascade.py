@@ -243,7 +243,10 @@ async def retry_pending(user_id: str, *, db=None) -> Optional[CascadeResult]:
 
             return await restraint.erase_matching(user_id, lambda topic_key: bool(rx.search(topic_key)), strict=True)
 
-        await _clear(user_id, rx, mutes, res, db=db, only=frozenset(labels), recover_ids=True)
+        run = set(labels)
+        if "people" in run:
+            run.add("edges")             # edges depends on people: never trust the marker set to carry both (an older build wrote one)
+        await _clear(user_id, rx, mutes, res, db=db, only=frozenset(run), recover_ids=True)
         failed = set(res.failed)
         db_failed = bool(failed.intersection(DB_LABELS))
         done = []
@@ -362,6 +365,10 @@ async def _run(db, user_id: str, rx, res: CascadeResult, *, only: Optional[froze
         res.people = await _step("people", people, res)
     if want("edges"):
         res.edges = await _step("edges", edges, res)
+    if "people" in res.failed and "edges" not in res.failed:
+        # edges closes the relationships of the people the people step resolved; with that step failed there were no ids, so edges
+        # "succeeded" over nothing. It is pending together with its parent, or the contact's open edges would stay open for good.
+        res.failed.append("edges")
     if res.person_ids and only is None:       # a retry never arms the contact undo
         _last_cascade[user_id] = (time.monotonic(), list(res.person_ids), res.closed_at)
 
