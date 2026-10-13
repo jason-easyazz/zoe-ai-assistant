@@ -41,15 +41,18 @@ def enabled() -> bool:
 # ── the verbatim transcript, at forget time ──────────────────────────────────
 
 async def _with_db(fn: Callable[..., Any]) -> "tuple[int, int]":
-    """Run ``fn(db)`` on a pooled connection; ``(0, 0)`` when this process has no database pool at all (a lab / a bare unit test - the
-    forget cascade treats that the same way). A pool that exists and then fails raises from ``fn``."""
+    """Run ``fn(db)`` on a pooled connection; ``(0, 0)`` ONLY when this process has never had a database pool (a lab / a bare unit
+    test: there is no transcript table to reach). A process that HAD a pool and lost it, or whose pool is exhausted, RAISES - the
+    caller (``memory_forget_entity``) then does not report the forget as done: a redaction that silently did not run is a P1."""
     import contextlib
     stack = contextlib.AsyncExitStack()
     try:
-        from db_pool import get_db_ctx  # type: ignore[import]
+        from db_pool import get_db_ctx, pool_ever_initialised  # type: ignore[import]
         conn = await stack.enter_async_context(get_db_ctx())
     except RuntimeError:
-        logger.warning("forget_redact: no database in this process - the transcript was not redacted")
+        if pool_ever_initialised():
+            raise
+        logger.info("forget_redact: no database in this process (none was ever opened) - nothing to redact")
         return 0, 0
     async with stack:
         return await fn(conn)
