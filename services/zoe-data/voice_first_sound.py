@@ -14,9 +14,12 @@ from __future__ import annotations
 
 import asyncio
 import re
-from typing import AsyncIterator, Optional
+from typing import TYPE_CHECKING, AsyncIterator, Optional
 
 from typed_env import env_bool, env_int
+
+if TYPE_CHECKING:  # pragma: no cover
+    from voice_spacer import SpacerTurn
 
 
 def clause_enabled() -> bool:
@@ -71,25 +74,30 @@ def extract_first_clause(buffer: str, *, min_chars: Optional[int] = None,
 
 
 # ── the tool-turn acknowledgement ──
-# Router domains whose answer needs a tool round before the brain can speak. 'chat' is absent on purpose: a chat
-# turn gets no acknowledgement (the blueprint's control: acknowledge-always must fail).
-_TOOL_ACK_LINES = {
-    "calendar": "Let me check your calendar.", "lists": "Let me check your lists.",
-    "reminders": "Let me check your reminders.", "weather": "Let me check the weather.",
-    "memory": "Let me think.", "timers": "One sec.", "people": "One sec.", "notes": "One sec.",
-    "journal": "One sec.", "music": "One sec.", "smart_home": "One sec.", "time": "One sec.",
-}
+# The lines are the lexicon's (``lexicons_data/<lang>.json`` "spacer" -> ``tool_ack`` / ``families``) and the policy is
+# ``voice_spacer``'s: ONE spacer per turn, never the same line twice running, a family that fits the domain, silence for a
+# disclosure and for a recall/identity question the stack answers from the account or the packet. 'chat' has no pool on
+# purpose: a chat turn gets no acknowledgement (the blueprint's control: acknowledge-always must fail).
 
 
 def dispatch_ack(router_decision: Optional[dict], *, audio_started: bool = False, filler_emitted: bool = False,
-                 processing_ack_sent: bool = False) -> Optional[str]:
+                 processing_ack_sent: bool = False, spacer: "Optional[SpacerTurn]" = None, text: str = "") -> Optional[str]:
     """The stream loop's one decision point: the line to speak at brain dispatch, or None (flag off, chat or unknown
-    router domain, or sound already started: audio, the tool filler, the cached processing-ack)."""
+    router domain, or sound already started: audio, a filler, the cached processing-ack, or another spacer on this turn).
+
+    ``spacer`` is the turn's shared ``voice_spacer.SpacerTurn`` (the live loop passes it; it also carries the timer filler's
+    claim and the panel's last lines). Without one a transient turn is built from ``router_decision`` and ``text``, so the
+    pure call still applies the same pool, the same chat rule and the same no-repeat memory."""
     if audio_started or filler_emitted or processing_ack_sent or not tool_ack_enabled():
         return None
     if not isinstance(router_decision, dict):
         return None
-    return _TOOL_ACK_LINES.get(str(router_decision.get("routed") or "").strip().lower())
+    from voice_spacer import SpacerTurn
+
+    turn = spacer if spacer is not None else SpacerTurn(text=text)
+    if not turn.domain:
+        turn.note_router(router_decision)
+    return turn.tool_ack_line()
 
 
 # ── start the brain request before the acknowledgement is synthesized ──

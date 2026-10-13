@@ -44,3 +44,32 @@ def test_memory_service_resolved_the_pin_at_import():
     assert os.path.realpath(memory_service._MEMPALACE_DATA) == str(
         _pinned("MEMPALACE_DATA_DIR")
     )
+
+
+def test_app_log_dir_is_pinned_off_the_live_log():
+    """A test that enters the FastAPI lifespan runs ``configure_logging()``, which writes to ``$ZOE_LOG_DIR``. Unpinned that is the live
+    server's ``~/.zoe-logs/zoe-data.app.log`` (measured 2026-10-13: 355 synthetic-user forget warnings from CI runs)."""
+    path = _pinned("ZOE_LOG_DIR")
+    assert path != (_HOME / ".zoe-logs").resolve()
+
+
+def test_configure_logging_with_no_arguments_lands_in_the_pin():
+    """What the lifespan does (no ``log_dir``): the handler's file must be under the throwaway dir, never the operator's log."""
+    import logging
+
+    logging_setup = pytest.importorskip("logging_setup")
+    pin = _pinned("ZOE_LOG_DIR")     # first: if the pin is missing, fail here rather than configure the live log
+    root = logging.getLogger()
+    saved, level = list(root.handlers), root.level
+    root.handlers[:] = [h for h in saved if getattr(h, "name", None) != logging_setup.HANDLER_NAME]
+    try:
+        handler = logging_setup.configure_logging()
+        assert handler is not None
+        assert pathlib.Path(handler.baseFilename).resolve().parent == pin
+    finally:
+        for h in list(root.handlers):
+            if h not in saved:
+                root.removeHandler(h)
+                h.close()
+        root.handlers[:] = saved
+        root.setLevel(level)

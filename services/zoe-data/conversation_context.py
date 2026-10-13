@@ -51,6 +51,19 @@ class ConversationContext:
 
         t = text.strip().lower()
 
+        # ── Smart home ("turn it back on again" after "turn the light off") ───────────────────────────────────────────────
+        # The words are the lexicon's (conversation_cues); the window is tighter than the context's own (a light someone
+        # just switched is "it" for about a minute, not two).
+        if self.last_intent == "smart_home" and self.last_slots.get("action") in ("turn_on", "turn_off"):
+            from conversation_cues import smart_home_followup, smart_home_followup_ttl_s
+            if time.time() - self.updated_at <= smart_home_followup_ttl_s():
+                verdict = smart_home_followup(text)
+                if verdict:
+                    last = self.last_slots["action"]
+                    action = ("turn_on" if verdict == "on" else "turn_off" if verdict == "off"
+                              else "turn_off" if last == "turn_on" else "turn_on")
+                    return "smart_home", {**self.last_slots, "action": action}
+
         # ── Volume ────────────────────────────────────────────────────────────
         if self.last_intent == "set_volume":
             m = _PERCENTAGE_RE.search(text)

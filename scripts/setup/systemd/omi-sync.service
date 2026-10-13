@@ -8,12 +8,13 @@
 #
 # Inert until ALL of these hold (it is never auto-enabled):
 #   1. the pendant is unpaired from the Omi phone app (it accepts ONE connection; do NOT pair it to the Pi);
-#   2. ~/.zoe-omi-sync/.env.omi has OMI_SYNC_ENABLED=1, OMI_PENDANT_ADDRESS, ZOE_URL, DEVICE_TOKEN
+#   2. ~/.zoe-omi-sync/.env.omi has OMI_SYNC_ENABLED=1, OMI_PENDANT_ADDRESSES (comma list; or the single OMI_PENDANT_ADDRESS), ZOE_URL, DEVICE_TOKEN
 #      (the same panel device token the voice daemon uses), and the user may run `sudo -n hcitool lecc|ledc`
 #      (the long-supervision-timeout link recipe; see docs/architecture/omi-integration-plan.md section 4.7 step 2).
 #      The pendant firmware is 3.0.18: also OMI_SYNC_LEGACY_FILES=1 + OMI_SYNC_ASSUME_CODEC=21 (an informed opt-in), or update
 #      it first (plan 4.10);
-#   3. zoe-data has ZOE_OMI_SYNC_ENABLED=1 + ZOE_OMI_OWNER_USER_ID set, and migration 0045 applied;
+#   3. zoe-data has ZOE_OMI_SYNC_ENABLED=1 + ZOE_OMI_OWNER_USER_ID set (or ZOE_OMI_DEVICE_OWNERS=1 and each pendant assigned in
+#      Settings > Bluetooth devices), and migrations 0045 (+ 0047 for the owners registry) applied;
 #   4. the venv exists:  python3 -m venv ~/.zoe-omi-sync/venv && ~/.zoe-omi-sync/venv/bin/pip install -r services/omi-sync/requirements.txt
 #      (and `sudo apt install libopus0`), with the code copied/synced to ~/.zoe-omi-sync/app/ from a git worktree.
 #
