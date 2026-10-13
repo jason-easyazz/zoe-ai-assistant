@@ -3,7 +3,7 @@ type: research
 title: "Making WeSpeaker ResNet34 panel-ready (2026-10-13): INT8 QDQ, ORT options, enrolment, cohort-mean centring, thresholds, adaptation"
 date: 2026-10-13
 status: measured on the Jetson CPU and the panel Pi 5. No live path, flag, service, unit or profile changed. Aggregates only - no clip names, transcripts, audio or embeddings (docs/knowledge/biometric-retention-policy.md). Owner-corpus speaker labels are INFERRED (bake-off record section 2.2); the labelled-public axis is the one to trust for ranking. The production swap is NOT built here.
-description: Every lever the owner asked for, each run as a measured experiment against the bake-off's own trial design (same frozen owner corpus, same impostors, same public axis, baseline reproduced to the digit) with bootstrap CIs and paired deltas. Winners - static INT8 QDQ (2.4-3.5x faster, no accuracy loss), ORT spinning off, cohort-mean centring, 5 clips with outlier rejection, length-dependent thresholds, retuned adaptation guards. Losers - dynamic INT8, FP16 (kept as fallback), S8 activations, duration caps, silence trim/strip, length-weighted enrolment, AS-norm on top of centring, threads beyond 2. Recommended panel configuration and a migration note.
+description: Every lever the owner asked for, each run as a measured experiment against the bake-off's own trial design (same frozen owner corpus, same impostors, same public axis, baseline reproduced to the digit) with bootstrap CIs and paired deltas. Winners - static INT8 QDQ (2.3-2.8x faster in the same session, 3.5x against the bake-off record; no accuracy loss), ORT spinning off, cohort-mean centring, 5 clips with outlier rejection, length-dependent thresholds, retuned adaptation guards. Losers - dynamic INT8, FP16 (kept as fallback), S8 activations, duration caps, silence trim/strip, length-weighted enrolment, AS-norm on top of centring, threads beyond 2. Recommended panel configuration and a migration note.
 evidence_labels: "[measured] this run, scripts/perf/speaker_bakeoff.py + speaker_lab.py | [record] copied from docs/research/speaker-model-bakeoff-2026-10.md | [src] file:line read in this worktree | [derived] arithmetic on measured numbers | [hypothesis] / [unverified] not confirmed"
 ---
 
@@ -17,13 +17,14 @@ on paper: as fast and as accurate as it can get, with every number comparable to
 
 ## 0. Answer first
 
-**Recommended panel configuration** (details and the full lever table below):
+**Recommended panel configuration** (details and the full lever table below). The latency headline is the **same-session** FP32 -> INT8 pair; the 369 -> 106 ms line is a secondary cross-session comparison against the bake-off record:
 
 | | bake-off baseline | recommended | change |
 |---|---|---|---|
 | model file | `wespeaker_en_voxceleb_resnet34.onnx`, FP32, 26.5 MB | same network, **static INT8 QDQ** (U8 activations, S8 per-channel weights, MinMax calibration on 100 public dev-clean clips), 6.8 MB | 3.9x smaller |
 | ORT | `ORT_ENABLE_ALL`, 2 threads | `ORT_ENABLE_ALL` (anything below EXTENDED is a trap, section 3.3), 2 threads, **`session.intra_op.allow_spinning=0`** | |
-| Pi 5 latency, 3.65 s clips | p50 369 ms / p95 1002 ms [record, cool Pi] | **p50 106 ms / p95 242 ms** (median of 3 passes, 60 clips, un-throttled, Pi at 73 - 81 C) | 3.5x / 4.1x faster; under the 150 ms goal |
+| Pi 5 latency, **same session, same 30 clips** (mean 2.86 s), un-throttled | FP32 **p50 232 ms [228-238] / p95 665 ms** (3 clean passes of 4) | INT8 + spin off **p50 89 ms [87-90] / p95 225 ms** (4 clean passes) | **2.6x p50 / 3.0x p95**; 16-clip sweeps agree: FP32 203 -> INT8 83 - 89 ms (2.3 - 2.4x), 200 -> 71 - 75 ms with spinning off on both (2.7 - 2.8x) |
+| Pi 5 latency, 3.65 s clips - **secondary, cross-session** | p50 369 ms / p95 1002 ms [bake-off record, 07:00, Pi at 65 C] | p50 106 ms / p95 242 ms (60 clips, median of 3 passes, un-throttled, Pi at 73 - 81 C, 4 h later) | 3.5x / 4.1x - a different session and a cooler Pi for the baseline, so read it as supporting only; under the 150 ms goal either way |
 | Pi peak RSS (fresh process) | ~233 MB [record] | **199 - 218 MB** | same |
 | owner strict core, 3-clip enrolment: EER / FRR@FAR1 % / FRR@FAR0.1 % | 1.31 % / 1.61 % / 6.42 % | **0.72 % / 0.48 % / 4.03 %** | EER -0.58 pp [-0.71, -0.45] |
 | same, nested design (sessions with 8 or more clips): 3 / 5 / 8 enrolment clips | 1.19 % / 1.31 % / 4.16 % (3 clips, FP32 raw) | 0.69 % / 0.45 % / 2.33 % (3) ; **0.53 % / 0.29 % / 1.85 % (5)** ; 0.47 % / 0.17 % / 1.33 % (8) | |
@@ -80,8 +81,8 @@ the final row group (section 3.4) uses the bake-off's 60 clips (mean 3.65 s).
 | 7b | S-norm / AS-norm (top-k 20, 50, 100, 200) | raw 1.31 % | owner EER 0.76 - 0.82 % (same as centring: 0.79 %); FRR@0.1 % no better (4.0 - 6.4 %); public EER 2.13 - 2.27 % | **not adopted on top of centring** (centring + AS-norm k=50: owner EER 0.70 %, FRR@0.1 % worse 5.56 %, public 2.04 %; CIs overlap centring alone) |
 | 7c | clean-speech cohort instead of far-field | - | owner delta EER +0.05 [-0.11, +0.21]; AS-norm k=20 FRR@0.1 % +7.6 pp* worse | the cohort must share the channel; **far-field only** |
 | 7d | which clips make the mean | all 240 clips: 0.72 % | half the speakers: 0.71 / 0.73 %; 24 random clips: 0.71 / 0.75 / **0.86 %** | use 200 or more clips from 40 or more speakers |
-| 8 | length-dependent thresholds, speaker-disjoint 2-fold CV, INT8 + centring | one global threshold: short (2 s or less) FAR 0.70 %, long 1.52 % at a 1 % target | per-group: 1.20 % / 1.27 %; short-clip FRR 1.52 % -> 0.88 % (FAR 1 %), 9.91 % -> 4.87 % (FAR 0.1 %) | **KEEP** (two groups; three groups add nothing). Overall FRR unchanged (0.51 %) |
-| 9 | #2002 adaptation on ResNet34 profiles | its defaults (score 0.85, anchor cosine 0.80) | **never fire** (0 updates); with gates retuned: held-out FRR@FAR1 % 0.77 % -> 0.02 %, FRR@0.1 % 5.94 % -> 0.67 %; section 5 | retune the constants; a score gate alone admits a lookalike |
+| 8 | length-dependent thresholds, speaker-disjoint 2-fold CV, INT8 + centring (paired, section 2.1) | one global threshold: short (2 s or less) FAR 0.70 %, long 1.52 % at a 1 % target (gap -0.86 pp [-1.57, -0.05]) | per-group thresholds: FAR 1.20 % / 1.27 % (gap -0.10 pp [-0.87, +0.89]); FRR short **-0.62 pp [-0.87, -0.37]*** (1.52 -> 0.88 %), long +0.11 [+0.08, +0.14]*, overall +0.01 [-0.04, +0.06]. At FAR 0.1 %: FRR short **-5.02 pp [-5.86, -4.17]*** (9.91 -> 4.87 %), long +0.58 [+0.51, +0.64]*, overall -0.19 [-0.38, -0.03]* | **KEEP** (two groups; three add nothing). The gain is on short clips; overall FRR is unchanged at FAR 1 %. The FAR-gap interval is wide: the FAR equalisation is directional evidence (the global gap excludes 0, the per-group gap does not), not a tight estimate |
+| 9 | #2002 adaptation on ResNet34 profiles (paired two-level bootstrap, section 2.1) | its defaults (score 0.85, anchor cosine 0.80) | **never fire** (0 updates); with the retuned gates (score 0.342, anchor 0.45): held-out FRR@FAR1 % **-0.73 pp [-1.34, -0.32]*** (0.77 -> 0.02 %), FRR@0.1 % **-5.12 pp [-7.60, -2.91]*** (5.94 -> 0.67 %), impostor FAR at the fixed 0.1 % threshold -0.09 pp [-0.19, -0.03]*, at the 1 % threshold -0.14 pp [-0.36, +0.05] (no measurable change); section 5 | retune the constants; a score gate alone admits a lookalike |
 
 ## 2. Method
 
@@ -108,9 +109,21 @@ the final row group (section 3.4) uses the bake-off's 60 clips (mean 3.65 s).
   onnx 1.19.1 (quantisation tooling only), numpy 2.2.6 (Jetson scratch venv) / 2.4.4 (Pi), scipy 1.15.3, scikit-learn 1.7.2.
   Model files: FP32 sha256 `5ef208a9da14...57fe94` (matches the sherpa-onnx release `checksum.txt`), INT8 QDQ
   `d1f65aa0e09b...1eae32` (built by `speaker_bakeoff.py quantize`, calibration clips shuffled with `random.Random(3)`).
-- **Statistics**: CIs resample probe clips (columns); the 30 enrolment draws stay paired. Every delta in this record uses the
-  same resample indices for both arms. The FAR 0.1 % rows rest on a few hundred distinct impostor clips - read them as an order
-  of magnitude. The shuffled-label control stays at 50.0 - 50.3 % EER.
+- **Statistics** - which interval means what:
+  - Accuracy deltas in sections 1, 4.1, 4.2 (quantisation, caps, trim, enrolment recipes and clip counts, contamination arm, centring, AS-norm,
+    cohort subsets, final pipeline) are **paired bootstraps over probe clips**: both arms are scored on the same 30 enrolment draws and
+    the same resampled probe columns (owner path: shared `boot_indices`; public path: shared `public_boot_indices`, explicit since the
+    revision of 2026-10-13). They do **not** cover the variance of the enrolment draws, the inferred owner labels or the choice of
+    impostors; the strict-vs-lenient swing is far larger than any interval.
+  - Length-threshold deltas (row 8) are paired bootstraps over genuine clips and impostor clips with the speaker-disjoint thresholds held as
+    cross-validated (both schemes scored on the same resampled clips).
+  - Adaptation deltas (row 9, section 5) are paired two-level bootstraps: enrolment draws, then the held-out genuine and impostor clips inside
+    each draw, with the same indices for the anchor-only and the adapted profile. The lookalike and admitted-update counts are one value per
+    draw, so their intervals are over enrolment draws only. The 30 draws share one clip stream, so they are not independent - read these
+    intervals as optimistic.
+  - Speed intervals are the range over 3 - 4 passes, not CIs.
+  The FAR 0.1 % rows rest on a few hundred distinct impostor clips - read them as an order of magnitude. The shuffled-label control stays at
+  50.0 - 50.3 % EER.
 - **Run discipline**: every Jetson model step ran under an **exclusive** hold of `/tmp/zoe-voice-harness.lock`, `nice -n 10`, CUDA
   hidden, with the 2 GB `MemAvailable` gate before each model load (the box sat at 1.1 - 2.7 GB through the session, mostly below
   2 GB, so jobs queued for hours behind other agents' voice probes; the 1.5 GB mid-run floor never tripped). The numpy-only analysis
@@ -137,10 +150,10 @@ about half a core). The firmware's soft temperature limit (about 82 C) engaged d
 showed the soft-limit and frequency-cap bits and the clock fell from 2.4 to 1.5 GHz. A first 40-clip FP32 sweep was discarded
 because the timings were taken throttled (and it pushed the panel to 88 C - it was killed). The harness now gates: it waits
 for the SoC to cool to `--max-temp-c`, samples the throttle bits during the run, flags a pass `tainted` if any were set, re-runs
-it after another cool-down and never averages a tainted pass. **FP32 at 60 clips could not be re-measured un-throttled
-in this session** - it always crossed the limit - so the FP32 reference below is the record's 369 / 1002 ms (cool Pi) plus
-clean same-session ratios at 16 clips. The INT8 numbers are un-throttled and were measured on a **warmer** Pi than the baseline, so
-the speed-up is conservative. Every row in a sweep shares a process; its RSS columns are cumulative and are not quoted
+it after another cool-down and never averages a tainted pass. **FP32 at 60 clips could not be re-measured un-throttled** - it always crossed the limit, even from 66 C - so the same-session FP32
+comparison uses shorter runs: 16 clips (sweeps A - D) and 30 clips (3 of 4 FP32 passes stayed un-throttled, start 70 - 72 C, end 81.5 C, just under
+the limit; the fourth was throttled and dropped). The 60-clip FP32 reference is the record's 369 / 1002 ms (cool Pi) and is a cross-session
+comparison only. The INT8 numbers are un-throttled and were measured on a **warmer** Pi than that baseline, so the cross-session speed-up is conservative. Every row in a sweep shares a process; its RSS columns are cumulative and are not quoted
 (fresh-process RSS is in section 3.4).
 
 ### 3.2 Where the time goes
@@ -161,12 +174,14 @@ have **cosine 1.0 (min 0.9999999999999998)** - a profile enrolled on either box 
 FP32 ResNet34 itself shows no drift between any ORT option (none / basic / extended / layout, 1 - 4 threads, arena and
 mem-pattern and spinning off, parallel mode): cosine 1.0 on 40 clips, so the `>= 0.9999` check holds for all of them.
 
-### 3.4 Final numbers (60 public clips, mean 3.65 s, the bake-off's set; Pi 5; un-throttled passes only)
+### 3.4 Final numbers (public clips; Pi 5; un-throttled passes only; the 60-clip rows are the bake-off's set, mean 3.65 s)
 
 | config | p50 ms (3 passes) | p95 ms | ms per audio-s + fixed | fbank | notes |
 |---|---|---|---|---|---|
 | FP32, 2 thr, ORT_ENABLE_ALL [record] | **369** | 1002 | 134 | | cool Pi, record |
 | FP32, 2 thr (this session, 8 clips, fresh process) | 231 | 588 | 87.5 + 48 | 6 | mean 2.84 s |
+| **same-session pair, 30 clips (mean 2.86 s): FP32, 2 thr** | **232 [228-238]** | **665 [664-672]** | 89 + 34 | 3 - 6 | 3 clean passes of 4; the headline FP32 reference |
+| **same-session pair, 30 clips: INT8, 2 thr, spin off** | **89 [87-90]** | **225 [222-228]** | 29.7 + 17 | 3 | 4 clean passes; **2.6x p50, 3.0x p95** vs the row above |
 | **INT8 QDQ, 2 thr, spin off (recommended)** | **106 [105-108]** | **242 [241-245]** | **29.6 + 17** | 4.1 | un-throttled, Pi 73 -> 81.5 C |
 | INT8, 1 thr, spin off | 136 [135-142] | 371 [368-385] | 49.3 + 0 | 3.6 | frees a core, +29 % latency |
 | INT8, 4 thr, spin off | about 90 - 97 (**throttled**, indicative) | about 191 | 22.4 + 25 | 4 | every 60-clip pass crossed the limit; 16 and 30 clip passes were clean: 64 (2.43 s) and 78 - 86 (2.86 s) ms, p95 150 - 183 |
@@ -219,20 +234,26 @@ drift bound (the update is refused if the profile would fall under cosine 0.92 o
 that policy. Results on ResNet34 (INT8 + centring, 30 enrolment draws, owner strict clips replayed in capture order, first 70 % offered,
 last 30 % held out; FAR thresholds fixed from the anchor-only trials: 0.253 at FAR 1 %, 0.342 at FAR 0.1 %):
 
-| guard setting | updates applied (mean) | held-out genuine mean | FRR@FAR1 % | FRR@FAR0.1 % | impostor FAR at the fixed 1 % / 0.1 % thresholds | worst-case lookalike offered 5 per day for 73 days |
+| guard setting | updates applied per replay (mean [95 % CI]) | held-out genuine mean score | FRR@FAR1 % | FRR@FAR0.1 % | impostor FAR at the fixed 1 % / 0.1 % thresholds | worst-case lookalike offered 5 per day for 73 days: admitted updates, score before -> after |
 |---|---|---|---|---|---|---|
-| #2002 defaults (0.85 / 0.80) | **0** | 0.519 | 0.77 % | 5.94 % | 1.00 % / 0.097 % | nothing admitted |
-| score and anchor gate at the FAR-1 % threshold (0.253) | 38.4 | 0.519 -> 0.613 | 0.77 -> 0.02 % | 5.94 -> 0.61 % | 0.93 % / 0.009 % | **8.1 admitted; lookalike score 0.321 -> 0.629** (cosine to anchor 0.932) |
-| gate at the FAR-0.1 % threshold (0.342) | 38.5 | 0.519 -> 0.613 | 0.77 -> 0.02 % | 5.94 -> 0.62 % | 0.89 % / 0.004 % | 3.6 admitted; lookalike 0.321 -> 0.452 (crosses the 0.342 threshold) |
-| **score gate 0.342 + anchor-cosine gate 0.45** | 38.5 | 0.519 -> 0.611 | 0.77 -> 0.02 % | 5.94 -> 0.67 % | 0.86 % / 0.004 % | **0 admitted; lookalike unchanged** |
+| #2002 defaults (0.85 / 0.80) | **0** | 0.519 (no change) | 0.77 % (no change) | 5.94 % (no change) | 1.00 % / 0.097 % (no change) | 0; unchanged |
+| score and anchor gate at the FAR-1 % threshold (0.253) | 38.4 [34.4, 42.0] | 0.519 -> 0.613 (+0.09 [+0.08, +0.10]*) | 0.77 -> 0.02 % (-0.73 pp [-1.34, -0.32]*) | 5.94 -> 0.61 % (-5.17 pp [-7.64, -2.92]*) | 0.93 % (-0.07 pp [-0.29, +0.11]) / 0.009 % (-0.09 pp [-0.19, -0.02]*) | **8.1 [7.0, 8.8]; 0.321 -> 0.629** (+0.31 [+0.28, +0.33]*) |
+| gate at the FAR-0.1 % threshold (0.342) | 38.5 [34.4, 42.1] | 0.519 -> 0.613 (+0.09 [+0.08, +0.10]*) | 0.77 -> 0.02 % (-0.73 pp [-1.34, -0.32]*) | 5.94 -> 0.62 % (-5.16 pp [-7.61, -2.92]*) | 0.89 % (-0.11 pp [-0.30, +0.08]) / 0.004 % (-0.09 pp [-0.19, -0.03]*) | 3.6 [2.4, 5.1]; 0.321 -> 0.452 (+0.13 [+0.07, +0.19]*; crosses the 0.342 threshold) |
+| **score gate 0.342 + anchor-cosine gate 0.45** | 38.5 [34.1, 42.1] | 0.519 -> 0.611 (+0.09 [+0.08, +0.10]*) | 0.77 -> 0.02 % (-0.73 pp [-1.34, -0.32]*) | 5.94 -> 0.67 % (-5.12 pp [-7.60, -2.91]*) | 0.86 % (-0.14 pp [-0.36, +0.05]) / 0.004 % (-0.09 pp [-0.19, -0.03]*) | **0; unchanged** |
 
-Reading: (1) the PR's constants are Resemblyzer-scale and never fire on ResNet34 - they are single global env settings today (`ZOE_SPEAKER_ADAPT_MIN_SCORE`, `ZOE_SPEAKER_ADAPT_ANCHOR_FLOOR`) and must become per-model settings keyed by `model_id`.
-(2) Adaptation helps ResNet34 a lot (held-out FRR@1 % 0.77 -> 0.02 %) and does not loosen the impostor side (FAR at the fixed
-thresholds goes *down*). (3) A score gate set at a FAR threshold is not enough: the single most owner-like public impostor
-(score 0.32 - 0.36 to the anchor) is admitted and drags itself to 0.63. The extra rule that stops it costs nothing: require the clip's
-cosine to the **anchor** to clear a bar above the worst impostor seen (0.45 here, about the 22nd genuine percentile, so roughly 4 owner turns in 5 can still adapt) - the drift bound
-(final cosine 0.923 against a 0.92 limit) limits the damage but did not prevent admission. This is the same residual risk #2002 names for a true
-lookalike; it is narrowed, not removed, and needs the second enrolled member's margin guard to be meaningful.
+Deltas are adapted minus anchor-only, paired within each draw (two-level bootstrap, section 2.1). Between gates, paired by draw: the extra anchor
+gate vs the FAR-0.1 % gate alone lowers the lookalike's final score by 0.13 [0.07, 0.19] and the admitted updates by 3.6 [1.8, 5.1], with
+no change in held-out FRR@0.1 % (+0.000 [+0.000, +0.001]); the FAR-0.1 % gate vs the FAR-1 % gate lowers them by 0.18 [0.12, 0.24] and 4.5 [3.0, 6.1].
+
+Reading: (1) the PR's constants are Resemblyzer-scale and never fire on ResNet34 - they are single global env settings today
+(`ZOE_SPEAKER_ADAPT_MIN_SCORE`, `ZOE_SPEAKER_ADAPT_ANCHOR_FLOOR`) and must become per-model settings keyed by `model_id`.
+(2) Adaptation helps ResNet34 a lot (held-out FRR@1 % 0.77 -> 0.02 %, FRR@0.1 % 5.9 -> 0.7 %) and does not measurably loosen the impostor
+side (FAR at the fixed 1 % threshold moves by -0.14 pp [-0.36, +0.05], i.e. no detectable change; at the 0.1 % threshold it falls). (3) A score gate
+set at a FAR threshold is not enough: the single most owner-like public impostor (score 0.32 - 0.36 to the anchor) is admitted and drags itself to 0.63.
+The extra rule that stops it costs nothing: require the clip's cosine to the **anchor** to clear a bar above the worst impostor seen (0.45 here, about the
+22nd genuine percentile, so roughly 4 owner turns in 5 can still adapt) - the drift bound (final cosine 0.923 against a 0.92 limit) limits the damage but
+did not prevent admission. This is the same residual risk #2002 names for a true lookalike; it is narrowed, not removed, and needs the second enrolled
+member's margin guard to be meaningful. The lookalike is one impostor per enrolment draw, so the admitted-update and lookalike intervals are over draws.
 
 ## 6. Where it runs, and why not the Jetson
 

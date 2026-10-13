@@ -365,6 +365,64 @@ def test_length_dependent_thresholds_equalise_far_across_duration_groups():
     assert 0.0 <= l["frr"] <= 1.0
 
 
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")  # the single-group control leaves a group empty on purpose
+def test_length_threshold_ci_is_paired_and_shows_the_far_gap_closing():
+    rng = np.random.default_rng(26)
+    n_draw, n_imp, n_gen = 3, 3000, 500
+    idur = np.where(rng.random(n_imp) < 0.4, 1.5, 3.5)
+    ispk = rng.integers(0, 60, n_imp)
+    I = np.where(idur[None, :] <= 2.0, rng.normal(0.18, 0.14, (n_draw, n_imp)), rng.normal(0.05, 0.08, (n_draw, n_imp)))
+    gdur = np.where(rng.random(n_gen) < 0.4, 1.5, 3.5)
+    G = np.where(gdur[None, :] <= 2.0, rng.normal(0.55, 0.15, (n_draw, n_gen)), rng.normal(0.62, 0.12, (n_draw, n_gen)))
+    out = lab.length_threshold_cv(G, gdur, I, idur, ispk, [2.0], n_rep=4, n_boot=40)
+    ci_ = out["ci"]["far0.01"]
+    # the global threshold leaves a FAR gap between the groups whose interval excludes 0; per-group thresholds close it
+    assert ci_["far_gap_global"]["ci95"][0] > 0
+    assert abs(ci_["far_gap_length"]["mean"]) < 0.5 * abs(ci_["far_gap_global"]["mean"])
+    for k in ("frr_delta_overall", "frr_delta_g0", "frr_delta_g1"):
+        lo, hi = ci_[k]["ci95"]
+        assert lo <= ci_[k]["mean"] <= hi
+    # the CI means track the point estimates of the same run (paired, same tallies)
+    pt = out["far0.01"]
+    assert abs(ci_["far_global_g0"]["mean"] - pt["global"]["far_by_group"][0]) < 0.01
+    # identical schemes (one duration group, so length == global) => the paired FRR difference is exactly 0
+    same = lab.length_threshold_cv(G, np.full(n_gen, 3.5), I, np.full(n_imp, 3.5), ispk, [2.0], n_rep=2, n_boot=20)
+    assert same["ci"]["far0.01"]["frr_delta_overall"]["ci95"] == [0.0, 0.0]
+
+
+def test_adapt_boot_is_paired_and_zero_when_nothing_changed():
+    rng = np.random.default_rng(27)
+    per = []
+    for _ in range(12):
+        gb = rng.normal(0.5, 0.1, 80)
+        ib = rng.normal(0.0, 0.1, 200)
+        per.append({"gb": gb, "ga": gb + 0.1, "ib": ib, "ia": ib.copy()})
+    d = lab.adapt_boot(per, 0.4, 0.5, n_boot=60)
+    assert d["genuine_mean"]["ci95"][0] > 0.09 and d["frr_far1"]["ci95"][1] < 0  # genuine scores rose, FRR fell
+    assert d["far_at_thr1"]["ci95"] == [0.0, 0.0]  # impostors untouched => paired difference is exactly 0
+    for p in per:
+        p["ga"] = p["gb"].copy()
+    z = lab.adapt_boot(per, 0.4, 0.5, n_boot=30)
+    assert all(v["ci95"] == [0.0, 0.0] for v in z.values())
+    assert lab.draw_boot_diff([1, 2, 3], [1, 2, 3], 20)["ci95"] == [0.0, 0.0]
+    b = lab.draw_boot([0.0, 1.0, 1.0, 1.0], 100)
+    assert b["ci95"][0] <= b["mean"] <= b["ci95"][1]
+
+
+def test_public_report_explicit_boot_indices_match_the_seeded_default():
+    rng = np.random.default_rng(28)
+    E, y = _speakers(rng, 6, 16, noise=0.2)
+    role_probe = np.tile(np.r_[np.zeros(4, bool), np.ones(12, bool)], 6)
+    spk = np.array([f"s{v}" for v in y])
+    e_idx, p_idx = np.where(~role_probe)[0], np.where(role_probe)[0]
+    S, same = lab.public_scores(E, p_idx, e_idx, spk, lab.Scorer("raw"))
+    bucket = np.array(list("sml"))[np.arange(len(p_idx)) % 3]
+    a = lab.public_report(S, same, bucket, n_boot=15)
+    idx = lab.public_boot_indices(len(p_idx), 15, 11)
+    b = lab.public_report(S, same, bucket, n_boot=99, idx=idx)  # idx wins over n_boot
+    assert np.array_equal(a["_boots"], b["_boots"])
+
+
 def test_group_of_edges_are_inclusive_on_the_low_side():
     assert list(lab.group_of([1.0, 2.0, 2.01, 5.0], [2.0])) == [0, 0, 1, 1]
     assert list(lab.group_of([1.0, 2.0, 3.0, 4.0, 5.0], [2.0, 4.0])) == [0, 0, 1, 1, 2]
@@ -514,12 +572,13 @@ def test_every_experiment_runs_end_to_end_on_a_synthetic_scratch_dir(tmp_path):
     sens = lab.exp_centersens(ctx, a, {})
     assert "all_240" in sens["owner"] and "none" in sens["public"]
     len_ = lab.exp_lenthr(ctx, a, {})
-    assert set(len_["edges_2s"]) == {"far0.01", "far0.001"} and len_["thresholds_insample"]["far0.01"]["global"] > 0
+    assert {"far0.01", "far0.001", "ci"} <= set(len_["edges_2s"]) and len_["thresholds_insample"]["far0.01"]["global"] > 0
     ad = lab.exp_adapt(ctx, a, {})
     assert set(ad["arms"]) >= {"resemblyzer_scale_defaults", "far01_gate+hi_anchor"}
     far = ad["arms"]["far01_gate"]
     assert far["n_draws_used"] > 0 and far["applied"] > 0 and far["anchor_cos"] >= 0.92 - 1e-9  # the drift bound holds
     assert ad["arms"]["far01_gate+hi_anchor"]["kw"]["min_anchor_cos"] >= far["kw"]["min_anchor_cos"]
+    assert {"delta_ci", "lookalike_delta", "poison_admitted_ci"} <= set(far) and "far01_gate+hi_anchor minus far01_gate" in ad["arm_vs_arm"]
     fin = lab.exp_final(ctx, a, {"tag": "syn", "center": 1})
     assert "final_n3" in fin["owner_strict"] and "final_n4" in fin["public"]
     text = lab.show(fin) + lab.show_other(len_) + lab.show_other(ad)

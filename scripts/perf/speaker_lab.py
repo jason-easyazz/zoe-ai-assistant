@@ -285,8 +285,16 @@ def public_scores(Ep, p_idx, e_idx, spk, scorer: Scorer, *, n_enrol: int = 3, en
     return S, same
 
 
-def public_report(S, same, bucket, n_boot: int = 0, seed: int = 11) -> dict:
-    """Overall + per-length-bucket metrics; bootstrap over probe rows when ``n_boot``."""
+def public_boot_indices(n_probe: int, n_boot: int, seed: int = 11):
+    """Shared resample indices over public probe ROWS (the public-path twin of ``boot_indices``)."""
+    return np.random.default_rng(seed).integers(0, n_probe, (n_boot, n_probe))
+
+
+def public_report(S, same, bucket, n_boot: int = 0, seed: int = 11, idx=None) -> dict:
+    """Overall + per-length-bucket metrics; bootstrap over probe rows when ``n_boot``.
+
+    ``idx`` = ``public_boot_indices(...)`` makes the resamples explicit so two configs can be compared
+    PAIRED; without it the indices come from ``seed``, which is the same for equal probe counts."""
     P = S.shape[1]
     nsp = S.shape[2]
     # genuine (combos, P); impostors (combos, P, nsp-1)
@@ -298,10 +306,10 @@ def public_report(S, same, bucket, n_boot: int = 0, seed: int = 11) -> dict:
         if m.sum() >= 10:
             out[f"bucket_{b}"] = metrics(Gm[:, m], Im[:, m, :])
     if n_boot:
-        r = np.random.default_rng(seed)
-        boots = np.zeros((n_boot, 3))
-        for k in range(n_boot):
-            ix = r.integers(0, P, P)
+        idx = public_boot_indices(P, n_boot, seed) if idx is None else idx
+        boots = np.zeros((len(idx), 3))
+        for k in range(len(idx)):
+            ix = idx[k]
             q = det_point(Gm[:, ix].ravel(), Im[:, ix, :].ravel())
             boots[k] = [q[x] for x in KEYS]
         out["_boots"] = boots
@@ -315,7 +323,8 @@ def group_of(dur, edges) -> np.ndarray:
     return np.searchsorted(np.asarray(edges, float), np.asarray(dur, float), side="left")
 
 
-def length_threshold_cv(G, gdur, I, idur, ispk, edges, fars=(0.01, 0.001), seed: int = 5, n_rep: int = 20):
+def length_threshold_cv(G, gdur, I, idur, ispk, edges, fars=(0.01, 0.001), seed: int = 5, n_rep: int = 20,
+                        n_boot: int = 0, boot_seed: int = 17):
     """Cross-validated length-dependent thresholds.
 
     Impostor SPEAKERS are split into two folds at random (``n_rep`` times).  Thresholds are
@@ -324,20 +333,33 @@ def length_threshold_cv(G, gdur, I, idur, ispk, edges, fars=(0.01, 0.001), seed:
     in-sample FAR.  Genuine scores ``G`` (draws, clips; NaN = absent) have durations ``gdur``.
     Returns, per FAR target and scheme (global / length), the realised FAR and FRR overall and per
     duration group, averaged over folds and repeats.
+
+    With ``n_boot`` it also returns ``ci``: a bootstrap over genuine CLIPS and impostor CLIPS (the
+    thresholds stay as cross-validated) of the PAIRED difference length - global in FRR (per group and
+    overall), and of FAR per group for each scheme plus the short-minus-long FAR gap.  Both schemes
+    are scored on the very same resampled clips, so the differences are paired.
     """
     G, I = np.asarray(G), np.asarray(I)
     gg, ig = group_of(gdur, edges), group_of(idur, edges)
     ng = len(edges) + 1
     fin = np.isfinite(G)
+    n_g, n_i = G.shape[1], I.shape[1]
     spk_ids = np.unique(ispk)
     rr = np.random.default_rng(seed)
-    acc = {(far, name): {"far": [], "frr": [], "far_g": [[] for _ in range(ng)], "frr_g": [[] for _ in range(ng)]}
-           for far in fars for name in ("global", "length")}
+    keys = [(far, name) for far in fars for name in ("global", "length")]
+    acc = {k: {"far": [], "frr": [], "far_g": [[] for _ in range(ng)], "frr_g": [[] for _ in range(ng)]} for k in keys}
+    # per-clip tallies for the bootstrap: genuine misses / trials per clip, impostor accepts / trials per clip
+    gmiss = {k: np.zeros(n_g) for k in keys}
+    ghit = np.zeros(n_g)
+    iacc = {k: np.zeros(n_i) for k in keys}
+    itry = np.zeros(n_i)
     for _ in range(n_rep):
         perm = rr.permutation(spk_ids)
         folds = [np.isin(ispk, perm[: len(perm) // 2]), np.isin(ispk, perm[len(perm) // 2:])]
         for a, b in ((0, 1), (1, 0)):
             ia, ib = folds[a], folds[b]
+            ghit += fin.sum(axis=0)
+            itry[ib] += I.shape[0]
             for far in fars:
                 thr_global = np.quantile(_flat(I[:, ia]), 1.0 - far, method="higher")
                 thr_len = np.array([
@@ -346,6 +368,9 @@ def length_threshold_cv(G, gdur, I, idur, ispk, edges, fars=(0.01, 0.001), seed:
                 for name, thr in (("global", np.full(ng, thr_global)), ("length", thr_len)):
                     d = acc[(far, name)]
                     miss = (G <= thr[gg][None, :]) & fin
+                    hit = I > thr[ig][None, :]
+                    gmiss[(far, name)] += miss.sum(axis=0)
+                    iacc[(far, name)][ib] += hit[:, ib].sum(axis=0)
                     d["frr"].append(float(miss.sum() / fin.sum()))
                     d["far"].append(float((I[:, ib] > thr[ig][ib][None, :]).mean()))
                     for g in range(ng):
@@ -363,6 +388,34 @@ def length_threshold_cv(G, gdur, I, idur, ispk, edges, fars=(0.01, 0.001), seed:
                 "far": float(np.mean(d["far"])), "frr": float(np.mean(d["frr"])),
                 "far_by_group": [float(np.mean(x)) if x else None for x in d["far_g"]],
                 "frr_by_group": [float(np.mean(x)) if x else None for x in d["frr_g"]]}
+    if n_boot:
+        rb = np.random.default_rng(boot_seed)
+        gr = {k: gmiss[k] / np.maximum(ghit, 1) for k in keys}   # per-genuine-clip miss rate
+        ir = {k: iacc[k] / np.maximum(itry, 1) for k in keys}    # per-impostor-clip accept rate
+        gok, iok = ghit > 0, itry > 0
+        draws_ = {}
+        for far in fars:
+            g_, l_ = (far, "global"), (far, "length")
+            rows = []
+            for _ in range(n_boot):
+                gi_ = rb.integers(0, n_g, n_g)
+                ii_ = rb.integers(0, n_i, n_i)
+                gi_, ii_ = gi_[gok[gi_]], ii_[iok[ii_]]
+                r = {"frr_delta_overall": gr[l_][gi_].mean() - gr[g_][gi_].mean()}
+                for g in range(ng):
+                    sg = gi_[gg[gi_] == g]
+                    si = ii_[ig[ii_] == g]
+                    r[f"frr_delta_g{g}"] = gr[l_][sg].mean() - gr[g_][sg].mean() if len(sg) else np.nan
+                    r[f"far_global_g{g}"] = ir[g_][si].mean() if len(si) else np.nan
+                    r[f"far_length_g{g}"] = ir[l_][si].mean() if len(si) else np.nan
+                r["far_gap_global"] = r["far_global_g0"] - r[f"far_global_g{ng - 1}"]
+                r["far_gap_length"] = r["far_length_g0"] - r[f"far_length_g{ng - 1}"]
+                rows.append(r)
+            ks = rows[0].keys()
+            draws_[f"far{far}"] = {k: {"mean": float(np.nanmean([r[k] for r in rows])),
+                                       "ci95": [float(np.nanpercentile([r[k] for r in rows], 2.5)),
+                                                float(np.nanpercentile([r[k] for r in rows], 97.5))]} for k in ks}
+        out["ci"] = draws_
     return out
 
 
@@ -498,11 +551,12 @@ def exp_variant(ctx, a, kv):
                                 "delta": paired_delta(v["_boots"], b["_boots"]),
                                 "inside_base_ci": inside(v["all"], b["ci95"])}
     e_idx, p_idx = ctx.public_idx("farfield")
+    pidx = public_boot_indices(len(p_idx), nb, 11)  # explicit shared resamples => paired public deltas
     pr = {}
     for t in (ctx.base_tag, tag):
         _, Ei, _, _ = ctx.split(t)
         S, same = public_scores(Ei, p_idx, e_idx, ctx.spk, Scorer("raw"))
-        pr[t] = public_report(S, same, ctx.bk[p_idx], nb)
+        pr[t] = public_report(S, same, ctx.bk[p_idx], nb, idx=pidx)
     res["public"] = {"base": _strip(pr[ctx.base_tag]), "variant": _strip(pr[tag]),
                      "delta": paired_delta(pr[tag]["_boots"], pr[ctx.base_tag]["_boots"]),
                      "inside_base_ci": inside(pr[tag]["all"], pr[ctx.base_tag]["ci95"])}
@@ -585,6 +639,7 @@ def exp_norm(ctx, a, kv):
     draws = _design(ctx, a, core)
     idx = boot_indices(int(ctx.cores[core].sum()), len(ctx.imp_ff), nb, 41)
     e_idx, p_idx = ctx.public_idx("farfield")
+    pidx = public_boot_indices(len(p_idx), nb, 11)  # explicit shared resamples => paired public deltas
     fo, fp = {}, {}
     cfgs = [("raw", dict(mode="raw", center=False, cv="farfield"))]
     for cv in ("farfield", "clean"):
@@ -601,7 +656,7 @@ def exp_norm(ctx, a, kv):
         tr = owner_scores(Ec, Ei, ctx.cdur, ctx.csess, ctx.cores[core], ctx.imp_ff, ctx.imp_cl, draws, sc)
         fo[name] = owner_report(tr, ctx.cdur, ctx.bk[ctx.imp_ff], idx, nb)
         S, same = public_scores(Ei, p_idx, e_idx, ctx.spk, sc)
-        fp[name] = public_report(S, same, ctx.bk[p_idx], nb)
+        fp[name] = public_report(S, same, ctx.bk[p_idx], nb, idx=pidx)
     return {"owner": _attach_deltas(fo, "raw"), "public": _attach_deltas(fp, "raw")}
 
 
@@ -626,10 +681,48 @@ def exp_lenthr(ctx, a, kv):
                            "gt2s": float(np.quantile(_flat(tr["If"][:, gi == 1]), 1 - far, method="higher"))}
     dg, di = dist_summary(_flat(tr["G"])), dist_summary(_flat(tr["If"]))
     return {"thresholds_insample": thr, "dist_genuine": {k: round(float(v), 3) for k, v in dg.items()},
-            "dist_impostor": {k: round(float(v), 3) for k, v in di.items()}, "edges_2s": length_threshold_cv(tr["G"], gdur, tr["If"], idur, ispk, [2.0]),
-            "edges_2_4s": length_threshold_cv(tr["G"], gdur, tr["If"], idur, ispk, [2.0, 4.0]),
+            "dist_impostor": {k: round(float(v), 3) for k, v in di.items()}, "edges_2s": length_threshold_cv(tr["G"], gdur, tr["If"], idur, ispk, [2.0], n_boot=a.boot),
+            "edges_2_4s": length_threshold_cv(tr["G"], gdur, tr["If"], idur, ispk, [2.0, 4.0], n_boot=a.boot),
             "genuine_share_le2s": float((gdur <= 2.0).mean()),
             "impostor_share_le2s": float((idur <= 2.0).mean())}
+
+
+def adapt_boot(per_draw, thr1, thr01, n_boot: int = 200, seed: int = 23):
+    """Two-level PAIRED bootstrap of the adaptation effect: resample enrolment draws, then within each
+    draw resample the held-out genuine clips and the impostor clips (the same indices for the anchor-only
+    and the adapted profile of that draw, so every delta is paired).  Returns mean and 95 % CI of
+    (adapted - anchor-only) for the held-out genuine mean score, FRR at the fixed FAR-1 % / 0.1 %
+    thresholds, and the impostor FAR at them."""
+    rng = np.random.default_rng(seed)
+    n = len(per_draw)
+    names = ("genuine_mean", "frr_far1", "frr_far01", "far_at_thr1", "far_at_thr01")
+    rows = []
+    for _ in range(n_boot):
+        acc = np.zeros(len(names))
+        for d in rng.integers(0, n, n):
+            p = per_draw[d]
+            gi = rng.integers(0, len(p["gb"]), len(p["gb"]))
+            ii = rng.integers(0, len(p["ib"]), len(p["ib"]))
+            gb, ga, ib, ia = p["gb"][gi], p["ga"][gi], p["ib"][ii], p["ia"][ii]
+            acc += [ga.mean() - gb.mean(), (ga <= thr1).mean() - (gb <= thr1).mean(), (ga <= thr01).mean() - (gb <= thr01).mean(),
+                    (ia > thr1).mean() - (ib > thr1).mean(), (ia > thr01).mean() - (ib > thr01).mean()]
+        rows.append(acc / n)
+    rows = np.array(rows)
+    return {k: {"mean": float(rows[:, j].mean()), "ci95": [float(np.percentile(rows[:, j], 2.5)), float(np.percentile(rows[:, j], 97.5))]}
+            for j, k in enumerate(names)}
+
+
+def draw_boot(x, n_boot: int = 200, seed: int = 29):
+    """Mean and 95 % CI of a per-draw quantity (bootstrap over enrolment draws)."""
+    x = np.asarray(x, float)
+    r = np.random.default_rng(seed)
+    m = np.array([x[r.integers(0, len(x), len(x))].mean() for _ in range(n_boot)])
+    return {"mean": float(x.mean()), "ci95": [float(np.percentile(m, 2.5)), float(np.percentile(m, 97.5))]}
+
+
+def draw_boot_diff(x, y, n_boot: int = 200, seed: int = 31):
+    """Paired (same draws) bootstrap of mean(x - y) over enrolment draws."""
+    return draw_boot(np.asarray(x, float) - np.asarray(y, float), n_boot, seed)
 
 
 def exp_adapt(ctx, a, kv):
@@ -653,6 +746,7 @@ def exp_adapt(ctx, a, kv):
     imp_cols = ctx.imp_ff
     rr = np.random.default_rng(5)
     for arm, kw in arms.items():
+        per_draw = []
         res = {"applied": [], "genuine_before": [], "genuine_after": [], "frr1_before": [], "frr1_after": [],
                "frr01_before": [], "frr01_after": [], "far1_after": [], "far01_after": [], "imp_mean_before": [],
                "imp_mean_after": [], "anchor_cos": [], "poison_admitted": [], "lookalike_before": [], "lookalike_after": [],
@@ -670,6 +764,7 @@ def exp_adapt(ctx, a, kv):
             ga = Ec[test] @ prof
             ib = Ei[imp_cols] @ anchor
             ia = Ei[imp_cols] @ prof
+            per_draw.append({"gb": gb.copy(), "ga": ga.copy(), "ib": ib.copy(), "ia": ia.copy()})
             res["applied"].append(int(applied.sum()))
             res["genuine_before"].append(float(gb.mean()))
             res["genuine_after"].append(float(ga.mean()))
@@ -695,6 +790,23 @@ def exp_adapt(ctx, a, kv):
             res["lookalike_cos"].append(float(pprof @ anchor))
         m = lambda k: float(np.mean(res[k])) if res[k] else None  # noqa: E731
         out["arms"][arm] = {"n_draws_used": len(res["applied"]), **{k: m(k) for k in res}, "kw": kw}
+        if per_draw:  # paired CIs: the point estimates above are means over enrolment draws
+            nb = max(a.boot, 50)
+            out["arms"][arm]["delta_ci"] = adapt_boot(per_draw, thr1, thr01, nb)
+            out["arms"][arm]["lookalike_delta"] = draw_boot_diff(res["lookalike_after"], res["lookalike_before"], nb)
+            out["arms"][arm]["poison_admitted_ci"] = draw_boot(res["poison_admitted"], nb)
+            out["arms"][arm]["applied_ci"] = draw_boot(res["applied"], nb)
+            out["arms"][arm]["_per_draw"] = {k: list(res[k]) for k in ("lookalike_after", "poison_admitted", "frr01_after")}
+    pairs = (("far01_gate+hi_anchor", "far01_gate"), ("far01_gate", "far1_gate"))
+    out["arm_vs_arm"] = {}
+    for x, y in pairs:  # paired by enrolment draw (the same draws are skipped in every arm)
+        if x in out["arms"] and y in out["arms"] and "_per_draw" in out["arms"][x] and "_per_draw" in out["arms"][y]:
+            px, py = out["arms"][x]["_per_draw"], out["arms"][y]["_per_draw"]
+            if len(px["lookalike_after"]) == len(py["lookalike_after"]):
+                out["arm_vs_arm"][f"{x} minus {y}"] = {
+                    k: draw_boot_diff(px[k], py[k], max(a.boot, 50)) for k in ("lookalike_after", "poison_admitted", "frr01_after")}
+    for v in out["arms"].values():
+        v.pop("_per_draw", None)
     return out
 
 
@@ -729,13 +841,14 @@ def exp_final(ctx, a, kv):
                                                          Scorer("raw"), n_use=n, enrol=rej), ctx.cdur, ctx.bk[ctx.imp_ff], idx, nb)
     out["owner_strict_nested"] = _attach_deltas(nest, "nested_n3")
     e_idx, p_idx = ctx.public_idx("farfield")
+    pidx = public_boot_indices(len(p_idx), nb, 11)  # explicit shared resamples => paired public deltas
     _, Ei0, _, _ = ctx.split(ctx.base_tag)
     pub = {}
     S, same = public_scores(Ei0, p_idx, e_idx, ctx.spk, Scorer("raw"))
-    pub["fp32_raw_n3"] = public_report(S, same, ctx.bk[p_idx], nb)
+    pub["fp32_raw_n3"] = public_report(S, same, ctx.bk[p_idx], nb, idx=pidx)
     for n in (3, 4):
         S, same = public_scores(Ei, p_idx, e_idx, ctx.spk, Scorer("raw"), n_enrol=n, enrol=rej)
-        pub[f"final_n{n}"] = public_report(S, same, ctx.bk[p_idx], nb)
+        pub[f"final_n{n}"] = public_report(S, same, ctx.bk[p_idx], nb, idx=pidx)
     out["public"] = _attach_deltas(pub, "fp32_raw_n3")
     out["public"]["inside_base_ci"] = inside(pub["final_n3"]["all"], pub["fp32_raw_n3"]["ci95"])
     return out
@@ -750,6 +863,7 @@ def exp_centersens(ctx, a, kv):
     draws = _design(ctx, a, core)
     idx = boot_indices(int(ctx.cores[core].sum()), len(ctx.imp_ff), nb, 61)
     e_idx, p_idx = ctx.public_idx("farfield")
+    pidx = public_boot_indices(len(p_idx), nb, 11)  # explicit shared resamples => paired public deltas
     Ec0, Ei0, Eh0, _ = ctx.split(tag)
     hv = np.array([m["variant"] for m in ctx.coh])
     hs = np.array([m["speaker"] for m in ctx.coh])
@@ -772,7 +886,7 @@ def exp_centersens(ctx, a, kv):
         full_o[name] = owner_report(owner_scores(Ec, Ei, ctx.cdur, ctx.csess, ctx.cores[core], ctx.imp_ff, ctx.imp_cl, draws, Scorer("raw")),
                                     ctx.cdur, ctx.bk[ctx.imp_ff], idx, nb)
         S, same = public_scores(Ei, p_idx, e_idx, ctx.spk, Scorer("raw"))
-        full_p[name] = public_report(S, same, ctx.bk[p_idx], nb)
+        full_p[name] = public_report(S, same, ctx.bk[p_idx], nb, idx=pidx)
     return {"owner": _attach_deltas(full_o, "none"), "public": _attach_deltas(full_p, "none")}
 
 
@@ -869,9 +983,17 @@ def show_other(res) -> str:
         lines.append(f"impostor: {res['dist_impostor']}")
     for e in ("edges_2s", "edges_2_4s"):
         for far, d in (res.get(e) or {}).items():
+            if far == "ci":
+                continue
             for n, v in d.items():
                 lines.append(f"{e:11s} {far:9s} {n:6s} FAR {100 * v['far']:.3f}%  FRR {100 * v['frr']:.2f}%   "
                              f"FAR/group {[round(100 * x, 3) for x in v['far_by_group']]}  FRR/group {[round(100 * x, 2) for x in v['frr_by_group']]}")
+    for e in ("edges_2s",):
+        for far, d in ((res.get("edges_2s") or {}).get("ci") or {}).items():
+            f = lambda k: f"{100 * d[k]['mean']:+.2f} [{100 * d[k]['ci95'][0]:+.2f},{100 * d[k]['ci95'][1]:+.2f}]"  # noqa: E731
+            lines.append(f"paired CI {far}: FRR length-global overall {f('frr_delta_overall')}  short {f('frr_delta_g0')}  long {f('frr_delta_g1')} | "
+                         f"FAR short {f('far_global_g0')} / {f('far_length_g0')}  long {f('far_global_g1')} / {f('far_length_g1')} (global / length) | "
+                         f"FAR gap short-long global {f('far_gap_global')} length {f('far_gap_length')}")
     if "arms" in res:
         lines.append(f"anchor-only thresholds: {res['policy']}")
         for arm, v in res["arms"].items():
@@ -879,6 +1001,17 @@ def show_other(res) -> str:
                          f"FRR@FAR1% {100 * v['frr1_before']:.2f}->{100 * v['frr1_after']:.2f}%  FRR@FAR0.1% {100 * v['frr01_before']:.2f}->{100 * v['frr01_after']:.2f}%  "
                          f"FAR1%-thr {100 * v['far1_after']:.2f}%  FAR0.1%-thr {100 * v['far01_after']:.3f}%  imp mean {v['imp_mean_before']:.3f}->{v['imp_mean_after']:.3f}  "
                          f"cos(anchor) {v['anchor_cos']:.3f}  | poison admitted {v['poison_admitted']:.1f}, lookalike {v['lookalike_before']:.3f}->{v['lookalike_after']:.3f} (cos {v['lookalike_cos']:.3f})  gates {({k: round(x, 3) for k, x in v['kw'].items()})}")
+            dc = v.get("delta_ci")
+            if dc:
+                g = lambda k, sc=100: f"{sc * dc[k]['mean']:+.2f} [{sc * dc[k]['ci95'][0]:+.2f},{sc * dc[k]['ci95'][1]:+.2f}]"  # noqa: E731
+                lines.append(f"   paired CI (adapted - anchor-only): genuine mean {g('genuine_mean', 1)}  FRR@1% {g('frr_far1')} pp  FRR@0.1% {g('frr_far01')} pp  "
+                             f"FAR@thr1 {g('far_at_thr1')} pp  FAR@thr0.1 {g('far_at_thr01')} pp | lookalike score delta {v['lookalike_delta']['mean']:+.3f} "
+                             f"[{v['lookalike_delta']['ci95'][0]:+.3f},{v['lookalike_delta']['ci95'][1]:+.3f}] | admitted {v['poison_admitted_ci']['mean']:.1f} "
+                             f"[{v['poison_admitted_ci']['ci95'][0]:.1f},{v['poison_admitted_ci']['ci95'][1]:.1f}] | updates {v['applied_ci']['mean']:.1f} "
+                             f"[{v['applied_ci']['ci95'][0]:.1f},{v['applied_ci']['ci95'][1]:.1f}]")
+    for k, d in (res.get("arm_vs_arm") or {}).items():
+        lines.append(f"arm vs arm, {k} (paired by draw): " + "  ".join(
+            f"{m} {x['mean']:+.3f} [{x['ci95'][0]:+.3f},{x['ci95'][1]:+.3f}]" for m, x in d.items()))
     return "\n".join(lines)
 
 
