@@ -87,6 +87,10 @@ class _Lang:
     fronted_object: frozenset = frozenset()
     # Subject-auxiliary inversion words: a fronted-object question has one between the wh-word and the final verb.
     question_auxiliaries: frozenset = frozenset()
+    # A pronoun subject straight after the auxiliary ("should I ...") followed by more words means the question already has its own
+    # main verb ("should I DO ..."), so a trailing "cause" is "because". Adverbs in that gap do not count as a verb.
+    subject_pronouns: frozenset = frozenset()
+    question_adverbs: frozenset = frozenset()
     # The whole of a genuine short ANSWER to a question Zoe just asked ("Yes, Casey."): only these words around the name.
     # Gratitude and praise ("Thanks", "Great job") are replies to a person, not answers, and are not here.
     short_answers: frozenset = frozenset()
@@ -149,6 +153,8 @@ _LANGS: Mapping[str, _Lang] = {
         ),
         verb_final=_fs("cause", "make", "do", "mean", "say", "need", "want", "use"),
         fronted_object=_fs("what", "which", "who", "whom", "whose"),
+        subject_pronouns=_fs("i", "you", "we", "they", "he", "she", "it"),
+        question_adverbs=_fs("also", "often", "ever", "just", "still", "even", "always", "never", "usually", "really", "actually"),
         short_answers=_fs("yes", "yeah", "yep", "yup", "no", "nope", "nah", "okay", "ok", "sure"),
         question_auxiliaries=_fs(
             "do", "does", "did", "can", "could", "will", "would", "should", "shall", "might", "may", "must",
@@ -236,7 +242,16 @@ def _verb_final_question(words: list[str], langs: list[_Lang]) -> bool:
     if _first_content_word(words, _union("lead_ins", langs)) not in _union("fronted_object", langs):
         return False
     auxiliaries = _union("question_auxiliaries", langs)
-    return any(w in auxiliaries for w in words[1:-1])
+    for k in range(1, len(words) - 1):
+        if words[k] not in auxiliaries:
+            continue
+        if words[k + 1] in _union("subject_pronouns", langs):
+            # "What should I do cause": a pronoun subject plus another word before the last = a main verb of its own, so "cause"
+            # is the conjunction. "What problems can they cause" (the pronoun directly before the verb) is still complete.
+            adverbs = _union("question_adverbs", langs)
+            return all(w in adverbs or w.endswith("ly") for w in words[k + 2:-1])
+        return True
+    return False
 
 
 def ends_incomplete(text: str, languages: tuple[str, ...] | None = None) -> bool:

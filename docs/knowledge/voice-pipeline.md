@@ -1419,7 +1419,7 @@ hold; "that"/"which"/"que"/"si"... only hold in a 6+ word utterance that does no
 question ("what was that" is complete); "cause" holds only as a conjunction (not after
 the/a/my/root/... or a pronoun/modal, unless written `'cause`, and not at the end of a finished verb-final question - an
 object-fronted wh-question ("what"/"which"/"who") with a subject-auxiliary before a `verb_final` verb, so "What symptoms does
-mold cause" with no punctuation is complete and costs no extra wait or second transcription). **Cost:** only a turn ending on such a word pays — the
+mold cause" with no punctuation is complete and costs no extra wait or second transcription; but when a pronoun subject follows the auxiliary and another word comes before the last, the question already has its own main verb and "cause" is "because" - "What should I do cause" still holds). **Cost:** only a turn ending on such a word pays — the
 wait, plus a second STT pass on the retry. Every other turn is byte-identical. **Known limit:** the
 mic is closed for the STT round trip (~0.5 s), so a word spoken in that gap is lost; the listen
 opens right after, and a pause after "and" is normally longer. The seamless fix is the under-speech

@@ -100,6 +100,8 @@ class _Lang:
     conditionals: frozenset = frozenset()     # "if" / "unless": a TRAILING one opens its own (blocked) clause, it never reaches back
     temporals: tuple = ()                     # "after" / "when" / "once" / "before" as token tuples, longest first: a TRAILING one likewise
     temporal_firsts: frozenset = frozenset()  # the first word of each, for the per-word fast check in ``_temporal_at``
+    temporal_clause_starts: tuple = ()        # what follows a temporal word when it opens a CLAUSE ("after YOU asked"), not a time phrase ("after lunch")
+    discourse: frozenset = frozenset()        # "okay" / "so" / "well": skipped before judging whether a tagged unit opens a question
     tag_questions: tuple = ()                 # a trailing "okay" / "right" / "vale": a TAG on a statement, not a question about the write
     question_openers: frozenset = frozenset() # words that open a genuine question ("did", "have", "should"): "Have I added it, okay?"
     ellipsis_objects: frozenset = frozenset() # what may follow a sentence-opening claim verb in a completion ellipsis ("Added THE milk")
@@ -158,6 +160,8 @@ def _langs() -> tuple:
             joiners=tuple(sorted((tuple(p.split()) for p in phrases("clause_joiners")), key=len, reverse=True)),
             conditionals=words("clause_conditionals"),
             temporals=temporals, temporal_firsts=frozenset(t[0] for t in temporals),
+            temporal_clause_starts=tuple(sorted((tuple(p.split()) for p in phrases("temporal_clause_starts")), key=len, reverse=True)),
+            discourse=words("discourse_openers"),
         ))
     return tuple(out)
 
@@ -190,8 +194,11 @@ def _declarative_part(text: str) -> Optional[str]:
         return None
     cut = seps[-1]
     tag, rest = _phrase(body[cut.end():]), body[:cut.start()]
-    first = (tokenize(rest) or [""])[0]
+    if "\u00bf" in rest:
+        return None                 # a question opened inside the unit ("Bueno, ¿he añadido …")
     langs = _langs()
+    discourse = frozenset().union(*(lang.discourse for lang in langs))
+    first = next((t for t in tokenize(rest) if t not in discourse), "")      # "Okay, have I added it — right?" is a question
     if any(first in lang.question_openers for lang in langs):
         return None
     return rest if any(tag in lang.tag_questions for lang in langs) else None
@@ -321,13 +328,16 @@ def _clauses(text: str, lang: "_Lang") -> list:
     cur_head = 0        # words of the clause being built that are the temporal phrase which split it off
     i = 0
 
+    cur_soft = False    # a prepositional time phrase ("after lunch") was passed over inside the clause being built
+
     def close(temporal_tail: bool = False) -> None:
-        nonlocal cur, cur_off, cur_head
+        nonlocal cur, cur_off, cur_head, cur_soft
         if cur:
-            clauses.append((cur_off, cur, temporal_tail, cur_head))
+            clauses.append((cur_off, cur, temporal_tail or cur_soft, cur_head))
         cur = []
         cur_off = seen
         cur_head = 0
+        cur_soft = False
 
     while i < len(items):
         tok = items[i]
@@ -343,12 +353,22 @@ def _clauses(text: str, lang: "_Lang") -> list:
                 # "if" stays in its clause (and blocks it), so "If it's added, great" is still not a claim (review, #2004).
                 close()
             temporal = _temporal_at(items, i, lang)
-            if temporal and cur and _clause_follows(items, i + temporal, lang):
-                # "I've added milk to your list, after you asked me to": the trailing temporal clause is a clause of its own
-                # (its own leading "after" blocks only IT), so it never disables the completed claim before it. A LEADING
-                # "When I've added it, I'll tell you" stays one clause and stays blocked.
-                close(temporal_tail=True)
-                cur_head = temporal
+            if temporal and cur and _word_follows(items, i + temporal, lang):
+                if _clause_starts_at(items, i + temporal, lang):
+                    # "I've added milk to your list, after you asked me to": the trailing temporal clause is a clause of its own
+                    # (its own leading "after" blocks only IT), so it never disables the completed claim before it. A LEADING
+                    # "When I've added it, I'll tell you" stays one clause and stays blocked.
+                    close(temporal_tail=True)
+                    cur_head = temporal
+                else:
+                    # "I've put the dentist after lunch in your calendar": a time PHRASE, not a clause. It is neither a split nor a
+                    # blocker, but each of its words keeps its place as a placeholder so word positions (the 12-word bound
+                    # streaming depends on) do not shift.
+                    cur_soft = True
+                    cur.extend(["~"] * temporal)
+                    seen += temporal
+                    i += temporal
+                    continue
             joiner = next((len(j) for j in lang.joiners if items[i:i + len(j)] == list(j)), 0)
             if joiner:
                 close()
@@ -370,10 +390,15 @@ def _temporal_at(items: list, i: int, lang: "_Lang") -> int:
     return next((len(t) for t in lang.temporals if items[i:i + len(t)] == list(t)), 0)
 
 
-def _clause_follows(items: list, i: int, lang: "_Lang") -> bool:
-    """True when a real word follows at ``items[i]`` that is not itself temporal: "after YOU asked" opens a clause, but "once
-    before" / "once." / "before," are adverbs and leave the sentence as it was."""
+def _word_follows(items: list, i: int, lang: "_Lang") -> bool:
+    """True when a real word follows at ``items[i]`` that is not itself temporal: "after YOU asked" / "after LUNCH" lead on, but
+    "once before" / "once." / "before," are adverbs and leave the sentence as it was."""
     return i < len(items) and items[i] not in ",;:\u2014\u2013" and not _temporal_at(items, i, lang)
+
+
+def _clause_starts_at(items: list, i: int, lang: "_Lang") -> bool:
+    """True when ``items[i:]`` opens a clause (a subject: "you", "I've", es "de que" / "lo"), not a time phrase ("lunch")."""
+    return any(items[i:i + len(t)] == list(t) for t in lang.temporal_clause_starts)
 
 
 def is_recap_question(user_text: str) -> bool:

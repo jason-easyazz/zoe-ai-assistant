@@ -678,6 +678,9 @@ STREAM_CORPUS = [
     "I've added milk to your shopping list: okay?",
     "I've added milk to your list after I've scheduled the physio. I'll tell you when I've set a reminder.",
     "I've added milk to your list, once I've scheduled the physio. Anything else?",
+    "I've put the dentist after lunch in your calendar. Anything else?",
+    "I'll put the dentist after lunch in your calendar. Milk is added to your shopping list after lunch.",
+    "Okay, have I added milk to your shopping list \u2014 right? I've added eggs to your shopping list - okay?",
     "I'll tell you after I've scheduled the physio, then I've added milk to your list when I've set a reminder.",
     "Should I add eggs \u2014 okay? I've added milk to your shopping list \u2013 all right?",
 ]
@@ -735,7 +738,7 @@ _FUZZ_PHRASES = [
     "I've scheduled the physio for Friday at 9 a.m. tomorrow morning.", "so I've put oat milk on your list", "and then",
     "The restaurant was fully booked.", "one two three four five six seven eight nine ten eleven twelve thirteen,",
     "He añadido leche a tu lista de compras.", "Ya agendé la cita en tu calendario,", "You added it earlier.",
-    "Oat milk is added to your shopping list.", "after you asked me to.", "after I've scheduled the physio.", "once I've set a reminder,", "I'll add it once you confirm.", "Milk is added when you tap Done,",
+    "Oat milk is added to your shopping list.", "after you asked me to.", "after I've scheduled the physio.", "once I've set a reminder,", "after lunch in your calendar.", "Okay, have I added it \u2014 right?", "I'll add it once you confirm.", "Milk is added when you tap Done,",
     "I've added milk to your shopping list - okay?", "The appointment was added to your calendar \u2014 right?", "Which items were added to your shopping list yesterday evening for the party?",
 ]
 
@@ -1113,3 +1116,71 @@ def test_a_temporal_tail_that_claims_nothing_adds_no_kind(sentence, kinds):
 ])
 def test_a_temporal_tail_after_a_promise_or_denial_is_still_not_a_claim(sentence):
     assert g.find_claim(sentence) is None, sentence
+
+
+# ── 5c. Codex review of #2021 ────────────────────────────────────────────────────────────────────────────────────────────────
+# (1) A temporal word that introduces a PREPOSITIONAL time phrase ("after lunch", "before dinner") is not a clause: it is neither
+# split off nor a blocker, so the claim keeps its target nouns. (2) A discourse opener ("Okay, ...") does not hide the
+# interrogative of a genuine question that ends in a dash tag.
+
+PREPOSITIONAL_TIME_CLAIMS = [
+    ("I've put the dentist after lunch in your calendar.", ("calendar",)),
+    ("I've added milk after work to your shopping list.", ("list",)),
+    ("I've put the dentist in your calendar before dinner.", ("calendar",)),
+    ("I've scheduled the physio for Friday after lunch.", ("calendar",)),
+    ("I've put the paint on your to-do list when ready.", ("list",)),
+    ("He puesto la cita después del almuerzo en tu calendario.", ("calendar",)),
+]
+
+
+@pytest.mark.parametrize("sentence,kinds", PREPOSITIONAL_TIME_CLAIMS)
+def test_a_prepositional_time_phrase_keeps_the_claims_target(sentence, kinds):
+    claim = g.find_claim(sentence)
+    assert claim is not None and tuple(sorted(claim.kinds)) == kinds, (sentence, claim)
+    started = wr.begin()
+    assert g.guard_text(sentence, "jason", started) in (HONEST_EN, HONEST_ES), sentence
+    wr.record("jason", kinds[0], "row-1", "t")
+    assert g.guard_text(sentence, "jason", started) == sentence
+
+
+@pytest.mark.parametrize("sentence", [
+    "I'll put the dentist after lunch in your calendar.",
+    "I haven't put the dentist after lunch in your calendar.",
+    "Do you want me to put the dentist after lunch in your calendar?",
+    "Milk is added to your shopping list after lunch.",
+    "The milk is added to your shopping list when done.",
+    "After lunch I'll put the dentist in your calendar.",
+    "Before dinner, I haven't added milk to your shopping list.",
+    "I couldn't put the dentist in your calendar before dinner.",
+])
+def test_an_honest_sentence_with_a_prepositional_time_phrase_is_still_never_a_claim(sentence):
+    assert g.find_claim(sentence) is None, sentence
+
+
+DISCOURSE_QUESTIONS = [
+    "Okay, have I added milk to your shopping list — right?",
+    "So, did I add the dentist to your calendar - okay?",
+    "Well, should I put the paint on your to-do list: right?",
+    "Hmm, have I scheduled the physio for Friday – all right?",
+    "Okay, so have I added milk to your shopping list — right?",
+    "Bueno, ¿he añadido leche a tu lista — vale?",
+]
+
+
+@pytest.mark.parametrize("sentence", DISCOURSE_QUESTIONS)
+def test_a_genuine_question_behind_a_discourse_opener_is_never_a_claim(sentence):
+    assert g.find_claim(sentence) is None, sentence
+    started = wr.begin()
+    assert g.guard_text(sentence, "jason", started) == sentence
+
+
+@pytest.mark.parametrize("sentence", [
+    "Okay, I've added milk to your shopping list — right?",
+    "So I've added milk to your shopping list - okay?",
+    "Well, the appointment was added to your calendar: right?",
+    "Okay, so I've scheduled the physio for Friday — okay?",
+])
+def test_a_claim_behind_a_discourse_opener_and_a_dash_tag_is_still_a_claim(sentence):
+    assert g.find_claim(sentence) is not None, sentence
+    started = wr.begin()
+    assert g.guard_text(sentence, "jason", started) != sentence

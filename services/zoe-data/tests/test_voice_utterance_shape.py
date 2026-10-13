@@ -430,3 +430,28 @@ def test_the_gate_drops_a_thanks_to_someone_else_when_the_flag_is_on(monkeypatch
     frame = us.gate_frame(dict(window="followup"), "Thanks for the help, Casey.")
     assert frame == dict(done=True, reply="", skipped="not_addressed", reason="vocative")
     assert us.gate_frame(dict(window="followup"), "Thanks for the help, Zoe.") is None
+
+
+# ── Codex review of #2021: a clipped "because" written "cause" after a clause that already has its own main verb ─────────────
+@pytest.mark.parametrize("text", [
+    "What should I do cause",                # "should I do" is a whole question already: "cause" is "because"
+    "Which one should I choose cause",
+    "What did you buy cause",
+    "What would we need to buy cause",
+    "Which route could they take cause",
+])
+def test_a_clipped_because_after_a_complete_question_is_still_held(text):
+    assert us.ends_incomplete(text) is True, text
+    assert us.gate_frame(dict(can_continue=True), text) == dict(done=True, reply="", incomplete=True)
+
+
+@pytest.mark.parametrize("text", [
+    "What symptoms does mold cause",
+    "What problems can they cause",           # a pronoun subject straight before the verb is fine
+    "What does it cause",
+    "What problems can they really cause",    # an adverb between is not a second verb
+    "What problems might they often cause",
+    "Which problems does damp usually cause",
+])
+def test_the_verb_final_rule_still_accepts_cause_as_the_only_main_verb(text):
+    assert us.ends_incomplete(text) is False, text
