@@ -87,6 +87,26 @@ def test_a_possessive_noun_phrase_is_a_plausible_item(item):
     assert list_service.is_plausible_item(item) is True
 
 
+# review (#2004, P2): an auxiliary-looking word can be the NOUN of the item ("can opener", "can of paint", "spare can", "last will")
+@pytest.mark.parametrize("item", ["my can opener", "our can of paint", "my spare can", "your last will", "my can of soup"])
+def test_an_auxiliary_homograph_used_as_a_noun_is_still_an_item(item):
+    assert list_service.is_plausible_item(item) is True
+
+
+@pytest.mark.parametrize("item", ["my phone can ring", "my can is empty", "my phone will not work", "our car can not start", "my dog has a cold"])
+def test_an_auxiliary_in_predicate_position_is_still_a_sentence(item):
+    assert list_service.is_plausible_item(item) is False
+
+
+@pytest.mark.parametrize("said,item", [
+    ("add my can opener to my shopping list", "my can opener"),
+    ("add our can of paint to the work list", "our can of paint"),
+])
+def test_a_homograph_noun_item_takes_the_deterministic_add_path(said, item):
+    i = intent_router.detect_intent(said, log_miss=False)
+    assert i is not None and i.name == "list_add" and i.slots["item"] == item, i
+
+
 @pytest.mark.parametrize("item", ["my phone is dead", "your dog doesn't like it", "my kids don't know", "your answer was wrong"])
 def test_a_possessive_sentence_is_still_not_an_item(item):
     assert list_service.is_plausible_item(item) is False

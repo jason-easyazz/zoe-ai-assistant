@@ -4706,13 +4706,21 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         if raw is None:
             return None
 
-        # The mcporter subprocess writes in ITS process, where write_receipts cannot see it: receipt the write here (the
-        # subprocess exited 0) so a reply that says it happened is not blocked by the write-claim guard.
+        # The mcporter subprocess writes in ITS process, where write_receipts cannot see it: receipt the write here so a
+        # reply that says it happened is not blocked by the write-claim guard. Exit 0 is NOT proof: mcp_server.handle_tool
+        # catches a DB / validation error and returns {"error": ...} with isError false, so the subprocess exits 0 having
+        # written nothing. Only a result that explicitly says the row was added / created is a receipt.
         _mcp_kind = _MCPORTER_WRITE_KINDS.get(intent.name)
         if _mcp_kind:
-            import write_receipts
+            if _mcporter_write_landed(raw):
+                import write_receipts
 
-            write_receipts.record(user_id, _mcp_kind, "", f"mcporter:{intent.name}")
+                write_receipts.record(user_id, _mcp_kind, "", f"mcporter:{intent.name}")
+            elif not _mcporter_result_is_error(raw):
+                # Empty / unparseable / status-less: no receipt, and no templated "Added ..." line either - that line is
+                # itself a claim, and nothing backs it. (An explicit error result is worded honestly by _format_response.)
+                logger.warning("mcporter %s exited 0 without a success status; not claiming the write", intent.name)
+                return "I couldn't confirm that was saved, so please check it or try again."
         return _format_response(intent, raw)
 
     except Exception as e:
@@ -4727,6 +4735,33 @@ _MCPORTER_WRITE_KINDS = {
     "reminder_create": "reminder",
     "note_create": "note",
 }
+
+
+# mcp_server's create tools (list_add_item, calendar_create_event, reminder_create, note_create) return one of these on success.
+_MCPORTER_SUCCESS_STATUSES = frozenset({"added", "created"})
+
+
+def _mcporter_parse(raw: object) -> Optional[dict]:
+    try:
+        data = json.loads(raw) if isinstance(raw, (str, bytes)) else None
+    except (ValueError, TypeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _mcporter_write_landed(raw: object) -> bool:
+    """True only when an mcporter create result explicitly reports the row written: a JSON object with no error and a
+    success status. Empty, non-JSON, ``{}``, ``{"error": ...}`` and any other status are all NOT a write."""
+    data = _mcporter_parse(raw)
+    if not data or data.get("error"):
+        return False
+    return str(data.get("status") or "").strip().lower() in _MCPORTER_SUCCESS_STATUSES
+
+
+def _mcporter_result_is_error(raw: object) -> bool:
+    """An explicit {"error": ...} result: ``_format_response`` already words that honestly ("Sorry, that didn't work")."""
+    data = _mcporter_parse(raw)
+    return bool(data and data.get("error"))
 
 
 async def _execute_daily_briefing(user_id: str) -> Optional[str]:

@@ -121,7 +121,7 @@ async def test_execute_reminder_create_falls_back_to_mcporter_when_direct_unavai
 
     async def fake_mcporter(cmd):
         calls.append(("mcporter", cmd))
-        return "{}"
+        return '{"id": "rem-9", "status": "created"}'
 
     monkeypatch.setattr("intent_router._execute_reminder_create_direct", fake_direct)
     monkeypatch.setattr("intent_router._build_command", fake_build_command)

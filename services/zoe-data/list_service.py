@@ -94,6 +94,23 @@ def clean_item_text(raw: str) -> str:
     return _EDGE_PUNCT_RE.sub("", ", ".join(kept))
 
 
+# Auxiliaries that are also common nouns: "my can opener", "our can of paint", "my spare can", "your last will".
+_NOUN_HOMOGRAPHS = frozenset({"can", "will"})
+
+
+def _has_predicate(words: list) -> bool:
+    """True when the words after a possessive hold a predicate - the sentence-making auxiliary / pronoun of "my phone IS dead". The
+    word straight after the possessive is the head noun and never a predicate ("my CAN opener"); an auxiliary-looking noun that
+    ENDS the phrase is a noun too ("my spare CAN"). Anything else in ``_SENTENCE_WORDS`` makes it a sentence."""
+    for n, w in enumerate(words):
+        if n == 0:
+            continue
+        w = w.lower().strip(",;:")
+        if w in _SENTENCE_WORDS and not (w in _NOUN_HOMOGRAPHS and n == len(words) - 1):
+            return True
+    return False
+
+
 def is_plausible_item(item: str) -> bool:
     """False for text that is a SENTENCE rather than something to put on a list - so a statement the user made to Zoe is never
     stored as an item (and never answered with "Added …"). Pure; takes the already-cleaned item."""
@@ -109,7 +126,7 @@ def is_plausible_item(item: str) -> bool:
         return False
     lead = words[0].lower().strip(",;:")
     if lead in _POSSESSIVE_LEADS:
-        return len(words) > 1 and not any(w.lower().strip(",;:") in _SENTENCE_WORDS for w in words[1:])
+        return len(words) > 1 and not _has_predicate(words[1:])
     return lead not in _NON_ITEM_LEADS
 
 

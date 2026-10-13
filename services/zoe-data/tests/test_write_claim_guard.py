@@ -58,6 +58,23 @@ CLAIMS_EN = [
     ("It was added.", ()),
     ("Oat milk is added to your shopping list.", ("list",)),
     ("Sure thing, I've added milk to your shopping list.", ("list",)),
+    # review (#2004, P1): an ordinary modifier between the subject and the verb must not hide the claim
+    ("I've definitely added milk to your shopping list.", ("list",)),
+    ("I've really added milk to your shopping list.", ("list",)),
+    ("I've just added milk to your shopping list.", ("list",)),
+    ("I've successfully added milk to your shopping list.", ("list",)),
+    ("I have now set a reminder for five o'clock.", ("reminder",)),
+    ("I've gone ahead and added milk to your shopping list.", ("list",)),
+    ("I've gone ahead and just added milk to your shopping list.", ("list",)),
+    ("I have now definitely gone ahead and added milk to your shopping list.", ("list",)),
+    ("I've happily scheduled the physio for Friday.", ("calendar",)),
+    ("I've officially booked the dentist for Monday.", ("calendar",)),
+    ("We've quietly added eggs to the shopping list.", ("list",)),
+    ("I've only added milk to your shopping list.", ("list",)),
+    ("Okay, I've totally saved a note about that.", ("note",)),
+    ("The milk was definitely added to your shopping list.", ("list",)),
+    ("The appointment has been happily booked in your calendar.", ("calendar",)),
+    ("Definitely added the milk to your shopping list.", ("list",)),
 ]
 
 NOT_CLAIMS_EN = [
@@ -83,6 +100,15 @@ NOT_CLAIMS_EN = [
     "Nothing was added to your shopping list.",
     "Was the appointment added to your calendar?",
     "The chicken was set aside to cool.",
+    # review (#2004, P1): widening for modifiers must not turn someone ELSE's write, or a name ending in -ly, into my claim
+    "Emily added the milk to the shopping list.",
+    "I think Mum added milk to the shopping list.",
+    "I saw Dad really added milk to the shopping list.",
+    "The kids definitely added milk to the shopping list.",
+    "I've definitely not added milk to your shopping list.",
+    "I've really been meaning to add milk to your shopping list.",
+    "Have I definitely added milk to your shopping list?",
+    "I will definitely add milk to your shopping list.",
 ]
 
 CLAIMS_ES = [
@@ -153,6 +179,41 @@ def test_guard_text_allows_a_claim_backed_by_a_write_this_turn():
     started = wr.begin()
     wr.record("jason", "calendar", "evt-1", "test")
     assert g.guard_text(CALENDAR_CLAIM, "jason", started) == CALENDAR_CLAIM
+
+
+MODIFIED_CLAIMS = [
+    ("I've definitely added milk to your shopping list.", "list"),
+    ("I've really added milk to your shopping list.", "list"),
+    ("I've just added milk to your shopping list.", "list"),
+    ("I've successfully added milk to your shopping list.", "list"),
+    ("I have now set a reminder for five o'clock.", "reminder"),
+    ("I've gone ahead and added milk to your shopping list.", "list"),
+]
+
+
+@pytest.mark.parametrize("sentence,kind", MODIFIED_CLAIMS)
+def test_a_modified_claim_with_no_write_is_blocked(sentence, kind):
+    started = wr.begin()
+    assert g.guard_text(sentence, "jason", started) == HONEST_EN
+
+
+@pytest.mark.parametrize("sentence,kind", MODIFIED_CLAIMS)
+def test_a_modified_claim_with_a_real_receipt_is_spoken_as_is(sentence, kind):
+    started = wr.begin()
+    wr.record("jason", kind, "row-1", "test")
+    assert g.guard_text(sentence, "jason", started) == sentence
+
+
+@pytest.mark.parametrize("sentence", [
+    "Your shopping list has milk, eggs and bread on it.",
+    "You've really got milk and eggs on your shopping list.",
+    "Milk is definitely on your shopping list.",
+    "Your dentist appointment is definitely scheduled for Friday.",
+    "Emily added the milk to the shopping list.",
+])
+def test_an_honest_read_back_is_never_blocked(sentence):
+    started = wr.begin()
+    assert g.guard_text(sentence, "jason", started) == sentence
 
 
 def test_a_write_before_the_turn_began_does_not_back_a_claim():
@@ -482,6 +543,10 @@ STREAM_CORPUS = [
     "Your physio is scheduled for Friday at ten. The restaurant was fully booked. Nothing was added to your list.",
     "One two three four five six seven eight nine ten eleven twelve I've added milk to your shopping list.",
     "I went through everything on your list this morning and it all looks fine, the milk was added to your shopping list.",
+    # review (#2004, P1): modifiers before the verb are judged the same however the text is cut
+    "Okay. I've definitely added milk to your shopping list. Anything else?",
+    "I have now definitely gone ahead and added milk to your shopping list, so that is sorted.",
+    "Emily added the milk to the shopping list. I think Mum really added eggs too.",
 ]
 
 

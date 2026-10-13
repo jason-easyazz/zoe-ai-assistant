@@ -46,7 +46,10 @@ chat, Telegram, LiveKit). `_claim_guarded` wraps the lane stream (`write_claim_g
   row exists: `calendar_service.create_event_record` (calendar), `list_service.add_item_to_list` (list, including a replayed
   add that deduped), `reminder_service.create_reminder_record` (reminder), the Skybridge inline event / list inserts, the
   Skybridge timer store (timer), the note executor (note), and the mcporter fallback tail of `execute_intent` for
-  `list_add` / `calendar_create` / `reminder_create` / `note_create` (that subprocess writes in ANOTHER process). A Flue
+  `list_add` / `calendar_create` / `reminder_create` / `note_create` (that subprocess writes in ANOTHER process) - but ONLY
+  when the result is a JSON object with no `error` and `status` `added` / `created` (`_mcporter_write_landed`): `handle_tool`
+  catches a DB / validation error and returns `{"error": ...}` with `isError` false, so exit 0 proves nothing; an empty,
+  non-JSON or status-less result records nothing and the reply says it could not confirm the save. A Flue
   brain tool call reaches those writers through `/api/system/intent-dispatch`, so a tool that succeeded leaves a receipt and
   one that failed ("I need a title…") does not. Per user, in process, 64 newest, 1 h.
 * **Claims** are data (`lexicons_data/write_claims.json`, languages `en` and `es`): claim verbs (`added`, `scheduled`,
@@ -55,7 +58,11 @@ chat, Telegram, LiveKit). `_claim_guarded` wraps the lane stream (`write_claim_g
   irrealis, future, "want me to"). Questions, offers, refusals and promises are never claims; a 2nd-person subject ("you
   added") is not. A claim verb counts in the active ("I've added") and the completed passive: `been` ("has been added") and
   `was` / `were` ("The appointment was added to your calendar") - the latter needs a target noun unless the verb is `added`,
-  so "The restaurant was fully booked" claims nothing. "is scheduled for Friday" describes the calendar and is not a claim
+  so "The restaurant was fully booked" claims nothing. Modifiers between the subject and the verb never hide a
+  claim: the lexicon's `adverbs` / `modifiers` lists ("just", "definitely", "again") count anywhere, and any word ending in a
+  `modifier_suffixes` entry ("-ly", es "-mente") counts once a first-person subject stands before it
+  (`_subject_then_modifiers`: "I've definitely / happily added", "we have now quietly gone ahead and set") - so "Emily added the
+  milk" and "I think Mum added eggs" stay someone else's write. "is scheduled for Friday" describes the calendar and is not a claim
   (it is how an honest read-back of an existing event sounds); only "is added" is (`state_claim` in the lexicon).
 * **Verdict**: a claim naming kinds needs a receipt of every kind since the turn began (calendar and reminder back each
   other; a recap question - "did you add the milk?" - may stand on a write from the last 30 min). A claim naming no target

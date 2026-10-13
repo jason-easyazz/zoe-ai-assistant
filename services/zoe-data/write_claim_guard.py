@@ -97,6 +97,13 @@ class _Lang:
     passive_state: frozenset = frozenset()    # "is added": a present-tense passive - a claim only for a ``state_claim`` verb
     clause_starts: frozenset = frozenset()    # words that open a new clause after a comma ("it", "that", …)
     joiners: tuple = ()                       # clause joiners as token tuples, longest first ("but", "so", "because")
+    modifiers: frozenset = frozenset()        # ordinary adverbs that may sit before a claim verb ("definitely", "again")
+    modifier_suffixes: tuple = ()             # a word ending in one is an adverb too ("-ly", "-mente"), once a subject stands before it
+
+    def is_modifier(self, tok: str, *, by_suffix: bool = False) -> bool:
+        if tok in self.adverbs or tok in self.modifiers:
+            return True
+        return by_suffix and any(len(tok) >= len(suf) + 3 and tok.endswith(suf) for suf in self.modifier_suffixes)
 
     @property
     def joiner_firsts(self) -> frozenset:
@@ -138,6 +145,7 @@ def _langs() -> tuple:
             adverbs=words("adverbs"), verbs=verbs, targets=targets, other_targets=phrases("other_targets"),
             blockers=phrases("blockers"), recap_cues=phrases("recap_cues"), honest=str(lex.get("honest") or "").strip(),
             passive_done=words("passive_done"), passive_past=words("passive_past"), passive_state=words("passive_state"), clause_starts=words("clause_starts"),
+            modifiers=words("modifiers"), modifier_suffixes=tuple(sorted(phrases("modifier_suffixes"), key=len, reverse=True)),
             joiners=tuple(sorted((tuple(p.split()) for p in phrases("clause_joiners")), key=len, reverse=True)),
         ))
     return tuple(out)
@@ -178,7 +186,7 @@ def find_claim(sentence: str) -> Optional[Claim]:
                 pre = toks[max(0, i - 4):i]
                 if any(p in lang.second_person for p in pre):
                     continue            # "you added it" - the user did it
-                active = all(p in lang.hold_words for p in pre)
+                active = all(p in lang.hold_words or p in lang.modifiers for p in pre) or _subject_then_modifiers(toks, i, lang)
                 aux = _passive_aux(pre, lang)
                 passive = aux in lang.passive_done or aux in lang.passive_past or (state_claim and aux in lang.passive_state)
                 if not (active or passive):
@@ -200,9 +208,26 @@ def _passive_aux(pre: list, lang: "_Lang") -> str:
     for tok in reversed(pre):
         if tok in lang.passive_done or tok in lang.passive_past or tok in lang.passive_state:
             return tok
-        if tok not in lang.adverbs:
+        if not lang.is_modifier(tok, by_suffix=True):
             return ""
     return ""
+
+
+_SUBJECT_REACH = 6      # how far back from the claim verb a first-person subject may stand ("I have now definitely gone ahead and added")
+
+
+def _subject_then_modifiers(toks: list, i: int, lang: "_Lang") -> bool:
+    """True when the claim verb at ``toks[i]`` is led by a first-person subject through nothing but openers, claim words and
+    modifiers - listed ones or any adverb by suffix ("I've definitely added", "we have quietly set"). The subject is what makes a
+    suffix word safe to trust: "Emily added the milk" has none and stays someone else's write; "I think Mum added" is cut by
+    "think", which is neither a hold word nor a modifier."""
+    for j in range(i - 1, max(-1, i - 1 - _SUBJECT_REACH), -1):
+        tok = toks[j]
+        if tok in lang.subjects:
+            return True
+        if not (tok in lang.hold_words or lang.is_modifier(tok, by_suffix=True)):
+            return False
+    return False
 
 
 _BREAK_RE = re.compile(r"[a-z0-9']+|[,;:—–]")
