@@ -5441,6 +5441,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_SPEAKER_MODEL": {
+        "defaults": [
+          "'resemblyzer'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_session.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_SPECULATIVE_MAX_HOLD_MS": {
         "defaults": [
           "5000"
@@ -6258,6 +6268,36 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/routers/voice_tts.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_VOICE_SESSION": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_session.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_VOICE_SESSION_ALLOW_RESEMBLYZER": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_session.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_VOICE_SESSION_TTL_S": {
+        "defaults": [
+          "120"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_session.py"
         ],
         "typed_env": true
       },
