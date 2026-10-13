@@ -1933,6 +1933,13 @@ async def run_flue_brain_streaming(
         import narration_filter
 
         turn = narration_filter.filter_stream(turn)
+    # A reply that opens "It sounds like ..." / "That sounds like ..." (the 4B's one empathy move) loses that sentence when something of
+    # substance follows it (mirror_guard, ZOE_MIRROR_GUARD=off|shadow|on, default shadow = byte-identical + a label-only log line).
+    # off: nothing wraps the stream. After the narration strip (so it sees the real first sentence), before clean_goodbye.
+    import mirror_guard
+
+    if mirror_guard.mode() != "off":
+        turn = mirror_guard.filter_stream(turn, _spoken)
     # A clean goodbye, a plain "are you there?", a silence never remarked on (clean_goodbye, ZOE_CLEAN_GOODBYE):
     # holds the reply ONLY on such a turn (a few anchored regexes on the user's words); every other turn streams
     # byte-identical. Outermost, so it cleans the text the owner would actually hear.
