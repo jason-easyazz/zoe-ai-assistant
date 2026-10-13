@@ -19,6 +19,11 @@ idle-logout window, the existing expiry authority), or the caller's own signed-i
 session. Anything else is guest. Every test carries a negative control showing the
 same harness DOES resolve the member when a fresh source exists, so "guest" is a
 verdict, not a broken rig.
+
+Section 7 (2026-10-14): a fresh member session is EXTENDED only by a turn that
+identifies itself as that member (accepted claim, PIN replay, own session) - an
+unidentified voice uses it but no longer keeps it alive. The ambient and LiveKit
+lanes are pinned in test_ambient_memory_scoping.py and test_livekit_media_authz.py.
 """
 
 from __future__ import annotations
@@ -269,7 +274,8 @@ async def test_binding_follows_the_fresh_session_not_the_old_member(monkeypatch)
 
     assert _last(seen, "skybridge_user") == BOB
     assert voice_tts._VOICE_SESSIONS[PANEL].get("bound_user_id") == BOB
-    assert (PANEL, BOB) == store.heartbeats[-1][:2], "a fresh session is kept alive by talking (#1349)"
+    # An unidentified voice uses the fresh session but never extends it (section 7).
+    assert store.heartbeats == []
 
 
 # --------------------------------------------------------------------------- #
@@ -355,7 +361,8 @@ async def test_public_read_shortcut_runs_as_claimed_member_for_that_turn(monkeyp
 async def test_pin_sign_in_then_voice_is_the_member_within_its_session(monkeypatch):
     """What ``panel_auth.submit_pin`` does on a correct PIN — stamp the binding and write a
     fresh ``ui_panel_sessions`` row — still identifies the member on the following turns
-    while that session is fresh, and the turn's heartbeat keeps it fresh."""
+    while that session is fresh. Those turns carry no identification of their own, so they
+    do not extend it (section 7); the PIN replay, which does, is what refreshes it."""
     store = _PanelStore()
     seen = _wire(monkeypatch, store)
     voice_tts._VOICE_SESSIONS[PANEL] = {"session_id": "vs-1", "last_at": voice_tts.time.monotonic(),
@@ -365,7 +372,11 @@ async def test_pin_sign_in_then_voice_is_the_member_within_its_session(monkeypat
     for _ in range(3):
         await _turn(seen)
         assert _last(seen, "skybridge_user") == ALICE
-    assert len(store.heartbeats) == 3
+    assert store.heartbeats == []
+    # The replayed turn after a correct PIN names its member itself (panel_auth.submit_pin).
+    await _turn(seen, identified_user_id=ALICE)
+    assert _last(seen, "skybridge_user") == ALICE
+    assert [h[:2] for h in store.heartbeats] == [(PANEL, ALICE)]
 
 
 # --------------------------------------------------------------------------- #
@@ -466,4 +477,87 @@ async def test_voice_session_ttl_expiry_leaves_the_next_turn_guest(monkeypatch):
     assert vs.active_member(PANEL) is None
     assert _last(seen, "skybridge_user") == "guest", "an expired voice session still identified the speaker"
     assert BOB not in seen["saved_users"]
+
+
+# --------------------------------------------------------------------------- #
+# 7. Only a turn that identifies ITSELF as the member extends the member's PIN session
+#    (privacy, 2026-10-14). Before, ANY voice turn on the panel refreshed a fresh member
+#    session (#1349), so it never lapsed while anybody at all kept talking.
+# --------------------------------------------------------------------------- #
+async def _consent_all(monkeypatch):
+    async def consented(_uid, *_model):
+        return True
+
+    monkeypatch.setattr(voice_tts, "_voice_claim_consented", consented)
+
+
+@pytest.mark.asyncio
+async def test_unidentified_voice_does_not_extend_a_member_session(monkeypatch):
+    store = _PanelStore()
+    seen = _wire(monkeypatch, store)
+    signed_in = _ts(IDLE_WINDOW_S - 60)          # Alice's PIN session, one minute from lapsing
+    store.session = {"user_id": ALICE, "last_seen_at": signed_in}
+
+    for _ in range(3):                            # somebody keeps talking; no claim, no PIN
+        await _turn(seen)
+
+    assert store.heartbeats == [], "an unidentified voice refreshed the member's PIN session"
+    assert store.session["last_seen_at"] == signed_in
+    # ... so the window still runs out on schedule: once it has, the same voice is guest.
+    store.session = {"user_id": ALICE, "last_seen_at": _ts(IDLE_WINDOW_S + 1)}
+    await _turn(seen)
+    assert _last(seen, "skybridge_user") == "guest"
+
+
+@pytest.mark.asyncio
+async def test_another_members_claim_does_not_extend_or_take_over_the_session(monkeypatch):
+    store = _PanelStore()
+    seen = _wire(monkeypatch, store)
+    await _consent_all(monkeypatch)
+    store.session = {"user_id": ALICE, "last_seen_at": _ts(30)}
+
+    await _turn(seen, voice_user_id=BOB, voice_score=0.99)
+
+    assert _last(seen, "skybridge_user") == BOB          # Bob's turn is Bob's ...
+    assert store.heartbeats == []                         # ... but it neither refreshes Alice's session
+    assert store.session["user_id"] == ALICE              # ... nor turns it into a Bob session
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("how", ["accepted_claim", "pin_replay"])
+async def test_the_members_own_identification_extends_their_session(monkeypatch, how):
+    """NEGATIVE CONTROL: the same rig DOES refresh the session when the turn identifies
+    itself as that member - an accepted voice claim, or the replay after a correct PIN."""
+    store = _PanelStore()
+    seen = _wire(monkeypatch, store)
+    await _consent_all(monkeypatch)
+    store.session = {"user_id": ALICE, "last_seen_at": _ts(IDLE_WINDOW_S - 60)}
+
+    if how == "accepted_claim":
+        await _turn(seen, voice_user_id=ALICE, voice_score=0.99)
+    else:
+        await _turn(seen, identified_user_id=ALICE)
+
+    assert [h[:2] for h in store.heartbeats] == [(PANEL, ALICE)]
+
+
+@pytest.mark.asyncio
+async def test_a_below_threshold_claim_does_not_extend_the_session(monkeypatch):
+    store = _PanelStore()
+    seen = _wire(monkeypatch, store)
+    await _consent_all(monkeypatch)
+    store.session = {"user_id": ALICE, "last_seen_at": _ts(30)}
+
+    await _turn(seen, voice_user_id=ALICE, voice_score=0.10)
+
+    assert store.heartbeats == []
+
+
+def test_the_last_signed_in_fallback_is_retired():
+    """`_resolve_panel_default_user` (the panel's LAST signed-in member, else its declared
+    owner - no freshness check) was the stale-identity source on every lane that used it.
+    Retired by removing; every lane resolves a panel member through
+    `_resolve_fresh_panel_member` instead."""
+    assert not hasattr(voice_tts, "_resolve_panel_default_user")
+    assert callable(voice_tts._resolve_fresh_panel_member)
 

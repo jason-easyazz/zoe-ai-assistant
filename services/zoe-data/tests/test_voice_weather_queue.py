@@ -541,7 +541,6 @@ async def test_voice_command_uses_skybridge_fast_path(monkeypatch, utterance, re
     monkeypatch.setattr(voice_tts, "_broadcast_skybridge_ui", broadcast_skybridge_ui)
     monkeypatch.setattr(voice_tts, "synthesize", synthesize)
     monkeypatch.setattr(voice_tts, "_resolve_recent_panel_session_user", no_user)
-    monkeypatch.setattr(voice_tts, "_resolve_panel_default_user", no_user)
     monkeypatch.setattr(voice_tts, "_schedule_voice_chat_save", save_chat)
     monkeypatch.setattr(voice_tts, "_run_voice_memory_passes", memory_passes)
     monkeypatch.setattr(voice_tts.asyncio, "ensure_future", _close_coro_ensure_future)
@@ -633,7 +632,6 @@ async def test_voice_command_emits_processing_cue_for_non_pi_fallback(monkeypatc
     monkeypatch.setattr(voice_tts, "_broadcast_skybridge_ui", broadcast_skybridge_ui)
     monkeypatch.setattr(voice_tts, "synthesize", synthesize)
     monkeypatch.setattr(voice_tts, "_resolve_recent_panel_session_user", no_user)
-    monkeypatch.setattr(voice_tts, "_resolve_panel_default_user", no_user)
     monkeypatch.setattr(voice_tts, "_schedule_voice_chat_save", save_chat)
     monkeypatch.setattr(voice_tts, "_run_voice_memory_passes", memory_passes)
     monkeypatch.setattr(voice_tts.asyncio, "ensure_future", _close_coro_ensure_future)
@@ -702,9 +700,6 @@ async def test_voice_skybridge_private_request_challenges_guest_before_cards(mon
     async def no_user(*_args, **_kwargs):
         return None
 
-    async def default_user(*_args, **_kwargs):
-        return "panel-default-user"
-
     skybridge_module = types.SimpleNamespace(resolve_skybridge_request=resolve_skybridge_request)
     monkeypatch.setitem(sys.modules, "skybridge_service", skybridge_module)
     monkeypatch.setattr(skybridge_service, "resolve_skybridge_request", resolve_skybridge_request)
@@ -712,7 +707,6 @@ async def test_voice_skybridge_private_request_challenges_guest_before_cards(mon
     monkeypatch.setattr(voice_tts, "_broadcast_skybridge_ui", broadcast_skybridge_ui)
     monkeypatch.setattr(voice_tts, "_request_voice_identity_challenge", request_voice_identity_challenge)
     monkeypatch.setattr(voice_tts, "_resolve_recent_panel_session_user", no_user)
-    monkeypatch.setattr(voice_tts, "_resolve_panel_default_user", default_user)
     monkeypatch.setattr(voice_tts, "_VOICE_SESSIONS", {})
 
     response = await voice_command(
@@ -777,7 +771,6 @@ async def test_voice_skybridge_auth_challenge_failure_does_not_fall_through(monk
     monkeypatch.setattr(voice_tts, "_request_voice_identity_challenge", request_voice_identity_challenge)
     monkeypatch.setattr(voice_tts, "synthesize", synthesize)
     monkeypatch.setattr(voice_tts, "_resolve_recent_panel_session_user", no_user)
-    monkeypatch.setattr(voice_tts, "_resolve_panel_default_user", no_user)
     monkeypatch.setattr(voice_tts, "_VOICE_SESSIONS", {})
 
     response = await voice_command(
@@ -877,7 +870,6 @@ async def test_voice_command_stream_emits_processing_ack_before_slow_response(mo
 
     monkeypatch.setenv("ZOE_PROCESSING_ACK_PHRASE", "Let me check.")
     monkeypatch.setattr(voice_tts, "_resolve_recent_panel_session_user", panel_user)
-    monkeypatch.setattr(voice_tts, "_resolve_panel_default_user", no_user)
     monkeypatch.setattr(voice_tts, "_load_voice_history", load_voice_history)
     monkeypatch.setattr(voice_tts, "_synthesize_kokoro_sidecar", synthesize_sentence)
     monkeypatch.setattr(voice_tts, "_VOICE_SESSIONS", {})
@@ -975,7 +967,6 @@ async def test_voice_command_uses_pi_hybrid_production_with_processing_cue(
         return {"available": True, "text": "Let me check.", "event": {"type": "voice:processing_ack", "text": "Let me check."}}
 
     monkeypatch.setattr(voice_tts, "_resolve_recent_panel_session_user", panel_user)
-    monkeypatch.setattr(voice_tts, "_resolve_panel_default_user", no_user)
     monkeypatch.setattr(voice_tts, "_VOICE_SESSIONS", {})
     monkeypatch.setattr(voice_tts, "synthesize", fake_synthesize)
     monkeypatch.setattr(pi_hybrid_production.PiHybridProductionConfig, "from_env", classmethod(lambda cls: cls(enabled=True, resource_guard_enabled=False)))
@@ -1063,7 +1054,6 @@ async def test_voice_command_caps_pi_hybrid_list_show_response(monkeypatch) -> N
         return {"available": True, "text": "Let me check."}
 
     monkeypatch.setattr(voice_tts, "_resolve_recent_panel_session_user", panel_user)
-    monkeypatch.setattr(voice_tts, "_resolve_panel_default_user", no_user)
     monkeypatch.setattr(voice_tts, "_VOICE_SESSIONS", {})
     monkeypatch.setattr(voice_tts, "synthesize", fake_synthesize)
     monkeypatch.setattr(
