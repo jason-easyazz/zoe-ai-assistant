@@ -260,6 +260,15 @@ async def push_forget_to_panels(user_id: str) -> int:
     """One ``voice_profile_forget`` command per panel holding a device token. Returns how many were queued. Never raises."""
     from db_compat import get_compat_db
 
+    # A deleted voice signature also ends any open panel voice session of that member (ZOE_VOICE_SESSION; a no-op
+    # when the flag is off). Both delete paths (the settings route and "forget my voice") come through here.
+    try:
+        import voice_session
+
+        await voice_session.revoke_member(user_id, "voice_profile_deleted")
+    except Exception:  # noqa: BLE001 - the purge below must still be queued
+        pass
+
     queued = 0
     try:
         async with get_compat_db() as db:

@@ -280,7 +280,7 @@ async def test_voice_claim_applies_only_to_its_own_turn(monkeypatch):
     store = _PanelStore()
     seen = _wire(monkeypatch, store)
 
-    async def consented(_uid):
+    async def consented(_uid, *_model):   # #2024 adds the claim's model id
         return True
 
     monkeypatch.setattr(voice_tts, "_voice_claim_consented", consented)
@@ -338,7 +338,7 @@ async def test_public_read_shortcut_runs_as_claimed_member_for_that_turn(monkeyp
     store = _PanelStore()
     seen = _wire(monkeypatch, store, skybridge_handles=False)
 
-    async def consented(_uid):
+    async def consented(_uid, *_model):   # #2024 adds the claim's model id
         return True
 
     monkeypatch.setattr(voice_tts, "_voice_claim_consented", consented)
@@ -366,3 +366,104 @@ async def test_pin_sign_in_then_voice_is_the_member_within_its_session(monkeypat
         await _turn(seen)
         assert _last(seen, "skybridge_user") == ALICE
     assert len(store.heartbeats) == 3
+
+
+# --------------------------------------------------------------------------- #
+# 6. ZOE_VOICE_SESSION (#2025): an OPEN voice session is a valid fresh source -
+#    and nothing outlives it
+# --------------------------------------------------------------------------- #
+R34 = "wespeaker_resnet34+i8qdq-u8s8+c1"
+
+
+def _voice_claim(member, score=0.95):
+    return {"voice_user_id": member, "voice_score": score,
+            "speaker": {"verified": None, "member": member, "score": score, "model_id": R34}}
+
+
+def _voice_session_on(monkeypatch):
+    import voice_session as vs
+
+    monkeypatch.setenv("ZOE_VOICE_SESSION", "1")
+    monkeypatch.setenv("ZOE_SPEAKER_MODEL", "resnet34")
+    monkeypatch.setattr(vs, "_SESSIONS", {})
+
+    async def no_names(_m):
+        return ()
+
+    async def no_publish(_events):
+        return None
+
+    monkeypatch.setattr(vs, "other_member_names", no_names)
+    monkeypatch.setattr(vs, "publish", no_publish)
+    # The step-up check classifies the turn; an unclassifiable turn is no step-up.
+    sys.modules["skybridge_service"].classify_skybridge_intent = lambda *_a, **_k: None
+    return vs
+
+
+@pytest.mark.asyncio
+async def test_open_voice_session_is_the_member_and_its_close_is_guest(monkeypatch):
+    store = _PanelStore()
+    seen = _wire(monkeypatch, store)
+
+    async def consented(_uid, *_model):
+        return True
+
+    monkeypatch.setattr(voice_tts, "_voice_claim_consented", consented)
+    vs = _voice_session_on(monkeypatch)
+    clock = [1000.0]
+    monkeypatch.setattr(vs, "_clock", lambda: clock[0])
+
+    # Alice's verified voice opens the panel's voice session: her turn is hers (scope AND attribution).
+    await _turn(seen, **_voice_claim(ALICE))
+    assert vs.active_member(PANEL) == ALICE
+    assert _last(seen, "skybridge_user") == ALICE
+    assert _last(seen, "saved_users") == ALICE
+    # The session is the source - never an indefinite panel binding.
+    assert voice_tts._VOICE_SESSIONS[PANEL].get("bound_user_id") is None
+
+    # Inside the open session her next verified turn is still hers.
+    clock[0] += 30
+    await _turn(seen, **_voice_claim(ALICE))
+    assert _last(seen, "skybridge_user") == ALICE and vs.active_member(PANEL) == ALICE
+
+    # Another (unverified) voice closes the session: that turn is guest and saves nothing as Alice.
+    seen["saved_users"].clear()
+    await _turn(seen, speaker={"verified": False, "member": None, "score": None})
+    assert vs.active_member(PANEL) is None
+    assert _last(seen, "skybridge_user") == "guest"
+    assert ALICE not in seen["saved_users"]
+
+    # With the session closed, a stale binding, a stale "last signed in" row and the operator-declared owner
+    # are all still NOT sources: a claim-less turn is guest and the stale binding is dropped.
+    store.session = {"user_id": ALICE, "last_seen_at": _ts(6 * 3600)}
+    store.owner = ALICE
+    voice_tts._VOICE_SESSIONS[PANEL]["bound_user_id"] = ALICE
+    await _turn(seen)
+    assert _last(seen, "skybridge_user") == "guest", "a stale binding applied after the voice session closed"
+    assert ALICE not in seen["saved_users"]
+    assert voice_tts._VOICE_SESSIONS[PANEL].get("bound_user_id") is None
+
+
+@pytest.mark.asyncio
+async def test_voice_session_ttl_expiry_leaves_the_next_turn_guest(monkeypatch):
+    store = _PanelStore()
+    seen = _wire(monkeypatch, store)
+
+    async def consented(_uid, *_model):
+        return True
+
+    monkeypatch.setattr(voice_tts, "_voice_claim_consented", consented)
+    vs = _voice_session_on(monkeypatch)
+    clock = [1000.0]
+    monkeypatch.setattr(vs, "_clock", lambda: clock[0])
+
+    await _turn(seen, **_voice_claim(BOB))
+    assert vs.active_member(PANEL) == BOB and _last(seen, "skybridge_user") == BOB
+
+    clock[0] += vs.ttl_s() + 1                      # the session's TTL passes with nobody speaking
+    seen["saved_users"].clear()
+    await _turn(seen)
+    assert vs.active_member(PANEL) is None
+    assert _last(seen, "skybridge_user") == "guest", "an expired voice session still identified the speaker"
+    assert BOB not in seen["saved_users"]
+

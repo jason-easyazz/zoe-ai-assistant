@@ -1,0 +1,44 @@
+{
+ "_note": "voice_session.py (ZOE_VOICE_SESSION): the STEP-UP tier. A turn whose member identity comes ONLY from a panel voice session (an identified voice) still needs the PIN for anything listed here; a fresh PIN sign-in or a PIN-resumed turn is not stepped up again. Language-free: intent names (intent_router), Skybridge domain:action pairs ('domain:*' = every action), and the step_up classes of lexicons_data/<lang>.json voice_session that are ON. Read reasons are 'intent:<name>', 'skybridge:<domain>:<action>', 'phrase:<class>' and 'other_member'. Adding a line here can only ask for MORE PINs, never fewer.",
+ "step_up_intents": [
+  "transaction_create",
+  "transaction_summary",
+  "transaction_list",
+  "memory_forget_entity",
+  "board_heal",
+  "board_status",
+  "evolution_proposals_review",
+  "self_improve",
+  "a2a_federation_status",
+  "build_widget",
+  "build_page",
+  "extend_capability",
+  "ha_full_setup",
+  "music_setup",
+  "panel_confirm_code",
+  "panel_list",
+  "panel_setup",
+  "panel_status"
+ ],
+ "step_up_skybridge": [
+  "voice:set"
+ ],
+ "step_up_phrase_classes": [
+  "payments",
+  "security",
+  "settings",
+  "biometric",
+  "forget_person"
+ ],
+ "other_member": true,
+ "private_read_intents": {
+  "calendar_show": "calendar",
+  "agenda_show": "calendar",
+  "list_show": "lists",
+  "reminder_list": "reminders"
+ },
+ "private_read_skybridge": {
+  "calendar": ["show", "overview"],
+  "lists": ["show", "overview"]
+ }
+}
