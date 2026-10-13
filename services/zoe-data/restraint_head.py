@@ -25,6 +25,9 @@ Rules this module keeps:
   re-stamped or re-warmed (the restamp pass in the open-problems ledger).
 * **English-trained.** The embedding model is bge-small-en: another language's text falls back on its lexicon (the head is
   not claimed for them, and the held-out measure is English only).
+* **A text deferred before the model loads is parked, not dropped.** The worker used to find no model and forget the text; now it parks it
+  (``PENDING_MAX``, oldest out) and ``retry_pending`` re-queues it once ``semantic_router`` has its model (the worker polls every ``RETRY_S`` while anything is
+  parked, and ``defer`` tries too). A model-name mismatch or an injected embedder is permanent and is not parked.
 * Fail-safe: any error (missing file, wrong shape, no embedder) returns ``()``.
 
 Stdlib + numpy. No import of ``semantic_router`` at module import time.
@@ -53,7 +56,11 @@ CACHE_MAX = 4096
 _LOCK = threading.Lock()
 _CACHE_LOCK = threading.Lock()                     # the worker thread fills the cache while turns read it
 DEFER_MAX = 256                                    # texts waiting for the worker; beyond it a text is dropped (it is re-derivable)
-_QUEUE: "queue.Queue[str]" = queue.Queue(maxsize=DEFER_MAX)
+PENDING_MAX = 256                                  # texts parked because the router's model was not loaded yet (oldest dropped beyond it)
+RETRY_S = 20.0                                     # how often the worker looks for the model once something is parked
+_QUEUE: "queue.Queue[Optional[str]]" = queue.Queue(maxsize=DEFER_MAX)
+_PENDING: "OrderedDict[str, None]" = OrderedDict()  # parked texts, oldest first; guarded by _CACHE_LOCK
+_PENDING_DROPPED = 0                               # how many parked texts the bound pushed out (a counter, for the log and the tests)
 _WORKER: Optional[threading.Thread] = None
 _STATE: dict[str, Any] = {}                       # "head": (classes, W, b, thr, meta) | None (tried and absent)
 _CACHE: "OrderedDict[str, tuple[str, ...]]" = OrderedDict()
@@ -100,14 +107,22 @@ def reset() -> None:
     with _LOCK:
         _STATE.clear()
         _EMBEDDER = None
+    global _PENDING_DROPPED
     with _CACHE_LOCK:
         _CACHE.clear()
+        _PENDING.clear()
+        _PENDING_DROPPED = 0
     while True:                                    # a text still queued from before must not be embedded into the next test
         try:
             _QUEUE.get_nowait()
             _QUEUE.task_done()
         except queue.Empty:
             break
+    if _WORKER is not None and _WORKER.is_alive():
+        try:
+            _QUEUE.put_nowait(None)                # wake a worker waiting on an old retry interval so it re-reads RETRY_S
+        except queue.Full:
+            pass
 
 
 def set_embedder(fn: Optional[Callable[[str], Any]]) -> None:
@@ -232,11 +247,75 @@ def warm(texts: Any) -> int:
     return n
 
 
+def _model_pending() -> bool:
+    """True while the only thing missing is the router's model: the router module is not imported yet, or has not loaded its
+    model. NOT the permanent cases (an injected embedder, a model-name mismatch, no head file), which retrying cannot fix."""
+    if _EMBEDDER is not None:
+        return False
+    sr = sys.modules.get("semantic_router")
+    return sr is None or getattr(sr, "_MODEL", None) is None
+
+
+def _park(raw: str) -> None:
+    """Remember a text whose head classification could not run yet because the model is not loaded (bounded, oldest out)."""
+    global _PENDING_DROPPED
+    with _CACHE_LOCK:
+        _PENDING.pop(raw, None)
+        _PENDING[raw] = None
+        while len(_PENDING) > PENDING_MAX:
+            _PENDING.popitem(last=False)
+            _PENDING_DROPPED += 1
+
+
+def pending() -> int:
+    """How many texts are parked waiting for the router's model."""
+    with _CACHE_LOCK:
+        return len(_PENDING)
+
+
+def retry_pending() -> int:
+    """Put every parked text back on the worker's queue, once the router's model is available; returns how many were requeued.
+    A no-op (0) while the model is still not loaded, and when nothing is parked. Constant-time per text and never embeds on
+    the calling thread, so it is safe anywhere (the worker itself calls it every ``RETRY_S`` seconds while something is parked;
+    ``defer`` calls it too). Never raises."""
+    try:
+        if _model_pending():
+            return 0
+        with _CACHE_LOCK:
+            texts = list(_PENDING)
+        n = 0
+        for raw in texts:
+            try:
+                _QUEUE.put_nowait(raw)
+            except queue.Full:
+                break                              # stays parked; the next retry takes it
+            with _CACHE_LOCK:
+                _PENDING.pop(raw, None)
+            n += 1
+        return n
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("restraint head: retry skipped: %r", exc)
+        return 0
+
+
+def _embed_or_park(raw: str) -> None:
+    if _model_pending():
+        # the stamp that deferred this ran before the router loaded its model: keep the text for the retry, do not lose it
+        _park(raw)
+        return
+    lookup(raw, embed=True)
+
+
 def _run_worker() -> None:
     while True:
-        text = _QUEUE.get()
         try:
-            lookup(text, embed=True)
+            text = _QUEUE.get(timeout=RETRY_S if _PENDING else None)
+        except queue.Empty:
+            retry_pending()                        # nothing new for a while: has the model arrived for what is parked?
+            continue
+        try:
+            if text is not None:                   # None is only a wake-up (``reset``)
+                _embed_or_park(text)
         except Exception as exc:  # noqa: BLE001 - the worker outlives any one text
             logger.debug("restraint head worker: %r", exc)
         finally:
@@ -255,6 +334,8 @@ def defer(text: Any) -> bool:
         with _CACHE_LOCK:
             if _key(raw) in _CACHE:
                 return False
+        if _PENDING:
+            retry_pending()                        # a later stamp is the cheapest signal that the model may have arrived
         with _LOCK:
             if _WORKER is None or not _WORKER.is_alive():
                 _WORKER = threading.Thread(target=_run_worker, name="restraint-head", daemon=True)
