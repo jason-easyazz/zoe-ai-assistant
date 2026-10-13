@@ -593,3 +593,29 @@ def test_show_reprints_a_saved_result_without_the_scratch_dir(tmp_path):
     f.write_text(json.dumps({"owner": rep}))
     a = _args(experiment="show", args=f"file={f}", scratch=str(tmp_path), corpus_index="x", core="x", base="x", json=None)
     lab.run(a)
+
+
+def test_centred_analysis_refuses_missing_cohort_rows_and_keeps_missing_trials_absent(tmp_path):
+    ctx = _synthetic_scratch(tmp_path, np.random.default_rng(31))
+    Ec, Ei, Eh, mu = ctx.split("syn", center=True)  # complete cohort: fine
+    assert mu is not None and np.isfinite(Ec).all()
+    z = np.load(tmp_path / "emb_syn.npz")
+    E = z["emb"].copy()
+    E[ctx.n_c + 3] = np.nan  # one impostor trial row never embedded
+
+    def save(tag, arr):
+        np.savez(tmp_path / f"emb_{tag}.npz", emb=arr, secs=z["secs"], dur=z["dur"], group=z["group"], meta=str(z["meta"]))
+
+    save("part", E)
+    _, Ei2, _, _ = ctx.split("part", center=True)
+    assert np.allclose(Ei2[3], 0.0) and not np.allclose(Ei2[4], 0.0)  # absent stays absent, not normalize(-mu)
+    E[ctx.n_c + ctx.n_i + 1] = np.nan  # now a cohort row is missing too
+    save("part2", E)
+    with pytest.raises(ValueError, match="complete, finite"):
+        ctx.split("part2", center=True)
+    E2 = z["emb"].copy()
+    E2[ctx.n_c + ctx.n_i:] = np.nan  # a `--groups imp` screening artefact: no cohort at all
+    save("imp", E2)
+    with pytest.raises(ValueError):
+        ctx.split("imp", center=True)
+    ctx.split("imp", center=False)  # uncentred use of a screening artefact still works

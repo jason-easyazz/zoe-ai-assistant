@@ -40,7 +40,7 @@ process refuses to start below ``--min-avail-mb`` MemAvailable (default 2048) an
 (the 12B night window).  Run under ``nice -n 10`` AND inside a SHARED hold of the voice
 harness lock so it never overlaps a speed-gated replay probe:
 
-    flock -s -w 3600 /tmp/zoe-voice-harness.lock nice -n 10 \
+    flock -x -w 3600 /tmp/zoe-voice-harness.lock nice -n 10 \
         python3 scripts/perf/speaker_bakeoff.py embed --model <name> ...
 """
 from __future__ import annotations
@@ -617,6 +617,23 @@ def _items(a):
     return items
 
 
+def reuse_compatible(ref_meta: dict, info: dict, spec: str):
+    """May ``embed --reuse`` copy rows from a reference artefact?  Only if the reference was produced by
+    the SAME ONNX file of the SAME base model, with no waveform pre-processing of its own (a capped /
+    trimmed reference holds different audio than the original clip).  Returns (ok, reason)."""
+    name, _ = parse_variant(spec)
+    ref_name, ref_opts = parse_variant(ref_meta.get("model", ""))
+    if ref_name != name:
+        return False, f"reference model {ref_name!r} is not {name!r}"
+    cur_file, ref_file = info.get("model_file"), ref_meta.get("model_file")
+    if not cur_file or cur_file != ref_file:
+        return False, f"reference model file {ref_file!r} differs from {cur_file!r} (or is unrecorded)"
+    pre = sorted(k for k in ref_opts if k in ("cap", "capmode", "trim", "strip"))
+    if pre:
+        return False, f"reference was itself pre-processed ({', '.join(pre)})"
+    return True, ""
+
+
 def cmd_embed(a) -> None:
     import numpy as np
 
@@ -634,6 +651,9 @@ def cmd_embed(a) -> None:
         # Variants that only touch some clips (a duration cap, silence trim) re-embed just those:
         # every clip whose pre-processed waveform equals the original keeps the reference row.
         z = np.load(scratch / f"emb_{a.reuse}.npz", allow_pickle=False)
+        ok_, why_ = reuse_compatible(json.loads(str(z["meta"])), info, a.model)
+        if not ok_:
+            sys.exit(f"--reuse {a.reuse} refused: {why_}")
         ref = {"emb": z["emb"], "secs": z["secs"]}
         if len(ref["emb"]) != len(items):
             sys.exit(f"--reuse {a.reuse}: {len(ref['emb'])} rows but {len(items)} items (cohort flags differ?)")
@@ -715,6 +735,24 @@ def throttled_now():
         return None
 
 
+SOFT_LIMIT_C = 82.0  # Pi 5 firmware soft temperature limit: clocks fall to ~1.5 GHz at about this SoC temperature
+
+
+def sample_health():
+    """(current throttle bits, SoC temperature) - sampled after EVERY timed clip, outside the timer.
+
+    The sticky 'has occurred' bits (16-19 of ``get_throttled``) cannot be used: they are set from boot
+    onward on this panel (0xe0000 when idle), so they would taint every pass.  Instead the CURRENT bits
+    and the temperature are read after each clip, so a throttle episode anywhere in the pass is seen."""
+    return (throttled_now() or 0), read_temp_c()
+
+
+def pass_tainted(bits: int, temp_max, limit_c: float = SOFT_LIMIT_C) -> bool:
+    """A pass is unusable if the firmware reported any current throttle/cap/under-voltage bit at any
+    sample, or the SoC reached the soft limit."""
+    return bool(bits) or (temp_max is not None and temp_max >= limit_c)
+
+
 def _cool_down(max_c: float, wait_s: float) -> float | None:
     """Wait (up to wait_s) for the SoC to fall to max_c; a hot Pi throttles and the numbers lie."""
     t = read_temp_c()
@@ -731,22 +769,31 @@ def _bench_once(spec: str, a, scratch: Path, clips, rep: int) -> dict:
 
     temp_before = _cool_down(getattr(a, "max_temp_c", 0), getattr(a, "cool_wait_s", 300))
     thr_mask = 0
+    temp_max = temp_before
     t0 = time.perf_counter()
     f, info = load_model(spec, a.threads, scratch / "models", scratch)
+    name_, vopts_ = parse_variant(spec)
+    eff_threads = vopts_.get("intra", a.threads) if MODELS[name_][0] == "ort" else a.threads
     load_s = time.perf_counter() - t0
     rss_load = rss_mb()
     t1 = time.perf_counter()
-    f(clips[0])
+    if f(clips[0]) is None:
+        raise RuntimeError("embedding failed (None) on the first clip - not a timing")
     first_ms = (time.perf_counter() - t1) * 1e3
     for w in clips[1:3]:
         f(w)
     ts, ds, fb, inf = [], [], [], []
     for k, w in enumerate(clips):
         t1 = time.perf_counter()
-        f(w)
-        ts.append(time.perf_counter() - t1)
-        if k % 10 == 9:
-            thr_mask |= throttled_now() or 0
+        e = f(w)
+        dt = time.perf_counter() - t1
+        if e is None:  # e.g. a cap so small that fewer than 10 feature frames remain: inference never ran
+            raise RuntimeError(f"embedding failed (None) on timed clip {k}; the pass is an error, not a fast run")
+        ts.append(dt)
+        bits, tc = sample_health()
+        thr_mask |= bits
+        if tc is not None:
+            temp_max = tc if temp_max is None else max(temp_max, tc)
         ds.append(len(f.prep(w)) / SR if hasattr(f, "prep") else len(w) / SR)
         if hasattr(f, "last"):
             fb.append(f.last[0])
@@ -754,15 +801,18 @@ def _bench_once(spec: str, a, scratch: Path, clips, rep: int) -> dict:
     ts, ds = np.array(ts), np.array(ds)
     slope, icpt = np.polyfit(ds, ts, 1) if len(set(ds.round(2))) > 1 else (float("nan"), float("nan"))
     r = {
-        "model": spec, "pass": rep, "threads": a.threads, "n": len(ts), "mean_dur_s": round(float(ds.mean()), 2),
+        "model": spec, "pass": rep, "threads": eff_threads, "threads_global": a.threads, "n": len(ts), "mean_dur_s": round(float(ds.mean()), 2),
         "load_s": round(load_s, 2), "first_call_ms": round(first_ms, 1),
         "p50_ms": round(float(np.percentile(ts, 50) * 1e3), 1),
         "p95_ms": round(float(np.percentile(ts, 95) * 1e3), 1),
         "ms_per_audio_s": round(float(slope * 1e3), 1), "fixed_ms": round(float(icpt * 1e3), 1),
         "rss_after_load_mb": round(rss_load, 1), "peak_rss_mb": round(peak_rss_mb(), 1), **info}
-    thr_mask |= throttled_now() or 0
-    r["temp_c_before"], r["temp_c_after"], r["throttle_bits"] = temp_before, read_temp_c(), thr_mask
-    r["tainted"] = bool(thr_mask)  # firmware throttled/capped during the run: do not use the timings
+    bits, tc = sample_health()
+    thr_mask |= bits
+    if tc is not None:
+        temp_max = tc if temp_max is None else max(temp_max, tc)
+    r["temp_c_before"], r["temp_c_after"], r["temp_c_max"], r["throttle_bits"] = temp_before, tc, temp_max, thr_mask
+    r["tainted"] = pass_tainted(thr_mask, temp_max, getattr(a, "taint_temp_c", SOFT_LIMIT_C))  # throttled/capped/at the limit: do not use
     if fb:
         r["fbank_p50_ms"] = round(float(np.percentile(fb, 50)), 1)
         r["infer_p50_ms"] = round(float(np.percentile(inf, 50)), 1)
@@ -807,10 +857,11 @@ def cmd_bench_summ(a) -> None:
         print(f"(dropped {dropped} errored/thermally-tainted passes)", file=sys.stderr)
     by: dict = {}
     for r in rows:
-        by.setdefault(r["model"], []).append(r)
-    print("| variant | passes | p50 ms (median of passes) | p95 ms | fbank ms | infer ms | load s | first call ms | RSS after load MB | peak RSS MB |")
+        by.setdefault((r["model"], r.get("threads")), []).append(r)
+    print("| variant (threads) | passes | p50 ms (median of passes) | p95 ms | fbank ms | infer ms | load s | first call ms | RSS after load MB | peak RSS MB |")
     print("|---|---|---|---|---|---|---|---|---|---|")
-    for k, v in by.items():
+    for (k0, thr), v in by.items():
+        k = f"{k0} [{thr} thr]"
         med = lambda key: float(np.median([x[key] for x in v if key in x])) if any(key in x for x in v) else float("nan")  # noqa: E731
         print(f"| {k} | {len(v)} | {med('p50_ms'):.0f} | {med('p95_ms'):.0f} | {med('fbank_p50_ms'):.1f} | "
               f"{med('infer_p50_ms'):.0f} | {med('load_s'):.2f} | {med('first_call_ms'):.0f} | "
@@ -1286,6 +1337,7 @@ def main() -> None:
     p.add_argument("--threads", type=int, default=2)
     p.add_argument("--max-temp-c", type=float, default=0, help="before each run wait for the SoC to cool to this (0 = off)")
     p.add_argument("--cool-wait-s", type=float, default=300)
+    p.add_argument("--taint-temp-c", type=float, default=82.0, help="a pass whose SoC temperature reaches this is tainted")
     p.add_argument("--retries", type=int, default=0, help="re-run a thermally tainted pass this many times")
     p.set_defaults(fn=cmd_bench)
 

@@ -3,7 +3,7 @@ type: research
 title: "Making WeSpeaker ResNet34 panel-ready (2026-10-13): INT8 QDQ, ORT options, enrolment, cohort-mean centring, thresholds, adaptation"
 date: 2026-10-13
 status: measured on the Jetson CPU and the panel Pi 5. No live path, flag, service, unit or profile changed. Aggregates only - no clip names, transcripts, audio or embeddings (docs/knowledge/biometric-retention-policy.md). Owner-corpus speaker labels are INFERRED (bake-off record section 2.2); the labelled-public axis is the one to trust for ranking. The production swap is NOT built here.
-description: Every lever the owner asked for, each run as a measured experiment against the bake-off's own trial design (same frozen owner corpus, same impostors, same public axis, baseline reproduced to the digit) with bootstrap CIs and paired deltas. Winners - static INT8 QDQ (2.3-2.8x faster in the same session, 3.5x against the bake-off record; no accuracy loss), ORT spinning off, cohort-mean centring, 5 clips with outlier rejection, length-dependent thresholds, retuned adaptation guards. Losers - dynamic INT8, FP16 (kept as fallback), S8 activations, duration caps, silence trim/strip, length-weighted enrolment, AS-norm on top of centring, threads beyond 2. Recommended panel configuration and a migration note.
+description: Every lever the owner asked for, each run as a measured experiment against the bake-off's own trial design (same frozen owner corpus, same impostors, same public axis, baseline reproduced to the digit) with bootstrap CIs and paired deltas. Winners - static INT8 QDQ (2.3-2.8x faster in the same session, 3.6x against the bake-off record; no accuracy loss), ORT spinning off, cohort-mean centring, 5 clips with outlier rejection, length-dependent thresholds, retuned adaptation guards. Losers - dynamic INT8, FP16 (kept as fallback), S8 activations, duration caps, silence trim/strip, length-weighted enrolment, AS-norm on top of centring, threads beyond 2. Recommended panel configuration and a migration note.
 evidence_labels: "[measured] this run, scripts/perf/speaker_bakeoff.py + speaker_lab.py | [record] copied from docs/research/speaker-model-bakeoff-2026-10.md | [src] file:line read in this worktree | [derived] arithmetic on measured numbers | [hypothesis] / [unverified] not confirmed"
 ---
 
@@ -17,14 +17,14 @@ on paper: as fast and as accurate as it can get, with every number comparable to
 
 ## 0. Answer first
 
-**Recommended panel configuration** (details and the full lever table below). The latency headline is the **same-session** FP32 -> INT8 pair; the 369 -> 106 ms line is a secondary cross-session comparison against the bake-off record:
+**Recommended panel configuration** (details and the full lever table below). The latency headline is the **same-session** FP32 -> INT8 pair; the 369 -> 102 ms line is a secondary cross-session comparison against the bake-off record:
 
 | | bake-off baseline | recommended | change |
 |---|---|---|---|
 | model file | `wespeaker_en_voxceleb_resnet34.onnx`, FP32, 26.5 MB | same network, **static INT8 QDQ** (U8 activations, S8 per-channel weights, MinMax calibration on 100 public dev-clean clips), 6.8 MB | 3.9x smaller |
 | ORT | `ORT_ENABLE_ALL`, 2 threads | `ORT_ENABLE_ALL` (anything below EXTENDED is a trap, section 3.3), 2 threads, **`session.intra_op.allow_spinning=0`** | |
-| Pi 5 latency, **same session, same 30 clips** (mean 2.86 s), un-throttled | FP32 **p50 232 ms [228-238] / p95 665 ms** (3 clean passes of 4) | INT8 + spin off **p50 89 ms [87-90] / p95 225 ms** (4 clean passes) | **2.6x p50 / 3.0x p95**; 16-clip sweeps agree: FP32 203 -> INT8 83 - 89 ms (2.3 - 2.4x), 200 -> 71 - 75 ms with spinning off on both (2.7 - 2.8x) |
-| Pi 5 latency, 3.65 s clips - **secondary, cross-session** | p50 369 ms / p95 1002 ms [bake-off record, 07:00, Pi at 65 C] | p50 106 ms / p95 242 ms (60 clips, median of 3 passes, un-throttled, Pi at 73 - 81 C, 4 h later) | 3.5x / 4.1x - a different session and a cooler Pi for the baseline, so read it as supporting only; under the 150 ms goal either way |
+| Pi 5 latency, **same session, same 30 clips** (mean 2.86 s), un-throttled | FP32 **p50 235 ms [222-248] / p95 663 ms [653-673]** (2 clean passes of 4; the other two were throttled and dropped) | INT8 + spin off **p50 90 ms [84-92] / p95 225 ms [222-228]** (4 clean passes) | **2.6x p50 / 2.9x p95**; 16-clip sweeps agree: FP32 203 -> INT8 83 - 89 ms (2.3 - 2.4x), 200 -> 71 - 75 ms with spinning off on both (2.7 - 2.8x) |
+| Pi 5 latency, 3.65 s clips - **secondary, cross-session** | p50 369 ms / p95 1002 ms [bake-off record, 07:00, Pi at 65 C] | p50 102 ms [99-102] / p95 238 ms [237-238] (60 clips, median of 3 passes, un-throttled, Pi at 71 - 81.5 C, 5 h later) | 3.6x / 4.2x - a different session and a cooler Pi for the baseline, so read it as supporting only; under the 150 ms goal either way |
 | Pi peak RSS (fresh process) | ~233 MB [record] | **199 - 218 MB** | same |
 | owner strict core, 3-clip enrolment: EER / FRR@FAR1 % / FRR@FAR0.1 % | 1.31 % / 1.61 % / 6.42 % | **0.72 % / 0.48 % / 4.03 %** | EER -0.58 pp [-0.71, -0.45] |
 | same, nested design (sessions with 8 or more clips): 3 / 5 / 8 enrolment clips | 1.19 % / 1.31 % / 4.16 % (3 clips, FP32 raw) | 0.69 % / 0.45 % / 2.33 % (3) ; **0.53 % / 0.29 % / 1.85 % (5)** ; 0.47 % / 0.17 % / 1.33 % (8) | |
@@ -62,7 +62,7 @@ the final row group (section 3.4) uses the bake-off's 60 clips (mean 3.65 s).
 | 1b | `enable_cpu_mem_arena=0`, `enable_mem_pattern=0`, `mode=par,inter=2` (FP32) | 203 ms | 205 / 198 / 216 ms | **no effect**; parallel mode is 6 % slower |
 | 1c | intra-op threads 1 / 2 / 4 (FP32) | 203 ms (2) | 301 [301-312] / 203 / 174 [169-176] ms | 4 threads -14 %, 1 thread +48 %; threads cannot reach the goal |
 | 1d | `allow_spinning=0` (FP32 / INT8) | 203 / 83 ms | 200 / **71 [69-72]** ms (sweep C); INT8 75 vs 86 in sweep D | **keep for INT8**: about -13 %, and idle worker threads stop burning CPU |
-| 2a | **static INT8 QDQ, U8 act / S8 weights, per-channel, MinMax** | FP32 203 [202-208] ms | **89 [84-93] ms** (83 in sweep C; 106 at 3.65 s, section 3.4) | **KEEP**. Accuracy below |
+| 2a | **static INT8 QDQ, U8 act / S8 weights, per-channel, MinMax** | FP32 203 [202-208] ms | **89 [84-93] ms** (83 in sweep C; 102 at 3.65 s, section 3.4) | **KEEP**. Accuracy below |
 | 2a-acc | its accuracy vs FP32 | owner strict 1.31 / 1.61 / 6.42 | 1.22 [1.06-1.44] / 1.44 / 6.23; delta EER -0.07 [-0.16, +0.01] | no loss. Lenient core EER -0.38 pp* (better). Public EER 3.28 -> 3.30 (delta +0.05 [-0.24, +0.38]); FRR@1 % +0.75 pp [-0.27, +1.68]; FRR@0.1 % +2.34 pp* [+0.58, +4.57] (coarse tail, 476 distinct probes) |
 | 2b | static INT8, S8 activations (symmetric) | U8/S8 3.30 % | public EER 3.94 % [3.05-4.86]; delta vs FP32 +0.70 pp* [+0.12, +1.23], FRR@1 % +2.13 pp* | **REJECT** (same speed) |
 | 2c | static INT8 variants: per-tensor weights; last Gemm kept FP32; percentile calibration | 3.30 % public EER | 3.22 % / 3.20 % / 3.05 % | all inside noise; **no reason to leave plain MinMax** (public axis only) |
@@ -72,8 +72,8 @@ the final row group (section 3.4) uses the bake-off's 60 clips (mean 3.65 s).
 | 3b | duration cap (first N s), INT8, owner strict EER | 1.22 % (no cap) | 4 s: 1.33 % (+0.08 pp*) ; 3 s: 1.51 % (+0.28*) ; 2 s: 2.28 % (+1.03*) ; 3 s "densest window": 1.58 % (+0.34*) | **REJECT**. Pi gain (single pass each, 3.65 s mean): p50 flat, p95 235 -> 141 (4 s) / 112 (3 s) / 94 (2 s) ms |
 | 3c | edge-silence trim (40 dB), INT8, owner strict EER | 1.22 % | 3.69 % (+2.45 pp* [+2.15, +2.75]); public +0.02 [-0.45, +0.46] | **REJECT** - and a channel warning, section 7 |
 | 3d | all-silence strip (35 dB), INT8, owner strict EER | 1.22 % | 3.55 % (+2.33 pp*); public +0.01 | **REJECT** |
-| 4 | warm session reuse | cold load 0.04 - 0.13 s, first call 63 - 85 ms (INT8), 200+ ms (FP32) | warm p50 106 ms | load once at daemon start and run one throw-away embedding |
-| 5 | Jetson / off-box | - | INT8 on the Jetson CPU: 101 ms (2 thr) / 86 ms (4 thr); FP32 260 ms | **no latency win** vs the Pi's 106 ms, plus network; section 6 |
+| 4 | warm session reuse | cold load 0.04 - 0.13 s, first call 63 - 85 ms (INT8), 200+ ms (FP32) | warm p50 102 ms | load once at daemon start and run one throw-away embedding |
+| 5 | Jetson / off-box | - | INT8 on the Jetson CPU: 101 ms (2 thr) / 86 ms (4 thr); FP32 260 ms | **no latency win** vs the Pi's 102 ms, plus network; section 6 |
 | 6a | enrolment clips 3 -> 5 -> 8 (nested draws, sessions with 8 or more clips), FP32 raw | n=3: 1.19 % / 1.31 % / 4.16 % | n=5: 1.00 % / 1.01 % / 3.06 % (delta EER -0.19 pp* [-0.27, -0.12]) ; n=8: 0.83 % / 0.72 % / 2.30 % (-0.36 pp* [-0.46, -0.27]) | **KEEP 5, prefer 8** |
 | 6b | length-weighted mean (duration, or its square root) | plain mean | n=3 0.00 [-0.05, +0.05]; n=5 -0.16 vs -0.19 for plain; n=8 -0.30 vs -0.36; under contamination +0.12 pp worse | **REJECT** |
 | 6c | outlier rejection (drop a clip whose leave-one-out cosine < 0.30, keep 2 or more) | clean n=5: 1.00 % | identical to plain mean on clean enrolments (never fires); with one random stranger among 5 clips: plain mean 1.65 % / 2.47 % / 10.89 % -> **1.06 % / 1.08 % / 3.36 %** (clean is 1.00 % / 1.01 % / 3.06 %) | **KEEP** (tau 0.30 and 0.40 identical). "Always drop the lowest of 5" costs +0.13 pp on clean enrolments - reject |
@@ -149,7 +149,7 @@ The Pi in the kiosk sat at **65 C when the bake-off ran (07:00) and 73 - 78 C id
 about half a core). The firmware's soft temperature limit (about 82 C) engaged during FP32 bursts: `vcgencmd get_throttled`
 showed the soft-limit and frequency-cap bits and the clock fell from 2.4 to 1.5 GHz. A first 40-clip FP32 sweep was discarded
 because the timings were taken throttled (and it pushed the panel to 88 C - it was killed). The harness now gates: it waits
-for the SoC to cool to `--max-temp-c`, samples the throttle bits during the run, flags a pass `tainted` if any were set, re-runs
+for the SoC to cool to `--max-temp-c`, samples the throttle bits and the SoC temperature after **every timed clip** (the sticky 'has occurred' bits are set from boot on this panel, so only the current bits can be used), flags a pass `tainted` if any current bit was set at any sample or the SoC reached 82 C, re-runs
 it after another cool-down and never averages a tainted pass. **FP32 at 60 clips could not be re-measured un-throttled** - it always crossed the limit, even from 66 C - so the same-session FP32
 comparison uses shorter runs: 16 clips (sweeps A - D) and 30 clips (3 of 4 FP32 passes stayed un-throttled, start 70 - 72 C, end 81.5 C, just under
 the limit; the fourth was throttled and dropped). The 60-clip FP32 reference is the record's 369 / 1002 ms (cool Pi) and is a cross-session
@@ -180,11 +180,15 @@ mem-pattern and spinning off, parallel mode): cosine 1.0 on 40 clips, so the `>=
 |---|---|---|---|---|---|
 | FP32, 2 thr, ORT_ENABLE_ALL [record] | **369** | 1002 | 134 | | cool Pi, record |
 | FP32, 2 thr (this session, 8 clips, fresh process) | 231 | 588 | 87.5 + 48 | 6 | mean 2.84 s |
-| **same-session pair, 30 clips (mean 2.86 s): FP32, 2 thr** | **232 [228-238]** | **665 [664-672]** | 89 + 34 | 3 - 6 | 3 clean passes of 4; the headline FP32 reference |
-| **same-session pair, 30 clips: INT8, 2 thr, spin off** | **89 [87-90]** | **225 [222-228]** | 29.7 + 17 | 3 | 4 clean passes; **2.6x p50, 3.0x p95** vs the row above |
-| **INT8 QDQ, 2 thr, spin off (recommended)** | **106 [105-108]** | **242 [241-245]** | **29.6 + 17** | 4.1 | un-throttled, Pi 73 -> 81.5 C |
+| **same-session pair, 30 clips (mean 2.86 s): FP32, 2 thr** | **235 [222-248]** | **663 [653-673]** | about 90 + 35 | 3 - 6 | 2 clean passes of 4 (throttle bits and temperature sampled after every clip); the headline FP32 reference |
+| **same-session pair, 30 clips: INT8, 2 thr, spin off** | **90 [84-92]** | **225 [222-228]** | 29.7 + 17 | 3 | 4 clean passes; **2.6x p50, 2.9x p95** vs the row above |
+| **INT8 QDQ, 2 thr, spin off (recommended)** | **102 [99-102]** | **238 [237-238]** | **30 + 17** | 4.1 | un-throttled, sampled after every clip, Pi 71 -> 81.5 C |
 | INT8, 1 thr, spin off | 136 [135-142] | 371 [368-385] | 49.3 + 0 | 3.6 | frees a core, +29 % latency |
 | INT8, 4 thr, spin off | about 90 - 97 (**throttled**, indicative) | about 191 | 22.4 + 25 | 4 | every 60-clip pass crossed the limit; 16 and 30 clip passes were clean: 64 (2.43 s) and 78 - 86 (2.86 s) ms, p95 150 - 183 |
+
+Sampling note: the two headline rows (the same-session pair and the 60-clip INT8 row) were re-run after the health sampling was tightened to every clip
+(a review finding); the earlier 232 / 89 ms and 106 / 242 ms figures were taken with checks every tenth clip and moved by at most 3 % / 4 %. The 1-thread and 4-thread
+rows, the 16-clip sweeps (A - D) and the FP16 / dynamic rows keep the older every-tenth-clip sampling plus an end-of-pass check; none of them is a headline.
 
 Fresh-process RSS (one session, one process): INT8 **154 MB after load, 199 MB peak at 16 clips / 218 MB at 60**; FP32 167 / 224 MB.
 Weights drop 26.5 -> 6.8 MB but peak RSS is dominated by activations and the ORT arena, so RAM is unchanged (the daemon already imports
@@ -257,14 +261,14 @@ member's margin guard to be meaningful. The lookalike is one impostor per enrolm
 
 ## 6. Where it runs, and why not the Jetson
 
-- **Pi (recommended).** 106 ms p50 / 242 ms p95 at 3.65 s with no network and no server load; the daemon already computes the shadow
+- **Pi (recommended).** 102 ms p50 / 238 ms p95 at 3.65 s with no network and no server load; the daemon already computes the shadow
   embedding on the Pi today (Resemblyzer, 243 ms in the record).
 - **Jetson CPU (measured, contended: load average 7 - 10, shared with the brain and other agents):** INT8 **101 ms** (2 threads) / 86 ms (4
   threads), FP32 260 ms. So moving to the Jetson does not reach "much faster than the Pi" - INT8 on the Pi is already there.
 - **Panel -> Jetson round trip (measured with ping and read-only requests to the existing server; no new listener was opened):**
   ICMP RTT 4.2 ms avg (1.0 - 8.2; 1,400-byte packets 5.9 ms), HTTPS GET to an existing endpoint 5 - 15 ms on a kept-alive connection and
   15 - 32 ms with a new TLS connection. A 3.65 s clip is 117 kB at 16-bit 16 kHz. **[derived]** estimate for an off-box embedding:
-  101 ms + 5 - 15 ms request + the upload (about 10 - 30 ms on this LAN) = 120 - 150 ms - slower than the Pi's 106 ms, plus the record's
+  101 ms + 5 - 15 ms request + the upload (about 10 - 30 ms on this LAN) = 120 - 150 ms - slower than the Pi's 102 ms, plus the record's
   233 - 265 MB peak for an ONNX embedder in zoe-data on a box whose RAM gates everything, and a server path for a biometric.
   **Not built, not recommended.**
 - **ORT CUDA EP:** not available - the zoe-data venv's onnxruntime 1.23.2 lists only `AzureExecutionProvider` and `CPUExecutionProvider`;
@@ -298,7 +302,7 @@ member's margin guard to be meaningful. The lookalike is one impostor per enrolm
    of embedding of the same clip).
 2. **Dual-run (flag-dark, one week).** Keep Resemblyzer as the live shadow scorer; add ResNet34 INT8 as a second scorer in the same
    `speaker_shadow_metrics.jsonl` rows, `model_id` on each. A member has one profile row per `model_id`; ResNet34 rows stay unused until the
-   comparison is done. The Pi has the headroom: 106 ms in a background thread after the turn, about 200 MB.
+   comparison is done. The Pi has the headroom: 102 ms in a background thread after the turn, about 200 MB.
 3. **Re-enrolment through the guided panel flow** (`zoe_enroll_flow.py`): **5 clips** per member in one sitting (8 if the household is
    patient: EER 0.53 -> 0.47 %), same room, then outlier rejection at tau 0.30 and a re-ask for any clip rejected. The retention policy keeps no
    audio, so profiles cannot be re-embedded - this is the only path. Until a member re-enrols the new scorer has no profile for them and
@@ -309,7 +313,7 @@ member's margin guard to be meaningful. The lookalike is one impostor per enrolm
    within 3x of the expected, so an ORT upgrade or a wrong graph level fails loudly. The reference vector is public/synthetic data, not a voiceprint.
 5. **Thresholds.** Keyed by `model_id` and length group (2 s or less / longer): start at 0.233 / 0.265 (FAR 1 %) and 0.309 / 0.351 (FAR 0.1 %) on centred
    cosines (section 4.3), then re-derive on the labelled shadow week. `ZOE_SPEAKER_ID_THRESHOLD`'s 0.82 does not carry over. Decide CAM++ vs ResNet34 there
-   too: ResNet34 INT8 at 106 ms now costs about what CAM++ cost in the record (133 ms) - the speed reason to prefer CAM++ is gone.
+   too: ResNet34 INT8 at 102 ms now costs about what CAM++ cost in the record (133 ms) - the speed reason to prefer CAM++ is gone.
 6. **#2002.** Make `ZOE_SPEAKER_ADAPT_MIN_SCORE` and `ZOE_SPEAKER_ADAPT_ANCHOR_FLOOR` per-model settings; for ResNet34 set the anchor floor to 0.45 and the min score to the FAR-0.1 % threshold; keep
    the 0.92 drift bound. Turn adaptation on only after the shadow week and a second enrolled member (margin guard).
 7. **Centring vector**: a public artefact built from the cohort (mean of the L2-normalised far-field dev-clean embeddings, 240 clips / 40 speakers) with the *deployed*

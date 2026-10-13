@@ -498,13 +498,20 @@ class Ctx:
     def split(self, tag, center: bool = False, coh_variant: str = "farfield"):
         """(Ec, Ei, Eh, mu): L2-normalised blocks; ``center`` subtracts the cohort mean first."""
         E, _, _ = self.raw(tag)
-        E = l2(np.nan_to_num(E, nan=0.0)) * np.isfinite(E).all(axis=1, keepdims=True)
+        fin = np.isfinite(E).all(axis=1, keepdims=True)  # rows that were never embedded (screening runs) stay absent
+        E = l2(np.nan_to_num(E, nan=0.0)) * fin
         Ec, Ei, Eh = E[: self.n_c], E[self.n_c: self.n_c + self.n_i], E[self.n_c + self.n_i:]
         mu = None
         if center:
             hv = np.array([m["variant"] for m in self.coh])
-            mu = Eh[hv == coh_variant].mean(axis=0)
-            Ec, Ei, Eh = centered(Ec, mu), centered(Ei, mu), centered(Eh, mu)
+            sel = hv == coh_variant
+            fh = fin[self.n_c + self.n_i:, 0]
+            if len(Eh) != len(self.coh) or not sel.any() or not fh[sel].all():
+                raise ValueError(f"centred analysis needs the complete, finite {coh_variant!r} cohort rows in emb_{tag}.npz "
+                                 f"(embedded with --groups imp, or --no-cohort?)")
+            mu = Eh[sel].mean(axis=0)
+            # rows that were never embedded must stay absent (zero), not become normalize(-mu)
+            Ec, Ei, Eh = centered(Ec, mu) * fin[: self.n_c], centered(Ei, mu) * fin[self.n_c: self.n_c + self.n_i], centered(Eh, mu) * fh[:, None]
         return Ec, Ei, Eh, mu
 
     def cohort(self, Eh, variant="farfield"):
