@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-626 flags; 624 not documented in `.env.example`.
+627 flags; 625 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -533,6 +533,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_SKYBRIDGE_ONLY` | `False` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_SKYBRIDGE_ROUTER_VETO` | `'1'` | no | NO | `services/zoe-data/skybridge_service.py` |
 | `ZOE_SKYBRIDGE_TIMEZONE` | `-` | no | NO | `services/zoe-data/skybridge_service.py` |
+| `ZOE_SKYBRIDGE_UNSURE_FLOOR_WRITE` | `0.45` | no | NO | `services/zoe-data/skybridge_service.py` |
 | `ZOE_SMART_HOME_FOLLOWUP_TTL_S` | `'60'` | no | NO | `services/zoe-data/conversation_cues.py` |
 | `ZOE_SMART_TURN_ENABLED` | `'0'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_SMART_TURN_MAX_CHECKS` | `'2'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |

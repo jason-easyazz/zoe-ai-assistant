@@ -54,7 +54,7 @@ def test_voice_form_replies_are_gated_on_panel_liveness():
     # a dead panel queues NO form (a stale Done must not add what the reply said was not added)
     assert src.count("if _form_live:") == 2
     # the literal tails live ONLY inside the helpers
-    assert src.count("Check the panel and tap Done") == 1
+    assert src.count("Tap Done on the panel to save") == 1
     assert src.count("check the details and tap Confirm") == 1
 
 

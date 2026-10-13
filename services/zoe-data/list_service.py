@@ -19,8 +19,11 @@ still carry their own list INSERTs.
 
 from __future__ import annotations
 
+import re
 import uuid
 from typing import Optional
+
+import write_receipts
 
 # The voice/MCP rule for a freshly auto-created list's visibility. Callers pass
 # the result explicitly so the choice stays visible at the call site.
@@ -30,6 +33,131 @@ PERSONAL_LIST_TYPES = frozenset({"personal", "tasks", "shopping"})
 def default_visibility(list_type: str) -> str:
     """Visibility the voice/MCP add paths give a list they auto-create."""
     return "personal" if list_type in PERSONAL_LIST_TYPES else "family"
+
+
+# ── Item text hygiene (live 2026-10-12: "Can you add noodles? Noodles. To the shopping list." stored "noodles? Noodles";
+# a whole sentence the user said to Zoe was stored as an item). One cleaner and one plausibility test, used by BOTH the
+# Skybridge parser and the intent_router parser so a spoken item reads the same on every lane.
+_FILLER_WORDS = frozenset({"um", "uh", "er", "erm", "ah", "hmm", "mm", "uhh", "umm", "eh"})
+_LEAD_WORDS = frozenset({"please", "pls", "and", "also", "then", "just", "so", "okay", "ok", "like", "well"})
+_EDGE_PUNCT_RE = re.compile(r"^[\s.,;:!?\-]+|[\s.,;:!?\-]+$")
+# A sentence is not an item: it opens with a pronoun / auxiliary / wh-word / discourse marker ("I don't know where you got
+# that from"). Task verbs ("do laundry", "call mum") are deliberately NOT here.
+_NON_ITEM_LEADS = frozenset({
+    "i", "i'm", "im", "i've", "i'd", "i'll", "you", "you're", "we", "we're", "they", "he", "she", "it", "it's", "that",
+    "that's", "this", "what", "what's", "why", "how", "who", "when", "where", "which", "is", "are", "was", "were", "am",
+    "don't", "dont", "didn't", "doesn't", "isn't", "can't", "cant", "won't", "wouldn't", "couldn't", "if", "because",
+    "but", "actually", "no", "yes", "yeah", "nope", "oh", "there", "here", "let's", "lets",
+})
+# A possessive opener ("my passport", "your book", "our spare keys") starts a perfectly good item; it starts a SENTENCE only when a
+# verb-ish word follows ("my phone is dead", "your dog doesn't like it"). Review (#2004): rejecting every "my …" made "add my
+# passport to my shopping list" fall into the garbled matcher and store "dd my passport".
+_POSSESSIVE_LEADS = frozenset({"my", "your", "our"})
+_SENTENCE_WORDS = frozenset({
+    "is", "are", "was", "were", "am", "be", "been", "has", "have", "had", "will", "would", "could", "should", "can", "cannot",
+    "do", "does", "did", "don't", "dont", "doesn't", "didn't", "isn't", "aren't", "wasn't", "weren't", "can't", "cant",
+    "won't", "wouldn't", "couldn't", "shouldn't", "i", "i'm", "i've", "i'll", "i'd", "you", "you're", "you've", "we", "they",
+    "he", "she", "it", "it's", "that's", "because",
+})
+MAX_ITEM_WORDS = 12
+# Nouns that name no item at all ("add things to the list") - never stored.
+_VAGUE_ITEMS = frozenset({"things", "thing", "stuff", "something", "it", "that", "them", "this", "these", "those", "one",
+                          "anything", "everything", "some", "items", "item"})
+
+
+# A period that ends an ABBREVIATION is part of the item, not a sentence break: "Dr. Pepper", "Mr. Clean", "U.S. stamps", "J. Crew".
+_BREAK_RE = re.compile(r"[.!?]+(?=\s|$)")
+_ABBREV_END_RE = re.compile(
+    r"(?:^|\s)(?:mr|mrs|ms|mx|dr|st|jr|sr|prof|mt|vs|inc|ltd|co|ave|rd|blvd|oz|lb|lbs|tbsp|tsp|pkg|approx|etc|[a-z])$"
+    r"|\b[a-z](?:\.[a-z])+$", re.IGNORECASE)
+
+
+def _real_breaks(text: str) -> list:
+    """``(start, end)`` of each terminator that really ends a sentence in ``text`` - a lone abbreviation period is not one."""
+    out = []
+    for m in _BREAK_RE.finditer(text):
+        if m.group() == "." and _ABBREV_END_RE.search(text[:m.start()]) and m.end() < len(text):
+            continue
+        out.append((m.start(), m.end()))
+    return out
+
+
+def _split_sentences(text: str) -> list:
+    segments, prev = [], 0
+    for start, end in _real_breaks(text):
+        segments.append(text[prev:start])
+        prev = end
+    segments.append(text[prev:])
+    return [seg.strip() for seg in segments if seg.strip()]
+
+
+def clean_item_text(raw: str) -> str:
+    """The item a person meant, from the words STT handed over: filler words dropped, a stutter ("noodles? Noodles",
+    "and and") collapsed, edge punctuation stripped. Casing is kept. Never raises; "" when nothing is left OR when the words hold
+    two different sentences (a spoken correction is ambiguous, so it is declined, never glued into one item)."""
+    text = re.sub(r"\s+", " ", str(raw or "")).strip()
+    if not text:
+        return ""
+    # Segments split on sentence punctuation: a repeated segment ("noodles? Noodles.") is a stutter, kept once.
+    segments = _split_sentences(text)
+    kept: list[str] = []
+    seen: set[str] = set()
+    for seg in segments:
+        words = [w for w in seg.split() if w.lower().strip(",;:") not in _FILLER_WORDS]
+        while words and words[0].lower().strip(",;:") in _LEAD_WORDS and (kept or len(words) > 1):
+            words = words[1:]
+        # adjacent repeated words ("and and", "milk milk")
+        deduped: list[str] = []
+        for w in words:
+            if deduped and w.lower().strip(",;:") == deduped[-1].lower().strip(",;:"):
+                continue
+            deduped.append(w)
+        seg_clean = _EDGE_PUNCT_RE.sub("", " ".join(deduped))
+        key = seg_clean.lower()
+        if seg_clean and key not in seen:
+            seen.add(key)
+            kept.append(seg_clean)
+    if len(kept) > 1:
+        # Two DIFFERENT sentences are not one item: "add milk? Actually no, add eggs" is a correction, and gluing them gave the
+        # item "milk, Actually no, add eggs". Only a repetition collapses (above); anything else is declined as ambiguous.
+        return ""
+    return _EDGE_PUNCT_RE.sub("", "".join(kept))
+
+
+# Auxiliaries that are also common nouns: "my can opener", "our can of paint", "my spare can", "your last will".
+_NOUN_HOMOGRAPHS = frozenset({"can", "will"})
+
+
+def _has_predicate(words: list) -> bool:
+    """True when the words after a possessive hold a predicate - the sentence-making auxiliary / pronoun of "my phone IS dead". The
+    word straight after the possessive is the head noun and never a predicate ("my CAN opener"); an auxiliary-looking noun that
+    ENDS the phrase is a noun too ("my spare CAN"). Anything else in ``_SENTENCE_WORDS`` makes it a sentence."""
+    for n, w in enumerate(words):
+        if n == 0:
+            continue
+        w = w.lower().strip(",;:")
+        if w in _SENTENCE_WORDS and not (w in _NOUN_HOMOGRAPHS and n == len(words) - 1):
+            return True
+    return False
+
+
+def is_plausible_item(item: str) -> bool:
+    """False for text that is a SENTENCE rather than something to put on a list - so a statement the user made to Zoe is never
+    stored as an item (and never answered with "Added …"). Pure; takes the already-cleaned item."""
+    text = (item or "").strip()
+    if not text:
+        return False
+    words = text.split()
+    if len(words) > MAX_ITEM_WORDS:
+        return False
+    if _real_breaks(text):                       # a full stop / ? / ! INSIDE the item: more than one sentence
+        return False
+    if text.lower() in _VAGUE_ITEMS:
+        return False
+    lead = words[0].lower().strip(",;:")
+    if lead in _POSSESSIVE_LEADS:
+        return len(words) > 1 and not _has_predicate(words[1:])
+    return lead not in _NON_ITEM_LEADS
 
 
 async def create_list_record(
@@ -166,11 +294,14 @@ async def add_item_to_list(
                 db, list_id=list_id, text=text, window_s=dedup_window_s
             )
             if dup_id is not None:
+                # the item IS on the list (a replayed add), so a reply that says so is true
+                write_receipts.record(user_id, "list", dup_id, "add_item_to_list:dedup")
                 return {"list_id": list_id, "item_id": dup_id, "created_list": False, "deduped": True}
         # Existing list: a single INSERT is already atomic.
         item = await create_item_record(
             db, list_id=list_id, text=text, quantity=quantity, category=category
         )
+        write_receipts.record(user_id, "list", item["id"], "add_item_to_list")
         return {"list_id": list_id, "item_id": item["id"], "created_list": False, "deduped": False}
 
     async def _write_new_list_and_item() -> dict:
@@ -194,6 +325,9 @@ async def add_item_to_list(
     txn = getattr(db, "transaction", None)
     if callable(txn):
         async with txn():
-            return await _write_new_list_and_item()
-    # Fallback (e.g. a DB shim without transaction support).
-    return await _write_new_list_and_item()
+            outcome = await _write_new_list_and_item()
+    else:
+        # Fallback (e.g. a DB shim without transaction support).
+        outcome = await _write_new_list_and_item()
+    write_receipts.record(user_id, "list", outcome["item_id"], "add_item_to_list:new_list")
+    return outcome

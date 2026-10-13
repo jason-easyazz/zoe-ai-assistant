@@ -249,7 +249,9 @@ def test_classify_calendar_and_weather_requests():
     assert contextual_create.list_type == "personal"
     assert classify_skybridge_intent("add dentist at 2pm", list_context) is None
     ambiguous_list_add = classify_skybridge_intent("add bread to the project list", list_context)
-    assert ambiguous_list_add.action != "add_item"
+    # An add to a list Zoe has never heard of is no longer answered with a SHOW of the card on screen ("Lists has 2 items."
+    # and nothing added, live 2026-10-12): it is declined (None), so the brain can ask which list.
+    assert ambiguous_list_add is None or ambiguous_list_add.action != "add_item"
     calendar_destination = classify_skybridge_intent("add a meeting to my calendar", list_context)
     contacts_destination = classify_skybridge_intent("add Sarah to my contacts", list_context)
     assert calendar_destination.action != "add_item"

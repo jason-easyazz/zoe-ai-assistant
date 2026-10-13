@@ -187,7 +187,7 @@ async def test_mutating_list_intents_still_use_mcporter(monkeypatch):
 
     async def fake_mcporter(cmd):
         calls.append(cmd)
-        return "{}"
+        return '{"id": "li-1", "status": "added"}'
 
     monkeypatch.setattr("intent_router._run_mcporter", fake_mcporter)
 

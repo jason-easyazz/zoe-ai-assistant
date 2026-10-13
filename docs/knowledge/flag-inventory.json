@@ -5261,6 +5261,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_SKYBRIDGE_UNSURE_FLOOR_WRITE": {
+        "defaults": [
+          "0.45"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/skybridge_service.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_SMART_HOME_FOLLOWUP_TTL_S": {
         "defaults": [
           "'60'"

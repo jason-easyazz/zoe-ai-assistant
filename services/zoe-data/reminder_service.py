@@ -11,6 +11,7 @@ from typing import Mapping
 
 from fastapi import HTTPException
 
+import write_receipts
 from guest_policy import require_feature_access
 from models import ReminderCreate
 from push import broadcaster
@@ -219,6 +220,8 @@ async def create_reminder_record(payload: ReminderCreate, *, user: Mapping[str, 
               **({"recurring_pattern": recurring_pattern} if recurring_pattern else {})},
     )
     await db.commit()
+    # The receipt the write-claim guard checks a reply against (write_receipts.py): the row is committed.
+    write_receipts.record(user_id, "reminder", reminder_id, "create_reminder_record")
 
     cursor = await db.execute("SELECT * FROM reminders WHERE id = ?", [reminder_id])
     row = await cursor.fetchone()

@@ -194,7 +194,8 @@ def test_form_replies_only_point_at_the_panel_when_it_is_live():
     import routers.voice_tts as vt
 
     live = vt._list_add_reply_text("milk", ["milk", "eggs"], True)
-    assert "Check the panel and tap Done" in live and live.startswith("I've added milk to your list.")
+    # NOT "I've added ...": nothing is saved until Done is tapped (write-claim guard), so the live line says to tap Done to save.
+    assert live == "Tap Done on the panel to save milk to your list." and "I've added" not in live
     # Dead panel: the flow only QUEUES a form (the insert happens on Done), so it must NOT claim a write.
     dead = vt._list_add_reply_text("milk", ["milk", "eggs", "bread"], False)
     assert "added" in dead and "haven't added milk" in dead, dead

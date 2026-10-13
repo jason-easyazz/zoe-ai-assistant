@@ -19,6 +19,8 @@ import re
 import uuid
 from typing import Optional
 
+import write_receipts
+
 # Conversational events: a health event is private.
 # Every event writer defaults to visibility='family' (the household calendar the panel shows)
 # and every calendar READ (the chat/voice show_calendar tool, the router, the MCP tool)
@@ -118,6 +120,8 @@ async def create_event_record(
             visibility,
         ),
     )
+    # The receipt the write-claim guard checks a reply against (write_receipts.py): a row exists now.
+    write_receipts.record(user_id, "calendar", event_id, "create_event_record")
     return {
         "id": event_id,
         "title": title,

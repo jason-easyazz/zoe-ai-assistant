@@ -428,7 +428,9 @@ def test_real_greetings_keep_their_instant_answer(text, name):
 
 
 def test_a_wellbeing_phrase_with_a_real_request_is_not_swallowed_either():
-    assert intent_router.detect_intent("how are you and add milk to my shopping list").name != "greeting"
+    # None is right too: #2004 refuses to store the garbled item "how are you and add milk" and leaves the compound to the brain.
+    got = intent_router.detect_intent("how are you and add milk to my shopping list")
+    assert got is None or got.name != "greeting"
 
 
 # ── 4. the guest PIN challenge on a casual question ───────────────────────────────────────────────────────────────────────────
