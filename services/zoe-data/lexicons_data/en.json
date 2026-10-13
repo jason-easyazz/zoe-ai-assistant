@@ -1172,6 +1172,35 @@
    "double": "Timing: two things are set for the same time (\"{0}\" and \"{1}\")."
   }
  },
+ "subject_adverbs": ["always", "usually", "often", "sometimes", "never", "also", "just", "still", "really", "mostly", "generally",
+  "normally", "typically", "rarely", "regularly", "currently", "recently", "already", "only", "even", "almost", "probably",
+  "definitely", "actually", "occasionally", "frequently", "now", "then", "seldom", "mainly", "barely", "finally"],
+ "_note_present_verbs": "Bare present-tense verbs: a word after a coordinator under \"User\" is conjugated into second person (\"likes tea but hates coffee\" -> \"like tea but hate coffee\") ONLY when it is one of these in its third-person form AND an object follows, so a plural noun (\"tea and cats\") is never taken for a verb.",
+ "present_verbs": ["walk", "feed", "like", "love", "hate", "enjoy", "dislike", "prefer", "want", "need", "own", "keep", "run", "drive",
+  "work", "live", "play", "drink", "eat", "watch", "read", "write", "cook", "bake", "clean", "wash", "water", "make",
+  "take", "bring", "buy", "sell", "visit", "call", "meet", "see", "hear", "speak", "talk", "study", "teach", "learn",
+  "use", "wear", "carry", "ride", "swim", "cycle", "draw", "sing", "dance", "practise", "practice", "go", "come",
+  "stay", "move", "sleep", "wake", "cut", "fix", "build", "manage", "lead", "help", "try", "hope", "plan", "start",
+  "finish", "open", "close", "pay", "save", "spend", "collect", "check", "follow", "join", "attend", "host", "serve",
+  "share", "grow", "tend", "look", "listen", "think", "believe", "know", "remember", "forget", "feel", "get", "give",
+  "put", "set", "find", "lose", "win", "lack", "miss"],
+ "memory_challenge": {
+  "_note": "The user CHALLENGES Zoe's memory (memory_gate.is_memory_challenge): 'don't you remember', 'you already know', 'we've already talked about it', 'I told you about that' - but NOT plain past conversation ('we talked to the electrician and he fixed the fuse'): \"we talked\" needs 'already', 'before', 'earlier' or an anaphoric 'about it/this/that'. Such a turn is a recall question whatever its grammar: the seam runs a recall pass first, and the brain is told to answer only from what comes back. Regex fragments, matched case-insensitively against the user's words with apostrophes normalised to '.",
+  "patterns": [
+   "\\bdon'?t\\s+you\\s+(?:remember|recall)\\b",
+   "\\bdo\\s+you\\s+not\\s+(?:remember|recall)\\b",
+   "\\bdidn'?t\\s+(?:i|we)\\s+(?:already\\s+)?(?:tell|talk|speak|discuss)\\b",
+   "\\byou\\s+(?:already|should(?:\\s+already)?)\\s+(?:know|remember|recall)\\b",
+   "\\bwe(?:'ve|\\s+have)?\\s+already\\s+(?:talked|spoke|spoken|discussed|chatted)\\b",
+   "\\bwe(?:'ve|\\s+have)?\\s+(?:talked|spoke|spoken|discussed|chatted)\\s+(?:(?:it|this|that|them)\\s+)?(?:already|before|earlier)\\b",
+   "\\bwe(?:'ve|\\s+have)?\\s+(?:talked|spoke|spoken|discussed|chatted)\\s+about\\s+(?:it|this|that|them)\\b",
+   "\\b(?:already|just)\\s+told\\s+you\\b",
+   "\\btold\\s+you\\s+(?:about|that|this|it|before|earlier|already)\\b",
+   "\\bas\\s+i\\s+(?:said|mentioned|told\\s+you)\\b",
+   "\\bremember\\s+(?:when|what|how|me\\s+(?:telling|saying|mentioning)|our\\s+(?:chat|talk|conversation)|the\\s+time)\\b",
+   "\\bi\\s+(?:already\\s+)?(?:said|mentioned)\\s+(?:it|that|this)\\s+(?:to\\s+you\\s+)?(?:before|earlier|already|today)\\b"
+  ]
+ },
  "spacer": {
   "_note": "voice_spacer.py: the short spoken lines that fill a wait. 'families' are the pools by what the turn is doing (lookup = a read of stored data, recall = remembering, action = doing something, generic = nothing known); 'tool_ack' is the domain-specific pool for the dispatch-time acknowledgement. A line never claims a result. Wide on purpose: the same three lines on every turn read as a tic.",
   "reviewed": true,

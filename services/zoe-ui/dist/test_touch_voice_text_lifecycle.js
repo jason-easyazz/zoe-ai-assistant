@@ -124,6 +124,8 @@ function bootEstate() {
   return {
     V, clock,
     onAsk: () => els.full.innerHTML.indexOf('talkBtn') >= 0,
+    onSleep: () => els.full.innerHTML.indexOf('slClock') >= 0,
+    orbListening: () => els.orb.classList.contains('listening'),
     answer: () => (els.askOut ? els.askOut.textContent : ''),
   };
 }
@@ -253,6 +255,24 @@ const CONV_HOLD = 30000;
     e.V.done(null);
     e.clock.advance(1300);
     assert.strictEqual(e.answer(), 'Sunny.', 'a new turn does not inherit the previous answer');
+  }
+
+  // A7. "Hey Zoe" on the night clock wakes the panel (2026-10-12): the orb is hidden and the dock
+  // is gone on the sleep surface, so the listening cue was invisible and the panel looked dead.
+  // transcript/responding already woke it (dockHeard/dockSaid); listening() did not.
+  {
+    const e = bootEstate();
+    e.clock.advance(180000 + 1);                      // the idle clock fires and asks the server (music, sleep-gate)…
+    for (let i = 0; i < 6; i++) await new Promise((r) => setImmediate(r));
+    e.clock.advance(4001);                            // …and decides with whatever has landed
+    for (let i = 0; i < 6; i++) await new Promise((r) => setImmediate(r));
+    assert(e.onSleep(), 'precondition: the idle clock put the panel on the sleep surface');
+    e.V.listening();                                  // "Hey Zoe"
+    assert(!e.onSleep(), 'a wake must leave the sleep surface');
+    assert(e.orbListening(), 'and the listening cue is on the (now visible) orb');
+    // A wake with nothing said still drifts nowhere and does not strand anything: the home face stays.
+    e.clock.advance(HOLD + 1000);
+    assert(!e.onAsk() && !e.onSleep(), 'a wake with nothing said leaves the home face alone');
   }
 
   // ── Part B: the executor's push socket (js/touch-ui-executor.js) ──────────
