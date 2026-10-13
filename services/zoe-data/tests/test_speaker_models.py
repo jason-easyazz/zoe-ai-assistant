@@ -563,3 +563,31 @@ def test_the_deploy_script_ships_the_embedder_and_its_artifacts():
     deploy = (REPO / "scripts/setup/deploy-pi-voice.sh").read_text()
     for name in ("zoe_speaker_resnet34.py", "zoe_speaker_resnet34_artifacts.json", "fetch_speaker_models.sh"):
         assert name in re.search(r"SHIPPED_FILES=\(([^)]*)\)", deploy).group(1), name
+
+
+@pytest.mark.asyncio
+async def test_enrolment_state_counts_only_the_acting_models_profile_in_every_mode(monkeypatch, world):
+    """Codex P2 on #2024: after a rollback to the default mode, a member who only has a ResNet34 row must NOT be reported enrolled
+    (that would suppress the re-enrolment the acting model needs), and Zoe must not say she knows a voice she cannot recognise."""
+    import enrollment_state as es
+    world.db.conn.execute("DELETE FROM speaker_profiles")
+    world.db.conn.commit()
+    add_r34(world, "jason", at_cos(0.9))
+    for mode in ("resemblyzer", "resnet34"):
+        monkeypatch.setenv("ZOE_SPEAKER_MODEL", mode)
+        st = await es.get_state("jason", db=world.db)
+        want = mode == "resnet34"
+        assert (st.voice_enrolled, st.voice_upgrade) == (want, False), mode
+    # negative control: the acting (legacy) row present -> enrolled in the default mode, and in dual she knows the voice (upgrade)
+    world.add_profile("jason", ANCHOR)
+    monkeypatch.setenv("ZOE_SPEAKER_MODEL", "resemblyzer")
+    assert (await es.get_state("jason", db=world.db)).voice_enrolled is True
+    world.db.conn.execute("DELETE FROM speaker_profiles WHERE model_id = ?", (R34,))
+    world.db.conn.commit()
+    monkeypatch.setenv("ZOE_SPEAKER_MODEL", "dual")
+    st = await es.get_state("jason", db=world.db)
+    assert (st.voice_enrolled, st.voice_upgrade) == (False, True)
+    # resnet34 mode with only the legacy row: she can NOT recognise him, so it is not an 'upgrade' she can vouch for
+    monkeypatch.setenv("ZOE_SPEAKER_MODEL", "resnet34")
+    st = await es.get_state("jason", db=world.db)
+    assert (st.voice_enrolled, st.voice_upgrade) == (False, False)

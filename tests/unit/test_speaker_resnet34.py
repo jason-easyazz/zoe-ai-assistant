@@ -663,3 +663,30 @@ def test_in_resnet34_alone_the_profile_is_the_acting_upload_and_is_retried_once(
     assert res.outcome == em.FAILED and len(rig.profiles) == 2 and rig.said[-1] == em.DEFAULT_SCRIPT["store_failed"]
     ok = Rig(order(v, names), legacy_upload=False, profile_ok=True)       # negative control
     assert ok.run().outcome == em.DONE and len(ok.profiles) == 1
+
+
+def test_resnet34_mode_without_the_module_refuses_to_enrol_instead_of_a_legacy_only_done(daemon, monkeypatch):
+    """Codex P2 on #2024: ResNet34 is the ACTING model and its module did not import - a legacy-only enrolment would report DONE
+    while nothing can recognise the member. The wiring must return the unavailable sentinel (None)."""
+    monkeypatch.setattr(daemon, "_rn34", None)
+    monkeypatch.setattr(daemon, "SPEAKER_MODEL", "resnet34")
+    assert daemon._enroll_speaker_kwargs(dict(clips=5), "ada", "Ada") is None
+    # negative control: in dual Resemblyzer acts, so a missing ResNet34 module degrades to the legacy enrolment, which is honest
+    monkeypatch.setattr(daemon, "SPEAKER_MODEL", "dual")
+    assert daemon._enroll_speaker_kwargs(dict(clips=5), "ada", "Ada") == dict()
+    monkeypatch.setattr(daemon, "SPEAKER_MODEL", "resemblyzer")
+    assert daemon._enroll_speaker_kwargs(dict(clips=5), "ada", "Ada") == dict()
+
+
+def test_the_refused_enrolment_says_so_records_nothing_and_reports_failed(daemon, monkeypatch):
+    said, reports, posts = [], [], []
+    monkeypatch.setattr(daemon, "_rn34", None)
+    monkeypatch.setattr(daemon, "SPEAKER_MODEL", "resnet34")
+    monkeypatch.setattr(daemon, "_enroll_say", lambda text: said.append(text) or True)
+    monkeypatch.setattr(daemon, "_enroll_record_once", lambda pa: posts.append("RECORDED"))
+    monkeypatch.setattr(daemon, "_api_post", lambda path, data, **k: reports.append((path, data)) or dict(ok=True))
+    monkeypatch.setattr(daemon, "_enroll_request", dict(user_id="ada", name="Ada"))
+    monkeypatch.setattr(daemon, "_enroll_mode", em)
+    daemon._run_enrollment_mode(None)
+    assert said and posts == []
+    assert reports == [("/api/enrollment/result", dict(status="failed", user_id="ada", samples=0, reason="encoder_unavailable"))]

@@ -166,33 +166,27 @@ def _enrolled_key(row) -> str:
 async def _voice_state(db, uid: str) -> dict:
     """The voice fields of ``SetupState`` (a failed read raises: the caller reports 'unknown', never 'no').
 
-    Default mode (``ZOE_SPEAKER_MODEL`` unset / ``resemblyzer``): unchanged - the member's newest profile row. Any other mode:
-    enrolled means a CONSENTED profile in EVERY model the mode enrols (``dual`` needs both, so a member with only the old
-    Resemblyzer profile is offered a re-enrolment, which builds both from the same clips). One row per (member, model_id);
-    ``voice_upgrade`` says the member does have a voice on file, just not the one the mode needs."""
-    if speaker_models.speaker_mode() == "resemblyzer":
-        row = await _scalar_row(
-            db, "SELECT sample_count, enrolled_at, consent_at FROM speaker_profiles WHERE user_id = ? "
-                "ORDER BY enrolled_at DESC LIMIT 1", (uid,))
-        if row is None:
-            return dict(voice_enrolled=False)
-        consented = row[2] is not None
-        return dict(voice_enrolled=consented, voice_consented=consented, voice_samples=int(row[0] or 0),
-                    voice_enrolled_at=str(row[1]) if row[1] is not None else None)
+    Model-aware in EVERY mode (``speaker_models``): enrolled means a CONSENTED profile in every model the current
+    ``ZOE_SPEAKER_MODEL`` mode enrols (the default mode: Resemblyzer only, so a member who holds only a ResNet34 row - e.g. after a
+    rollback - is NOT enrolled and is offered the re-enrolment the acting model needs). ``dual`` needs both. ``voice_upgrade`` means
+    the ACTING model does recognise the member, but the mode wants another profile too - only then may Zoe say she knows the voice."""
     async with db.execute(
         "SELECT sample_count, enrolled_at, consent_at, " + speaker_models.MODEL_SQL + " FROM speaker_profiles WHERE user_id = ?",
         (uid,),
     ) as cur:
         rows = await cur.fetchall()
-    if not rows:
+    consented = dict()
+    for r in sorted(rows, key=_enrolled_key):                 # newest last, so it wins per model
+        if r[2] is not None:
+            consented[speaker_models.normalize_model_id(r[3])] = r
+    if not consented:
         return dict(voice_enrolled=False)
-    consented = [r for r in rows if r[2] is not None]
-    have = set(speaker_models.normalize_model_id(r[3]) for r in consented)
-    complete = all(m in have for m in speaker_models.enrolled_models())
-    newest = max(rows, key=_enrolled_key)
-    return dict(voice_enrolled=complete, voice_consented=bool(consented), voice_upgrade=bool(consented) and not complete,
-                voice_samples=max(int(r[0] or 0) for r in rows),
-                voice_enrolled_at=str(newest[1]) if newest[1] is not None else None)
+    complete = all(m in consented for m in speaker_models.enrolled_models())
+    acting = consented.get(speaker_models.acting_model())
+    if acting is None:
+        return dict(voice_enrolled=False)                     # nothing that can recognise them in this mode
+    return dict(voice_enrolled=complete, voice_consented=True, voice_upgrade=not complete,
+                voice_samples=int(acting[0] or 0), voice_enrolled_at=str(acting[1]) if acting[1] is not None else None)
 
 
 async def get_state(user_id: str, db=None) -> SetupState:

@@ -48,7 +48,7 @@ PANEL = "zoe-touch-pi"          # a panel that holds a live device token in the 
 
 _SCHEMA = [
     """CREATE TABLE speaker_profiles (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, display_name TEXT NOT NULL, embedding_blob BLOB NOT NULL,
-       enrolled_at TEXT DEFAULT CURRENT_TIMESTAMP, sample_count INTEGER DEFAULT 0, panel_id TEXT, consent_at TEXT)""",
+       enrolled_at TEXT DEFAULT CURRENT_TIMESTAMP, sample_count INTEGER DEFAULT 0, panel_id TEXT, consent_at TEXT, model_id TEXT)""",  # 0049
     "CREATE TABLE face_profiles (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, active INTEGER DEFAULT 1)",
     "CREATE TABLE device_tokens (panel_id TEXT, revoked INTEGER DEFAULT 0)",
     """CREATE TABLE voice_announcements (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, panel_id TEXT, message TEXT NOT NULL,

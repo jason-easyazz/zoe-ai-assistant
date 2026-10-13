@@ -4260,8 +4260,14 @@ def _enroll_speaker_kwargs(cmd: dict, uid: str, name: str):
     The panel embeds each of the 5 captures, drops the one that does not sound like the rest (leave-one-out cosine under 0.30) and
     asks for it again, then uploads ONE 256-float profile; audio never leaves the panel for this model. ``dual`` also uploads the
     kept WAVs for the Resemblyzer profile, as always, so both models are enrolled from the same clips."""
-    if SPEAKER_MODEL == "resemblyzer" or _rn34 is None:
+    if SPEAKER_MODEL == "resemblyzer":
         return dict()
+    if _rn34 is None:
+        if SPEAKER_MODEL == "resnet34":
+            log.error("enrolment refused: ZOE_SPEAKER_MODEL=resnet34 but zoe_speaker_resnet34.py did not import - the acting model "
+                      "could not recognise anyone enrolled now")
+            return None
+        return dict()                    # dual: Resemblyzer acts, so the legacy enrolment alone is honest
     emb = _get_rn34()
     if emb is None:
         if SPEAKER_MODEL == "resnet34":
