@@ -668,6 +668,21 @@ STREAM_CORPUS = [
     "I've added milk to your shopping list, okay? Anything else?",
     "The appointment you requested has been added to your calendar. Anything else?",
     "Scheduled maintenance starts at 2 PM. Added sugar is unhealthy. Added the milk.",
+    # follow-ups to #2004: a trailing temporal clause, a dash / colon tag, each cut at every position
+    "I've added milk to your shopping list, after you asked me to. Anything else?",
+    "I've added milk to your shopping list once you asked me to.",
+    "I'll add milk to your shopping list after you confirm. When I've added it, I'll say so.",
+    "Okay. The appointment was added to your calendar when you confirmed it. Anything else?",
+    "I've added milk to your shopping list \u2014 okay? Anything else?",
+    "I've added milk to your shopping list - right?",
+    "I've added milk to your shopping list: okay?",
+    "I've added milk to your list after I've scheduled the physio. I'll tell you when I've set a reminder.",
+    "I've added milk to your list, once I've scheduled the physio. Anything else?",
+    "I've put the dentist after lunch in your calendar. Anything else?",
+    "I'll put the dentist after lunch in your calendar. Milk is added to your shopping list after lunch.",
+    "Okay, have I added milk to your shopping list \u2014 right? I've added eggs to your shopping list - okay?",
+    "I'll tell you after I've scheduled the physio, then I've added milk to your list when I've set a reminder.",
+    "Should I add eggs \u2014 okay? I've added milk to your shopping list \u2013 all right?",
 ]
 
 
@@ -723,7 +738,8 @@ _FUZZ_PHRASES = [
     "I've scheduled the physio for Friday at 9 a.m. tomorrow morning.", "so I've put oat milk on your list", "and then",
     "The restaurant was fully booked.", "one two three four five six seven eight nine ten eleven twelve thirteen,",
     "He añadido leche a tu lista de compras.", "Ya agendé la cita en tu calendario,", "You added it earlier.",
-    "Oat milk is added to your shopping list.", "Which items were added to your shopping list yesterday evening for the party?",
+    "Oat milk is added to your shopping list.", "after you asked me to.", "after I've scheduled the physio.", "once I've set a reminder,", "after lunch in your calendar.", "Okay, have I added it \u2014 right?", "I'll add it once you confirm.", "Milk is added when you tap Done,",
+    "I've added milk to your shopping list - okay?", "The appointment was added to your calendar \u2014 right?", "Which items were added to your shopping list yesterday evening for the party?",
 ]
 
 
@@ -926,3 +942,245 @@ async def test_text_held_back_is_not_lost_when_the_lane_fails_mid_stream():
         async for piece in g.guard_stream(claiming(), "jason", started):
             got.append(piece)
     assert "".join(got) == HONEST_EN                      # an unfinished claim is still judged, not leaked
+
+
+# ── 5. follow-ups to #2004 (declined in review, done here) ─────────────────────────────────────────────────────────────
+# Each group is pinned in BOTH directions: the claim is still caught (and spoken when a receipt backs it), and the honest
+# sentence of the same shape is never blocked.
+# Negative controls (run by hand, each went red): emptying ``clause_temporals`` in write_claims.json fails the temporal-tail claim
+# tests; deleting the ``temporal_tail and aux in lang.passive_state`` skip fails the honest "is added once you tap Done" case;
+# reducing ``_TAG_SEP_RE`` to ``[,;]`` fails the dash / colon tag tests.
+
+HONEST_ES = "No logré añadir eso; ¿quieres que lo intente otra vez?"
+
+TEMPORAL_TAIL_CLAIMS = [
+    ("I've added milk to your shopping list, after you asked me to.", ("list",)),
+    ("I've added milk to your shopping list after you asked me to.", ("list",)),
+    ("I've added milk to your shopping list when you asked.", ("list",)),
+    ("I've added milk to your shopping list once you confirmed it.", ("list",)),
+    ("I've added milk to your shopping list before the shop opens.", ("list",)),
+    ("I've scheduled the physio for Friday, after you asked me to.", ("calendar",)),
+    ("The appointment was added to your calendar after you confirmed.", ("calendar",)),
+    ("I've added it, when you asked me to.", ()),
+    ("He añadido leche a tu lista de compras después de que lo pidieras.", ("list",)),
+    ("He añadido leche a tu lista de compras, cuando lo pediste.", ("list",)),
+]
+
+
+@pytest.mark.parametrize("sentence,kinds", TEMPORAL_TAIL_CLAIMS)
+def test_a_trailing_temporal_clause_does_not_disable_a_completed_claim(sentence, kinds):
+    claim = g.find_claim(sentence)
+    assert claim is not None and claim.kinds == kinds, (sentence, claim)
+    started = wr.begin()
+    assert g.guard_text(sentence, "jason", started) in (HONEST_EN, HONEST_ES)
+
+
+@pytest.mark.parametrize("sentence,kind", [
+    ("I've added milk to your shopping list, after you asked me to.", "list"),
+    ("I've added milk to your shopping list when you asked.", "list"),
+    ("I've scheduled the physio for Friday once you confirmed it.", "calendar"),
+])
+def test_a_temporal_tail_claim_with_a_real_receipt_is_spoken_as_is(sentence, kind):
+    started = wr.begin()
+    wr.record("jason", kind, "row-1", "test")
+    assert g.guard_text(sentence, "jason", started) == sentence
+
+
+def test_a_temporal_tail_does_not_hide_a_second_claim_or_a_promise():
+    # the claim clause is real; the later clause is a promise and stays exempt, so the sentence is one claim, not two
+    claim = g.find_claim("I've added milk to your shopping list after you asked me to, and I'll add eggs once you confirm.")
+    assert claim is not None and claim.kinds == ("list",)
+    # a later claim clause behind a temporal tail still needs its own receipt
+    claim = g.find_claim("I've added milk to your list after you asked, and I've scheduled the physio.")
+    assert claim is not None and sorted(claim.kinds) == ["calendar", "list"]
+
+
+NOT_CLAIMS_TEMPORAL = [
+    "I'll add milk to your shopping list after you confirm.",
+    "I'll have added milk to your shopping list once you confirm.",
+    "When I've added milk to your shopping list, I'll let you know.",
+    "Once I've added milk to your shopping list I'll tell you.",
+    "Before I've added milk to your shopping list I need a quantity.",
+    "After I've added milk to your shopping list, I'll set a reminder.",
+    "I'll tell you when I've added milk to your shopping list.",
+    "I'll let you know once I've added it.",
+    "I haven't added milk to your shopping list after you asked.",
+    "I've not added milk to your shopping list when you asked me to.",
+    "Nothing was added to your shopping list after you asked.",
+    "I couldn't add milk to your shopping list once you asked.",
+]
+
+# A present-tense passive tail describes a pending form, it does not report a write.
+NOT_CLAIMS_TEMPORAL += [
+    "Milk is added to your shopping list once you tap Done.",
+    "The milk is added to your shopping list when you confirm.",
+    # a temporal word with nothing after it ("once before") is still not a clause
+    "I've added milk to your shopping list once before.",
+    "No pude añadir leche a tu lista después de que lo pidieras.",
+    "Añadiré leche a tu lista cuando me lo confirmes.",
+]
+
+
+@pytest.mark.parametrize("sentence", NOT_CLAIMS_TEMPORAL)
+def test_an_honest_sentence_with_a_temporal_word_is_still_never_a_claim(sentence):
+    assert g.find_claim(sentence) is None, sentence
+
+
+DASH_TAG_CLAIMS = [
+    "I've added milk to your shopping list — okay?",
+    "I've added milk to your shopping list - right?",
+    "I've added milk to your shopping list: okay?",
+    "I've added milk to your shopping list – all right?",
+    "I've added milk to your shopping list -- yeah?",
+    "The appointment was added to your calendar — right?",
+    "I've set a reminder for five o'clock - okay?",
+    "He añadido leche a tu lista de compras — ¿vale?",
+]
+
+
+@pytest.mark.parametrize("sentence", DASH_TAG_CLAIMS)
+def test_a_dash_or_colon_tag_question_does_not_exempt_the_claim(sentence):
+    assert g.find_claim(sentence) is not None, sentence
+    started = wr.begin()
+    assert g.guard_text(sentence, "jason", started) != sentence
+    for kind in ("list", "calendar", "reminder"):
+        wr.record("jason", kind, kind + "-1", "t")
+    assert g.guard_text(sentence, "jason", started) == sentence
+
+
+@pytest.mark.parametrize("sentence", [
+    "Did I add it to your list — okay?",
+    "Have I added milk to your shopping list - right?",
+    "Do you want me to add oat milk to the shopping list: okay?",
+    "I've added milk — should I add eggs too?",
+    "I've added milk to your shopping list - do you want eggs?",
+    "Is the milk on your shopping list — yes?",
+    "Shall I put the paint on your to-do list - okay?",
+    "¿Quieres que añada leche a tu lista — vale?",
+])
+def test_a_genuine_question_with_a_dash_is_still_never_a_claim(sentence):
+    assert g.find_claim(sentence) is None, sentence
+
+
+def test_a_hyphen_inside_a_word_is_not_a_tag_separator():
+    # "to-do" is one word; a hyphen with no spaces around it never cuts a question
+    assert g.find_claim("Is the paint on your to-do list?") is None
+    assert g.find_claim("Is that the to-do list right?") is None
+
+
+# ── 5b. review of the follow-ups: a COMPLETED claim inside the split-off temporal clause is a claim of its own ─────────────
+# "I've added milk to your list after I've scheduled the physio." was spoken verbatim with only a list receipt: the tail clause kept
+# its leading "after", a blocker, and was skipped. The leading temporal word of a tail that follows a CLAIM is now stripped, so
+# the tail's own claim needs its own receipt. A tail after a promise / denial stays blocked ("I'll tell you after I've added it").
+
+TAIL_CLAIMS = [
+    ("I've added milk to your list after I've scheduled the physio.", ("calendar", "list")),
+    ("I've added milk to your list, once I've scheduled the physio.", ("calendar", "list")),
+    ("I've added milk to your list when I've scheduled the physio.", ("calendar", "list")),
+    ("I've added milk to your list before I've set a reminder.", ("list", "reminder")),
+    ("The milk was added to your list after I scheduled the physio.", ("calendar", "list")),
+    ("He añadido leche a tu lista después de que he programado la cita.", ("calendar", "list")),
+]
+
+
+@pytest.mark.parametrize("sentence,kinds", TAIL_CLAIMS)
+def test_a_completed_claim_inside_a_temporal_tail_needs_its_own_receipt(sentence, kinds):
+    claim = g.find_claim(sentence)
+    assert claim is not None and tuple(sorted(claim.kinds)) == kinds, (sentence, claim)
+    started = wr.begin()
+    wr.record("jason", "list", "l1", "t")                 # the FIRST claim's receipt alone must not vouch for the second
+    assert g.guard_text(sentence, "jason", started) in (HONEST_EN, HONEST_ES), sentence
+    for kind in kinds:
+        wr.record("jason", kind, kind + "-2", "t")
+    assert g.guard_text(sentence, "jason", started) == sentence
+
+
+@pytest.mark.parametrize("sentence,kinds", [
+    ("I've added milk to your list once you've scheduled the physio.", ("list",)),     # YOU did the second: not Zoe's write
+    ("I've added milk to your list after you scheduled the physio.", ("list",)),
+    ("I've added milk to your list after I asked.", ("list",)),                        # a tail with no claim verb of its own
+])
+def test_a_temporal_tail_that_claims_nothing_adds_no_kind(sentence, kinds):
+    claim = g.find_claim(sentence)
+    assert claim is not None and tuple(sorted(claim.kinds)) == kinds, (sentence, claim)
+
+
+@pytest.mark.parametrize("sentence", [
+    "I'll tell you after I've scheduled the physio.",
+    "I'll tell you when I've set a reminder.",
+    "I haven't added milk to your list after I've scheduled the physio.",
+    "When I've scheduled the physio, I'll tell you.",
+    "I'll add milk to your list once I've scheduled the physio.",
+    "Milk is added to your list after I've scheduled the physio.",
+    "I couldn't add milk to your list before I've scheduled the physio.",
+])
+def test_a_temporal_tail_after_a_promise_or_denial_is_still_not_a_claim(sentence):
+    assert g.find_claim(sentence) is None, sentence
+
+
+# ── 5c. Codex review of #2021 ────────────────────────────────────────────────────────────────────────────────────────────────
+# (1) A temporal word that introduces a PREPOSITIONAL time phrase ("after lunch", "before dinner") is not a clause: it is neither
+# split off nor a blocker, so the claim keeps its target nouns. (2) A discourse opener ("Okay, ...") does not hide the
+# interrogative of a genuine question that ends in a dash tag.
+
+PREPOSITIONAL_TIME_CLAIMS = [
+    ("I've put the dentist after lunch in your calendar.", ("calendar",)),
+    ("I've added milk after work to your shopping list.", ("list",)),
+    ("I've put the dentist in your calendar before dinner.", ("calendar",)),
+    ("I've scheduled the physio for Friday after lunch.", ("calendar",)),
+    ("I've put the paint on your to-do list when ready.", ("list",)),
+    ("He puesto la cita después del almuerzo en tu calendario.", ("calendar",)),
+]
+
+
+@pytest.mark.parametrize("sentence,kinds", PREPOSITIONAL_TIME_CLAIMS)
+def test_a_prepositional_time_phrase_keeps_the_claims_target(sentence, kinds):
+    claim = g.find_claim(sentence)
+    assert claim is not None and tuple(sorted(claim.kinds)) == kinds, (sentence, claim)
+    started = wr.begin()
+    assert g.guard_text(sentence, "jason", started) in (HONEST_EN, HONEST_ES), sentence
+    wr.record("jason", kinds[0], "row-1", "t")
+    assert g.guard_text(sentence, "jason", started) == sentence
+
+
+@pytest.mark.parametrize("sentence", [
+    "I'll put the dentist after lunch in your calendar.",
+    "I haven't put the dentist after lunch in your calendar.",
+    "Do you want me to put the dentist after lunch in your calendar?",
+    "Milk is added to your shopping list after lunch.",
+    "The milk is added to your shopping list when done.",
+    "After lunch I'll put the dentist in your calendar.",
+    "Before dinner, I haven't added milk to your shopping list.",
+    "I couldn't put the dentist in your calendar before dinner.",
+])
+def test_an_honest_sentence_with_a_prepositional_time_phrase_is_still_never_a_claim(sentence):
+    assert g.find_claim(sentence) is None, sentence
+
+
+DISCOURSE_QUESTIONS = [
+    "Okay, have I added milk to your shopping list — right?",
+    "So, did I add the dentist to your calendar - okay?",
+    "Well, should I put the paint on your to-do list: right?",
+    "Hmm, have I scheduled the physio for Friday – all right?",
+    "Okay, so have I added milk to your shopping list — right?",
+    "Bueno, ¿he añadido leche a tu lista — vale?",
+]
+
+
+@pytest.mark.parametrize("sentence", DISCOURSE_QUESTIONS)
+def test_a_genuine_question_behind_a_discourse_opener_is_never_a_claim(sentence):
+    assert g.find_claim(sentence) is None, sentence
+    started = wr.begin()
+    assert g.guard_text(sentence, "jason", started) == sentence
+
+
+@pytest.mark.parametrize("sentence", [
+    "Okay, I've added milk to your shopping list — right?",
+    "So I've added milk to your shopping list - okay?",
+    "Well, the appointment was added to your calendar: right?",
+    "Okay, so I've scheduled the physio for Friday — okay?",
+])
+def test_a_claim_behind_a_discourse_opener_and_a_dash_tag_is_still_a_claim(sentence):
+    assert g.find_claim(sentence) is not None, sentence
+    started = wr.begin()
+    assert g.guard_text(sentence, "jason", started) != sentence

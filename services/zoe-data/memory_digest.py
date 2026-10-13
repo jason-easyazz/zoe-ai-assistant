@@ -1770,12 +1770,21 @@ async def load_day_messages(user_id: str, start_iso: str, end_iso: str, db=None)
 async def _redact_forgotten_transcript(user_id: str, db=None) -> None:
     """Before the day is read: the owner's recent ``chat_messages`` that still name a forgotten entity (the reply saved after the
     forget turn, a later mention) get the span replaced by a fixed marker, by the ledger alone (``forget_redact``). Counts only
-    are logged. Fail-open: the transcript filter below is the second wall."""
+    are logged. Fail-open: the transcript filter below is the second wall.
+
+    The same healthy pass finishes any forget cascade that could not reach a derived store when the member asked (portrait, card,
+    loops, contacts ...): ``memory_forget_cascade.retry_pending`` re-runs just those steps from the ledger hashes, so no name is
+    needed and the member never has to say the forget again."""
     try:
         import forget_redact
         await forget_redact.sweep_transcripts(user_id, db=db)
     except Exception as exc:  # noqa: BLE001
         logger.debug("memory_digest: transcript redaction unavailable (%s)", type(exc).__name__)
+    try:
+        import memory_forget_cascade
+        await memory_forget_cascade.retry_pending(user_id, db=db)
+    except Exception as exc:  # noqa: BLE001 - retry_pending never raises; this guards the import
+        logger.debug("memory_digest: forget cascade retry unavailable (%s)", type(exc).__name__)
 
 
 async def _skip_forgotten_turns(user_id: str, turns: list, reader: str) -> list:

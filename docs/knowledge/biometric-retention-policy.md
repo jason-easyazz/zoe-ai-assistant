@@ -106,6 +106,14 @@ deleting anything; the face feed needs no such filter because every stored row i
 consented by construction. Both `/sync` endpoints are **device-token only** and
 403 a browser session: embeddings never reach a browser.
 
+**Voice-verified panel session (flag-dark `ZOE_VOICE_SESSION`).** An accepted voice
+claim can open a short-lived per-panel session that unlocks that member's private
+data by voice ([voice-verified-session.md](voice-verified-session.md)). It stores no
+biometric data - an in-memory member id and two timestamps, gone on restart - and it
+fails closed on consent: a claim whose member no longer holds a consented row is not
+accepted, and revoking consent (`consent: false`) or deleting the profile closes every
+open session of that member at once. Its audit line never carries a score or audio.
+
 ## 4. Deleting your profile
 
 **Server side (implemented and tested).**

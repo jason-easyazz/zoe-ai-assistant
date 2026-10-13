@@ -34,6 +34,10 @@ guards (``MemoryService.ingest``, the transcript loaders) pass ``near=True``: a 
 stored, not mined) and the owner is asked "did you also mean ...?" (``memory_forget_alias``); nothing already stored is ever
 erased on a near match. An answered "no" records the spelling as ``distinct`` and it passes. Reads (hiding recalled rows) stay exact.
 
+PENDING MARKERS. ``mark_pending`` stores, for each cascade step that could not clear a derived store, the salted hash of a fixed step label (scope ``pending``): no name, no hash of a name.
+``memory_forget_cascade.retry_pending`` reads them back (``pending_labels``), finishes just those steps with ``LedgerPattern`` (a ``re.Pattern``-shaped matcher over this
+ledger's own hashes) and deletes them (``clear_pending``). Exact words only.
+
 A lookup failure is fail-open on the last-known-good set (a DB blip must never lose a fact); a forget
 whose DB write fails still shields this process through the in-process overlay.
 """
@@ -529,6 +533,106 @@ async def release(user_id: str, text: str) -> int:
     logger.info("memory_forgotten: released %d entr%s for user=%s (explicit re-teach)", len(hit),
                 "y" if len(hit) == 1 else "ies", user_id)
     return len(hit)
+
+
+# ── the durable cascade-retry marker (no name, no hash of a name) ─────────────
+
+SCOPE_PENDING = "pending"
+_PENDING_PREFIX = "pending" + chr(124)          # a pipe never occurs in a tokenised word, so no text can hash to a marker
+
+
+def _pending_digest(user_id: str, label: str) -> str:
+    return _Hasher(user_id).hash(_PENDING_PREFIX + str(label))
+
+
+async def mark_pending(user_id: str, labels: Iterable[str], *, actor: str = "") -> bool:
+    """Record that a forget's cascade did NOT reach the derived stores named by ``labels`` (the cascade's fixed step labels:
+    ``portrait``, ``card``, ``open_loops`` ...), so the next healthy pass must finish it. The row is the salted hash of the
+    prefix plus the label: no name, no hash of a name, no text - it says only that this member has an unfinished derived-store
+    clear. True when every marker is durable. Unconfigured ledger (no salt): False, and the member saying the forget again is the
+    only redo. A failed DB write still keeps the marker in this process (the overlay), so the in-process retry sees it."""
+    wanted = sorted(set(str(x) for x in labels if x))
+    if not user_id or not wanted or not configured():
+        return False
+    start = _now()
+    ok = True
+    for label in wanted:
+        try:
+            await _put(user_id, _pending_digest(user_id, label), scope=SCOPE_PENDING, actor=actor or user_id,
+                       start=start, until=PERMANENT_UNTIL)
+        except Exception as exc:  # noqa: BLE001
+            ok = False
+            logger.warning("memory_forgotten: could not persist a pending-cascade marker for user=%s (%s) - kept in this process only",
+                           user_id, type(exc).__name__)
+    _invalidate(user_id)
+    return ok
+
+
+async def pending_labels(user_id: str, labels: Iterable[str]) -> list[str]:
+    """Which of ``labels`` have a pending marker for ``user_id`` (a hash membership test; the labels are the caller's fixed list)."""
+    if not user_id or not configured():
+        return []
+    wanted = await active_hashes(user_id)
+    if not wanted:
+        return []
+    return [l for l in labels if _pending_digest(user_id, l) in wanted]
+
+
+async def clear_pending(user_id: str, labels: Iterable[str]) -> int:
+    """Remove the markers for ``labels`` once their stores were cleared. A failed DB delete keeps the marker (it is read back from
+    the table next pass), so the retry repeats rather than being lost."""
+    digests = [_pending_digest(user_id, l) for l in labels if l] if user_id and configured() else []
+    if not digests:
+        return 0
+    ov = _overlay.get(user_id)
+    if ov:
+        for d in digests:
+            ov.pop(d, None)
+    _invalidate(user_id)
+    try:
+        n = await get_backend().delete(user_id, digests)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memory_forgotten: could not clear the pending-cascade markers for user=%s (%s) - they stay", user_id,
+                       type(exc).__name__)
+        return 0
+    _invalidate(user_id)
+    return n
+
+
+class LedgerPattern:
+    """A ``re.Pattern``-shaped matcher (``search``, ``sub``) over a user's forgotten set, so the cascade's erasers can run with NO name:
+    the name is not stored anywhere, only its salted hashes are, and a hash is enough to find a forgotten word in a derived text.
+    Exact words only (never a near spelling - that is the owner's call), the same anchoring as the ledger."""
+
+    def __init__(self, user_id: str, wanted: "frozenset[str]"):
+        self.user_id = user_id
+        self._wanted = wanted
+
+    def _spans(self, text: Any) -> "list[tuple[int, int]]":
+        s = str(text or "")
+        return spans_in(self.user_id, s, self._wanted, near=False)[0] if s else []
+
+    def search(self, text: Any):
+        found = self._spans(text)
+        return found[0] if found else None          # a (start, end) tuple: truthy like a match object
+
+    def sub(self, repl: str, text: Any) -> str:
+        s = str(text or "")
+        out, pos = [], 0
+        for a, b in self._spans(s):
+            out.append(s[pos:a])
+            out.append(repl)
+            pos = b
+        out.append(s[pos:])
+        return "".join(out)
+
+
+async def ledger_pattern(user_id: str) -> "Optional[LedgerPattern]":
+    """The matcher for everything ``user_id`` has forgotten, or None when the ledger is off or holds nothing for them."""
+    if not user_id or not configured():
+        return None
+    wanted = await active_hashes(user_id)
+    return LedgerPattern(user_id, wanted) if wanted else None
 
 
 def is_explicit_reteach(writer: str, *, user_id: str = "", speaker_verified: Optional[bool] = None) -> bool:
