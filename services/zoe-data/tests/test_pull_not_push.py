@@ -83,6 +83,20 @@ class _Sqlite:
         return self.conn.execute(sql, params).fetchall()
 
 
+@pytest.fixture(autouse=True)
+def _router_model_stays_unloaded(monkeypatch):
+    """Several tests below end in ``fast_tiers.resolve(...)`` for a greeting / guest, which falls through to the REAL semantic router and
+    LOADS the bge model into ``semantic_router``'s module globals. Left there, every later test in the process sees a loaded router
+    (``test_restraint_head``'s held-out 'head off' twin measured 267 hits instead of 181). Register the globals with monkeypatch so
+    each test's teardown puts them back."""
+    try:
+        import semantic_router
+    except ImportError:          # no numpy here: the router cannot load a model either, so there is nothing to restore
+        return
+    for name in ("_MODEL", "_MATRIX", "_LABELS", "_DOM_IDX", "_HEAD", "_HEAD_FAILED", "_EMBED_CACHE"):
+        monkeypatch.setattr(semantic_router, name, getattr(semantic_router, name))
+
+
 @pytest.fixture
 def env(monkeypatch, tmp_path):
     path = str(tmp_path / "zoe.db")
