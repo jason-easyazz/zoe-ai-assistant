@@ -440,6 +440,9 @@ def controls_off(features: "frozenset[str] | set[str]", svc: types.SimpleNamespa
             setenv("ZOE_AFFECT_CONSENT_GATE", "off")
         if "identity" in features:
             patch(svc.memory_service, "_identity_assertion_blocked", lambda *a, **k: False)
+            # H2's edit text is an unanchored speech fragment, which the standing rule (memory_authority.has_standing) now also
+            # refuses to let rewrite a row: lift it here so this control still isolates the identity wall the cell is named for
+            patch(svc.memory_authority, "has_standing", lambda *a, **k: True)
         if "speaker" in features:
             real_ingest = svc.memory_service.MemoryService.ingest
             real_edit = svc.memory_service.MemoryService.review
