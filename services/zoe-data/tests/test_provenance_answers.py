@@ -500,13 +500,13 @@ def seed_household(svc):
 def test_the_voice_summary_is_grouped_counted_bounded_and_never_reads_the_private_classes(svc):
     seed_household(svc)
     out = say("What do you know about me?", channel="voice")
-    assert out.startswith("Here's the short version. I know ")
-    assert "1 place, like you live in Hobart" in out and "1 routine, like you walk the dog every morning at six" in out
-    assert "1 preference, like you like oat milk in coffee" in out
-    assert "Most recently" in out and pa.PRIVATE_NOTE_VOICE in out and pa.HANDOFF_VOICE in out
+    assert out.startswith("Here's the short version. I know 1 person in your life, most recently Marisol, your sister.")
+    assert "your places, routines and preferences, like you live in Hobart" in out and "you walk the dog every morning at six" in out
+    assert "your places, routines and preferences" in out and "oat milk" not in out
+    assert pa.PRIVATE_NOTE_VOICE in out and pa.HANDOFF_VOICE in out
     assert "insulin" not in out and "diabetes" not in out and "loan" not in out and "bank" not in out
     assert "Anika" not in out and "surgeon" not in out                                   # another member's row
-    assert len(out.split()) <= 90                                                        # spoken length
+    assert len(out.split()) <= 75                                                        # spoken length
 
 
 def test_the_chat_summary_lists_more_with_dates_and_still_counts_the_private_classes(svc):
@@ -539,7 +539,7 @@ def test_the_people_group_is_one_entry_per_person_so_every_person_is_named(svc):
     assert out.lower().count("model ships") == 1                                  # the derived twin of the NL row is dropped
     assert len(out) <= 2600 and out.count("\n") <= 32
     voice = say("What do you know about me?", channel="voice")
-    assert "2 people, newest Teodor (dad)" in voice
+    assert "2 people in your life, most recently Teodor, your dad" in voice
 
 
 def test_many_people_are_all_named_and_the_summary_stays_bounded(svc):

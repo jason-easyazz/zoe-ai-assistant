@@ -36,8 +36,8 @@ LAB = Path(__file__).resolve().parents[3] / "labs" / "flue-zoe-brain-2x"
 
 # sha256 of the block text per language: editing the words is a deliberate act with a measured A/B in the PR (docs/knowledge/samantha-person.md)
 GOLDEN_SHA256 = {
-    "en": "64d78d426a598e361a913767ad7485d4661671b09c5fd5a4416e1c2e70124167",
-    "es": "80967ff20802f7d6ff97b82854aa69eadbbf68d7c5ec1fdd5b059a6338694c03",
+    "en": "e3ae667ccca09fdeca31170f5c028edbd416ac3ad804f5c58d1846d6e7927ee4",
+    "es": "cc771621c1176c54990a213b180bc3cc43bd8551d4ae6a00a618210180a8d6c6",
 }
 
 
@@ -106,7 +106,7 @@ def test_blocks_fit_the_budget_and_carry_the_counted_behaviours():
         text = mb.block_text(lang)
         assert text and mb.estimate_tokens(text) <= mb.MAX_BLOCK_TOKENS, lang
         assert "\n" not in text  # one paragraph: the JSON envelope keeps it on one line either way
-    assert "ONE question" in mb.block_text("en") and "UNA sola pregunta" in mb.block_text("es")
+    assert "at most one question" in mb.block_text("en") and "como máximo una pregunta" in mb.block_text("es")
 
 
 def test_a_language_with_no_entry_falls_back_to_english_and_a_missing_english_is_no_block(monkeypatch):

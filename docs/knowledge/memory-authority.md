@@ -362,3 +362,11 @@ rank 0. **Not run against the live palace.**
 ## Structural floors (2026-10-09)
 
 The lexical anchoring / promotion rule above reads English prose; `ZOE_STRUCTURAL_CLAIMS` (off | shadow default | enforce) adds the extractor's claim row beside it. See [structural-floors.md](structural-floors.md): the claim row, what authorises versus what only vetoes, retirement by claim key, id-triple roles, the shadow logs and the enforce checklist.
+
+## Standing: an unsupported model write retires nothing (2026-10-12)
+
+Rank is not enough. `may_override(power, target_class)` is `>=`, so one model row could retire another of the SAME class, and legacy rows (written before provenance, no class stamped) read back as the lowest rank. Found in a live review (2026-10-12): an idle-consolidation row whose text the owner's turn did not carry (`authority_class=model_from_transcript`, `authority_basis=unanchored`) retired an older, fuller row and replaced it with a vaguer past-tense one. No user-stated row was lost - the retired row was itself a model write - but the rule "inference never supersedes" was not what stopped it.
+
+`memory_authority.has_standing(power, basis)`: a write below the user classes whose basis is `unanchored` (the writer READ the owner's words and they do not support the fact) may not retire, archive or rewrite ANY approved row. It is checked beside `may_override` in `MemoryService.supersede_by`, `_authority_refuses` (the `review(edit)` path every per-turn writer uses) and `edit_outranked`. The refused row is still stored (approved, beside the old one: a harmless near-duplicate, never a lost fact), the log says `AUTHORITY_BLOCKED ... action=supersede`, and `expert_dispatch._ingest_or_supersede` logs `MEMORY_SUPERSEDE_REFUSED` instead of claiming a supersede. `no_user_evidence` (a caller that passed no words) is not covered: it says nothing about the fact. The "what do you know about me" summary also withholds `unanchored` rows (`provenance_answers.Known.unconfirmed`); the recall packet still serves them (open-problems ledger).
+
+Restoring a row this retired (operator, zoe-data stopped; `MemoryService.restore_superseded` is the audited path, the collateral audit script's `apply_restore` drives it): see the 2026-10-12 PR for the exact steps.

@@ -902,7 +902,37 @@
  "change_cues": ["instead", "(?:is|are|was|were|'s|'re)\\s+off", "called\\s+off", "call(?:ed|ing)?\\s+it\\s+off", "postponed?", "postponing", "rescheduled?", "rescheduling", "moved", "moving\\s+(?:it|to|house)", "switched", "switching", "changed", "changing", "pushed\\s+back", "put\\s+back", "brought\\s+forward", "not\\s+(?:going|happening)\\s+any\\s*more", "no\\s+longer", "cancell?ed", "cancell?ing", "fell\\s+through", "falling\\s+through", "scrapped", "dropped", "now\\s+(?:live|lives|living|work|works|working|stay|stays|staying|based|going|doing|goes|has|have|is|are)", "swapped", "swapping", "replaced", "any\\s*more"],
  "_note_clause_joiners": "night_mind.moment_change_backed: words that start a new clause inside one sentence (punctuation , ; : and dashes also split). A change cue backs a moment only from the clause(s) its quote overlaps, so another subject's 'now lives' in the same sentence is not borrowed.",
  "clause_joiners": ["while", "whilst", "whereas", "but", "although", "though", "and", "meanwhile", "yet", "however"],
- "manner": {"block": "With people: when someone shares a feeling, first say back what you heard in a few words of your own, then stop or ask ONE question; give advice only if they ask. Name one specific thing about what they told you, and never flatter or gush. If their plan has a real problem, say so once, kindly, then respect their choice; if it is a good plan, say so plainly. Ask one question at a time. Never hint they should stay or that you missed them. When they say goodnight, say a plain goodnight."},
+ "manner": {"block": "Talk like a friend, not a counsellor. Never open with \"It sounds like\", \"That sounds like\" or \"I hear you\", and never restate what they just said. Start with something of your own: a fact, a real opinion, a related thought, a next step. If they are upset, one short clause is enough (\"Ugh, rough.\"), then carry on. Ask at most one question, only if the answer changes what you say next; otherwise end on a statement. If they criticise you, take it as feedback about you: name the exact thing, say what you will do. Never repeat your last answer. Never flatter."},
+ "mirror": {
+  "_note": "mirror_guard.py: the reflective-listening formulas a reply may OPEN with (the 4B's default empathy tic: 'It sounds like you're ...'). Matched on lower-cased, accent-stripped WORDS at a sentence start, after any leading filler. Data, never code: a language with no entry here gets no guard (inert), it is never guessed from English.",
+  "fillers": ["oh", "wow", "well", "hmm", "hm", "ah", "yeah", "okay", "ok", "so", "gosh", "oof", "ugh", "aw"],
+  "openers": [
+   "it sounds like", "that sounds like", "this sounds like", "sounds like", "it sounds as if", "it sounds as though", "that sounds as though",
+   "it seems like", "that seems like", "it seems as if", "it seems as though", "it seems that you", "it seems you",
+   "it feels like you", "it feels as if you", "you seem to be", "you sound like", "you sound a bit", "you sound really",
+   "i hear that", "i hear you", "i hear what you're", "i hear what you are", "i hear what you said", "i hear how","i can hear", "i can tell", "i can sense", "i can see that you", "i can see how",
+   "i'm hearing", "i am hearing", "what i'm hearing", "what i hear", "so what you're saying", "so you're saying", "if i understand",
+   "i understand that you", "i understand how", "i understand you", "i understand your", "i get that you", "i can imagine",
+   "that must be", "it must be", "that must have been", "it must have been", "you must be feeling", "you must feel",
+   "it's understandable", "it's completely understandable", "that's understandable", "that's completely understandable",
+   "it's totally understandable", "it makes sense that you", "that makes sense that you", "it's natural to feel", "it's okay to feel", "it's normal to feel"
+  ],
+  "contrast": ["but", "however", "though", "although", "yet"],
+  "intensifiers": ["really", "very", "such","pretty", "quite", "truly", "so", "just", "absolutely", "totally", "genuinely"],
+  "positive_exempt": [
+   "a great", "a good", "a lovely", "a nice", "a fun", "a wonderful", "a fantastic", "a brilliant", "a perfect", "a solid", "a smart", "a cool",
+   "an excellent", "an amazing", "a plan", "a deal", "a date", "a done deal", "fun", "great", "good", "lovely", "nice", "wonderful", "amazing",
+   "brilliant", "perfect", "delicious", "tasty", "cozy", "a treat", "a win", "an adventure", "a blast", "like fun"
+  ],
+  "generic_closers": [
+   "how are you feeling", "how are you holding up", "how are you doing", "how are you coping", "how does that make you feel", "how do you feel about",
+   "how did that make you feel", "how's that making you feel", "what's on your mind", "what is on your mind", "anything on your mind",
+   "do you want to talk about it", "would you like to talk about it", "want to talk about it", "do you want to share", "would you like to share",
+   "is there anything else", "is there anything you'd like", "is there anything you want", "anything else you'd like", "how can i help", "how can i support",
+   "how can i best support", "what can i do to help", "what would you like to", "what are your thoughts", "what do you think", "can you tell me more",
+   "tell me more", "want to tell me more", "would you like to tell me more", "what's been going on", "how's that been", "how has that been", "what's going on"
+  ]
+ },
  "risk_cues": {
   "_note": "The risk-cue tier (risk_cues.py, ZOE_RISK_CUES): CODE finds the problem in a plan the user just announced and hands the brain ONE short note naming it, so the 4B only has to voice the flaw, not find it. Regex fragments, matched case-insensitively against the user's own words after apostrophes are normalised to '. plan.* decide whether the turn is an announced plan at all. cues[]: every pattern in 'all' must match and no pattern in 'absent' may; {0} {1} in 'note' are filled with the words each 'all' pattern matched. timing.* is the clock arithmetic (two things at one time; too little lead before a flight). Categories: safety_health, money_contract, irreversible, prerequisite, timing. Written from the categories of everyday life, not from any bench sentence. Only the user's words are ever read with these, never Zoe's reply.",
   "reviewed": true,
@@ -1141,6 +1171,35 @@
    "late": "Timing: the {1} is at or after the {0}, so they would miss it.",
    "double": "Timing: two things are set for the same time (\"{0}\" and \"{1}\")."
   }
+ },
+ "subject_adverbs": ["always", "usually", "often", "sometimes", "never", "also", "just", "still", "really", "mostly", "generally",
+  "normally", "typically", "rarely", "regularly", "currently", "recently", "already", "only", "even", "almost", "probably",
+  "definitely", "actually", "occasionally", "frequently", "now", "then", "seldom", "mainly", "barely", "finally"],
+ "_note_present_verbs": "Bare present-tense verbs: a word after a coordinator under \"User\" is conjugated into second person (\"likes tea but hates coffee\" -> \"like tea but hate coffee\") ONLY when it is one of these in its third-person form AND an object follows, so a plural noun (\"tea and cats\") is never taken for a verb.",
+ "present_verbs": ["walk", "feed", "like", "love", "hate", "enjoy", "dislike", "prefer", "want", "need", "own", "keep", "run", "drive",
+  "work", "live", "play", "drink", "eat", "watch", "read", "write", "cook", "bake", "clean", "wash", "water", "make",
+  "take", "bring", "buy", "sell", "visit", "call", "meet", "see", "hear", "speak", "talk", "study", "teach", "learn",
+  "use", "wear", "carry", "ride", "swim", "cycle", "draw", "sing", "dance", "practise", "practice", "go", "come",
+  "stay", "move", "sleep", "wake", "cut", "fix", "build", "manage", "lead", "help", "try", "hope", "plan", "start",
+  "finish", "open", "close", "pay", "save", "spend", "collect", "check", "follow", "join", "attend", "host", "serve",
+  "share", "grow", "tend", "look", "listen", "think", "believe", "know", "remember", "forget", "feel", "get", "give",
+  "put", "set", "find", "lose", "win", "lack", "miss"],
+ "memory_challenge": {
+  "_note": "The user CHALLENGES Zoe's memory (memory_gate.is_memory_challenge): 'don't you remember', 'you already know', 'we've already talked about it', 'I told you about that' - but NOT plain past conversation ('we talked to the electrician and he fixed the fuse'): \"we talked\" needs 'already', 'before', 'earlier' or an anaphoric 'about it/this/that'. Such a turn is a recall question whatever its grammar: the seam runs a recall pass first, and the brain is told to answer only from what comes back. Regex fragments, matched case-insensitively against the user's words with apostrophes normalised to '.",
+  "patterns": [
+   "\\bdon'?t\\s+you\\s+(?:remember|recall)\\b",
+   "\\bdo\\s+you\\s+not\\s+(?:remember|recall)\\b",
+   "\\bdidn'?t\\s+(?:i|we)\\s+(?:already\\s+)?(?:tell|talk|speak|discuss)\\b",
+   "\\byou\\s+(?:already|should(?:\\s+already)?)\\s+(?:know|remember|recall)\\b",
+   "\\bwe(?:'ve|\\s+have)?\\s+already\\s+(?:talked|spoke|spoken|discussed|chatted)\\b",
+   "\\bwe(?:'ve|\\s+have)?\\s+(?:talked|spoke|spoken|discussed|chatted)\\s+(?:(?:it|this|that|them)\\s+)?(?:already|before|earlier)\\b",
+   "\\bwe(?:'ve|\\s+have)?\\s+(?:talked|spoke|spoken|discussed|chatted)\\s+about\\s+(?:it|this|that|them)\\b",
+   "\\b(?:already|just)\\s+told\\s+you\\b",
+   "\\btold\\s+you\\s+(?:about|that|this|it|before|earlier|already)\\b",
+   "\\bas\\s+i\\s+(?:said|mentioned|told\\s+you)\\b",
+   "\\bremember\\s+(?:when|what|how|me\\s+(?:telling|saying|mentioning)|our\\s+(?:chat|talk|conversation)|the\\s+time)\\b",
+   "\\bi\\s+(?:already\\s+)?(?:said|mentioned)\\s+(?:it|that|this)\\s+(?:to\\s+you\\s+)?(?:before|earlier|already|today)\\b"
+  ]
  },
  "spacer": {
   "_note": "voice_spacer.py: the short spoken lines that fill a wait. 'families' are the pools by what the turn is doing (lookup = a read of stored data, recall = remembering, action = doing something, generic = nothing known); 'tool_ack' is the domain-specific pool for the dispatch-time acknowledgement. A line never claims a result. Wide on purpose: the same three lines on every turn read as a tic.",

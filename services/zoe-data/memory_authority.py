@@ -474,6 +474,22 @@ def may_override(power: int, target_cls: str) -> bool:
     return power >= USER_RANK or power >= RANK.get(target_cls, 0)
 
 
+#: ``authority_basis`` values that say the writer READ the owner's words and they do NOT carry the fact. ("no_user_evidence" -
+#: a caller that passed no words at all - is deliberately not here: it says nothing about the fact, and a plain review(edit)
+#: from a lane with no turn to quote must keep working.)
+NO_STANDING_BASES = frozenset({"unanchored"})
+
+
+def has_standing(power: int, basis: str) -> bool:
+    """May a write of this POWER and ``authority_basis`` retire an approved row AT ALL? Inference never supersedes
+    (found in a live review, 2026-10-12: an idle-consolidation row the owner's words did not carry, class ``model_from_transcript``
+    basis ``unanchored``, retired an older row of the same class - equal rank passes ``may_override`` - and
+    replaced a present-tense fact with a vaguer past-tense one). A write below the user
+    classes that no user words support has no standing over ANY row, however weak the row: it is stored beside the
+    old one (a harmless near-duplicate) and the old row stays until something the owner said replaces it."""
+    return power >= USER_RANK or str(basis or "") not in NO_STANDING_BASES
+
+
 def provenance(writer: str, res: Resolved, *, turn_ref: Optional[str] = None,
                model: Optional[str] = None) -> dict[str, Any]:
     """The flat metadata a row carries about WHO wrote it (chroma-safe scalars)."""

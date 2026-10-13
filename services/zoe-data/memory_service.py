@@ -2558,7 +2558,9 @@ class MemoryService:
         # when they run nightly, so the rows' own authority decides.)
         if _auth.active():
             new_power = _auth.row_power(new_m, docs.get(new_id, ""))
-            if not _auth.may_override(new_power, _auth.row_class(old_m, docs.get(old_id, ""))):
+            # ...and an INFERRED successor no user words support has no standing over any row (has_standing)
+            if (not _auth.may_override(new_power, _auth.row_class(old_m, docs.get(old_id, "")))
+                    or not _auth.has_standing(new_power, str(new_m.get("authority_basis") or ""))):
                 _auth.log_blocked(str(new_m.get("origin") or new_m.get("source") or ""),
                                   _auth.kind_of(docs.get(old_id, "")), user_id=user_id,
                                   action="supersede")
@@ -2842,7 +2844,8 @@ class MemoryService:
                 origin or actor, (edits or current.text).strip(),
                 anchor_text=anchor_text, claimed=authority, user_id=user_id,
                 prompt_text=prompt_text, speaker_verified=speaker_verified)
-            return not _auth.may_override(res.power, _auth.row_class(meta, current.text))
+            return not (_auth.may_override(res.power, _auth.row_class(meta, current.text))
+                        and _auth.has_standing(res.power, res.basis))
         except Exception:  # noqa: BLE001 - a read error is not a refusal
             return False
 
@@ -2887,7 +2890,8 @@ class MemoryService:
                     speaker_verified=speaker_verified, claim=claim, claim_siblings=claim_siblings)
             else:  # archive / reject: the actor's own standing, no text to anchor
                 res = _auth.Resolved(_auth.writer_class(actor, user_id=user_id), "action")
-            if _auth.may_override(res.power, _auth.row_class(meta, current.text)):
+            if _auth.may_override(res.power, _auth.row_class(meta, current.text)) and (
+                    decision != "edit" or _auth.has_standing(res.power, res.basis)):
                 return False
             if decision == "edit":
                 new_text = (edits or current.text).strip()

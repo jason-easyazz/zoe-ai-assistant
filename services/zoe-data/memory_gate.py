@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import re
+from functools import lru_cache
 
 MEMORY_TRIGGER_WORDS = frozenset({
     "remember", "recall", "did i", "have i", "last time", "before",
@@ -542,6 +543,63 @@ def person_candidate_names(message: str) -> list[str]:
             _flush()
     _flush()
     return out[:PERSON_FLOOR_MAX_NAMED + 2]
+
+
+# "Who's Brannock?" / "Do you know Brannock?" / "Tell me about Brannock": the question IS "what do you have on this name?". When the name is not a
+# contact and has no person-fact entity, nothing above resolves it - and the brain answered "I don't have any information about Brannock"
+# with NO recall pass at all (found in a live review, 2026-10-12: the packet was skipped). A denial of knowing someone must stand on a search of the
+# record, so an identity-shaped question that names an unrecognised person-like word still forces the for-prompt packet. Only these
+# shapes: "What's the weather in Northcliff?" names a capitalised word too, and is not a question about a person.
+_IDENTITY_QUESTION_RE = re.compile(
+    r"^\s*(?:(?:hey|hi|ok|okay|so|and|but|um+|uh+|well|zoe|please)[,.\s]+)*"
+    r"(?:who(?:'s|’s|\s+is|\s+was|\s+are)|do\s+you\s+(?:know|remember)(?:\s+who)?|tell\s+me\s+(?:about|who)|"
+    r"what\s+(?:do|can)\s+you\s+(?:know|tell\s+me)\s+about|what\s+about|remember)\s+(?:about\s+)?(?P<rest>.+?)\s*[?.!]*\s*$",
+    re.IGNORECASE)
+_NOT_A_PERSON_WORD = _NOT_A_NAME | frozenset({
+    "he", "him", "his", "she", "hers", "they", "we", "us", "these", "those", "someone", "somebody", "anyone", "anybody",
+    "everyone", "everybody", "nobody", "something", "anything", "everything", "nothing", "that", "one", "ones",
+})
+
+
+def person_identity_names(sentence: str) -> list[str]:
+    """The person-like names an identity-shaped question asks about ("Who's Brannock?" -> ["Brannock"]). A capitalised run
+    (``person_candidate_names``), or - for a transcript with no capitals - the one or two words after the question frame, when
+    none is a function word or a pronoun. Pure; the caller decides whether the name is KNOWN."""
+    m = _IDENTITY_QUESTION_RE.match(sentence or "")
+    if not m:
+        return []
+    rest = m.group("rest")
+    got = person_candidate_names(rest)
+    if got:
+        return got
+    toks = [t for t, _cap in _name_tokens(rest)]
+    if 1 <= len(toks) <= 2 and _is_caseless(sentence) and not any(t in _NOT_A_PERSON_WORD or len(t) < 2 for t in toks):
+        return [" ".join(t.capitalize() for t in toks)]
+    return []
+
+
+@lru_cache(maxsize=8)
+def _challenge_patterns(lang: str) -> tuple:
+    import lexicons
+
+    return tuple(re.compile(p, re.IGNORECASE) for p in (lexicons.load(lang).get("memory_challenge") or {}).get("patterns") or ())
+
+
+def is_memory_challenge(message: str) -> bool:
+    """True when the user CHALLENGES Zoe's memory instead of asking a question: "don't you remember?", "I think you already know",
+    "we've already talked about it", "I told you about that". Such a turn is a recall question whatever its grammar (found in a live
+    review, 2026-10-12: it ran NO recall pass, and the reply denied the conversation, then described one that was never stored). The words
+    are per-language data (``lexicons_data/<lang>.json`` -> ``memory_challenge.patterns``); a language with none matches nothing,
+    and English is the fallback only for a Latin-script message no other lexicon claims. Pure."""
+    text = (message or "").replace("’", "'")
+    if not text.strip():
+        return False
+    import lexicons
+
+    langs = [lexicons.detect(text)]
+    if langs[0] != "en":
+        langs.append("en")      # a mixed-language line: English phrasing still counts
+    return any(rx.search(text) for lang in langs for rx in _challenge_patterns(lang))
 
 
 def message_needs_memory(message: str) -> bool:
