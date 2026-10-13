@@ -339,7 +339,7 @@ def _wire(monkeypatch, *, panel_user=None, consented=True):
     async def legacy_ui(*_a, **_k):
         rec["legacy_ui"] += 1
 
-    async def consent(_uid):
+    async def consent(_uid, *_model):      # PR #2024 adds the claim's model id as a second argument
         return consented
 
     async def challenge(**kw):
