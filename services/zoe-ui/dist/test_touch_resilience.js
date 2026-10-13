@@ -149,11 +149,18 @@ let n = 0; const ok = (m) => { n++; console.log('  ok  ' + m); };
       // 2026-10-09: ONE stop for every panel-scoped auth failure. A member not bound to the panel
       // got 403 on bind/sync/poll; the poll stopped itself while the 5 s sync went on forever.
       assert(/function stopPanelServices\(reason\) \{[\s\S]{0,400}clearInterval\(state\.syncTimer\)[\s\S]{0,900}stopServiceWorkerPanelPoll\(\);/.test(execSrc), 'stopPanelServices clears poll+sync timers and the SW poll');
-      assert(/if \(panelAuthFailed\(res\)\) stopPanelServices\(`bind refused/.test(execSrc) && /if \(panelAuthFailed\(res\)\) stopPanelServices\(`sync refused/.test(execSrc) && /if \(panelAuthFailed\(res\)\) stopPanelServices\(`poll refused/.test(execSrc), 'bind, sync and poll all route a 401/403 to stopPanelServices');
+      // 2026-10-12: a 401 is NOT a stop — it means the session expired (a PIN member's lives
+      // 60 min, the kiosk runs for days). #1921 treated 401 like 403 and also closed the push
+      // socket, which left the wall panel deaf to every voice:* event until a manual reload.
+      // Behaviour is pinned by test_touch_panel_session_recovery.js; these are the text pins.
+      const swSrc = fs.readFileSync(path.join(__dirname, 'sw.js'), 'utf8');
+      assert(/handlePanelAuthFailure\(res, 'bind'\)/.test(execSrc) && /handlePanelAuthFailure\(res, 'sync'\)/.test(execSrc) && /handlePanelAuthFailure\(res, 'poll'\)/.test(execSrc), 'bind, sync and poll all route a refusal through handlePanelAuthFailure');
+      assert(/function handlePanelAuthFailure\(res, what\) \{[\s\S]{0,300}res\.status === 401\) recoverPanelSession\([\s\S]{0,80}else if \(Date\.now\(\) < state\.guestReclaimUntil[\s\S]{0,700}else stopPanelServices\(/.test(execSrc), 'a 401 recovers the session; a 403 stops services except inside our own member->guest reclaim window');
       assert(/async function syncState\(\) \{\s*if \(state\.panelServicesStopped\) return;/.test(execSrc), 'a stopped sync never posts again');
-      assert(/function stopPanelServices\(reason\) \{[\s\S]{0,900}state\.pushWs\.close\(\)[\s\S]{0,300}window\.zoePushWs\.disconnect\(\)/.test(execSrc), 'stopPanelServices closes the fallback push socket and the shared push channel');
-      assert(/if \(state\.unloading \|\| state\.pushRetry \|\| state\.panelServicesStopped\) return;/.test(execSrc), 'the fallback push backoff never reschedules after a stop');
-      ok('executor: a panel 401/403 on bind, sync or poll stops every panel service once (push channel included)');
+      assert(/function stopPanelServices\(reason\) \{[\s\S]{0,1400}if \(isKioskContext\(\)\) \{[\s\S]{0,200}return;\s*\}[\s\S]{0,900}state\.pushWs\.close\(\)[\s\S]{0,300}window\.zoePushWs\.disconnect\(\)/.test(execSrc), 'stopPanelServices returns BEFORE closing the push socket on a kiosk; off-kiosk it still closes the fallback socket and the shared channel');
+      assert(/if \(state\.unloading \|\| state\.pushRetry \|\| state\.pushStopped\) return;/.test(execSrc), 'the fallback push backoff never reschedules after a deliberate (off-kiosk) stop, and does reconnect on a kiosk');
+      assert(/err\.status === 401\) \{[\s\S]{0,600}?_panelSessionId = null;[\s\S]{0,900}SW_PANEL_AUTH_EXPIRED[\s\S]{0,500}return;\s*\}\s*if \(err && err\.status === 403\) \{[\s\S]{0,900}_stopPanelPoll\(\);/.test(swSrc), 'sw.js: a 401 drops the session and keeps polling (never _stopPanelPoll); only a 403 stops (behaviour: test_sw_panel_poll.js)');
+      ok('executor: a 403 stops poll+sync (+SW poll, +push off-kiosk); a 401 recovers the session and stops nothing');
       // 2026-10-05: a member's laptop with a STALE session was bounced to the retired
       // /touch/index.html by the estate's own 401 path. Off-kiosk auth failures raise the
       // estate card in place; the estate never navigates to the old login page.

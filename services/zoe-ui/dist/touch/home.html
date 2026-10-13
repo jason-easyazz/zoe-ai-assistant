@@ -19,8 +19,15 @@
     // A GUEST session carries expires_at (30 min) while the kiosk runs for days.
     // An expired one must count as ABSENT here, or the first-paint fetches go
     // out with a dead id, 401, and the who+PIN card is raised at boot instead
-    // of the ambient home. (Member sessions carry no expires_at.)
-    if(ok&&s.expires_at&&Date.parse(s.expires_at)<Date.now()){ok=false;try{localStorage.removeItem('zoe_session');}catch(e2){}}}catch(e){ok=false;}
+    // of the ambient home. (A PIN member session carries expires_at too — the
+    // 60 min passcode TTL, stored by the sign-in handler; older stored ones may not.)
+    // An expired MEMBER session is stamped (zoe_member_handover_at) before it is dropped: the
+    // server keeps the panel row owned by the member for 300 s, so the guest that replaces it
+    // is refused (403) until then, and the executor (which no longer sees the member session)
+    // reads the stamp to ride that window out instead of stopping poll+sync for good.
+    if(ok&&s.expires_at&&Date.parse(s.expires_at)<Date.now()){ok=false;
+      try{if(String(s.role||'').toLowerCase()!=='guest'&&String(s.user_id||'').toLowerCase()!=='guest')localStorage.setItem('zoe_member_handover_at',String(Date.now()));}catch(e3){}
+      try{localStorage.removeItem('zoe_session');}catch(e2){}}}catch(e){ok=false;}
     // Three kiosk signals: the URL, localStorage (ours), and sessionStorage (what
     // js/auth.js keeps on the legacy touch pages) — a bare return navigation from
     // one of those pages must still boot as a kiosk.
@@ -747,6 +754,8 @@
   .askf .ah{font-size:27px;color:var(--ink-faint)}.askf .ah b{color:var(--ink-soft);font-weight:500}
   .askf .aa{font-size:46px;line-height:1.4;font-weight:300;max-width:920px}
   .askf .aa em{font-style:normal;font-weight:500;color:#fff}
+  /* A long answer is never cut: smaller type, and the box scrolls rather than overflowing the screen. */
+  .askf .aa.long{font-size:30px;line-height:1.45;max-height:400px;overflow-y:auto;overscroll-behavior:contain}
   /* Live conversation is a STATE of the Ask card — the dock, home button and orb
      all stay put (inline, never fullscreen). The talk control sits bottom-centre,
      clear of the cog (top-right) and the home button. */
@@ -4459,7 +4468,7 @@
   function askShowAnswer(q,a){
     FULL.ask.html=askShell('<div class="aa" id="askOut"></div>');
     if(_cur!=='ask')show('ask');   // show() clears the drift flags…
-    var o=document.getElementById('askOut');if(o)o.textContent=a||'';
+    var o=document.getElementById('askOut');if(o){o.textContent=a||'';o.classList.toggle('long',(a||'').length>220);}
     if(q)dockHeard(q);
     // …so re-arm here. Only the VOICE paths call askShowAnswer (a typed ask
     // renders via askZoe and never drifts), so arm unconditionally — an answer
@@ -4475,7 +4484,12 @@
     // taking over the dock — the dock keeps its pinned controls until a
     // transcript arrives. Safety timeout clears the state if no further
     // voice event lands (e.g. wake false-trigger).
-    listening:function(){orb.classList.add('listening');_turnTxt='';
+    listening:function(){
+      // A wake is activity: on the night clock the orb is hidden and the dock is gone, so
+      // the "listening" cue below would be invisible and the panel looked dead to "Hey Zoe".
+      // Wake it first (show() clears the drift flags; the re-arm below runs after it).
+      if(_cur==='sleep')show('home');
+      orb.classList.add('listening');_turnTxt='';
       window.__voiceArrivedAt=0;   // a NEW turn started — the last arrival no longer owns responding events
       _userTookOver=false;         // a new turn hands the screen back to Zoe
       voiceConvTouch();
@@ -4595,6 +4609,7 @@
   // covering the home screen for days. Listeners are wired ONCE; the
   // selection state lives in _au and is reset on every show.
   var AUTH_CARD_TTL_MS=120000;   // = the server's challenge TTL (panel_auth.py)
+  var PIN_SESSION_TTL_MS=3600000;   // = zoe-auth's PASSCODE session duration (core/sessions.py: 60 min)
   var _au={sel:null,code:'',wired:false,ttlT:null};
   window.__showAuthCard=function(){var ov=document.getElementById("authov");if(ov&&!ov.classList.contains("on"))initAuthCard();};
   window.__hideAuthCard=function(){var ov=document.getElementById('authov');if(!ov||!ov.classList.contains('on'))return;
@@ -4680,7 +4695,13 @@
           .then(function(r){return r.json().catch(function(){return {};}).then(function(d){return {ok:r.ok,d:d};});})
           .then(function(x){
             if(x.ok&&x.d&&x.d.success&&x.d.session_id){
-              try{localStorage.setItem('zoe_session',JSON.stringify({session_id:x.d.session_id,user_id:x.d.user_id||sel.user_id,username:sel.username,role:x.d.role||'user'}));}catch(e){}
+              // Record WHEN the PIN session dies (zoe-auth's PASSCODE session lives 60 min): without
+              // expires_at nothing client-side can tell it expired, and the panel's services
+              // learnt it only from a 401 (2026-10-12: the wall panel went deaf). Use the auth
+              // response's own expires_at; fall back to the known TTL. The executor downgrades
+              // a kiosk to guest shortly BEFORE this (sessionNeedsDowngrade).
+              var pinExp=x.d.expires_at&&!isNaN(Date.parse(x.d.expires_at))?x.d.expires_at:new Date(Date.now()+PIN_SESSION_TTL_MS).toISOString();
+              try{localStorage.setItem('zoe_session',JSON.stringify({session_id:x.d.session_id,user_id:x.d.user_id||sel.user_id,username:sel.username,role:x.d.role||'user',expires_at:pinExp}));}catch(e){}
               // Signing in is NOT what releases a voice turn that was held for
               // identity — answering its panel challenge is. Resolve it with the
               // same PIN (server-side that triggers the held-turn replay), then
@@ -4746,6 +4767,6 @@
     }).catch(function(){});}catch(e){}
 })();
 </script>
-<script src="/js/touch-ui-executor.js?v=estate-5"></script>
+<script src="/js/touch-ui-executor.js?v=estate-7"></script>
 </body>
 </html>

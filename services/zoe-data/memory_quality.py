@@ -782,6 +782,45 @@ _ROLE_HYPONYMS: dict[str, frozenset[str]] = {
 }
 
 
+# A bare kinship word ("seeing dad at the market", "mum's coming up") is how a person names their OWN
+# parent, grandparent... aloud: it is the address form, not "a dad". Each group is (the role words a fact may
+# use for it, the bare words a speaker uses). Only these - "wife", "friend", "boss" are never a bare name, so
+# "Corvina is the wife" still earns no anchor (the 2026-07-12 incident the validator exists for).
+_BARE_KIN: tuple[tuple[frozenset[str], frozenset[str]], ...] = (
+    (frozenset({"dad", "father"}), frozenset({"dad", "daddy", "papa"})),
+    (frozenset({"mum", "mom", "mother"}), frozenset({"mum", "mummy", "mom", "mommy", "mama"})),
+    (frozenset({"grandma", "grandmother"}), frozenset({"grandma", "gran", "granny", "nan", "nana", "nanna", "gramma"})),
+    (frozenset({"grandpa", "grandfather"}), frozenset({"grandpa", "grandad", "granddad", "gramps"})),
+)
+#: a word before a bare kin word that gives it ANOTHER possessor or makes it a common noun ("his dad", "Pell's dad", "the dad")
+_NOT_OWN_KIN_BEFORE = frozenset({
+    "his", "her", "hers", "their", "theirs", "your", "yours", "its", "whose", "the", "a", "an", "that", "this",
+    "those", "these", "any", "no", "some", "every", "each", "another", "other", "and",
+})
+
+
+def _bare_kin_stated(role: str, src: str) -> bool:
+    """True when ``src`` (lower-cased) names the speaker's own kin of ``role`` by the bare address word ("seeing dad").
+    A possessor other than the speaker ("her dad", "Pell's dad") or a determiner ("the dad") does not count."""
+    bare: set[str] = set()
+    variants = _role_variants(role)
+    for roles, words in _BARE_KIN:
+        if roles & variants:
+            bare |= words
+    if not bare:
+        return False
+    alt = "|".join(sorted(map(re.escape, bare), key=len, reverse=True))
+    for m in re.finditer(rf"(?<![\w'’-])({alt})(?![\w-])", src):
+        before = src[:m.start()].rstrip()
+        prev = re.search(r"([\w'’-]+)$", before)
+        if prev:
+            word = prev.group(1)
+            if word in _NOT_OWN_KIN_BEFORE or word.endswith(("'s", "’s")):
+                continue
+        return True
+    return False
+
+
 def _role_variants(role: str) -> frozenset[str]:
     """The role plus its everyday synonyms (mum/mother, kid/child, ...) and —
     for generic roles — its specific hyponyms (parent ← mum/dad)."""
@@ -791,6 +830,127 @@ def _role_variants(role: str) -> frozenset[str]:
             out |= group
     out |= _ROLE_HYPONYMS.get(role, frozenset())
     return frozenset(out)
+
+
+# ---------------------------------------------------------------------------
+# A fact with no subject: "His roster has changed a lot." / "He has been in and out of meetings."
+# ---------------------------------------------------------------------------
+# The per-turn extractor reads ONE message; when the owner continues about a person named a turn earlier ("...seeing my dad at the
+# market" / "His roster changed a lot") it copies the pronoun into the fact, and the stored row is about nobody: recall can
+# never place it, and "He" reads as whoever the next prompt is about (found in a live review, 2026-10-12). The antecedent is resolved
+# from the owner's OWN recent words - "my <relation>", exactly one compatible relation, newest turn first, and never past a nearer
+# NAMED person - or the fact is held.
+_SUBJECT_PRONOUN_RE = re.compile(
+    r"^\s*(?:(?:and|but|also|so)\s+)?(?P<pron>he|she|his|her|they|their|him|hers)\b(?P<rest>.*)$",
+    re.IGNORECASE | re.DOTALL)
+_PRONOUN_POSSESSIVE = frozenset({"his", "her", "their"})
+_PRONOUN_SUBJECT = frozenset({"he", "she"})
+_MALE_KIN = frozenset({"dad", "father", "brother", "husband", "son", "grandpa", "grandfather", "uncle", "boyfriend", "nephew"})
+_FEMALE_KIN = frozenset({"mum", "mom", "mother", "sister", "wife", "daughter", "grandma", "grandmother", "aunt", "girlfriend", "niece"})
+_NEUTRAL_KIN = frozenset({"friend", "partner", "colleague", "coworker", "boss", "neighbour", "neighbor", "cousin", "parent", "sibling",
+                          "fiance", "fiancee", "fiancé", "fiancée", "mate"})
+_MY_KIN_RE = re.compile(
+    r"\bmy\s+(?:(?:[a-z]+)\s+)?(?P<rel>" + "|".join(sorted(_MALE_KIN | _FEMALE_KIN | _NEUTRAL_KIN, key=len, reverse=True)) + r")\b",
+    re.IGNORECASE)
+
+
+# A NAMED person is an antecedent too, and a nearer one than an older "my <relation>": "Quillan called me" then, a turn earlier, "I visited
+# my sister" - "She is in a meeting" is about Quillan (or nobody we can tell), never "User's sister". So a name said AFTER the newest relation
+# (a later turn, or later in the same message) blocks the resolution; with no relation at all a name also means "held". A capitalised
+# word is a name unless it is clearly not one: a place after a locative word ("from Eastvale"), a day / month, the assistant, a kin word,
+# an ordinary sentence opener ("Yesterday", "It", "No"), or the name OF the relation just said ("my sister Quillan" is one person).
+# Lowercase-typed names are invisible here - the residual risk, in the safe direction only for capitalised text.
+_NOT_A_NAME = frozenset(
+    {"zoe", "user", "i", "ok", "okay", "yes", "yeah", "yep", "nope", "no", "hmm", "hm", "oh", "ah", "um", "uh", "well", "so", "and", "but", "or",
+     "the", "a", "an", "this", "that", "these", "those", "it", "its", "he", "his", "him", "she", "her", "hers", "they", "their", "them", "we",
+     "our", "us", "you", "your", "my", "me", "mine", "there", "here", "then", "now", "today", "tonight", "tomorrow", "yesterday", "later",
+     "soon", "still", "just", "also", "even", "only", "maybe", "perhaps", "please", "thanks", "thank", "sorry", "hello", "hi", "hey",
+     "what", "when", "where", "who", "why", "how", "which", "if", "as", "at", "in", "on", "of", "for", "from", "to", "with", "about", "after",
+     "before", "because", "since", "while", "although", "though", "until", "unless", "not", "never", "always", "sometimes", "every",
+     "each", "some", "any", "all", "most", "many", "much", "more", "one", "two", "three", "something", "everything", "anything", "nothing",
+     "everyone", "someone", "anyone", "nobody", "is", "are", "was", "were", "be", "been", "am", "do", "does", "did", "have", "has", "had",
+     "can", "could", "will", "would", "should", "may", "might", "must", "let", "lets", "got", "get", "went", "came", "said", "told",
+     "anyway", "honestly", "actually", "basically", "apparently", "luckily", "unfortunately", "meanwhile", "otherwise", "however",
+     "christmas", "easter", "covid"})
+_LOCATIVE_BEFORE = frozenset({"in", "from", "to", "at", "near", "around", "into", "across", "outside", "inside", "through", "via", "toward",
+                              "towards", "past", "of", "back"})
+_CAPITAL_WORD_RE = re.compile(r"\b[A-Z][a-z]+\b")
+_KIN_WORD_ALT = "|".join(sorted(_MALE_KIN | _FEMALE_KIN | _NEUTRAL_KIN, key=len, reverse=True))
+_KIN_APPOSITIVE_RE = re.compile(rf"\b(?:my|our)\s+(?:[a-z]+\s+)?(?:{_KIN_WORD_ALT})\W*(?:(?:is|was|named|called)\s+)?$", re.IGNORECASE)
+
+
+def _named_people(text: str) -> list:
+    """Start offsets of the named people in the owner's message ``text`` (apostrophes already normalised). Pure."""
+    found = []
+    for m in _CAPITAL_WORD_RE.finditer(text):
+        word = m.group(0).lower()
+        if word in _NOT_A_NAME or word in _GUARD_CAL_WORDS or word in _MALE_KIN or word in _FEMALE_KIN or word in _NEUTRAL_KIN:
+            continue
+        before = text[:m.start()].rstrip()
+        if not before or before[-1] in ".!?\n:;\"" or before.endswith("..."):
+            # the opener of a sentence: a name only when it is not an ordinary word that opens sentences
+            if word.endswith("ly") or word.endswith("ing"):
+                continue
+        else:
+            prev = re.search(r"([\w'-]+)$", before)
+            if prev and prev.group(1).lower() in _LOCATIVE_BEFORE:
+                continue                                           # "from Eastvale": a place
+            if _KIN_APPOSITIVE_RE.search(before + " "):
+                continue                                           # "my sister Quillan": the relation itself
+        found.append(m.start())
+    return found
+
+
+def subjectless_pronoun_fact(fact_text: str) -> bool:
+    """True when a stored fact OPENS on a third-person pronoun ("His roster changed a lot", "He has been in and out of meetings"):
+    its subject is whoever the sentence it was copied from was about. Pure."""
+    return bool(_SUBJECT_PRONOUN_RE.match(fact_text or ""))
+
+
+def resolve_subjectless_fact(fact_text: str, recent_user_texts: list) -> Optional[str]:
+    """The fact with its pronoun replaced by "User's <relation>", or None (hold it) when the owner's own recent words do not settle
+    who it is about. ``recent_user_texts`` are the owner's messages NEWEST FIRST, the current one first. The relation is whatever
+    ``my <relation>`` the newest message naming a compatible one says ("his"/"he" -> not a mother; "her"/"she" -> not a father);
+    two different compatible relations in that message is ambiguity, and ambiguity is held, never guessed. "they" never
+    resolve. Pure."""
+    m = _SUBJECT_PRONOUN_RE.match(fact_text or "")
+    if not m:
+        return fact_text
+    pron = m.group("pron").lower()
+    if pron in ("he", "his", "him"):
+        allowed = _MALE_KIN | _NEUTRAL_KIN
+    elif pron in ("she", "hers"):
+        allowed = _FEMALE_KIN | _NEUTRAL_KIN
+    elif pron == "her":
+        allowed = _FEMALE_KIN | _NEUTRAL_KIN
+    else:
+        return None
+    rest = m.group("rest").strip()
+    if not rest or pron in ("him", "hers"):
+        return None
+    for text in recent_user_texts or ():
+        norm = (text or "").replace("’", "'")
+        rels = []
+        last_kin = -1
+        for rm in _MY_KIN_RE.finditer(norm):
+            rel = rm.group("rel").lower()
+            if rel in allowed:
+                last_kin = max(last_kin, rm.start())
+                if rel not in rels:
+                    rels.append(rel)
+        # a named person said AFTER the newest relation (a later turn, or later in this message) is the nearer antecedent: never
+        # resolve past them to an older "my <relation>" - hold
+        names = _named_people(norm)
+        if names and max(names) > last_kin:
+            return None
+        if len(rels) == 1:
+            owner = f"User's {rels[0]}"
+            if pron in _PRONOUN_POSSESSIVE:
+                return f"{owner}'s {rest}"
+            return f"{owner} {rest}"
+        if len(rels) > 1:
+            return None
+    return None
 
 
 def user_relationship_claim_unsupported(fact_text: str, source_text: str) -> bool:
@@ -833,6 +993,10 @@ def user_relationship_claim_unsupported(fact_text: str, source_text: str) -> boo
             ):
                 supported = True
                 break
+        # "...straight from seeing dad at the market": the speaker named their own parent by the address word
+        # (found in a live review, 2026-10-12: a user-stated fact naming a parent this way was dropped as "the extractor guessed the anchor")
+        if not supported and _bare_kin_stated(role, src):
+            supported = True
         if not supported:
             return True  # at least one user-anchored role the source never stated
     return False

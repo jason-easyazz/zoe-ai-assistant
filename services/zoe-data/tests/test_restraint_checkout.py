@@ -26,6 +26,18 @@ def _meta(text, **kw):
 
 
 @pytest.fixture(autouse=True)
+def _router_model_loaded():
+    """Model the live service: the router's embedder is loaded, so the semantic head RUNS (a zero vector = it found nothing) and a
+    stamp is head-complete (v3). Without it a stamp is the lexicon version on purpose (test_restraint_head.py)."""
+    import numpy as np
+    import restraint_head
+    restraint_head.reset()
+    restraint_head.set_embedder(lambda _t: np.zeros(384, dtype=np.float32))
+    yield
+    restraint_head.reset()
+
+
+@pytest.fixture(autouse=True)
 def _enforce(monkeypatch):
     monkeypatch.setenv("ZOE_RESTRAINT", "enforce")
     restraint._reset_state()
@@ -34,7 +46,11 @@ def _enforce(monkeypatch):
 
 
 def test_a_new_row_carries_its_class_in_its_metadata():
+    import restraint_head
     md = _meta("I've got the dentist on Friday for a cracked molar")
+    assert md["sensitivity"] == "health" and md["sensitivity_v"] == restraint.LEXICON_VERSION   # head queued, not run inline
+    restraint_head.drain()
+    md = _meta("I've got the dentist on Friday for a cracked molar")                           # re-stamped with the cache filled
     assert md["sensitivity"] == "health" and md["sensitivity_v"] == restraint.VERSION
     assert md["sensitivity_h"] == restraint.text_hash("I've got the dentist on Friday for a cracked molar")
     assert _meta("parcel pickup on Friday")["sensitivity"] == ""

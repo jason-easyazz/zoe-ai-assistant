@@ -12,6 +12,11 @@ timestamp: 2026-10-10T00:00:00Z
 priority change 10:20). Do not flip the flag until `scripts/perf/manner_block_ab.py --phase report` prints `VERDICT ... KEEP` on the
 held-out half with the regression cells run.
 
+**Update 2026-10-12:** the text described below ("reflect before advising ... say back what you heard") was the MIRROR instruction behind the owner's
+"it feels like you just regurgitate what I'm doing". The lexicon text is now a provisional converse-not-mirror candidate and a deterministic
+`ZOE_MIRROR_GUARD` backstop exists: see [converse-not-mirror.md](converse-not-mirror.md). The counted behaviours listed under "What it is" describe
+the #1977 text, kept as arm `LEGACY` in `scripts/perf/converse_ab.py`.
+
 ## What it is
 
 A <=160-token paragraph of counted behaviours (MITI / EPITOME style: reflect before advising, name one specific true thing, one
