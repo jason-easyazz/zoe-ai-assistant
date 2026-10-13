@@ -79,6 +79,21 @@ class _Lang:
     ambiguous_continuers: frozenset = frozenset()
     # Words that, right before an ambiguous continuer, make it a noun ("the cause", "root cause").
     noun_cues: frozenset = frozenset()
+    # Verbs that can END a finished question whose object was fronted ("What symptoms does mold CAUSE"). One that is also a
+    # continuer ("cause" = "because") is not held when the utterance has that shape; see ``_verb_final_question``.
+    verb_final: frozenset = frozenset()
+    # First words of a question whose object is fronted ("what", "which", "who"): "how" / "why" / "when" are NOT here, so
+    # "Why did the kettle stop cause" is still a cut sentence.
+    fronted_object: frozenset = frozenset()
+    # Subject-auxiliary inversion words: a fronted-object question has one between the wh-word and the final verb.
+    question_auxiliaries: frozenset = frozenset()
+    # A pronoun subject straight after the auxiliary ("should I ...") followed by more words means the question already has its own
+    # main verb ("should I DO ..."), so a trailing "cause" is "because". Adverbs in that gap do not count as a verb.
+    subject_pronouns: frozenset = frozenset()
+    question_adverbs: frozenset = frozenset()
+    # The whole of a genuine short ANSWER to a question Zoe just asked ("Yes, Casey."): only these words around the name.
+    # Gratitude and praise ("Thanks", "Great job") are replies to a person, not answers, and are not here.
+    short_answers: frozenset = frozenset()
 
 
 def _fs(*words: str) -> frozenset:
@@ -136,6 +151,14 @@ _LANGS: Mapping[str, _Lang] = {
             "underlying", "possible", "to", "will", "would", "can", "could", "might", "may",
             "should", "not", "does", "did", "it", "they", "we", "you", "i", "which",
         ),
+        verb_final=_fs("cause", "make", "do", "mean", "say", "need", "want", "use"),
+        fronted_object=_fs("what", "which", "who", "whom", "whose"),
+        subject_pronouns=_fs("i", "you", "we", "they", "he", "she", "it"),
+        question_adverbs=_fs("also", "often", "ever", "just", "still", "even", "always", "never", "usually", "really", "actually"),
+        short_answers=_fs("yes", "yeah", "yep", "yup", "no", "nope", "nah", "okay", "ok", "sure"),
+        question_auxiliaries=_fs(
+            "do", "does", "did", "can", "could", "will", "would", "should", "shall", "might", "may", "must",
+        ),
     ),
     "es": _Lang(
         strong_continuers=_fs(
@@ -156,6 +179,7 @@ _LANGS: Mapping[str, _Lang] = {
             "cambia", "repite", "ayuda", "ayúdame", "ayudame", "cancela", "reproduce",
             "toca", "lee", "dame", "haz", "empieza", "continúa", "continua", "espera",
         ),
+        short_answers=_fs("sí", "si", "no", "vale", "claro", "bueno"),
         acknowledgements=_fs(
             "sí", "si", "no", "vale", "claro", "gracias", "perfecto", "genial", "bueno",
             "bien", "exacto", "correcto", "porfa", "perdón", "perdon",
@@ -209,10 +233,32 @@ def _first_content_word(words: list[str], lead_ins: frozenset) -> str:
     return ""
 
 
+def _verb_final_question(words: list[str], langs: list[_Lang]) -> bool:
+    """True for a finished question whose object is fronted and whose verb ends it: "What symptoms does mold cause".
+    Needs a fronted-object wh-word first (after any lead-ins), a subject-auxiliary somewhere before the last word, and a
+    last word that is a ``verb_final`` verb. Pure data lookups: no per-turn cost worth measuring."""
+    if len(words) < 3 or words[-1] not in _union("verb_final", langs):
+        return False
+    if _first_content_word(words, _union("lead_ins", langs)) not in _union("fronted_object", langs):
+        return False
+    auxiliaries = _union("question_auxiliaries", langs)
+    for k in range(1, len(words) - 1):
+        if words[k] not in auxiliaries:
+            continue
+        if words[k + 1] in _union("subject_pronouns", langs):
+            # "What should I do cause": a pronoun subject plus another word before the last = a main verb of its own, so "cause"
+            # is the conjunction. "What problems can they cause" (the pronoun directly before the verb) is still complete.
+            adverbs = _union("question_adverbs", langs)
+            return all(w in adverbs or w.endswith("ly") for w in words[k + 2:-1])
+        return True
+    return False
+
+
 def ends_incomplete(text: str, languages: tuple[str, ...] | None = None) -> bool:
     """True when the transcript stops on a word that means the clause is unfinished.
 
-    Conservative: a ``?`` or ``!`` ending is complete; fewer than three words is an answer;
+    Conservative: a ``?`` or ``!`` ending is complete; so is a verb-final question without one ("What symptoms does mold
+    cause" - ``_verb_final_question``); fewer than three words is an answer;
     a weak word ("that", "which", "que") only counts in a long statement that does not open
     like a question ("what was that" is complete).
     """
@@ -227,7 +273,7 @@ def ends_incomplete(text: str, languages: tuple[str, ...] | None = None) -> bool
     if last in _union("strong_continuers", langs):
         if last in _union("ambiguous_continuers", langs):
             clipped = re.search(r"['’]" + re.escape(last) + r"\W*$", s, re.IGNORECASE) is not None
-            if not clipped and words[-2] in _union("noun_cues", langs):
+            if not clipped and (words[-2] in _union("noun_cues", langs) or _verb_final_question(words, langs)):
                 return False
         return True
     if last in _union("weak_continuers", langs) and len(words) >= _MIN_WEAK_HOLD_WORDS:
@@ -242,14 +288,26 @@ class Verdict:
     reason: str
 
 
-def _names_other_person(text: str, langs: list[_Lang]) -> bool:
+def _vocative_names(text: str, langs: list[_Lang]) -> list[str]:
+    """The (lower-cased) names the text addresses: a vocative or a greeting target that is not a weekday / "thanks" / Zoe."""
     not_names = _union("not_names", langs)
+    out = []
     for rx in (_VOCATIVE, _GREETED):
         for m in rx.finditer(text or ""):
             candidate = m.group(1).replace("’", "'").lower()
             if candidate not in not_names and not _ZOE_NAME.fullmatch(candidate):
-                return True
-    return False
+                out.append(candidate)
+    return out
+
+
+def _names_other_person(text: str, langs: list[_Lang]) -> bool:
+    return bool(_vocative_names(text, langs))
+
+
+def _is_short_answer(words: list[str], names: list[str], langs: list[_Lang]) -> bool:
+    """True when, once the addressed name is set aside, nothing is left but 1-3 short-answer words ("Yes, Casey.")."""
+    rest = [w for w in words if w not in names]
+    return 0 < len(rest) <= 3 and all(w in _union("short_answers", langs) for w in rest)
 
 
 def _has_shape(text: str, words: list[str], langs: list[_Lang]) -> str:
@@ -273,7 +331,7 @@ def addressedness(text: str, window: str | None, *, prev_reply_question: bool = 
 
     Default (``on``) acts on POSITIVE evidence only: the utterance names another person as
     the addressee (a vocative: ", Name." / "Hey Name") and has no question / command shape
-    and does not name Zoe. A plain statement with no such evidence is let through — in an
+    (an acknowledgement does not count: "Thanks for the help, Casey." is said TO Casey) and does not name Zoe. A plain statement with no such evidence is let through — in an
     open follow-up the owner often keeps talking TO Zoe in statements.
     ``strict`` additionally requires a 5 s ``followup`` utterance to look like a question,
     command or acknowledgement, to answer a question Zoe just asked, or to be a few words
@@ -292,7 +350,12 @@ def addressedness(text: str, window: str | None, *, prev_reply_question: bool = 
         return Verdict(True, "name")
     shape = _has_shape(text, words, langs)
     vocative = _names_other_person(text, langs)
-    if vocative and not shape:
+    if vocative and shape not in ("question", "command"):
+        # Only a question or a command shape beats a vocative ("What time is it, Casey?"). An acknowledgement is the shape of a
+        # reply TO Casey ("Thanks for the help, Casey."), so it does not. One exception: Zoe just asked a question, so a bare short
+        # answer ("Yes, Casey.", "Okay, Casey.") may be the answer to it. Gratitude and praise never are.
+        if prev_reply_question and _is_short_answer(words, _vocative_names(text, langs), langs):
+            return Verdict(True, "answer")
         return Verdict(False, "vocative")
     if strict and window == "followup":
         if prev_reply_question:

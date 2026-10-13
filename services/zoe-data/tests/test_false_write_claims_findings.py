@@ -404,3 +404,36 @@ def test_an_abbreviation_item_is_added_on_both_parsers(said, item):
 @pytest.mark.parametrize("raw", ["milk. Actually no, add eggs", "dr pepper. Actually no, add eggs", "bread. And cheese"])
 def test_a_spoken_correction_with_a_full_stop_is_still_declined(raw):
     assert list_service.clean_item_text(raw) == ""
+
+
+# ── follow-up to #2004: an auxiliary homograph INSIDE a noun compound after a possessive ──────────────────────────────────
+# "my tin can opener" has "can" at index 1 (not first, not last), so the old rule read it as a predicate. A noun use is known by
+# what follows it (lexicon data, ``list_service._NOUN_COMPOUNDS``); "my phone can ring" / "my phone will not work" stay sentences.
+# Negative controls: dropping the ``_is_noun_compound`` clause fails the compound tests; treating EVERY mid-phrase homograph as a noun fails
+# the sentence tests (and the older ones above).
+@pytest.mark.parametrize("item", [
+    "my tin can opener", "my brother's can opener", "my last will and testament", "our old can of paint",
+    "my spare can of soup", "your electric can opener", "my mum's last will and testament", "my recycling can lid",
+])
+def test_a_homograph_inside_a_noun_compound_is_still_an_item(item):
+    assert list_service.is_plausible_item(item) is True
+
+
+@pytest.mark.parametrize("item", [
+    "my phone can ring", "my phone will not work", "my phone will and does ring", "my brother can open it",
+    "my tin can is empty", "my old phone can open files", "my dog will bark", "my last will is missing",
+])
+def test_the_same_auxiliaries_in_predicate_position_are_still_sentences(item):
+    assert list_service.is_plausible_item(item) is False
+
+
+@pytest.mark.parametrize("said,item", [
+    ("add my tin can opener to my shopping list", "my tin can opener"),
+    ("add my brother's can opener to the work list", "my brother's can opener"),
+    ("add my last will and testament to my to-do list", "my last will and testament"),
+])
+def test_a_homograph_compound_item_takes_the_deterministic_add_path(said, item):
+    i = intent_router.detect_intent(said, log_miss=False)
+    assert i is not None and i.name == "list_add" and i.slots["item"] == item, i
+    s = classify_skybridge_intent(said)
+    assert s is not None and s.action == "add_item" and item.endswith(s.item_text) and len(s.item_text.split()) >= 3, s

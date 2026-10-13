@@ -1417,7 +1417,9 @@ and re-sends one merged clip marked `continued` (never held twice), or the origi
 resumes. Conservative on purpose: fewer than 3 words, a `?`/`!` ending, "so" and "though" never
 hold; "that"/"which"/"que"/"si"... only hold in a 6+ word utterance that does not open like a
 question ("what was that" is complete); "cause" holds only as a conjunction (not after
-the/a/my/root/... or a pronoun/modal, unless written `'cause`). **Cost:** only a turn ending on such a word pays — the
+the/a/my/root/... or a pronoun/modal, unless written `'cause`, and not at the end of a finished verb-final question - an
+object-fronted wh-question ("what"/"which"/"who") with a subject-auxiliary before a `verb_final` verb, so "What symptoms does
+mold cause" with no punctuation is complete and costs no extra wait or second transcription; but when a pronoun subject follows the auxiliary and another word comes before the last, the question already has its own main verb and "cause" is "because" - "What should I do cause" still holds). **Cost:** only a turn ending on such a word pays — the
 wait, plus a second STT pass on the retry. Every other turn is byte-identical. **Known limit:** the
 mic is closed for the STT round trip (~0.5 s), so a word spoken in that gap is lost; the listen
 opens right after, and a pause after "and" is normally longer. The seamless fix is the under-speech
@@ -1438,7 +1440,7 @@ noise a side conversation does not want.
 | Mode | Drops | Trade-off |
 |---|---|---|
 | `off` (default) | nothing | today's behaviour |
-| `on` | an utterance that names another person as the addressee (a vocative: `, Name.` or `Hey Name`) **and** has no question/command/acknowledgement shape **and** does not say "Zoe" | catches both 2026-10-12 side-speech clips and nothing else; a statement with no such evidence is let through, so the owner can keep talking to Zoe in statements |
+| `on` | an utterance that names another person as the addressee (a vocative: `, Name.` or `Hey Name`) **and** has no question/command shape **and** does not say "Zoe". An acknowledgement ("Thanks for the help, Casey.") is the shape of a reply TO Casey, so it does not override the vocative; the one exception is a bare short answer (`short_answers` data: yes / yeah / okay / sure / no ... plus the name, at most 3 words) right after Zoe asked a question (`prev_reply_question`), which may be the answer; gratitude and praise to someone else ("Thanks for the help, Casey.", "Great job today, Casey.") are dropped even then | catches both 2026-10-12 side-speech clips and nothing else; a statement with no such evidence is let through, so the owner can keep talking to Zoe in statements |
 | `strict` | `on`, plus in a 5 s follow-up any plain statement that is not a question/command/acknowledgement, not an answer to a question Zoe asked, and longer than 3 words | the most protection from side speech, but it also drops a real statement meant for Zoe (the 2026-10-12 evening was mostly statements to Zoe in follow-up windows), so it needs the owner's explicit choice |
 
 Known false-positive risk of `on`: a place or brand after a comma (`..., Lisbon.`) looks like a
