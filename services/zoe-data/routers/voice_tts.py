@@ -26,6 +26,7 @@ from typed_env import env_bool, env_float, env_int, env_list, env_str
 import voice_first_sound as _first_sound
 import voice_speculation as _speculation
 import voice_stt_stream as _stt_stream
+import voice_utterance_shape as _utterance_shape
 import speaker_adaptation
 from voice_speaker_id import _compute_resemblyzer_embedding, _cosine_similarity
 # Waterfall engine mechanics live in tts_waterfall; they are re-exported here so
@@ -5602,6 +5603,34 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
             yield (_json.dumps({"transcript": "", "done": True, "reply": ""}) + "\n").encode()
         return StreamingResponse(
             _gated(_empty()), media_type="application/x-zoe-audio-stream", headers={"Cache-Control": "no-cache"}
+        )
+
+    # ── Pre-brain utterance gate: hold a clause cut mid-sentence, drop side speech ──
+    # Answers with a done frame INSTEAD of running the brain, before the transcript is
+    # broadcast or any memory/tool work starts, so a held or dropped turn leaves no trace
+    # but this log line. ``incomplete``: the transcript ends on "and"/"but"/...; the daemon
+    # listens a short extra window and re-sends ONE merged clip. ``skipped``: a follow-up
+    # window utterance that names someone else (ZOE_FOLLOWUP_ADDRESSED, default off).
+    # Never on a speculative turn (its own verdict protocol owns it). Fail-open.
+    try:
+        _gate = _utterance_shape.gate_frame(payload, transcript, speculative=_spec_gate is not None)
+    except Exception as _gate_exc:
+        logger.warning("voice/turn_stream utterance gate failed (non-fatal): %s", _gate_exc)
+        _gate = None
+    if _gate is not None:
+        _gate_kind = "incomplete" if _gate.get("incomplete") else "not_addressed"
+        logger.info("voice/turn_stream panel=%s %s (%s): %r", panel_id, _gate_kind,
+                    _gate.get("reason") or "trailing continuation word", transcript[:80])
+        try:
+            from voice_metrics import voice_turn_count
+            voice_turn_count.labels(outcome=_gate_kind, path="turn_stream").inc()
+        except Exception:
+            pass
+
+        async def _gated_done():
+            yield (_json.dumps(_gate) + "\n").encode()
+        return StreamingResponse(
+            _gated_done(), media_type="application/x-zoe-audio-stream", headers={"Cache-Control": "no-cache"}
         )
 
     logger.info("voice/turn_stream panel=%s STT=%.2fs transcript=%r", panel_id, t_stt, transcript[:80])

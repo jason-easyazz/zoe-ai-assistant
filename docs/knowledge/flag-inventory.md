@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-623 flags; 621 not documented in `.env.example`.
+627 flags; 625 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -109,6 +109,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_CONTACT_BACKFILL_ENABLED` | `''` | no | NO | `services/zoe-data/contact_backfill.py` |
 | `ZOE_CONTACT_OFFER_BATCH` | `''` | no | NO | `services/zoe-data/contacts_conversation.py` |
 | `ZOE_CONTEXT_TOKEN_BUDGET` | `5500` | yes | NO | `services/zoe-data/zoe_agent.py` |
+| `ZOE_CONTINUE_WINDOW_S` | `2.0` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_CONVERSATION_ENDER_ACKS` | `dynamic` | no | NO | `services/zoe-data/conversation_opener.py` |
 | `ZOE_CONVERSATION_FEEDBACK` | `True` | yes | NO | `services/zoe-data/conversation_feedback.py` |
 | `ZOE_CORE_DATA_URL` | `-` | no | NO | `services/zoe-data/zoe_core_client.py` |
@@ -195,6 +196,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_FLUE_BRAIN_URL` | `-` | no | NO | `services/zoe-data/zoe_flue_client.py` |
 | `ZOE_FLUE_STREAM_ENABLED` | `-` | no | NO | `services/zoe-data/zoe_flue_client.py` |
 | `ZOE_FLUE_WIRE` | `-` | no | NO | `services/zoe-data/zoe_flue_client.py` |
+| `ZOE_FOLLOWUP_ADDRESSED` | `'off'` | no | NO | `services/zoe-data/voice_utterance_shape.py` |
 | `ZOE_FORGET_ALIAS_SWEEP` | `-` | no | NO | `services/zoe-data/memory_forget_alias.py` |
 | `ZOE_FORGET_LEDGER_SALT` | `-` | no | NO | `services/zoe-data/memory_forgotten.py` |
 | `ZOE_FORGET_NEAR` | `-` | no | NO | `services/zoe-data/memory_forgotten.py` |
@@ -398,6 +400,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_PERF` | `-` | no | NO | `scripts/perf/engine_bench.py`<br>`scripts/perf/hop_placement_ab.py`<br>`scripts/perf/kokoro_first_chunk_probe.py`<br>`scripts/perf/measure_first_sound.py`<br>`scripts/perf/measure_speed.py`<br>`scripts/perf/measure_tts.py`<br>`scripts/perf/measure_voice.py`<br>`scripts/perf/person_half_enforce_ab.py`<br>`scripts/perf/recall_evidence_probe.py`<br>`scripts/perf/samantha_bar.py`<br>`scripts/perf/samantha_day_sim.py`<br>`scripts/perf/samantha_person.py`<br>`scripts/perf/tool_use_bench.py`<br>`scripts/perf/user_model_ab.py` |
 | `ZOE_PERSONALISATION_HOP` | `True` | yes | NO | `services/zoe-data/personalisation_hop.py` |
 | `ZOE_PERSONALISATION_HOP_PLACEMENT` | `'block'` | yes | NO | `services/zoe-data/personalisation_hop.py` |
+| `ZOE_PERSONALISATION_HOP_WORDING` | `'natural'` | yes | NO | `services/zoe-data/personalisation_hop.py` |
 | `ZOE_PERSONA_DRIFT` | `False` | yes | NO | `services/zoe-data/persona_drift.py` |
 | `ZOE_PERSONA_LAYER` | `False` | yes | NO | `services/zoe-data/persona_layer.py` |
 | `ZOE_PERSON_BENCH_DIR` | `-` | no | NO | `scripts/perf/person_half_replay.py` |
@@ -603,6 +606,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_VOICE_BARGE_IN` | `'0'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_VOICE_BASELINE` | `dynamic` | no | NO | `scripts/maintenance/voice_gate_check.py`<br>`scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_CHAT_TIMEOUT_S` | `'20'` | no | NO | `services/zoe-data/routers/voice_tts.py`<br>`services/zoe-data/zoe_agent.py` |
+| `ZOE_VOICE_CONTINUATION_HOLD` | `'on'` | no | NO | `services/zoe-data/voice_utterance_shape.py` |
 | `ZOE_VOICE_FAST_FIRST_AUDIO` | `True` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_FILLER_AFTER_S` | `'1.6'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_FILLER_ENABLED` | `False` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
