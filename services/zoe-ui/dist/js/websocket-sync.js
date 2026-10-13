@@ -53,9 +53,11 @@ class ZoeWebSocketSync {
         console.log(`🔌 Connecting WebSocket: ${this.endpoint}`);
         
         try {
-            this.ws = new WebSocket(wsUrl);
+            const ws = new WebSocket(wsUrl);
+            this.ws = ws;
             
-            this.ws.onopen = () => {
+            ws.onopen = () => {
+                if (this.ws !== ws) return;
                 console.log(`✅ WebSocket connected: ${this.endpoint}`);
                 this.isConnected = true;
                 this.reconnectAttempts = 0;
@@ -69,7 +71,8 @@ class ZoeWebSocketSync {
                 }
             };
             
-            this.ws.onmessage = (event) => {
+            ws.onmessage = (event) => {
+                if (this.ws !== ws) return;
                 this.lastRxAt = Date.now();
                 try {
                     const data = JSON.parse(event.data);
@@ -79,14 +82,16 @@ class ZoeWebSocketSync {
                 }
             };
             
-            this.ws.onclose = () => {
+            ws.onclose = () => {
+                if (this.ws !== ws) return;   // a superseded socket's late close must not touch the live one
                 console.log(`❌ WebSocket closed: ${this.endpoint}`);
                 this.isConnected = false;
                 this.stopPingInterval();
                 this.reconnect();
             };
             
-            this.ws.onerror = (error) => {
+            ws.onerror = (error) => {
+                if (this.ws !== ws) return;
                 console.error(`⚠️ WebSocket error: ${this.endpoint}`, error);
                 this.isConnected = false;
             };
@@ -359,6 +364,8 @@ window.ZoeWebSockets = {
         const nudge = () => {
             const p = this.push;
             if (!p || p.stopped) return;
+            // The panel executor owns the page lifecycle: no nudge while it is unloading / stopped on purpose.
+            if (typeof window._zoePushNudgeAllowed === 'function' && !window._zoePushNudgeAllowed()) return;
             if (p.ws && p.ws.readyState <= WebSocket.OPEN) return;   // connecting or open
             if (p.reconnectTimeout) { clearTimeout(p.reconnectTimeout); p.reconnectTimeout = null; }
             p.reconnectAttempts = 0;
@@ -398,32 +405,37 @@ window.ZoeWebSockets = {
                 // and the online/visible nudges can all call this at once: two live sockets would
                 // deliver every voice event twice). A handshake that hangs past 15 s is replaced.
                 if (rs === WebSocket.CONNECTING && Date.now() - (this.connectStartedAt || 0) < 15000) return;
-                if (rs <= WebSocket.CONNECTING) {
-                    const hung = this.ws;
-                    this.ws = null;
-                    try { hung.onopen = null; hung.onmessage = null; hung.onclose = null; hung.onerror = null; hung.close(); } catch (_) { /* already closed */ }
-                }
+                // Any other superseded socket (hung CONNECTING, CLOSING, CLOSED) is detached: its delayed
+                // onclose must never reach this instance's state (it would stop the NEW socket's heartbeat).
+                const old = this.ws;
+                this.ws = null;
+                try { old.onopen = null; old.onmessage = null; old.onclose = null; old.onerror = null; old.close(); } catch (_) { /* already closed */ }
             }
             console.log('[ZoeWS] Connecting push channel:', pushUrl);
             this.connectStartedAt = Date.now();
             try {
-                this.ws = new WebSocket(pushUrl);
-                this.ws.onopen = () => {
+                const ws = new WebSocket(pushUrl);
+                this.ws = ws;
+                // Every handler is bound to ITS socket: a late event from a superseded one is ignored.
+                ws.onopen = () => {
+                    if (this.ws !== ws) return;
                     this.isConnected = true;
                     this.reconnectAttempts = 0;
                     this.startPingInterval();
                     if (this.callbacks['connected']) this.callbacks['connected']();
                 };
-                this.ws.onmessage = (event) => {
+                ws.onmessage = (event) => {
+                    if (this.ws !== ws) return;
                     this.lastRxAt = Date.now();
                     try { this.handleMessage(JSON.parse(event.data)); } catch(e) {}
                 };
-                this.ws.onclose = () => {
+                ws.onclose = () => {
+                    if (this.ws !== ws) return;
                     this.isConnected = false;
                     this.stopPingInterval();
                     this.reconnect();
                 };
-                this.ws.onerror = () => { this.isConnected = false; };
+                ws.onerror = () => { if (this.ws === ws) this.isConnected = false; };
             } catch(e) { this.reconnect(); }
         };
 

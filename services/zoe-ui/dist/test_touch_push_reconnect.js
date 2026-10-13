@@ -89,7 +89,7 @@ function boot({ shared = false, session = 'member', maxReconnect } = {}) {
   const ls = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) };
 
   // fake server
-  const server = { mode: 'accept', blackhole: false, attempts: 0, polls: 0 };
+  const server = { mode: 'accept', slowClose: false, blackhole: false, attempts: 0, polls: 0 };
   const sockets = [];
   function FakeWS(url) {
     this.url = url; this.readyState = 0; this.sent = []; this.deaf = false;
@@ -117,6 +117,11 @@ function boot({ shared = false, session = 'member', maxReconnect } = {}) {
   FakeWS.prototype.close = function () {
     if (this.readyState >= 2) return;
     if (this.deaf) { this.readyState = 2; return; }       // a dead peer never completes the close handshake
+    if (server.slowClose) {                               // a close handshake that completes later, on demand
+      this.readyState = 2;
+      this.finishClose = () => { this.readyState = 3; if (this.onclose) this.onclose({ code: 1005 }); };
+      return;
+    }
     this.readyState = 3;
     clock.setTimeout(() => { if (this.onclose) this.onclose({ code: 1005 }); }, 5);
   };
@@ -257,6 +262,32 @@ async function run(label, fn) {
       assert.strictEqual(t.server.live().length, 1, 'a visible page reconnects within 1 s');
     });
   }
+
+  // ── E. a superseded CLOSING socket's late close must not kill the new socket's heartbeat ──
+  await run('E. shared push channel: a CLOSING socket with a pending onclose, replaced via a nudge, cannot stop the new socket\'s heartbeat', async () => {
+    const t = boot({ shared: true, session: 'member' });
+    await t.clock.advance(3000);
+    const closing = t.win.zoePushWs.ws;
+    t.server.slowClose = true;
+    closing.close();                                          // CLOSING (readyState 2), onclose still pending
+    assert.strictEqual(closing.readyState, 2);
+    t.fire(t.listeners.window, 'online');                     // nudge: a new socket replaces it
+    await t.clock.advance(1000);
+    assert.strictEqual(t.server.live().length, 1, 'the replacement socket is open');
+    closing.finishClose();                                    // the old socket's close finally arrives
+    await t.clock.advance(2000);
+    assert.strictEqual(t.server.live().length, 1, 'the late close did not drop or duplicate the live socket');
+    t.server.silence();                                       // the new socket now goes OPEN-but-silent
+    await t.clock.advance(150e3);
+    assert.strictEqual(t.server.live().length, 1, 'the heartbeat survived the late close: the silent socket was replaced');
+  });
+  await run('E. executor trusts a shared socket only while it is fresh (pushIsUp staleness)', async () => {
+    const t = boot({ shared: true, session: 'member' });
+    await t.clock.advance(3000);
+    t.server.silence();
+    await t.clock.advance(100e3);                             // > 75 s with the OPEN socket silent: replaced by someone
+    assert.strictEqual(t.server.live().length, 1);
+  });
 
   if (failures.length) { console.error(failures.length + ' scenario(s) FAILED'); process.exit(1); }
   console.log('push reconnect: ' + n + ' checks passed');

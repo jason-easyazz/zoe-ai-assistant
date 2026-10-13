@@ -487,7 +487,8 @@
         try {
             if (state.pushWs && state.pushWs.readyState === 1 && !pushSocketStale()) return true;
             const shared = window.zoePushWs;
-            if (shared && shared.ws && shared.ws.readyState === 1) return true;
+            if (shared && shared.ws && shared.ws.readyState === 1
+                && !(shared.staleAfterMs && Date.now() - (shared.lastRxAt || 0) > shared.staleAfterMs)) return true;
         } catch (_) { /* treat as down */ }
         return false;
     }
@@ -2689,6 +2690,8 @@ body.light-mode .zaf-btn-cancel { background: rgba(0,0,0,0.07); color: rgba(26,2
             state.seenActions.add(key);
             executeAction(normalized).then((result) => ackAction(normalized.id, result)).catch(() => {});
         };
+        // websocket-sync.js asks before its own online/visible reconnect nudge (never while unloading / stopped).
+        window._zoePushNudgeAllowed = () => !(state.unloading || state.viewer || state.panelServicesStopped || state.pushStopped);
         window._zoeSetOrbMode = setOrbMode;
         window._zoeResetAutoHomeTimer = resetAutoHomeTimer;
 
