@@ -460,7 +460,28 @@
  },
  "change_cues": ["en\\s+(?:su\\s+)?lugar", "en\\s+vez\\s+de", "se\\s+(?:cancel[oó]|suspendi[oó]|aplaz[oó]|pospuso)", "cancelad[oa]s?", "suspendid[oa]s?", "aplazad[oa]s?", "pospuest[oa]s?", "cambi(?:[oó]|amos|aron|ado|ada)", "se\\s+mud[oó]", "nos\\s+mudamos", "mudad[oa]", "ya\\s+no", "al\\s+final\\s+no", "se\\s+adelant[oó]", "se\\s+atras[oó]", "ahora\\s+(?:vive|viven|trabaja|trabajan|est[aá]n?|vamos|voy|va|van|tiene|tienen)", "cambiad[oa]s?"],
  "clause_joiners": ["mientras\\s+que", "mientras", "pero", "aunque", "sino", "y", "e", "sin\\s+embargo"],
- "manner": {"block": "Con las personas: cuando alguien comparte un sentimiento, primero devuelve lo que entendiste con unas pocas palabras tuyas, y luego calla o haz UNA sola pregunta; da consejos solo si te los piden. Menciona una cosa concreta de lo que te contaron, y nunca adules ni exageres. Si su plan tiene un problema real, dilo una sola vez, con cariño, y luego respeta su decisión; si es un buen plan, dilo con sencillez. Haz una pregunta a la vez. Nunca insinúes que deberían quedarse ni que los echaste de menos. Cuando se despidan por la noche, despídete sin más."},
+ "manner": {"block": "Habla como una amiga, no como una terapeuta. Nunca empieces con \"Suena a que\", \"Parece que\" o \"Te entiendo\", ni repitas lo que acaban de decir. Empieza con algo tuyo: un dato, una opinión de verdad, una idea relacionada, un siguiente paso. Si están mal, basta una frase corta (\"Uf, qué duro.\") y sigue. Haz como máximo una pregunta, solo si la respuesta cambia lo que dirás; si no, termina con una afirmación. Si te critican, tómalo como un comentario sobre ti: nombra lo concreto y di qué harás. Nunca repitas tu respuesta anterior. Nunca adules."},
+ "mirror": {
+  "_note": "mirror_guard.py (see en.json): las formulas de escucha reflexiva con que una respuesta puede ABRIR. Palabras en minuscula y sin acentos, al inicio de frase tras una muletilla. Escrito por el autor, sin revision nativa.",
+  "fillers": ["oh", "vaya", "bueno", "pues", "mmm", "hmm", "ah", "ay", "uf", "ojala", "anda", "oye", "bien", "si"],
+  "openers": [
+   "suena a que", "suena como", "suena a", "parece que", "parece como si", "me da la impresion", "se nota que", "se oye que", "se siente como",
+   "te noto", "te oigo", "te escucho", "te entiendo", "entiendo que", "entiendo como", "entiendo tu", "lo que escucho", "lo que oigo", "lo que me dices es",
+   "puedo imaginar", "puedo notar", "puedo sentir", "debe ser", "tiene que ser", "debe de haber sido", "debio de ser", "tiene que haber sido",
+   "es comprensible", "es totalmente comprensible", "es normal que", "es natural que", "es normal sentir", "es natural sentir", "tiene sentido que"
+  ],
+  "contrast": ["pero", "aunque", "sin embargo"],
+  "intensifiers": ["muy", "tan","realmente", "bastante", "verdaderamente", "super", "totalmente", "de verdad"],
+  "positive_exempt": [
+   "un buen", "una buena", "un gran", "una gran", "un excelente", "una excelente", "un plan", "una idea", "buen plan", "buena idea", "genial", "divertido",
+   "divertida", "bien", "bueno", "buena", "perfecto", "perfecta", "estupendo", "estupenda", "maravilloso", "maravillosa", "delicioso", "deliciosa", "riquisimo"
+  ],
+  "generic_closers": [
+   "como te sientes", "como te sientes con eso", "como te sientes al respecto", "como estas", "como lo llevas", "como te ha caido", "que tienes en mente",
+   "que piensas", "quieres hablar de ello", "quieres hablar de eso", "te gustaria hablar de ello", "quieres contarme mas", "cuentame mas", "hay algo mas",
+   "hay algo mas en lo que pueda", "en que puedo ayudarte", "como puedo ayudarte", "como puedo apoyarte", "que te gustaria hacer", "que esta pasando"
+  ]
+ },
  "risk_cues": {
   "_note": "Author-written, NOT native-reviewed (reviewed=false, like the rest of this file). The risk-cue tier in Spanish; see en.json 'risk_cues' for the shape and the meaning of every key. Apostrophes are normalised to ' before matching; accents are matched with [aá]-style classes. Only the user's words are ever read with these.",
   "reviewed": false,
@@ -662,6 +683,15 @@
    "late": "Horario: el {1} es a la hora del {0} o después, así que lo perdería.",
    "double": "Horario: hay dos cosas a la misma hora (\"{0}\" y \"{1}\")."
   }
+ },
+ "memory_challenge": {
+  "_note": "El usuario pone a prueba la memoria de Zoe ('¿no te acuerdas?', 'ya lo sabes', 'ya hablamos de eso'). Fragmentos de regex, sin distinguir mayúsculas.",
+  "patterns": [
+   "\\b(?:no\\s+)?te\\s+(?:acuerdas|recuerdas)\\b",
+   "\\bya\\s+lo\\s+sabes\\b",
+   "\\bya\\s+(?:hablamos|conversamos|te\\s+(?:lo\\s+)?(?:dije|cont[eé]|mencion[eé]))\\b",
+   "\\bte\\s+(?:lo\\s+)?(?:dije|cont[eé]|mencion[eé])\\s+(?:antes|ya|hoy)\\b"
+  ]
  },
  "spacer": {
   "_note": "voice_spacer.py: lineas cortas que llenan una espera; ver en.json. Escrito por el autor del cambio, sin revision nativa.",

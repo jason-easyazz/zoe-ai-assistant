@@ -37,6 +37,18 @@ INTERVIEW = "User is anxious about a job interview at the aquarium on Friday"
 PARCEL = "parcel pickup at the depot on Friday"
 
 
+@pytest.fixture(autouse=True)
+def _router_model_loaded():
+    """Model the live service: the router's embedder is loaded, so the semantic head RUNS (a zero vector = it found nothing) and a
+    stamp is head-complete (v3). Without it a stamp is the lexicon version on purpose (test_restraint_head.py)."""
+    import numpy as np
+    import restraint_head
+    restraint_head.reset()
+    restraint_head.set_embedder(lambda _t: np.zeros(384, dtype=np.float32))
+    yield
+    restraint_head.reset()
+
+
 # ── the real migrations over SQLite ─────────────────────────────────────────
 def _mig(name: str):
     spec = importlib.util.spec_from_file_location(f"mig_{name}", SVC / f"alembic/versions/{name}.py")
@@ -268,8 +280,12 @@ def test_signals_name_the_decider_so_an_audit_can_tell_structure_from_a_word_lis
 
 
 def test_stamp_writes_the_class_and_row_classes_trusts_it_only_while_it_still_matches():
+    import restraint_head
     md = {"memory_type": "fact", "tags": ""}
     restraint.stamp(md, DENTIST)
+    assert md["sensitivity_v"] == restraint.LEXICON_VERSION      # the head has not run yet: it is queued for the worker, never embedded here
+    restraint_head.drain()
+    restraint.stamp(md, DENTIST)                                  # ... once the cache is filled, a re-stamp is head-complete
     assert md["sensitivity"] == "health,affect" and md["sensitivity_v"] == restraint.VERSION
     assert restraint.row_classes(md, DENTIST) == ("health", "affect")
     # the stored label is TRUSTED while version and hash match (proved by planting a label no text implies)

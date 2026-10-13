@@ -20,6 +20,7 @@ import pytest
 pytestmark = pytest.mark.ci_safe  # zoe_flue_client is slim; every fetch is stubbed
 
 import zoe_flue_client as zc
+from memory_gate import is_memory_challenge
 
 S4_ASK = "Ugh, I've been feeling a bit on edge today."
 S4_SEED = (
@@ -397,11 +398,30 @@ async def test_recall_floor_owns_personal_questions(monkeypatch):
     """A message both regexes match gets ONE block: the recall floor's."""
     monkeypatch.setenv("ZOE_SEAM_RECALL_INJECT", "1")
     calls = _stub(monkeypatch)
-    q = "do you remember what I said? I'm so anxious"
+    # Deliberately NOT a memory challenge ("do you remember what I said?" is one - see the next test): this pins the plain
+    # personal-question path, where the for-prompt packet is the ONLY fetch and the continuity fetchers never run.
+    q = "what did I say about the interview? I'm so anxious"
     assert zc._PERSONAL_QUESTION_RE.search(q) and zc._CONTINUITY_RE.search(q)
+    assert not is_memory_challenge(q)
     msg = await _outbound(q)
     assert zc._RECALL_BLOCK_OPEN in msg and zc._CONTINUITY_BLOCK_OPEN not in msg
     assert calls == {"continuity": 0, "portrait": 0, "recall": 1}
+
+
+@pytest.mark.asyncio
+async def test_recall_floor_owns_memory_challenges_and_sources_them_from_the_continuity_packet(monkeypatch):
+    """A memory CHALLENGE that is also a mood statement still gets ONE block - the recall floor's - but PR #2005 deliberately
+    sources that block from the continuity-mode packet (the last few days pinned ahead of relevance: "we talked about it today"
+    is about today's rows) and appends the grounding rule. So the continuity FETCH runs once, to fill the recall block; the
+    continuity BLOCK never appears and the for-prompt fetch does not run."""
+    monkeypatch.setenv("ZOE_SEAM_RECALL_INJECT", "1")
+    calls = _stub(monkeypatch)
+    q = "do you remember what I said? I'm so anxious"
+    assert zc._PERSONAL_QUESTION_RE.search(q) and zc._CONTINUITY_RE.search(q) and is_memory_challenge(q)
+    msg = await _outbound(q)
+    assert zc._RECALL_BLOCK_OPEN in msg and zc._CONTINUITY_BLOCK_OPEN not in msg
+    assert zc._CHALLENGE_RULE in msg and WORRY_BULLET in msg
+    assert calls == {"continuity": 1, "portrait": 0, "recall": 0}
 
 
 @pytest.mark.asyncio

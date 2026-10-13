@@ -54,6 +54,65 @@ router = APIRouter(prefix="/api/voice", tags=["voice"])
 _BG_TASKS: set = set()
 
 
+def _warn_if_panel_deaf(panel_id) -> None:
+    """One rate-limited WARNING when a voice turn targets a panel with zero push subscribers.
+
+    Every voice:* event and answer card reaches the wall panel ONLY over its /ws/push socket,
+    and ``broadcast``'s delivered count used to be ignored, so a deaf panel looked healthy
+    server-side (2026-10-12). Lives in its own try so it can never skip the broadcast it
+    precedes (tests swap ``push`` for a namespace with no such method)."""
+    try:
+        from push import broadcaster
+        broadcaster.warn_if_panel_deaf(panel_id)
+    except Exception:
+        pass
+
+
+def _panel_can_see(panel_id) -> bool:
+    """Is the target panel able to show a pushed form/card right now? (push.panel_live)
+
+    Gates every "check the panel / tap Done" line: while the wall panel was deaf
+    (2026-10-12) the voice path kept sending the owner to a form that never showed.
+    Fails CLOSED — if liveness cannot be read, say the result aloud."""
+    try:
+        from push import panel_live
+        return bool(panel_live(panel_id))
+    except Exception:
+        return False
+
+
+def _list_add_reply_text(item_text: str, items: list, panel_live: bool) -> str:
+    """Spoken reply for the list_add panel-form flow. Only points at the panel when it can
+    be seen. Otherwise NOTHING is claimed as written: this flow only queues a form and the
+    insert happens when someone taps Done, so with a dead panel the item is NOT on the list.
+    The honest line says so; a plain "show my list" is a read and is just said aloud."""
+    if panel_live:
+        # NOT "I've added ...": nothing is saved until Done is tapped, so the sentence must not say it was.
+        return f"Tap Done on the panel to save {item_text} to your list." if item_text else "Here's your shopping list."
+    existing = [str(i) for i in (items or []) if str(i).strip() and str(i).strip() != item_text]
+    shown = existing[:8]
+    more = "" if len(existing) <= 8 else f", and {len(existing) - 8} more"
+    if len(shown) > 1:
+        spoken = f"{', '.join(shown[:-1])} and {shown[-1]}{more}"
+    else:
+        spoken = shown[0] if shown else ""
+    if item_text:
+        lead = f"I can't show the panel right now, so I haven't added {item_text} to your list yet. Ask me again in a moment."
+        return lead + (f" What's on it now: {spoken}." if spoken else "")
+    return f"Here's your shopping list: {spoken}." if spoken else "Your shopping list is empty."
+
+
+def _calendar_form_reply_text(title: str, date: str, time_: str, panel_live: bool) -> str:
+    """Spoken reply for the calendar_create panel-form flow (same rule as _list_add_reply_text)."""
+    if panel_live:
+        return "Here's your calendar event — check the details and tap Confirm to save."
+    what = f"{title} on {date}" + (f" at {time_}" if time_ else "") if title else f"an event on {date}"
+    return (
+        f"I drafted {what}, but I can't show it on the panel right now, so I haven't saved it. "
+        "Try again in a moment."
+    )
+
+
 def _spawn_bg(coro) -> None:
     """Schedule a background coroutine with a strong reference (see _BG_TASKS).
 
@@ -1638,18 +1697,10 @@ def _parse_voice_form_field(text: str, panel_type: str) -> dict:
 
 
 def _panel_is_live(panel_id: Optional[str]) -> bool:
-    """Can this panel be told to show something right now (``push.PushBroadcaster.panel_live``)? A reply must not send the
-    user to "check the panel" when it is not - the result is said aloud instead. Fail-closed: any error means not live."""
-    try:
-        from push import broadcaster as _bc_live
-
-        return bool(_bc_live.panel_live(panel_id, max_ack_age_s=_PANEL_LIVE_ACK_MAX_S))
-    except Exception:
-        return False
-
-
-# How fresh the last panel ack must be (when acks are tracked at all) for the panel to count as live.
-_PANEL_LIVE_ACK_MAX_S = float(os.environ.get("ZOE_PANEL_LIVE_ACK_MAX_S", "600") or 600)
+    """Can this panel be told to show something right now? A reply must not send the user to "tap Done" / "check the
+    panel" when it is not - the result is said aloud instead. One liveness source (``push.panel_live``, via
+    ``_panel_can_see``): fail-closed, any error means not live."""
+    return _panel_can_see(panel_id)
 
 
 async def _broadcast_action_form_panel(
@@ -1658,14 +1709,18 @@ async def _broadcast_action_form_panel(
     data: dict,
     title: str = "",
     turn_key: Optional[str] = None,
+    owner_user_id: Optional[str] = None,
 ) -> None:
     """Broadcast a panel_show_action_form event so the touch overlay opens.
 
     panel_type: "calendar_event" | "shopping_list"
     data: pre-fill data dict (slots already parsed)
+    owner_user_id: the member the form is presented for. Bound server-side so the Done
+    (/api/ui/panel/form/confirm) refuses a guest session instead of saving the member's
+    entry under ``guest`` (the push socket that shows the form is not authenticated).
     """
     from panel_form_state import set_active_form
-    set_active_form(panel_id, panel_type, data)
+    set_active_form(panel_id, panel_type, data, owner_user_id=owner_user_id)
 
     delivery_key = turn_key or str(time.monotonic_ns())
     form_action = {
@@ -3780,6 +3835,7 @@ async def voice_command(
     # Show the user's words in the voice overlay before processing.
     try:
         from push import broadcaster as _bc
+        _warn_if_panel_deaf(panel_id)
         await _bc.broadcast("all", "voice:transcript", {"panel_id": panel_id, "text": text})
     except Exception:
         pass
@@ -3812,7 +3868,7 @@ async def voice_command(
             _xct = _xaudio.media_type
         try:
             from push import broadcaster as _bc_xd
-            await _bc_xd.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": reply_text[:200]})
+            await _bc_xd.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": reply_text})
             await _bc_xd.broadcast("all", "voice:done", {"panel_id": panel_id})
         except Exception:
             pass
@@ -3889,7 +3945,7 @@ async def voice_command(
 
                         await _bc_pi_done.broadcast("all", "voice:responding", {
                             "panel_id": panel_id,
-                            "text": reply_text[:200],
+                            "text": reply_text,
                             "pi_hybrid": True,
                         })
                         if str(_pi_hybrid.get("intent") or "") == "weather":
@@ -4028,7 +4084,7 @@ async def voice_command(
                         _sky_t_resolve, _bcast_dt, time.monotonic() - _synth_t0, stream, _skybridge_reply[:50])
             try:
                 from push import broadcaster as _bc_sky
-                await _bc_sky.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": _skybridge_reply[:200]})
+                await _bc_sky.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": _skybridge_reply})
                 await _bc_sky.broadcast("all", "voice:done", {"panel_id": panel_id})
             except Exception:
                 pass
@@ -4227,18 +4283,19 @@ async def voice_command(
                         # Flag so confirm endpoint knows which item is the new addition.
                         "new_item": _item_text,
                     }
-                    # NOT "I've added …": nothing is saved until Done is tapped, so the sentence must not say it was.
-                    reply_text = (
-                        f"Tap Done on the panel to save {_item_text} to your list." if _item_text
-                        else "Here's your shopping list."
-                    )
-                    await _broadcast_action_form_panel(
-                        panel_id=panel_id,
-                        panel_type="shopping_list",
-                        data=_list_form_data,
-                        title=_list_title,
-                        turn_key=_turn_key,
-                    )
+                    _form_live = _panel_can_see(panel_id)
+                    reply_text = _list_add_reply_text(_item_text, _prefill_items, _form_live)
+                    # Dead panel: queue NO form. The reply says nothing was added, and a form
+                    # that surfaced later would let a stale Done add it after the person asked again.
+                    if _form_live:
+                        await _broadcast_action_form_panel(
+                            panel_id=panel_id,
+                            panel_type="shopping_list",
+                            data=_list_form_data,
+                            title=_list_title,
+                            turn_key=_turn_key,
+                            owner_user_id=effective_user,
+                        )
                     _list_audio = await synthesize({"text": reply_text}, caller=caller)
                     await _schedule_voice_chat_save(session_id, text, reply_text, effective_user, speaker_verified=_speaker_verified)
                     _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id, speaker_verified=_speaker_verified))
@@ -4314,14 +4371,20 @@ async def voice_command(
                         "location": slots.get("location") or "",
                         "notes": slots.get("notes") or "",
                     }
-                    reply_text = "Here's your calendar event — check the details and tap Confirm to save."
-                    await _broadcast_action_form_panel(
-                        panel_id=panel_id,
-                        panel_type="calendar_event",
-                        data=_cal_form_data,
-                        title="New Calendar Event",
-                        turn_key=_turn_key,
+                    _form_live = _panel_can_see(panel_id)
+                    reply_text = _calendar_form_reply_text(
+                        str(_cal_form_data["title"] or ""), str(_parsed_date), str(_parsed_time or ""),
+                        _form_live,
                     )
+                    if _form_live:   # dead panel: no form queued (the reply says nothing was saved)
+                        await _broadcast_action_form_panel(
+                            panel_id=panel_id,
+                            panel_type="calendar_event",
+                            data=_cal_form_data,
+                            title="New Calendar Event",
+                            turn_key=_turn_key,
+                            owner_user_id=effective_user,
+                        )
                     _cal_audio = await synthesize({"text": reply_text}, caller=caller)
                     await _schedule_voice_chat_save(session_id, text, reply_text, effective_user, speaker_verified=_speaker_verified)
                     _spawn_bg(_run_voice_memory_passes(text, reply_text, effective_user, session_id, speaker_verified=_speaker_verified))
@@ -4498,7 +4561,7 @@ async def voice_command(
                     pass
                 try:
                     from push import broadcaster as _bc_pub
-                    await _bc_pub.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": _pub_reply[:200]})
+                    await _bc_pub.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": _pub_reply})
                 except Exception:
                     pass
                 _pub_audio_resp = await synthesize({"text": _pub_reply}, caller=caller)
@@ -4716,6 +4779,47 @@ async def voice_command(
                 # next one can be held back to the cadence floor. None until the
                 # first delivery, so first-audio is never paced.
                 _last_emit_ts: Optional[float] = None
+                # The panel's screen must ALWAYS be told the turn ended (voice:done clears the
+                # orb's "thinking"). The happy path sends it inline below; the `finally` sends
+                # it for every other exit — a barge-in or client disconnect (GeneratorExit /
+                # CancelledError), a timeout, an error — which used to leave the panel on
+                # "thinking" until the next turn (2026-10-12).
+                # Two flags, each set only AFTER its await completes: a CancelledError (not an
+                # Exception, so the swallows below do not catch it) landing inside either
+                # broadcast leaves it unset, and the `finally` below re-runs the missing step.
+                # Setting one up front made a cancelled card send look "finished" and left the
+                # panel on "thinking" (PR #1999 review).
+                _card_sent = False
+                _screen_finished = False
+
+                async def _finish_panel_screen(reply: str) -> None:
+                    """The answer card (FULL text — the estate scrolls, and a card REPLACES the
+                    accumulated per-sentence text, so a slice here cut every long reply short),
+                    then voice:done. Idempotent per step; cancellation-safe (see above)."""
+                    nonlocal _card_sent, _screen_finished
+                    if _screen_finished:
+                        return
+                    if reply and not _card_sent:
+                        try:
+                            await _bc_stream.broadcast("all", "ui_action", {
+                                "action": {
+                                    "id": f"voice_card_{panel_id}",
+                                    "action_type": "show_card",
+                                    "payload": {
+                                        "type": "answer",
+                                        "data": {"text": reply},
+                                        "panel_id": panel_id,
+                                    },
+                                }
+                            })
+                        except Exception:
+                            pass
+                    _card_sent = True
+                    try:
+                        await _bc_stream.broadcast("all", "voice:done", {"panel_id": panel_id})
+                    except Exception:
+                        pass
+                    _screen_finished = True
 
                 async def _pace_delivery() -> None:
                     # Hold the just-synthesized audio until at least the cadence
@@ -4745,7 +4849,7 @@ async def voice_command(
                             full_reply_parts.append(s)
                         await _bc_stream.broadcast("all", "voice:responding", {
                             "panel_id": panel_id,
-                            "text": s[:200],
+                            "text": s,
                         })
 
                         # Prefer kokoro-sidecar (natural GPU voice); fall back to the
@@ -4916,24 +5020,7 @@ async def voice_command(
                         token_buf = ""
 
                     final_reply = " ".join(part.strip() for part in full_reply_parts if part.strip()).strip()
-                    try:
-                        await _bc_stream.broadcast("all", "ui_action", {
-                            "action": {
-                                "id": f"voice_card_{panel_id}",
-                                "action_type": "show_card",
-                                "payload": {
-                                    "type": "answer",
-                                    "data": {"text": final_reply[:300]},
-                                    "panel_id": panel_id,
-                                },
-                            }
-                        })
-                    except Exception:
-                        pass
-                    try:
-                        await _bc_stream.broadcast("all", "voice:done", {"panel_id": panel_id})
-                    except Exception:
-                        pass
+                    await _finish_panel_screen(final_reply)
                     try:
                         from voice_metrics import voice_stage_seconds, voice_turn_count
                         if _t_turn_start is None:
@@ -4951,6 +5038,17 @@ async def voice_command(
                     async for out_line in _emit_line({"error": "voice command stream failure"}):
                         yield out_line
                 finally:
+                    if not _screen_finished:
+                        # Abnormal exit (barge-in / disconnect / timeout / error). Schedule, never
+                        # await: a GeneratorExit unwind must not suspend, and a cancelled task
+                        # must not lose the voice:done to its own cancellation.
+                        _heard_now = " ".join(p.strip() for p in full_reply_parts if p.strip()).strip()
+                        try:
+                            _done_task = asyncio.ensure_future(_finish_panel_screen(_heard_now))
+                            _BG_TASKS.add(_done_task)
+                            _done_task.add_done_callback(_BG_TASKS.discard)
+                        except Exception as _done_exc:  # no running loop
+                            logger.debug("voice stream: could not schedule voice:done: %s", _done_exc)
                     if _prefetched is not None:
                         _prefetched.close_nowait()  # no-op once the stream ran to its end
                     if _v_packet is not None and _t_brain_dispatch is not None:
@@ -5172,7 +5270,7 @@ async def voice_command(
                 from push import broadcaster as _bc2
                 await _bc2.broadcast("all", "voice:responding", {
                     "panel_id": panel_id,
-                    "text": reply_text[:200],
+                    "text": reply_text,
                 })
                 await _bc2.broadcast("all", "ui_action", {
                     "action": {
@@ -5180,7 +5278,7 @@ async def voice_command(
                         "action_type": "show_card",
                         "payload": {
                             "type": "answer",
-                            "data": {"text": reply_text[:300]},
+                            "data": {"text": reply_text},
                             "panel_id": panel_id,
                         },
                     }
@@ -5348,6 +5446,7 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
     # Broadcast transcript so UI shows what was heard.
     try:
         from push import broadcaster as _bc_t
+        _warn_if_panel_deaf(panel_id)
         await _bc_t.broadcast("all", "voice:transcript", {"panel_id": panel_id, "text": transcript})
     except Exception:
         pass
@@ -5508,6 +5607,7 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     logger.info("voice/turn_stream panel=%s STT=%.2fs transcript=%r", panel_id, t_stt, transcript[:80])
     try:
         from push import broadcaster as _bc_t
+        _warn_if_panel_deaf(panel_id)
         await _bc_t.broadcast("all", "voice:transcript", {"panel_id": panel_id, "text": transcript})
     except Exception:
         pass

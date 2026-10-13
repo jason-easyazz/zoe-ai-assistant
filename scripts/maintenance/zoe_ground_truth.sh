@@ -140,6 +140,19 @@ if [ "$ha" = "active" ]; then
   bad "hermes-agent ACTIVE (listening=$ls on :8642) — if a doc says 'paused', the doc is stale"
 else dim "hermes-agent $ha"; fi
 
+# ── Wall panel push channel: can the panel hear voice events right now? ──────
+# Every voice:* event and answer card reaches the kiosk ONLY over its /ws/push
+# socket. 0 subscribers PROVES the panel is deaf (2026-10-12: an expired PIN
+# session made the executor close its own socket). Bounded (-m 2), read-only,
+# unauthenticated endpoint; override the id with ZOE_GT_PANEL_ID.
+hdr "WALL PANEL PUSH CHANNEL"
+_gt_panel="${ZOE_GT_PANEL_ID:-zoe-touch-pi}"
+_gt_push=$(curl -s -m 2 "http://127.0.0.1:8000/api/panels/${_gt_panel}/push-status" 2>/dev/null)
+_gt_subs=$(printf '%s' "$_gt_push" | python3 -c 'import json,sys; print(json.load(sys.stdin)["subscribers"])' 2>/dev/null)
+if [ -z "$_gt_subs" ]; then dim "push-status unreadable for ${_gt_panel} (zoe-data down, or an older build without the endpoint)"
+elif [ "$_gt_subs" = "0" ]; then bad "${_gt_panel}: ZERO push subscribers — the panel is DEAF to voice events: $_gt_push"
+else ok "${_gt_panel}: ${_gt_subs} push subscriber(s) connected"; fi
+
 # ── Load-bearing tables: row count + freshness (empty+documented-live=suspect)
 # Rendered from the parallel prefetch above. Count and freshness are separate
 # reads on purpose: the row count is the load-bearing signal (empty +

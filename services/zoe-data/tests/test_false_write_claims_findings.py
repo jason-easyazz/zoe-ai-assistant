@@ -335,7 +335,9 @@ class _Ws:
     pass
 
 
-def test_panel_live_needs_a_subscriber_on_the_panels_own_channel_and_a_fresh_ack_when_acks_are_tracked():
+def test_panel_live_needs_a_subscriber_on_the_panels_own_channel():
+    """The write-claim guard's "may I say check the panel?" question reads ONE liveness source: push.PushBroadcaster.panel_live
+    (a subscriber on the panel's OWN channel, or a recent UI-action ack). Its full matrix is pinned in test_push_panel_status.py."""
     from push import PushBroadcaster
 
     bc = PushBroadcaster()
@@ -344,12 +346,7 @@ def test_panel_live_needs_a_subscriber_on_the_panels_own_channel_and_a_fresh_ack
     assert bc.panel_live("panel-a") is False
     bc._connections["panel_panel-a"] = {_Ws()}
     assert bc.panel_live("panel-a") is True
-    assert bc.panel_live("panel-a", max_ack_age_s=60) is True          # no acks tracked: connection presence decides
-    bc.note_panel_ack("panel-a")
-    assert bc.panel_live("panel-a", max_ack_age_s=60) is True
-    bc._panel_acks["panel-a"] -= 600                                    # last proof of life was ten minutes ago
-    assert bc.panel_live("panel-a", max_ack_age_s=60) is False
-    assert bc.panel_live("panel-a") is True
+    assert bc.panel_live("panel-b") is False
 
 
 def test_the_voice_helper_fails_closed(monkeypatch):

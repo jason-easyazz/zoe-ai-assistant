@@ -230,10 +230,20 @@ def test_continuity_owns_an_event_shape_inside_a_feeling(monkeypatch, q):
 def test_personal_question_inside_a_feeling_stays_recall(monkeypatch):
     """The existing rule is unchanged: a my/I recall question is recall even
     with a feeling beside it."""
-    q = "do you remember what I said? I'm so anxious"
+    q = "what did I say about the interview? I'm so anxious"
     monkeypatch.delenv("ZOE_SEAM_CONTINUITY_INJECT", raising=False)
     monkeypatch.setenv("ZOE_SEAM_RECALL_INJECT", "1")
     assert zc._recall_floor_shape(q) == "personal"
+    assert not zc.is_continuity_turn(q, "demo-a")
+
+
+def test_memory_challenge_inside_a_feeling_stays_recall(monkeypatch):
+    """PR #2005 gave "do you remember what I said?" its own recall shape, "challenge" (a grounded block with a rule), checked ahead
+    of "personal". It is still RECALL, never a continuity turn - only the shape name changed."""
+    q = "do you remember what I said? I'm so anxious"
+    monkeypatch.delenv("ZOE_SEAM_CONTINUITY_INJECT", raising=False)
+    monkeypatch.setenv("ZOE_SEAM_RECALL_INJECT", "1")
+    assert zc._recall_floor_shape(q) == "challenge"
     assert not zc.is_continuity_turn(q, "demo-a")
 
 

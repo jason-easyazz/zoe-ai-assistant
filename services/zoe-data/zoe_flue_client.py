@@ -727,12 +727,18 @@ def _recall_question_shape(message: str) -> str:
     ``_recall_floor_shape`` — the ONE predicate the floor, the continuity
     exclusivity check and the offer ager share."""
     msg = message or ""
-    if _PERSONAL_QUESTION_RE.search(msg):
-        return "personal"
     from memory_gate import (  # stdlib-only
-        is_event_question, is_event_time_question, is_evidence_question,
+        is_event_question, is_event_time_question, is_evidence_question, is_memory_challenge,
         present_state_question_kind,
     )
+
+    if is_memory_challenge(msg):
+        # "Don't you remember?" / "we've already talked about it" / "Do you remember what I said?" (found in a live review, 2026-10-12): the whole turn is
+        # "look at what you have". Per-language data (memory_gate.is_memory_challenge); the block carries the grounding rule. Checked
+        # BEFORE the generic personal shape so a phrase both match still gets the grounding rule and the empty-result marker.
+        return "challenge"
+    if _PERSONAL_QUESTION_RE.search(msg):
+        return "personal"
 
     if _present_state_shapes_enabled():
         # "Am I still doing the half-marathon?", "How's my mum?" (day-sim 6/6n) and
@@ -1057,6 +1063,34 @@ async def _named_person_floor(message: str, user_id: str) -> list:
         return []
 
 
+# A memory challenge ("don't you remember?") is answered from what is STORED, never from what would sound right: the 4B first denied the
+# conversation, then described one that no row or turn holds ("you mentioning that you've been learning the cello ..."). The rule travels
+# INSIDE the block, and the block is sent even when nothing matched, so the denial stands on a looked-at record and the invention has
+# no room.
+_CHALLENGE_RULE = (
+    "The user is asking whether you remember something. Answer ONLY from the notes above. If a note covers it, say what it holds. "
+    "If none does, say plainly that you don't have that noted and ask them to tell you again. Never describe something they said, "
+    "or a past conversation, that these notes do not contain."
+)
+_CHALLENGE_EMPTY = "(Nothing stored matches what the user is asking about.)"
+
+
+async def _challenge_context_block(message: str, user_id: str) -> str:
+    """The recall block for a memory CHALLENGE turn - NEVER raises. The packet is the continuity-mode one (the last few days pinned
+    ahead of relevance: "we talked about it today" is about today's rows), capped like any recall block, and the grounding rule is
+    appended whether or not the packet holds anything."""
+    packet = ""
+    try:
+        res = await _fetch_continuity_packet(user_id, message)
+        packet = _truncate_packet(str((res or {}).get("packet") or "").strip())
+    except Exception as exc:  # noqa: BLE001 - the recall floor must never break a turn
+        logger.warning("seam memory-challenge recall failed, continuing with the rule only: %s", type(exc).__name__)
+    packet = packet.replace(_RECALL_BLOCK_CLOSE, "[​" + _RECALL_BLOCK_CLOSE[1:])
+    bullets = sum(1 for ln in packet.splitlines() if ln.lstrip().startswith(("-", "•", "*")))
+    logger.info("SEAM_RECALL user=%s shape=challenge bullets=%d chars=%d", user_id, bullets, len(packet))
+    return f"{_recall_block_open()}\n{packet or _CHALLENGE_EMPTY}\n{_CHALLENGE_RULE}\n{_RECALL_BLOCK_CLOSE}"
+
+
 async def _recall_context_block(message: str, user_id: str) -> str:
     """The delimited memory block for this turn, or '' — NEVER raises.
 
@@ -1083,6 +1117,8 @@ async def _recall_context_block(message: str, user_id: str) -> str:
             shape = "named_person"
     if not shape:
         return ""
+    if shape == "challenge":
+        return await _challenge_context_block(message, user_id)
     try:
         packet = await (_fetch_for_prompt_packet(user_id, message, focus=named) if named
                         else _fetch_for_prompt_packet(user_id, message))
@@ -1897,6 +1933,13 @@ async def run_flue_brain_streaming(
         import narration_filter
 
         turn = narration_filter.filter_stream(turn)
+    # A reply that opens "It sounds like ..." / "That sounds like ..." (the 4B's one empathy move) loses that sentence when something of
+    # substance follows it (mirror_guard, ZOE_MIRROR_GUARD=off|shadow|on, default shadow = byte-identical + a label-only log line).
+    # off: nothing wraps the stream. After the narration strip (so it sees the real first sentence), before clean_goodbye.
+    import mirror_guard
+
+    if mirror_guard.mode() != "off":
+        turn = mirror_guard.filter_stream(turn, _spoken)
     # A clean goodbye, a plain "are you there?", a silence never remarked on (clean_goodbye, ZOE_CLEAN_GOODBYE):
     # holds the reply ONLY on such a turn (a few anchored regexes on the user's words); every other turn streams
     # byte-identical. Outermost, so it cleans the text the owner would actually hear.

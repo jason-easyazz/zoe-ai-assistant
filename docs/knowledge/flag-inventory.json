@@ -3271,6 +3271,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_MIRROR_GUARD": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/mirror_guard.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_MIRROR_INTENTS_TO_OPENCLAW": {
         "defaults": [
           "'false'"
@@ -3840,16 +3850,6 @@
         "readers": [
           "scripts/maintenance/zoe_latency_probe.py",
           "services/zoe-data/zoe_agent.py"
-        ],
-        "typed_env": false
-      },
-      "ZOE_PANEL_LIVE_ACK_MAX_S": {
-        "defaults": [
-          "'600'"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "services/zoe-data/routers/voice_tts.py"
         ],
         "typed_env": false
       },
