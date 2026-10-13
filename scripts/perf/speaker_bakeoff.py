@@ -17,7 +17,22 @@ Sub-commands (run in the scratch venv, never the zoe-data venv):
                 RSS is clean.
   score         trials + metrics over every emb_*.npz; prints markdown tables, writes JSON.
   bench         time one model on a directory of PUBLIC wavs (for the Raspberry Pi: no
-                household audio is needed to measure latency).
+                household audio is needed to measure latency).  Takes variants (below), repeats
+                passes, and splits fbank vs inference time.
+
+ResNet34 optimisation round (record: docs/research/speaker-resnet34-optimisation-2026-10.md):
+
+  prep-cohort   build a PUBLIC score-normalisation cohort from LibriSpeech dev-clean
+                (speaker-disjoint from the test-clean trial set).
+  quantize      INT8 (dynamic, or static QDQ calibrated on the cohort) / FP16 export of an ONNX model.
+  drift         compare embeddings across ORT options / variants against a reference variant.
+  lab           the accuracy levers (enrolment recipe, S/AS-norm, length-dependent thresholds,
+                adaptation) - see scripts/perf/speaker_lab.py.
+
+A MODEL SPEC is ``name`` or ``name@key=value,key=value``; the keys (``file``, ``opt``, ``intra``,
+``inter``, ``arena``, ``mempat``, ``mode``, ``spin``, ``cap``, ``capmode``, ``trim``, ``strip``) are
+documented at ``parse_variant``.  Variants change nothing in ``MODELS``, so ``score`` still compares
+exactly the bake-off models.
 
 Hard guards (this box runs the live voice brain): CUDA is hidden unconditionally; the
 process refuses to start below ``--min-avail-mb`` MemAvailable (default 2048) and waits
@@ -25,7 +40,7 @@ process refuses to start below ``--min-avail-mb`` MemAvailable (default 2048) an
 (the 12B night window).  Run under ``nice -n 10`` AND inside a SHARED hold of the voice
 harness lock so it never overlaps a speed-gated replay probe:
 
-    flock -s -w 3600 /tmp/zoe-voice-harness.lock nice -n 10 \
+    flock -x -w 3600 /tmp/zoe-voice-harness.lock nice -n 10 \
         python3 scripts/perf/speaker_bakeoff.py embed --model <name> ...
 """
 from __future__ import annotations
@@ -64,6 +79,54 @@ MODELS = {
     # NeMo log-mel front end is not Kaldi fbank: use sherpa-onnx's extractor for it.
     "titanet_small": ("sherpa", "nemo_en_titanet_small.onnx"),
 }
+
+OPT_LEVELS = {
+    "none": "DISABLE_ALL", "basic": "ENABLE_BASIC", "extended": "ENABLE_EXTENDED", "all": "ENABLE_ALL",
+    "layout": "ENABLE_LAYOUT",
+}
+VARIANT_KEYS = {
+    "file": str,      # ONNX file name inside <scratch>/models (e.g. a quantised export)
+    "opt": str,       # graph optimisation: none|basic|extended|all|layout
+    "intra": int,     # intra-op threads (default: --threads)
+    "inter": int,     # inter-op threads (default 1; only meaningful with mode=par)
+    "arena": int,     # enable_cpu_mem_arena 0|1
+    "mempat": int,    # enable_mem_pattern 0|1
+    "mode": str,      # execution mode seq|par
+    "spin": int,      # session.intra_op.allow_spinning 0|1
+    "cap": float,     # embed at most this many seconds of the clip
+    "capmode": str,   # which seconds when capping: first|last|center|dense
+    "trim": float,    # drop leading/trailing frames this many dB under the peak frame
+    "strip": float,   # drop ALL frames this many dB under the peak frame (interior silence too)
+}
+
+
+def parse_variant(spec: str):
+    """``name@k=v,k=v`` -> (name, {k: typed v}).  Unknown keys/values raise ValueError."""
+    base, _, rest = spec.partition("@")
+    opts: dict = {}
+    for kv in filter(None, rest.split(",")):
+        k, eq, v = kv.partition("=")
+        if not eq or k not in VARIANT_KEYS:
+            raise ValueError(f"bad variant option {kv!r} in {spec!r}; keys: {sorted(VARIANT_KEYS)}")
+        try:
+            opts[k] = VARIANT_KEYS[k](v)
+        except ValueError:
+            raise ValueError(f"bad value for {k} in {spec!r}: {v!r}") from None
+    if "opt" in opts and opts["opt"] not in OPT_LEVELS:
+        raise ValueError(f"opt must be one of {sorted(OPT_LEVELS)}")
+    if "mode" in opts and opts["mode"] not in ("seq", "par"):
+        raise ValueError("mode must be seq|par")
+    if "capmode" in opts and opts["capmode"] not in ("first", "last", "center", "dense"):
+        raise ValueError("capmode must be first|last|center|dense")
+    return base, opts
+
+
+def variant_tag(spec: str) -> str:
+    """Filesystem-safe tag for a spec: the bare model name for a bare spec."""
+    import re
+
+    return re.sub(r"[^A-Za-z0-9_.+=-]", "", spec.replace("@", "+").replace(",", "+"))
+
 
 KOKORO_TEXTS = [
     "Turn off the lights.",
@@ -152,6 +215,71 @@ def trim_edges(x, thresh_db: float = -40.0):
     if len(keep) == 0:
         return x
     return x[keep[0] * hop : (keep[-1] + 1) * hop]
+
+
+def _frame_levels(x, hop: int):
+    import numpy as np
+
+    n = len(x) // hop
+    if n == 0:
+        return n, np.zeros(0)
+    return n, np.sqrt((x[: n * hop].reshape(n, hop) ** 2).mean(axis=1) + 1e-12)
+
+
+def strip_silence(x, thresh_db: float, pad_frames: int = 2, min_s: float = 0.6):
+    """Keep only 20 ms frames within ``thresh_db`` of the loudest frame (+-pad_frames), interior
+    silence included.  Returns ``x`` untouched when the result would be under ``min_s`` seconds."""
+    import numpy as np
+
+    hop = int(0.02 * SR)
+    n, fr = _frame_levels(x, hop)
+    if n < 3:
+        return x
+    voiced = fr > fr.max() * 10 ** (-abs(thresh_db) / 20)
+    keep = voiced.copy()
+    for k in range(1, pad_frames + 1):
+        keep[k:] |= voiced[:-k]
+        keep[:-k] |= voiced[k:]
+    if keep.sum() * hop < min_s * SR:
+        return x
+    return np.concatenate([x[i * hop : (i + 1) * hop] for i in np.where(keep)[0]])
+
+
+def cap_window(x, cap_s: float, mode: str = "first"):
+    """At most ``cap_s`` seconds of ``x``: the first / last / centre window, or ``dense`` = the
+    window holding the most voiced (within 35 dB of peak) 20 ms frames."""
+    import numpy as np
+
+    ln = int(cap_s * SR)
+    if len(x) <= ln:
+        return x
+    if mode == "first":
+        return x[:ln]
+    if mode == "last":
+        return x[-ln:]
+    if mode == "center":
+        o = (len(x) - ln) // 2
+        return x[o : o + ln]
+    hop = int(0.02 * SR)
+    n, fr = _frame_levels(x, hop)
+    voiced = (fr > fr.max() * 10 ** (-35 / 20)).astype(np.int64)
+    w = max(1, ln // hop)
+    if n <= w:
+        return x[:ln]
+    cs = np.concatenate([[0], np.cumsum(voiced)])
+    best = int(np.argmax(cs[w:] - cs[:-w]))  # first window with the most voiced frames
+    return x[best * hop : best * hop + ln]
+
+
+def apply_prep(x, opts: dict):
+    """Waveform pre-processing for a variant: strip/trim silence, then cap the duration."""
+    if opts.get("strip"):
+        x = strip_silence(x, opts["strip"])
+    elif opts.get("trim"):
+        x = trim_edges(x, -abs(opts["trim"]))
+    if opts.get("cap"):
+        x = cap_window(x, opts["cap"], opts.get("capmode", "first"))
+    return x
 
 
 def farfield(x, rng):
@@ -278,6 +406,10 @@ def cmd_index_corpus(a) -> None:
 
     root = Path(os.path.expanduser(a.corpus))
     files = sorted(p for p in root.iterdir() if p.is_file() and p.suffix == ".wav")  # top level only
+    if a.before:
+        # Freeze the corpus to what the bake-off saw: the live corpus keeps growing.
+        cut = _dt.datetime.fromisoformat(a.before).timestamp()
+        files = [p for p in files if p.stat().st_mtime <= cut]
     rows = []
     for p in files:
         try:
@@ -296,7 +428,7 @@ def cmd_index_corpus(a) -> None:
     out.mkdir(parents=True, exist_ok=True)
     (out / "corpus_index.json").write_text(json.dumps({
         "root": str(root), "names": [r[0] for r in rows], "dur": [r[1] for r in rows],
-        "session": sess,
+        "session": sess, "mtime": [r[2] for r in rows],
     }))
     d = np.array([r[1] for r in rows])
     print(json.dumps({"clips": len(rows), "sessions": cur + 1,
@@ -304,11 +436,68 @@ def cmd_index_corpus(a) -> None:
                       "le_2s": int((d <= 2).sum())}))
 
 
+def cmd_resfail(a) -> None:
+    """Record, in the corpus index, the clips the incumbent's preprocessing trims to nothing.  The
+    bake-off excluded these (4 clips) from every model's trials - and so from the 2-means owner-core
+    vote; reproducing its core needs the same exclusion even when Resemblyzer itself is not re-run."""
+    from resemblyzer import preprocess_wav
+
+    guard(a.min_avail_mb, a.wait_mem_s, "(resfail)")
+    idx_path = Path(a.corpus_index)
+    idx = json.loads(idx_path.read_text())
+    bad = []
+    for i, n in enumerate(idx["names"]):
+        if len(preprocess_wav(load_16k(str(Path(idx["root"]) / n)))) < 1600:
+            bad.append(i)
+    idx["resemblyzer_fail"] = bad
+    idx_path.write_text(json.dumps(idx))
+    print(json.dumps({"clips_failing_resemblyzer_preprocess": len(bad)}))
+
+
+def cmd_prep_cohort(a) -> None:
+    """Public normalisation cohort: LibriSpeech dev-clean speakers (speaker-disjoint from the
+    test-clean trial set), cropped to the three length buckets, clean + synthetic far-field."""
+    import numpy as np
+    import soundfile as sf
+
+    guard(a.min_avail_mb, a.wait_mem_s, "(prep-cohort)")
+    rng = random.Random(a.seed + 99)
+    out = Path(a.out)
+    manifest: list[dict] = []
+    for sp in sorted(p for p in Path(a.libri).iterdir() if p.is_dir()):
+        utts = sorted(sp.rglob("*.flac"))
+        info = [(u, sf.info(str(u)).duration) for u in utts]
+        rng.shuffle(info)
+        pool = [u for u, d in info if d >= 8.5]
+        if len(pool) < a.per_speaker:
+            continue
+        for j, u in enumerate(pool[: a.per_speaker]):
+            b = "sml"[j % 3]
+            lo, hi = BUCKETS[b]
+            x = trim_edges(load_16k(str(u)))
+            ln = int(rng.uniform(lo, hi) * SR)
+            if len(x) <= ln:
+                continue
+            off = rng.randrange(0, len(x) - ln)
+            w = x[off : off + ln]
+            base = f"{sp.name}_c{j}"
+            crng = np.random.default_rng(_stable_seed(a.seed, "cohort/" + base))
+            for v in ("clean", "farfield"):
+                y = w if v == "clean" else farfield(w, crng)
+                rel = f"{v}/{base}.wav"
+                write_wav(out / rel, y)
+                manifest.append({"source": "cohort", "speaker": sp.name, "role": "cohort", "bucket": b,
+                                 "variant": v, "path": rel, "dur": round(len(y) / SR, 3)})
+    (out / "manifest.json").write_text(json.dumps(manifest))
+    print(json.dumps({"clips": len(manifest), "speakers": len({m["speaker"] for m in manifest})}))
+
+
 # ----------------------------------------------------------------------------- models
-def model_files_bytes(name: str, models_dir: Path, scratch: Path) -> int:
+def model_files_bytes(spec: str, models_dir: Path, scratch: Path) -> int:
+    name, vopts = parse_variant(spec)
     kind, ref = MODELS[name][:2]
     if kind in ("sherpa", "ort"):
-        return (models_dir / ref).stat().st_size
+        return (models_dir / vopts.get("file", ref)).stat().st_size
     if kind == "resemblyzer":
         import resemblyzer
 
@@ -317,11 +506,19 @@ def model_files_bytes(name: str, models_dir: Path, scratch: Path) -> int:
     return sum(p.stat().st_size for p in d.glob("*") if p.is_file() and p.suffix in (".ckpt", ".pt"))
 
 
-def load_model(name: str, threads: int, models_dir: Path, scratch: Path):
-    """Return (embed_fn(wav16k float32)->1-D np array or None, info dict)."""
+def load_model(spec: str, threads: int, models_dir: Path, scratch: Path):
+    """Return (embed_fn(wav16k float32)->1-D np array or None, info dict).
+
+    ``spec`` is a model spec (``name`` or ``name@key=value,...``, see ``parse_variant``).  The
+    returned callable carries ``.prep(w)`` (what is actually embedded) and ``.last`` ([fbank_ms,
+    infer_ms] of the latest call) for the ONNX models.
+    """
     import numpy as np
 
+    name, vopts = parse_variant(spec)
     kind, ref = MODELS[name][:2]
+    if vopts and kind != "ort":
+        raise ValueError(f"variants are only supported for the ONNX (ort) models, not {name} ({kind})")
     if kind == "resemblyzer":
         import torch
         from resemblyzer import VoiceEncoder, preprocess_wav
@@ -354,20 +551,36 @@ def load_model(name: str, threads: int, models_dir: Path, scratch: Path):
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "voice"))
         from speaker_shadow_embed import kaldi_fbank  # numpy-only Kaldi fbank + per-utterance CMN
 
+        level = OPT_LEVELS[vopts["opt"]] if "opt" in vopts else MODELS[name][2]
         so = ort.SessionOptions()
-        so.intra_op_num_threads = threads
-        so.inter_op_num_threads = 1
-        so.graph_optimization_level = getattr(ort.GraphOptimizationLevel, "ORT_" + MODELS[name][2])
-        sess = ort.InferenceSession(str(models_dir / ref), so, providers=["CPUExecutionProvider"])
+        so.intra_op_num_threads = vopts.get("intra", threads)
+        so.inter_op_num_threads = vopts.get("inter", 1)
+        so.graph_optimization_level = getattr(ort.GraphOptimizationLevel, "ORT_" + level)
+        if vopts.get("mode") == "par":
+            so.execution_mode = ort.ExecutionMode.ORT_PARALLEL
+        if "arena" in vopts:
+            so.enable_cpu_mem_arena = bool(vopts["arena"])
+        if "mempat" in vopts:
+            so.enable_mem_pattern = bool(vopts["mempat"])
+        if "spin" in vopts:
+            so.add_session_config_entry("session.intra_op.allow_spinning", str(int(vopts["spin"])))
+        sess = ort.InferenceSession(str(models_dir / vopts.get("file", ref)), so, providers=["CPUExecutionProvider"])
         inp, outp = sess.get_inputs()[0].name, sess.get_outputs()[0].name
 
         def f(w):
-            feat = kaldi_fbank(w)
+            t0 = time.perf_counter()
+            feat = kaldi_fbank(f.prep(w))
+            t1 = time.perf_counter()
             if feat.shape[0] < 10:
                 return None
-            return sess.run([outp], {inp: feat[None]})[0].reshape(-1)
+            r = sess.run([outp], {inp: feat[None]})[0].reshape(-1)
+            f.last = [(t1 - t0) * 1e3, (time.perf_counter() - t1) * 1e3]
+            return r
 
-        return f, {"runtime": f"onnxruntime {ort.__version__} (ORT_{MODELS[name][2]}) + numpy Kaldi fbank"}
+        f.prep = lambda w: apply_prep(w, vopts)
+        f.last = [0.0, 0.0]
+        return f, {"runtime": f"onnxruntime {ort.__version__} (ORT_{level}) + numpy Kaldi fbank",
+                   "variant": spec, "model_file": vopts.get("file", ref)}
     import sherpa_onnx
 
     cfg = sherpa_onnx.SpeakerEmbeddingExtractorConfig(
@@ -386,7 +599,8 @@ def load_model(name: str, threads: int, models_dir: Path, scratch: Path):
 
 
 def _items(a):
-    """Yield (group, key, path) for every clip to embed: owner corpus first, then impostors."""
+    """Yield (group, key, path) for every clip to embed: owner corpus, then impostors, then (if
+    built by ``prep-cohort`` and not ``--no-cohort``) the public normalisation cohort."""
     scratch = Path(a.scratch)
     items = []
     if a.corpus_index and Path(a.corpus_index).exists():
@@ -396,7 +610,28 @@ def _items(a):
     man = json.loads((scratch / "impostors" / "manifest.json").read_text())
     for m in man:
         items.append(("imp", m["path"], str(scratch / "impostors" / m["path"])))
+    coh = scratch / "cohort" / "manifest.json"
+    if coh.exists() and not getattr(a, "no_cohort", False):
+        for m in json.loads(coh.read_text()):
+            items.append(("coh", m["path"], str(scratch / "cohort" / m["path"])))
     return items
+
+
+def reuse_compatible(ref_meta: dict, info: dict, spec: str):
+    """May ``embed --reuse`` copy rows from a reference artefact?  Only if the reference was produced by
+    the SAME ONNX file of the SAME base model, with no waveform pre-processing of its own (a capped /
+    trimmed reference holds different audio than the original clip).  Returns (ok, reason)."""
+    name, _ = parse_variant(spec)
+    ref_name, ref_opts = parse_variant(ref_meta.get("model", ""))
+    if ref_name != name:
+        return False, f"reference model {ref_name!r} is not {name!r}"
+    cur_file, ref_file = info.get("model_file"), ref_meta.get("model_file")
+    if not cur_file or cur_file != ref_file:
+        return False, f"reference model file {ref_file!r} differs from {cur_file!r} (or is unrecorded)"
+    pre = sorted(k for k in ref_opts if k in ("cap", "capmode", "trim", "strip"))
+    if pre:
+        return False, f"reference was itself pre-processed ({', '.join(pre)})"
+    return True, ""
 
 
 def cmd_embed(a) -> None:
@@ -405,20 +640,50 @@ def cmd_embed(a) -> None:
     guard(a.min_avail_mb, a.wait_mem_s, f"(before loading {a.model})")
     scratch = Path(a.scratch)
     models_dir = scratch / "models"
+    tag = a.tag or variant_tag(a.model)
     t0 = time.perf_counter()
     f, info = load_model(a.model, a.threads, models_dir, scratch)
     load_s = time.perf_counter() - t0
     rss_after_load = rss_mb()
     items = _items(a)
+    ref = None
+    if a.reuse:
+        # Variants that only touch some clips (a duration cap, silence trim) re-embed just those:
+        # every clip whose pre-processed waveform equals the original keeps the reference row.
+        z = np.load(scratch / f"emb_{a.reuse}.npz", allow_pickle=False)
+        ok_, why_ = reuse_compatible(json.loads(str(z["meta"])), info, a.model)
+        if not ok_:
+            sys.exit(f"--reuse {a.reuse} refused: {why_}")
+        ref = {"emb": z["emb"], "secs": z["secs"]}
+        if len(ref["emb"]) != len(items):
+            sys.exit(f"--reuse {a.reuse}: {len(ref['emb'])} rows but {len(items)} items (cohort flags differ?)")
     # warm-up on a few clips, excluded from the timings (first-call JIT / allocator growth)
     for _, _, p in items[-3:]:
         f(load_16k(p))
     embs, secs, durs, groups = [], [], [], []
     dim = None
+    reused = 0
     for n, (g, key, p) in enumerate(items):
         if n % 25 == 0:
             guard(a.midrun_floor_mb, a.wait_mem_s * 4, f"(mid-run {a.model})")
+        if a.groups and g not in a.groups.split(","):  # screening run: leave these rows NaN (layout kept)
+            embs.append(None)
+            secs.append(0.0)
+            durs.append(0.0)
+            groups.append(g)
+            continue
         w = load_16k(p)
+        if ref is not None and hasattr(f, "prep"):
+            pw = f.prep(w)
+            if len(pw) == len(w) and np.array_equal(pw, w) and np.isfinite(ref["emb"][n]).all():
+                e = ref["emb"][n]
+                embs.append(np.asarray(e, dtype=np.float32).reshape(-1))
+                secs.append(float(ref["secs"][n]))
+                durs.append(len(w) / SR)
+                groups.append(g)
+                dim = dim or int(embs[-1].size)
+                reused += 1
+                continue
         t1 = time.perf_counter()
         try:
             e = f(w)
@@ -436,46 +701,273 @@ def cmd_embed(a) -> None:
     for i, e in enumerate(embs):
         if e is not None:
             arr[i] = e
-    out = scratch / f"emb_{a.model}.npz"
+    out = scratch / f"emb_{tag}.npz"
     np.savez(out, emb=arr, secs=np.array(secs), dur=np.array(durs), group=np.array(groups),
              meta=json.dumps({
-                 "model": a.model, "dim": dim, "threads": a.threads, "load_s": round(load_s, 2),
+                 "model": a.model, "tag": tag, "dim": dim, "threads": a.threads, "load_s": round(load_s, 2),
                  "rss_after_load_mb": round(rss_after_load, 1), "peak_rss_mb": round(peak_rss_mb(), 1),
-                 "model_bytes": model_files_bytes(a.model, models_dir, scratch),
+                 "model_bytes": model_files_bytes(a.model, models_dir, scratch), "reused_rows": reused,
                  "failures": int(sum(e is None for e in embs)), **info}))
-    print(f"{a.model}: {len(items)} clips, dim {dim}, failures {sum(e is None for e in embs)}, "
+    print(f"{tag}: {len(items)} clips ({reused} reused), dim {dim}, failures {sum(e is None for e in embs)}, "
           f"load {load_s:.1f}s, peak RSS {peak_rss_mb():.0f} MB -> {out.name}")
 
 
-def cmd_bench(a) -> None:
+def read_temp_c():
+    """SoC temperature in deg C (Linux thermal zone 0), None where unavailable."""
+    try:
+        return int(Path("/sys/class/thermal/thermal_zone0/temp").read_text()) / 1000.0
+    except (OSError, ValueError):
+        return None
+
+
+def throttled_now():
+    """Raspberry Pi firmware: CURRENT throttle bits (under-voltage, freq cap, throttled, soft temp
+    limit = 0xF mask of ``vcgencmd get_throttled``); 0 when clean, None when not a Pi."""
+    import shutil
+    import subprocess
+
+    if not shutil.which("vcgencmd"):
+        return None
+    try:
+        out = subprocess.run(["vcgencmd", "get_throttled"], capture_output=True, text=True, timeout=3).stdout
+        return int(out.strip().split("=")[1], 16) & 0xF
+    except Exception:
+        return None
+
+
+SOFT_LIMIT_C = 82.0  # Pi 5 firmware soft temperature limit: clocks fall to ~1.5 GHz at about this SoC temperature
+
+
+def sample_health():
+    """(current throttle bits, SoC temperature) - sampled after EVERY timed clip, outside the timer.
+
+    The sticky 'has occurred' bits (16-19 of ``get_throttled``) cannot be used: they are set from boot
+    onward on this panel (0xe0000 when idle), so they would taint every pass.  Instead the CURRENT bits
+    and the temperature are read after each clip, so a throttle episode anywhere in the pass is seen."""
+    return (throttled_now() or 0), read_temp_c()
+
+
+def pass_tainted(bits: int, temp_max, limit_c: float = SOFT_LIMIT_C) -> bool:
+    """A pass is unusable if the firmware reported any current throttle/cap/under-voltage bit at any
+    sample, or the SoC reached the soft limit."""
+    return bool(bits) or (temp_max is not None and temp_max >= limit_c)
+
+
+def _cool_down(max_c: float, wait_s: float) -> float | None:
+    """Wait (up to wait_s) for the SoC to fall to max_c; a hot Pi throttles and the numbers lie."""
+    t = read_temp_c()
+    waited = 0.0
+    while max_c and t is not None and t > max_c and waited < wait_s:
+        time.sleep(5)
+        waited += 5
+        t = read_temp_c()
+    return t
+
+
+def _bench_once(spec: str, a, scratch: Path, clips, rep: int) -> dict:
     import numpy as np
 
-    guard(a.min_avail_mb, 0, "(bench)")
-    scratch = Path(a.scratch)
+    temp_before = _cool_down(getattr(a, "max_temp_c", 0), getattr(a, "cool_wait_s", 300))
+    thr_mask = 0
+    temp_max = temp_before
     t0 = time.perf_counter()
-    f, info = load_model(a.model, a.threads, scratch / "models", scratch)
+    f, info = load_model(spec, a.threads, scratch / "models", scratch)
+    name_, vopts_ = parse_variant(spec)
+    eff_threads = vopts_.get("intra", a.threads) if MODELS[name_][0] == "ort" else a.threads
     load_s = time.perf_counter() - t0
     rss_load = rss_mb()
-    paths = sorted(Path(a.wavs).rglob("*.wav"))
-    random.Random(1).shuffle(paths)
-    paths = paths[: a.n]
-    clips = [load_16k(str(p)) for p in paths]
-    for w in clips[:3]:
+    t1 = time.perf_counter()
+    if f(clips[0]) is None:
+        raise RuntimeError("embedding failed (None) on the first clip - not a timing")
+    first_ms = (time.perf_counter() - t1) * 1e3
+    for w in clips[1:3]:
         f(w)
-    ts, ds = [], []
-    for w in clips:
+    ts, ds, fb, inf = [], [], [], []
+    for k, w in enumerate(clips):
         t1 = time.perf_counter()
-        f(w)
-        ts.append(time.perf_counter() - t1)
-        ds.append(len(w) / SR)
+        e = f(w)
+        dt = time.perf_counter() - t1
+        if e is None:  # e.g. a cap so small that fewer than 10 feature frames remain: inference never ran
+            raise RuntimeError(f"embedding failed (None) on timed clip {k}; the pass is an error, not a fast run")
+        ts.append(dt)
+        bits, tc = sample_health()
+        thr_mask |= bits
+        if tc is not None:
+            temp_max = tc if temp_max is None else max(temp_max, tc)
+        ds.append(len(f.prep(w)) / SR if hasattr(f, "prep") else len(w) / SR)
+        if hasattr(f, "last"):
+            fb.append(f.last[0])
+            inf.append(f.last[1])
     ts, ds = np.array(ts), np.array(ds)
-    slope, icpt = np.polyfit(ds, ts, 1)
-    print(json.dumps({
-        "model": a.model, "threads": a.threads, "n": len(ts), "mean_dur_s": round(float(ds.mean()), 2),
-        "load_s": round(load_s, 2), "p50_ms": round(float(np.percentile(ts, 50) * 1e3), 1),
+    slope, icpt = np.polyfit(ds, ts, 1) if len(set(ds.round(2))) > 1 else (float("nan"), float("nan"))
+    r = {
+        "model": spec, "pass": rep, "threads": eff_threads, "threads_global": a.threads, "n": len(ts), "mean_dur_s": round(float(ds.mean()), 2),
+        "load_s": round(load_s, 2), "first_call_ms": round(first_ms, 1),
+        "p50_ms": round(float(np.percentile(ts, 50) * 1e3), 1),
         "p95_ms": round(float(np.percentile(ts, 95) * 1e3), 1),
         "ms_per_audio_s": round(float(slope * 1e3), 1), "fixed_ms": round(float(icpt * 1e3), 1),
-        "rss_after_load_mb": round(rss_load, 1), "peak_rss_mb": round(peak_rss_mb(), 1), **info}))
+        "rss_after_load_mb": round(rss_load, 1), "peak_rss_mb": round(peak_rss_mb(), 1), **info}
+    bits, tc = sample_health()
+    thr_mask |= bits
+    if tc is not None:
+        temp_max = tc if temp_max is None else max(temp_max, tc)
+    r["temp_c_before"], r["temp_c_after"], r["temp_c_max"], r["throttle_bits"] = temp_before, tc, temp_max, thr_mask
+    r["tainted"] = pass_tainted(thr_mask, temp_max, getattr(a, "taint_temp_c", SOFT_LIMIT_C))  # throttled/capped/at the limit: do not use
+    if fb:
+        r["fbank_p50_ms"] = round(float(np.percentile(fb, 50)), 1)
+        r["infer_p50_ms"] = round(float(np.percentile(inf, 50)), 1)
+    del f
+    return r
+
+
+def cmd_bench(a) -> None:
+    guard(a.min_avail_mb, 0, "(bench)")
+    scratch = Path(a.scratch)
+    paths = sorted(Path(a.wavs).rglob("*.wav"))
+    random.Random(1).shuffle(paths)
+    clips = [load_16k(str(p)) for p in paths[: a.n]]
+    specs = [x for x in a.model.split(";") if x]
+    for rep in range(1, a.reps + 1):  # interleave the variants so drift hits them all alike
+        for spec in specs:
+            try:
+                for attempt in range(1 + max(0, getattr(a, "retries", 0))):
+                    row = _bench_once(spec, a, scratch, clips, rep)
+                    row["attempt"] = attempt
+                    if not row["tainted"]:
+                        break  # a throttled pass is re-run after another cool-down, never averaged in
+                print(json.dumps(row), flush=True)
+            except Exception as exc:  # one bad variant must not lose the rest of the sweep
+                print(json.dumps({"model": spec, "pass": rep, "error": f"{type(exc).__name__}: {exc}"[:300]}), flush=True)
+
+
+def cmd_bench_summ(a) -> None:
+    """Median-over-passes table from bench JSON lines (stdin or --files)."""
+    import numpy as np
+
+    rows = []
+    dropped = 0
+    for fn in a.files or ["-"]:
+        fh = sys.stdin if fn == "-" else open(fn)
+        for r in (json.loads(line) for line in fh if line.startswith("{")):
+            if "error" in r or r.get("tainted"):
+                dropped += 1
+            else:
+                rows.append(r)
+    if dropped:
+        print(f"(dropped {dropped} errored/thermally-tainted passes)", file=sys.stderr)
+    by: dict = {}
+    for r in rows:
+        by.setdefault((r["model"], r.get("threads")), []).append(r)
+    print("| variant (threads) | passes | p50 ms (median of passes) | p95 ms | fbank ms | infer ms | load s | first call ms | RSS after load MB | peak RSS MB |")
+    print("|---|---|---|---|---|---|---|---|---|---|")
+    for (k0, thr), v in by.items():
+        k = f"{k0} [{thr} thr]"
+        med = lambda key: float(np.median([x[key] for x in v if key in x])) if any(key in x for x in v) else float("nan")  # noqa: E731
+        print(f"| {k} | {len(v)} | {med('p50_ms'):.0f} | {med('p95_ms'):.0f} | {med('fbank_p50_ms'):.1f} | "
+              f"{med('infer_p50_ms'):.0f} | {med('load_s'):.2f} | {med('first_call_ms'):.0f} | "
+              f"{med('rss_after_load_mb'):.0f} | {med('peak_rss_mb'):.0f} |")
+
+
+def cmd_drift(a) -> None:
+    """Cosine of each variant's embeddings to the reference variant's, over public clips."""
+    import numpy as np
+
+    guard(a.min_avail_mb, 0, "(drift)")
+    scratch = Path(a.scratch)
+    paths = sorted(Path(a.wavs).rglob("*.wav"))
+    random.Random(2).shuffle(paths)
+    clips = [load_16k(str(p)) for p in paths[: a.n]]
+
+    def run(spec):
+        f, _ = load_model(spec, a.threads, scratch / "models", scratch)
+        out = [f(w) for w in clips]
+        del f
+        if any(e is None for e in out):
+            return None
+        return np.stack([np.asarray(e, np.float64) for e in out])
+
+    ref = run(a.ref)
+    if a.save_dir and ref is not None:  # PUBLIC clips only: lets two machines (Pi vs Jetson) compare runtimes
+        Path(a.save_dir).mkdir(parents=True, exist_ok=True)
+        np.save(Path(a.save_dir) / f"drift_{variant_tag(a.ref)}.npy", ref)
+    for spec in [x for x in a.variants.split(";") if x]:
+        v = run(spec)
+        if a.save_dir and v is not None:
+            np.save(Path(a.save_dir) / f"drift_{variant_tag(spec)}.npy", v)
+        if v is None or ref is None or v.shape != ref.shape:
+            print(json.dumps({"variant": spec, "error": "embedding failed/shape mismatch"}))
+            continue
+        c = (_norm(v) * _norm(ref)).sum(axis=1)
+        print(json.dumps({"variant": spec, "ref": a.ref, "n": len(c), "cos_min": round(float(c.min()), 6),
+                          "cos_p5": round(float(np.percentile(c, 5)), 6), "cos_mean": round(float(c.mean()), 6),
+                          "ge_0.9999": bool((c >= 0.9999).all())}), flush=True)
+
+
+def cmd_quantize(a) -> None:
+    """Export a quantised / half-precision copy of an ONNX model next to the originals.
+
+    dynamic : ``quantize_dynamic`` (weights int8, activations quantised at run time).
+    static  : ``quantize_static`` (QDQ or QOperator) calibrated on PUBLIC cohort clips.
+    fp16    : weights/activations in float16, float32 at the graph edges.
+    """
+    import numpy as np
+
+    guard(a.min_avail_mb, a.wait_mem_s, "(quantize)")
+    import onnx
+    import onnxruntime as ort
+    from onnxruntime.quantization import (CalibrationDataReader, CalibrationMethod, QuantFormat, QuantType,
+                                          quantize_dynamic, quantize_static)
+
+    models = Path(a.scratch) / "models"
+    src, dst = models / a.src, models / a.dst
+    types = {"int8": QuantType.QInt8, "uint8": QuantType.QUInt8}
+    exclude = []
+    if a.exclude_tail:
+        # keep the last N Gemm/MatMul/Conv nodes (the embedding head) in float
+        m = onnx.load(str(src))
+        heads = [n.name for n in m.graph.node if n.op_type in ("Gemm", "MatMul", "Conv")]
+        exclude = heads[-a.exclude_tail:]
+    if a.mode == "fp16":
+        from onnxruntime.transformers.float16 import convert_float_to_float16
+
+        onnx.save(convert_float_to_float16(onnx.load(str(src)), keep_io_types=True), str(dst))
+    elif a.mode == "dynamic":
+        quantize_dynamic(str(src), str(dst), weight_type=types[a.w_type], per_channel=bool(a.per_channel),
+                         nodes_to_exclude=exclude)
+    else:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "voice"))
+        from speaker_shadow_embed import kaldi_fbank
+
+        sess = ort.InferenceSession(str(src), providers=["CPUExecutionProvider"])
+        inp = sess.get_inputs()[0].name
+        man = json.loads((Path(a.scratch) / "cohort" / "manifest.json").read_text())
+        rng = random.Random(3)
+        rng.shuffle(man)
+        feats = []
+        for mm in man[: a.calib_n]:
+            ft = kaldi_fbank(load_16k(str(Path(a.scratch) / "cohort" / mm["path"])))
+            if a.calib_frames:  # equal-length features: percentile/entropy calibrators need a rectangular stack
+                reps = -(-a.calib_frames // len(ft))
+                ft = np.tile(ft, (reps, 1))[: a.calib_frames]
+            feats.append(ft)
+
+        class Reader(CalibrationDataReader):
+            def __init__(self):
+                self.it = iter({inp: f[None]} for f in feats)
+
+            def get_next(self):
+                return next(self.it, None)
+
+        method = {"minmax": CalibrationMethod.MinMax, "entropy": CalibrationMethod.Entropy,
+                  "percentile": CalibrationMethod.Percentile}[a.calib]
+        quantize_static(
+            str(src), str(dst), Reader(),
+            quant_format=QuantFormat.QDQ if a.format == "qdq" else QuantFormat.QOperator,
+            activation_type=types[a.act_type], weight_type=types[a.w_type], per_channel=bool(a.per_channel),
+            calibrate_method=method, nodes_to_exclude=exclude,
+            extra_options={"ActivationSymmetric": a.act_type == "int8", "WeightSymmetric": True})
+    print(json.dumps({"src": a.src, "dst": a.dst, "mode": a.mode, "bytes": dst.stat().st_size,
+                      "onnx": onnx.__version__, "onnxruntime": ort.__version__, "excluded": exclude}))
 
 
 # ----------------------------------------------------------------------------- metrics
@@ -589,6 +1081,7 @@ def cmd_eval(a) -> None:
 
     # ---- owner-core: consensus of per-model 2-means "cluster A" (labels are INFERRED, see record)
     finite_all = np.ones(n_c, bool)
+    finite_all[idx.get("resemblyzer_fail", [])] = False  # same exclusion as the bake-off (see resfail)
     for m in names:
         finite_all &= np.isfinite(data[m]["emb"][:n_c]).all(axis=1)
     inA = {}
@@ -605,6 +1098,10 @@ def cmd_eval(a) -> None:
     votes = np.sum([inA[m] for m in core_names], axis=0)
     cores = {"strict": finite_all & (votes == len(core_names)),
              "majority": finite_all & (votes > len(core_names) / 2)}
+
+    if a.save_core:
+        np.savez(a.save_core, strict=cores["strict"], majority=cores["majority"], finite_all=finite_all,
+                 core_models=np.array(core_names))
 
     def pooled(m, core_name, n_draws=30):
         core_mask = cores[core_name]
@@ -772,6 +1269,20 @@ def _print_tables(r) -> None:
               f"{t['ms_per_audio_s']:.0f} | {me['load_s']} | {me['rss_after_load_mb']:.0f} | {me['peak_rss_mb']:.0f} | {me['runtime']} |")
 
 
+def _model_spec(s: str) -> str:
+    name, _ = parse_variant(s)  # raises ValueError on a bad option
+    if name not in MODELS:
+        raise argparse.ArgumentTypeError(f"unknown model {name!r}; choose from {sorted(MODELS)}")
+    return s
+
+
+def cmd_lab(a) -> None:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import speaker_lab
+
+    speaker_lab.run(a)
+
+
 # ----------------------------------------------------------------------------- main
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -795,20 +1306,77 @@ def main() -> None:
     p.add_argument("--corpus", default="~/.zoe-voice-samples")
     p.add_argument("--out", required=True)
     p.add_argument("--session-gap-s", type=float, default=1800)
+    p.add_argument("--before", help="only clips with mtime <= this local ISO time (freeze the corpus)")
     p.set_defaults(fn=cmd_index_corpus)
 
+    p = sub.add_parser("resfail")
+    p.add_argument("--corpus-index", required=True)
+    p.set_defaults(fn=cmd_resfail)
+
+    p = sub.add_parser("prep-cohort")
+    p.add_argument("--libri", required=True, help="LibriSpeech/dev-clean directory")
+    p.add_argument("--out", required=True, help="output dir (scratch/cohort)")
+    p.add_argument("--per-speaker", type=int, default=6)
+    p.set_defaults(fn=cmd_prep_cohort)
+
     p = sub.add_parser("embed")
-    p.add_argument("--model", required=True, choices=sorted(MODELS))
+    p.add_argument("--model", required=True, type=_model_spec, help="model spec: name or name@key=value,...")
+    p.add_argument("--tag", help="output tag (default: derived from the spec) -> emb_<tag>.npz")
     p.add_argument("--threads", type=int, default=2)
     p.add_argument("--corpus-index")
+    p.add_argument("--no-cohort", action="store_true", help="skip the public normalisation cohort items")
+    p.add_argument("--groups", help="only embed these item groups (corpus,imp,coh); the rest stay NaN (screening runs)")
+    p.add_argument("--reuse", metavar="TAG", help="reuse rows of emb_<TAG>.npz for clips this variant leaves unchanged")
     p.set_defaults(fn=cmd_embed)
 
     p = sub.add_parser("bench")
-    p.add_argument("--model", required=True, choices=sorted(MODELS))
+    p.add_argument("--model", required=True, help="model spec(s), ';'-separated")
     p.add_argument("--wavs", required=True)
     p.add_argument("--n", type=int, default=60)
+    p.add_argument("--reps", type=int, default=1, help="passes (variants interleaved within each pass)")
     p.add_argument("--threads", type=int, default=2)
+    p.add_argument("--max-temp-c", type=float, default=0, help="before each run wait for the SoC to cool to this (0 = off)")
+    p.add_argument("--cool-wait-s", type=float, default=300)
+    p.add_argument("--taint-temp-c", type=float, default=82.0, help="a pass whose SoC temperature reaches this is tainted")
+    p.add_argument("--retries", type=int, default=0, help="re-run a thermally tainted pass this many times")
     p.set_defaults(fn=cmd_bench)
+
+    p = sub.add_parser("bench-summ")
+    p.add_argument("files", nargs="*")
+    p.set_defaults(fn=cmd_bench_summ)
+
+    p = sub.add_parser("drift")
+    p.add_argument("--ref", required=True, help="reference model spec")
+    p.add_argument("--variants", required=True, help="';'-separated model specs compared to the reference")
+    p.add_argument("--wavs", required=True)
+    p.add_argument("--n", type=int, default=120)
+    p.add_argument("--threads", type=int, default=2)
+    p.add_argument("--save-dir", help="also save each variant's embeddings (public clips) as .npy here")
+    p.set_defaults(fn=cmd_drift)
+
+    p = sub.add_parser("quantize")
+    p.add_argument("--src", required=True, help="source ONNX file name inside <scratch>/models")
+    p.add_argument("--dst", required=True)
+    p.add_argument("--mode", choices=("dynamic", "static", "fp16"), required=True)
+    p.add_argument("--format", choices=("qdq", "qoperator"), default="qdq")
+    p.add_argument("--w-type", choices=("int8", "uint8"), default="int8")
+    p.add_argument("--act-type", choices=("int8", "uint8"), default="uint8")
+    p.add_argument("--per-channel", type=int, default=1)
+    p.add_argument("--calib", choices=("minmax", "entropy", "percentile"), default="minmax")
+    p.add_argument("--calib-n", type=int, default=100)
+    p.add_argument("--calib-frames", type=int, default=0, help="crop/tile calibration features to this many frames")
+    p.add_argument("--exclude-tail", type=int, default=0, help="keep the last N Gemm/MatMul/Conv nodes in float")
+    p.set_defaults(fn=cmd_quantize)
+
+    p = sub.add_parser("lab", help="accuracy levers; see scripts/perf/speaker_lab.py")
+    p.add_argument("--corpus-index", required=True)
+    p.add_argument("--core", required=True, help="core masks from `score --save-core`")
+    p.add_argument("--base", default="wespeaker_resnet34", help="embedding tag of the baseline")
+    p.add_argument("--experiment", required=True)
+    p.add_argument("--args", default="", help="experiment arguments, key=value,key=value")
+    p.add_argument("--boot", type=int, default=200)
+    p.add_argument("--json", help="write the result JSON here")
+    p.set_defaults(fn=cmd_lab)
 
     p = sub.add_parser("score")
     p.add_argument("--corpus-index", required=True)
@@ -818,6 +1386,7 @@ def main() -> None:
     p.add_argument("--center", choices=("raw", "cohort"), default="raw",
                    help="raw cosine (what Zoe runs today) or cosine after subtracting a public-cohort mean")
     p.add_argument("--json", default="bakeoff_results.json")
+    p.add_argument("--save-core", help="write the strict/majority owner-core masks (npz) for `lab`")
     p.set_defaults(fn=cmd_eval)
 
     a = ap.parse_args()
