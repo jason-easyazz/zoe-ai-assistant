@@ -38,6 +38,7 @@ class Cell:
     serve: tuple = ()                           # utterances whose brain turn "recalled" the user's notes (what /for-prompt does live)
     voice_only: bool = False                    # a safety row that only has a meaning on the spoken lane
     note: str = ""
+    setup: Optional[Callable[[Rig], None]] = None   # runs once per lane on the fresh rig (an account row, a pinned router verdict)
 
 
 def _no_brain(o: Outcome) -> bool:
@@ -120,6 +121,34 @@ async def check_no_write_on_question(rig, outs, lane):
     return (rig.db.people == []), f"people={[p['name'] for p in rig.db.people]} last={outs[-1].stage}"
 
 
+ACCOUNT_NAME = "Dana Example"
+
+
+def setup_identity(rig: Rig) -> None:
+    """A registered demo account, and the router verdict the live box gave "what's my name": memory / recall_memory (2026-10-12)."""
+    rig.db.account_name = ACCOUNT_NAME
+    rig.route_as("memory", "recall_memory")
+    rig.skybridge_reads_the_fake_db()
+
+
+async def check_identity_name(rig, outs, lane):
+    # live 2026-10-12: typed chat answered in ~5 ms from the account; the spoken lane vetoed its own identity card on
+    # `router_disagrees` (the router filed the ask under memory/recall_memory) and sent the turn to the brain for 6-7 s.
+    last = outs[-1]
+    return (_no_brain(last) and ACCOUNT_NAME.lower() in last.reply.lower()), f"stage={last.stage} reply={last.reply[:70]!r}"
+
+
+COFFEE_Q = "Tell me something about coffee."
+COFFEE_OFFER = "Coffee beans are really the seeds of a cherry. How about the history of coffee?"
+
+
+async def check_ack_after_offer(rig, outs, lane):
+    # live 2026-10-12: "sounds good" after "...how about the history of coffee?" was answered with the canned "Okay." on both
+    # lanes, so the accepted offer was never delivered. It must reach the brain, which has the conversation.
+    last = outs[-1]
+    return last.brain_reached, f"stage={last.stage} reply={last.reply[:60]!r}"
+
+
 CELLS: list[Cell] = [
     Cell("correction", "'that's wrong, my sister is Marisol not Marisa' changes the stored note and reads it back",
          ["Remember that my sister is called Marisa.", "That's wrong, my sister is Marisol not Marisa."],
@@ -147,6 +176,10 @@ CELLS: list[Cell] = [
     Cell("exact_words", "'what exactly did I say' carries the owner's own words to the answer",
          ["Remember that my sister is called Marisa.", "What exactly did I say about my sister?"],
          ["Remember that my sister is called Marisa.", "What exactly did I say about my sister?"], check_exact_words),
+    Cell("identity_name", "'what's my name' is answered from the account on both lanes, never by the model",
+         ["What's my name?"], ["What's my name?"], check_identity_name, setup=setup_identity),
+    Cell("ack_after_offer", "'sounds good' after Zoe's offer reaches the brain instead of the canned 'Okay.'",
+         [COFFEE_Q, "Sounds good."], [COFFEE_Q, "Sounds good."], check_ack_after_offer, brain_reply={COFFEE_Q: COFFEE_OFFER}),
     Cell("pending_not_a_yes", "a waiting spoken write is not confirmed by 'are you sure?'",
          ["Add my brother Percival."], ["Add my brother Percival.", "Are you sure?"], check_no_write_on_question, voice_only=True),
     Cell("pending_not_correct", "a waiting spoken write is not confirmed by 'no, that's not correct'",
@@ -174,6 +207,8 @@ async def run_lane(cell: Cell, lane: str, monkeypatch, *, user_suffix: str = "",
     # a fresh identity per run: the throwaway palace outlives one run inside a process, and a note left by an earlier run is state
     rig = Rig(user=f"demo_lane_parity_{lane}_{cell.cid}_{uuid.uuid4().hex[:6]}{user_suffix}").install(monkeypatch, flags=flags)
     script = cell.chat if lane == "chat" else cell.voice
+    if cell.setup is not None:
+        cell.setup(rig)
     outs: list[Outcome] = []
     for utt in script:
         rig.brain_reply = (cell.brain_reply or {}).get(utt, BRAIN_SENTINEL)
