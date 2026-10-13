@@ -676,11 +676,17 @@ def test_the_seam_has_one_construction_site_and_it_is_after_the_other_blocks():
     assert src.index("offer_block = await _pending_offer_block(uid)") < src.index("risk_block = await _risk_cue_block(")
 
 
-def test_the_lexicon_identity_of_the_other_sections_is_untouched():
-    """Adding a section to the lexicon files must not change any other section: the manner block text is the same bytes."""
+def test_the_lexicon_identity_of_the_other_sections_is_untouched(monkeypatch):
+    """Adding a section to the lexicon files must not change any other section: the manner block text is the same bytes
+    with and without the risk_cues section (compared, not pinned to wording - the manner block's own text may change)."""
     import manner_block
 
-    assert manner_block.block_text("en").startswith("With people: when someone shares a feeling")
+    with_section = manner_block.block_text("en")
+    assert with_section
+    real = lexicons.load
+    monkeypatch.setattr(lexicons, "load", lambda code: {k: v for k, v in (real(code) or {}).items() if k != "risk_cues"})
+    assert manner_block.block_text("en") == with_section
+    monkeypatch.undo()
     assert "risk_cues" in lexicons.load("en") and "risk_cues" in lexicons.load("es")
     assert "risk_cues" not in lexicons.load("fr")        # a language with no entry gets no block, never English's
     assert rc.detect("Je vais conduire ce soir, je suis épuisé et je n'ai pas dormi.") == []
