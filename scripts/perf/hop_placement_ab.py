@@ -33,6 +33,8 @@ bearer token is read from the service .env (one key at a time) and never printed
 Usage:
     python3 scripts/perf/hop_placement_ab.py --selftest      # OFFLINE: the scorers and the three compositions, with negative controls
     ZOE_PERF=1 flock /tmp/zoe-voice-harness.lock python3 scripts/perf/hop_placement_ab.py [--n 6] [--placements block,suffix,preamble]
+    ZOE_PERF=1 flock /tmp/zoe-voice-harness.lock python3 scripts/perf/hop_placement_ab.py --placements block --wordings legacy,natural --asks S9b
+        # the WORDING A/B (ZOE_PERSONALISATION_HOP_WORDING, 2026-10-13): same placement, the rule line / opener text varies
 Exit: 0 ran | 2 refused / error / selftest failed | 3 lock held / brain window busy.
 """
 from __future__ import annotations
@@ -239,12 +241,13 @@ def live(args) -> int:
         print("refused: no ZOE_BRAIN_TOKEN in the service .env")
         return 2
     placements = [p for p in args.placements.split(",") if p]
+    wordings = [w for w in args.wordings.split(",") if w]
     import personalisation_hop as ph
     import zoe_flue_client as zc
 
-    unknown = [p for p in placements if p not in ph.PLACEMENTS]
+    unknown = [p for p in placements if p not in ph.PLACEMENTS] + [w for w in wordings if w not in ph.WORDINGS]
     if unknown:
-        print(f"unknown placement(s): {unknown}")
+        print(f"unknown placement/wording(s): {unknown}")
         return 2
     style = FACTS[args.facts]
     install_stubs(zc, ph, lambda msg: next((style[a] for a, qs in ASKS.items() if msg in qs), ""))
@@ -252,27 +255,32 @@ def live(args) -> int:
     sb.assert_demo_user(user)
     judge = ds.DayLive("", "", "", False).judge_rubric
     asks = [a for a in args.asks.split(",") if a]
-    plan = [(p, a, i) for i in range(args.n) for a in asks for p in placements]
+    arms = [(p, w) for p in placements for w in wordings]       # an arm = a placement x a wording; its label is "p" or "p/w"
+    label = lambda p, w: p if len(wordings) == 1 and w == ph.DEFAULT_WORDING else f"{p}/{w}"  # noqa: E731
+    plan = [(label(p, w), p, w, a, i) for i in range(args.n) for a in asks for p, w in arms]
     random.Random(args.seed).shuffle(plan)
     out: dict = {"started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "n": args.n, "facts": args.facts,
-                 "placements": placements, "asks": asks, "user": user, "samples": []}
-    for p, a, i in plan:
+                 "placements": placements, "wordings": wordings, "asks": asks, "user": user, "samples": []}
+    for arm, p, w, a, i in plan:
         os.environ["ZOE_PERSONALISATION_HOP_PLACEMENT"] = p
-        sid = f"hopab-{p}-{a.replace('.', '')}-{i}-{int(time.time())}"
+        os.environ["ZOE_PERSONALISATION_HOP_WORDING"] = w
+        sid = f"hopab-{p}-{w}-{a.replace('.', '')}-{i}-{int(time.time())}"
+        t0 = time.time()
         try:
             reply, wire = asyncio.run(one_turn(zc, user, sid, ask_text(a, i)))
         except Exception as exc:  # noqa: BLE001
-            out["samples"].append({"placement": p, "ask": a, "i": i, "verdict": "ERROR", "why": type(exc).__name__})
-            print(f"  {p:9s} {a:5s} #{i} ERROR {type(exc).__name__}")
+            out["samples"].append({"placement": arm, "ask": a, "i": i, "verdict": "ERROR", "why": type(exc).__name__})
+            print(f"  {arm:16s} {a:5s} #{i} ERROR {type(exc).__name__}")
             continue
+        ms = int((time.time() - t0) * 1000)
         if not reply or sb.is_brain_fallback(reply):
             v, ev = "ERROR", {"why": "empty or fallback reply"}
         else:
             v, ev = score(a, reply, judge)
-        out["samples"].append({"placement": p, "ask": a, "i": i, "verdict": v, "reply": reply[:300],
+        out["samples"].append({"placement": arm, "ask": a, "i": i, "verdict": v, "reply": reply[:300], "ms": ms,
                                "text": ask_text(a, i), "hop_on_wire": (ph.HEADING in wire) or (ph.SUFFIX_OPEN in wire),
                                **{k: ev[k] for k in ev if k in ("personal", "meat", "diet_used")}})
-        print(f"  {p:9s} {a:5s} #{i} {v:5s} {reply[:90]!r}")
+        print(f"  {arm:16s} {a:5s} #{i} {v:5s} {ms:5d}ms {reply[:90]!r}")
     table: dict = {}
     for s in out["samples"]:
         c = table.setdefault(s["placement"], {}).setdefault(s["ask"], {"PASS": 0, "FAIL": 0, "ERROR": 0, "n": 0, "hop": 0})
@@ -282,10 +290,11 @@ def live(args) -> int:
     out["table"] = table
     out["finished"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     RESULTS.write_text(json.dumps(out, indent=1))
-    print("\nplacement   " + "  ".join(f"{a:>9s}" for a in asks) + "     total")
-    for p in placements:
+    print("\narm               " + "  ".join(f"{a:>9s}" for a in asks) + "     total")
+    for p, w in arms:
+        p = label(p, w)
         cells = [table.get(p, {}).get(a, {"PASS": 0, "n": 0}) for a in asks]
-        print(f"{p:10s}  " + "  ".join(f"{c['PASS']:>4d}/{c['n']:<4d}" for c in cells)
+        print(f"{p:16s}  " + "  ".join(f"{c['PASS']:>4d}/{c['n']:<4d}" for c in cells)
               + f"   {sum(c['PASS'] for c in cells)}/{sum(c['n'] for c in cells)}"
               + "   hop on the wire: " + " ".join(f"{a}={c.get('hop', 0)}/{c['n']}" for a, c in zip(asks, cells)))
     print(f"results: {RESULTS}")
@@ -297,6 +306,7 @@ def main() -> int:
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--n", type=int, default=6, help="repeats per (placement, ask)")
     ap.add_argument("--placements", default="block,suffix,preamble")
+    ap.add_argument("--wordings", default="natural", help="ZOE_PERSONALISATION_HOP_WORDING arms (legacy,natural); default = the shipped one")
     ap.add_argument("--asks", default="S9a,S9b,P2.b")
     ap.add_argument("--facts", choices=sorted(FACTS), default="third", help="the stored form of the fact rows")
     ap.add_argument("--seed", type=int, default=1)

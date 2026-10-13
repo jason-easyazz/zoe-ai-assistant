@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-625 flags; 623 not documented in `.env.example`.
+626 flags; 624 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -400,6 +400,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_PERF` | `-` | no | NO | `scripts/perf/engine_bench.py`<br>`scripts/perf/hop_placement_ab.py`<br>`scripts/perf/kokoro_first_chunk_probe.py`<br>`scripts/perf/measure_first_sound.py`<br>`scripts/perf/measure_speed.py`<br>`scripts/perf/measure_tts.py`<br>`scripts/perf/measure_voice.py`<br>`scripts/perf/person_half_enforce_ab.py`<br>`scripts/perf/recall_evidence_probe.py`<br>`scripts/perf/samantha_bar.py`<br>`scripts/perf/samantha_day_sim.py`<br>`scripts/perf/samantha_person.py`<br>`scripts/perf/tool_use_bench.py`<br>`scripts/perf/user_model_ab.py` |
 | `ZOE_PERSONALISATION_HOP` | `True` | yes | NO | `services/zoe-data/personalisation_hop.py` |
 | `ZOE_PERSONALISATION_HOP_PLACEMENT` | `'block'` | yes | NO | `services/zoe-data/personalisation_hop.py` |
+| `ZOE_PERSONALISATION_HOP_WORDING` | `'natural'` | yes | NO | `services/zoe-data/personalisation_hop.py` |
 | `ZOE_PERSONA_DRIFT` | `False` | yes | NO | `services/zoe-data/persona_drift.py` |
 | `ZOE_PERSONA_LAYER` | `False` | yes | NO | `services/zoe-data/persona_layer.py` |
 | `ZOE_PERSON_BENCH_DIR` | `-` | no | NO | `scripts/perf/person_half_replay.py` |

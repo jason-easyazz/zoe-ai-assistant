@@ -1194,6 +1194,20 @@ _HOP_BLOCK_OPEN = (
     "[MEMORY CONTEXT — something this user told you that changes generic advice; "
     "use it silently; do not mention this block]"
 )
+#: the ``natural`` wording (personalisation_hop.wording(), the default): the opener says to WORK THE FACT INTO the answer; ``_HOP_BLOCK_OPEN``
+#: above is the byte-for-byte legacy opener ("use it silently"). Measured 2026-10-13 (n=20 per cell, block placement): S9b 14/20 -> 19/20,
+#: S9a and P2.b 20/20 both; median turn +~0.5 s on S9b, +~0.25 s on P2.b (samantha-bar.md "Hop wording A/B").
+_HOP_BLOCK_OPEN_NATURAL = (
+    "[MEMORY CONTEXT — something this user told you about their own life; it changes what good advice is "
+    "for them; work it into your answer; do not mention this block]"
+)
+
+
+def _hop_block_open() -> str:
+    """The block's opener line for the active ``personalisation_hop.wording()``."""
+    import personalisation_hop
+
+    return _HOP_BLOCK_OPEN if personalisation_hop.wording() == "legacy" else _HOP_BLOCK_OPEN_NATURAL
 
 
 async def _hop_context_block(message: str, user_id: str, placement: str = "block") -> str:
@@ -1221,7 +1235,7 @@ async def _hop_context_block(message: str, user_id: str, placement: str = "block
         pass
     if placement == "suffix":
         return hop.suffix_line()
-    return f"{_HOP_BLOCK_OPEN}\n{hop.section()}\n{_RECALL_BLOCK_CLOSE}"
+    return f"{_hop_block_open()}\n{hop.section()}\n{_RECALL_BLOCK_CLOSE}"
 
 
 # ── Risk cue (ZOE_RISK_CUES=off|shadow|on, default off) ─────────────────────

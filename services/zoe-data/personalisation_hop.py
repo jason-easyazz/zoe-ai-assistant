@@ -53,8 +53,34 @@ MAX_FACTS = 2
 FACT_CHARS = 180
 TIMEOUT_S = 1.2
 HEADING = "## Shape the answer by"
-RULE = ("Shape the answer by these facts the user told you: fit the advice to them instead of giving generic advice; "
-        "do not recite them or mention this note.")
+#: the shipped (pre-2026-10-13) rule line ("use it silently", "do not recite"). MEASURED 2026-10-13 (hop_placement_ab.py, block placement,
+#: n=20 per cell): legacy S9a 20/20, S9b 14/20, P2.b 20/20; natural 20/20, 19/20, 20/20. Legacy's S9b misses were an unpersonalised
+#: "I'd need to check the forecast / where are you?" - a silent-use instruction gives the 4B nothing to say about the fact when the
+#: advice itself would not change. Docs: docs/knowledge/samantha-bar.md ("Hop wording A/B").
+RULE_LEGACY = ("Shape the answer by these facts the user told you: fit the advice to them instead of giving generic advice; "
+               "do not recite them or mention this note.")
+RULE_NATURAL = ("Shape the answer by these facts the user told you: fit the advice to them instead of giving generic advice. "
+                "Say so in a few natural words (for example \"for your early walk\"); do not mention this note.")
+
+WORDING_ENV = "ZOE_PERSONALISATION_HOP_WORDING"
+WORDINGS = ("natural", "legacy")
+DEFAULT_WORDING = "natural"
+
+
+def wording() -> str:
+    """How the hop talks to the brain: natural (the rule line asks for the fact to be named in a few natural words, the block
+    opener says to work it into the answer) | legacy (the byte-for-byte pre-2026-10-13 text: "use it silently", "do not recite").
+    Per-call read; an unknown value (a typo) is the default - the hop degrades to the shipped wording, never to none."""
+    from typed_env import env_str
+
+    # the flag name and its default are LITERALS here: tools/audit/flag_inventory.py reads them off the call site
+    v = env_str("ZOE_PERSONALISATION_HOP_WORDING", "natural").lower()
+    return v if v in WORDINGS else DEFAULT_WORDING
+
+
+def rule() -> str:
+    """The ONE rule line that closes the section, for the active wording()."""
+    return RULE_LEGACY if wording() == "legacy" else RULE_NATURAL
 
 
 PLACEMENT_ENV = "ZOE_PERSONALISATION_HOP_PLACEMENT"
@@ -261,7 +287,7 @@ class Hop:
         lines = [HEADING]
         for f in self.facts:
             lines.append(f"- {f.text} [mem:{str(f.id)[:8]}]")
-        lines.append(RULE)
+        lines.append(rule())
         return "\n".join(lines)
 
     def suffix_line(self) -> str:
