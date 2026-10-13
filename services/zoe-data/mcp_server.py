@@ -1070,8 +1070,12 @@ TOOLS = [
     {
         "name": "memory_forget",
         "description": (
-            "Soft-delete a specific memory by id (marks it archived and writes "
-            "an audit row). Owner or admin only."
+            "Hide ONE saved note by its id (rejects that single row and writes an audit row; the owner's own notes only, and a "
+            "fact the member told you directly is held back). ROW-LEVEL ONLY: it does NOT forget a person, a name or a topic, "
+            "and it clears nothing derived from the note (summary, contacts, open loops, other notes, transcripts). Never use it "
+            "to forget a person, and never tell the member something is forgotten because of it. A person or a topic is "
+            "forgotten only when the member asks Zoe to forget it ('forget Dana'): that request runs the full cleanup and is "
+            "confirmed only when every store was cleared. Notes that describe a person are refused here for that reason."
         ),
         "inputSchema": {
             "type": "object",
@@ -3235,6 +3239,13 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
                 return {"status": "not_found"}
             if (existing.metadata or {}).get("user_id") != user_id:
                 return {"error": "forbidden: memory belongs to another user"}
+            _emd = existing.metadata or {}
+            if str(_emd.get("memory_type") or "").lower() == "person" or str(_emd.get("entity_type") or "").lower() == "person":
+                # a row about a person is the entity itself: hiding it alone would leave the contact, the summary and the loops naming
+                # them, and an agent would then report a forget that did not happen. The member's own request runs the whole cascade.
+                return {"error": "refused: this note describes a person. Forgetting a person is not a row operation - ask the member "
+                                 "to say 'forget <name>' to Zoe, which clears everything derived from it and confirms only when it is done",
+                        "scope": "row", "cascade": "not_run"}
             try:
                 done = await svc.review(
                     mem_id,
@@ -3248,7 +3259,9 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             if done is None:
                 return {"error": "held back: that is something you told me directly; ask me "
                                  "to forget it yourself (\"forget that\") and I will"}
-            return {"id": mem_id, "status": "rejected"}
+            # honest by construction: one row was hidden and nothing else ran, so a model has no "forgotten" to repeat to the member
+            return {"id": mem_id, "status": "rejected", "scope": "row", "cascade": "not_run",
+                    "note": "this hid one saved note only; it did not forget any person or topic and cleared nothing derived from it"}
 
     # === MULTICA BOARD TOOLS ============================================
     elif name == "list_board_issues":
