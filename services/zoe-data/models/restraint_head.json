@@ -1,0 +1,50 @@
+{
+  "C": 16.0,
+  "classes": [
+    "health",
+    "money",
+    "family_conflict",
+    "grief",
+    "other_member",
+    "affect"
+  ],
+  "cv": {
+    "affect": {
+      "oof_plain_fire": 0.0095,
+      "oof_recall": 0.989,
+      "threshold": 0.37
+    },
+    "family_conflict": {
+      "oof_plain_fire": 0.0095,
+      "oof_recall": 0.908,
+      "threshold": 0.675
+    },
+    "grief": {
+      "oof_plain_fire": 0.0095,
+      "oof_recall": 0.839,
+      "threshold": 0.785
+    },
+    "health": {
+      "oof_plain_fire": 0.0095,
+      "oof_recall": 0.744,
+      "threshold": 0.86
+    },
+    "money": {
+      "oof_plain_fire": 0.0095,
+      "oof_recall": 0.807,
+      "threshold": 0.865
+    },
+    "other_member": {
+      "oof_plain_fire": 0.0095,
+      "oof_recall": 0.697,
+      "threshold": 0.795
+    }
+  },
+  "dim": 384,
+  "embedder": "BAAI/bge-small-en-v1.5",
+  "format": "zoe-restraint-head/1",
+  "fp_budget": 0.01,
+  "n_train": 1422,
+  "train_sha": "f8ad7ad980876ff0be9e87e66e2736b5cece8b57f962a98f727b8af2efc9b1aa",
+  "train_sha_scheme": "classes+text/1"
+}

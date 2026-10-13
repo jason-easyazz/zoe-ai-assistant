@@ -397,6 +397,9 @@ services/zoe-data/models/*
 !services/zoe-data/models/router_head_logreg.json
 !services/zoe-data/models/router_head_mlp.npz
 !services/zoe-data/models/router_head_mlp.json
+# Restraint semantic head (restraint_head.py; scripts/maintenance/train_restraint_head.py): ~10 KB, tracked deliberately.
+!services/zoe-data/models/restraint_head.npz
+!services/zoe-data/models/restraint_head.json
 services/zoe-data/data/router_head_shadow.jsonl
 
 # Router self-training loop — miner (labs/router-selftrain/) + orchestrator

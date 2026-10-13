@@ -17,6 +17,13 @@ Five parts, one module (the pure core imports nothing heavy; I/O imports are laz
    for threads in ``restraint_classes`` (migration 0042). INVALIDATE, NEVER DELETE: a stored class
    is trusted only while its classifier version and text hash still match; otherwise it is ignored
    (and, for threads, marked ``invalid_at`` and superseded by a new row), never overwritten.
+   **The semantic head never embeds on a turn or on the event loop** (``restraint_head``): ``stamp`` is
+   cache-only and hands the text to one daemon worker thread that fills the head's cache; the nightly
+   thread pass warms it through ``asyncio.to_thread``. Behaviour change, stated: a row stamped at write
+   time may LACK the head's classes until the worker has filled the cache (it is stamped
+   ``LEXICON_VERSION``, which readers ignore, so they recompute and pick the head up from the cache
+   once it is there); the cache is per process, so after a restart a row regains the head only when
+   it is re-stamped or re-warmed.
 2. **Withhold** (``apply_to_packet`` / ``filter_brief_ctx`` / ``decide``): in enforce, a row or
    thread in a sensitive class is removed from the recall packet, the ``[Today]`` brief and the
    ``[RAISE]`` pick unless the turn PULLS it: the owner's words share a topic with it, name its
@@ -41,6 +48,7 @@ guest rule, which is pure code with no I/O to fail.
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import contextvars
 import hashlib
@@ -53,12 +61,14 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Optional
 
+import lexicons as _lexicons
+import restraint_head as _head
 import restraint_lex as _lex
 
 logger = logging.getLogger(__name__)
 
 ENV = "ZOE_RESTRAINT"
-VERSION = 2  # the classifier version: bump it and every stored class is invalid (read as unstored)
+VERSION = 3  # the classifier version: bump it and every stored class is invalid (read as unstored). 3 = the semantic head joined the union
 CLASSES = ("health", "money", "family_conflict", "grief", "other_member", "affect")
 SURFACES = ("packet", "brief", "raise_greeting", "raise_cue", "card")
 
@@ -155,11 +165,68 @@ _TAG_CLASSES = {
 }
 
 
+#: The version a label carries when the semantic head was applicable but did NOT run (the router's model was not loaded yet, no
+#: head file): the lexicon's version, which ``row_classes`` ignores, so a later read or ``stamp`` applies the head.
+LEXICON_VERSION = VERSION - 1
+
+
+#: English function words that are NOT also common words in another language (so no ``to``/``no``/``in``/``is``/``was``/``will``/``for``/
+#: ``do``/``a``: Polish, German, Dutch, Danish and Portuguese all use those). With English contractions and the detector's own word list
+#: they are the POSITIVE evidence the text is English; ``detect_scored``'s language alone cannot give it because it answers
+#: ``("en", 0)`` for every language it has no word list for.
+_ENGLISH_MARKERS = frozenset(
+    "he she his the and are were with that this they them their there these those than then have been being would could should about "
+    "because while since when what where which who how whom whose from over after before again always never lately just very also "
+    "some any every everyone everything something nothing anything everywhere our your ours yours myself himself herself "
+    "themselves into onto upon until though although either neither today tonight tomorrow yesterday keep keeps kept "
+    "feel feels feeling felt really maybe much".split())
+_CONTRACTION_RE = re.compile(r"\b[a-z]+(?:n't|'(?:m|ve|ll|re|d|s))\b")
+_WORD_RE = re.compile(r"[^\W\d_]+")
+
+
+def _head_applies(text: Any) -> bool:
+    """The head is an ENGLISH embedding classifier: it runs only on text with POSITIVE evidence of being English, and everything
+    else stays lexicon-only (the module's promise), as every other restraint word list does.
+
+    Two conditions: the language detector must not prefer another language, AND the text must carry English-only evidence (an
+    unambiguous function word, an English contraction, or a hit on the detector's own English word list). ``detect_scored`` returns ``("en", 0)`` for Polish, Russian, Portuguese
+    and anything else it has no word list for, so ``lang == "en"`` alone proves nothing. A short English line with no marker
+    ("Divorce papers arrive next week") falls back to the lexicon, the safe side: the head only ever ADDS classes, so not running it
+    can only mean fewer, never a wrong one."""
+    raw = str(text or "")
+    lang, hits = _lexicons.detect_scored(raw)
+    if lang != "en":
+        return False
+    low = raw.casefold().replace("\u2019", "'")
+    if _CONTRACTION_RE.search(low):
+        return True
+    if any(t in _ENGLISH_MARKERS for t in _WORD_RE.findall(low)):
+        return True
+    return hits > 0         # the detector's own English word list (a word like ``to`` or ``is`` is a weak but real signal)
+
+
+def head_settled(text: Any) -> bool:
+    """True when the semantic head has nothing left to add for ``text``: it already ran on it, or the text is not English (it never
+    will). Call AFTER a ``head=True`` classification: it reads the cache that classification filled. A label written while this is
+    False is stamped ``LEXICON_VERSION``, not ``VERSION``, so it is never trusted as head-complete."""
+    raw = str(text or "")
+    if not _head_applies(raw):
+        return True
+    return _head.lookup(raw, embed=False) is not None
+
+
 def classify_full(text: Any, *, memory_type: Any = "", affect: Any = "", entity_type: Any = "",
-                  kind: str = "", names: Iterable[str] = (), tags: Any = "") -> tuple[tuple[str, ...], tuple[str, ...]]:
+                  kind: str = "", names: Iterable[str] = (), tags: Any = "",
+                  head: Any = "cache") -> tuple[tuple[str, ...], tuple[str, ...]]:
     """``(classes, signals)`` for one row or thread. ``signals`` names what decided each class
-    (``entity``, ``type``, ``tag``, ``affect``, ``kind``, ``lexicon``, ``name``) so a test or an audit can
-    tell a structured decision from a word-list one. Pure, no I/O, order follows ``CLASSES``."""
+    (``entity``, ``type``, ``tag``, ``affect``, ``kind``, ``lexicon``, ``name``, ``head``) so a test or an audit can
+    tell a structured decision from a word-list one. Order follows ``CLASSES``.
+
+    ``head`` is the semantic half (``restraint_head``: six logistic units on the embedding the router already loaded),
+    UNIONED with everything else, so it can only add a class: ``False`` = off (the word list and structured signals alone),
+    ``"cache"`` (default; the hot-path mode) = use the head's answer only if this exact text was embedded before, never embed,
+    ``True`` = embed it now, ON THE CALLING THREAD (a worker thread or ``asyncio.to_thread`` only, plus the offline eval harness; a
+    turn or the event loop must never pass it). With no head file or no loaded embedder it adds nothing."""
     raw = str(text or "")
     low = raw.lower().replace("\u2019", "'")
     pk = _lex.pack_for(raw)
@@ -201,6 +268,10 @@ def classify_full(text: Any, *, memory_type: Any = "", affect: Any = "", entity_
     elif pk.affect is not None and pk.affect.search(low):
         found["affect"] = "lexicon"
 
+    if head and _head_applies(raw):
+        for cls in _head.classes(raw, embed=head is True):
+            found.setdefault(cls, "head")
+
     classes = tuple(c for c in CLASSES if c in found)
     return classes, tuple(f"{c}:{found[c]}" for c in classes)
 
@@ -220,10 +291,15 @@ def stamp(md: dict, text: Any) -> None:
     try:
         if mode() == "off":
             return
+        # head="cache": a stamp runs on the event loop inside a memory write (a turn's "remember" tool call), so it never embeds.
         classes = classify(text, memory_type=md.get("memory_type"), affect=md.get("candidate_affect"),
-                           entity_type=md.get("entity_type"), tags=md.get("tags"))
+                           entity_type=md.get("entity_type"), tags=md.get("tags"), head="cache")
         md["sensitivity"] = ",".join(classes)
-        md["sensitivity_v"] = VERSION
+        # v3 only when the head actually ran (or never applies); otherwise the lexicon version, which a reader ignores
+        settled = head_settled(text)
+        md["sensitivity_v"] = VERSION if settled else LEXICON_VERSION
+        if not settled:
+            _head.defer(text)       # off-loop: the worker fills the cache, so readers (and a later re-stamp) see the head's answer
         md["sensitivity_h"] = text_hash(text)
     except Exception as exc:  # noqa: BLE001
         logger.debug("restraint: stamp skipped: %r", exc)
@@ -943,14 +1019,20 @@ async def store_thread_classes(db, user_id: str, items: Iterable[tuple[str, str,
     try:
         valid = await load_thread_classes(db, user_id)
         names = list(names)
+        items = list(items)
+        # the head's embedding is the slow part (~7-19 ms a text): do ALL of it on a worker thread first, so the loop below only
+        # reads the cache (head="cache") and the event loop is never blocked by the nightly pass
+        await asyncio.to_thread(_head.warm, [t for _r, t, _k in items if _head_applies(t)])
         for ref, text, kind in items:
             h = text_hash(text)
             cur_ = valid.get(ref)
             # classified BEFORE the skip: the contact names are an input too, so a thread stored before
             # a contact was added is re-derived (same text, new class) rather than kept stale
-            classes, signals = classify_full(text, kind=kind, names=names)
-            if cur_ and cur_[0] == VERSION and cur_[1] == h and _parse_csv(cur_[2]) == classes:
-                continue
+            classes, signals = classify_full(text, kind=kind, names=names, head="cache")
+            settled = head_settled(text)
+            if cur_ and cur_[0] == VERSION and cur_[1] == h and (_parse_csv(cur_[2]) == classes or not settled):
+                continue      # (head not run this pass: keep the head-complete row rather than downgrade it to the word list)
+            ver = VERSION if settled else LEXICON_VERSION
             # invalidate + insert are ONE transaction: a failed insert must not leave the thread with
             # no valid saved class (db-safety: multi-step writes are transactional)
             async with _txn(db):
@@ -964,7 +1046,7 @@ async def store_thread_classes(db, user_id: str, items: Iterable[tuple[str, str,
                        ON CONFLICT (user_id, subject_ref, version, text_hash)
                        DO UPDATE SET invalid_at = NULL, classes = excluded.classes,
                            signals = excluded.signals, derived_at = excluded.derived_at""",
-                    (uuid.uuid4().hex, user_id, ref, ",".join(classes), ",".join(signals), VERSION, h, stamp_))
+                    (uuid.uuid4().hex, user_id, ref, ",".join(classes), ",".join(signals), ver, h, stamp_))
             written += 1
     except Exception as exc:  # noqa: BLE001
         logger.warning("restraint: thread class store failed user=%s: %r", user_id, exc)
