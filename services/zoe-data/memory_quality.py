@@ -838,8 +838,7 @@ def _role_variants(role: str) -> frozenset[str]:
 # The per-turn extractor reads ONE message; when the owner continues about a person named a turn earlier ("...seeing my dad in the
 # hospital" / "His health went up and down") it copies the pronoun into the fact, and the stored row is about nobody: recall can
 # never place it, and "He" reads as whoever the next prompt is about (live 2026-10-12, two health rows). The antecedent is resolved
-# from the owner's OWN recent words - "my <relation>", exactly one compatible relation, newest turn first, and never past a nearer
-# NAMED person - or the fact is held.
+# from the owner's OWN recent words - "my <relation>", exactly one compatible relation, newest turn first - or the fact is held.
 _SUBJECT_PRONOUN_RE = re.compile(
     r"^\s*(?:(?:and|but|also|so)\s+)?(?P<pron>he|she|his|her|they|their|him|hers)\b(?P<rest>.*)$",
     re.IGNORECASE | re.DOTALL)
@@ -852,53 +851,6 @@ _NEUTRAL_KIN = frozenset({"friend", "partner", "colleague", "coworker", "boss", 
 _MY_KIN_RE = re.compile(
     r"\bmy\s+(?:(?:[a-z]+)\s+)?(?P<rel>" + "|".join(sorted(_MALE_KIN | _FEMALE_KIN | _NEUTRAL_KIN, key=len, reverse=True)) + r")\b",
     re.IGNORECASE)
-
-
-# A NAMED person is an antecedent too, and a nearer one than an older "my <relation>": "Dana called me" then, a turn earlier, "I visited
-# my sister" - "She is in ICU" is about Dana (or nobody we can tell), never "User's sister". So a name said AFTER the newest relation
-# (a later turn, or later in the same message) blocks the resolution; with no relation at all a name also means "held". A capitalised
-# word is a name unless it is clearly not one: a place after a locative word ("from Hobart"), a day / month, the assistant, a kin word,
-# an ordinary sentence opener ("Yesterday", "It", "No"), or the name OF the relation just said ("my sister Dana" is one person).
-# Lowercase-typed names are invisible here - the residual risk, in the safe direction only for capitalised text.
-_NOT_A_NAME = frozenset(
-    {"zoe", "user", "i", "ok", "okay", "yes", "yeah", "yep", "nope", "no", "hmm", "hm", "oh", "ah", "um", "uh", "well", "so", "and", "but", "or",
-     "the", "a", "an", "this", "that", "these", "those", "it", "its", "he", "his", "him", "she", "her", "hers", "they", "their", "them", "we",
-     "our", "us", "you", "your", "my", "me", "mine", "there", "here", "then", "now", "today", "tonight", "tomorrow", "yesterday", "later",
-     "soon", "still", "just", "also", "even", "only", "maybe", "perhaps", "please", "thanks", "thank", "sorry", "hello", "hi", "hey",
-     "what", "when", "where", "who", "why", "how", "which", "if", "as", "at", "in", "on", "of", "for", "from", "to", "with", "about", "after",
-     "before", "because", "since", "while", "although", "though", "until", "unless", "not", "never", "always", "sometimes", "every",
-     "each", "some", "any", "all", "most", "many", "much", "more", "one", "two", "three", "something", "everything", "anything", "nothing",
-     "everyone", "someone", "anyone", "nobody", "is", "are", "was", "were", "be", "been", "am", "do", "does", "did", "have", "has", "had",
-     "can", "could", "will", "would", "should", "may", "might", "must", "let", "lets", "got", "get", "went", "came", "said", "told",
-     "anyway", "honestly", "actually", "basically", "apparently", "luckily", "unfortunately", "meanwhile", "otherwise", "however",
-     "christmas", "easter", "covid"})
-_LOCATIVE_BEFORE = frozenset({"in", "from", "to", "at", "near", "around", "into", "across", "outside", "inside", "through", "via", "toward",
-                              "towards", "past", "of", "back"})
-_CAPITAL_WORD_RE = re.compile(r"\b[A-Z][a-z]+\b")
-_KIN_WORD_ALT = "|".join(sorted(_MALE_KIN | _FEMALE_KIN | _NEUTRAL_KIN, key=len, reverse=True))
-_KIN_APPOSITIVE_RE = re.compile(rf"\b(?:my|our)\s+(?:[a-z]+\s+)?(?:{_KIN_WORD_ALT})\W*(?:(?:is|was|named|called)\s+)?$", re.IGNORECASE)
-
-
-def _named_people(text: str) -> list:
-    """Start offsets of the named people in the owner's message ``text`` (apostrophes already normalised). Pure."""
-    found = []
-    for m in _CAPITAL_WORD_RE.finditer(text):
-        word = m.group(0).lower()
-        if word in _NOT_A_NAME or word in _GUARD_CAL_WORDS or word in _MALE_KIN or word in _FEMALE_KIN or word in _NEUTRAL_KIN:
-            continue
-        before = text[:m.start()].rstrip()
-        if not before or before[-1] in ".!?\n:;\"" or before.endswith("..."):
-            # the opener of a sentence: a name only when it is not an ordinary word that opens sentences
-            if word.endswith("ly") or word.endswith("ing"):
-                continue
-        else:
-            prev = re.search(r"([\w'-]+)$", before)
-            if prev and prev.group(1).lower() in _LOCATIVE_BEFORE:
-                continue                                           # "from Hobart": a place
-            if _KIN_APPOSITIVE_RE.search(before + " "):
-                continue                                           # "my sister Dana": the relation itself
-        found.append(m.start())
-    return found
 
 
 def subjectless_pronoun_fact(fact_text: str) -> bool:
@@ -929,20 +881,11 @@ def resolve_subjectless_fact(fact_text: str, recent_user_texts: list) -> Optiona
     if not rest or pron in ("him", "hers"):
         return None
     for text in recent_user_texts or ():
-        norm = (text or "").replace("’", "'")
         rels = []
-        last_kin = -1
-        for rm in _MY_KIN_RE.finditer(norm):
+        for rm in _MY_KIN_RE.finditer((text or "").replace("’", "'")):
             rel = rm.group("rel").lower()
-            if rel in allowed:
-                last_kin = max(last_kin, rm.start())
-                if rel not in rels:
-                    rels.append(rel)
-        # a named person said AFTER the newest relation (a later turn, or later in this message) is the nearer antecedent: never
-        # resolve past them to an older "my <relation>" - hold
-        names = _named_people(norm)
-        if names and max(names) > last_kin:
-            return None
+            if rel in allowed and rel not in rels:
+                rels.append(rel)
         if len(rels) == 1:
             owner = f"User's {rels[0]}"
             if pron in _PRONOUN_POSSESSIVE:

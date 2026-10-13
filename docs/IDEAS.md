@@ -37,9 +37,6 @@ Detail/AI notes go under each entry. Move the status as it progresses.
 - **Core:** Zoe owns everyday tasks end to end — emails as herself, books online, phones businesses, pays with single-use capped cards, escalates to the owner when stuck, learns from corrections. Source: [wajo.ai](https://wajo.ai); owner, 2026-10-12: "be great to get zoe to this level."
 - **Record + plan:** [`docs/research/zoe-action-agent-2026-10.md`](research/zoe-action-agent-2026-10.md); tracked in [PLANS.md](PLANS.md). The piece to borrow first is Fo's benchmark shape (a simulated world graded world-state first), not its feature list.
 
-### Omi pendant: press-to-record firmware (and our own bootloader key) — 🔬 exploring
-- **Core:** the owner wants the pendant to record only after a button press. Possible as a small app-core patch pushed over OTA (the CV1 bootloader trusts MCUboot's public default key, so anyone can sign), but a bad image has no BLE recovery - buy/borrow an SWD probe first, and consider replacing the bootloader key over SWD at the same time because the public key lets anyone in BLE range reflash a stock pendant. Source: [omi-press-to-record-firmware-2026-10.md](research/omi-press-to-record-firmware-2026-10.md), 2026-10-13.
-
 ### Voice for Bluetooth devices — "connect my pendant" / "is my pendant connected" — 💡 pinned
 Settings > Bluetooth devices ([bluetooth-settings.md](knowledge/bluetooth-settings.md)) is built flag-dark without a voice path (a new intent is a replay-gated change). The seam is `bluetooth_broker.enqueue` — an intent would queue `connect`/`status` for the right panel. Also: a push channel for update progress instead of polling, and a USB Bluetooth adapter on the panel (the built-in radio hears the pendant at about -91 dBm even beside it).
 

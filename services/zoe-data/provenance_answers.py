@@ -441,70 +441,6 @@ def _second_person_verb(verb: str) -> str:
     return verb[:-1]
 
 
-#: a verb that takes a clause of its OWN ("User says Dana likes tea and hates coffee"): whatever follows has another subject
-_CLAUSE_VERBS = frozenset({"say", "think", "know", "believe", "hope", "feel", "mention", "tell", "worry", "wish", "mean", "see", "hear",
-                           "notice", "remember", "forget", "find", "learn", "realise", "realize", "understand", "guess", "suppose",
-                           "assume", "claim", "explain", "report", "add", "note", "decide", "said", "thought", "knew", "told", "felt"})
-#: words that open another clause (and so another subject) before a coordinated verb
-_CLAUSE_OPENER_RE = re.compile(r"\b(?:he|she|they|it|we|i|you|that|who|whom|which|whose|because|since|while|when|where|if|as|after|before|"
-                               r"so|than|until|unless|although|though)\b", re.IGNORECASE)
-_MODAL_INFINITIVE_RE = re.compile(r"\b(?:to|can|could|will|would|should|might|must|may)\s+[a-z]+", re.IGNORECASE)
-_COORD_RE = re.compile(r"(?P<sep>,\s*(?:(?:and|but|or)\s+)?|\s+(?:and|but|or)\s+)(?P<adv>(?:(?:then|[a-z]+ly)\s+)*)(?P<verb>[A-Za-z']+)"
-                       r"(?=(?P<after>\s+[A-Za-z0-9'][\w'-]*)?)")
-#: another SUBJECT of its own earlier in the predicate: a name or a relation word (with an optional possessive) then a verb
-#: ("Dana likes", "his sister works", "Tom's dog barks")
-_OTHER_PERSON_SUBJECT_RE = re.compile(
-    r"(?:\b[A-Z][a-z]+|\b(?:sister|brother|mother|father|mum|mom|dad|wife|husband|partner|son|daughter|friend|boss|neighbou?r|"
-    r"colleague|cousin|aunt|uncle|kids?|children)s?)(?:['’]s)?\s+(?:[a-z]+s|is|has|was|does|goes|isn't|hasn't)\b")
-
-
-@lru_cache(maxsize=1)
-def _present_verbs() -> frozenset:
-    try:
-        import lexicons
-
-        return frozenset(w.lower() for w in lexicons.words("en", "present_verbs"))
-    except Exception:  # noqa: BLE001 - no lexicon: a coordinated verb is left as it was, never guessed
-        return frozenset()
-
-
-def _coordinated_verb(low: str, after: str) -> Optional[str]:
-    """The second-person form of a third-person verb that follows "and" / "but" / "or" / a comma - or None when it is not clearly one.
-    An irregular verb ("is", "has") is clear; a regular "-s" word is a verb only when its stem is a known verb AND a word follows it
-    that is not "and" / "of" ("likes tea and cats", "likes walks and runs" are noun lists, left as they were). Pure."""
-    if low in _IRREGULAR_VERB:
-        return _IRREGULAR_VERB[low]
-    stem = _second_person_verb(low)
-    if stem == low or stem.lower() not in _present_verbs():
-        return None
-    nxt = after.strip().lower()
-    if not nxt or nxt in ("and", "or", "but", "of"):
-        return None
-    return stem
-
-
-def _conjugate_coordinated(first_verb: str, rest: str) -> str:
-    """"User walks the dog and feeds the cat" / "likes tea but hates coffee": the verbs the "User" subject coordinates after the first
-    one take the second person too ("you walk the dog and feed the cat"), or the spoken list is ungrammatical halfway through.
-    Conservative on purpose - another subject in between (a name, a relation, a pronoun, a "that" clause), an infinitive or a modal,
-    or a first verb that takes a clause of its own, leaves the rest exactly as it was. Pure."""
-    if first_verb.lower() in _CLAUSE_VERBS or _second_person_verb(first_verb).lower() in _CLAUSE_VERBS:
-        return rest
-    out, last = [], 0
-    for m in _COORD_RE.finditer(rest):
-        if m.start() < last:
-            continue
-        lead = rest[:m.start()]
-        if _CLAUSE_OPENER_RE.search(lead) or _MODAL_INFINITIVE_RE.search(lead) or _OTHER_PERSON_SUBJECT_RE.search(lead):
-            break
-        fixed = _coordinated_verb(m.group("verb").lower(), m.group("after") or "")
-        if fixed is None:
-            continue
-        out.append(rest[last:m.start("verb")] + fixed)
-        last = m.end("verb")
-    return "".join(out) + rest[last:] if out else rest
-
-
 def second_person(text: str) -> str:
     """"User's sister is named Marisol" -> "your sister is named Marisol"; "User lives in Perth" -> "you live in Perth"; "The user
     enjoys being back in their house" -> "you enjoy being back in your house". A light rewrite for the spoken list - EVERY "the
@@ -516,7 +452,7 @@ def second_person(text: str) -> str:
     m = _third_subject_re().match(t)
     rewritten = rewritten or bool(m)
     if m:
-        t = f"you {m.group('adv')}{_second_person_verb(m.group('verb'))}{_conjugate_coordinated(m.group('verb'), m.group('rest'))}"
+        t = f"you {m.group('adv')}{_second_person_verb(m.group('verb'))}{m.group('rest')}"
 
         def _own(mm: "re.Match") -> str:
             # "their" is the user's only when NO other person is named before it ("enjoys being back in their house"): in

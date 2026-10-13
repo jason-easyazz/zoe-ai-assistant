@@ -481,10 +481,6 @@ each file's docstring.
   "recording" a deliberate act, restores a real consent posture (section 5), and is the right moment to adopt the
   custody-capable firmware (`CAP_APP_ACK_RECLAIM`, `ring_id`) so the pendant never frees on its own. Needs the pendant's
   hardware facts from 0.3 first.
-  **Researched 2026-10-13:** [`docs/research/omi-press-to-record-firmware-2026-10.md`](../research/omi-press-to-record-firmware-2026-10.md)
-  — the bootloader trusts MCUboot's public default RSA key (committed with its private half), so an OTA image is signable; the
-  change is a small gate in front of the codec plus a button toggle; the cost is that a bad image can only be recovered over
-  SWD (get a probe first); the public key is also a security hole in the stock device.
 - **Speaker gate on recordings** (the section-5 machinery applied to a recording instead of a live segment) and a
   **reviewed → promoted** path into the memory admission gate. Until then the table is read by nothing.
 - **Live-stream / ambient (sections 4a-6)** and push-to-talk (B9.7).
@@ -521,16 +517,14 @@ two `.hex` full images, which are NOT the OTA artefact).
    write-without-response + notify.
 4. `image list` → `image test <hash>` (swap on next boot, **revert if not confirmed**) → `reset` → reconnect → check
    DIS firmware reads 3.0.21 and `python -m omi_sync check` is healthy → `image confirm`. If it does not come back or the check
-   fails, there is **no revert**: this MCUboot is overwrite-only, so "test" and "confirm" are the same thing and a power-cycle does
-   not bring the old image back (correction 2026-10-13; see `docs/research/omi-press-to-record-firmware-2026-10.md` 5.1).
+   fails, power-cycle: MCUboot reverts an unconfirmed image.
 **Risks (general MCUboot/OTA behaviour — none of this was exercised on this unit):** an upload that dies midway only touches
 the secondary slot; a power loss during the swap is the one risky instant (hence battery + charger); the nRF5340 has a
 network core, and a mismatch between application and network images is a way to brick it, so use ONLY the official OTA zip;
 the **update changes the storage protocol** (the SD files already on the card follow whatever the new firmware does with
-them — **drain the card with the legacy path first if that audio matters**); the clock and settings may reset; and the stock
-3.0.18 OTA zip **is** published (`Omi_CV1_v3.0.18` / `Omi_CV1_OTA_v3.0.18.zip`, 430 318 bytes; correction 2026-10-13) and
-equal-version images are accepted by the downgrade check, so going back over BLE is possible in principle (untested). The app's
-developer flash page is the alternative, but it brings the phone app back into the loop.
+them — **drain the card with the legacy path first if that audio matters**); the clock and settings may reset; and no
+3.0.18 image is known to be published, so going back is not an option. The app's developer flash page is the alternative, but
+it brings the phone app back into the loop.
 
 **The codec question.** Before `OMI_SYNC_ASSUME_CODEC=21`: the cheapest check is the live stream — wear the pendant, speak,
 and subscribe to `19b10001` for a few seconds with `omi_bringup_2026-10-12_probe.py` (it printed 0 packets in a quiet room; the
