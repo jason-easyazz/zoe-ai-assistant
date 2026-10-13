@@ -2210,10 +2210,12 @@ app.include_router(openclaw_router)
 app.include_router(voice_tts_router)
 from routers.voice_settings import router as voice_settings_router  # noqa: E402
 from routers.face_id import router as face_id_router  # noqa: E402
+from routers.voice_speaker_adapt import router as voice_speaker_adapt_router  # noqa: E402
 from routers.enrollment import router as enrollment_router  # noqa: E402
 
 app.include_router(voice_settings_router)
 app.include_router(face_id_router)
+app.include_router(voice_speaker_adapt_router)
 app.include_router(enrollment_router)
 app.include_router(user_profile_router)
 app.include_router(dashboard_router)
@@ -2958,6 +2960,9 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
     # between sentence boundaries. True mid-stream cancel requires task refactor (future).
     _ws_cancelled: list[bool] = [False]
     skybridge_context: dict = {}
+    # Zoe's last spoken reply on THIS socket: the WS does not persist its turns, so the "did she just make an offer?" check
+    # for a bare "sounds good" reads this copy instead of the stored transcript.
+    _ws_last_reply = ""
 
     try:
         while True:
@@ -3044,6 +3049,7 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
                 _co_ack = None
             if _co_ack:
                 import base64 as _b64co
+                _ws_last_reply = str(_co_ack.get("phrase") or "")
                 await websocket.send_json({"type": "state", "state": "responding"})
                 await websocket.send_json(
                     {"type": "transcript", "role": "zoe", "text": _co_ack["phrase"]}
@@ -3076,6 +3082,8 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
                 await websocket.send_json({"type": "cards", "result": skybridge_result})
                 await websocket.send_json({"type": "skybridge_context", "context": skybridge_context})
                 spoken_summary = str(skybridge_result.get("spoken_summary") or "").strip()
+                # a handled card turn IS Zoe's latest reply: a "sounds good" after it must not accept an older offer
+                _ws_last_reply = spoken_summary
                 if spoken_summary:
                     await websocket.send_json({"type": "transcript", "role": "assistant", "text": spoken_summary})
                 await websocket.send_json({"type": "state", "state": "ambient"})
@@ -3095,14 +3103,22 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
             # duplicate transcript if the brain path also ran).
             _fp_reply = None
             try:
-                from intent_router import detect_intent as _fp_detect, execute_intent as _fp_exec
+                from intent_router import (
+                    ack_answers_offer as _fp_ack_offer,
+                    detect_intent as _fp_detect,
+                    execute_intent as _fp_exec,
+                )
                 _fp_intent = _fp_detect(message_text, log_miss=False, user_id=user_id)
-                if _fp_intent is not None and _fp_intent.name in _VOICE_INSTANT_INTENTS:
+                # "sounds good" right after Zoe's OFFER accepts it: the canned "Okay." would swallow the offer, so the
+                # turn goes on to the brain, which has the conversation.
+                if (_fp_intent is not None and _fp_intent.name in _VOICE_INSTANT_INTENTS
+                        and not await _fp_ack_offer(_fp_intent, user_id, previous=_ws_last_reply)):
                     _fp_reply = await _fp_exec(_fp_intent, user_id=user_id)
             except Exception as _fp_exc:
                 logger.debug("voice instant fast-path detect/execute skipped: %s", _fp_exc)
                 _fp_reply = None
             if _fp_reply:
+                _ws_last_reply = _fp_reply
                 import base64 as _b64fp
                 await websocket.send_json({"type": "state", "state": "responding"})
                 await websocket.send_json({"type": "transcript", "role": "zoe", "text": _fp_reply})
@@ -3124,6 +3140,7 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
             # ── Streaming LLM + per-sentence TTS ────────────────────────────────
             # Track LLM output and TTS output separately so fallback only re-runs
             # what actually failed (avoids double-transcript if LLM works but TTS is down).
+            _ws_last_reply = ""   # an aborted / failed brain turn leaves no stale offer behind
             _stream_llm_reply = ""   # filled once LLM streaming completes
             _stream_tts_ok = False   # True if at least one audio chunk was sent
             try:
@@ -3234,6 +3251,8 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
                         })
                     except Exception as _tts_exc:
                         logger.warning("Voice WS TTS synthesize fallback failed: %s", _tts_exc)
+
+            _ws_last_reply = _stream_llm_reply or ""
 
             # ── Generative UI on the panel (flag-gated): all audio frames are
             # already sent (playback is client-side), so composing here cannot

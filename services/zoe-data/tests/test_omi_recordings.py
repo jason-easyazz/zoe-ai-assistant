@@ -520,15 +520,17 @@ def test_a_transcript_that_lands_after_a_forget_is_redacted_against_the_ledger(e
 
 def test_the_cascade_and_the_delete_user_path_call_this_module():
     """The forget entry points reach us (a string guard: the two hooks must exist, and are the only callers)."""
-    assert "omi_recordings.erase_entity(user_id, rx)" in (SVC / "memory_forget_cascade.py").read_text()
+    assert "omi_recordings.erase_entity(user_id, rx, strict=True)" in (SVC / "memory_forget_cascade.py").read_text()
     assert "omi_recordings.forget_user(user_id)" in (SVC / "memory_service.py").read_text()
 
 
 # --- kept out of everything else -----------------------------------------------------------------------------------------------------------------
 def test_nothing_else_reads_pendant_transcripts():
     """A pendant transcript is unreviewed and unverified: no fact extraction, recall, digest or prompt may read the table.
-    Static guard: the only modules naming it are the module itself, its router, main (mount + loop) and the two forget hooks."""
-    allowed = {"omi_recordings.py", "routers/omi_recordings.py", "main.py", "memory_service.py", "memory_forget_cascade.py"}
+    Static guard: the only modules naming it are the module itself, its router, main (mount + loop), the two forget hooks and
+    ``omi_devices.py`` (the one-time registry seed reads device_id + user_id only - never a transcript)."""
+    allowed = {"omi_recordings.py", "routers/omi_recordings.py", "main.py", "memory_service.py", "memory_forget_cascade.py",
+               "omi_devices.py"}
     hits = set()
     for p in SVC.rglob("*.py"):
         rel = str(p.relative_to(SVC))
@@ -572,7 +574,7 @@ def test_the_notice_route_rate_limits_and_needs_the_device_token(env, monkeypatc
         return True
 
     monkeypatch.setattr(omi, "notify_synced", fake_notify)
-    monkeypatch.setattr(omi_router, "_last_notice", 0.0)
+    monkeypatch.setattr(omi_router, "_last_notice", {})
     assert env.client.post("/api/omi/sync-notice", json={"count": 2}).status_code == 401
     assert env.client.post("/api/omi/sync-notice", json={"count": 2}, headers=TOKEN).json() == {"ok": True, "sent": True}
     assert env.client.post("/api/omi/sync-notice", json={"count": 2}, headers=TOKEN).json() == {"ok": True, "sent": False}

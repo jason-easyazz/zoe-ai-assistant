@@ -128,7 +128,7 @@ Settings "Face Identity" card beside Voice Identity: consent text → capture 3 
 - ECAPA-TDNN ONNX as a drop-in speaker-model upgrade over resemblyzer (≈5× better EER on benchmarks).
 - Attention gating: personal content only when recognized face is looking at the screen (head pose already computed).
 - ~$6 LD2410 mmWave sensor via ESPHome as a dedicated panel-room presence source (HA-bridged).
-- Cross-modally-gated rolling template gallery (auto-refresh enrollment) — only after the base system is proven; strict admission gate + immutable anchor per the poisoning literature.
+- Cross-modally-gated rolling template gallery (auto-refresh enrollment) — only after the base system is proven; strict admission gate + immutable anchor per the poisoning literature. **Partly built, flag-dark (`ZOE_SPEAKER_ADAPT`):** a single slow-EMA adapted voice profile beside the immutable anchor, learned only from high-certainty turns (strict score, corroboration, margin to the other members, rate limits, a hard cosine bound from the anchor) — see `services/zoe-data/speaker_adaptation.py` and `docs/knowledge/biometric-retention-policy.md` §1. The multi-sample gallery and face-side adaptation remain unbuilt.
 
 ## Risks / open questions
 

@@ -12,8 +12,8 @@ How it is held:
 * ``Spool.mark_confirmed`` (which drops the records) runs only on ``Outcome.CONFIRMED``;
 * on the RING path the pendant is advanced to ``advance_target(...)`` - a pure function of confirmed state: never past the
   first unconfirmed record, never past what we hold or confirmed contiguously from the pendant's own read pointer;
-* a dropped link, a refused READ, an inconsistent DONE, an unavailable Zoe, a rejected recording, an undecodable one: none of
-  them advance anything. The next session resumes from the spool + the pendant's pointer, and a seq already held is ignored
+* a dropped link, a refused READ, an inconsistent DONE, an unavailable Zoe, a pendant nobody owns yet (``NOT_REGISTERED``), a
+  rejected recording, an undecodable one: none of them advance anything. The next session resumes from the spool + the pendant's pointer, and a seq already held is ignored
   (idempotent by ``(ring, seq)``).
 
 ``CMD_RING_CLEAR`` and the legacy ``DELETE_FILE`` (the same byte as ADVANCE!) are never sent: neither protocol module has an
@@ -96,6 +96,7 @@ class DrainResult:
     rejected: int = 0
     undecodable: int = 0                # held: the audio did not decode (wrong codec assumption / corrupt)
     unavailable: bool = False           # Zoe could not be reached / is not accepting
+    not_registered: bool = False        # Zoe answered "this pendant is not assigned to a household member": custody kept, ask again later
     pending: int = 0                    # closed recordings left unconfirmed + the open tail
     advanced_to: Optional[int] = None
     notes: list[str] = field(default_factory=list)
@@ -103,7 +104,7 @@ class DrainResult:
     @property
     def clean(self) -> bool:
         return (self.refused is None and self.read_complete and not self.dropped and not self.unavailable
-                and not self.rejected and not self.undecodable)
+                and not self.not_registered and not self.rejected and not self.undecodable)
 
 
 # --- pure custody arithmetic --------------------------------------------------------------
@@ -219,7 +220,7 @@ class Drain:
                 await self._read_legacy(device, codec, offset)
             await self._upload_all(device)
         if res.uploaded:
-            await self.up.notify_synced(res.uploaded)
+            await self.up.notify_synced(res.uploaded, device)
         return res
 
     # ------------------------------------------------------------------------------ ring path
@@ -470,6 +471,13 @@ class Drain:
                     if path is not None:
                         path.unlink(missing_ok=True)
                     res.uploaded += 1
+                elif out.outcome is Outcome.NOT_REGISTERED:
+                    # Nobody owns this pendant yet. Nothing is confirmed, so nothing is freed; the rest of the session would get the
+                    # same answer, so stop asking. The runner waits OMI_SYNC_UNREGISTERED_RETRY_S before the next visit.
+                    res.not_registered = True
+                    res.pending += 1
+                    res.notes.append("Zoe: this pendant is not assigned to anyone yet (an admin assigns it in Settings > Bluetooth); kept")
+                    stop = True
                 elif out.outcome is Outcome.REJECTED:
                     res.rejected += 1
                     res.pending += 1

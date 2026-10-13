@@ -96,7 +96,9 @@ def test_tool_domains_get_a_short_line_that_claims_no_result(ack_on, routed):
 @pytest.mark.parametrize("decision", [{"routed": "chat"}, {"routed": ""}, {}, None, {"routed": "bogus"},
                                       {"domain": "calendar"}])   # only the ROUTED domain counts
 def test_chat_and_unknown_turns_get_no_ack(ack_on, decision):
-    assert fs.dispatch_ack(decision) is None and "chat" not in fs._TOOL_ACK_LINES
+    import voice_spacer
+
+    assert fs.dispatch_ack(decision) is None and "chat" not in voice_spacer.TOOL_ACK_DOMAINS
 
 
 def test_no_ack_when_sound_already_started_and_the_loop_uses_the_shared_decision(ack_on):

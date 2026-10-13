@@ -4,8 +4,9 @@ The ONLY thing that may free audio is ``Outcome.CONFIRMED``: HTTP 200 whose JSON
 ``ok`` and echoes the SHA-256 of the exact bytes we sent (or says the recording was
 deleted by its owner - a tombstone hit, which is also "Zoe has dealt with it"). Every
 other answer keeps the audio: ``REJECTED`` is a permanent per-recording refusal (kept,
-logged loudly, never retried in a loop), ``UNAVAILABLE`` is everything transient or
-config-shaped (Zoe down, the feature flag off => 404, bad token, owner unset).
+logged loudly, never retried in a loop), ``NOT_REGISTERED`` is Zoe saying "this pendant is not assigned to any household member"
+(409 ``device_not_registered`` - an admin has to assign it; custody is KEPT and the next try is slow), ``UNAVAILABLE`` is everything
+transient or config-shaped (Zoe down, the feature flag off => 404, bad token, owner unset).
 
 Stdlib ``urllib`` on purpose: the Pi service has two dependencies (bleak, opuslib) and
 does not need a third for one POST.
@@ -33,6 +34,7 @@ _PERMANENT = {400, 409, 413, 415, 422}
 class Outcome(str, Enum):
     CONFIRMED = "confirmed"
     REJECTED = "rejected"
+    NOT_REGISTERED = "not_registered"
     UNAVAILABLE = "unavailable"
 
 
@@ -55,12 +57,23 @@ class UploadResult:
 
 class Uploader(Protocol):
     async def upload(self, meta: UploadMeta, wav: bytes) -> UploadResult: ...
-    async def notify_synced(self, count: int) -> None: ...
+    async def notify_synced(self, count: int, device_id: str = "") -> None: ...
 
 
 def device_hash(address: str) -> str:
     """A stable, non-reversible id for the pendant (16 hex chars). The address itself stays on the Pi."""
     return hashlib.sha256(("omi-sync:" + address.strip().lower()).encode()).hexdigest()[:16]
+
+
+NOT_REGISTERED_CODE = "device_not_registered"
+
+
+def _error_code(body: bytes) -> str:
+    try:
+        doc = json.loads(body.decode("utf-8", "replace") or "{}")
+    except ValueError:
+        return ""
+    return str(doc.get("error") or "") if isinstance(doc, dict) else ""
 
 
 def sha256_hex(data: bytes) -> str:
@@ -81,6 +94,9 @@ def classify(status: int, body: bytes, sent_sha: str) -> UploadResult:
         if doc.get("sha256") != sent_sha:
             return UploadResult(Outcome.UNAVAILABLE, "200 but the echoed sha256 does not match what was sent")
         return UploadResult(Outcome.CONFIRMED, "duplicate" if doc.get("duplicate") else "stored")
+    if status == 409 and _error_code(body) == NOT_REGISTERED_CODE:
+        # NOT a per-recording refusal: nothing is wrong with these bytes, nobody owns this pendant yet. Keep everything and ask again later.
+        return UploadResult(Outcome.NOT_REGISTERED, "device_not_registered")
     if status in _PERMANENT:
         return UploadResult(Outcome.REJECTED, f"HTTP {status}")
     return UploadResult(Outcome.UNAVAILABLE, f"HTTP {status}")
@@ -129,10 +145,11 @@ class HttpUploader:
             log.warning("upload of %s not confirmed: %s (%s)", meta.key, res.outcome.value, res.detail)
         return res
 
-    async def notify_synced(self, count: int) -> None:
-        """Best-effort 'I synced N recordings' notice trigger. Never raises; losing it loses nothing."""
+    async def notify_synced(self, count: int, device_id: str = "") -> None:
+        """Best-effort 'I synced N recordings' notice trigger (Zoe sends it to the pendant's OWNER only, found from ``device_id``).
+        Never raises; losing it loses nothing."""
         try:
-            await asyncio.to_thread(self._post, "/api/omi/sync-notice", json.dumps({"count": int(count)}).encode(),
+            await asyncio.to_thread(self._post, "/api/omi/sync-notice", json.dumps({"count": int(count), "device": device_id}).encode(),
                                     {"Content-Type": "application/json"})
         except Exception as exc:  # noqa: BLE001
             log.info("sync notice not sent: %s", type(exc).__name__)

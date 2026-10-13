@@ -43,6 +43,9 @@ if "memory_service" not in sys.modules:
         atexit.register(shutil.rmtree, _stores, ignore_errors=True)
     os.environ["MEMPALACE_DATA_DIR"] = os.path.join(_stores, "mempalace")
     os.environ["ZOE_MEMORY_REJECT_LEDGER"] = os.path.join(_stores, "memory-reject-ledger.json")
+    # ... and the app log: a test that enters the zoe-data lifespan attaches a handler writing to $ZOE_LOG_DIR (the live
+    # server's ~/.zoe-logs/zoe-data.app.log by default). See services/zoe-data/tests/conftest.py.
+    os.environ["ZOE_LOG_DIR"] = os.path.join(_stores, "logs")
 
 
 @pytest.fixture(scope="session")

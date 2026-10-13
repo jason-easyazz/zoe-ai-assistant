@@ -123,7 +123,7 @@ def test_a_forget_cascade_clears_the_mutes_that_name_the_forgotten_entity(monkey
 
     erased = []
 
-    async def erase(uid, name):
+    async def erase(uid, name, **_kw):
         erased.append((uid, name))
         return 1
 
