@@ -943,6 +943,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_CONTINUE_WINDOW_S": {
+        "defaults": [
+          "2.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/zoe_voice_daemon.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_CONVERSATION_ENDER_ACKS": {
         "defaults": [
           "dynamic"
@@ -1813,6 +1823,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/zoe_flue_client.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_FOLLOWUP_ADDRESSED": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_utterance_shape.py"
         ],
         "typed_env": false
       },
@@ -5985,6 +6005,16 @@
         "readers": [
           "services/zoe-data/routers/voice_tts.py",
           "services/zoe-data/zoe_agent.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_VOICE_CONTINUATION_HOLD": {
+        "defaults": [
+          "'on'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_utterance_shape.py"
         ],
         "typed_env": false
       },

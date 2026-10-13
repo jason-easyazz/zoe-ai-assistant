@@ -1370,6 +1370,141 @@ Jetson, not the Pi's torch-hub copy, so read chunk counts as ±1.
   of this, because it starts from saved recordings. `scripts/perf/measure_endpointing.py` is the
   endpointing instrument.
 
+## Long speech is one turn — caps, trailing "and", side speech (2026-10-12)
+
+**What the Pi log showed (2026-10-12, no transcripts here).** Four follow-up recordings
+(18:34:24, 18:47:53, 18:48:23, 18:48:53) stopped at `stop=max_duration duration=12.32s tail=-`: the
+speaker was mid-sentence, Zoe answered the first half, and the leftover was recorded as a separate
+1.2 s turn (empty or garbage transcript, which the brain read as distress). A recording closed on
+the fixed pause at a trailing "and" (17:20:20), so Zoe answered half a thought. The follow-up and
+conversation windows (no wake word) accepted the owner talking to someone else as commands.
+
+| Saved clip (`~/.zoe-voice-samples`) | What it is | Fixed by |
+|---|---|---|
+| `183428_411`, `184758_824`, `184827_246`, `184857_782` (12.32 s each) | cap hit mid-speech | (a) |
+| `183433_104`, `184910_027` (1.2 s each) | the leftover tail that became its own turn | (a): never exists now |
+| `172020_735` (6.4 s) | closed on silence; the logged transcript ends on "and" | (b) |
+| `184728_290` (5.28 s) | control: a full sentence closed on silence; must replay unchanged | none |
+| `184053_605`, `184651_163` | side speech, a person addressed by name mid-utterance | (c) |
+
+### (a) Soft cap, hard cap, snap to a pause — daemon, on by default
+
+`RECORD_SECONDS_MAX` (12) is now the **soft** cap. Between it and the hard cap
+(`RECORD_SECONDS_HARD_MAX`=30; `CONV_RECORD_SECONDS_HARD_MAX`=60 in an open conversation) a
+recording stays open only while the speaker is still flowing: Silero speech in at least
+`RECORD_STILL_SPEAKING_RATIO` (0.5) of the last ~2 s, so a TV or a stuck mic still stops at 12 s (never while the current chunk is speech: a
+speaker who paused and resumed just before 12 s runs on to the next quiet chunk).
+At the hard cap it runs on, up to `RECORD_SNAP_S` (3), to the first non-speech chunk, so the cut
+falls in a pause, never inside a word. All three recorders (wake command, follow-up/conversation
+window, barge-in seed) share one rule, `_record_cap_stop`. A recording that still ends on the hard
+cap **mid-speech** is not sent: `_gather_capped_continuation` listens `ZOE_CONTINUE_WINDOW_S` (2)
+for the rest and sends one merged clip (at most 3 merges), so there is no second turn and no
+sub-second tail. Cost: STT is ~0.25 s per second of clip, so a 30 s monologue spends ~7 s in STT
+before Zoe answers, and only turns that are actually that long pay it. Verify a 30 s clip in
+Moonshine on the first replay (the corpus has no clip over 12.32 s).
+
+### (b) Trailing "and": the server holds, the daemon waits once
+
+The daemon has no transcript at endpoint time; a per-turn STT just to peek would slow every fast
+turn. So the decision is the server's, after STT and before the brain
+(`services/zoe-data/voice_utterance_shape.py`). Every non-speculative streamed turn carries
+`can_continue`; if the transcript ends on a continuation word (en + es data in `_LANGS`: and, but,
+because, or, if, unless, although, whether, until, plus, trailing um/uh/er/erm, and the Spanish
+y/e/o/u/ni/pero/porque/aunque/sino/pues/mientras) the server answers `{"done": true, "incomplete": true}`
+**without running the brain** (nothing written, nothing broadcast). The daemon (`_turn_with_monitor`)
+stops the barge monitor (the Jabra holds one input stream), listens `ZOE_CONTINUE_WINDOW_S` (2.0 s)
+and re-sends one merged clip marked `continued` (never held twice), or the original clip if nobody
+resumes. Conservative on purpose: fewer than 3 words, a `?`/`!` ending, "so" and "though" never
+hold; "that"/"which"/"que"/"si"... only hold in a 6+ word utterance that does not open like a
+question ("what was that" is complete); "cause" holds only as a conjunction (not after
+the/a/my/root/... or a pronoun/modal, unless written `'cause`). **Cost:** only a turn ending on such a word pays — the
+wait, plus a second STT pass on the retry. Every other turn is byte-identical. **Known limit:** the
+mic is closed for the STT round trip (~0.5 s), so a word spoken in that gap is lost; the listen
+opens right after, and a pause after "and" is normally longer. The seamless fix is the under-speech
+STT stream (`ZOE_STT_STREAM_UNDER_SPEECH`, still flag-dark). Kill switch on the server:
+`ZOE_VOICE_CONTINUATION_HOLD=off`; on the Pi: `ZOE_CONTINUE_WINDOW_S=0` (the daemon then never
+asks).
+
+### (c) Addressedness in follow-up windows — server, `ZOE_FOLLOWUP_ADDRESSED=off|on|strict`, default OFF
+
+A product decision, so it ships dark. The daemon labels a no-wake-word turn `window=followup`
+(5 s) or `conversation` (12 s) and, in a follow-up, sends `prev_reply_question` when Zoe's last
+reply ended in a question. A barge-in seed is deliberate speech to Zoe and carries no label. When
+the server decides the speech was not for Zoe it answers `{"done": true, "skipped": "not_addressed"}`:
+no brain, no memory write, no chime; a 5 s follow-up loop drops back to wake mode, an open
+conversation keeps listening. A soft "were you talking to me?" was rejected: it is exactly the
+noise a side conversation does not want.
+
+| Mode | Drops | Trade-off |
+|---|---|---|
+| `off` (default) | nothing | today's behaviour |
+| `on` | an utterance that names another person as the addressee (a vocative: `, Name.` or `Hey Name`) **and** has no question/command/acknowledgement shape **and** does not say "Zoe" | catches both 2026-10-12 side-speech clips and nothing else; a statement with no such evidence is let through, so the owner can keep talking to Zoe in statements |
+| `strict` | `on`, plus in a 5 s follow-up any plain statement that is not a question/command/acknowledgement, not an answer to a question Zoe asked, and longer than 3 words | the most protection from side speech, but it also drops a real statement meant for Zoe (the 2026-10-12 evening was mostly statements to Zoe in follow-up windows), so it needs the owner's explicit choice |
+
+Known false-positive risk of `on`: a place or brand after a comma (`..., Lisbon.`) looks like a
+vocative; a question or command shape wins, and a weekday/month/"thanks" list is excluded. Recommend
+trying `on`, then reading `not_addressed (<reason>)` lines in `~/.zoe-logs` (zoe-data does not log
+to journald) before ever considering `strict`.
+
+### Offline replay check (no live probe)
+
+The replay gate starts from saved WAVs, so it cannot see any of this (capture rules live before the
+WAV exists), and its POSTs carry none of the new fields, so the server gate returns `None` for every
+replayed turn (wake-path behaviour is unchanged by construction). The instrument is
+`scripts/perf/measure_long_speech_capture.py`: it feeds the saved clips above through the REAL
+`_Endpointer` + `_record_cap_stop`, prints `would_continue` for each cap-hit clip and the
+`ends_incomplete` / `addressedness` verdicts for each logged transcript (booleans and the last word
+only). Energy VAD by default (no model, RAM-free); `--vad silero` is the faithful run, under
+`flock /tmp/zoe-voice-harness.lock` and not while Kokoro loads. Expected: the four 12.32 s clips
+`would_continue=true`; `184728_290` closes on silence unchanged; `172020_735` `held=true`
+(last word "and"); the two side-speech clips `side_speech_in_followup=true`. Negative control:
+`--hard-s 12 --snap-s 0` makes the long clips `max_duration` again. Pinned by
+`tests/unit/test_voice_daemon_long_speech.py` and `services/zoe-data/tests/test_voice_utterance_shape.py`
+(both `ci_safe`, break-the-fix controls).
+
+### Operator deploy (replay-gated voice path; the Pi step is manual)
+
+Mixed versions are safe in both directions: a new server ignores a daemon that sends none of the
+new fields, and an old server ignores them, so the order is only a convenience.
+
+1. **Server first.** Land the PR; deploy zoe-data by the blessed path (the voice-path deploy gate
+   applies — [merge-and-deploy.md](merge-and-deploy.md) → *Landing a voice-path PR*; the artifact must
+   be for the deployed tree). Poll `/health` after the restart. Nothing changes yet: `incomplete`
+   needs the new daemon, and `ZOE_FOLLOWUP_ADDRESSED` is off.
+2. **Pi daemon**, from a clean worktree at the merged commit (never the live checkout):
+   ```
+   git -C /home/zoe/assistant fetch origin
+   git -C /home/zoe/assistant worktree add ~/.worktrees/voice-capture origin/main
+   cd ~/.worktrees/voice-capture
+   DRY_RUN=1 bash scripts/setup/deploy-pi-voice.sh     # plan only, touches nothing
+   bash scripts/setup/deploy-pi-voice.sh               # rsync (keeps .bak-<ts>), restart, verify active + /health + md5
+   ```
+   No `.env.voice` change is needed (the defaults are the new behaviour; `RECORD_SECONDS_MAX=12`
+   is already pinned there).
+3. **Smoke on the panel** (watch `ssh zoe-pi "tail -f /home/pi/.zoe-voice/voice.log"`):
+   - speak ~20 s without stopping in a follow-up window: `Recording ran past the 12s soft cap` and
+     ONE `turn_stream ... transcript=`; no 1 s leftover turn;
+   - say a sentence ending in "and", pause a second, then finish it: `Turn held`, then
+     `Continuation merged`, then one answer;
+   - ordinary short turns: `Recorded command: ... tail=deep` as before, no `Turn held`.
+4. **Side speech (optional, the owner's call).** On the Jetson set `ZOE_FOLLOWUP_ADDRESSED=on` in the
+   zoe-data service environment (the file each `ZOE_*` flag is read from is in
+   [flag-inventory.md](flag-inventory.md)), restart zoe-data, poll `/health`. Say an invented
+   side sentence ending `, <a name>.` in a follow-up window: expect `not_addressed (vocative)` in
+   `~/.zoe-logs` and silence on the panel.
+
+**Rollback**, cheapest first:
+- *Side speech:* unset `ZOE_FOLLOWUP_ADDRESSED` (or `off`) on the Jetson, restart zoe-data.
+- *Trailing "and":* `ZOE_VOICE_CONTINUATION_HOLD=off` on the Jetson (restart zoe-data), or
+  `ZOE_CONTINUE_WINDOW_S=0` in `/home/pi/.zoe-voice/.env.voice`.
+- *Long speech, back to the flat 12 s cap with no redeploy:* in `.env.voice` set
+  `RECORD_SECONDS_HARD_MAX=12 CONV_RECORD_SECONDS_HARD_MAX=12 RECORD_SNAP_S=0 ZOE_CONTINUE_WINDOW_S=0`,
+  then `ssh zoe-pi "systemctl --user restart zoe-voice"`.
+- *Whole daemon:* the deploy script printed the exact commands; they are
+  `cp -p /home/pi/.zoe-voice/zoe_voice_daemon.py.bak-<ts> /home/pi/.zoe-voice/zoe_voice_daemon.py`
+  (same for `zoe_voice_announce.py`) and `systemctl --user restart zoe-voice`. A server rollback needs
+  nothing on the Pi: an old server ignores the new fields.
+
 ## Smart Turn v3 end-of-turn scorer (LiveKit lane)
 
 `services/zoe-data/voice_turn.py` wraps pipecat's `smart-turn-v3.2-cpu.onnx`
