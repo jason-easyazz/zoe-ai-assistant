@@ -127,6 +127,8 @@ class FakeDB:
         self.feedback: list[dict] = []
         self.unhandled: list[str] = []
         self.statements: list[tuple[str, tuple]] = []
+        #: the demo account's name; None = no account row (identity questions fall through to the brain, as for a guest)
+        self.account_name: Optional[str] = None
 
     def add_message(self, session_id, role, content, user_id=None) -> str:
         mid = f"m{len(self.messages)}"
@@ -182,6 +184,8 @@ class FakeDB:
                 pat = str(params[0]).strip("%").replace("\\", "").lower()
                 return _Cur([p for p in self.people if pat in p["name"].lower()])
             return _Cur(list(self.people))
+        if low.startswith("select m.content from chat_messages m join chat_sessions"):    # intent_router._previous_assistant_message
+            return _Cur([{"content": m["content"]} for m in [m for m in self.messages if m["role"] == "assistant"][-1:]])
         if low.startswith("select id from chat_messages") and "role = 'assistant'" in low:
             sid = params[0] if params else ""
             rows = [m for m in self.messages if m["session_id"] == sid and m["role"] == "assistant"][::-1][:1]
@@ -193,6 +197,13 @@ class FakeDB:
         if low.startswith("insert into chat_feedback"):
             self.feedback.append({"params": params})
             return _Cur()
+        if low.startswith("select") and "from auth_users" in low:       # identity_facts._IDENTITY_SQL (the typed lane's identity tier)
+            if self.account_name is None:
+                return _Cur()
+            return _Cur([{"username": "demo", "settings": "{}", "users_name": self.account_name, "prefs": None, "wp_city": "",
+                          "wp_country": "", "wp_current": 0, "sysloc": None}])
+        if low.startswith("select name, role from users"):               # skybridge_service._resolve_self_identity (the spoken lane)
+            return _Cur([] if self.account_name is None else [{"name": self.account_name, "role": "member"}])
         self.unhandled.append(s[:120])
         return _Cur()
 
@@ -250,7 +261,27 @@ class Rig:
         self._last_tier: Optional[Any] = None
 
     # ── install ──────────────────────────────────────────────────────────────
+    def route_as(self, domain: str, tool: Optional[str], *, conf: float = 0.9) -> None:
+        """Pin the router's ACTIVE two-stage verdict for every turn of this rig (the rig has no sidecar to decode one), so a cell
+        can reproduce a live verdict ("memory" / "recall_memory" for an identity ask). Undone with the rest of the patches."""
+        import semantic_router
+
+        def route(text):
+            return {"domain": domain, "routed": domain, "score": 0.5, "scores": {domain: 0.5}, "ms": 1.0,
+                    "two_stage": {"tool": tool, "domain": domain, "args": {}, "shortlist": [domain], "head_top": domain,
+                                  "head_conf": conf, "gated": False, "ms": 1.0}}
+
+        self._mp.setattr(semantic_router, "route", route)
+
+    def skybridge_reads_the_fake_db(self) -> None:
+        """Give ``skybridge_service`` the fake store. It imported ``get_db_ctx`` by name, so patching ``db_pool`` does not reach it:
+        by default its card reads fail (no pool) and the turn falls through - the behaviour every other cell was written against."""
+        import skybridge_service
+
+        self._mp.setattr(skybridge_service, "get_db_ctx", self._ctx, raising=False)
+
     def install(self, monkeypatch, flags: Optional[dict] = None) -> "Rig":
+        self._mp = monkeypatch
         for k, v in {**LIVE_FLAGS, **(flags or {})}.items():
             if v is None:
                 monkeypatch.delenv(k, raising=False)
@@ -274,6 +305,7 @@ class Rig:
         async def get_db_gen(*_a, **_k):
             yield db
 
+        self._ctx = ctx
         for mod in (database, db_pool):
             monkeypatch.setattr(mod, "get_db_ctx", ctx, raising=False)
             monkeypatch.setattr(mod, "get_db", get_db_gen, raising=False)

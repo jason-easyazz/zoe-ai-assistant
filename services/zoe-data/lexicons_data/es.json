@@ -683,5 +683,87 @@
    "late": "Horario: el {1} es a la hora del {0} o después, así que lo perdería.",
    "double": "Horario: hay dos cosas a la misma hora (\"{0}\" y \"{1}\")."
   }
+ },
+ "spacer": {
+  "_note": "voice_spacer.py: lineas cortas que llenan una espera; ver en.json. Escrito por el autor del cambio, sin revision nativa.",
+  "reviewed": false,
+  "families": {
+   "lookup": ["Déjame ver.", "Voy a mirarlo.", "Lo compruebo.", "Déjame comprobarlo.", "Un momento, lo miro."],
+   "recall": ["Déjame pensar.", "Déjame recordar.", "A ver si me acuerdo.", "Déjame pensarlo un momento."],
+   "action": ["Un momento.", "Ahora mismo.", "Enseguida.", "En ello."],
+   "generic": ["Un momento.", "Un segundo.", "Dame un segundo.", "Espera un momento."]
+  },
+  "tool_ack": {
+   "calendar": ["Déjame ver tu calendario.", "Miro tu calendario.", "Reviso tu calendario."],
+   "lists": ["Déjame ver tus listas.", "Miro tus listas.", "Reviso tus listas."],
+   "reminders": ["Déjame ver tus recordatorios.", "Miro tus recordatorios.", "Reviso tus recordatorios."],
+   "weather": ["Déjame ver el tiempo.", "Miro el tiempo.", "Reviso el tiempo."]
+  }
+ },
+ "wellbeing": {
+  "_note": "conversation_cues.py: preguntas sobre como esta Zoe y charla dirigida a ella; ver en.json. Sin revision nativa.",
+  "reviewed": false,
+  "patterns": [
+   "c[oó]mo\\s+(?:est[aá]s|andas|te\\s+va|te\\s+sientes|has\\s+estado)",
+   "qu[eé]\\s+tal\\s+(?:est[aá]s|andas|tu\\s+d[ií]a)",
+   "c[oó]mo\\s+(?:va\\s+tu\\s+d[ií]a|est[aá]\\s+tu\\s+d[ií]a)",
+   "est[aá]s\\s+bien"
+  ],
+  "small_talk": [
+   "qu[eé]\\s+haces",
+   "qu[eé]\\s+cuentas",
+   "cu[eé]ntame\\s+(?:algo\\s+)?de\\s+ti",
+   "qui[eé]n\\s+eres",
+   "c[oó]mo\\s+te\\s+llamas",
+   "eres\\s+(?:un\\s+)?(?:robot|humano|real)"
+  ],
+  "frames": [
+   "(?:solo\\s+)?quiero\\s+(?:saber|preguntar)",
+   "quer[ií]a\\s+(?:saber|preguntar)",
+   "me\\s+(?:gustar[ií]a|interesa)\\s+saber",
+   "puedo\\s+preguntar",
+   "d[ií]me"
+  ],
+  "examples": ["cómo estás", "cómo estás hoy", "qué tal estás", "quiero saber cómo estás", "cuéntame algo de ti"]
+ },
+ "smart_home_followup": {
+  "_note": "conversation_cues.smart_home_followup; ver en.json. Sin revision nativa.",
+  "reviewed": false,
+  "verbs": ["vuelve", "a"],
+  "pronouns": ["lo", "la", "los", "las"],
+  "on": ["enciende", "prende", "enciéndela", "enciéndelo", "enciéndelas", "enciéndelos", "préndela", "préndelo", "encenderla", "encenderlo"],
+  "off": ["apaga", "apágala", "apágalo", "apágalas", "apágalos", "apagarla", "apagarlo"],
+  "back": [],
+  "fillers": ["otra", "vez", "de", "nuevo", "por", "favor", "ahora", "y", "zoe", "entonces"],
+  "self_contained": ["enciéndela", "enciéndelo", "enciéndelas", "enciéndelos", "préndela", "préndelo", "encenderla", "encenderlo", "apágala", "apágalo", "apágalas", "apágalos", "apagarla", "apagarlo"],
+  "examples": {
+   "on": ["enciéndela otra vez", "vuelve a encenderla", "enciéndelo"],
+   "off": ["apágala", "apágalo por favor", "apágalas"],
+   "reverse": []
+  },
+  "not_followups": ["enciende la luz de la cocina", "apaga la televisión"]
+ },
+ "offer": {
+  "_note": "conversation_cues.ends_with_offer; ver en.json. Sin revision nativa.",
+  "reviewed": false,
+  "tail_chars": 240,
+  "cues": [
+   "qu[eé]\\s+tal\\s+si\\b",
+   "qu[eé]\\s+te\\s+parece\\b",
+   "te\\s+gustar[ií]a\\b",
+   "quieres\\s+que\\b",
+   "quieres\\s+(?:saber|o[ií]r|ver|probar)\\b",
+   "si\\s+quieres\\b",
+   "podr[ií]a\\s+(?:contarte|decirte|buscar|leerte|ponerte|mostrarte|ayudarte|ponerlo)\\b",
+   "puedo\\s+tambi[eé]n\\s+(?:contarte|decirte|buscar|leerte|ponerte|mostrarte|ayudarte)\\b",
+   "te\\s+apetece\\b"
+  ],
+  "examples": [
+   "Me alegra que ayudara. ¿Qué tal si te cuento la historia del café?",
+   "¿Quieres que lo busque?"
+  ],
+  "not_offers": [
+   "Hoy hace sol y 22 grados."
+  ]
  }
 }

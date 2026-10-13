@@ -655,6 +655,7 @@ async def resolve_smart_home(
         pct = int(getattr(intent, "duration_seconds", 0) or 0) or None
         # A TILE tap carries the exact HA entity id → control precisely that device,
         # never a fuzzy name match. Voice (no id) falls back to name selection.
+        entity_ids = tuple(getattr(intent, "entity_ids", ()) or ())
         if entity_id:
             dev = next((d for d in devices if d.get("entity_id") == entity_id), None)
             if dev is None:
@@ -664,6 +665,15 @@ async def resolve_smart_home(
                     action,
                 )
             targets, ambiguous = [dev], False
+        elif entity_ids:
+            # a follow-up ("turn it back on"): exactly what the last command controlled, by id - never re-matched by name
+            targets, ambiguous = [d for d in devices if d.get("entity_id") in entity_ids], False
+            if not targets:
+                return _result(
+                    "That device isn't available right now.",
+                    _home_card(devices, scenes, status="Home", summary="Device unavailable."),
+                    action,
+                )
         else:
             targets, ambiguous = _select_targets(devices, query, action, room_eids)
         # A SPECIFIC command tied across several devices — ask rather than toggle
@@ -693,9 +703,11 @@ async def resolve_smart_home(
             )
         targets = live
         ok_any = False
+        controlled: list[str] = []
         for d in targets:
             if await set_device(str(d.get("entity_id")), on, brightness_pct=pct if on else None):
                 ok_any = True
+                controlled.append(str(d.get("entity_id")))
         refreshed = await list_devices() or devices
         label = "dimmed" if action == "set_brightness" else ("on" if on else "off")
         if len(targets) == 1:
@@ -703,7 +715,10 @@ async def resolve_smart_home(
             spoken = f"Turned {nm} {label}." if ok_any else f"I couldn't reach {nm}."
         else:
             spoken = f"Turned {len(targets)} devices {label}." if ok_any else "I couldn't reach those devices."
-        return _result(spoken, _home_card(refreshed, scenes, status="Home", summary=spoken), action)
+        out = _result(spoken, _home_card(refreshed, scenes, status="Home", summary=spoken), action)
+        if controlled:
+            out["controlled_entities"] = controlled    # the ids the command really switched (a follow-up targets these)
+        return out
 
     # status / "show me the lights" / "smart home"
     summary = _summarize(devices)

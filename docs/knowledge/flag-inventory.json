@@ -5231,6 +5231,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_SMART_HOME_FOLLOWUP_TTL_S": {
+        "defaults": [
+          "'60'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/conversation_cues.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_SMART_TURN_ENABLED": {
         "defaults": [
           "'0'"
@@ -5270,6 +5280,116 @@
           "services/zoe-data/routers/voice_livekit.py"
         ],
         "typed_env": false
+      },
+      "ZOE_SPEAKER_ADAPT": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/speaker_adaptation.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_SPEAKER_ADAPT_ALPHA": {
+        "defaults": [
+          "0.05"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/speaker_adaptation.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_SPEAKER_ADAPT_ANCHOR_FLOOR": {
+        "defaults": [
+          "0.8"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/speaker_adaptation.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_SPEAKER_ADAPT_FACE_MIN": {
+        "defaults": [
+          "0.6"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/speaker_adaptation.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_SPEAKER_ADAPT_MAX_PER_DAY": {
+        "defaults": [
+          "5"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/speaker_adaptation.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_SPEAKER_ADAPT_MIN_ANCHOR_COS": {
+        "defaults": [
+          "0.92"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/speaker_adaptation.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_SPEAKER_ADAPT_MIN_INTERVAL_S": {
+        "defaults": [
+          "600.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/speaker_adaptation.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_SPEAKER_ADAPT_MIN_MARGIN": {
+        "defaults": [
+          "0.1"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/speaker_adaptation.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_SPEAKER_ADAPT_MIN_SCORE": {
+        "defaults": [
+          "0.85"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/speaker_adaptation.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_SPEAKER_ADAPT_MIN_SPEECH_S": {
+        "defaults": [
+          "2.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/speaker_adaptation.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_SPEAKER_ADAPT_PIN_WINDOW_S": {
+        "defaults": [
+          "900.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/speaker_adaptation.py"
+        ],
+        "typed_env": true
       },
       "ZOE_SPEAKER_ID_THRESHOLD": {
         "defaults": [
@@ -5888,13 +6008,23 @@
         ],
         "typed_env": true
       },
-      "ZOE_VOICE_FILLER_PHRASES": {
+      "ZOE_VOICE_FILLER_EXPECT_MIN_S": {
         "defaults": [
-          "'Let me check.|One sec.|Hmm, let me look.'"
+          "1.0"
         ],
         "in_env_example": false,
         "readers": [
-          "services/zoe-data/routers/voice_tts.py"
+          "services/zoe-data/voice_spacer.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_VOICE_FILLER_PHRASES": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_spacer.py"
         ],
         "typed_env": false
       },
