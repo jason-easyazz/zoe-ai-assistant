@@ -98,6 +98,9 @@ class _Lang:
     clause_starts: frozenset = frozenset()    # words that open a new clause after a comma ("it", "that", …)
     joiners: tuple = ()                       # clause joiners as token tuples, longest first ("but", "so", "because")
     conditionals: frozenset = frozenset()     # "if" / "unless": a TRAILING one opens its own (blocked) clause, it never reaches back
+    tag_questions: tuple = ()                 # a trailing "okay" / "right" / "vale": a TAG on a statement, not a question about the write
+    question_openers: frozenset = frozenset() # words that open a genuine question ("did", "have", "should"): "Have I added it, okay?"
+    ellipsis_objects: frozenset = frozenset() # what may follow a sentence-opening claim verb in a completion ellipsis ("Added THE milk")
     modifiers: frozenset = frozenset()        # ordinary adverbs that may sit before a claim verb ("definitely", "again")
     modifier_suffixes: tuple = ()             # a word ending in one is an adverb too ("-ly", "-mente"), once a subject stands before it
 
@@ -146,6 +149,8 @@ def _langs() -> tuple:
             adverbs=words("adverbs"), verbs=verbs, targets=targets, other_targets=phrases("other_targets"),
             blockers=phrases("blockers"), recap_cues=phrases("recap_cues"), honest=str(lex.get("honest") or "").strip(),
             passive_done=words("passive_done"), passive_past=words("passive_past"), passive_state=words("passive_state"), clause_starts=words("clause_starts"),
+            tag_questions=phrases("tag_questions"), question_openers=words("question_openers"),
+            ellipsis_objects=words("ellipsis_objects"),
             modifiers=words("modifiers"), modifier_suffixes=tuple(sorted(phrases("modifier_suffixes"), key=len, reverse=True)),
             joiners=tuple(sorted((tuple(p.split()) for p in phrases("clause_joiners")), key=len, reverse=True)),
             conditionals=words("clause_conditionals"),
@@ -164,16 +169,52 @@ class Claim:
     honest: str
 
 
-def find_claim(sentence: str) -> Optional[Claim]:
-    """The write this sentence CLAIMS to have made, or None. Pure."""
-    text = (sentence or "").strip()
-    if not text or text.endswith("?"):
+def _declarative_part(text: str) -> Optional[str]:
+    """The statement a ``?``-ending unit really makes, or None when it is a genuine question. A TAG ("…, okay?", "…, right?",
+    es "…, ¿vale?") questions only the tag: the clause before it is still an affirmative claim, so it is returned for judging.
+    A question that opens with an interrogative word ("Have I added it, okay?") or "¿" is genuine and exempt."""
+    if text.lstrip().startswith("¿"):
         return None
+    body = text.rstrip().rstrip("?!. ").rstrip()
+    cut = max(body.rfind(","), body.rfind(";"))
+    if cut <= 0:
+        return None
+    tag, rest = _phrase(body[cut + 1:]), body[:cut]
+    first = (tokenize(rest) or [""])[0]
+    langs = _langs()
+    if any(first in lang.question_openers for lang in langs):
+        return None
+    return rest if any(tag in lang.tag_questions for lang in langs) else None
+
+
+def _completion_ellipsis(rest: list, has_target: bool, lang: "_Lang") -> bool:
+    """A claim verb that OPENS its clause with nothing before it is Zoe's completion ("Added the milk.", "Added it.", "Added milk
+    to the shopping list.") only when what follows reads as the thing written: nothing, a determiner / pronoun, or a target noun with
+    no copula after it. "Scheduled maintenance starts at 2 PM" and "Added sugar is unhealthy" use the participle as an adjective."""
+    if not lang.ellipsis_objects:
+        return True                 # a language whose verbs conjugate ("añadí") has no bare-participle ambiguity
+    if not rest or rest[0] in lang.ellipsis_objects:
+        return True
+    copulas = lang.passive_state | lang.passive_past | lang.passive_done
+    return has_target and not any(t in copulas for t in rest)
+
+
+def find_claim(sentence: str) -> Optional[Claim]:
+    """The write this sentence CLAIMS to have made, or None. Pure. Every claim clause of the unit counts: the Claim names the
+    kinds of ALL of them, so a receipt for one cannot vouch for another."""
+    text = (sentence or "").strip()
+    if not text:
+        return None
+    if text.endswith("?"):
+        text = _declarative_part(text)
+        if text is None:
+            return None
     if not tokenize(text):
         return None
     for lang in _langs():
         # Blockers (negation, irrealis, future) and target nouns are judged in the CLAUSE of the claim verb only: "I've added
         # milk to your list, but I'm not sure about eggs" and "… as you wanted" still claim the milk (review, #2004).
+        found: list = []            # the kinds each claiming clause names
         for offset, toks in _clauses(text, lang):
             padded = " " + " ".join(toks) + " "
             if any(_has_phrase(padded, b) for b in lang.blockers):
@@ -186,21 +227,28 @@ def find_claim(sentence: str) -> Optional[Claim]:
                     continue
                 verb_kind, needs_target, state_claim = spec
                 pre = toks[max(0, i - 4):i]
-                if any(p in lang.second_person for p in pre):
-                    continue            # "you added it" - the user did it
-                active = all(p in lang.hold_words or p in lang.modifiers for p in pre) or _subject_then_modifiers(toks, i, lang)
                 aux = _passive_aux(pre, lang)
                 passive = aux in lang.passive_done or aux in lang.passive_past or (state_claim and aux in lang.passive_state)
+                if not passive and any(p in lang.second_person for p in pre):
+                    continue            # "you added it" - the user did it ("The milk you mentioned has been added": you is not the writer)
+                active = all(p in lang.hold_words or p in lang.modifiers for p in pre) or _subject_then_modifiers(toks, i, lang)
                 if not (active or passive):
                     continue
                 kinds = tuple(kind for kind, phrases_ in lang.targets.items() if any(_has_phrase(padded, p) for p in phrases_))
+                if not pre and not _completion_ellipsis(toks[i + 1:], bool(kinds), lang):
+                    continue
                 if not kinds:
                     if needs_target or any(_has_phrase(padded, o) for o in lang.other_targets):
                         continue
                     if not active and aux not in lang.passive_done and verb_kind != "any":
                         continue        # "The restaurant was booked solid": a past passive with no target noun claims no write
                     kinds = () if verb_kind == "any" else (verb_kind,)
-                return Claim(kinds=kinds, lang=lang.code, honest=lang.honest)
+                found.append(kinds)
+                break                   # one claim per clause: its target nouns are already all in ``kinds``
+        if found:
+            specific = {k for kinds in found for k in kinds}
+            ordered = tuple(k for k in lang.targets if k in specific) + tuple(sorted(specific - set(lang.targets)))
+            return Claim(kinds=ordered, lang=lang.code, honest=lang.honest)
     return None
 
 

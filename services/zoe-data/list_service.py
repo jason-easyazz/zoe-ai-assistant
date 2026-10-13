@@ -40,7 +40,6 @@ def default_visibility(list_type: str) -> str:
 # Skybridge parser and the intent_router parser so a spoken item reads the same on every lane.
 _FILLER_WORDS = frozenset({"um", "uh", "er", "erm", "ah", "hmm", "mm", "uhh", "umm", "eh"})
 _LEAD_WORDS = frozenset({"please", "pls", "and", "also", "then", "just", "so", "okay", "ok", "like", "well"})
-_TERMINAL_PUNCT_RE = re.compile(r"[.!?]+")
 _EDGE_PUNCT_RE = re.compile(r"^[\s.,;:!?\-]+|[\s.,;:!?\-]+$")
 # A sentence is not an item: it opens with a pronoun / auxiliary / wh-word / discourse marker ("I don't know where you got
 # that from"). Task verbs ("do laundry", "call mum") are deliberately NOT here.
@@ -66,6 +65,32 @@ _VAGUE_ITEMS = frozenset({"things", "thing", "stuff", "something", "it", "that",
                           "anything", "everything", "some", "items", "item"})
 
 
+# A period that ends an ABBREVIATION is part of the item, not a sentence break: "Dr. Pepper", "Mr. Clean", "U.S. stamps", "J. Crew".
+_BREAK_RE = re.compile(r"[.!?]+(?=\s|$)")
+_ABBREV_END_RE = re.compile(
+    r"(?:^|\s)(?:mr|mrs|ms|mx|dr|st|jr|sr|prof|mt|vs|inc|ltd|co|ave|rd|blvd|oz|lb|lbs|tbsp|tsp|pkg|approx|etc|[a-z])$"
+    r"|\b[a-z](?:\.[a-z])+$", re.IGNORECASE)
+
+
+def _real_breaks(text: str) -> list:
+    """``(start, end)`` of each terminator that really ends a sentence in ``text`` - a lone abbreviation period is not one."""
+    out = []
+    for m in _BREAK_RE.finditer(text):
+        if m.group() == "." and _ABBREV_END_RE.search(text[:m.start()]) and m.end() < len(text):
+            continue
+        out.append((m.start(), m.end()))
+    return out
+
+
+def _split_sentences(text: str) -> list:
+    segments, prev = [], 0
+    for start, end in _real_breaks(text):
+        segments.append(text[prev:start])
+        prev = end
+    segments.append(text[prev:])
+    return [seg.strip() for seg in segments if seg.strip()]
+
+
 def clean_item_text(raw: str) -> str:
     """The item a person meant, from the words STT handed over: filler words dropped, a stutter ("noodles? Noodles",
     "and and") collapsed, edge punctuation stripped. Casing is kept. Never raises; "" when nothing is left OR when the words hold
@@ -74,7 +99,7 @@ def clean_item_text(raw: str) -> str:
     if not text:
         return ""
     # Segments split on sentence punctuation: a repeated segment ("noodles? Noodles.") is a stutter, kept once.
-    segments = [seg.strip() for seg in re.split(r"[.!?]+(?:\s+|$)", text) if seg.strip()]
+    segments = _split_sentences(text)
     kept: list[str] = []
     seen: set[str] = set()
     for seg in segments:
@@ -125,7 +150,7 @@ def is_plausible_item(item: str) -> bool:
     words = text.split()
     if len(words) > MAX_ITEM_WORDS:
         return False
-    if _TERMINAL_PUNCT_RE.search(text):          # a full stop / ? / ! INSIDE the item: more than one sentence
+    if _real_breaks(text):                       # a full stop / ? / ! INSIDE the item: more than one sentence
         return False
     if text.lower() in _VAGUE_ITEMS:
         return False

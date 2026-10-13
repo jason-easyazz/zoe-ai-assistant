@@ -62,7 +62,12 @@ chat, Telegram, LiveKit). `_claim_guarded` wraps the lane stream (`write_claim_g
   claim: the lexicon's `adverbs` / `modifiers` lists ("just", "definitely", "again") count anywhere, and any word ending in a
   `modifier_suffixes` entry ("-ly", es "-mente") counts once a first-person subject stands before it
   (`_subject_then_modifiers`: "I've definitely / happily added", "we have now quietly gone ahead and set") - so "Emily added the
-  milk" and "I think Mum added eggs" stay someone else's write. "is scheduled for Friday" describes the calendar and is not a claim
+  milk" and "I think Mum added eggs" stay someone else's write. Every claim clause of a unit counts (`find_claim`
+  returns the union of their kinds, so one receipt cannot vouch for a second claim); a trailing tag ("…, okay?", "…, right?",
+  es "…, ¿vale?" - `tag_questions`) questions only the tag, while a question that opens with an interrogative word or "¿" stays
+  exempt; "you" excludes only an ACTIVE claim ("The milk you mentioned has been added" is still a claim); and a claim verb that
+  opens a clause is a claim only as a completion ellipsis ("Added the milk.", "Added it.", or with a target noun and no copula),
+  never an adjective ("Scheduled maintenance starts at 2 PM", "Added sugar is unhealthy" - `ellipsis_objects`, en only). "is scheduled for Friday" describes the calendar and is not a claim
   (it is how an honest read-back of an existing event sounds); only "is added" is (`state_claim` in the lexicon).
 * **Verdict**: a claim naming kinds needs a receipt of every kind since the turn began (calendar and reminder back each
   other; a recap question - "did you add the milk?" - may stand on a write from the last 30 min). A claim naming no target

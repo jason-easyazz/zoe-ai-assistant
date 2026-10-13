@@ -216,6 +216,122 @@ def test_an_honest_read_back_is_never_blocked(sentence):
     assert g.guard_text(sentence, "jason", started) == sentence
 
 
+# ── final-round review (#2004): every claim clause needs its receipt; a tag question hides nothing; "you" is only the writer
+# when it is the subject; a bare participle that opens a sentence is a claim only as a completion ellipsis ───────────────
+
+TWO_CLAIMS = "I've added milk to your shopping list, and then I've scheduled the dentist on your calendar."
+
+
+def test_every_claim_clause_in_a_unit_is_found_and_needs_its_own_receipt():
+    claim = g.find_claim(TWO_CLAIMS)
+    assert claim is not None and set(claim.kinds) == {"list", "calendar"}, claim
+    started = wr.begin()
+    wr.record("jason", "list", "li-1", "test")
+    assert g.guard_text(TWO_CLAIMS, "jason", started) == HONEST_EN       # the calendar half has no receipt
+    wr.record("jason", "calendar", "ev-1", "test")
+    assert g.guard_text(TWO_CLAIMS, "jason", started) == TWO_CLAIMS      # both halves backed: spoken as-is
+
+
+@pytest.mark.parametrize("sentence,kinds", [
+    ("I've added milk to your shopping list; I've set a timer for ten minutes.", {"list", "timer"}),
+    ("I've added milk to your shopping list, so I've booked the dentist in your calendar.", {"list", "calendar"}),
+    ("The milk was added to your shopping list and the dentist was added to your calendar.", {"list", "calendar"}),
+    ("I've added milk to your shopping list, and I've added it.", {"list"}),     # a generic claim adds nothing the list receipt lacks
+])
+def test_a_second_claim_clause_widens_the_kinds_needed(sentence, kinds):
+    claim = g.find_claim(sentence)
+    assert claim is not None and set(claim.kinds) == kinds, (sentence, claim)
+
+
+@pytest.mark.parametrize("sentence", [
+    "I've added milk to your shopping list, okay?",
+    "I've added milk to your shopping list, right?",
+    "The appointment was added to your calendar, right?",
+    "I've set a reminder for five o'clock, yeah?",
+    "I've added milk to your shopping list, all right?",
+    "He añadido leche a tu lista de compras, ¿vale?",
+])
+def test_a_trailing_tag_question_does_not_exempt_the_claim(sentence):
+    started = wr.begin()
+    assert g.find_claim(sentence) is not None, sentence
+    assert g.guard_text(sentence, "jason", started) != sentence
+
+
+def test_a_tag_question_claim_with_a_real_receipt_is_spoken():
+    started = wr.begin()
+    wr.record("jason", "list", "li-1", "test")
+    s = "I've added milk to your shopping list, okay?"
+    assert g.guard_text(s, "jason", started) == s
+
+
+@pytest.mark.parametrize("sentence", [
+    "Did I add it to your list?",
+    "Have I added milk to your shopping list, okay?",
+    "Have you added milk to your shopping list, right?",
+    "Do you want me to add oat milk to the shopping list, okay?",
+    "Should I schedule the dentist for Friday, right?",
+    "Was the appointment added to your calendar, do you know?",
+    "Is the milk on your shopping list?",
+    "¿Quieres que añada leche a tu lista, vale?",
+    "¿He añadido leche a tu lista?",
+])
+def test_a_genuine_question_is_still_never_a_claim(sentence):
+    assert g.find_claim(sentence) is None, sentence
+
+
+@pytest.mark.parametrize("sentence,kind", [
+    ("The appointment you requested has been added to your calendar.", "calendar"),
+    ("The milk you mentioned has been added to your shopping list.", "list"),
+    ("The reminder you asked for was added to your calendar.", "calendar"),
+])
+def test_a_passive_with_a_second_person_relative_clause_is_a_claim(sentence, kind):
+    claim = g.find_claim(sentence)
+    assert claim is not None and kind in claim.kinds, sentence
+    started = wr.begin()
+    assert g.guard_text(sentence, "jason", started) == HONEST_EN
+    wr.record("jason", kind, "row-1", "test")
+    assert g.guard_text(sentence, "jason", started) == sentence
+
+
+@pytest.mark.parametrize("sentence", [
+    "You added oat milk earlier.",
+    "I think you've added milk to the shopping list.",
+    "You asked me whether the milk you added is still on your shopping list.",
+    "Since you added the dentist to your calendar, you are all set.",
+])
+def test_you_as_the_writer_still_exempts_an_active_claim(sentence):
+    assert g.find_claim(sentence) is None, sentence
+
+
+@pytest.mark.parametrize("sentence", [
+    "Scheduled maintenance starts at 2 PM.",
+    "Added sugar is unhealthy.",
+    "Booked flights are cheaper on Tuesdays.",
+    "Added sugar is bad for you, so check the label.",
+    "Scheduled meetings are shown on the calendar.",
+    "Saved searches appear in your account.",
+])
+def test_a_sentence_opening_participle_used_as_an_adjective_is_not_a_claim(sentence):
+    assert g.find_claim(sentence) is None, sentence
+    started = wr.begin()
+    assert g.guard_text(sentence, "jason", started) == sentence
+
+
+@pytest.mark.parametrize("sentence", [
+    "Added the milk.",
+    "Done - added it.",
+    "Added milk to the shopping list.",
+    "Added it.",
+    "Scheduled the dentist for Friday.",
+    "Added those to your calendar.",
+])
+def test_a_completion_ellipsis_is_still_a_claim(sentence):
+    claim = g.find_claim(sentence)
+    assert claim is not None, sentence
+    started = wr.begin()
+    assert g.guard_text(sentence, "jason", started) == HONEST_EN
+
+
 def test_a_write_before_the_turn_began_does_not_back_a_claim():
     wr.record("jason", "calendar", "evt-0", "test")
     started = wr.begin()
@@ -547,6 +663,11 @@ STREAM_CORPUS = [
     "Okay. I've definitely added milk to your shopping list. Anything else?",
     "I have now definitely gone ahead and added milk to your shopping list, so that is sorted.",
     "Emily added the milk to the shopping list. I think Mum really added eggs too.",
+    # final round (#2004): several claim clauses, a tag question, a relative clause, a bare participle
+    TWO_CLAIMS,
+    "I've added milk to your shopping list, okay? Anything else?",
+    "The appointment you requested has been added to your calendar. Anything else?",
+    "Scheduled maintenance starts at 2 PM. Added sugar is unhealthy. Added the milk.",
 ]
 
 

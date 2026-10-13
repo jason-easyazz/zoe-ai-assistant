@@ -379,3 +379,28 @@ def test_a_contextual_list_add_uses_the_same_item_validation():
     assert sk._contextual_list_add_from_text("add I really do not know what that was", ctx) is None
     assert sk._contextual_list_add_from_text("add things", ctx) is None
     assert sk._contextual_list_add_from_text("add oat milk", ctx) == ("oat milk", "shopping")
+
+
+# final-round review (#2004): a period inside an item is an abbreviation, not a spoken correction
+
+@pytest.mark.parametrize("item", ["Dr. Pepper", "Mr. Clean", "U.S. stamps", "Mrs. Meyer's soap", "J. Crew gift card", "St. Ives scrub"])
+def test_an_abbreviation_period_stays_inside_the_item(item):
+    assert list_service.clean_item_text(item) == item
+    assert list_service.is_plausible_item(item) is True
+
+
+@pytest.mark.parametrize("said,item", [
+    ("add Dr. Pepper to my shopping list", "Dr. Pepper"),
+    ("add Mr. Clean to my shopping list", "Mr. Clean"),
+    ("add U.S. stamps to my shopping list", "U.S. stamps"),
+])
+def test_an_abbreviation_item_is_added_on_both_parsers(said, item):
+    i = intent_router.detect_intent(said, log_miss=False)       # the router lower-cases what it captures
+    assert i is not None and i.name == "list_add" and i.slots["item"].lower() == item.lower(), i
+    s = classify_skybridge_intent(said)
+    assert s is not None and s.action == "add_item" and s.item_text == item, s
+
+
+@pytest.mark.parametrize("raw", ["milk. Actually no, add eggs", "dr pepper. Actually no, add eggs", "bread. And cheese"])
+def test_a_spoken_correction_with_a_full_stop_is_still_declined(raw):
+    assert list_service.clean_item_text(raw) == ""
