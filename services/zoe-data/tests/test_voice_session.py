@@ -452,8 +452,9 @@ async def test_flag_off_is_todays_path_and_never_touches_the_session(monkeypatch
     for name in ("observe_turn", "model_gate", "step_up_reason", "publish", "text_for", "private_read_kind"):
         monkeypatch.setattr(vs, name, boom)
     resp = await run(_claim(model="resemblyzer"))
-    # Today's behaviour: an accepted (Resemblyzer) claim unlocks, the Skybridge UI broadcast runs, the binding is set.
+    # Today's behaviour: an accepted (Resemblyzer) claim unlocks its own turn and the Skybridge UI broadcast runs;
+    # since #2026 (voice identity freshness) a claim never writes the indefinite panel binding, flag on or off.
     assert rec["resolver_users"] == ["casey"] and rec["legacy_ui"] == 1 and not rec["challenges"]
     assert resp["reply"] == "You have 2 events today." and resp["intent"] == "skybridge:calendar"
     assert not rec["frames"]                                  # no voice_session / voice_card frame at all
-    assert v._VOICE_SESSIONS[PANEL_ID]["bound_user_id"] == "casey"
+    assert "bound_user_id" not in (v._VOICE_SESSIONS.get(PANEL_ID) or {})
