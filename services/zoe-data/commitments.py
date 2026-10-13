@@ -844,10 +844,11 @@ async def forget_user(user_id: str) -> int:
         return 0
 
 
-async def erase_entity(user_id: str, rx: "re.Pattern[str]") -> int:
+async def erase_entity(user_id: str, rx: "re.Pattern[str]", *, strict: bool = False) -> int:
     """Delete the member's commitments whose subject names the forgotten entity (``rx``, the cascade's whole-word name pattern) and the
     sentence each one queued. Takes the member's erase gate (without staling their other writes): a recording in flight waits, and
-    its subject is checked against the forgotten ledger when it lands. Returns the count; 0 on any failure (logged at WARNING)."""
+    its subject is checked against the forgotten ledger when it lands. Returns the count; 0 on any failure (logged at WARNING) -
+    or, with ``strict``, the failure RAISES (the forget cascade records it: a forget must not read as complete over a failed erase)."""
     try:
         from db_compat import get_compat_db
 
@@ -863,5 +864,7 @@ async def erase_entity(user_id: str, rx: "re.Pattern[str]") -> int:
                     await db.commit()
         return n
     except Exception as exc:  # noqa: BLE001
+        if strict:
+            raise
         logger.warning("commitments: promises naming a forgotten entity NOT erased (%s)", type(exc).__name__)
         return 0

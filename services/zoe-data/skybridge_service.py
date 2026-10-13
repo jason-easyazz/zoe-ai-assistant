@@ -48,6 +48,7 @@ class SkybridgeIntent:
     duration_seconds: int = 0
     completed: bool | None = None
     entity_id: str = ""  # exact HA entity a smart_home TILE tap targets (never fuzzy)
+    entity_ids: tuple[str, ...] = ()  # exact HA entities a smart_home FOLLOW-UP ("turn it back on") targets: what the last command controlled
     radio_mode: bool = False  # music/play: "play <x> radio" → MA endless station
 
 
@@ -1282,7 +1283,7 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
     # smart_home runs AFTER list/calendar parsing (so "add lights to the shopping
     # list" stays a list write) but BEFORE the generic clock/weather/people
     # fallbacks. Household-shared like clock/music — no identity gate.
-    smart_home_intent = _classify_smart_home(text)
+    smart_home_intent = _smart_home_followup_intent(raw_message, context) or _classify_smart_home(text)
     if smart_home_intent is not None:
         return smart_home_intent
     if (
@@ -1402,14 +1403,20 @@ def router_veto_enabled() -> bool:
     return raw not in ("0", "false", "off", "no")
 
 
-def _router_agrees(intent: SkybridgeIntent, router_domain: str) -> bool | None:
-    """True/False when the router's domain agrees with the Skybridge intent;
+def _router_agrees(intent: SkybridgeIntent, router_domain: str, router_tool: str | None = None) -> bool | None:
+    """True/False when the router's verdict agrees with the Skybridge intent;
     None when the router has no class for this Skybridge domain."""
     allowed = _ROUTER_AGREEING_DOMAINS.get(intent.domain)
     if allowed is None:
         return None
     if intent.domain == "people" and intent.action == "remember_fact":
         # "remember that Sarah likes flowers" is the router's remember_fact tool.
+        allowed = allowed | {"memory"}
+    if intent.domain == "people" and intent.action == "identity" and router_tool == "recall_memory":
+        # "what's my name" / "who am I" is a stored-fact READ, and the router files it under memory/recall_memory: a
+        # compatible verdict, not a disagreement. Vetoing it sent the question to the brain (6-7 s on voice) while typed chat
+        # answered it from the account in ~5 ms (live 2026-10-12). Only the READ tool: a memory/remember_fact verdict on the
+        # same words is a write and still disagrees.
         allowed = allowed | {"memory"}
     return router_domain in allowed
 
@@ -1477,7 +1484,7 @@ def skybridge_router_gate(
             # verdict like any other turn; any other reply is a name (Greptile, #1757).
             if not _is_naming_prompt_reply(intent, context) or _looks_like_list_name(message):
                 return "allow", "context_followup", router_domain, conf
-    agrees = _router_agrees(intent, router_domain)
+    agrees = _router_agrees(intent, router_domain, str(decision.get("tool") or "") or None)
     if agrees is None:
         return "allow", "no_router_class", router_domain, conf
     if agrees:
@@ -1639,7 +1646,9 @@ async def resolve_skybridge_request(
         # about. Empty set = no room context = unchanged behaviour, which is
         # every install that has not created a room.
         room_eids = await _room_eids_for_context(context, db)
-        return _attach_skybridge_context(await resolve_smart_home(intent, room_eids))
+        out = _attach_skybridge_context(await resolve_smart_home(intent, room_eids))
+        _remember_smart_home_target(intent, out)
+        return out
 
     if db is not None:
         return _attach_skybridge_context(await _resolve_with_db(intent, user_id, db, context=context))
@@ -1778,6 +1787,46 @@ def _classify_music(text: str) -> "SkybridgeIntent | None":
     if (has_ctx or re.search(r"\bplaying\b", text)) and re.search(r"\b(what|show|see|playing|song|music)\b", text):
         return SkybridgeIntent(domain="music", action="status")
     return None
+
+
+# "Turn it back on again" right after "Turn the light off" (live 2026-10-12: intent_miss, then the brain: "It sounds like you're ready
+# to get back to chatting"). The last on/off command's TARGET rides in the panel's Skybridge context for a short window, and a bare
+# pronoun command (the words are the lexicon's, ``conversation_cues.smart_home_followup``) resolves to it.
+_SMART_HOME_TARGET_KEY = "smart_home_target"
+
+
+def _remember_smart_home_target(intent: "SkybridgeIntent", out: dict[str, Any]) -> None:
+    """Record the on/off command this result carried in ``out["skybridge_context"]`` (only a handled on/off turn that CONTROLLED
+    something: a status read, a "which one?" question or a brightness change is not something "it ... back on" can mean). The
+    target is what the resolver actually SELECTED (``out["controlled_entities"]`` - the room-disambiguated light, the fuzzy match),
+    never the words of the command: a follow-up must switch the very device that was switched."""
+    ctx = out.get("skybridge_context")
+    entities = [str(e) for e in out.get("controlled_entities") or [] if e]
+    if out.get("handled") and isinstance(ctx, dict) and intent.action in ("turn_on", "turn_off") and entities:
+        ctx[_SMART_HOME_TARGET_KEY] = {
+            "action": intent.action, "query": intent.query, "entity_ids": entities, "ts": time.time(),
+        }
+
+
+def _smart_home_followup_intent(raw_message: str, context: dict[str, Any] | None) -> "SkybridgeIntent | None":
+    """A bare pronoun command ("turn it back on again", "switch them off", "turn it back") about the device just controlled."""
+    mem = context.get(_SMART_HOME_TARGET_KEY) if isinstance(context, dict) else None
+    if not isinstance(mem, dict) or mem.get("action") not in ("turn_on", "turn_off"):
+        return None
+    from conversation_cues import smart_home_followup, smart_home_followup_ttl_s
+
+    if time.time() - float(mem.get("ts") or 0.0) > smart_home_followup_ttl_s():
+        return None
+    verdict = smart_home_followup(raw_message)
+    if verdict is None:
+        return None
+    action = ("turn_on" if verdict == "on" else "turn_off" if verdict == "off"
+              else "turn_off" if mem["action"] == "turn_on" else "turn_on")
+    ids = tuple(str(e) for e in mem.get("entity_ids") or [] if e)
+    if not ids:
+        return None
+    return SkybridgeIntent(domain="smart_home", action=action, query=str(mem.get("query") or ""),
+                           entity_id=ids[0] if len(ids) == 1 else "", entity_ids=ids)
 
 
 # Smart-home device anchors: a word clearly about a controllable household

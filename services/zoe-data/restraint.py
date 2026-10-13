@@ -843,9 +843,9 @@ async def _release(db, uid: str, u: Utterance, key: str, now: datetime) -> int:
     return len(ids)
 
 
-async def erase_entity(user_id: str, name: str) -> int:
+async def erase_entity(user_id: str, name: str, *, strict: bool = False) -> int:
     """A forget of ``name`` also deletes the mutes whose topic names it (the forgotten-means-forever rule:
-    a topic stem is still the name). Best-effort; returns the rows removed."""
+    a topic stem is still the name). Best-effort (0 on failure) unless ``strict``, which RAISES so the forget cascade can record it."""
     uid = (user_id or "").strip()
     st = stems(name)
     if not uid or not st:
@@ -864,6 +864,8 @@ async def erase_entity(user_id: str, name: str) -> int:
         _mute_cache.pop(uid, None)
         return n
     except Exception as exc:  # noqa: BLE001
+        if strict:
+            raise
         logger.debug("restraint: entity erase skipped: %r", exc)
         return 0
 

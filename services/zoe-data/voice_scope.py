@@ -25,6 +25,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from conversation_cues import small_talk_remainder
 from guest_policy import PUBLIC_HOUSEHOLD_INTENTS, USER_SCOPED_INTENTS
 
 _PUBLIC_INTENTS: frozenset = PUBLIC_HOUSEHOLD_INTENTS
@@ -74,7 +75,6 @@ _CLEAR_PUBLIC_RE = re.compile(
     r"what(?:'s| is) the (time|date|weather|temperature|forecast)|"
     r"what time|what day|what date|"
     r"tell me a joke|"
-    r"how are you\b|"
     r"good (morning|afternoon|evening|night)|"
     r"hello|hi( there)?|hey (zoe|there)|"
     r"thank you|thanks\b"
@@ -83,6 +83,16 @@ _CLEAR_PUBLIC_RE = re.compile(
 )
 
 _PLAY_PREFIX_RE = re.compile(r"^\s*play\b", re.IGNORECASE)
+
+
+def _is_small_talk_toward_zoe(t: str) -> bool:
+    """A question about how ZOE is ("how are you", "how you are", "I want to know how you are") or other chat aimed at her.
+
+    The words are the lexicon's (``conversation_cues``, ``lexicons_data/<lang>.json`` "wellbeing"). It is public even when its
+    lead-in trips the possessive rule ("i want to ..."), but only when NOTHING personal is left once the phrase and its lead-in
+    are taken out: "how are you and what's on my calendar" keeps its calendar half and stays user-scoped."""
+    rest = small_talk_remainder(t)
+    return rest is not None and not _POSSESSIVE_RE.search(rest)
 
 
 @dataclass(frozen=True)
@@ -149,6 +159,9 @@ def classify(
 
     if _CLEAR_PUBLIC_RE.search(t):
         return ScopeDecision("public", "text:clear_public", intent_name)
+
+    if _is_small_talk_toward_zoe(t):
+        return ScopeDecision("public", "text:small_talk", intent_name)
 
     # "my library" / "resume where i left off" must win before the HA
     # regex, otherwise "play"/"resume" would be tagged as public media

@@ -1,7 +1,7 @@
 ---
 type: architecture-plan
 date: 2026-09-25
-updated: 2026-10-12
+updated: 2026-10-13
 status: 🔨 owner chose "record on the pendant, sync when in range of Zoe" (2026-10-12) — phase 1 built flag-dark (services/omi-sync + zoe-data omi_recordings); the real pendant runs firmware 3.0.18 (below the ring protocol) so the 3.0.18 file path is opt-in and a firmware update is the recommended route (section 4.10); hardware-only facts still UNVERIFIED (section 0.3a); the live-stream path (sections 4a-6) is now the LATER path, not the first
 owner: W6 (attributed ambient capture) — samantha-evolution-plan.md; program block B9 below
 audience: Jason + every agent picking up the Omi work
@@ -364,11 +364,12 @@ Sub-options inside (A) — the receiver:
 ### 4.3 Zoe side — `services/zoe-data/omi_recordings.py` + `routers/omi_recordings.py` (migration 0045)
 
 - `POST /api/omi/recordings` — **device-token only** (a session cannot upload). Attributed to `ZOE_OMI_OWNER_USER_ID`
-  (a device token authenticates the device, not a person; unset → 503). Verifies the body's SHA-256, validates a
+  (a device token authenticates the device, not a person; unset → 503) — or, with the registry on (4.11), to the owner the
+  `omi_devices` registry names for `X-Omi-Device`; an unregistered pendant gets 409 `device_not_registered`. Verifies the body's SHA-256, validates a
   16 kHz mono 16-bit WAV, writes the file (tmp + fsync + rename, 0600), inserts the row, and only then answers
   `{"ok": true, "sha256": <echo>}`. Idempotent by `(user, device, key)`; the same key with different bytes is a 409,
   never an overwrite; a key the owner already deleted is acknowledged (tombstone), never resurrected.
-- `GET/PATCH/DELETE /api/omi/recordings[/{id}]` — **owner only** (admin role does not widen it).
+- `GET/PATCH/DELETE /api/omi/recordings[/{id}]` — **owner only** (admin role does not widen it). With the registry on (4.11): any signed-in member, own rows only.
 - Each row: `source='omi'`, `provenance='recording'`, the **recording time from the pendant timestamps**
   (`started_at`/`ended_at`, `time_quality`), `gap_before`, `speaker_state='unverified'`, `reviewed=0`.
 - **Transcription** (background `run_loop`, flag-gated): the existing Moonshine path
@@ -395,14 +396,16 @@ Sub-options inside (A) — the receiver:
 
 After a session that confirmed ≥ 1 recording the Pi calls `POST /api/omi/sync-notice {count}`; zoe-data writes one
 `notifications` row (type `omi_sync`) and broadcasts `notification_created` — the existing bell path — "I've synced 3
-recordings from your pendant." Rate-limited to one per minute; best-effort (losing it loses nothing).
+recordings from your pendant." Rate-limited to one per minute (per owner); best-effort (losing it loses nothing). With the
+registry on the body also names the pendant (`device`) and the notice goes to **that pendant's owner only** (4.11).
 
 ### 4.6 Flags and configuration
 
 | Where | Name | Default | Meaning |
 |---|---|---|---|
 | Pi | `OMI_SYNC_ENABLED` | off | the service does nothing, exits 0 |
-| Pi | `OMI_PENDANT_ADDRESS` (`OMI_PENDANT_ADDR_TYPE`) | — (`random`) | the pendant's BLE address (never uploaded); the CV1 uses a static random address |
+| Pi | `OMI_PENDANT_ADDRESSES` (comma list) / `OMI_PENDANT_ADDRESS` (`OMI_PENDANT_ADDR_TYPE`) | — (`random`) | the pendants' BLE addresses, visited in turn (never uploaded); the single var is the fallback; the CV1 uses a static random address (4.11) |
+| Pi | `OMI_SYNC_UNREGISTERED_RETRY_S` | 900 (floor 60) | how long to wait before asking again after Zoe said the pendant is not assigned to anyone |
 | Pi | `ZOE_URL`, `DEVICE_TOKEN`, `VERIFY_SSL` | — | same as the voice daemon |
 | Pi | `OMI_SYNC_LECC`, `OMI_SYNC_LECC_PREFIX` | on, `sudo -n` | create the link with `hcitool lecc` (the recipe that works at range); how to run it privileged |
 | Pi | `OMI_SYNC_LEGACY_FILES` | **off** | opt in to the firmware-3.0.18 file protocol (the pendant frees each file itself on delivery) |
@@ -410,7 +413,9 @@ recordings from your pendant." Rate-limited to one per minute; best-effort (losi
 | Pi | `OMI_SYNC_SET_DEVICE_TIME` | **off** | the one WRITE to the pendant: set its clock once per session when it is >2 s off |
 | Pi | `OMI_SYNC_GAP_S` / `_MAX_RECORDING_S` / `_SCAN_INTERVAL_S` / `_COOLDOWN_S` / `OMI_SYNC_DIR` | 90 / 600 / 30 / 120 / `~/.zoe-omi-sync` | tuning |
 | zoe-data | `ZOE_OMI_SYNC_ENABLED` | off | routes absent (404), no loop |
-| zoe-data | `ZOE_OMI_OWNER_USER_ID` | — | whose pendant; unset = uploads 503 |
+| zoe-data | `ZOE_OMI_OWNER_USER_ID` | — | whose pendant while the registry is OFF (unset = uploads 503); with `ZOE_OMI_DEVICE_OWNERS` on it is **only the one-time seed** (4.11) |
+| zoe-data | `ZOE_OMI_DEVICE_OWNERS` | off | the pendant-ownership registry (`omi_devices`, migration 0047): uploads attributed by pendant, per-member views, admin assignment (4.11) |
+| zoe-data | `ZOE_OMI_AUDIT_PATH` | `~/.zoe/omi-audit.jsonl` | audit log of assignments (fail-closed) |
 | zoe-data | `ZOE_OMI_AUDIO_DIR`, `_AUDIO_RETENTION_DAYS`, `_KEEP_AUDIO`, `_MIN_MEM_MB` | `~/.zoe/omi-recordings`, 7, off, 1500 | storage + gates |
 
 ### 4.7 Operator runbook (the owner present; nothing here is done by the build agent)
@@ -538,6 +543,20 @@ hardware VAD needs sound), then decode the first payloads with libopus: `opus_pa
 frame length (160 = 10 ms, 320 = 20 ms) regardless of the id, and a clean decode of 16 kHz speech confirms Opus. The sync service
 does the same implicitly (durations come from the decoded PCM, a recording that does not decode is held, not uploaded). A
 firmware update to 3.0.21 should make the id read 21.
+
+### 4.11 Several pendants, one owner each (2026-10-13, flag-dark `ZOE_OMI_DEVICE_OWNERS`)
+
+**Owner requirement (verbatim):** "we will need to link a certain omi, to a certain user, but the sync should sync no matter who is logged on, as long as in range of the pi, and of course only sync to the user its registered for".
+
+- **One identity per pendant, derived on the Pi.** `device_hash(address)` = `sha256("omi-sync:" + address.lower())[:16]` (hex): what omi-sync sends as `X-Omi-Device` and keys its spool by. Settings > Bluetooth (`panel_bt.model.device_id`) previously used a *different* 12-hex hash; it now uses this exact derivation, so the id an admin sees on a pendant's row IS the upload id. Chosen over changing omi-sync because omi-sync is live (existing stored recordings and the Pi spool carry this id) while Settings > Bluetooth was not deployed — zero data migration. Two copies (two venvs) pinned equal, with a golden value, by `tests/unit/test_omi_device_identity.py`. The address never leaves the Pi.
+- **Registry:** table `omi_devices` (migration 0047): `device_id` PK, `user_id` (current owner, `''` when unassigned), `label`, `registered_by`, `registered_at`, `updated_at`, `active`. Chosen over a general `ble_device_owners`: ownership only matters to attributing recordings, which is Omi-specific; generalise when a second owned device exists.
+- **Attribution:** ONLY the registry, by `X-Omi-Device`, re-checked inside the owner's erase gate at write time. Never the panel's signed-in/bound user, never `ZOE_OMI_OWNER_USER_ID`, never "some admin". Unregistered/unassigned/inactive → 409 `device_not_registered` → omi-sync `NOT_REGISTERED`: keep the spool, do not advance/free the ring, retry every `OMI_SYNC_UNREGISTERED_RETRY_S` (900 s).
+- **Viewing:** any signed-in non-guest human member sees/edits/deletes only their own rows; no admin override; a device token (even one bound to a member) is refused.
+- **Registration:** `GET /api/omi/members|devices`, `PUT|DELETE /api/omi/devices/{device_id}` — human admin only (device tokens refused, the #2010 pattern), audited fail-closed. **Reassigning moves no existing recording**; ownership is resolved at upload time, so audio still on the pendant or in the Pi spool at the moment of change goes to the new owner (the UI says so). The admin sees ownership only — never recordings or counts. UI: the Omi driver's row in Settings > Bluetooth devices has an **Assigned to** select.
+- **Seed:** `ZOE_OMI_OWNER_USER_ID` is now a one-time seed — if set and exactly one pendant has ever uploaded under that owner, that pendant is registered to them once (idempotent; any existing row blocks a re-seed, so an admin's unassign/reassign or an erase is never undone by a restart). Otherwise registration is explicit.
+- **Several pendants on one Pi:** `OMI_PENDANT_ADDRESSES` (comma list; the single var is the fallback). `omi_sync/runner.py` visits each in turn; the shared radio lock is held per visit; spool, outbox and next-visit time are per pendant.
+- **Forget:** `MemoryService.delete_user` → `omi_recordings.forget_user` tombstones the member's recordings and unassigns their pendants (the row stays, unowned, so the seed cannot resurrect them), scrubbing them from `registered_by`.
+- Operator steps and rollback: [`docs/knowledge/bluetooth-settings.md`](../knowledge/bluetooth-settings.md) → "Operator steps for pendant ownership". Tests: `services/zoe-data/tests/test_omi_device_owners.py`, `tests/unit/test_omi_sync_rotation.py`, `tests/unit/test_omi_device_identity.py`, `services/zoe-ui/dist/test_bluetooth_settings.js`.
 
 ## 4a. The live-stream architecture (the later path — superseded as the first build by section 4)
 

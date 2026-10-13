@@ -369,7 +369,7 @@ def test_a_memory_challenge_is_recognised(q):
 
 
 @pytest.mark.parametrize("q", [
-    "Tell me the meaning of life", "I told you to turn off the light", "You know, it's been a long week",
+    "Remember that the gate code is blue", "Tell me the meaning of life", "I told you to turn off the light", "You know, it's been a long week",
     "How are you going?", "Turn on the kitchen light", "", "What's the weather like?",
 ])
 def test_not_a_memory_challenge(q):
