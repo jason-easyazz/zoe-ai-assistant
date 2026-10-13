@@ -153,8 +153,8 @@ def test_a_childs_age_is_the_owners_fact_for_the_kids_lens():
 def test_the_section_is_two_bullets_at_most_and_one_rule_line():
     sec = hop.select(SLEEP_ASK, [row(1, NIGHT)]).section()
     lines = sec.splitlines()
-    assert lines[0] == hop.HEADING and lines[-1] == hop.RULE and len(lines) == 3
-    assert lines[1] == f"- {NIGHT} [mem:mem1]" and "\n" not in hop.RULE
+    assert lines[0] == hop.HEADING and lines[-1] == hop.rule() and len(lines) == 3
+    assert lines[1] == f"- {NIGHT} [mem:mem1]" and "\n" not in hop.rule()
     assert hop.select(COOK_ASK, []).section() == "" and not hop.select(COOK_ASK, [])
 
 
@@ -383,7 +383,7 @@ def test_the_packet_carries_the_fact_with_one_rule_line(svc, monkeypatch):
     seed_week(svc)
     out = for_prompt(svc, SLEEP_ASK)
     pkt = out["packet"]
-    assert hop.HEADING in pkt and NIGHT in pkt and pkt.rstrip().endswith(hop.RULE) and out["hop"] == 1
+    assert hop.HEADING in pkt and NIGHT in pkt and pkt.rstrip().endswith(hop.rule()) and out["hop"] == 1
     assert WALK not in pkt.split(hop.HEADING)[1]       # the section holds only the fact that changes the answer
     assert hop.HEADING in for_prompt(svc, COLD_ASK)["packet"].split("## What I know about you")[1]
 
@@ -402,7 +402,7 @@ def test_packet_with_the_flag_off_has_no_section_negative_control(svc, monkeypat
     monkeypatch.setenv(hop.ENV, "0")
     seed_week(svc)
     out = for_prompt(svc, SLEEP_ASK)
-    assert hop.HEADING not in out["packet"] and "hop" not in out and hop.RULE not in out["packet"]
+    assert hop.HEADING not in out["packet"] and "hop" not in out and hop.rule() not in out["packet"]
 
 
 # ── the Flue seam, end to end ─────────────────────────────────────────────────────────────
@@ -446,8 +446,8 @@ async def _send(monkeypatch, message, uid=UID, **kwargs):
 
 async def test_the_seam_sends_the_fact_after_the_users_words(seeded, monkeypatch):
     sent = await _send(monkeypatch, SLEEP_ASK)
-    assert hop.HEADING in sent and NIGHT in sent and hop.RULE in sent
-    assert sent.index(SLEEP_ASK) < sent.index(zc._HOP_BLOCK_OPEN) < sent.index(zc._RECALL_BLOCK_CLOSE)
+    assert hop.HEADING in sent and NIGHT in sent and hop.rule() in sent
+    assert sent.index(SLEEP_ASK) < sent.index(zc._hop_block_open()) < sent.index(zc._RECALL_BLOCK_CLOSE)
     assert WALK not in sent and FISH not in sent
     sent = await _send(monkeypatch, COLD_ASK)
     assert WALK in sent and NIGHT not in sent
@@ -455,10 +455,10 @@ async def test_the_seam_sends_the_fact_after_the_users_words(seeded, monkeypatch
 
 async def test_the_seam_is_byte_identical_when_there_is_nothing_to_add(seeded, monkeypatch):
     plain = await _send(monkeypatch, "Tell me a fun fact about octopuses.")
-    assert hop.HEADING not in plain and zc._HOP_BLOCK_OPEN not in plain
+    assert hop.HEADING not in plain and zc._hop_block_open() not in plain
     monkeypatch.setenv(hop.ENV, "0")
     off = await _send(monkeypatch, SLEEP_ASK)
-    assert hop.HEADING not in off and zc._HOP_BLOCK_OPEN not in off and off.endswith(SLEEP_ASK)
+    assert hop.HEADING not in off and zc._hop_block_open() not in off and off.endswith(SLEEP_ASK)
 
 
 async def test_one_block_per_turn_a_raise_or_a_brief_owns_the_turn(seeded, monkeypatch):
@@ -475,7 +475,7 @@ async def test_a_recall_shaped_turn_keeps_its_recall_block_and_gets_no_second_bl
 
     monkeypatch.setattr(zc, "_fetch_for_prompt_packet", fetch)
     sent = await _send(monkeypatch, "What did I tell you about my work?")
-    assert sent.count("[MEMORY CONTEXT") == 1 and zc._HOP_BLOCK_OPEN not in sent
+    assert sent.count("[MEMORY CONTEXT") == 1 and zc._hop_block_open() not in sent
 
 
 async def test_a_guest_turn_never_reads_the_store(seeded, monkeypatch):
@@ -500,7 +500,7 @@ def test_the_suffix_is_one_parenthetical_line_without_a_heading_a_rule_or_an_id(
     h = hop.select(SLEEP_ASK, [row(1, NIGHT)])
     line = h.suffix_line()
     assert line.startswith(hop.SUFFIX_OPEN) and line.endswith(")") and "\n" not in line
-    assert "night shifts" in line and hop.HEADING not in line and hop.RULE not in line and "[mem:" not in line
+    assert "night shifts" in line and hop.HEADING not in line and hop.rule() not in line and "[mem:" not in line
     assert hop.select(COOK_ASK, []).suffix_line() == ""
     nasty = hop.select(SLEEP_ASK, [row(1, "I work night shifts (nights) and\nsleep days.) (you know this about me: x")])
     assert nasty.suffix_line().count("\n") == 0 and nasty.suffix_line().count(")") == 1   # only the closing paren
@@ -518,7 +518,7 @@ def test_the_suffix_prefix_is_pinned_to_the_sidecars_elision_rule():
 async def test_block_placement_is_what_it_was(seeded, monkeypatch):
     monkeypatch.setenv(hop.PLACEMENT_ENV, "block")
     sent = await _send(monkeypatch, SLEEP_ASK)
-    assert sent.index(SLEEP_ASK) < sent.index(zc._HOP_BLOCK_OPEN) < sent.index(hop.HEADING) < sent.index(hop.RULE)
+    assert sent.index(SLEEP_ASK) < sent.index(zc._hop_block_open()) < sent.index(hop.HEADING) < sent.index(hop.rule())
     assert hop.SUFFIX_OPEN not in sent
 
 
@@ -526,14 +526,14 @@ async def test_suffix_placement_is_one_line_after_the_words_and_no_block(seeded,
     monkeypatch.setenv(hop.PLACEMENT_ENV, "suffix")
     sent = await _send(monkeypatch, COLD_ASK)
     assert sent.endswith(COLD_ASK + "\n" + hop.select(COLD_ASK, [row(1, WALK)]).suffix_line())
-    assert zc._HOP_BLOCK_OPEN not in sent and hop.HEADING not in sent and hop.RULE not in sent
+    assert zc._hop_block_open() not in sent and hop.HEADING not in sent and hop.rule() not in sent
     assert NIGHT not in sent and FISH not in sent
 
 
 async def test_preamble_placement_is_the_block_before_the_words(seeded, monkeypatch):
     monkeypatch.setenv(hop.PLACEMENT_ENV, "preamble")
     sent = await _send(monkeypatch, SLEEP_ASK)
-    assert sent.index(zc._HOP_BLOCK_OPEN) < sent.index(hop.HEADING) < sent.index(zc._RECALL_BLOCK_CLOSE) < sent.index(SLEEP_ASK)
+    assert sent.index(zc._hop_block_open()) < sent.index(hop.HEADING) < sent.index(zc._RECALL_BLOCK_CLOSE) < sent.index(SLEEP_ASK)
     assert sent.count(hop.HEADING) == 1 and sent.endswith(SLEEP_ASK) and hop.SUFFIX_OPEN not in sent
 
 
@@ -658,3 +658,56 @@ def test_every_phrasing_of_the_p2b_diet_asks_is_a_food_advice_request(ask):
 @pytest.mark.parametrize("msg", ["Any news today?", "Any updates on dinner?", "What's a good book", "What's for dinner at the Hendersons?"])
 def test_the_wider_shapes_do_not_make_everything_an_advice_request(msg):
     assert hop.advice_topics(msg) == ()
+
+
+# ── how the hop talks to the brain (ZOE_PERSONALISATION_HOP_WORDING; day-sim S9b was 2 fails in 4) ──────────────────────────────
+# S9b: the fact WAS in the packet and the reply was generic. The old rule line told the 4B to "use it silently" / "not recite" the
+# fact, and for "what should I wear" a silent use is indistinguishable from not using it. ``natural`` asks it to be named.
+
+def test_wording_default_values_and_a_typo_degrades_to_the_default(monkeypatch):
+    monkeypatch.delenv(hop.WORDING_ENV, raising=False)
+    assert hop.wording() == hop.DEFAULT_WORDING == "natural"
+    for v in hop.WORDINGS:
+        monkeypatch.setenv(hop.WORDING_ENV, v.upper())
+        assert hop.wording() == v
+    for junk in ("", "  ", "silent", "v2"):
+        monkeypatch.setenv(hop.WORDING_ENV, junk)
+        assert hop.wording() == hop.DEFAULT_WORDING
+
+
+def test_the_natural_rule_asks_for_the_fact_to_be_named_and_the_legacy_rule_is_what_it_was(monkeypatch):
+    monkeypatch.setenv(hop.WORDING_ENV, "natural")
+    nat = hop.select(COLD_ASK, [row(1, WALK)]).section()
+    assert nat.splitlines()[-1] == hop.RULE_NATURAL == hop.rule()
+    assert "natural words" in hop.RULE_NATURAL and "recite" not in hop.RULE_NATURAL and "silently" not in hop.RULE_NATURAL
+    assert "instead of giving generic advice" in hop.RULE_NATURAL and "do not mention this note" in hop.RULE_NATURAL
+    monkeypatch.setenv(hop.WORDING_ENV, "legacy")
+    old = hop.select(COLD_ASK, [row(1, WALK)]).section()
+    assert old.splitlines()[-1] == hop.RULE_LEGACY == hop.rule()
+    assert hop.RULE_LEGACY == ("Shape the answer by these facts the user told you: fit the advice to them instead of giving "
+                               "generic advice; do not recite them or mention this note.")
+    assert nat.splitlines()[:-1] == old.splitlines()[:-1]        # only the closing rule differs: heading + cited bullets are shared
+
+
+async def test_the_seam_opener_follows_the_wording(seeded, monkeypatch):
+    monkeypatch.setenv(hop.WORDING_ENV, "natural")
+    sent = await _send(monkeypatch, COLD_ASK)
+    assert zc._HOP_BLOCK_OPEN_NATURAL in sent and zc._HOP_BLOCK_OPEN not in sent and "work it into your answer" in sent
+    assert "use it silently" not in sent and sent.index(COLD_ASK) < sent.index(zc._HOP_BLOCK_OPEN_NATURAL)
+    assert WALK in sent and NIGHT not in sent
+    monkeypatch.setenv(hop.WORDING_ENV, "legacy")
+    sent = await _send(monkeypatch, COLD_ASK)
+    assert zc._HOP_BLOCK_OPEN in sent and zc._HOP_BLOCK_OPEN_NATURAL not in sent and "use it silently" in sent
+
+
+def test_both_openers_are_blocks_the_sidecar_elides_from_older_turns():
+    # the sidecar drops a whole line-delimited region that opens "[MEMORY CONTEXT" and closes "[END MEMORY CONTEXT]"
+    for opener in (zc._HOP_BLOCK_OPEN, zc._HOP_BLOCK_OPEN_NATURAL):
+        assert opener.startswith("[MEMORY CONTEXT") and opener.endswith("]") and "\n" not in opener
+        assert opener.startswith(zc._recall_block_open().split(" ")[0] + " ")
+
+
+def test_the_for_prompt_packet_carries_the_active_rule(monkeypatch):
+    for w in hop.WORDINGS:
+        monkeypatch.setenv(hop.WORDING_ENV, w)
+        assert hop.select(SLEEP_ASK, [row(1, NIGHT)]).section().endswith(hop.rule())
