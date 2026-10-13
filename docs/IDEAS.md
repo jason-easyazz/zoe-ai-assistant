@@ -37,6 +37,9 @@ Detail/AI notes go under each entry. Move the status as it progresses.
 - **Core:** Zoe owns everyday tasks end to end — emails as herself, books online, phones businesses, pays with single-use capped cards, escalates to the owner when stuck, learns from corrections. Source: [wajo.ai](https://wajo.ai); owner, 2026-10-12: "be great to get zoe to this level."
 - **Record + plan:** [`docs/research/zoe-action-agent-2026-10.md`](research/zoe-action-agent-2026-10.md); tracked in [PLANS.md](PLANS.md). The piece to borrow first is Fo's benchmark shape (a simulated world graded world-state first), not its feature list.
 
+### Users add abilities to Zoe — "connect my email" and she keeps an eye on it — 🔬 exploring
+- **Core:** a member says "Zoe, connect my email" (or Telegram, WhatsApp, calendar, SMS), gets a QR on the panel, finishes on their phone, and Zoe watches it and tells them what matters; owner, 2026-10-14. Record + design: [`zoe-abilities-connectors-2026-10.md`](research/zoe-abilities-connectors-2026-10.md), [`zoe-abilities.md`](architecture/zoe-abilities.md); tracked in [PLANS.md](PLANS.md).
+
 ### Omi pendant: press-to-record firmware (and our own bootloader key) — 🔬 exploring
 - **Core:** the owner wants the pendant to record only after a button press. Possible as a small app-core patch pushed over OTA (the CV1 bootloader trusts MCUboot's public default key, so anyone can sign), but a bad image has no BLE recovery - buy/borrow an SWD probe first, and consider replacing the bootloader key over SWD at the same time because the public key lets anyone in BLE range reflash a stock pendant. Source: [omi-press-to-record-firmware-2026-10.md](research/omi-press-to-record-firmware-2026-10.md), 2026-10-13.
 
