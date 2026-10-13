@@ -106,7 +106,9 @@ chat, Telegram, LiveKit). `_claim_guarded` wraps the lane stream (`write_claim_g
   (a sentence, a vague noun, a pronoun/wh-word opener, > 12 words) used by both the Skybridge and the `intent_router` parsers.
   After a possessive, an auxiliary-looking word (`can`, `will`) is the NOUN of the item at the end of the phrase ("my spare can") or
   when it opens a known compound (`_NOUN_COMPOUNDS` data: "my tin can OPENER", "my brother's can opener", "our can OF paint", "my
-  last will AND TESTAMENT"); "my phone can ring" / "my phone will not work" stay sentences. A new compound is a new row there.
+  last will AND TESTAMENT"); "my phone can ring" / "my phone will not work" stay sentences. A new compound is a new row there. A LONE tail
+  word that can be a verb or preposition ("label", "of") never exempts a predicate: those rows need a second token ("can of <noun>",
+  "can label maker"), so "my printer can label packages" / "my printer can of course print" stay sentences.
 * Skybridge `_list_add_from_text`: `add|put … to|on|in (the|my|our) <list>`, list names incl. `to-do`, `to do`, `todo`,
   `bucket`; the verb must open a COMMAND (`_command_shaped`: only lead-in words before it).
 * Skybridge calendar create: `add|schedule|book|put|set up|create|make X (on <day>) at <time>` and "what/how about a
