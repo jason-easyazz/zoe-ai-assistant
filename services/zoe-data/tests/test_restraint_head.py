@@ -458,6 +458,39 @@ def test_the_english_head_is_not_applied_to_spanish_text(monkeypatch):
     assert md["sensitivity_v"] == restraint.VERSION
 
 
+# Codex P2 (#1996): ``detect_scored`` falls back to ("en", 0) for ANY language it has no word list for (Polish, Russian,
+# Portuguese, ...) and for English with no function word, so "the pack says en" is not evidence that the text IS English.
+@pytest.mark.parametrize("text", [
+    "Moja mama jest chora i nie mogę spać",        # Polish: no word list, falls back to ("en", 0)
+    "Мама больна, и я очень волнуюсь",              # Russian
+    "A minha mãe está doente e não consigo dormir",  # Portuguese
+    "Mi madre está muy enferma",                   # Spanish (positive evidence for es)
+    "Ma mère est très malade",                     # French (positive evidence for fr)
+])
+def test_the_english_head_needs_positive_english_evidence(text, monkeypatch):
+    import lexicons
+    assert lexicons.detect(text) in ("en", "es", "fr")                        # the premise: several of these read as "en"
+    fn = _embedder_for({text: _direction("grief")})
+    restraint_head.set_embedder(fn)
+    assert restraint.classify_full(text, head=True) == restraint.classify_full(text, head=False)
+    assert fn.calls == []                                                     # not even embedded
+    assert restraint.head_settled(text)                                       # nothing the head will ever add
+    monkeypatch.setenv(restraint.ENV, "shadow")
+    md: dict = {}
+    restraint.stamp(md, text)
+    assert md["sensitivity_v"] == restraint.VERSION                           # head-complete, never re-stamped forever
+
+
+def test_the_head_still_serves_english_with_positive_evidence():
+    """Negative control for the gate above: an English line carrying English-only markers (``she``, ``are``) is still head-classified."""
+    text = "she is so ill and we are worried"
+    import lexicons
+    assert lexicons.detect_scored(text) == ("en", 3) or lexicons.detect_scored(text)[1] > 0
+    restraint_head.set_embedder(_embedder_for({text: _direction("grief")}))
+    classes, signals = restraint.classify_full(text, head=True)
+    assert "grief" in classes and "grief:head" in signals
+
+
 def test_a_router_running_a_different_embedding_model_disables_the_head_with_one_log_line(monkeypatch, caplog):
     import logging
     _router(monkeypatch, name="some/other-384-model")

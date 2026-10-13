@@ -61,6 +61,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Optional
 
+import lexicons as _lexicons
 import restraint_head as _head
 import restraint_lex as _lex
 
@@ -169,10 +170,39 @@ _TAG_CLASSES = {
 LEXICON_VERSION = VERSION - 1
 
 
-def _head_applies(pk: "_lex.Pack") -> bool:
-    """The head is an ENGLISH embedding classifier: text whose detected language is anything else stays lexicon-only (the
-    module's promise), as every other restraint word list does."""
-    return pk.lang == "en"
+#: English function words that are NOT also common words in another language (so no ``to``/``no``/``in``/``is``/``was``/``will``/``for``/
+#: ``do``/``a``: Polish, German, Dutch, Danish and Portuguese all use those). With English contractions and the detector's own word list
+#: they are the POSITIVE evidence the text is English; ``detect_scored``'s language alone cannot give it because it answers
+#: ``("en", 0)`` for every language it has no word list for.
+_ENGLISH_MARKERS = frozenset(
+    "he she his the and are were with that this they them their there these those than then have been being would could should about "
+    "because while since when what where which who how whom whose from over after before again always never lately just very also "
+    "some any every everyone everything something nothing anything everywhere our your ours yours myself himself herself "
+    "themselves into onto upon until though although either neither today tonight tomorrow yesterday keep keeps kept "
+    "feel feels feeling felt really maybe much".split())
+_CONTRACTION_RE = re.compile(r"\b[a-z]+(?:n't|'(?:m|ve|ll|re|d|s))\b")
+_WORD_RE = re.compile(r"[^\W\d_]+")
+
+
+def _head_applies(text: Any) -> bool:
+    """The head is an ENGLISH embedding classifier: it runs only on text with POSITIVE evidence of being English, and everything
+    else stays lexicon-only (the module's promise), as every other restraint word list does.
+
+    Two conditions: the language detector must not prefer another language, AND the text must carry English-only evidence (an
+    unambiguous function word, an English contraction, or a hit on the detector's own English word list). ``detect_scored`` returns ``("en", 0)`` for Polish, Russian, Portuguese
+    and anything else it has no word list for, so ``lang == "en"`` alone proves nothing. A short English line with no marker
+    ("Divorce papers arrive next week") falls back to the lexicon, the safe side: the head only ever ADDS classes, so not running it
+    can only mean fewer, never a wrong one."""
+    raw = str(text or "")
+    lang, hits = _lexicons.detect_scored(raw)
+    if lang != "en":
+        return False
+    low = raw.casefold().replace("\u2019", "'")
+    if _CONTRACTION_RE.search(low):
+        return True
+    if any(t in _ENGLISH_MARKERS for t in _WORD_RE.findall(low)):
+        return True
+    return hits > 0         # the detector's own English word list (a word like ``to`` or ``is`` is a weak but real signal)
 
 
 def head_settled(text: Any) -> bool:
@@ -180,7 +210,7 @@ def head_settled(text: Any) -> bool:
     will). Call AFTER a ``head=True`` classification: it reads the cache that classification filled. A label written while this is
     False is stamped ``LEXICON_VERSION``, not ``VERSION``, so it is never trusted as head-complete."""
     raw = str(text or "")
-    if not _head_applies(_lex.pack_for(raw)):
+    if not _head_applies(raw):
         return True
     return _head.lookup(raw, embed=False) is not None
 
@@ -238,7 +268,7 @@ def classify_full(text: Any, *, memory_type: Any = "", affect: Any = "", entity_
     elif pk.affect is not None and pk.affect.search(low):
         found["affect"] = "lexicon"
 
-    if head and _head_applies(pk):
+    if head and _head_applies(raw):
         for cls in _head.classes(raw, embed=head is True):
             found.setdefault(cls, "head")
 
@@ -992,7 +1022,7 @@ async def store_thread_classes(db, user_id: str, items: Iterable[tuple[str, str,
         items = list(items)
         # the head's embedding is the slow part (~7-19 ms a text): do ALL of it on a worker thread first, so the loop below only
         # reads the cache (head="cache") and the event loop is never blocked by the nightly pass
-        await asyncio.to_thread(_head.warm, [t for _r, t, _k in items if _head_applies(_lex.pack_for(str(t or "")))])
+        await asyncio.to_thread(_head.warm, [t for _r, t, _k in items if _head_applies(t)])
         for ref, text, kind in items:
             h = text_hash(text)
             cur_ = valid.get(ref)

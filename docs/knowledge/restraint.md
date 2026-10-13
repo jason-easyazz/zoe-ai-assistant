@@ -229,8 +229,11 @@ round). The repo's answer to that is a small head on the embedding it already co
   each against the class count, requires every array finite and every threshold in [0, 1], and refuses a damaged file (word list only,
   never a crash). At runtime a wrong-width or non-finite vector, or a non-finite score, reads as "head did not run" (`lookup` returns `None`,
   nothing cached, the row is not stamped head-complete) - never as a cached empty classification.
-* **English only, enforced.** bge-small-en is an English embedding: the head runs only on text whose detected language (`lexicons.detect`, as the
-  rest of restraint) is English; another language's text keeps its lexicon, and its stamp is head-complete (there is nothing for the head to add).
+* **English only, enforced.** bge-small-en is an English embedding: the head runs only on text with POSITIVE evidence of English: the
+  detector (`lexicons.detect_scored`) must say `en` AND the text must carry an English-only function word, an English contraction, or a hit on the detector's
+  English word list (`restraint._head_applies`). `detect_scored` answers `("en", 0)` for Polish, Russian, Portuguese and every other language without a word
+  list, so the language code alone is not evidence. Anything else keeps its lexicon, and its stamp is head-complete (there is nothing for the head to add); a short
+  English line with no marker also falls back to the lexicon, which can only mean fewer classes, never a wrong one.
 * **A v3 stamp means the head ran.** `stamp` (and the nightly thread pass) write `VERSION` only when the head actually classified the text (or never applies);
   a row created before the router's model is loaded is stamped `LEXICON_VERSION` (2), which `row_classes` ignores, so a later `stamp` of the same row
   applies the head. The nightly pass never downgrades a head-complete thread row to the word list.
