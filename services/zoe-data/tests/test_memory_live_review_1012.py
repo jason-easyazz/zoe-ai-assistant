@@ -566,3 +566,85 @@ def test_notes_withheld_as_unconfirmed_are_not_nothing(svc):
         assert "know much about you yet" not in out and "go through them" in out
     # control: with nothing at all the old empty reply stands
     assert pa.render_summary(pa.Known(), voice=True, now=NOW) == pa.NOTHING_KNOWN_REPLY
+
+
+# ── Codex round 3 on PR #2005 ────────────────────────────────────────────────────────────────
+# P1  a pronoun never resolves PAST a newer named person to an older "my <relation>"
+# P2  "we talked/discussed ..." is a memory challenge only with a challenge cue
+# P2  every coordinated verb under "User" is second person, not just the first
+
+_NEWER_NAME_HOLDS = [
+    # the finding: the named person is the nearer antecedent; the sister was said earlier
+    ("She is in ICU", ["She is in ICU", "Dana called me", "I visited my sister yesterday"]),
+    ("She is in ICU", ["She is in ICU", "Dana called me", "I visited my sister yesterday."]),
+    # same message, name said AFTER the relation
+    ("She is in ICU", ["She is in ICU", "I visited my sister yesterday. Dana called me."]),
+    ("He is in ICU", ["He is in ICU", "Tom rang and I went to see my dad and Tom"]),
+    # a name and no relation at all: nothing to resolve to
+    ("She is in ICU", ["She is in ICU", "Dana called me"]),
+    # the current message itself names the nearer person
+    ("Her flight is late", ["Her flight is late, Marisol says", "I visited my sister yesterday"]),
+]
+
+
+@pytest.mark.parametrize("fact,texts", _NEWER_NAME_HOLDS)
+def test_a_pronoun_never_resolves_past_a_newer_named_person(fact, texts):
+    assert mq.resolve_subjectless_fact(fact, texts) is None
+
+
+@pytest.mark.parametrize("fact,texts,want", [
+    # the relation is the NEWEST antecedent: the older named person does not matter
+    ("She is in ICU", ["She is in ICU", "I visited my sister yesterday", "Dana called me"], "User's sister is in ICU"),
+    ("She is in ICU", ["She is in ICU", "Dana called me about my sister"], "User's sister is in ICU"),
+    # a place after the relation is not a person (locative cue), nor a sentence opener, a day or the assistant
+    ("She is in ICU", ["She is in ICU", "I visited my sister in Hobart"], "User's sister is in ICU"),
+    ("She is in ICU", ["She is in ICU", "Yesterday I visited my sister. On Monday we left."], "User's sister is in ICU"),
+    ("She is in ICU", ["She is in ICU", "Zoe, I visited my sister"], "User's sister is in ICU"),
+    # the name IS the relation ("my sister Dana"): one person
+    ("She is in ICU", ["She is in ICU", "I visited my sister Dana yesterday"], "User's sister is in ICU"),
+    ("She is in ICU", ["She is in ICU", "I visited my sister, Dana, yesterday"], "User's sister is in ICU"),
+])
+def test_a_newer_name_is_only_a_blocker_when_it_is_another_person(fact, texts, want):
+    assert mq.resolve_subjectless_fact(fact, texts) == want
+
+
+@pytest.mark.parametrize("q", [
+    "We talked to the doctor and he prescribed antibiotics",
+    "We discussed dinner and chose pizza",
+    "We spoke with the plumber and he fixed the tap",
+    "We've talked to the school and they agreed",
+    "We chatted for a while and then went to bed",
+])
+def test_ordinary_past_conversation_is_not_a_memory_challenge(q):
+    assert mg.is_memory_challenge(q) is False
+
+
+@pytest.mark.parametrize("q", [
+    "We already talked about it",
+    "we've talked about this",
+    "We talked about that before",
+    "we discussed it earlier",
+    "We have spoken about them already",
+    "We've talked already today",
+])
+def test_a_we_talked_turn_with_a_challenge_cue_still_is(q):
+    assert mg.is_memory_challenge(q) is True
+
+
+@pytest.mark.parametrize("text,want", [
+    ("User walks the dog and feeds the cat", "you walk the dog and feed the cat"),
+    ("User likes tea but hates coffee", "you like tea but hate coffee"),
+    ("User owns a shop, works nights and drives home", "you own a shop, work nights and drive home"),
+    ("User usually walks the dog and then watches the news", "you usually walk the dog and then watch the news"),
+    ("User studies law and has two cats", "you study law and have two cats"),
+    ("User lives in Hobart and is a nurse", "you live in Hobart and are a nurse"),
+    # not a verb: a noun list, an infinitive, another subject's verb - left exactly as they were
+    ("User likes tea and cats", "you like tea and cats"),
+    ("User likes walks and runs", "you like walks and runs"),
+    ("User likes walks, runs and swims", "you like walks, runs and swims"),
+    ("User plans to eat food and relax", "you plan to eat food and relax"),
+    ("User says Dana likes tea and hates coffee", "you say Dana likes tea and hates coffee"),
+    ("User thinks he likes tea and hates coffee", "you think he likes tea and hates coffee"),
+])
+def test_every_coordinated_verb_under_user_is_second_person(text, want):
+    assert pa.second_person(text) == want
