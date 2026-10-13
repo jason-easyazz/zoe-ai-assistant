@@ -21,6 +21,7 @@ from card_service import card_service
 from database import get_db_ctx
 from people_utils import row_to_person
 from time_utils import today_for_zoe_tz
+from weather_speech import WeatherAsk, classify_weather_ask, speak_weather
 
 logger = logging.getLogger(__name__)
 
@@ -1436,9 +1437,11 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
         or re.search(r"\bcurrent\s+time\b", text)
     ):
         return SkybridgeIntent(domain="clock", action="show")
-    if any(term in text for term in (" weather", " forecast", " temperature", " rain", " windy", " wind ")):
-        action = "forecast" if any(term in text for term in ("forecast", "tomorrow", "week", "next few days")) else "current"
-        return SkybridgeIntent(domain="weather", action=action)
+    weather_ask = classify_weather_ask(text)
+    if weather_ask is not None:
+        # query = what was asked for (high/low/rain/outlook/current), range_label = which day.
+        return SkybridgeIntent(domain="weather", action=weather_ask.action, query=weather_ask.focus,
+                               range_label=weather_ask.day)
     # A command-shaped WRITE ("add fix the gate to my to-do list") that no parser above claimed is never answered with a
     # list SHOW (live 2026-10-12: "Lists has 2 items." and nothing added): it falls through to the brain instead.
     write_led = _command_shaped(raw_message, _WRITE_VERB_RE) is not None
@@ -1594,7 +1597,7 @@ def _looks_like_list_name(message: str) -> bool:
     return not _NAMING_REFUSAL_RE.match((message or "").strip())
 
 
-_READ_ACTIONS = frozenset({"show", "overview", "forecast", "current"})
+_READ_ACTIONS = frozenset({"show", "overview", "forecast", "current", "today"})
 _WRITE_ACTIONS = frozenset({"add_item", "remove_item", "complete_item", "edit_item", "create_list", "create_event",
                             "update_time", "edit_event", "delete_event", "remember_fact", "create"})
 # Domains holding the household's personal data: the only ones the unsure floor applies to (music / smart-home / timers
@@ -2800,32 +2803,18 @@ async def _resolve_weather(intent: SkybridgeIntent, user_id: str, db: Any) -> di
     current = {k: v for k, v in current.items() if not str(k).startswith("_")}
     forecast = await _get_forecast(lat, lon)
 
-    def _say_num(n) -> str:
-        s = str(n)
-        return s.replace(".", " point ") if "." in s else s
-
+    ask = WeatherAsk(intent.query or "current", intent.range_label,
+                     wide=intent.action == "forecast" and intent.range_label != "tomorrow")
+    slots = {"current": current, "forecast": forecast, "location": {"city": city, "country": country}}
+    # Forecast card for tomorrow-and-later; current card for current and today's outlook
+    # (it carries the forecast block too, so the panel shows the day's range).
     if intent.action == "forecast":
-        card = card_service.build_weather_forecast_card(
-            {"current": current, "forecast": forecast, "location": {"city": city, "country": country}}
-        )
-        spoken = f"Here is the forecast for {city}."
+        card = card_service.build_weather_forecast_card(slots)
     else:
-        card = card_service.build_weather_current_card(
-            {"current": current, "forecast": forecast, "location": {"city": city, "country": country}}
-        )
-        temp = current.get("temp")
-        desc = current.get("description") or "current conditions"
-        # Whole degrees for speech: "18 degrees", never "18 point 3 degrees" —
-        # more natural spoken, and it keeps the reply inside the voice segment
-        # cache's stitch vocabulary (voice_stitch works on integer temps).
-        try:
-            temp = round(float(temp))
-        except (TypeError, ValueError):
-            pass
-        spoken = (
-            f"It's {_say_num(temp)} degrees and {desc} in {city}."
-            if temp is not None else f"Here is the weather for {city}."
-        )
+        card = card_service.build_weather_current_card(slots)
+    # Whole degrees, the asked-for fact first (weather_speech) — keeps the plain
+    # current reply inside voice_stitch's stitchable shape.
+    spoken = speak_weather(ask, current, forecast, city)
     return {
         "handled": True,
         "intent": {"domain": "weather", "action": intent.action},

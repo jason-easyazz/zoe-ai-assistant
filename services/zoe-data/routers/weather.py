@@ -257,7 +257,7 @@ async def _fetch_openmeteo_current(lat: float, lon: float, city: str, country: s
         "longitude": lon,
         "current_weather": "true",
         "hourly": "temperature_2m,weathercode,relativehumidity_2m,apparent_temperature,windspeed_10m",
-        "daily": "temperature_2m_max,temperature_2m_min,weathercode,sunrise,sunset",
+        "daily": "temperature_2m_max,temperature_2m_min,weathercode,sunrise,sunset,precipitation_probability_max",
         "timezone": "auto",
         "forecast_days": 6,
         "wind_speed_unit": "ms",  # m/s like OpenWeatherMap metric
@@ -334,7 +334,7 @@ async def _fetch_openmeteo_forecast(lat: float, lon: float) -> dict:
         params = {
             "latitude": lat, "longitude": lon,
             "hourly": "temperature_2m,weathercode",
-            "daily": "temperature_2m_max,temperature_2m_min,weathercode",
+            "daily": "temperature_2m_max,temperature_2m_min,weathercode,precipitation_probability_max",
             "timezone": "auto", "forecast_days": 6,
         }
         try:
@@ -369,15 +369,27 @@ async def _fetch_openmeteo_forecast(lat: float, lon: float) -> dict:
         if len(hourly) >= 8:
             break
 
-    # Daily: skip today, next 5 days
+    # Daily: skip today, next 5 days. Today's own outlook (high/low/rain chance)
+    # rides separately in ``today`` so "how hot is it going to get" has a source.
     today_str = now.date().isoformat()
     d_dates = daily_raw.get("time", [])
     d_maxes = daily_raw.get("temperature_2m_max", [])
     d_mins  = daily_raw.get("temperature_2m_min", [])
     d_codes = daily_raw.get("weathercode", [])
+    d_pops  = daily_raw.get("precipitation_probability_max") or []
+    today = None
     daily = []
     for i, date_str in enumerate(d_dates):
         if date_str == today_str:
+            t_code = int(d_codes[i]) if i < len(d_codes) else 0
+            t_desc, _t_icon = _wmo_info(t_code)
+            today = {
+                "day": date_str,
+                "high": d_maxes[i] if i < len(d_maxes) else None,
+                "low":  d_mins[i]  if i < len(d_mins)  else None,
+                "rain_chance": d_pops[i] if i < len(d_pops) else None,
+                "description": t_desc,
+            }
             continue
         code = int(d_codes[i]) if i < len(d_codes) else 0
         desc, icon = _wmo_info(code)
@@ -385,13 +397,14 @@ async def _fetch_openmeteo_forecast(lat: float, lon: float) -> dict:
             "day": date_str,
             "high": d_maxes[i] if i < len(d_maxes) else None,
             "low":  d_mins[i]  if i < len(d_mins)  else None,
+            "rain_chance": d_pops[i] if i < len(d_pops) else None,
             "description": desc,
             "icon": icon,
         })
         if len(daily) >= 5:
             break
 
-    result = {"hourly": hourly, "daily": daily}
+    result = {"hourly": hourly, "daily": daily, "today": today}
     _cache_put("forecast", lat, lon, result)
     return result
 
@@ -477,25 +490,41 @@ async def _fetch_owm_forecast(lat: float, lon: float) -> dict:
             day_buckets[item_dt.date().isoformat()].append(item)
 
         daily = []
+        today = None
         today_str = now.date().isoformat()
         for date_key in sorted(day_buckets.keys()):
             if date_key == today_str:
+                # OWM's 3-hourly list only covers what is LEFT of today, so this
+                # high/low is the remaining-day range; ``pop`` is a 0..1 chance.
+                t_entries = day_buckets[date_key]
+                t_temps = [_owm_main_info(e).get("temp") for e in t_entries if _owm_main_info(e).get("temp") is not None]
+                t_pops = [e.get("pop") for e in t_entries if isinstance(e.get("pop"), (int, float))]
+                t_wa = _owm_weather_info(t_entries[0])
+                today = {
+                    "day": date_key,
+                    "high": max(t_temps) if t_temps else None,
+                    "low": min(t_temps) if t_temps else None,
+                    "rain_chance": round(max(t_pops) * 100) if t_pops else None,
+                    "description": t_wa.get("description"),
+                }
                 continue
             entries = day_buckets[date_key]
             temps = [_owm_main_info(e).get("temp") for e in entries if _owm_main_info(e).get("temp") is not None]
             midday = min(entries, key=lambda e: abs(_parse_owm_forecast_time(e, provider_tz).hour - 12))
             wa = _owm_weather_info(midday)
+            pops = [e.get("pop") for e in entries if isinstance(e.get("pop"), (int, float))]
             daily.append({
                 "day":  date_key,
                 "high": max(temps) if temps else None,
                 "low":  min(temps) if temps else None,
+                "rain_chance": round(max(pops) * 100) if pops else None,
                 "description": wa.get("description"),
                 "icon": wa.get("icon"),
             })
             if len(daily) >= 5:
                 break
 
-        result = {"hourly": hourly, "daily": daily}
+        result = {"hourly": hourly, "daily": daily, "today": today}
         _cache_put("forecast", lat, lon, result)
         return result
     except Exception:

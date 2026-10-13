@@ -244,6 +244,7 @@ async def prewarm_vocabulary(
 _TIME_RE = re.compile(r"^It(?:'s| is) (\d{1,2}):(\d{2}) (AM|PM)\.?$")
 _WEATHER_RE = re.compile(
     r"^It's (\d{1,3}) degrees(?: and ([^,]+?))? in ([^,]+?)"
+    r"(?:, with a top of (\d{1,3}) today)?"
     r"(?:, and it feels like (\d{1,3}) degrees)?\.?$"
 )
 
@@ -276,7 +277,13 @@ async def stitch_reply(
         segs = weather_segments(temp, desc, city)
         if not segs:
             return None
-        feels = m.group(4)
+        top = m.group(4)
+        if top is not None:
+            topw = number_to_words(int(top))
+            if topw is None:
+                return None  # out-of-vocab top → full synth
+            segs.append(f"with a top of {topw} today")
+        feels = m.group(5)
         if feels is not None:
             fw = number_to_words(int(feels))
             if fw is None:
