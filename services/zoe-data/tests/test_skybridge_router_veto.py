@@ -495,3 +495,72 @@ async def test_voice_naming_prompt_name_reply_creates_the_list(monkeypatch, reso
     response = await _say("weekend jobs")
     assert response["skybridge"] is True
     assert resolved == [("lists", "create_list", "weekend jobs")]
+
+
+# ── 5. 2026-10-12: a stored-fact READ is not a disagreement with an identity ask ─────────────────────────────────
+# Live: `SKYBRIDGE_GATE router=memory … action=identity decision=veto reason=router_disagrees`, then `fast_tiers defer domain=memory`
+# and a 6-7 s brain turn, while typed chat answered the same name question from the account in ~5 ms. The router files "what's my
+# name" under memory / recall_memory: a compatible verdict.
+#
+# Negative control (run by hand when this was written): deleting the `router_tool == "recall_memory"` branch in
+# `skybridge_service._router_agrees` fails every test below that expects an allow.
+
+
+def _memory(tool):
+    r = _two_stage("memory")
+    r["two_stage"]["tool"] = tool
+    return r
+
+
+IDENTITY_ASKS = ["what's my name", "who am I"]
+
+
+@pytest.mark.parametrize("utterance", IDENTITY_ASKS)
+def test_identity_asks_classify_as_the_identity_card(utterance):
+    intent = sky.classify_skybridge_intent(utterance)
+    assert intent is not None and (intent.domain, intent.action) == ("people", "identity")
+
+
+def test_gate_identity_ask_with_a_memory_recall_verdict_is_compatible():
+    decision, reason, router_domain, _conf = sky.skybridge_router_gate(
+        "what's my name", _intent("people", "identity"), _memory("recall_memory"))
+    assert (decision, reason, router_domain) == ("allow", "router_agrees", "memory")
+
+
+@pytest.mark.parametrize("router,why", [
+    (_memory("remember_fact"), "a WRITE verdict on the same words is a disagreement"),
+    (_memory(None), "memory with no tool decoded carries no recall verdict"),
+    (_two_stage("lists"), "another domain still disagrees"),
+    (_two_stage("chat"), "a chat verdict still vetoes"),
+])
+def test_gate_identity_ask_only_the_recall_read_is_compatible(router, why):
+    decision, *_ = sky.skybridge_router_gate("what's my name", _intent("people", "identity"), router)
+    assert decision == "veto", why
+
+
+def test_the_recall_allowance_is_the_identity_asks_alone():
+    # a people SEARCH ("who is Dana") filed under memory/recall_memory stays a disagreement: the allowance is for identity only
+    for action in ("show", "create"):
+        decision, reason, *_ = sky.skybridge_router_gate("x", _intent("people", action), _memory("recall_memory"))
+        assert (decision, reason) == ("veto", "router_disagrees"), action
+
+
+async def test_resolve_identity_ask_under_a_recall_verdict_is_answered(resolved, caplog):
+    caplog.set_level(logging.INFO, logger="skybridge_service")
+    result = await sky.resolve_skybridge_request("what's my name", "jason", router_decision=_memory("recall_memory"))
+    assert result["handled"] is True and resolved == [("people", "identity")]
+    assert "action=identity decision=allow reason=router_agrees" in caplog.text
+
+
+@pytest.mark.parametrize("utterance", IDENTITY_ASKS)
+async def test_voice_identity_ask_under_a_recall_verdict_is_answered_on_the_spot(monkeypatch, resolved, utterance):
+    _wire_voice(monkeypatch, _memory("recall_memory"))
+    response = await _say(utterance)
+    assert response["skybridge"] is True and resolved == [("people", "identity")]
+
+
+async def test_voice_identity_ask_under_a_write_verdict_still_goes_on_to_the_brain_lanes(monkeypatch, resolved):
+    _wire_voice(monkeypatch, _memory("remember_fact"))
+    with pytest.raises(_PastSkybridge):
+        await _say("what's my name")
+    assert resolved == []

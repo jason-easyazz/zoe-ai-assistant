@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-619 flags; 617 not documented in `.env.example`.
+621 flags; 619 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -529,6 +529,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_SKYBRIDGE_ONLY` | `False` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_SKYBRIDGE_ROUTER_VETO` | `'1'` | no | NO | `services/zoe-data/skybridge_service.py` |
 | `ZOE_SKYBRIDGE_TIMEZONE` | `-` | no | NO | `services/zoe-data/skybridge_service.py` |
+| `ZOE_SMART_HOME_FOLLOWUP_TTL_S` | `'60'` | no | NO | `services/zoe-data/conversation_cues.py` |
 | `ZOE_SMART_TURN_ENABLED` | `'0'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_SMART_TURN_MAX_CHECKS` | `'2'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
 | `ZOE_SMART_TURN_THREADS` | `'1'` | no | NO | `services/zoe-data/voice_turn.py` |
@@ -603,7 +604,8 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_VOICE_FAST_FIRST_AUDIO` | `True` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_FILLER_AFTER_S` | `'1.6'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_FILLER_ENABLED` | `False` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
-| `ZOE_VOICE_FILLER_PHRASES` | `'Let me check.|One sec.|Hmm, let me look.'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
+| `ZOE_VOICE_FILLER_EXPECT_MIN_S` | `1.0` | yes | NO | `services/zoe-data/voice_spacer.py` |
+| `ZOE_VOICE_FILLER_PHRASES` | `''` | no | NO | `services/zoe-data/voice_spacer.py` |
 | `ZOE_VOICE_GATE_MAX_AGE_H` | `'24'` | no | NO | `scripts/maintenance/voice_gate_check.py` |
 | `ZOE_VOICE_GATE_PATHS` | `''` | no | NO | `scripts/maintenance/voice_gate_check.py` |
 | `ZOE_VOICE_GREETING_ENABLED` | `'0'` | no | NO | `services/zoe-data/voice_greeting.py` |

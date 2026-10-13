@@ -3058,19 +3058,50 @@ async def _handle_introduce_intent(
     return person_id
 
 
+class _ArrivalRow:
+    """The user row ``voice_command`` is writing the moment a turn ARRIVES. ``saved`` is True only once the insert is CONFIRMED
+    (``_save_chat_message`` returns False on a swallowed failure); ``settled`` is set when the attempt is over either way, so
+    the reply's later save can wait for the outcome and write the row itself when the first attempt failed."""
+
+    __slots__ = ("session_id", "text", "saved", "settled")
+
+    def __init__(self, session_id: str, text: str) -> None:
+        self.session_id, self.text, self.saved = session_id, text, False
+        self.settled = asyncio.Event()
+
+
+#: the arrival row of the turn running in this task. ``_schedule_voice_chat_save`` reads it so the exchange's user row is written
+#: ONCE (live 2026-10-12: every fast-tier turn carried two identical user rows, which polluted exact-words recall, the digest
+#: and the history) - and writes it itself when the arrival insert did not land. A ContextVar because the exits that save are
+#: plain calls inside the same task; ``voice_command`` resets it at the start of every turn.
+_USER_TURN_SAVED: "contextvars.ContextVar[Optional[_ArrivalRow]]" = contextvars.ContextVar(
+    "voice_user_turn_saved", default=None)
+#: how long the reply's save waits for the arrival insert to settle before it writes the user row itself (never lose a row).
+_ARRIVAL_SETTLE_TIMEOUT_S = 10.0
+
+
 async def _schedule_voice_chat_save(
     session_id: str, user_text: str, reply: str, user_id: str,
     speaker_verified: Optional[bool] = None,
 ) -> None:
-    """Fire-and-forget: persist both turns of a voice exchange to chat_messages.
+    """Fire-and-forget: persist the reply of a voice exchange (and its user turn, unless ``voice_command`` already did) to chat_messages.
 
     Called from every exit path in voice_command so the full transcript ends up
     in the DB regardless of which fast-path handled the turn. The nightly digest
     and _load_voice_history both read from chat_messages, so this is the single
     fix that unblocks multi-turn context, transcript search, and nightly extraction.
+
+    ``voice_command`` persists the user turn the moment it arrives (so every downstream path sees the transcript); that turn is
+    NOT written a second time here (``_USER_TURN_SAVED``).
     """
     if not session_id or user_id in _GUEST_SENTINEL_USERS:
         return
+    arrival = _USER_TURN_SAVED.get()
+    # An EMPTY user_text is intentional (the streaming finalizer: the user turn was saved pre-stream), so it names the turn by
+    # session alone; a non-empty one must also match the arrival's text.
+    if arrival is None or arrival.session_id != session_id or (user_text and arrival.text != user_text):
+        arrival = None
+    user_text = user_text or (arrival.text if arrival is not None else "")   # the row to recover when the arrival insert failed
     try:
         # lazy — avoids circular import (routers.chat lazily imports us back)
         from routers.chat import _ensure_user_and_chat_session, _save_chat_message as _svc
@@ -3081,8 +3112,17 @@ async def _schedule_voice_chat_save(
             # here or every insert dies on the session FK (the silent zero-
             # voice-rows outage behind W0).
             await _ensure_user_and_chat_session(session_id, user_id)
-            if user_text:
-                # count_turn=False: voice_command already saved (and numbered) this user turn when it arrived
+            write_user = bool(user_text)
+            if arrival is not None:
+                # the arrival insert is the user row's first attempt: wait for its OUTCOME (bounded), and only a confirmed
+                # insert makes this one redundant - a swallowed failure must not leave the turn with no user row at all
+                try:
+                    await asyncio.wait_for(arrival.settled.wait(), _ARRIVAL_SETTLE_TIMEOUT_S)
+                except asyncio.TimeoutError:
+                    pass
+                write_user = not arrival.saved
+            if write_user:
+                # count_turn=False: voice_command already numbered this user turn when it arrived
                 await _svc(session_id, "user", user_text, user_id=user_id, count_turn=False,
                            **({"speaker_verified": False} if speaker_verified is False else {}))
             if reply:
@@ -3264,6 +3304,16 @@ async def voice_command(
     except Exception as _rexc:
         logger.debug("semantic router shadow failed: %s", _rexc)
 
+    # The turn's SPACER state (voice_spacer): ONE spoken filler per turn across the layers. The outer /voice/turn_stream wrapper
+    # hands in the instance its timer filler also reads (payload["_spacer"]); any other caller gets a private one.
+    from voice_spacer import SpacerTurn as _SpacerTurn
+
+    _spacer = (payload or {}).get("_spacer")
+    if not isinstance(_spacer, _SpacerTurn):
+        _spacer = _SpacerTurn(panel_key=panel_id, text=text, user_id=str(identified_user_id or ""))
+    _spacer.text = text   # the NORMALISED command (wake word stripped): the identity / recall shapes are anchored
+    _spacer.note_router(_router_decision)
+
     # ── B1.1 phase 2: a SPECULATIVE turn (daemon verdict pending) runs now only
     # if the intent layer calls it a read or chat. Anything write-capable —
     # a write intent, a Skybridge action, a write-capable routed domain (whose
@@ -3437,6 +3487,7 @@ async def voice_command(
 
     # Persist user turn to chat_messages immediately so all downstream paths
     # (nightly digest, _load_voice_history, multi-turn context) have the transcript.
+    _USER_TURN_SAVED.set(None)   # a new turn: nothing saved yet (the var outlives one call in a long-lived task)
     if text and effective_user not in _GUEST_SENTINEL_USERS:
         try:
             from routers.chat import (
@@ -3444,14 +3495,23 @@ async def voice_command(
                 _save_chat_message as _svc_user_turn,
             )
 
+            _arrival = _ArrivalRow(session_id, text)
+
             async def _persist_user_turn() -> None:
-                # Same FK guard as _schedule_voice_chat_save: voice session ids
-                # never pass through POST /sessions/, so mint the parent row.
-                await _ensure_sess_user_turn(session_id, effective_user)
-                await _svc_user_turn(session_id, "user", text, user_id=effective_user,
-                                     **({"speaker_verified": False} if _speaker_verified is False else {}))
+                try:
+                    # Same FK guard as _schedule_voice_chat_save: voice session ids
+                    # never pass through POST /sessions/, so mint the parent row.
+                    await _ensure_sess_user_turn(session_id, effective_user)
+                    # `_save_chat_message` swallows a DB failure and returns False: only a CONFIRMED insert marks the row saved,
+                    # so the reply's later save writes the user row itself when this one did not land
+                    _arrival.saved = bool(await _svc_user_turn(
+                        session_id, "user", text, user_id=effective_user,
+                        **({"speaker_verified": False} if _speaker_verified is False else {})))
+                finally:
+                    _arrival.settled.set()
 
             _spawn_bg(_persist_user_turn())
+            _USER_TURN_SAVED.set(_arrival)   # _schedule_voice_chat_save defers to it once its insert is confirmed
         except Exception as exc:
             logger.warning(
                 "voice user-turn save scheduling failed for user %s (session %s): %s",
@@ -4700,6 +4760,7 @@ async def voice_command(
                         audio_started=_t_first_audio is not None,
                         filler_emitted=_filler_emitted,
                         processing_ack_sent=_processing_ack_audio_sent,
+                        spacer=_spacer,
                     )
                     if _ack_line:
                         _brain_stream = _prefetched = _first_sound.prefetch(_brain_stream)
@@ -4731,10 +4792,11 @@ async def voice_command(
                                 _tool_name = _voice_tool_name_from_sentinel(delta)
                                 if _tool_name is not None:
                                     _filler_emitted = True
-                                    async for out_chunk in _emit_sentence(
-                                        _voice_tool_filler(_tool_name), record=False
-                                    ):
-                                        yield out_chunk
+                                    # one spacer per turn, never a repeat of the panel's last line, none on a disclosure
+                                    _tool_line = _spacer.tool_filler_line(_voice_tool_filler(_tool_name))
+                                    if _tool_line:
+                                        async for out_chunk in _emit_sentence(_tool_line, record=False):
+                                            yield out_chunk
                             continue
                         if delta.startswith(_VOICE_ESCALATION_MARKERS):
                             try:
@@ -4827,7 +4889,7 @@ async def voice_command(
                     # lane never reaches voice_command's tail save, and a
                     # client disconnect (GeneratorExit) or mid-stream error
                     # must not drop sentences that were already spoken. Empty
-                    # user_text: the user turn is saved pre-stream.
+                    # user_text: the user turn is saved pre-stream (the save matches its arrival row by session and retries a failed insert).
                     heard_reply = " ".join(
                         part.strip() for part in full_reply_parts if part.strip()
                     ).strip()
@@ -5440,10 +5502,16 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
             _gated(_fast_stream()), media_type="application/x-zoe-audio-stream", headers={"Cache-Control": "no-cache"}
         )
 
+    # The turn's spacer state, shared with voice_command (which fills in the router's domain and may speak the tool ack): the
+    # timer filler below and that ack are ONE budget, one spacer per turn (voice_spacer).
+    from voice_spacer import SpacerTurn as _SpacerTurn
+
+    _spacer = _SpacerTurn(panel_key=panel_id, text=transcript, user_id=str((payload or {}).get("identified_user_id") or ""))
     command_payload = {
         "text": transcript,
         "panel_id": panel_id,
         "_t_turn_start": t_turn_start,
+        "_spacer": _spacer,
     }
     if (payload or {}).get("identified_user_id"):
         command_payload["identified_user_id"] = payload["identified_user_id"]
@@ -5513,10 +5581,12 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
             _after = 1.6
 
         async def _filler_lines():
-            _fillers = [p for p in os.environ.get(
-                "ZOE_VOICE_FILLER_PHRASES", "Let me check.|One sec.|Hmm, let me look."
-            ).split("|") if p.strip()]
-            _phrase = random.choice(_fillers) if _fillers else "One sec."
+            # voice_spacer decides: ONE spacer per turn (the tool ack shares the budget), never the panel's last line, a
+            # family that fits the router domain, and silence on a chat turn, a disclosure, or a first token expected
+            # within ZOE_VOICE_FILLER_EXPECT_MIN_S. The pool is the lexicon's "spacer" (ZOE_VOICE_FILLER_PHRASES pins it).
+            _phrase = _spacer.timer_line()
+            if not _phrase:
+                return []
             try:
                 _fill_audio = await _synthesize_kokoro_sidecar(_phrase)
                 if _fill_audio:
@@ -5527,6 +5597,7 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
                     ]
             except Exception as _f_exc:
                 logger.debug("voice filler skipped: %s", _f_exc)
+            _spacer.release("timer")   # nothing was spoken: the turn's spacer is free again
             return []
 
         sub = None

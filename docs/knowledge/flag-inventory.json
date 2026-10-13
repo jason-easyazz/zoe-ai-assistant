@@ -5221,6 +5221,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_SMART_HOME_FOLLOWUP_TTL_S": {
+        "defaults": [
+          "'60'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/conversation_cues.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_SMART_TURN_ENABLED": {
         "defaults": [
           "'0'"
@@ -5988,13 +5998,23 @@
         ],
         "typed_env": true
       },
-      "ZOE_VOICE_FILLER_PHRASES": {
+      "ZOE_VOICE_FILLER_EXPECT_MIN_S": {
         "defaults": [
-          "'Let me check.|One sec.|Hmm, let me look.'"
+          "1.0"
         ],
         "in_env_example": false,
         "readers": [
-          "services/zoe-data/routers/voice_tts.py"
+          "services/zoe-data/voice_spacer.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_VOICE_FILLER_PHRASES": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_spacer.py"
         ],
         "typed_env": false
       },
