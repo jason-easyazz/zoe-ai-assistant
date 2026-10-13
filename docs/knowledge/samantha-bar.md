@@ -238,6 +238,22 @@ elision rule like a block, `context-blocks.ts` `HOP_NOTE_PREFIX`, and never touc
 every placement are "I need to check the forecast first - where are you?" (the 4B asks instead of calling `get_weather`), a tool-use
 question, not a hop one.
 
+**Hop wording A/B (2026-10-13) - `ZOE_PERSONALISATION_HOP_WORDING`.** Day-sim S9b was unreliable (2 FAIL in 4 across an allowlisted and a
+default run) with `hop_in_packet` true and the hop reaching the brain: the reply was generic ("no personal detail used") or "I'd need to
+check the forecast for where you are". The fact reached the 4B; the old text told it to use the fact silently ("use it silently",
+"do not recite them"), so on an ask whose advice does not change with the fact ("what should I wear") there was nothing to say about
+it. `natural` asks for the fact to be named in a few words ("for your early walk") and the block opener says to work it into the answer.
+Same harness, `block` placement, third-person fact rows, n=20 per cell, interleaved shuffle, hop on the wire 20/20 in every cell
+(`hop_placement_ab.py --placements block --wordings legacy,natural --asks S9a,S9b,P2.b --n 20`):
+
+| wording | S9a (sleep) | S9b (cold, 6am walk) | P2.b (diet, 5 phrasings) | total | median turn ms (S9a / S9b / P2.b) |
+|---|---|---|---|---|---|
+| legacy | 20/20 | 14/20 | 20/20 | 54/60 | 2948 / 2614 / 1729 |
+| natural (default) | 20/20 | **19/20** | 20/20 | **59/60** | 2871 / 3179 / 1983 |
+
+Cost: median +~0.5 s on S9b and +~0.25 s on P2.b (S9a unchanged). `legacy` restores the
+old bytes (kill switch). The legacy S9b misses were "I'll need to check the forecast..." / a location ask with no personalisation.
+
 The judge is the brain itself: llama-server `:11434` `/v1/chat/completions` with temperature 0,
 `top_k` 1 and seed 0. It gets a fixed system prompt and one rubric per judged scenario, and
 must answer `VERDICT: PASS|FAIL` / `REASON: …`. Its verdict and reason are recorded, and an

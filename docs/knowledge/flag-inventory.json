@@ -3906,6 +3906,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_PERSONALISATION_HOP_WORDING": {
+        "defaults": [
+          "'natural'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/personalisation_hop.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_PERSONA_DRIFT": {
         "defaults": [
           "False"
