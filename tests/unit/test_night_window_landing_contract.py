@@ -45,12 +45,34 @@ def test_busy_detection_is_the_bakeoff_one_and_covers_land_voice_pr():
     for name in ("BUSY_PATTERNS", "landing_running", "busy_reason", "wait_until_quiet", "probe_lock", "take_lock"):
         assert name not in vars(nw.NightWindow), f"NightWindow overrides {name}: re-pin the landing contract against the override"
     rx = re.compile(_lander_pattern())
-    # a real lander command line (pgrep -f matches the full argv)
-    assert rx.search("bash /opt/zoe/scripts/maintenance/land_voice_pr.sh 1234")
-    assert rx.search("bash ./land_voice_pr.sh")
-    # a mere mention (editor, tail, grep) is not a landing
-    assert not rx.search("vim /opt/zoe/scripts/maintenance/land_voice_pr.sh")
-    assert not rx.search("tail -f land_voice_pr.sh.log")
+    # a real lander command line (pgrep -f matches the FULL argv, so a directly executed script shows its
+    # shebang interpreter path first: /bin/bash or /usr/bin/bash, not a bare bash)
+    for argv in (
+        "bash /opt/zoe/scripts/maintenance/land_voice_pr.sh 1234",
+        "bash ./land_voice_pr.sh",
+        "/bin/bash /opt/zoe/scripts/maintenance/land_voice_pr.sh 1234",
+        "/usr/bin/bash /opt/zoe/scripts/maintenance/land_voice_pr.sh",
+        "/usr/local/bin/bash -x /opt/zoe/scripts/maintenance/land_voice_pr.sh 7",
+    ):
+        assert rx.search(argv), f"a live lander was not recognised: {argv}"
+    # a mere mention (editor, tail, grep, a script that only names it) is not a landing
+    for argv in (
+        "vim /opt/zoe/scripts/maintenance/land_voice_pr.sh",
+        "tail -f land_voice_pr.sh.log",
+        "bash -c sleep 60 watching-land_voice_pr.sh",
+        "/bin/bash /opt/zoe/scripts/other.sh land_voice_pr.sh",
+        "grep land_voice_pr.sh /var/log/syslog",
+    ):
+        assert not rx.search(argv), f"a mere mention was taken for a lander: {argv}"
+
+
+def test_negative_control_the_old_anchored_pattern_missed_a_direct_execution():
+    """The pre-fix pattern (bare bash only) cannot see /bin/bash ...land_voice_pr.sh: the new fixtures must fail it."""
+    old = re.compile(r"^bash .*/land_voice_pr\.sh")
+    assert old.search("bash /opt/zoe/scripts/maintenance/land_voice_pr.sh 1")
+    assert not old.search("/bin/bash /opt/zoe/scripts/maintenance/land_voice_pr.sh 1")
+    assert not old.search("/usr/bin/bash /opt/zoe/scripts/maintenance/land_voice_pr.sh")
+    assert re.compile(_lander_pattern()).search("/bin/bash /opt/zoe/scripts/maintenance/land_voice_pr.sh 1")
 
 
 class _Host:
@@ -148,8 +170,11 @@ def test_the_night_schedule_sits_inside_the_span_the_landers_keep_clear():
     assert CLEAR_FROM <= fires and fires + delay <= CLEAR_UNTIL
 
 
-@pytest.mark.parametrize("doc", ["docs/knowledge/merge-and-deploy.md", "docs/knowledge/night-window.md"])
-def test_the_contract_is_written_down_where_landers_and_operators_read(doc):
-    text = (REPO / doc).read_text()
+def test_the_binding_rule_lives_in_agents_md_and_the_docs_only_point_at_it():
+    """Binding rules belong in AGENTS.md (DOX); docs/knowledge keeps the rationale and links to it."""
+    rule = (REPO / "scripts/AGENTS.md").read_text()
     for needle in ("01:50", "04:55", LOCK_NAME, "land_voice_pr.sh"):
-        assert needle in text, f"{doc} must state the night-window landing contract ({needle!r} missing)"
+        assert needle in rule, f"scripts/AGENTS.md must carry the landing contract ({needle!r} missing)"
+    assert "scripts/AGENTS.md" in (REPO / "AGENTS.md").read_text() and "01:50" in (REPO / "AGENTS.md").read_text()
+    for doc in ("docs/knowledge/merge-and-deploy.md", "docs/knowledge/night-window.md"):
+        assert "scripts/AGENTS.md" in (REPO / doc).read_text(), f"{doc} must point at the binding rule"

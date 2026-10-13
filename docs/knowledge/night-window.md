@@ -117,13 +117,12 @@ During: the MemAvailable floor (1,200 MiB) is checked every 5 s once the 12B is 
 
 ### Landings must stay out of the night (2026-10-13)
 
-The window shares the brain with every landing and harness, so it needs them out of the way. The contract,
-with the full wording and the reason in [merge-and-deploy.md](merge-and-deploy.md) ("Landings and the night
-window"): **between 01:50 and 04:55 no landing or harness holds `/tmp/zoe-brain-window.lock`, and none is a
-live `land_voice_pr.sh` process.** The window refuses at once on a held lock and waits (30 min, then refuses)
-on a live lander, a samantha bar, a voice probe, a held `/tmp/zoe-voice-harness.lock` or a recent voice turn.
-`tests/unit/test_night_window_landing_contract.py` pins that detection and the schedule. Whether the window
-should WAIT (bounded) for the lock instead of refusing is a proposal, not a change: `open-problems.md`.
+The window shares the brain with every landing and harness. The binding rule (no landing or harness starts,
+holds `/tmp/zoe-brain-window.lock`, or stays alive as a process between 01:50 and 04:55) is in
+[scripts/AGENTS.md](../../scripts/AGENTS.md) "Brain-window quiet hours"; the rationale and the incident are in
+[merge-and-deploy.md](merge-and-deploy.md). The window refuses at once on a held lock and waits (30 min, then
+refuses) on a live lander, a samantha bar, a voice probe, a held voice-harness lock or a recent voice turn.
+Whether it should WAIT (bounded) for the lock instead of refusing is a proposal, not a change: `open-problems.md`.
 
 ## 8. The first real attempts (2026-10-09 01:57-02:06) and why the 12B did not load
 
