@@ -513,6 +513,22 @@ def test_the_blocking_turn_gets_no_new_kwargs(daemon, monkeypatch):
     assert seen == {"prompt_on_empty": False}
 
 
+def test_the_blocking_turn_also_merges_a_hard_cap_continuation(daemon, monkeypatch):
+    # ZOE_VOICE_STREAM=0 must not recreate the split: the cap merge is not a streaming-only feature (review, #2000).
+    sent = []
+
+    def _blocking(pa, wav, **kw):  # noqa: ARG001
+        sent.append(wav)
+        return True
+    _turn_harness(daemon, monkeypatch, [])
+    monkeypatch.setattr(daemon, "_do_single_turn", _blocking)
+    first, rest = _wav(daemon, 2.0), _wav(daemon, 1.0)
+    monkeypatch.setattr(daemon, "_last_record_capped", True)
+    _fake_listen(daemon, monkeypatch, [rest])
+    daemon._turn_with_monitor(_FakePA(), first, daemon._do_single_turn, window="followup", prompt_on_empty=False)
+    assert len(sent) == 1 and _secs(sent[0]) == pytest.approx(2.0 + 0.2 + 1.0, abs=0.001)
+
+
 def test_the_monitor_is_stopped_before_the_continuation_listen(daemon, monkeypatch):
     # The Jabra cannot hold two input streams: the barge monitor must be down first.
     order = []

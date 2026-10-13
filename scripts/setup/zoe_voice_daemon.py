@@ -2055,7 +2055,7 @@ def _turn_with_monitor(pa: "pyaudio.PyAudio", wav: bytes, turn_fn, *, window: st
                        **kw) -> "tuple[bool, bytes | None]":
     """Run one turn under a barge monitor -> (played_audio, barge_seed).
 
-    On the streaming turn this also (1) merges a hard-cap continuation first, and (2) honours
+    This (1) merges a hard-cap continuation first, on either turn function, and (2) on the streaming turn honours
     the server's ``incomplete`` frame: the transcript ended on a continuation word, so the
     brain did not run; listen ZOE_CONTINUE_WINDOW_S for the speaker to resume and send ONE
     merged clip (or the original, if nobody does) marked ``continued`` so it is never held
@@ -2064,10 +2064,11 @@ def _turn_with_monitor(pa: "pyaudio.PyAudio", wav: bytes, turn_fn, *, window: st
     """
     streaming = turn_fn is _do_single_turn_stream
     hold_ok = streaming and ZOE_CONTINUE_WINDOW_S > 0
-    if streaming:
-        wav = _gather_capped_continuation(pa, wav)
-        if window:
-            kw["window"] = window
+    # A hard-cap continuation is merged on BOTH turn functions (ZOE_VOICE_STREAM=0 must not recreate the split);
+    # only the server-driven incomplete-frame retry below needs the streaming turn.
+    wav = _gather_capped_continuation(pa, wav)
+    if streaming and window:
+        kw["window"] = window
     held = False
     while True:
         _monitor = _BargeMonitor(pa)

@@ -40,6 +40,7 @@ loading).
 from __future__ import annotations
 
 import argparse
+import ast
 import importlib.util
 import json
 import re
@@ -88,7 +89,9 @@ def read_wav(path: Path, rate: int) -> np.ndarray:
 
 def logged_transcript(stem: str) -> str | None:
     """The Moonshine transcript the server logged when it captured this clip (local only)."""
-    rx = re.compile(r'STT_CAPTURE file=\S*/' + re.escape(stem) + r'\.wav moonshine="(.*?)"(?:\s|$)')
+    # The server writes the transcript with %r: single quotes normally, double quotes when it holds an apostrophe.
+    rx = re.compile(r'STT_CAPTURE file=\S*/' + re.escape(stem)
+                    + r'\.wav moonshine=(\'(?:[^\'\\]|\\.)*\'|"(?:[^"\\]|\\.)*")(?:\s|$)')
     if not LOG_DIR.is_dir():
         return None
     for log in sorted(LOG_DIR.glob("*.log")):
@@ -96,7 +99,10 @@ def logged_transcript(stem: str) -> str | None:
             for line in log.read_text(errors="replace").splitlines():
                 m = rx.search(line)
                 if m:
-                    return m.group(1)
+                    try:
+                        return str(ast.literal_eval(m.group(1)))
+                    except (ValueError, SyntaxError):
+                        return m.group(1)[1:-1]
         except OSError:
             continue
     return None
@@ -142,7 +148,8 @@ def replay(mod, audio: np.ndarray, probs: list[float], caps) -> dict:
     return {"stop": "clip_ends_recorder_open", "seconds": round(n * chunk / mod.SAMPLE_RATE, 2),
             "still_speaking": ep.still_speaking(mod.RECORD_STILL_SPEAKING_RATIO),
             "mid_speech": ep.mid_speech(),
-            "would_continue": ep.still_speaking(mod.RECORD_STILL_SPEAKING_RATIO)}
+            # production's _record_cap_stop continues on EITHER signal (a pause-then-resume has low density)
+            "would_continue": bool(ep.still_speaking(mod.RECORD_STILL_SPEAKING_RATIO) or ep.mid_speech())}
 
 
 def main() -> int:
