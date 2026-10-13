@@ -29,9 +29,10 @@
 # After the restart the script VERIFIES on the Pi (unit active within
 # ${VERIFY_TIMEOUT_S:-20}s, /health answers on 127.0.0.1:7777, md5 of every
 # shipped file equals the local copy) and exits non-zero, printing the
-# rollback, if anything is off.
+# rollback, if anything is off. With ZOE_SPEAKER_MODEL=resnet34 on the Pi it also waits
+# (RESNET34_READY_TIMEOUT_S) for /health's speaker_resnet34 to be ready and fails otherwise.
 #
-# Env: PI_HOST PI_USER PI_DAEMON_DIR PI_VENV VERIFY_TIMEOUT_S HEALTH_PORT
+# Env: PI_HOST PI_USER PI_DAEMON_DIR PI_VENV VERIFY_TIMEOUT_S HEALTH_PORT RESNET34_READY_TIMEOUT_S
 #      DRY_RUN=1  print the plan + rendered unit, touch nothing.
 # Exit codes: 0 ok | 2 usage | 3 unit install refused | 4 verification failed
 #             | 5 transfer/render failed
@@ -43,6 +44,7 @@ PI_USER="${PI_USER:-pi}"
 PI_DAEMON_DIR="${PI_DAEMON_DIR:-/home/pi/.zoe-voice}"
 PI_VENV="${PI_VENV:-/home/pi/.zoe-voice/venv}"
 VERIFY_TIMEOUT_S="${VERIFY_TIMEOUT_S:-20}"
+RESNET34_READY_TIMEOUT_S="${RESNET34_READY_TIMEOUT_S:-45}"
 HEALTH_PORT="${HEALTH_PORT:-7777}"
 DRY_RUN="${DRY_RUN:-0}"
 
@@ -62,7 +64,7 @@ for arg in "$@"; do
   case "$arg" in
     --install-unit) INSTALL_UNIT=1 ;;
     --force-unit) FORCE_UNIT=1 ;;
-    -h|--help) sed -n '2,32p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '2,38p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "unknown argument: ${arg}" >&2; exit 2 ;;
   esac
 done
@@ -239,6 +241,23 @@ if ! rssh "for i in \$(seq 1 ${VERIFY_TIMEOUT_S}); do (curl -fsS --max-time 3 ${
   fail_verify "${health_url} did not answer within ${VERIFY_TIMEOUT_S}s"
 fi
 echo "    /health answers"
+
+# The speaker model must be READY when it is the acting one (ZOE_SPEAKER_MODEL=resnet34): /health answers even when the ResNet34
+# embedder was refused (missing file, pin or self-test drift), so the deploy reads its state - bounded wait - and fails on not-ready.
+# dual: ResNet34 is shadow-only, so not-ready is reported loudly but does not fail. A daemon without the field is the default mode.
+speaker_state="$(rssh "cd ${PI_DAEMON_DIR} && ${PI_VENV}/bin/python3 zoe_speaker_resnet34.py --health-state ${health_url} ${RESNET34_READY_TIMEOUT_S}" 2>/dev/null | grep '^SPEAKER_STATE ' | tail -n 1)" || speaker_state=""
+read -r _ speaker_model speaker_rn34 <<<"${speaker_state:-SPEAKER_STATE resemblyzer off}"
+case "$speaker_model" in
+  resnet34)
+    [ "$speaker_rn34" = "ready" ] \
+      || fail_verify "ZOE_SPEAKER_MODEL=resnet34 but speaker_resnet34 is '${speaker_rn34}' after ${RESNET34_READY_TIMEOUT_S}s - the acting speaker model cannot run (fetch_speaker_models.sh verify)"
+    echo "    speaker model resnet34: ready" ;;
+  dual)
+    if [ "$speaker_rn34" = "ready" ]; then echo "    speaker model dual: resnet34 ready (shadow)"
+    else echo "    WARNING: speaker model dual, resnet34 is '${speaker_rn34}' - shadow scoring is OFF until fixed (Resemblyzer still acts)"; fi ;;
+  *)
+    echo "    speaker model: ${speaker_model:-resemblyzer}" ;;
+esac
 
 local_md5="$(cd "${SRC_DIR}" && md5sum "${SHIPPED_FILES[@]}" | sort -k2)"
 remote_md5="$(rssh "cd ${PI_DAEMON_DIR} && md5sum ${SHIPPED_FILES[*]}" | sort -k2)" \

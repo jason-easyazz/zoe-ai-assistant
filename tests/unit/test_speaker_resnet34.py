@@ -690,3 +690,71 @@ def test_the_refused_enrolment_says_so_records_nothing_and_reports_failed(daemon
     daemon._run_enrollment_mode(None)
     assert said and posts == []
     assert reports == [("/api/enrollment/result", dict(status="failed", user_id="ada", samples=0, reason="encoder_unavailable"))]
+
+
+# -- health must not lie when ResNet34 is the acting model (Codex P1 on #2024) -------------------------------------------
+
+def test_health_is_degraded_when_the_acting_resnet34_embedder_is_not_ready(daemon, monkeypatch):
+    monkeypatch.setattr(daemon, "SPEAKER_MODEL", "resnet34")
+    monkeypatch.setattr(daemon, "_rn34", rn)
+    monkeypatch.setattr(daemon, "_rn34_embedder", None)
+    monkeypatch.setattr(daemon, "_rn34_error", "embedding drift: cosine 0.98")
+    h = daemon._health_payload()
+    assert h["status"] == "degraded" and h["speaker_model"] == "resnet34" and h["speaker_resnet34"].startswith("refused")
+    monkeypatch.setattr(daemon, "SPEAKER_MODEL", "dual")                      # shadow-only: reported, not degraded
+    h = daemon._health_payload()
+    assert h["status"] == "ok" and h["speaker_resnet34"].startswith("refused")
+    emb, _ = make_embedder()                                                    # negative control: ready -> ok
+    monkeypatch.setattr(daemon, "SPEAKER_MODEL", "resnet34")
+    monkeypatch.setattr(daemon, "_rn34_embedder", emb)
+    assert daemon._health_payload()["status"] == "ok"
+    monkeypatch.setattr(daemon, "SPEAKER_MODEL", "resemblyzer")                # default: the body it always had
+    assert set(daemon._health_payload()) == set(("status", "service", "panel_id", "uptime_s", "wake_phrase"))
+
+
+def test_health_state_waits_for_ready_in_resnet34_mode_and_gives_up_bounded():
+    answers = iter([dict(speaker_model="resnet34", speaker_resnet34="not loaded")] * 2
+                   + [dict(speaker_model="resnet34", speaker_resnet34="ready")])
+    t = [0.0]
+    clock = lambda: t[0]                                                       # noqa: E731
+
+    def sleep(s):
+        t[0] += s
+
+    assert rn.health_state("u", 10, fetch=lambda u: next(answers), clock=clock, sleep=sleep) == ("resnet34", "ready")
+    t[0] = 0.0
+    stuck = rn.health_state("u", 3, fetch=lambda u: dict(speaker_model="resnet34", speaker_resnet34="refused: x"), clock=clock, sleep=sleep)
+    assert stuck == ("resnet34", "refused: x") and t[0] >= 3                 # waited, then reported the truth
+    t[0] = 0.0
+    assert rn.health_state("u", 30, fetch=lambda u: dict(speaker_model="dual", speaker_resnet34="refused: x"), clock=clock,
+                           sleep=sleep) == ("dual", "refused: x") and t[0] == 0   # dual: answered at once, no wait
+    assert rn.health_state("u", 30, fetch=lambda u: dict(status="ok"), clock=clock, sleep=sleep) == ("resemblyzer", "off")
+
+    def down(u):
+        raise OSError("refused")
+
+    assert rn.health_state("u", 2, fetch=down, clock=clock, sleep=sleep) == ("unknown", "unreachable")
+
+
+# -- the hand-run flow mirrors the daemon: resnet34 without its module refuses (Codex P2 on #2024) --------------------------
+
+@pytest.fixture
+def flow(monkeypatch):
+    mod = _load("zoe_enroll_flow_rn34_test", SETUP / "zoe_enroll_flow.py")
+    said, legacy = [], []
+    monkeypatch.setattr(mod, "say", lambda text: said.append(text))
+    monkeypatch.setattr(mod, "_load_rn34", lambda: None)
+    monkeypatch.setattr(mod, "_enroll_voice_legacy", lambda user, name, svc="zoe-voice": legacy.append(user) or 0)
+    mod.said, mod.legacy_calls = said, legacy
+    return mod
+
+
+def test_hand_run_enrolment_in_resnet34_mode_without_the_module_refuses(flow, monkeypatch):
+    monkeypatch.setenv("ZOE_SPEAKER_MODEL", "resnet34")
+    assert flow.enroll_voice("ada", "Ada") == 1
+    assert flow.legacy_calls == [] and flow.said and "Nothing was stored" in flow.said[-1]
+    # negative controls: dual (Resemblyzer acts) and the default mode fall back to the legacy enrolment
+    for mode in ("dual", "resemblyzer"):
+        monkeypatch.setenv("ZOE_SPEAKER_MODEL", mode)
+        assert flow.enroll_voice("ada", "Ada") == 0
+    assert flow.legacy_calls == ["ada", "ada"]

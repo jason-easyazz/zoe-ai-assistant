@@ -6656,6 +6656,10 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
     if emb_b64:
         if caller.get("source") != "device":
             raise HTTPException(status_code=403, detail="a finished voice profile may only be uploaded by a panel (device token)")
+        # A finished profile says which space it lives in; it is never assumed to be the legacy model.
+        _raw_model = payload.get("model_id")
+        if not isinstance(_raw_model, str) or not _raw_model.strip():
+            raise HTTPException(status_code=400, detail="model_id is required with embedding_base64")
         try:
             vec = speaker_models.validate_embedding(base64.b64decode(emb_b64, validate=True), model_id)
         except Exception:

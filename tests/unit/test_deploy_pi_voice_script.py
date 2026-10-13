@@ -47,6 +47,8 @@ case "$cmd" in
     fi
     printf '%s\n' "$out"
     ;;
+  *--health-state*)
+    [ -n "${FAKE_SPEAKER:-}" ] && echo "SPEAKER_STATE ${FAKE_SPEAKER}" ;;
   *is-active*)
     [ "${FAKE_ACTIVE:-1}" = 1 ] || exit 1 ;;
   *curl*)
@@ -234,3 +236,20 @@ def test_dry_run_touches_nothing(harness):
 def test_script_is_shellcheck_clean():
     r = subprocess.run(["shellcheck", str(SCRIPT)], capture_output=True, text=True)
     assert r.returncode == 0, r.stdout
+
+
+# --- the speaker model must be READY when it is the acting one (Codex P1 on #2024) ---------------------------------------
+
+@pytest.mark.parametrize("state, ok, says", [
+    ("resnet34 refused: embedding drift: cosine 0.98", False, "the acting speaker model cannot run"),
+    ("resnet34 not loaded", False, "the acting speaker model cannot run"),
+    ("resnet34 ready", True, "speaker model resnet34: ready"),                  # negative control
+    ("dual refused: model file sha256 mismatch", True, "WARNING: speaker model dual"),   # shadow-only: loud, not fatal
+    ("dual ready", True, "resnet34 ready (shadow)"),
+    ("", True, "speaker model: resemblyzer"),                                    # a daemon without the field = default mode
+])
+def test_deploy_verifies_the_acting_speaker_model_is_ready(harness, state, ok, says):
+    r = harness(FAKE_SPEAKER=state, RESNET34_READY_TIMEOUT_S=1)
+    assert (r.returncode == 0) is ok, r.stdout + r.stderr
+    assert says in r.stdout + r.stderr
+    assert "--health-state http://127.0.0.1:7777/health 1" in _ssh_log(harness.rec)

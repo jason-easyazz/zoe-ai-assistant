@@ -490,3 +490,39 @@ def selftest(embedder: Any, *, reference: Optional[Sequence[float]] = None, max_
         raise SelfTestFailed("too slow: " + format(ms, ".0f") + " ms for the self-test clip (limit "
                              + format(max_factor * exp_ms, ".0f") + " ms) - wrong graph level or a starved CPU")
     return report
+
+
+# -- deploy verification: what the running daemon says about this model ------------------------------------------------
+
+def health_state(url: str, timeout_s: float, fetch: Optional[Callable[[str], dict]] = None,
+                 clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep) -> tuple:
+    """``(speaker_model, speaker_resnet34)`` from the daemon's /health. In ``resnet34`` mode it WAITS (bounded by ``timeout_s``) for
+    ``ready``, because loading + the self-test take a moment after a restart; any other mode is answered at once. A daemon that
+    predates the flag (no fields) is ``resemblyzer`` / ``off``; an unreachable one is ``unknown`` / ``unreachable``."""
+    def default_fetch(u: str) -> dict:
+        import urllib.request
+        with urllib.request.urlopen(u, timeout=3) as resp:
+            return json.loads(resp.read().decode("utf-8") or "null") or dict()
+
+    get = fetch or default_fetch
+    deadline = clock() + max(0.0, float(timeout_s))
+    while True:
+        try:
+            h = get(url)
+            model, state = str(h.get("speaker_model") or "resemblyzer"), str(h.get("speaker_resnet34") or "off")
+        except Exception:  # noqa: BLE001
+            model, state = "unknown", "unreachable"
+        if (model != "resnet34" and model != "unknown") or state == "ready" or clock() >= deadline:
+            return model, state
+        sleep(1.0)
+
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) == 4 and sys.argv[1] == "--health-state":
+        m, st = health_state(sys.argv[2], float(sys.argv[3]))
+        print("SPEAKER_STATE " + m + " " + st)
+        sys.exit(0)
+    print("usage: zoe_speaker_resnet34.py --health-state URL TIMEOUT_S", file=sys.stderr)
+    sys.exit(2)

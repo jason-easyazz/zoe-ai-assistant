@@ -591,3 +591,19 @@ async def test_enrolment_state_counts_only_the_acting_models_profile_in_every_mo
     monkeypatch.setenv("ZOE_SPEAKER_MODEL", "resnet34")
     st = await es.get_state("jason", db=world.db)
     assert (st.voice_enrolled, st.voice_upgrade) == (False, False)
+
+
+@pytest.mark.asyncio
+async def test_a_finished_profile_must_name_its_model_it_is_never_assumed_legacy(monkeypatch, world):
+    """Codex P2 on #2024: an embedding upload without a valid string model_id is refused (4xx), never stored as Resemblyzer."""
+    from fastapi import HTTPException
+    vec = _b64(at_cos(0.8))
+    for bad in (dict(), dict(model_id=None), dict(model_id=""), dict(model_id="   "), dict(model_id=7), dict(model_id=["resemblyzer"])):
+        body = dict(embedding_base64=vec)
+        body.update(bad)
+        with pytest.raises(HTTPException) as e:
+            await enrol(monkeypatch, world, body)
+        assert 400 <= e.value.status_code < 500, bad
+    assert len(rows(world)) == 1                                               # only the fixture's legacy row
+    out = await enrol(monkeypatch, world, dict(embedding_base64=vec, model_id="resemblyzer"))      # negative control: named -> stored
+    assert out["ok"]

@@ -419,7 +419,13 @@ def enroll_voice(user: str, name: str, daemon_service: str = "zoe-voice") -> int
         rn = _load_rn34()
         if rn is not None:
             return enroll_voice_resnet34(user, name, mode, rn, daemon_service)
-        print("ZOE_SPEAKER_MODEL is set but zoe_speaker_resnet34.py is not beside this script - enrolling Resemblyzer only", file=sys.stderr)
+        if mode == "resnet34":
+            # ResNet34 is the ACTING model and cannot run here: a Resemblyzer-only enrolment would "succeed" with a profile nothing
+            # uses to recognise them. Refuse honestly (the daemon does the same).
+            print("ZOE_SPEAKER_MODEL=resnet34 but zoe_speaker_resnet34.py is not beside this script - refusing to enrol", file=sys.stderr)
+            say(f"I can't learn your voice on this panel right now, {name}. Nothing was stored.")
+            return 1
+        print("ZOE_SPEAKER_MODEL=dual but zoe_speaker_resnet34.py is not beside this script - enrolling Resemblyzer only", file=sys.stderr)
     return _enroll_voice_legacy(user, name, daemon_service)
 
 

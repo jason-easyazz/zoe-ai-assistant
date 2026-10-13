@@ -4385,19 +4385,30 @@ def _activate_request_allowed(host_header: "str | None", origin_header: "str | N
     return bool(want.scheme and want.netloc and (got.scheme, got.netloc.lower()) == (want.scheme, want.netloc.lower()))
 
 
+def _health_payload() -> dict:
+    """The /health body. Default mode: exactly what it always was. Otherwise it names the speaker model and ResNet34's state, and in
+    ``resnet34`` (the ACTING model) a not-ready embedder makes the daemon ``degraded`` - health must not say ``ok`` while the model that
+    identifies speakers cannot run. In ``dual`` ResNet34 is shadow-only, so its state is reported without degrading the daemon.
+    ``deploy-pi-voice.sh`` waits (bounded) for ``speaker_resnet34 == ready`` in ``resnet34`` mode and fails the deploy otherwise."""
+    health = dict(
+        status="ok",
+        service="zoe-voice-daemon",
+        panel_id=PANEL_ID,
+        uptime_s=int(time.time() - _daemon_started_at),
+        wake_phrase=os.environ.get("_ZOE_WAKE_PHRASE_LOG", ""),
+    )
+    if SPEAKER_MODEL != "resemblyzer":
+        state = _rn34_status()
+        health.update(speaker_model=SPEAKER_MODEL, speaker_resnet34=state)
+        if SPEAKER_MODEL == "resnet34" and state != "ready":
+            health["status"] = "degraded"
+    return health
+
+
 class _HealthHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
-            health = dict(
-                status="ok",
-                service="zoe-voice-daemon",
-                panel_id=PANEL_ID,
-                uptime_s=int(time.time() - _daemon_started_at),
-                wake_phrase=os.environ.get("_ZOE_WAKE_PHRASE_LOG", ""),
-            )
-            if SPEAKER_MODEL != "resemblyzer":     # default mode: the body is exactly what it always was
-                health.update(speaker_model=SPEAKER_MODEL, speaker_resnet34=_rn34_status())
-            body = json.dumps(health).encode()
+            body = json.dumps(_health_payload()).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -4564,11 +4575,13 @@ def main():
     # Pre-warm resemblyzer end-to-end in background so first command isn't
     # delayed, and pull the speaker-profile cache (disk copy first so a server
     # outage doesn't blind local matching, then a fresh sync).
+    if SPEAKER_MODEL != "resemblyzer":
+        # Loaded (pinned + self-tested) whenever the flag names it - enrolment needs it even with SPEAKER_ID_ENABLED off - so /health
+        # reports a real ready / refused state rather than "not loaded" forever.
+        threading.Thread(target=_rn34_warmup, daemon=True, name="resnet34-warmup").start()
     if SPEAKER_ID_ENABLED:
         if SPEAKER_MODEL != "resnet34":      # resnet34 acts alone: Resemblyzer (torch) is not even loaded then
             threading.Thread(target=_speaker_id_warmup, daemon=True, name="resemblyzer-warmup").start()
-        if SPEAKER_MODEL != "resemblyzer":
-            threading.Thread(target=_rn34_warmup, daemon=True, name="resnet34-warmup").start()
 
         def _profile_warmup() -> None:
             _load_profile_cache_from_disk()
