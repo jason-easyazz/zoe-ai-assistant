@@ -98,6 +98,8 @@ class _Lang:
     clause_starts: frozenset = frozenset()    # words that open a new clause after a comma ("it", "that", …)
     joiners: tuple = ()                       # clause joiners as token tuples, longest first ("but", "so", "because")
     conditionals: frozenset = frozenset()     # "if" / "unless": a TRAILING one opens its own (blocked) clause, it never reaches back
+    temporals: tuple = ()                     # "after" / "when" / "once" / "before" as token tuples, longest first: a TRAILING one likewise
+    temporal_firsts: frozenset = frozenset()  # the first word of each, for the per-word fast check in ``_temporal_at``
     tag_questions: tuple = ()                 # a trailing "okay" / "right" / "vale": a TAG on a statement, not a question about the write
     question_openers: frozenset = frozenset() # words that open a genuine question ("did", "have", "should"): "Have I added it, okay?"
     ellipsis_objects: frozenset = frozenset() # what may follow a sentence-opening claim verb in a completion ellipsis ("Added THE milk")
@@ -144,6 +146,7 @@ def _langs() -> tuple:
                               bool((spec or {}).get("state_claim")))
         targets = {kind: phrases_ for kind, phrases_ in ((k, tuple(p for p in (_phrase(x) for x in v) if p))
                                                           for k, v in (lex.get("targets") or {}).items())}
+        temporals = tuple(sorted((tuple(p.split()) for p in phrases("clause_temporals")), key=len, reverse=True))
         out.append(_Lang(
             code=code, subjects=words("subjects"), second_person=words("second_person"), openers=words("openers"),
             adverbs=words("adverbs"), verbs=verbs, targets=targets, other_targets=phrases("other_targets"),
@@ -154,6 +157,7 @@ def _langs() -> tuple:
             modifiers=words("modifiers"), modifier_suffixes=tuple(sorted(phrases("modifier_suffixes"), key=len, reverse=True)),
             joiners=tuple(sorted((tuple(p.split()) for p in phrases("clause_joiners")), key=len, reverse=True)),
             conditionals=words("clause_conditionals"),
+            temporals=temporals, temporal_firsts=frozenset(t[0] for t in temporals),
         ))
     return tuple(out)
 
@@ -169,17 +173,23 @@ class Claim:
     honest: str
 
 
+# What may stand between a statement and its tag: , ; : and the dashes (em, en, and a SPACED hyphen or double hyphen -
+# "to-do" is one word and never a separator).
+_TAG_SEP_RE = re.compile(r"[,;:\u2014\u2013]|(?<=\s)-{1,2}(?=\s)")
+
+
 def _declarative_part(text: str) -> Optional[str]:
-    """The statement a ``?``-ending unit really makes, or None when it is a genuine question. A TAG ("…, okay?", "…, right?",
-    es "…, ¿vale?") questions only the tag: the clause before it is still an affirmative claim, so it is returned for judging.
-    A question that opens with an interrogative word ("Have I added it, okay?") or "¿" is genuine and exempt."""
+    """The statement a ``?``-ending unit really makes, or None when it is a genuine question. A TAG ("…, okay?", "… - right?",
+    "… \u2014 okay?", "…: okay?", es "…, ¿vale?") questions only the tag: the clause before it is still an affirmative claim, so it is
+    returned for judging. A question that opens with an interrogative word ("Have I added it, okay?") or "¿" is genuine and exempt."""
     if text.lstrip().startswith("¿"):
         return None
     body = text.rstrip().rstrip("?!. ").rstrip()
-    cut = max(body.rfind(","), body.rfind(";"))
-    if cut <= 0:
+    seps = list(_TAG_SEP_RE.finditer(body))
+    if not seps or seps[-1].start() <= 0:
         return None
-    tag, rest = _phrase(body[cut + 1:]), body[:cut]
+    cut = seps[-1]
+    tag, rest = _phrase(body[cut.end():]), body[:cut.start()]
     first = (tokenize(rest) or [""])[0]
     langs = _langs()
     if any(first in lang.question_openers for lang in langs):
@@ -215,7 +225,7 @@ def find_claim(sentence: str) -> Optional[Claim]:
         # Blockers (negation, irrealis, future) and target nouns are judged in the CLAUSE of the claim verb only: "I've added
         # milk to your list, but I'm not sure about eggs" and "… as you wanted" still claim the milk (review, #2004).
         found: list = []            # the kinds each claiming clause names
-        for offset, toks in _clauses(text, lang):
+        for offset, toks, temporal_tail in _clauses(text, lang):
             padded = " " + " ".join(toks) + " "
             if any(_has_phrase(padded, b) for b in lang.blockers):
                 continue
@@ -229,6 +239,8 @@ def find_claim(sentence: str) -> Optional[Claim]:
                 pre = toks[max(0, i - 4):i]
                 aux = _passive_aux(pre, lang)
                 passive = aux in lang.passive_done or aux in lang.passive_past or (state_claim and aux in lang.passive_state)
+                if temporal_tail and aux in lang.passive_state:
+                    continue            # "Milk is added once you tap Done": a pending form described, not a write reported
                 if not passive and any(p in lang.second_person for p in pre):
                     continue            # "you added it" - the user did it ("The milk you mentioned has been added": you is not the writer)
                 active = all(p in lang.hold_words or p in lang.modifiers for p in pre) or _subject_then_modifiers(toks, i, lang)
@@ -284,7 +296,9 @@ _BREAK_RE = re.compile(r"[a-z0-9']+|[,;:—–]")
 
 
 def _clauses(text: str, lang: "_Lang") -> list:
-    """``(offset, tokens)`` for each clause of ``text`` - ``offset`` is how many words precede the clause in the unit. The word tokens split into clauses: at ``; : -`` always, at a comma that is followed by a new subject
+    """``(offset, tokens, temporal_tail)`` for each clause of ``text`` - ``offset`` is how many words precede the clause in the
+    unit; ``temporal_tail`` is True when a trailing temporal clause ("… after you asked me to") was split off right after it. The
+    word tokens split into clauses: at ``; : -`` always, at a comma that is followed by a new subject
     (``clause_starts`` / subjects / second person) or a joiner, and at every joiner word (``clause_joiners`` - "but", "so",
     "as", "because"… per language DATA; the joiner itself belongs to neither clause). A comma inside a list of items does
     not split ("I've added milk, eggs and bread to your list")."""
@@ -297,10 +311,10 @@ def _clauses(text: str, lang: "_Lang") -> list:
     cur_off = 0
     i = 0
 
-    def close() -> None:
+    def close(temporal_tail: bool = False) -> None:
         nonlocal cur, cur_off
         if cur:
-            clauses.append((cur_off, cur))
+            clauses.append((cur_off, cur, temporal_tail))
         cur = []
         cur_off = seen
 
@@ -317,6 +331,12 @@ def _clauses(text: str, lang: "_Lang") -> list:
                 # "I've added milk to your list, if that's okay": the hedge is a clause of its own and blocks only itself. A LEADING
                 # "if" stays in its clause (and blocks it), so "If it's added, great" is still not a claim (review, #2004).
                 close()
+            temporal = _temporal_at(items, i, lang)
+            if temporal and cur and _clause_follows(items, i + temporal, lang):
+                # "I've added milk to your list, after you asked me to": the trailing temporal clause is a clause of its own
+                # (its own leading "after" blocks only IT), so it never disables the completed claim before it. A LEADING
+                # "When I've added it, I'll tell you" stays one clause and stays blocked.
+                close(temporal_tail=True)
             joiner = next((len(j) for j in lang.joiners if items[i:i + len(j)] == list(j)), 0)
             if joiner:
                 close()
@@ -329,6 +349,19 @@ def _clauses(text: str, lang: "_Lang") -> list:
         i += 1
     close()
     return clauses
+
+
+def _temporal_at(items: list, i: int, lang: "_Lang") -> int:
+    """Length in words of the temporal phrase ("after", "una vez") starting at ``items[i]``, else 0."""
+    if items[i] not in lang.temporal_firsts:      # the hot path: almost every word of a reply stops here
+        return 0
+    return next((len(t) for t in lang.temporals if items[i:i + len(t)] == list(t)), 0)
+
+
+def _clause_follows(items: list, i: int, lang: "_Lang") -> bool:
+    """True when a real word follows at ``items[i]`` that is not itself temporal: "after YOU asked" opens a clause, but "once
+    before" / "once." / "before," are adverbs and leave the sentence as it was."""
+    return i < len(items) and items[i] not in ",;:\u2014\u2013" and not _temporal_at(items, i, lang)
 
 
 def is_recap_question(user_text: str) -> bool:

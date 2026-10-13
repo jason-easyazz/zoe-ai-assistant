@@ -79,6 +79,14 @@ class _Lang:
     ambiguous_continuers: frozenset = frozenset()
     # Words that, right before an ambiguous continuer, make it a noun ("the cause", "root cause").
     noun_cues: frozenset = frozenset()
+    # Verbs that can END a finished question whose object was fronted ("What symptoms does mold CAUSE"). One that is also a
+    # continuer ("cause" = "because") is not held when the utterance has that shape; see ``_verb_final_question``.
+    verb_final: frozenset = frozenset()
+    # First words of a question whose object is fronted ("what", "which", "who"): "how" / "why" / "when" are NOT here, so
+    # "Why did the kettle stop cause" is still a cut sentence.
+    fronted_object: frozenset = frozenset()
+    # Subject-auxiliary inversion words: a fronted-object question has one between the wh-word and the final verb.
+    question_auxiliaries: frozenset = frozenset()
 
 
 def _fs(*words: str) -> frozenset:
@@ -135,6 +143,11 @@ _LANGS: Mapping[str, _Lang] = {
             "probable", "possible", "only", "one", "common", "exact", "actual", "true",
             "underlying", "possible", "to", "will", "would", "can", "could", "might", "may",
             "should", "not", "does", "did", "it", "they", "we", "you", "i", "which",
+        ),
+        verb_final=_fs("cause", "make", "do", "mean", "say", "need", "want", "use"),
+        fronted_object=_fs("what", "which", "who", "whom", "whose"),
+        question_auxiliaries=_fs(
+            "do", "does", "did", "can", "could", "will", "would", "should", "shall", "might", "may", "must",
         ),
     ),
     "es": _Lang(
@@ -209,10 +222,23 @@ def _first_content_word(words: list[str], lead_ins: frozenset) -> str:
     return ""
 
 
+def _verb_final_question(words: list[str], langs: list[_Lang]) -> bool:
+    """True for a finished question whose object is fronted and whose verb ends it: "What symptoms does mold cause".
+    Needs a fronted-object wh-word first (after any lead-ins), a subject-auxiliary somewhere before the last word, and a
+    last word that is a ``verb_final`` verb. Pure data lookups: no per-turn cost worth measuring."""
+    if len(words) < 3 or words[-1] not in _union("verb_final", langs):
+        return False
+    if _first_content_word(words, _union("lead_ins", langs)) not in _union("fronted_object", langs):
+        return False
+    auxiliaries = _union("question_auxiliaries", langs)
+    return any(w in auxiliaries for w in words[1:-1])
+
+
 def ends_incomplete(text: str, languages: tuple[str, ...] | None = None) -> bool:
     """True when the transcript stops on a word that means the clause is unfinished.
 
-    Conservative: a ``?`` or ``!`` ending is complete; fewer than three words is an answer;
+    Conservative: a ``?`` or ``!`` ending is complete; so is a verb-final question without one ("What symptoms does mold
+    cause" - ``_verb_final_question``); fewer than three words is an answer;
     a weak word ("that", "which", "que") only counts in a long statement that does not open
     like a question ("what was that" is complete).
     """
@@ -227,7 +253,7 @@ def ends_incomplete(text: str, languages: tuple[str, ...] | None = None) -> bool
     if last in _union("strong_continuers", langs):
         if last in _union("ambiguous_continuers", langs):
             clipped = re.search(r"['’]" + re.escape(last) + r"\W*$", s, re.IGNORECASE) is not None
-            if not clipped and words[-2] in _union("noun_cues", langs):
+            if not clipped and (words[-2] in _union("noun_cues", langs) or _verb_final_question(words, langs)):
                 return False
         return True
     if last in _union("weak_continuers", langs) and len(words) >= _MIN_WEAK_HOLD_WORDS:
@@ -273,7 +299,7 @@ def addressedness(text: str, window: str | None, *, prev_reply_question: bool = 
 
     Default (``on``) acts on POSITIVE evidence only: the utterance names another person as
     the addressee (a vocative: ", Name." / "Hey Name") and has no question / command shape
-    and does not name Zoe. A plain statement with no such evidence is let through — in an
+    (an acknowledgement does not count: "Thanks for the help, Casey." is said TO Casey) and does not name Zoe. A plain statement with no such evidence is let through — in an
     open follow-up the owner often keeps talking TO Zoe in statements.
     ``strict`` additionally requires a 5 s ``followup`` utterance to look like a question,
     command or acknowledgement, to answer a question Zoe just asked, or to be a few words
@@ -292,7 +318,12 @@ def addressedness(text: str, window: str | None, *, prev_reply_question: bool = 
         return Verdict(True, "name")
     shape = _has_shape(text, words, langs)
     vocative = _names_other_person(text, langs)
-    if vocative and not shape:
+    if vocative and shape not in ("question", "command"):
+        # Only a question or a command shape beats a vocative ("What time is it, Casey?"). An acknowledgement is the shape of a
+        # reply TO Casey ("Thanks for the help, Casey."), so it does not. One exception: Zoe just asked a question, so a short
+        # "Yes, Casey." may be the answer to it.
+        if shape == "acknowledgement" and prev_reply_question:
+            return Verdict(True, "answer")
         return Verdict(False, "vocative")
     if strict and window == "followup":
         if prev_reply_question:

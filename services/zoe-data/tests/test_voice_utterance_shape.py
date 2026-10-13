@@ -357,3 +357,65 @@ def test_route_fails_open_when_the_gate_crashes(monkeypatch, events):
     monkeypatch.setattr(us, "gate_frame", _boom)
     frames = _turn(app, can_continue=True, window="followup")
     assert any(f.get("done") for f in frames) and len(calls) == 1
+
+
+# ── follow-ups to #2000 ──────────────────────────────────────────────────────────────
+# Negative controls: dropping ``_verb_final_question`` from the ambiguous-continuer branch fails the verb-final tests; restoring
+# ``if vocative and not shape`` fails the acknowledgement tests.
+
+@pytest.mark.parametrize("text", [
+    "What symptoms does mold cause",         # the object is fronted: the verb ENDS the finished question
+    "Which problems does damp cause",
+    "What problems can a leaking roof cause",
+    "What would an unbalanced diet cause",
+    "What does a lack of sleep usually cause",
+    "Which of these medicines might cause",
+    "What does that word mean",              # other verb-final questions are complete too
+    "What do you want me to do",
+    "Which one should I make",
+])
+def test_a_verb_final_question_without_punctuation_is_complete(text):
+    assert us.ends_incomplete(text) is False, text
+    assert us.gate_frame(dict(can_continue=True), text) is None
+
+
+@pytest.mark.parametrize("text", [
+    "We should stay home cause",             # a statement: still the conjunction
+    "Why did the kettle stop cause",         # not an object-fronted question: "cause" is "because"
+    "What time is the shop open cause",      # no auxiliary inversion before it
+    "What does mold look like 'cause",       # clipped apostrophe = the conjunction, whatever the shape
+    "I know what mold does and",             # a different continuer after a wh-word still holds
+])
+def test_a_verb_final_look_alike_is_still_held_where_it_is_a_conjunction(text):
+    assert us.ends_incomplete(text) is True, text
+
+
+def test_the_continuation_hold_still_asks_for_a_second_clip_on_a_real_cut():
+    frame = us.gate_frame(dict(can_continue=True), "What symptoms does mold cause and")
+    assert frame == dict(done=True, reply="", incomplete=True)
+
+
+def test_an_acknowledgement_aimed_at_someone_else_by_name_is_not_addressed():
+    # the documented rule: only a question or a command shape overrides a vocative
+    for text in ("Thanks for the help, Casey.", "Sure, Casey.", "Okay, Morgan.", "Great job today, Casey."):
+        for window in ("followup", "conversation"):
+            assert us.addressedness(text, window) == us.Verdict(False, "vocative"), (text, window)
+    assert us.addressedness("Thanks for the help, Casey.", "followup", strict=True) == us.Verdict(False, "vocative")
+
+
+def test_a_question_or_command_to_someone_else_by_name_is_still_addressed():
+    assert us.addressedness("What time is it, Casey?", "followup").addressed is True
+    assert us.addressedness("Turn the porch light off, Casey.", "followup").addressed is True
+
+
+def test_an_acknowledgement_that_answers_zoes_own_question_is_addressed():
+    # Zoe just asked something: "Yes, Casey." may be the answer (a name of the thing asked about), so it is kept
+    assert us.addressedness("Yes, Casey.", "followup", prev_reply_question=True).addressed is True
+    assert us.addressedness("Yes, Casey.", "followup", prev_reply_question=False).addressed is False
+
+
+def test_the_gate_drops_a_thanks_to_someone_else_when_the_flag_is_on(monkeypatch):
+    monkeypatch.setenv(us.FOLLOWUP_FLAG, "on")
+    frame = us.gate_frame(dict(window="followup"), "Thanks for the help, Casey.")
+    assert frame == dict(done=True, reply="", skipped="not_addressed", reason="vocative")
+    assert us.gate_frame(dict(window="followup"), "Thanks for the help, Zoe.") is None
