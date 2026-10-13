@@ -4,6 +4,8 @@
 
 "Record on the pendant, sync when in range of Zoe." The owner wears an Omi CV1 pendant that records to its own SD storage while powered. When he comes within Bluetooth range of the panel Pi, this small service connects (to the Pi, NOT the Omi phone app; no pairing/bond is involved), drains the storage, decodes Opus to 16 kHz WAV, uploads each recording to zoe-data, and — on ring firmware — frees the pendant's ring only after zoe-data confirms it stored that recording. The owner's pendant runs firmware 3.0.18, which predates the ring protocol: see the legacy-file contract below. Nothing goes to Omi's cloud. Design + status: [`docs/architecture/omi-integration-plan.md`](../../docs/architecture/omi-integration-plan.md) (section 4 and the operator runbook).
 
+One Pi may sync SEVERAL pendants (`OMI_PENDANT_ADDRESSES`); **who owns which pendant is zoe-data's `omi_devices` registry, never this service's business** (owner requirement 2026-10-13: link a certain Omi to a certain user, sync no matter who is logged in, as long as it is in range of the Pi, and only to the user it is registered for).
+
 It runs as its OWN process and unit (`scripts/setup/systemd/omi-sync.service`, operator opt-in, never auto-enabled) — **not** inside `zoe_voice_daemon.py` — so a BlueZ fault cannot touch the voice path.
 
 ## Ownership
@@ -13,12 +15,13 @@ It runs as its OWN process and unit (`scripts/setup/systemd/omi-sync.service`, o
 - `omi_sync/spool.py` — the durable local custody spool (SQLite, `synchronous=FULL`): every received record, until Zoe confirms its recording.
 - `omi_sync/recordings.py` — deterministic segmentation of spooled records into recordings, time resolution (device clock vs host), Opus → WAV.
 - `omi_sync/engine.py` — one drain session and THE CUSTODY RULE (`Drain`, `advance_target`, `ring_label`).
-- `omi_sync/uploader.py` — HTTP upload + the mapping of Zoe's answer to a custody outcome (`classify`).
+- `omi_sync/uploader.py` — HTTP upload + the mapping of Zoe's answer to a custody outcome (`classify`: CONFIRMED / REJECTED / UNAVAILABLE / NOT_REGISTERED). `device_hash(address)` is THE device identity (16 hex, never the address).
+- `omi_sync/runner.py` — the sync loop over every configured pendant: `Rotation` (round-robin, per-pendant next-visit time) + `Runner.visit/step`. A visit is one old-style session (shared radio lock per visit, connect, drain, release); one pendant's absence, drop or "not assigned yet" never holds up another.
 - `omi_sync/ble_link.py` — the only module that needs a pendant (bleak 0.22.3). Everything else is tested on fixture bytes. Connection recipe (verified on the real pendant 2026-10-12): `sudo -n hcitool lecc --random <addr>` first (32 s supervision timeout; BlueZ's 420 ms default dies at this range), then bleak on the connected device; no scan, no pairing, no agent; retry with backoff.
 - `omi_sync/radio_lock.py` — the panel Pi's one-radio advisory `flock` (`ZOE_BLE_RADIO_LOCK`, default `~/.zoe-ble-radio.lock`), a deliberate copy of `services/panel-bluetooth/panel_bt/radio_lock.py` (same path, same semantics; two venvs, no import). `ble_link.connect` takes it first and raises `ConnectError("radio busy ...")` if the Settings > Bluetooth agent holds it (a scan, an open link, a FIRMWARE UPDATE) — so a sync can never take the pendant's single connection in the gap after a firmware reset. Pinned by `tests/unit/test_omi_sync_radio_lock.py`.
-- `omi_sync/check.py`, `omi_sync/cli.py`, `omi_sync/config.py` — the read-only device check, the entry points (`run | check | status`), env config.
+- `omi_sync/check.py`, `omi_sync/cli.py`, `omi_sync/config.py` — the read-only device check (`check -p N` picks the Nth configured pendant), the entry points (`run | check | status`), env config (`OMI_PENDANT_ADDRESSES` comma list, the single `OMI_PENDANT_ADDRESS` as fallback; `OMI_SYNC_UNREGISTERED_RETRY_S`).
 - `THIRD_PARTY_NOTICES.md` — the MIT notice for the Omi source the protocol is ported from. Keep it with any substantial new port.
-- The Zoe side lives in `services/zoe-data/omi_recordings.py` + `routers/omi_recordings.py` (migration 0045).
+- The Zoe side lives in `services/zoe-data/omi_recordings.py` + `omi_devices.py` + `routers/omi_recordings.py` (migrations 0045, 0047).
 
 ## Local Contracts
 
@@ -27,7 +30,9 @@ It runs as its OWN process and unit (`scripts/setup/systemd/omi-sync.service`, o
 - Which protocol runs is decided by DIS `2A26` BEFORE any storage command: **≥ 3.0.20 → ring**; **exactly 3.0.18 → the legacy file protocol, only with `OMI_SYNC_LEGACY_FILES=1`** (its firmware deletes each file itself on delivery — a free we can neither gate nor defer, so the spool is the ONLY custody; default off); anything else is refused with GATT reads only (the same opcode byte is ADVANCE on one protocol and DELETE_FILE on the other). An unknown codec id (the owner's pendant reports `0x0f`; the source says 21) is refused unless `OMI_SYNC_ASSUME_CODEC` names one; a recording whose frames do not decode is HELD (raw records stay in the spool), never uploaded. Durations come from the decoded PCM, not the codec id.
 - The pendant is never written to except: the storage commands above (list/read/advance/stop) and, only with `OMI_SYNC_SET_DEVICE_TIME=1`, one clock write at the start of a session. No pairing, no agent, no OTA/SMP traffic, no settings or haptic writes.
 - The last recording of a session stays OPEN (not uploaded, not freed) until it has been quiet for `OMI_SYNC_GAP_S`, hit `OMI_SYNC_MAX_RECORDING_S`, or the pendant is fully drained; a tail we have not caught up with (dropped READ) is held however old it is.
-- The pendant address never leaves the Pi: uploads carry `device_hash(address)`.
+- The pendant address never leaves the Pi: uploads carry `device_hash(address)` (`X-Omi-Device`). That id is ONE identity shared with Settings > Bluetooth: `panel_bt.model.device_id` is the same derivation (copied, two venvs, no import), pinned by `tests/unit/test_omi_device_identity.py` incl. a golden value — changing it orphans every stored and spooled recording.
+- **Several pendants, one Pi.** Each configured address is visited in turn; spool rows, staged WAVs and the next-visit time are per pendant (the spool key already includes the device id). The radio lock is held per visit, never across visits, so Settings > Bluetooth can always get in between; if it holds the radio every visit is `ConnectError("radio busy ...")` and the rotation moves on without touching a pendant.
+- **A pendant nobody owns keeps its audio.** Zoe answers 409 `device_not_registered` (an admin has not assigned it): `classify` -> `NOT_REGISTERED`, the engine stops uploading for the session, nothing is confirmed so nothing is freed (ring ADVANCE stops at the first unconfirmed record; legacy files are held by the spool), and the runner retries after `OMI_SYNC_UNREGISTERED_RETRY_S` (default 900 s, floor 60) instead of the 30 s unavailable cadence. Assigning the pendant is all it takes; the next visit uploads everything. Nothing about who is signed in on the panel is sent, read or used here.
 - Flag-dark: `OMI_SYNC_ENABLED` unset/0 → `python -m omi_sync run` exits 0 without importing bleak or creating state. Opt-ins that default OFF: `OMI_SYNC_LEGACY_FILES`, `OMI_SYNC_SET_DEVICE_TIME`, `OMI_SYNC_ASSUME_CODEC`. Zoe-side, `ZOE_OMI_SYNC_ENABLED` unset → the routes do not exist (404).
 - Stock-firmware caveat (read from `storage.c`): firmware without the custody capability frees records as the link layer acknowledges them; the spool is what makes that safe. Custody firmware (`CAP_APP_ACK_RECLAIM`, `ring_id`, `ADVANCE_ID 0x15`) is supported when the pendant advertises it.
 
@@ -35,6 +40,7 @@ It runs as its OWN process and unit (`scripts/setup/systemd/omi-sync.service`, o
 
 - Never send `CMD_RING_CLEAR` (`0x13`) or the legacy `DELETE_FILE` (`0x12`), and never add an encoder for either. Never ADVANCE on anything but confirmed state.
 - Never pair, bond, unpair or register a BlueZ agent from code (a test pins it): the real pendant connects and reads fine with no bond, and it holds ONE bond which the phone app would otherwise keep. Never touch the MCUmgr SMP service (`8d53dc1d-…`): a firmware update is an owner-run operation (plan 4.10) done through Settings > Bluetooth devices (`services/panel-bluetooth`, which holds the radio lock for the whole update), never this service.
+- Never send, derive or guess an OWNER from the Pi (no user id in an upload, no reading of the panel's session or binding): ownership is the registry's, resolved by zoe-data from `X-Omi-Device` alone.
 - Never upload to any host except the configured `ZOE_URL`; never log audio, transcripts, the device token or the pendant address.
 - Never import from `labs/` or `services/zoe-data`; never run inside the voice daemon, the Orin or a Docker image.
 - Never delete a spool record or a staged WAV except via a CONFIRMED upload (or the confirmed-range prune).
@@ -48,8 +54,8 @@ It runs as its OWN process and unit (`scripts/setup/systemd/omi-sync.service`, o
 
 ## Verification
 
-- `pytest tests/unit/test_omi_sync_protocol.py tests/unit/test_omi_sync_engine.py tests/unit/test_omi_sync_check.py -q` (all `ci_safe`; no hardware, no network, no `bleak`/`opuslib` needed).
-- Zoe side: `pytest services/zoe-data/tests/test_omi_recordings.py -q`.
+- `pytest tests/unit/test_omi_sync_protocol.py tests/unit/test_omi_sync_engine.py tests/unit/test_omi_sync_check.py tests/unit/test_omi_sync_rotation.py tests/unit/test_omi_device_identity.py tests/unit/test_omi_sync_radio_lock.py -q` (all `ci_safe`; no hardware, no network, no `bleak`/`opuslib` needed).
+- Zoe side: `pytest services/zoe-data/tests/test_omi_recordings.py services/zoe-data/tests/test_omi_device_owners.py -q`.
 - On the Pi, read-only: `python -m omi_sync check` (GATT reads + `0x10 INFO`; never READ/ADVANCE/CLEAR/time-write).
 
 ## Child DOX Index

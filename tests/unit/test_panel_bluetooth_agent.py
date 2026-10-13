@@ -102,7 +102,7 @@ def test_command_validation_accepts_the_good_shapes():
 
 
 def test_device_id_is_a_short_hash_not_the_address():
-    assert re.fullmatch(r"[0-9a-f]{12}", OMI_ID)
+    assert re.fullmatch(r"[0-9a-f]{16}", OMI_ID)
     assert OMI_ADDR.lower().replace(":", "") not in OMI_ID
     assert device_id(OMI_ADDR) == device_id(OMI_ADDR.lower())
 

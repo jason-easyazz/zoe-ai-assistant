@@ -6,7 +6,7 @@ One small service per panel Pi that does what the household asks in Settings > B
 
 ## Ownership
 
-- `panel_bt/model.py` — the wire shapes: `Advert`, `Command` + `parse_command` (whitelisted ops, well-formed ids), `AgentError` + error codes, the opaque `device_id` hash, `version_tuple`.
+- `panel_bt/model.py` — the wire shapes: `Advert`, `Command` + `parse_command` (whitelisted ops, well-formed ids), `AgentError` + error codes, the opaque `device_id` hash (16 hex; THE SAME derivation as `omi_sync.uploader.device_hash`, so the id Settings > Bluetooth shows for a pendant is the id its uploads carry and the id zoe-data's `omi_devices` registry assigns to a member — pinned by `tests/unit/test_omi_device_identity.py`), `version_tuple`.
 - `panel_bt/config.py` — env config; the update floors are CLAMPED here (battery >= 50, median RSSI better than -75) so configuration can only be stricter.
 - `panel_bt/backend.py` — the radio behind `BleBackend` / `BleLink`; `BleakBackend` is the real one (the `hcitool lecc` recipe ported from omi-sync, adapter selection `PANEL_BT_HCI`, RSSI sampling).
 - `panel_bt/agent.py` — `PanelBluetoothAgent`: executes commands, owns the single live link + its lease, the radio lock, the outbox, the poll loop.
@@ -20,7 +20,7 @@ One small service per panel Pi that does what the household asks in Settings > B
 
 ## Local Contracts
 
-- **No inbound socket, ever.** Auth is the panel's device token on outbound calls. A device's BLE address never leaves the Pi: everything sent speaks `device_id`.
+- **No inbound socket, ever.** Auth is the panel's device token on outbound calls. A device's BLE address never leaves the Pi: everything sent speaks `device_id`. The Omi driver's "Assigned to" control (which household member a pendant's recordings sync to) is a zoe-data/UI concern (`/api/omi/devices`): this agent knows nothing about owners and sends no user id.
 - **One radio.** Every scan / open link / update holds `RadioLock`; omi-sync yields to it. A link is a lease (`PANEL_BT_LEASE_S`, hard cap `PANEL_BT_MAX_HOLD_S`). One live link at a time. One task at a time (`status` and `update_cancel` are always answered).
 - **No pairing, no agent, no bond.** Devices are connected as omi-sync connects the pendant. A device that needs a bond is a deliberate, reviewed addition, not something a driver may do quietly.
 - **Updates: every gate blocks, nothing retries.** The Omi update proceeds only through `omi_dfu.run_omi_update`: all gates, a verified pinned package, both secondary hashes checked before marking, exactly two pending before the reset, the first doubt stops it, a failure starts a persisted cool-down. The bootloader is overwrite-only: there is NO revert, so the UI must keep saying so.
