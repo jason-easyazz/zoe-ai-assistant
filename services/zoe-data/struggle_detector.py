@@ -362,6 +362,15 @@ async def _may_keep_words(turn: sig.Turn, *texts: str) -> bool:
     return True
 
 
+async def _keep_words_bounded(turn: sig.Turn, *texts: str) -> bool:
+    """``_may_keep_words`` with a time bound: a slow forget-ledger lookup must not stall the worker (and so fill the queue);
+    a lookup that runs out of time keeps NO words."""
+    try:
+        return await asyncio.wait_for(_may_keep_words(turn, *texts), STORE_TIMEOUT_S)
+    except Exception:  # noqa: BLE001 - TimeoutError included
+        return False
+
+
 def _scrub(text: str) -> Optional[str]:
     try:
         from memory_service import scrub_pii
@@ -377,7 +386,7 @@ async def _row(e: sig.Event) -> dict[str, Any]:
     summary = ""
     texts = (about.text, cur.text) if about is not cur else (cur.text,)
     # words only when every turn quoted is this member's own (a panel's identity can flip between guest and member)
-    if about.user_id == cur.user_id and await _may_keep_words(cur, *texts):
+    if about.user_id == cur.user_id and await _keep_words_bounded(cur, *texts):
         parts = [sig.normalise(t) for t in texts]
         joined = " -> ".join(p for p in parts if p)
         scrubbed = _scrub(joined)

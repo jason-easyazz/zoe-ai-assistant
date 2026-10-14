@@ -57,9 +57,11 @@ def _pin_stores() -> str:
             sys.path.insert(0, p)
     import exact_words
     import night_store
+    import struggle_detector
 
     exact_words.set_backend(exact_words.MemoryBackend())
     night_store.set_backend(night_store.MemoryBackend())
+    struggle_detector.set_backend(struggle_detector.MemoryBackend())
     return root
 
 

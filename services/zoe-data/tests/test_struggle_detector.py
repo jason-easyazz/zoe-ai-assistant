@@ -246,6 +246,20 @@ async def test_off_the_record_and_forgotten_turns_keep_no_words(monkeypatch, fre
     assert fresh.data[-1]["summary"], "an ordinary member turn keeps its words"
 
 
+async def test_a_slow_forget_lookup_keeps_no_words_and_does_not_stall(monkeypatch, fresh):
+    import memory_forgotten
+
+    async def hangs(*_a, **_k):
+        await asyncio.sleep(30)
+
+    monkeypatch.setattr(memory_forgotten, "matches", hangs)
+    monkeypatch.setattr(sd, "STORE_TIMEOUT_S", 0.05)
+    t0 = time.perf_counter()
+    await feed(item("what's the capital of chad"), item("what's the capital of chad"))
+    assert time.perf_counter() - t0 < 2.0
+    assert fresh.data and fresh.data[0]["summary"] == ""
+
+
 async def test_an_identity_flip_on_a_panel_keeps_no_words(fresh):
     await feed(item("set a time for five minutes", user=A, channel="voice", session="voice-panel-hall-11112222"),
                item("set a timer for five minutes", user=B, channel="voice", session="voice-panel-hall-33334444"))
