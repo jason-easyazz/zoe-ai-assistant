@@ -800,6 +800,7 @@ async def maybe_swap(text: str, user_id: str, session_id: str, *, svc=None) -> O
 # member id, and a guest / unidentified turn neither registers nor reads (it writes no durable memory at all).
 
 RECENT_WINDOW_S = 30 * 60
+_MIN_CONTAIN_WORDS = 4
 _PENDING_MAX_KEYS = 256
 _PHRASE = r"[A-Za-z0-9][A-Za-z0-9'’\-]*(?:\s+[A-Za-z0-9][A-Za-z0-9'’\-]*){0,3}"
 _MARK = (r"(?:no|nope|actually|sorry|wait|oh|hang\s+on|correction|you\s+misheard(?:\s+me)?|i\s+said|i\s+meant|"
@@ -926,7 +927,10 @@ def correct_fact(user_id: str, session_id: Optional[str], fact: str, turn_text: 
         return None
     turn = _norm(turn_text)
     for p in reversed(_live_pending(user_id, session_id)):
-        if not any(turn == e or turn in e or e in turn for e in p.earlier if e):
+        # the same turn, give or take what the lane trimmed (own_words) or appended; a SHORT earlier turn ("ok") is never
+        # matched by containment - it would make any later turn that happens to contain it look earlier
+        if not any(turn == e or (min(len(turn.split()), len(e.split())) >= _MIN_CONTAIN_WORDS and (turn in e or e in turn))
+                   for e in p.earlier if e):
             continue
         rx = _phrase_re(p.old)
         if rx.search(fact) and rx.search(turn_text):

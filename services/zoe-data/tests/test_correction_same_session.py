@@ -159,6 +159,17 @@ def test_a_turn_spoken_after_the_correction_is_not_rewritten():
     assert ca.correct_fact(MEMBER, SESSION, "User's cousin runs a pike shop.", later) is None
 
 
+def test_a_short_earlier_turn_does_not_make_a_later_one_look_earlier(monkeypatch):
+    async def history(user_id, session_id, current):
+        return [MISHEARD_TURN, "ok thanks"]
+
+    monkeypatch.setattr(ca, "_recent_user_messages", history)
+    asyncio.run(ca.maybe_fix_recent(CORRECTION, MEMBER, SESSION, svc=FakeSvc([])))
+    later = "ok thanks, and my cousin runs a pike shop down the road"
+    assert ca.correct_fact(MEMBER, SESSION, "User's cousin runs a pike shop.", later) is None
+    assert ca.correct_fact(MEMBER, SESSION, "User manages a pike shop.", MISHEARD_TURN) is not None
+
+
 def test_another_session_does_not_inherit_the_correction():
     asyncio.run(ca.maybe_fix_recent(CORRECTION, MEMBER, SESSION, svc=FakeSvc([])))
     assert ca.correct_fact(MEMBER, "voice-panel-other", "User manages a pike shop.", MISHEARD_TURN) is None
