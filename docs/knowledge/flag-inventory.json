@@ -6382,6 +6382,7 @@
         "in_env_example": false,
         "readers": [
           "scripts/maintenance/curate_voice_corpus.py",
+          "scripts/maintenance/stt_accuracy_report.py",
           "scripts/maintenance/voice_regression_probe.py",
           "services/zoe-data/routers/voice_tts.py"
         ],
