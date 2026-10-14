@@ -127,16 +127,19 @@ class _TimerStore:
         timers = self.list(owner)
         if not timers:
             return None, "none"
+        hits = timers
         if label:
             wanted = label.strip().lower()
-            hits = [t for t in timers if t["label"].lower() == wanted]
-            if not hits:  # "the egg timer" for a timer called "Eggs"
+            named = [t for t in hits if t["label"].lower() == wanted]
+            if not named:  # "the egg timer" for a timer called "Eggs"
                 stem = wanted.rstrip("s")
-                hits = [t for t in timers if t["label"].lower().rstrip("s") == stem]
-        elif start_seconds:
-            hits = [t for t in timers if int(t.get("set_seconds", t["duration_seconds"])) == int(start_seconds)]
-        else:
-            hits = timers
+                named = [t for t in hits if t["label"].lower().rstrip("s") == stem]
+            if not named and len(hits) == 1 and hits[0]["label"].lower() == "timer":
+                # "the kitchen timer" when the ONE running timer has no name: nothing the words say contradicts it.
+                named = hits
+            hits = named
+        if start_seconds:  # a name AND a length ("my 10 minute pasta timer") must BOTH match
+            hits = [t for t in hits if int(t.get("set_seconds", t["duration_seconds"])) == int(start_seconds)]
         if not hits:
             return None, "no_match"
         if len(hits) > 1:
@@ -330,6 +333,9 @@ def _resolve_timer_change(intent: SkybridgeIntent, owner: str) -> dict[str, Any]
     named = "" if target["label"].lower() == "timer" else f"{target['label']} "
     remaining = target["expires_at"] - time.time()
     delta = int(intent.duration_seconds)
+    if delta <= 0:  # "add some time to the timer": no amount in the words - ask, never guess one
+        verb = "add to" if intent.action == "increase" else "take off"
+        return _timer_reply(intent, owner, f"How much time should I {verb} your {named}timer?")
     if intent.action == "decrease":
         if delta >= remaining:
             return _timer_reply(intent, owner, f"Your {named}timer only has {_format_duration(remaining)} left, "
@@ -353,7 +359,14 @@ def _resolve_timer(intent: SkybridgeIntent, user_id: str) -> dict[str, Any]:
         return _resolve_timer_change(intent, owner)
 
     if intent.action == "cancel":
-        cancelled = _timers.cancel(owner, intent.title or None)
+        if intent.title or intent.start_seconds:
+            # A NAMED / sized cancel removes that timer or none: it used to fall back to the soonest one, a wrong delete.
+            target, why = _timers.find(owner, intent.title, intent.start_seconds)
+            if target is None and why != "none":
+                return _timer_reply(intent, owner, _which_timer_line(intent, owner, why))
+            cancelled = _timers.cancel_by_id(owner, target["timer_id"]) if target else None
+        else:
+            cancelled = _timers.cancel(owner, None)
         if not cancelled:
             return {
                 "handled": True, "intent": _intent_dict(intent),
@@ -843,13 +856,19 @@ def _list_add_from_text(message: str) -> tuple[str, str] | None:
 
 # A list named by the user ("my chores list"): one to three words, none of them glue, then "list". Tried AFTER the
 # known list names, so "shopping list" stays the shopping type.
-_LIST_GLUE = r"(?:the|my|our|a|from|off|on|in|of|to|into|onto|out)"
+_LIST_GLUE = (
+    r"(?:the|my|our|your|their|his|her|a|an|this|that|these|those|other|new|current|same|whole|entire|any|every"
+    r"|from|off|on|in|of|to|into|onto|out)"
+)
+# An item that only POINTS ("complete it on the list"): a pronoun is not an item - a substring match would tick off
+# whatever happens to contain it.
+_POINTING_ITEMS = frozenset({"it", "that", "this", "them", "those", "these", "one", "something", "everything", "all"})
 _NAMED_LIST_RE = rf"(?P<lname>(?!{_LIST_GLUE}\b)[a-z0-9']+(?:\s+(?!{_LIST_GLUE}\b)[a-z0-9']+){{0,2}})\s+list"
 _KNOWN_LIST_RE = (
     r"(?P<list>shopping list|grocery list|groceries|work list|personal list|list|task list|todo list|to[- ]do list"
     r"|tasks|todos)"
 )
-_LIST_TARGET_RE = rf"(?:the\s+|my\s+|our\s+)?(?:{_KNOWN_LIST_RE}|{_NAMED_LIST_RE})\b"
+_LIST_TARGET_RE = rf"(?:the\s+|my\s+|our\s+|this\s+|that\s+)?(?:{_KNOWN_LIST_RE}|{_NAMED_LIST_RE})\b"
 
 
 def _list_target(match: "re.Match[str]") -> tuple[str, str]:
@@ -858,7 +877,8 @@ def _list_target(match: "re.Match[str]") -> tuple[str, str]:
     groups = match.groupdict()
     name = (groups.get("lname") or "").strip().lower()
     if name:
-        list_type = LIST_TYPE_ALIASES.get(name, "")
+        # "the grocery shopping list" / "my todo list" is a TYPED list, not one named "grocery shopping".
+        list_type = LIST_TYPE_ALIASES.get(name, "") or _list_type_from_text(f" {name} ")
         return (list_type, "") if list_type else ("", name)
     phrase = f" {re.sub(r'[- ]+', ' ', (groups.get('list') or '').lower())} "
     return (_list_type_from_text(phrase) or ("shopping" if "grocery" in phrase else "")), ""
@@ -879,7 +899,7 @@ def _list_remove_from_text(message: str) -> tuple[str, str, str] | None:
     if not match:
         return None
     item = _clean_action_text(match.group("item"))
-    if not item:
+    if not item or item.lower() in _POINTING_ITEMS:
         return None
     list_type, list_name = _list_target(match)
     return item, (list_type or ("" if list_name else "shopping")), list_name
@@ -928,7 +948,7 @@ def _list_complete_from_text(message: str) -> tuple[str, str, bool, str] | None:
 
     def _finish(match: "re.Match[str]", completed: bool) -> tuple[str, str, bool, str] | None:
         item = _clean_action_text(match.group("item"))
-        if not item:
+        if not item or item.lower() in _POINTING_ITEMS:
             return None
         list_type, list_name = _list_target(match)
         return item, (list_type or ("" if list_name else "shopping")), completed, list_name
@@ -1476,8 +1496,13 @@ def classify_skybridge_intent(
             action, target = pause
             return SkybridgeIntent(domain="timer", action=action, title=target.label.title(),
                                    start_seconds=target.start_seconds)
-        if re.search(r"\b(cancel|stop|clear|delete|dismiss|reset|turn off)\b", text):
-            return SkybridgeIntent(domain="timer", action="cancel", title=_parse_timer_label(text))
+        cancel = re.search(r"\b(cancel|stop|clear|delete|dismiss|reset|turn off|remove|kill|scrap|get rid of)\b", text)
+        if cancel:
+            # "remove the 5 minute timer" used to START a 5-minute timer ("remove" was not a cancel word).
+            target = command_shapes.timer_target(text[cancel.end():])
+            return SkybridgeIntent(domain="timer", action="cancel",
+                                   title=target.label.title() or _parse_timer_label(text),
+                                   start_seconds=target.start_seconds)
         if re.search(r"\b(how (?:long|much)|left|remaining|status|check on|still going)\b", text):
             return SkybridgeIntent(domain="timer", action="status")
         # "show/list my timers" is a status ask too. Without this, the query fell
@@ -2104,7 +2129,9 @@ def _classify_music(text: str) -> "SkybridgeIntent | None":
             return SkybridgeIntent(domain="music", action="pause")
         if re.search(r"\b(resume|unpause|keep playing|carry on)\b", text):
             return SkybridgeIntent(domain="music", action="resume")
-        if re.search(r"\b(next|skip|forward)\b", text):
+        # "next" as a TIME ("play relaxing music for the next hour") is not a skip.
+        if re.search(r"\b(?:next(?!\s+(?:hours?|minutes?|weeks?|days?|time|years?|months?|morning|night|few))|skip|forward)\b",
+                     text):
             return SkybridgeIntent(domain="music", action="next")
         if re.search(r"\b(previous|back|last)\s+(?:song|track|tune)\b|\bgo back\b", text):
             return SkybridgeIntent(domain="music", action="previous")
@@ -3090,8 +3117,14 @@ def _list_contains_answer(
     """"Is milk on the list?" answered YES/NO first, naming the list (and the item as stored), never a list read-out.
     A named or typed list is the only one searched; a plain "the list" searches every list the user can see."""
     wanted = intent.item_text
-    if intent.list_type or intent.list_name:
-        scope = [lst for lst in [_select_list(lists, intent.list_type, intent.list_name)] if lst]
+    if intent.list_name:
+        # A NAMED list is that list or none (``_select_list`` would fall back to the only list).
+        wanted = intent.list_name.strip().lower()
+        scope = [lst for lst in lists if str(lst.get("name") or "").strip().lower() in (wanted, f"{wanted} list")]
+        if not scope:
+            return f"I couldn't find a list called {intent.list_name}.", None
+    elif intent.list_type:
+        scope = [lst for lst in lists if lst.get("list_type") == intent.list_type][:1]
         if not scope:
             return "I couldn't find that list.", None
     else:

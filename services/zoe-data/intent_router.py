@@ -539,7 +539,9 @@ _SMART_HOME_RE = re.compile(
 )
 
 _SMART_HOME_QUESTION_RE = re.compile(
-    r"^(?:please\s+)?(?:are|is|which|what|how\s+many|do\s+i\s+have|did\s+i\s+leave|have\s+i\s+left)\b", re.IGNORECASE
+    r"^(?:please\s+)?(?:are|is|were|was|which|what|why|when|who|how|should|shall|could\s+i|can\s+i|do|does|did"
+    r"|have\s+i|i\s+(?:left|think|forgot|wonder|noticed))\b",
+    re.IGNORECASE
 )
 
 # === MATH / CALCULATION (ZOE-10) ===
@@ -1289,13 +1291,15 @@ def detect_intent(
     # --- SMART HOME LIGHTS (ZOE-9) ---
     # A QUESTION about the lights ("are any lights on") is not a command: it used to switch them ON.
     if _SMART_HOME_RE.search(t) and not _SMART_HOME_QUESTION_RE.match(t):
-        # Determine action. OFF words are read first: "turn off the lights on the first floor" contains "lights on".
+        # Determine action from the FIRST clause ("turn on the lights and turn off the tv" is an ON), and in it OFF
+        # words first: "turn off the lights on the first floor" contains "lights on".
+        first = re.split(r"\s(?:and|then|but)\s|[,;]", t, maxsplit=1)[0]
         if re.search(r'\bdim\b', t):
             action = "dim"
         elif re.search(r'\bbrighten\b', t):
             action = "brighten"
         elif re.search(r'\b(?:turn|switch|flip|shut)\s+off\b|\b(?:turn|switch|flip|shut)\s+.+\boff\s*$'
-                       r'|\bdeactivate\b|\blights?\s+off\b', t):
+                       r'|\bdeactivate\b|\blights?\s+off\b', first):
             action = "turn_off"
         elif re.search(r'\b(?:turn|switch|flip)\s+on\b|\blights?\s+on\b', t):
             action = "turn_on"
@@ -1495,7 +1499,11 @@ def detect_intent(
     )
 
     m = _MUSIC_PLAY_RE.match(t)
-    if m:
+    # "play dead" / "play fair" / "play a game" are not music (the Skybridge music matcher's stopwords, same words).
+    if m and not re.match(r"^play\s+(?:a\s+)?(?:game|games|along|nice|fair|pretend|dead|catch|with)\b", t):
+        if command_shapes.delayed_command(t, strict=True):
+            # "play the news at 6am": playback for LATER is never started now (_execute_music_intent says so).
+            return Intent("music_play", {"query": m.group(1).strip(), "delayed": True})
         return Intent("music_play", {"query": m.group(1).strip()})
 
     m = _VOLUME_SET_RE.match(t)
@@ -5289,6 +5297,8 @@ async def _post_music_ha_control(client, ha_url: str, payload: dict) -> Optional
 
 async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
     """Route music intents to HA media_player via zoe-data HA bridge."""
+    if (intent.slots or {}).get("delayed"):
+        return command_shapes.DELAYED_COMMAND_REPLY  # nothing plays now, nothing is queued
     try:
         import os as _os, httpx as _httpx
         ha_url = _os.environ.get("ZOE_HA_BRIDGE_URL", "http://127.0.0.1:8007")

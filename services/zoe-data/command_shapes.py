@@ -99,30 +99,46 @@ def parse_duration_seconds(text: str) -> int:
     return 0
 
 
+
 # ── Timers ───────────────────────────────────────────────────────────────────
 
 _TIMER = r"\b(?:timers?|countdowns?)\b"
 _INCREASE_VERBS = r"add|put|give|stick"
 _DECREASE_VERBS = r"remove|take|subtract|knock|cut|shave"
-# "add 5 minutes to the timer" - the amount comes first, the timer is the object of to/from.
+# What may stand between "to/from" and the timer word: a determiner, a name, a length - never another clause
+# ("put the pizza on and set a timer" is a new timer, not a change to one).
+_TARGET = rf"(?P<tgt>(?:(?!\b(?:and|then|set|start|make|create)\b)[^,;])*?{_TIMER}.*)$"
+# "add 5 minutes to the timer" - the amount comes first, the timer is the object of to/on/off/from.
 _AMOUNT_FIRST = (
-    (re.compile(rf"\b(?:{_INCREASE_VERBS})\b(?P<amt>.+?)\b(?:to|on|onto)\b(?P<tgt>.*{_TIMER}.*)$"), "increase"),
-    (re.compile(rf"\b(?:{_DECREASE_VERBS})\b(?P<amt>.+?)\b(?:off(?:\s+of)?|from)\b(?P<tgt>.*{_TIMER}.*)$"), "decrease"),
+    (re.compile(rf"\b(?:{_INCREASE_VERBS})\b(?P<amt>.+?)\b(?:to|on|onto)\b{_TARGET}"), "increase"),
+    (re.compile(rf"\b(?:{_DECREASE_VERBS})\b(?:\s+off\b)?(?P<amt>.+?)\b(?:off(?:\s+of)?|from)\b{_TARGET}"), "decrease"),
 )
 # "increase the timer by 5 minutes" - the timer first, the amount after "by".
 _TIMER_FIRST = (
     (re.compile(rf"\b(?:increase|extend|lengthen|raise)\b(?P<tgt>.*?{_TIMER}.*?)\bby\b(?P<amt>.+)$"), "increase"),
     (re.compile(rf"\b(?:decrease|reduce|shorten|lower|cut)\b(?P<tgt>.*?{_TIMER}.*?)\bby\b(?P<amt>.+)$"), "decrease"),
 )
+# "make the timer 5 minutes longer", "another 5 minutes on the timer", "5 more minutes on the timer".
+_LONGER_SHORTER = re.compile(rf"\bmake\b(?P<tgt>.*?{_TIMER})(?P<amt>.*?)\b(?P<dir>longer|shorter)\b")
+_MORE_ON = re.compile(rf"^(?!\s*(?:is|are|how|what|does|do|can|will)\b)(?P<amt>(?:.*?\b)?(?:another|an?\s+extra|more)\b.*?)\b(?:on|to)\b(?P<tgt>.*{_TIMER}.*)$")
+# An amount-ish phrase: a number, a unit, or a word that only ever means "some time".
+_AMOUNTISH_RE = re.compile(rf"\b(?:\d+|{NUM}|{UNIT}|time|another|more|extra|few|couple|bit|little|half|quarter)\b")
 _DETERMINERS = r"(?:the|my|our|your|a|an|that|this)"
-_NOT_A_NAME = frozenset({"current", "running", "other", "first", "last", "only", "existing", "active"})
+_NOT_A_NAME = frozenset({"current", "running", "other", "first", "last", "only", "existing", "active", "same",
+                         "all", "every", "both", "these", "those", "of"})
 # "10 MORE minutes", "an EXTRA minute", "ANOTHER 5 minutes": amount words that are not part of the number.
 _AMOUNT_NOISE_RE = re.compile(r"\b(?:more|extra|another|additional)\b")
 
 
+def _amount_seconds(amt: str) -> int:
+    """Seconds in an amount phrase: "another minute" is a minute, "5 more minutes" is 5 minutes."""
+    words = re.sub(r"\banother\b", "a", amt)
+    return parse_duration_seconds(" ".join(_AMOUNT_NOISE_RE.sub(" ", words).split()))
+
+
 @dataclass(frozen=True)
 class TimerTarget:
-    """Which running timer a command means: by name, by its original length, or (both empty) the only one."""
+    """Which running timer a command means: by name and/or by the length it was set for; both empty = the only one."""
 
     label: str = ""
     start_seconds: int = 0
@@ -131,20 +147,32 @@ class TimerTarget:
 @dataclass(frozen=True)
 class TimerAdjust:
     direction: str  # "increase" | "decrease"
-    seconds: int
+    seconds: int  # 0 = a change with no amount the words give ("add some time to the timer"): ask, never guess
     target: TimerTarget
 
 
+def _strip_durations(words: str) -> str:
+    rest = words
+    for pattern, _kind in _FRACTIONS:
+        rest = pattern.sub(" ", rest)
+    rest = _DURATION_RE.sub(" ", rest)
+    return " ".join(rest.split())
+
+
 def timer_target(phrase: str) -> TimerTarget:
-    """Read "the pizza timer" / "timer named pizza" / "the 5 minute timer" / "timer for 1 hour" / "timer in the
-    kitchen" into a :class:`TimerTarget`. A room ("in the kitchen") names no timer: Zoe's timers have no room."""
+    """Read "the pizza timer" / "timer named pizza" / "the 5 minute timer" / "my 10 minute pasta timer" / "timer for
+    1 hour" / "the timer for the pasta" / "timer in the kitchen" into a :class:`TimerTarget`. A name AND a length are
+    both kept (both must match). A room ("in the kitchen") names no timer: Zoe's timers have no room."""
     p = " ".join((phrase or "").lower().split())
     m = re.search(r"\b(?:named|called)\s+(?:the\s+)?(?P<l>.+?)\s*$", p)
     if m:
         return TimerTarget(label=m.group("l").strip(" .!?"))
-    m = re.search(rf"{_TIMER}\s+for\s+(?P<d>.+?)\s*$", p)
-    if m and parse_duration_seconds(m.group("d")):
-        return TimerTarget(start_seconds=parse_duration_seconds(m.group("d")))
+    m = re.search(rf"{_TIMER}\s+for\s+(?:the\s+|my\s+)?(?P<d>.+?)\s*$", p)
+    if m:
+        secs = parse_duration_seconds(m.group("d"))
+        if secs:
+            return TimerTarget(start_seconds=secs)
+        return TimerTarget(label=m.group("d").strip(" .!?"))
     m = re.search(rf"(?P<pre>[a-z0-9' .-]*?)\s*{_TIMER}", p)
     words = (m.group("pre") if m else "").split()
     # The timer's own words follow the LAST determiner ("put the pizza timer" -> "pizza"); with no determiner the
@@ -156,13 +184,14 @@ def timer_target(phrase: str) -> TimerTarget:
     if not pre:
         return TimerTarget()
     secs = parse_duration_seconds(pre)
-    if secs:
-        return TimerTarget(start_seconds=secs)
-    return TimerTarget(label=pre)
+    label = _strip_durations(pre) if secs else pre
+    label = " ".join(w for w in label.split() if w not in ("minute", "minutes", "hour", "hours", "second", "seconds"))
+    return TimerTarget(label=label, start_seconds=secs)
 
 
 def timer_adjust(text: str) -> Optional[TimerAdjust]:
-    """A change of length to a running timer, or None. Needs a timer word AND a parsable amount."""
+    """A change of length to a running timer, or None. ``seconds`` is 0 when the words say "change it" but give no
+    amount the parser can read ("add a few minutes to the timer"): the caller asks, and never starts a new timer."""
     t = " ".join((text or "").lower().split())
     if not re.search(_TIMER, t):
         return None
@@ -171,10 +200,22 @@ def timer_adjust(text: str) -> Optional[TimerAdjust]:
             m = pattern.search(t)
             if not m:
                 continue
-            secs = parse_duration_seconds(" ".join(_AMOUNT_NOISE_RE.sub(" ", m.group("amt")).split()))
-            if secs <= 0:
-                continue
-            return TimerAdjust(direction, secs, timer_target(m.group("tgt")))
+            amt = m.group("amt")
+            secs = _amount_seconds(amt)
+            if secs <= 0 and not _AMOUNTISH_RE.search(amt):
+                continue  # "put the kettle on ... timer": not an amount at all
+            return TimerAdjust(direction, max(0, secs), timer_target(m.group("tgt")))
+    m = _LONGER_SHORTER.search(t)
+    if m:
+        secs = parse_duration_seconds(m.group("amt"))
+        return TimerAdjust("increase" if m.group("dir") == "longer" else "decrease", secs, timer_target(m.group("tgt")))
+    m = _MORE_ON.search(t)
+    if m and not re.search(r"\b(?:set|start|create|new)\b", t):
+        secs = _amount_seconds(m.group("amt"))
+        return TimerAdjust("increase", secs, timer_target(m.group("tgt")))
+    m = re.search(rf"\b(?P<dir>extend|lengthen|shorten)\b(?P<tgt>.*{_TIMER}.*)$", t)
+    if m:
+        return TimerAdjust("decrease" if m.group("dir") == "shorten" else "increase", 0, timer_target(m.group("tgt")))
     return None
 
 
@@ -195,24 +236,32 @@ def timer_pause_resume(text: str) -> Optional[tuple[str, TimerTarget]]:
 
 # ── Delayed commands ─────────────────────────────────────────────────────────
 
-_AMOUNT = rf"(?:another\s+|an?\s+extra\s+)?(?:(?:{NUM}|half\s+an?|a\s+half|a\s+few|few|a\s+couple(?:\s+of)?|couple(?:\s+of)?)[\s-]+)+(?:and\s+a\s+half\s+)?(?:{UNIT})"
+_AMOUNT_WORD = rf"(?:{NUM}|half\s+an?|a\s+half|a\s+few|few|a\s+couple(?:\s+of)?|couple(?:\s+of)?)"
+# BOUNDED repetition: an unbounded "(word[\s-]+)+" over overlapping alternatives ("twenty five" / "twenty") is
+# exponential on a looping transcript.
+_AMOUNT = rf"(?:another\s+|an?\s+extra\s+)?{_AMOUNT_WORD}(?:[\s-]+{_AMOUNT_WORD}){{0,3}}[\s-]+(?:and\s+a\s+half\s+)?(?:{UNIT})"
 _CLOCK = r"\d{1,2}(?::\d{2})?\s*(?:a\.?\s?m\.?|p\.?\s?m\.?|o'?\s?clock)|\d{1,2}:\d{2}|noon|midnight"
-# Strict: an explicit amount of time or clock time ("in 5 minutes", "after an hour", "for 20 minutes", "at 10pm").
+# Strict: an explicit wait or clock time ("in 5 minutes", "after an hour", "at 10pm"). NOT "for 20 minutes": that is
+# a command for NOW (play white noise for 8 hours), it just lasts.
 _DELAY_STRICT_RE = re.compile(
     rf"\bin\s+(?:{_AMOUNT}|half\s+an?\s+hour)\b"
     rf"|\bafter\s+(?:{_AMOUNT})\b"
-    rf"|\bfor\s+(?:the\s+next\s+|another\s+)?(?:{_AMOUNT})\b"
     rf"|\b(?:at|by|until|till)\s+(?:{_CLOCK})(?!\s*(?:%|percent|per\s*cent))\b"
     rf"|\bat\s+\d{{1,2}}\s*$"
 )
-# Loose adds day words and conditions ("tonight", "tomorrow", "when I get home", "every morning"). Device commands
-# only: a song or show title may well contain "tonight" ("play Tonight Tonight").
+# Loose adds day words and conditions ("tonight", "tomorrow", "when I get home", "every morning"), read only in the
+# COMMAND's own clause ("turn off the lights, see you tomorrow" is a command for now). Device commands only: a song
+# or show title may well contain "tonight" ("play Tonight Tonight").
 _DELAY_LOOSE_RE = re.compile(
-    r"\b(?:tonight|tomorrow|later(?:\s+on)?|this\s+(?:evening|afternoon)|in\s+the\s+(?:morning|evening|afternoon)"
+    r"\b(?:tonight|tomorrow|later(?:\s+on)?|this\s+(?:evening|afternoon)"
+    r"|in\s+the\s+(?:morning|evening|afternoon)(?!\s+room)"
     r"|in\s+a\s+(?:bit|while|minute|moment|sec(?:ond)?))\b"
-    r"|\b(?:when|once|as\s+soon\s+as|whenever|if)\s+(?:i|we|you|it|the|someone|everyone|they|he|she)\b"
+    r"|\b(?:when|once|as\s+soon\s+as|whenever|if)\s+"
+    r"(?!you\s+(?:can|could|get|like|want|please|have|do|don't|are|would)\b)"
+    r"(?:i|we|you|it|the|someone|everyone|they|he|she)\b"
     r"|\b(?:every|each)\s+(?:day|night|morning|evening|hour|weekday|week)\b"
 )
+_CLAUSE_END_RE = re.compile(r"[,;.!?]|\s(?:and|then|but)\s")
 
 
 #: What both fast paths say to a command for later: there is no scheduler for device commands yet, so nothing runs now
@@ -221,8 +270,11 @@ DELAYED_COMMAND_REPLY = "I can't schedule that for later yet, so I haven't chang
 
 
 def delayed_command(text: str, *, strict: bool = False) -> bool:
-    """True when the command is for LATER (or for a while, or on a condition), not now."""
+    """True when the command is for LATER (or on a condition), not now."""
     t = " ".join((text or "").lower().replace("’", "'").split())
     if _DELAY_STRICT_RE.search(t):
         return True
-    return not strict and _DELAY_LOOSE_RE.search(t) is not None
+    if strict:
+        return False
+    first_clause = _CLAUSE_END_RE.split(t, maxsplit=1)[0]
+    return _DELAY_LOOSE_RE.search(first_clause) is not None

@@ -180,7 +180,6 @@ def test_intent_router_never_reads_a_timer_change_as_a_list_write():
     [
         ("turn off the kitchen lights in ten minutes", "smart_home"),
         ("at 10pm switch the porch light on", "smart_home"),
-        ("turn on the fan for twenty minutes", "smart_home"),
         ("when I go to bed switch off the hallway light", "smart_home"),
         ("stop the music in half an hour", "music"),
     ],
@@ -196,6 +195,14 @@ def test_a_command_for_later_is_not_run_now(text, domain):
         ("dim the lamp to 30%", ("smart_home", "set_brightness")),
         ("play tonight tonight", ("music", "play")),  # a title, not a time
         ("turn the lights on", ("smart_home", "turn_on")),
+        # a command that LASTS is a command for now (it used to play; the "for" clause is not a delay)
+        ("turn on the fan for twenty minutes", ("smart_home", "turn_on")),
+        ("play white noise for eight hours", ("music", "play")),
+        # a day word or condition OUTSIDE the command's clause, a room name, a politeness tail
+        ("turn off the lights, talk to you later", ("smart_home", "turn_off")),
+        ("turn on the lights in the morning room", ("smart_home", "turn_on")),
+        ("turn on the lights if you can", ("smart_home", "turn_on")),
+        ("play relaxing music for the next hour", ("music", "play")),  # "next hour" is not a track skip
     ],
 )
 def test_now_commands_still_run_now(text, claim):
@@ -362,3 +369,121 @@ def test_a_phrase_that_already_matches_is_untouched():
     """The retry only ever ADDS a claim: every corpus-style phrase with a lead-in that matched before still does."""
     for text in ("please turn off the lights", "hey zoe what's the weather", "can you add milk to the shopping list"):
         assert sky.classify_skybridge_intent(text) == sky.classify_skybridge_intent(text, _filler_retry=False)
+
+
+# ── review round: more shapes of the same classes ───────────────────────────
+
+
+@pytest.mark.parametrize(
+    "text,action,seconds,start",
+    [
+        ("take off a minute from the timer", "decrease", 60, 0),
+        ("add another minute to the timer", "increase", 60, 0),
+        ("another 5 minutes on the timer", "increase", 300, 0),
+        ("make the timer 5 minutes longer", "increase", 300, 0),
+        ("make the timer longer", "increase", 0, 0),  # no amount: asked, never guessed
+        ("add some time to the timer", "increase", 0, 0),
+        ("remove the 5 minute timer", "cancel", 0, 300),  # used to START a 5-minute timer
+    ],
+)
+def test_more_timer_change_shapes_never_create(text, action, seconds, start):
+    i = sky.classify_skybridge_intent(text)
+    assert (i.domain, i.action, i.duration_seconds, i.start_seconds) == ("timer", action, seconds, start), text
+    hit = intent_router.detect_intent(text, log_miss=False)
+    assert hit is None or not hit.name.startswith(("list_", "timer_create")), (text, hit)
+
+
+def test_a_change_with_no_amount_asks(owner):
+    sky._timers.create(owner, "Timer", 300)
+    out = _adjust(owner, "increase", 0)
+    assert out["spoken_summary"] == "How much time should I add to your timer?"
+
+
+def test_name_and_length_must_both_match(owner):
+    sky._timers.create(owner, "Pasta", 300)
+    eggs = sky._timers.create(owner, "Eggs", 600)
+    i = sky.classify_skybridge_intent("add 2 minutes to my 10 minute pasta timer")
+    out = sky._resolve_timer(i, owner)
+    assert out["spoken_summary"] == "I couldn't find a pasta timer."
+    assert sky._timers.list(owner)[-1]["expires_at"] == eggs["expires_at"]
+
+
+def test_a_named_cancel_never_cancels_another_timer(owner):
+    sky._timers.create(owner, "Pasta", 300)
+    sky._timers.create(owner, "Eggs", 600)
+    out = sky._resolve_timer(sky.classify_skybridge_intent("cancel the rice timer"), owner)
+    assert out["spoken_summary"] == "I couldn't find a rice timer." and len(sky._timers.list(owner)) == 2
+    sky._resolve_timer(sky.classify_skybridge_intent("cancel the eggs timer"), owner)
+    assert [t["label"] for t in sky._timers.list(owner)] == ["Pasta"]
+
+
+def test_a_described_cancel_of_the_only_unnamed_timer_works(owner):
+    sky._timers.create(owner, "Timer", 300)
+    out = sky._resolve_timer(sky.classify_skybridge_intent("stop the kitchen timer"), owner)
+    assert out["spoken_summary"] == "Cancelled your timer." and sky._timers.list(owner) == []
+
+
+@pytest.mark.parametrize(
+    "text,action",
+    [
+        ("turn on the lights and turn off the tv", "turn_on"),
+        ("turn the lights on and the fan off", "turn_on"),
+        ("turn off the lights on the first floor", "turn_off"),
+        ("turn the overhead light on the first floor off", "turn_off"),
+    ],
+)
+def test_intent_router_light_direction_reads_the_first_clause(text, action):
+    assert intent_router.detect_intent(text, log_miss=False).slots["action"] == action
+
+
+@pytest.mark.parametrize("text", ["why are the lights on", "i left the lights on", "should i turn off the lights"])
+def test_intent_router_light_questions_are_not_commands(text):
+    hit = intent_router.detect_intent(text, log_miss=False)
+    assert hit is None or hit.name != "smart_home", (text, hit)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["i need to put the kids to bed", "i want to remove my name from the list", "can you play dead", "can you play fair"],
+)
+def test_statements_are_not_stripped_into_writes(text):
+    hit = intent_router.detect_intent(text, log_miss=False)
+    assert hit is None or hit.name not in ("list_add", "list_remove", "music_play"), (text, hit)
+
+
+def test_intent_router_delayed_playback_is_not_started():
+    hit = intent_router.detect_intent("play the news at 6am", log_miss=False)
+    assert hit.name == "music_play" and hit.slots.get("delayed") is True
+    assert asyncio.run(intent_router._execute_music_intent(hit, "p0-user")) == command_shapes.DELAYED_COMMAND_REPLY
+    assert not intent_router.detect_intent("play white noise for 8 hours", log_miss=False).slots.get("delayed")
+
+
+@pytest.mark.parametrize(
+    "text,action,list_type,list_name",
+    [
+        ("remove milk from the grocery shopping list", "remove_item", "shopping", ""),
+        ("remove milk from this list", "remove_item", "shopping", ""),
+    ],
+)
+def test_typed_and_demonstrative_lists_are_not_names(text, action, list_type, list_name):
+    i = sky.classify_skybridge_intent(text)
+    assert (i.action, i.list_type, i.list_name) == (action, list_type, list_name)
+
+
+@pytest.mark.parametrize("text", ["complete it on the list", "delete it in the list", "remove that from the list"])
+def test_a_pronoun_is_never_a_list_item(text):
+    i = sky.classify_skybridge_intent(text)
+    assert i is None or i.action not in ("complete_item", "remove_item"), (text, i)
+
+
+def test_membership_in_a_missing_named_list_never_answers_about_another_list():
+    lists, items = _lists()
+    spoken, found = sky._list_contains_answer(
+        SkybridgeIntent(domain="lists", action="contains", item_text="milk", list_name="hardware"), lists, items)
+    assert spoken == "I couldn't find a list called hardware." and found is None
+
+
+def test_delay_reader_is_linear_on_a_looping_transcript():
+    started = time.monotonic()
+    command_shapes.delayed_command("turn off the lights in " + "twenty five " * 40 + "zebra")
+    assert time.monotonic() - started < 0.5

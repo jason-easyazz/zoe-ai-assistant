@@ -118,6 +118,13 @@ def _filler_patterns(lang: str) -> tuple[tuple["re.Pattern[str]", ...], tuple["r
     return lead, tail, tuple(str(w).lower() for w in sec.get("not_after_lead") or [])
 
 
+def _starts_with(text: str, frag: str) -> bool:
+    try:
+        return re.match(rf"(?:{frag})(?!\w)", text, re.IGNORECASE) is not None
+    except re.error:
+        return False
+
+
 def strip_command_filler(text: str) -> str:
     """``text`` without its leading politeness / wake words and trailing "please" / "for me" ("Could you please turn off
     the lights for me" -> "turn off the lights"), or ``text`` unchanged when there is none, when nothing would be left,
@@ -138,7 +145,7 @@ def strip_command_filler(text: str) -> str:
                     if m and m.end() < len(out):
                         out, changed, stripped_lead = out[m.end():], True, True
                         break
-            if stripped_lead and any(re.match(rf"{re.escape(w)}(?!\w)", out, re.IGNORECASE) for w in not_after):
+            if stripped_lead and any(_starts_with(out, w) for w in not_after):
                 continue
             changed = True
             while changed:
