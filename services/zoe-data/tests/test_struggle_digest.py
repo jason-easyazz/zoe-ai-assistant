@@ -193,3 +193,34 @@ async def test_a_report_that_hits_the_row_limit_says_so(monkeypatch, fresh):
     rep = await dg.digest(viewer_id=A, user_ids=[A])
     assert rep["total"] == 2 and rep["truncated"] is True
     assert "total=2+" in dg.summary_line(rep)
+
+
+
+async def test_a_distress_turn_keeps_no_words(monkeypatch, fresh):
+    """Regression (review follow-up): a turn the distress hand-off ENFORCES is off the record for every writer, so its
+    struggle row holds categories only. Control: with the hand-off in shadow the same words ARE kept - the floor is what
+    blanks them, not luck."""
+    import distress_handoff as dh
+
+    monkeypatch.setenv(dh.ENV, "enforce")
+    await feed(item("I want to die", session="sd1"), item("I want to die", session="sd1"))
+    assert fresh.data and fresh.data[-1]["signal"] == "RE_ASK" and fresh.data[-1]["summary"] == ""
+    monkeypatch.setenv(dh.ENV, "shadow")
+    await feed(item("I want to die", session="sd2"), item("I want to die", session="sd2"))
+    assert fresh.data[-1]["summary"] == "i want to die -> i want to die"
+
+
+def test_off_runs_no_detector_machinery(monkeypatch, fresh):
+    """``off``: no queue, no worker, no notes, no rows - the hooks only count."""
+    monkeypatch.setenv("ZOE_STRUGGLE_DETECT", "off")
+
+    async def run():
+        sd.note_route("what time is it", {"domain": "time", "score": 0.9})
+        sd.note_brain("s1", "flue", "ok")
+        assert sd.observe("chat", "what time is it", "Noon.", A, "s1") is False
+        rep = await dg.log_nightly_summary()
+        return rep
+
+    assert asyncio.run(run()) is None
+    assert sd._STATE["queue"] is None and sd._STATE["worker"] is None and not sd._ROUTES and not sd._BRAINS
+    assert fresh.data == [] and sd.stats()["observed"] == 1 and sd.stats()["dropped_off"] == 1

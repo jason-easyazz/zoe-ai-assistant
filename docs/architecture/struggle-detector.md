@@ -82,7 +82,7 @@ JSON reason codes. Suggested fix types: `router_training`, `router_latency`, `ca
 
 | flag | default | meaning |
 |---|---|---|
-| `ZOE_STRUGGLE_DETECT` | `shadow` | `off` = hooks return at once; `shadow` = detect + store + report, nothing user-facing; `on` = shadow + a one-line ack of a bare "that was wrong" that no tier answered + the owner's line in the admin morning brief |
+| `ZOE_STRUGGLE_DETECT` | `shadow` | `off` = no detector machinery runs (no queue, worker, notes or rows; the hooks return after one env read and only bump the in-process `observed` / `dropped_off` counters); `shadow` = detect + store + report, nothing user-facing; `on` = shadow + a one-line ack of a bare "that was wrong" that no tier answered + the owner's line in the admin morning brief |
 | `ZOE_STRUGGLE_WINDOW_S` | 45 | pair-signal window (clamped 5..300) |
 | `ZOE_STRUGGLE_RETENTION_DAYS` | 90 | row retention |
 | `ZOE_STRUGGLE_QUEUE_MAX` | 256 | worker queue bound |

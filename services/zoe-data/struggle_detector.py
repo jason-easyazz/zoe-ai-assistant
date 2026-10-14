@@ -3,7 +3,8 @@
 (pure); this module is the runtime around them.
 
 ``ZOE_STRUGGLE_DETECT`` = off | **shadow (default)** | on, read per call.
-  * off    - the hooks return at once: no queue, no notes, no rows.
+  * off    - NO detector machinery runs: no queue, no worker, no route/brain notes, no rows, no report reads. The hooks
+             still return after one env read, bumping only the in-process ``observed`` / ``dropped_off`` counters.
   * shadow - detect + store + report (admin endpoint, CLI, nightly ``STRUGGLE_SUMMARY`` line). NOTHING user-facing changes.
   * on     - shadow, plus the two user-facing pieces: a one-line acknowledgement of a bare "that was wrong" that no other tier
              answered (``ack_line``) and the owner's struggles line in the admin morning brief.
