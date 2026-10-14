@@ -499,6 +499,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_BRAIN_KV_WARM_ON_WAKE": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_flue_client.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_BRAIN_PREWARM_ON_WAKE": {
         "defaults": [
           "'1'",

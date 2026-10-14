@@ -1852,6 +1852,114 @@ async def _run_turn_aggregated_wire2(
     yield _FALLBACK_TEXT
 
 
+# ── Wake-time KV prefix warm (ZOE_BRAIN_KV_WARM_ON_WAKE, default ON) ─────────
+#
+# The brain has ONE llama-server slot, and what makes a first turn fast is that the system prompt + tool block
+# (~2.7k tokens, byte-identical for every user and every session: the member's words, memory, persona and identity
+# all ride the USER message, behind that prefix) is already resident in it. After an idle gap it is not: the post-turn
+# passes (brain_slot_guard) leave a helper prompt in the slot, so the next turn prefills the whole prefix cold
+# (`FLUE_PROMPT_CACHE first_cache_n=0 first_prompt_n~2.7k`, ~4.8 s to first token vs ~1.1-1.7 s warm;
+# docs/knowledge/brain-prefix-cache-2026-10-12.md "Not done").
+#
+# The wake word fires 2-4 s before the command, so the wake handler asks the sidecar for one throwaway turn that
+# carries NOTHING but a fixed instruction: no user id (a guest-shaped turn, so no identity envelope, no persona,
+# no memory/recall block, nothing member-scoped), on its own fresh session (nothing joins a real conversation's
+# history and no session is refreshed). The model re-prefills the shared prefix into the slot and answers one
+# word. The command's turn then finds the prefix resident. The warm is therefore the SAME for a guest and a member,
+# which is the point: identity is not an input.
+#
+# Bounded and polite: skipped while a brain turn is in flight or the conversation is still hot (the prefix is
+# resident), one warm at a time, hard wall-clock cap, never raises, and it brackets itself with brain_slot_guard
+# so the post-turn helpers do not evict what it just loaded.
+_KV_WARM_MESSAGE = "Reply with the single word: ready."
+_KV_WARM_MAX_S = 20.0
+_kv_warm_inflight = False
+
+
+def kv_warm_enabled() -> bool:
+    """ZOE_BRAIN_KV_WARM_ON_WAKE - per-call env read; default ON, only an explicit falsy word turns it off."""
+    return (os.environ.get("ZOE_BRAIN_KV_WARM_ON_WAKE") or "1").strip().lower() not in (
+        "0", "false", "no", "off", "disabled")
+
+
+async def _kv_warm_turn(session_id: str) -> tuple[str, int, int]:
+    """Run the throwaway warm turn; returns (outcome, first_prompt_n, first_cache_n) (-1 = not reported)."""
+    import httpx
+
+    headers = dict(_headers())
+    headers["Accept"] = _NDJSON_CONTENT_TYPE
+    async with httpx.AsyncClient(timeout=_KV_WARM_MAX_S) as client:
+        async with client.stream(
+            "POST", _endpoint(session_id, stream=True),
+            content=_request_payload(_KV_WARM_MESSAGE), headers=headers,
+        ) as resp:
+            if resp.status_code >= 300:
+                return f"http_{resp.status_code}", -1, -1
+            if _NDJSON_CONTENT_TYPE not in (resp.headers.get("content-type") or ""):
+                return "not_ndjson", -1, -1
+            async for line in resp.aiter_lines():
+                line = (line or "").strip()
+                if not line:
+                    continue
+                try:
+                    chunk = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(chunk, dict):
+                    continue
+                if chunk.get("done"):
+                    rounds = chunk.get("prompt_cache")
+                    first = rounds[0] if isinstance(rounds, list) and rounds and isinstance(rounds[0], dict) else {}
+                    try:
+                        return "warmed", int(first.get("prompt_n")), int(first.get("cache_n"))
+                    except (TypeError, ValueError):
+                        return "warmed", -1, -1
+                if "error" in chunk:
+                    return "error_terminal", -1, -1
+    return "no_terminal", -1, -1
+
+
+async def warm_kv_prefix() -> str:
+    """Prime the brain's llama-server slot with the shared system+tools prefix (see the block above).
+
+    Fire-and-forget for the wake handler. Returns an outcome label (``warmed`` / ``skipped:...`` / ``failed:...``)
+    for logs and tests; NEVER raises, whatever the sidecar does. Carries no identity of any kind.
+    """
+    global _kv_warm_inflight
+    if not kv_warm_enabled():
+        return "skipped:off"
+    if _kv_warm_inflight:
+        return "skipped:inflight"
+    if brain_slot_guard.is_hot():
+        return "skipped:hot"   # a turn is running or ended < ZOE_BRAIN_SLOT_QUIET_S ago: the prefix is resident
+    import uuid
+
+    session_id = f"kvwarm-{uuid.uuid4().hex[:10]}"
+    _kv_warm_inflight = True
+    brain_slot_guard.turn_started()
+    t0 = asyncio.get_running_loop().time()
+    outcome, prompt_n, cache_n = "failed:unknown", -1, -1
+    try:
+        outcome, prompt_n, cache_n = await asyncio.wait_for(_kv_warm_turn(session_id), timeout=_KV_WARM_MAX_S)
+    except asyncio.TimeoutError:
+        outcome = "failed:timeout"
+    except asyncio.CancelledError:
+        outcome = "failed:cancelled"
+        raise
+    except Exception as exc:  # noqa: BLE001 - a warm-up must never break the wake path
+        outcome = f"failed:{type(exc).__name__}"
+    finally:
+        _kv_warm_inflight = False
+        brain_slot_guard.turn_finished()
+        # A dedicated line, NOT FLUE_PROMPT_CACHE: the warm is cold by design, and mixing its rows into that log would
+        # corrupt the live miss-rate (share of turns with first_cache_n=0) the prefix-cache doc tells operators to read.
+        logger.info(
+            "FLUE_KV_WARM session=%s outcome=%s first_prompt_n=%d first_cache_n=%d ms=%d",
+            session_id, outcome, prompt_n, cache_n, round((asyncio.get_running_loop().time() - t0) * 1000),
+        )
+    return outcome
+
+
 def _owed_questions(user_id: str) -> list:
     """The questions the reply of THIS turn is meant to voice: the pending contact offer the seam injected
     (``contacts_conversation.record_asked``, S16). Never raises."""
