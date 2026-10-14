@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from fastapi import HTTPException
 
+import command_shapes
 import contacts_conversation as _cc
 from time_utils import today_for_zoe_tz
 from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS
@@ -537,6 +538,12 @@ _SMART_HOME_RE = re.compile(
     re.IGNORECASE,
 )
 
+_SMART_HOME_QUESTION_RE = re.compile(
+    r"^(?:please\s+)?(?:are|is|were|was|which|what|why|when|who|how|should|shall|could\s+i|can\s+i|do|does|did"
+    r"|have\s+i|i\s+(?:left|think|forgot|wonder|noticed))\b",
+    re.IGNORECASE
+)
+
 # === MATH / CALCULATION (ZOE-10) ===
 # Pure arithmetic fast-path — group 1 captures the numeric expression.
 _CALCULATE_RE = re.compile(
@@ -790,6 +797,7 @@ def detect_intent(
     log_miss: bool = True,
     context: "Optional[ConversationContext]" = None,
     user_id: str = "unknown",
+    _filler_retry: bool = True,
 ) -> Optional[Intent]:
     t = _normalize_chat_intent_text(text)
 
@@ -1281,16 +1289,26 @@ def detect_intent(
             return Intent("daily_briefing", {})
 
     # --- SMART HOME LIGHTS (ZOE-9) ---
-    if _SMART_HOME_RE.search(t):
-        # Determine action
+    # A QUESTION about the lights ("are any lights on") is not a command: it used to switch them ON.
+    if _SMART_HOME_RE.search(t) and not _SMART_HOME_QUESTION_RE.match(t):
+        # Determine action from the FIRST clause ("turn on the lights and turn off the tv" is an ON), and in it OFF
+        # words first: "turn off the lights on the first floor" contains "lights on".
+        first = re.split(r"\s(?:and|then|but)\s|[,;]", t, maxsplit=1)[0]
         if re.search(r'\bdim\b', t):
             action = "dim"
         elif re.search(r'\bbrighten\b', t):
             action = "brighten"
+        elif re.search(r'\b(?:turn|switch|flip|shut)\s+off\b|\b(?:turn|switch|flip|shut)\s+.+\boff\s*$'
+                       r'|\bdeactivate\b|\blights?\s+off\b', first):
+            action = "turn_off"
         elif re.search(r'\b(?:turn|switch|flip)\s+on\b|\blights?\s+on\b', t):
             action = "turn_on"
         else:
             action = "turn_off"
+        if command_shapes.delayed_command(t):
+            # "turn off the lights in 5 minutes": a command for LATER is never run now (it was, 14 of 14 in HA's
+            # corpus); _execute_smart_home_intent answers it honestly instead.
+            action = "delayed"
         # Attempt to extract a room name
         _room_m = re.search(
             r'\b(bedroom|kitchen|living\s+room|bathroom|lounge|office|'
@@ -1299,6 +1317,12 @@ def detect_intent(
         )
         room = _room_m.group(1).replace(" ", "_") if _room_m else None
         return Intent("smart_home", {"action": action, "entity": "light", "room": room})
+
+    # A change to a RUNNING timer ("add 5 minutes to the timer", "take a minute off the pizza timer", "pause the
+    # timer") has no executor in this module; the Skybridge timer store owns it. The list-add/remove patterns below
+    # used to read it as a list write ("add 1 hour to kitchen timer" -> list_add), so it is claimed by nobody here.
+    if command_shapes.timer_adjust(t) is not None or command_shapes.timer_pause_resume(t) is not None:
+        return None
 
     # --- TIMER CREATE ---
     for pattern in [
@@ -1442,12 +1466,16 @@ def detect_intent(
     # --- LIST REMOVE ---
     for pattern in [
         r"^(?:remove|delete|take off|cross off) (.+?) from (?:the |my )?(.+?) ?list$",
-        r"^(?:remove|delete|take off|cross off) (.+?) from (?:the |my )?(.+)$",
+        # a LIST it is removed from ("remove milk from my diet" is not a list command)
+        r"^(?:remove|delete|take off|cross off) (.+?) from (?:the |my )?"
+        r"(shopping|grocery|groceries|todo|to do|to-do|personal|work|bucket|tasks?)$",
         r"^(?:we got|got|we have) (.+)$",
     ]:
         m = re.match(pattern, t)
         if m:
             item = m.group(1).strip()
+            if not command_shapes.plain_list_item(item):
+                break  # "remove all but the milk", "the second item", "everything": never a guessed delete
             lst = m.group(2).strip() if m.lastindex >= 2 else "shopping"
             return Intent("list_remove", {"item": item, "list_type": _normalize_list(lst)})
 
@@ -1475,7 +1503,11 @@ def detect_intent(
     )
 
     m = _MUSIC_PLAY_RE.match(t)
-    if m:
+    # "play dead" / "play fair" / "play a game" are not music (the Skybridge music matcher's stopwords, same words).
+    if m and not re.match(r"^play\s+(?:a\s+)?(?:game|games|along|nice|fair|pretend|dead|catch|with)\b", t):
+        if command_shapes.delayed_command(t, strict=True):
+            # "play the news at 6am": playback for LATER is never started now (_execute_music_intent says so).
+            return Intent("music_play", {"query": m.group(1).strip(), "delayed": True})
         return Intent("music_play", {"query": m.group(1).strip()})
 
     m = _VOLUME_SET_RE.match(t)
@@ -1690,6 +1722,19 @@ def detect_intent(
         if _ctx_name:
             from conversation_context import ConversationContext as _CC  # noqa: F401 (type-check only)
             return Intent(_ctx_name, _ctx_slots or {}, confidence=0.85)
+
+    if _filler_retry:
+        # Nothing matched the words as said: once more without politeness / wake words ("can you remind me to ...",
+        # "could you please turn the lights off for me"), like HA's skip words. The anchored patterns above never see
+        # a lead-in otherwise; a phrase that already matched is untouched.
+        from conversation_cues import strip_command_filler
+
+        bare = strip_command_filler(text)
+        if bare != (text or "").strip():
+            hit = detect_intent(bare, log_miss=False, context=context if not isinstance(context, str) else None,
+                                user_id=user_id, _filler_retry=False)
+            if hit is not None:
+                return hit
 
     if log_miss:
         logger.info("intent_miss: %s", text)
@@ -3816,6 +3861,16 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             logger.warning("memory_forget_entity: night-mind erase failed (%s)", type(exc).__name__)
             return ("I couldn't finish erasing what I'd noticed about that just now, so I can't say it's forgotten yet. "
                     "I won't bring it up meanwhile - please tell me again in a moment.")
+        # ... and the struggle detector's summaries of turns that named it (struggle_events): same rule, fail closed
+        try:
+            import struggle_detector
+            _sd = await struggle_detector.erase_entity(user_id, name)
+            if _sd:
+                logger.info("memory_forget_entity: erased %d struggle row(s)", _sd)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_forget_entity: struggle-row erase failed (%s)", type(exc).__name__)
+            return ("I couldn't finish clearing my notes about that conversation just now, so I can't say it's forgotten yet. "
+                    "I won't bring it up meanwhile - please tell me again in a moment.")
         # ... and the verbatim transcript (chat_messages: the digest's source, the session history): the name's span becomes a fixed
         # marker in place (ids and timestamps kept), plus the in-process turn marks. Same rule: a failure is not "forgotten".
         try:
@@ -4626,6 +4681,8 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             forecast=bool(intent.slots.get("forecast")),
             advice=str(intent.slots.get("advice") or ""),
             location=str(intent.slots.get("location") or ""),
+            focus=str(intent.slots.get("focus") or ""),
+            day=str(intent.slots.get("day") or ""),
         )
 
     if intent.name == "list_show":
@@ -4895,7 +4952,8 @@ def _spoken_day(raw: str) -> str:
 
 
 async def _execute_weather_direct(user_id: str, forecast: bool = False,
-                                  advice: str = "", location: str = "") -> Optional[str]:
+                                  advice: str = "", location: str = "",
+                                  focus: str = "", day: str = "") -> Optional[str]:
     """Direct weather path used by voice fast-intent execution.
 
     This bypasses mcporter so household voice weather works even if external
@@ -4903,6 +4961,9 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False,
 
     `advice` ("rain"|"warmth") returns a DIRECT yes/no answer to questions like
     "do I need an umbrella" / "should I take a jacket" instead of a forecast dump.
+
+    `focus`/`day` ("high"|"low"|"rain"|"outlook", "today"|"tonight"|"tomorrow") answer
+    "how hot is it going to get today" with the asked-for number FIRST (weather_speech).
 
     `location` is a free-text place the user named ("weather in Perth"). When set
     it is geocoded and used INSTEAD of the user's saved home area; if it can't be
@@ -4917,6 +4978,7 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False,
             _row_to_prefs, _resolve_location, _geocode,
             _get_current, _get_forecast,
         )
+        from weather_speech import WeatherAsk, speak_current, speak_weather
         adhoc = bool(location.strip())
         async with get_db_ctx() as db:
             if adhoc:
@@ -4959,7 +5021,8 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False,
                 today_desc = cur_desc
                 try:
                     f = await _get_forecast(lat, lon)
-                    d0 = (f.get("daily") or [{}])[0]
+                    # forecast["daily"] starts TOMORROW; today's own range is ["today"].
+                    d0 = f.get("today") or {}
                     today_hi = d0.get("high")
                     today_desc = (str(d0.get("description", "")) or cur_desc).lower()
                 except Exception:
@@ -4990,9 +5053,15 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False,
                     return f"Yes, I'd take a jacket{reason} in {city_name}."
                 temp_part = f" — it's around {_say_num(round(ref))} degrees" if ref is not None else ""
                 return f"No, you should be fine without a jacket{temp_part} in {city_name}."
+            if focus:
+                # A specific ask ("how hot is it going to get today"): lead with the
+                # asked-for fact, keep it short - never the multi-day dump below.
+                f = await _get_forecast(lat, lon)
+                return speak_weather(WeatherAsk(focus, day), current, f, city_name)
             if forecast:
                 f = await _get_forecast(lat, lon)
-                daily = f.get("daily", [])[:5]
+                # Three days is already a long spoken reply; five read as a wall of numbers.
+                daily = f.get("daily", [])[:3]
                 if not daily:
                     return f"I couldn't get the forecast for {city_name} right now."
                 lines = [f"Here's the forecast for {city_name}."]
@@ -5004,30 +5073,30 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False,
                     lines.append(f"{day}, a high of {_say_num(hi)} and a low of {_say_num(lo)} degrees, {desc}.")
                 return " ".join(lines)
             temp = current.get("temp")
-            desc = current.get("description", "")
             feels = current.get("feels_like")
             if temp is None:
                 return f"I couldn't get the weather for {city_name} right now."
-            # Speak naturally: "18.3°C (overcast)" → "18 point 3 degrees and overcast".
-            desc_part = f" and {desc}" if desc else ""
-            # Whole degrees for speech: "17 degrees", never "17 point 1 degrees"
-            # — more natural spoken, and it makes the reply stitchable by the
+            # Whole degrees for speech: "17 degrees", never "17 point 1 degrees" -
+            # more natural spoken, and it makes the reply stitchable by the
             # voice segment cache (voice_stitch works on the integer vocab).
-            raw_temp = temp
-            try:
-                temp = round(float(temp))
-            except (TypeError, ValueError):
-                pass
-            msg = f"It's {_say_num(temp)} degrees{desc_part} in {city_name}"
+            feels_whole = None
             if feels is not None:
                 try:
-                    # Gate on the REAL delta, not the rounded speech value —
+                    # Gate on the REAL delta, not the rounded speech value -
                     # rounding must not change whether feels-like is mentioned.
-                    if abs(float(feels) - float(raw_temp)) > 2:
-                        msg += f", and it feels like {_say_num(round(float(feels)))} degrees"
+                    if abs(float(feels) - float(temp)) > 2:
+                        feels_whole = round(float(feels))
                 except Exception:
                     pass
-            return msg + "."
+            # Today's high rides on the plain current reading ("..., with a top of 27
+            # today") when the forecast has it; a failed/cold forecast just omits it.
+            today_high = None
+            try:
+                t = (await _get_forecast(lat, lon)).get("today")
+                today_high = round(float(t["high"])) if isinstance(t, dict) and t.get("high") is not None else None
+            except Exception:
+                pass
+            return speak_current(city_name, current, today_high=today_high, feels=feels_whole)
     except Exception as exc:
         logger.warning("direct weather intent failed: %s", exc)
         return None
@@ -5256,6 +5325,8 @@ async def _post_music_ha_control(client, ha_url: str, payload: dict) -> Optional
 
 async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
     """Route music intents to HA media_player via zoe-data HA bridge."""
+    if (intent.slots or {}).get("delayed"):
+        return command_shapes.DELAYED_COMMAND_REPLY  # nothing plays now, nothing is queued
     try:
         import os as _os, httpx as _httpx
         ha_url = _os.environ.get("ZOE_HA_BRIDGE_URL", "http://127.0.0.1:8007")
@@ -5905,6 +5976,8 @@ async def _execute_smart_home_intent(intent: Intent, user_id: str) -> Optional[s
     properly (real entity lists, class resolution, room context, ambiguity).
     Delegate instead: one resolver, one behaviour, no invented ids.
     """
+    if (intent.slots or {}).get("action") == "delayed":
+        return command_shapes.DELAYED_COMMAND_REPLY  # nothing runs now, nothing is queued
     try:
         from smart_home_service import resolve_smart_home
 

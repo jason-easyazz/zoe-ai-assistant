@@ -744,4 +744,11 @@ def route(text: str) -> dict:
         # decision None → similarity behavior unchanged (brain-safe)
     if "two_stage" not in out:
         _apply_question_precedence(text, out, scores)
+    try:  # the struggle detector's view of this turn (an O(1) deque append; never raises)
+        import struggle_detector
+
+        struggle_detector.note_route(text, out, two_stage_active=(hm == "active"),
+                                     two_stage_failed=(hm == "active" and "two_stage" not in out))
+    except Exception:  # noqa: BLE001
+        pass
     return out

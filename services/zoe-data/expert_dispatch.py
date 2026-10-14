@@ -274,8 +274,16 @@ def _plan(domain: str, text: str):
         # Advice questions get a DIRECT yes/no answer, not a forecast dump.
         if re.search(r"\bumbrella\b|\brain(coat)?\b|will\s+it\s+rain|going\s+to\s+rain", low):
             return ("weather", {"advice": "rain"}, "read")
-        if re.search(r"\bjacket\b|\bcoat\b|\bjumper\b|\bwarm(ly)?\b|\bcold\b|"
-                     r"what\s+should\s+i\s+wear|do\s+i\s+need\s+a", low):
+        if re.search(r"\bjacket\b|\bcoat\b|\bjumper\b|what\s+should\s+i\s+wear|do\s+i\s+need\s+a", low):
+            return ("weather", {"advice": "warmth"}, "read")
+        # "how hot is it going to get today" / "what's the high" / "how cold tonight":
+        # lead with the asked-for number, short (voice). Checked BEFORE the bare
+        # warm/cold advice below, which would answer a jacket yes/no to "how cold".
+        from weather_speech import classify_weather_ask
+        ask = classify_weather_ask(low)
+        if ask is not None and (ask.focus in ("high", "low", "outlook") or ask.day):
+            return ("weather", {"focus": ask.focus, "day": ask.day, "forecast": ask.action == "forecast"}, "read")
+        if re.search(r"\bwarm(ly)?\b|\bcold\b", low):
             return ("weather", {"advice": "warmth"}, "read")
         # Otherwise: forecast for time-shifted questions, current for "right now".
         fc = bool(re.search(

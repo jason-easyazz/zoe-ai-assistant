@@ -352,7 +352,7 @@ def test_the_cache_is_bounded(monkeypatch):
 
 
 # ── the measurement (needs the bge model on disk) ───────────────────────────────────────────────────────────────────────
-def test_held_out_class_exact_with_the_real_embedding_is_measured_not_assumed():
+def test_held_out_class_exact_with_the_real_embedding_is_measured_not_assumed(monkeypatch):
     """The number the ledger asks for. Skips (never passes) without the model. Floors are the first run on the held-out split, rounded down."""
     try:
         from fastembed import TextEmbedding
@@ -379,6 +379,10 @@ def test_held_out_class_exact_with_the_real_embedding_is_measured_not_assumed():
     assert with_head["plain_fp"] <= without["plain_fp"] + 3, (with_head["plain_fp"], without["plain_fp"])
     # break-the-fix twin: the same held-out set with the head neutered is the word list
     restraint_head.set_embedder(None)
+    # ``set_embedder(None)`` returns to the live ``semantic_router`` lookup, which answers whenever ANY earlier test in the process
+    # loaded the router's real model (test_pull_not_push does, through fast_tiers): the twin would then still run the head (267 != 181).
+    # The twin is "no head", so close that fallback explicitly instead of trusting process history.
+    monkeypatch.setattr(restraint_head, "_live_embedder", lambda: None)
     off = ev.score(held, lambda t: restraint.classify(t, head=True))
     assert off["hit"] == without["hit"]
 

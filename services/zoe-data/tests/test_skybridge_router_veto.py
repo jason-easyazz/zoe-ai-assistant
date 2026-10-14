@@ -427,7 +427,6 @@ def _wire_voice(monkeypatch, router: dict | None):
     monkeypatch.setattr(voice_tts, "_run_voice_memory_passes", _none)
     monkeypatch.setattr(voice_tts, "_spawn_bg", lambda coro: coro.close())
     monkeypatch.setattr(voice_tts, "_resolve_recent_panel_session_user", _none)
-    monkeypatch.setattr(voice_tts, "_resolve_panel_default_user", _none)
     monkeypatch.setattr(voice_tts, "_VOICE_SESSIONS", {})
     monkeypatch.setattr(voice_tts, "_PENDING_CONFIRMATIONS", {})
 
