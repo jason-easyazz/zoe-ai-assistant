@@ -31,7 +31,7 @@ server serves only Resemblyzer profiles. The spec is the measured record
 ## The rule that keeps the models apart: `model_id`
 
 Resemblyzer and ResNet34 are **both 256-d**, so a shape check cannot tell them apart. Every `speaker_profiles` row carries a `model_id`
-(migration **0049**: one nullable column, existing rows backfilled to `resemblyzer`, NULL / empty still means `resemblyzer`):
+(migration **0051**: one nullable column, existing rows backfilled to `resemblyzer`, NULL / empty still means `resemblyzer`):
 
 - `resemblyzer`
 - `wespeaker_resnet34+i8qdq-u8s8+c1` = model + quantisation + centring-vector version. Change any of the three and the id must change
@@ -90,7 +90,7 @@ Model steps on the Jetson hold `/tmp/zoe-voice-harness.lock`, run `nice -n 10`, 
 2. **Push it and let the Pi run the daemon's own check:** `bash scripts/setup/fetch_speaker_models.sh push ~/.cache/zoe-speaker-resnet34` copies
    `wespeaker_resnet34_i8qdq_u8s8.onnx` to `/home/pi/.zoe-voice/models/` and runs `verify` there (pin + artifacts + self-test; exit 3 = the
    daemon would refuse it). Re-run `fetch_speaker_models.sh verify` on the Pi after any ORT upgrade.
-3. **Migrate, then deploy zoe-data:** `bash scripts/deploy/migrate.sh` (0049, additive, rerun-safe) BEFORE the restart - the new queries read
+3. **Migrate, then deploy zoe-data:** `bash scripts/deploy/migrate.sh` (0051, additive, rerun-safe) BEFORE the restart - the new queries read
    `model_id`. Still nothing changes: the flag is unset.
 4. **Deploy the daemon:** `bash scripts/setup/deploy-pi-voice.sh` (it now also ships `zoe_speaker_resnet34.py`, the artifacts JSON and
    `fetch_speaker_models.sh`). Replay-gate it as any voice-path change (`scripts/maintenance/voice_regression_probe.py` under the harness lock).
@@ -128,7 +128,7 @@ Model steps on the Jetson hold `/tmp/zoe-voice-harness.lock`, run `nice -n 10`, 
 ## Tests
 
 `services/zoe-data/tests/test_speaker_models.py` (registry, the claim matrix per mode, sync / identify never cross models, the finished-profile
-enrolment, per-model adaptation and the anchor gate's zero-update lookalike, enrolment state, script, migration 0049 and the single head,
+enrolment, per-model adaptation and the anchor gate's zero-update lookalike, enrolment state, script, migration 0051 and the single head,
 drift and pins), `tests/unit/test_speaker_resnet34.py` (front end, centring, self-test drift / slowness refusals, graph-level refusal, loader
 pins, cross-model matching, length-group decisions, the 5-clip run with re-ask, dual acting only on Resemblyzer through the daemon's real
 dispatch, default mode byte-identical) and `tests/unit/test_speaker_dual_compare.py`. Each guard has a negative control; the key ones were

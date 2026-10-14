@@ -2,13 +2,13 @@
 
 Why this exists. Resemblyzer and WeSpeaker ResNet34 are BOTH 256-d, so a shape check cannot tell their vectors apart: a
 Resemblyzer profile scored against a ResNet34 embedding (or the reverse) runs without error and returns a meaningless
-number. Every ``speaker_profiles`` row therefore carries a ``model_id`` (migration 0049) and **profiles of different
+number. Every ``speaker_profiles`` row therefore carries a ``model_id`` (migration 0051) and **profiles of different
 model_ids are never compared** - not in the sync feed, not in ``/identify``, not in the panel's matcher, not in adaptation.
 
 A ``model_id`` names everything that changes the embedding space:
 
   ``resemblyzer``                       the incumbent (GE2E d-vector); also what a NULL / empty column means (every row
-                                        enrolled before 0049).
+                                        enrolled before 0051).
   ``wespeaker_resnet34+i8qdq-u8s8+c1``  WeSpeaker ResNet34, static INT8 QDQ (U8 activations, S8 per-channel weights),
                                         centred on public-cohort mean vector ``c1``. Change the model file, the
                                         quantisation or the centring vector and the id MUST change - an INT8 profile and
@@ -41,7 +41,7 @@ RESNET34_MODEL_ID = "wespeaker_resnet34+i8qdq-u8s8+c1"
 
 MODES = ("resemblyzer", "dual", "resnet34")
 
-#: SQL that reads a row's model id, treating NULL / '' (every pre-0049 row) as the legacy model.
+#: SQL that reads a row's model id, treating NULL / '' (every pre-0051 row) as the legacy model.
 MODEL_SQL = "COALESCE(NULLIF(model_id, ''), 'resemblyzer')"
 
 #: record section 4.3 - cosine of the CENTRED embedding to the CENTRED centroid, impostors = public far-field speakers.

@@ -313,16 +313,32 @@ const tick = () => new Promise((r) => setTimeout(r, 5));
     assert.strictEqual(trace.disconnects.length, 1, 'room disconnected exactly once');
   }
 
-  // ── 5. pagehide/beforeunload release the mic (kiosk reload) ───────────────
-  for (const evt of ['pagehide', 'beforeunload']) {
+  // ── 5. pagehide releases the mic (kiosk reload); beforeunload does NOT ─────
+  // beforeunload is a request: a cancelled / handed-off navigation fires it and the page stays alive, so it must leave a live
+  // conversation running. A bfcache pagehide (persisted) is not a teardown either.
+  {
     const { trace, sandbox, listeners } = run();
     await sandbox.window.__zoeConv.start();
     await tick();
-    assert.ok((listeners[evt] || []).length, evt + ' listener registered');
-    listeners[evt].forEach((fn) => fn());
+    assert.ok((listeners.pagehide || []).length, 'pagehide listener registered');
+    assert.strictEqual((listeners.beforeunload || []).length, 0, 'no beforeunload listener may stop the conversation');
+    (listeners.beforeunload || []).forEach((fn) => fn());
+    listeners.pagehide.forEach((fn) => fn({ persisted: true }));
     await tick();
-    assert.deepStrictEqual(trace.mic, [true, false], evt + ' must release the mic');
-    assert.strictEqual(trace.disconnects.length, 1, evt + ' must disconnect');
+    assert.strictEqual(sandbox.window.__zoeConv.live(), true, 'a cancelled unload / bfcache pagehide must not end the conversation');
+    assert.deepStrictEqual(trace.mic, [true], 'mic stays on through a cancelled unload');
+    listeners.pagehide.forEach((fn) => fn({ persisted: false }));
+    await tick();
+    assert.deepStrictEqual(trace.mic, [true, false], 'a real pagehide must release the mic');
+    assert.strictEqual(trace.disconnects.length, 1, 'a real pagehide must disconnect');
+  }
+  {
+    const { trace, sandbox, listeners } = run();
+    await sandbox.window.__zoeConv.start();
+    await tick();
+    listeners.pagehide.forEach((fn) => fn());   // an event-less call (older shims) still tears down
+    await tick();
+    assert.deepStrictEqual(trace.mic, [true, false], 'pagehide without an event must release the mic');
   }
 
   // ── 6. A failed token/bundle leaves NO live session and NO open mic ───────

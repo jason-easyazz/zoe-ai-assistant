@@ -1,4 +1,4 @@
-"""0049 - ``speaker_profiles.model_id``: which embedding space a voiceprint lives in.
+"""0051 - ``speaker_profiles.model_id``: which embedding space a voiceprint lives in.
 
 Resemblyzer and WeSpeaker ResNet34 are both 256-d, so a shape check cannot keep their vectors apart; a profile of one
 scored against an embedding of the other runs without error and means nothing. Every row now names its model
@@ -14,13 +14,13 @@ One NULLABLE column and a lookup index, nothing else, so a deploy that has not r
   * A member may now hold ONE ROW PER model_id (a re-enrolment under ``dual`` writes both). ``user_id`` was never unique
     on this table, so no constraint changes; the new index is on (user_id, model_id).
 
-Conventions match 0023 / 0048: dialect-aware, rerun-safe.
+Conventions match 0023 / 0048: dialect-aware, rerun-safe. Chains after 0050_struggle_events (numbered 0051 because #2037 landed 0050 first).
 """
 
 from alembic import op
 
-revision = "0049"
-down_revision = "0048"
+revision = "0051"
+down_revision = "0050"
 branch_labels = None
 depends_on = None
 

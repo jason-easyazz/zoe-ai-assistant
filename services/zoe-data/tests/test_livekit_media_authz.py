@@ -41,6 +41,8 @@ from __future__ import annotations
 import inspect
 import sys
 import types
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -82,6 +84,58 @@ def _app(*, device=None, user=None, user_raises=False) -> FastAPI:
             user if user is not None else {"user_id": "guest", "role": "guest"}
         )
     return app
+
+
+def _ts(age_s: float) -> str:
+    """A ``ui_panel_sessions.last_seen_at`` written ``age_s`` seconds ago (Postgres TEXT shape)."""
+    return (datetime.now(timezone.utc) - timedelta(seconds=age_s)).strftime("%Y-%m-%d %H:%M:%S.%f+00")
+
+
+class _PanelSessions(dict):
+    """``ui_panel_sessions`` keyed by panel id, behind the voice lane's REAL fresh-identity
+    resolver (`voice_tts._resolve_fresh_panel_member` -> `_resolve_recent_panel_session_user`).
+    Records any upsert so a test can prove no turn refreshed a session."""
+
+    def __init__(self):
+        super().__init__()
+        self.writes: list[tuple] = []
+
+    async def execute(self, sql, params=()):
+        u = " ".join(sql.split()).upper()
+        if "FROM UI_PANEL_SESSIONS" in u:
+            row = self.get(params[0])
+
+            class _Cur:
+                async def fetchone(self_inner):
+                    return dict(row) if row else None
+
+            return _Cur()
+        if u.startswith("INSERT INTO UI_PANEL_SESSIONS"):
+            self.writes.append(tuple(params))
+            return None
+        raise AssertionError(f"unexpected SQL in the panel-session fake: {sql!r}")
+
+    async def commit(self):
+        return None
+
+
+@pytest.fixture(autouse=True)
+def panel_sessions(monkeypatch):
+    """Every test runs against an explicit (default EMPTY) panel-session store - never a
+    real pool - so the device path's identity is decided by the rows a test sets."""
+    store = _PanelSessions()
+
+    @asynccontextmanager
+    async def _ctx():
+        yield store
+
+    monkeypatch.setitem(sys.modules, "db_pool", types.SimpleNamespace(get_db_ctx=_ctx))
+
+    async def _idle_window():
+        return 900
+
+    monkeypatch.setattr(voice_tts, "_panel_idle_logout_s", _idle_window)
+    return store
 
 
 def _post_audio(client: TestClient, **kwargs):
@@ -347,19 +401,11 @@ def test_brain_turn_is_attributed_to_the_authenticated_principal(monkeypatch):
     assert resp.json()["transcript"] == "what is the weather"
 
 
-def test_device_token_turn_runs_as_the_PANEL_BOUND_user(monkeypatch):
-    """A device token authenticates the DEVICE; the acting person is the bound user.
-
-    `_validate_device_token` hardcodes `user_id="voice-daemon"`, while
-    `get_current_user` resolves the SAME token through `panel_user_bindings` to
-    the panel's bound user. Taking the device dict's id runs the Pi daemon's
-    brain turns as `voice-daemon` — no personal context, and any memory written
-    into the wrong scope.
-    """
+def _capture_brain_user(monkeypatch, transcript="what is on my calendar") -> dict:
     seen: dict = {}
 
     async def _transcribe(_path):
-        return "what is on my calendar"
+        return transcript
 
     async def _brain(text, session_id, user_id, **kwargs):
         seen["user_id"] = user_id
@@ -374,23 +420,76 @@ def test_device_token_turn_runs_as_the_PANEL_BOUND_user(monkeypatch):
         raise RuntimeError("TTS deliberately skipped in this test")
 
     monkeypatch.setattr(voice_tts, "synthesize", _synth)
+    return seen
 
-    app = _app(
-        device={"panel_id": "zoe-touch-pi", "user_id": "voice-daemon", "role": "kiosk"},
-        # what get_current_user returns for this token via _resolve_device_token_user
-        user={"user_id": "jason", "role": "user"},
-    )
-    resp = TestClient(app).post(
+
+def _device_turn(user: dict, panel_id: str = "zoe-touch-pi"):
+    app = _app(device={"panel_id": panel_id, "user_id": "voice-daemon", "role": "kiosk"}, user=user)
+    return TestClient(app).post(
         "/api/voice/livekit-audio",
         files={"audio": ("ptt.webm", b"\x00\x01", "audio/webm")},
         data={"session_id": "sess-lk"},
         headers={"X-Device-Token": "raw"},
     )
+
+
+@pytest.mark.parametrize("pin_row", [
+    None,                                                       # no PIN session on the panel
+    {"user_id": "jason", "last_seen_at": _ts(6 * 3600)},        # jason's LAST sign-in, long stale
+    {"user_id": "guest", "last_seen_at": _ts(5)},               # the kiosk reclaimed the panel as guest
+], ids=["no_session", "stale_session", "guest_row"])
+def test_device_token_turn_is_guest_without_a_fresh_source(monkeypatch, panel_sessions, pin_row):
+    """PRIVACY (2026-10-14). A device token authenticates the DEVICE, and the panel's
+    operator-declared owner (what `get_current_user` resolves the token to through
+    `panel_user_bindings`) is not the person talking. Without a FRESH source the turn
+    is not a member: it keeps the device identity, a guest sentinel - never the owner,
+    and never the shared `guest` principal other callers also share."""
+    seen = _capture_brain_user(monkeypatch)
+    if pin_row:
+        panel_sessions["zoe-touch-pi"] = pin_row
+
+    # get_current_user resolved the token to the panel's declared owner.
+    resp = _device_turn({"user_id": "jason", "role": "user"})
+
     assert resp.status_code == 200
-    assert seen["user_id"] == "jason", (
-        "the device-token turn ran as the raw device identity instead of the "
-        "panel's bound user — personal context lost, memory in the wrong scope"
-    )
+    assert seen["user_id"] != "jason", "a device-token turn ran as the panel's declared owner"
+    assert seen["user_id"] == "voice-daemon"
+    assert seen["user_id"] in voice_tts._GUEST_SENTINEL_USERS
+
+
+def test_device_token_turn_is_the_member_of_a_FRESH_pin_session(monkeypatch, panel_sessions):
+    """NEGATIVE CONTROL: the same rig DOES run the turn as a member when a fresh source
+    exists - the member signed in by PIN on THIS panel within the idle-logout window
+    (the voice_command lane's own resolver), whoever the declared owner is."""
+    seen = _capture_brain_user(monkeypatch)
+    panel_sessions["zoe-touch-pi"] = {"user_id": "user-b", "last_seen_at": _ts(20)}
+
+    resp = _device_turn({"user_id": "jason", "role": "user"})
+
+    assert resp.status_code == 200
+    assert seen["user_id"] == "user-b"
+
+
+def test_fresh_pin_session_on_ANOTHER_panel_is_not_this_turns_identity(monkeypatch, panel_sessions):
+    seen = _capture_brain_user(monkeypatch)
+    panel_sessions["hallway-panel"] = {"user_id": "user-b", "last_seen_at": _ts(20)}
+
+    resp = _device_turn({"user_id": "guest", "role": "guest"})
+
+    assert resp.status_code == 200
+    assert seen["user_id"] == "voice-daemon"
+
+
+def test_device_token_turn_does_not_refresh_the_member_session(monkeypatch, panel_sessions):
+    """An unidentified voice never extends a member's PIN session (no heartbeat on this lane)."""
+    _capture_brain_user(monkeypatch)
+    row = {"user_id": "user-b", "last_seen_at": _ts(20)}
+    panel_sessions["zoe-touch-pi"] = dict(row)
+
+    _device_turn({"user_id": "guest", "role": "guest"})
+
+    assert panel_sessions["zoe-touch-pi"] == row
+    assert panel_sessions.writes == []
 
 
 @pytest.mark.parametrize(
@@ -405,35 +504,10 @@ def test_unbound_panel_device_token_stays_the_device_identity(monkeypatch, resol
     """CONTROL for the above: an UNBOUND panel resolves to guest (fail-closed,
     ZOE-4321), and that must fall back to the DEVICE identity — never attribute
     the turn to a `guest` principal whose scope other callers also share."""
-    seen: dict = {}
+    seen = _capture_brain_user(monkeypatch, transcript="hello")
 
-    async def _transcribe(_path):
-        return "hello"
+    resp = _device_turn(resolved_user, panel_id="unbound-panel")
 
-    async def _brain(text, session_id, user_id, **kwargs):
-        seen["user_id"] = user_id
-        return "Hi."
-
-    monkeypatch.setattr(voice_tts, "_transcribe_audio", _transcribe)
-    monkeypatch.setitem(
-        sys.modules, "brain_dispatch", types.SimpleNamespace(brain_oneshot=_brain)
-    )
-
-    async def _synth(_payload, caller=None):
-        raise RuntimeError("TTS deliberately skipped in this test")
-
-    monkeypatch.setattr(voice_tts, "synthesize", _synth)
-
-    app = _app(
-        device={"panel_id": "unbound-panel", "user_id": "voice-daemon", "role": "kiosk"},
-        user=resolved_user,
-    )
-    resp = TestClient(app).post(
-        "/api/voice/livekit-audio",
-        files={"audio": ("ptt.webm", b"\x00\x01", "audio/webm")},
-        data={"session_id": "sess-lk"},
-        headers={"X-Device-Token": "raw"},
-    )
     assert resp.status_code == 200
     assert seen["user_id"] == "voice-daemon", (
         "an unbound (or unresolvable) panel must keep the device identity, not "
@@ -457,3 +531,54 @@ def test_the_swallowing_resolver_is_gone():
     """`_get_current_user_soft` was the bug, not a helper worth keeping. Retire
     by removing — if it comes back, so does the invalid-session hole."""
     assert not hasattr(voice_livekit, "_get_current_user_soft")
+
+
+# ── room lane: the data-channel "identify" message ─────────────────────────
+
+class _Room:
+    """Just enough of a LiveKit room for `_build_room_handlers` to register its callbacks."""
+
+    def __init__(self):
+        self.handlers: dict = {}
+        self.local_participant = object()
+
+    def on(self, event):
+        def _register(fn):
+            self.handlers[event] = fn
+            return fn
+
+        return _register
+
+
+def _identify(minted_identity: str, claimed_user: str) -> dict:
+    import json
+
+    room, state = _Room(), {}
+    voice_livekit._build_room_handlers(room, state, {})
+    participant = types.SimpleNamespace(identity=minted_identity, sid="PA_test")
+    packet = types.SimpleNamespace(
+        participant=participant,
+        data=json.dumps({"type": "identify", "user_id": claimed_user, "session_id": "s-1"}).encode(),
+    )
+    room.handlers["data_received"](packet)
+    return state["PA_test"]
+
+
+@pytest.mark.parametrize("minted_identity", ["voice-daemon", "guest", "voice-guest", "user-b"],
+                         ids=["device_token", "kiosk_guest", "voice_guest", "another_member"])
+def test_room_identify_cannot_name_a_member_the_server_did_not_mint(minted_identity):
+    """PRIVACY (2026-10-14). A room participant's identity is the JWT `sub` that
+    `/livekit-token` minted from the SERVER-resolved principal. The `identify` data message
+    is client-asserted, so it may not name anybody else: a device-token (voice-daemon) or
+    kiosk-guest participant saying "I am jason" stays guest, and so does another member."""
+    ps = _identify(minted_identity, "jason")
+
+    assert ps["user_id"] != "jason", "a client-asserted identify message named a member"
+    assert ps["user_id"] == "guest"
+    assert ps["session_id"] == "s-1"
+
+
+def test_room_identify_matching_the_minted_member_is_that_member():
+    """NEGATIVE CONTROL: a signed-in member's own token (their own session) identifies as
+    themselves - the same rig does resolve a member from a fresh source."""
+    assert _identify("jason", "jason")["user_id"] == "jason"

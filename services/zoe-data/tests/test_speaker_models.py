@@ -1,5 +1,5 @@
 """Speaker model identity and the ResNet34 switch, SERVER side (``speaker_models.py``, the model-aware parts of
-``routers/voice_tts.py``, ``speaker_adaptation.py``, ``enrollment_state.py``, ``voice_enrollment.py``, migration 0049).
+``routers/voice_tts.py``, ``speaker_adaptation.py``, ``enrollment_state.py``, ``voice_enrollment.py``, migration 0051).
 
 The rules pinned here, each with a negative control (the same call with the one guard flipped behaves differently, so a green
 test is the GUARD working, not an easy fixture):
@@ -470,22 +470,22 @@ def test_the_script_asks_for_three_phrases_unchanged_or_five_with_the_many_intro
     assert five["retry_odd"] and ve.script_for("es", "Ada", 5)["phrases"][3:]
 
 
-# -- migration 0049 ----------------------------------------------------------------------------------------------------
+# -- migration 0051 ----------------------------------------------------------------------------------------------------
 
-def test_there_is_exactly_one_alembic_head_and_it_is_0049():
+def test_there_is_exactly_one_alembic_head_and_it_is_0051():
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
     cfg = Config(str(SVC / "alembic.ini"))
     cfg.set_main_option("script_location", str(SVC / "alembic"))
-    assert ScriptDirectory.from_config(cfg).get_heads() == ["0049"]
+    assert ScriptDirectory.from_config(cfg).get_heads() == ["0051"]
 
 
-def test_migration_0049_backfills_is_rerun_safe_and_adds_one_nullable_column(tmp_path):
+def test_migration_0051_backfills_is_rerun_safe_and_adds_one_nullable_column(tmp_path):
     import sqlalchemy as sa
     from alembic.migration import MigrationContext
     from alembic.operations import Operations
-    spec = importlib.util.spec_from_file_location("mig_0049_t", SVC / "alembic/versions/0049_speaker_profile_model_id.py")
+    spec = importlib.util.spec_from_file_location("mig_0051_t", SVC / "alembic/versions/0051_speaker_profile_model_id.py")
     mig = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mig)
     eng = sa.create_engine("sqlite:///" + str(tmp_path / "m.db"))
@@ -498,7 +498,7 @@ def test_migration_0049_backfills_is_rerun_safe_and_adds_one_nullable_column(tmp
         cols = dict((r[1], r) for r in conn.exec_driver_sql("PRAGMA table_info(speaker_profiles)").fetchall())
         assert cols["model_id"][2] == "TEXT" and cols["model_id"][3] == 0       # nullable
         assert conn.exec_driver_sql("SELECT model_id FROM speaker_profiles").fetchall() == [("resemblyzer",)]
-        assert mig.revision == "0049" and mig.down_revision == "0048"
+        assert mig.revision == "0051" and mig.down_revision == "0050"
     eng.dispose()
 
 

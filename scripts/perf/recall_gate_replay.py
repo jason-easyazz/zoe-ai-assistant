@@ -247,9 +247,11 @@ async def replay(only):
     import exact_words
     import night_store
     import restraint
+    import struggle_detector
 
     exact_words.set_backend(exact_words.MemoryBackend())             # Postgres tables in production; in-process here (the conftest rule)
     night_store.set_backend(night_store.MemoryBackend())
+    struggle_detector.set_backend(struggle_detector.MemoryBackend())
 
     async def no_mutes(_uid):
         return []

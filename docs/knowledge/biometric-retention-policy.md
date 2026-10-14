@@ -28,7 +28,7 @@ Scope note: this covers *enrolled identity biometrics*. Ambient-capture retentio
 
 Per modality, one row per profile in Postgres (the zoe-data DB):
 
-| | Speaker (`speaker_profiles`, migration 0001 + 0023 + 0049) | Face (`face_profiles`, migration 0024) |
+| | Speaker (`speaker_profiles`, migration 0001 + 0023 + 0051) | Face (`face_profiles`, migration 0024) |
 |---|---|---|
 | Biometric payload | `embedding_blob` — one 256-dim float32 vector in the space its `model_id` names: Resemblyzer (weight-averaged across enrol samples, the server embeds the uploaded WAV and discards it) or, flag-dark, WeSpeaker ResNet34 (a 5-clip profile built ON THE PANEL; only the 256 floats are uploaded, never audio) | `embedding_blob` — a buffalo_sc / MobileFaceNet-class ArcFace vector (`dim` ∈ {128, 256, 512}) |
 | Rows per person | one per `model_id` (re-enrolling a Resemblyzer profile averages into it; a ResNet34 re-enrolment replaces it). Two only while `ZOE_SPEAKER_MODEL=dual` builds both from the same sitting; profiles of different models are never compared | up to 8 (pose variety; oldest dropped past the cap) |

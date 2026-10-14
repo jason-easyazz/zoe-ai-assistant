@@ -360,6 +360,6 @@ four planted bugs (outlier rejection off, drift bound off, length threshold = gl
 4. Re-measure the Pi FP32 60-clip timing in a cool hour so the speed-up has an un-throttled same-session denominator.
 
 > **Built (2026-10-13), flag-dark:** steps 1 and 3 of section 10 are implemented as `ZOE_SPEAKER_MODEL` (`resemblyzer` default | `dual` | `resnet34`)
-> with `model_id` on every profile (migration 0049), the per-model ORT pin and start-up self-test, the shipped `c1` centring vector, length-group
+> with `model_id` on every profile (migration 0051), the per-model ORT pin and start-up self-test, the shipped `c1` centring vector, length-group
 > thresholds, 5-clip enrolment with outlier rejection and re-ask, and the per-model #2002 guards with the anchor gate. Operator runbook and the
 > in-place Pi measurement: [docs/knowledge/speaker-resnet34-switch.md](../knowledge/speaker-resnet34-switch.md). The shadow week (step 2) is the owner's.
