@@ -62,6 +62,10 @@ FORECAST = {
         ("what's the weather going to be like today", "outlook", "today"),
         ("will it rain today", "rain", "today"),
         ("is it going to rain tomorrow", "rain", "tomorrow"),
+        ("how cold tonight", "low", "tonight"),  # bare forms: no "is it"
+        ("how hot tomorrow", "high", "tomorrow"),
+        ("what's the high", "high", "today"),
+        ("what's the low", "low", "today"),
         ("how hot is it outside", "current", ""),
         ("how cold is it", "current", ""),
         ("what's the weather", "current", ""),
@@ -86,6 +90,9 @@ def test_classifier_positive(text, focus, day):
         "how hot is the water going to get today",
         "how hard is it going to get today",  # a misheard variant must NOT become weather
         "how is it going today",
+        "how hot is the oven tonight",
+        "what's the high score",
+        "what's the low battery",
         "what's it going to be like",  # no day: could be anything
         "will it be hot",  # no day scope: not claimed
         "what time is it",
@@ -236,6 +243,8 @@ def test_expert_plan_leads_with_the_asked_fact_not_a_forecast_dump():
         "weather", {"focus": "high", "day": "today", "forecast": False}, "read")
     # "how cold" used to be swallowed by the jacket-advice branch.
     assert _plan("weather", "how cold is it going to get tonight")[1]["focus"] == "low"
+    assert _plan("weather", "how cold tonight")[1] == {"focus": "low", "day": "tonight", "forecast": False}
+    assert _plan("weather", "what's the high")[1]["focus"] == "high"
     # Explicit-object advice is untouched.
     assert _plan("weather", "do I need a jacket today")[1] == {"advice": "warmth"}
     assert _plan("weather", "should I take an umbrella")[1] == {"advice": "rain"}

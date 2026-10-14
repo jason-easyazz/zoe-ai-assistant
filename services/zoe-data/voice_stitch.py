@@ -237,8 +237,9 @@ async def prewarm_vocabulary(
 # ── Reply-text → stitched audio (the live hook) ───────────────────────────────
 # Strict, anchored patterns for the exact intent replies we own (both use digits):
 #   time    → "It's 7:42 AM."                     (intent_router time_query)
-#   weather → "It's 14 degrees and clear in Geraldton"   (intent_router weather)
-# Anything else — a decimal temp, a "feels like" clause, a rephrase — simply does
+#   weather → "It's 14 degrees and clear in Geraldton[, with a top of 20 today][, and it feels like 12 degrees]"
+#             (weather_speech.speak_current, used by skybridge + intent_router weather)
+# Anything else — a decimal temp, a rain-chance clause, a rephrase — simply does
 # not match, so stitch_reply returns None and the caller uses normal TTS. It never
 # guesses: a mis-parse can only FAIL to match, never emit wrong audio.
 _TIME_RE = re.compile(r"^It(?:'s| is) (\d{1,2}):(\d{2}) (AM|PM)\.?$")

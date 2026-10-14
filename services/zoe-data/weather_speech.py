@@ -51,6 +51,8 @@ _RE_HOW = re.compile(
     r"(?P<verb>is\s+it(?:\s+(?:going|gonna)(?:\s+to)?)?|will\s+it|it(?:'s|\s+is)\s+(?:going|gonna)(?:\s+to)?)"
     r"(?:\s+(?:be|get(?:ting)?))?(?P<tail>.*)$"
 )
+# "how cold tonight" / "how hot tomorrow": adjective + a scope word, no verb at all.
+_RE_HOW_BARE = re.compile(rf"\bhow\s+({_HOT})\s+(?P<tail>(?:{_SCOPE})(?:\s+.*)?)$")
 _RE_HIGH_LOW = re.compile(
     r"\bwhat(?:'s|\s+is|\s+will)\s+(?:the\s+)?(?:(?:today|tonight|tomorrow)(?:'s)?\s+)?"
     r"(?P<w>high|low|max(?:imum)?|min(?:imum)?)(?:\s+temp(?:erature)?)?"
@@ -123,10 +125,16 @@ def classify_weather_ask(message: str) -> Optional[WeatherAsk]:
             return WeatherAsk("current", day)
         return WeatherAsk("high" if word in ("hot", "warm") else "low", day or "today")
 
+    m = _RE_HOW_BARE.search(low)
+    if m and _tail_ok(" " + m.group("tail")):
+        return WeatherAsk("high" if m.group(1) in ("hot", "warm") else "low", _day_of(m.group("tail")))
+
     m = _RE_HIGH_LOW.search(low)
     if m and _tail_ok(m.group("tail")):
         day = _day_of(low)
-        if day or "temp" in low:
+        # A bare "what's the high" (nothing after it) is a weather ask too: tail_ok
+        # already rules out "high score" / "low battery" by rejecting any other word.
+        if day or "temp" in low or not m.group("tail").strip():
             return WeatherAsk("high" if m.group("w") in ("high", "max", "maximum") else "low", day or "today")
 
     m = _RE_TEMP_FUTURE.search(low)
