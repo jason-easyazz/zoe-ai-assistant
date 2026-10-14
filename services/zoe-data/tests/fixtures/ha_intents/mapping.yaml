@@ -85,6 +85,15 @@ relabel:
   "tell me the outside temperature": HassGetWeather
   "how is the outside temperature": HassGetWeather
   "please tell me the outside temperature": HassGetWeather
+  # A BARE temperature question names no room or thermostat. HA (which has a thermostat) reads it as indoor; OVOS labels
+  # the same phrasing weather, and Zoe has no thermostat lane, so for Zoe the outdoor reading is the right answer.
+  "what is the temperature?": HassGetWeather
+  "how is the temperature?": HassGetWeather
+  "how's the temperature?": HassGetWeather
+  "how warm is it?": HassGetWeather
+  "what's the current temp": HassGetWeather
+  "how's current temp": HassGetWeather
+  "hows temp": HassGetWeather
 
 labels:
   # ── Time / date / weather ─────────────────────────────────────────────────

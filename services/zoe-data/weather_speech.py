@@ -71,7 +71,21 @@ _RE_WILL_IT_BE = re.compile(
     r"(?P<w>hot|warm|cold|cool|chilly|sunny|wet|rainy|nice|windy|cloudy)(?P<tail>.*)$"
 )
 _RE_RAIN = re.compile(r"\b(?:will\s+it|is\s+it\s+(?:going\s+to|gonna)|going\s+to|gonna|chance\s+of|any)\s+rain\b")
-_KEYWORD_TERMS = (" weather", " forecast", " temperature", " rain", " windy", " wind ")
+_KEYWORD_RE = re.compile(r"\b(?:weather\w*|forecast\w*|temperatures?|rain(?!bow)\w*|windy|winds?)\b")
+_INDOORS = (
+    r"(?:inside|indoors?|in\s+here|in\s+the\s+house|house|home|room|bedroom|living\s+room|lounge|kitchen|office|bathroom"
+    r"|hallway|garage|nursery|study|basement|attic|fridge|freezer|oven|pool|water|body|cpu|thermostat|heater|heating"
+    r"|aircon|air\s+con(?:ditioner|ditioning)?|ac)"
+)
+_NOT_WEATHER_RE = re.compile(
+    # a set / change of a temperature is a thermostat or a light, never a forecast
+    r"\b(?:set|change|turn|raise|lower|increase|decrease|make|adjust|put)\b.*\btemp(?:erature)?\b"
+    r"|\bcolou?r\s+temp(?:erature)?\b|\bkelvin\b|\b\d{4}\s*k\b"
+    rf"|\btemp(?:erature)?\b.*\b{_INDOORS}\b|\b{_INDOORS}\b.*\btemp(?:erature)?\b"
+    # a condition ("remind me ... if it rains") or another meaning of the word
+    r"|\b(?:if|when|whenever|unless|in\s+case|once)\s+it\s+(?:rains?|is\s+raining|starts\s+raining)\b"
+    r"|\bwind\s+(?:down|up|back|it|this|that|the\s+(?:clock|watch|window|car))\b|\bunder\s+the\s+weather\b"
+)
 _WIDE_TERMS = ("forecast", "week", "next few days")
 
 
@@ -156,8 +170,10 @@ def classify_weather_ask(message: str) -> Optional[WeatherAsk]:
         if day:
             return WeatherAsk("outlook", day)
 
-    # The pre-existing keyword gate (unchanged), now carrying what was asked.
-    if any(term in text for term in _KEYWORD_TERMS):
+    # The keyword gate, now carrying what was asked. Whole words only, and never a keyword that is about something
+    # else: an indoor / thermostat / colour temperature, "if it rains", "wind down" (HA corpus 2026-10-14: indoor
+    # temperature and "set the lamp colour temperature to 2700 K" got the outdoor weather).
+    if _KEYWORD_RE.search(text) and not _NOT_WEATHER_RE.search(text):
         day = _day_of(low)
         wide = any(term in low for term in _WIDE_TERMS)
         if _RE_RAIN.search(low):

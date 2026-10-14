@@ -248,6 +248,42 @@ def test_keyword_inside_another_word_does_not_claim(text, not_domain):
         assert claim is None or claim[0] != not_domain, (text, claim)
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "remind me to bring the washing in if it rains",
+        "help me wind down",
+        "what is the temperature in the living room",
+        "how warm is the nursery temperature",
+        "set the bedroom lamp colour temperature to 2700 K",
+        "set the temperature to 21",
+        "remind me to check the weather",
+        "I am feeling under the weather",
+    ],
+)
+def test_weather_words_about_something_else_are_not_weather(text):
+    claim = _claim(text)
+    assert claim is None or claim[0] != "weather", (text, claim)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["what is the temperature outside", "will it rain tomorrow", "is it windy", "what's the weather like",
+     "what is the outside temperature", "how hot is it going to get today", "any rain this afternoon"],
+)
+def test_weather_questions_still_claim_weather(text):
+    assert _claim(text)[0] == "weather", text
+
+
+def test_break_the_fix_temperature_substring_steals_again(monkeypatch):
+    import re
+
+    import weather_speech
+
+    monkeypatch.setattr(weather_speech, "_NOT_WEATHER_RE", re.compile(r"(?!)"))
+    assert _claim("what is the temperature in the living room")[0] == "weather"
+
+
 def test_break_the_fix_substring_keywords_steal_again(monkeypatch):
     import re
 

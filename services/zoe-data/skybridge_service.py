@@ -1572,14 +1572,15 @@ def classify_skybridge_intent(
         or re.search(r"\bcurrent\s+time\b", text)
     ):
         return SkybridgeIntent(domain="clock", action="show")
-    weather_ask = classify_weather_ask(text)
+    # A command-shaped WRITE ("add fix the gate to my to-do list", "remind me to check the weather") that no parser above
+    # claimed is never answered with a weather / list / calendar READ (live 2026-10-12: "Lists has 2 items." and nothing
+    # added): it falls through to the brain instead.
+    write_led = _command_shaped(raw_message, _WRITE_VERB_RE) is not None
+    weather_ask = None if write_led else classify_weather_ask(text)
     if weather_ask is not None:
         # query = what was asked for (high/low/rain/outlook/current), range_label = which day.
         return SkybridgeIntent(domain="weather", action=weather_ask.action, query=weather_ask.focus,
                                range_label=weather_ask.day)
-    # A command-shaped WRITE ("add fix the gate to my to-do list") that no parser above claimed is never answered with a
-    # list SHOW (live 2026-10-12: "Lists has 2 items." and nothing added): it falls through to the brain instead.
-    write_led = _command_shaped(raw_message, _WRITE_VERB_RE) is not None
     if not write_led and _LIST_KEYWORD_RE.search(text):
         list_type = _list_type_from_text(text)
         action = "overview" if re.search(r"\blists\b", text) else "show"
