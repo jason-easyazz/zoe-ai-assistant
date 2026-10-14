@@ -515,7 +515,7 @@ def main(argv=None) -> int:
     if args.keyterm_ab:
         avail = mem_available_mb()
         if in_quiet_hours():
-            report["keyterm_ab"] = {"clips": 0, "note": "skipped: brain-window quiet hours (01:50-04:55)"}
+            report["keyterm_ab"] = {"clips": 0, "note": "skipped: the night brain window (quiet hours 01:50-04:55; the A/B does not start after 01:35)"}
         elif avail < args.min_mem_mb:
             report["keyterm_ab"] = {"clips": 0, "note": f"skipped: MemAvailable {avail} MB < {args.min_mem_mb} MB"}
         else:
