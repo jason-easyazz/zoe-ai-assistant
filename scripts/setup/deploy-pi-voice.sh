@@ -13,7 +13,10 @@
 # WHAT IT SHIPS (exactly): zoe_voice_daemon.py, zoe_voice_announce.py (the
 # daemon imports it; a partial deploy silently disables announce polling),
 # zoe_voice_enroll_mode.py (the daemon imports it; without it Zoe-driven voice
-# enrolment commands are refused and logged), zoe_enroll_flow.py (the hand-run
+# enrolment commands are refused and logged), zoe_speaker_resnet34.py + its
+# zoe_speaker_resnet34_artifacts.json (the flag-dark WeSpeaker ResNet34 embedder; only
+# imported when ZOE_SPEAKER_MODEL=dual|resnet34 - the INT8 MODEL FILE itself is not
+# shipped here, see docs/knowledge/speaker-resnet34-switch.md), zoe_enroll_flow.py (the hand-run
 # guided flow, kept in step), pi-requirements.txt. It NEVER ships scripts/setup/zoe-voice.service as-is:
 # that file is the JETSON template (/home/zoe paths, WantedBy=multi-user.target)
 # and installing it over the live unit killed the panel daemon with
@@ -26,9 +29,10 @@
 # After the restart the script VERIFIES on the Pi (unit active within
 # ${VERIFY_TIMEOUT_S:-20}s, /health answers on 127.0.0.1:7777, md5 of every
 # shipped file equals the local copy) and exits non-zero, printing the
-# rollback, if anything is off.
+# rollback, if anything is off. With ZOE_SPEAKER_MODEL=resnet34 on the Pi it also waits
+# (RESNET34_READY_TIMEOUT_S) for /health's speaker_resnet34 to be ready and fails otherwise.
 #
-# Env: PI_HOST PI_USER PI_DAEMON_DIR PI_VENV VERIFY_TIMEOUT_S HEALTH_PORT
+# Env: PI_HOST PI_USER PI_DAEMON_DIR PI_VENV VERIFY_TIMEOUT_S HEALTH_PORT RESNET34_READY_TIMEOUT_S
 #      DRY_RUN=1  print the plan + rendered unit, touch nothing.
 # Exit codes: 0 ok | 2 usage | 3 unit install refused | 4 verification failed
 #             | 5 transfer/render failed
@@ -40,6 +44,7 @@ PI_USER="${PI_USER:-pi}"
 PI_DAEMON_DIR="${PI_DAEMON_DIR:-/home/pi/.zoe-voice}"
 PI_VENV="${PI_VENV:-/home/pi/.zoe-voice/venv}"
 VERIFY_TIMEOUT_S="${VERIFY_TIMEOUT_S:-20}"
+RESNET34_READY_TIMEOUT_S="${RESNET34_READY_TIMEOUT_S:-45}"
 HEALTH_PORT="${HEALTH_PORT:-7777}"
 DRY_RUN="${DRY_RUN:-0}"
 
@@ -51,7 +56,7 @@ REMOTE_UNIT_DIR='$HOME/.config/systemd/user'
 REMOTE_UNIT="${REMOTE_UNIT_DIR}/zoe-voice.service"
 # The daemon's only local import is `zoe_voice_announce` (scripts/setup); ship
 # exactly the daemon + what it imports + the pip manifest.
-SHIPPED_FILES=(zoe_voice_daemon.py zoe_voice_announce.py zoe_voice_enroll_mode.py zoe_enroll_flow.py pi-requirements.txt)
+SHIPPED_FILES=(zoe_voice_daemon.py zoe_voice_announce.py zoe_voice_enroll_mode.py zoe_enroll_flow.py zoe_speaker_resnet34.py zoe_speaker_resnet34_artifacts.json fetch_speaker_models.sh pi-requirements.txt)
 
 INSTALL_UNIT=0
 FORCE_UNIT=0
@@ -59,7 +64,7 @@ for arg in "$@"; do
   case "$arg" in
     --install-unit) INSTALL_UNIT=1 ;;
     --force-unit) FORCE_UNIT=1 ;;
-    -h|--help) sed -n '2,32p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '2,38p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "unknown argument: ${arg}" >&2; exit 2 ;;
   esac
 done
@@ -236,6 +241,41 @@ if ! rssh "for i in \$(seq 1 ${VERIFY_TIMEOUT_S}); do (curl -fsS --max-time 3 ${
   fail_verify "${health_url} did not answer within ${VERIFY_TIMEOUT_S}s"
 fi
 echo "    /health answers"
+
+# The speaker model must be READY when it is the acting one (ZOE_SPEAKER_MODEL=resnet34): /health answers even when the ResNet34
+# embedder was refused (missing file, pin or self-test drift), so the deploy reads its state - bounded wait - and fails on not-ready.
+# dual: ResNet34 is shadow-only, so not-ready is reported loudly but does not fail. FAIL-CLOSED: when the daemon's state cannot be
+# read (ssh hiccup, helper import error, no SPEAKER_STATE line, daemon unreachable) the deploy passes ONLY if the Pi's configured
+# ZOE_SPEAKER_MODEL (.env.voice) proves the legacy mode; a daemon that reports a different mode than the one configured also fails.
+cfg_raw="$(rssh "printf 'CFG_OK '; grep -E '^[[:space:]]*(export[[:space:]]+)?ZOE_SPEAKER_MODEL=' ${PI_DAEMON_DIR}/.env.voice 2>/dev/null | tail -n 1 | cut -d= -f2-" 2>/dev/null)" || cfg_raw=""
+case "$cfg_raw" in
+  CFG_OK*)
+    cfg_val="$(printf '%s' "${cfg_raw#CFG_OK}" | tr -d "\"' \t\r" | tr '[:upper:]' '[:lower:]')"
+    case "$cfg_val" in dual|resnet34) cfg_mode="$cfg_val" ;; *) cfg_mode="resemblyzer" ;; esac ;;
+  *) cfg_mode="unreadable" ;;
+esac
+speaker_state="$(rssh "cd ${PI_DAEMON_DIR} && ${PI_VENV}/bin/python3 zoe_speaker_resnet34.py --health-state ${health_url} ${RESNET34_READY_TIMEOUT_S}" 2>/dev/null | grep '^SPEAKER_STATE ' | tail -n 1)" || speaker_state=""
+speaker_model=""; speaker_rn34=""
+read -r _ speaker_model speaker_rn34 <<<"$speaker_state" || true
+if [ -z "$speaker_state" ] || [ "$speaker_model" = "unknown" ]; then
+  [ "$cfg_mode" = "resemblyzer" ] \
+    || fail_verify "could not read the daemon's speaker-model state (configured ZOE_SPEAKER_MODEL: ${cfg_mode}) - cannot prove the speaker model runs"
+  echo "    speaker model: resemblyzer (configured; the daemon's state was unreadable)"
+elif [ "$cfg_mode" != "unreadable" ] && [ "$speaker_model" != "$cfg_mode" ]; then
+  fail_verify "the daemon reports speaker model '${speaker_model}' but .env.voice configures '${cfg_mode}' - the restart did not pick up the configuration"
+else
+  case "$speaker_model" in
+    resnet34)
+      [ "$speaker_rn34" = "ready" ] \
+        || fail_verify "ZOE_SPEAKER_MODEL=resnet34 but speaker_resnet34 is '${speaker_rn34}' after ${RESNET34_READY_TIMEOUT_S}s - the acting speaker model cannot run (fetch_speaker_models.sh verify)"
+      echo "    speaker model resnet34: ready" ;;
+    dual)
+      if [ "$speaker_rn34" = "ready" ]; then echo "    speaker model dual: resnet34 ready (shadow)"
+      else echo "    WARNING: speaker model dual, resnet34 is '${speaker_rn34}' - shadow scoring is OFF until fixed (Resemblyzer still acts)"; fi ;;
+    *)
+      echo "    speaker model: ${speaker_model}" ;;
+  esac
+fi
 
 local_md5="$(cd "${SRC_DIR}" && md5sum "${SHIPPED_FILES[@]}" | sort -k2)"
 remote_md5="$(rssh "cd ${PI_DAEMON_DIR} && md5sum ${SHIPPED_FILES[*]}" | sort -k2)" \

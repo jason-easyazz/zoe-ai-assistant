@@ -2457,11 +2457,13 @@ def _extract_simple_calendar_slots(text: str) -> Optional[dict]:
         parsed = _sky._calendar_create_from_text(str(text or ""), None)
         if not parsed:
             return None
-        title, hhmm = parsed
+        title, hhmm, day_offset = parsed
         slots: dict = {"title": title, "time": hhmm}
         rng = _sky._calendar_date_from_text(f" {str(text).lower()} ", _sky._today())
-        if rng:
-            slots["date"] = rng[1].isoformat()
+        if rng or day_offset:        # the small hours of "2 tonight" belong to the NEXT date
+            from datetime import timedelta as _td
+
+            slots["date"] = ((rng[1] if rng else _sky._today()) + _td(days=day_offset)).isoformat()
         return slots
     except Exception as exc:  # noqa: BLE001 - the NLU path still follows
         logger.debug("simple calendar slots unavailable: %s", exc)

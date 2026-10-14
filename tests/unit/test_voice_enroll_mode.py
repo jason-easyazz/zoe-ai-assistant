@@ -323,7 +323,7 @@ def test_the_defaults_cover_a_command_with_no_script_and_match_the_old_flow_phra
 
 def test_every_script_key_the_server_sends_is_one_the_machine_speaks():
     spoken = {"intro", "prompt", "retry_short", "retry_quiet", "retry_noise", "got", "done", "partial", "cancelled", "timeout", "failed",
-              "store_failed"}
+              "store_failed", "intro_many", "retry_odd"}     # the last two: the 5-clip (ResNet34) enrolment
     assert spoken <= set(SCRIPT) and set(SCRIPT) - spoken == {"cancel_words"}
 
 
