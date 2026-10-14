@@ -29,6 +29,7 @@ import voice_speculation as _speculation
 import voice_stt_stream as _stt_stream
 import voice_utterance_shape as _utterance_shape
 import speaker_adaptation
+import speaker_models
 from voice_speaker_id import _compute_resemblyzer_embedding, _cosine_similarity
 # Waterfall engine mechanics live in tts_waterfall; they are re-exported here so
 # existing importers (main.py health detail, tests that monkeypatch this module,
@@ -4251,11 +4252,13 @@ async def voice_command(
             )
             _skybridge_reply = str(_skybridge_result.get("spoken_summary") or "Showing that in Skybridge.")
             _bcast_t0 = time.monotonic()
-            # ZOE_VOICE_SESSION: an AUTHORISED calendar / list read shows its real rows on THIS panel (a private
-            # voice_card on the panel's own channel) and names the events aloud. Delivered = no page-reloading
-            # navigate (it would wipe the card); not delivered (no live socket) = today's Skybridge broadcast.
+            # An AUTHORISED calendar / list read (a fresh PIN sign-in, the member's voice session, a named speaker) shows
+            # its real rows on THIS panel (a private voice_card on the panel's own channel) - flag or no flag: "if I ask
+            # what is on my calendar I want to see the results as well as hear them" (owner, 2026-10-13/14). The events
+            # are spoken by the Skybridge answer itself. Delivered = no page-reloading navigate (it would wipe the card);
+            # not delivered (no live socket) = today's Skybridge broadcast. A guest has no real user here: no card.
             _vs_card_sent = 0
-            if _voice_session.enabled() and _real_user_or_none(_skybridge_user):
+            if _real_user_or_none(_skybridge_user):
                 try:
                     import voice_cards as _voice_cards
 
@@ -4263,8 +4266,6 @@ async def voice_command(
                     _sky_kind = _voice_session.private_read_kind(
                         skybridge=(_sky_rd.get("domain"), _sky_rd.get("action")))
                     if _sky_kind:
-                        if _sky_kind == "calendar":
-                            _skybridge_reply = _voice_cards.spoken_calendar(_skybridge_result) or _skybridge_reply
                         _vs_card_sent = await _voice_cards.push(
                             _voice_cards.from_skybridge(panel_id, str(_skybridge_user), _skybridge_result))
                 except Exception as _vs_card_exc:
@@ -4312,10 +4313,10 @@ async def voice_command(
         # the legacy intent path, which is the silent bounce-to-domain-page behavior.
         logger.warning("voice/command skybridge fast path failed (non-fatal): %s", _skybridge_exc)
 
-    # ZOE_VOICE_SESSION: a private READ the Skybridge did not answer (reminders; a calendar / list ask it was vetoed
-    # on) still SHOWS its rows when the turn is authorised for that member - read in the background, so whichever
-    # lane speaks the answer is not delayed.
-    if _voice_session.enabled() and _has_scope_identity:
+    # A private READ the Skybridge did not answer (reminders; a calendar / list ask it was vetoed on) still SHOWS its
+    # rows when the turn is authorised for that member (fresh PIN sign-in, voice session, named speaker) - read in the
+    # background, so whichever lane speaks the answer is not delayed.
+    if _has_scope_identity:
         try:
             from intent_router import detect_intent as _detect_rd
 
@@ -6389,52 +6390,71 @@ def _brain_prewarm_on_wake_enabled() -> bool:
 
 
 async def _prewarm_brain_for_panel(panel_id: str) -> None:
-    """On wake-word, spawn the panel's likely (user, session) brain worker so the
-    first turn doesn't pay the Pi subprocess cold-start. Fully best-effort and
-    backgrounded — must never delay or break the wake acknowledgement.
+    """On wake-word, warm what the first turn would otherwise pay for cold. Fully
+    best-effort and backgrounded - must never delay or break the wake acknowledgement.
 
-    Resolves the user the way voice_command will without a claim (the fresh panel
-    session it mirrors in bound_user_id > recent; never the panel's last signed-in
-    member); if the user is unknown the worker key would miss the real turn, so we
-    skip rather than spawn a wasted process.
+    Runs on EVERY wake, identified or not. Identity decides only the member-scoped
+    half (below); it is never a precondition for the warm itself:
+
+    * The brain's cacheable prefix (system prompt + tool block) is the same bytes for
+      every user and session - the member's words, memory and persona ride the user
+      message behind it - so ``zoe_flue_client.warm_kv_prefix`` loads it into llama-server's
+      one slot with an explicit-guest throwaway turn. This is what hides the ~2.7k-token cold
+      prefill (TTFT ~4.8 s cold vs ~1.1-1.7 s warm). Live lane only.
+    * The core (Pi) worker is keyed on (user, session): warmed for the member of a FRESH
+      panel session, else for ``guest`` - the same key the turn's ``effective_user`` gets
+      (``_resolve_fresh_panel_member``, never the panel's last signed-in member). Only
+      spawned when the core lane can serve; the Flue lane never reads it.
+    * A member's facts cache is warmed only for a member. A guest has no memory to warm
+      and nothing about a member is ever read on a guest's behalf.
+
+    Nothing here refreshes a PIN or voice session (only a turn's own identity does, #2034).
     """
     try:
         if not _brain_prewarm_on_wake_enabled():
             return
+        from brain_dispatch import failover_enabled, use_flue_brain
+        flue_lane = use_flue_brain()
+        _t0 = time.monotonic()
+        # Started FIRST: it needs neither a session nor an identity, so nothing below (a session lookup, the
+        # identity read) can lose the wake its warm. Never raises; detached from this coroutine's own failures.
+        kv_task = None
+        if flue_lane:
+            import zoe_flue_client
+            kv_task = asyncio.ensure_future(zoe_flue_client.warm_kv_prefix())
         session_id = _get_or_create_voice_session(panel_id)
-        user_id = _real_user_or_none(
+        member = _real_user_or_none(
             (_VOICE_SESSIONS.get(panel_id) or {}).get("bound_user_id")
         ) or ""
-        if not user_id:
-            user_id = await _resolve_fresh_panel_member(panel_id) or ""
-        if not user_id:
-            return
-        import zoe_core_client
-        _t0 = time.monotonic()
-        # Warm the brain worker (subprocess spawn) AND the user's facts cache
-        # concurrently, during the speech window. The cold facts read is ~1.4s and
-        # otherwise lands on the turn's critical path before the brain's first token;
-        # warming it here (cache TTL now outlives wake→turn) hides it on the first turn.
-        _pw = await asyncio.gather(
+        if not member:
+            member = await _resolve_fresh_panel_member(panel_id) or ""
+        jobs: dict[str, Any] = {}
+        if kv_task is not None:
+            jobs["kv"] = kv_task
+        if (not flue_lane) or failover_enabled():
+            import zoe_core_client
             # voice_mode=True: warm the SAME (voice-capped) worker the voice turn
             # will use, so prewarm actually hides the cold subprocess boot.
-            zoe_core_client.prewarm(user_id, session_id, voice_mode=True),
-            _voice_brain_memory(user_id),
-            return_exceptions=True,
-        )
-        warmed = _pw[0] if not isinstance(_pw[0], BaseException) else False
+            jobs["worker"] = zoe_core_client.prewarm(member or "guest", session_id, voice_mode=True)
+        if member:
+            # The cold facts read is ~1.4s and otherwise lands on the turn's critical path
+            # before the brain's first token; the cache TTL now outlives wake->turn.
+            jobs["facts"] = _voice_brain_memory(member)
+        if not jobs:
+            return
+        _res = await asyncio.gather(*jobs.values(), return_exceptions=True)
+        _got = {k: (None if isinstance(v, BaseException) else v) for k, v in zip(jobs, _res)}
         _ms = int((time.monotonic() - _t0) * 1000)
-        # INFO (not debug): the only way to know on-device whether the spawn
-        # actually overlaps the speech window — if this logs AFTER the turn's
-        # first token, prewarm bought nothing and the cost is elsewhere (prefill).
+        # INFO (not debug): the only way to know on-device whether the warm actually
+        # overlaps the speech window. `user` names the member only; a guest is "guest".
         logger.info(
-            "voice/wake brain prewarm panel=%s user=%s warmed=%s spawn_ms=%d",
-            panel_id, user_id, warmed, _ms,
+            "voice/wake brain prewarm panel=%s user=%s warmed=%s kv=%s spawn_ms=%d",
+            panel_id, member or "guest", _got.get("worker"), _got.get("kv"), _ms,
         )
     except Exception as exc:  # never let prewarm affect the wake path
         # debug, not warning: a boot-time race (wake fires before zoe-core is up)
         # would otherwise warn on every turn until the core settles. The INFO
-        # success line above (with spawn_ms) is the real signal — its ABSENCE
+        # success line above (with spawn_ms) is the real signal - its ABSENCE
         # already tells us prewarm isn't completing.
         logger.debug("voice/wake brain prewarm failed (non-fatal): %s", exc)
 
@@ -6650,6 +6670,22 @@ def _claim_fields(payload: dict) -> tuple[str, Any]:
     return "", None
 
 
+def _claim_model(payload: dict) -> tuple:
+    """``(model_id, speech_s)`` of the panel's speaker claim: which embedding space its score was computed in, and how long
+    the clip was (the length group picks the threshold). A claim that names no model is the legacy Resemblyzer one - every
+    panel that predates ``ZOE_SPEAKER_MODEL`` - and an unknown length picks the stricter group."""
+    payload = payload or {}
+    block = payload.get("speaker")
+    block = block if isinstance(block, dict) else {}
+    if "model_id" in block:
+        model_id = speaker_models.model_id_field(block, "model_id")
+    else:
+        model_id = speaker_models.model_id_field(payload, "voice_model_id")
+    speech = block.get("speech_s", payload.get("voice_speech_s"))
+    # an explicitly blank / non-string model id is MALFORMED (""), never the legacy model: the claim is then refused as unknown
+    return (model_id if model_id is not None else ""), speech
+
+
 def _speaker_verdict(payload: dict, caller: dict, *, identified_by_claim: bool) -> Optional[bool]:
     """What the speaker gate said about this turn, as the memory layer needs it
     (``MemoryService.ingest(speaker_verified=...)``; docs/knowledge/memory-authority.md).
@@ -6703,17 +6739,24 @@ def _accept_panel_voice_claim(payload: dict, caller: dict) -> Optional[str]:
         score = float(raw_score)
     except (TypeError, ValueError):
         return None
-    threshold = _speaker_id_threshold()
-    if score >= threshold:
+    model_id, speech_s = _claim_model(payload)
+    if not speaker_models.is_known(model_id) or model_id != speaker_models.acting_model():
+        # A score computed in another model's space means nothing to this server's gate (and would face the wrong
+        # threshold): never honoured, whatever its value. The flag is flipped on BOTH hosts (docs/knowledge/speaker-resnet34-switch.md).
+        logger.info("voice claim rejected: model %r is not the acting model %r", model_id[:48], speaker_models.acting_model())
+        return None
+    threshold = speaker_models.claim_threshold(model_id, speech_s, _speaker_id_threshold())
+    if threshold is not None and score >= threshold:
         return user
     logger.info(
-        "voice claim rejected: user=%s score=%.4f < threshold=%.2f", user, score, threshold
+        "voice claim rejected: user=%s score=%.4f < threshold=%.2f", user, score, threshold or 0.0
     )
     return None
 
 
-async def _voice_claim_consented(user_id: str) -> bool:
-    """True iff the user still has a consented speaker profile.
+async def _voice_claim_consented(user_id: str, model_id: Optional[str] = None) -> bool:
+    """True iff the user still has a consented speaker profile (of ``model_id`` when given: a claim made in one model's
+    space needs a consent row of THAT model).
 
     Guards the panel-claim path against a stale panel cache: consent
     revocation drops the row from /profiles/sync and /identify, and this
@@ -6724,10 +6767,12 @@ async def _voice_claim_consented(user_id: str) -> bool:
     try:
         from db_compat import get_compat_db as _get_compat_db
         async with _get_compat_db() as db:
-            async with db.execute(
-                "SELECT 1 FROM speaker_profiles WHERE user_id=? AND consent_at IS NOT NULL LIMIT 1",
-                (user_id,),
-            ) as cur:
+            sql = "SELECT 1 FROM speaker_profiles WHERE user_id=? AND consent_at IS NOT NULL"
+            params: tuple = (user_id,)
+            if model_id is not None:
+                sql += " AND " + speaker_models.MODEL_SQL + " = ?"
+                params = (user_id, model_id)
+            async with db.execute(sql + " LIMIT 1", params) as cur:
                 row = await cur.fetchone()
         return row is not None
     except Exception as exc:
@@ -6741,7 +6786,8 @@ async def _accepted_voice_claim(payload: dict, caller: dict) -> Optional[str]:
     member's live consent (``_voice_claim_consented``) - else None. The one claim gate
     for every lane that takes a claim (``voice_command``, ``/ambient``)."""
     claimed = _accept_panel_voice_claim(payload, caller)
-    if claimed and await _voice_claim_consented(claimed):
+    # consent is checked in the claim's OWN model (speaker_models): a ResNet34 claim needs a consented ResNet34 row
+    if claimed and await _voice_claim_consented(claimed, _claim_model(payload)[0]):
         return claimed
     return None
 
@@ -6758,10 +6804,17 @@ def _speaker_engine_unavailable_detail() -> str:
 
 @router.post("/enroll")
 async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth)):
-    """Enroll a speaker voice profile using a WAV audio sample.
+    """Enroll a speaker voice profile. ONE ``speaker_profiles`` row per (member, ``model_id``); profiles of different
+    models never mix (``speaker_models.py``).
 
-    Request: { "audio_base64": "...", "user_id": "...", "display_name": "...", "panel_id": "..." }
-    Computes a resemblyzer 256-dim embedding and stores it in speaker_profiles.
+    Two request shapes:
+
+    * ``audio_base64`` (+ ``user_id``, ``display_name``, ``panel_id``, ``consent``) - a WAV the SERVER embeds with
+      Resemblyzer (the legacy path, the only model the server computes). The embedding is averaged into the member's
+      existing Resemblyzer profile, as it always was.
+    * ``embedding_base64`` + ``model_id`` (+ ``sample_count``) - a finished 256-float PROFILE built ON THE PANEL (device
+      token only: for ResNet34 the audio never leaves the panel). It REPLACES the member's profile of that model - a fresh
+      5-clip enrolment is not blended with an old session - and drops that row's adapted profile.
     """
     from database import get_db
     import uuid as _uuid
@@ -6769,72 +6822,118 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
 
     from biometric_scope import resolve_enroll_target
 
-    b64 = str((payload or {}).get("audio_base64", "")).strip()
+    payload = payload or dict()
+    b64 = str(payload.get("audio_base64", "")).strip()
+    emb_b64 = str(payload.get("embedding_base64", "")).strip()
+    model_id = speaker_models.model_id_field(payload, "model_id")
+    if model_id is None:
+        raise HTTPException(status_code=400, detail="model_id must be a non-empty string")
+    if not speaker_models.is_known(model_id):
+        raise HTTPException(status_code=400, detail="unknown model_id")
     # A session caller may only enrol ITSELF (admins excepted). Taking the
     # payload's user_id verbatim let any household member enrol their own voice
     # under someone else's id — identity takeover, not just a bad row. A device
     # token still enrols on behalf of the person at the panel; when it names
     # nobody the pre-existing caller fallback stands.
-    _target = resolve_enroll_target((payload or {}).get("user_id"), caller)
+    _target = resolve_enroll_target(payload.get("user_id"), caller)
     user_id = str(_target or caller.get("user_id", "unknown"))
-    display_name = str((payload or {}).get("display_name", user_id)).strip() or user_id
-    panel_id = str((payload or {}).get("panel_id", caller.get("panel_id") or ""))
+    display_name = str(payload.get("display_name", user_id)).strip() or user_id
+    panel_id = str(payload.get("panel_id", caller.get("panel_id") or ""))
     # Biometric enrollment is opt-in (W6): the enroll UI sends consent=true after
     # an explicit checkbox. Without recorded consent the profile is stored but
     # never matched against or synced to a panel (identify/sync filter on it).
     # Tri-state: True stamps consent_at, False REVOKES it (SET NULL — the user
     # changed their mind), absent leaves the existing consent untouched.
-    _consent_raw = (payload or {}).get("consent")
+    _consent_raw = payload.get("consent")
     consent: Optional[bool] = None if _consent_raw is None else bool(_consent_raw)
 
-    if not b64:
-        raise HTTPException(status_code=400, detail="audio_base64 is required")
-
-    try:
-        raw = base64.b64decode(b64, validate=True)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="invalid base64 audio") from exc
-
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-        tmp.write(raw)
-        wav_path = tmp.name
-
-    try:
-        # Off the event loop: the first call loads resemblyzer/torch (~6 s) and
-        # every call is CPU-bound — inline, it stalled every live voice turn.
-        embedding_bytes = await asyncio.to_thread(_compute_resemblyzer_embedding, wav_path)
-    finally:
+    finished_profile = None      # the panel-built profile (float32 bytes) when this is the embedding shape
+    clips = 0                    # the audio path keeps the column default (0), exactly as before models existed
+    if emb_b64:
+        if caller.get("source") != "device":
+            raise HTTPException(status_code=403, detail="a finished voice profile may only be uploaded by a panel (device token)")
+        # A finished profile says which space it lives in; it is never assumed to be the legacy model.
+        _raw_model = payload.get("model_id")
+        if not isinstance(_raw_model, str) or not _raw_model.strip():
+            raise HTTPException(status_code=400, detail="model_id is required with embedding_base64")
         try:
-            os.unlink(wav_path)
-        except OSError:
-            pass
+            vec = speaker_models.validate_embedding(base64.b64decode(emb_b64, validate=True), model_id)
+        except Exception:
+            vec = None
+        if vec is None:
+            raise HTTPException(status_code=400, detail="invalid embedding for this model")
+        finished_profile = vec.astype("float32").tobytes()
+        try:
+            clips = max(1, min(int(payload.get("sample_count") or 1), 16))
+        except (TypeError, ValueError):
+            clips = 1
+        embedding_bytes = finished_profile
+    else:
+        if speaker_models.acting_model() != speaker_models.LEGACY_MODEL_ID:
+            # ZOE_SPEAKER_MODEL=resnet34: a Resemblyzer profile from uploaded audio would be stored and reported as success yet
+            # never recognise anyone (the acting model is ResNet34, built only on the panel). Refuse, and say where to go.
+            raise HTTPException(status_code=409, detail="Voice profiles are now built at the panel: say \"Zoe, learn my voice\" "
+                                                        "to the panel (nothing was stored).")
+        if not b64:
+            raise HTTPException(status_code=400, detail="audio_base64 or embedding_base64 is required")
+        if model_id != speaker_models.LEGACY_MODEL_ID:
+            raise HTTPException(status_code=400, detail="the server embeds audio with resemblyzer only; this model's profile is built on the panel")
+        try:
+            raw = base64.b64decode(b64, validate=True)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="invalid base64 audio") from exc
 
-    if embedding_bytes is None:
-        raise HTTPException(status_code=503, detail=_speaker_engine_unavailable_detail())
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp.write(raw)
+            wav_path = tmp.name
+
+        try:
+            # Off the event loop: the first call loads resemblyzer/torch (~6 s) and
+            # every call is CPU-bound — inline, it stalled every live voice turn.
+            embedding_bytes = await asyncio.to_thread(_compute_resemblyzer_embedding, wav_path)
+        finally:
+            try:
+                os.unlink(wav_path)
+            except OSError:
+                pass
+
+        if embedding_bytes is None:
+            raise HTTPException(status_code=503, detail=_speaker_engine_unavailable_detail())
 
     profile_id = str(_uuid.uuid4())
     try:
         async with _get_compat_db() as db:
-            # Check if user already has a profile — update sample_count and average embedding.
+            # Check if the user already has a profile OF THIS MODEL — update it, never touch another model's row.
             async with db.execute(
-                "SELECT id, embedding_blob, sample_count FROM speaker_profiles WHERE user_id=?",
-                (user_id,)
+                "SELECT id, embedding_blob, sample_count FROM speaker_profiles WHERE user_id=? AND "
+                + speaker_models.MODEL_SQL + " = ?",
+                (user_id, model_id)
             ) as cur:
                 existing = await cur.fetchone()
             if existing:
                 import numpy as np
                 old_id, old_blob, old_count = existing
-                old_emb = np.frombuffer(old_blob, dtype=np.float32)
-                new_emb = np.frombuffer(embedding_bytes, dtype=np.float32)
-                # Weighted average of embeddings.
-                n = old_count or 1
-                averaged = (old_emb * n + new_emb) / (n + 1)
-                averaged_norm = averaged / (np.linalg.norm(averaged) + 1e-9)
-                await db.execute(
-                    """UPDATE speaker_profiles SET embedding_blob=?, sample_count=sample_count+1,
-                       display_name=? WHERE id=?""",
-                    (averaged_norm.astype(np.float32).tobytes(), display_name, old_id),
-                )
+                if finished_profile is not None:
+                    # A finished panel-built profile REPLACES the old one. Its adapted profile started from the old anchor,
+                    # so it goes too (the sample_count may be unchanged, which alone would not invalidate it).
+                    await db.execute(
+                        """UPDATE speaker_profiles SET embedding_blob=?, sample_count=?, display_name=?,
+                           enrolled_at=CURRENT_TIMESTAMP, adapted_blob=NULL, adapted_from_count=NULL, adapt_count=0,
+                           adapted_at=NULL WHERE id=?""",
+                        (finished_profile, clips, display_name, old_id),
+                    )
+                else:
+                    old_emb = np.frombuffer(old_blob, dtype=np.float32)
+                    new_emb = np.frombuffer(embedding_bytes, dtype=np.float32)
+                    # Weighted average of embeddings.
+                    n = old_count or 1
+                    averaged = (old_emb * n + new_emb) / (n + 1)
+                    averaged_norm = averaged / (np.linalg.norm(averaged) + 1e-9)
+                    await db.execute(
+                        """UPDATE speaker_profiles SET embedding_blob=?, sample_count=sample_count+1,
+                           display_name=? WHERE id=?""",
+                        (averaged_norm.astype(np.float32).tobytes(), display_name, old_id),
+                    )
                 if consent is True:
                     await db.execute(
                         "UPDATE speaker_profiles SET consent_at=CURRENT_TIMESTAMP WHERE id=?",
@@ -6850,15 +6949,15 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
             else:
                 if consent:
                     await db.execute(
-                        """INSERT INTO speaker_profiles (id, user_id, display_name, embedding_blob, panel_id, consent_at)
-                           VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
-                        (profile_id, user_id, display_name, embedding_bytes, panel_id or None),
+                        """INSERT INTO speaker_profiles (id, user_id, display_name, embedding_blob, panel_id, consent_at, sample_count, model_id)
+                           VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)""",
+                        (profile_id, user_id, display_name, embedding_bytes, panel_id or None, clips, model_id),
                     )
                 else:
                     await db.execute(
-                        """INSERT INTO speaker_profiles (id, user_id, display_name, embedding_blob, panel_id)
-                           VALUES (?, ?, ?, ?, ?)""",
-                        (profile_id, user_id, display_name, embedding_bytes, panel_id or None),
+                        """INSERT INTO speaker_profiles (id, user_id, display_name, embedding_blob, panel_id, sample_count, model_id)
+                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        (profile_id, user_id, display_name, embedding_bytes, panel_id or None, clips, model_id),
                     )
             await db.commit()
     except Exception as exc:
@@ -6871,7 +6970,10 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
         import voice_session as _vs_revoke
 
         await _vs_revoke.revoke_member(user_id, "consent_revoked")
-    return {"ok": True, "profile_id": profile_id, "user_id": user_id, "display_name": display_name}
+    out = dict(ok=True, profile_id=profile_id, user_id=user_id, display_name=display_name)
+    if model_id != speaker_models.LEGACY_MODEL_ID:
+        out["model_id"] = model_id      # the legacy response shape is a pinned contract; only a new model adds a field
+    return out
 
 
 @router.post("/identify")
@@ -6880,13 +6982,20 @@ async def voice_identify(payload: dict, caller: dict = Depends(_require_voice_au
 
     Accepts two request formats:
     - { "embedding_base64": "...", "panel_id": "..." }  — pre-computed float32 embedding bytes
-      (sent by zoe_voice_daemon.py which computes resemblyzer locally on Pi/Jetson)
-    - { "audio_base64": "...", "panel_id": "..." }  — raw WAV bytes; server computes embedding
+      (sent by zoe_voice_daemon.py which computes the embedding locally on Pi/Jetson). ``model_id`` names the embedding
+      space it was computed in (default resemblyzer) and ``speech_s`` its clip length; ONLY profiles of that same model
+      are compared, and the threshold is that model's (``speaker_models.claim_threshold``).
+    - { "audio_base64": "...", "panel_id": "..." }  — raw WAV bytes; server computes the (Resemblyzer) embedding
     Returns best-match profile with confidence score.
     """
     from db_compat import get_compat_db as _get_compat_db
 
-    payload = payload or {}
+    payload = payload or dict()
+    model_id = speaker_models.model_id_field(payload, "model_id")
+    if model_id is None:
+        raise HTTPException(status_code=400, detail="model_id must be a non-empty string")
+    if not speaker_models.is_known(model_id):
+        raise HTTPException(status_code=400, detail="unknown model_id")
 
     # Fast path: pre-computed embedding from the voice daemon
     emb_b64 = str(payload.get("embedding_base64", "")).strip()
@@ -6900,6 +7009,8 @@ async def voice_identify(payload: dict, caller: dict = Depends(_require_voice_au
         b64 = str(payload.get("audio_base64", "")).strip()
         if not b64:
             raise HTTPException(status_code=400, detail="embedding_base64 or audio_base64 is required")
+        if model_id != speaker_models.LEGACY_MODEL_ID:
+            raise HTTPException(status_code=400, detail="the server embeds audio with resemblyzer only")
 
         try:
             raw = base64.b64decode(b64, validate=True)
@@ -6922,27 +7033,32 @@ async def voice_identify(payload: dict, caller: dict = Depends(_require_voice_au
         if query_emb is None:
             raise HTTPException(status_code=503, detail=_speaker_engine_unavailable_detail())
 
+    if model_id not in speaker_models.visible_models():
+        return dict(ok=True, identified=False, reason="model_not_served")
+
     try:
         async with _get_compat_db() as db:
             async with db.execute(
-                "SELECT id, user_id, display_name, embedding_blob FROM speaker_profiles "
-                "WHERE consent_at IS NOT NULL"
+                "SELECT id, user_id, display_name, embedding_blob, " + speaker_models.MODEL_SQL
+                + " FROM speaker_profiles WHERE consent_at IS NOT NULL"
             ) as cur:
                 profiles = await cur.fetchall()
     except Exception as exc:
         raise HTTPException(status_code=500, detail="DB error") from exc
 
+    # Profiles of any OTHER model are in a different embedding space: they are never scored against this query.
+    profiles = [r for r in profiles if speaker_models.row_model_id(r, 4) == model_id]
     if not profiles:
-        return {"ok": True, "identified": False, "reason": "no_profiles"}
+        return dict(ok=True, identified=False, reason="no_profiles")
 
-    profiles = await speaker_adaptation.serve_adapted_profiles(profiles, user_idx=1, blob_idx=3)
+    profiles = await speaker_adaptation.serve_adapted_profiles(profiles, user_idx=1, blob_idx=3, model_idx=4)
 
     best_id = None
     best_user_id = None
     best_name = None
     best_score = -1.0
     for row in profiles:
-        pid, uid, dname, emb_blob = row
+        pid, uid, dname, emb_blob = row[:4]
         score = _cosine_similarity(query_emb, emb_blob)
         if score > best_score:
             best_score = score
@@ -6950,34 +7066,33 @@ async def voice_identify(payload: dict, caller: dict = Depends(_require_voice_au
             best_user_id = uid
             best_name = dname
 
-    # Resemblyzer cosine similarity > 0.82 is typically a match.
-    threshold = _speaker_id_threshold()
-    if best_score >= threshold:
-        return {
-            "ok": True,
-            "identified": True,
-            "profile_id": best_id,
-            "user_id": best_user_id,
-            "display_name": best_name,
-            "confidence": round(best_score, 4),
-        }
-    return {
-        "ok": True,
-        "identified": False,
-        "best_confidence": round(best_score, 4),
-        "threshold": threshold,
-    }
+    # Resemblyzer cosine similarity > 0.82 is typically a match; ResNet34 has its own length-group thresholds.
+    threshold = speaker_models.claim_threshold(model_id, payload.get("speech_s"), _speaker_id_threshold())
+    if threshold is not None and best_score >= threshold:
+        return dict(ok=True, identified=True, profile_id=best_id, user_id=best_user_id, display_name=best_name,
+                    confidence=round(best_score, 4), model_id=model_id)
+    return dict(ok=True, identified=False, best_confidence=round(best_score, 4), threshold=threshold, model_id=model_id)
+
+
+def _parse_models_param(models: Optional[str]) -> frozenset:
+    """The model ids a panel says it can match (``?models=a,b``). A panel that says nothing is a legacy one and gets the
+    Resemblyzer profiles only - it must never be handed a vector from a space it does not know about."""
+    wanted = frozenset(m.strip() for m in (models or "").split(",") if m.strip())
+    return wanted or frozenset([speaker_models.LEGACY_MODEL_ID])
 
 
 @router.get("/profiles/sync")
-async def voice_profiles_sync(caller: dict = Depends(_require_voice_auth)):
+async def voice_profiles_sync(models: Optional[str] = None, caller: dict = Depends(_require_voice_auth)):
     """Panel-facing profile feed for ON-DEVICE speaker matching.
 
-    Returns consented profiles (embedding + user_id) plus the server's
-    acceptance threshold so the panel daemon can cosine-match locally and
-    send back only {voice_user_id, voice_score} per turn. Device-token
+    Returns consented profiles (embedding + user_id + ``model_id``) plus the server's acceptance thresholds so the panel
+    daemon can cosine-match locally and send back only {voice_user_id, voice_score} per turn. Device-token
     callers only: this hands out biometric embeddings and must never be
     reachable from a browser session.
+
+    Profiles are served per MODEL: only those the server's ``ZOE_SPEAKER_MODEL`` mode exposes AND the panel asked for with
+    ``?models=`` (no parameter = legacy Resemblyzer only), so an older panel is never given a ResNet34 vector to
+    mis-compare, and with the flag at its default the feed carries nothing new.
     """
     if caller.get("source") != "device":
         raise HTTPException(status_code=403, detail="device token required")
@@ -6986,29 +7101,35 @@ async def voice_profiles_sync(caller: dict = Depends(_require_voice_auth)):
     try:
         async with _get_compat_db() as db:
             async with db.execute(
-                "SELECT user_id, display_name, embedding_blob, sample_count FROM speaker_profiles "
-                "WHERE consent_at IS NOT NULL ORDER BY user_id"
+                "SELECT user_id, display_name, embedding_blob, sample_count, " + speaker_models.MODEL_SQL
+                + " FROM speaker_profiles WHERE consent_at IS NOT NULL ORDER BY user_id"
             ) as cur:
                 rows = await cur.fetchall()
     except Exception as exc:
         logger.error("voice/profiles/sync DB error: %s", exc)
         raise HTTPException(status_code=500, detail="DB error") from exc
 
-    rows = await speaker_adaptation.serve_adapted_profiles(rows, user_idx=0, blob_idx=2)  # ZOE_SPEAKER_ADAPT=on only
+    served = speaker_models.visible_models() & _parse_models_param(models)
+    rows = [r for r in rows if speaker_models.row_model_id(r, 4) in served]
+    rows = await speaker_adaptation.serve_adapted_profiles(rows, user_idx=0, blob_idx=2, model_idx=4)  # ZOE_SPEAKER_ADAPT=on only
 
-    return {
-        "ok": True,
-        "threshold": _speaker_id_threshold(),
-        "profiles": [
-            {
-                "user_id": r[0],
-                "display_name": r[1],
-                "embedding_base64": base64.b64encode(bytes(r[2])).decode("ascii"),
-                "sample_count": r[3] or 1,
-            }
+    return dict(
+        ok=True,
+        threshold=_speaker_id_threshold(),
+        mode=speaker_models.speaker_mode(),
+        models=dict((m, dict(dim=speaker_models.MODELS[m].dim, thresholds=speaker_models.thresholds_public(m)))
+                    for m in sorted(served)),
+        profiles=[
+            dict(
+                user_id=r[0],
+                display_name=r[1],
+                embedding_base64=base64.b64encode(bytes(r[2])).decode("ascii"),
+                sample_count=r[3] or 1,
+                model_id=speaker_models.row_model_id(r, 4),
+            )
             for r in rows
         ],
-    }
+    )
 
 
 @router.get("/profiles")
@@ -7026,14 +7147,14 @@ async def voice_profiles(caller: dict = Depends(_require_voice_auth)):
     caller_id, is_admin = require_person_scope(caller)
     if is_admin:
         sql = (
-            "SELECT id, user_id, display_name, sample_count, panel_id, consent_at "
-            "FROM speaker_profiles ORDER BY display_name"
+            "SELECT id, user_id, display_name, sample_count, panel_id, consent_at, " + speaker_models.MODEL_SQL
+            + " FROM speaker_profiles ORDER BY display_name"
         )
         params: tuple = ()
     else:
         sql = (
-            "SELECT id, user_id, display_name, sample_count, panel_id, consent_at "
-            "FROM speaker_profiles WHERE user_id=? ORDER BY display_name"
+            "SELECT id, user_id, display_name, sample_count, panel_id, consent_at, " + speaker_models.MODEL_SQL
+            + " FROM speaker_profiles WHERE user_id=? ORDER BY display_name"
         )
         params = (caller_id,)
 
@@ -7041,15 +7162,18 @@ async def voice_profiles(caller: dict = Depends(_require_voice_auth)):
         async with _get_compat_db() as db:
             async with db.execute(sql, params) as cur:
                 rows = await cur.fetchall()
-        return {
-            "ok": True,
-            "profiles": [
-                {"id": r[0], "user_id": r[1], "display_name": r[2],
-                 "sample_count": r[3] or 1, "panel_id": r[4],
-                 "consented": r[5] is not None}
-                for r in rows
-            ]
-        }
+        mode = speaker_models.speaker_mode()
+        profiles = []
+        for r in rows:
+            mid = speaker_models.row_model_id(r, 6)
+            profiles.append(dict(id=r[0], user_id=r[1], display_name=r[2], sample_count=r[3] or 1, panel_id=r[4],
+                                 consented=r[5] is not None, model_id=mid,
+                                 acting=mid == speaker_models.acting_model(mode),
+                                 model_label=speaker_models.model_label(mid, mode)))
+        # deterministic: per member, the profile that recognises them first, then the others by model id
+        profiles.sort(key=lambda p: (str(p["display_name"] or ""), str(p["user_id"] or ""), 0 if p["acting"] else 1,
+                                     p["model_id"]))
+        return dict(ok=True, profiles=profiles)
     except Exception as exc:
         logger.error("voice/profiles DB error: %s", exc)
         raise HTTPException(status_code=500, detail="DB error") from exc

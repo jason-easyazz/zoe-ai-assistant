@@ -102,8 +102,17 @@ unlocks private data by itself - private reads ask for the PIN.
 gets one `voice_card` push frame with the real rows - the events (title, time), the list items (done or not), the
 reminders (title, due) - built by `voice_cards.py` from the rows the Skybridge card already carries (calendar, lists)
 or read for that member (reminders, and a calendar / list ask the Skybridge was vetoed on, in the background). The
-calendar answer also NAMES the events aloud ("You have 2 events today: Dentist at 9 AM and Dinner at 6:30 PM.",
-lexicon `voice_session.spoken_calendar`). A delivered card replaces the page-reloading Skybridge navigate (it would wipe
+calendar answer also NAMES the events aloud - at most three, then "and N more on screen" ("You have 2 events today:
+Dentist at 9 AM and Dinner at 6:30 PM.", "Just one today: Team meeting at 10 PM."; lexicon
+`voice_session.spoken_calendar`), built in the Skybridge answer itself (`_resolve_calendar` ->
+`voice_cards.spoken_events`). **None of this needs `ZOE_VOICE_SESSION`** (2026-10-14, live: a member signed in by a fresh
+PIN heard only "You have 1 event today."): the read-back and the card follow the turn's IDENTITY - an open voice session, a
+fresh PIN sign-in or a named speaker - and a turn with none hears only "That's private. Unlock with your PIN and I'll read it
+out." (no title, no count). A short follow-up within `ZOE_CALENDAR_FOLLOWUP_TTL_S` (90 s) of such an answer ("what is it",
+"what are they", "which one", "what's the one event") re-runs the same member-scoped read (`conversation_cues.calendar_followup`,
+lexicon `calendar_followup`; a guest's follow-up is the PIN challenge). **Crowded room:** the identity-engine rule (nothing
+private is spoken or shown while a second voice is present) is NOT enforced for these reads - the server has no signal for
+"someone else is in the room" yet (open problem). A delivered card replaces the page-reloading Skybridge navigate (it would wipe
 the card); an undelivered one (no live socket) falls back to today's broadcast. A turn that is NOT authorised gets the
 privacy-safe card instead - no member, no rows: "Say it again so I know it's you, or unlock with your PIN." (only the
 PIN line when no voice session can open), alongside the existing PIN challenge.
@@ -133,7 +142,8 @@ on open). Never audio, never a score.
    a second voice (or "lock") removes both; "unlock the front door" asks for the PIN; `grep VOICE_SESSION` in
    `~/.zoe-logs/zoe-data.app.log` shows the open / close lines.
 5. Voice-path change: the merged commit needs a passing `voice_regression_probe.py` artifact before deploy (the deploy
-   gate enforces it). Flag OFF is byte-for-byte today's path (`tests/test_voice_session.py`).
+   gate enforces it). Flag OFF has no session machinery (nothing opens, closes or steps up) but the read-back and the card above still apply
+   (`tests/test_voice_session.py`, `tests/test_calendar_voice_read.py`).
 
 **Rollback:** unset `ZOE_VOICE_SESSION` (or `=0`) and restart zoe-data - every session check is skipped and the voice
 path is the legacy one; open sessions vanish with the process. The UI script is inert without frames.

@@ -28,11 +28,11 @@ Scope note: this covers *enrolled identity biometrics*. Ambient-capture retentio
 
 Per modality, one row per profile in Postgres (the zoe-data DB):
 
-| | Speaker (`speaker_profiles`, migration 0001 + 0023) | Face (`face_profiles`, migration 0024) |
+| | Speaker (`speaker_profiles`, migration 0001 + 0023 + 0051) | Face (`face_profiles`, migration 0024) |
 |---|---|---|
-| Biometric payload | `embedding_blob` — one resemblyzer 256-dim float32 vector, weight-averaged across enrol samples | `embedding_blob` — a buffalo_sc / MobileFaceNet-class ArcFace vector (`dim` ∈ {128, 256, 512}) |
-| Rows per person | exactly one (re-enrolling averages into it) | up to 8 (pose variety; oldest dropped past the cap) |
-| Metadata | `user_id`, `display_name`, `panel_id`, `sample_count`, `enrolled_at`, `consent_at` | `user_id`, `display_name`, `panel_id`, `model_name`, `dim`, `created_at`, `consent_at`, `active` |
+| Biometric payload | `embedding_blob` — one 256-dim float32 vector in the space its `model_id` names: Resemblyzer (weight-averaged across enrol samples, the server embeds the uploaded WAV and discards it) or, flag-dark, WeSpeaker ResNet34 (a 5-clip profile built ON THE PANEL; only the 256 floats are uploaded, never audio) | `embedding_blob` — a buffalo_sc / MobileFaceNet-class ArcFace vector (`dim` ∈ {128, 256, 512}) |
+| Rows per person | one per `model_id` (re-enrolling a Resemblyzer profile averages into it; a ResNet34 re-enrolment replaces it). Two only while `ZOE_SPEAKER_MODEL=dual` builds both from the same sitting; profiles of different models are never compared | up to 8 (pose variety; oldest dropped past the cap) |
+| Metadata | `user_id`, `display_name`, `panel_id`, `sample_count`, `enrolled_at`, `consent_at`, `model_id` | `user_id`, `display_name`, `panel_id`, `model_name`, `dim`, `created_at`, `consent_at`, `active` |
 
 **Guarded adaptation (flag-dark, `ZOE_SPEAKER_ADAPT`, default off; migration 0048).** When
 turned on, a speaker row additionally carries an *adapted* embedding (`adapted_blob`, the same
@@ -123,7 +123,10 @@ the database. Authorisation is per §5.
 
 **UI (voice only).** The desktop **Settings → Voice Identity** section
 (`services/zoe-ui/dist/settings.html`) lists the signed-in member's voice profiles
-and offers a per-profile Delete button, which calls the endpoint above.
+and offers a per-profile Delete button, which calls the endpoint above. A member enrolled under
+`ZOE_SPEAKER_MODEL=dual` has one row per model (the list carries `model_id`); the per-row Delete removes
+that row only, while the spoken "forget my voice" deletes every row of the member
+([speaker-resnet34-switch.md](speaker-resnet34-switch.md)).
 
 **Deleting a SPEAKER profile now reaches the panels at once** (Zoe-driven voice enrolment,
 [zoe-driven-voice-enrollment.md](zoe-driven-voice-enrollment.md)): both the spoken "forget my voice" and
