@@ -948,11 +948,16 @@ def _list_remove_from_text(message: str) -> tuple[str, str, str] | None:
 @lru_cache(maxsize=1)
 def _list_contains_res() -> tuple["re.Pattern[str]", ...]:
     # Built on first use: _SHAPE_LEAD is defined further down, with the people shapes.
+    # A tag after the list ("…on the list, right?", "…on the list yet", "…please") is not part of the question.
+    tag = r"(?:[\s,]+(?:right|yet|as\s+well|too|please|again|now|then|zoe|already|still))*\s*$"
     return (
-        re.compile(_SHAPE_LEAD + r"(?:is|are)\s+(?:there\s+)?(?:any\s+|some\s+)?(?P<item>.+?)\s+(?:on|in)\s+"
-                   + _LIST_TARGET_RE + r"\s*$"),
-        re.compile(_SHAPE_LEAD + r"(?:do|did|have)\s+(?:we|i)\s+(?:already\s+)?(?:got|have|put|add|added)\s+"
-                   r"(?:any\s+|some\s+)?(?P<item>.+?)\s+(?:on|in|to)\s+" + _LIST_TARGET_RE + r"\s*$"),
+        re.compile(_SHAPE_LEAD + r"(?:is|are)\s+(?:there\s+)?(?:still\s+)?(?:any\s+|some\s+)?(?P<item>.+?)\s+(?:on|in)\s+"
+                   + _LIST_TARGET_RE + tag),
+        re.compile(_SHAPE_LEAD + r"(?:do|did|have)\s+(?:we|i)\s+(?:(?:already|still)\s+)?(?:got|have|put|add|added)\s+"
+                   r"(?:any\s+|some\s+)?(?P<item>.+?)\s+(?:on|in|to)\s+" + _LIST_TARGET_RE + tag),
+        # "milk's on the list, right?" / "milk is on the list, isn't it"
+        re.compile(_SHAPE_LEAD + r"(?P<item>[a-z0-9' -]+?)(?:'s|\s+is|\s+are)\s+(?:still\s+|already\s+)?(?:on|in)\s+"
+                   + _LIST_TARGET_RE + r"(?:[\s,]+(?:right|isn't\s+it|aren't\s+they|yeah|yes))+\s*$"),
     )
 
 
@@ -965,8 +970,12 @@ def _list_contains_from_text(text: str) -> tuple[str, str, str] | None:
             continue
         from list_service import clean_item_text, is_plausible_item
 
-        item = clean_item_text(_clean_action_text(match.group("item")))
-        if not item or not is_plausible_item(item):
+        # "is milk STILL / ALREADY on the list": the adverb is about the question, not part of the item.
+        raw_item = re.sub(r"(?:\s+(?:still|already|even|actually|definitely|really|also|left|remaining|anymore|any\s+more))+$", "",
+                          match.group("item").strip())
+        raw_item = re.sub(r"^(?:still|already|even|actually|definitely|really|also)\s+", "", raw_item)
+        item = clean_item_text(_clean_action_text(raw_item))
+        if not item or not is_plausible_item(item) or not command_shapes.plain_list_item(item):
             return None
         list_type, list_name = _list_target(match)
         return item, list_type, list_name

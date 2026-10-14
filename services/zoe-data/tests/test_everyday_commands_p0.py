@@ -795,3 +795,40 @@ def test_no_time_word_means_now():
                  "turn on the lights if you can", "turn off light two", "turn on the lights at 100 percent"):
         claim = _claim(text)
         assert claim is None or claim[1] != "delayed", text
+
+
+@pytest.mark.parametrize(
+    "text,item",
+    [("is milk still on my shopping list?", "milk"), ("is milk already on my shopping list", "milk"),
+     ("do we still have eggs on the list", "eggs")],
+)
+def test_membership_adverbs_are_not_part_of_the_item(text, item):
+    i = sky.classify_skybridge_intent(text)
+    assert (i.action, i.item_text) == ("contains", item), text
+
+
+@pytest.mark.parametrize(
+    "text,item",
+    [
+        ("is there any milk on the list", "milk"),
+        ("do we have any milk left on the list", "milk"),
+        ("have we got milk on the list", "milk"),
+        ("is the milk on the list", "milk"),
+        ("is my milk on the list", "milk"),
+        ("milk's on the list right?", "milk"),
+        ("is milk on the list yet", "milk"),
+        ("is milk on the list as well", "milk"),
+        ("hey zoe is milk on the list please", "milk"),
+        ("is there still milk on the list", "milk"),
+        ("are the eggs still on the list", "eggs"),
+    ],
+)
+def test_membership_fillers_articles_and_tags_never_leak_into_the_item(text, item):
+    i = sky.classify_skybridge_intent(text)
+    assert (i.action, i.item_text) == ("contains", item), text
+
+
+@pytest.mark.parametrize("text", ["milk is on the list", "is it on the list", "is everything on the list"])
+def test_membership_statements_and_pointers_are_not_yes_no_questions(text):
+    i = sky.classify_skybridge_intent(text)
+    assert i is None or i.action != "contains", text
