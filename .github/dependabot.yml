@@ -35,10 +35,6 @@ updates:
       # tests/unit/test_harness_pin_agreement.py), and zoe_core_client.py is
       # written against its RPC event schema. A bot bump here can only be red.
       - dependency-name: "@earendil-works/pi-*"
-      # Types must match the Node the sidecars actually run (22.x, engines
-      # >=22.18); a newer @types/node typechecks APIs that do not exist at runtime.
-      - dependency-name: "@types/node"
-        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: npm
     directory: /labs/flue-zoe-brain-2x
