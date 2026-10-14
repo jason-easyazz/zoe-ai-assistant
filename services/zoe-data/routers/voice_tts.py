@@ -3896,7 +3896,21 @@ async def voice_command(
             if _decision == "drop":
                 # corrected or moved on ("no, that's not correct, it's Percy"): the waiting write is off, these words are a new request
                 del _PENDING_CONFIRMATIONS[panel_id]
-            if _decision == "yes":
+            if _decision == "yes" and pending.get("stt_snap_text"):
+                # A confirmed STT snap ("Did you mean: cancel the timer?" - "yes"): from here on this turn's words ARE the snapped
+                # command, so every gate below (PIN / guest policy / speculation / Skybridge's router veto) judges it like any other.
+                del _PENDING_CONFIRMATIONS[panel_id]
+                text = str(pending["stt_snap_text"])
+                _spacer.text = text
+                try:
+                    import stt_snap as _stt_snap_yes
+
+                    _router_decision = _stt_snap_yes.route_for(text)
+                    logger.warning("STT_SNAP from=%s to=%s outcome=confirmed", pending.get("stt_snap_from", ""),
+                                   pending.get("stt_snap_intent", ""))
+                except Exception as _snap_yes_exc:
+                    logger.debug("voice/command stt snap confirm re-route failed: %s", _snap_yes_exc)
+            elif _decision == "yes":
                 # User confirmed — execute the intent now.
                 del _PENDING_CONFIRMATIONS[panel_id]
                 from intent_router import execute_intent, Intent
@@ -4019,6 +4033,56 @@ async def voice_command(
             return await _answer_from_tier(_conv_result)
     except Exception as _conv_exc:
         logger.warning("voice/command conversation tiers failed (non-fatal): %s", _conv_exc)
+
+    # ── STT snap (ZOE_STT_SNAP = off | shadow (default) | on; stt_snap.py) ─────
+    # ONE misheard word of a command ("two on the light", "turn of the lights", "set a time for 5 minutes"): the conversation tiers
+    # above missed, and stt_snap.decide runs only when no Skybridge / keyword matcher claims the words and the domain experts could
+    # not act on them either (expert_may_claim) - so a turn a fast tier owns is never touched. A snap to a read or a low-risk write
+    # (one light on/off, music play/pause, one list item, one new timer) continues as the snapped command, whose own receipt says
+    # it back; any other write asks "Did you mean: ...?" (the pending-confirmation "yes" above runs it). shadow = log + struggle note.
+    try:
+        import stt_snap as _stt_snap
+
+        _snap_mode = _stt_snap.mode()
+        if _snap_mode != "off" and not _stt_snap.expert_may_claim(_router_decision):
+            _snap = _stt_snap.decide(
+                text, context=(_VOICE_SESSIONS.get(panel_id) or {}).get("skybridge_context") or None).snap
+            if _snap is not None:
+                _snap_guest = effective_user in _GUEST_SENTINEL_USERS or _speaker_verified is False
+                if _snap_mode == "on" and _speculation.bound_gate() is not None:
+                    # a speculative turn (daemon verdict pending) neither asks nor changes its words before the verdict
+                    await _speculation.await_commit("turn:stt_snap")
+                if _snap_mode != "on":
+                    _stt_snap.log_line(_snap, f"shadow_{_snap.safety}", guest=_snap_guest)
+                    _stt_snap.note_struggle(_snap, f"shadow_{_snap.safety}", turn_text=text)
+                elif _snap.safety == _stt_snap.CONFIRM:
+                    _stt_snap.log_line(_snap, "asked", guest=_snap_guest)
+                    _stt_snap.note_struggle(_snap, "asked", turn_text=text)
+                    _PENDING_CONFIRMATIONS[panel_id] = {
+                        "intent_name": "stt_snap",
+                        "slots": {},
+                        "stt_snap_text": _snap.text,
+                        "stt_snap_intent": _snap.intent,
+                        "stt_snap_from": _snap.from_hash,
+                        "expire_at": time.monotonic() + _CONFIRM_TIMEOUT_S,
+                        "session_id": session_id,
+                        "user_id": effective_user,
+                    }
+                    from types import SimpleNamespace as _SnapNS
+
+                    _snap_out = await _answer_from_tier(
+                        _SnapNS(reply=_stt_snap.confirm_question(_snap), ui=None, domain="stt_snap", intent="confirm"),
+                        intent="stt_snap_confirm")
+                    _snap_out["pending_confirmation"] = True
+                    return _snap_out
+                else:
+                    _stt_snap.log_line(_snap, "acted", guest=_snap_guest)
+                    text = _snap.text
+                    _spacer.text = text
+                    _router_decision = _stt_snap.route_for(text)
+                    _stt_snap.note_struggle(_snap, "acted", turn_text=text)
+    except Exception as _snap_exc:
+        logger.warning("voice/command stt snap failed (non-fatal): %s", _snap_exc)
 
     _voice_processing_ack_sent = False
     if not stream:
