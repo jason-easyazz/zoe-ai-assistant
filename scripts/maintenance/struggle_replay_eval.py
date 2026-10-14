@@ -49,6 +49,8 @@ _CMD = re.compile(r"voice/command panel=(\S+) session=(\S+) user=(\S+) ")
 _SKY = re.compile(r"SKYBRIDGE TIMING .* reply=(.*)$")
 _LANE = re.compile(r"BRAIN_LANE lane_attempted=\S+ lane_served=(\S+) outcome=(\S+) .*session=(\S+)")
 _SYNTHETIC_PANELS = ("replay", "test", "probe", "ci-", "e2e", "bench")
+_SKYGATE = re.compile(r"SKYBRIDGE_GATE router=\S+ conf=\S+ skybridge=(\S+) action=\S+ decision=(\S+)")
+_INTENT_GATE = re.compile(r"INTENT_GATE lane=\S+ intent=\S+ head=([a-z_]+)@")
 _ABORT = re.compile(r"FLUE_ABORT .*session=(\S+) .*reason=(\S+)")
 
 
@@ -105,6 +107,7 @@ def parse(paths: list[Path], since: datetime) -> list[sig.Turn]:
                             scores = {}
                         last.predicted_score = (float(scores.get(last.predicted_domain, 0.0)) if scores
                                                 else float(mr.group(3)))
+                        last.sim_scores = {str(k): float(v) for k, v in scores.items() if isinstance(v, (int, float))}
                 elif (m2 := _TWO.search(line)):
                     try:
                         rec = json.loads(m2.group(1))
@@ -134,6 +137,10 @@ def parse(paths: list[Path], since: datetime) -> list[sig.Turn]:
                     if t is not None:
                         t.path, t.lane, t.lane_outcome = sig.PATH_BRAIN, ml.group(1), ml.group(2)
                         t.reply = t.reply or "(brain reply not logged)"
+                elif (mg := _SKYGATE.search(line)):
+                    last.sky_domain, last.sky_vetoed = mg.group(1), mg.group(2) == "veto"
+                elif (mi := _INTENT_GATE.search(line)):
+                    last.head_top = last.head_top or mi.group(1)
                 elif (ma := _ABORT.search(line)):
                     t = by_session.get(ma.group(1))
                     if t is not None and ma.group(2) == "barge_in":
@@ -143,14 +150,15 @@ def parse(paths: list[Path], since: datetime) -> list[sig.Turn]:
 
 def run(turns: list[sig.Turn]) -> list[tuple[sig.Turn | None, sig.Turn, list[sig.Event]]]:
     out = []
-    prev_by_conv: dict[str, sig.Turn] = {}
+    hist_by_conv: dict[str, list] = {}
     for t in turns:
-        prev = prev_by_conv.get(t.conv_key)
-        evs = sig.detect(prev, t)
+        hist = hist_by_conv.get(t.conv_key, [])
+        prev = hist[-1] if hist else None
+        evs = sig.detect_window(hist, t)       # exactly what the live worker runs
         if t.reply == "(brain reply not logged)":   # no words to judge: CANT_DO / VERBOSE are not evaluable here
             evs = [e for e in evs if not (e.about is t and e.signal in (sig.CANT_DO, sig.VERBOSE))]
         out.append((prev, t, evs))
-        prev_by_conv[t.conv_key] = t
+        hist_by_conv[t.conv_key] = (hist + [t])[-(sig.LOOKBACK_TURNS + 1):]
     return out
 
 

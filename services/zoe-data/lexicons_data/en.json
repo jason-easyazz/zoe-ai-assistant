@@ -1255,6 +1255,66 @@
   ],
   "examples": ["how are you", "how are you today", "how are you going", "how's it going", "hi there how are you", "hey zoe how are you?", "hello how are you today", "I want to know how you are", "I just want to know how you are doing", "can I ask how you are", "are you okay", "tell me about yourself", "what are you up to"]
  },
+ "calendar_followup": {
+  "_note": "conversation_cues.calendar_followup: a short question about the calendar answer Zoe JUST gave ('what is it', 'what are they', 'what's the one event', 'which one'). The WHOLE utterance (after 'lead_ins' and 'fillers' are taken off both ends) must match one of 'patterns' (regex fragments, full match). The caller supplies the freshness window and the member-scoped read; a language with no section contributes nothing.",
+  "reviewed": true,
+  "lead_ins": [
+   "i was wondering",
+   "i'm wondering",
+   "i wonder",
+   "i'd like to know",
+   "i want to know",
+   "i need to know",
+   "can you tell me",
+   "could you tell me",
+   "can you say",
+   "do you know",
+   "tell me",
+   "just tell me",
+   "so",
+   "and",
+   "um",
+   "uh",
+   "okay",
+   "ok",
+   "hey",
+   "zoe",
+   "well"
+  ],
+  "fillers": ["please", "again", "then", "now", "zoe", "for me", "to me"],
+  "patterns": [
+   "(?:what|which)(?:'s|s| is| are| was)? (?:it|they|that|those|these|this)(?: (?:is|are|called))?",
+   "(?:what|which)(?:'s|s| is| are)? (?:the )?(?:(?:one|only|single|first|next|other|last|2|3|two|three) )?(?:event|events|appointment|appointments|thing|things|one|ones)(?: (?:on|in|for) (?:my |the )?(?:calendar|schedule|today|tonight|tomorrow|the day))?(?: (?:is|are|called|it is))?",
+   "which one(?: is it)?",
+   "(?:read|say) (?:it|them|that|those)(?: out| out loud| to me| again)?",
+   "(?:show|give) me (?:it|them|that|those)(?: again)?",
+   "what(?:'s| is)? (?:it|that) (?:event |appointment )?called"
+  ],
+  "examples": [
+   "what is it",
+   "What is it?",
+   "what are they",
+   "what's that",
+   "which one",
+   "what's the one event on my calendar",
+   "I was wondering what the one event for today is",
+   "can you tell me what it is",
+   "read them out",
+   "what's it called"
+  ],
+  "not_followups": [
+   "what is it about you",
+   "what time is it",
+   "what is the weather",
+   "what is the capital of france",
+   "what is it like on mars",
+   "what is the one thing you like about music",
+   "which one is better",
+   "play it",
+   "turn it off",
+   "what is it you do"
+  ]
+ },
  "smart_home_followup": {
   "_note": "conversation_cues.smart_home_followup: a bare pronoun command about the device just controlled ('turn it back on again' right after 'turn the light off'). The WHOLE utterance must be made of these words: 'verbs' + 'pronouns' + on/off/back, with 'fillers' ignored; a pronoun, or 'back' beside on/off, is required; 'back' with no on/off reverses the last action. 'self_contained' lists on/off words that already carry their object (a language that fuses the pronoun into the verb).",
   "reviewed": true,
@@ -1409,15 +1469,20 @@
   },
   "step_up_reason": "That needs your PIN. Choose your profile and enter your PIN to continue.",
   "spoken_calendar": {
-   "none": "You have nothing on {qualifier}.",
-   "one": "You have one event {qualifier}: {list}.",
-   "many": "You have {count} events {qualifier}: {list}.",
+   "none": "You have nothing {when}.",
+   "one": "Just one {when}: {list}.",
+   "many": "You have {count} events {when}: {list}.",
    "item_timed": "{title} at {time}",
    "item_untimed": "{title}",
+   "item_timed_day": "{title} on {day} at {time}",
+   "item_untimed_day": "{title} on {day}",
    "joiner": ", ",
    "last_joiner": " and ",
-   "more": "and {n} more",
-   "max_named": 5
+   "more": "{n} more on screen",
+   "max_named": 3,
+   "on": "on {qualifier}",
+   "bare_qualifiers": ["today", "tonight", "tomorrow", "yesterday", "this week", "next week", "this weekend"],
+   "private": "That's private. Unlock with your PIN and I'll read it out."
   },
   "examples": {
    "lock": [
