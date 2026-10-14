@@ -50,6 +50,7 @@ PROVENANCE_FOR_PROVIDER = {"google": "synced", "microsoft": "synced", "carddav":
                            "local": "file_import", "introduction": "introduction", "omi_tag": "approved_from_pendant"}
 MEMBER_PROVENANCES = ("said_by_member", "entered_by_member")
 MAX_VALUE = 2000
+CARD_META = ("unmapped", "photos_inline_dropped", "cards_skipped")     # codec counters, never stored
 MAX_PARTS_JSON = 4000
 
 # card list key -> field kind (``name`` / ``groups`` / ``dates`` / ``related`` are handled on their own)
@@ -299,7 +300,7 @@ async def _apply_source_card(db, user_id: str, person_id: str, sc_id: str, card:
 
 @dataclass
 class ImportOutcome:
-    action: str                    # created | linked | updated | unchanged | review | forgotten | skipped
+    action: str                    # created | linked | updated | unchanged | review | dismissed | forgotten | skipped
     person_id: Optional[str] = None
     source_contact_id: Optional[str] = None
     review_id: Optional[str] = None
@@ -354,6 +355,13 @@ async def _link(db, user_id: str, person_id: str, sc_id: str, *, method: str, li
     await _run(db, "INSERT INTO person_contact_links (id, user_id, person_id, source_contact_id, method, linked_by, linked_at, evidence) "
                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                (str(uuid.uuid4()), user_id, person_id, sc_id, method, linked_by, now, json.dumps(evidence, sort_keys=True)))
+
+
+async def _close_stale_links(db, user_id: str, sc_id: str, now: str) -> None:
+    """A live link whose person is soft-deleted (the People page's delete) is closed, so the card can be matched afresh
+    instead of tripping the one-live-link index."""
+    await _run(db, "UPDATE person_contact_links SET unlinked_at = ? WHERE user_id = ? AND source_contact_id = ? AND unlinked_at IS NULL "
+                   "AND person_id IN (SELECT id FROM people WHERE deleted = 1)", (now, user_id, sc_id))
 
 
 async def _linked_person(db, user_id: str, sc_id: str) -> Optional[str]:
@@ -435,12 +443,31 @@ async def forgotten_pattern(user_id: str):
         return None
 
 
+async def _forget_source_contact(db, user_id: str, sc_id: str, source_id: str, external_id: str, now: str) -> None:
+    """Make one source card a content-free FORGOTTEN tombstone (its fields, synced dates and links go). If a tombstone for the same
+    external id already exists, this row is removed instead (``UNIQUE (source_id, external_id)``)."""
+    tomb = tombstone_external_id(source_id, external_id) if not external_id.startswith("forgotten:") else external_id
+    await _run(db, "DELETE FROM contact_fields WHERE user_id = ? AND source_contact_id = ?", (user_id, sc_id))
+    await _run(db, "DELETE FROM person_important_dates WHERE user_id = ? AND source_contact_id = ?", (user_id, sc_id))
+    await _run(db, "DELETE FROM person_contact_links WHERE user_id = ? AND source_contact_id = ?", (user_id, sc_id))
+    await _run(db, "DELETE FROM contact_merge_reviews WHERE user_id = ? AND source_contact_id = ?", (user_id, sc_id))
+    if await _all(db, "SELECT 1 FROM source_contacts WHERE source_id = ? AND external_id = ? AND id != ?", (source_id, tomb, sc_id)):
+        await _run(db, "DELETE FROM source_contacts WHERE id = ? AND user_id = ?", (sc_id, user_id))
+        return
+    await _run(db, "UPDATE source_contacts SET state = 'forgotten', card_json = '{}', uid = NULL, etag = NULL, external_id = ?, "
+                   "updated_at = ? WHERE id = ? AND user_id = ?", (tomb, now, sc_id, user_id))
+
+
 async def _tombstone_incoming(db, user_id: str, source_id: str, external_id: str, now: str) -> None:
     tomb = tombstone_external_id(source_id, external_id)
-    if not await _all(db, "SELECT 1 FROM source_contacts WHERE source_id = ? AND external_id = ?", (source_id, tomb)):
-        await _run(db, "INSERT INTO source_contacts (id, user_id, source_id, external_id, card_json, state, created_at, updated_at) "
-                       "VALUES (?, ?, ?, ?, '{}', 'forgotten', ?, ?)", (str(uuid.uuid4()), user_id, source_id, tomb, now, now))
-    await db.commit()
+    async with _atomic(db):
+        live = await _all(db, "SELECT id FROM source_contacts WHERE user_id = ? AND source_id = ? AND external_id = ?",
+                          (user_id, source_id, external_id))
+        if live:                                    # the card was here before the forget reached it: convert, never a second row
+            await _forget_source_contact(db, user_id, live[0][0], source_id, external_id, now)
+        elif not await _all(db, "SELECT 1 FROM source_contacts WHERE source_id = ? AND external_id = ?", (source_id, tomb)):
+            await _run(db, "INSERT INTO source_contacts (id, user_id, source_id, external_id, card_json, state, created_at, updated_at) "
+                           "VALUES (?, ?, ?, ?, '{}', 'forgotten', ?, ?)", (str(uuid.uuid4()), user_id, source_id, tomb, now, now))
 
 
 async def import_card(db, user_id: str, source: dict, card: dict, *, external_id: str, etag: Optional[str] = None,
@@ -462,7 +489,7 @@ async def import_card(db, user_id: str, source: dict, card: dict, *, external_id
     full = (card.get("full_name") or "").strip()
     if not full:
         return ImportOutcome("skipped", reason="no_name")
-    card_json = json.dumps({k: v for k, v in card.items() if k not in ("unmapped", "photos_inline_dropped")},
+    card_json = json.dumps({k: v for k, v in card.items() if k not in CARD_META},
                            ensure_ascii=False, sort_keys=True)
     read_only = bool(source.get("read_only"))
     provider = source["provider"]
@@ -481,6 +508,11 @@ async def import_card(db, user_id: str, source: dict, card: dict, *, external_id
                        (sc_id, user_id, sid, external_id, etag, card.get("uid"), card_json, now, now, now))
         live = await _live_people(db, user_id)
         pid = await _linked_person(db, user_id, sc_id)
+        if not pid:
+            await _close_stale_links(db, user_id, sc_id, now)
+            if await _all(db, "SELECT 1 FROM contact_merge_reviews WHERE user_id = ? AND source_contact_id = ? AND kind = 'link' "
+                              "AND status = 'dismissed'", (user_id, sc_id)):
+                return ImportOutcome("dismissed", source_contact_id=sc_id)      # the member said no: never asked again
         if pid:
             if unchanged:
                 return ImportOutcome("unchanged", person_id=pid, source_contact_id=sc_id)
@@ -519,12 +551,18 @@ async def import_card(db, user_id: str, source: dict, card: dict, *, external_id
 
 
 def vcard_external_id(card: dict) -> str:
-    """A file import's external id: the card's UID, else a hash of its name + first identifiers (stable across re-imports)."""
+    """A file import's external id: the card's UID; else a hash of its name + identifiers (stable across re-imports); a card with
+    neither hashes its whole content, so two different "John Smith" cards never collapse into one source card (a silent merge)."""
     if card.get("uid"):
         return str(card["uid"])
     ids = [norm_email(e.get("value", "")) for e in card.get("emails") or []] + \
           [norm_phone(p.get("value", "")) for p in card.get("phones") or []]
-    return "vcf:" + _hash(fold(card.get("full_name")), *sorted(i for i in ids if i))
+    ids = sorted(i for i in ids if i)
+    if ids:
+        return "vcf:" + _hash(fold(card.get("full_name")), *ids)
+    body = json.dumps({k: v for k, v in card.items() if k not in CARD_META}, sort_keys=True,
+                      ensure_ascii=False)
+    return "vcf:" + _hash("content", body)
 
 
 async def import_vcf(db, user_id: str, text: str, *, provider: str = "phone", source_account_id: str = "file") -> dict:
@@ -536,6 +574,7 @@ async def import_vcf(db, user_id: str, text: str, *, provider: str = "phone", so
     source = await ensure_source(db, user_id, provider, source_account_id=source_account_id, label="vCard file")
     await db.commit()
     report: dict[str, Any] = {"cards": 0, "created": 0, "linked": 0, "updated": 0, "unchanged": 0, "review": 0, "forgotten": 0,
+                              "dismissed": 0, "cards_skipped": 0,
                               "skipped": 0, "edges": 0, "relation_reviews": 0, "photos_inline_dropped": 0, "unmapped": 0,
                               "review_ids": [], "person_ids": []}
     landed: list[tuple[str, str, dict]] = []
@@ -544,6 +583,7 @@ async def import_vcf(db, user_id: str, text: str, *, provider: str = "phone", so
         report["cards"] += 1
         report["photos_inline_dropped"] += card.get("photos_inline_dropped", 0)
         report["unmapped"] += card.get("unmapped", 0)
+        report["cards_skipped"] += card.get("cards_skipped", 0)
         out = await import_card(db, user_id, source, card, external_id=vcard_external_id(card), relations=False, forgotten=rx)
         if rx is not None and out.action not in ("forgotten", "skipped"):
             card = _redact(card, rx)
@@ -619,6 +659,9 @@ async def resolve_review(db, user_id: str, review_id: str, action: str, *, perso
             if not sc_rows:
                 raise ContactsError("the incoming contact is gone", 410)
             card, provider, ro = _loads(sc_rows[0][0], {}), sc_rows[0][1], bool(sc_rows[0][2])
+            await _close_stale_links(db, user_id, rv["source_contact_id"], now)
+            if await _linked_person(db, user_id, rv["source_contact_id"]):
+                raise ContactsError("this contact is already linked to one of your people", 409)
             if action == "link":
                 if not person_id or not await own_person(db, user_id, person_id):
                     raise ContactsError("link needs one of your people", 400)
@@ -821,12 +864,7 @@ async def forget_entity(db, user_id: str, rx) -> int:
     tombstoned: set = set()
     for sc_id, source_id, external_id, card_json, linked in sc_rows:
         if linked in ids or (not linked and _card_is_about(_loads(card_json, {}), rx)):
-            await _run(db, "DELETE FROM contact_fields WHERE user_id = ? AND source_contact_id = ?", (user_id, sc_id))
-            await _run(db, "DELETE FROM person_important_dates WHERE user_id = ? AND source_contact_id = ?", (user_id, sc_id))
-            await _run(db, "DELETE FROM person_contact_links WHERE user_id = ? AND source_contact_id = ?", (user_id, sc_id))
-            await _run(db, "UPDATE source_contacts SET state = 'forgotten', card_json = '{}', uid = NULL, etag = NULL, "
-                           "external_id = ?, updated_at = ? WHERE id = ? AND user_id = ?",
-                       (tombstone_external_id(source_id, external_id), now, sc_id, user_id))
+            await _forget_source_contact(db, user_id, sc_id, source_id, external_id, now)
             tombstoned.add(sc_id)
             n += 1
         elif _names(rx, card_json):

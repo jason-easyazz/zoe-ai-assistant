@@ -1,6 +1,6 @@
 """0053 - the contacts data model (``contacts_store.py``, ``routers/contacts.py``; design ``docs/architecture/contacts-data-model.md``).
 
-ADDITIVE. Five new tables, four nullable/defaulted columns on ``person_important_dates``, and NO change to ``people`` or
+ADDITIVE. Six new tables, four nullable/defaulted columns on ``person_important_dates``, and NO change to ``people`` or
 ``person_relationships``: a deploy that has not run this migration degrades to "the contacts routes are off" (the router is
 flag-dark, ``ZOE_CONTACTS_API``) and every store call is fail-soft on a missing table. The forget cascade's new ``contacts`` and
 ``voiceprints`` steps read a missing table as "nothing to reach".

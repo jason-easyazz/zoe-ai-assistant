@@ -20,6 +20,7 @@ Pure: no I/O, no database.
 
 from __future__ import annotations
 
+import quopri
 import re
 from typing import Any, Iterable, Optional
 
@@ -49,12 +50,29 @@ def empty_card() -> dict:
 
 def _unfold(text: str) -> list[str]:
     lines: list[str] = []
+    qp_open = False
     for raw in re.split(r"\r\n|\n|\r", text or ""):
-        if raw[:1] in (" ", "\t") and lines:
+        if qp_open and lines:                       # vCard 2.1 quoted-printable soft line break ("=" at the end)
+            lines[-1] = lines[-1][:-1] + raw
+        elif raw[:1] in (" ", "\t") and lines:
             lines[-1] += raw[1:]
         elif raw.strip():
             lines.append(raw)
+        else:
+            continue
+        last = lines[-1]
+        qp_open = last.endswith("=") and "QUOTED-PRINTABLE" in last.split(":", 1)[0].upper()
     return lines
+
+
+def _decode_qp(raw: str, params: dict) -> str:
+    """vCard 2.1 ``ENCODING=QUOTED-PRINTABLE`` (phone exports still write it), in the line's ``CHARSET`` (default UTF-8)."""
+    data = quopri.decodestring(raw.encode("latin-1", "replace"))
+    charset = (params.get("CHARSET") or ["utf-8"])[0]
+    try:
+        return data.decode(charset, "replace")
+    except LookupError:
+        return data.decode("utf-8", "replace")
 
 
 def _split_unescaped(value: str, sep: str) -> list[str]:
@@ -186,6 +204,11 @@ def _first(comps: list[list[str]], i: int) -> str:
     return (comps[i][0] if i < len(comps) and comps[i] else "").strip()
 
 
+def _joined(comps: list[list[str]], i: int) -> str:
+    """A component whose writer left a comma unescaped ("123 Main St, Apt 4", "Acme, Inc") keeps all of it."""
+    return ", ".join(x.strip() for x in (comps[i] if i < len(comps) else []) if x.strip())
+
+
 def _name_from_n(comps: list[list[str]]) -> dict:
     """RFC 6350 N (family; given; additional; prefixes; suffixes) + RFC 9554's secondary surname (6th) and generation (7th). A 9554
     reader ignores the copy a writer also put in the old component (family / suffixes) for back compatibility."""
@@ -215,17 +238,26 @@ def parse_vcards(text: str) -> list[dict]:
     """Every ``BEGIN:VCARD`` .. ``END:VCARD`` block in ``text`` as a card dict (``empty_card``'s shape)."""
     cards: list[dict] = []
     card: Optional[dict] = None
+    skipped_cards = 0
     for line in _unfold(text):
         parsed = _parse_line(line)
         if parsed is None:
             continue
         name, params, raw = parsed
+        if any(e.upper() == "QUOTED-PRINTABLE" for e in params.get("ENCODING", [])):
+            raw = _decode_qp(raw, params)
         if name == "BEGIN" and raw.strip().upper() == "VCARD":
+            if card is not None:
+                skipped_cards += 1                  # an unterminated card: dropped, counted
             card = empty_card()
             continue
         if card is None:
             continue
         if name == "END" and raw.strip().upper() == "VCARD":
+            if card.pop("kind_not_individual", False):
+                skipped_cards += 1
+                card = None
+                continue
             if not card["full_name"]:
                 n = card["name"]
                 card["full_name"] = " ".join(x for x in (n.get("given"), n.get("given2"), n.get("surname")) if x)
@@ -234,7 +266,11 @@ def parse_vcards(text: str) -> list[dict]:
             continue
         types, pref = _types(params)
         text_value = unescape(raw).strip()
-        if name in ("VERSION", "PRODID", "REV", "KIND"):
+        if name == "KIND":
+            if text_value.lower() in ("group", "org", "location"):
+                card["kind_not_individual"] = True      # a distribution list / an organisation is not a person
+            continue
+        if name in ("VERSION", "PRODID", "REV"):
             continue
         if name == "UID":
             card["uid"] = text_value or None
@@ -271,13 +307,13 @@ def parse_vcards(text: str) -> list[dict]:
                 card["phones"].append({"value": v, "types": types, "pref": pref, "label": _one(params, "X-ABLABEL")})
         elif name == "ADR":
             comps = _components(raw)
-            parts = {k: _first(comps, i) for i, k in enumerate(("po_box", "extended", "street", "locality", "region", "postcode",
-                                                                 "country"))}
+            parts = {k: _joined(comps, i) for i, k in enumerate(("po_box", "extended", "street", "locality", "region", "postcode",
+                                                                  "country"))}
             parts = {k: v for k, v in parts.items() if v}
             if parts:
                 card["addresses"].append({"parts": parts, "types": types, "pref": pref, "label": _one(params, "LABEL")})
         elif name == "ORG":
-            comps = [c[0].strip() if c else "" for c in _components(raw)]
+            comps = [", ".join(x.strip() for x in c if x.strip()) for c in _components(raw)]
             if comps and comps[0]:
                 card["orgs"].append({"value": comps[0], "parts": {"units": [c for c in comps[1:] if c]}, "types": types,
                                      "pref": pref})
@@ -328,23 +364,33 @@ def parse_vcards(text: str) -> list[dict]:
                                         "zoe_role": _one(params, "X-ZOE-ROLE")})
         else:
             card["unmapped"] += 1
+    if card is not None:
+        skipped_cards += 1
+    if cards:
+        cards[0]["cards_skipped"] = skipped_cards     # unterminated cards and non-person KINDs, reported by the importer
     return cards
 
 
 # -- writing ------------------------------------------------------------------------------------------------------------------
 
 def escape(value: Any) -> str:
-    return (str(value or "").replace("\\", "\\\\").replace("\n", "\\n").replace(",", "\\,").replace(";", "\\;"))
+    v = str(value or "").replace("\r\n", "\n").replace("\r", "\n")      # a bare CR must never open a content line
+    return v.replace("\\", "\\\\").replace("\n", "\\n").replace(",", "\\,").replace(";", "\\;")
+
+
+def _raw(value: Any) -> str:
+    """A URI / phone value written as is: any CR or LF is removed so it can never open a new content line."""
+    return re.sub(r"[\r\n]+", " ", str(value or "")).strip()
 
 
 def _param(name: str, value: str) -> str:
-    v = str(value).replace('"', "'").replace("\n", " ")
+    v = re.sub(r"[\r\n]+", " ", str(value)).replace('"', "'")
     return f';{name}="{v}"' if any(c in v for c in ",;:") else f";{name}={v}"
 
 
 def _params(item: dict, *, extra: Iterable[tuple[str, str]] = ()) -> str:
     out = ""
-    types = [t for t in (item.get("types") or []) if t]
+    types = [t for t in (item.get("types") or []) if t and re.fullmatch(r"[A-Za-z0-9-]{1,24}", str(t))]
     if types:
         out += ";TYPE=" + ",".join(types)
     if item.get("pref"):
@@ -382,7 +428,7 @@ def to_vcard(card: dict) -> str:
     n = card.get("name") or {}
     lines = ["BEGIN:VCARD", "VERSION:4.0", f"PRODID:{PRODID}"]
     if card.get("uid"):
-        lines.append(f"UID:{card['uid']}")
+        lines.append(f"UID:{_raw(card['uid'])}")
     full = card.get("full_name") or " ".join(x for x in (n.get("given"), n.get("given2"), n.get("surname")) if x)
     lines.append("FN:" + escape(full))
     family = [x for x in (n.get("surname"), n.get("surname2")) if x]
@@ -409,7 +455,7 @@ def to_vcard(card: dict) -> str:
     for it in card.get("emails") or []:
         lines.append("EMAIL" + _params(it) + ":" + escape(it["value"]))
     for it in card.get("phones") or []:
-        lines.append("TEL" + _params(it) + ":" + it["value"].replace("\n", " "))
+        lines.append("TEL" + _params(it) + ":" + _raw(it["value"]))
     for it in card.get("addresses") or []:
         p = it.get("parts") or {}
         vals = [escape(p.get(k)) for k in ("po_box", "extended", "street", "locality", "region", "postcode", "country")]
@@ -421,16 +467,16 @@ def to_vcard(card: dict) -> str:
         prop = "ROLE" if (it.get("parts") or {}).get("role") else "TITLE"
         lines.append(prop + _params(it) + ":" + escape(it["value"]))
     for it in card.get("urls") or []:
-        lines.append("URL" + _params(it) + ":" + it["value"])
+        lines.append("URL" + _params(it) + ":" + _raw(it["value"]))
     for it in card.get("socials") or []:
         p = it.get("parts") or {}
         lines.append("SOCIALPROFILE" + _params(it, extra=[("SERVICE-TYPE", p.get("service") or ""),
-                                                          ("USERNAME", p.get("username") or "")]) + ":" + it["value"])
+                                                          ("USERNAME", p.get("username") or "")]) + ":" + _raw(it["value"]))
     for it in card.get("ims") or []:
-        lines.append("IMPP" + _params(it) + ":" + it["value"])
+        lines.append("IMPP" + _params(it) + ":" + _raw(it["value"]))
     for it in card.get("photos") or []:
         if re.match(r"^https?://", it.get("value") or ""):        # a local media reference never leaves the box
-            lines.append("PHOTO" + _params(it) + ":" + it["value"])
+            lines.append("PHOTO" + _params(it) + ":" + _raw(it["value"]))
     for d in card.get("dates") or []:
         lines.append(("BDAY:" if d["kind"] == "birthday" else "ANNIVERSARY:") + _date(d))
     for it in card.get("notes") or []:
@@ -442,7 +488,7 @@ def to_vcard(card: dict) -> str:
     for r in card.get("related") or []:
         extra = [("X-ZOE-REL", r.get("zoe_rel") or ""), ("X-ZOE-ROLE", r.get("zoe_role") or "")]
         if r.get("uri"):
-            lines.append("RELATED" + _params({"types": r.get("types")}, extra=extra) + ":" + r["uri"])
+            lines.append("RELATED" + _params({"types": r.get("types")}, extra=extra) + ":" + _raw(r["uri"]))
         elif r.get("name"):
             lines.append("RELATED" + _params({"types": r.get("types")}, extra=[("VALUE", "text")] + extra) + ":" + escape(r["name"]))
     lines.append("END:VCARD")

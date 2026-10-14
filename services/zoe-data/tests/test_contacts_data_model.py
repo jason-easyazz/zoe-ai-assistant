@@ -215,7 +215,7 @@ def test_vcf_fixture_parses_every_mapped_field():
 def test_vcf_round_trip_is_lossless_for_mapped_fields():
     for card in vc.parse_vcards(VCF):
         again = vc.parse_vcards(vc.to_vcard(card))[0]
-        card = {k: v for k, v in card.items() if k not in ("unmapped", "photos_inline_dropped")}
+        card = {k: v for k, v in card.items() if k not in ("unmapped", "photos_inline_dropped", "cards_skipped")}
         assert {k: again[k] for k in card} == card
 
 
@@ -351,6 +351,60 @@ def test_several_candidates_and_identifier_conflict_are_reviews(db):
         [("Marisol Okafor-Vance", "personal")]
 
 
+def test_reimport_after_the_person_was_deleted_matches_afresh(db):
+    """The People page's delete is a soft delete: the card's link to it is closed, never a one-live-link violation (500)."""
+    rep = run(cs.import_vcf(db, A, VCF))
+    ines = db.q("SELECT id FROM people WHERE name = 'Ines Ferreira'")[0][0]
+    db.conn.execute("UPDATE people SET deleted = 1 WHERE id = ?", (ines,))
+    db.conn.commit()
+    again = run(cs.import_vcf(db, A, VCF))
+    assert again["created"] == 1 and again["unchanged"] == 2 and rep["created"] == 3
+    assert db.q("SELECT COUNT(*) FROM person_contact_links WHERE person_id = ? AND unlinked_at IS NOT NULL", (ines,)) == [(1,)]
+
+
+def test_a_dismissed_review_is_not_asked_again(db):
+    person(db, A, "Ines Ferreira")
+    src = run(cs.ensure_source(db, A, "phone", source_account_id="file"))
+    out = run(cs.import_card(db, A, src, vc.parse_vcards(VCF)[2], external_id="i1"))
+    run(cs.resolve_review(db, A, out.review_id, "dismiss"))
+    again = run(cs.import_card(db, A, src, vc.parse_vcards(VCF)[2], external_id="i1"))
+    assert again.action == "dismissed" and run(cs.list_reviews(db, A)) == []
+
+
+def test_two_different_cards_with_no_identifiers_never_collapse(db):
+    """No UID, email or phone: the external id is the card's content, so a second "Sam Okoro" is a second card - asked, not merged."""
+    text = vcard(full_name="Sam Okoro", notes=[{"value": "From the choir."}]) + vcard(full_name="Sam Okoro",
+                                                                                      notes=[{"value": "Plumber."}])
+    rep = run(cs.import_vcf(db, A, text))
+    assert rep["created"] == 1 and rep["review"] == 1 and rep["updated"] == 0
+    assert db.q("SELECT value FROM contact_fields WHERE kind = 'note'") == [("From the choir.",)]
+
+
+def test_vcf_reader_handles_real_phone_exports():
+    text = ("BEGIN:VCARD\r\nVERSION:2.1\r\nN;CHARSET=UTF-8;ENCODING=QUOTED-PRINTABLE:Lef=C3=A8vre;=C3=89lise;;;\r\n"
+            "FN;CHARSET=UTF-8;ENCODING=QUOTED-PRINTABLE:=C3=89lise Lef=\r\n=C3=A8vre\r\n"
+            "ADR;HOME:;;123 Example St, Apt 4;Springfield;;;\r\nORG:Acme, Inc\r\nEND:VCARD\r\n"
+            "BEGIN:VCARD\r\nVERSION:4.0\r\nKIND:group\r\nFN:Book club\r\nEND:VCARD\r\n"
+            "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Never Ended\r\n")
+    cards = vc.parse_vcards(text)
+    assert len(cards) == 1 and cards[0]["cards_skipped"] == 2                       # the group and the unterminated card
+    c = cards[0]
+    assert c["full_name"] == "Élise Lefèvre" and c["name"] == {"surname": "Lefèvre", "given": "Élise"}
+    assert c["addresses"][0]["parts"]["street"] == "123 Example St, Apt 4" and c["orgs"][0]["value"] == "Acme, Inc"
+
+
+def test_export_can_never_inject_a_content_line():
+    card = vc.empty_card()
+    card.update(full_name="Plain Person", uid="urn:x\r\nFN:Evil0",
+                notes=[{"value": "x\rEND:VCARD\rBEGIN:VCARD\rFN:Evil"}],
+                urls=[{"value": "http://a.example\nEND:VCARD\nBEGIN:VCARD\nFN:Evil2", "types": ['work"x', "home"]}],
+                phones=[{"value": "1\r\nFN:Evil3", "types": ["cell"]}])
+    out = vc.to_vcard(card)
+    parsed = vc.parse_vcards(out)
+    assert len(parsed) == 1 and parsed[0]["full_name"] == "Plain Person"
+    assert parsed[0]["urls"][0]["types"] == ["home"]
+
+
 # -- back-compat + member edits ---------------------------------------------------------------------------------------------
 
 def test_legacy_columns_read_as_legacy_entries_and_are_never_written(db):
@@ -475,6 +529,22 @@ async def test_a_sync_after_the_forget_never_brings_the_name_back(db, ledger_env
     again = await cs.import_vcf(db, A, text)                       # the tombstone answers the second time without the ledger read
     assert again["forgotten"] == 1 and again["unchanged"] == 1
     assert (await cs.import_vcf(db, B, text))["created"] == 2      # B never forgot her: B's import is untouched
+
+
+@pytest.mark.asyncio
+async def test_a_card_seen_by_the_ledger_before_the_cascade_is_converted_not_duplicated(db, ledger_env):
+    """A sync that meets a forgotten person's card while its active row is still there converts that row; the cascade that runs
+    afterwards does not collide with the tombstone (``UNIQUE (source_id, external_id)``) and completes."""
+    import memory_forget_cascade as cascade
+    import memory_forgotten
+    await cs.import_vcf(db, A, VCF)
+    assert await memory_forgotten.add(A, "Marisol", actor=A)
+    rep = await cs.import_vcf(db, A, VCF)
+    assert rep["forgotten"] == 1
+    assert db.q("SELECT COUNT(*) FROM source_contacts WHERE user_id = ? AND state = 'forgotten'", (A,)) == [(1,)]
+    res = await cascade.cascade_forget(A, "Marisol", db=db)
+    assert "contacts" not in res.failed
+    assert not [r for r in db.q("SELECT * FROM source_contacts WHERE user_id = ?", (A,)) if "marisol" in json.dumps(r).lower()]
 
 
 @pytest.mark.asyncio

@@ -188,6 +188,11 @@ incoming card (source S, external_id E)
   `people_graph.fold_name` (case, accents, punctuation, any script).
 - **A review holds the card, not a guess.** Until the member answers, the card is in `source_contacts` only: no fields
   attached, no person created, no link. Re-importing the same card updates the open review instead of adding another.
+- **A dismissed card stays dismissed**: the next sync of the same card returns `dismissed` and asks nothing.
+- **A link to a person the member deleted** (the People page's soft delete) is closed (`unlinked_at`) and the card is
+  matched afresh, never a second live link.
+- **A file card with no UID, email or phone** is keyed by a hash of its whole content, so two different "Sam Okoro" cards
+  are two cards (the second is a `name_only` review), never one card overwritten by the other.
 - **Settling a review** (`POST /api/contacts/reviews/{id}`): `link` (to one of the member's people: method
   `member_confirmed`, `linked_by` = the member), `new` (a separate personal person), `dismiss` (the card stays unlinked).
 - **Person merge** (`person_merge.merge_person`, two Zoe people the member says are one) now re-points
@@ -321,3 +326,12 @@ Each negative control is named in the test module's docstring. `test_memory_loss
 - The forget cascade still leaves `person_activities` / `person_gift_ideas` / `person_bucket_list` on the soft-deleted
   person (pre-existing, not contact data).
 - A JSContact (`application/jscontact+json`) exporter is a straight mapping from section 2 when a consumer needs it.
+- Member erase removes every contact-model row but not the `people` rows the importer created (`created_from` links);
+  `MemoryService.delete_user` never deletes `people` rows at all (pre-existing). A `contacts_store.forget_user` failure is
+  logged at ERROR but leaves no durable retry marker.
+- A verified re-teach releases the forget ledger entry but not the `forgotten` source-card tombstones, so that card never
+  syncs again until a "resume syncing" control exists. When the ledger is unreadable an import fails OPEN for a RE-CREATED
+  card (new external id); the tombstone still covers the old one.
+- A RELATED line that resolves to a person who already has an edge with this one is dropped (the member's edge wins) without
+  a count; a URI-only RELATED is skipped.
+- The importer reads the member's people once per card (fine for a phone export; batch it for a sync of thousands).
