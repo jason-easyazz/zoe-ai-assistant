@@ -4182,11 +4182,13 @@ async def voice_command(
             )
             _skybridge_reply = str(_skybridge_result.get("spoken_summary") or "Showing that in Skybridge.")
             _bcast_t0 = time.monotonic()
-            # ZOE_VOICE_SESSION: an AUTHORISED calendar / list read shows its real rows on THIS panel (a private
-            # voice_card on the panel's own channel) and names the events aloud. Delivered = no page-reloading
-            # navigate (it would wipe the card); not delivered (no live socket) = today's Skybridge broadcast.
+            # An AUTHORISED calendar / list read (a fresh PIN sign-in, the member's voice session, a named speaker) shows
+            # its real rows on THIS panel (a private voice_card on the panel's own channel) - flag or no flag: "if I ask
+            # what is on my calendar I want to see the results as well as hear them" (owner, 2026-10-13/14). The events
+            # are spoken by the Skybridge answer itself. Delivered = no page-reloading navigate (it would wipe the card);
+            # not delivered (no live socket) = today's Skybridge broadcast. A guest has no real user here: no card.
             _vs_card_sent = 0
-            if _voice_session.enabled() and _real_user_or_none(_skybridge_user):
+            if _real_user_or_none(_skybridge_user):
                 try:
                     import voice_cards as _voice_cards
 
@@ -4194,8 +4196,6 @@ async def voice_command(
                     _sky_kind = _voice_session.private_read_kind(
                         skybridge=(_sky_rd.get("domain"), _sky_rd.get("action")))
                     if _sky_kind:
-                        if _sky_kind == "calendar":
-                            _skybridge_reply = _voice_cards.spoken_calendar(_skybridge_result) or _skybridge_reply
                         _vs_card_sent = await _voice_cards.push(
                             _voice_cards.from_skybridge(panel_id, str(_skybridge_user), _skybridge_result))
                 except Exception as _vs_card_exc:
@@ -4243,10 +4243,10 @@ async def voice_command(
         # the legacy intent path, which is the silent bounce-to-domain-page behavior.
         logger.warning("voice/command skybridge fast path failed (non-fatal): %s", _skybridge_exc)
 
-    # ZOE_VOICE_SESSION: a private READ the Skybridge did not answer (reminders; a calendar / list ask it was vetoed
-    # on) still SHOWS its rows when the turn is authorised for that member - read in the background, so whichever
-    # lane speaks the answer is not delayed.
-    if _voice_session.enabled() and _has_scope_identity:
+    # A private READ the Skybridge did not answer (reminders; a calendar / list ask it was vetoed on) still SHOWS its
+    # rows when the turn is authorised for that member (fresh PIN sign-in, voice session, named speaker) - read in the
+    # background, so whichever lane speaks the answer is not delayed.
+    if _has_scope_identity:
         try:
             from intent_router import detect_intent as _detect_rd
 

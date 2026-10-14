@@ -651,6 +651,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_CALENDAR_FOLLOWUP_TTL_S": {
+        "defaults": [
+          "'90'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/conversation_cues.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_CALENDAR_HEALTH_PRIVATE": {
         "defaults": [
           "True"

@@ -1228,7 +1228,22 @@ def _calendar_create_from_text(message: str, context: dict[str, Any] | None) -> 
     if not match:
         return None
     title = _event_title(match.group("title"), tail)
-    target_time = _parse_spoken_time(match.group("time"))
+    raw_time = match.group("time")
+    target_time = _parse_spoken_time(raw_time)
+    if re.search(r"\b(?:tonight|this evening|in the evening|at night)\b", text, re.IGNORECASE) and not re.search(
+        r"[ap]\.?m\b", raw_time, re.IGNORECASE
+    ):
+        # "10 o'clock tonight" is 22:00, not the morning reading an unqualified "10 o'clock" gets, and "at 7 tonight" is no
+        # longer the "am or pm?" ambiguity a bare "at 7" is: the evening word answers it.
+        bare = re.fullmatch(r"(\d{1,2})(?::(\d{2}))?", raw_time.strip())
+        if target_time:
+            hour, minute = int(target_time[:2]), target_time[3:]
+        elif bare and int(bare.group(2) or 0) < 60:
+            hour, minute = int(bare.group(1)), f"{int(bare.group(2) or 0):02d}"
+        else:
+            hour, minute = 0, "00"
+        if 1 <= hour <= 11:
+            target_time = f"{hour + 12:02d}:{minute}"
     return (title, target_time) if title and target_time else None
 
 
@@ -1646,6 +1661,9 @@ def classify_skybridge_intent(
     # smart_home runs AFTER list/calendar parsing (so "add lights to the shopping
     # list" stays a list write) but BEFORE the generic clock/weather/people
     # fallbacks. Household-shared like clock/music — no identity gate.
+    calendar_followup = _calendar_followup_intent(raw_message, context)
+    if calendar_followup is not None:
+        return calendar_followup
     smart_home_intent = _smart_home_followup_intent(raw_message, context) or _classify_smart_home(text)
     if smart_home_intent is not None:
         return _unless_delayed(smart_home_intent, text)
@@ -1916,6 +1934,24 @@ def skybridge_router_gate(
         if floor is not None and (conf is None or conf < floor):
             return "veto", "router_unsure_low_conf", router_domain, conf
         return "allow", "router_unsure", router_domain, conf
+    if (
+        router_domain == "chat"
+        and decision.get("gated")
+        and str(decision.get("reason") or "") == "low_conf"
+        and intent.domain == "calendar"
+        and intent.action == "create_event"
+        and intent.target_time
+        and not intent.all_day
+    ):
+        # "schedule a meeting for 10 o'clock tonight" (live 2026-10-14): the parser read a create verb, an event noun AND a
+        # clock time, and the router fell under its low-confidence floor (chat @ 0.65) - it did not say "this is chat", it said
+        # "not sure". The structured parse is the stronger evidence for a WRITE it fully understood, and the veto cost 9.4 s on
+        # the brain for the same event. Only `low_conf` (a CONFIDENT chat head top / `chat_top` still vetoes, and so does a
+        # confident other domain, which `router_disagrees` covers above); only a create with a parsed time (no time = an
+        # all-day guess, which keeps the veto); the unsure floor still applies to a verdict this weak.
+        floor = _unsure_floor(intent, message)
+        if floor is None or (conf is not None and conf >= floor):
+            return "allow", "write_parsed_time", router_domain, conf
     return "veto", ("router_chat" if router_domain == "chat" else "router_disagrees"), router_domain, conf
 
 
@@ -2069,10 +2105,12 @@ async def resolve_skybridge_request(
         return out
 
     if db is not None:
-        return _attach_skybridge_context(await _resolve_with_db(intent, user_id, db, context=context))
-
-    async with get_db_ctx() as ctx_db:
-        return _attach_skybridge_context(await _resolve_with_db(intent, user_id, ctx_db, context=context))
+        out = _attach_skybridge_context(await _resolve_with_db(intent, user_id, db, context=context))
+    else:
+        async with get_db_ctx() as ctx_db:
+            out = _attach_skybridge_context(await _resolve_with_db(intent, user_id, ctx_db, context=context))
+    _remember_calendar_read(intent, out)
+    return out
 
 
 def _card_as_component(card: Any) -> dict[str, Any]:
@@ -2273,6 +2311,42 @@ def _smart_home_followup_intent(raw_message: str, context: dict[str, Any] | None
         return None
     return SkybridgeIntent(domain="smart_home", action=action, query=str(mem.get("query") or ""),
                            entity_id=ids[0] if len(ids) == 1 else "", entity_ids=ids)
+
+
+# "What is it?" right after "You have one event today." (live 2026-10-14: the first two went to the brain with no context). The
+# range the last calendar READ covered rides in the panel's Skybridge context for a short window, and a short question about
+# "it / them / the one event" (the words are the lexicon's, ``conversation_cues.calendar_followup``) re-runs that read. It is the
+# SAME member-scoped read as the original ask: a guest's follow-up is the PIN challenge, never the events.
+_CALENDAR_READ_KEY = "calendar_read"
+
+
+def _remember_calendar_read(intent: "SkybridgeIntent", out: dict[str, Any]) -> None:
+    """Record the range a handled calendar READ covered in ``out["skybridge_context"]`` (not a challenge, not a write)."""
+    ctx = out.get("skybridge_context")
+    if out.get("handled") and not out.get("auth_required") and isinstance(ctx, dict) and (
+        intent.domain == "calendar" and intent.action == "show" and intent.start_date
+    ):
+        ctx[_CALENDAR_READ_KEY] = {
+            "label": intent.range_label, "start": intent.start_date.isoformat(),
+            "end": (intent.end_date or intent.start_date).isoformat(), "ts": time.time(),
+        }
+
+
+def _calendar_followup_intent(raw_message: str, context: dict[str, Any] | None) -> "SkybridgeIntent | None":
+    """A short question about the calendar answer just given ("what is it", "what are they", "which one") -> the same read."""
+    mem = context.get(_CALENDAR_READ_KEY) if isinstance(context, dict) else None
+    if not isinstance(mem, dict):
+        return None
+    from conversation_cues import calendar_followup, calendar_followup_ttl_s
+
+    if time.time() - float(mem.get("ts") or 0.0) > calendar_followup_ttl_s() or not calendar_followup(raw_message):
+        return None
+    try:
+        start = date.fromisoformat(str(mem.get("start")))
+        end = date.fromisoformat(str(mem.get("end") or mem.get("start")))
+    except ValueError:
+        return None
+    return SkybridgeIntent("calendar", "show", str(mem.get("label") or "today"), start, end)
 
 
 # Smart-home device anchors: a word clearly about a controllable household
@@ -3020,7 +3094,21 @@ async def _resolve_calendar(intent: SkybridgeIntent, user_id: str, db: Any) -> d
         events = [row_to_event(row) for row in rows]
     qualifier = intent.range_label or start.isoformat()
     event_word = "event" if len(events) == 1 else "events"
-    spoken = f"You have {len(events)} {event_word} {qualifier}."
+    count_line = f"You have {len(events)} {event_word} {qualifier}."
+    # The identified member HEARS the events (the asker is the member: this resolver only reads rows for a real user_id, and
+    # the voice lane passes one only for a fresh PIN sign-in, an open voice session or the member's own session); the card
+    # carries all of them. No identity: no rows, no count - only how to unlock (docs/knowledge/voice-verified-session.md).
+    spoken = count_line
+    try:
+        import voice_cards
+
+        if user_id in {"guest", "voice-guest"}:
+            spoken = voice_cards.spoken_private() or "That's private. Unlock with your PIN."
+        else:
+            spoken = voice_cards.spoken_events(
+                events, qualifier, start_date=start.isoformat(), end_date=end.isoformat()) or count_line
+    except Exception:  # noqa: BLE001 - the count is the floor; speech never fails over a lexicon
+        logger.warning("calendar read-back fell back to the count", exc_info=True)
     card = card_service.convert_emit(
         card_service.build_calendar_timeline_card(
             {
@@ -3029,7 +3117,7 @@ async def _resolve_calendar(intent: SkybridgeIntent, user_id: str, db: Any) -> d
                 "start_date": start.isoformat(),
                 "end_date": end.isoformat(),
                 "events": events,
-                "summary": spoken,
+                "summary": count_line,
             }
         ),
         target_major=1,
