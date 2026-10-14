@@ -72,7 +72,7 @@ def test_sqlite_upgrade_twice_then_downgrade():
 
 
 def test_no_request_time_ddl():
-    for rel in ("struggle_detector.py", "struggle_signals.py"):
+    for rel in ("struggle_detector.py", "struggle_signals.py", "struggle_digest.py", "routers/struggles.py"):
         src = (SVC / rel).read_text()
         assert "CREATE TABLE" not in src and "ALTER TABLE" not in src and "DROP TABLE" not in src, rel
 
