@@ -23,7 +23,7 @@ contract. **Phase 1 (this build) is step 1: notice.** It detects, records and re
 ## Where it sits (and why it cannot hurt a turn)
 
 ```
-turn ──► semantic_router.route ──(note_route: deque append)──┐
+turn ──► semantic_router.route ──(note_route: deque append)──┐   (+ skybridge_service gate ── note_skybridge: deque append)
      ──► brain_dispatch._log_lane ──(note_brain: deque append)┤   in the turn: two O(1) appends (p99 0.03 ms measured)
      ──► reply out
          └─ existing post-turn task ─► struggle_detector.observe ─► bounded queue ─► ONE worker:
@@ -49,14 +49,14 @@ that failed): its domain, path and shape are that turn's.
 
 | signal | fires when | precision guards (each pinned by a hard-negative test + a negative control) |
 |---|---|---|
-| RE_ASK | the same request again within `ZOE_STRUGGLE_WINDOW_S` (45 s) after normalisation (wake word, contractions, number words, plurals, fillers) or with only a polite lead-in dropped | repeatable commands (next / louder / yes ...); changed slot (time, number, place, name, on/off) |
-| REPHRASE | same domain, other words, no new slot: shared content words, a pure refinement, or the same lead + time anchor + time frame | follow-up openers ("and", "what about"); different fact; added time slot |
-| CORRECTION | a repair cue opens the next turn ("no, I said ...", "I meant ...", "not that one", "you misheard"), or opens its second sentence | "no worries / no thanks / no, it's fine"; a bare "no" answering Zoe's question; "I meant to ..." |
+| RE_ASK | the same request again within `ZOE_STRUGGLE_WINDOW_S` (45 s) after normalisation (wake word, contractions, number words, plurals, fillers) or with only a polite lead-in dropped - also reaching back over up to 3 earlier turns ("what is it?" asked twice around another question) | repeatable commands (next / louder / yes ...); changed slot (time, number, place, name, on/off); a reach-back REPHRASE without domain evidence on both turns |
+| REPHRASE | same domain (by evidence: the head's domain, a similarity score >= 0.75, a fast reply's own phrasing, an un-vetoed Skybridge claim), other words, no new slot (a slot Zoe's reply already said is not new): shared content words, a pure refinement, or the same lead + time anchor + time frame; the short "what is it?" / "which one?" right after a COUNT-ONLY fast answer ("You have 1 event today."); and, reaching back, an earlier same-domain ask | follow-up openers ("and", "what about"); different fact; added time slot |
+| CORRECTION | a repair cue opens the next turn ("no, I said ...", "I meant ...", "not that one", "you misheard"), or opens its second sentence; or the contrast "it's actually X, not Y" where Y was in the previous exchange (the user's misheard words or Zoe's reply) | "no worries / no thanks / no, it's fine"; a bare "no" answering Zoe's question; "I meant to ..."; a contrast with no real X ("actually I'm not hungry") or a Y new to the exchange |
 | NEGATIVE_FEEDBACK | `conversation_feedback.classify` says thumbs_down / correction, or a complaint about the exchange ("you're not listening", "that doesn't make sense") | kind verdicts; sentences merely containing "wrong" |
 | CANT_DO | the reply is a capability disclaimer (superset of the replay gate's `_CANT_DO_RE`) on a routed domain, or the brain's degraded fallback (ERROR, any domain) | policy refusals (guest / PIN / privacy); "I can't wait"; unsupported asks (no domain) |
-| FALLTHROUGH | the router placed the turn in a fast domain and the brain (or ANOTHER fast domain) answered | two witnesses: the two-stage domain AND its similarity score >= 0.70 (or head >= 0.9 for domains without examples); a timed-out head needs similarity >= 0.65; similarity alone needs >= 0.80 |
+| FALLTHROUGH | the router placed the turn in a fast domain and the brain (or ANOTHER fast domain) answered; or Skybridge recognised a fast domain, the router vetoed it and the brain answered | two witnesses: the two-stage domain AND its similarity score >= 0.70 (or head >= 0.9 for domains without examples); a timed-out head needs similarity >= 0.65; similarity alone needs >= 0.80; a vetoed Skybridge claim needs that domain's similarity >= 0.75 or the head's own top pick |
 | VERBOSE | a short factual question (<= 12 tokens) got a reply over budget (voice 280 chars / 200 on a fast domain; chat 700 / 500) | open requests (story, explain, why, recipe, tell me about ...) |
-| MISHEAR | a wake-word-only transcript, or a voice corrected repeat within 30 s (same frame, one or two words swapped for sound-alikes, or re-ordered, or a garbled lead-in dropped) | a different word that does not sound alike ("milk" -> "eggs"); polarity / number / place swaps; typed text (a typo fix is a RE_ASK) |
+| MISHEAR | a wake-word-only transcript, or a voice corrected repeat within 30 s (same frame, one or two words swapped for sound-alikes - including a number homophone heard for a word, "two on the light" -> "turn on the light" - or re-ordered, or a garbled lead-in dropped) | a different word that does not sound alike ("milk" -> "eggs"); polarity / number / place swaps; typed text (a typo fix is a RE_ASK) |
 | ABANDON | the streamed voice reply ended early with words already heard (barge-in or disconnect - indistinguishable server-side) | an unheard / complete reply |
 
 Each event carries: ts, channel, panel, user scope, prev + current turn ids (detector-minted, `t-<hash>`), signal,
@@ -115,6 +115,22 @@ and a polarity swap produced a false RE_ASK); the counts are small; CANT_DO and 
 (brain reply text is not logged) and chat turns are not in it. The weather-forecast episode of 2026-10-14 (a forecast
 question answered with current conditions, then a re-ask about the day's high) is caught: FALLTHROUGH + REPHRASE on the
 re-ask, MISHEAR on the corrected repeat. Re-run after a week of shadow data with the stored rows as the sheet.
+
+### Recall round (2026-10-14 evening, live shadow)
+
+The first night live in shadow flagged 2 events and missed 4 clear struggles: an ask chain after a count-only calendar
+answer, a number homophone heard for "turn", an "actually X, not Y" correction, and a Skybridge calendar claim the router
+vetoed and the brain served slowly. Each shape now has a rule, invented tests, hard negatives and a negative control
+(`tests/test_struggle_recall.py`). Same replay, extended to 130 hand-labelled turns (local only, numbers only):
+
+| labels | before P | before R | after P | after R |
+|---|---|---|---|---|
+| frozen (labelled before the change) | 1.000 (21/21) | 0.553 (21/38) | 0.967 (29/30) | 0.763 (29/38) |
+| one disclosed relabel (an identical question re-asked two turns later, ~35 s: the written RE_ASK definition) | 1.000 | 0.538 (21/39) | 1.000 (30/30) | 0.769 (30/39) |
+
+All four of the evening's misses are caught. Still missed (stated, not hidden): rewordings with no shared word and no
+domain evidence ("how are you" -> "I want to know how you are"), garbled STT that is never repeated, and a correction
+that says "it's okay, you don't need to" without a cue.
 
 ## Phase 2 / 3 plan (out of scope for Phase 1)
 
