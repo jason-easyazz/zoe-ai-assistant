@@ -550,3 +550,24 @@ def test_an_adjust_moves_the_card_fields_it_should(owner):
     assert props["expires_at_ms"] == int((t["expires_at"]) * 1000)  # the store row itself moved
     assert props["duration_seconds"] == 720
     assert sky._timers.list(owner)[0]["set_seconds"] == 600  # still "the 10 minute timer"
+
+
+# ── PR review threads (codex) ────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("text", ["cancel all but the pasta timer", "cancel every timer except the eggs"])
+def test_an_exclusion_never_cancels_everything(owner, text):
+    sky._timers.create(owner, "Pasta", 600)
+    sky._timers.create(owner, "Eggs", 300)
+    i = sky.classify_skybridge_intent(text)
+    assert (i.action, i.query) != ("cancel", "all"), text
+    sky._resolve_timer(i, owner)
+    assert len(sky._timers.list(owner)) == 2
+
+
+def test_membership_in_a_named_list_searches_for_the_item_not_the_list_name():
+    lists = [{"id": "c", "name": "Chores", "list_type": "tasks"}, {"id": "s", "name": "Shopping", "list_type": "shopping"}]
+    items = {"c": [{"text": "milk", "completed": 0}], "s": []}
+    spoken, found = sky._list_contains_answer(
+        SkybridgeIntent(domain="lists", action="contains", item_text="milk", list_name="chores"), lists, items)
+    assert spoken == "Yes, milk is on your Chores list." and found["id"] == "c"

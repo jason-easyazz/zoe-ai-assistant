@@ -1520,7 +1520,12 @@ def classify_skybridge_intent(
             return SkybridgeIntent(domain="timer", action="status")  # "can I cancel the timer?" deletes nothing
         if cancel:
             # "remove the 5 minute timer" used to START a 5-minute timer ("remove" was not a cancel word).
-            if re.search(r"\b(?:all|every|both)\b", text[cancel.end():]):
+            rest = text[cancel.end():]
+            if re.search(r"\b(?:but|except|apart\s+from|other\s+than|besides|save|bar|leave|keep)\b", rest):
+                # "cancel all but the pasta timer": a subset/exclusion is neither "all" nor the one named - deleting
+                # either way is wrong, so it is answered with the timers' status (nothing cancelled).
+                return SkybridgeIntent(domain="timer", action="status")
+            if re.search(r"\b(?:all|every|both)\b", rest):
                 return SkybridgeIntent(domain="timer", action="cancel", query="all")
             target = command_shapes.timer_target(text[cancel.end():])
             return SkybridgeIntent(domain="timer", action="cancel",
@@ -3143,8 +3148,8 @@ def _list_contains_answer(
     wanted = intent.item_text
     if intent.list_name:
         # A NAMED list is that list or none (``_select_list`` would fall back to the only list).
-        wanted = intent.list_name.strip().lower()
-        scope = [lst for lst in lists if str(lst.get("name") or "").strip().lower() in (wanted, f"{wanted} list")]
+        list_key = intent.list_name.strip().lower()
+        scope = [lst for lst in lists if str(lst.get("name") or "").strip().lower() in (list_key, f"{list_key} list")]
         if not scope:
             return f"I couldn't find a list called {intent.list_name}.", None
     elif intent.list_type:
