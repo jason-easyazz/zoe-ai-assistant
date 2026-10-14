@@ -4070,9 +4070,14 @@ async def voice_command(
                     }
                     from types import SimpleNamespace as _SnapNS
 
-                    _snap_out = await _answer_from_tier(
-                        _SnapNS(reply=_stt_snap.confirm_question(_snap), ui=None, domain="stt_snap", intent="confirm"),
-                        intent="stt_snap_confirm")
+                    try:
+                        _snap_out = await _answer_from_tier(
+                            _SnapNS(reply=_stt_snap.confirm_question(_snap), ui=None, domain="stt_snap", intent="confirm"),
+                            intent="stt_snap_confirm")
+                    except BaseException:
+                        # the question was never heard: a later "yes" must not run a command nobody was asked about
+                        _PENDING_CONFIRMATIONS.pop(panel_id, None)
+                        raise
                     _snap_out["pending_confirmation"] = True
                     return _snap_out
                 else:
