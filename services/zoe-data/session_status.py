@@ -48,7 +48,6 @@ _PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
     ("who", _rx(r"(?:can\s+you\s+)?tell\s+me\s+who(?:['’]s|\s+is)\s+" + _SIGNED + _HERE + _WHEN)),
     # who am I signed in as / which account
     ("self", _rx(r"who\s+am\s+i(?:\s+" + _SIGNED + r"\s+as)?" + _WHEN)),
-    ("self", _rx(r"do\s+you\s+(?:know|recogni[sz]e)\s+who\s+i\s+am" + _WHEN)),
     ("self", _rx(r"(?:which|what)\s+(?:account|profile|user)\s+(?:am\s+i\s+(?:using|on)|is\s+this)" + _WHEN)),
     ("self", _rx(r"(?:which|what)\s+(?:account|profile|user)\s+(?:am\s+i|is)\s+" + _SIGNED + r"(?:\s+(?:as|with))?" + _HERE + _WHEN)),
     ("self", _rx(r"whose\s+(?:account|profile)\s+is\s+this" + _WHEN)),
