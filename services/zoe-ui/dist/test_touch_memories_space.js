@@ -91,6 +91,7 @@ function boot(opts) {
   vm.runInContext(src, ctx);
   const Z = window.ZoeMemoriesSpace;
   const host = makeEl('div');
+  const sidRef = { v: 'sess-a' };
   const log = { gets: [], posts: [], toasts: [], signIns: 0, meta: [], confirms: [] };
   let getImpl = opts.get || (() => Promise.resolve(viewOf([clone(SISTER), clone(PREFS), clone(DATES)], { private: { health: 2, feelings: 1 } })));
   let postImpl = opts.post || (() => Promise.resolve({ forgotten: true }));
@@ -101,9 +102,10 @@ function boot(opts) {
     toast: (t) => log.toasts.push(t),
     signIn: () => { log.signIns++; },
     confirm: (o, yes) => { log.confirms.push({ o, yes }); },
+    sid: () => sidRef.v,
     setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
   };
-  return { Z, host, deps, log, clock, setGet: (f) => { getImpl = f; }, setPost: (f) => { postImpl = f; } };
+  return { Z, host, deps, log, clock, sidRef, setGet: (f) => { getImpl = f; }, setPost: (f) => { postImpl = f; } };
 }
 
 (async () => {
@@ -195,8 +197,12 @@ function boot(opts) {
     ok(!t.log.toasts.includes('Forgotten'), 'never "Forgotten" for a failure');
     // 404: already gone elsewhere
     t.setPost(() => Promise.reject(new Error('http 404')));
+    const gets0 = t.log.gets.length;
+    t.setGet(() => Promise.resolve(viewOf([clone(SISTER), { key: 'preferences', label: 'Preferences', kind: 'items', more: 0, items: [clone(PREFS.items[1])] }, clone(DATES)])));
     btn.click(); t.log.confirms[1].yes(); await settle();
-    ok(!t.host.textContent.includes('dark roast') && t.log.toasts.includes('Already gone'));
+    ok(t.log.toasts.includes('Already gone'));
+    eq(t.log.gets.length, gets0 + 1, 'a 404 is answered by re-reading the server list, never by a local guess');
+    ok(!t.host.textContent.includes('dark roast'), 'and the server list no longer has it');
     // the session died mid-way
     t.setPost(() => Promise.reject(new Error('auth')));
     byAct(t.host, 'forget')[0].click(); t.log.confirms[2].yes(); await settle();
@@ -225,7 +231,7 @@ function boot(opts) {
     t.clock.advance(t.Z.VIEW_TTL_MS - 1000);
     ok(t.host.textContent.includes('Marisol'), 'still there inside the window');
     // a touch inside the window restarts it
-    all(t.host, 'memwrap')[0].listeners.pointerdown[0]();
+    t.host.listeners.pointerdown.forEach((f) => f());   // the host is the scroller; scroll does not bubble
     t.clock.advance(t.Z.VIEW_TTL_MS - 1000);
     ok(t.host.textContent.includes('Marisol'), 'a touch restarts the window');
     t.clock.advance(1500);
@@ -251,7 +257,7 @@ function boot(opts) {
     ok(!t.host.textContent.includes('Marisol'), 'a response that lands after navigation never paints');
     const u = boot();
     u.Z.mount(u.host, u.deps); await settle();
-    eq(u.clock.pending(), 1, 'one privacy timer while the rows are up');
+    eq(u.clock.pending(), 2, 'the idle window and the who-is-here watch run while the rows are up');
     u.Z.unmount();
     eq(u.clock.pending(), 0, 'unmount cancels it');
     // a second mount supersedes the first (a guest result must not paint over a newer member view)
@@ -269,6 +275,79 @@ function boot(opts) {
     ok(f.host.textContent.includes('couldn’t reach my memory') && !f.host.textContent.includes('don’t know much'), 'failed != empty');
     byAct(f.host, 'retry')[0].click();
     eq(f.log.gets.length, 2);
+  }
+
+  // ── A8: review findings - nothing private outlives its session, its navigation or its idle window ────────────────
+  {
+    // unmount empties the host: a screen that is hidden but live (a card painted over it) must not still hold rows
+    const t = boot();
+    t.Z.mount(t.host, t.deps); await settle();
+    ok(t.host.textContent.includes('Marisol'));
+    t.Z.unmount();
+    ok(t.host.textContent === '' && t.host.children.length === 0, 'unmount removes the rows from the DOM');
+
+    // the session changes under an untouched screen -> rows are re-asked (and a guest sees the prompt)
+    const u = boot();
+    u.Z.mount(u.host, u.deps); await settle();
+    u.clock.advance(4900);
+    ok(u.host.textContent.includes('Marisol'), 'same session: still shown');
+    u.sidRef.v = 'sess-guest';
+    u.setGet(() => Promise.reject(new Error('auth')));
+    u.clock.advance(300); await settle();
+    ok(!u.host.textContent.includes('Marisol') && u.host.textContent.includes('Sign in to see'), 'a changed session never keeps the old rows up');
+    eq(u.log.gets.length, 2);
+
+    // a touch cannot keep rows up past a session change either (the watch is independent of the idle window)
+    const w = boot();
+    w.Z.mount(w.host, w.deps); await settle();
+    for (let i = 0; i < 3; i++) { w.clock.advance(4000); w.host.listeners.pointerdown.forEach((f) => f()); }
+    w.sidRef.v = 'sess-other';
+    w.setGet(() => Promise.reject(new Error('auth')));
+    w.clock.advance(5100); await settle();
+    ok(!w.host.textContent.includes('Marisol'));
+
+    // scroll counts as activity
+    const v = boot();
+    v.Z.mount(v.host, v.deps); await settle();
+    v.clock.advance(v.Z.VIEW_TTL_MS - 1000);
+    v.host.listeners.scroll.forEach((f) => f());
+    v.clock.advance(v.Z.VIEW_TTL_MS - 1000);
+    ok(v.host.textContent.includes('Marisol'), 'scrolling restarts the idle window');
+
+    // the idle window fires while the confirm modal is open: confirming does nothing and repaints nothing
+    const x = boot();
+    x.Z.mount(x.host, x.deps); await settle();
+    byAct(x.host, 'forget')[0].click();
+    x.clock.advance(x.Z.VIEW_TTL_MS + 1);
+    ok(x.host.textContent.includes('Hidden to keep your things private'));
+    x.log.confirms[0].yes(); await settle();
+    eq(x.log.posts.length, 0, 'no POST once the screen was hidden');
+    ok(!/Marisol|coffee/.test(x.host.textContent), 'and nothing repaints');
+
+    // a different person is signed in by the time the modal is confirmed
+    const y = boot();
+    y.Z.mount(y.host, y.deps); await settle();
+    byAct(y.host, 'forget')[0].click();
+    y.sidRef.v = 'sess-b';
+    y.log.confirms[0].yes(); await settle();
+    eq(y.log.posts.length, 0, 'a forget asked under one session is not sent under another');
+
+    // a forget that lands after the screen was hidden never repaints rows
+    let releasePost;
+    const z = boot({ post: () => new Promise((r) => { releasePost = r; }) });
+    z.Z.mount(z.host, z.deps); await settle();
+    byAct(z.host, 'forget')[2].click(); z.log.confirms[0].yes();   // the only item of its group: the removal would repaint
+    z.clock.advance(z.Z.VIEW_TTL_MS + 1);
+    releasePost({ forgotten: true }); await settle();
+    ok(!/Marisol|coffee|birthday/.test(z.host.textContent) && z.host.textContent.includes('Hidden to keep your things private'), 'a late forget response never repaints over the hidden screen');
+
+    // a hidden screen keeps no copy of the rows to re-render
+    const q = boot();
+    q.Z.mount(q.host, q.deps); await settle();
+    q.clock.advance(q.Z.VIEW_TTL_MS + 1);
+    q.setGet(() => Promise.reject(new Error('http 503')));
+    byAct(q.host, 'show')[0].click(); await settle();
+    ok(!/Marisol|coffee/.test(q.host.textContent), 'a failed re-read shows no stale rows');
   }
 
   // ── B: home.html ─────────────────────────────────────────────────────────────────────────────
@@ -293,7 +372,7 @@ function boot(opts) {
     ok(scriptAt > 0 && scriptAt < estateAt, 'loaded (cache-busted) before the estate script, so a ?domain=memories arrival finds it');
     // the wiring hands over the SESSION-carrying helpers and picks no identity
     const w = home.slice(home.indexOf('function wireMemories()'), home.indexOf('// ---- Settings: full-screen expanding sections'));
-    ok(w.includes('apiGet:apiGet') && w.includes('apiJson:apiJson') && w.includes('__showAuthCard'));
+    ok(w.includes('apiGet:apiGet') && w.includes('apiJson:apiJson') && w.includes('sid:sid') && w.includes('__showAuthCard'));
     ok(!/user_id|localStorage|sessionStorage|zoe_session|<input|<textarea|prompt\(/.test(w), 'wireMemories names no member, reads no storage, adds no input');
     // a surface name opens it: the voice arrival path (?domain=memories) needs no new map entry
     ok(home.includes("(FULL[dom]?dom:'home')"));

@@ -23,8 +23,11 @@
   var BADGE = { told: 'You told me', inferred: 'I picked this up' };
 
   var gen = 0;       // bumped on every mount/unmount: a late response from an earlier screen is dropped
-  var timer = null;
+  var timer = null;       // the idle (privacy) window
+  var watchT = null;      // the who-is-here check while rows are up
+  var shown = null;       // the host currently holding this screen: unmount() empties it
   var timers = { set: null, clear: null };
+  var WATCH_MS = 5000;
 
   function el(tag, cls, text) {
     var e = root.document.createElement(tag);
@@ -46,10 +49,14 @@
 
   function stopTimer() {
     if (timer != null) { timers.clear(timer); timer = null; }
+    if (watchT != null) { timers.clear(watchT); watchT = null; }
   }
+  // Called by the estate on EVERY navigation. Some screens (cards) are painted without resetting the stage's content, so a
+  // member's rows must be removed here, not left in a hidden-but-live DOM.
   function unmount() {
     gen++;
     stopTimer();
+    if (shown) { clear(shown); shown = null; }
   }
 
   function mount(host, deps) {
@@ -60,6 +67,14 @@
     timers.clear = deps.clearTimeout || function (id) { return root.clearTimeout(id); };
     var live = function () { return my === gen; };
     var lastData = null, groupState = {};
+    var view = 'loading';       // loading | data | signin | failed | hidden | empty
+    var loadSid = null;         // the session the rows on screen were read under
+    shown = host;
+    var activity = function () { if (live() && view === 'data') touch(); };
+    // the scroller is the host itself (scroll does not bubble), so listen here, once per mount
+    host.addEventListener('pointerdown', activity);
+    host.addEventListener('scroll', activity);
+    function sidNow() { return deps.sid ? deps.sid() : null; }
 
     function meta(text) { if (deps.setMeta) deps.setMeta(text || ''); }
     function paint(node) { clear(host); host.appendChild(node); }
@@ -78,11 +93,13 @@
       return box;
     }
     function loading() {
+      view = 'loading';
       meta('');
       paint(note('Looking through what I know…', ''));
     }
     function signIn() {
       stopTimer();
+      view = 'signin'; lastData = null;
       meta('');
       paint(note('Sign in to see what I know about you',
         'I only show this to you. Tap to enter your PIN.',
@@ -90,25 +107,39 @@
     }
     function failed() {
       stopTimer();
+      view = 'failed'; lastData = null;
       meta('');
       paint(note('I couldn’t reach my memory just now', 'Nothing has been changed.',
         [{ act: 'retry', text: 'Try again', primary: true, fn: load }]));
     }
     function hidden() {
       stopTimer();
+      view = 'hidden'; lastData = null;
       meta('');
       paint(note('Hidden to keep your things private', 'Tap to show them again.',
         [{ act: 'show', text: 'Show again', primary: true, fn: load }]));
     }
     function empty() {
+      view = 'empty'; lastData = null;
       meta('');
       paint(note('I don’t know much about you yet', 'Tell me something and say “remember that” — it will show up here.'));
     }
 
     // ---- the member's view ----------------------------------------------------------------------------------------
     function touch() {
-      stopTimer();
+      if (timer != null) { timers.clear(timer); timer = null; }
       timer = timers.set(function () { timer = null; if (live()) hidden(); }, VIEW_TTL_MS);
+    }
+    // The session can change under a screen that nobody is touching (the kiosk downgrades a PIN session to guest just before
+    // it expires; a voice turn can sign someone else in). Rows read under one session never stay up under another: re-ask.
+    function watch() {
+      if (watchT != null) { timers.clear(watchT); watchT = null; }
+      watchT = timers.set(function () {
+        watchT = null;
+        if (!live() || view !== 'data') return;
+        if (sidNow() !== loadSid) { load(); return; }
+        watch();
+      }, WATCH_MS);
     }
 
     function renderItem(it, grp) {
@@ -184,32 +215,37 @@
       }
       meta(plural(data.total != null ? data.total : 0, 'thing', 'things'));
       paint(wrap);
-      ['pointerdown', 'scroll'].forEach(function (t) { wrap.addEventListener(t, function () { if (live()) touch(); }); });
+      view = 'data';
       touch();
+      watch();
     }
 
     // ---- forget (confirm -> POST -> remove the row) ---------------------------------------------------------------
     function forgetFlow(it, row, grp, btn) {
       if (!live()) return;
       touch();
+      var askedSid = sidNow();
       deps.confirm({ title: 'Forget this?', body: it.text, yes: 'Forget it', no: 'Keep it' }, function () {
-        if (!live()) return;
+        // the screen was hidden, or someone else is signed in now, while the modal was open: do nothing, show nothing
+        if (!live() || view !== 'data' || sidNow() !== askedSid) { if (live() && view === 'data') load(); return; }
         btn.disabled = true;
         deps.apiJson('POST', MINE_URL + '/' + encodeURIComponent(it.id) + '/forget').then(function () {
           if (!live()) return;
-          removeRow(it, row, grp);
           if (deps.toast) deps.toast('Forgotten');
+          removeRow(it, row, grp);
         }).catch(function (e) {
           if (!live()) return;
           var m = e && e.message;
           if (m === 'auth') { signIn(); return; }
-          if (m === 'http 404') { removeRow(it, row, grp); if (deps.toast) deps.toast('Already gone'); return; }
+          // 404 is also what a memory store that could not answer looks like: trust the server's list, not a local guess
+          if (m === 'http 404') { if (deps.toast) deps.toast('Already gone'); load(); return; }
           btn.disabled = false;
           if (deps.toast) deps.toast('Couldn’t forget that — try again');
         });
       });
     }
     function removeRow(it, row, grp) {
+      if (view !== 'data' || !lastData) return;   // hidden / signed out meanwhile: never repaint rows
       if (row.parentNode) row.parentNode.removeChild(row);
       // keep the data the screen was built from in step, so a re-render never resurrects a forgotten row
       (lastData.groups || []).forEach(function (g) {
@@ -231,7 +267,9 @@
 
     // ---- load -----------------------------------------------------------------------------------------------------
     function load() {
+      stopTimer();
       loading();
+      loadSid = sidNow();
       deps.apiGet(MINE_URL).then(function (data) {
         if (!live()) return;
         renderView(data);

@@ -3454,7 +3454,7 @@
     var host=document.getElementById('memBody'),meta=document.getElementById('memMeta');
     if(!host||!window.ZoeMemoriesSpace)return;
     window.ZoeMemoriesSpace.mount(host,{
-      apiGet:apiGet,apiJson:apiJson,
+      apiGet:apiGet,apiJson:apiJson,sid:sid,
       setMeta:function(t){if(meta)meta.textContent=t||'';},
       toast:toast,
       signIn:function(){if(window.__showAuthCard)window.__showAuthCard();},

@@ -173,7 +173,8 @@ async def forget_row(user_id: str, row_id: str, *, svc: Any = None) -> str:
 
     The steps of ``provenance_answers.forget_it``: reject the row and its twins (one utterance leaves several), erase them for
     real when physical erase is on, remove the owner's verbatim words. RAISES when a step could not finish (the row may already
-    be hidden; calling again redoes the idempotent rest) - the caller must not report a forget that did not hold.
+    be hidden): calling again redoes EVERY remaining step - a row that is already rejected is finished the same way, twins and
+    erase included - so the caller must not report a forget that did not hold.
     """
     svc = svc or pa._svc_default()
     rid = str(row_id or "").strip()
@@ -182,27 +183,29 @@ async def forget_row(user_id: str, row_id: str, *, svc: Any = None) -> str:
     ref = await asyncio.wait_for(svc.get(rid), pa.READ_BUDGET_S)
     if ref is None or not pa._owns(ref.metadata or {}, user_id):
         return "gone"
+    status = str((ref.metadata or {}).get("status") or "approved").lower()
+    if status not in ("approved", "rejected"):
+        return "gone"          # pending / disputed / archived rows are not on the screen: nothing here to forget
     exp = mp.Explained(seq=0, row_id=rid, ts=0.0, text=ref.text or "")
-    if str((ref.metadata or {}).get("status") or "approved").lower() != "approved":
-        # rejected already - possibly by an earlier forget whose word erase failed: finish that job (idempotent)
-        left = await pa._erase_words(user_id, exp, ref.text or "")
-        return "forgotten" if left else "gone"
     twins = await pa.twins_of(user_id, ref, svc=svc)
-    done = await svc.review(ref.id, decision="reject", actor=user_id, note="forget_memory_space")
-    if done is None:
-        raise RuntimeError("memory store refused the forget")
+    if status == "approved":
+        if await svc.review(ref.id, decision="reject", actor=user_id, note="forget_memory_space") is None:
+            raise RuntimeError("memory store refused the forget")
     gone = [ref.id]
     for tw in twins:
-        if await svc.review(tw.id, decision="reject", actor=user_id, note="forget_memory_space") is not None:
-            gone.append(tw.id)
+        if await svc.review(tw.id, decision="reject", actor=user_id, note="forget_memory_space") is None:
+            raise RuntimeError("memory store refused a twin's forget")
+        gone.append(tw.id)
+    physical = False
     if hasattr(svc, "erase_rows"):
-        try:
-            from memory_service import physical_erase_enabled
+        from memory_service import physical_erase_enabled
 
-            if physical_erase_enabled():
-                await svc.erase_rows(user_id, gone, actor=user_id, reason="forgotten by request (memories screen)")
-        except Exception as exc:  # noqa: BLE001 - the reject already hid the rows
-            logger.warning("memory_space: physical erase failed (%s) - rows stay rejected", type(exc).__name__)
-    await pa._erase_words(user_id, exp, ref.text or "")
+        if physical_erase_enabled():
+            # a failed physical erase is NOT "forgotten": the text is still on disk. The rows stay rejected; a retry finishes it.
+            await svc.erase_rows(user_id, gone, actor=user_id, reason="forgotten by request (memories screen)")
+            physical = True
+    erased = await pa._erase_words(user_id, exp, ref.text or "")
     logger.info("MEMORY_SPACE_FORGET user=%s rows=%d", user_id, len(gone))
+    if status == "rejected" and len(gone) == 1 and not erased and not physical:
+        return "gone"          # already forgotten earlier and nothing was left to remove
     return "forgotten"

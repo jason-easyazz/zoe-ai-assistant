@@ -323,6 +323,67 @@ def test_a_forget_that_cannot_finish_is_503_not_ok(seeded, monkeypatch):
     assert r.status_code == 503, "the verbatim words could not be erased: never report 'forgotten'"
 
 
+def test_a_retry_after_a_failed_twin_finishes_the_whole_job(seeded, monkeypatch):
+    """The first forget rejects the row, then a twin's reject fails (503). The retry must redo the twins and the erase, not
+    only the words - or the twin keeps the fact alive while the route says 'forgotten'."""
+    import provenance_answers as pa
+
+    rid = row_id(seeded, ME, "dark roast")
+    twin = row_id(seeded, ME, "bike")                     # stands in for a twin row of the same utterance
+    ref_twin = run(seeded.get(twin))
+
+    async def twins(_uid, _ref, svc=None):
+        return [ref_twin] if _ref.id == rid else []
+
+    monkeypatch.setattr(pa, "twins_of", twins)
+    real_review = seeded.review
+    calls = {"n": 0}
+
+    async def flaky(mem_id, **kw):
+        if mem_id == twin and calls["n"] == 0:
+            calls["n"] += 1
+            raise RuntimeError("store hiccup")
+        return await real_review(mem_id, **kw)
+
+    monkeypatch.setattr(seeded, "review", flaky)
+    c = as_member()
+    assert c.post(f"/api/memories/mine/{rid}/forget", headers=H).status_code == 503
+    assert any("bike" in t for t in approved_texts(seeded, ME)), "the twin is still there after the failed first try"
+    r = c.post(f"/api/memories/mine/{rid}/forget", headers=H)
+    assert r.status_code == 200, r.text
+    assert not any("bike" in t for t in approved_texts(seeded, ME)), "the retry takes the twin too"
+    assert not any("dark roast" in t for t in approved_texts(seeded, ME))
+
+
+def test_a_failed_physical_erase_is_503_and_the_retry_finishes(seeded, monkeypatch):
+    monkeypatch.setenv("ZOE_MEMORY_PHYSICAL_ERASE", "1")
+    rid = row_id(seeded, ME, "dark roast")
+    state = {"fail": True, "erased": []}
+
+    async def erase(user_id, ids, **kw):          # the real one needs a live palace directory: stubbed here
+        if state["fail"]:
+            raise RuntimeError("disk busy")
+        state["erased"].append(list(ids))
+        return {"rows_removed": len(list(ids))}
+
+    monkeypatch.setattr(seeded, "erase_rows", erase)
+    c = as_member()
+    assert c.post(f"/api/memories/mine/{rid}/forget", headers=H).status_code == 503, "text still on disk: never 'forgotten'"
+    state["fail"] = False
+    assert c.post(f"/api/memories/mine/{rid}/forget", headers=H).status_code == 200
+    assert state["erased"] and rid in state["erased"][0], "the retry runs the physical erase for the already-rejected row"
+    assert not any("dark roast" in t for t in approved_texts(seeded, ME))
+
+
+def test_a_pending_row_is_not_forgettable_from_the_screen(seeded):
+    pending = run(seeded.ingest("I secretly collect teapots from every place I visit.", user_id=ME, source="chat_regex",
+                                confidence=0.4, session_id="s0", status="pending"))
+    if pending is None:
+        pytest.skip("the ingest gate dropped the pending row")
+    r = as_member().post(f"/api/memories/mine/{pending.id}/forget", headers=H)
+    assert r.status_code == 404
+
+
 # ── negative controls: take the wall away and the leak is real ─────────────────────────────────
 
 def test_control_without_the_identity_wall_a_guest_would_read_rows(seeded, monkeypatch):
