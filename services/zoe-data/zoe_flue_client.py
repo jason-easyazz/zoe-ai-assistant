@@ -1872,7 +1872,7 @@ async def _run_turn_aggregated_wire2(
 # resident), one warm at a time, hard wall-clock cap, never raises, and it brackets itself with brain_slot_guard
 # so the post-turn helpers do not evict what it just loaded.
 _KV_WARM_MESSAGE = "Reply with the single word: ready."
-_KV_WARM_MAX_S = 20.0
+_KV_WARM_MAX_S = 10.0   # a cold prefill is ~4 s (2.7k tokens at ~670 tok/s): 2x headroom, and the cap on how long a command can queue behind a stalled warm
 _kv_warm_inflight = False
 
 
@@ -1935,11 +1935,13 @@ async def warm_kv_prefix() -> str:
     import uuid
 
     session_id = f"kvwarm-{uuid.uuid4().hex[:10]}"
-    _kv_warm_inflight = True
-    brain_slot_guard.turn_started()
     t0 = asyncio.get_running_loop().time()
     outcome, prompt_n, cache_n = "failed:unknown", -1, -1
+    acquired = False
     try:
+        _kv_warm_inflight = True
+        brain_slot_guard.turn_started()
+        acquired = True
         outcome, prompt_n, cache_n = await asyncio.wait_for(_kv_warm_turn(session_id), timeout=_KV_WARM_MAX_S)
     except asyncio.TimeoutError:
         outcome = "failed:timeout"
@@ -1950,7 +1952,8 @@ async def warm_kv_prefix() -> str:
         outcome = f"failed:{type(exc).__name__}"
     finally:
         _kv_warm_inflight = False
-        brain_slot_guard.turn_finished()
+        if acquired:
+            brain_slot_guard.turn_finished()
         # A dedicated line, NOT FLUE_PROMPT_CACHE: the warm is cold by design, and mixing its rows into that log would
         # corrupt the live miss-rate (share of turns with first_cache_n=0) the prefix-cache doc tells operators to read.
         logger.info(

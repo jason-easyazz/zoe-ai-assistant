@@ -6343,19 +6343,24 @@ async def _prewarm_brain_for_panel(panel_id: str) -> None:
     try:
         if not _brain_prewarm_on_wake_enabled():
             return
+        from brain_dispatch import failover_enabled, use_flue_brain
+        flue_lane = use_flue_brain()
+        _t0 = time.monotonic()
+        # Started FIRST: it needs neither a session nor an identity, so nothing below (a session lookup, the
+        # identity read) can lose the wake its warm. Never raises; detached from this coroutine's own failures.
+        kv_task = None
+        if flue_lane:
+            import zoe_flue_client
+            kv_task = asyncio.ensure_future(zoe_flue_client.warm_kv_prefix())
         session_id = _get_or_create_voice_session(panel_id)
         member = _real_user_or_none(
             (_VOICE_SESSIONS.get(panel_id) or {}).get("bound_user_id")
         ) or ""
         if not member:
             member = await _resolve_fresh_panel_member(panel_id) or ""
-        from brain_dispatch import failover_enabled, use_flue_brain
-        flue_lane = use_flue_brain()
-        _t0 = time.monotonic()
         jobs: dict[str, Any] = {}
-        if flue_lane:
-            import zoe_flue_client
-            jobs["kv"] = zoe_flue_client.warm_kv_prefix()
+        if kv_task is not None:
+            jobs["kv"] = kv_task
         if (not flue_lane) or failover_enabled():
             import zoe_core_client
             # voice_mode=True: warm the SAME (voice-capped) worker the voice turn

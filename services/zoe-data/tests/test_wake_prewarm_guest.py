@@ -152,12 +152,32 @@ def test_a_failing_warm_never_fails_the_wake(wake, monkeypatch, flue):
     _run(v._prewarm_brain_for_panel(PANEL))   # must simply return
 
 
-def test_a_failing_identity_lookup_never_fails_the_wake(wake, monkeypatch):
+def test_a_failing_identity_lookup_never_fails_the_wake_or_loses_its_warm(wake, monkeypatch):
+    """The KV warm needs no identity, so nothing about the identity read may cost the wake its warm."""
+    _flue(monkeypatch)
+
     async def _boom(*a, **k):
         raise RuntimeError("db down")
 
     monkeypatch.setattr(v, "_resolve_fresh_panel_member", _boom)
     _run(v._prewarm_brain_for_panel(PANEL))
+    assert wake["kv"] == 1
+
+
+def test_a_failing_session_lookup_does_not_lose_the_kv_warm(wake, monkeypatch):
+    _flue(monkeypatch)
+
+    def _boom(panel_id):
+        raise RuntimeError("session store broke")
+
+    monkeypatch.setattr(v, "_get_or_create_voice_session", _boom)
+
+    async def _go():
+        await v._prewarm_brain_for_panel(PANEL)
+        await asyncio.sleep(0)   # let the detached warm task run
+
+    _run(_go())
+    assert wake["kv"] == 1
 
 
 def test_kill_switch_skips_everything(wake, monkeypatch):
@@ -283,3 +303,23 @@ def test_warm_is_wall_clock_bounded(sidecar, monkeypatch):
     monkeypatch.setattr(zfc, "_KV_WARM_MAX_S", 0.05)
     assert _run(zfc.warm_kv_prefix()) == "failed:timeout"
     assert brain_slot_guard._active == 0 and zfc._kv_warm_inflight is False
+
+
+def test_a_cancelled_warm_restores_the_slot_guard_and_the_inflight_flag(sidecar, monkeypatch):
+    async def _go():
+        gate = asyncio.Event()
+
+        async def _hang(session_id):
+            gate.set()
+            await asyncio.sleep(60)
+
+        monkeypatch.setattr(zfc, "_kv_warm_turn", _hang)
+        task = asyncio.ensure_future(zfc.warm_kv_prefix())
+        await gate.wait()
+        assert zfc._kv_warm_inflight is True and brain_slot_guard._active == 1
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    _run(_go())
+    assert zfc._kv_warm_inflight is False and brain_slot_guard._active == 0
