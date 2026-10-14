@@ -119,6 +119,30 @@ def normalize_model_id(raw: Any) -> str:
     return s or LEGACY_MODEL_ID
 
 
+def model_id_field(mapping: Any, key: str) -> Optional[str]:
+    """A model id named by a REQUEST: an ABSENT field is the legacy model (every client older than ``ZOE_SPEAKER_MODEL``);
+    a present field must be a non-empty string (stripped) - a blank, null or non-string value is MALFORMED and returns None,
+    which callers refuse (400 / claim refused) instead of quietly treating it as Resemblyzer. (Stored rows use
+    ``normalize_model_id``: there NULL / '' genuinely means a pre-0051 Resemblyzer row.)"""
+    if not isinstance(mapping, dict) or key not in mapping:
+        return LEGACY_MODEL_ID
+    raw = mapping[key]
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return None
+
+
+def model_label(model_id: str, mode: Optional[str] = None) -> str:
+    """How a member's profile of ``model_id`` is described to them: ``current`` (the model that recognises them now),
+    ``new model, testing`` (enrolled for the shadow comparison in ``dual``), or ``not in use``."""
+    m = mode or speaker_mode()
+    if model_id == acting_model(m):
+        return "current"
+    if model_id in enrolled_models(m):
+        return "new model, testing"
+    return "not in use"
+
+
 def is_known(model_id: str) -> bool:
     return model_id in MODELS
 

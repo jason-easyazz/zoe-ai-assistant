@@ -159,6 +159,17 @@ async def _scalar_row(db, sql: str, params: tuple):
         return await cur.fetchone()
 
 
+def acting_voice_count_query(user_id: Optional[str] = None) -> tuple:
+    """``(sql, params)`` counting members (or, with ``user_id``, that member's rows) whose voice the CURRENT acting model can
+    recognise: a consented ``speaker_profiles`` row of ``speaker_models.acting_model()``. The same rule ``_voice_state`` applies,
+    shared so every "is this voice known?" answer agrees (``self_model``)."""
+    acting = speaker_models.acting_model()
+    where = "consent_at IS NOT NULL AND " + speaker_models.MODEL_SQL + " = ?"
+    if user_id is None:
+        return "SELECT COUNT(DISTINCT user_id) FROM speaker_profiles WHERE " + where, (acting,)
+    return "SELECT COUNT(*) FROM speaker_profiles WHERE user_id = ? AND " + where, (user_id, acting)
+
+
 def _enrolled_key(row) -> str:
     return str(row[1] or "")
 

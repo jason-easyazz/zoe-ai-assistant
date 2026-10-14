@@ -1507,14 +1507,21 @@ async function loadVoiceProfiles() {
       el.innerHTML = '<div class="empty"><span class="empty-icon">🎙️</span>No voice profiles enrolled</div>';
       return;
     }
-    el.innerHTML = profiles.map(p => `
+    // One row per (member, speaker model): during the ResNet34 dual-run a member has two, so each names its model
+    // ("current" = the one that recognises them now) and the server orders them deterministically.
+    el.innerHTML = profiles.map(p => {
+      const who = p.display_name || p.user_id || 'Profile';
+      const label = p.model_label ? `Voice profile (${p.model_label})` : 'Voice profile';
+      return `
       <div class="session-item">
         <div>
-          <div class="session-device">${escHtml(p.display_name || p.user_id || 'Profile')}</div>
-          <div class="session-meta">${p.sample_count || 1} sample${(p.sample_count || 1) > 1 ? 's' : ''}${p.consented === false ? ' — consent pending' : ''}</div>
+          <div class="session-device">${escHtml(who)}</div>
+          <div class="session-meta">${escHtml(label)} · ${p.sample_count || 1} sample${(p.sample_count || 1) > 1 ? 's' : ''}${p.consented === false ? ' — consent pending' : ''}</div>
         </div>
-        <button class="btn btn-danger btn-sm" onclick="deleteVoiceProfile('${p.id}')">Delete</button>
-      </div>`).join('');
+        <button class="btn btn-danger btn-sm" data-id="${escHtml(String(p.id))}" data-who="${escHtml(who)}" data-label="${escHtml(label)}"
+                onclick="deleteVoiceProfile(this.dataset.id, this.dataset.who, this.dataset.label)">Delete</button>
+      </div>`;
+    }).join('');
   } catch {
     el.innerHTML = '<div class="empty">Could not load voice profiles</div>';
   }
@@ -1605,8 +1612,9 @@ async function uploadEnrollment() {
   }
 }
 
-async function deleteVoiceProfile(id) {
-  if (!confirm('Delete this voice profile?')) return;
+async function deleteVoiceProfile(id, who, label) {
+  // name WHICH profile: with two models a member has two rows, and deleting the current one stops recognition
+  if (!confirm(`Delete ${label || 'this voice profile'}${who ? ' for ' + who : ''}?`)) return;
   try {
     await apiCall('DELETE', `/api/voice/profiles/${id}`);
     toast('Profile deleted', 'success');

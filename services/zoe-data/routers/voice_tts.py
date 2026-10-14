@@ -6586,11 +6586,16 @@ def _claim_model(payload: dict) -> tuple:
     """``(model_id, speech_s)`` of the panel's speaker claim: which embedding space its score was computed in, and how long
     the clip was (the length group picks the threshold). A claim that names no model is the legacy Resemblyzer one - every
     panel that predates ``ZOE_SPEAKER_MODEL`` - and an unknown length picks the stricter group."""
-    block = (payload or {}).get("speaker")
+    payload = payload or {}
+    block = payload.get("speaker")
     block = block if isinstance(block, dict) else {}
-    raw = block.get("model_id") or (payload or {}).get("voice_model_id")
-    speech = block.get("speech_s", (payload or {}).get("voice_speech_s"))
-    return speaker_models.normalize_model_id(raw), speech
+    if "model_id" in block:
+        model_id = speaker_models.model_id_field(block, "model_id")
+    else:
+        model_id = speaker_models.model_id_field(payload, "voice_model_id")
+    speech = block.get("speech_s", payload.get("voice_speech_s"))
+    # an explicitly blank / non-string model id is MALFORMED (""), never the legacy model: the claim is then refused as unknown
+    return (model_id if model_id is not None else ""), speech
 
 
 def _speaker_verdict(payload: dict, caller: dict, *, identified_by_claim: bool) -> Optional[bool]:
@@ -6732,7 +6737,9 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
     payload = payload or dict()
     b64 = str(payload.get("audio_base64", "")).strip()
     emb_b64 = str(payload.get("embedding_base64", "")).strip()
-    model_id = speaker_models.normalize_model_id(payload.get("model_id"))
+    model_id = speaker_models.model_id_field(payload, "model_id")
+    if model_id is None:
+        raise HTTPException(status_code=400, detail="model_id must be a non-empty string")
     if not speaker_models.is_known(model_id):
         raise HTTPException(status_code=400, detail="unknown model_id")
     # A session caller may only enrol ITSELF (admins excepted). Taking the
@@ -6896,7 +6903,9 @@ async def voice_identify(payload: dict, caller: dict = Depends(_require_voice_au
     from db_compat import get_compat_db as _get_compat_db
 
     payload = payload or dict()
-    model_id = speaker_models.normalize_model_id(payload.get("model_id"))
+    model_id = speaker_models.model_id_field(payload, "model_id")
+    if model_id is None:
+        raise HTTPException(status_code=400, detail="model_id must be a non-empty string")
     if not speaker_models.is_known(model_id):
         raise HTTPException(status_code=400, detail="unknown model_id")
 
@@ -7065,14 +7074,18 @@ async def voice_profiles(caller: dict = Depends(_require_voice_auth)):
         async with _get_compat_db() as db:
             async with db.execute(sql, params) as cur:
                 rows = await cur.fetchall()
-        return dict(
-            ok=True,
-            profiles=[
-                dict(id=r[0], user_id=r[1], display_name=r[2], sample_count=r[3] or 1, panel_id=r[4],
-                     consented=r[5] is not None, model_id=speaker_models.row_model_id(r, 6))
-                for r in rows
-            ],
-        )
+        mode = speaker_models.speaker_mode()
+        profiles = []
+        for r in rows:
+            mid = speaker_models.row_model_id(r, 6)
+            profiles.append(dict(id=r[0], user_id=r[1], display_name=r[2], sample_count=r[3] or 1, panel_id=r[4],
+                                 consented=r[5] is not None, model_id=mid,
+                                 acting=mid == speaker_models.acting_model(mode),
+                                 model_label=speaker_models.model_label(mid, mode)))
+        # deterministic: per member, the profile that recognises them first, then the others by model id
+        profiles.sort(key=lambda p: (str(p["display_name"] or ""), str(p["user_id"] or ""), 0 if p["acting"] else 1,
+                                     p["model_id"]))
+        return dict(ok=True, profiles=profiles)
     except Exception as exc:
         logger.error("voice/profiles DB error: %s", exc)
         raise HTTPException(status_code=500, detail="DB error") from exc

@@ -402,7 +402,7 @@ async def test_adaptation_touches_only_the_acting_models_row(monkeypatch, world)
     assert by_model[R34][4] is not None and by_model[R34][5] == 1       # ResNet34 row adapted ...
     assert by_model[sm.LEGACY_MODEL_ID][4] is None                      # ... the Resemblyzer row untouched
     # a Resemblyzer-space offer in resnet34 mode is refused (and so is a ResNet34 one while dual acts on Resemblyzer)
-    out = await spk.process_adaptation(world.db, panel_id="panel1", payload=dict(offer, model_id=None), now=NOW + timedelta(hours=2), mode="on")
+    out = await spk.process_adaptation(world.db, panel_id="panel1", payload=dict((k, v) for k, v in offer.items() if k != "model_id"), now=NOW + timedelta(hours=2), mode="on")
     assert out["reason"] == "not_acting_model"
     monkeypatch.setenv("ZOE_SPEAKER_MODEL", "dual")
     out = await spk.process_adaptation(world.db, panel_id="panel1", payload=offer, now=NOW + timedelta(hours=3), mode="on")
@@ -637,3 +637,106 @@ async def test_resnet34_mode_still_accepts_the_panels_finished_profile(monkeypat
     monkeypatch.setenv("ZOE_SPEAKER_MODEL", "resnet34")
     out = await enrol(monkeypatch, world, dict(embedding_base64=_b64(at_cos(0.8)), model_id=R34, sample_count=5))
     assert out["ok"] and out["model_id"] == R34
+
+
+# -- an ABSENT model id is legacy; an explicit malformed one is refused (Codex P2 on #2024) -----------------------------
+
+def test_model_id_field_absent_is_legacy_and_malformed_is_none():
+    assert sm.model_id_field(dict(), "model_id") == sm.LEGACY_MODEL_ID
+    assert sm.model_id_field(dict(model_id=" " + R34 + " "), "model_id") == R34
+    for bad in ("", "   ", None, 7, ["resemblyzer"], dict()):
+        assert sm.model_id_field(dict(model_id=bad), "model_id") is None, bad
+    assert sm.normalize_model_id(None) == sm.LEGACY_MODEL_ID        # stored rows keep their NULL = legacy meaning
+
+
+@pytest.mark.parametrize("payload", [
+    dict(voice_user_id="jason", voice_score=0.95, speaker=dict(verified=None, member="jason", score=0.95, model_id="")),
+    dict(voice_user_id="jason", voice_score=0.95, speaker=dict(verified=None, member="jason", score=0.95, model_id=None)),
+    dict(voice_user_id="jason", voice_score=0.95, speaker=dict(verified=None, member="jason", score=0.95, model_id=7)),
+    dict(voice_user_id="jason", voice_score=0.95, voice_model_id="  "),
+])
+def test_an_explicitly_malformed_claim_model_is_refused_not_read_as_legacy(monkeypatch, payload):
+    from routers import voice_tts
+    monkeypatch.delenv("ZOE_SPEAKER_MODEL", raising=False)
+    monkeypatch.setenv("ZOE_SPEAKER_ID_THRESHOLD", "0.82")
+    assert voice_tts._accept_panel_voice_claim(payload, DEVICE) is None
+    # negative control: the same claim with the field ABSENT is today's legacy claim, accepted
+    clean = dict(voice_user_id="jason", voice_score=0.95, speaker=dict(verified=None, member="jason", score=0.95))
+    assert voice_tts._accept_panel_voice_claim(clean, DEVICE) == "jason"
+
+
+@pytest.mark.asyncio
+async def test_identify_refuses_an_explicitly_malformed_model_id(monkeypatch, world):
+    from fastapi import HTTPException
+    from routers import voice_tts
+    monkeypatch.delenv("ZOE_SPEAKER_MODEL", raising=False)
+    monkeypatch.setenv("ZOE_SPEAKER_ID_THRESHOLD", "0.5")
+    with compat_db(monkeypatch, world.db):
+        for bad in ("", " ", None, 3):
+            with pytest.raises(HTTPException) as e:
+                await voice_tts.voice_identify(dict(embedding_base64=_b64(ANCHOR), model_id=bad), caller=DEVICE)
+            assert e.value.status_code == 400, bad
+        ok = await voice_tts.voice_identify(dict(embedding_base64=_b64(ANCHOR)), caller=DEVICE)    # negative control: absent
+    assert ok["identified"] and ok["user_id"] == "jason"
+
+
+@pytest.mark.asyncio
+async def test_adaptation_refuses_a_malformed_model_id(world):
+    offer = dict(voice_user_id="jason", embedding_base64=_b64(at_cos(0.90)), voice_score=0.90, speech_s=3.0, model_id="")
+    out = await spk.process_adaptation(world.db, panel_id="panel1", payload=offer, now=NOW, mode="shadow")
+    assert out["reason"] == "unknown_model"
+    offer.pop("model_id")                                                      # negative control: absent = legacy, evaluated
+    out = await spk.process_adaptation(world.db, panel_id="panel1", payload=offer, now=NOW, mode="shadow")
+    assert out["reason"] != "unknown_model"
+
+
+# -- the settings list names each model's profile and orders them (Codex P2 on #2024) ------------------------------------
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode, first, labels", [
+    ("dual", sm.LEGACY_MODEL_ID, ["current", "new model, testing"]),
+    ("resnet34", R34, ["current", "not in use"]),
+    ("resemblyzer", sm.LEGACY_MODEL_ID, ["current", "not in use"]),
+])
+async def test_profile_list_labels_each_model_and_puts_the_acting_one_first(monkeypatch, world, mode, first, labels):
+    from routers import voice_tts
+    add_r34(world, "jason", at_cos(0.9))
+    monkeypatch.setenv("ZOE_SPEAKER_MODEL", mode)
+    with compat_db(monkeypatch, world.db):
+        out = await voice_tts.voice_profiles(caller=dict(source="session", user_id="jason", role="admin"))
+    mine = [p for p in out["profiles"] if p["user_id"] == "jason"]
+    assert [p["model_id"] for p in mine][0] == first and [p["model_label"] for p in mine] == labels
+    assert [p["acting"] for p in mine] == [True, False]
+
+
+def test_the_settings_page_shows_the_model_and_the_delete_names_it():
+    html = (REPO / "services/zoe-ui/dist/settings.html").read_text()
+    assert "Voice profile (${p.model_label})" in html and "data-label=" in html
+    assert "deleteVoiceProfile(this.dataset.id, this.dataset.who, this.dataset.label)" in html
+    assert "confirm(`Delete ${label || 'this voice profile'}" in html
+
+
+# -- "do you know my voice?" follows the acting model + consent (Codex P2 on #2024) ---------------------------------------
+
+@pytest.mark.asyncio
+async def test_self_model_knows_a_voice_only_if_the_acting_model_does_rollback_case(monkeypatch, world):
+    import self_model
+
+    async def count(sql, params=(), ttl=60.0):
+        if "speaker_profiles" not in sql:
+            return 0                                                       # the face count: not this test's table
+        return world.db.conn.execute(sql, params).fetchone()[0]
+
+    monkeypatch.setattr(self_model, "_count", count)
+    world.db.conn.execute("DELETE FROM speaker_profiles")
+    world.db.conn.commit()
+    add_r34(world, "jason", at_cos(0.9))                                    # enrolled under resnet34, then rolled back
+    monkeypatch.setenv("ZOE_SPEAKER_MODEL", "resemblyzer")
+    assert (await self_model._enrolment("jason"))[0] is False             # the acting model cannot recognise him
+    assert await count(*self_model._acting_voices_query()) == 0
+    monkeypatch.setenv("ZOE_SPEAKER_MODEL", "resnet34")                    # negative control: the model that has his profile acts
+    assert (await self_model._enrolment("jason"))[0] is True
+    assert await count(*self_model._acting_voices_query()) == 1
+    world.db.conn.execute("UPDATE speaker_profiles SET consent_at = NULL")  # unconsented never counts
+    world.db.conn.commit()
+    assert (await self_model._enrolment("jason"))[0] is False

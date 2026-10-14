@@ -393,7 +393,7 @@ async def process_adaptation(db: Any, *, panel_id: str, payload: dict, now: Opti
     if mode == "off":
         return {"ok": True, "mode": "off", "applied": False, "reason": "off"}
     payload = payload or {}
-    model_id = speaker_models.normalize_model_id(payload.get("model_id"))
+    model_id = speaker_models.model_id_field(payload, "model_id") or ""     # "" = malformed: refused as unknown below
     cfg = cfg or AdaptConfig.from_env(model_id)     # each model carries its own score / anchor guards
     now = now or datetime.now(timezone.utc)
 
