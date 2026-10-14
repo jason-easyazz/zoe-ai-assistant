@@ -2816,7 +2816,7 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
             cursor = await db.execute(
                 "SELECT li.id, li.list_id FROM list_items li JOIN lists l ON li.list_id = l.id"
                 " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=? AND LOWER(li.text)=LOWER(?)"
-                " AND li.deleted=0 AND l.deleted=0 LIMIT 1",
+                " AND li.deleted=0 AND l.deleted=0 ORDER BY l.created_at ASC, li.id ASC LIMIT 1",
                 (user_id, lt, item),
             )
             row = await cursor.fetchone()
@@ -2824,7 +2824,7 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
                 cursor = await db.execute(
                     "SELECT li.id, li.list_id FROM list_items li JOIN lists l ON li.list_id = l.id"
                     " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=? AND li.text LIKE ? ESCAPE '\\'"
-                    " AND li.deleted=0 AND l.deleted=0 LIMIT 1",
+                    " AND li.deleted=0 AND l.deleted=0 ORDER BY l.created_at ASC, li.id ASC LIMIT 1",
                     (user_id, lt, f"%{_escape_like_pattern(item)}%"),
                 )
                 row = await cursor.fetchone()

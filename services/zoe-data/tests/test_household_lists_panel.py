@@ -388,6 +388,56 @@ def test_trusted_client_ip_ignores_x_real_ip_from_a_direct_peer():
     assert panel_principal.household_actor(GUEST) == "panel" and panel_principal.household_actor(MEMBER) == "casey"
 
 
+async def test_a_request_that_crossed_cloudflare_is_never_the_panel(db):
+    """The tunnel's container address is inside the trusted proxy range and Cloudflare passes a caller's own X-Real-IP through."""
+    for header in (b"cf-connecting-ip", b"cf-ray", b"cf-visitor"):
+        req = Request({"type": "http", "method": "GET", "path": "/", "client": ("172.18.0.9", 1),
+                       "headers": [(b"x-real-ip", PANEL_IP.encode()), (b"x-session-id", b"s"), (header, b"1")]})
+        with pytest.raises(HTTPException) as e:
+            await lists.delete_item("shopping", "fam", "i1", user=GUEST, db=db, request=req)
+        assert e.value.status_code == 403
+    # negative control: the same request without the Cloudflare header, from the docker proxy range, IS the panel
+    ok = Request({"type": "http", "method": "GET", "path": "/", "client": ("172.18.0.9", 1),
+                  "headers": [(b"x-real-ip", PANEL_IP.encode()), (b"x-session-id", b"s")]})
+    assert (await lists.delete_item("shopping", "fam", "i1", user=GUEST, db=db, request=ok)) == {"ok": True}
+
+
+async def test_pinning_the_proxy_address_narrows_who_may_vouch_for_x_real_ip(db, monkeypatch):
+    monkeypatch.setenv("ZOE_TRUSTED_PROXY_NETS", "127.0.0.0/8,172.18.0.5/32")
+    sibling = Request({"type": "http", "method": "GET", "path": "/", "client": ("172.18.0.9", 1),
+                       "headers": [(b"x-real-ip", PANEL_IP.encode()), (b"x-session-id", b"s")]})
+    with pytest.raises(HTTPException) as e:
+        await lists.delete_item("shopping", "fam", "i1", user=GUEST, db=db, request=sibling)
+    assert e.value.status_code == 403
+    nginx = Request({"type": "http", "method": "GET", "path": "/", "client": ("172.18.0.5", 1),
+                     "headers": [(b"x-real-ip", PANEL_IP.encode()), (b"x-session-id", b"s")]})
+    assert (await lists.delete_item("shopping", "fam", "i1", user=GUEST, db=db, request=nginx)) == {"ok": True}
+
+
+async def test_the_household_list_is_the_fullest_then_the_OLDEST_never_the_most_recently_touched(db):
+    # equal fullness, different age: the older one wins; touching the newer one does not change that
+    db.lst("older", "jo", name="Pantry", ltype="bucket", created="2026-09-01T00:00:00")
+    db.lst("newer", "jo", name="Pantry", ltype="bucket", created="2026-10-09T00:00:00")
+    db.item("o1", "older", "a")
+    db.item("n1", "newer", "b")
+    db.con.execute("UPDATE lists SET updated_at='2026-10-15T09:00:00' WHERE id='newer'")
+    assert await list_service.find_household_list_id(db, list_type="bucket", name="Pantry") == "older"
+    # fuller beats older
+    db.item("n2", "newer", "c")
+    assert await list_service.find_household_list_id(db, list_type="bucket", name="Pantry") == "newer"
+
+
+def test_the_skybridge_household_resolvers_rank_fullest_then_oldest_not_most_recent():
+    import inspect
+    import skybridge_service
+
+    for fn in (skybridge_service._find_or_create_list, skybridge_service._find_list_for_remove):
+        src = inspect.getsource(fn)
+        order = src[src.rindex("ORDER BY"):]
+        assert "COUNT(*)" in order and "created_at ASC" in order, fn.__name__
+        assert "updated_at DESC" not in order, fn.__name__
+
+
 # ---- over real HTTP: FastAPI really injects the Request into the optional `request` parameter ---------------------------
 def _client(db, user):
     from fastapi import FastAPI

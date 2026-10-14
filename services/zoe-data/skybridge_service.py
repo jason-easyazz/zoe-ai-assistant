@@ -3565,7 +3565,7 @@ async def _find_or_create_list(intent: SkybridgeIntent, user_id: str, db: Any, c
         ORDER BY
           (SELECT COUNT(*) FROM list_items i WHERE i.list_id = lists.id AND i.deleted = 0) DESC,
           CASE WHEN user_id = $1 THEN 0 ELSE 1 END,
-          updated_at DESC
+          created_at ASC, id ASC
         LIMIT 1
         """,
         user_id,
@@ -3775,7 +3775,7 @@ async def _find_list_for_remove(intent: SkybridgeIntent, user_id: str, db: Any, 
         ORDER BY
           (SELECT COUNT(*) FROM list_items i WHERE i.list_id = lists.id AND i.deleted = 0) DESC,
           CASE WHEN user_id = $1 THEN 0 ELSE 1 END,
-          updated_at DESC
+          created_at ASC, id ASC
         LIMIT 1
         """,
         user_id,

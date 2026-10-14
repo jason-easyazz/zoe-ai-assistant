@@ -14,7 +14,11 @@ mints one for any caller, so "a guest session" is not evidence of a panel. In or
      The address is nginx's ``X-Real-IP`` (set absolutely from ``$remote_addr``) and is trusted ONLY when the TCP peer is a proxy
      we run (loopback / the docker bridge) - zoe-data's own port answers on the LAN, where a caller could write that header
      itself, so a direct peer is judged by its own address. The same device check ``routers/skybridge.py`` uses for the panel's
-     display identity.
+     display identity. TRUST ASSUMPTION (accepted residual): the default proxy range is loopback + the docker ``172.16/12``
+     because nginx reaches zoe-data from a container address that cannot be told from a sibling container by subnet; every
+     container on ``zoe-network`` that can reach :8000 is therefore trusted not to forge ``X-Real-IP``. A request that carries a
+     Cloudflare header is refused outright (the tunnel is the one internet-facing hop). To narrow it, pin the nginx container's
+     address in ``ZOE_TRUSTED_PROXY_NETS`` (e.g. ``127.0.0.0/8,172.18.0.5/32``).
 
 Everything else - an anonymous caller, a phone on the Wi-Fi, a guest session from anywhere that is not a registered panel, a
 degraded (auth-outage) principal - is NOT the panel and keeps today's rule: a guest touches no list.
@@ -112,6 +116,14 @@ def trusted_client_ip(request: Any) -> str:
     return peer
 
 
+def _via_public_tunnel(request: Any) -> bool:
+    """True when the request carries a Cloudflare edge header. The tunnel's container address sits inside the trusted proxy
+    range, and Cloudflare passes a caller's own ``X-Real-IP`` through, so without this a tunnel hop could forge a panel address.
+    Cloudflare sets these on every proxied request and a caller cannot remove them."""
+    headers = request.headers
+    return bool(headers.get("cf-connecting-ip") or headers.get("cf-ray") or headers.get("cf-visitor"))
+
+
 async def _from_registered_panel(db: Any, client_ip: str) -> bool:
     if not client_ip:
         return False
@@ -135,6 +147,8 @@ async def is_panel_guest(request: Any, user: Mapping[str, Any] | None, db: Any =
         return False  # an auth outage resolves ANY header to a guest: never evidence of anything
     if (user or {}).get("panel_id"):
         return True  # device token, no bound member
+    if _via_public_tunnel(request):
+        return False  # a request that crossed Cloudflare is the internet, never the kiosk on the LAN
     client_ip = trusted_client_ip(request)
     if mode == "lan":
         try:
