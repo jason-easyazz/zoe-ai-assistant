@@ -237,13 +237,15 @@ async def prewarm_vocabulary(
 # ── Reply-text → stitched audio (the live hook) ───────────────────────────────
 # Strict, anchored patterns for the exact intent replies we own (both use digits):
 #   time    → "It's 7:42 AM."                     (intent_router time_query)
-#   weather → "It's 14 degrees and clear in Geraldton"   (intent_router weather)
-# Anything else — a decimal temp, a "feels like" clause, a rephrase — simply does
+#   weather → "It's 14 degrees and clear in Geraldton[, with a top of 20 today][, and it feels like 12 degrees]"
+#             (weather_speech.speak_current, used by skybridge + intent_router weather)
+# Anything else — a decimal temp, a rain-chance clause, a rephrase — simply does
 # not match, so stitch_reply returns None and the caller uses normal TTS. It never
 # guesses: a mis-parse can only FAIL to match, never emit wrong audio.
 _TIME_RE = re.compile(r"^It(?:'s| is) (\d{1,2}):(\d{2}) (AM|PM)\.?$")
 _WEATHER_RE = re.compile(
     r"^It's (\d{1,3}) degrees(?: and ([^,]+?))? in ([^,]+?)"
+    r"(?:, with a top of (\d{1,3}) today)?"
     r"(?:, and it feels like (\d{1,3}) degrees)?\.?$"
 )
 
@@ -276,7 +278,13 @@ async def stitch_reply(
         segs = weather_segments(temp, desc, city)
         if not segs:
             return None
-        feels = m.group(4)
+        top = m.group(4)
+        if top is not None:
+            topw = number_to_words(int(top))
+            if topw is None:
+                return None  # out-of-vocab top → full synth
+            segs.append(f"with a top of {topw} today")
+        feels = m.group(5)
         if feels is not None:
             fw = number_to_words(int(feels))
             if fw is None:

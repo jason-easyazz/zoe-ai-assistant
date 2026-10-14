@@ -168,6 +168,8 @@ class Z0Arm(Arm):
         self.svc.memory_tombstones.clear_all(user_id)
         xw = importlib.import_module("exact_words")        # the owner's verbatim turns (j): the lab's own in-process index, as the tests' (the SQL one is Postgres)
         xw.set_backend(xw.MemoryBackend())
+        sd = importlib.import_module("struggle_detector")   # the struggle detector's rows (a forget erases them, fail closed): in-process too
+        sd.set_backend(sd.MemoryBackend())
         mf = importlib.import_module("memory_forgotten")   # the durable forget ledger (F3): ON, in memory, with a LAB secret. The 2026-10-08 baseline ran with the
         if not mf.configured():                            # secret unset, so only the 300 s tombstone shielded and F3 failed 3 of 3 seeds - an instrument gap, not a defect
             os.environ[mf.SALT_ENV] = _LAB_SALT
@@ -182,6 +184,7 @@ class Z0Arm(Arm):
             self._salt_ours = False
         importlib.import_module("exact_words").set_backend(None)
         importlib.import_module("night_store").set_backend(None)
+        importlib.import_module("struggle_detector").set_backend(None)
         self.graph.close()
         if self._lab_service is not None:
             self._lab_service.close()

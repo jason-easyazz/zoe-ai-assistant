@@ -67,11 +67,15 @@ def _exact_words_in_process_index():
     that is not there: every test gets the in-process index (a test that wants the SQL one sets it itself)."""
     import exact_words
     import night_store
+    import struggle_detector
     exact_words.set_backend(exact_words.MemoryBackend())
     night_store.set_backend(night_store.MemoryBackend())     # the night mind's tables are Postgres in production; same rule
+    struggle_detector.set_backend(struggle_detector.MemoryBackend())   # struggle_events too (delete_user / forget fail closed)
     yield
     exact_words.set_backend(None)
     night_store.set_backend(None)
+    struggle_detector.reset()     # the worker task belongs to this test's loop
+    struggle_detector.set_backend(None)
 
 
 @pytest.fixture(autouse=True)

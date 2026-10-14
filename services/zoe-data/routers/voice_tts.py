@@ -3252,7 +3252,7 @@ async def _schedule_voice_chat_save(
 
 async def _run_voice_memory_passes(
     user_text: str, reply: str, user_id: str, session_id: str,
-    speaker_verified: Optional[bool] = None,
+    speaker_verified: Optional[bool] = None, interrupted: bool = False,
 ) -> None:
     """Run both memory extraction passes for a completed voice exchange.
 
@@ -3263,7 +3263,16 @@ async def _run_voice_memory_passes(
     ``False`` makes a self-fact the turn states ``user_unverified`` instead of the owner's
     own statement (memory_authority); ``None`` = no verdict = unchanged. Third-person
     person-facts (the two person extractors) are not self-assertions and are unaffected.
+
+    ``interrupted`` = the streamed reply ended early (barge-in / disconnect): only the struggle detector reads it.
     """
+    try:  # the struggle detector (post-turn, already off the reply path; a bounded put_nowait that never raises)
+        import struggle_detector
+
+        struggle_detector.observe("voice", user_text, reply, user_id, session_id, interrupted=interrupted,
+                                  speaker_verified=speaker_verified)
+    except Exception:  # noqa: BLE001
+        pass
     try:
         # Mirror of the chat lane: a reply the hold-the-fact tier wrote means the owner's contradicting
         # claim was not accepted this turn, so it is not mined (routers/chat.py::_persist_memory_candidates_impl).
@@ -5223,7 +5232,8 @@ async def voice_command(
                         # Safe during GeneratorExit unwind: neither call suspends
                         # (_schedule_voice_chat_save only spawns a bg task).
                         await _schedule_voice_chat_save(session_id, "", heard_reply, effective_user, speaker_verified=_speaker_verified)
-                        _spawn_bg(_run_voice_memory_passes(text, heard_reply, effective_user, session_id, speaker_verified=_speaker_verified))
+                        _spawn_bg(_run_voice_memory_passes(text, heard_reply, effective_user, session_id, speaker_verified=_speaker_verified,
+                                                           interrupted=not _screen_finished))
 
             return StreamingResponse(
                 _generate_voice_stream(),
