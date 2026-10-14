@@ -49,7 +49,8 @@ Every example below is invented. No household data appears in this doc.
    panel, so a panel profile is only a stricter fallback. And tagging must run **at transcription time, before the
    WAV is deleted**: zoe-data deletes the audio right after transcription today [src `omi_recordings._transcribe_one`].
    Each line gets one of five labels: `you`, `other`, `unsure`, `mixed`, or `unverified` (no profile yet). It also
-   gets a score. No embedding of anyone is stored, and nobody else is identified by voice.
+   gets a score. Nobody is identified by voice to anyone. The one stored voiceprint of another person is the
+   private, suggestion-only kind in item 7.
 4. **The day review is "model points, code decides", with approval before every write.**
    - The live 4B runs the analysis on an idle evening slot, so time-sensitive items reach the owner the same
      evening. Its calls are cancelled when a turn arrives.
@@ -68,9 +69,16 @@ Every example below is invented. No household data appears in this doc.
    carer may curate for an adult member, with that member's own consent where they can give it. Every curated row
    says who added it, and Zoe says so when she uses it ("Mum added a note: ..."). Sensitive categories, health
    above all, are an owner decision (§11) and none appear in examples.
-7. **Tagging people in recordings** is a manual label in the owner's own people layer (layer 2 of §5.5). It never
-   creates a voiceprint. A person's speaker profile is stored only through the visitor-consent flow, in their own
-   voice at the panel (identity §5.2). Facts about a tagged person go through the same review.
+7. **Tagging people in recordings teaches Zoe their voice** (owner decision, 2026-10-14: "Zoe needs to learn").
+   - When the member tags a "Someone else" line as a person in their own people layer (layer 2 of §5.5), Zoe keeps
+     a **learned voiceprint** for that person, built from the member-tagged segments.
+   - Next time she *suggests* the tag ("this sounds like Sam, right?"), and every confirmation improves it.
+   - Five guardrails (§2.6) keep it defensible without blocking learning. The voiceprint stays on the box, in the
+     tagging member's layer only. It is used only for suggestions in that member's own recordings, never for
+     authentication or presence. A suggestion counts only once confirmed, and unconfirmed voiceprints expire. A
+     forget cascades through it, and there is a per-person "stop learning" toggle. Each member sees a list of the
+     voices Zoe has learned.
+   - Facts about a tagged person still go through the same review.
 8. **Phase 1 is buildable now:** the tile plus a read-only "what Zoe knows about me" for the identified member, on
    existing APIs (§2.1). The minimum useful Omi product is next: see the transcripts on desktop (P2). It needs only
    the existing `/api/omi/recordings` routes.
@@ -219,13 +227,18 @@ flag-off 404 hides it):
   - **mark** them as a household member. That is a label only: Zoe never relays it to that member. Whether it may
     be used at all is owner decision D12.
 
-  The tag is stored as `omi_segments.tagged_person_id` (a FK to the owner's people row, `ON DELETE SET NULL`).
-  **It is a manual label, never a biometric.** No embedding is taken from pendant audio for anyone but the wearer.
-- **Their voice, only with their consent.** A person's speaker profile is stored only through the identity design's
-  visitor flow (§5.2): an introduction at the panel and the person's own spoken "yes", verified as their voice. A
-  pendant recording cannot carry that consent, and the pendant WAV is gone after transcription anyway. The
-  Omi-section tag and a later visitor profile are linked only through the directory (`person_directory`, identity
-  Phase 4) once it exists.
+  The tag is stored as `omi_segments.tagged_person_id` (a FK to the owner's people row, `ON DELETE SET NULL`), with
+  `tag_source` = `owner` (typed or picked) or `suggested_confirmed`. A tag also feeds that person's **learned
+  voiceprint** (§2.6).
+- **Suggestions.** When a recording is tagged, every `other` / `unsure` segment is scored against the tagging
+  member's own learned voiceprints. If the best score is at least `θ_suggest` and beats the runner-up by the margin,
+  the line shows "Sounds like Sam?" with **Yes** / **No** / **Someone else**. A suggestion is never a tag until the
+  member says yes: it is shown in a distinct style and never feeds the day review as an attribution.
+- **Not the identity design's visitor profile.** The identity design's visitor profile (§5.2) is a different object:
+  household-wide, used by every panel's matcher, and stored only with the visitor's own spoken consent. A learned
+  voiceprint is never promoted into it, never compared on a panel, and never confers recognition anywhere but the
+  tagging member's own recordings. If the person is later introduced at the panel, the visitor flow enrols them
+  afresh.
 - **Populating a contact.** Tagging a conversation lets the day review (§5) propose `person_memory` candidates about
   that conversation. They are written on approval to the **owner's layer 2** (a memory row with
   `entity_id = <people id>`) and never to the directory or the person's own layer 3. The restraint rules of §5.5
@@ -244,6 +257,75 @@ flag-off 404 hides it):
 
 The day-review list (§5) is one card in the Pendant section on both products, with Approve, Edit and Skip per item
 and Approve all ticked. The spoken review (§5.3) and the panel card show the same list from the same API.
+
+### 2.6 Learned voices (owner decision 2026-10-14) and their guardrails
+
+Owner: *"Zoe needs to learn."* Learning a tagged person's voice is **not** gated on that person's spoken consent. It
+is bounded by five guardrails, each enforced in code and pinned by a test (§10, cells V1-V8).
+
+**How a voiceprint is learned.**
+
+- **The segment embeddings must outlive the WAV.** The member tags lines after transcription, and the WAV is gone
+  by then. So at tagging time (§3.2) the centred ResNet34 embedding of every `other` and `unsure` segment is kept,
+  as one mean vector per segment, in `omi_segment_embeddings`. They are on the box only. They are deleted when they
+  are used, and otherwise after `ZOE_OMI_SEGMENT_EMBED_TTL_DAYS` (14). An embedding that no member ever tags simply
+  expires.
+- **A tag adds the segment to that person's voiceprint.** The voiceprint is the mean of the L2-normalised confirmed
+  segment embeddings (at least 2 s of speech each). It uses the leave-one-out outlier rule from the panel's 5-clip
+  enrolment [branch]: an outlier is dropped and counted, never forced in.
+- **States.** The voiceprint starts `provisional`. It becomes `confirmed` once it holds at least 3 segments from at
+  least 2 recordings **and** the member has said yes to at least one of its own suggestions.
+- **Expiry.** A `provisional` voiceprint that is never confirmed expires after `ZOE_OMI_VOICEPRINT_PROVISIONAL_DAYS`
+  (30). A confirmed one expires after `ZOE_OMI_VOICEPRINT_IDLE_DAYS` (365) with no new confirmation (owner decision
+  D15).
+- **Corrections.** A "No" to a suggestion is kept as a negative example for that pair: it raises the margin needed
+  for that person on that member's recordings. It is never used as a training clip.
+
+**The guardrails.**
+
+1. **On the box, in the tagging member's own layer.** The table is keyed by the tagging member and FKs that
+   member's own `people` row (`ON DELETE CASCADE`).
+   - It is never visible to other members. Every query filters on the tagging member.
+   - It is never in `/api/memories/export`, never in the memory export job, never in any sync, and never sent off the
+     box.
+   - [unverified] Whether the nightly Postgres backup leaves the box must be checked. If it does, this table is
+     excluded from that copy.
+   - Two members who both tag the same person hold **two separate voiceprints**. Neither sees or uses the other's.
+2. **Suggestions only.**
+   - The voiceprint is used only to suggest tags, and to attribute transcript lines in **that member's own**
+     recordings.
+   - It is **never** used for authentication, sign-in, a voice session, presence, the identity engine's evidence,
+     "who's here?", or naming the person to anyone else.
+   - It lives in its own table (`learned_voiceprints`), never in `speaker_profiles`. So `/api/voice/profiles/sync`,
+     `/api/voice/identify`, `voice_session` and adaptation cannot reach it. A static test pins that none of them
+     names the table.
+3. **The member confirms before a suggestion counts.**
+   - A suggested tag is not a tag. It does not attribute lines for the day review.
+   - The day review may say "Someone else" or "Sam (you tagged)", never "Sam (suggested)".
+   - Unconfirmed voiceprints expire (above).
+4. **Forget erases it.**
+   - "Forget Sam" erases the voiceprint, every derived tag (`tagged_person_id`, the suggestions, the stored segment
+     embeddings tagged to Sam), and the candidates naming Sam. This is a new step in `memory_forget_cascade`,
+     fail-loud like the others.
+   - Deleting the person row cascades.
+   - `forget_user` (the tagging member) deletes all of their learned voiceprints.
+   - Per person there is a **Stop learning this voice** toggle (`learning_enabled = false`). It freezes the
+     voiceprint: no new segments are added and no suggestions are made. A second control, **Forget this voice**,
+     deletes the voiceprint and keeps the person and the tags.
+5. **A visible list, per member.** "Voices I've learned" in the member's Memories space (desktop; and touch for the
+   identified member, subject to the crowded-room rule) shows:
+   - each person;
+   - the state (learning / confirmed);
+   - how many segments and recordings it rests on;
+   - when it was last confirmed;
+   - the Stop learning and Forget this voice controls.
+
+**Children.** If the tagged person is a member with a `child` account, or the member marks the person as a child,
+learning is **off by default**: the tag is a label only. Owner decision D16. This follows the identity design's "no
+child visitor voiceprints by default".
+
+**Legal note.** A learned voiceprint is biometric information about a third party. The jurisdictional questions are
+already listed in the identity research record §9, and D1 carries them as a lawyer question. **It is not a blocker.**
 
 ## 3. Speaker tagging at transcription time (B)
 
@@ -271,7 +353,9 @@ every segment is `unverified`.
 2. **Windows.** 2.0 s windows with a 1.0 s hop inside speech regions (`ZOE_OMI_TAG_WINDOW_S`, `_HOP_S`). Each is
    embedded with ResNet34 and centred, then scored as cosine to the wearer's profile. The wearer is the recording's
    `user_id`; each recording is compared **only** with its own owner's profile. Embeddings stay in RAM and are
-   dropped after scoring. **No vector is ever stored.**
+   dropped after scoring, **except** the per-segment mean embedding of `other` / `unsure` segments, which goes to
+   `omi_segment_embeddings` for the learned-voices feature (§2.6; deleted once used, or after 14 days). The wearer's
+   own segments' embeddings are never stored.
 3. **Window label.**
    - `you` if `score >= θ_you`.
    - `other` if `score < θ_other`.
@@ -517,7 +601,8 @@ candidates whose status is `approved` or `edited`, re-checked inside the owner's
    override exists. Cell E10 has a cross-user negative control.
 3. **Bystanders.** The stance:
    - Other people's words already sit in the wearer's private transcript (omi plan 0.4). This design adds **no**
-     voiceprint of them, **no** identification of them by voice, and **no** facts about them unless the owner
+     shared voiceprint of them and **no** identification of them to anyone. The only voiceprint is the tagging
+     member's private, suggestion-only one (§2.6, owner decision). There are also **no** facts about them unless the owner
      approves a candidate that rests on the owner's own words.
    - Scores are similarity to the *wearer's* profile, not a template of anyone else.
    - The law is not settled by this design:
@@ -600,6 +685,23 @@ omi_day_candidates (
   decided_via text NULL CHECK (decided_via IN ('voice','panel_touch','desktop','phone')),
   decided_at text NULL, written_ref text NULL, written_at text NULL, approved_by text NULL, created_at text NOT NULL)
 
+-- P4b (learned voices, section 2.6)
+omi_segment_embeddings (
+  segment_id text PK REFERENCES omi_segments(id) ON DELETE CASCADE, user_id text NOT NULL,
+  model_id text NOT NULL, embedding bytea NOT NULL,        -- 256 float32, centred; other/unsure segments only
+  expires_at text NOT NULL)                                -- 14 days, or deleted once used
+learned_voiceprints (
+  id text PK, owner_user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,   -- the TAGGING member
+  people_id text NOT NULL REFERENCES people(id) ON DELETE CASCADE,                   -- that member's own row
+  model_id text NOT NULL, channel text NOT NULL DEFAULT 'pendant',
+  embedding bytea NOT NULL, n_segments int NOT NULL, n_recordings int NOT NULL,
+  status text NOT NULL CHECK (status IN ('provisional','confirmed')),
+  learning_enabled boolean NOT NULL DEFAULT true,
+  created_at, updated_at, last_confirmed_at NULL, expires_at NOT NULL,
+  UNIQUE (owner_user_id, people_id, model_id))
+omi_segments + tag_source text NULL CHECK (tag_source IN ('owner','suggested_confirmed'))
+             + suggested_person_id text NULL, suggested_score real NULL     -- a suggestion, never a tag
+
 -- P7 (caregiving): memory_curators, section 2.3
 ```
 
@@ -613,6 +715,10 @@ omi_day_candidates (
 | `ZOE_OMI_DAY_REVIEW_IDLE_S` / `_MAX_CALLS` | 600 / 8 | lane E gate and budget |
 | `ZOE_OMI_REVIEW_UNTAGGED` | on (in shadow) | analyse untagged days in the reduced form of §5.2 (D4) |
 | `ZOE_OMI_CANDIDATE_RETENTION_DAYS` | 14 | candidate text retention after close |
+| `ZOE_OMI_LEARN_VOICES` | off | learned voiceprints from member tags + suggestions (§2.6) |
+| `ZOE_OMI_SEGMENT_EMBED_TTL_DAYS` | 14 | life of an untagged segment embedding |
+| `ZOE_OMI_VOICEPRINT_PROVISIONAL_DAYS` / `_IDLE_DAYS` | 30 / 365 | learned-voice expiry (D15) |
+| `ZOE_OMI_SUGGEST_MIN` / `_MARGIN` | measured in the shadow fortnight | suggestion threshold and runner-up margin |
 | `ZOE_MEMORIES_CURATORS` | off | caregiver grants and curated writes |
 
 ## 8. APIs: what exists and what is needed
@@ -627,6 +733,7 @@ omi_day_candidates (
 | Pendant enrolment | panel enrolment flow + `/api/voice/profiles` [branch] | `channel` on profile upload and sync; omi-sync live-capture command (P4) |
 | Day review | none | `GET /api/omi/reviews?status=`, `GET /api/omi/reviews/{id}` (candidates), `POST /api/omi/candidates/{id}` `{action: approve|edit|skip, fields?}`, `POST /api/omi/reviews/{id}/approve-ticked` (P5) |
 | Raise / pull / orb | `proactive_candidates`, selector, pull | kind `day_review` + `_ASK` entry (P6) |
+| Learned voices | none | `GET /api/omi/voices` (the member's own list), `PATCH /api/omi/voices/{id}` `{learning_enabled}`, `DELETE /api/omi/voices/{id}` (forget the voice, keep the person), `POST /api/omi/segments/{id}/suggestion` `{answer: yes|no|someone_else}` (P4b) |
 | Caregiving | none | `GET/PUT/DELETE /api/memories/curators` (admin + member consent), `POST /api/memories/for/{member}` (curator write) (P7) |
 
 ## 9. Phases (F): minimum useful product first
@@ -639,6 +746,7 @@ Each phase is one PR (or a small workstream), flag-dark, with its tests, and say
 | **P2 (MUP for the pendant)** | desktop `memories.html`: "What Zoe knows about me" and a Pendant tab with recordings, the joined transcript, reviewed / keep / delete, audio playback | existing `/api/omi/*` + the audio route | "see my Omi transcripts somewhere" is answered |
 | P3 | memory actions: tap-to-explain + spoken forget/correct, the phone hand-off for fixes, the voice-session `memories` card | P1 | correcting a memory from the panel |
 | P4 | speaker tagging (`ZOE_OMI_SPEAKER_TAG=shadow`), segments, per-line labels and corrections, pendant enrolment, "Who is this?" labels | #2024 merged, ResNet34 built on the Jetson, owner re-enrolled; T8 measured | lines say You / Someone else; Zoe can learn the pendant voice |
+| P4b | learned voices (`ZOE_OMI_LEARN_VOICES`): segment embeddings, voiceprints from tags, suggestions, the "Voices I've learned" list, the forget step | P4 | "this sounds like Sam, right?" |
 | P5 | day analysis (`ZOE_OMI_DAY_REVIEW=shadow`), candidates on the desktop Pendant tab with approve / edit / skip and real writes **on approval** | P2 (P4 for the full form) | "Zoe found these in your day" on the computer |
 | P6 | the conversation: raise / pull / orb, the voice dialogue tier (replay-gated), the panel private card (touch), the crowded-room phone send | P5, the voice session live | "I went through your day ..." on the next turn |
 | P7 | caregiver curation | owner decisions D7-D10 | parents and carers can add memories for someone |
@@ -676,6 +784,14 @@ CI cells are `ci_safe` and use a deterministic fake embedder and a fake model. L
 | C1 | the raise fires only on an identified owner's brain turn; no TTS without a user turn | |
 | C2 | a second voice → no counts spoken, the list leaves the screen, the phone send goes out | let crowding cap only the display: red |
 | C3 | voice approve writes with provenance; "skip" writes nothing; "change it to 11" edits the time only | |
+| V1 | a member tag adds the segment to that member's voiceprint; the next recording suggests the tag, and a suggestion is not a tag until confirmed | count suggestions as tags: red |
+| V2 | member B never sees, lists or gets suggestions from A's voiceprint of the same person | drop the owner filter: red |
+| V3 | statically, `voice_session`, `routers/voice_tts` (sync / identify), `speaker_adaptation` and the identity engine never name `learned_voiceprints`; it is absent from `/api/memories/export` and the memory export job | add a reader: red |
+| V4 | "forget Sam" deletes the voiceprint, the tags, the suggestions and the stored embeddings tagged to Sam; a failed step is fail-loud | skip the step: the cascade reports incomplete |
+| V5 | Stop learning freezes it (no adds, no suggestions); Forget this voice deletes it and keeps the person and the tags | |
+| V6 | a provisional voiceprint expires at 30 days; untagged segment embeddings expire at 14 | shift the clock without the purge: red |
+| V7 | no embedding of the wearer's own `you` segments is stored | store all segments: red |
+| V8 | a child-marked person gets a label only, no voiceprint | |
 | CG1 | a curator write lands on the member with `origin=curator`; the curator cannot list the member's other memories | let the curator read `/api/memories/` for the member: red |
 | CG2 | an adult member's carer grant is inactive until the member's own consent | |
 | Static | `test_nothing_else_reads_pendant_transcripts` gains exactly the new modules (`omi_speaker_tag`, `omi_day_review`, `omi_review_apply`, `omi_review_dialog`) and nothing else | add an unlisted reader: red |
@@ -685,7 +801,8 @@ against `~/.zoe-voice-samples` per AGENTS.md.
 
 ## 11. Owner decisions
 
-1. **D1 Legal check** (omi plan Q5; identity research §9 items 2-4): wearing the pendant in company; whether a
+1. **D1 Legal check** (omi plan Q5; identity research §9 items 2-4), as a lawyer question, not a blocker: learned
+   voiceprints are biometric information about third parties (§2.6); wearing the pendant in company; whether a
    transcript of a bystander held in the wearer's private store is acceptable; the 2025 tort.
 2. **D2 Wear posture until press-to-record firmware exists**: alone or with people who know (the omi plan 0.4
    default)?
@@ -702,10 +819,18 @@ against `~/.zoe-voice-samples` per AGENTS.md.
 10. **D10 Sensitive categories in curation** (health, medication, money): off by default. Allowed at all?
 11. **D11 Sensitive classes for the owner's own day review and Memories panel view**: never proposed and never on
     the wall (recommended), or opt-in per class?
-12. **D12 Tagging other household members** in pendant transcripts: allowed as a private label, or only once they
+12. **D12 Tagging other household members** in pendant transcripts, including learning their voice for suggestions
+    (§2.6): allowed as a private, member-only label, or only once they
     opt in (omi plan §5 `ambient_consent_at`)?
 13. **D13 Full transcripts on the wall panel**: never (recommended; phone and desktop only) or behind a fresh PIN?
 14. **D14 Children wearing a pendant**: not supported (recommended)?
+15. **D15 Learned-voice lifetime**: provisional 30 days, confirmed 365 days since the last confirmation
+    (recommended), or kept until forgotten?
+16. **D16 Learning a child's voice** from tags: off by default (recommended), or on?
+
+**Decided by the owner (2026-10-14).** Tagging a person teaches Zoe their voice for suggestions. This is not gated
+on that person's spoken consent, and is bounded by the guardrails of §2.6. It differs on purpose from the identity
+design's visitor profile (§5.2), which stays consent-gated because it confers recognition on every panel.
 
 ## 12. Unverified, and risks
 
