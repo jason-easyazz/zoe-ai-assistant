@@ -212,6 +212,48 @@ async def test_desktop_metadata_description_is_bridged_both_ways(db):
     assert ev["metadata"] == {"description": "Room 7, bring forms", "travel_time": 5}   # an old reader still sees it
 
 
+async def test_clearing_notes_sticks_and_a_null_attendee_list_leaves_them_alone(db):
+    ev = await calendar_router.create_event(
+        EventCreate(title="Parent night", start_date="2026-10-22", metadata={"description": "Room 4"},
+                    attendees=[{"display_name": "Alex Rivers"}]), user=_u(A), db=db)
+    ev = await calendar_router.update_event(ev["id"], EventUpdate(description=""), user=_u(A), db=db)
+    assert ev["description"] is None and ev["metadata"]["description"] == ""   # no fallback to the stale "Room 4"
+    ev = await calendar_router.update_event(ev["id"], EventUpdate(attendees=None, title="Parents' night"), user=_u(A), db=db)
+    assert [a["display_name"] for a in ev["attendees"]] == ["Alex Rivers"]
+
+
+def test_instants_handle_dst_overnight_and_bad_zone_names():
+    # 2026-10-04 02:00 AEST -> 03:00 AEDT in Sydney: 180 elapsed minutes from 01:00 is 05:00 on the wall (18:00Z), not 04:00
+    assert cal.derive_instants({"start_date": "2026-10-04", "start_time": "01:00", "duration": 180,
+                                "timezone": "Australia/Sydney"}) == ("2026-10-03T15:00:00Z", "2026-10-03T18:00:00Z")
+    # "22:00 to 01:00" with no end date ends the next morning
+    assert cal.derive_instants({"start_date": "2026-10-20", "start_time": "22:00", "end_time": "01:00",
+                                "timezone": "Australia/Perth"}) == ("2026-10-20T14:00:00Z", "2026-10-20T17:00:00Z")
+    for bad in ("America", "Etc", "localtime", "Mars/Olympus"):
+        with pytest.raises(ValueError):
+            cal.validate_timezone(bad)
+
+
+def test_ics_odd_values_fall_back_instead_of_aborting_the_file():
+    pytest.importorskip("icalendar")
+    import calendar_ical
+
+    odd = (b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Invented//EN\r\n"
+           b"BEGIN:VEVENT\r\nUID:odd-1@example.com\r\nDTSTAMP:20261001T000000Z\r\n"
+           b"DTSTART;TZID=Australia/Perth:20261020T090000\r\nDTEND:20261020T100000\r\n"
+           b"SUMMARY:Odd one\r\nSTATUS:NEEDS-ACTION\r\nTRANSP:X-MAYBE\r\nURL:webcal://example.com/feed\r\n"
+           b"RDATE;VALUE=PERIOD:20261027T010000Z/PT1H\r\n"
+           b"ATTENDEE;ROLE=X-SPEAKER;PARTSTAT=X-UNSURE;CUTYPE=X-ROBOT:mailto:robot@example.com\r\n"
+           b"END:VEVENT\r\n"
+           b"BEGIN:VEVENT\r\nUID:odd-2@example.com\r\nDTSTAMP:20261001T000000Z\r\nSUMMARY:no start\r\nEND:VEVENT\r\n"
+           b"END:VCALENDAR\r\n")
+    [item] = calendar_ical.parse_ics(odd, home_tz="Australia/Perth")
+    ev = item["event"]
+    assert (ev["status"], ev["transparency"], ev["url"]) == ("confirmed", "opaque", None)
+    assert (ev["start_time"], ev["end_time"], ev["rdates"]) == ("09:00", "10:00", ["2026-10-27T01:00:00Z"])
+    assert [(a["role"], a["partstat"], a["kind"]) for a in item["attendees"]] == [("req-participant", "needs-action", "individual")]
+
+
 async def test_legacy_metadata_attendees_surface_as_attendees_and_calendar_name_is_given(db):
     ev = await calendar_router.create_event(
         EventCreate(title="Book club", start_date="2026-10-22",

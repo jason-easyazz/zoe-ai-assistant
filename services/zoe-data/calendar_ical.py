@@ -89,8 +89,27 @@ def _decoded_list(component, name: str) -> list:
     out = []
     for prop in raw if isinstance(raw, list) else [raw]:
         for d in getattr(prop, "dts", []):
-            out.append(d.dt)
+            value = d.dt
+            if isinstance(value, tuple):                   # an RDATE PERIOD (start, end|duration): its start
+                value = value[0]
+            if isinstance(value, (date, datetime)):
+                out.append(value)
     return out
+
+
+def _or_default(fn, value, default):
+    if value is None or str(value).strip() == "":
+        return default
+    try:
+        return fn(str(value))
+    except ValueError:
+        return default
+
+
+def _param(params: dict, name: str, allowed, default: str) -> str:
+    """An ATTENDEE parameter inside Zoe's vocabulary, else the default (X- values, IANA-registered extensions)."""
+    value = str(params.get(name) or "").strip().lower()
+    return value if value in allowed else default
 
 
 def _address(addr) -> "tuple[Optional[str], dict]":
@@ -136,15 +155,17 @@ def _parse_vevent(ve, default_visibility: str, home: str) -> dict:
         "location": str(ve.get("LOCATION")) if ve.get("LOCATION") is not None else None,
         "external_uid": str(ve.get("UID")) if ve.get("UID") is not None else None,
         "sequence": int(ve.get("SEQUENCE") or 0),
-        "status": cal.normalize_status(str(ve.get("STATUS"))) if ve.get("STATUS") else "confirmed",
-        "transparency": cal.normalize_transparency(str(ve.get("TRANSP"))) if ve.get("TRANSP") else "opaque",
-        "url": cal.validate_link(str(ve.get("URL"))) if ve.get("URL") else None,
+        # a value outside the vocabulary (X- extensions, STATUS:NEEDS-ACTION, a webcal:/mailto: URL) falls back to
+        # the default: one odd property never aborts the import of a whole file
+        "status": _or_default(cal.normalize_status, ve.get("STATUS"), "confirmed"),
+        "transparency": _or_default(cal.normalize_transparency, ve.get("TRANSP"), "opaque"),
+        "url": _or_default(cal.validate_link, ve.get("URL"), None),
         "visibility": _CLASS_TO_VISIBILITY.get(str(ve.get("CLASS") or "").upper(), default_visibility),
         "category": "general",
     }
     cats = ve.get("CATEGORIES")
     if cats is not None:
-        first = (cats[0] if isinstance(cats, list) else cats).cats
+        first = getattr(cats[0] if isinstance(cats, list) else cats, "cats", None)
         if first:
             ev["category"] = str(first[0]).strip().lower() or "general"
     conf = ve.get("CONFERENCE")
@@ -162,6 +183,11 @@ def _parse_vevent(ve, default_visibility: str, home: str) -> dict:
         ev.update({"all_day": False, "timezone": tz, "start_date": s_local.date().isoformat(),
                    "start_time": _hhmm(s_local.time())})
         end = ve.decoded("DTEND") if ve.get("DTEND") is not None else None
+        if isinstance(end, datetime) and (end.tzinfo is None) != (start.tzinfo is None):
+            # a floating end with a zoned start (or the reverse): read the naive side in the other's zone
+            end = end.replace(tzinfo=start.tzinfo) if end.tzinfo is None else end.astimezone(start.tzinfo).replace(tzinfo=None)
+        elif isinstance(end, date) and not isinstance(end, datetime):
+            end = None                                       # a DATE end on a DATE-TIME start: invalid, ignore it
         if end is None and ve.get("DURATION") is not None:
             end = start + ve.decoded("DURATION")
         if isinstance(end, datetime):
@@ -208,9 +234,9 @@ def _parse_vevent(ve, default_visibility: str, home: str) -> dict:
         fields = {
             "display_name": params.get("CN"),
             "email": email,
-            "role": params.get("ROLE") or "req-participant",
-            "partstat": params.get("PARTSTAT") or "needs-action",
-            "kind": (params.get("CUTYPE") or "individual"),
+            "role": _param(params, "ROLE", cal.ATTENDEE_ROLES, "req-participant"),
+            "partstat": _param(params, "PARTSTAT", cal.PARTSTATS, "needs-action"),
+            "kind": _param(params, "CUTYPE", cal.ATTENDEE_KINDS, "individual"),
             "rsvp": str(params.get("RSVP") or "").upper() == "TRUE",
         }
         if email and email.lower() in by_email:            # the organizer also attends: one row

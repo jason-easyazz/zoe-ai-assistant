@@ -234,8 +234,10 @@ def validate_timezone(value) -> Optional[str]:
     name = str(value).strip()
     try:
         ZoneInfo(name)
-    except (ZoneInfoNotFoundError, ValueError):
+    except (ZoneInfoNotFoundError, ValueError, OSError):   # OSError: a directory name ("America") on 3.10
         raise ValueError(f"unknown IANA time zone: {name!r}") from None
+    if name in ("localtime", "posixrules", "Factory"):
+        raise ValueError(f"unknown IANA time zone: {name!r}")
     return name
 
 
@@ -291,7 +293,7 @@ def derive_instants(event: dict) -> "tuple[Optional[str], Optional[str]]":
     ``start_date`` / ``start_time`` stay the wall clock in the event's own zone (RFC 5545 ``DTSTART;TZID=``).
     No ``timezone`` = a FLOATING event (RFC 5545 3.3.5: the same wall clock wherever you are - how every row
     written before 0052 is read), and an all-day event is a DATE: neither has an instant (None)."""
-    from datetime import datetime as _dt, timedelta
+    from datetime import datetime as _dt, timedelta, timezone as _tz
     from zoneinfo import ZoneInfo
 
     tz = event.get("timezone")
@@ -304,11 +306,14 @@ def derive_instants(event: dict) -> "tuple[Optional[str], Optional[str]]":
     end = None
     t1 = parse_time(event.get("end_time"))
     if t1 is not None:
-        d1 = parse_date(event.get("end_date")) or d0
-        end = _dt.combine(d1, t1).replace(tzinfo=ZoneInfo(event.get("end_timezone") or tz))
+        d1 = parse_date(event.get("end_date"))
+        end = _dt.combine(d1 or d0, t1).replace(tzinfo=ZoneInfo(event.get("end_timezone") or tz))
+        if d1 is None and end < start:
+            end += timedelta(days=1)          # "22:00 to 01:00" with no end date ends the next morning
     elif event.get("duration"):
         try:
-            end = start + timedelta(minutes=int(event["duration"]))
+            # elapsed time: add it to the UTC instant, not the wall clock (a DST change in between moves the wall)
+            end = start.astimezone(_tz.utc) + timedelta(minutes=int(event["duration"]))
         except (TypeError, ValueError):
             end = None
     return utc_iso(start), (utc_iso(end) if end is not None else None)

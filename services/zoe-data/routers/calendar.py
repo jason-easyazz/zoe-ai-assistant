@@ -109,6 +109,15 @@ async def _present_all(db, rows, user_id: str) -> list:
     return events
 
 
+def _sync_meta_description(meta, extra: dict):
+    """``meta`` with its legacy ``description`` set to the column's new value ('' when cleared) - a NEW dict when that
+    changes anything, else ``meta`` itself. Only touches a metadata dict that already carries the key."""
+    if "description" not in extra or not isinstance(meta, dict) or "description" not in meta:
+        return meta
+    value = extra["description"] or ""
+    return meta if meta.get("description") == value else {**meta, "description": value}
+
+
 def _422(exc: Exception) -> HTTPException:
     return HTTPException(status_code=422, detail=str(exc))
 
@@ -246,11 +255,12 @@ async def create_event(
         # the desktop calendar writes notes into metadata.description: the column is the one place they live now
         if payload.metadata["description"]:
             extra["description"] = payload.metadata["description"]
+    metadata = _sync_meta_description(payload.metadata, extra)
     if extra.get("timezone"):
         start_at, end_at = cal.derive_instants({**payload.model_dump(), **extra})
         extra.update({"start_at": start_at, "end_at": end_at})
     attendees = await _clean_attendees(db, payload.attendees, actor_id=user_id, owner_id=user_id)
-    metadata_json = json.dumps(payload.metadata) if payload.metadata else None
+    metadata_json = json.dumps(metadata) if metadata else None
 
     record = await create_event_record(
         db,
@@ -320,7 +330,7 @@ async def update_event(
     data = payload.model_dump(exclude_unset=True)
     if not is_owner:
         data.pop("visibility", None)
-    has_attendees = "attendees" in payload.model_fields_set
+    has_attendees = payload.attendees is not None      # absent or null = leave them alone; [] clears them
     data.pop("attendees", None)
     extra = _clean_fields(data)
     for key in _CLIENT_FIELDS:
@@ -328,6 +338,15 @@ async def update_event(
     if "description" not in extra and isinstance(data.get("metadata"), dict) \
             and isinstance(data["metadata"].get("description"), str):
         extra["description"] = data["metadata"]["description"] or None
+    if "description" in extra:
+        # keep the desktop's legacy copy in step, or a cleared column would fall back to the stale metadata text
+        if "metadata" in data:
+            data["metadata"] = _sync_meta_description(data["metadata"], extra)
+        else:
+            stored = _row_to_event(current).get("metadata")
+            synced = _sync_meta_description(stored, extra)
+            if synced is not stored:
+                data["metadata"] = synced
     if "visibility" in data:
         if data["visibility"] is None:
             data.pop("visibility")

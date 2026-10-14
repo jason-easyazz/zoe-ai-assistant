@@ -186,7 +186,7 @@ supports `CREATE_EVENT`).
    page and the new sheet see the same text.
 6. **Who it's with, for old events.** An event with no attendee rows returns the desktop's `metadata.attendees`
    in the structured shape, marked `legacy: true` (not rows; a PUT of `attendees` makes them rows). Every event
-   from a calendar also carries `calendar_name`. PUT stays a partial update: only the keys sent are written.
+   from a calendar also carries `calendar_name`. PUT stays a partial update: only the keys sent are written (`attendees` absent or null = unchanged, `[]` = cleared).
 
 ## 6. Forget, delete, tombstones
 
@@ -194,7 +194,9 @@ supports `CREATE_EVENT`).
   and pending-marker contract as the others): on the member's OWN events, an attendee linked to the forgotten
   person or whose name / email names them loses the link, the name and the email (the row stays, anonymous, so
   the event keeps its shape); the desktop's legacy `metadata.attendees` entries are dropped the same way. The
-  "keep the contact" undo restores the contact, not the attendee links.
+  "keep the contact" undo restores the contact, not the attendee links. The step is scoped to the forgetting
+  member: a household contact that member A forgets stays linked from member B's own attendee rows (B did not
+  forget them; per-member forgetting is the memory layer's rule too).
 * Not in this PR, owner decision 8.4: event TITLES and DESCRIPTIONS that name the person ("Lunch with Robin")
   are not redacted - today's cascade never touched `events` either.
 * **Delete** stays a soft delete (`deleted = 1`) and now stamps `deleted_at`: the tombstone a sync engine needs
@@ -228,11 +230,18 @@ supports `CREATE_EVENT`).
 ### Before a sync engine writes a row (prerequisites, not done here)
 
 1. The voice / MCP / skybridge / proactive readers must filter `status <> 'cancelled'` (today only the router does).
-2. The MCP `calendar_update_event` / `calendar_delete_event` and the skybridge writers must refuse `read_only` rows
+2. The MCP `calendar_update_event` / `calendar_delete_event` and the skybridge writers must refuse `read_only` rows,
+   re-derive `start_at` / `end_at` when they move a time, and stamp `deleted_at` on delete (best: one shared
+   update / delete in `calendar_service`)
    (today only the router does).
 3. Inbound sync must consult the forget ledger (`memory_forgotten`) so a forgotten attendee name is not re-imported.
 4. Inbound text (description, title, attendee names) stays fenced untrusted input for any brain call.
 5. Never push a forget-driven attendee change upstream: it would uninvite a real person from someone else's meeting.
+6. `calendar_ical.store_parsed` always INSERTs: a second import of the same file into the same calendar hits
+   `uq_events_external_instance`. The connector needs an upsert on `(calendar_id, external_uid, recurrence_id)`
+   that respects `sequence` / `etag`.
+7. A PUT of `attendees` re-asserts every `person_id` it carries as `person_link_source = user` (the member
+   confirmed the list); a connector-written `email_match` link survives only until the member edits the list.
 
 ## 8. Decisions for the owner
 

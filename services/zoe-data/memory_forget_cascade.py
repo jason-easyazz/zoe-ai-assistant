@@ -88,7 +88,7 @@ class CascadeResult:
 
     @property
     def touched(self) -> bool:
-        return bool(self.summary_cleared or self.people)
+        return bool(self.summary_cleared or self.people or self.attendees)
 
 
 def _now_iso() -> str:
