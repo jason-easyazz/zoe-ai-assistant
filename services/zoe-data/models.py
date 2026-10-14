@@ -5,7 +5,35 @@ from datetime import datetime
 from money import normalize_dollars
 
 
-class EventCreate(BaseModel):
+class EventAttendee(BaseModel):
+    """One attendee (or the organizer, ``is_organizer``) - RFC 5545 ATTENDEE / ORGANIZER, lower-cased vocabulary
+    (calendar_service.ATTENDEE_ROLES / PARTSTATS / ATTENDEE_KINDS). ``name`` is the desktop calendar's legacy key
+    for ``display_name``. ``person_id`` links a contact in the people graph; its provenance is set server-side."""
+    display_name: Optional[str] = Field(None, max_length=300)
+    name: Optional[str] = Field(None, max_length=300)
+    email: Optional[str] = Field(None, max_length=320)
+    person_id: Optional[str] = None
+    role: Optional[str] = None
+    partstat: Optional[str] = None
+    kind: Optional[str] = None
+    is_organizer: bool = False
+    rsvp: bool = False
+
+
+class _EventModelFields(BaseModel):
+    """The alembic-0052 fields shared by create and update. All optional: a payload without them (every client
+    written before 0052) behaves exactly as before."""
+    description: Optional[str] = Field(None, max_length=20000)
+    timezone: Optional[str] = None
+    end_timezone: Optional[str] = None
+    status: Optional[str] = None
+    transparency: Optional[str] = None
+    url: Optional[str] = Field(None, max_length=2048)
+    conference_url: Optional[str] = Field(None, max_length=2048)
+    attendees: Optional[List[EventAttendee]] = Field(None, max_length=200)
+
+
+class EventCreate(_EventModelFields):
     title: str
     start_date: str
     start_time: Optional[str] = None
@@ -20,7 +48,7 @@ class EventCreate(BaseModel):
     visibility: str = "family"
 
 
-class EventUpdate(BaseModel):
+class EventUpdate(_EventModelFields):
     title: Optional[str] = None
     start_date: Optional[str] = None
     start_time: Optional[str] = None

@@ -7,7 +7,7 @@ Multi-user data access rules. All routers enforce these via the SQL fragment:
 
 | Table             | Default Visibility | Who Can Read                            | Who Can Write | On Delete                              |
 |-------------------|--------------------|-----------------------------------------|---------------|----------------------------------------|
-| **events**        | `family`           | Family (if family), creator (if personal) | Creator       | Soft-delete, others notified           |
+| **events**        | `family`           | Family (if family), creator (if personal); `busy` = family sees the time as "Busy", nothing else | Creator (read-only synced events: nobody, 409) | Soft-delete + `deleted_at` tombstone, others notified |
 | **lists**         | `family`           | All family members                      | All family    | Soft-delete, others notified           |
 | **list_items**    | Inherits list      | Same as parent list                     | All family    | Removed for all                        |
 | **people**        | `family`           | All family members                      | All family    | Soft-delete, confirm with family       |
@@ -21,7 +21,7 @@ Multi-user data access rules. All routers enforce these via the SQL fragment:
 
 ## Rules
 
-1. Every record has `user_id` (creator) and `visibility` (`family` or `personal`)
+1. Every record has `user_id` (creator) and `visibility` (`family` or `personal`; calendar events also `busy` - see docs/architecture/calendar-data-model.md section 4)
 2. Family-visible: all authenticated family members can read
 3. Personal: only the creator can read
 4. The AI infers visibility from context ("my dentist" = personal, "family dinner" = family)

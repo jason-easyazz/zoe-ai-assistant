@@ -40,7 +40,7 @@ def _run(engine, fn_name):
             getattr(mod, fn_name)()
 
 
-def test_revision_chain_is_linear_and_this_is_the_head():
+def test_revision_chain_is_linear_with_one_head():
     mod = _mod()
     assert mod.revision == "0050"
     revs, downs = set(), set()
@@ -53,7 +53,9 @@ def test_revision_chain_is_linear_and_this_is_the_head():
         if d:
             downs.add(d.group(1))
     assert mod.down_revision in revs, "0050 must chain onto an existing revision"
-    assert revs - downs == {"0050"}, f"more than one head: {sorted(revs - downs)}"
+    heads = revs - downs
+    assert len(heads) == 1, f"more than one head: {sorted(heads)}"
+    assert "0050" in downs or heads == {"0050"}, "0050 is either the head or a later revision chains onto it"
 
 
 def test_sqlite_upgrade_twice_then_downgrade():
