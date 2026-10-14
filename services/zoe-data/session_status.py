@@ -43,11 +43,12 @@ _PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
     # who is signed in (on this panel)
     ("who", _rx(r"who(?:['’]s|\s+is|\s+are|s)\s+" + _ADV + _SIGNED + _HERE + _WHEN)),
     ("who", _rx(r"who(?:['’]s|\s+is|s)\s+(?:using|on)\s+(?:this|the)\s+(?:panel|screen|device|tablet|display)" + _WHEN)),
-    ("who", _rx(r"who\s+(?:am\s+i|are\s+you)\s+(?:talking|speaking)\s+(?:to|with)" + _WHEN)),
     ("who", _rx(r"who\s+do\s+you\s+(?:think|have|see)\s+(?:is\s+)?" + _SIGNED + _HERE + _WHEN)),
     ("who", _rx(r"(?:can\s+you\s+)?tell\s+me\s+who(?:['’]s|\s+is)\s+" + _SIGNED + _HERE + _WHEN)),
     # who am I signed in as / which account
-    ("self", _rx(r"who\s+am\s+i(?:\s+" + _SIGNED + r"\s+as)?" + _WHEN)),
+    # NOT bare "who am I" / "who are you talking to" / "who do you think I am": the Skybridge identity card owns those
+    # (skybridge_service._IDENTITY_QUERY_RE, tests/test_skybridge_router_veto.py), answered with a UI card.
+    ("self", _rx(r"who\s+am\s+i\s+" + _SIGNED + r"\s+as" + _WHEN)),
     ("self", _rx(r"(?:which|what)\s+(?:account|profile|user)\s+(?:am\s+i\s+(?:using|on)|is\s+this)" + _WHEN)),
     ("self", _rx(r"(?:which|what)\s+(?:account|profile|user)\s+(?:am\s+i|is)\s+" + _SIGNED + r"(?:\s+(?:as|with))?" + _HERE + _WHEN)),
     ("self", _rx(r"whose\s+(?:account|profile)\s+is\s+this" + _WHEN)),

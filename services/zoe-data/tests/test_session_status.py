@@ -37,9 +37,6 @@ POSITIVE = [
     "is somebody logged in here",
     "who am I signed in as",
     "who am I logged in as right now",
-    "who am I",
-    "who are you talking to",
-    "who are you talking to right now",
     "which account am I using",
     "what profile is this",
     "whose account is this",
@@ -60,6 +57,10 @@ NEGATIVE = [
     "who signed the declaration of independence",
     "who am I meeting tomorrow",
     "do you know who I am",
+    # owned by the Skybridge identity card (skybridge_service._IDENTITY_QUERY_RE; test_skybridge_router_veto.py):
+    "who am I",
+    "who are you talking to",
+    "who do you think I am",
     "who is at the door",
     "who's on the phone",
     "who's coming to dinner",
@@ -117,9 +118,9 @@ async def test_guest_hears_nobody_is_signed_in_and_no_names(monkeypatch):
 async def test_without_a_scope_key_the_account_id_is_the_identity(monkeypatch):
     """The replay harness passes no scope_user: a real account is a member, a sentinel is a guest."""
     _patch_identity(monkeypatch, {"u1": "Maya"})
-    assert await ss.answer("who am I", "u1", channel="voice", extra_ctx=None) == "You're signed in as Maya."
-    assert await ss.answer("who am I", "voice-guest", channel="voice", extra_ctx=None) == ss.GUEST_REPLY
-    assert await ss.answer("who am I", "guest", channel="voice", extra_ctx={"panel_id": "p1"}) == ss.GUEST_REPLY
+    assert await ss.answer("who am I signed in as", "u1", channel="voice", extra_ctx=None) == "You're signed in as Maya."
+    assert await ss.answer("who am I signed in as", "voice-guest", channel="voice", extra_ctx=None) == ss.GUEST_REPLY
+    assert await ss.answer("who am I signed in as", "guest", channel="voice", extra_ctx={"panel_id": "p1"}) == ss.GUEST_REPLY
 
 
 @pytest.mark.asyncio
