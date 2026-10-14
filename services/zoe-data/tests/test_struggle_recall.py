@@ -79,6 +79,10 @@ A_NEGATIVES = [
     (T("what's on today", ts=-200, dom="calendar", reply="You have 2 events today."), "what are they?"),   # too late
     (T("how many timers are running", ts=0, dom="timers", reply="Two timers are running and both finish soon."),
      "which one finishes first?"),
+    # review B1: a count WITH the listing is a full answer
+    (T("what's on today", ts=0, dom="calendar", reply="You have 2 events today: dentist and gym."), "what are they?"),
+    (T("what's on today", ts=0, dom="calendar", reply="You have 2 events today, the dentist at 3 and gym at 6."), "which one?"),
+    (T("what's on the list", ts=0, dom="lists", reply="Lists has 2 items and milk is one of them."), "what are they?"),
 ]
 
 
@@ -153,6 +157,7 @@ C_NEGATIVES = [
     ("shall I play music", "not now, thanks"),
     ("how was the walk", "it was cold, not freezing"),                    # Y new to the exchange
     ("tell me about whales", "actually that's not what I expected, wow"),
+    ("tell me about the weather", "Actually a climate report, not a weather station."),   # review N1: Y partly new
 ]
 
 
@@ -329,3 +334,18 @@ def test_the_offline_replay_parses_the_skybridge_vote_and_the_head(tmp_path):
     t = turns[0]
     assert (t.sky_domain, t.sky_vetoed, t.head_top, t.sim_scores["calendar"]) == ("calendar", True, "calendar", 0.8)
     assert [[e.signal for e in evs] for _p, _t, evs in ev.run(turns)] == [["FALLTHROUGH"]]
+
+
+
+# ── review B2: "one" is still the number 1 for the same-request path ─────────
+
+@pytest.mark.parametrize("a,b", [("set a timer for one minute", "set a timer for 1 minute"),
+                                 ("add one carton of milk", "add 1 carton of milk"),
+                                 ("remind me in one hour", "remind me in 1 hour")])
+def test_one_and_1_are_the_same_request(a, b):
+    assert "RE_ASK" in {e.signal for e in s.detect(T(a, ts=0), T(b, ts=8))}, (a, b)
+
+
+def test_which_one_is_still_an_anaphoric_ask():
+    prev = T("what's on", ts=0, dom="calendar", reply="You have 2 events today.")
+    assert [e.signal for e in s.detect(prev, T("which one?", ts=5))] == ["REPHRASE"]

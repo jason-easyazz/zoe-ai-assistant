@@ -94,7 +94,7 @@ _CONTRACTIONS = (
 _CONTRACTION_RES = tuple((re.compile(p), r) for p, r in _CONTRACTIONS)
 
 _NUMBER_WORDS = {
-    "zero": "0", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6", "seven": "7", "eight": "8",
+    "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6", "seven": "7", "eight": "8",
     "nine": "9", "ten": "10", "eleven": "11", "twelve": "12", "thirteen": "13", "fourteen": "14", "fifteen": "15",
     "sixteen": "16", "seventeen": "17", "eighteen": "18", "nineteen": "19", "twenty": "20", "thirty": "30", "forty": "40",
     "fifty": "50", "sixty": "60", "ninety": "90", "hundred": "100",
@@ -420,11 +420,12 @@ ROUTER_THRESHOLD = 0.62
 _COUNT_ONLY_RE = re.compile(
     r"^(?:you have|there (?:is|are)|i found|lists? ha(?:s|ve)|your \w+ ha(?:s|ve))\s+(?:\d+|no|one|a|an|two|three|four|five)\s+"
     r"(?:\w+\s+){0,2}?(?:events?|items?|things?|reminders?|timers?|lists?|contacts?|people|appointments?|messages?)\b"
-    r"[^.!?]{0,40}[.!]?$", re.IGNORECASE)
+    r"(?:\s+(?!and\b)[\w']+){0,4}\s*[.!]?$", re.IGNORECASE)
 #: a short follow-up that only points back at the answer ("what is it?", "which one?", "what are they?")
 _ANAPHORIC_ASK_RE = re.compile(
-    r"^(?:so |and |ok |okay |well )?(?:what|which|who|when|where)(?: one)?(?: is| are| was| were)? "
-    r"(?:it|they|them|that|those|this|these|one|ones)(?: then| exactly| again)?$|^(?:which one|what are they|what is it)$")
+    r"^(?:so |and |ok |okay |well )?(?:what|which|who|when|where)(?: 1)?(?: is| are| was| were)? "
+    r"(?:it|they|them|that|those|this|these|1|ones)(?: then| exactly| again)?$|^(?:which 1|what are they|what is it)$")
+#: (matched against ``normalise``d text, where "one" is "1": "which one?" -> "which 1")
 
 
 def domains(t: Turn) -> set:
@@ -555,7 +556,7 @@ def _repeat_signals(prev: Turn, cur: Turn, gap: float, window_s: float) -> list[
         reasons = []
         if only_inserts and content_tokens(tc) - cp:
             reasons.append("refined")
-        if shared and sim >= 0.55:
+        if (shared and sim >= 0.55) or (len(shared) >= 2 and sim >= 0.45):   # two shared content words need less wording
             reasons.append("shared_content")
         if sp[2] != "none" and sp[2] == sc[2] and sp[0] == sc[0] and sim >= 0.55:
             reasons.append("same_lead_and_anchor")
@@ -602,7 +603,7 @@ def contrast_correction(prev: "Turn", text: str) -> Optional[str]:
         if not m:
             continue
         x, y = content_tokens(tokens(m.group("x"))), content_tokens(tokens(m.group("y")))
-        if x and y and y & said:          # a real X ("I'm not hungry" has none) against a Y the exchange contained
+        if x and y and y <= said:         # a real X ("I'm not hungry" has none) against a Y the exchange contained
             return "contrast"
     return None
 
