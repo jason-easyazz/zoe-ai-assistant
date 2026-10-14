@@ -116,6 +116,8 @@ async function t(name, fn) { try { await fn(); results.push(true); console.log('
     const r = await rect();
     assert(r.w >= 1000 && r.h >= 500, `sheet ${Math.round(r.w)}x${Math.round(r.h)} is not near-full-screen`);
     assert(r.x >= 0 && r.y >= 0 && r.x + r.w <= VIEW.width && r.y + r.h <= VIEW.height, 'sheet overflows the panel');
+    const vis = await page.evaluate(() => ['edit', 'del', 'close'].map((x) => { const r = document.querySelector('#estModal [data-x="' + x + '"]').getBoundingClientRect(); return [x, r.top >= 0 && r.bottom <= 720]; }));
+    assert.deepStrictEqual(vis.filter((v) => !v[1]), [], 'actions must be on screen without scrolling');
     await shot('01-detail-minimal');
   });
   await t('minimal event shows title/date/time/category and omits empty rows', async () => {
@@ -132,6 +134,9 @@ async function t(name, fn) { try { await fn(); results.push(true); console.log('
     await page.click('#estModal [data-x="phone"]'); await page.waitForTimeout(500);
     const r = await page.evaluate(() => { const c = document.querySelector('#evqr canvas'); return { hidden: document.getElementById('evqr').hidden, w: c && c.width, drawn: c && (() => { const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; for (let i = 0; i < d.length; i += 4) if (d[i] < 100) return true; return false; })() }; });
     assert(!r.hidden && r.w > 0, 'QR slot visible'); assert(r.drawn, 'the QR was actually drawn (dark modules present)');
+    const g = await page.evaluate(() => { const q = document.querySelector('#evqr .evqrbox').getBoundingClientRect(); return { top: q.top, right: q.right, bottom: q.bottom, left: q.left, scroll: document.querySelector('#estModal .evd').scrollTop }; });
+    assert(g.top >= 0 && g.bottom <= 720 && g.left >= 0 && g.right <= 1280, 'QR card fits the panel: ' + JSON.stringify(g));
+    assert.strictEqual(g.scroll, 0, 'opening the QR must not scroll the sheet');
     await shot('02-detail-phone-qr');
   });
 
@@ -147,6 +152,8 @@ async function t(name, fn) { try { await fn(); results.push(true); console.log('
     chips.forEach((c) => { assert(c.ratio >= 4.5, `${c.cat} contrast ${c.ratio.toFixed(2)}`); assert(c.h >= 48, c.cat + ' height ' + c.h); });
     assert.strictEqual(chips.filter((c) => c.on === 'true').length, 1, 'exactly one selected');
     assert.strictEqual(chips.find((c) => c.on === 'true').cat, 'health');
+    const sv = await page.evaluate(() => ['save', 'back', 'phone'].map((x) => { const r = document.querySelector('#estModal [data-x="' + x + '"]').getBoundingClientRect(); return [x, r.top >= 0 && r.bottom <= 720]; }));
+    assert.deepStrictEqual(sv.filter((v) => !v[1]), [], 'Save/Back must be on screen without scrolling');
     await shot('03-edit-chips');
   });
   await t('chip + Save PUTs ONLY the category, then returns to the updated sheet', async () => {
@@ -170,6 +177,8 @@ async function t(name, fn) { try { await fn(); results.push(true); console.log('
   await t('full event shows notes, who, where, repeat, reminder', async () => {
     const txt = await page.evaluate(() => document.querySelector('#estModal .evd').innerText);
     ['Bring the blue folder.', 'Sam', 'Riley', 'Example Primary School hall', 'Repeats every week', '30 min before', '7:30 pm – 9:00 pm'].forEach((s) => assert(txt.includes(s), 'missing ' + s));
+    const fv = await page.evaluate(() => ['edit', 'del'].map((x) => { const r = document.querySelector('#estModal [data-x="' + x + '"]').getBoundingClientRect(); return [x, r.bottom <= 720]; }));
+    assert.deepStrictEqual(fv.filter((v) => !v[1]), [], 'actions stay on screen on the fullest event');
     await shot('04-detail-full');
   });
   await t('delete asks first; Keep it returns; Delete sends DELETE and closes', async () => {
@@ -186,7 +195,7 @@ async function t(name, fn) { try { await fn(); results.push(true); console.log('
   await t('synced-shaped event: read-only, tentative, source, tz, meeting QR, RSVPs', async () => {
     await open('ev-sync');
     const h = await page.evaluate(() => ({ txt: document.querySelector('#estModal .evd').innerText, btns: [...document.querySelectorAll('#estModal button')].map((b) => b.dataset.x) }));
-    ['Tentative', 'From Google Calendar', 'Europe/London', 'Managed in Google Calendar', 'Organizer', 'Going', 'No reply', 'Declined', 'Agenda in the shared doc.'].forEach((s) => assert(h.txt.includes(s), 'missing ' + s));
+    ['Tentative', 'From Google Calendar', 'Europe/London', 'Managed in Google Calendar', 'Organizer', 'Going', 'No reply', 'Declined', 'Agenda in the shared doc.'].forEach((s) => assert(h.txt.toLowerCase().includes(s.toLowerCase()), 'missing ' + s));   // badges are text-transform:uppercase in innerText
     assert(!h.btns.includes('edit') && !h.btns.includes('del') && !h.btns.includes('phone'), 'no edit/delete on a read-only event: ' + h.btns);
     await page.click('#estModal [data-x="meeturl"]'); await page.waitForTimeout(500);
     assert(await page.evaluate(() => !document.getElementById('evqr').hidden), 'meeting QR shown');

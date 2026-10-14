@@ -67,6 +67,8 @@ function checkSuite(M) {
     const h = M.renderDetail(MINIMAL, OPT);
     has(h, '>Dentist<'); has(h, 'October'); has(h, '20'); has(h, '9:00 am – 9:45 am', 'time range from duration');
     has(h, 'Health'); has(h, 'class="evcat"'); has(h, 'data-x="close"');
+    has(h, 'evd sparse', 'a headline-only event fills the sheet');
+    lacks(M.renderDetail(TODAYS_FULL, OPT), 'evd sparse');
   });
   t('minimal event: empty fields are omitted, not shown blank', () => {
     const h = M.renderDetail(MINIMAL, OPT);

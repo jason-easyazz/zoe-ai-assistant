@@ -338,9 +338,9 @@
   .estmc select{width:100%;min-height:52px;margin-top:6px;border-radius:12px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.08);color:var(--ink);font:inherit;font-size:19px;padding:0 12px}
   /* ---- Calendar event sheet (tap an event): near-full-screen read view + a keyboard-free edit view.
      No text inputs, no native select: categories are chips, typed edits go to the phone (QR). ---- */
-  .estmc.evd{width:min(1120px,94%);max-height:94%;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;padding:0;border-radius:30px;position:relative;
+  .estmc.evd{width:min(1120px,94%);min-height:90%;max-height:94%;display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;padding:0;border-radius:30px;position:relative;
     background:linear-gradient(180deg,#181c2c,#0f121c);border-color:color-mix(in srgb,var(--c,#7b96ff) 45%,rgba(255,255,255,.14))}
-  .evd .evh{position:relative;padding:34px 120px 26px 48px;background:linear-gradient(100deg,color-mix(in srgb,var(--c) 24%,transparent),transparent 70%);border-bottom:1px solid var(--line)}
+  .evd .evh{position:relative;padding:26px 120px 20px 48px;background:linear-gradient(100deg,color-mix(in srgb,var(--c) 24%,transparent),transparent 70%);border-bottom:1px solid var(--line)}
   .evd .evx{position:absolute;top:22px;right:24px;width:56px;height:56px;border-radius:50%;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.1);color:var(--ink);font-size:24px;cursor:pointer;padding:0}
   .evd .evbadges{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:14px}
   .evd .evcat{display:inline-flex;align-items:center;gap:10px;min-height:40px;padding:0 18px;border-radius:999px;font-size:19px;font-weight:600;color:var(--ink);background:color-mix(in srgb,var(--cc) 22%,#12151f);border:1px solid var(--cc)}
@@ -348,14 +348,15 @@
   .evd .evbadge{display:inline-flex;align-items:center;min-height:40px;padding:0 16px;border-radius:999px;font-size:17px;color:var(--ink);background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2)}
   .evd .evbadge.warn{border-style:dashed;border-color:var(--amber);color:var(--amber)}
   .evd .evbadge.bad{border-color:#ff9db0;color:#ff9db0}
-  .evd .evt{font-size:52px;font-weight:600;line-height:1.1;margin:0 0 14px;overflow-wrap:anywhere}
+  .evd .evt{font-size:50px;font-weight:600;line-height:1.1;margin:0 0 10px;overflow-wrap:anywhere}
   .evd .evdate{font-size:30px;color:var(--ink)}
   .evd .evtime{font-size:30px;font-weight:600;margin-top:6px;font-variant-numeric:tabular-nums}
   .evd .evdur{font-size:20px;font-weight:400;color:var(--ink-soft);margin-left:16px}
   .evd .evtz{font-size:17px;color:var(--ink-soft);margin-top:8px}
   .evd.st-cancelled .evt{text-decoration:line-through;color:var(--ink-soft)}
   .evd.st-tentative{border-style:dashed}
-  .evd .evbody{display:grid;grid-template-columns:1fr 1fr;gap:24px 48px;padding:28px 48px}
+  .evd>*{flex:none}
+  .evd .evbody{flex:1 0 auto;align-content:start;display:grid;grid-template-columns:1fr 1fr;gap:20px 48px;padding:22px 48px}
   .evd .evbody.one{grid-template-columns:1fr}
   .evd .evrow.wide{grid-column:1/-1}
   .evd .evl{font-size:15px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-soft);margin-bottom:8px}
@@ -370,7 +371,16 @@
   .evd .evtag{font-size:13px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:999px;background:var(--accent);color:#0b0e17}
   .evd .evrsvp{font-size:15px;color:var(--ink-soft)}
   .evd .evrsvp.r-going{color:#66d6a3}.evd .evrsvp.r-declined{color:#ff9db0}.evd .evrsvp.r-maybe{color:var(--amber)}
-  .evd .evfoot{padding:8px 48px 14px}
+  .evd .evstick{position:sticky;bottom:0;margin-top:auto;background:#0f121c;border-top:1px solid var(--line)}
+  .evd.sparse .evh{flex:1;display:flex;flex-direction:column;justify-content:center;padding-top:36px;border-bottom:0}
+  .evd.sparse .evt{font-size:66px}
+  .evd.sparse .evdate,.evd.sparse .evtime{font-size:36px}
+  .evd .evfoot{padding:8px 48px 2px}
+  .evd .evwr{display:flex;flex-wrap:wrap;gap:12px 44px;align-items:center}
+  .evd.eve .evt{font-size:38px;margin:0}
+  .evd.eve .evh{padding-bottom:16px}
+  .evd.eve .evbadges{margin-bottom:8px}
+  .evd .evsw{margin-top:0!important}
   .evd .evacts{display:flex;gap:14px;align-items:center;padding:14px 0 6px}
   .evd .evsp{flex:1}
   .evd .evbtn{min-height:60px;padding:0 28px;border-radius:16px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.1);color:var(--ink);font:inherit;font-size:21px;cursor:pointer}
@@ -379,11 +389,12 @@
   .evd .evbtn:disabled{opacity:.5}
   .evd .evro{font-size:20px;color:var(--ink-soft);padding:10px 0 0}
   .evd .evconf .evcq{font-size:30px;font-weight:600;padding-top:14px}
-  .evd .evhint{text-align:center;font-size:15px;color:var(--ink-soft);padding:0 0 18px;letter-spacing:.04em}
-  .evd .evqr{padding:6px 48px 0}
-  .evd .evqrbox{display:flex;align-items:center;gap:24px;padding:16px 20px;border-radius:20px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.14)}
-  .evd .evqrc{width:180px;height:180px;background:#fff;border-radius:12px;padding:8px;flex:none}
-  .evd .evqrcap{font-size:23px}
+  .evd .evhint{text-align:center;font-size:15px;color:var(--ink-soft);padding:0 0 12px;letter-spacing:.04em}
+  /* The QR is a card FLOATING above the sticky action bar (right-aligned), so opening it never scrolls the sheet. */
+  .evd .evqr{position:absolute;right:48px;bottom:calc(100% - 4px);z-index:2}
+  .evd .evqrbox{display:flex;flex-direction:column;align-items:center;gap:10px;width:244px;padding:16px 16px 14px;border-radius:20px;background:#1d2234;border:1px solid rgba(255,255,255,.22);box-shadow:0 18px 50px rgba(0,0,0,.55)}
+  .evd .evqrc{width:180px;height:180px;background:#fff;border-radius:12px;padding:8px}
+  .evd .evqrcap{font-size:18px;text-align:center;line-height:1.25}
   .evd .evcats{display:flex;flex-wrap:wrap;gap:12px}
   .evd .evchip{display:inline-flex;align-items:center;gap:10px;min-height:60px;padding:0 26px 0 14px;border-radius:999px;border:2px solid var(--cc);font:inherit;font-size:22px;font-weight:600;cursor:pointer}
   .evd .evchip .evck{width:28px;height:28px;display:grid;place-items:center;font-style:normal;font-size:20px;font-weight:800;border-radius:50%;border:2px solid currentColor;flex:none}
@@ -4205,7 +4216,6 @@
     function draw(){var cv=slot.querySelector('canvas[data-qr]');if(cv)try{QRCode.toCanvas(cv,cv.getAttribute('data-qr'),{width:164,margin:0,errorCorrectionLevel:'M'});}catch(e){}}
     // The ONE client QR library; non-secret URLs only (see authCard for secret-bearing hand-offs).
     if(window.QRCode)draw();else{var sc=document.createElement('script');sc.src='/lib/qrcode/qrcode.min.js';sc.onload=draw;document.head.appendChild(sc);}
-    if(slot.scrollIntoView)slot.scrollIntoView({block:'nearest'});
   }
   function evdClick(e){
     var m=document.getElementById('estModal');

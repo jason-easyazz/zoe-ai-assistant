@@ -335,6 +335,7 @@
     if (n.reminders.length) rows += row(n.reminders.length > 1 ? 'Reminders' : 'Reminder', esc(n.reminders.join(', ')));
     if (n.notes) rows += row('Notes', '<div class="evnotes">' + esc(n.notes) + '</div>', true);
 
+    if (!rows) cls += ' sparse';   // nothing but the headline: let it fill the sheet instead of leaving a black void
     var acts;
     if (n.readOnly) {
       acts = '<div class="evro">' + esc(n.source ? 'Managed in ' + n.source + ' — edit it there.' : 'This event can’t be edited here.') + '</div>' +
@@ -350,9 +351,8 @@
       '<div class="evbadges">' + badges + '</div>' +
       '<h2 class="evt">' + esc(n.title) + '</h2>' + when + '</div>' +
       (rows ? '<div class="evbody">' + rows + '</div>' : '') +
-      '<div class="evqr" id="evqr" hidden></div>' +
-      '<div class="evfoot" id="evfoot">' + acts + '</div>' +
-      '<div class="evhint">Say “close” or swipe down</div></div>';
+      '<div class="evstick"><div class="evqr" id="evqr" hidden></div><div class="evfoot" id="evfoot">' + acts + '</div>' +
+      '<div class="evhint">Say “close” or swipe down</div></div></div>';
   }
 
   function renderQr(kind, url) {
@@ -400,14 +400,12 @@
       '<div class="evbadges"><span class="evbadge">Changing</span></div><h2 class="evt">' + esc(n.title) + '</h2></div>' +
       '<div class="evbody one">' +
       row('Category', renderCategoryChips(n.category), true) +
-      row('When', (o.dtHtml || '') +
-        '<button type="button" class="evsw" role="switch" data-x="allday" aria-checked="' + (n.allDay || !firstStr(ev.start_time) ? 'true' : 'false') + '"><i></i>All day</button>', true) +
-      row('Words', '<div class="evnote">Title, place, notes and who’s coming are typed — do those on your phone.</div>' +
-        '<button type="button" class="evbtn" data-x="phone">Edit on your phone</button>', true) +
+      row('When', '<div class="evwr">' + (o.dtHtml || '') +
+        '<button type="button" class="evsw" role="switch" data-x="allday" aria-checked="' + (n.allDay || !firstStr(ev.start_time) ? 'true' : 'false') + '"><i></i>All day</button></div>', true) +
       '</div>' +
-      '<div class="evqr" id="evqr" hidden></div>' +
-      '<div class="evfoot"><div class="evacts"><button type="button" class="evbtn" data-x="back">Back</button><span class="evsp"></span>' +
-      '<button type="button" class="evbtn pri" data-x="save">Save</button></div></div></div>';
+      '<div class="evstick"><div class="evqr" id="evqr" hidden></div><div class="evfoot"><div class="evacts"><button type="button" class="evbtn" data-x="back">Back</button>' +
+      '<button type="button" class="evbtn" data-x="phone">Title, place &amp; notes: on your phone</button><span class="evsp"></span>' +
+      '<button type="button" class="evbtn pri" data-x="save">Save</button></div></div></div></div>';
   }
 
   // ---- save: build ONLY what changed ---------------------------------------
