@@ -177,6 +177,7 @@ THE production Zoe API: FastAPI app served by host uvicorn on port 8000. Owns ch
 
 - `curl http://localhost:8000/health` and `/api/system/status` after changes plus a restart of the user service.
 - Focused pytest in `tests/` (see child doc for runner constraints).
+- Any change to a deterministic matcher (`skybridge_service.classify_skybridge_intent`, `intent_router.detect_intent`) runs `tests/test_ha_phrasing_corpus.py`: the HA/OVOS phrasing ratchet (correct claims may only rise; wrong claims, wrong WRITES and known hazards may only fall).
 
 ## Child DOX Index
 
