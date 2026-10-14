@@ -2450,6 +2450,11 @@ async def run_nightly_digest_pass(db=None) -> dict:
         log_nightly_summary(hours=24)
     except Exception:
         pass
+    try:  # "STRUGGLE_SUMMARY ..." - the struggle detector's last 24 h, counts only (never raises)
+        import struggle_digest
+        await struggle_digest.log_nightly_summary(days=1.0)
+    except Exception:
+        pass
     return {
         "results": results,
         "cutoff": cutoff,
