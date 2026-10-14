@@ -2107,6 +2107,12 @@ async def resolve_skybridge_request(
             message, intent, router_decision, context=context
         )
         _log_router_gate(intent, decision, reason, router_domain, conf)
+        try:  # the struggle detector: what Skybridge recognised and whether the router let it (an O(1) append, never raises)
+            import struggle_detector
+
+            struggle_detector.note_skybridge(message, intent.domain, intent.action, decision)
+        except Exception:  # noqa: BLE001
+            pass
         if decision == "veto":
             return {
                 "handled": False,
