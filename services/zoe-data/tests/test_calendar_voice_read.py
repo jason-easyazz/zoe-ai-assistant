@@ -190,10 +190,77 @@ def test_the_live_create_parses_to_ten_at_night():
     assert sky.classify_skybridge_intent("schedule a meeting for 10 o'clock tomorrow", None).target_time == "10:00"   # control
     assert sky.classify_skybridge_intent("schedule a meeting at 9 am tonight", None).target_time == "09:00"          # explicit wins
     assert sky.classify_skybridge_intent("schedule a meeting for 11 o'clock tonight", None).target_time == "23:00"
-    # "12 tonight" is midnight (tomorrow's date): not guessed as noon - no create is claimed
-    for text in ("schedule a meeting for 12 o'clock tonight", "schedule a meeting at 12 tonight"):
-        got = sky.classify_skybridge_intent(text, None)
-        assert got is None or got.action != "create_event", text
+
+
+NEXT = "2026-06-12"
+
+
+def _create(text):
+    got = sky.classify_skybridge_intent(text, None)
+    return (got.action, got.target_time, got.start_date.isoformat()) if got else None
+
+
+@pytest.mark.parametrize("hour,hhmm", [("12", "00:00"), ("1", "01:00"), ("2", "02:00"), ("3", "03:00"), ("4", "04:00"),
+                                       ("5", "05:00")])
+@pytest.mark.parametrize("form", ["schedule a meeting at {h} tonight", "schedule a meeting for {h} o'clock tonight",
+                                  "schedule a meeting for {h} o'clock at night"])
+def test_the_small_hours_of_tonight_are_the_next_dates_not_the_afternoon_today(form, hour, hhmm):
+    """Codex P1: "2 o'clock tonight" became 14:00 TODAY. 12..5 + tonight / at night = the NEXT date's 00:00..05:00."""
+    assert _create(form.format(h=hour)) == ("create_event", hhmm, NEXT)
+
+
+@pytest.mark.parametrize("hour,hhmm", [("6", "18:00"), ("7", "19:00"), ("10", "22:00"), ("11", "23:00")])
+def test_the_evening_hours_of_tonight_stay_today(hour, hhmm):
+    assert _create(f"schedule a meeting at {hour} tonight") == ("create_event", hhmm, TODAY)
+    assert _create(f"schedule a meeting for {hour} o'clock at night") == ("create_event", hhmm, TODAY)
+
+
+def test_the_small_hours_carry_minutes_and_a_named_day():
+    assert _create("schedule a meeting at 12:30 tonight") == ("create_event", "00:30", NEXT)
+    assert _create("schedule a meeting tomorrow night at 8") == ("create_event", "20:00", NEXT)
+    assert _create("schedule a meeting tomorrow night at 2") == ("create_event", "02:00", "2026-06-13")
+
+
+def test_the_nlu_slots_agree_on_the_rolled_date():
+    import intent_router
+    slots = intent_router._extract_simple_calendar_slots("schedule a meeting at 2 tonight")
+    assert (slots["time"], slots["date"]) == ("02:00", NEXT)
+    assert intent_router._extract_simple_calendar_slots("schedule a meeting at 10 tonight")["time"] == "22:00"
+
+
+@pytest.mark.parametrize("text,want", [
+    ("schedule a meeting at 5 this evening", ("create_event", "17:00", TODAY)),
+    ("schedule a meeting at 3 o'clock in the morning", ("create_event", "03:00", TODAY)),   # not the bare-o'clock afternoon
+    ("schedule a meeting at 7 in the morning", ("create_event", "07:00", TODAY)),
+    ("schedule a meeting at ten o'clock this morning", ("create_event", "10:00", TODAY)),
+    ("schedule a meeting at 7:30 tonight", ("create_event", "19:30", TODAY)),
+    ("schedule a meeting at 6 pm tonight", ("create_event", "18:00", TODAY)),                # explicit pm wins
+    ("schedule a meeting at 9 am tonight", ("create_event", "09:00", TODAY)),                # explicit am wins
+    ("schedule a meeting at 18:30 tonight", ("create_event", "18:30", TODAY)),               # 24-hour is left alone
+    ("schedule a meeting at noon", ("create_event", "12:00", TODAY)),
+    ("schedule a meeting at midday", ("create_event", "12:00", TODAY)),
+    ("schedule a lunch at 12 o'clock", ("create_event", "12:00", TODAY)),
+])
+def test_day_part_words_place_the_time_the_audit_set(text, want):
+    assert _create(text) == want
+
+
+@pytest.mark.parametrize("text", [
+    "schedule a meeting at midnight", "schedule a meeting at half past ten tonight", "schedule a meeting at 12 this evening",
+    "schedule a meeting at 12 in the morning",
+])
+def test_a_time_that_cannot_be_placed_is_not_claimed_at_all(text):
+    """Unclaimed means the brain (which can ask) - not a create, and not a calendar READ answering a write."""
+    assert sky.classify_skybridge_intent(text, None) is None, text
+
+
+@pytest.mark.parametrize("text", [
+    "schedule a timer for 10 o'clock tonight", "schedule a reminder for 10 o'clock tonight", "schedule an alarm at 7 am",
+    "book a timer at 5 tonight", "schedule a reminder to call mum at 4 pm",
+])
+def test_a_timer_alarm_or_reminder_never_takes_the_calendar_create_path(text):
+    got = sky.classify_skybridge_intent(text, None)
+    assert got is None or (got.domain, got.action) not in {("calendar", "create_event"), ("calendar", "show")}, text
 
 
 def test_a_low_conf_chat_verdict_does_not_veto_a_parsed_create():
@@ -206,10 +273,36 @@ def test_a_low_conf_chat_verdict_does_not_veto_a_parsed_create():
     (_two_stage("chat", conf=0.8), "stage 1 said chat, not gated"),
     (_two_stage("lists"), "a confident OTHER domain"),
     (_two_stage("chat", conf=0.30, gated=True, head_top="calendar", reason="low_conf"), "under the unsure floor"),
+    # Codex P1: a low_conf verdict whose head is some OTHER domain is not "unsure about the calendar"
+    (_two_stage("chat", conf=0.65, gated=True, head_top="timers", reason="low_conf"), "head says timers"),
+    (_two_stage("chat", conf=0.65, gated=True, head_top="music", reason="low_conf"), "head says music"),
 ])
 def test_everything_else_still_vetoes_the_create(verdict, why):
     intent = sky.classify_skybridge_intent(CREATE, None)
     assert sky.skybridge_router_gate(CREATE, intent, verdict)[0] == "veto", why
+
+
+def test_the_head_may_name_calendar_by_its_shortlist():
+    verdict = _two_stage("chat", conf=0.65, gated=True, head_top="reminders", reason="low_conf")
+    intent = sky.classify_skybridge_intent(CREATE, None)
+    assert sky.skybridge_router_gate(CREATE, intent, verdict)[0] == "veto"                       # control: no calendar anywhere
+    verdict["two_stage"]["shortlist"] = ["reminders", "calendar", "timers"]
+    assert sky.skybridge_router_gate(CREATE, intent, verdict)[:2] == ("allow", "write_parsed_time")
+
+
+@pytest.mark.parametrize("message,allowed", [
+    ("schedule a meeting for 10 o'clock tonight", True),
+    ("book an appointment at 4 tonight", True),
+    ("schedule lunch with Sam at 1 pm", True),
+    ("put an event in my calendar at 8 tonight", True),
+    ("schedule dentist at 10 o'clock tonight", False),          # the verb "schedule" alone is not a calendar noun
+    ("schedule a thing for 10 o'clock tonight", False),
+])
+def test_the_bypass_needs_a_calendar_noun_not_just_the_verb(message, allowed):
+    intent = sky.classify_skybridge_intent(message, None)
+    assert intent is not None and intent.action == "create_event", message
+    decision = sky.skybridge_router_gate(message, intent, LIVE_VERDICT)[0]
+    assert decision == ("allow" if allowed else "veto"), message
 
 
 def test_a_timeless_create_and_a_read_keep_the_low_conf_veto():

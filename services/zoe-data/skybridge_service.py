@@ -1202,9 +1202,9 @@ def _event_title(raw: str, tail: str = "") -> str:
     return title
 
 
-def _calendar_create_from_text(message: str, context: dict[str, Any] | None) -> tuple[str, str] | None:
-    """"add/schedule/book X (on <day>) at <time>" and "what about a meeting <day> at <time>" -> (title, HH:MM). The day is
-    resolved by the caller from the same text. A time that cannot be read, or no event cue at all, claims nothing."""
+def _calendar_create_from_text(message: str, context: dict[str, Any] | None) -> tuple[str, str, int] | None:
+    """"add/schedule/book X (on <day>) at <time>" and "what about a meeting <day> at <time>" -> (title, HH:MM, day_offset). The
+    day is resolved by the caller from the same text, plus ``day_offset`` (1 for the small hours of "2 tonight"). A time that cannot be read, or no event cue at all, claims nothing."""
     text = re.sub(r"\s+", " ", message or "").strip()
     cue = re.search(r"\b(calendar|schedule|event|appointment|meeting)\b", text, re.IGNORECASE)
     if _context_domain(context) != "calendar" and not cue:
@@ -1228,25 +1228,66 @@ def _calendar_create_from_text(message: str, context: dict[str, Any] | None) -> 
     if not match:
         return None
     title = _event_title(match.group("title"), tail)
+    # A timer / alarm / reminder is not a calendar event, whatever verb it follows ("schedule a timer for 10 tonight").
+    if _NOT_A_CALENDAR_EVENT_RE.search(text):
+        return None
     raw_time = match.group("time")
-    target_time = _parse_spoken_time(raw_time)
-    if re.search(r"\b(?:tonight|this evening|in the evening|at night)\b", text, re.IGNORECASE) and not re.search(
-        r"[ap]\.?m\b", raw_time, re.IGNORECASE
-    ):
-        # "10 o'clock tonight" is 22:00, not the morning reading an unqualified "10 o'clock" gets, and "at 7 tonight" is no
-        # longer the "am or pm?" ambiguity a bare "at 7" is: the evening word answers it.
-        bare = re.fullmatch(r"(\d{1,2})(?::(\d{2}))?", raw_time.strip())
-        if target_time:
-            hour, minute = int(target_time[:2]), target_time[3:]
-        elif bare and int(bare.group(2) or 0) < 60:
-            hour, minute = int(bare.group(1)), f"{int(bare.group(2) or 0):02d}"
-        else:
-            hour, minute = 0, "00"
-        if 1 <= hour <= 11:
-            target_time = f"{hour + 12:02d}:{minute}"
-        elif hour == 12 and not re.search(r"\b(?:noon|midday)\b", raw_time, re.IGNORECASE):
-            return None        # "12 tonight" is midnight, tomorrow's date: not guessed - the turn goes on to the brain
-    return (title, target_time) if title and target_time else None
+    resolved = _resolve_daypart_time(raw_time, _parse_spoken_time(raw_time), text)
+    if resolved is None:
+        return None
+    target_time, day_offset = resolved
+    return (title, target_time, day_offset) if title and target_time else None
+
+
+_NOT_A_CALENDAR_EVENT_RE = re.compile(r"\b(?:timers?|alarms?|stopwatch|remind(?:ers?|s)?|remind\s+me)\b", re.IGNORECASE)
+_NIGHT_RE = re.compile(r"\b(?:tonight|night)\b", re.IGNORECASE)
+_EVENING_RE = re.compile(r"\bevening\b", re.IGNORECASE)
+_MORNING_RE = re.compile(r"\bmorning\b", re.IGNORECASE)
+
+
+def _raw_hour_minute(raw: str) -> tuple[int, int] | None:
+    """The hour and minute AS SPOKEN ("two o'clock" -> 2, never the afternoon reading), or None when it is not a plain hour."""
+    s = re.sub(r"\s+", " ", (raw or "").strip().lower().replace(".", ""))
+    m = re.match(rf"^(?P<h>{_HOUR_WORD_RE})(?: (?P<mw>thirty|fifteen|forty[- ]?five))? ?(?:o'? ?clock)?$", s)
+    if m:
+        minutes = {"thirty": 30, "fifteen": 15, "forty five": 45, "fortyfive": 45}
+        return _HOUR_WORDS[m.group("h")], minutes.get((m.group("mw") or "").replace("-", " "), 0)
+    m = re.match(r"^(\d{1,2})(?::(\d{2}))? ?(?:o'? ?clock)?$", s)
+    if m and int(m.group(2) or 0) < 60:
+        return int(m.group(1)), int(m.group(2) or 0)
+    return None
+
+
+def _resolve_daypart_time(raw_time: str, parsed: str, text: str) -> tuple[str, int] | None:
+    """``(HH:MM, day_offset)`` for a time the words place in a part of the day, ``(parsed, 0)`` when they do not, ``None`` when
+    the time cannot be placed (the turn is not claimed as a create).
+
+    No am/pm and no noon/midday in the time itself, then the day-part word decides the 12-hour reading:
+    * tonight / night: 6-11 -> that hour in the evening, TODAY ("11 tonight" 23:00); 12 and 1-5 are the small hours - they
+      are the NEXT date's 00:00-05:00 ("2 o'clock tonight" is not 14:00 today), offset +1.
+    * evening: 1-11 -> pm ("5 this evening" 17:00); 12 is not an evening time (None).
+    * morning: 1-11 -> am AS SPOKEN ("3 o'clock in the morning" 03:00, not the afternoon reading a bare o'clock gets); 12 None.
+    Anything else (explicit am/pm, noon, midday, 24-hour, no day-part word) is left to ``_parse_spoken_time``."""
+    if re.search(r"[ap]\.?m\b|noon|midday", raw_time, re.IGNORECASE):
+        return parsed, 0
+    night, evening, morning = bool(_NIGHT_RE.search(text)), bool(_EVENING_RE.search(text)), bool(_MORNING_RE.search(text))
+    if not (night or evening or morning):
+        return parsed, 0
+    if sum((night, evening, morning)) > 1:
+        return None                                            # "tomorrow morning ... tonight": contradictory, ask
+    hm = _raw_hour_minute(raw_time)
+    if hm is None:
+        return (parsed, 0) if parsed else None                # unplaceable
+    hour, minute = hm
+    if not 1 <= hour <= 12:
+        return (f"{hour:02d}:{minute:02d}", 0) if hour <= 23 else None      # 24-hour ("18:30 tonight")
+    if night:
+        if 6 <= hour <= 11:
+            return f"{hour + 12:02d}:{minute:02d}", 0
+        return f"{hour % 12:02d}:{minute:02d}", 1
+    if evening:
+        return (f"{hour + 12:02d}:{minute:02d}", 0) if hour < 12 else None
+    return (f"{hour:02d}:{minute:02d}", 0) if hour < 12 else None
 
 
 def _calendar_create_notime_from_text(message: str, context: dict[str, Any] | None) -> str | None:
@@ -1651,9 +1692,9 @@ def classify_skybridge_intent(
         return SkybridgeIntent(domain="calendar", action="edit_event", target_text=calendar_edit)
     calendar_create = _calendar_create_from_text(raw_message, context)
     if calendar_create:
-        title, target_time = calendar_create
+        title, target_time, day_offset = calendar_create
         parsed_range = _calendar_date_from_text(text, _today())
-        start = parsed_range[1] if parsed_range else _context_calendar_date(context)
+        start = (parsed_range[1] if parsed_range else _context_calendar_date(context)) + timedelta(days=day_offset)
         return SkybridgeIntent(domain="calendar", action="create_event", title=title, target_time=target_time, range_label=start.isoformat(), start_date=start, end_date=start)
     calendar_create_notime = _calendar_create_notime_from_text(raw_message, context)
     if calendar_create_notime:
@@ -1690,7 +1731,11 @@ def classify_skybridge_intent(
         list_type = _list_type_from_text(text)
         action = "overview" if re.search(r"\blists\b", text) else "show"
         return SkybridgeIntent(domain="lists", action=action, list_type=list_type)
-    if not write_led and _CALENDAR_KEYWORD_RE.search(text):
+    # A command-shaped CREATE ("schedule a meeting at midnight", "book a lunch at half past twelve tonight") whose time the
+    # parser above could not place is not a calendar READ either: the bare "schedule" keyword used to answer it with today's
+    # events. It goes on to the brain, which can ask.
+    create_led = _command_shaped(raw_message, _CREATE_VERBS) is not None
+    if not write_led and not create_led and _CALENDAR_KEYWORD_RE.search(text):
         today = _today()
         parsed_range = _calendar_date_from_text(text, today)
         if parsed_range is not None:
@@ -1865,6 +1910,24 @@ def _unsure_floor(intent: SkybridgeIntent, message: str = "") -> float | None:
     return value if value > 0 else None
 
 
+_CALENDAR_NOUN_RE = re.compile(
+    rf"\b(?:calendar|events?|appointments?|bookings?|meetings?|calls?|{_EVENT_NOUNS[3:-1]}|(?:my|the)\s+schedule)\b", re.IGNORECASE)
+
+
+def _has_calendar_noun(message: str) -> bool:
+    """A calendar NOUN in the words (meeting / appointment / event / booking / lunch / dinner / call ... / "my schedule"), not
+    merely the verb "schedule": "schedule a timer for 10 tonight" has none. Timer / alarm / reminder phrasing never counts."""
+    text = message or ""
+    return bool(_CALENDAR_NOUN_RE.search(text)) and not _NOT_A_CALENDAR_EVENT_RE.search(text)
+
+
+def _head_names_calendar(decision: dict[str, Any]) -> bool:
+    """The router head's top class (or its non-chat shortlist) is calendar: a low-confidence verdict for some OTHER domain
+    (timers, music, people ...) is not "unsure about the calendar"."""
+    shortlist = decision.get("shortlist") if isinstance(decision.get("shortlist"), (list, tuple)) else ()
+    return str(decision.get("head_top") or "") == "calendar" or "calendar" in {str(c) for c in shortlist}
+
+
 def skybridge_router_gate(
     message: str,
     intent: SkybridgeIntent,
@@ -1944,6 +2007,8 @@ def skybridge_router_gate(
         and intent.action == "create_event"
         and intent.target_time
         and not intent.all_day
+        and _head_names_calendar(decision)
+        and _has_calendar_noun(message)
     ):
         # "schedule a meeting for 10 o'clock tonight" (live 2026-10-14): the parser read a create verb, an event noun AND a
         # clock time, and the router fell under its low-confidence floor (chat @ 0.65) - it did not say "this is chat", it said
