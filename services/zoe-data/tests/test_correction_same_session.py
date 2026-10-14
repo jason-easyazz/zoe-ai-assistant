@@ -107,9 +107,10 @@ class FakeSvc:
         return self.rows[row_id]
 
 
-def row(rid, text, user=MEMBER, session=SESSION, age_s=60):
+def row(rid, text, user=MEMBER, session=SESSION, age_s=60, excerpt=MISHEARD_TURN):
+    """``excerpt``: the member's own words the row was mined from (``source_excerpt``)."""
     return SimpleNamespace(id=rid, text=text, metadata={"user_id": user, "status": "approved", "session_id": session,
-                                                         "added_ts": time.time() - age_s})
+                                                         "added_ts": time.time() - age_s, "source_excerpt": excerpt})
 
 
 def test_the_same_members_row_of_this_session_is_superseded_with_provenance():
@@ -123,6 +124,75 @@ def test_the_same_members_row_of_this_session_is_superseded_with_provenance():
 
 def test_another_sessions_row_is_untouched():
     svc = FakeSvc([row("r1", "User manages a pike shop.", session="voice-panel-older")])
+    assert asyncio.run(ca.maybe_fix_recent(CORRECTION, MEMBER, SESSION, svc=svc)) is None
+    assert svc.edits == []
+
+
+# ── codex review #2058: a clause is not a value; a row must derive from the corrected value ──────────────────────
+
+FREE_TURN = "I'm free today if you want to catch up about the garden"
+CLAUSE_CONTRASTS = [
+    "Actually, the meeting is tomorrow, not today",                  # the reviewer's case
+    "Actually the meeting's tomorrow, not today",
+    "No, I said I'd call her tomorrow, not today",
+    "Actually she's coming tomorrow, not today",
+    "Sorry, we're meeting tomorrow, not today",
+    "Wait, the plumber comes tomorrow, not today",
+    "Actually the kids want pizza today, not pasta",
+    "No, the dog needs a walk today, not food",
+    "Actually, today is busy, not free",
+    "I meant the meeting moved, not today",
+    "Actually it has to be tomorrow, not today",
+    "No, I want to go tomorrow, not today",
+    "Actually, tomorrow afternoon, not today",                       # two words against one: not the same shape
+    "Sorry, I think tomorrow, not today",
+]
+
+
+@pytest.mark.parametrize("text", CLAUSE_CONTRASTS)
+def test_a_clause_shaped_contrast_is_not_a_correction(text):
+    assert ca.correction_pair(text) is None
+
+
+@pytest.mark.parametrize("text", CLAUSE_CONTRASTS)
+def test_a_clause_shaped_contrast_changes_no_row(monkeypatch, text):
+    async def history(user_id, session_id, current):
+        return [FREE_TURN]
+
+    monkeypatch.setattr(ca, "_recent_user_messages", history)
+    svc = FakeSvc([row("r1", "User is free today.", excerpt=FREE_TURN)])
+    assert asyncio.run(ca.maybe_fix_recent(text, MEMBER, SESSION, svc=svc)) is None
+    assert svc.edits == [] and svc.rows["r1"].text == "User is free today."
+    assert ca.correct_fact(MEMBER, SESSION, "User is free today.", FREE_TURN) is None
+
+
+@pytest.mark.parametrize("new,old,ok", [
+    ("bike shop", "pike shop", True), ("Perth", "Sydney", True), ("New York", "New Jersey", True), ("tomorrow", "today", True),
+    ("meeting is tomorrow", "today", False), ("tomorrow", "Perth", False), ("bike shop", "pike stall", False),
+    ("kids want pizza", "pasta", False), ("Tom's", "Sam's", False),
+])
+def test_same_shape(new, old, ok):
+    assert ca.same_shape(new, old) is ok
+
+
+def test_a_row_from_an_older_turn_is_untouched(monkeypatch):
+    """Same member, same session, recent, holds the old value - but it was mined from a turn three back, not one this
+    correction follows: a different statement that happens to use the same words."""
+    older = "my uncle used to run a pike shop by the river years ago"
+
+    async def history(user_id, session_id, current):
+        return [MISHEARD_TURN, "thanks Zoe that is lovely", older]
+
+    monkeypatch.setattr(ca, "_recent_user_messages", history)
+    svc = FakeSvc([row("r1", "User's uncle ran a pike shop.", excerpt=older)])
+    assert asyncio.run(ca.maybe_fix_recent(CORRECTION, MEMBER, SESSION, svc=svc)) is None
+    assert svc.edits == []
+    assert ca.correct_fact(MEMBER, SESSION, "User's uncle ran a pike shop.", older) is None
+
+
+def test_a_row_whose_own_words_never_held_the_value_is_untouched():
+    """The row's text holds the old phrase but the member's words it was mined from do not (a model paraphrase)."""
+    svc = FakeSvc([row("r1", "User manages a pike shop.", excerpt="I run the little place on the corner most days")])
     assert asyncio.run(ca.maybe_fix_recent(CORRECTION, MEMBER, SESSION, svc=svc)) is None
     assert svc.edits == []
 

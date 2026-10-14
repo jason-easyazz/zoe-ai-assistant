@@ -801,6 +801,8 @@ async def maybe_swap(text: str, user_id: str, session_id: str, *, svc=None) -> O
 
 RECENT_WINDOW_S = 30 * 60
 _MIN_CONTAIN_WORDS = 4
+# a correction refers to what the member JUST said: only the last two of their turns in the session are ones it may correct
+FIX_TURNS = 2
 _PENDING_MAX_KEYS = 256
 _PHRASE = r"[A-Za-z0-9][A-Za-z0-9'’\-]*(?:\s+[A-Za-z0-9][A-Za-z0-9'’\-]*){0,3}"
 _MARK = (r"(?:no|nope|actually|sorry|wait|oh|hang\s+on|correction|you\s+misheard(?:\s+me)?|i\s+said|i\s+meant|"
@@ -823,6 +825,35 @@ _PAIR_STOP = frozenset({"it", "that", "this", "so", "sure", "right", "wrong", "c
 _PAIR_BAD_HEAD = frozenset({"it", "it's", "that", "that's", "this", "he", "he's", "she", "she's", "they", "they're", "we", "we're",
                             "i", "i'm", "you", "you're", "there", "there's", "sure", "really", "yet", "quite", "too", "so", "very",
                             "just", "only", "even", "much", "that'll", "gonna", "going"})
+# a VALUE never carries a verb / auxiliary: "the meeting is tomorrow" is a clause, so "the meeting is tomorrow, not today" is not
+# a value swap (codex review, #2058 - it rewrote "User is free today" to "User is free meeting is tomorrow")
+_CLAUSE_WORDS = frozenset({"is", "isn't", "are", "aren't", "was", "wasn't", "were", "weren't", "be", "been", "being", "am", "will",
+                           "won't", "would", "wouldn't", "has", "hasn't", "have", "haven't", "had", "do", "does", "did", "don't",
+                           "doesn't", "didn't", "can", "can't", "could", "should", "shall", "may", "might", "must", "want", "wants",
+                           "need", "needs", "said", "say", "says", "think", "know", "like", "likes", "not", "to", "i'd", "i'll"})
+_TIME_RE = re.compile(r"^(?:today|tonight|tomorrow|yesterday|morning|afternoon|evening|night|noon|midnight|weekend|week|month|year|"
+                      r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun|"
+                      r"january|february|march|april|may|june|july|august|september|october|november|december|"
+                      r"am|pm|o'clock|\d[\d:.]*(?:am|pm|st|nd|rd|th)?)$")
+
+
+def _is_time(words: "list[str]") -> bool:
+    return any(_TIME_RE.match(w) for w in words)
+
+
+def same_shape(new: str, old: str) -> bool:
+    """The two halves of a value swap are the same KIND of thing: the same number of words (at most three), no verb or
+    auxiliary in either (a clause is never a value), both a time or neither, and a multi-word pair keeps one word in place
+    ("bike shop" / "pike shop", "New York" / "New Jersey") - a misheard or misspoken value, not two unrelated phrases. Pure."""
+    a = [w.replace("’", "'") for w in new.lower().split()]
+    b = [w.replace("’", "'") for w in old.lower().split()]
+    if not a or len(a) != len(b) or len(a) > 3:
+        return False
+    if any(w in _CLAUSE_WORDS or w.endswith("'s") for w in a + b):
+        return False
+    if _is_time(a) != _is_time(b):
+        return False
+    return len(a) == 1 or any(x == y for x, y in zip(a, b))
 
 
 def _norm(text: str) -> str:
@@ -857,6 +888,8 @@ def correction_pair(text: str) -> Optional[tuple[str, str]]:
                 continue
             if any(v.split()[0].lower().replace("’", "'") in _PAIR_BAD_HEAD for v in (new, old)):
                 continue          # "actually it's not sure yet": a clause, not a value
+            if not same_shape(new, old):
+                continue          # "actually, the meeting is tomorrow, not today": a clause against a token
             return new, old
     return None
 
@@ -898,8 +931,9 @@ def note_correction(user_id: str, session_id: str, new: str, old: str, utterance
         return
     key = _pending_key(user_id, session_id)
     entries = _live_pending(user_id, session_id)
+    recent = [e for e in earlier if (e or "").strip()][:FIX_TURNS]      # newest first: the turns this correction follows
     entries.append(_PendingCorrection(new, old, " ".join((utterance or "").split()),
-                                      tuple(_norm(e) for e in earlier if (e or "").strip()), time.time()))
+                                      tuple(_norm(e) for e in recent), time.time()))
     _PENDING[key] = entries[-8:]
     while len(_PENDING) > _PENDING_MAX_KEYS:
         _PENDING.pop(next(iter(_PENDING)))
@@ -925,17 +959,24 @@ def correct_fact(user_id: str, session_id: Optional[str], fact: str, turn_text: 
     apart from the in-process registry. Newest correction wins."""
     if not user_id or not session_id or _is_unidentified(user_id) or not fact or not turn_text:
         return None
-    turn = _norm(turn_text)
     for p in reversed(_live_pending(user_id, session_id)):
-        # the same turn, give or take what the lane trimmed (own_words) or appended; a SHORT earlier turn ("ok") is never
-        # matched by containment - it would make any later turn that happens to contain it look earlier
-        if not any(turn == e or (min(len(turn.split()), len(e.split())) >= _MIN_CONTAIN_WORDS and (turn in e or e in turn))
-                   for e in p.earlier if e):
+        if not _derives_from(turn_text, p.earlier):
             continue
         rx = _phrase_re(p.old)
         if rx.search(fact) and rx.search(turn_text):
             return _swap_phrase(fact, p.old, p.new), p.utterance
     return None
+
+
+def _derives_from(turn_text: str, earlier: "tuple[str, ...]") -> bool:
+    """``turn_text`` is one of the (normalised) turns a correction followed - the same turn, give or take what the lane trimmed
+    (own_words) or appended. A SHORT turn ("ok") is never matched by containment: it would make any later turn that happens
+    to contain it look earlier."""
+    turn = _norm(turn_text)
+    if not turn:
+        return False
+    return any(turn == e or (min(len(turn.split()), len(e.split())) >= _MIN_CONTAIN_WORDS and (turn in e or e in turn))
+               for e in earlier if e)
 
 
 def _is_unidentified(user_id: Optional[str]) -> bool:
@@ -970,7 +1011,9 @@ async def maybe_fix_recent(text: str, user_id: str, session_id: str, *, svc=None
                 return None
         except Exception:  # noqa: BLE001
             pass
-        note_correction(user_id, session_id, new, old, text, await _recent_user_messages(user_id, session_id, text))
+        earlier = await _recent_user_messages(user_id, session_id, text)
+        note_correction(user_id, session_id, new, old, text, earlier)
+        just_said = tuple(_norm(e) for e in earlier if (e or "").strip())[:FIX_TURNS]
         if svc is None:
             from memory_service import get_memory_service
 
@@ -990,6 +1033,11 @@ async def maybe_fix_recent(text: str, user_id: str, session_id: str, *, svc=None
             except (TypeError, ValueError):
                 added = 0.0
             if now - added > RECENT_WINDOW_S or not old_re.search(r.text or ""):
+                continue
+            # the row must DERIVE from the value being corrected: its evidence (the member's own words it was mined from) is one
+            # of the turns this correction follows AND states the old value - never a blind swap of a word some other fact uses
+            excerpt = str(meta.get("source_excerpt") or "")
+            if not old_re.search(excerpt) or not _derives_from(excerpt, just_said):
                 continue
             hits.append(r)
         if not hits or len(hits) > SWAP_MAX_ROWS:
