@@ -492,8 +492,12 @@ each file's docstring.
   SWD (get a probe first); the public key is also a security hole in the stock device.
 - **Speaker gate on recordings** (the section-5 machinery applied to a recording instead of a live segment) and a
   **reviewed → promoted** path into the memory admission gate. Until then the table is read by nothing.
+  **Designed 2026-10-14:** [`memories-space.md`](memories-space.md) — per-line You / Someone-else tagging at
+  transcription time (ResNet34 + a pendant enrolment), the desktop/touch Pendant section, and the **day review**
+  (candidates with exact evidence spans, from the owner's own speech, mentioned on the next turn, written only on
+  approval). Docs only; nothing built.
 - **Live-stream / ambient (sections 4a-6)** and push-to-talk (B9.7).
-- A UI for the recordings (today: API only).
+- A UI for the recordings (today: API only) — designed in [`memories-space.md`](memories-space.md) §2.4 (desktop Pendant tab first, P2).
 
 ### 4.10 Firmware update (NOT done by this PR — an owner decision) and the codec question
 
