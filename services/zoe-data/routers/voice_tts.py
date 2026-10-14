@@ -6321,52 +6321,71 @@ def _brain_prewarm_on_wake_enabled() -> bool:
 
 
 async def _prewarm_brain_for_panel(panel_id: str) -> None:
-    """On wake-word, spawn the panel's likely (user, session) brain worker so the
-    first turn doesn't pay the Pi subprocess cold-start. Fully best-effort and
-    backgrounded — must never delay or break the wake acknowledgement.
+    """On wake-word, warm what the first turn would otherwise pay for cold. Fully
+    best-effort and backgrounded - must never delay or break the wake acknowledgement.
 
-    Resolves the user the way voice_command will without a claim (the fresh panel
-    session it mirrors in bound_user_id > recent; never the panel's last signed-in
-    member); if the user is unknown the worker key would miss the real turn, so we
-    skip rather than spawn a wasted process.
+    Runs on EVERY wake, identified or not. Identity decides only the member-scoped
+    half (below); it is never a precondition for the warm itself:
+
+    * The brain's cacheable prefix (system prompt + tool block) is the same bytes for
+      every user and session - the member's words, memory and persona ride the user
+      message behind it - so ``zoe_flue_client.warm_kv_prefix`` loads it into llama-server's
+      one slot with an explicit-guest throwaway turn. This is what hides the ~2.7k-token cold
+      prefill (TTFT ~4.8 s cold vs ~1.1-1.7 s warm). Live lane only.
+    * The core (Pi) worker is keyed on (user, session): warmed for the member of a FRESH
+      panel session, else for ``guest`` - the same key the turn's ``effective_user`` gets
+      (``_resolve_fresh_panel_member``, never the panel's last signed-in member). Only
+      spawned when the core lane can serve; the Flue lane never reads it.
+    * A member's facts cache is warmed only for a member. A guest has no memory to warm
+      and nothing about a member is ever read on a guest's behalf.
+
+    Nothing here refreshes a PIN or voice session (only a turn's own identity does, #2034).
     """
     try:
         if not _brain_prewarm_on_wake_enabled():
             return
+        from brain_dispatch import failover_enabled, use_flue_brain
+        flue_lane = use_flue_brain()
+        _t0 = time.monotonic()
+        # Started FIRST: it needs neither a session nor an identity, so nothing below (a session lookup, the
+        # identity read) can lose the wake its warm. Never raises; detached from this coroutine's own failures.
+        kv_task = None
+        if flue_lane:
+            import zoe_flue_client
+            kv_task = asyncio.ensure_future(zoe_flue_client.warm_kv_prefix())
         session_id = _get_or_create_voice_session(panel_id)
-        user_id = _real_user_or_none(
+        member = _real_user_or_none(
             (_VOICE_SESSIONS.get(panel_id) or {}).get("bound_user_id")
         ) or ""
-        if not user_id:
-            user_id = await _resolve_fresh_panel_member(panel_id) or ""
-        if not user_id:
-            return
-        import zoe_core_client
-        _t0 = time.monotonic()
-        # Warm the brain worker (subprocess spawn) AND the user's facts cache
-        # concurrently, during the speech window. The cold facts read is ~1.4s and
-        # otherwise lands on the turn's critical path before the brain's first token;
-        # warming it here (cache TTL now outlives wake→turn) hides it on the first turn.
-        _pw = await asyncio.gather(
+        if not member:
+            member = await _resolve_fresh_panel_member(panel_id) or ""
+        jobs: dict[str, Any] = {}
+        if kv_task is not None:
+            jobs["kv"] = kv_task
+        if (not flue_lane) or failover_enabled():
+            import zoe_core_client
             # voice_mode=True: warm the SAME (voice-capped) worker the voice turn
             # will use, so prewarm actually hides the cold subprocess boot.
-            zoe_core_client.prewarm(user_id, session_id, voice_mode=True),
-            _voice_brain_memory(user_id),
-            return_exceptions=True,
-        )
-        warmed = _pw[0] if not isinstance(_pw[0], BaseException) else False
+            jobs["worker"] = zoe_core_client.prewarm(member or "guest", session_id, voice_mode=True)
+        if member:
+            # The cold facts read is ~1.4s and otherwise lands on the turn's critical path
+            # before the brain's first token; the cache TTL now outlives wake->turn.
+            jobs["facts"] = _voice_brain_memory(member)
+        if not jobs:
+            return
+        _res = await asyncio.gather(*jobs.values(), return_exceptions=True)
+        _got = {k: (None if isinstance(v, BaseException) else v) for k, v in zip(jobs, _res)}
         _ms = int((time.monotonic() - _t0) * 1000)
-        # INFO (not debug): the only way to know on-device whether the spawn
-        # actually overlaps the speech window — if this logs AFTER the turn's
-        # first token, prewarm bought nothing and the cost is elsewhere (prefill).
+        # INFO (not debug): the only way to know on-device whether the warm actually
+        # overlaps the speech window. `user` names the member only; a guest is "guest".
         logger.info(
-            "voice/wake brain prewarm panel=%s user=%s warmed=%s spawn_ms=%d",
-            panel_id, user_id, warmed, _ms,
+            "voice/wake brain prewarm panel=%s user=%s warmed=%s kv=%s spawn_ms=%d",
+            panel_id, member or "guest", _got.get("worker"), _got.get("kv"), _ms,
         )
     except Exception as exc:  # never let prewarm affect the wake path
         # debug, not warning: a boot-time race (wake fires before zoe-core is up)
         # would otherwise warn on every turn until the core settles. The INFO
-        # success line above (with spawn_ms) is the real signal — its ABSENCE
+        # success line above (with spawn_ms) is the real signal - its ABSENCE
         # already tells us prewarm isn't completing.
         logger.debug("voice/wake brain prewarm failed (non-fatal): %s", exc)
 
