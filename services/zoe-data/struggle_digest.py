@@ -20,6 +20,9 @@ from struggle_detector import STORE_TIMEOUT_S, get_backend, mode
 
 logger = logging.getLogger("struggle_detector")
 
+#: the most rows one report reads (newest first); a report that hits it says so (``truncated``) instead of undercounting silently
+ROW_LIMIT = 20000
+
 _FIX_HINT = {
     sig.FIX_ROUTER_TRAINING: "add router training examples for this phrasing (Phase 3 self-train feed)",
     sig.FIX_ROUTER_LATENCY: "the two-stage router timed out or failed; check the router sidecar latency",
@@ -70,19 +73,21 @@ async def digest(*, viewer_id: Optional[str] = None, user_ids: Optional[list[str
     ``user_ids`` limits the rows (None = everyone; ``["guest"]`` = guest rows). Example words only from ``viewer_id``'s own
     rows (and never a guest's: guest rows hold none)."""
     t = time.time() if now is None else now
-    rows = await get_backend().rows(t - days * 86400.0, user_ids)
+    rows = await get_backend().rows(t - days * 86400.0, user_ids, limit=ROW_LIMIT)
     by_signal: dict[str, int] = {}
     for r in rows:
         by_signal[r["signal"]] = by_signal.get(r["signal"], 0) + 1
-    return {"days": days, "total": len(rows), "by_signal": dict(sorted(by_signal.items())),
-            "clusters": cluster(rows, viewer_id=viewer_id, top=top), "mode": mode()}
+    return {"days": days, "total": len(rows), "truncated": len(rows) >= ROW_LIMIT,
+            "by_signal": dict(sorted(by_signal.items())), "clusters": cluster(rows, viewer_id=viewer_id, top=top),
+            "mode": mode()}
 
 
 def summary_line(report: dict[str, Any]) -> str:
     """``STRUGGLE_SUMMARY window=… total=N signals=RE_ASK:2,… top=signal/domain:n,…`` - counts only, never words."""
     sigs = ",".join(f"{k}:{v}" for k, v in report.get("by_signal", {}).items()) or "-"
     top = ",".join(f"{c['signal']}/{c['domain']}:{c['count']}" for c in report.get("clusters", [])[:3]) or "-"
-    return f"STRUGGLE_SUMMARY window={report.get('days')}d total={report.get('total', 0)} signals={sigs} top={top}"
+    more = "+" if report.get("truncated") else ""
+    return f"STRUGGLE_SUMMARY window={report.get('days')}d total={report.get('total', 0)}{more} signals={sigs} top={top}"
 
 
 async def log_nightly_summary(days: float = 1.0) -> Optional[str]:

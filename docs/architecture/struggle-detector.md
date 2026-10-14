@@ -67,9 +67,9 @@ JSON reason codes. Suggested fix types: `router_training`, `router_latency`, `ca
 
 ## Privacy
 
-* A member's row may carry `summary` = the normalised, PII-scrubbed (`memory_service.scrub_pii`) user words, <= 160
+* A member's row may carry `summary` = the PII-scrubbed (`memory_service.scrub_pii`, on the RAW words) display form (lower case, wake word stripped, never folded, so a forget's name pattern finds it) of the user words, <= 160
   chars - never Zoe's reply. It is the same text `chat_messages` already keeps for that member.
-* No words for: guests; off-the-record / distress turns (`memory_provenance.is_off_record`); turns naming a forgotten
+* No words for: guests (and a voice turn whose speaker the gate REJECTED, recorded as a guest's); a turn queued before a forget of that user (before a delete it is not recorded at all); off-the-record / distress turns (`memory_provenance.is_off_record`); turns naming a forgotten
   entity (tombstone + `memory_forgotten.matches`); a pair across two identities; any lookup failure.
 * Reports show example words only from the VIEWER's own rows (admin endpoint, CLI, morning line). Another member's
   words never appear in anyone else's report; guest rows have none to show.

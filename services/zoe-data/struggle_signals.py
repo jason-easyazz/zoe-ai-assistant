@@ -80,7 +80,7 @@ VERBOSE_MAX_QUESTION_TOKENS = 12
 
 _WAKE_RE = re.compile(
     r"^\s*(?:(?:a|ah|uh|um+|hey|hi|hello|ok|okay|oi)[\s,.!]+)?(?:zoe|zoey|zoie|zowie|zoë)\b[\s,.!?:;-]*", re.IGNORECASE)
-_WAKE_TAIL_RE = re.compile(r"[\s,]+(?:zoe|zoey|zoie|zoë)[\s.!?]*$", re.IGNORECASE)
+_WAKE_TAIL_RE = re.compile(r"[\s,]+(?:zoe|zoey|zoie|zoë)$", re.IGNORECASE)   # applied to a rstripped, 12-char tail only
 _FILLER_ONLY = frozenset({"", "a", "ah", "uh", "um", "umm", "hey", "hi", "hello", "ok", "okay", "oi", "hmm", "mm"})
 
 _CONTRACTIONS = (
@@ -208,7 +208,15 @@ def strip_wake(text: str) -> str:
         if new == t:
             break
         t = new
-    return _WAKE_TAIL_RE.sub("", t).strip()
+    body = t.rstrip(" \t\n.!?")
+    head, tail = body[:-12], body[-12:]          # a bounded tail: no regex ever scans a long run of whitespace
+    return (head + _WAKE_TAIL_RE.sub("", tail)).strip() if _WAKE_TAIL_RE.search(tail) else t.strip()
+
+
+def display(text: str) -> str:
+    """The words as a member's struggle row keeps them: wake word stripped, lower case, whitespace collapsed - NOT folded
+    (no plural / contraction rewriting), so a forget's name pattern still finds "james" or "o'brien" in it."""
+    return re.sub(r"\s+", " ", strip_wake(text).replace("’", "'").lower()).strip()
 
 
 def normalise(text: str) -> str:
@@ -350,6 +358,7 @@ class Turn:
     latency_ms: Optional[int] = None
     stt_ms: Optional[int] = None
     interrupted: bool = False
+    started: Optional[float] = None    # when the turn began (the router's note), if known; ``ts`` is when it finished
 
     def domain(self) -> str:
         return self.predicted_domain if self.predicted_domain not in _NON_DOMAINS else ""
@@ -621,9 +630,10 @@ def detect(prev: Optional[Turn], cur: Turn, *, window_s: float = DEFAULT_WINDOW_
         return events
     if prev.user_id != cur.user_id and cur.channel != "voice":
         return events
-    gap = cur.ts - prev.ts
-    if gap < 0:
+    # the pause the user took: from the END of the previous turn (its reply done) to the START of this one when known
+    if cur.ts < prev.ts:
         return events
+    gap = max(0.0, (cur.started if cur.started is not None else cur.ts) - prev.ts)
     fb = _feedback_kind(cur.text) if gap <= CORRECTION_WINDOW_S else None
     if fb:
         events.append(Event(NEGATIVE_FEEDBACK, 0.95 if fb != "complaint" else 0.85, _pair_fix(prev), cur, prev, [fb],

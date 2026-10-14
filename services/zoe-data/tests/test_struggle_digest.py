@@ -182,3 +182,14 @@ def test_main_registers_the_report_router():
     src = (Path(__file__).resolve().parents[1] / "main.py").read_text()
     assert "from routers.struggles import router as struggles_router" in src
     assert "app.include_router(struggles_router)" in src
+
+
+
+async def test_a_report_that_hits_the_row_limit_says_so(monkeypatch, fresh):
+    monkeypatch.setattr(dg, "ROW_LIMIT", 2)
+    now = time.time()
+    fresh.data = [{"id": str(i), "ts": now - i, "user_id": A, "signal": "RE_ASK", "summary": "", "is_guest": 0}
+                  for i in range(5)]
+    rep = await dg.digest(viewer_id=A, user_ids=[A])
+    assert rep["total"] == 2 and rep["truncated"] is True
+    assert "total=2+" in dg.summary_line(rep)
