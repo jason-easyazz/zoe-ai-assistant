@@ -193,14 +193,29 @@ class _FakeBgTask:
     """Task-shaped stub: voice_tts._bg_task calls add_done_callback on the
     ensure_future result, so the fake must not return None."""
 
-    def add_done_callback(self, _cb):
-        return None
+    def add_done_callback(self, cb):
+        # A finished task runs its done-callbacks at once. Swallowing the callback left this stub in the process-wide
+        # ``voice_tts._BG_TASKS`` forever, and test_voice_lane_parity's ``asyncio.gather(*_BG_TASKS)`` then choked on it
+        # ("An asyncio.Future, a coroutine or an awaitable is required") whenever it ran after this file.
+        cb(self)
 
 
 def _close_coro_ensure_future(coro):
     if hasattr(coro, "close"):
         coro.close()
     return _FakeBgTask()
+
+
+def test_a_stubbed_bg_task_never_lingers_in_the_shared_registry(monkeypatch) -> None:
+    """Order-pollution pin: after ``_spawn_bg`` with the stubbed ensure_future the registry must be as it was found."""
+    before = set(voice_tts._BG_TASKS)
+    monkeypatch.setattr(voice_tts.asyncio, "ensure_future", _close_coro_ensure_future)
+
+    async def _noop():
+        return None
+
+    voice_tts._spawn_bg(_noop())
+    assert set(voice_tts._BG_TASKS) == before
 
 
 class _Db:

@@ -1454,5 +1454,60 @@
     "forget it"
    ]
   }
+ },
+ "mishear_clarify": {
+  "_note": "mishear_clarify.py (flag ZOE_MISHEAR_CLARIFY): the light 'what was that?' lines Zoe speaks instead of answering a short, feeling-shaped line whose speech-to-text looks unreliable (a mishearing of a command as an affect line, 2026-10-14). 'phrases' = the clarification, ALL ending in a question mark (the panel daemon then opens its follow-up window and tags the repeat prev_reply_question). 'cues' = extra explicit-emotion words/regexes ON TOP of the restraint 'affect' list, the distress hand-off and the risk-cue tier: any hit means the line is a possible disclosure and is ALWAYS answered. 'a lot' is deliberately NOT a cue. A language with no entry here gets no guard (inert).",
+  "reviewed": true,
+  "phrases": [
+   "Sorry, what was that?",
+   "Sorry, I didn't catch that. Say again?",
+   "Sorry, could you say that again?",
+   "I missed that. One more time?",
+   "Sorry, what did you say?"
+  ],
+  "cues": [
+   "awful",
+   "terrible",
+   "horrible",
+   "dreadful",
+   "exhausted",
+   "tired",
+   "drained",
+   "wiped out",
+   "down",
+   "low",
+   "not (?:ok|okay|alright|fine|great|good|well|myself)",
+   "struggling",
+   "hurting",
+   "hurt",
+   "lost",
+   "empty",
+   "alone",
+   "fed up",
+   "unwell",
+   "sick of",
+   "had enough",
+   "falling apart",
+   "breaking down",
+   "giving up",
+   "give up",
+   "can'?t (?:do this|take (?:it|this)|go on|cope|stop crying|sleep|breathe)",
+   "hate (?:myself|my life|everything)",
+   "too much",
+   "so much",
+   "hurts?",
+   "pain(?:s|ful)?",
+   "aching",
+   "aches?",
+   "sore",
+   "dizzy",
+   "nauseous",
+   "bleeding",
+   "crying",
+   "tears",
+   "worse",
+   "rough",
+   "overwhelm\\w*"
+  ]
  }
 }

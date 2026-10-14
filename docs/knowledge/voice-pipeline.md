@@ -1507,6 +1507,58 @@ new fields, and an old server ignores them, so the order is only a convenience.
   (same for `zoe_voice_announce.py`) and `systemctl --user restart zoe-voice`. A server rollback needs
   nothing on the Pi: an old server ignores the new fields.
 
+## Mishear clarification — "Sorry, what was that?" instead of a counsellor reply (flag-dark, 2026-10-14)
+
+**The failure (owner, 2026-10-14).** A short spoken device command was heard by Moonshine as a short feeling-shaped line (STT took
+1.47 s, unusually slow for the clip), routed to chat, and the brain answered it as a disclosure ("It sounds like you're carrying a heavy
+load ..."). The command was repeated 16 s later and worked. Nothing downstream can know the words were wrong; the only evidence is on the
+STT side. `ZOE_MISHEAR_CLARIFY=off|shadow|on` (default **off**; a typo is off) adds one pre-brain decision in `/api/voice/turn_stream`
+(`services/zoe-data/mishear_clarify.py`), right after the utterance gate and before the `voice:transcript` broadcast.
+
+**Which STT signals exist (read from the code).** Moonshine v2 (`moonshine-voice` 0.1.3) is called with `transcribe_without_streaming`. Its
+transcript lines carry `last_transcription_latency_ms` and `words`, but `words` (per-word `confidence`) is filled only with the optional
+attention decoder (`word_timestamps`) that this deployment does not load, and there is **no no-speech probability** anywhere. So no engine
+confidence is readable. What a turn has is: the STT wall time (`t_stt`), the clip length (the WAV header) and the transcript.
+
+| Signal | Rule | Evidence (1,497 short turns in `~/.zoe-voice/voice_stt.jsonl`, replays + live) |
+|---|---|---|
+| `slow_stt` | `t_stt >= 1.0 s` AND `t_stt / clip >= 0.6` AND (with 3+ earlier turns known) ratio >= 2.5x the recent median | ratio p50 0.19, p90 0.35, p99 0.52, so 0.6 is above p99; fires on ~0.4% of short turns. The relative clause is a load guard: a box where every turn is slow clarifies nobody |
+| `sparse` | clip >= 2 s, <= 0.5 words/s, ratio >= 0.4 | a long recording that produced almost no words |
+| NOT signals | words/s alone (p5 = 0.49), a missing final full stop (24% of short live lines) | measured, far too common |
+
+**When it clarifies** (every one is a veto on its own; the default and every doubt is *answer normally*): flag on; a real,
+unspeculative, un-merged turn; at most 5 words and a language with a `mishear_clarify` lexicon entry (en, es; others are inert);
+an unreliable-STT signal; no explicit emotional cue (distress hand-off at any tier, restraint classes affect / health / grief /
+family conflict, the risk-cue tier, plus the lexicon's own `cues` — "I'm really stressed about work" is never clarified);
+feeling-shaped (first-person or a "feel" lead, not a question); no deterministic owner (conversation opener / ender, a keyword
+intent, a Skybridge card, a goodbye, a "what's up" pull, a spoken mute); the router says **chat** (a tool domain or an unavailable
+router answers); Zoe did not just ask a question (`prev_reply_question`); and the previous turn on that panel was not itself a
+clarification. **One clarification in a row**: the next turn on the panel (within 90 s) is answered whatever it is.
+
+**What it does.** Speaks one varied line from the lexicon (`phrases`; every one ends in `?`) through the Kokoro sidecar and returns
+a normal done frame. Because the reply is a question the daemon's existing follow-up window opens and tags the repeat
+`prev_reply_question` — no daemon change. The garbled line is never broadcast to the panel UI, never saved, never reaches memory.
+No TTS audio means no clarification (the turn is answered as today). The router verdict computed on the way is handed to
+`voice_command` (`_router_decision` / `_router_text`) so the rare "answer" turn does not route twice.
+
+**Metric line** (one per short turn, never any transcript text; grep `MISHEAR_CLARIFY` in `~/.zoe-logs/zoe-data.app.log`):
+`MISHEAR_CLARIFY mode=on decision=clarify reason=unreliable words=4 clip=1.60 stt=1.47 ratio=0.92 base=0.20 signals=slow_stt lang=en routed=chat window=-`.
+`reason` is `reliable`, `unreliable`, `repeat`, `answers_question`, `disclosure:<tier>`, `command:<owner>`, `not_feeling_shaped`,
+`router_unavailable`, `no_lexicon`. Use `ZOE_MISHEAR_CLARIFY=shadow` first: it logs `decision=would_clarify` and answers as today.
+Tune from those lines before flipping to `on`; the constants are at the top of the module.
+
+**Cost.** Measured (warm micro-benchmark, Orin, `nice -n 10`): flag off **2.1 us** per turn (one env read); flag on, any long or ordinary turn **10-11 us** p50 (word count, ratio, deque update); the full path for the rare short + slow turn **~1.0 ms** p50 (lexicon tiers, keyword intent, Skybridge classifier, router stubbed). The router itself is the existing call, made once and handed to `voice_command` instead of twice. A clarified turn skips the brain and TTS of a long reply, so it answers sooner than the turn it replaces. (A cold first full-path call in a fresh process took 2.0 s: module imports, already resident in the server.)
+
+**Found on the way.** `routers/voice_tts.py` used `wave` without importing it, so `_wav_duration_seconds` swallowed a `NameError` and
+`audio_duration_seconds` in `voice_stt.jsonl` was `null` on every live turn; fixed (one import), pinned by a test.
+
+**Not covered, and the replay gate.** The blocking `/voice/turn` lane and the LiveKit lane (the panel's real lane is `/turn_stream`). The
+replay harness takes STT from `/api/voice/transcribe` and runs the router, `fast_tiers` and the brain in-process, so it never enters
+`/turn_stream` and cannot exercise this guard at all: with the flag off the route is byte-identical (pinned: no new payload keys, same
+frames, no state), so said-vs-did and per-stage speed are unchanged by construction. The guard is judged from its own metric lines
+(`shadow` first) and the live panel, not from the corpus. Pinned by `services/zoe-data/tests/test_mishear_clarify.py` (`ci_safe`, a
+paired negative control for each behaviour).
+
 ## Smart Turn v3 end-of-turn scorer (LiveKit lane)
 
 `services/zoe-data/voice_turn.py` wraps pipecat's `smart-turn-v3.2-cpu.onnx`
