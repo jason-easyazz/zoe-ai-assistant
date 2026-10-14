@@ -607,3 +607,33 @@ async def test_a_finished_profile_must_name_its_model_it_is_never_assumed_legacy
     assert len(rows(world)) == 1                                               # only the fixture's legacy row
     out = await enrol(monkeypatch, world, dict(embedding_base64=vec, model_id="resemblyzer"))      # negative control: named -> stored
     assert out["ok"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode, refused", [("resnet34", True), ("dual", False), ("resemblyzer", False)])
+async def test_browser_audio_enrolment_is_refused_only_when_resnet34_acts(monkeypatch, world, mode, refused):
+    """Codex P2 on #2024: the settings page uploads audio with no model_id. In resnet34 mode that would store a Resemblyzer
+    profile nobody uses and report success - refuse it and point at the panel. dual / default keep the old behaviour."""
+    from fastapi import HTTPException
+    from routers import voice_tts
+    monkeypatch.setenv("ZOE_SPEAKER_MODEL", mode)
+    monkeypatch.setattr(voice_tts, "_compute_resemblyzer_embedding", lambda path: np.asarray(at_cos(0.7), dtype=np.float32).tobytes())
+    world.db.conn.execute("DELETE FROM speaker_profiles")
+    world.db.conn.commit()
+    body = dict(audio_base64=base64.b64encode(b"RIFF....WAVE").decode())
+    browser = dict(source="session", user_id="jason", role="admin")
+    if refused:
+        with pytest.raises(HTTPException) as e:
+            await enrol(monkeypatch, world, body, caller=browser)
+        assert e.value.status_code == 409 and "learn my voice" in e.value.detail and "nothing was stored" in e.value.detail
+        assert rows(world) == []
+    else:                                                                       # negative control: the same upload is stored
+        out = await enrol(monkeypatch, world, body, caller=browser)
+        assert out["ok"] and [r[1] for r in rows(world)] == [sm.LEGACY_MODEL_ID]
+
+
+@pytest.mark.asyncio
+async def test_resnet34_mode_still_accepts_the_panels_finished_profile(monkeypatch, world):
+    monkeypatch.setenv("ZOE_SPEAKER_MODEL", "resnet34")
+    out = await enrol(monkeypatch, world, dict(embedding_base64=_b64(at_cos(0.8)), model_id=R34, sample_count=5))
+    assert out["ok"] and out["model_id"] == R34

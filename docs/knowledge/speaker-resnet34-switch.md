@@ -93,7 +93,7 @@ Model steps on the Jetson hold `/tmp/zoe-voice-harness.lock`, run `nice -n 10`, 
 3. **Migrate, then deploy zoe-data:** `bash scripts/deploy/migrate.sh` (0051, additive, rerun-safe) BEFORE the restart - the new queries read
    `model_id`. Still nothing changes: the flag is unset.
 4. **Deploy the daemon:** `bash scripts/setup/deploy-pi-voice.sh` (it now also ships `zoe_speaker_resnet34.py`, the artifacts JSON and
-   `fetch_speaker_models.sh`). Replay-gate it as any voice-path change (`scripts/maintenance/voice_regression_probe.py` under the harness lock).
+   `fetch_speaker_models.sh`). Its verification reads the daemon's speaker state FAIL-CLOSED: in `resnet34` it waits (`RESNET34_READY_TIMEOUT_S`, 45 s) for `ready`; a daemon reporting a different mode than `.env.voice` configures fails; an unreadable state passes only when `.env.voice` proves the legacy mode. Replay-gate it as any voice-path change (`scripts/maintenance/voice_regression_probe.py` under the harness lock).
 5. **Turn on `dual`** on both hosts (`ZOE_SPEAKER_MODEL=dual` in zoe-data's env and the Pi's `.env.voice`; restart both). On the Pi,
    `curl -s localhost:7777/health` must show `speaker_resnet34: ready` (otherwise `refused: <reason>`).
 6. **Re-enrol at the panel - no ssh, no command.** Recordings are not kept, so a Resemblyzer profile cannot be converted; a fresh sitting is
@@ -101,7 +101,7 @@ Model steps on the Jetson hold `/tmp/zoe-voice-harness.lock`, run `nice -n 10`, 
    moments (after a PIN step-up, at the close of a conversation), or the member says "Zoe, learn my voice". She says what is kept (a voice
    signature, not recordings), asks for 5 short phrases in the normal voice, re-asks a clip that sounds unlike the rest, and stores one
    profile per model from the same clips; a "no" is respected. `zoe_enroll_flow.py voice --user ... --name ...` is the hand-run equivalent.
-   Done when `GET /api/voice/profiles` lists both model ids for the member.
+   Done when `GET /api/voice/profiles` lists both model ids for the member. In `resnet34` mode the settings page's audio enrolment is refused (409, "say 'Zoe, learn my voice' to the panel", nothing stored): a Resemblyzer profile would never be used.
 7. **Compare for a week:** label `truth` on the shadow rows (the W5 review: the member id who spoke, or `none` for a non-enrolled voice), then
    `python3 scripts/voice/speaker_dual_compare.py ~/.zoe-voice/speaker_shadow_metrics.jsonl --legacy-threshold 0.82` (aggregates only:
    TA / FR / FA per model and the ResNet34 added ms). Re-derive both length-group thresholds on the labelled household turns (the real-channel

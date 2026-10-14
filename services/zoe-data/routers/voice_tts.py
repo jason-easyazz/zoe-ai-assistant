@@ -6774,6 +6774,11 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
             clips = 1
         embedding_bytes = finished_profile
     else:
+        if speaker_models.acting_model() != speaker_models.LEGACY_MODEL_ID:
+            # ZOE_SPEAKER_MODEL=resnet34: a Resemblyzer profile from uploaded audio would be stored and reported as success yet
+            # never recognise anyone (the acting model is ResNet34, built only on the panel). Refuse, and say where to go.
+            raise HTTPException(status_code=409, detail="Voice profiles are now built at the panel: say \"Zoe, learn my voice\" "
+                                                        "to the panel (nothing was stored).")
         if not b64:
             raise HTTPException(status_code=400, detail="audio_base64 or embedding_base64 is required")
         if model_id != speaker_models.LEGACY_MODEL_ID:

@@ -1585,7 +1585,12 @@ async function uploadEnrollment() {
         consent: document.getElementById('enroll-consent').checked,
       }),
     });
-    if (!r.ok) throw new Error('Enroll failed');
+    if (!r.ok) {
+      // the server says WHY (e.g. 409: profiles are built at the panel when ZOE_SPEAKER_MODEL=resnet34) - show it, do not hide it
+      let detail = '';
+      try { detail = (await r.json()).detail || ''; } catch (_) { /* not JSON */ }
+      throw new Error(detail || 'Enroll failed');
+    }
     const data = await r.json();
     document.getElementById('enroll-status').textContent =
       data.message || `Sample ${enrollSamples} enrolled. ${enrollSamples < 3 ? 'Record again for better accuracy.' : 'Done!'}`;
@@ -1596,7 +1601,7 @@ async function uploadEnrollment() {
     toast('Voice sample uploaded', 'success');
   } catch (e) {
     toast('Enrollment failed: ' + e.message, 'error');
-    document.getElementById('enroll-status').textContent = 'Failed — please try again';
+    document.getElementById('enroll-status').textContent = e.message && e.message !== 'Enroll failed' ? e.message : 'Failed — please try again';
   }
 }
 

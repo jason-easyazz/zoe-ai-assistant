@@ -244,20 +244,38 @@ echo "    /health answers"
 
 # The speaker model must be READY when it is the acting one (ZOE_SPEAKER_MODEL=resnet34): /health answers even when the ResNet34
 # embedder was refused (missing file, pin or self-test drift), so the deploy reads its state - bounded wait - and fails on not-ready.
-# dual: ResNet34 is shadow-only, so not-ready is reported loudly but does not fail. A daemon without the field is the default mode.
-speaker_state="$(rssh "cd ${PI_DAEMON_DIR} && ${PI_VENV}/bin/python3 zoe_speaker_resnet34.py --health-state ${health_url} ${RESNET34_READY_TIMEOUT_S}" 2>/dev/null | grep '^SPEAKER_STATE ' | tail -n 1)" || speaker_state=""
-read -r _ speaker_model speaker_rn34 <<<"${speaker_state:-SPEAKER_STATE resemblyzer off}"
-case "$speaker_model" in
-  resnet34)
-    [ "$speaker_rn34" = "ready" ] \
-      || fail_verify "ZOE_SPEAKER_MODEL=resnet34 but speaker_resnet34 is '${speaker_rn34}' after ${RESNET34_READY_TIMEOUT_S}s - the acting speaker model cannot run (fetch_speaker_models.sh verify)"
-    echo "    speaker model resnet34: ready" ;;
-  dual)
-    if [ "$speaker_rn34" = "ready" ]; then echo "    speaker model dual: resnet34 ready (shadow)"
-    else echo "    WARNING: speaker model dual, resnet34 is '${speaker_rn34}' - shadow scoring is OFF until fixed (Resemblyzer still acts)"; fi ;;
-  *)
-    echo "    speaker model: ${speaker_model:-resemblyzer}" ;;
+# dual: ResNet34 is shadow-only, so not-ready is reported loudly but does not fail. FAIL-CLOSED: when the daemon's state cannot be
+# read (ssh hiccup, helper import error, no SPEAKER_STATE line, daemon unreachable) the deploy passes ONLY if the Pi's configured
+# ZOE_SPEAKER_MODEL (.env.voice) proves the legacy mode; a daemon that reports a different mode than the one configured also fails.
+cfg_raw="$(rssh "printf 'CFG_OK '; grep -E '^[[:space:]]*(export[[:space:]]+)?ZOE_SPEAKER_MODEL=' ${PI_DAEMON_DIR}/.env.voice 2>/dev/null | tail -n 1 | cut -d= -f2-" 2>/dev/null)" || cfg_raw=""
+case "$cfg_raw" in
+  CFG_OK*)
+    cfg_val="$(printf '%s' "${cfg_raw#CFG_OK}" | tr -d "\"' \t\r" | tr '[:upper:]' '[:lower:]')"
+    case "$cfg_val" in dual|resnet34) cfg_mode="$cfg_val" ;; *) cfg_mode="resemblyzer" ;; esac ;;
+  *) cfg_mode="unreadable" ;;
 esac
+speaker_state="$(rssh "cd ${PI_DAEMON_DIR} && ${PI_VENV}/bin/python3 zoe_speaker_resnet34.py --health-state ${health_url} ${RESNET34_READY_TIMEOUT_S}" 2>/dev/null | grep '^SPEAKER_STATE ' | tail -n 1)" || speaker_state=""
+speaker_model=""; speaker_rn34=""
+read -r _ speaker_model speaker_rn34 <<<"$speaker_state" || true
+if [ -z "$speaker_state" ] || [ "$speaker_model" = "unknown" ]; then
+  [ "$cfg_mode" = "resemblyzer" ] \
+    || fail_verify "could not read the daemon's speaker-model state (configured ZOE_SPEAKER_MODEL: ${cfg_mode}) - cannot prove the speaker model runs"
+  echo "    speaker model: resemblyzer (configured; the daemon's state was unreadable)"
+elif [ "$cfg_mode" != "unreadable" ] && [ "$speaker_model" != "$cfg_mode" ]; then
+  fail_verify "the daemon reports speaker model '${speaker_model}' but .env.voice configures '${cfg_mode}' - the restart did not pick up the configuration"
+else
+  case "$speaker_model" in
+    resnet34)
+      [ "$speaker_rn34" = "ready" ] \
+        || fail_verify "ZOE_SPEAKER_MODEL=resnet34 but speaker_resnet34 is '${speaker_rn34}' after ${RESNET34_READY_TIMEOUT_S}s - the acting speaker model cannot run (fetch_speaker_models.sh verify)"
+      echo "    speaker model resnet34: ready" ;;
+    dual)
+      if [ "$speaker_rn34" = "ready" ]; then echo "    speaker model dual: resnet34 ready (shadow)"
+      else echo "    WARNING: speaker model dual, resnet34 is '${speaker_rn34}' - shadow scoring is OFF until fixed (Resemblyzer still acts)"; fi ;;
+    *)
+      echo "    speaker model: ${speaker_model}" ;;
+  esac
+fi
 
 local_md5="$(cd "${SRC_DIR}" && md5sum "${SHIPPED_FILES[@]}" | sort -k2)"
 remote_md5="$(rssh "cd ${PI_DAEMON_DIR} && md5sum ${SHIPPED_FILES[*]}" | sort -k2)" \
