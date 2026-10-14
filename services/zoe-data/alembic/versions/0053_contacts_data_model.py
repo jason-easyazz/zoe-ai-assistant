@@ -1,4 +1,4 @@
-"""0052 - the contacts data model (``contacts_store.py``, ``routers/contacts.py``; design ``docs/architecture/contacts-data-model.md``).
+"""0053 - the contacts data model (``contacts_store.py``, ``routers/contacts.py``; design ``docs/architecture/contacts-data-model.md``).
 
 ADDITIVE. Five new tables, four nullable/defaulted columns on ``person_important_dates``, and NO change to ``people`` or
 ``person_relationships``: a deploy that has not run this migration degrades to "the contacts routes are off" (the router is
@@ -45,7 +45,7 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0052"
+revision = "0053"
 down_revision = "0050"
 branch_labels = None
 depends_on = None

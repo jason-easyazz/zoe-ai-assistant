@@ -12,7 +12,7 @@ stored anywhere new):
   * ``proactive_candidates``- deleted (derived, rebuilt nightly from loops / moments / events)
   * ``people``              - the row is SOFT-deleted (``deleted = 1``, the row and its history are kept),
                               and the person's current relationship edges are CLOSED (``valid_to``)
-  * ``contacts``            - the contact model (migration 0052, ``contacts_store.forget_entity``): the person's contact fields,
+  * ``contacts``            - the contact model (migration 0053, ``contacts_store.forget_entity``): the person's contact fields,
                               source-contact links, synced dates and merge reviews are DELETED, any other field or review that
                               names them too, and their synced source cards become content-free tombstones the next sync skips
   * ``voiceprints``         - the voiceprint the member's Omi tagging taught Zoe for that person (``learned_voiceprints``,
@@ -72,7 +72,7 @@ class CascadeResult:
     candidates: int = 0
     people: int = 0
     edges: int = 0
-    contacts: int = 0       # contact-model rows removed / tombstoned (0052)
+    contacts: int = 0       # contact-model rows removed / tombstoned (0053)
     voiceprints: int = 0    # learned voiceprints erased
     person_ids: list[str] = field(default_factory=list)
     closed_at: str = ""

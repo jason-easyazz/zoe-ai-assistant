@@ -1,6 +1,6 @@
-"""The contacts data model (migration 0052, ``contacts_store.py``, ``contacts_vcard.py``, ``routers/contacts.py``).
+"""The contacts data model (migration 0053, ``contacts_store.py``, ``contacts_vcard.py``, ``routers/contacts.py``).
 
-Real SQLite built by running the REAL 0052 upgrade over the people-graph tables; no fakes for the storage engine. Every person, number
+Real SQLite built by running the REAL 0053 upgrade over the people-graph tables; no fakes for the storage engine. Every person, number
 and address here is invented (``example.org`` / ``555``). Covers: migration up/down/rerun + one head; back-compat with the legacy
 single-value columns; multi-value fields round-tripping through the store and vCard; the merge model (strong-identifier link,
 name-only / several-candidate / identifier-conflict -> review item, never a silent merge or a duplicate); member-private visibility;
@@ -35,7 +35,7 @@ from forgotten_support import ledger_env  # noqa: F401 - fixture
 pytestmark = pytest.mark.ci_safe
 
 SVC = Path(__file__).resolve().parents[1]
-MIG = SVC / "alembic/versions/0052_contacts_data_model.py"
+MIG = SVC / "alembic/versions/0053_contacts_data_model.py"
 VCF = (SVC / "tests/fixtures/contacts/invented.vcf").read_text()
 A, B = "demo_contacts_a", "demo_contacts_b"
 
@@ -63,7 +63,7 @@ CREATE TABLE person_important_dates (
 
 
 def _mod():
-    spec = importlib.util.spec_from_file_location("mig_0052", MIG)
+    spec = importlib.util.spec_from_file_location("mig_0053", MIG)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod

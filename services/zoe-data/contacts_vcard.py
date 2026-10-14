@@ -23,7 +23,7 @@ from __future__ import annotations
 import re
 from typing import Any, Iterable, Optional
 
-PRODID = "-//Zoe//contacts 0052//EN"
+PRODID = "-//Zoe//contacts 0053//EN"
 
 #: vCard RELATED ``TYPE`` values (RFC 6350 section 6.6.6) the reader accepts.
 RELATED_TYPES = frozenset({"contact", "acquaintance", "friend", "met", "co-worker", "colleague", "co-resident", "neighbor", "child",

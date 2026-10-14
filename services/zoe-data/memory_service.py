@@ -2056,7 +2056,7 @@ class MemoryService:
                 await omi_recordings.forget_user(user_id)
             except Exception:  # noqa: BLE001
                 pass
-            try:   # ... and their contact model (migration 0052): synced cards, links, reviews, fields, learned voiceprints
+            try:   # ... and their contact model (migration 0053): synced cards, links, reviews, fields, learned voiceprints
                 import contacts_store
                 await contacts_store.forget_user(user_id)
             except Exception:  # noqa: BLE001 - logged at ERROR inside; the palace rows ARE gone either way

@@ -44,7 +44,7 @@ _SATELLITE_TABLES = (
 )
 
 
-# The contact model (migration 0052): owner-scoped rows that hang off a person. Re-pointed only where the tables exist
+# The contact model (migration 0053): owner-scoped rows that hang off a person. Re-pointed only where the tables exist
 # (probed from the catalog BEFORE the merge transaction - a failing probe would poison an open Postgres transaction).
 _CONTACT_REPOINTS = (
     ("contact_fields", "UPDATE contact_fields SET person_id=$1 WHERE person_id=$2 AND user_id=$3",
@@ -64,7 +64,7 @@ async def _contact_tables_present(db) -> bool:
             "SELECT COUNT(*) = 2 FROM sqlite_master WHERE type = 'table' AND name IN ('contact_fields', 'learned_voiceprints')",
             (),
         )
-    except Exception:  # noqa: BLE001 - cannot tell: the merge goes on without the contact re-point, as before 0052
+    except Exception:  # noqa: BLE001 - cannot tell: the merge goes on without the contact re-point, as before 0053
         return False
     return bool(rows) and bool(rows[0][0])
 
@@ -207,7 +207,7 @@ async def merge_person(db, user_id: str, source_id: str, target_id: str, *,
     async def _apply() -> tuple[dict, int, int]:
         repointed: dict[str, int] = {}
 
-        # ── 2b. The contact model (0052): fields, links, reviews; the voiceprint the member's tagging taught. A voiceprint is
+        # ── 2b. The contact model (0053): fields, links, reviews; the voiceprint the member's tagging taught. A voiceprint is
         # never AVERAGED across a merge (a wrong merge must not poison it): the survivor keeps its own for a model, the
         # duplicate's moves only where the survivor has none, and the colliding leftover is erased.
         if contacts_present:

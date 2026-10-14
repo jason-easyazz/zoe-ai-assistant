@@ -2,7 +2,7 @@
 
 The contact card of one of the CALLER's own people (layer 2 of the identity design, section 5.5): multi-value fields with their
 provenance, dates, relationships, links to synced source contacts; a vCard 4.0 export; a .vcf import that runs the merge model; and
-the merge-review queue. Store: ``../contacts_store.py``; migration 0052; design ``docs/architecture/contacts-data-model.md``.
+the merge-review queue. Store: ``../contacts_store.py``; migration 0053; design ``docs/architecture/contacts-data-model.md``.
 
     GET    /api/contacts/people/{person_id}           the card (404 for anyone else's person, family-visible or not)
     GET    /api/contacts/people/{person_id}/vcard     text/vcard; charset=utf-8

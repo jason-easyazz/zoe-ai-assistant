@@ -392,8 +392,8 @@ Found while building and replaying `struggle_detector.py` (`docs/architecture/st
 
 ## Contacts data model findings (2026-10-14, feature/contacts-sync-schema)
 
-Found while building migration `0052` / `contacts_store.py` (`docs/architecture/contacts-data-model.md`).
+Found while building migration `0053` / `contacts_store.py` (`docs/architecture/contacts-data-model.md`).
 
 - **2026-10-14** · People dates · `correction_apply` updates `person_important_dates` in place; on a synced (`read_only = 1`) date a member's correction should be a new member row beside it, not an overwrite of the provider's value · `services/zoe-data/correction_apply.py:186` · next contacts PR (owner question C2) · a test that corrects a synced birthday and still finds both rows
 - **2026-10-14** · Forget cascade · "forget <name>" soft-deletes the person row but leaves `person_activities` / `person_gift_ideas` / `person_bucket_list` attached to it (pre-existing; the contact model's own rows are now erased) · `memory_forget_cascade.py` people step · next forget PR · a cascade test that seeds each satellite and finds none naming the person afterwards
-- **2026-10-14** · Migration numbering · `0052_contacts_data_model` chains onto `0050` while #2024 holds `0051` and the calendar-sync worker adds one too; whichever lands later re-points its `down_revision` (the one-head tests go red until it does) · `services/zoe-data/alembic/versions/` · the second lander · `test_revision_chain_has_exactly_one_head` green on main
+- **2026-10-14** · Migration numbering · three open PRs each chain a migration onto `0050`: #2024 `0051` (speaker model id), #2059 `0052` (calendar data model), #2061 `0053` (contacts data model). Revision ids are distinct; whichever lands second (and third) re-points its `down_revision` onto the one that landed (the one-head tests go red until it does) · `services/zoe-data/alembic/versions/` · each later lander · `test_revision_chain_has_exactly_one_head` green on main

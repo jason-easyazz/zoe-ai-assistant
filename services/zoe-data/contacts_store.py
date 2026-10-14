@@ -1,4 +1,4 @@
-"""The contacts data model's store (migration 0052; design ``docs/architecture/contacts-data-model.md``).
+"""The contacts data model's store (migration 0053; design ``docs/architecture/contacts-data-model.md``).
 
 A Zoe person (``people``) is the node. Around it, in the OWNING MEMBER's layer (identity design section 5.5, layer 2):
 

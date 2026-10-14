@@ -1,7 +1,7 @@
 ---
 type: Architecture / design
 title: "The contacts data model: where synced contacts live and how they join Zoe's people knowledge (design + build, 2026-10-14)"
-status: BUILT (storage + minimal API, flag-dark). Migration 0052, contacts_store.py, contacts_vcard.py, routers/contacts.py (ZOE_CONTACTS_API, default off). No sync engine (that is the connectors work). Nothing live changes until the migration runs and the flag is turned on.
+status: BUILT (storage + minimal API, flag-dark). Migration 0053, contacts_store.py, contacts_vcard.py, routers/contacts.py (ZOE_CONTACTS_API, default off). No sync engine (that is the connectors work). Nothing live changes until the migration runs and the flag is turned on.
 date: 2026-10-14
 description: A member's contacts from Google, Microsoft/Outlook, Apple/CardDAV, a phone export, an introduction or an Omi tag land in one standards-aligned card model (RFC 6350 vCard 4.0 / RFC 9553 JSContact) around the existing people node, in that member's own private layer, with provenance on every field. One Zoe person links to many source contacts; an ambiguous merge is a review item, never a silent merge. Dates feed the existing birthday store, relationships the existing people graph, learned voiceprints the owner's Omi decision. "Forget <name>" removes all of it, through the audited cascade.
 evidence_labels: "[src] read in this worktree (origin/main 8c144cc7e) | [branch] read from an unmerged branch (#2029 abilities, #2051 memories space) | [doc] an official specification or API reference, linked | [proposal] a choice made here"
@@ -15,7 +15,7 @@ evidence_labels: "[src] read in this worktree (origin/main 8c144cc7e) | [branch]
   CONTACT CARD and where it came from: `contact_fields` (multi-value fields), `contact_sources` (one per member per
   account), `source_contacts` (each external card as last seen), `person_contact_links` (one person, many source cards)
   and `contact_merge_reviews` (the member settles what Zoe is not sure of). Plus `learned_voiceprints` for the Omi
-  tagging decision. Migration **0052**, additive.
+  tagging decision. Migration **0053**, additive.
 - **No second store for what already has one.** Birthdays and anniversaries go to `person_important_dates` (the birthday
   trigger's feed), relationships to `person_relationships` (the people graph, through `people_graph.insert_edge`).
 - **Private by default.** Every row is keyed by the owning member and every read filters on it. A person Zoe creates from
@@ -90,7 +90,7 @@ Not mapped (counted in a vCard import's `unmapped`, ignored from APIs): `GENDER`
 `userDefined` / `clientData` / `coverPhotos`, Graph `initials` / `fileAs` / `yomiCompanyName`. Each is one row in this
 table and one `kind` in the CHECK when a member needs it.
 
-## 3. The data model (migration 0052)
+## 3. The data model (migration 0053)
 
 ```
 contact_sources     (id, user_id, provider CHECK IN (local,google,microsoft,carddav,phone,introduction,omi_tag),
@@ -236,7 +236,7 @@ gate, with five guardrails (`memories-space.md` section 2.6 [branch]). What this
 | same, the next sync | the tombstoned card is not re-imported (`import_card` returns `forgotten`); a RE-CREATED card for the person (a new external id) is refused by the forget ledger (`memory_forgotten.ledger_pattern`: salted hashes, no names) and tombstoned; any other incoming card loses the entries that name them (a note, a RELATED line) before anything is stored | `contacts_store.is_forgotten_external`, `contacts_store.forgotten_pattern` in `import_card` |
 | a step that fails | recorded in `CascadeResult.failed`, the forget is NOT confirmed, a durable retry marker is left (no name); the retry re-runs the step from the ledger's hash pattern | existing cascade machinery; both steps find their person rows themselves, so a failed `people` step never makes them "succeed" over nothing |
 | member erase (`MemoryService.delete_user`) | every row the member owns in the six tables, and their synced dates | `contacts_store.forget_user` |
-| person row hard-deleted | `contact_fields`, links, reviews, voiceprints by `ON DELETE CASCADE` | 0052 FKs |
+| person row hard-deleted | `contact_fields`, links, reviews, voiceprints by `ON DELETE CASCADE` | 0053 FKs |
 | the member removes one field | that field, unless it is synced (`read_only`) | `contacts_store.remove_field` |
 | a re-sync of a card | that card's previous fields and dates (replaced) | `contacts_store._apply_source_card` |
 
@@ -265,7 +265,7 @@ Built for it, not built here:
 
 ## 11. Migration and back-compat plan
 
-1. **0052 is additive** (`down_revision` = the head at push time; one head, pinned by a test). It creates the tables and
+1. **0053 is additive** (`down_revision` = the head at push time; one head, pinned by a test). It creates the tables and
    adds four columns to `person_important_dates`; existing dates read as `source = 'local'`, `read_only = 0`. Rerun-safe
    on PostgreSQL and SQLite (`IF NOT EXISTS`, inspector check for columns). The downgrade drops what it added (lossy by
    design: synced data is re-fetched by the next sync).
@@ -305,7 +305,7 @@ Open (for the owner; none blocks the storage):
 
 ## 13. Verification
 
-`services/zoe-data/tests/test_contacts_data_model.py` (ci_safe, invented data, real SQLite built by the real 0052): migration
+`services/zoe-data/tests/test_contacts_data_model.py` (ci_safe, invented data, real SQLite built by the real 0053): migration
 up / rerun / down and one head; CHECK refusals; vCard parse of the invented fixture
 (`tests/fixtures/contacts/invented.vcf`), lossless round trip, UTF-8-safe folding, RFC 9554 7-component N + phonetic;
 store round trip through export and Zoe-UID relink; per-source replace + read-only refusal; strong-identifier link;

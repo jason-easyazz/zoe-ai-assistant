@@ -2284,7 +2284,7 @@ from routers import omi_recordings as _omi_router  # noqa: E402
 _omi_router.register(app)
 
 # Contact cards (flag-dark): the member's own multi-value contact fields with provenance, vCard export/import and the merge-review
-# queue (migration 0052, contacts_store.py). Mounted ONLY when ZOE_CONTACTS_API is on — flag off = 404. No sync engine.
+# queue (migration 0053, contacts_store.py). Mounted ONLY when ZOE_CONTACTS_API is on — flag off = 404. No sync engine.
 from routers import contacts as _contacts_router  # noqa: E402
 _contacts_router.register(app)
 
