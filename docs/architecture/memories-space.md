@@ -4,8 +4,8 @@ title: "The Memories space: what Zoe knows about me, caregiver-curated memories,
 status: DESIGN for the owner. Docs only. No code, flag, table, route or live path changed. Phase 1 (the Memories tile and a read-only view) is being built in parallel on feature/touch-memories-space; section 2.1 is the contract that build follows. Every later phase ships flag-dark and shadow-first. Nothing is decided until the owner answers section 11.
 date: 2026-10-14
 owner: W6 / program B9 (Omi), B3 (visible, sound memory), B4 (identity)
-description: The Ask Zoe tile on the touch estate becomes Memories. It is one space, with a desktop counterpart, that holds four things. (1) What Zoe knows about the identified member, with provenance and voice-first correction. (2) Memories a parent or a nominated carer curates for a young child or a forgetful older relative. (3) The member's Omi pendant recordings, with each line tagged You or Someone else and a way to say who someone else was. (4) The day review. When a day's pendant recordings are transcribed and tagged, Zoe proposes calendar events, list items, reminders, follow-ups and conversation memories. They come only from the owner's own speech or things said to them, and each carries an exact evidence span. On the owner's next turn Zoe says "I went through your day: 2 meetings, 3 things for the shopping list ...". Never unprompted. Nothing is written until the owner approves it.
-evidence_labels: "[src] read in this worktree (origin/main 8c144cc7e) | [branch] read from unmerged PR #2024 | [proposal] a design choice made here | [unverified] not measured or confirmed"
+description: The Ask Zoe tile on the touch estate becomes Memories. It is one space, with a desktop counterpart, that holds four things. (1) What Zoe knows about the identified member, with provenance and voice-first correction. (2) Memories a parent or a nominated carer curates for a young child or an older relative who wants help remembering. (3) The member's Omi pendant recordings, with each line tagged You or Someone else and a way to say who someone else was. (4) The day review. When a day's pendant recordings are transcribed and tagged, Zoe proposes calendar events, list items, reminders, follow-ups and conversation memories. They come only from the owner's own speech or things said to them, and each carries an exact evidence span. On the owner's next turn Zoe says "I went through your day: 2 meetings, 3 things for the shopping list ...". Never unprompted. Nothing is written until the owner approves it.
+evidence_labels: "[src] read in this worktree (origin/main 8c144cc7e) | [2024] read from PR #2024 (merged as e1923262e after this design began; re-checked on origin/main) | [proposal] a design choice made here | [unverified] not measured or confirmed"
 ---
 
 # The Memories space (design, 2026-10-14)
@@ -17,8 +17,8 @@ Owner requests, 2026-10-14. Gist, with the verbatim parts in quotes:
   of, and a conversation with <a person> to remember etc."
 - Earlier: see the Omi transcripts somewhere, and "can Zoe tell when it's me talking" in those recordings.
 - "get rid of the Ask Zoe shortcut in the touch screen menu and replace it with Memories. In there we can see what
-  Zoe knows about the user; it could be where we populate memories for young kids so they know, or older family
-  members who might be forgetful; in there we could have an Omi section — review recordings, tag people, which then
+  Zoe knows about the user; it could be where we populate memories for young kids so they know, or for older family
+  members who want help remembering; in there we could have an Omi section — review recordings, tag people, which then
   could create a contact and start populating information about them."
 
 This doc is read with, and does not repeat:
@@ -27,7 +27,7 @@ This doc is read with, and does not repeat:
   section 0.4 is the consent posture; section 5 has the legal notes.
 - [identity-presence-engine.md](identity-presence-engine.md): the assurance levels (§3), the crowded-room cell (§7),
   visitor introductions and consent (§5.2), and the three-layer people model (§5.5).
-- `docs/knowledge/speaker-resnet34-switch.md` [branch: it lands with PR #2024, open at the time of writing]: `model_id`, 5-clip
+- `docs/knowledge/speaker-resnet34-switch.md` [2024]: `model_id`, 5-clip
   enrolment, the thresholds.
 - [night-mind.md](../knowledge/night-mind.md) and [night-window.md](../knowledge/night-window.md): the
   "model points, code decides" extraction pattern, the 12B window and its budget.
@@ -91,7 +91,7 @@ Every example below is invented. No household data appears in this doc.
 | Pendant ownership | `omi_devices.py`, migration 0047, `ZOE_OMI_DEVICE_OWNERS` (off): the registry names each pendant's owner; per-member views of own rows only; no admin override on content. |
 | "Nothing reads the table" | `tests/test_omi_recordings.py::test_nothing_else_reads_pendant_transcripts`, a static allow-list of the modules naming the table. Every reader this design adds must be added there, by name. |
 | Transcription gate | night window (02:30-04:30 clock or `WINDOW_OPEN`), a voice turn in the last 45 s, `ZOE_OMI_MIN_MEM_MB` (1500). Moonshine in ~20 s chunks cut at the quietest 100 ms (`chunk_pcm`), silent chunks skipped. |
-| Speaker models | Resemblyzer is acting today; the server can embed with it (torch, ~360 MB RSS, lazy; `voice_speaker_id.py`). ResNet34 INT8 is flag-dark on #2024 (OPEN): it runs on the Pi, "the server never loads this model", and `speaker_profiles.model_id` keeps the models apart (migration 0051 on that branch). zoe-data already runs onnxruntime 1.23.2 in-process (Silero VAD `voice_vad.py`, Smart Turn). |
+| Speaker models | Resemblyzer is acting today; the server can embed with it (torch, ~360 MB RSS, lazy; `voice_speaker_id.py`). ResNet34 INT8 landed flag-dark with #2024 (`ZOE_SPEAKER_MODEL`, default `resemblyzer`): it runs on the Pi, "the server never loads this model", and `speaker_profiles.model_id` keeps the models apart (migration 0051). zoe-data already runs onnxruntime 1.23.2 in-process (Silero VAD `voice_vad.py`, Smart Turn). |
 | Voice session | `voice_session.py` (`ZOE_VOICE_SESSION`, off): a verified ResNet34 voice opens member scope on one panel; a different or unverified voice closes it; `voice_card` frames carry one member's rows to `panel_<id>` only, rendered by `js/touch-voice-session.js`. |
 | No unprompted speech | `brief_first_turn.py` (`ZOE_BRIEF_ON_FIRST_TURN`): a `[Today]` block on the first brain turn of the morning. `proactive/selector.py` (`ZOE_PROACTIVE_SELECTOR`): `proactive_candidates`, a `[RAISE]` block on an open turn. `proactive/pull.py` (`ZOE_PULL_NOT_PUSH`, default on): "what's up?" delivers the queue, and the orb's count state shows something is pending. |
 | Memories API | `GET /api/memories/` (own approved rows; each row carries `memory_type`, `origin`, `authority_class`), `GET /review`, `POST /{id}/review` (approve / reject / edit; own rows only, an admin acts as operator), `POST /proposals`, `GET /people`, `GET /user-model`, `GET /export`, `POST /users/{id}/forget`. Gated by `require_feature_access(feature="memories")`. |
@@ -99,7 +99,8 @@ Every example below is invented. No household data appears in this doc.
 | Authority | `memory_authority.py`: "the user approving a candidate" is `user_confirmed` (rank 5). |
 | Forget | `memory_forget_cascade.py` already calls `omi_recordings.erase_entity`. `forget_user` tombstones a member's recordings. |
 | Roles | zoe-auth `UserRole`: admin, user, family_member, child, guest. There is NO caregiver relation today. |
-| Touch launcher | `touch/home.html` `DESTS` holds `{id:'ask', n:'Ask Zoe', ...}`. The `ask` surface (`FULL.ask`, `askZoe()`) is also the in-place answer renderer for the command bar and for voice. |
+| Touch launcher | `touch/home.html` `DESTS` holds `{id:'ask', n:'Ask Zoe', ...}`. The `ask` surface (`FULL.ask`, `askZoe()`) is also the in-place answer renderer for the command bar and for voice, and it holds the **Talk** button (`#talkBtn`) for conversation mode. |
+| Desktop memories | `dist/memories.html` exists ("Memories Intelligence"), with the XSS harness `dist/test_notes_memories_xss.js`. P2 extends it. |
 
 ## 2. The Memories space
 
@@ -108,6 +109,12 @@ Every example below is invented. No household data appears in this doc.
 - **Touch.** In `DESTS`, replace `{id:'ask', ...}` with `{id:'memories', n:'Memories', ic:'memories', ...}`. Keep
   `FULL.ask`, `askZoe()` and the `ask` entry in the surface `ORDER`: the command bar falls through to `askZoe`
   [src home.html `askZoe(q)`], and voice answers render there. Only the launcher shortcut goes.
+  - Add an `LIC.memories` icon path: `DESTS` renders `LIC[d.ic]`, and an unknown key renders an empty icon.
+  - The **Talk** button for conversation mode (`#talkBtn`) lives on the Ask surface. Removing the tile removes its
+    only tap path, so Phase 1 must keep Talk reachable: a Talk control on the Memories surface's header, or on the
+    home dock. The spoken "let's talk" and `?conv=1` paths are unchanged.
+  - Run the estate's no-browser harnesses that parse `home.html` as text (`services/zoe-ui/AGENTS.md`), including
+    `dist/test_touch_conversation_mode.js` and `dist/test_touch_orb_and_dock.js`.
 - **Identity.** The surface reads `GET /api/memories/?status=approved` with the panel's session.
   - A **fresh member PIN sign-in** shows that member's rows.
   - A **guest session** shows only "Sign in to see what I know about you", with a tap that opens the estate's own
@@ -124,8 +131,8 @@ Every example below is invented. No household data appears in this doc.
 - **Read-only.** No edit or forget buttons in Phase 1. A spoken "forget that" or "that's wrong" already works
   through the existing intents, and the view refreshes on the next open.
 - **No on-screen keyboard.** No text input appears on the surface (the touch contract in `services/zoe-ui/AGENTS.md`).
-- **Desktop** is a separate product. Its "What Zoe knows about me" view goes in `memories.html` (P2), and no link
-  crosses between the two.
+- **Desktop** is a separate product. Its "What Zoe knows about me" view **extends the existing `memories.html`**
+  (P2), keeping `dist/test_notes_memories_xss.js` green, and no link crosses between the two.
 
 ### 2.2 "What Zoe knows about me"
 
@@ -144,9 +151,11 @@ Every example below is invented. No household data appears in this doc.
   | `curator` (new, §2.3) | "Added by <name>" |
   | model classes (rank 0-1) | "I worked this out", with a softer style. These are the rows most worth correcting. |
 
-- **Voice-first actions.** "Zoe, forget that" acts on the row the surface last highlighted. That is the
-  `memory_provenance.mark_explained` "next turn" hook, extended so that a tapped row counts as explained.
-  "That's wrong, it's a bottle shop" goes through the existing correction path (`correction_apply`), at the
+- **Voice-first actions.** "Zoe, forget that" acts on the row the surface last highlighted. This needs new work:
+  `memory_provenance.mark_explained` today is next-turn only, session-bound and lives 300 s. A tap arrives over
+  HTTP, so a small bridge records "tapped row R on panel P for member M" and lets the next spoken turn **of the same
+  member on the same panel within 60 s** treat it as "that". Any other turn in between clears it.
+  "That's wrong, swimming is on Saturday" goes through the existing correction path (`correction_apply`), at the
   member's own authority. A tap on a row opens two choices: **Forget** (confirm inline, no browser dialog) and
   **Fix on my phone**. Free text is never typed on the panel: "Fix on my phone" opens the phone handoff (QR, or the
   Telegram "send to my phone" link from `auth_handoff`) to the desktop page's edit view.
@@ -154,7 +163,7 @@ Every example below is invented. No household data appears in this doc.
   lands) `voices_heard >= 2`, the surface swaps to "You're not alone. I've hidden your memories", and one tap sends
   the view to the phone.
 
-### 2.3 Caregiver-curated memories (young children, forgetful relatives)
+### 2.3 Caregiver-curated memories (young children, relatives who want help remembering)
 
 Goal: a parent can tell Zoe things a young child should be able to ask about ("who's picking me up today?",
 "when is swimming?"). A nominated carer can do the same for an older relative who wants help remembering, with that
@@ -164,7 +173,7 @@ relative's agreement where they can give it.
 
   ```
   memory_curators (
-    id text PK, curator_user_id text FK users, member_user_id text FK users,
+    id text PK, curator_user_id text NOT NULL, member_user_id text NOT NULL,   -- account ids (auth_users), no FK, as 0045
     relation text CHECK (relation IN ('parent','carer')),
     granted_by text FK users, granted_at timestamptz,
     member_consent_at timestamptz NULL,      -- the member's own yes (voice or PIN), when they can give it
@@ -185,6 +194,9 @@ relative's agreement where they can give it.
   `MemoryService.ingest` with `origin="curator"` and `added_by=<curator id>`. A dated routine can instead become a
   calendar event or reminder on the member's account. That uses the "another member's data" floor of identity §3.2:
   "refused unless that member granted it". The curator grant is that grant, and it needs ZAL2 for the curator.
+- **Carer writes to an adult** are memory rows only by default. A calendar event or reminder the carer proposes for
+  an adult member is a **proposal** the member accepts once (by voice or tap), because a reminder will fire at them.
+  For a child, the parent's writes land directly.
 - **Authority** [proposal, owner decision D9]. A new allow-listed class for `origin="curator"`. Recommended
   behaviour:
   - For a **child**, a curated row is not superseded by the child's own passing statement ("Grandma picks me up
@@ -266,13 +278,29 @@ is bounded by five guardrails, each enforced in code and pinned by a test (§10,
 **How a voiceprint is learned.**
 
 - **The segment embeddings must outlive the WAV.** The member tags lines after transcription, and the WAV is gone
-  by then. So at tagging time (§3.2) the centred ResNet34 embedding of every `other` and `unsure` segment is kept,
-  as one mean vector per segment, in `omi_segment_embeddings`. They are on the box only. They are deleted when they
-  are used, and otherwise after `ZOE_OMI_SEGMENT_EMBED_TTL_DAYS` (14). An embedding that no member ever tags simply
-  expires.
+  by then. So, **only while `ZOE_OMI_LEARN_VOICES` is on**, tagging (§3.2) keeps the centred ResNet34 embedding of
+  every `other` segment, and of every `unsure` segment whose score is at least the margin below `θ_you`, as one mean
+  vector per segment in `omi_segment_embeddings`.
+  - **This is a stored biometric of every bystander, held up to 14 days before anyone tags them.** That is the cost
+    of learning from tags made after the audio is gone, and it is stated plainly here and in §6.3.
+  - The low-margin rule keeps the wearer's own voice, mis-scored as `unsure`, out of another person's voiceprint
+    (cell V7b).
+  - They are on the box only. They are deleted when they are used, and otherwise after
+    `ZOE_OMI_SEGMENT_EMBED_TTL_DAYS` (14). An embedding that no member ever tags simply expires.
 - **A tag adds the segment to that person's voiceprint.** The voiceprint is the mean of the L2-normalised confirmed
   segment embeddings (at least 2 s of speech each). It uses the leave-one-out outlier rule from the panel's 5-clip
-  enrolment [branch]: an outlier is dropped and counted, never forced in.
+  enrolment [2024]: an outlier is dropped and counted, never forced in.
+  - Each contribution is kept in `learned_voiceprint_segments` (segment id, recording id, embedding), so the mean can
+    be **rebuilt**.
+  - Deleting a recording, correcting a mis-tag ("that wasn't Sam"), or forgetting a name inside it removes that
+    recording's contributions and recomputes the mean. Without this the voiceprint could not un-learn.
+  - The contributions are the same biometric as the voiceprint, under the same guardrails.
+- **Assurance.** Creating or adding to a voiceprint (a tag), Stop learning and Forget this voice are the member's own
+  writes on their own data. They need ZAL2 (identity §3.2 "own reversible writes"), not the ZAL3 that enrolling a
+  *recognising* biometric needs, because a learned voiceprint confers no recognition outside §2.6 guardrail 2.
+- **First-tag notice.** The first time a member's tag would start a voiceprint, Zoe says so once: "I'll learn Sam's
+  voice from this so I can suggest it next time. You can stop that any time." The member can say "don't" (that
+  sets `learning_enabled = false` for that person).
 - **States.** The voiceprint starts `provisional`. It becomes `confirmed` once it holds at least 3 segments from at
   least 2 recordings **and** the member has said yes to at least one of its own suggestions.
 - **Expiry.** A `provisional` voiceprint that is never confirmed expires after `ZOE_OMI_VOICEPRINT_PROVISIONAL_DAYS`
@@ -288,8 +316,12 @@ is bounded by five guardrails, each enforced in code and pinned by a test (§10,
    - It is never visible to other members. Every query filters on the tagging member.
    - It is never in `/api/memories/export`, never in the memory export job, never in any sync, and never sent off the
      box.
-   - [unverified] Whether the nightly Postgres backup leaves the box must be checked. If it does, this table is
-     excluded from that copy.
+   - **Backups.** The nightly Postgres backup is local-only (`scripts/maintenance/postgres-nightly-backup.sh`: dumps
+     in `~/.zoe-backups/postgres`, 7 daily plus 4 weekly; nothing sends them off the box). But nothing redacts those
+     dumps on a forget (`redact_backups.py` covers the palace exports and chat only). So the backup excludes the
+     **data** of `omi_segment_embeddings`, `learned_voiceprints` and `learned_voiceprint_segments`
+     (`pg_dump --exclude-table-data`). A restore therefore brings back no biometric of a third party. The cost is
+     that learned voices are re-learned after a restore.
    - Two members who both tag the same person hold **two separate voiceprints**. Neither sees or uses the other's.
 2. **Suggestions only.**
    - The voiceprint is used only to suggest tags, and to attribute transcript lines in **that member's own**
@@ -307,7 +339,16 @@ is bounded by five guardrails, each enforced in code and pinned by a test (§10,
    - "Forget Sam" erases the voiceprint, every derived tag (`tagged_person_id`, the suggestions, the stored segment
      embeddings tagged to Sam), and the candidates naming Sam. This is a new step in `memory_forget_cascade`,
      fail-loud like the others.
-   - Deleting the person row cascades.
+   - **People are soft-deleted**: the forget cascade and the People panel both set `people.deleted = 1`, so an FK
+     cascade never fires. The purge is therefore **explicit and keyed on person ids**. It is hooked into the
+     cascade's person step (which already has the ids, `recover_ids`) and into the People panel's delete, with a
+     nightly sweep that joins `people.deleted = 1` as a backstop.
+   - Every listing and every suggestion joins `people.deleted = 0`, so a deleted person is never suggested even
+     before the purge runs.
+   - **From Sam's side.** Sam's own "forget me" (identity §5.4) and an admin removing Sam from the directory cannot
+     reach members' private learned voiceprints today, because there is no link from a member's people row to the
+     directory until identity Phase 4. Once `people.directory_id` exists, a directory removal or a recognised "forget
+     me" also purges every learned voiceprint whose people row points at that entry. Until then this is a stated gap.
    - `forget_user` (the tagging member) deletes all of their learned voiceprints.
    - Per person there is a **Stop learning this voice** toggle (`learning_enabled = false`). It freezes the
      voiceprint: no new segments are added and no suggestions are made. A second control, **Forget this voice**,
@@ -320,8 +361,15 @@ is bounded by five guardrails, each enforced in code and pinned by a test (§10,
    - when it was last confirmed;
    - the Stop learning and Forget this voice controls.
 
-**Children.** If the tagged person is a member with a `child` account, or the member marks the person as a child,
-learning is **off by default**: the tag is a label only. Owner decision D16. This follows the identity design's "no
+**Flag off and the sweep.** The expiry and purge sweep runs **whether or not** `ZOE_OMI_LEARN_VOICES` is on.
+Turning the flag off stops new learning and all suggestions. Existing rows keep expiring on schedule, and an
+operator purge (`DELETE` of all three tables) is the rollback.
+
+**Household members.** Learning the voice of a tagged person who is a household *member* is **paused until D12**.
+Until then such a tag is a label only. The decided item covers non-member people.
+
+**Children.** If the tagged person is a member with a `child` account, or the member marks the person as a child, or
+the person's `people.relationship` / `birthday` says child, learning is **off by default**: the tag is a label only. Owner decision D16. This follows the identity design's "no
 child visitor voiceprints by default".
 
 **Legal note.** A learned voiceprint is biometric information about a third party. The jurisdictional questions are
@@ -336,11 +384,11 @@ already listed in the identity research record §9, and D1 carries them as a law
 
 | Option | For | Against | Verdict |
 |---|---|---|---|
-| **zoe-data (Jetson), in `_transcribe_one`** | The audio is already there. The step runs under the same gate (night window, voice turn, RAM floor). onnxruntime 1.23.2 is already in-process, and it is the version the ResNet34 centring vector was computed on [branch]. Tag and transcribe happen in one pass, with speaker-aware chunk cuts (3.3). | It changes #2024's "the server never loads this model", for the pendant path only. RAM on the Jetson is the scarce resource. | **Chosen.** The model is loaded lazily per pass and released after it. The RSS delta is measured before the flag acts (cell T8). |
+| **zoe-data (Jetson), in `_transcribe_one`** | The audio is already there. The step runs under the same gate (night window, voice turn, RAM floor). onnxruntime 1.23.2 is already in-process, and it is the version the ResNet34 centring vector was computed on [2024]. Tag and transcribe happen in one pass, with speaker-aware chunk cuts (3.3). | It changes #2024's "the server never loads this model", for the pendant path only. RAM on the Jetson is the scarce resource. | **Chosen.** The model is loaded lazily per pass and released after it. The RSS delta is measured before the flag acts (cell T8). |
 | omi-sync on the Pi, before upload | The model and self-test already ship to the Pi. | A second venv on the Pi needs ORT and numpy. The tags arrive as a sidecar that has to be time-aligned with Jetson chunks. Pi CPU competes with the wake word. | Rejected for P4; reconsider if T8 fails. |
 | Resemblyzer on the Jetson | It is already wired. | torch costs ~360 MB. It misses the owner about 11 % at FAR 1 % on the panel channel. | Rejected. |
 
-The embedder **reuses the panel's own module** (`scripts/setup/zoe_speaker_resnet34.py` [branch]: fbank, ORT
+The embedder **reuses the panel's own module** (`scripts/setup/zoe_speaker_resnet34.py` [2024]: fbank, ORT
 session, centring `c1`, sha256 pin, start-up self-test) loaded by path from the repo checkout. That keeps one code
 path for pins and front end, and a drift test pins it. The model file is the one `fetch_speaker_models.sh build`
 already writes on the Jetson (`~/.cache/zoe-speaker-resnet34`). If the self-test refuses, tagging does not run, and
@@ -348,14 +396,16 @@ every segment is `unverified`.
 
 ### 3.2 The pass
 
-1. **VAD.** Silero (`voice_vad.create_vad`, already in-process) over the 16 kHz PCM finds the speech regions. If no
+1. **VAD.** Silero (`voice_vad.create_vad`, already in-process) over the 16 kHz PCM finds the speech regions. It is a
+   streaming per-frame probability wrapper, so a small offline region builder (hysteresis plus a minimum gap) is
+   new code. If no
    VAD is available, fall back to the existing `SILENCE_PEAK` energy rule.
 2. **Windows.** 2.0 s windows with a 1.0 s hop inside speech regions (`ZOE_OMI_TAG_WINDOW_S`, `_HOP_S`). Each is
    embedded with ResNet34 and centred, then scored as cosine to the wearer's profile. The wearer is the recording's
    `user_id`; each recording is compared **only** with its own owner's profile. Embeddings stay in RAM and are
-   dropped after scoring, **except** the per-segment mean embedding of `other` / `unsure` segments, which goes to
-   `omi_segment_embeddings` for the learned-voices feature (§2.6; deleted once used, or after 14 days). The wearer's
-   own segments' embeddings are never stored.
+   dropped after scoring. The one exception is §2.6: while `ZOE_OMI_LEARN_VOICES` is on, the per-segment mean of
+   `other` segments and of low-margin `unsure` segments goes to `omi_segment_embeddings` (deleted once used, or after
+   14 days). The wearer's own `you` segments' embeddings are never stored.
 3. **Window label.**
    - `you` if `score >= θ_you`.
    - `other` if `score < θ_other`.
@@ -369,8 +419,10 @@ every segment is `unverified`.
    to the quietest 100 ms within ±0.5 s. The 20 s maximum and the quietest-point rule are unchanged, so every
    Moonshine chunk lies inside one label. Each transcribed chunk becomes one `omi_segments` row with
    `start_ms`/`end_ms`, the text, and its segment's label and score.
-6. **Order of writes.** The segments and the joined `transcript`, which is still written for back-compat and for the
-   forget redaction, commit in the same transaction as `status='done'`. Only then is the WAV unlinked, so the
+6. **Order of writes.** Each segment's text is passed through `_redact_forgotten` (exactly as the joined transcript
+   is today), so a name forgotten before the recording landed cannot come back through a segment, a candidate or a
+   memory derived from it (cell E8b). The segments and the joined `transcript`, which is still written for
+   back-compat and for the forget redaction, commit in the same transaction as `status='done'`. Only then is the WAV unlinked, so the
    existing invariant holds.
    - **A tagging failure never costs the transcript.** Transcription proceeds untagged, `speaker_state='untaggable'`,
      and the WAV is kept until its normal retention expiry, which allows one retry.
@@ -380,7 +432,7 @@ every segment is `unverified`.
 
 ### 3.3 Cost (to be measured, cell T8)
 
-[unverified] Per hour of *speech* that is 3,600 windows. On the Pi the measured p50 was ~70 ms per 3.2 s clip [branch].
+[unverified] Per hour of *speech* that is 3,600 windows. On the Pi the measured p50 was ~70 ms per 3.2 s clip [2024].
 On the contended Jetson the self-test clip took 115 ms. So roughly 4-7 CPU-minutes per hour of speech at 2 threads,
 `nice`-equivalent. The pass yields between batches of 50 windows and asks the gate before each batch. RAM is a
 6.8 MB model plus the ORT session arena: an estimate in the tens of MB, released after the pass. **The flag may not
@@ -390,20 +442,23 @@ act until T8 has measured the RSS delta and the voice replay has passed with a t
 
 - **Why it is needed.** A chest-worn mic hears the wearer near-field, through clothing, with body noise. The panel
   hears them at 1-3 m. The ResNet34 thresholds were derived on other channels.
-- **Where the profile lives.** A pendant profile is a row in `speaker_profiles` with a new column `channel`
-  ('panel' default | 'pendant'), under the same `model_id`.
-  - `/api/voice/profiles/sync` serves **only** `channel='panel'`. A pendant profile must never reach a panel
-    matcher; test T6 has a negative control for this.
-  - Adaptation never touches a pendant profile.
-  - "Forget my voice" deletes every channel.
+- **Where the profile lives.** In its own table, `pendant_speaker_profiles` (`user_id`, `model_id`, embedding,
+  `n_clips`, `consent_at`, times), **not** a `channel` column on `speaker_profiles`.
+  - A column would collide with the existing readers and writers keyed on `(user_id, model_id)`: the enrolment
+    upsert merges into a row of the same model (`routers/voice_tts.py`), and so do the consent check, the
+    enrolment-state count (`enrollment_state.py`), the profile list, adaptation (`speaker_adaptation.py`) and the
+    per-user delete (`voice_enrollment.py`).
+  - In its own table no panel path can reach it. Test T6 asserts that statically and at `/api/voice/profiles/sync`.
+  - "Forget my voice" (`voice_enrollment`'s delete) also deletes the member's pendant profile. That is one added line
+    plus a test.
 - **The flow** ("Zoe, learn my voice on my pendant", or Zoe's offer through the existing `ZOE_ENROLL_OFFER` moments
   once a synced recording finds no pendant profile; a "no" is remembered):
   1. **Step-up.** Enrolling biometrics needs ZAL3 (identity §3.2): Zoe asks for the PIN on the pad.
   2. Zoe, on the panel: "Make sure your pendant is on. I'll say a line, then you repeat it." Five lines, in the
-     normal voice, as in the panel's 5-clip enrolment [branch `zoe_enroll_flow.py`].
+     normal voice, as in the panel's 5-clip enrolment [2024 `zoe_enroll_flow.py`].
   3. **Capture, preferred path.** omi-sync on the Pi opens the pendant's live audio stream for at most 90 s, under
      the shared radio lock. It decodes and cuts the utterances using the panel's own VAD timestamps for the same
-     five lines, embeds them with ResNet34 on the Pi, and posts a finished `channel='pendant'` profile. No audio
+     five lines, embeds them with ResNet34 on the Pi, and posts a finished pendant profile. No audio
      leaves the Pi, which is the #2024 rule. [unverified] Whether firmware 3.0.18 streams live audio while the
      storage ring is on must be checked in the device check (omi plan 0.3).
   4. **Binding (the security of the flow).** A pendant clip is accepted only if the panel heard the same utterance
@@ -414,7 +469,7 @@ act until T8 has measured the RSS delta and the voice replay has passed with a t
      deleted, and the profile is stored. Zoe says "I'll finish once your pendant syncs."
   6. The leave-one-out outlier re-ask, at most twice, and "fewer than 3 clips = nothing stored" are as in #2024.
 - **Before a pendant profile exists**, the panel ResNet34 profile is used at the **stricter** tier (FAR 0.1 %:
-  0.309 / 0.351 [branch]). That yields more `unsure`, by design.
+  0.309 / 0.351 [2024]). That yields more `unsure`, by design.
 - **With no ResNet34 profile at all**, nothing is compared: every segment is `unverified` and
   `speaker_state='unverified'`. That is today's behaviour, so the page and the review still work in the reduced
   form of §5.2.
@@ -422,7 +477,7 @@ act until T8 has measured the RSS delta and the voice replay has passed with a t
 ### 3.5 Thresholds
 
 - **Starting values** (env `ZOE_OMI_TAG_YOU_MIN`, `ZOE_OMI_TAG_OTHER_MAX`, per channel):
-  - `θ_you` = the short-group FAR 0.1 % value, 0.309 [branch].
+  - `θ_you` = the short-group FAR 0.1 % value, 0.309 [2024].
   - `θ_other` = 0.15 [proposal].
   - Both are placeholders.
 - **Re-derivation.** After the shadow fortnight they are re-derived on the pendant channel from the owner's per-line
@@ -454,12 +509,20 @@ act until T8 has measured the RSS delta and the voice replay has passed with a t
 | N (night) | inside the 12B window, **after** digest, dreaming and night_mind, only with time left | 12B (`:11500`) | inside the window's budget | Optional quality or fallback lane. The window is already full (30-60 min of jobs against about 52 available), so it may never get a turn. Owner decision D3 |
 
 - **Lane E must never cost a live turn.** The brain has one slot, so a running extraction call would make a voice
-  turn wait. Every call is **streamed with a cancel token**. A voice turn (the same `voice_busy` signal the
-  transcription gate reads) or a chat turn starting cancels the in-flight call, and the chunk is retried later.
-  [unverified] Whether llama-server b9733 frees the slot promptly when the client disconnects must be measured.
-  Cell E9 does this, with a negative control: cancel disabled means the TTFT regression is visible.
+  turn wait. Every call is **streamed with a cancel token**. A voice turn or a chat turn starting cancels the
+  in-flight call, and the chunk is retried later.
+  - `voice_busy()` reads only the voice-session table, so it sees no chat turn. A small "brain turn starting" hook
+    in `brain_dispatch` is new code.
+  - [unverified] Whether llama-server b9733 frees the slot promptly when the client disconnects must be measured.
+  - [unverified, hypothesis] A ~2.4k-token extraction prompt on the single 8k slot may evict the KV prefix the
+    wake prewarm built, so the **next** live turn could start cold even when the cancel worked.
+  - Cell E9 measures both the TTFT of a turn that arrives during a call and the TTFT of the first turn after a
+    finished call. Its negative control disables the cancel, which makes the regression visible. If the prewarm is
+    lost, lane E re-runs the prewarm after its last call.
+  - **The 4B precedent is a night one.** The digest and night-mind runs it rests on are night runs, not evening runs
+    beside live use. E9 is what makes the evening lane safe.
 - **The 4B is the precedent.** The digest's fact extractor and the night mind's MOMENTS pass already run on it.
-  12B vs 4B on the night-mind cells was 9/13 vs 7/13 [night-mind.md]. A miss costs a lost item. A false positive
+  12B vs 4B on the night-mind cells was 9/13 vs 7/13 ([night-window.md](../knowledge/night-window.md) §12; pre-fix figures whose failures were mostly cell and code design, so a weak quality argument either way). A miss costs a lost item. A false positive
   costs one tap, because nothing is written without approval.
 
 ### 4.3 The pass: model points, code decides
@@ -467,7 +530,10 @@ act until T8 has measured the RSS delta and the voice replay has passed with a t
 1. **Pack (code).**
    - Keep the segments of **conversations the owner took part in**: a run of segments with at least one `you`
      within 60 s.
-   - Drop pure-`other` stretches the owner never spoke in. Those are overheard, not addressed.
+   - Drop pure-`other` stretches the owner never spoke in (overheard, not addressed), **except** lines with a request
+     or command shape ("add ... to the list", "remind ...", "can you ...", the wake word). Those are kept as
+     overheard lines so they can surface as unticked `source=other` candidates (the "Overheard commands" rule
+     below), and never as anything else.
    - Drop routine stretches with a cheap cue filter (no date, time, list word, "remind", "need", "buy", "meeting",
      "call", or name), like the night mind's `is_routine`.
    - Cut into chunks of about 2,400 tokens, at most `ZOE_OMI_DAY_REVIEW_MAX_CALLS` (default 8). A full day keeps its
@@ -485,12 +551,17 @@ act until T8 has measured the RSS delta and the voice replay has passed with a t
    - a cited id is not in the chunk, or the `quote` is not an exact span of a cited segment;
    - it is a `person_memory` whose evidence is not owner speech (a conversation memory must rest on something the
      owner said; the other person's lines are context);
-   - it is a kind other than `follow_up` / `reminder` / `calendar_event` / `list_item` whose evidence includes an
-     `other` line with `addressed=false`;
+   - its evidence is only `other` lines, and it is neither `addressed` nor one of the overheard request lines kept by
+     the pack step (only `follow_up` / `reminder` / `calendar_event` / `list_item` may rest on `other` lines at all,
+     and always unticked);
    - its date or time does not parse with the existing parsers (`reminder_service.normalize_due_date` /
      `normalize_due_time`, the calendar parser), or it is in the past;
-   - `memory_authority.check_observation` finds the quote hedged ("maybe we should catch up sometime"): that is
-     *held* and becomes a low-confidence `follow_up`, never a calendar event;
+   - it fails the **commitment-strength rule** (new code, a lexicon list): a `calendar_event` needs a commitment cue
+     and a concrete day or time ("see you Thursday at 10", "the meeting is at 3"). A wish or a vague plan ("we
+     should catch up sometime", "maybe next week") becomes at most a low-confidence `follow_up`. The existing
+     `memory_authority.check_observation` (verdicts `supported | restatement | unsupported`, lexical hedge words such
+     as "maybe", "might", "probably") is a second check on `person_memory` text against the owner's own lines. It is
+     not a hedge detector for events, which is why the separate rule exists;
    - `restraint` classifies the quote or the fields into a class from §6.4: it is not proposed;
    - it duplicates an existing item (a list item already on the list, an event at the same time and title, a memory
      whose `dedup_verdict` is duplicate).
@@ -515,23 +586,38 @@ imports no write service and no router.
 ### 5.1 How it reaches the owner: never unprompted
 
 When a review becomes `ready`, a `proactive_candidates` row is written: kind `day_review`, salience 1.0, expiry
-36 h. Its text is **composed in code from the counts**, with no names, places or times, for example: "I went through
+36 h. **That needs three small code changes to the existing seams**, because today they would not hold it:
+
+- **Survive the nightly selector.** `select_for_user` expires every row not refreshed that night except
+  `kind = 'commitment'` (`proactive/selector.py` ~274). `day_review` joins that exemption, so an evening review is
+  still there in the morning. Test: a nightly pass leaves a `day_review` row untouched.
+- **Owner-verified only.** The selector's `prepare` has no speaker-verified input, and the pull holds back only items
+  that carry a restraint `sensitivity`. So `day_review` is **always sensitive**: the pull holds it from an
+  unverified spoken turn (`pull.py` ~451), and the selector path gains a verified-speaker gate for this kind (the
+  voice-session or PIN scope `voice_tts` already computes).
+- **Not three days of silence after a pull.** A delivered candidate enters the 3-day `COOLDOWN`. For `day_review` the
+  cooldown after an unanswered delivery is 12 h, and `MAX_SURFACED = 2` still bounds it.
+
+From there it reaches the owner only through seams that already exist, all of which wait for the owner. Its text is **composed in code from the counts**, with no names, places or times, for example: "I went through
 your recordings from today: 2 meetings, 3 things for the shopping list, 2 reminders and 1 conversation to remember.
-Want to go through them?" From there it reaches the owner only through seams that already exist, all of which wait
-for the owner:
+Want to go through them?"
+
+The routes:
 
 - **The open turn.** On the owner's next brain turn that is a greeting or open turn, the selector's `[RAISE]` block
   (`ZOE_PROACTIVE_SELECTOR`) carries it. It is a new `_ASK` entry: "say this once and ask whether to go through them
-  now". In the morning window it rides the `[Today]` block instead (`brief_first_turn`; the brief wins a turn they
-  share, as today).
+  now". `[RAISE]` hands the brain the code-composed line plus a hint, and the brain voices it, so the wording is not
+  verbatim. Counts and kinds are fixed by code. In the morning window the raise waits while the brief is active, as
+  today. Carrying it inside the `[Today]` block instead is new work in `brief_first_turn` (it does not read
+  `proactive_candidates` today), and it is optional.
 - **The pull.** "What's up?" delivers it at once.
 - **The orb.** The panel orb shows the quiet pending state from `pull.pending_state`: a count, no content, no sound.
 - **A command turn** ("turn on the lights") gets no mention. Deterministic tiers do not carry raises, and that is
   correct.
 
 **Who may hear it.** Only the pendant's owner, and only on a turn where they are identified: an open voice session,
-a fresh PIN sign-in, or a signed-in chat. An unverified voice turn gets nothing. This follows the pull's rule that a
-sensitive item is held back on the spoken lane when the speaker is not verified.
+a fresh PIN sign-in, or a signed-in chat. An unverified voice turn gets nothing, not even the count. This is
+enforced by the "always sensitive" change above. The existing pull rule alone would not cover a counts-only line.
 
 ### 5.2 An untagged day (no enrolment yet)
 
@@ -551,12 +637,15 @@ The alternative (`ZOE_OMI_REVIEW_UNTAGGED=off`) is no review at all until enrolm
   - Zoe reads one item: "A meeting: Thursday at 10, project check-in. Add it?"
   - The owner answers "yes" / "no" / "skip" / "change it to 11" (date and time edits only) / "add the rest" /
     "stop". Each answer sets the candidate's status.
+  - **No approval of the unseen.** Before "add the rest" writes anything, Zoe reads back the count and the titles
+    ("That's 3 more: milk, bread, the Friday call. Add all three?"), and only a second yes writes.
   - Free-text edits go to the phone ("I'll send that one to your phone to fix").
   - Names are spoken here, because the member asked to go through the list and is verified. The crowded-room rule
     still applies.
   - **This tier is on the voice path** (`fast_tiers.py`), so it is replay-gated (AGENTS.md).
 - **By touch.** The panel shows the list as a private card through a `voice_card` frame (kind `day_review`), with
-  Approve and Skip per row and "Approve ticked". It reuses `touch-voice-session.js` rendering (text only, removed
+  Approve and Skip per row and "Approve ticked". "Approve ticked" covers only rows that were rendered on screen.
+  The API refuses a bulk approval naming a candidate the client never fetched. It reuses `touch-voice-session.js` rendering (text only, removed
   when the session closes). This is a touch change in its own phase (P6).
 - **On desktop or phone.** The Pendant tab's review card: approve, edit any field, skip.
 - **Crowded room.** If a second voice is present when the raise would fire, or during the review, the spoken line
@@ -577,6 +666,15 @@ candidates whose status is `approved` or `edited`, re-checked inside the owner's
 | follow_up | a reminder with no time, or an open loop (owner decision D5) | the candidate row |
 | person_memory | `MemoryService.ingest(user_id=owner, origin="omi_review", source="pendant", entity_id=<owner's people row>, ...)`, **ingest only, never `review(edit)`/supersede** | memory columns: `origin`, `turn_ref="omi_segment:<id>"`, the day; class `user_confirmed` (the approval) |
 
+- **What the apply module does around the raw write calls.** `create_event_record` does not notify, broadcast or touch
+  MemPalace, so the apply module does what the calendar route does after it: the notification and the broadcast.
+  `create_reminder_record` takes a `ReminderCreate` and the owner as `user`, and runs `require_feature_access` and
+  scheduling itself.
+- **A write that returns nothing is a failure.** An `ingest` that returns `None` (the forget shield, an opt-out,
+  dedup) is `write_failed` with its reason, never `written`.
+- **No double writes on retry.** The candidate moves to `writing` (with an intent id) before the call and records
+  `written_ref` after it. A retry first checks for a row carrying that intent id: the event's `metadata`, or a lookup
+  by title and time for reminders and items. Only lists have a dedup window of their own.
 - A `person_memory` that the authority layer flags as contradicting an existing row is not written. The candidate
   becomes `held_conflict` and shows both: "This disagrees with what I have: ... Which is right?"
 - **The candidate row is the provenance index** for kinds whose tables carry none: after a write it keeps `kind`,
@@ -602,7 +700,9 @@ candidates whose status is `approved` or `edited`, re-checked inside the owner's
 3. **Bystanders.** The stance:
    - Other people's words already sit in the wearer's private transcript (omi plan 0.4). This design adds **no**
      shared voiceprint of them and **no** identification of them to anyone. The only voiceprint is the tagging
-     member's private, suggestion-only one (§2.6, owner decision). There are also **no** facts about them unless the owner
+     member's private, suggestion-only one (§2.6, owner decision). While `ZOE_OMI_LEARN_VOICES` is on, every
+     untagged bystander segment's embedding is also held for up to 14 days so it can be tagged (§2.6). It is then
+     deleted. Its data is excluded from backups. There are also **no** facts about them unless the owner
      approves a candidate that rests on the owner's own words.
    - Scores are similarity to the *wearer's* profile, not a template of anyone else.
    - The law is not settled by this design:
@@ -647,11 +747,14 @@ candidates whose status is `approved` or `edited`, re-checked inside the owner's
 
 ## 7. Data model and flags (consolidated)
 
-Migrations take the next free revisions at build time; #2024 holds 0051.
+Migrations take the next free revisions at build time (0052 onward at the time of writing). They follow the 0045 / 0051 conventions so the SQLite unit lane runs them: TEXT timestamps, JSON as TEXT, ids as TEXT, `user_id TEXT NOT NULL` with no FK to a users table (as `omi_recordings` does), bytes as BLOB through the compat layer. `jsonb`/`bytea`/`timestamptz` below are shorthand for those.
 
 ```
 -- P4 (tagging)
-speaker_profiles  + channel text NOT NULL DEFAULT 'panel' CHECK (channel IN ('panel','pendant'))
+pendant_speaker_profiles (                                 -- its own table, never speaker_profiles (section 3.4)
+  user_id text NOT NULL, model_id text NOT NULL, embedding bytea NOT NULL, n_clips int NOT NULL,
+  consent_at text NOT NULL, created_at text NOT NULL, updated_at text NOT NULL,
+  PRIMARY KEY (user_id, model_id))
 omi_recordings    + day_local text NULL                       -- household-local YYYY-MM-DD of started_at
                   (speaker_state existing: 'unverified' | 'tagged' | 'untaggable')
 omi_segments (
@@ -681,7 +784,8 @@ omi_day_candidates (
   payload jsonb NULL, evidence jsonb NULL,                 -- [{segment_id, quote, speaker}] <= 3; nulled at retention
   source_speaker text NOT NULL CHECK (source_speaker IN ('you','addressed','other','unverified')),
   confidence real NOT NULL, preselected boolean NOT NULL DEFAULT false,
-  status text NOT NULL CHECK (status IN ('proposed','approved','edited','skipped','expired','written','write_failed','held_conflict')),
+  status text NOT NULL CHECK (status IN ('proposed','approved','edited','skipped','expired','writing','written','write_failed','held_conflict')),
+  intent_id text NULL,                                     -- idempotency key for a retried write (section 5.4)
   decided_via text NULL CHECK (decided_via IN ('voice','panel_touch','desktop','phone')),
   decided_at text NULL, written_ref text NULL, written_at text NULL, approved_by text NULL, created_at text NOT NULL)
 
@@ -691,14 +795,20 @@ omi_segment_embeddings (
   model_id text NOT NULL, embedding bytea NOT NULL,        -- 256 float32, centred; other/unsure segments only
   expires_at text NOT NULL)                                -- 14 days, or deleted once used
 learned_voiceprints (
-  id text PK, owner_user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,   -- the TAGGING member
-  people_id text NOT NULL REFERENCES people(id) ON DELETE CASCADE,                   -- that member's own row
+  id text PK, owner_user_id text NOT NULL,                  -- the TAGGING member (account id, no FK, as 0045)
+  people_id text NOT NULL,                                  -- that member's own row; people are SOFT-deleted,
+                                                            -- so the purge is explicit (section 2.6 guardrail 4)
   model_id text NOT NULL, channel text NOT NULL DEFAULT 'pendant',
   embedding bytea NOT NULL, n_segments int NOT NULL, n_recordings int NOT NULL,
   status text NOT NULL CHECK (status IN ('provisional','confirmed')),
   learning_enabled boolean NOT NULL DEFAULT true,
   created_at, updated_at, last_confirmed_at NULL, expires_at NOT NULL,
   UNIQUE (owner_user_id, people_id, model_id))
+learned_voiceprint_segments (                              -- each contribution, so the mean can be rebuilt
+  voiceprint_id text NOT NULL REFERENCES learned_voiceprints(id) ON DELETE CASCADE,
+  segment_id text NOT NULL, recording_id text NOT NULL, embedding bytea NOT NULL, added_at text NOT NULL,
+  PRIMARY KEY (voiceprint_id, segment_id))
+-- the data of the three biometric tables is excluded from pg_dump (section 2.6 guardrail 1)
 omi_segments + tag_source text NULL CHECK (tag_source IN ('owner','suggested_confirmed'))
              + suggested_person_id text NULL, suggested_score real NULL     -- a suggestion, never a tag
 
@@ -730,7 +840,7 @@ omi_segments + tag_source text NULL CHECK (tag_source IN ('owner','suggested_con
 | Memories by voice on the panel | `voice_card` frames (calendar / lists / reminders) | a `memories` card kind (P3) |
 | Recordings list / get / patch / delete | `/api/omi/recordings[...]` | `GET /api/omi/recordings/{id}/audio` (P2); `segments` in the GET (P4); `PATCH /api/omi/segments/{id}` `{owner_label?, tagged_person_id?}` (P4) |
 | People to tag | `GET /api/memories/people` (returns family-visible rows too) | `?mine=1`, own rows only; create-person with `visibility='personal'` (P4) |
-| Pendant enrolment | panel enrolment flow + `/api/voice/profiles` [branch] | `channel` on profile upload and sync; omi-sync live-capture command (P4) |
+| Pendant enrolment | panel enrolment flow + `/api/voice/profiles` [2024] | `POST /api/omi/pendant-profile` (a finished profile, owner-only, ZAL3 step-up) into `pendant_speaker_profiles`; omi-sync live-capture command (P4) |
 | Day review | none | `GET /api/omi/reviews?status=`, `GET /api/omi/reviews/{id}` (candidates), `POST /api/omi/candidates/{id}` `{action: approve|edit|skip, fields?}`, `POST /api/omi/reviews/{id}/approve-ticked` (P5) |
 | Raise / pull / orb | `proactive_candidates`, selector, pull | kind `day_review` + `_ASK` entry (P6) |
 | Learned voices | none | `GET /api/omi/voices` (the member's own list), `PATCH /api/omi/voices/{id}` `{learning_enabled}`, `DELETE /api/omi/voices/{id}` (forget the voice, keep the person), `POST /api/omi/segments/{id}/suggestion` `{answer: yes|no|someone_else}` (P4b) |
@@ -745,7 +855,7 @@ Each phase is one PR (or a small workstream), flag-dark, with its tests, and say
 | **P1 (now, in parallel)** | the touch tile `ask` → `memories`; read-only "what Zoe knows about me" for a PIN-identified member, with the panel-sensitive filter of §2.1 | existing APIs only | the menu says Memories; a signed-in member sees their memories |
 | **P2 (MUP for the pendant)** | desktop `memories.html`: "What Zoe knows about me" and a Pendant tab with recordings, the joined transcript, reviewed / keep / delete, audio playback | existing `/api/omi/*` + the audio route | "see my Omi transcripts somewhere" is answered |
 | P3 | memory actions: tap-to-explain + spoken forget/correct, the phone hand-off for fixes, the voice-session `memories` card | P1 | correcting a memory from the panel |
-| P4 | speaker tagging (`ZOE_OMI_SPEAKER_TAG=shadow`), segments, per-line labels and corrections, pendant enrolment, "Who is this?" labels | #2024 merged, ResNet34 built on the Jetson, owner re-enrolled; T8 measured | lines say You / Someone else; Zoe can learn the pendant voice |
+| P4 | speaker tagging (`ZOE_OMI_SPEAKER_TAG=shadow`), segments, per-line labels and corrections, pendant enrolment, "Who is this?" labels | `ZOE_SPEAKER_MODEL` past `resemblyzer` (#2024 is merged), ResNet34 built on the Jetson, owner re-enrolled; T8 measured | lines say You / Someone else; Zoe can learn the pendant voice |
 | P4b | learned voices (`ZOE_OMI_LEARN_VOICES`): segment embeddings, voiceprints from tags, suggestions, the "Voices I've learned" list, the forget step | P4 | "this sounds like Sam, right?" |
 | P5 | day analysis (`ZOE_OMI_DAY_REVIEW=shadow`), candidates on the desktop Pendant tab with approve / edit / skip and real writes **on approval** | P2 (P4 for the full form) | "Zoe found these in your day" on the computer |
 | P6 | the conversation: raise / pull / orb, the voice dialogue tier (replay-gated), the panel private card (touch), the crowded-room phone send | P5, the voice session live | "I went through your day ..." on the next turn |
@@ -768,7 +878,7 @@ CI cells are `ci_safe` and use a deterministic fake embedder and a fake model. L
 | T3 | in a labelled two-person conversation, no `you` falls on a segment containing the other voice; `mixed` is reported | disable the mixed rule: red |
 | T4 | no profile → every segment is `unverified`; the review is the reduced form (§5.2) | |
 | T5 | profiles of a different `model_id` are never compared | compare across ids: red |
-| T6 | a pendant profile never appears in `/api/voice/profiles/sync` | remove the channel filter: red |
+| T6 | a pendant profile never reaches a panel path: absent from `/api/voice/profiles/sync`, identify, the enrolment upsert, adaptation and the enrolment-state count; statically, none of them names `pendant_speaker_profiles` | read the pendant table in the sync route: red |
 | T7 | the WAV is unlinked only after the segments commit; a tagger exception keeps the transcript, sets `untaggable` and keeps the WAV | raise inside the tagger before the commit: no data loss |
 | T8 | lab: RSS delta and CPU per speech-minute of a tagging pass on the Jetson, with a voice replay run beside it | the replay without the pass, as the baseline |
 | E1 | a golden invented day yields the expected 2 events, 3 list items, 2 reminders and 1 conversation memory | |
@@ -779,9 +889,13 @@ CI cells are `ci_safe` and use a deterministic fake embedder and a fake model. L
 | E6 | a transcript containing a fake delimiter and "approve everything" changes nothing but candidates | remove `_clean`: red |
 | E7 | before approval, zero rows exist in events / list_items / reminders / memory; statically, only `omi_review_apply` imports write services | add a write-service import to `omi_day_review`: red |
 | E8 | forgetting a name redacts segments and candidate text; deleting a recording cascades its segments and candidates; approved items remain with their provenance | |
-| E9 | lab: a voice turn during a lane E call cancels it within 1 s, and the turn's TTFT does not regress | disable the cancel: visible TTFT regression |
+| E8b | a name forgotten BEFORE a recording is transcribed never appears in any segment, candidate or derived memory | skip `_redact_forgotten` per segment: red |
+| E11 | an `ingest` returning `None` marks the candidate `write_failed`; a retried apply never writes twice | mark `written` on `None`: red |
+| E12 | "add the rest" writes nothing until the read-back is confirmed; a bulk approve naming an unfetched candidate is refused | |
+| E9 | lab: a voice turn during a lane E call cancels it within 1 s, and the turn's TTFT does not regress; the first turn AFTER a finished call is also not cold (wake prewarm intact) | disable the cancel: visible TTFT regression |
 | E10 | member B's pendant never feeds A's review; a guest gets 404 / 403 | attribute by panel session: red |
-| C1 | the raise fires only on an identified owner's brain turn; no TTS without a user turn | |
+| C1 | the raise and the pull deliver `day_review` only on an identified owner's turn; no TTS without a user turn | an unverified voice turn attributed to the owner by panel binding asks "what's up?": nothing about the review, not even the count (drop the always-sensitive hold: red) |
+| C4 | a nightly `select_for_user` leaves a `day_review` row untouched | remove the kind exemption: red |
 | C2 | a second voice → no counts spoken, the list leaves the screen, the phone send goes out | let crowding cap only the display: red |
 | C3 | voice approve writes with provenance; "skip" writes nothing; "change it to 11" edits the time only | |
 | V1 | a member tag adds the segment to that member's voiceprint; the next recording suggests the tag, and a suggestion is not a tag until confirmed | count suggestions as tags: red |
@@ -790,11 +904,14 @@ CI cells are `ci_safe` and use a deterministic fake embedder and a fake model. L
 | V4 | "forget Sam" deletes the voiceprint, the tags, the suggestions and the stored embeddings tagged to Sam; a failed step is fail-loud | skip the step: the cascade reports incomplete |
 | V5 | Stop learning freezes it (no adds, no suggestions); Forget this voice deletes it and keeps the person and the tags | |
 | V6 | a provisional voiceprint expires at 30 days; untagged segment embeddings expire at 14 | shift the clock without the purge: red |
-| V7 | no embedding of the wearer's own `you` segments is stored | store all segments: red |
+| V7 | no embedding of the wearer's own `you` segments is stored; with `ZOE_OMI_LEARN_VOICES` off no segment embedding is stored at all | store all segments: red |
+| V7b | a wearer segment scored `unsure` near `θ_you`, then tagged as Sam, does not enter Sam's voiceprint | drop the low-margin rule: red |
+| V9 | soft-deleting a person (forget cascade and People panel) purges their voiceprint, contributions and suggestions; deleting a recording removes its contributions and recomputes the mean | rely on the FK cascade: red |
+| V10 | the nightly backup contains no row data of the three biometric tables | drop `--exclude-table-data`: red |
 | V8 | a child-marked person gets a label only, no voiceprint | |
 | CG1 | a curator write lands on the member with `origin=curator`; the curator cannot list the member's other memories | let the curator read `/api/memories/` for the member: red |
 | CG2 | an adult member's carer grant is inactive until the member's own consent | |
-| Static | `test_nothing_else_reads_pendant_transcripts` gains exactly the new modules (`omi_speaker_tag`, `omi_day_review`, `omi_review_apply`, `omi_review_dialog`) and nothing else | add an unlisted reader: red |
+| Static | `test_nothing_else_reads_pendant_transcripts` gains exactly the new modules (`omi_speaker_tag`, `omi_day_review`, `omi_review_apply`, `omi_review_dialog`) and nothing else, and its needles grow beyond the string `omi_recordings` to the new tables (`omi_segments`, `omi_segment_embeddings`, `omi_day_candidates`, `omi_day_reviews`, `learned_voiceprints`, `pendant_speaker_profiles`) | add an unlisted reader of any of them: red |
 
 Voice-path changes (the dialogue tier in `fast_tiers.py`, the raise kind, the `voice_card` kind) are replay-gated
 against `~/.zoe-voice-samples` per AGENTS.md.
@@ -820,7 +937,7 @@ against `~/.zoe-voice-samples` per AGENTS.md.
 11. **D11 Sensitive classes for the owner's own day review and Memories panel view**: never proposed and never on
     the wall (recommended), or opt-in per class?
 12. **D12 Tagging other household members** in pendant transcripts, including learning their voice for suggestions
-    (§2.6): allowed as a private, member-only label, or only once they
+    (§2.6; paused until this is answered): allowed as a private, member-only label, or only once they
     opt in (omi plan §5 `ambient_consent_at`)?
 13. **D13 Full transcripts on the wall panel**: never (recommended; phone and desktop only) or behind a fresh PIN?
 14. **D14 Children wearing a pendant**: not supported (recommended)?
@@ -844,4 +961,4 @@ design's visitor profile (§5.2), which stays consent-gated because it confers r
   `MAX_SURFACED=2` means it is raised at most twice.
 - **Risk: a wall panel exposes private material.** Mitigated by strict identity, the crowded-room rule, counts-only
   speech, and no transcripts on the wall by default.
-- **Risk: #2024 slips.** P1, P2 and P5 in its reduced form do not need it. P4 does.
+- **Risk: the ResNet34 switch stays in `dual` or `resemblyzer` for long.** P1, P2 and P5 in its reduced form do not need it. P4 does.

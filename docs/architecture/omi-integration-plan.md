@@ -160,7 +160,9 @@ design does instead:
   (`ZOE_OMI_OWNER_USER_ID`), and only the owner can list, read or delete them (admin does not widen it).
 - Every transcript is stored **`speaker_state='unverified'`, `reviewed=0`** (other voices may be in it) and **nothing
   else reads the table** — no fact extraction, recall, digest or prompt — until a reviewed-promotion step exists
-  (guarded by a static test).
+  (guarded by a static test). *The day review in [`memories-space.md`](memories-space.md) §4-§5 is that step, as
+  designed: named readers only (the static test's allow-list grows by name), approval before every write, and learned
+  voices of tagged people as a recorded owner exception to the section-5 `ambient_consent_at` rule (§2.6 there).*
 - **Audio is deleted right after transcription** unless he keeps it; any WAV that remains expires after 7 days
   (`ZOE_OMI_AUDIO_RETENTION_DAYS`); transcripts live until he deletes them; "forget" (a name or the whole user)
   redacts/erases them (4.4).
