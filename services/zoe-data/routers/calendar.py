@@ -63,9 +63,49 @@ def _present(row, user_id: str) -> dict:
     return event
 
 
+def _legacy_attendees(event: dict) -> list:
+    """The desktop calendar's ``metadata.attendees`` in the structured shape, for an event with no attendee rows - so
+    a client that reads ``event.attendees`` sees "who it's with" for events written before 0052. ``legacy: true``
+    marks them; they are not rows (PUT ``attendees`` to make them rows)."""
+    meta = event.get("metadata")
+    listed = meta.get("attendees") if isinstance(meta, dict) else None
+    out = []
+    for i, a in enumerate(listed if isinstance(listed, list) else []):
+        if not isinstance(a, dict):
+            continue
+        name = a.get("name") or a.get("display_name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        try:
+            role = cal.normalize_attendee({"display_name": name, "role": a.get("role")})["role"]
+        except ValueError:
+            role = "req-participant"
+        out.append({"display_name": name.strip(), "email": None, "person_id": a.get("person_id"),
+                    "person_link_source": None, "role": role, "partstat": "needs-action", "kind": "individual",
+                    "is_organizer": False, "rsvp": False, "position": i, "legacy": True})
+    return out
+
+
+async def _calendar_names(db, events: list) -> None:
+    """``calendar_name`` (the member's name for the calendar an event came from) on each event that has one."""
+    ids = sorted({e["calendar_id"] for e in events if e.get("calendar_id") and not e.get("busy_only")})
+    if not ids:
+        return
+    ph = ", ".join("?" for _ in ids)
+    cur = await db.execute(f"SELECT id, name FROM calendars WHERE id IN ({ph})", ids)
+    names = {dict(r)["id"]: dict(r)["name"] async for r in cur}
+    for e in events:
+        if e.get("calendar_id") in names and not e.get("busy_only"):
+            e["calendar_name"] = names[e["calendar_id"]]
+
+
 async def _present_all(db, rows, user_id: str) -> list:
     events = [_present(r, user_id) for r in rows]
     await cal.load_children(db, events)
+    for e in events:
+        if not e.get("busy_only") and not e["attendees"]:
+            e["attendees"] = _legacy_attendees(e)
+    await _calendar_names(db, events)
     return events
 
 

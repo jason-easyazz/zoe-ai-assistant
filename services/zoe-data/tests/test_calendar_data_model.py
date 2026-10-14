@@ -212,6 +212,22 @@ async def test_desktop_metadata_description_is_bridged_both_ways(db):
     assert ev["metadata"] == {"description": "Room 7, bring forms", "travel_time": 5}   # an old reader still sees it
 
 
+async def test_legacy_metadata_attendees_surface_as_attendees_and_calendar_name_is_given(db):
+    ev = await calendar_router.create_event(
+        EventCreate(title="Book club", start_date="2026-10-22",
+                    metadata={"attendees": [{"person_id": "p-robin", "name": "Robin Vale", "role": "participant"}]}),
+        user=_u(A), db=db)
+    assert [(a["display_name"], a["person_id"], a["role"], a["legacy"]) for a in ev["attendees"]] == [
+        ("Robin Vale", "p-robin", "req-participant", True)]
+    await db.execute("INSERT INTO calendars (id, user_id, name, source, created_at, updated_at) "
+                     "VALUES ('cal-work', 'member-a', 'Work', 'google', 'x', 'x')")
+    rec = await cal.create_event_record(db, user_id=A, title="Standup", start_date="2026-10-22",
+                                        extra={"calendar_id": "cal-work", "source": "google", "read_only": 1})
+    await db.commit()
+    got = await calendar_router.get_event(rec["id"], user=_u(A), db=db)
+    assert (got["calendar_name"], got["source"], got["read_only"]) == ("Work", "google", True)
+
+
 async def test_new_fields_round_trip_through_the_api(db):
     payload = EventCreate(
         title="Planning lunch", start_date="2026-10-20", start_time="12:30", end_time="13:30",

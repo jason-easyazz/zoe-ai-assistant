@@ -184,6 +184,9 @@ supports `CREATE_EVENT`).
 5. **Notes have one home.** The `description` column is authoritative; the desktop calendar's legacy
    `metadata.description` is promoted into it on write and mirrored back into `metadata` on read, so the old
    page and the new sheet see the same text.
+6. **Who it's with, for old events.** An event with no attendee rows returns the desktop's `metadata.attendees`
+   in the structured shape, marked `legacy: true` (not rows; a PUT of `attendees` makes them rows). Every event
+   from a calendar also carries `calendar_name`. PUT stays a partial update: only the keys sent are written.
 
 ## 6. Forget, delete, tombstones
 
