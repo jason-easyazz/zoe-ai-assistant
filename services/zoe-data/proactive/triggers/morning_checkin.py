@@ -166,6 +166,15 @@ async def _build_morning_context(db, user_id: str, today: str, *, include_board:
                     }
         except Exception as exc:
             log.debug("morning_checkin: board summary load failed (non-fatal): %s", exc)
+        # The struggle detector's line (ZOE_STRUGGLE_DETECT=on only; counts of the owner's own + guest struggles, no words).
+        try:
+            import struggle_digest
+
+            line = await struggle_digest.brief_line(user_id)
+            if line:
+                ctx["struggle_line"] = line
+        except Exception as exc:
+            log.debug("morning_checkin: struggle line failed (non-fatal): %s", exc)
 
     return ctx
 
@@ -212,6 +221,10 @@ def _compose_morning_message(ctx: dict, user_name: str, day_str: str) -> str:
             f"There {'is' if total == 1 else 'are'} {total} open item{'s' if total > 1 else ''} "
             f"on the board — agents will triage automatically."
         )
+
+    # The struggle detector (admin-only, mode "on" only; set by _build_morning_context)
+    if ctx.get("struggle_line"):
+        parts.append(ctx["struggle_line"])
 
     # Portrait-informed personal note (fallback generic)
     portrait = ctx.get("portrait_snippet", "")

@@ -765,6 +765,23 @@ async def _feedback_tier(text: str, user_id: str, session_id: str, kwargs: dict)
         return None
 
 
+def _struggle_ack(text: str):
+    """``ZOE_STRUGGLE_DETECT=on`` only: a bare "that was wrong" that NO tier answered gets one short deterministic line instead of
+    a model turn (the verdict row is ``conversation_feedback``'s, the struggle event the detector's). Off / shadow = None, so the
+    turn goes on exactly as before. NEVER raises."""
+    try:
+        import struggle_detector as _sd
+
+        line = _sd.ack_line(text)
+        if not line:
+            return None
+        import expert_dispatch as _xd
+
+        return _xd.DispatchResult(domain="feedback", reply=line, intent="struggle_ack", tier="struggle_ack")
+    except Exception:  # noqa: BLE001
+        return None
+
+
 @_functools.wraps(_resolve_core)
 async def resolve(text: str, user_id: str, session_id: str, **kwargs):  # noqa: F811 - the documented wrapper
     # `phase="domain"` is the second half of a split run (the caller ran `phase="conversation"` already): the wrapper tiers
@@ -805,7 +822,20 @@ async def resolve(text: str, user_id: str, session_id: str, **kwargs):  # noqa: 
             answered = None
         if answered is not None:
             return answered
+        # session_status: "who is logged in / am I signed in" on the voice lane is answered from the resolved identity of the
+        # turn (a member's own name, or "nobody is signed in"), never routed to the lists domain and the brain.
+        try:
+            import session_status as _ss
+
+            answered = await _ss.tier(text, user_id, session_id, channel=kwargs.get("channel"),
+                                      extra_ctx=kwargs.get("extra_ctx"))
+        except Exception:  # noqa: BLE001 - the tier never breaks a turn
+            answered = None
+        if answered is not None:
+            return answered
     res = await _resolve_core(text, user_id, session_id, **kwargs)
+    if res is None and kwargs.get("phase") != "domain":
+        res = _struggle_ack(text)
     if res is not None and getattr(res, "reply", ""):
         try:
             import memory_provenance as _mp

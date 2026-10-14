@@ -159,7 +159,16 @@ let n = 0; const ok = (m) => { n++; console.log('  ok  ' + m); };
       assert(/async function syncState\(\) \{\s*if \(state\.panelServicesStopped\) return;/.test(execSrc), 'a stopped sync never posts again');
       assert(/function stopPanelServices\(reason\) \{[\s\S]{0,1400}if \(isKioskContext\(\)\) \{[\s\S]{0,200}return;\s*\}[\s\S]{0,900}state\.pushWs\.close\(\)[\s\S]{0,300}window\.zoePushWs\.disconnect\(\)/.test(execSrc), 'stopPanelServices returns BEFORE closing the push socket on a kiosk; off-kiosk it still closes the fallback socket and the shared channel');
       assert(/if \(state\.unloading \|\| state\.pushRetry \|\| state\.pushStopped\) return;/.test(execSrc), 'the fallback push backoff never reschedules after a deliberate (off-kiosk) stop, and does reconnect on a kiosk');
-      assert(/err\.status === 401\) \{[\s\S]{0,600}?_panelSessionId = null;[\s\S]{0,900}SW_PANEL_AUTH_EXPIRED[\s\S]{0,500}return;\s*\}\s*if \(err && err\.status === 403\) \{[\s\S]{0,900}_stopPanelPoll\(\);/.test(swSrc), 'sw.js: a 401 drops the session and keeps polling (never _stopPanelPoll); only a 403 stops (behaviour: test_sw_panel_poll.js)');
+      // sw.js intent (behaviour: test_sw_panel_poll.js): a 401 drops the session and keeps polling (never
+      // _stopPanelPoll); a 403 for the CURRENT session stops; a 403 for a replaced session is ignored.
+      const i401 = swSrc.indexOf('err.status === 401');
+      const i403 = swSrc.indexOf('err.status === 403');
+      assert(i401 > 0 && i403 > i401, 'sw.js: the poll error handler has a 401 branch followed by a 403 branch');
+      const b401 = swSrc.slice(i401, i403);
+      const b403 = swSrc.slice(i403, swSrc.indexOf('function _startPanelPoll', i403));
+      assert(/_panelSessionId = null;/.test(b401) && /SW_PANEL_AUTH_EXPIRED/.test(b401) && !/_stopPanelPoll\(/.test(b401), 'sw.js: a 401 drops the session and keeps polling (never _stopPanelPoll)');
+      assert(/_stopPanelPoll\(\);/.test(b403), 'sw.js: a 403 for the current session stops the SW poll');
+      assert(/err\.sessionId[\s\S]{0,120}_panelSessionId[\s\S]{0,40}return;/.test(b403) && b403.search(/err\.sessionId/) < b403.search(/_stopPanelPoll\(\)/), 'sw.js: a 403 for a replaced session returns before it can stop the poll');
       ok('executor: a 403 stops poll+sync (+SW poll, +push off-kiosk); a 401 recovers the session and stops nothing');
       // 2026-10-05: a member's laptop with a STALE session was bounced to the retired
       // /touch/index.html by the estate's own 401 path. Off-kiosk auth failures raise the

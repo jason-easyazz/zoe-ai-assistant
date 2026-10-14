@@ -398,7 +398,6 @@ class Rig:
 
         monkeypatch.setattr(vt, "synthesize", synth)
         monkeypatch.setattr(vt, "_resolve_recent_panel_session_user", noop)
-        monkeypatch.setattr(vt, "_resolve_panel_default_user", noop)
         monkeypatch.setattr(vt, "_touch_panel_session", noop)
         monkeypatch.setattr(vt, "_run_voice_memory_passes", noop)
         monkeypatch.setattr(vt, "_voice_brain_kwargs", self._voice_brain_kwargs)

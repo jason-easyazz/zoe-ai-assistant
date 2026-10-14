@@ -110,13 +110,15 @@ def _verbatim_and_night_stores_in_process():
     try:
         import exact_words
         import night_store
+        import struggle_detector
     except Exception:  # noqa: BLE001 - a lane without the service modules on its path has no delete_user to protect
         yield
         return
     # Only where nothing is installed: the bench arm (``zmb.arms.z0``) installs - and owns - its own in-process stores for as
     # long as it is open (module-scoped), and a per-test swap here would pull them out from under it.
     installed = []
-    for mod, make in ((exact_words, exact_words.MemoryBackend), (night_store, night_store.MemoryBackend)):
+    for mod, make in ((exact_words, exact_words.MemoryBackend), (night_store, night_store.MemoryBackend),
+                      (struggle_detector, struggle_detector.MemoryBackend)):
         if getattr(mod, "_backend", None) is None:
             be = make()
             mod.set_backend(be)

@@ -97,6 +97,72 @@ def smart_home_followup_ttl_s() -> float:
         return 60.0
 
 
+_FILLER_SEP = r"[\s,.!?:;-]*"
+
+
+@lru_cache(maxsize=None)
+def _filler_patterns(lang: str) -> tuple[tuple["re.Pattern[str]", ...], tuple["re.Pattern[str]", ...], tuple[str, ...]]:
+    sec = lexicons.load(lang).get("command_filler") or {}
+
+    def build(frags: list, fmt: str) -> tuple["re.Pattern[str]", ...]:
+        out = []
+        for frag in sorted(frags or [], key=len, reverse=True):
+            try:
+                out.append(re.compile(fmt.format(frag=frag), re.IGNORECASE))
+            except re.error:
+                continue
+        return tuple(out)
+
+    lead = build(sec.get("lead"), "^" + _FILLER_SEP + r"(?:{frag})(?!\w)" + _FILLER_SEP)
+    tail = build(sec.get("tail"), _FILLER_SEP + r"(?<!\w)(?:{frag})" + _FILLER_SEP + "$")
+    return lead, tail, tuple(str(w).lower() for w in sec.get("not_after_lead") or [])
+
+
+def _starts_with(text: str, frag: str) -> bool:
+    try:
+        return re.match(rf"(?:{frag})(?!\w)", text, re.IGNORECASE) is not None
+    except re.error:
+        return False
+
+
+def strip_command_filler(text: str) -> str:
+    """``text`` without its leading politeness / wake words and trailing "please" / "for me" ("Could you please turn off
+    the lights for me" -> "turn off the lights"), or ``text`` unchanged when there is none, when nothing would be left,
+    or when what follows the lead makes it a question or an offer rather than a command ("would you like ...", "can you
+    hear me"). Case is kept. The words are the lexicon's (section ``command_filler``); NEVER raises."""
+    try:
+        raw = (text or "").strip()
+        if not raw:
+            return text
+        for lang in _langs(raw, "command_filler"):
+            lead, tail, not_after = _filler_patterns(lang)
+            out, stripped_lead = raw, False
+            changed = True
+            while changed:
+                changed = False
+                for pattern in lead:
+                    m = pattern.match(out)
+                    if m and m.end() < len(out):
+                        out, changed, stripped_lead = out[m.end():], True, True
+                        break
+            if stripped_lead and any(_starts_with(out, w) for w in not_after):
+                continue
+            changed = True
+            while changed:
+                changed = False
+                for pattern in tail:
+                    m = pattern.search(out)
+                    if m and m.start() > 0:
+                        out, changed = out[:m.start()], True
+                        break
+            out = out.strip()
+            if out and out != raw:
+                return out
+    except Exception:  # noqa: BLE001
+        return text
+    return text
+
+
 def smart_home_followup(text: str) -> Optional[str]:
     """``"on"`` / ``"off"`` / ``"reverse"`` when ``text`` is a bare pronoun command about the device just controlled ("turn it
     back on again", "switch them off", "turn it back"), else ``None``. The WHOLE utterance must be lexicon words (verbs,

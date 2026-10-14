@@ -386,6 +386,111 @@ async def test_rejects_when_guest_panel_db_yields_nothing(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# A VALID guest session during the member -> guest reclaim window (PR #1999 review follow-up).
+# The kiosk dropped an expired PIN session and minted a guest; routers/ui_actions refuses the
+# guest's bind (403) until the member's ui_panel_sessions row is 300 s stale, so the guest has no
+# row of its own. A non-home touch page (websocket-sync.js -> initPush(panel, guestSessionId))
+# used to be closed 1008 for that whole window and missed every voice:* event.
+# ---------------------------------------------------------------------------
+async def _install_reclaim_window_db(monkeypatch, *, allow_guest=1, guest_row=False):
+    import aiosqlite
+
+    conn = await aiosqlite.connect(":memory:")
+    conn.row_factory = aiosqlite.Row
+    await conn.executescript(
+        f"""
+        CREATE TABLE panels (
+            panel_id TEXT PRIMARY KEY, is_active INTEGER DEFAULT 1,
+            allow_guest INTEGER DEFAULT 0
+        );
+        CREATE TABLE ui_panel_sessions (
+            panel_id TEXT PRIMARY KEY, user_id TEXT NOT NULL,
+            chat_session_id TEXT, is_foreground INTEGER DEFAULT 1, last_seen_at TEXT
+        );
+        INSERT INTO panels(panel_id, allow_guest) VALUES ('zoe-touch-pi', {int(allow_guest)}), ('other-panel', 0);
+        -- the panel row is still MEMBER-owned (fresh): the guest cannot bind it yet
+        INSERT INTO ui_panel_sessions(panel_id, user_id, chat_session_id, last_seen_at)
+        VALUES ('zoe-touch-pi', 'u1', 'member-session', '2026-10-13T10:00:00');
+        INSERT INTO ui_panel_sessions(panel_id, user_id, chat_session_id, last_seen_at)
+        VALUES ('other-panel', 'u1', 'member-session', '2026-10-13T10:00:00');
+        """
+    )
+    if guest_row:
+        await conn.execute("UPDATE ui_panel_sessions SET user_id='guest', chat_session_id='guest-session' WHERE panel_id='zoe-touch-pi'")
+    await conn.commit()
+    module = types.ModuleType("db_pool")
+
+    @contextlib.asynccontextmanager
+    async def get_db_ctx():
+        yield conn
+
+    module.get_db_ctx = get_db_ctx
+    monkeypatch.setitem(sys.modules, "db_pool", module)
+    return conn
+
+
+def _guest(monkeypatch):
+    async def resolve(_session_id):
+        return {"user_id": "guest", "role": "guest"}
+
+    monkeypatch.setattr(main, "_resolve_ws_session", resolve)
+
+
+@pytest.mark.asyncio
+async def test_valid_guest_session_joins_allow_guest_panel_in_reclaim_window(monkeypatch):
+    conn = await _install_reclaim_window_db(monkeypatch)
+    try:
+        _guest(monkeypatch)
+        assert await main._resolve_subscribable_panel("zoe-touch-pi", "guest-session") == "zoe-touch-pi"
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_guest_session_is_no_wider_than_a_sessionless_socket(monkeypatch):
+    """Negative controls: the guest fallback is exactly the anonymous policy, nothing more."""
+    conn = await _install_reclaim_window_db(monkeypatch)
+    try:
+        _guest(monkeypatch)
+        # a panel that does NOT allow guests is refused (a guest never reaches a member-only panel)
+        assert await main._resolve_subscribable_panel("other-panel", "guest-session") is None
+        # an unknown panel id is refused
+        assert await main._resolve_subscribable_panel("panel_made_up", "guest-session") is None
+        assert await main._resolve_subscribable_panel("", "guest-session") is None
+    finally:
+        await conn.close()
+    conn = await _install_reclaim_window_db(monkeypatch, allow_guest=0)
+    try:
+        _guest(monkeypatch)
+        assert await main._resolve_subscribable_panel("zoe-touch-pi", "guest-session") is None
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_other_member_still_refused_on_a_member_owned_panel(monkeypatch):
+    """The guest fallback must not leak to members: another member without a row is refused even
+    though the panel allows guests."""
+    conn = await _install_reclaim_window_db(monkeypatch)
+    try:
+        _member(monkeypatch, user_id="u2", role="member")
+        assert await main._resolve_subscribable_panel("zoe-touch-pi", "u2-session") is None
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_bound_guest_row_still_resolves_on_a_panel_that_disallows_guests(monkeypatch):
+    """The pre-existing row-based path is kept for guests (the fallback only adds)."""
+    conn = await _install_reclaim_window_db(monkeypatch, allow_guest=0, guest_row=True)
+    try:
+        _guest(monkeypatch)
+        assert await main._resolve_subscribable_panel("zoe-touch-pi", "guest-session") == "zoe-touch-pi"
+    finally:
+        await conn.close()
+
+
+# ---------------------------------------------------------------------------
 # websocket_push channel-cleanup wiring: the socket subscribes under the
 # RESOLVED panel id, so disconnect cleanup must target that same channel — not
 # the connecting alias. Drives the endpoint with a fake WebSocket + broadcaster.

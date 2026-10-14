@@ -186,7 +186,7 @@ SPECULATION_SAFE_ROUTED_DOMAINS = frozenset({"chat", "weather", "time"})
 
 # Skybridge (domain, action) pairs that only render/read. Fail-closed as above.
 _SAFE_SKYBRIDGE_DOMAINS = frozenset({"clock", "weather"})
-_SAFE_SKYBRIDGE_ACTIONS = frozenset({"show", "status", "overview", "forecast", "identity"})
+_SAFE_SKYBRIDGE_ACTIONS = frozenset({"show", "status", "overview", "forecast", "today", "identity"})
 
 
 def bind(gate: Optional[SpeculationGate]) -> contextvars.Token:

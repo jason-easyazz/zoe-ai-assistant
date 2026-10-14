@@ -2256,6 +2256,10 @@ app.include_router(ha_control_router)
 from routers.auth import router as auth_router
 app.include_router(auth_router)
 
+# The struggles report (struggle_detector, ZOE_STRUGGLE_DETECT): admin persons only, read-only.
+from routers.struggles import router as struggles_router  # noqa: E402
+app.include_router(struggles_router)
+
 try:
     from routers.voice_livekit import router as voice_livekit_router
     app.include_router(voice_livekit_router)
@@ -2410,6 +2414,12 @@ async def internal_broadcast(payload: dict, _: None = Depends(require_internal_t
     return {"ok": True}
 
 
+def _is_ws_guest(user: dict) -> bool:
+    """True for the guest sentinel identity (user_id ``guest`` or role ``guest``)."""
+    from auth import GUEST_USER_ID
+    return str(user.get("user_id") or "") == GUEST_USER_ID or str(user.get("role") or "").lower() == "guest"
+
+
 async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> str | None:
     """Resolve the *canonical* panel channel a browser push socket may subscribe to.
 
@@ -2442,6 +2452,9 @@ async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> 
          this session, or a NULL-session legacy/device bind.
       * admin/agent roles may target any explicit panel_id.
       * an unresolved session defers to the registered-panel guest policy.
+      * a VALID guest session (role/user_id ``guest``) uses its bound row when it has one,
+        else the SAME registered-panel guest policy (``panels.allow_guest``) -- no wider
+        than a session-less socket, so the member->guest reclaim window cannot deafen it.
     A user can never reach a panel their session/account isn't bound to (every
     query filters on ``user_id``).
     """
@@ -2454,11 +2467,36 @@ async def _resolve_subscribable_panel(panel_id: str, session_id: str | None) -> 
     role = str(user.get("role") or "").lower()
     if not user_id:
         return None
+    if _is_ws_guest(user):
+        # A VALID guest session (a kiosk that recovered from an expired PIN session mints one).
+        # Its own ui_panel_sessions row does not exist yet while the panel is still owned by the
+        # member it replaced (routers/ui_actions._authorize_panel refuses the guest's bind with
+        # 403 until that row is 300 s stale), so the row-based rules below would refuse the socket
+        # for up to 5 minutes and a non-home touch page that loads websocket-sync.js would miss
+        # every voice:* event. Fall back to EXACTLY the policy a session-less socket gets: the
+        # registered panel must explicitly allow guests. A guest therefore sees nothing an
+        # anonymous panel socket could not already join; it never reaches a member's user
+        # channels (this returns only a panel channel, never a user_id) nor a panel that
+        # disallows guests. A bound guest row (checked first) still wins on any panel.
+        if not panel_id:
+            return None
+        resolved = await _resolve_bound_panel(user_id, session_id, panel_id)
+        if resolved:
+            return resolved
+        if await _panel_allows_guest_push(panel_id):
+            return panel_id
+        return None
     if role in {"admin", "agent"}:
         # Trusted roles may subscribe to an explicit panel channel as-is.
         return panel_id or None
     if not panel_id:
         return None
+    return await _resolve_bound_panel(user_id, session_id, panel_id)
+
+
+async def _resolve_bound_panel(user_id: str, session_id: str | None, panel_id: str) -> str | None:
+    """The row-based half of :func:`_resolve_subscribable_panel`: the panel channel this
+    user's session is BOUND to (see that docstring for the resolution rules), or None."""
     try:
         # get_db_ctx, NOT `async for db in get_db()`: this guard RETURNS from inside
         # the DB block, and returning out of get_db()'s generator LEAKS the pooled
