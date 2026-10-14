@@ -45,6 +45,10 @@
   "Anade leche, pan y cafe a mi lista de la compra.",
   "Recuerdame llamar a mi madre manana por la tarde."
  ],
+ "phrases_extra": [
+  "Baja las luces del salon a la mitad.",
+  "Pon algo de musica tranquila en la cocina."
+ ],
  "say": {
   "offer_pin": "Puedo aprender tu voz, asi no necesitaras tu PIN la proxima vez. Guardaria una firma de tu voz, no grabaciones, y puedes borrarla cuando quieras. Lleva un minuto. Quieres?",
   "offer_close": "Por cierto, todavia no conozco tu voz. Si la aprendiera, no necesitarias tu PIN. Guardaria una firma de tu voz, no grabaciones, y puedes borrarla cuando quieras. Lleva un minuto. Quieres?",
@@ -71,6 +75,8 @@
  },
  "script": {
   "intro": "Hola {name}. Te pedire que digas tres frases cortas. Guardo una firma de tu voz, nunca las grabaciones. Di para en cualquier momento.",
+  "intro_many": "Hola {name}. Te pedire que digas {count} frases cortas, con tu voz normal. Guardo una firma de tu voz, nunca las grabaciones. Di para en cualquier momento.",
+  "retry_odd": "Esa sono distinta a las demas, asi que repitamos una vez mas.",
   "prompt": "Frase {n}. Despues del pitido, di: {phrase}",
   "retry_short": "Solo he oido un poco. Repitamos la misma frase.",
   "retry_quiet": "Se oyo un poco bajo. Un poco mas alto, por favor.",
