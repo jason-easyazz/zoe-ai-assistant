@@ -85,9 +85,6 @@ def _wire_voice_command_fakes(monkeypatch, *, panel_user: str | None):
     async def fake_panel_user(_panel_id, _db):
         return panel_user
 
-    async def fake_no_panel_user(_panel_id, _db):
-        return None
-
     async def fake_memory_passes(*_args, **_kwargs):
         return None
 
@@ -158,7 +155,6 @@ def _wire_voice_command_fakes(monkeypatch, *, panel_user: str | None):
     monkeypatch.setattr(
         voice_tts, "_resolve_recent_panel_session_user", fake_panel_user
     )
-    monkeypatch.setattr(voice_tts, "_resolve_panel_default_user", fake_no_panel_user)
     monkeypatch.setattr(voice_tts, "_VOICE_SESSIONS", {})
     monkeypatch.setattr(voice_tts, "_PENDING_CONFIRMATIONS", {})
 
@@ -199,14 +195,16 @@ async def test_bound_panel_guest_sentinel_saves_as_bound_user(monkeypatch) -> No
 async def test_lapsed_session_on_bound_panel_is_guest_and_not_revived(monkeypatch) -> None:
     """A LAPSED panel session is neither attributed nor revived.
 
-    recent=None (the login lapsed) + default=jason (the panel's last signed-in user).
-    Until 2026-10-13 the turn was still ATTRIBUTED to jason through `_panel_default_user`
-    as the last resort in `effective_user` — which is the privacy defect: whoever spoke
+    recent=None (the login lapsed; jason was the panel's last signed-in user).
+    Until 2026-10-13 the turn was still ATTRIBUTED to jason through the panel's
+    last-signed-in fallback (`_resolve_panel_default_user`, retired 2026-10-14) as the
+    last resort in `effective_user` — which is the privacy defect: whoever spoke
     was saved into (and, on the public calendar/list shortcut, read) jason's data. A
     voice turn's identity now comes only from a fresh source, so this turn is guest
-    (tests/test_voice_identity_freshness.py holds the rule end to end).
+    (tests/test_voice_identity_freshness.py holds the rule end to end, with the real
+    stale row).
 
-    And the lapsed session must NOT be resurrected. Promoting `_panel_default_user`
+    And the lapsed session must NOT be resurrected. Promoting the last signed-in member
     into the freshness-gated `_panel_recent_user` (as #1349 did) re-trusted a
     logged-OUT user for `_scope_identity_user` and every `user_scoped` PIN gate, and
     the heartbeat then refreshed the expired session on every turn — including a
@@ -217,16 +215,12 @@ async def test_lapsed_session_on_bound_panel_is_guest_and_not_revived(monkeypatc
     async def recent_none(_pid, _db):
         return None
 
-    async def default_bound(_pid, _db):
-        return BOUND_USER
-
     touched: list[tuple[str, str]] = []
 
     async def fake_touch(panel_id, user_id):
         touched.append((panel_id, user_id))
 
     monkeypatch.setattr(voice_tts, "_resolve_recent_panel_session_user", recent_none)
-    monkeypatch.setattr(voice_tts, "_resolve_panel_default_user", default_bound)
     monkeypatch.setattr(voice_tts, "_touch_panel_session", fake_touch)
 
     response = await voice_command(
