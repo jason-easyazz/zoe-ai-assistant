@@ -487,3 +487,66 @@ def test_delay_reader_is_linear_on_a_looping_transcript():
     started = time.monotonic()
     command_shapes.delayed_command("turn off the lights in " + "twenty five " * 40 + "zebra")
     assert time.monotonic() - started < 0.5
+
+
+# ── cross-review round (codex): ambiguity, questions, transport delays, destructive list questions ──
+
+
+def test_a_bare_cancel_with_several_timers_asks(owner):
+    sky._timers.create(owner, "Eggs", 180)
+    sky._timers.create(owner, "Pasta", 600)
+    out = sky._resolve_timer(sky.classify_skybridge_intent("cancel the timer"), owner)
+    assert "Which one?" in out["spoken_summary"] and len(sky._timers.list(owner)) == 2
+    out = sky._resolve_timer(sky.classify_skybridge_intent("cancel all timers"), owner)
+    assert out["spoken_summary"] == "Cancelled all 2 timers." and sky._timers.list(owner) == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "should I add 5 minutes to the timer?",
+        "should I cancel the timer?",
+        "why did you cancel the timer?",
+        "can I take a minute off the timer",
+        "did you set a timer for 10 minutes",
+        "I was going to set a timer for the rice",
+    ],
+)
+def test_a_question_about_a_timer_never_writes_one(owner, text):
+    sky._timers.create(owner, "Pasta", 600)
+    before = [(t["timer_id"], t["expires_at"]) for t in sky._timers.list(owner)]
+    i = sky.classify_skybridge_intent(text)
+    assert (i.domain, i.action) == ("timer", "status"), (text, i)
+    sky._resolve_timer(i, owner)  # resolver level: nothing created, moved or cancelled
+    assert [(t["timer_id"], t["expires_at"]) for t in sky._timers.list(owner)] == before
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["stop the music tomorrow", "pause the music later", "turn off the lights and do it tomorrow"],
+)
+def test_transport_and_back_referenced_delays_are_not_run_now(text):
+    assert _claim(text)[1] == "delayed", text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "can I remove milk from my chores list",
+        "I was going to remove milk from my chores list",
+        "did you check milk off my chores list",
+        "would you like to complete milk on my chores list",
+    ],
+)
+def test_a_question_about_a_list_change_never_writes(text):
+    i = sky.classify_skybridge_intent(text)
+    assert i is None or i.action not in ("remove_item", "complete_item"), (text, i)
+
+
+def test_an_adjust_moves_the_card_fields_it_should(owner):
+    t = sky._timers.create(owner, "Soup", 600)
+    out = _adjust(owner, "increase", 120)
+    props = out["cards"][0]["props"]
+    assert props["expires_at_ms"] == int((t["expires_at"]) * 1000)  # the store row itself moved
+    assert props["duration_seconds"] == 720
+    assert sky._timers.list(owner)[0]["set_seconds"] == 600  # still "the 10 minute timer"

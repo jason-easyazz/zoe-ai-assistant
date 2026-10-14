@@ -359,14 +359,21 @@ def _resolve_timer(intent: SkybridgeIntent, user_id: str) -> dict[str, Any]:
         return _resolve_timer_change(intent, owner)
 
     if intent.action == "cancel":
-        if intent.title or intent.start_seconds:
-            # A NAMED / sized cancel removes that timer or none: it used to fall back to the soonest one, a wrong delete.
+        if intent.query == "all":  # "cancel all timers" (HA HassCancelAllTimers)
+            gone = [t for t in list(_timers.list(owner)) if _timers.cancel_by_id(owner, t["timer_id"])]
+            if gone:
+                return _timer_reply(intent, owner,
+                                    "Cancelled your timer." if len(gone) == 1 else f"Cancelled all {len(gone)} timers.",
+                                    timer_cancelled_id=gone[0]["timer_id"],
+                                    timer_cancelled_ids=[t["timer_id"] for t in gone])
+            cancelled = None
+        else:
+            # The ONE timer meant - by name, by length, or the only one running. Several running and nothing says
+            # which = ask: it used to cancel the soonest one, a delete the words never asked for.
             target, why = _timers.find(owner, intent.title, intent.start_seconds)
             if target is None and why != "none":
                 return _timer_reply(intent, owner, _which_timer_line(intent, owner, why))
             cancelled = _timers.cancel_by_id(owner, target["timer_id"]) if target else None
-        else:
-            cancelled = _timers.cancel(owner, None)
         if not cancelled:
             return {
                 "handled": True, "intent": _intent_dict(intent),
@@ -886,7 +893,10 @@ def _list_target(match: "re.Match[str]") -> tuple[str, str]:
 
 def _list_remove_from_text(message: str) -> tuple[str, str, str] | None:
     """(item, list_type, list_name) for "take/remove/delete X off|from|out of <list>", and - ending the turn - for
-    "delete X in <list>" / "remove X on <list>" (HA's phrasings; they used to be answered with a list READ)."""
+    "delete X in <list>" / "remove X on <list>" (HA's phrasings; they used to be answered with a list READ). A question
+    or statement ABOUT removing ("can I remove milk from my list?", "I was going to remove ...") deletes nothing."""
+    if command_shapes.asks_or_mentions(message, destructive=True):
+        return None
     match = re.search(
         rf"\b(?:take|remove|delete|drop)\s+(?P<item>.+?)\s+(?:off|from|out of)\s+{_LIST_TARGET_RE}",
         message,
@@ -943,6 +953,8 @@ def _list_complete_from_text(message: str) -> tuple[str, str, bool, str] | None:
     "cross milk off the list", "complete X on my chores list", "check X off from my list").
     Direction is explicit so a tap never guesses wrong.
     """
+    if command_shapes.asks_or_mentions(message, destructive=True):
+        return None  # "did you check milk off my list?" / "would you like to complete ..." tick nothing
     on_tail = r"(?:\s+(?:on|from|in)\s+" + _LIST_TARGET_RE + r")?\s*[.!]*\s*$"
     off_tail = r"\s+off(?:\s+(?:from\s+|of\s+)?" + _LIST_TARGET_RE + r")?\s*[.!]*\s*$"
 
@@ -1485,9 +1497,16 @@ def classify_skybridge_intent(
     # Timers claim the phrase early so "set a 5 minute timer" isn't misread as a
     # calendar event ("set ... at a time").
     if re.search(r"\btimers?\b|\bcountdowns?\b", text):
+        # A question or statement ABOUT a timer ("should I add 5 minutes to the timer?", "why did you cancel the
+        # timer?") is answered with the timers' status - never a write.
+        if command_shapes.asks_or_mentions(text):
+            return SkybridgeIntent(domain="timer", action="status")
+        changing = command_shapes.asks_or_mentions(text, destructive=True)
         # A change to a RUNNING timer first: "add 5 minutes to the timer" carries a duration and a start-ish verb, so
         # the create rule below used to start a NEW timer for it (HA corpus, 2026-10-14).
         adjust = command_shapes.timer_adjust(text)
+        if adjust is not None and changing:
+            return SkybridgeIntent(domain="timer", action="status")  # "can I take a minute off the timer?"
         if adjust is not None:
             return SkybridgeIntent(domain="timer", action=adjust.direction, duration_seconds=adjust.seconds,
                                    title=adjust.target.label.title(), start_seconds=adjust.target.start_seconds)
@@ -1497,8 +1516,12 @@ def classify_skybridge_intent(
             return SkybridgeIntent(domain="timer", action=action, title=target.label.title(),
                                    start_seconds=target.start_seconds)
         cancel = re.search(r"\b(cancel|stop|clear|delete|dismiss|reset|turn off|remove|kill|scrap|get rid of)\b", text)
+        if cancel and changing:
+            return SkybridgeIntent(domain="timer", action="status")  # "can I cancel the timer?" deletes nothing
         if cancel:
             # "remove the 5 minute timer" used to START a 5-minute timer ("remove" was not a cancel word).
+            if re.search(r"\b(?:all|every|both)\b", text[cancel.end():]):
+                return SkybridgeIntent(domain="timer", action="cancel", query="all")
             target = command_shapes.timer_target(text[cancel.end():])
             return SkybridgeIntent(domain="timer", action="cancel",
                                    title=target.label.title() or _parse_timer_label(text),
@@ -2084,8 +2107,9 @@ DELAYED_COMMAND_REPLY = command_shapes.DELAYED_COMMAND_REPLY
 
 def _unless_delayed(intent: "SkybridgeIntent", text: str, *, strict: bool = False) -> "SkybridgeIntent":
     """An actuation for LATER becomes ``<domain>/delayed``: answered honestly, never run now. A tile tap (exact
-    entity id) is always now. ``strict`` (music) counts only an explicit amount or clock time, because a title may
-    hold "tonight" or "tomorrow"."""
+    entity id) is always now. ``strict`` (music PLAY only) counts only an explicit amount or clock time, because a
+    title may hold "tonight" or "tomorrow"; a transport verb ("stop the music tomorrow") has no title to protect."""
+    strict = strict and intent.action in ("play", "transfer", "dont_stop")
     if (intent.action in _ACTUATING_ACTIONS and not intent.entity_id and not intent.entity_ids
             and command_shapes.delayed_command(text, strict=strict)):
         return SkybridgeIntent(domain=intent.domain, action="delayed", query=intent.query)

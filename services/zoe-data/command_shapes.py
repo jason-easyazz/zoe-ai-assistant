@@ -234,6 +234,30 @@ def timer_pause_resume(text: str) -> Optional[tuple[str, TimerTarget]]:
     return None
 
 
+# ── Questions and statements that only MENTION a write ──────────────────────
+
+_LEAD_IN = r"^\s*(?:(?:hey|hi|ok|okay|so|um|uh|oh|well|zoe|zoey)\b[\s,.!?]*)*"
+# "should I add 5 minutes to the timer?", "why did you cancel the timer?", "I was going to remove milk from my list",
+# "would you like to complete milk on my list": the words of a write, but no request to do it.
+_ASKING_RE = re.compile(
+    _LEAD_IN + r"(?:should|shall|why|did|does|was|were|has|had|what\s+if|how\s+(?:do|did|does|would|can)"
+    r"|do\s+(?:i|we|you|they)|have\s+(?:i|we|you|they)|would\s+you\s+(?:like|want|mind)|do\s+you\s+(?:want|think)"
+    r"|i\s+(?:was|were|wonder|think|thought|already|just|have|had|did|might|may)|we\s+(?:were|already|just|have|had))\b",
+    re.IGNORECASE,
+)
+# A permission question about a DESTRUCTIVE change ("can I remove milk from my list?") is not a request to delete.
+_ASKING_PERMISSION_RE = re.compile(_LEAD_IN + r"(?:can|could|may)\s+(?:i|we)\b", re.IGNORECASE)
+
+
+def asks_or_mentions(text: str, *, destructive: bool = False) -> bool:
+    """True when ``text`` is a question or a statement ABOUT a write rather than a request for one. ``destructive``
+    (a delete / tick-off / timer change) also counts "can I ..." as a question."""
+    t = (text or "").strip()
+    if _ASKING_RE.match(t):
+        return True
+    return destructive and _ASKING_PERMISSION_RE.match(t) is not None
+
+
 # ── Delayed commands ─────────────────────────────────────────────────────────
 
 _AMOUNT_WORD = rf"(?:{NUM}|half\s+an?|a\s+half|a\s+few|few|a\s+couple(?:\s+of)?|couple(?:\s+of)?)"
@@ -276,5 +300,9 @@ def delayed_command(text: str, *, strict: bool = False) -> bool:
         return True
     if strict:
         return False
-    first_clause = _CLAUSE_END_RE.split(t, maxsplit=1)[0]
-    return _DELAY_LOOSE_RE.search(first_clause) is not None
+    clauses = _CLAUSE_END_RE.split(t)
+    if _DELAY_LOOSE_RE.search(clauses[0]):
+        return True
+    # A later clause counts only when it points back at the command ("turn off the lights and do it tomorrow"); a
+    # sign-off does not ("turn off the lights, see you tomorrow").
+    return any(_DELAY_LOOSE_RE.search(c) and re.search(r"\b(?:it|that|them|this|those)\b", c) for c in clauses[1:])

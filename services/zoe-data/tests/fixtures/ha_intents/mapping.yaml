@@ -183,9 +183,10 @@ labels:
   HassMediaUnpause:
     accept: ["sky:music/resume", "ir:music_control/resume", "ir:music_control/play"]
   HassMediaNext:
-    accept: ["sky:music/next", "ir:music_control/next*", "ir:music_control/skip*"]
+    accept: ["sky:music/next", "ir:music_control/next", "ir:music_control/skip", "ir:music_control/skip_this_song",
+             "ir:music_control/skip_the_song", "ir:music_control/skip_this_track", "ir:music_control/skip_the_track"]
   HassMediaPrevious:
-    accept: ["sky:music/previous", "ir:music_control/previous*", "ir:music_control/prev*", "ir:music_control/back*"]
+    accept: ["sky:music/previous", "ir:music_control/previous"]
   HassMediaPlayerMute:
     accept: ["ir:music_control/mute"]
   HassMediaPlayerUnmute:
