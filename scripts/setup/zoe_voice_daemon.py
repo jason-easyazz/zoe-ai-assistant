@@ -4125,6 +4125,23 @@ _enroll_lock = threading.Lock()
 _enroll_request: "dict | None" = None
 _enroll_running = threading.Event()
 _enroll_cancel = threading.Event()
+_enroll_screen_failures = 0
+
+
+def _enroll_screen(state: str, **fields) -> None:
+    """Show the enrolment prompt on THIS panel's talk screen (``POST /api/enrollment/screen``; the server pushes it to the panel this
+    daemon's device token belongs to). Best effort and fast: a short timeout, no retries, and after two failures in a row (an older
+    server without the endpoint, the server down) the rest of the run stops trying - the spoken prompt is the contract and must never wait
+    on the screen. Nothing but the phrase, the step counter and a short line is sent."""
+    global _enroll_screen_failures
+    if _enroll_screen_failures >= 2:
+        return
+    try:
+        resp = _api_post("/api/enrollment/screen", {"state": state, **fields}, timeout=3, retries=0)
+        ok = bool(resp.get("ok"))
+    except Exception:  # noqa: BLE001
+        ok = False
+    _enroll_screen_failures = 0 if ok else _enroll_screen_failures + 1
 
 
 def _enroll_poller_kwargs(logic) -> dict:
@@ -4340,7 +4357,8 @@ def _enroll_speaker_kwargs(cmd: dict, uid: str, name: str):
 
 def _run_enrollment_mode(pa) -> None:
     """Run the queued enrolment to its end. The caller (the main loop) has closed the wake stream and reopens it afterwards."""
-    global _enroll_request, _ignore_wake_until
+    global _enroll_request, _ignore_wake_until, _enroll_screen_failures
+    _enroll_screen_failures = 0
     with _enroll_lock:
         cmd, _enroll_request = _enroll_request, None
     if not cmd or _enroll_mode is None:
@@ -4381,7 +4399,7 @@ def _run_enrollment_mode(pa) -> None:
         result = _enroll_mode.EnrollmentRun(
             cmd.get("script"), say=_enroll_say, record=lambda: _enroll_record_once(pa), upload=upload, name=name,
             transcribe=stt_on_jetson, report=report,
-            cancelled=_enroll_stop_reason, max_total_s=max_total, log=log.info, **extra,
+            cancelled=_enroll_stop_reason, max_total_s=max_total, log=log.info, screen=_enroll_screen, **extra,
         ).run()
     finally:
         _recording_active.clear()
