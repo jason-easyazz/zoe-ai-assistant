@@ -1862,18 +1862,29 @@ async def _run_turn_aggregated_wire2(
 # docs/knowledge/brain-prefix-cache-2026-10-12.md "Not done").
 #
 # The wake word fires 2-4 s before the command, so the wake handler asks the sidecar for one throwaway turn that
-# carries NOTHING but a fixed instruction: no user id (a guest-shaped turn, so no identity envelope, no persona,
-# no memory/recall block, nothing member-scoped), on its own fresh session (nothing joins a real conversation's
-# history and no session is refreshed). The model re-prefills the shared prefix into the slot and answers one
-# word. The command's turn then finds the prefix resident. The warm is therefore the SAME for a guest and a member,
-# which is the point: identity is not an input.
+# carries NOTHING but a fixed instruction behind an EXPLICIT guest identity envelope (` zoe-uid:guest`). Explicit,
+# because a turn with NO envelope is not anonymous: the sidecar falls back to its own ZOE_BRAIN_USER_ID, so it would
+# fetch that member's user-model card, append it to the system prompt (which also breaks the shared prefix) and run any
+# tool as them (measured on the real sidecar + mock model, 2026-10-14). A `guest` envelope binds the guest sentinel:
+# no card fetched, no card in the prompt, every tool fails closed, and the system prompt + tool block are byte-identical
+# to a real guest turn's. No persona, no memory/recall block, no session of a real conversation is touched.
+# The model re-prefills the shared prefix into the slot and answers one word; the command's turn then finds it resident.
 #
 # Bounded and polite: skipped while a brain turn is in flight or the conversation is still hot (the prefix is
-# resident), one warm at a time, hard wall-clock cap, never raises, and it brackets itself with brain_slot_guard
-# so the post-turn helpers do not evict what it just loaded.
+# resident), one warm at a time, a hard wall-clock cap after which the sidecar turn is ABORTED (a cancelled reader alone
+# would leave it running in the one llama slot, ahead of the command), never raises, and it brackets itself with
+# brain_slot_guard so the post-turn helpers do not evict what it just loaded.
+#
+# Sessions: Flue persists every turn durably and has no delete or retention, so a session per wake grows the store
+# one conversation per wake. One warm session is reused for `_KV_WARM_SESSION_TURNS` warms, then rotated (a longer one
+# grows its replayed history, i.e. the warm's own prefill, and deepens its divergence from a real prompt); a failed
+# warm rotates at once. Measured offline: three reuses of one session keep system prompt + tool block byte-identical.
 _KV_WARM_MESSAGE = "Reply with the single word: ready."
+_KV_WARM_IDENTITY = "guest"
 _KV_WARM_MAX_S = 10.0   # a cold prefill is ~4 s (2.7k tokens at ~670 tok/s): 2x headroom, and the cap on how long a command can queue behind a stalled warm
+_KV_WARM_SESSION_TURNS = 8
 _kv_warm_inflight = False
+_kv_warm_session: dict = {"id": "", "uses": 0, "seq": 0}
 
 
 def kv_warm_enabled() -> bool:
@@ -1882,19 +1893,49 @@ def kv_warm_enabled() -> bool:
         "0", "false", "no", "off", "disabled")
 
 
-async def _kv_warm_turn(session_id: str) -> tuple[str, int, int]:
-    """Run the throwaway warm turn; returns (outcome, first_prompt_n, first_cache_n) (-1 = not reported)."""
+def _kv_warm_message() -> str:
+    """The warm turn's whole message: the explicit guest envelope, then the fixed instruction."""
+    return f"{_IDENTITY_ENVELOPE_PREFIX}{_KV_WARM_IDENTITY}\n{_KV_WARM_MESSAGE}"
+
+
+def _kv_warm_session_id() -> str:
+    """The warm session for THIS warm: reused for `_KV_WARM_SESSION_TURNS` warms, then a fresh one."""
+    import uuid
+
+    st = _kv_warm_session
+    if not st["id"] or st["uses"] >= _KV_WARM_SESSION_TURNS:
+        st["seq"] += 1
+        st["id"] = f"kvwarm-{uuid.uuid4().hex[:6]}-{st['seq']}"
+        st["uses"] = 0
+    st["uses"] += 1
+    return st["id"]
+
+
+def _kv_warm_rotate() -> None:
+    _kv_warm_session["uses"] = _KV_WARM_SESSION_TURNS   # next warm mints a new session
+
+
+async def _kv_warm_turn(session_id: str, state: dict) -> tuple[str, int, int]:
+    """Run the throwaway warm turn; returns (outcome, first_prompt_n, first_cache_n) (-1 = not reported).
+
+    ``state["submission"]`` is set as soon as the sidecar admits the turn, so a caller that cancels this
+    coroutine can still ask the sidecar to abort exactly that submission.
+    """
     import httpx
 
     headers = dict(_headers())
     headers["Accept"] = _NDJSON_CONTENT_TYPE
+    # Opt in to the sidecar's abort guard whatever ZOE_FLUE_ABORT_ON_CANCEL says: it makes the sidecar abort the turn
+    # if this reader goes away, and echoes the submission id the explicit abort below names.
+    headers[_ABORT_OPT_IN_HEADER] = "1"
     async with httpx.AsyncClient(timeout=_KV_WARM_MAX_S) as client:
         async with client.stream(
             "POST", _endpoint(session_id, stream=True),
-            content=_request_payload(_KV_WARM_MESSAGE), headers=headers,
+            content=_request_payload(_kv_warm_message()), headers=headers,
         ) as resp:
             if resp.status_code >= 300:
                 return f"http_{resp.status_code}", -1, -1
+            state["submission"] = resp.headers.get(_SUBMISSION_HEADER) or ""
             if _NDJSON_CONTENT_TYPE not in (resp.headers.get("content-type") or ""):
                 return "not_ndjson", -1, -1
             async for line in resp.aiter_lines():
@@ -1908,6 +1949,7 @@ async def _kv_warm_turn(session_id: str) -> tuple[str, int, int]:
                 if not isinstance(chunk, dict):
                     continue
                 if chunk.get("done"):
+                    state["settled"] = True
                     rounds = chunk.get("prompt_cache")
                     first = rounds[0] if isinstance(rounds, list) and rounds and isinstance(rounds[0], dict) else {}
                     try:
@@ -1915,6 +1957,7 @@ async def _kv_warm_turn(session_id: str) -> tuple[str, int, int]:
                     except (TypeError, ValueError):
                         return "warmed", -1, -1
                 if "error" in chunk:
+                    state["settled"] = True
                     return "error_terminal", -1, -1
     return "no_terminal", -1, -1
 
@@ -1923,7 +1966,7 @@ async def warm_kv_prefix() -> str:
     """Prime the brain's llama-server slot with the shared system+tools prefix (see the block above).
 
     Fire-and-forget for the wake handler. Returns an outcome label (``warmed`` / ``skipped:...`` / ``failed:...``)
-    for logs and tests; NEVER raises, whatever the sidecar does. Carries no identity of any kind.
+    for logs and tests; NEVER raises, whatever the sidecar does. Runs as an explicit guest, never as a member.
     """
     global _kv_warm_inflight
     if not kv_warm_enabled():
@@ -1932,17 +1975,17 @@ async def warm_kv_prefix() -> str:
         return "skipped:inflight"
     if brain_slot_guard.is_hot():
         return "skipped:hot"   # a turn is running or ended < ZOE_BRAIN_SLOT_QUIET_S ago: the prefix is resident
-    import uuid
-
-    session_id = f"kvwarm-{uuid.uuid4().hex[:10]}"
+    session_id = "-"
     t0 = asyncio.get_running_loop().time()
     outcome, prompt_n, cache_n = "failed:unknown", -1, -1
     acquired = False
+    state: dict = {"submission": "", "settled": False}
     try:
         _kv_warm_inflight = True
         brain_slot_guard.turn_started()
         acquired = True
-        outcome, prompt_n, cache_n = await asyncio.wait_for(_kv_warm_turn(session_id), timeout=_KV_WARM_MAX_S)
+        session_id = _kv_warm_session_id()
+        outcome, prompt_n, cache_n = await asyncio.wait_for(_kv_warm_turn(session_id, state), timeout=_KV_WARM_MAX_S)
     except asyncio.TimeoutError:
         outcome = "failed:timeout"
     except asyncio.CancelledError:
@@ -1951,14 +1994,26 @@ async def warm_kv_prefix() -> str:
     except Exception as exc:  # noqa: BLE001 - a warm-up must never break the wake path
         outcome = f"failed:{type(exc).__name__}"
     finally:
+        if outcome != "warmed":
+            _kv_warm_rotate()
+        abort = "-"
+        if state["submission"] and not state["settled"]:
+            # The turn was admitted and never reached a terminal: stop it, or it keeps decoding in the one llama slot
+            # ahead of the command this warm exists to speed up. Bounded and never raising.
+            try:
+                abort = await asyncio.wait_for(
+                    _post_guarded_abort(session_id, state["submission"], "warm_timeout"),
+                    timeout=_ABORT_TIMEOUT_S + 0.5)
+            except BaseException as err:  # noqa: BLE001 - incl. a second cancel: we are already unwinding
+                abort = f"error:{type(err).__name__}"
         _kv_warm_inflight = False
         if acquired:
             brain_slot_guard.turn_finished()
         # A dedicated line, NOT FLUE_PROMPT_CACHE: the warm is cold by design, and mixing its rows into that log would
         # corrupt the live miss-rate (share of turns with first_cache_n=0) the prefix-cache doc tells operators to read.
         logger.info(
-            "FLUE_KV_WARM session=%s outcome=%s first_prompt_n=%d first_cache_n=%d ms=%d",
-            session_id, outcome, prompt_n, cache_n, round((asyncio.get_running_loop().time() - t0) * 1000),
+            "FLUE_KV_WARM session=%s outcome=%s first_prompt_n=%d first_cache_n=%d ms=%d abort=%s",
+            session_id, outcome, prompt_n, cache_n, round((asyncio.get_running_loop().time() - t0) * 1000), abort,
         )
     return outcome
 

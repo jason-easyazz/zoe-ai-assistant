@@ -6329,7 +6329,7 @@ async def _prewarm_brain_for_panel(panel_id: str) -> None:
     * The brain's cacheable prefix (system prompt + tool block) is the same bytes for
       every user and session - the member's words, memory and persona ride the user
       message behind it - so ``zoe_flue_client.warm_kv_prefix`` loads it into llama-server's
-      one slot with an identity-free throwaway turn. This is what hides the ~2.7k-token cold
+      one slot with an explicit-guest throwaway turn. This is what hides the ~2.7k-token cold
       prefill (TTFT ~4.8 s cold vs ~1.1-1.7 s warm). Live lane only.
     * The core (Pi) worker is keyed on (user, session): warmed for the member of a FRESH
       panel session, else for ``guest`` - the same key the turn's ``effective_user`` gets

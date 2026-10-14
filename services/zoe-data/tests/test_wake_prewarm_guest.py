@@ -196,13 +196,23 @@ def sidecar(monkeypatch):
     import httpx
 
     seen: list = []
-    state = {"status": 200, "ctype": "application/x-ndjson",
+    state = {"status": 200, "ctype": "application/x-ndjson", "stall": False, "aborts": [],
              "body": '"ready"\n{"done": true, "prompt_cache": [{"prompt_n": 2667, "cache_n": 0}]}\n'}
 
-    def handler(request):
+    async def _stalled():
+        yield b'"..."\n'          # admitted, then silence: the model never finishes
+        await asyncio.sleep(60)
+
+    async def handler(request):
         seen.append(request)
-        return httpx.Response(state["status"], headers={"content-type": state["ctype"]},
-                              content=state["body"].encode())
+        if request.url.path.endswith("/abort"):
+            state["aborts"].append((request.url.path, request.headers.get("x-zoe-abort-submission"),
+                                    request.headers.get("x-zoe-abort-reason")))
+            return httpx.Response(200, json={"outcome": "requested"})
+        headers = {"content-type": state["ctype"], "x-flue-submission-id": "sub-warm-1"}
+        if state["stall"]:
+            return httpx.Response(200, headers=headers, content=_stalled())
+        return httpx.Response(state["status"], headers=headers, content=state["body"].encode())
 
     real = httpx.AsyncClient
     monkeypatch.setattr(httpx, "AsyncClient",
@@ -213,34 +223,110 @@ def sidecar(monkeypatch):
     monkeypatch.delenv("ZOE_BRAIN_KV_WARM_ON_WAKE", raising=False)
     brain_slot_guard.reset()
     monkeypatch.setattr(zfc, "_kv_warm_inflight", False)
+    monkeypatch.setattr(zfc, "_kv_warm_session", {"id": "", "uses": 0, "seq": 0})
     yield seen, state
     brain_slot_guard.reset()
 
 
-def test_warm_carries_no_identity_and_uses_its_own_fresh_session(sidecar, caplog):
+def _warm_message(req) -> str:
+    return json.loads(req.content)["body"]
+
+
+def _assert_guest_only(message: str) -> None:
+    """The warm turn is an EXPLICIT guest: a leading guest envelope, then the fixed instruction, nothing else.
+
+    No envelope at all is NOT anonymous - the live sidecar falls back to its own ZOE_BRAIN_USER_ID, fetches that
+    member's user-model card into the system prompt and lets tools act as them (measured offline on the real sidecar).
+    """
+    assert message == " zoe-uid:guest\n" + zfc._KV_WARM_MESSAGE, repr(message)
+    for needle in ("zoe-persona", "zoe-replay", "zoe-spec", "What you remember", "[MEMORY"):
+        assert needle not in message, f"{needle!r} must never ride a warm turn"
+
+
+def test_warm_is_an_explicit_guest_on_its_own_session(sidecar, caplog):
     seen, _ = sidecar
     caplog.set_level("INFO", logger="zoe_flue_client")
     assert _run(zfc.warm_kv_prefix()) == "warmed"
     assert len(seen) == 1
     req = seen[0]
     assert req.url.path.startswith("/agents/zoe/kvwarm-"), "never a real conversation's session"
-    body = json.loads(req.content)
-    assert body == {"kind": "user", "body": zfc._KV_WARM_MESSAGE}, "nothing but the fixed instruction"
-    wire = req.content.decode()
-    for needle in ("zoe-uid", "zoe-persona", "zoe-replay", "What you remember", "[MEMORY"):
-        assert needle not in wire, f"{needle!r} must never ride a warm turn"
+    assert set(json.loads(req.content)) == {"kind", "body"}
+    _assert_guest_only(_warm_message(req))
+    assert req.headers.get("x-zoe-abort-on-cancel") == "1", "the sidecar must be able to abort a stalled warm"
     line = [r.getMessage() for r in caplog.records if "FLUE_KV_WARM" in r.getMessage()]
     assert line and "outcome=warmed first_prompt_n=2667 first_cache_n=0" in line[0]
     assert not any("FLUE_PROMPT_CACHE" in r.getMessage() for r in caplog.records), \
         "the warm must not pollute the live miss-rate log"
 
 
-def test_each_warm_gets_a_distinct_session(sidecar):
+def test_negative_control_an_envelope_less_warm_is_caught(sidecar, monkeypatch):
+    """Drop the envelope (what the first version did): the guard above must fail, or it proves nothing."""
     seen, _ = sidecar
+    monkeypatch.setattr(zfc, "_kv_warm_message", lambda: zfc._KV_WARM_MESSAGE)
+    _run(zfc.warm_kv_prefix())
+    with pytest.raises(AssertionError):
+        _assert_guest_only(_warm_message(seen[0]))
+
+
+def test_one_warm_session_is_reused_then_rotated(sidecar):
+    """Flue persists every turn and never deletes: reuse bounds the store's growth, rotation bounds the history."""
+    seen, _ = sidecar
+    for _i in range(zfc._KV_WARM_SESSION_TURNS + 1):
+        assert _run(zfc.warm_kv_prefix()) == "warmed"
+        brain_slot_guard.reset()
+    paths = [r.url.path for r in seen]
+    assert len(set(paths[:zfc._KV_WARM_SESSION_TURNS])) == 1, "the first N warms share ONE session"
+    assert paths[zfc._KV_WARM_SESSION_TURNS] != paths[0], "then a fresh one, so the replayed history stays short"
+    assert all(p.startswith("/agents/zoe/kvwarm-") for p in paths)
+
+
+def test_a_failed_warm_rotates_the_session(sidecar):
+    seen, state = sidecar
     _run(zfc.warm_kv_prefix())
     brain_slot_guard.reset()
+    state.update(body='"ready"\n{"done": true}\n')
     _run(zfc.warm_kv_prefix())
-    assert seen[0].url.path != seen[1].url.path
+    brain_slot_guard.reset()
+    state.update(body='{"error": "model down"}\n')
+    _run(zfc.warm_kv_prefix())
+    brain_slot_guard.reset()
+    state.update(body='"ready"\n{"done": true}\n')
+    _run(zfc.warm_kv_prefix())
+    assert seen[0].url.path == seen[1].url.path == seen[2].url.path   # reused until it failed...
+    assert seen[3].url.path != seen[2].url.path                        # ...never reused after a failure
+
+
+def test_a_stalled_warm_is_actually_aborted_not_just_abandoned(sidecar, monkeypatch, caplog):
+    """On the deadline the reader is cancelled AND the admitted submission is aborted via the guarded route."""
+    seen, state = sidecar
+    caplog.set_level("INFO", logger="zoe_flue_client")
+    state["stall"] = True
+    monkeypatch.setattr(zfc, "_KV_WARM_MAX_S", 0.2)
+    assert _run(zfc.warm_kv_prefix()) == "failed:timeout"
+    assert len(state["aborts"]) == 1, "the stalled turn must be aborted or it keeps the one llama slot"
+    path, submission, reason = state["aborts"][0]
+    assert path == seen[0].url.path + "/abort" and submission == "sub-warm-1" and reason == "warm_timeout"
+    assert any("abort=requested" in r.getMessage() for r in caplog.records)
+    assert zfc._kv_warm_inflight is False and brain_slot_guard._active == 0
+
+
+def test_a_finished_warm_is_not_aborted(sidecar):
+    _, state = sidecar
+    assert _run(zfc.warm_kv_prefix()) == "warmed"
+    assert state["aborts"] == []
+
+
+def test_a_failing_abort_never_breaks_the_warm(sidecar, monkeypatch):
+    _, state = sidecar
+    state["stall"] = True
+    monkeypatch.setattr(zfc, "_KV_WARM_MAX_S", 0.2)
+
+    async def _boom(*a, **k):
+        raise RuntimeError("sidecar gone")
+
+    monkeypatch.setattr(zfc, "_post_guarded_abort", _boom)
+    assert _run(zfc.warm_kv_prefix()) == "failed:timeout"
+    assert zfc._kv_warm_inflight is False and brain_slot_guard._active == 0
 
 
 def test_warm_is_skipped_while_the_conversation_is_hot(sidecar):
@@ -296,7 +382,7 @@ def test_warm_never_raises_when_the_sidecar_is_unreachable(monkeypatch):
 
 
 def test_warm_is_wall_clock_bounded(sidecar, monkeypatch):
-    async def _hang(session_id):
+    async def _hang(session_id, state):
         await asyncio.sleep(60)
 
     monkeypatch.setattr(zfc, "_kv_warm_turn", _hang)
@@ -309,7 +395,7 @@ def test_a_cancelled_warm_restores_the_slot_guard_and_the_inflight_flag(sidecar,
     async def _go():
         gate = asyncio.Event()
 
-        async def _hang(session_id):
+        async def _hang(session_id, state):
             gate.set()
             await asyncio.sleep(60)
 
