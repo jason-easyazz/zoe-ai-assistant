@@ -23,6 +23,8 @@ import memory_reject_ledger as reject_ledger
 import memory_service
 from memory_service import MemoryService, MemoryServiceError
 
+pytestmark = pytest.mark.ci_safe  # the structural removal guard must run in the required `validate` lane
+
 SERVICE_DIR = pathlib.Path(memory_service.__file__).resolve().parent
 REPO = SERVICE_DIR.parent.parent
 
@@ -305,6 +307,10 @@ _REMOVERS = {
     ("scripts/perf/zmb/lab_driver.py", "delete"),
     # the forgotten ledger's own row (a salted hash, never palace text): an explicit re-teach releases it (#1883)
     ("memory_forgotten.py", "release"),
+    # the forgotten ledger's cascade-retry markers (scope ``pending``): the salted hash of the FIXED step label behind a pipe
+    # prefix no tokenised text can produce - never palace text, never a forgotten entity's hash. It deletes only after the derived
+    # stores were cleared. Pinned by test_forget_cascade_durable_retry.py::test_clear_pending_can_only_remove_pending_markers.
+    ("memory_forgotten.py", "clear_pending"),
     ("scripts/maintenance/compact_drawers_index.py", "compact"),
     ("scripts/maintenance/check_memory_tombstones.py", "compact"),
     ("scripts/maintenance/remediate_ownerless_memories.py", "delete_rows"),
