@@ -9,7 +9,7 @@ NEGATIVE_FEEDBACK), written OFF the turn path by the detector's bounded worker:
   * ``prev_turn_id`` / ``turn_id`` - the failing turn and the turn that revealed it (pair signals), or '' / the turn.
   * ``domain_predicted`` / ``domain_served`` / ``path_served`` - the router's guess vs what actually answered.
   * ``pattern``    - a TEXT-FREE shape key (domain + question shape) the digest clusters on, for every user.
-  * ``summary``    - the normalised user wording (members only, <= 160 chars) - the same words ``chat_messages`` keeps.
+  * ``summary``    - the member's own words in display form (lower case, wake word stripped; PII-scrubbed raw; <= 160 chars) - the same words ``chat_messages`` keeps.
   * ``detail``     - JSON reason codes and numbers (similarities, gap, chars), never words.
 
 A forget deletes the rows whose summary names the entity (``struggle_detector.erase_entity``); the audited user delete

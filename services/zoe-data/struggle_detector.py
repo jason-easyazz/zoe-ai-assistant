@@ -19,7 +19,7 @@ OFF THE TURN PATH, by construction:
     counted, never retried on the turn's time.
 
 PRIVACY (same rules as the transcript the turn already lives in, ``chat_messages``):
-  * a member's row may carry ``summary`` = the normalised, PII-scrubbed user words (<= 160 chars) - never Zoe's reply;
+  * a member's row may carry ``summary`` = the display-form (lower case, unfolded), raw-scrubbed user words (<= 160 chars) - never Zoe's reply;
   * a GUEST row (and an off-the-record / distress turn, and a turn that names a forgotten entity) carries no words at all,
     only categories (signal, domain, the text-free ``pattern`` shape, numbers);
   * ``erase_entity`` (the forget path) deletes the user's rows whose summary names the entity, ``delete_user`` (the audited
@@ -53,6 +53,10 @@ SUMMARY_MAX = 160
 NOTE_TTL_S = 300.0
 HISTORY_TTL_S = 600.0
 HISTORY_MAX = 512
+#: the user's words / the reply as the worker sees them (a pasted blob must not make string matching expensive on the loop;
+#: VERBOSE needs only the reply's length up to a few budgets)
+TEXT_CAP = 600
+REPLY_CAP = 3000
 SWEEP_EVERY_S = 3600.0
 STORE_TIMEOUT_S = 5.0
 #: panels whose traffic is a harness or a test, never a household conversation
@@ -192,10 +196,12 @@ def _queue() -> "asyncio.Queue":
 
 
 def observe(channel: str, user_text: str, reply: str, user_id: str, session_id: str = "", *, panel_id: str = "",
-            interrupted: bool = False) -> bool:
+            interrupted: bool = False, speaker_verified: Optional[bool] = None) -> bool:
     """THE post-turn hook: queue one finished exchange for detection. True when queued. Synchronous, O(1), NEVER raises.
 
-    Call it from a turn's post-turn background work, never before the reply is out."""
+    Call it from a turn's post-turn background work, never before the reply is out. A voice turn whose speaker the gate
+    REJECTED (``speaker_verified=False``) is recorded as a guest's (categories, no words): it is not provably the member's.
+    The texts are capped (``TEXT_CAP`` / ``REPLY_CAP``) so the worker's string work stays bounded on the event loop."""
     try:
         _count("observed")
         if mode() == "off":
@@ -205,7 +211,8 @@ def observe(channel: str, user_text: str, reply: str, user_id: str, session_id: 
         if pid.startswith(SYNTHETIC_PANELS) or _synthetic(user_id):
             _count("skipped_synthetic")
             return False
-        item = (time.time(), str(channel or "chat"), str(user_text or ""), str(reply or ""), str(user_id or ""),
+        uid = "guest" if speaker_verified is False else str(user_id or "")
+        item = (time.time(), str(channel or "chat"), str(user_text or "")[:TEXT_CAP], str(reply or "")[:REPLY_CAP], uid,
                 str(session_id or ""), pid, bool(interrupted))
         q = _queue()
         try:
@@ -260,6 +267,8 @@ def reset() -> None:
     _BRAINS.clear()
     _HISTORY.clear()
     _COUNTERS.clear()
+    _ERASED_AT.clear()
+    _DELETED_AT.clear()
 
 
 # ── the worker ───────────────────────────────────────────────────────────────
@@ -302,12 +311,15 @@ def build_turn(item: tuple) -> sig.Turn:
         two_stage_conf=(float(route["two_stage_conf"]) if isinstance(route.get("two_stage_conf"), (int, float)) else None),
         two_stage_active=bool(route.get("two_stage_active")),
         two_stage_failed=bool(route.get("two_stage_failed")),
-        latency_ms=int((ts - route_ts) * 1000) if route_ts is not None else None, interrupted=bool(interrupted))
+        latency_ms=int((ts - route_ts) * 1000) if route_ts is not None else None, interrupted=bool(interrupted),
+        started=route_ts)
 
 
 async def process(item: tuple) -> list[sig.Event]:
     """Detect and store the struggles of one queued turn. Returns the events (tests)."""
     cur = build_turn(item)
+    if _erased_since(cur.user_id, cur.ts, _DELETED_AT):
+        return []          # the user was deleted after this turn was queued: it is not recorded at all
     for k in [k for k, t in _HISTORY.items() if cur.ts - t.ts > HISTORY_TTL_S]:
         _HISTORY.pop(k, None)
     prev = _HISTORY.get(cur.conv_key)
@@ -386,11 +398,13 @@ async def _row(e: sig.Event) -> dict[str, Any]:
     summary = ""
     texts = (about.text, cur.text) if about is not cur else (cur.text,)
     # words only when every turn quoted is this member's own (a panel's identity can flip between guest and member)
-    if about.user_id == cur.user_id and await _keep_words_bounded(cur, *texts):
-        parts = [sig.normalise(t) for t in texts]
-        joined = " -> ".join(p for p in parts if p)
-        scrubbed = _scrub(joined)
-        summary = (scrubbed or "")[:SUMMARY_MAX]
+    if (about.user_id == cur.user_id and not _erased_since(cur.user_id, cur.ts, _ERASED_AT)
+            and await _keep_words_bounded(cur, *texts)):
+        # scrub the RAW words (normalising first would hide a card number / key / "password: x" from the scrubber); any
+        # rejected text = no words at all
+        scrubbed = [_scrub(t) for t in texts]
+        if all(x is not None for x in scrubbed):
+            summary = " -> ".join(p for p in (sig.display(x) for x in scrubbed) if p)[:SUMMARY_MAX]
     return {
         "id": uuid.uuid4().hex,
         "ts": float(cur.ts),
@@ -556,6 +570,8 @@ async def erase_entity(user_id: str, name: str) -> int:
     A store failure is RAISED: a forget that could not erase must not be confirmed. Only a missing table is "nothing stored"."""
     if not (user_id or "").strip() or not (name or "").strip():
         return 0
+    _ERASED_AT[user_id] = time.time()     # turns still queued for this user keep no words
+    _forget_history(user_id)
     from memory_forgotten import name_pattern, normalise_key
 
     pat = name_pattern(name)
@@ -576,12 +592,30 @@ async def delete_user(user_id: str) -> int:
     """Remove every row of a user (``MemoryService.delete_user``). RAISES on a store failure (fail closed)."""
     if not (user_id or "").strip():
         return 0
+    _DELETED_AT[user_id] = time.time()    # turns still queued for this user are not recorded
+    _forget_history(user_id)
     try:
         return int(await get_backend().delete_user(user_id) or 0)
     except Exception as exc:
         if _nothing_stored(exc):
             return 0
         raise
+
+
+#: user -> when a forget / a delete ran: a turn queued BEFORE it must not write the words (forget) or anything (delete) after it
+_ERASED_AT: dict[str, float] = {}
+_DELETED_AT: dict[str, float] = {}
+
+
+def _erased_since(user_id: str, ts: float, marks: dict) -> bool:
+    at = marks.get(user_id)
+    return at is not None and ts <= at
+
+
+def _forget_history(user_id: str) -> None:
+    """Drop the in-memory previous turns of ``user_id`` (they hold raw words a later pair signal would quote)."""
+    for k in [k for k, t in _HISTORY.items() if t.user_id == user_id]:
+        _HISTORY.pop(k, None)
 
 
 def _nothing_stored(exc: BaseException) -> bool:

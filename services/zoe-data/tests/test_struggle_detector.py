@@ -71,7 +71,7 @@ async def test_shadow_records_through_the_real_queue_and_worker(fresh):
     assert [r["signal"] for r in fresh.data] == ["RE_ASK"]
     row = fresh.data[0]
     assert row["user_id"] == A and row["channel"] == "chat" and row["mode"] == "shadow" and row["ts"] >= t0
-    assert row["summary"] == "what is the capital of peru -> what is the capital of peru"
+    assert row["summary"] == "what's the capital of peru -> what's the capital of peru"
     st = sd.stats()
     assert st["enqueued"] == 2 and st["processed"] == 2 and st["events"] == 1 and st["queue_depth"] == 0
 
@@ -429,7 +429,7 @@ async def test_voice_memory_passes_call_the_hook_first_and_survive_it_raising(mo
     monkeypatch.setattr(hold_the_fact, "is_own_reply", lambda _r: True)     # stop right after the hook: no extractors
     await vt._run_voice_memory_passes("what's the capital of chad", "N'Djamena.", A, "voice-panel-hall-1", interrupted=True)
     assert seen and seen[0][0][:5] == ("voice", "what's the capital of chad", "N'Djamena.", A, "voice-panel-hall-1")
-    assert seen[0][1] == {"interrupted": True}
+    assert seen[0][1] == {"interrupted": True, "speaker_verified": None}
 
 
 async def test_chat_memory_hook_calls_the_detector_and_survives_it_raising(monkeypatch):
@@ -505,3 +505,80 @@ def test_offline_replay_refuses_to_write_the_sheet_inside_the_repo(tmp_path):
     repo = Path(ev.__file__).resolve().parents[2]
     assert ev.main(["--log-dir", str(tmp_path), "--dump", "--out-dir", str(repo / "tmp-sheet")]) == 2
     assert not (repo / "tmp-sheet").exists()
+
+
+
+# ── review fixes (2026-10-14): each pinned ───────────────────────────────────
+
+@pytest.mark.parametrize("name,said", [("James", "when is James coming over"), ("Lucas", "text Lucas about the keys"),
+                                       ("O'Brien", "call O'Brien after lunch"), ("Charles", "is Charles's flight late")])
+async def test_forget_finds_names_the_normaliser_would_fold(fresh, name, said):
+    """The stored words are NOT plural-folded or apostrophe-stripped, so the forget's own name pattern finds them."""
+    await feed(item(said), item(said))
+    assert fresh.data and fresh.data[0]["summary"]
+    assert await sd.erase_entity(A, name) == 1 and fresh.data == []
+
+
+@pytest.mark.parametrize("said,secret", [("my ssn is 123-45-6789", "6789"), ("the password: hunter2 please", "hunter2"),
+                                         ("use key AKIAIOSFODNN7EXAMPLE now", "AKIAIOSFODNN7EXAMPLE")])
+async def test_pii_is_scrubbed_on_the_raw_words(fresh, said, secret):
+    await feed(item(said), item(said))
+    assert fresh.data and secret.lower() not in fresh.data[0]["summary"].lower()
+
+
+async def test_a_huge_paste_is_capped_and_cheap(fresh):
+    blob = "a" + " " * 40000 + "x " * 5000
+    t0 = time.perf_counter()
+    assert sd.observe("chat", blob, "ok", A, "s1") and sd.observe("chat", blob, "ok", A, "s1")
+    await sd.drain(timeout=10)
+    assert time.perf_counter() - t0 < 1.0
+    assert all(len(r["summary"]) <= sd.SUMMARY_MAX for r in fresh.data)
+
+
+async def test_the_chat_hook_observes_the_words_without_the_voice_suffix(monkeypatch):
+    from routers import chat as chat_router
+    from routers.voice_tts import _VOICE_SYSTEM_PROMPT_SUFFIX
+
+    seen = []
+    monkeypatch.setattr(sd, "observe", lambda *a, **k: seen.append(a))
+
+    async def impl(*_a, **_k):
+        return True
+
+    monkeypatch.setattr(chat_router, "_persist_memory_candidates_impl", impl)
+    await chat_router._persist_memory_candidates(A, "s1", "next song\n" + _VOICE_SYSTEM_PROMPT_SUFFIX, "Skipping.")
+    assert seen[0][1] == "next song"
+
+
+async def test_a_turn_queued_before_a_delete_is_not_recorded_and_before_a_forget_keeps_no_words(fresh):
+    t = time.time() - 5
+    first, second = item("when is Marlowe coming over", ts=t), item("when is Marlowe coming over", ts=t + 1)
+    await sd.process(first)
+    await sd.erase_entity(A, "Marlowe")
+    await sd.process(second)          # queued before the forget ran
+    assert fresh.data == [] or all(r["summary"] == "" for r in fresh.data)
+    sd.reset()
+    sd.set_backend(fresh)
+    fresh.data.clear()
+    await sd.process(first)
+    await sd.delete_user(A)
+    await sd.process(second)          # queued before the delete ran
+    assert fresh.data == []
+
+
+async def test_the_pause_is_measured_from_the_end_of_the_reply_to_the_start_of_the_next_turn(fresh):
+    """A long spoken answer must not push a quick repeat out of the window: the gap runs from the previous turn's end
+    to the router's note of the next one."""
+    now = time.time()
+    await sd.process(item("what's the capital of peru", ts=now - 60))
+    sd.note_route("what's the capital of peru", {"domain": "chat", "score": 0.5})
+    sd._ROUTES[-1] = (now - 30, sd._ROUTES[-1][1], sd._ROUTES[-1][2])    # the repeat began 30 s after the first ended
+    ev = await sd.process(item("what's the capital of peru", ts=now))  # ... and finished 30 s later
+    assert [e.signal for e in ev] == ["RE_ASK"] and ev[0].numbers["gap_s"] == 30.0
+
+
+async def test_a_rejected_speaker_is_recorded_as_a_guest(fresh):
+    sd.observe("voice", "what's on my calendar", "You have 2 events.", A, "voice-panel-hall-1", speaker_verified=False)
+    sd.observe("voice", "what's on my calendar", "You have 2 events.", A, "voice-panel-hall-1", speaker_verified=False)
+    await sd.drain()
+    assert fresh.data and {r["user_id"] for r in fresh.data} == {"guest"} and fresh.data[0]["summary"] == ""

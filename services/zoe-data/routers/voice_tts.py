@@ -3240,7 +3240,8 @@ async def _run_voice_memory_passes(
     try:  # the struggle detector (post-turn, already off the reply path; a bounded put_nowait that never raises)
         import struggle_detector
 
-        struggle_detector.observe("voice", user_text, reply, user_id, session_id, interrupted=interrupted)
+        struggle_detector.observe("voice", user_text, reply, user_id, session_id, interrupted=interrupted,
+                                  speaker_verified=speaker_verified)
     except Exception:  # noqa: BLE001
         pass
     try:
