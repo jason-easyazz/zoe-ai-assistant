@@ -47,6 +47,12 @@ case "$cmd" in
     fi
     printf '%s\n' "$out"
     ;;
+  *--health-state*)
+    [ "${FAKE_HELPER_FAIL:-0}" = 1 ] && { echo "ImportError: boom" >&2; exit 1; }
+    [ -n "${FAKE_SPEAKER:-}" ] && echo "SPEAKER_STATE ${FAKE_SPEAKER}" ;;
+  *ZOE_SPEAKER_MODEL=*)
+    [ "${FAKE_CFG_FAIL:-0}" = 1 ] && exit 255
+    printf 'CFG_OK %s\n' "${FAKE_SPEAKER_CFG:-}" ;;
   *is-active*)
     [ "${FAKE_ACTIVE:-1}" = 1 ] || exit 1 ;;
   *curl*)
@@ -234,3 +240,45 @@ def test_dry_run_touches_nothing(harness):
 def test_script_is_shellcheck_clean():
     r = subprocess.run(["shellcheck", str(SCRIPT)], capture_output=True, text=True)
     assert r.returncode == 0, r.stdout
+
+
+# --- the speaker model must be READY when it is the acting one (Codex P1 on #2024) ---------------------------------------
+
+@pytest.mark.parametrize("state, cfg, ok, says", [
+    ("resnet34 refused: embedding drift: cosine 0.98", "resnet34", False, "the acting speaker model cannot run"),
+    ("resnet34 not loaded", "resnet34", False, "the acting speaker model cannot run"),
+    ("resnet34 ready", "resnet34", True, "speaker model resnet34: ready"),                    # negative control
+    ("dual refused: model file sha256 mismatch", "dual", True, "WARNING: speaker model dual"),   # shadow-only: loud, not fatal
+    ("dual ready", "dual", True, "resnet34 ready (shadow)"),
+    ("resemblyzer off", "", True, "speaker model: resemblyzer"),
+    ("", "", True, "speaker model: resemblyzer"),               # state unreadable BUT the config proves the legacy mode
+])
+def test_deploy_verifies_the_acting_speaker_model_is_ready(harness, state, cfg, ok, says):
+    r = harness(FAKE_SPEAKER=state, FAKE_SPEAKER_CFG=cfg, RESNET34_READY_TIMEOUT_S=1)
+    assert (r.returncode == 0) is ok, r.stdout + r.stderr
+    assert says in r.stdout + r.stderr
+    assert "--health-state http://127.0.0.1:7777/health 1" in _ssh_log(harness.rec)
+
+
+# --- fail-CLOSED when the state cannot be read (Codex P1 on #2024) --------------------------------------------------------
+
+@pytest.mark.parametrize("env, says", [
+    (dict(FAKE_HELPER_FAIL=1, FAKE_SPEAKER_CFG="resnet34"), "could not read the daemon's speaker-model state"),
+    (dict(FAKE_HELPER_FAIL=1, FAKE_SPEAKER_CFG="dual"), "could not read the daemon's speaker-model state"),
+    (dict(FAKE_SPEAKER="", FAKE_SPEAKER_CFG="'resnet34'"), "could not read the daemon's speaker-model state"),   # no SPEAKER_STATE line
+    (dict(FAKE_SPEAKER="unknown unreachable", FAKE_SPEAKER_CFG="RESNET34"), "could not read the daemon's speaker-model state"),
+    (dict(FAKE_HELPER_FAIL=1, FAKE_CFG_FAIL=1), "could not read the daemon's speaker-model state"),   # neither readable: cannot prove legacy
+    (dict(FAKE_SPEAKER="resemblyzer off", FAKE_SPEAKER_CFG="resnet34"), "the restart did not pick up the configuration"),
+])
+def test_deploy_fails_closed_when_the_speaker_state_cannot_be_proven(harness, env, says):
+    r = harness(RESNET34_READY_TIMEOUT_S=1, **env)
+    assert r.returncode != 0, r.stdout + r.stderr
+    assert says in r.stdout + r.stderr
+
+
+def test_an_unreadable_state_passes_only_when_the_config_proves_the_legacy_mode(harness):
+    # negative control for the fail-closed rule: the same helper failure with no ZOE_SPEAKER_MODEL configured is the legacy mode
+    r = harness(FAKE_HELPER_FAIL=1, FAKE_SPEAKER_CFG="", RESNET34_READY_TIMEOUT_S=1)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "the daemon's state was unreadable" in r.stdout
+    assert harness(FAKE_HELPER_FAIL=1, FAKE_SPEAKER_CFG="garbage", RESNET34_READY_TIMEOUT_S=1).returncode == 0   # unknown value = legacy, as the daemon reads it
