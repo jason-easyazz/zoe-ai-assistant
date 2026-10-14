@@ -44,6 +44,7 @@ const EVENTS = [
     location: 'Example Primary School hall', recurring: 'weekly',
     metadata: { description: 'Bring the blue folder.\nDoors open at 6.', attendees: [{ person_id: 'p1', name: 'Sam', role: 'participant' }, { person_id: 'p2', name: 'Riley', role: 'participant' }],
       reminders: [{ offset_minutes: 30, message: 'leave soon' }] } }),
+  base({ id: 'ev-two', title: 'Gym', start_date: '2026-10-17', start_time: '07:00:00', category: 'personal' }),
   base({ id: 'ev-sync', title: 'Quarterly planning', start_date: '2026-10-16', start_time: '10:00:00', end_time: '11:30:00', category: 'work',
     location: 'Room 4, Example Tower', status: 'tentative', source: 'google', timezone: 'Europe/London', read_only: true,
     meeting_url: 'https://meet.example.com/abc-defg-hij', description: 'Agenda in the shared doc.', organizer: { name: 'Alex Example' },
@@ -81,11 +82,13 @@ async function t(name, fn) { try { await fn(); results.push(true); console.log('
   const page = await browser.newPage({ viewport: VIEW, hasTouch: true });
   await freezeClock(page, '2026-10-14T09:30:00');
   const wire = [], pageErrors = [];
+  let gate = null;   // when set, PUT/DELETE responses wait for it (a slow network)
   page.on('pageerror', (e) => pageErrors.push(String(e.message || e)));
   const events = EVENTS.map((e) => Object.assign({}, e));
   await page.route('**/api/**', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: '{}' }));
-  await page.route('**/api/calendar/events**', (r) => {
+  await page.route('**/api/calendar/events**', async (r) => {
     const req = r.request(), url = new URL(req.url());
+    if (gate && req.method() !== 'GET') await gate;
     if (req.method() === 'GET' && /\/events$/.test(url.pathname)) {
       const a = url.searchParams.get('start_date'), b = url.searchParams.get('end_date');
       return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ events: events.filter((e) => !e.deleted && (!a || e.start_date >= a) && (!b || e.start_date <= b)) }) });
@@ -201,7 +204,38 @@ async function t(name, fn) { try { await fn(); results.push(true); console.log('
     assert(await page.evaluate(() => !document.getElementById('evqr').hidden), 'meeting QR shown');
     await shot('06-detail-synced');
   });
-  await t('close: the X', async () => { await page.click('#estModal [data-x="close"]'); await page.waitForTimeout(150); assert(await closed()); });
+  await t('stale completion: a slow SAVE for event A never lands on the sheet now showing event B', async () => {
+    if (!(await closed())) { await page.click('#estModal [data-x="close"]'); await page.waitForTimeout(150); }
+    await open('ev-min'); await page.click('#estModal [data-x="edit"]'); await page.waitForTimeout(250);
+    await page.click('#estModal .evchip[data-cat="social"]');
+    let release; gate = new Promise((res) => { release = res; });
+    wire.length = 0;
+    await page.click('#estModal [data-x="save"]'); await page.waitForTimeout(150);   // PUT is in flight, held by the gate
+    await page.click('#estModal [data-x="close"]'); await page.waitForTimeout(150);
+    await open('ev-sync');                                                           // the person moves on to B
+    release(); gate = null; await page.waitForTimeout(600);
+    const txt = await page.evaluate(() => document.querySelector('#estModal .evd').innerText);
+    assert(txt.includes('Quarterly planning'), 'the sheet must still be B, got: ' + txt.slice(0, 60));
+    assert(!txt.includes('Dentist') && !txt.includes('Social'), 'A\'s saved event leaked into B\'s sheet');
+    assert.strictEqual(wire.length, 1, 'the save itself still reached the server'); assert.strictEqual(wire[0].id, 'ev-min');
+    await page.click('#estModal [data-x="close"]'); await page.waitForTimeout(150);
+  });
+  await t('stale completion: a slow DELETE for event A never closes the sheet now showing event B', async () => {
+    if (!(await closed())) { await page.click('#estModal [data-x="close"]'); await page.waitForTimeout(150); }
+    await open('ev-two'); await page.click('#estModal [data-x="del"]');
+    let release; gate = new Promise((res) => { release = res; });
+    wire.length = 0;
+    await page.click('#estModal [data-x="delyes"]'); await page.waitForTimeout(150);
+    await page.click('#estModal [data-x="close"]'); await page.waitForTimeout(150);
+    await open('ev-sync');
+    release(); gate = null; await page.waitForTimeout(800);
+    assert(!(await closed()), 'B\'s sheet was closed by A\'s delete completing');
+    assert((await page.evaluate(() => document.querySelector('#estModal .evd').innerText)).includes('Quarterly planning'));
+    assert.strictEqual(wire[0].method, 'DELETE'); assert.strictEqual(wire[0].id, 'ev-two');
+    assert.strictEqual(await page.evaluate(() => !!document.querySelector('#calBody [data-eid="ev-two"]')), false, 'the calendar behind was still repainted');
+    await page.click('#estModal [data-x="close"]'); await page.waitForTimeout(150);
+  });
+  await t('close: the X', async () => { await open('ev-min'); await page.click('#estModal [data-x="close"]'); await page.waitForTimeout(150); assert(await closed()); });
   await t('close: tap outside the sheet', async () => { await open('ev-min'); await page.mouse.click(4, 4); await page.waitForTimeout(150); assert(await closed()); });
   await t('close: swipe down from the top', async () => {
     await open('ev-min');

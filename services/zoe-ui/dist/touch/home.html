@@ -4233,14 +4233,18 @@
     else if(x==='phone')evdQr('phone',EVD.phoneEditUrl(location.origin));
     else if(x==='meeturl')evdQr('meeting',b.getAttribute('data-url'));
     else if(x==='del'){var f=document.getElementById('evfoot');if(f)f.innerHTML=EVD.renderDeleteConfirm(ev);}
-    else if(x==='delyes'){b.disabled=true;
-      apiJson('DELETE','/api/calendar/events/'+encodeURIComponent(ev.id)).then(function(){evdClose();evdRefresh();})
-        .catch(function(){b.disabled=false;toast('Couldn’t delete');});}
+    else if(x==='delyes'){b.disabled=true;var dtok=_evd;   // the sheet SESSION this delete belongs to (editEvent makes a new one per open)
+      apiJson('DELETE','/api/calendar/events/'+encodeURIComponent(ev.id)).then(function(){
+        if(_evd===dtok)evdClose();   // a slow delete of A must not close the sheet the person has since opened for B
+        evdRefresh();})              // the data changed either way: repaint the calendar behind
+        .catch(function(){if(_evd===dtok)b.disabled=false;toast('Couldn’t delete “'+(ev.title||'event')+'”');});}
     else if(x==='allday'){_evd.st.allDay=!_evd.st.allDay;b.setAttribute('aria-checked',_evd.st.allDay?'true':'false');}
-    else if(x==='save'){b.disabled=true;var dt=_dtGet();
+    else if(x==='save'){b.disabled=true;var dt=_dtGet(),stok=_evd;   // same session token as delete: stale completions never touch another event's sheet
       EVD.save(apiJson,ev,{category:_evd.st.category,date:dt.date,time:dt.time,allDay:_evd.st.allDay}).then(function(r){
-        if(!_evd)return;_evd.ev=r.event;evdDetailView(r.event);if(r.changed)evdRefresh();})
-        .catch(function(){b.disabled=false;toast('Couldn’t save event');});}
+        if(r.changed)evdRefresh();
+        if(_evd!==stok)return;       // closed, or another event opened meanwhile
+        _evd.ev=r.event;evdDetailView(r.event);})
+        .catch(function(){if(_evd===stok)b.disabled=false;toast('Couldn’t save “'+(ev.title||'event')+'”');});}
   }
   // Spoken "close" while the sheet is up (called from ZoeEstateVoice.transcript). Returns true when it closed.
   window.__evdVoiceClose=function(t){if(!evdLive()||!EVD||!EVD.isCloseUtterance(t))return false;evdClose();return true;};

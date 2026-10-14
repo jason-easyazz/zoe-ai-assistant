@@ -264,6 +264,31 @@ function checkSuite(M) {
       { category: 'general', date: '2026-10-26', time: '08:00', allDay: false });
     eq(s2.calls[0].body, { start_date: '2026-10-26', end_date: '2026-10-28' });
   }]);
+  saveCases.push(['moving the start across midnight rolls end_date (23:00-23:30 -> 23:45 ends 00:15 NEXT day)', async () => {
+    const ev = { id: 'm1', title: 'Late', start_date: '2026-10-20', start_time: '23:00', end_time: '23:30', category: 'general' };
+    const s = stub(); await M.save(s.api, ev, { category: 'general', date: '2026-10-20', time: '23:45', allDay: false });
+    eq(s.calls[0].body, { start_time: '23:45', end_time: '00:15', end_date: '2026-10-21' });
+  }]);
+  saveCases.push(['moving backwards across midnight rolls the end back too (00:10-00:40 -> 23:50 the day before)', async () => {
+    const ev = { id: 'm2', title: 'Early', start_date: '2026-10-21', start_time: '00:10', end_time: '00:40', category: 'general' };
+    const s = stub(); await M.save(s.api, ev, { category: 'general', date: '2026-10-20', time: '23:50', allDay: false });
+    eq(s.calls[0].body, { start_date: '2026-10-20', start_time: '23:50', end_time: '00:20', end_date: '2026-10-21' });
+  }]);
+  saveCases.push(['an event that already ends after midnight keeps its end_date when the shifted end stays on that day', async () => {
+    const ev = { id: 'm3', title: 'Night', start_date: '2026-10-20', start_time: '22:00', end_date: '2026-10-21', end_time: '01:00', category: 'general' };
+    const s = stub(); await M.save(s.api, ev, { category: 'general', date: '2026-10-20', time: '22:30', allDay: false });
+    eq(s.calls[0].body, { start_time: '22:30', end_time: '01:30' });
+  }]);
+  saveCases.push(['moving an overnight event earlier so it no longer crosses midnight pulls end_date back to the start day', async () => {
+    const ev = { id: 'm4', title: 'Night', start_date: '2026-10-20', start_time: '23:00', end_date: '2026-10-21', end_time: '00:30', category: 'general' };
+    const s = stub(); await M.save(s.api, ev, { category: 'general', date: '2026-10-20', time: '21:00', allDay: false });
+    eq(s.calls[0].body, { start_time: '21:00', end_time: '22:30', end_date: '2026-10-20' });
+  }]);
+  saveCases.push(['a month-end crossing rolls into the next month', async () => {
+    const ev = { id: 'm5', title: 'Eve', start_date: '2026-10-31', start_time: '23:30', end_time: '23:50', category: 'general' };
+    const s = stub(); await M.save(s.api, ev, { category: 'general', date: '2026-10-31', time: '23:50', allDay: false });
+    eq(s.calls[0].body, { start_time: '23:50', end_time: '00:10', end_date: '2026-11-01' });
+  }]);
   saveCases.push(['a timeless event saved with only a new category is NOT flipped to all-day', async () => {
     const ev = { id: 't', title: 'Pay rent', start_date: '2026-10-30', start_time: null, all_day: false, category: 'general' };
     const s = stub(); await M.save(s.api, ev, { category: 'family', date: '2026-10-30', time: null, allDay: true });
@@ -304,6 +329,13 @@ function checkSuite(M) {
 }
 
 // ---- static checks on the real home.html -----------------------------------------
+// Save and delete each capture the sheet SESSION (`_evd` is replaced by editEvent on every open) when the
+// mutation starts, and only touch the sheet when it is still the same one. The behaviour itself is proven in
+// test_touch_event_detail_browser.js (a gated slow PUT/DELETE for A while B is open).
+function staleGuard(region) {
+  return /stok=_evd/.test(region) && /if\(_evd!==stok\)return;/.test(region) && /_evd\.ev=r\.event;evdDetailView\(r\.event\)/.test(region)
+    && /dtok=_evd/.test(region) && /if\(_evd===dtok\)evdClose\(\);/.test(region);
+}
 function wiringChecks() {
   const fails = [];
   const t = (name, fn) => { try { fn(); } catch (e) { fails.push(name + ' :: ' + e.message.split('\n')[0]); } };
@@ -325,6 +357,11 @@ function wiringChecks() {
   t('both entry points open the sheet (calendar grid + Day list)', () => {
     assert(/body\.onclick=function\(e\)\{var chip=e\.target\.closest\('\[data-eid\]'\);[^\n]*editEvent\(ev\)/.test(HOME), 'grid tap');
     assert(/host\.onclick=function\(ev\)\{var row=ev\.target\.closest\('\.dev\[data-eid\]'\)[\s\S]{0,700}editEvent\(e\)/.test(HOME), 'day list tap');
+  });
+  t('a slow save/delete for event A cannot touch the sheet now showing event B (session token captured at mutation start)', () => {
+    assert(staleGuard(region), 'save and delete must capture the sheet session and compare it on completion');
+    assert(!staleGuard(region.replace('if(_evd!==stok)return;', '')), 'control: dropping the save guard must be detected');
+    assert(!staleGuard(region.replace('if(_evd===dtok)evdClose();', 'evdClose();')), 'control: dropping the delete guard must be detected');
   });
   t('spoken "close" is wired into ZoeEstateVoice.transcript', () => {
     assert(/transcript:function\(t\)\{if\(window\.__evdVoiceClose&&window\.__evdVoiceClose\(t\)\)return;/.test(HOME));
@@ -373,6 +410,7 @@ function wiringChecks() {
     'legacy recurring beats rrule': (s) => s.replace(`var rr = firstStr(ev.rrule, meta(ev).rrule);`, `var rr = ev.recurring ? '' : firstStr(ev.rrule, meta(ev).rrule);`),
     'read_only 1 not recognised': (s) => s.replace(`truthy(ev.read_only) ||`, `ev.read_only === true ||`),
     'alarms ignored': (s) => s.replace(`if (Array.isArray(ev.alarms)) raw = raw.concat(ev.alarms);`, ``),
+    'end time clamped at midnight instead of rolling end_date': (s) => s.replace(`var e1 = unstampMin(e0 + (s1 - s0));`, `var e1 = unstampMin(e0 + (s1 - s0)); if (e1.date !== (firstStr(ev.end_date) || oldDate)) { e1.date = firstStr(ev.end_date) || oldDate; e1.time = '23:59'; }`),
     'swipe ignores scroll position': (s) => s.replace(`(Number(g.scrollTop) || 0) <= 1 &&`, ``),
   };
   let ctl = 0;

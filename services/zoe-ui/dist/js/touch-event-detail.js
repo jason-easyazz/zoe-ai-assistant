@@ -468,16 +468,33 @@
     if (newAll !== wasAll) { body.all_day = newAll; body.start_time = newAll ? null : newTime; }
     else if (!newAll && newTime !== oldTime) body.start_time = newTime;
 
-    // Keep the duration: moving the start moves the end by the same amount.
+    // Keep the duration: moving the start moves the end by the same amount — computed on FULL date-time
+    // values, so a 23:00-23:30 event moved to 23:45 ends 00:15 the NEXT day (end_date rolls), and moving
+    // backwards across midnight rolls it back, instead of clamping the time at 23:59 / 00:00.
+    var newDate = st.date || oldDate;
     if (!newAll && !wasAll) {
-      var oldM = toMin(oldTime), newM = toMin(newTime), endM = toMin(ev.end_time);
-      if (body.start_time && oldM != null && newM != null && endM != null) body.end_time = fromMin(endM + (newM - oldM));
-    }
-    if (dateChanged && firstStr(ev.end_date) && oldDate) {
-      var delta = dayNum(st.date) - dayNum(oldDate);
-      body.end_date = addDays(ev.end_date, delta);
+      var s0 = stampMin(oldDate, oldTime), s1 = stampMin(newDate, newTime);
+      var e0 = firstStr(ev.end_time) ? stampMin(firstStr(ev.end_date) || oldDate, firstStr(ev.end_time).slice(0, 5)) : null;
+      if (s0 != null && s1 != null && e0 != null && s1 !== s0) {
+        var e1 = unstampMin(e0 + (s1 - s0));
+        if (e1.time !== firstStr(ev.end_time).slice(0, 5)) body.end_time = e1.time;
+        // end_date: only when it already existed, or the end now falls on a different day than the start.
+        if (e1.date !== firstStr(ev.end_date) && (firstStr(ev.end_date) || e1.date !== newDate)) body.end_date = e1.date;
+      }
+    } else if (dateChanged && firstStr(ev.end_date) && oldDate) {
+      // all-day (or all-day <-> timed): whole days only
+      body.end_date = addDays(ev.end_date, dayNum(st.date) - dayNum(oldDate));
     }
     return body;
+  }
+  // Minutes since the epoch for a local date + HH:MM wall clock (calendar arithmetic, DST-proof), and back.
+  function stampMin(date, hhmm) {
+    var d = dayNum(date), m = toMin(hhmm);
+    return d == null || m == null ? null : d * 1440 + m;
+  }
+  function unstampMin(n) {
+    var d = Math.floor(n / 1440), m = n - d * 1440;
+    return { date: addDays('1970-01-01', d), time: two(Math.floor(m / 60)) + ':' + two(m % 60) };
   }
   // api(method,url,body) -> Promise<json>. Resolves {changed:false} without a request when nothing changed.
   function save(api, ev, st) {
