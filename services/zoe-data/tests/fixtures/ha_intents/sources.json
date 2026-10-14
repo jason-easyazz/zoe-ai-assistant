@@ -1,0 +1,32 @@
+{
+  "counts": {
+    "ha_sample": 966,
+    "ha_test": 1192,
+    "ovos": 1121,
+    "total": 3279
+  },
+  "generator": "scripts/maintenance/ha_intents_corpus.py",
+  "hassil": "3.12.1",
+  "params": {
+    "ovos_per_line": 3,
+    "ovos_slot_values": {
+      "location": "Paris",
+      "unit": "celsius"
+    },
+    "sample_per_intent": 30,
+    "sample_pool": 3000
+  },
+  "pins": {
+    "ha": {
+      "commit": "c602e0b215d9ae5e7b8e8b88a93027d55e989cab",
+      "licence": "CC-BY-4.0",
+      "repo": "OHF-Voice/intents"
+    },
+    "ovos": {
+      "commit": "991439b0968408e92f9de9b3176be4ddb18163e9",
+      "licence": "Apache-2.0",
+      "repo": "OpenVoiceOS/ovos-skill-weather"
+    }
+  },
+  "seed": 20261014
+}

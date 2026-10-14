@@ -1,0 +1,233 @@
+# What Zoe's deterministic fast path SHOULD claim for each corpus label.
+#
+# Read by tests/test_ha_phrasing_corpus.py. Each sentence in en.jsonl is run
+# through skybridge_service.classify_skybridge_intent, then (only if Skybridge
+# claimed nothing) intent_router.detect_intent. The first claim is rendered as:
+#   sky:<domain>/<action>            a Skybridge claim
+#   ir:<intent>[/<action|command>]   an intent_router claim (suffix when the slots carry one)
+# or no claim at all (a MISS: the turn goes on to the router head / experts / brain,
+# which is slower but not wrong).
+#
+# Per label:
+#   accept  globs of claims that are CORRECT for this label
+#   forbid  globs of claims that are a known P0 hazard for this label (a subset of
+#           wrong claims, ratcheted on its own so a fix can be seen landing)
+#   check_seconds  a correct timer claim must also carry the sentence's duration
+#                  (HA's hours/minutes/seconds slots); a timer with the wrong length
+#                  is a wrong WRITE
+#   unsupported  Zoe has no such capability: a negative control, where a miss is
+#                the right answer and any write is a wrong write
+# Any claim not in `accept` is WRONG; a wrong claim that matches `writes` is a
+# WRONG WRITE (the gate). Globs are fnmatch-style.
+
+writes:
+  # Skybridge: anything that changes a row, a timer, a device or playback.
+  - "sky:timer/create"
+  - "sky:timer/cancel"
+  - "sky:lists/add_item"
+  - "sky:lists/complete_item"
+  - "sky:lists/remove_item"
+  - "sky:lists/edit_item"
+  - "sky:lists/create_list"
+  - "sky:calendar/create_event"
+  - "sky:calendar/update_time"
+  - "sky:calendar/edit_event"
+  - "sky:calendar/delete_event"
+  - "sky:people/create"
+  - "sky:people/remember_fact"
+  - "sky:smart_home/turn_on"
+  - "sky:smart_home/turn_off"
+  - "sky:smart_home/set_brightness"
+  - "sky:smart_home/activate_scene"
+  - "sky:music/play"
+  - "sky:music/pause"
+  - "sky:music/resume"
+  - "sky:music/next"
+  - "sky:music/previous"
+  - "sky:music/stop"
+  - "sky:music/volume_*"
+  - "sky:music/transfer"
+  - "sky:music/dont_stop"
+  - "sky:voice/set"
+  # intent_router: the executors that write or actuate.
+  - "ir:timer_create*"
+  - "ir:list_add*"
+  - "ir:list_remove*"
+  - "ir:calendar_create*"
+  - "ir:reminder_create*"
+  - "ir:note_create*"
+  - "ir:journal_create*"
+  - "ir:people_create*"
+  - "ir:people_introduce*"
+  - "ir:transaction_create*"
+  - "ir:smart_home*"
+  - "ir:music_play*"
+  - "ir:music_control*"
+  - "ir:music_volume*"
+  - "ir:music_favorite*"
+  - "ir:set_volume*"
+  - "ir:memory_remember*"
+  - "ir:memory_forget_*"
+  - "ir:portrait_refresh*"
+  - "ir:engineering_*"
+  - "ir:panel_confirm_code*"
+
+# Sentences HA labels one way that Zoe should answer another way. Keep this short
+# and give the reason; it is part of the "modified" note in ATTRIBUTION.md.
+relabel:
+  # HA's fixture has an entity NAMED "Outside Temperature"; for Zoe these are weather questions.
+  "what is the outside temperature": HassGetWeather
+  "what's the current value of outside temperature": HassGetWeather
+  "tell me the outside temperature": HassGetWeather
+  "how is the outside temperature": HassGetWeather
+  "please tell me the outside temperature": HassGetWeather
+
+labels:
+  # ── Time / date / weather ─────────────────────────────────────────────────
+  HassGetCurrentTime:
+    accept: ["sky:clock/show", "ir:time_query*"]
+  HassGetCurrentDate:
+    accept: ["ir:date_query*"]
+  HassGetWeather:
+    accept: ["sky:weather/*", "ir:weather*"]
+
+  # ── Timers ────────────────────────────────────────────────────────────────
+  HassStartTimer:
+    accept: ["sky:timer/create", "ir:timer_create*"]
+    check_seconds: true
+  HassStartTimer.delayed_command:
+    # "turn off the lights in 5 minutes": running the command NOW is the bug.
+    accept: []
+    forbid: ["sky:smart_home/turn_*", "sky:smart_home/set_brightness", "sky:smart_home/activate_scene",
+             "ir:smart_home*", "sky:music/*", "ir:music_*"]
+  HassTimerStatus:
+    accept: ["sky:timer/status"]
+  HassCancelTimer:
+    accept: ["sky:timer/cancel"]
+  HassCancelAllTimers:
+    accept: ["sky:timer/cancel"]
+  HassIncreaseTimer:
+    # "add 5 minutes to the timer" must never START a new timer.
+    accept: []
+    forbid: ["sky:timer/create", "ir:timer_create*", "ir:list_add*", "sky:lists/*"]
+  HassDecreaseTimer:
+    accept: []
+    forbid: ["sky:timer/create", "ir:timer_create*", "ir:list_remove*", "sky:lists/*"]
+  HassPauseTimer:
+    accept: []
+    forbid: ["sky:timer/create", "ir:timer_create*"]
+  HassUnpauseTimer:
+    accept: []
+    forbid: ["sky:timer/create", "ir:timer_create*"]
+
+  # ── Lists ─────────────────────────────────────────────────────────────────
+  HassListAddItem:
+    accept: ["sky:lists/add_item", "ir:list_add*"]
+  HassShoppingListAddItem:
+    accept: ["sky:lists/add_item", "ir:list_add*"]
+  HassListCompleteItem:
+    # A write answered with a list READ is the reported bug.
+    accept: ["sky:lists/complete_item"]
+    forbid: ["sky:lists/show", "sky:lists/overview"]
+  HassShoppingListCompleteItem:
+    accept: ["sky:lists/complete_item"]
+    forbid: ["sky:lists/show", "sky:lists/overview"]
+  HassListRemoveItem:
+    accept: ["sky:lists/remove_item", "ir:list_remove*"]
+    forbid: ["sky:lists/show", "sky:lists/overview"]
+
+  # ── Devices / climate ─────────────────────────────────────────────────────
+  HassTurnOn:
+    accept: ["sky:smart_home/turn_on", "sky:smart_home/activate_scene", "ir:smart_home/turn_on"]
+    forbid: ["sky:music/*", "ir:music_*"]
+  HassTurnOff:
+    accept: ["sky:smart_home/turn_off", "ir:smart_home/turn_off"]
+    forbid: ["sky:music/*", "ir:music_*"]
+  HassGetState:
+    accept: ["sky:smart_home/status"]
+  HassLightSet:
+    # Brightness only; colour / colour temperature is not something Zoe sets yet.
+    accept: ["sky:smart_home/set_brightness", "ir:smart_home/dim", "ir:smart_home/brighten"]
+    forbid: ["sky:weather/*", "ir:weather*"]
+  HassClimateGetTemperature:
+    # The INDOOR thermostat. The outdoor weather is a wrong fact.
+    accept: []
+    forbid: ["sky:weather/*", "ir:weather*"]
+  HassClimateSetTemperature:
+    accept: []
+    forbid: ["sky:weather/*", "ir:weather*"]
+  HassClimateSetFanMode:
+    accept: []
+    unsupported: true
+  HassFanSetSpeed:
+    accept: []
+    unsupported: true
+  HassSetPosition:
+    accept: []
+    unsupported: true
+
+  # ── Media ─────────────────────────────────────────────────────────────────
+  HassMediaSearchAndPlay:
+    accept: ["sky:music/play", "ir:music_play*"]
+  HassMediaPause:
+    accept: ["sky:music/pause", "sky:music/stop", "ir:music_control/pause", "ir:music_control/stop"]
+  HassMediaUnpause:
+    accept: ["sky:music/resume", "ir:music_control/resume", "ir:music_control/play"]
+  HassMediaNext:
+    accept: ["sky:music/next", "ir:music_control/next", "ir:music_control/skip"]
+  HassMediaPrevious:
+    accept: ["sky:music/previous", "ir:music_control/previous", "ir:music_control/back"]
+  HassMediaPlayerMute:
+    accept: ["ir:music_control/mute"]
+  HassMediaPlayerUnmute:
+    accept: ["ir:music_control/unmute"]
+  HassSetVolume:
+    accept: ["sky:music/volume_*", "ir:set_volume*", "ir:music_volume*", "ir:music_control/volume_*"]
+  HassSetVolumeRelative:
+    accept: ["sky:music/volume_*", "ir:set_volume*", "ir:music_volume*", "ir:music_control/volume_*"]
+
+  # ── Conversation ──────────────────────────────────────────────────────────
+  HassNevermind:
+    # "never mind" should close the turn; it must never act.
+    accept: []
+  HassRespond:
+    accept: ["ir:greeting*", "ir:acknowledgement*", "ir:status_check*"]
+    forbid: ["sky:lists/*"]
+
+  # ── Unsupported: negative controls (a miss is right, any write is wrong) ─
+  HassBroadcast:
+    accept: []
+    unsupported: true
+  HassVacuumStart:
+    accept: []
+    unsupported: true
+  HassVacuumReturnToBase:
+    accept: []
+    unsupported: true
+  HassVacuumCleanArea:
+    accept: []
+    unsupported: true
+  HassLawnMowerStartMowing:
+    accept: []
+    unsupported: true
+  HassLawnMowerDock:
+    accept: []
+    unsupported: true
+
+  # ── OVOS weather skill (depth HA lacks): any weather claim is the right lane ─
+  OVOS.weather:
+    accept: ["sky:weather/*", "ir:weather*"]
+  OVOS.temperature:
+    accept: ["sky:weather/*", "ir:weather*"]
+  OVOS.weather_condition:
+    accept: ["sky:weather/*", "ir:weather*"]
+  OVOS.next_rain:
+    accept: ["sky:weather/*", "ir:weather*"]
+  OVOS.humidity:
+    accept: ["sky:weather/*", "ir:weather*"]
+  OVOS.is_wind:
+    accept: ["sky:weather/*", "ir:weather*"]
+  OVOS.sunrise:
+    accept: ["sky:weather/*", "ir:weather*"]
+  OVOS.sunset:
+    accept: ["sky:weather/*", "ir:weather*"]
