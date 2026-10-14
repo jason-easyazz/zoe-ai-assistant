@@ -2756,6 +2756,7 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
         return None
     lt = str(slots.get("list_type") or "shopping").strip() or "shopping"
     ln = str(slots.get("list_name") or "").strip() or lt.capitalize()
+    actor = panel_principal.household_actor({"user_id": user_id})  # the member, or "panel" for an unidentified guest
     try:
         from database import get_db_ctx
         from list_service import add_item_to_list, default_visibility
@@ -2775,15 +2776,14 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
                 # already done instead of inserting a duplicate.
                 dedup_window_s=10,
             )
-        logger.info("list_item_audit op=add actor=%s list=%s item=%s", panel_principal.household_actor({"user_id": user_id}),
-                    outcome["list_id"], outcome["item_id"])
+        logger.info("list_item_audit op=add actor=%s list=%s item=%s", actor, outcome["list_id"], outcome["item_id"])
         list_id = outcome["list_id"]
         item_id = outcome["item_id"]
         if outcome["deduped"]:
             logger.info("list add: duplicate %r within 10s on list %s — replay skipped", item, list_id)
         await _notify_lists_ui(
             "list_updated",
-            {"action": "item_added", "list_id": list_id, "item": {"id": item_id, "text": item}},
+            {"action": "item_added", "list_id": list_id, "item": {"id": item_id, "text": item}, "actor": actor},
         )
         return _format_response(
             intent,
@@ -2807,6 +2807,7 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
     if not item:
         return None
     lt = str(slots.get("list_type") or "shopping").strip() or "shopping"
+    actor = panel_principal.household_actor({"user_id": user_id})  # BEFORE the viewer swap: the sentinel would read as a member
     if _is_guest_identity(user_id):
         user_id = panel_principal.HOUSEHOLD_VIEWER  # household (family-visible) lists only
     try:
@@ -2837,9 +2838,10 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
             await db.execute(
                 "UPDATE list_items SET completed=1, updated_at=NOW() WHERE id=?", (item_id,)
             )
+        logger.info("list_item_audit op=remove actor=%s list=%s item=%s", actor, list_id, item_id)
         await _notify_lists_ui(
             "list_updated",
-            {"action": "item_completed", "list_id": list_id, "item_id": item_id},
+            {"action": "item_completed", "list_id": list_id, "item_id": item_id, "actor": actor},
         )
         return _format_response(
             intent, json.dumps({"item_id": item_id, "text": item, "status": "completed"})

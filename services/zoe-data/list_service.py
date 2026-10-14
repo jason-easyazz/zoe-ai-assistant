@@ -266,38 +266,52 @@ async def create_item_record(
     }
 
 
-async def find_household_list_id(db, *, list_type: str, name: str) -> Optional[str]:
-    """The ONE family-visible list a panel guest's add/remove lands on.
-
-    An exact name match wins, else any family list of that type; among several the canonical one is the fullest, then the
-    oldest - never merely the most recently touched, which would send items to an empty duplicate. Personal lists are never
-    candidates, whoever owns them.
-    """
-    cursor = await db.execute(
-        "SELECT l.id FROM lists l WHERE l.list_type=? AND l.visibility='family' AND l.deleted=0"
-        " ORDER BY CASE WHEN lower(l.name)=lower(?) THEN 0 ELSE 1 END,"
-        " (SELECT COUNT(*) FROM list_items i WHERE i.list_id=l.id AND i.deleted=0) DESC,"
-        " l.created_at ASC LIMIT 1",
-        (list_type, name),
+def household_lists_sql(placeholder: str = "?") -> str:
+    """SELECT of every live family-visible list of one TYPE, with its live-item count. ``placeholder`` is the driver's
+    parameter marker for the type (``?`` for the compat layer, ``$1`` for raw asyncpg). The ONE query every resolver uses."""
+    return (
+        "SELECT l.id, l.name, l.created_at, "
+        "(SELECT COUNT(*) FROM list_items i WHERE i.list_id = l.id AND i.deleted = 0) AS n "
+        f"FROM lists l WHERE l.list_type = {placeholder} AND l.visibility = 'family' AND l.deleted = 0 "
+        "ORDER BY l.created_at ASC, l.id ASC"
     )
-    row = await cursor.fetchone()
-    return row["id"] if row else None
+
+
+def pick_household_list(rows, name: str = "") -> Optional[dict]:
+    """THE household-list rule, shared by list_service, skybridge and the voice executor: among the family-visible lists of a
+    TYPE the canonical one is the fullest, then the one whose name matches ``name`` (a tie-break ONLY), then the oldest -
+    never the most recently touched, which would send items to an empty duplicate. Resolving by name first is how a "Shopping"
+    add missed an existing family "Groceries" list and created a twin. Pure; ``rows`` are mappings with id/name/created_at/n."""
+    wanted = " ".join(str(name or "").lower().split())
+    cands = [dict(r) for r in rows]
+    if not cands:
+        return None
+    best = min(range(len(cands)), key=lambda i: (
+        -int(cands[i].get("n") or 0),
+        0 if wanted and " ".join(str(cands[i].get("name") or "").lower().split()) == wanted else 1,
+        str(cands[i].get("created_at") or ""),
+        i,  # a full tie keeps the caller's order
+    ))
+    return cands[best]
+
+
+async def find_household_list_id(db, *, list_type: str, name: str) -> Optional[str]:
+    """The ONE family-visible list of ``list_type`` (see :func:`pick_household_list`). Personal lists are never candidates,
+    whoever owns them."""
+    cursor = await db.execute(household_lists_sql("?"), (list_type,))
+    picked = pick_household_list(await cursor.fetchall(), name)
+    return picked["id"] if picked else None
 
 
 async def find_list_id(db, *, user_id: str, list_type: str, name: str) -> Optional[str]:
-    """Resolve a list by type + exact name, family lists first.
-
-    The shared voice/MCP resolution: the user's own lists and family-visible
-    lists both match; a family list wins a name tie so household adds converge
-    on the shared list. A guest identity owns nothing: it resolves to the
-    household list only.
+    """Resolve the list an add lands on: the household (family-visible) list of the TYPE first, whatever it is called; only when
+    there is none, the user's own list of that exact name. A guest identity owns nothing: it resolves to the household list only.
     """
-    if panel_principal.is_guest_id(user_id):
-        return await find_household_list_id(db, list_type=list_type, name=name)
+    household = await find_household_list_id(db, list_type=list_type, name=name)
+    if household is not None or panel_principal.is_guest_id(user_id):
+        return household
     cursor = await db.execute(
-        "SELECT id FROM lists WHERE list_type=? AND name=? AND deleted=0"
-        " AND (user_id=? OR visibility='family')"
-        " ORDER BY CASE WHEN visibility='family' THEN 0 ELSE 1 END LIMIT 1",
+        "SELECT id FROM lists WHERE list_type=? AND name=? AND deleted=0 AND user_id=? LIMIT 1",
         (list_type, name, user_id),
     )
     row = await cursor.fetchone()

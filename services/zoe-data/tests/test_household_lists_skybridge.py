@@ -101,3 +101,19 @@ async def test_default_list_seeding_still_creates_the_household_list_when_there_
     await skybridge_service._ensure_default_lists("casey", db)
     seeded = [str(c[3]).lower() for c in db.executed if "INSERT INTO lists" in str(c[0])]
     assert "shopping" in seeded
+
+
+async def test_a_members_type_only_add_lands_on_the_household_list_whatever_it_is_called():
+    """Type first, name only a tie-break: casey's own empty personal 'Shopping' must not capture the add while the house
+    keeps its list as 'Groceries'."""
+    db = FakeDb(
+        lists=[
+            {"id": "mine", "user_id": "casey", "name": "Shopping", "list_type": "shopping", "visibility": "personal", "updated_at": 9},
+            {"id": "groc", "user_id": "jo", "name": "Groceries", "list_type": "shopping", "visibility": "family", "updated_at": 1},
+        ],
+        items_by_list={"groc": [{"id": "g1", "list_id": "groc", "text": "bread", "completed": False}]},
+    )
+    result = await resolve_skybridge_request("add jam to the shopping list", "casey", db=db)
+    assert result.get("handled")
+    assert [i["text"] for i in db.items_by_list["groc"]] == ["bread", "jam"]
+    assert not db.items_by_list.get("mine")

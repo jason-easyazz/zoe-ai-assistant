@@ -427,6 +427,64 @@ async def test_the_household_list_is_the_fullest_then_the_OLDEST_never_the_most_
     assert await list_service.find_household_list_id(db, list_type="bucket", name="Pantry") == "newer"
 
 
+async def test_a_member_add_defaulting_to_Shopping_lands_on_the_existing_household_list_with_another_name(empty_pooled):
+    """Resolve by TYPE first: a family 'Groceries' list is THE shopping list; name is only a tie-break (no twin 'Shopping')."""
+    d = empty_pooled
+    d.lst("groc", "jo", name="Groceries")
+    d.item("g1", "groc", "bread")
+    out = await intent_router.execute_intent(intent_router.Intent("list_add", {"item": "jam", "list_type": "shopping"}), "casey")
+    assert "jam" in out.lower()
+    assert d.list_ids() == ["groc"]
+    assert d.live_items("groc") == ["bread", "jam"]
+    # the guest path agrees (same resolver)
+    panel_principal.mark_panel_turn()
+    await intent_router.execute_intent(intent_router.Intent("list_add", {"item": "tea", "list_type": "shopping"}), "guest")
+    assert d.list_ids() == ["groc"] and d.live_items("groc")[-1] == "tea"
+
+
+async def test_a_member_still_gets_their_own_list_when_no_household_list_of_the_type_exists(empty_pooled):
+    d = empty_pooled
+    d.lst("mine", "casey", name="Work", ltype="work", vis="personal")
+    await intent_router.execute_intent(intent_router.Intent("list_add", {"item": "email", "list_type": "work", "list_name": "Work"}), "casey")
+    assert d.list_ids("work") == ["mine"] and d.live_items("mine") == ["email"]
+
+
+def test_pick_household_list_is_fullest_then_name_tie_break_then_oldest():
+    rows = [
+        {"id": "a", "name": "Shopping", "n": 1, "created_at": "2026-10-05"},
+        {"id": "b", "name": "Groceries", "n": 3, "created_at": "2026-10-09"},
+        {"id": "c", "name": "Shopping", "n": 3, "created_at": "2026-10-08"},
+    ]
+    assert list_service.pick_household_list(rows, "Shopping")["id"] == "c"     # fullest tie -> the name match
+    assert list_service.pick_household_list(rows, "")["id"] == "c"             # no name -> oldest of the fullest
+    assert list_service.pick_household_list(rows, "Groceries")["id"] == "b"
+    assert list_service.pick_household_list(rows[:1] + rows[1:2], "Shopping")["id"] == "b"   # fullness beats a name match
+    assert list_service.pick_household_list([], "x") is None
+
+
+async def test_the_actor_is_panel_for_a_guest_on_both_voice_direct_paths_and_the_member_for_a_member(pooled, monkeypatch, caplog):
+    import logging
+
+    sent = []
+
+    async def _notify(event, data):
+        sent.append(data)
+
+    monkeypatch.setattr(intent_router, "_notify_lists_ui", _notify)
+    caplog.set_level(logging.INFO)
+    panel_principal.mark_panel_turn()
+    await intent_router.execute_intent(intent_router.Intent("list_add", {"item": "rice", "list_type": "shopping"}), "guest")
+    await intent_router.execute_intent(intent_router.Intent("list_remove", {"item": "milk", "list_type": "shopping"}), "guest")
+    assert [(p["action"], p["actor"]) for p in sent] == [("item_added", "panel"), ("item_completed", "panel")]
+    log = caplog.text
+    assert "list_item_audit op=add actor=panel" in log and "list_item_audit op=remove actor=panel" in log
+    assert "__household__" not in log and "__household__" not in str(sent)
+    # a signed-in member is attributed to themselves, not to the panel
+    sent.clear()
+    await intent_router.execute_intent(intent_router.Intent("list_remove", {"item": "eggs", "list_type": "shopping"}), "casey")
+    assert sent[-1]["actor"] == "casey"
+
+
 def test_the_skybridge_household_resolvers_rank_fullest_then_oldest_not_most_recent():
     import inspect
     import skybridge_service

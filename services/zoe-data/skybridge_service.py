@@ -2236,6 +2236,16 @@ def _is_guest_user(user_id: str | None) -> bool:
     return (user_id or "").strip() in {"", "guest", "voice-guest"}
 
 
+def _pick_list_row(rows: Any, name: str = "") -> dict[str, Any]:
+    """Which of the lists of a TYPE a type-only add/remove lands on: the household (family-visible) list by the ONE shared
+    rule (``list_service.pick_household_list``: fullest, name only a tie-break, then oldest); with none, the caller's own list."""
+    from list_service import pick_household_list
+
+    dicts = [dict(r) for r in rows]
+    family = [r for r in dicts if r.get("visibility", "family") == "family"]
+    return pick_household_list(family, name) or dicts[0]
+
+
 def _audit_list_item(op: str, user_id: str, list_id: str, item_id: str) -> None:
     """Who touched a list item (no column holds it): the member, or ``panel`` when nobody at the panel was identified."""
     actor = panel_principal.PANEL_ACTOR if user_id == panel_principal.HOUSEHOLD_VIEWER else user_id
@@ -3558,7 +3568,8 @@ async def _find_or_create_list(intent: SkybridgeIntent, user_id: str, db: Any, c
         return str(row["id"]), str(row.get("list_type") or list_type)
     rows = await db.fetch(
         """
-        SELECT id, name, list_type
+        SELECT id, name, list_type, visibility, created_at,
+               (SELECT COUNT(*) FROM list_items i WHERE i.list_id = lists.id AND i.deleted = 0) AS n
         FROM lists
         WHERE list_type = $2 AND deleted = 0
           AND (visibility = 'family' OR user_id = $1)
@@ -3566,13 +3577,12 @@ async def _find_or_create_list(intent: SkybridgeIntent, user_id: str, db: Any, c
           (SELECT COUNT(*) FROM list_items i WHERE i.list_id = lists.id AND i.deleted = 0) DESC,
           CASE WHEN user_id = $1 THEN 0 ELSE 1 END,
           created_at ASC, id ASC
-        LIMIT 1
         """,
         user_id,
         list_type,
     )
     if rows:
-        row = dict(rows[0])
+        row = _pick_list_row(rows, intent.list_name)
         return str(row["id"]), str(row.get("list_type") or list_type)
     household = user_id == panel_principal.HOUSEHOLD_VIEWER
     if household and list_type != "shopping":
@@ -3768,7 +3778,8 @@ async def _find_list_for_remove(intent: SkybridgeIntent, user_id: str, db: Any, 
         return str(row["id"]), str(row.get("list_type") or list_type)
     rows = await db.fetch(
         """
-        SELECT id, name, list_type
+        SELECT id, name, list_type, visibility, created_at,
+               (SELECT COUNT(*) FROM list_items i WHERE i.list_id = lists.id AND i.deleted = 0) AS n
         FROM lists
         WHERE list_type = $2 AND deleted = 0
           AND (visibility = 'family' OR user_id = $1)
@@ -3776,13 +3787,12 @@ async def _find_list_for_remove(intent: SkybridgeIntent, user_id: str, db: Any, 
           (SELECT COUNT(*) FROM list_items i WHERE i.list_id = lists.id AND i.deleted = 0) DESC,
           CASE WHEN user_id = $1 THEN 0 ELSE 1 END,
           created_at ASC, id ASC
-        LIMIT 1
         """,
         user_id,
         list_type,
     )
     if rows:
-        row = dict(rows[0])
+        row = _pick_list_row(rows, intent.list_name)
         return str(row["id"]), str(row.get("list_type") or list_type)
     return None
 
