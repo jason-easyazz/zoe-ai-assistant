@@ -24,7 +24,7 @@ export PYTHONDONTWRITEBYTECODE=1 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 ANONYMI
 avail() { awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo; }
 
 busy() {
-  for pat in '^bash .*/land_voice_pr\.sh' '^\S*python\S*( -\S+)* \S*(samantha_bar|samantha_bar_conv|samantha_day_sim)\.py' '^\S*python\S*( -\S+)* \S*voice_regression_probe\.py'; do
+  for pat in '^(\S*/)?bash( -\S+)* \S*land_voice_pr\.sh' '^\S*python\S*( -\S+)* \S*(samantha_bar|samantha_bar_conv|samantha_day_sim)\.py' '^\S*python\S*( -\S+)* \S*voice_regression_probe\.py'; do
     if pgrep -f "$pat" >/dev/null 2>&1; then echo "busy: a process matches $pat"; return 0; fi
   done
   if [ -e "$HLOCK" ] && ! flock -n -s "$HLOCK" true 2>/dev/null; then echo "busy: the voice harness lock $HLOCK is held"; return 0; fi

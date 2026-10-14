@@ -58,7 +58,6 @@ def _wire(monkeypatch, agent):
 
     monkeypatch.setattr(voice_presence, "_AUDIO_CACHE", {})
     monkeypatch.setattr(vt, "_resolve_recent_panel_session_user", panel_user)
-    monkeypatch.setattr(vt, "_resolve_panel_default_user", none)
     monkeypatch.setattr(vt, "_load_voice_history", history)
     monkeypatch.setattr(vt, "_synthesize_kokoro_sidecar", tts)
     monkeypatch.setattr(vt, "_VOICE_SESSIONS", {})

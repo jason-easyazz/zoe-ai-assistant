@@ -212,6 +212,27 @@ clobber them); untracked runtime artifacts on the live tree (`data/chroma/`, `da
 sidecars, HACS, …) do **not** block and are gitignored. The runner's `reset --hard` intentionally has
 **no** clean-tree refuse — CD overwrites the tree to match `main` by contract.
 
+### Landings and the night window (rationale; the rule is binding in scripts/AGENTS.md)
+
+The rule itself lives in [scripts/AGENTS.md](../../scripts/AGENTS.md) ("Brain-window quiet hours"): between
+01:50 and 04:55 no landing or harness starts, holds `/tmp/zoe-brain-window.lock`, or stays alive as a process
+(including `land_voice_pr.sh`). This section keeps the why.
+
+The 12B night window (`scripts/night/night_window.py`, timer 02:50 +0-2 min, over by 03:55; see
+[night-window.md](night-window.md)) takes the **brain** for about an hour. On 2026-10-13 a lander that was
+sleeping (waiting, but still a live `land_voice_pr.sh` process) at 02:50 made the window wait and then refuse,
+and the 12B night was lost. The span is wider than the window itself: 01:50 gives a lander time to drain before
+the earliest manual start (01:30 is allowed) and the timer; 04:55 is past the voice-gate blackout (04:10-04:52)
+the window already refuses to overlap.
+
+What the window does about it (read-only facts, pinned by `tests/unit/test_night_window_landing_contract.py`):
+
+- the brain-window lock held: **refuse at once**, nothing stopped (`probe_lock` in preflight).
+- a live lander (anchored `pgrep -f`, the same patterns as the bake-off, interpreter path free), a samantha
+  bar or a voice probe, or `/tmp/zoe-voice-harness.lock` held, or a panel voice turn in the last 10 minutes:
+  **wait**, polling every 60 s, up to `NIGHT_QUIET_WAIT_MIN` (30 min), then refuse. A running nightly timer job
+  waits up to 20 min first. After taking the lock it checks the same things once more.
+
 ## Protected `main` — the merge gates (re-tiered 2026-07-31)
 
 **The required gate is DETERMINISTIC and locally runnable.** Anything judgement-shaped —

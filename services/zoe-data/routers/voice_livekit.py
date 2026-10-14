@@ -1245,7 +1245,19 @@ def _build_room_handlers(room, participant_state: dict, audio_tasks: dict) -> No
         ps = participant_state[sid]
 
         if msg_type == "identify":
-            ps["user_id"] = msg.get("user_id") or "guest"
+            # PRIVACY (2026-10-14): the message is CLIENT-asserted. A participant's identity
+            # is the JWT `sub` `/livekit-token` minted from the server-resolved principal (a
+            # member's own session, else a device / kiosk-guest sentinel), so `identify` may
+            # confirm that member and nobody else - "I am jason" from any other participant
+            # stays guest. It used to set the turn's user to whatever the client said.
+            from routers.voice_tts import _real_user_or_none
+
+            _claimed = _real_user_or_none(msg.get("user_id"))
+            _minted = _real_user_or_none(getattr(participant, "identity", None))
+            ps["user_id"] = _claimed if _claimed and _claimed == _minted else "guest"
+            if _claimed and _claimed != _minted:
+                logger.warning("LiveKit: identify as %s refused for participant %s (not its minted identity)",
+                               _claimed, sid[:8])
             ps["session_id"] = msg.get("session_id") or ps["session_id"]
 
         elif msg_type == "ptt_start":
@@ -1547,22 +1559,24 @@ async def _require_livekit_media_auth(
     for once both have landed.
     """
     if device:
-        # ATTRIBUTION, not authorisation. The token authenticates the DEVICE; the
-        # acting person is the user bound to that panel. `_validate_device_token`
-        # hardcodes `user_id="voice-daemon"`, while `get_current_user` has already
-        # resolved the same token through `panel_user_bindings` to the bound user
-        # (guest for an unbound panel — fail-closed, ZOE-4321). Taking the device
-        # dict's id would run the brain turn as `voice-daemon`, losing the
-        # speaker's personal context and writing memory into the wrong scope —
-        # something the `_get_current_user_soft` path this gate replaced did not
-        # do. Fall back to the device id only when there is no bound principal.
-        bound_user_id = user.get("user_id")
-        if not bound_user_id or user.get("role") == "guest" or user.get("auth_degraded"):
-            bound_user_id = device.get("user_id") or "voice-daemon"
+        # ATTRIBUTION, not authorisation. The token authenticates the DEVICE, and
+        # (PRIVACY, 2026-10-14) the panel's operator-declared owner that
+        # `get_current_user` resolves the same token to through `panel_user_bindings`
+        # is NOT the person talking - this lane used to run every device-token turn
+        # as that owner. The acting member comes only from a FRESH source, through
+        # the voice lane's own resolver: the member of a fresh PIN session on THIS
+        # panel (`voice_tts._resolve_fresh_panel_member`, the idle-logout window).
+        # These uploads carry no speaker identification, so there is nothing else;
+        # without a fresh session the turn keeps the DEVICE identity (a guest
+        # sentinel, never the shared `guest` principal). An unidentified voice never
+        # refreshes the member's session either (no heartbeat here).
+        from routers.voice_tts import _resolve_fresh_panel_member
+
+        acting_user_id = await _resolve_fresh_panel_member(str(device.get("panel_id") or ""))
         return {
             "source": "device",
             "panel_id": device.get("panel_id"),
-            "user_id": bound_user_id,
+            "user_id": acting_user_id or device.get("user_id") or "voice-daemon",
             "role": device.get("role") or "voice-daemon",
         }
     if user.get("role") not in (None, "guest"):

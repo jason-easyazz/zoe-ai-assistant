@@ -696,7 +696,7 @@ class Window:
     #: ``pgrep -f samantha_bar.py`` also matches an editor, a ``tail -f`` or the very shell that was asked (and misses ``samantha_bar_conv.py``,
     #: the conversation bar, and the voice regression probe the landing script runs under ``/tmp/zoe-voice-harness.lock``).
     BUSY_PATTERNS = (
-        ("a voice-PR landing", r"^bash .*/land_voice_pr\.sh"),
+        ("a voice-PR landing", r"^(\S*/)?bash( -\S+)* \S*land_voice_pr\.sh"),
         ("the samantha bar", r"^\S*python\S*( -\S+)* \S*(samantha_bar|samantha_bar_conv|samantha_day_sim)\.py"),
         ("a voice regression probe", r"^\S*python\S*( -\S+)* \S*voice_regression_probe\.py"),
     )
