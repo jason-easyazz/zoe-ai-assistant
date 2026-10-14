@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Auto-generated inventory of every ZOE_* environment flag read in the codebase — defaults, readers, typed_env adoption, and .env.example coverage.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-10-14T00:00:00Z
+timestamp: 2026-10-15T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-10-14T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-10-14. The table body is deterministic (sorted, no
+Last generated: 2026-10-15. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Default `dynamic` = not statically extractable; `(required)` = bare
@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-637 flags; 635 not documented in `.env.example`.
+643 flags; 641 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -66,6 +66,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_BRAIN_BACKEND` | `'core'` | no | NO | `services/zoe-data/brain_dispatch.py` |
 | `ZOE_BRAIN_FAILOVER` | `'0'` | no | NO | `services/zoe-data/brain_dispatch.py` |
 | `ZOE_BRAIN_FAILOVER_COOLDOWN_S` | `'45'` | no | NO | `services/zoe-data/brain_dispatch.py` |
+| `ZOE_BRAIN_KV_WARM_ON_WAKE` | `-` | no | NO | `services/zoe-data/zoe_flue_client.py` |
 | `ZOE_BRAIN_PREWARM_ON_WAKE` | `'1'`, `True` | yes | NO | `services/zoe-data/routers/voice_livekit.py`<br>`services/zoe-data/routers/voice_tts.py` |
 | `ZOE_BRAIN_SLOT_GUARD` | `-` | no | NO | `services/zoe-data/brain_slot_guard.py` |
 | `ZOE_BRAIN_SLOT_MAX_DEFER_S` | `''` | no | NO | `services/zoe-data/brain_slot_guard.py` |
@@ -552,8 +553,13 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_SPEAKER_ADAPT_MIN_SCORE` | `0.85` | yes | NO | `services/zoe-data/speaker_adaptation.py` |
 | `ZOE_SPEAKER_ADAPT_MIN_SPEECH_S` | `2.0` | yes | NO | `services/zoe-data/speaker_adaptation.py` |
 | `ZOE_SPEAKER_ADAPT_PIN_WINDOW_S` | `900.0` | yes | NO | `services/zoe-data/speaker_adaptation.py` |
+| `ZOE_SPEAKER_ADAPT_RESNET34_ANCHOR_FLOOR` | `dynamic` | yes | NO | `services/zoe-data/speaker_models.py` |
+| `ZOE_SPEAKER_ADAPT_RESNET34_MIN_SCORE` | `dynamic` | yes | NO | `services/zoe-data/speaker_models.py` |
 | `ZOE_SPEAKER_ID_THRESHOLD` | `'0.82'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
-| `ZOE_SPEAKER_MODEL` | `'resemblyzer'` | yes | NO | `services/zoe-data/voice_session.py` |
+| `ZOE_SPEAKER_MODEL` | `''`, `'resemblyzer'` | yes | NO | `scripts/setup/zoe_enroll_flow.py`<br>`scripts/setup/zoe_voice_daemon.py`<br>`services/zoe-data/speaker_models.py`<br>`services/zoe-data/voice_session.py` |
+| `ZOE_SPEAKER_RESNET34_THRESHOLD_LONG` | `dynamic` | yes | NO | `services/zoe-data/speaker_models.py` |
+| `ZOE_SPEAKER_RESNET34_THRESHOLD_SHORT` | `dynamic` | yes | NO | `services/zoe-data/speaker_models.py` |
+| `ZOE_SPEAKER_RESNET34_TIER` | `'far1'`, `dynamic` | yes | NO | `scripts/setup/zoe_speaker_resnet34.py`<br>`services/zoe-data/speaker_models.py` |
 | `ZOE_SPECULATIVE_MAX_HOLD_MS` | `5000` | yes | NO | `services/zoe-data/voice_speculation.py` |
 | `ZOE_SPECULATIVE_TAIL_MS` | `320` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_SPECULATIVE_TURN` | `'false'`, `False` | yes | NO | `scripts/setup/zoe_voice_daemon.py`<br>`services/zoe-data/voice_speculation.py` |
