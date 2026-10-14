@@ -172,6 +172,7 @@ member-said before synced, then the card's `ord`.
 ```
 incoming card (source S, external_id E)
   E is a forgotten tombstone of S?                       -> skip ("forgotten")
+  the card IS a person the member forgot (forget ledger)? -> tombstone E, skip ("forgotten"); else drop entries naming one
   (S, E) already linked to a live person?                -> replace S's fields on that person ("updated"/"unchanged")
   strong identifiers among the member's OWN live people:
       Zoe urn:uuid UID | email (lower-case) | phone (last 9 digits); legacy columns count
@@ -232,7 +233,7 @@ gate, with five guardrails (`memories-space.md` section 2.6 [branch]). What this
 |---|---|---|
 | "Forget <name>" (member) | the forgotten person's `contact_fields`, `person_contact_links`, synced `person_important_dates`, every review naming them or listing them; any other field of the member that names them (a note on someone else); their source cards become `state = 'forgotten'` tombstones with `card_json = '{}'`, no uid/etag, and `external_id` replaced by `forgotten:<sha256(source_id, external_id)>` (a CardDAV href can carry a name); a card linked to someone else is redacted instead | `memory_forget_cascade` step `contacts` -> `contacts_store.forget_entity` |
 | same | the member's `learned_voiceprints` for that person | step `voiceprints` -> `contacts_store.forget_voiceprints` |
-| same, the next sync | the tombstoned card is not re-imported (`import_card` returns `forgotten`) | `contacts_store.is_forgotten_external` |
+| same, the next sync | the tombstoned card is not re-imported (`import_card` returns `forgotten`); a RE-CREATED card for the person (a new external id) is refused by the forget ledger (`memory_forgotten.ledger_pattern`: salted hashes, no names) and tombstoned; any other incoming card loses the entries that name them (a note, a RELATED line) before anything is stored | `contacts_store.is_forgotten_external`, `contacts_store.forgotten_pattern` in `import_card` |
 | a step that fails | recorded in `CascadeResult.failed`, the forget is NOT confirmed, a durable retry marker is left (no name); the retry re-runs the step from the ledger's hash pattern | existing cascade machinery; both steps find their person rows themselves, so a failed `people` step never makes them "succeed" over nothing |
 | member erase (`MemoryService.delete_user`) | every row the member owns in the six tables, and their synced dates | `contacts_store.forget_user` |
 | person row hard-deleted | `contact_fields`, links, reviews, voiceprints by `ON DELETE CASCADE` | 0052 FKs |

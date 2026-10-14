@@ -97,8 +97,8 @@ async def import_vcf(request: Request, provider: str = Query("phone"), user: dic
     raw = await request.body()
     if len(raw) > MAX_IMPORT_BYTES:
         raise HTTPException(status_code=413, detail="vCard file too large")
-    if provider not in ("phone", "local", "carddav", "google", "microsoft"):
-        raise HTTPException(status_code=400, detail="provider must be phone, local, carddav, google or microsoft")
+    if provider not in contacts_store.FILE_PROVIDERS:      # a file is never "synced from Google"
+        raise HTTPException(status_code=400, detail="a file import is provider phone or local")
     try:
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:

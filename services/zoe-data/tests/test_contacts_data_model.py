@@ -457,6 +457,27 @@ async def test_forget_removes_contact_rows_links_and_the_voiceprint(db, ledger_e
 
 
 @pytest.mark.asyncio
+async def test_a_sync_after_the_forget_never_brings_the_name_back(db, ledger_env):
+    """The tombstone covers the SAME card; the forget ledger (salted hashes, no names) covers a re-created one and every other card
+    that mentions the person. Control: drop the ledger check in ``import_card`` -> the re-created card imports and Tove's note
+    carries the name again."""
+    import memory_forgotten
+    assert await memory_forgotten.add(A, "Marisol", actor=A)
+    tove = vc.empty_card()
+    tove.update(full_name="Tove Lindqvist", notes=[{"value": "Met Marisol at the seed swap."}, {"value": "Plays the cello."}],
+                related=[{"name": "Marisol Okafor-Vance", "uri": None, "types": ["friend"], "zoe_rel": None, "zoe_role": None}])
+    text = vc.to_vcard(vc.parse_vcards(VCF)[0]) + vc.to_vcard(tove)
+    rep = await cs.import_vcf(db, A, text)
+    assert rep["forgotten"] == 1 and rep["created"] == 1 and rep["relation_reviews"] == 0
+    for table in ("contact_fields", "source_contacts", "contact_merge_reviews", "people"):
+        assert not [r for r in db.q(f"SELECT * FROM {table} WHERE user_id = ?", (A,)) if "marisol" in json.dumps(r).lower()], table
+    assert db.q("SELECT value FROM contact_fields WHERE kind = 'note'") == [("Plays the cello.",)]
+    again = await cs.import_vcf(db, A, text)                       # the tombstone answers the second time without the ledger read
+    assert again["forgotten"] == 1 and again["unchanged"] == 1
+    assert (await cs.import_vcf(db, B, text))["created"] == 2      # B never forgot her: B's import is untouched
+
+
+@pytest.mark.asyncio
 async def test_forget_contacts_step_fails_loud(db, ledger_env, monkeypatch):
     """A locked contact table is a FAILED step (the forget is not confirmed), never a silent skip."""
     import memory_forget_cascade as cascade

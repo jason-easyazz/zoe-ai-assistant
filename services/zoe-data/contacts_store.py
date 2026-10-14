@@ -43,6 +43,7 @@ logger = logging.getLogger(__name__)
 
 PROVIDERS = ("local", "google", "microsoft", "carddav", "phone", "introduction", "omi_tag")
 EXTERNAL_PROVIDERS = frozenset({"google", "microsoft", "carddav"})        # externally owned by default (read_only)
+FILE_PROVIDERS = ("phone", "local")
 FIELD_KINDS = ("name", "nickname", "email", "phone", "address", "org", "title", "url", "social", "im", "photo", "note",
                "group", "pronouns")
 PROVENANCE_FOR_PROVIDER = {"google": "synced", "microsoft": "synced", "carddav": "synced", "phone": "file_import",
@@ -420,14 +421,44 @@ async def _import_relations(db, user_id: str, person_id: str, sc_id: str, card: 
     return edges, reviews
 
 
+_UNSET: Any = object()
+
+
+async def forgotten_pattern(user_id: str):
+    """The member's forget-ledger matcher (``memory_forgotten.LedgerPattern``: salted hashes, no names), or None (ledger off, empty,
+    or unreachable). An incoming card is checked against it so a sync can never bring a forgotten person back."""
+    try:
+        import memory_forgotten
+        return await memory_forgotten.ledger_pattern(user_id)
+    except Exception as exc:  # noqa: BLE001 - the ledger being down never blocks an import; the tombstones still hold
+        logger.warning("contacts_store: forget ledger unreadable for an import (%s)", type(exc).__name__)
+        return None
+
+
+async def _tombstone_incoming(db, user_id: str, source_id: str, external_id: str, now: str) -> None:
+    tomb = tombstone_external_id(source_id, external_id)
+    if not await _all(db, "SELECT 1 FROM source_contacts WHERE source_id = ? AND external_id = ?", (source_id, tomb)):
+        await _run(db, "INSERT INTO source_contacts (id, user_id, source_id, external_id, card_json, state, created_at, updated_at) "
+                       "VALUES (?, ?, ?, ?, '{}', 'forgotten', ?, ?)", (str(uuid.uuid4()), user_id, source_id, tomb, now, now))
+    await db.commit()
+
+
 async def import_card(db, user_id: str, source: dict, card: dict, *, external_id: str, etag: Optional[str] = None,
-                      relations: bool = True) -> ImportOutcome:
+                      relations: bool = True, forgotten: Any = _UNSET) -> ImportOutcome:
     """Bring one external card in for ``user_id`` (the merge model; see the module doc). Atomic per card. ``relations=False`` defers
-    the RELATED lines to the caller (a batch resolves them after every card is in, so the order of a file does not matter)."""
+    the RELATED lines to the caller (a batch resolves them after every card is in, so the order of a file does not matter).
+    ``forgotten`` is the member's forget-ledger matcher (fetched when not given): a card that IS a forgotten person is refused and
+    tombstoned; any other card loses the entries that name one (a note, a RELATED line) before anything is stored."""
     now = now_iso()
     sid = source["id"]
     if await is_forgotten_external(db, user_id, sid, external_id):
         return ImportOutcome("forgotten", reason="forgotten")
+    rx = await forgotten_pattern(user_id) if forgotten is _UNSET else forgotten
+    if rx is not None:
+        if _card_is_about(card, rx):
+            await _tombstone_incoming(db, user_id, sid, external_id, now)
+            return ImportOutcome("forgotten", reason="forgotten")
+        card = _redact(card, rx)
     full = (card.get("full_name") or "").strip()
     if not full:
         return ImportOutcome("skipped", reason="no_name")
@@ -497,20 +528,25 @@ def vcard_external_id(card: dict) -> str:
 
 
 async def import_vcf(db, user_id: str, text: str, *, provider: str = "phone", source_account_id: str = "file") -> dict:
-    """Import every card of a .vcf for the member; a per-action count plus the review ids. Inline photos are dropped (counted)."""
-    if provider not in PROVIDERS:
-        raise ContactsError(f"unknown provider {provider!r}")
+    """Import every card of a .vcf for the member; a per-action count plus the review ids. Inline photos are dropped (counted).
+    A file is ``phone`` or ``local`` (provenance ``file_import``): it is never labelled as synced from an account it did not come
+    through."""
+    if provider not in FILE_PROVIDERS:
+        raise ContactsError("a file import is provider phone or local")
     source = await ensure_source(db, user_id, provider, source_account_id=source_account_id, label="vCard file")
     await db.commit()
     report: dict[str, Any] = {"cards": 0, "created": 0, "linked": 0, "updated": 0, "unchanged": 0, "review": 0, "forgotten": 0,
                               "skipped": 0, "edges": 0, "relation_reviews": 0, "photos_inline_dropped": 0, "unmapped": 0,
                               "review_ids": [], "person_ids": []}
     landed: list[tuple[str, str, dict]] = []
+    rx = await forgotten_pattern(user_id)
     for card in contacts_vcard.parse_vcards(text):
         report["cards"] += 1
         report["photos_inline_dropped"] += card.get("photos_inline_dropped", 0)
         report["unmapped"] += card.get("unmapped", 0)
-        out = await import_card(db, user_id, source, card, external_id=vcard_external_id(card), relations=False)
+        out = await import_card(db, user_id, source, card, external_id=vcard_external_id(card), relations=False, forgotten=rx)
+        if rx is not None and out.action not in ("forgotten", "skipped"):
+            card = _redact(card, rx)
         report[out.action] += 1
         if out.review_id:
             report["review_ids"].append(out.review_id)
@@ -782,6 +818,7 @@ async def forget_entity(db, user_id: str, rx) -> int:
                              "LEFT JOIN person_contact_links l ON l.source_contact_id = s.id AND l.unlinked_at IS NULL "
                              "WHERE s.user_id = ? AND s.state != 'forgotten'", (user_id,))
     now = now_iso()
+    tombstoned: set = set()
     for sc_id, source_id, external_id, card_json, linked in sc_rows:
         if linked in ids or (not linked and _card_is_about(_loads(card_json, {}), rx)):
             await _run(db, "DELETE FROM contact_fields WHERE user_id = ? AND source_contact_id = ?", (user_id, sc_id))
@@ -790,6 +827,7 @@ async def forget_entity(db, user_id: str, rx) -> int:
             await _run(db, "UPDATE source_contacts SET state = 'forgotten', card_json = '{}', uid = NULL, etag = NULL, "
                            "external_id = ?, updated_at = ? WHERE id = ? AND user_id = ?",
                        (tombstone_external_id(source_id, external_id), now, sc_id, user_id))
+            tombstoned.add(sc_id)
             n += 1
         elif _names(rx, card_json):
             await _run(db, "UPDATE source_contacts SET card_json = ?, updated_at = ? WHERE id = ? AND user_id = ?",
@@ -800,9 +838,10 @@ async def forget_entity(db, user_id: str, rx) -> int:
         n += await _run(db, f"DELETE FROM person_contact_links WHERE user_id = ? AND person_id IN ({_qs(len(idl))})", (user_id, *idl))
         n += await _run(db, f"DELETE FROM person_important_dates WHERE user_id = ? AND source_contact_id IS NOT NULL "
                             f"AND person_id IN ({_qs(len(idl))})", (user_id, *idl))
-    for rid, pid, rpid, cands, detail in await _all(db, "SELECT id, person_id, resolved_person_id, candidate_ids, detail "
-                                                        "FROM contact_merge_reviews WHERE user_id = ?", (user_id,)):
-        if pid in ids or rpid in ids or ids.intersection(_loads(cands, [])) or _names(rx, detail):
+    for rid, pid, rpid, cands, detail, sc in await _all(db, "SELECT id, person_id, resolved_person_id, candidate_ids, detail, "
+                                                            "source_contact_id FROM contact_merge_reviews WHERE user_id = ?",
+                                                            (user_id,)):
+        if pid in ids or rpid in ids or ids.intersection(_loads(cands, [])) or _names(rx, detail) or sc in tombstoned:
             n += await _run(db, "DELETE FROM contact_merge_reviews WHERE id = ? AND user_id = ?", (rid, user_id))
     await db.commit()
     return n
