@@ -87,6 +87,8 @@ def main() -> int:
     )
     ap.add_argument("--last", type=int, default=10, help="newest N samples to replay")
     ap.add_argument("--since", help="only samples whose filename sorts >= this")
+    ap.add_argument("--files-from", help="replay EXACTLY the clips named (basenames, one per "
+                    "line) in this file; overrides --last/--since (pinned clip set)")
     ap.add_argument("--user", default="jason", help="user_id for memory recall (reads only)")
     ap.add_argument("--service-dir", default=None, help=SERVICE_DIR_HELP)
     ap.add_argument("--json", help="write aggregated machine-readable results here")
@@ -139,7 +141,9 @@ def main() -> int:
     ]
     if args.base_url:
         cmd += ["--base-url", args.base_url]
-    if args.since:
+    if args.files_from:
+        cmd += ["--files-from", args.files_from]
+    elif args.since:
         cmd += ["--since", args.since]
     else:
         cmd += ["--last", str(args.last)]

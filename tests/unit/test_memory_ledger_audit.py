@@ -259,3 +259,17 @@ def test_the_script_has_no_write_or_delete_path():
         if isinstance(node, ast.Constant) and isinstance(node.value, str) and not node.value.startswith(("#!", "Reconcile")):
             head = node.value.lstrip().upper()
             assert not head.startswith(("INSERT ", "UPDATE ", "DELETE ", "DROP ", "ALTER ", "CREATE ", "VACUUM", "REPLACE ", "PRAGMA ")), head[:30]
+
+
+def test_synthetic_re_mirrors_the_services_user_filters():
+    """The script cannot import service code, so it carries a copy of the predicate. A copy
+    that drifts is how a probe id gets audited as a person (zoe-hammer-<epoch>, 2026-10-13)."""
+    import importlib.util
+    import pathlib
+
+    src = pathlib.Path(__file__).resolve().parents[2] / "services" / "zoe-data" / "user_filters.py"
+    spec = importlib.util.spec_from_file_location("uf_mirror_check", src)
+    uf = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(uf)
+    assert mla.SYNTHETIC_RE.pattern == uf.SYNTHETIC_USER_RE.pattern
+    assert mla.SYNTHETIC_RE.flags == uf.SYNTHETIC_USER_RE.flags
