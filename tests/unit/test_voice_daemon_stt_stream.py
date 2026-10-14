@@ -3,6 +3,9 @@
 Pins: flag off -> no uploader and no payload fields; uploader batches the mic audio in order with the exact sample
 total; any failed POST (or a 409 from a server with the flag off) means NO stream id on the turn and, for 409, a latch;
 the id is attached only when the sample count equals the WAV's, once, never to a speculative turn.
+Every recording that becomes a turn of its own streams, not just the wake command: record_command AND the follow-up /
+conversation windows (_follow_up_source -> _follow_up_listen(stream_upload=True)). The continuation listens (hard-cap merge,
+held-turn resume) never do - their audio is merged into an earlier clip.
 Loaded with stubbed pyaudio/requests like test_voice_daemon_speculation.py.
 """
 from __future__ import annotations
@@ -205,3 +208,198 @@ def test_uploads_only_when_turns_use_the_streaming_endpoint(daemon, monkeypatch)
     assert daemon._stt_stream_available()
     monkeypatch.setattr(daemon, "VOICE_STREAM_ENABLED", False)
     assert not daemon._stt_stream_available()
+
+
+# -- every turn-making recording streams (live 2026-10-13: only the wake command did; follow-ups fell back to batch) --
+
+SPEECH, DEEP = 0.9, 0.02
+
+
+class _FakeStream:
+    def __init__(self, fail_after: int | None = None):
+        self.reads = 0
+        self._fail_after = fail_after
+
+    def read(self, size, exception_on_overflow=True):  # noqa: ARG002
+        self.reads += 1
+        if self._fail_after is not None and self.reads > self._fail_after:
+            raise OSError("mic gone")
+        return b"\x01\x00" * size
+
+    def stop_stream(self):
+        pass
+
+    def close(self):
+        pass
+
+
+class _FakePA:
+    def __init__(self, fail_after: int | None = None):
+        self._fail_after = fail_after
+
+    def get_sample_size(self, fmt):  # noqa: ARG002
+        return 2
+
+    def open(self, **kw):  # noqa: ARG002
+        return _FakeStream(self._fail_after)
+
+
+@pytest.fixture()
+def lane(daemon, monkeypatch):
+    """Flags on, scripted VAD, and a fake chunk endpoint recording every POST."""
+    posts: list[dict] = []
+    state = {"resp": {"ok": True}}
+
+    def fake_post(path, body, timeout=5, retries=0):  # noqa: ARG001
+        posts.append({"path": path, "stream_id": body["stream_id"], "seq": body["seq"],
+                      "pcm": base64.b64decode(body["pcm_base64"])})
+        return state["resp"]
+
+    monkeypatch.setattr(daemon, "ZOE_STT_STREAM_UPLOAD", True)
+    monkeypatch.setattr(daemon, "VOICE_STREAM_ENABLED", True)
+    monkeypatch.setattr(daemon, "_api_post", fake_post)
+    monkeypatch.setattr(daemon, "VAD_ENDPOINT_ENABLED", True)
+    monkeypatch.setattr(daemon, "ZOE_VAD_TAIL_MS", 640)
+    monkeypatch.setattr(daemon, "ZOE_SPECULATIVE_TURN", False)
+    monkeypatch.setattr(daemon, "FOLLOW_UP_VAD_THRESHOLD", 0.5)
+    monkeypatch.setattr(daemon, "_PREROLL", [])
+    monkeypatch.setattr(daemon, "_get_silero_vad", lambda: (object(), None))
+    monkeypatch.setattr(daemon, "_last_record_capped", False)
+    monkeypatch.setattr(daemon, "_notify_wake_background", lambda: None)
+
+    def script(probs):
+        seq = iter(probs)
+        monkeypatch.setattr(daemon, "_vad_prob", lambda _m, _c: next(seq))
+
+    return types.SimpleNamespace(posts=posts, state=state, script=script)
+
+
+def _assert_stream_covers(daemon, lane, wav: bytes) -> str:
+    """The posted chunks are ONE stream id, contiguous from seq 0, carry exactly the WAV's PCM, and the turn payload
+    names that stream with the WAV's sample count."""
+    with wave.open(io.BytesIO(wav), "rb") as w:
+        pcm = w.readframes(w.getnframes())
+        frames = w.getnframes()
+    assert lane.posts, "no chunk was uploaded"
+    assert {p["stream_id"] for p in lane.posts} == {lane.posts[0]["stream_id"]}
+    assert [p["seq"] for p in lane.posts] == list(range(len(lane.posts)))
+    assert b"".join(p["pcm"] for p in lane.posts) == pcm
+    payload: dict = {}
+    daemon._attach_stt_stream(payload, wav, None)
+    assert payload == {"stt_stream_id": lane.posts[0]["stream_id"], "stt_stream_samples": frames}
+    return lane.posts[0]["stream_id"]
+
+
+def test_follow_up_window_uploads_with_its_own_session_and_names_it_on_the_turn(daemon, lane):
+    lane.script([SPEECH] * 40 + [DEEP] * 40)
+    wav = daemon._follow_up_source(_FakePA(), None, beep=False, window_s=5.0)
+    assert wav is not None
+    _assert_stream_covers(daemon, lane, wav)
+    assert all(p["path"] == "/api/voice/stt_stream/chunk" for p in lane.posts)
+
+
+def test_conversation_window_uploads_too(daemon, lane):
+    lane.script([SPEECH] * 40 + [DEEP] * 40)
+    wav = daemon._follow_up_source(_FakePA(), None, beep=False, window_s=5.0,
+                                   hard_cap_s=daemon.CONV_RECORD_SECONDS_HARD)
+    assert wav is not None
+    _assert_stream_covers(daemon, lane, wav)
+
+
+def test_wake_command_still_uploads_after_the_shared_helper_refactor(daemon, lane):
+    lane.script([SPEECH] * 40 + [DEEP] * 40)
+    wav = daemon.record_command(_FakePA(), stream=_FakeStream())
+    assert wav is not None
+    _assert_stream_covers(daemon, lane, wav)
+
+
+def test_each_recording_gets_a_fresh_stream_id(daemon, lane):
+    lane.script([SPEECH] * 40 + [DEEP] * 40 + [SPEECH] * 40 + [DEEP] * 40)
+    first = daemon._follow_up_source(_FakePA(), None, beep=False, window_s=5.0)
+    id1 = _assert_stream_covers(daemon, lane, first)
+    lane.posts.clear()
+    second = daemon._follow_up_source(_FakePA(), None, beep=False, window_s=5.0)
+    id2 = _assert_stream_covers(daemon, lane, second)
+    assert id1 != id2
+
+
+def test_negative_control_old_wiring_sends_no_chunks(daemon, lane, monkeypatch):
+    """Break the fix: a _follow_up_source that does not ask for streaming (the pre-fix wiring) uploads nothing and the
+    turn carries no stream id - this is exactly what the live follow-up turns did."""
+    real = daemon._follow_up_listen
+    monkeypatch.setattr(daemon, "_follow_up_listen",
+                        lambda pa, **kw: real(pa, **{k: v for k, v in kw.items() if k != "stream_upload"}))
+    lane.script([SPEECH] * 40 + [DEEP] * 40)
+    wav = daemon._follow_up_source(_FakePA(), None, beep=False, window_s=5.0)
+    assert wav is not None and lane.posts == []
+    payload: dict = {}
+    daemon._attach_stt_stream(payload, wav, None)
+    assert payload == {}
+
+
+def test_continuation_listens_never_stream_and_leave_the_earlier_clips_id_alone(daemon, lane):
+    """The hard-cap merge and the held-turn resume call _follow_up_listen for audio that is merged into an earlier clip;
+    streaming them would clobber that clip's pending id with one that can never match the merged WAV."""
+    daemon._pending_stt_stream.update(stream_id="ab" * 8, samples=500, digest=_digest(500))
+    lane.script([SPEECH] * 40 + [DEEP] * 40)
+    assert daemon._follow_up_listen(_FakePA(), window_s=5.0) is not None
+    assert lane.posts == []
+    assert daemon._pending_stt_stream["stream_id"] == "ab" * 8
+    src = (DAEMON).read_text(encoding="utf-8")
+    assert src.count("_follow_up_listen(pa, window_s=ZOE_CONTINUE_WINDOW_S)") == 2  # both continuation callers, flag-less
+
+
+def test_a_merged_continuation_clip_never_names_the_stream(daemon, lane):
+    lane.script([SPEECH] * 40 + [DEEP] * 40)
+    first = daemon._follow_up_source(_FakePA(), None, beep=False, window_s=5.0)
+    merged = daemon._merge_wavs(first, _wav(8000))
+    payload: dict = {}
+    daemon._attach_stt_stream(payload, merged, None)
+    assert payload == {}  # digest/length mismatch -> batch STT for the merged clip, no wrong transcript
+
+
+def test_upload_error_falls_back_to_batch_and_keeps_the_recording(daemon, lane):
+    lane.state["resp"] = {"ok": False, "error": "HTTP 500"}
+    lane.script([SPEECH] * 40 + [DEEP] * 40)
+    wav = daemon._follow_up_source(_FakePA(), None, beep=False, window_s=5.0)
+    assert wav is not None
+    payload: dict = {}
+    daemon._attach_stt_stream(payload, wav, None)
+    assert payload == {} and not daemon._stt_stream_disabled.is_set()
+
+
+def test_409_in_a_follow_up_latches_off_and_the_next_window_does_not_upload(daemon, lane):
+    lane.state["resp"] = {"ok": False, "error": "HTTP 409"}
+    lane.script([SPEECH] * 40 + [DEEP] * 40 + [SPEECH] * 40 + [DEEP] * 40)
+    wav = daemon._follow_up_source(_FakePA(), None, beep=False, window_s=5.0)
+    assert wav is not None and daemon._stt_stream_disabled.is_set()
+    lane.posts.clear()
+    assert daemon._follow_up_source(_FakePA(), None, beep=False, window_s=5.0) is not None
+    assert lane.posts == []
+
+
+def test_flag_off_follow_up_uploads_nothing(daemon, lane, monkeypatch):
+    monkeypatch.setattr(daemon, "ZOE_STT_STREAM_UPLOAD", False)
+    lane.script([SPEECH] * 40 + [DEEP] * 40)
+    assert daemon._follow_up_source(_FakePA(), None, beep=False, window_s=5.0) is not None
+    assert lane.posts == [] and not daemon._pending_stt_stream
+
+
+def test_a_mic_error_mid_follow_up_abandons_the_upload(daemon, lane):
+    lane.script([SPEECH] * 80)
+    # drain (2 reads) + trigger read, then the mic dies mid-recording
+    assert daemon._follow_up_source(_FakePA(fail_after=8), None, beep=False, window_s=5.0) is None
+    assert not daemon._pending_stt_stream
+    import threading
+    assert not [t for t in threading.enumerate() if t.name == "stt-stream-upload" and t.is_alive()]
+
+
+def test_a_stale_pending_stream_is_dropped_when_a_new_window_opens(daemon, lane):
+    """A pending id left by a committed speculative wake turn must not survive into the next recording."""
+    daemon._pending_stt_stream.update(stream_id="ab" * 8, samples=500, digest=_digest(500))
+    lane.script([DEEP] * 10)
+    assert daemon._follow_up_source(_FakePA(), None, beep=False, window_s=0.0) is None  # silent window
+    assert not daemon._pending_stt_stream
+    daemon._pending_stt_stream.update(stream_id="cd" * 8, samples=500, digest=_digest(500))
+    assert daemon._follow_up_source(_FakePA(), b"SEED", beep=False) == b"SEED"
+    assert not daemon._pending_stt_stream  # a barge-in seed was never uploaded
