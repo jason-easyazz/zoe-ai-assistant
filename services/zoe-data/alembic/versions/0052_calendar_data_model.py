@@ -31,7 +31,7 @@ lost - the 0001 columns and their rows are untouched).
 from alembic import op
 
 revision = "0052"
-down_revision = "0050"
+down_revision = "0051"
 branch_labels = None
 depends_on = None
 

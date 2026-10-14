@@ -63,6 +63,17 @@ DEFAULT_SCRIPT = {
     "phrases": list(DEFAULT_PHRASES),
 }
 
+#: the two extra phrases and lines a 5-clip (ResNet34) enrolment needs when the server's script does not carry them (an older server)
+DEFAULT_PHRASES_EXTRA = (
+    "Turn the living room lights down to half.",
+    "Play some quiet music in the kitchen.",
+)
+DEFAULT_SCRIPT.update(
+    intro_many="Hi {name}. I'll ask you to say {count} short phrases, in your normal voice. I keep a voice signature, never the recordings. Say stop at any time.",
+    retry_odd="That one sounded different from the others, so let's do it once more.",
+    phrases_extra=list(DEFAULT_PHRASES_EXTRA),
+)
+
 # Capture quality (16 kHz mono int16 WAV, as the daemon records). Thresholds are deliberately forgiving: a retry costs the person ten
 # seconds, a rejected honest capture costs their patience.
 MIN_TOTAL_S = 1.2        # shorter than this is a clipped or empty capture
@@ -172,8 +183,20 @@ class EnrollmentRun:
                  upload: Callable[[bytes], bool], name: str = "", transcribe: Optional[Callable[[bytes], str]] = None,
                  report: Optional[Callable[[str, int, str], None]] = None, cancelled: Callable[[], object] = lambda: False,
                  assess: Callable[[bytes], tuple] = assess_wav, clock: Callable[[], float] = time.monotonic,
-                 max_total_s: float = 90.0, attempts_per_phrase: int = 3, log: Optional[Callable[[str], None]] = None):
+                 max_total_s: float = 90.0, attempts_per_phrase: int = 3, log: Optional[Callable[[str], None]] = None,
+                 clips: Optional[int] = None, embed: Optional[Callable[[bytes], object]] = None,
+                 build: Optional[Callable[[list], tuple]] = None, upload_profile: Optional[Callable[[object, int], bool]] = None,
+                 legacy_upload: bool = True, reask_rounds: int = 2):
         self.script = merge_script(script)
+        # ResNet34 enrolment (flag-dark, ZOE_SPEAKER_MODEL): ``clips`` captures are asked for; ``embed(wav)`` gives each capture's
+        # embedding on the panel (None = unusable); ``build(embeddings) -> (profile | None, dropped_positions)`` rejects a capture
+        # that does not sound like the rest; ``upload_profile(profile, n_clips)`` stores the finished profile. A capture that is
+        # dropped is RE-ASKED (``retry_odd``), at most ``reask_rounds`` times. ``legacy_upload`` keeps the WAV upload the Resemblyzer
+        # profile is built from (``dual`` does both from the same clips; ``resnet34`` alone sends no audio at all).
+        self.clips = int(clips) if clips else None
+        self._embed, self._build, self._upload_profile = embed, build, upload_profile
+        self.legacy_upload = bool(legacy_upload)
+        self.reask_rounds = max(0, int(reask_rounds))
         self.name = name
         self._say, self._record, self._upload = say, record, upload
         self._transcribe, self._report, self._cancelled = transcribe, report, cancelled
@@ -249,41 +272,68 @@ class EnrollmentRun:
                     pass
         return result
 
+    def _phrases(self) -> list:
+        """The phrases to ask for: the script's own (legacy), or - when ``clips`` is set - exactly that many: the script's, then its
+        ``phrases_extra``, then repeats from the top (an older server's 3-phrase script still yields 5 captures)."""
+        base = [str(p) for p in self.script["phrases"]]
+        if not self.clips:
+            return base
+        out = list(base[: self.clips])
+        for p in (str(x) for x in (self.script.get("phrases_extra") or [])):
+            if len(out) >= self.clips:
+                break
+            out.append(p)
+        i = 0
+        while len(out) < self.clips and base:
+            out.append(base[i % len(base)])
+            i += 1
+        return out
+
+    def _capture_phrase(self, index: int, phrase: str):
+        """Ask for ONE phrase, up to ``attempts`` tries with spoken guidance. The WAV, or the terminal ``Result`` (a stop, the
+        deadline, no voice, three bad captures)."""
+        for attempt in range(self.attempts):
+            if self._stop_requested():
+                return self._stopped(self._stop_requested())
+            if self._expired():
+                return self._finish(TIMEOUT, 0, "timeout", "timeout")
+            if not self._speak("prompt", n=index, phrase=phrase):
+                return Result(FAILED, 0, "no_voice")
+            if self._stop_requested():
+                return self._stopped(self._stop_requested())
+            wav = self._record()
+            if self._stop_requested():
+                return self._stopped(self._stop_requested())
+            if wav is None:
+                ok, why = False, "short"
+            else:
+                if self._heard_cancel(wav):
+                    return self._finish(CANCELLED, 0, "said_stop", "cancelled")
+                ok, why = self._assess(wav)
+            if ok:
+                return wav
+            if self._expired():
+                return self._finish(TIMEOUT, 0, "timeout", "timeout")
+            if attempt + 1 < self.attempts:
+                self._speak("retry_" + why if ("retry_" + why) in self.script else "retry_short")
+        return self._finish(FAILED, 0, "bad_capture", "failed")
+
     def _run(self) -> Result:
-        if not self._speak("intro"):
+        phrases = self._phrases()
+        many = self.clips is not None and self.clips != len(self.script["phrases"]) and bool(self.script.get("intro_many"))
+        if not (self._speak("intro_many", count=len(phrases)) if many else self._speak("intro")):
             return Result(FAILED, 0, "no_voice")           # consent is spoken: no voice, no recording
-        phrases = [str(p) for p in self.script["phrases"]]
         for index, phrase in enumerate(phrases, start=1):
-            captured = None
-            for attempt in range(self.attempts):
-                if self._stop_requested():
-                    return self._stopped(self._stop_requested())
-                if self._expired():
-                    return self._finish(TIMEOUT, 0, "timeout", "timeout")
-                if not self._speak("prompt", n=index, phrase=phrase):
-                    return Result(FAILED, 0, "no_voice")
-                if self._stop_requested():
-                    return self._stopped(self._stop_requested())
-                wav = self._record()
-                if self._stop_requested():
-                    return self._stopped(self._stop_requested())
-                if wav is None:
-                    ok, why = False, "short"
-                else:
-                    if self._heard_cancel(wav):
-                        return self._finish(CANCELLED, 0, "said_stop", "cancelled")
-                    ok, why = self._assess(wav)
-                if ok:
-                    captured = wav
-                    break
-                if self._expired():
-                    return self._finish(TIMEOUT, 0, "timeout", "timeout")
-                if attempt + 1 < self.attempts:
-                    self._speak("retry_" + why if ("retry_" + why) in self.script else "retry_short")
-            if captured is None:
-                return self._finish(FAILED, 0, "bad_capture", "failed")
-            self._wavs.append(captured)
+            got = self._capture_phrase(index, phrase)
+            if isinstance(got, Result):
+                return got
+            self._wavs.append(got)
             self._speak("got")
+        if self._embed is not None and self._build is not None and self._upload_profile is not None:
+            return self._profile_and_upload(phrases)
+        return self._upload_all()
+
+    def _upload_all(self) -> Result:
         # No time check here: the budget bounds the CAPTURE (how long the panel listens to the person). Every phrase is already in hand, and
         # the upload has its own timeouts - abandoning a finished enrolment because the last retry ran long would be the wrong trade.
         uploaded = 0
@@ -300,3 +350,79 @@ class EnrollmentRun:
         if uploaded < len(self._wavs):
             return self._finish(PARTIAL, uploaded, "partial_upload", "partial")
         return self._finish(DONE, uploaded, "ok", "done")
+
+    # ── the ResNet34 profile: embed on the panel, reject the odd one out, re-ask it, upload the profile ─────────────────────
+    def _safe_embed(self, wav: bytes):
+        try:
+            return self._embed(wav)
+        except Exception as exc:  # noqa: BLE001 - an embedder that raises gave no embedding
+            self._log(f"embed failed: {type(exc).__name__}")
+            return None
+
+    def _judge(self, embs: list) -> tuple:
+        """``(profile | None, kept, bad)`` over the captures (indices). A capture with no embedding is bad; the builder drops the rest."""
+        good = [i for i, e in enumerate(embs) if e is not None]
+        bad = [i for i, e in enumerate(embs) if e is None]
+        if not good:
+            return None, [], bad
+        try:
+            profile, dropped = self._build([embs[i] for i in good])
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"profile build failed: {type(exc).__name__}")
+            return None, [], list(range(len(embs)))
+        bad += [good[j] for j in dropped]
+        return profile, [i for i in good if i not in bad], sorted(set(bad))
+
+    def _profile_and_upload(self, phrases: list) -> Result:
+        embs = [self._safe_embed(w) for w in self._wavs]
+        profile, kept, bad = self._judge(embs)
+        for _ in range(self.reask_rounds):
+            if not bad or self._expired():
+                break
+            for i in bad:
+                if self._expired():
+                    break
+                self._speak("retry_odd")
+                got = self._capture_phrase(i + 1, phrases[i % len(phrases)])
+                if isinstance(got, Result):
+                    return got
+                self._wavs[i] = got
+                embs[i] = self._safe_embed(got)
+            profile, kept, bad = self._judge(embs)
+        embs.clear()                                   # embeddings, like recordings, never outlive the run
+        if profile is None:
+            return self._finish(TIMEOUT if self._expired() else FAILED, 0, "timeout" if self._expired() else "bad_capture",
+                                "timeout" if self._expired() else "failed")
+        # The ACTING model's profile is uploaded FIRST (retried once): it is the one that recognises the member. If it does not land,
+        # nothing else is stored either - so "I haven't kept anything" stays true - and the run is a storage failure, never "partial":
+        # a shadow-model profile alone is something nobody can use yet. ``dual`` acts on Resemblyzer (the kept WAVs); ``resnet34`` on
+        # the panel-built profile.
+        if self.legacy_upload:
+            legacy_ok = self._upload_wavs(kept)
+            if legacy_ok == 0:
+                return self._finish(FAILED, 0, "upload_failed", "store_failed")
+            profile_ok = self._try_upload(self._upload_profile, profile, len(kept), label="profile")
+            if profile_ok and legacy_ok == len(kept):
+                return self._finish(DONE, len(kept), "ok", "done")
+            return self._finish(PARTIAL, len(kept), "partial_upload", "partial")   # the acting profile exists; the shadow one is incomplete
+        if not self._try_upload(self._upload_profile, profile, len(kept), label="profile", attempts=2):
+            return self._finish(FAILED, 0, "upload_failed", "store_failed")
+        return self._finish(DONE, len(kept), "ok", "done")
+
+    def _try_upload(self, fn, *args, label: str = "upload", attempts: int = 1) -> bool:
+        for _ in range(max(1, attempts)):
+            try:
+                if fn(*args):
+                    return True
+            except Exception as exc:  # noqa: BLE001
+                self._log(f"{label} failed: {type(exc).__name__}")
+        return False
+
+    def _upload_wavs(self, kept: list) -> int:
+        """Upload the kept captures for the Resemblyzer profile in order; the first one is retried once. Returns how many landed."""
+        done = 0
+        for n, i in enumerate(kept):
+            if not self._try_upload(self._upload, self._wavs[i], attempts=2 if n == 0 else 1):
+                break
+            done += 1
+        return done

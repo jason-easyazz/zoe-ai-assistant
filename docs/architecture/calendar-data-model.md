@@ -209,8 +209,7 @@ supports `CREATE_EVENT`).
 
 ## 7. Migration and back-compat
 
-* Revision **0052** (`down_revision = 0050`; 0051 is reserved by PR #2024 - whichever lands second re-points
-  its `down_revision`, and the single-head tests in both PRs fail until it does).
+* Revision **0052**, `down_revision = 0051` (#2024's speaker `model_id`). One head; pinned by the head tests.
 * Additive only: three new tables, 23 new `events` columns, all NULLable or defaulted (PostgreSQL 11+ adds a
   defaulted column without a rewrite). No existing value is rewritten; no backfill runs in the migration. Every
   statement is guarded (`IF NOT EXISTS` on PostgreSQL, a column probe on SQLite), so a rerun is a no-op and

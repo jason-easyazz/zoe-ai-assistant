@@ -432,7 +432,7 @@ async def load_children(db, events: list) -> None:
 #: people, links, category or metadata.
 BUSY_FIELDS = ("id", "user_id", "start_date", "start_time", "end_date", "end_time", "duration", "all_day",
                "timezone", "end_timezone", "start_at", "end_at", "status", "transparency", "visibility",
-               "rrule", "rdates", "exdates", "recurrence_id", "series_id", "deleted")
+               "rrule", "rdates", "exdates", "recurrence_id", "deleted")
 
 
 def busy_projection(event: dict) -> dict:

@@ -138,11 +138,11 @@ def test_postgres_render_guards_every_column_server_side(monkeypatch):
     from test_migrations_offline_render import _render
     from alembic import command
 
-    up = _render(monkeypatch, command.upgrade, "0050:0052")
+    up = _render(monkeypatch, command.upgrade, "0051:0052")
     for name, _ddl in _mig().EVENT_COLUMNS:
         assert f"ALTER TABLE events ADD COLUMN IF NOT EXISTS {name} " in up
     assert "CREATE TABLE IF NOT EXISTS calendars" in up and "CREATE TABLE IF NOT EXISTS event_attendees" in up
-    down = _render(monkeypatch, command.downgrade, "0052:0050")
+    down = _render(monkeypatch, command.downgrade, "0052:0051")
     assert "ALTER TABLE events DROP COLUMN IF EXISTS description" in down
 
 
