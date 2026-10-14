@@ -1306,5 +1306,142 @@
    "Your sister is called Marisa.",
    "Sure, it's done."
   ]
+ },
+ "voice_session": {
+  "_note": "voice_session.py (ZOE_VOICE_SESSION): the words that LOCK or CLOSE a panel voice session, the phrases that still need a PIN inside one (step_up), the frames that make a request about ANOTHER member, and the panel/spoken texts. 'lock' and 'close' match the WHOLE normalised utterance (the 'strip' words removed from either end), never a fragment, so 'lock the front door' is not a lock. 'step_up' fragments are searched with word boundaries. 'other_member' templates carry {name}, replaced by each other member's escaped name. A language with no section locks nothing and steps nothing up by phrase (the intent and Skybridge tiers in voice_session_policy.json still apply).",
+  "reviewed": true,
+  "lock": [
+   "lock",
+   "lock\\s+(?:the\\s+)?(?:screen|panel|zoe|it|up|everything)",
+   "lock\\s+my\\s+(?:session|stuff|things|account|screen)",
+   "lock\\s+it\\s+up",
+   "sign\\s+(?:me\\s+)?out",
+   "log\\s+(?:me\\s+)?out"
+  ],
+  "close": [
+   "that(?:'|\u2019)?s\\s+all(?:\\s+for\\s+now)?",
+   "that\\s+is\\s+all(?:\\s+for\\s+now)?",
+   "that(?:'|\u2019)?ll\\s+be\\s+all",
+   "(?:thanks|thank\\s+you)\\s*,?\\s+that(?:'|\u2019)?s\\s+all(?:\\s+for\\s+now)?",
+   "(?:i(?:'|\u2019)?m|i\\s+am|we(?:'|\u2019)?re|we\\s+are)\\s+(?:all\\s+)?done(?:\\s+for\\s+now)?",
+   "all\\s+done"
+  ],
+  "strip": [
+   "hey\\s+zoe",
+   "ok(?:ay)?\\s+zoe",
+   "zoe",
+   "please"
+  ],
+  "step_up": {
+   "payments": [
+    "pay\\s+(?:for|the|my|a|an|this|that)",
+    "make\\s+a\\s+payment",
+    "send\\s+(?:\\w+\\s+)?money",
+    "transfer\\s+(?:money|funds|\\$?\\d+)",
+    "buy\\s+(?:it|this|that|one|them)(?:\\s+now)?",
+    "purchase",
+    "place\\s+(?:an|the)\\s+order",
+    "check\\s*out\\s+(?:now|the\\s+cart|my\\s+cart)"
+   ],
+   "security": [
+    "unlock\\s+(?:the\\s+)?(?:front\\s+|back\\s+|side\\s+|garage\\s+)?(?:door|doors|gate|lock|locks|garage)",
+    "disarm",
+    "turn\\s+off\\s+(?:the\\s+)?(?:alarm|security|cameras?)",
+    "open\\s+(?:the\\s+)?garage",
+    "(?:change|reset)\\s+(?:my\\s+|the\\s+)?(?:pin|password|passcode)",
+    "factory\\s+reset",
+    "(?:add|create)\\s+(?:a\\s+)?(?:new\\s+)?(?:user|member|admin|account)",
+    "(?:remove|delete)\\s+(?:a\\s+|the\\s+)?(?:user|member|account)",
+    "make\\s+\\w+\\s+(?:an\\s+)?admin"
+   ],
+   "settings": [
+    "(?:open|go\\s+to|change)\\s+(?:the\\s+)?settings?",
+    "turn\\s+(?:off|on)\\s+(?:speaker|voice|face)\\s+(?:id|identification|recognition)",
+    "idle\\s+logout"
+   ],
+   "biometric": [
+    "learn\\s+my\\s+(?:voice|face)",
+    "(?:re-?)?enrol+\\s+(?:my\\s+)?(?:voice|face)",
+    "(?:forget|delete|remove|erase)\\s+my\\s+(?:voice|face)",
+    "voice\\s+(?:id|print|signature|profile)",
+    "face\\s+(?:id|print|profile)"
+   ],
+   "forget_person": [
+    "forget\\s+(?:everything\\s+)?about\\s+(?!it\\b|that\\b|this\\b)\\w+",
+    "forget\\s+who\\s+\\w+\\s+is",
+    "(?:delete|remove|erase)\\s+(?:the\\s+)?contact",
+    "(?:delete|remove|erase)\\s+\\w+\\s+from\\s+(?:my\\s+)?(?:contacts|people|memory|memories)"
+   ]
+  },
+  "other_member": [
+   "{name}(?:'|\u2019)s",
+   "{name}s(?:'|\u2019)",
+   "for\\s+{name}",
+   "remind\\s+{name}",
+   "tell\\s+{name}"
+  ],
+  "reply_locked": "Locked. I'll need your voice or your PIN again.",
+  "badge_suffix": "voice",
+  "card_titles": {
+   "calendar": "Your calendar",
+   "lists": "Your list",
+   "reminders": "Your reminders",
+   "locked": "This is private"
+  },
+  "card_locked_voice": "Say it again so I know it's you, or unlock with your PIN.",
+  "card_locked_pin": "Unlock with your PIN to see this.",
+  "card_step_up": "That needs your PIN, even when I know your voice.",
+  "card_empty": {
+   "calendar": "Nothing on the calendar.",
+   "lists": "Nothing on this list.",
+   "reminders": "No reminders set."
+  },
+  "step_up_reason": "That needs your PIN. Choose your profile and enter your PIN to continue.",
+  "spoken_calendar": {
+   "none": "You have nothing on {qualifier}.",
+   "one": "You have one event {qualifier}: {list}.",
+   "many": "You have {count} events {qualifier}: {list}.",
+   "item_timed": "{title} at {time}",
+   "item_untimed": "{title}",
+   "joiner": ", ",
+   "last_joiner": " and ",
+   "more": "and {n} more",
+   "max_named": 5
+  },
+  "examples": {
+   "lock": [
+    "lock",
+    "lock the screen",
+    "Zoe, sign me out",
+    "log out please"
+   ],
+   "not_lock": [
+    "lock the front door",
+    "is the back door locked",
+    "what's the lock screen wallpaper"
+   ],
+   "close": [
+    "that's all",
+    "thanks, that's all for now",
+    "I'm done"
+   ],
+   "not_close": [
+    "that's all the milk we have",
+    "are we done with the list"
+   ],
+   "step_up": [
+    "pay the electricity bill",
+    "unlock the front door",
+    "forget my voice",
+    "forget everything about Robin",
+    "change my PIN"
+   ],
+   "not_step_up": [
+    "what's on my calendar",
+    "add milk to the shopping list",
+    "remind me to buy milk",
+    "forget it"
+   ]
+  }
  }
 }

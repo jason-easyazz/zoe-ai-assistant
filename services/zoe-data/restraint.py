@@ -175,12 +175,25 @@ LEXICON_VERSION = VERSION - 1
 #: they are the POSITIVE evidence the text is English; ``detect_scored``'s language alone cannot give it because it answers
 #: ``("en", 0)`` for every language it has no word list for.
 _ENGLISH_MARKERS = frozenset(
-    "he she his the and are were with that this they them their there these those than then have been being would could should about "
-    "because while since when what where which who how whom whose from over after before again always never lately just very also "
+    "he she his the and are were with that this they them their there these those than then have being would could should about "
+    "because while since when what where which who how whom whose from after before again always never lately very "
     "some any every everyone everything something nothing anything everywhere our your ours yours myself himself herself "
     "themselves into onto upon until though although either neither today tonight tomorrow yesterday keep keeps kept "
-    "feel feels feeling felt really maybe much".split())
-_CONTRACTION_RE = re.compile(r"\b[a-z]+(?:n't|'(?:m|ve|ll|re|d|s))\b")
+    "feel feels feeling felt really maybe much "
+    # frequent English verbs, pronouns and nouns that no Dutch / Afrikaans / German / Romance / Scandinavian text uses as an
+    # ordinary word (deliberately left out: is to in my me no a of on at by for so an be was had has her want last week time
+    # over been also man son just hospital doctor, each a real word in at least one of those languages)
+    "you your yours it its need needs needed got get gets gotten went gone going getting having doing being coming taking making "
+    "looking trying working passed ago years months days night wants prefer prefers remind reminds buy bought "
+    "friend friends mum mom mother father husband wife uncle aunt brother sister cousin niece nephew daughter "
+    "new out up back away next monday tuesday wednesday thursday friday saturday sunday yesterday "
+    "tablets "
+    "user more now against most three first year weeks likes become leave play plays take black green blue colour".split())
+# An English contraction only: ``n't`` / ``'ve`` / ``'ll`` / ``'re`` / ``'d``, ``I'm``, and ``'s`` ONLY after a pronoun or wh-word
+# (it's, she's, that's, what's, let's). A bare ``[a-z]+'s`` is also Dutch and Afrikaans plural (``oma's``, ``auto's``) and German
+# ``geht's``, which is exactly the leak the evidence rule exists to stop.
+_CONTRACTION_RE = re.compile(
+    r"\b(?:[a-z]+n't|[a-z]+'(?:ve|ll|re|d)|i'm|(?:it|he|she|that|there|here|what|who|where|how|let|everyone|someone|nobody)'s)\b")
 _WORD_RE = re.compile(r"[^\W\d_]+")
 
 
@@ -189,20 +202,23 @@ def _head_applies(text: Any) -> bool:
     else stays lexicon-only (the module's promise), as every other restraint word list does.
 
     Two conditions: the language detector must not prefer another language, AND the text must carry English-only evidence (an
-    unambiguous function word, an English contraction, or a hit on the detector's own English word list). ``detect_scored`` returns ``("en", 0)`` for Polish, Russian, Portuguese
+    English-only function word or an English contraction; the detector's own hit count is NOT evidence, see below). ``detect_scored`` returns ``("en", 0)`` for Polish, Russian, Portuguese
     and anything else it has no word list for, so ``lang == "en"`` alone proves nothing. A short English line with no marker
     ("Divorce papers arrive next week") falls back to the lexicon, the safe side: the head only ever ADDS classes, so not running it
     can only mean fewer, never a wrong one."""
     raw = str(text or "")
-    lang, hits = _lexicons.detect_scored(raw)
+    lang, _hits = _lexicons.detect_scored(raw)
     if lang != "en":
         return False
     low = raw.casefold().replace("\u2019", "'")
     if _CONTRACTION_RE.search(low):
         return True
-    if any(t in _ENGLISH_MARKERS for t in _WORD_RE.findall(low)):
-        return True
-    return hits > 0         # the detector's own English word list (a word like ``to`` or ``is`` is a weak but real signal)
+    # No fallback on ``hits``: the detector's English word list is made of ``is``/``to``/``in``/``my``/``no``/``me``, which are
+    # also Dutch, Afrikaans and German words, and ``detect_scored`` only knows en/es/fr/de, so a Dutch or Afrikaans line
+    # ("Mijn moeder is ziek", "Ek is baie bekommerd oor my ma") reads as ``("en", 1+)`` on exactly those tokens. Only a word
+    # that is English and nothing else counts; a short English line without one stays on the word list (fewer classes, never a
+    # wrong one).
+    return any(t in _ENGLISH_MARKERS for t in _WORD_RE.findall(low))
 
 
 def head_settled(text: Any) -> bool:
@@ -919,12 +935,12 @@ async def _release(db, uid: str, u: Utterance, key: str, now: datetime) -> int:
     return len(ids)
 
 
-async def erase_entity(user_id: str, name: str, *, strict: bool = False) -> int:
-    """A forget of ``name`` also deletes the mutes whose topic names it (the forgotten-means-forever rule:
-    a topic stem is still the name). Best-effort (0 on failure) unless ``strict``, which RAISES so the forget cascade can record it."""
+async def erase_matching(user_id: str, topic_names, *, strict: bool = False) -> int:
+    """Delete the member's mutes whose ``topic_key`` satisfies ``topic_names(topic_key) -> bool``. Best-effort (0 on failure) unless
+    ``strict``, which RAISES so the forget cascade can record it. The one deleter behind ``erase_entity`` (a name) and the cascade's
+    ledger-driven retry (hashes only, no name)."""
     uid = (user_id or "").strip()
-    st = stems(name)
-    if not uid or not st:
+    if not uid:
         return 0
     try:
         from db_compat import get_compat_db
@@ -934,7 +950,7 @@ async def erase_entity(user_id: str, name: str, *, strict: bool = False) -> int:
             async with db.execute("SELECT id, topic_key FROM restraint_mutes WHERE user_id = ?", (uid,)) as cur:
                 rows = await cur.fetchall()
             for r in rows:
-                if st & set(str(r[1] or "").split()):
+                if topic_names(str(r[1] or "")):
                     await db.execute("DELETE FROM restraint_mutes WHERE id = ? AND user_id = ?", (r[0], uid))
                     n += 1
         _mute_cache.pop(uid, None)
@@ -944,6 +960,15 @@ async def erase_entity(user_id: str, name: str, *, strict: bool = False) -> int:
             raise
         logger.debug("restraint: entity erase skipped: %r", exc)
         return 0
+
+
+async def erase_entity(user_id: str, name: str, *, strict: bool = False) -> int:
+    """A forget of ``name`` also deletes the mutes whose topic names it (the forgotten-means-forever rule:
+    a topic stem is still the name). Best-effort (0 on failure) unless ``strict``, which RAISES so the forget cascade can record it."""
+    st = stems(name)
+    if not (user_id or "").strip() or not st:
+        return 0
+    return await erase_matching(user_id, lambda topic_key: bool(st.intersection(topic_key.split())), strict=strict)
 
 
 async def erase_user(user_id: str) -> int:

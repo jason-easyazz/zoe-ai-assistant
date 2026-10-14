@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Auto-generated inventory of every ZOE_* environment flag read in the codebase — defaults, readers, typed_env adoption, and .env.example coverage.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-10-13T00:00:00Z
+timestamp: 2026-10-14T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-10-13T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-10-13. The table body is deterministic (sorted, no
+Last generated: 2026-10-14. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Default `dynamic` = not statically extractable; `(required)` = bare
@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-627 flags; 625 not documented in `.env.example`.
+631 flags; 629 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -551,6 +551,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_SPEAKER_ADAPT_MIN_SPEECH_S` | `2.0` | yes | NO | `services/zoe-data/speaker_adaptation.py` |
 | `ZOE_SPEAKER_ADAPT_PIN_WINDOW_S` | `900.0` | yes | NO | `services/zoe-data/speaker_adaptation.py` |
 | `ZOE_SPEAKER_ID_THRESHOLD` | `'0.82'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
+| `ZOE_SPEAKER_MODEL` | `'resemblyzer'` | yes | NO | `services/zoe-data/voice_session.py` |
 | `ZOE_SPECULATIVE_MAX_HOLD_MS` | `5000` | yes | NO | `services/zoe-data/voice_speculation.py` |
 | `ZOE_SPECULATIVE_TAIL_MS` | `320` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_SPECULATIVE_TURN` | `'false'`, `False` | yes | NO | `scripts/setup/zoe_voice_daemon.py`<br>`services/zoe-data/voice_speculation.py` |
@@ -630,6 +631,9 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_VOICE_RESULTS` | `dynamic` | no | NO | `scripts/maintenance/voice_gate_check.py`<br>`scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_SAMPLE_DIR` | `-` | no | NO | `scripts/maintenance/curate_voice_corpus.py`<br>`scripts/maintenance/voice_regression_probe.py`<br>`services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_SAVE_AUDIO` | `False` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
+| `ZOE_VOICE_SESSION` | `False` | yes | NO | `services/zoe-data/voice_session.py` |
+| `ZOE_VOICE_SESSION_ALLOW_RESEMBLYZER` | `False` | yes | NO | `services/zoe-data/voice_session.py` |
+| `ZOE_VOICE_SESSION_TTL_S` | `120` | yes | NO | `services/zoe-data/voice_session.py` |
 | `ZOE_VOICE_STITCH_ENABLED` | `'0'` | no | NO | `services/zoe-data/main.py`<br>`services/zoe-data/voice_stitch.py` |
 | `ZOE_VOICE_STREAM` | `'1'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_VOICE_STT_LOG` | `-` | yes | NO | `services/zoe-data/routers/voice_tts.py` |

@@ -20,6 +20,14 @@ text behind is a P1). The one exception is a process that has NEVER had a databa
 ``db_pool.pool_ever_initialised``): there is no store to clear, so that is not a failure. A process that had a pool and lost it
 (or whose pool is exhausted) is a failure. Counts only are logged, never the name.
 
+DURABLE RETRY (no name stored): a cascade that ends incomplete leaves a marker in the forget ledger for each step that failed
+(``memory_forgotten.mark_pending``: the salted hash of a fixed step label - not the name, not a hash of the name, not a regex).
+The next healthy pass (``retry_pending``: the nightly digest's pre-read, and the next forget by that member) re-runs ONLY the
+failed steps against the ledger's own hashes (``memory_forgotten.LedgerPattern``), which can find a forgotten word in a derived
+text without the word ever having been stored, then deletes the markers. So the member never has to say the forget again, and the
+name still exists nowhere but in the turn that spoke it. Without the ledger secret there is no marker and no retry: saying it again
+is the only redo (the caller's answer says so).
+
 UNDO: the people soft-delete and the edge closes are recorded in-process for ``UNDO_WINDOW_S`` so
 "keep the contact" (``restore_contacts``) can put exactly those rows back. It restores the contact, not the
 forgotten memories, and not past a restart (the People panel can re-add the contact after that).
@@ -39,6 +47,13 @@ logger = logging.getLogger(__name__)
 
 UNDO_WINDOW_S = 900.0
 RETRY_DELAY_S = 0.25   # one retry of a failed step after this pause (a pool blip); tests set 0
+
+#: The cascade's fixed step labels (what ``CascadeResult.failed`` holds and what a pending marker is keyed by). ``database`` is the
+#: connection itself: when it is pending every DB step is.
+DB_STEPS = frozenset(("portrait", "card", "open_loops", "proactive_candidates", "people", "edges"))
+DB_LABELS = DB_STEPS.union(("database",))
+ALL_LABELS = ("database", "portrait", "card", "open_loops", "proactive_candidates", "people", "edges",
+              "restraint_mutes", "commitments", "omi_recordings")
 
 # {user_id: (recorded_at_monotonic, [person ids], closed_at_iso)}
 _last_cascade: dict[str, tuple[float, list[str], str]] = {}
@@ -124,32 +139,29 @@ async def _step(label: str, fn, res: Optional[CascadeResult] = None) -> int:
     return 0
 
 
-async def cascade_forget(user_id: str, name: str, *, db=None) -> CascadeResult:
-    """Clear everything derived from ``name`` for ``user_id`` and record the contact undo. Never raises; a store it could not
-    clear is in ``CascadeResult.failed`` (the caller must not report the forget as complete then)."""
-    res = CascadeResult()
-    if not user_id or not (name or "").strip():
-        return res
-    rx = _name_re(name)
+async def _clear(user_id: str, rx, mutes, res: CascadeResult, *, db=None, only: Optional[frozenset] = None,
+                 recover_ids: bool = False) -> None:
+    """One pass over the derived stores (or just the labels in ``only``). ``rx`` is a ``re.Pattern`` for the name or a
+    ``memory_forgotten.LedgerPattern`` (the retry: no name); ``mutes`` is the restraint-mutes eraser for the same."""
+    def want(label: str) -> bool:
+        return only is None or label in only
+
+    db_only = None if (only is None or "database" in only) else frozenset(only.intersection(DB_STEPS))
 
     async def database() -> int:
         if db is not None:
-            await _run(db, user_id, rx, res)
+            await _run(db, user_id, rx, res, only=db_only, recover_ids=recover_ids)
         else:
             from db_pool import get_db_ctx  # type: ignore[import]
             async with get_db_ctx() as conn:
-                await _run(conn, user_id, rx, res)
+                await _run(conn, user_id, rx, res, only=db_only, recover_ids=recover_ids)
         return 0
 
     # _run records each store's own failure; this label is the connection itself (pool lost / exhausted / never there)
-    await _step("database", database, res)
+    if only is None or "database" in only or db_only:
+        await _step("database", database, res)
     # the stores reached through their own modules: restraint mutes, commitments, pendant transcripts. strict=True so a failure
     # raises to the cascade (their default is swallow-and-log, which is what hid this).
-    async def restraint_mutes() -> int:
-        import restraint
-
-        return await restraint.erase_entity(user_id, name, strict=True)
-
     async def commitments_() -> int:
         import commitments
 
@@ -160,17 +172,109 @@ async def cascade_forget(user_id: str, name: str, *, db=None) -> CascadeResult:
 
         return await omi_recordings.erase_entity(user_id, rx, strict=True)
 
-    await _step("restraint_mutes", restraint_mutes, res)
-    await _step("commitments", commitments_, res)
-    await _step("omi_recordings", omi, res)
+    if want("restraint_mutes"):
+        await _step("restraint_mutes", mutes, res)
+    if want("commitments"):
+        await _step("commitments", commitments_, res)
+    if want("omi_recordings"):
+        await _step("omi_recordings", omi, res)
+
+
+async def cascade_forget(user_id: str, name: str, *, db=None) -> CascadeResult:
+    """Clear everything derived from ``name`` for ``user_id`` and record the contact undo. Never raises; a store it could not
+    clear is in ``CascadeResult.failed`` (the caller must not report the forget as complete then) AND left as a pending marker in the
+    forget ledger (no name) so ``retry_pending`` finishes it on the next healthy pass. A complete cascade also finishes whatever an
+    EARLIER forget left pending for this member."""
+    res = CascadeResult()
+    if not user_id or not (name or "").strip():
+        return res
+    rx = _name_re(name)
+
+    async def mutes() -> int:
+        import restraint
+
+        return await restraint.erase_entity(user_id, name, strict=True)
+
+    await _clear(user_id, rx, mutes, res, db=db)
     if res.failed:
         logger.error("FORGET_CASCADE_INCOMPLETE user=%s steps=%s - the forget is not confirmed", user_id, ",".join(res.failed))
+        await _mark_pending(user_id, res.failed)
     logger.info("memory_forget_cascade: user=%s portrait=%d card=%d loops=%d candidates=%d people=%d edges=%d",
                 user_id, res.portrait, res.card, res.loops, res.candidates, res.people, res.edges)
+    if res.complete:
+        await retry_pending(user_id, db=db)         # an earlier forget's unfinished steps, now that the database answers
     return res
 
 
-async def _run(db, user_id: str, rx: "re.Pattern[str]", res: CascadeResult) -> None:
+async def _mark_pending(user_id: str, labels) -> bool:
+    """Leave the durable retry marker for ``labels`` (never the name). Never raises."""
+    try:
+        import memory_forgotten
+        ok = await memory_forgotten.mark_pending(user_id, labels)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("FORGET_CASCADE_RETRY_NOT_RECORDED user=%s (%s)", user_id, type(exc).__name__)
+        return False
+    if not ok:
+        logger.error("FORGET_CASCADE_RETRY_NOT_RECORDED user=%s - no durable marker (ledger off or its table unreachable); "
+                     "only the member saying the forget again will redo it", user_id)
+    return ok
+
+
+async def retry_pending(user_id: str, *, db=None) -> Optional[CascadeResult]:
+    """Finish the cascade steps an earlier forget left pending for ``user_id``, from the forget ledger's hashes alone (no name was
+    ever stored). Re-runs only the steps that have a marker, deletes the markers of the ones that succeeded, leaves (and adds) the
+    markers of the ones that did not. None when nothing is pending. Idempotent and safe to call from any healthy pass; never raises.
+
+    Does NOT record a contact undo and never touches contacts of a step that was not pending: a member who said "keep the
+    contact" after a COMPLETE forget keeps it."""
+    try:
+        import memory_forgotten
+        labels = await memory_forgotten.pending_labels(user_id, ALL_LABELS)
+        if not labels:
+            return None
+        rx = await memory_forgotten.ledger_pattern(user_id)
+        if rx is None:       # nothing forgotten any more (every entity was explicitly re-taught): there is nothing left to clear
+            await memory_forgotten.clear_pending(user_id, labels)
+            return CascadeResult()
+        res = CascadeResult()
+
+        async def mutes() -> int:
+            import restraint
+
+            return await restraint.erase_matching(user_id, lambda topic_key: bool(rx.search(topic_key)), strict=True)
+
+        run = set(labels)
+        if "people" in run:
+            run.add("edges")             # edges depends on people: never trust the marker set to carry both (an older build wrote one)
+        await _clear(user_id, rx, mutes, res, db=db, only=frozenset(run), recover_ids=True)
+        failed = set(res.failed)
+        db_failed = bool(failed.intersection(DB_LABELS))
+        done = []
+        for label in labels:
+            if label == "database":
+                ok = not db_failed
+            elif label in DB_STEPS:
+                ok = label not in failed and "database" not in failed
+            else:
+                ok = label not in failed
+            if ok:
+                done.append(label)
+        if done:
+            await memory_forgotten.clear_pending(user_id, done)
+        if failed:
+            await _mark_pending(user_id, sorted(failed))
+        logger.info("FORGET_CASCADE_RETRY user=%s pending=%s cleared=%s still_pending=%s rows=%d", user_id, ",".join(labels),
+                    ",".join(done), ",".join(sorted(failed)), res.summary_cleared + res.people)
+        return res
+    except Exception as exc:  # noqa: BLE001 - a retry pass never breaks the pass that called it
+        logger.error("FORGET_CASCADE_RETRY failed user=%s (%s)", user_id, type(exc).__name__)
+        return None
+
+
+async def _run(db, user_id: str, rx, res: CascadeResult, *, only: Optional[frozenset] = None,
+               recover_ids: bool = False) -> None:
+    """The database stores. ``only`` limits it to those step labels (the retry); ``recover_ids`` lets the edges step find the
+    people a previous pass already soft-deleted (their ids were only in that pass memory)."""
     async def portrait() -> int:
         rows = await _rows(db, "SELECT portrait_text FROM user_portraits WHERE user_id = ?", (user_id,))
         if rows and _names(rx, rows[0][0]):
@@ -228,11 +332,15 @@ async def _run(db, user_id: str, rx: "re.Pattern[str]", res: CascadeResult) -> N
         return len(ids)
 
     async def edges() -> int:
-        if not res.person_ids:
+        ids = list(res.person_ids)
+        if not ids and recover_ids:
+            ids = [str(r[0]) for r in await _rows(db, "SELECT id, name FROM people WHERE user_id = ? AND deleted = 1", (user_id,))
+                   if _names(rx, r[1])]
+        if not ids:
             return 0
         closed_at = _now_iso()
         n = 0
-        for pid in res.person_ids:
+        for pid in ids:
             cur = await db.execute(
                 "UPDATE person_relationships SET valid_to = ?, updated_at = ? "
                 "WHERE user_id = ? AND valid_to IS NULL AND (person_a_id = ? OR person_b_id = ?)",
@@ -242,15 +350,27 @@ async def _run(db, user_id: str, rx: "re.Pattern[str]", res: CascadeResult) -> N
         res.closed_at = closed_at
         return n
 
-    res.portrait = await _step("portrait", portrait, res)
-    res.card = await _step("card", card, res)
-    res.loops = await _step("open_loops", loops, res)
-    res.candidates = await _step("proactive_candidates", candidates, res)
-    res.people = await _step("people", people, res)
-    res.edges = await _step("edges", edges, res)
-    if res.person_ids:
-        _last_cascade[user_id] = (time.monotonic(), list(res.person_ids),
-                                  res.closed_at)
+    def want(label: str) -> bool:
+        return only is None or label in only
+
+    if want("portrait"):
+        res.portrait = await _step("portrait", portrait, res)
+    if want("card"):
+        res.card = await _step("card", card, res)
+    if want("open_loops"):
+        res.loops = await _step("open_loops", loops, res)
+    if want("proactive_candidates"):
+        res.candidates = await _step("proactive_candidates", candidates, res)
+    if want("people"):
+        res.people = await _step("people", people, res)
+    if want("edges"):
+        res.edges = await _step("edges", edges, res)
+    if "people" in res.failed and "edges" not in res.failed:
+        # edges closes the relationships of the people the people step resolved; with that step failed there were no ids, so edges
+        # "succeeded" over nothing. It is pending together with its parent, or the contact's open edges would stay open for good.
+        res.failed.append("edges")
+    if res.person_ids and only is None:       # a retry never arms the contact undo
+        _last_cascade[user_id] = (time.monotonic(), list(res.person_ids), res.closed_at)
 
 
 def pending_undo(user_id: str) -> bool:

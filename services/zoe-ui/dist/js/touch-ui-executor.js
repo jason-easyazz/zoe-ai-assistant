@@ -1198,6 +1198,22 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                             }
                         }
                     }
+                    // Panel voice session (ZOE_VOICE_SESSION): the "<name> · voice" badge and the private result
+                    // cards. These carry ONE member's data, so unlike voice:* an absent panel_id is NOT "any panel":
+                    // the frame must name this panel. Relayed as window events for js/touch-voice-session.js; a page
+                    // without that script ignores them, exactly as before (unknown types always fell through).
+                    if (msg.type === 'voice_session' || msg.type === 'voice_card') {
+                        const _vsd = msg.data || {};
+                        const _vsPanel = String(_vsd.panel_id || '').trim();
+                        if (_vsPanel && panelMatches(_vsPanel)) {
+                            try {
+                                window.dispatchEvent(new CustomEvent(
+                                    msg.type === 'voice_session' ? 'zoe:voice-session' : 'zoe:voice-card',
+                                    { detail: _vsd }
+                                ));
+                            } catch (_vsErr) { /* ignore */ }
+                        }
+                    }
                     // Voice state machine — drive orb + conversation overlay from backend events.
                     // Panel-ID filter: only react to voice events from our own panel (or global ones without panel_id).
                     if (msg.type && msg.type.startsWith('voice:')) {

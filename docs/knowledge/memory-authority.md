@@ -182,7 +182,7 @@ user's text becomes a **pending PERSON candidate** ("<X> was mentioned in conver
 | W12 nightly implicit-conflict pass | yes | same |
 | W16 decay archive | yes | `decay_sweep` = rank 1 |
 | W20 voice teach | yes (user class) | `voice_fact` |
-| W22 MCP `memory_review` / `memory_forget` as the user | yes | `mcp_server` passes `origin="mcp"` (rank 1) on every review and forget call; the account stays `actor` (audit). An MCP edit, archive, reject or candidate-approval cannot touch a row the person said; the tool answers "held back" instead of crashing |
+| W22 MCP `memory_review` / `memory_forget` as the user | yes | `mcp_server` passes `origin="mcp"` (rank 1) on every review and forget call; the account stays `actor` (audit). An MCP edit, archive, reject or candidate-approval cannot touch a row the person said; the tool answers "held back" instead of crashing. `memory_forget` is ROW-LEVEL by design (one row, no entity cascade): its description and answer (`scope: row`, `cascade: not_run`) say so, a person-typed note is refused, and an entity forget is not an MCP tool at all - it stays the member's own words (`memory_forget_entity`, the full cascade) |
 | `person_merge.merge_person` (closes / re-points people rows + edges) | yes | a USER/admin action enforced at the entry point: a named writer below the user classes is refused (`AUTHORITY_BLOCKED ... action=merge`); the REST endpoint passes `actor=<account>`; nothing automatic calls it |
 
 ### The speaker verdict (P1.3): voice turn -> `speaker_verified` -> every write the turn causes
