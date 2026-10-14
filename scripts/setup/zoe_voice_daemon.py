@@ -345,6 +345,39 @@ def _attach_stt_stream(payload: dict, wav: bytes, speculation) -> None:
         payload["stt_stream_samples"] = frames
 
 
+def _start_stt_stream(frames) -> "_SttStreamUploader | None":
+    """Open an uploader for a recording and feed it the audio already captured (pre-roll / VAD lookback), in order, so
+    the stream carries exactly the bytes the WAV will. None when the lane is off, latched off, or cannot start - the
+    recording itself must never depend on it."""
+    _pending_stt_stream.clear()
+    if not _stt_stream_available():
+        return None
+    try:
+        uploader = _SttStreamUploader()
+        for _f in frames:
+            uploader.push(_f)
+        return uploader
+    except Exception as exc:
+        log.debug("stt stream could not start (%s) - turn will use batch STT", exc)
+        return None
+
+
+def _finish_stt_stream(uploader: "_SttStreamUploader | None", *, keep: bool = True) -> None:
+    """Join the uploader and, when it covered the whole recording, leave its id for the turn POST (``_attach_stt_stream``).
+    ``keep=False`` (recording discarded / errored) abandons it. Never raises."""
+    if uploader is None:
+        return
+    try:
+        closed = uploader.close()
+        if keep and closed is not None:
+            _pending_stt_stream.update(stream_id=closed[0], samples=closed[1], digest=uploader.digest())
+        else:
+            _pending_stt_stream.clear()
+    except Exception as exc:
+        _pending_stt_stream.clear()
+        log.debug("stt stream close failed (%s) - turn will use batch STT", exc)
+
+
 def _speculation_available() -> bool:
     return ZOE_SPECULATIVE_TURN and VOICE_STREAM_ENABLED and not _speculation_disabled.is_set()
 
@@ -2145,11 +2178,7 @@ def record_command(pa: pyaudio.PyAudio, stream=None, speculation: "_SpeculativeT
                 log.warning("Mic open failed (%s), retrying in %.2fs [%d/5]...", exc, wait_s, attempt)
                 time.sleep(wait_s)
     frames = list(_PREROLL)  # prepend pre-roll so the start of speech is kept
-    uploader = _SttStreamUploader() if _stt_stream_available() else None
-    _pending_stt_stream.clear()
-    if uploader is not None:
-        for _f in frames:
-            uploader.push(_f)
+    uploader = _start_stt_stream(frames)
     endpointer = _Endpointer()
     stop_reason = "max_duration"
     caps = _record_caps()
@@ -2179,13 +2208,10 @@ def record_command(pa: pyaudio.PyAudio, stream=None, speculation: "_SpeculativeT
         duration_s, len(frames), stop_reason, endpointer.mode, endpointer.tail_rule or "-",
         SILENCE_TIMEOUT_S,
     )
-    if uploader is not None:
-        _closed = uploader.close()
-        if _closed is not None:
-            _pending_stt_stream.update(stream_id=_closed[0], samples=_closed[1], digest=uploader.digest())
-    if len(frames) < int(0.3 * SAMPLE_RATE / CHUNK_SIZE):
+    too_short = len(frames) < int(0.3 * SAMPLE_RATE / CHUNK_SIZE)
+    _finish_stt_stream(uploader, keep=not too_short)
+    if too_short:
         log.info("Command too short, ignoring.")
-        _pending_stt_stream.clear()
         return None
     return _frames_to_wav(pa, frames)
 
@@ -3464,7 +3490,7 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
 
 
 def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None,
-                      hard_cap_s: float | None = None) -> bytes | None:
+                      hard_cap_s: float | None = None, stream_upload: bool = False) -> bytes | None:
     """Listen for speech without wake word for `window_s` (default
     FOLLOW_UP_LISTEN_S) seconds.
 
@@ -3472,9 +3498,16 @@ def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None,
     recording on the SAME stream (no gap where words get lost) and returns
     the WAV bytes. Returns None if silence throughout the window.
     ``hard_cap_s`` raises the recording's hard cap (conversation windows).
+    ``stream_upload`` (ZOE_STT_STREAM_UPLOAD) uploads the recording to the under-speech STT lane exactly as
+    ``record_command`` does - set ONLY for a recording that becomes a turn of its own (follow-up / conversation
+    window). The continuation listens (hard-cap merge, held-turn resume) leave it off: their audio is merged into an
+    earlier clip, so a stream for it could never match the merged WAV and would clobber the earlier clip's id.
     """
     global _last_record_capped
     _last_record_capped = False
+    uploader = None
+    if stream_upload:
+        _pending_stt_stream.clear()  # nothing left over from an earlier recording may name this one
     model, _ = _get_silero_vad()
     if model is None:
         return None
@@ -3536,6 +3569,8 @@ def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None,
         log.info("Recording follow-up command (max %ds, up to %.0fs while still speaking)...",
                  RECORD_SECONDS, caps[1] * _CHUNK_S)
         frames = list(lookback)
+        if stream_upload:
+            uploader = _start_stt_stream(frames)  # same bytes, same order as the WAV below
         # The trigger chunk was already-detected speech — seed the endpointer so
         # the fast VAD tail applies from the first pause.
         endpointer = _Endpointer(spoke=True)
@@ -3545,6 +3580,8 @@ def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None,
             data = stream.read(CHUNK_SIZE, exception_on_overflow=False)
             frames.append(data)
             n_read += 1
+            if uploader is not None:
+                uploader.push(data)
             if endpointer.push(data, len(frames)):
                 stop_reason = "silence"
                 break
@@ -3560,7 +3597,10 @@ def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None,
             SILENCE_TIMEOUT_S,
         )
 
-        if len(frames) < int(0.3 * SAMPLE_RATE / CHUNK_SIZE):
+        too_short = len(frames) < int(0.3 * SAMPLE_RATE / CHUNK_SIZE)
+        _finish_stt_stream(uploader, keep=not too_short)
+        uploader = None
+        if too_short:
             log.info("Follow-up too short, ignoring.")
             return None
 
@@ -3574,6 +3614,7 @@ def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None,
 
     except Exception as exc:
         log.warning("Follow-up listen error: %s", exc)
+        _finish_stt_stream(uploader, keep=False)  # the recording is dropped: abandon its upload too
         try:
             stream.stop_stream()
             stream.close()
@@ -3589,15 +3630,17 @@ def _follow_up_source(pa: pyaudio.PyAudio, seed: "bytes | None", *, beep: bool =
     user said over Zoe — no beep, no fresh listen), else beep + listen."""
     if seed is not None:
         log.info("Follow-up seeded by barge-in (%d bytes) — no beep", len(seed))
+        _pending_stt_stream.clear()  # the seed was never uploaded
         _recording_active.set()
         return seed
     threading.Thread(target=_notify_wake_background, daemon=True, name="followup-notify").start()
     if beep:
         play_follow_up_beep()
     _recording_active.set()
+    # This recording is a turn of its own (follow-up / conversation window): it streams to the STT lane like a wake turn.
     if hard_cap_s is None:
-        return _follow_up_listen(pa, window_s=window_s)
-    return _follow_up_listen(pa, window_s=window_s, hard_cap_s=hard_cap_s)
+        return _follow_up_listen(pa, window_s=window_s, stream_upload=True)
+    return _follow_up_listen(pa, window_s=window_s, hard_cap_s=hard_cap_s, stream_upload=True)
 
 
 def voice_command(pa: pyaudio.PyAudio, oww, wake_stream=None) -> None:
