@@ -51,6 +51,17 @@ from test_memory_implicit_supersede import UID, _by_text, _svc
 
 pytestmark = pytest.mark.ci_safe
 
+
+@pytest.fixture(autouse=True)
+def _no_live_restraint_head(monkeypatch):
+    """The stored rows carry the restraint stamp, which asks the semantic head, which falls back to the ROUTER's model when any earlier test in
+    the process loaded it (test_pull_not_push did): the first digest run then warmed the head's cache and the second read it, so the off/shadow
+    rows differed for a reason that has nothing to do with the structural flag. Pin the same 'no model' world this file is written for."""
+    import restraint_head
+
+    monkeypatch.setattr(restraint_head, "_live_embedder", lambda: None)
+
+
 MOVING = "My mum is moving to Bendigo next month."
 MOVING_FACT = "User's mum lives in Bendigo"
 
