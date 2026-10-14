@@ -23,11 +23,21 @@ import re
 import uuid
 from typing import Optional
 
+import panel_principal
 import write_receipts
 
 # The voice/MCP rule for a freshly auto-created list's visibility. Callers pass
 # the result explicitly so the choice stays visible at the call site.
-PERSONAL_LIST_TYPES = frozenset({"personal", "tasks", "shopping"})
+# ``shopping`` is NOT here: the household has ONE shopping list (a fridge list), so an auto-created one is family-visible.
+# Auto-creating it as the first speaker's PERSONAL list made the next person's "add milk" find nothing and create a second
+# list - the duplicate shopping lists seen on the panel (2026-10-15).
+PERSONAL_LIST_TYPES = frozenset({"personal", "tasks"})
+# The only list a panel guest may bring into existence; every other household list must already exist.
+GUEST_CREATABLE_LIST_TYPES = frozenset({"shopping"})
+
+
+class HouseholdListUnavailable(Exception):
+    """A guest asked for a household list that does not exist and may not be created by a guest."""
 
 
 def default_visibility(list_type: str) -> str:
@@ -256,13 +266,34 @@ async def create_item_record(
     }
 
 
+async def find_household_list_id(db, *, list_type: str, name: str) -> Optional[str]:
+    """The ONE family-visible list a panel guest's add/remove lands on.
+
+    An exact name match wins, else any family list of that type; among several the canonical one is the fullest, then the
+    oldest - never merely the most recently touched, which would send items to an empty duplicate. Personal lists are never
+    candidates, whoever owns them.
+    """
+    cursor = await db.execute(
+        "SELECT l.id FROM lists l WHERE l.list_type=? AND l.visibility='family' AND l.deleted=0"
+        " ORDER BY CASE WHEN lower(l.name)=lower(?) THEN 0 ELSE 1 END,"
+        " (SELECT COUNT(*) FROM list_items i WHERE i.list_id=l.id AND i.deleted=0) DESC,"
+        " l.created_at ASC LIMIT 1",
+        (list_type, name),
+    )
+    row = await cursor.fetchone()
+    return row["id"] if row else None
+
+
 async def find_list_id(db, *, user_id: str, list_type: str, name: str) -> Optional[str]:
     """Resolve a list by type + exact name, family lists first.
 
     The shared voice/MCP resolution: the user's own lists and family-visible
     lists both match; a family list wins a name tie so household adds converge
-    on the shared list.
+    on the shared list. A guest identity owns nothing: it resolves to the
+    household list only.
     """
+    if panel_principal.is_guest_id(user_id):
+        return await find_household_list_id(db, list_type=list_type, name=name)
     cursor = await db.execute(
         "SELECT id FROM lists WHERE list_type=? AND name=? AND deleted=0"
         " AND (user_id=? OR visibility='family')"
@@ -315,7 +346,11 @@ async def add_item_to_list(
     Returns ``{"list_id", "item_id", "created_list", "deduped"}``; on a dedup
     hit ``item_id`` is the existing duplicate row's id and nothing is written.
     """
+    guest = panel_principal.is_guest_id(user_id)
     list_id = await find_list_id(db, user_id=user_id, list_type=list_type, name=list_name)
+    if list_id is None and guest and list_type not in GUEST_CREATABLE_LIST_TYPES:
+        # A guest adds to a household list that exists; it never conjures a new list of another type.
+        raise HouseholdListUnavailable(list_type)
     if list_id is not None:
         if dedup_window_s > 0:
             dup_id = await _find_recent_duplicate(
@@ -335,10 +370,11 @@ async def add_item_to_list(
     async def _write_new_list_and_item() -> dict:
         new_list = await create_list_record(
             db,
-            user_id=user_id,
+            # A guest has no users row to own a list; the household does. A guest-created list is always family-visible.
+            user_id=panel_principal.HOUSEHOLD_OWNER_ID if guest else user_id,
             name=list_name,
             list_type=list_type,
-            visibility=new_list_visibility,
+            visibility="family" if guest else new_list_visibility,
         )
         item = await create_item_record(
             db, list_id=new_list["id"], text=text, quantity=quantity, category=category

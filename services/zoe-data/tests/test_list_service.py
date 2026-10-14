@@ -96,7 +96,8 @@ def _writes(db, table: str):
 
 
 def test_default_visibility_rule():
-    assert default_visibility("shopping") == "personal"
+    # ONE household shopping list: auto-created family-visible, never as the first speaker's personal list (household-lists fix).
+    assert default_visibility("shopping") == "family"
     assert default_visibility("tasks") == "personal"
     assert default_visibility("personal") == "personal"
     assert default_visibility("work") == "family"

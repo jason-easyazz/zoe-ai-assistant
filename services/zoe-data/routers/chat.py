@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import StreamingResponse
+import panel_principal
 from intent_router import detect_intent, detect_and_extract_intent, execute_intent, openclaw_user_message, Intent
 from browser_broker import create_default_browser_broker
 from conversation_context import ConversationContext as _CC
@@ -2774,6 +2775,10 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
 
     if not message:
         return {"error": "No message provided"}
+
+    # Anyone AT THE PANEL may use the household list (a fridge list). The verdict rides this request's context so the intent
+    # executors can tell a panel guest from an anonymous LAN caller (who still touches no list).
+    await panel_principal.mark_if_panel(request, user)
 
     # An explicit session_id is used as-is. With none (the estate ask-box sends none) the
     # user's last ask_ session within ZOE_STICKY_SESSION_MINUTES continues (never a web_

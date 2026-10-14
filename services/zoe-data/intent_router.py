@@ -28,6 +28,8 @@ from fastapi import HTTPException
 
 import command_shapes
 import contacts_conversation as _cc
+import panel_principal
+from list_service import HouseholdListUnavailable
 from time_utils import today_for_zoe_tz
 from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS
 
@@ -2680,6 +2682,8 @@ async def _execute_list_show_direct(intent: Intent, user_id: str) -> Optional[st
     slots = intent.slots or {}
     list_type = str(slots.get("list_type") or "shopping").strip() or "shopping"
     list_name = str(slots.get("list_name") or "").strip()
+    if _is_guest_identity(user_id):
+        user_id = panel_principal.HOUSEHOLD_VIEWER  # a guest owns no list: household (family-visible) lists only
     try:
         from database import get_db_ctx
 
@@ -2771,6 +2775,8 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
                 # already done instead of inserting a duplicate.
                 dedup_window_s=10,
             )
+        logger.info("list_item_audit op=add actor=%s list=%s item=%s", panel_principal.household_actor({"user_id": user_id}),
+                    outcome["list_id"], outcome["item_id"])
         list_id = outcome["list_id"]
         item_id = outcome["item_id"]
         if outcome["deduped"]:
@@ -2783,6 +2789,8 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
             intent,
             json.dumps({"item_id": item_id, "list": ln, "list_id": list_id, "text": item, "status": "added"}),
         )
+    except HouseholdListUnavailable:
+        return f"There isn't a household {lt.replace('_', ' ')} list yet, and I can only start a shopping list from here."
     except Exception as exc:
         logger.warning("list_add direct execution unavailable; falling back to mcporter: %s", exc)
         return None
@@ -2799,6 +2807,8 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
     if not item:
         return None
     lt = str(slots.get("list_type") or "shopping").strip() or "shopping"
+    if _is_guest_identity(user_id):
+        user_id = panel_principal.HOUSEHOLD_VIEWER  # household (family-visible) lists only
     try:
         from database import get_db_ctx
 
@@ -3556,6 +3566,10 @@ _GUEST_GATED_INTENTS = (
 )
 
 
+# The list intents a PANEL guest may run (on household lists only); every other gated intent still needs a signed-in member.
+_GUEST_HOUSEHOLD_INTENTS = frozenset({"list_add", "list_remove", "list_show"})
+
+
 def _is_guest_identity(user_id: str | None) -> bool:
     u = (user_id or "").strip()
     return u in ("", "guest", "voice-guest") or u.startswith("guest-")
@@ -3624,6 +3638,16 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
     #   caller omits identity (#1021/#1032 posture). All live callers pass an explicit
     #   user_id; this default is defense-in-depth for future forgetful callers.
     await _speculative_side_effect_barrier(intent.name)
+    if (_is_guest_identity(user_id) and intent.name in _GUEST_HOUSEHOLD_INTENTS
+            and panel_principal.in_panel_turn()):
+        # Anyone AT THE PANEL may add, tick off and read the HOUSEHOLD list (a fridge list). The executors resolve a
+        # guest to family-visible lists only and never fall back to the mcporter writer, which would own a new list.
+        direct = {
+            "list_add": _execute_list_add_direct,
+            "list_remove": _execute_list_remove_direct,
+            "list_show": _execute_list_show_direct,
+        }[intent.name]
+        return (await direct(intent, user_id)) or "I couldn't reach the household list just now, so nothing has changed."
     if _is_guest_identity(user_id) and intent.name.startswith(_GUEST_GATED_INTENTS):
         # Same posture as voice (which challenges for who+PIN): personal data
         # needs a signed-in identity. Chat has no PIN pad, so answer with the
