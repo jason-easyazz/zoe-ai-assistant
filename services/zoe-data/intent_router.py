@@ -1466,12 +1466,16 @@ def detect_intent(
     # --- LIST REMOVE ---
     for pattern in [
         r"^(?:remove|delete|take off|cross off) (.+?) from (?:the |my )?(.+?) ?list$",
-        r"^(?:remove|delete|take off|cross off) (.+?) from (?:the |my )?(.+)$",
+        # a LIST it is removed from ("remove milk from my diet" is not a list command)
+        r"^(?:remove|delete|take off|cross off) (.+?) from (?:the |my )?"
+        r"(shopping|grocery|groceries|todo|to do|to-do|personal|work|bucket|tasks?)$",
         r"^(?:we got|got|we have) (.+)$",
     ]:
         m = re.match(pattern, t)
         if m:
             item = m.group(1).strip()
+            if not command_shapes.plain_list_item(item):
+                break  # "remove all but the milk", "the second item", "everything": never a guessed delete
             lst = m.group(2).strip() if m.lastindex >= 2 else "shopping"
             return Intent("list_remove", {"item": item, "list_type": _normalize_list(lst)})
 

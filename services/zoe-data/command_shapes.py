@@ -242,6 +242,155 @@ def timer_pause_resume(text: str) -> Optional[tuple[str, TimerTarget]]:
     return None
 
 
+# ── ALLOW-LISTED destructive shapes ─────────────────────────────────────────
+# The default is inverted: a timer cancel / change or a list remove / tick-off ACTS only on one of the exact shapes
+# below; any other wording around the verb or the object (an ordinal, "other", a subset, a quantifier with a
+# qualifier, a negation, "except", a conjunction, an unknown word) gets a status read or a question, never a write.
+# Every finding of the 2026-10-14 reviews was a phrasing nobody listed falling through to act.
+
+_POLITE_LEAD_RE = re.compile(
+    r"^(?:(?:hey|hi|hello|ok|okay|so|um|uh|oh|well|zoe|zoey|please)\b[\s,.!?]*)*"
+    r"(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|please\s+|go\s+ahead\s+and\s+)?"
+)
+_POLITE_TAIL_RE = re.compile(r"(?:[\s,]+(?:please|for\s+me|thanks|thank\s+you|now|right\s+now|zoe))+\s*$")
+#: words that change WHICH thing is meant - never part of a name in an allow-listed shape
+MODIFIER_WORDS = frozenset({
+    "other", "another", "first", "second", "third", "fourth", "fifth", "last", "next", "previous", "older", "newer",
+    "oldest", "newest", "latest", "earlier", "later", "all", "every", "each", "both", "any", "some", "none", "no",
+    "not", "never", "don't", "dont", "except", "but", "besides", "apart", "and", "or", "nor", "either", "neither",
+    "also", "too", "rest", "remaining", "half", "few", "couple", "several", "many", "more", "less", "than", "longer",
+    "shorter", "which", "that's", "whose", "if", "unless", "when", "until", "one", "ones", "same", "only", "just",
+    "everything", "anything", "nothing", "whole", "entire", "these", "those", "them", "it", "they", "without", "with",
+})
+_ROOM = (
+    r"(?:kitchen|bedroom|master\s+bedroom|guest\s+room|living\s+room|lounge|family\s+room|dining\s+room|office|study"
+    r"|bathroom|laundry|garage|hallway|hall|entrance|entry|nursery|playroom|basement|attic|outside|garden|patio"
+    r"|upstairs|downstairs|first\s+floor|second\s+floor|ground\s+floor|space|area|room|house|home|here)"
+)
+_TIMER_NAME = r"[a-z0-9'.-]+(?:\s+[a-z0-9'.-]+){0,2}"
+_TIMER_DET = r"(?:the|my|our|that|this|your)"
+_TIMER_OBJ = (
+    rf"(?:{_TIMER_DET}\s+)?(?:(?P<pre>{_TIMER_NAME})\s+)?(?:timers?|countdowns?)"
+    rf"(?:\s+(?:called|named|for)\s+(?:the\s+)?(?P<post>{_TIMER_NAME}))?"
+    rf"(?:\s+(?:in|on)\s+(?:the\s+|my\s+|our\s+)?{_ROOM})?"
+)
+_CANCEL_VERB = r"(?:cancel|stop|clear|delete|dismiss|reset|turn\s+off|remove|kill|scrap|get\s+rid\s+of|end|switch\s+off)"
+#: a cancel word anywhere in a timer utterance: the turn is destructive, so it acts only on an allow-listed shape
+CANCEL_CUE = (
+    r"(?:cancel|stop|clear|delete|dismiss|reset|turn\s+off|switch\s+off|remove|kill|scrap|get\s+rid\s+of"
+    r"|end(?=\s+(?:the|my|that|this|all|every|both)\b)|(?:turn|switch)\s+(?:\S+\s+){0,4}?(?:timers?|countdowns?)\s+off)"
+)
+#: a change word anywhere in a timer utterance (not "another timer" / "a new timer": those are new timers), or an
+#: add / take verb whose object comes BEFORE "to|on|off|from ... timer" ("add 5 minutes to both timers")
+CHANGE_CUE = (
+    r"(?:more(?!\s+timers?\b)|extra|another(?!\s+(?:timer|countdown|one)\b)|longer|shorter|bump|increase|extend"
+    r"|lengthen|decrease|reduce|shorten|less|knock|subtract|shave"
+    r"|(?:add|put|give|stick|take|remove|cut)\b(?:(?!\b(?:set|start|create|make|begin|run|new)\b|\ban?\s+timer\b).)*"
+    r"\b(?:to|on|onto|off|from)\b(?:(?!\b(?:set|start|create|make|begin|run|new)\b|\ban?\s+timer\b).)*"
+    r"\b(?:timers?|countdowns?))"
+)
+_AMOUNT_WORDS = frozenset(set(_ALL_WORDS) | {
+    "and", "half", "quarter", "quarters", "of", "another", "extra", "more", "hour", "hours", "hr", "hrs", "minute",
+    "minutes", "min", "mins", "second", "seconds", "sec", "secs",
+})
+
+
+def command_core(text: str) -> str:
+    """The command without wake / politeness words and trailing punctuation, lower-cased ("Could you please cancel
+    the timer for me?" -> "cancel the timer")."""
+    t = " ".join((text or "").lower().replace("’", "'").split())
+    t = re.sub(r"[.!?,;:]+$", "", t).strip()
+    t = _POLITE_LEAD_RE.sub("", t, count=1)
+    return _POLITE_TAIL_RE.sub("", t).strip()
+
+
+def _plain_name(words: Optional[str]) -> bool:
+    return not words or not any(w in MODIFIER_WORDS for w in words.split())
+
+
+def _plain_amount(words: str) -> bool:
+    toks = re.findall(r"[a-z]+|\d+(?:\.\d+)?", words)
+    return bool(toks) and all(t in _AMOUNT_WORDS or re.fullmatch(r"\d+(?:\.\d+)?", t) for t in toks)
+
+
+def _target_from(m: "re.Match[str]") -> Optional[TimerTarget]:
+    if not (_plain_name(m.group("pre")) and _plain_name(m.group("post"))):
+        return None
+    phrase = " ".join(p for p in (m.group("pre"), "timer") if p)
+    if m.group("post"):
+        phrase += f" for {m.group('post')}"
+    return timer_target(phrase)
+
+
+_ALL_TIMERS_RE = re.compile(
+    rf"^{_CANCEL_VERB}\s+(?P<q>all|every|both)(?:\s+of)?(?:\s+(?:the|my|our))?(?:\s+{_ROOM})?\s+(?:timers?|countdowns?)"
+    rf"(?:\s+(?:in|on)\s+(?:the\s+|my\s+|our\s+)?{_ROOM})?$"
+)
+_ONE_TIMER_RES = (
+    re.compile(rf"^{_CANCEL_VERB}\s+{_TIMER_OBJ}$"),
+    re.compile(rf"^(?:turn|switch)\s+{_TIMER_OBJ}\s+off$"),
+)
+
+
+def allowed_timer_cancel(text: str) -> Optional[tuple[str, TimerTarget]]:
+    """("all"|"both"|"one", target) when the cancel is one of the allow-listed shapes, else None."""
+    t = command_core(text)
+    m = _ALL_TIMERS_RE.match(t)
+    if m:
+        return ("both" if m.group("q") == "both" else "all"), TimerTarget()
+    for pattern in _ONE_TIMER_RES:
+        m = pattern.match(t)
+        if m:
+            target = _target_from(m)
+            return ("one", target) if target is not None else None
+    return None
+
+
+_AMT = r"(?P<amt>[a-z0-9.\s-]+?)"
+_ADJUST_RES: tuple[tuple["re.Pattern[str]", str], ...] = (
+    (re.compile(rf"^(?:add|put|give|stick)\s+{_AMT}(?:\s+more)?\s+(?:to|on|onto)\s+{_TIMER_OBJ}$"), "increase"),
+    (re.compile(rf"^(?:another\s+)?{_AMT}(?:\s+more)?\s+on\s+{_TIMER_OBJ}$"), "increase"),
+    (re.compile(rf"^(?:take|remove|knock|cut|shave|subtract)\s+(?:off\s+)?{_AMT}\s+(?:off(?:\s+of)?|from)\s+{_TIMER_OBJ}$"),
+     "decrease"),
+    (re.compile(rf"^(?:increase|extend|lengthen|raise)\s+{_TIMER_OBJ}\s+by\s+{_AMT}$"), "increase"),
+    (re.compile(rf"^(?:decrease|reduce|shorten|lower|cut)\s+{_TIMER_OBJ}\s+by\s+{_AMT}$"), "decrease"),
+    (re.compile(rf"^(?:increase|extend|lengthen|raise|decrease|reduce|shorten|lower|cut|change|adjust|reset)\s+"
+                rf"{_TIMER_OBJ}\s+to\s+{_AMT}$"), "set"),
+    (re.compile(rf"^make\s+{_TIMER_OBJ}\s+{_AMT}\s+longer$"), "increase"),
+    (re.compile(rf"^make\s+{_TIMER_OBJ}\s+{_AMT}\s+shorter$"), "decrease"),
+)
+
+
+def allowed_timer_adjust(text: str) -> Optional[TimerAdjust]:
+    """A change to ONE timer in an allow-listed shape with a plain, parsable amount, else None."""
+    t = command_core(text)
+    for pattern, direction in _ADJUST_RES:
+        m = pattern.match(t)
+        if not m or not _plain_amount(m.group("amt")):
+            continue
+        secs = _amount_seconds(m.group("amt"))
+        target = _target_from(m)
+        if secs > 0 and target is not None:
+            return TimerAdjust(direction, secs, target)
+    return None
+
+
+#: words that make a list ITEM mean something other than one item ("all but milk", "the second item", "everything")
+_LIST_ITEM_MODIFIERS = frozenset({
+    "other", "another", "second", "third", "fourth", "fifth", "all", "every", "each", "both", "any", "some", "none",
+    "not", "never", "don't", "dont", "except", "but", "besides", "apart", "either", "neither", "rest", "remaining",
+    "everything", "anything", "nothing", "whole", "entire", "these", "those", "them", "it", "they", "that", "this",
+    "one", "ones",
+})
+
+
+def plain_list_item(item: str) -> bool:
+    """True when ``item`` names ONE thing (a conjunction is allowed: "salt and pepper" may be one item - the remove
+    resolver then needs an EXACT match), never a subset, an ordinal or a pointer."""
+    words = re.findall(r"[a-z0-9'-]+", (item or "").lower())
+    return bool(words) and len(words) <= 6 and not any(w in _LIST_ITEM_MODIFIERS for w in words)
+
+
 # ── Questions and statements that only MENTION a write ──────────────────────
 
 _LEAD_IN = r"^\s*(?:(?:hey|hi|ok|okay|so|um|uh|oh|well|zoe|zoey)\b[\s,.!?]*)*"
@@ -294,19 +443,22 @@ _DELAY_STRICT_RE = re.compile(
     r"(?:\s*(?:a\.?\s?m\.?|p\.?\s?m\.?|in\s+the\s+(?:morning|evening|afternoon)|tonight))?\s*$"
     rf"|\bat\s+{_HOUR_WORD}(?:\s+\w+)?\s*(?:a\.?\s?m\.?|p\.?\s?m\.?|o'?\s?clock)\b"
 )
-# Loose adds day words and conditions ("tonight", "tomorrow", "when I get home", "every morning"), read only in the
-# COMMAND's own clause ("turn off the lights, see you tomorrow" is a command for now). Device commands only: a song
-# or show title may well contain "tonight" ("play Tonight Tonight").
-_DELAY_LOOSE_RE = re.compile(
-    r"\b(?:tonight|tomorrow|later(?:\s+on)?|this\s+(?:evening|afternoon)"
-    r"|in\s+the\s+(?:morning|evening|afternoon)(?!\s+room)"
-    r"|in\s+a\s+(?:bit|while|minute|moment|sec(?:ond)?))\b"
-    r"|\b(?:when|once|as\s+soon\s+as|whenever|if)\s+"
-    r"(?!you\s+(?:can|could|get|like|want|please|have|do|don't|are|would)\b)"
-    r"(?:i|we|you|it|the|someone|everyone|they|he|she)\b"
-    r"|\b(?:every|each)\s+(?:day|night|morning|evening|hour|weekday|week)\b"
+# ANY time cue anywhere in a device command means "not now" (the default is inverted: an unrecognised time phrase must
+# never run the command). Only a word that LOOKS like a time but plainly is not one is let through: "at one end of the
+# room", "the morning room", "if you can".
+_TIME_CUE_RE = re.compile(
+    rf"\b(?:at|by|before|until|till|after|from)\s+(?:\d(?!\d*\s*(?:%|percent|per\s*cent))|half\s+past|(?:a\s+)?quarter\s+(?:past|to)"
+    rf"|{_HOUR_WORD}\b(?!\s+(?:end|side|of|point|corner|another|more|time|light|lamp|room|door|window))"
+    r"|dawn|dusk|sunset|sunrise|sundown|bedtime|night|dinner|lunch|breakfast|the\s+(?:end|top)\s+of)"
+    rf"|\b(?:in|after|within)\s+(?:{_AMOUNT}|half\s+an?\s+hour|a\s+(?:bit|while|minute|moment|sec(?:ond)?)|an?\s+(?:hour|minute))\b"
+    r"|\b(?:tonight|tomorrow|later|overnight|o'?\s?clock|noon|midnight)\b"
+    r"|\bthis\s+(?:evening|afternoon|morning|weekend)\b|\bin\s+the\s+(?:morning|evening|afternoon|night)\b(?!\s+room)"
+    r"|\d\s*(?:a\.?\s?m\b\.?|p\.?\s?m\b\.?)|\b\d{1,2}:\d{2}\b|\b(?:half\s+past|quarter\s+(?:to|past))\b"
+    r"|\b(?:when|once|whenever|as\s+soon\s+as)\b(?!\s+(?:you\s+(?:can|could|get|like|want)|possible)\b)"
+    r"|\b(?:every|each)\s+(?:day|night|morning|evening|hour|minute|weekday|week|\w+day)\b"
+    r"|\bif\s+(?!you\s+(?:can|could|would|please|want|like|don'?t|do|are|have)\b)(?:i|we|it|the|someone|everyone|they|he|she)\b"
+    r"|\b(?:mon|tues|wednes|thurs|fri|satur|sun)day\b"
 )
-_CLAUSE_END_RE = re.compile(r"[,;.!?]|\s(?:and|then|but)\s")
 
 
 #: What both fast paths say to a command for later: there is no scheduler for device commands yet, so nothing runs now
@@ -315,15 +467,9 @@ DELAYED_COMMAND_REPLY = "I can't schedule that for later yet, so I haven't chang
 
 
 def delayed_command(text: str, *, strict: bool = False) -> bool:
-    """True when the command is for LATER (or on a condition), not now."""
+    """True when a device / playback command carries ANY time cue (it is for later, or on a condition), so it must
+    not run now. ``strict`` (music PLAY: a title may say "tonight") counts only an explicit wait or clock time."""
     t = " ".join((text or "").lower().replace("’", "'").split())
     if _DELAY_STRICT_RE.search(t):
         return True
-    if strict:
-        return False
-    clauses = _CLAUSE_END_RE.split(t)
-    if _DELAY_LOOSE_RE.search(clauses[0]):
-        return True
-    # A later clause counts only when it points back at the command ("turn off the lights and do it tomorrow"); a
-    # sign-off does not ("turn off the lights, see you tomorrow").
-    return any(_DELAY_LOOSE_RE.search(c) and re.search(r"\b(?:it|that|them|this|those)\b", c) for c in clauses[1:])
+    return not strict and _TIME_CUE_RE.search(t) is not None

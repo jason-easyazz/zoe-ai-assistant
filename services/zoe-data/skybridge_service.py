@@ -937,7 +937,7 @@ def _list_remove_from_text(message: str) -> tuple[str, str, str] | None:
     if not match:
         return None
     item = _clean_action_text(match.group("item"))
-    if not item or item.lower() in _POINTING_ITEMS:
+    if not item or item.lower() in _POINTING_ITEMS or not command_shapes.plain_list_item(item):
         return None
     list_type, list_name = _list_target(match)
     return item, (list_type or ("" if list_name else "shopping")), list_name
@@ -988,7 +988,7 @@ def _list_complete_from_text(message: str) -> tuple[str, str, bool, str] | None:
 
     def _finish(match: "re.Match[str]", completed: bool) -> tuple[str, str, bool, str] | None:
         item = _clean_action_text(match.group("item"))
-        if not item or item.lower() in _POINTING_ITEMS:
+        if not item or item.lower() in _POINTING_ITEMS or not command_shapes.plain_list_item(item):
             return None
         list_type, list_name = _list_target(match)
         return item, (list_type or ("" if list_name else "shopping")), completed, list_name
@@ -1038,7 +1038,7 @@ def _contextual_list_remove_from_text(message: str, context: dict[str, Any] | No
     if re.search(r"\b(?:off|from|out of)\s+", message, re.IGNORECASE):
         return None
     item = _clean_action_text(match.group("item"))
-    if not item or item.lower() in {"item", "something", "this", "that", "it"}:
+    if not item or item.lower() in {"item", "something", "this", "that", "it"} or not command_shapes.plain_list_item(item):
         return None
     _list_id, list_type = _context_list_hint(context)
     return item, list_type or "shopping"
@@ -1525,71 +1525,42 @@ def classify_skybridge_intent(
     # Timers claim the phrase early so "set a 5 minute timer" isn't misread as a
     # calendar event ("set ... at a time").
     if re.search(r"\btimers?\b|\bcountdowns?\b", text):
+        status = SkybridgeIntent(domain="timer", action="status")
         # A question or statement ABOUT a timer ("should I add 5 minutes to the timer?", "why did you cancel the
         # timer?") is answered with the timers' status - never a write.
         if command_shapes.asks_or_mentions(text):
-            return SkybridgeIntent(domain="timer", action="status")
+            return status
         changing = command_shapes.asks_or_mentions(text, destructive=True)
-        # A change to a RUNNING timer first: "add 5 minutes to the timer" carries a duration and a start-ish verb, so
-        # the create rule below used to start a NEW timer for it (HA corpus, 2026-10-14).
-        adjust = command_shapes.timer_adjust(text)
-        if adjust is not None and changing:
-            return SkybridgeIntent(domain="timer", action="status")  # "can I take a minute off the timer?"
-        if adjust is not None:
+        # DESTRUCTIVE timer commands act only on an ALLOW-LISTED shape (command_shapes.allowed_timer_*). Anything
+        # change-like or cancel-like that is not on the list - an ordinal, "other", a subset, a qualified quantifier,
+        # a negation, "except", a conjunction, an unknown word - is a status read, never a write. Before this, every
+        # phrasing nobody had listed fell through to act (a new timer for "add 5 minutes to the timer", every timer
+        # cancelled for "cancel every other timer").
+        if command_shapes.timer_adjust(text) is not None or re.search(rf"\b{command_shapes.CHANGE_CUE}\b", text):
+            adjust = None if changing else command_shapes.allowed_timer_adjust(text)
+            if adjust is None:
+                return status
             return SkybridgeIntent(domain="timer", action=adjust.direction, duration_seconds=adjust.seconds,
                                    title=adjust.target.label.title(), start_seconds=adjust.target.start_seconds)
         pause = command_shapes.timer_pause_resume(text)
-        if pause is not None:
+        if pause is not None:  # never a write: answered honestly that Zoe can't pause
             action, target = pause
             return SkybridgeIntent(domain="timer", action=action, title=target.label.title(),
                                    start_seconds=target.start_seconds)
-        cancel = re.search(r"\b(cancel|stop|clear|delete|dismiss|reset|turn off|remove|kill|scrap|get rid of)\b", text)
-        if cancel and changing:
-            return SkybridgeIntent(domain="timer", action="status")  # "can I cancel the timer?" deletes nothing
-        if cancel:
-            # "remove the 5 minute timer" used to START a 5-minute timer ("remove" was not a cancel word).
-            rest = text[cancel.end():]
-            if re.search(r"\b(?:but|except|apart\s+from|other\s+than|besides|save|bar|leave|keep)\b", rest):
-                # "cancel all but the pasta timer": a subset/exclusion is neither "all" nor the one named - deleting
-                # either way is wrong, so it is answered with the timers' status (nothing cancelled).
-                return SkybridgeIntent(domain="timer", action="status")
-            quantifier = re.search(r"\b(?P<q>all|every|both)\b", rest)
-            if quantifier:
-                # Only the WHOLE set ("cancel all timers", "stop all of my timers in the kitchen", "cancel both timers");
-                # an enumerated subset ("cancel both the pasta and eggs timers") names timers, so it is read, not
-                # cancelled. "both" with anything other than exactly two running is ambiguous (resolver).
-                if re.search(r"\band\b|,", rest):
-                    return SkybridgeIntent(domain="timer", action="status")
-                # A QUALIFIED set ("cancel every pasta timer", "every 5-minute timer") is every timer that fits the
-                # qualifier, never every timer. A trailing room ("in the kitchen") qualifies nothing: Zoe's timers
-                # have no room.
-                qualifier = re.sub(r"\s+in\s+(?:the\s+|my\s+|our\s+)?[a-z]+(?:\s+[a-z]+)?\s*$", "", rest)
-                qualifier = re.sub(r"\b(?:all|every|both|of|the|my|our|these|those)\b", " ", qualifier)
-                if re.search(r"\b(?:than|longer|shorter|over|under|more|less|that|which|with|without|before|after"
-                             r"|left|remaining|almost|nearly|done|finished|expired"
-                             r"|other|first|second|third|fourth|last|next|rest|alternate|odd|even|older|newer"
-                             r"|oldest|newest)\b", qualifier):
-                    # "every timer longer than 5 minutes": a condition the matcher cannot evaluate - read, not delete.
-                    return SkybridgeIntent(domain="timer", action="status")
-                target = command_shapes.timer_target(" ".join(qualifier.split()) or "timers")
-                return SkybridgeIntent(domain="timer", action="cancel",
-                                       query="both" if quantifier.group("q") == "both" else "all",
-                                       title=target.label.title(), start_seconds=target.start_seconds)
-            if re.search(r"\band\b|,", rest):
-                # "cancel the pasta timer and the eggs timer" / "cancel the timer and set a new one": more than one
-                # target or a second clause - cancelling the first name only would be half a delete; read instead.
-                return SkybridgeIntent(domain="timer", action="status")
-            target = command_shapes.timer_target(text[cancel.end():])
-            return SkybridgeIntent(domain="timer", action="cancel",
-                                   title=target.label.title() or _parse_timer_label(text),
-                                   start_seconds=target.start_seconds)
+        if re.search(rf"\b{command_shapes.CANCEL_CUE}\b", text):
+            allowed = None if changing else command_shapes.allowed_timer_cancel(text)
+            if allowed is None:
+                return status
+            scope, target = allowed
+            return SkybridgeIntent(domain="timer", action="cancel", query="" if scope == "one" else scope,
+                                   title=target.label.title(), start_seconds=target.start_seconds)
         if re.search(r"\b(how (?:long|much)|left|remaining|status|check on|still going)\b", text):
-            return SkybridgeIntent(domain="timer", action="status")
+            return status
         # "show/list my timers" is a status ask too. Without this, the query fell
         # through to the people fallback ("show my X" -> contact search) and the
         # dashboard Timers tile rendered an empty people directory (glass-verified).
         if re.search(r"\b(show|list|view|see|display|what)\b", text):
-            return SkybridgeIntent(domain="timer", action="status")
+            return status
         duration = _parse_timer_duration(text)
         # Only CREATE for an explicit ask — a passing mention ("it's not the timer",
         # "the timer went off") must not spin one up. A duration or a start verb is
@@ -3547,6 +3518,10 @@ def _match_list_items_by_text(items: list[dict[str, Any]], wanted: str) -> list[
     exact = [item for item in items if str(item.get("text") or "").strip().lower() == target]
     if exact:
         return exact
+    if re.search(r"\b(?:and|or)\b|&", target):
+        # "milk and eggs" is ONE item only if an item is literally called that; a substring guess would act on one of
+        # two things the user named.
+        return []
     return [item for item in items if target in str(item.get("text") or "").strip().lower()]
 
 

@@ -95,9 +95,19 @@ def test_timer_hard_negatives_keep_their_meaning(text, action, seconds):
 
 
 def test_break_the_fix_adjust_falls_back_to_creating_a_timer(monkeypatch):
-    """Control: with the adjust shape switched off, the old false WRITE comes back."""
+    """Control: with the change detection switched off, the old false WRITE comes back."""
     monkeypatch.setattr(command_shapes, "timer_adjust", lambda _t: None)
+    monkeypatch.setattr(command_shapes, "CHANGE_CUE", r"(?!)")
     assert _claim("add 5 minutes to the timer") == ("timer", "create")
+
+
+def test_break_the_fix_without_the_allow_list_an_ordinal_cancels_everything(monkeypatch, owner):
+    """Control: let any cancel phrasing act (no allow-list) and "cancel every other timer" deletes timers again."""
+    monkeypatch.setattr(command_shapes, "allowed_timer_cancel", lambda _t: ("all", command_shapes.TimerTarget()))
+    sky._timers.create(owner, "Pasta", 600)
+    sky._timers.create(owner, "Eggs", 300)
+    sky._resolve_timer(sky.classify_skybridge_intent("cancel every other timer"), owner)
+    assert sky._timers.list(owner) == []
 
 
 @pytest.fixture
@@ -199,7 +209,7 @@ def test_a_command_for_later_is_not_run_now(text, domain):
         ("turn on the fan for twenty minutes", ("smart_home", "turn_on")),
         ("play white noise for eight hours", ("music", "play")),
         # a day word or condition OUTSIDE the command's clause, a room name, a politeness tail
-        ("turn off the lights, talk to you later", ("smart_home", "turn_off")),
+        ("turn off the lights, see you in the morning room", ("smart_home", "turn_off")),
         ("turn on the lights in the morning room", ("smart_home", "turn_on")),
         ("turn on the lights if you can", ("smart_home", "turn_on")),
         ("play relaxing music for the next hour", ("music", "play")),  # "next hour" is not a track skip
@@ -381,8 +391,8 @@ def test_a_phrase_that_already_matches_is_untouched():
         ("add another minute to the timer", "increase", 60, 0),
         ("another 5 minutes on the timer", "increase", 300, 0),
         ("make the timer 5 minutes longer", "increase", 300, 0),
-        ("make the timer longer", "increase", 0, 0),  # no amount: asked, never guessed
-        ("add some time to the timer", "increase", 0, 0),
+        ("make the timer longer", "status", 0, 0),  # no amount: not an allow-listed change - a read
+        ("add some time to the timer", "status", 0, 0),
         ("remove the 5 minute timer", "cancel", 0, 300),  # used to START a 5-minute timer
     ],
 )
@@ -612,12 +622,12 @@ def test_a_negated_list_change_writes_nothing(text):
 @pytest.mark.parametrize(
     "text,survivors",
     [
-        ("cancel every pasta timer", {"Eggs", "Rice"}),
-        ("cancel every 5-minute timer", {"Pasta", "Rice"}),  # Eggs was set for 5 minutes
-        ("cancel all of the rice timers", {"Pasta", "Eggs"}),
+        ("cancel every pasta timer", {"Pasta", "Eggs", "Rice"}),  # a qualified set is not allow-listed: a read
+        ("cancel every 5-minute timer", {"Pasta", "Eggs", "Rice"}),
+        ("cancel all of the rice timers", {"Pasta", "Eggs", "Rice"}),
     ],
 )
-def test_a_qualified_quantifier_cancels_only_what_it_names(owner, text, survivors):
+def test_a_qualified_quantifier_cancels_nothing(owner, text, survivors):
     for label, secs in (("Pasta", 600), ("Eggs", 300), ("Rice", 900)):
         sky._timers.create(owner, label, secs)
     sky._resolve_timer(sky.classify_skybridge_intent(text), owner)
@@ -665,3 +675,123 @@ def test_ordinal_subsets_never_cancel_everything(owner, text):
         sky._timers.create(owner, label, secs)
     sky._resolve_timer(sky.classify_skybridge_intent(text), owner)
     assert len(sky._timers.list(owner)) == 3, text
+
+
+# ── property sweep: the default is inverted ─────────────────────────────────
+# A destructive timer / list command ACTS only on an allow-listed shape (command_shapes.allowed_timer_*,
+# plain_list_item); a device command with ANY time cue is never run now. Hundreds of invented combinations of verb x
+# modifier x object: none outside the allow-list may change state. A failure here names the phrasing that acted.
+
+_CANCEL_VERBS = ["cancel", "stop", "delete", "remove", "kill", "turn off", "get rid of", "clear"]
+_ADJUST_SHAPES = ["add 5 minutes to {obj}", "take a minute off {obj}", "increase {obj} by 2 minutes",
+                  "reduce {obj} to 3 minutes", "make {obj} 5 minutes longer", "another 5 minutes on {obj}"]
+_BAD_TIMER_OBJECTS = [
+    "the other timer", "the second timer", "the first timer", "every other timer", "every second timer",
+    "all but the pasta timer", "every timer except the eggs", "both the pasta and eggs timers",
+    "the pasta timer and the eggs timer", "every pasta timer", "all the pasta timers", "every 5 minute timer",
+    "the last timer", "the newest timer", "that one timer", "any timer", "some timer", "the remaining timers",
+    "every timer longer than 5 minutes", "the timers which are nearly done", "half the timers", "these timers",
+    "the rest of the timers", "either timer", "neither timer", "the timer and the oven",
+]
+
+
+def _three_timers(owner):
+    for label, secs in (("Pasta", 600), ("Eggs", 300), ("Rice", 900)):
+        sky._timers.create(owner, label, secs)
+    return sorted((t["timer_id"], round(t["expires_at"], 3)) for t in sky._timers.list(owner))
+
+
+def _timer_state(owner):
+    return sorted((t["timer_id"], round(t["expires_at"], 3)) for t in sky._timers.list(owner))
+
+
+_TIMER_VARIANTS = (
+    [f"{v} {o}" for v in _CANCEL_VERBS for o in _BAD_TIMER_OBJECTS]
+    + [s.format(obj=o) for s in _ADJUST_SHAPES for o in _BAD_TIMER_OBJECTS]
+    + [f"{neg} {v} the timer" for neg in ("don't", "do not", "never") for v in _CANCEL_VERBS]
+    + [f"{lead} {v} the timer" for lead in ("should I", "why did you", "can I", "I was going to", "did you")
+       for v in _CANCEL_VERBS]
+)
+
+
+def test_property_no_unlisted_timer_phrasing_changes_a_timer(owner):
+    assert len(_TIMER_VARIANTS) > 300
+    acted = []
+    for text in _TIMER_VARIANTS:
+        before = _three_timers(owner)
+        sky._resolve_timer(sky.classify_skybridge_intent(text) or SkybridgeIntent(domain="timer", action="status"),
+                           owner)
+        if _timer_state(owner) != before:
+            acted.append(text)
+        sky._timers._by_owner.pop(owner, None)
+    assert acted == [], acted
+
+
+def test_property_allow_listed_timer_shapes_still_act(owner):
+    for text, survivors in (("cancel the pasta timer", 2), ("stop the eggs timer", 2), ("cancel all timers", 0),
+                            ("turn the rice timer off", 2), ("cancel the timer called pasta", 2)):
+        _three_timers(owner)
+        sky._resolve_timer(sky.classify_skybridge_intent(text), owner)
+        assert len(sky._timers.list(owner)) == survivors, text
+        sky._timers._by_owner.pop(owner, None)
+    before = _three_timers(owner)
+    sky._resolve_timer(sky.classify_skybridge_intent("add 5 minutes to the pasta timer"), owner)
+    assert _timer_state(owner) != before
+
+
+_LIST_VERBS = ["remove {i} from my shopping list", "delete {i} from the list", "take {i} off my list",
+               "check off {i} on my shopping list", "tick {i} off the list", "complete {i} on my chores list",
+               "remove {i} on my shopping list", "cross {i} off my list"]
+_BAD_ITEMS = ["all but the milk", "everything except bread", "the second item", "the other one", "it", "that",
+              "them", "every item", "both of them", "the rest", "any of it", "not the milk", "none of them",
+              "the whole thing", "these", "those things", "either of them", "some of the eggs"]
+
+
+def test_property_no_unlisted_list_phrasing_removes_or_ticks():
+    acted = []
+    for shape in _LIST_VERBS:
+        for item in _BAD_ITEMS:
+            text = shape.format(i=item)
+            i = sky.classify_skybridge_intent(text)
+            if i is not None and i.action in ("remove_item", "complete_item"):
+                acted.append(text)
+            hit = intent_router.detect_intent(text, log_miss=False)
+            if hit is not None and hit.name in ("list_remove",):
+                acted.append(f"[ir] {text}")
+    assert acted == [], acted
+
+
+def test_a_conjunction_item_only_matches_exactly():
+    items = [{"text": "milk"}, {"text": "eggs"}, {"text": "salt and pepper"}]
+    assert sky._match_list_items_by_text(items, "milk and eggs") == []
+    assert sky._match_list_items_by_text(items, "salt and pepper") == [{"text": "salt and pepper"}]
+
+
+_DEVICE_COMMANDS = ["turn off the lights", "turn on the kitchen light", "switch off the fan", "turn on the lamp",
+                    "turn the lights off", "dim the lights to 30%"]
+_TIME_CUES = ["in 5 minutes", "in a quarter of an hour", "at seven", "at 7", "at 10pm", "at half past six",
+              "at quarter to nine", "tonight", "tomorrow", "later", "this evening", "in the morning", "at noon",
+              "at midnight", "when I get home", "once the movie ends", "before dinner", "after dinner", "at dusk",
+              "until 9", "by 10 o'clock", "every night", "on friday", "at bedtime", "in an hour", "after an hour",
+              "in a bit", "at 6:30"]
+
+
+def test_property_any_time_cue_means_not_now():
+    ran = []
+    for cmd in _DEVICE_COMMANDS:
+        for cue in _TIME_CUES:
+            for text in (f"{cmd} {cue}", f"{cue} {cmd}", f"{cmd}, {cue}"):
+                claim = _claim(text)
+                if claim is not None and claim[0] == "smart_home" and claim[1] != "delayed":
+                    ran.append(text)
+                hit = intent_router.detect_intent(text, log_miss=False)
+                if hit is not None and hit.name == "smart_home" and hit.slots.get("action") != "delayed":
+                    ran.append(f"[ir] {text}")
+    assert ran == [], ran[:20]
+
+
+def test_no_time_word_means_now():
+    for text in ("turn on the lights at one end of the room", "turn on the lights in the morning room",
+                 "turn on the lights if you can", "turn off light two", "turn on the lights at 100 percent"):
+        claim = _claim(text)
+        assert claim is None or claim[1] != "delayed", text
