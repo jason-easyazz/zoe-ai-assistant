@@ -822,6 +822,17 @@ async def resolve(text: str, user_id: str, session_id: str, **kwargs):  # noqa: 
             answered = None
         if answered is not None:
             return answered
+        # session_status: "who is logged in / am I signed in" on the voice lane is answered from the resolved identity of the
+        # turn (a member's own name, or "nobody is signed in"), never routed to the lists domain and the brain.
+        try:
+            import session_status as _ss
+
+            answered = await _ss.tier(text, user_id, session_id, channel=kwargs.get("channel"),
+                                      extra_ctx=kwargs.get("extra_ctx"))
+        except Exception:  # noqa: BLE001 - the tier never breaks a turn
+            answered = None
+        if answered is not None:
+            return answered
     res = await _resolve_core(text, user_id, session_id, **kwargs)
     if res is None and kwargs.get("phase") != "domain":
         res = _struggle_ack(text)

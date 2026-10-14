@@ -421,6 +421,6 @@ def test_queue_length_is_bounded(monkeypatch):
 
 def test_replay_arm_uses_the_production_finish_timeout():
     import inspect
-    import tests.replay_samples as rs
+    import replay_samples as rs  # not `tests.replay_samples`: the repo-root tests/ package shadows it when pytest runs from the root
     src = inspect.getsource(rs)
     assert "ss.finish_timeout_s()" in src and "sess.finish, n, 30.0" not in src
