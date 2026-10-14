@@ -450,7 +450,7 @@ def test_negative_control_a_warm_router_would_make_the_same_turn_store_different
     monkeypatch.setenv(restraint.ENV, "shadow")
     head = restraint_head._load()
     assert head is not None, "restraint head artefact missing: the control needs the shipped head"
-    text = "I live in Perth."
+    text = "I'm living in Perth, and I don't plan to move."   # a contraction: the head only applies to text with English evidence (_head_applies)
     first, second = {}, {}
     restraint.stamp(first, text)
     restraint_head.set_embedder(lambda t: np.zeros(384, dtype=np.float32))
