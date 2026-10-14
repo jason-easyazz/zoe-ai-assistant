@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from fastapi import HTTPException
 
+import calc_speech as _calc_speech
 import command_shapes
 import contacts_conversation as _cc
 from time_utils import today_for_zoe_tz
@@ -544,26 +545,6 @@ _SMART_HOME_QUESTION_RE = re.compile(
     re.IGNORECASE
 )
 
-# === MATH / CALCULATION (ZOE-10) ===
-# Pure arithmetic fast-path — group 1 captures the numeric expression.
-_CALCULATE_RE = re.compile(
-    r"^(?:what(?:'?s|\s+is)\s+|calculate\s+|compute\s+|how\s+much\s+is\s+)?"
-    r"(-?\d+(?:\.\d+)?\s*(?:[+\-\*\/]\s*-?\d+(?:\.\d+)?)+)\s*[=]?\s*\??$",
-    re.IGNORECASE,
-)
-# "what is 25% of 80" → groups (1=pct, 2=base)
-_CALCULATE_PCT_RE = re.compile(
-    r"^(?:what(?:'?s|\s+is)\s+|calculate\s+)?(\d+(?:\.\d+)?)\s*(?:percent|%)\s+of\s+(\d+(?:\.\d+)?)\s*\??$",
-    re.IGNORECASE,
-)
-# "what is 10 times 3" / "10 divided by 2" → groups (1=a, 2=op_word, 3=b)
-_CALCULATE_WORDS_RE = re.compile(
-    r"^(?:what(?:'?s|\s+is)\s+)?(-?\d+(?:\.\d+)?)\s+"
-    r"(times|multiplied\s+by|divided\s+by|plus|minus)\s+"
-    r"(-?\d+(?:\.\d+)?)\s*\??$",
-    re.IGNORECASE,
-)
-
 # === TTS / SYSTEM VOLUME — Zoe's own voice (ZOE-13) ===
 # Only matches phrases clearly about Zoe's speaking volume, not the music player.
 # Placed before _AUTOGEN_UNKNOWN_GAP so these don't fall through to music_control.
@@ -954,24 +935,11 @@ def detect_intent(
         return Intent("date_query", {})
 
     # --- CALCULATE (ZOE-10) — arithmetic fast-path, no LLM needed ---
-    # Percentage form: "what is 25% of 80"
-    _pct_m = _CALCULATE_PCT_RE.match(t)
-    if _pct_m:
-        pct_val, base_val = _pct_m.group(1), _pct_m.group(2)
-        return Intent("calculate", {"expression": f"{pct_val}/100*{base_val}",
-                                    "display": f"{pct_val}% of {base_val}"})
-    # Word-operator form: "what is 10 times 3" / "10 divided by 2"
-    _words_m = _CALCULATE_WORDS_RE.match(t)
-    if _words_m:
-        a, op_word, b = _words_m.group(1), _words_m.group(2).lower(), _words_m.group(3)
-        op = {"times": "*", "multiplied by": "*",
-              "divided by": "/", "plus": "+", "minus": "-"}.get(op_word, "+")
-        return Intent("calculate", {"expression": f"{a}{op}{b}",
-                                    "display": f"{a} {op_word} {b}"})
-    # Symbolic form: "2+2", "what is 100/4", "15 * 3 = ?"
-    _calc_m = _CALCULATE_RE.match(t)
-    if _calc_m and _calc_m.group(1):
-        return Intent("calculate", {"expression": _calc_m.group(1).strip()})
+    # Digits or number words, pi / e, symbols or spoken operators ("what is 25% of 80", "two plus two", "7 x 8"): one safe parser,
+    # calc_speech. A follow-up ("that one divided by 3.5") needs the conversation's last result, which only fast_tiers has.
+    _calc = _calc_speech.parse(t)
+    if _calc is not None:
+        return Intent("calculate", {"expression": _calc.canonical, "display": _calc.canonical, "spoken": _calc.reply})
 
     # === DOMAIN-SPECIFIC PATTERNS FIRST (to avoid list collisions) ===
 
@@ -6026,74 +5994,18 @@ async def _execute_smart_home_intent(intent: Intent, user_id: str) -> Optional[s
 
 
 def _execute_calculate(intent: Intent) -> str:
-    """Safe arithmetic evaluator for bounded numeric expressions (ZOE-10)."""
-    expr_raw = intent.slots.get("expression", "").strip()
-    display = intent.slots.get("display", expr_raw)
-    if not expr_raw:
+    """Spoken arithmetic (ZOE-10): the sum was already answered at detection, or ``expression`` is parsed by the same safe parser."""
+    slots = intent.slots or {}
+    spoken = str(slots.get("spoken") or "").strip()
+    if spoken:
+        return spoken
+    expr = str(slots.get("expression") or "").strip()
+    if not expr:
         return "What would you like me to calculate?"
-
-    import ast as _ast
-    import operator as _operator
-
-    safe = expr_raw.strip()
-    if (
-        not safe
-        or len(safe) > 80
-        or not re.fullmatch(r"[\d\s\+\-\*\/\.\(\)\%]+", safe)
-        or "**" in safe
-    ):
-        return f"I can only handle numeric expressions. Try something like \"what is 2 + 2\"."
-
-    binary_ops = {
-        _ast.Add: _operator.add,
-        _ast.Sub: _operator.sub,
-        _ast.Mult: _operator.mul,
-        _ast.Div: _operator.truediv,
-        _ast.Mod: _operator.mod,
-    }
-    unary_ops = {
-        _ast.UAdd: _operator.pos,
-        _ast.USub: _operator.neg,
-    }
-    max_nodes = 64
-    max_abs_value = 1_000_000_000_000
-    seen_nodes = 0
-
-    def _check_bound(value):
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ValueError("non-numeric result")
-        if abs(value) > max_abs_value:
-            raise ValueError("result too large")
-        return value
-
-    def _eval_node(node):
-        nonlocal seen_nodes
-        seen_nodes += 1
-        if seen_nodes > max_nodes:
-            raise ValueError("expression too complex")
-        if isinstance(node, _ast.Expression):
-            return _eval_node(node.body)
-        if isinstance(node, _ast.Constant):
-            return _check_bound(node.value)
-        if isinstance(node, _ast.BinOp) and type(node.op) in binary_ops:
-            left = _eval_node(node.left)
-            right = _eval_node(node.right)
-            return _check_bound(binary_ops[type(node.op)](left, right))
-        if isinstance(node, _ast.UnaryOp) and type(node.op) in unary_ops:
-            return _check_bound(unary_ops[type(node.op)](_eval_node(node.operand)))
-        raise ValueError("unsupported expression")
-
-    try:
-        parsed = _ast.parse(safe, mode="eval")
-        result = _eval_node(parsed)
-        if isinstance(result, float):
-            # Show integer when result is whole
-            result = int(result) if result == int(result) else round(result, 6)
-        return f"{display} = {result}"
-    except ZeroDivisionError:
-        return "That expression would divide by zero."
-    except Exception:
-        return f"I couldn't calculate \"{display}\". Try a simpler expression like \"what is 15 * 4\"."
+    res = _calc_speech.parse(expr)
+    if res is None:
+        return "I can only handle numeric expressions. Try something like \"what is 2 + 2\"."
+    return res.reply
 
 
 async def _execute_set_volume_intent(intent: Intent) -> str:

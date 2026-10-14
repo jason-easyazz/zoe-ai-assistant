@@ -782,6 +782,23 @@ def _struggle_ack(text: str):
         return None
 
 
+def _calc_tier(text: str, user_id: str, session_id: str):
+    """Spoken arithmetic and its follow-ups, answered deterministically (no model, no I/O). The "last result" is kept per
+    (user, conversation) for ``calc_speech.WINDOW_S``. NEVER raises."""
+    try:
+        import calc_speech as _cs
+
+        reply = _cs.answer(text, f"{user_id}|{session_id}")
+        if not reply:
+            return None
+        import expert_dispatch as _xd
+
+        return _xd.DispatchResult(domain="math", reply=reply, intent="calculate", tier="calc")
+    except Exception as exc:  # noqa: BLE001 - never let the tier break a turn
+        logger.warning("fast_tiers calc tier failed (non-fatal): %s", exc)
+        return None
+
+
 @_functools.wraps(_resolve_core)
 async def resolve(text: str, user_id: str, session_id: str, **kwargs):  # noqa: F811 - the documented wrapper
     # `phase="domain"` is the second half of a split run (the caller ran `phase="conversation"` already): the wrapper tiers
@@ -831,6 +848,11 @@ async def resolve(text: str, user_id: str, session_id: str, **kwargs):  # noqa: 
                                       extra_ctx=kwargs.get("extra_ctx"))
         except Exception:  # noqa: BLE001 - the tier never breaks a turn
             answered = None
+        if answered is not None:
+            return answered
+        # calculator: spoken arithmetic ("two plus two", "what about 3 times pi") and its follow-ups ("that one divided by 3.5", "times
+        # three") against the conversation's last result (calc_speech). A safe closed-vocabulary parser; anything else returns None.
+        answered = _calc_tier(text, user_id, session_id)
         if answered is not None:
             return answered
     res = await _resolve_core(text, user_id, session_id, **kwargs)
