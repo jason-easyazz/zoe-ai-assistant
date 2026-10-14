@@ -4,6 +4,15 @@
 **Status:** Ready for Implementation
 **Timeline:** 2 weeks (P0), 1 week (P1)
 
+> **2026-10-14 Common voice questions vs Home Assistant Assist:** [common-questions-ha-intents-2026-10.md](./common-questions-ha-intents-2026-10.md) is a research record with a measured gap map. It covers:
+> - HA's built-in intent set, hassil grammar, phrasing counts and response templates, read from source;
+> - OVOS weather-skill coverage (high/low, next rain, umbrella), which HA lacks;
+> - published smart-speaker usage rankings;
+> - answer-style rules (fact first, one breath, relative days, screen carries detail);
+> - Zoe's Skybridge + intent_router run over HA's 1,192 labelled test sentences. The worst findings: timer adjust/pause creates a new timer, delayed device commands run immediately, and greedy `temperature`/`rain`/`list` substrings steal turns.
+>
+> The record recommends adopting the HA corpus (CC-BY-4.0, verified) plus the OVOS weather intents (Apache-2.0) as a ratcheted phrasing regression corpus. Research only; nothing built.
+>
 > **2026-10-14 identity as a score card:** [identity-presence-scorecard-2026-10.md](./identity-presence-scorecard-2026-10.md) — owner ask: security as a score card (last login, left the room, phone in range, voice, face), per-user strictness in settings, noticing new voices and learning a visitor once introduced. NIST SP 800-63B-4 (verified: "Biometric comparison based on voice SHALL NOT be used"; biometrics only with a physical authenticator; indicators do not change the AAL), zero trust and Entra CAE (events beat timers), FIDO PXP, likelihood-ratio fusion, Google/Amazon/Apple/Android/Windows practice, BLE/IRK/mmWave presence, pyannote and open-set ID, ASVspoof, AU/WA/GDPR/BIPA/COPPA law with lawyer flags, and a file:line survey of every identity signal Zoe has. Design: [identity-presence-engine.md](../architecture/identity-presence-engine.md).
 >
 > **2026-10-13 Omi press-to-record firmware:** [omi-press-to-record-firmware-2026-10.md](./omi-press-to-record-firmware-2026-10.md) — can the owner's Omi CV1 be made to record only after a button press? The bootloader trusts MCUboot's public default RSA-2048 key (the private half is committed in the Omi repo; verified against the shipped 3.0.21 images' key-hash and signature TLVs and the key embedded in the factory bootloader), so an OTA image is signable by anyone; the button/mic/codec/storage code map with file:line, the smallest patch (a gate in front of the codec, single-tap toggle, haptic + LED, boots closed), the NCS 2.9.0 build via a fork of upstream's own CI (Jetson aarch64 possible but RAM-bound), the no-revert overwrite-only recovery story (SWD only; the schematic shows a debug header), why the stock mic-gain "mute" is -20 dB not silence, why a Pi-side button marker is unreliable (presses with no central connected are lost), and the security consequence of a public key. Research only; nothing flashed.
