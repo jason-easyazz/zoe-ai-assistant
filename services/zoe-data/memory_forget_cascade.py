@@ -12,6 +12,11 @@ stored anywhere new):
   * ``proactive_candidates``- deleted (derived, rebuilt nightly from loops / moments / events)
   * ``people``              - the row is SOFT-deleted (``deleted = 1``, the row and its history are kept),
                               and the person's current relationship edges are CLOSED (``valid_to``)
+  * ``contacts``            - the contact model (migration 0052, ``contacts_store.forget_entity``): the person's contact fields,
+                              source-contact links, synced dates and merge reviews are DELETED, any other field or review that
+                              names them too, and their synced source cards become content-free tombstones the next sync skips
+  * ``voiceprints``         - the voiceprint the member's Omi tagging taught Zoe for that person (``learned_voiceprints``,
+                              owner decision 2026-10-14) is DELETED (``contacts_store.forget_voiceprints``)
 
 Every step is independent: a missing table or a DB blip in one never blocks the others. A step that fails is retried
 once, and if it still fails it is RECORDED (``CascadeResult.failed``) and logged at ERROR - never swallowed: the caller
@@ -50,9 +55,9 @@ RETRY_DELAY_S = 0.25   # one retry of a failed step after this pause (a pool bli
 
 #: The cascade's fixed step labels (what ``CascadeResult.failed`` holds and what a pending marker is keyed by). ``database`` is the
 #: connection itself: when it is pending every DB step is.
-DB_STEPS = frozenset(("portrait", "card", "open_loops", "proactive_candidates", "people", "edges"))
+DB_STEPS = frozenset(("portrait", "card", "open_loops", "proactive_candidates", "people", "edges", "contacts", "voiceprints"))
 DB_LABELS = DB_STEPS.union(("database",))
-ALL_LABELS = ("database", "portrait", "card", "open_loops", "proactive_candidates", "people", "edges",
+ALL_LABELS = ("database", "portrait", "card", "open_loops", "proactive_candidates", "people", "edges", "contacts", "voiceprints",
               "restraint_mutes", "commitments", "omi_recordings")
 
 # {user_id: (recorded_at_monotonic, [person ids], closed_at_iso)}
@@ -67,6 +72,8 @@ class CascadeResult:
     candidates: int = 0
     people: int = 0
     edges: int = 0
+    contacts: int = 0       # contact-model rows removed / tombstoned (0052)
+    voiceprints: int = 0    # learned voiceprints erased
     person_ids: list[str] = field(default_factory=list)
     closed_at: str = ""
     failed: list[str] = field(default_factory=list)   # labels of the stores that could NOT be cleared (after a retry)
@@ -82,7 +89,7 @@ class CascadeResult:
 
     @property
     def touched(self) -> bool:
-        return bool(self.summary_cleared or self.people)
+        return bool(self.summary_cleared or self.people or self.contacts or self.voiceprints)
 
 
 def _now_iso() -> str:
@@ -199,8 +206,9 @@ async def cascade_forget(user_id: str, name: str, *, db=None) -> CascadeResult:
     if res.failed:
         logger.error("FORGET_CASCADE_INCOMPLETE user=%s steps=%s - the forget is not confirmed", user_id, ",".join(res.failed))
         await _mark_pending(user_id, res.failed)
-    logger.info("memory_forget_cascade: user=%s portrait=%d card=%d loops=%d candidates=%d people=%d edges=%d",
-                user_id, res.portrait, res.card, res.loops, res.candidates, res.people, res.edges)
+    logger.info("memory_forget_cascade: user=%s portrait=%d card=%d loops=%d candidates=%d people=%d edges=%d contacts=%d "
+                "voiceprints=%d", user_id, res.portrait, res.card, res.loops, res.candidates, res.people, res.edges, res.contacts,
+                res.voiceprints)
     if res.complete:
         await retry_pending(user_id, db=db)         # an earlier forget's unfinished steps, now that the database answers
     return res
@@ -350,6 +358,18 @@ async def _run(db, user_id: str, rx, res: CascadeResult, *, only: Optional[froze
         res.closed_at = closed_at
         return n
 
+    async def contacts() -> int:
+        # independent of the people step: it finds the person rows itself (live or already soft-deleted), so a people failure
+        # never makes it "succeed" over nothing
+        import contacts_store
+
+        return await contacts_store.forget_entity(db, user_id, rx)
+
+    async def voiceprints() -> int:
+        import contacts_store
+
+        return await contacts_store.forget_voiceprints(db, user_id, rx)
+
     def want(label: str) -> bool:
         return only is None or label in only
 
@@ -365,6 +385,10 @@ async def _run(db, user_id: str, rx, res: CascadeResult, *, only: Optional[froze
         res.people = await _step("people", people, res)
     if want("edges"):
         res.edges = await _step("edges", edges, res)
+    if want("contacts"):
+        res.contacts = await _step("contacts", contacts, res)
+    if want("voiceprints"):
+        res.voiceprints = await _step("voiceprints", voiceprints, res)
     if "people" in res.failed and "edges" not in res.failed:
         # edges closes the relationships of the people the people step resolved; with that step failed there were no ids, so edges
         # "succeeded" over nothing. It is pending together with its parent, or the contact's open edges would stay open for good.

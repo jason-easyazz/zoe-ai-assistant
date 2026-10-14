@@ -53,7 +53,9 @@ def test_revision_chain_is_linear_and_this_is_the_head():
         if d:
             downs.add(d.group(1))
     assert mod.down_revision in revs, "0050 must chain onto an existing revision"
-    assert revs - downs == {"0050"}, f"more than one head: {sorted(revs - downs)}"
+    # the invariant is ONE head, not that 0050 stays the newest revision forever (a later migration must not turn this red)
+    assert len(revs - downs) == 1, f"more than one head: {sorted(revs - downs)}"
+    assert "0050" in downs or revs - downs == {"0050"}
 
 
 def test_sqlite_upgrade_twice_then_downgrade():
