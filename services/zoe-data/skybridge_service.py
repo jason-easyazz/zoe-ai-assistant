@@ -10,10 +10,13 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import command_shapes
+import conversation_cues
 import write_receipts
 from calendar_utils import row_to_event
 from card_contract import CardContractError, validate_component
@@ -47,6 +50,7 @@ class SkybridgeIntent:
     relationship: str = ""  # people/create: "add {name} as my {relationship}"
     birthday: str = ""
     duration_seconds: int = 0
+    start_seconds: int = 0  # timer/increase|decrease|pause|resume: "the 5 minute timer" = the timer SET for 300 s
     completed: bool | None = None
     entity_id: str = ""  # exact HA entity a smart_home TILE tap targets (never fuzzy)
     entity_ids: tuple[str, ...] = ()  # exact HA entities a smart_home FOLLOW-UP ("turn it back on") targets: what the last command controlled
@@ -60,24 +64,10 @@ class SkybridgeIntent:
 # survives a reload. In-memory is intentional: timers are short-lived and the
 # panel persists its own copy, so a service restart losing one is acceptable.
 
-_WORD_NUMBERS = {
-    "a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
-    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
-    "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
-    "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
-    "twenty": 20, "thirty": 30, "forty": 40,
-    "fifty": 50, "sixty": 60, "ninety": 90,
-}
-# COMPOUND spoken numbers ("twenty five", "forty-five"). Kept separate so the
-# duration alternation can try them LONGEST-FIRST — a flat dict would let
-# "twenty" match first and leave " five minutes" to be re-matched as 5.
-_COMPOUND_WORD_NUMBERS = {
-    f"{tens_w}{sep}{ones_w}": tens_v + ones_v
-    for tens_w, tens_v in (("twenty", 20), ("thirty", 30), ("forty", 40), ("fifty", 50))
-    for ones_w, ones_v in (("one", 1), ("two", 2), ("three", 3), ("four", 4),
-                           ("five", 5), ("six", 6), ("seven", 7), ("eight", 8), ("nine", 9))
-    for sep in (" ", "-")
-}
+# The number vocabulary and the duration parser live in command_shapes (shared with
+# intent_router, so the two matchers never disagree about a duration).
+_WORD_NUMBERS = command_shapes.WORD_NUMBERS
+_COMPOUND_WORD_NUMBERS = command_shapes.COMPOUND_WORD_NUMBERS
 
 MAX_TIMER_SECONDS = 24 * 3600
 
@@ -103,6 +93,7 @@ class _TimerStore:
             "timer_id": uuid.uuid4().hex[:12],
             "label": (label or "Timer").strip() or "Timer",
             "duration_seconds": int(seconds),
+            "set_seconds": int(seconds),  # the length it was SET for: "the 5 minute timer" still means it after an adjust
             "created_at": now,
             "expires_at": now + int(seconds),
         }
@@ -129,6 +120,41 @@ class _TimerStore:
         self._prune(owner)
         return target
 
+    def find(self, owner: str, label: str = "", start_seconds: int = 0) -> tuple[dict[str, Any] | None, str]:
+        """The ONE running timer a command means, or (None, why): ``none`` (nothing running), ``no_match`` (the
+        named / sized timer is not running) or ``ambiguous`` (several running and nothing says which). Never a
+        guess: a change to the wrong timer is a wrong write."""
+        timers = self.list(owner)
+        if not timers:
+            return None, "none"
+        if label:
+            wanted = label.strip().lower()
+            hits = [t for t in timers if t["label"].lower() == wanted]
+            if not hits:  # "the egg timer" for a timer called "Eggs"
+                stem = wanted.rstrip("s")
+                hits = [t for t in timers if t["label"].lower().rstrip("s") == stem]
+        elif start_seconds:
+            hits = [t for t in timers if int(t.get("set_seconds", t["duration_seconds"])) == int(start_seconds)]
+        else:
+            hits = timers
+        if not hits:
+            return None, "no_match"
+        if len(hits) > 1:
+            return None, "ambiguous"
+        return hits[0], ""
+
+    def adjust(self, owner: str, timer_id: str, delta_seconds: int) -> dict[str, Any] | None:
+        """Move a running timer's end by ``delta_seconds`` (negative = shorter). The panel reads ``expires_at`` from
+        ``GET /api/skybridge/timers`` (``active_timers_for``), so the new end reaches it on its next poll."""
+        self._prune(owner)
+        timer = next((t for t in self._by_owner.get(owner, []) if t["timer_id"] == timer_id), None)
+        if timer is None:
+            return None
+        timer["expires_at"] += int(delta_seconds)
+        timer["duration_seconds"] = int(timer["duration_seconds"]) + int(delta_seconds)
+        write_receipts.record(owner, "timer", timer["timer_id"], "timer_store")
+        return timer
+
     def cancel_by_id(self, owner: str, timer_id: str) -> dict[str, Any] | None:
         self._prune(owner)
         timers = self._by_owner.get(owner, [])
@@ -142,38 +168,9 @@ class _TimerStore:
 _timers = _TimerStore()
 
 
-def _unit_to_seconds(unit: str) -> int:
-    u = unit.lower()
-    if u.startswith("h"):
-        return 3600
-    if u.startswith("m"):
-        return 60
-    return 1
-
-
 def _parse_timer_duration(text: str) -> int:
-    """Total seconds from a timer phrase (digits or number-words), else 0."""
-    # Compounds FIRST in the alternation, else "twenty five minutes" matches
-    # bare "five minutes" (the 25/45-minute bug caught in review).
-    all_words = {**_COMPOUND_WORD_NUMBERS, **_WORD_NUMBERS}
-    num = r"\d+|" + "|".join(
-        re.escape(w) for w in sorted(all_words, key=len, reverse=True)
-    )
-    # [\s-]* not \s*: the adjectival form hyphenates through to the unit
-    # ("a twenty-five-minute timer").
-    pattern = re.compile(r"\b(" + num + r")[\s-]*(hours?|hrs?|minutes?|mins?|seconds?|secs?)\b")
-    total = 0
-    found = False
-    for value, unit in pattern.findall(text):
-        n = int(value) if value.isdigit() else all_words.get(value, 0)
-        total += n * _unit_to_seconds(unit)
-        found = True
-    if found:
-        return total
-    short = re.search(r"\b(\d+)\s*([hms])\b", text)
-    if short:
-        return int(short.group(1)) * _unit_to_seconds(short.group(2))
-    return 0
+    """Total seconds from a timer phrase (digits, number-words, halves: "half an hour" is 1800), else 0."""
+    return command_shapes.parse_duration_seconds(text)
 
 
 def _strip_trailing_duration(cand: str) -> str:
@@ -296,8 +293,64 @@ def create_timer_direct(user_id: str, *, minutes: Any = 5, label: str = "") -> d
     return _resolve_timer(intent, user_id or "guest")
 
 
+def _timer_reply(intent: SkybridgeIntent, owner: str, spoken: str, **extra: Any) -> dict[str, Any]:
+    timers = _timers.list(owner)
+    cards = [_timer_card(t) for t in timers] or [_status_card("No timers", "Ask me to set a timer to get started.")]
+    return {"handled": True, "intent": _intent_dict(intent), "spoken_summary": spoken, "cards": cards, "actions": [],
+            **extra}
+
+
+def _which_timer_line(intent: SkybridgeIntent, owner: str, why: str) -> str:
+    """The honest line when a change cannot be pinned to ONE running timer (never a guess)."""
+    if why == "none":
+        return "You have no timers running."
+    if why == "no_match":
+        if intent.title:
+            return f"I couldn't find a {intent.title.lower()} timer."
+        return f"I couldn't find a {_format_duration(intent.start_seconds)} timer."
+    names = [t["label"] for t in _timers.list(owner)]
+    named = [n for n in names if n.lower() != "timer"]
+    if len(named) == len(names):
+        return f"You have {len(names)} timers running: {', '.join(names[:-1])} and {names[-1]}. Which one?"
+    return f"You have {len(names)} timers running. Which one?"
+
+
+def _resolve_timer_change(intent: SkybridgeIntent, owner: str) -> dict[str, Any]:
+    """"add 5 minutes to the timer" / "take a minute off the pizza timer" / "pause the timer": a change to a RUNNING
+    timer. It never creates one (HA's corpus: 74 of 78 increase phrasings used to start a NEW timer) and never guesses
+    which timer when several run. Pause/resume is not supported (the panel has no paused timer), so it says so."""
+    target, why = _timers.find(owner, intent.title, intent.start_seconds)
+    if intent.action in ("pause", "resume"):
+        if target is None and why == "none":
+            return _timer_reply(intent, owner, "You have no timers running.")
+        verb = "pause" if intent.action == "pause" else "resume"
+        return _timer_reply(intent, owner, f"I can't {verb} timers yet. I can cancel a timer or add time to it.")
+    if target is None:
+        return _timer_reply(intent, owner, _which_timer_line(intent, owner, why))
+    named = "" if target["label"].lower() == "timer" else f"{target['label']} "
+    remaining = target["expires_at"] - time.time()
+    delta = int(intent.duration_seconds)
+    if intent.action == "decrease":
+        if delta >= remaining:
+            return _timer_reply(intent, owner, f"Your {named}timer only has {_format_duration(remaining)} left, "
+                                               "so I left it alone.")
+        delta = -delta
+    elif remaining + delta > MAX_TIMER_SECONDS:
+        return _timer_reply(intent, owner, "That would take the timer past 24 hours, so I left it alone.")
+    _timers.adjust(owner, target["timer_id"], delta)
+    left = _format_duration(remaining + delta)
+    if delta > 0:
+        spoken = f"Added {_format_duration(delta)} to your {named}timer. {left[0].upper()}{left[1:]} left."
+    else:
+        spoken = f"Took {_format_duration(-delta)} off your {named}timer. {left[0].upper()}{left[1:]} left."
+    return _timer_reply(intent, owner, spoken, timer_adjusted_id=target["timer_id"])
+
+
 def _resolve_timer(intent: SkybridgeIntent, user_id: str) -> dict[str, Any]:
     owner = (user_id or "guest")
+
+    if intent.action in ("increase", "decrease", "pause", "resume"):
+        return _resolve_timer_change(intent, owner)
 
     if intent.action == "cancel":
         cancelled = _timers.cancel(owner, intent.title or None)
@@ -788,52 +841,97 @@ def _list_add_from_text(message: str) -> tuple[str, str] | None:
     return item, list_type or "shopping"
 
 
-def _list_remove_from_text(message: str) -> tuple[str, str] | None:
+# A list named by the user ("my chores list"): one to three words, none of them glue, then "list". Tried AFTER the
+# known list names, so "shopping list" stays the shopping type.
+_LIST_GLUE = r"(?:the|my|our|a|from|off|on|in|of|to|into|onto|out)"
+_NAMED_LIST_RE = rf"(?P<lname>(?!{_LIST_GLUE}\b)[a-z0-9']+(?:\s+(?!{_LIST_GLUE}\b)[a-z0-9']+){{0,2}})\s+list"
+_KNOWN_LIST_RE = (
+    r"(?P<list>shopping list|grocery list|groceries|work list|personal list|list|task list|todo list|to[- ]do list"
+    r"|tasks|todos)"
+)
+_LIST_TARGET_RE = rf"(?:the\s+|my\s+|our\s+)?(?:{_KNOWN_LIST_RE}|{_NAMED_LIST_RE})\b"
+
+
+def _list_target(match: "re.Match[str]") -> tuple[str, str]:
+    """(list_type, list_name) from a ``_LIST_TARGET_RE`` match: a known list gives its type, a named list ("chores")
+    gives its name, unless the name IS a known type ("todo list")."""
+    groups = match.groupdict()
+    name = (groups.get("lname") or "").strip().lower()
+    if name:
+        list_type = LIST_TYPE_ALIASES.get(name, "")
+        return (list_type, "") if list_type else ("", name)
+    phrase = f" {re.sub(r'[- ]+', ' ', (groups.get('list') or '').lower())} "
+    return (_list_type_from_text(phrase) or ("shopping" if "grocery" in phrase else "")), ""
+
+
+def _list_remove_from_text(message: str) -> tuple[str, str, str] | None:
+    """(item, list_type, list_name) for "take/remove/delete X off|from|out of <list>", and - ending the turn - for
+    "delete X in <list>" / "remove X on <list>" (HA's phrasings; they used to be answered with a list READ)."""
     match = re.search(
-        r"\b(?:take|remove|delete|drop)\s+(?P<item>.+?)\s+(?:off|from|out of)\s+(?:the\s+|my\s+)?(?P<list>shopping list|grocery list|groceries|work list|personal list|list|task list|todo list|tasks|todos)\b",
+        rf"\b(?:take|remove|delete|drop)\s+(?P<item>.+?)\s+(?:off|from|out of)\s+{_LIST_TARGET_RE}",
+        message,
+        re.IGNORECASE,
+    ) or re.search(
+        rf"\b(?:take|remove|delete|drop)\s+(?P<item>.+?)\s+(?:on|in)\s+{_LIST_TARGET_RE}\s*[.!?]*\s*$",
         message,
         re.IGNORECASE,
     )
     if not match:
         return None
     item = _clean_action_text(match.group("item"))
-    list_phrase = f" {match.group('list').lower()} "
-    list_type = _list_type_from_text(list_phrase) or ("shopping" if "grocery" in list_phrase else "")
     if not item:
         return None
-    return item, list_type or "shopping"
+    list_type, list_name = _list_target(match)
+    return item, (list_type or ("" if list_name else "shopping")), list_name
 
 
-# Item nouns shared by the check-off parser. Kept inline (not a module constant)
-# so it sits next to the patterns that use it.
-_LIST_NOUNS_RE = (
-    r"(?P<list>shopping list|grocery list|groceries|work list|personal list|list"
-    r"|task list|todo list|tasks|todos)"
-)
+# "is milk on the shopping list" / "do we have eggs on the list": a YES/NO question about one item, not a list read.
+@lru_cache(maxsize=1)
+def _list_contains_res() -> tuple["re.Pattern[str]", ...]:
+    # Built on first use: _SHAPE_LEAD is defined further down, with the people shapes.
+    return (
+        re.compile(_SHAPE_LEAD + r"(?:is|are)\s+(?:there\s+)?(?:any\s+|some\s+)?(?P<item>.+?)\s+(?:on|in)\s+"
+                   + _LIST_TARGET_RE + r"\s*$"),
+        re.compile(_SHAPE_LEAD + r"(?:do|did|have)\s+(?:we|i)\s+(?:already\s+)?(?:got|have|put|add|added)\s+"
+                   r"(?:any\s+|some\s+)?(?P<item>.+?)\s+(?:on|in|to)\s+" + _LIST_TARGET_RE + r"\s*$"),
+    )
 
 
-def _list_complete_from_text(message: str) -> tuple[str, str, bool] | None:
+def _list_contains_from_text(text: str) -> tuple[str, str, str] | None:
+    """(item, list_type, list_name) for a membership question; ``text`` is the classifier's normalised text."""
+    t = text.strip().rstrip("?").strip()
+    for pattern in _list_contains_res():
+        match = pattern.search(t)
+        if not match:
+            continue
+        from list_service import clean_item_text, is_plausible_item
+
+        item = clean_item_text(_clean_action_text(match.group("item")))
+        if not item or not is_plausible_item(item):
+            return None
+        list_type, list_name = _list_target(match)
+        return item, list_type, list_name
+    return None
+
+
+def _list_complete_from_text(message: str) -> tuple[str, str, bool, str] | None:
     """Parse a check-off / un-check command (from a tapped row or voice).
 
-    Returns (item, list_type, completed) where completed=True means "tick it off".
+    Returns (item, list_type, completed, list_name) where completed=True means "tick it off".
     Tap rows emit "check off X on the shopping list" / "uncheck X on the shopping
     list"; this also catches natural forms ("tick off bread", "mark eggs as done",
-    "cross milk off the list"). Direction is explicit so a tap never guesses wrong.
+    "cross milk off the list", "complete X on my chores list", "check X off from my list").
+    Direction is explicit so a tap never guesses wrong.
     """
-    on_tail = r"(?:\s+(?:on|from|in)\s+(?:the\s+|my\s+)?" + _LIST_NOUNS_RE + r")?\s*[.!]*\s*$"
-    off_tail = r"\s+off(?:\s+(?:the\s+|my\s+)?" + _LIST_NOUNS_RE + r")?\s*[.!]*\s*$"
+    on_tail = r"(?:\s+(?:on|from|in)\s+" + _LIST_TARGET_RE + r")?\s*[.!]*\s*$"
+    off_tail = r"\s+off(?:\s+(?:from\s+|of\s+)?" + _LIST_TARGET_RE + r")?\s*[.!]*\s*$"
 
-    def _finish(match: "re.Match[str]", completed: bool) -> tuple[str, str, bool] | None:
+    def _finish(match: "re.Match[str]", completed: bool) -> tuple[str, str, bool, str] | None:
         item = _clean_action_text(match.group("item"))
         if not item:
             return None
-        raw = match.groupdict().get("list")
-        if raw:
-            phrase = f" {raw.lower()} "
-            list_type = _list_type_from_text(phrase) or "shopping"
-        else:
-            list_type = "shopping"
-        return item, list_type, completed
+        list_type, list_name = _list_target(match)
+        return item, (list_type or ("" if list_name else "shopping")), completed, list_name
 
     # Restore / un-check FIRST so "uncheck X" is never read as "check X".
     match = re.search(r"\b(?:uncheck|un-?tick|unmark|undo|put back)\s+(?P<item>.+?)" + on_tail, message, re.IGNORECASE)
@@ -859,6 +957,15 @@ def _list_complete_from_text(message: str) -> tuple[str, str, bool] | None:
         result = _finish(match, True)
         if result:
             return result
+    # "complete X on my chores list" - the list is REQUIRED here ("complete the form" is not a list command).
+    match = _command_shaped(message, "complete|finish")
+    if match:
+        match = re.search(r"\b(?:complete|finish)\s+(?P<item>.+?)\s+(?:on|from|in)\s+" + _LIST_TARGET_RE
+                          + r"\s*[.!]*\s*$", message[match.start():], re.IGNORECASE)
+        if match:
+            result = _finish(match, True)
+            if result:
+                return result
     return None
 
 
@@ -1320,13 +1427,23 @@ _PEOPLE_FACT_SHAPE_RE = re.compile(
 )
 
 
+# The loose read fallbacks (kept loose on purpose: Moonshine drops leading wh-words, and the router veto covers a
+# statement) match WHOLE WORDS, never a substring: " list" used to claim "are you always LISTening?" and read out a list.
+_LIST_KEYWORD_RE = re.compile(r"\b(?:lists?|shopping|groceries|grocery|tasks|todos|to-dos)\b")
+_CALENDAR_KEYWORD_RE = re.compile(
+    r"\b(?:calendars?|schedules?|scheduled|events|appointments|agenda|happening)\b|\bwhat'?s\s+on\b"
+)
+
+
 def _is_people_directory_ask(text: str) -> bool:
     """True when ``text`` (classifier-normalised) is a command/question for the
     people directory, not a sentence that merely contains a people word."""
     return bool(_PEOPLE_DIRECTORY_ASK_RE.search(text))
 
 
-def classify_skybridge_intent(message: str, context: dict[str, Any] | None = None) -> SkybridgeIntent | None:
+def classify_skybridge_intent(
+    message: str, context: dict[str, Any] | None = None, *, _filler_retry: bool = True
+) -> SkybridgeIntent | None:
     """Classify only domains that Skybridge can resolve to real data cards."""
     raw_message = message or ""
     # Strip TRAILING sentence punctuation before matching. Moonshine punctuates
@@ -1348,6 +1465,17 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
     # Timers claim the phrase early so "set a 5 minute timer" isn't misread as a
     # calendar event ("set ... at a time").
     if re.search(r"\btimers?\b|\bcountdowns?\b", text):
+        # A change to a RUNNING timer first: "add 5 minutes to the timer" carries a duration and a start-ish verb, so
+        # the create rule below used to start a NEW timer for it (HA corpus, 2026-10-14).
+        adjust = command_shapes.timer_adjust(text)
+        if adjust is not None:
+            return SkybridgeIntent(domain="timer", action=adjust.direction, duration_seconds=adjust.seconds,
+                                   title=adjust.target.label.title(), start_seconds=adjust.target.start_seconds)
+        pause = command_shapes.timer_pause_resume(text)
+        if pause is not None:
+            action, target = pause
+            return SkybridgeIntent(domain="timer", action=action, title=target.label.title(),
+                                   start_seconds=target.start_seconds)
         if re.search(r"\b(cancel|stop|clear|delete|dismiss|reset|turn off)\b", text):
             return SkybridgeIntent(domain="timer", action="cancel", title=_parse_timer_label(text))
         if re.search(r"\b(how (?:long|much)|left|remaining|status|check on|still going)\b", text):
@@ -1365,7 +1493,7 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
             return SkybridgeIntent(domain="timer", action="create", title=_parse_timer_label(text), duration_seconds=duration or 300)
     music_intent = _classify_music(text)
     if music_intent is not None:
-        return music_intent
+        return _unless_delayed(music_intent, text, strict=True)
     # Zoe's speaking voice — matched early (the phrases are distinctive) so
     # "set your voice to ember" can't be misread as a calendar/list write.
     voice_set = _VOICE_SET_RE.search(raw_message)
@@ -1383,12 +1511,19 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
         return SkybridgeIntent(domain="lists", action="add_item", item_text=item, list_type=list_type)
     list_complete = _list_complete_from_text(raw_message)
     if list_complete:
-        item, list_type, completed = list_complete
-        return SkybridgeIntent(domain="lists", action="complete_item", item_text=item, list_type=list_type, completed=completed)
+        item, list_type, completed, list_name = list_complete
+        return SkybridgeIntent(domain="lists", action="complete_item", item_text=item, list_type=list_type,
+                               completed=completed, list_name=list_name)
     list_remove = _list_remove_from_text(raw_message)
     if list_remove:
-        item, list_type = list_remove
-        return SkybridgeIntent(domain="lists", action="remove_item", item_text=item, list_type=list_type)
+        item, list_type, list_name = list_remove
+        return SkybridgeIntent(domain="lists", action="remove_item", item_text=item, list_type=list_type,
+                               list_name=list_name)
+    list_contains = _list_contains_from_text(text)
+    if list_contains:
+        item, list_type, list_name = list_contains
+        return SkybridgeIntent(domain="lists", action="contains", item_text=item, list_type=list_type,
+                               list_name=list_name)
     calendar_delete = _calendar_delete_from_text(raw_message, context)
     if calendar_delete:
         return SkybridgeIntent(domain="calendar", action="delete_event", target_text=calendar_delete)
@@ -1427,7 +1562,7 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
     # fallbacks. Household-shared like clock/music — no identity gate.
     smart_home_intent = _smart_home_followup_intent(raw_message, context) or _classify_smart_home(text)
     if smart_home_intent is not None:
-        return smart_home_intent
+        return _unless_delayed(smart_home_intent, text)
     if (
         " clock " in text
         or re.search(r"\bwhat(?:'s| is)?\s+the\s+time\b", text)
@@ -1442,23 +1577,11 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
     # A command-shaped WRITE ("add fix the gate to my to-do list") that no parser above claimed is never answered with a
     # list SHOW (live 2026-10-12: "Lists has 2 items." and nothing added): it falls through to the brain instead.
     write_led = _command_shaped(raw_message, _WRITE_VERB_RE) is not None
-    if not write_led and any(term in text for term in (" list", " lists", " shopping", " groceries", " grocery", " tasks", " todos")):
+    if not write_led and _LIST_KEYWORD_RE.search(text):
         list_type = _list_type_from_text(text)
         action = "overview" if re.search(r"\blists\b", text) else "show"
         return SkybridgeIntent(domain="lists", action=action, list_type=list_type)
-    if not write_led and any(
-        term in text
-        for term in (
-            " calendar",
-            " schedule",
-            " events",
-            " appointments",
-            " agenda",
-            " happening",
-            " what's on",
-            " whats on",
-        )
-    ):
+    if not write_led and _CALENDAR_KEYWORD_RE.search(text):
         today = _today()
         parsed_range = _calendar_date_from_text(text, today)
         if parsed_range is not None:
@@ -1501,6 +1624,12 @@ def classify_skybridge_intent(message: str, context: dict[str, Any] | None = Non
         query, people_ctx, circle = _people_filters_from_text(text)
         if query:
             return SkybridgeIntent(domain="people", action="show", query=query, context=people_ctx, circle=circle)
+    if _filler_retry:
+        # Nothing matched the words as said: try once more without politeness / wake words ("could you please ...
+        # for me"), like HA's skip words. Only ever ADDS a claim - a phrase that already matched is untouched.
+        bare = conversation_cues.strip_command_filler(raw_message)
+        if bare != raw_message.strip():
+            return classify_skybridge_intent(bare, context, _filler_retry=False)
     return None
 
 
@@ -1814,6 +1943,15 @@ async def resolve_skybridge_request(
             and not _vs.skybridge_intent_is_speculation_safe(intent.domain, intent.action)):
         await _vs.await_commit(f"skybridge:{intent.domain}:{intent.action}")
 
+    if intent.action == "delayed":
+        # Nothing is scheduled and nothing runs now: no scheduler for device commands exists yet.
+        return _attach_skybridge_context({
+            "handled": True, "intent": _intent_dict(intent), "spoken_summary": DELAYED_COMMAND_REPLY,
+            "cards": [_status_card("Not scheduled", "Zoe can't run a command later yet. Nothing was changed.",
+                                   status="Not scheduled")],
+            "actions": [],
+        })
+
     if intent.domain == "clock":
         return _attach_skybridge_context(_resolve_clock(intent))
 
@@ -1910,10 +2048,32 @@ _MUSIC_CTX = re.compile(r"\b(music|song|songs|track|tune|tunes|album|playlist|ar
 _MUSIC_STOPWORDS = re.compile(r"\b(play\s+(?:a\s+)?(?:game|along|nice|fair|pretend|dead|catch))\b")
 
 
+# Actions that CHANGE a device or playback right now. A command for later ("turn off the lights in 5 minutes", "stop
+# the music in half an hour") used to run immediately - 14 of 14 of HA's delayed-command sentences did (2026-10-14).
+_ACTUATING_ACTIONS = frozenset({
+    "turn_on", "turn_off", "set_brightness", "activate_scene",
+    "play", "pause", "resume", "next", "previous", "stop", "volume_up", "volume_down", "transfer", "dont_stop",
+})
+DELAYED_COMMAND_REPLY = command_shapes.DELAYED_COMMAND_REPLY
+
+
+def _unless_delayed(intent: "SkybridgeIntent", text: str, *, strict: bool = False) -> "SkybridgeIntent":
+    """An actuation for LATER becomes ``<domain>/delayed``: answered honestly, never run now. A tile tap (exact
+    entity id) is always now. ``strict`` (music) counts only an explicit amount or clock time, because a title may
+    hold "tonight" or "tomorrow"."""
+    if (intent.action in _ACTUATING_ACTIONS and not intent.entity_id and not intent.entity_ids
+            and command_shapes.delayed_command(text, strict=strict)):
+        return SkybridgeIntent(domain=intent.domain, action="delayed", query=intent.query)
+    return intent
+
+
 def _classify_music(text: str) -> "SkybridgeIntent | None":
     """Classify a music command for the Music Assistant bridge. `text` is the
     lowercased message padded with surrounding spaces."""
     if _MUSIC_STOPWORDS.search(text):
+        return None
+    # "play corner light off": a DEVICE whose name has "play" in it, switched on/off - smart home, not music.
+    if _HOME_DEVICE_NOUN.search(text) and re.search(r"\b(?:on|off)\s*$", text):
         return None
     # Setup: "add music" / "add/connect <service>" / "music setup".
     m = re.search(r"\b(?:add|connect|set ?up|link)\s+(?:my\s+|a\s+|the\s+)?(spotify|youtube music|ytmusic|tidal|qobuz|deezer|radio|music service|music)\b", text)
@@ -1964,7 +2124,10 @@ def _classify_music(text: str) -> "SkybridgeIntent | None":
             return SkybridgeIntent(domain="music", action="play", query=seed, radio_mode=True)
     # Play X — "play some jazz", "put on the beatles", "play the news".
     m = re.search(r"\b(?:play|put on|start playing|listen to)\s+(?:some\s+|the\s+|a\s+)?(.+?)\s*$", text)
-    if m and (has_ctx or re.search(r"\b(play|put on|listen to)\b", text)):
+    # The play verb must OPEN the command: "turn on the kitchen play corner lights" names a DEVICE with "play" in it
+    # (HA's corpus: 28 such device commands started music instead).
+    if m and _command_shaped(text, r"play|put\s+on|start\s+playing|listen\s+to") is not None and (
+            has_ctx or re.search(r"\b(play|put on|listen to)\b", text)):
         query = m.group(1).strip()
         # "play music" / "play some music" with no real target is still a PLAY
         # (resume the queue or start the house default) — routing it to status
@@ -2024,6 +2187,7 @@ def _smart_home_followup_intent(raw_message: str, context: dict[str, Any] | None
 # device. A control verb ("turn on") is only treated as smart_home when paired
 # with one of these, so "turn on charm" / "turn off the news" never steal it.
 _HOME_DEVICE_NOUN = re.compile(r"\b(lights?|lamps?|switch(?:es)?|plugs?|outlets?|fans?)\b")
+_NOT_BRIGHTNESS_RE = re.compile(r"\b(?:speed|position|volume|temperature|temp|colou?r|humidity|mode)\b")
 
 
 def _classify_smart_home(text: str) -> "SkybridgeIntent | None":
@@ -2071,7 +2235,8 @@ def _classify_smart_home(text: str) -> "SkybridgeIntent | None":
     # Brightness: "dim the kitchen lamp to 40%", "set the lights to 80 percent".
     # (No trailing \b after % — a "%" before a space is not a word boundary.)
     m = re.search(r"\b(?:dim|set|turn|put)\s+(?:the\s+)?(.+?)\s+to\s+(\d{1,3})\s*(?:%|percent)", text)
-    if m and has_device:
+    # A percentage of something that is NOT brightness ("fan speed to 50%", "blind position to 30%") is not a dim.
+    if m and has_device and not _NOT_BRIGHTNESS_RE.search(m.group(1)):
         pct = max(0, min(100, int(m.group(2))))
         return SkybridgeIntent(domain="smart_home", action="set_brightness", query=_clean_device(m.group(1)), duration_seconds=pct)
     if has_device and re.search(r"\bdim(?:mer)?\b", text):
@@ -2881,12 +3046,18 @@ async def _resolve_lists(intent: SkybridgeIntent, user_id: str, db: Any) -> dict
 
     list_type = intent.list_type
     selected = None if intent.action == "overview" else _select_list(lists, list_type, intent.list_name)
+    contains_answer = ""
+    if intent.action == "contains":
+        contains_answer, found_in = _list_contains_answer(intent, lists, items_by_list)
+        selected = found_in or selected
     items = selected.get("items", []) if selected else []
     list_name = selected.get("name") if selected else (list_type.title() if list_type else "Lists")
     summary_count = len(items) if selected else sum(item.get("item_count", 0) for item in lists)
     open_count = selected.get("open_count", 0) if selected else sum(item.get("open_count", 0) for item in lists)
     completed_count = selected.get("completed_count", 0) if selected else sum(item.get("completed_count", 0) for item in lists)
-    if selected and items:
+    if contains_answer:
+        spoken = contains_answer
+    elif selected and items:
         # Readback: enumerate the items so the voice half names them, not just a count.
         spoken = _enumerate_items_for_speech(list_name, items)
     else:
@@ -2911,6 +3082,33 @@ async def _resolve_lists(intent: SkybridgeIntent, user_id: str, db: Any) -> dict
         "spoken_summary": spoken,
         "cards": [card_service.convert_emit(card, target_major=1)],
     }
+
+
+def _list_contains_answer(
+    intent: SkybridgeIntent, lists: list[dict[str, Any]], items_by_list: dict[Any, list[dict[str, Any]]]
+) -> tuple[str, dict[str, Any] | None]:
+    """"Is milk on the list?" answered YES/NO first, naming the list (and the item as stored), never a list read-out.
+    A named or typed list is the only one searched; a plain "the list" searches every list the user can see."""
+    wanted = intent.item_text
+    if intent.list_type or intent.list_name:
+        scope = [lst for lst in [_select_list(lists, intent.list_type, intent.list_name)] if lst]
+        if not scope:
+            return "I couldn't find that list.", None
+    else:
+        scope = lists
+    for lst in scope:
+        hits = _match_list_items_by_text(items_by_list.get(lst["id"], []), wanted)
+        if not hits:
+            continue
+        open_hits = [h for h in hits if not h.get("completed")]
+        name = str(lst.get("name") or "")
+        if open_hits:
+            return f"Yes, {open_hits[0].get('text') or wanted} is on your {name} list.", lst
+        text = str(hits[0].get("text") or wanted)
+        return f"{text[:1].upper()}{text[1:]} is on your {name} list, but it's already ticked off.", lst
+    if len(scope) == 1:
+        return f"No, {wanted} isn't on your {scope[0].get('name')} list.", scope[0]
+    return f"No, {wanted} isn't on any of your lists.", None
 
 
 async def _ensure_default_lists(user_id: str, db: Any) -> None:
@@ -3242,7 +3440,7 @@ async def _find_list_for_remove(intent: SkybridgeIntent, user_id: str, db: Any, 
     """Locate an existing list (never create) for a removal, mirroring _find_or_create_list's lookups."""
     hinted_id, hinted_type = _context_list_hint(context)
     list_type = intent.list_type or hinted_type or "shopping"
-    if hinted_id:
+    if hinted_id and not intent.list_name:
         rows = await db.fetch(
             """
             SELECT id, name, list_type
@@ -3257,6 +3455,26 @@ async def _find_list_for_remove(intent: SkybridgeIntent, user_id: str, db: Any, 
         if rows:
             row = dict(rows[0])
             return str(row["id"]), str(row.get("list_type") or list_type)
+    if intent.list_name:
+        # A list the user NAMED ("my chores list"): that list or none - never the default shopping list instead.
+        rows = await db.fetch(
+            """
+            SELECT id, name, list_type
+            FROM lists
+            WHERE deleted = 0 AND (lower(name) = lower($2) OR lower(name) = lower($2) || ' list')
+              AND (visibility = 'family' OR user_id = $1)
+            ORDER BY
+              CASE WHEN user_id = $1 THEN 0 ELSE 1 END,
+              updated_at DESC
+            LIMIT 1
+            """,
+            user_id,
+            intent.list_name.strip(),
+        )
+        if not rows:
+            return None
+        row = dict(rows[0])
+        return str(row["id"]), str(row.get("list_type") or list_type)
     rows = await db.fetch(
         """
         SELECT id, name, list_type

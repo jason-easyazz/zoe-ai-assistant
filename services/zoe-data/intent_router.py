@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from fastapi import HTTPException
 
+import command_shapes
 import contacts_conversation as _cc
 from time_utils import today_for_zoe_tz
 from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS
@@ -537,6 +538,10 @@ _SMART_HOME_RE = re.compile(
     re.IGNORECASE,
 )
 
+_SMART_HOME_QUESTION_RE = re.compile(
+    r"^(?:please\s+)?(?:are|is|which|what|how\s+many|do\s+i\s+have|did\s+i\s+leave|have\s+i\s+left)\b", re.IGNORECASE
+)
+
 # === MATH / CALCULATION (ZOE-10) ===
 # Pure arithmetic fast-path — group 1 captures the numeric expression.
 _CALCULATE_RE = re.compile(
@@ -790,6 +795,7 @@ def detect_intent(
     log_miss: bool = True,
     context: "Optional[ConversationContext]" = None,
     user_id: str = "unknown",
+    _filler_retry: bool = True,
 ) -> Optional[Intent]:
     t = _normalize_chat_intent_text(text)
 
@@ -1281,16 +1287,24 @@ def detect_intent(
             return Intent("daily_briefing", {})
 
     # --- SMART HOME LIGHTS (ZOE-9) ---
-    if _SMART_HOME_RE.search(t):
-        # Determine action
+    # A QUESTION about the lights ("are any lights on") is not a command: it used to switch them ON.
+    if _SMART_HOME_RE.search(t) and not _SMART_HOME_QUESTION_RE.match(t):
+        # Determine action. OFF words are read first: "turn off the lights on the first floor" contains "lights on".
         if re.search(r'\bdim\b', t):
             action = "dim"
         elif re.search(r'\bbrighten\b', t):
             action = "brighten"
+        elif re.search(r'\b(?:turn|switch|flip|shut)\s+off\b|\b(?:turn|switch|flip|shut)\s+.+\boff\s*$'
+                       r'|\bdeactivate\b|\blights?\s+off\b', t):
+            action = "turn_off"
         elif re.search(r'\b(?:turn|switch|flip)\s+on\b|\blights?\s+on\b', t):
             action = "turn_on"
         else:
             action = "turn_off"
+        if command_shapes.delayed_command(t):
+            # "turn off the lights in 5 minutes": a command for LATER is never run now (it was, 14 of 14 in HA's
+            # corpus); _execute_smart_home_intent answers it honestly instead.
+            action = "delayed"
         # Attempt to extract a room name
         _room_m = re.search(
             r'\b(bedroom|kitchen|living\s+room|bathroom|lounge|office|'
@@ -1299,6 +1313,12 @@ def detect_intent(
         )
         room = _room_m.group(1).replace(" ", "_") if _room_m else None
         return Intent("smart_home", {"action": action, "entity": "light", "room": room})
+
+    # A change to a RUNNING timer ("add 5 minutes to the timer", "take a minute off the pizza timer", "pause the
+    # timer") has no executor in this module; the Skybridge timer store owns it. The list-add/remove patterns below
+    # used to read it as a list write ("add 1 hour to kitchen timer" -> list_add), so it is claimed by nobody here.
+    if command_shapes.timer_adjust(t) is not None or command_shapes.timer_pause_resume(t) is not None:
+        return None
 
     # --- TIMER CREATE ---
     for pattern in [
@@ -1690,6 +1710,19 @@ def detect_intent(
         if _ctx_name:
             from conversation_context import ConversationContext as _CC  # noqa: F401 (type-check only)
             return Intent(_ctx_name, _ctx_slots or {}, confidence=0.85)
+
+    if _filler_retry:
+        # Nothing matched the words as said: once more without politeness / wake words ("can you remind me to ...",
+        # "could you please turn the lights off for me"), like HA's skip words. The anchored patterns above never see
+        # a lead-in otherwise; a phrase that already matched is untouched.
+        from conversation_cues import strip_command_filler
+
+        bare = strip_command_filler(text)
+        if bare != (text or "").strip():
+            hit = detect_intent(bare, log_miss=False, context=context if not isinstance(context, str) else None,
+                                user_id=user_id, _filler_retry=False)
+            if hit is not None:
+                return hit
 
     if log_miss:
         logger.info("intent_miss: %s", text)
@@ -5905,6 +5938,8 @@ async def _execute_smart_home_intent(intent: Intent, user_id: str) -> Optional[s
     properly (real entity lists, class resolution, room context, ambiguity).
     Delegate instead: one resolver, one behaviour, no invented ids.
     """
+    if (intent.slots or {}).get("action") == "delayed":
+        return command_shapes.DELAYED_COMMAND_REPLY  # nothing runs now, nothing is queued
     try:
         from smart_home_service import resolve_smart_home
 
