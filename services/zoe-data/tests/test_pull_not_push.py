@@ -93,8 +93,10 @@ def _router_model_stays_unloaded(monkeypatch):
         import semantic_router
     except ImportError:          # no numpy here: the router cannot load a model either, so there is nothing to restore
         return
+    # snapshot-and-restore, not a no-op: setting each global to its CURRENT value makes monkeypatch remember it and undo at teardown
     for name in ("_MODEL", "_MATRIX", "_LABELS", "_DOM_IDX", "_HEAD", "_HEAD_FAILED", "_EMBED_CACHE"):
-        monkeypatch.setattr(semantic_router, name, getattr(semantic_router, name))
+        if hasattr(semantic_router, name):       # a renamed global must not turn every test in this file into an error
+            monkeypatch.setattr(semantic_router, name, getattr(semantic_router, name))
 
 
 @pytest.fixture
