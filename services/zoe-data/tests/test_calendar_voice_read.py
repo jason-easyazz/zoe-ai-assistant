@@ -87,10 +87,11 @@ async def test_a_week_read_names_the_day_of_each_event():
 async def test_a_guest_hears_no_title_and_no_count():
     """Negative control of the member reads above: the same rows, no identity."""
     rows = [_event("Therapist")]
-    spoken = (await sky._resolve_calendar(sky.SkybridgeIntent("calendar", "show", "today", None, None), "guest", FakeDb(events=rows)))[
-        "spoken_summary"]
-    assert "Therapist" not in spoken and "1" not in spoken and "event" not in spoken.lower()
-    assert "private" in spoken.lower()
+    for sentinel in ("guest", "voice-guest", "", None):          # every shape of "nobody", not just the two named ones
+        out = await sky._resolve_calendar(sky.SkybridgeIntent("calendar", "show", "today", None, None), sentinel, FakeDb(events=rows))
+        spoken = out["spoken_summary"]
+        assert "Therapist" not in spoken and "1" not in spoken and "event" not in spoken.lower(), sentinel
+        assert "private" in spoken.lower() and out["cards"][0]["content"]["events"] == [], sentinel
     # and through the public entry point a guest is challenged before any row is read
     result = await _read("what's on my calendar?", user="guest", events=rows)
     assert result.get("auth_required") is True and "Therapist" not in str(result)
@@ -188,6 +189,11 @@ def test_the_live_create_parses_to_ten_at_night():
     assert sky.classify_skybridge_intent("schedule a meeting at 7 tonight", None).target_time == "19:00"
     assert sky.classify_skybridge_intent("schedule a meeting for 10 o'clock tomorrow", None).target_time == "10:00"   # control
     assert sky.classify_skybridge_intent("schedule a meeting at 9 am tonight", None).target_time == "09:00"          # explicit wins
+    assert sky.classify_skybridge_intent("schedule a meeting for 11 o'clock tonight", None).target_time == "23:00"
+    # "12 tonight" is midnight (tomorrow's date): not guessed as noon - no create is claimed
+    for text in ("schedule a meeting for 12 o'clock tonight", "schedule a meeting at 12 tonight"):
+        got = sky.classify_skybridge_intent(text, None)
+        assert got is None or got.action != "create_event", text
 
 
 def test_a_low_conf_chat_verdict_does_not_veto_a_parsed_create():

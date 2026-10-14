@@ -1244,6 +1244,8 @@ def _calendar_create_from_text(message: str, context: dict[str, Any] | None) -> 
             hour, minute = 0, "00"
         if 1 <= hour <= 11:
             target_time = f"{hour + 12:02d}:{minute}"
+        elif hour == 12 and not re.search(r"\b(?:noon|midday)\b", raw_time, re.IGNORECASE):
+            return None        # "12 tonight" is midnight, tomorrow's date: not guessed - the turn goes on to the brain
     return (title, target_time) if title and target_time else None
 
 
@@ -3076,7 +3078,7 @@ async def _resolve_calendar(intent: SkybridgeIntent, user_id: str, db: Any) -> d
     start = intent.start_date or today_for_zoe_tz()
     end = intent.end_date or start
     events = []
-    if user_id not in {"guest", "voice-guest"}:
+    if not _is_guest_user(user_id):
         rows = await db.fetch(
             """
             SELECT *
@@ -3102,7 +3104,7 @@ async def _resolve_calendar(intent: SkybridgeIntent, user_id: str, db: Any) -> d
     try:
         import voice_cards
 
-        if user_id in {"guest", "voice-guest"}:
+        if _is_guest_user(user_id):
             spoken = voice_cards.spoken_private() or "That's private. Unlock with your PIN."
         else:
             spoken = voice_cards.spoken_events(
