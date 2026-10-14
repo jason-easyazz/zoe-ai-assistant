@@ -4636,6 +4636,8 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             forecast=bool(intent.slots.get("forecast")),
             advice=str(intent.slots.get("advice") or ""),
             location=str(intent.slots.get("location") or ""),
+            focus=str(intent.slots.get("focus") or ""),
+            day=str(intent.slots.get("day") or ""),
         )
 
     if intent.name == "list_show":
@@ -4905,7 +4907,8 @@ def _spoken_day(raw: str) -> str:
 
 
 async def _execute_weather_direct(user_id: str, forecast: bool = False,
-                                  advice: str = "", location: str = "") -> Optional[str]:
+                                  advice: str = "", location: str = "",
+                                  focus: str = "", day: str = "") -> Optional[str]:
     """Direct weather path used by voice fast-intent execution.
 
     This bypasses mcporter so household voice weather works even if external
@@ -4913,6 +4916,9 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False,
 
     `advice` ("rain"|"warmth") returns a DIRECT yes/no answer to questions like
     "do I need an umbrella" / "should I take a jacket" instead of a forecast dump.
+
+    `focus`/`day` ("high"|"low"|"rain"|"outlook", "today"|"tonight"|"tomorrow") answer
+    "how hot is it going to get today" with the asked-for number FIRST (weather_speech).
 
     `location` is a free-text place the user named ("weather in Perth"). When set
     it is geocoded and used INSTEAD of the user's saved home area; if it can't be
@@ -4927,6 +4933,7 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False,
             _row_to_prefs, _resolve_location, _geocode,
             _get_current, _get_forecast,
         )
+        from weather_speech import WeatherAsk, speak_current, speak_weather
         adhoc = bool(location.strip())
         async with get_db_ctx() as db:
             if adhoc:
@@ -4969,7 +4976,8 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False,
                 today_desc = cur_desc
                 try:
                     f = await _get_forecast(lat, lon)
-                    d0 = (f.get("daily") or [{}])[0]
+                    # forecast["daily"] starts TOMORROW; today's own range is ["today"].
+                    d0 = f.get("today") or {}
                     today_hi = d0.get("high")
                     today_desc = (str(d0.get("description", "")) or cur_desc).lower()
                 except Exception:
@@ -5000,9 +5008,15 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False,
                     return f"Yes, I'd take a jacket{reason} in {city_name}."
                 temp_part = f" — it's around {_say_num(round(ref))} degrees" if ref is not None else ""
                 return f"No, you should be fine without a jacket{temp_part} in {city_name}."
+            if focus:
+                # A specific ask ("how hot is it going to get today"): lead with the
+                # asked-for fact, keep it short - never the multi-day dump below.
+                f = await _get_forecast(lat, lon)
+                return speak_weather(WeatherAsk(focus, day), current, f, city_name)
             if forecast:
                 f = await _get_forecast(lat, lon)
-                daily = f.get("daily", [])[:5]
+                # Three days is already a long spoken reply; five read as a wall of numbers.
+                daily = f.get("daily", [])[:3]
                 if not daily:
                     return f"I couldn't get the forecast for {city_name} right now."
                 lines = [f"Here's the forecast for {city_name}."]
@@ -5014,30 +5028,30 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False,
                     lines.append(f"{day}, a high of {_say_num(hi)} and a low of {_say_num(lo)} degrees, {desc}.")
                 return " ".join(lines)
             temp = current.get("temp")
-            desc = current.get("description", "")
             feels = current.get("feels_like")
             if temp is None:
                 return f"I couldn't get the weather for {city_name} right now."
-            # Speak naturally: "18.3°C (overcast)" → "18 point 3 degrees and overcast".
-            desc_part = f" and {desc}" if desc else ""
-            # Whole degrees for speech: "17 degrees", never "17 point 1 degrees"
-            # — more natural spoken, and it makes the reply stitchable by the
+            # Whole degrees for speech: "17 degrees", never "17 point 1 degrees" -
+            # more natural spoken, and it makes the reply stitchable by the
             # voice segment cache (voice_stitch works on the integer vocab).
-            raw_temp = temp
-            try:
-                temp = round(float(temp))
-            except (TypeError, ValueError):
-                pass
-            msg = f"It's {_say_num(temp)} degrees{desc_part} in {city_name}"
+            feels_whole = None
             if feels is not None:
                 try:
-                    # Gate on the REAL delta, not the rounded speech value —
+                    # Gate on the REAL delta, not the rounded speech value -
                     # rounding must not change whether feels-like is mentioned.
-                    if abs(float(feels) - float(raw_temp)) > 2:
-                        msg += f", and it feels like {_say_num(round(float(feels)))} degrees"
+                    if abs(float(feels) - float(temp)) > 2:
+                        feels_whole = round(float(feels))
                 except Exception:
                     pass
-            return msg + "."
+            # Today's high rides on the plain current reading ("..., with a top of 27
+            # today") when the forecast has it; a failed/cold forecast just omits it.
+            today_high = None
+            try:
+                t = (await _get_forecast(lat, lon)).get("today")
+                today_high = round(float(t["high"])) if isinstance(t, dict) and t.get("high") is not None else None
+            except Exception:
+                pass
+            return speak_current(city_name, current, today_high=today_high, feels=feels_whole)
     except Exception as exc:
         logger.warning("direct weather intent failed: %s", exc)
         return None

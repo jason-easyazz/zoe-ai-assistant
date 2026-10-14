@@ -98,7 +98,6 @@ def _voice_app(monkeypatch):
     monkeypatch.setattr(vt, "_broadcast_skybridge_ui", nothing)
     monkeypatch.setattr(vt, "synthesize", synthesize)
     monkeypatch.setattr(vt, "_resolve_recent_panel_session_user", nothing)
-    monkeypatch.setattr(vt, "_resolve_panel_default_user", nothing)
     monkeypatch.setattr(vt, "_schedule_voice_chat_save", nothing)
     monkeypatch.setattr(vt, "_VOICE_SESSIONS", {})
     # the extractors BEHIND the hook are not under test: stop the memory passes right after the struggle hook
