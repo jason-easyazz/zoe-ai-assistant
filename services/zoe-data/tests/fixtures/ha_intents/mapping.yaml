@@ -60,7 +60,9 @@ writes:
   - "ir:people_create*"
   - "ir:people_introduce*"
   - "ir:transaction_create*"
-  - "ir:smart_home*"
+  - "ir:smart_home/turn_*"
+  - "ir:smart_home/dim"
+  - "ir:smart_home/brighten"
   - "ir:music_play*"
   - "ir:music_control*"
   - "ir:music_volume*"
@@ -130,7 +132,8 @@ labels:
     accept: ["sky:lists/complete_item"]
     forbid: ["sky:lists/show", "sky:lists/overview"]
   HassShoppingListCompleteItem:
-    accept: ["sky:lists/complete_item"]
+    # HA's shopping-list "complete" includes "remove/delete X on my shopping list": for Zoe a remove is right there.
+    accept: ["sky:lists/complete_item", "sky:lists/remove_item", "ir:list_remove*"]
     forbid: ["sky:lists/show", "sky:lists/overview"]
   HassListRemoveItem:
     accept: ["sky:lists/remove_item", "ir:list_remove*"]

@@ -14,7 +14,11 @@ against ``fixtures/ha_intents/mapping.yaml``:
 * forbidden    a wrong claim the mapping names as a known hazard for that label
 * miss         no claim; the turn falls through to the router head / brain
 
-It RATCHETS against ``fixtures/ha_intents/baseline.json``, per label and in total:
+Two LANES are scored separately: ``cascade`` (the voice order above) and ``intent_router``
+(``detect_intent`` alone - the chat keyword lanes, ``fast_tiers`` Tier 0 and the voice
+public-intent short-circuit after a Skybridge router veto all reach it without Skybridge).
+
+It RATCHETS against ``fixtures/ha_intents/baseline.json``, per lane, per label and in total:
 ``correct`` may only go up, ``wrong``/``wrong_write``/``forbidden`` may only go down.
 A change that IMPROVES a number must re-baseline in the same PR (otherwise the gain is
 not locked in and could silently regress later):
@@ -85,8 +89,15 @@ def zoe_claim(text: str) -> Claim | None:
     """Zoe's deterministic claim for ``text``, in voice-cascade order."""
     sky = skybridge_service.classify_skybridge_intent(text)
     if sky is not None:
-        secs = int(sky.duration_seconds) if sky.domain == "timer" and sky.action == "create" else None
+        secs = int(sky.duration_seconds) if sky.domain == "timer" and sky.duration_seconds else None
         return Claim(f"sky:{sky.domain}/{sky.action}", secs)
+    return ir_claim(text)
+
+
+def ir_claim(text: str) -> Claim | None:
+    """``intent_router.detect_intent`` ALONE. Lanes reach it without Skybridge: the voice
+    public-intent short-circuit after a Skybridge router veto, the chat keyword lanes and
+    ``fast_tiers`` Tier 0 - so a wrong write here is live even when Skybridge is right."""
     intent = intent_router.detect_intent(text, log_miss=False)
     if intent is None:
         return None
@@ -99,6 +110,10 @@ def zoe_claim(text: str) -> Claim | None:
         except (TypeError, ValueError):
             secs = None
     return Claim(tag, secs)
+
+
+#: Each lane is scored and ratcheted on its own. ``cascade`` is the voice order; ``intent_router`` is the matcher alone.
+LANES: dict[str, Callable[[str], "Claim | None"]] = {"cascade": zoe_claim, "intent_router": ir_claim}
 
 
 def _matches(tag: str, globs: list[str]) -> bool:
@@ -148,43 +163,47 @@ def as_baseline(s: Score) -> dict:
     return {"total": pick(s.totals()), "labels": {k: pick(v) for k, v in sorted(s.labels.items())}}
 
 
-def dump_baseline(b: dict) -> str:
+def dump_baseline(lanes: dict[str, dict]) -> str:
     """One line per label, so a baseline diff reads label by label."""
-    rows = [f"    {json.dumps(k)}: {json.dumps(v, sort_keys=True)}" for k, v in sorted(b["labels"].items())]
-    return ('{\n  "total": ' + json.dumps(b["total"], sort_keys=True) + ',\n  "labels": {\n'
-            + ",\n".join(rows) + "\n  }\n}\n")
+    parts = []
+    for lane, b in sorted(lanes.items()):
+        rows = [f"      {json.dumps(k)}: {json.dumps(v, sort_keys=True)}" for k, v in sorted(b["labels"].items())]
+        parts.append(f'  {json.dumps(lane)}: {{\n    "total": {json.dumps(b["total"], sort_keys=True)},\n'
+                     '    "labels": {\n' + ",\n".join(rows) + "\n    }\n  }")
+    return "{\n" + ",\n".join(parts) + "\n}\n"
 
 
-def ratchet_problems(current: dict, baseline: dict) -> tuple[list[str], list[str]]:
-    """(regressions, improvements) of ``current`` against ``baseline``."""
+def ratchet_problems(current: dict, baseline: dict, lane: str = "") -> tuple[list[str], list[str]]:
+    """(regressions, improvements) of one lane's ``current`` against its ``baseline``."""
     regress: list[str] = []
     improve: list[str] = []
+    pre = f"[{lane}] " if lane else ""
     scopes = [("TOTAL", current["total"], baseline["total"])]
     for label in sorted(set(current["labels"]) | set(baseline["labels"])):
         scopes.append((label, current["labels"].get(label), baseline["labels"].get(label)))
     for name, cur, base in scopes:
         if cur is None or base is None or cur["n"] != base["n"]:
-            regress.append(f"{name}: sentence set changed (now {cur and cur['n']}, baseline {base and base['n']})"
+            regress.append(f"{pre}{name}: sentence set changed (now {cur and cur['n']}, baseline {base and base['n']})"
                            " - regenerate + re-baseline together")
             continue
         for m in UP_ONLY:
             if cur[m] < base[m]:
-                regress.append(f"{name}: {m} {base[m]} -> {cur[m]}")
+                regress.append(f"{pre}{name}: {m} {base[m]} -> {cur[m]}")
             elif cur[m] > base[m]:
-                improve.append(f"{name}: {m} {base[m]} -> {cur[m]}")
+                improve.append(f"{pre}{name}: {m} {base[m]} -> {cur[m]}")
         for m in DOWN_ONLY:
             if cur[m] > base[m]:
-                regress.append(f"{name}: {m} {base[m]} -> {cur[m]}")
+                regress.append(f"{pre}{name}: {m} {base[m]} -> {cur[m]}")
             elif cur[m] < base[m]:
-                improve.append(f"{name}: {m} {base[m]} -> {cur[m]}")
+                improve.append(f"{pre}{name}: {m} {base[m]} -> {cur[m]}")
     return regress, improve
 
 
-def report(s: Score) -> str:
+def report(s: Score, lane: str) -> str:
     t = s.totals()
     n = max(1, t["n"])
     lines = [
-        f"HA/OVOS phrasing corpus: {t['n']} sentences | correct {t['correct']} ({100 * t['correct'] / n:.1f}%)"
+        f"[{lane}] HA/OVOS phrasing corpus: {t['n']} sentences | correct {t['correct']} ({100 * t['correct'] / n:.1f}%)"
         f" | wrong {t['wrong']} ({100 * t['wrong'] / n:.1f}%) | wrong_write {t['wrong_write']}"
         f" | forbidden {t['forbidden']} | miss {t['miss']}",
         f"{'label':38} {'n':>5} {'ok':>5} {'wrong':>5} {'w_wr':>5} {'forb':>5} {'miss':>5}",
@@ -220,9 +239,14 @@ def mapping() -> dict:
 
 
 @pytest.fixture(scope="module")
-def zoe_score(rows, mapping) -> Score:
+def lane_scores(rows, mapping) -> dict[str, Score]:
     with _quiet_logs():
-        return score(rows, mapping)
+        return {lane: score(rows, mapping, fn) for lane, fn in LANES.items()}
+
+
+@pytest.fixture(scope="module")
+def zoe_score(lane_scores) -> Score:
+    return lane_scores["cascade"]
 
 
 # ── corpus integrity ────────────────────────────────────────────────────────
@@ -268,21 +292,30 @@ def test_corpus_is_free_of_duplicates_within_a_source(rows):
 # ── the ratchet ─────────────────────────────────────────────────────────────
 
 
-def test_phrasing_corpus_ratchet(zoe_score):
-    current = as_baseline(zoe_score)
-    print("\n" + report(zoe_score))
+def test_phrasing_corpus_ratchet(lane_scores):
+    current = {lane: as_baseline(s) for lane, s in lane_scores.items()}
+    for lane, s in lane_scores.items():
+        print("\n" + report(s, lane))
     if os.environ.get("ZOE_HA_CORPUS_REBASELINE") == "1":
         BASELINE.write_text(dump_baseline(current), encoding="utf-8")
         pytest.skip(f"baseline rewritten: {BASELINE}")
     baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
-    regress, improve = ratchet_problems(current, baseline)
-    if regress:
-        detail = []
-        for line in regress:
-            label = line.split(":", 1)[0]
+    assert set(baseline) == set(LANES), "baseline lanes differ from the test's lanes - re-baseline"
+    regress: list[str] = []
+    improve: list[str] = []
+    detail: list[str] = []
+    for lane in LANES:
+        r, i = ratchet_problems(current[lane], baseline[lane], lane)
+        regress += r
+        improve += i
+        for line in r:
+            label = line.split("] ", 1)[1].split(":", 1)[0]
             for metric in ("wrong_write", "forbidden", "wrong"):
-                for ex in zoe_score.examples.get((label, metric), [])[:3]:
-                    detail.append(f"    {label} {metric}: {ex}")
+                shown = lane_scores[lane].examples.get((label, metric), [])[:3]
+                detail += [f"    [{lane}] {label} {metric}: {ex}" for ex in shown]
+                if shown:
+                    break
+    if regress:
         pytest.fail("phrasing corpus REGRESSED:\n  " + "\n  ".join(regress) + "\n" + "\n".join(detail))
     if improve:
         pytest.fail(
