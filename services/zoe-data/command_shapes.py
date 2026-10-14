@@ -148,7 +148,7 @@ class TimerTarget:
 
 @dataclass(frozen=True)
 class TimerAdjust:
-    direction: str  # "increase" | "decrease"
+    direction: str  # "increase" | "decrease" | "set" (seconds = the new time LEFT)
     seconds: int  # 0 = a change with no amount the words give ("add some time to the timer"): ask, never guess
     target: TimerTarget
 
@@ -215,6 +215,12 @@ def timer_adjust(text: str) -> Optional[TimerAdjust]:
     if m and not re.search(r"\b(?:set|start|create|new)\b", t):
         secs = _amount_seconds(m.group("amt"))
         return TimerAdjust("increase", secs, timer_target(m.group("tgt")))
+    # "increase the timer to 10 minutes" / "reduce the pasta timer to 5 minutes": a NEW remaining time for a running
+    # timer (direction "set"), never a second timer.
+    m = re.search(rf"\b(?:increase|extend|lengthen|raise|decrease|reduce|shorten|lower|cut|change|adjust|reset)\b"
+                  rf"(?P<tgt>.*?{_TIMER}.*?)\b(?:to|so\s+it\s+has)\b(?P<amt>.+)$", t)
+    if m and _amount_seconds(m.group("amt")) > 0:
+        return TimerAdjust("set", _amount_seconds(m.group("amt")), timer_target(m.group("tgt")))
     m = re.search(rf"\b(?P<dir>extend|lengthen|shorten)\b(?P<tgt>.*{_TIMER}.*)$", t)
     if m:
         return TimerAdjust("decrease" if m.group("dir") == "shorten" else "increase", 0, timer_target(m.group("tgt")))
@@ -273,6 +279,7 @@ _AMOUNT_WORD = (
 # BOUNDED repetition: an unbounded "(word[\s-]+)+" over overlapping alternatives ("twenty five" / "twenty") is
 # exponential on a looping transcript.
 _AMOUNT = rf"(?:another\s+|an?\s+extra\s+)?{_AMOUNT_WORD}(?:[\s-]+{_AMOUNT_WORD}){{0,3}}[\s-]+(?:and\s+a\s+half\s+)?(?:{UNIT})"
+_HOUR_WORD = r"(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|noon|midnight)"
 _CLOCK = r"\d{1,2}(?::\d{2})?\s*(?:a\.?\s?m\.?|p\.?\s?m\.?|o'?\s?clock)|\d{1,2}:\d{2}|noon|midnight"
 # Strict: an explicit wait or clock time ("in 5 minutes", "after an hour", "at 10pm"). NOT "for 20 minutes": that is
 # a command for NOW (play white noise for 8 hours), it just lasts.
@@ -281,6 +288,11 @@ _DELAY_STRICT_RE = re.compile(
     rf"|\bafter\s+(?:{_AMOUNT})\b"
     rf"|\b(?:at|by|until|till)\s+(?:{_CLOCK})(?!\s*(?:%|percent|per\s*cent))\b"
     rf"|\bat\s+\d{{1,2}}\s*$"
+    # spoken clock times ("at seven", "at seven thirty", "at half past six", "at quarter to nine", "at ten pm")
+    rf"|\bat\s+(?:half\s+past|(?:a\s+)?quarter\s+(?:past|to)|\w+\s+(?:past|to))\s+{_HOUR_WORD}\b"
+    rf"|\bat\s+{_HOUR_WORD}(?:\s+(?:o'?\s?clock|thirty|fifteen|forty[\s-]five|oh\s+\w+|twenty(?:[\s-]\w+)?|ten|five))?"
+    r"(?:\s*(?:a\.?\s?m\.?|p\.?\s?m\.?|in\s+the\s+(?:morning|evening|afternoon)|tonight))?\s*$"
+    rf"|\bat\s+{_HOUR_WORD}(?:\s+\w+)?\s*(?:a\.?\s?m\.?|p\.?\s?m\.?|o'?\s?clock)\b"
 )
 # Loose adds day words and conditions ("tonight", "tomorrow", "when I get home", "every morning"), read only in the
 # COMMAND's own clause ("turn off the lights, see you tomorrow" is a command for now). Device commands only: a song

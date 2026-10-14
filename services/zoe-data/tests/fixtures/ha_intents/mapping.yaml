@@ -26,6 +26,7 @@ writes:
   - "sky:timer/cancel"
   - "sky:timer/increase"
   - "sky:timer/decrease"
+  - "sky:timer/set"
   - "sky:lists/add_item"
   - "sky:lists/complete_item"
   - "sky:lists/remove_item"

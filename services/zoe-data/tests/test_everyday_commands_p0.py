@@ -630,3 +630,38 @@ def test_a_qualified_quantifier_cancels_only_what_it_names(owner, text, survivor
 )
 def test_quarter_hour_delays_are_not_run_now(text):
     assert _claim(text) == ("smart_home", "delayed"), text
+
+
+@pytest.mark.parametrize(
+    "text,seconds,label",
+    [("increase the timer to 10 minutes", 600, ""), ("reduce the pasta timer to 5 minutes", 300, "Pasta")],
+)
+def test_a_set_to_change_moves_the_running_timer_and_never_creates(owner, text, seconds, label):
+    sky._timers.create(owner, "Pasta", 420)
+    i = sky.classify_skybridge_intent(text)
+    assert (i.action, i.duration_seconds, i.title) == ("set", seconds, label), text
+    out = sky._resolve_timer(i, owner)
+    timers = sky._timers.list(owner)
+    assert len(timers) == 1 and timers[0]["expires_at"] - time.time() == pytest.approx(seconds, abs=2)
+    assert out["spoken_summary"].startswith("Your Pasta timer now has")
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["turn off the lights at seven", "turn off the lights at seven thirty", "turn on the porch light at half past six",
+     "switch off the fan at ten pm"],
+)
+def test_spoken_clock_times_are_delays(text):
+    assert _claim(text)[1] == "delayed", text
+
+
+def test_spoken_clock_negatives_still_run_now():
+    assert _claim("turn on the lights at one end of the room") == ("smart_home", "turn_on")
+
+
+@pytest.mark.parametrize("text", ["cancel every other timer", "cancel every second timer"])
+def test_ordinal_subsets_never_cancel_everything(owner, text):
+    for label, secs in (("Pasta", 600), ("Eggs", 300), ("Rice", 900)):
+        sky._timers.create(owner, label, secs)
+    sky._resolve_timer(sky.classify_skybridge_intent(text), owner)
+    assert len(sky._timers.list(owner)) == 3, text

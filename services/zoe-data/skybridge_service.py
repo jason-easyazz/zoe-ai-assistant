@@ -348,6 +348,12 @@ def _resolve_timer_change(intent: SkybridgeIntent, owner: str) -> dict[str, Any]
     if delta <= 0:  # "add some time to the timer": no amount in the words - ask, never guess one
         verb = "add to" if intent.action == "increase" else "take off"
         return _timer_reply(intent, owner, f"How much time should I {verb} your {named}timer?")
+    if intent.action == "set":  # "reduce the timer to 5 minutes": the new time LEFT
+        if delta > MAX_TIMER_SECONDS:
+            return _timer_reply(intent, owner, "That would take the timer past 24 hours, so I left it alone.")
+        _timers.adjust(owner, target["timer_id"], int(round(delta - remaining)))
+        return _timer_reply(intent, owner, f"Your {named}timer now has {_format_duration(delta)} left.",
+                            timer_adjusted_id=target["timer_id"])
     if intent.action == "decrease":
         if delta >= remaining:
             return _timer_reply(intent, owner, f"Your {named}timer only has {_format_duration(remaining)} left, "
@@ -367,7 +373,7 @@ def _resolve_timer_change(intent: SkybridgeIntent, owner: str) -> dict[str, Any]
 def _resolve_timer(intent: SkybridgeIntent, user_id: str) -> dict[str, Any]:
     owner = (user_id or "guest")
 
-    if intent.action in ("increase", "decrease", "pause", "resume"):
+    if intent.action in ("increase", "decrease", "set", "pause", "resume"):
         return _resolve_timer_change(intent, owner)
 
     if intent.action == "cancel":
@@ -1560,7 +1566,9 @@ def classify_skybridge_intent(
                 qualifier = re.sub(r"\s+in\s+(?:the\s+|my\s+|our\s+)?[a-z]+(?:\s+[a-z]+)?\s*$", "", rest)
                 qualifier = re.sub(r"\b(?:all|every|both|of|the|my|our|these|those)\b", " ", qualifier)
                 if re.search(r"\b(?:than|longer|shorter|over|under|more|less|that|which|with|without|before|after"
-                             r"|left|remaining|almost|nearly|done|finished|expired)\b", qualifier):
+                             r"|left|remaining|almost|nearly|done|finished|expired"
+                             r"|other|first|second|third|fourth|last|next|rest|alternate|odd|even|older|newer"
+                             r"|oldest|newest)\b", qualifier):
                     # "every timer longer than 5 minutes": a condition the matcher cannot evaluate - read, not delete.
                     return SkybridgeIntent(domain="timer", action="status")
                 target = command_shapes.timer_target(" ".join(qualifier.split()) or "timers")
@@ -3641,7 +3649,7 @@ async def _resolve_list_remove_item(intent: SkybridgeIntent, user_id: str, db: A
     matches = _match_list_items_by_text(items, intent.item_text)
     if len(matches) != 1:
         # Ambiguity rule: never delete the wrong item. Ask for clarification.
-        refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type), user_id, db)
+        refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type, list_name=intent.list_name), user_id, db)
         if not matches:
             body = f"I could not find \"{intent.item_text}\" on that list. Say the exact item to remove."
             spoken = f"I could not find {intent.item_text} on that list."
@@ -3664,7 +3672,7 @@ async def _resolve_list_remove_item(intent: SkybridgeIntent, user_id: str, db: A
         list_id,
     )
     if _affected_rows(remove_result) == 0:
-        refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type), user_id, db)
+        refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type, list_name=intent.list_name), user_id, db)
         refreshed["intent"] = {"domain": "lists", "action": "remove_item", "list_type": list_type}
         refreshed["spoken_summary"] = "I could not remove that item."
         refreshed["cards"] = [_status_card("I could not remove that item", "The list item is no longer available. Show your lists again to confirm.")] + list(refreshed.get("cards") or [])
@@ -3672,7 +3680,7 @@ async def _resolve_list_remove_item(intent: SkybridgeIntent, user_id: str, db: A
         return refreshed
     await _maybe_commit(db)
     item_text = str(target_item.get("text") or intent.item_text)
-    refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type), user_id, db)
+    refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type, list_name=intent.list_name), user_id, db)
     refreshed["intent"] = {"domain": "lists", "action": "remove_item", "list_type": list_type, "item_id": item_id}
     refreshed["spoken_summary"] = f"Removed {item_text} from the {list_type} list."
     refreshed["actions"] = [{"type": "deleted", "domain": "lists", "id": item_id, "list_id": list_id}]
@@ -3721,7 +3729,7 @@ async def _resolve_list_complete_item(intent: SkybridgeIntent, user_id: str, db:
     matches = _match_list_items_by_text(items, intent.item_text)
     if len(matches) != 1:
         # Ambiguity rule: never tick the wrong item. Ask instead of guessing.
-        refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type), user_id, db)
+        refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type, list_name=intent.list_name), user_id, db)
         if not matches:
             body = f"I could not find \"{intent.item_text}\" on that list. Say the exact item."
             spoken = f"I could not find {intent.item_text} on that list."
@@ -3750,7 +3758,7 @@ async def _resolve_list_complete_item(intent: SkybridgeIntent, user_id: str, db:
         list_id,
     )
     if _affected_rows(update_result) == 0:
-        refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type), user_id, db)
+        refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type, list_name=intent.list_name), user_id, db)
         refreshed["intent"] = {"domain": "lists", "action": "complete_item", "list_type": list_type}
         refreshed["spoken_summary"] = "I could not update that item."
         refreshed["cards"] = [_status_card("I could not update that item", "The list item is no longer available. Show your lists again to confirm.")] + list(refreshed.get("cards") or [])
@@ -3758,7 +3766,7 @@ async def _resolve_list_complete_item(intent: SkybridgeIntent, user_id: str, db:
         return refreshed
     await _maybe_commit(db)
     item_text = str(target_item.get("text") or intent.item_text)
-    refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type), user_id, db)
+    refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type, list_name=intent.list_name), user_id, db)
     refreshed["intent"] = {"domain": "lists", "action": "complete_item", "list_type": list_type, "item_id": item_id, "completed": desired}
     refreshed["spoken_summary"] = (
         f"Ticked off {item_text} on the {list_type} list." if desired
