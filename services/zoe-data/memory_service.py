@@ -1997,6 +1997,12 @@ class MemoryService:
                 await night_mind.delete_user(user_id)
             except Exception as exc:
                 raise MemoryServiceError(f"delete_user failed: night-mind erasure failed ({type(exc).__name__})") from exc
+            # ... and the struggle detector's rows (summaries of the same words) - same rule, fail closed
+            try:
+                import struggle_detector
+                await struggle_detector.delete_user(user_id)
+            except Exception as exc:
+                raise MemoryServiceError(f"delete_user failed: struggle-row erasure failed ({type(exc).__name__})") from exc
             # The member's mutes and thread classes (restraint.py): topic stems and class labels, no words, but a
             # right-to-be-forgotten leaves nothing of the person. Best-effort: a store without migration 0040 has none.
             try:

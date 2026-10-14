@@ -367,6 +367,38 @@ def test_a_marker_key_can_never_equal_a_tokenised_text():
     assert asyncio.run(memory_forgotten.pending_labels(USER, ["portrait"])) == []
 
 
+async def _clear_pending_probe(ledger_env, label_for_entity: str) -> tuple[bool, bool, int]:
+    """Ledger holding one forgotten entity + one pending marker, then ``clear_pending`` called with the step label AND a label that
+    spells the entity. Returns (entity row survives, marker survives, rows removed)."""
+    assert await memory_forgotten.add(USER, FRIEND, actor=USER)
+    assert await memory_forgotten.mark_pending(USER, ["portrait"], actor=USER)
+    entity_rows = {k for k, r in ledger_env.rows.items() if r["scope"] != memory_forgotten.SCOPE_PENDING}
+    marker_rows = {k for k, r in ledger_env.rows.items() if r["scope"] == memory_forgotten.SCOPE_PENDING}
+    assert entity_rows and len(marker_rows) == 1
+    removed = await memory_forgotten.clear_pending(USER, ["portrait", label_for_entity])
+    return entity_rows <= set(ledger_env.rows), bool(marker_rows & set(ledger_env.rows)), removed
+
+
+@pytest.mark.asyncio
+async def test_clear_pending_can_only_remove_pending_markers(ledger_env):
+    """``clear_pending`` is the one ledger delete outside ``release`` that the memory-loss scanner allow-lists
+    (test_memory_loss_class._REMOVERS): it must never be able to drop a forgotten entity's shield. Even handed the entity's own
+    name as a 'label', the digest it computes is the pending-prefixed one, so the entity (and its near probes) stay."""
+    entity_kept, marker_kept, removed = await _clear_pending_probe(ledger_env, FRIEND)
+    assert entity_kept and not marker_kept and removed == 1
+    assert memory_forgotten.LedgerPattern(USER, await memory_forgotten.active_hashes(USER)).search(FRIEND)
+
+
+@pytest.mark.asyncio
+async def test_clear_pending_control_an_unprefixed_digest_would_drop_the_shield(monkeypatch, ledger_env):
+    """Break-the-fix control for the test above: with the pipe prefix removed from the marker digest, handing the entity's name
+    as a label DOES delete the entity row - so the test above is the thing that stands between a refactor and a lost shield."""
+    monkeypatch.setattr(memory_forgotten, "_pending_digest",
+                        lambda user_id, label: memory_forgotten._Hasher(user_id).hash(memory_forgotten.normalise_key(label)))
+    entity_kept, _marker_kept, _removed = await _clear_pending_probe(ledger_env, FRIEND)
+    assert not entity_kept, "the control did not bite: an unprefixed marker digest must be able to delete an entity row"
+
+
 @pytest.mark.asyncio
 async def test_a_people_failure_leaves_edges_pending_too_and_the_retry_closes_them(ledger_env):
     """Codex P1 (#2022): when ``people`` fails, ``res.person_ids`` is empty so ``edges`` 'succeeds' with nothing to do; only ``people`` was marked,

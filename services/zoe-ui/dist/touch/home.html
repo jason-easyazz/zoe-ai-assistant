@@ -1165,9 +1165,10 @@
     if(!e.target.closest('#talkBtn'))return;
     if(_convLive)convStop('user');else convStart();
   });
-  // Never leave a hot mic behind if the kiosk reloads or the page is hidden.
-  window.addEventListener('pagehide',function(){convStop('pagehide');});
-  window.addEventListener('beforeunload',function(){convStop('unload');});
+  // Never leave a hot mic behind if the kiosk reloads or the page is torn down. pagehide ONLY, and not for a bfcache entry
+  // (persisted): beforeunload is a REQUEST to leave - a cancelled or handed-off navigation fires it and the page stays, and
+  // stopping the conversation there killed a live one for nothing (the executor's own unload logic resumes the same way).
+  window.addEventListener('pagehide',function(e){if(e&&e.persisted)return;convStop('pagehide');});
   // ---- Ambient return -------------------------------------------------------
   // A screen Zoe opened BY VOICE is a glance, not a destination: when the turn
   // is over it drifts back home so the panel is always the ambient home face.

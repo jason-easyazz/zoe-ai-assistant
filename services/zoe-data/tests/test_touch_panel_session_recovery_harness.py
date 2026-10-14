@@ -38,12 +38,14 @@ def test_touch_panel_session_recovery_harness():
 
 
 def test_sw_panel_poll_rides_out_the_guest_reclaim_window():
-    """The SW poll survives the member->guest handover's expected 403s (bounded), and stops on a real one."""
+    """The SW poll survives the member->guest handover's expected 403s (bounded), stops on a real one, and ignores a stale 403 for a replaced session."""
     harness = ROOT / "zoe-ui" / "dist" / "test_sw_panel_poll.js"
     assert harness.is_file(), f"harness missing: {harness}"
     proc = subprocess.run([_node(), str(harness)], capture_output=True, text=True, timeout=120)
     assert proc.returncode == 0, f"sw panel poll harness failed:\n{proc.stdout}\n{proc.stderr}"
-    assert "6 checks passed" in proc.stdout
+    assert "8 checks passed" in proc.stdout
+    # S7/S8: a stale 403 (guest or replaced member) landing after a fresh sign-in must not stop the poll
+    assert "S7: a stale guest 403 landing after a fresh PIN login" in proc.stdout
 
 
 def test_voice_form_replies_are_gated_on_panel_liveness():

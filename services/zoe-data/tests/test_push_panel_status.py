@@ -142,7 +142,6 @@ async def test_a_real_voice_turn_warns_exactly_once(monkeypatch, caplog):
     monkeypatch.setattr(push_mod, "broadcaster", b)
     monkeypatch.setattr(voice_presence, "_AUDIO_CACHE", {})
     monkeypatch.setattr(vt, "_resolve_recent_panel_session_user", panel_user)
-    monkeypatch.setattr(vt, "_resolve_panel_default_user", none)
     monkeypatch.setattr(vt, "_load_voice_history", history)
     monkeypatch.setattr(vt, "_synthesize_kokoro_sidecar", tts)
     monkeypatch.setattr(vt, "_VOICE_SESSIONS", {})

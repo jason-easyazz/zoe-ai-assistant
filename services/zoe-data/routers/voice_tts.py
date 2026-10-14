@@ -11,6 +11,7 @@ import shutil
 import tempfile
 import threading
 import time
+import wave
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -2008,29 +2009,55 @@ async def _request_voice_identity_challenge(
     }
 
 
-async def _resolve_panel_default_user(panel_id: str, db) -> Optional[str]:
-    """Best-effort panel user resolution for voice fallback identity."""
-    try:
-        cur = await db.execute(
-            "SELECT user_id FROM ui_panel_sessions WHERE panel_id = ? ORDER BY last_seen_at DESC LIMIT 1",
-            (panel_id,),
-        )
-        row = await cur.fetchone()
-        if row and row["user_id"]:
-            return str(row["user_id"])
-    except Exception:
-        pass
-    try:
-        cur = await db.execute(
-            "SELECT user_id FROM panel_user_bindings WHERE panel_id = ? AND binding_type = 'default' LIMIT 1",
-            (panel_id,),
-        )
-        row = await cur.fetchone()
-        if row and row["user_id"]:
-            return str(row["user_id"])
-    except Exception:
-        pass
+def _turn_own_identity(caller: Optional[dict], identified_user_id=None) -> Optional[str]:
+    """The member THIS turn names by ITSELF, or None (privacy, 2026-10-14).
+
+    Either its own identification (``identified_user_id``: an accepted voice claim, the
+    daemon's VID, the replay after a correct PIN - already vetted by the caller of this
+    helper) or the caller's own signed-in member session. Never a panel binding, the
+    panel's operator-declared owner, its last signed-in member, or even its FRESH PIN
+    session: those say who is signed in at the panel, not who is speaking. This is the
+    test for anything that WRITES on a speaker's behalf without a turn of its own
+    (ambient capture) and for extending a member's session (the voice heartbeat).
+    """
+    own = _real_user_or_none(identified_user_id)
+    if own:
+        return own
+    if (caller or {}).get("source") == "session":
+        return _real_user_or_none((caller or {}).get("user_id"))
     return None
+
+
+async def _resolve_fresh_panel_member(panel_id: str, fallback_db=None) -> Optional[str]:
+    """THE panel half of the voice fresh-identity rule (#2026): the member of a FRESH PIN
+    panel session on ``panel_id`` (``_resolve_recent_panel_session_user``: the panel
+    idle-logout window is the expiry authority - never add a second TTL), else None.
+
+    Every voice-shaped lane resolves a panel's member through this one function -
+    ``voice_command``, the wake prewarm and the LiveKit device-token lane - so none of
+    them can drift back to the panel's LAST signed-in member or its declared owner
+    (``panel_user_bindings``), which are not voice identities. Normalised (a sentinel is
+    None). Reads on a DEDICATED pooled connection (P-F8: the request ``db`` may be in use
+    concurrently on the streaming path); ``fallback_db`` is tried only when that
+    connection cannot be acquired. Fails closed: any error is None, i.e. guest.
+    """
+    if not panel_id:
+        return None
+    try:
+        from db_pool import get_db_ctx as _get_db_ctx
+        async with _get_db_ctx() as _conn:
+            return _real_user_or_none(await _resolve_recent_panel_session_user(panel_id, _conn))
+    except Exception:
+        if fallback_db is None:
+            return None
+        # On the awaited /turn path the request db is still valid -> correct identity under
+        # pool pressure; on the detached streaming/PIN-replay path it is released/racy, so the
+        # query just fails -> None. Never a WRONG attribution either way.
+        logger.warning("voice identity: dedicated conn unavailable for panel=%s; trying request db", panel_id)
+        try:
+            return _real_user_or_none(await _resolve_recent_panel_session_user(panel_id, fallback_db))
+        except Exception:
+            return None
 
 
 async def _touch_panel_session(panel_id: str, user_id: str) -> None:
@@ -2038,9 +2065,11 @@ async def _touch_panel_session(panel_id: str, user_id: str) -> None:
 
     The session row is otherwise only written on touch login / UI actions, so a
     VOICE-only session silently expired after the trust window (~15 min) even while
-    the user was still talking — dropping their identity to guest and blocking
-    user-scoped actions. Calling this on each voice turn keeps an actively-used
-    login alive (it only lapses after real inactivity). Best-effort on a dedicated
+    the user was still talking. ``voice_command`` calls this ONLY for a turn that
+    identifies itself as that member (``_turn_own_identity``: an accepted claim, the
+    PIN replay, the member's own session) - never for an unidentified voice, which
+    would keep the member's session alive while anyone at all kept talking
+    (2026-10-14). Best-effort on a dedicated
     connection (the request db is released on the detached streaming path); never
     raises. Does NOT create a session for guest/None.
     """
@@ -3223,7 +3252,7 @@ async def _schedule_voice_chat_save(
 
 async def _run_voice_memory_passes(
     user_text: str, reply: str, user_id: str, session_id: str,
-    speaker_verified: Optional[bool] = None,
+    speaker_verified: Optional[bool] = None, interrupted: bool = False,
 ) -> None:
     """Run both memory extraction passes for a completed voice exchange.
 
@@ -3234,7 +3263,16 @@ async def _run_voice_memory_passes(
     ``False`` makes a self-fact the turn states ``user_unverified`` instead of the owner's
     own statement (memory_authority); ``None`` = no verdict = unchanged. Third-person
     person-facts (the two person extractors) are not self-assertions and are unaffected.
+
+    ``interrupted`` = the streamed reply ended early (barge-in / disconnect): only the struggle detector reads it.
     """
+    try:  # the struggle detector (post-turn, already off the reply path; a bounded put_nowait that never raises)
+        import struggle_detector
+
+        struggle_detector.observe("voice", user_text, reply, user_id, session_id, interrupted=interrupted,
+                                  speaker_verified=speaker_verified)
+    except Exception:  # noqa: BLE001
+        pass
     try:
         # Mirror of the chat lane: a reply the hold-the-fact tier wrote means the owner's contradicting
         # claim was not accepted this turn, so it is not mined (routers/chat.py::_persist_memory_candidates_impl).
@@ -3353,8 +3391,8 @@ async def voice_command(
         # and only device-token callers may claim at all. The claimed user must
         # STILL hold consent in the DB — a panel whose profile cache predates a
         # revocation must not keep identifying that user (fail closed).
-        _claimed = _accept_panel_voice_claim(payload, caller)
-        if _claimed and await _voice_claim_consented(_claimed):
+        _claimed = await _accepted_voice_claim(payload, caller)
+        if _claimed:
             identified_user_id = _claimed
             _by_claim = True
         _speaker_verified = _speaker_verdict(payload, caller, identified_by_claim=_by_claim)
@@ -3386,7 +3424,9 @@ async def voice_command(
     try:
         import semantic_router as _sr
         if _sr.is_enabled():
-            _rr = _sr.route(text)
+            _pre_rr = (payload or {}).get("_router_decision")
+            # reuse a verdict the mishear guard computed on this exact text (turn_stream); otherwise route here as always
+            _rr = _pre_rr if isinstance(_pre_rr, dict) and (payload or {}).get("_router_text") == text else _sr.route(text)
             _router_decision = _rr
             logger.warning("ROUTER_SHADOW text=%r -> routed=%s (best=%s %.2f) %.1fms scores=%s",
                            text[:70], _rr["routed"], _rr["domain"], _rr["score"], _rr["ms"], _rr["scores"])
@@ -3448,15 +3488,15 @@ async def voice_command(
 
     # PRIVACY (2026-10-13, default on): a voice turn's member identity never outlives its source. It comes ONLY from
     #   * THIS turn's identification (`identified_user_id`: an accepted voice claim, the daemon's VID, a PIN replay),
-    #   * a FRESH PIN panel session (`_resolve_recent_panel_session_user`: the panel idle-logout window, the existing
-    #     session-expiry authority - no new TTL), or
+    #   * a FRESH PIN panel session (`_resolve_fresh_panel_member` -> `_resolve_recent_panel_session_user`: the panel
+    #     idle-logout window, the existing session-expiry authority - no new TTL), or
     #   * the caller's own signed-in member session (a non-device caller authenticated as itself), or
     #   * with ZOE_VOICE_SESSION on, the panel's OPEN, unexpired voice session (`_vs_decision` below) - which only ever
     #     names the member THIS turn's verified voice claims, and is closed by any other / unverified voice or its TTL.
     # Anything else is guest. A claim answers for its own turn only, so it never writes the panel binding (it used to,
     # "so the next turn doesn't re-verify" - and the next voice was ANYONE's), and `bound_user_id` only mirrors the fresh
-    # panel session (below). The panel's LAST signed-in member (`_resolve_panel_default_user`, no freshness check) is no
-    # longer an attribution fallback. Pinned by tests/test_voice_identity_freshness.py.
+    # panel session (below). The panel's LAST signed-in member (the retired `_resolve_panel_default_user`, no freshness
+    # check) is no longer an attribution fallback. Pinned by tests/test_voice_identity_freshness.py.
 
     # Resolve effective user once so all downstream branches (intent fast path,
     # scope checks, Zoe Agent, and Hermes escalation) share the same identity.
@@ -3474,43 +3514,27 @@ async def voice_command(
     _cached_binding = _real_user_or_none(
         (_VOICE_SESSIONS.get(panel_id) or {}).get("bound_user_id")
     )
-    _panel_recent_user = None
-    try:
-        from db_pool import get_db_ctx as _get_db_ctx
-        async with _get_db_ctx() as _idconn:
-            _panel_recent_user = await _resolve_recent_panel_session_user(panel_id, _idconn)
-    except Exception:
-        # Dedicated connection unavailable (e.g. pool momentarily exhausted). Fall back
-        # to the request `db`: on the awaited /turn path it is still valid → correct
-        # identity even under pool pressure; on the detached streaming/PIN-replay path it
-        # is released/racy so this query just fails → we keep None. Either way, never a
-        # WRONG attribution (the dedicated conn is always TRIED first, so the detached
-        # path uses it in the normal case — this fallback only runs on acquire failure).
-        logger.warning("voice identity: dedicated conn unavailable for panel=%s; trying request db", panel_id)
-        try:
-            _panel_recent_user = await _resolve_recent_panel_session_user(panel_id, db)
-        except Exception:
-            _panel_recent_user = None
-    # Keep the panel's login alive while it's actively in use. The session tracks
-    # "whoever is logged into the panel" and should lapse only after real inactivity
-    # — but ui_panel_sessions is written only on touch/login, so a VOICE-only session
-    # expired mid-conversation (~15 min trust window), dropping the user to guest and
-    # blocking their scoped commands. The heartbeat below is that fix (#1349): a user
-    # whose session is STILL FRESH keeps it fresh by talking.
+    # The shared fresh-panel resolver: dedicated connection first, the request `db` only if
+    # one cannot be acquired (see `_resolve_fresh_panel_member`). Normalised: never a sentinel.
+    _panel_recent_user = await _resolve_fresh_panel_member(panel_id, fallback_db=db)
+    # Keep the panel's login alive while its MEMBER is actively using it (#1349): ui_panel_sessions
+    # is written only on touch/login, so a VOICE-only session expired mid-conversation.
+    # PRIVACY (2026-10-14): only a turn that identifies ITSELF as that member extends the session
+    # (`_turn_own_identity`: an accepted voice claim, the PIN replay, the member's own session). An
+    # unidentified voice still USES a fresh session (above), but it no longer refreshes it - before,
+    # any voice on the panel kept the member's session alive for as long as anybody kept talking.
+    # Another member's claim never refreshes it either (nor rewrites the row to themselves).
     #
     # A lapsed session must NOT be revived here. `_panel_recent_user` is the
     # freshness-gated signal, and it feeds `_scope_identity_user` → the skybridge
-    # user and every `user_scoped` PIN gate. `_resolve_panel_default_user` has NO
-    # freshness filter — it returns the newest `ui_panel_sessions` row, i.e. "whoever
-    # last signed in here", not an operator-declared owner. Promoting it into
-    # `_panel_recent_user` therefore re-trusts a logged-OUT user indefinitely, so
-    # anyone at the panel reads their lists/calendar/reminders with no PIN. It is
-    # also self-perpetuating: the heartbeat would refresh that expired session on
-    # every turn — including a guest's — so idle logout could never fire and #1348's
-    # stale-owner reclaim could never arm. Freshness confers trust (#1348); a stale
-    # owner is reclaimable — and, since 2026-10-13, no longer the turn's attribution either.
-    _recent_real_user = _real_user_or_none(_panel_recent_user)
-    if _recent_real_user:
+    # user and every `user_scoped` PIN gate. The panel's LAST signed-in member (the
+    # newest `ui_panel_sessions` row, no freshness filter - the retired
+    # `_resolve_panel_default_user`) re-trusted a logged-OUT user indefinitely, so
+    # anyone at the panel read their lists/calendar/reminders with no PIN, and the
+    # heartbeat refreshing it on every turn meant idle logout could never fire and
+    # #1348's stale-owner reclaim could never arm. Freshness confers trust (#1348).
+    _recent_real_user = _panel_recent_user
+    if _recent_real_user and _turn_own_identity(caller, identified_user_id) == _recent_real_user:
         await _touch_panel_session(panel_id, _recent_real_user)
     # The binding MIRRORS the fresh session: rewritten from it every turn, cleared once it has lapsed or been signed
     # out (or another member signed in). It used to be filled once and never cleared, so one PIN made every later
@@ -3987,7 +4011,8 @@ async def voice_command(
             text, effective_user, session_id,
             channel="voice",
             router_decision=_router_decision,
-            extra_ctx={"db": db, "panel_id": panel_id, "speaker_verified": _speaker_verified},
+            extra_ctx={"db": db, "panel_id": panel_id, "speaker_verified": _speaker_verified,
+                       "scope_user": _scope_identity_user},
             phase="conversation",
         )
         if _conv_result is not None and getattr(_conv_result, "reply", ""):
@@ -5207,7 +5232,8 @@ async def voice_command(
                         # Safe during GeneratorExit unwind: neither call suspends
                         # (_schedule_voice_chat_save only spawns a bg task).
                         await _schedule_voice_chat_save(session_id, "", heard_reply, effective_user, speaker_verified=_speaker_verified)
-                        _spawn_bg(_run_voice_memory_passes(text, heard_reply, effective_user, session_id, speaker_verified=_speaker_verified))
+                        _spawn_bg(_run_voice_memory_passes(text, heard_reply, effective_user, session_id, speaker_verified=_speaker_verified,
+                                                           interrupted=not _screen_finished))
 
             return StreamingResponse(
                 _generate_voice_stream(),
@@ -5614,6 +5640,25 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
     return result
 
 
+def _canned_turn_response(transcript: str, reply: str, audio: Optional[bytes], panel_id: str, flags: dict, gate) -> StreamingResponse:
+    """One spoken sentence answered WITHOUT the brain (the conversation opener / ender ack, the mishear clarification), in the turn_stream wire
+    format: transcript line, one audio chunk when there is audio, then the done frame carrying ``flags``. ``gate`` is the speculative turn's gate
+    (its verdict still decides what is audible) or None."""
+    import json as _json
+
+    async def _stream():
+        yield (_json.dumps({"transcript": transcript}) + "\n").encode()
+        if audio:
+            yield (_json.dumps({"chunk": 0, "text": reply, "provider": "kokoro"}) + "\n").encode()
+            yield base64.b64encode(audio) + b"\n"
+        yield (_json.dumps({"done": True, "reply": reply, "panel_id": panel_id, **flags}) + "\n").encode()
+
+    return StreamingResponse(
+        _speculation.gate_frames(_stream(), gate) if gate is not None else _stream(),
+        media_type="application/x-zoe-audio-stream", headers={"Cache-Control": "no-cache"},
+    )
+
+
 @router.post("/turn_stream")
 async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice_auth), db=Depends(get_db)):
     """Streaming variant of /turn: STT, then stream brain→sentence→TTS audio
@@ -5764,6 +5809,58 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
             _gated_done(), media_type="application/x-zoe-audio-stream", headers={"Cache-Control": "no-cache"}
         )
 
+    # ── Mishear clarification (ZOE_MISHEAR_CLARIFY, default OFF) ──
+    # A SHORT feeling-shaped line whose STT looks unreliable (slow for its clip), that routes to chat and carries no explicit emotional cue,
+    # is more likely a mishearing than a disclosure (2026-10-14: a device command heard as "I'm feeling a lot." drew a counsellor reply).
+    # Zoe asks "Sorry, what was that?" INSTEAD of the brain: no transcript broadcast, no memory write; the question opens the panel's normal
+    # follow-up window and the repeat is answered whatever it is (one clarification in a row). Never on a speculative turn. Fail-open.
+    # Flag off: ``mode()`` is one env read and nothing else runs. Doc: docs/knowledge/voice-pipeline.md, mishear_clarify.py.
+    _mc = None
+    _mc_text = transcript
+    try:
+        import mishear_clarify as _mishear
+        if _mishear.mode() != "off" and _spec_gate is None:
+            _mc_text = _normalize_voice_command_text(transcript)
+
+            def _mc_route(_t: str):
+                import semantic_router as _sr_mc
+                return _sr_mc.route(_t) if _sr_mc.is_enabled() else None
+            _mc = _mishear.evaluate(
+                _mc_text,
+                panel_id=panel_id,
+                clip_s=duration_s or _mishear.wav_seconds(raw),
+                stt_s=t_stt,
+                window=str((payload or {}).get("window") or ""),
+                prev_reply_question=bool((payload or {}).get("prev_reply_question")),
+                in_conversation=bool((payload or {}).get("conversation")),
+                continued=bool((payload or {}).get("continued")),
+                route_fn=_mc_route,
+            )
+    except Exception as _mc_exc:
+        logger.warning("voice/turn_stream mishear guard failed (non-fatal): %s", _mc_exc)
+        _mc = None
+    if _mc is not None and _mc.action == "clarify" and not _mc.shadow:
+        _mc_audio = None
+        try:
+            _mc_audio = await _synthesize_kokoro_sidecar(_mc.reply)
+        except Exception as _mc_tts_exc:
+            logger.warning("voice/turn_stream mishear clarification TTS failed: %s", _mc_tts_exc)
+        if _mc_audio:
+            try:
+                from voice_metrics import voice_turn_count
+                voice_turn_count.labels(outcome="mishear_clarify", path="turn_stream").inc()
+            except Exception:
+                pass
+            try:
+                from conversation_opener import broadcast_conversation_turn
+                await broadcast_conversation_turn(panel_id, _mc.reply, {})
+            except Exception:
+                pass
+            return _canned_turn_response(transcript, _mc.reply, _mc_audio, panel_id, {}, None)
+        # No audio, no clarification: a silent turn is worse than answering. The memory of "just clarified" goes with it.
+        _mishear.forget(panel_id)
+        _mc = None
+
     logger.info("voice/turn_stream panel=%s STT=%.2fs transcript=%r", panel_id, t_stt, transcript[:80])
     try:
         from push import broadcaster as _bc_t
@@ -5826,21 +5923,12 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
             finally:
                 _speculation.unbind(_ui_token)
 
-        async def _fast_stream():
-            yield (_json.dumps({"transcript": transcript}) + "\n").encode()
-            if _ack_audio:
-                yield (_json.dumps({"chunk": 0, "text": _fast_ack, "provider": "kokoro"}) + "\n").encode()
-                yield base64.b64encode(_ack_audio) + b"\n"
-            yield (_json.dumps({"done": True, "reply": _fast_ack, "panel_id": panel_id, **_fast_flags}) + "\n").encode()
-
         try:
             from voice_metrics import voice_turn_count
             voice_turn_count.labels(outcome="ok", path="turn_stream").inc()
         except Exception:
             pass
-        return StreamingResponse(
-            _gated(_fast_stream()), media_type="application/x-zoe-audio-stream", headers={"Cache-Control": "no-cache"}
-        )
+        return _canned_turn_response(transcript, _fast_ack, _ack_audio, panel_id, _fast_flags, _spec_gate)
 
     # The turn's spacer state, shared with voice_command (which fills in the router's domain and may speak the tool ack): the
     # timer filler below and that ack are ONE budget, one spacer per turn (voice_spacer).
@@ -5853,6 +5941,10 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
         "_t_turn_start": t_turn_start,
         "_spacer": _spacer,
     }
+    if _mc is not None and _mc.router is not None:
+        # The mishear guard already ran the router on this exact (normalised) text: hand it over instead of routing twice.
+        command_payload["_router_decision"] = _mc.router
+        command_payload["_router_text"] = _mc_text
     if (payload or {}).get("identified_user_id"):
         command_payload["identified_user_id"] = payload["identified_user_id"]
     for _claim_key in ("voice_user_id", "voice_score"):
@@ -6245,14 +6337,7 @@ async def _prewarm_brain_for_panel(panel_id: str) -> None:
             (_VOICE_SESSIONS.get(panel_id) or {}).get("bound_user_id")
         ) or ""
         if not user_id:
-            try:
-                from db_pool import get_db_ctx
-                async with get_db_ctx() as db:
-                    user_id = _real_user_or_none(
-                        await _resolve_recent_panel_session_user(panel_id, db)
-                    ) or ""
-            except Exception:
-                user_id = ""
+            user_id = await _resolve_fresh_panel_member(panel_id) or ""
         if not user_id:
             return
         import zoe_core_client
@@ -6399,9 +6484,15 @@ async def voice_ambient(payload: dict, caller: dict = Depends(_require_voice_aut
     The Pi daemon's always-on VAD posts speech segments here.
     Raw audio is transcribed by Moonshine, then stored in ambient_memory.
     Raw audio bytes are discarded after transcription — only text is kept.
-    """
-    from database import get_db
 
+    PRIVACY (2026-10-14): a segment is filed ONLY under its own speaker's identification
+    (``_turn_own_identity``: a voice claim that passes the server's threshold + consent,
+    or the caller's own signed-in session). Ambient audio is overheard ROOM speech, so a
+    panel's member - its fresh PIN session, its last signed-in member, its declared owner
+    - is not its speaker. An unidentified segment is neither transcribed nor filed: not
+    under a member, and not under ``guest`` (a scope every guest session's
+    ``ambient_search`` would read). P-F4: ownerless ambient audio is never stored.
+    """
     b64 = str((payload or {}).get("audio_base64", "")).strip()
     panel_id = str((payload or {}).get("panel_id", caller.get("panel_id") or "unknown"))
     room = str((payload or {}).get("room", "")).strip() or None
@@ -6415,6 +6506,13 @@ async def voice_ambient(payload: dict, caller: dict = Depends(_require_voice_aut
         raw = base64.b64decode(b64, validate=True)
     except Exception as exc:
         raise HTTPException(status_code=400, detail="invalid base64 audio") from exc
+
+    ambient_user_id = _turn_own_identity(caller, await _accepted_voice_claim(payload, caller))
+    if not ambient_user_id:
+        # debug, not warning: always-on capture posts every room utterance, and an
+        # unidentified one is the expected case, not a fault.
+        logger.debug("ambient_memory: unidentified speaker on panel=%s - not transcribed, not stored", panel_id)
+        return {"ok": True, "panel_id": panel_id, "transcript": "", "stored": False}
 
     import uuid as _uuid
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
@@ -6436,32 +6534,23 @@ async def voice_ambient(payload: dict, caller: dict = Depends(_require_voice_aut
     if not transcript:
         return {"ok": True, "panel_id": panel_id, "transcript": ""}
 
-    # Store in ambient_memory table — always scoped to the panel's resolved
-    # user. If no user is resolvable for the panel, SKIP the insert entirely:
-    # ownerless ambient audio must never be stored (P-F4).
+    # Store in ambient_memory, scoped to the segment's own speaker (resolved above).
     stored = False
     try:
         from db_compat import get_compat_db as _get_compat_db
 
         async with _get_compat_db() as db:
-            ambient_user_id = await _resolve_panel_default_user(panel_id, db)
-            if not ambient_user_id:
-                logger.warning(
-                    "ambient_memory: no user resolvable for panel=%s — transcript NOT stored",
-                    panel_id,
-                )
-            else:
-                await db.execute(
-                    """INSERT INTO ambient_memory (panel_id, room, transcript, duration_seconds, source, user_id)
-                       VALUES (?, ?, ?, ?, 'ambient', ?)""",
-                    (panel_id, room, transcript, duration_s, ambient_user_id),
-                )
-                await db.commit()
-                stored = True
-                logger.debug(
-                    "ambient_memory: panel=%s user=%s chars=%d",
-                    panel_id, ambient_user_id, len(transcript),
-                )
+            await db.execute(
+                """INSERT INTO ambient_memory (panel_id, room, transcript, duration_seconds, source, user_id)
+                   VALUES (?, ?, ?, ?, 'ambient', ?)""",
+                (panel_id, room, transcript, duration_s, ambient_user_id),
+            )
+            await db.commit()
+            stored = True
+            logger.debug(
+                "ambient_memory: panel=%s user=%s chars=%d",
+                panel_id, ambient_user_id, len(transcript),
+            )
     except Exception as exc:
         logger.warning("ambient_memory insert failed: %s", exc)
 
@@ -6575,6 +6664,17 @@ async def _voice_claim_consented(user_id: str) -> bool:
     except Exception as exc:
         logger.warning("voice claim consent check failed for %s (dropping claim): %s", user_id, exc)
         return False
+
+
+async def _accepted_voice_claim(payload: dict, caller: dict) -> Optional[str]:
+    """The member a panel's speaker claim identifies, once it passes BOTH server gates -
+    the threshold (``_accept_panel_voice_claim``, device-token callers only) and the
+    member's live consent (``_voice_claim_consented``) - else None. The one claim gate
+    for every lane that takes a claim (``voice_command``, ``/ambient``)."""
+    claimed = _accept_panel_voice_claim(payload, caller)
+    if claimed and await _voice_claim_consented(claimed):
+        return claimed
+    return None
 
 
 def _speaker_engine_unavailable_detail() -> str:

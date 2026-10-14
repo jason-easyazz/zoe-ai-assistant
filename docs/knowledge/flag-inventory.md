@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-631 flags; 629 not documented in `.env.example`.
+636 flags; 634 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -341,6 +341,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_MERGE_QUEUE_MAX_CANDIDATES` | `'50'` | no | NO | `services/zoe-data/greploop_guard.py` |
 | `ZOE_MIRROR_GUARD` | `-` | yes | NO | `services/zoe-data/mirror_guard.py` |
 | `ZOE_MIRROR_INTENTS_TO_OPENCLAW` | `'false'` | no | NO | `services/zoe-data/routers/chat.py` |
+| `ZOE_MISHEAR_CLARIFY` | `'off'` | yes | NO | `services/zoe-data/mishear_clarify.py` |
 | `ZOE_MOONSHINE_ARCH` | `'MEDIUM_STREAMING'`, `'v2'` | yes | NO | `scripts/perf/measure_moonshine_vad_threshold.py`<br>`scripts/perf/measure_stt_under_speech.py`<br>`services/zoe-data/routers/voice_tts.py` |
 | `ZOE_MOONSHINE_KEYTERMS` | `-` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_MULTICA` | `'false'` | no | NO | `services/zoe-data/main.py` |
@@ -561,6 +562,10 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_STRUCTURAL_CLAIMS` | `-` | no | NO | `services/zoe-data/structural_claims.py` |
 | `ZOE_STRUCTURAL_READER` | `'shadow'` | yes | NO | `services/zoe-data/structural_reader.py` |
 | `ZOE_STRUCTURAL_VERIFIER` | `-` | no | NO | `services/zoe-data/structural_verifier.py` |
+| `ZOE_STRUGGLE_DETECT` | `-` | no | NO | `services/zoe-data/struggle_detector.py` |
+| `ZOE_STRUGGLE_QUEUE_MAX` | `256` | yes | NO | `services/zoe-data/struggle_detector.py` |
+| `ZOE_STRUGGLE_RETENTION_DAYS` | `90` | yes | NO | `services/zoe-data/struggle_detector.py` |
+| `ZOE_STRUGGLE_WINDOW_S` | `dynamic` | yes | NO | `services/zoe-data/struggle_detector.py` |
 | `ZOE_STT_BACKEND` | `'moonshine'` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_STT_PREWARM_ON_WAKE` | `True` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_STT_STREAM_FINISH_TIMEOUT_MS` | `2500` | yes | NO | `services/zoe-data/voice_stt_stream.py` |
