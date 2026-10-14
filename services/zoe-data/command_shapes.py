@@ -125,6 +125,8 @@ _MORE_ON = re.compile(rf"^(?!\s*(?:is|are|how|what|does|do|can|will)\b)(?P<amt>(
 _AMOUNTISH_RE = re.compile(rf"\b(?:\d+|{NUM}|{UNIT}|time|another|more|extra|few|couple|bit|little|half|quarter)\b")
 _DETERMINERS = r"(?:the|my|our|your|a|an|that|this)"
 _NOT_A_NAME = frozenset({"current", "running", "other", "first", "last", "only", "existing", "active", "same",
+                         "second", "third", "fourth", "newest", "oldest", "latest", "earlier", "later", "new", "old",
+                         "longer", "shorter", "one", "ones",
                          "all", "every", "both", "these", "those", "of"})
 # "10 MORE minutes", "an EXTRA minute", "ANOTHER 5 minutes": amount words that are not part of the number.
 _AMOUNT_NOISE_RE = re.compile(r"\b(?:more|extra|another|additional)\b")
@@ -255,7 +257,11 @@ def asks_or_mentions(text: str, *, destructive: bool = False) -> bool:
     t = (text or "").strip()
     if _ASKING_RE.match(t):
         return True
-    return destructive and _ASKING_PERMISSION_RE.match(t) is not None
+    return destructive and (_ASKING_PERMISSION_RE.match(t) is not None or _NEGATED_RE.search(t) is not None)
+
+
+# "don't cancel the timer", "do not remove milk from the list": a delete that is explicitly NOT wanted.
+_NEGATED_RE = re.compile(r"\b(?:don'?t|do\s+not|never|no\s+need\s+to|not\s+to)\b", re.IGNORECASE)
 
 
 # ── Delayed commands ─────────────────────────────────────────────────────────

@@ -359,7 +359,12 @@ def _resolve_timer(intent: SkybridgeIntent, user_id: str) -> dict[str, Any]:
         return _resolve_timer_change(intent, owner)
 
     if intent.action == "cancel":
-        if intent.query == "all":  # "cancel all timers" (HA HassCancelAllTimers)
+        if intent.query == "both" and len(_timers.list(owner)) != 2:
+            return _timer_reply(intent, owner, _which_timer_line(intent, owner, "ambiguous")
+                                if len(_timers.list(owner)) > 2 else
+                                ("You have no timers running." if not _timers.list(owner) else
+                                 "You only have one timer running."))
+        if intent.query in ("all", "both"):  # "cancel all timers" (HA HassCancelAllTimers)
             gone = [t for t in list(_timers.list(owner)) if _timers.cancel_by_id(owner, t["timer_id"])]
             if gone:
                 return _timer_reply(intent, owner,
@@ -1525,8 +1530,19 @@ def classify_skybridge_intent(
                 # "cancel all but the pasta timer": a subset/exclusion is neither "all" nor the one named - deleting
                 # either way is wrong, so it is answered with the timers' status (nothing cancelled).
                 return SkybridgeIntent(domain="timer", action="status")
-            if re.search(r"\b(?:all|every|both)\b", rest):
-                return SkybridgeIntent(domain="timer", action="cancel", query="all")
+            quantifier = re.search(r"\b(?P<q>all|every|both)\b", rest)
+            if quantifier:
+                # Only the WHOLE set ("cancel all timers", "stop all of my timers in the kitchen", "cancel both timers");
+                # an enumerated subset ("cancel both the pasta and eggs timers") names timers, so it is read, not
+                # cancelled. "both" with anything other than exactly two running is ambiguous (resolver).
+                if re.search(r"\band\b|,|\b(?:named|called)\b", rest):
+                    return SkybridgeIntent(domain="timer", action="status")
+                return SkybridgeIntent(domain="timer", action="cancel",
+                                       query="both" if quantifier.group("q") == "both" else "all")
+            if re.search(r"\band\b|,", rest):
+                # "cancel the pasta timer and the eggs timer" / "cancel the timer and set a new one": more than one
+                # target or a second clause - cancelling the first name only would be half a delete; read instead.
+                return SkybridgeIntent(domain="timer", action="status")
             target = command_shapes.timer_target(text[cancel.end():])
             return SkybridgeIntent(domain="timer", action="cancel",
                                    title=target.label.title() or _parse_timer_label(text),

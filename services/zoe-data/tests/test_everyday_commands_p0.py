@@ -571,3 +571,39 @@ def test_membership_in_a_named_list_searches_for_the_item_not_the_list_name():
     spoken, found = sky._list_contains_answer(
         SkybridgeIntent(domain="lists", action="contains", item_text="milk", list_name="chores"), lists, items)
     assert spoken == "Yes, milk is on your Chores list." and found["id"] == "c"
+
+
+def test_an_enumerated_subset_never_cancels_everything(owner):
+    for label, secs in (("Pasta", 600), ("Eggs", 300), ("Rice", 900)):
+        sky._timers.create(owner, label, secs)
+    i = sky.classify_skybridge_intent("cancel both the pasta and eggs timers")
+    sky._resolve_timer(i, owner)
+    assert len(sky._timers.list(owner)) == 3
+    out = sky._resolve_timer(sky.classify_skybridge_intent("cancel both timers"), owner)  # three running: ambiguous
+    assert "Which one?" in out["spoken_summary"] and len(sky._timers.list(owner)) == 3
+    out = sky._resolve_timer(sky.classify_skybridge_intent("stop all of my timers in the kitchen"), owner)
+    assert out["spoken_summary"] == "Cancelled all 3 timers."
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "cancel the first timer",  # an ordinal names no timer: several running = ask
+        "cancel the other timer",
+        "stop that timer",
+        "cancel the pasta timer and the eggs timer",  # two targets: never half a delete
+        "don't cancel the timer",
+        "never mind dont stop the timer",
+    ],
+)
+def test_cancel_self_audit_never_deletes_a_timer_nobody_named(owner, text):
+    sky._timers.create(owner, "Pasta", 600)
+    sky._timers.create(owner, "Eggs", 300)
+    sky._resolve_timer(sky.classify_skybridge_intent(text), owner)
+    assert len(sky._timers.list(owner)) == 2, text
+
+
+@pytest.mark.parametrize("text", ["do not remove milk from the list", "don't tick off the bread"])
+def test_a_negated_list_change_writes_nothing(text):
+    i = sky.classify_skybridge_intent(text)
+    assert i is None or i.action not in ("remove_item", "complete_item"), (text, i)
