@@ -32,7 +32,8 @@ are reported, never purged, by this tool.
 
 ``--show`` output is household speech: keep it on the box, never paste it into a PR or issue.
 
-Exit codes: 0 = report printed / purge done (or dry run), 2 = refused or the data could not be read.
+Exit codes: 0 = report printed / purge done (or dry run), 2 = refused, the data could not be read, or an executed
+purge erased fewer rows than it was asked to (the owner id is passed exactly as stored).
 """
 from __future__ import annotations
 
@@ -87,7 +88,9 @@ def load_guest_rows(palace: str) -> list[dict[str, Any]]:
                 if not (meta.get("user_id") or meta.get("wing")):
                     continue        # ownerless rows are remediate_ownerless_memories.py's, not a guest's
                 text = str(meta.pop("chroma:document", "") or "")
-                rows.append({"id": str(eid), "owner": owner.strip().lower(), "text": text, "meta": meta})
+                # the owner EXACTLY as stored: the purge's erase_rows matches it byte for byte ("Guest" / " guest " are
+                # their own owners - normalising them would make the erase skip the row and still report success)
+                rows.append({"id": str(eid), "owner": owner, "text": text, "meta": meta})
         return sorted(rows, key=lambda r: (str(r["meta"].get("added_at") or ""), r["id"]))
     finally:
         con.close()
@@ -104,7 +107,7 @@ def summarise(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
     return {
         "palace_rows": len(rows),
-        "by_owner": count(lambda r: r["owner"] or "(empty)"),
+        "by_owner": count(lambda r: repr(r["owner"]) if r["owner"] != r["owner"].strip() else (r["owner"] or "(empty)")),
         "by_status": count(lambda r: str(r["meta"].get("status") or "approved")),
         "by_type": count(lambda r: str(r["meta"].get("memory_type") or "-")),
         "by_writer": count(lambda r: _writer(r["meta"])),
@@ -182,7 +185,8 @@ async def purge(rows: list[dict[str, Any]], *, palace: str, svc=None) -> dict[st
     done: dict[str, Any] = {}
     for owner, ids in sorted(by_owner.items()):
         res = await svc.erase_rows(owner, ids, actor=PURGE_ACTOR, reason=PURGE_REASON)
-        done[owner] = {"asked": len(ids), "rows_removed": int((res or {}).get("rows_removed") or 0)}
+        removed = int((res or {}).get("rows_removed") or 0)
+        done[owner] = {"asked": len(ids), "rows_removed": removed, "complete": removed == len(ids)}
     return done
 
 
@@ -234,7 +238,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0
     import asyncio
 
-    print(json.dumps({"purged": asyncio.run(purge(rows, palace=args.palace))}, indent=2))
+    done = asyncio.run(purge(rows, palace=args.palace))
+    print(json.dumps({"purged": done}, indent=2))
+    if not all(d["complete"] for d in done.values()):
+        print("INCOMPLETE: some rows were not erased (rows_removed < asked); re-run the report", file=sys.stderr)
+        return 2
     return 0
 
 

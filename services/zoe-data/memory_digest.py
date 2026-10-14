@@ -1054,10 +1054,16 @@ async def run_turn_digest(
             except Exception:  # noqa: BLE001 - a correction lookup never takes the digest down
                 fixed = None
             if fixed is not None:
-                fact, corr_words = fixed
-                fact_anchor_text = f"{user_message}\n{corr_words}"
-                fact_excerpt = f"{turn_excerpt} / {corr_words}"
-                validate_text = f"{validate_text}\n{corr_words}"
+                fact, corr_words = fixed.fact, fixed.utterance
+                # the correcting words FIRST: the excerpt is capped at the write boundary, and they are the only evidence for the
+                # stored value - appended after a long misheard turn they were the part cut off
+                fact_anchor_text = f"{corr_words}\n{user_message}"
+                fact_excerpt = f"{corr_words} / {turn_excerpt}"
+                validate_text = f"{corr_words}\n{validate_text}"
+                # the extractor's claim row still holds the OLD value: rebuilt for the corrected one (or dropped), never stale
+                if idx < len(item_claims) and item_claims[idx] is not None:
+                    item_claims[idx] = _ca.correct_claim(item_claims[idx], fixed)
+                    claim_kw = _claim_kwargs(item_claims, idx)
                 result["corrected"] = result.get("corrected", 0) + 1
                 logger.info("CORRECTION_APPLIED kind=pending lane=%s user=%s", source, user_id)
             fact_type = item.get("type", "fact")

@@ -33,7 +33,7 @@ from test_memory_authority import _Col
 
 pytestmark = pytest.mark.ci_safe
 
-SENTINELS = ["guest", "Guest", " guest ", "anonymous", "voice-guest", "voice-daemon", ""]
+SENTINELS = ["guest", "Guest", " guest ", "anonymous", "voice-guest", "voice-daemon", "", "guest-3f9a1c", "Guest-Kiosk-7"]
 MEMBER = "demo_member_wren"
 TURN = "I manage a little bakery in town and I swim at the lake most mornings"
 
@@ -41,7 +41,7 @@ TURN = "I manage a little bakery in town and I swim at the lake most mornings"
 def test_is_unidentified_covers_every_sentinel_and_no_member():
     for s in SENTINELS + [None]:
         assert user_filters.is_unidentified(s), s
-    for m in (MEMBER, "jason", "guestbook-owner", "family-admin"):
+    for m in (MEMBER, "jason", "guestbook-owner", "guests-team", "family-admin"):
         assert not user_filters.is_unidentified(m), m
 
 
@@ -129,7 +129,7 @@ def _voice_passes(monkeypatch, user):
     return called
 
 
-@pytest.mark.parametrize("who", ["guest", "voice-guest", "anonymous", "voice-daemon", ""])
+@pytest.mark.parametrize("who", ["guest", "voice-guest", "anonymous", "voice-daemon", "", "guest-3f9a1c"])
 def test_voice_passes_run_no_writer_for_a_guest(monkeypatch, who):
     assert _voice_passes(monkeypatch, who) == []
 
@@ -163,7 +163,7 @@ def _chat_passes(monkeypatch, user):
     return called
 
 
-@pytest.mark.parametrize("who", ["guest", "voice-guest", "anonymous", "voice-daemon", ""])
+@pytest.mark.parametrize("who", ["guest", "voice-guest", "anonymous", "voice-daemon", "", "guest-3f9a1c"])
 def test_chat_passes_run_no_writer_for_any_sentinel(monkeypatch, who):
     assert _chat_passes(monkeypatch, who) == []
 

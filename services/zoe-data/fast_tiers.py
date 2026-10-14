@@ -402,11 +402,13 @@ async def _conversation_quality_tier(text: str, user_id: str, session_id: str,
         if _ca.enabled():
             res = await _ca.maybe_apply(text, user_id, session_id)
             if res is None and not dry and speaker_verified is not False:
-                res = await _ca.maybe_swap(text, user_id, session_id)
-                if res is None:
-                    # "it's actually a bike shop, not a pike shop": this member's rows of THIS session, and the digest of
-                    # an earlier turn of it that has not landed yet (correction_apply.correct_fact)
-                    res = await _ca.maybe_fix_recent(text, user_id, session_id)
+                # the NARROW path first: "it's actually a bike shop, not a pike shop" rewrites this member's rows of THIS
+                # session (and registers the correction for a digest of an earlier turn that has not landed yet,
+                # correction_apply.correct_fact); the store-wide name swap only for the shapes the session path does not read
+                # (a relation said - "my sister is Marisol not Marisa" - or a bare swap with no correction cue)
+                res = await _ca.maybe_fix_recent(text, user_id, session_id)
+                if res is None and _ca.global_swap_allowed(text):
+                    res = await _ca.maybe_swap(text, user_id, session_id)
             if res is not None:
                 import expert_dispatch as _xd
 

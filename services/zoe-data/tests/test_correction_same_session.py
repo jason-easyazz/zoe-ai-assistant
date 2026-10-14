@@ -220,7 +220,7 @@ def test_no_cross_identity_correction():
 def test_a_pending_correction_rewrites_the_later_digest_of_the_earlier_turn():
     asyncio.run(ca.maybe_fix_recent(CORRECTION, MEMBER, SESSION, svc=FakeSvc([])))
     fixed = ca.correct_fact(MEMBER, SESSION, "User manages a pike shop.", MISHEARD_TURN)
-    assert fixed == ("User manages a bike shop.", " ".join(CORRECTION.split()))
+    assert fixed == ("User manages a bike shop.", " ".join(CORRECTION.split()), "pike shop", "bike shop")
 
 
 def test_a_turn_spoken_after_the_correction_is_not_rewritten():
@@ -300,6 +300,18 @@ def _digest(monkeypatch, user, fact, turn):
     return s.ingested
 
 
+def _digest_with_claim(monkeypatch, claim, fact, turn):
+    """``_digest`` with the extractor's claim row for the one fact (as ``ZOE_STRUCTURAL_CLAIMS=enforce`` reads it)."""
+    monkeypatch.setattr(memory_digest, "_read_claims", lambda facts: [claim] * len(facts))
+    seen = []
+
+    async def post(svc, user_id, user_message, stored, claims, consumed, result):
+        seen.extend(claims)
+
+    monkeypatch.setattr(memory_digest, "_structural_post", post)
+    return _digest(monkeypatch, MEMBER, fact, turn), seen
+
+
 def test_the_digest_stores_the_corrected_value_with_the_correction_as_evidence(monkeypatch):
     asyncio.run(ca.maybe_fix_recent(CORRECTION, MEMBER, SESSION, svc=FakeSvc([])))
     ingested = _digest(monkeypatch, MEMBER, "User manages a pike shop.", MISHEARD_TURN)
@@ -312,3 +324,93 @@ def test_the_digest_stores_the_corrected_value_with_the_correction_as_evidence(m
 def test_control_without_a_correction_the_digest_stores_what_was_heard(monkeypatch):
     ingested = _digest(monkeypatch, MEMBER, "User manages a pike shop.", MISHEARD_TURN)
     assert [t for t, _ in ingested] == ["User manages a pike shop."]
+
+
+# ── codex review round 2 (#2058) ─────────────────────────────────────────────
+
+def _claim(obj):
+    import structural_claims as sc
+
+    return sc.Claim(subj="user", pred="occupation", obj=obj, pol="affirm", mod="asserted", tense="current",
+                    quote="I manage a pike shop")
+
+
+def test_a_late_digest_rebuilds_the_claim_for_the_corrected_value(monkeypatch):
+    asyncio.run(ca.maybe_fix_recent(CORRECTION, MEMBER, SESSION, svc=FakeSvc([])))
+    ingested, seen = _digest_with_claim(monkeypatch, _claim("manages a pike shop"), "User manages a pike shop.", MISHEARD_TURN)
+    assert [t for t, _ in ingested] == ["User manages a bike shop."]
+    claim = ingested[0][1]["claim"]
+    assert claim.obj == "manages a bike shop" and "bike shop" in claim.quote          # never the stale value
+    assert seen and seen[0].obj == "manages a bike shop"                                # the post-write claim pass too
+
+
+def test_a_claim_whose_value_does_not_hold_the_old_value_is_dropped_not_kept_stale(monkeypatch):
+    asyncio.run(ca.maybe_fix_recent(CORRECTION, MEMBER, SESSION, svc=FakeSvc([])))
+    ingested, _ = _digest_with_claim(monkeypatch, _claim("runs a shop"), "User manages a pike shop.", MISHEARD_TURN)
+    assert [t for t, _ in ingested] == ["User manages a bike shop."] and "claim" not in ingested[0][1]
+
+
+def test_control_without_a_correction_the_claim_is_the_extractors(monkeypatch):
+    ingested, _ = _digest_with_claim(monkeypatch, _claim("manages a pike shop"), "User manages a pike shop.", MISHEARD_TURN)
+    assert ingested[0][1]["claim"].obj == "manages a pike shop"
+
+
+def test_the_correcting_words_survive_the_evidence_cap(monkeypatch):
+    from memory_service import scrub_source_excerpt
+
+    long_turn = MISHEARD_TURN + " and " + " ".join(["we had a long chat about the weather and the garden"] * 12)
+    assert len(long_turn) > 500
+
+    async def history(user_id, session_id, current):
+        return [long_turn]
+
+    monkeypatch.setattr(ca, "_recent_user_messages", history)
+    asyncio.run(ca.maybe_fix_recent(CORRECTION, MEMBER, SESSION, svc=FakeSvc([])))
+    ingested = _digest(monkeypatch, MEMBER, "User manages a pike shop.", long_turn)
+    kw = ingested[0][1]
+    stored = scrub_source_excerpt(kw["source_excerpt"])          # what the write boundary keeps
+    assert "bike shop" in stored and "bike shop" in kw["anchor_text"][:200]
+
+
+@pytest.mark.parametrize("text,allowed", [
+    ("That's wrong, my sister is Marisol not Marisa.", True),     # a relation pins the row: the store-wide swap may act
+    ("it's Thursday not Friday", True),                           # no correction cue: the session path does not read it
+    ("actually Perth, not Sydney", False),                        # generic: the session-bounded path only
+    ("No, Marisol, not Marisa.", False),
+    ("it's actually Perth, not Sydney", False),
+])
+def test_global_swap_allowed(text, allowed):
+    assert ca.global_swap_allowed(text) is allowed
+
+
+def _tier(monkeypatch, text, fix_result):
+    import fast_tiers
+
+    order = []
+
+    async def no_apply(*_a, **_k):
+        return None
+
+    async def fix(*_a, **_k):
+        order.append("recent")
+        return fix_result
+
+    async def swap(*_a, **_k):
+        order.append("global")
+        return None
+
+    monkeypatch.setattr(ca, "maybe_apply", no_apply)
+    monkeypatch.setattr(ca, "maybe_fix_recent", fix)
+    monkeypatch.setattr(ca, "maybe_swap", swap)
+    asyncio.run(fast_tiers._conversation_quality_tier(text, MEMBER, SESSION, True))
+    return order
+
+
+def test_the_session_bounded_correction_runs_before_the_global_swap(monkeypatch):
+    # a generic correction: the narrow path only - the global swap never sees it, whatever the narrow path found
+    assert _tier(monkeypatch, "actually Perth, not Sydney", None) == ["recent"]
+    # a relation-bearing correction the narrow path did not settle: then the global swap
+    assert _tier(monkeypatch, "That's wrong, my sister is Marisol not Marisa.", None) == ["recent", "global"]
+    # the narrow path settled it: nothing else runs
+    done = ca.CorrectionResult("recent", "Got it.", ["x"])
+    assert _tier(monkeypatch, "That's wrong, my sister is Marisol not Marisa.", done) == ["recent"]

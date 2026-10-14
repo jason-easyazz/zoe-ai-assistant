@@ -21,13 +21,20 @@ GUEST_USERS: tuple[str, ...] = ("guest", "anonymous", "voice-guest", "voice-daem
 SYNTHETIC_USER_RE = re.compile(r"^(test|probe|demo|ci|e2e|bench)[-_]", re.IGNORECASE)
 
 
+# A per-session / per-device guest principal (zoe-auth mints ``guest-<id>``): the namespace the intent, enrollment,
+# provenance and guest-write guards already treat as unauthenticated.
+GUEST_PREFIX = "guest-"
+
+
 def is_unidentified(user_id: str | None) -> bool:
-    """True when ``user_id`` names NOBODY - a guest sentinel (case and whitespace ignored).
+    """True when ``user_id`` names NOBODY - a guest sentinel or a ``guest-<id>`` principal (case and
+    whitespace ignored).
 
     The durable-memory write gate: what an unrecognised voice or a guest session says is never
     filed as anyone's memory (identity comes from the account, never from the shared guest
     bucket). In-session context (the conversation history) is not durable memory."""
-    return str(user_id or "").strip().lower() in GUEST_USERS
+    uid = str(user_id or "").strip().lower()
+    return uid in GUEST_USERS or uid.startswith(GUEST_PREFIX)
 
 
 def synthetic_user_allowlist() -> frozenset[str]:

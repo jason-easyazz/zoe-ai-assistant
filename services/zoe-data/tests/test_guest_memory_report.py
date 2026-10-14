@@ -132,5 +132,42 @@ def test_the_executed_purge_erases_only_guest_rows_through_the_audited_path(tmp_
 
     done = asyncio.run(gmr.purge(rows, palace=str(tmp_path), svc=_Svc()))
     assert calls == [("guest", ["zoe_guest_a"], gmr.PURGE_ACTOR), ("voice-guest", ["zoe_guest_b"], gmr.PURGE_ACTOR)]
-    assert json.loads(json.dumps(done)) == {"guest": {"asked": 1, "rows_removed": 1},
-                                            "voice-guest": {"asked": 1, "rows_removed": 1}}
+    assert json.loads(json.dumps(done)) == {"guest": {"asked": 1, "rows_removed": 1, "complete": True},
+                                            "voice-guest": {"asked": 1, "rows_removed": 1, "complete": True}}
+
+
+
+def test_the_purge_passes_each_owner_exactly_as_stored(tmp_path):
+    """A legacy row stored as "Guest" or " guest " is erased under THAT id (erase_rows matches the owner exactly); normalising it
+    to "guest" erased nothing and still reported success."""
+    db = _palace(tmp_path)
+    con = sqlite3.connect(db)
+    for rid, eid, owner in ((10, "zoe_Guest_m", "Guest"), (11, "zoe_sp_guest_m", " guest ")):
+        con.execute("INSERT INTO embeddings VALUES (?,?,?)", (rid, "s1", eid))
+        for k, v in {"user_id": owner, "status": "approved", "chroma:document": "User likes kites."}.items():
+            con.execute("INSERT INTO embedding_metadata VALUES (?,?,?,NULL,NULL)", (rid, k, v))
+    con.commit()
+    con.close()
+    rows = gmr.load_guest_rows(str(tmp_path))
+    calls = []
+
+    class _Svc:
+        async def erase_rows(self, user_id, ids, *, actor, reason):
+            calls.append((user_id, sorted(ids)))
+            return {"rows_removed": len(ids)}
+
+    asyncio.run(gmr.purge(rows, palace=str(tmp_path), svc=_Svc()))
+    assert (" guest ", ["zoe_sp_guest_m"]) in calls and ("Guest", ["zoe_Guest_m"]) in calls
+    assert ("guest", ["zoe_guest_a"]) in calls
+
+
+def test_an_incomplete_purge_is_not_reported_as_success(tmp_path, monkeypatch):
+    _palace(tmp_path)
+
+    async def short(rows, *, palace, svc=None):
+        return {"guest": {"asked": 1, "rows_removed": 0, "complete": False}}
+
+    monkeypatch.setattr(gmr, "purge", short)
+    monkeypatch.setattr(gmr, "_service_listening", lambda: False)
+    monkeypatch.setattr(gmr, "_service_active", lambda: False)
+    assert gmr.main(["--palace", str(tmp_path), "--no-pg", "--purge", "--execute", "--i-stopped-zoe-data"]) == 2

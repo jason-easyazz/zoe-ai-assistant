@@ -32,7 +32,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
+from typing import NamedTuple, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -953,8 +953,8 @@ def _swap_phrase(text: str, old: str, new: str) -> str:
     return text[:m.start()] + value + text[m.end():]
 
 
-def correct_fact(user_id: str, session_id: Optional[str], fact: str, turn_text: str) -> Optional[tuple[str, str]]:
-    """``(corrected_fact, correcting_utterance)`` when THIS member corrected, later in the SAME session, a value the fact holds
+def correct_fact(user_id: str, session_id: Optional[str], fact: str, turn_text: str) -> Optional[FactCorrection]:
+    """``FactCorrection(corrected_fact, correcting_utterance, old, new)`` when THIS member corrected, later in the SAME session, a value the fact holds
     and ``turn_text`` (the user turn the fact was mined from) is one of the turns that correction followed; else None. Pure
     apart from the in-process registry. Newest correction wins."""
     if not user_id or not session_id or _is_unidentified(user_id) or not fact or not turn_text:
@@ -964,8 +964,43 @@ def correct_fact(user_id: str, session_id: Optional[str], fact: str, turn_text: 
             continue
         rx = _phrase_re(p.old)
         if rx.search(fact) and rx.search(turn_text):
-            return _swap_phrase(fact, p.old, p.new), p.utterance
+            return FactCorrection(_swap_phrase(fact, p.old, p.new), p.utterance, p.old, p.new)
     return None
+
+
+def global_swap_allowed(text: str) -> bool:
+    """May the store-wide name swap (``maybe_swap``) act on ``text``? Only when it names a RELATION ("my sister is Marisol not
+    Marisa": the relation pins the row) or is a swap the same-session path does not read (no correction cue). A generic
+    "actually Perth, not Sydney" belongs to the session-bounded path only - globally it would rewrite whichever older,
+    unrelated row happens to hold "Sydney". Pure."""
+    sw = swap_statement(text)
+    if sw is None:
+        return False
+    return bool(sw[0]) or correction_pair(text) is None
+
+
+class FactCorrection(NamedTuple):
+    fact: str           # the fact with the old value replaced
+    utterance: str      # the member's correcting words (evidence)
+    old: str
+    new: str
+
+
+def correct_claim(claim, fc: "FactCorrection"):
+    """The extractor's claim row for a fact ``correct_fact`` rewrote, rebuilt for the CORRECTED value: ``obj`` with the old
+    value replaced and ``quote`` = the member's correcting words (their verbatim support for the new value). None (drop the
+    claim, the write is judged on its lexical floor) when the claim's value does not hold the old value. Pure."""
+    if claim is None:
+        return None
+    obj = str(getattr(claim, "obj", "") or "")
+    if not _phrase_re(fc.old).search(obj):
+        return None
+    try:
+        import dataclasses
+
+        return dataclasses.replace(claim, obj=_swap_phrase(obj, fc.old, fc.new), quote=fc.utterance)
+    except Exception:  # noqa: BLE001 - an unexpected claim shape is dropped, never stored stale
+        return None
 
 
 def _derives_from(turn_text: str, earlier: "tuple[str, ...]") -> bool:
