@@ -103,6 +103,37 @@ def test_classifier_negative(text):
     assert classify_weather_ask(text) is None, text
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "what's the temperature in the bedroom",
+        "how warm is it in the living room",
+        "what is the temperature inside",
+        "what is the current temperature in this area",
+        "how is temperature my space",
+        "what's the current temperature in my area",
+        "how hot is it in here",
+        "what's the thermostat temperature",
+        "set the lamp colour temperature to 2700 K",
+        "set the temperature to 21 degrees",
+        "what's the temperature of the water",
+        "remind me if it rains tomorrow",
+        "how's the rainbow lamp",
+        "wind down the lights",
+    ],
+)
+def test_indoor_and_non_weather_temperature_is_never_weather(text):
+    assert classify_weather_ask(text) is None, text
+    intent = classify_skybridge_intent(text)
+    assert intent is None or intent.domain != "weather", text
+
+
+def test_a_command_shaped_write_is_never_answered_with_the_weather():
+    # classify_weather_ask alone reads the keyword; the Skybridge write guard keeps a WRITE out of the read lane.
+    intent = classify_skybridge_intent("remind me to check the weather")
+    assert intent is None or intent.domain != "weather"
+
+
 def test_actions():
     assert WeatherAsk("current").action == "current"
     assert WeatherAsk("high", "today").action == "today"
