@@ -28,7 +28,7 @@ importScripts('/workbox/workbox-sw.js');
 //  first use, and precaching ~2 MB of libraries would re-download the lot on
 //  every future SW_VERSION bump.)
 // PRECACHE_DIGEST=509deca48af4e776  (sha256 of the precached files; refresh with tools/audit/sw_precache_digest.py --write and BUMP SW_VERSION)
-const SW_VERSION = '4.86.2'; // 4.86.2: a late 401 for a replaced panel session no longer wipes the newer one (the notice names the refused session id). 4.86.1: panel poll survives a 401 (polls as guest + asks the page to re-mint) instead of stopping for good — the wall panel no longer goes deaf when a PIN session expires, and the guest poll rides out the 300 s member->guest reclaim 403s instead of stopping (2026-10-12/13). 4.86.0: dashboard/lists (precached) drop the dead AI-generate tab; dark-mode-shared.css (precached) makes chat session titles readable (2026-10-09). 4.85.0: index.html (precached) opens the sign-in overlay itself after a gate redirect (2026-10-09). 4.84.1: chat.html persists its chat session id before the first send (no throwaway id per message). 4.84.0: chat/dashboard/calendar/lists/offline (precached): desktop→touch links severed, dead tier removed, offline probes /health, trailing-slash 307s gone (UI deep review wave 5, 2026-10-04)
+const SW_VERSION = '4.86.3'; // 4.86.3: a stale guest/member 403 that lands after a fresh PIN sign-in no longer stops the SW panel poll (mirrors the 401 stale-response check). 4.86.2: a late 401 for a replaced panel session no longer wipes the newer one (the notice names the refused session id). 4.86.1: panel poll survives a 401 (polls as guest + asks the page to re-mint) instead of stopping for good — the wall panel no longer goes deaf when a PIN session expires, and the guest poll rides out the 300 s member->guest reclaim 403s instead of stopping (2026-10-12/13). 4.86.0: dashboard/lists (precached) drop the dead AI-generate tab; dark-mode-shared.css (precached) makes chat session titles readable (2026-10-09). 4.85.0: index.html (precached) opens the sign-in overlay itself after a gate redirect (2026-10-09). 4.84.1: chat.html persists its chat session id before the first send (no throwaway id per message). 4.84.0: chat/dashboard/calendar/lists/offline (precached): desktop→touch links severed, dead tier removed, offline probes /health, trailing-slash 307s gone (UI deep review wave 5, 2026-10-04)
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
@@ -714,6 +714,11 @@ async function _panelPoll() {
             return;
         }
         if (err && err.status === 403) {
+            // Mirror of the 401 rule above: a LATE 403 for a session that has since been replaced
+            // (a stale guest poll refused inside the reclaim window that lands after a fresh PIN
+            // sign-in re-sent START_PANEL_POLL) says nothing about the CURRENT session. Stopping on
+            // it killed the poll the new session was running.
+            if ((err.sessionId || null) !== (_panelSessionId || null)) return;
             // A GUEST poll (we just dropped a dead member session) is refused with a 403 while
             // the former owner's panel row is still fresh — expected for ~300 s, and nothing
             // restarts a stopped SW poll when reclaim then succeeds. Ride it out for the same
