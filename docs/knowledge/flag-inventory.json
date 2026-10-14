@@ -5543,6 +5543,46 @@
         ],
         "typed_env": false
       },
+      "ZOE_STRUGGLE_DETECT": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/struggle_detector.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_STRUGGLE_QUEUE_MAX": {
+        "defaults": [
+          "256"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/struggle_detector.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_STRUGGLE_RETENTION_DAYS": {
+        "defaults": [
+          "90"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/struggle_detector.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_STRUGGLE_WINDOW_S": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/struggle_detector.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_STT_BACKEND": {
         "defaults": [
           "'moonshine'"

@@ -953,6 +953,12 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
     ``GET /api/memories/capture-status`` (internal token). Harness contract:
     ``scripts/perf/samantha_bar.py`` waits on it before scoring S7.
     """
+    try:  # the struggle detector (this task already runs after the reply; a bounded put_nowait that never raises)
+        import struggle_detector
+
+        struggle_detector.observe("chat", user_message, assistant_response, user_id, session_id)
+    except Exception:  # noqa: BLE001
+        pass
     import memory_capture_stats
 
     memory_capture_stats.started(user_id)

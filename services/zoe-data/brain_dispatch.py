@@ -303,6 +303,12 @@ def _log_lane(
         reason or "-",
         (session_id or "-")[:64],
     )
+    try:  # the struggle detector: a brain lane served this session's turn (an O(1) deque append; never raises)
+        import struggle_detector
+
+        struggle_detector.note_brain(session_id, served, outcome)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 class _LaneRecord:

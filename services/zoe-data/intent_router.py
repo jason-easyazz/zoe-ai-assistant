@@ -3816,6 +3816,16 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             logger.warning("memory_forget_entity: night-mind erase failed (%s)", type(exc).__name__)
             return ("I couldn't finish erasing what I'd noticed about that just now, so I can't say it's forgotten yet. "
                     "I won't bring it up meanwhile - please tell me again in a moment.")
+        # ... and the struggle detector's summaries of turns that named it (struggle_events): same rule, fail closed
+        try:
+            import struggle_detector
+            _sd = await struggle_detector.erase_entity(user_id, name)
+            if _sd:
+                logger.info("memory_forget_entity: erased %d struggle row(s)", _sd)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_forget_entity: struggle-row erase failed (%s)", type(exc).__name__)
+            return ("I couldn't finish clearing my notes about that conversation just now, so I can't say it's forgotten yet. "
+                    "I won't bring it up meanwhile - please tell me again in a moment.")
         # ... and the verbatim transcript (chat_messages: the digest's source, the session history): the name's span becomes a fixed
         # marker in place (ids and timestamps kept), plus the in-process turn marks. Same rule: a failure is not "forgotten".
         try:
