@@ -388,6 +388,8 @@ async def _conversation_quality_tier(text: str, user_id: str, session_id: str,
     * ``ZOE_CORRECTION_APPLY`` also covers "that's wrong, my sister is Marisol not Marisa" (``correction_apply.maybe_swap``): the
       one stored note that holds the wrong name is rewritten and read back ("Got it, your sister is Marisol."). It needs a
       verified speaker and a live (not dry) turn, and acts only when exactly one note carries the wrong value.
+      Then ``correction_apply.maybe_fix_recent``: "it's actually a bike shop, not a pike shop" rewrites this member's rows of
+      THIS session holding the old phrase, and keeps the correction for a digest of an earlier turn that has not landed yet.
     * ``ZOE_ROSTER_NEUTRAL_ASK`` — a pasted `Name - detail` list whose roles are not stated is
       restated neutrally with ONE question, never assigned wife/girls from first names
       (``people_roles.roster_reply``).
@@ -401,6 +403,10 @@ async def _conversation_quality_tier(text: str, user_id: str, session_id: str,
             res = await _ca.maybe_apply(text, user_id, session_id)
             if res is None and not dry and speaker_verified is not False:
                 res = await _ca.maybe_swap(text, user_id, session_id)
+                if res is None:
+                    # "it's actually a bike shop, not a pike shop": this member's rows of THIS session, and the digest of
+                    # an earlier turn of it that has not landed yet (correction_apply.correct_fact)
+                    res = await _ca.maybe_fix_recent(text, user_id, session_id)
             if res is not None:
                 import expert_dispatch as _xd
 

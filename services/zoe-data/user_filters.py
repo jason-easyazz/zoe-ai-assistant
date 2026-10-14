@@ -21,6 +21,15 @@ GUEST_USERS: tuple[str, ...] = ("guest", "anonymous", "voice-guest", "voice-daem
 SYNTHETIC_USER_RE = re.compile(r"^(test|probe|demo|ci|e2e|bench)[-_]", re.IGNORECASE)
 
 
+def is_unidentified(user_id: str | None) -> bool:
+    """True when ``user_id`` names NOBODY - a guest sentinel (case and whitespace ignored).
+
+    The durable-memory write gate: what an unrecognised voice or a guest session says is never
+    filed as anyone's memory (identity comes from the account, never from the shared guest
+    bucket). In-session context (the conversation history) is not durable memory."""
+    return str(user_id or "").strip().lower() in GUEST_USERS
+
+
 def synthetic_user_allowlist() -> frozenset[str]:
     """Ids that match the synthetic pattern but must still be processed.
 

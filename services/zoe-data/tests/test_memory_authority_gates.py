@@ -201,7 +201,8 @@ def test_guests_never_get_an_affective_record_in_any_mode(svc, monkeypatch, gues
         _gate(monkeypatch, mode)
     _persona(monkeypatch)
     assert emo(svc, user=guest) is None and not svc._col.rows
-    assert "AFFECT_NOT_STORED" in caplog.text
+    # a guest sentinel is refused before the affect gate: an unidentified turn files no durable memory at all
+    assert "GUEST_MEMORY_DISCARD" in caplog.text
 
 
 def test_household_refuses_when_the_member_lookup_fails(svc, monkeypatch):
@@ -255,9 +256,13 @@ def test_an_unrecognised_value_falls_to_the_strictest_gate_not_the_default(monke
 
 
 def test_off_is_the_break_the_fix_control(svc, monkeypatch):
+    _persona(monkeypatch, mode="kid", minor=True)
+    _gate(monkeypatch, "members")
+    assert emo(svc, user="member-b") is None                  # the gate refuses a minor in this mode ...
     _gate(monkeypatch, "off")
-    _persona(monkeypatch)
-    assert emo(svc, user="guest") is not None
+    assert emo(svc, user="member-b") is not None              # ... and "off" lets it through
+    # a guest sentinel is not the affect gate's to allow: an unidentified turn files nothing, whatever the mode
+    assert emo(svc, user="guest") is None
 
 
 def test_a_fact_with_a_feeling_keeps_it_for_a_minor_by_default_and_strips_it_in_members(svc, monkeypatch):
