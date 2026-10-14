@@ -159,8 +159,12 @@ async def test_cancel_one_keeps_the_others():
     user = "kitchen2"
     await resolve_skybridge_request("set a 10 minute timer for pasta", user)
     await resolve_skybridge_request("set a 3 minute timer for eggs", user)
-    # bare cancel removes the soonest (eggs); pasta keeps running and is shown
-    result = await resolve_skybridge_request("cancel the timer", user)
+    # a bare cancel with two running ASKS which (it used to delete the soonest, a delete nobody asked for)
+    asked = await resolve_skybridge_request("cancel the timer", user)
+    assert "timer_cancelled_id" not in asked and "Which one?" in asked["spoken_summary"]
+    assert len(active_timers_for(user)) == 2
+    # naming it cancels that one; pasta keeps running and is shown
+    result = await resolve_skybridge_request("cancel the eggs timer", user)
     assert result["timer_cancelled_id"]
     remaining = [c["props"]["label"] for c in result["cards"]]
     assert remaining == ["Pasta"]

@@ -24,6 +24,9 @@ writes:
   # Skybridge: anything that changes a row, a timer, a device or playback.
   - "sky:timer/create"
   - "sky:timer/cancel"
+  - "sky:timer/increase"
+  - "sky:timer/decrease"
+  - "sky:timer/set"
   - "sky:lists/add_item"
   - "sky:lists/complete_item"
   - "sky:lists/remove_item"
@@ -107,8 +110,9 @@ labels:
     accept: ["sky:timer/create", "ir:timer_create*"]
     check_seconds: true
   HassStartTimer.delayed_command:
-    # "turn off the lights in 5 minutes": running the command NOW is the bug.
-    accept: []
+    # "turn off the lights in 5 minutes": running the command NOW is the bug. Zoe has no scheduler for device
+    # commands, so the correct claim is the honest "can't schedule that yet" (`delayed`).
+    accept: ["sky:smart_home/delayed", "sky:music/delayed", "ir:smart_home/delayed"]
     forbid: ["sky:smart_home/turn_*", "sky:smart_home/set_brightness", "sky:smart_home/activate_scene",
              "ir:smart_home*", "sky:music/*", "ir:music_*"]
   HassTimerStatus:
@@ -118,17 +122,20 @@ labels:
   HassCancelAllTimers:
     accept: ["sky:timer/cancel"]
   HassIncreaseTimer:
-    # "add 5 minutes to the timer" must never START a new timer.
-    accept: []
+    # "add 5 minutes to the timer" must never START a new timer; the amount added must be the amount said.
+    accept: ["sky:timer/increase"]
+    check_seconds: true
     forbid: ["sky:timer/create", "ir:timer_create*", "ir:list_add*", "sky:lists/*"]
   HassDecreaseTimer:
-    accept: []
+    accept: ["sky:timer/decrease"]
+    check_seconds: true
     forbid: ["sky:timer/create", "ir:timer_create*", "ir:list_remove*", "sky:lists/*"]
   HassPauseTimer:
-    accept: []
+    # Zoe cannot pause a timer (the panel has no paused timer): the honest "can't pause yet" is the correct claim.
+    accept: ["sky:timer/pause"]
     forbid: ["sky:timer/create", "ir:timer_create*"]
   HassUnpauseTimer:
-    accept: []
+    accept: ["sky:timer/resume"]
     forbid: ["sky:timer/create", "ir:timer_create*"]
 
   # ── Lists ─────────────────────────────────────────────────────────────────
@@ -186,9 +193,10 @@ labels:
   HassMediaUnpause:
     accept: ["sky:music/resume", "ir:music_control/resume", "ir:music_control/play"]
   HassMediaNext:
-    accept: ["sky:music/next", "ir:music_control/next", "ir:music_control/skip"]
+    accept: ["sky:music/next", "ir:music_control/next", "ir:music_control/skip", "ir:music_control/skip_this_song",
+             "ir:music_control/skip_the_song", "ir:music_control/skip_this_track", "ir:music_control/skip_the_track"]
   HassMediaPrevious:
-    accept: ["sky:music/previous", "ir:music_control/previous", "ir:music_control/back"]
+    accept: ["sky:music/previous", "ir:music_control/previous"]
   HassMediaPlayerMute:
     accept: ["ir:music_control/mute"]
   HassMediaPlayerUnmute:
