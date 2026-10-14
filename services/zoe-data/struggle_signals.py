@@ -359,6 +359,10 @@ class Turn:
     stt_ms: Optional[int] = None
     interrupted: bool = False
     started: Optional[float] = None    # when the turn began (the router's note), if known; ``ts`` is when it finished
+    sim_scores: dict = field(default_factory=dict)   # the similarity router's per-domain scores (0..1)
+    head_top: str = ""                 # the two-stage head's top domain (also when it gated to chat)
+    sky_domain: str = ""               # the domain Skybridge classified the words as ('' = it did not claim them)
+    sky_vetoed: bool = False           # ... and the router vetoed that claim
 
     def domain(self) -> str:
         return self.predicted_domain if self.predicted_domain not in _NON_DOMAINS else ""
@@ -407,6 +411,45 @@ def _repeatable(norm: str) -> bool:
     return bool(_REPEATABLE.match(norm)) or len(norm.split()) <= 1
 
 
+#: a similarity score this high is evidence of the domain on its own (the live routers score a domain they own at 0.8+)
+SIM_DOMAIN_EVIDENCE = 0.75
+#: the similarity router's own routing threshold (``semantic_router.threshold``, ZOE_ROUTER_THRESHOLD default)
+ROUTER_THRESHOLD = 0.62
+#: a fast path's COUNT-ONLY answer ("You have 1 event today.", "Lists has 2 items.") - the follow-up "what is it?" asks for
+#: what the count left out
+_COUNT_ONLY_RE = re.compile(
+    r"^(?:you have|there (?:is|are)|i found|lists? ha(?:s|ve)|your \w+ ha(?:s|ve))\s+(?:\d+|no|one|a|an|two|three|four|five)\s+"
+    r"(?:\w+\s+){0,2}?(?:events?|items?|things?|reminders?|timers?|lists?|contacts?|people|appointments?|messages?)\b"
+    r"(?:\s+(?!and\b)[\w']+){0,4}\s*[.!]?$", re.IGNORECASE)
+#: a short follow-up that only points back at the answer ("what is it?", "which one?", "what are they?")
+_ANAPHORIC_ASK_RE = re.compile(
+    r"^(?:so |and |ok |okay |well )?(?:what|which|who|when|where)(?: 1)?(?: is| are| was| were)? "
+    r"(?:it|they|them|that|those|this|these|1|ones)(?: then| exactly| again)?$|^(?:which 1|what are they|what is it)$")
+#: (matched against ``normalise``d text, where "one" is "1": "which one?" -> "which 1")
+
+
+def domains(t: Turn) -> set:
+    """Every domain the turn carries evidence for: the head's decision, a strong similarity score, a fast reply's own
+    phrasing, an un-vetoed Skybridge claim. Used to say two turns asked about the same thing."""
+    out = set()
+    if t.two_stage_domain not in _NON_DOMAINS:
+        out.add(t.two_stage_domain)
+    score = t.predicted_score or 0.0
+    if t.predicted_domain not in _NON_DOMAINS and (
+            score >= SIM_DOMAIN_EVIDENCE or (t.two_stage_domain in _NON_DOMAINS and score >= ROUTER_THRESHOLD)):
+        out.add(t.predicted_domain)     # similarity alone routed it (the head did not decide): its own threshold applies
+    for d, v in (t.sim_scores or {}).items():
+        if d not in _NON_DOMAINS and isinstance(v, (int, float)) and v >= SIM_DOMAIN_EVIDENCE:
+            out.add(d)
+    if t.path == PATH_FAST:
+        rd = reply_domain(t.reply)
+        if rd:
+            out.add(rd)
+        if t.sky_domain and not t.sky_vetoed:
+            out.add(t.sky_domain)
+    return out
+
+
 def _pair_fix(prev: Turn) -> str:
     """Why the previous turn failed, from how it was served."""
     if prev.path == PATH_BRAIN and prev.domain() in FAST_DOMAINS:
@@ -416,10 +459,42 @@ def _pair_fix(prev: Turn) -> str:
     return FIX_CAPABILITY_GAP
 
 
-def _new_slots(prev_text: str, cur_text: str) -> set[str]:
-    """Slots of ``cur`` that ``prev`` never said (as any word): a new time / number / place / name / on-off."""
-    prev_toks = set(tokens(prev_text))
+def _new_slots(prev_text: str, cur_text: str, prev_reply: str = "") -> set[str]:
+    """Slots of ``cur`` that neither ``prev`` nor the reply to it said (as any word): a new time / number / place / name /
+    on-off. A slot Zoe's own answer established ("You have 1 event today") is not a new question when the user repeats it."""
+    prev_toks = set(tokens(prev_text)) | set(tokens(prev_reply))
     return {s_ for s_ in slots(cur_text) if s_ not in prev_toks}
+
+
+#: number words that sound like ordinary words ("two on the light" = "turn on the light", "for" / "four", "ate" / "eight")
+_NUMBER_HOMOPHONES = frozenset({"two", "to", "too", "four", "for", "eight", "ate", "won", "ten", "then"})
+
+
+def _raw_tokens(text: str) -> list[str]:
+    """Like ``tokens`` but number words stay words (a mishearing swaps a WORD for a sound-alike number word)."""
+    t = strip_wake(text).replace("’", "'").lower()
+    for rx, rep_ in _CONTRACTION_RES:
+        t = rx.sub(rep_, t)
+    return [w for w in re.sub(r"[^\w\s']", " ", t).replace("'", "").split() if w not in _FILLERS]
+
+
+def _homophone_mishear(prev: Turn, cur: Turn, gap: float) -> Optional[list]:
+    """A voice repeat whose only difference is one or two sound-alike words where ONE side is a number homophone
+    ("two on the light" -> "turn on the light"). Two numbers, two places or two on/off words are a changed request."""
+    if cur.channel != "voice" or gap > MISHEAR_WINDOW_S:
+        return None
+    rp, rc = _raw_tokens(prev.text), _raw_tokens(cur.text)
+    if len(rc) < 3 or len(rp) != len(rc):
+        return None
+    diff = token_diff(rp, rc)
+    if not diff or not all(op == "replace" and len(a) == len(b) for op, a, b in diff) or sum(len(a) for _, a, _ in diff) > 2:
+        return None
+    pairs = [(x, y) for _, a, b in diff for x, y in zip(a, b)]
+    if not all(sound_alike(x, y) for x, y in pairs):
+        return None
+    if not all((x in _NUMBER_HOMOPHONES) != (y in _NUMBER_HOMOPHONES) for x, y in pairs):
+        return None
+    return pairs
 
 
 def _repeat_signals(prev: Turn, cur: Turn, gap: float, window_s: float) -> list[Event]:
@@ -433,7 +508,11 @@ def _repeat_signals(prev: Turn, cur: Turn, gap: float, window_s: float) -> list[
     # ── RE_ASK: the same request again
     if nc == np_:
         return [] if _repeatable(nc) else [Event(RE_ASK, 0.95, _pair_fix(prev), cur, prev, ["identical"], nums)]
-    if _new_slots(prev.text, cur.text) or _new_slots(cur.text, prev.text):
+    # ── MISHEAR: a number homophone heard where the user said a word ("two on the light"), then said clearly
+    pairs = _homophone_mishear(prev, cur, gap)
+    if pairs:
+        return [Event(MISHEAR, 0.8, FIX_STT, cur, prev, ["number_homophone"], {**nums, "swapped": len(pairs)})]
+    if _new_slots(prev.text, cur.text, prev.reply) or _new_slots(cur.text, prev.text):
         return []  # a new / changed time, number, place, name or on/off: a new question
     if _FOLLOWUP_OPENERS.match(nc) or _FOLLOWUP_TAIL.search(nc) or _repeatable(nc):
         return []
@@ -471,14 +550,13 @@ def _repeat_signals(prev: Turn, cur: Turn, gap: float, window_s: float) -> list[
     elif len(cp) >= 2 and cp < cc and len(cc - cp) == 1 and sim >= 0.6:
         reasons = ["refined"]                          # any domain: the same words plus one that pins it down
     else:
-        dp, dc = prev.domain(), cur.domain()
-        if not dp or dp != dc or len(tc) < 2 or len(tp) < 2:
+        if not (domains(prev) & domains(cur)) or len(tc) < 2 or len(tp) < 2:
             return []
         sp, sc = shape(prev.text).split(":"), shape(cur.text).split(":")
         reasons = []
         if only_inserts and content_tokens(tc) - cp:
             reasons.append("refined")
-        if shared and sim >= 0.55:
+        if (shared and sim >= 0.55) or (len(shared) >= 2 and sim >= 0.45):   # two shared content words need less wording
             reasons.append("shared_content")
         if sp[2] != "none" and sp[2] == sc[2] and sp[0] == sc[0] and sim >= 0.55:
             reasons.append("same_lead_and_anchor")
@@ -509,6 +587,25 @@ def _feedback_kind(text: str) -> Optional[str]:
 
 def _sentences(text: str) -> list[str]:
     return [normalise(p) for p in re.split(r"(?<=[.!?])\s+", strip_wake(text)) if normalise(p)]
+
+
+_CONTRAST_RE = re.compile(
+    r"(?:^|\b)(?:actually|it is|it was|its|it's|that is|that was|that's|i said|i meant|i wanted|i asked for|i want)\b"
+    r"(?P<x>[^.?!]{1,60}?),?\s+not\s+(?:a |an |the |my )?(?P<y>[a-z0-9' ]{2,40}?)\s*(?:[.!?,]|$)")
+
+
+def contrast_correction(prev: "Turn", text: str) -> Optional[str]:
+    """"It's actually a garden shop, not a garbage shop": the user puts the right X against a wrong Y that the previous
+    exchange (their own misheard words or Zoe's reply) contained. Returns ``contrast`` or None. Pure."""
+    said = set(content_tokens(tokens(prev.text))) | set(content_tokens(tokens(prev.reply)))
+    for sent in [display(p) for p in re.split(r"(?<=[.!?])\s+", strip_wake(text))][:2]:
+        m = _CONTRAST_RE.search(sent)
+        if not m:
+            continue
+        x, y = content_tokens(tokens(m.group("x"))), content_tokens(tokens(m.group("y")))
+        if x and y and y <= said:         # a real X ("I'm not hungry" has none) against a Y the exchange contained
+            return "contrast"
+    return None
 
 
 def correction_cue(prev_reply: str, text: str) -> Optional[str]:
@@ -581,6 +678,12 @@ def _fallthrough(cur: Turn) -> Optional[Event]:
         dom, reasons, conf = cur.predicted_domain, ["two_stage_failed"], 0.85
     elif not cur.two_stage_active and cur.predicted_domain in FAST_DOMAINS and score >= FALLTHROUGH_SIMILARITY_ONLY:
         dom, reasons, conf = cur.predicted_domain, ["similarity_fast_domain"], 0.75
+    elif (cur.sky_vetoed and cur.sky_domain in FAST_DOMAINS and cur.path == PATH_BRAIN
+          and ((cur.sim_scores or {}).get(cur.sky_domain, 0.0) >= SIM_DOMAIN_EVIDENCE or cur.head_top == cur.sky_domain)):
+        # Skybridge recognised the request, the router vetoed it, the brain served it slowly; a second witness (the
+        # similarity score for that domain, or the head's own top pick under its gate) keeps a declarative that merely
+        # mentions rain or a meeting out of it
+        dom, reasons, conf = cur.sky_domain, ["skybridge_vetoed"], 0.8
     else:
         return None
     if dom not in FAST_DOMAINS:
@@ -640,9 +743,60 @@ def detect(prev: Optional[Turn], cur: Turn, *, window_s: float = DEFAULT_WINDOW_
                             {"gap_s": round(gap, 1)}))
         return events
     cue = correction_cue(prev.reply, cur.text) if gap <= CORRECTION_WINDOW_S and (prev.reply or "").strip() else None
+    if not cue and gap <= CORRECTION_WINDOW_S:
+        cue = contrast_correction(prev, cur.text)
     if cue:
         events.append(Event(CORRECTION, 0.9 if cue == "explicit" else 0.75, _pair_fix(prev), cur, prev, [cue],
                             {"gap_s": round(gap, 1)}))
         return events
-    events.extend(_repeat_signals(prev, cur, gap, window_s))
+    rep_ev = _repeat_signals(prev, cur, gap, window_s)
+    if not rep_ev:
+        rep_ev = _detail_after_count(prev, cur, gap, window_s)
+    events.extend(rep_ev)
+    return events
+
+
+def _detail_after_count(prev: Turn, cur: Turn, gap: float, window_s: float) -> list[Event]:
+    """"What's on my calendar?" -> "You have 1 event today." -> "what is it?": the fast path answered a count and the user
+    had to ask again for the thing itself. Only right after a COUNT-ONLY fast reply; "what is it?" anywhere else is not."""
+    if gap > window_s or prev.path != PATH_FAST or not _COUNT_ONLY_RE.match((prev.reply or "").strip()):
+        return []
+    if not _ANAPHORIC_ASK_RE.match(normalise(cur.text)):
+        return []
+    return [Event(REPHRASE, 0.8, FIX_CAPABILITY_GAP, cur, prev, ["detail_after_count"], {"gap_s": round(gap, 1)})]
+
+
+#: how many earlier turns of the conversation a repeat may reach back over (the previous one is the pair rule's)
+LOOKBACK_TURNS = 3
+_PAIR_FAMILY = frozenset({RE_ASK, MISHEAR, REPHRASE, CORRECTION, NEGATIVE_FEEDBACK})
+
+
+def detect_window(history: list, cur: Turn, *, window_s: float = DEFAULT_WINDOW_S) -> list[Event]:
+    """``detect`` against the previous turn, plus a look BACK over up to ``LOOKBACK_TURNS`` earlier turns of the same
+    conversation by the same user for a repeat the pair rule cannot see: "what is it?" asked twice with another question in
+    between, or the fourth way of asking for the same calendar entry. Only RE_ASK / REPHRASE reach back (a mishearing is
+    corrected at once), only inside the window measured from that earlier turn's end, and an earlier hit is attributed to
+    the earlier turn. A RE_ASK may still be found when the pair rule only found a REPHRASE."""
+    prev = history[-1] if history else None
+    events = detect(prev, cur, window_s=window_s)
+    found = {e.signal for e in events if e.about is not cur}
+    if found & {RE_ASK, MISHEAR, CORRECTION, NEGATIVE_FEEDBACK} or wake_only(cur.text):
+        return events
+    want = {RE_ASK} if REPHRASE in found else {RE_ASK, REPHRASE}
+    start = cur.started if cur.started is not None else cur.ts
+    for earlier in reversed(history[-1 - LOOKBACK_TURNS:-1]):
+        if earlier.user_id != cur.user_id or earlier.conv_key != cur.conv_key:
+            continue
+        gap = start - earlier.ts
+        if gap < 0 or gap > window_s:
+            break
+        # reaching back, a REPHRASE needs domain evidence on both turns: a conversational "tell me more about that" asked
+        # again around another question is not a struggle the words alone can prove
+        hit = [e for e in _repeat_signals(earlier, cur, gap, window_s) if e.signal in want
+               and (e.signal == RE_ASK or domains(earlier) & domains(cur))]
+        if hit:
+            for e in hit:
+                e.reasons.append("earlier_turn")
+            events.extend(hit)
+            break
     return events
