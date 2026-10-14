@@ -2256,6 +2256,10 @@ app.include_router(ha_control_router)
 from routers.auth import router as auth_router
 app.include_router(auth_router)
 
+# The struggles report (struggle_detector, ZOE_STRUGGLE_DETECT): admin persons only, read-only.
+from routers.struggles import router as struggles_router  # noqa: E402
+app.include_router(struggles_router)
+
 try:
     from routers.voice_livekit import router as voice_livekit_router
     app.include_router(voice_livekit_router)

@@ -1,10 +1,12 @@
-"""The STRUGGLE DETECTOR (Phase 1 of the self-correction loop): notice the turns where Zoe visibly struggled and record
-them. Signals are ``struggle_signals.py`` (pure); this module is the runtime around them.
+"""The STRUGGLE DETECTOR (Phase 1 of the self-correction loop): notice the turns where Zoe visibly struggled, record them
+(the read side - clusters, endpoint, CLI, nightly line - is ``struggle_digest.py``). Signals are ``struggle_signals.py``
+(pure); this module is the runtime around them.
 
 ``ZOE_STRUGGLE_DETECT`` = off | **shadow (default)** | on, read per call.
   * off    - the hooks return at once: no queue, no notes, no rows.
-  * shadow - detect + store (+ one ``STRUGGLE signal=...`` log line per event, labels only). NOTHING user-facing changes.
-  * on     - reserved for the user-facing pieces of the report half; until those land it behaves exactly as shadow.
+  * shadow - detect + store + report (admin endpoint, CLI, nightly ``STRUGGLE_SUMMARY`` line). NOTHING user-facing changes.
+  * on     - shadow, plus the two user-facing pieces: a one-line acknowledgement of a bare "that was wrong" that no other tier
+             answered (``ack_line``) and the owner's struggles line in the admin morning brief.
 
 OFF THE TURN PATH, by construction:
   * The hooks (``observe``) are called from the turn's EXISTING post-turn background tasks
@@ -22,6 +24,7 @@ PRIVACY (same rules as the transcript the turn already lives in, ``chat_messages
   * a member's row may carry ``summary`` = the normalised, PII-scrubbed user words (<= 160 chars) - never Zoe's reply;
   * a GUEST row (and an off-the-record / distress turn, and a turn that names a forgotten entity) carries no words at all,
     only categories (signal, domain, the text-free ``pattern`` shape, numbers);
+  * the digest shows example words only from the VIEWER's own rows - a member's words never reach another member's report;
   * ``erase_entity`` (the forget path) deletes the user's rows whose summary names the entity, ``delete_user`` (the audited
     right-to-be-forgotten) every row of the user - both RAISE on a store failure so the forget is not confirmed;
   * rows older than ``ZOE_STRUGGLE_RETENTION_DAYS`` (default 90) are swept by the worker at most once an hour.
@@ -57,6 +60,7 @@ SWEEP_EVERY_S = 3600.0
 STORE_TIMEOUT_S = 5.0
 #: panels whose traffic is a harness or a test, never a household conversation
 SYNTHETIC_PANELS = ("replay", "test", "probe", "ci-", "e2e", "bench")
+ACK_LINE = "Sorry about that. I've made a note of it."
 
 #: counters (process lifetime): observed / enqueued / dropped_off / dropped_full / skipped_synthetic / processed / events /
 #: hook_errors / process_errors / store_errors / sweeps / swept
@@ -580,3 +584,19 @@ def _nothing_stored(exc: BaseException) -> bool:
     built in this process (a script would then wrongly report rows gone that live in Postgres) - is a FAILURE."""
     msg = f"{type(exc).__name__} {exc}".lower()
     return "undefinedtable" in msg or "no such table" in msg or ("struggle_events" in msg and "does not exist" in msg)
+
+
+# ── the one user-facing reply (mode ``on``) ──────────────────────────────────
+
+def ack_line(text: str) -> Optional[str]:
+    """``on`` only: a short, deterministic acknowledgement of a BARE "that was wrong" (no corrected value) that nothing else
+    answered. None otherwise. Pure apart from the flag read."""
+    try:
+        if mode() != "on":
+            return None
+        import conversation_feedback as _cf
+
+        hit = _cf.classify(sig.strip_wake(text))
+        return ACK_LINE if hit and hit[0] == _cf.THUMBS_DOWN else None
+    except Exception:  # noqa: BLE001
+        return None

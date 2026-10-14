@@ -2,7 +2,7 @@
 type: architecture
 title: Struggle detector - notice where Zoe struggled (Phase 1 of the self-correction loop)
 status: phase-1 built (ZOE_STRUGGLE_DETECT default shadow); phases 2-3 planned
-owner: services/zoe-data (struggle_signals.py, struggle_detector.py)
+owner: services/zoe-data (struggle_signals.py, struggle_detector.py, struggle_digest.py, routers/struggles.py)
 updated: 2026-10-14
 ---
 
@@ -37,8 +37,8 @@ turn ──► semantic_router.route ──(note_route: deque append)──┐
 * A speculative voice turn that is cancelled never reaches the hook (`_spawn_bg` defers the memory passes until commit).
 * Harness / test traffic is never recorded: `replay-*` / `test*` / `probe*` / `ci-` / `e2e` / `bench` panels and
   synthetic users (`user_filters.is_synthetic_user`).
-* The voice-path file touched is `routers/voice_tts.py` (one call at the top of `_run_voice_memory_passes`, one kwarg
-  at the streaming finaliser). Replay-gated like every voice change.
+* The voice-path files touched are `routers/voice_tts.py` (one call at the top of `_run_voice_memory_passes`, one kwarg
+  at the streaming finaliser) and `fast_tiers.py` (the `on`-only ack). Replay-gated like every voice change.
 
 ## The signals (`struggle_signals.py`, pure)
 
@@ -71,8 +71,8 @@ JSON reason codes. Suggested fix types: `router_training`, `router_latency`, `ca
   chars - never Zoe's reply. It is the same text `chat_messages` already keeps for that member.
 * No words for: guests; off-the-record / distress turns (`memory_provenance.is_off_record`); turns naming a forgotten
   entity (tombstone + `memory_forgotten.matches`); a pair across two identities; any lookup failure.
-* Reports (the report half, below) show example words only from the VIEWER's own rows; another member's words never
-  appear in anyone else's report and guest rows have none to show.
+* Reports show example words only from the VIEWER's own rows (admin endpoint, CLI, morning line). Another member's
+  words never appear in anyone else's report; guest rows have none to show.
 * Forget: `memory_forget_entity` -> `struggle_detector.erase_entity` (after the night mind, fail closed: a store failure
   answers "I can't say it's forgotten yet"). User delete: `MemoryService.delete_user` -> `struggle_detector.delete_user`
   (fail closed). Only a missing table counts as "nothing stored".
@@ -82,17 +82,17 @@ JSON reason codes. Suggested fix types: `router_training`, `router_latency`, `ca
 
 | flag | default | meaning |
 |---|---|---|
-| `ZOE_STRUGGLE_DETECT` | `shadow` | `off` = hooks return at once; `shadow` = detect + store, nothing user-facing; `on` = reserved for the report half's user-facing pieces, behaves as `shadow` until they land |
+| `ZOE_STRUGGLE_DETECT` | `shadow` | `off` = hooks return at once; `shadow` = detect + store + report, nothing user-facing; `on` = shadow + a one-line ack of a bare "that was wrong" that no tier answered + the owner's line in the admin morning brief |
 | `ZOE_STRUGGLE_WINDOW_S` | 45 | pair-signal window (clamped 5..300) |
 | `ZOE_STRUGGLE_RETENTION_DAYS` | 90 | row retention |
 | `ZOE_STRUGGLE_QUEUE_MAX` | 256 | worker queue bound |
 
 ## Reports
 
-This half records: every event is a `struggle_events` row plus one `STRUGGLE signal=... domain=... path=...` log line
-(labels only), and `struggle_detector.stats()` holds the counters. The read side - the clustered digest, the admin
-endpoint, the operator CLI, the nightly `STRUGGLE_SUMMARY` line and the `on`-only pieces (the admin morning-brief line,
-a one-line ack of a bare "that was wrong") - is the second, serial PR of this workstream.
+* `GET /api/system/struggles?days=7&scope=me|guest|all&top=20` (`routers/struggles.py` over `struggle_digest.digest`) - admin PERSONS only (a panel device token is refused).
+* `scripts/maintenance/struggle_report.py [--user ID | --guest] [--days N] [--json]` - read-only CLI.
+* Nightly: `STRUGGLE_SUMMARY window=1.0d total=N signals=... top=...` beside `MEMORY_REJECT_SUMMARY` (counts only).
+* Mode `on` only: one line in the admin's morning brief (`proactive/triggers/morning_checkin.py`).
 
 ## Evaluation (2026-10-14)
 
