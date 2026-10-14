@@ -427,6 +427,21 @@ def test_the_same_auxiliaries_in_predicate_position_are_still_sentences(item):
     assert list_service.is_plausible_item(item) is False
 
 
+# A LONE tail word ("label", "of") must not exempt a predicate: "can label" is a verb phrase, "can of course" is not a can of
+# anything. Negative control: restore ("of",) / ("label",) as one-word tails in ``_NOUN_COMPOUNDS`` and the first test goes red.
+@pytest.mark.parametrize("item", [
+    "my printer can label packages", "my printer can of course print", "my machine can label boxes",
+    "my printer can of all things jam", "my robot can of course label cans",
+])
+def test_a_lone_tail_word_does_not_exempt_a_predicate(item):
+    assert list_service.is_plausible_item(item) is False
+
+
+@pytest.mark.parametrize("item", ["my pantry can of beans", "our old can of paint", "my brother's label maker", "my dymo can label maker"])
+def test_the_two_token_compounds_still_pass(item):
+    assert list_service.is_plausible_item(item) is True
+
+
 @pytest.mark.parametrize("said,item", [
     ("add my tin can opener to my shopping list", "my tin can opener"),
     ("add my brother's can opener to the work list", "my brother's can opener"),

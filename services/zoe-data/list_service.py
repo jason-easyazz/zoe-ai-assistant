@@ -127,18 +127,32 @@ def clean_item_text(raw: str) -> str:
 # Auxiliaries that are also common nouns: "my can opener", "our can of paint", "my spare can", "your last will".
 _NOUN_HOMOGRAPHS = frozenset({"can", "will"})
 # Words that, straight AFTER one of those auxiliaries, make it the noun of a compound even mid-phrase: "my tin can OPENER", "my
-# brother's can OPENER", "our old can OF paint", "my last will AND TESTAMENT". Data, not code: a new compound is a new row here.
-# "my phone can ring" / "my phone will not work" / "my phone will and does ring" match none of them and stay sentences.
+# brother's can OPENER", "our old can OF PAINT", "my last will AND TESTAMENT". Data, not code: a new compound is a new row here.
+# A tail is the compound's tokens AFTER the auxiliary; ``_ANY_NOUN`` is a slot for "a noun follows" ("can of <noun>"). A single tail
+# word is only listed when it cannot be a verb or a preposition on its own: "of" and "label" alone are NOT ("my printer can label
+# packages", "my printer can of course print" are sentences), so they need a second token. "my phone can ring" / "my phone will
+# not work" / "my phone will and does ring" match none of them and stay sentences.
+_ANY_NOUN = "*"
 _NOUN_COMPOUNDS = {
-    "can": (("opener",), ("openers",), ("of",), ("lid",), ("lids",), ("crusher",), ("tab",), ("label",)),
+    "can": (("opener",), ("openers",), ("of", _ANY_NOUN), ("lid",), ("lids",), ("crusher",), ("tab",), ("label", "maker"),
+            ("label", "makers")),
     "will": (("and", "testament"), ("testament",)),
 }
+# Function words that cannot be the noun of "can of <noun>" ("my printer can of course print").
+_NOT_A_NOUN = frozenset({"course", "it", "them", "that", "this", "these", "those", "which", "what", "all", "any", "us", "me", "you",
+                         "him", "her", "and", "or", "but", "to", "the", "a", "an", "not"})
+
+
+def _tail_matches(tail: tuple, ahead: list) -> bool:
+    if len(ahead) < len(tail):
+        return False
+    return all((a not in _NOT_A_NOUN) if t == _ANY_NOUN else a == t for t, a in zip(tail, ahead))
 
 
 def _is_noun_compound(word: str, following: list) -> bool:
     """True when the auxiliary-looking ``word`` is followed by the rest of a known noun compound ("can" + "opener")."""
     ahead = [w.lower().strip(",;:") for w in following]
-    return any(ahead[:len(tail)] == list(tail) for tail in _NOUN_COMPOUNDS.get(word, ()))
+    return any(_tail_matches(tail, ahead) for tail in _NOUN_COMPOUNDS.get(word, ()))
 
 
 def _has_predicate(words: list) -> bool:

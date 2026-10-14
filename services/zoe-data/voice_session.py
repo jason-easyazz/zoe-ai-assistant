@@ -369,6 +369,16 @@ def _on_timer(panel_id: str, generation: int) -> None:
             pass
 
 
+def seconds_left(panel_id: str) -> Optional[float]:
+    """Seconds until the open voice session on ``panel_id`` lapses (it renews on each verified turn), or None when none is open."""
+    if not enabled():
+        return None
+    now = _clock()
+    _expire(panel_id, now)
+    s = _SESSIONS.get(panel_id)
+    return max(0.0, ttl_s() - (now - s.last_verified_at)) if s else None
+
+
 def active_member(panel_id: str) -> Optional[str]:
     """The member whose voice session is open on ``panel_id`` now (expiring it lazily), else None."""
     if not enabled():

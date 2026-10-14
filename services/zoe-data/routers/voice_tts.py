@@ -3990,7 +3990,8 @@ async def voice_command(
             text, effective_user, session_id,
             channel="voice",
             router_decision=_router_decision,
-            extra_ctx={"db": db, "panel_id": panel_id, "speaker_verified": _speaker_verified},
+            extra_ctx={"db": db, "panel_id": panel_id, "speaker_verified": _speaker_verified,
+                       "scope_user": _scope_identity_user},
             phase="conversation",
         )
         if _conv_result is not None and getattr(_conv_result, "reply", ""):
