@@ -635,7 +635,7 @@ async def test_calendar_empty_state_still_returns_data_card():
     card = result["cards"][0]
     assert card["content"]["source"] == "calendar_show"
     assert card["content"]["events"] == []
-    assert "0 events" in result["spoken_summary"]
+    assert result["spoken_summary"] == "You have nothing today."
 
 
 @pytest.mark.asyncio
