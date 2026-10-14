@@ -11,6 +11,7 @@ import shutil
 import tempfile
 import threading
 import time
+import wave
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -3414,7 +3415,9 @@ async def voice_command(
     try:
         import semantic_router as _sr
         if _sr.is_enabled():
-            _rr = _sr.route(text)
+            _pre_rr = (payload or {}).get("_router_decision")
+            # reuse a verdict the mishear guard computed on this exact text (turn_stream); otherwise route here as always
+            _rr = _pre_rr if isinstance(_pre_rr, dict) and (payload or {}).get("_router_text") == text else _sr.route(text)
             _router_decision = _rr
             logger.warning("ROUTER_SHADOW text=%r -> routed=%s (best=%s %.2f) %.1fms scores=%s",
                            text[:70], _rr["routed"], _rr["domain"], _rr["score"], _rr["ms"], _rr["scores"])
@@ -5627,6 +5630,25 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
     return result
 
 
+def _canned_turn_response(transcript: str, reply: str, audio: Optional[bytes], panel_id: str, flags: dict, gate) -> StreamingResponse:
+    """One spoken sentence answered WITHOUT the brain (the conversation opener / ender ack, the mishear clarification), in the turn_stream wire
+    format: transcript line, one audio chunk when there is audio, then the done frame carrying ``flags``. ``gate`` is the speculative turn's gate
+    (its verdict still decides what is audible) or None."""
+    import json as _json
+
+    async def _stream():
+        yield (_json.dumps({"transcript": transcript}) + "\n").encode()
+        if audio:
+            yield (_json.dumps({"chunk": 0, "text": reply, "provider": "kokoro"}) + "\n").encode()
+            yield base64.b64encode(audio) + b"\n"
+        yield (_json.dumps({"done": True, "reply": reply, "panel_id": panel_id, **flags}) + "\n").encode()
+
+    return StreamingResponse(
+        _speculation.gate_frames(_stream(), gate) if gate is not None else _stream(),
+        media_type="application/x-zoe-audio-stream", headers={"Cache-Control": "no-cache"},
+    )
+
+
 @router.post("/turn_stream")
 async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice_auth), db=Depends(get_db)):
     """Streaming variant of /turn: STT, then stream brain→sentence→TTS audio
@@ -5777,6 +5799,58 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
             _gated_done(), media_type="application/x-zoe-audio-stream", headers={"Cache-Control": "no-cache"}
         )
 
+    # ── Mishear clarification (ZOE_MISHEAR_CLARIFY, default OFF) ──
+    # A SHORT feeling-shaped line whose STT looks unreliable (slow for its clip), that routes to chat and carries no explicit emotional cue,
+    # is more likely a mishearing than a disclosure (2026-10-14: a device command heard as "I'm feeling a lot." drew a counsellor reply).
+    # Zoe asks "Sorry, what was that?" INSTEAD of the brain: no transcript broadcast, no memory write; the question opens the panel's normal
+    # follow-up window and the repeat is answered whatever it is (one clarification in a row). Never on a speculative turn. Fail-open.
+    # Flag off: ``mode()`` is one env read and nothing else runs. Doc: docs/knowledge/voice-pipeline.md, mishear_clarify.py.
+    _mc = None
+    _mc_text = transcript
+    try:
+        import mishear_clarify as _mishear
+        if _mishear.mode() != "off" and _spec_gate is None:
+            _mc_text = _normalize_voice_command_text(transcript)
+
+            def _mc_route(_t: str):
+                import semantic_router as _sr_mc
+                return _sr_mc.route(_t) if _sr_mc.is_enabled() else None
+            _mc = _mishear.evaluate(
+                _mc_text,
+                panel_id=panel_id,
+                clip_s=duration_s or _mishear.wav_seconds(raw),
+                stt_s=t_stt,
+                window=str((payload or {}).get("window") or ""),
+                prev_reply_question=bool((payload or {}).get("prev_reply_question")),
+                in_conversation=bool((payload or {}).get("conversation")),
+                continued=bool((payload or {}).get("continued")),
+                route_fn=_mc_route,
+            )
+    except Exception as _mc_exc:
+        logger.warning("voice/turn_stream mishear guard failed (non-fatal): %s", _mc_exc)
+        _mc = None
+    if _mc is not None and _mc.action == "clarify" and not _mc.shadow:
+        _mc_audio = None
+        try:
+            _mc_audio = await _synthesize_kokoro_sidecar(_mc.reply)
+        except Exception as _mc_tts_exc:
+            logger.warning("voice/turn_stream mishear clarification TTS failed: %s", _mc_tts_exc)
+        if _mc_audio:
+            try:
+                from voice_metrics import voice_turn_count
+                voice_turn_count.labels(outcome="mishear_clarify", path="turn_stream").inc()
+            except Exception:
+                pass
+            try:
+                from conversation_opener import broadcast_conversation_turn
+                await broadcast_conversation_turn(panel_id, _mc.reply, {})
+            except Exception:
+                pass
+            return _canned_turn_response(transcript, _mc.reply, _mc_audio, panel_id, {}, None)
+        # No audio, no clarification: a silent turn is worse than answering. The memory of "just clarified" goes with it.
+        _mishear.forget(panel_id)
+        _mc = None
+
     logger.info("voice/turn_stream panel=%s STT=%.2fs transcript=%r", panel_id, t_stt, transcript[:80])
     try:
         from push import broadcaster as _bc_t
@@ -5839,21 +5913,12 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
             finally:
                 _speculation.unbind(_ui_token)
 
-        async def _fast_stream():
-            yield (_json.dumps({"transcript": transcript}) + "\n").encode()
-            if _ack_audio:
-                yield (_json.dumps({"chunk": 0, "text": _fast_ack, "provider": "kokoro"}) + "\n").encode()
-                yield base64.b64encode(_ack_audio) + b"\n"
-            yield (_json.dumps({"done": True, "reply": _fast_ack, "panel_id": panel_id, **_fast_flags}) + "\n").encode()
-
         try:
             from voice_metrics import voice_turn_count
             voice_turn_count.labels(outcome="ok", path="turn_stream").inc()
         except Exception:
             pass
-        return StreamingResponse(
-            _gated(_fast_stream()), media_type="application/x-zoe-audio-stream", headers={"Cache-Control": "no-cache"}
-        )
+        return _canned_turn_response(transcript, _fast_ack, _ack_audio, panel_id, _fast_flags, _spec_gate)
 
     # The turn's spacer state, shared with voice_command (which fills in the router's domain and may speak the tool ack): the
     # timer filler below and that ack are ONE budget, one spacer per turn (voice_spacer).
@@ -5866,6 +5931,10 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
         "_t_turn_start": t_turn_start,
         "_spacer": _spacer,
     }
+    if _mc is not None and _mc.router is not None:
+        # The mishear guard already ran the router on this exact (normalised) text: hand it over instead of routing twice.
+        command_payload["_router_decision"] = _mc.router
+        command_payload["_router_text"] = _mc_text
     if (payload or {}).get("identified_user_id"):
         command_payload["identified_user_id"] = payload["identified_user_id"]
     for _claim_key in ("voice_user_id", "voice_score"):

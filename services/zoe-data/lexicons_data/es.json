@@ -774,5 +774,34 @@
   "not_offers": [
    "Hoy hace sol y 22 grados."
   ]
+ },
+ "mishear_clarify": {
+  "_note": "mishear_clarify.py: ver en.json. Escrito por el autor del cambio, sin revision nativa. 'phrases' acaban todas en signo de interrogacion; 'cues' = palabras de emocion explicita ademas de la lista 'restraint.affect'.",
+  "reviewed": false,
+  "phrases": [
+   "Perdona, ¿qué has dicho?",
+   "Perdona, no te he oído bien. ¿Puedes repetirlo?",
+   "Perdón, ¿me lo repites?",
+   "No te he entendido. ¿Otra vez?"
+  ],
+  "cues": [
+   "fatal",
+   "fatales",
+   "horrible\\w*",
+   "agotad\\w*",
+   "cansad\\w*",
+   "mal",
+   "peor",
+   "vac[ií]\\w*",
+   "sol[oa]s?",
+   "no (?:puedo|aguanto) m[aá]s",
+   "no (?:estoy|me siento) bien",
+   "harto",
+   "harta",
+   "muy mal",
+   "duele\\w*",
+   "dolor\\w*",
+   "llor\\w*"
+  ]
  }
 }
