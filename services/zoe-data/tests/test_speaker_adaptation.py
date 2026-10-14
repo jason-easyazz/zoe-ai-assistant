@@ -250,6 +250,13 @@ def _migration_0048():
     return mod
 
 
+def _migration_0051():
+    spec = importlib.util.spec_from_file_location("mig_0051", SVC / "alembic/versions/0051_speaker_profile_model_id.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 BASE_SCHEMA = """
 CREATE TABLE speaker_profiles (
     id TEXT PRIMARY KEY, user_id TEXT NOT NULL, display_name TEXT NOT NULL, embedding_blob BLOB NOT NULL,
@@ -269,6 +276,7 @@ def _build_db(path):
                 conn.exec_driver_sql(stmt)
         with Operations.context(MigrationContext.configure(conn)):
             _migration_0048().upgrade()
+            _migration_0051().upgrade()
     eng.dispose()
 
 

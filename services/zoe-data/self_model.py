@@ -475,13 +475,20 @@ def ambient_capture_on(live: "Live") -> bool:
     return facts().ambient_on or (live.ambient_recent or 0) > 0
 
 
+def _acting_voices_query(user_id: Optional[str] = None) -> tuple:
+    """enrollment_state's acting-model + consent rule for "is this voice known?" (imported lazily: no import cycle)."""
+    import enrollment_state
+
+    return enrollment_state.acting_voice_count_query(user_id)
+
+
 async def live_state(*, counts: bool = True) -> Live:
     music, home = await asyncio.gather(probe("music"), probe("home"))
     acc = vo = fa = amb = None
     if counts:
         acc, vo, fa, amb = await asyncio.gather(
             _count("SELECT COUNT(*) FROM auth_users"),
-            _count("SELECT COUNT(DISTINCT user_id) FROM speaker_profiles"),
+            _count(*_acting_voices_query()),
             _count("SELECT COUNT(DISTINCT user_id) FROM face_profiles WHERE active = 1"),
             _count("SELECT COUNT(*) FROM ambient_memory WHERE timestamp > NOW() - INTERVAL '7 days'"))
     return Live(now=_clock(), night_open=night_window_open(), music=music, home=home, accounts=acc, voices=vo, faces=fa,
@@ -614,7 +621,9 @@ def build_block(lang: str = "en", live: Optional[Live] = None, *, cap: Optional[
 
 async def _enrolment(user_id: str) -> tuple:
     """(has a voice profile, has a face profile) for THIS user, or None where the read failed."""
-    v = await _count("SELECT COUNT(*) FROM speaker_profiles WHERE user_id = ?", (user_id,), ttl=30.0)
+    # the profile that can RECOGNISE them: consented, in the acting model (enrollment_state's rule) - so after a model switch
+    # or a rollback "do you know my voice?" is true only when the current model does
+    v = await _count(*_acting_voices_query(user_id), ttl=30.0)
     fc = await _count("SELECT COUNT(*) FROM face_profiles WHERE user_id = ? AND active = 1", (user_id,), ttl=30.0)
     return (None if v is None else v > 0), (None if fc is None else fc > 0)
 
