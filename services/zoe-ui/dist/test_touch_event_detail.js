@@ -57,6 +57,20 @@ const SYNCED = { id: 'ev-sync', title: 'Quarterly planning', start_date: '2026-1
 // Objects built inside the vm context are cross-realm: compare their JSON, not prototypes.
 const eq = (a, b) => assert.deepStrictEqual(JSON.parse(JSON.stringify(a)), b);
 
+// The REAL API shape from the calendar data model (alembic 0052, PR #2059): attendees are event_attendees rows
+// (display_name/email/partstat/role 'chair'/is_organizer, rsvp is a BOOLEAN "reply requested"), alarms[] rows,
+// rrule beats the legacy free-text `recurring`, calendar_name names the calendar, read_only arrives as 1/0.
+const API_SHAPED = { id: 'ev-api', title: 'Team sync', start_date: '2026-10-21', start_time: '10:00', end_time: '10:30', category: 'work',
+  status: 'confirmed', source: 'google', calendar_name: 'Work', read_only: 1, description: 'Standing agenda.',
+  conference_url: 'https://meet.example.com/team', recurring: 'daily', rrule: 'FREQ=WEEKLY;INTERVAL=2;BYDAY=TU,TH;COUNT=10',
+  alarms: [{ action: 'display', offset_minutes: 30, related: 'start' }, { action: 'display', offset_minutes: 1440, related: 'start' }],
+  attendees: [{ display_name: 'Alex Example', partstat: 'accepted', is_organizer: true, role: 'chair', rsvp: true },
+    { display_name: 'Jo Sample', partstat: 'needs-action', role: 'req-participant', rsvp: true, is_organizer: false },
+    { display_name: 'Kit Demo', partstat: 'declined', role: 'opt-participant', rsvp: false },
+    { display_name: 'Pat Tentative', partstat: 'tentative' }, { name: 'Pat Legacy', role: 'participant', legacy: true }] };
+const BUSY = { id: 'ev-busy', title: 'Busy', busy_only: true, start_date: '2026-10-21', start_time: '14:00', end_time: '15:00', status: 'confirmed',
+  visibility: 'busy', category: null, location: null, description: null, metadata: null, attendees: [], alarms: [] };
+
 function checkSuite(M) {
   const fails = [];
   const t = (name, fn) => { try { fn(); } catch (e) { fails.push(name + ' :: ' + (e && e.message || e).toString().split('\n')[0]); } };
@@ -175,6 +189,50 @@ function checkSuite(M) {
       assert.strictEqual(M.CAT_HEX[m[1]], hex, 'category ' + m[1]); n++;
     });
     assert(n >= 14, 'compared the whole map (' + n + ')');
+  });
+
+  t('API shape: RSVP from partstat, organizer from is_organizer, boolean rsvp ignored', () => {
+    const h = M.renderDetail(API_SHAPED, OPT);
+    ['Going', 'No reply', 'Declined', 'Maybe'].forEach((x) => has(h, '>' + x + '<'));
+    assert.strictEqual((h.match(/>Organizer</g) || []).length, 1, 'only the is_organizer row');
+    lacks(h, 'r-true'); lacks(h, 'r-false'); lacks(h, '>true<'); lacks(h, '>false<');
+    has(h, '>Pat Legacy<'); assert.strictEqual((h.match(/class="evrsvp/g) || []).length, 4, 'the legacy attendee has no RSVP chip');
+    // a role of "chair" without is_organizer is NOT what marks the organizer
+    lacks(M.renderDetail({ id: 'x', title: 'T', start_date: '2026-10-21', attendees: [{ display_name: 'Cy', role: 'chair', partstat: 'accepted' }] }, OPT), '>Organizer<');
+    // a non-participant organizer (organises, does not attend) still shows, as organizer
+    has(M.renderDetail({ id: 'x', title: 'T', start_date: '2026-10-21', attendees: [{ display_name: 'Dee', role: 'non-participant', is_organizer: true, partstat: 'needs-action' }] }, OPT), '>Organizer<');
+  });
+  t('API shape: rrule beats the legacy `recurring`, and reads as words', () => {
+    const h = M.renderDetail(API_SHAPED, OPT);
+    has(h, 'Repeats every 2 weeks on Tue, Thu, 10 times'); lacks(h, 'every day', 'the legacy text must not win over rrule');
+    has(M.renderDetail({ id: 'r', title: 'T', start_date: '2026-10-21', rrule: 'RRULE:FREQ=MONTHLY' }, OPT), 'Repeats every month');
+    has(M.renderDetail({ id: 'r', title: 'T', start_date: '2026-10-21', recurring: 'weekly' }, OPT), 'Repeats every week');
+    lacks(M.renderDetail({ id: 'r', title: 'T', start_date: '2026-10-21', rrule: null, recurring: null }, OPT), 'Repeats');
+  });
+  t('API shape: alarms[] listed, labelled as stored only (nothing fires them)', () => {
+    const h = M.renderDetail(API_SHAPED, OPT);
+    has(h, '30 min before, 1 day before'); has(h, 'Saved reminders'); has(h, 'nothing sends them yet');
+    lacks(M.renderDetail(MINIMAL, OPT), 'Saved reminders');
+    const both = M.renderDetail({ id: 'd', title: 'T', start_date: '2026-10-21', alarms: [{ offset_minutes: 30 }], metadata: { reminders: [{ offset_minutes: 30 }] } }, OPT);
+    assert.strictEqual((both.match(/30 min before/g) || []).length, 1, 'the same reminder in alarms and metadata is listed once');
+  });
+  t('API shape: calendar_name + provider label (incl. Home Assistant), read_only as 1', () => {
+    const h = M.renderDetail(API_SHAPED, OPT);
+    has(h, 'From Work (Google Calendar)'); has(h, 'Managed in Work (Google Calendar) — edit it there.');
+    lacks(h, 'data-x="edit"'); lacks(h, 'data-x="del"');
+    has(M.renderDetail({ id: 'h', title: 'Bins', start_date: '2026-10-21', source: 'ha', calendar_name: 'Household' }, OPT), 'From Household (Home Assistant)');
+    has(M.renderDetail({ id: 'h', title: 'Bins', start_date: '2026-10-21', source: 'ha' }, OPT), 'From Home Assistant');
+    lacks(M.renderDetail({ id: 'l', title: 'T', start_date: '2026-10-21', source: 'local', calendar_name: 'Personal' }, OPT), 'evbadge src');
+    assert(M.renderDetail({ id: 'z', title: 'T', start_date: '2026-10-21', read_only: 0 }, OPT).includes('data-x="edit"'), 'read_only 0 is editable');
+  });
+  t('API shape: conference_url becomes the meeting button', () => { has(M.renderDetail(API_SHAPED, OPT), 'data-url="https://meet.example.com/team"'); });
+  t('busy_only renders a time block and NOTHING else (even if the payload leaks detail)', () => {
+    const h = M.renderDetail(BUSY, OPT);
+    has(h, 'Busy'); has(h, '2:00 pm – 3:00 pm'); has(h, 'Only the time is shared'); has(h, 'class="estmc evd busy');
+    ['data-x="edit"', 'data-x="del"', 'data-x="phone"', 'evcat', '>With<', '>Where<', '>Notes<', 'data-x="meeturl"'].forEach((x) => lacks(h, x));
+    const leaky = M.renderDetail(Object.assign({}, BUSY, { description: 'SECRET NOTES', location: 'SECRET PLACE', attendees: [{ display_name: 'SECRET PERSON' }],
+      conference_url: 'https://meet.example.com/secret', category: 'health', alarms: [{ offset_minutes: 5 }] }), OPT);
+    ['SECRET', 'meet.example.com', 'Health', 'Saved reminders'].forEach((x) => lacks(leaky, x, 'a busy block must not show'));
   });
 
   // ---- saving: the narrowest write -------------------------------------------
@@ -306,10 +364,15 @@ function wiringChecks() {
     'save also sends the title (would blank text the panel cannot edit)': (s) => s.replace(`var body = {};\n    var curCat`, `var body = { title: ev.title };\n    var curCat`),
     'save always PUTs even when nothing changed': (s) => s.replace(`if (!Object.keys(body).length) return`, `if (false) return`),
     'read-only events still offer Delete': (s) => s.replace(`if (n.readOnly) {`, `if (false) {`),
-    'empty rows rendered (omission broken)': (s) => s.replace(`if (n.location) rows += row('Where', esc(n.location));`, `rows += row('Where', esc(n.location));`),
+    'empty rows rendered (omission broken)': (s) => s.replace(`if (!n.busy && n.location) rows += row('Where', esc(n.location));`, `rows += row('Where', esc(n.location));`),
     'attendee RSVP dropped': (s) => s.replace(`rsvp: isObj(a) ? rsvpOf(a) : '',\n        organizer: (isObj(a)`, `rsvp: '',\n        organizer: (isObj(a)`),
     'timeless event flipped to all-day on a category save': (s) => s.replace(`var wasAll = !!ev.all_day || !firstStr(ev.start_time)`, `var wasAll = !!ev.all_day`),
     'close word matches too much': (s) => s.replace(`return CLOSE_WORDS.indexOf(s) >= 0;`, `return s.indexOf('close') >= 0;`),
+    'RSVP read from the boolean rsvp instead of partstat': (s) => s.replace(`firstStr(a.partstat, a.status,`, `firstStr(a.status,`),
+    'busy_only not honoured': (s) => s.replace(`busy: truthy(ev.busy_only)`, `busy: false`),
+    'legacy recurring beats rrule': (s) => s.replace(`var rr = firstStr(ev.rrule, meta(ev).rrule);`, `var rr = ev.recurring ? '' : firstStr(ev.rrule, meta(ev).rrule);`),
+    'read_only 1 not recognised': (s) => s.replace(`truthy(ev.read_only) ||`, `ev.read_only === true ||`),
+    'alarms ignored': (s) => s.replace(`if (Array.isArray(ev.alarms)) raw = raw.concat(ev.alarms);`, ``),
     'swipe ignores scroll position': (s) => s.replace(`(Number(g.scrollTop) || 0) <= 1 &&`, ``),
   };
   let ctl = 0;

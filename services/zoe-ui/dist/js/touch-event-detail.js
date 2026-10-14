@@ -49,6 +49,8 @@
   }
   function two(n) { return (n < 10 ? '0' : '') + n; }
   function isObj(x) { return x && typeof x === 'object' && !Array.isArray(x); }
+  // The API may hand back 1/0 for booleans (SQLite-era columns), true/false, or 'true'.
+  function truthy(v) { return v === true || v === 1 || v === '1' || v === 'true'; }
   function str(x) { return typeof x === 'string' ? x.trim() : (typeof x === 'number' ? String(x) : ''); }
   function firstStr() {
     for (var i = 0; i < arguments.length; i++) { var s = str(arguments[i]); if (s) return s; }
@@ -147,7 +149,8 @@
   }
   var SOURCE_LABEL = {
     google: 'Google Calendar', gcal: 'Google Calendar', outlook: 'Outlook', microsoft: 'Outlook',
-    office365: 'Outlook', o365: 'Outlook', caldav: 'CalDAV', icloud: 'iCloud', apple: 'iCloud', ics: 'a calendar feed'
+    office365: 'Outlook', o365: 'Outlook', caldav: 'CalDAV', icloud: 'iCloud', apple: 'iCloud', ics: 'a calendar feed',
+    ha: 'Home Assistant', homeassistant: 'Home Assistant'
   };
   var LOCAL_SOURCE = { '': 1, local: 1, zoe: 1, manual: 1, voice: 1, panel: 1, native: 1 };
   function sourceOf(ev) {
@@ -155,13 +158,16 @@
     var raw = firstStr(isObj(ev.source) ? ev.source.type || ev.source.name : ev.source,
       ev.provider, ev.source_type, m.source, m.provider).toLowerCase();
     if (LOCAL_SOURCE[raw]) return null;
-    return SOURCE_LABEL[raw] || titleCase(raw);
+    // calendar_name is the member's own name for the calendar ("Work", "Family"); the provider rides along.
+    var prov = SOURCE_LABEL[raw] || titleCase(raw);
+    var cal = firstStr(ev.calendar_name, meta(ev).calendar_name);
+    return cal && cal !== prov ? cal + ' (' + prov + ')' : (cal || prov);
   }
   function readOnlyOf(ev) {
     var m = meta(ev);
-    return ev.read_only === true || ev.readonly === true || ev.readOnly === true ||
+    return truthy(ev.read_only) || truthy(ev.readonly) || truthy(ev.readOnly) ||
       ev.editable === false || ev.can_edit === false || ev.canEdit === false ||
-      m.read_only === true || m.readonly === true || m.editable === false;
+      truthy(m.read_only) || truthy(m.readonly) || m.editable === false;
   }
   function statusOf(ev) {
     var s = firstStr(ev.status, meta(ev).status).toLowerCase();
@@ -173,10 +179,13 @@
     accepted: 'Going', going: 'Going', yes: 'Going', confirmed: 'Going',
     declined: 'Declined', no: 'Declined',
     tentative: 'Maybe', tentativelyaccepted: 'Maybe', maybe: 'Maybe',
-    needsaction: 'No reply', none: 'No reply', pending: 'No reply', notresponded: 'No reply', invited: 'No reply'
+    needsaction: 'No reply', none: 'No reply', pending: 'No reply', notresponded: 'No reply', invited: 'No reply',
+    delegated: 'Delegated'
   };
   function rsvpOf(a) {
-    var raw = firstStr(a.status, a.response_status, a.responseStatus, a.rsvp, a.response).toLowerCase().replace(/[\s_-]/g, '');
+    // partstat is the real field (RFC 5545 PARTSTAT). `rsvp` is a BOOLEAN ("reply requested") in the API —
+    // str() ignores a boolean, so it only ever contributes as a legacy string.
+    var raw = firstStr(a.partstat, a.status, a.response_status, a.responseStatus, a.rsvp, a.response).toLowerCase().replace(/[\s_-]/g, '');
     return RSVP[raw] || '';
   }
   function nameOfPerson(a) {
@@ -205,7 +214,7 @@
       out.push({
         name: name,
         rsvp: isObj(a) ? rsvpOf(a) : '',
-        organizer: (isObj(a) && (a.organizer === true || role === 'organizer')) || (!!orgName && key === orgName)
+        organizer: (isObj(a) && (truthy(a.is_organizer) || truthy(a.organizer) || role === 'organizer')) || (!!orgName && key === orgName)
       });
     });
     // An organizer who is not in the attendee list is still "who it's with".
@@ -216,7 +225,29 @@
   }
   var REPEAT = { daily: 'every day', weekly: 'every week', monthly: 'every month', yearly: 'every year', annually: 'every year',
     weekdays: 'every weekday', fortnightly: 'every two weeks', biweekly: 'every two weeks' };
+  var DAYS = { MO: 'Mon', TU: 'Tue', WE: 'Wed', TH: 'Thu', FR: 'Fri', SA: 'Sat', SU: 'Sun' };
+  var UNIT = { DAILY: ['day', 'days'], WEEKLY: ['week', 'weeks'], MONTHLY: ['month', 'months'], YEARLY: ['year', 'years'] };
+  // One RFC 5545 RRULE value (the structured `rrule` column) -> "Repeats every 2 weeks on Tue, Thu, 10 times".
+  function rruleText(r) {
+    r = String(r || '').replace(/^RRULE:/i, '');
+    var parts = {};
+    r.split(';').forEach(function (kv) { var i = kv.indexOf('='); if (i > 0) parts[kv.slice(0, i).toUpperCase()] = kv.slice(i + 1); });
+    var u = UNIT[String(parts.FREQ || '').toUpperCase()];
+    if (!u) return '';
+    var n = parseInt(parts.INTERVAL, 10);
+    var t = 'Repeats every ' + (n > 1 ? n + ' ' + u[1] : u[0]);
+    if (parts.BYDAY) {
+      var days = parts.BYDAY.split(',').map(function (d) { return DAYS[d.replace(/^[-+\d]+/, '').toUpperCase()]; }).filter(Boolean);
+      if (days.length) t += ' on ' + days.join(', ');
+    }
+    var c = parseInt(parts.COUNT, 10);
+    if (c > 0) t += ', ' + c + (c === 1 ? ' time' : ' times');
+    else if (parts.UNTIL) { var d = parseDate(String(parts.UNTIL).replace(/^(\d{4})(\d{2})(\d{2}).*$/, '$1-$2-$3')); if (d) t += ', until ' + d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }); }
+    return t;
+  }
   function recurrenceOf(ev) {
+    var rr = firstStr(ev.rrule, meta(ev).rrule);          // the structured rule wins over the legacy free-text
+    if (rr) { var rt = rruleText(rr); if (rt) return rt; }
     var r = firstStr(ev.recurring, ev.recurrence, meta(ev).recurring);
     if (!r) return '';
     var k = r.toLowerCase();
@@ -226,18 +257,21 @@
     if (m) return 'Repeats ' + REPEAT[m[1].toLowerCase()];
     return 'Repeats: ' + r;
   }
+  // Reminders ON FILE: the API's `alarms[]` (event_alarms rows) plus the desktop's legacy metadata.reminders.
+  // Stored only — nothing fires them yet — so the sheet says so and offers no "remind me" on top.
   function remindersOf(ev) {
-    var raw = meta(ev).reminders;
-    if (!Array.isArray(raw)) return [];
-    var out = [];
+    var raw = [];
+    if (Array.isArray(ev.alarms)) raw = raw.concat(ev.alarms);
+    if (Array.isArray(meta(ev).reminders)) raw = raw.concat(meta(ev).reminders);
+    var out = [], seen = {};
     raw.forEach(function (r) {
       var n = isObj(r) ? Number(r.offset_minutes) : NaN;
-      if (!isFinite(n)) return;
-      if (n === 0) { out.push('At the time'); return; }
-      if (n < 0) return;
-      var t = n % 1440 === 0 ? (n / 1440) + (n === 1440 ? ' day' : ' days')
-        : n % 60 === 0 ? (n / 60) + (n === 60 ? ' hour' : ' hours') : n + ' min';
-      out.push(t + ' before');
+      if (r == null || r.offset_minutes == null || !isFinite(n) || n < 0) return;
+      var t;
+      if (n === 0) t = 'At the time';
+      else t = (n % 1440 === 0 ? (n / 1440) + (n === 1440 ? ' day' : ' days')
+        : n % 60 === 0 ? (n / 60) + (n === 60 ? ' hour' : ' hours') : n + ' min') + (isObj(r) && r.related === 'end' ? ' before it ends' : ' before');
+      if (!seen[t]) { seen[t] = 1; out.push(t); }
     });
     return out;
   }
@@ -293,7 +327,9 @@
       status: statusOf(ev), source: src,
       timezone: timezoneNote(ev, o),
       recurrence: recurrenceOf(ev), reminders: remindersOf(ev),
-      readOnly: readOnlyOf(ev)
+      readOnly: readOnlyOf(ev),
+      // Someone else's busy-only event: the API sends the time block and nothing else (title is 'Busy').
+      busy: truthy(ev.busy_only)
     };
   }
 
@@ -312,7 +348,9 @@
   function renderDetail(ev, o) {
     var n = normalize(ev, o);
     var cls = 'estmc evd' + (n.status ? ' st-' + n.status : '');
-    var badges = '<span class="evcat" style="--cc:' + n.color + '"><i></i>' + esc(titleCase(n.category)) + '</span>';
+    var badges = n.busy ? '<span class="evbadge">Busy</span>'
+      : '<span class="evcat" style="--cc:' + n.color + '"><i></i>' + esc(titleCase(n.category)) + '</span>';
+    if (n.busy) cls += ' busy';
     if (n.status === 'cancelled') badges += '<span class="evbadge bad">Cancelled</span>';
     else if (n.status === 'tentative') badges += '<span class="evbadge warn">Tentative</span>';
     if (n.source) badges += '<span class="evbadge src">From ' + esc(n.source) + '</span>';
@@ -323,21 +361,24 @@
       (n.timezone ? '<div class="evtz">Times are in ' + esc(n.timezone) + '</div>' : '');
 
     var rows = '';
-    if (n.attendees.length) {
+    if (!n.busy && n.attendees.length) {
       var shown = n.attendees.slice(0, MAX_ATTENDEES).map(attendeeHtml).join('');
       var more = n.attendees.length - MAX_ATTENDEES;
       rows += row('With', '<div class="evwhos">' + shown + (more > 0 ? '<span class="evwho more">+' + more + ' more</span>' : '') + '</div>', true);
     }
-    if (n.location) rows += row('Where', esc(n.location));
-    if (n.meetingUrl) {
+    if (!n.busy && n.location) rows += row('Where', esc(n.location));
+    if (!n.busy && n.meetingUrl) {
       rows += row('Meeting', '<button type="button" class="evbtn" data-x="meeturl" data-url="' + esc(n.meetingUrl) + '">Join on your phone</button>');
     }
-    if (n.reminders.length) rows += row(n.reminders.length > 1 ? 'Reminders' : 'Reminder', esc(n.reminders.join(', ')));
-    if (n.notes) rows += row('Notes', '<div class="evnotes">' + esc(n.notes) + '</div>', true);
+    if (!n.busy && n.reminders.length) rows += row('Saved reminders', esc(n.reminders.join(', ')) + '<div class="evnote">Stored with the event — nothing sends them yet.</div>');
+    if (!n.busy && n.notes) rows += row('Notes', '<div class="evnotes">' + esc(n.notes) + '</div>', true);
 
     if (!rows) cls += ' sparse';   // nothing but the headline: let it fill the sheet instead of leaving a black void
     var acts;
-    if (n.readOnly) {
+    if (n.busy) {
+      acts = '<div class="evro">Only the time is shared — the details are private.</div>' +
+        '<div class="evacts"><button type="button" class="evbtn" data-x="close">Close</button></div>';
+    } else if (n.readOnly) {
       acts = '<div class="evro">' + esc(n.source ? 'Managed in ' + n.source + ' — edit it there.' : 'This event can’t be edited here.') + '</div>' +
         '<div class="evacts"><button type="button" class="evbtn" data-x="close">Close</button></div>';
     } else {
