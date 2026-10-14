@@ -607,3 +607,26 @@ def test_cancel_self_audit_never_deletes_a_timer_nobody_named(owner, text):
 def test_a_negated_list_change_writes_nothing(text):
     i = sky.classify_skybridge_intent(text)
     assert i is None or i.action not in ("remove_item", "complete_item"), (text, i)
+
+
+@pytest.mark.parametrize(
+    "text,survivors",
+    [
+        ("cancel every pasta timer", {"Eggs", "Rice"}),
+        ("cancel every 5-minute timer", {"Pasta", "Rice"}),  # Eggs was set for 5 minutes
+        ("cancel all of the rice timers", {"Pasta", "Eggs"}),
+    ],
+)
+def test_a_qualified_quantifier_cancels_only_what_it_names(owner, text, survivors):
+    for label, secs in (("Pasta", 600), ("Eggs", 300), ("Rice", 900)):
+        sky._timers.create(owner, label, secs)
+    sky._resolve_timer(sky.classify_skybridge_intent(text), owner)
+    assert {t["label"] for t in sky._timers.list(owner)} == survivors, text
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["turn off the lights in a quarter of an hour", "after three quarters of an hour turn on the fan"],
+)
+def test_quarter_hour_delays_are_not_run_now(text):
+    assert _claim(text) == ("smart_home", "delayed"), text

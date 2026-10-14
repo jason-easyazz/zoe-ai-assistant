@@ -266,7 +266,10 @@ _NEGATED_RE = re.compile(r"\b(?:don'?t|do\s+not|never|no\s+need\s+to|not\s+to)\b
 
 # ── Delayed commands ─────────────────────────────────────────────────────────
 
-_AMOUNT_WORD = rf"(?:{NUM}|half\s+an?|a\s+half|a\s+few|few|a\s+couple(?:\s+of)?|couple(?:\s+of)?)"
+_AMOUNT_WORD = (
+    r"(?:three\s+quarters\s+of\s+an?|(?:a\s+)?quarter\s+of\s+an?|a\s+quarter|"
+    rf"{NUM}|half\s+an?|a\s+half|a\s+few|few|a\s+couple(?:\s+of)?|couple(?:\s+of)?)"
+)
 # BOUNDED repetition: an unbounded "(word[\s-]+)+" over overlapping alternatives ("twenty five" / "twenty") is
 # exponential on a looping transcript.
 _AMOUNT = rf"(?:another\s+|an?\s+extra\s+)?{_AMOUNT_WORD}(?:[\s-]+{_AMOUNT_WORD}){{0,3}}[\s-]+(?:and\s+a\s+half\s+)?(?:{UNIT})"

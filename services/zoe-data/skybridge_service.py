@@ -127,7 +127,16 @@ class _TimerStore:
         timers = self.list(owner)
         if not timers:
             return None, "none"
-        hits = timers
+        hits = self.matching(owner, label, start_seconds)
+        if not hits:
+            return None, "no_match"
+        if len(hits) > 1:
+            return None, "ambiguous"
+        return hits[0], ""
+
+    def matching(self, owner: str, label: str = "", start_seconds: int = 0) -> list[dict[str, Any]]:
+        """Every running timer the name and/or set length describe (all of them when neither is given)."""
+        hits = self.list(owner)
         if label:
             wanted = label.strip().lower()
             named = [t for t in hits if t["label"].lower() == wanted]
@@ -140,11 +149,7 @@ class _TimerStore:
             hits = named
         if start_seconds:  # a name AND a length ("my 10 minute pasta timer") must BOTH match
             hits = [t for t in hits if int(t.get("set_seconds", t["duration_seconds"])) == int(start_seconds)]
-        if not hits:
-            return None, "no_match"
-        if len(hits) > 1:
-            return None, "ambiguous"
-        return hits[0], ""
+        return hits
 
     def adjust(self, owner: str, timer_id: str, delta_seconds: int) -> dict[str, Any] | None:
         """Move a running timer's end by ``delta_seconds`` (negative = shorter). The panel reads ``expires_at`` from
@@ -303,6 +308,13 @@ def _timer_reply(intent: SkybridgeIntent, owner: str, spoken: str, **extra: Any)
             **extra}
 
 
+def _cancelled_line(gone: list[dict[str, Any]], qualified: bool) -> str:
+    if len(gone) == 1:
+        named = "" if gone[0]["label"].lower() == "timer" else f"{gone[0]['label']} "
+        return f"Cancelled your {named}timer."
+    return f"Cancelled {len(gone)} timers." if qualified else f"Cancelled all {len(gone)} timers."
+
+
 def _which_timer_line(intent: SkybridgeIntent, owner: str, why: str) -> str:
     """The honest line when a change cannot be pinned to ONE running timer (never a guess)."""
     if why == "none":
@@ -359,16 +371,21 @@ def _resolve_timer(intent: SkybridgeIntent, user_id: str) -> dict[str, Any]:
         return _resolve_timer_change(intent, owner)
 
     if intent.action == "cancel":
-        if intent.query == "both" and len(_timers.list(owner)) != 2:
+        qualified = bool(intent.title or intent.start_seconds)
+        if intent.query == "both" and not qualified and len(_timers.list(owner)) != 2:
             return _timer_reply(intent, owner, _which_timer_line(intent, owner, "ambiguous")
                                 if len(_timers.list(owner)) > 2 else
                                 ("You have no timers running." if not _timers.list(owner) else
                                  "You only have one timer running."))
         if intent.query in ("all", "both"):  # "cancel all timers" (HA HassCancelAllTimers)
-            gone = [t for t in list(_timers.list(owner)) if _timers.cancel_by_id(owner, t["timer_id"])]
+            # Every timer the qualifier fits ("every pasta timer"), or every timer when there is none.
+            targets = _timers.matching(owner, intent.title, intent.start_seconds)
+            if qualified and not targets and _timers.list(owner):
+                return _timer_reply(intent, owner, _which_timer_line(intent, owner, "no_match"))
+            gone = [t for t in targets if _timers.cancel_by_id(owner, t["timer_id"])]
             if gone:
                 return _timer_reply(intent, owner,
-                                    "Cancelled your timer." if len(gone) == 1 else f"Cancelled all {len(gone)} timers.",
+                                    _cancelled_line(gone, qualified),
                                     timer_cancelled_id=gone[0]["timer_id"],
                                     timer_cancelled_ids=[t["timer_id"] for t in gone])
             cancelled = None
@@ -1535,10 +1552,21 @@ def classify_skybridge_intent(
                 # Only the WHOLE set ("cancel all timers", "stop all of my timers in the kitchen", "cancel both timers");
                 # an enumerated subset ("cancel both the pasta and eggs timers") names timers, so it is read, not
                 # cancelled. "both" with anything other than exactly two running is ambiguous (resolver).
-                if re.search(r"\band\b|,|\b(?:named|called)\b", rest):
+                if re.search(r"\band\b|,", rest):
                     return SkybridgeIntent(domain="timer", action="status")
+                # A QUALIFIED set ("cancel every pasta timer", "every 5-minute timer") is every timer that fits the
+                # qualifier, never every timer. A trailing room ("in the kitchen") qualifies nothing: Zoe's timers
+                # have no room.
+                qualifier = re.sub(r"\s+in\s+(?:the\s+|my\s+|our\s+)?[a-z]+(?:\s+[a-z]+)?\s*$", "", rest)
+                qualifier = re.sub(r"\b(?:all|every|both|of|the|my|our|these|those)\b", " ", qualifier)
+                if re.search(r"\b(?:than|longer|shorter|over|under|more|less|that|which|with|without|before|after"
+                             r"|left|remaining|almost|nearly|done|finished|expired)\b", qualifier):
+                    # "every timer longer than 5 minutes": a condition the matcher cannot evaluate - read, not delete.
+                    return SkybridgeIntent(domain="timer", action="status")
+                target = command_shapes.timer_target(" ".join(qualifier.split()) or "timers")
                 return SkybridgeIntent(domain="timer", action="cancel",
-                                       query="both" if quantifier.group("q") == "both" else "all")
+                                       query="both" if quantifier.group("q") == "both" else "all",
+                                       title=target.label.title(), start_seconds=target.start_seconds)
             if re.search(r"\band\b|,", rest):
                 # "cancel the pasta timer and the eggs timer" / "cancel the timer and set a new one": more than one
                 # target or a second clause - cancelling the first name only would be half a delete; read instead.
