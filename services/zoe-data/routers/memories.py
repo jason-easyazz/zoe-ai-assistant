@@ -279,6 +279,66 @@ async def search_memories(
     return {"query": q, "results": results, "count": len(results)}
 
 
+def _member_or_refuse(request: Request, user: dict) -> str:
+    """The signed-in member's id for the Memories screen, or an HTTP refusal (strict identity: ``memory_space.require_member``)."""
+    import memory_space
+
+    try:
+        return memory_space.require_member(user, has_session_header=bool(request.headers.get(memory_space.SESSION_HEADER)))
+    except memory_space.SpaceRefused as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail)
+
+
+@router.get("/mine")
+async def my_memories(
+    request: Request,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """What Zoe knows about the signed-in member, grouped, for the touch panel's Memories screen.
+
+    Own rows only (no ``user_id`` parameter exists). A guest, a device-token-only caller or an unverified session gets 401/403
+    and NO data. Private classes (health, money, personal, feelings) come back as counts, never text. ``no-store``: a wall
+    display's private rows must not be cached by anything between here and the screen.
+    """
+    uid = _member_or_refuse(request, user)
+    await require_feature_access(db, user, feature="memories", action="read")
+    import memory_space
+
+    try:
+        view = await memory_space.read_view(uid, svc=_svc())
+    except Exception as exc:  # noqa: BLE001 - a failed read is never "nothing known"
+        logger.warning("memories/mine: read failed (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Memory is unavailable right now.")
+    return JSONResponse(content=view, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/mine/{memory_id}/forget")
+async def forget_my_memory(
+    memory_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Forget ONE of the signed-in member's own memories (the Memories screen's "Forget this", after its confirm step).
+
+    Same identity wall as ``GET /mine``. A row that is absent, someone else's or already forgotten answers the same 404 (no
+    oracle on other members' rows). Reject + twins + physical erase + verbatim words, as the voice "forget it".
+    """
+    uid = _member_or_refuse(request, user)
+    await require_feature_access(db, user, feature="memories", action="review")
+    import memory_space
+
+    try:
+        outcome = await memory_space.forget_row(uid, memory_id, svc=_svc())
+    except Exception as exc:  # noqa: BLE001 - the forget may be half done: say so, the retry finishes it
+        logger.warning("memories/mine forget failed (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="I couldn't finish forgetting that. Try again in a moment.")
+    if outcome != "forgotten":
+        raise HTTPException(status_code=404, detail="Memory not found")
+    return JSONResponse(content={"forgotten": True}, headers={"Cache-Control": "no-store"})
+
+
 _PROMPT_PACKET_MAX_FACTS = 12
 
 
