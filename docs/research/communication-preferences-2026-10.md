@@ -141,7 +141,7 @@ overflow into the next digest.
 | **ntfy** | self-hostable pub/sub push | Priorities 1-5; action buttons `view`, `http`, `copy` (and `broadcast` on Android); 4,096-byte messages. **iOS** instant delivery needs `upstream-base-url: https://ntfy.sh`, which relays only the message id, a topic hash and the fixed text "New message" through APNs; without it delivery "can take hours" | [verified] <https://docs.ntfy.sh/publish/>, <https://docs.ntfy.sh/config/> |
 | **Gotify** | self-hosted push server | Android app, web UI, CLI; WebSocket. **No iOS client** | [verified] <https://gotify.net/> |
 | **Pushover** | hosted push, very reliable | US$4.99 once per platform; priorities -2..2 (2 repeats until acknowledged, `retry` >= 30 s, `expire` <= 10,800 s); quiet hours downgrade normal messages; 1,024-char body; 10,000 messages a month | [verified] <https://pushover.net/api>, <https://pushover.net/pricing> |
-| **Matrix** | federated chat; bots are ordinary accounts | E2EE (Olm/Megolm) needs persistent key storage in the bot; a bot invites the user to a DM rather than opening one | [secondary] |
+| **Matrix** | federated chat; bots are ordinary accounts | E2EE (Olm/Megolm) needs persistent key storage in the bot; a bot invites the user to a DM rather than opening one. No source was read for this row in this session | [unverified] |
 
 ## 4. Which channels may speak first, and on what terms
 
@@ -197,7 +197,19 @@ to undo. Every notice carries its own controls (details, undo, quieter, stop).
 ## 6. Zoe today (read-only survey, 2026-10-15)
 
 Code read on `origin/main` at `e5b3ee316`; live state read with `scripts/maintenance/zoe_ground_truth.sh` and the
-running zoe-data process environment (key names and counts only, never values).
+running zoe-data process environment (key names and counts only, never values). **[verified]** in this section
+means read in this session by these commands, which a reviewer on the box can re-run:
+
+```
+git show e5b3ee316:.github/workflows/deploy.yml | sed -n 655,672p          # marker written last, after health
+git log -3 --format='%B' e5b3ee316                                          # squash body = PR description
+git show e5b3ee316:labs/flue-zoe-telegram-2x/src/app.ts | grep -n allowed_updates
+git show e5b3ee316:services/zoe-data/proactive/triggers/evolution_weekly_digest.py | sed -n 100,108p
+git show e5b3ee316:services/zoe-data/routers/system.py | sed -n 2053,2058p   # POST, body required
+grep -c '^ZOE_TELEGRAM_BOT_TOKEN=.' services/zoe-data/.env ~/.hermes/.env    # counts, never values
+grep -c '^ZOE_ALERT_TELEGRAM_CHAT_IDS=.' labs/flue-zoe-telegram-2x/.env
+systemctl --user is-active zoe-crash-loop-watch.timer
+```
 
 ### 6.1 Outbound paths that exist
 

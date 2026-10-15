@@ -127,7 +127,9 @@ communication:
 ### 3.2 Floors (not overridable)
 
 - **`security` about your own account cannot be set to `never`.** The member can pick the channel; the lowest it can
-  go is `panel` + `first_turn`, delivered as a pointer on a shared surface.
+  go is "held for you": it waits for the member's next **identified** turn (voice session or fresh PIN, through
+  `first_turn`) or their signed-in desktop or phone. It is never shown, not even as a pointer or a count, on a shared
+  surface to a turn that is not that member's (an account event's existence is itself private).
 - **`decision` for the owner cannot be `never`** while anything waits on him; he can make it `digest`.
 - **Nobody is ever woken.** Quiet hours defer every instant notice to the end of the window, including `broke`.
   Whether a crash loop may break through is owner decision 11.
@@ -167,7 +169,9 @@ Illustrative only: the PR numbers and the plain sentences below are examples, no
 > **Household (1)** #2051 Memories tile design (docs only, nothing visible yet)
 > **Under the hood: 9** (4 tests, 3 docs, 2 dependency bumps) [List]
 > **Raised, not merged: 5** (2 drafts) [List]
-> Reply **undo 2071**, **details 2063**, or **quieter**.
+> [Open #2071] [Open #2063] [All of today's PRs]
+>
+> (P1 carries URL buttons only. From P2 the same digest carries Details / Undo / Quieter buttons, section 5.7.)
 
 **Another adult, the next conversation they start after the weekly digest is due** (spoken, inside their own
 turn, through `[RAISE]`; the brain voices a code-composed line, as Memories-space 5.1 does):
@@ -198,7 +202,7 @@ turn, through `[RAISE]`; the brain voices a code-composed line, as Memories-spac
 
 | Source | How it is read | Category | Phase |
 |---|---|---|---|
-| **Merged and live** | `git log <last-notified>..<last-deployed-sha>` on the live checkout; each squash commit gives `(#N)`, the title, the body and the trailers | by conventional-commit type and labels: `feat` -> `ability`/`household`, `fix` -> `fixed`, `docs`/`test`/`chore`/`deps`/`ci` -> `under_the_hood`; a `Revert "..."` commit -> `broke` | P1 |
+| **Merged and live** | `git log <last-notified>..<last-deployed-sha>` on the live checkout; each squash commit gives `(#N)`, the title, the body and the trailers | **owner** grouping by the conventional-commit type in the title (`feat` -> New, `fix` -> Fixed, `docs`/`test`/`chore`/`deps`/`ci` -> `under_the_hood`; a `Revert "..."` commit -> `broke`). **Any other member's** category comes only from the explicit `Zoe-Notice:` trailer (5.2); no trailer = owner only. The commit holds no GitHub labels, and none are needed | P1 |
 | **Merged, not live** | `origin/main` ahead of `last-deployed-sha` for longer than the deploy normally takes, plus the deploy run's conclusion | `broke` (deploy failed) or `decision` (deploy refused by the voice gate: re-run the probe) | P1 |
 | **Deploy failed** | a new `if: failure()` step in `deploy.yml` writes `~/.zoe/deploy/last-failed` (run URL, target sha, failing step) | `broke` | P1 |
 | **Raised** | `gh pr list --state open --json number,title,isDraft,labels,headRefName,reviewDecision` | `decision` if labelled `needs-owner` (or a confirm-first PR), else a count in the digest | P1 |
@@ -216,13 +220,18 @@ the author field. P1 adds one commit trailer, written by whoever opens the PR an
 
 ```
 Zoe-Origin: self | agent | owner | dependabot
+Zoe-Notice: household | ability | fixed | none
 For-The-Household: <one plain sentence, or "nothing visible">
 For-Children: <one plain sentence, only if it affects them>
 ```
 
+- `Zoe-Notice` is the category for non-owners, chosen by the author, never inferred from the diff or the commit type.
+  Missing, `none`, or contradicted by `For-The-Household: nothing visible` = owner only (fail closed).
+
 - `self` = it came from Zoe's own evolution proposal or struggle cluster. Those notices may say "I"; everything else
   says "Zoe was updated" or names the change. A notice never claims Zoe did something she did not.
-- `For-The-Household` is the layer 1 sentence for non-owners (rule 4). A missing trailer means owner only.
+- `For-The-Household` is the layer 1 sentence for non-owners (rule 4). A missing trailer means owner only. Trailers
+  are part of the squash commit body, which GitHub fills from the PR description, so they are immutable once merged.
 - `pr-hygiene.yml` gains an **advisory** note when `Zoe-Origin` is missing. It is not a blocking check: blocking gates
   stay deterministic and minimal (AGENTS.md review pipeline).
 - Dependabot PRs get `dependabot` from their author and are always `under_the_hood`.
@@ -248,6 +257,7 @@ For-Children: <one plain sentence, only if it affects them>
   undelivered digest.
 - A deploy that ships 14 PRs is one digest section, not 14 messages. A crash loop that keeps looping is one notice
   until it recovers (the watcher's existing cooldown).
+- **Delivery is at most once per channel** (5.6), never silently lost.
 - **Already seen elsewhere is not sent again** (Linear's rule, research 1.3): an item the member pulled on the panel
   or heard on a first turn is marked delivered on every channel.
 - An empty digest is not sent. "Nothing changed today" is noise.
@@ -270,7 +280,7 @@ Two lanes, because the thing that reports a breakage must not depend on the thin
 |---|---|---|
 | `telegram` | a loopback-only route on the bot sidecar (`POST /internal/notify`, internal-token auth, `127.0.0.1`), so **one process holds the bot token**, enforces Telegram's per-chat rate (about 1 message a second, research 4) and receives the button presses. Alternative: give zoe-data the token (`auth_handoff` already expects `ZOE_TELEGRAM_BOT_TOKEN`). Owner decision 6 | P2 |
 | `web_push` | `routers/push.send_push_to_user` (VAPID) through `fire_notification` **with spoken delivery bypassed** | P2 |
-| `panel` | a `proactive_candidates` row of kind `whats_new` (counts and plain sentences only), shown by the orb's quiet count and delivered on "what's up?" (`proactive/pull.py`) | P2 |
+| `panel` | a `proactive_candidates` row of kind `whats_new` (counts and plain sentences only), shown by the orb's quiet count and delivered on "what's up?" (`proactive/pull.py`), **only inside that member's identified session** (the pull queue is already per member; the household orb never shows another member's count). `security` rows are never on the panel unless the speaker is verified | P2 |
 | `first_turn` | the same row carried by `[RAISE]` on an open turn, with the seam changes memories-space 5.1 proposes for `day_review` (exempt from the nightly expiry, a 12 h cooldown after an unanswered raise, a verified-speaker gate for `security`); proposed there, not built | P2 |
 | `apprise` | Apprise with `enable_only(...)` to an allowlist (`ntfys://`, `pover://`, `mailtos://`), URLs in the abilities vault; send-only, so no reply controls | P3 |
 | Flue channels | the abilities C-track sidecar: email (Resend) for a weekly digest; WhatsApp **only as a reply inside the member's open 24-hour window**, or a pointer-only utility template if owner decision 12 accepts the cost; SMS only for opted-in `broke`/`security` | P3 |
@@ -281,7 +291,12 @@ Two lanes, because the thing that reports a breakage must not depend on the thin
   (`owner` | `household` | `member:<id>` | `children`), layer 1 text, layer 2 text, `user_visible`, created_at.
 - `notice_deliveries`: notice id, member, channel, detail level actually sent, status (`queued`, `deferred_quiet`,
   `capped`, `sent`, `failed`, `seen_elsewhere`), sent_at, provider message id. Unique on (notice, member, channel),
-  written through an outbox so a crash never sends twice (the same pattern as the abilities watcher, W7).
+  written through an outbox. **No external channel offers an idempotency key** (Telegram's `sendMessage` has none), so
+  "exactly once" is impossible across a crash. The rule is **at most once, never silently lost**: the row is claimed
+  (`sending`) and committed *before* the provider call; success records `sent` and the provider message id. On
+  restart a `sending` row is never re-sent; it becomes `uncertain` and the member's next digest lists it in one line
+  ("this may not have reached you: ..."). On-box channels (panel, first turn) are written in the same transaction as
+  the status and are exactly once.
 - A member sees their own deliveries ("what have you told me lately?"); the admin sees counts per member, never
   another member's text.
 - Both tables join `MemoryService.delete_user` and `forget_user` (a member's deliveries are erased with them;
@@ -308,14 +323,20 @@ Two lanes, because the thing that reports a breakage must not depend on the thin
 
 - A fix PR born from a struggle cluster carries `Zoe-Origin: self` and `Struggle-Cluster:`. At merge the owner gets a
   normal `fixed` digest line.
-- **The member hears about it only after the evidence is in:** 7 days after it went live, the cluster's events are
-  counted for the week after and the week before (`struggle_events` by `(signal, domain, pattern)`; the
-  `struggle_replay_eval.py` method). Only if the count fell does a `fixed` notice go to the members whose events were
-  in the cluster: "I kept mishearing 'turn on the hall light'. I've fixed that." It never quotes another member's
-  words, and only quotes a member's own words when it delivers to that member on a private surface or in their own
-  turn.
-- If the count did not fall, the owner gets "the fix for <pattern> didn't help (5 -> 6)" and nobody else hears
-  anything. Calibrated trust needs the misses too (rule 7).
+- **The member hears about it only after the evidence is in.** A raw count falling is not enough (people may simply
+  have used the feature less). All three must hold:
+  1. **Replay:** the cluster's stored cases replay clean on the deployed code (the fix PR's own replay-gate result and
+     `struggle_replay_eval.py` on that cluster).
+  2. **Rate, not count:** the cluster's events **per opportunity** (per turn routed to that domain, by that member)
+     over the 14 days after going live fell by at least half against the 14 days before.
+  3. **Enough data:** at least 5 cluster events before and at least as many domain turns after as before; otherwise
+     the window extends, up to 6 weeks, then closes as "not enough data".
+  Then a `fixed` notice goes to the members whose events were in the cluster: "I kept mishearing 'turn on the hall
+  light'. I've fixed that." It never quotes another member's words, and only quotes a member's own words when it
+  delivers to that member on a private surface or in their own turn.
+- If replay passed but the rate test did not, or the data ran out, the owner gets the numbers ("hall light mishears:
+  4 per 100 turns -> 3 per 100, not enough to call it fixed") and nobody else hears anything. Calibrated trust needs
+  the misses too (rule 7).
 
 ## 6. Privacy and safety
 
@@ -390,14 +411,14 @@ Every cell has a negative control that must turn it red.
 | CN5 never spoken unprompted | with `ZOE_PROACTIVE_SPOKEN=1`, no notice ever enqueues an announcement | route a notice through `fire_notification` with spoken on: red |
 | CN6 plain-language fail-closed | a change with no `For-The-Household` trailer reaches only the owner | compose layer 1 from the PR title: red |
 | CN7 jargon guard | "Merged #2071 to fix the router lane" is rejected for non-owners | empty the deny list: red |
-| CN8 exactly once | a kill after the outbox insert and before the send, and after the send and before the status update, ends with exactly one message | write the status outside the transaction: duplicate, red |
+| CN8 at most once | a kill after the claim and before the send, and after the send and before the status update, never yields two messages; the uncertain notice appears once in the next digest | re-send `sending` rows on restart: a duplicate, red |
 | CN9 guests and children | a guest receives nothing; a child receives no `under_the_hood` and nothing technical | map `child` to the adult defaults: red |
 | CN10 no secrets | a fake flag `ZOE_FAKE_TOKEN=canary` never appears in any notice, log or audit row | read flag values without the secret filter: red |
 | CN11 controls bound to the member | a callback from a different Telegram id than the one the notice was sent to changes nothing | skip the sender check: red |
 | CN12 undo is a PR | "undo" creates a revert branch and PR, and `main` is never pushed | call `git push origin main` in the handler: the fake remote records it, red |
 | CN13 out-of-band survives | with zoe-data stopped, a `deploy failed` marker still produces the owner's message | send through zoe-data: red |
 | CN14 off-box content | a member who never opted Telegram in to content gets only a pointer on Telegram | send layer 1 to Telegram by default: red |
-| CN15 evidence before "fixed" | a struggle cluster that did not shrink produces no member notice, and an owner "didn't help" line | send the member notice at merge: red |
+| CN15 evidence before "fixed" | a cluster whose raw count fell only because domain turns fell (same rate) produces no member notice, and the owner gets the numbers | compare raw counts instead of rates: a member notice, red |
 
 The **Samantha bar** gains one scenario in P2 ("what's new?" from a member after a household change, on voice and
 chat). The **voice replay gate** applies to the P2 voice tier and to any change in `fast_tiers.py` or the
