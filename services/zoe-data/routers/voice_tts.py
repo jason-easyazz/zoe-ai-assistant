@@ -21,6 +21,7 @@ import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from auth import get_current_user
+import panel_principal
 from database import get_db
 from stt_wake_strip import _strip_wake_word
 from typed_env import env_bool, env_float, env_int, env_list, env_str
@@ -833,6 +834,8 @@ async def _require_voice_auth(
 ) -> dict:
     """Allow voice endpoints if caller has a valid device token OR is authenticated."""
     if device:
+        # A provisioned device token IS the panel: a guest voice turn may use the household list (a fridge list).
+        panel_principal.mark_panel_turn()
         return {
             "source": "device",
             "panel_id": device.get("panel_id"),
