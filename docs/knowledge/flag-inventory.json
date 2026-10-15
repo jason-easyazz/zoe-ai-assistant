@@ -5709,6 +5709,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_STT_SNAP": {
+        "defaults": [
+          "'shadow'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/stt_snap.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_STT_STREAM_FINISH_TIMEOUT_MS": {
         "defaults": [
           "2500"
@@ -6413,6 +6423,7 @@
         "in_env_example": false,
         "readers": [
           "scripts/maintenance/curate_voice_corpus.py",
+          "scripts/maintenance/stt_accuracy_report.py",
           "scripts/maintenance/voice_regression_probe.py",
           "services/zoe-data/routers/voice_tts.py"
         ],

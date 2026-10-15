@@ -466,10 +466,36 @@ _TIME_CUE_RE = re.compile(
 DELAYED_COMMAND_REPLY = "I can't schedule that for later yet, so I haven't changed anything. Ask me again when you want it done."
 
 
+# A sign-off / pleasantry clause AFTER the command ("…, see you tomorrow", "… and good night", "…, catch you later")
+# carries a time word that does not modify the command. It is a separate clause (after a comma / full stop / "and" /
+# "then") and opens with a fixed pleasantry; one that points back at the command ("…, do it tomorrow") is not one.
+_PLEASANTRY = (
+    r"(?:see\s+(?:you|ya)|talk\s+(?:to\s+(?:you|ya)\s+)?|speak\s+(?:to\s+you\s+)?|catch\s+(?:you|ya)|chat\s+"
+    r"|good\s*night|good\s+morning|good\s+evening|night\s+night|nighty\s+night|nite|sleep\s+(?:well|tight)"
+    r"|sweet\s+dreams|have\s+a\s+(?:good|great|nice|lovely|wonderful)\s+\w+|enjoy\s+your\s+\w+|bye(?:\s+bye)?"
+    r"|goodbye|cheers|thanks|thank\s+you|ta|love\s+you)"
+)
+_TRAILING_PLEASANTRY_RE = re.compile(
+    rf"(?:\s*[,;.!?]+\s*|\s+(?:and|then)\s+)(?:zoe[\s,]+)?{_PLEASANTRY}\b(?![^,;.!?]*\b(?:it|that|them|do)\b)[^,;.!?]*$"
+)
+
+
+def _without_trailing_pleasantries(t: str) -> str:
+    """``t`` minus every pleasantry clause at its END ("turn off the lights, see you tomorrow" -> "turn off the
+    lights"); the command itself is never cut."""
+    while True:
+        m = _TRAILING_PLEASANTRY_RE.search(t)
+        if not m or m.start() == 0:
+            return t
+        t = t[:m.start()].rstrip(" ,;.!?")
+
+
 def delayed_command(text: str, *, strict: bool = False) -> bool:
-    """True when a device / playback command carries ANY time cue (it is for later, or on a condition), so it must
-    not run now. ``strict`` (music PLAY: a title may say "tonight") counts only an explicit wait or clock time."""
+    """True when a device / playback command carries a time cue that MODIFIES it (it is for later, or on a
+    condition), so it must not run now. A trailing sign-off ("…, see you tomorrow", "… good night") is not one.
+    ``strict`` (music PLAY: a title may say "tonight") counts only an explicit wait or clock time."""
     t = " ".join((text or "").lower().replace("’", "'").split())
+    t = _without_trailing_pleasantries(t)
     if _DELAY_STRICT_RE.search(t):
         return True
     return not strict and _TIME_CUE_RE.search(t) is not None

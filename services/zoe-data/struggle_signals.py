@@ -51,7 +51,9 @@ FIX_CAPABILITY_GAP = "capability_gap"        # the right path ran but could not 
 FIX_STT = "stt"                              # the words were misheard
 FIX_VERBOSITY = "verbosity"                  # the answer was too long for the question
 FIX_ANSWER_QUALITY = "answer_quality"        # the brain answered, wrongly
-FIX_TYPES = (FIX_ROUTER_TRAINING, FIX_ROUTER_LATENCY, FIX_CAPABILITY_GAP, FIX_STT, FIX_VERBOSITY, FIX_ANSWER_QUALITY)
+FIX_STT_SNAPPED = "stt_snapped"              # a misheard command word was snapped back (stt_snap) - or would have been
+FIX_TYPES = (FIX_ROUTER_TRAINING, FIX_ROUTER_LATENCY, FIX_CAPABILITY_GAP, FIX_STT, FIX_VERBOSITY, FIX_ANSWER_QUALITY,
+             FIX_STT_SNAPPED)
 
 #: domains a deterministic fast path serves (a turn routed here and answered by the brain fell through)
 FAST_DOMAINS = frozenset({"weather", "time", "timers", "lists", "calendar", "smart_home", "music", "reminders"})
@@ -363,6 +365,7 @@ class Turn:
     head_top: str = ""                 # the two-stage head's top domain (also when it gated to chat)
     sky_domain: str = ""               # the domain Skybridge classified the words as ('' = it did not claim them)
     sky_vetoed: bool = False           # ... and the router vetoed that claim
+    stt_snap: Optional[dict] = None    # stt_snap's text-free note when a misheard command word was snapped (or would be)
 
     def domain(self) -> str:
         return self.predicted_domain if self.predicted_domain not in _NON_DOMAINS else ""
@@ -663,14 +666,59 @@ def wake_only(text: str) -> bool:
     return normalise(text) in _FILLER_ONLY
 
 
+#: words a request for each fast domain plausibly carries. A FALLTHROUGH on the head's word ALONE (a domain with no similarity
+#: examples scores 0.0, so there is no second witness) also needs one of these in the turn: the head put a calculator follow-up
+#: ("that one divided by 3.5") in ``music`` at 0.9+ and the report blamed the router for a domain the words never touched.
+_DOMAIN_CUES = {
+    "music": re.compile(
+        r"\b(?:play(?:ing)?|music|songs?|tracks?|tunes?|albums?|artists?|playlists?|radio|spotify|volume|louder|quieter|softer"
+        r"|skip|next|previous|pause|resume|shuffle|repeat|listen(?:ing)?|band|sing|dj|jazz|rock|pop|put on)\b|turn (?:it )?(?:up|down)"),
+    "smart_home": re.compile(
+        r"\b(?:lights?|lamps?|bulbs?|switch(?:es)?|plugs?|fans?|heater|heating|aircon|ac|air conditioning|thermostat|temperature"
+        r"|warmer|cooler|colder|hotter|doors?|lock|unlock|garage|gate|blinds?|curtains?|shutters?|tv|television|brightness|dim"
+        r"|brighter|darker|scenes?|kettle|vacuum|turn|toggle|open|close|set|room|bedroom|kitchen|bathroom|lounge|hallway"
+        r"|porch|garden|office)\b"),
+    "weather": re.compile(
+        r"\b(?:weather|forecast|rain(?:ing)?|sunny|temperature|hot|cold|warm|windy|wind|umbrella|jacket|coat|snow|storm|degrees"
+        r"|humid|outside|today|tomorrow|tonight|week(?:end)?|high|low|cloud(?:s|y)?|sun)\b"),
+    "time": re.compile(r"\b(?:time|clock|date|day|today|o'?clock|hour|minute|morning|afternoon|evening|tonight)\b"),
+    "timers": re.compile(r"\b(?:timers?|alarms?|countdown|minutes?|seconds?|hours?|stopwatch|remind)\b"),
+    "lists": re.compile(r"\b(?:lists?|add|shopping|groceries|grocery|to-?do|tasks?|buy|items?|put|remove|tick|cross)\b"),
+    "calendar": re.compile(
+        r"\b(?:calendar|meetings?|appointments?|events?|schedule|agenda|booked|diary|busy|free|today|tomorrow|tonight|week"
+        r"|weekend|month|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next)\b"),
+    "reminders": re.compile(r"\b(?:remind(?:er|ers|s)?|remember|forget|don'?t let me|alert|nudge)\b"),
+}
+
+
+def domain_plausible(dom: str, text: str) -> bool:
+    """True when ``text`` carries a word a request for fast domain ``dom`` plausibly has (or ``dom`` has no lexicon). Pure."""
+    rx = _DOMAIN_CUES.get(dom)
+    return rx is None or bool(rx.search((text or "").lower()))
+
+
+def _is_arithmetic(text: str) -> bool:
+    """A sum ("two plus two", "that one divided by 3.5"): never a request for a fast DOMAIN, whatever a head said about it."""
+    try:
+        import calc_speech
+
+        return calc_speech.parse(strip_wake(text), 1.0) is not None
+    except Exception:  # noqa: BLE001 - a guard that cannot run is no guard: the other rules decide
+        return False
+
+
 def _fallthrough(cur: Turn) -> Optional[Event]:
     """A turn the router placed in a fast domain that the brain - or ANOTHER fast domain - answered."""
+    if _is_arithmetic(cur.text):
+        return None
     ts_dom = cur.two_stage_domain if cur.two_stage_domain not in _NON_DOMAINS else ""
     score = cur.predicted_score or 0.0
     if ts_dom:
         # two witnesses must agree: the head chose a fast domain AND the similarity router scores that domain too (a domain
-        # with no similarity examples - smart_home / music - scores 0.0 there, so the head alone must then be sure)
-        sure = score >= FALLTHROUGH_TWO_STAGE_SIM or (score <= 0.0 and (cur.two_stage_conf or 0.0) >= 0.9)
+        # with no similarity examples - smart_home / music - scores 0.0 there, so the head alone must then be sure AND the
+        # words must carry a cue for that domain)
+        sure = score >= FALLTHROUGH_TWO_STAGE_SIM or (
+            score <= 0.0 and (cur.two_stage_conf or 0.0) >= 0.9 and domain_plausible(ts_dom, cur.text))
         if not sure:
             return None
         dom, reasons, conf = ts_dom, ["two_stage_fast_domain"], 0.85
@@ -713,6 +761,10 @@ def detect(prev: Optional[Turn], cur: Turn, *, window_s: float = DEFAULT_WINDOW_
     if wake_only(cur.text):
         events.append(Event(MISHEAR, 0.7, FIX_STT, cur, cur, ["wake_only"]))
         return events
+    if cur.stt_snap:
+        snap = cur.stt_snap
+        events.append(Event(MISHEAR, 0.8, FIX_STT_SNAPPED, cur, cur, ["stt_snapped", str(snap.get("outcome") or "")],
+                            {k: snap.get(k) for k in ("intent", "safety", "cost", "position")}))
     kind = cant_do(cur.reply)
     if kind and (kind == "error" or cur.domain()):
         events.append(Event(CANT_DO, 0.9 if kind == "error" else 0.85,
