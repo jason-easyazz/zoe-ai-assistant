@@ -277,45 +277,55 @@ async def connect(address: str, *, lecc: bool = True, lecc_prefix: Sequence[str]
     client = None
     handle: Optional[int] = None
     last: Optional[BaseException] = None
-    for attempt in range(1, attempts + 1):
-        handle = None
-        try:
-            if lecc:
-                # A link to the pendant may already be up with no owner (a stale initiation completed - see lecc_cancel_argv).
-                # The controller would ACCEPT another lecc for it and leave that one pending too, so adopt the link instead;
-                # it is ours now and is torn down with ledc like any other (we hold the radio lock, so it is no one else's).
-                handle = await _existing_link(address)
-                if handle is not None:
-                    log.info("adopting an existing LE link to the pendant (handle %d)", handle)
-                else:
-                    rc, out = await _run(lecc_argv(lecc_prefix, address, addr_type), 30.0)
-                    handle = parse_lecc_handle(out) if rc == 0 else None
-                    if handle is None:
-                        await _cancel_pending(lecc_prefix)      # never leave the controller initiating behind us
-                        raise ConnectError(f"hcitool lecc failed (rc={rc}): {out.strip()[:120]}")
-            client = BleakClient(address, disconnected_callback=on_disconnect, timeout=60.0)
+    try:
+        for attempt in range(1, attempts + 1):
+            handle = None
             try:
-                await client.connect()
-            except Exception as exc:  # noqa: BLE001 - device unknown to BlueZ's cache: one scan, then connect with the device object
-                if type(exc).__name__ != "BleakDeviceNotFoundError":
-                    raise
-                dev = await find_pendant(address, timeout=10.0)
-                if dev is None:
-                    raise
-                client = BleakClient(dev, disconnected_callback=on_disconnect, timeout=60.0)
-                await client.connect()
-            await client.start_notify(rp.STORAGE_DATA_UUID, on_notify)
-            break
-        except Exception as exc:  # noqa: BLE001
-            last = exc
-            log.info("connect attempt %d/%d failed: %s: %s", attempt, attempts, type(exc).__name__, str(exc)[:120])
-            if client is not None:
-                with contextlib.suppress(Exception):
-                    await client.disconnect()
-            await _drop_link(lecc_prefix, handle)
-            client = None
-            if attempt < attempts:
-                await asyncio.sleep(backoff_s * attempt)
+                if lecc:
+                    # A link to the pendant may already be up with no owner (a stale initiation completed - see lecc_cancel_argv).
+                    # The controller would ACCEPT another lecc for it and leave that one pending too, so adopt the link instead;
+                    # it is ours now and is torn down with ledc like any other (we hold the radio lock, so it is no one else's).
+                    handle = await _existing_link(address)
+                    if handle is not None:
+                        log.info("adopting an existing LE link to the pendant (handle %d)", handle)
+                    else:
+                        rc, out = await _run(lecc_argv(lecc_prefix, address, addr_type), 30.0)
+                        handle = parse_lecc_handle(out) if rc == 0 else None
+                        if handle is None:
+                            await _cancel_pending(lecc_prefix)      # never leave the controller initiating behind us
+                            raise ConnectError(f"hcitool lecc failed (rc={rc}): {out.strip()[:120]}")
+                client = BleakClient(address, disconnected_callback=on_disconnect, timeout=60.0)
+                try:
+                    await client.connect()
+                except Exception as exc:  # noqa: BLE001 - device unknown to BlueZ's cache: one scan, then connect with the device object
+                    if type(exc).__name__ != "BleakDeviceNotFoundError":
+                        raise
+                    dev = await find_pendant(address, timeout=10.0)
+                    if dev is None:
+                        raise
+                    client = BleakClient(dev, disconnected_callback=on_disconnect, timeout=60.0)
+                    await client.connect()
+                await client.start_notify(rp.STORAGE_DATA_UUID, on_notify)
+                break
+            except Exception as exc:  # noqa: BLE001
+                last = exc
+                log.info("connect attempt %d/%d failed: %s: %s", attempt, attempts, type(exc).__name__, str(exc)[:120])
+                if client is not None:
+                    with contextlib.suppress(Exception):
+                        await client.disconnect()
+                await _drop_link(lecc_prefix, handle)
+                client, handle = None, None     # dropped: a cancel during the backoff must not ledc a reused handle
+                if attempt < attempts:
+                    await asyncio.sleep(backoff_s * attempt)
+    except BaseException:           # cancelled mid-connect (an Exception is handled per attempt): leave nothing behind
+        if client is not None:
+            with contextlib.suppress(Exception):
+                await client.disconnect()
+        await _drop_link(lecc_prefix, handle)
+        if lecc:
+            await _cancel_pending(lecc_prefix)
+        radio.release()
+        raise
     if client is None:
         radio.release()
         raise ConnectError(f"could not connect after {attempts} attempts: {type(last).__name__ if last else 'n/a'}") from last

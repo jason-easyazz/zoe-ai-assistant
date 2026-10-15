@@ -11,6 +11,7 @@ the cancel tests go red; drop the ``_existing_link`` adoption -> the adopt test 
 """
 from __future__ import annotations
 
+import asyncio
 import sys
 import types
 from pathlib import Path
@@ -22,6 +23,7 @@ pytestmark = pytest.mark.ci_safe
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "services" / "omi-sync"))
 
 from omi_sync import ble_link, ring_protocol as rp  # noqa: E402
+from omi_sync.radio_lock import RadioLock  # noqa: E402
 
 ADDR = "E4:A3:57:6C:8D:0D"
 CANCEL = ["sudo", "-n", "hcitool", "cmd", "0x08", "0x000E"]
@@ -156,3 +158,30 @@ async def test_without_lecc_nothing_is_run(monkeypatch):
     async with ble_link.connect(ADDR, lecc=False, attempts=1):
         pass
     assert hci.calls == []
+
+
+async def test_a_connect_cancelled_mid_lecc_cancels_the_initiation_and_frees_the_radio(monkeypatch):
+    hci = use(monkeypatch, FakeHci())
+    started = asyncio.Event()
+    real = hci.run
+
+    async def run(argv, timeout):
+        if "lecc" in argv:
+            hci.calls.append(list(argv))
+            started.set()
+            await asyncio.Event().wait()           # the pendant is out of range: hcitool is still waiting
+        return await real(argv, timeout)
+    monkeypatch.setattr(ble_link, "_run", run)
+
+    async def go():
+        async with ble_link.connect(ADDR, attempts=2):
+            pytest.fail("must not connect")
+    task = asyncio.ensure_future(go())
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert hci.of("cmd") == [CANCEL], "a cancelled connect must not leave the controller initiating"
+    lock = RadioLock()
+    assert lock.try_acquire(), "a cancelled connect must give the radio back"
+    lock.release()
