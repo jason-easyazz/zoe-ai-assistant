@@ -775,9 +775,9 @@ def test_deferral_is_silent_with_an_empty_backlog_and_for_the_expected_closures(
         run(omi.note_deferred("MemAvailable 900 MB < 1500 MB", now_mono=0.0))      # nothing waiting: not news
         upload(env, make_wav(3.0))
         run(omi.note_deferred("night window", now_mono=0.0))                        # state, never log noise
+        assert omi.deferred_state()["reason"] == "night_window"
         run(omi.note_deferred("flag off", now_mono=0.0))
         assert not _deferred_lines(caplog)
-        assert omi.deferred_state()["reason"] == "night_window"
         run(omi.note_deferred("MemAvailable 900 MB < 1500 MB", now_mono=0.0))      # control: with a backlog, memory does log
         assert len(_deferred_lines(caplog)) == 1
 
@@ -944,3 +944,25 @@ def test_measure_wav_file_equals_measure_wav_and_never_raises(tmp_path):
     p.write_bytes(wav)
     assert omi.measure_wav_file(str(p)) == omi.measure_wav(wav)
     assert omi.measure_wav_file(str(tmp_path / "missing.wav"))["seconds"] == 0.0
+
+
+def test_a_flag_flip_clears_a_stale_deferred_state_and_ends_a_running_job(env, monkeypatch):
+    upload(env, make_wav(45.0), duration=45.0)
+    monkeypatch.setattr(omi, "night_window", lambda now=None: True)
+    run(omi.transcribe_pending(limit=1, pause_s=0))
+    assert omi.deferred_state()["reason"] == "night_window"
+    monkeypatch.delenv("ZOE_OMI_SYNC_ENABLED")
+    run(omi.note_deferred("flag off"))
+    assert omi.deferred_state()["deferred"] is False                                 # control: the night-window state above was real
+    monkeypatch.setenv("ZOE_OMI_SYNC_ENABLED", "1")
+    monkeypatch.setattr(omi, "night_window", lambda now=None: False)
+    monkeypatch.setattr(omi, "HOLD_MAX_S", 3600.0)
+    orig = omi._transcribe_file
+
+    async def flip_after_first(path):
+        monkeypatch.delenv("ZOE_OMI_SYNC_ENABLED")                                    # the flag goes off mid-job: ends it, no waiting
+        return await orig(path)
+
+    monkeypatch.setattr(omi, "_transcribe_file", flip_after_first)
+    assert run(asyncio.wait_for(omi.transcribe_pending(limit=1, pause_s=0), timeout=10)) == 0
+    assert rows(env)[0]["status"] == "pending" and rows(env)[0]["attempts"] == 0

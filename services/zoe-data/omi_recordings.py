@@ -245,7 +245,10 @@ async def note_deferred(why: str, *, now_mono: Optional[float] = None) -> None:
     ``DEFERRED_LOG_EVERY_S``. Silent when nothing is waiting: a closed gate with an empty backlog is not news. The expected daily
     closures (night window, flag off) are state only, never log noise."""
     code = reason_code(why)
-    if code in ("flag_off", "other"):
+    if code == "flag_off":
+        _clear_deferred()                            # the feature is off: nothing is "waiting", so no stale reason may linger
+        return
+    if code == "other":
         return
     try:
         n = await backlog_count()
