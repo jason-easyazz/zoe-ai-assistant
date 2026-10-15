@@ -83,14 +83,24 @@ install:
   scope: member                    # member | household
   roles: [admin, user]             # guests never; minors only by explicit owner decision
   admin_allowlisted: true          # the household admin enables the ability before members can
+endpoint:                          # member-supplied servers are validated before storing or connecting
+  validate: public_only            # loopback/private/link-local/metadata rejected; DNS re-checked per connect
 egress:                            # shown verbatim on the consent screen
   - host: "<the member's IMAP server>"
     direction: pull
     sends: ["credentials", "IMAP commands"]
     receives: ["headers", "bodies (transient)"]
+notify:                            # where watch-derived content may go; consented per destination
+  - channel: panel_and_bell        # on the box: sender, subject, one-line summary
+    content: full
+  - channel: web_push              # leaves the box via the browser vendor's push service
+    content: pointer               # "something from your email" only, unless the member opts in
+  - channel: telegram              # leaves the box via Telegram; needs the transport in A1 (section 3.1)
+    content: pointer
 storage:                           # what lands on the box and for how long
-  keeps: ["sender", "subject", "date", "thread id", "provider message id", "triage label"]
-  body: transient                  # transient | summary_only (never verbatim)
+  keeps: ["sender", "subject", "date", "thread id", "provider message id", "triage label",
+          "one-sentence summary (items labelled pull/brief/interrupt only)"]
+  body: transient                  # transient | summary_only (never verbatim); no body excerpt is stored
   ttl_days: 14
   restraint: true                  # restraint classes applied before any spoken surfacing
 actions:
@@ -112,8 +122,19 @@ flags: [ZOE_ABILITIES, ZOE_ABILITY_EMAIL]
 ```
 
 The loader rejects a manifest that: declares T2+ without an `errand_class`; declares T5 at all;
-has no `egress` block; has `body: verbatim`; omits `ram_mb`; or lists `guest` in `roles`. Each of
-these is a unit test with a negative control (add the field, the load must fail).
+has no `egress` block; has no `notify` block (every destination watch-derived text can reach, with its
+content level); has `body: verbatim`; keeps anything body-derived that `storage.keeps` does not name;
+omits `ram_mb`; or lists `guest` in `roles`. Each of these is a unit test with a negative control (add
+the field, the load must fail). The consent screen is generated from `egress`, `notify` and `storage`
+together, so whatever is kept or sent is what the member was told.
+
+**Member-supplied endpoints** (a generic IMAP or CalDAV server, a JMAP session URL) are untrusted input
+from a box on the LAN. Before storing or connecting, zoe-data resolves the host and rejects loopback,
+private, link-local, CGNAT, multicast and cloud-metadata addresses (the rule `agent_safety.assert_public_url`
+already applies to web fetches, made protocol-aware for IMAPS/CalDAV ports), refuses redirects to a
+different host, and **re-resolves and re-checks on every connect** so a DNS-rebinding answer cannot swap
+in an internal address later. A household that runs its own mail or calendar server on the LAN adds it to
+an admin allowlist explicitly. Lab cell W12 covers this.
 
 Each ability also gets one entry in the existing capability-profile registry
 (`docs/architecture/zoe-capability-profiles.md`) at trust level `experimental` until its lab cells pass.
@@ -176,27 +197,42 @@ which of three surfaces each one gets. It never decides by asking the model "is 
 |---|---|---|
 | **Pull queue** (default) | worth knowing, not urgent: "two emails worth a look" | `proactive/pull.py` (`ZOE_PULL_NOT_PUSH`, default on): the orb shows "there's something", "what's up?" delivers |
 | **[Today] brief** | first turn of the morning | `brief_first_turn.py` (`ZOE_BRIEF_ON_FIRST_TURN`): the day's context rides into the first brain turn |
-| **Interrupt** (rare) | only a rule **the member wrote**: "tell me straight away if the school emails" | `proactive.engine.fire_notification` (`proactive/engine.py:80`): quiet hours, push, bell; Telegram for a linked member |
+| **Interrupt** (rare) | only a rule **the member wrote**: "tell me straight away if the school emails" | `proactive.engine.fire_notification` (`proactive/engine.py:80`): quiet hours, Web Push, bell. **Telegram is not wired today**: zoe-data has no general member-facing Telegram send (only `auth_handoff`'s private link sender), so Telegram interrupts need a new, tested transport (phase A1) or are not offered |
 
 Interrupts are opt-in per rule, capped per day, and respect quiet hours (`ZOE_QUIET_START_HOUR` /
 `ZOE_QUIET_END_HOUR`). The owner turned unprompted speech off on 2026-09-29; a watcher does not turn it
 back on. A spoken interrupt is a separate, later owner decision.
 
+**What an interrupt may carry depends on where it goes**, because `fire_notification` forwards its message
+verbatim (`proactive/engine.py:163`). On-box surfaces (panel, bell, chat) may show the sender and the
+one-line summary. Anything that leaves the box (Web Push through the browser vendor's push service, a
+Telegram message) carries a **content-free pointer** ("something from your email needs a look") unless the
+member opted that destination in to content on the consent screen (the manifest's `notify` block). This is
+the same rule the action-agent record set for Telegram notifications. Lab cell W13 asserts no sender,
+subject or summary appears in any off-box payload without that opt-in.
+
 ### 3.2 The pipeline
 
 1. **Change detection** (per protocol, section 6): IMAP IDLE or JMAP push, a provider's delta/history
-   cursor, CalDAV `sync-collection`, a bridge's event stream. Only a cursor and a provider id are kept
-   per account; catch-up after a restart or the night window resumes from the cursor exactly once.
-2. **Normalise** to a `watch_items` row: member, account, provider id, thread id, sender, subject or
-   first line, time, and a deterministic set of signals. The **body is not stored**.
+   cursor, CalDAV `sync-collection`, a bridge's event stream. Catch-up after a restart or the night window
+   resumes from a cursor, and **crash-idempotence is designed, not assumed**: `watch_items` has a unique key
+   on `(account_id, provider_id)`, the item rows and the advanced cursor are written in **one
+   transaction**, and surfacing (pull queue, brief, notification) goes through a delivery outbox with its
+   own unique `(item_id, surface)` marker, so a crash before the commit replays the batch harmlessly and a
+   crash after it never delivers twice. Lab cell W7 kills the process at both boundaries (after the insert,
+   before the commit; after the commit, before delivery) and asserts exactly one row and one delivery.
+2. **Normalise** to a `watch_items` row: member, account, provider id, thread id, sender, subject, time,
+   and a deterministic set of signals. The **body is not stored**, and neither is a "first line" or any
+   other body excerpt; the only body-derived text ever kept is step 4's one-sentence summary, which the
+   manifest's `storage.keeps` names so the consent screen says so.
 3. **Deterministic triage** (code, no model): is the sender in the member's `people` graph; is it a
    reply to a thread the member started; is it a calendar invitation; is it bulk (`List-Unsubscribe`,
    `Precedence: bulk`, known no-reply senders); does it match one of the member's own rules. The output
    is a label (`ignore` / `pull` / `brief` / `interrupt`) and a reason code. Most mail ends at `ignore`.
 4. **Summarise** only the items labelled `pull`, `brief` or `interrupt`, in a **tool-less** brain call
    (no tools are registered for that call, so injected text has nothing to drive), with the body fenced.
-   The summary is capped (one sentence) and stored on the row; the body is dropped from memory when the
-   call returns.
+   The summary is capped (one sentence) and stored on the row (declared in `storage.keeps`, erased with the
+   row at the TTL or on disconnect); the body is dropped from memory when the call returns.
 5. **Surface** through the existing pull queue, brief block or notification path. Restraint classes
    (`restraint.py`: health, money, family conflict, another member) are applied before any spoken
    surfacing: a restrained item on an unverified speaker is offered on chat, not read aloud, exactly as
@@ -219,8 +255,10 @@ RAM is the scarce resource (MemAvailable about 1.5-2.5 GB with the voice stack r
   Each process is a systemd user unit with `MemoryMax=`, `MemorySwapMax=0` per the voice
   stack's protection rules, binds 127.0.0.1 only, and exposes a local event stream to zoe-data.
 - **Organs, where one already exists.** Home Assistant already ships CalDAV, Google Calendar and IMAP
-  integrations and Zoe already talks to HA. Where HA's integration fits (calendar reads especially), the
-  ability's adapter is the HA bridge, not a new client (VISION: HA and MA are hidden organs). Music
+  integrations and Zoe already talks to HA. Where the data is genuinely household-scoped (an explicitly
+  shared family calendar), the ability's adapter is the HA bridge, not a new client (VISION: HA and MA are
+  hidden organs). HA is never used for a member's personal account, because its storage and event bus are
+  household-wide. Music
   Assistant is the reference: it holds the streaming tokens and Zoe never sees them
   (`services/zoe-data/music_oauth.py`, header).
 
@@ -245,8 +283,12 @@ for the night.
 - **Panel, voice first.** "Zoe, connect my email" leads to a spoken explanation of what she will and will
   not do, then **a QR on the panel**; the member finishes on their phone and the panel card turns green
   live (`auth_handoff.py`, `status()` and `_notify_panel()`). No typing on the panel, ever. A known member
-  may get "send it to my phone" on Telegram instead (`auth_handoff.send_to_phone`); a guest gets nothing,
-  because guests cannot connect accounts.
+  may get "send it to my phone" on Telegram instead (`auth_handoff.send_to_phone`). **A guest also gets
+  the QR** (VISION principle 8: "a guest always gets the QR"): it opens the phone page, which first asks
+  the person to sign in to Zoe (or to finish linking as a household member); only a signed-in member with
+  the ability allowed ever reaches the credential step. So the voice flow is never a dead end, and a guest
+  still cannot connect an account. Lab cell W17 checks that the guest's QR reaches sign-in and that no
+  credential form is served before it.
 - **Voice controls.** "What can you see of mine?", "stop watching my email", "disconnect my email",
   "forget that email". Disconnect and forget are user rights, T1 (or the authenticated erase tier),
   never refused.
@@ -301,10 +343,21 @@ migration). The device-token row is the right shape to copy; nothing today encry
 - **Never in prompts, never in logs.** Secrets are decrypted only inside the adapter call that uses them.
   A canary secret in the lab cells is grepped for in logs, `chat_messages`, the brain's request bodies and
   `watch_items`; any hit fails the cell.
-- **Revocable from both ends.** Disconnect deletes the vault row, the cursor and the member's
-  `watch_items` in one transaction, then calls the provider's revoke endpoint where one exists, and tells
-  the member which provider page to visit where none does (an app password must be revoked at the
-  provider).
+- **Disconnect stops the watcher before it deletes anything.** Each connected account has a
+  **generation** number in the database (the same idea as `user_erase_gate.py`, made database-backed so a
+  sidecar can honour it too). Disconnect (1) bumps the generation, (2) cancels the account's watcher task
+  or tells its sidecar to drop the session, and waits for it to drain, and (3) only then deletes the
+  cursor and the member's `watch_items`. Every watcher write carries the generation it started under and
+  is rejected inside its own transaction if the generation moved, so an IDLE response or read batch that
+  was already in flight cannot recreate rows after the delete. Lab cell W14 disconnects mid-IDLE and
+  mid-batch and asserts zero rows afterwards and no further provider traffic.
+- **Credentials are kept until revocation succeeds.** Where the provider has a revoke endpoint (OAuth),
+  Disconnect calls it first; if that fails (outage, timeout), the vault row is not destroyed but moved to
+  `pending_revocation` (still encrypted, unusable by any watcher or tool) and retried with backoff until the
+  provider confirms, then deleted. The member sees "disconnected, still revoking with Google" rather than a
+  false "done". Where no revoke endpoint exists (an app password), the secret is deleted immediately and
+  the member is told exactly which provider page revokes it; the Connected accounts page keeps a reminder
+  until they confirm.
 - **Audited.** `ability_audit` rows: connect, scope change, each watcher session start, each read batch
   (counts, never content), each tool call (action, member, item ids), disconnect. The member can see their
   own; the admin sees counts only.
@@ -336,8 +389,14 @@ linking, the vault and the egress rules, and they are planned as two tracks (sec
 
 All C-track channels mount in **one channels sidecar** (the Telegram sidecar generalised), reachable only
 through one Cloudflare-tunnel path per channel (`/channels/<provider>/*`, Access bypass for those paths
-alone, the package verifying the provider signature). Unknown senders are guests until a member links the
-channel (the `telegram_link.py` flow) or the owner approves a pairing code (OpenClaw's and Hermes' default).
+alone, the package verifying the provider signature). **An unlinked sender never reaches the brain**, not
+even as a guest: the guest matrix can read household calendars, lists, reminders and smart-home state
+(`services/zoe-data/guest_policy.py:151-203`), which is fine for someone standing in the house and wrong
+for an anonymous phone number. Every public channel keeps the Telegram lane's existing gate
+(`labs/flue-zoe-telegram-2x/src/handler.ts:46-62`: an unlinked sender gets the linking message and
+returns before any brain call): the only reply to an unknown sender is the link or pairing-code prompt,
+until a member links the channel (the `telegram_link.py` flow) or the owner approves the pairing. Lab cell
+W18 sends from an unknown number on every channel and asserts zero brain calls and zero data in the reply.
 A reply in the same conversation is conversation, not an outbound errand; anything to a third party is.
 
 | Watched service | Recommendation | Auth method | Watch mechanism | Phase |
@@ -345,9 +404,9 @@ A reply in the same conversation is conversation, not an outbound errand; anythi
 | **Email, IMAP/JMAP providers** (Fastmail, iCloud, generic, Gmail via app password) | **Thin** in-process adapter over `imap-tools` (Apache-2.0, zero dependencies, IDLE; `aioimaplib` only after a GPL-3.0 decision) and JMAP for Fastmail; borrows Hermes' sender authentication | C (app password on the phone) | IMAP IDLE, re-issued under the 29-minute rule; JMAP push where offered | **A1** |
 | **Email, Outlook.com / Microsoft 365** | **Thin** over Microsoft Graph (delta query polling; change notifications need a public HTTPS endpoint) | A (device code) | Graph delta every few minutes | A1b |
 | **Email, Gmail API** | **Avoid for now.** Gmail read scopes (and IMAP's XOAUTH2 scope) are restricted: verification plus a yearly security assessment, unless the household's own Cloud project relies on Google's personal-use exception in Production (a warning screen, under 100 users); in Testing mode the refresh token dies every 7 days; no device flow. Use IMAP with an app password (C); the API is an owner decision | C (B only if decided) | via IMAP IDLE | A1 (as IMAP) |
-| **Calendars** | **HA** for calendars the household already keeps in HA (shared, household scope); **thin** in-process `caldav` / Google Calendar API (`calendar.readonly`) / Graph for a member's personal calendars, so they stay per member | HA's own flow, or C / A / B | poll with sync tokens | A2 |
+| **Calendars** | **HA only for calendars explicitly marked shared** (a family calendar the household already keeps in HA, listed as household-scope on the consent screen). **Never for a member's personal calendar**: HA keeps the credentials in household-scoped storage and publishes on an event bus that automations and admins can read, which would break the per-member vault and the "the admin cannot read your account" promise. Personal calendars use the **thin** in-process `caldav` / Google Calendar API (`calendar.readonly`) / Graph adapter | HA's own flow (shared only), or C / A / B | poll with sync tokens | A2 |
 | **Telegram, watching the member's own chats** | **Owner decision.** An ordinary bot cannot see a person's chats. Preferred: a **Telegram Business connection** - the member adds Zoe's existing bot as a chatbot in their own app (needs Premium) and the sidecar adds `business_*` to `allowed_updates`; no new process, sanctioned by Telegram. Fallback: the member's own account through MTProto (Telethon or TDLib), read-only, QR login | E plus in-app opt-in; D for the fallback | Bot long-poll; MTProto updates for the fallback | A3 |
-| **Chat networks a member wants watched** (WhatsApp, Signal, SMS/RCS via Google Messages, Messenger) | **Adopt Matrix + mautrix bridgev2** on a small homeserver (Tuwunel first): bridges maintained weekly upstream, one event shape for every network, Zoe reads with `mautrix-python`. `encryption.allow: false` (one box), `split_portals: true` before the first login (per-member rooms), one Matrix account per member, relay off, Zoe's token behind a read-only allow-list proxy. **Gated on a lab RSS measurement** (no upstream publishes bridge RAM). Runner-up: direct sidecars (whatsmeow, `signal-cli`), lighter for one or two networks | D (each bridge's QR or pairing code) | bridge event stream into the homeserver; Zoe `/sync` | A4 |
+| **Chat networks a member wants watched** (WhatsApp, Signal, SMS/RCS via Google Messages, Messenger) | **Adopt Matrix + mautrix bridgev2** on a small homeserver (Tuwunel first): bridges maintained weekly upstream, one event shape for every network, Zoe reads with `mautrix-python`. `encryption.allow: false` (one box), `split_portals: true` before the first login (per-member rooms), one Matrix account per member, relay off, Zoe's token behind a read-only allow-list proxy. **Gated on a lab RSS measurement** (no upstream publishes bridge RAM) **and on a working retention purge**: every bridged message is a plaintext event in the homeserver, outside `watch_items`, so the manifest's TTL and the disconnect eraser do not reach it, and Tuwunel's `m.room.retention` request is still open (issue #367, open since 2026-03-12: the event is accepted but old events are not purged) [verified, issue state]. A4 ships only with a demonstrated purge (an admin-API or database-level purge job run by zoe-data on the manifest TTL and on disconnect, proven by cell W16), or on a homeserver that enforces retention, or as direct sidecars where Zoe controls storage. Runner-up: direct sidecars (whatsmeow, `signal-cli`), lighter for one or two networks | D (each bridge's QR or pairing code) | bridge event stream into the homeserver; Zoe `/sync` | A4 |
 | **WhatsApp specifically** | Inside A4, and **only on a written owner yes**: the bridge is an unofficial linked device (Meta forbids it; the bridge docs warn of bans for "suspicious" accounts). The Cloud API cannot read a personal account | D | as A4 | A5 |
 | **SMS** | Watch: **mautrix-gmessages** if A4 is adopted (the phone must stay online); otherwise an Android SMS-gateway app (capcom6, Apache-2.0) on a spare phone, local mode. Talk to Zoe by SMS: the C1 Twilio channel | D / phone pairing | bridge stream / LAN webhook | A6 |
 | **Phone calls** | **Not an ability.** Calls are action-agent Phase 5 (legal checks, carrier eligibility); Flue's Twilio channel is messaging only | - | - | after #2011 Phase 5 |
@@ -400,11 +459,17 @@ account is ever contacted. Every cell has a negative control that must turn it r
 | W4 canary | a canary credential never appears in logs, prompts, `chat_messages` or `watch_items` | log the decrypted secret at debug - red |
 | W5 no egress when off | with the ability flag off, the synthetic server sees zero connections | leave the watcher task registered - red |
 | W6 read-only | `\Seen` and every other flag on the synthetic mailbox is unchanged after a day of watching | fetch with `BODY[]` instead of `BODY.PEEK[]` - red |
-| W7 catch-up | items that arrive while zoe-data is stopped are surfaced exactly once after restart | reset the cursor on start - duplicates, red |
+| W7 catch-up | items that arrive while zoe-data is stopped are surfaced exactly once after restart; a kill after the item insert but before the commit, and a kill after the commit but before delivery, each end with exactly one row and one delivery | reset the cursor on start, or write the cursor outside the item transaction - duplicates or a lost item, red |
 | W8 triage quality | on a labelled synthetic mailbox (bulk, people, replies, invites, bills), recall of "worth telling" items >= the floor the owner sets, and interrupts/day <= the cap | invert one triage rule - the floor fails |
 | W9 restraint | a health-class item is not spoken to an unverified speaker | remove the restraint check - red |
 | W10 RAM | measured RSS per account and per sidecar is within the manifest's `ram_mb`; MemAvailable never crosses the voice floor during a burst | double the fetch window - red |
 | W11 no send path | in any A-phase build, a forged approval or a model call naming a send action sends nothing | add a send tool - red |
+| W12 endpoint | a member-supplied IMAP/CalDAV host that resolves (or later re-resolves) to loopback, private, link-local or metadata space is refused before any connection | skip the per-connect re-check - the rebinding case goes red |
+| W13 off-box content | no sender, subject or summary appears in a Web Push or Telegram payload unless that destination was opted in to content | send the on-box message text to push - red |
+| W14 disconnect fence | Disconnect during an active IDLE session and during a read batch leaves zero `watch_items`, no cursor and no further provider traffic | delete rows without bumping the generation - an in-flight write recreates a row, red |
+| W16 bridge retention | bridged chat events older than the manifest TTL, and all of a member's events after disconnect, are gone from the homeserver store | disable the purge job - red |
+| W17 guest QR | a guest asking to connect gets a QR that leads to sign-in; no credential form is reachable before a signed-in member with the ability allowed | serve the credential form from the QR directly - red |
+| W18 unknown sender | a message from an unlinked sender on any public channel produces zero brain calls and a reply with no household data | route unknown senders to the guest brain - red |
 
 The **Samantha bar** gains one scenario per phase (for A1: "anything from the school?" answered right, from
 a synthetic inbox, on chat and on voice), and the **voice replay gate** applies to any change that adds
@@ -422,11 +487,11 @@ no access to anybody's personal account, so it can start at once; **A (watching)
 | **C1** | WhatsApp (Cloud API business number) and SMS (Twilio) to talk to Zoe; replies in the same conversation only | `ZOE_CHANNEL_WHATSAPP`, `ZOE_CHANNEL_SMS` (off) | C0; owner decision 12 | S each |
 | C2 | Email to Zoe (Resend), Slack, Discord slash commands, Messenger - whichever the household uses | `ZOE_CHANNEL_<NAME>` (off) | C0; action-agent Phase 3's mailbox decision for email | S each |
 | **A0** | Registry, manifest loader with its refusals, vault, `connected_accounts`, `ability_audit`, the Connected accounts page (desktop + panel), moving the existing Telegram link and Music connect onto it. **No new egress.** | `ZOE_ABILITIES=off\|shadow\|on` (off), `ZOE_CONNECTED_ACCOUNTS_UI` (off) | nothing | M |
-| **A1** | Email read-only for IMAP/JMAP providers, app password on the phone, watcher in-process, tool-less summariser, pull queue and [Today] brief, `inbox` tool group, W15 `email` source | `ZOE_ABILITY_EMAIL=off\|shadow\|pull\|brief` (off) | A0, W15 fence for email (gap G31), action-world Phase 0 | M |
+| **A1** | Email read-only for IMAP/JMAP providers, app password on the phone, watcher in-process, tool-less summariser, pull queue and [Today] brief, `inbox` tool group, W15 `email` source; a general member-facing Telegram notification transport (tested, pointer-only by default) if Telegram interrupts are wanted | `ZOE_ABILITY_EMAIL=off\|shadow\|pull\|brief` (off) | A0, W15 fence for email (gap G31), action-world Phase 0 | M |
 | A1b | Outlook / Microsoft 365 via Graph with device-code sign-in | same flag, provider-gated | A1 | S |
 | **A2** | Calendars read (HA for shared household calendars; in-process CalDAV / Google / Graph for personal ones) | `ZOE_ABILITY_CALENDAR_EXT` (off) | A0 | S-M |
 | **A3** | Telegram watching, read-only: Business connection of the existing bot first, MTProto user lane only as a fallback | `ZOE_ABILITY_TELEGRAM_WATCH` (off) | owner decision 3, A1's pipeline | S-M |
-| **A4** | Watched chat networks: lab RSS cell for Tuwunel + mautrix (signal first), then the homeserver, the read-only proxy and the Matrix reader; direct sidecars instead if the cell fails | `ZOE_ABILITY_CHAT_WATCH` (off) | owner decision 4, the RSS cell | M-L |
+| **A4** | Watched chat networks: lab RSS cell and retention-purge cell (W16) for Tuwunel + mautrix (signal first), then the homeserver, the read-only proxy and the Matrix reader; direct sidecars instead if either cell fails | `ZOE_ABILITY_CHAT_WATCH` (off) | owner decision 4, the RSS and purge cells | M-L |
 | **A5** | WhatsApp bridge on the A4 stack | `ZOE_ABILITY_WHATSAPP` (off) | owner decision 5 (ToS risk accepted in writing) | S |
 | A6 | SMS watch (mautrix-gmessages on A4, or a local Android gateway) | `ZOE_ABILITY_SMS` (off) | owner decision 6 | S |
 | later | Drafting replies (T2) and sending (T3) through errands | the action-agent flags (`ZOE_ERRANDS`, `ZOE_APPROVALS`, `ZOE_EMAIL`) | action-agent Phases 1-3 | - |
@@ -447,8 +512,9 @@ Operator steps per phase (key file, admin allowlist, the first connect) go in an
    member" **[LAWYER]**.
 4. **Watched chat networks (A4).** Run a small Matrix homeserver (Tuwunel) with the mautrix bridges, the
    maintained "connectors galore" stack, starting with Signal? Recommended: yes, *after* a lab cell measures
-   its resident memory over 24 h with the voice stack up; if it does not fit, direct sidecars
-   (`signal-cli`, whatsmeow) for one or two networks instead.
+   its resident memory over 24 h with the voice stack up **and** a purge job is shown to delete bridged
+   history on the TTL and on disconnect (Tuwunel does not enforce `m.room.retention` yet); if either fails,
+   direct sidecars (`signal-cli`, whatsmeow) for one or two networks instead.
 5. **WhatsApp watching.** Accept the account-ban risk of the unofficial linked-device bridge for a member who
    asks, or rule it out. There is no official way to watch a personal WhatsApp.
 6. **SMS watching.** Wanted? mautrix-gmessages if A4 is adopted (the phone stays paired and online), or a

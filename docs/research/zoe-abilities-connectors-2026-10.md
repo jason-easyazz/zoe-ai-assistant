@@ -418,7 +418,7 @@ For *watching* SMS:
   [secondary, sensitive-scope guide]. No device flow for Calendar (above), and HA's own Calendar
   integration says Device Auth "still works" but is no longer recommended [verified].
 - **Microsoft**: `Calendars.Read` delegated for personal accounts, delta or notifications [verified].
-- **Home Assistant** already has Google Calendar and CalDAV integrations (section 3.3): the cheapest adopt.
+- **Home Assistant** already has Google Calendar and CalDAV integrations (section 3.3): the cheapest adopt for an explicitly shared household calendar, never for a personal one (household-scoped storage and event bus).
 
 ### 4.6 Signal
 
@@ -507,7 +507,7 @@ mapping are the application's job by Flue's own contract, `blueprints/README.md`
   `/channels/<provider>/*` to a channels sidecar, with an Access bypass for those paths alone (the provider
   cannot pass an Access login; each package verifies the provider's signature over the exact body
   instead). Nothing else is exposed.
-- **Identity.** A message from an unknown sender is a guest. A member links each channel once, exactly as
+- **Identity.** A message from an unknown sender never reaches the brain (the Telegram lane's existing gate, `labs/flue-zoe-telegram-2x/src/handler.ts:46-62`; the guest matrix can read household data, so "guest" is the wrong default for an anonymous number); it gets only a link or pairing prompt. A member links each channel once, exactly as
   Telegram linking works today (`telegram_link.py`: a signed single-use token in a deep link or QR, the
   provider's verified sender id stored on the member). OpenClaw's default for unknown senders is a pairing
   code the owner approves (`dmPolicy: pairing`) [verified]; Hermes does the same (`gateway/pairing.py`,
@@ -615,8 +615,8 @@ This is the "connectors galore" answer for messaging, and it is a good one.
 |---|---|---|---|
 | **Talk to Zoe on chat apps** | **Flue channel packages** in one channels sidecar (WhatsApp Cloud number, Twilio SMS, Slack, Discord slash commands, Resend email-to-Zoe), behind a tunnel path with signature verification and the Telegram-style link flow | Hermes / OpenClaw adapters as code to borrow (MIT) | Zoe already runs Flue; each channel is a verified route plus an official SDK, no new runtime |
 | **Watch my email** | **Thin in-process adapter on `imap-tools`** (IDLE, `BODY.PEEK`) + Graph via device code for Microsoft; borrow Hermes' sender-auth (MIT), OpenClaw's read-only IDLE design, `mcp-email-server`'s per-account grants | Home Assistant IMAP for the owner's mailbox only | No maintained service keeps tokens per member in our vault; the maintained component *is* the library. Activepieces sends Google refresh tokens to its cloud; MCP servers each bring their own token store and process |
-| **Calendars** | **HA** for calendars the household already keeps in HA (shared, household-scope); **in-process `caldav` / Google Calendar API (`calendar.readonly`) / Graph** for a member's personal calendars | Activepieces calendar pieces (rejected on the same cloud-OAuth ground) | Isolation: HA is one household bus, so personal calendars stay per member in zoe-data |
-| **Chat networks I watch** (WhatsApp, Signal, SMS/RCS via Google Messages, Messenger) | **Tuwunel + mautrix bridgev2**, encryption off, `split_portals`, read-only proxy, read via mautrix-python - **gated on a lab RSS measurement** | Direct per-network sidecars (whatsmeow, signal-cli) | Maintained weekly upstream, one event shape for every network; direct wins only if the household wants one or two networks or the homeserver's memory fails the gate |
+| **Calendars** | **HA only for explicitly shared household calendars**; **in-process `caldav` / Google Calendar API (`calendar.readonly`) / Graph** for every personal calendar | Activepieces calendar pieces (rejected on the same cloud-OAuth ground) | Isolation: HA is one household bus, so personal calendars stay per member in zoe-data |
+| **Chat networks I watch** (WhatsApp, Signal, SMS/RCS via Google Messages, Messenger) | **Tuwunel + mautrix bridgev2**, encryption off, `split_portals`, read-only proxy, read via mautrix-python - **gated on a lab RSS measurement** | Direct per-network sidecars (whatsmeow, signal-cli) | Maintained weekly upstream, one event shape for every network; direct wins only if the household wants one or two networks, or the homeserver fails the memory gate or the retention gate (bridged messages are plaintext homeserver events, and Tuwunel's `m.room.retention` request, issue #367, is still open [verified]) |
 | **Telegram I watch** | **Business connection of Zoe's existing bot** (no new process; needs Premium) | mautrix-telegram on the homeserver above | Sanctioned by Telegram and costs nothing extra to run |
 | **SMS** | Talk to Zoe: **Flue Twilio channel**. Watch my SMS: **mautrix-gmessages** if the homeserver is adopted | Watch: SMS Gateway for Android (capcom6, Apache-2.0) on a spare phone in local mode | gmessages reuses the chat stack; the gateway phone avoids any Google pairing |
 | **Voice calls** | Not a connector: action-agent Phase 5 (Twilio Media Streams over the tunnel, or LiveKit SIP). Flue's Twilio channel is messaging only | - | Legal and carrier eligibility come first |
