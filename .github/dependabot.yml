@@ -29,6 +29,12 @@ updates:
     groups:
       npm-minor-patch:
         update-types: [minor, patch]
+    ignore:
+      # Pi is pinned in THREE places that must move together (zoe-core
+      # package.json, modules/omnigent/Dockerfile, pi_runtime_probe —
+      # tests/unit/test_harness_pin_agreement.py), and zoe_core_client.py is
+      # written against its RPC event schema. A bot bump here can only be red.
+      - dependency-name: "@earendil-works/pi-*"
 
   - package-ecosystem: npm
     directory: /labs/flue-zoe-brain-2x
@@ -40,9 +46,15 @@ updates:
       npm-minor-patch:
         update-types: [minor, patch]
     ignore:
-      # Flue majors are a harness migration (1.x -> 2.x was a program of its
-      # own), not a dependency bump.
+      # The LIVE brain (:3579). @flue/* moves only with a lab check: Flue 2.2.x
+      # drags pi-ai 0.83 -> 0.87, which README.md pins against ("0.84+ changes
+      # the provider stream contract"). Majors are a harness migration (1.x -> 2.x
+      # was a program of its own). Land by hand: parity suite + LANDING.md + voice replay.
       - dependency-name: "@flue/*"
+      # pi-ai is pinned exactly (0.83.0); same provider-stream-contract reason.
+      - dependency-name: "@earendil-works/pi-*"
+      # Types must match the Node the sidecar runs (22.x), not a newer major.
+      - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
 
   - package-ecosystem: npm
@@ -56,6 +68,9 @@ updates:
         update-types: [minor, patch]
     ignore:
       - dependency-name: "@flue/*"
+        update-types: ["version-update:semver-major"]
+      # Types must match the Node the sidecar runs (22.x), not a newer major.
+      - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
 
   - package-ecosystem: pip
@@ -75,3 +90,18 @@ updates:
       # numpy<2 is a C-ABI ceiling for chromadb + both voice rocks (tests/AGENTS.md).
       - dependency-name: "numpy"
         update-types: ["version-update:semver-major"]
+      # Deliberate pins (reasons in services/zoe-data/requirements*.txt). Dependabot
+      # ignores by name across the whole directory, so these also stop the
+      # requirements-py312.txt copies; each moves only through a deliberate PR.
+      - dependency-name: "APScheduler"      # 3.10.4: later 3.x unpickles persisted jobs differently - a reminder/autopilot whose pytz trigger fails to restore is permanently DELETED
+      - dependency-name: "onnxruntime"      # 1.23.2: last cp310 wheel; the 1.30+ step-up is a separate gated runbook move (voice VAD/embeddings)
+      - dependency-name: "scikit-learn"     # held at the training pins while the ZOE_ROUTER_HEADS_BACKEND=joblib fallback can still unpickle .joblib heads
+      - dependency-name: "joblib"           # same reason as scikit-learn
+      - dependency-name: "uvicorn"          # 3.10 file capped at 0.49.0 (py312 file crossed to 0.53.0 deliberately, replay-gated); websocket path moves only with the voice replay
+      - dependency-name: "SQLAlchemy"       # 2.1+ requires Python >=3.11, so it cannot resolve against the 3.10 requirements.txt (#2047/#2066 deps-resolvable); patch bumps within 2.0.x still flow
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: "mempalace"        # moves with chromadb/B0.8 AND the pin in scripts/setup/jetson/install-jetson-agent.sh (tests/unit/test_jetson_agent_install_pins.py); a skewed side venv corrupts the palace
+      - dependency-name: "transformers"     # voice_turn/semantic_router/embedding numerics: bump only through a replay-gated PR (requirements*.txt is invisible to the replay probe)
+      - dependency-name: "fastembed"        # embedding model/numerics feed memory recall; replay-gated PR only (same probe blind spot)
+      - dependency-name: "cloakbrowser"     # 0.x: a minor is a breaking change (browser_broker); move deliberately
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]

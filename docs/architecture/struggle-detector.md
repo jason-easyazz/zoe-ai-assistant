@@ -56,14 +56,14 @@ that failed): its domain, path and shape are that turn's.
 | CANT_DO | the reply is a capability disclaimer (superset of the replay gate's `_CANT_DO_RE`) on a routed domain, or the brain's degraded fallback (ERROR, any domain) | policy refusals (guest / PIN / privacy); "I can't wait"; unsupported asks (no domain) |
 | FALLTHROUGH | the router placed the turn in a fast domain and the brain (or ANOTHER fast domain) answered; or Skybridge recognised a fast domain, the router vetoed it and the brain answered | two witnesses: the two-stage domain AND its similarity score >= 0.70 (or head >= 0.9 for domains without examples); a timed-out head needs similarity >= 0.65; similarity alone needs >= 0.80; a vetoed Skybridge claim needs that domain's similarity >= 0.75 or the head's own top pick |
 | VERBOSE | a short factual question (<= 12 tokens) got a reply over budget (voice 280 chars / 200 on a fast domain; chat 700 / 500) | open requests (story, explain, why, recipe, tell me about ...) |
-| MISHEAR | a wake-word-only transcript, or a voice corrected repeat within 30 s (same frame, one or two words swapped for sound-alikes - including a number homophone heard for a word, "two on the light" -> "turn on the light" - or re-ordered, or a garbled lead-in dropped) | a different word that does not sound alike ("milk" -> "eggs"); polarity / number / place swaps; typed text (a typo fix is a RE_ASK) |
+| MISHEAR | a wake-word-only transcript, or a voice corrected repeat within 30 s (same frame, one or two words swapped for sound-alikes - including a number homophone heard for a word, "two on the light" -> "turn on the light" - or re-ordered, or a garbled lead-in dropped), or a turn the STT snap recovered (or, in shadow, would have) - `stt_snap` hands it over with `note_snap`, fix `stt_snapped` | a different word that does not sound alike ("milk" -> "eggs"); polarity / number / place swaps; typed text (a typo fix is a RE_ASK) |
 | ABANDON | the streamed voice reply ended early with words already heard (barge-in or disconnect - indistinguishable server-side) | an unheard / complete reply |
 
 Each event carries: ts, channel, panel, user scope, prev + current turn ids (detector-minted, `t-<hash>`), signal,
 confidence, fix type, domain predicted vs served, path served (`fast` / `brain:<lane>`), latency (route note to
 completion), a text-free `pattern` (`<domain>|<lead>:<time frame>:<anchor>`, e.g. `weather|what:future:today`) and
 JSON reason codes. Suggested fix types: `router_training`, `router_latency`, `capability_gap`, `stt`, `verbosity`,
-`answer_quality`.
+`answer_quality`, `stt_snapped` (a misheard command word the STT snap recovered: [voice-pipeline.md](../knowledge/voice-pipeline.md) -> *STT snap*).
 
 ## Privacy
 
