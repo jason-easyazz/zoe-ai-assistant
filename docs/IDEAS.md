@@ -37,6 +37,9 @@ Detail/AI notes go under each entry. Move the status as it progresses.
 - **Core:** Zoe owns everyday tasks end to end — emails as herself, books online, phones businesses, pays with single-use capped cards, escalates to the owner when stuck, learns from corrections. Source: [wajo.ai](https://wajo.ai); owner, 2026-10-12: "be great to get zoe to this level."
 - **Record + plan:** [`docs/research/zoe-action-agent-2026-10.md`](research/zoe-action-agent-2026-10.md); tracked in [PLANS.md](PLANS.md). The piece to borrow first is Fo's benchmark shape (a simulated world graded world-state first), not its feature list.
 
+### Users add abilities to Zoe — "connect my email" and she keeps an eye on it — 🔬 exploring
+- **Core:** a member says "Zoe, connect my email" (or Telegram, WhatsApp, calendar, SMS), gets a QR on the panel, finishes on their phone, and Zoe watches it and tells them what matters; owner, 2026-10-14. Record + design: [`zoe-abilities-connectors-2026-10.md`](research/zoe-abilities-connectors-2026-10.md), [`zoe-abilities.md`](architecture/zoe-abilities.md); tracked in [PLANS.md](PLANS.md).
+
 ### Identity as a score card + "Zoe, this is Sam" — 🔬 exploring
 - **Core:** security is a score card (last login, left the room, phone in range, voice match, face match), each member picks how strict Zoe is in their own settings, and Zoe notices new voices and learns a visitor once introduced. Owner, 2026-10-14. Design: [`identity-presence-engine.md`](architecture/identity-presence-engine.md); research: [`identity-presence-scorecard-2026-10.md`](research/identity-presence-scorecard-2026-10.md); tracked in [PLANS.md](PLANS.md).
 
