@@ -18,7 +18,17 @@ GUEST_USERS: tuple[str, ...] = ("guest", "anonymous", "voice-guest", "voice-daem
 
 # Anchored on a separator so a real name that merely STARTS with these letters
 # ("Christine", "Benchley", "Testa") cannot match: ``ci`` needs ``ci-``/``ci_``.
-SYNTHETIC_USER_RE = re.compile(r"^(test|probe|demo|ci|e2e|bench)[-_]", re.IGNORECASE)
+# Two families: the generic test/demo prefixes, and the ids our own load probes and harnesses
+# mint under the ``zoe-`` prefix. Measured 2026-10-13: ``zoe-hammer-<epoch>`` and
+# ``zoe-tok-<epoch>`` (July load/token probes) were walked as REAL users by the night
+# passes beside ``skipped_synthetic=10``. ``zoe-`` alone can never be a prefix: the panel
+# ids (``zoe-touch-pi``) and real accounts start with it, so each family is named.
+SYNTHETIC_USER_RE = re.compile(
+    r"^(?:(?:test|probe|demo|ci|e2e|bench)[-_]"
+    r"|zoe[-_](?:hammer|tok)[-_]\d+$"
+    r"|zoe-(?:mempalace-baseline|prompt-packet-measure)$)",
+    re.IGNORECASE,
+)
 
 
 # A per-session / per-device guest principal (zoe-auth mints ``guest-<id>``): the namespace the intent, enrollment,
