@@ -472,13 +472,16 @@ def test_the_script_asks_for_three_phrases_unchanged_or_five_with_the_many_intro
 
 # -- migration 0051 ----------------------------------------------------------------------------------------------------
 
-def test_there_is_exactly_one_alembic_head_and_it_is_0051():
+def test_there_is_exactly_one_alembic_head_and_0051_is_on_its_chain():
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
     cfg = Config(str(SVC / "alembic.ini"))
     cfg.set_main_option("script_location", str(SVC / "alembic"))
-    assert ScriptDirectory.from_config(cfg).get_heads() == ["0051"]
+    script = ScriptDirectory.from_config(cfg)
+    heads = script.get_heads()
+    assert len(heads) == 1, heads          # 0051 was the head when it landed; 0052 (calendar data model) chains onto it
+    assert "0051" in {rev.revision for rev in script.walk_revisions("base", heads[0])}
 
 
 def test_migration_0051_backfills_is_rerun_safe_and_adds_one_nullable_column(tmp_path):
