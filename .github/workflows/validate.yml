@@ -57,6 +57,9 @@ jobs:
       # websockets 16.x while the manifest pinned 0.32.0 and 14.0). The
       # `deps-resolvable` job below proves the manifests themselves still resolve;
       # this list only has to agree with them.
+      # ONE deliberate exception: icalendar (calendar_ical.py, alembic 0052) is pinned here only. Nothing on the
+      # request path imports it yet; it joins requirements.txt with the calendar connectors work (a manifest edit
+      # is voice-gated, see voice_gate_check.VOICE_PATH_PATTERNS) - docs/architecture/calendar-data-model.md s7.
       - name: Install slim CI deps
         run: |
           pip install --quiet \
@@ -65,7 +68,7 @@ jobs:
             pydantic pywebpush py-vapid cryptography \
             "ag-ui-protocol==1.0.0" "websockets==16.1.1" "pyjwt==2.15.0" passlib \
             python-multipart "uvicorn[standard]==0.53.0" "prometheus-client==0.26.0" "python-json-logger>=4.1.0" \
-            pyyaml
+            pyyaml "icalendar==7.3.0"
 
       - name: Validate project structure
         run: python3 tools/audit/validate_structure.py

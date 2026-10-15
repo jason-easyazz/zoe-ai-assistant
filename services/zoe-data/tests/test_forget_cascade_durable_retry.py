@@ -409,7 +409,7 @@ async def test_a_people_failure_leaves_edges_pending_too_and_the_retry_closes_th
         await _forget_in_ledger()
         res = await cascade.cascade_forget(USER, FRIEND, db=_FlakyDb(db, "FROM people"))
         assert "people" in res.failed and "edges" in res.failed          # edges is not 'done' just because it had no ids to close
-        assert set(await memory_forgotten.pending_labels(USER, cascade.ALL_LABELS)) == set(["people", "edges"])
+        assert set(await memory_forgotten.pending_labels(USER, cascade.ALL_LABELS)) == set(["people", "edges", "calendar_attendees"])  # both depend on the people ids
         assert await _alive(db, "person_relationships", "id = 'e1' AND valid_to IS NULL") == 1
         out = await cascade.retry_pending(USER, db=db)
         assert out is not None and out.complete and out.people == 1 and out.edges == 1
@@ -429,7 +429,7 @@ async def test_a_retry_whose_people_step_fails_again_keeps_edges_pending(ledger_
         await cascade.cascade_forget(USER, FRIEND, db=_FlakyDb(db, "FROM people"))
         again = await cascade.retry_pending(USER, db=_FlakyDb(db, "FROM people"))
         assert again is not None and "people" in again.failed and "edges" in again.failed
-        assert set(await memory_forgotten.pending_labels(USER, cascade.ALL_LABELS)) == set(["people", "edges"])
+        assert set(await memory_forgotten.pending_labels(USER, cascade.ALL_LABELS)) == set(["people", "edges", "calendar_attendees"])  # both depend on the people ids
         done = await cascade.retry_pending(USER, db=db)
         assert done is not None and done.complete
         assert await _alive(db, "person_relationships", "id = 'e1' AND valid_to IS NOT NULL") == 1
