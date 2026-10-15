@@ -380,16 +380,56 @@ Sub-options inside (A) — the receiver:
   (`started_at`/`ended_at`, `time_quality`), `gap_before`, `speaker_state='unverified'`, `reviewed=0`.
 - **Transcription** (background `run_loop`, flag-gated): the existing Moonshine path
   (`routers.voice_tts._transcribe_audio(…, capture=False)` — no panel push, no corpus), ~20 s chunks cut at the
-  quietest 100 ms, silent chunks skipped (Moonshine hallucinates on silence). **Defers** — leaving the recording
-  pending, never failing it — when the night window is open (the `WINDOW_OPEN` marker or household-local
-  02:30–04:30), within 45 s of a voice turn, or under `ZOE_OMI_MIN_MEM_MB` (1500) of `MemAvailable`; it yields the
-  Moonshine lock between chunks, so a live turn waits at most one chunk. Three attempts, then `failed` (audio kept
+  quietest 100 ms, silent chunks skipped (Moonshine hallucinates on silence). The WAV is **streamed from disk**
+  chunk by chunk (`iter_wave_chunks`; a 600 s recording costs the same RAM as a 20 s one). **Defers** — leaving the
+  recording pending, never failing it — when the night window is open (the `WINDOW_OPEN` marker or household-local
+  02:30–04:30), within 45 s of a voice turn, or under the RAM floor; it yields the Moonshine lock between chunks,
+  so a live turn waits at most one chunk. **Two levels** (hysteresis): a NEW recording needs `ZOE_OMI_MIN_MEM_MB`
+  of `MemAvailable` and a panel idle for `ZOE_OMI_IDLE_S` (120 s); a job already RUNNING only yields below HALF the
+  floor or to a turn in the last 45 s, and a transient closure is **waited out** (up to 5 min, Moonshine not held)
+  instead of aborting — aborting threw away every transcribed chunk and restarted from zero, which stalled a 600 s
+  backlog while `MemAvailable` floated around the floor. The night window / flag end a job at once.
+  **Visible:** `OMI_TRANSCRIBE_DEFERRED reason=low_memory|voice_active|panel_not_idle avail= floor= backlog=` at INFO,
+  at most once per reason per 10 min and only when something is waiting; `GET /api/omi/recordings` returns
+  `transcription: {backlog, transcribing, deferred, reason, since, mem_available_mb, mem_floor_mb}` (counts and codes,
+  no content). **The RAM floor** — measured, see 4.3a. Three attempts, then `failed` (audio kept
   until its retention expiry). No new model, no new RAM tenant. **An empty transcript is not a success** (2026-10-14: 117 of
   129 recordings synced over two days came back with no text and their WAVs were deleted, so nobody could tell a quiet room
   from a deaf pipeline): the row goes `empty_transcript`, the WAV is **kept until its retention expiry** (the owner can still
   drop or delete it), and a WARNING `OMI_EMPTY_TRANSCRIPT` logs its measured seconds / peak / RMS / rate and how many chunks
   reached Moonshine. `GET /api/omi/recordings` returns `empty_transcript_held`. Only a transcript with text deletes the audio.
 - The voice path is untouched: no `VOICE_PATH_PATTERNS` file changes, so the replay gate does not front this PR.
+
+### 4.3a The RAM floor — measured 2026-10-15 (default `ZOE_OMI_MIN_MEM_MB=800`)
+
+Live incident: ~86 recordings synced, 34 done in 2 h, then stalled. `MemAvailable` on the 15.6 GB Jetson floats 1.0–1.4 GB at
+steady state (llama-server 6.3 GB + Kokoro 2.4 GB + zoe-data 1.6 GB resident; measured 1 Hz over ~15 min: min 1010, p10 1112,
+median 1163, max 1384 MB, jitter ±70 MB second to second). With a 1500 (then 1200) floor checked before EVERY chunk, any job
+that started was aborted by the next dip and restarted from chunk 0 — caught in the act: a job ran 59 s at 23:42:06 and was
+discarded at `MemAvailable` 1194 MB < 1200.
+
+What one transcription costs (zoe-data RSS from `/proc/<pid>/smaps_rollup`, same 1 Hz trace, no swap-out during the job):
+
+| | measured |
+|---|---|
+| steady RSS / anon before the job | 1605.9 / 1556.3 MB |
+| job start transient (whole-file load: `read_bytes` + PCM copy + sample array of a 19.2 MB recording) | peak **+57 MB** RSS |
+| job steady state (the held `wav` + `pcm` buffers) | **+40 MB** RSS |
+| Moonshine per-chunk inference, on top of that | within noise (anon +-4 MB; the ONNX session is already resident) |
+| offline, same recording shape (`tracemalloc`, 600 s WAV, no model): old read-everything | 58.8 MB peak |
+| offline: streamed `iter_wave_chunks` | **2.5 MB** peak |
+| swap-out during the job | none (voice stack has `MemorySwapMax=0`) |
+
+So the cost was never Moonshine; it was the code holding the whole file, and streaming removes it (~57 MB -> ~2.5 MB; call the
+incremental cost <= 10 MB with the chunk WAV, tempfile page cache and ONNX arena). The floor therefore does not pay for the job
+— it keeps the voice stack out of trouble when OTHER things are using the box. The voice stack is `MemoryLow`-protected
+(llama-server 6 GiB, Kokoro 3 GiB, zoe-data 2 GiB) with `MemorySwapMax=0`, so memory pressure reclaims from, and swaps, the
+unprotected tenants (48 GB swap free); the kernel's own cliff is `vm.min_free_kbytes` = 256 MB.
+
+Chosen: start floor **800 MB** (about 200 MB under the idle minimum so the backlog drains at steady state, ~3x the kernel
+reserve, ~80x the job's own streamed cost); a running job yields below **400 MB** (half) and waits out shorter dips.
+Judgement, not measurement: the 800 is a margin choice; the evidence is that the job costs <= 10 MB and the box never went
+below 1010 MB at idle. Revisit if `OMI_TRANSCRIBE_DEFERRED reason=low_memory` appears with `avail` far above 400.
 
 ### 4.4 Retention, review, forgetting
 
@@ -426,7 +466,8 @@ registry on the body also names the pendant (`device`) and the notice goes to **
 | zoe-data | `ZOE_OMI_OWNER_USER_ID` | — | whose pendant while the registry is OFF (unset = uploads 503); with `ZOE_OMI_DEVICE_OWNERS` on it is **only the one-time seed** (4.11) |
 | zoe-data | `ZOE_OMI_DEVICE_OWNERS` | off | the pendant-ownership registry (`omi_devices`, migration 0047): uploads attributed by pendant, per-member views, admin assignment (4.11) |
 | zoe-data | `ZOE_OMI_AUDIT_PATH` | `~/.zoe/omi-audit.jsonl` | audit log of assignments (fail-closed) |
-| zoe-data | `ZOE_OMI_AUDIO_DIR`, `_AUDIO_RETENTION_DAYS`, `_KEEP_AUDIO`, `_MIN_MEM_MB` | `~/.zoe/omi-recordings`, 7, off, 1500 | storage + gates |
+| zoe-data | `ZOE_OMI_AUDIO_DIR`, `_AUDIO_RETENTION_DAYS`, `_KEEP_AUDIO`, `_MIN_MEM_MB` | `~/.zoe/omi-recordings`, 7, off, 800 | storage + gates |
+| zoe-data | `ZOE_OMI_IDLE_S` | 120 | a NEW recording is claimed only after this many seconds without a voice turn (a running job yields only to a turn in the last 45 s) |
 
 ### 4.7 Operator runbook (the owner present; nothing here is done by the build agent)
 
