@@ -215,6 +215,24 @@ quiet window run `flock /tmp/zoe-voice-harness.lock python3 scripts/maintenance/
 deploy gate blocks voice-path deploys (fail-closed); `curate_voice_corpus.py` quarantining a pinned clip
 has the same effect, so re-pin after a curation.
 
+**Flaky brain-wording tolerance (2026-10-15).** A pinned clip that falls through to the free-text brain
+has a verdict that depends on the brain's wording, and that varies run to run (same code: OK, OK,
+CANT_DO, so a PR failed ~1/3 of the time with no regression). When the FUNCTION comparison fails, the
+probe re-runs ONLY the clips that were OK in the baseline and are now `CANT_DO` *via the brain* on the
+baseline's route and transcript, up to 2 more times in the same harness on the same code, and counts a
+clip regressed only if it fails in >= 2 of its runs. A deterministic regression fails every run, and
+anything that is not brain wording (route/tier or STT-transcript change, `ERROR`, a non-brain
+`CANT_DO`) fails on the FIRST run with no retry. More than 3 candidates, a retry that cannot run, has
+no recall evidence or comes back on another route, is never tolerated; `--update-baseline` never
+retries (it records first-run truth). Artifact keys (additive): `flaky_retried`, `flaky_clips`
+(`clip_id`, per-run `runs`, `failures`, `of`, `regressed`, `note` such as "clip <id> flaky: 1/3 CANT_DO
+(brain wording): not counted"), `flaky_note`; `voice_gate_check.py` prints how many tolerated clips a
+PASS carried. The replay rows gain content-free `via_brain` + `route_hash`, and a baseline written by
+this probe stores `summary.clip_profile` (per clip id: verdict, route, heard hash). A baseline without
+it still gets the tolerance (route change then cannot be checked); re-record it once with
+`--update-baseline` in a quiet window to get the strict route check. Pinned by
+`tests/unit/test_voice_probe_flaky_retry.py`.
+
 **STT mode — `--stt remote` is the nightly default** (unit template sets
 `ZOE_VOICE_REPLAY_STT=remote`). In-process mode lazy-loads a SECOND Moonshine next to the live
 service's warm one, which is why the gate demanded 1500MB and skipped for days on a box whose
