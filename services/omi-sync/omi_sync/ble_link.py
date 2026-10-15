@@ -186,6 +186,26 @@ def lecc_argv(prefix: Sequence[str], address: str, addr_type: str) -> list[str]:
     return [*prefix, "hcitool", "lecc", *(["--random"] if addr_type == "random" else []), address]
 
 
+def lecc_cancel_argv(prefix: Sequence[str]) -> list[str]:
+    """LE Create Connection Cancel (HCI OGF 0x08 OCF 0x000E). ``hcitool lecc`` gives up after its own timeout WITHOUT cancelling,
+    and the controller keeps initiating forever: every later ``lecc`` is then refused ``Command Disallowed`` (``Input/output
+    error``), and when the pendant comes back into range the stale initiation completes into a link nobody owns. Harmless when
+    nothing is pending (the controller answers ``Command Disallowed``). Same command ``services/panel-bluetooth`` sends."""
+    return [*prefix, "hcitool", "cmd", "0x08", "0x000E"]
+
+
+def parse_con_handle(output: str, address: str) -> Optional[int]:
+    """The handle of an LE link to ``address`` in ``hcitool con`` output (``< LE E4:A3:.. handle 64 state 1 lm CENTRAL``)."""
+    want = address.strip().upper()
+    for line in (output or "").splitlines():
+        parts = line.split()
+        if "LE" in parts and want in (p.upper() for p in parts):
+            m = _HANDLE_RX.search(line)
+            if m:
+                return int(m.group(1))
+    return None
+
+
 async def _run(argv: Sequence[str], timeout: float) -> tuple[int, str]:
     proc = await asyncio.create_subprocess_exec(*argv, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
                                                 stderr=asyncio.subprocess.STDOUT)
@@ -204,6 +224,20 @@ async def _drop_link(prefix: Sequence[str], handle: Optional[int]) -> None:
             await _run([*prefix, "hcitool", "ledc", str(handle)], 10.0)
 
 
+async def _cancel_pending(prefix: Sequence[str]) -> None:
+    with contextlib.suppress(Exception):
+        await _run(lecc_cancel_argv(prefix), 10.0)
+
+
+async def _existing_link(address: str) -> Optional[int]:
+    """An LE link to the pendant that is already up (``hcitool con``, read-only, no privileges)."""
+    with contextlib.suppress(Exception):
+        rc, out = await _run(["hcitool", "con"], 10.0)
+        if rc == 0:
+            return parse_con_handle(out, address)
+    return None
+
+
 @contextlib.asynccontextmanager
 async def connect(address: str, *, lecc: bool = True, lecc_prefix: Sequence[str] = ("sudo", "-n"), addr_type: str = "random",
                   attempts: int = 5, backoff_s: float = 4.0) -> AsyncIterator[BleLink]:
@@ -215,6 +249,11 @@ async def connect(address: str, *, lecc: bool = True, lecc_prefix: Sequence[str]
     device. A BlueZ-initiated connect uses a 420 ms supervision timeout and died with ``Connection Timeout 0x08`` during service
     discovery 24/24 times. One attempt in six still stalls for a minute: hence retry with backoff, dropping the half-open link
     between tries. ``lecc=False`` is the plain bleak connect (fine on a bench, hopeless at range).
+
+    A failed ``lecc`` is followed by LE Create Connection Cancel, and a link to the pendant that is already up is adopted rather
+    than ``lecc``'d again (2026-10-15: one ``lecc`` timed out as the owner walked away, the controller kept initiating, every
+    later ``lecc`` got ``Input/output error`` for 11 h, and the stale initiation re-created an owner-less link within 110 ms of
+    every ``ledc``).
     """
     # One radio: while the Settings > Bluetooth agent holds the shared lock (a scan, an open link, a FIRMWARE UPDATE) we do not
     # connect. This is what stops a sync from taking the pendant's single connection in the gap after a firmware reset.
@@ -242,10 +281,18 @@ async def connect(address: str, *, lecc: bool = True, lecc_prefix: Sequence[str]
         handle = None
         try:
             if lecc:
-                rc, out = await _run(lecc_argv(lecc_prefix, address, addr_type), 30.0)
-                handle = parse_lecc_handle(out) if rc == 0 else None
-                if handle is None:
-                    raise ConnectError(f"hcitool lecc failed (rc={rc}): {out.strip()[:120]}")
+                # A link to the pendant may already be up with no owner (a stale initiation completed - see lecc_cancel_argv).
+                # The controller would ACCEPT another lecc for it and leave that one pending too, so adopt the link instead;
+                # it is ours now and is torn down with ledc like any other (we hold the radio lock, so it is no one else's).
+                handle = await _existing_link(address)
+                if handle is not None:
+                    log.info("adopting an existing LE link to the pendant (handle %d)", handle)
+                else:
+                    rc, out = await _run(lecc_argv(lecc_prefix, address, addr_type), 30.0)
+                    handle = parse_lecc_handle(out) if rc == 0 else None
+                    if handle is None:
+                        await _cancel_pending(lecc_prefix)      # never leave the controller initiating behind us
+                        raise ConnectError(f"hcitool lecc failed (rc={rc}): {out.strip()[:120]}")
             client = BleakClient(address, disconnected_callback=on_disconnect, timeout=60.0)
             try:
                 await client.connect()
