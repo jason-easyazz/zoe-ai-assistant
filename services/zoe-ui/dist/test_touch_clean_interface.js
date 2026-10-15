@@ -514,7 +514,7 @@ async function t(name, fn) {
     // corner button — it is deliberately not a launcher tile).
     // Every launcher destination in DESTS.
     const surfaces = ['day', 'calendar', 'list', 'weather', 'music', 'rooms',
-      'reminder', 'person', 'timer', 'sleep', 'ask', 'settings'];
+      'reminder', 'person', 'timer', 'sleep', 'memories', 'settings'];
     for (const s of surfaces) {
       await page.nav(s);
       const n = await page.$$eval('.fcog, .cog', (e) => e.length);

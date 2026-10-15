@@ -12,6 +12,8 @@ import httpx
 import brain_slot_guard
 from gemma_endpoint import gemma_base
 
+from user_filters import is_unidentified
+
 logger = logging.getLogger(__name__)
 _MODEL = os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf")
 
@@ -207,7 +209,7 @@ async def process_text_llm(
 ) -> int:
     """Extract person facts via local LLM. Silently no-ops on error."""
     text = (text or "").strip()
-    if not text or user_id in ("guest", "") or len(text.split()) < 4:
+    if not text or is_unidentified(user_id) or len(text.split()) < 4:
         return 0
     from person_extractor import _opted_out
     if await _opted_out(user_id, source, "person_extractor_llm"):

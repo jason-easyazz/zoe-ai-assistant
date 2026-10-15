@@ -139,6 +139,13 @@ async def create_event_record(
     )
     # The receipt the write-claim guard checks a reply against (write_receipts.py): a row exists now.
     write_receipts.record(user_id, "calendar", event_id, "create_event_record")
+    # A new event must reach the next first-turn brief, not wait out its 300 s context cache.
+    try:
+        import brief_first_turn
+
+        brief_first_turn.forget_day_context(user_id)
+    except Exception:  # noqa: BLE001 - advisory; the write above is what matters
+        pass
     return {
         "id": event_id,
         "title": title,
