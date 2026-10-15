@@ -13,8 +13,17 @@ a saved baseline on TWO axes:
     a ratio + absolute-ms gate (same shape as scripts/maintenance/zoe_latency_probe.py).
 
 Designed to run on demand OR on a schedule (scripts/setup/systemd/zoe-voice-
-regression.{service,timer}). Every newly captured sample (ZOE_VOICE_SAVE_AUDIO)
-becomes part of the bar, so the test evolves with real use.
+regression.{service,timer}).
+
+PINNED CLIP SET: the baseline records WHICH clips it measured (summary.clip_ids,
+hashes of name+size, never content or names) and every later run replays exactly
+that set, so new recordings can no longer shift the speed bar (on 2026-10-13 the
+newest-N slice drifted STT to ~400 ms against a 921 ms baseline, which would have
+let a 2x STT regression through). If the baseline's clips are not all present, or
+the baseline predates pinning, SPEED IS REFUSED (status error/fail with a
+BASELINE-SET reason), never guessed. --update-baseline re-pins to the newest N
+(--samples). summary.stt_ms_per_audio_s is a length-normalised STT metric that is
+also gated. The artifact gains an additive `speed_comparison` field.
 
 CAVEAT (do not misread the numbers): the replay harness uses WARM models and
 stops before TTS, so its timings UNDERSTATE real live latency — this probe tracks
@@ -87,6 +96,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import wave
 from pathlib import Path
 from typing import Any
 
@@ -133,6 +143,326 @@ VAD_SCAN_FACTOR = 4
 VAD_FRAME_BYTES = 640            # 20 ms of int16 @16 kHz — the live frame size
 VAD_DEFAULT_MODEL_PATH = "/home/zoe/models/silero_vad.onnx"  # mirrors voice_vad
 VAD_STAGE_MIN_MEM_MB = 400       # the stage peaks ~100 MB; never OOM the box for it
+
+
+# -- Pinned clip set (instrument hygiene, 2026-10-13) -------------------------
+# The probe used to replay "the newest N clips by mtime". Every new recording
+# silently CHANGED that set, so a speed baseline recorded on one set was judged
+# against another: on 2026-10-13 STT measured ~400 ms against a 921 ms baseline
+# (the newest clips are shorter), meaning a genuine 2x STT regression would have
+# passed. The baseline now records WHICH clips it measured (ids = a hash of name
+# + size, never content, never a name) and every later run replays exactly that
+# set. If the set is unavailable, speed is REFUSED rather than guessed.
+CLIP_ID_SCHEME = "sha256(name NUL size)[:12]"
+# Per-audio-second STT is length-normalised, so it is far less sensitive to which
+# clips were picked. Absolute floor (ms of STT per second of audio) below which a
+# high ratio is noise: the per-second analogue of RATIO_FLOOR_MS.
+CLIP_ID_LEN = 12
+STT_PER_S_FLOOR = 50.0
+
+
+def clip_id(name: str, size: int) -> str:
+    """Stable, content-free id of a corpus clip: hash of basename + byte size."""
+    return hashlib.sha256(f"{name}\x00{int(size)}".encode()).hexdigest()[:CLIP_ID_LEN]
+
+
+def corpus_index(sample_dir: str) -> dict[str, str]:
+    idx: dict[str, str] = {}
+    for p in glob.glob(os.path.join(sample_dir, "*.wav")):
+        try:
+            idx[clip_id(os.path.basename(p), os.stat(p).st_size)] = p
+        except OSError:
+            continue
+    return idx
+
+
+def clip_ids_for_names(names: list[str], sample_dir: str) -> list[str]:
+    """Ids for the replayed clip names (order preserved; unreadable ones dropped)."""
+    out: list[str] = []
+    for n in names:
+        try:
+            out.append(clip_id(n, os.stat(os.path.join(sample_dir, n)).st_size))
+        except OSError:
+            continue
+    return out
+
+
+def baseline_clip_ids(baseline: dict[str, Any] | None) -> list[str] | None:
+    """The clip ids a baseline pinned, or None for a legacy/absent baseline."""
+    summ = baseline.get("summary") if isinstance(baseline, dict) else None
+    ids = summ.get("clip_ids") if isinstance(summ, dict) else None
+    if isinstance(ids, list) and ids and all(isinstance(i, str) for i in ids):
+        return list(ids)
+    return None
+
+
+def resolve_pinned(ids: list[str], sample_dir: str) -> tuple[list[str], list[str]]:
+    """(basenames of the pinned clips present in the corpus, ids that are missing)."""
+    idx = corpus_index(sample_dir)
+    names = [os.path.basename(idx[i]) for i in ids if i in idx]
+    return names, [i for i in ids if i not in idx]
+
+
+def wav_duration_s(path: str) -> float | None:
+    try:
+        with wave.open(path, "rb") as w:
+            rate = w.getframerate()
+            return w.getnframes() / rate if rate else None
+    except (OSError, EOFError, wave.Error):
+        return None
+
+
+def stt_per_audio_second(rows: list[dict[str, Any]], sample_dir: str) -> float | None:
+    """STT ms per second of audio: total STT ms divided by total audio seconds over
+    the replayed clips. Length-normalised, so it still means something when the
+    clip set differs."""
+    stt = dur = 0.0
+    for r in rows or []:
+        ms, name = r.get("stt_ms"), r.get("file")
+        if not isinstance(ms, (int, float)) or ms <= 0 or not name:
+            continue
+        d = wav_duration_s(os.path.join(sample_dir, os.path.basename(name)))
+        if d and d > 0:
+            stt += ms
+            dur += d
+    return round(stt / dur, 1) if dur > 0 else None
+
+
+def clip_set_summary(report: dict[str, Any], sample_dir: str) -> dict[str, Any]:
+    """The pinned-set fields merged into the summary (and thus into a baseline)."""
+    rows = report.get("rows") or []
+    names = [os.path.basename(r["file"]) for r in rows if r.get("file")]
+    return dict(
+        clip_ids=clip_ids_for_names(names, sample_dir),
+        clip_id_scheme=CLIP_ID_SCHEME,
+        stt_ms_per_audio_s=stt_per_audio_second(rows, sample_dir),
+        clip_profile=clip_profile(rows, sample_dir),
+    )
+
+
+def _row_clip_id(row: dict[str, Any], sample_dir: str) -> str | None:
+    name = row.get("file")
+    if not name:
+        return None
+    try:
+        return clip_id(os.path.basename(name),
+                       os.stat(os.path.join(sample_dir, os.path.basename(name))).st_size)
+    except OSError:
+        return None
+
+
+def clip_profile(rows: list[dict[str, Any]], sample_dir: str) -> dict[str, dict[str, Any]]:
+    """Per-clip {verdict, via_brain, route, heard}, keyed by clip id. Content-free
+    (the hashes measure_voice already records, never a name, transcript or reply).
+    A baseline that carries it lets a later run tell WHICH clips were OK before and
+    whether a failing clip still takes the same route with the same transcript."""
+    out: dict[str, dict[str, Any]] = {}
+    for r in rows or []:
+        cid = _row_clip_id(r, sample_dir)
+        if cid and isinstance(r.get("verdict"), str):
+            out[cid] = dict(verdict=r["verdict"], via_brain=r.get("via_brain") is True,
+                            route=r.get("route_hash"), heard=r.get("heard_hash"))
+    return out
+
+
+# ── Flaky brain-wording tolerance ────────────────────────────────────────────
+# Incident (2026-10-15): the pinned set holds a short garbled clip that routes to
+# chat, so the BRAIN's free-text reply decides its verdict — and that reply varies
+# run to run, sometimes matching replay_samples._CANT_DO_RE ("can't tell you…").
+# Same code scored OK, OK, CANT_DO: a PR failed ~1/3 of the time with no regression.
+#
+# The tolerance is deliberately narrow. Only a clip that (a) was OK in the baseline,
+# (b) is CANT_DO now AFTER falling through to the brain (via_brain — the verdict is
+# a function of reply text), and (c) still takes the same route with the same
+# transcript as the baseline is re-run, in the same harness on the same code. It
+# counts as regressed if it fails in >= FLAKY_FAIL_MIN of its 3 runs. A deterministic
+# regression (route/tier change, STT change, crash, ERROR, a real refusal) fails
+# every run, so it still fails; anything that is not brain wording is never retried.
+FLAKY_MAX_CLIPS = 3       # more candidates than this is a regression, not noise
+FLAKY_EXTRA_RUNS = 2      # runs 2 and 3
+FLAKY_FAIL_MIN = 2        # failures (of 3 runs) that make a clip regressed
+
+
+def _profile_of(baseline: dict[str, Any] | None) -> dict[str, dict[str, Any]] | None:
+    summ = baseline.get("summary") if isinstance(baseline, dict) else None
+    prof = summ.get("clip_profile") if isinstance(summ, dict) else None
+    return prof if isinstance(prof, dict) and prof else None
+
+
+def flaky_candidates(report: dict[str, Any], baseline: dict[str, Any] | None,
+                     sample_dir: str) -> dict[str, Any]:
+    """Split the failing rows of a first run into retry-eligible and hard ones.
+
+    eligible     [(clip_id, basename)]: CANT_DO via the brain with the same route and
+                 transcript as a baseline OK (on a legacy baseline with no per-clip
+                 profile: brain CANT_DO only; route change cannot be checked)
+    hard         failures that are not brain wording, or whose route / transcript
+                 differs from the baseline: deterministic, never retried
+    pre_existing failing in the baseline too: not a regression, not retried
+    profile      True when the baseline carried per-clip verdicts."""
+    prof = _profile_of(baseline)
+    eligible: list[tuple[str, str]] = []
+    hard: list[str] = []
+    pre_existing: list[str] = []
+    for i, r in enumerate(report.get("rows") or []):
+        if r.get("verdict") not in ("CANT_DO", "ERROR"):
+            continue
+        real_id = _row_clip_id(r, sample_dir)
+        cid = real_id or f"unidentified-{i}"
+        brain_wording = r.get("verdict") == "CANT_DO" and r.get("via_brain") is True and real_id is not None
+        if prof is not None:
+            b = prof.get(cid)
+            if isinstance(b, dict) and b.get("verdict") in ("CANT_DO", "ERROR"):
+                pre_existing.append(cid)
+                continue
+            if not brain_wording or not isinstance(b, dict):
+                hard.append(cid)
+                continue
+            if (b.get("verdict") != "OK" or b.get("via_brain") is not True
+                    or b.get("route") != r.get("route_hash") or b.get("heard") != r.get("heard_hash")):
+                hard.append(cid)       # route/tier/transcript changed: deterministic
+                continue
+        elif not brain_wording:
+            hard.append(cid)
+            continue
+        eligible.append((cid, os.path.basename(r["file"])))
+    return dict(eligible=eligible, hard=hard, pre_existing=pre_existing, profile=prof is not None)
+
+
+def _recount(rows: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for r in rows:
+        v = r.get("verdict")
+        if isinstance(v, str):
+            counts[v] = counts.get(v, 0) + 1
+    return counts
+
+
+def _retry_verdict(first_row: dict[str, Any], row: dict[str, Any] | None) -> str:
+    """One retry's verdict for a clip: OK only on positive evidence (an OK verdict
+    via the brain on the same route as the first run); otherwise the failure."""
+    if not row:
+        return "ERROR"
+    v = row.get("verdict")
+    if v != "OK":
+        return v if isinstance(v, str) else "ERROR"
+    if row.get("via_brain") is True and row.get("route_hash") == first_row.get("route_hash"):
+        return "OK"
+    return "ROUTE-CHANGED"
+
+
+def apply_flaky_tolerance(report: dict[str, Any], baseline: dict[str, Any] | None,
+                          rerun: Any, sample_dir: str, *,
+                          max_clips: int = FLAKY_MAX_CLIPS,
+                          extra_runs: int = FLAKY_EXTRA_RUNS) -> dict[str, Any]:
+    """Re-run ONLY the retry-eligible failing clips (<= extra_runs more times) and
+    return a report whose verdicts reflect the majority outcome.
+
+    rerun(names) -> measure report for exactly those clips (same code/harness).
+    Returns {retried, report, clips, note}. `report` is the input unchanged unless
+    retried; a clip that fails in >= FLAKY_FAIL_MIN of its runs keeps CANT_DO,
+    otherwise its row is set to OK with `flaky: true` (first-run numbers kept).
+    A retry that cannot run, has no recall evidence, or returns a different route
+    counts as a failure: tolerance is only ever granted on positive evidence."""
+    out: dict[str, Any] = dict(retried=False, report=report, clips=[], note="")
+    cand = flaky_candidates(report, baseline, sample_dir)
+    if not cand["eligible"]:
+        return out
+    if cand["profile"] and cand["hard"]:
+        out["note"] = (f"{len(cand['hard'])} failing clip(s) are not brain wording (route/transcript "
+                       "change, ERROR or non-brain CANT_DO): deterministic, not retried")
+        return out
+    if not cand["profile"]:
+        summ = (baseline or {}).get("summary") if isinstance(baseline, dict) else None
+        base_fail = summ.get("fail") if isinstance(summ, dict) else None
+        if isinstance(base_fail, int) and len(cand["hard"]) > base_fail:
+            out["note"] = (f"{len(cand['hard'])} failing clip(s) are not brain wording and the "
+                           f"baseline had {base_fail} failure(s): deterministic, not retried")
+            return out
+    if len(cand["eligible"]) > max_clips:
+        out["note"] = (f"{len(cand['eligible'])} brain-wording failures exceed the retry cap of "
+                       f"{max_clips}: counted as a regression, not retried")
+        return out
+
+    rows = report.get("rows") or []
+    first = {c: r for r in rows if (c := _row_clip_id(r, sample_dir))}
+    names = dict(cand["eligible"])
+    runs: dict[str, list[str]] = {cid: ["CANT_DO"] for cid in names}
+    problems: list[str] = []
+    for _ in range(extra_runs):
+        pending = [cid for cid, v in runs.items() if sum(x != "OK" for x in v) < FLAKY_FAIL_MIN]
+        if not pending:
+            break
+        try:
+            rep = rerun([names[c] for c in pending])
+            recall = rep.get("memory_recall") if isinstance(rep, dict) else None
+            if recall != "ok":
+                raise RuntimeError(f"retry replay has no recall evidence ({recall})")
+        except Exception as exc:
+            problems.append(f"retry did not run ({type(exc).__name__}: {str(exc)[:120]})")
+            for cid in pending:
+                runs[cid].append("ERROR")
+            continue
+        got = {c: r for r in rep.get("rows") or [] if (c := _row_clip_id(r, sample_dir))}
+        for cid in pending:
+            runs[cid].append(_retry_verdict(first[cid], got.get(cid)))
+
+    clips: list[dict[str, Any]] = []
+    adjusted = [dict(r) for r in rows]
+    for r in adjusted:
+        cid = _row_clip_id(r, sample_dir)
+        if cid not in runs:
+            continue
+        fails = sum(v != "OK" for v in runs[cid])
+        total = len(runs[cid])
+        regressed = fails >= FLAKY_FAIL_MIN
+        if not regressed:
+            r["verdict"], r["flaky"] = "OK", True
+        clips.append(dict(
+            clip_id=cid, runs=runs[cid], failures=fails, of=total, regressed=regressed,
+            note=(f"clip {cid} regressed: {fails}/{total} runs failed {runs[cid]}: counted"
+                  if regressed else
+                  f"clip {cid} flaky: {fails}/{total} CANT_DO (brain wording): not counted")))
+    new_report = dict(report, rows=adjusted, verdicts=_recount(adjusted),
+                      first_run_verdicts=report.get("verdicts"))
+    return dict(retried=True, report=new_report, clips=clips, note="; ".join(problems),
+                profile=cand["profile"])
+
+
+def plan_clip_set(baseline: dict[str, Any], sample_dir: str,
+                  update_baseline: bool) -> dict[str, Any]:
+    """Decide WHICH clips this run replays and whether speed may be compared.
+
+    mode:
+      pinned   replay exactly the baseline's set (names); speed comparable
+      newest   replay the newest N (no usable pin); speed_ok is False when a
+               baseline exists (re-pinning, or a legacy baseline with no set)
+      missing  the baseline's set is not all present: do not run, refuse
+    warn True means the refusal must surface as a failing reason; a deliberate
+    re-pin (update_baseline) is not a failure.
+    """
+    if not baseline:
+        return dict(mode="newest", names=None, speed_ok=True, warn=False,
+                    note="no baseline yet")
+    if update_baseline:
+        return dict(mode="newest", names=None, speed_ok=False, warn=False,
+                    note="--update-baseline re-pins the clip set to the newest N; "
+                         "speed is not compared across sets")
+    pinned = baseline_clip_ids(baseline)
+    if pinned is None:
+        return dict(mode="newest", names=None, speed_ok=False, warn=True,
+                    note="baseline has no pinned clip set (recorded before set-pinning); "
+                         "speed cannot be compared across a different clip set; "
+                         "re-pin once with --update-baseline")
+    names, missing = resolve_pinned(pinned, sample_dir)
+    if missing:
+        return dict(mode="missing", names=None, speed_ok=False, warn=True,
+                    missing=len(missing), pinned=len(pinned),
+                    note=f"{len(missing)} of the baseline's {len(pinned)} pinned clips are not in "
+                         f"{sample_dir} (deleted, quarantined or renamed); refusing to compare "
+                         "speed against a clip set that cannot be replayed; restore them or "
+                         "re-pin with --update-baseline")
+    return dict(mode="pinned", names=names, speed_ok=True, warn=False, note="")
 
 
 def mem_available_mb() -> int:
@@ -255,11 +585,19 @@ def _diagnose_skip(service_dir: str, stt: str = "inprocess") -> list[str]:
 
 
 def run_measure(samples: int, service_dir: str, user: str, timeout: int, stt: str,
-                python: str | None = None) -> dict[str, Any]:
-    """Run measure_voice.py under the shared flock and return its aggregated JSON."""
+                python: str | None = None, names: list[str] | None = None) -> dict[str, Any]:
+    """Run measure_voice.py under the shared flock and return its aggregated JSON.
+
+    names (basenames) pins the EXACT clips to replay (--files-from); without it
+    the replay takes the newest N by mtime."""
     with tempfile.NamedTemporaryFile("r", suffix=".json", delete=False) as tf:
         out_json = tf.name
+    files_from: str | None = None
     try:
+        if names is not None:
+            with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as nf:
+                nf.write("\n".join(names) + "\n")
+                files_from = nf.name
         # NO inner flock here: the harness lock (/tmp/zoe-voice-harness.lock)
         # is the CALLER'S boundary — the systemd unit and the documented manual
         # invocation both wrap the probe in `flock <lock> python3 probe.py`.
@@ -274,7 +612,8 @@ def run_measure(samples: int, service_dir: str, user: str, timeout: int, stt: st
         python = python or sys.executable
         cmd = [
             python, str(MEASURE),
-            "--last", str(samples), "--user", user,
+            *(["--files-from", files_from] if files_from else ["--last", str(samples)]),
+            "--user", user,
             "--service-dir", service_dir, "--json", out_json, "--timeout", str(timeout),
             "--stt", stt, "--python", python,
         ]
@@ -305,10 +644,13 @@ def run_measure(samples: int, service_dir: str, user: str, timeout: int, stt: st
         with open(out_json) as fh:
             return json.load(fh)
     finally:
-        try:
-            os.unlink(out_json)
-        except OSError:
-            pass
+        for leftover in (out_json, files_from):
+            if not leftover:
+                continue
+            try:
+                os.unlink(leftover)
+            except OSError:
+                pass
 
 
 def summarize(report: dict[str, Any]) -> dict[str, Any]:
@@ -368,7 +710,11 @@ def recall_gate(summary: dict[str, Any]) -> str | None:
             "scored WITHOUT recall; run the probe on the zoe-data service interpreter")
 
 
-def compare(cur: dict[str, Any], baseline: dict[str, Any], warn_ratio: float, warn_ms: float) -> list[str]:
+def compare(cur: dict[str, Any], baseline: dict[str, Any], warn_ratio: float, warn_ms: float,
+            *, compare_speed: bool = True) -> list[str]:
+    """Function + speed verdicts. compare_speed=False is used ONLY when the run
+    could not replay the baseline's clip set (plan_clip_set); the caller then owns
+    the loud 'speed refused' reason, it must never be a silent skip."""
     warnings: list[str] = []
     base = baseline.get("summary") if isinstance(baseline, dict) else None
     if not isinstance(base, dict):
@@ -397,6 +743,8 @@ def compare(cur: dict[str, Any], baseline: dict[str, Any], warn_ratio: float, wa
     if isinstance(base_fail, int) and isinstance(cur.get("fail"), int) and cur["fail"] > base_fail:
         warnings.append(f"FUNCTION: CANT_DO/ERROR count rose to {cur['fail']} "
                         f"from baseline {base_fail}")
+    if not compare_speed:
+        return warnings
     # Speed regression — per stage, ratio AND absolute gate.
     base_med = base.get("medians_ms", {}) if isinstance(base.get("medians_ms"), dict) else {}
     for stage, cur_ms in cur["medians_ms"].items():
@@ -407,6 +755,13 @@ def compare(cur: dict[str, Any], baseline: dict[str, Any], warn_ratio: float, wa
         if (ratio >= warn_ratio and delta >= RATIO_FLOOR_MS) or (delta >= warn_ms):
             warnings.append(f"SPEED {stage}: {cur_ms:.0f}ms vs baseline {base_ms:.0f}ms "
                             f"({ratio:.2f}x, +{delta:.0f}ms)")
+    # Length-normalised STT: ms of STT per second of audio. Robust to WHICH clips
+    # were replayed, so it catches a slow STT even when the set is not identical.
+    cur_ps, base_ps = cur.get("stt_ms_per_audio_s"), base.get("stt_ms_per_audio_s")
+    if (isinstance(cur_ps, (int, float)) and isinstance(base_ps, (int, float)) and base_ps > 0
+            and cur_ps / base_ps >= warn_ratio and cur_ps - base_ps >= STT_PER_S_FLOOR):
+        warnings.append(f"SPEED stt_ms_per_audio_s: {cur_ps:.0f}ms/s vs baseline {base_ps:.0f}ms/s "
+                        f"({cur_ps / base_ps:.2f}x, +{cur_ps - base_ps:.0f}ms/s)")
     return warnings
 
 
@@ -426,6 +781,13 @@ def stage_speed_deltas(summary: dict[str, Any], baseline: dict[str, Any]) -> dic
             entry["delta_ms"] = round(cur_ms - base_ms, 1)
             entry["ratio"] = round(cur_ms / base_ms, 3)
         out[stage] = entry
+    cur_ps, base_ps = summary.get("stt_ms_per_audio_s"), (base or {}).get("stt_ms_per_audio_s")
+    if isinstance(cur_ps, (int, float)) or isinstance(base_ps, (int, float)):
+        entry = dict(cur_ms=cur_ps, baseline_ms=base_ps)
+        if isinstance(cur_ps, (int, float)) and isinstance(base_ps, (int, float)) and base_ps > 0:
+            entry["delta_ms"] = round(cur_ps - base_ps, 1)
+            entry["ratio"] = round(cur_ps / base_ps, 3)
+        out["stt_ms_per_audio_s"] = entry
     return out
 
 
@@ -670,7 +1032,9 @@ def service_revision(service_dir: Any) -> dict[str, Any] | None:
 def emit_result(args, *, status: str, summary: dict[str, Any],
                 said_vs_did: list[str], speed_deltas: dict[str, Any],
                 baseline: dict[str, Any], reason: str = "",
-                vad: dict[str, Any] | None = None) -> dict[str, Any]:
+                vad: dict[str, Any] | None = None,
+                speed_comparison: str = "not-applicable",
+                flaky: dict[str, Any] | None = None) -> dict[str, Any]:
     """Write the durable, machine-readable RESULT ARTIFACT — on EVERY exit path.
 
     This is the whole point of the gate's hardening: a skip / timeout / error
@@ -690,6 +1054,7 @@ def emit_result(args, *, status: str, summary: dict[str, Any],
         "path": str(args.baseline),
         "created_at": (baseline or {}).get("created_at"),
         "ok_rate": (base_summary or {}).get("ok_rate") if isinstance(base_summary, dict) else None,
+        "clip_set_size": len(baseline_clip_ids(baseline) or []),
     }
     payload = {
         "status": status,                       # pass | fail | skip | error
@@ -698,12 +1063,22 @@ def emit_result(args, *, status: str, summary: dict[str, Any],
         "reason": reason,
         "said_vs_did_regressions": said_vs_did,
         "per_stage_speed_deltas": speed_deltas,
+        # compared | refused: <why> | skipped: <why> | not-applicable. A speed
+        # verdict is only meaningful when the baseline's own clip set was replayed.
+        "speed_comparison": speed_comparison,
         "baseline_ref": baseline_ref,
         # WHAT CODE THIS IS EVIDENCE FOR. Read by voice_gate_check.py
         # --expect-revision (the PR gate). getattr: emit_result is also called
         # with lightweight arg objects that carry no service_dir.
         "revision": service_revision(getattr(args, "service_dir", None)),
         "summary": summary,                     # back-compat: n_samples / ok_rate / medians_ms
+        # Flaky brain-wording tolerance (see apply_flaky_tolerance). Present on EVERY
+        # exit path so a reader never has to guess: flaky_retried says whether any clip
+        # was re-run; flaky_clips records each one's per-run verdicts and whether it was
+        # counted. A tolerated clip is VISIBLE here, never silently absorbed.
+        "flaky_retried": bool(flaky and flaky.get("retried")),
+        "flaky_clips": list((flaky or {}).get("clips") or []),
+        "flaky_note": str((flaky or {}).get("note") or ""),
         "non_pass_streak": streak,              # consecutive runs with status != "pass"
         "non_pass_alert_after": alert_after,
         "non_pass_alert": streak >= alert_after,
@@ -984,7 +1359,8 @@ def main(reexec: bool = False) -> int:
     ap.add_argument("--baseline", type=Path, default=Path(os.environ.get("ZOE_VOICE_BASELINE", DEFAULT_BASELINE)))
     ap.add_argument("--results", type=Path, default=Path(os.environ.get("ZOE_VOICE_RESULTS", DEFAULT_RESULTS)))
     ap.add_argument("--trend", type=Path, default=Path(os.environ.get("ZOE_VOICE_TREND", DEFAULT_TREND)))
-    ap.add_argument("--update-baseline", action="store_true", help="Save this run as the new comparison baseline.")
+    ap.add_argument("--update-baseline", action="store_true", help="Save this run as the new comparison baseline and PIN its clip set "
+                         "(the newest --samples clips).")
     ap.add_argument("--warn-ratio", type=float, default=float(os.environ.get("ZOE_VOICE_WARN_RATIO", "1.5")))
     ap.add_argument("--warn-ms", type=float, default=float(os.environ.get("ZOE_VOICE_WARN_MS", "1500")))
     # Per-mode default, both MEASURED not guessed. inprocess: 1500MB (set
@@ -1010,8 +1386,8 @@ def main(reexec: bool = False) -> int:
                     default=int(os.environ.get("ZOE_VOICE_PROBE_VAD_CLIPS", str(VAD_DEFAULT_CLIPS))),
                     help="newest N usable corpus clips the VAD stage scores")
     ap.add_argument("--sample-dir", default=DEFAULT_SAMPLE_DIR,
-                    help="voice corpus dir for the VAD stage (default: ZOE_VOICE_SAMPLE_DIR "
-                         "or ~zoe/.zoe-voice-samples — the replay harness's own default)")
+                    help="voice corpus dir for the replay and the VAD stage (default: ZOE_VOICE_SAMPLE_DIR "
+                         "or ~zoe/.zoe-voice-samples, the replay harness's own default)")
     ap.add_argument("--python", default=None,
                     help=f"interpreter for the whole run (default: ${PYTHON_ENV}, else the "
                          "zoe-data unit's ExecStart — scripts/lib/service_python.py). The "
@@ -1082,10 +1458,27 @@ def main(reexec: bool = False) -> int:
             return 4
         return 0
 
+    # WHICH clips this run replays: the baseline's pinned set, never "whatever is
+    # newest today" (see the pinned clip set block above).
+    os.environ["ZOE_VOICE_SAMPLE_DIR"] = args.sample_dir   # replay and probe read ONE corpus
+    plan = plan_clip_set(baseline, args.sample_dir, args.update_baseline)
+    if plan["mode"] == "missing":
+        reason = f"BASELINE-SET: {plan['note']}"
+        print(f"ERROR: {reason}", file=sys.stderr)
+        emit_result(args, status="error", summary=dict(EMPTY_SUMMARY), said_vs_did=[],
+                    speed_deltas={}, baseline=baseline, reason=reason,
+                    vad=_vad_stage(args), speed_comparison=f"refused: {plan['note']}")
+        return 2
+    if plan["mode"] == "pinned":
+        print(f"replaying the baseline's {len(plan['names'])} pinned clips "
+              f"(--samples {args.samples} ignored; re-pin with --update-baseline)")
+    elif plan["note"]:
+        print(f"NOTE {plan['note']}")
+
     run_started_utc = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
     try:
         report = run_measure(args.samples, args.service_dir, args.user, args.timeout, args.stt,
-                             python=args.python)
+                             python=args.python, names=plan["names"])
     except Exception as exc:
         reason = f"voice probe could not run: {exc}"
         print(f"ERROR: {reason}", file=sys.stderr)
@@ -1099,7 +1492,39 @@ def main(reexec: bool = False) -> int:
         return 2
 
     summary = summarize(report)
-    warnings = compare(summary, baseline, args.warn_ratio, args.warn_ms)
+    summary.update(clip_set_summary(report, args.sample_dir))
+    speed_ok, speed_note, speed_warn = plan["speed_ok"], plan["note"], plan["warn"]
+    if plan["mode"] == "pinned" and set(summary["clip_ids"]) != set(baseline_clip_ids(baseline) or []):
+        # The replay silently dropped or swapped a clip: not the baseline's set.
+        speed_ok, speed_warn = False, True
+        speed_note = (f"replayed {len(summary['clip_ids'])} clips but the baseline pinned "
+                      f"{len(baseline_clip_ids(baseline) or [])}; the sets differ, so speed is not comparable")
+    warnings = compare(summary, baseline, args.warn_ratio, args.warn_ms, compare_speed=speed_ok)
+    flaky: dict[str, Any] | None = None
+    if (any(w.startswith("FUNCTION") for w in warnings) and baseline
+            and not args.update_baseline and recall_gate(summary) is None):
+        # Same code, same harness: re-run only the brain-wording failures (<= 2 more
+        # times, <= 3 clips). Anything deterministic stays a first-run failure.
+        flaky = apply_flaky_tolerance(
+            report, baseline,
+            lambda names: run_measure(args.samples, args.service_dir, args.user, args.timeout,
+                                      args.stt, python=args.python, names=names),
+            args.sample_dir)
+        if flaky["retried"]:
+            report = flaky["report"]
+            summary = summarize(report)
+            summary.update(clip_set_summary(report, args.sample_dir))
+            warnings = compare(summary, baseline, args.warn_ratio, args.warn_ms, compare_speed=speed_ok)
+        if flaky["note"]:
+            print(f"NOTE flaky tolerance: {flaky['note']}")
+        for c in flaky["clips"]:
+            print(f"NOTE {c['note']}  runs={c['runs']}")
+    if speed_warn and not speed_ok:
+        warnings.append(f"BASELINE-SET: {speed_note}")
+    if speed_ok:
+        speed_comparison = "compared" if baseline else "not-applicable"
+    else:
+        speed_comparison = ("refused: " if speed_warn else "skipped: ") + speed_note
     said_vs_did = [w for w in warnings if w.startswith("FUNCTION")]
     speed_deltas = stage_speed_deltas(summary, baseline)
 
@@ -1120,9 +1545,15 @@ def main(reexec: bool = False) -> int:
         print("NOTE baseline was recorded WITHOUT recall-on evidence — per-stage speed deltas "
               "are not comparable; re-baseline once in a quiet window (--update-baseline)")
 
+    pin_error = None
+    if (args.update_baseline or not args.baseline.exists()) and not summary.get("clip_ids"):
+        # A baseline with no pinned set re-opens the very drift this guards.
+        pin_error = "no replayed clip could be identified; refusing to write a baseline with no pinned set"
     if recall_error:
         # NEVER write a recall-off run as the bar, and never call it a pass.
         print(f"ERROR: {recall_error}", file=sys.stderr)
+    elif pin_error:
+        print(f"ERROR: {pin_error}", file=sys.stderr)
     elif args.update_baseline or not args.baseline.exists():
         write_json(args.baseline, {
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -1148,13 +1579,16 @@ def main(reexec: bool = False) -> int:
     if recall_error:
         status = "error"
         reason_parts.insert(0, recall_error)
+    elif pin_error:
+        status = "error"
+        reason_parts.insert(0, pin_error)
     if not cleanup_ok:
         reason_parts.append("replay-artifact cleanup FAILED (calendar/lists may be dirty)")
     if vad.get("status") in ("fail", "error"):
         reason_parts.append(f"VAD {vad['status'].upper()}: {vad.get('reason')}")
     emit_result(args, status=status, summary=summary, said_vs_did=said_vs_did,
                 speed_deltas=speed_deltas, baseline=baseline, reason="; ".join(reason_parts),
-                vad=vad)
+                vad=vad, speed_comparison=speed_comparison, flaky=flaky)
 
     print(f"Results: {args.results}  Trend: {args.trend}  (status={status})")
     if status == "error":

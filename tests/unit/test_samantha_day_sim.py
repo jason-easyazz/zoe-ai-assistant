@@ -39,7 +39,7 @@ P = ds.ALLOWLISTED_USER
 def test_criteria_and_rubrics_are_pinned():
     # Editing a criterion or a rubric changes what PASS means: update this pin deliberately.
     assert ds.CRITERIA_SHA256 == ds.criteria_digest()
-    assert ds.CRITERIA_SHA256 == "5f6f4720be4550715a9a0d92d567f7cb7b30e2b769f6fce8a938411e428c4704"
+    assert ds.CRITERIA_SHA256 == "c9fcc6d1b0b54138b31fd51847278b420d2d62ee2a7fff9f956aa1bffc0b880b"
 
 
 def test_every_ask_has_a_criterion_and_a_known_mode():
@@ -350,14 +350,37 @@ MORNING = dt.datetime(2026, 10, 3, 8, 0)
 
 @pytest.mark.parametrize("now, lines, reply, verdict", [
     (dt.datetime(2026, 10, 3, 22, 0), [LINE_B], "x", "SKIP"),          # outside the window
-    (MORNING, [], "Morning!", "SKIP"),                                  # no day items logged
+    (MORNING, [], "Morning!", "ERROR"),                                 # nothing logged: never a quiet SKIP
     (MORNING, [LINE_B.replace("injected=1", "injected=0")], "Hi", "FAIL"),
     (MORNING, [LINE_B], "Morning! Lovely day.", "FAIL"),                # briefed, nothing said
     (MORNING, [LINE_B], "Morning! Don't forget the Kestrel proofs at 5.", "PASS"),
 ])
 def test_score_brief(now, lines, reply, verdict):
-    v, _ = ds.score_brief(now, ds.parse_lines(lines, P), reply, lambda items: ("PASS", "ok"))
+    v, _ = ds.score_brief(now, ds.parse_lines(lines, P), reply, lambda items: ("PASS", "ok"),
+                          seed_landed=True)
     assert v == verdict
+
+
+def test_a_seed_that_did_not_land_is_a_loud_error_not_a_skip():
+    """The morning brief sat in SKIP for days with the cause buried in prose. Inside the window,
+    no decision logged is a harness failure either way; the verdict says WHICH."""
+    gone = ds.score_brief(MORNING, ds.parse_lines([], P), "Morning!", None, seed_landed=False)
+    assert gone[0] == "ERROR" and gone[1]["seed_landed"] is False
+    assert "calendar seed did not land" in gone[1]["why"]
+    seen = ds.score_brief(MORNING, ds.parse_lines([], P), "Morning!", None, seed_landed=True)
+    assert seen[0] == "ERROR" and seen[1]["seed_landed"] is True
+    assert "day-context cache" in seen[1]["why"] and "forget_day_context" in seen[1]["why"]
+    # NEGATIVE CONTROLS: the window is still a legitimate SKIP, and a logged brief still scores.
+    late = dt.datetime(2026, 10, 3, 22, 0)
+    assert ds.score_brief(late, ds.parse_lines([], P), "x", None, seed_landed=False)[0] == "SKIP"
+    ok = ds.score_brief(MORNING, ds.parse_lines([LINE_B], P), "Don't forget the Kestrel proofs at 5.",
+                        lambda items: ("PASS", "ok"), seed_landed=False)
+    assert ok[0] == "PASS"
+
+
+def test_no_rebrief_follows_an_errored_brief_instead_of_hiding_behind_skip():
+    assert ds.score_no_rebrief(ds.parse_lines([], P), "Hi!", briefed=False, brief_verdict="ERROR")[0] == "ERROR"
+    assert ds.score_no_rebrief(ds.parse_lines([], P), "Hi!", briefed=False, brief_verdict="SKIP")[0] == "SKIP"
 
 
 def test_score_no_rebrief():

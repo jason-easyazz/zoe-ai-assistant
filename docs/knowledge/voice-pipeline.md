@@ -197,6 +197,42 @@ It mirrors `zoe_latency_probe.py`: `--update-baseline` to set the bar, baseline 
 regression. It self-guards: **SKIPs if available memory is low** (never OOMs the box) and runs the
 harness under the shared flock.
 
+**The clip set is PINNED (2026-10-13).** The probe used to replay "the newest N clips by mtime", so every
+new recording silently changed the set and the speed bar with it (STT read ~400 ms against a 921 ms
+baseline recorded on another set; a 2x STT regression would have passed). Now the baseline stores
+`summary.clip_ids` (sha256 of basename + byte size, 12 hex; never content or names) and every run replays
+exactly that set (`measure_voice.py --files-from`). A baseline whose clips are not all in the corpus
+(deleted, quarantined, re-encoded) or that predates pinning REFUSES speed: status `error`/`fail` with a
+`BASELINE-SET` reason and `speed_comparison: "refused: …"` in the artifact; function (OK-rate) is still
+compared on a legacy baseline. `--update-baseline` re-pins to the newest `--samples` clips (speed is not
+compared across sets on that run). `summary.stt_ms_per_audio_s` (total STT ms per second of audio) is a
+length-normalised metric gated at the same ratio, with a 50 ms/s floor. Artifact keys added (additive,
+the deploy gate ignores them): `speed_comparison`, `baseline_ref.clip_set_size`, `summary.clip_ids`,
+`summary.clip_id_scheme`, `summary.stt_ms_per_audio_s`.
+**Operator step after this lands (one time, and again whenever the pinned clips are retired):** in a
+quiet window run `flock /tmp/zoe-voice-harness.lock python3 scripts/maintenance/voice_regression_probe.py
+--samples 20 --update-baseline`. Until then the probe reports `BASELINE-SET` (status fail) and the
+deploy gate blocks voice-path deploys (fail-closed); `curate_voice_corpus.py` quarantining a pinned clip
+has the same effect, so re-pin after a curation.
+
+**Flaky brain-wording tolerance (2026-10-15).** A pinned clip that falls through to the free-text brain
+has a verdict that depends on the brain's wording, and that varies run to run (same code: OK, OK,
+CANT_DO, so a PR failed ~1/3 of the time with no regression). When the FUNCTION comparison fails, the
+probe re-runs ONLY the clips that were OK in the baseline and are now `CANT_DO` *via the brain* on the
+baseline's route and transcript, up to 2 more times in the same harness on the same code, and counts a
+clip regressed only if it fails in >= 2 of its runs. A deterministic regression fails every run, and
+anything that is not brain wording (route/tier or STT-transcript change, `ERROR`, a non-brain
+`CANT_DO`) fails on the FIRST run with no retry. More than 3 candidates, a retry that cannot run, has
+no recall evidence or comes back on another route, is never tolerated; `--update-baseline` never
+retries (it records first-run truth). Artifact keys (additive): `flaky_retried`, `flaky_clips`
+(`clip_id`, per-run `runs`, `failures`, `of`, `regressed`, `note` such as "clip <id> flaky: 1/3 CANT_DO
+(brain wording): not counted"), `flaky_note`; `voice_gate_check.py` prints how many tolerated clips a
+PASS carried. The replay rows gain content-free `via_brain` + `route_hash`, and a baseline written by
+this probe stores `summary.clip_profile` (per clip id: verdict, route, heard hash). A baseline without
+it still gets the tolerance (route change then cannot be checked); re-record it once with
+`--update-baseline` in a quiet window to get the strict route check. Pinned by
+`tests/unit/test_voice_probe_flaky_retry.py`.
+
 **STT mode — `--stt remote` is the nightly default** (unit template sets
 `ZOE_VOICE_REPLAY_STT=remote`). In-process mode lazy-loads a SECOND Moonshine next to the live
 service's warm one, which is why the gate demanded 1500MB and skipped for days on a box whose
@@ -1507,6 +1543,58 @@ new fields, and an old server ignores them, so the order is only a convenience.
   (same for `zoe_voice_announce.py`) and `systemctl --user restart zoe-voice`. A server rollback needs
   nothing on the Pi: an old server ignores the new fields.
 
+## STT accuracy score — a local, weakly-labelled word-error proxy + the keyterm A/B (2026-10-14)
+
+**Why.** Moonshine (the rock) exposes no confidence (word confidences need the attention decoder this deployment does not
+load), so "is our voice-to-text as good as it can be?" had no number. The household supplies one: a turn the struggle
+detector calls a MISHEAR or a RE_ASK, followed within ~30 s by the person saying it again, is a weakly-labelled pair —
+(what Moonshine heard, what was meant ≈ the repeat). `scripts/maintenance/stt_accuracy_report.py` collects and scores them.
+
+**LOCAL ONLY.** Reads `~/.zoe-voice/voice_stt.jsonl` (+ `.1`) and `struggle_events` read-only (needs the service's
+`POSTGRES_URL`; without it the log alone labels pairs and the report says so). Writes ONLY under `~/.zoe/stt-accuracy/`
+(`stt-accuracy-<utc stamp>.json` with the pair rows + a `.txt` summary); a path inside the repo is refused before anything is
+read — the pairs are household words. Stdout carries counts only.
+
+```bash
+python3 scripts/maintenance/stt_accuracy_report.py                 # 8 weeks, log + struggle_events labels
+python3 scripts/maintenance/stt_accuracy_report.py --no-db --weeks 4
+python3 scripts/maintenance/stt_accuracy_report.py --keyterm-ab "<comma-separated candidate terms>"
+```
+
+**Labels** (both sources, de-duplicated; a pair both find is `both`): (1) the log — consecutive transcripts on one panel at
+most `--window-s` (30) apart that the detector's own pure pair rule (`struggle_signals.detect`) calls MISHEAR / RE_ASK of
+the first; (2) `struggle_events` — a voice MISHEAR / RE_ASK row mapped back to its two transcripts by panel and time (the
+repeat = the panel's last transcript at or before the event, the misheard turn = the one before it, within the window).
+Harness / test panels (`replay-*`, `test*`, `probe*`, ...) never count.
+
+**Score, per ISO week (UTC).** `turns` (live voice transcripts), `pairs`, `mishears` (pairs whose transcripts DIFFER after the
+detector's normalisation — an identical repeat means the words were heard right and something else failed), `mishear_rate`
+= mishears / turns, `proxy_wer` = word edits / repeat words over the mishear pairs. A **proxy**: the repeat is not a reference
+transcript (people rephrase), so read it as a trend. First run (2026-10-14, 8 weeks): 218 live voice turns, 6 labelled pairs
+(5 from the log, 1 only from `struggle_events`), 5 mishears — the week of 2026-10-12 at 3.7% of turns, proxy WER 60% over
+those 5. Small numbers: the panel's live traffic is low, and the corpus grows
+as the household talks.
+
+**Keyterm A/B** (`--keyterm-ab TERMS`). The clip behind each labelled misheard turn (`~/.zoe-voice-samples`, matched to the
+log row by file time within 2 s — measured median gap 5 ms; two clips that close are both refused) is transcribed twice by
+the SERVICE's own path (`routers.voice_tts._run_moonshine`, so the wake-word strip and the keyterm loader are the live ones),
+each in a child process on the service interpreter: once with `ZOE_MOONSHINE_KEYTERMS` unset, once with the candidate list,
+set for that child only (the live service is never touched; the child's STT log, palace and app log are pinned to a
+throwaway directory and it never captures audio). Reported per clip: changed or not, and closer to / further from / as far
+from the repeat as before (word edits), plus each arm's `moonshine_keyterms_state` (configured / applied / supported) as
+proof the B arm was biased. Runs under `/tmp/zoe-voice-harness.lock` and only with `--min-mem-mb` (1500) available — a second
+Moonshine load beside the live one; below it the report records `skipped: MemAvailable ...`, and it never starts inside the night brain window
+(01:35-04:55 local, `scripts/AGENTS.md` quiet hours). First A/B (2026-10-15, a generic 5-term command list, no names): 5
+labelled clips, keyterms applied 5/5 in the B arm, **0 transcripts changed** — that list would not have fixed those
+mishears. Only clips
+captured while `ZOE_VOICE_SAVE_AUDIO` was on can take part. A candidate list that moves clips closer and none further is the
+evidence for setting `ZOE_MOONSHINE_KEYTERMS` (then the replay gate in
+[moonshine-0-1-5-upgrade.md](moonshine-0-1-5-upgrade.md) §6 before it ships).
+
+Pinned by `tests/unit/test_stt_accuracy_report.py` (`ci_safe`, synthetic rows only: pairing from the log and from events with
+a window negative control, merge, weekly numbers, clip matching, the A/B comparison with a fake transcriber, the child env,
+and the never-into-the-repo guard).
+
 ## Mishear clarification — "Sorry, what was that?" instead of a counsellor reply (flag-dark, 2026-10-14)
 
 **The failure (owner, 2026-10-14).** A short spoken device command was heard by Moonshine as a short feeling-shaped line (STT took
@@ -1558,6 +1646,85 @@ replay harness takes STT from `/api/voice/transcribe` and runs the router, `fast
 frames, no state), so said-vs-did and per-stage speed are unchanged by construction. The guard is judged from its own metric lines
 (`shadow` first) and the live panel, not from the corpus. Pinned by `services/zoe-data/tests/test_mishear_clarify.py` (`ci_safe`, a
 paired negative control for each behaviour).
+
+## STT snap — one misheard command word, snapped back (`ZOE_STT_SNAP`, default shadow, 2026-10-14)
+
+**The failure.** A device command with ONE word misheard as a sound-alike ("two on the light" for "turn on the light", "turn of
+the lights", "set a time for 5 minutes") matches no deterministic matcher, so it falls through every fast path to the slow brain,
+which may or may not work out what was meant. Moonshine is a rock (never retrained or swapped); this step works on its output.
+`services/zoe-data/stt_snap.py`, called from `routers/voice_tts.voice_command`.
+
+**Where it runs.** Right after the conversation tiers (`fast_tiers.resolve(phase="conversation")`) missed, before the Pi hybrid /
+Skybridge / keyword-intent stages. `stt_snap.decide` returns nothing unless ALL of: no matcher claims the words
+(`classify_skybridge_intent` with the panel's Skybridge context, then `intent_router.detect_intent`); the words are not a question or
+statement ABOUT a write (`command_shapes.asks_or_mentions`); and the domain experts could not act on them
+(`expert_may_claim`: expert mode active + an allow-listed, non-deferred domain over its threshold — a conservative stand-in for the
+Tier-1.5 dispatch that runs later in the lane). So a turn any fast tier owns is never touched.
+
+**How a candidate is made (deterministic, no model).**
+
+* Only the first three words of the command (`command_shapes.command_core`: wake / politeness words off), ONE word swapped. Polarity
+  words (on/off/up/down/start/stop/...), negations and quantifiers are never swapped; a number word only as the FIRST word
+  ("two on ..."), never later (it is a slot there).
+* Targets come from `lexicons_data/stt_snap_vocab.json` — GENERATED from the HA/OVOS phrasing-corpus sentences the voice cascade
+  already claims correctly (the words at each of the first three places, plus the place-to-place word pairs) and the command verbs of
+  `command_shapes` (cancel / change shapes). Drift-pinned: regenerate with
+  `python3 services/zoe-data/tests/stt_snap_eval.py --write-vocab` after a matcher or corpus change.
+* Sound-alike: the same onset, and a cost <= `MAX_COST` (0.45) = the cheaper of character dissimilarity and the distance between
+  consonant skeletons (non-rhotic "r", silent "w" / "h" / final "e" dropped; "sh" / "ch" / "th" kept apart; voicing pairs t/d, p/b,
+  ... cost 0.4). A final "n" / "m" may be heard as the start of a following vowel-initial word ("turn on" -> "two on") for
+  `LIAISON_COST` (0.2). Swapping a word that already opens Zoe's commands at that place costs `IN_VOCAB_PENALTY` (0.3) more. Words
+  whose skeletons are further apart than 0.6 never sound alike, however they are spelled ("front" / "forecast").
+* Context: the swapped-in word must sit next to a neighbour it is seen with in a handled command (the word before, the word after,
+  or the one after that), and the words BEFORE it must already open a handled command (only one word is misheard: "as the front
+  door locked" never becomes "as the forecast door locked"). A swap that makes a command nobody says ("set timer table") is not
+  a candidate.
+
+**When it snaps.** Every candidate goes back through the same two matchers. It snaps only when the claims name exactly ONE command
+(grouped by intent + slots), in a domain the snap may serve (clock, weather, timers, lists, calendar, smart home, music — never
+people, memory, notes, greetings, panels, engineering), the next-best DIFFERENT command costs at least `MARGIN` (0.15) more, and no
+clearly likelier repair anywhere in the words (by `MARGIN`) makes a command Zoe cannot serve ("pours our tv shows": "pause" is the
+likely word, so it never snaps to "play").
+
+**Safety.** `read` (time, weather, a list / timer / calendar read, a delayed command's honest "can't schedule that") and `act` (one
+light on/off, music play/pause/resume, ONE item added to a list, one new timer) continue as the snapped command — its own spoken
+receipt says the command back ("Turned the bedroom light on.", "Your timer is set for 5 minutes."). Everything else asks ONE
+question, never silently: cancel / delete / remove / complete, a timer change, scenes, brightness, volume, calendar writes,
+keyword-intent writes, "all" / "everything", a plural device group ("the lights"), and anything naming a lock, door, gate, garage,
+alarm, camera, thermostat / heating, oven, blinds, vacuum or water. The question is "Did you mean: cancel the timer?" (a pending
+confirmation, 30 s): "yes" makes the snapped words that turn's words, so every gate (PIN / guest policy / speculation / Skybridge's
+router veto, re-run on the snapped words) judges it like any other command; "no" says "Okay, cancelled."; anything else is a new
+request. A speculative turn waits for the daemon's verdict before it asks or acts.
+
+**Flag.** `ZOE_STT_SNAP` = `off` | `shadow` (default) | `on`, read per turn. `shadow` decides, logs and feeds the struggle detector,
+and changes nothing; `on` acts. Flip to `on` only after reading a few days of shadow lines.
+
+**Log + struggle feed.** One line per snap (never for a turn that does not snap):
+`STT_SNAP from=<sha1-12 of the heard words> to=<intent tag> outcome=<shadow_read|shadow_act|shadow_confirm|acted|asked|confirmed> safety=... cost=... pos=... mode=...`;
+a member's line also carries `heard=` / `as=`, a guest's (or a voice the speaker gate rejected) never does. The turn is recorded by the
+struggle detector as `MISHEAR` with fix `stt_snapped` (`struggle_detector.note_snap`, text-free detail: outcome, intent, safety,
+cost, position) — a recurring one is a Moonshine keyterm candidate (`ZOE_MOONSHINE_KEYTERMS`, [moonshine-0-1-5-upgrade.md](moonshine-0-1-5-upgrade.md)).
+
+**Measured on the HA/OVOS corpus** (`stt_snap_eval.py`; synthetic mishears: one of the first three words of every corpus sentence
+swapped for a sound-alike from an independent hand table of STT confusions, 2 draws per sentence, fixed seed 20261014):
+
+| | count |
+|---|---|
+| synthetic mishears | 4,891 (1,749 still claimed by a matcher as heard; the snap never runs on those) |
+| recoverable (unclaimed, and the matchers get the correctly-heard sentence right) | 1,125 |
+| **recovered** | **922 (82.0% of recoverable)** — read 169, act 182, confirm 571 |
+| wrong (not the label's command) | **0** |
+| **wrong write (the gate)** | **0** |
+| inherited (the snap restored the words; the MATCHERS mis-claim the clean sentence, the phrasing ratchet's to own) | 17 wrong, 17 wrong writes — every one a `confirm`, none acts |
+| hard negatives ("two people are coming", "to be honest", "whether or not", ... 40 sentences) | 0 snapped |
+
+Cost: ~5-10 ms per unclaimed turn on the Orin (up to 40 candidates through two regex matchers; the turn was heading to a
+multi-second brain call). Pinned by `tests/test_stt_snap.py` (`ci_safe`: the owner's examples, hard negatives, the safety classes,
+the corpus gate with a planted-greedy negative control, the vocabulary drift pin, the struggle feed) and
+`tests/test_stt_snap_voice_lane.py` (the real `voice_command` through the lane-parity rig: act, ask + "yes", "no", shadow, off).
+
+**Replay gate.** In `shadow` (the default) the lane's behaviour is byte-identical — the step only logs. The replay harness mirrors
+`fast_tiers.resolve`, not `voice_command`, so it cannot see the snap either way; the lane-parity rig test is what covers it.
 
 ## Smart Turn v3 end-of-turn scorer (LiveKit lane)
 

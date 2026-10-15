@@ -1,0 +1,179 @@
+"""Who counts as "anyone at the panel" - the principal that may touch HOUSEHOLD lists.
+
+Owner decision (2026-10-15): household lists work like a fridge list. ANYONE AT THE PANEL can add, tick off and remove ITEMS on
+family-visible lists (shopping, family to-dos). Renaming or deleting the LIST itself still needs a signed-in member, and a private
+list stays private: a guest never sees or changes one.
+
+"Anyone at the panel" is a statement about WHERE the request comes from, not about WHO the person is, so the signal has to be
+unforgeable from the open LAN. The panel kiosk is a browser whose only credential is a guest session, and ``POST /api/auth/guest``
+mints one for any caller, so "a guest session" is not evidence of a panel. In order of strength, a request is the panel when:
+
+  1. its principal came from a provisioned device token with NO bound member (``get_current_user`` stamps ``panel_id`` on that
+     guest) - the voice daemon / provisioned kiosk; or
+  2. its client address is the address of a REGISTERED, ACTIVE panel that allows guests (``panels.ip_address``, ``allow_guest``).
+     The address is nginx's ``X-Real-IP`` (set absolutely from ``$remote_addr``) and is trusted ONLY when the TCP peer is a proxy
+     we run (loopback / the docker bridge) - zoe-data's own port answers on the LAN, where a caller could write that header
+     itself, so a direct peer is judged by its own address. The same device check ``routers/skybridge.py`` uses for the panel's
+     display identity. TRUST ASSUMPTION (accepted residual): the default proxy range is loopback + the docker ``172.16/12``
+     because nginx reaches zoe-data from a container address that cannot be told from a sibling container by subnet; every
+     container on ``zoe-network`` that can reach :8000 is therefore trusted not to forge ``X-Real-IP``. A request that carries a
+     Cloudflare header is refused outright (the tunnel is the one internet-facing hop). To narrow it, pin the nginx container's
+     address in ``ZOE_TRUSTED_PROXY_NETS`` (e.g. ``127.0.0.0/8,172.18.0.5/32``).
+
+Everything else - an anonymous caller, a phone on the Wi-Fi, a guest session from anywhere that is not a registered panel, a
+degraded (auth-outage) principal - is NOT the panel and keeps today's rule: a guest touches no list.
+
+``ZOE_HOUSEHOLD_LISTS_PANEL_SCOPE`` (per-call read): ``registered`` (default) is the rule above. ``lan`` is the operator's loosening
+for a panel whose ``ip_address`` is not on file: any private-LAN client holding a VALIDATED guest session. ``off`` restores the old
+behaviour (no guest ever touches a list).
+
+Voice/chat/skybridge turns carry the verdict as a per-request ContextVar (``mark_panel_turn``) because ``execute_intent`` and the
+skybridge resolvers take a bare ``user_id``; the request-level entry points that have authenticated the channel set it.
+"""
+from __future__ import annotations
+
+import contextvars
+import ipaddress
+import logging
+import os
+from typing import Any, Mapping, Optional
+
+logger = logging.getLogger(__name__)
+
+# The actor a household-list write is attributed to when nobody at the panel was identified.
+PANEL_ACTOR = "panel"
+# Owner id of a household list created on behalf of the panel. ``family-admin`` is seeded by ``database.init_db`` (lists.user_id
+# is a foreign key to users, and the shared ``guest`` account has no users row), and it is NOT a person.
+HOUSEHOLD_OWNER_ID = "family-admin"
+# Owners whose lists any signed-in member may rename/delete: the shared kiosk/household accounts, never a person.
+SHARED_OWNER_IDS = frozenset({"guest", "voice-guest", HOUSEHOLD_OWNER_ID})
+# The "viewer" id household-scoped queries pass where a member's id would go: it matches no ``lists.user_id``, so a panel guest
+# sees family-visible lists only and never an owner's personal one.
+HOUSEHOLD_VIEWER = "__household__"
+
+_DEFAULT_PROXY_NETS = "127.0.0.0/8,::1/128,172.16.0.0/12"
+
+_panel_turn: contextvars.ContextVar[bool] = contextvars.ContextVar("zoe_panel_turn", default=False)
+
+
+def scope_mode() -> str:
+    mode = os.environ.get("ZOE_HOUSEHOLD_LISTS_PANEL_SCOPE", "registered").strip().lower()
+    return mode if mode in ("registered", "lan", "off") else "registered"
+
+
+def mark_panel_turn() -> None:
+    """Record, for the rest of THIS request's context, that it came from the panel. Never raises."""
+    if scope_mode() != "off":
+        _panel_turn.set(True)
+
+
+def in_panel_turn() -> bool:
+    return _panel_turn.get()
+
+
+def is_guest_id(user_id: Optional[str]) -> bool:
+    """The shared kiosk/voice guest identities (the strings ``get_current_user`` and the voice lane hand out)."""
+    u = (user_id or "").strip()
+    return u in ("", "guest", "voice-guest") or u.startswith("guest-")
+
+
+def household_actor(user: Mapping[str, Any] | None) -> str:
+    """The id a household-list write is attributed to: the signed-in member, or ``panel`` when nobody was identified."""
+    uid = str((user or {}).get("user_id") or "").strip()
+    return PANEL_ACTOR if is_guest_id(uid) else uid
+
+
+def _networks(raw: str) -> list:
+    out = []
+    for part in raw.split(","):
+        part = part.strip()
+        if part:
+            try:
+                out.append(ipaddress.ip_network(part, strict=False))
+            except ValueError:
+                logger.warning("panel_principal: ignoring bad proxy network %r", part)
+    return out
+
+
+def _in_nets(addr: str, nets: list) -> bool:
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return any(ip in net for net in nets)
+
+
+def trusted_client_ip(request: Any) -> str:
+    """The caller's address. ``X-Real-IP`` only when the TCP peer is a proxy of ours; otherwise the peer itself."""
+    peer = request.client.host if getattr(request, "client", None) else ""
+    nets = _networks(os.environ.get("ZOE_TRUSTED_PROXY_NETS", _DEFAULT_PROXY_NETS))
+    if peer and _in_nets(peer, nets):
+        real = str(request.headers.get("x-real-ip", "") or "").strip()
+        if real:
+            return real
+    return peer
+
+
+def _via_public_tunnel(request: Any) -> bool:
+    """True when the request carries a Cloudflare edge header. The tunnel's container address sits inside the trusted proxy
+    range, and Cloudflare passes a caller's own ``X-Real-IP`` through, so without this a tunnel hop could forge a panel address.
+    Cloudflare sets these on every proxied request and a caller cannot remove them."""
+    headers = request.headers
+    return bool(headers.get("cf-connecting-ip") or headers.get("cf-ray") or headers.get("cf-visitor"))
+
+
+async def _from_registered_panel(db: Any, client_ip: str) -> bool:
+    if not client_ip:
+        return False
+    try:
+        cur = await db.execute(
+            "SELECT 1 FROM panels WHERE ip_address = ? AND is_active = 1 AND allow_guest = 1 LIMIT 1",
+            (client_ip,),
+        )
+        return await cur.fetchone() is not None
+    except Exception as exc:  # noqa: BLE001 - an unreadable registry is "not the panel" (fail closed), but say so
+        logger.warning("panel_principal: panel registry lookup failed (%s) - treating the request as not-a-panel", type(exc).__name__)
+        return False
+
+
+async def is_panel_guest(request: Any, user: Mapping[str, Any] | None, db: Any = None) -> bool:
+    """True only for a GUEST principal whose request is demonstrably from the panel (see the module docstring)."""
+    mode = scope_mode()
+    if mode == "off" or request is None or not is_guest_id((user or {}).get("user_id")):
+        return False
+    if (user or {}).get("auth_degraded"):
+        return False  # an auth outage resolves ANY header to a guest: never evidence of anything
+    if (user or {}).get("panel_id"):
+        return True  # device token, no bound member
+    if _via_public_tunnel(request):
+        return False  # a request that crossed Cloudflare is the internet, never the kiosk on the LAN
+    client_ip = trusted_client_ip(request)
+    if mode == "lan":
+        try:
+            private = ipaddress.ip_address(client_ip).is_private
+        except ValueError:
+            private = False
+        return bool(private and str(request.headers.get("X-Session-ID", "")).strip())
+    if db is None:
+        try:
+            from db_pool import get_db_ctx
+
+            async with get_db_ctx() as pooled:
+                return await _from_registered_panel(pooled, client_ip)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("panel_principal: no database for the panel check (%s)", type(exc).__name__)
+            return False
+    return await _from_registered_panel(db, client_ip)
+
+
+async def mark_if_panel(request: Any, user: Mapping[str, Any] | None, db: Any = None) -> bool:
+    """Request-level entry points (chat, skybridge resolve): mark the turn when the caller is the panel. Never raises."""
+    try:
+        if await is_panel_guest(request, user, db):
+            mark_panel_turn()
+            return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("panel_principal: mark_if_panel failed (%s)", type(exc).__name__)
+    return False

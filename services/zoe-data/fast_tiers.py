@@ -388,6 +388,8 @@ async def _conversation_quality_tier(text: str, user_id: str, session_id: str,
     * ``ZOE_CORRECTION_APPLY`` also covers "that's wrong, my sister is Marisol not Marisa" (``correction_apply.maybe_swap``): the
       one stored note that holds the wrong name is rewritten and read back ("Got it, your sister is Marisol."). It needs a
       verified speaker and a live (not dry) turn, and acts only when exactly one note carries the wrong value.
+      Then ``correction_apply.maybe_fix_recent``: "it's actually a bike shop, not a pike shop" rewrites this member's rows of
+      THIS session holding the old phrase, and keeps the correction for a digest of an earlier turn that has not landed yet.
     * ``ZOE_ROSTER_NEUTRAL_ASK`` — a pasted `Name - detail` list whose roles are not stated is
       restated neutrally with ONE question, never assigned wife/girls from first names
       (``people_roles.roster_reply``).
@@ -400,7 +402,13 @@ async def _conversation_quality_tier(text: str, user_id: str, session_id: str,
         if _ca.enabled():
             res = await _ca.maybe_apply(text, user_id, session_id)
             if res is None and not dry and speaker_verified is not False:
-                res = await _ca.maybe_swap(text, user_id, session_id)
+                # the NARROW path first: "it's actually a bike shop, not a pike shop" rewrites this member's rows of THIS
+                # session (and registers the correction for a digest of an earlier turn that has not landed yet,
+                # correction_apply.correct_fact); the store-wide name swap only for the shapes the session path does not read
+                # (a relation said - "my sister is Marisol not Marisa" - or a bare swap with no correction cue)
+                res = await _ca.maybe_fix_recent(text, user_id, session_id)
+                if res is None and _ca.global_swap_allowed(text):
+                    res = await _ca.maybe_swap(text, user_id, session_id)
             if res is not None:
                 import expert_dispatch as _xd
 
@@ -782,6 +790,23 @@ def _struggle_ack(text: str):
         return None
 
 
+def _calc_tier(text: str, user_id: str, session_id: str):
+    """Spoken arithmetic and its follow-ups, answered deterministically (no model, no I/O). The "last result" is kept per
+    (user, conversation) for ``calc_speech.WINDOW_S``. NEVER raises."""
+    try:
+        import calc_speech as _cs
+
+        reply = _cs.answer(text, f"{user_id}|{session_id}")
+        if not reply:
+            return None
+        import expert_dispatch as _xd
+
+        return _xd.DispatchResult(domain="math", reply=reply, intent="calculate", tier="calc")
+    except Exception as exc:  # noqa: BLE001 - never let the tier break a turn
+        logger.warning("fast_tiers calc tier failed (non-fatal): %s", exc)
+        return None
+
+
 @_functools.wraps(_resolve_core)
 async def resolve(text: str, user_id: str, session_id: str, **kwargs):  # noqa: F811 - the documented wrapper
     # `phase="domain"` is the second half of a split run (the caller ran `phase="conversation"` already): the wrapper tiers
@@ -831,6 +856,11 @@ async def resolve(text: str, user_id: str, session_id: str, **kwargs):  # noqa: 
                                       extra_ctx=kwargs.get("extra_ctx"))
         except Exception:  # noqa: BLE001 - the tier never breaks a turn
             answered = None
+        if answered is not None:
+            return answered
+        # calculator: spoken arithmetic ("two plus two", "what about 3 times pi") and its follow-ups ("that one divided by 3.5", "times
+        # three") against the conversation's last result (calc_speech). A safe closed-vocabulary parser; anything else returns None.
+        answered = _calc_tier(text, user_id, session_id)
         if answered is not None:
             return answered
     res = await _resolve_core(text, user_id, session_id, **kwargs)

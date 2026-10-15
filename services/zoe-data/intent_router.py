@@ -26,8 +26,11 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from fastapi import HTTPException
 
+import calc_speech as _calc_speech
 import command_shapes
 import contacts_conversation as _cc
+import panel_principal
+from list_service import HouseholdListUnavailable
 from time_utils import today_for_zoe_tz
 from zoe_pi_promotion import LOW_RISK_PI_INTENT_GROUPS
 
@@ -544,26 +547,6 @@ _SMART_HOME_QUESTION_RE = re.compile(
     re.IGNORECASE
 )
 
-# === MATH / CALCULATION (ZOE-10) ===
-# Pure arithmetic fast-path — group 1 captures the numeric expression.
-_CALCULATE_RE = re.compile(
-    r"^(?:what(?:'?s|\s+is)\s+|calculate\s+|compute\s+|how\s+much\s+is\s+)?"
-    r"(-?\d+(?:\.\d+)?\s*(?:[+\-\*\/]\s*-?\d+(?:\.\d+)?)+)\s*[=]?\s*\??$",
-    re.IGNORECASE,
-)
-# "what is 25% of 80" → groups (1=pct, 2=base)
-_CALCULATE_PCT_RE = re.compile(
-    r"^(?:what(?:'?s|\s+is)\s+|calculate\s+)?(\d+(?:\.\d+)?)\s*(?:percent|%)\s+of\s+(\d+(?:\.\d+)?)\s*\??$",
-    re.IGNORECASE,
-)
-# "what is 10 times 3" / "10 divided by 2" → groups (1=a, 2=op_word, 3=b)
-_CALCULATE_WORDS_RE = re.compile(
-    r"^(?:what(?:'?s|\s+is)\s+)?(-?\d+(?:\.\d+)?)\s+"
-    r"(times|multiplied\s+by|divided\s+by|plus|minus)\s+"
-    r"(-?\d+(?:\.\d+)?)\s*\??$",
-    re.IGNORECASE,
-)
-
 # === TTS / SYSTEM VOLUME — Zoe's own voice (ZOE-13) ===
 # Only matches phrases clearly about Zoe's speaking volume, not the music player.
 # Placed before _AUTOGEN_UNKNOWN_GAP so these don't fall through to music_control.
@@ -954,24 +937,11 @@ def detect_intent(
         return Intent("date_query", {})
 
     # --- CALCULATE (ZOE-10) — arithmetic fast-path, no LLM needed ---
-    # Percentage form: "what is 25% of 80"
-    _pct_m = _CALCULATE_PCT_RE.match(t)
-    if _pct_m:
-        pct_val, base_val = _pct_m.group(1), _pct_m.group(2)
-        return Intent("calculate", {"expression": f"{pct_val}/100*{base_val}",
-                                    "display": f"{pct_val}% of {base_val}"})
-    # Word-operator form: "what is 10 times 3" / "10 divided by 2"
-    _words_m = _CALCULATE_WORDS_RE.match(t)
-    if _words_m:
-        a, op_word, b = _words_m.group(1), _words_m.group(2).lower(), _words_m.group(3)
-        op = {"times": "*", "multiplied by": "*",
-              "divided by": "/", "plus": "+", "minus": "-"}.get(op_word, "+")
-        return Intent("calculate", {"expression": f"{a}{op}{b}",
-                                    "display": f"{a} {op_word} {b}"})
-    # Symbolic form: "2+2", "what is 100/4", "15 * 3 = ?"
-    _calc_m = _CALCULATE_RE.match(t)
-    if _calc_m and _calc_m.group(1):
-        return Intent("calculate", {"expression": _calc_m.group(1).strip()})
+    # Digits or number words, pi / e, symbols or spoken operators ("what is 25% of 80", "two plus two", "7 x 8"): one safe parser,
+    # calc_speech. A follow-up ("that one divided by 3.5") needs the conversation's last result, which only fast_tiers has.
+    _calc = _calc_speech.parse(t)
+    if _calc is not None:
+        return Intent("calculate", {"expression": _calc.canonical, "spoken": _calc.reply})
 
     # === DOMAIN-SPECIFIC PATTERNS FIRST (to avoid list collisions) ===
 
@@ -2680,6 +2650,8 @@ async def _execute_list_show_direct(intent: Intent, user_id: str) -> Optional[st
     slots = intent.slots or {}
     list_type = str(slots.get("list_type") or "shopping").strip() or "shopping"
     list_name = str(slots.get("list_name") or "").strip()
+    if _is_guest_identity(user_id):
+        user_id = panel_principal.HOUSEHOLD_VIEWER  # a guest owns no list: household (family-visible) lists only
     try:
         from database import get_db_ctx
 
@@ -2752,6 +2724,7 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
         return None
     lt = str(slots.get("list_type") or "shopping").strip() or "shopping"
     ln = str(slots.get("list_name") or "").strip() or lt.capitalize()
+    actor = panel_principal.household_actor({"user_id": user_id})  # the member, or "panel" for an unidentified guest
     try:
         from database import get_db_ctx
         from list_service import add_item_to_list, default_visibility
@@ -2771,18 +2744,21 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
                 # already done instead of inserting a duplicate.
                 dedup_window_s=10,
             )
+        logger.info("list_item_audit op=add actor=%s list=%s item=%s", actor, outcome["list_id"], outcome["item_id"])
         list_id = outcome["list_id"]
         item_id = outcome["item_id"]
         if outcome["deduped"]:
             logger.info("list add: duplicate %r within 10s on list %s — replay skipped", item, list_id)
         await _notify_lists_ui(
             "list_updated",
-            {"action": "item_added", "list_id": list_id, "item": {"id": item_id, "text": item}},
+            {"action": "item_added", "list_id": list_id, "item": {"id": item_id, "text": item}, "actor": actor},
         )
         return _format_response(
             intent,
             json.dumps({"item_id": item_id, "list": ln, "list_id": list_id, "text": item, "status": "added"}),
         )
+    except HouseholdListUnavailable:
+        return f"There isn't a household {lt.replace('_', ' ')} list yet, and I can only start a shopping list from here."
     except Exception as exc:
         logger.warning("list_add direct execution unavailable; falling back to mcporter: %s", exc)
         return None
@@ -2799,6 +2775,9 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
     if not item:
         return None
     lt = str(slots.get("list_type") or "shopping").strip() or "shopping"
+    actor = panel_principal.household_actor({"user_id": user_id})  # BEFORE the viewer swap: the sentinel would read as a member
+    if _is_guest_identity(user_id):
+        user_id = panel_principal.HOUSEHOLD_VIEWER  # household (family-visible) lists only
     try:
         from database import get_db_ctx
 
@@ -2806,7 +2785,7 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
             cursor = await db.execute(
                 "SELECT li.id, li.list_id FROM list_items li JOIN lists l ON li.list_id = l.id"
                 " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=? AND LOWER(li.text)=LOWER(?)"
-                " AND li.deleted=0 AND l.deleted=0 LIMIT 1",
+                " AND li.deleted=0 AND l.deleted=0 ORDER BY l.created_at ASC, li.id ASC LIMIT 1",
                 (user_id, lt, item),
             )
             row = await cursor.fetchone()
@@ -2814,7 +2793,7 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
                 cursor = await db.execute(
                     "SELECT li.id, li.list_id FROM list_items li JOIN lists l ON li.list_id = l.id"
                     " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=? AND li.text LIKE ? ESCAPE '\\'"
-                    " AND li.deleted=0 AND l.deleted=0 LIMIT 1",
+                    " AND li.deleted=0 AND l.deleted=0 ORDER BY l.created_at ASC, li.id ASC LIMIT 1",
                     (user_id, lt, f"%{_escape_like_pattern(item)}%"),
                 )
                 row = await cursor.fetchone()
@@ -2827,9 +2806,10 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
             await db.execute(
                 "UPDATE list_items SET completed=1, updated_at=NOW() WHERE id=?", (item_id,)
             )
+        logger.info("list_item_audit op=remove actor=%s list=%s item=%s", actor, list_id, item_id)
         await _notify_lists_ui(
             "list_updated",
-            {"action": "item_completed", "list_id": list_id, "item_id": item_id},
+            {"action": "item_completed", "list_id": list_id, "item_id": item_id, "actor": actor},
         )
         return _format_response(
             intent, json.dumps({"item_id": item_id, "text": item, "status": "completed"})
@@ -3556,9 +3536,16 @@ _GUEST_GATED_INTENTS = (
 )
 
 
+# The list intents a PANEL guest may run (on household lists only); every other gated intent still needs a signed-in member.
+_GUEST_HOUSEHOLD_INTENTS = frozenset({"list_add", "list_remove", "list_show"})
+
+
 def _is_guest_identity(user_id: str | None) -> bool:
     u = (user_id or "").strip()
-    return u in ("", "guest", "voice-guest") or u.startswith("guest-")
+    # every sentinel (user_filters.GUEST_USERS - "anonymous" / "voice-daemon" used to slip through) + per-device guest ids
+    from user_filters import is_unidentified
+
+    return is_unidentified(u) or u.lower().startswith("guest-")
 
 
 async def _speculative_side_effect_barrier(intent_name: str) -> None:
@@ -3624,6 +3611,16 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
     #   caller omits identity (#1021/#1032 posture). All live callers pass an explicit
     #   user_id; this default is defense-in-depth for future forgetful callers.
     await _speculative_side_effect_barrier(intent.name)
+    if (_is_guest_identity(user_id) and intent.name in _GUEST_HOUSEHOLD_INTENTS
+            and panel_principal.in_panel_turn()):
+        # Anyone AT THE PANEL may add, tick off and read the HOUSEHOLD list (a fridge list). The executors resolve a
+        # guest to family-visible lists only and never fall back to the mcporter writer, which would own a new list.
+        direct = {
+            "list_add": _execute_list_add_direct,
+            "list_remove": _execute_list_remove_direct,
+            "list_show": _execute_list_show_direct,
+        }[intent.name]
+        return (await direct(intent, user_id)) or "I couldn't reach the household list just now, so nothing has changed."
     if _is_guest_identity(user_id) and intent.name.startswith(_GUEST_GATED_INTENTS):
         # Same posture as voice (which challenges for who+PIN): personal data
         # needs a signed-in identity. Chat has no PIN pad, so answer with the
@@ -6026,74 +6023,18 @@ async def _execute_smart_home_intent(intent: Intent, user_id: str) -> Optional[s
 
 
 def _execute_calculate(intent: Intent) -> str:
-    """Safe arithmetic evaluator for bounded numeric expressions (ZOE-10)."""
-    expr_raw = intent.slots.get("expression", "").strip()
-    display = intent.slots.get("display", expr_raw)
-    if not expr_raw:
+    """Spoken arithmetic (ZOE-10): the sum was already answered at detection, or ``expression`` is parsed by the same safe parser."""
+    slots = intent.slots or {}
+    spoken = str(slots.get("spoken") or "").strip()
+    if spoken:
+        return spoken
+    expr = str(slots.get("expression") or "").strip()
+    if not expr:
         return "What would you like me to calculate?"
-
-    import ast as _ast
-    import operator as _operator
-
-    safe = expr_raw.strip()
-    if (
-        not safe
-        or len(safe) > 80
-        or not re.fullmatch(r"[\d\s\+\-\*\/\.\(\)\%]+", safe)
-        or "**" in safe
-    ):
-        return f"I can only handle numeric expressions. Try something like \"what is 2 + 2\"."
-
-    binary_ops = {
-        _ast.Add: _operator.add,
-        _ast.Sub: _operator.sub,
-        _ast.Mult: _operator.mul,
-        _ast.Div: _operator.truediv,
-        _ast.Mod: _operator.mod,
-    }
-    unary_ops = {
-        _ast.UAdd: _operator.pos,
-        _ast.USub: _operator.neg,
-    }
-    max_nodes = 64
-    max_abs_value = 1_000_000_000_000
-    seen_nodes = 0
-
-    def _check_bound(value):
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ValueError("non-numeric result")
-        if abs(value) > max_abs_value:
-            raise ValueError("result too large")
-        return value
-
-    def _eval_node(node):
-        nonlocal seen_nodes
-        seen_nodes += 1
-        if seen_nodes > max_nodes:
-            raise ValueError("expression too complex")
-        if isinstance(node, _ast.Expression):
-            return _eval_node(node.body)
-        if isinstance(node, _ast.Constant):
-            return _check_bound(node.value)
-        if isinstance(node, _ast.BinOp) and type(node.op) in binary_ops:
-            left = _eval_node(node.left)
-            right = _eval_node(node.right)
-            return _check_bound(binary_ops[type(node.op)](left, right))
-        if isinstance(node, _ast.UnaryOp) and type(node.op) in unary_ops:
-            return _check_bound(unary_ops[type(node.op)](_eval_node(node.operand)))
-        raise ValueError("unsupported expression")
-
-    try:
-        parsed = _ast.parse(safe, mode="eval")
-        result = _eval_node(parsed)
-        if isinstance(result, float):
-            # Show integer when result is whole
-            result = int(result) if result == int(result) else round(result, 6)
-        return f"{display} = {result}"
-    except ZeroDivisionError:
-        return "That expression would divide by zero."
-    except Exception:
-        return f"I couldn't calculate \"{display}\". Try a simpler expression like \"what is 15 * 4\"."
+    res = _calc_speech.parse(expr)
+    if res is None:
+        return "I can only handle numeric expressions. Try something like \"what is 2 + 2\"."
+    return res.reply
 
 
 async def _execute_set_volume_intent(intent: Intent) -> str:

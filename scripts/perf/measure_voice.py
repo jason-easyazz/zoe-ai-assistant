@@ -87,6 +87,8 @@ def main() -> int:
     )
     ap.add_argument("--last", type=int, default=10, help="newest N samples to replay")
     ap.add_argument("--since", help="only samples whose filename sorts >= this")
+    ap.add_argument("--files-from", help="replay EXACTLY the clips named (basenames, one per "
+                    "line) in this file; overrides --last/--since (pinned clip set)")
     ap.add_argument("--user", default="jason", help="user_id for memory recall (reads only)")
     ap.add_argument("--service-dir", default=None, help=SERVICE_DIR_HELP)
     ap.add_argument("--json", help="write aggregated machine-readable results here")
@@ -139,7 +141,9 @@ def main() -> int:
     ]
     if args.base_url:
         cmd += ["--base-url", args.base_url]
-    if args.since:
+    if args.files_from:
+        cmd += ["--files-from", args.files_from]
+    elif args.since:
         cmd += ["--since", args.since]
     else:
         cmd += ["--last", str(args.last)]
@@ -197,6 +201,12 @@ def _run_and_report(cmd: list[str], service_dir: str, replay_json: str, args) ->
             "stt_ms": stt, "resolve_ms": resolve, "brain_ms": brain, "e2e_ms": e2e,
             # A/B diagnostics, never the text: which STT path served the clip, and a hash to compare arms.
             "stt_stream": r.get("stt_stream"),
+            # Route identity for the probe's flaky-brain tolerance. Content-free by
+            # construction: `via_brain` is "the turn fell through to the free-text brain",
+            # `route_hash` hashes the replay's outcome label (tier:domain:intent) so a
+            # route/tier change shows as a different hash without the label being stored.
+            "via_brain": r.get("outcome") == "brain",
+            "route_hash": hashlib.sha1(str(r.get("outcome") or "").encode()).hexdigest()[:8],
             "heard_hash": hashlib.sha1(" ".join(re.sub(r"[^\w\s']", " ", (r.get("transcript") or "").lower()).split()).encode()).hexdigest()[:8],
         })
 
