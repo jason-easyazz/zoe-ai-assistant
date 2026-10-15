@@ -267,13 +267,13 @@ FALL_POS = [
     dict(dom="timers", path=s.PATH_BRAIN, score=0.9),
     dict(dom="calendar", path=s.PATH_BRAIN, score=0.75),
     dict(dom="lists", path=s.PATH_BRAIN, score=0.71),
-    dict(dom="music", path=s.PATH_BRAIN, score=0.0, conf=0.95),          # no similarity examples: the head alone, sure
-    dict(dom="smart_home", path=s.PATH_BRAIN, score=0.0, conf=0.92),
+    dict(dom="music", path=s.PATH_BRAIN, score=0.0, conf=0.95, text="put some jazz on"),   # no similarity examples: the head alone, sure, and a music cue
+    dict(dom="smart_home", path=s.PATH_BRAIN, score=0.0, conf=0.92, text="dim the lounge light"),
     dict(dom="weather", path=s.PATH_BRAIN, score=0.70, tsf=True),        # two-stage timed out, similarity routed
     dict(dom="calendar", path=s.PATH_BRAIN, score=0.85, tsa=False),      # no head at all, similarity strong
     dict(dom="timers", path=s.PATH_FAST, score=0.86, reply="Here is the calendar."),   # another fast domain answered
     dict(dom="weather", path=s.PATH_FAST, score=0.9, reply="It is 7:05 PM."),
-    dict(dom="smart_home", path=s.PATH_FAST, score=0.0, conf=0.97, reply="Here is the calendar."),
+    dict(dom="smart_home", path=s.PATH_FAST, score=0.0, conf=0.97, reply="Here is the calendar.", text="dim the lounge light"),
     dict(dom="reminders", path=s.PATH_BRAIN, score=0.78),
 ]
 FALL_NEG = [
@@ -296,7 +296,8 @@ FALL_NEG = [
 def test_fallthrough_positive(kw):
     kw = dict(kw)
     reply = kw.pop("reply", "Sure.")
-    assert "FALLTHROUGH" in sigs(None, T("a request", reply=reply, **kw)), kw
+    text = kw.pop("text", "a request")
+    assert "FALLTHROUGH" in sigs(None, T(text, reply=reply, **kw)), kw
 
 
 @pytest.mark.parametrize("kw", FALL_NEG)

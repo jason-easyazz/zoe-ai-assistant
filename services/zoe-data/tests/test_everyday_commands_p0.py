@@ -832,3 +832,47 @@ def test_membership_fillers_articles_and_tags_never_leak_into_the_item(text, ite
 def test_membership_statements_and_pointers_are_not_yes_no_questions(text):
     i = sky.classify_skybridge_intent(text)
     assert i is None or i.action != "contains", text
+
+
+# ── sign-offs are not delays (regression from #2040, codex PRRT_kwDOPZpkks6sKdsn / sXdvM) ─────────────────────
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "turn off the lights, see you tomorrow",
+        "turn off the lights and good night",
+        "turn off the lights, talk tomorrow",
+        "turn off the lights, night night",
+        "turn off the lights, catch you later",
+        "turn off the lights, have a good day",
+        "switch off the fan. see you in the morning",
+        "turn off the lights, thanks, see you tomorrow",
+        "turn off the lights, good night zoe",
+    ],
+)
+def test_a_trailing_sign_off_is_not_a_delay(text):
+    assert _claim(text) == ("smart_home", "turn_off"), text
+    hit = intent_router.detect_intent(text, log_miss=False)
+    assert hit is None or hit.name != "smart_home" or hit.slots["action"] != "delayed", (text, hit)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "turn off the lights tomorrow",
+        "turn off the lights at seven",
+        "turn off the lights, do it tomorrow",  # points back at the command
+        "turn off the lights, tomorrow",
+        "turn off the lights later",
+        "turn off the lights tonight, good night",  # the time is on the command, the sign-off is extra
+        "turn off the lights in 5 minutes, thanks",
+    ],
+)
+def test_a_time_on_the_command_is_still_a_delay(text):
+    assert _claim(text) == ("smart_home", "delayed"), text
+
+
+def test_break_the_fix_sign_off_is_refused_again_without_the_strip(monkeypatch):
+    monkeypatch.setattr(command_shapes, "_without_trailing_pleasantries", lambda t: t)
+    assert _claim("turn off the lights, see you tomorrow") == ("smart_home", "delayed")

@@ -236,7 +236,197 @@ def clip_set_summary(report: dict[str, Any], sample_dir: str) -> dict[str, Any]:
         clip_ids=clip_ids_for_names(names, sample_dir),
         clip_id_scheme=CLIP_ID_SCHEME,
         stt_ms_per_audio_s=stt_per_audio_second(rows, sample_dir),
+        clip_profile=clip_profile(rows, sample_dir),
     )
+
+
+def _row_clip_id(row: dict[str, Any], sample_dir: str) -> str | None:
+    name = row.get("file")
+    if not name:
+        return None
+    try:
+        return clip_id(os.path.basename(name),
+                       os.stat(os.path.join(sample_dir, os.path.basename(name))).st_size)
+    except OSError:
+        return None
+
+
+def clip_profile(rows: list[dict[str, Any]], sample_dir: str) -> dict[str, dict[str, Any]]:
+    """Per-clip {verdict, via_brain, route, heard}, keyed by clip id. Content-free
+    (the hashes measure_voice already records, never a name, transcript or reply).
+    A baseline that carries it lets a later run tell WHICH clips were OK before and
+    whether a failing clip still takes the same route with the same transcript."""
+    out: dict[str, dict[str, Any]] = {}
+    for r in rows or []:
+        cid = _row_clip_id(r, sample_dir)
+        if cid and isinstance(r.get("verdict"), str):
+            out[cid] = dict(verdict=r["verdict"], via_brain=r.get("via_brain") is True,
+                            route=r.get("route_hash"), heard=r.get("heard_hash"))
+    return out
+
+
+# ── Flaky brain-wording tolerance ────────────────────────────────────────────
+# Incident (2026-10-15): the pinned set holds a short garbled clip that routes to
+# chat, so the BRAIN's free-text reply decides its verdict — and that reply varies
+# run to run, sometimes matching replay_samples._CANT_DO_RE ("can't tell you…").
+# Same code scored OK, OK, CANT_DO: a PR failed ~1/3 of the time with no regression.
+#
+# The tolerance is deliberately narrow. Only a clip that (a) was OK in the baseline,
+# (b) is CANT_DO now AFTER falling through to the brain (via_brain — the verdict is
+# a function of reply text), and (c) still takes the same route with the same
+# transcript as the baseline is re-run, in the same harness on the same code. It
+# counts as regressed if it fails in >= FLAKY_FAIL_MIN of its 3 runs. A deterministic
+# regression (route/tier change, STT change, crash, ERROR, a real refusal) fails
+# every run, so it still fails; anything that is not brain wording is never retried.
+FLAKY_MAX_CLIPS = 3       # more candidates than this is a regression, not noise
+FLAKY_EXTRA_RUNS = 2      # runs 2 and 3
+FLAKY_FAIL_MIN = 2        # failures (of 3 runs) that make a clip regressed
+
+
+def _profile_of(baseline: dict[str, Any] | None) -> dict[str, dict[str, Any]] | None:
+    summ = baseline.get("summary") if isinstance(baseline, dict) else None
+    prof = summ.get("clip_profile") if isinstance(summ, dict) else None
+    return prof if isinstance(prof, dict) and prof else None
+
+
+def flaky_candidates(report: dict[str, Any], baseline: dict[str, Any] | None,
+                     sample_dir: str) -> dict[str, Any]:
+    """Split the failing rows of a first run into retry-eligible and hard ones.
+
+    eligible     [(clip_id, basename)]: CANT_DO via the brain with the same route and
+                 transcript as a baseline OK (on a legacy baseline with no per-clip
+                 profile: brain CANT_DO only; route change cannot be checked)
+    hard         failures that are not brain wording, or whose route / transcript
+                 differs from the baseline: deterministic, never retried
+    pre_existing failing in the baseline too: not a regression, not retried
+    profile      True when the baseline carried per-clip verdicts."""
+    prof = _profile_of(baseline)
+    eligible: list[tuple[str, str]] = []
+    hard: list[str] = []
+    pre_existing: list[str] = []
+    for i, r in enumerate(report.get("rows") or []):
+        if r.get("verdict") not in ("CANT_DO", "ERROR"):
+            continue
+        real_id = _row_clip_id(r, sample_dir)
+        cid = real_id or f"unidentified-{i}"
+        brain_wording = r.get("verdict") == "CANT_DO" and r.get("via_brain") is True and real_id is not None
+        if prof is not None:
+            b = prof.get(cid)
+            if isinstance(b, dict) and b.get("verdict") in ("CANT_DO", "ERROR"):
+                pre_existing.append(cid)
+                continue
+            if not brain_wording or not isinstance(b, dict):
+                hard.append(cid)
+                continue
+            if (b.get("verdict") != "OK" or b.get("via_brain") is not True
+                    or b.get("route") != r.get("route_hash") or b.get("heard") != r.get("heard_hash")):
+                hard.append(cid)       # route/tier/transcript changed: deterministic
+                continue
+        elif not brain_wording:
+            hard.append(cid)
+            continue
+        eligible.append((cid, os.path.basename(r["file"])))
+    return dict(eligible=eligible, hard=hard, pre_existing=pre_existing, profile=prof is not None)
+
+
+def _recount(rows: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for r in rows:
+        v = r.get("verdict")
+        if isinstance(v, str):
+            counts[v] = counts.get(v, 0) + 1
+    return counts
+
+
+def _retry_verdict(first_row: dict[str, Any], row: dict[str, Any] | None) -> str:
+    """One retry's verdict for a clip: OK only on positive evidence (an OK verdict
+    via the brain on the same route as the first run); otherwise the failure."""
+    if not row:
+        return "ERROR"
+    v = row.get("verdict")
+    if v != "OK":
+        return v if isinstance(v, str) else "ERROR"
+    if row.get("via_brain") is True and row.get("route_hash") == first_row.get("route_hash"):
+        return "OK"
+    return "ROUTE-CHANGED"
+
+
+def apply_flaky_tolerance(report: dict[str, Any], baseline: dict[str, Any] | None,
+                          rerun: Any, sample_dir: str, *,
+                          max_clips: int = FLAKY_MAX_CLIPS,
+                          extra_runs: int = FLAKY_EXTRA_RUNS) -> dict[str, Any]:
+    """Re-run ONLY the retry-eligible failing clips (<= extra_runs more times) and
+    return a report whose verdicts reflect the majority outcome.
+
+    rerun(names) -> measure report for exactly those clips (same code/harness).
+    Returns {retried, report, clips, note}. `report` is the input unchanged unless
+    retried; a clip that fails in >= FLAKY_FAIL_MIN of its runs keeps CANT_DO,
+    otherwise its row is set to OK with `flaky: true` (first-run numbers kept).
+    A retry that cannot run, has no recall evidence, or returns a different route
+    counts as a failure: tolerance is only ever granted on positive evidence."""
+    out: dict[str, Any] = dict(retried=False, report=report, clips=[], note="")
+    cand = flaky_candidates(report, baseline, sample_dir)
+    if not cand["eligible"]:
+        return out
+    if cand["profile"] and cand["hard"]:
+        out["note"] = (f"{len(cand['hard'])} failing clip(s) are not brain wording (route/transcript "
+                       "change, ERROR or non-brain CANT_DO): deterministic, not retried")
+        return out
+    if not cand["profile"]:
+        summ = (baseline or {}).get("summary") if isinstance(baseline, dict) else None
+        base_fail = summ.get("fail") if isinstance(summ, dict) else None
+        if isinstance(base_fail, int) and len(cand["hard"]) > base_fail:
+            out["note"] = (f"{len(cand['hard'])} failing clip(s) are not brain wording and the "
+                           f"baseline had {base_fail} failure(s): deterministic, not retried")
+            return out
+    if len(cand["eligible"]) > max_clips:
+        out["note"] = (f"{len(cand['eligible'])} brain-wording failures exceed the retry cap of "
+                       f"{max_clips}: counted as a regression, not retried")
+        return out
+
+    rows = report.get("rows") or []
+    first = {c: r for r in rows if (c := _row_clip_id(r, sample_dir))}
+    names = dict(cand["eligible"])
+    runs: dict[str, list[str]] = {cid: ["CANT_DO"] for cid in names}
+    problems: list[str] = []
+    for _ in range(extra_runs):
+        pending = [cid for cid, v in runs.items() if sum(x != "OK" for x in v) < FLAKY_FAIL_MIN]
+        if not pending:
+            break
+        try:
+            rep = rerun([names[c] for c in pending])
+            recall = rep.get("memory_recall") if isinstance(rep, dict) else None
+            if recall != "ok":
+                raise RuntimeError(f"retry replay has no recall evidence ({recall})")
+        except Exception as exc:
+            problems.append(f"retry did not run ({type(exc).__name__}: {str(exc)[:120]})")
+            for cid in pending:
+                runs[cid].append("ERROR")
+            continue
+        got = {c: r for r in rep.get("rows") or [] if (c := _row_clip_id(r, sample_dir))}
+        for cid in pending:
+            runs[cid].append(_retry_verdict(first[cid], got.get(cid)))
+
+    clips: list[dict[str, Any]] = []
+    adjusted = [dict(r) for r in rows]
+    for r in adjusted:
+        cid = _row_clip_id(r, sample_dir)
+        if cid not in runs:
+            continue
+        fails = sum(v != "OK" for v in runs[cid])
+        total = len(runs[cid])
+        regressed = fails >= FLAKY_FAIL_MIN
+        if not regressed:
+            r["verdict"], r["flaky"] = "OK", True
+        clips.append(dict(
+            clip_id=cid, runs=runs[cid], failures=fails, of=total, regressed=regressed,
+            note=(f"clip {cid} regressed: {fails}/{total} runs failed {runs[cid]}: counted"
+                  if regressed else
+                  f"clip {cid} flaky: {fails}/{total} CANT_DO (brain wording): not counted")))
+    new_report = dict(report, rows=adjusted, verdicts=_recount(adjusted),
+                      first_run_verdicts=report.get("verdicts"))
+    return dict(retried=True, report=new_report, clips=clips, note="; ".join(problems),
+                profile=cand["profile"])
 
 
 def plan_clip_set(baseline: dict[str, Any], sample_dir: str,
@@ -843,7 +1033,8 @@ def emit_result(args, *, status: str, summary: dict[str, Any],
                 said_vs_did: list[str], speed_deltas: dict[str, Any],
                 baseline: dict[str, Any], reason: str = "",
                 vad: dict[str, Any] | None = None,
-                speed_comparison: str = "not-applicable") -> dict[str, Any]:
+                speed_comparison: str = "not-applicable",
+                flaky: dict[str, Any] | None = None) -> dict[str, Any]:
     """Write the durable, machine-readable RESULT ARTIFACT — on EVERY exit path.
 
     This is the whole point of the gate's hardening: a skip / timeout / error
@@ -881,6 +1072,13 @@ def emit_result(args, *, status: str, summary: dict[str, Any],
         # with lightweight arg objects that carry no service_dir.
         "revision": service_revision(getattr(args, "service_dir", None)),
         "summary": summary,                     # back-compat: n_samples / ok_rate / medians_ms
+        # Flaky brain-wording tolerance (see apply_flaky_tolerance). Present on EVERY
+        # exit path so a reader never has to guess: flaky_retried says whether any clip
+        # was re-run; flaky_clips records each one's per-run verdicts and whether it was
+        # counted. A tolerated clip is VISIBLE here, never silently absorbed.
+        "flaky_retried": bool(flaky and flaky.get("retried")),
+        "flaky_clips": list((flaky or {}).get("clips") or []),
+        "flaky_note": str((flaky or {}).get("note") or ""),
         "non_pass_streak": streak,              # consecutive runs with status != "pass"
         "non_pass_alert_after": alert_after,
         "non_pass_alert": streak >= alert_after,
@@ -1302,6 +1500,25 @@ def main(reexec: bool = False) -> int:
         speed_note = (f"replayed {len(summary['clip_ids'])} clips but the baseline pinned "
                       f"{len(baseline_clip_ids(baseline) or [])}; the sets differ, so speed is not comparable")
     warnings = compare(summary, baseline, args.warn_ratio, args.warn_ms, compare_speed=speed_ok)
+    flaky: dict[str, Any] | None = None
+    if (any(w.startswith("FUNCTION") for w in warnings) and baseline
+            and not args.update_baseline and recall_gate(summary) is None):
+        # Same code, same harness: re-run only the brain-wording failures (<= 2 more
+        # times, <= 3 clips). Anything deterministic stays a first-run failure.
+        flaky = apply_flaky_tolerance(
+            report, baseline,
+            lambda names: run_measure(args.samples, args.service_dir, args.user, args.timeout,
+                                      args.stt, python=args.python, names=names),
+            args.sample_dir)
+        if flaky["retried"]:
+            report = flaky["report"]
+            summary = summarize(report)
+            summary.update(clip_set_summary(report, args.sample_dir))
+            warnings = compare(summary, baseline, args.warn_ratio, args.warn_ms, compare_speed=speed_ok)
+        if flaky["note"]:
+            print(f"NOTE flaky tolerance: {flaky['note']}")
+        for c in flaky["clips"]:
+            print(f"NOTE {c['note']}  runs={c['runs']}")
     if speed_warn and not speed_ok:
         warnings.append(f"BASELINE-SET: {speed_note}")
     if speed_ok:
@@ -1371,7 +1588,7 @@ def main(reexec: bool = False) -> int:
         reason_parts.append(f"VAD {vad['status'].upper()}: {vad.get('reason')}")
     emit_result(args, status=status, summary=summary, said_vs_did=said_vs_did,
                 speed_deltas=speed_deltas, baseline=baseline, reason="; ".join(reason_parts),
-                vad=vad, speed_comparison=speed_comparison)
+                vad=vad, speed_comparison=speed_comparison, flaky=flaky)
 
     print(f"Results: {args.results}  Trend: {args.trend}  (status={status})")
     if status == "error":
