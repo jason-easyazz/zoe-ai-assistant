@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import StreamingResponse
+import panel_principal
 from intent_router import detect_intent, detect_and_extract_intent, execute_intent, openclaw_user_message, Intent
 from browser_broker import create_default_browser_broker
 from conversation_context import ConversationContext as _CC
@@ -984,7 +985,12 @@ async def _persist_memory_candidates_impl(user_id: str, session_id: str, user_me
                                           assistant_response: str) -> bool:
     """True when every memory pass ran cleanly (or there was nothing to capture);
     False when any pass raised — logged here, counted by the wrapper."""
-    if user_id == "guest":
+    # Nobody identified (the guest session or any other sentinel - "guest" only used to be checked): no durable memory pass
+    # runs, for anyone (user_filters.is_unidentified; the same wall as the voice lane and MemoryService.ingest).
+    from user_filters import is_unidentified as _is_unidentified
+
+    if _is_unidentified(user_id):
+        logger.info("GUEST_MEMORY_DISCARD lane=chat passes=all")
         return True
     # A reply the HOLD tier wrote (hold_the_fact: "I've got your dentist appointment down as Friday, and
     # that's what you told me...") means the owner's contradicting claim was NOT accepted this turn: mining
@@ -2774,6 +2780,10 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
 
     if not message:
         return {"error": "No message provided"}
+
+    # Anyone AT THE PANEL may use the household list (a fridge list). The verdict rides this request's context so the intent
+    # executors can tell a panel guest from an anonymous LAN caller (who still touches no list).
+    await panel_principal.mark_if_panel(request, user)
 
     # An explicit session_id is used as-is. With none (the estate ask-box sends none) the
     # user's last ask_ session within ZOE_STICKY_SESSION_MINUTES continues (never a web_

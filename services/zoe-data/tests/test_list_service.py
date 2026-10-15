@@ -96,7 +96,8 @@ def _writes(db, table: str):
 
 
 def test_default_visibility_rule():
-    assert default_visibility("shopping") == "personal"
+    # ONE household shopping list: auto-created family-visible, never as the first speaker's personal list (household-lists fix).
+    assert default_visibility("shopping") == "family"
     assert default_visibility("tasks") == "personal"
     assert default_visibility("personal") == "personal"
     assert default_visibility("work") == "family"
@@ -179,10 +180,10 @@ async def test_add_item_existing_list_inserts_item_only():
     assert _writes(db, "lists") == []
     (sql, params), = _writes(db, "list_items")
     assert params[1:] == ("L1", "milk", "normal", "dairy", "2", None, None)
-    # Family-first resolution: family lists win a name tie.
+    # Household-first resolution BY TYPE: the family-visible list of the type, whatever it is called (name is a tie-break).
     resolve_sql, resolve_params = db.selects[0]
-    assert "visibility='family' THEN 0" in resolve_sql
-    assert resolve_params == ("shopping", "Shopping", "u1")
+    assert "visibility = 'family'" in resolve_sql and "l.list_type = ?" in resolve_sql
+    assert resolve_params == ("shopping",)
 
 
 @pytest.mark.asyncio

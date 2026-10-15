@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import command_shapes
 import conversation_cues
+import panel_principal
 import write_receipts
 from calendar_utils import row_to_event
 from card_contract import CardContractError, validate_component
@@ -1202,9 +1203,9 @@ def _event_title(raw: str, tail: str = "") -> str:
     return title
 
 
-def _calendar_create_from_text(message: str, context: dict[str, Any] | None) -> tuple[str, str] | None:
-    """"add/schedule/book X (on <day>) at <time>" and "what about a meeting <day> at <time>" -> (title, HH:MM). The day is
-    resolved by the caller from the same text. A time that cannot be read, or no event cue at all, claims nothing."""
+def _calendar_create_from_text(message: str, context: dict[str, Any] | None) -> tuple[str, str, int] | None:
+    """"add/schedule/book X (on <day>) at <time>" and "what about a meeting <day> at <time>" -> (title, HH:MM, day_offset). The
+    day is resolved by the caller from the same text, plus ``day_offset`` (1 for the small hours of "2 tonight"). A time that cannot be read, or no event cue at all, claims nothing."""
     text = re.sub(r"\s+", " ", message or "").strip()
     cue = re.search(r"\b(calendar|schedule|event|appointment|meeting)\b", text, re.IGNORECASE)
     if _context_domain(context) != "calendar" and not cue:
@@ -1228,8 +1229,66 @@ def _calendar_create_from_text(message: str, context: dict[str, Any] | None) -> 
     if not match:
         return None
     title = _event_title(match.group("title"), tail)
-    target_time = _parse_spoken_time(match.group("time"))
-    return (title, target_time) if title and target_time else None
+    # A timer / alarm / reminder is not a calendar event, whatever verb it follows ("schedule a timer for 10 tonight").
+    if _NOT_A_CALENDAR_EVENT_RE.search(text):
+        return None
+    raw_time = match.group("time")
+    resolved = _resolve_daypart_time(raw_time, _parse_spoken_time(raw_time), text)
+    if resolved is None:
+        return None
+    target_time, day_offset = resolved
+    return (title, target_time, day_offset) if title and target_time else None
+
+
+_NOT_A_CALENDAR_EVENT_RE = re.compile(r"\b(?:timers?|alarms?|stopwatch|remind(?:ers?|s)?|remind\s+me)\b", re.IGNORECASE)
+_NIGHT_RE = re.compile(r"\b(?:tonight|night)\b", re.IGNORECASE)
+_EVENING_RE = re.compile(r"\bevening\b", re.IGNORECASE)
+_MORNING_RE = re.compile(r"\bmorning\b", re.IGNORECASE)
+
+
+def _raw_hour_minute(raw: str) -> tuple[int, int] | None:
+    """The hour and minute AS SPOKEN ("two o'clock" -> 2, never the afternoon reading), or None when it is not a plain hour."""
+    s = re.sub(r"\s+", " ", (raw or "").strip().lower().replace(".", ""))
+    m = re.match(rf"^(?P<h>{_HOUR_WORD_RE})(?: (?P<mw>thirty|fifteen|forty[- ]?five))? ?(?:o'? ?clock)?$", s)
+    if m:
+        minutes = {"thirty": 30, "fifteen": 15, "forty five": 45, "fortyfive": 45}
+        return _HOUR_WORDS[m.group("h")], minutes.get((m.group("mw") or "").replace("-", " "), 0)
+    m = re.match(r"^(\d{1,2})(?::(\d{2}))? ?(?:o'? ?clock)?$", s)
+    if m and int(m.group(2) or 0) < 60:
+        return int(m.group(1)), int(m.group(2) or 0)
+    return None
+
+
+def _resolve_daypart_time(raw_time: str, parsed: str, text: str) -> tuple[str, int] | None:
+    """``(HH:MM, day_offset)`` for a time the words place in a part of the day, ``(parsed, 0)`` when they do not, ``None`` when
+    the time cannot be placed (the turn is not claimed as a create).
+
+    No am/pm and no noon/midday in the time itself, then the day-part word decides the 12-hour reading:
+    * tonight / night: 6-11 -> that hour in the evening, TODAY ("11 tonight" 23:00); 12 and 1-5 are the small hours - they
+      are the NEXT date's 00:00-05:00 ("2 o'clock tonight" is not 14:00 today), offset +1.
+    * evening: 1-11 -> pm ("5 this evening" 17:00); 12 is not an evening time (None).
+    * morning: 1-11 -> am AS SPOKEN ("3 o'clock in the morning" 03:00, not the afternoon reading a bare o'clock gets); 12 None.
+    Anything else (explicit am/pm, noon, midday, 24-hour, no day-part word) is left to ``_parse_spoken_time``."""
+    if re.search(r"[ap]\.?m\b|noon|midday", raw_time, re.IGNORECASE):
+        return parsed, 0
+    night, evening, morning = bool(_NIGHT_RE.search(text)), bool(_EVENING_RE.search(text)), bool(_MORNING_RE.search(text))
+    if not (night or evening or morning):
+        return parsed, 0
+    if sum((night, evening, morning)) > 1:
+        return None                                            # "tomorrow morning ... tonight": contradictory, ask
+    hm = _raw_hour_minute(raw_time)
+    if hm is None:
+        return (parsed, 0) if parsed else None                # unplaceable
+    hour, minute = hm
+    if not 1 <= hour <= 12:
+        return (f"{hour:02d}:{minute:02d}", 0) if hour <= 23 else None      # 24-hour ("18:30 tonight")
+    if night:
+        if 6 <= hour <= 11:
+            return f"{hour + 12:02d}:{minute:02d}", 0
+        return f"{hour % 12:02d}:{minute:02d}", 1
+    if evening:
+        return (f"{hour + 12:02d}:{minute:02d}", 0) if hour < 12 else None
+    return (f"{hour:02d}:{minute:02d}", 0) if hour < 12 else None
 
 
 def _calendar_create_notime_from_text(message: str, context: dict[str, Any] | None) -> str | None:
@@ -1634,9 +1693,9 @@ def classify_skybridge_intent(
         return SkybridgeIntent(domain="calendar", action="edit_event", target_text=calendar_edit)
     calendar_create = _calendar_create_from_text(raw_message, context)
     if calendar_create:
-        title, target_time = calendar_create
+        title, target_time, day_offset = calendar_create
         parsed_range = _calendar_date_from_text(text, _today())
-        start = parsed_range[1] if parsed_range else _context_calendar_date(context)
+        start = (parsed_range[1] if parsed_range else _context_calendar_date(context)) + timedelta(days=day_offset)
         return SkybridgeIntent(domain="calendar", action="create_event", title=title, target_time=target_time, range_label=start.isoformat(), start_date=start, end_date=start)
     calendar_create_notime = _calendar_create_notime_from_text(raw_message, context)
     if calendar_create_notime:
@@ -1646,6 +1705,9 @@ def classify_skybridge_intent(
     # smart_home runs AFTER list/calendar parsing (so "add lights to the shopping
     # list" stays a list write) but BEFORE the generic clock/weather/people
     # fallbacks. Household-shared like clock/music — no identity gate.
+    calendar_followup = _calendar_followup_intent(raw_message, context)
+    if calendar_followup is not None:
+        return calendar_followup
     smart_home_intent = _smart_home_followup_intent(raw_message, context) or _classify_smart_home(text)
     if smart_home_intent is not None:
         return _unless_delayed(smart_home_intent, text)
@@ -1670,7 +1732,11 @@ def classify_skybridge_intent(
         list_type = _list_type_from_text(text)
         action = "overview" if re.search(r"\blists\b", text) else "show"
         return SkybridgeIntent(domain="lists", action=action, list_type=list_type)
-    if not write_led and _CALENDAR_KEYWORD_RE.search(text):
+    # A command-shaped CREATE ("schedule a meeting at midnight", "book a lunch at half past twelve tonight") whose time the
+    # parser above could not place is not a calendar READ either: the bare "schedule" keyword used to answer it with today's
+    # events. It goes on to the brain, which can ask.
+    create_led = _command_shaped(raw_message, _CREATE_VERBS) is not None
+    if not write_led and not create_led and _CALENDAR_KEYWORD_RE.search(text):
         today = _today()
         parsed_range = _calendar_date_from_text(text, today)
         if parsed_range is not None:
@@ -1845,6 +1911,24 @@ def _unsure_floor(intent: SkybridgeIntent, message: str = "") -> float | None:
     return value if value > 0 else None
 
 
+_CALENDAR_NOUN_RE = re.compile(
+    rf"\b(?:calendar|events?|appointments?|bookings?|meetings?|calls?|{_EVENT_NOUNS[3:-1]}|(?:my|the)\s+schedule)\b", re.IGNORECASE)
+
+
+def _has_calendar_noun(message: str) -> bool:
+    """A calendar NOUN in the words (meeting / appointment / event / booking / lunch / dinner / call ... / "my schedule"), not
+    merely the verb "schedule": "schedule a timer for 10 tonight" has none. Timer / alarm / reminder phrasing never counts."""
+    text = message or ""
+    return bool(_CALENDAR_NOUN_RE.search(text)) and not _NOT_A_CALENDAR_EVENT_RE.search(text)
+
+
+def _head_names_calendar(decision: dict[str, Any]) -> bool:
+    """The router head's top class (or its non-chat shortlist) is calendar: a low-confidence verdict for some OTHER domain
+    (timers, music, people ...) is not "unsure about the calendar"."""
+    shortlist = decision.get("shortlist") if isinstance(decision.get("shortlist"), (list, tuple)) else ()
+    return str(decision.get("head_top") or "") == "calendar" or "calendar" in {str(c) for c in shortlist}
+
+
 def skybridge_router_gate(
     message: str,
     intent: SkybridgeIntent,
@@ -1916,6 +2000,26 @@ def skybridge_router_gate(
         if floor is not None and (conf is None or conf < floor):
             return "veto", "router_unsure_low_conf", router_domain, conf
         return "allow", "router_unsure", router_domain, conf
+    if (
+        router_domain == "chat"
+        and decision.get("gated")
+        and str(decision.get("reason") or "") == "low_conf"
+        and intent.domain == "calendar"
+        and intent.action == "create_event"
+        and intent.target_time
+        and not intent.all_day
+        and _head_names_calendar(decision)
+        and _has_calendar_noun(message)
+    ):
+        # "schedule a meeting for 10 o'clock tonight" (live 2026-10-14): the parser read a create verb, an event noun AND a
+        # clock time, and the router fell under its low-confidence floor (chat @ 0.65) - it did not say "this is chat", it said
+        # "not sure". The structured parse is the stronger evidence for a WRITE it fully understood, and the veto cost 9.4 s on
+        # the brain for the same event. Only `low_conf` (a CONFIDENT chat head top / `chat_top` still vetoes, and so does a
+        # confident other domain, which `router_disagrees` covers above); only a create with a parsed time (no time = an
+        # all-day guess, which keeps the veto); the unsure floor still applies to a verdict this weak.
+        floor = _unsure_floor(intent, message)
+        if floor is None or (conf is not None and conf >= floor):
+            return "allow", "write_parsed_time", router_domain, conf
     return "veto", ("router_chat" if router_domain == "chat" else "router_disagrees"), router_domain, conf
 
 
@@ -2004,6 +2108,12 @@ async def resolve_skybridge_request(
             message, intent, router_decision, context=context
         )
         _log_router_gate(intent, decision, reason, router_domain, conf)
+        try:  # the struggle detector: what Skybridge recognised and whether the router let it (an O(1) append, never raises)
+            import struggle_detector
+
+            struggle_detector.note_skybridge(message, intent.domain, intent.action, decision)
+        except Exception:  # noqa: BLE001
+            pass
         if decision == "veto":
             return {
                 "handled": False,
@@ -2021,7 +2131,13 @@ async def resolve_skybridge_request(
             }
 
     if skybridge_intent_requires_identity(intent) and _is_guest_user(user_id):
-        return _attach_skybridge_context(_auth_required_result(intent))
+        if (intent.domain == "lists" and intent.action in _GUEST_HOUSEHOLD_LIST_ACTIONS
+                and panel_principal.in_panel_turn()):
+            # Anyone AT THE PANEL may read, add to, tick off and remove from the HOUSEHOLD list (a fridge list). The
+            # resolvers below see the household viewer: it owns nothing, so only family-visible lists can match.
+            user_id = panel_principal.HOUSEHOLD_VIEWER
+        else:
+            return _attach_skybridge_context(_auth_required_result(intent))
 
     # B1.1 phase 2: a speculative voice turn (verdict pending) must not run a
     # Skybridge WRITE (list add, calendar create, music, smart-home, timers) on a
@@ -2069,10 +2185,12 @@ async def resolve_skybridge_request(
         return out
 
     if db is not None:
-        return _attach_skybridge_context(await _resolve_with_db(intent, user_id, db, context=context))
-
-    async with get_db_ctx() as ctx_db:
-        return _attach_skybridge_context(await _resolve_with_db(intent, user_id, ctx_db, context=context))
+        out = _attach_skybridge_context(await _resolve_with_db(intent, user_id, db, context=context))
+    else:
+        async with get_db_ctx() as ctx_db:
+            out = _attach_skybridge_context(await _resolve_with_db(intent, user_id, ctx_db, context=context))
+    _remember_calendar_read(intent, out)
+    return out
 
 
 def _card_as_component(card: Any) -> dict[str, Any]:
@@ -2116,6 +2234,26 @@ def _attach_skybridge_context(result: dict[str, Any]) -> dict[str, Any]:
 
 def _is_guest_user(user_id: str | None) -> bool:
     return (user_id or "").strip() in {"", "guest", "voice-guest"}
+
+
+def _pick_list_row(rows: Any, name: str = "") -> dict[str, Any]:
+    """Which of the lists of a TYPE a type-only add/remove lands on: the household (family-visible) list by the ONE shared
+    rule (``list_service.pick_household_list``: fullest, name only a tie-break, then oldest); with none, the caller's own list."""
+    from list_service import pick_household_list
+
+    dicts = [dict(r) for r in rows]
+    family = [r for r in dicts if r.get("visibility", "family") == "family"]
+    return pick_household_list(family, name) or dicts[0]
+
+
+def _audit_list_item(op: str, user_id: str, list_id: str, item_id: str) -> None:
+    """Who touched a list item (no column holds it): the member, or ``panel`` when nobody at the panel was identified."""
+    actor = panel_principal.PANEL_ACTOR if user_id == panel_principal.HOUSEHOLD_VIEWER else user_id
+    logger.info("list_item_audit op=%s actor=%s list=%s item=%s", op, actor, list_id, item_id)
+
+
+# What a panel guest may do to the household list; everything else on a list (edit text, create a list) needs a member.
+_GUEST_HOUSEHOLD_LIST_ACTIONS = frozenset({"show", "overview", "contains", "add_item", "remove_item", "complete_item"})
 
 
 def skybridge_intent_requires_identity(intent: SkybridgeIntent | None) -> bool:
@@ -2273,6 +2411,42 @@ def _smart_home_followup_intent(raw_message: str, context: dict[str, Any] | None
         return None
     return SkybridgeIntent(domain="smart_home", action=action, query=str(mem.get("query") or ""),
                            entity_id=ids[0] if len(ids) == 1 else "", entity_ids=ids)
+
+
+# "What is it?" right after "You have one event today." (live 2026-10-14: the first two went to the brain with no context). The
+# range the last calendar READ covered rides in the panel's Skybridge context for a short window, and a short question about
+# "it / them / the one event" (the words are the lexicon's, ``conversation_cues.calendar_followup``) re-runs that read. It is the
+# SAME member-scoped read as the original ask: a guest's follow-up is the PIN challenge, never the events.
+_CALENDAR_READ_KEY = "calendar_read"
+
+
+def _remember_calendar_read(intent: "SkybridgeIntent", out: dict[str, Any]) -> None:
+    """Record the range a handled calendar READ covered in ``out["skybridge_context"]`` (not a challenge, not a write)."""
+    ctx = out.get("skybridge_context")
+    if out.get("handled") and not out.get("auth_required") and isinstance(ctx, dict) and (
+        intent.domain == "calendar" and intent.action == "show" and intent.start_date
+    ):
+        ctx[_CALENDAR_READ_KEY] = {
+            "label": intent.range_label, "start": intent.start_date.isoformat(),
+            "end": (intent.end_date or intent.start_date).isoformat(), "ts": time.time(),
+        }
+
+
+def _calendar_followup_intent(raw_message: str, context: dict[str, Any] | None) -> "SkybridgeIntent | None":
+    """A short question about the calendar answer just given ("what is it", "what are they", "which one") -> the same read."""
+    mem = context.get(_CALENDAR_READ_KEY) if isinstance(context, dict) else None
+    if not isinstance(mem, dict):
+        return None
+    from conversation_cues import calendar_followup, calendar_followup_ttl_s
+
+    if time.time() - float(mem.get("ts") or 0.0) > calendar_followup_ttl_s() or not calendar_followup(raw_message):
+        return None
+    try:
+        start = date.fromisoformat(str(mem.get("start")))
+        end = date.fromisoformat(str(mem.get("end") or mem.get("start")))
+    except ValueError:
+        return None
+    return SkybridgeIntent("calendar", "show", str(mem.get("label") or "today"), start, end)
 
 
 # Smart-home device anchors: a word clearly about a controllable household
@@ -3002,7 +3176,7 @@ async def _resolve_calendar(intent: SkybridgeIntent, user_id: str, db: Any) -> d
     start = intent.start_date or today_for_zoe_tz()
     end = intent.end_date or start
     events = []
-    if user_id not in {"guest", "voice-guest"}:
+    if not _is_guest_user(user_id):
         rows = await db.fetch(
             """
             SELECT *
@@ -3020,7 +3194,21 @@ async def _resolve_calendar(intent: SkybridgeIntent, user_id: str, db: Any) -> d
         events = [row_to_event(row) for row in rows]
     qualifier = intent.range_label or start.isoformat()
     event_word = "event" if len(events) == 1 else "events"
-    spoken = f"You have {len(events)} {event_word} {qualifier}."
+    count_line = f"You have {len(events)} {event_word} {qualifier}."
+    # The identified member HEARS the events (the asker is the member: this resolver only reads rows for a real user_id, and
+    # the voice lane passes one only for a fresh PIN sign-in, an open voice session or the member's own session); the card
+    # carries all of them. No identity: no rows, no count - only how to unlock (docs/knowledge/voice-verified-session.md).
+    spoken = count_line
+    try:
+        import voice_cards
+
+        if _is_guest_user(user_id):
+            spoken = voice_cards.spoken_private() or "That's private. Unlock with your PIN."
+        else:
+            spoken = voice_cards.spoken_events(
+                events, qualifier, start_date=start.isoformat(), end_date=end.isoformat()) or count_line
+    except Exception:  # noqa: BLE001 - the count is the floor; speech never fails over a lexicon
+        logger.warning("calendar read-back fell back to the count", exc_info=True)
     card = card_service.convert_emit(
         card_service.build_calendar_timeline_card(
             {
@@ -3029,7 +3217,7 @@ async def _resolve_calendar(intent: SkybridgeIntent, user_id: str, db: Any) -> d
                 "start_date": start.isoformat(),
                 "end_date": end.isoformat(),
                 "events": events,
-                "summary": spoken,
+                "summary": count_line,
             }
         ),
         target_major=1,
@@ -3196,18 +3384,25 @@ def _list_contains_answer(
 
 
 async def _ensure_default_lists(user_id: str, db: Any) -> None:
+    if user_id == panel_principal.HOUSEHOLD_VIEWER:
+        return  # a panel guest owns nothing and seeds nothing
     rows = await db.fetch(
         """
-        SELECT list_type, name
+        SELECT list_type, name, user_id, visibility
         FROM lists
-        WHERE user_id = $1 AND deleted = 0
+        WHERE deleted = 0 AND (user_id = $1 OR visibility = 'family')
         """,
         user_id,
     )
     existing_rows = [dict(row) for row in rows]
-    existing_types = {str(row.get("list_type") or "").strip().lower() for row in existing_rows}
+    existing_types = {str(row.get("list_type") or "").strip().lower()
+                      for row in existing_rows if row.get("user_id", user_id) == user_id}
+    # The household's shared list (shopping) is created ONCE for the house: a family-visible list of that type that anyone
+    # owns satisfies every member. Seeding one per member is how the panel came to show two shopping lists.
+    family_types = {str(row.get("list_type") or "").strip().lower()
+                    for row in existing_rows if row.get("visibility") == "family"}
     for list_type, name, description, visibility in DEFAULT_USER_LISTS:
-        if list_type in existing_types:
+        if list_type in existing_types or (visibility == "family" and list_type in family_types):
             continue
         await db.execute(
             """
@@ -3228,7 +3423,8 @@ async def _ensure_default_lists(user_id: str, db: Any) -> None:
 async def _fetch_list_catalog(user_id: str, db: Any) -> list[dict[str, Any]]:
     rows = await db.fetch(
         """
-        SELECT id, user_id, name, list_type, description, visibility, created_at, updated_at
+        SELECT id, user_id, name, list_type, description, visibility, created_at, updated_at,
+               (SELECT COUNT(*) FROM list_items i WHERE i.list_id = lists.id AND i.deleted = 0) AS n_items
         FROM lists
         WHERE deleted = 0
           AND (user_id = $1 OR visibility = 'family')
@@ -3240,17 +3436,27 @@ async def _fetch_list_catalog(user_id: str, db: Any) -> list[dict[str, Any]]:
         """,
         user_id,
     )
+    household = user_id == panel_principal.HOUSEHOLD_VIEWER  # a panel guest: every family-visible list, nothing else
     catalog: list[dict[str, Any]] = []
-    seen: set[tuple[str, str]] = set()
+    seen: dict[tuple[str, str], int] = {}
     for row in rows:
         item = dict(row)
-        if item.get("user_id") != user_id and item.get("list_type") != "shopping":
+        if household and item.get("visibility") != "family":
+            continue  # belt and braces: the query already filters, a panel guest must never be handed a private list
+        if item.get("user_id") != user_id and item.get("list_type") != "shopping" and not household:
             continue
         key = (str(item.get("list_type") or ""), str(item.get("name") or "").strip().lower())
         if key in seen:
+            # ONE list per name: a fuller duplicate replaces an emptier one already kept (never the reverse), so the
+            # panel/voice never lands on a stray empty twin.
+            kept = catalog[seen[key]]
+            if int(item.get("n_items") or 0) > int(kept.get("n_items") or 0):
+                catalog[seen[key]] = item
             continue
-        seen.add(key)
+        seen[key] = len(catalog)
         catalog.append(item)
+    for item in catalog:
+        item.pop("n_items", None)  # a tiebreak for the dedupe above, not part of the list contract
     return catalog
 
 
@@ -3362,21 +3568,27 @@ async def _find_or_create_list(intent: SkybridgeIntent, user_id: str, db: Any, c
         return str(row["id"]), str(row.get("list_type") or list_type)
     rows = await db.fetch(
         """
-        SELECT id, name, list_type
+        SELECT id, name, list_type, visibility, created_at,
+               (SELECT COUNT(*) FROM list_items i WHERE i.list_id = lists.id AND i.deleted = 0) AS n
         FROM lists
         WHERE list_type = $2 AND deleted = 0
           AND (visibility = 'family' OR user_id = $1)
         ORDER BY
+          (SELECT COUNT(*) FROM list_items i WHERE i.list_id = lists.id AND i.deleted = 0) DESC,
           CASE WHEN user_id = $1 THEN 0 ELSE 1 END,
-          updated_at DESC
-        LIMIT 1
+          created_at ASC, id ASC
         """,
         user_id,
         list_type,
     )
     if rows:
-        row = dict(rows[0])
+        row = _pick_list_row(rows, intent.list_name)
         return str(row["id"]), str(row.get("list_type") or list_type)
+    household = user_id == panel_principal.HOUSEHOLD_VIEWER
+    if household and list_type != "shopping":
+        return None  # a panel guest adds to a household list that exists; it only ever starts the shopping list
+    if household:
+        user_id = panel_principal.HOUSEHOLD_OWNER_ID  # the household owns what a guest starts (a guest has no users row)
     list_id = str(uuid.uuid4())
     list_name = "Shopping" if list_type == "shopping" else list_type.title()
     await db.execute(
@@ -3477,7 +3689,8 @@ async def _resolve_list_add_item(intent: SkybridgeIntent, user_id: str, db: Any,
         )
         await _maybe_commit(db)
     # The item is on the list now (inserted, or already there from a replayed add): the receipt the write-claim guard reads.
-    write_receipts.record(user_id, "list", item_id, "skybridge:add_item")
+    write_receipts.record("guest" if user_id == panel_principal.HOUSEHOLD_VIEWER else user_id, "list", item_id, "skybridge:add_item")
+    _audit_list_item("add", user_id, list_id, item_id)
     refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type), user_id, db)
     card_content = refreshed.get("cards", [{}])[0].get("content", {}) if refreshed.get("cards") else {}
     items = card_content.get("items")
@@ -3565,20 +3778,21 @@ async def _find_list_for_remove(intent: SkybridgeIntent, user_id: str, db: Any, 
         return str(row["id"]), str(row.get("list_type") or list_type)
     rows = await db.fetch(
         """
-        SELECT id, name, list_type
+        SELECT id, name, list_type, visibility, created_at,
+               (SELECT COUNT(*) FROM list_items i WHERE i.list_id = lists.id AND i.deleted = 0) AS n
         FROM lists
         WHERE list_type = $2 AND deleted = 0
           AND (visibility = 'family' OR user_id = $1)
         ORDER BY
+          (SELECT COUNT(*) FROM list_items i WHERE i.list_id = lists.id AND i.deleted = 0) DESC,
           CASE WHEN user_id = $1 THEN 0 ELSE 1 END,
-          updated_at DESC
-        LIMIT 1
+          created_at ASC, id ASC
         """,
         user_id,
         list_type,
     )
     if rows:
-        row = dict(rows[0])
+        row = _pick_list_row(rows, intent.list_name)
         return str(row["id"]), str(row.get("list_type") or list_type)
     return None
 
@@ -3655,6 +3869,7 @@ async def _resolve_list_remove_item(intent: SkybridgeIntent, user_id: str, db: A
     await _maybe_commit(db)
     item_text = str(target_item.get("text") or intent.item_text)
     refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type, list_name=intent.list_name), user_id, db)
+    _audit_list_item("remove", user_id, list_id, item_id)
     refreshed["intent"] = {"domain": "lists", "action": "remove_item", "list_type": list_type, "item_id": item_id}
     refreshed["spoken_summary"] = f"Removed {item_text} from the {list_type} list."
     refreshed["actions"] = [{"type": "deleted", "domain": "lists", "id": item_id, "list_id": list_id}]
@@ -3741,6 +3956,7 @@ async def _resolve_list_complete_item(intent: SkybridgeIntent, user_id: str, db:
     await _maybe_commit(db)
     item_text = str(target_item.get("text") or intent.item_text)
     refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type, list_name=intent.list_name), user_id, db)
+    _audit_list_item("complete" if desired else "restore", user_id, list_id, item_id)
     refreshed["intent"] = {"domain": "lists", "action": "complete_item", "list_type": list_type, "item_id": item_id, "completed": desired}
     refreshed["spoken_summary"] = (
         f"Ticked off {item_text} on the {list_type} list." if desired

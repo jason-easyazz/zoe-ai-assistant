@@ -18,7 +18,7 @@ ap.add_argument("--floor", type=int, default=48)
 ap.add_argument("--panel-id", default="uitest-headless")
 args = ap.parse_args()
 
-SURFACES = ["day", "calendar", "list", "weather", "music", "rooms", "reminder", "person", "timer", "ask", "settings"]
+SURFACES = ["day", "calendar", "list", "weather", "music", "rooms", "reminder", "person", "timer", "memories", "settings"]
 
 SWEEP_JS = r"""(floor) => {
   const out = [];

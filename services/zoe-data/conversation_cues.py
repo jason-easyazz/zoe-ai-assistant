@@ -195,6 +195,47 @@ def smart_home_followup(text: str) -> Optional[str]:
     return None
 
 
+def calendar_followup_ttl_s() -> float:
+    """``ZOE_CALENDAR_FOLLOWUP_TTL_S`` (default 90): how long after a calendar answer "what is it" still means those events."""
+    try:
+        return max(0.0, float(os.environ.get("ZOE_CALENDAR_FOLLOWUP_TTL_S", "90")))
+    except (TypeError, ValueError):
+        return 90.0
+
+
+def calendar_followup(text: str) -> bool:
+    """True when ``text`` is a short question about the calendar answer just given ("what is it", "what are they", "which one",
+    "what's the one event"). The WHOLE utterance must match a lexicon pattern once its lead-ins ("I was wondering", "can you
+    tell me") and fillers are taken off the ends: "what is it about you" and "what time is it" are not follow-ups. The caller
+    supplies the freshness window and does the (member-scoped) read."""
+    try:
+        s = _norm(text)
+        s = re.sub(r"[.!?,;:]+", " ", s)
+        s = re.sub(r"\s+", " ", s).strip()
+        if not s:
+            return False
+        for lang in _langs(s, "calendar_followup"):
+            sec = lexicons.load(lang)["calendar_followup"]
+            lead = sorted((str(x).lower() for x in sec.get("lead_ins") or []), key=len, reverse=True)
+            tail = sorted((str(x).lower() for x in sec.get("fillers") or []), key=len, reverse=True)
+            core, changed = s, True
+            while changed and core:
+                changed = False
+                for frag in lead:
+                    if core == frag or core.startswith(frag + " "):
+                        core, changed = core[len(frag):].strip(), True
+                        break
+                for frag in tail:
+                    if core.endswith(" " + frag):
+                        core, changed = core[: -len(frag)].strip(), True
+                        break
+            if core and any(re.fullmatch(frag, core) for frag in sec.get("patterns") or []):
+                return True
+    except Exception:  # noqa: BLE001
+        return False
+    return False
+
+
 def ends_with_offer(reply: str) -> bool:
     """True when the END of Zoe's reply makes an offer ("how about ...?", "would you like ...?", "want me to ...?")."""
     try:

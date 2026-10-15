@@ -419,8 +419,23 @@ def test_queue_length_is_bounded(monkeypatch):
         gate.set()
 
 
-def test_replay_arm_uses_the_production_finish_timeout():
-    import inspect
-    import replay_samples as rs  # not `tests.replay_samples`: the repo-root tests/ package shadows it when pytest runs from the root
-    src = inspect.getsource(rs)
-    assert "ss.finish_timeout_s()" in src and "sess.finish, n, 30.0" not in src
+def _uses_production_finish_timeout(src: str) -> bool:
+    return "ss.finish_timeout_s()" in src and "sess.finish, n, 30.0" not in src
+
+
+def test_replay_arm_uses_the_production_finish_timeout(monkeypatch, tmp_path):
+    """Reads the harness SOURCE by path. It used to ``import tests.replay_samples``, which
+    resolves only when services/zoe-data is the rootdir (from the repo root it found the
+    repo-level ``tests/`` namespace: ModuleNotFoundError) and, when it did resolve, ran the
+    module's import-time ``os.chdir`` for the rest of the session."""
+    from pathlib import Path
+
+    monkeypatch.chdir(tmp_path)                       # the answer must not depend on the cwd
+    src = (Path(__file__).resolve().parent / "replay_samples.py").read_text(encoding="utf-8")
+    assert _uses_production_finish_timeout(src)
+
+
+def test_negative_control_the_timeout_check_goes_red_on_a_hardcoded_wait():
+    good = "await asyncio.to_thread(sess.finish, n, ss.finish_timeout_s())"
+    assert _uses_production_finish_timeout(good)
+    assert not _uses_production_finish_timeout(good.replace("ss.finish_timeout_s()", "30.0"))

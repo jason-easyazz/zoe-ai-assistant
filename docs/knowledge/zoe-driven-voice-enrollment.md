@@ -29,6 +29,24 @@ Flow: a correct PIN (or a thanks) -> policy -> one spoken offer through the anno
 
 On "no": stored with a 60-day quiet period (`ZOE_ENROLL_DECLINE_DAYS`); three offers nobody answered start the same quiet period. "Learn my voice" works any time and clears it.
 
+## The phrases on the talk screen
+
+Owner request 2026-10-15: *"it's sometimes hard to remember; you could probably just use the Zoe talk screen."* Zoe still SPEAKS every phrase; the panel also SHOWS it, large, so it can be read while saying it.
+
+`EnrollmentRun(screen=...)` -> the daemon's `_enroll_screen` -> `POST /api/enrollment/screen` (device token; the server pushes a transient `voice_enroll` frame to the token's panel only) -> `touch-ui-executor.js` relays `zoe:voice-enroll` (only a frame naming this panel) -> `js/touch-voice-enroll.js` (loaded by `touch/home.html`) paints a full-screen overlay in the talk screen's type: `Say:` + the phrase + `2 / 5` + dots.
+
+| State | On the wall |
+|---|---|
+| `phrase` | `Say:` + the phrase, counter and dots. Sent BEFORE Zoe starts speaking the phrase. |
+| `recording` | `Recording...` with a pulsing dot, the phrase still up, until the capture ends. |
+| `accepted` | a tick, that dot filled. |
+| `reask` | the gentle `That one sounded different - let's try it again` + the phrase again (the ResNet34 leave-one-out re-ask). |
+| `saving` | `Saving...` while the signature is uploaded. |
+| `done` / `partial` / `failed` | the closing line, gone after 8 s. |
+| `clear` | gone at once: the run ended any other way (stop, tap, timeout, shutdown, no voice, a crash). |
+
+The wall never keeps a stale phrase: a `clear` removes it immediately, a closing line expires by itself, a 75 s watchdog (re-armed by every frame) takes it down if the daemon dies mid-run, and a tap hides it. Privacy: only the phrase text, the counter and a short localized line (`screen_*` in the language file) are sent - no member, no name, no audio; the page sets text with `textContent` and stores nothing in the browser. The daemon's post is short (3 s, no retries) and stops after two failures in a row, so an older server (no endpoint) costs two failed posts, never a slower or broken enrolment. Pinned by `tests/unit/test_voice_enroll_mode.py` (the `screen` group), `services/zoe-data/tests/test_enrollment_screen.py` and `services/zoe-ui/dist/test_touch_voice_enroll.js` (CI wrapper `test_touch_voice_enroll_harness.py`). Deploy: the daemon files (`deploy-pi-voice.sh`) AND the server/UI together; the screen needs both ends, the spoken flow works with either missing.
+
 ## Privacy
 
 - The offer and the intro both say what is kept: **a voice signature (256 numbers), not recordings**, deletable on request.
@@ -81,7 +99,7 @@ Nothing here is done by the agent; the daemon deploy is an operator step.
 
 ## Not built (named honestly)
 
-- Progress on the panel screen: the estate has no enrolment hook yet; the spoken prompts are the progress. (Cancel by tap is wired on the daemon side: `POST /enroll/cancel`.)
+- A tap-to-stop on the enrolment screen: the overlay only hides itself on a tap; cancelling by tap is still the daemon-side `POST /enroll/cancel`.
 - Barge-in DURING a prompt is not monitored (the monitor needs its own mic stream); cancel is heard in the next capture, by tap, or by the 90 s bound.
 - Face enrolment is not Zoe-driven (voice only); the state API and `enrollment_offers.modality` already carry `face`.
 - Multi-panel routing of the offer / enrol command uses the repo's claim-any default (one household speaker); set `ZOE_ANNOUNCE_STRICT_PANEL` for exact-panel claims when a second speaker exists.

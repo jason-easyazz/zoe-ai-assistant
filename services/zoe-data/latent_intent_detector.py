@@ -12,6 +12,8 @@ import httpx
 import brain_slot_guard
 from gemma_endpoint import gemma_base
 
+from user_filters import is_unidentified
+
 logger = logging.getLogger(__name__)
 _MODEL = os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf")
 
@@ -131,7 +133,7 @@ async def detect(
 ) -> list[dict]:
     """Background detection — returns suggestions stored by caller."""
     text = (user_message or "").strip()
-    if not text or user_id in ("guest", "") or len(text.split()) < 3:
+    if not text or is_unidentified(user_id) or len(text.split()) < 3:
         return []
 
     try:
