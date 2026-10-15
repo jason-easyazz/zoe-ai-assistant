@@ -53,6 +53,10 @@
   "Add milk, bread, and coffee to my shopping list.",
   "Remind me to call my mum tomorrow afternoon."
  ],
+ "phrases_extra": [
+  "Turn the living room lights down to half.",
+  "Play some quiet music in the kitchen."
+ ],
  "say": {
   "offer_pin": "I can learn your voice, so you won't need your PIN next time. I'd keep a voice signature, not recordings, and you can delete it whenever you like. It takes about a minute. Want to?",
   "offer_close": "By the way, I don't know your voice yet. If I learned it, you wouldn't need your PIN. I'd keep a voice signature, not recordings, and you can delete it whenever you like. It takes about a minute. Want to?",
@@ -79,6 +83,8 @@
  },
  "script": {
   "intro": "Hi {name}. I'll ask you to say three short phrases. I keep a voice signature, never the recordings. Say stop at any time.",
+  "intro_many": "Hi {name}. I'll ask you to say {count} short phrases, in your normal voice. I keep a voice signature, never the recordings. Say stop at any time.",
+  "retry_odd": "That one sounded different from the others, so let's do it once more.",
   "prompt": "Phrase {n}. After the beep, say: {phrase}",
   "retry_short": "I only caught a little of that. Let's try the same phrase again.",
   "retry_quiet": "That was a bit quiet. A little louder, please.",
@@ -90,6 +96,13 @@
   "timeout": "That's taking a while, so I'll stop here. I haven't kept anything. Ask me any time and we'll try again.",
   "failed": "I couldn't get a clear recording. I haven't kept anything. We can try again in a quiet moment, just ask.",
   "store_failed": "I couldn't save it just now. I haven't kept anything.",
+  "screen_say": "Say:",
+  "screen_recording": "Recording...",
+  "screen_odd": "That one sounded different - let's try it again",
+  "screen_saving": "Saving...",
+  "screen_done": "Done - I'll recognise your voice",
+  "screen_partial": "Saved - I can already use it",
+  "screen_failed": "That didn't work - nothing was kept",
   "cancel_words": ["stop", "cancel", "never mind", "nevermind", "forget it", "not now", "quit", "enough"]
  }
 }

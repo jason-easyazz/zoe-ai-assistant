@@ -45,6 +45,7 @@ Not in scope: the daemon decides nothing here; flag-dark; no model is loaded (nu
 from __future__ import annotations
 
 import base64
+import dataclasses
 import logging
 import math
 from dataclasses import dataclass, field
@@ -53,6 +54,7 @@ from typing import Any, Optional, Sequence
 
 import numpy as np
 
+import speaker_models
 from typed_env import env_float, env_int, env_str
 
 logger = logging.getLogger(__name__)
@@ -87,12 +89,14 @@ class AdaptConfig:
     face_min: float = 0.60
 
     @classmethod
-    def from_env(cls) -> "AdaptConfig":
+    def from_env(cls, model_id: Optional[str] = None) -> "AdaptConfig":
+        """The guards from env; ``model_id`` swaps in that model's own score / anchor constants (``speaker_models.
+        adapt_guard_overrides``). Resemblyzer's 0.85 / 0.80 never fire on ResNet34's cosine scale (record, section 5)."""
         d = cls()
         alpha = _finite(env_float("ZOE_SPEAKER_ADAPT_ALPHA", 0.05), d.alpha)
         if not 0.0 < alpha <= 0.5:  # a big step defeats "small steps"; refuse to be configured into one
             alpha = d.alpha
-        return cls(
+        base = cls(
             min_score=_finite(env_float("ZOE_SPEAKER_ADAPT_MIN_SCORE", 0.85), d.min_score),
             anchor_floor=_finite(env_float("ZOE_SPEAKER_ADAPT_ANCHOR_FLOOR", 0.80), d.anchor_floor),
             min_margin=_finite(env_float("ZOE_SPEAKER_ADAPT_MIN_MARGIN", 0.10), d.min_margin),
@@ -104,6 +108,8 @@ class AdaptConfig:
             pin_window_s=max(0.0, _finite(env_float("ZOE_SPEAKER_ADAPT_PIN_WINDOW_S", 900.0), d.pin_window_s)),
             face_min=_finite(env_float("ZOE_SPEAKER_ADAPT_FACE_MIN", 0.60), d.face_min),
         )
+        over = speaker_models.adapt_guard_overrides(model_id) if model_id else {}
+        return dataclasses.replace(base, **over) if over else base
 
 
 # ── pure math ──────────────────────────────────────────────────────────────
@@ -283,8 +289,13 @@ def _parse_ts(raw: Any) -> Optional[datetime]:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-async def overlay_adapted(db: Any, rows: Sequence[Sequence[Any]], *, user_idx: int, blob_idx: int) -> list:
+async def overlay_adapted(db: Any, rows: Sequence[Sequence[Any]], *, user_idx: int, blob_idx: int,
+                          model_idx: Optional[int] = None) -> list:
     """Replace each row's anchor blob with its valid adapted blob (mode ``on`` only; the caller checks the mode).
+
+    The adapted profile belongs to ONE model's row, so the lookup is keyed by (user, model): ``model_idx`` is the column
+    of ``rows`` that holds the row's model id (None = every row is the legacy model). A ResNet34 anchor is never
+    overlaid with a Resemblyzer adapted blob, or the reverse.
 
     Fails SAFE: any error (e.g. the migration has not run) serves the anchors untouched. Consent was already applied
     by the caller's query, so an unconsented profile never reaches this function.
@@ -292,16 +303,17 @@ async def overlay_adapted(db: Any, rows: Sequence[Sequence[Any]], *, user_idx: i
     out = [tuple(r) for r in rows]
     try:
         async with db.execute(
-            "SELECT user_id, adapted_blob, adapted_from_count, sample_count FROM speaker_profiles "
-            "WHERE consent_at IS NOT NULL AND adapted_blob IS NOT NULL"
+            "SELECT user_id, adapted_blob, adapted_from_count, sample_count, " + speaker_models.MODEL_SQL
+            + " FROM speaker_profiles WHERE consent_at IS NOT NULL AND adapted_blob IS NOT NULL"
         ) as cur:
             adapted_rows = await cur.fetchall()
     except Exception as exc:
         logger.warning("speaker adaptation overlay unavailable (serving anchors): %s", exc)
         return out
-    by_user = {r[0]: r for r in adapted_rows}
+    by_key = dict(((r[0], speaker_models.normalize_model_id(r[4])), r) for r in adapted_rows)
     for i, row in enumerate(out):
-        a = by_user.get(row[user_idx])
+        mid = speaker_models.row_model_id(row, model_idx) if model_idx is not None else speaker_models.LEGACY_MODEL_ID
+        a = by_key.get((row[user_idx], mid))
         if not a:
             continue
         blob = serve_blob(row[blob_idx], a[1], a[2], a[3])
@@ -312,7 +324,8 @@ async def overlay_adapted(db: Any, rows: Sequence[Sequence[Any]], *, user_idx: i
     return out
 
 
-async def serve_adapted_profiles(rows: Sequence[Sequence[Any]], *, user_idx: int, blob_idx: int) -> Sequence:
+async def serve_adapted_profiles(rows: Sequence[Sequence[Any]], *, user_idx: int, blob_idx: int,
+                                 model_idx: Optional[int] = None) -> Sequence:
     """The feed hook (``/profiles/sync``, ``/identify``): in mode ``on`` swap anchors for valid adapted profiles;
     in ANY other mode return ``rows`` itself - no DB read, nothing changed, so the flag-off feed is byte-identical to
     before adaptation existed. Fails safe to the anchors."""
@@ -322,7 +335,7 @@ async def serve_adapted_profiles(rows: Sequence[Sequence[Any]], *, user_idx: int
 
     try:
         async with get_compat_db() as db:
-            return await overlay_adapted(db, rows, user_idx=user_idx, blob_idx=blob_idx)
+            return await overlay_adapted(db, rows, user_idx=user_idx, blob_idx=blob_idx, model_idx=model_idx)
     except Exception as exc:
         logger.warning("speaker adaptation overlay failed (serving anchors): %s", exc)
         return rows
@@ -379,17 +392,22 @@ async def process_adaptation(db: Any, *, panel_id: str, payload: dict, now: Opti
     mode = adapt_mode() if mode is None else mode
     if mode == "off":
         return {"ok": True, "mode": "off", "applied": False, "reason": "off"}
-    cfg = cfg or AdaptConfig.from_env()
-    now = now or datetime.now(timezone.utc)
     payload = payload or {}
+    model_id = speaker_models.model_id_field(payload, "model_id") or ""     # "" = malformed: refused as unknown below
+    cfg = cfg or AdaptConfig.from_env(model_id)     # each model carries its own score / anchor guards
+    now = now or datetime.now(timezone.utc)
 
     def refuse(reason: str, **extra) -> dict:
         logger.debug("speaker adapt refused: %s", reason)
-        return {"ok": True, "mode": mode, "applied": False, "reason": reason, **extra}
+        return dict(ok=True, mode=mode, applied=False, reason=reason, model_id=model_id, **extra)
 
     user_id = str(payload.get("voice_user_id") or payload.get("user_id") or "").strip()
     if not user_id:
         return refuse("no_user")
+    if not speaker_models.is_known(model_id):
+        return refuse("unknown_model")
+    if model_id != speaker_models.acting_model():
+        return refuse("not_acting_model")           # only the model that ACTS is ever adapted (never a shadow one)
     try:
         emb_bytes = base64.b64decode(str(payload.get("embedding_base64") or ""), validate=True)
     except Exception:
@@ -410,14 +428,16 @@ async def process_adaptation(db: Any, *, panel_id: str, payload: dict, now: Opti
     try:
         async with db.execute(
             "SELECT id, embedding_blob, sample_count, consent_at, adapted_blob, adapted_from_count, adapt_count, "
-            "adapted_at, adapt_day, adapt_day_count FROM speaker_profiles WHERE user_id = ?",
-            (user_id,),
+            "adapted_at, adapt_day, adapt_day_count FROM speaker_profiles WHERE user_id = ? AND "
+            + speaker_models.MODEL_SQL + " = ?",
+            (user_id, model_id),
         ) as cur:
             row = await cur.fetchone()
+        # the OTHER members' profiles of the SAME model only: a different model's vectors are not comparable
         async with db.execute(
             "SELECT user_id, embedding_blob, sample_count, adapted_blob, adapted_from_count FROM speaker_profiles "
-            "WHERE consent_at IS NOT NULL AND user_id <> ?",
-            (user_id,),
+            "WHERE consent_at IS NOT NULL AND user_id != ? AND " + speaker_models.MODEL_SQL + " = ?",
+            (user_id, model_id),
         ) as cur:
             other_rows = await cur.fetchall()
     except Exception as exc:  # e.g. migration 0048 not applied: fail closed, write nothing
@@ -448,7 +468,8 @@ async def process_adaptation(db: Any, *, panel_id: str, payload: dict, now: Opti
                        day=str(day) if day else None, day_count=int(day_count or 0))
     d = evaluate(embedding=embedding, anchor=anchor, adapted=adapted, others=others, claimed_score=claimed,
                  speech_s=speech_s, corroboration=corroboration, state=state, now=now, cfg=cfg)
-    out = {"ok": True, "mode": mode, "applied": False, "reason": d.reason, **d.public()}
+    out = dict(ok=True, mode=mode, applied=False, model_id=model_id)
+    out.update(d.public())
     if not d.allowed:
         logger.debug("speaker adapt refused user=%s reason=%s", user_id, d.reason)
         return out

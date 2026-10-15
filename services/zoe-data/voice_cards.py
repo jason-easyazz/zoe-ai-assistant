@@ -148,33 +148,62 @@ async def push(frame: Optional[dict]) -> int:
     return await voice_session.send_to_panel(str(frame["panel_id"]), "voice_card", frame)
 
 
-def spoken_calendar(result: Optional[dict]) -> Optional[str]:
-    """Name the events aloud ("You have 2 events today: Dentist at 9 AM and Dinner at 6 PM."), not just a count. From
-    the lexicon's ``spoken_calendar`` templates; None when the result is not a calendar read or the templates are absent."""
+def _when_phrase(qualifier: str, tpl: dict) -> str:
+    """"today" / "tomorrow" / "this week" stand alone; a named day or a date takes the lexicon's preposition ("on friday")."""
+    q = str(qualifier or "").strip()
+    bare = {str(w).lower() for w in tpl.get("bare_qualifiers") or ()}
+    if not q or q.lower() in bare:
+        return q
+    return str(tpl.get("on") or "{qualifier}").format(qualifier=q)
+
+
+def spoken_events(events: list, qualifier: str, *, start_date: str = "", end_date: str = "") -> Optional[str]:
+    """Name the events aloud, briefly: at most ``max_named`` (3) with time + title, the rest as "and N more on screen". For
+    a read the turn is AUTHORISED for only - the caller never passes a guest's (there are none) rows. A multi-day range names
+    each event's weekday. None when the lexicon has no templates (the caller keeps its count)."""
     tpl = voice_session.text_for("spoken_calendar", default={}) or {}
     if not tpl:
         return None
+    when = _when_phrase(qualifier, tpl)
+    fmt = {"qualifier": qualifier, "when": when}
+    events = [e for e in (events or []) if isinstance(e, dict)]
+    if not events:
+        return str(tpl.get("none") or "").format(**fmt) or None
+    try:
+        cap = max(1, int(tpl.get("max_named") or 3))
+    except (TypeError, ValueError):
+        cap = 3
+    multi = bool(start_date) and str(start_date)[:10] != str(end_date or start_date)[:10]
+    named = []
+    for ev in events[:cap]:
+        title = str(ev.get("title") or ev.get("summary") or "").strip() or "?"
+        clock = "" if ev.get("all_day") else _clock(ev.get("start_time"))
+        day = ""
+        if multi:
+            try:
+                day = date.fromisoformat(str(ev.get("start_date"))[:10]).strftime("%A")
+            except Exception:
+                day = ""
+        key = "item_" + ("timed" if clock else "untimed") + ("_day" if day else "")
+        named.append(str(tpl.get(key) or tpl.get("item_untimed") or "{title}").format(title=title, time=clock, day=day))
+    if len(events) > cap:
+        named.append(str(tpl.get("more") or "").format(n=len(events) - cap))
+    joiner, last = str(tpl.get("joiner") or ", "), str(tpl.get("last_joiner") or " and ")
+    listed = named[0] if len(named) == 1 else joiner.join(named[:-1]) + last + named[-1]
+    key = "one" if len(events) == 1 else "many"
+    return str(tpl.get(key) or "").format(count=len(events), list=listed, **fmt) or None
+
+
+def spoken_private() -> Optional[str]:
+    """What a turn with NO identity hears for a calendar read: no count, no title, only how to unlock."""
+    return str(voice_session.text_for("spoken_calendar", default={}).get("private") or "") or None
+
+
+def spoken_calendar(result: Optional[dict]) -> Optional[str]:
+    """``spoken_events`` for a handled Skybridge calendar read (its ``calendar_show`` card); None for any other result."""
     for content in _card_contents(result):
         if content.get("source") != "calendar_show":
             continue
-        qualifier = str(content.get("qualifier") or "").strip()
-        events = [e for e in (content.get("events") or []) if isinstance(e, dict)]
-        if not events:
-            return str(tpl.get("none") or "").format(qualifier=qualifier) or None
-        try:
-            cap = int(tpl.get("max_named") or 5)
-        except (TypeError, ValueError):
-            cap = 5
-        named = []
-        for ev in events[:cap]:
-            title = str(ev.get("title") or "").strip() or "?"
-            when = "" if ev.get("all_day") else _clock(ev.get("start_time"))
-            key = "item_timed" if when else "item_untimed"
-            named.append(str(tpl.get(key) or "{title}").format(title=title, time=when))
-        if len(events) > cap:
-            named.append(str(tpl.get("more") or "").format(n=len(events) - cap))
-        joiner, last = str(tpl.get("joiner") or ", "), str(tpl.get("last_joiner") or " and ")
-        listed = named[0] if len(named) == 1 else joiner.join(named[:-1]) + last + named[-1]
-        key = "one" if len(events) == 1 else "many"
-        return str(tpl.get(key) or "").format(count=len(events), qualifier=qualifier, list=listed) or None
+        return spoken_events(content.get("events") or [], str(content.get("qualifier") or "").strip(),
+                             start_date=str(content.get("start_date") or ""), end_date=str(content.get("end_date") or ""))
     return None
