@@ -1,13 +1,17 @@
-"""omi-sync never leaves the controller initiating, and adopts a pendant link that is already up.
+"""omi-sync never leaves the controller initiating, and clears a pendant link that is already up before connecting.
 
 The 2026-10-15 incident: one ``hcitool lecc`` timed out as the owner walked out of range. hcitool gives up WITHOUT sending LE
 Create Connection Cancel, so the controller kept initiating; every later ``lecc`` was refused ``Command Disallowed`` (hcitool:
 ``Input/output error``) for 11 hours, and when the pendant came home the stale initiation completed into a link nobody owned -
 re-created within 110 ms of every ``ledc`` (btmon showed no new Create Connection in between).
 
+bleak cannot attach to such a link (its BlueZ connect scans first and a connected pendant does not advertise:
+``BleakDeviceNotFoundError`` after the full timeout, measured live), so it is cleared - cancel FIRST, then ``ledc`` - and our
+own ``lecc`` follows. ``FakeHci`` models the controller as btmon showed it.
+
 Source mutations that must turn this file red (re-run by Edit): drop the ``_cancel_pending`` call after a failed ``lecc`` ->
-the cancel tests go red; drop the ``_existing_link`` adoption -> the adopt test goes red; drop the ``_drop_link`` in the
-``finally`` -> the adopted link is not torn down and the teardown assertion goes red.
+the cancel tests go red; drop the clearing of an existing link, or ``ledc`` it before cancelling -> the stale-link tests go red;
+drop the ``_drop_link`` in the ``finally`` -> the teardown assertions go red.
 """
 from __future__ import annotations
 
@@ -30,11 +34,20 @@ CANCEL = ["sudo", "-n", "hcitool", "cmd", "0x08", "0x000E"]
 
 
 class FakeHci:
-    """Scripted ``hcitool``: ``con`` lists ``links``, ``lecc`` answers from ``lecc_answers`` in order."""
+    """Scripted ``hcitool`` over a controller that behaves like the panel Pi's (btmon, 2026-10-15).
 
-    def __init__(self, *, links: dict[str, int] | None = None, lecc_answers: list[tuple[int, str]] | None = None) -> None:
+    ``con`` lists ``links``. ``lecc`` while an initiation is ``pending`` is refused (Command Disallowed); ``lecc`` for a peer that
+    is already connected is ACCEPTED and left pending (hcitool still fails); otherwise it answers from ``lecc_answers``. ``ledc``
+    of a peer with a pending initiation re-creates the link at once with a new handle; the cancel clears ``pending``."""
+
+    EIO = (1, "Could not create connection: Input/output error")
+
+    def __init__(self, *, links: dict[str, int] | None = None, lecc_answers: list[tuple[int, str]] | None = None,
+                 pending: str | None = None) -> None:
         self.links = dict(links or {})
         self.lecc_answers = list(lecc_answers or [])
+        self.pending = pending
+        self.next_handle = 90
         self.calls: list[list[str]] = []
 
     async def run(self, argv, timeout):
@@ -45,13 +58,30 @@ class FakeHci:
             lines = ["Connections:"] + [f"\t< LE {a} handle {h} state 1 lm CENTRAL " for a, h in self.links.items()]
             return 0, "\n".join(lines) + "\n"
         if cmd == "lecc":
+            addr = argv[-1]
+            if self.pending is not None:
+                return self.EIO
+            if addr in self.links:
+                self.pending = addr
+                return self.EIO
             rc, out = self.lecc_answers.pop(0)
             h = ble_link.parse_lecc_handle(out) if rc == 0 else None
             if h is not None:
-                self.links[argv[-1]] = h
+                self.links[addr] = h
+            elif rc == -1 or (rc != 0 and "timed out" in out):
+                self.pending = addr                         # hcitool gave up; the controller did not
             return rc, out
         if cmd == "ledc":
+            gone = [a for a, h in self.links.items() if h == int(argv[-1])]
             self.links = {a: h for a, h in self.links.items() if h != int(argv[-1])}
+            for a in gone:
+                if self.pending == a:                       # the stale initiation completes the instant the peer is free
+                    self.pending = None
+                    self.links[a] = self.next_handle
+                    self.next_handle += 1
+            return 0, ""
+        if cmd == "cmd" and argv[-2:] == ["0x08", "0x000E"]:
+            self.pending = None
             return 0, ""
         return 0, ""
 
@@ -115,6 +145,7 @@ async def test_a_failed_lecc_is_always_followed_by_a_cancel(monkeypatch):
             pytest.fail("must not connect")
     assert len(hci.of("lecc")) == 2
     assert hci.of("cmd") == [CANCEL, CANCEL], "every failed lecc must cancel the controller's pending initiation"
+    assert hci.pending is None
 
 
 async def test_a_killed_lecc_is_cancelled_too(monkeypatch):
@@ -123,16 +154,37 @@ async def test_a_killed_lecc_is_cancelled_too(monkeypatch):
         async with ble_link.connect(ADDR, attempts=1):
             pass
     assert hci.of("cmd") == [CANCEL]
+    assert hci.pending is None
 
 
-async def test_an_existing_link_to_the_pendant_is_adopted_not_lecced_again_and_torn_down(monkeypatch):
-    hci = use(monkeypatch, FakeHci(links={ADDR: 65}))
-    async with ble_link.connect(ADDR, attempts=2) as link:
+async def test_the_incident_a_timed_out_lecc_does_not_wedge_the_next_attempt(monkeypatch):
+    """Walked out of range (lecc times out, initiation left pending), came back: the very next attempt connects."""
+    hci = use(monkeypatch, FakeHci(lecc_answers=[(1, "Could not create connection: Connection timed out"),
+                                                  (0, "Connection handle 64\n")]))
+    async with ble_link.connect(ADDR, attempts=2):
+        assert hci.links == {ADDR: 64}
+    assert hci.links == {} and hci.pending is None
+
+
+async def test_an_owner_less_link_with_a_stale_initiation_is_cleared_cancel_first_then_ours_is_created(monkeypatch):
+    """The live state on 2026-10-15 evening: a link up (handle 65) AND an initiation pending behind it."""
+    hci = use(monkeypatch, FakeHci(links={ADDR: 65}, pending=ADDR, lecc_answers=[(0, "Connection handle 64\n")]))
+    async with ble_link.connect(ADDR, attempts=1) as link:
         assert isinstance(link, ble_link.BleLink)
-        assert hci.of("lecc") == [], "a second lecc while connected is ACCEPTED by the controller and left pending"
-    assert hci.of("ledc") == [["sudo", "-n", "hcitool", "ledc", "65"]], "the adopted link is ours: it is dropped at the end"
-    assert hci.links == {}
-    assert hci.of("cmd") == []
+        assert hci.links == {ADDR: 64}, "the stale link must be gone and ours up"
+    first_cancel = hci.calls.index(CANCEL)
+    first_ledc = next(i for i, c in enumerate(hci.calls) if "ledc" in c)
+    assert first_cancel < first_ledc, "ledc before the cancel lets the controller re-create the link at once"
+    assert hci.of("ledc") == [["sudo", "-n", "hcitool", "ledc", "65"], ["sudo", "-n", "hcitool", "ledc", "64"]]
+    assert hci.links == {} and hci.pending is None
+
+
+async def test_an_owner_less_link_alone_is_cleared_then_ours_is_created(monkeypatch):
+    hci = use(monkeypatch, FakeHci(links={ADDR: 65}, lecc_answers=[(0, "Connection handle 64\n")]))
+    async with ble_link.connect(ADDR, attempts=1):
+        assert hci.links == {ADDR: 64}
+    assert hci.of("ledc") == [["sudo", "-n", "hcitool", "ledc", "65"], ["sudo", "-n", "hcitool", "ledc", "64"]]
+    assert hci.links == {} and hci.pending is None
 
 
 async def test_a_fresh_link_is_created_and_dropped_without_a_cancel(monkeypatch):
@@ -144,12 +196,13 @@ async def test_a_fresh_link_is_created_and_dropped_without_a_cancel(monkeypatch)
     assert hci.links == {}
 
 
-async def test_a_link_to_another_device_is_not_adopted(monkeypatch):
+async def test_a_link_to_another_device_is_left_alone(monkeypatch):
     hci = use(monkeypatch, FakeHci(links={"AA:BB:CC:DD:EE:FF": 70}, lecc_answers=[(0, "Connection handle 64\n")]))
     async with ble_link.connect(ADDR, attempts=1):
         pass
     assert len(hci.of("lecc")) == 1
     assert hci.of("ledc") == [["sudo", "-n", "hcitool", "ledc", "64"]]
+    assert hci.of("cmd") == []
     assert hci.links == {"AA:BB:CC:DD:EE:FF": 70}
 
 

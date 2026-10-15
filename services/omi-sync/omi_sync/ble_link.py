@@ -250,8 +250,8 @@ async def connect(address: str, *, lecc: bool = True, lecc_prefix: Sequence[str]
     discovery 24/24 times. One attempt in six still stalls for a minute: hence retry with backoff, dropping the half-open link
     between tries. ``lecc=False`` is the plain bleak connect (fine on a bench, hopeless at range).
 
-    A failed ``lecc`` is followed by LE Create Connection Cancel, and a link to the pendant that is already up is adopted rather
-    than ``lecc``'d again (2026-10-15: one ``lecc`` timed out as the owner walked away, the controller kept initiating, every
+    A failed ``lecc`` is followed by LE Create Connection Cancel, and a link to the pendant that is already up is cleared (cancel,
+    then ``ledc``) before our own ``lecc`` (2026-10-15: one ``lecc`` timed out as the owner walked away, the controller kept initiating, every
     later ``lecc`` got ``Input/output error`` for 11 h, and the stale initiation re-created an owner-less link within 110 ms of
     every ``ledc``).
     """
@@ -283,17 +283,21 @@ async def connect(address: str, *, lecc: bool = True, lecc_prefix: Sequence[str]
             try:
                 if lecc:
                     # A link to the pendant may already be up with no owner (a stale initiation completed - see lecc_cancel_argv).
-                    # The controller would ACCEPT another lecc for it and leave that one pending too, so adopt the link instead;
-                    # it is ours now and is torn down with ledc like any other (we hold the radio lock, so it is no one else's).
-                    handle = await _existing_link(address)
-                    if handle is not None:
-                        log.info("adopting an existing LE link to the pendant (handle %d)", handle)
-                    else:
-                        rc, out = await _run(lecc_argv(lecc_prefix, address, addr_type), 30.0)
-                        handle = parse_lecc_handle(out) if rc == 0 else None
-                        if handle is None:
-                            await _cancel_pending(lecc_prefix)      # never leave the controller initiating behind us
-                            raise ConnectError(f"hcitool lecc failed (rc={rc}): {out.strip()[:120]}")
+                    # The controller would ACCEPT another lecc for it and leave that one pending too, and bleak cannot attach to
+                    # it (its BlueZ connect scans first, and a connected pendant does not advertise: BleakDeviceNotFoundError
+                    # after the full timeout, measured 2026-10-15). So clear it: cancel any pending initiation FIRST (else the
+                    # controller re-creates the link within ~110 ms of the ledc), drop the link, then create our own. We hold
+                    # the radio lock, so the link is no one else's.
+                    stale = await _existing_link(address)
+                    if stale is not None:
+                        log.info("clearing an existing LE link to the pendant (handle %d) before connecting", stale)
+                        await _cancel_pending(lecc_prefix)
+                        await _drop_link(lecc_prefix, stale)
+                    rc, out = await _run(lecc_argv(lecc_prefix, address, addr_type), 30.0)
+                    handle = parse_lecc_handle(out) if rc == 0 else None
+                    if handle is None:
+                        await _cancel_pending(lecc_prefix)      # never leave the controller initiating behind us
+                        raise ConnectError(f"hcitool lecc failed (rc={rc}): {out.strip()[:120]}")
                 client = BleakClient(address, disconnected_callback=on_disconnect, timeout=60.0)
                 try:
                     await client.connect()

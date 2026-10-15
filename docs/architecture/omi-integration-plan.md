@@ -314,8 +314,8 @@ Sub-options inside (A) — the receiver:
   (`hcitool ledc`) between tries; a failed cycle is the normal "not in range" answer. A failed `lecc` is always followed by
   LE Create Connection Cancel (`hcitool cmd 0x08 0x000E`): `hcitool` gives up WITHOUT cancelling, the controller keeps
   initiating, every later `lecc` gets `Input/output error`, and the stale initiation re-creates an owner-less link the instant
-  any link drops (2026-10-15: 11 h of failed syncs). An LE link to the pendant that is already up is adopted (`hcitool con`)
-  rather than `lecc`'d again, then torn down like our own. Needs privilege for `hcitool`:
+  any link drops (2026-10-15: 11 h of failed syncs). An LE link to the pendant that is already up (`hcitool con`) is cleared
+  (cancel, then `ledc`) before our own `lecc`: bleak cannot attach to it (it scans first; a connected pendant is silent). Needs privilege for `hcitool`:
   a narrow sudoers line (4.7) or `OMI_SYNC_LECC_PREFIX`. `OMI_SYNC_LECC=0` is the plain bleak connect.
 - **Which path** (`engine.Drain.run`, from DIS `2A26`): **≥ 3.0.20 → `ring`** (below); **exactly 3.0.18 → `legacy`, only with
   `OMI_SYNC_LEGACY_FILES=1`** (the firmware frees files itself — 0.3a); anything else is **refused before a single storage
