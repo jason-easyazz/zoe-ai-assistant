@@ -784,8 +784,12 @@ def evaluate(artifact: dict[str, Any] | None, *, now_epoch: float, max_age_s: fl
     elif tree_note:
         bound = f", {tree_note}"
     vad_part = f", {vad_note}" if vad_note else ""
+    # Additive + informational: a pass that tolerated a flaky brain-wording clip
+    # says so (the probe's flaky_clips), so the tolerance is never invisible.
+    flaky = [c for c in (artifact.get("flaky_clips") or []) if isinstance(c, dict) and not c.get("regressed")]
+    flaky_part = f", {len(flaky)} flaky brain-wording clip(s) tolerated" if flaky else ""
     return True, (f"voice replay-gate PASS ({age_s / 3600:.1f}h old, "
-                  f"n={((artifact.get('summary') or {}).get('n_samples'))}{bound}{vad_part})")
+                  f"n={((artifact.get('summary') or {}).get('n_samples'))}{bound}{vad_part}{flaky_part})")
 
 
 def load_json(path: Path) -> dict[str, Any] | None:

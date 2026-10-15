@@ -1415,11 +1415,14 @@ def _people_filters_from_text(text: str) -> tuple[str, str, str]:
 _IDENTITY_QUERY_RE = re.compile(
     r"\bwho\s+am\s+i\b"
     r"|\bwho(?:'s|\s+is)\s+(?:currently\s+)?(?:signed|logged)\s+in\b"
-    r"|\bwhat(?:'s|\s+is)\s+my\s+name\b"
+    r"|\b(?:what(?:'s|\s+is)|whats)\s+my\s+name\b"
     r"|\bam\s+i\s+(?:signed|logged)\s+in\b"
     r"|\bwho\s+do\s+you\s+think\s+i\s+am\b"
     r"|\bwho\s+are\s+you\s+talking\s+to\b"
 )
+
+# "what's my name" asks for the NAME, not for the sign-in state: the identity ask answers it as "Your name is <name>."
+_IDENTITY_NAME_RE = re.compile(r"\b(?:what(?:'s|\s+is)|whats)\s+my\s+name\b")
 
 # Surface the pending "add this known person as a contact" offers as tappable
 # person_confirm cards (as opposed to a people SEARCH). Two shapes:
@@ -1753,7 +1756,8 @@ def classify_skybridge_intent(
         # is already claimed earlier by _people_fact_from_text, and an explicit
         # directory ask ("what's my name in contacts") yields to the people
         # branch below rather than being stolen by the leading identity phrase.
-        return SkybridgeIntent(domain="people", action="identity")
+        return SkybridgeIntent(domain="people", action="identity",
+                               query="name" if _IDENTITY_NAME_RE.search(text) else "")
     _create_match = _PEOPLE_CREATE_AS_RE.match(raw_message) or _PEOPLE_CREATE_TO_RE.match(raw_message)
     if _create_match:
         # "add Daniel as my brother" / "add Sarah to my contacts" — the
@@ -2573,7 +2577,7 @@ async def _resolve_with_db(intent: SkybridgeIntent, user_id: str, db: Any, *, co
         return await _resolve_lists(intent, user_id, db)
     if intent.domain == "people":
         if intent.action == "identity":
-            return await _resolve_self_identity(user_id, db)
+            return await _resolve_self_identity(user_id, db, kind=intent.query)
         if intent.action == "remember_fact":
             return await _resolve_people_remember_fact(intent, user_id, db)
         if intent.action == "pending_offers":
@@ -4058,15 +4062,46 @@ _IDENTITY_ROLE_LABELS = {
 }
 
 
-async def _resolve_self_identity(user_id: str, db: Any) -> dict[str, Any]:
-    """Answer a self-identity ask ("who am I") with the panel's identity card.
+GUEST_NAME_REPLY = "I don't know who you are yet. Sign in with your PIN on the panel and I'll know you."
+
+
+async def _self_display_name(user_id: str, db: Any) -> tuple[str, str]:
+    """``(display name, role)`` of the signed-in account. The name is what Zoe calls the person (identity_facts: the preferred name,
+    else the account's own, capitalised) - NEVER the raw lowercase user id, which is a key, not a name."""
+    name = role = ""
+    try:
+        import identity_facts as _idf
+
+        ident = await _idf.resolve_identity(user_id)  # its own pooled connection: never the request `db`
+        if ident is not None and ident.name:
+            name = ident.name
+    except Exception:
+        pass  # identity unavailable - the users row below, then the humanised id
+    try:
+        rows = await db.fetch("SELECT name, role FROM users WHERE id = $1 LIMIT 1", user_id)
+        if rows:
+            role = str(rows[0]["role"] or "").strip()
+            if not name:
+                raw = str(rows[0]["name"] or "").strip()
+                name = raw.title() if raw.islower() else raw
+    except Exception:
+        # Users table unavailable / schema mismatch - still answer with the id we have.
+        pass
+    return (name or _humanize_user_id(user_id)), role
+
+
+async def _resolve_self_identity(user_id: str, db: Any, kind: str = "") -> dict[str, Any]:
+    """Answer a self-identity ask ("who am I", "what's my name") with the panel's identity card.
 
     Reuses the person-profile card so "who am I" surfaces WHO Zoe thinks is
-    speaking — name + role — instead of falling through to a generic settings
+    speaking - name + role - instead of falling through to a generic settings
     page. A guest gets an informative "not signed in" card rather than the
-    sign-in wall, so the question is always answered.
+    sign-in wall, so the question is always answered. ``kind="name"`` ("what's my
+    name") is a NAME question: it is answered "Your name is <name>." and never as a
+    sign-in statement.
     """
     if _is_guest_user(user_id):
+        asked_name = kind == "name"
         person = {
             "name": "Guest",
             "circle": "self",
@@ -4074,7 +4109,7 @@ async def _resolve_self_identity(user_id: str, db: Any) -> dict[str, Any]:
             "notes": "You're using Zoe as a guest. Sign in to get your calendar, lists and people.",
             "health_score": 100,
         }
-        summary = "You're signed in as a guest."
+        summary = GUEST_NAME_REPLY if asked_name else "You're signed in as a guest."
         card = card_service.build_person_profile_card({"person": person, "summary": summary})
         return {
             "handled": True,
@@ -4083,18 +4118,7 @@ async def _resolve_self_identity(user_id: str, db: Any) -> dict[str, Any]:
             "cards": [card_service.convert_emit(card, target_major=1)],
         }
 
-    name = ""
-    role = ""
-    try:
-        rows = await db.fetch("SELECT name, role FROM users WHERE id = $1 LIMIT 1", user_id)
-        if rows:
-            name = str(rows[0]["name"] or "").strip()
-            role = str(rows[0]["role"] or "").strip()
-    except Exception:
-        # Users table unavailable / schema mismatch — still answer with the id we have.
-        pass
-
-    display = name or _humanize_user_id(user_id)
+    display, role = await _self_display_name(user_id, db)
     role_label = _IDENTITY_ROLE_LABELS.get(role.lower(), role.title() if role else "Signed in")
     person = {
         "name": display,
@@ -4104,7 +4128,7 @@ async def _resolve_self_identity(user_id: str, db: Any) -> dict[str, Any]:
         "notes": f"You're signed in on this panel as {display}.",
         "health_score": 100,
     }
-    summary = f"You're signed in as {display}."
+    summary = f"Your name is {display}." if kind == "name" else f"You're signed in as {display}."
     card = card_service.build_person_profile_card({"person": person, "summary": summary})
     return {
         "handled": True,

@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Auto-generated inventory of every ZOE_* environment flag read in the codebase — defaults, readers, typed_env adoption, and .env.example coverage.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-10-15T00:00:00Z
+timestamp: 2026-10-16T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-10-15T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-10-15. The table body is deterministic (sorted, no
+Last generated: 2026-10-16. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Default `dynamic` = not statically extractable; `(required)` = bare
@@ -22,7 +22,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Production flags
 
-646 flags; 644 not documented in `.env.example`.
+647 flags; 645 not documented in `.env.example`.
 
 | Flag | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -107,6 +107,7 @@ Default `dynamic` = not statically extractable; `(required)` = bare
 | `ZOE_COMPOSE_TIMEOUT_S` | `'14'` | no | NO | `services/zoe-data/ui_compose.py` |
 | `ZOE_COMPOSE_UI` | `''` | no | NO | `services/zoe-data/ui_compose.py` |
 | `ZOE_COMPOSE_VOICE_BUDGET_S` | `'8'` | no | NO | `services/zoe-data/main.py` |
+| `ZOE_CONTACTS_API` | `''` | no | NO | `services/zoe-data/routers/contacts.py` |
 | `ZOE_CONTACTS_CONVERSATIONAL` | `''` | no | NO | `services/zoe-data/contacts_conversation.py` |
 | `ZOE_CONTACT_BACKFILL_ENABLED` | `''` | no | NO | `services/zoe-data/contact_backfill.py` |
 | `ZOE_CONTACT_OFFER_BATCH` | `''` | no | NO | `services/zoe-data/contacts_conversation.py` |
