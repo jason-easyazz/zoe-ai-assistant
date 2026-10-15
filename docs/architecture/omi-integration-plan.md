@@ -311,7 +311,11 @@ Sub-options inside (A) — the receiver:
 - **Connection** (`ble_link.connect`): no scan, no pairing, no agent. `sudo -n hcitool lecc --random <addr>` creates the LE
   link with a 32 s supervision timeout (BlueZ's own 420 ms default kills it at this range — 0.3a), bleak attaches to the
   already-connected device, up to 2 attempts per cycle in the run loop (5 for `check`) with the half-open link dropped
-  (`hcitool ledc`) between tries; a failed cycle is the normal "not in range" answer. Needs privilege for `hcitool`:
+  (`hcitool ledc`) between tries; a failed cycle is the normal "not in range" answer. A failed `lecc` is always followed by
+  LE Create Connection Cancel (`hcitool cmd 0x08 0x000E`): `hcitool` gives up WITHOUT cancelling, the controller keeps
+  initiating, every later `lecc` gets `Input/output error`, and the stale initiation re-creates an owner-less link the instant
+  any link drops (2026-10-15: 11 h of failed syncs). An LE link to the pendant that is already up (`hcitool con`) is cleared
+  (cancel, then `ledc`) before our own `lecc`: bleak cannot attach to it (it scans first; a connected pendant is silent). Needs privilege for `hcitool`:
   a narrow sudoers line (4.7) or `OMI_SYNC_LECC_PREFIX`. `OMI_SYNC_LECC=0` is the plain bleak connect.
 - **Which path** (`engine.Drain.run`, from DIS `2A26`): **≥ 3.0.20 → `ring`** (below); **exactly 3.0.18 → `legacy`, only with
   `OMI_SYNC_LEGACY_FILES=1`** (the firmware frees files itself — 0.3a); anything else is **refused before a single storage
@@ -430,9 +434,10 @@ registry on the body also names the pendant (`device`) and the notice goes to **
    In the app remove/forget the pendant (and, if you want the cloud copy gone, delete the Omi account/data); then in the
    phone's Bluetooth settings "Forget" the pendant. Nothing is bonded to the Pi: **do not pair** (the 2026-10-12 bring-up
    read everything with `Paired: no`, and the sync service never pairs). Make sure the pendant is powered on.
-2. **Allow the link-creation command.** The service runs `sudo -n hcitool lecc --random <addr>` and `hcitool ledc <handle>`.
-   Either the Pi user already has passwordless sudo (the bring-up used it), or add a narrow rule, e.g. in
-   `/etc/sudoers.d/omi-sync`: `<pi-user> ALL=(root) NOPASSWD: /usr/bin/hcitool lecc *, /usr/bin/hcitool ledc *`; or grant the
+2. **Allow the link-creation command.** The service runs `sudo -n hcitool lecc --random <addr>`, `hcitool ledc <handle>` and
+   `hcitool cmd 0x08 0x000E` (cancel a pending connect). Either the Pi user already has passwordless sudo (the bring-up used
+   it), or add a narrow rule, e.g. in `/etc/sudoers.d/omi-sync`: `<pi-user> ALL=(root) NOPASSWD: /usr/bin/hcitool lecc *,
+   /usr/bin/hcitool ledc *, /usr/bin/hcitool cmd 0x08 0x000E`; or grant the
    capabilities instead (`sudo setcap cap_net_raw,cap_net_admin+eip $(readlink -f $(which hcitool))`, set
    `OMI_SYNC_LECC_PREFIX=""`) — **the setcap route is untried**. This is an operator change to the Pi, not done by the build.
 3. **Install the service** (from a git worktree, not the live checkout): copy `services/omi-sync/omi_sync/` to
