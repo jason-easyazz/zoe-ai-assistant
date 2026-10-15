@@ -359,6 +359,83 @@
   .estmc label.dtall{display:flex;align-items:center;gap:10px;font-size:16px;color:var(--ink);margin-top:14px}
   .estmc label.dtall input{width:22px;height:22px;flex:none}
   .estmc .btns .del{background:rgba(255,122,144,.14);border-color:rgba(255,122,144,.4);color:#ff9db0}
+  /* Every native <select> on the estate: the OPEN dropdown is a native popup the browser
+     paints light by default while our text is near-white — unreadable. color-scheme:dark +
+     the explicit option colours fix the class (the calendar Category picker no longer uses
+     one at all: see the event sheet below). */
+  select{color-scheme:dark}
+  select option{background:#131a2b;color:var(--ink)}
+  .estmc select{width:100%;min-height:52px;margin-top:6px;border-radius:12px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.08);color:var(--ink);font:inherit;font-size:19px;padding:0 12px}
+  /* ---- Calendar event sheet (tap an event): near-full-screen read view + a keyboard-free edit view.
+     No text inputs, no native select: categories are chips, typed edits go to the phone (QR). ---- */
+  .estmc.evd{width:min(1120px,94%);min-height:90%;max-height:94%;display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;padding:0;border-radius:30px;position:relative;
+    background:linear-gradient(180deg,#181c2c,#0f121c);border-color:color-mix(in srgb,var(--c,#7b96ff) 45%,rgba(255,255,255,.14))}
+  .evd .evh{position:relative;padding:26px 120px 20px 48px;background:linear-gradient(100deg,color-mix(in srgb,var(--c) 24%,transparent),transparent 70%);border-bottom:1px solid var(--line)}
+  .evd .evx{position:absolute;top:22px;right:24px;width:56px;height:56px;border-radius:50%;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.1);color:var(--ink);font-size:24px;cursor:pointer;padding:0}
+  .evd .evbadges{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:14px}
+  .evd .evcat{display:inline-flex;align-items:center;gap:10px;min-height:40px;padding:0 18px;border-radius:999px;font-size:19px;font-weight:600;color:var(--ink);background:color-mix(in srgb,var(--cc) 22%,#12151f);border:1px solid var(--cc)}
+  .evd .evcat i{width:14px;height:14px;border-radius:50%;background:var(--cc);display:block}
+  .evd .evbadge{display:inline-flex;align-items:center;min-height:40px;padding:0 16px;border-radius:999px;font-size:17px;color:var(--ink);background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2)}
+  .evd .evbadge.warn{border-style:dashed;border-color:var(--amber);color:var(--amber)}
+  .evd .evbadge.bad{border-color:#ff9db0;color:#ff9db0}
+  .evd .evt{font-size:50px;font-weight:600;line-height:1.1;margin:0 0 10px;overflow-wrap:anywhere}
+  .evd .evdate{font-size:30px;color:var(--ink)}
+  .evd .evtime{font-size:30px;font-weight:600;margin-top:6px;font-variant-numeric:tabular-nums}
+  .evd .evdur{font-size:20px;font-weight:400;color:var(--ink-soft);margin-left:16px}
+  .evd .evtz{font-size:17px;color:var(--ink-soft);margin-top:8px}
+  .evd.st-cancelled .evt{text-decoration:line-through;color:var(--ink-soft)}
+  .evd.st-tentative{border-style:dashed}
+  .evd>*{flex:none}
+  .evd .evbody{flex:1 0 auto;align-content:start;display:grid;grid-template-columns:1fr 1fr;gap:20px 48px;padding:22px 48px}
+  .evd .evbody.one{grid-template-columns:1fr}
+  .evd .evrow.wide{grid-column:1/-1}
+  .evd .evl{font-size:15px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-soft);margin-bottom:8px}
+  .evd .evv{font-size:26px;line-height:1.35;overflow-wrap:anywhere}
+  .evd .evnotes{white-space:pre-wrap;font-size:23px;line-height:1.45;color:var(--ink)}
+  .evd .evnote{font-size:19px;color:var(--ink-soft);margin-bottom:12px}
+  .evd .evwhos{display:flex;flex-wrap:wrap;gap:12px}
+  .evd .evwho{display:inline-flex;align-items:center;gap:10px;min-height:52px;padding:0 18px 0 8px;border-radius:999px;background:rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.16);font-size:21px}
+  .evd .evwho.more{padding-left:18px;color:var(--ink-soft)}
+  .evd .evwho.org{border-color:var(--accent)}
+  .evd .evav{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;background:var(--accent);color:#0b0e17;font-weight:700;font-size:19px}
+  .evd .evtag{font-size:13px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:999px;background:var(--accent);color:#0b0e17}
+  .evd .evrsvp{font-size:15px;color:var(--ink-soft)}
+  .evd .evrsvp.r-going{color:#66d6a3}.evd .evrsvp.r-declined{color:#ff9db0}.evd .evrsvp.r-maybe{color:var(--amber)}
+  .evd .evstick{position:sticky;bottom:0;margin-top:auto;background:#0f121c;border-top:1px solid var(--line)}
+  .evd.sparse .evh{flex:1;display:flex;flex-direction:column;justify-content:center;padding-top:36px;border-bottom:0}
+  .evd.sparse .evt{font-size:66px}
+  .evd.sparse .evdate,.evd.sparse .evtime{font-size:36px}
+  .evd .evfoot{padding:8px 48px 2px}
+  .evd .evwr{display:flex;flex-wrap:wrap;gap:12px 44px;align-items:center}
+  .evd.eve .evt{font-size:38px;margin:0}
+  .evd.eve .evh{padding-bottom:16px}
+  .evd.eve .evbadges{margin-bottom:8px}
+  .evd .evsw{margin-top:0!important}
+  .evd .evacts{display:flex;gap:14px;align-items:center;padding:14px 0 6px}
+  .evd .evsp{flex:1}
+  .evd .evbtn{min-height:60px;padding:0 28px;border-radius:16px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.1);color:var(--ink);font:inherit;font-size:21px;cursor:pointer}
+  .evd .evbtn.pri{background:var(--accent);border-color:transparent;color:#0b0e17;font-weight:700}
+  .evd .evbtn.del{background:rgba(255,122,144,.14);border-color:rgba(255,122,144,.5);color:#ff9db0}
+  .evd .evbtn:disabled{opacity:.5}
+  .evd .evro{font-size:20px;color:var(--ink-soft);padding:10px 0 0}
+  .evd .evconf .evcq{font-size:30px;font-weight:600;padding-top:14px}
+  .evd .evhint{text-align:center;font-size:15px;color:var(--ink-soft);padding:0 0 12px;letter-spacing:.04em}
+  /* The QR is a card FLOATING above the sticky action bar (right-aligned), so opening it never scrolls the sheet. */
+  .evd .evqr{position:absolute;right:48px;bottom:calc(100% - 4px);z-index:2}
+  .evd .evqrbox{display:flex;flex-direction:column;align-items:center;gap:10px;width:244px;padding:16px 16px 14px;border-radius:20px;background:#1d2234;border:1px solid rgba(255,255,255,.22);box-shadow:0 18px 50px rgba(0,0,0,.55)}
+  .evd .evqrc{width:180px;height:180px;background:#fff;border-radius:12px;padding:8px}
+  .evd .evqrcap{font-size:18px;text-align:center;line-height:1.25}
+  .evd .evcats{display:flex;flex-wrap:wrap;gap:12px}
+  .evd .evchip{display:inline-flex;align-items:center;gap:10px;min-height:60px;padding:0 26px 0 14px;border-radius:999px;border:2px solid var(--cc);font:inherit;font-size:22px;font-weight:600;cursor:pointer}
+  .evd .evchip .evck{width:28px;height:28px;display:grid;place-items:center;font-style:normal;font-size:20px;font-weight:800;border-radius:50%;border:2px solid currentColor;flex:none}
+  .evd .evchip:not(.on) .evck{border-color:var(--cc);color:transparent}
+  .evd .evchip.on{outline:3px solid #fff;outline-offset:2px}
+  .evd .evsw{display:inline-flex;align-items:center;gap:14px;min-height:60px;margin-top:14px;padding:0 24px 0 12px;border-radius:999px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.08);color:var(--ink);font:inherit;font-size:21px;cursor:pointer}
+  .evd .evsw i{width:56px;height:32px;border-radius:999px;background:rgba(255,255,255,.22);position:relative;flex:none}
+  .evd .evsw i::after{content:'';position:absolute;top:4px;left:4px;width:24px;height:24px;border-radius:50%;background:#fff;transition:left .2s}
+  .evd .evsw[aria-checked="true"] i{background:var(--accent)}
+  .evd .evsw[aria-checked="true"] i::after{left:28px}
+  .evd.eve .dtp{margin-top:0}
   /* pinned-dock-control editor (Settings › This panel). Every tap target is
      >=48px — this is driven with a finger on a 1280x720 kiosk. */
   .estmc .pinrow{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid rgba(255,255,255,.08)}
@@ -4154,26 +4231,84 @@
     }).catch(function(){if(_cur!=='calendar'||gen!==_cal.gen)return;body.innerHTML='<div style="color:var(--ink-faint);font-size:20px">Couldn’t load the calendar.</div>';});
   }
 
-  function editEvent(ev){
-    var cats=['general','work','personal','family','health','social','appointment','birthday'];
-    _dtInit(ev.start_date,ev.start_time);
-    estOpen('<h3>Edit event</h3>'
-      +'<label>Title</label><input data-f="title" value="'+esc(ev.title||'')+'">'
-      +'<label>When</label>'+_dtHtml()
-      +'<label class="dtall"><input type="checkbox" data-f2="allday"'+(ev.all_day?' checked':'')+'> All day</label>'
-      +'<label>Category</label><select data-f="category">'+cats.map(function(c){return '<option value="'+c+'"'+((ev.category||'general').toLowerCase()===c?' selected':'')+'>'+c.charAt(0).toUpperCase()+c.slice(1)+'</option>';}).join('')+'</select>'
-      +'<label>Location</label><input data-f="location" value="'+esc(ev.location||'')+'">'
-      +'<div class="btns"><button class="del" data-x="del">Delete</button><button data-x="cancel">Cancel</button><button class="save" data-x="save">Save</button></div>');
-    var m=document.getElementById('estModal');_dtWire(m);
-    m.querySelector('[data-x="cancel"]').onclick=estClose;
-    m.querySelector('[data-x="del"]').onclick=function(){estConfirm('Delete “'+(ev.title||'this event')+'”?',function(){
-      apiJson('DELETE','/api/calendar/events/'+encodeURIComponent(ev.id)).then(function(){estClose();if(_cur==='day')wireDay();else paintCal();}).catch(function(){toast('Couldn’t delete');});});};
-    m.querySelector('[data-x="save"]').onclick=function(){var body={};m.querySelectorAll('[data-f]').forEach(function(i){body[i.getAttribute('data-f')]=i.value.trim();});
-      var dt=_dtGet();body.start_date=dt.date;
-      var allday=m.querySelector('[data-f2="allday"]');
-      if((allday&&allday.checked)||dt.time===null){body.all_day=true;body.start_time=null;}else{body.all_day=false;body.start_time=dt.time;}
-      apiJson('PUT','/api/calendar/events/'+encodeURIComponent(ev.id),body).then(function(){estClose();if(_cur==='day')wireDay();else paintCal();}).catch(function(){toast('Couldn’t save event');});};
+  // ---- Calendar event sheet (js/touch-event-detail.js) ----
+  // Tap an event -> near-full-screen READ view (title, date+time, category chip, who, where, notes…).
+  // "Change time or category" -> a keyboard-free EDIT view: category CHIPS (never a native select —
+  // the open dropdown was unreadable on the dark kiosk) + the ▲/▼ date-time steppers. Anything typed
+  // (title, place, notes, attendees) hands off to the phone via QR. Close: ✕, tap outside, swipe
+  // down, the idle timer, or the spoken word "close" (ZoeEstateVoice.transcript -> __evdVoiceClose).
+  var EVD=null,_evd=null,EVD_IDLE_MS=120000;   // EVD is resolved at first use: the module's <script> sits AFTER this inline one
+  function evdLive(){var m=document.getElementById('estModal');return !!(_evd&&m&&m.classList.contains('on')&&m.querySelector('.evd'));}
+  function evdTouch(){if(!_evd)return;if(_evd.idle)clearTimeout(_evd.idle);_evd.idle=setTimeout(function(){if(evdLive())evdClose();},EVD_IDLE_MS);}
+  function evdClose(){if(_evd&&_evd.idle)clearTimeout(_evd.idle);_evd=null;estClose();}
+  function evdRefresh(){if(_cur==='day')wireDay();else paintCal();}
+  function evdShow(html){
+    var m=document.getElementById('estModal');if(!m)return;
+    m.innerHTML=html;m.classList.add('on');m.onclick=evdClick;
+    var sh=m.querySelector('.evd'),g=null;
+    if(sh){   // swipe down from the top of the sheet closes it
+      sh.addEventListener('touchstart',function(e){var t=e.touches&&e.touches[0];g=t?{x:t.clientX,y:t.clientY,top:sh.scrollTop}:null;evdTouch();},{passive:true});
+      sh.addEventListener('touchend',function(e){var t=e.changedTouches&&e.changedTouches[0];if(!g||!t)return;
+        var ok=EVD.swipeShouldClose({dy:t.clientY-g.y,dx:t.clientX-g.x,scrollTop:g.top});g=null;if(ok)evdClose();},{passive:true});
+    }
+    evdTouch();
   }
+  function evdDetailView(ev){_evd=_evd||{};_evd.ev=ev;evdShow(EVD.renderDetail(ev));}
+  function editEvent(ev){
+    EVD=EVD||window.ZoeEventDetail;
+    if(!EVD){toast('Couldn’t open the event');return;}
+    _evd={ev:ev};evdDetailView(ev);
+  }
+  function evdEditView(){
+    var ev=_evd.ev,allDay=!!ev.all_day||!ev.start_time;
+    _dtInit(ev.start_date,allDay?null:ev.start_time);
+    _evd.st={category:String(ev.category||'general').toLowerCase(),allDay:allDay};
+    evdShow(EVD.renderEdit(ev,{dtHtml:_dtHtml()}));
+    var m=document.getElementById('estModal');_dtWire(m);
+    // Touching an hour/minute stepper means "give it a time" -> no longer all-day.
+    m.querySelectorAll('.dtp button[data-s^="h,"],.dtp button[data-s^="mi,"]').forEach(function(b){
+      b.addEventListener('click',function(){var sw=m.querySelector('[data-x="allday"]');_evd.st.allDay=false;if(sw)sw.setAttribute('aria-checked','false');});});
+  }
+  function evdQr(kind,url){
+    var slot=document.getElementById('evqr');if(!slot)return;
+    if(!slot.hidden&&slot.getAttribute('data-k')===kind){slot.hidden=true;slot.innerHTML='';return;}   // second tap hides it
+    if(!url){toast('Couldn’t make a code for that');return;}
+    slot.setAttribute('data-k',kind);slot.innerHTML=EVD.renderQr(kind,url);slot.hidden=false;
+    function draw(){var cv=slot.querySelector('canvas[data-qr]');if(cv)try{QRCode.toCanvas(cv,cv.getAttribute('data-qr'),{width:164,margin:0,errorCorrectionLevel:'M'});}catch(e){}}
+    // The ONE client QR library; non-secret URLs only (see authCard for secret-bearing hand-offs).
+    if(window.QRCode)draw();else{var sc=document.createElement('script');sc.src='/lib/qrcode/qrcode.min.js';sc.onload=draw;document.head.appendChild(sc);}
+  }
+  function evdClick(e){
+    var m=document.getElementById('estModal');
+    if(e.target===m){evdClose();return;}
+    if(!_evd)return;
+    evdTouch();
+    var chip=e.target.closest('.evchip');
+    if(chip){var c=chip.getAttribute('data-cat');_evd.st.category=c;
+      m.querySelector('.evcats').outerHTML=EVD.renderCategoryChips(c);return;}
+    var b=e.target.closest('[data-x]');if(!b)return;
+    var x=b.getAttribute('data-x'),ev=_evd.ev;
+    if(x==='close')evdClose();
+    else if(x==='edit')evdEditView();
+    else if(x==='back'||x==='keep')evdDetailView(ev);
+    else if(x==='phone')evdQr('phone',EVD.phoneEditUrl(location.origin));
+    else if(x==='meeturl')evdQr('meeting',b.getAttribute('data-url'));
+    else if(x==='del'){var f=document.getElementById('evfoot');if(f)f.innerHTML=EVD.renderDeleteConfirm(ev);}
+    else if(x==='delyes'){b.disabled=true;var dtok=_evd;   // the sheet SESSION this delete belongs to (editEvent makes a new one per open)
+      apiJson('DELETE','/api/calendar/events/'+encodeURIComponent(ev.id)).then(function(){
+        if(_evd===dtok)evdClose();   // a slow delete of A must not close the sheet the person has since opened for B
+        evdRefresh();})              // the data changed either way: repaint the calendar behind
+        .catch(function(){if(_evd===dtok)b.disabled=false;toast('Couldn’t delete “'+(ev.title||'event')+'”');});}
+    else if(x==='allday'){_evd.st.allDay=!_evd.st.allDay;b.setAttribute('aria-checked',_evd.st.allDay?'true':'false');}
+    else if(x==='save'){b.disabled=true;var dt=_dtGet(),stok=_evd;   // same session token as delete: stale completions never touch another event's sheet
+      EVD.save(apiJson,ev,{category:_evd.st.category,date:dt.date,time:dt.time,allDay:_evd.st.allDay}).then(function(r){
+        if(r.changed)evdRefresh();
+        if(_evd!==stok)return;       // closed, or another event opened meanwhile
+        _evd.ev=r.event;evdDetailView(r.event);})
+        .catch(function(){if(_evd===stok)b.disabled=false;toast('Couldn’t save “'+(ev.title||'event')+'”');});}
+  }
+  // Spoken "close" while the sheet is up (called from ZoeEstateVoice.transcript). Returns true when it closed.
+  window.__evdVoiceClose=function(t){if(!evdLive()||!EVD||!EVD.isCloseUtterance(t))return false;evdClose();return true;};
 
   // ---- Day: full-screen — today's events + reminders (+ comms when a source exists) ----
   function wireDay(){
@@ -4560,7 +4695,7 @@
       // here is what left the last answer on screen forever.
       armAutoHome(VOICE_HOLD_MS);
       if(_lisT)clearTimeout(_lisT);_lisT=setTimeout(function(){orb.classList.remove('listening');},20000);},
-    transcript:function(t){orb.classList.remove('listening');if(_lisT)clearTimeout(_lisT);_turnTxt='';
+    transcript:function(t){if(window.__evdVoiceClose&&window.__evdVoiceClose(t))return;orb.classList.remove('listening');if(_lisT)clearTimeout(_lisT);_turnTxt='';
       window.__voiceArrivedAt=0;   // new turn — see listening()
       _userTookOver=false;
       voiceConvTouch();
@@ -4829,6 +4964,7 @@
     }).catch(function(){});}catch(e){}
 })();
 </script>
+<script src="/js/touch-event-detail.js?v=ed-1"></script>
 <script src="/js/touch-voice-session.js?v=vs-1"></script>
 <script src="/js/touch-voice-enroll.js?v=ve-1"></script>
 <script src="/js/touch-ui-executor.js?v=estate-9"></script>
