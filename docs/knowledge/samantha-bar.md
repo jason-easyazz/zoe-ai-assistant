@@ -764,7 +764,7 @@ stranger.
 
 | id | ask | PASS (deterministic first, judge only for the ambiguous rest) | mode |
 |---|---|---|---|
-| 1b | "Morning Zoe, how's it going?" — the day brief | inside 05:00–12:00: `BRIEF_FIRST_TURN … injected=1` logged for the user, the reply names a day item, the judge says it is woven in naturally. Outside the window or no day items = SKIP. | allowlisted |
+| 1b | "Morning Zoe, how's it going?" — the day brief | inside 05:00–12:00: `BRIEF_FIRST_TURN … injected=1` logged for the user, the reply names a day item, the judge says it is woven in naturally. Outside the window = SKIP; a calendar seed that did not land, or one the server never saw (no `BRIEF_FIRST_TURN` decision logged), = ERROR. | allowlisted |
 | 1r | same turn — at most one follow-up raised | the stood-in selector kept ≥ 1 candidate; exactly one surfaced in this session (`proactive_candidates.last_surfaced_session`); the reply voices its topic and names ≤ 1 follow-up topic; the judge says it is a caring follow-up (a "no information about it" disclaimer is FAIL) | default |
 | 2 | "What should I cook tonight?" — diet from the card, no recall | card delivery observed; no meat (negation-aware), uses fish/seafood/pescatarian | allowlisted |
 | 3 | "How's my mum doing?" | names the hip/recovery, never asserts Ballarat (the corrected home) | both |
@@ -844,7 +844,12 @@ Mechanism findings from the same run (read before teardown):
 - **The brief window.** 05:00–12:00 local (`ZOE_BRIEF_WINDOW_START/END` defaults); outside it
   ask 1b is SKIP, never PASS. The brief also has no day items for a synthetic user unless the
   calendar seed lands: an allowlisted id gets no open loops (the hook refuses it) and no
-  emotional moments (no digest).
+  emotional moments (no digest). A seed that did NOT land, or one that landed while the server
+  logged no decision, is an ERROR (and 7b follows it), never a SKIP. The 2026-10-13 SKIP was the
+  server's 300 s day-context cache holding the pre-seed empty context; calendar writes now drop
+  it (`brief_first_turn.forget_day_context`), so the live zoe-data must be restarted on a build
+  that has it. A second allowlisted run the same morning also finds no brief (the in-process
+  claim throttle outlives teardown): restart zoe-data or run on another day.
 - **The card in the sidecar.** It is cached per user for `ZOE_USER_MODEL_TTL_MS` (300 s) and
   refreshed in the background on a turn after expiry. The probe proves delivery from the app
   log (a `USER_MODEL_BLOCK user=… version=<rebuilt version>` line after its own read), driving

@@ -30,7 +30,7 @@ import own_words
 from memory_overlap import dedup_verdict, richness
 from routers.journal import CREATED_AT_VALID_TIMESTAMP_SQL
 from typed_env import env_float
-from user_filters import GUEST_USERS, drop_synthetic_users, message_owner_expr
+from user_filters import GUEST_USERS, drop_synthetic_users, is_unidentified, message_owner_expr
 import distress_handoff   # the distress hand-off's text test: a turn it enforces is never digested
 from memory_provenance import off_record_sql as _off_record_sql
 
@@ -861,6 +861,13 @@ async def run_turn_digest(
     """
     result: dict = {"user_id": user_id, "new": 0, "skipped_duplicates": 0, "skipped_low_quality": 0}
 
+    # Nobody identified (a guest / an unrecognised voice): nothing durable is filed, for anyone. The words cannot be attributed
+    # to a member later without proof, and the shared guest bucket is not a person's memory (DISCARD; the model call is saved too).
+    if is_unidentified(user_id):
+        result["skipped_reason"] = "unidentified"
+        _count_drop(source, "unidentified", gate=False)
+        return result
+
     # BM5: an off-the-record turn is never digested.
     try:
         import memory_provenance as _mp
@@ -1035,8 +1042,32 @@ async def run_turn_digest(
                     fact, validate_text = resolved, "\n".join(recent_texts)
             except Exception:  # noqa: BLE001 - the guard must never take the digest down
                 pass
+            # The SAME member corrected a value this turn holds, later in the same session ("it's actually a bike shop, not a
+            # pike shop"), before this digest got the brain's slot: store the corrected value, the correcting words joining the
+            # evidence (correction_apply.correct_fact; a different identity never matches).
+            fact_anchor_text = user_message
+            fact_excerpt = turn_excerpt
+            try:
+                import correction_apply as _ca
+
+                fixed = _ca.correct_fact(user_id, session_id, fact, user_message)
+            except Exception:  # noqa: BLE001 - a correction lookup never takes the digest down
+                fixed = None
+            if fixed is not None:
+                fact, corr_words = fixed.fact, fixed.utterance
+                # the correcting words FIRST: the excerpt is capped at the write boundary, and they are the only evidence for the
+                # stored value - appended after a long misheard turn they were the part cut off
+                fact_anchor_text = f"{corr_words}\n{user_message}"
+                fact_excerpt = f"{corr_words} / {turn_excerpt}"
+                validate_text = f"{corr_words}\n{validate_text}"
+                # the extractor's claim row still holds the OLD value: rebuilt for the corrected one (or dropped), never stale
+                if idx < len(item_claims) and item_claims[idx] is not None:
+                    item_claims[idx] = _ca.correct_claim(item_claims[idx], fixed)
+                    claim_kw = _claim_kwargs(item_claims, idx)
+                result["corrected"] = result.get("corrected", 0) + 1
+                logger.info("CORRECTION_APPLIED kind=pending lane=%s user=%s", source, user_id)
             fact_type = item.get("type", "fact")
-            fact_tags = ["turn_digest", "auto_extract"]
+            fact_tags = ["turn_digest", "auto_extract"] + (["corrected"] if fixed is not None else [])
             fact_changes = False
             if change_cue:
                 from memory_supersede import STATE_CHANGE, fact_cue, is_tombstone
@@ -1128,10 +1159,10 @@ async def run_turn_digest(
                         # a neutral update clears the old one ("" overrides the
                         # value the edit would otherwise carry forward).
                         metadata={"affect": fact_affect},
-                        source_excerpt=turn_excerpt,
+                        source_excerpt=fact_excerpt,
                         # authority: the user's OWN turn is the anchor; the new row is THIS
                         # writer's (session/turn), never the superseded row's
-                        anchor_text=user_message,
+                        anchor_text=fact_anchor_text,
                         session_id=session_id,
                         turn_ref=f"{base_turn_id}-td{idx}",
                         prompt_text=prompt_text or None,
@@ -1161,8 +1192,8 @@ async def run_turn_digest(
                     status="approved",
                     tags=fact_tags,
                     metadata={"affect": fact_affect} if fact_affect else None,
-                    source_excerpt=turn_excerpt,
-                    anchor_text=user_message,
+                    source_excerpt=fact_excerpt,
+                    anchor_text=fact_anchor_text,
                     prompt_text=prompt_text or None,
                     speaker_verified=speaker_verified,
                     **claim_kw,

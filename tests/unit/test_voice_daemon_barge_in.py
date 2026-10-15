@@ -668,7 +668,7 @@ def test_follow_up_source_prefers_the_seed_and_skips_the_beep(daemon, monkeypatc
     calls = []
     monkeypatch.setattr(daemon, "play_follow_up_beep", lambda: calls.append("beep"))
     monkeypatch.setattr(daemon, "_follow_up_listen",
-                        lambda pa, window_s=None: calls.append("listen") or b"L")
+                        lambda pa, window_s=None, **kw: calls.append("listen") or b"L")
     monkeypatch.setattr(daemon, "_notify_wake_background", lambda: None)
     assert daemon._follow_up_source(None, b"SEED") == b"SEED" and calls == []
     assert daemon._follow_up_source(None, None) == b"L" and calls == ["beep", "listen"]
