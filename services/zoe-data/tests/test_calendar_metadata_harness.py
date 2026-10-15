@@ -149,7 +149,9 @@ def test_dead_attendee_and_reminder_routes_are_not_fetched():
     )
 
     py = _strip_py_comments(ROUTER.read_text(encoding="utf-8"))
-    assert "attendees" not in py, (
+    # Since alembic 0052 the router returns structured ``attendees`` on every event (no sub-route); the desktop
+    # page still reads its own ``metadata.attendees``. What must not appear is a per-event sub-ROUTE.
+    assert not re.search(r"@router\.(get|post|put|delete)\([^)]*attendees", py), (
         "routers/calendar.py gained an attendees route -- the client now reads "
         "attendees from event.metadata, so revisit that decision"
     )

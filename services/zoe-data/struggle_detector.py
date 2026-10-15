@@ -14,8 +14,10 @@ OFF THE TURN PATH, by construction:
     (``routers/voice_tts._run_voice_memory_passes``, ``routers/chat._persist_memory_candidates``), never from the reply path. A
     hook is one ``put_nowait`` on a bounded queue; a full queue drops the turn and counts it. Every exception is swallowed and
     counted (``stats()``); a detector bug can never break or slow a turn.
-  * Two in-process notes feed the turn record: ``note_route`` (``semantic_router.route``: the router's domain / score /
-    two-stage failure) and ``note_brain`` (``brain_dispatch._log_lane``: a brain lane served this session). Each is a deque
+  * In-process notes feed the turn record: ``note_route`` (``semantic_router.route``: the router's domain / score /
+    two-stage failure), ``note_skybridge`` (Skybridge's claim and whether the router vetoed it), ``note_brain``
+    (``brain_dispatch._log_lane``: a brain lane served this session) and ``note_snap`` (``stt_snap`` via the voice lane: a
+    misheard command word was snapped, or would have been). Each is a deque
     append - measured in ``tests/test_struggle_detector.py`` (``test_hook_overhead``).
   * One worker task drains the queue: builds the ``Turn``, runs ``struggle_signals.detect`` against the previous turn of the
     same conversation (voice: the panel; chat: the session) by the same user, and writes the events. A store failure is
@@ -127,6 +129,7 @@ def is_guest(user_id: Optional[str]) -> bool:
 _ROUTES: "deque[tuple[float, str, dict]]" = deque(maxlen=64)
 _BRAINS: "deque[tuple[float, str, str, str]]" = deque(maxlen=64)
 _SKY: "deque[tuple[float, str, str, bool]]" = deque(maxlen=64)
+_SNAPS: "deque[tuple[float, str, dict]]" = deque(maxlen=32)
 
 
 def note_route(text: str, decision: Optional[dict], *, two_stage_active: bool = False,
@@ -172,6 +175,34 @@ def note_brain(session_id: str, served: str, outcome: str) -> None:
         _BRAINS.append((time.time(), str(session_id), str(served or ""), str(outcome or "")))
     except Exception:  # noqa: BLE001
         _count("hook_errors")
+
+
+def note_snap(text: str, info: dict) -> None:
+    """``stt_snap`` recovered (or, in shadow, would have recovered) a misheard command word on the turn whose words are now
+    ``text``: the turn gets a MISHEAR event with fix ``stt_snapped``. ``info`` is text-free (outcome / intent tag / safety /
+    cost / position). O(1), never raises."""
+    try:
+        if mode() == "off":
+            return
+        keep = ("outcome", "intent", "safety", "cost", "position")
+        _SNAPS.append((time.time(), str(text or "")[:500], {k: info.get(k) for k in keep if k in (info or {})}))
+    except Exception:  # noqa: BLE001
+        _count("hook_errors")
+
+
+def _snap_for(text: str, now: float) -> dict:
+    raw = (text or "").strip()
+    for i in range(len(_SNAPS) - 1, -1, -1):
+        ts, t, info = _SNAPS[i]
+        if now - ts > NOTE_TTL_S:
+            break
+        if t.strip() == raw:
+            try:
+                del _SNAPS[i]    # one snap belongs to one turn
+            except IndexError:
+                pass
+            return info
+    return {}
 
 
 def _route_for(text: str, now: float) -> tuple[Optional[float], dict]:
@@ -298,6 +329,7 @@ def reset() -> None:
     _ROUTES.clear()
     _BRAINS.clear()
     _SKY.clear()
+    _SNAPS.clear()
     _HISTORY.clear()
     _COUNTERS.clear()
     _ERASED_AT.clear()
@@ -349,7 +381,7 @@ def build_turn(item: tuple) -> sig.Turn:
         two_stage_failed=bool(route.get("two_stage_failed")),
         latency_ms=int((ts - route_ts) * 1000) if route_ts is not None else None, interrupted=bool(interrupted),
         started=route_ts, sim_scores=dict(route.get("sim_scores") or {}), head_top=str(route.get("head_top") or ""),
-        sky_domain=sky_domain, sky_vetoed=sky_vetoed)
+        sky_domain=sky_domain, sky_vetoed=sky_vetoed, stt_snap=_snap_for(text, ts) or None)
 
 
 async def process(item: tuple) -> list[sig.Event]:
