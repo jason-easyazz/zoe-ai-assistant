@@ -5868,6 +5868,7 @@
         ],
         "in_env_example": false,
         "readers": [
+          "services/zoe-data/calendar_ical.py",
           "services/zoe-data/identity_facts.py",
           "services/zoe-data/mcp_server.py",
           "services/zoe-data/memory_digest.py",
