@@ -160,7 +160,9 @@ design does instead:
   (`ZOE_OMI_OWNER_USER_ID`), and only the owner can list, read or delete them (admin does not widen it).
 - Every transcript is stored **`speaker_state='unverified'`, `reviewed=0`** (other voices may be in it) and **nothing
   else reads the table** — no fact extraction, recall, digest or prompt — until a reviewed-promotion step exists
-  (guarded by a static test).
+  (guarded by a static test). *The day review in [`memories-space.md`](memories-space.md) §4-§5 is that step, as
+  designed: named readers only (the static test's allow-list grows by name), approval before every write, and learned
+  voices of tagged people as a recorded owner exception to the section-5 `ambient_consent_at` rule (§2.6 there).*
 - **Audio is deleted right after transcription** unless he keeps it; any WAV that remains expires after 7 days
   (`ZOE_OMI_AUDIO_RETENTION_DAYS`); transcripts live until he deletes them; "forget" (a name or the whole user)
   redacts/erases them (4.4).
@@ -496,8 +498,12 @@ each file's docstring.
   SWD (get a probe first); the public key is also a security hole in the stock device.
 - **Speaker gate on recordings** (the section-5 machinery applied to a recording instead of a live segment) and a
   **reviewed → promoted** path into the memory admission gate. Until then the table is read by nothing.
+  **Designed 2026-10-14:** [`memories-space.md`](memories-space.md) — per-line You / Someone-else tagging at
+  transcription time (ResNet34 + a pendant enrolment), the desktop/touch Pendant section, and the **day review**
+  (candidates with exact evidence spans, from the owner's own speech, mentioned on the next turn, written only on
+  approval). Docs only; nothing built.
 - **Live-stream / ambient (sections 4a-6)** and push-to-talk (B9.7).
-- A UI for the recordings (today: API only).
+- A UI for the recordings (today: API only) — designed in [`memories-space.md`](memories-space.md) §2.4 (desktop Pendant tab first, P2).
 
 ### 4.10 Firmware update (NOT done by this PR — an owner decision) and the codec question
 

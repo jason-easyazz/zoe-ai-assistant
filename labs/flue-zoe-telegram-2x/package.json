@@ -25,9 +25,9 @@
   "devDependencies": {
     "@flue/cli": "2.2.2",
     "@flue/vite": "2.2.2",
-    "@types/node": "22.20.1",
+    "@types/node": "22.20.5",
     "typescript": "5.7.2",
-    "vite": "^8.3.3"
+    "vite": "^8.3.4"
   },
   "overrides": {
     "@modelcontextprotocol/client": "2.2.0",

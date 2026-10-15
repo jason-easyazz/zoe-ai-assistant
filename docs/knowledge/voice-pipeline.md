@@ -215,6 +215,24 @@ quiet window run `flock /tmp/zoe-voice-harness.lock python3 scripts/maintenance/
 deploy gate blocks voice-path deploys (fail-closed); `curate_voice_corpus.py` quarantining a pinned clip
 has the same effect, so re-pin after a curation.
 
+**Flaky brain-wording tolerance (2026-10-15).** A pinned clip that falls through to the free-text brain
+has a verdict that depends on the brain's wording, and that varies run to run (same code: OK, OK,
+CANT_DO, so a PR failed ~1/3 of the time with no regression). When the FUNCTION comparison fails, the
+probe re-runs ONLY the clips that were OK in the baseline and are now `CANT_DO` *via the brain* on the
+baseline's route and transcript, up to 2 more times in the same harness on the same code, and counts a
+clip regressed only if it fails in >= 2 of its runs. A deterministic regression fails every run, and
+anything that is not brain wording (route/tier or STT-transcript change, `ERROR`, a non-brain
+`CANT_DO`) fails on the FIRST run with no retry. More than 3 candidates, a retry that cannot run, has
+no recall evidence or comes back on another route, is never tolerated; `--update-baseline` never
+retries (it records first-run truth). Artifact keys (additive): `flaky_retried`, `flaky_clips`
+(`clip_id`, per-run `runs`, `failures`, `of`, `regressed`, `note` such as "clip <id> flaky: 1/3 CANT_DO
+(brain wording): not counted"), `flaky_note`; `voice_gate_check.py` prints how many tolerated clips a
+PASS carried. The replay rows gain content-free `via_brain` + `route_hash`, and a baseline written by
+this probe stores `summary.clip_profile` (per clip id: verdict, route, heard hash). A baseline without
+it still gets the tolerance (route change then cannot be checked); re-record it once with
+`--update-baseline` in a quiet window to get the strict route check. Pinned by
+`tests/unit/test_voice_probe_flaky_retry.py`.
+
 **STT mode — `--stt remote` is the nightly default** (unit template sets
 `ZOE_VOICE_REPLAY_STT=remote`). In-process mode lazy-loads a SECOND Moonshine next to the live
 service's warm one, which is why the gate demanded 1500MB and skipped for days on a box whose
@@ -1524,6 +1542,58 @@ new fields, and an old server ignores them, so the order is only a convenience.
   `cp -p /home/pi/.zoe-voice/zoe_voice_daemon.py.bak-<ts> /home/pi/.zoe-voice/zoe_voice_daemon.py`
   (same for `zoe_voice_announce.py`) and `systemctl --user restart zoe-voice`. A server rollback needs
   nothing on the Pi: an old server ignores the new fields.
+
+## STT accuracy score — a local, weakly-labelled word-error proxy + the keyterm A/B (2026-10-14)
+
+**Why.** Moonshine (the rock) exposes no confidence (word confidences need the attention decoder this deployment does not
+load), so "is our voice-to-text as good as it can be?" had no number. The household supplies one: a turn the struggle
+detector calls a MISHEAR or a RE_ASK, followed within ~30 s by the person saying it again, is a weakly-labelled pair —
+(what Moonshine heard, what was meant ≈ the repeat). `scripts/maintenance/stt_accuracy_report.py` collects and scores them.
+
+**LOCAL ONLY.** Reads `~/.zoe-voice/voice_stt.jsonl` (+ `.1`) and `struggle_events` read-only (needs the service's
+`POSTGRES_URL`; without it the log alone labels pairs and the report says so). Writes ONLY under `~/.zoe/stt-accuracy/`
+(`stt-accuracy-<utc stamp>.json` with the pair rows + a `.txt` summary); a path inside the repo is refused before anything is
+read — the pairs are household words. Stdout carries counts only.
+
+```bash
+python3 scripts/maintenance/stt_accuracy_report.py                 # 8 weeks, log + struggle_events labels
+python3 scripts/maintenance/stt_accuracy_report.py --no-db --weeks 4
+python3 scripts/maintenance/stt_accuracy_report.py --keyterm-ab "<comma-separated candidate terms>"
+```
+
+**Labels** (both sources, de-duplicated; a pair both find is `both`): (1) the log — consecutive transcripts on one panel at
+most `--window-s` (30) apart that the detector's own pure pair rule (`struggle_signals.detect`) calls MISHEAR / RE_ASK of
+the first; (2) `struggle_events` — a voice MISHEAR / RE_ASK row mapped back to its two transcripts by panel and time (the
+repeat = the panel's last transcript at or before the event, the misheard turn = the one before it, within the window).
+Harness / test panels (`replay-*`, `test*`, `probe*`, ...) never count.
+
+**Score, per ISO week (UTC).** `turns` (live voice transcripts), `pairs`, `mishears` (pairs whose transcripts DIFFER after the
+detector's normalisation — an identical repeat means the words were heard right and something else failed), `mishear_rate`
+= mishears / turns, `proxy_wer` = word edits / repeat words over the mishear pairs. A **proxy**: the repeat is not a reference
+transcript (people rephrase), so read it as a trend. First run (2026-10-14, 8 weeks): 218 live voice turns, 6 labelled pairs
+(5 from the log, 1 only from `struggle_events`), 5 mishears — the week of 2026-10-12 at 3.7% of turns, proxy WER 60% over
+those 5. Small numbers: the panel's live traffic is low, and the corpus grows
+as the household talks.
+
+**Keyterm A/B** (`--keyterm-ab TERMS`). The clip behind each labelled misheard turn (`~/.zoe-voice-samples`, matched to the
+log row by file time within 2 s — measured median gap 5 ms; two clips that close are both refused) is transcribed twice by
+the SERVICE's own path (`routers.voice_tts._run_moonshine`, so the wake-word strip and the keyterm loader are the live ones),
+each in a child process on the service interpreter: once with `ZOE_MOONSHINE_KEYTERMS` unset, once with the candidate list,
+set for that child only (the live service is never touched; the child's STT log, palace and app log are pinned to a
+throwaway directory and it never captures audio). Reported per clip: changed or not, and closer to / further from / as far
+from the repeat as before (word edits), plus each arm's `moonshine_keyterms_state` (configured / applied / supported) as
+proof the B arm was biased. Runs under `/tmp/zoe-voice-harness.lock` and only with `--min-mem-mb` (1500) available — a second
+Moonshine load beside the live one; below it the report records `skipped: MemAvailable ...`, and it never starts inside the night brain window
+(01:35-04:55 local, `scripts/AGENTS.md` quiet hours). First A/B (2026-10-15, a generic 5-term command list, no names): 5
+labelled clips, keyterms applied 5/5 in the B arm, **0 transcripts changed** — that list would not have fixed those
+mishears. Only clips
+captured while `ZOE_VOICE_SAVE_AUDIO` was on can take part. A candidate list that moves clips closer and none further is the
+evidence for setting `ZOE_MOONSHINE_KEYTERMS` (then the replay gate in
+[moonshine-0-1-5-upgrade.md](moonshine-0-1-5-upgrade.md) §6 before it ships).
+
+Pinned by `tests/unit/test_stt_accuracy_report.py` (`ci_safe`, synthetic rows only: pairing from the log and from events with
+a window negative control, merge, weekly numbers, clip matching, the A/B comparison with a fake transcriber, the child env,
+and the never-into-the-repo guard).
 
 ## Mishear clarification — "Sorry, what was that?" instead of a counsellor reply (flag-dark, 2026-10-14)
 
