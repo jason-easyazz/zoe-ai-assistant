@@ -1,0 +1,47 @@
+BEGIN:VCARD
+VERSION:4.0
+UID:urn:uuid:9b0f7a52-0000-4000-8000-00000000c0a1
+FN:Marisol Okafor-Vance
+N:Okafor-Vance;Marisol;Ines;Dr.;PhD;;;
+X-PHONETIC-FIRST-NAME:mah-ree-SOL
+X-PHONETIC-LAST-NAME:oh-KAH-for
+X-ZOE-SAY-AS:mah-ree-SOL oh-KAH-for
+NICKNAME:Mari,Sol
+EMAIL;TYPE=home;PREF=1:marisol@example.org
+EMAIL;TYPE=work:m.okafor@example.net
+TEL;TYPE=cell;PREF=1:+61 400 555 101
+TEL;TYPE=work,voice:(08) 5550 1202
+TEL;VALUE=uri;TYPE=home:tel:+61-8-5550-1303
+ADR;TYPE=home;LABEL="12 Example Lane\nSpringfield WA 6999":;Unit 3;12 Exam
+ ple Lane;Springfield;WA;6999;Australia
+ORG:Lantern Labs;Field Research
+TITLE:Lead Botanist
+URL;TYPE=work:https://example.org/marisol
+SOCIALPROFILE;SERVICE-TYPE=Mastodon:https://social.example/@marisol
+IMPP;TYPE=personal:xmpp:marisol@chat.example
+PHOTO:https://example.org/photos/marisol.jpg
+BDAY:19860412
+ANNIVERSARY:--0605
+NOTE:Allergic to peanuts\, loves ferns\; met at the seed swap.\nCall after 5.
+CATEGORIES:Garden club,Book club
+PRONOUNS:she/her
+RELATED;TYPE=friend;VALUE=text:Tove Lindqvist
+RELATED;TYPE=crush;VALUE=text:Nobody Known
+END:VCARD
+BEGIN:VCARD
+VERSION:3.0
+FN:Tove Lindqvist
+N:Lindqvist;Tove;;;
+EMAIL;TYPE=INTERNET;TYPE=pref:tove@example.com
+TEL;TYPE=CELL:0400 555 202
+BDAY:--1103
+PHOTO;ENCODING=b;TYPE=JPEG:/9j/4AAQSkZJRgABAQAAAQABAAD
+item1.URL:https://tove.example.com
+END:VCARD
+BEGIN:VCARD
+VERSION:4.0
+FN:Ines Ferreira
+N:Ferreira;Ines;;;
+TEL;TYPE=cell:+61 400 555 303
+GENDER:F
+END:VCARD
