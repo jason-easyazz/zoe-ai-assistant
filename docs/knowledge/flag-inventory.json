@@ -5699,6 +5699,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_STT_SNAP": {
+        "defaults": [
+          "'shadow'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/stt_snap.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_STT_STREAM_FINISH_TIMEOUT_MS": {
         "defaults": [
           "2500"
@@ -5868,6 +5878,7 @@
         ],
         "in_env_example": false,
         "readers": [
+          "services/zoe-data/calendar_ical.py",
           "services/zoe-data/identity_facts.py",
           "services/zoe-data/mcp_server.py",
           "services/zoe-data/memory_digest.py",
