@@ -21,9 +21,11 @@ import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from auth import get_current_user
+import panel_principal
 from database import get_db
 from stt_wake_strip import _strip_wake_word
 from typed_env import env_bool, env_float, env_int, env_list, env_str
+from user_filters import is_unidentified as _is_unidentified
 import voice_first_sound as _first_sound
 import voice_speculation as _speculation
 import voice_stt_stream as _stt_stream
@@ -156,7 +158,7 @@ _INTRO_STATE: dict[str, dict] = {}
 # silently, which is why NO panel voice conversation ever persisted (P-F6,
 # live-diagnosed 2026-07-07). A panel actually bound to a real user in
 # ui_panel_sessions always takes precedence over these sentinels.
-_GUEST_SENTINEL_USERS = frozenset({"", "guest", "voice-guest", "voice-daemon"})
+_GUEST_SENTINEL_USERS = frozenset({"", "guest", "voice-guest", "voice-daemon", "anonymous"})  # = user_filters.GUEST_USERS
 
 
 def _real_user_or_none(value) -> Optional[str]:
@@ -832,6 +834,8 @@ async def _require_voice_auth(
 ) -> dict:
     """Allow voice endpoints if caller has a valid device token OR is authenticated."""
     if device:
+        # A provisioned device token IS the panel: a guest voice turn may use the household list (a fridge list).
+        panel_principal.mark_panel_turn()
         return {
             "source": "device",
             "panel_id": device.get("panel_id"),
@@ -3129,8 +3133,14 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
 async def _handle_introduce_intent(
     name: str, user_id: str, panel_id: str, session_id: str, turn_key: str, db
 ) -> str:
-    """Create or find a person record, navigate the touch panel to their card, return person_id."""
+    """Create or find a person record, navigate the touch panel to their card, return person_id.
+
+    Nobody identified: no contact is filed (a guest's introduction is not anyone's people record) and there is no card to
+    open - "" is returned; the spoken greeting is the caller's and is unchanged."""
     person_id: str = ""
+    if _is_unidentified(user_id):
+        logger.info("GUEST_MEMORY_DISCARD lane=voice writer=people_introduce")
+        return person_id
     try:
         # Try to find existing person
         cursor = await db.execute(
@@ -3274,6 +3284,12 @@ async def _run_voice_memory_passes(
                                   speaker_verified=speaker_verified)
     except Exception:  # noqa: BLE001
         pass
+    # Nobody identified (an unrecognised voice is a guest): no durable memory from this turn - no fact, digest, person,
+    # suggestion or tombstone pass, for anyone. DISCARD, not hold: the words cannot be attributed to a member later without
+    # proof. The turn's in-session context (the voice conversation history) is not touched here.
+    if _is_unidentified(user_id):
+        logger.info("GUEST_MEMORY_DISCARD lane=voice passes=all")
+        return
     try:
         # Mirror of the chat lane: a reply the hold-the-fact tier wrote means the owner's contradicting
         # claim was not accepted this turn, so it is not mined (routers/chat.py::_persist_memory_candidates_impl).

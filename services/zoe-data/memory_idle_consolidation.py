@@ -25,14 +25,15 @@ import os
 from collections import Counter
 from typing import Any, Optional
 
+from user_filters import is_unidentified
+
 logger = logging.getLogger(__name__)
 
-_GUEST_USERS = ("guest", "voice-daemon", "")
 
 
 def _is_real_user(user_id: Any) -> bool:
     """True only for a concrete, non-guest identity."""
-    return bool(user_id) and str(user_id).strip() not in _GUEST_USERS
+    return bool(user_id) and not is_unidentified(user_id)
 
 
 def _user_from_metadata(meta: Any) -> Optional[str]:

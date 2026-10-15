@@ -88,6 +88,13 @@
   "timeout": "Esto esta tardando, asi que paro aqui. No he guardado nada. Pideme cuando quieras y lo intentamos de nuevo.",
   "failed": "No he conseguido una grabacion clara. No he guardado nada. Podemos intentarlo en un momento tranquilo, solo pidemelo.",
   "store_failed": "No he podido guardarlo ahora. No he guardado nada.",
+  "screen_say": "Di:",
+  "screen_recording": "Grabando...",
+  "screen_odd": "Esa sono distinta - probemos otra vez",
+  "screen_saving": "Guardando...",
+  "screen_done": "Listo - reconocere tu voz",
+  "screen_partial": "Guardado - ya puedo usarlo",
+  "screen_failed": "No funciono - no se guardo nada",
   "cancel_words": ["para", "parar", "cancela", "cancelar", "olvidalo", "ahora no", "basta", "ya esta"]
  }
 }

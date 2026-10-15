@@ -96,6 +96,13 @@
   "timeout": "That's taking a while, so I'll stop here. I haven't kept anything. Ask me any time and we'll try again.",
   "failed": "I couldn't get a clear recording. I haven't kept anything. We can try again in a quiet moment, just ask.",
   "store_failed": "I couldn't save it just now. I haven't kept anything.",
+  "screen_say": "Say:",
+  "screen_recording": "Recording...",
+  "screen_odd": "That one sounded different - let's try it again",
+  "screen_saving": "Saving...",
+  "screen_done": "Done - I'll recognise your voice",
+  "screen_partial": "Saved - I can already use it",
+  "screen_failed": "That didn't work - nothing was kept",
   "cancel_words": ["stop", "cancel", "never mind", "nevermind", "forget it", "not now", "quit", "enough"]
  }
 }
