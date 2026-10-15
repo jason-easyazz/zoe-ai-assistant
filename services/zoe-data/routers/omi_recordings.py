@@ -212,7 +212,8 @@ async def unassign_device(device_id: str, admin: dict = Depends(_require_human_a
 
 @router.get("/recordings")
 async def list_my_recordings(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0), user: dict = Depends(_require_owner)):
-    return {"recordings": await omi.list_recordings(user["user_id"], limit=limit, offset=offset)}
+    return {"recordings": await omi.list_recordings(user["user_id"], limit=limit, offset=offset),
+            "empty_transcript_held": await omi.count_empty_transcripts(user["user_id"])}
 
 
 @router.get("/recordings/{rid}")

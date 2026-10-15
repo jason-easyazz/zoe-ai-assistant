@@ -18,6 +18,8 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
+from user_filters import is_unidentified
+
 logger = logging.getLogger(__name__)
 
 # ── Temporal-relationships flag (default OFF) ─────────────────────────────────
@@ -1306,7 +1308,7 @@ async def process_text(
     Opens its own DB connection if db is None.
     Returns count of facts written.
     """
-    if not text or not user_id or user_id in ("guest", "voice-daemon", ""):
+    if not text or not user_id or is_unidentified(user_id):
         return 0
     # BM5: an off-the-record turn is never mined.
     try:

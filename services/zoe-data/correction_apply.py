@@ -32,7 +32,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
+from typing import NamedTuple, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -536,7 +536,7 @@ async def apply_row_correction(
     supersedes (nothing is deleted), under the user-class writer ``conversation_correction`` with the correcting utterance as
     evidence. None (the caller says so) when the correction path is off, the row is gone / not approved / not this user's, the text
     does not change, or the edit is refused. Never raises."""
-    if not enabled() or not user_id or user_id in ("guest", "voice-daemon", "") or not (new_text or "").strip():
+    if not enabled() or _is_unidentified(user_id) or not (new_text or "").strip():
         return None
     try:
         try:
@@ -589,7 +589,9 @@ _SWAP_RES = (
     re.compile(_SWAP_LEAD + rf"(?:my|our|his|her|their)\s+(?P<r>{_REL})(?:['’]s\s+name)?\s+(?:is|was)\s+not\s+(?P<o>{_VAL})[,;]?\s+"
                rf"(?:(?:she|he|they|it)(?:['’]s|\s+is)|it(?:['’]s|\s+is)|but)\s+(?P<n>{_VAL})\W*$", re.IGNORECASE),
     # "it's Marisol, not Marisa" / "No, Marisol, not Marisa"
-    re.compile(_SWAP_LEAD + rf"(?:it(?:['’]s|\s+is|\s+was)\s+)?(?P<n>{_VAL})[,;]?\s+not\s+(?P<o>{_VAL})\W*$", re.IGNORECASE),
+    # ("it's actually Marisol, not Marisa": the filler adverb is not part of the value - it used to be read as "actually Marisol")
+    re.compile(_SWAP_LEAD + rf"(?:it(?:['’]s|\s+is|\s+was)\s+)?(?:(?:actually|really)\s+)?(?P<n>{_VAL})[,;]?\s+not\s+(?P<o>{_VAL})\W*$",
+               re.IGNORECASE),
     # "not Marisa, Marisol"
     re.compile(_SWAP_LEAD + rf"not\s+(?P<o>{_VAL})[,;]?\s+(?:it(?:['’]s|\s+is)\s+)?(?P<n>{_VAL})\W*$", re.IGNORECASE),
 )
@@ -715,7 +717,7 @@ async def maybe_swap(text: str, user_id: str, session_id: str, *, svc=None) -> O
     back. Evidence only: it acts when the OWNER'S approved notes hold the old value as a whole word (with the relation word too,
     when one was said) in at most ``SWAP_MAX_ROWS`` rows - with the relation unsaid, in exactly one - and returns None otherwise, so
     the brain answers as before and a correction is never claimed without a stored fact to change. Never raises."""
-    if not enabled() or not user_id or user_id in ("guest", "voice-daemon", ""):
+    if not enabled() or _is_unidentified(user_id):
         return None
     sw = swap_statement(text)
     if sw is None:
@@ -780,6 +782,319 @@ async def maybe_swap(text: str, user_id: str, session_id: str, *, svc=None) -> O
         return None
 
 
+# ── same-session correction ("it's actually a bike shop, not a pike shop") ───────────────────────
+#
+# A misheard word is corrected by the SAME person a turn or two later. The name swap above only fixes a note that is already
+# stored and name-shaped; this lane covers the other two halves of that class, bounded by the strongest evidence there is - the
+# same identity, the same session, a few minutes:
+#
+# * the misheard fact is ALREADY stored (``maybe_fix_recent``): the owner's approved rows written in THIS session within
+#   ``RECENT_WINDOW_S`` that hold the old phrase are rewritten through ``apply_row_correction`` (review edit = supersede, the
+#   correcting utterance as evidence, nothing deleted);
+# * the misheard fact is NOT stored yet (``correct_fact``): the post-turn digest of the misheard turn waits for the brain's one
+#   slot and can land minutes AFTER the correction (seen live: the correction at :03, the wrong row at :25). The correction is
+#   kept per (identity, session) with the owner's earlier turns of that session; the digest of one of THOSE turns rewrites the
+#   old phrase before the write, the correcting words joining the evidence.
+#
+# A different identity never matches: the registry, the history read and the row filter are all keyed on the turn's own
+# member id, and a guest / unidentified turn neither registers nor reads (it writes no durable memory at all).
+
+RECENT_WINDOW_S = 30 * 60
+_MIN_CONTAIN_WORDS = 4
+# a correction refers to what the member JUST said: only the last two of their turns in the session are ones it may correct
+FIX_TURNS = 2
+_PENDING_MAX_KEYS = 256
+_PHRASE = r"[A-Za-z0-9][A-Za-z0-9'’\-]*(?:\s+[A-Za-z0-9][A-Za-z0-9'’\-]*){0,3}"
+_MARK = (r"(?:no|nope|actually|sorry|wait|oh|hang\s+on|correction|you\s+misheard(?:\s+me)?|i\s+said|i\s+meant|"
+         r"that(?:['’]s|\s+is|\s+was)\s+(?:wrong|incorrect|not\s+(?:right|correct)))")
+_LEAD = rf"^\W*(?P<lead>(?:{_MARK}[,.;:!\-\s]+)*)"
+_PAIR_RES = (
+    # "it's actually a bike shop, not a pike shop" / "no, a bike shop not a pike shop" / "I said Perth, not Sydney"
+    re.compile(_LEAD + rf"(?:(?:it|that|this)(?:['’]s|\s+is|\s+was)\s+)?(?P<act>(?:actually|really)\s+)?(?P<n>{_PHRASE})[,;]?\s+"
+               rf"(?:and\s+)?not\s+(?P<o>{_PHRASE})\W*$", re.IGNORECASE),
+    # "no, not a pike shop, a bike shop"
+    re.compile(_LEAD + rf"not\s+(?P<o>{_PHRASE})[,;]?\s+(?:(?:it|that)(?:['’]s|\s+is)\s+)?(?P<act>(?:actually|really)\s+)?"
+               rf"(?P<n>{_PHRASE})\W*$", re.IGNORECASE),
+)
+_FILLER_RE = re.compile(r"^(?:(?:a|an|the|my|our|your|actually|really|just)\s+)+", re.IGNORECASE)
+# a one-word "value" that is really the rest of an everyday sentence ("it's fine, not bad", "not sure") is never a correction
+_PAIR_STOP = frozenset({"it", "that", "this", "so", "sure", "right", "wrong", "correct", "incorrect", "really", "yet", "bad", "good",
+                        "much", "quite", "too", "very", "just", "only", "even", "me", "you", "now", "then", "there", "here",
+                        "fine", "okay", "ok", "yes", "no"})
+# a value never opens on a pronoun / contraction or on the words "not" negates in everyday speech ("not sure yet", "not really")
+_PAIR_BAD_HEAD = frozenset({"it", "it's", "that", "that's", "this", "he", "he's", "she", "she's", "they", "they're", "we", "we're",
+                            "i", "i'm", "you", "you're", "there", "there's", "sure", "really", "yet", "quite", "too", "so", "very",
+                            "just", "only", "even", "much", "that'll", "gonna", "going"})
+# a VALUE never carries a verb / auxiliary: "the meeting is tomorrow" is a clause, so "the meeting is tomorrow, not today" is not
+# a value swap (codex review, #2058 - it rewrote "User is free today" to "User is free meeting is tomorrow")
+_CLAUSE_WORDS = frozenset({"is", "isn't", "are", "aren't", "was", "wasn't", "were", "weren't", "be", "been", "being", "am", "will",
+                           "won't", "would", "wouldn't", "has", "hasn't", "have", "haven't", "had", "do", "does", "did", "don't",
+                           "doesn't", "didn't", "can", "can't", "could", "should", "shall", "may", "might", "must", "want", "wants",
+                           "need", "needs", "said", "say", "says", "think", "know", "like", "likes", "not", "to", "i'd", "i'll"})
+_TIME_RE = re.compile(r"^(?:today|tonight|tomorrow|yesterday|morning|afternoon|evening|night|noon|midnight|weekend|week|month|year|"
+                      r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun|"
+                      r"january|february|march|april|may|june|july|august|september|october|november|december|"
+                      r"am|pm|o'clock|\d[\d:.]*(?:am|pm|st|nd|rd|th)?)$")
+
+
+def _is_time(words: "list[str]") -> bool:
+    return any(_TIME_RE.match(w) for w in words)
+
+
+def same_shape(new: str, old: str) -> bool:
+    """The two halves of a value swap are the same KIND of thing: the same number of words (at most three), no verb or
+    auxiliary in either (a clause is never a value), both a time or neither, and a multi-word pair keeps one word in place
+    ("bike shop" / "pike shop", "New York" / "New Jersey") - a misheard or misspoken value, not two unrelated phrases. Pure."""
+    a = [w.replace("’", "'") for w in new.lower().split()]
+    b = [w.replace("’", "'") for w in old.lower().split()]
+    if not a or len(a) != len(b) or len(a) > 3:
+        return False
+    if any(w in _CLAUSE_WORDS or w.endswith("'s") for w in a + b):
+        return False
+    if _is_time(a) != _is_time(b):
+        return False
+    return len(a) == 1 or any(x == y for x, y in zip(a, b))
+
+
+def _norm(text: str) -> str:
+    return " ".join((text or "").lower().split())
+
+
+def _bare(value: str) -> str:
+    return _FILLER_RE.sub("", " ".join((value or "").strip(" ,.;").split()))
+
+
+def correction_pair(text: str) -> Optional[tuple[str, str]]:
+    """``(new, old)`` for an explicit correction of a just-said value - "it's actually a bike shop, not a pike shop",
+    "no, Perth not Sydney", "I said Perth, not Sydney", "not a pike shop, a bike shop" - else None. Pure.
+
+    The correction must SAY it is one: a lead cue ("no", "actually", "sorry", "that's wrong", "I said/meant", ...) or "actually"
+    before the new value. "Tea, not coffee" (an answer), "it's fine, not bad" (an everyday sentence) are not corrections.
+    Leading articles / possessives are dropped from both values, so they are matched as the phrase itself. Each sentence of a
+    multi-sentence turn is read on its own; the first correction wins."""
+    for sentence in re.split(r"(?<=[.!?])\s+", " ".join((text or "").split())):
+        if not sentence or len(sentence.split()) > SWAP_MAX_WORDS:
+            continue
+        for rx in _PAIR_RES:
+            m = rx.match(sentence)
+            if not m:
+                continue
+            if not (m.group("lead") or "").strip() and not (m.group("act") or "").strip():
+                continue
+            new, old = _bare(m.group("n")), _bare(m.group("o"))
+            if not new or not old or new.lower() == old.lower():
+                continue
+            if any(len(v.split()) == 1 and v.lower() in _PAIR_STOP for v in (new, old)):
+                continue
+            if any(v.split()[0].lower().replace("’", "'") in _PAIR_BAD_HEAD for v in (new, old)):
+                continue          # "actually it's not sure yet": a clause, not a value
+            if not same_shape(new, old):
+                continue          # "actually, the meeting is tomorrow, not today": a clause against a token
+            return new, old
+    return None
+
+
+@dataclass
+class _PendingCorrection:
+    new: str
+    old: str
+    utterance: str
+    earlier: tuple[str, ...]          # the owner's earlier user turns of the session, normalised (the turns it may correct)
+    at: float
+
+
+_PENDING: "dict[tuple[str, str], list[_PendingCorrection]]" = {}
+
+
+def _pending_key(user_id: str, session_id: str) -> tuple[str, str]:
+    return (user_id or "").strip().lower(), (session_id or "").strip()
+
+
+def _live_pending(user_id: str, session_id: str, now: Optional[float] = None) -> list[_PendingCorrection]:
+    import time
+
+    key = _pending_key(user_id, session_id)
+    now = time.time() if now is None else now
+    keep = [p for p in _PENDING.get(key, []) if now - p.at <= RECENT_WINDOW_S]
+    if keep:
+        _PENDING[key] = keep
+    else:
+        _PENDING.pop(key, None)
+    return keep
+
+
+def note_correction(user_id: str, session_id: str, new: str, old: str, utterance: str, earlier: "list[str]") -> None:
+    """Remember a member's correction for the rest of the window (in process; a restart forgets it - the window is minutes)."""
+    import time
+
+    if not user_id or not session_id or _is_unidentified(user_id):
+        return
+    key = _pending_key(user_id, session_id)
+    entries = _live_pending(user_id, session_id)
+    recent = [e for e in earlier if (e or "").strip()][:FIX_TURNS]      # newest first: the turns this correction follows
+    entries.append(_PendingCorrection(new, old, " ".join((utterance or "").split()),
+                                      tuple(_norm(e) for e in recent), time.time()))
+    _PENDING[key] = entries[-8:]
+    while len(_PENDING) > _PENDING_MAX_KEYS:
+        _PENDING.pop(next(iter(_PENDING)))
+
+
+def _phrase_re(value: str):
+    return re.compile(r"(?<![A-Za-z0-9'’])" + re.escape(value).replace(r"\ ", r"\s+") + r"(?![A-Za-z0-9'’])", re.IGNORECASE)
+
+
+def _swap_phrase(text: str, old: str, new: str) -> str:
+    rx = _phrase_re(old)
+    m = rx.search(text or "")
+    if not m:
+        return text
+    found = m.group(0)
+    value = new[:1].upper() + new[1:] if found[:1].isupper() and not new[:1].isupper() else new
+    return text[:m.start()] + value + text[m.end():]
+
+
+def correct_fact(user_id: str, session_id: Optional[str], fact: str, turn_text: str) -> Optional[FactCorrection]:
+    """``FactCorrection(corrected_fact, correcting_utterance, old, new)`` when THIS member corrected, later in the SAME session, a value the fact holds
+    and ``turn_text`` (the user turn the fact was mined from) is one of the turns that correction followed; else None. Pure
+    apart from the in-process registry. Newest correction wins."""
+    if not user_id or not session_id or _is_unidentified(user_id) or not fact or not turn_text:
+        return None
+    for p in reversed(_live_pending(user_id, session_id)):
+        if not _derives_from(turn_text, p.earlier):
+            continue
+        rx = _phrase_re(p.old)
+        if rx.search(fact) and rx.search(turn_text):
+            return FactCorrection(_swap_phrase(fact, p.old, p.new), p.utterance, p.old, p.new)
+    return None
+
+
+def global_swap_allowed(text: str) -> bool:
+    """May the store-wide name swap (``maybe_swap``) act on ``text``? Only when it names a RELATION ("my sister is Marisol not
+    Marisa": the relation pins the row) or is a swap the same-session path does not read (no correction cue). A generic
+    "actually Perth, not Sydney" belongs to the session-bounded path only - globally it would rewrite whichever older,
+    unrelated row happens to hold "Sydney". Pure."""
+    sw = swap_statement(text)
+    if sw is None:
+        return False
+    return bool(sw[0]) or correction_pair(text) is None
+
+
+class FactCorrection(NamedTuple):
+    fact: str           # the fact with the old value replaced
+    utterance: str      # the member's correcting words (evidence)
+    old: str
+    new: str
+
+
+def correct_claim(claim, fc: "FactCorrection"):
+    """The extractor's claim row for a fact ``correct_fact`` rewrote, rebuilt for the CORRECTED value: ``obj`` with the old
+    value replaced and ``quote`` = the member's correcting words (their verbatim support for the new value). None (drop the
+    claim, the write is judged on its lexical floor) when the claim's value does not hold the old value. Pure."""
+    if claim is None:
+        return None
+    obj = str(getattr(claim, "obj", "") or "")
+    if not _phrase_re(fc.old).search(obj):
+        return None
+    try:
+        import dataclasses
+
+        return dataclasses.replace(claim, obj=_swap_phrase(obj, fc.old, fc.new), quote=fc.utterance)
+    except Exception:  # noqa: BLE001 - an unexpected claim shape is dropped, never stored stale
+        return None
+
+
+def _derives_from(turn_text: str, earlier: "tuple[str, ...]") -> bool:
+    """``turn_text`` is one of the (normalised) turns a correction followed - the same turn, give or take what the lane trimmed
+    (own_words) or appended. A SHORT turn ("ok") is never matched by containment: it would make any later turn that happens
+    to contain it look earlier."""
+    turn = _norm(turn_text)
+    if not turn:
+        return False
+    return any(turn == e or (min(len(turn.split()), len(e.split())) >= _MIN_CONTAIN_WORDS and (turn in e or e in turn))
+               for e in earlier if e)
+
+
+def _is_unidentified(user_id: Optional[str]) -> bool:
+    try:
+        from user_filters import is_unidentified
+
+        return is_unidentified(user_id)
+    except Exception:  # noqa: BLE001
+        return (user_id or "").strip().lower() in ("guest", "anonymous", "voice-guest", "voice-daemon", "")
+
+
+def _row_session(meta: dict) -> str:
+    return str(meta.get("session_id") or "").strip()
+
+
+async def maybe_fix_recent(text: str, user_id: str, session_id: str, *, svc=None,
+                           now: Optional[float] = None) -> Optional[CorrectionResult]:
+    """Explicit same-session correction: rewrite the owner's rows of THIS session (last ``RECENT_WINDOW_S``) that hold the old
+    phrase, and remember the correction for a digest of an earlier turn that has not landed yet (``correct_fact``). Returns the
+    result only when a stored row changed (a correction is never claimed without one); None otherwise. Never raises."""
+    if not enabled() or not session_id or _is_unidentified(user_id):
+        return None
+    pair = correction_pair(text)
+    if pair is None:
+        return None
+    new, old = pair
+    try:
+        try:
+            import user_prefs
+
+            if await user_prefs.is_memory_opted_out(user_id):
+                return None
+        except Exception:  # noqa: BLE001
+            pass
+        earlier = await _recent_user_messages(user_id, session_id, text)
+        note_correction(user_id, session_id, new, old, text, earlier)
+        just_said = tuple(_norm(e) for e in earlier if (e or "").strip())[:FIX_TURNS]
+        if svc is None:
+            from memory_service import get_memory_service
+
+            svc = get_memory_service()
+        import time
+
+        now = time.time() if now is None else now
+        uid = user_id.strip().lower()
+        old_re = _phrase_re(old)
+        hits = []
+        for r in await svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT):
+            meta = r.metadata or {}
+            if str(meta.get("user_id") or meta.get("wing") or "").strip().lower() != uid or _row_session(meta) != session_id:
+                continue
+            try:
+                added = float(meta.get("added_ts") or 0.0)
+            except (TypeError, ValueError):
+                added = 0.0
+            if now - added > RECENT_WINDOW_S or not old_re.search(r.text or ""):
+                continue
+            # the row must DERIVE from the value being corrected: its evidence (the member's own words it was mined from) is one
+            # of the turns this correction follows AND states the old value - never a blind swap of a word some other fact uses
+            excerpt = str(meta.get("source_excerpt") or "")
+            if not old_re.search(excerpt) or not _derives_from(excerpt, just_said):
+                continue
+            hits.append(r)
+        if not hits or len(hits) > SWAP_MAX_ROWS:
+            return None
+        from provenance_answers import _speculation_barrier
+
+        await _speculation_barrier()
+        changed: list[str] = []
+        for r in hits:
+            res = await apply_row_correction(user_id, r.id, _swap_phrase(r.text, old, new), utterance=text,
+                                             session_id=session_id, svc=svc)
+            if res is not None:
+                changed.extend(res.changed)
+        if not changed:
+            return None
+        logger.info("CORRECTION_APPLIED kind=recent user=%s rows=%d", user_id, len(changed))
+        return CorrectionResult("recent", f"Got it - {new}, not {old}. I've fixed my note.", changed)
+    except Exception as exc:  # noqa: BLE001 — a correction never breaks the turn
+        logger.warning("correction_apply recent fix failed user=%s: %s", user_id, type(exc).__name__)
+        return None
+
+
 # ── entry point ──────────────────────────────────────────────────────────────
 
 async def maybe_apply(
@@ -789,7 +1104,7 @@ async def maybe_apply(
     """Apply a spoken/typed correction to the stored record, or None (the brain answers).
 
     Never raises: any failure is logged and the turn goes on to the brain."""
-    if not enabled() or not user_id or user_id in ("guest", "voice-daemon", ""):
+    if not enabled() or _is_unidentified(user_id):
         return None
     if not is_correction_turn(text):
         return None

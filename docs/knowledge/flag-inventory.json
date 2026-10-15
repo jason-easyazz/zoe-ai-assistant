@@ -2096,6 +2096,16 @@
         ],
         "typed_env": true
       },
+      "ZOE_HOUSEHOLD_LISTS_PANEL_SCOPE": {
+        "defaults": [
+          "'registered'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/panel_principal.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_HYBRID_RETRIEVAL_ENABLED": {
         "defaults": [
           "''"
@@ -5913,6 +5923,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/zoe_flue_client.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_TRUSTED_PROXY_NETS": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/panel_principal.py"
         ],
         "typed_env": false
       },

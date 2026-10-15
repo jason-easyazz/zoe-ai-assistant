@@ -28,6 +28,10 @@ Multi-user data access rules. All routers enforce these via the SQL fragment:
 5. Users can override: "add a private note..." forces `personal`
 6. Soft-deleted records keep `deleted=1`, others see "deleted by" notification
 7. Trust audit log is append-only (security)
+8. **Household lists are a fridge list (2026-10-15).** On a `family` list, ITEMS (add, tick off, edit, remove) are open to every
+   signed-in member AND to anyone at the panel (the kiosk guest; `panel_principal.py`); renaming/deleting the LIST needs a
+   signed-in member (the list's owner, or any member for a list owned by a shared account). A `personal` list is never visible or
+   writable to a guest, even one a guest session created. An anonymous caller that is not the panel gets nothing.
 
 ## Enforcement
 

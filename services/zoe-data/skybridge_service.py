@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import command_shapes
 import conversation_cues
+import panel_principal
 import write_receipts
 from calendar_utils import row_to_event
 from card_contract import CardContractError, validate_component
@@ -2130,7 +2131,13 @@ async def resolve_skybridge_request(
             }
 
     if skybridge_intent_requires_identity(intent) and _is_guest_user(user_id):
-        return _attach_skybridge_context(_auth_required_result(intent))
+        if (intent.domain == "lists" and intent.action in _GUEST_HOUSEHOLD_LIST_ACTIONS
+                and panel_principal.in_panel_turn()):
+            # Anyone AT THE PANEL may read, add to, tick off and remove from the HOUSEHOLD list (a fridge list). The
+            # resolvers below see the household viewer: it owns nothing, so only family-visible lists can match.
+            user_id = panel_principal.HOUSEHOLD_VIEWER
+        else:
+            return _attach_skybridge_context(_auth_required_result(intent))
 
     # B1.1 phase 2: a speculative voice turn (verdict pending) must not run a
     # Skybridge WRITE (list add, calendar create, music, smart-home, timers) on a
@@ -2227,6 +2234,26 @@ def _attach_skybridge_context(result: dict[str, Any]) -> dict[str, Any]:
 
 def _is_guest_user(user_id: str | None) -> bool:
     return (user_id or "").strip() in {"", "guest", "voice-guest"}
+
+
+def _pick_list_row(rows: Any, name: str = "") -> dict[str, Any]:
+    """Which of the lists of a TYPE a type-only add/remove lands on: the household (family-visible) list by the ONE shared
+    rule (``list_service.pick_household_list``: fullest, name only a tie-break, then oldest); with none, the caller's own list."""
+    from list_service import pick_household_list
+
+    dicts = [dict(r) for r in rows]
+    family = [r for r in dicts if r.get("visibility", "family") == "family"]
+    return pick_household_list(family, name) or dicts[0]
+
+
+def _audit_list_item(op: str, user_id: str, list_id: str, item_id: str) -> None:
+    """Who touched a list item (no column holds it): the member, or ``panel`` when nobody at the panel was identified."""
+    actor = panel_principal.PANEL_ACTOR if user_id == panel_principal.HOUSEHOLD_VIEWER else user_id
+    logger.info("list_item_audit op=%s actor=%s list=%s item=%s", op, actor, list_id, item_id)
+
+
+# What a panel guest may do to the household list; everything else on a list (edit text, create a list) needs a member.
+_GUEST_HOUSEHOLD_LIST_ACTIONS = frozenset({"show", "overview", "contains", "add_item", "remove_item", "complete_item"})
 
 
 def skybridge_intent_requires_identity(intent: SkybridgeIntent | None) -> bool:
@@ -3357,18 +3384,25 @@ def _list_contains_answer(
 
 
 async def _ensure_default_lists(user_id: str, db: Any) -> None:
+    if user_id == panel_principal.HOUSEHOLD_VIEWER:
+        return  # a panel guest owns nothing and seeds nothing
     rows = await db.fetch(
         """
-        SELECT list_type, name
+        SELECT list_type, name, user_id, visibility
         FROM lists
-        WHERE user_id = $1 AND deleted = 0
+        WHERE deleted = 0 AND (user_id = $1 OR visibility = 'family')
         """,
         user_id,
     )
     existing_rows = [dict(row) for row in rows]
-    existing_types = {str(row.get("list_type") or "").strip().lower() for row in existing_rows}
+    existing_types = {str(row.get("list_type") or "").strip().lower()
+                      for row in existing_rows if row.get("user_id", user_id) == user_id}
+    # The household's shared list (shopping) is created ONCE for the house: a family-visible list of that type that anyone
+    # owns satisfies every member. Seeding one per member is how the panel came to show two shopping lists.
+    family_types = {str(row.get("list_type") or "").strip().lower()
+                    for row in existing_rows if row.get("visibility") == "family"}
     for list_type, name, description, visibility in DEFAULT_USER_LISTS:
-        if list_type in existing_types:
+        if list_type in existing_types or (visibility == "family" and list_type in family_types):
             continue
         await db.execute(
             """
@@ -3389,7 +3423,8 @@ async def _ensure_default_lists(user_id: str, db: Any) -> None:
 async def _fetch_list_catalog(user_id: str, db: Any) -> list[dict[str, Any]]:
     rows = await db.fetch(
         """
-        SELECT id, user_id, name, list_type, description, visibility, created_at, updated_at
+        SELECT id, user_id, name, list_type, description, visibility, created_at, updated_at,
+               (SELECT COUNT(*) FROM list_items i WHERE i.list_id = lists.id AND i.deleted = 0) AS n_items
         FROM lists
         WHERE deleted = 0
           AND (user_id = $1 OR visibility = 'family')
@@ -3401,17 +3436,27 @@ async def _fetch_list_catalog(user_id: str, db: Any) -> list[dict[str, Any]]:
         """,
         user_id,
     )
+    household = user_id == panel_principal.HOUSEHOLD_VIEWER  # a panel guest: every family-visible list, nothing else
     catalog: list[dict[str, Any]] = []
-    seen: set[tuple[str, str]] = set()
+    seen: dict[tuple[str, str], int] = {}
     for row in rows:
         item = dict(row)
-        if item.get("user_id") != user_id and item.get("list_type") != "shopping":
+        if household and item.get("visibility") != "family":
+            continue  # belt and braces: the query already filters, a panel guest must never be handed a private list
+        if item.get("user_id") != user_id and item.get("list_type") != "shopping" and not household:
             continue
         key = (str(item.get("list_type") or ""), str(item.get("name") or "").strip().lower())
         if key in seen:
+            # ONE list per name: a fuller duplicate replaces an emptier one already kept (never the reverse), so the
+            # panel/voice never lands on a stray empty twin.
+            kept = catalog[seen[key]]
+            if int(item.get("n_items") or 0) > int(kept.get("n_items") or 0):
+                catalog[seen[key]] = item
             continue
-        seen.add(key)
+        seen[key] = len(catalog)
         catalog.append(item)
+    for item in catalog:
+        item.pop("n_items", None)  # a tiebreak for the dedupe above, not part of the list contract
     return catalog
 
 
@@ -3523,21 +3568,27 @@ async def _find_or_create_list(intent: SkybridgeIntent, user_id: str, db: Any, c
         return str(row["id"]), str(row.get("list_type") or list_type)
     rows = await db.fetch(
         """
-        SELECT id, name, list_type
+        SELECT id, name, list_type, visibility, created_at,
+               (SELECT COUNT(*) FROM list_items i WHERE i.list_id = lists.id AND i.deleted = 0) AS n
         FROM lists
         WHERE list_type = $2 AND deleted = 0
           AND (visibility = 'family' OR user_id = $1)
         ORDER BY
+          (SELECT COUNT(*) FROM list_items i WHERE i.list_id = lists.id AND i.deleted = 0) DESC,
           CASE WHEN user_id = $1 THEN 0 ELSE 1 END,
-          updated_at DESC
-        LIMIT 1
+          created_at ASC, id ASC
         """,
         user_id,
         list_type,
     )
     if rows:
-        row = dict(rows[0])
+        row = _pick_list_row(rows, intent.list_name)
         return str(row["id"]), str(row.get("list_type") or list_type)
+    household = user_id == panel_principal.HOUSEHOLD_VIEWER
+    if household and list_type != "shopping":
+        return None  # a panel guest adds to a household list that exists; it only ever starts the shopping list
+    if household:
+        user_id = panel_principal.HOUSEHOLD_OWNER_ID  # the household owns what a guest starts (a guest has no users row)
     list_id = str(uuid.uuid4())
     list_name = "Shopping" if list_type == "shopping" else list_type.title()
     await db.execute(
@@ -3638,7 +3689,8 @@ async def _resolve_list_add_item(intent: SkybridgeIntent, user_id: str, db: Any,
         )
         await _maybe_commit(db)
     # The item is on the list now (inserted, or already there from a replayed add): the receipt the write-claim guard reads.
-    write_receipts.record(user_id, "list", item_id, "skybridge:add_item")
+    write_receipts.record("guest" if user_id == panel_principal.HOUSEHOLD_VIEWER else user_id, "list", item_id, "skybridge:add_item")
+    _audit_list_item("add", user_id, list_id, item_id)
     refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type), user_id, db)
     card_content = refreshed.get("cards", [{}])[0].get("content", {}) if refreshed.get("cards") else {}
     items = card_content.get("items")
@@ -3726,20 +3778,21 @@ async def _find_list_for_remove(intent: SkybridgeIntent, user_id: str, db: Any, 
         return str(row["id"]), str(row.get("list_type") or list_type)
     rows = await db.fetch(
         """
-        SELECT id, name, list_type
+        SELECT id, name, list_type, visibility, created_at,
+               (SELECT COUNT(*) FROM list_items i WHERE i.list_id = lists.id AND i.deleted = 0) AS n
         FROM lists
         WHERE list_type = $2 AND deleted = 0
           AND (visibility = 'family' OR user_id = $1)
         ORDER BY
+          (SELECT COUNT(*) FROM list_items i WHERE i.list_id = lists.id AND i.deleted = 0) DESC,
           CASE WHEN user_id = $1 THEN 0 ELSE 1 END,
-          updated_at DESC
-        LIMIT 1
+          created_at ASC, id ASC
         """,
         user_id,
         list_type,
     )
     if rows:
-        row = dict(rows[0])
+        row = _pick_list_row(rows, intent.list_name)
         return str(row["id"]), str(row.get("list_type") or list_type)
     return None
 
@@ -3816,6 +3869,7 @@ async def _resolve_list_remove_item(intent: SkybridgeIntent, user_id: str, db: A
     await _maybe_commit(db)
     item_text = str(target_item.get("text") or intent.item_text)
     refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type, list_name=intent.list_name), user_id, db)
+    _audit_list_item("remove", user_id, list_id, item_id)
     refreshed["intent"] = {"domain": "lists", "action": "remove_item", "list_type": list_type, "item_id": item_id}
     refreshed["spoken_summary"] = f"Removed {item_text} from the {list_type} list."
     refreshed["actions"] = [{"type": "deleted", "domain": "lists", "id": item_id, "list_id": list_id}]
@@ -3902,6 +3956,7 @@ async def _resolve_list_complete_item(intent: SkybridgeIntent, user_id: str, db:
     await _maybe_commit(db)
     item_text = str(target_item.get("text") or intent.item_text)
     refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type, list_name=intent.list_name), user_id, db)
+    _audit_list_item("complete" if desired else "restore", user_id, list_id, item_id)
     refreshed["intent"] = {"domain": "lists", "action": "complete_item", "list_type": list_type, "item_id": item_id, "completed": desired}
     refreshed["spoken_summary"] = (
         f"Ticked off {item_text} on the {list_type} list." if desired

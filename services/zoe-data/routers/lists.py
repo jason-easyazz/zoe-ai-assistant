@@ -2,13 +2,18 @@
 FastAPI router for lists and list items.
 Mounted at prefix="/api/lists" with tag "lists".
 """
-from fastapi import APIRouter, Depends, HTTPException
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+import panel_principal
 from auth import get_current_user
 from database import get_db
 from guest_policy import require_feature_access, role_from_user
 from list_service import create_item_record, create_list_record
 from models import ListCreate, ListUpdate, ListItemCreate, ListItemUpdate
 from push import broadcaster
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/lists", tags=["lists"])
 
@@ -28,31 +33,91 @@ def _row_to_dict(row) -> dict:
     return dict(row)
 
 
+def _viewer_id(user: dict):
+    """The id the visibility filter matches ``lists.user_id`` against. A guest owns no list, so it matches none: a guest sees
+    family-visible (household) lists only, never a personal list - not even one a guest session once created."""
+    return None if panel_principal.is_guest_id(user.get("user_id")) else user["user_id"]
+
+
+async def _item_actor(request, user: dict, db) -> tuple[bool, str]:
+    """``(is_panel_guest, actor)`` for a list-item write. The actor is the signed-in member, or ``panel`` when nobody at the panel
+    was identified. ``request`` is None only for a direct (non-HTTP) call, which is never the panel."""
+    panel = request is not None and await panel_principal.is_panel_guest(request, user, db)
+    return panel, panel_principal.household_actor(user)
+
+
+async def _require_item_feature(db, user: dict, action: str, panel: bool) -> None:
+    """The role matrix still decides a signed-in caller. The panel guest is the household's own principal: item add/tick/remove on
+    a household list is its owner-granted capability, so the guest row of the matrix (no item writes) does not apply to it - the
+    list-visibility check below does."""
+    if not panel:
+        await require_feature_access(db, user, feature="lists", action=action)
+
+
+def _audit_item(op: str, actor: str, list_id: str, item_id: str) -> None:
+    """Who touched a household item (no schema column holds it; the log and the push payload carry it)."""
+    logger.info("list_item_audit op=%s actor=%s list=%s item=%s", op, actor, list_id, item_id)
+
+
 async def _require_list_item_mutation_access(
     db,
     list_id: str,
     list_type: str,
     user: dict,
     action: str,
+    panel: bool = False,
 ) -> None:
     user_id = user["user_id"]
+    viewer = _viewer_id(user)
     cursor = await db.execute(
         """
         SELECT id, user_id, visibility FROM lists
         WHERE id = ? AND list_type = ? AND deleted = 0
           AND (visibility = 'family' OR user_id = ?)
         """,
-        (list_id, list_type, user_id),
+        (list_id, list_type, viewer),
     )
     row = await cursor.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="List not found")
     list_data = dict(row)
-    if list_data.get("user_id") == user_id:
+    if viewer is not None and list_data.get("user_id") == user_id:
         return
-    if list_data.get("visibility") == "family" and role_from_user(user) != "guest":
+    if list_data.get("visibility") == "family" and (role_from_user(user) != "guest" or panel):
         return
     raise HTTPException(status_code=403, detail=f"Not authorised to {action} items in this list")
+
+
+def _can_manage_list(list_data: dict, user: dict) -> bool:
+    """Rename / delete the LIST itself: its owner, or any signed-in member for a list owned by a shared account (the kiosk guest
+    or the household) - nobody else could ever remove a duplicate a guest created."""
+    if panel_principal.is_guest_id(user.get("user_id")):
+        return False
+    owner = list_data.get("user_id")
+    return owner == user["user_id"] or owner in panel_principal.SHARED_OWNER_IDS
+
+
+async def _collapse_duplicate_lists(db, rows: list[dict]) -> list[dict]:
+    """ONE list per name: of several family-visible lists sharing a type and name, keep the fullest (then oldest) and drop the
+    EMPTY others from the presentation. A non-empty duplicate is never hidden - that would hide data; the merge script
+    (``scripts/maintenance/merge_duplicate_lists.py``) is what actually combines them."""
+    groups: dict[tuple, list[dict]] = {}
+    for r in rows:
+        if r.get("visibility") == "family":
+            groups.setdefault((r.get("list_type"), str(r.get("name") or "").strip().lower()), []).append(r)
+    dupes = [g for g in groups.values() if len(g) > 1]
+    if not dupes:
+        return rows
+    drop: set = set()
+    for group in dupes:
+        counts = {}
+        for r in group:
+            cur = await db.execute("SELECT COUNT(*) AS n FROM list_items WHERE list_id = ? AND deleted = 0", (r["id"],))
+            row = await cur.fetchone()
+            counts[r["id"]] = int(dict(row).get("n") or 0) if row else 0
+        keep = sorted(group, key=lambda r: (-counts[r["id"]], str(r.get("created_at") or "")))[0]["id"]
+        drop.update(r["id"] for r in group if r["id"] != keep and counts[r["id"]] == 0)
+    return [r for r in rows if r["id"] not in drop]
 
 
 @router.get("/types")
@@ -82,10 +147,10 @@ async def list_lists(
           AND (visibility = 'family' OR user_id = ?)
         ORDER BY updated_at DESC
         """,
-        (list_type, user_id),
+        (list_type, _viewer_id(user)),
     )
     rows = await cursor.fetchall()
-    lists = [_row_to_dict(r) for r in rows]
+    lists = await _collapse_duplicate_lists(db, [_row_to_dict(r) for r in rows])
     return {"lists": lists}
 
 
@@ -147,7 +212,7 @@ async def get_list(
         WHERE id = ? AND list_type = ? AND deleted = 0
           AND (visibility = 'family' OR user_id = ?)
         """,
-        (list_id, list_type, user_id),
+        (list_id, list_type, _viewer_id(user)),
     )
     row = await cursor.fetchone()
     if not row:
@@ -192,12 +257,12 @@ async def update_list(
         WHERE id = ? AND list_type = ? AND deleted = 0
           AND (visibility = 'family' OR user_id = ?)
         """,
-        (list_id, list_type, user_id),
+        (list_id, list_type, _viewer_id(user)),
     )
     row = await cursor.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="List not found")
-    if dict(row).get("user_id") != user_id:
+    if not _can_manage_list(dict(row), user):
         raise HTTPException(status_code=403, detail="Not authorised to edit this list")
 
     updates = []
@@ -258,12 +323,12 @@ async def delete_list(
         WHERE id = ? AND list_type = ? AND deleted = 0
           AND (visibility = 'family' OR user_id = ?)
         """,
-        (list_id, list_type, user_id),
+        (list_id, list_type, _viewer_id(user)),
     )
     row = await cursor.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="List not found")
-    if dict(row).get("user_id") != user_id:
+    if not _can_manage_list(dict(row), user):
         raise HTTPException(status_code=403, detail="Not authorised to delete this list")
 
     await db.execute(
@@ -283,15 +348,17 @@ async def add_item(
     body: ListItemCreate,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
+    request: Request = None,
 ):
-    """Add an item to a list."""
-    await require_feature_access(db, user, feature="lists", action="add_item")
+    """Add an item to a list (anyone at the panel may, on a household list)."""
+    panel, actor = await _item_actor(request, user, db)
+    await _require_item_feature(db, user, "add_item", panel)
     if list_type not in VALID_LIST_TYPES:
         raise HTTPException(status_code=404, detail=f"Unknown list type: {list_type}")
     list_type = _normalize_list_type(list_type)
 
     user_id = user["user_id"]
-    await _require_list_item_mutation_access(db, list_id, list_type, user, "add")
+    await _require_list_item_mutation_access(db, list_id, list_type, user, "add", panel)
 
     record = await create_item_record(
         db,
@@ -317,10 +384,11 @@ async def add_item(
     row = await cursor.fetchone()
     result = _row_to_dict(row)
 
+    _audit_item("add", actor, list_id, item_id)
     await broadcaster.broadcast(
         "lists",
         "list_updated",
-        {"action": "item_added", "list_id": list_id, "item": result},
+        {"action": "item_added", "list_id": list_id, "item": result, "actor": actor},
         user_id=user_id,
     )
     return result
@@ -346,7 +414,7 @@ async def list_items(
         WHERE l.id = ? AND l.list_type = ? AND l.deleted = 0
           AND (l.visibility = 'family' OR l.user_id = ?)
         """,
-        (list_id, list_type, user_id),
+        (list_id, list_type, _viewer_id(user)),
     )
     row = await cursor.fetchone()
     if not row:
@@ -375,15 +443,17 @@ async def update_item(
     body: ListItemUpdate,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
+    request: Request = None,
 ):
-    """Update a list item."""
-    await require_feature_access(db, user, feature="lists", action="update_item")
+    """Update a list item (tick it off, edit it): anyone at the panel may, on a household list."""
+    panel, actor = await _item_actor(request, user, db)
+    await _require_item_feature(db, user, "update_item", panel)
     if list_type not in VALID_LIST_TYPES:
         raise HTTPException(status_code=404, detail=f"Unknown list type: {list_type}")
     list_type = _normalize_list_type(list_type)
 
     user_id = user["user_id"]
-    await _require_list_item_mutation_access(db, list_id, list_type, user, "edit")
+    await _require_list_item_mutation_access(db, list_id, list_type, user, "edit", panel)
 
     cursor = await db.execute(
         "SELECT id FROM list_items WHERE id = ? AND list_id = ? AND deleted = 0",
@@ -447,10 +517,11 @@ async def update_item(
     )
     row = await cursor.fetchone()
     result = _row_to_dict(row)
+    _audit_item("update", actor, list_id, item_id)
     await broadcaster.broadcast(
         "lists",
         "list_updated",
-        {"action": "item_updated", "list_id": list_id, "item": result},
+        {"action": "item_updated", "list_id": list_id, "item": result, "actor": actor},
         user_id=user_id,
     )
     return result
@@ -463,15 +534,17 @@ async def delete_item(
     item_id: str,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
+    request: Request = None,
 ):
-    """Soft delete a list item."""
-    await require_feature_access(db, user, feature="lists", action="delete_item")
+    """Soft delete a list item: anyone at the panel may, on a household list (the LIST itself is not theirs to delete)."""
+    panel, actor = await _item_actor(request, user, db)
+    await _require_item_feature(db, user, "delete_item", panel)
     if list_type not in VALID_LIST_TYPES:
         raise HTTPException(status_code=404, detail=f"Unknown list type: {list_type}")
     list_type = _normalize_list_type(list_type)
 
     user_id = user["user_id"]
-    await _require_list_item_mutation_access(db, list_id, list_type, user, "delete")
+    await _require_list_item_mutation_access(db, list_id, list_type, user, "delete", panel)
 
     cursor = await db.execute(
         "SELECT id FROM list_items WHERE id = ? AND list_id = ? AND deleted = 0",
@@ -487,10 +560,11 @@ async def delete_item(
     )
     await db.commit()
 
+    _audit_item("delete", actor, list_id, item_id)
     await broadcaster.broadcast(
         "lists",
         "list_updated",
-        {"action": "item_deleted", "list_id": list_id, "item_id": item_id},
+        {"action": "item_deleted", "list_id": list_id, "item_id": item_id, "actor": actor},
         user_id=user_id,
     )
     return {"ok": True}
