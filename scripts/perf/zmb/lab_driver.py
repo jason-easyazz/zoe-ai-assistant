@@ -42,7 +42,7 @@ CONTROLS = {
     "tombstone": "the forget tombstone removed - a late extractor write may resurrect a forgotten name",
     "forget_ledger": "the durable forget ledger removed - once the 300 s tombstone has expired a late writer resurrects a forgotten name",
     "sweep": "the forget sweep archives nothing while still claiming it did",
-    "affect": "ZOE_AFFECT_CONSENT_GATE=off - feelings are recorded for guests and children",
+    "affect": "ZOE_AFFECT_CONSENT_GATE=off and the unidentified-turn write wall lifted - feelings are recorded for guests and children",
     "speaker": "the speaker-gate verdict dropped on the voice lane - an unconfirmed panel voice's self-fact is written as the owner's own statement",
     "extractor": "a lazy extractor that flips day/month, guesses roles, mines questions and assistant text",
     "gate": "the write-quality gate removed - questions, meta-rambling and transcript echoes are stored",
@@ -438,6 +438,9 @@ def controls_off(features: "frozenset[str] | set[str]", svc: types.SimpleNamespa
             setenv("ZOE_MEMORY_AUTHORITY", "off")
         if "affect" in features:
             setenv("ZOE_AFFECT_CONSENT_GATE", "off")
+            # a guest's write is now refused BEFORE the consent gate (no durable memory for an unidentified turn): lift that wall
+            # too, so this control still flips the guest consent cells it is named for
+            patch(svc.memory_service, "_is_unidentified", lambda *a, **k: False)
         if "identity" in features:
             patch(svc.memory_service, "_identity_assertion_blocked", lambda *a, **k: False)
             # H2's edit text is an unanchored speech fragment, which the standing rule (memory_authority.has_standing) now also

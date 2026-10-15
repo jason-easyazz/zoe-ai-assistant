@@ -969,6 +969,12 @@ async def extract_and_ingest(
     turn. Pass ``""`` to disable anchoring explicitly.
     """
     from memory_service import get_memory_service
+    from user_filters import is_unidentified
+
+    # Nobody identified: nothing is extracted for anyone (MemoryService.ingest refuses too; this also skips the exact-turn
+    # index and the anchoring LRU, which are keyed on the same non-identity).
+    if is_unidentified(user_id):
+        return 0
 
     # BM5: an off-the-record turn is never extracted, whichever lane calls this (chat, voice, the legacy agent, the teach lane).
     try:

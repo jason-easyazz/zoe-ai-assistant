@@ -77,6 +77,10 @@ Usage:
 
 ALWAYS take ``flock /tmp/zoe-voice-harness.lock`` around ``--execute`` so the
 replay harness cannot enumerate the corpus mid-move.
+
+After ``--execute``, re-pin the regression probe baseline: it replays a PINNED clip set
+(``summary.clip_ids``), and a quarantined clip that was in it makes the probe refuse speed
+(``BASELINE-SET``) until ``voice_regression_probe.py --update-baseline`` is run.
 """
 from __future__ import annotations
 
