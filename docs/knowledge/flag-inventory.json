@@ -499,6 +499,16 @@
         ],
         "typed_env": false
       },
+      "ZOE_BRAIN_KV_WARM_ON_WAKE": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/zoe_flue_client.py"
+        ],
+        "typed_env": false
+      },
       "ZOE_BRAIN_PREWARM_ON_WAKE": {
         "defaults": [
           "'1'",
@@ -648,6 +658,16 @@
         "in_env_example": false,
         "readers": [
           "scripts/setup/zoe_voice_daemon.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_CALENDAR_FOLLOWUP_TTL_S": {
+        "defaults": [
+          "'90'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/conversation_cues.py"
         ],
         "typed_env": false
       },
@@ -2075,6 +2095,16 @@
           "services/zoe-data/distress_handoff.py"
         ],
         "typed_env": true
+      },
+      "ZOE_HOUSEHOLD_LISTS_PANEL_SCOPE": {
+        "defaults": [
+          "'registered'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/panel_principal.py"
+        ],
+        "typed_env": false
       },
       "ZOE_HYBRID_RETRIEVAL_ENABLED": {
         "defaults": [
@@ -5441,6 +5471,26 @@
         ],
         "typed_env": true
       },
+      "ZOE_SPEAKER_ADAPT_RESNET34_ANCHOR_FLOOR": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/speaker_models.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_SPEAKER_ADAPT_RESNET34_MIN_SCORE": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/speaker_models.py"
+        ],
+        "typed_env": true
+      },
       "ZOE_SPEAKER_ID_THRESHOLD": {
         "defaults": [
           "'0.82'"
@@ -5453,11 +5503,47 @@
       },
       "ZOE_SPEAKER_MODEL": {
         "defaults": [
+          "''",
           "'resemblyzer'"
         ],
         "in_env_example": false,
         "readers": [
+          "scripts/setup/zoe_enroll_flow.py",
+          "scripts/setup/zoe_voice_daemon.py",
+          "services/zoe-data/speaker_models.py",
           "services/zoe-data/voice_session.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_SPEAKER_RESNET34_THRESHOLD_LONG": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/speaker_models.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_SPEAKER_RESNET34_THRESHOLD_SHORT": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/speaker_models.py"
+        ],
+        "typed_env": true
+      },
+      "ZOE_SPEAKER_RESNET34_TIER": {
+        "defaults": [
+          "'far1'",
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/zoe_speaker_resnet34.py",
+          "services/zoe-data/speaker_models.py"
         ],
         "typed_env": true
       },
@@ -5837,6 +5923,16 @@
         "in_env_example": false,
         "readers": [
           "services/zoe-data/zoe_flue_client.py"
+        ],
+        "typed_env": false
+      },
+      "ZOE_TRUSTED_PROXY_NETS": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/panel_principal.py"
         ],
         "typed_env": false
       },

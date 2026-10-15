@@ -14,8 +14,10 @@ the spool and, under custody firmware, on the pendant).
 """
 from __future__ import annotations
 
+import array
 import io
 import logging
+import sys
 import wave
 from dataclasses import dataclass, field
 from typing import Optional, Protocol, Sequence
@@ -165,6 +167,8 @@ class Rendered:
     duration_s: float
     frames: int
     decode_errors: int
+    peak: int = 0           # int16 units (full scale 32768): "was anything audible", not a gate
+    rms: float = 0.0
 
 
 def render_wav(seg: Segment, decoder: FrameDecoder) -> Rendered:
@@ -191,4 +195,17 @@ def render_wav(seg: Segment, decoder: FrameDecoder) -> Rendered:
         w.setsampwidth(2)
         w.setframerate(rp.SAMPLE_RATE)
         w.writeframes(bytes(pcm))
-    return Rendered(buf.getvalue(), len(pcm) / 2 / rp.SAMPLE_RATE, frames, errors)
+    peak, rms = level_of(bytes(pcm))
+    return Rendered(buf.getvalue(), len(pcm) / 2 / rp.SAMPLE_RATE, frames, errors, peak, rms)
+
+
+def level_of(pcm: bytes) -> tuple[int, float]:
+    """``(peak, rms)`` of little-endian s16 PCM, int16 units. RMS is over every 4th sample (cheap on a Pi, ample for a level)."""
+    a = array.array("h")
+    a.frombytes(pcm[: len(pcm) - (len(pcm) % 2)])
+    if sys.byteorder == "big":
+        a.byteswap()
+    if not len(a):
+        return 0, 0.0
+    sub = a[::4]
+    return max(map(abs, a)), round((sum(v * v for v in sub) / len(sub)) ** 0.5, 1)

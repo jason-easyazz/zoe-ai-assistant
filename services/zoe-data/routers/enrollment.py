@@ -4,6 +4,7 @@
     GET  /api/enrollment/state?user_id=ID   any member's state - ADMIN only (who is enrolled is itself biometric metadata)
     GET  /api/enrollment/household          every real member's state - ADMIN only
     POST /api/enrollment/result             DEVICE TOKEN only: the panel daemon reports how an enrolment run ended
+    POST /api/enrollment/screen             DEVICE TOKEN only: the panel daemon puts the phrase to say / progress on ITS OWN talk screen
 
 Same scoping rules as the other biometric routes (``biometric_scope``): a device token owns nothing and cannot read a member's state; a
 signed-in member sees only their own row; an admin sees the household, explicitly. The state itself is ``enrollment_state.get_state``
@@ -13,16 +14,23 @@ signed-in member sees only their own row; an admin sees the household, explicitl
 ``reason`` = ``said_stop`` | ``tapped_stop``) starts the same quiet period as a "no", so Zoe does not offer again tomorrow. Every other
 outcome - done / partial / failed / timeout, and a ``cancelled`` run caused by a daemon ``shutdown`` (or an older daemon that sends no
 reason) - is logged and changes nothing.
+
+``POST /screen`` is the on-screen half of "Zoe, learn my voice": the person only HEARS each phrase, which is hard to remember, so the
+daemon also has the panel show it (``voice_enroll`` push frame -> ``js/touch-voice-enroll.js``). It is a TRANSIENT push, never queued or
+stored: the frame goes to the panel the DEVICE TOKEN belongs to (any ``panel_id`` in the body is ignored) and to no other, and not to the
+``all`` channel ``broadcast_to_panel`` falls back to. It carries the phrase text, the step counter and one short line - no member id, no name.
 """
 from __future__ import annotations
 
 import logging
+import re
 
 from fastapi import APIRouter, Depends, HTTPException
 
 import enrollment_state as es
 from biometric_scope import require_person_scope
 from routers.voice_tts import _require_voice_auth
+from voice_session import send_to_panel
 
 logger = logging.getLogger(__name__)
 
@@ -88,3 +96,43 @@ async def enrollment_result(payload: dict, caller: dict = Depends(_require_voice
     if status == "cancelled" and reason in _PERSON_STOPPED:
         await es.record_answer(uid, False)
     return {"ok": True}
+
+
+#: the states the talk screen knows (``scripts/setup/zoe_voice_enroll_mode.py`` emits exactly these)
+_SCREEN_STATES = frozenset({"phrase", "recording", "accepted", "reask", "saving", "done", "partial", "failed", "clear"})
+_CTRL = re.compile(r"[\x00-\x1f\x7f]+")
+
+
+def _screen_text(value, limit: int) -> str:
+    return _CTRL.sub(" ", str(value or "")).strip()[:limit]
+
+
+def _screen_int(value, lo: int, hi: int) -> int:
+    try:
+        return max(lo, min(hi, int(value)))
+    except (TypeError, ValueError):
+        return 0
+
+
+@router.post("/screen")
+async def enrollment_screen(payload: dict, caller: dict = Depends(_require_voice_auth)):
+    """Show (or clear) the enrolment prompt on the calling panel's talk screen. Device token only; best effort (``delivered`` 0 = the
+    panel had no live socket, which the daemon ignores - the spoken prompt is the contract)."""
+    if caller.get("source") != "device":
+        raise HTTPException(status_code=403, detail="the enrolment screen is driven by the panel daemon (device token)")
+    panel_id = str(caller.get("panel_id") or "").strip()
+    if not panel_id:
+        raise HTTPException(status_code=403, detail="this device token is not bound to a panel")
+    body = payload or {}
+    state = str(body.get("state") or "").strip().lower()
+    if state not in _SCREEN_STATES:
+        raise HTTPException(status_code=400, detail="unknown state")
+    frame: dict = {"panel_id": panel_id, "state": state}
+    if state != "clear":
+        frame["line"] = _screen_text(body.get("line"), 160)
+        if state in ("phrase", "recording", "accepted", "reask"):
+            frame["phrase"] = _screen_text(body.get("phrase"), 240)
+            frame["index"] = _screen_int(body.get("index"), 0, 12)
+            frame["total"] = _screen_int(body.get("total"), 0, 12)
+    delivered = await send_to_panel(panel_id, "voice_enroll", frame)
+    return {"ok": True, "delivered": delivered}

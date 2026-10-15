@@ -28,6 +28,9 @@ class _Cursor:
     async def fetchone(self):
         return self._row
 
+    async def fetchall(self):
+        return [self._row] if self._row else []
+
 
 class _FakeListDB:
     """Captures every SQL statement; returns a scripted row for each SELECT.

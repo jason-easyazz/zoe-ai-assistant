@@ -151,6 +151,36 @@
   .laddbar input{flex:1;height:52px;border-radius:14px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:var(--ink);font:inherit;font-size:19px;padding:0 16px;outline:none}
   .laddbar button{width:52px;height:52px;border-radius:14px;border:0;background:var(--accent);color:#fff;font-size:22px;cursor:pointer}
   .laddbar select{height:52px;border-radius:14px;background:rgba(255,255,255,.06);color:var(--ink);border:1px solid rgba(255,255,255,.14);font:inherit;padding:0 10px}
+  /* Memories — what Zoe knows about the signed-in member (js/touch-memories-space.js). Large type, 56px+ targets, no input. */
+  /* ends above the dock (top 605px at 720): nothing scrolls under it, so no Forget is ever half-covered */
+  .memf{position:absolute;left:0;right:0;top:0;bottom:116px;padding:100px 110px 24px;display:flex;flex-direction:column;overflow-y:auto;scrollbar-width:none;overscroll-behavior:contain}
+  .memf::-webkit-scrollbar{width:0}
+  .memwrap{display:flex;flex-direction:column;gap:18px}
+  .memcols{columns:2;column-gap:22px}
+  .memgrp{break-inside:avoid;margin-bottom:22px;background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.09);border-radius:22px;padding:18px 22px}
+  .memgh{display:flex;align-items:center;gap:12px;font-size:14px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:6px;font-weight:600}
+  .memgc{font-size:13px;letter-spacing:0;background:rgba(255,255,255,.1);color:var(--ink-soft);border-radius:999px;padding:2px 10px}
+  .memitem{display:flex;align-items:center;gap:14px;padding:12px 0;border-top:1px solid rgba(255,255,255,.08)}
+  .memgh + .memitem,.memgh + .memperson{border-top:0}
+  .memmain{flex:1;min-width:0}
+  .memtx{font-size:23px;line-height:1.35;overflow-wrap:anywhere}
+  .memmeta{display:flex;gap:10px;align-items:center;margin-top:6px;font-size:15px;color:var(--ink-faint)}
+  .membadge{border-radius:999px;padding:3px 11px;font-size:14px;background:rgba(123,150,255,.18);color:#b9c6ff}
+  .membadge.inferred{background:rgba(255,191,94,.16);color:#ffd896}
+  .memforget{flex:none;min-width:96px;height:56px;border-radius:16px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.07);color:var(--ink);font:inherit;font-size:18px;cursor:pointer}
+  .memforget:active{background:rgba(255,90,90,.28)}
+  .memforget:disabled{opacity:.4}
+  .memperson{padding:12px 0;border-top:1px solid rgba(255,255,255,.08)}
+  .memname{font-size:24px;font-weight:600;margin-bottom:4px}
+  .memfact{font-size:21px;line-height:1.35;color:var(--ink-soft)}
+  .memhint,.memprivate{font-size:17px;color:var(--ink-faint);line-height:1.4;padding-top:8px}
+  .memprivate{background:rgba(255,255,255,.04);border-radius:16px;padding:14px 18px}
+  .memstate{margin:auto;max-width:720px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:18px}
+  .memstate-t{font-size:32px;font-weight:600}
+  .memstate-b{font-size:21px;color:var(--ink-faint);line-height:1.4}
+  .membtn{min-width:200px;height:64px;border-radius:20px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.08);color:var(--ink);font:inherit;font-size:22px;padding:0 28px;cursor:pointer}
+  .membtn.primary{background:var(--accent);border-color:transparent;color:#fff}
+  .estmc .memconfirm{font-size:21px;line-height:1.4;color:var(--ink-soft);max-height:220px;overflow-y:auto;overflow-wrap:anywhere}
   /* Contacts — full-screen tile grid + detail */
   .ctf{position:absolute;inset:0;padding:92px 40px 150px;display:flex;flex-direction:column}
   .ctwrap{flex:1;display:flex;gap:10px;min-height:0}
@@ -1104,6 +1134,8 @@
 
 <div id="pick"></div>
 
+<!-- before the estate script: a ?domain=memories arrival calls into it during boot -->
+<script src="/js/touch-memories-space.js?v=mem-1"></script>
 <script>
 (function(){
   var stage=document.getElementById('stage');
@@ -1182,6 +1214,10 @@
         +'</div>'},
     ask:{home:true, bg:GROUND, canvas:false,
       html:askShell('<div class="aa" id="askOut" style="opacity:.55">Just ask — I’ll answer here.</div>')},
+    // What Zoe knows about the signed-in member. The server decides who that is (GET /api/memories/mine -> 401/403 for a
+    // guest); js/touch-memories-space.js renders what it is given and nothing else.
+    memories:{home:true, bg:GROUND, canvas:false,
+      html:'<div class="chttl">What Zoe knows about you</div><div class="chmeta" id="memMeta"></div><div class="memf" id="memBody"></div>'},
     weather:{home:true, bg:DUSK, canvas:true,
       html:'<div class="wloc" id="wxLoc"></div><div class="wbig"><div class="t" id="wxTemp">—°</div><div class="c" id="wxCond"></div></div><div class="whours" id="wxHours"></div>'},
     music:{home:true, bg:'radial-gradient(120% 115% at 22% 14%,#4a4a93,#0b0e1c 60%)', canvas:false,
@@ -1392,6 +1428,8 @@
     if(typeof _askFallT!=='undefined'&&_askFallT){clearTimeout(_askFallT);_askFallT=null;}
     // Navigating supersedes any pending drift; voice paths re-arm after this.
     cancelAutoHome();_voiceScreen=false;_userTookOver=false;
+    // Leaving (or re-entering) Memories drops its privacy timer and any in-flight read: private rows never outlive the screen.
+    if(window.ZoeMemoriesSpace)window.ZoeMemoriesSpace.unmount();
     _cur=id; clearScreenTimers(); armIdleSleep();
     var _orb=document.getElementById('orb');if(_orb)_orb.classList.toggle('hide',id==='sleep');  // the orb is distracting on the sleep clock
     var cb=document.getElementById('cmdbar');if(cb)cb.classList.remove('on');
@@ -1414,6 +1452,7 @@
       if(id==='day')wireDay();
       if(id==='calendar')wireCalendar();
       if(id==='person')wireContacts();
+      if(id==='memories')wireMemories();
       if(id==='settings')wireSettings();
       if(id==='work')wireWork();
       if(id==='reminder')wireReminder();
@@ -1805,7 +1844,7 @@
     people:'<circle cx="12" cy="8" r="3.6"/><path d="M5 20c0-3.6 3.1-6 7-6s7 2.4 7 6"/>',
     timer:'<circle cx="12" cy="13" r="8"/><path d="M12 13V8.5M9.5 2.5h5"/>',
     sleep:'<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
-    ask:'<path d="M4 5.5h16a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5H9l-4 3.5V16.5H4A1.5 1.5 0 0 1 2.5 15V7A1.5 1.5 0 0 1 4 5.5z"/><circle cx="8.5" cy="11" r="1"/><circle cx="12" cy="11" r="1"/><circle cx="15.5" cy="11" r="1"/>',
+    memories:'<path d="M6 3.5h12A1.5 1.5 0 0 1 19.5 5v15.5L12 16.6 4.5 20.5V5A1.5 1.5 0 0 1 6 3.5z"/><path d="M12 12.4s-3.2-1.9-3.2-4.2a1.8 1.8 0 0 1 3.2-1.1 1.8 1.8 0 0 1 3.2 1.1c0 2.3-3.2 4.2-3.2 4.2z"/>',
     settings:'<circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v2.6M12 18.9v2.6M4.9 4.9l1.9 1.9M17.2 17.2l1.9 1.9M2.5 12h2.6M18.9 12h2.6M4.9 19.1l1.9-1.9M17.2 6.8l1.9-1.9"/>'
   };
   // Home is the estate's own screen (real data). The deeper functions link to the
@@ -1822,7 +1861,7 @@
     {id:'person',n:'Contacts',ic:'people',c:'linear-gradient(150deg,#ff7a90,#e85a78)'},
     {id:'timer',n:'Timers',ic:'timer',c:'linear-gradient(150deg,#ffbf5e,#f0961e)'},
     {id:'sleep',n:'Sleep',ic:'sleep',c:'linear-gradient(150deg,#5b6bb0,#3a4788)'},
-    {id:'ask',n:'Ask Zoe',ic:'ask',c:'linear-gradient(150deg,#9a8cff,#6a53e8)'},
+    {id:'memories',n:'Memories',ic:'memories',c:'linear-gradient(150deg,#9a8cff,#6a53e8)'},
     {id:'settings',n:'Settings',ic:'settings',c:'linear-gradient(150deg,#9aa6bd,#6f7c96)'}
   ];
   var lgrid=document.getElementById('lgrid'),apps=document.getElementById('apps'),launch=document.getElementById('launch');
@@ -3483,6 +3522,28 @@
       else grid.innerHTML='<div style="color:var(--ink-faint);font-size:20px;padding:12px 0">Couldn’t load your contacts.</div>';});
   }
 
+  // ---- Memories: what Zoe knows about the signed-in member ----
+  // All logic lives in js/touch-memories-space.js (pinned by dist/test_touch_memories_space.js). This only hands it the
+  // estate's own helpers: apiGet/apiJson (which carry the SESSION - never a name the page picked), the estate modal for the
+  // confirm step, and the who+PIN card for a guest. The server decides who is asking; a guest/expired session gets a
+  // sign-in prompt and no rows. No keyboard: the PIN pad is the only input and it already exists.
+  function wireMemories(){
+    var host=document.getElementById('memBody'),meta=document.getElementById('memMeta');
+    if(!host||!window.ZoeMemoriesSpace)return;
+    window.ZoeMemoriesSpace.mount(host,{
+      apiGet:apiGet,apiJson:apiJson,sid:sid,
+      setMeta:function(t){if(meta)meta.textContent=t||'';},
+      toast:toast,
+      signIn:function(){if(window.__showAuthCard)window.__showAuthCard();},
+      confirm:function(o,onYes){
+        estOpen('<h3>'+esc(o.title)+'</h3><div class="memconfirm">'+esc(o.body)+'</div><div class="btns"><button data-x="no">'+esc(o.no)+'</button><button class="del" data-x="yes">'+esc(o.yes)+'</button></div>');
+        var m=document.getElementById('estModal');
+        m.querySelector('[data-x="no"]').onclick=estClose;
+        m.querySelector('[data-x="yes"]').onclick=function(){estClose();onYes();};
+      }
+    });
+  }
+
   // ---- Settings: full-screen expanding sections ----
   var _setPrefs=null,_setPrefT=null;
   function _panelDevId(){return localStorage.getItem('zoe_panel_id')||localStorage.getItem('zoe_touch_panel_id')||'default';}
@@ -4276,7 +4337,7 @@
     // Messages/email section stays hidden until a comms backend exists (no fake data).
   }
 
-  var ORDER=[['home','Home'],['rooms','Rooms'],['sleep','Sleep'],['ask','Ask Zoe'],['weather','Weather'],['music','Music'],['timer','Timer'],['SEP'],['day','Day'],['list','List'],['reminder','Reminder'],['person','Person'],['confirm','Confirm'],['settings','Settings']];
+  var ORDER=[['home','Home'],['rooms','Rooms'],['sleep','Sleep'],['ask','Ask Zoe'],['memories','Memories'],['weather','Weather'],['music','Music'],['timer','Timer'],['SEP'],['day','Day'],['list','List'],['reminder','Reminder'],['person','Person'],['confirm','Confirm'],['settings','Settings']];
   ORDER.forEach(function(o){ if(o[0]==='SEP'){var s=document.createElement('div');s.className='sep';pick.appendChild(s);return;} var b=document.createElement('button');b.dataset.id=o[0];b.textContent=o[1];b.onclick=function(){show(o[0]);};pick.appendChild(b);});
   home.onclick=function(){lclose();show('home');};
   setInterval(refreshHA,30000);   // keep dock HA state fresh + recover from a failed load
@@ -4905,6 +4966,7 @@
 </script>
 <script src="/js/touch-event-detail.js?v=ed-1"></script>
 <script src="/js/touch-voice-session.js?v=vs-1"></script>
-<script src="/js/touch-ui-executor.js?v=estate-8"></script>
+<script src="/js/touch-voice-enroll.js?v=ve-1"></script>
+<script src="/js/touch-ui-executor.js?v=estate-9"></script>
 </body>
 </html>

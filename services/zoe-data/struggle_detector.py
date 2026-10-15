@@ -126,6 +126,7 @@ def is_guest(user_id: Optional[str]) -> bool:
 
 _ROUTES: "deque[tuple[float, str, dict]]" = deque(maxlen=64)
 _BRAINS: "deque[tuple[float, str, str, str]]" = deque(maxlen=64)
+_SKY: "deque[tuple[float, str, str, bool]]" = deque(maxlen=64)
 
 
 def note_route(text: str, decision: Optional[dict], *, two_stage_active: bool = False,
@@ -143,7 +144,22 @@ def note_route(text: str, decision: Optional[dict], *, two_stage_active: bool = 
             "two_stage_conf": (ts or {}).get("head_conf"),
             "two_stage_active": bool(two_stage_active),
             "two_stage_failed": bool(two_stage_failed),
+            "head_top": str((ts or {}).get("head_top") or ""),
+            # the similarity view (the head's own domain replaces ``domain`` when it decided)
+            "sim_scores": {str(k): float(v) for k, v in list((decision.get("scores") or {}).items())[:24]
+                           if isinstance(v, (int, float))},
         }))
+    except Exception:  # noqa: BLE001
+        _count("hook_errors")
+
+
+def note_skybridge(text: str, domain: str, action: str, decision: str) -> None:
+    """Skybridge classified ``text`` as ``domain``/``action`` and the router gate said ``decision`` (allow / veto). O(1),
+    never raises (``skybridge_service.resolve_skybridge_request``)."""
+    try:
+        if mode() == "off" or not domain:
+            return
+        _SKY.append((time.time(), str(text or "")[:500], str(domain), str(decision or "") == "veto"))
     except Exception:  # noqa: BLE001
         _count("hook_errors")
 
@@ -167,6 +183,17 @@ def _route_for(text: str, now: float) -> tuple[Optional[float], dict]:
         if t.strip() == raw or (norm and sig.normalise(t) == norm):
             return ts, rec
     return None, {}
+
+
+def _sky_for(text: str, now: float) -> tuple[str, bool]:
+    norm = sig.normalise(text)
+    raw = (text or "").strip()
+    for ts, t, dom, vetoed in reversed(_SKY):
+        if now - ts > NOTE_TTL_S:
+            break
+        if t.strip() == raw or (norm and sig.normalise(t) == norm):
+            return dom, vetoed
+    return "", False
 
 
 def _brain_for(session_id: str, since: float, now: float) -> Optional[tuple[str, str]]:
@@ -270,6 +297,7 @@ def reset() -> None:
     _STATE.update(queue=None, loop=None, worker=None, last_sweep=0.0)
     _ROUTES.clear()
     _BRAINS.clear()
+    _SKY.clear()
     _HISTORY.clear()
     _COUNTERS.clear()
     _ERASED_AT.clear()
@@ -279,7 +307,9 @@ def reset() -> None:
 # ── the worker ───────────────────────────────────────────────────────────────
 
 #: conv key -> the last turn seen there (bounded, TTL'd): what a pair signal compares against
-_HISTORY: "OrderedDict[str, sig.Turn]" = OrderedDict()
+_HISTORY: "OrderedDict[str, list[sig.Turn]]" = OrderedDict()
+#: turns kept per conversation: the previous one (pair rules) + the look-back (``struggle_signals.LOOKBACK_TURNS``)
+HISTORY_TURNS = sig.LOOKBACK_TURNS + 1
 
 
 async def _worker(q: "asyncio.Queue") -> None:
@@ -306,6 +336,7 @@ def build_turn(item: tuple) -> sig.Turn:
     conv = f"{channel}:{panel_id}" if channel == "voice" and panel_id else f"{channel}:{session_id or user_id}"
     domain = route.get("two_stage_domain") or route.get("domain") or ""
     score = route.get("score")
+    sky_domain, sky_vetoed = _sky_for(text, ts)
     return sig.Turn(
         ts=ts, channel=channel, user_id=("guest" if guest else user_id), is_guest=guest, conv_key=conv,
         turn_id="t-" + hashlib.sha1(f"{user_id}|{session_id}|{ts:.3f}|{text}".encode("utf-8")).hexdigest()[:16],
@@ -317,7 +348,8 @@ def build_turn(item: tuple) -> sig.Turn:
         two_stage_active=bool(route.get("two_stage_active")),
         two_stage_failed=bool(route.get("two_stage_failed")),
         latency_ms=int((ts - route_ts) * 1000) if route_ts is not None else None, interrupted=bool(interrupted),
-        started=route_ts)
+        started=route_ts, sim_scores=dict(route.get("sim_scores") or {}), head_top=str(route.get("head_top") or ""),
+        sky_domain=sky_domain, sky_vetoed=sky_vetoed)
 
 
 async def process(item: tuple) -> list[sig.Event]:
@@ -325,14 +357,14 @@ async def process(item: tuple) -> list[sig.Event]:
     cur = build_turn(item)
     if _erased_since(cur.user_id, cur.ts, _DELETED_AT):
         return []          # the user was deleted after this turn was queued: it is not recorded at all
-    for k in [k for k, t in _HISTORY.items() if cur.ts - t.ts > HISTORY_TTL_S]:
+    for k in [k for k, h in _HISTORY.items() if not h or cur.ts - h[-1].ts > HISTORY_TTL_S]:
         _HISTORY.pop(k, None)
-    prev = _HISTORY.get(cur.conv_key)
-    _HISTORY[cur.conv_key] = cur
+    history = list(_HISTORY.get(cur.conv_key) or [])
+    _HISTORY[cur.conv_key] = (history + [cur])[-HISTORY_TURNS:]
     _HISTORY.move_to_end(cur.conv_key)
     while len(_HISTORY) > HISTORY_MAX:
         _HISTORY.popitem(last=False)
-    events = sig.detect(prev, cur, window_s=window_s())
+    events = sig.detect_window(history, cur, window_s=window_s())
     if events:
         _count("events", len(events))
         rows = [await _row(e) for e in events]
@@ -619,8 +651,12 @@ def _erased_since(user_id: str, ts: float, marks: dict) -> bool:
 
 def _forget_history(user_id: str) -> None:
     """Drop the in-memory previous turns of ``user_id`` (they hold raw words a later pair signal would quote)."""
-    for k in [k for k, t in _HISTORY.items() if t.user_id == user_id]:
-        _HISTORY.pop(k, None)
+    for k in list(_HISTORY):
+        kept = [t for t in _HISTORY[k] if t.user_id != user_id]
+        if kept:
+            _HISTORY[k] = kept
+        else:
+            _HISTORY.pop(k, None)
 
 
 def _nothing_stored(exc: BaseException) -> bool:

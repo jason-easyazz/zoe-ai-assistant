@@ -53,7 +53,10 @@ def test_revision_chain_is_linear_and_this_is_the_head():
         if d:
             downs.add(d.group(1))
     assert mod.down_revision in revs, "0050 must chain onto an existing revision"
-    assert revs - downs == {"0050"}, f"more than one head: {sorted(revs - downs)}"
+    heads = revs - downs
+    assert len(heads) == 1, f"more than one head: {sorted(heads)}"
+    # 0050 was the head when it landed; #2024's 0051 (speaker model_id) now chains onto it. Either way it is on the one chain.
+    assert "0050" in heads or "0050" in downs
 
 
 def test_sqlite_upgrade_twice_then_downgrade():

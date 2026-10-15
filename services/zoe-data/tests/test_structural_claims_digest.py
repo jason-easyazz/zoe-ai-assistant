@@ -54,13 +54,17 @@ pytestmark = pytest.mark.ci_safe
 
 @pytest.fixture(autouse=True)
 def _no_live_restraint_head(monkeypatch):
-    """The stored rows carry the restraint stamp, which asks the semantic head, which falls back to the ROUTER's model when any earlier test in
-    the process loaded it (test_pull_not_push did): the first digest run then warmed the head's cache and the second read it, so the off/shadow
-    rows differed for a reason that has nothing to do with the structural flag. Pin the same 'no model' world this file is written for."""
+    """Every stored row is stamped by ``restraint.stamp``; in the default ``shadow`` mode an unsettled text is handed to the
+    restraint head's background worker, which fills a process-wide cache once ``semantic_router`` is warm. A warm router is
+    left behind by earlier tests in the full lane (and absent when this file runs alone), so the same turn stored a different
+    ``sensitivity_v`` the second time round: ``off`` and ``shadow`` rows looked different for a reason that has nothing to do
+    with structural claims. Hide the live lookup and start from an empty head cache."""
     import restraint_head
 
+    restraint_head.reset()
     monkeypatch.setattr(restraint_head, "_live_embedder", lambda: None)
-
+    yield
+    restraint_head.reset()
 
 MOVING = "My mum is moving to Bendigo next month."
 MOVING_FACT = "User's mum lives in Bendigo"
@@ -434,3 +438,23 @@ def test_a_place_fragment_the_extractor_returns_is_refused_but_the_full_clause_i
     _, col, _, _ = _run(monkeypatch, [{"type": "profile", "fact": "User has moved and now lives in Hobart"}],
                         "Big news - I've moved. I live in Hobart now.", mode="off")
     assert [d for d, _ in col.rows.values()] == ["User has moved and now lives in Hobart"]
+
+
+def test_negative_control_a_warm_router_would_make_the_same_turn_store_differently(monkeypatch):
+    """Take the isolation away and give the head a live embedder: the second store of the same text sees the head's cached
+    answer (a different ``sensitivity_v``) while the first did not: the order-dependent failure, reproduced on purpose."""
+    import numpy as np
+    import restraint
+    import restraint_head
+
+    monkeypatch.setenv(restraint.ENV, "shadow")
+    head = restraint_head._load()
+    assert head is not None, "restraint head artefact missing: the control needs the shipped head"
+    text = "I'm living in Perth, and I don't plan to move."   # a contraction: the head only applies to text with English evidence (_head_applies)
+    first, second = {}, {}
+    restraint.stamp(first, text)
+    restraint_head.set_embedder(lambda t: np.zeros(384, dtype=np.float32))
+    monkeypatch.setattr(restraint_head, "_live_embedder", lambda: restraint_head._EMBEDDER)   # undo the autouse isolation
+    restraint_head.warm([text])                   # what the background worker does once a router is warm
+    restraint.stamp(second, text)
+    assert first["sensitivity_v"] != second["sensitivity_v"]
