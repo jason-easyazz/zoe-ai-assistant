@@ -51,7 +51,9 @@ FIX_CAPABILITY_GAP = "capability_gap"        # the right path ran but could not 
 FIX_STT = "stt"                              # the words were misheard
 FIX_VERBOSITY = "verbosity"                  # the answer was too long for the question
 FIX_ANSWER_QUALITY = "answer_quality"        # the brain answered, wrongly
-FIX_TYPES = (FIX_ROUTER_TRAINING, FIX_ROUTER_LATENCY, FIX_CAPABILITY_GAP, FIX_STT, FIX_VERBOSITY, FIX_ANSWER_QUALITY)
+FIX_STT_SNAPPED = "stt_snapped"              # a misheard command word was snapped back (stt_snap) - or would have been
+FIX_TYPES = (FIX_ROUTER_TRAINING, FIX_ROUTER_LATENCY, FIX_CAPABILITY_GAP, FIX_STT, FIX_VERBOSITY, FIX_ANSWER_QUALITY,
+             FIX_STT_SNAPPED)
 
 #: domains a deterministic fast path serves (a turn routed here and answered by the brain fell through)
 FAST_DOMAINS = frozenset({"weather", "time", "timers", "lists", "calendar", "smart_home", "music", "reminders"})
@@ -363,6 +365,7 @@ class Turn:
     head_top: str = ""                 # the two-stage head's top domain (also when it gated to chat)
     sky_domain: str = ""               # the domain Skybridge classified the words as ('' = it did not claim them)
     sky_vetoed: bool = False           # ... and the router vetoed that claim
+    stt_snap: Optional[dict] = None    # stt_snap's text-free note when a misheard command word was snapped (or would be)
 
     def domain(self) -> str:
         return self.predicted_domain if self.predicted_domain not in _NON_DOMAINS else ""
@@ -713,6 +716,10 @@ def detect(prev: Optional[Turn], cur: Turn, *, window_s: float = DEFAULT_WINDOW_
     if wake_only(cur.text):
         events.append(Event(MISHEAR, 0.7, FIX_STT, cur, cur, ["wake_only"]))
         return events
+    if cur.stt_snap:
+        snap = cur.stt_snap
+        events.append(Event(MISHEAR, 0.8, FIX_STT_SNAPPED, cur, cur, ["stt_snapped", str(snap.get("outcome") or "")],
+                            {k: snap.get(k) for k in ("intent", "safety", "cost", "position")}))
     kind = cant_do(cur.reply)
     if kind and (kind == "error" or cur.domain()):
         events.append(Event(CANT_DO, 0.9 if kind == "error" else 0.85,
