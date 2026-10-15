@@ -21,9 +21,11 @@ import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from auth import get_current_user
+import panel_principal
 from database import get_db
 from stt_wake_strip import _strip_wake_word
 from typed_env import env_bool, env_float, env_int, env_list, env_str
+from user_filters import is_unidentified as _is_unidentified
 import voice_first_sound as _first_sound
 import voice_speculation as _speculation
 import voice_stt_stream as _stt_stream
@@ -156,7 +158,7 @@ _INTRO_STATE: dict[str, dict] = {}
 # silently, which is why NO panel voice conversation ever persisted (P-F6,
 # live-diagnosed 2026-07-07). A panel actually bound to a real user in
 # ui_panel_sessions always takes precedence over these sentinels.
-_GUEST_SENTINEL_USERS = frozenset({"", "guest", "voice-guest", "voice-daemon"})
+_GUEST_SENTINEL_USERS = frozenset({"", "guest", "voice-guest", "voice-daemon", "anonymous"})  # = user_filters.GUEST_USERS
 
 
 def _real_user_or_none(value) -> Optional[str]:
@@ -832,6 +834,8 @@ async def _require_voice_auth(
 ) -> dict:
     """Allow voice endpoints if caller has a valid device token OR is authenticated."""
     if device:
+        # A provisioned device token IS the panel: a guest voice turn may use the household list (a fridge list).
+        panel_principal.mark_panel_turn()
         return {
             "source": "device",
             "panel_id": device.get("panel_id"),
@@ -3129,8 +3133,14 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
 async def _handle_introduce_intent(
     name: str, user_id: str, panel_id: str, session_id: str, turn_key: str, db
 ) -> str:
-    """Create or find a person record, navigate the touch panel to their card, return person_id."""
+    """Create or find a person record, navigate the touch panel to their card, return person_id.
+
+    Nobody identified: no contact is filed (a guest's introduction is not anyone's people record) and there is no card to
+    open - "" is returned; the spoken greeting is the caller's and is unchanged."""
     person_id: str = ""
+    if _is_unidentified(user_id):
+        logger.info("GUEST_MEMORY_DISCARD lane=voice writer=people_introduce")
+        return person_id
     try:
         # Try to find existing person
         cursor = await db.execute(
@@ -3274,6 +3284,12 @@ async def _run_voice_memory_passes(
                                   speaker_verified=speaker_verified)
     except Exception:  # noqa: BLE001
         pass
+    # Nobody identified (an unrecognised voice is a guest): no durable memory from this turn - no fact, digest, person,
+    # suggestion or tombstone pass, for anyone. DISCARD, not hold: the words cannot be attributed to a member later without
+    # proof. The turn's in-session context (the voice conversation history) is not touched here.
+    if _is_unidentified(user_id):
+        logger.info("GUEST_MEMORY_DISCARD lane=voice passes=all")
+        return
     try:
         # Mirror of the chat lane: a reply the hold-the-fact tier wrote means the owner's contradicting
         # claim was not accepted this turn, so it is not mined (routers/chat.py::_persist_memory_candidates_impl).
@@ -3897,7 +3913,21 @@ async def voice_command(
             if _decision == "drop":
                 # corrected or moved on ("no, that's not correct, it's Percy"): the waiting write is off, these words are a new request
                 del _PENDING_CONFIRMATIONS[panel_id]
-            if _decision == "yes":
+            if _decision == "yes" and pending.get("stt_snap_text"):
+                # A confirmed STT snap ("Did you mean: cancel the timer?" - "yes"): from here on this turn's words ARE the snapped
+                # command, so every gate below (PIN / guest policy / speculation / Skybridge's router veto) judges it like any other.
+                del _PENDING_CONFIRMATIONS[panel_id]
+                text = str(pending["stt_snap_text"])
+                _spacer.text = text
+                try:
+                    import stt_snap as _stt_snap_yes
+
+                    _router_decision = _stt_snap_yes.route_for(text)
+                    logger.warning("STT_SNAP from=%s to=%s outcome=confirmed", pending.get("stt_snap_from", ""),
+                                   pending.get("stt_snap_intent", ""))
+                except Exception as _snap_yes_exc:
+                    logger.debug("voice/command stt snap confirm re-route failed: %s", _snap_yes_exc)
+            elif _decision == "yes":
                 # User confirmed — execute the intent now.
                 del _PENDING_CONFIRMATIONS[panel_id]
                 from intent_router import execute_intent, Intent
@@ -4020,6 +4050,61 @@ async def voice_command(
             return await _answer_from_tier(_conv_result)
     except Exception as _conv_exc:
         logger.warning("voice/command conversation tiers failed (non-fatal): %s", _conv_exc)
+
+    # ── STT snap (ZOE_STT_SNAP = off | shadow (default) | on; stt_snap.py) ─────
+    # ONE misheard word of a command ("two on the light", "turn of the lights", "set a time for 5 minutes"): the conversation tiers
+    # above missed, and stt_snap.decide runs only when no Skybridge / keyword matcher claims the words and the domain experts could
+    # not act on them either (expert_may_claim) - so a turn a fast tier owns is never touched. A snap to a read or a low-risk write
+    # (one light on/off, music play/pause, one list item, one new timer) continues as the snapped command, whose own receipt says
+    # it back; any other write asks "Did you mean: ...?" (the pending-confirmation "yes" above runs it). shadow = log + struggle note.
+    try:
+        import stt_snap as _stt_snap
+
+        _snap_mode = _stt_snap.mode()
+        if _snap_mode != "off" and not _stt_snap.expert_may_claim(_router_decision):
+            _snap = _stt_snap.decide(
+                text, context=(_VOICE_SESSIONS.get(panel_id) or {}).get("skybridge_context") or None).snap
+            if _snap is not None:
+                _snap_guest = effective_user in _GUEST_SENTINEL_USERS or _speaker_verified is False
+                if _snap_mode == "on" and _speculation.bound_gate() is not None:
+                    # a speculative turn (daemon verdict pending) neither asks nor changes its words before the verdict
+                    await _speculation.await_commit("turn:stt_snap")
+                if _snap_mode != "on":
+                    _stt_snap.log_line(_snap, f"shadow_{_snap.safety}", guest=_snap_guest)
+                    _stt_snap.note_struggle(_snap, f"shadow_{_snap.safety}", turn_text=text)
+                elif _snap.safety == _stt_snap.CONFIRM:
+                    _stt_snap.log_line(_snap, "asked", guest=_snap_guest)
+                    _stt_snap.note_struggle(_snap, "asked", turn_text=text)
+                    _PENDING_CONFIRMATIONS[panel_id] = {
+                        "intent_name": "stt_snap",
+                        "slots": {},
+                        "stt_snap_text": _snap.text,
+                        "stt_snap_intent": _snap.intent,
+                        "stt_snap_from": _snap.from_hash,
+                        "expire_at": time.monotonic() + _CONFIRM_TIMEOUT_S,
+                        "session_id": session_id,
+                        "user_id": effective_user,
+                    }
+                    from types import SimpleNamespace as _SnapNS
+
+                    try:
+                        _snap_out = await _answer_from_tier(
+                            _SnapNS(reply=_stt_snap.confirm_question(_snap), ui=None, domain="stt_snap", intent="confirm"),
+                            intent="stt_snap_confirm")
+                    except BaseException:
+                        # the question was never heard: a later "yes" must not run a command nobody was asked about
+                        _PENDING_CONFIRMATIONS.pop(panel_id, None)
+                        raise
+                    _snap_out["pending_confirmation"] = True
+                    return _snap_out
+                else:
+                    _stt_snap.log_line(_snap, "acted", guest=_snap_guest)
+                    text = _snap.text
+                    _spacer.text = text
+                    _router_decision = _stt_snap.route_for(text)
+                    _stt_snap.note_struggle(_snap, "acted", turn_text=text)
+    except Exception as _snap_exc:
+        logger.warning("voice/command stt snap failed (non-fatal): %s", _snap_exc)
 
     _voice_processing_ack_sent = False
     if not stream:

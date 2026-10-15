@@ -425,6 +425,8 @@ class Drain:
             return None
         if rendered.decode_errors:
             self.res.notes.append(f"{seg.key}: {rendered.decode_errors} undecodable frame(s) replaced with silence")
+        # The decoded level, so "the pendant heard nothing" (peak ~0) is visible on the Pi and distinguishable from "it did not decode".
+        self.res.notes.append(f"{seg.key}: {rendered.duration_s:.1f}s level peak={rendered.peak} rms={rendered.rms}")
         if path is not None:
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(".part")

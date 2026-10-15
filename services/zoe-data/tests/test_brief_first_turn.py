@@ -673,3 +673,61 @@ def test_soon_is_unchanged_for_an_event_without_an_end():
     ev = {"title": "School run", "start": "08:30", "end": "", "duration": None}
     _, critical = bft.day_items({"calendar": [ev]}, at(8).astimezone(PERTH))
     assert critical == ["Soon: School run at 08:30"]
+
+
+# ── a calendar write must reach the next first turn (not wait out the 300 s cache) ──
+async def test_negative_control_an_empty_context_stays_cached_after_a_write(env):
+    """The 2026-10-13 day-sim miss: an earlier in-window turn found nothing on (empty context
+    cached, no claim); the seed then landed in the DB and the next first turn STILL got no
+    brief. Without the invalidation this is exactly what happens."""
+    env["ctx"] = dict()
+    assert await bft.prepare("morning zoe", MEMBER) is None
+    env["ctx"] = CTX_FULL                      # the event is now in the DB
+    assert await bft.prepare("morning zoe", MEMBER) is None      # ...but the cache still says "empty"
+    assert env["gathers"] == 1
+
+
+async def test_forgetting_the_day_context_lets_the_next_first_turn_see_the_write(env):
+    env["ctx"] = dict()
+    assert await bft.prepare("morning zoe", MEMBER) is None
+    env["ctx"] = CTX_FULL
+    bft.forget_day_context(MEMBER)
+    brief = await bft.prepare("morning zoe", MEMBER)
+    assert brief is not None and "Dentist at 09:30" in brief.body
+    assert env["gathers"] == 2
+
+
+async def test_forgetting_one_users_context_leaves_the_others_cached(env):
+    env["ctx"] = dict()
+    for uid in (MEMBER, "member-b"):
+        assert await bft.prepare("morning zoe", uid) is None
+    bft.forget_day_context(MEMBER)
+    env["ctx"] = CTX_FULL
+    assert await bft.prepare("morning zoe", "member-b") is None   # still the cached empty context
+    assert await bft.prepare("morning zoe", MEMBER) is not None
+
+
+class _NoopDB:
+    async def execute(self, sql, params=()):
+        return None
+
+
+async def test_create_event_record_drops_the_cached_day_context(env):
+    from calendar_service import create_event_record
+
+    env["ctx"] = dict()
+    assert await bft.prepare("morning zoe", MEMBER) is None
+    await create_event_record(_NoopDB(), user_id=MEMBER, title="Dentist", start_date=DAY, start_time="09:30")
+    env["ctx"] = CTX_FULL
+    assert await bft.prepare("morning zoe", MEMBER) is not None
+
+
+async def test_a_failing_invalidation_never_breaks_the_calendar_write(env, monkeypatch):
+    from calendar_service import create_event_record
+
+    def boom(_uid):
+        raise RuntimeError("cache gone")
+
+    monkeypatch.setattr(bft, "forget_day_context", boom)
+    record = await create_event_record(_NoopDB(), user_id=MEMBER, title="Dentist", start_date=DAY)
+    assert record["title"] == "Dentist"

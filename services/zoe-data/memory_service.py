@@ -70,6 +70,10 @@ from live_store_guard import (
 )
 from memory_captured_at import parse_captured_at, value_shape
 from memory_importance import score_importance
+from user_filters import is_unidentified as _is_unidentified
+
+# write-counter / reject-ledger status for a write refused because the turn identified nobody
+GUEST_DROP = "guest_drop"
 
 try:
     from memory_metrics import (
@@ -1475,6 +1479,15 @@ class MemoryService:
         if not text or not text.strip():
             raise MemoryServiceError("empty text")
 
+        # Nobody identified (a guest session, an unrecognised voice): what they said is not filed as anyone's memory, by any
+        # writer. Identity comes from the account; the shared guest bucket is readable by every guest session and is nobody's
+        # memory. The words cannot be re-attributed to a member later without proof, so they are discarded, not held.
+        # In-session context (the conversation history) is not this store and is untouched.
+        if _is_unidentified(user_id):
+            self._bump(GUEST_DROP, source)
+            logger.info("GUEST_MEMORY_DISCARD writer=%s op=ingest", source)
+            return None
+
         # Opt-out is enforced HERE, the one durable-write chokepoint, so every
         # automatic writer (per-turn extractor, turn digest, person extractors,
         # idle/nightly digest, consolidation, synthesis) honours it without each
@@ -2245,6 +2258,11 @@ class MemoryService:
             raise MemoryServiceError(f"memory {mem_id} not found")
         user_id = current.metadata.get("user_id") or current.metadata.get("wing")
         self._require(user_id, "reviewed row is missing user_id metadata")
+        if decision == "edit" and _is_unidentified(user_id):
+            # an edit WRITES a new row: none for a guest-owned row (same wall as ingest); reject/archive still clear one
+            self._bump(GUEST_DROP, actor)
+            logger.info("GUEST_MEMORY_DISCARD writer=%s op=edit", actor)
+            return None
         if (
             decision == "edit"
             and actor in MEMORY_OPT_OUT_SOURCES
@@ -3007,6 +3025,10 @@ class MemoryService:
         """Store ``text`` as a ``disputed`` (or, for a person to ask about, ``pending``)
         candidate - never approved, never recalled - linked to the row it disagrees with. Idempotent (deterministic id); a
         candidate the user already reviewed is not resurrected. Never raises."""
+        if _is_unidentified(user_id):
+            self._bump(GUEST_DROP, writer)
+            logger.info("GUEST_MEMORY_DISCARD writer=%s op=candidate", writer)
+            return None
         try:
             scrubbed, reject = scrub_pii(text)
             if reject or not scrubbed.strip():
@@ -3424,7 +3446,7 @@ class MemoryService:
     # Statuses that mean "a candidate reached ingest and was NOT written": counted in the
     # durable reject ledger (memory_reject_ledger) so the nightly summary can say why an
     # ingest left no row. ``error`` is separate (a failed write is loud, never a reject).
-    _REFUSED_STATUSES = frozenset({"opt_out", "pii_reject", "tombstone_drop", "forgotten_drop", "dedup",
+    _REFUSED_STATUSES = frozenset({"opt_out", "pii_reject", "tombstone_drop", "forgotten_drop", "dedup", GUEST_DROP,
                                  "identity_drop"})
 
     def _bump(self, status: str, source: str) -> None:

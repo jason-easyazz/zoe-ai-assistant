@@ -1214,6 +1214,19 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                             } catch (_vsErr) { /* ignore */ }
                         }
                     }
+                    // Voice enrolment on the talk screen ("Zoe, learn my voice"): the phrase to say, the step counter and a tick,
+                    // pushed only to the panel whose daemon is running the enrolment. Like voice_session, a frame that does not NAME
+                    // this panel is dropped (absent is not "any panel"). Relayed for js/touch-voice-enroll.js; a page without that
+                    // script ignores it. Transient: nothing here is stored.
+                    if (msg.type === 'voice_enroll') {
+                        const _veData = msg.data || {};
+                        const _vePanel = String(_veData.panel_id || '').trim();
+                        if (_vePanel && panelMatches(_vePanel)) {
+                            try {
+                                window.dispatchEvent(new CustomEvent('zoe:voice-enroll', { detail: _veData }));
+                            } catch (_veErr) { /* ignore */ }
+                        }
+                    }
                     // Voice state machine — drive orb + conversation overlay from backend events.
                     // Panel-ID filter: only react to voice events from our own panel (or global ones without panel_id).
                     if (msg.type && msg.type.startsWith('voice:')) {

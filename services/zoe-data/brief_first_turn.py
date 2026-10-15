@@ -521,6 +521,18 @@ async def scheduled_row_gate(db, user_id: str) -> str:
     return "suppress" if holder == TRIGGER_TYPE else "play"
 
 
+def forget_day_context(user_id: str) -> None:
+    """Drop the user's cached day context so the NEXT first turn re-reads it.
+
+    ``_ctx_cache`` holds a gathered context for ``_GATHER_CACHE_S`` (300 s) per user. An
+    earlier turn in the window that found nothing on (so briefed nothing and took no claim)
+    leaves an EMPTY context cached, and a calendar event written seconds later was then
+    invisible to the very next first turn: measured 2026-10-13, the day-sim's seed landed
+    (event in the DB) and the morning brief still logged nothing for ~4 minutes. Calendar
+    writes call this (calendar_service.create_event_record). Pure dict pop; never raises."""
+    _ctx_cache.pop((user_id or "").strip(), None)
+
+
 def _reset_state() -> None:
     """Clear the in-process throttles (tests; simulates a restart)."""
     _settled.clear()

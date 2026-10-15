@@ -59,6 +59,11 @@ def _clean(monkeypatch):
     monkeypatch.setenv("ZOE_MEMORY_PHYSICAL_ERASE", "0")
     monkeypatch.setenv("ZOE_EXPERT_ENABLED", "0")        # fast_tiers.resolve: only the BM5 tier can answer
     monkeypatch.setattr(mp, "_now", lambda now=None: NOW if now is None else float(now))     # the ledger's clock is injected
+    # ...and so is the summary's wall clock: render_summary's "last week" window and day labels read time.time() when the
+    # answer path passes no `now`, so the seeded 2026-10-08 rows aged out of "Recently" on 2026-10-15 (a dated test).
+    import time as _real_time
+    import types
+    monkeypatch.setattr(pa, "time", types.SimpleNamespace(time=lambda: NOW, monotonic=_real_time.monotonic))
     mp.reset()
     yield
     mp.reset()

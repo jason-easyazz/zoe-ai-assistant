@@ -217,17 +217,20 @@ def _drive_main(tmp_path, monkeypatch, fake, *, avail_mb=10_000, extra=()):
     monkeypatch.setattr(vrp, "mem_available_mb", lambda: avail_mb)
     monkeypatch.setattr(vrp, "cleanup_replay_artifacts", lambda *a, **k: True)
     monkeypatch.setattr(vrp, "service_revision", lambda *_: None)
-    report = {"n_samples": 4, "verdicts": {"OK": 4}, "memory_recall": "ok",
+    corpus = _corpus(tmp_path, [LOUD] * 12)
+    # The replay covers 4 corpus clips and the baseline PINS those same 4 (the
+    # probe replays the baseline's set, and refuses speed against an unpinned one).
+    rows = [dict(file=p.name, stt_ms=100) for p in sorted(corpus.glob("*.wav"))[:4]]
+    report = {"n_samples": 4, "verdicts": {"OK": 4}, "memory_recall": "ok", "rows": rows,
               "aggregate_ms": {"stt_ms": {"median": 100}, "brain_ms": {"median": 200},
                                "e2e_ms": {"median": 300}}}
     monkeypatch.setattr(vrp, "run_measure", lambda *a, **k: report)
     monkeypatch.setattr(vrp, "_load_service_vad", lambda _sd: fake)
     monkeypatch.delenv("ZOE_VOICE_PROBE_MIN_MEM_MB", raising=False)
-    corpus = _corpus(tmp_path, [LOUD] * 12)
     results = tmp_path / "last.json"
     baseline = tmp_path / "baseline.json"
-    baseline.write_text(json.dumps({"created_at": "2026-09-01T00:00:00Z",
-                                    "summary": vrp.summarize(report)}))
+    pinned = dict(vrp.summarize(report), **vrp.clip_set_summary(report, str(corpus)))
+    baseline.write_text(json.dumps({"created_at": "2026-09-01T00:00:00Z", "summary": pinned}))
     monkeypatch.setattr(sys, "argv", [
         "probe", "--results", str(results), "--baseline", str(baseline),
         "--trend", str(tmp_path / "trend.jsonl"), "--service-dir", str(tmp_path),

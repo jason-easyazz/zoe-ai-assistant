@@ -350,7 +350,12 @@ async def _call_llm_for_portrait(prompt: str) -> str:
 
 
 async def _save_portrait(user_id: str, portrait_text: str, memory_count: int, db=None) -> None:
-    """Upsert the portrait into the user_portraits table."""
+    """Upsert the portrait into the user_portraits table. Never for a guest sentinel (nobody to portray)."""
+    from user_filters import is_unidentified
+
+    if is_unidentified(user_id):
+        logger.info("GUEST_MEMORY_DISCARD writer=portrait")
+        return
     sql = """INSERT INTO user_portraits (user_id, portrait_text, portrait_version,
                    generated_from_memory_count, last_generated)
                VALUES (?, ?, 1, ?, CURRENT_TIMESTAMP)

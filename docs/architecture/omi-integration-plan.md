@@ -380,7 +380,11 @@ Sub-options inside (A) — the receiver:
   pending, never failing it — when the night window is open (the `WINDOW_OPEN` marker or household-local
   02:30–04:30), within 45 s of a voice turn, or under `ZOE_OMI_MIN_MEM_MB` (1500) of `MemAvailable`; it yields the
   Moonshine lock between chunks, so a live turn waits at most one chunk. Three attempts, then `failed` (audio kept
-  until its retention expiry). No new model, no new RAM tenant.
+  until its retention expiry). No new model, no new RAM tenant. **An empty transcript is not a success** (2026-10-14: 117 of
+  129 recordings synced over two days came back with no text and their WAVs were deleted, so nobody could tell a quiet room
+  from a deaf pipeline): the row goes `empty_transcript`, the WAV is **kept until its retention expiry** (the owner can still
+  drop or delete it), and a WARNING `OMI_EMPTY_TRANSCRIPT` logs its measured seconds / peak / RMS / rate and how many chunks
+  reached Moonshine. `GET /api/omi/recordings` returns `empty_transcript_held`. Only a transcript with text deletes the audio.
 - The voice path is untouched: no `VOICE_PATH_PATTERNS` file changes, so the replay gate does not front this PR.
 
 ### 4.4 Retention, review, forgetting
