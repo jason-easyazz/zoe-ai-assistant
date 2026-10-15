@@ -312,7 +312,8 @@ check('the server really has no attendees/reminders sub-route (why they 404)', (
         .split('\n')
         .filter(line => !/^\s*#/.test(line))
         .join('\n');
-    assert.ok(!/attendees/.test(py),
+    // alembic 0052: events carry structured `attendees` (no sub-route); only a per-event ROUTE would matter here
+    assert.ok(!/@router\.(get|post|put|delete)\([^)]*attendees/.test(py),
         'routers/calendar.py gained an attendees route -- revisit the metadata read path');
     assert.ok(!/@router\.(get|post)\([^)]*reminders/.test(py),
         'routers/calendar.py gained an event-reminders route -- revisit the read path');
