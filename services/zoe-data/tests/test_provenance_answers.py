@@ -22,6 +22,8 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
+import types
 from pathlib import Path
 
 import pytest
@@ -59,6 +61,10 @@ def _clean(monkeypatch):
     monkeypatch.setenv("ZOE_MEMORY_PHYSICAL_ERASE", "0")
     monkeypatch.setenv("ZOE_EXPERT_ENABLED", "0")        # fast_tiers.resolve: only the BM5 tier can answer
     monkeypatch.setattr(mp, "_now", lambda now=None: NOW if now is None else float(now))     # the ledger's clock is injected
+    # The summary's "Recently (last week)" window and the "(2 Oct)" day labels are measured against provenance_answers' own
+    # wall clock (fast_tiers.resolve passes no `now`); the rows above are hard-dated, so pin that clock too or the test rots
+    # a week after it was written. Only time.time() is frozen - monotonic stays real.
+    monkeypatch.setattr(pa, "time", types.SimpleNamespace(time=lambda: NOW, monotonic=time.monotonic))
     mp.reset()
     yield
     mp.reset()
