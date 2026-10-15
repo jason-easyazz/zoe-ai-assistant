@@ -10,7 +10,9 @@ THE FLOW
                           ``ok`` with the digest echoed - that answer is the Pi's licence to free the audio on the pendant.
   ``transcribe_pending``  (background, ``run_loop``) Moonshine, in-process, chunk by chunk, between voice turns - the existing
                           STT path (``routers.voice_tts._transcribe_audio(..., capture=False)``), no second model.
-  the WAV is deleted right after a successful transcription unless the owner kept it; ``purge_expired_audio`` bounds the rest.
+  the WAV is deleted right after a transcription that PRODUCED TEXT unless the owner kept it; ``purge_expired_audio`` bounds the rest.
+  An EMPTY transcript is not a success: the row goes ``empty_transcript``, the WAV is KEPT until its retention expiry, and a WARNING
+  logs its measured length/peak/RMS - so a deaf pipeline (wrong rate, dead mic, gain) never silently eats the owner's audio.
 
 WHAT THIS DOES NOT DO (on purpose, and why)
   * It does not feed the transcript to fact extraction, recall, the digest or the memory gate. A pendant recording can hold
@@ -231,6 +233,21 @@ def peak(pcm: bytes) -> int:
     return max(map(abs, a)) if len(a) else 0
 
 
+def measure_wav(wav: bytes) -> dict:
+    """What the audio actually is, for the empty-transcript WARNING: ``{"seconds", "peak", "rms", "rate", "channels", "width"}``.
+    Never raises (an unreadable WAV measures as zeros) - it is diagnostics, not a gate. Peak/RMS are int16 units (full scale 32768)."""
+    try:
+        with wave.open(io.BytesIO(wav)) as w:
+            rate, ch, width, n = w.getframerate(), w.getnchannels(), w.getsampwidth(), w.getnframes()
+            pcm = w.readframes(n)
+    except (wave.Error, EOFError):
+        return {"seconds": 0.0, "peak": 0, "rms": 0.0, "rate": 0, "channels": 0, "width": 0}
+    a = _samples(pcm) if width == 2 else array.array("h")
+    pk = max(map(abs, a)) if len(a) else 0
+    rms = (sum(v * v for v in a) / len(a)) ** 0.5 if len(a) else 0.0
+    return {"seconds": round(n / rate, 1) if rate else 0.0, "peak": int(pk), "rms": round(rms, 1), "rate": rate, "channels": ch, "width": width}
+
+
 # --- rows -----------------------------------------------------------------------------------------------------------
 _PUBLIC = ("id", "source", "provenance", "device_id", "recording_key", "started_at", "ended_at", "duration_s", "time_quality",
            "gap_before", "audio_bytes", "keep_audio", "audio_expires_at", "status", "speaker_state", "reviewed", "created_at",
@@ -381,6 +398,16 @@ async def list_recordings(user_id: str, *, limit: int = 50, offset: int = 0) -> 
     return [_public(r) for r in rows]
 
 
+async def count_empty_transcripts(user_id: str) -> int:
+    """How many of the member's recordings came back with NO text but whose audio is still held (the owner-visible half of the
+    empty-transcript safety rule: the list shows the count, each row shows ``status: empty_transcript`` + ``has_audio``)."""
+    from db_compat import get_compat_db
+    async with get_compat_db() as db:
+        rows = await _fetch(db, "SELECT COUNT(*) AS n FROM omi_recordings WHERE user_id = ? AND status = 'empty_transcript' AND audio_path != ''",
+                            (user_id,))
+    return int(rows[0]["n"]) if rows else 0
+
+
 async def get_recording(user_id: str, rid: str) -> Optional[dict]:
     from db_compat import get_compat_db
     async with get_compat_db() as db:
@@ -426,9 +453,9 @@ async def update_recording(user_id: str, rid: str, *, keep_audio: Optional[bool]
         await db.commit()
         if not getattr(cur, "rowcount", 1):
             return None
-        if keep_audio is False:       # un-keeping an already-transcribed recording drops the WAV now
+        if keep_audio is False:       # un-keeping an already-transcribed (or empty-transcript) recording drops the WAV now - the owner's explicit call
             rows = await _fetch(db, "SELECT id, audio_path, status FROM omi_recordings WHERE id = ? AND user_id = ?", (rid, user_id))
-            if rows and rows[0]["status"] == "done" and rows[0]["audio_path"]:
+            if rows and rows[0]["status"] in ("done", "empty_transcript") and rows[0]["audio_path"]:
                 _unlink(rows[0]["audio_path"])
                 await db.execute("UPDATE omi_recordings SET audio_path = '', audio_bytes = 0, audio_expires_at = NULL WHERE id = ?", (rid,))
                 await db.commit()
@@ -519,14 +546,18 @@ def _chunk_wav(pcm: bytes, tmpdir: str, idx: int) -> str:
     return p
 
 
-async def transcribe_audio_bytes(wav: bytes, *, gate=None, pause_s: float = 0.4) -> str:
+async def transcribe_audio_bytes(wav: bytes, *, gate=None, pause_s: float = 0.4, stats: Optional[dict] = None) -> str:
     """Moonshine over a long WAV in ~20 s chunks cut at the quietest point. Silent chunks are skipped. ``gate()`` is asked before every
-    chunk (night window / voice turn / RAM) and aborts the job by raising ``GateClosed``; the caller leaves the recording pending."""
+    chunk (night window / voice turn / RAM) and aborts the job by raising ``GateClosed``; the caller leaves the recording pending.
+    ``stats`` (optional) is filled with ``chunks`` (total) and ``voiced`` (sent to Moonshine, i.e. peak >= ``SILENCE_PEAK``)."""
     with wave.open(io.BytesIO(wav)) as w:
         pcm = w.readframes(w.getnframes())
     parts: list[str] = []
+    st = stats if stats is not None else {}
+    st["chunks"], st["voiced"] = 0, 0
     with tempfile.TemporaryDirectory(prefix="zoe-omi-") as tmp:
         for i, (a, b) in enumerate(chunk_pcm(pcm)):
+            st["chunks"] += 1
             if gate is not None:
                 ok, why = gate()
                 if not ok:
@@ -534,6 +565,7 @@ async def transcribe_audio_bytes(wav: bytes, *, gate=None, pause_s: float = 0.4)
             piece = pcm[a:b]
             if peak(piece) < SILENCE_PEAK:
                 continue
+            st["voiced"] += 1
             text = (await _transcribe_file(_chunk_wav(piece, tmp, i)) or "").strip()
             if text:
                 parts.append(text)
@@ -579,9 +611,14 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
     from db_compat import get_compat_db
     rid, uid, path = r["id"], r["user_id"], r["audio_path"]
     text, err = "", ""
+    seen_chunks: dict = {}
+    level: dict = {}
     try:
-        text = await transcribe_audio_bytes(Path(path).read_bytes(), gate=lambda: may_transcribe_now(now), pause_s=pause_s)
+        wav = Path(path).read_bytes()
+        text = await transcribe_audio_bytes(wav, gate=lambda: may_transcribe_now(now), pause_s=pause_s, stats=seen_chunks)
         text = await _redact_forgotten(uid, text)
+        if not text.strip():                    # diagnostics for the WARNING below; off the event loop (a 10-minute WAV is ~10M samples)
+            level = await asyncio.to_thread(measure_wav, wav)
     except GateClosed as exc:                   # the gate closed mid-job: not a failure, try again later
         err = f"deferred:{exc}"
     except Exception as exc:  # noqa: BLE001
@@ -610,6 +647,17 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
             if not cur or cur[0]["status"] != "transcribing":      # deleted while we worked: write nothing
                 return False
             keep = bool(cur[0]["keep_audio"])
+            if not text.strip():
+                # An EMPTY transcript is not a successful transcription: nothing was understood, so the audio is the only copy of
+                # whatever the pendant heard. Keep the WAV (its retention expiry still bounds it) and say so loudly.
+                await db.execute("UPDATE omi_recordings SET status = 'empty_transcript', transcript = '', transcribed_at = ? "
+                                 "WHERE id = ? AND status = 'transcribing'", (_iso(_now()), rid))
+                await db.commit()
+                logger.warning("OMI_EMPTY_TRANSCRIPT id=%s seconds=%s peak=%s rms=%s rate=%s voiced_chunks=%s/%s reason=%s - WAV kept until retention",
+                               rid, level.get("seconds"), level.get("peak"), level.get("rms"), level.get("rate"),
+                               seen_chunks.get("voiced"), seen_chunks.get("chunks"),
+                               "below_silence_floor" if not seen_chunks.get("voiced") else "voiced_but_no_text")
+                return True
             await db.execute("UPDATE omi_recordings SET status = 'done', transcript = ?, transcribed_at = ?"
                              + ("" if keep else ", audio_path = '', audio_bytes = 0, audio_expires_at = NULL")
                              + " WHERE id = ? AND status = 'transcribing'", (text, _iso(_now()), rid))

@@ -12,6 +12,8 @@ from datetime import date, datetime, timezone
 from db_pool import get_db_ctx, get_pool
 from people_utils import name_covered_by_contacts
 
+from user_filters import is_unidentified
+
 logger = logging.getLogger(__name__)
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
@@ -75,7 +77,7 @@ async def store_suggestions(
     session_id: str,
     suggestions: list[dict],
 ) -> int:
-    if not suggestions or user_id in ("guest", ""):
+    if not suggestions or is_unidentified(user_id):
         return 0
     now = datetime.now(timezone.utc).isoformat()
     stored = 0

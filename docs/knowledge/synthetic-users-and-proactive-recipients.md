@@ -14,8 +14,10 @@ Tracker rows: B3.2, B2.1 and "Speaks first" in [the program](../architecture/bea
 
 `services/zoe-data/user_filters.py::is_synthetic_user` is true for guest sentinels (`guest`,
 `anonymous`, `voice-guest`, `voice-daemon`, empty) and ids matching
-`^(test|probe|demo|ci|e2e|bench)[-_]` (case-insensitive; the separator keeps "Christine" or
-"testa" real). `ZOE_SYNTHETIC_USER_ALLOWLIST` (comma list, default empty) opts pattern ids
+`user_filters.SYNTHETIC_USER_RE` (case-insensitive): `^(test|probe|demo|ci|e2e|bench)[-_]` (the separator
+keeps "Christine" or "testa" real), `^zoe[-_](hammer|tok)[-_]\d+$` (the July 2026 load/token probe run ids;
+digits only, so `zoe-hammer-jane` stays a person) and the exact ids `zoe-mempalace-baseline` /
+`zoe-prompt-packet-measure`. `ZOE_SYNTHETIC_USER_ALLOWLIST` (comma list, default empty) opts pattern ids
 back in for a lab, never a guest sentinel. It is applied in the dreaming, weekly
 consolidation, music-taste and portrait passes and in the morning, evening,
 evolution-digest and emotional follow-up triggers, each logging one `<pass>: users kept=N skipped_synthetic=M` line

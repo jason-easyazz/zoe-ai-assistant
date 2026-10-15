@@ -197,6 +197,24 @@ It mirrors `zoe_latency_probe.py`: `--update-baseline` to set the bar, baseline 
 regression. It self-guards: **SKIPs if available memory is low** (never OOMs the box) and runs the
 harness under the shared flock.
 
+**The clip set is PINNED (2026-10-13).** The probe used to replay "the newest N clips by mtime", so every
+new recording silently changed the set and the speed bar with it (STT read ~400 ms against a 921 ms
+baseline recorded on another set; a 2x STT regression would have passed). Now the baseline stores
+`summary.clip_ids` (sha256 of basename + byte size, 12 hex; never content or names) and every run replays
+exactly that set (`measure_voice.py --files-from`). A baseline whose clips are not all in the corpus
+(deleted, quarantined, re-encoded) or that predates pinning REFUSES speed: status `error`/`fail` with a
+`BASELINE-SET` reason and `speed_comparison: "refused: …"` in the artifact; function (OK-rate) is still
+compared on a legacy baseline. `--update-baseline` re-pins to the newest `--samples` clips (speed is not
+compared across sets on that run). `summary.stt_ms_per_audio_s` (total STT ms per second of audio) is a
+length-normalised metric gated at the same ratio, with a 50 ms/s floor. Artifact keys added (additive,
+the deploy gate ignores them): `speed_comparison`, `baseline_ref.clip_set_size`, `summary.clip_ids`,
+`summary.clip_id_scheme`, `summary.stt_ms_per_audio_s`.
+**Operator step after this lands (one time, and again whenever the pinned clips are retired):** in a
+quiet window run `flock /tmp/zoe-voice-harness.lock python3 scripts/maintenance/voice_regression_probe.py
+--samples 20 --update-baseline`. Until then the probe reports `BASELINE-SET` (status fail) and the
+deploy gate blocks voice-path deploys (fail-closed); `curate_voice_corpus.py` quarantining a pinned clip
+has the same effect, so re-pin after a curation.
+
 **STT mode — `--stt remote` is the nightly default** (unit template sets
 `ZOE_VOICE_REPLAY_STT=remote`). In-process mode lazy-loads a SECOND Moonshine next to the live
 service's warm one, which is why the gate demanded 1500MB and skipped for days on a box whose

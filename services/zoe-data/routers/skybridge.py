@@ -6,6 +6,7 @@ import logging
 import os
 from fastapi import Request, APIRouter, Depends
 
+import panel_principal
 from auth import get_current_user
 from database import get_db
 from skybridge_service import active_timers_for, cancel_timer_by_id, resolve_skybridge_request
@@ -115,12 +116,15 @@ async def resolve_skybridge_command(
     payload: dict,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
+    request: Request = None,
 ):
     """Resolve a typed Skybridge command into real data cards when supported."""
     message = str((payload or {}).get("message") or "").strip()
     context = (payload or {}).get("context")
     if not isinstance(context, dict):
         context = None
+    # Anyone AT THE PANEL may use the household list; an anonymous LAN caller still touches no list.
+    await panel_principal.mark_if_panel(request, user, db)
     return await resolve_skybridge_request(message, user.get("user_id", "voice-guest"), context=context, db=db)
 
 

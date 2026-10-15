@@ -377,11 +377,11 @@ def test_held_out_class_exact_with_the_real_embedding_is_measured_not_assumed(mo
         assert hit / n >= CLASS_FLOOR, (c, hit, n)
     # the head may add a false positive on a hard negative; it must not add many (the word list alone has WORD_LIST_FP)
     assert with_head["plain_fp"] <= without["plain_fp"] + 3, (with_head["plain_fp"], without["plain_fp"])
-    # break-the-fix twin: the same held-out set with the head neutered is the word list
+    # break-the-fix twin: the same held-out set with the head neutered is the word list.
+    # ``set_embedder(None)`` means "back to the live semantic_router lookup", and in the full lane an earlier test has
+    # already warmed that module's model, so the head stayed ACTIVE (268 hits, not the word list's 181): order-dependent.
+    # Take the live lookup out of the picture so the twin means what it says in any order.
     restraint_head.set_embedder(None)
-    # ``set_embedder(None)`` returns to the live ``semantic_router`` lookup, which answers whenever ANY earlier test in the process
-    # loaded the router's real model (test_pull_not_push does, through fast_tiers): the twin would then still run the head (267 != 181).
-    # The twin is "no head", so close that fallback explicitly instead of trusting process history.
     monkeypatch.setattr(restraint_head, "_live_embedder", lambda: None)
     off = ev.score(held, lambda t: restraint.classify(t, head=True))
     assert off["hit"] == without["hit"]
@@ -776,3 +776,20 @@ def test_eval_json_mode_writes_only_json_to_stdout(monkeypatch, capsys):
     out = capsys.readouterr()
     assert "lexicon only / dev" in json.loads(out.out)
     assert out.err.startswith("head:")
+
+
+# ── isolation: a router warmed by an earlier test is process state, not a property of this test ────────────────────────
+def test_a_warm_router_makes_the_head_live_unless_the_test_hides_it(monkeypatch):
+    """The negative control for the held-out twin above: with a router already warm (what a full-lane run has by now), a
+    test that merely drops its injected embedder still has a live head. The isolation must hide the live lookup."""
+    import sys
+    import types
+
+    head = restraint_head._load()
+    router = types.SimpleNamespace(_MODEL=object(), _MODEL_NAME=head[4]["embedder"],
+                                   embed=lambda text: np.zeros(384, dtype=np.float32))
+    monkeypatch.setitem(sys.modules, "semantic_router", router)
+    restraint_head.set_embedder(None)
+    assert restraint_head._live_embedder() is router.embed                  # the leak: no injected embedder, head still on
+    monkeypatch.setattr(restraint_head, "_live_embedder", lambda: restraint_head._EMBEDDER)
+    assert restraint_head._live_embedder() is None                          # the isolation: now it is the word list

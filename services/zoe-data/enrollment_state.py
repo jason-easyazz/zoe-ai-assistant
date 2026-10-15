@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import speaker_models
 from typed_env import env_bool, env_int, env_str
 
 logger = logging.getLogger(__name__)
@@ -112,6 +113,7 @@ class SetupState:
     voice_samples: int = 0
     voice_enrolled_at: Optional[str] = None
     voice_consented: bool = False
+    voice_upgrade: bool = False       # enrolled in ANOTHER speaker model, but not yet in every model ZOE_SPEAKER_MODEL needs
     face_enrolled: Optional[bool] = False
     face_samples: int = 0
     last_offered_at: Optional[str] = None
@@ -157,6 +159,47 @@ async def _scalar_row(db, sql: str, params: tuple):
         return await cur.fetchone()
 
 
+def acting_voice_count_query(user_id: Optional[str] = None) -> tuple:
+    """``(sql, params)`` counting members (or, with ``user_id``, that member's rows) whose voice the CURRENT acting model can
+    recognise: a consented ``speaker_profiles`` row of ``speaker_models.acting_model()``. The same rule ``_voice_state`` applies,
+    shared so every "is this voice known?" answer agrees (``self_model``)."""
+    acting = speaker_models.acting_model()
+    where = "consent_at IS NOT NULL AND " + speaker_models.MODEL_SQL + " = ?"
+    if user_id is None:
+        return "SELECT COUNT(DISTINCT user_id) FROM speaker_profiles WHERE " + where, (acting,)
+    return "SELECT COUNT(*) FROM speaker_profiles WHERE user_id = ? AND " + where, (user_id, acting)
+
+
+def _enrolled_key(row) -> str:
+    return str(row[1] or "")
+
+
+async def _voice_state(db, uid: str) -> dict:
+    """The voice fields of ``SetupState`` (a failed read raises: the caller reports 'unknown', never 'no').
+
+    Model-aware in EVERY mode (``speaker_models``): enrolled means a CONSENTED profile in every model the current
+    ``ZOE_SPEAKER_MODEL`` mode enrols (the default mode: Resemblyzer only, so a member who holds only a ResNet34 row - e.g. after a
+    rollback - is NOT enrolled and is offered the re-enrolment the acting model needs). ``dual`` needs both. ``voice_upgrade`` means
+    the ACTING model does recognise the member, but the mode wants another profile too - only then may Zoe say she knows the voice."""
+    async with db.execute(
+        "SELECT sample_count, enrolled_at, consent_at, " + speaker_models.MODEL_SQL + " FROM speaker_profiles WHERE user_id = ?",
+        (uid,),
+    ) as cur:
+        rows = await cur.fetchall()
+    consented = dict()
+    for r in sorted(rows, key=_enrolled_key):                 # newest last, so it wins per model
+        if r[2] is not None:
+            consented[speaker_models.normalize_model_id(r[3])] = r
+    if not consented:
+        return dict(voice_enrolled=False)
+    complete = all(m in consented for m in speaker_models.enrolled_models())
+    acting = consented.get(speaker_models.acting_model())
+    if acting is None:
+        return dict(voice_enrolled=False)                     # nothing that can recognise them in this mode
+    return dict(voice_enrolled=complete, voice_consented=True, voice_upgrade=not complete,
+                voice_samples=int(acting[0] or 0), voice_enrolled_at=str(acting[1]) if acting[1] is not None else None)
+
+
 async def get_state(user_id: str, db=None) -> SetupState:
     """The member's setup state. Each source is read on its own: a failed read leaves THAT field unknown (None), the rest intact."""
     uid = (user_id or "").strip()
@@ -166,15 +209,7 @@ async def get_state(user_id: str, db=None) -> SetupState:
     try:
         async with _conn(db) as conn:
             try:
-                row = await _scalar_row(
-                    conn, "SELECT sample_count, enrolled_at, consent_at FROM speaker_profiles WHERE user_id = ? "
-                          "ORDER BY enrolled_at DESC LIMIT 1", (uid,))
-                if row is None:
-                    voice = {"voice_enrolled": False}
-                else:
-                    consented = row[2] is not None
-                    voice = {"voice_enrolled": consented, "voice_consented": consented, "voice_samples": int(row[0] or 0),
-                             "voice_enrolled_at": str(row[1]) if row[1] is not None else None}
+                voice = await _voice_state(conn, uid)
             except Exception as exc:  # noqa: BLE001 - unknown, not "no"
                 logger.warning("enrollment_state: speaker read failed: %s", type(exc).__name__)
             try:

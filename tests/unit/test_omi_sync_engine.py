@@ -207,6 +207,26 @@ def seq_of(cmd: bytes) -> int:
 
 
 # --- the happy path -----------------------------------------------------------------------------------
+def test_every_staged_recording_logs_its_decoded_level(spool, tmp_path):
+    """A pendant that heard nothing (peak ~0) must be tellable from one that did not decode: the level rides the sync log line."""
+    pendant, zoe = FakePendant(build_ring(RING), caps=0x09), FakeZoe()
+    res = drain(pendant, spool, zoe, tmp_path)
+    levels = [n for n in res.notes if " level peak=" in n]
+    assert len(levels) == 3 and all(n.split(":")[0].startswith("r") for n in levels)
+    assert all("s level peak=" in n and "rms=" in n for n in levels)
+
+
+def test_level_of_distinguishes_silence_from_sound_and_tolerates_odd_bytes():
+    import math
+    from omi_sync.recordings import level_of
+    tone = b"".join(struct.pack("<h", int(6000 * math.sin(2 * math.pi * 220 * i / 16000))) for i in range(16000))
+    peak, rms = level_of(tone)
+    assert peak == 6000 and 4000 < rms < 4400
+    assert level_of(b"\x00\x00" * 16000) == (0, 0.0)          # negative control: digital silence reads as zero, not as the tone
+    assert level_of(b"") == (0, 0.0)
+    assert level_of(tone + b"\x01")[0] == 6000                  # a dangling byte is ignored, not an exception
+
+
 def test_full_drain_uploads_every_recording_then_frees_the_ring(spool, tmp_path):
     pendant, zoe = FakePendant(build_ring(RING), caps=0x09), FakeZoe()
     res = drain(pendant, spool, zoe, tmp_path)
