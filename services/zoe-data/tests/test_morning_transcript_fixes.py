@@ -106,7 +106,7 @@ async def test_a_guest_asking_their_name_is_told_how_to_introduce_themselves():
         res = await resolve_skybridge_request("what's my name", guest, db=_Db(None))
         assert res["spoken_summary"] == skybridge_service.GUEST_NAME_REPLY
         assert "signed in as" not in res["spoken_summary"]
-        assert "PIN" in res["spoken_summary"] and "Zoe, it's" in res["spoken_summary"]
+        assert "PIN" in res["spoken_summary"] and "it's" not in res["spoken_summary"]   # no introduction path exists: never offered
     # control: the guest's SIGN-IN question keeps its own answer
     assert (await resolve_skybridge_request("who am i", "guest", db=_Db(None)))["spoken_summary"] == "You're signed in as a guest."
 

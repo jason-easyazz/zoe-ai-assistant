@@ -4007,7 +4007,7 @@ _IDENTITY_ROLE_LABELS = {
 }
 
 
-GUEST_NAME_REPLY = "I don't know who you are yet. Say 'Zoe, it's' and then your name, or sign in with your PIN."
+GUEST_NAME_REPLY = "I don't know who you are yet. Sign in with your PIN on the panel and I'll know you."
 
 
 async def _self_display_name(user_id: str, db: Any) -> tuple[str, str]:
