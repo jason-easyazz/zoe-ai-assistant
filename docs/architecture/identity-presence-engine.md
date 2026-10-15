@@ -588,6 +588,11 @@ Zoe: "Done. Nice to meet you, Sam."
     above threshold. Apple's "Personalized Hey Siri" caps implicit enrolment at 40 vectors and warns that
     "wrongly accepted utterances from impostors could corrupt the profile". An introduction that bound the
     wrong cluster must be undoable: "Zoe, that wasn't Sam" deletes the profile [research §2, §7].
+- **Exception, owner decision 2026-10-14:** a member's *learned voiceprint* of a person they tag in their own Omi
+  pendant recordings is NOT consent-gated. It is a different object: private to that member, used only to suggest
+  tags in that member's own recordings, never synced to panels, never evidence for any assurance level, and it
+  expires unconfirmed. Guardrails: [memories-space.md](memories-space.md) §2.6. It never becomes this visitor
+  profile; an introduction still enrols the visitor afresh with their consent.
 
 ### 5.3 Building up who they are
 

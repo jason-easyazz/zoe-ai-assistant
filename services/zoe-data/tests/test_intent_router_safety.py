@@ -46,7 +46,7 @@ async def test_calculate_rejects_exponentiation_safely(expression: str):
 async def test_calculate_allows_ordinary_arithmetic():
     response = await execute_intent(Intent("calculate", {"expression": "2+3*4"}))
 
-    assert response == "2+3*4 = 14"
+    assert response == "Two plus three times four is fourteen."
 
 
 @pytest.mark.ci_safe
