@@ -30,6 +30,7 @@ _FIX_HINT = {
     sig.FIX_STT: "speech recognition misheard; review the wake/STT path or add a homophone fix",
     sig.FIX_VERBOSITY: "the answer was too long for the question; tighten the reply budget for this shape",
     sig.FIX_ANSWER_QUALITY: "the brain answered wrongly; review the prompt / memory for this domain",
+    sig.FIX_STT_SNAPPED: "a misheard command word was snapped back (stt_snap); a recurring one is a Moonshine keyterm candidate",
 }
 
 
