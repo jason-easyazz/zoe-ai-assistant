@@ -10,7 +10,8 @@ Pinned, each with a negative control (the opposite input, or the fix taken away,
   challenge INSIDE a session; ordinary reads and writes do not;
 * voice_command end to end: inside a session the Skybridge read is resolved for the member (no PIN challenge) and the
   panel gets the REAL rows on its own channel; a guest gets only the privacy-safe card; a step-up phrase challenges;
-* flag off: voice_command takes today's path and never consults the session machinery (it is made to explode).
+* flag off: voice_command never consults the session machinery (it is made to explode); an authorised read still shows
+  its rows (the card is not flag-gated).
 
 Synthetic names only; no DB, no network, no models (ci_safe).
 """
@@ -270,7 +271,7 @@ def test_private_read_kinds():
 
 CAL_RESULT = {
     "handled": True,
-    "spoken_summary": "You have 2 events today.",
+    "spoken_summary": "You have 2 events today: Dentist at 9 AM and Dinner at 6:30 PM.",   # the resolver names them now
     "intent": {"domain": "calendar", "action": "show", "range": "today"},
     "cards": [{"card_type": "generic", "content": {
         "source": "calendar_show", "qualifier": "today", "start_date": "2026-10-13", "end_date": "2026-10-13",
@@ -449,12 +450,37 @@ async def test_flag_off_is_todays_path_and_never_touches_the_session(monkeypatch
     def boom(*_a, **_k):
         raise AssertionError("voice_session consulted with the flag off")
 
-    for name in ("observe_turn", "model_gate", "step_up_reason", "publish", "text_for", "private_read_kind"):
+    for name in ("observe_turn", "model_gate", "step_up_reason", "publish"):
         monkeypatch.setattr(vs, name, boom)
     resp = await run(_claim(model="resemblyzer"))
-    # Today's behaviour: an accepted (Resemblyzer) claim unlocks its own turn and the Skybridge UI broadcast runs;
-    # since #2026 (voice identity freshness) a claim never writes the indefinite panel binding, flag on or off.
-    assert rec["resolver_users"] == ["casey"] and rec["legacy_ui"] == 1 and not rec["challenges"]
-    assert resp["reply"] == "You have 2 events today." and resp["intent"] == "skybridge:calendar"
-    assert not rec["frames"]                                  # no voice_session / voice_card frame at all
+    # An accepted (Resemblyzer) claim unlocks its own turn; since #2026 (voice identity freshness) a claim never writes the
+    # indefinite panel binding, flag on or off. The session machinery is never consulted (no open / close / step-up), but an
+    # AUTHORISED read still shows its rows - "I want to see the results as well as hear them" is not a flag.
+    assert rec["resolver_users"] == ["casey"] and not rec["challenges"]
+    assert resp["reply"].startswith("You have 2 events today: Dentist") and resp["intent"] == "skybridge:calendar"
+    assert not [d for (_c, t, d) in rec["frames"] if t == "voice_session"]       # no session frame at all
+    cards = _private_cards(rec)
+    assert len(cards) == 1 and cards[0]["member_id"] == "casey" and rec["legacy_ui"] == 0
     assert "bound_user_id" not in (v._VOICE_SESSIONS.get(PANEL_ID) or {})
+
+
+@pytest.mark.asyncio
+async def test_a_fresh_pin_sign_in_hears_and_sees_the_read_with_no_flag(monkeypatch):
+    """The live shape (2026-10-14): a member signed in by PIN, ZOE_VOICE_SESSION unset. The read shows its rows on the
+    panel's own channel (the card is not flag-gated); nobody signed in gets the challenge and no rows."""
+    run, rec = _wire(monkeypatch, panel_user="casey")
+    resp = await run({})
+    assert rec["resolver_users"] == ["casey"] and not rec["challenges"]
+    assert resp["reply"].startswith("You have 2 events today: Dentist")
+    cards = _private_cards(rec)
+    assert len(cards) == 1 and cards[0]["member_id"] == "casey" and rec["legacy_ui"] == 0
+    assert not [d for (_c, t, d) in rec["frames"] if t == "voice_session"]
+
+
+@pytest.mark.asyncio
+async def test_no_sign_in_and_no_flag_is_the_challenge_and_no_private_card(monkeypatch):
+    """Negative control of the test above: nobody signed in."""
+    run, rec = _wire(monkeypatch, panel_user=None)
+    resp = await run({})
+    assert rec["resolver_users"] == ["guest"] and len(rec["challenges"]) == 1 and resp["status"] == "awaiting_pin"
+    assert not _private_cards(rec)

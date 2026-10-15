@@ -202,7 +202,8 @@ ASKS: tuple[dict[str, Any], ...] = (
     {"id": "1b", "title": "first open turn of the morning: the day brief", "needs": "allowlisted",
      "criterion": "inside 05:00-12:00: the server logs BRIEF_FIRST_TURN injected=1 claimed=1 for the "
                   "user AND the reply mentions a day item (dentist/molar/Kestrel proofs) AND the judge "
-                  "says it is woven in naturally; no day items or outside the window = SKIP"},
+                  "says it is woven in naturally; outside the window = SKIP; a calendar seed that did not "
+                  "land, or a landed seed the server never saw, = ERROR (never a quiet SKIP)"},
     {"id": "1r", "title": "first open turn: at most one follow-up raised", "needs": "hook",
      "criterion": "the stood-in nightly selector kept >=1 candidate; exactly one candidate is marked "
                   "surfaced in this session; the reply voices that candidate's topic and names at most "
@@ -666,17 +667,33 @@ def parse_lines(lines: Iterable[str], user: str) -> dict[str, list[dict]]:
 
 
 def score_brief(local_now: dt.datetime, lines1: dict, reply1: str,
-                judge: Callable[[str], tuple[str, str]] | None) -> tuple[str, dict]:
-    """1b. lines1: parse_lines over the app log written during the first open turn."""
+                judge: Callable[[str], tuple[str, str]] | None, *,
+                seed_landed: bool) -> tuple[str, dict]:
+    """1b. lines1: parse_lines over the app log written during the first open turn.
+
+    seed_landed: the day-3 calendar seed produced an event for TODAY in the DB. The brief
+    needs a day item and an allowlisted id has no other source, so inside the window an
+    unscoreable brief is a HARNESS problem and is an ERROR, never a SKIP: this ask sat in
+    SKIP for days (2026-10-13) while the seed had in fact landed and the server's 300 s
+    day-context cache still held the pre-seed (empty) context."""
     if not in_brief_window(local_now):
         return _r("SKIP", why=f"outside the brief window ({local_now:%H:%M} local; it runs "
                               "05:00-12:00) — re-run --allowlisted in the morning")
     injected = [b for b in lines1["brief"] if b.get("injected") == "1"]
     ev = {"brief_lines": lines1["brief"], "items": int(injected[0]["items"]) if injected else 0}
     if not lines1["brief"]:
-        return _r("SKIP", **ev, why="no BRIEF_FIRST_TURN decision logged: no day items (no loops "
-                                    "for an allowlisted id without a real nightly pass, and the "
-                                    "calendar seed did not land) or the claim was already taken")
+        if not seed_landed:
+            return _r("ERROR", **ev, seed_landed=False,
+                      why="the calendar seed did not land (no event for today in the DB), so the "
+                          "brief had no day item to say: harness setup failed, the ask is NOT scored")
+        return _r("ERROR", **ev, seed_landed=True,
+                  why="the calendar seed landed but the server logged no BRIEF_FIRST_TURN decision "
+                      "for this user, so the ask is NOT scored. Causes, most likely first: the "
+                      "server's day-context cache (300 s) held the pre-seed context (fixed by "
+                      "brief_first_turn.forget_day_context: restart zoe-data on a build that has it); "
+                      "today's brief claim is already taken (an earlier run this morning: the "
+                      "in-process throttle outlives teardown, restart zoe-data); "
+                      "ZOE_BRIEF_ON_FIRST_TURN is off; the id is not in ZOE_SYNTHETIC_USER_ALLOWLIST")
     if not injected:
         return _r("FAIL", **ev, why="a non-empty day, but the open turn was not briefed")
     ev["mentions"] = [t for t in topics_in(reply1) if t in ("dentist", "project")] \
@@ -689,8 +706,12 @@ def score_brief(local_now: dt.datetime, lines1: dict, reply1: str,
     return _r(v, **ev, method="judge", judge_reason=why)
 
 
-def score_no_rebrief(lines2: dict, reply2: str, briefed: bool) -> tuple[str, dict]:
+def score_no_rebrief(lines2: dict, reply2: str, briefed: bool,
+                     brief_verdict: str = "PASS") -> tuple[str, dict]:
     if not briefed:
+        if brief_verdict == "ERROR":
+            return _r("ERROR", why="ask 1b errored (the first open turn could not be scored), so "
+                                   "'no repeat' cannot be scored either")
         return _r("SKIP", why="the first open turn was not briefed — nothing to repeat")
     again = [b for b in lines2["brief"] if b.get("injected") == "1"]
     ev = {"second_injection": bool(again), "reply2_dentist": "dentist" in topics_in(reply2)}
@@ -1042,7 +1063,12 @@ def run_week(live: DayLive, user: str, stranger: str, mode: str, samples: int,
             log(f"  night {day}: {json.dumps(nights[day])}")
         else:
             nights[day] = {"trigger": "not-run", "why": NEEDS_TEXT["hook"]}
-    landed["d3-calendar"] = {"landed": live.events_today(user, today) > 0, "kind": "calendar"}
+    cal_landed = live.events_today(user, today) > 0
+    landed["d3-calendar"] = {"landed": cal_landed, "kind": "calendar",
+                             "turn_error": seeds.get("d3-calendar", {}).get("error")}
+    if not cal_landed:
+        log("  ERROR: the calendar seed did not land (no event for today in the DB); "
+            "the morning brief will be an ERROR, not a SKIP")
 
     # The clock: chat rows only --------------------------------------------------
     backdate: dict[str, Any] = {}
@@ -1090,10 +1116,11 @@ def run_week(live: DayLive, user: str, stranger: str, mode: str, samples: int,
         res["7s"]["evidence"]["raise_log_open_2"] = lines2["raise"]
     else:
         put("1b", *score_brief(local_now, lines1, t1["reply"],
-                               lambda items: live.judge_rubric("brief", OPEN_1, t1["reply"], items=items)))
+                               lambda items: live.judge_rubric("brief", OPEN_1, t1["reply"], items=items),
+                               seed_landed=cal_landed))
         briefed = res["1b"]["verdict"] in ("PASS", "FAIL") and \
             any(b.get("injected") == "1" for b in lines1["brief"])
-        put("7b", *score_no_rebrief(lines2, t2["reply"], briefed))
+        put("7b", *score_no_rebrief(lines2, t2["reply"], briefed, res["1b"]["verdict"]))
 
     # The card (allowlisted only): the nightly rebuild stood in by the portrait intent ---
     card: dict[str, Any] = {"mode": "not-served (synthetic id)"}

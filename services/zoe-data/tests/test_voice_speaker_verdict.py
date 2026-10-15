@@ -100,7 +100,7 @@ async def _turn(monkeypatch, payload, caller=None, *, consented=True):
     async def passes(text, reply, user, session, **kw):
         seen.append({"user": user, **kw})
 
-    async def consent(_uid):
+    async def consent(_uid, _model_id=None):
         return consented
 
     monkeypatch.setattr(v, "_run_voice_memory_passes", passes)
