@@ -368,11 +368,96 @@ def test_patching_keep_audio_off_drops_an_already_transcribed_wav(env, monkeypat
     assert not Path(path).exists()
 
 
-def test_silence_is_not_sent_to_moonshine(env):
+def test_silence_is_not_sent_to_moonshine_and_its_audio_is_kept(env, caplog):
+    import logging
     upload(env, make_wav(30.0, amp=20))                                   # room noise: peak 20 << the 300 floor
+    path = rows(env)[0]["audio_path"]
+    with caplog.at_level(logging.WARNING, logger="omi_recordings"):
+        run(omi.transcribe_pending(limit=1, pause_s=0))
+    (row,) = rows(env)
+    assert row["status"] == "empty_transcript" and row["transcript"] == "" and env.stt == []
+    # THE SAFETY RULE: no text is not a success, so the only copy of the audio is NOT deleted ...
+    assert Path(path).exists() and row["audio_path"] == path and row["audio_expires_at"]
+    # ... and the WARNING carries what the audio actually was, so "deaf pipeline" and "quiet room" are tellable apart
+    (msg,) = [r.getMessage() for r in caplog.records if "OMI_EMPTY_TRANSCRIPT" in r.getMessage()]
+    assert "seconds=30.0" in msg and "peak=20" in msg and "rate=16000" in msg and "voiced_chunks=0/2" in msg and "below_silence_floor" in msg
+    # surfaced to the owner: the status on the row, the held count on the list
+    lst = env.client.get("/api/omi/recordings").json()
+    assert lst["empty_transcript_held"] == 1 and lst["recordings"][0]["status"] == "empty_transcript" and lst["recordings"][0]["has_audio"] is True
+
+
+def test_voiced_audio_that_moonshine_returns_nothing_for_is_kept_too(env, monkeypatch, caplog):
+    import logging
+
+    async def says_nothing(path):
+        return "   "
+
+    monkeypatch.setattr(omi, "_transcribe_file", says_nothing)
+    upload(env, make_wav(3.0))                                            # a loud tone: it DOES reach Moonshine
+    path = rows(env)[0]["audio_path"]
+    with caplog.at_level(logging.WARNING, logger="omi_recordings"):
+        assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 1
+    (row,) = rows(env)
+    assert row["status"] == "empty_transcript" and Path(path).exists()
+    (msg,) = [r.getMessage() for r in caplog.records if "OMI_EMPTY_TRANSCRIPT" in r.getMessage()]
+    assert "voiced_chunks=1/1" in msg and "voiced_but_no_text" in msg and "peak=6000" in msg
+
+
+def test_negative_control_text_still_deletes_the_audio(env):
+    """The empty-transcript rule must not have turned the normal path into 'keep everything': real text still deletes the WAV."""
+    upload(env, make_wav(3.0))
+    path = rows(env)[0]["audio_path"]
     run(omi.transcribe_pending(limit=1, pause_s=0))
     (row,) = rows(env)
-    assert row["status"] == "done" and row["transcript"] == "" and env.stt == []
+    assert row["status"] == "done" and row["transcript"] == "words1" and row["audio_path"] == "" and not Path(path).exists()
+    assert env.client.get("/api/omi/recordings").json()["empty_transcript_held"] == 0
+
+
+def test_an_empty_transcript_wav_still_expires_with_its_retention(env):
+    upload(env, make_wav(5.0, amp=10))
+    path = rows(env)[0]["audio_path"]
+    run(omi.transcribe_pending(limit=1, pause_s=0))
+    assert Path(path).exists() and rows(env)[0]["status"] == "empty_transcript"
+    assert run(omi.purge_expired_audio(now=datetime.now(UTC) + timedelta(days=6))) == 0 and Path(path).exists()
+    assert run(omi.purge_expired_audio(now=datetime.now(UTC) + timedelta(days=8))) == 1          # bounded: never kept forever
+    assert not Path(path).exists() and rows(env)[0]["status"] == "empty_transcript"
+
+
+def test_the_owner_can_still_drop_or_delete_an_empty_transcript_wav(env):
+    a = upload(env, make_wav(5.0, amp=10), key="r1.0-9").json()["id"]
+    b = upload(env, make_wav(5.0, amp=10), key="r1.10-19", started="2026-10-10T02:00:00Z").json()["id"]
+    run(omi.transcribe_pending(limit=2, pause_s=0))
+    pa, pb = [r["audio_path"] for r in rows(env)]
+    assert Path(pa).exists() and Path(pb).exists()
+    assert env.client.patch(f"/api/omi/recordings/{a}", json={"keep_audio": False}).json()["has_audio"] is False
+    assert not Path(pa).exists()
+    assert env.client.delete(f"/api/omi/recordings/{b}").status_code in (200, 204) and not Path(pb).exists()
+
+
+def test_a_wrong_rate_or_stereo_wav_is_refused_never_stored_or_confirmed(env):
+    """An 8 kHz stream labelled/uploaded as a recording (or stereo) is the 'mis-decoded audio' failure: the Pi must hear a 4xx."""
+    def wav_with(rate, channels):
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(channels)
+            w.setsampwidth(2)
+            w.setframerate(rate)
+            w.writeframes(b"\x10\x10" * rate * channels)
+        return buf.getvalue()
+
+    for rate, ch in ((8000, 1), (48000, 1), (16000, 2)):
+        r = upload(env, wav_with(rate, ch), key=f"bad{rate}{ch}")
+        assert r.status_code == 422 and r.json().get("ok") is False
+    assert rows(env) == [] and not list((env.tmp / "audio").glob("*.wav"))
+    assert upload(env, wav_with(16000, 1), key="good").json()["ok"] is True          # control: the right format is accepted
+
+
+def test_measure_wav_reports_what_the_audio_is():
+    tone = omi.measure_wav(make_wav(2.0, amp=6000))
+    assert tone["seconds"] == 2.0 and tone["peak"] == 6000 and 4200 < tone["rms"] < 4300 and tone["rate"] == 16000 and tone["channels"] == 1
+    silent = omi.measure_wav(make_wav(2.0, amp=0))
+    assert silent["peak"] == 0 and silent["rms"] == 0.0 and silent["seconds"] == 2.0
+    assert omi.measure_wav(b"not a wav") == {"seconds": 0.0, "peak": 0, "rms": 0.0, "rate": 0, "channels": 0, "width": 0}
 
 
 def test_the_night_window_blocks_transcription(env, monkeypatch):
