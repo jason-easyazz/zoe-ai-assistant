@@ -122,7 +122,7 @@ class Calc:
     reply: str          # what to say
     value: Optional[float]   # the number to remember for a follow-up (None when the answer was an error)
     uses_ref: bool      # the sum pointed at the previous result
-    canonical: str      # digits-and-words form of the sum, re-parsable ("2 plus 2")
+    canonical: str      # digits-and-words form of the sum ("2 plus 2"); a log / slot label, not guaranteed to round-trip
 
 
 # ── tokens ───────────────────────────────────────────────────────────────────

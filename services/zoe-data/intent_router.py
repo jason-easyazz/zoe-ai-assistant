@@ -939,7 +939,7 @@ def detect_intent(
     # calc_speech. A follow-up ("that one divided by 3.5") needs the conversation's last result, which only fast_tiers has.
     _calc = _calc_speech.parse(t)
     if _calc is not None:
-        return Intent("calculate", {"expression": _calc.canonical, "display": _calc.canonical, "spoken": _calc.reply})
+        return Intent("calculate", {"expression": _calc.canonical, "spoken": _calc.reply})
 
     # === DOMAIN-SPECIFIC PATTERNS FIRST (to avoid list collisions) ===
 
